@@ -14,21 +14,36 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo } from "./_seed.js";
-import {
-  buildReactionModel,
-  reactionModelForCoach,
-  saveReactionModel,
-} from "../dist/repo/reaction-model.js";
+import { buildReactionModel, reactionModelForCoach, saveReactionModel } from "../dist/repo/reaction-model.js";
 
 // ---- local seeding (kept in-file; we never touch the shared _seed.js) ----
 function reset() {
   for (const t of [
-    "logged_sets", "plan_items", "plan_days", "sessions", "session_skips", "exercises",
-    "bodyweight_log", "food_notes", "activities", "garmin_daily_metrics", "daily_metrics",
-    "garmin_sources", "health_documents", "health_directives", "context_events",
-    "plan_proposals", "meal_plans", "app_state", "memory",
+    "logged_sets",
+    "plan_items",
+    "plan_days",
+    "sessions",
+    "session_skips",
+    "exercises",
+    "bodyweight_log",
+    "food_notes",
+    "activities",
+    "garmin_daily_metrics",
+    "daily_metrics",
+    "garmin_sources",
+    "health_documents",
+    "health_directives",
+    "context_events",
+    "plan_proposals",
+    "meal_plans",
+    "app_state",
+    "memory",
   ]) {
-    try { db.prepare(`DELETE FROM ${t}`).run(); } catch { /* table may not exist */ }
+    try {
+      db.prepare(`DELETE FROM ${t}`).run();
+    } catch {
+      /* table may not exist */
+    }
   }
 }
 
@@ -52,7 +67,12 @@ function seedIntake(daysAgo, kcal) {
 
 // One dated health doc carrying a markers[] array (a per-marker time series).
 function seedDoc(docDate, markers) {
-  return repo.addHealthDocument({ kind: "bloodwork", doc_date: docDate, parsed_json: { markers }, enrichment_status: "done" });
+  return repo.addHealthDocument({
+    kind: "bloodwork",
+    doc_date: docDate,
+    parsed_json: { markers },
+    enrichment_status: "done",
+  });
 }
 
 // Synced sleep night (source-agnostic table).
@@ -62,13 +82,21 @@ function seedSleep(daysAgo, sleepMin, hrv = null) {
   ).run(isoDaysAgo(daysAgo), sleepMin, hrv);
 }
 
+function seedFoodPattern(daysAgo, nutritionPattern) {
+  db.prepare(
+    `INSERT INTO food_notes (date, meal, raw_output, parsed_json, enrichment_status)
+     VALUES (?, 'dinner', '', ?, 'done')`
+  ).run(isoDaysAgo(daysAgo), JSON.stringify({ kcal: 500, nutrition_pattern: nutritionPattern }));
+}
+
 // Training day producing real prior-week tonnage (so load_crp has an x-axis).
 function seedTonnage(date, sets = 4, weight = 200, reps = 5) {
   const ex = repo.upsertExercise({ name: "RM Squat", muscle_group: "quads" });
   const sess = repo.getOrCreateSession(date, null);
   for (let n = 1; n <= sets; n++) {
-    db.prepare(`INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps, rir) VALUES (?, ?, ?, ?, ?, 2)`)
-      .run(sess.id, ex.id, n, weight, reps);
+    db.prepare(
+      `INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps, rir) VALUES (?, ?, ?, ?, ?, 2)`
+    ).run(sess.id, ex.id, n, weight, reps);
   }
 }
 
@@ -84,7 +112,10 @@ test("deficit_response is silent on a thin window (low/none confidence)", () => 
   seedWeight(1, 199.6);
   seedIntake(1, 2000);
   const model = buildReactionModel();
-  assert.equal(model.patterns.find((p) => p.id === "deficit_response"), undefined);
+  assert.equal(
+    model.patterns.find((p) => p.id === "deficit_response"),
+    undefined
+  );
 });
 
 test("deficit_response speaks on a rich, drifting window", () => {
@@ -111,7 +142,10 @@ test("load_crp stays SILENT with fewer than 3 hs-CRP draws", () => {
   // Some training so an x-axis exists — still only 2 readings.
   seedTonnage(isoDaysAgo(12));
   const model = buildReactionModel();
-  assert.equal(model.patterns.find((p) => p.id === "load_crp"), undefined);
+  assert.equal(
+    model.patterns.find((p) => p.id === "load_crp"),
+    undefined
+  );
 });
 
 test("load_crp speaks (observational, never causal) when CRP tracks load at >=3 draws", () => {
@@ -166,7 +200,30 @@ test("data_gap is silent when sleep/HRV is fresh", () => {
   seedSleep(1, 430, 58);
   seedSleep(0, 410, 56);
   const model = buildReactionModel();
-  assert.equal(model.patterns.find((p) => p.id === "data_gap"), undefined);
+  assert.equal(
+    model.patterns.find((p) => p.id === "data_gap"),
+    undefined
+  );
+});
+
+test("repeated explicit late caffeine learns an observational next-sleep pattern", () => {
+  for (let day = 12; day >= 1; day--) {
+    const late = day % 2 === 0;
+    seedFoodPattern(
+      day,
+      late
+        ? { caffeine_mg: 120, caffeine_time: "4:00 PM", alcohol_servings: 0 }
+        : { caffeine_mg: 0, caffeine_time: null, alcohol_servings: 0 }
+    );
+    // Recovery is dated the morning after the logged food day.
+    seedSleep(day - 1, late ? 375 : 450, 55);
+  }
+  const model = buildReactionModel();
+  const pattern = model.patterns.find((item) => item.id === "food_recovery_lateCaffeine");
+  assert.ok(pattern);
+  assert.match(pattern.statement, /caffeine after early afternoon/i);
+  assert.match(pattern.statement, /not proof of cause/i);
+  assert.ok(pattern.domains.includes("lifestyle"));
 });
 
 // ---------------------------------------------------------------------------
@@ -211,7 +268,10 @@ test("reactionModelForCoach caps the surfaced patterns at 6, strongest first", (
 // ---------------------------------------------------------------------------
 test("GOLDEN: serialized reactionModelForCoach() leaks NO params/score/grade field", () => {
   // Build a model with several patterns (each carries an INTERNAL params blob).
-  for (let d = 18; d >= 0; d--) { seedWeight(d, 200 - (18 - d) * 0.06); seedIntake(d, 2100); }
+  for (let d = 18; d >= 0; d--) {
+    seedWeight(d, 200 - (18 - d) * 0.06);
+    seedIntake(d, 2100);
+  }
   saveReactionModel();
   const read = reactionModelForCoach();
   const json = JSON.stringify(read);

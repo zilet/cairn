@@ -13,21 +13,22 @@ export interface Settings {
   coach_hour: number;
   onboarded: boolean;
   enrich_enabled: boolean;
-  proactive_enabled: boolean;           // nightly quiet insight + weekly read/nutrition-checkin precompute (pull-never-push)
+  proactive_enabled: boolean; // nightly quiet insight + weekly read/nutrition-checkin precompute (pull-never-push)
   art_enabled: boolean;
   art_enabled_at: string | null;
   meal_prefs: string;
   garmin_username: string;
   garmin_password_configured: boolean;
   garmin_credentials_source: "settings" | "env" | "mixed" | "none";
-  garmin_last_sync_at: string | null;   // UTC ISO of the last completed sync (ok or failed)
-  garmin_last_sync_status: string;      // short result line: "ok: 12 activities · 14 daily" | "failed: …"
+  garmin_last_sync_at: string | null; // UTC ISO of the last completed sync (ok or failed)
+  garmin_last_sync_status: string; // short result line: "ok: 12 activities · 14 daily" | "failed: …"
   gemini_api_key_configured: boolean;
   gemini_api_key_source: "settings" | "env" | "none";
-  research_enabled: boolean;            // host-side evidence research (default OFF; off ⇒ deterministic, no network)
-  bg_ops_enabled: boolean;              // run supported agentic ops as durable background jobs (off ⇒ legacy inline blocking)
+  research_enabled: boolean; // host-side evidence research (default OFF; off ⇒ deterministic, no network)
+  bg_ops_enabled: boolean; // legacy compatibility flag; user-facing agentic ops always stay durable/non-blocking
   agent_routes: Record<string, string>; // optional per-task agent routing { task -> agent }; {} = no routing (Auto = today's rotation)
-  update_check_enabled: boolean;        // quiet daily check for a newer Cairn release (pull-never-push; off ⇒ no outbound check)
+  update_check_enabled: boolean; // quiet daily check for a newer Cairn release (pull-never-push; off ⇒ no outbound check)
+  lead_mode: "lead" | "announce_first" | "review_everything"; // how much Cairn leads within server policy
   updated_at?: string;
 }
 
@@ -36,8 +37,17 @@ export interface Settings {
 // these names is honored for that op when the caller passes "auto"/blank. Any
 // other key is dropped on save (forward-compatible: an unknown task just no-ops).
 export const ROUTABLE_TASKS = [
-  "chat", "meal_plan", "meal_swap", "recipe", "session_suggest",
-  "nutrition_checkin", "health_review", "health_synthesis", "insight", "weekly_read", "day_read",
+  "chat",
+  "meal_plan",
+  "meal_swap",
+  "recipe",
+  "session_suggest",
+  "nutrition_checkin",
+  "health_review",
+  "health_synthesis",
+  "insight",
+  "weekly_read",
+  "day_read",
 ] as const;
 export type RoutableTask = (typeof ROUTABLE_TASKS)[number];
 const ROUTABLE_TASK_SET = new Set<string>(ROUTABLE_TASKS);
@@ -86,6 +96,7 @@ const SETTINGS_COLUMN_REPAIRS: [string, string][] = [
   ["bg_ops_enabled", "INTEGER DEFAULT 1"],
   ["agent_routes", "TEXT DEFAULT ''"],
   ["update_check_enabled", "INTEGER DEFAULT 1"],
+  ["lead_mode", "TEXT DEFAULT 'lead'"],
 ];
 let settingsSchemaChecked = false;
 
@@ -141,10 +152,9 @@ function decryptSettingSecret(field: SettingsSecretField, stored: string): strin
     const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(ivRaw, "base64url"));
     decipher.setAAD(aadForSecret(field));
     decipher.setAuthTag(Buffer.from(tagRaw, "base64url"));
-    return Buffer.concat([
-      decipher.update(Buffer.from(ciphertextRaw, "base64url")),
-      decipher.final(),
-    ]).toString("utf8").trim();
+    return Buffer.concat([decipher.update(Buffer.from(ciphertextRaw, "base64url")), decipher.final()])
+      .toString("utf8")
+      .trim();
   } catch {
     return "";
   }
@@ -228,9 +238,9 @@ function defaultSettings(): Settings {
     onboarded: false,
     enrich_enabled: true, // background enrichment on by default
     proactive_enabled: true, // calm precompute (quiet insight / weekly read / nutrition check-in) on by default
-    art_enabled: true,    // generated artwork on by default (no-op without GEMINI_API_KEY)
+    art_enabled: true, // generated artwork on by default (no-op without GEMINI_API_KEY)
     art_enabled_at: null, // unset → spend telemetry shows all-time
-    meal_prefs: "",       // free-text meal/schedule preferences embedded in meal prompts
+    meal_prefs: "", // free-text meal/schedule preferences embedded in meal prompts
     garmin_username: process.env.GARMIN_USERNAME || "",
     garmin_password_configured: !!process.env.GARMIN_PASSWORD,
     garmin_credentials_source: process.env.GARMIN_USERNAME || process.env.GARMIN_PASSWORD ? "env" : "none",
@@ -239,9 +249,10 @@ function defaultSettings(): Settings {
     gemini_api_key_configured: !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_KEY),
     gemini_api_key_source: process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_KEY ? "env" : "none",
     research_enabled: false, // host-side research off by default — opt-in, deterministic when off
-    bg_ops_enabled: true, // durable background jobs on by default (the calm, fast path)
+    bg_ops_enabled: true, // retained for imported settings; durable jobs are now always on for user-facing ops
     agent_routes: {}, // no per-task routing by default — "auto" rotates as before
     update_check_enabled: true, // quiet daily update check on by default (one toggle disables the outbound call)
+    lead_mode: "lead", // bounded background coaching is the default relationship
   };
 }
 
@@ -281,10 +292,15 @@ function rowToSettings(row: any): Settings {
   const hasSettingsGarmin = !!(rowGarminUser || rowGarminPass);
   const hasEnvGarmin = !!(envGarminUser || envGarminPass);
   const garminSource =
-    rowGarminUser && rowGarminPass ? "settings" :
-    hasSettingsGarmin && hasEnvGarmin ? "mixed" :
-    hasSettingsGarmin ? "settings" :
-    hasEnvGarmin ? "env" : "none";
+    rowGarminUser && rowGarminPass
+      ? "settings"
+      : hasSettingsGarmin && hasEnvGarmin
+        ? "mixed"
+        : hasSettingsGarmin
+          ? "settings"
+          : hasEnvGarmin
+            ? "env"
+            : "none";
   const rowGemini = readStoredSecret(row, "gemini_api_key");
   const envGemini = process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_KEY || "";
   return {
@@ -317,6 +333,7 @@ function rowToSettings(row: any): Settings {
     agent_routes: parseRoutes(row.agent_routes),
     // NULL on old rows (column added by migration v47) defaults to ON.
     update_check_enabled: row.update_check_enabled == null ? true : !!row.update_check_enabled,
+    lead_mode: ["lead", "announce_first", "review_everything"].includes(String(row.lead_mode)) ? row.lead_mode : "lead",
     updated_at: row.updated_at,
   };
 }
@@ -330,16 +347,30 @@ export function getSettings(): Settings {
   db.prepare(
     `INSERT INTO settings (id, agent_strategy, agent_order, disabled_agents, rr_cursor, coach_enabled, coach_day, coach_hour, enrich_enabled, proactive_enabled, art_enabled, meal_prefs)
      VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(d.agent_strategy, JSON.stringify(d.agent_order), JSON.stringify(d.disabled_agents), d.rr_cursor, d.coach_enabled ? 1 : 0, d.coach_day, d.coach_hour, d.enrich_enabled ? 1 : 0, d.proactive_enabled ? 1 : 0, d.art_enabled ? 1 : 0, d.meal_prefs);
+  ).run(
+    d.agent_strategy,
+    JSON.stringify(d.agent_order),
+    JSON.stringify(d.disabled_agents),
+    d.rr_cursor,
+    d.coach_enabled ? 1 : 0,
+    d.coach_day,
+    d.coach_hour,
+    d.enrich_enabled ? 1 : 0,
+    d.proactive_enabled ? 1 : 0,
+    d.art_enabled ? 1 : 0,
+    d.meal_prefs
+  );
   return d;
 }
 
 export function setSettings(patch: any): Settings {
   ensureSettingsSchema();
   const cur = getSettings();
-  const raw = db.prepare(
-    `SELECT garmin_username, garmin_password, garmin_password_encrypted, gemini_api_key, gemini_api_key_encrypted FROM settings WHERE id = 1`
-  ).get() as any;
+  const raw = db
+    .prepare(
+      `SELECT garmin_username, garmin_password, garmin_password_encrypted, gemini_api_key, gemini_api_key_encrypted FROM settings WHERE id = 1`
+    )
+    .get() as any;
   const incomingGarminPassword = patch.garmin_password !== undefined ? String(patch.garmin_password).trim() : undefined;
   const incomingGeminiKey = patch.gemini_api_key !== undefined ? String(patch.gemini_api_key).trim() : undefined;
   const existingGarminPassword = readStoredSecret(raw, "garmin_password");
@@ -380,8 +411,13 @@ export function setSettings(patch: any): Settings {
       patch.art_enabled !== undefined && patch.art_enabled && !cur.art_enabled
         ? new Date().toISOString().slice(0, 19).replace("T", " ")
         : cur.art_enabled_at,
-    meal_prefs: String(patch.meal_prefs ?? cur.meal_prefs).trim().slice(0, 2000),
-    garmin_username: patch.garmin_username !== undefined ? String(patch.garmin_username).trim().slice(0, 320) : String(raw?.garmin_username ?? ""),
+    meal_prefs: String(patch.meal_prefs ?? cur.meal_prefs)
+      .trim()
+      .slice(0, 2000),
+    garmin_username:
+      patch.garmin_username !== undefined
+        ? String(patch.garmin_username).trim().slice(0, 320)
+        : String(raw?.garmin_username ?? ""),
     garmin_password_configured: !!garminPasswordForStatus || cur.garmin_password_configured,
     garmin_credentials_source: cur.garmin_credentials_source,
     // Sync status is read-only here — recorded by setGarminSyncStatus() and not
@@ -394,7 +430,11 @@ export function setSettings(patch: any): Settings {
     bg_ops_enabled: patch.bg_ops_enabled !== undefined ? !!patch.bg_ops_enabled : cur.bg_ops_enabled,
     // Per-task routing: validated below (known task + known agent only).
     agent_routes: patch.agent_routes !== undefined ? parseRoutes(patch.agent_routes) : cur.agent_routes,
-    update_check_enabled: patch.update_check_enabled !== undefined ? !!patch.update_check_enabled : cur.update_check_enabled,
+    update_check_enabled:
+      patch.update_check_enabled !== undefined ? !!patch.update_check_enabled : cur.update_check_enabled,
+    lead_mode: ["lead", "announce_first", "review_everything"].includes(String(patch.lead_mode))
+      ? patch.lead_mode
+      : cur.lead_mode,
   };
   if (!["round_robin", "random", "priority"].includes(merged.agent_strategy)) merged.agent_strategy = "round_robin";
   // Drop any route pointing at an agent that doesn't exist (agents.json is the
@@ -410,13 +450,31 @@ export function setSettings(patch: any): Settings {
     `UPDATE settings SET agent_strategy=?, agent_order=?, disabled_agents=?, rr_cursor=?,
        coach_enabled=?, coach_day=?, coach_hour=?, onboarded=?, enrich_enabled=?, proactive_enabled=?, art_enabled=?, art_enabled_at=?, meal_prefs=?,
        garmin_username=?, garmin_password=?, garmin_password_encrypted=?, gemini_api_key=?, gemini_api_key_encrypted=?,
-       research_enabled=?, bg_ops_enabled=?, agent_routes=?, update_check_enabled=?, updated_at=datetime('now') WHERE id = 1`
+       research_enabled=?, bg_ops_enabled=?, agent_routes=?, update_check_enabled=?, lead_mode=?, updated_at=datetime('now') WHERE id = 1`
   ).run(
-    merged.agent_strategy, JSON.stringify(merged.agent_order), JSON.stringify(merged.disabled_agents),
-    merged.rr_cursor, merged.coach_enabled ? 1 : 0, merged.coach_day, merged.coach_hour,
-    merged.onboarded ? 1 : 0, merged.enrich_enabled ? 1 : 0, merged.proactive_enabled ? 1 : 0, merged.art_enabled ? 1 : 0, merged.art_enabled_at ?? "", merged.meal_prefs,
-    merged.garmin_username, garminPasswordStorage.legacy, garminPasswordStorage.encrypted, geminiApiKeyStorage.legacy, geminiApiKeyStorage.encrypted,
-    merged.research_enabled ? 1 : 0, merged.bg_ops_enabled ? 1 : 0, JSON.stringify(merged.agent_routes), merged.update_check_enabled ? 1 : 0
+    merged.agent_strategy,
+    JSON.stringify(merged.agent_order),
+    JSON.stringify(merged.disabled_agents),
+    merged.rr_cursor,
+    merged.coach_enabled ? 1 : 0,
+    merged.coach_day,
+    merged.coach_hour,
+    merged.onboarded ? 1 : 0,
+    merged.enrich_enabled ? 1 : 0,
+    merged.proactive_enabled ? 1 : 0,
+    merged.art_enabled ? 1 : 0,
+    merged.art_enabled_at ?? "",
+    merged.meal_prefs,
+    merged.garmin_username,
+    garminPasswordStorage.legacy,
+    garminPasswordStorage.encrypted,
+    geminiApiKeyStorage.legacy,
+    geminiApiKeyStorage.encrypted,
+    merged.research_enabled ? 1 : 0,
+    merged.bg_ops_enabled ? 1 : 0,
+    JSON.stringify(merged.agent_routes),
+    merged.update_check_enabled ? 1 : 0,
+    merged.lead_mode
   );
   return getSettings();
 }
@@ -437,7 +495,9 @@ export function setGarminSyncStatus(status: string) {
   getSettings(); // lazily creates the singleton row
   db.prepare(`UPDATE settings SET garmin_last_sync_at = ?, garmin_last_sync_status = ? WHERE id = 1`).run(
     new Date().toISOString(),
-    String(status ?? "").trim().slice(0, 200)
+    String(status ?? "")
+      .trim()
+      .slice(0, 200)
   );
 }
 
@@ -498,7 +558,7 @@ export function getAgentConfig() {
 export function resolveAgentForTask(
   task: string | undefined,
   requested: string | undefined,
-  cfg?: { routes?: Record<string, string>; enabled?: string[] },
+  cfg?: { routes?: Record<string, string>; enabled?: string[] }
 ): string | undefined {
   // An explicitly named agent (anything that isn't blank/"auto") is honored as-is.
   if (requested && requested !== "auto") return requested;
@@ -510,7 +570,11 @@ export function resolveAgentForTask(
   // ok). A disabled/missing pin silently falls back to the rotation so the
   // deterministic base always stands. Tests inject `cfg.enabled` directly; in
   // production we use the usable set (CLI presence included).
-  const enabled = cfg?.enabled ?? getAgentConfig().filter((a) => a.usable).map((a) => a.name);
+  const enabled =
+    cfg?.enabled ??
+    getAgentConfig()
+      .filter((a) => a.usable)
+      .map((a) => a.name);
   return enabled.includes(pinned) ? pinned : requested;
 }
 
@@ -525,7 +589,9 @@ export function resolveAgentForTask(
 // designed ok:false / graceful-degradation path, NEVER fake coaching).
 export function pickAgentOrder(): string[] {
   const s = getSettings();
-  const enabled = getAgentConfig().filter((a) => a.usable).map((a) => a.name);
+  const enabled = getAgentConfig()
+    .filter((a) => a.usable)
+    .map((a) => a.name);
   if (enabled.length <= 1) return enabled;
   if (s.agent_strategy === "priority") return enabled;
   if (s.agent_strategy === "random") {
@@ -556,9 +622,13 @@ export function pickAgentOrder(): string[] {
 // `cfg` lets tests inject the usable set + route without touching the DB.
 export function pickHealthAgentOrder(
   prefer: string[] = ["claude", "codex"],
-  cfg?: { enabled?: string[]; route?: string },
+  cfg?: { enabled?: string[]; route?: string }
 ): string[] {
-  const enabled = cfg?.enabled ?? getAgentConfig().filter((a) => a.usable).map((a) => a.name);
+  const enabled =
+    cfg?.enabled ??
+    getAgentConfig()
+      .filter((a) => a.usable)
+      .map((a) => a.name);
   if (enabled.length <= 1) return enabled;
   const routed = cfg?.route ?? getSettings().agent_routes?.health;
   const head: string[] = [];
@@ -574,10 +644,12 @@ export function pickHealthAgentOrder(
 // NO round-robin cursor side effect, [] when nothing is usable. `research` isn't a
 // per-task route key, so an explicit pin is honored upstream (runChosen) instead.
 // `cfg` injects the usable set + web flags so the ordering is unit-testable offline.
-export function pickResearchAgentOrder(
-  cfg?: { agents?: { name: string; web_access?: boolean }[] },
-): string[] {
-  const all = cfg?.agents ?? getAgentConfig().filter((a) => a.usable).map((a) => ({ name: a.name, web_access: !!a.web_access }));
+export function pickResearchAgentOrder(cfg?: { agents?: { name: string; web_access?: boolean }[] }): string[] {
+  const all =
+    cfg?.agents ??
+    getAgentConfig()
+      .filter((a) => a.usable)
+      .map((a) => ({ name: a.name, web_access: !!a.web_access }));
   const enabled = all.map((a) => a.name);
   if (enabled.length <= 1) return enabled;
   const web = all.filter((a) => a.web_access).map((a) => a.name);

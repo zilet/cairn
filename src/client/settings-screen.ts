@@ -21,13 +21,14 @@ const { garminStatusLine, agentHealthCard, agentOpLabel, agentActivityCard, noti
 const SETTINGS_SCREEN_CACHE_KEY = "settings:screen";
 
 async function fetchSettingsBundle(): Promise<SettingsScreenBundle> {
-  const [rawData, rawArtStats, agentStats, learnings] = await Promise.all([
+  const [rawData, rawArtStats, agentStats, learnings, brainDiagnostics] = await Promise.all([
     api("/settings"),
     api("/art/stats").catch(() => null),
     api("/agent-stats").catch(() => null), // 404s on a backend without telemetry -> degrade silently
     api("/learnings").catch(() => null),   // outcome learnings -> "What Cairn has noticed"; absent on older backends
+    api("/brain-diagnostics").catch(() => null), // operator-only accountable brain/tool trace
   ]);
-  return { rawData, rawArtStats, agentStats, learnings };
+  return { rawData, rawArtStats, agentStats, learnings, brainDiagnostics };
 }
 
 function settingsBundleSame(a: unknown, b: unknown): boolean {
@@ -68,7 +69,7 @@ async function renderSettings(): Promise<void> {
 }
 
 function renderSettingsBundle(bundle: SettingsScreenBundle): void {
-  const { rawData, rawArtStats, agentStats, learnings } = bundle;
+  const { rawData, rawArtStats, agentStats, learnings, brainDiagnostics } = bundle;
   const data = CairnSettingsSurface.settingsData(rawData);
   const artStats = rawArtStats ? (rawArtStats as SettingsScreenArtStats) : null;
   const s = data.settings;
@@ -88,7 +89,7 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
   // Side cards (built once; folded into the Agents slice). All degrade to "" when the
   // backing endpoint is absent/empty.
   const agentHealthHtml = agentHealthCard(agentStats);
-  const agentActivityHtml = agentActivityCard(agentStats);
+  const agentActivityHtml = agentActivityCard(agentStats) + CairnSettingsClient.brainDiagnosticsCard(brainDiagnostics);
   const noticedHtml = noticedCard(learnings);
   const artSpendHtml = artStats ? CairnSettingsSurface.artSpendCardHtml(artStats) : "";
 
@@ -132,6 +133,7 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
       coach_hour: +wm.coach_hour,
       agent_routes: wm.routes,
       update_check_enabled: wm.update_check_enabled,
+      lead_mode: wm.lead_mode,
     };
     // password / api-key fields: blank means "leave the configured value intact" — only
     // send a typed value (matches the old per-field placeholder behavior).

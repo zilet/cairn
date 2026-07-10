@@ -716,7 +716,13 @@ declare global {
     root: HTMLElement;
     workingModel: Pick<
       SettingsScreenWorkingModel,
-      "garmin_username" | "garmin_password" | "enrich_enabled" | "art_enabled" | "research_enabled" | "gemini_api_key"
+      | "garmin_username"
+      | "garmin_password"
+      | "enrich_enabled"
+      | "art_enabled"
+      | "research_enabled"
+      | "gemini_api_key"
+      | "lead_mode"
     >;
     settings: Record<string, unknown>;
     data: SettingsScreenData;
@@ -2625,8 +2631,15 @@ declare global {
       garminStatusLine(settings: unknown, syncing: boolean, options?: { relTime?: (value: string) => string }): string;
       agentHealthCard(stats: unknown): string;
       agentOpLabel(op: unknown): string;
-      agentActivityCard(stats: unknown, options?: { relTime?: (value: string) => string; absDate?: (value: string) => string }): string;
-      noticedCard(data: unknown, options?: { relTime?: (value: string) => string; absDate?: (value: string) => string }): string;
+      agentActivityCard(
+        stats: unknown,
+        options?: { relTime?: (value: string) => string; absDate?: (value: string) => string }
+      ): string;
+      noticedCard(
+        data: unknown,
+        options?: { relTime?: (value: string) => string; absDate?: (value: string) => string }
+      ): string;
+      brainDiagnosticsCard(data: unknown): string;
       agentChipState(agent: Record<string, unknown>): { cls: string; label: string };
       updateCardHtml(status: unknown, options: { updateCheckEnabled: boolean }): string;
     };
@@ -2658,7 +2671,10 @@ declare global {
         garminStatusHtml: string;
       }): string;
       automationSliceHtml(options: {
-        workingModel: Pick<SettingsScreenWorkingModel, "enrich_enabled" | "art_enabled" | "research_enabled">;
+        workingModel: Pick<
+          SettingsScreenWorkingModel,
+          "enrich_enabled" | "art_enabled" | "research_enabled" | "lead_mode"
+        >;
         settings: Record<string, unknown>;
         artSpendHtml: string;
         researchEligible: { eligible?: boolean; reason?: string } | null;

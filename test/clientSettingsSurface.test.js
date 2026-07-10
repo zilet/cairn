@@ -52,6 +52,7 @@ test("settings surface normalizes API data into the working model", () => {
   assert.equal(wm.routes.chat, "claude");
   assert.equal(wm.art_enabled, false);
   assert.equal(wm.update_check_enabled, true);
+  assert.equal(wm.lead_mode, "lead");
   assert.equal(wm.garmin_username, "athlete@example.com");
   assert.equal(surface.routeEligible(data).reason, "web_agent_connected");
 });
@@ -63,6 +64,7 @@ test("settings surface renders source and automation slices without echoing secr
     enrich_enabled: true,
     art_enabled: false,
     research_enabled: false,
+    lead_mode: "announce_first",
   };
 
   const sources = surface.sourcesSliceHtml({
@@ -87,6 +89,7 @@ test("settings surface renders source and automation slices without echoing secr
     researchEligible: { eligible: true, reason: "web_agent_connected" },
   });
   assert.match(automation, /id="enrichEnabled" checked/);
+  assert.match(automation, /value="announce_first" selected/);
   assert.doesNotMatch(automation, /id="artEnabled" checked/);
   assert.match(automation, /placeholder="Configured via env &quot;key&quot;"/);
   assert.match(automation, /turn this on for live, cited research/);

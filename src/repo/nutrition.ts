@@ -1,7 +1,17 @@
 import { db, todayISO } from "../db.js";
+import type { ProposedExpectation } from "../brain/expectation-contract.js";
+import { emitBrainEvent } from "../brainEvents.js";
 import { emitEnrichTransition } from "../enrichBus.js";
+import { recordDecision } from "./brain-decisions.js";
+import { estimateExpenditure } from "./expenditure.js";
 import { newestHealthDocDate } from "./health.js";
 import { computeGoalCheck } from "./profile.js";
+import {
+  assertMealAllergenSafe,
+  assertPlanAllergenSafe,
+  assertRecipeAllergenSafe,
+  clampNutritionFloors,
+} from "./nutrition-safety.js";
 import { getSettings } from "./settings.js";
 import { localDateISO, chatHistoryTimeLabel } from "./shared.js";
 import { bumpFoodDataVersion } from "./training-cache.js";
@@ -21,6 +31,98 @@ export interface AcceptedNutritionTarget {
   note: string | null;
 }
 
+function nutritionTrendExpectation(
+  targetKcal: number,
+  effectiveDate: string,
+  metric: "weight_trend_lb_wk" | "intake_to_weight_response" = "intake_to_weight_response"
+): { expectation: ProposedExpectation; basis: string } {
+  let expectedTrend = 0;
+  let tolerance = 0.75;
+  let basis = "cold_start_broad_band";
+  try {
+    const estimate = estimateExpenditure(21);
+    if (
+      (estimate.confidence === "medium" || estimate.confidence === "high") &&
+      estimate.tdee != null
+    ) {
+      expectedTrend = ((targetKcal - estimate.tdee) * 7) / 3_500;
+      tolerance = 0.35;
+      basis = "measured_expenditure";
+    } else {
+      const goal = computeGoalCheck();
+      if (goal?.ok) {
+        const rate = Number(goal.recommended?.weekly_rate_lb) || 0;
+        expectedTrend = goal.goal_mode === "lose" ? -rate : goal.goal_mode === "gain" ? rate : 0;
+        tolerance = 0.5;
+        basis = "goal_formula";
+      }
+    }
+  } catch {
+    // A cold start still gets a falsifiable, deliberately broad expectation.
+    // Minimum-data rules make it inconclusive until enough logs arrive.
+  }
+  return {
+    basis,
+    expectation: {
+      metric_key: metric,
+      subject_key: null,
+      direction: "within_band",
+      baseline: { target_kcal: targetKcal, basis },
+      target: {
+        min: Math.round((expectedTrend - tolerance) * 100) / 100,
+        max: Math.round((expectedTrend + tolerance) * 100) / 100,
+      },
+      window_start: effectiveDate,
+      window_end: addDaysISO(effectiveDate, 28),
+      minimum_data: metric === "intake_to_weight_response" ? { weigh_ins: 6, intake_days: 10 } : { weigh_ins: 6 },
+      confounder_policy: "exclude_context_events",
+      confidence: "tentative",
+      evaluator: metric === "intake_to_weight_response" ? "intake_response" : "weight_trend",
+      evaluator_version: metric === "intake_to_weight_response" ? "nutrition-intake-response-v1" : "nutrition-weight-v1",
+    },
+  };
+}
+
+function recordNutritionTargetDecision(saved: AcceptedNutritionTarget): void {
+  try {
+    const response = saved.target_kcal != null ? nutritionTrendExpectation(saved.target_kcal, saved.effective_date) : null;
+    recordDecision(
+      {
+        effective_date: saved.effective_date,
+        kind: "nutrition_target",
+        domain: "nutrition",
+        summary: "Nutrition target updated.",
+        rationale: saved.note,
+        source: saved.source || "direct",
+        source_ref_type: "nutrition_target",
+        source_ref_key: String(saved.id),
+        status: "applied",
+        autonomy_tier: "ask",
+        risk_class: "low",
+        reversible: false,
+        input_fingerprint: null,
+        context: {
+          expectation_basis: response?.basis ?? "protein_only_no_supported_evaluator",
+        },
+        action: {
+          target_kcal: saved.target_kcal,
+          protein_g: saved.protein_g,
+          carbs_g: saved.carbs_g,
+          fat_g: saved.fat_g,
+        },
+        specialist: null,
+        applied_at: new Date().toISOString(),
+        reverted_at: null,
+        superseded_by: null,
+        evaluator_version: response?.expectation.evaluator_version ?? null,
+      },
+      response ? [response.expectation] : []
+    );
+  } catch {
+    // The durable target is authoritative; accountability telemetry is fail-soft.
+  }
+}
+
 export function setNutritionTarget(input: {
   target_kcal?: number | null;
   protein_g?: number | null;
@@ -29,15 +131,25 @@ export function setNutritionTarget(input: {
   source?: string | null;
   note?: string | null;
   effective_date?: string | null;
-}): AcceptedNutritionTarget | null {
-  const eff = input.effective_date && /^\d{4}-\d{2}-\d{2}$/.test(input.effective_date) ? input.effective_date : localDateISO();
+}, opts: { recordDecision?: boolean } = {}): AcceptedNutritionTarget | null {
+  let goal: any = null;
+  try {
+    goal = computeGoalCheck();
+  } catch {
+    goal = null;
+  }
+  const safeInput = clampNutritionFloors(input, { kcal: "target_kcal", protein: "protein_g" }, goal);
+  const eff =
+    safeInput.effective_date && /^\d{4}-\d{2}-\d{2}$/.test(safeInput.effective_date)
+      ? safeInput.effective_date
+      : localDateISO();
   const int = (v: any, max: number): number | null => {
     if (v == null || v === "") return null;
     const n = Number(v);
     return Number.isFinite(n) ? Math.min(max, Math.max(0, Math.round(n))) : null;
   };
-  const kcal = int(input.target_kcal, 10000);
-  const protein = int(input.protein_g, 500);
+  const kcal = int(safeInput.target_kcal, 10000);
+  const protein = int(safeInput.protein_g, 500);
   // Nothing usable → don't persist an empty target row.
   if (kcal == null && protein == null) return null;
   const info = db
@@ -45,13 +157,35 @@ export function setNutritionTarget(input: {
       `INSERT INTO nutrition_targets (effective_date, target_kcal, protein_g, carbs_g, fat_g, source, note)
        VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(eff, kcal, protein, int(input.carbs_g, 2000), int(input.fat_g, 1000), input.source ? String(input.source).slice(0, 40) : null, input.note ? capStr(input.note, 300) : null);
-  return getNutritionTarget(Number(info.lastInsertRowid));
+    .run(
+      eff,
+      kcal,
+      protein,
+      int(safeInput.carbs_g, 2000),
+      int(safeInput.fat_g, 1000),
+      safeInput.source ? String(safeInput.source).slice(0, 40) : null,
+      safeInput.note ? capStr(safeInput.note, 300) : null
+    );
+  const saved = getNutritionTarget(Number(info.lastInsertRowid));
+  if (saved) {
+    if (opts.recordDecision !== false) recordNutritionTargetDecision(saved);
+    emitBrainEvent({ kind: "nutrition_target_changed", domain: "nutrition", date: eff, entity_id: saved.id });
+  }
+  return saved;
 }
 
 export function getNutritionTarget(id: number): AcceptedNutritionTarget | null {
   const row = db.prepare(`SELECT * FROM nutrition_targets WHERE id = ?`).get(id) as any;
   return row ? { id: row.id, effective_date: row.effective_date, target_kcal: row.target_kcal, protein_g: row.protein_g, carbs_g: row.carbs_g, fat_g: row.fat_g, source: row.source, note: row.note } : null;
+}
+
+export function deleteNutritionTarget(id: number): boolean {
+  const numeric = Math.trunc(Number(id));
+  if (!Number.isInteger(numeric) || numeric <= 0) return false;
+  const changed = Number(db.prepare(`DELETE FROM nutrition_targets WHERE id = ?`).run(numeric).changes) > 0;
+  if (changed)
+    emitBrainEvent({ kind: "nutrition_target_changed", domain: "nutrition", date: localDateISO(), entity_id: numeric });
+  return changed;
 }
 
 // The active accepted target: the newest row effective on/before `date` (today).
@@ -104,10 +238,22 @@ export function mealPlanFreshness(plan: any): { stale: boolean; reason: string |
 export function createMealPlan(agent: string, raw: string, parsed: any) {
   // Stamp the max upstream source at draft time so freshness can later tell whether a
   // newer lipid/health directive has outrun this plan.
-  const stamped = parsed && typeof parsed === "object" ? { ...parsed, source_ts: maxUpstreamNutritionSource() } : parsed;
-  const info = db.prepare(
-    `INSERT INTO meal_plans (week_of, agent, raw_output, parsed_json) VALUES (?, ?, ?, ?)`
-  ).run(todayISO(), agent, raw || "", stamped ? JSON.stringify(stamped) : null);
+  let goal: any = null;
+  try {
+    goal = computeGoalCheck();
+  } catch {
+    goal = null;
+  }
+  const floored =
+    parsed && typeof parsed === "object"
+      ? clampNutritionFloors(parsed, { kcal: "daily_kcal", protein: "daily_protein_g" }, goal)
+      : parsed;
+  assertPlanAllergenSafe(floored, athleteAllergies());
+  const stamped =
+    floored && typeof floored === "object" ? { ...floored, source_ts: maxUpstreamNutritionSource() } : floored;
+  const info = db
+    .prepare(`INSERT INTO meal_plans (week_of, agent, raw_output, parsed_json) VALUES (?, ?, ?, ?)`)
+    .run(todayISO(), agent, raw || "", stamped ? JSON.stringify(stamped) : null);
   return hydrate(db.prepare(`SELECT * FROM meal_plans WHERE id = ?`).get(info.lastInsertRowid));
 }
 
@@ -155,6 +301,9 @@ export function mealPlanForCoach() {
     week_of: plan.week_of,
     daily_kcal: parsed.daily_kcal ?? null,
     daily_protein_g: parsed.daily_protein_g ?? null,
+    practicality: parsed.practicality && typeof parsed.practicality === "object" ? parsed.practicality : null,
+    nutrition_pattern:
+      parsed.nutrition_pattern && typeof parsed.nutrition_pattern === "object" ? parsed.nutrition_pattern : null,
     today: pick(today, "today"),
     tomorrow: pick(addDaysISO(today, 1), "tomorrow"),
     stale: freshness.stale,
@@ -176,17 +325,120 @@ export function listMealPlans(limit = 10) {
   });
 }
 
+function recordMealPlanStatusDecision(plan: any, transition: string): void {
+  if (!plan?.id || !["accepted", "applied", "discarded", "superseded"].includes(transition)) return;
+  try {
+    const accepted = transition === "accepted" || transition === "applied";
+    const explicitKcal = Number(plan.parsed?.daily_kcal);
+    const dayKcal = (Array.isArray(plan.parsed?.days) ? plan.parsed.days : [])
+      .map((day: any) =>
+        (Array.isArray(day?.meals) ? day.meals : []).reduce(
+          (sum: number, meal: any) => sum + (Number(meal?.kcal) || 0),
+          0
+        )
+      )
+      .filter((value: number) => value > 0);
+    const kcal = Number.isFinite(explicitKcal) && explicitKcal > 0
+      ? explicitKcal
+      : dayKcal.length
+        ? Math.round(dayKcal.reduce((sum: number, value: number) => sum + value, 0) / dayKcal.length)
+        : Number.NaN;
+    const response = accepted && Number.isFinite(kcal) && kcal > 0
+      ? nutritionTrendExpectation(kcal, localDateISO())
+      : null;
+    const days = Array.isArray(plan.parsed?.days) ? plan.parsed.days : [];
+    recordDecision(
+      {
+        effective_date: localDateISO(),
+        kind: "meal_plan",
+        domain: "nutrition",
+        summary: accepted
+          ? String(plan.parsed?.summary ?? "Meal plan accepted.").slice(0, 300)
+          : transition === "superseded"
+            ? "Meal plan superseded by a newer accepted plan."
+            : "Meal plan declined.",
+        rationale: accepted
+          ? String(plan.parsed?.rationale ?? plan.parsed?.notes ?? "Accepted as the current meal plan.").slice(0, 1_500)
+          : null,
+        source: plan.agent || "meal_plan",
+        source_ref_type: "meal_plan",
+        source_ref_key: String(plan.id),
+        status: accepted ? "applied" : transition === "superseded" ? "superseded" : "rejected",
+        autonomy_tier: "ask",
+        risk_class: "low",
+        // Meal-plan acceptance has no persisted before-snapshot. Manual swaps and
+        // edits also remain ordinary direct writes, never fictional auto-undo.
+        reversible: false,
+        input_fingerprint: null,
+        context: {
+          transition,
+          week_of: plan.week_of ?? null,
+          expectation_basis: response?.basis ?? (accepted ? "daily_kcal_unavailable" : null),
+        },
+        action: {
+          meal_plan_id: plan.id,
+          transition,
+          daily_kcal: Number.isFinite(kcal) ? kcal : null,
+          daily_protein_g: Number(plan.parsed?.daily_protein_g) || null,
+          planned_days: days.length,
+        },
+        specialist: null,
+        applied_at: accepted ? new Date().toISOString() : null,
+        reverted_at: null,
+        superseded_by: null,
+        evaluator_version: response?.expectation.evaluator_version ?? null,
+      },
+      response ? [response.expectation] : []
+    );
+  } catch {
+    // Meal-plan status is authoritative; accountability telemetry is fail-soft.
+  }
+}
+
 export function setMealPlanStatus(id: number, status: string) {
   db.prepare(`UPDATE meal_plans SET status = ? WHERE id = ?`).run(status, id);
-  return hydrate(db.prepare(`SELECT * FROM meal_plans WHERE id = ?`).get(id));
+  const plan = hydrate(db.prepare(`SELECT * FROM meal_plans WHERE id = ?`).get(id));
+  if (plan) recordMealPlanStatusDecision(plan, status);
+  return plan;
 }
 
 // Accepting a meal plan retires the OTHER open meal-plan drafts — they were
 // alternative weeks, so once one is kept the rest are stale. Marked 'superseded'
 // (the system retiring them), distinct from a user 'discarded'.
 export function acceptMealPlan(id: number) {
+  const plan = getMealPlan(id);
+  if (!plan) return null;
+  let goal: any = null;
+  try {
+    goal = computeGoalCheck();
+  } catch {
+    goal = null;
+  }
+  const safeParsed =
+    plan.parsed && typeof plan.parsed === "object"
+      ? clampNutritionFloors(plan.parsed, { kcal: "daily_kcal", protein: "daily_protein_g" }, goal)
+      : plan.parsed;
+  assertPlanAllergenSafe(safeParsed, athleteAllergies());
+  if (safeParsed && JSON.stringify(safeParsed) !== JSON.stringify(plan.parsed)) {
+    db.prepare(`UPDATE meal_plans SET parsed_json = ? WHERE id = ?`).run(JSON.stringify(safeParsed), id);
+  }
+  const siblings = db
+    .prepare(`SELECT * FROM meal_plans WHERE status = 'draft' AND id != ?`)
+    .all(id)
+    .map(hydrate)
+    .filter(Boolean);
   db.prepare(`UPDATE meal_plans SET status = 'superseded' WHERE status = 'draft' AND id != ?`).run(id);
-  return setMealPlanStatus(id, "accepted");
+  for (const sibling of siblings) recordMealPlanStatusDecision({ ...sibling, status: "superseded" }, "superseded");
+  const accepted = setMealPlanStatus(id, "accepted");
+  if (accepted)
+    emitBrainEvent({
+      kind: "meal_plan_changed",
+      domain: "nutrition",
+      date: localDateISO(),
+      entity_id: id,
+      material: true,
+    });
+  return accepted;
 }
 
 export function getMealPlan(id: number) {
@@ -225,6 +477,15 @@ export function coerceMeal(m: any) {
   };
 }
 
+function athleteAllergies(): string | null {
+  try {
+    const row = db.prepare(`SELECT allergies FROM profile WHERE id = 1`).get() as any;
+    return row?.allergies == null ? null : String(row.allergies);
+  } catch {
+    return null;
+  }
+}
+
 // Replace the days array inside a meal plan's parsed_json — used for manual
 // reordering/editing of meals. PRESERVES every other key the agent emitted
 // (daily_kcal, shopping, notes, ...). Returns the hydrated updated row, or
@@ -245,9 +506,12 @@ export function updateMealPlanDays(id: number, days: any) {
       return recipe ? { ...coerceMeal(m), recipe } : coerceMeal(m);
     }),
   }));
+  assertPlanAllergenSafe({ days: cleanDays }, athleteAllergies());
   const parsed = { ...(plan.parsed && typeof plan.parsed === "object" ? plan.parsed : {}), days: cleanDays };
   db.prepare(`UPDATE meal_plans SET parsed_json = ? WHERE id = ?`).run(JSON.stringify(parsed), id);
-  return getMealPlan(id);
+  const updated = getMealPlan(id);
+  emitBrainEvent({ kind: "meal_plan_changed", domain: "nutrition", date: localDateISO(), entity_id: id });
+  return updated;
 }
 
 // Swap one meal in place (agentic "swap this meal"). Returns { plan, meal }
@@ -262,8 +526,16 @@ export function swapMealInPlan(id: number, day: string, mealIndex: number, meal:
   const idx = Number(mealIndex);
   if (!Number.isInteger(idx) || idx < 0 || idx >= target.meals.length) return null;
   const clean = coerceMeal(meal);
+  assertMealAllergenSafe(clean, athleteAllergies(), `${capStr(target.day, 40) || "meal plan"} meal ${idx + 1}`);
   target.meals[idx] = clean;
   db.prepare(`UPDATE meal_plans SET parsed_json = ? WHERE id = ?`).run(JSON.stringify(plan.parsed), id);
+  emitBrainEvent({
+    kind: "meal_plan_changed",
+    domain: "nutrition",
+    date: localDateISO(),
+    entity_id: id,
+    subject_key: `${target.day}:${idx}`,
+  });
   return { plan: getMealPlan(id), meal: clean };
 }
 
@@ -311,8 +583,23 @@ export function setMealRecipe(planId: number, day: string, mealIndex: number, re
   if (!Number.isInteger(idx) || idx < 0 || idx >= target.meals.length) return null;
   const clean = coerceRecipe(recipe);
   if (!clean) return null;
-  target.meals[idx] = { ...(target.meals[idx] && typeof target.meals[idx] === "object" ? target.meals[idx] : {}), recipe: clean };
+  assertRecipeAllergenSafe(
+    clean,
+    athleteAllergies(),
+    `${capStr(target.day, 40) || "meal plan"} meal ${idx + 1} recipe`
+  );
+  target.meals[idx] = {
+    ...(target.meals[idx] && typeof target.meals[idx] === "object" ? target.meals[idx] : {}),
+    recipe: clean,
+  };
   db.prepare(`UPDATE meal_plans SET parsed_json = ? WHERE id = ?`).run(JSON.stringify(plan.parsed), planId);
+  emitBrainEvent({
+    kind: "meal_plan_changed",
+    domain: "nutrition",
+    date: localDateISO(),
+    entity_id: planId,
+    subject_key: `${target.day}:${idx}:recipe`,
+  });
   return { plan: getMealPlan(planId), recipe: clean };
 }
 
@@ -329,6 +616,7 @@ export function addFoodNote(meal: string, raw: string, parsed: any, imagePath?: 
   ).run(localDateISO(), meal || "meal", raw || "", parsed ? JSON.stringify(parsed) : null, imagePath ?? null, status);
   const row = hydrate(db.prepare(`SELECT * FROM food_notes WHERE id = ?`).get(info.lastInsertRowid));
   bumpFoodDataVersion(); // a new food entry moves the intake average → expenditure read
+  emitBrainEvent({ kind: "food_logged", domain: "nutrition", date: row.date || localDateISO(), entity_id: row.id });
   // Lazy import to avoid a circular dependency (enrich.ts imports repo.ts).
   if (status === "pending") {
     import("../enrich.js").then((m) => m.enqueueEnrich("food", row.id)).catch(() => {});
@@ -359,7 +647,15 @@ export function updateFoodNoteParsed(id: number, parsed: any) {
     id
   );
   bumpFoodDataVersion(); // enrichment can revise kcal in place (backstop can't see it)
-  return getFoodNote(id);
+  const updated = getFoodNote(id);
+  if (updated)
+    emitBrainEvent({
+      kind: "food_corrected",
+      domain: "nutrition",
+      date: updated.date || localDateISO(),
+      entity_id: id,
+    });
+  return updated;
 }
 
 export function setFoodNoteEnrichStatus(id: number, status: string) {
@@ -401,6 +697,7 @@ export function getDayIntake(date?: string) {
       carbs_g: p.carbs_g ?? null,
       fat_g: p.fat_g ?? null,
       fiber_g: p.fiber_g ?? null,
+      nutrition_pattern: p.nutrition_pattern ?? null,
       enrichment_status: r.enrichment_status ?? null,
       created_at: r.created_at,
       logged_at: chatHistoryTimeLabel(r.created_at), // local "1:15 PM" so the coach can reference WHEN it was eaten
@@ -474,6 +771,7 @@ export function updateFoodNote(id: number, fields: any) {
   // A manual edit stamps enrichment_status 'done' OUTSIDE the queue/setter, so emit
   // here too — a still-open SSE watcher (Fuel card) must see the row settle.
   emitEnrichTransition("food", id, updated);
+  emitBrainEvent({ kind: "food_corrected", domain: "nutrition", date: updated.date || localDateISO(), entity_id: id });
   return updated;
 }
 

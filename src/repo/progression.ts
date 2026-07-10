@@ -14,11 +14,14 @@
 // (e.g. −30 = 30 lb assist); timed lifts progress in seconds, never load.
 // ============================================================================
 import { db } from "../db.js";
+import { emitBrainEvent } from "../brainEvents.js";
 import { canonicalGroup, classifyConstraint, classifyMuscleGroup, type MuscleGroup, MUSCLE_LANDMARKS } from "./exercise-canon.js";
 import { type Equipment, effectiveVolumeByGroup, examplesForGroup, parseEquipment, suggestAlternatives, type VolumeSet } from "./exercise-variations.js";
 import { findExercise, recentWorkingWeight } from "./exercises.js";
 import { loadPhrase, recentMuscleLoad, type RecentLoad } from "./hybrid-load.js";
 import { getPlan } from "./plan.js";
+import type { CoachPersonalModifier, CoachWhatWorksForYou } from "../brain/coach-context-contract.js";
+import { applyPersonalResponseModifier, whatWorksForYou } from "./reaction-model.js";
 // createProposal + the auto-progression dedup live in profile.js; imported here (as
 // run-progression.ts does for buildRunPlanProposal) so REST + MCP share ONE proposal
 // builder instead of duplicating the change-shaping logic (and drifting).
@@ -237,9 +240,17 @@ function round5(n: number): number {
 
 // The relative timed step for a hold of `seconds`: ~10% of the hold, clamped to
 // [MIN, MAX] so short and long holds both progress proportionally.
-function timedStep(seconds: number): number {
+function timedStep(seconds: number, modifier?: CoachPersonalModifier | null): number {
   const raw = Math.round(Math.abs(seconds) * SECONDS_STEP_FRAC);
-  return Math.min(SECONDS_STEP_MAX, Math.max(SECONDS_STEP_MIN, raw));
+  const standard = Math.min(SECONDS_STEP_MAX, Math.max(SECONDS_STEP_MIN, raw));
+  if (!modifier) return standard;
+  return Math.round(applyPersonalResponseModifier({
+    base: standard,
+    modifier,
+    min: SECONDS_STEP_MIN,
+    max: SECONDS_STEP_MAX,
+    safety_ceiling: SECONDS_STEP_MAX,
+  }));
 }
 
 // The step ceiling for a lift, by group (compound vs isolation).
@@ -248,11 +259,43 @@ function stepCeiling(group: string | null): number {
   return g && ISOLATION_GROUPS.has(g) ? STEP_CEIL_ISOLATION : STEP_CEIL_COMPOUND;
 }
 
+function trainingModifierFor(
+  exerciseName: string,
+  response: CoachWhatWorksForYou | null = whatWorksForYou()
+): CoachPersonalModifier | null {
+  if (!response) return null;
+  const matchingLearning = response.learnings.find(
+    (learning) => learning.subject_key?.toLowerCase() === exerciseName.toLowerCase()
+  );
+  const globalLearning = response.learnings.find((learning) => learning.subject_key == null);
+  const key = matchingLearning?.key ?? globalLearning?.key ?? null;
+  if (!key) return null;
+  return response.modifiers.find(
+    (modifier) => modifier.target === "training_progression_step" && modifier.key === key
+  ) ?? null;
+}
+
 // Clamp a desired LOADED step to the safe cap, rounded to a sane plate. Only
 // for positive loaded weight; assist/bodyweight handled separately.
-function clampedOverload(current: number, group: string | null): number {
+function clampedOverload(current: number, group: string | null, modifier?: CoachPersonalModifier | null): number {
   const ceil = stepCeiling(group);
   const step = Math.min(Math.abs(current) * STEP_FRAC, ceil);
+  if (modifier) {
+    const adjusted = applyPersonalResponseModifier({
+      base: step,
+      modifier,
+      min: Math.min(2.5, ceil),
+      max: ceil,
+      safety_ceiling: ceil,
+    });
+    // A learned conservative response must be operational, not cosmetic. Use the
+    // smallest common plate increment while the universal per-session ceiling stays
+    // authoritative. A standard response retains the historical rounding below.
+    if (adjusted < step) {
+      const conservativeStep = Math.max(2.5, Math.floor(adjusted / 2.5) * 2.5);
+      return Math.min(current + ceil, current + conservativeStep);
+    }
+  }
   // Round to 5 lb for compounds, 2.5 for isolation, but never below the smaller
   // plate (so a light isolation lift still moves).
   const next = current + step;
@@ -433,6 +476,7 @@ export interface PrescriptionOpts {
   recentLoad?: Map<MuscleGroup, RecentLoad> | null; // acute per-group load (a just-smoked group)
   availableEquipment?: Equipment[] | null;       // rank variation candidates by what the athlete can load
   excludeNames?: string[] | null;                // movements already on the day — don't re-suggest them
+  personalModifier?: CoachPersonalModifier | null; // learned step size; never overrides constraints/recovery
 }
 
 export function nextPrescription(exerciseName: string, states?: Map<string, LiftState>, opts?: PrescriptionOpts): Prescription | null {
@@ -446,6 +490,9 @@ export function nextPrescription(exerciseName: string, states?: Map<string, Lift
   const recentLoad = opts && "recentLoad" in opts ? (opts.recentLoad ?? null) : recentMuscleLoad(2);
   const equip = opts && "availableEquipment" in opts ? (opts.availableEquipment ?? []) : availableEquipment();
   const excludeNames = (opts?.excludeNames ?? []).filter(Boolean);
+  const personalModifier = opts && "personalModifier" in opts
+    ? (opts.personalModifier ?? null)
+    : trainingModifierFor(exerciseName);
   const tenureWeeks = movementTenureWeeks(exerciseName);
   // Only a LOAD-limiting constraint (pain/strain under load) freezes load. A form/
   // grip/ROM cue ("neutral grip only, no supinated curls") does NOT — the athlete
@@ -462,7 +509,7 @@ export function nextPrescription(exerciseName: string, states?: Map<string, Lift
   // Nothing logged and nothing planned → genuinely nothing to read.
   if (!last && !plan) return null;
 
-  const brakeCtx: PrescCtx = { canonGroup, autoreg, recentLoad, tenureWeeks, availableEquipment: equip, excludeNames };
+  const brakeCtx: PrescCtx = { canonGroup, autoreg, recentLoad, tenureWeeks, availableEquipment: equip, excludeNames, personalModifier };
   if (mode === "timed") return timedPrescription(exerciseName, group, loadConstrained, plan, cur, last, state, brakeCtx);
   return repsPrescription(exerciseName, group, loadConstrained, plan, cur, last, state, brakeCtx);
 }
@@ -474,6 +521,7 @@ interface PrescCtx {
   tenureWeeks: number | null;
   availableEquipment: Equipment[];
   excludeNames: string[];
+  personalModifier: CoachPersonalModifier | null;
 }
 
 function repsPrescription(
@@ -613,14 +661,17 @@ function repsPrescription(
     } else if (baseWeight < 0) {
       // Assisted — reduce the assist toward bodyweight (a smaller absolute value).
       const ceil = stepCeiling(group);
-      const step = Math.min(Math.abs(baseWeight) * STEP_FRAC, ceil);
+      const standardStep = Math.min(Math.abs(baseWeight) * STEP_FRAC, ceil);
+      const step = brakeCtx?.personalModifier
+        ? applyPersonalResponseModifier({ base: standardStep, modifier: brakeCtx.personalModifier, min: 0, max: ceil, safety_ceiling: ceil })
+        : standardStep;
       const reduced = round5(baseWeight + step); // toward 0
       nextWeight = reduced >= 0 ? null : reduced; // crossed to bodyweight → null
       why = nextWeight == null
         ? "You're nearly off the assist — try the next session at bodyweight."
         : "You capped the range — peel a little assist off; you're getting stronger.";
     } else {
-      nextWeight = clampedOverload(baseWeight, group);
+      nextWeight = clampedOverload(baseWeight, group, brakeCtx?.personalModifier);
       why = hasRange
         ? `Every set hit ${repHigh} at RIR 2+ — take the earned step up, then reset to ${repLow} reps and build the range back up.`
         : "You hit the top of the range at RIR 2+ — the small earned step up is yours.";
@@ -732,7 +783,7 @@ function timedPrescription(
   } else if (solid || status === "progressing") {
     action = "overload";
     const base = baseSeconds ?? held ?? 0;
-    const step = timedStep(base);
+    const step = timedStep(base, brakeCtx?.personalModifier);
     nextSeconds = base + step;
     why = `The hold's solid — add ${step}s (a proportional step for a ${base}s hold). Progress timed work in time, never load.`;
   } else {
@@ -788,7 +839,7 @@ function ex_name(name: string): string {
 // runner loop owns those). Powers Today's session card + the apply path. Each
 // row carries its plan_item_id so a "apply these" build can route through
 // propose→apply by day_number.
-export function planDayProgression(dayNumber: number): Prescription[] {
+export function planDayProgression(dayNumber: number, opts: { forNextSession?: boolean } = {}): Prescription[] {
   const day = db.prepare(`SELECT id FROM plan_days WHERE day_number = ?`).get(dayNumber) as any;
   if (!day) return [];
   const items = db.prepare(
@@ -802,15 +853,20 @@ export function planDayProgression(dayNumber: number): Prescription[] {
   // morning after soreness / a named sore joint). Equipment + the day's own movements
   // are threaded in too so a variety suggestion ranks by what the athlete can load and
   // never re-suggests something already on the day.
-  const autoreg = recentAutoregulation();
-  const recentLoad = recentMuscleLoad(2);
+  // At the finish boundary this proposal is for the NEXT exposure, not another
+  // set today. Do not let the just-completed session masquerade as poor readiness;
+  // constraints still apply here, and readiness is re-checked when that day starts.
+  const autoreg = opts.forNextSession ? null : recentAutoregulation();
+  const recentLoad = opts.forNextSession ? null : recentMuscleLoad(2);
   const equip = availableEquipment();
   const dayMovements = items.filter((it) => it.kind !== "cardio" && it.name).map((it) => String(it.name));
+  const personalResponse = whatWorksForYou();
   const out: Prescription[] = [];
   for (const it of items) {
     if (it.kind === "cardio" || !it.name) continue; // skip cardio + label-only rows
     const excludeNames = dayMovements.filter((n) => n.toLowerCase() !== String(it.name).toLowerCase());
-    const p = nextPrescription(it.name, states, { autoreg, recentLoad, availableEquipment: equip, excludeNames });
+    const personalModifier = trainingModifierFor(String(it.name), personalResponse);
+    const p = nextPrescription(it.name, states, { autoreg, recentLoad, availableEquipment: equip, excludeNames, personalModifier });
     if (p) out.push({ ...p, plan_item_id: it.plan_item_id, day_number: dayNumber });
   }
   return out;
@@ -825,9 +881,9 @@ export function planDayProgression(dayNumber: number): Prescription[] {
 // "hold" (including an autoregulation-braked hold) is by definition no change → dropped.
 // Returns the designed { ok:false, error } (status 200 at the surface) when there's
 // nothing to propose.
-export function buildProgressionProposal(day: number): { ok: false; error: string } | { ok: true; proposal: any } {
+export function buildProgressionProposal(day: number, opts: { forNextSession?: boolean } = {}): { ok: false; error: string } | { ok: true; proposal: any } {
   if (!Number.isFinite(day)) return { ok: false, error: "day required" };
-  const prescriptions = planDayProgression(day);
+  const prescriptions = planDayProgression(day, opts);
   const changes: Record<string, any>[] = [];
   for (const p of prescriptions) {
     if (p.action === "hold") continue; // a hold is no change
@@ -907,6 +963,14 @@ export function buildAndApplySwap(
       setProposalStatus(draft.proposal.id, "discarded");
       return { ok: false, error: applied?.error || "couldn't apply that swap" };
     }
+    // savePlanDay already emitted plan_changed; the explicit swap kind carries
+    // WHICH movement rotated out/in so the review can speak to the rotation.
+    emitBrainEvent({
+      kind: "exercise_swapped",
+      domain: "training",
+      date: localDateISO(),
+      subject_key: `${from} -> ${to}`.slice(0, 160),
+    });
     return { ok: true, swapped: applied };
   } catch (e: any) {
     setProposalStatus(draft.proposal.id, "discarded");

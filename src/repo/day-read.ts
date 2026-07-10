@@ -9,6 +9,7 @@ import { db } from "../db.js";
 import { scheduleDayReadRefresh } from "../dayread-refresh.js";
 import { invalidateBrainSnapshot } from "../brain/snapshot.js";
 import { resolveDayReadRule, type DayReadRule } from "./brain/day-read-rules.js";
+import { recordDecision } from "./brain-decisions.js";
 import { getCheckinByDate, getRecoverySummary, latestSleep } from "./coach.js";
 import { activeContextEffect } from "./context-effect.js";
 import {
@@ -26,11 +27,11 @@ import { type TrainingLoad, dayLoad } from "./training-read.js";
 
 // ---------- T1: day intelligence ----------
 export interface DayRead {
-  kind: "train" | "easy" | "rest" | "done";  // 'done' = a real, loading session is already logged today
-  focus: string | null;          // e.g. "Lower body" on a train day
-  why: string;                   // one plain-language sentence
+  kind: "train" | "easy" | "rest" | "done"; // 'done' = a real, loading session is already logged today
+  focus: string | null; // e.g. "Lower body" on a train day
+  why: string; // one plain-language sentence
   est_minutes: number | null;
-  signals: Record<string, any>;  // the deterministic inputs behind the call
+  signals: Record<string, any>; // the deterministic inputs behind the call
 }
 
 // Deterministic baseline (T1 layers the agentic sentence + buildDayReadPrompt on
@@ -50,7 +51,11 @@ export function dayRead(date?: string, recovery?: any): DayRead {
 
   // Lifting-session days (a logged set) — still used for "did they train today".
   const sessionDates = new Set(
-    (db.prepare(`SELECT DISTINCT s.date AS dt FROM sessions s JOIN logged_sets l ON l.session_id = s.id`).all() as any[]).map((r) => r.dt)
+    (
+      db
+        .prepare(`SELECT DISTINCT s.date AS dt FROM sessions s JOIN logged_sets l ON l.session_id = s.id`)
+        .all() as any[]
+    ).map((r) => r.dt)
   );
 
   // Intensity-aware earned-rest count. The old rule treated ANY logged day as a
@@ -83,15 +88,17 @@ export function dayRead(date?: string, recovery?: any): DayRead {
     const weekKm = (endIso: string): number => {
       const end = new Date(endIso + "T00:00:00Z").getTime();
       const start = new Date(end - 6 * 864e5).toISOString().slice(0, 10);
-      const row = db.prepare(
-        `SELECT COALESCE(SUM(distance_km), 0) AS km FROM activities WHERE date >= ? AND date <= ?`
-      ).get(start, endIso) as any;
+      const row = db
+        .prepare(`SELECT COALESCE(SUM(distance_km), 0) AS km FROM activities WHERE date >= ? AND date <= ?`)
+        .get(start, endIso) as any;
       return Math.round(Number(row?.km ?? 0) * 10) / 10;
     };
     const yesterdayIso = new Date(new Date(d + "T00:00:00Z").getTime() - 864e5).toISOString().slice(0, 10);
     lastWeekKm = weekKm(yesterdayIso);
     // The three prior weeks' average (the chronic base), ending a week back.
-    const priorEnds = [7, 14, 21].map((n) => new Date(new Date(d + "T00:00:00Z").getTime() - n * 864e5).toISOString().slice(0, 10));
+    const priorEnds = [7, 14, 21].map((n) =>
+      new Date(new Date(d + "T00:00:00Z").getTime() - n * 864e5).toISOString().slice(0, 10)
+    );
     const priorKm = priorEnds.map(weekKm);
     const chronic = priorKm.reduce((a, b) => a + b, 0) / priorKm.length;
     // A meaningful spike: this week clearly above the chronic base (and a real
@@ -118,7 +125,9 @@ export function dayRead(date?: string, recovery?: any): DayRead {
   }
   const avgSleepMin = rec?.recovery?.avg_sleep_min ?? null;
   const lowSleep = avgSleepMin != null && avgSleepMin > 0 && avgSleepMin < 360; // <6h average
-  const lowSubjective = checkin && ((checkin.energy != null && checkin.energy <= 2) || (checkin.sleep_feel != null && checkin.sleep_feel <= 2));
+  const lowSubjective =
+    checkin &&
+    ((checkin.energy != null && checkin.energy <= 2) || (checkin.sleep_feel != null && checkin.sleep_feel <= 2));
 
   // ---- predictive deload anticipation ----
   // Don't wait for 3 hard days to already be logged: read the acute-vs-chronic
@@ -129,7 +138,13 @@ export function dayRead(date?: string, recovery?: any): DayRead {
   const dl = rec?.delta ?? null;
   let recoveryDrift = 0; // count of signals pointing the wrong way vs the athlete's own norm
   // HRV running meaningfully below baseline (>~5% of baseline) is a fatigue tell.
-  if (dl?.hrv != null && rec?.baseline?.hrv != null && rec.baseline.hrv > 0 && dl.hrv < -Math.max(2, rec.baseline.hrv * 0.05)) recoveryDrift++;
+  if (
+    dl?.hrv != null &&
+    rec?.baseline?.hrv != null &&
+    rec.baseline.hrv > 0 &&
+    dl.hrv < -Math.max(2, rec.baseline.hrv * 0.05)
+  )
+    recoveryDrift++;
   // Resting HR running above baseline (>~2 bpm) the same way.
   if (dl?.rhr != null && dl.rhr > 2) recoveryDrift++;
   // Sleep running short vs their norm.
@@ -150,20 +165,31 @@ export function dayRead(date?: string, recovery?: any): DayRead {
   // today it should acknowledge it, not keep suggesting a fresh session as if the
   // day were blank. A "real" activity clears a light bar (≥20 min or any logged
   // distance) so an incidental short walk doesn't suppress a genuinely-due day.
-  const todaysActivities = db.prepare(
-    `SELECT type, duration_min, distance_km FROM activities WHERE date = ? ORDER BY id DESC`
-  ).all(d) as any[];
+  const todaysActivities = db
+    .prepare(`SELECT type, duration_min, distance_km FROM activities WHERE date = ? ORDER BY id DESC`)
+    .all(d) as any[];
   const todaysSetCount = Number(
-    (db.prepare(`SELECT COUNT(*) AS n FROM logged_sets l JOIN sessions s ON s.id = l.session_id WHERE s.date = ?`).get(d) as any)?.n ?? 0
+    (
+      db
+        .prepare(`SELECT COUNT(*) AS n FROM logged_sets l JOIN sessions s ON s.id = l.session_id WHERE s.date = ?`)
+        .get(d) as any
+    )?.n ?? 0
   );
   const bigActivity =
-    todaysActivities.find((a) => (a.duration_min != null && Number(a.duration_min) >= 20) || a.distance_km != null) || null;
+    todaysActivities.find((a) => (a.duration_min != null && Number(a.duration_min) >= 20) || a.distance_km != null) ||
+    null;
 
   // Active lifestyle/context (injury, illness, travel, a late night) as of `d`. The
   // deterministic floor now READS it — an active injury isn't just prompt prose, it
   // biases the read (a caveat on the train branch, never a forced rest — you can
   // usually train around it). Null-safe; absent context changes nothing.
-  const ctx = (() => { try { return activeContextEffect(d); } catch { return null; } })();
+  const ctx = (() => {
+    try {
+      return activeContextEffect(d);
+    } catch {
+      return null;
+    }
+  })();
   const reduceItem = ctx?.active?.find((a) => a.reduce_load) ?? null;
 
   const signals = {
@@ -189,7 +215,9 @@ export function dayRead(date?: string, recovery?: any): DayRead {
     endurance_volume: countsCardio ? { last_week_km: lastWeekKm, volume_spike: volumeSpike } : null,
     avg_sleep_min: avgSleepMin,
     low_sleep: lowSleep,
-    checkin: checkin ? { energy: checkin.energy, sleep_feel: checkin.sleep_feel, soreness: checkin.soreness, mood: checkin.mood } : null,
+    checkin: checkin
+      ? { energy: checkin.energy, sleep_feel: checkin.sleep_feel, soreness: checkin.soreness, mood: checkin.mood }
+      : null,
     has_recovery_data: !!rec?.has_data,
     // Last night's single-night sleep architecture + HRV (plain numbers + a calm
     // one-line `text`), so the Brief can speak to LAST NIGHT, not just the window.
@@ -197,7 +225,11 @@ export function dayRead(date?: string, recovery?: any): DayRead {
     last_night: lastNight,
     logged_today: {
       sets: todaysSetCount,
-      activities: todaysActivities.map((a) => ({ type: a.type, duration_min: a.duration_min, distance_km: a.distance_km })),
+      activities: todaysActivities.map((a) => ({
+        type: a.type,
+        duration_min: a.duration_min,
+        distance_km: a.distance_km,
+      })),
     },
     // Predictive deload anticipation — a soft, forward-looking fatigue read.
     // anticipate_deload true ⇒ heading toward a reset (recovery drifting below the
@@ -247,8 +279,18 @@ export function dayRead(date?: string, recovery?: any): DayRead {
         // Name the work for the deterministic `why` (the floor when the agent's offline).
         // A logged lifting session reads as "session"; otherwise name the activity (run/
         // ride). When BOTH happened, "session" wins so the lift isn't erased by the run.
-        const label = trainedToday ? "session" : (bigActivity && bigActivity.type && bigActivity.type !== "other" ? String(bigActivity.type) : "session");
-        return { kind: "done", focus: null, why: `You already got a solid ${label} in today — the rest of the day is for recovery.`, est_minutes: null, signals };
+        const label = trainedToday
+          ? "session"
+          : bigActivity && bigActivity.type && bigActivity.type !== "other"
+            ? String(bigActivity.type)
+            : "session";
+        return {
+          kind: "done",
+          focus: null,
+          why: `You already got a solid ${label} in today — the rest of the day is for recovery.`,
+          est_minutes: null,
+          signals,
+        };
       },
     },
     {
@@ -264,11 +306,12 @@ export function dayRead(date?: string, recovery?: any): DayRead {
         return {
           kind: "rest",
           focus: null,
-          why: consec >= 3
-            ? "You've trained hard several days running — let it consolidate."
-            : lowSleep
-              ? "Sleep's run short lately — an easier day will serve you better."
-              : "You're feeling run-down today — rest is the smart call.",
+          why:
+            consec >= 3
+              ? "You've trained hard several days running — let it consolidate."
+              : lowSleep
+                ? "Sleep's run short lately — an easier day will serve you better."
+                : "You're feeling run-down today — rest is the smart call.",
           est_minutes: null,
           signals,
         };
@@ -280,7 +323,13 @@ export function dayRead(date?: string, recovery?: any): DayRead {
         // An easy/light effort already done today (a short walk, a recovery spin a lifter
         // doesn't count as their real work) — acknowledge it without telling them to rest.
         if (!(trainedToday || bigActivity)) return null;
-        return { kind: "easy", focus: null, why: "You've already moved today — keep the rest of it easy.", est_minutes: 20, signals };
+        return {
+          kind: "easy",
+          focus: null,
+          why: "You've already moved today — keep the rest of it easy.",
+          est_minutes: 20,
+          signals,
+        };
       },
     },
     {
@@ -291,7 +340,13 @@ export function dayRead(date?: string, recovery?: any): DayRead {
         // yesterday was already a recovery/easy day, the spike has been answered — don't
         // stack easy on easy, let them train (the spike still rides as a caveat below).
         if (!(volumeSpike && consec >= 1)) return null;
-        return { kind: "easy", focus: null, why: "Your running's ramped this week — an easy day lets it absorb.", est_minutes: 25, signals };
+        return {
+          kind: "easy",
+          focus: null,
+          why: "Your running's ramped this week — an easy day lets it absorb.",
+          est_minutes: 25,
+          signals,
+        };
       },
     },
     {
@@ -303,14 +358,19 @@ export function dayRead(date?: string, recovery?: any): DayRead {
         // caveats so it's coach-level, not a blunt "go": fatigue quietly building toward
         // a reset, and/or running ramped this week (keep today's miles easy).
         const caveats: string[] = [];
-        if (reduceItem) caveats.push(
-          reduceItem.kind === "injury"
-            ? `you've got ${String(reduceItem.title || "an injury").toLowerCase()} to work around — train around it and skip anything that aggravates it`
-            : "there's something to ease around right now, so keep the load conservative",
-        );
+        if (reduceItem)
+          caveats.push(
+            reduceItem.kind === "injury"
+              ? `you've got ${String(reduceItem.title || "an injury").toLowerCase()} to work around — train around it and skip anything that aggravates it`
+              : "there's something to ease around right now, so keep the load conservative"
+          );
         if (sd.selection?.adapted && sd.selection?.reason) caveats.push(String(sd.selection.reason));
-        if (anticipateDeload) caveats.push("recovery's drifting below your norm, so a couple more hard days and you'll likely want a reset");
-        if (volumeSpike) caveats.push("your running's ramped this week, so keep today's miles easy and don't pile on hard intensity");
+        if (anticipateDeload)
+          caveats.push(
+            "recovery's drifting below your norm, so a couple more hard days and you'll likely want a reset"
+          );
+        if (volumeSpike)
+          caveats.push("your running's ramped this week, so keep today's miles easy and don't pile on hard intensity");
         const why = caveats.length
           ? `You're good to train — ${caveats.join("; and ")}.`
           : "You're recovered and due — good to go.";
@@ -319,8 +379,15 @@ export function dayRead(date?: string, recovery?: any): DayRead {
     },
   ];
 
-  return resolveDayReadRule(rules)
-    ?? { kind: "easy", focus: null, why: "Nothing programmed — some easy movement is plenty today.", est_minutes: 20, signals };
+  return (
+    resolveDayReadRule(rules) ?? {
+      kind: "easy",
+      focus: null,
+      why: "Nothing programmed — some easy movement is plenty today.",
+      est_minutes: 20,
+      signals,
+    }
+  );
 }
 
 // ---------- the forward look (day-ahead heads-up) ----------
@@ -330,9 +397,9 @@ export function dayRead(date?: string, recovery?: any): DayRead {
 // (under their productive range). Deterministic + null-safe — the agent voices it
 // warmly when available, this is the floor (and the structured truth the PWA renders).
 export interface ForwardLook {
-  next_focus: string | null;   // the next session's character ("Lower body")
-  due: string[];               // groups under their productive range this week
-  text: string | null;         // a single plain-words line, or null when there's nothing to say
+  next_focus: string | null; // the next session's character ("Lower body")
+  due: string[]; // groups under their productive range this week
+  text: string | null; // a single plain-words line, or null when there's nothing to say
 }
 export function forwardLook(date?: string): ForwardLook {
   const d = date || localDateISO();
@@ -342,14 +409,20 @@ export function forwardLook(date?: string): ForwardLook {
     if (days.length) {
       // If today already has work, "Next" means the day after that work. Otherwise
       // it means the same adaptive next-session pick the Brief points at.
-      const todaySess = db.prepare(
-        `SELECT s.id AS id, s.plan_day_id AS plan_day_id
+      const todaySess = db
+        .prepare(
+          `SELECT s.id AS id, s.plan_day_id AS plan_day_id
            FROM sessions s
           WHERE s.date = ? AND EXISTS (SELECT 1 FROM logged_sets l WHERE l.session_id = s.id)
           ORDER BY s.id DESC LIMIT 1`
-      ).get(d) as any;
+        )
+        .get(d) as any;
       const todayResolved = todaySess
-        ? resolveSessionPlanDay(Number(todaySess.id), todaySess.plan_day_id == null ? null : Number(todaySess.plan_day_id), days)
+        ? resolveSessionPlanDay(
+            Number(todaySess.id),
+            todaySess.plan_day_id == null ? null : Number(todaySess.plan_day_id),
+            days
+          )
         : null;
       const selected = todayResolved ? null : selectAdaptivePlanDay(d);
       const nd = todayResolved
@@ -357,12 +430,16 @@ export function forwardLook(date?: string): ForwardLook {
         : days.find((day) => day.day_number === selected?.day_number);
       next_focus = nd ? planDayFocus(nd) : null;
     }
-  } catch { /* no plan → no next focus */ }
+  } catch {
+    /* no plan → no next focus */
+  }
   let due: string[] = [];
   try {
     const bal: any = programBalance(2, d);
     due = Array.isArray(bal?.due) ? bal.due.slice(0, 2) : [];
-  } catch { /* no balance → no due groups */ }
+  } catch {
+    /* no balance → no due groups */
+  }
   const parts: string[] = [];
   if (next_focus) parts.push(`Next: ${next_focus}`);
   if (due.length) parts.push(`${due.join(" & ")} due this week`);
@@ -375,9 +452,9 @@ export function forwardLook(date?: string): ForwardLook {
 // plan order, plus a base-building note — NO fabricated calendar (the agent owns the
 // real day-by-day). Always available, never throws.
 export interface WeekAheadDay {
-  day: string | null;            // weekday label when the agent placed it; null for the floor's plan list
+  day: string | null; // weekday label when the agent placed it; null for the floor's plan list
   kind: "lift" | "run" | "mixed" | "rest";
-  label: string;                 // e.g. "Lower body" / "Easy 5k" / "Rest"
+  label: string; // e.g. "Lower body" / "Easy 5k" / "Rest"
   note?: string | null;
 }
 export function weekAheadPlan(): { days: WeekAheadDay[]; summary: string } {
@@ -388,12 +465,14 @@ export function weekAheadPlan(): { days: WeekAheadDay[]; summary: string } {
   // zero runs in the Today week-ahead floor. cardio-only → run; cardio+strength →
   // mixed; otherwise lift. (The agentic weekAheadRead still layers the real shape.)
   const counts = new Map<number, { cardio: number; strength: number }>();
-  for (const r of db.prepare(
-    `SELECT plan_day_id AS id,
+  for (const r of db
+    .prepare(
+      `SELECT plan_day_id AS id,
             SUM(CASE WHEN kind='cardio' THEN 1 ELSE 0 END) AS cardio,
             SUM(CASE WHEN kind='cardio' THEN 0 ELSE 1 END) AS strength
        FROM plan_items GROUP BY plan_day_id`
-  ).all() as any[]) {
+    )
+    .all() as any[]) {
     counts.set(Number(r.id), { cardio: Number(r.cardio) || 0, strength: Number(r.strength) || 0 });
   }
   const days: WeekAheadDay[] = planDays.map((d) => {
@@ -402,7 +481,10 @@ export function weekAheadPlan(): { days: WeekAheadDay[]; summary: string } {
     return {
       day: null,
       kind,
-      label: String(d.focus || d.name || `Day ${d.day_number}`).replace(/\s+/g, " ").trim().slice(0, 60),
+      label: String(d.focus || d.name || `Day ${d.day_number}`)
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 60),
     };
   });
   // Reflect PROGRAM STATE in the floor's summary (plain words, never a fabricated
@@ -415,12 +497,20 @@ export function weekAheadPlan(): { days: WeekAheadDay[]; summary: string } {
     const st = getProgramState();
     if (st?.mesocycle?.phase === "deload-due") notes.push("a deload week is about due — pencil in one lighter day");
     const bal = programBalance();
-    if (Array.isArray(bal?.due) && bal.due.length) notes.push(`${bal.due.slice(0, 3).join(", ")} ${bal.due.length === 1 ? "is" : "are"} due — work ${bal.due.length === 1 ? "it" : "them"} in`);
-    const deload = (Array.isArray(st?.lifts) ? st.lifts : []).filter((l: any) => l.suggested_action === "deload").map((l: any) => l.exercise);
+    if (Array.isArray(bal?.due) && bal.due.length)
+      notes.push(
+        `${bal.due.slice(0, 3).join(", ")} ${bal.due.length === 1 ? "is" : "are"} due — work ${bal.due.length === 1 ? "it" : "them"} in`
+      );
+    const deload = (Array.isArray(st?.lifts) ? st.lifts : [])
+      .filter((l: any) => l.suggested_action === "deload")
+      .map((l: any) => l.exercise);
     if (deload.length) notes.push(`${deload.slice(0, 2).join(", ")} could use a light deload`);
-  } catch { /* program-state unavailable — fall back to the plain summary */ }
+  } catch {
+    /* program-state unavailable — fall back to the plain summary */
+  }
 
-  const base = "Your training week in order — weave easy, conversational runs between sessions for your aerobic base, and take a rest day when you need one.";
+  const base =
+    "Your training week in order — weave easy, conversational runs between sessions for your aerobic base, and take a rest day when you need one.";
   return {
     days,
     summary: notes.length ? `${base} This week: ${notes.join("; ")}.` : base,
@@ -437,7 +527,11 @@ export function getCachedDayRead(date: string): any | null {
   const row = db.prepare(`SELECT * FROM day_reads WHERE date = ?`).get(date) as any;
   if (!row) return null;
   let signals: any = {};
-  try { signals = row.signals ? JSON.parse(row.signals) : {}; } catch { signals = {}; }
+  try {
+    signals = row.signals ? JSON.parse(row.signals) : {};
+  } catch {
+    signals = {};
+  }
   return {
     kind: row.kind,
     headline: row.headline,
@@ -483,18 +577,58 @@ export function saveDayRead(date: string, read: any): void {
     override
   );
   // Keep the table to a rolling few weeks — old reads are never served.
-  try { db.prepare(`DELETE FROM day_reads WHERE date < date('now','-21 days')`).run(); } catch {}
+  try {
+    db.prepare(`DELETE FROM day_reads WHERE date < date('now','-21 days')`).run();
+  } catch {}
+  // Persist the recommendation as a bounded, outcome-addressable decision. This
+  // runs after the canonical cache write and is intentionally fail-soft: an audit
+  // outage must never make the Brief unavailable.
+  try {
+    recordDecision({
+      effective_date: date,
+      kind: "day_read",
+      domain: "cross_domain",
+      summary: String(read.headline || `${String(read.kind)} day`).slice(0, 300),
+      rationale: read.why ?? null,
+      source: read.source ?? "deterministic",
+      source_ref_type: "day_read",
+      source_ref_key: date,
+      status: "observed",
+      autonomy_tier: "observe",
+      risk_class: "low",
+      reversible: false,
+      input_fingerprint: null,
+      context: { signals: read.signals ?? {}, override },
+      action: {
+        kind: read.kind,
+        focus: read.focus ?? null,
+        est_minutes: read.est_minutes ?? null,
+        why: read.why ?? null,
+      },
+      specialist: null,
+      applied_at: null,
+      reverted_at: null,
+      superseded_by: null,
+      evaluator_version: null,
+    });
+  } catch {
+    // The day-read cache is authoritative; learning/audit recording is best effort.
+  }
 }
 
 export function invalidateDayRead(date?: string): void {
   const d = date || localDateISO();
   invalidateBrainSnapshot("day_read");
-  try { db.prepare(`DELETE FROM day_reads WHERE date = ?`).run(d); } catch {}
+  try {
+    db.prepare(`DELETE FROM day_reads WHERE date = ?`).run(d);
+  } catch {}
   // Fresh-wake: schedule a debounced, coalesced, fire-and-forget background
   // recompute so the athlete's next open serves a warm agentic read instead of
   // paying the ~90s agent run inline. Best-effort + off the write path — it only
   // acts when `d` covers today AND an agent is usable (see src/dayread-refresh.ts).
-  try { scheduleDayReadRefresh(d); } catch {}
+  try {
+    scheduleDayReadRefresh(d);
+  } catch {}
 }
 
 // ---------- T5: frequent foods by time of day ----------
@@ -520,10 +654,10 @@ export interface FrequentFood {
 function frequentFoodKey(s: string): string {
   return String(s)
     .toLowerCase()
-    .replace(/[.,;:!?]+$/g, "")          // trailing punctuation
-    .replace(/\s*&\s*/g, " and ")        // "&" ⇒ "and" so both spellings merge
-    .replace(/^\s*(a|an|the)\s+/, "")    // leading article
-    .replace(/\s+/g, " ")                // fold internal whitespace
+    .replace(/[.,;:!?]+$/g, "") // trailing punctuation
+    .replace(/\s*&\s*/g, " and ") // "&" ⇒ "and" so both spellings merge
+    .replace(/^\s*(a|an|the)\s+/, "") // leading article
+    .replace(/\s+/g, " ") // fold internal whitespace
     .trim();
 }
 
@@ -537,12 +671,14 @@ export function frequentFoods(hour?: number): FrequentFood[] {
   // off-peak slot could fall entirely outside the 400 newest rows and return [].
   // The hour set wraps midnight naturally.
   const bandHours: number[] = [];
-  for (let dh = -2; dh <= 2; dh++) bandHours.push(((targetHour + dh) % 24 + 24) % 24);
-  const rows = db.prepare(
-    `SELECT created_at, meal, parsed_json FROM food_notes
+  for (let dh = -2; dh <= 2; dh++) bandHours.push((((targetHour + dh) % 24) + 24) % 24);
+  const rows = db
+    .prepare(
+      `SELECT created_at, meal, parsed_json FROM food_notes
      WHERE CAST(substr(created_at, 12, 2) AS INTEGER) IN (${bandHours.map(() => "?").join(",")})
      ORDER BY id DESC LIMIT 400`
-  ).all(...bandHours) as any[];
+    )
+    .all(...bandHours) as any[];
   const agg = new Map<string, { count: number; last_at: string }>();
   for (const r of rows) {
     // created_at is stored UTC ("YYYY-MM-DD HH:MM:SS"); read the hour and accept
@@ -552,14 +688,20 @@ export function frequentFoods(hour?: number): FrequentFood[] {
     const diff = Math.min(Math.abs(hh - targetHour), 24 - Math.abs(hh - targetHour));
     if (diff > 2) continue;
     let parsed: any = null;
-    try { parsed = r.parsed_json ? JSON.parse(r.parsed_json) : null; } catch { parsed = null; }
+    try {
+      parsed = r.parsed_json ? JSON.parse(r.parsed_json) : null;
+    } catch {
+      parsed = null;
+    }
     const summary = String(parsed?.summary ?? r.meal ?? "").trim();
     if (!summary) continue;
     const key = frequentFoodKey(summary);
     if (!key) continue;
     const cur = agg.get(key);
-    if (cur) { cur.count++; if (String(r.created_at) > cur.last_at) cur.last_at = String(r.created_at); }
-    else agg.set(key, { count: 1, last_at: String(r.created_at) });
+    if (cur) {
+      cur.count++;
+      if (String(r.created_at) > cur.last_at) cur.last_at = String(r.created_at);
+    } else agg.set(key, { count: 1, last_at: String(r.created_at) });
   }
   // Recover display casing from the NEWEST occurrence of each key (rows are
   // id-DESC, so the first one we see per key wins), and macros from the newest
@@ -567,11 +709,21 @@ export function frequentFoods(hour?: number): FrequentFood[] {
   // often a quick text entry not yet enriched, so we want the freshest enriched
   // estimate to prefill, not null.
   const display = new Map<string, string>();
-  const macros = new Map<string, { kcal: number | null; protein_g: number | null; carbs_g: number | null; fat_g: number | null }>();
-  const num = (v: any): number | null => { const n = Number(v); return Number.isFinite(n) ? n : null; };
+  const macros = new Map<
+    string,
+    { kcal: number | null; protein_g: number | null; carbs_g: number | null; fat_g: number | null }
+  >();
+  const num = (v: any): number | null => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
   for (const r of rows) {
     let parsed: any = null;
-    try { parsed = r.parsed_json ? JSON.parse(r.parsed_json) : null; } catch { parsed = null; }
+    try {
+      parsed = r.parsed_json ? JSON.parse(r.parsed_json) : null;
+    } catch {
+      parsed = null;
+    }
     const summary = String(parsed?.summary ?? r.meal ?? "").trim();
     if (!summary) continue;
     const key = frequentFoodKey(summary);

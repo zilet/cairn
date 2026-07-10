@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { draftCoachProposal, evolveProgram } from "../coachOps.js";
 import { localToday } from "../dayread.js";
-import { getCachedDayRead } from "../domain/brain/index.js";
+import { applyProposalWithAutonomy, getCachedDayRead } from "../domain/brain/index.js";
 import { dexaTargeting } from "../domain/health/index.js";
 import {
   advanceBlockWeek,
@@ -192,6 +192,21 @@ programRouter.get("/proposals", (req, res) =>
 programRouter.post("/proposals/:id/apply", (req, res) => {
   try {
     res.json(applyProposal(Number(req.params.id)));
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+programRouter.post("/proposals/:id/lead", (req, res) => {
+  try {
+    res.json(
+      applyProposalWithAutonomy(Number(req.params.id), {
+        requested_tier: req.body?.requested_tier,
+        safety_response: !!req.body?.safety_response,
+        user_locked: !!req.body?.user_locked,
+        clamp_refused: !!req.body?.clamp_refused,
+      })
+    );
   } catch (e: any) {
     res.status(400).json({ error: e.message });
   }

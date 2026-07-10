@@ -48,6 +48,7 @@ export interface CoachDayIntakeEntry {
   carbs_g: number | null;
   fat_g: number | null;
   fiber_g: number | null;
+  nutrition_pattern?: CoachRecord | null;
   logged_at: string | null;
   enrichment_status: string | null;
 }
@@ -147,6 +148,51 @@ export interface CoachCheckin extends CoachRecord {
   date?: string;
 }
 
+export type CoachPersonalResponseConfidence = "tentative" | "observed" | "strong";
+
+export type CoachPersonalModifierTarget =
+  | "nutrition_step"
+  | "training_progression_step"
+  | "recovery_adjustment"
+  | "plan_complexity";
+
+export type CoachPersonalSafetyGuardrail = "injury" | "allergy" | "clinical" | "lean_safe";
+
+export interface CoachPersonalModifier {
+  key: string;
+  target: CoachPersonalModifierTarget;
+  scale: number;
+  bounds: { min: number; max: number };
+  confidence: CoachPersonalResponseConfidence;
+  evidence_n: number;
+  rationale: string;
+  never_overrides: CoachPersonalSafetyGuardrail[];
+}
+
+export interface CoachOutcomeLearning {
+  key: string;
+  domain: string;
+  metric_key: string;
+  subject_key: string | null;
+  statement: string;
+  expected: string;
+  observed: string;
+  change: string;
+  confidence: CoachPersonalResponseConfidence;
+  evidence_n: number;
+  aligned_n: number;
+  missed_n: number;
+  contradictions: number;
+  superseded_evidence_n: number;
+  last_observed: string;
+}
+
+export interface CoachWhatWorksForYou {
+  version: 2;
+  learnings: CoachOutcomeLearning[];
+  modifiers: CoachPersonalModifier[];
+}
+
 export interface CoachContextEnvelope {
   now: CoachNowContext;
   profile: CoachRecord | null;
@@ -197,7 +243,10 @@ export interface CoachContextEnvelope {
   day_read: CoachRecord | null;
   insights: CoachRecord[];
   reaction_model: CoachRecord | null;
+  what_works_for_you: CoachWhatWorksForYou | null;
+  recent_decisions: CoachRecord[];
   trajectory: CoachRecord | null;
+  whole_person_trajectory: CoachRecord | null;
   context_today: CoachRecord | null;
   next_step: CoachRecord | null;
 }
@@ -217,6 +266,9 @@ export const COACH_CONTEXT_REQUIRED_KEYS = [
   "directives",
   "recovery",
   "coaching_focus",
+  "whole_person_trajectory",
+  "what_works_for_you",
+  "recent_decisions",
   "program_state",
   "program_adjustments",
   "day_read",
@@ -243,6 +295,7 @@ export const COACH_CONTEXT_ARRAY_KEYS = [
   "program_adjustments",
   "endurance_tests",
   "insights",
+  "recent_decisions",
 ] as const satisfies readonly (keyof CoachContextEnvelope)[];
 
 export function isCoachRecord(value: unknown): value is CoachRecord {
@@ -278,5 +331,5 @@ export function isCoachContextEnvelope(value: unknown): value is CoachContextEnv
 }
 
 export function normalizeMemoryKind(value: unknown, fallback: MemoryKind = "observation"): MemoryKind {
-  return typeof value === "string" && value.trim() ? value.trim() as MemoryKind : fallback;
+  return typeof value === "string" && value.trim() ? (value.trim() as MemoryKind) : fallback;
 }

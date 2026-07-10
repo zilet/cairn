@@ -949,7 +949,15 @@ export function applyFoodPhoto(id: number, parsed: any): boolean {
   // A coarse confidence band (low|medium|high) the surface can show as an honest
   // "rough estimate" hint — never a score, never a percentage. Anything else → drop.
   const conf = String(parsed.confidence ?? "").toLowerCase();
-  if (["low", "medium", "high"].includes(conf)) { merged.confidence = conf; changed = true; }
+  if (["low", "medium", "high"].includes(conf)) {
+    merged.confidence = conf;
+    changed = true;
+  }
+  const pattern = coerceNutritionPattern(parsed.nutrition_pattern, "photo");
+  if (pattern) {
+    merged.nutrition_pattern = pattern;
+    changed = true;
+  }
   // The estimate came from the plate photo — mark provenance so the surface can say
   // "estimated from your photo" rather than implying a precise hand-entered log.
   if (!usableMacro) return false;
@@ -985,6 +993,34 @@ function macroTotalsFromItems(items: any): Record<string, number> | null {
     }
   }
   return saw ? totals : null;
+}
+
+export function coerceNutritionPattern(value: any, fallbackBasis = "estimated_from_foods"): Record<string, any> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const out: Record<string, any> = {};
+  const bands = new Set(["low", "moderate", "high", "unknown"]);
+  for (const key of ["sodium", "potassium", "calcium", "iron", "saturated_fat", "added_sugar"]) {
+    const band = String(value[key] ?? "").toLowerCase();
+    if (bands.has(band)) out[key] = band;
+  }
+  if (typeof value.omega_3_source === "boolean" || value.omega_3_source === null)
+    out.omega_3_source = value.omega_3_source;
+  for (const [key, max] of [
+    ["alcohol_servings", 20],
+    ["caffeine_mg", 2_000],
+  ] as const) {
+    const n = asNum(value[key]);
+    if (n !== undefined) out[key] = Math.max(0, Math.min(max, Math.round(n * 10) / 10));
+  }
+  const caffeineTime = asStr(value.caffeine_time);
+  if (caffeineTime !== undefined) out.caffeine_time = caffeineTime.slice(0, 80);
+  const quality = String(value.food_quality ?? "").toLowerCase();
+  if (["mostly_whole", "mixed", "mostly_ultra_processed", "unknown"].includes(quality)) out.food_quality = quality;
+  const confidence = String(value.confidence ?? "").toLowerCase();
+  out.confidence = ["low", "medium", "high"].includes(confidence) ? confidence : "low";
+  const basis = String(value.basis ?? fallbackBasis).toLowerCase();
+  out.basis = ["label", "user_report", "estimated_from_foods", "photo"].includes(basis) ? basis : fallbackBasis;
+  return Object.keys(out).length > 2 ? out : null;
 }
 
 function isImageAccessFailureNote(v: any): boolean {
@@ -1461,12 +1497,41 @@ function applyStructured(job: Job, structured: any): boolean {
       .filter(Boolean);
     changed = true;
   }
-  const kcal = asNum(structured.kcal); if (kcal !== undefined) { merged.kcal = kcal; changed = true; }
-  const protein = asNum(structured.protein_g); if (protein !== undefined) { merged.protein_g = protein; changed = true; }
-  const carbs = asNum(structured.carbs_g); if (carbs !== undefined) { merged.carbs_g = carbs; changed = true; }
-  const fat = asNum(structured.fat_g); if (fat !== undefined) { merged.fat_g = fat; changed = true; }
-  const fiber = asNum(structured.fiber_g); if (fiber !== undefined) { merged.fiber_g = fiber; changed = true; }
-  const fnotes = asStr(structured.notes); if (fnotes !== undefined) { merged.notes = fnotes; changed = true; }
+  const kcal = asNum(structured.kcal);
+  if (kcal !== undefined) {
+    merged.kcal = kcal;
+    changed = true;
+  }
+  const protein = asNum(structured.protein_g);
+  if (protein !== undefined) {
+    merged.protein_g = protein;
+    changed = true;
+  }
+  const carbs = asNum(structured.carbs_g);
+  if (carbs !== undefined) {
+    merged.carbs_g = carbs;
+    changed = true;
+  }
+  const fat = asNum(structured.fat_g);
+  if (fat !== undefined) {
+    merged.fat_g = fat;
+    changed = true;
+  }
+  const fiber = asNum(structured.fiber_g);
+  if (fiber !== undefined) {
+    merged.fiber_g = fiber;
+    changed = true;
+  }
+  const pattern = coerceNutritionPattern(structured.nutrition_pattern);
+  if (pattern) {
+    merged.nutrition_pattern = pattern;
+    changed = true;
+  }
+  const fnotes = asStr(structured.notes);
+  if (fnotes !== undefined) {
+    merged.notes = fnotes;
+    changed = true;
+  }
   if (changed) repo.updateFoodNoteParsed(job.id, merged);
   return changed;
 }

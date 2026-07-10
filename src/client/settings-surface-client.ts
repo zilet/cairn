@@ -24,7 +24,7 @@ type SettingsSourcesSliceOptions = {
 };
 
 type SettingsAutomationSliceOptions = {
-  workingModel: Pick<SettingsScreenWorkingModel, "enrich_enabled" | "art_enabled" | "research_enabled">;
+  workingModel: Pick<SettingsScreenWorkingModel, "enrich_enabled" | "art_enabled" | "research_enabled" | "lead_mode">;
   settings: Record<string, unknown>;
   artSpendHtml: string;
   researchEligible: SettingsSurfaceRouteEligibility;
@@ -83,6 +83,9 @@ function settingsWorkingModel(data: SettingsScreenData): SettingsScreenWorkingMo
     coach_day: settingsSurfaceNumber(s.coach_day),
     coach_hour: settingsSurfaceNumber(s.coach_hour),
     update_check_enabled: settingsSurfaceBool(s.update_check_enabled, true),
+    lead_mode: ["lead", "announce_first", "review_everything"].includes(settingsSurfaceString(s.lead_mode))
+      ? (settingsSurfaceString(s.lead_mode) as SettingsScreenWorkingModel["lead_mode"])
+      : "lead",
   };
 }
 
@@ -183,9 +186,19 @@ function settingsAutomationSliceHtml(options: SettingsAutomationSliceOptions): s
     : "";
   return `
       <section class="set-group set-group--flush">
-        <p class="set-group-sub">Background touches that make logging effortless. Both fall back gracefully when off.</p>
+        <p class="set-group-sub">Background touches that make logging effortless. Everything falls back gracefully when off.</p>
 
-        <h1 class="lbl" style="margin:14px 0 8px">Agentic enrichment</h1>
+        <h1 class="lbl" style="margin:14px 0 8px">How much should Cairn lead?</h1>
+        <div class="field">
+          <select id="leadMode" aria-label="How much should Cairn lead?">
+            <option value="lead" ${wm.lead_mode === "lead" ? "selected" : ""}>Lead</option>
+            <option value="announce_first" ${wm.lead_mode === "announce_first" ? "selected" : ""}>Announce first</option>
+            <option value="review_everything" ${wm.lead_mode === "review_everything" ? "selected" : ""}>Review everything</option>
+          </select>
+        </div>
+        <div class="sess-line" style="color:var(--muted);margin-top:6px">Lead lets Cairn make bounded, reversible coaching changes at natural boundaries and explain them where they land. Announce first tells you before they take effect. Review everything keeps the classic approval flow. Goal-level and clinical decisions always stay with you.</div>
+
+        <h1 class="lbl" style="margin:22px 0 8px">Agentic enrichment</h1>
         <label class="toggle"><input type="checkbox" id="enrichEnabled" ${wm.enrich_enabled ? "checked" : ""}>
           <span>Refine free-text logs &amp; capture coaching notes via an agent</span></label>
         <div class="sess-line" style="color:var(--muted);margin-top:6px">Logs stay instant; an agent upgrades them in the background. Falls back to offline parsing when off.</div>

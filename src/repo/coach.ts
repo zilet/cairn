@@ -1,4 +1,5 @@
 import { db } from "../db.js";
+import { emitBrainEvent } from "../brainEvents.js";
 import { canonicalMarker } from "./marker-canon.js";
 import { getGarminCoachSummary, hydrateJson, jsonOrNull, listActivities } from "./activities.js";
 import { cleanClinicalFacts, getLatestHealthReview, hydrateHealthDoc, listContextEvents } from "./health.js";
@@ -17,7 +18,17 @@ import { bodyMetricsContextSlice } from "./body-metrics.js";
 import { getPlan } from "./plan.js";
 import { computeGoalCheck, effectiveGoalMode, getEnduranceGoal, getProfile, listWeight } from "./profile.js";
 import { bodyCompositionRead } from "./standing.js";
-import { directiveFeedbackForCoach, directivesForCoach, getHealthSynthesis, healthFocus, markerSide, matchOptimalZone, optimalDistance, prioritizeMarkers, supplementsForCoach } from "./propagation.js";
+import {
+  directiveFeedbackForCoach,
+  directivesForCoach,
+  getHealthSynthesis,
+  healthFocus,
+  markerSide,
+  matchOptimalZone,
+  optimalDistance,
+  prioritizeMarkers,
+  supplementsForCoach,
+} from "./propagation.js";
 import { symptomMarkerLinks } from "./symptom-links.js";
 import { getProgress, getRecentSessions, getRunCompliance } from "./sessions.js";
 import { localDateISO, nowContext } from "./shared.js";
@@ -25,8 +36,9 @@ import { bumpTrainingDataVersion } from "./training-cache.js";
 import type { CoachContext, CoachDayIntake, CoachProgramState } from "./coach-context.js";
 // The "knows-me" layer — additive context keys (function-level cycle, same shape as
 // the existing coach↔intelligence import; resolved at call time, never at module init).
-import { reactionModelForCoach } from "./reaction-model.js";
+import { reactionModelForCoach, whatWorksForYou } from "./reaction-model.js";
 import { getTrajectory } from "./trajectory.js";
+import { wholePersonTrajectory } from "./whole-person-trajectory.js";
 import { journeyRead } from "./journey.js";
 import { activeContextEffect } from "./context-effect.js";
 import { nextBestStep } from "./next-step.js";
@@ -35,6 +47,8 @@ import { cardiovascularRiskRead } from "./risk.js";
 import { trainingBenchmarkRead } from "./training-milestones.js";
 import { listDueAttention } from "./attention.js";
 import { brainSignal, runWithBrainSnapshot } from "../brain/snapshot.js";
+import { listBrainDecisions, listBrainExpectations } from "./brain-decisions.js";
+import { latestBrainEvaluation } from "./brain-evaluations.js";
 
 // ---------- coach context (shared by prompts) ----------
 // Compact view of a health doc for coaching: kind, date, summary, key markers
@@ -48,9 +62,7 @@ function healthForCoach() {
     // because the lab printed the normal CBC first. Rank flagged (low/high) and
     // out-of-optimal markers ahead of the in-range ones, THEN cap — so the coach
     // always sees the concerning ones. Stable for ties (preserves parse order).
-    const markers = Array.isArray(h.parsed?.markers)
-      ? rankDocMarkers(h.parsed.markers).slice(0, 30)
-      : undefined;
+    const markers = Array.isArray(h.parsed?.markers) ? rankDocMarkers(h.parsed.markers).slice(0, 30) : undefined;
     const clinical_facts = cleanClinicalFacts(h.parsed?.clinical_facts, 12).map((f: any) => ({
       kind: f.kind,
       date: f.date,
@@ -102,7 +114,11 @@ function healthReviewForCoach() {
     created_at: r.created_at,
     headline: p.headline,
     focus: (Array.isArray(p.focus) ? p.focus : []).map((f: any) => ({ title: f?.title, action: f?.action })),
-    watchlist: (Array.isArray(p.watchlist) ? p.watchlist : []).map((w: any) => ({ marker: w?.marker, status: w?.status, action: w?.action })),
+    watchlist: (Array.isArray(p.watchlist) ? p.watchlist : []).map((w: any) => ({
+      marker: w?.marker,
+      status: w?.status,
+      action: w?.action,
+    })),
     followups: Array.isArray(p.followups) ? p.followups : [],
   };
 }
@@ -118,6 +134,7 @@ function dayIntakeForCoach(date = localDateISO()): CoachDayIntake {
     carbs_g: e.carbs_g ?? null,
     fat_g: e.fat_g ?? null,
     fiber_g: e.fiber_g ?? null,
+    nutrition_pattern: e.nutrition_pattern && typeof e.nutrition_pattern === "object" ? e.nutrition_pattern : null,
     logged_at: e.logged_at ?? null,
     enrichment_status: e.enrichment_status ?? null,
   }));
@@ -144,21 +161,24 @@ function dayIntakeForCoach(date = localDateISO()): CoachDayIntake {
 // the next recommendation instead of disappearing into a JSON blob the agent may skim past.
 export interface ProgressionSignal {
   exercise: string;
-  rep_target: string | null;   // "8–10" (reps mode) or null for timed
-  sec_target: number | null;   // timed prescription, when applicable
-  last_logged: string | null;  // ISO date of the most recent logged session for this lift
+  rep_target: string | null; // "8–10" (reps mode) or null for timed
+  sec_target: number | null; // timed prescription, when applicable
+  last_logged: string | null; // ISO date of the most recent logged session for this lift
   days_since: number | null;
-  progress_ready: boolean;     // recent working sets met the top target at RIR ≤ 3 (or met the timed hold)
+  progress_ready: boolean; // recent working sets met the top target at RIR ≤ 3 (or met the timed hold)
   est_1rm_trend: "up" | "down" | "flat" | null;
-  reason: string;              // plain-language ("hit 10/10 reps at RIR 2 last session")
+  reason: string; // plain-language ("hit 10/10 reps at RIR 2 last session")
 }
 export interface AutoregSignal {
   soreness_flag: boolean;
   low_performance_flag: boolean;
   joint_areas: string[];
-  note: string;                // one rolled-up plain sentence
+  note: string; // one rolled-up plain sentence
 }
-export function trainingSignals(recent?: any[]): { progression: ProgressionSignal[]; autoregulation: AutoregSignal | null } {
+export function trainingSignals(recent?: any[]): {
+  progression: ProgressionSignal[];
+  autoregulation: AutoregSignal | null;
+} {
   const sessions = (recent ?? getRecentSessions(20)) as any[];
   const now = Date.now();
   const daysAgo = (d: string): number | null => {
@@ -170,7 +190,7 @@ export function trainingSignals(recent?: any[]): { progression: ProgressionSigna
   const seen = new Set<string>();
   const items: any[] = [];
   for (const day of getPlan() as any[]) {
-    for (const it of (day.items || [])) {
+    for (const it of day.items || []) {
       const key = String(it.exercise || "").toLowerCase();
       if (!key || seen.has(key)) continue;
       seen.add(key);
@@ -189,7 +209,10 @@ export function trainingSignals(recent?: any[]): { progression: ProgressionSigna
     for (const s of sessions) {
       const mine = (s.sets || []).filter((x: any) => String(x.exercise || "").toLowerCase() === lc);
       if (!mine.length) continue;
-      if (!latestSets) { latestSets = mine; latestDate = s.date; }
+      if (!latestSets) {
+        latestSets = mine;
+        latestDate = s.date;
+      }
     }
     const days = latestDate ? daysAgo(latestDate) : null;
     const stale = days != null && days > 14; // a month-old set isn't "ready now"
@@ -202,31 +225,39 @@ export function trainingSignals(recent?: any[]): { progression: ProgressionSigna
         const target = Number(it.target_seconds) || null;
         const best = latestSets.reduce((m: number, x: any) => Math.max(m, Number(x.duration_sec) || 0), 0);
         ready = !stale && target != null && best >= target;
-        reason = target != null ? `held ${best}s vs ${target}s target${stale ? " (a while ago)" : ""}` : `held ${best}s`;
+        reason =
+          target != null ? `held ${best}s vs ${target}s target${stale ? " (a while ago)" : ""}` : `held ${best}s`;
       } else {
         const repHigh = Number(it.rep_high) || null;
         const working = latestSets.filter((x: any) => x.reps != null);
         const reps = working.map((x: any) => Number(x.reps) || 0);
         const topReps = reps.length ? Math.max(...reps) : 0;
         const allHit = repHigh != null && reps.length > 0 && reps.every((r) => r >= repHigh);
-        const rirs = working.map((x: any) => x.rir).filter((r: any) => r != null).map(Number);
+        const rirs = working
+          .map((x: any) => x.rir)
+          .filter((r: any) => r != null)
+          .map(Number);
         const lowRir = rirs.length === 0 || rirs.every((r) => r <= 3);
         ready = !stale && allHit && lowRir;
-        const rirTxt = rirs.length ? ` at RIR ${Math.min(...rirs)}${rirs.length > 1 && Math.min(...rirs) !== Math.max(...rirs) ? `–${Math.max(...rirs)}` : ""}` : "";
-        reason = repHigh != null
-          ? `${ready ? "hit" : "last"} ${topReps}/${repHigh} reps${rirTxt}${stale ? " (a while ago)" : ""}`
-          : `last ${topReps} reps${rirTxt}`;
+        const rirTxt = rirs.length
+          ? ` at RIR ${Math.min(...rirs)}${rirs.length > 1 && Math.min(...rirs) !== Math.max(...rirs) ? `–${Math.max(...rirs)}` : ""}`
+          : "";
+        reason =
+          repHigh != null
+            ? `${ready ? "hit" : "last"} ${topReps}/${repHigh} reps${rirTxt}${stale ? " (a while ago)" : ""}`
+            : `last ${topReps} reps${rirTxt}`;
         const pts = ((getProgress(name) as any).points || []) as any[];
         if (pts.length >= 2) {
-          const a = pts[pts.length - 2].best1rm, b = pts[pts.length - 1].best1rm;
+          const a = pts[pts.length - 2].best1rm,
+            b = pts[pts.length - 1].best1rm;
           trend = b > a * 1.005 ? "up" : b < a * 0.995 ? "down" : "flat";
         }
       }
     }
     return {
       exercise: name,
-      rep_target: timed ? null : (it.rep_low != null && it.rep_high != null ? `${it.rep_low}–${it.rep_high}` : null),
-      sec_target: timed ? (Number(it.target_seconds) || null) : null,
+      rep_target: timed ? null : it.rep_low != null && it.rep_high != null ? `${it.rep_low}–${it.rep_high}` : null,
+      sec_target: timed ? Number(it.target_seconds) || null : null,
       last_logged: latestDate,
       days_since: days,
       progress_ready: ready,
@@ -297,7 +328,9 @@ function nextPlanDayNumber(read: any): number | null {
   const focus = read?.focus ? String(read.focus).toLowerCase().trim() : null;
   if (focus) {
     const hit = days.find((d) => {
-      const f = String(d.focus || d.name || "").toLowerCase().trim();
+      const f = String(d.focus || d.name || "")
+        .toLowerCase()
+        .trim();
       return f && (f === focus || f.includes(focus) || focus.includes(f));
     });
     if (hit) return hit.day_number;
@@ -335,6 +368,7 @@ interface CoachContextSignals {
   runVarietyView: any;
   enduranceTestsView: any;
   trajectoryView: any;
+  wholePersonTrajectoryView: any;
   journeyView: any;
   coachingFocusView: any;
   bodyCompositionView: any;
@@ -350,7 +384,20 @@ interface CoachContextSignals {
 // and life-context it plans around. Cheap per-key reads; `profile` is threaded in.
 function buildPersonSlice(
   signals: CoachContextSignals
-): Pick<CoachContext, "now" | "profile" | "discipline" | "memory" | "learnings" | "context_events" | "family" | "checkins" | "reaction_model" | "context_today"> {
+): Pick<
+  CoachContext,
+  | "now"
+  | "profile"
+  | "discipline"
+  | "memory"
+  | "learnings"
+  | "context_events"
+  | "family"
+  | "checkins"
+  | "reaction_model"
+  | "what_works_for_you"
+  | "context_today"
+> {
   const { profile, contextEventsView, contextTodayView } = signals;
   return {
     // The current LOCAL clock (date + weekday + time + part-of-day). Folded in so
@@ -375,13 +422,17 @@ function buildPersonSlice(
     // "tolerates higher frequency than the read assumed"). Suggestion-not-a-gate:
     // these inform tone/defaults, never enforce.
     learnings: recentLearnings(6),
-    context_events: contextEventsView,        // active life-context (computed once)
-    family: listFamily(),                     // family roster the coach plans around
-    checkins: listCheckins(7),                // optional subjective morning check-ins
+    context_events: contextEventsView, // active life-context (computed once)
+    family: listFamily(), // family roster the coach plans around
+    checkins: listCheckins(7), // optional subjective morning check-ins
     // How THIS athlete actually reacts, learned from their own logged history (deficit→
     // weight rate, hs-CRP↔training-load, late-event→sleep, adherence, a data-gap signal so
     // the coach never fabricates recovery). The personalization spine every brain reads.
     reaction_model: reactionModelForCoach(),
+    // Outcomes earned from the decision -> expectation -> evaluation ledger. Null
+    // until repeated clean evidence exists, so an empty ledger preserves today's
+    // coaching defaults exactly.
+    what_works_for_you: whatWorksForYou(),
     // Active life-context effect (a late concert / travel / illness mentioned once) →
     // expect worse sleep / a transient inflammation bump (don't alarm) / plan around it.
     context_today: contextTodayView,
@@ -410,7 +461,13 @@ function buildNutritionSlice(
     // A bounded view of the current meal plan (today's + tomorrow's meals + the daily
     // targets + a freshness flag) so chat / the day-read / insights can reference the
     // ACTUAL planned food instead of being blind to it. Null when there's no live plan.
-    meal_plan: (() => { try { return mealPlanForCoach(); } catch { return null; } })(),
+    meal_plan: (() => {
+      try {
+        return mealPlanForCoach();
+      } catch {
+        return null;
+      }
+    })(),
   };
 }
 
@@ -419,11 +476,39 @@ function buildNutritionSlice(
 // program-state, recovery, balance, acute load, day-read and conductor domain reads.
 function buildTrainingSlice(
   signals: CoachContextSignals
-): Pick<CoachContext, "plan" | "recent_sessions" | "recent_activities" | "training_signals" | "garmin" | "program_block" | "program_state" | "performance" | "program_balance" | "recent_load" | "progression" | "program_adjustments" | "groups_trajectory" | "test_week" | "dexa_targeting" | "trajectory"> {
+): Pick<
+  CoachContext,
+  | "plan"
+  | "recent_sessions"
+  | "recent_activities"
+  | "training_signals"
+  | "garmin"
+  | "program_block"
+  | "program_state"
+  | "performance"
+  | "program_balance"
+  | "recent_load"
+  | "progression"
+  | "program_adjustments"
+  | "groups_trajectory"
+  | "test_week"
+  | "dexa_targeting"
+  | "trajectory"
+> {
   const {
-    garmin, recentSessions, dayReadView, programBal, recentLoad, fullProgramState,
-    performanceView, programAdjustmentsView, groupsTrajectoryView, testWeekView,
-    dexaTargetingView, trajectoryView, trainingSignalsView,
+    garmin,
+    recentSessions,
+    dayReadView,
+    programBal,
+    recentLoad,
+    fullProgramState,
+    performanceView,
+    programAdjustmentsView,
+    groupsTrajectoryView,
+    testWeekView,
+    dexaTargetingView,
+    trajectoryView,
+    trainingSignalsView,
   } = signals;
   return {
     plan: getPlan(),
@@ -496,7 +581,10 @@ function buildTrainingSlice(
 // zones / plan / variety / test reads built once from the shared recovery+state+block.
 function buildRunningSlice(
   signals: CoachContextSignals
-): Pick<CoachContext, "endurance_goal" | "run_compliance" | "run_zones" | "run_plan" | "run_variety" | "endurance_tests"> {
+): Pick<
+  CoachContext,
+  "endurance_goal" | "run_compliance" | "run_zones" | "run_plan" | "run_variety" | "endurance_tests"
+> {
   const { runZonesView, runPlanView, runVarietyView, enduranceTestsView } = signals;
   return {
     // The endurance OBJECTIVE (v37) — race (dated, periodized + taper) or standing
@@ -531,19 +619,37 @@ function buildRunningSlice(
 // view (threaded in — the same recovery the day-read/program-state already read).
 function buildHealthSlice(
   signals: CoachContextSignals
-): Pick<CoachContext, "health" | "health_review" | "directives" | "health_focus" | "symptom_links" | "health_synthesis" | "directive_feedback" | "recovery" | "body_composition" | "supplements"> {
+): Pick<
+  CoachContext,
+  | "health"
+  | "health_review"
+  | "directives"
+  | "health_focus"
+  | "symptom_links"
+  | "health_synthesis"
+  | "directive_feedback"
+  | "recovery"
+  | "body_composition"
+  | "supplements"
+> {
   const { recovery, healthFocusView, bodyCompositionView } = signals;
   return {
     health: healthForCoach(),
     health_review: healthReviewForCoach(),
-    directives: directivesForCoach(),         // cross-domain consequences of flagged findings (condensed, bounded)
-    health_focus: healthFocusView,            // the TIERED, deduped priorities (act-now/track) — so coaching leads with what matters most, not a flat directive flood
-    symptom_links: (() => { try { return symptomMarkerLinks(); } catch { return []; } })(), // symptom the athlete noted ↔ an out-of-range marker — informational "mention to your doctor" connections
-    health_synthesis: getHealthSynthesis(),   // the latest elite-coach whole-picture narrative (pull artifact), so chat/coach can reference it
+    directives: directivesForCoach(), // cross-domain consequences of flagged findings (condensed, bounded)
+    health_focus: healthFocusView, // the TIERED, deduped priorities (act-now/track) — so coaching leads with what matters most, not a flat directive flood
+    symptom_links: (() => {
+      try {
+        return symptomMarkerLinks();
+      } catch {
+        return [];
+      }
+    })(), // symptom the athlete noted ↔ an out-of-range marker — informational "mention to your doctor" connections
+    health_synthesis: getHealthSynthesis(), // the latest elite-coach whole-picture narrative (pull artifact), so chat/coach can reference it
     directive_feedback: directiveFeedbackForCoach(), // Done/Dismiss memory so the coach avoids stale repeats
-    recovery,                                 // unified Garmin + Apple/other recovery view
-    body_composition: bodyCompositionView,    // DEXA anchor + current-weight projection, with dates
-    supplements: supplementsForCoach(),       // understood supplement regimen (markers/protein it touches)
+    recovery, // unified Garmin + Apple/other recovery view
+    body_composition: bodyCompositionView, // DEXA anchor + current-weight projection, with dates
+    supplements: supplementsForCoach(), // understood supplement regimen (markers/protein it touches)
   };
 }
 
@@ -552,14 +658,21 @@ function buildHealthSlice(
 // threaded in (computed once); insights + next-step are cheap per-key reads.
 function buildBrainSlice(
   signals: CoachContextSignals
-): Pick<CoachContext, "coaching_focus" | "day_read" | "insights" | "next_step"> {
-  const { coachingFocusView, dayReadView } = signals;
+): Pick<
+  CoachContext,
+  "coaching_focus" | "day_read" | "insights" | "next_step" | "recent_decisions" | "whole_person_trajectory"
+> {
+  const { coachingFocusView, dayReadView, wholePersonTrajectoryView } = signals;
   return {
     // THE CONDUCTOR — the single sequenced WHOLE-ATHLETE focus (lead + parallel +
     // later + connections + one batched retest) arbitrated across training, running,
     // DEXA, health, nutrition and recovery. The brain leads with this; the rest is
     // evidence, not a checklist.
     coaching_focus: coachingFocusView,
+    // The standing cross-domain objective: what improved, what is deliberately
+    // parked for this phase, and whether an unexplained regression requires a
+    // revision. Weekly reads receive this directly instead of rediscovering it.
+    whole_person_trajectory: wholePersonTrajectoryView,
     // The persisted read carries the agentic sentence AND the athlete's steer
     // ("rough night" / "easy day") so chat/coach/meals echo the Brief the user is
     // actually looking at; the deterministic floor backs it when nothing's cached.
@@ -568,9 +681,39 @@ function buildBrainSlice(
     // Recent quiet cross-domain insights (bounded) so the chat/coach brain can
     // reference and build on connections it has already surfaced — closing the
     // "one brain" loop instead of re-deriving them each turn.
-    insights: listVisibleInsights(5).map((i: any) => ({ text: i.text, kind: i.kind, rationale: i.rationale, next_step: i.next_step })),
+    insights: listVisibleInsights(5).map((i: any) => ({
+      text: i.text,
+      kind: i.kind,
+      rationale: i.rationale,
+      next_step: i.next_step,
+    })),
     // The single highest-leverage next action across all domains (or null on a quiet day).
     next_step: nextBestStep(),
+    recent_decisions: listBrainDecisions({ limit: 12 }).map((decision) => {
+      const latestVerdict = listBrainExpectations({ decisionId: decision.id!, limit: 12 })
+        .map((expectation) => latestBrainEvaluation(expectation.id!))
+        .filter(Boolean)
+        .sort((a: any, b: any) => String(b.evaluated_at ?? "").localeCompare(String(a.evaluated_at ?? "")))[0] as any;
+      return {
+        id: decision.id,
+        created_at: decision.created_at,
+        effective_date: decision.effective_date,
+        kind: decision.kind,
+        domain: decision.domain,
+        summary: decision.summary,
+        rationale: decision.rationale,
+        status: decision.status,
+        autonomy_tier: decision.autonomy_tier,
+        reversible: decision.reversible,
+        latest_outcome: latestVerdict
+          ? {
+              verdict: latestVerdict.verdict,
+              explanation: latestVerdict.explanation,
+              evaluated_at: latestVerdict.evaluated_at,
+            }
+          : null,
+      };
+    }),
   };
 }
 
@@ -604,13 +747,42 @@ function getCoachContextFromSnapshot(): CoachContext {
   // Running brain (the endurance counterpart to program_state/performance): real
   // HR-zone bpm bands + this week's deterministic periodized run mix, both computed
   // ONCE from the recovery/programState/block already built above so nothing recomputes.
-  const runZonesView = brainSignal("run_zones", () => { try { return runZones({ profile, recovery }); } catch { return null; } });
+  const runZonesView = brainSignal("run_zones", () => {
+    try {
+      return runZones({ profile, recovery });
+    } catch {
+      return null;
+    }
+  });
   // Compute the run plan / DEXA targeting / test-week ONCE here, so both the context
   // keys below AND the programAdjustments digest reuse them (no double compute —
   // dexaTargeting reads healthStanding(), the heaviest of the three).
-  const runPlanView = brainSignal(`run_plan:${today}`, () => { try { return weeklyRunPlan(today, { programState: fullProgramState, recovery, block: activeBlock, zones: runZonesView ?? undefined }); } catch { return null; } });
-  const dexaTargetingView = brainSignal("dexa_targeting", () => { try { return dexaTargeting({ profile }); } catch { return { available: false, targets: [], lead: null, next_dexa_focus: null }; } });
-  const testWeekView = brainSignal(`test_week:${today}`, () => { try { return testWeekDue(today, { programState: fullProgramState, block: activeBlock }); } catch { return null; } });
+  const runPlanView = brainSignal(`run_plan:${today}`, () => {
+    try {
+      return weeklyRunPlan(today, {
+        programState: fullProgramState,
+        recovery,
+        block: activeBlock,
+        zones: runZonesView ?? undefined,
+      });
+    } catch {
+      return null;
+    }
+  });
+  const dexaTargetingView = brainSignal("dexa_targeting", () => {
+    try {
+      return dexaTargeting({ profile });
+    } catch {
+      return { available: false, targets: [], lead: null, next_dexa_focus: null };
+    }
+  });
+  const testWeekView = brainSignal(`test_week:${today}`, () => {
+    try {
+      return testWeekDue(today, { programState: fullProgramState, block: activeBlock });
+    } catch {
+      return null;
+    }
+  });
   // Hoist the domain reads the CONDUCTOR arbitrates so they're computed ONCE here and
   // shared by both the context keys below and coachingFocus() (no double compute).
   const healthFocusView = brainSignal("health_focus", () => healthFocus());
@@ -620,31 +792,92 @@ function getCoachContextFromSnapshot(): CoachContext {
       const weights = listWeight(1) as any[];
       const latestWeight = Array.isArray(weights) && weights.length ? weights[weights.length - 1] : null;
       const asOf = latestWeight?.date ? String(latestWeight.date).slice(0, 10) : today;
-      return bodyCompositionRead(Array.isArray(priority?.markers) ? priority.markers : [], profile?.weight_lb ?? null, asOf);
+      return bodyCompositionRead(
+        Array.isArray(priority?.markers) ? priority.markers : [],
+        profile?.weight_lb ?? null,
+        asOf
+      );
     } catch {
       return null;
     }
   });
-  const performanceView = brainSignal(`performance:${today}`, () => performanceStanding(today, { programState: fullProgramState, recovery, balance: programBal }));
-  const programAdjustmentsView = brainSignal(`program_adjustments:${today}`, () => programAdjustments(programBal, recentLoad, { runPlan: runPlanView, dexa: dexaTargetingView, testWeek: testWeekView }).slice(0, 6));
-  const groupsTrajectoryView = brainSignal(`groups_trajectory:${today}`, () => { try { return muscleGroupTrajectory(today, { programState: fullProgramState }); } catch { return null; } });
-  const runVarietyView = brainSignal(`run_variety:${today}`, () => { try { return runVarietyRead(today); } catch { return null; } });
-  const enduranceTestsView = brainSignal(`endurance_tests:${today}`, () => { try { return enduranceTestsDue(today); } catch { return []; } });
+  const performanceView = brainSignal(`performance:${today}`, () =>
+    performanceStanding(today, { programState: fullProgramState, recovery, balance: programBal })
+  );
+  const programAdjustmentsView = brainSignal(`program_adjustments:${today}`, () =>
+    programAdjustments(programBal, recentLoad, {
+      runPlan: runPlanView,
+      dexa: dexaTargetingView,
+      testWeek: testWeekView,
+    }).slice(0, 6)
+  );
+  const groupsTrajectoryView = brainSignal(`groups_trajectory:${today}`, () => {
+    try {
+      return muscleGroupTrajectory(today, { programState: fullProgramState });
+    } catch {
+      return null;
+    }
+  });
+  const runVarietyView = brainSignal(`run_variety:${today}`, () => {
+    try {
+      return runVarietyRead(today);
+    } catch {
+      return null;
+    }
+  });
+  const enduranceTestsView = brainSignal(`endurance_tests:${today}`, () => {
+    try {
+      return enduranceTestsDue(today);
+    } catch {
+      return [];
+    }
+  });
   const trajectoryView = brainSignal("trajectory", () => getTrajectory(undefined, { programState: fullProgramState }));
+  const wholePersonTrajectoryView = brainSignal("whole_person_trajectory", () => wholePersonTrajectory());
   const journeyView = brainSignal(`journey:${today}`, () => journeyRead(today));
   // The active life-context effect, the training-signals rollup and the active context
   // events, computed ONCE and shared by the person/training slices AND the conductor
   // (life/soreness awareness) so nothing recomputes them.
-  const contextTodayView = brainSignal("context_today", () => { try { return activeContextEffect(); } catch { return { active: [], any: false, reduce_load: false, resolve_candidates: [] }; } });
+  const contextTodayView = brainSignal("context_today", () => {
+    try {
+      return activeContextEffect();
+    } catch {
+      return { active: [], any: false, reduce_load: false, resolve_candidates: [] };
+    }
+  });
   const trainingSignalsView = brainSignal("training_signals", () => trainingSignals(recentSessions));
-  const contextEventsView = brainSignal("context_events:active", () => { try { return listContextEvents({ activeOnly: true }) as any[]; } catch { return []; } });
+  const contextEventsView = brainSignal("context_events:active", () => {
+    try {
+      return listContextEvents({ activeOnly: true }) as any[];
+    } catch {
+      return [];
+    }
+  });
   // External producer reads the CONDUCTOR arbitrates (K3), computed once here and
   // threaded in so coachingFocus stays a pure function: the PREVENT cardiovascular
   // risk read, benchmark milestones, and the K5 due-attention re-checks (labs/DEXA/
   // lifts). journeyView.milestones is reused for the journey producer (no recompute).
-  const cardioRiskView = brainSignal("cardio_risk", () => { try { return cardiovascularRiskRead(); } catch { return null; } });
-  const benchmarkMilestonesView = brainSignal(`benchmark_milestones:${today}`, () => { try { return trainingBenchmarkRead(today, { programState: fullProgramState }).milestones; } catch { return []; } });
-  const dueAttentionView = brainSignal(`due_attention:${today}`, () => { try { return listDueAttention(today, { limit: 12 }); } catch { return []; } });
+  const cardioRiskView = brainSignal("cardio_risk", () => {
+    try {
+      return cardiovascularRiskRead();
+    } catch {
+      return null;
+    }
+  });
+  const benchmarkMilestonesView = brainSignal(`benchmark_milestones:${today}`, () => {
+    try {
+      return trainingBenchmarkRead(today, { programState: fullProgramState }).milestones;
+    } catch {
+      return [];
+    }
+  });
+  const dueAttentionView = brainSignal(`due_attention:${today}`, () => {
+    try {
+      return listDueAttention(today, { limit: 12 });
+    } catch {
+      return [];
+    }
+  });
   // THE CONDUCTOR (the whole-athlete analog of healthFocus): arbitrate every domain
   // read into ONE sequenced focus — a single lead lever, 1-2 parallel levers, an
   // explicit "later", the cross-domain connections, and one batched retest — so the
@@ -653,7 +886,10 @@ function getCoachContextFromSnapshot(): CoachContext {
   const coachingFocusView = brainSignal("coaching_focus", () => {
     try {
       return coachingFocus({
-        discipline: { primary: (profile?.primary_discipline as string) || "strength", endurance_sport: profile?.endurance_sport ?? null },
+        discipline: {
+          primary: (profile?.primary_discipline as string) || "strength",
+          endurance_sport: profile?.endurance_sport ?? null,
+        },
         enduranceGoal: getEnduranceGoal(),
         goalMode: effectiveGoalMode(profile),
         programState: fullProgramState,
@@ -683,7 +919,17 @@ function getCoachContextFromSnapshot(): CoachContext {
         cardioRisk: cardioRiskView,
       });
     } catch {
-      return { available: false, headline: "", lead: null, parallel: [], later: [], connections: [], retest: null, horizon_weeks: null, caveat: null };
+      return {
+        available: false,
+        headline: "",
+        lead: null,
+        parallel: [],
+        later: [],
+        connections: [],
+        retest: null,
+        horizon_weeks: null,
+        caveat: null,
+      };
     }
   });
   const signals: CoachContextSignals = {
@@ -707,6 +953,7 @@ function getCoachContextFromSnapshot(): CoachContext {
     runVarietyView,
     enduranceTestsView,
     trajectoryView,
+    wholePersonTrajectoryView,
     journeyView,
     coachingFocusView,
     bodyCompositionView,
@@ -725,7 +972,13 @@ function getCoachContextFromSnapshot(): CoachContext {
     ...buildRunningSlice(signals),
     ...buildHealthSlice(signals),
     ...buildBrainSlice(signals),
-    body_metrics: brainSignal("body_metrics", () => { try { return bodyMetricsContextSlice(); } catch { return null; } }),
+    body_metrics: brainSignal("body_metrics", () => {
+      try {
+        return bodyMetricsContextSlice();
+      } catch {
+        return null;
+      }
+    }),
   };
 }
 
@@ -736,7 +989,16 @@ export function getCoachingFocus() {
   try {
     return getCoachContext().coaching_focus;
   } catch {
-    return { available: false, headline: "", lead: null, parallel: [], later: [], connections: [], retest: null, horizon_weeks: null };
+    return {
+      available: false,
+      headline: "",
+      lead: null,
+      parallel: [],
+      later: [],
+      connections: [],
+      retest: null,
+      horizon_weeks: null,
+    };
   }
 }
 
@@ -811,7 +1073,9 @@ export function getFamilyMember(id: number) {
 
 export function addFamily(fields: FamilyInput = {}) {
   const info = db
-    .prepare(`INSERT INTO family_members (name, color, relationship, birthdate, notes, allergies, dietary_restrictions) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    .prepare(
+      `INSERT INTO family_members (name, color, relationship, birthdate, notes, allergies, dietary_restrictions) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
     .run(
       fields.name == null ? null : String(fields.name).trim().slice(0, 120) || null,
       fields.color == null ? null : String(fields.color).trim().slice(0, 40) || null,
@@ -859,18 +1123,18 @@ export function deleteFamily(id: number) {
 // medical advice. Two sources coexist: 'markers' (deterministic propagation
 // engine) and 'health_review' (agent-emitted on a saved review).
 export interface DirectiveInput {
-  source?: string | null;       // markers | health_review
-  domain?: string | null;       // nutrition | training | watch
-  marker?: string | null;       // the source marker key (e.g. 'LDL-C') when applicable
+  source?: string | null; // markers | health_review
+  domain?: string | null; // nutrition | training | watch
+  marker?: string | null; // the source marker key (e.g. 'LDL-C') when applicable
   directive_key?: string | null; // stable advice family key for repeat suppression
   directive?: string | null;
   rationale?: string | null;
   citation?: string | null;
-  uncertain?: boolean;          // 1 when the lever is real but not settled
-  status?: string | null;       // active | resolved | dismissed
+  uncertain?: boolean; // 1 when the lever is real but not settled
+  status?: string | null; // active | resolved | dismissed
   status_at?: string | null;
   trigger_value?: number | null;
-  trigger_side?: string | null;  // low | high | unknown
+  trigger_side?: string | null; // low | high | unknown
   trigger_date?: string | null;
   resurfaced_from_id?: number | null;
 }
@@ -902,8 +1166,13 @@ function directiveTriggerFromMarker(marker: string | null) {
   if (!marker) return null;
   const target = String(marker).toLowerCase();
   const { markers } = prioritizeMarkers();
-  const m = markers.find((x: any) => String(x?.name || x?.key || "").toLowerCase() === target)
-    || markers.find((x: any) => String(x?.name || x?.key || "").toLowerCase().includes(target));
+  const m =
+    markers.find((x: any) => String(x?.name || x?.key || "").toLowerCase() === target) ||
+    markers.find((x: any) =>
+      String(x?.name || x?.key || "")
+        .toLowerCase()
+        .includes(target)
+    );
   if (!m) return null;
   const z = matchOptimalZone(m?.name);
   if (!z) return null;
@@ -924,11 +1193,17 @@ export function addDirective(fields: DirectiveInput = {}) {
   const status = DIRECTIVE_STATUSES.has(String(fields.status)) ? String(fields.status) : "active";
   const marker = fields.marker == null ? null : String(fields.marker).trim().slice(0, 60) || null;
   const directive = fields.directive == null ? null : String(fields.directive).trim().slice(0, 600) || null;
-  const directive_key = fields.directive_key == null
-    ? defaultDirectiveKey(marker, domain, directive)
-    : normalizeDirectiveKey(fields.directive_key);
-  const triggerSide = ["low", "high", "unknown"].includes(String(fields.trigger_side)) ? String(fields.trigger_side) : null;
-  const triggerValue = fields.trigger_value == null || !Number.isFinite(Number(fields.trigger_value)) ? null : Number(fields.trigger_value);
+  const directive_key =
+    fields.directive_key == null
+      ? defaultDirectiveKey(marker, domain, directive)
+      : normalizeDirectiveKey(fields.directive_key);
+  const triggerSide = ["low", "high", "unknown"].includes(String(fields.trigger_side))
+    ? String(fields.trigger_side)
+    : null;
+  const triggerValue =
+    fields.trigger_value == null || !Number.isFinite(Number(fields.trigger_value))
+      ? null
+      : Number(fields.trigger_value);
   const info = db
     .prepare(`INSERT INTO health_directives (source, domain, marker, directive_key, directive, rationale, citation, uncertain, status, status_at, trigger_value, trigger_side, trigger_date, resurfaced_from_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
@@ -939,14 +1214,18 @@ export function addDirective(fields: DirectiveInput = {}) {
       directive_key,
       directive,
       fields.rationale == null ? null : String(fields.rationale).trim().slice(0, 600) || null,
-      fields.citation == null || String(fields.citation).trim() === "" ? null : String(fields.citation).trim().slice(0, 600),
+      fields.citation == null || String(fields.citation).trim() === ""
+        ? null
+        : String(fields.citation).trim().slice(0, 600),
       fields.uncertain ? 1 : 0,
       status,
       fields.status_at == null ? null : String(fields.status_at).trim().slice(0, 40) || null,
       triggerValue,
       triggerSide,
       fields.trigger_date == null ? null : String(fields.trigger_date).trim().slice(0, 20) || null,
-      fields.resurfaced_from_id == null || !Number.isFinite(Number(fields.resurfaced_from_id)) ? null : Number(fields.resurfaced_from_id)
+      fields.resurfaced_from_id == null || !Number.isFinite(Number(fields.resurfaced_from_id))
+        ? null
+        : Number(fields.resurfaced_from_id)
     );
   return getDirective(Number(info.lastInsertRowid));
 }
@@ -957,7 +1236,9 @@ export function getDirective(id: number) {
 
 export function listActiveDirectives() {
   return dedupeActiveDirectives(
-    (db.prepare(`SELECT * FROM health_directives WHERE status = 'active' ORDER BY id DESC`).all() as any[]).map(hydrateDirective)
+    (db.prepare(`SELECT * FROM health_directives WHERE status = 'active' ORDER BY id DESC`).all() as any[]).map(
+      hydrateDirective
+    )
   ).reverse();
 }
 
@@ -974,13 +1255,22 @@ export function listDirectives(opts: { all?: boolean } = {}) {
 export function directiveKey(d: any): string {
   return [
     String(d?.domain || "watch").toLowerCase(),
-    String(d?.marker || "").toLowerCase().replace(/\s+/g, " ").trim(),
-    String(d?.directive_key || "").toLowerCase().replace(/\s+/g, " ").trim(),
+    String(d?.marker || "")
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim(),
+    String(d?.directive_key || "")
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim(),
   ].join("|");
 }
 
 function directiveTextKey(d: any): string {
-  return String(d?.directive || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return String(d?.directive || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
 }
 
 // A stable (canonical marker, domain) key — same analyte under different lab names
@@ -1024,10 +1314,17 @@ function dedupeActiveDirectives(rows: any[]) {
   const collapsed: any[] = [];
   for (const row of out) {
     const raw = String(row?.marker || "").trim();
-    if (!raw) { collapsed.push(row); continue; } // no marker → never cross-collapse
+    if (!raw) {
+      collapsed.push(row);
+      continue;
+    } // no marker → never cross-collapse
     const key = directiveMarkerDomainKey(row);
     const prior = byMd.get(key);
-    if (!prior) { byMd.set(key, row); collapsed.push(row); continue; }
+    if (!prior) {
+      byMd.set(key, row);
+      collapsed.push(row);
+      continue;
+    }
     // Replace the kept row in-place with the preferred of the two.
     const winner = directivePreferred(prior, row);
     if (winner !== prior) {
@@ -1045,14 +1342,42 @@ export function updateDirective(id: number, fields: DirectiveInput) {
   const sets: string[] = [];
   const vals: any[] = [];
   let statusChanged = false;
-  if (fields.source !== undefined) { sets.push("source = ?"); vals.push(fields.source == null ? null : String(fields.source).trim().slice(0, 120) || null); }
-  if (fields.domain !== undefined) { sets.push("domain = ?"); vals.push(DIRECTIVE_DOMAINS.has(String(fields.domain)) ? String(fields.domain) : cur.domain); }
-  if (fields.marker !== undefined) { sets.push("marker = ?"); vals.push(fields.marker == null ? null : String(fields.marker).trim().slice(0, 60) || null); }
-  if (fields.directive_key !== undefined) { sets.push("directive_key = ?"); vals.push(fields.directive_key == null ? null : normalizeDirectiveKey(fields.directive_key)); }
-  if (fields.directive !== undefined) { sets.push("directive = ?"); vals.push(fields.directive == null ? null : String(fields.directive).trim().slice(0, 600) || null); }
-  if (fields.rationale !== undefined) { sets.push("rationale = ?"); vals.push(fields.rationale == null ? null : String(fields.rationale).trim().slice(0, 600) || null); }
-  if (fields.citation !== undefined) { sets.push("citation = ?"); vals.push(fields.citation == null || String(fields.citation).trim() === "" ? null : String(fields.citation).trim().slice(0, 600)); }
-  if (fields.uncertain !== undefined) { sets.push("uncertain = ?"); vals.push(fields.uncertain ? 1 : 0); }
+  if (fields.source !== undefined) {
+    sets.push("source = ?");
+    vals.push(fields.source == null ? null : String(fields.source).trim().slice(0, 120) || null);
+  }
+  if (fields.domain !== undefined) {
+    sets.push("domain = ?");
+    vals.push(DIRECTIVE_DOMAINS.has(String(fields.domain)) ? String(fields.domain) : cur.domain);
+  }
+  if (fields.marker !== undefined) {
+    sets.push("marker = ?");
+    vals.push(fields.marker == null ? null : String(fields.marker).trim().slice(0, 60) || null);
+  }
+  if (fields.directive_key !== undefined) {
+    sets.push("directive_key = ?");
+    vals.push(fields.directive_key == null ? null : normalizeDirectiveKey(fields.directive_key));
+  }
+  if (fields.directive !== undefined) {
+    sets.push("directive = ?");
+    vals.push(fields.directive == null ? null : String(fields.directive).trim().slice(0, 600) || null);
+  }
+  if (fields.rationale !== undefined) {
+    sets.push("rationale = ?");
+    vals.push(fields.rationale == null ? null : String(fields.rationale).trim().slice(0, 600) || null);
+  }
+  if (fields.citation !== undefined) {
+    sets.push("citation = ?");
+    vals.push(
+      fields.citation == null || String(fields.citation).trim() === ""
+        ? null
+        : String(fields.citation).trim().slice(0, 600)
+    );
+  }
+  if (fields.uncertain !== undefined) {
+    sets.push("uncertain = ?");
+    vals.push(fields.uncertain ? 1 : 0);
+  }
   if (fields.status !== undefined) {
     const nextStatus = DIRECTIVE_STATUSES.has(String(fields.status)) ? String(fields.status) : cur.status;
     sets.push("status = ?");
@@ -1069,16 +1394,48 @@ export function updateDirective(id: number, fields: DirectiveInput) {
   if (statusChanged && (cur.trigger_value == null || !cur.trigger_side || !cur.trigger_date)) {
     const trigger = directiveTriggerFromMarker(cur.marker ?? null);
     if (trigger) {
-      if (cur.trigger_value == null && fields.trigger_value === undefined) { sets.push("trigger_value = ?"); vals.push(trigger.value); }
-      if (!cur.trigger_side && fields.trigger_side === undefined) { sets.push("trigger_side = ?"); vals.push(trigger.side); }
-      if (!cur.trigger_date && fields.trigger_date === undefined) { sets.push("trigger_date = ?"); vals.push(trigger.date); }
+      if (cur.trigger_value == null && fields.trigger_value === undefined) {
+        sets.push("trigger_value = ?");
+        vals.push(trigger.value);
+      }
+      if (!cur.trigger_side && fields.trigger_side === undefined) {
+        sets.push("trigger_side = ?");
+        vals.push(trigger.side);
+      }
+      if (!cur.trigger_date && fields.trigger_date === undefined) {
+        sets.push("trigger_date = ?");
+        vals.push(trigger.date);
+      }
     }
   }
-  if (fields.status_at !== undefined) { sets.push("status_at = ?"); vals.push(fields.status_at == null ? null : String(fields.status_at).trim().slice(0, 40) || null); }
-  if (fields.trigger_value !== undefined) { sets.push("trigger_value = ?"); vals.push(fields.trigger_value == null || !Number.isFinite(Number(fields.trigger_value)) ? null : Number(fields.trigger_value)); }
-  if (fields.trigger_side !== undefined) { sets.push("trigger_side = ?"); vals.push(["low", "high", "unknown"].includes(String(fields.trigger_side)) ? String(fields.trigger_side) : null); }
-  if (fields.trigger_date !== undefined) { sets.push("trigger_date = ?"); vals.push(fields.trigger_date == null ? null : String(fields.trigger_date).trim().slice(0, 20) || null); }
-  if (fields.resurfaced_from_id !== undefined) { sets.push("resurfaced_from_id = ?"); vals.push(fields.resurfaced_from_id == null || !Number.isFinite(Number(fields.resurfaced_from_id)) ? null : Number(fields.resurfaced_from_id)); }
+  if (fields.status_at !== undefined) {
+    sets.push("status_at = ?");
+    vals.push(fields.status_at == null ? null : String(fields.status_at).trim().slice(0, 40) || null);
+  }
+  if (fields.trigger_value !== undefined) {
+    sets.push("trigger_value = ?");
+    vals.push(
+      fields.trigger_value == null || !Number.isFinite(Number(fields.trigger_value))
+        ? null
+        : Number(fields.trigger_value)
+    );
+  }
+  if (fields.trigger_side !== undefined) {
+    sets.push("trigger_side = ?");
+    vals.push(["low", "high", "unknown"].includes(String(fields.trigger_side)) ? String(fields.trigger_side) : null);
+  }
+  if (fields.trigger_date !== undefined) {
+    sets.push("trigger_date = ?");
+    vals.push(fields.trigger_date == null ? null : String(fields.trigger_date).trim().slice(0, 20) || null);
+  }
+  if (fields.resurfaced_from_id !== undefined) {
+    sets.push("resurfaced_from_id = ?");
+    vals.push(
+      fields.resurfaced_from_id == null || !Number.isFinite(Number(fields.resurfaced_from_id))
+        ? null
+        : Number(fields.resurfaced_from_id)
+    );
+  }
   if (sets.length) {
     vals.push(id);
     db.prepare(`UPDATE health_directives SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
@@ -1103,9 +1460,9 @@ export interface InsightInput {
   kind?: string | null;
   text?: string | null;
   rationale?: string | null;
-  next_step?: string | null;  // optional concrete, low-friction suggestion
-  status?: string | null;     // new | seen | dismissed
-  feedback?: string | null;   // up | down
+  next_step?: string | null; // optional concrete, low-friction suggestion
+  status?: string | null; // new | seen | dismissed
+  feedback?: string | null; // up | down
 }
 
 const INSIGHT_STATUSES = new Set(["new", "seen", "dismissed"]);
@@ -1139,12 +1496,30 @@ export function updateInsight(id: number, fields: InsightInput) {
   if (!cur) return null;
   const sets: string[] = [];
   const vals: any[] = [];
-  if (fields.kind !== undefined) { sets.push("kind = ?"); vals.push(fields.kind == null ? null : String(fields.kind).trim().slice(0, 60) || null); }
-  if (fields.text !== undefined) { sets.push("text = ?"); vals.push(fields.text == null ? null : capStr(fields.text, 320) || null); }
-  if (fields.rationale !== undefined) { sets.push("rationale = ?"); vals.push(fields.rationale == null ? null : capStr(fields.rationale, 360) || null); }
-  if (fields.next_step !== undefined) { sets.push("next_step = ?"); vals.push(fields.next_step == null ? null : capStr(fields.next_step, 200) || null); }
-  if (fields.status !== undefined) { sets.push("status = ?"); vals.push(INSIGHT_STATUSES.has(String(fields.status)) ? String(fields.status) : cur.status); }
-  if (fields.feedback !== undefined) { sets.push("feedback = ?"); vals.push(INSIGHT_FEEDBACK.has(String(fields.feedback)) ? String(fields.feedback) : null); }
+  if (fields.kind !== undefined) {
+    sets.push("kind = ?");
+    vals.push(fields.kind == null ? null : String(fields.kind).trim().slice(0, 60) || null);
+  }
+  if (fields.text !== undefined) {
+    sets.push("text = ?");
+    vals.push(fields.text == null ? null : capStr(fields.text, 320) || null);
+  }
+  if (fields.rationale !== undefined) {
+    sets.push("rationale = ?");
+    vals.push(fields.rationale == null ? null : capStr(fields.rationale, 360) || null);
+  }
+  if (fields.next_step !== undefined) {
+    sets.push("next_step = ?");
+    vals.push(fields.next_step == null ? null : capStr(fields.next_step, 200) || null);
+  }
+  if (fields.status !== undefined) {
+    sets.push("status = ?");
+    vals.push(INSIGHT_STATUSES.has(String(fields.status)) ? String(fields.status) : cur.status);
+  }
+  if (fields.feedback !== undefined) {
+    sets.push("feedback = ?");
+    vals.push(INSIGHT_FEEDBACK.has(String(fields.feedback)) ? String(fields.feedback) : null);
+  }
   if (sets.length) {
     vals.push(id);
     db.prepare(`UPDATE insights SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
@@ -1240,21 +1615,36 @@ export function recordDailyMetrics(source: string, date: string, metrics: DailyM
        resting_hr = excluded.resting_hr, hrv_ms = excluded.hrv_ms, active_calories = excluded.active_calories,
        raw_json = excluded.raw_json, updated_at = datetime('now')`
   ).run(
-    src, date,
-    num(metrics.steps, 0, 200000), num(metrics.sleep_min, 0, 1440), num(metrics.sleep_score, 0, 100),
-    num(metrics.resting_hr, 0, 250), num(metrics.hrv_ms, 0, 500), num(metrics.active_calories, 0, 20000),
+    src,
+    date,
+    num(metrics.steps, 0, 200000),
+    num(metrics.sleep_min, 0, 1440),
+    num(metrics.sleep_score, 0, 100),
+    num(metrics.resting_hr, 0, 250),
+    num(metrics.hrv_ms, 0, 500),
+    num(metrics.active_calories, 0, 20000),
     jsonOrNull(metrics.raw)
   );
   bumpTrainingDataVersion(); // fresh recovery (in-place upsert) shifts program-state's deload read
   invalidateDayRead(); // fresh recovery data feeds today's Brief — recompute on next open
-  return hydrateJson(db.prepare(`SELECT * FROM daily_metrics WHERE source = ? AND date = ?`).get(src, date));
+  const row = hydrateJson(db.prepare(`SELECT * FROM daily_metrics WHERE source = ? AND date = ?`).get(src, date));
+  emitBrainEvent({
+    kind: "recovery_metrics_changed",
+    domain: "recovery",
+    date,
+    entity_id: row?.id ?? `${src}:${date}`,
+    subject_key: src,
+  });
+  return row;
 }
 
 // Recent rows for a source (or all sources) over the last `days`.
 export function getDailyMetrics(source?: string | null, days = 30) {
   const since = new Date(Date.now() - Math.max(1, days - 1) * 864e5).toISOString().slice(0, 10);
   const rows = source
-    ? (db.prepare(`SELECT * FROM daily_metrics WHERE source = ? AND date >= ? ORDER BY date DESC, id DESC`).all(source, since) as any[])
+    ? (db
+        .prepare(`SELECT * FROM daily_metrics WHERE source = ? AND date >= ? ORDER BY date DESC, id DESC`)
+        .all(source, since) as any[])
     : (db.prepare(`SELECT * FROM daily_metrics WHERE date >= ? ORDER BY date DESC, id DESC`).all(since) as any[]);
   return rows.map((r) => hydrateJson(r));
 }
@@ -1295,8 +1685,9 @@ export function getRecoverySummary(days = 14, garminSummary?: any) {
 
   // Non-Garmin daily_metrics aggregates over the same window — averaged over ONE
   // row per date (most-recent source), so a multi-source night isn't double-counted.
-  const other = db.prepare(
-    `SELECT
+  const other = db
+    .prepare(
+      `SELECT
        ROUND(AVG(sleep_min), 1) AS avg_sleep_min,
        ROUND(AVG(sleep_score), 1) AS avg_sleep_score,
        ROUND(AVG(resting_hr), 1) AS avg_resting_hr,
@@ -1306,13 +1697,14 @@ export function getRecoverySummary(days = 14, garminSummary?: any) {
        MAX(date) AS last_date
      FROM (${DAILY_METRICS_ONE_PER_DATE})
      WHERE date >= ?`
-  ).get(since) as any;
+    )
+    .get(since) as any;
 
   // Steps live only on garmin_daily_metrics / daily_metrics raw rows — pull a
   // garmin steps average directly (getGarminCoachSummary doesn't surface it).
-  const garminSteps = db.prepare(
-    `SELECT ROUND(AVG(steps), 0) AS avg_steps FROM garmin_daily_metrics WHERE date >= ?`
-  ).get(since) as any;
+  const garminSteps = db
+    .prepare(`SELECT ROUND(AVG(steps), 0) AS avg_steps FROM garmin_daily_metrics WHERE date >= ?`)
+    .get(since) as any;
 
   // Prefer Garmin for recovery signals; fall back to other sources; fold steps
   // & active calories from whichever source has them (prefer Garmin).
@@ -1322,8 +1714,8 @@ export function getRecoverySummary(days = 14, garminSummary?: any) {
     avg_sleep_score: pick(g.avg_sleep_score, other?.avg_sleep_score),
     avg_resting_hr: pick(g.avg_resting_hr, other?.avg_resting_hr),
     avg_hrv_ms: pick(g.avg_hrv_ms, other?.avg_hrv_ms),
-    avg_stress: g.avg_stress ?? null,                          // Garmin-only signal
-    avg_body_battery: g.avg_body_battery ?? null,              // Garmin-only signal
+    avg_stress: g.avg_stress ?? null, // Garmin-only signal
+    avg_body_battery: g.avg_body_battery ?? null, // Garmin-only signal
     avg_active_calories: pick(g.avg_active_calories, other?.avg_active_calories),
     avg_steps: pick(garminSteps?.avg_steps, other?.avg_steps),
     // Richer Garmin-only recovery signals (null when no Garmin source / device).
@@ -1364,14 +1756,18 @@ export function getRecoverySummary(days = 14, garminSummary?: any) {
   // preferring Garmin and falling back to other sources. Null-safe throughout.
   const avgWindow = (winDays: number): { sleep: number | null; hrv: number | null; rhr: number | null } => {
     const s = new Date(Date.now() - Math.max(1, winDays - 1) * 864e5).toISOString().slice(0, 10);
-    const gw = db.prepare(
-      `SELECT ROUND(AVG(sleep_min),1) AS sleep, ROUND(AVG(hrv_ms),1) AS hrv, ROUND(AVG(resting_hr),1) AS rhr
+    const gw = db
+      .prepare(
+        `SELECT ROUND(AVG(sleep_min),1) AS sleep, ROUND(AVG(hrv_ms),1) AS hrv, ROUND(AVG(resting_hr),1) AS rhr
        FROM garmin_daily_metrics WHERE date >= ?`
-    ).get(s) as any;
-    const ow = db.prepare(
-      `SELECT ROUND(AVG(sleep_min),1) AS sleep, ROUND(AVG(hrv_ms),1) AS hrv, ROUND(AVG(resting_hr),1) AS rhr
+      )
+      .get(s) as any;
+    const ow = db
+      .prepare(
+        `SELECT ROUND(AVG(sleep_min),1) AS sleep, ROUND(AVG(hrv_ms),1) AS hrv, ROUND(AVG(resting_hr),1) AS rhr
        FROM (${DAILY_METRICS_ONE_PER_DATE}) WHERE date >= ?`
-    ).get(s) as any;
+      )
+      .get(s) as any;
     return {
       sleep: pick(gw?.sleep, ow?.sleep),
       hrv: pick(gw?.hrv, ow?.hrv),
@@ -1381,8 +1777,7 @@ export function getRecoverySummary(days = 14, garminSummary?: any) {
   const recent = avgWindow(7);
   const baseline = avgWindow(30);
   const round1 = (v: number) => Math.round(v * 10) / 10;
-  const diff = (a: number | null, b: number | null): number | null =>
-    a != null && b != null ? round1(a - b) : null;
+  const diff = (a: number | null, b: number | null): number | null => (a != null && b != null ? round1(a - b) : null);
   const delta = {
     sleep: diff(recent.sleep, baseline.sleep),
     hrv: diff(recent.hrv, baseline.hrv),
@@ -1396,8 +1791,11 @@ export function getRecoverySummary(days = 14, garminSummary?: any) {
   for (const r of otherSrc) if (r?.source && !sources.includes(r.source)) sources.push(r.source);
 
   const has_data =
-    recovery.avg_sleep_min != null || recovery.avg_resting_hr != null ||
-    recovery.avg_hrv_ms != null || recovery.avg_steps != null || recovery.avg_active_calories != null;
+    recovery.avg_sleep_min != null ||
+    recovery.avg_resting_hr != null ||
+    recovery.avg_hrv_ms != null ||
+    recovery.avg_steps != null ||
+    recovery.avg_active_calories != null;
 
   return {
     days,
@@ -1425,30 +1823,56 @@ export function getRecoverySummary(days = 14, garminSummary?: any) {
 // the athlete's own 30-day norm for a "steady / below your norm" read — never a
 // score. Null-safe: no sleep data anywhere → null.
 export function latestSleep(): {
-  date: string; source: string; total_min: number | null;
-  deep_min: number | null; rem_min: number | null; light_min: number | null; awake_min: number | null;
-  hrv_ms: number | null; hrv_status: string | null; resting_hr: number | null; sleep_score: number | null;
-  hrv_vs_baseline: number | null; text: string;
+  date: string;
+  source: string;
+  total_min: number | null;
+  deep_min: number | null;
+  rem_min: number | null;
+  light_min: number | null;
+  awake_min: number | null;
+  hrv_ms: number | null;
+  hrv_status: string | null;
+  resting_hr: number | null;
+  sleep_score: number | null;
+  hrv_vs_baseline: number | null;
+  text: string;
 } | null {
-  const g = db.prepare(
-    `SELECT date, sleep_min, sleep_score, resting_hr, hrv_ms, hrv_status,
+  const g = db
+    .prepare(
+      `SELECT date, sleep_min, sleep_score, resting_hr, hrv_ms, hrv_status,
             deep_sleep_min, light_sleep_min, rem_sleep_min, awake_min
        FROM garmin_daily_metrics
       WHERE sleep_min IS NOT NULL AND sleep_min > 0
       ORDER BY date DESC LIMIT 1`
-  ).get() as any;
-  const o = db.prepare(
-    `SELECT date, source, sleep_min, sleep_score, resting_hr, hrv_ms
+    )
+    .get() as any;
+  const o = db
+    .prepare(
+      `SELECT date, source, sleep_min, sleep_score, resting_hr, hrv_ms
        FROM daily_metrics
       WHERE sleep_min IS NOT NULL AND sleep_min > 0
       ORDER BY date DESC LIMIT 1`
-  ).get() as any;
+    )
+    .get() as any;
 
   // Most recent night wins; Garmin breaks a tie (richer architecture).
-  let row: any = null, source = "";
-  if (g && o) { if (o.date > g.date) { row = o; source = o.source || "apple"; } else { row = g; source = "garmin"; } }
-  else if (g) { row = g; source = "garmin"; }
-  else if (o) { row = o; source = o.source || "apple"; }
+  let row: any = null,
+    source = "";
+  if (g && o) {
+    if (o.date > g.date) {
+      row = o;
+      source = o.source || "apple";
+    } else {
+      row = g;
+      source = "garmin";
+    }
+  } else if (g) {
+    row = g;
+    source = "garmin";
+  } else if (o) {
+    row = o;
+    source = o.source || "apple";
+  }
   if (!row) return null;
 
   // 30-day HRV baseline (same source family) up to — not including — last night.
@@ -1456,15 +1880,18 @@ export function latestSleep(): {
   // uses) so two wearables feeding the same nights don't double-weight the average.
   const since30 = new Date(Date.now() - 29 * 864e5).toISOString().slice(0, 10);
   const baseTable = source === "garmin" ? "garmin_daily_metrics" : `(${DAILY_METRICS_ONE_PER_DATE})`;
-  const hb = db.prepare(
-    `SELECT ROUND(AVG(hrv_ms),1) AS h FROM ${baseTable}
+  const hb = db
+    .prepare(
+      `SELECT ROUND(AVG(hrv_ms),1) AS h FROM ${baseTable}
       WHERE date >= ? AND date < ? AND hrv_ms IS NOT NULL`
-  ).get(since30, row.date) as any;
+    )
+    .get(since30, row.date) as any;
   const baselineHrv = hb?.h ?? null;
   const hrvDelta = row.hrv_ms != null && baselineHrv != null ? Math.round((row.hrv_ms - baselineHrv) * 10) / 10 : null;
 
   const hm = (m: number) => {
-    const h = Math.floor(m / 60), mm = Math.round(m % 60);
+    const h = Math.floor(m / 60),
+      mm = Math.round(m % 60);
     return h > 0 ? `${h}h${mm > 0 ? String(mm).padStart(2, "0") + "m" : ""}` : `${mm}m`;
   };
   const parts: string[] = [];
@@ -1485,12 +1912,18 @@ export function latestSleep(): {
 
   const r = (v: any) => (v != null ? Math.round(v) : null);
   return {
-    date: row.date, source,
+    date: row.date,
+    source,
     total_min: r(row.sleep_min),
-    deep_min: r(row.deep_sleep_min), rem_min: r(row.rem_sleep_min),
-    light_min: r(row.light_sleep_min), awake_min: r(row.awake_min),
-    hrv_ms: r(row.hrv_ms), hrv_status: row.hrv_status ?? null, resting_hr: r(row.resting_hr),
-    sleep_score: row.sleep_score ?? null, hrv_vs_baseline: hrvDelta,
+    deep_min: r(row.deep_sleep_min),
+    rem_min: r(row.rem_sleep_min),
+    light_min: r(row.light_sleep_min),
+    awake_min: r(row.awake_min),
+    hrv_ms: r(row.hrv_ms),
+    hrv_status: row.hrv_status ?? null,
+    resting_hr: r(row.resting_hr),
+    sleep_score: row.sleep_score ?? null,
+    hrv_vs_baseline: hrvDelta,
     text: parts.join(" · "),
   };
 }

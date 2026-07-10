@@ -171,8 +171,13 @@ test("getEvidenceForMarker is empty until research caches a row, then round-trip
   assert.equal(ev.evidence[0].source_title, "AHA/ACC 2018 Cholesterol Guideline");
 });
 
-test("verifyCitation accepts a guideline body and strips an unverifiable claim", () => {
-  const ok = repo.verifyCitation("AHA/ACC 2018 Cholesterol Guideline");
+test("verifyCitation requires a claim tied to a trusted source and strips an unverifiable claim", () => {
+  const ok = repo.verifyCitation(
+    "WHO 2020 Ferritin Guideline",
+    "https://www.who.int/publications/i/item/9789240000124",
+    "Ferritin below 15 ng/mL indicates iron deficiency and is interpreted with other iron studies.",
+    "Ferritin"
+  );
   assert.equal(ok.verified, true);
   assert.equal(ok.uncertain, false);
   const bad = repo.verifyCitation("trust me — a random blog post");
@@ -181,16 +186,17 @@ test("verifyCitation accepts a guideline body and strips an unverifiable claim",
   assert.equal(bad.citation, null); // stripped, but the directive survives (uncertain)
 });
 
-test("verifyCitation matches short acronyms on word boundaries (no 'who' inside 'Whoop')", () => {
+test("verifyCitation never promotes a bare organization acronym into claim verification", () => {
   // The short-acronym allowlist must not false-accept a substring: "Whoop" contains
   // "who", "across" contains "acr", "Canada" contains "ada" — none are guideline bodies.
   for (const fake of ["Whoop-derived cohort, 2024", "a study of who responds to statins", "data from across the cohort"]) {
     const r = repo.verifyCitation(fake);
     assert.equal(r.verified, false, `"${fake}" must NOT verify as a guideline body`);
   }
-  // A genuine short-acronym body on a word boundary still verifies.
-  assert.equal(repo.verifyCitation("WHO 2023 physical activity guidelines").verified, true);
-  assert.equal(repo.verifyCitation("NIH Office of Dietary Supplements").verified, true);
+  // Even genuine organizations are only source hints until a material claim is
+  // paired with a curated/cached source record.
+  assert.equal(repo.verifyCitation("WHO 2023 physical activity guidelines").verified, false);
+  assert.equal(repo.verifyCitation("NIH Office of Dietary Supplements").verified, false);
 });
 
 test("isPlausibleSourceUrl rejects internal/non-http URLs (SSRF-shaped), accepts a real https source", () => {

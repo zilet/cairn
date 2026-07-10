@@ -1,4 +1,5 @@
 import { db } from "../db.js";
+import { emitBrainEvent } from "../brainEvents.js";
 import { emitEnrichTransition } from "../enrichBus.js";
 import { inferHealthDocumentKind, normalizeHealthDocumentKind } from "../healthDocumentKinds.js";
 import { activeTimeZone } from "../tz.js";
@@ -64,6 +65,56 @@ export function cleanClinicalFacts(raw: any, max = MAX_CLINICAL_FACTS_PER_DOC): 
     if (out.length >= max) break;
   }
   return out;
+}
+
+function validHealthSignalDate(value: unknown): string {
+  const date = String(value ?? "").slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : localDateISO();
+}
+
+function healthDocumentSignalState(row: any): { markers: boolean; medications: boolean } {
+  const parsed = row?.parsed ?? row?.parsed_json ?? null;
+  let hydrated = parsed;
+  if (typeof parsed === "string") {
+    try {
+      hydrated = JSON.parse(parsed);
+    } catch {
+      hydrated = null;
+    }
+  }
+  return {
+    markers: Array.isArray(hydrated?.markers) && hydrated.markers.length > 0,
+    medications: cleanClinicalFacts(hydrated?.clinical_facts, MAX_CLINICAL_FACTS_PER_DOC).some(
+      (fact: any) => fact.kind === "medication"
+    ),
+  };
+}
+
+function emitHealthDocumentSignals(row: any, changed?: { markers?: boolean; medications?: boolean }): void {
+  if (!row) return;
+  const state = healthDocumentSignalState(row);
+  const date = validHealthSignalDate(row.doc_date ?? row.created_at);
+  const entityId = row.source_doc_id ?? row.id;
+  if (changed?.markers ?? state.markers) {
+    emitBrainEvent({
+      kind: "health_marker_changed",
+      domain: "health",
+      date,
+      entity_id: entityId,
+      subject_key: `health-document:${entityId}`,
+      clinical: true,
+    });
+  }
+  if (changed?.medications ?? state.medications) {
+    emitBrainEvent({
+      kind: "medication_changed",
+      domain: "health",
+      date,
+      entity_id: entityId,
+      subject_key: `health-document:${entityId}:medications`,
+      clinical: true,
+    });
+  }
 }
 
 // Active medications the user is on, read from the clinical_facts extracted out of
@@ -302,7 +353,16 @@ export function addBloodPressureReading(input: {
      VALUES (?, ?, ?, ?, ?, ?, ?)`
   ).run(row.measured_at, row.systolic, row.diastolic, row.pulse, row.source, row.position, row.note);
   bumpMarkerHistoryVersion(); // BP readings feed getMarkerHistory's Systolic/Diastolic/Pulse series
-  return db.prepare(`SELECT * FROM blood_pressure_readings WHERE id = ?`).get(info.lastInsertRowid);
+  const inserted = db.prepare(`SELECT * FROM blood_pressure_readings WHERE id = ?`).get(info.lastInsertRowid) as any;
+  emitBrainEvent({
+    kind: "health_marker_changed",
+    domain: "health",
+    date: validHealthSignalDate(inserted?.measured_at),
+    entity_id: inserted?.id ?? Number(info.lastInsertRowid),
+    subject_key: "blood-pressure",
+    clinical: true,
+  });
+  return inserted;
 }
 
 export function upsertBloodPressureReading(input: {
@@ -339,8 +399,20 @@ export function listBloodPressureReadings(limit = 60) {
 }
 
 export function deleteBloodPressureReading(id: number) {
+  const existing = db.prepare(`SELECT measured_at FROM blood_pressure_readings WHERE id = ?`).get(id) as any;
   const ok = db.prepare(`DELETE FROM blood_pressure_readings WHERE id = ?`).run(id).changes > 0;
-  if (ok) bumpMarkerHistoryVersion();
+  if (ok) {
+    bumpMarkerHistoryVersion();
+    emitBrainEvent({
+      kind: "health_marker_changed",
+      domain: "health",
+      date: validHealthSignalDate(existing?.measured_at),
+      entity_id: id,
+      subject_key: "blood-pressure",
+      reason: "reading removed",
+      clinical: true,
+    });
+  }
   return { ok };
 }
 
@@ -483,7 +555,9 @@ export function addHealthDocument(input: HealthDocInput) {
       input.source_doc_id ?? null
     );
   bumpMarkerHistoryVersion(); // a new doc (or a derived panel) can add marker series
-  return getHealthDocument(Number(info.lastInsertRowid));
+  const row = getHealthDocument(Number(info.lastInsertRowid));
+  emitHealthDocumentSignals(row);
+  return row;
 }
 
 // A single dated panel split out of a multi-record import (one lab visit, scan
@@ -625,7 +699,11 @@ export function newestHealthDocDate(): string | null {
   }
 }
 
-export function updateHealthDocFields(id: number, fields: { parsed_json?: any; summary?: string | null; kind?: string | null; doc_date?: string | null }) {
+export function updateHealthDocFields(
+  id: number,
+  fields: { parsed_json?: any; summary?: string | null; kind?: string | null; doc_date?: string | null }
+) {
+  const before = getHealthDocument(id) as any;
   const sets: string[] = [];
   const vals: any[] = [];
   if (fields.parsed_json !== undefined) { sets.push("parsed_json = ?"); vals.push(fields.parsed_json != null ? JSON.stringify(fields.parsed_json) : null); }
@@ -642,7 +720,16 @@ export function updateHealthDocFields(id: number, fields: { parsed_json?: any; s
   // parsed_json/kind/doc_date all shift the marker series (re-analysis, confirm-lab
   // commit, panel re-date); bump regardless of which field changed — cheap + exact.
   bumpMarkerHistoryVersion();
-  return getHealthDocument(id);
+  const row = getHealthDocument(id) as any;
+  if (fields.parsed_json !== undefined || fields.kind !== undefined || fields.doc_date !== undefined) {
+    const previous = healthDocumentSignalState(before);
+    const next = healthDocumentSignalState(row);
+    emitHealthDocumentSignals(row, {
+      markers: previous.markers || next.markers,
+      medications: previous.medications || next.medications,
+    });
+  }
+  return row;
 }
 
 export function setHealthDocEnrichStatus(id: number, status: string) {
@@ -715,12 +802,24 @@ export function confirmPendingLab(id: number, opts?: { enrichOn?: boolean; hasAg
 }
 
 export function deleteHealthDocument(id: number) {
+  const existing = getHealthDocument(id) as any;
+  const derived = db.prepare(`SELECT * FROM health_documents WHERE source_doc_id = ?`).all(id) as any[];
+  const relatedState = [existing, ...derived].reduce(
+    (state, row) => {
+      const next = healthDocumentSignalState(row);
+      return { markers: state.markers || next.markers, medications: state.medications || next.medications };
+    },
+    { markers: false, medications: false }
+  );
   // Deleting a source upload takes its derived dated panels with it (they have
   // no binary of their own and are meaningless without the source).
-  const derived = deleteDerivedHealthDocs(id);
+  const derivedDeleted = deleteDerivedHealthDocs(id);
   const deleted = db.prepare(`DELETE FROM health_documents WHERE id = ?`).run(id).changes;
-  if (deleted) bumpMarkerHistoryVersion();
-  return { deleted, derived };
+  if (deleted) {
+    bumpMarkerHistoryVersion();
+    emitHealthDocumentSignals(existing ?? { id, doc_date: localDateISO() }, relatedState);
+  }
+  return { deleted, derived: derivedDeleted };
 }
 
 // ---------- marker forecasting (least-squares slope → plain-language projection) ----------
@@ -1451,7 +1550,17 @@ export function addContextEvent(input: ContextEventInput) {
   // from EVERY surface (REST/MCP/chat), not just the chat path.
   try { invalidateDayRead(); } catch { /* best-effort */ }
   bumpTrainingDataVersion(); // an active trip/illness suppresses expenditure confidence
-  return getContextEvent(Number(info.lastInsertRowid));
+  const row = getContextEvent(Number(info.lastInsertRowid));
+  emitBrainEvent({
+    kind: "context_changed",
+    domain: "lifestyle",
+    date: localDateISO(),
+    entity_id: Number(info.lastInsertRowid),
+    subject_key: kind,
+    reason: "context event added",
+    clinical: kind === "injury",
+  });
+  return row;
 }
 
 export function listContextEvents(opts: { activeOnly?: boolean } = {}) {
@@ -1502,21 +1611,41 @@ export function updateContextEvent(id: number, patch: ContextEventInput) {
   // refresh the Brief from every surface.
   try { invalidateDayRead(); } catch { /* best-effort */ }
   bumpTrainingDataVersion(); // an in-place edit (end date/resolution) the backstop can't see
-  return getContextEvent(id);
+  const row = getContextEvent(id);
+  emitBrainEvent({
+    kind: "context_changed",
+    domain: "lifestyle",
+    date: localDateISO(),
+    entity_id: id,
+    subject_key: kind,
+    reason: "context event updated",
+    clinical: kind === "injury",
+  });
+  return row;
 }
 
 // Close a context event as healed/over WITHOUT hard-deleting it: stamp resolved_at so
 // it drops out of the active set (stops gating the day-read/conductor) but stays on the
 // timeline and in exports. `date` defaults to today; returns the hydrated row or null.
 export function resolveContextEvent(id: number, date?: string) {
-  const cur = db.prepare(`SELECT id FROM context_events WHERE id = ?`).get(id) as any;
+  const cur = db.prepare(`SELECT id, kind FROM context_events WHERE id = ?`).get(id) as any;
   if (!cur) return null;
   const when = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : localDateISO();
   db.prepare(`UPDATE context_events SET resolved_at = ? WHERE id = ?`).run(when, id);
   // A resolved injury no longer eases load — the next Brief should reflect that.
   try { invalidateDayRead(); } catch { /* best-effort */ }
   bumpTrainingDataVersion(); // resolving an event re-opens expenditure confidence
-  return getContextEvent(id);
+  const row = getContextEvent(id);
+  emitBrainEvent({
+    kind: "context_changed",
+    domain: "lifestyle",
+    date: when,
+    entity_id: id,
+    subject_key: cur.kind,
+    reason: "context event resolved",
+    clinical: cur.kind === "injury",
+  });
+  return row;
 }
 
 export interface HealthDocContextEventMatch {
@@ -1644,9 +1773,25 @@ export function reconcileHealthDocumentContextEvents(healthDocumentId: number): 
 }
 
 export function deleteContextEvent(id: number) {
+  const existing = db.prepare(`SELECT kind FROM context_events WHERE id = ?`).get(id) as any;
   const r = { deleted: db.prepare(`DELETE FROM context_events WHERE id = ?`).run(id).changes };
-  try { invalidateDayRead(); } catch { /* best-effort */ }
-  if (r.deleted) bumpTrainingDataVersion();
+  try {
+    invalidateDayRead();
+  } catch {
+    /* best-effort */
+  }
+  if (r.deleted) {
+    bumpTrainingDataVersion();
+    emitBrainEvent({
+      kind: "context_changed",
+      domain: "lifestyle",
+      date: localDateISO(),
+      entity_id: id,
+      subject_key: existing?.kind ?? "context",
+      reason: "context event removed",
+      clinical: existing?.kind === "injury",
+    });
+  }
   return r;
 }
 

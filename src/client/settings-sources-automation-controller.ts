@@ -81,19 +81,37 @@ function renderSettingsAutomation(deps: ClientSettingsSourcesAutomationControlle
     researchEligible,
   });
 
-  settingsSourcesAutomationRequired<HTMLInputElement>(deps.root, "#enrichEnabled").addEventListener("change", (event) => {
-    wm.enrich_enabled = settingsSourcesAutomationInput(event).checked;
-  });
-  settingsSourcesAutomationRequired<HTMLInputElement>(deps.root, "#artEnabled").addEventListener("change", (event) => {
-    wm.art_enabled = settingsSourcesAutomationInput(event).checked;
-  });
-  settingsSourcesAutomationRequired<HTMLInputElement>(deps.root, "#researchEnabled").addEventListener("change", (event) => {
-    wm.research_enabled = settingsSourcesAutomationInput(event).checked;
-  });
-  settingsSourcesAutomationRequired<HTMLInputElement>(deps.root, "#geminiApiKey").addEventListener("input", (event) => {
-    wm.gemini_api_key = settingsSourcesAutomationInput(event).value;
-  });
-}
+    settingsSourcesAutomationRequired<HTMLInputElement>(deps.root, "#enrichEnabled").addEventListener(
+      "change",
+      (event) => {
+        wm.enrich_enabled = settingsSourcesAutomationInput(event).checked;
+      }
+    );
+    settingsSourcesAutomationRequired<HTMLInputElement>(deps.root, "#artEnabled").addEventListener(
+      "change",
+      (event) => {
+        wm.art_enabled = settingsSourcesAutomationInput(event).checked;
+      }
+    );
+    settingsSourcesAutomationRequired<HTMLInputElement>(deps.root, "#researchEnabled").addEventListener(
+      "change",
+      (event) => {
+        wm.research_enabled = settingsSourcesAutomationInput(event).checked;
+      }
+    );
+    settingsSourcesAutomationRequired<HTMLSelectElement>(deps.root, "#leadMode").addEventListener("change", (event) => {
+      const value = (event.currentTarget as HTMLSelectElement).value;
+      wm.lead_mode = (
+        ["lead", "announce_first", "review_everything"].includes(value) ? value : "lead"
+      ) as SettingsScreenWorkingModel["lead_mode"];
+    });
+    settingsSourcesAutomationRequired<HTMLInputElement>(deps.root, "#geminiApiKey").addEventListener(
+      "input",
+      (event) => {
+        wm.gemini_api_key = settingsSourcesAutomationInput(event).value;
+      }
+    );
+  }
 
 const CAIRN_SETTINGS_SOURCES_AUTOMATION_CONTROLLER = {
   renderSources: renderSettingsSources,

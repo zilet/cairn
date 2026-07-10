@@ -1,4 +1,10 @@
 export * from "./day-read-use-case.js";
+export * from "./decision-service.js";
+export * from "./evaluation-service.js";
+export * from "./case-conference.js";
+export * from "./autonomy-service.js";
+export * from "../../repo/brain-decisions.js";
+export * from "../../repo/brain-evaluations.js";
 export * from "../../repo/coach.js";
 export * from "../../repo/coaching-focus.js";
 export * from "../../repo/context-effect.js";
@@ -10,3 +16,4 @@ export * from "../../repo/reaction-model.js";
 export * from "../../repo/since-last.js";
 export * from "../../repo/today-agenda.js";
 export * from "../../repo/trajectory.js";
+export * from "../../repo/whole-person-trajectory.js";

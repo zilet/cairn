@@ -1,6 +1,12 @@
 import { listMemory, getOutcomeLearnings, type MemoryRow } from "./memory.js";
 import { listDirectives } from "./coach.js";
 import { listProposals } from "./profile.js";
+import { listBrainDecisions, listBrainExpectations } from "./brain-decisions.js";
+import { latestBrainEvaluation } from "./brain-evaluations.js";
+import { whatWorksForYou } from "./reaction-model.js";
+import type { BrainDecision } from "../brain/decision-contract.js";
+import type { BrainEvaluation } from "../brain/evaluation-contract.js";
+import type { BrainExpectation } from "../brain/expectation-contract.js";
 
 // ============================================================================
 // THE LEARNED TIMELINE — a calm, legible "what Cairn has understood about you"
@@ -13,6 +19,8 @@ import { listProposals } from "./profile.js";
 //   - outcome learnings (suggestion → actual reconciliation)  → "What we tried & how it went"
 //   - health directives the connected brain propagated         → "Connections it made"
 //   - applied plan proposals (changes you accepted)            → "Plan changes you accepted"
+//   - decision expectations + their latest outcome             → "What Cairn tried & learned"
+//   - earned personal-response patterns                        → "What Cairn tried & learned"
 //
 // It calls EXISTING repo functions — it never duplicates their logic. Every
 // source is read in its own try/catch so a missing table on an old DB (or a
@@ -194,6 +202,122 @@ function appliedItems(): LearnedItem[] {
   return out;
 }
 
+const VISIBLE_DECISION_STATUSES = new Set(["applied", "reverted", "superseded", "rejected", "canceled"]);
+
+function metricLabel(metric: string): string {
+  const labels: Record<string, string> = {
+    weight_trend_lb_wk: "weight trend",
+    intake_to_weight_response: "intake-to-weight response",
+    exercise_target_completion: "exercise completion",
+    exercise_est_1rm_trend: "strength progression",
+    session_performance_feedback: "session performance",
+    joint_pain_or_soreness: "joint-pain or soreness response",
+    plan_day_adherence: "plan adherence",
+    recovery_hrv_delta: "HRV response",
+    recovery_rhr_delta: "resting-heart-rate response",
+    sleep_duration_delta: "sleep response",
+    marker_direction: "marker direction",
+    body_measurement_direction: "body-measurement direction",
+  };
+  return labels[metric] ?? metric.replace(/_/g, " ");
+}
+
+function latestExpectationOutcome(decision: BrainDecision): {
+  expectation: BrainExpectation | null;
+  evaluation: BrainEvaluation | null;
+} {
+  const candidates = listBrainExpectations({ decisionId: decision.id, limit: 12 })
+    .map((expectation) => ({
+      expectation,
+      evaluation: expectation.id ? latestBrainEvaluation(expectation.id) : null,
+    }))
+    .sort((a, b) => {
+      const aw = toWhen(a.evaluation?.evaluated_at || a.expectation.window_end || a.expectation.created_at);
+      const bw = toWhen(b.evaluation?.evaluated_at || b.expectation.window_end || b.expectation.created_at);
+      return bw.localeCompare(aw);
+    });
+  return candidates[0] ?? { expectation: null, evaluation: null };
+}
+
+function decisionOutcomeTitle(decision: BrainDecision, evaluation: BrainEvaluation | null): string {
+  if (decision.status === "reverted") return "A change that was put back";
+  if (decision.status === "superseded") return "A decision Cairn updated";
+  if (decision.status === "rejected") return "A suggestion you passed on";
+  if (decision.status === "canceled") return "A decision that was set aside";
+  if (evaluation?.verdict === "aligned") return "A change that landed as expected";
+  if (evaluation?.verdict === "not_aligned") return "A result Cairn is adjusting from";
+  if (evaluation?.verdict === "inconclusive") return "A result Cairn cannot judge yet";
+  if (evaluation?.verdict === "canceled") return "A change that could not be tested";
+  return "A decision Cairn is checking";
+}
+
+// Durable decision accountability. One compact item per decision: what Cairn
+// decided, what it expected, and only the latest authoritative evaluation. Raw
+// targets, action JSON, evidence logs, tool traces, and numeric internals never
+// cross this projection.
+function brainDecisionItems(): LearnedItem[] {
+  const out: LearnedItem[] = [];
+  try {
+    for (const decision of listBrainDecisions({ limit: 80 })) {
+      const { expectation, evaluation } = latestExpectationOutcome(decision);
+      if (!VISIBLE_DECISION_STATUSES.has(decision.status) && !evaluation) continue;
+      const summary = clip(decision.summary, 240);
+      if (!summary) continue;
+      const expected = expectation
+        ? `Expected ${metricLabel(expectation.metric_key)} to ${expectation.direction.replace(/_/g, " ")}.`
+        : "";
+      const observed = evaluation?.explanation ? clip(evaluation.explanation, 220) : "";
+      const detail = clip([summary, expected, observed].filter(Boolean).join(" "), 420);
+      out.push({
+        when: toWhen(
+          evaluation?.evaluated_at ||
+            decision.applied_at ||
+            decision.reverted_at ||
+            decision.created_at ||
+            decision.effective_date
+        ),
+        kind: "outcome",
+        title: decisionOutcomeTitle(decision, evaluation),
+        detail,
+        source: `accountability · ${clip(decision.domain, 24)}`,
+      });
+    }
+  } catch {
+    /* ledger absent/partial — preserve the shipped timeline */
+  }
+  return out;
+}
+
+// Cumulative personal-response learnings are distinct from a single decision:
+// they only exist after the response model's evidence threshold and contradiction
+// policy have been satisfied. Keep the confidence WORD and evidence count, never
+// the internal modifier scale.
+function personalResponseItems(): LearnedItem[] {
+  const out: LearnedItem[] = [];
+  try {
+    const learned = whatWorksForYou();
+    for (const item of learned?.learnings ?? []) {
+      const statement = clip(item.statement, 260);
+      if (!statement) continue;
+      out.push({
+        when: toWhen(item.last_observed),
+        kind: "outcome",
+        title:
+          item.confidence === "strong"
+            ? "A response pattern that has held up"
+            : item.confidence === "tentative"
+              ? "A response Cairn is still checking"
+              : "A response pattern Cairn has seen",
+        detail: clip(`${statement} ${item.change}`, 420),
+        source: `personal response · ${item.domain} · ${item.confidence} · ${item.evidence_n} comparable decision${item.evidence_n === 1 ? "" : "s"}`,
+      });
+    }
+  } catch {
+    /* response model unavailable — skip this source */
+  }
+  return out;
+}
+
 // Newest-first by `when`; a falsy/unparseable stamp sorts last (oldest). A pure
 // string compare on the ISO-ish stamps is correct lexicographically AND cheap.
 function byWhenDesc(a: LearnedItem, b: LearnedItem): number {
@@ -222,6 +346,8 @@ export function learnedTimeline(opts: { limit?: number } = {}): { items: Learned
     ...learningItems(),
     ...directiveItems(),
     ...appliedItems(),
+    ...brainDecisionItems(),
+    ...personalResponseItems(),
   ];
   all.sort(byWhenDesc);
   const seen = new Set<string>();

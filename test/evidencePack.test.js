@@ -20,6 +20,10 @@ test("the evidence pack loads and every entry is well-formed", () => {
     ids.add(e.id);
     assert.equal(typeof e.source, "string");
     assert.ok(e.source.trim().length, "entry names a source");
+    assert.ok(repo.isPlausibleSourceUrl(e.source_url), "entry has a real source URL");
+    assert.equal(e.source_scope, "general");
+    assert.ok(e.pack_version && e.source_version, "entry carries pack and source versions");
+    assert.ok(e.reviewed_at && e.expires_at, "entry carries a bounded review window");
     assert.ok(Array.isArray(e.markers) && e.markers.length, "entry lists at least one marker");
     assert.ok(e.markers.every((m) => typeof m === "string" && m.length), "markers are labels");
     assert.equal(typeof e.summary, "string");
@@ -29,7 +33,7 @@ test("the evidence pack loads and every entry is well-formed", () => {
 
 test("every pack source verifies (so a directive citing it keeps its citation offline)", () => {
   for (const e of EVIDENCE_PACK) {
-    const v = repo.verifyCitation(e.source);
+    const v = repo.verifyCitation(e.source, e.source_url, e.summary, e.markers.join(" "));
     assert.equal(v.verified, true, `"${e.source}" is a recognized guideline body`);
     assert.equal(v.uncertain, false, `"${e.source}" is not downgraded to uncertain`);
     assert.ok(v.citation, "the citation string is kept");

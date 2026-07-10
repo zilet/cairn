@@ -35,9 +35,9 @@ export interface AgentDef {
   // model visibility only. `command`/`args`/`input`/`stream` stay exactly as before.
   login?: string[] | null;        // argv to start the interactive login flow (run by the PTY bridge, Stream A)
   status_check?: string[] | null; // argv for a non-interactive login probe; its STDOUT is parsed (NEVER the exit code) — see agentConfigured
-  auth_state?: string[] | null;   // HOME-relative paths whose presence is a fallback "logged in" signal when there is no status_check
-  models_list?: string[] | null;  // argv that prints the available models (grok/agy); null ⇒ no model catalog
-  model_flag?: string[] | null;   // ["--model","{model}"] — DECLARED for a future optional pin; UNUSED this batch (never injected)
+  auth_state?: string[] | null; // HOME-relative paths whose presence is a fallback "logged in" signal when there is no status_check
+  models_list?: string[] | null; // argv that prints the available models (grok/agy); null ⇒ no model catalog
+  model_flag?: string[] | null; // ["--model","{model}"] — expanded only at an explicit {model_args} slot
   // Optional headless token-streaming. When present, the chat path can run the CLI
   // in its NDJSON streaming mode (separate args) and render the reply live. `format`
   // selects the per-CLI event adapter (see streamDelta). Absent → one-shot only.
@@ -599,6 +599,12 @@ export interface RunOpts {
   // an option because prompt/shared.ts imports from THIS module (a direct import
   // here would be a cycle).
   extract?: (text: string) => any | null;
+  // Capability-scoped CLI arguments supplied by the caller for this run only
+  // (for example Claude's --mcp-config pointing at the loopback read-only coach
+  // adapter). Expanded only at an explicit {mcp_config_args} slot.
+  mcpConfigArgs?: string[];
+  /** Optional per-run model pin. Only agents with a {model_args} slot consume it. */
+  model?: string;
 }
 
 const UPLOAD_IMAGE_RE = /\.(?:jpe?g|png|webp|gif|heic|heif)$/i;
@@ -625,7 +631,14 @@ function extractPromptImagePaths(prompt: string, sourceEnv: NodeJS.ProcessEnv = 
   return out.slice(0, 8);
 }
 
-function expandAgentArgs(def: AgentDef, args: string[], prompt: string, useStdin: boolean): string[] {
+function expandAgentArgs(
+  def: AgentDef,
+  args: string[],
+  prompt: string,
+  useStdin: boolean,
+  mcpConfigArgs: string[] = [],
+  model?: string
+): string[] {
   const dataDir = path.resolve(agentDataDir(process.env));
   const needsFileAccess = promptReferencesDataDir(prompt);
   const images = needsFileAccess ? extractPromptImagePaths(prompt) : [];
@@ -642,6 +655,17 @@ function expandAgentArgs(def: AgentDef, args: string[], prompt: string, useStdin
     if (arg === "{image_args}") {
       if (images.length && Array.isArray(def.image_args)) {
         for (const image of images) out.push(...def.image_args.map((x) => replaceCommon(x, image)));
+      }
+      continue;
+    }
+    if (arg === "{mcp_config_args}") {
+      out.push(...mcpConfigArgs.filter((value) => typeof value === "string" && value.length > 0));
+      continue;
+    }
+    if (arg === "{model_args}") {
+      const chosen = String(model ?? "").trim();
+      if (chosen && Array.isArray(def.model_flag)) {
+        out.push(...def.model_flag.map((value) => replaceCommon(value).replaceAll("{model}", chosen)));
       }
       continue;
     }
@@ -787,13 +811,27 @@ export async function runAgentWithFallback(
     const started = Date.now();
     let triedJson = false;
     try {
-      let result = await runAgent(name, prompt, { timeoutMs, signal, extract: o.extract });
+      let result = await runAgent(name, prompt, {
+        timeoutMs,
+        signal,
+        extract: o.extract,
+        mcpConfigArgs: o.mcpConfigArgs,
+        model: o.model,
+      });
       // One-shot JSON-repair retry: it ran but emitted nothing parseable.
       if (!result.parsed && !signal?.aborted) {
         triedJson = true;
         try {
-          result = await runAgent(name, prompt + JSON_REPAIR_SUFFIX, { timeoutMs, signal, extract: o.extract });
-        } catch { /* keep the first (unparsed) result; fall through below */ }
+          result = await runAgent(name, prompt + JSON_REPAIR_SUFFIX, {
+            timeoutMs,
+            signal,
+            extract: o.extract,
+            mcpConfigArgs: o.mcpConfigArgs,
+            model: o.model,
+          });
+        } catch {
+          /* keep the first (unparsed) result; fall through below */
+        }
       }
       if (result.parsed) {
         breakerNoteSuccess(name);
@@ -855,7 +893,9 @@ export function runAgent(name: string, prompt: string, opts: RunOpts | number = 
   const timeoutMs = typeof opts === "number" ? opts : (opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   const signal = typeof opts === "number" ? undefined : opts.signal;
   const extract = typeof opts === "number" ? undefined : opts.extract;
-  return runAgentImpl(name, prompt, timeoutMs, signal, extract);
+  const mcpConfigArgs = typeof opts === "number" ? undefined : opts.mcpConfigArgs;
+  const model = typeof opts === "number" ? undefined : opts.model;
+  return runAgentImpl(name, prompt, timeoutMs, signal, extract, mcpConfigArgs, model);
 }
 
 // ---------- subprocess env/workdir hardening (Trust build V1) ----------
@@ -866,12 +906,20 @@ export function runAgent(name: string, prompt: string, opts: RunOpts | number = 
 // itself. Prompts that hand the CLI an absolute uploaded-file path still use
 // DATA_DIR as cwd for compatibility with CLI file-read permissions.
 
-function runAgentImpl(name: string, prompt: string, timeoutMs: number, signal?: AbortSignal, extract?: (text: string) => any | null): Promise<AgentResult> {
+function runAgentImpl(
+  name: string,
+  prompt: string,
+  timeoutMs: number,
+  signal?: AbortSignal,
+  extract?: (text: string) => any | null,
+  mcpConfigArgs?: string[],
+  model?: string
+): Promise<AgentResult> {
   const def = loadAgents()[name];
   if (!def) return Promise.reject(new Error(`Unknown agent "${name}"`));
 
   const useStdin = def.input === "stdin";
-  const args = expandAgentArgs(def, def.args, prompt, useStdin);
+  const args = expandAgentArgs(def, def.args, prompt, useStdin, mcpConfigArgs, model);
 
   // Cap accumulated output so a runaway/verbose CLI can't balloon RSS on a small
   // host (e.g. the Pi), especially during a multi-job enrichment queue drain.
@@ -1045,7 +1093,7 @@ export function runAgentStreaming(name: string, prompt: string, opts: StreamRunO
   const onDelta = opts.onDelta;
   const format = def.stream.format;
   const useStdin = def.input === "stdin";
-  const args = expandAgentArgs(def, def.stream.args, prompt, useStdin);
+  const args = expandAgentArgs(def, def.stream.args, prompt, useStdin, opts.mcpConfigArgs, opts.model);
   const MAX_OUT = 4 * 1024 * 1024;
 
   return new Promise((resolve, reject) => {

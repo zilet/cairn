@@ -19,6 +19,7 @@ export const CHAT_ACTION_TYPES = [
   "resolve_context_event",
   "log_supplement",
   "log_measurement",
+  "revert_decision",
 ] as const;
 
 export type ChatActionType = typeof CHAT_ACTION_TYPES[number];
@@ -158,6 +159,12 @@ export interface LogMeasurementAction extends ChatActionBase {
   [key: string]: unknown;
 }
 
+export interface RevertDecisionAction extends ChatActionBase {
+  type: "revert_decision";
+  id: number | string;
+  reason?: unknown;
+}
+
 export type ChatAction =
   | LogActivityAction
   | LogSetAction
@@ -174,7 +181,8 @@ export type ChatAction =
   | AddContextEventAction
   | ResolveContextEventAction
   | LogSupplementAction
-  | LogMeasurementAction;
+  | LogMeasurementAction
+  | RevertDecisionAction;
 
 const CHAT_ACTION_TYPE_SET = new Set<string>(CHAT_ACTION_TYPES);
 
@@ -323,6 +331,14 @@ export const CHAT_ACTION_PROMPT_SPECS = {
       `log_measurement records at-home body measurements (tape/circumference) so the body picture — waist trend, BMI, waist-to-height, Navy body-fat estimate — stays current. Include only the sites they actually gave; the user can just say "waist 34, chest 42, arms 15" and it logs. Values default to inches; if the user speaks centimeters, pass their numbers as given with "unit": "cm" — the server converts, storage stays inches. "upper_arm_in" is the arm/bicep; only send "height_in" if they tell you their height (it updates the profile so BMI/body-fat light up; it follows "unit" too). Leave date null unless they name one.`,
     ],
   },
+  revert_decision: {
+    type: "revert_decision",
+    applyMode: "immediate",
+    shape: `{ "type": "revert_decision", "id": <reversible id from DATA.recent_decisions>, "reason": "<what did not work>" }`,
+    guidance: [
+      `When the user says “put it back”, “undo that”, or “that didn't work for me” about a reversible change in DATA.recent_decisions, emit revert_decision with that exact id. Their word wins immediately. Never invent an id and never use this for a clinical observation.`,
+    ],
+  },
 } as const satisfies { [K in ChatActionType]: ChatActionPromptSpec<K> };
 
 export function chatActionPromptSpecs(): ChatActionPromptSpec[] {
@@ -448,6 +464,8 @@ export function normalizeChatAction(value: unknown): ChatAction | null {
       return MEASUREMENT_ACTION_FIELDS.some((k) => value[k] != null && value[k] !== "")
         ? { ...value, type: "log_measurement" }
         : null;
+    case "revert_decision":
+      return finiteId(value.id) ? { ...value, type: "revert_decision", id: value.id } : null;
   }
   const _exhaustive: never = value.type;
   return _exhaustive;

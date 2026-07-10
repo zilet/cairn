@@ -116,6 +116,31 @@ type TodayRailDeps = {
         const candidate = pending.find((item) => item.id === id);
         const action = candidate?.action;
         const payload = action?.payload;
+        if (kind === "hold-decision") {
+          // Deterministic one-tap cancel: the server revert path flips the
+          // announced decision to canceled; no agent turn is involved.
+          const decisionId = Number(payload);
+          if (!Number.isFinite(decisionId) || button.dataset.busy === "1") return;
+          button.dataset.busy = "1";
+          button.setAttribute("aria-busy", "true");
+          void (async () => {
+            try {
+              const result = (await deps.api(`/brain/decisions/${decisionId}/revert`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ reason: "hold on — keep my current plan" }),
+              })) as { ok?: boolean; error?: string } | null;
+              if (!result?.ok) throw new Error(result?.error || "That change can no longer be held.");
+              deps.toast("Held — your current plan stays");
+              await deps.refreshToday({ soft: true });
+            } catch (error) {
+              deps.toast(error instanceof Error ? error.message : "Could not hold that change");
+              button.dataset.busy = "";
+              button.removeAttribute("aria-busy");
+            }
+          })();
+          return;
+        }
         if (kind.startsWith("chat")) {
           deps.gotoChatWith(typeof payload === "string" ? payload : candidate?.title || "");
           return;

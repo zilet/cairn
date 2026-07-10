@@ -3,17 +3,20 @@
 type DirectiveLoaderRow = Record<string, unknown>;
 type DirectiveLoaderDirective = import("../contracts/client-api.js").ClientDirective;
 type DirectiveLoaderEvidenceRow = import("../contracts/client-api.js").ClientEvidenceRow;
-type DirectiveLoaderEvidenceSummary = {
-  research_enabled?: unknown;
-  by_marker?: Array<{ marker?: unknown; count?: unknown }>;
-} | null | undefined;
+type DirectiveLoaderEvidenceSummary =
+  | {
+      research_enabled?: unknown;
+      by_marker?: Array<{ marker?: unknown; count?: unknown }>;
+    }
+  | null
+  | undefined;
 
 function directiveLoaderRecord(value: unknown): DirectiveLoaderRow {
-  return value && typeof value === "object" ? value as DirectiveLoaderRow : {};
+  return value && typeof value === "object" ? (value as DirectiveLoaderRow) : {};
 }
 
 function directiveLoaderRows<T extends DirectiveLoaderRow = DirectiveLoaderRow>(value: unknown): T[] {
-  return Array.isArray(value) ? value.filter((row) => !!row && typeof row === "object") as T[] : [];
+  return Array.isArray(value) ? (value.filter((row) => !!row && typeof row === "object") as T[]) : [];
 }
 
 function directiveLoaderEvidenceRows(value: unknown): DirectiveLoaderEvidenceRow[] {
@@ -42,7 +45,15 @@ async function directiveLoaderToggleEvidence(btn: HTMLElement): Promise<void> {
   }
   box.innerHTML = `<div class="hb-ev-loading lbl"><span class="aspin aspin-xs"></span> reading the source…</div>`;
   let res: unknown = null;
-  try { res = await api(`/evidence?marker=${encodeURIComponent(btn.dataset.evidence || "")}`); } catch { res = null; }
+  const marker = btn.dataset.evidence || "";
+  try {
+    res = await cachedApi(`/evidence?marker=${encodeURIComponent(marker)}`, {
+      key: `health:evidence:${marker.toLowerCase()}`,
+      freshFor: 300000,
+    });
+  } catch {
+    res = null;
+  }
   if (box.hidden) return;
   box.dataset.loaded = "1";
   box.innerHTML = CairnHealthClient.evidenceListHtml(directiveLoaderEvidenceRows(res));
@@ -53,18 +64,24 @@ async function directiveLoaderToggleEvidence(btn: HTMLElement): Promise<void> {
   }
 }
 
-function directiveLoaderPaint(wrap: Element, active: DirectiveLoaderDirective[], evSummary: DirectiveLoaderEvidenceSummary): void {
+function directiveLoaderPaint(
+  wrap: Element,
+  active: DirectiveLoaderDirective[],
+  evSummary: DirectiveLoaderEvidenceSummary
+): void {
   wrap.innerHTML = CairnHealthDirectives.directivesSectionHtml(active, evSummary);
   $("#hbDerive")?.addEventListener("click", directiveLoaderDerive);
   $("#hbResearchNudge")?.addEventListener("click", () => switchTab("settings"));
-  wrap.querySelectorAll<HTMLElement>("[data-ddone]").forEach((b) =>
-    b.addEventListener("click", () => directiveLoaderResolve(b.dataset.ddone || "", "resolved"))
-  );
-  wrap.querySelectorAll<HTMLElement>("[data-ddismiss]").forEach((b) =>
-    b.addEventListener("click", () => directiveLoaderResolve(b.dataset.ddismiss || "", "dismissed"))
-  );
+  wrap
+    .querySelectorAll<HTMLElement>("[data-ddone]")
+    .forEach((b) => b.addEventListener("click", () => directiveLoaderResolve(b.dataset.ddone || "", "resolved")));
+  wrap
+    .querySelectorAll<HTMLElement>("[data-ddismiss]")
+    .forEach((b) => b.addEventListener("click", () => directiveLoaderResolve(b.dataset.ddismiss || "", "dismissed")));
   wrap.querySelectorAll<HTMLElement>("[data-evidence]").forEach((b) =>
-    b.addEventListener("click", () => { void directiveLoaderToggleEvidence(b); })
+    b.addEventListener("click", () => {
+      void directiveLoaderToggleEvidence(b);
+    })
   );
 }
 
@@ -87,16 +104,25 @@ async function directiveLoaderLoad(token: number): Promise<void> {
   // Cached-first: repaint the last-known connections instantly, then revalidate.
   const peek = peekCached<DirectiveLoaderBundle>(DIRECTIVES_CACHE_KEY);
   if (peek) directiveLoaderPaintBundle(wrap, peek.data);
-  let res: unknown = null, evSummary: DirectiveLoaderEvidenceSummary = null, ok = false;
+  let res: unknown = null,
+    evSummary: DirectiveLoaderEvidenceSummary = null,
+    ok = false;
   try {
     [res, evSummary] = await Promise.all([
       api("/directives"),
-      api("/evidence/summary").then((summary) => summary as DirectiveLoaderEvidenceSummary).catch(() => null),
+      api("/evidence/summary")
+        .then((summary) => summary as DirectiveLoaderEvidenceSummary)
+        .catch(() => null),
     ]);
     ok = true;
-  } catch { ok = false; }
+  } catch {
+    ok = false;
+  }
   if (token !== pollToken || !wrap.isConnected) return;
-  if (!ok) { if (!peek) directiveLoaderPaintBundle(wrap, { res: null, evSummary: null }); return; }
+  if (!ok) {
+    if (!peek) directiveLoaderPaintBundle(wrap, { res: null, evSummary: null });
+    return;
+  }
   const bundle: DirectiveLoaderBundle = { res, evSummary };
   swrSet(DIRECTIVES_CACHE_KEY, bundle);
   if (!peek || JSON.stringify(peek.data) !== JSON.stringify(bundle)) directiveLoaderPaintBundle(wrap, bundle);
@@ -107,22 +133,46 @@ async function directiveLoaderResolve(id: string, status: "resolved" | "dismisse
   const card = $(`#hbDirectives .hb-directive[data-dir="${id}"]`);
   let res: unknown = null;
   try {
-    res = await api(`/directives/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }) });
-  } catch { res = null; }
-  if (!directiveLoaderRecord(res).ok) { toast("Couldn't update"); return; }
+    res = await api(`/directives/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+    });
+  } catch {
+    res = null;
+  }
+  if (!directiveLoaderRecord(res).ok) {
+    toast("Couldn't update");
+    return;
+  }
   toast(status === "resolved" ? "Marked done" : "Dismissed");
   swrInvalidate(DIRECTIVES_CACHE_KEY); // don't flash the just-resolved item back from cache
-  const after = () => { void directiveLoaderLoad(pollToken); };
-  if (card) collapseEl(card, after); else after();
+  const after = () => {
+    void directiveLoaderLoad(pollToken);
+  };
+  if (card) collapseEl(card, after);
+  else after();
 }
 
 async function directiveLoaderDerive(): Promise<void> {
   const btn = $("#hbDerive");
   const restore = btnBusy(btn, "refreshing…");
   let res: unknown = null;
-  try { res = await api("/directives/derive", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); } catch { res = null; }
+  try {
+    res = await api("/directives/derive", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+  } catch {
+    res = null;
+  }
   const row = directiveLoaderRecord(res);
-  if (!row.ok) { toast("Couldn't refresh"); restore(); return; }
+  if (!row.ok) {
+    toast("Couldn't refresh");
+    restore();
+    return;
+  }
   toast(row.derived ? `Refreshed — ${row.derived} found` : "Up to date");
   swrInvalidate(DIRECTIVES_CACHE_KEY); // re-derive changed the set; refetch fresh
   void directiveLoaderLoad(pollToken);

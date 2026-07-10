@@ -1,14 +1,16 @@
 import { z } from "zod";
-import { reconcileMarkers, runHealthReview, runResearch, synthesizeHealth } from "../../coachOps.js";
 import { buildClinicalReportData, renderClinicalReportText } from "../../report.js";
 import {
   activeContextEffect,
   getCoachingFocus,
   getTrajectory,
+  wholePersonTrajectory,
   listDirectives,
   nextBestStep,
   nextStepDone,
   reactionModelForCoach,
+  listBrainDecisions,
+  revertDecision,
   snoozeNextStep,
   updateDirective,
 } from "../../domain/brain/index.js";
@@ -33,8 +35,23 @@ import {
 } from "../../domain/health/index.js";
 import { getOutcomeLearnings } from "../../domain/person/index.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
+import { queueMcpAgentJob } from "./background.js";
 
 export function registerConnectedBrainTools(server: McpToolRegistrar) {
+  server.tool(
+    "list_brain_decisions",
+    "Read recent meaningful coaching decisions and their accountable status. Bounded, pull-only, with no raw prompts or hidden reasoning.",
+    { limit: z.number().int().min(1).max(100).optional() },
+    async ({ limit }) => asText(listBrainDecisions({ limit: limit ?? 50 }))
+  );
+
+  server.tool(
+    "revert_brain_decision",
+    "Undo one reversible autonomous coaching decision using its server-owned rollback snapshot. The user's word wins; returns a calm error when the decision is not reversible.",
+    { id: z.number().int().positive(), reason: z.string().max(300).optional() },
+    async ({ id, reason }) => asText(revertDecision(id, reason ?? "user undo"))
+  );
+
   server.tool(
     "get_health_markers",
     "Marker history aggregated across every uploaded health document: per marker the latest value/flag, the previous reading, a numeric time series, and a trend ({dir: rising|falling|stable, change, span_days, n}) so you can speak to direction over time, not just the latest value. Each marker also carries its health group (group/group_label — e.g. Lipids & Cardiovascular, Metabolic & Glucose), and the top-level `groups` list gives the canonical-ordered groups present. Flagged (low/high) markers sort first.",
@@ -45,7 +62,12 @@ export function registerConnectedBrainTools(server: McpToolRegistrar) {
   server.tool(
     "get_health_standing",
     "A pull-based health standing read: actual-age vs selectable reference-age percentiles for markers with real reference curves (VO2max/body composition), plus BP, labs, activity, Garmin/recovery signals, and a plain signal_age synthesis. Motivational orientation only — no 0-100 score and not medical advice.",
-    { reference_age: z.number().optional().describe("Compare against this decade; e.g. 20 for 20s, 30 for 30s. Defaults to 20s.") },
+    {
+      reference_age: z
+        .number()
+        .optional()
+        .describe("Compare against this decade; e.g. 20 for 20s, 30 for 30s. Defaults to 20s."),
+    },
     async ({ reference_age }) => asText(healthStanding({ referenceAge: reference_age }))
   );
 
@@ -77,7 +99,8 @@ export function registerConnectedBrainTools(server: McpToolRegistrar) {
       limit: z.number().int().optional(),
       record: z.boolean().optional(),
     },
-    async ({ limit, record }) => asText(record ? recordHealthOutcomeAnnotations(limit) : healthOutcomeAnnotations(limit))
+    async ({ limit, record }) =>
+      asText(record ? recordHealthOutcomeAnnotations(limit) : healthOutcomeAnnotations(limit))
   );
 
   server.tool(
@@ -89,9 +112,9 @@ export function registerConnectedBrainTools(server: McpToolRegistrar) {
 
   server.tool(
     "run_health_review",
-    "Run a coaching agent over the user's full context plus aggregated marker history to produce a fresh whole-picture health review (informational, not medical advice). Returns ok:false when the agent's output is unusable.",
+    "Queue a durable whole-picture health review over the user's context and marker history. Returns a job immediately; poll get_agent_job. Informational, not medical advice.",
     { agent: z.string().optional().describe("omit or 'auto' to use the configured rotation") },
-    async ({ agent }) => asText(await runHealthReview(agent))
+    async ({ agent }) => asText(queueMcpAgentJob("health_review", {}, agent))
   );
 
   server.tool(
@@ -127,6 +150,16 @@ export function registerConnectedBrainTools(server: McpToolRegistrar) {
     "The user's forward ARC: a periodized horizon (weeks/phase) toward their goals (body-comp, longevity markers, any race), the milestones along it, and today framed as the next step on the path. Plain words, no completion %; null line when there's no goal/block/race.",
     { date: z.string().optional() },
     async ({ date }) => asText(getTrajectory(date))
+  );
+
+  server.tool(
+    "get_whole_person_trajectory",
+    "Read the standing everything-better objective across strength, endurance, body composition, metabolic health, and recovery. Names what this phase intentionally parks and flags only unexplained regression; plain words, no score.",
+    {
+      end: z.string().optional().describe("YYYY-MM-DD window end; defaults to today"),
+      days: z.number().int().min(28).max(120).optional(),
+    },
+    async ({ end, days }) => asText(wholePersonTrajectory({ end, days }))
   );
 
   server.tool(
@@ -166,9 +199,9 @@ export function registerConnectedBrainTools(server: McpToolRegistrar) {
 
   server.tool(
     "synthesize_health",
-    "Generate (and cache) the elite-coach whole-picture synthesis: reads labs + body composition + training load + recovery + nutrition + supplements + life as ONE story and names the few things that matter most right now and the highest-leverage move. Informational, not medical advice; pull — nothing is pushed.",
+    "Queue and cache the elite-coach whole-picture synthesis across labs, body composition, training, recovery, nutrition, supplements, and life. Returns a job immediately; poll get_agent_job. Informational and pull-only.",
     { agent: z.string().optional().describe("agent name from list_agents; omit/'auto' for the rotation") },
-    async ({ agent }) => asText(await synthesizeHealth(agent))
+    async ({ agent }) => asText(queueMcpAgentJob("health_synthesis", {}, agent))
   );
 
   server.tool(
@@ -215,27 +248,34 @@ export function registerConnectedBrainTools(server: McpToolRegistrar) {
 
   server.tool(
     "reconcile_markers",
-    "Align differently-named lab markers that are the SAME analyte so each analyte's history merges into one trend. A deterministic normalizer + curated clinical KB always fold the obvious cases (e.g. 'Glucose (random)'='Glucose Random'; 'Vitamin D'='25-OH Vitamin D'); this AGENTIC pass learns the harder synonyms a new lab introduces (e.g. 'Estimated Glomerular Filt Rate'=eGFR) and persists them. CONSERVATIVE: it only merges unambiguous same-analyte names (never direct-vs-calculated LDL, random-vs-fasting-vs-eAG glucose, free-vs-total, serum-vs-urine) and never relabels the displayed name — only the series merge. Returns {aligned, applied}.",
+    "Queue a conservative reconciliation of differently named versions of the same lab analyte. Returns a job immediately; poll get_agent_job. It never merges incompatible analytes/units or changes measured values.",
     { agent: z.string().optional().describe("agent name from list_agents; omit/'auto' for the rotation") },
-    async ({ agent }) => asText(await reconcileMarkers(agent))
+    async ({ agent }) => asText(queueMcpAgentJob("marker_reconcile", {}, agent))
   );
 
   server.tool(
     "research",
-    "Host-side research & grounding (Stream 4). Runs a cited, web-grounded evidence pass for ONE health/longevity question and caches the sourced claims (each claim must carry a real http(s) source URL — sourceless claims are discarded). Gated by settings.research_enabled: when OFF this serves only already-cached evidence and returns ok:false, never reaching the network. The cached evidence grounds the health review and verifies its citations. INFORMATIONAL, not medical advice.",
+    "Queue one cited health/longevity evidence pass and cache its verified claims. Returns a job immediately; poll get_agent_job. Gated by research_enabled; off means no network. Informational, not medical advice.",
     {
       question: z.string().describe("the health/longevity question to ground"),
       markers: z.array(z.string()).optional().describe("relevant marker names, e.g. ['ApoB']"),
       agent: z.string().optional().describe("omit or 'auto' to use the configured rotation"),
       force: z.boolean().optional().describe("re-research even when cached evidence exists for this topic"),
     },
-    async ({ question, markers, agent, force }) => asText(await runResearch(question, { markers, agent, force }))
+    async ({ question, markers, agent, force }) =>
+      asText(queueMcpAgentJob("evidence_research", { question, markers, force }, agent))
   );
 
   server.tool(
     "get_evidence",
     "Make a directive's citation INSPECTABLE: returns the cited evidence behind ONE marker as { marker, evidence:[{claim, source_title, source_url, body, confidence, retrieved_at}] }. Reads the evidence cache only (never the network), so it works with research disabled; evidence:[] when research never ran for that marker. INFORMATIONAL, not medical advice.",
-    { marker: z.string().optional().describe("the marker name, e.g. 'ApoB' (omit for the most-recent cached evidence overall)"), limit: z.number().int().optional() },
+    {
+      marker: z
+        .string()
+        .optional()
+        .describe("the marker name, e.g. 'ApoB' (omit for the most-recent cached evidence overall)"),
+      limit: z.number().int().optional(),
+    },
     async ({ marker, limit }) => asText(getEvidenceForMarker(marker, limit))
   );
 

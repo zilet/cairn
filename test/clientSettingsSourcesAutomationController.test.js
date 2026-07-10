@@ -48,8 +48,9 @@ class FakeElement {
     if (handler) handler({ currentTarget: this });
   }
 
-  change(checked) {
-    this.checked = checked;
+  change(value) {
+    if (typeof value === "string") this.value = value;
+    else this.checked = value;
     const handler = this.listeners.get("change");
     if (handler) handler({ currentTarget: this });
   }
@@ -75,6 +76,7 @@ class FakeRoot extends FakeElement {
       "artEnabled",
       "researchEnabled",
       "geminiApiKey",
+      "leadMode",
     ];
     for (const id of ids) {
       const el = new FakeElement(id);
@@ -146,6 +148,7 @@ test("settings sources controller owns Garmin and Apple Health wiring", async ()
     art_enabled: true,
     research_enabled: false,
     gemini_api_key: "",
+    lead_mode: "lead",
   };
   const harness = baseDeps(rootEl, wm);
 
@@ -183,6 +186,7 @@ test("settings automation controller owns enrichment and research toggles", () =
     art_enabled: false,
     research_enabled: false,
     gemini_api_key: "",
+    lead_mode: "lead",
   };
   const harness = baseDeps(rootEl, wm, {
     settings: { gemini_api_key_configured: true, gemini_api_key_source: "env" },
@@ -196,10 +200,12 @@ test("settings automation controller owns enrichment and research toggles", () =
   rootEl.querySelector("#enrichEnabled").change(false);
   rootEl.querySelector("#artEnabled").change(true);
   rootEl.querySelector("#researchEnabled").change(true);
+  rootEl.querySelector("#leadMode").change("announce_first");
   rootEl.querySelector("#geminiApiKey").input("gemini-key");
 
   assert.equal(wm.enrich_enabled, false);
   assert.equal(wm.art_enabled, true);
   assert.equal(wm.research_enabled, true);
+  assert.equal(wm.lead_mode, "announce_first");
   assert.equal(wm.gemini_api_key, "gemini-key");
 });

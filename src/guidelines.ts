@@ -19,7 +19,16 @@
 // over each entry's keys, longest-key-wins, so "non-hdl" never reads as "hdl" and
 // "ApoB" / "Apolipoprotein B" resolve to the same entry. null when nothing matches.
 
-import { isPlausibleSourceUrl } from "./repo/evidence.js";
+import {
+  evidenceFreshness,
+  type EvidenceFreshness,
+  type EvidenceSourceScope,
+  isPlausibleSourceUrl,
+} from "./evidenceGovernance.js";
+
+export const TRUSTED_GUIDELINES_PACK_VERSION = "2026.07.1";
+export const TRUSTED_GUIDELINES_REVIEWED_AT = "2026-07-09";
+export const TRUSTED_GUIDELINES_EXPIRES_AT = "2027-01-09";
 
 export interface GuidelineEntry {
   // canonical short key (stable; aligns to an OPTIMAL_ZONES label / marker-canon key)
@@ -34,12 +43,25 @@ export interface GuidelineEntry {
   url: string;
   // publication / latest-revision year, when known
   year?: number;
+  // Governance metadata: pack revision + source revision and review window.
+  pack_version: string;
+  source_version: string | null;
+  source_scope: EvidenceSourceScope;
+  published_at: string | null;
+  reviewed_at: string;
+  expires_at: string;
+  freshness: EvidenceFreshness;
 }
+
+type RawGuidelineEntry = Omit<
+  GuidelineEntry,
+  "pack_version" | "source_version" | "source_scope" | "published_at" | "reviewed_at" | "expires_at" | "freshness"
+>;
 
 // The curated pack. Conservative and few — only well-established, broadly-cited
 // positions, phrased generically. Keys are aligned to the connected brain's own
 // marker vocabulary so guidelineFor() resolves the names directives already use.
-const GUIDELINES: GuidelineEntry[] = [
+const GUIDELINES: RawGuidelineEntry[] = [
   {
     key: "apob",
     keys: ["apob", "apolipoprotein b", "apo b"],
@@ -143,22 +165,37 @@ const GUIDELINES: GuidelineEntry[] = [
 // nothing matches. A key match is a plain `includes` against the lowercased query,
 // so an aliased/expanded name ("Apolipoprotein B (ApoB)", "25-OH Vitamin D") still
 // resolves to its entry.
+function governedGuideline(entry: RawGuidelineEntry): GuidelineEntry {
+  const metadata = {
+    pack_version: TRUSTED_GUIDELINES_PACK_VERSION,
+    source_version: entry.year ? String(entry.year) : null,
+    source_scope: "general" as const,
+    published_at: entry.year ? `${entry.year}-01-01` : null,
+    reviewed_at: TRUSTED_GUIDELINES_REVIEWED_AT,
+    expires_at: TRUSTED_GUIDELINES_EXPIRES_AT,
+  };
+  return { ...entry, ...metadata, freshness: evidenceFreshness(metadata) };
+}
+
 export function guidelineFor(markerOrTopic: string): GuidelineEntry | null {
   const n = String(markerOrTopic ?? "").toLowerCase();
   if (!n.trim()) return null;
-  let best: GuidelineEntry | null = null;
+  let best: RawGuidelineEntry | null = null;
   let bestLen = 0;
   for (const e of GUIDELINES) {
     for (const k of e.keys) {
       if (n.includes(k) && k.length > bestLen) { best = e; bestLen = k.length; }
     }
   }
-  return best;
+  return best ? governedGuideline(best) : null;
 }
 
 // All curated entries (a defensive copy). Only entries whose URL passes the shared
 // http(s) scheme guard are surfaced — a bad/unsafe URL would never reach a consumer
 // even if a future edit introduced one (defense-in-depth, mirrors evidence.addEvidence).
 export function allGuidelines(): GuidelineEntry[] {
-  return GUIDELINES.filter((e) => isPlausibleSourceUrl(e.url)).map((e) => ({ ...e, keys: [...e.keys] }));
+  return GUIDELINES.filter((e) => isPlausibleSourceUrl(e.url)).map((e) => {
+    const governed = governedGuideline(e);
+    return { ...governed, keys: [...governed.keys] };
+  });
 }

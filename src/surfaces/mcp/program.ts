@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { draftCoachProposal, evolveProgram } from "../../coachOps.js";
 import { localToday } from "../../dayread.js";
-import { getCachedDayRead } from "../../domain/brain/index.js";
+import { applyProposalWithAutonomy, getCachedDayRead } from "../../domain/brain/index.js";
 import { dexaTargeting } from "../../domain/health/index.js";
 import {
   advanceBlockWeek,
@@ -293,6 +293,20 @@ export function registerProgramTools(server: McpToolRegistrar) {
         return asText({ error: error.message });
       }
     }
+  );
+
+  server.tool(
+    "apply_proposal_with_autonomy",
+    "Route a proposal through Cairn's server autonomy policy. It may quiet-apply, announce for a natural boundary, or hold for review; clinical and user-locked changes never auto-apply.",
+    {
+      id: z.number().int(),
+      requested_tier: z.enum(["observe", "quiet_apply", "announce", "ask", "clinician"]).optional(),
+      safety_response: z.boolean().optional(),
+      user_locked: z.boolean().optional(),
+      clamp_refused: z.boolean().optional(),
+    },
+    async ({ id, requested_tier, safety_response, user_locked, clamp_refused }) =>
+      asText(applyProposalWithAutonomy(id, { requested_tier, safety_response, user_locked, clamp_refused }))
   );
 
   server.tool(

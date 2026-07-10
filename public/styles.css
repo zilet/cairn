@@ -4102,9 +4102,10 @@ button.hmk-row:active{background:var(--card-2)}
 .hb-ev-title{font-family:var(--font-ui);font-weight:600;font-size:.82rem;color:var(--ink)}
 .hb-ev-claim{font-size:.8rem;color:var(--ink-2);line-height:1.45;margin-top:3px}
 .hb-ev-body{font-size:.78rem;color:var(--muted);line-height:1.5;margin-top:4px}
-.hb-ev-meta{margin-top:5px}
+.hb-ev-meta{margin-top:5px;display:flex;flex-wrap:wrap;gap:5px 9px;align-items:baseline}
 .hb-ev-conf{display:inline-block;font-family:var(--font-ui);font-size:.58rem;font-weight:700;
   letter-spacing:.1em;text-transform:uppercase;color:var(--sage)}
+.hb-ev-governance{font-family:var(--font-ui);font-size:.6rem;color:var(--muted);line-height:1.45}
 /* the cached-evidence count hint on "see the evidence (N)" — a quiet sage tally */
 .hb-evcount{color:var(--sage);font-weight:700}
 /* research-discoverability nudge (F1): a calm, single-line hint under the

@@ -63,10 +63,17 @@ function paintHealthLearnedTab() {
   const c = $("#hContent");
   if (!c) return;
   const token = pollToken;
-  c.innerHTML = `<div id="hLearned">${skelLines(4)}</div>`;
-  api("/learned-timeline")
-    .then((data) => renderLearnedTimeline(data || { items: [] }, token))
-    .catch(() => renderLearnedTimeline({ items: [] }, token));
+  const peek = peekCached<LearnedTimelineData>("health:learned");
+  c.innerHTML = `<div id="hLearned">${peek ? "" : skelLines(4)}</div>`;
+  if (peek) renderLearnedTimeline(peek.data, token);
+  cachedApi("/learned-timeline", {
+    key: "health:learned",
+    onUpgrade: (data, { changed }) => {
+      if (changed || !peek) renderLearnedTimeline(data || { items: [] }, token);
+    },
+  }).catch(() => {
+    if (!peek) renderLearnedTimeline({ items: [] }, token);
+  });
 }
 
 function healthRecordsDeps() {
@@ -99,7 +106,9 @@ function lifeControllerDeps(): ClientLifeControllerDeps {
     api,
     armDelete,
     escapeAttr: escAttr,
-    invalidatePoll: () => { pollToken++; },
+    invalidatePoll: () => {
+      pollToken++;
+    },
     segBar,
     toast,
     wireSeg,
@@ -124,7 +133,9 @@ function familyControllerDeps(): ClientFamilyControllerDeps {
     api,
     armDelete,
     escapeAttr: escAttr,
-    invalidatePoll: () => { pollToken++; },
+    invalidatePoll: () => {
+      pollToken++;
+    },
     localISO,
     segBar,
     toast,

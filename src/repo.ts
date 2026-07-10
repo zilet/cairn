@@ -10,6 +10,8 @@ export * from "./repo/sessions.js";
 export * from "./repo/profile.js";
 export * from "./repo/activities.js";
 export * from "./repo/memory.js";
+export * from "./repo/brain-decisions.js";
+export * from "./repo/brain-evaluations.js";
 export * from "./repo/nutrition.js";
 export * from "./repo/chat.js";
 export * from "./repo/settings.js";
@@ -54,6 +56,7 @@ export { guidelineFor, allGuidelines, type GuidelineEntry } from "./guidelines.j
 // The "knows-me" layer (docs/VISION.md — the personal coaching team):
 export * from "./repo/reaction-model.js"; // how THIS athlete actually reacts (the personalization foundation)
 export * from "./repo/trajectory.js"; // one periodized arc to the goals, today as the next step
+export * from "./repo/whole-person-trajectory.js"; // standing "everything better" objective, per-domain words not a score
 export * from "./repo/journey.js"; // body-composition journey phases + leanness-aware cut foundation
 // context-effect: explicit re-export — its local isAcuteMarker would clash with propagation's `export *`
 export {

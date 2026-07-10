@@ -4,6 +4,9 @@ import { buildCoachPrompt } from "./prompt.js";
 import { evolveProgram, generateInsight, nutritionCheckin, synthesizeHealth } from "./coachOps.js";
 import { precomputeDayRead, localToday, warmToday } from "./dayread.js";
 import { checkForUpdate } from "./updateCheck.js";
+import { evaluateMatureExpectations } from "./brainEvaluator.js";
+import { applyDueAnnouncedDecisions } from "./domain/brain/autonomy-service.js";
+import { enqueueAgentJob } from "./agentJobs.js";
 // Stream 2 (self-updating memory): quiet nightly memory housekeeping + outcome
 // reconciliation. Lazy-imported in the tick so this module stays decoupled.
 
@@ -70,6 +73,87 @@ export function startScheduler() {
   // emits through a registered sink. recordAgentRun is itself failure-safe.
   setAgentRunSink((r) => repo.recordAgentRun(r));
 
+  // Announced structural changes land only when their stated natural boundary
+  // arrives. This is deterministic, fast, and idempotent; it never calls an
+  // agent and every applied change already carries an exact undo snapshot.
+  let boundaryApplyDate = "";
+  const boundaryApplyTick = () => {
+    const today = localToday();
+    if (boundaryApplyDate === today) return;
+    boundaryApplyDate = today;
+    try {
+      const result = applyDueAnnouncedDecisions(today);
+      if (result.applied.length)
+        console.log(`[brain] applied ${result.applied.length} announced change(s) at their natural boundary.`);
+      if (result.failed.length)
+        console.error(
+          `[brain] ${result.failed.length} announced change(s) could not be applied; they remain reviewable.`
+        );
+    } catch (e: any) {
+      // Keep today's stamp: per-decision failures are isolated inside
+      // applyDueAnnouncedDecisions, so a pass-level throw is an anomaly —
+      // retrying it every 60s would just repeat the same failure all day.
+      console.error(`[brain] announced-change boundary pass failed: ${e?.message ?? e}`);
+    }
+  };
+
+  // Standing whole-person revision: once per month, at a detected phase change,
+  // or when a non-parked domain regresses. Persist the conference as a durable
+  // job; the request path never waits and a restart can recover it.
+  let revisionBusy = false;
+  const revisionTick = () => {
+    if (revisionBusy) return;
+    const today = localToday();
+    if (repo.getAppState("brain_revision_check_date") === today) return;
+    revisionBusy = true;
+    // This is an attempt stamp, not a success stamp: it prevents an unavailable
+    // specialist pool from being retried every minute. Successful phase/month
+    // signatures are written by the completed case-conference job only.
+    repo.setAppState("brain_revision_check_date", today);
+    try {
+      const trajectory = repo.wholePersonTrajectory({ end: today, days: 56 });
+      const month = today.slice(0, 7);
+      const phaseSig = JSON.stringify(trajectory.phase);
+      const regressionSig = trajectory.unexplained_worse.slice().sort().join("|");
+      const monthlyDue = repo.getAppState("brain_revision_last_month") !== month;
+      const previousPhase = repo.getAppState("brain_revision_phase_sig");
+      const phaseDue = !!previousPhase && previousPhase !== phaseSig;
+      const previousRegression = repo.getAppState("brain_revision_regression_sig");
+      const regressionDue = !!regressionSig && regressionSig !== previousRegression;
+      if (!monthlyDue && !phaseDue && !regressionDue) return;
+      const reason = regressionDue
+        ? `Unexplained regression requires a revision: ${trajectory.unexplained_worse.join(", ")}.`
+        : phaseDue
+          ? "The training or goal phase changed."
+          : "Standing monthly whole-person review.";
+      const job = repo.createAgentJob({
+        kind: "case_conference",
+        agent: null,
+        input: {
+          question: `${reason} Reconcile the next bounded revision against the standing objective: everything better. ${trajectory.line}`,
+          domains: ["training", "nutrition", "health", "recovery", "lifestyle"],
+          trajectory,
+          optimizes: trajectory.phase.optimizes,
+          parks: trajectory.phase.parks,
+          scheduler_success: {
+            brain_revision_last_month: month,
+            brain_revision_phase_sig: phaseSig,
+            brain_revision_regression_sig: regressionSig,
+          },
+        },
+      }) as any;
+      enqueueAgentJob(Number(job.id));
+      console.log(
+        `[brain] queued a whole-person revision conference (${regressionDue ? "regression" : phaseDue ? "phase" : "monthly"}).`
+      );
+    } catch (e: any) {
+      repo.setAppState("brain_revision_check_date", "");
+      console.error(`[brain] revision conference check failed: ${e?.message ?? e}`);
+    } finally {
+      revisionBusy = false;
+    }
+  };
+
   // The small-hours hour the nightly Brief precompute + quiet insight run at.
   // Declared up front so both the proactive tick and the precompute tick share it.
   const PRECOMPUTE_HOUR = (() => {
@@ -110,8 +194,7 @@ export function startScheduler() {
     // (a) Nightly quiet insight — once per day, in the small hours alongside the
     //     Brief precompute. generateInsight emits ONE genuine connection or
     //     ok:false (dedup-guarded); a near-repeat / nothing-real is a calm no-op.
-    const insightDue =
-      now.getHours() === PRECOMPUTE_HOUR && repo.getAppState("insight_last_date") !== localToday(now);
+    const insightDue = now.getHours() === PRECOMPUTE_HOUR && repo.getAppState("insight_last_date") !== localToday(now);
     // (b) Weekly read — on the configured coach day/hour (miss-tolerant). A
     //     standing "how the week went + the one change", stored as a weekly_read
     //     insight. Reuses the coach slot so it lands on the same cadence.
@@ -136,8 +219,7 @@ export function startScheduler() {
     //     most once/day (cheap deterministic read); skipped on a tick where the
     //     weekly slot is already drafting (that path owns this evolution). The
     //     firing decision (signature changed + cooldown) is made inside the block.
-    const triggerCheckDue =
-      !evolutionDue && repo.getAppState("program_evolution_trigger_date") !== localToday(now);
+    const triggerCheckDue = !evolutionDue && repo.getAppState("program_evolution_trigger_date") !== localToday(now);
     // (f) Keep the TRAINING BENCHMARK attention (K5) fresh — a cheap, deterministic,
     //     no-agent pass (≤1×/day) that writes each tracked lift's + the test-week's
     //     re-test cadence onto the shared attention engine. This is what lets
@@ -147,7 +229,16 @@ export function startScheduler() {
     //     fall back to the legacy cadence.
     const benchmarkAttnDue = repo.getAppState("benchmark_attention_date") !== localToday(now);
 
-    if (!insightDue && !weeklyDue && !nutritionDue && !evolutionDue && !blockAdvanceDue && !triggerCheckDue && !benchmarkAttnDue) return;
+    if (
+      !insightDue &&
+      !weeklyDue &&
+      !nutritionDue &&
+      !evolutionDue &&
+      !blockAdvanceDue &&
+      !triggerCheckDue &&
+      !benchmarkAttnDue
+    )
+      return;
     proactiveBusy = true;
     try {
       if (benchmarkAttnDue) {
@@ -176,9 +267,11 @@ export function startScheduler() {
             const ageDays = startedStamp ? daysBetweenStamps(startedStamp, localToday(now)) : 0;
             if (ageDays >= 6) {
               const advanced = repo.advanceBlockWeek();
-              console.log(advanced
-                ? `[proactive] advanced the training block to ${advanced.phase} (week ${advanced.week_index} of ${advanced.total_weeks}).`
-                : `[proactive] no block to advance (calm no-op).`);
+              console.log(
+                advanced
+                  ? `[proactive] advanced the training block to ${advanced.phase} (week ${advanced.week_index} of ${advanced.total_weeks}).`
+                  : `[proactive] no block to advance (calm no-op).`
+              );
             } else {
               console.log(`[proactive] ensured an active training block (${block.focus}, week ${block.week_index}).`);
             }
@@ -194,7 +287,9 @@ export function startScheduler() {
           // guaranteed instant hit (no agent wait on the request path), like the
           // nightly Brief precompute → saveDayRead.
           const r = await generateInsight("auto", "connection", undefined, { freshForMs: 12 * 60 * 60 * 1000 });
-          console.log(r.ok ? `[proactive] stored a quiet insight.` : `[proactive] no genuine insight tonight (calm no-op).`);
+          console.log(
+            r.ok ? `[proactive] stored a quiet insight.` : `[proactive] no genuine insight tonight (calm no-op).`
+          );
         } catch (e: any) {
           console.error(`[proactive] insight pass failed: ${e?.message ?? e}`);
         }
@@ -202,7 +297,9 @@ export function startScheduler() {
       if (weeklyDue) {
         try {
           const r = await generateInsight("auto", "weekly_read", undefined, { freshForMs: 12 * 60 * 60 * 1000 });
-          console.log(r.ok ? `[proactive] stored the weekly read.` : `[proactive] no weekly read this week (calm no-op).`);
+          console.log(
+            r.ok ? `[proactive] stored the weekly read.` : `[proactive] no weekly read this week (calm no-op).`
+          );
         } catch (e: any) {
           console.error(`[proactive] weekly read failed: ${e?.message ?? e}`);
         }
@@ -211,7 +308,9 @@ export function startScheduler() {
         // enrich review pass). Pull artifact — cached, never pushed.
         try {
           const r = await synthesizeHealth("auto");
-          console.log(r.ok ? `[proactive] refreshed the health synthesis.` : `[proactive] health synthesis steady (calm no-op).`);
+          console.log(
+            r.ok ? `[proactive] refreshed the health synthesis.` : `[proactive] health synthesis steady (calm no-op).`
+          );
         } catch (e: any) {
           console.error(`[proactive] health synthesis failed: ${e?.message ?? e}`);
         }
@@ -220,9 +319,11 @@ export function startScheduler() {
         try {
           const r: any = await nutritionCheckin("auto");
           console.log(
-            r.ok && r.change ? `[proactive] drafted an adaptive nutrition change (waiting for review).`
-              : r.ok ? `[proactive] nutrition steady — no change (calm no-op).`
-              : `[proactive] nutrition check-in unavailable (calm no-op).`
+            r.ok && r.change
+              ? `[proactive] drafted an adaptive nutrition change (waiting for review).`
+              : r.ok
+                ? `[proactive] nutrition steady — no change (calm no-op).`
+                : `[proactive] nutrition check-in unavailable (calm no-op).`
           );
         } catch (e: any) {
           console.error(`[proactive] nutrition check-in failed: ${e?.message ?? e}`);
@@ -247,9 +348,15 @@ export function startScheduler() {
                 const trig = repo.programEvolutionTrigger();
                 repo.setAppState("program_evolution_last_draft_date", localToday(now));
                 repo.setAppState("program_evolution_trigger_sig", trig.signature);
-              } catch { /* trigger read unavailable → leave stamps as-is */ }
+              } catch {
+                /* trigger read unavailable → leave stamps as-is */
+              }
             }
-            console.log(r.ok ? `[proactive] drafted a plan evolution (waiting for review).` : `[proactive] plan evolution unavailable (calm no-op).`);
+            console.log(
+              r.ok
+                ? `[proactive] drafted a plan evolution (waiting for review).`
+                : `[proactive] plan evolution unavailable (calm no-op).`
+            );
           }
         } catch (e: any) {
           console.error(`[proactive] plan evolution failed: ${e?.message ?? e}`);
@@ -282,7 +389,11 @@ export function startScheduler() {
               repo.setAppState("program_evolution_trigger_sig", trig.signature);
               repo.setAppState("program_evolution_last_draft_date", localToday(now));
             }
-            console.log(r.ok ? `[proactive] data-triggered plan evolution drafted (${trig.reasons.length} reason(s), waiting for review).` : `[proactive] data-triggered evolution unavailable (calm no-op).`);
+            console.log(
+              r.ok
+                ? `[proactive] data-triggered plan evolution drafted (${trig.reasons.length} reason(s), waiting for review).`
+                : `[proactive] data-triggered evolution unavailable (calm no-op).`
+            );
           } else if (trig.due) {
             console.log(`[proactive] training shifted but already drafted / within cooldown (calm no-op).`);
           }
@@ -371,14 +482,29 @@ export function startScheduler() {
       // 1. Deterministic outcome reconciliation — no agent, never fails the pass.
       try {
         const rec = repo.reconcileSuggestions();
-        if (rec.learnings > 0) console.log(`[memory] reconciled ${rec.reconciled} suggestions → ${rec.learnings} learnings.`);
-      } catch (e: any) { console.error(`[memory] reconcile failed: ${e?.message ?? e}`); }
+        if (rec.learnings > 0)
+          console.log(`[memory] reconciled ${rec.reconciled} suggestions → ${rec.learnings} learnings.`);
+      } catch (e: any) {
+        console.error(`[memory] reconcile failed: ${e?.message ?? e}`);
+      }
+      // 1a. Mature generalized expectations before rebuilding the response model,
+      // so the same nightly pass can learn from any newly authoritative verdict.
+      try {
+        const evaluated = evaluateMatureExpectations(stamp, { limit: 200 });
+        if (evaluated.evaluated > 0) {
+          console.log(`[brain] evaluated ${evaluated.evaluated}/${evaluated.scanned} matured expectation(s).`);
+        }
+      } catch (e: any) {
+        console.error(`[brain] maturity evaluation failed: ${e?.message ?? e}`);
+      }
       // 1b. Rebuild the PERSONAL-RESPONSE model (deterministic) from the freshly
       //     reconciled history + latest logs — cache it + promote the load-bearing
       //     patterns into memory so the coach voice personalizes. Pull, never push.
       try {
         repo.saveReactionModel();
-      } catch (e: any) { console.error(`[memory] reaction-model rebuild failed: ${e?.message ?? e}`); }
+      } catch (e: any) {
+        console.error(`[memory] reaction-model rebuild failed: ${e?.message ?? e}`);
+      }
       // 1c. Write the plain-language NARRATIVE over the freshly rebuilt patterns
       //     (agentic, best-effort). A quiet/failed agent leaves the prior narrative,
       //     and an emptied model already cleared it in saveReactionModel. Pull, never push.
@@ -386,23 +512,31 @@ export function startScheduler() {
         const { refreshReactionNarrative } = await import("./coachOps.js");
         const rn: any = await refreshReactionNarrative("auto");
         if (rn.ok && rn.narrative) console.log(`[memory] refreshed the reaction-model narrative.`);
-      } catch (e: any) { console.error(`[memory] reaction-model narrative refresh failed: ${e?.message ?? e}`); }
+      } catch (e: any) {
+        console.error(`[memory] reaction-model narrative refresh failed: ${e?.message ?? e}`);
+      }
       // 2. Agentic consolidation + about-me growth — best-effort, lazy-imported.
       try {
         const { consolidateMemory, growAboutMe } = await import("./coachOps.js");
         const c = await consolidateMemory("auto");
-        if (c.ok && (c.merged || c.superseded || c.promoted)) console.log(`[memory] consolidated: ${c.merged} merged, ${c.superseded} superseded, ${c.promoted} promoted.`);
+        if (c.ok && (c.merged || c.superseded || c.promoted))
+          console.log(`[memory] consolidated: ${c.merged} merged, ${c.superseded} superseded, ${c.promoted} promoted.`);
         const g = await growAboutMe("auto");
         if (g.ok && (g as any).changed) console.log(`[memory] grew about_me from memory.`);
-      } catch (e: any) { console.error(`[memory] nightly consolidation failed: ${e?.message ?? e}`); }
+      } catch (e: any) {
+        console.error(`[memory] nightly consolidation failed: ${e?.message ?? e}`);
+      }
       // 3. Agentic exercise-name tidy — best-effort, pull-never-push. Messy /
       //    duplicate movement titles self-align over time so the volume +
       //    progression read stays clean (never touches logged numbers).
       try {
         const { reconcileExercises } = await import("./coachOps.js");
         const x: any = await reconcileExercises("auto");
-        if (x.ok && x.applied) console.log(`[memory] tidied exercise names: ${x.applied} alias(es) across ${x.aligned} movement(s).`);
-      } catch (e: any) { console.error(`[memory] nightly exercise tidy failed: ${e?.message ?? e}`); }
+        if (x.ok && x.applied)
+          console.log(`[memory] tidied exercise names: ${x.applied} alias(es) across ${x.aligned} movement(s).`);
+      } catch (e: any) {
+        console.error(`[memory] nightly exercise tidy failed: ${e?.message ?? e}`);
+      }
     } finally {
       memoryBusy = false;
     }
@@ -426,7 +560,8 @@ export function startScheduler() {
     try {
       const r = await checkForUpdate();
       if (r.error) console.log(`[update] check unavailable (calm no-op): ${r.error}`);
-      else if (r.update_available) console.log(`[update] a newer Cairn is available: ${r.latest} (running ${r.current}) — see Settings → Data.`);
+      else if (r.update_available)
+        console.log(`[update] a newer Cairn is available: ${r.latest} (running ${r.current}) — see Settings → Data.`);
       else console.log(`[update] up to date (${r.current}).`);
     } catch (e: any) {
       console.error(`[update] check error: ${e?.message ?? e}`);
@@ -441,8 +576,14 @@ export function startScheduler() {
       ? `Auto-coach enabled: day=${s.coach_day}, hour=${s.coach_hour}, strategy=${s.agent_strategy}.`
       : "Auto-coach disabled (enable it in Settings)."
   );
-  console.log(s.proactive_enabled ? "Quiet proactivity enabled (insights wait in-app; never pushed)." : "Quiet proactivity disabled (enable it in Settings).");
+  console.log(
+    s.proactive_enabled
+      ? "Quiet proactivity enabled (insights wait in-app; never pushed)."
+      : "Quiet proactivity disabled (enable it in Settings)."
+  );
   setInterval(tick, 60_000); // check every minute
+  setInterval(boundaryApplyTick, 60_000);
+  setInterval(revisionTick, 60_000);
   setInterval(proactiveTick, 60_000);
   setInterval(garminTick, 60_000);
   setInterval(precomputeTick, 60_000);
@@ -450,6 +591,8 @@ export function startScheduler() {
   setInterval(updateCheckTick, 60_000); // self-hosted update check (≤ once/day)
   setTimeout(garminTick, 45_000); // the boot-time pass; later passes ride the minute tick
   setTimeout(updateCheckTick, 30_000); // first update check shortly after boot (then daily)
+  setTimeout(boundaryApplyTick, 5_000);
+  setTimeout(revisionTick, 15_000);
 
   // Boot warm: if today's read isn't cached yet (e.g. a mid-day restart), compute
   // it in the background so the very next open is instant too. Safe no-op when an

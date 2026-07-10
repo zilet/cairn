@@ -45,6 +45,7 @@ import { listProposals } from "./profile.js";
 // TodayAgendaCandidate or null.
 import { sinceLastLookedCandidate } from "./since-last.js";
 import { goalCheckinCandidate } from "./goal-checkin.js";
+import { listBrainDecisions } from "./brain-decisions.js";
 
 // ---- The shared Today-agenda contract (also consumed by sibling Era-2 cards) ----
 export type TodayAgendaTier = "hero" | "primary" | "more";
@@ -152,9 +153,31 @@ function reconcileCandidate(): TodayAgendaCandidate | null {
   };
 }
 
-// ---- plan: a draft plan change waiting for review (a scheduler weekly draft, a
-// chat plan change, an applied progression). High — the user asked for or is owed
-// a decision (you-drive: nothing auto-applies). Reads draft proposals. ----
+// ---- announced change: a structural coaching decision that will land at its
+// natural boundary unless the athlete says "hold on". It is explicit without
+// becoming a notification; the action cancels the decision deterministically in
+// one tap (the server revert path), never through an agent turn. ----
+function announcedChangeCandidate(): TodayAgendaCandidate | null {
+  const decision = listBrainDecisions({ status: "announced", limit: 20 }).find((row) => !!row.effective_date);
+  if (!decision) return null;
+  return {
+    id: `announced-decision-${decision.id}`,
+    kind: "plan",
+    tier: "primary",
+    priority: 82,
+    kicker: "NEXT BOUNDARY",
+    title: decision.summary,
+    body: `${decision.rationale || "Cairn found a structural change worth making."} Planned for ${decision.effective_date}.`,
+    action: {
+      label: "Hold on",
+      kind: "hold-decision",
+      payload: decision.id,
+    },
+  };
+}
+
+// ---- plan: a draft that requires review under the selected autonomy mode or a
+// goal/user-locked boundary. High because the athlete is owed a decision. ----
 function planDraftCandidate(): TodayAgendaCandidate | null {
   const plans = listProposals(8) as any[];
   const drafts = (Array.isArray(plans) ? plans : []).filter((p) => p && p.status === "draft");
@@ -167,7 +190,7 @@ function planDraftCandidate(): TodayAgendaCandidate | null {
     priority: 78,
     kicker: "PLAN DRAFT",
     title: drafts.length > 1 ? `${drafts.length} plan changes are waiting` : "A plan change is waiting",
-    body: raw || "Review the coach's draft before anything changes.",
+    body: raw || "This one needs your decision before anything changes.",
     action: { label: "Review", kind: "plan-coach" },
   };
 }
@@ -358,6 +381,7 @@ export function todayAgenda(date?: string): TodayAgenda {
 
   add(safe(() => fuelCandidate(d)));
   add(safe(() => reconcileCandidate()));
+  add(safe(() => announcedChangeCandidate()));
   add(safe(() => planDraftCandidate()));
   add(safe(() => healthCandidate()));
   if (showPlanForward) add(safe(() => adjustmentsCandidate(d, weeklyStats)));

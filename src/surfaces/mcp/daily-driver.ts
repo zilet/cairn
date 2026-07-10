@@ -1,9 +1,9 @@
 import { z } from "zod";
-import { generateInsight } from "../../coachOps.js";
 import { learnedTimeline, listVisibleInsights, todayAgenda, updateInsight } from "../../domain/brain/index.js";
 import { allGuidelines, guidelineFor } from "../../domain/health/index.js";
 import { addMemory } from "../../domain/person/index.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
+import { queueMcpAgentJob } from "./background.js";
 
 export function registerDailyDriverTools(server: McpToolRegistrar) {
   server.tool(
@@ -24,7 +24,8 @@ export function registerDailyDriverTools(server: McpToolRegistrar) {
     "get_guidelines",
     "Trusted clinical-guideline statements (offline, recognized bodies — AHA/ACC, Endocrine Society, KDIGO…) for a marker/topic, or the whole pack. Grounds the connected brain's directive notes with a citation even with research disabled. INFORMATIONAL, not medical advice.",
     { marker: z.string().optional() },
-    async ({ marker }) => asText(marker && marker.trim() ? { marker, guideline: guidelineFor(marker) } : { guidelines: allGuidelines() })
+    async ({ marker }) =>
+      asText(marker && marker.trim() ? { marker, guideline: guidelineFor(marker) } : { guidelines: allGuidelines() })
   );
 
   server.tool(
@@ -36,12 +37,17 @@ export function registerDailyDriverTools(server: McpToolRegistrar) {
 
   server.tool(
     "generate_insight",
-    "Run ONE agentic pass over the user's whole picture for a single genuine cross-domain connection (or a weekly read), dedupe against what's already been said, and store it. Returns ok:false when there's nothing real to say (found:false / duplicate / unusable shape). NO notification fires — the insight simply waits in-app. Informational, not medical advice.",
+    "Queue one durable whole-picture pass for a genuine connection or weekly read. Returns a job immediately; poll get_agent_job. A valid insight is deduped and waits in-app without a notification. Informational, not medical advice.",
     {
-      kind: z.enum(["connection", "weekly_read"]).optional().describe("'connection' (default) = one cross-domain link; 'weekly_read' = the standing how-the-week-went read"),
+      kind: z
+        .enum(["connection", "weekly_read"])
+        .optional()
+        .describe(
+          "'connection' (default) = one cross-domain link; 'weekly_read' = the standing how-the-week-went read"
+        ),
       agent: z.string().optional().describe("omit or 'auto' to use the configured rotation"),
     },
-    async ({ kind, agent }) => asText(await generateInsight(agent, kind))
+    async ({ kind, agent }) => asText(queueMcpAgentJob(kind === "weekly_read" ? "weekly_read" : "insight", {}, agent))
   );
 
   server.tool(

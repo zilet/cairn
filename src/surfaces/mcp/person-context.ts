@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { onboardFromText } from "../../coachOps.js";
 import {
   addContextEvent,
   addFamily,
@@ -17,6 +16,7 @@ import {
   updateSupplement,
 } from "../../domain/person/index.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
+import { queueMcpAgentJob } from "./background.js";
 
 export function registerPersonContextTools(server: McpToolRegistrar) {
   // ---- context events (life timeline the coach plans around) ----
@@ -29,7 +29,12 @@ export function registerPersonContextTools(server: McpToolRegistrar) {
       detail: z.string().nullable().optional(),
       start_date: z.string().nullable().optional().describe("YYYY-MM-DD"),
       end_date: z.string().nullable().optional().describe("YYYY-MM-DD; null/omit = ongoing/open-ended"),
-      meta: z.any().optional().describe("kind-specific: trip {location}, injury {area,severity}, life_event {impact}, family_event {member,recurrence}"),
+      meta: z
+        .any()
+        .optional()
+        .describe(
+          "kind-specific: trip {location}, injury {area,severity}, life_event {impact}, family_event {member,recurrence}"
+        ),
     },
     async (a) => asText(addContextEvent(a))
   );
@@ -60,7 +65,10 @@ export function registerPersonContextTools(server: McpToolRegistrar) {
   server.tool(
     "resolve_context_event",
     "Close a life-timeline event as healed/over (e.g. an injury the user confirms is no longer bothering them) WITHOUT deleting it — it stays on the timeline and in exports but stops gating the day-read/coach as a hard constraint. Use this instead of delete when a niggle/injury has passed. `date` defaults to today.",
-    { id: z.number().int(), date: z.string().nullable().optional().describe("YYYY-MM-DD healed-on date; defaults to today") },
+    {
+      id: z.number().int(),
+      date: z.string().nullable().optional().describe("YYYY-MM-DD healed-on date; defaults to today"),
+    },
     async ({ id, date }) => asText(resolveContextEvent(id, date ?? undefined) ?? { error: "not found", id })
   );
 
@@ -117,11 +125,8 @@ export function registerPersonContextTools(server: McpToolRegistrar) {
     async ({ id, ...patch }) => asText(updateFamily(id, patch) ?? { error: "not found", id })
   );
 
-  server.tool(
-    "delete_family",
-    "Delete a family member by id.",
-    { id: z.number().int() },
-    async ({ id }) => asText(deleteFamily(id))
+  server.tool("delete_family", "Delete a family member by id.", { id: z.number().int() }, async ({ id }) =>
+    asText(deleteFamily(id))
   );
 
   // ---- supplements (UNDERSTANDING, not a daily log) ----
@@ -142,7 +147,13 @@ export function registerPersonContextTools(server: McpToolRegistrar) {
   server.tool(
     "update_supplement",
     "Edit one understood supplement (dose, frequency, note), or set active=false to mark it stopped (kept for history).",
-    { id: z.number().int(), dose: z.string().optional(), frequency: z.string().optional(), note: z.string().optional(), active: z.boolean().optional() },
+    {
+      id: z.number().int(),
+      dose: z.string().optional(),
+      frequency: z.string().optional(),
+      note: z.string().optional(),
+      active: z.boolean().optional(),
+    },
     async (args) => asText(updateSupplement(args.id, args) ?? { error: "not found", id: args.id })
   );
 
@@ -155,8 +166,8 @@ export function registerPersonContextTools(server: McpToolRegistrar) {
 
   server.tool(
     "onboard",
-    "Frictionless first-run setup from ONE free-text intro ('41, training for longevity, lift 4x/week, bad left shoulder, train fasted, take creatine daily + omega-3'). Understands + applies profile/about-me/supplements/injuries/memories in one pass, then marks onboarded. Never interrogates; degrades to a deterministic base with no agent.",
+    "Queue frictionless first-run setup from one free-text intro. Returns a job immediately; poll get_agent_job. It understands profile, about-me, supplements, injuries, and memories without a questionnaire and degrades to a deterministic base.",
     { text: z.string().describe("the user's short free-text intro"), agent: z.string().optional() },
-    async ({ text, agent }) => asText(await onboardFromText(agent, text)),
+    async ({ text, agent }) => asText(queueMcpAgentJob("onboard", { text }, agent))
   );
 }

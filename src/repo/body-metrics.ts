@@ -1,4 +1,5 @@
 import { db } from "../db.js";
+import { emitBrainEvent } from "../brainEvents.js";
 import { lsqSlopePerDay } from "./health.js";
 import { getProfile, listWeight, setProfile } from "./profile.js";
 import { localDateISO } from "./shared.js";
@@ -325,6 +326,18 @@ export function addBodyMeasurement(
       note != null ? String(note).slice(0, 500) : null,
       source ? String(source).slice(0, 40) : "manual"
     );
+  const measured = Object.entries(sites)
+    .filter(([, value]) => value != null)
+    .map(([key]) => key.replace(/_in$/, ""))
+    .sort()
+    .join(",");
+  emitBrainEvent({
+    kind: "body_measurement_changed",
+    domain: "body",
+    date: d,
+    entity_id: Number(info.lastInsertRowid),
+    subject_key: measured || "measurement",
+  });
   return getBodyMeasurement(Number(info.lastInsertRowid))!;
 }
 

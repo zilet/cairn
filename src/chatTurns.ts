@@ -16,12 +16,8 @@ import {
 } from "./agents.js";
 import { createChatStreamFilter, type LiveReplyEvent } from "./chatStreamFilter.js";
 import type { MemoryKind } from "./repo/memory.js";
-import {
-  normalizeChatActions,
-  type ChatAction,
-  type ChatActionType,
-  type LogFoodAction,
-} from "./chatActions.js";
+import { normalizeChatActions, type ChatAction, type ChatActionType, type LogFoodAction } from "./chatActions.js";
+import { applyProposalWithAutonomy, revertDecision } from "./domain/brain/autonomy-service.js";
 
 // Background, in-process chat-turn engine — the durable counterpart to the
 // enrichment queue. A chat turn is no longer a blocking request/response: the
@@ -238,15 +234,40 @@ export function isFoodOnlyTurn(message: string | null | undefined, imagePath?: s
   return (Boolean(imagePath) || FOOD_TURN_RE.test(text)) && !TRAINING_SIGNAL_RE.test(text);
 }
 
+const GOAL_IDENTITY_FIELDS = new Set([
+  "goal_weight_lb",
+  "goal_bodyfat_pct",
+  "goal_date",
+  "goal_mode",
+  "primary_discipline",
+  "endurance_sport",
+  "endurance_goal",
+]);
+
+// Identity-level goals must come from an explicit athlete statement, never from
+// a coach inference or an answer to a "what should my goal be?" question.
+export function hasExplicitGoalIntent(message: string | null | undefined): boolean {
+  const text = String(message ?? "").trim();
+  if (!text) return false;
+  if (/\b(?:what|which)\b.{0,30}\b(?:goal|target)\b|\b(?:should|could|would)\s+i\b.{0,30}\b(?:goal|target|weigh|train|run|race)\b/i.test(text))
+    return false;
+  return (
+    /\bmy\s+(?:new\s+)?goal\s+(?:is|will be)\b/i.test(text) ||
+    /\b(?:set|change|update)\s+(?:my\s+)?(?:goal|target|discipline)\b/i.test(text) ||
+    /\bi\s+(?:want|plan|aim|intend|am going)\s+to\b.{0,80}\b(?:weigh|lose|gain|maintain|run|race|train|lift|cycle|ride|swim|complete|finish)\b/i.test(text) ||
+    /\b(?:train(?:ing)?\s+for|signed?\s+up\s+for|keep\s+me\b.{0,40}\bready)\b/i.test(text)
+  );
+}
+
 function applyBackgroundPlanUpdate(agent: string, summary: unknown, changes: unknown[]): unknown {
   const proposal = repo.createProposal(agent, "background: chat signal", "", {
     summary: String(summary ?? "Plan adjusted from a new coaching signal.").slice(0, 500),
     changes,
   });
-  // Keep an auditable applied proposal, but do not retire unrelated drafts the
-  // athlete may still be considering. This remains the shared clamped plan-write
-  // path, so background changes follow the same safety rules as reviewed ones.
-  const result = repo.applyProposal((proposal as any).id, { supersedeSiblings: false }) as any;
+  // Route every background adjustment through the ONE autonomy policy. Lead mode
+  // may quietly apply a small reversible change; announce/review modes leave it
+  // waiting. The shared proposal path still owns all server-side clamps.
+  const result = applyProposalWithAutonomy((proposal as any).id, { requested_tier: "quiet_apply" }) as any;
   return { background: true, proposal_id: (proposal as any).id, ...result };
 }
 
@@ -682,6 +703,8 @@ export function applyChatActions(
   const drafts: unknown[] = [];
   const labConfirms: LabConfirmDraft[] = [];
   const message = ctx.message ?? "";
+  const foodOnly = isFoodOnlyTurn(message, ctx.imagePath);
+  const explicitGoalIntent = !foodOnly && hasExplicitGoalIntent(message);
   const actions = normalizeChatActions(Array.isArray(parsed) ? parsed : parsed?.actions);
   for (const a of actions) {
     try {
@@ -692,10 +715,17 @@ export function applyChatActions(
         case "log_set":
           applied.push({ type: a.type, result: repo.logSetByName(a) });
           break;
-        case "set_profile":
-          applied.push({ type: a.type, result: repo.setProfile(a) });
+        case "set_profile": {
+          const { type, ...patch } = a;
+          if (!explicitGoalIntent) {
+            for (const field of GOAL_IDENTITY_FIELDS) delete patch[field];
+          }
+          if (Object.keys(patch).length)
+            applied.push({ type: a.type, result: repo.setProfile(patch) });
           break;
+        }
         case "set_endurance_goal": {
+          if (!explicitGoalIntent) break;
           // The endurance OBJECTIVE — applied through setProfile's endurance_goal
           // path (normalized/validated there). The action's own fields ARE the goal.
           const { type, ...goal } = a;
@@ -827,11 +857,18 @@ export function applyChatActions(
           applied.push({ type: a.type, result: repo.applyMeasurementAction(a) });
           break;
         case "plan_update":
-          if (isFoodOnlyTurn(message, ctx.imagePath)) break;
+          if (foodOnly) break;
           applied.push({ type: a.type, result: applyBackgroundPlanUpdate(ctx.agent, a.summary, a.changes) });
           break;
         case "plan_restructure":
+          if (foodOnly) break;
           drafts.push(repo.createProposal(ctx.agent, "chat: restructure", "", { summary: a.summary, days: a.days }));
+          break;
+        case "revert_decision":
+          applied.push({
+            type: a.type,
+            result: revertDecision(Number(a.id), stringOrUndefined(a.reason) ?? "user veto"),
+          });
           break;
         default: {
           const _exhaustive: never = a;

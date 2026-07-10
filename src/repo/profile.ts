@@ -1,4 +1,15 @@
 import { db } from "../db.js";
+import { emitBrainEvent } from "../brainEvents.js";
+import type { ProposedExpectation } from "../brain/expectation-contract.js";
+import {
+  getBrainDecision,
+  insertBrainExpectation,
+  listBrainDecisions,
+  listBrainExpectations,
+  patchBrainDecision,
+  recordDecision,
+  transitionBrainDecision,
+} from "./brain-decisions.js";
 import { findExercise } from "./exercises.js";
 import { estimateExpenditure } from "./expenditure.js";
 import { lsqSlopePerDay } from "./health.js";
@@ -39,9 +50,7 @@ export function createProposal(agent: string, instruction: string, raw: string, 
 }
 
 export function listProposals(limit = 20) {
-  const rows = db
-    .prepare(`SELECT * FROM plan_proposals ORDER BY id DESC LIMIT ?`)
-    .all(limit) as any[];
+  const rows = db.prepare(`SELECT * FROM plan_proposals ORDER BY id DESC LIMIT ?`).all(limit) as any[];
   return rows.map(hydrateProposal);
 }
 
@@ -62,7 +71,9 @@ function hydrateProposal(row: any) {
 
 export function setProposalStatus(id: number, status: string) {
   db.prepare(`UPDATE plan_proposals SET status = ? WHERE id = ?`).run(status, id);
-  return getProposal(id);
+  const proposal = getProposal(id);
+  if (proposal && status !== "applied") recordProposalStatusDecision(proposal, status);
+  return proposal;
 }
 
 // Applying a training proposal retires the OTHER open training drafts — they were
@@ -76,9 +87,15 @@ function supersedeSiblingTrainingDrafts(appliedId: number) {
     .all(appliedId) as any[];
   for (const d of drafts) {
     let kind: any = null;
-    try { kind = d.parsed_json ? JSON.parse(d.parsed_json).kind : null; } catch { /* keep null */ }
+    try {
+      kind = d.parsed_json ? JSON.parse(d.parsed_json).kind : null;
+    } catch {
+      /* keep null */
+    }
     if (kind === "nutrition_target") continue; // different category — leave it
     db.prepare(`UPDATE plan_proposals SET status = 'superseded' WHERE id = ?`).run(d.id);
+    const proposal = getProposal(Number(d.id));
+    if (proposal) recordProposalStatusDecision(proposal, "superseded");
   }
 }
 
@@ -95,6 +112,8 @@ export function supersedeAutoEvolutionDrafts(exceptId?: number) {
   for (const d of drafts) {
     if (exceptId != null && Number(d.id) === Number(exceptId)) continue;
     db.prepare(`UPDATE plan_proposals SET status = 'superseded' WHERE id = ?`).run(d.id);
+    const proposal = getProposal(Number(d.id));
+    if (proposal) recordProposalStatusDecision(proposal, "superseded");
     retired++;
   }
   return retired;
@@ -110,6 +129,8 @@ export function supersedeAutoRunPlanDrafts() {
   let retired = 0;
   for (const d of drafts) {
     db.prepare(`UPDATE plan_proposals SET status = 'superseded' WHERE id = ?`).run(d.id);
+    const proposal = getProposal(Number(d.id));
+    if (proposal) recordProposalStatusDecision(proposal, "superseded");
     retired++;
   }
   return retired;
@@ -131,9 +152,13 @@ export function supersedeAutoProgressionDrafts(dayNumber: number) {
       const parsed = d.parsed_json ? JSON.parse(d.parsed_json) : null;
       const first = parsed && Array.isArray(parsed.changes) ? parsed.changes[0] : null;
       dn = first ? Number(first.day_number) : Number.NaN;
-    } catch { /* keep NaN — an unparseable draft is left alone */ }
+    } catch {
+      /* keep NaN — an unparseable draft is left alone */
+    }
     if (dn === Number(dayNumber)) {
       db.prepare(`UPDATE plan_proposals SET status = 'superseded' WHERE id = ?`).run(d.id);
+      const proposal = getProposal(Number(d.id));
+      if (proposal) recordProposalStatusDecision(proposal, "superseded");
       retired++;
     }
   }
@@ -146,41 +171,411 @@ export function supersedeAutoProgressionDrafts(dayNumber: number) {
 // can never land below the lean-safe recommended intake (or ~1500 kcal absolute,
 // whichever is higher), and protein is never dropped below the recommended floor.
 // Returns the (possibly-adjusted) nutrition object plus transparent clamp records.
-const KCAL_ABSOLUTE_FLOOR = 1500;   // never advise a target below this for this user (mirrors buildMealPlanPrompt)
+const KCAL_ABSOLUTE_FLOOR = 1500; // never advise a target below this for this user (mirrors buildMealPlanPrompt)
 function clampNutritionTarget(nutrition: any): { nutrition: any; clamped: ClampAdjustment[] } {
   const clamped: ClampAdjustment[] = [];
   if (!nutrition || typeof nutrition !== "object") return { nutrition, clamped };
   const out = { ...nutrition };
   let goal: any = null;
-  try { goal = computeGoalCheck(); } catch { /* profile incomplete → only the absolute floors apply */ }
+  try {
+    goal = computeGoalCheck();
+  } catch {
+    /* profile incomplete → only the absolute floors apply */
+  }
   const recIntake = goal?.ok ? Number(goal.recommended?.target_intake_kcal) : NaN;
   const recProtein = goal?.ok ? Number(goal.recommended?.protein_g) : NaN;
   // Mode-aware wording: the same floor protects against a crash deficit (lose),
   // an accidental shortfall below maintenance, or eating below the lean-gain anchor.
   const goalMode: string | null = goal?.ok ? goal.goal_mode : null;
-  const floorLabel = goalMode === "gain" ? "lean-gain anchor" : goalMode === "maintain" ? "maintenance anchor" : "lean-safe floor";
+  const floorLabel =
+    goalMode === "gain" ? "lean-gain anchor" : goalMode === "maintain" ? "maintenance anchor" : "lean-safe floor";
   // kcal floor: the mode's recommended intake, never below the absolute floor.
   const kcalFloor = Math.max(KCAL_ABSOLUTE_FLOOR, Number.isFinite(recIntake) ? recIntake : 0);
   const reqKcal = Number(out.target_kcal);
   if (Number.isFinite(reqKcal) && reqKcal < kcalFloor) {
-    clamped.push({ exercise: "nutrition target", field: "target_kcal", requested: Math.round(reqKcal), applied: Math.round(kcalFloor),
-      reason: `kcal raised to your ${floorLabel} (≥${Math.round(kcalFloor)} kcal)${goalMode === "lose" || goalMode == null ? " — never a crash deficit" : ""}` });
+    clamped.push({
+      exercise: "nutrition target",
+      field: "target_kcal",
+      requested: Math.round(reqKcal),
+      applied: Math.round(kcalFloor),
+      reason: `kcal raised to your ${floorLabel} (≥${Math.round(kcalFloor)} kcal)${goalMode === "lose" || goalMode == null ? " — never a crash deficit" : ""}`,
+    });
     out.target_kcal = Math.round(kcalFloor);
   }
   // protein floor: hold/raise, never below the recommended protein target.
   const reqProtein = Number(out.protein_g);
   if (Number.isFinite(recProtein) && recProtein > 0 && Number.isFinite(reqProtein) && reqProtein < recProtein) {
-    clamped.push({ exercise: "nutrition target", field: "protein_g", requested: Math.round(reqProtein), applied: Math.round(recProtein),
-      reason: `protein held at the recommended floor (≥${Math.round(recProtein)} g) — protein stays protected` });
+    clamped.push({
+      exercise: "nutrition target",
+      field: "protein_g",
+      requested: Math.round(reqProtein),
+      applied: Math.round(recProtein),
+      reason: `protein held at the recommended floor (≥${Math.round(recProtein)} g) — protein stays protected`,
+    });
     out.protein_g = Math.round(recProtein);
   }
   return { nutrition: out, clamped };
 }
 
-export function applyProposal(id: number, opts: { supersedeSiblings?: boolean } = {}) {
+function datePlusDays(date: string, days: number): string {
+  return localDateISO(new Date(Date.parse(`${date}T00:00:00Z`) + days * 864e5));
+}
+
+function proposalDecisionShape(p: any): {
+  kind: "nutrition_target" | "training_structure" | "training_target" | "exercise_rotation";
+  domain: "nutrition" | "training";
+  summary: string;
+  rationale: string | null;
+} {
+  const nutrition = p?.parsed?.kind === "nutrition_target";
+  const restructure = Array.isArray(p?.parsed?.days);
+  const rotation =
+    p?.agent === "exercise-swap" ||
+    (Array.isArray(p?.parsed?.changes) && p.parsed.changes.some((item: any) => item?.swap));
+  const changeReasons = Array.isArray(p?.parsed?.changes)
+    ? p.parsed.changes
+        .map((item: any) => item?.reason)
+        .filter(Boolean)
+        .slice(0, 4)
+        .join("; ")
+    : null;
+  const reason = nutrition
+    ? (p?.parsed?.nutrition?.reason ?? p?.instruction ?? null)
+    : (p?.parsed?.rationale ?? (changeReasons || p?.instruction || null));
+  return {
+    kind: nutrition
+      ? "nutrition_target"
+      : restructure
+        ? "training_structure"
+        : rotation
+          ? "exercise_rotation"
+          : "training_target",
+    domain: nutrition ? "nutrition" : "training",
+    summary: String(
+      p?.parsed?.summary ??
+        (nutrition
+          ? "Nutrition target proposal."
+          : restructure
+            ? "Training structure proposal."
+            : "Training target proposal.")
+    ),
+    rationale: reason || null,
+  };
+}
+
+function recordProposalStatusDecision(p: any, proposalStatus: string): void {
+  if (!p?.id || !["discarded", "rejected", "superseded"].includes(proposalStatus)) return;
+  try {
+    const shape = proposalDecisionShape(p);
+    recordDecision({
+      effective_date: localDateISO(),
+      kind: shape.kind,
+      domain: shape.domain,
+      summary: shape.summary,
+      rationale: shape.rationale,
+      source: p.agent || "plan_proposal",
+      source_ref_type: "plan_proposal",
+      source_ref_key: String(p.id),
+      status: proposalStatus === "superseded" ? "superseded" : "rejected",
+      autonomy_tier: "ask",
+      risk_class: shape.kind === "training_structure" ? "moderate" : "low",
+      reversible: false,
+      input_fingerprint: null,
+      context: { instruction: p.instruction || null },
+      action: { proposal_status: proposalStatus },
+      specialist: null,
+      applied_at: null,
+      reverted_at: null,
+      superseded_by: null,
+      evaluator_version: null,
+    });
+  } catch {
+    // Proposal status is authoritative; audit recording is best effort.
+  }
+}
+
+// Decision telemetry is deliberately fail-soft: the plan/nutrition mutation above
+// is authoritative and must never be rolled back because its learning record could
+// not be written. Only bounded facts needed to evaluate the decision are retained;
+// raw agent output and prompts stay in their existing proposal row.
+function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?: number): void {
+  try {
+    const today = localDateISO();
+    const nutrition = p.parsed?.kind === "nutrition_target";
+    const restructure = Array.isArray(p.parsed?.days);
+    const affected = [
+      ...(Array.isArray(result?.applied) ? result.applied : []),
+      ...(Array.isArray(result?.added) ? result.added : []),
+    ];
+    const exercises: string[] = [
+      ...new Set<string>(affected.map((item: any) => String(item?.exercise || "").trim()).filter(Boolean)),
+    ];
+    const expectations: ProposedExpectation[] = exercises.slice(0, 12).map((exercise) => ({
+      metric_key: "exercise_target_completion",
+      subject_key: exercise,
+      direction: "complete",
+      baseline: null,
+      target: { exposures: 2 },
+      window_start: today,
+      window_end: datePlusDays(today, 28),
+      minimum_data: { exposures: 2 },
+      confounder_policy: "require_exposure",
+      confidence: "tentative",
+      evaluator: "exercise_completion",
+      evaluator_version: "exercise-completion-v1",
+    }));
+    if (restructure) {
+      const plannedDays = Math.max(1, Math.min(14, p.parsed.days.length));
+      expectations.push({
+        metric_key: "plan_day_adherence",
+        subject_key: null,
+        direction: "complete",
+        baseline: null,
+        target: { rate: 0.75, planned_sessions: plannedDays * 4 },
+        window_start: today,
+        window_end: datePlusDays(today, 28),
+        minimum_data: { sessions: Math.min(2, plannedDays) },
+        confounder_policy: "exclude_context_events",
+        confidence: "tentative",
+        evaluator: "plan_adherence",
+        evaluator_version: "plan-adherence-v1",
+      });
+    }
+    const accepted = result?.accepted ?? null;
+    let nutritionBaseline: ReturnType<typeof estimateExpenditure> | null = null;
+    let nutritionExpectationBasis: string | null = null;
+    if (nutrition && accepted?.target_kcal != null) {
+      try {
+        const estimate = estimateExpenditure(21);
+        if (
+          (estimate.confidence === "medium" || estimate.confidence === "high") &&
+          estimate.tdee != null &&
+          estimate.trend_lb_wk != null
+        ) {
+          nutritionBaseline = estimate;
+          nutritionExpectationBasis = "measured_expenditure";
+          const expectedTrend = ((Number(accepted.target_kcal) - estimate.tdee) * 7) / KCAL_PER_LB;
+          expectations.push({
+            metric_key: "weight_trend_lb_wk",
+            subject_key: null,
+            direction: "within_band",
+            baseline: {
+              trend_lb_wk: estimate.trend_lb_wk,
+              tdee: estimate.tdee,
+              intake_avg_kcal: estimate.intake_avg_kcal,
+              confidence: estimate.confidence,
+            },
+            target: {
+              min: Math.round((expectedTrend - 0.35) * 100) / 100,
+              max: Math.round((expectedTrend + 0.35) * 100) / 100,
+            },
+            window_start: accepted.effective_date || today,
+            window_end: datePlusDays(accepted.effective_date || today, 28),
+            minimum_data: { weigh_ins: 6, intake_days: 10 },
+            confounder_policy: "exclude_context_events",
+            confidence: "tentative",
+            evaluator: "weight_trend",
+            evaluator_version: "nutrition-weight-v1",
+          });
+        }
+      } catch {
+        nutritionBaseline = null;
+      }
+    }
+    if (nutrition && accepted?.target_kcal != null && !expectations.length) {
+      let expectedTrend = 0;
+      let tolerance = 0.75;
+      nutritionExpectationBasis = "cold_start_broad_band";
+      try {
+        const goal = computeGoalCheck();
+        if (goal?.ok) {
+          const rate = Number(goal.recommended?.weekly_rate_lb) || 0;
+          expectedTrend = goal.goal_mode === "lose" ? -rate : goal.goal_mode === "gain" ? rate : 0;
+          tolerance = 0.5;
+          nutritionExpectationBasis = "goal_formula";
+        }
+      } catch {
+        // Thin data remains a broad, tentative prediction. The minimum-data
+        // requirement will yield inconclusive rather than a fabricated verdict.
+      }
+      expectations.push({
+        metric_key: "weight_trend_lb_wk",
+        subject_key: null,
+        direction: "within_band",
+        baseline: { target_kcal: Number(accepted.target_kcal), basis: nutritionExpectationBasis },
+        target: {
+          min: Math.round((expectedTrend - tolerance) * 100) / 100,
+          max: Math.round((expectedTrend + tolerance) * 100) / 100,
+        },
+        window_start: accepted.effective_date || today,
+        window_end: datePlusDays(accepted.effective_date || today, 28),
+        minimum_data: { weigh_ins: 6 },
+        confounder_policy: "exclude_context_events",
+        confidence: "tentative",
+        evaluator: "weight_trend",
+        evaluator_version: "nutrition-weight-v1",
+      });
+    }
+    if (!nutrition && !expectations.length) {
+      const plannedDays = Math.max(
+        1,
+        new Set((Array.isArray(result?.runs) ? result.runs : []).map((item: any) => Number(item?.day_number))).size
+      );
+      expectations.push({
+        metric_key: "plan_day_adherence",
+        subject_key: null,
+        direction: "complete",
+        baseline: null,
+        target: { rate: 0.75, planned_sessions: plannedDays * 4 },
+        window_start: today,
+        window_end: datePlusDays(today, 28),
+        minimum_data: { sessions: Math.min(2, plannedDays) },
+        confounder_policy: "exclude_context_events",
+        confidence: "tentative",
+        evaluator: "plan_adherence",
+        evaluator_version: "plan-adherence-v1",
+      });
+    }
+    const sourceRefType = nutrition && accepted?.id ? "nutrition_target" : "plan_proposal";
+    const sourceRefKey = String(nutrition && accepted?.id ? accepted.id : p.id);
+    const shape = proposalDecisionShape(p);
+    const rationale = shape.rationale;
+    const evidenceKeys: string[] = [
+      `plan_proposal:${p.id}`,
+      ...(nutrition
+        ? [`nutrition_target:${accepted?.id ?? p.id}`, `expenditure:${nutritionExpectationBasis ?? "thin"}`]
+        : exercises.map((exercise) => `exercise:${exercise}:plan-and-history`).slice(0, 12)),
+    ];
+    const action = nutrition
+      ? {
+          target_kcal: result?.nutrition?.target_kcal ?? null,
+          protein_g: result?.nutrition?.protein_g ?? null,
+          carbs_g: result?.nutrition?.carbs_g ?? null,
+          fat_g: result?.nutrition?.fat_g ?? null,
+          plan_proposal_id: p.id,
+        }
+      : restructure
+        ? {
+            plan_proposal_id: p.id,
+            day_count: Number(result?.days) || p.parsed.days.length,
+            days: p.parsed.days.slice(0, 14).map((day: any) => ({
+              day_number: day?.day_number ?? null,
+              name: day?.name ?? null,
+              focus: day?.focus ?? null,
+            })),
+          }
+        : {
+            plan_proposal_id: p.id,
+            changes: affected.slice(0, 24).map((item: any) => ({
+              day_number: item?.day_number ?? null,
+              exercise: item?.exercise ?? null,
+              target_weight: item?.target_weight ?? null,
+              sets: item?.sets ?? null,
+              rep_low: item?.rep_low ?? null,
+              rep_high: item?.rep_high ?? null,
+              target_seconds: item?.target_seconds ?? null,
+            })),
+            runs: Array.isArray(result?.runs) ? result.runs.slice(0, 14) : [],
+          };
+    const decisionInput = {
+      effective_date: nutrition && accepted?.effective_date ? accepted.effective_date : today,
+      kind: shape.kind,
+      domain: shape.domain,
+      summary: shape.summary,
+      rationale,
+      source: p.agent || "plan_proposal",
+      source_ref_type: sourceRefType,
+      source_ref_key: sourceRefKey,
+      status: "applied",
+      autonomy_tier: "ask",
+      risk_class: restructure ? "moderate" : "low",
+      // A direct/manual apply has no rollback snapshot. Autonomy-owned applies
+      // patch this true only after their rollback has been durably stored.
+      reversible: false,
+      input_fingerprint: null,
+      context: {
+        instruction: p.instruction || null,
+        evidence_keys: evidenceKeys,
+        evidence_observed_at: new Date().toISOString(),
+        ...(nutrition
+          ? {
+              expectation_basis: nutritionExpectationBasis,
+              baseline_confidence: nutritionBaseline?.confidence ?? null,
+            }
+          : {}),
+      },
+      action,
+      specialist: null,
+      applied_at: new Date().toISOString(),
+      reverted_at: null,
+      superseded_by: null,
+      evaluator_version: expectations[0]?.evaluator_version ?? null,
+    } as const;
+    if (existingDecisionId) {
+      const existing = getBrainDecision(existingDecisionId);
+      if (!existing) throw new Error(`No brain decision ${existingDecisionId}`);
+      patchBrainDecision(existingDecisionId, {
+        effective_date: decisionInput.effective_date,
+        kind: decisionInput.kind,
+        domain: decisionInput.domain,
+        summary: decisionInput.summary,
+        rationale: decisionInput.rationale,
+        source: decisionInput.source,
+        source_ref_type: decisionInput.source_ref_type,
+        source_ref_key: decisionInput.source_ref_key,
+        status: "applied",
+        risk_class: decisionInput.risk_class,
+        context: { ...(existing.context ?? {}), ...(decisionInput.context ?? {}) },
+        action: decisionInput.action as any,
+        applied_at: decisionInput.applied_at,
+        evaluator_version: decisionInput.evaluator_version,
+      });
+      const stored = new Set(
+        listBrainExpectations({ decisionId: existingDecisionId }).map(
+          (item) => `${item.metric_key}|${item.subject_key}|${item.window_end}`
+        )
+      );
+      for (const expectation of expectations) {
+        const key = `${expectation.metric_key}|${expectation.subject_key}|${expectation.window_end}`;
+        if (!stored.has(key)) insertBrainExpectation(existingDecisionId, expectation);
+      }
+    } else {
+      recordDecision(decisionInput, expectations);
+    }
+  } catch {
+    // The authoritative apply/accept path already succeeded. Learning must never
+    // turn a valid plan or nutrition action into an error.
+  }
+}
+
+// An apply outside the announced decision's own boundary pass (a manual tap, chat,
+// MCP) makes the standing announcement moot: cancel it so the boundary never
+// re-applies the same proposal on top of the user's action.
+function cancelAnnouncementsForProposal(proposalId: number, exceptDecisionId?: number) {
+  try {
+    const standing = [
+      ...listBrainDecisions({ status: "announced", limit: 100 }),
+      ...listBrainDecisions({ status: "pending", limit: 100 }),
+    ].filter(
+      (decision) =>
+        decision.id !== exceptDecisionId && Number((decision.action as any)?.proposal_id) === proposalId
+    );
+    for (const decision of standing) transitionBrainDecision(decision.id!, "canceled");
+  } catch {
+    // Bookkeeping must never block the authoritative apply.
+  }
+}
+
+export function applyProposal(id: number, opts: { supersedeSiblings?: boolean; decisionId?: number } = {}) {
   const p = getProposal(id);
   if (!p) throw new Error(`No proposal ${id}`);
   if (!p.parsed) throw new Error("Proposal has no parsed payload");
+  if (p.status === "applied") {
+    // Re-running an applied proposal would duplicate its side effects (a second
+    // nutrition_targets row, a re-run replacePlan over newer edits).
+    return { ok: false, id, error: "proposal already applied" };
+  }
+  cancelAnnouncementsForProposal(id, opts.decisionId);
   // Adaptive nutrition-target drafts (from the nutrition check-in) are advisory —
   // there is no plan to mutate. Recognize the shape so "applying" one is a clean
   // acknowledgement on every surface (REST + MCP) instead of throwing
@@ -194,30 +589,41 @@ export function applyProposal(id: number, opts: { supersedeSiblings?: boolean } 
     // formula. Effective from today. Failure to persist never blocks the ack.
     let accepted: any = null;
     try {
-      accepted = setNutritionTarget({
-        target_kcal: nutrition.target_kcal,
-        protein_g: nutrition.protein_g,
-        carbs_g: nutrition.carbs_g,
-        fat_g: nutrition.fat_g,
-        source: "checkin",
-        note: nutrition.reason ?? null,
-      });
-    } catch { accepted = null; }
+      accepted = setNutritionTarget(
+        {
+          target_kcal: nutrition.target_kcal,
+          protein_g: nutrition.protein_g,
+          carbs_g: nutrition.carbs_g,
+          fat_g: nutrition.fat_g,
+          source: "checkin",
+          note: nutrition.reason ?? null,
+        },
+        { recordDecision: false }
+      );
+    } catch {
+      accepted = null;
+    }
     setProposalStatus(id, "applied");
-    return {
+    const result = {
       ok: true,
-      id, applied: [], nutrition,
+      id,
+      applied: [],
+      nutrition,
       note: "advisory nutrition target — saved as your active target",
       ...(accepted ? { accepted } : {}),
       ...(clamped.length ? { clamped } : {}),
     };
+    recordAppliedProposalDecision(p, result, opts.decisionId);
+    return result;
   }
   // Restructure proposal: full plan replacement (changed frequency / split).
   if (Array.isArray(p.parsed.days)) {
     replacePlan(p.parsed.days);
     setProposalStatus(id, "applied");
     if (opts.supersedeSiblings !== false) supersedeSiblingTrainingDrafts(id);
-    return { ok: true, id, restructured: true, days: p.parsed.days.length };
+    const result = { ok: true, id, restructured: true, days: p.parsed.days.length };
+    recordAppliedProposalDecision(p, result, opts.decisionId);
+    return result;
   }
   // A proposal may carry strength `changes`, a week of run prescriptions (`cardio`),
   // or both. (A full split/frequency rewrite uses `days` → replacePlan above.)
@@ -226,8 +632,8 @@ export function applyProposal(id: number, opts: { supersedeSiblings?: boolean } 
   if (!hasChanges && !hasCardio) {
     throw new Error("Proposal has no valid changes, cardio, or days");
   }
-  const applied: any[] = [];   // target tweaks to existing prescriptions
-  const added: any[] = [];     // movements ADDED to a day (the "add a back movement" intent)
+  const applied: any[] = []; // target tweaks to existing prescriptions
+  const added: any[] = []; // movements ADDED to a day (the "add a back movement" intent)
   const skipped: any[] = [];
   const clamped: ClampAdjustment[] = [];
   const cardioRuns: any[] = [];
@@ -270,7 +676,10 @@ export function applyProposal(id: number, opts: { supersedeSiblings?: boolean } 
   if (!changedAny) {
     return {
       ok: false,
-      id, applied, added, skipped,
+      id,
+      applied,
+      added,
+      skipped,
       error: skipped.length
         ? "Couldn't apply these changes — the movement may need to be added through a plan restructure."
         : "Nothing to change — your plan already matches this.",
@@ -282,7 +691,17 @@ export function applyProposal(id: number, opts: { supersedeSiblings?: boolean } 
   // An applied target tweak / added movement / week of runs can change today's read —
   // bust the cached Brief so the next open reflects the change, not the stale plan.
   invalidateDayRead();
-  return { ok: true, id, applied, added, skipped, ...(runs ? { runs: runs.applied } : {}), ...(clamped.length ? { clamped } : {}) };
+  const result = {
+    ok: true,
+    id,
+    applied,
+    added,
+    skipped,
+    ...(runs ? { runs: runs.applied } : {}),
+    ...(clamped.length ? { clamped } : {}),
+  };
+  recordAppliedProposalDecision(p, result, opts.decisionId);
+  return result;
 }
 
 // Map a coach-emitted cardio entry (from parsed.cardio, or a kind:'cardio' change)
@@ -346,14 +765,15 @@ export function setProfile(p: any) {
   // intact, a value is clamped to a plausible human range. NaN → null.
   const heightIn: number | null =
     p.height_in !== undefined
-      ? (p.height_in == null || p.height_in === ""
-          ? null
-          : Math.round(Math.min(108, Math.max(24, Number(p.height_in))) * 10) / 10 || null)
+      ? p.height_in == null || p.height_in === ""
+        ? null
+        : Math.round(Math.min(108, Math.max(24, Number(p.height_in))) * 10) / 10 || null
       : (cur.height_in ?? null);
   const merged = {
     // The athlete's name (optional). Same contract as the free-text fields: an
     // explicit '' clears it, undefined leaves the existing value intact, capped.
-    name: p.name !== undefined ? (p.name == null ? null : String(p.name).trim().slice(0, 120) || null) : (cur.name ?? null),
+    name:
+      p.name !== undefined ? (p.name == null ? null : String(p.name).trim().slice(0, 120) || null) : (cur.name ?? null),
     sex: p.sex ?? cur.sex ?? "male",
     age: p.age ?? cur.age ?? null,
     // When only inches were ever provided, derive cm so the existing TDEE /
@@ -362,10 +782,12 @@ export function setProfile(p: any) {
     height_cm: p.height_cm ?? cur.height_cm ?? (heightIn != null ? Math.round(heightIn * 2.54 * 10) / 10 : null),
     height_in: heightIn,
     weight_lb: p.weight_lb ?? cur.weight_lb ?? null,
-    start_weight_lb: p.start_weight_lb !== undefined ? clampProfileNumber(p.start_weight_lb, 50, 700) : (cur.start_weight_lb ?? null),
+    start_weight_lb:
+      p.start_weight_lb !== undefined ? clampProfileNumber(p.start_weight_lb, 50, 700) : (cur.start_weight_lb ?? null),
     start_date: p.start_date !== undefined ? cleanISODate(p.start_date) : (cur.start_date ?? null),
     goal_weight_lb: p.goal_weight_lb ?? cur.goal_weight_lb ?? null,
-    goal_bodyfat_pct: p.goal_bodyfat_pct !== undefined ? clampProfileNumber(p.goal_bodyfat_pct, 3, 70) : (cur.goal_bodyfat_pct ?? null),
+    goal_bodyfat_pct:
+      p.goal_bodyfat_pct !== undefined ? clampProfileNumber(p.goal_bodyfat_pct, 3, 70) : (cur.goal_bodyfat_pct ?? null),
     goal_date: p.goal_date ?? cur.goal_date ?? null,
     // The journey's shape (v41). Same nullable contract as the free-text fields:
     // explicit null/'' clears it (→ derived), undefined leaves intact, a valid
@@ -375,22 +797,41 @@ export function setProfile(p: any) {
     notes: p.notes ?? cur.notes ?? null,
     // Rich free-text understanding (Phase 2A). Trimmed/capped; explicit empty
     // string clears it, undefined leaves the existing value intact.
-    about_me: p.about_me !== undefined ? (p.about_me == null ? null : String(p.about_me).slice(0, 8000)) : (cur.about_me ?? null),
+    about_me:
+      p.about_me !== undefined
+        ? p.about_me == null
+          ? null
+          : String(p.about_me).slice(0, 8000)
+        : (cur.about_me ?? null),
     // Allergies (HARD safety exclusion for meals) + dietary restrictions. Same
     // contract as about_me: '' clears, undefined leaves intact, capped at 1000.
-    allergies: p.allergies !== undefined ? (p.allergies == null ? null : String(p.allergies).slice(0, 1000)) : (cur.allergies ?? null),
-    dietary_restrictions: p.dietary_restrictions !== undefined ? (p.dietary_restrictions == null ? null : String(p.dietary_restrictions).slice(0, 1000)) : (cur.dietary_restrictions ?? null),
+    allergies:
+      p.allergies !== undefined
+        ? p.allergies == null
+          ? null
+          : String(p.allergies).slice(0, 1000)
+        : (cur.allergies ?? null),
+    dietary_restrictions:
+      p.dietary_restrictions !== undefined
+        ? p.dietary_restrictions == null
+          ? null
+          : String(p.dietary_restrictions).slice(0, 1000)
+        : (cur.dietary_restrictions ?? null),
     // Primary training discipline (v35) — drives coach framing, the day-read, and
     // weekly stats. Only 'strength' | 'endurance' | 'hybrid' are accepted; anything
     // else falls back to the existing value (default 'strength'). endurance_sport is
     // optional free text ('' clears, undefined leaves intact, capped at 60).
     primary_discipline: normalizeDiscipline(p.primary_discipline, cur.primary_discipline),
-    endurance_sport: p.endurance_sport !== undefined ? (p.endurance_sport == null ? null : String(p.endurance_sport).trim().slice(0, 60) || null) : (cur.endurance_sport ?? null),
+    endurance_sport:
+      p.endurance_sport !== undefined
+        ? p.endurance_sport == null
+          ? null
+          : String(p.endurance_sport).trim().slice(0, 60) || null
+        : (cur.endurance_sport ?? null),
     // The endurance OBJECTIVE (v37). undefined leaves intact, null clears, else it's
     // normalized (race | standing) and re-serialized; an unusable shape clears it.
-    endurance_goal_json: p.endurance_goal !== undefined
-      ? serializeEnduranceGoal(p.endurance_goal)
-      : (cur.endurance_goal_json ?? null),
+    endurance_goal_json:
+      p.endurance_goal !== undefined ? serializeEnduranceGoal(p.endurance_goal) : (cur.endurance_goal_json ?? null),
     // AHA PREVENT capture flags (v57). Same nullable contract as the other
     // optional fields: undefined leaves intact, null/'' clears back to "not
     // captured", a boolean/0/1 sets it. Removes risk.ts's provisional assumption
@@ -412,10 +853,80 @@ export function setProfile(p: any) {
        primary_discipline=excluded.primary_discipline, endurance_sport=excluded.endurance_sport,
        endurance_goal_json=excluded.endurance_goal_json,
        smoking=excluded.smoking, bp_treated=excluded.bp_treated, statin=excluded.statin, updated_at=datetime('now')`
-  ).run(merged.name, merged.sex, merged.age, merged.height_cm, merged.height_in, merged.weight_lb, merged.start_weight_lb, merged.start_date, merged.goal_weight_lb, merged.goal_bodyfat_pct, merged.goal_date, merged.goal_mode, merged.activity_factor, merged.notes, merged.about_me, merged.allergies, merged.dietary_restrictions, merged.primary_discipline, merged.endurance_sport, merged.endurance_goal_json, merged.smoking, merged.bp_treated, merged.statin);
+  ).run(
+    merged.name,
+    merged.sex,
+    merged.age,
+    merged.height_cm,
+    merged.height_in,
+    merged.weight_lb,
+    merged.start_weight_lb,
+    merged.start_date,
+    merged.goal_weight_lb,
+    merged.goal_bodyfat_pct,
+    merged.goal_date,
+    merged.goal_mode,
+    merged.activity_factor,
+    merged.notes,
+    merged.about_me,
+    merged.allergies,
+    merged.dietary_restrictions,
+    merged.primary_discipline,
+    merged.endurance_sport,
+    merged.endurance_goal_json,
+    merged.smoking,
+    merged.bp_treated,
+    merged.statin
+  );
   // Profile is UPDATEd in place (single row), so the SQL backstop's count/max can't
   // see a sex/age/goal/weight change — bump so program/weekly/expenditure reads refresh.
   bumpTrainingDataVersion();
+  // Change-detected brain signals. weight_lb is excluded (logWeight emits its own
+  // weight_logged); name/notes/about_me are soft context, not a review trigger.
+  const changed = (fields: string[]) =>
+    fields.filter((field) => JSON.stringify((merged as any)[field] ?? null) !== JSON.stringify(cur[field] ?? null));
+  const goalChanges = changed([
+    "goal_weight_lb",
+    "goal_bodyfat_pct",
+    "goal_date",
+    "goal_mode",
+    "endurance_goal_json",
+    "start_weight_lb",
+    "start_date",
+  ]);
+  const profileChanges = changed([
+    "sex",
+    "age",
+    "height_cm",
+    "height_in",
+    "activity_factor",
+    "allergies",
+    "dietary_restrictions",
+    "primary_discipline",
+    "endurance_sport",
+    "smoking",
+    "bp_treated",
+    "statin",
+  ]);
+  if (goalChanges.length)
+    emitBrainEvent({
+      kind: "goal_changed",
+      domain: "person",
+      date: localDateISO(),
+      subject_key: "profile:goal",
+      reason: `changed: ${goalChanges.join(", ")}`,
+      material: true,
+    });
+  if (profileChanges.length)
+    emitBrainEvent({
+      kind: "profile_changed",
+      domain: "person",
+      date: localDateISO(),
+      subject_key: "profile:identity",
+      reason: `changed: ${profileChanges.join(", ")}`,
+      // Allergies are a hard meal-safety exclusion; a change there is material.
+      material: profileChanges.includes("allergies"),
+    });
   return getProfile();
 }
 
@@ -446,7 +957,9 @@ const GOAL_MODES = new Set<GoalMode>(["lose", "maintain", "gain"]);
 // leaves the current value intact (mirrors normalizeDiscipline, but nullable).
 export function normalizeGoalMode(v: any, current?: any): GoalMode | null {
   if (v === null || v === "") return null; // explicit clear → derive from goal weight
-  const s = String(v ?? "").trim().toLowerCase();
+  const s = String(v ?? "")
+    .trim()
+    .toLowerCase();
   if (GOAL_MODES.has(s as GoalMode)) return s as GoalMode;
   const cur = current != null ? String(current).trim().toLowerCase() : "";
   return GOAL_MODES.has(cur as GoalMode) ? (cur as GoalMode) : null;
@@ -457,9 +970,10 @@ export function normalizeGoalMode(v: any, current?: any): GoalMode | null {
 // meaningfully below current is set, else 'maintain'. Never returns null.
 export function effectiveGoalMode(p?: any): GoalMode {
   const prof = p ?? getProfile();
-  const explicit = prof?.goal_mode && GOAL_MODES.has(String(prof.goal_mode).toLowerCase() as GoalMode)
-    ? (String(prof.goal_mode).toLowerCase() as GoalMode)
-    : null;
+  const explicit =
+    prof?.goal_mode && GOAL_MODES.has(String(prof.goal_mode).toLowerCase() as GoalMode)
+      ? (String(prof.goal_mode).toLowerCase() as GoalMode)
+      : null;
   if (explicit) return explicit;
   const w = Number(prof?.weight_lb);
   const gw = Number(prof?.goal_weight_lb);
@@ -481,12 +995,12 @@ export function leanGainRate(weightLb: number): number {
 // Normalized/clamped at the trust boundary; an unusable shape returns null (= clear).
 export type EnduranceGoal = {
   mode: "race" | "standing";
-  event?: string | null;          // race name (race mode)
-  date?: string | null;           // race date YYYY-MM-DD (race mode)
-  label?: string | null;          // readiness label, e.g. "10k-ready" (standing mode)
-  distance_km?: number | null;    // target/readiness distance
-  target?: string | null;         // qualitative target, e.g. "sub-1:45"
-  weekly_km?: number | null;      // optional volume anchor
+  event?: string | null; // race name (race mode)
+  date?: string | null; // race date YYYY-MM-DD (race mode)
+  label?: string | null; // readiness label, e.g. "10k-ready" (standing mode)
+  distance_km?: number | null; // target/readiness distance
+  target?: string | null; // qualitative target, e.g. "sub-1:45"
+  weekly_km?: number | null; // optional volume anchor
   weekly_sessions?: number | null;
 };
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -501,19 +1015,42 @@ function capStr(v: any, max: number): string | null {
 }
 export function normalizeEnduranceGoal(input: any): EnduranceGoal | null {
   let g: any = input;
-  if (typeof g === "string") { try { g = JSON.parse(g); } catch { return null; } }
+  if (typeof g === "string") {
+    try {
+      g = JSON.parse(g);
+    } catch {
+      return null;
+    }
+  }
   if (!g || typeof g !== "object") return null;
-  const mode = String(g.mode || "").trim().toLowerCase();
+  const mode = String(g.mode || "")
+    .trim()
+    .toLowerCase();
   const distance_km = clampPos(g.distance_km, 500);
   const weekly_km = clampPos(g.weekly_km, 400);
   const weekly_sessions = clampPos(g.weekly_sessions, 14);
   if (mode === "race") {
     const date = ISO_DATE.test(String(g.date || "")) ? String(g.date) : null;
     if (!date) return null; // a race without a date can't be periodized — reject
-    return { mode: "race", event: capStr(g.event, 120), date, distance_km, target: capStr(g.target, 60), weekly_km, weekly_sessions };
+    return {
+      mode: "race",
+      event: capStr(g.event, 120),
+      date,
+      distance_km,
+      target: capStr(g.target, 60),
+      weekly_km,
+      weekly_sessions,
+    };
   }
   if (mode === "standing") {
-    return { mode: "standing", label: capStr(g.label, 80), distance_km, target: capStr(g.target, 60), weekly_km, weekly_sessions };
+    return {
+      mode: "standing",
+      label: capStr(g.label, 80),
+      distance_km,
+      target: capStr(g.target, 60),
+      weekly_km,
+      weekly_sessions,
+    };
   }
   return null;
 }
@@ -534,12 +1071,14 @@ function daysBetweenISO(fromISO: string, toISO: string): number {
 // Deterministic read of the active endurance goal, with race timing derived for the
 // coach (weeks/days out + a coarse periodization PHASE hint). Standing goals have no
 // date, so no phase — the coach maintains rather than ramps. Returns null when unset.
-export function getEnduranceGoal(today?: string): (EnduranceGoal & {
-  is_race: boolean;
-  days_to_race?: number | null;
-  weeks_to_race?: number | null;
-  phase?: "base" | "build" | "sharpen" | "taper" | "past" | null;
-}) | null {
+export function getEnduranceGoal(today?: string):
+  | (EnduranceGoal & {
+      is_race: boolean;
+      days_to_race?: number | null;
+      weeks_to_race?: number | null;
+      phase?: "base" | "build" | "sharpen" | "taper" | "past" | null;
+    })
+  | null {
   const p = getProfile();
   const g = normalizeEnduranceGoal(p?.endurance_goal_json);
   if (!g) return null;
@@ -566,6 +1105,13 @@ export function logWeight(weight_lb: number, date?: string, note?: string) {
   // A fresh weigh-in is a brain signal (it moves the weight trend the day-read +
   // energy-balance read speak to) — refresh the Brief like its sibling signals do.
   invalidateDayRead(d);
+  emitBrainEvent({
+    kind: "weight_logged",
+    domain: "body",
+    date: d,
+    entity_id: Number(info.lastInsertRowid),
+    subject_key: "bodyweight",
+  });
   return db.prepare(`SELECT * FROM bodyweight_log WHERE id = ?`).get(info.lastInsertRowid);
 }
 
@@ -607,7 +1153,14 @@ function navyTapeBodyFat(p: any): BodyFatEstimate | null {
   let value: number | null = null;
   if (!female && Number.isFinite(waist) && Number.isFinite(neck) && waist > neck && heightIn > 0) {
     value = 86.01 * Math.log10(waist - neck) - 70.041 * Math.log10(heightIn) + 36.76;
-  } else if (female && Number.isFinite(waist) && Number.isFinite(hip) && Number.isFinite(neck) && waist + hip > neck && heightIn > 0) {
+  } else if (
+    female &&
+    Number.isFinite(waist) &&
+    Number.isFinite(hip) &&
+    Number.isFinite(neck) &&
+    waist + hip > neck &&
+    heightIn > 0
+  ) {
     value = 163.205 * Math.log10(waist + hip - neck) - 97.684 * Math.log10(heightIn) - 78.387;
   }
   if (value == null || !Number.isFinite(value)) return null;
@@ -617,7 +1170,9 @@ function navyTapeBodyFat(p: any): BodyFatEstimate | null {
 
 function latestGarminBodyFat(): BodyFatEstimate | null {
   const row = db
-    .prepare(`SELECT date, body_fat_pct FROM garmin_daily_metrics WHERE body_fat_pct IS NOT NULL ORDER BY date DESC, id DESC LIMIT 1`)
+    .prepare(
+      `SELECT date, body_fat_pct FROM garmin_daily_metrics WHERE body_fat_pct IS NOT NULL ORDER BY date DESC, id DESC LIMIT 1`
+    )
     .get() as any;
   const value = Number(row?.body_fat_pct);
   if (!Number.isFinite(value) || value < 3 || value > 70) return null;
@@ -695,13 +1250,16 @@ export function computeGoalCheck(prof?: any) {
   // it only narrows the ceiling; absent BF keeps the old conservative default.
   const bodyFat = currentBodyFatEstimate(p);
   const lossRates = leannessAwareLossRates(p.weight_lb, bodyFat?.body_fat_pct ?? null);
-  const safeMaxRate = lossRates.safe_max_rate_lb;       // upper bound (lb/wk)
-  const leanIdealRate = lossRates.lean_ideal_rate_lb;   // recommended (lb/wk)
+  const safeMaxRate = lossRates.safe_max_rate_lb; // upper bound (lb/wk)
+  const leanIdealRate = lossRates.lean_ideal_rate_lb; // recommended (lb/wk)
 
   let requested: any = null;
   let recommended: {
-    weekly_rate_lb: number; daily_deficit_kcal: number; target_intake_kcal: number;
-    weeks_to_goal: number; protein_g: number;
+    weekly_rate_lb: number;
+    daily_deficit_kcal: number;
+    target_intake_kcal: number;
+    weeks_to_goal: number;
+    protein_g: number;
   };
   let message: string;
 
@@ -724,7 +1282,7 @@ export function computeGoalCheck(prof?: any) {
     const dailySurplus = Math.round((gainRate * KCAL_PER_LB) / 7);
     recommended = {
       weekly_rate_lb: gainRate,
-      daily_deficit_kcal: -dailySurplus,   // negative = a surplus (field name kept for back-compat)
+      daily_deficit_kcal: -dailySurplus, // negative = a surplus (field name kept for back-compat)
       target_intake_kcal: tdee + dailySurplus,
       weeks_to_goal: 0,
       protein_g: Math.round((p.weight_lb || 0) * 1.0),
@@ -775,27 +1333,36 @@ export function computeGoalCheck(prof?: any) {
   // recomputed each time). The formula stays the fallback AND the lean-safe floor:
   // protein never drops below the recommended protein floor. `accepted` is null-safe.
   let accepted: any = null;
-  try { accepted = getActiveNutritionTarget(); } catch { accepted = null; }
-  const effective_target = accepted && accepted.target_kcal != null
-    ? {
-        target_kcal: Math.round(accepted.target_kcal),
-        protein_g: Math.max(Math.round(accepted.protein_g ?? 0), Math.round(recommended.protein_g || 0)),
-        carbs_g: accepted.carbs_g != null ? Math.round(accepted.carbs_g) : null,
-        fat_g: accepted.fat_g != null ? Math.round(accepted.fat_g) : null,
-        source: "accepted" as const,
-        effective_date: accepted.effective_date,
-      }
-    : {
-        target_kcal: Math.round(recommended.target_intake_kcal),
-        protein_g: Math.round(recommended.protein_g || 0),
-        carbs_g: null,
-        fat_g: null,
-        source: "formula" as const,
-        effective_date: null,
-      };
+  try {
+    accepted = getActiveNutritionTarget();
+  } catch {
+    accepted = null;
+  }
+  const effective_target =
+    accepted && accepted.target_kcal != null
+      ? {
+          target_kcal: Math.round(accepted.target_kcal),
+          protein_g: Math.max(Math.round(accepted.protein_g ?? 0), Math.round(recommended.protein_g || 0)),
+          carbs_g: accepted.carbs_g != null ? Math.round(accepted.carbs_g) : null,
+          fat_g: accepted.fat_g != null ? Math.round(accepted.fat_g) : null,
+          source: "accepted" as const,
+          effective_date: accepted.effective_date,
+        }
+      : {
+          target_kcal: Math.round(recommended.target_intake_kcal),
+          protein_g: Math.round(recommended.protein_g || 0),
+          carbs_g: null,
+          fat_g: null,
+          source: "formula" as const,
+          effective_date: null,
+        };
 
   return {
-    ok: true, bmr: Math.round(bmr), tdee, tdee_source, lbs_to_lose: lbsToLose,
+    ok: true,
+    bmr: Math.round(bmr),
+    tdee,
+    tdee_source,
+    lbs_to_lose: lbsToLose,
     // The effective journey shape (v41) — drives the day-intake target framing,
     // the pace verdict, and every nutrition prompt. Additive; older consumers ignore.
     goal_mode: mode,
@@ -807,7 +1374,9 @@ export function computeGoalCheck(prof?: any) {
       safe_max_rate_lb: safeMaxRate,
       lean_ideal_rate_lb: leanIdealRate,
     },
-    requested, recommended, message,
+    requested,
+    recommended,
+    message,
     // The persisted accepted target (or null) + the EFFECTIVE target every surface
     // should read (accepted wins, formula is the fallback/floor). Additive.
     accepted_target: accepted,
@@ -825,7 +1394,10 @@ export function computeGoalCheck(prof?: any) {
 // line ("at this trend, ~Aug 20 — about 3 weeks past your date"). Words + a
 // date, never a number-as-score. Null-safe: too little scale data / no goal →
 // quiet (trend or date null, no false precision).
-export function projectGoalPace(p: any, lbsToLose: number): {
+export function projectGoalPace(
+  p: any,
+  lbsToLose: number
+): {
   trend_lb_wk: number | null;
   projected_goal_date: string | null;
   projection_text: string | null;
@@ -833,10 +1405,14 @@ export function projectGoalPace(p: any, lbsToLose: number): {
   // Measured weekly trend over the last 28 days of weigh-ins (a bit longer than
   // the 21-day weekly-stats window so a goal forecast is steadier).
   const since = new Date(Date.now() - 28 * 864e5).toISOString().slice(0, 10);
-  const wpts = db.prepare(`SELECT date, weight_lb FROM bodyweight_log WHERE date >= ? ORDER BY date, id`).all(since) as any[];
+  const wpts = db
+    .prepare(`SELECT date, weight_lb FROM bodyweight_log WHERE date >= ? ORDER BY date, id`)
+    .all(since) as any[];
   let trend: number | null = null; // lb/week (negative = losing)
   if (wpts.length >= 2) {
-    const pts = wpts.map((w) => ({ date: String(w.date), value: Number(w.weight_lb) })).filter((x) => Number.isFinite(x.value));
+    const pts = wpts
+      .map((w) => ({ date: String(w.date), value: Number(w.weight_lb) }))
+      .filter((x) => Number.isFinite(x.value));
     const xs = pts.map((x) => Date.parse(x.date + "T00:00:00Z") / 864e5);
     if (pts.length >= 2 && xs[xs.length - 1] - xs[0] >= 4) {
       const slope = lsqSlopePerDay(pts);
@@ -845,7 +1421,12 @@ export function projectGoalPace(p: any, lbsToLose: number): {
   }
   const curW = wpts.length ? Number(wpts[wpts.length - 1].weight_lb) : (p?.weight_lb ?? null);
   if (lbsToLose <= 0 || curW == null) return { trend_lb_wk: trend, projected_goal_date: null, projection_text: null };
-  if (trend == null) return { trend_lb_wk: null, projected_goal_date: null, projection_text: "Not enough recent weigh-ins to project a date yet — a few more and the forecast sharpens." };
+  if (trend == null)
+    return {
+      trend_lb_wk: null,
+      projected_goal_date: null,
+      projection_text: "Not enough recent weigh-ins to project a date yet — a few more and the forecast sharpens.",
+    };
 
   const goalW = p?.goal_weight_lb;
   if (goalW == null) return { trend_lb_wk: trend, projected_goal_date: null, projection_text: null };
@@ -856,15 +1437,20 @@ export function projectGoalPace(p: any, lbsToLose: number): {
     return {
       trend_lb_wk: trend,
       projected_goal_date: null,
-      projection_text: trend > 0.05
-        ? "At your current trend you're drifting up, not down — no date to project until the trend turns."
-        : "Your weight's holding steady right now — a small deficit would start moving it toward your goal.",
+      projection_text:
+        trend > 0.05
+          ? "At your current trend you're drifting up, not down — no date to project until the trend turns."
+          : "Your weight's holding steady right now — a small deficit would start moving it toward your goal.",
     };
   }
 
   const weeksToGoal = (curW - goalW) / Math.abs(trend);
   if (!Number.isFinite(weeksToGoal) || weeksToGoal <= 0 || weeksToGoal > 520) {
-    return { trend_lb_wk: trend, projected_goal_date: null, projection_text: "At this trend the goal is a long way out — worth revisiting the pace." };
+    return {
+      trend_lb_wk: trend,
+      projected_goal_date: null,
+      projection_text: "At this trend the goal is a long way out — worth revisiting the pace.",
+    };
   }
   const projDate = new Date(Date.now() + weeksToGoal * 7 * 864e5);
   const projected_goal_date = projDate.toISOString().slice(0, 10);
@@ -875,8 +1461,10 @@ export function projectGoalPace(p: any, lbsToLose: number): {
     const goalDateMs = Date.parse(p.goal_date);
     if (Number.isFinite(goalDateMs)) {
       const diffWeeks = Math.round((projDate.getTime() - goalDateMs) / (7 * 864e5));
-      if (diffWeeks <= -1) projection_text = `At your current trend, ~${niceDate} — about ${Math.abs(diffWeeks)} week${Math.abs(diffWeeks) === 1 ? "" : "s"} ahead of your date.`;
-      else if (diffWeeks >= 1) projection_text = `At your current trend, ~${niceDate} — about ${diffWeeks} week${diffWeeks === 1 ? "" : "s"} past your date.`;
+      if (diffWeeks <= -1)
+        projection_text = `At your current trend, ~${niceDate} — about ${Math.abs(diffWeeks)} week${Math.abs(diffWeeks) === 1 ? "" : "s"} ahead of your date.`;
+      else if (diffWeeks >= 1)
+        projection_text = `At your current trend, ~${niceDate} — about ${diffWeeks} week${diffWeeks === 1 ? "" : "s"} past your date.`;
       else projection_text = `At your current trend, ~${niceDate} — right around your target date.`;
     } else {
       projection_text = `At your current trend, you'd reach your goal around ${niceDate}.`;

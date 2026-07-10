@@ -2,7 +2,7 @@ import { Router } from "express";
 import { enqueueAgentJob } from "../agentJobs.js";
 import { suggestSession, weekAheadRead } from "../coachOps.js";
 import { readToday } from "../domain/brain/index.js";
-import { createAgentJob, getSettings } from "../domain/person/index.js";
+import { createAgentJob } from "../domain/person/index.js";
 import { backgroundOp } from "./background-op.js";
 
 export const dayCoachRouter = Router();
@@ -34,23 +34,19 @@ dayCoachRouter.get("/today-read", async (req, res) => {
 // synchronous (cached + deterministic floor); this POST is ONLY for the agentic
 // override reshape. The job's `done` result is byte-for-byte what
 // GET /api/today-read?override= returns, so the PWA reuses its Brief render.
-// When bg_ops is OFF this computes inline and returns the legacy read body.
+// This always queues: a user-facing request never waits on a coaching CLI.
 dayCoachRouter.post("/today-read/reshape", async (req, res) => {
   const b = req.body ?? {};
   const date = b.date != null ? String(b.date) : undefined;
   const override = b.override != null ? String(b.override) : undefined;
   const agentParam = b.agent != null ? String(b.agent) : undefined;
-  if (getSettings().bg_ops_enabled) {
-    const job = createAgentJob({
-      kind: "day_read_override",
-      input: { date, override, agent: agentParam ?? null },
-      agent: agentParam ?? null,
-    });
-    enqueueAgentJob((job as any).id);
-    return res.json({ ok: true, job });
-  }
-  // Legacy inline path (bg_ops off) — same body the GET override branch returns.
-  return res.json(await readToday({ date, override, agent: agentParam, recordOutcome: true }));
+  const job = createAgentJob({
+    kind: "day_read_override",
+    input: { date, override, agent: agentParam ?? null },
+    agent: agentParam ?? null,
+  });
+  enqueueAgentJob((job as any).id);
+  return res.json({ ok: true, job });
 });
 
 // Build ONE session for today on demand ("ask it for a session right now"). A
@@ -69,13 +65,15 @@ dayCoachRouter.post("/session-suggest", async (req, res) => {
   };
   if (backgroundOp(res, "session_suggest", input, b.agent)) return;
   try {
-    res.json(await suggestSession(b.agent, {
-      minutes: input.minutes,
-      equipment: input.equipment,
-      focus: input.focus,
-      constraints: input.constraints,
-      date: input.date,
-    }));
+    res.json(
+      await suggestSession(b.agent, {
+        minutes: input.minutes,
+        equipment: input.equipment,
+        focus: input.focus,
+        constraints: input.constraints,
+        date: input.date,
+      })
+    );
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }

@@ -1,4 +1,5 @@
 import { db } from "../db.js";
+import { emitBrainEvent } from "../brainEvents.js";
 import { localDateISO } from "./shared.js";
 import { isStrengthGarminType, listActivities, listGarminActivities, listGarminDailyMetrics, listGarminSources } from "./activities.js";
 import { activitySportWhere, canonicalEnduranceSport, enduranceSportPatterns } from "./endurance-sports.js";
@@ -116,6 +117,13 @@ export function finishSession(sessionId: number, notes?: string | null) {
   db.prepare(`UPDATE sessions SET duration_min = ?, notes = COALESCE(?, notes), finished_at = datetime('now') WHERE id = ?`)
     .run(duration_min, notes ?? null, sessionId);
   bumpTrainingDataVersion();
+  emitBrainEvent({
+    kind: "session_finished",
+    domain: "training",
+    date: s.date,
+    entity_id: sessionId,
+    subject_key: `session:${sessionId}`,
+  });
   return { ...getSessionDetail(sessionId), summary: sessionSummary(sessionId) };
 }
 
@@ -163,6 +171,14 @@ export function setSessionFeedback(
     vals.push(session.id);
     db.prepare(`UPDATE sessions SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
     bumpTrainingDataVersion(); // soreness/performance bends the program-state deload read
+    emitBrainEvent({
+      kind: "session_feedback",
+      domain: "training",
+      date: date || localDateISO(),
+      entity_id: session.id,
+      subject_key: `session:${session.id}`,
+      reason: fields.joint_pain ? "joint discomfort reported" : "session feedback updated",
+    });
   }
   // A fresh 1-tap soreness/performance/joint signal is a day-read input (its sibling
   // addCheckin already busts the Brief) — refresh so today's read reflects it.
@@ -211,7 +227,18 @@ export function skipExercise(exercise: string, date?: string) {
       };
     }
   }
-  db.prepare(`INSERT OR IGNORE INTO session_skips (session_id, exercise) VALUES (?, ?)`).run(session.id, name);
+  const inserted = db
+    .prepare(`INSERT OR IGNORE INTO session_skips (session_id, exercise) VALUES (?, ?)`)
+    .run(session.id, name).changes;
+  if (inserted) {
+    emitBrainEvent({
+      kind: "exercise_skipped",
+      domain: "training",
+      date: d,
+      entity_id: session.id,
+      subject_key: name,
+    });
+  }
   return { ok: true as const, date: d, exercise: name, session_id: session.id, skips: skipsForSession(session.id) };
 }
 
@@ -269,6 +296,13 @@ export function logSetByName(input: LogSetInput) {
 
   bumpTrainingDataVersion(); // a new logged set moves lifts/volume/weekly reads
   invalidateDayRead(date); // logging a set flips "trained today" → refresh the Brief
+  emitBrainEvent({
+    kind: "set_logged",
+    domain: "training",
+    date,
+    entity_id: session.id,
+    subject_key: ex.name,
+  });
 
   // PR check. Reps exercises: a new all-time est-1RM (Epley). Timed exercises:
   // strictly beating the previous max duration; est_1rm stays null for timed.
@@ -896,6 +930,69 @@ export function getTrainingCalendar(days = 84) {
   return { days, cells };
 }
 
+function parseExportJson(value: unknown): unknown {
+  if (typeof value !== "string" || !value) return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function exportBrainTable(
+  table: "brain_decisions" | "brain_expectations" | "brain_evaluations" | "brain_tool_calls" | "brain_rollbacks"
+): any[] {
+  let rows: any[] = [];
+  try {
+    rows = db
+      .prepare(`SELECT * FROM ${table} ORDER BY ${table === "brain_rollbacks" ? "decision_id" : "id"}`)
+      .all() as any[];
+  } catch {
+    return [];
+  }
+  if (table === "brain_decisions") {
+    return rows.map((row) => {
+      const { context_json, action_json, specialist_json, ...rest } = row;
+      return {
+        ...rest,
+        reversible: !!row.reversible,
+        context: parseExportJson(context_json),
+        action: parseExportJson(action_json),
+        specialist: parseExportJson(specialist_json),
+      };
+    });
+  }
+  if (table === "brain_expectations") {
+    return rows.map((row) => {
+      const { baseline_json, target_json, minimum_data_json, ...rest } = row;
+      return {
+        ...rest,
+        baseline: parseExportJson(baseline_json),
+        target: parseExportJson(target_json),
+        minimum_data: parseExportJson(minimum_data_json),
+      };
+    });
+  }
+  if (table === "brain_evaluations") {
+    return rows.map((row) => {
+      const { actual_json, evidence_json, confounders_json, ...rest } = row;
+      return {
+        ...rest,
+        actual: parseExportJson(actual_json),
+        evidence_keys: parseExportJson(evidence_json) ?? [],
+        confounders: parseExportJson(confounders_json) ?? [],
+      };
+    });
+  }
+  if (table === "brain_rollbacks") {
+    return rows.map((row) => {
+      const { payload_json, ...rest } = row;
+      return { ...rest, payload: parseExportJson(payload_json) };
+    });
+  }
+  return rows;
+}
+
 export function exportAll() {
   return {
     version: 2,
@@ -915,6 +1012,14 @@ export function exportAll() {
     health_documents: listHealthDocuments(100000),
     health_reviews: listHealthReviews(100000),
     context_events: listContextEvents(),
+    // The accountability spine is first-class backup data. Export every row (no
+    // UI pagination cap), hydrating bounded JSON columns into the same structured
+    // shape consumers receive from the repository.
+    brain_decisions: exportBrainTable("brain_decisions"),
+    brain_expectations: exportBrainTable("brain_expectations"),
+    brain_evaluations: exportBrainTable("brain_evaluations"),
+    brain_tool_calls: exportBrainTable("brain_tool_calls"),
+    brain_rollbacks: exportBrainTable("brain_rollbacks"),
     garmin: {
       sources: listGarminSources(),
       activities: listGarminActivities(100000),

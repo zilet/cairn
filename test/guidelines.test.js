@@ -31,6 +31,10 @@ test("guidelineFor resolves known markers to a real-sourced entry", () => {
     assert.ok(typeof g.body === "string" && g.body.trim().length > 0, `${name} has a body`);
     assert.ok(typeof g.source === "string" && g.source.trim().length > 0, `${name} names a source`);
     assert.ok(isPlausibleSourceUrl(g.url), `${name} URL passes the http(s) guard: ${g.url}`);
+    assert.ok(g.pack_version && g.source_version, `${name} carries pack/source versions`);
+    assert.equal(g.source_scope, "general");
+    assert.ok(g.reviewed_at && g.expires_at, `${name} carries a bounded review window`);
+    assert.ok(["current", "review_due", "expired"].includes(g.freshness));
   }
 });
 

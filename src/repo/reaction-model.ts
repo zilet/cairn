@@ -30,6 +30,14 @@ import { addMemory } from "./memory.js";
 // (with its chronic-cluster guard) and the prior-week training-load helpers.
 import { isAcuteMarker } from "./propagation.js";
 import { weeklyTonnage, weeklyKm } from "./program-state.js";
+import type {
+  CoachOutcomeLearning,
+  CoachPersonalModifier,
+  CoachPersonalModifierTarget,
+  CoachPersonalResponseConfidence,
+  CoachPersonalSafetyGuardrail,
+  CoachWhatWorksForYou,
+} from "../brain/coach-context-contract.js";
 
 export interface ReactionPattern {
   id: string;
@@ -63,10 +71,15 @@ function pearson(pairs: Array<{ x: number; y: number }>): number | null {
   const n = pairs.length;
   const mx = pairs.reduce((a, p) => a + p.x, 0) / n;
   const my = pairs.reduce((a, p) => a + p.y, 0) / n;
-  let sxy = 0, sxx = 0, syy = 0;
+  let sxy = 0,
+    sxx = 0,
+    syy = 0;
   for (const p of pairs) {
-    const dx = p.x - mx, dy = p.y - my;
-    sxy += dx * dy; sxx += dx * dx; syy += dy * dy;
+    const dx = p.x - mx,
+      dy = p.y - my;
+    sxy += dx * dy;
+    sxx += dx * dx;
+    syy += dy * dy;
   }
   if (sxx <= 0 || syy <= 0) return null;
   return sxy / Math.sqrt(sxx * syy);
@@ -77,16 +90,24 @@ function round(v: number, dp = 2): number {
   return Math.round(v * f) / f;
 }
 
+function mean(values: number[]): number {
+  return values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
+}
+
 // Latest date present in either recovery table for a recovery column, plus a
 // "stale by" gap in days vs today. Null when there's no data at all.
 function latestRecoveryDate(): { date: string | null; age_days: number | null } {
   try {
-    const g = db.prepare(
-      `SELECT MAX(date) AS d FROM garmin_daily_metrics WHERE (sleep_min IS NOT NULL AND sleep_min > 0) OR hrv_ms IS NOT NULL`
-    ).get() as any;
-    const o = db.prepare(
-      `SELECT MAX(date) AS d FROM daily_metrics WHERE (sleep_min IS NOT NULL AND sleep_min > 0) OR hrv_ms IS NOT NULL`
-    ).get() as any;
+    const g = db
+      .prepare(
+        `SELECT MAX(date) AS d FROM garmin_daily_metrics WHERE (sleep_min IS NOT NULL AND sleep_min > 0) OR hrv_ms IS NOT NULL`
+      )
+      .get() as any;
+    const o = db
+      .prepare(
+        `SELECT MAX(date) AS d FROM daily_metrics WHERE (sleep_min IS NOT NULL AND sleep_min > 0) OR hrv_ms IS NOT NULL`
+      )
+      .get() as any;
     const cands = [g?.d, o?.d].filter((x) => x && String(x).trim()) as string[];
     if (!cands.length) return { date: null, age_days: null };
     const latest = cands.sort().slice(-1)[0];
@@ -101,19 +122,31 @@ function latestRecoveryDate(): { date: string | null; age_days: number | null } 
 // daily_metrics. Null fields when absent. Used by the event-recovery pattern.
 function nightRecovery(date: string): { sleep_min: number | null; hrv_ms: number | null } {
   try {
-    const g = db.prepare(
-      `SELECT sleep_min, hrv_ms FROM garmin_daily_metrics WHERE date = ? AND (sleep_min IS NOT NULL OR hrv_ms IS NOT NULL) ORDER BY id DESC LIMIT 1`
-    ).get(date) as any;
+    const g = db
+      .prepare(
+        `SELECT sleep_min, hrv_ms FROM garmin_daily_metrics WHERE date = ? AND (sleep_min IS NOT NULL OR hrv_ms IS NOT NULL) ORDER BY id DESC LIMIT 1`
+      )
+      .get(date) as any;
     if (g && (g.sleep_min != null || g.hrv_ms != null)) {
-      return { sleep_min: g.sleep_min != null ? Number(g.sleep_min) : null, hrv_ms: g.hrv_ms != null ? Number(g.hrv_ms) : null };
+      return {
+        sleep_min: g.sleep_min != null ? Number(g.sleep_min) : null,
+        hrv_ms: g.hrv_ms != null ? Number(g.hrv_ms) : null,
+      };
     }
-    const o = db.prepare(
-      `SELECT sleep_min, hrv_ms FROM daily_metrics WHERE date = ? AND (sleep_min IS NOT NULL OR hrv_ms IS NOT NULL) ORDER BY updated_at DESC, id DESC LIMIT 1`
-    ).get(date) as any;
+    const o = db
+      .prepare(
+        `SELECT sleep_min, hrv_ms FROM daily_metrics WHERE date = ? AND (sleep_min IS NOT NULL OR hrv_ms IS NOT NULL) ORDER BY updated_at DESC, id DESC LIMIT 1`
+      )
+      .get(date) as any;
     if (o && (o.sleep_min != null || o.hrv_ms != null)) {
-      return { sleep_min: o.sleep_min != null ? Number(o.sleep_min) : null, hrv_ms: o.hrv_ms != null ? Number(o.hrv_ms) : null };
+      return {
+        sleep_min: o.sleep_min != null ? Number(o.sleep_min) : null,
+        hrv_ms: o.hrv_ms != null ? Number(o.hrv_ms) : null,
+      };
     }
-  } catch { /* fall through */ }
+  } catch {
+    /* fall through */
+  }
   return { sleep_min: null, hrv_ms: null };
 }
 
@@ -122,13 +155,17 @@ function nightRecovery(date: string): { sleep_min: number | null; hrv_ms: number
 function sleepBaseline(): { avg_min: number | null; n: number } {
   try {
     const since = isoDaysAgo(new Date().toISOString().slice(0, 10), 30);
-    const g = db.prepare(
-      `SELECT ROUND(AVG(sleep_min),1) AS a, COUNT(*) AS n FROM garmin_daily_metrics WHERE date >= ? AND sleep_min IS NOT NULL AND sleep_min > 0`
-    ).get(since) as any;
+    const g = db
+      .prepare(
+        `SELECT ROUND(AVG(sleep_min),1) AS a, COUNT(*) AS n FROM garmin_daily_metrics WHERE date >= ? AND sleep_min IS NOT NULL AND sleep_min > 0`
+      )
+      .get(since) as any;
     if (g && g.n >= 5 && g.a != null) return { avg_min: Number(g.a), n: Number(g.n) };
-    const o = db.prepare(
-      `SELECT ROUND(AVG(sleep_min),1) AS a, COUNT(*) AS n FROM daily_metrics WHERE date >= ? AND sleep_min IS NOT NULL AND sleep_min > 0`
-    ).get(since) as any;
+    const o = db
+      .prepare(
+        `SELECT ROUND(AVG(sleep_min),1) AS a, COUNT(*) AS n FROM daily_metrics WHERE date >= ? AND sleep_min IS NOT NULL AND sleep_min > 0`
+      )
+      .get(since) as any;
     if (o && o.n >= 5 && o.a != null) return { avg_min: Number(o.a), n: Number(o.n) };
     return { avg_min: null, n: 0 };
   } catch {
@@ -159,9 +196,10 @@ function deficitResponse(): ReactionPattern | null {
   if (Math.abs(deficit) < 150 || Math.abs(lbWk) < 0.1) return null;
   const dir = lbWk < 0 ? "down" : "up";
   const absLb = round(Math.abs(lbWk), 2);
-  const statement = deficit > 0
-    ? `A roughly ${Math.abs(deficit)} kcal/day deficit has been moving your weight ${dir} about ${absLb} lb/wk.`
-    : `A roughly ${Math.abs(deficit)} kcal/day surplus has been moving your weight ${dir} about ${absLb} lb/wk.`;
+  const statement =
+    deficit > 0
+      ? `A roughly ${Math.abs(deficit)} kcal/day deficit has been moving your weight ${dir} about ${absLb} lb/wk.`
+      : `A roughly ${Math.abs(deficit)} kcal/day surplus has been moving your weight ${dir} about ${absLb} lb/wk.`;
   return {
     id: "deficit_response",
     kind: "nutrition_response",
@@ -180,7 +218,11 @@ function deficitResponse(): ReactionPattern | null {
 // ---------------------------------------------------------------------------
 function loadCrp(): ReactionPattern | null {
   let hist: any;
-  try { hist = getMarkerHistory(); } catch { return null; }
+  try {
+    hist = getMarkerHistory();
+  } catch {
+    return null;
+  }
   const markers: any[] = Array.isArray(hist?.markers) ? hist.markers : [];
   // Acute inflammation markers with dated numeric readings.
   const acute = markers.filter((m) => m && isAcuteMarker(m.name) && Array.isArray(m.points) && m.points.length);
@@ -201,7 +243,8 @@ function loadCrp(): ReactionPattern | null {
   if (r == null) return null;
   // Only speak when the marker actually moves WITH load (positive correlation).
   if (r < 0.4) return null;
-  const confidence: ReactionPattern["confidence"] = r >= 0.75 && points.length >= 4 ? "strong" : r >= 0.6 ? "observed" : "tentative";
+  const confidence: ReactionPattern["confidence"] =
+    r >= 0.75 && points.length >= 4 ? "strong" : r >= 0.6 ? "observed" : "tentative";
   const display = String(m.name || "hs-CRP");
   const statement = `Your ${display} tends to move alongside your training load — likely training-induced inflammation, not a red flag. Recheck it on a lighter week before reading anything into a single high value.`;
   return {
@@ -226,13 +269,17 @@ function eventRecovery(): ReactionPattern | null {
   if (base.avg_min == null) return null;
   let events: any[];
   try {
-    events = db.prepare(
-      `SELECT title, detail, start_date FROM context_events
+    events = db
+      .prepare(
+        `SELECT title, detail, start_date FROM context_events
         WHERE start_date IS NOT NULL AND start_date != '' AND COALESCE(archived,0) = 0
           AND kind = 'life_event'
         ORDER BY start_date DESC LIMIT 24`
-    ).all() as any[];
-  } catch { return null; }
+      )
+      .all() as any[];
+  } catch {
+    return null;
+  }
   if (!events.length) return null;
   const deficits: number[] = [];
   let lastObserved: string | null = null;
@@ -269,16 +316,127 @@ function eventRecovery(): ReactionPattern | null {
 }
 
 // ---------------------------------------------------------------------------
+// 3b) food_recovery — explicitly logged late caffeine / alcohol vs next sleep.
+//     This stays observational and only speaks after repeated exposed AND clean
+//     comparison nights. Photo inference is not enough: the enrichment contract
+//     leaves these fields null unless visible or stated.
+// ---------------------------------------------------------------------------
+function foodRecovery(): ReactionPattern | null {
+  let rows: any[] = [];
+  try {
+    rows = db
+      .prepare(
+        `SELECT COALESCE(date, substr(created_at,1,10)) AS date, parsed_json
+           FROM food_notes
+          WHERE parsed_json IS NOT NULL
+          ORDER BY COALESCE(date, substr(created_at,1,10)) DESC, id DESC
+          LIMIT 500`
+      )
+      .all() as any[];
+  } catch {
+    return null;
+  }
+  const byDate = new Map<string, { alcohol: boolean; lateCaffeine: boolean }>();
+  const timeHour = (value: unknown): number | null => {
+    const text = String(value ?? "")
+      .trim()
+      .toLowerCase();
+    if (!text) return null;
+    const match = text.match(/\b(\d{1,2})(?::\d{2})?\s*(am|pm)?\b/);
+    if (!match) return null;
+    let hour = Number(match[1]);
+    if (!Number.isFinite(hour) || hour > 23) return null;
+    if (match[2] === "pm" && hour < 12) hour += 12;
+    if (match[2] === "am" && hour === 12) hour = 0;
+    return hour;
+  };
+  for (const row of rows) {
+    let parsed: any;
+    try {
+      parsed = JSON.parse(row.parsed_json);
+    } catch {
+      continue;
+    }
+    const pattern = parsed?.nutrition_pattern;
+    if (!pattern || typeof pattern !== "object") continue;
+    const date = String(row.date ?? "").slice(0, 10);
+    if (!date) continue;
+    const current = byDate.get(date) ?? { alcohol: false, lateCaffeine: false };
+    current.alcohol ||= Number(pattern.alcohol_servings) > 0;
+    const caffeine = Number(pattern.caffeine_mg);
+    const hour = timeHour(pattern.caffeine_time);
+    current.lateCaffeine ||= Number.isFinite(caffeine) && caffeine > 0 && hour != null && hour >= 14;
+    byDate.set(date, current);
+  }
+  if (byDate.size < 6) return null;
+
+  const candidates = [
+    { key: "alcohol" as const, label: "alcohol" },
+    { key: "lateCaffeine" as const, label: "caffeine after early afternoon" },
+  ];
+  let best: {
+    key: "alcohol" | "lateCaffeine";
+    label: string;
+    exposed: number[];
+    clean: number[];
+    delta: number;
+    last: string;
+  } | null = null;
+  for (const candidate of candidates) {
+    const exposed: number[] = [];
+    const clean: number[] = [];
+    let last = "";
+    for (const [date, flags] of byDate) {
+      const sleep = nightRecovery(isoDaysAgo(date, -1)).sleep_min;
+      if (sleep == null || !Number.isFinite(sleep)) continue;
+      if (flags[candidate.key]) {
+        exposed.push(sleep);
+        if (date > last) last = date;
+      } else if (!flags.alcohol && !flags.lateCaffeine) {
+        clean.push(sleep);
+      }
+    }
+    if (exposed.length < 3 || clean.length < 3) continue;
+    const exposedAvg = mean(exposed);
+    const cleanAvg = mean(clean);
+    const delta = exposedAvg - cleanAvg;
+    if (Math.abs(delta) < 20) continue;
+    if (!best || Math.abs(delta) > Math.abs(best.delta)) {
+      best = { ...candidate, exposed, clean, delta, last };
+    }
+  }
+  if (!best) return null;
+  const minutes = Math.round(Math.abs(best.delta) / 5) * 5;
+  const direction = best.delta < 0 ? "less" : "more";
+  return {
+    id: `food_recovery_${best.key}`,
+    kind: "lifestyle_response",
+    statement: `On repeatedly logged nights with ${best.label}, the next sleep has averaged about ${minutes} minutes ${direction} than your clean comparison nights. Treat that as a personal pattern to plan around, not proof of cause.`,
+    confidence: best.exposed.length >= 5 && best.clean.length >= 5 ? "observed" : "tentative",
+    evidence_n: best.exposed.length + best.clean.length,
+    domains: ["lifestyle", "recovery", "nutrition"],
+    last_observed: best.last || null,
+    params: {
+      exposed_n: best.exposed.length,
+      clean_n: best.clean.length,
+      sleep_delta_min: round(best.delta, 0),
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // 4) adherence — which plan days land, and which exercises get skipped.
 //    Gate: >=4 weeks of training history.
 // ---------------------------------------------------------------------------
 function adherence(): ReactionPattern | null {
   let span: any;
   try {
-    span = db.prepare(
-      `SELECT MIN(date) AS first, MAX(date) AS last, COUNT(DISTINCT date) AS days FROM sessions`
-    ).get() as any;
-  } catch { return null; }
+    span = db
+      .prepare(`SELECT MIN(date) AS first, MAX(date) AS last, COUNT(DISTINCT date) AS days FROM sessions`)
+      .get() as any;
+  } catch {
+    return null;
+  }
   if (!span?.first || !span?.last) return null;
   const weeks = (Date.parse(span.last + "T00:00:00Z") - Date.parse(span.first + "T00:00:00Z")) / (7 * 864e5);
   if (weeks < 4) return null; // gate: >=4 weeks history
@@ -287,18 +445,24 @@ function adherence(): ReactionPattern | null {
   // Per plan day: how many distinct sessions landed on it.
   let landed: any[] = [];
   try {
-    landed = db.prepare(
-      `SELECT pd.day_number AS dn, pd.name AS name, COUNT(DISTINCT s.id) AS n
+    landed = db
+      .prepare(
+        `SELECT pd.day_number AS dn, pd.name AS name, COUNT(DISTINCT s.id) AS n
          FROM plan_days pd LEFT JOIN sessions s ON s.plan_day_id = pd.id
         GROUP BY pd.id ORDER BY pd.day_number ASC`
-    ).all() as any[];
-  } catch { landed = []; }
+      )
+      .all() as any[];
+  } catch {
+    landed = [];
+  }
 
   // Skips by exercise (deduped via the canonical movement key), most-skipped first.
   let skips: any[] = [];
   try {
     skips = db.prepare(`SELECT exercise FROM session_skips`).all() as any[];
-  } catch { skips = []; }
+  } catch {
+    skips = [];
+  }
   const skipCount = new Map<string, { display: string; n: number }>();
   for (const row of skips) {
     const name = String(row.exercise ?? "").trim();
@@ -324,7 +488,7 @@ function adherence(): ReactionPattern | null {
   }
   if (!parts.length) return null;
   const joined = parts.join("; ");
-  const statement = (joined.charAt(0).toUpperCase() + joined.slice(1)) + ".";
+  const statement = joined.charAt(0).toUpperCase() + joined.slice(1) + ".";
   return {
     id: "adherence",
     kind: "adherence",
@@ -345,12 +509,16 @@ function adherence(): ReactionPattern | null {
 function volumeSoreness(): ReactionPattern | null {
   let flagged: any[] = [];
   try {
-    flagged = db.prepare(
-      `SELECT id, date, soreness, joint_pain FROM sessions
+    flagged = db
+      .prepare(
+        `SELECT id, date, soreness, joint_pain FROM sessions
         WHERE (soreness IS NOT NULL AND soreness >= 4) OR (joint_pain IS NOT NULL AND TRIM(joint_pain) != '')
         ORDER BY date DESC LIMIT 40`
-    ).all() as any[];
-  } catch { return null; }
+      )
+      .all() as any[];
+  } catch {
+    return null;
+  }
   if (!flagged.length) return null;
 
   // For each flagged session, find the muscle group that carried the most sets
@@ -363,13 +531,17 @@ function volumeSoreness(): ReactionPattern | null {
     const start = isoDaysAgo(date, 6);
     let rows: any[] = [];
     try {
-      rows = db.prepare(
-        `SELECT e.muscle_group AS mg, COUNT(*) AS sets
+      rows = db
+        .prepare(
+          `SELECT e.muscle_group AS mg, COUNT(*) AS sets
            FROM logged_sets ls JOIN sessions ss ON ss.id = ls.session_id JOIN exercises e ON e.id = ls.exercise_id
           WHERE ss.date >= ? AND ss.date <= ?
           GROUP BY e.id`
-      ).all(start, date) as any[];
-    } catch { rows = []; }
+        )
+        .all(start, date) as any[];
+    } catch {
+      rows = [];
+    }
     const byGroup = new Map<string, number>();
     for (const r of rows) {
       const g = canonicalGroup(r.mg) ?? null;
@@ -408,7 +580,8 @@ function dataGap(): ReactionPattern | null {
     return {
       id: "data_gap",
       kind: "data_gap",
-      statement: "No synced sleep or HRV right now — recovery signal is dark, so reads lean on how you say you feel rather than a number.",
+      statement:
+        "No synced sleep or HRV right now — recovery signal is dark, so reads lean on how you say you feel rather than a number.",
       confidence: "observed",
       evidence_n: 0,
       domains: ["recovery"],
@@ -439,37 +612,51 @@ function dataGap(): ReactionPattern | null {
 // ---------------------------------------------------------------------------
 function interventionMarker(): ReactionPattern | null {
   let hist: any;
-  try { hist = getMarkerHistory(); } catch { return null; }
+  try {
+    hist = getMarkerHistory();
+  } catch {
+    return null;
+  }
   const markers: any[] = Array.isArray(hist?.markers) ? hist.markers : [];
   if (!markers.length) return null;
 
   // Candidate interventions, each with an effective date + the marker it targets.
-  interface Interv { date: string; marker: string | null; label: string }
+  interface Interv {
+    date: string;
+    marker: string | null;
+    label: string;
+  }
   const intervs: Interv[] = [];
   try {
-    const dirs = db.prepare(
-      `SELECT marker, status_at, directive FROM health_directives
+    const dirs = db
+      .prepare(
+        `SELECT marker, status_at, directive FROM health_directives
         WHERE status = 'resolved' AND status_at IS NOT NULL AND marker IS NOT NULL`
-    ).all() as any[];
+      )
+      .all() as any[];
     for (const d of dirs) {
       const dt = String(d.status_at).slice(0, 10);
       if (dt) intervs.push({ date: dt, marker: String(d.marker), label: "a resolved finding" });
     }
-  } catch { /* table may be absent */ }
+  } catch {
+    /* table may be absent */
+  }
   try {
-    const props = db.prepare(
-      `SELECT created_at FROM plan_proposals WHERE status = 'applied' ORDER BY created_at DESC LIMIT 6`
-    ).all() as any[];
-    const meals = db.prepare(
-      `SELECT created_at FROM meal_plans WHERE status = 'applied' ORDER BY created_at DESC LIMIT 6`
-    ).all() as any[];
+    const props = db
+      .prepare(`SELECT created_at FROM plan_proposals WHERE status = 'applied' ORDER BY created_at DESC LIMIT 6`)
+      .all() as any[];
+    const meals = db
+      .prepare(`SELECT created_at FROM meal_plans WHERE status = 'applied' ORDER BY created_at DESC LIMIT 6`)
+      .all() as any[];
     // Plan/meal applies aren't tied to a specific marker — recorded but
     // marker-less, so they can't anchor a marker series on their own here.
     for (const p of [...props, ...meals]) {
       const dt = String(p.created_at ?? "").slice(0, 10);
       if (dt) intervs.push({ date: dt, marker: null, label: "a plan change" });
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   if (!intervs.length) return null;
 
   // Match a marker-targeted intervention to its marker series, requiring a
@@ -495,9 +682,12 @@ function interventionMarker(): ReactionPattern | null {
     if (Math.abs(delta) < 1e-6) continue;
     const dirWord = delta < 0 ? "down" : "up";
     const fdir = m.forecast?.direction; // 'improving' | 'worsening' | 'stable' | null — plain word, no number
-    const fclause = fdir === "improving" ? ", and it's still trending toward optimal"
-      : fdir === "worsening" ? ", though it's since drifting the wrong way"
-        : "";
+    const fclause =
+      fdir === "improving"
+        ? ", and it's still trending toward optimal"
+        : fdir === "worsening"
+          ? ", though it's since drifting the wrong way"
+          : "";
     const statement = `Since ${iv.label}, your ${m.name} has moved ${dirWord} (from ${before.value} to ${latest.value})${fclause}.`;
     return {
       id: "intervention_marker",
@@ -520,11 +710,16 @@ export function buildReactionModel(): { version: number; patterns: ReactionPatte
   // Each builder is independently fail-safe — wrap so one bad query never sinks
   // the whole model (deterministic + never throws on missing data).
   const safe = (fn: () => ReactionPattern | null): ReactionPattern | null => {
-    try { return fn(); } catch { return null; }
+    try {
+      return fn();
+    } catch {
+      return null;
+    }
   };
   candidates.push(safe(deficitResponse));
   candidates.push(safe(loadCrp));
   candidates.push(safe(eventRecovery));
+  candidates.push(safe(foodRecovery));
   candidates.push(safe(adherence));
   candidates.push(safe(volumeSoreness));
   candidates.push(safe(dataGap));
@@ -532,6 +727,354 @@ export function buildReactionModel(): { version: number; patterns: ReactionPatte
 
   const patterns = candidates.filter((p): p is ReactionPattern => p != null);
   return { version: REACTION_MODEL_VERSION, patterns };
+}
+
+// ---- v2: evaluated decisions -> earned personal defaults -------------------
+
+const PERSONAL_RESPONSE_VERSION = 2 as const;
+const PERSONAL_RESPONSE_GUARDRAILS: CoachPersonalSafetyGuardrail[] = ["injury", "allergy", "clinical", "lean_safe"];
+
+interface EvaluatedDecisionRow {
+  decision_id: number;
+  decision_kind: string;
+  domain: string;
+  decision_status: string;
+  superseded_by: number | null;
+  metric_key: string;
+  subject_key: string | null;
+  direction: string;
+  expectation_confidence: CoachPersonalResponseConfidence;
+  target: Record<string, unknown> | null;
+  verdict: "aligned" | "not_aligned";
+  actual: Record<string, unknown> | null;
+  evidence_keys: string[];
+  confounders: string[];
+  explanation: string;
+  evaluated_at: string;
+}
+
+function parseObject(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "string" || !value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseList(value: unknown): string[] {
+  if (typeof value !== "string" || !value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed
+          .map((item) => String(item ?? "").trim())
+          .filter(Boolean)
+          .slice(0, 30)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function evaluatedDecisionRows(): EvaluatedDecisionRow[] {
+  try {
+    const rows = db
+      .prepare(
+        `SELECT d.id AS decision_id, d.kind AS decision_kind, d.domain,
+              d.status AS decision_status, d.superseded_by,
+              x.metric_key, x.subject_key, x.direction,
+              x.confidence AS expectation_confidence, x.target_json,
+              e.verdict, e.actual_json, e.evidence_json, e.confounders_json,
+              e.explanation, e.evaluated_at
+         FROM brain_evaluations e
+         JOIN brain_expectations x ON x.id = e.expectation_id
+         JOIN brain_decisions d ON d.id = x.decision_id
+        WHERE e.id = (
+          SELECT e2.id FROM brain_evaluations e2
+           WHERE e2.expectation_id = e.expectation_id
+           ORDER BY e2.id DESC LIMIT 1
+        )
+          AND e.verdict IN ('aligned','not_aligned')
+        ORDER BY e.evaluated_at, e.id
+        LIMIT 500`
+      )
+      .all() as any[];
+    return rows
+      .map(
+        (row): EvaluatedDecisionRow => ({
+          decision_id: Number(row.decision_id),
+          decision_kind: String(row.decision_kind ?? ""),
+          domain: String(row.domain ?? ""),
+          decision_status: String(row.decision_status ?? ""),
+          superseded_by: row.superseded_by == null ? null : Number(row.superseded_by),
+          metric_key: String(row.metric_key ?? ""),
+          subject_key: row.subject_key == null ? null : String(row.subject_key),
+          direction: String(row.direction ?? ""),
+          expectation_confidence:
+            row.expectation_confidence === "strong"
+              ? "strong"
+              : row.expectation_confidence === "observed"
+                ? "observed"
+                : "tentative",
+          target: parseObject(row.target_json),
+          verdict: row.verdict === "not_aligned" ? "not_aligned" : "aligned",
+          actual: parseObject(row.actual_json),
+          evidence_keys: parseList(row.evidence_json),
+          confounders: parseList(row.confounders_json),
+          explanation: String(row.explanation ?? "")
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, 300),
+          evaluated_at: String(row.evaluated_at ?? "").replace(" ", "T"),
+        })
+      )
+      .filter((row) => row.decision_id > 0 && row.metric_key && row.evaluated_at);
+  } catch {
+    // New installations create the ledger tables at boot, but this stays null-safe
+    // for imported/partial databases and never blocks the existing seven builders.
+    return [];
+  }
+}
+
+function comparableKey(row: EvaluatedDecisionRow): string {
+  return [row.decision_kind, row.metric_key, row.subject_key ?? "all", row.direction].join(":");
+}
+
+function dayGap(later: string, earlier: string): number {
+  const a = Date.parse(later.includes("T") ? later : `${later}T00:00:00Z`);
+  const b = Date.parse(earlier.includes("T") ? earlier : `${earlier}T00:00:00Z`);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return 0;
+  return Math.max(0, Math.round((a - b) / 864e5));
+}
+
+function measurementCount(row: EvaluatedDecisionRow): number {
+  const keys = [
+    "data_points",
+    "weigh_ins",
+    "intake_days",
+    "exposures",
+    "sessions",
+    "nights",
+    "readings",
+    "measurements",
+  ];
+  const values = keys.map((key) => Number(row.actual?.[key])).filter(Number.isFinite);
+  for (const evidence of row.evidence_keys) {
+    const match = evidence.match(/(?:^|:)n=(\d+)/);
+    if (match) values.push(Number(match[1]));
+  }
+  return values.length ? Math.max(...values) : 0;
+}
+
+function metricLabel(metric: string): string {
+  const labels: Record<string, string> = {
+    weight_trend_lb_wk: "weight trend",
+    intake_to_weight_response: "intake-to-weight response",
+    exercise_target_completion: "exercise target completion",
+    exercise_est_1rm_trend: "strength progression",
+    session_performance_feedback: "session performance",
+    joint_pain_or_soreness: "joint-pain or soreness response",
+    plan_day_adherence: "plan-day adherence",
+    recovery_hrv_delta: "HRV response",
+    recovery_rhr_delta: "resting-heart-rate response",
+    sleep_duration_delta: "sleep response",
+    marker_direction: "marker direction",
+    body_measurement_direction: "body-measurement direction",
+  };
+  return labels[metric] ?? metric.replace(/_/g, " ");
+}
+
+function expectedText(row: EvaluatedDecisionRow): string {
+  return `${metricLabel(row.metric_key)} to ${row.direction.replace(/_/g, " ")}`;
+}
+
+function boundedScale(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function nutritionMissScale(row: EvaluatedDecisionRow): number {
+  const actual = Number(row.actual?.value ?? row.actual?.delta ?? row.actual?.trend_lb_wk);
+  const min = Number(row.target?.min ?? row.target?.minimum ?? row.target?.min_value);
+  const max = Number(row.target?.max ?? row.target?.maximum ?? row.target?.max_value);
+  if (Number.isFinite(actual) && Number.isFinite(min) && Number.isFinite(max)) {
+    const desiredMinMagnitude = Math.min(Math.abs(min), Math.abs(max));
+    const desiredMaxMagnitude = Math.max(Math.abs(min), Math.abs(max));
+    if (Math.abs(actual) > desiredMaxMagnitude) return 0.85;
+    if (Math.abs(actual) < desiredMinMagnitude) return 1.15;
+  }
+  // A miss without enough directional detail stays at the universal default.
+  return 1;
+}
+
+function modifierFor(
+  row: EvaluatedDecisionRow,
+  verdict: EvaluatedDecisionRow["verdict"],
+  confidence: CoachPersonalResponseConfidence,
+  evidenceN: number
+): CoachPersonalModifier | null {
+  let target: CoachPersonalModifierTarget | null = null;
+  let scale = 1;
+  let bounds = { min: 0.85, max: 1.15 };
+  if (["weight_trend_lb_wk", "intake_to_weight_response"].includes(row.metric_key)) {
+    target = "nutrition_step";
+    scale = verdict === "not_aligned" ? nutritionMissScale(row) : 1;
+  } else if (
+    [
+      "exercise_target_completion",
+      "exercise_est_1rm_trend",
+      "session_performance_feedback",
+      "joint_pain_or_soreness",
+    ].includes(row.metric_key)
+  ) {
+    target = "training_progression_step";
+    bounds = { min: 0.85, max: 1.1 };
+    scale = verdict === "not_aligned" ? 0.9 : 1;
+  } else if (["recovery_hrv_delta", "recovery_rhr_delta", "sleep_duration_delta"].includes(row.metric_key)) {
+    target = "recovery_adjustment";
+    bounds = { min: 0.9, max: 1.15 };
+    scale = verdict === "not_aligned" ? 1.1 : 1;
+  } else if (row.metric_key === "plan_day_adherence") {
+    target = "plan_complexity";
+    bounds = { min: 0.85, max: 1 };
+    scale = verdict === "not_aligned" ? 0.9 : 1;
+  }
+  if (!target) return null; // clinical/marker learnings stay informational
+  scale = boundedScale(scale, bounds.min, bounds.max);
+  const direction = scale > 1 ? "a slightly larger" : scale < 1 ? "a slightly more conservative" : "the standard";
+  return {
+    key: comparableKey(row),
+    target,
+    scale,
+    bounds,
+    confidence,
+    evidence_n: evidenceN,
+    rationale: `${direction} ${target.replace(/_/g, " ")} is the earned default; re-evaluate after the next clean outcome.`,
+    never_overrides: [...PERSONAL_RESPONSE_GUARDRAILS],
+  };
+}
+
+function learningForGroup(
+  allRows: EvaluatedDecisionRow[]
+): { learning: CoachOutcomeLearning; modifier: CoachPersonalModifier | null } | null {
+  // Evidence counts decisions, not expectations. A single decision may carry two
+  // windows for the same metric; treating those as two independent trials would
+  // let one intervention manufacture confidence.
+  const byDecision = new Map<number, EvaluatedDecisionRow>();
+  for (const row of allRows) {
+    if (row.decision_status !== "applied" || row.superseded_by != null || row.confounders.length > 0) continue;
+    const prior = byDecision.get(row.decision_id);
+    if (!prior || row.evaluated_at >= prior.evaluated_at) byDecision.set(row.decision_id, row);
+  }
+  const eligible = [...byDecision.values()].sort((a, b) => a.evaluated_at.localeCompare(b.evaluated_at));
+  if (!eligible.length) return null;
+  const latestDate = eligible[eligible.length - 1].evaluated_at;
+  const rows = eligible.filter((row) => dayGap(latestDate, row.evaluated_at) <= 365);
+  if (!rows.length) return null;
+
+  const latest = rows[rows.length - 1];
+  let runStart = rows.length - 1;
+  while (runStart > 0 && rows[runStart - 1].verdict === latest.verdict) runStart--;
+  const latestRun = rows.slice(runStart);
+  const hasContradiction = rows.some((row) => row.verdict !== latest.verdict);
+  const strongSingle = rows.length === 1 && latest.expectation_confidence === "strong" && measurementCount(latest) >= 6;
+  if (rows.length < 2 && !strongSingle) return null;
+
+  const alignedN = rows.filter((row) => row.verdict === "aligned").length;
+  const missedN = rows.length - alignedN;
+  const contradictions = rows
+    .slice(1)
+    .reduce((count, row, index) => count + (row.verdict !== rows[index].verdict ? 1 : 0), 0);
+  const unresolvedContradiction = hasContradiction && latestRun.length < 2;
+  const activeVerdict = unresolvedContradiction ? null : latest.verdict;
+  const confidence: CoachPersonalResponseConfidence = unresolvedContradiction
+    ? "tentative"
+    : (latestRun.length >= 4 && contradictions === 0) || (strongSingle && measurementCount(latest) >= 12)
+      ? "strong"
+      : "observed";
+  const supersededEvidenceN = activeVerdict ? rows.filter((row) => row.verdict !== activeVerdict).length : 0;
+  const label = metricLabel(latest.metric_key);
+  const statement = unresolvedContradiction
+    ? `Recent ${label} outcomes conflict, so the standard default stays in place until the response repeats.`
+    : activeVerdict === "aligned"
+      ? `${label.charAt(0).toUpperCase() + label.slice(1)} has matched the expectation across ${latestRun.length} comparable decision${latestRun.length === 1 ? "" : "s"}.`
+      : `${label.charAt(0).toUpperCase() + label.slice(1)} has missed the expectation across ${latestRun.length} comparable decisions, so the next step should change modestly and be rechecked.`;
+  const modifier = activeVerdict ? modifierFor(latest, activeVerdict, confidence, latestRun.length) : null;
+  const change = modifier
+    ? modifier.rationale
+    : unresolvedContradiction
+      ? "Keep the universal default while collecting another comparable outcome."
+      : "Keep this learning informational; it cannot set a clinical or safety policy.";
+  return {
+    learning: {
+      key: comparableKey(latest),
+      domain: latest.domain,
+      metric_key: latest.metric_key,
+      subject_key: latest.subject_key,
+      statement,
+      expected: expectedText(latest),
+      observed:
+        latest.explanation || (activeVerdict === "aligned" ? "The result matched." : "The result did not match."),
+      change,
+      confidence,
+      evidence_n: rows.length,
+      aligned_n: alignedN,
+      missed_n: missedN,
+      contradictions,
+      superseded_evidence_n: supersededEvidenceN,
+      last_observed: latest.evaluated_at,
+    },
+    modifier,
+  };
+}
+
+export function whatWorksForYou(): CoachWhatWorksForYou | null {
+  const groups = new Map<string, EvaluatedDecisionRow[]>();
+  for (const row of evaluatedDecisionRows()) {
+    const key = comparableKey(row);
+    groups.set(key, [...(groups.get(key) ?? []), row]);
+  }
+  const learned = [...groups.values()]
+    .map(learningForGroup)
+    .filter((item): item is NonNullable<typeof item> => item != null)
+    .sort((a, b) => b.learning.last_observed.localeCompare(a.learning.last_observed))
+    .slice(0, 4);
+  if (!learned.length) return null;
+  return {
+    version: PERSONAL_RESPONSE_VERSION,
+    learnings: learned.map((item) => item.learning),
+    modifiers: learned.flatMap((item) => (item.modifier ? [item.modifier] : [])).slice(0, 4),
+  };
+}
+
+export function applyPersonalResponseModifier(input: {
+  base: number;
+  modifier: CoachPersonalModifier | null | undefined;
+  min?: number;
+  max?: number;
+  safety_floor?: number;
+  safety_ceiling?: number;
+  hard_constraint?: CoachPersonalSafetyGuardrail | null;
+}): number {
+  const base = Number(input.base);
+  if (!Number.isFinite(base)) throw new Error("personal modifier base must be finite");
+  const lower = Math.max(input.min ?? -Infinity, input.safety_floor ?? -Infinity);
+  const upper = Math.min(input.max ?? Infinity, input.safety_ceiling ?? Infinity);
+  if (lower > upper) throw new Error("personal modifier bounds conflict with safety bounds");
+  const modifier = input.modifier;
+  const modifierMin = Number(modifier?.bounds?.min);
+  const modifierMax = Number(modifier?.bounds?.max);
+  const scale =
+    !modifier || input.hard_constraint
+      ? 1
+      : boundedScale(
+          Number(modifier.scale) || 1,
+          Number.isFinite(modifierMin) ? modifierMin : 0.85,
+          Number.isFinite(modifierMax) ? modifierMax : 1.15
+        );
+  const adjusted = base * scale;
+  return Math.round(Math.max(lower, Math.min(upper, adjusted)) * 1000) / 1000;
 }
 
 const CONF_RANK: Record<ReactionPattern["confidence"], number> = { strong: 3, observed: 2, tentative: 1 };
@@ -566,7 +1109,9 @@ export function reactionModelForCoach(): {
         narrative = getAppState("reaction_model_narrative") || null;
         builtAt = getAppState("reaction_model_built_at");
       }
-    } catch { /* corrupt cache → rebuild */ }
+    } catch {
+      /* corrupt cache → rebuild */
+    }
   }
   if (source !== "cache") {
     patterns = buildReactionModel().patterns;
@@ -575,7 +1120,10 @@ export function reactionModelForCoach(): {
   // Strongest first (by confidence WORD, then evidence_n), capped at 6 — calm,
   // bounded output. Public shape strips the internal params number blob.
   const ranked = [...patterns]
-    .sort((a, b) => (CONF_RANK[b.confidence] ?? 0) - (CONF_RANK[a.confidence] ?? 0) || (b.evidence_n ?? 0) - (a.evidence_n ?? 0))
+    .sort(
+      (a, b) =>
+        (CONF_RANK[b.confidence] ?? 0) - (CONF_RANK[a.confidence] ?? 0) || (b.evidence_n ?? 0) - (a.evidence_n ?? 0)
+    )
     .slice(0, 6)
     .map(publicPattern);
 
@@ -590,7 +1138,9 @@ export function reactionModelForCoach(): {
 // upstream). Trimmed + capped; null/empty CLEARS the slot (a "" sentinel that
 // reactionModelForCoach reads back as null).
 export function setReactionNarrative(text: string | null): void {
-  const s = String(text ?? "").replace(/\s+/g, " ").trim();
+  const s = String(text ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
   setAppState("reaction_model_narrative", s ? s.slice(0, 600) : "");
 }
 
@@ -609,7 +1159,11 @@ export function saveReactionModel(): void {
   // a tentative pattern isn't durable enough to memorialize. addMemory dedupes.
   for (const p of model.patterns) {
     if (p.confidence === "strong" || p.confidence === "observed") {
-      try { addMemory(p.statement, "reaction", "reaction-model"); } catch { /* best-effort */ }
+      try {
+        addMemory(p.statement, "reaction", "reaction-model");
+      } catch {
+        /* best-effort */
+      }
     }
   }
 }
