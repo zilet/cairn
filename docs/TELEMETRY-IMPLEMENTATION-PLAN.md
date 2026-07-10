@@ -109,4 +109,8 @@ Status: implemented and integrated locally.
 - Built server smoke passed 74 assertions, including request correlation,
   readiness, telemetry ingestion, grouping, and auth behavior.
 - Browser smoke passed 17 routes and 13 real workflows without runtime errors.
+- The release gate exposed a real same-member edit/delete race; Luna added
+  per-member mutation serialization plus duplicate-delete protection and a
+  deferred-response regression. The final rebased `npm run release:check` passed
+  end to end on local `main` commit `c214a2a0` plus the telemetry wave.
 - No Pi deployment or public release was requested or performed in this wave.
