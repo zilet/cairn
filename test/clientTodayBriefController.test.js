@@ -429,6 +429,48 @@ test("upgradeBriefInPlace flashes thinking for a provisional paint but reconcile
   assert.equal(cachedHarness.rootEl.querySelector(".brief") === cachedBrief, true);
 });
 
+test("upgradeBriefInPlace adopts a terminally-failed fetch so the shimmer doesn't return on the next render", async () => {
+  const harness = loadController({ localStorage: fakeLocalStorage() });
+  harness.deps.reducedMotion = () => false;
+  const brief = harness.rootEl.appendChild(new FakeElement("section", { className: "brief" }));
+  let resolveRead;
+  const promise = new Promise((resolve) => { resolveRead = resolve; });
+  // Nothing real cached yet — what's painted right now IS the placeholder.
+  const placeholder = { kind: "train", headline: "Today", why: "", focus: null, est_minutes: null, signals: {}, source: "deterministic", _provisional: true };
+  harness.deps.state.brief = { date: harness.deps.state.logDate, override: "", read: placeholder };
+  harness.deps.state._briefInflight = { date: harness.deps.state.logDate, override: "", promise };
+
+  const done = harness.controller.upgradeBriefInPlace(harness.deps.state.logDate, true, harness.deps);
+  // Mirrors loadBrief's fetchRead fallback: a terminal failure still resolves to
+  // provisional fallback content, now flagged _failed.
+  resolveRead({ ...placeholder, _failed: true });
+  await done;
+
+  assert.equal(brief.classList.contains("is-thinking"), false);
+  // The failed flag is adopted into state so a later renderToday()/briefHtml()
+  // call sees `_failed` and does not re-add the shimmer.
+  assert.equal(harness.deps.state.brief.read._failed, true);
+  assert.equal(harness.deps.state.brief.read._provisional, true);
+});
+
+test("upgradeBriefInPlace keeps a good cached read on a failed refetch instead of adopting the failure", async () => {
+  const harness = loadController({ localStorage: fakeLocalStorage() });
+  harness.deps.reducedMotion = () => false;
+  harness.rootEl.appendChild(new FakeElement("section", { className: "brief" }));
+  let resolveRead;
+  const promise = new Promise((resolve) => { resolveRead = resolve; });
+  const cachedRead = { kind: "easy", headline: "Cached easy read", why: "recover", focus: "walk", est_minutes: 20, signals: {}, _cached: true };
+  harness.deps.state.brief = { date: harness.deps.state.logDate, override: "", read: cachedRead };
+  harness.deps.state._briefInflight = { date: harness.deps.state.logDate, override: "", promise };
+
+  const done = harness.controller.upgradeBriefInPlace(harness.deps.state.logDate, true, harness.deps);
+  resolveRead({ kind: "train", headline: "Today", why: "", focus: null, est_minutes: null, signals: {}, source: "deterministic", _provisional: true, _failed: true });
+  await done;
+
+  // The cached, already-true content stands — never clobbered by a failed refetch.
+  assert.equal(harness.deps.state.brief.read.headline, "Cached easy read");
+});
+
 test("a completed-state upgrade repaints all of Today so stale Start controls disappear", async () => {
   const harness = loadController({ localStorage: fakeLocalStorage() });
   const brief = harness.rootEl.appendChild(new FakeElement("section", { className: "brief" }));

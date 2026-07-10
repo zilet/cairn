@@ -635,12 +635,12 @@ declare global {
     cardioPlanCard(item: any, index: any, matched?: any, syncLine?: string): string;
     cardioEffortMatches(item: any, effort: any): boolean;
     suggestedPlanDayNumber(session: any, isToday: boolean): Promise<number>;
-    loadBrief(date: string, override: string, opts?: { fast?: boolean }): Promise<ClientDayRead & { _provisional?: boolean; override?: string | null }>;
+    loadBrief(date: string, override: string, opts?: { fast?: boolean }): Promise<ClientDayRead & { _provisional?: boolean; _failed?: boolean; override?: string | null }>;
     upgradeBriefInPlace(date: string, isToday: boolean): Promise<void>;
     reshapeToday(): Promise<void>;
     briefHtml(
-      read: (Partial<ClientDayRead> & { _provisional?: unknown; override?: unknown }) | null | undefined,
-      options: { showPlan?: unknown; hasPlanDay?: unknown; isToday?: unknown },
+      read: (Partial<ClientDayRead> & { _provisional?: unknown; _failed?: unknown; override?: unknown }) | null | undefined,
+      options: { showPlan?: unknown; showDone?: unknown; isToday?: unknown },
     ): string;
     briefSignalsText(read: Partial<ClientDayRead> | null | undefined): string;
     revealPlanThen(after: (() => unknown) | null | undefined, opts?: { blank?: boolean }): void;
@@ -3548,8 +3548,9 @@ declare global {
       visibleOverrides(args: { kind?: unknown; estMinutes?: unknown; activeOverride?: unknown }): Array<{ intent: string; label: string }>;
       agentOffline(status: unknown): boolean;
       agentOfflineNoticeHtml(status: unknown, dismissed?: boolean): string;
-      briefHtml(read: (Partial<ClientDayRead> & { _provisional?: unknown; override?: unknown }) | null | undefined, options?: {
+      briefHtml(read: (Partial<ClientDayRead> & { _provisional?: unknown; _failed?: unknown; override?: unknown }) | null | undefined, options?: {
         showPlan?: boolean;
+        showDone?: boolean;
         isToday?: boolean;
         activeOverride?: unknown;
         morph?: boolean;
@@ -3585,12 +3586,12 @@ declare global {
         override: string,
         deps: ClientTodayBriefControllerDeps,
         opts?: { fast?: boolean },
-      ): Promise<ClientDayRead & { _provisional?: boolean; override?: string | null }>;
+      ): Promise<ClientDayRead & { _provisional?: boolean; _failed?: boolean; override?: string | null }>;
       upgradeBriefInPlace(date: string, isToday: boolean, deps: ClientTodayBriefControllerDeps): Promise<void>;
       reshapeToday(deps: ClientTodayBriefControllerDeps): Promise<void>;
       briefHtml(
-        read: (Partial<ClientDayRead> & { _provisional?: unknown; override?: unknown }) | null | undefined,
-        options: { showPlan?: unknown; hasPlanDay?: unknown; isToday?: unknown },
+        read: (Partial<ClientDayRead> & { _provisional?: unknown; _failed?: unknown; override?: unknown }) | null | undefined,
+        options: { showPlan?: unknown; showDone?: unknown; isToday?: unknown },
         deps: ClientTodayBriefControllerDeps,
       ): string;
       briefSignalsText(read: Partial<ClientDayRead> | null | undefined): string;
