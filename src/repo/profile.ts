@@ -347,12 +347,16 @@ function datePlusDays(date: string, days: number): string {
 
 function proposalDecisionShape(p: any): {
   kind: "nutrition_target" | "training_structure" | "training_target" | "exercise_rotation";
-  domain: "nutrition" | "training";
+  domain: "nutrition" | "training" | "recovery";
   summary: string;
   rationale: string | null;
 } {
   const nutrition = p?.parsed?.kind === "nutrition_target";
   const restructure = Array.isArray(p?.parsed?.days);
+  // The canonical recovery-week draft is stamped domain 'recovery' (same structural
+  // marker autonomy-service's proposalShape uses) so the ledger reads consistently
+  // whichever path applied it.
+  const recoveryWeek = restructure && String(p?.instruction ?? "").startsWith(RECOVERY_WEEK_INSTRUCTION_PREFIX);
   const rotation =
     p?.agent === "exercise-swap" ||
     (Array.isArray(p?.parsed?.changes) && p.parsed.changes.some((item: any) => item?.swap));
@@ -374,7 +378,7 @@ function proposalDecisionShape(p: any): {
         : rotation
           ? "exercise_rotation"
           : "training_target",
-    domain: nutrition ? "nutrition" : "training",
+    domain: nutrition ? "nutrition" : recoveryWeek ? "recovery" : "training",
     summary: String(
       p?.parsed?.summary ??
         (nutrition

@@ -955,6 +955,16 @@ function getCoachContextFromSnapshot(): CoachContext {
             return "lead";
           }
         })(),
+        // Background coaching off means the scheduler can never fulfill "your coach
+        // sets this up automatically" — the conductor then keeps the athlete-driven
+        // asks even under lead posture (coachLeads() requires both).
+        proactiveEnabled: (() => {
+          try {
+            return getSettings().proactive_enabled !== false;
+          } catch {
+            return true;
+          }
+        })(),
         recentRotations: recentRotationsView,
         plannedNames: brainSignal("planned_names", () => {
           try {
@@ -1068,13 +1078,17 @@ registerTrainingCacheClear(() => {
 });
 
 export function getCoachingFocus() {
-  // lead_mode is in the key so flipping the setting (which changes `acts` and the
-  // recovery/stall copy) busts the memo without waiting for a training/marker write.
+  // lead_mode + proactive_enabled are in the key so flipping either setting (both
+  // change `acts` and the recovery/stall copy) busts the memo without waiting for
+  // a training/marker write.
   let leadMode = "lead";
+  let proactive = "on";
   try {
-    leadMode = getSettings().lead_mode;
+    const s = getSettings();
+    leadMode = s.lead_mode;
+    proactive = s.proactive_enabled !== false ? "on" : "off";
   } catch {}
-  const key = `${currentTrainingDataVersion()}:${currentMarkerDataVersion()}:${localDateISO()}:${leadMode}`;
+  const key = `${currentTrainingDataVersion()}:${currentMarkerDataVersion()}:${localDateISO()}:${leadMode}:${proactive}`;
   if (
     coachingFocusMemo &&
     coachingFocusMemo.key === key &&

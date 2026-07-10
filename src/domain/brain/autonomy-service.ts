@@ -14,7 +14,7 @@ import {
 import { insertBrainEvaluation } from "../../repo/brain-evaluations.js";
 import { deleteNutritionTarget, getActiveNutritionTarget, setNutritionTarget } from "../../repo/nutrition.js";
 import { getPlan, replacePlan } from "../../repo/plan.js";
-import { applyProposal, getProposal } from "../../repo/profile.js";
+import { applyProposal, getProposal, RECOVERY_WEEK_INSTRUCTION_PREFIX } from "../../repo/profile.js";
 import { buildProgressionProposal } from "../../repo/progression.js";
 import { getSettings } from "../../repo/settings.js";
 import { addDaysISO, localDateISO } from "../../repo/shared.js";
@@ -22,15 +22,21 @@ import { getSessionByDate } from "../../repo/sessions.js";
 
 type ProposalShape = {
   kind: "nutrition_target" | "training_structure" | "training_target" | "exercise_rotation";
-  domain: "nutrition" | "training";
+  domain: "nutrition" | "training" | "recovery";
   risk: "low" | "moderate";
 };
 
 function proposalShape(proposal: any): ProposalShape {
   if (proposal?.parsed?.kind === "nutrition_target")
     return { kind: "nutrition_target", domain: "nutrition", risk: "low" };
-  if (Array.isArray(proposal?.parsed?.days))
-    return { kind: "training_structure", domain: "training", risk: "moderate" };
+  if (Array.isArray(proposal?.parsed?.days)) {
+    // The canonical recovery-week draft is stamped domain 'recovery' at WRITE time —
+    // the conductor's "a lighter recovery week lands <weekday>" claim keys off this
+    // structural marker, never off substring-matching the agent's free-text summary
+    // (an unrelated restructure whose prose says "lighter" must not qualify).
+    const recoveryWeek = String(proposal?.instruction ?? "").startsWith(RECOVERY_WEEK_INSTRUCTION_PREFIX);
+    return { kind: "training_structure", domain: recoveryWeek ? "recovery" : "training", risk: "moderate" };
+  }
   // A changes[] payload carrying a swap is an exercise rotation, not a bare target
   // tweak — classify it as such for the ledger. It stays low-risk/quiet_apply and
   // shares training_target's next-boundary + freshness handling (kind !== structure).

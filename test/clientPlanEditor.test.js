@@ -97,7 +97,7 @@ test("plan editor calendar footer and read-only day cards escape dynamic content
   assert.doesNotMatch(html, /<push>|<press>|<rep>|<easy>/);
   // Every plan day in the read view offers a "Train this day" entry into logging,
   // keyed by the day's array index (mirrors data-editday).
-  assert.match(html, /<button class="ghostbtn prog-train" data-trainday="0">Train this day<\/button>/);
+  assert.match(html, /<button class="ghostbtn prog-train" data-trainday="0">Train<\/button>/);
   assert.match(html, /data-editday="0"/);
 });
 
