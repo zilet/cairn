@@ -139,6 +139,35 @@ export function supersedeAutoEvolutionDrafts(exceptId?: number) {
 // prior draft when a fresh one lands so repeated taps never pile up drafts.
 export const RECOVERY_WEEK_INSTRUCTION_PREFIX = "Reshape next week into a RECOVERY";
 
+// The canonical full recovery-week instruction — shared by the lead-mode auto-draft
+// (scheduler) and kept prefix-compatible with the PWA's one-tap draft so the
+// drafted/active state machine (pendingRecoveryDraft, supersedeRecoveryWeekDrafts)
+// treats both sources as the same thing.
+export const RECOVERY_WEEK_INSTRUCTION =
+  "Reshape next week into a RECOVERY (deload) week: cut working-set volume roughly in half, " +
+  "keep every movement pattern, keep efforts easy and crisp (3-4 reps in reserve), no new " +
+  "exercises and no load PRs — an earned reset after sustained loading, so the athlete comes back stronger.";
+
+// Whether the lead-mode coach should draft the recovery week ITSELF right now: the
+// conductor is asking for one (a recovery lead that is neither running nor already
+// drafted) and the athlete has chosen the lead posture. Pure — the scheduler owns
+// the ≤1×/day cadence stamp. This is what keeps the conductor's "your coach sets
+// this up automatically" copy honest: the same read that makes the promise is the
+// read that triggers the draft.
+export function shouldAutoDraftRecoveryWeek(opts: {
+  lead_mode?: unknown;
+  focus_lead_domain?: unknown;
+  recovery_active?: unknown;
+  status: unknown;
+}): boolean {
+  return (
+    String(opts.lead_mode) === "lead" &&
+    String(opts.focus_lead_domain) === "recovery" &&
+    opts.recovery_active !== true &&
+    opts.status == null
+  );
+}
+
 export function pendingRecoveryDraft(): { id: number } | null {
   // parsed_json IS NOT NULL: a failed agent run persists an unparseable draft row —
   // that is a retry case, not a reviewable recovery week.

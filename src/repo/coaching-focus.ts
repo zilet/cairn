@@ -301,6 +301,7 @@ interface AppliedRotationInput {
 interface UpcomingDecisionInput {
   kind?: unknown;
   domain?: unknown;
+  summary?: unknown;
   effective_date?: unknown;
 }
 
@@ -516,10 +517,17 @@ function recoveryCandidate(inp: CoachingFocusInput): Candidate | null {
     if (draftPending) {
       move = "Recovery week is queued — it lands automatically. Undo any time from Plan.";
     } else {
+      // Only a decision that is genuinely ABOUT recovery may claim "a lighter week
+      // lands Monday" — an unrelated structural restructure must never be dressed
+      // up as one (it would attribute the wrong change to the wrong promise).
       const soon = inputArray<UpcomingDecisionInput>(inp.upcoming).find(
-        (d) => lc(d?.kind) === "training_structure" || lc(d?.domain) === "recovery"
+        (d) =>
+          lc(d?.domain) === "recovery" ||
+          (lc(d?.kind) === "training_structure" && /deload|recovery|lighter/i.test(String(d?.summary ?? "")))
       );
       const weekday = soon ? weekdayOf(soon.effective_date) : null;
+      // The scheduler's recovery auto-draft (lead mode, ≤1×/day) is what makes the
+      // undrafted copy honest — the coach genuinely will set this up on its own.
       move = weekday
         ? `A lighter recovery week lands ${weekday} — your coach set it up; undo any time from Plan.`
         : "Your coach sets this up automatically at the week boundary.";
@@ -568,33 +576,14 @@ function trainingCandidate(inp: CoachingFocusInput): Candidate | null {
     const leadLift = String(stalled.lead_lift ?? "").trim();
     const leadLiftLc = lc(leadLift);
     const label = lc(stalled.label || stalled.group);
-    // Has the brain already HANDLED this plateau? A matching applied rotation means
-    // the stalled lift was rotated out — speak to the new stimulus (a calm alongside
-    // note), never re-offer the swap that just happened (or the lift just removed).
+    // A plateau the brain already HANDLED (a matching applied rotation) or a stalled
+    // lift that's off every plan day is not a live lead — fall through to the
+    // capacity laggard so training can still lead on something real. The handled
+    // rotation speaks separately via rotationHandledCandidate (a calm parallel note),
+    // so this producer never re-offers the swap that just happened.
     const rotation = leadLiftLc ? rotations.find((r) => lc(r?.from) === leadLiftLc) : undefined;
-    if (rotation) {
-      const to = String(rotation.to ?? "").trim();
-      const on = String(rotation.date ?? "").slice(0, 10);
-      return {
-        key: "training-stall-handled",
-        leverage: 2.2,
-        slot: "parallel",
-        item: {
-          domain: "training",
-          title: `New stimulus in for your ${label}`,
-          why: `${leadLift || "Your main lift"} stalled, so ${to || "a fresh variation"} rotated in — give it a few weeks to read before judging it.`,
-          based_on: [
-            `${leadLift || label} was rotated out`,
-            on ? `Rotated in on ${on}` : `${to || "A variation"} is the new stimulus`,
-          ],
-        },
-      };
-    }
-    // The stalled lift is off every plan day with no rotation record on file — the
-    // plateau read is stale (it can't be rotated out; it isn't there). Fall through
-    // to the capacity laggard rather than offering to rotate a lift that's gone.
     const unprogrammed = plannedNames.length > 0 && leadLiftLc !== "" && !plannedNames.includes(leadLiftLc);
-    if (!unprogrammed) {
+    if (!rotation && !unprogrammed) {
       // vary_options are {name, why} objects — pull the movement NAME (a bare
       // String(o) renders "[object Object]"). Tolerate a plain-string option too.
       const opts = inputArray<unknown>(stalled.vary_options)
@@ -628,7 +617,7 @@ function trainingCandidate(inp: CoachingFocusInput): Candidate | null {
       };
     }
   }
-  // Else the capacity laggard (the one lift furthest behind for the athlete's age).
+  // The capacity laggard (the one lift furthest behind for the athlete's age).
   const lever = inp.performance?.lever;
   if (lever?.headline) {
     const conflicts = leverLoadsFlagged(String(lever.headline), String(lever.target ?? ""), flagged);
@@ -646,6 +635,41 @@ function trainingCandidate(inp: CoachingFocusInput): Candidate | null {
         why: `${String(lever.why || "Focused volume on your furthest-behind lift is where the easiest, most motivating progress is.")}${caveat ? ` (${caveat})` : ""}`,
         move: lever.target ? String(lever.target) : undefined,
         based_on: ["Performance standing lever", lever.why ? String(lever.why) : "Capacity comparison across lifts"],
+      },
+    };
+  }
+  return null;
+}
+
+// A plateau the brain already rotated a variation in for — its own producer so the
+// calm "new stimulus" note rides ALONGSIDE whatever training lead is live (the
+// capacity laggard, a later stall) instead of silently replacing it.
+function rotationHandledCandidate(inp: CoachingFocusInput): Candidate | null {
+  const rotations = inputArray<AppliedRotationInput>(inp.recentRotations);
+  if (!rotations.length) return null;
+  const groups = inputArray<MuscleGroupTrajectoryInput>(inp.groupsTrajectory?.groups);
+  for (const group of groups) {
+    if (lc(group?.verdict) !== "stalling") continue;
+    const leadLift = String(group?.lead_lift ?? "").trim();
+    const leadLiftLc = lc(leadLift);
+    if (!leadLiftLc) continue;
+    const rotation = rotations.find((r) => lc(r?.from) === leadLiftLc);
+    if (!rotation) continue;
+    const label = lc(group.label || group.group);
+    const to = String(rotation.to ?? "").trim();
+    const on = String(rotation.date ?? "").slice(0, 10);
+    return {
+      key: "training-stall-handled",
+      leverage: 2.2,
+      slot: "parallel",
+      item: {
+        domain: "training",
+        title: `New stimulus in for your ${label}`,
+        why: `${leadLift || "Your main lift"} stalled, so ${to || "a fresh variation"} rotated in — give it a few weeks to read before judging it.`,
+        based_on: [
+          `${leadLift || label} was rotated out`,
+          on ? `Rotated in on ${on}` : `${to || "A variation"} is the new stimulus`,
+        ],
       },
     };
   }
@@ -1107,6 +1131,7 @@ export function coachingFocus(input: CoachingFocusInput = {}): CoachingFocus {
   const candidates: Candidate[] = [
     recoveryCandidate(input),
     trainingCandidate(input),
+    rotationHandledCandidate(input),
     runningCandidate(input),
     healthCandidate(input),
     dexaCandidate(input),

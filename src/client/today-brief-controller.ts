@@ -222,7 +222,11 @@ type TodayBriefControllerDeps = {
     }
     const live = deps.root.querySelector(".brief");
     if (!live) return;
-    const showPlan = !!deps.root.querySelector(".plansurface");
+    // The Today tab renders the showPlan state as the session LAUNCH card
+    // (.sess-launch), not the .plansurface branch — recognize both, or a same-kind
+    // 'done' upgrade would think nothing below offers an entry and inject a
+    // redundant "Log training" action above the live Continue card.
+    const showPlan = !!(deps.root.querySelector(".plansurface") || deps.root.querySelector(".sess-launch"));
     const showDone = !!deps.root.querySelector(".sessiondone");
     const tmp = document.createElement("div");
     tmp.innerHTML = briefHtml(read, { showPlan, showDone, isToday }, deps);

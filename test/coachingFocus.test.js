@@ -247,6 +247,39 @@ test("a stalled lift the brain already rotated out becomes a calm 'handled' note
   assert.equal(stall, undefined, "no stall lead once the rotation is on record");
 });
 
+test("a handled rotation never suppresses the capacity-laggard training lead", () => {
+  const out = coachingFocus({
+    performance: {
+      lever: { headline: "Bring up your overhead press", why: "Furthest behind for your age.", target: "Add one focused OHP day." },
+    },
+    groupsTrajectory: {
+      groups: [{ verdict: "stalling", label: "Chest", lead_lift: "Barbell Bench Press", vary_options: [{ name: "DB Bench Press" }] }],
+    },
+    recentRotations: [{ from: "Barbell Bench Press", to: "Incline Bench Press", date: "2026-07-08" }],
+    plannedNames: ["Incline Bench Press"],
+  });
+  // The live lever still LEADS; the handled plateau does not swallow training.
+  assert.equal(out.lead.domain, "training");
+  assert.match(out.lead.title, /overhead press/i);
+  // The handled note still exists in the read (parallel or later — never the lead).
+  const everywhere = [...out.parallel.map((p) => p.title), ...out.later.map((l) => l.title)];
+  assert.ok(everywhere.some((t) => /new stimulus/i.test(String(t))), "handled note rides along");
+});
+
+test("an unrelated structural decision is never dressed up as the recovery week", () => {
+  const out = coachingFocus({
+    programState: { mesocycle: { phase: "deload-due", note: "Time for a lighter week." } },
+    recovery: {},
+    leadMode: "lead",
+    upcoming: [
+      { kind: "training_structure", domain: "training", summary: "Move to a 4-day upper/lower split.", effective_date: "2026-07-13" },
+    ],
+  });
+  assert.equal(out.lead.domain, "recovery");
+  assert.doesNotMatch(String(out.lead.move), /lands \w+day/i, "no weekday claim off an unrelated decision");
+  assert.match(String(out.lead.move), /automatically at the week boundary/i);
+});
+
 test("lead mode strips the one-tap swap payload and reports acts:false; other modes keep it", () => {
   const lead = coachingFocus({ ...richInput(), leadMode: "lead" });
   assert.equal(lead.acts, false, "lead mode owns the actions server-side");
@@ -264,8 +297,14 @@ test("lead mode strips the one-tap swap payload and reports acts:false; other mo
 
 test("under lead mode a due recovery week speaks STATE — the coach sets it up, no ask", () => {
   const base = { programState: { mesocycle: { phase: "deload-due", note: "Time for a lighter week." } }, recovery: {} };
-  // With an upcoming recovery/structure decision, name the weekday it lands (2026-07-13 is a Monday).
-  const named = coachingFocus({ ...base, leadMode: "lead", upcoming: [{ kind: "training_structure", domain: "training", effective_date: "2026-07-13" }] });
+  // With an upcoming RECOVERY-shaped decision, name the weekday it lands (2026-07-13 is a Monday).
+  const named = coachingFocus({
+    ...base,
+    leadMode: "lead",
+    upcoming: [
+      { kind: "training_structure", domain: "training", summary: "Recovery deload week — volume halves.", effective_date: "2026-07-13" },
+    ],
+  });
   assert.equal(named.acts, false);
   assert.equal(named.lead.domain, "recovery");
   assert.match(String(named.lead.move), /lands Monday/, "names the weekday the auto-set week arrives");
