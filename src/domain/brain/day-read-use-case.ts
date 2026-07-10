@@ -1,7 +1,8 @@
 import { agentStatusFor } from "../../coachOps.js";
 import { db } from "../../db.js";
 import { computeDayRead, localToday } from "../../dayread.js";
-import { dayRead, forwardLook, getCachedDayRead, invalidateDayRead } from "../../repo/intelligence.js";
+import { scheduleDayReadRefresh } from "../../dayread-refresh.js";
+import { dayRead, forwardLook, getCachedDayRead, invalidateDayRead, saveDayRead } from "../../repo/intelligence.js";
 import { recordSuggestion } from "../../repo/memory.js";
 import { getTrajectory } from "../../repo/trajectory.js";
 
@@ -69,7 +70,9 @@ export function recordDayReadSuggestion(date: string, read: Record<string, unkno
   try {
     if (!override) {
       const existing = db
-        .prepare(`SELECT 1 FROM suggestions WHERE kind = 'day_read' AND date = ? AND payload_json LIKE '%"override":null%' LIMIT 1`)
+        .prepare(
+          `SELECT 1 FROM suggestions WHERE kind = 'day_read' AND date = ? AND payload_json LIKE '%"override":null%' LIMIT 1`
+        )
         .get(date);
       if (existing) return;
     }
@@ -99,6 +102,40 @@ export async function readToday(options: ReadTodayOptions = {}): Promise<DayRead
     if (!override) {
       const cached = getCachedDayRead(readDate);
       if (cached) {
+        // The cache is a prose accelerator, never the authority on whether work
+        // has happened. A Garmin/manual activity can land while an older agentic
+        // warm is still in flight and re-save prospective copy after invalidation.
+        // Recheck only the deterministic temporal fact before serving the row so
+        // a completed run can never show "Start session" from a stale morning read.
+        const live = dayRead(readDate);
+        const liveLogged = live?.signals?.logged_today as { sets?: unknown; activities?: unknown[] } | undefined;
+        const cachedLogged = cached?.signals?.logged_today as { sets?: unknown; activities?: unknown[] } | undefined;
+        const liveHasWork =
+          Number(liveLogged?.sets ?? 0) > 0 ||
+          (Array.isArray(liveLogged?.activities) && liveLogged.activities.length > 0);
+        const cachedHasWork =
+          Number(cachedLogged?.sets ?? 0) > 0 ||
+          (Array.isArray(cachedLogged?.activities) && cachedLogged.activities.length > 0);
+        if (liveHasWork && (!cachedHasWork || (live.kind === "done" && cached.kind !== "done"))) {
+          const factual = {
+            ...live,
+            headline: dayReadHeadline(live),
+            source: "deterministic",
+            override: null,
+          };
+          try {
+            saveDayRead(readDate, factual);
+          } catch {
+            /* the response is still truthful */
+          }
+          // The factual row keeps every subsequent open truthful, but its prose is
+          // the deterministic floor. Re-warm in the background (debounced, agent-gated)
+          // so the day still gets the warm agentic DONE debrief instead of pinning
+          // floor prose for the rest of the day.
+          scheduleDayReadRefresh(readDate);
+          if (recordOutcome) recordDayReadSuggestion(readDate, factual, null);
+          return attachDayReadContext(readDate, { ...factual, agent_status: agentStatusFor(factual) });
+        }
         if (recordOutcome) recordDayReadSuggestion(readDate, cached, null);
         return attachDayReadContext(readDate, { ...cached, cached: true, agent_status: agentStatusFor(cached) });
       }

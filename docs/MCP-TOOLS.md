@@ -6,10 +6,11 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**199 tools.**
+**200 tools.**
 
 | Tool | Description |
 |---|---|
+| `ack_today_agenda` | Presentation acknowledgement for a Today-agenda attention item (currently 'health-focus'): retires the current semantic revision from Today WITHOUT resolving or dismissing the underlying health directives — they keep shaping meals/training. Materially new evidence creates a new revision and may surface again. Mirrors POST /api/today-agenda/ack. |
 | `add_checkin` | Record an optional morning check-in (a day-read signal — offered, never required). All fields optional; mood/energy/sleep_feel/soreness are 1-5 (clamped). Several per day are allowed; the latest wins for reads. |
 | `add_context_event` | Record a life-timeline event the coach should plan around: a trip (training disruption), an injury (deload/swap affected movements), a life_event (high stress / poor sleep / illness → reduce volume), or a family_event (a family/kids commitment like 'Tue 17:00 soccer' → keep that day shorter / more flexible). meta is kind-specific: trip {location}, injury {area, severity}, life_event {impact}, family_event {member, recurrence}. |
 | `add_family` | Add a family member to the roster. relationship is e.g. son / daughter / partner / parent; color is an optional swatch; birthdate is optional YYYY-MM-DD; notes is free-text. allergies are a HARD exclusion in any shared/household meal; dietary_restrictions surface as optional kid-friendly / shared-meal mods. |

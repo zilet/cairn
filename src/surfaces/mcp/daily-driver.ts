@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { learnedTimeline, listVisibleInsights, todayAgenda, updateInsight } from "../../domain/brain/index.js";
+import {
+  acknowledgeTodayAgendaCandidate,
+  learnedTimeline,
+  listVisibleInsights,
+  todayAgenda,
+  updateInsight,
+} from "../../domain/brain/index.js";
 import { allGuidelines, guidelineFor } from "../../domain/health/index.js";
 import { addMemory } from "../../domain/person/index.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
@@ -11,6 +17,19 @@ export function registerDailyDriverTools(server: McpToolRegistrar) {
     "The Today salience arbiter (Era 2): ONE deterministic ranking + budget pass over the whole Today surface → { hero, primary[], more[], total }, so only the 1-2 things that matter most today surface inline and the rest collapse behind 'more'. Internal priorities never cross to the user (no scores). Pass `date` (YYYY-MM-DD; defaults to today).",
     { date: z.string().optional() },
     async ({ date }) => asText(todayAgenda(date))
+  );
+
+  server.tool(
+    "ack_today_agenda",
+    "Presentation acknowledgement for a Today-agenda attention item (currently 'health-focus'): retires the current semantic revision from Today WITHOUT resolving or dismissing the underlying health directives — they keep shaping meals/training. Materially new evidence creates a new revision and may surface again. Mirrors POST /api/today-agenda/ack.",
+    {
+      id: z.string().describe("agenda candidate id, e.g. 'health-focus'"),
+      revision: z
+        .string()
+        .optional()
+        .describe("the revision shown to the user; omitted = acknowledge whatever is current"),
+    },
+    async ({ id, revision }) => asText(acknowledgeTodayAgendaCandidate(id, revision ?? null))
   );
 
   server.tool(

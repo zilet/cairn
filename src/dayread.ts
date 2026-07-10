@@ -60,7 +60,7 @@ export async function computeDayRead(
     const p = result.parsed;
     const sane =
       p && typeof p === "object" &&
-      (p.kind === "train" || p.kind === "easy" || p.kind === "rest") &&
+      (p.kind === "train" || p.kind === "easy" || p.kind === "rest" || p.kind === "done") &&
       typeof p.why === "string" && p.why.trim();
     if (sane) {
       out = {
@@ -87,7 +87,19 @@ export async function computeDayRead(
   // "Already trained a real session today" is a deterministic FACT — the agent voices
   // it (warm acknowledgement + recovery framing) but must never downgrade it to a
   // bare easy/rest/train read (which is what mislabeled a hard session as "EASY DAY").
-  if (baseline.kind === "done") out.kind = "done";
+  if (baseline.kind === "done") {
+    // Completion is a server-owned fact. An agent may phrase the debrief, but it
+    // cannot leave a prospective focus/duration behind or turn the completed work
+    // back into another recommendation. Older agents that still emit easy/train
+    // for the debrief fall all the way back to the deterministic acknowledgement.
+    if (out.kind !== "done") {
+      out.headline = deterministicHeadline(baseline);
+      out.why = baseline.why;
+    }
+    out.kind = "done";
+    out.focus = null;
+    out.est_minutes = null;
+  }
   // The day-ahead `forward` line is NOT persisted here — it's attached fresh on every
   // /today-read response (it must reflect the current plan/balance, not a snapshot).
   // Record the athlete's steer on the read and ALWAYS persist it (the no-clobber

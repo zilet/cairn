@@ -113,7 +113,14 @@ type TodayBriefControllerDeps = {
     opts: { fast?: boolean } = {},
   ): Promise<TodayBriefControllerDayRead> {
     const cached = deps.state.brief;
-    if (cached && cached.date === date && cached.override === (override || "") && !cached.read._provisional && !cached.read._cached) return cached.read;
+    // A same-date in-memory sentence is only an instant paint, not permanent
+    // truth. Activity/recovery signals can change underneath this controller
+    // (notably a Garmin run arriving after the morning open), so every render
+    // revalidates it against /today-read while preserving the warm paint.
+    const memoryCached =
+      cached && cached.date === date && cached.override === (override || "") && !cached.read._provisional
+        ? cached.read
+        : null;
     const fetchRead: Promise<TodayBriefControllerDayRead> = (async () => {
       let read: TodayBriefControllerDayRead | null = null;
       try {
@@ -134,7 +141,7 @@ type TodayBriefControllerDeps = {
       // against the fetch post-render. The invented placeholder is reserved for a
       // genuinely first-ever open with nothing cached for this date.
       if (!override) {
-        const stored = readCachedBrief(date);
+        const stored = memoryCached || readCachedBrief(date);
         if (stored) {
           const instant: TodayBriefControllerDayRead = { ...stored, _cached: true };
           deps.state._briefInflight = { date, override: "", promise: fetchRead };
@@ -194,6 +201,15 @@ type TodayBriefControllerDeps = {
       return;
     }
     deps.state.brief = { date, override: inflight.override || read.override || "", read };
+    // A temporal-state change reshapes more than the sentence: train can mount a
+    // Start-session card, while done/rest/easy must remove it. Re-render the whole
+    // Today composition so a freshly synced run cannot leave a stale Start CTA
+    // underneath an otherwise-correct completed Brief.
+    if (shown && shown.kind !== read.kind) {
+      briefEl?.classList.remove("is-thinking");
+      await deps.renderToday({ soft: true });
+      return;
+    }
     const live = deps.root.querySelector(".brief");
     if (!live) return;
     const day = deps.state.plan.find((d) => d.day_number === (deps.state as { day?: unknown }).day) || deps.state.plan[0] || { items: [] };

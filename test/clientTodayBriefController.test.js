@@ -277,15 +277,18 @@ function loadController(opts = {}) {
   };
 }
 
-test("Today Brief controller fetches, caches, and falls back without blocking the screen", async () => {
+test("Today Brief controller revalidates same-date memory without blocking the screen", async () => {
   const harness = loadController();
 
   const read = await harness.controller.loadBrief("2026-07-01", "", harness.deps);
   const cached = await harness.controller.loadBrief("2026-07-01", "rough night", harness.deps);
 
   assert.equal(read.headline, "Easy day");
-  assert.equal(cached, read);
-  assert.deepEqual(harness.apiCalls, ["/today-read?date=2026-07-01&agent=auto"]);
+  assert.deepEqual(plain(cached), plain(read));
+  assert.deepEqual(harness.apiCalls, [
+    "/today-read?date=2026-07-01&agent=auto",
+    "/today-read?date=2026-07-01&agent=auto&override=rough+night",
+  ]);
   assert.deepEqual(plain(harness.deps.state.brief), {
     date: "2026-07-01",
     override: "rough night",
@@ -424,4 +427,25 @@ test("upgradeBriefInPlace flashes thinking for a provisional paint but reconcile
   // Fresh read adopted into state (flag dropped) and the element was never swapped.
   assert.equal(!!cachedHarness.deps.state.brief.read._cached, false);
   assert.equal(cachedHarness.rootEl.querySelector(".brief") === cachedBrief, true);
+});
+
+test("a completed-state upgrade repaints all of Today so stale Start controls disappear", async () => {
+  const harness = loadController({ localStorage: fakeLocalStorage() });
+  const brief = harness.rootEl.appendChild(new FakeElement("section", { className: "brief" }));
+  let resolveRead;
+  const promise = new Promise((resolve) => { resolveRead = resolve; });
+  harness.deps.state.brief = {
+    date: harness.deps.state.logDate,
+    override: "",
+    read: { kind: "train", headline: "Easy long run", why: "Go run", _cached: true },
+  };
+  harness.deps.state._briefInflight = { date: harness.deps.state.logDate, override: "", promise };
+
+  const done = harness.controller.upgradeBriefInPlace(harness.deps.state.logDate, true, harness.deps);
+  resolveRead({ kind: "done", headline: "Long run done", why: "The work is in", focus: null, est_minutes: null });
+  await done;
+
+  assert.deepEqual(plain(harness.renders), [{ soft: true }]);
+  assert.equal(harness.deps.state.brief.read.kind, "done");
+  assert.equal(brief.classList.contains("is-thinking"), false);
 });

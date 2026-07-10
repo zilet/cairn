@@ -161,6 +161,16 @@ type TodayRailDeps = {
           return;
         }
         if (kind === "me-health-read") {
+          // Retire only this semantic presentation revision. The active health
+          // directives continue shaping meals/training in the background; new or
+          // materially changed evidence gets a new revision and can surface again.
+          void deps
+            .api("/today-agenda/ack", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id: candidate?.id || id, revision: candidate?.revision || null }),
+            })
+            .catch(() => {});
           // The whole-picture read lives on the Stand overview now.
           deps.state.standSeg = null;
           deps.activateTab("stand");
@@ -175,6 +185,17 @@ type TodayRailDeps = {
       button.dataset.wired = "1";
       button.addEventListener("click", () => {
         const card = button.closest(".agenda-card");
+        const id = button.getAttribute("data-agenda-dismiss") || card?.getAttribute("data-agenda-card") || "";
+        const candidate = pending.find((item) => item.id === id);
+        if (candidate?.revision) {
+          void deps
+            .api("/today-agenda/ack", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id, revision: candidate.revision }),
+            })
+            .catch(() => {});
+        }
         if (card) deps.collapseEl(card, () => card.remove());
         else button.remove();
       });

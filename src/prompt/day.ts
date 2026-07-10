@@ -31,8 +31,8 @@ import {
 
 // ---------- the day read (Phase 1A — the soul) ----------
 const DAY_READ_SCHEMA = `{
-  "kind": "train|easy|rest",
-  "headline": "<2-4 word plain-language state, e.g. 'Lower body.', 'Long run.', or 'Rest today.'>",
+  "kind": "train|easy|rest|done",
+  "headline": "<2-5 word plain-language state. Prospective when train/easy/rest ('Long run today.'); past-tense acknowledgement when done ('Long run done.')>",
   "why": "<one warm, plain sentence — what you saw and why; NO numbers, NO scores>",
   "focus": "<train: the session character. For a LIFTING day this is the muscle focus ('Lower body'); for an ENDURANCE user it can be the run/ride character — 'Easy', 'Long', 'Tempo', 'Intervals', 'Recovery'. null on rest.>",
   "est_minutes": <rough minutes for the suggestion, or null>
@@ -204,7 +204,7 @@ export function buildDayReadPrompt(ctx?: CoachContext, opts: { override?: string
 - Do NOT propose more training unless they ask. The day's work is in.
 - "headline": acknowledge the WORK specifically — name what they actually did (a standout lift from SESSION TODAY, or the run/ride from CARDIO TODAY with its real effort) like a friend who watched you train, e.g. "Strong push session." / "Solid 6 km — you pushed that one.". If CARDIO TODAY shows a hard effort (high avg HR), don't call it "easy".
 - "why": for a DONE day you MAY use 2-3 short sentences (the one exception to one-sentence): (1) how today fits the week's rhythm, (2) ONE forward focus — what the next session leans toward / what's DUE, (3) a brief refuel nudge ONLY if FUEL shows a real protein gap. Warm, plain, never a number-wall or a score.
-- Output "kind":"easy", "focus":null, "est_minutes":null — the app renders this as the DONE read automatically.${debriefFacts(opts.date || context.now?.date || new Date().toISOString().slice(0, 10))}`
+- Output "kind":"done", "focus":null, "est_minutes":null. DONE is a factual temporal state, not another easy-day recommendation.${debriefFacts(opts.date || context.now?.date || new Date().toISOString().slice(0, 10))}`
     : "";
   return `${CAIRN_PERSONA}
 

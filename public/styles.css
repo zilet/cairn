@@ -5191,7 +5191,7 @@ button.hmk-row:active{background:var(--card-2)}
 /* the conductor leads the Standing review (Me's first tab); a touch of air above the read */
 .cfocus-standing-slot:not(:empty){margin-bottom:14px}
 
-/* Today's thread — ONE calm line that opens the full focus card on Me → Standing */
+/* Today's block thread — compact context, routed to the domain where the work lives. */
 .cfocus-thread{display:flex;align-items:center;gap:8px;width:100%;text-align:left;
   background:var(--card);border:none;border-left:3px solid var(--sage);
   border-radius:var(--radius-sm);box-shadow:var(--shadow-sm);
@@ -5199,9 +5199,13 @@ button.hmk-row:active{background:var(--card-2)}
   transition:background .15s ease}
 .cfocus-thread:hover{background:var(--card-2)}
 .cfocus-thread-arrow{flex:0 0 auto;color:var(--sage);font-weight:700}
+.cfocus-thread-copy{display:flex;flex:1 1 auto;min-width:0;flex-direction:column;gap:2px}
+.cfocus-thread-top{display:flex;align-items:baseline;gap:8px;min-width:0}
 .cfocus-thread-lbl{flex:0 0 auto;color:var(--sage-text);letter-spacing:.08em}
 .cfocus-thread-txt{flex:1 1 auto;min-width:0;font-size:.9rem;font-weight:560;color:var(--ink);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cfocus-thread-why{font-size:.72rem;line-height:1.35;color:var(--muted);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
 .cfocus-thread-go{flex:0 0 auto;color:var(--muted);font-weight:600;transition:transform .15s ease}
 .cfocus-thread:hover .cfocus-thread-go{transform:translateX(2px)}
 

@@ -136,12 +136,17 @@ function readGenHtml(): string {
     </div>`;
 }
 function readHtml(): string {
+  // Stand is the whole-person surface. The live conductor (training, running,
+  // recovery, nutrition and health together) leads; the cached health story is
+  // supporting depth below it. An older but still-valid health synthesis must
+  // never hide today's actual cross-domain priority.
+  const wholePersonLead = focusHeroHtml();
   const syn = DATA?.synthesis;
   const headline = syn && typeof syn.headline === "string" ? syn.headline.trim() : "";
   const prios = (syn?.priorities || []).slice(0, 3);
   // No synthesis yet → the conductor focus line still leads, with a quiet invite
   // to generate the whole-picture read once there are markers to read.
-  if (!headline && !prios.length) return focusHeroHtml() + readGenHtml();
+  if (!headline && !prios.length) return wholePersonLead + readGenHtml();
   const age = syn && typeof syn.generated_at === "string" ? ` · ${relAge(syn.generated_at)}` : "";
   const zones = prios.map((p, i) => {
     const label = String(p.label || "");
@@ -162,7 +167,7 @@ function readHtml(): string {
     .slice(0, 2)
     .map((c) => `<div class="stand-conn"><span class="stand-conn-i" aria-hidden="true">◇</span><span>${escHtml(String(c.text))}</span></div>`)
     .join("");
-  return `<div class="stand-read reveal">
+  return `${wholePersonLead}<div class="stand-read reveal">
       <span class="stand-read-top"><span class="stand-read-k lbl">Your read${age}</span>${readRefreshHtml()}</span>
       ${headline ? `<p class="stand-read-lede">${escHtml(headline)}</p>` : ""}
       ${zones ? `<div class="stand-zones">${zones}</div>` : ""}
@@ -202,6 +207,10 @@ function fullStoryHtml(): string {
 }
 function focusHeroHtml(): string {
   const f = DATA?.focus as Record<string, unknown> | null;
+  if (f && typeof coachingFocusCardHtml === "function") {
+    const full = coachingFocusCardHtml(f as unknown as ClientCoachingFocus);
+    if (full) return full;
+  }
   const headline = f && typeof f.headline === "string" ? f.headline.trim() : "";
   const lead = f && f.lead && typeof f.lead === "object" ? (f.lead as Record<string, unknown>) : null;
   const line = lead && typeof lead.line === "string" ? lead.line.trim()

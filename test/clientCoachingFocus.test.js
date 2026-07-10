@@ -19,7 +19,12 @@ class FakeElement {
 
   closest(selector) {
     if (selector === "[data-cfocus-go]" && this.attrs["data-cfocus-go"] != null) return this;
-    if (selector === '[data-cfocus-go][role="link"]' && this.attrs["data-cfocus-go"] != null && this.attrs.role === "link") return this;
+    if (
+      selector === '[data-cfocus-go][role="link"]' &&
+      this.attrs["data-cfocus-go"] != null &&
+      this.attrs.role === "link"
+    )
+      return this;
     return null;
   }
 
@@ -110,7 +115,21 @@ test("coaching focus renderer escapes text and preserves conductor structure", (
   assert.doesNotMatch(html, /<plateau>|<press>|<later>|<top set>/);
 
   assert.equal(focus.coachingFocusCardHtml({ ...richFocus, available: false }), "");
-  assert.equal(focus.coachingFocusThreadHtml({ ...richFocus, lead: { ...richFocus.lead, title: "Use <thread>" } }).includes("Use &lt;thread&gt;"), true);
+  assert.equal(
+    focus
+      .coachingFocusThreadHtml({ ...richFocus, lead: { ...richFocus.lead, title: "Use <thread>" } })
+      .includes("Use &lt;thread&gt;"),
+    true
+  );
+
+  const recoveryThread = focus.coachingFocusThreadHtml({
+    ...richFocus,
+    lead: { domain: "recovery", title: "Take an earned recovery week", why: "Absorb the work you have already done." },
+  });
+  assert.match(recoveryThread, /data-cfocus-go="recovery"/);
+  assert.match(recoveryThread, /This block/);
+  assert.match(recoveryThread, /Absorb the work you have already done/);
+  assert.doesNotMatch(recoveryThread, /data-cfocus-go="stand"/);
 });
 
 test("coaching focus route bridge preserves deep-link destinations", () => {
