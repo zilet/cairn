@@ -981,7 +981,9 @@ CREATE TABLE IF NOT EXISTS request_metric_buckets (
   UNIQUE(hour, build_id, scope, protocol, method, route, status_class, latency_bucket_ms)
 );
 CREATE INDEX IF NOT EXISTS idx_request_metric_hour ON request_metric_buckets(hour DESC);
-CREATE INDEX IF NOT EXISTS idx_request_metric_route ON request_metric_buckets(build_id, protocol, route, hour DESC);
+-- idx_request_metric_route lives in the post-migration exec below: it references
+-- build_id, which pre-v62 databases only gain when migration v62 rebuilds this
+-- table — creating it here crashes boot BEFORE runMigrations can fix the table.
 
 -- Tiny generic key/value scratchpad for scheduler bookkeeping (last-run stamps
 -- for the miss-tolerant coach draft + the weekly proactive passes). Survives a
@@ -1047,6 +1049,8 @@ runMigrations(db);
 db.exec(`
 CREATE INDEX IF NOT EXISTS idx_agent_runs_build_created
   ON agent_runs(build_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_request_metric_route
+  ON request_metric_buckets(build_id, protocol, route, hour DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_activities_source_external
   ON activities(source, external_id)
   WHERE source IS NOT NULL AND external_id IS NOT NULL;

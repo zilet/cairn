@@ -7,8 +7,15 @@
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { db } from "../dist/db.js";
 import { MIGRATIONS, runMigrations } from "../dist/migrate.js";
+
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 const MAX_VERSION = MIGRATIONS.reduce((m, x) => Math.max(m, x.version), 0);
 
@@ -114,6 +121,47 @@ test("v61-v62 clear legacy dynamic telemetry and add build-scoped storage", () =
   assert.ok(metricColumns.has("build_id"));
   assert.ok(metricColumns.has("scope"));
   d.close();
+});
+
+// The deployed-Pi boot order: db.ts runs the SCHEMA exec BEFORE runMigrations, so a
+// statement in the main schema block that references a MIGRATED column (e.g. an index
+// on request_metric_buckets.build_id, which only v62's rebuild adds) crashes boot
+// before the migration can ever run — the exact crash-loop that took the live
+// deployment down. This spawns the real dist/db.js against a pre-v62 file DB, so the
+// true ordering (schema exec → runMigrations → post-migration indexes) is exercised.
+test("dist/db.js BOOTS a pre-v62 database — the schema exec never references migrated columns", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cairn-v61-boot-"));
+  const dbPath = join(dir, "cairn.db");
+  const staged = new DatabaseSync(dbPath);
+  // The Pi's pre-v62 table shape: no build_id column.
+  staged.exec(`CREATE TABLE request_metric_buckets (
+    hour TEXT NOT NULL, scope TEXT NOT NULL DEFAULT 'product', protocol TEXT NOT NULL,
+    method TEXT NOT NULL, route TEXT NOT NULL, status_class TEXT NOT NULL,
+    latency_bucket_ms INTEGER NOT NULL, count INTEGER NOT NULL DEFAULT 0,
+    total_duration_ms INTEGER NOT NULL DEFAULT 0, max_duration_ms INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(hour, scope, protocol, method, route, status_class, latency_bucket_ms)
+  );`);
+  staged.exec("PRAGMA user_version = 61;");
+  staged.close();
+
+  const dbModule = pathToFileURL(join(root, "dist/db.js")).href;
+  const boot = spawnSync(process.execPath, ["--input-type=module", "-e", `await import(${JSON.stringify(dbModule)});`], {
+    env: { ...process.env, DATA_DIR: dir, DB_PATH: dbPath },
+    timeout: 60_000,
+    encoding: "utf8",
+  });
+  assert.equal(boot.status, 0, `boot must survive a pre-v62 DB — stderr: ${(boot.stderr || "").slice(0, 500)}`);
+
+  const after = new DatabaseSync(dbPath, { readOnly: true });
+  assert.equal(Number(after.prepare("PRAGMA user_version").get().user_version), MAX_VERSION, "the ladder completed");
+  const cols = new Set(after.prepare("PRAGMA table_info(request_metric_buckets)").all().map((c) => c.name));
+  assert.ok(cols.has("build_id"), "v62 rebuilt the table with build_id");
+  assert.ok(
+    after.prepare("SELECT name FROM sqlite_master WHERE name = 'idx_request_metric_route'").get(),
+    "the build-scoped index exists (created post-migration)"
+  );
+  after.close();
+  rmSync(dir, { recursive: true, force: true });
 });
 
 test("migration versions are gapless 1..N, unique, and strictly ascending", () => {
