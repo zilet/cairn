@@ -456,9 +456,13 @@ function diagnosticsCard(data: unknown, options: SettingsDiagnosticsOptions = {}
   const slow = Array.isArray(pulse.slow) ? pulse.slow.map(settingsClientRecord) : [];
   const total = Math.max(0, Number(pulse.total) || 0);
   const priorBuildTotal = hasCurrentBuild ? Math.max(0, Number(currentBuild.prior_build_total) || 0) : 0;
-  const currentBuildLabel = hasCurrentBuild
-    ? [String(currentBuild.release || "").trim(), String(currentBuild.build_id || "").trim()].filter(Boolean).join(" @ ")
-    : "";
+  const currentRelease = hasCurrentBuild ? String(currentBuild.release || "").trim() : "";
+  const currentBuildId = hasCurrentBuild ? String(currentBuild.build_id || "").trim() : "";
+  const currentBuildLabel = currentRelease
+    ? currentBuildId && !currentRelease.includes(currentBuildId)
+      ? `${currentRelease}@${currentBuildId}`
+      : currentRelease
+    : currentBuildId;
   const days = Math.max(1, Number(row.window_days) || requestedDays);
   const sourceFilter = String(options.source || "all");
   const severityFilter = String(options.severity || "all");

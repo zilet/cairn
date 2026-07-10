@@ -396,7 +396,7 @@ test("current-build diagnostics determine health while prior-build incidents rem
       current_build: {
         scope: "current_build",
         build_id: `abc<123>`,
-        release: `1.1.0<rc>`,
+        release: `1.1.0<rc>@abc<123>`,
         total: 0,
         prior_build_total: 10,
         issues: [],
@@ -408,7 +408,8 @@ test("current-build diagnostics determine health while prior-build incidents rem
   );
   assert.match(cleanDeploy, /System is ready/);
   assert.match(cleanDeploy, /Healthy zero-event response/);
-  assert.match(cleanDeploy, /Current build 1\.1\.0&lt;rc&gt; @ abc&lt;123&gt;/);
+  assert.match(cleanDeploy, /Current build 1\.1\.0&lt;rc&gt;@abc&lt;123&gt;/);
+  assert.doesNotMatch(cleanDeploy, /abc&lt;123&gt;@abc&lt;123&gt;/);
   assert.match(cleanDeploy, /10 earlier-build events remain as history and do not affect current health/);
   assert.doesNotMatch(cleanDeploy, /old build error|Runtime errors need a look/);
 
@@ -433,6 +434,7 @@ test("current-build diagnostics determine health while prior-build incidents rem
     { readinessStatus: "ready", readiness }
   );
   assert.match(currentWarning, /Operational warnings captured/);
+  assert.match(currentWarning, /Current build 1\.1\.0@new-build/);
   assert.match(currentWarning, /current slow/);
   assert.match(currentWarning, /9 earlier-build events remain/);
 });
