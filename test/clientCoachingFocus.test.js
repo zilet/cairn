@@ -369,6 +369,23 @@ test("a recovery lead with a waiting draft renders a review LINK, not the draft 
   assert.doesNotMatch(focus.coachingFocusCardHtml(drafted), /Review your recovery week/);
 });
 
+test("a RUNNING recovery week renders no action at all — the lead is a confirmation", () => {
+  const { focus } = loadCoachingFocus();
+  const running = {
+    ...richFocus,
+    lead: {
+      domain: "recovery",
+      title: "Recovery week — absorb the work",
+      why: "This week is deliberately lighter.",
+      recovery_active: true,
+    },
+  };
+  const html = focus.coachingFocusCardHtml(running, { actions: true });
+  assert.doesNotMatch(html, /data-cfocus-act="recovery-week"/, "no draft ask mid-recovery-week");
+  assert.doesNotMatch(html, /Review your recovery week/, "no review link either — nothing to do");
+  assert.match(html, /Recovery week — absorb the work/, "the lead still speaks");
+});
+
 test("the plan-coach route lands on the Plan tab's Coach section (the waiting draft)", () => {
   const { focus, state, activated } = loadCoachingFocus();
   state.tab = "progress";

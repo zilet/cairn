@@ -295,3 +295,27 @@ test("plan editor controller serializes cardio and filters blank rows", () => {
     },
   ]);
 });
+
+test("the Plan recovery banner announces a reshaped week — drafted asks, applied informs, null stays silent", () => {
+  const harness = loadPlanEditorController([]);
+  const banner = harness.context.CairnPlanEditorController.planRecoveryBannerHtml;
+
+  // Drafted: actionable — review it, nothing changed yet.
+  const drafted = banner({ state: "drafted", proposal_id: 4, summary: "Working sets <halved>, same movements." });
+  assert.match(drafted, /YOUR RECOVERY WEEK/);
+  assert.match(drafted, /nothing changes until you review/i);
+  assert.match(drafted, /id="planRecoveryReview"/, "one tap to Drafts");
+  assert.match(drafted, /Working sets &lt;halved&gt;/, "the coach's summary, escaped");
+
+  // Applied: a calm heads-up — what this week is, what changed, when building resumes.
+  const applied = banner({ state: "applied", applied_on: "2026-07-10", until: "2026-07-17", summary: "Volume −50% across all days." });
+  assert.match(applied, /RECOVERY WEEK/);
+  assert.match(applied, /deliberately lighter/i);
+  assert.match(applied, /Volume −50% across all days\./);
+  assert.match(applied, /Back to building around/i);
+  assert.doesNotMatch(applied, /planRecoveryReview/, "nothing to review — it's running");
+
+  // Null / malformed: the plan renders untouched.
+  assert.equal(banner(null), "");
+  assert.equal(banner({ state: "someday" }), "");
+});

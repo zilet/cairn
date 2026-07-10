@@ -68,6 +68,53 @@ function planEditorRoot(): HTMLElement | null {
   return $("#planedit");
 }
 
+// The recovery-week banner — a reshaped week announces itself instead of arriving
+// silently. Two states from /plan/recovery-status: a DRAFT waiting ("review and
+// apply it", one tap to Drafts) or the APPLIED lighter week in flight (heads-up +
+// the coach's own summary of what changed + when building resumes). Painted
+// asynchronously into its slot; a null status leaves the plan untouched.
+function planRecoveryBannerHtml(rs: import("../contracts/client.js").ClientRecoveryWeekStatus): string {
+  if (!rs || (rs.state !== "drafted" && rs.state !== "applied")) return "";
+  if (rs.state === "drafted") {
+    return `<div class="plan-recovery-banner reveal">
+      <span class="lbl plan-recovery-mast">YOUR RECOVERY WEEK</span>
+      <p class="plan-recovery-line">Drafted and waiting — nothing changes until you review and apply it.</p>
+      ${rs.summary ? `<p class="plan-recovery-summary">${escHtml(rs.summary)}</p>` : ""}
+      <button class="draftbtn plan-recovery-review" id="planRecoveryReview" type="button">Review and apply it →</button>
+    </div>`;
+  }
+  const until = fmtDate(rs.until);
+  return `<div class="plan-recovery-banner plan-recovery-on reveal">
+    <span class="lbl plan-recovery-mast">RECOVERY WEEK</span>
+    <p class="plan-recovery-line">Heads up — this week is deliberately lighter: about half the working volume, same movements, crisp easy efforts. Don't chase PRs; this is where the adaptation lands.</p>
+    ${rs.summary ? `<p class="plan-recovery-summary">${escHtml(rs.summary)}</p>` : ""}
+    ${until ? `<p class="plan-recovery-until">Back to building around ${escHtml(until)}.</p>` : ""}
+  </div>`;
+}
+
+// A local date-label helper (rs.until is a plain YYYY-MM-DD local day).
+function fmtDate(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso ?? ""));
+  if (!m) return "";
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
+}
+
+function loadPlanRecoveryBanner(token: number): void {
+  void api("/plan/recovery-status")
+    .then((rs) => {
+      if (token !== pollToken || state.tab !== "plan") return;
+      const slot = $("#planRecoverySlot");
+      if (!slot) return;
+      slot.innerHTML = planRecoveryBannerHtml(rs as import("../contracts/client.js").ClientRecoveryWeekStatus);
+      $("#planRecoveryReview")?.addEventListener("click", () => {
+        state.planJump = "coach";
+        activateTab("plan");
+      });
+    })
+    .catch(() => {});
+}
+
 async function renderPlanEditor(): Promise<void> {
   const helpers = planHelpers();
   const form = planForm();
@@ -92,10 +139,11 @@ async function renderPlanEditor(): Promise<void> {
 
   const icsUrl = withToken("/api/plan.ics");
   const calFooter = helpers.calendarFooterHtml(plan, location.host, icsUrl);
-  view.innerHTML = segBar("edit", planSeg()) + `<div id="planedit"></div>
+  view.innerHTML = segBar("edit", planSeg()) + `<div id="planRecoverySlot"></div><div id="planedit"></div>
     <button id="addDay" class="ghostbtn" style="width:100%;text-align:center;padding:11px;margin-top:8px">+ Add day</button>
     <div id="planstatus" style="margin-top:8px;color:var(--muted);font-size:.82rem"></div>${calFooter}`;
   wireSeg(PLAN_HANDLERS);
+  loadPlanRecoveryBanner(token);
 
   const model: PlanEditorControllerModelDay[] = (Array.isArray(plan) ? plan : []).map((day) => helpers.dayModelFromPlan(day));
   const editing = new Set<number>();
@@ -242,6 +290,7 @@ async function renderPlanEditor(): Promise<void> {
 const CAIRN_PLAN_EDITOR_CONTROLLER = {
   render: renderPlanEditor,
   serializeDays: (model: PlanEditorControllerModelDay[]) => planForm().serializeDays(model),
+  planRecoveryBannerHtml,
 };
 
 Object.assign(globalThis, {

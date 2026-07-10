@@ -42,6 +42,9 @@ export interface FocusItem {
   // link into Coach instead of the (now-stale) draft button. State in, state out —
   // the conductor never queries; the assembler passes recoveryDraftPending.
   draft_pending?: boolean;
+  // A recovery week currently RUNNING (applied and inside its window): the surface
+  // renders no action at all — the lead is a confirmation, not an ask.
+  recovery_active?: boolean;
 }
 
 export interface CoachingRetest {
@@ -260,6 +263,9 @@ export interface CoachingFocusInput {
   // lead then speaks STATE ("drafted — review and apply it") instead of re-offering
   // the action, and the Program surface renders a review link, not the draft button.
   recoveryDraftPending?: unknown;
+  // Whether the applied recovery week is RUNNING right now — the lead becomes a calm
+  // confirmation ("recovery week is on, absorb the work") with no action at all.
+  recoveryWeekActive?: unknown;
 }
 
 interface ProgramBlockSummaryInput {
@@ -331,8 +337,9 @@ function cleanFocusItem(item: FocusItem | null): FocusItem | null {
   const swap = cleanSwap(item.swap);
   if (swap) out.swap = swap;
   else delete out.swap;
-  // draft_pending is a strict boolean flag — anything else drops.
+  // draft_pending / recovery_active are strict boolean flags — anything else drops.
   if (out.draft_pending !== true) delete out.draft_pending;
+  if (out.recovery_active !== true) delete out.recovery_active;
   return out;
 }
 
@@ -434,6 +441,24 @@ function recoveryCandidate(inp: CoachingFocusInput): Candidate | null {
   const hrv = num(inp.recovery?.delta?.hrv);
   const rhr = num(inp.recovery?.delta?.rhr);
   const recoveringDown = hrv != null && hrv < 0 && rhr != null && rhr > 2;
+  // The applied recovery week RUNNING is its own lead — a calm confirmation, no
+  // action (the plan already is the lighter week), regardless of whether the
+  // original trigger signals still read due.
+  const active = inp.recoveryWeekActive === true;
+  if (active) {
+    return {
+      key: "recovery-deload",
+      leverage: 5,
+      slot: "lead",
+      item: {
+        domain: "recovery",
+        title: "Recovery week — absorb the work",
+        why: "This week is deliberately lighter: about half the working volume, same movements, crisp easy efforts. The adaptation you've been training for lands now — don't chase PRs, sleep big.",
+        recovery_active: true,
+        based_on: ["You applied the recovery week", "Back to building when the week is done"],
+      },
+    };
+  }
   if (!deloadDue && !recoveringDown) return null;
   // When the one-tap draft already landed, the lead speaks the STATE — "drafted,
   // review it" — instead of re-offering the same action (an elite coach tells you

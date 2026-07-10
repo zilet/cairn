@@ -16,8 +16,9 @@ import { lsqSlopePerDay } from "./health.js";
 import { invalidateDayRead } from "./intelligence.js";
 import { getActiveNutritionTarget, setNutritionTarget } from "./nutrition.js";
 import { type ClampAdjustment, type RunPrescription, applyPlanChange, replacePlan, setWeeklyRuns } from "./plan.js";
+import { getAppState, setAppState } from "./app-state.js";
 import { getProgress } from "./sessions.js";
-import { LB_PER_KG, localDateISO } from "./shared.js";
+import { addDaysISO, LB_PER_KG, localDateISO } from "./shared.js";
 import { bumpTrainingDataVersion } from "./training-cache.js";
 
 // ---------- exercise guide ----------
@@ -157,6 +158,56 @@ export function supersedeRecoveryWeekDrafts(exceptId?: number) {
     retired++;
   }
   return retired;
+}
+
+// The recovery-week story as ONE state the surfaces read — an elite coach doesn't
+// hand you a silently-halved week. Three states: a draft is waiting ('drafted' —
+// actionable, wins over informational), the applied week is running ('applied',
+// active for RECOVERY_WEEK_ACTIVE_DAYS from the apply stamp), or null. The Plan
+// banner, the conductor's recovery lead, and the Program button all speak from this.
+export const RECOVERY_WEEK_ACTIVE_DAYS = 7;
+const RECOVERY_WEEK_APPLIED_KEY = "recovery_week_applied";
+
+export type RecoveryWeekStatus =
+  | { state: "drafted"; proposal_id: number; summary: string | null }
+  | { state: "applied"; applied_on: string; until: string; summary: string | null }
+  | null;
+
+export function recoveryWeekStatus(): RecoveryWeekStatus {
+  const draft = pendingRecoveryDraft();
+  if (draft) {
+    const p = getProposal(draft.id);
+    return { state: "drafted", proposal_id: draft.id, summary: proposalSummary(p) };
+  }
+  const appliedOn = String(getAppState(RECOVERY_WEEK_APPLIED_KEY) ?? "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(appliedOn)) return null;
+  const until = addDaysISO(appliedOn, RECOVERY_WEEK_ACTIVE_DAYS);
+  if (!until || localDateISO() >= until) return null;
+  const p = db
+    .prepare(
+      `SELECT * FROM plan_proposals
+        WHERE status = 'applied' AND instruction LIKE ?
+        ORDER BY id DESC LIMIT 1`
+    )
+    .get(`${RECOVERY_WEEK_INSTRUCTION_PREFIX}%`) as any;
+  return { state: "applied", applied_on: appliedOn, until, summary: proposalSummary(p ? hydrateProposal(p) : null) };
+}
+
+function proposalSummary(p: any): string | null {
+  const s = String(p?.parsed?.summary ?? "").trim();
+  return s ? s.slice(0, 300) : null;
+}
+
+// Applying a recovery-week draft stamps its window so the plan (and the conductor)
+// can SAY this week is deliberately light. Bookkeeping — never blocks the apply.
+function stampRecoveryWeekIfApplies(p: any): void {
+  try {
+    if (String(p?.instruction ?? "").startsWith(RECOVERY_WEEK_INSTRUCTION_PREFIX)) {
+      setAppState(RECOVERY_WEEK_APPLIED_KEY, localDateISO());
+    }
+  } catch {
+    /* never blocks the apply */
+  }
 }
 
 // A fresh weekly run-plan draft retires any prior un-applied one (agent
@@ -660,6 +711,7 @@ export function applyProposal(id: number, opts: { supersedeSiblings?: boolean; d
   if (Array.isArray(p.parsed.days)) {
     replacePlan(p.parsed.days);
     setProposalStatus(id, "applied");
+    stampRecoveryWeekIfApplies(p);
     if (opts.supersedeSiblings !== false) supersedeSiblingTrainingDrafts(id);
     const result = { ok: true, id, restructured: true, days: p.parsed.days.length };
     recordAppliedProposalDecision(p, result, opts.decisionId);
@@ -727,6 +779,7 @@ export function applyProposal(id: number, opts: { supersedeSiblings?: boolean; d
     };
   }
   setProposalStatus(id, "applied");
+  stampRecoveryWeekIfApplies(p);
   if (opts.supersedeSiblings !== false) supersedeSiblingTrainingDrafts(id);
   // An applied target tweak / added movement / week of runs can change today's read —
   // bust the cached Brief so the next open reflects the change, not the stale plan.

@@ -16,7 +16,7 @@ import { jaccard, memNorm, memoryForCoach, recentLearnings } from "./memory.js";
 import { capStr, getDayIntake, mealPlanForCoach } from "./nutrition.js";
 import { bodyMetricsContextSlice } from "./body-metrics.js";
 import { getPlan } from "./plan.js";
-import { computeGoalCheck, effectiveGoalMode, getEnduranceGoal, getProfile, listWeight, pendingRecoveryDraft } from "./profile.js";
+import { computeGoalCheck, effectiveGoalMode, getEnduranceGoal, getProfile, listWeight, recoveryWeekStatus } from "./profile.js";
 import { bodyCompositionRead } from "./standing.js";
 import {
   directiveFeedbackForCoach,
@@ -927,14 +927,19 @@ function getCoachContextFromSnapshot(): CoachContext {
             return null;
           }
         })(),
-        // Whether a one-tap recovery-week draft is already waiting in Coach — the
-        // recovery lead then reads as STATE ("drafted — review it"), not a
-        // repeatable action, and the Program button becomes a review link.
-        recoveryDraftPending: (() => {
+        // The recovery-week state machine (due → drafted → applied): a waiting draft
+        // flips the Program button into a review link; an APPLIED week in flight
+        // makes the lead a calm confirmation ("recovery week is on") with no action
+        // at all — never the same ask twice.
+        ...(() => {
           try {
-            return pendingRecoveryDraft() != null;
+            const rw = recoveryWeekStatus();
+            return {
+              recoveryDraftPending: rw?.state === "drafted",
+              recoveryWeekActive: rw?.state === "applied",
+            };
           } catch {
-            return false;
+            return {};
           }
         })(),
       });

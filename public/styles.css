@@ -5260,6 +5260,17 @@ button.hmk-row:active{background:var(--card-2)}
    calm "it's waiting for you" pointer (sage), not another ask */
 .cfocus-review{margin-top:10px;background:var(--sage-bg);
   color:var(--sage-deep);border-color:transparent}
+
+/* the Plan tab's recovery-week banner — a reshaped week announces itself: a
+   waiting draft asks for review; the applied week reads as a calm heads-up
+   (sage = restorative, not an alarm) */
+.plan-recovery-banner{background:var(--card);border:1px solid var(--line);
+  border-left:3px solid var(--sage);border-radius:14px;padding:14px 16px;margin:2px 0 14px}
+.plan-recovery-mast{display:block;color:var(--sage-text);letter-spacing:.08em;margin-bottom:6px}
+.plan-recovery-line{margin:0;font-size:.92rem;line-height:1.5;color:var(--ink)}
+.plan-recovery-summary{margin:8px 0 0;font-size:.84rem;line-height:1.45;color:var(--muted)}
+.plan-recovery-until{margin:8px 0 0;font-size:.8rem;color:var(--sage-text)}
+.plan-recovery-review{margin-top:11px}
 .cfocus-full-link{display:block;background:none;border:none;padding:6px 0 0;cursor:pointer;
   font-size:.78rem;font-weight:600;color:var(--sage-text);text-align:left;
   transition:transform .15s ease,color .15s ease}

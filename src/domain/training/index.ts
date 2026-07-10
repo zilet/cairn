@@ -11,6 +11,7 @@ export {
   getEnduranceGoal,
   getExerciseDetail,
   listProposals,
+  recoveryWeekStatus,
   setProposalStatus,
   supersedeAutoProgressionDrafts,
 } from "../../repo/profile.js";
