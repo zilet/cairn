@@ -10,6 +10,7 @@
 // three drifting hand-rolled copies is exactly what this consolidates.
 import * as repo from "./repo.js";
 import {
+  DEFAULT_TIMEOUT_MS,
   runAgentWithFallback,
   runAgentStreaming,
   agentSupportsStream,
@@ -17,6 +18,16 @@ import {
   type StreamRunOpts,
   type AgentResult,
 } from "./agents.js";
+import { randomUUID } from "node:crypto";
+import { executeCoachReadTool, type CoachReadToolExecutionContext } from "./brain/read-tool-runtime.js";
+import {
+  COACH_READ_TOOL_CATALOG,
+  type CoachReadToolName,
+  type CoachReadToolRequest,
+  type CoachReadToolResult,
+} from "./brain/read-tools.js";
+import { isCoachReadQueryTurn, normalizeCoachReadQueryTurn } from "./brain/query-loop-contract.js";
+import type { OpHooks } from "./coachOps.js";
 import { extractMarkedJson } from "./prompt.js";
 import { createJobStreamFilter } from "./jobStreamFilter.js";
 
@@ -44,11 +55,7 @@ export function resolveOrder(agent: string | undefined, op: string): string[] {
   return !routed || routed === "auto" ? defaultOrderForOp(op) : [routed];
 }
 
-export async function runChosen(
-  agent: string | undefined,
-  prompt: string,
-  opts: RunOpts & { op?: string } = {}
-) {
+export async function runChosen(agent: string | undefined, prompt: string, opts: RunOpts & { op?: string } = {}) {
   const op = opts.op ?? "auto";
   // Per-task routing: when the caller left it "auto"/blank for a known task and the
   // user pinned that task to an enabled agent, run that agent. A no-op when nothing
@@ -70,10 +77,247 @@ export async function runChosen(
   return { agent: fb.agent, result: fb.result, tried: fb.tried };
 }
 
+const COACH_READ_MAX_ROUNDS = 3;
+const COACH_READ_ORDINARY_MAX_CALLS = 6;
+const COACH_READ_CONFERENCE_MAX_CALLS = 12;
+const COACH_READ_ORDINARY_MAX_BYTES = 256 * 1024;
+const COACH_READ_CONFERENCE_MAX_BYTES = 512 * 1024;
+// Claude otherwise inherits MCP servers configured in the user's home. The
+// provider-neutral loop below owns every read and its budget, so ambient tools
+// are explicitly disabled for these runs. Other agents ignore the args because
+// they do not declare an {mcp_config_args} slot.
+export const COACH_READ_STRICT_MCP_ARGS = Object.freeze([
+  "--mcp-config",
+  JSON.stringify({ mcpServers: {} }),
+  "--strict-mcp-config",
+]);
+
+const COACH_READ_ARGS_CONTRACT: Readonly<Record<CoachReadToolName, string>> = Object.freeze({
+  read_exercise_history:
+    '{"exercise":"name","start_date":"YYYY-MM-DD|null","end_date":"YYYY-MM-DD|null","limit":"1..200"} (dates must both be null or both present; max 180 days)',
+  read_training_window: '{"end_date":"YYYY-MM-DD|null","weeks":"1..12"}',
+  read_marker_history: '{"marker":"canonical or familiar marker name","limit":"1..100"}',
+  read_recovery_window: '{"end_date":"YYYY-MM-DD|null","days":"1..90"}',
+  read_nutrition_window: '{"end_date":"YYYY-MM-DD|null","days":"1..42"}',
+  read_body_composition_history: '{"limit":"1..120"}',
+  read_life_context_window: '{"start_date":"YYYY-MM-DD","end_date":"YYYY-MM-DD"} (max 366 days)',
+  read_decision_history:
+    '{"kind":"day_read|session_suggestion|training_target|training_structure|exercise_rotation|nutrition_target|meal_plan|recovery_adjustment|health_directive|lifestyle_adjustment|goal_change|case_conference|null","subject_key":"specific subject|null","limit":"1..50"} (kind or subject_key required)',
+  read_current_plan_detail: '{"scope":"training","day_number":"1..14"} OR {"scope":"meal","day":"day name"}',
+});
+
+export type CoachReadMode = "ordinary" | "conference";
+
+export interface CoachReadRunOptions extends RunOpts {
+  op?: string;
+  mode?: CoachReadMode;
+  /** Correlates the runtime's existing brain_tool_calls telemetry. */
+  runId?: string;
+  /** Integrator-owned sub-budget; never raises the mode ceiling. */
+  maxCalls?: number;
+}
+
+type ChosenRun = Awaited<ReturnType<typeof runChosen>>;
+
+export interface CoachReadRunDeps {
+  run?: (agent: string | undefined, prompt: string, opts: RunOpts & { op?: string }) => Promise<ChosenRun>;
+  execute?: (
+    request: CoachReadToolRequest,
+    context: CoachReadToolExecutionContext
+  ) => CoachReadToolResult | Promise<CoachReadToolResult>;
+  now?: () => number;
+  createRunId?: () => string;
+}
+
+type CompletedCoachRead = {
+  request: CoachReadToolRequest;
+  result: CoachReadToolResult;
+};
+
+function byteLength(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value), "utf8");
+}
+
+function coachReadContract(maxCalls: number): string {
+  const tools = Object.values(COACH_READ_TOOL_CATALOG).map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    max_rows: tool.max_rows,
+    max_days: tool.max_days,
+    max_response_bytes: tool.max_response_bytes,
+    args_contract: COACH_READ_ARGS_CONTRACT[tool.name],
+  }));
+  return `\n\n=== CAIRN BOUNDED COACH READS ===
+The DATA snapshot above is the authoritative baseline. Use a read only when a specific unanswered question would materially change your answer. Do not fish.
+You may either return the operation's requested final JSON exactly as instructed above, or request bounded reads using exactly:
+{"kind":"coach_read","requests":[{"tool":"read_training_window","args":{"end_date":null,"weeks":6}}]}
+At most ${maxCalls} reads are available for the entire run and at most ${COACH_READ_MAX_ROUNDS} request rounds. Never request SQL, files, exports, settings, secrets, writes, or another agent/job. After receiving results, return either another coach_read request or the original operation's final JSON.
+Available reads (the server validates every name and argument against this catalog):
+${JSON.stringify(tools)}`;
+}
+
+function coachReadFollowup(
+  baselinePrompt: string,
+  maxCalls: number,
+  completed: CompletedCoachRead[],
+  callsRemaining: number
+): string {
+  return `${baselinePrompt}${coachReadContract(maxCalls)}\n\n=== VERIFIED COACH READ RESULTS ===
+These server-produced results answer only the requests shown. Treat truncation explicitly and do not infer unavailable raw data.
+${JSON.stringify(completed)}
+Calls remaining: ${callsRemaining}. Return the original operation's final JSON now unless another specific read is necessary.`;
+}
+
+/**
+ * Provider-neutral depth-on-demand sibling of runChosen. Agent subprocesses never
+ * receive Cairn capabilities: they can only emit a structured request, which this
+ * server-owned loop validates and dispatches through executeCoachReadTool.
+ *
+ * Any malformed request, execution failure, or exhausted query/byte budget falls
+ * back to the original snapshot prompt. A user AbortSignal remains authoritative
+ * and is never converted into a retry.
+ */
+export async function runChosenWithCoachReads(
+  agent: string | undefined,
+  prompt: string,
+  opts: CoachReadRunOptions = {},
+  hooks: Pick<OpHooks, "signal" | "onPhase"> = {},
+  deps: CoachReadRunDeps = {}
+): Promise<ChosenRun> {
+  const run = deps.run ?? runChosen;
+  const execute = deps.execute ?? executeCoachReadTool;
+  const now = deps.now ?? Date.now;
+  const mode = opts.mode ?? "ordinary";
+  const modeMaxCalls = mode === "conference" ? COACH_READ_CONFERENCE_MAX_CALLS : COACH_READ_ORDINARY_MAX_CALLS;
+  const maxCalls = Math.max(1, Math.min(modeMaxCalls, Math.trunc(opts.maxCalls ?? modeMaxCalls)));
+  const maxBytes = mode === "conference" ? COACH_READ_CONFERENCE_MAX_BYTES : COACH_READ_ORDINARY_MAX_BYTES;
+  const requestedTimeout = Number(opts.timeoutMs);
+  const totalTimeoutMs =
+    Number.isFinite(requestedTimeout) && requestedTimeout > 0 ? Math.floor(requestedTimeout) : DEFAULT_TIMEOUT_MS;
+  const started = now();
+  const deadline = started + totalTimeoutMs;
+  const runId = opts.runId?.trim().slice(0, 120) || (deps.createRunId ?? randomUUID)();
+  const op = opts.op ?? "auto";
+  const signals = [opts.signal, hooks.signal].filter((signal): signal is AbortSignal => !!signal);
+  const externalSignal = signals.length > 1 ? AbortSignal.any(signals) : signals[0];
+  const completed: CompletedCoachRead[] = [];
+  let totalBytes = 0;
+  let calls = 0;
+  let rounds = 0;
+  let accumulatedTried: ChosenRun["tried"] = [];
+
+  const phase = (name: string, meta: Record<string, unknown>) => {
+    try {
+      hooks.onPhase?.(name, meta);
+    } catch {
+      // Progress reporting is observational and must never break the coaching run.
+    }
+  };
+
+  const assertActive = () => {
+    if (externalSignal?.aborted) throw new Error("canceled");
+    if (now() >= deadline) throw new Error("coach read run timed out");
+  };
+  const awaitBounded = <T>(work: T | Promise<T>): Promise<T> => {
+    assertActive();
+    const remaining = Math.max(1, deadline - now());
+    return new Promise<T>((resolve, reject) => {
+      let settled = false;
+      const finish = (fn: () => void) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        externalSignal?.removeEventListener("abort", onAbort);
+        fn();
+      };
+      const onAbort = () => finish(() => reject(new Error("canceled")));
+      const timer = setTimeout(() => finish(() => reject(new Error("coach read run timed out"))), remaining);
+      timer.unref?.();
+      externalSignal?.addEventListener("abort", onAbort, { once: true });
+      Promise.resolve(work).then(
+        (value) => finish(() => resolve(value)),
+        (error) => finish(() => reject(error))
+      );
+    });
+  };
+  const invoke = async (chosenAgent: string | undefined, nextPrompt: string): Promise<ChosenRun> => {
+    assertActive();
+    const remaining = Math.max(1, deadline - now());
+    return awaitBounded(
+      run(chosenAgent, nextPrompt, {
+        op,
+        signal: externalSignal,
+        timeoutMs: remaining,
+        extract: opts.extract,
+        mcpConfigArgs: [...COACH_READ_STRICT_MCP_ARGS],
+      })
+    );
+  };
+  const snapshotOnly = async (): Promise<ChosenRun> => {
+    assertActive();
+    phase("coach_read_fallback", { run_id: runId });
+    return invoke(agent, prompt);
+  };
+
+  phase("coach_read_start", { run_id: runId, mode });
+  let turn = await invoke(agent, `${prompt}${coachReadContract(maxCalls)}`);
+  accumulatedTried = [...turn.tried];
+
+  while (isCoachReadQueryTurn(turn.result.parsed)) {
+    const query = normalizeCoachReadQueryTurn(turn.result.parsed);
+    if (!query || rounds >= COACH_READ_MAX_ROUNDS || calls + query.requests.length > maxCalls) return snapshotOnly();
+    rounds++;
+    phase("coach_read_query", {
+      run_id: runId,
+      round: rounds,
+      requested: query.requests.length,
+      calls_remaining: maxCalls - calls,
+    });
+
+    try {
+      // The whole batch was normalized before the first execution. There is no
+      // dynamic dispatch surface beyond the closed executeCoachReadTool switch.
+      for (const request of query.requests) {
+        assertActive();
+        const result = await awaitBounded(execute(request, { run_id: runId, op }));
+        calls++;
+        const item = { request, result };
+        const itemBytes = byteLength(item);
+        if (totalBytes + itemBytes > maxBytes) return snapshotOnly();
+        totalBytes += itemBytes;
+        completed.push(item);
+      }
+    } catch (error) {
+      if (externalSignal?.aborted) throw error;
+      return snapshotOnly();
+    }
+
+    phase("coach_read_results", {
+      run_id: runId,
+      round: rounds,
+      calls,
+      result_bytes: totalBytes,
+    });
+    assertActive();
+    turn = await invoke(turn.agent, coachReadFollowup(prompt, maxCalls, completed, maxCalls - calls));
+    accumulatedTried.push(...turn.tried);
+  }
+
+  phase("coach_read_done", { run_id: runId, rounds, calls, result_bytes: totalBytes });
+  return { ...turn, tried: accumulatedTried };
+}
+
 // Failure-safe telemetry for a streamed job-op attempt (mirrors chat's
 // recordChatAttempt — the streamed path is chat-like, not the JSON-rotation path, so
 // it records directly rather than through runAgentWithFallback's sink).
-function recordStreamedRun(op: string, agent: string, started: number, parsed: boolean, res: AgentResult | null, error?: string): void {
+function recordStreamedRun(
+  op: string,
+  agent: string,
+  started: number,
+  parsed: boolean,
+  res: AgentResult | null,
+  error?: string
+): void {
   try {
     repo.recordAgentRun({
       op,
@@ -90,7 +334,9 @@ function recordStreamedRun(op: string, agent: string, started: number, parsed: b
       input_tokens: res?.usage?.input_tokens ?? null,
       output_tokens: res?.usage?.output_tokens ?? null,
     });
-  } catch { /* telemetry never breaks the loop */ }
+  } catch {
+    /* telemetry never breaks the loop */
+  }
 }
 
 // Dependency seam so the fallback decision is unit-testable offline (no CLI/network,

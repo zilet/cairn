@@ -1,7 +1,7 @@
 {
   "claude": {
     "command": "claude",
-    "args": ["{file_access_args}", "-p", "{prompt}"],
+    "args": ["{file_access_args}", "{mcp_config_args}", "-p", "{prompt}"],
     "input": "arg",
     "description": "Claude Code (Anthropic Pro/Max). Auth: ~/.claude.",
     "env_required": [],
@@ -15,12 +15,12 @@
     "file_access_args": ["--add-dir", "{data_dir}"],
     "stream": {
       "format": "claude",
-      "args": ["{file_access_args}", "-p", "{prompt}", "--output-format", "stream-json", "--include-partial-messages", "--verbose"]
+      "args": ["{file_access_args}", "{mcp_config_args}", "-p", "{prompt}", "--output-format", "stream-json", "--include-partial-messages", "--verbose"]
     }
   },
   "codex": {
     "command": "codex",
-    "args": ["exec", "--sandbox", "read-only", "--skip-git-repo-check", "{file_access_args}", "{prompt}", "{image_args}"],
+    "args": ["exec", "{model_args}", "--sandbox", "read-only", "--skip-git-repo-check", "{file_access_args}", "{prompt}", "{image_args}"],
     "input": "arg",
     "description": "OpenAI Codex (Sign in with ChatGPT). Auth: ~/.codex.",
     "env_required": [],

@@ -60,6 +60,15 @@ test("update_check_enabled round-trips and defaults ON for old NULL rows", () =>
   assert.equal(repo.getSettings().update_check_enabled, true);
 });
 
+test("lead_mode is one validated autonomy control and defaults to lead", () => {
+  assert.equal(repo.getSettings().lead_mode, "lead");
+  assert.equal(repo.setSettings({ lead_mode: "announce_first" }).lead_mode, "announce_first");
+  assert.equal(repo.setSettings({ lead_mode: "review_everything" }).lead_mode, "review_everything");
+  assert.equal(repo.setSettings({ lead_mode: "unsafe-auto-everything" }).lead_mode, "review_everything");
+  db.prepare("UPDATE settings SET lead_mode = NULL WHERE id = 1").run();
+  assert.equal(repo.getSettings().lead_mode, "lead");
+});
+
 test("meal_prefs round-trips (trimmed, capped at 2000 chars)", () => {
   repo.setSettings({ meal_prefs: "  I train fasted most mornings  " });
   assert.equal(repo.getSettings().meal_prefs, "I train fasted most mornings");

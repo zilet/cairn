@@ -213,6 +213,7 @@ const mkData = (sites, profileOver = {}) => ({
   trends: { window_days: 180, sites: [], weight: { key: "weight", direction: null } },
   needs_height: false,
   sites: [],
+  measurement_issues: [],
   profile: { height_in: 71, sex: "male", weight_lb: 190, goal_weight_lb: 178, ...profileOver },
   comp: { scales: [], focus: null, heading: null },
 });
@@ -230,32 +231,40 @@ test("the vendored library renders the Train figure with tappable, breathing mus
   assert.doesNotMatch(stand, /cbf-pulse/);
 });
 
-test("ratio context uses clinical waist guides without derived physique targets", () => {
+test("ratio rows stay clinical; the reference physique renders as its own references-not-mandates section", () => {
   const { bm } = loadElite();
   const model = bm.bmStandModel(mkData({ waist_in: 40, hip_in: 42, shoulder_in: 44, chest_in: 41, upper_arm_in: 14, calf_in: 15 }), "in");
   const rows = bm.bmStandRatioRows(model, "in");
   assert.match(rows, /Ratios &amp; context|Ratios & context/);
   assert.match(rows, /WAIST\/HEIGHT/);
   assert.match(rows, /clinical &lt;0\.50|clinical <0\.50/);
-  assert.match(rows, /SHOULDER\/WAIST/);
-  assert.match(rows, /tracking only/);
-  assert.match(rows, /no target/);
+  assert.doesNotMatch(rows, /SHOULDER\/WAIST/, "tracking ratios yield to the reference rows when height is known");
   assert.doesNotMatch(rows, /Reference physique/);
-  assert.doesNotMatch(rows, /WEIGHT/);
-  assert.doesNotMatch(rows, /→/, "no current-to-target circumference arrows");
+  const refRows = bm.bmReferenceRows(model, "in");
+  assert.match(refRows, /Reference physique · 5′11″/);
+  assert.match(refRows, /SHOULDER/);
+  assert.match(refRows, /→/, "each measured site reads current → reference");
+  assert.match(refRows, /References, not mandates/);
+  assert.doesNotMatch(refRows, /WEIGHT/);
+  assert.doesNotMatch(refRows, /\b\d{1,3}\s*\/\s*100\b/, "no x/100 grade");
 });
 
-test("site context only warns on clinical central-adiposity ratios", () => {
+test("site context warns only on clinical central-adiposity; other sites read against the reference", () => {
   const { bm } = loadElite();
   const model = bm.bmStandModel(mkData({ waist_in: 40, hip_in: 42, chest_in: 41 }), "in");
   assert.equal(bm.bmSiteContext(model, "waist_in").chip.tone, "warn", "a high waist-height ratio is a warn");
   assert.equal(bm.bmSiteContext(model, "hip_in").chip.tone, "warn", "a high waist-hip ratio is a warn");
   const chest = bm.bmSiteContext(model, "chest_in");
-  assert.equal(chest.chip.text, "tracking only");
-  assert.equal(chest.guide, "no target measurement");
+  assert.equal(chest.chip.text, "below reference", "a muscle site under the reference is a calm watch, never a warn");
+  assert.equal(chest.chip.tone, "gold");
+  assert.match(chest.guide, /reference for your height/);
+  assert.match(chest.why, /not a target/);
+  // Without a height there is no reference — the site falls back to tracking-only.
+  const noHeight = bm.bmStandModel(mkData({ chest_in: 41 }, { height_in: null }), "in");
+  assert.equal(bm.bmSiteContext(noHeight, "chest_in").chip.text, "tracking only");
 });
 
-test("the elite Stand figure: measured sites become tap targets, selection glows, no score leaks", () => {
+test("the elite Stand figure: measured silhouette over the reference ghost, tap targets, no score leaks", () => {
   const { bm, F } = loadElite();
   const model = bm.bmStandModel(mkData({ waist_in: 40, chest_in: 42, thigh_in: 23 }), "in");
   const svg = bm.bmStandFigureSvg(F, model, "waist_in");
@@ -264,28 +273,79 @@ test("the elite Stand figure: measured sites become tap targets, selection glows
   assert.match(svg, /data-site="chest_in"/);
   assert.doesNotMatch(svg, /data-site="hip_in"/, "an untaped site gets no callout");
   assert.match(svg, /url\(#bmfig2-warn\)/, "a high waist-height ratio glows terracotta when selected");
-  assert.match(svg, /stroke-dasharray="4.5 3.5"/, "the reference-waist chalk trace draws above the band");
-  assert.match(svg, /class="bmfig2-surface"/, "plain Stand body carries subtle anatomy planes");
-  assert.doesNotMatch(svg, /data-group=/, "the anatomy relief is not the tappable muscle map");
+  assert.match(svg, /stroke-dasharray="5 4"/, "the reference physique draws as a dashed ghost");
+  assert.match(svg, /stroke-dasharray="4.5 3.5"/, "the clinical waist chalk trace draws above the guide");
+  assert.match(svg, /dashed outline is the reference physique/, "the ghost is announced to assistive tech");
+  assert.doesNotMatch(svg, /data-group=/, "the Stand plate is not the tappable muscle map");
   assert.doesNotMatch(svg, /NaN/);
   assert.doesNotMatch(svg, /\b\d{1,3}\s*\/\s*100\b/, "no x/100 grade");
   const lean = bm.bmStandFigureSvg(F, bm.bmStandModel(mkData({ waist_in: 33 }), "in"), "waist_in");
-  assert.doesNotMatch(lean, /stroke-dasharray="4.5 3.5"/, "a lean waist draws no target trace");
+  assert.doesNotMatch(lean, /stroke-dasharray="4.5 3.5"/, "a lean waist draws no chalk trace");
+  // Without a height the figure still draws, but no reference is implied.
+  const noHeight = bm.bmStandFigureSvg(F, bm.bmStandModel(mkData({ waist_in: 40 }, { height_in: null }), "in"), "waist_in");
+  assert.doesNotMatch(noHeight, /stroke-dasharray="5 4"/, "no ghost from a stand-in height");
+  assert.doesNotMatch(noHeight, /NaN/);
 });
 
-test("the neutral male Stand baseline is a complete average body and surface definition follows body fat", () => {
+test("the measured model is honest: reference tape reproduces the reference figure, a real tape reshapes it", () => {
+  const { F } = loadElite();
+  const ref = F.referenceTape("male", 70);
+  assert.equal(ref.waist, Math.round(70 * 0.46 * 2) / 2, "reference waist is just under half height");
+  assert.ok(Math.abs(ref.arm - ref.calf) <= 0.5, "classical balance: arm ≈ calf");
+  const sil = F.silhouette("male");
+  const atRef = F.measuredSilhouette("male", ref, 70);
+  assert.equal(atRef.torso, sil.torso, "a full reference tape is pixel-identical to the authored figure");
+  assert.equal(atRef.armR, sil.armR);
+  // A partial tape only bends the measured zones; unmeasured sites hold reference.
+  const bigWaist = F.measuredSilhouette("male", { waist: ref.waist * 1.25 }, 70);
+  assert.ok(bigWaist.scales.waist > 1.05, "a wider waist widens the waist zone");
+  assert.equal(bigWaist.scales.chest, 1, "an unmeasured chest stays at reference");
+  assert.ok(bigWaist.scales.waist < 1.5, "tanh compression keeps extreme tapes plausible");
+  assert.doesNotMatch(bigWaist.torso, /NaN/);
+  // Female comes from the same paths via the per-zone warp.
+  assert.notEqual(F.silhouette("female").torso, sil.torso);
+  assert.doesNotMatch(F.measuredSilhouette("female", { hip: 44 }, 64).torso, /NaN/);
+});
+
+test("the Stand figure holds suspect tape sites neutral until re-taped", () => {
   const { bm, F } = loadElite();
-  const data = mkData({
-    neck_in: 15.5, shoulder_in: 46.2, chest_in: 42.2, waist_in: 35.8,
-    hip_in: 40.5, thigh_in: 24, upper_arm_in: 13.8, forearm_in: 11.8, calf_in: 15.8,
-  }, { height_in: 70, weight_lb: 185 });
-  data.indicators = [{ key: "bodyfat", value: 20, unit: "%", tone: "info", label: "Body fat", zone: "average", read: "", estimate: true }];
+  const data = mkData({ hip_in: 41, thigh_in: 15, calf_in: 11, waist_in: 38 });
+  data.measurement_issues = [
+    { site: "thigh_in", severity: "warning", message: "Thigh looks unusual for your height." },
+    { site: "calf_in", severity: "warning", message: "Calf looks unusual next to hips." },
+  ];
   const model = bm.bmStandModel(data, "in");
-  const svg = bm.bmStandFigureSvg(F, model, "waist_in");
-  assert.equal(model.bodyFatPct, 20);
-  assert.match(svg, /class="bmfig2-surface"/);
-  assert.match(svg, /<ellipse[^>]*rx="1\.7"[^>]*pointer-events="none"/, "the navel is a quiet anatomical landmark");
-  assert.doesNotMatch(svg, /NaN/);
+  assert.deepEqual([...model.flaggedSites].sort(), ["calf_in", "thigh_in"]);
+  assert.equal(bm.bmSiteContext(model, "thigh_in").chip.text, "recheck tape");
+  const svg = bm.bmStandFigureSvg(F, model, "thigh_in");
+  assert.match(svg, /RECHECK/);
+  assert.match(svg, /bmfig2-gold/, "a selected suspect site uses the calm gold wash");
+  assert.match(bm.compSection(data, "in"), /figure is holding those areas neutral/i);
+});
+
+test("the tape log form is elite entry: stepper rows, hidden-until-asked hints, reference values", () => {
+  const { bm } = loadElite();
+  const data = mkData({ waist_in: 35.8, chest_in: 42.2 });
+  data.sites = [
+    { key: "waist_in", label: "Waist", hint: "At the navel, relaxed.", range: { min: 15, max: 70, typical_min: 24, typical_max: 46 } },
+    { key: "chest_in", label: "Chest", hint: "At nipple line.", range: { min: 20, max: 80, typical_min: 30, typical_max: 55 } },
+  ];
+  const form = bm.logForm(data, "in");
+  assert.match(form, /class="bm-step" data-site="waist_in" data-dir="-1"/, "each site gets − / + steppers");
+  assert.match(form, /class="bm-step" data-site="waist_in" data-dir="1"/);
+  assert.match(form, /data-prefill="35.8"/, "the stepper seeds from the last-known tape");
+  assert.match(form, /ref 32/, "the height-derived reference rides the row in italic");
+  assert.match(form, /never a mandate/i);
+  // The placement hint must START hidden — the hidden attribute alone loses to
+  // an inline display:block (the every-hint-open regression), so the markup
+  // carries display:none explicitly.
+  assert.match(form, /class="bm-site-hint[^"]*"[^>]*hidden[^>]*display:none/, "hints hide until the ⓘ is tapped");
+  assert.match(form, /class="bm-site-hint[^"]*"[^>]*position:absolute/, "the hint is a popover — opening it never reflows the grid");
+  assert.doesNotMatch(form, /class="bm-site-hint[^"]*"[^>]*display:block/);
+  // Without a height there is no reference column, and the form still draws.
+  const noHeight = bm.logForm({ ...data, profile: { ...data.profile, height_in: null } }, "in");
+  assert.doesNotMatch(noHeight, /ref \d/);
+  assert.match(noHeight, /class="bm-step"/);
 });
 
 test("tape input checks distinguish impossible values from unusual-but-confirmable values", () => {
@@ -302,10 +362,11 @@ test("compSection uses the elite figure when the library is present, the legacy 
   const data = mkData({ waist_in: 38, chest_in: 43 });
   const { bm: elite } = loadElite();
   const heroElite = elite.compSection(data, "in");
-  assert.match(heroElite, /bm-figure2/, "elite fixed figure");
-  assert.match(heroElite, /Ratios &amp; context|Ratios & context/, "ratio context rows render");
-  assert.match(heroElite, /not target measurements/);
-  assert.doesNotMatch(heroElite, /Reference physique/);
+  assert.match(heroElite, /bm-figure2/, "elite measured figure");
+  assert.match(heroElite, /Ratios &amp; context|Ratios & context/, "clinical ratio rows render");
+  assert.match(heroElite, /Reference physique/, "the reference rows render beneath");
+  assert.match(heroElite, /References, not mandates/);
+  assert.match(heroElite, /the reference for your height/, "the ghost legend explains the dashes");
   const legacy = loadBodyMetrics(); // this context has no CairnBodyFigure
   const heroLegacy = legacy.compSection(data, "in");
   assert.doesNotMatch(heroLegacy, /bm-figure2/, "falls back to the tape-driven croquis");
@@ -315,7 +376,8 @@ test("compSection uses the elite figure when the library is present, the legacy 
 test("ratio rows carry no score and never emit derived target measurements", () => {
   const { bm } = loadElite();
   const noHeight = bm.bmStandRatioRows(bm.bmStandModel(mkData({ shoulder_in: 44, waist_in: 38 }, { height_in: null }), "in"), "in");
-  assert.match(noHeight, /SHOULDER\/WAIST/, "height is not required for tracking-only ratios");
+  assert.match(noHeight, /SHOULDER\/WAIST/, "tracking-only ratios cover the no-height case");
+  assert.equal(bm.bmReferenceRows(bm.bmStandModel(mkData({ waist_in: 38 }, { height_in: null }), "in"), "in"), "", "no reference rows without a height");
   const withHeight = bm.bmStandRatioRows(bm.bmStandModel(mkData({ waist_in: 38, hip_in: 42, chest_in: 41 }), "in"), "in");
   assert.match(withHeight, /Ratios &amp; context|Ratios & context/);
   assert.doesNotMatch(withHeight, /Reference physique/);

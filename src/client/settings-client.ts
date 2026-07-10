@@ -55,10 +55,14 @@ function settingsCompactCount(value: unknown): string {
 function settingsAttemptStatus(row: Record<string, unknown>): { label: string; cls: string; title: string } {
   if (row.ok) return { label: "clean", cls: "actlog-clean", title: "Completed cleanly" };
   const status = String(row.status || row.error_class || "");
-  if (status === "auth_required") return { label: "connect", cls: "actlog-auth", title: String(row.error_message || "Agent is not connected") };
-  if (status === "empty_reply") return { label: "empty", cls: "actlog-retry", title: String(row.error_message || "No assistant text returned") };
-  if (status === "timeout") return { label: "timeout", cls: "actlog-retry", title: String(row.error_message || "The CLI timed out") };
-  if (row.tried_json) return { label: "retried", cls: "actlog-retry", title: String(row.error_message || "Needed a retry") };
+  if (status === "auth_required")
+    return { label: "connect", cls: "actlog-auth", title: String(row.error_message || "Agent is not connected") };
+  if (status === "empty_reply")
+    return { label: "empty", cls: "actlog-retry", title: String(row.error_message || "No assistant text returned") };
+  if (status === "timeout")
+    return { label: "timeout", cls: "actlog-retry", title: String(row.error_message || "The CLI timed out") };
+  if (row.tried_json)
+    return { label: "retried", cls: "actlog-retry", title: String(row.error_message || "Needed a retry") };
   return { label: "failed", cls: "actlog-retry", title: String(row.error_message || "The CLI failed") };
 }
 
@@ -98,9 +102,10 @@ function agentHealthCard(stats: unknown): string {
       const word = total ? settingsAgentWord((Number(row.ok) || 0) / total) : null;
       const lat = row.p50_ms != null ? ` · ${settingsLatency(row.p50_ms)} typical` : "";
       const auth = Number(row.auth_required) ? ` · ${Number(row.auth_required)} connect` : "";
-      const tokens = (Number(row.input_tokens) || Number(row.output_tokens))
-        ? ` · ${settingsCompactCount((Number(row.input_tokens) || 0) + (Number(row.output_tokens) || 0))} tok`
-        : "";
+      const tokens =
+        Number(row.input_tokens) || Number(row.output_tokens)
+          ? ` · ${settingsCompactCount((Number(row.input_tokens) || 0) + (Number(row.output_tokens) || 0))} tok`
+          : "";
       return `<div class="agenthealth-row">
         <span class="agenthealth-name">${escHtml(String(row.agent))}</span>
         <span class="agenthealth-stat">${word || "—"}${lat}${auth}${tokens}</span>
@@ -152,10 +157,13 @@ function agentActivityCard(stats: unknown, options: SettingsDateFns = {}): strin
         ? `<span class="actlog-when" title="${escAttr(options.absDate ? options.absDate(created.slice(0, 10)) : created.slice(0, 10))}">${escHtml(options.relTime ? options.relTime(`${created.replace(" ", "T")}Z`) : created)}</span>`
         : "";
       const status = settingsAttemptStatus(row);
-      const model = row.model ? `<span class="actlog-dot">·</span><span class="actlog-model">${escHtml(String(row.model))}</span>` : "";
-      const tokens = (Number(row.input_tokens) || Number(row.output_tokens))
-        ? `<span class="actlog-dot">·</span><span class="actlog-tokens">${escHtml(settingsCompactCount((Number(row.input_tokens) || 0) + (Number(row.output_tokens) || 0)))} tok</span>`
+      const model = row.model
+        ? `<span class="actlog-dot">·</span><span class="actlog-model">${escHtml(String(row.model))}</span>`
         : "";
+      const tokens =
+        Number(row.input_tokens) || Number(row.output_tokens)
+          ? `<span class="actlog-dot">·</span><span class="actlog-tokens">${escHtml(settingsCompactCount((Number(row.input_tokens) || 0) + (Number(row.output_tokens) || 0)))} tok</span>`
+          : "";
       return `<div class="actlog-row">
         <span class="actlog-op">${op}</span>
         <span class="actlog-meta">${agent}${agent && when ? `<span class="actlog-dot">·</span>` : ""}${when}${model}${tokens}</span>
@@ -201,6 +209,64 @@ function noticedCard(data: unknown, options: SettingsDateFns = {}): string {
     </div>`;
 }
 
+function brainDiagnosticsCard(data: unknown): string {
+  const row = settingsClientRecord(data);
+  const decisions = Array.isArray(row.decisions) ? row.decisions : [];
+  const calls = Array.isArray(row.tool_calls) ? row.tool_calls : [];
+  const metrics = settingsClientRecord(row.metrics);
+  if (!decisions.length && !calls.length && !Object.keys(metrics).length) return "";
+  const decisionMetrics = settingsClientRecord(metrics.decisions);
+  const expectationMetrics = settingsClientRecord(metrics.expectations);
+  const autonomyMetrics = settingsClientRecord(metrics.autonomy);
+  const toolMetrics = settingsClientRecord(metrics.tools);
+  const conferenceMetrics = settingsClientRecord(metrics.conferences);
+  const metricLines = [
+    Number(decisionMetrics.material) > 0
+      ? `${Number(decisionMetrics.with_expectations) || 0} of ${Number(decisionMetrics.material) || 0} material decisions carry a checkable expectation`
+      : "",
+    Number(expectationMetrics.matured) > 0
+      ? `${Number(expectationMetrics.matured_evaluated) || 0} of ${Number(expectationMetrics.matured) || 0} mature expectations have been evaluated`
+      : "",
+    Number(autonomyMetrics.resolved) > 0
+      ? `${Number(autonomyMetrics.reverted) || 0} of ${Number(autonomyMetrics.resolved) || 0} resolved autonomous changes were put back`
+      : "",
+    Number(toolMetrics.calls) > 0
+      ? `${Number(toolMetrics.calls) || 0} bounded chart reads · ${Number(toolMetrics.failed) || 0} failed · ${Number(toolMetrics.budget_exhausted) || 0} exhausted a budget`
+      : "",
+    Number(conferenceMetrics.jobs) > 0
+      ? `${Number(conferenceMetrics.successful) || 0} of ${Number(conferenceMetrics.jobs) || 0} case conferences completed`
+      : "",
+  ].filter(Boolean);
+  const demoted = Array.isArray(autonomyMetrics.demoted_domains) ? autonomyMetrics.demoted_domains : [];
+  if (demoted.length) metricLines.push(`Review-first after repeated reversals: ${demoted.map(String).join(", ")}`);
+  const metricsHtml = metricLines.length
+    ? `<div class="agenthealth-rows">${metricLines.map((line) => `<div class="sess-line">${escHtml(line)}</div>`).join("")}</div>`
+    : "";
+  const decisionRows = decisions
+    .slice(0, 8)
+    .map((item) => {
+      const d = settingsClientRecord(item);
+      const status = String(d.status || "").replaceAll("_", " ");
+      const verdict = d.latest_verdict ? ` · ${String(d.latest_verdict).replaceAll("_", " ")}` : "";
+      return `<div class="actlog-row"><span class="actlog-op">${escHtml(String(d.summary || d.kind || "coaching decision"))}</span><span class="actlog-meta">${escHtml(String(d.domain || ""))}</span><span class="actlog-flag actlog-clean">${escHtml(status + verdict)}</span></div>`;
+    })
+    .join("");
+  const callRows = calls
+    .slice(0, 8)
+    .map((item) => {
+      const c = settingsClientRecord(item);
+      const rows = c.rows_returned == null ? "" : ` · ${Number(c.rows_returned) || 0} rows`;
+      return `<div class="actlog-row"><span class="actlog-op">${escHtml(String(c.tool || "bounded read"))}</span><span class="actlog-meta">${escHtml(String(c.op || "coach read"))}${escHtml(rows)}</span><span class="actlog-flag actlog-clean">${escHtml(String(c.status || "ok"))}</span></div>`;
+    })
+    .join("");
+  return `<details class="sess agentactivity" style="margin-top:14px"><summary class="lbl">Brain diagnostics</summary>
+    <div class="sess-line" style="color:var(--muted);margin:7px 0">Operator view of recent decisions and bounded chart reads. Raw prompts, private files, hidden reasoning, and internal scores are never shown.</div>
+    ${metricsHtml}
+    ${decisionRows ? `<div class="lbl" style="margin:8px 0 4px">Decisions</div><div class="actlog-rows">${decisionRows}</div>` : ""}
+    ${callRows ? `<div class="lbl" style="margin:10px 0 4px">Chart reads</div><div class="actlog-rows">${callRows}</div>` : ""}
+  </details>`;
+}
+
 function agentChipState(agent: Record<string, unknown>): SettingsChipState {
   if (agent.present === false) return { cls: "agent-chip-absent", label: "Not installed" };
   if (agent.configured === true) return { cls: "agent-chip-ok", label: "✓ Connected" };
@@ -216,7 +282,9 @@ function updateCardHtml(status: unknown, options: SettingsUpdateOptions): string
     return `${head}<div class="sess-line" style="color:var(--muted)">Automatic update checks are off. Turn them on to see when a newer Cairn is released.</div>`;
   }
   if (!statusRow) return `${head}<div class="sess-line" style="color:var(--muted)">Checking…</div>`;
-  const checked = statusRow.checked_at ? ` · checked ${escHtml(String(statusRow.checked_at).replace("T", " ").slice(0, 16))}` : "";
+  const checked = statusRow.checked_at
+    ? ` · checked ${escHtml(String(statusRow.checked_at).replace("T", " ").slice(0, 16))}`
+    : "";
   if (statusRow.update_available && statusRow.latest) {
     const url = statusRow.html_url ? escAttr(String(statusRow.html_url)) : "";
     return `<div class="sess-line"><b>v${escHtml(String(statusRow.latest))} is available</b> — you're on v${current}.${checked}</div>
@@ -242,6 +310,7 @@ Object.assign(globalThis, {
     agentOpLabel,
     agentActivityCard,
     noticedCard,
+    brainDiagnosticsCard,
     agentChipState,
     updateCardHtml,
   },

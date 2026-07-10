@@ -1,4 +1,6 @@
 import { db } from "../db.js";
+import { emitBrainEvent } from "../brainEvents.js";
+import { localDateISO } from "./shared.js";
 
 // ============================================================================
 // SUPPLEMENT UNDERSTANDING — say it once in plain words, the system approximates.
@@ -181,6 +183,19 @@ function hydrateSupp(row: any) {
   return { ...row, related_markers: Array.isArray(markers) ? markers : [] };
 }
 
+function emitSupplementChanged(row: any, reason: string): void {
+  if (!row) return;
+  emitBrainEvent({
+    kind: "supplement_changed",
+    domain: "health",
+    date: localDateISO(),
+    entity_id: row.id,
+    subject_key: row.name,
+    reason,
+    clinical: true,
+  });
+}
+
 // Insert one already-structured supplement (used by the chat agent for the long
 // tail). Dedup by canonical name: an existing row is UPDATED in place (re-stating
 // "creatine" never duplicates it), and a previously-stopped one is reactivated.
@@ -198,12 +213,18 @@ export function addSupplement(item: Partial<SupplementItem>) {
     db.prepare(
       `UPDATE supplements SET raw = COALESCE(?, raw), dose = ?, frequency = ?, category = ?, related_markers = ?, note = COALESCE(?, note), active = 1, updated_at = datetime('now') WHERE id = ?`
     ).run(raw, dose, freq, cat, JSON.stringify(markers), note, existing.id);
-    return hydrateSupp(db.prepare(`SELECT * FROM supplements WHERE id = ?`).get(existing.id));
+    const row = hydrateSupp(db.prepare(`SELECT * FROM supplements WHERE id = ?`).get(existing.id));
+    emitSupplementChanged(row, "supplement updated");
+    return row;
   }
-  const info = db.prepare(
-    `INSERT INTO supplements (name, raw, dose, frequency, category, related_markers, note) VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).run(name.slice(0, 80), raw, dose, freq, cat.slice(0, 40), JSON.stringify(markers), note);
-  return hydrateSupp(db.prepare(`SELECT * FROM supplements WHERE id = ?`).get(info.lastInsertRowid));
+  const info = db
+    .prepare(
+      `INSERT INTO supplements (name, raw, dose, frequency, category, related_markers, note) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(name.slice(0, 80), raw, dose, freq, cat.slice(0, 40), JSON.stringify(markers), note);
+  const row = hydrateSupp(db.prepare(`SELECT * FROM supplements WHERE id = ?`).get(info.lastInsertRowid));
+  emitSupplementChanged(row, "supplement added");
+  return row;
 }
 
 // The headline: free text → understood + stored supplements. Returns the items it
@@ -238,11 +259,15 @@ export function updateSupplement(id: number, fields: Partial<SupplementItem> & {
   if (!sets.length) return hydrateSupp(row);
   sets.push("updated_at = datetime('now')");
   db.prepare(`UPDATE supplements SET ${sets.join(", ")} WHERE id = ?`).run(...vals, id);
-  return hydrateSupp(db.prepare(`SELECT * FROM supplements WHERE id = ?`).get(id));
+  const updated = hydrateSupp(db.prepare(`SELECT * FROM supplements WHERE id = ?`).get(id));
+  emitSupplementChanged(updated, "supplement updated");
+  return updated;
 }
 
 export function deleteSupplement(id: number) {
+  const existing = hydrateSupp(db.prepare(`SELECT * FROM supplements WHERE id = ?`).get(id));
   const r = db.prepare(`DELETE FROM supplements WHERE id = ?`).run(id);
+  if (r.changes) emitSupplementChanged(existing ?? { id, name: "supplement" }, "supplement removed");
   return { deleted: r.changes, id };
 }
 

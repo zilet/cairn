@@ -7,12 +7,33 @@ type ClientLearnedTimeline = import("../contracts/client-api.js").ClientLearnedT
 type LearnedGroup = readonly [kind: ClientLearnedKind, label: string, blurb: string];
 
 (() => {
-const LEARNED_GROUPS: readonly LearnedGroup[] = [
-  ["memory", "Understood about you", "Constraints, preferences and goals it carries — the durable picture of who you are."],
-  ["learning", "What we tried, and how it went", "Quiet observations from comparing a suggestion to what actually happened. Never a verdict — just what it noticed."],
-  ["directive", "Connections it made", "When a finding in your labs quietly shaped your meals, training, or what to watch. Informational, never medical advice."],
-  ["applied", "Plan changes you accepted", "Adjustments Cairn proposed that you chose to apply. Nothing here changed on its own."],
-];
+  const LEARNED_GROUPS: readonly LearnedGroup[] = [
+    [
+      "memory",
+      "Understood about you",
+      "Constraints, preferences and goals it carries — the durable picture of who you are.",
+    ],
+    [
+      "learning",
+      "What we tried, and how it went",
+      "Quiet observations from comparing a suggestion to what actually happened. Never a verdict — just what it noticed.",
+    ],
+    [
+      "outcome",
+      "Decisions, expectations and outcomes",
+      "What Cairn changed, what it expected, what happened, and the personal defaults it is carefully earning from repeated clean results.",
+    ],
+    [
+      "directive",
+      "Connections it made",
+      "When a finding in your labs quietly shaped your meals, training, or what to watch. Informational, never medical advice.",
+    ],
+    [
+      "applied",
+      "Plan changes you accepted",
+      "Adjustments Cairn proposed that you chose to apply. Nothing here changed on its own.",
+    ],
+  ];
 
 function learnedItemHtml(item: Partial<ClientLearnedItem> | null | undefined, index: number): string {
   const row = item ?? {};
@@ -31,10 +52,10 @@ function learnedItemHtml(item: Partial<ClientLearnedItem> | null | undefined, in
     </div>`;
 }
 
-function learnedTimelineHtml(data: ClientLearnedTimeline | null | undefined): string {
-  const items = Array.isArray(data?.items) ? data.items : [];
-  const intro = `<div class="learned-intro sess"><div class="sess-line" style="color:var(--muted)">
-      A quiet record of what Cairn has come to understand about you, and the changes it's made with you. It's here to show its working — not to grade anything. Visit it whenever; it never nudges.
+  function learnedTimelineHtml(data: ClientLearnedTimeline | null | undefined): string {
+    const items = Array.isArray(data?.items) ? data.items : [];
+    const intro = `<div class="learned-intro sess"><div class="sess-line" style="color:var(--muted)">
+      A quiet record of what Cairn has come to understand about you, the changes it's made with you, and whether those changes worked as expected. It's here to show its working — not to grade anything. Visit it whenever; it never nudges.
     </div></div>`;
   if (!items.length) {
     return intro + `<div class="empty-state reveal" style="${stagger(0)}">

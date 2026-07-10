@@ -13,8 +13,18 @@ import {
   runHealthReview,
   synthesizeHealth,
   distillChat,
+  weekAheadRead,
+  reconcileMarkers,
+  runResearch,
+  reconcileExercises,
+  consolidateMemory,
+  growAboutMe,
+  onboardFromText,
 } from "./coachOps.js";
 import { readToday } from "./domain/brain/day-read-use-case.js";
+import { runCaseConference } from "./domain/brain/case-conference.js";
+import { applyProposalWithAutonomy } from "./domain/brain/autonomy-service.js";
+import type { SpecialistDomain } from "./brain/specialist-contract.js";
 
 // Durable, in-process agent-job engine — the GENERALIZATION of chatTurns.ts for
 // the other blocking agentic ops. An op is no longer a request held open for
@@ -48,7 +58,9 @@ export type JobEvent =
   | { type: "canceled"; job: any };
 
 const jobBus = createProgressBus<JobEvent>("job");
-function emit(id: number, payload: JobEvent): void { jobBus.emit(id, payload); }
+function emit(id: number, payload: JobEvent): void {
+  jobBus.emit(id, payload);
+}
 export function onJobEvent(id: number, listener: (e: JobEvent) => void): () => void {
   return jobBus.on(id, listener);
 }
@@ -58,12 +70,96 @@ export function onJobEvent(id: number, listener: (e: JobEvent) => void): () => v
 // JSON-only) and streams nothing. Exported (with the predicate) so the wiring is
 // unit-testable and stays in lockstep with the reshaped prompts in prompt.ts.
 export const STREAM_DELTA_KINDS = new Set(["health_synthesis", "session_suggest", "nutrition_checkin", "weekly_read"]);
-export function jobStreamsDeltas(kind: string): boolean { return STREAM_DELTA_KINDS.has(kind); }
+export function jobStreamsDeltas(kind: string): boolean {
+  return STREAM_DELTA_KINDS.has(kind);
+}
 
 // Push one live prose chunk onto a job's bus (the onDelta target for the streaming
 // kinds). Kept exported + thin so the delta path is exercisable via onJobEvent in tests.
 export function emitJobDelta(id: number, delta: string): void {
   if (delta) emit(id, { type: "delta", delta });
+}
+
+export interface BrainReviewActionDeps {
+  nutritionCheckin?: typeof nutritionCheckin;
+  generateInsight?: typeof generateInsight;
+  applyProposalWithAutonomy?: typeof applyProposalWithAutonomy;
+  buildProgressionProposal?: typeof repo.buildProgressionProposal;
+}
+
+/**
+ * Execute the small set of signal-boundary actions that are safe without another
+ * user decision. Training progression is deterministic and runs only after a
+ * finished session. A material food correction may refresh nutrition, but its
+ * target still goes through autonomy policy and waits for the next food-day
+ * boundary. Every other event stays a quiet pull-only insight.
+ */
+export async function executeBrainReviewAction(
+  input: any,
+  agent: string | undefined,
+  hooks?: any,
+  deps: BrainReviewActionDeps = {}
+): Promise<any> {
+  const event = input?.event;
+  const insight = deps.generateInsight ?? generateInsight;
+  const applyAutonomously = deps.applyProposalWithAutonomy ?? applyProposalWithAutonomy;
+
+  if (event?.kind === "session_finished" && event?.domain === "training" && event?.clinical !== true) {
+    const sessionId = Number(event.entity_id);
+    const session = Number.isFinite(sessionId) && sessionId > 0 ? (repo.getSessionDetail(sessionId) as any) : null;
+    if (!session?.finished_at || !session?.plan_day_id) return insight(agent, "connection", hooks);
+    const day = (repo.getPlan() as any[]).find((item) => Number(item.id) === Number(session.plan_day_id));
+    if (!day)
+      return {
+        ok: true,
+        change: false,
+        action: "training_progression",
+        summary: "The finished session did not map to a current plan day.",
+      };
+    hooks?.onPhase?.("updating the next session from what you earned");
+    const built = (deps.buildProgressionProposal ?? repo.buildProgressionProposal)(Number(day.day_number), {
+      forNextSession: true,
+    });
+    if (!built.ok) return { ok: true, change: false, action: "training_progression", summary: built.error };
+    const autonomy = applyAutonomously(Number(built.proposal.id), { requested_tier: "quiet_apply" });
+    return { ok: true, change: true, action: "training_progression", proposal: built.proposal, autonomy };
+  }
+
+  if (
+    event?.kind === "food_corrected" &&
+    event?.domain === "nutrition" &&
+    event?.material === true &&
+    event?.clinical !== true
+  ) {
+    hooks?.onPhase?.("rechecking the next nutrition target");
+    const checkin = await (deps.nutritionCheckin ?? nutritionCheckin)(agent, undefined, hooks);
+    const proposalId = Number(checkin?.proposal?.id);
+    if (!checkin?.change || !Number.isFinite(proposalId) || proposalId <= 0) {
+      return { ...checkin, action: "nutrition_recheck" };
+    }
+    const autonomy = applyAutonomously(proposalId, { requested_tier: "quiet_apply" });
+    return { ...checkin, action: "nutrition_recheck", autonomy };
+  }
+
+  return insight(agent, "connection", hooks);
+}
+
+const CONFERENCE_SUCCESS_STATE_KEYS = new Set([
+  "brain_revision_last_month",
+  "brain_revision_phase_sig",
+  "brain_revision_regression_sig",
+]);
+
+/** Stamp scheduler success only after a conference returned a valid result. */
+export function applyCaseConferenceSchedulerSuccess(input: any, result: any): boolean {
+  if (result?.ok !== true || !input?.scheduler_success || typeof input.scheduler_success !== "object") return false;
+  let stamped = false;
+  for (const [key, raw] of Object.entries(input.scheduler_success)) {
+    if (!CONFERENCE_SUCCESS_STATE_KEYS.has(key) || typeof raw !== "string") continue;
+    repo.setAppState(key, raw.slice(0, 2_000));
+    stamped = true;
+  }
+  return stamped;
 }
 
 // ---------- serial queue ----------
@@ -81,7 +177,9 @@ const runner = createSerialRunner(processAgentJob, (id, e) => {
       const failed = repo.failAgentJob(id, e?.message ?? String(e));
       emit(id, { type: "error", job: failed, message: e?.message ?? String(e) });
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   console.error(`[jobs] job#${id} failed: ${e?.message ?? e}`);
 });
 
@@ -107,7 +205,9 @@ async function processAgentJob(id: number): Promise<void> {
   // Prose-bearing kinds stream their reading into the card token by token; every other
   // kind leaves onDelta undefined, so its op runs prose-free exactly as before.
   const onDelta = jobStreamsDeltas(job.kind)
-    ? (delta: string) => { if (!controller.signal.aborted) emitJobDelta(id, delta); }
+    ? (delta: string) => {
+        if (!controller.signal.aborted) emitJobDelta(id, delta);
+      }
     : undefined;
   const hooks = { signal: controller.signal, onPhase, onDelta };
   const input = job.input ?? {};
@@ -125,18 +225,26 @@ async function processAgentJob(id: number): Promise<void> {
 
     switch (job.kind) {
       case "session_suggest": {
-        result = await suggestSession(agent, {
-          minutes: input.minutes != null ? Number(input.minutes) : undefined,
-          equipment: input.equipment != null ? String(input.equipment) : undefined,
-          focus: input.focus != null ? String(input.focus) : undefined,
-          constraints: input.constraints != null ? String(input.constraints) : undefined,
-          date: input.date != null ? String(input.date) : undefined,
-        }, hooks);
+        result = await suggestSession(
+          agent,
+          {
+            minutes: input.minutes != null ? Number(input.minutes) : undefined,
+            equipment: input.equipment != null ? String(input.equipment) : undefined,
+            focus: input.focus != null ? String(input.focus) : undefined,
+            constraints: input.constraints != null ? String(input.constraints) : undefined,
+            date: input.date != null ? String(input.date) : undefined,
+          },
+          hooks
+        );
         chosen = result?.agent ?? null;
         break;
       }
       case "proposal": {
-        result = await draftCoachProposal(agent, input.instruction != null ? String(input.instruction) : undefined, hooks);
+        result = await draftCoachProposal(
+          agent,
+          input.instruction != null ? String(input.instruction) : undefined,
+          hooks
+        );
         chosen = result?.agent ?? null;
         if (result?.proposal?.id) ref = { ref_table: "plan_proposals", ref_id: result.proposal.id };
         break;
@@ -157,21 +265,41 @@ async function processAgentJob(id: number): Promise<void> {
         // The plan must be resolved here (the API only did a pre-check before
         // enqueue) so a long queue still swaps against the current plan state.
         const plan = repo.getMealPlan(Number(input.id));
-        if (!plan) { result = { ok: false, error: "not found" }; break; }
-        result = await swapMealAgentic(agent, {
-          plan, id: Number(input.id), day: String(input.day ?? ""),
-          mealIndex: Number(input.meal_index), hint: input.hint,
-        }, hooks);
+        if (!plan) {
+          result = { ok: false, error: "not found" };
+          break;
+        }
+        result = await swapMealAgentic(
+          agent,
+          {
+            plan,
+            id: Number(input.id),
+            day: String(input.day ?? ""),
+            mealIndex: Number(input.meal_index),
+            hint: input.hint,
+          },
+          hooks
+        );
         chosen = result?.agent ?? null;
         ref = { ref_table: "meal_plans", ref_id: Number(input.id) };
         break;
       }
       case "recipe": {
         const plan = repo.getMealPlan(Number(input.id));
-        if (!plan) { result = { ok: false, error: "not found" }; break; }
-        result = await generateRecipe(agent, {
-          plan, id: Number(input.id), day: String(input.day ?? ""), mealIndex: Number(input.meal_index),
-        }, hooks);
+        if (!plan) {
+          result = { ok: false, error: "not found" };
+          break;
+        }
+        result = await generateRecipe(
+          agent,
+          {
+            plan,
+            id: Number(input.id),
+            day: String(input.day ?? ""),
+            mealIndex: Number(input.meal_index),
+          },
+          hooks
+        );
         chosen = result?.agent ?? null;
         ref = { ref_table: "meal_plans", ref_id: Number(input.id) };
         break;
@@ -187,6 +315,74 @@ async function processAgentJob(id: number): Promise<void> {
         result = await generateInsight(agent, job.kind === "weekly_read" ? "weekly_read" : "connection", hooks);
         chosen = result?.agent ?? null;
         if (result?.insight?.id) ref = { ref_table: "insights", ref_id: result.insight.id };
+        break;
+      }
+      case "brain_review": {
+        result = await executeBrainReviewAction(input, agent, hooks);
+        chosen = result?.agent ?? null;
+        if (result?.proposal?.id) ref = { ref_table: "plan_proposals", ref_id: result.proposal.id };
+        else if (result?.insight?.id) ref = { ref_table: "insights", ref_id: result.insight.id };
+        break;
+      }
+      case "case_conference": {
+        // The conference itself owns persistence. Advice-only output is held for
+        // review; a typed plan revision becomes a real proposal and runs through
+        // the shared autonomy/clamp/rollback path before this job can finish.
+        const domains: SpecialistDomain[] = Array.isArray(input.domains)
+          ? input.domains
+              .map(String)
+              .filter((domain: string): domain is SpecialistDomain =>
+                ["training", "nutrition", "health", "recovery", "lifestyle"].includes(domain)
+              )
+          : [];
+        result = await runCaseConference(agent, {
+          question: String(input.question ?? "Review the current whole-person plan at this phase boundary."),
+          domains,
+          trajectory: input.trajectory,
+          optimizes: Array.isArray(input.optimizes) ? input.optimizes.map(String) : undefined,
+          parks: Array.isArray(input.parks) ? input.parks.map(String) : undefined,
+        });
+        if (result?.proposal_id) ref = { ref_table: "plan_proposals", ref_id: Number(result.proposal_id) };
+        break;
+      }
+      case "week_ahead": {
+        result = await weekAheadRead(agent, hooks);
+        chosen = result?.agent ?? null;
+        break;
+      }
+      case "marker_reconcile": {
+        result = await reconcileMarkers(agent, hooks);
+        chosen = result?.agent ?? null;
+        break;
+      }
+      case "evidence_research": {
+        result = await runResearch(String(input.question ?? ""), {
+          markers: Array.isArray(input.markers) ? input.markers.map(String) : undefined,
+          agent,
+          force: input.force === true,
+        });
+        chosen = result?.agent ?? null;
+        break;
+      }
+      case "exercise_reconcile": {
+        result = await reconcileExercises(agent, hooks);
+        chosen = result?.agent ?? null;
+        break;
+      }
+      case "memory_consolidate": {
+        onPhase("tidying what I remember");
+        result = await consolidateMemory(agent);
+        chosen = result?.agent ?? null;
+        break;
+      }
+      case "about_me_grow": {
+        onPhase("updating the person model");
+        result = await growAboutMe(agent);
+        chosen = result?.agent ?? null;
+        break;
+      }
+      case "onboard": {
+        result = await onboardFromText(agent, String(input.text ?? ""), hooks);
         break;
       }
       case "health_review": {
@@ -228,8 +424,14 @@ async function processAgentJob(id: number): Promise<void> {
     if (cur?.status === "canceled" || controller.signal.aborted) return;
 
     const finished = repo.finishAgentJob(id, {
-      result, chosen_agent: chosen, ref_table: ref.ref_table ?? null, ref_id: ref.ref_id ?? null,
+      result,
+      chosen_agent: chosen,
+      ref_table: ref.ref_table ?? null,
+      ref_id: ref.ref_id ?? null,
     });
+    if (job.kind === "case_conference" && finished?.status === "done") {
+      applyCaseConferenceSchedulerSuccess(input, result);
+    }
     emit(id, { type: "done", job: finished, result });
   } catch (e: any) {
     const cur = repo.getAgentJob(id) as any;
@@ -247,7 +449,11 @@ async function processAgentJob(id: number): Promise<void> {
 export function cancelAgentJob(id: number) {
   const job = repo.cancelAgentJob(id);
   if (!job) return null;
-  try { controllers.get(id)?.abort(); } catch { /* not running */ }
+  try {
+    controllers.get(id)?.abort();
+  } catch {
+    /* not running */
+  }
   emit(id, { type: "canceled", job });
   return job;
 }
@@ -255,7 +461,11 @@ export function cancelAgentJob(id: number) {
 // Shutdown helper: abort every live agent-job subprocess (see chatTurns.abortAllTurns).
 export function abortAllJobs() {
   for (const c of controllers.values()) {
-    try { c.abort(); } catch { /* not running */ }
+    try {
+      c.abort();
+    } catch {
+      /* not running */
+    }
   }
 }
 

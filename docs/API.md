@@ -6,7 +6,7 @@ All routes are mounted under **`/api`** (e.g. `GET /api/plan`). When `CAIRN_AUTH
 is set, every route except `GET /api/health` requires the token (`Authorization: Bearer …`,
 `X-Cairn-Token: …`, or `?token=…`). See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**236 routes** across 87 groups.
+**241 routes** across 90 groups.
 
 ## `/activities`
 
@@ -89,6 +89,19 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | GET | `/api/bodyweight` |  |
 | POST | `/api/bodyweight` |  |
 
+## `/brain`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/brain/decisions` |  |
+| POST | `/api/brain/decisions/:id/revert` |  |
+
+## `/brain-diagnostics`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/brain-diagnostics` |  |
+
 ## `/calendar`
 
 | Method | Path | Notes |
@@ -108,7 +121,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | DELETE | `/api/chat` | "Clear" archives rather than deletes (repo.clearChat -> archiveChat): chat is part of the user's history/export, so nothing is hard-deleted anymore. |
 | GET | `/api/chat` |  |
 | POST | `/api/chat` | Chat is now a DURABLE, non-blocking turn (see src/chatTurns.ts): we persist the user message + a chat_turn and hand it to the serial worker, returning at once. The PWA streams progress over GET /api/chat/turns/:id/stream and rebuilds the in-flight + queued thread from GET /api/chat/turns on (re)load — so a follow-up queued mid-think, or a turn interrupted by navigation/reload/restart, survives. |
-| POST | `/api/chat/reset` | "Fresh start": ARCHIVE the live conversation immediately (so the composer is usable at once — no blocking on the agent), then distill durable facts from the pre-archive history into memory in the BACKGROUND as a chat_distill job. The PWA settles a "remembered" pill when the job lands; a message typed during the distill just queues as a normal chat turn (archive-before-enqueue keeps the ordering). When bg_ops is OFF this falls back to the legacy blocking inline path. |
+| POST | `/api/chat/reset` | "Fresh start": ARCHIVE the live conversation immediately (so the composer is usable at once — no blocking on the agent), then distill durable facts from the pre-archive history into memory in the BACKGROUND as a chat_distill job. The PWA settles a "remembered" pill when the job lands; a message typed during the distill just queues as a normal chat turn (archive-before-enqueue keeps the ordering). This always queues: resetting chat never waits on a coaching CLI. |
 | GET | `/api/chat/search` | Read-only history: browse past conversations (archived by "fresh start") and search across everything. These never mutate — nothing is hard-deleted. |
 | GET | `/api/chat/sessions` |  |
 | GET | `/api/chat/sessions/:sessionId` |  |
@@ -505,6 +518,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | GET | `/api/proposals` |  |
 | POST | `/api/proposals/:id/apply` |  |
 | POST | `/api/proposals/:id/discard` |  |
+| POST | `/api/proposals/:id/lead` |  |
 
 ## `/reaction-model`
 
@@ -641,7 +655,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/today-read` | The day intelligence read — the soul of the product. Judges what KIND of day today should be (train / easy / rest) as a calm SUGGESTION, never a gate. ALWAYS 200: the agentic read writes the human sentence, and if no agent is reachable (or it returns garbage) it falls back to the deterministic floor so the Brief always has something true to say. ?override= lets the launchpad chips reshape the read ("rough night" / "short on time" / "train anyway").  Fast path: the canonical (no-override) read is cached per day — written nightly by the scheduler and on any miss — so the morning open is instant and never waits on an agent subprocess. Overrides always recompute (they're transient). |
-| POST | `/api/today-read/reshape` | Background the Brief OVERRIDE reshape ("rough night" / "short on time" / "train anyway") as a durable job, so a steer survives a tab switch / reload / restart like the other 7 ops. The canonical GET /api/today-read (and ?reset=1) stays synchronous (cached + deterministic floor); this POST is ONLY for the agentic override reshape. The job's `done` result is byte-for-byte what GET /api/today-read?override= returns, so the PWA reuses its Brief render. When bg_ops is OFF this computes inline and returns the legacy read body. |
+| POST | `/api/today-read/reshape` | Background the Brief OVERRIDE reshape ("rough night" / "short on time" / "train anyway") as a durable job, so a steer survives a tab switch / reload / restart like the other 7 ops. The canonical GET /api/today-read (and ?reset=1) stays synchronous (cached + deterministic floor); this POST is ONLY for the agentic override reshape. The job's `done` result is byte-for-byte what GET /api/today-read?override= returns, so the PWA reuses its Brief render. This always queues: a user-facing request never waits on a coaching CLI. |
 
 ## `/trajectory`
 
@@ -678,6 +692,12 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/week-ahead` | The week ahead — a calm forward look (lift / run / mixed / rest across the next several days). Agentic with a deterministic plan-rotation floor, so it always returns a usable shape even with no agent. Cached per day+plan+goal. |
+
+## `/whole-person-trajectory`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/whole-person-trajectory` |  |
 
 ---
 

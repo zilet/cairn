@@ -318,6 +318,104 @@ CREATE TABLE IF NOT EXISTS suggestions (
 CREATE INDEX IF NOT EXISTS idx_suggestions_unreconciled
   ON suggestions(kind, date) WHERE reconciled_at IS NULL;
 
+-- Elite-brain accountability spine: durable decisions, falsifiable expectations,
+-- deterministic evaluations, and sanitized depth-on-demand telemetry. These are
+-- additive tables (not columns on an existing table), so fresh and existing DBs
+-- converge through CREATE TABLE IF NOT EXISTS without a migration version.
+CREATE TABLE IF NOT EXISTS brain_decisions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at TEXT DEFAULT (datetime('now')),
+  effective_date TEXT,
+  kind TEXT NOT NULL,
+  domain TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  rationale TEXT,
+  source TEXT,
+  source_ref_type TEXT,
+  source_ref_key TEXT,
+  status TEXT NOT NULL,
+  autonomy_tier TEXT NOT NULL,
+  risk_class TEXT NOT NULL,
+  reversible INTEGER DEFAULT 0,
+  input_fingerprint TEXT,
+  context_json TEXT,
+  action_json TEXT,
+  specialist_json TEXT,
+  applied_at TEXT,
+  reverted_at TEXT,
+  superseded_by INTEGER REFERENCES brain_decisions(id),
+  evaluator_version TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_brain_decisions_fingerprint
+  ON brain_decisions(input_fingerprint) WHERE input_fingerprint IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_brain_decisions_status_created
+  ON brain_decisions(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_brain_decisions_source
+  ON brain_decisions(source_ref_type, source_ref_key);
+
+-- Exact server-owned undo payloads. Kept separate from context_json because the
+-- latter is deliberately shallow/bounded for model context and would truncate a
+-- nested plan. Never included in coach context or public diagnostics.
+CREATE TABLE IF NOT EXISTS brain_rollbacks (
+  decision_id INTEGER PRIMARY KEY REFERENCES brain_decisions(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS brain_expectations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  decision_id INTEGER NOT NULL REFERENCES brain_decisions(id) ON DELETE CASCADE,
+  metric_key TEXT NOT NULL,
+  subject_key TEXT,
+  direction TEXT NOT NULL,
+  baseline_json TEXT,
+  target_json TEXT,
+  window_start TEXT NOT NULL,
+  window_end TEXT NOT NULL,
+  minimum_data_json TEXT,
+  confounder_policy TEXT,
+  confidence TEXT NOT NULL,
+  status TEXT DEFAULT 'pending',
+  evaluator TEXT NOT NULL,
+  evaluator_version TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_brain_expectations_maturity
+  ON brain_expectations(status, window_end, id);
+CREATE INDEX IF NOT EXISTS idx_brain_expectations_decision
+  ON brain_expectations(decision_id, id);
+
+CREATE TABLE IF NOT EXISTS brain_evaluations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  expectation_id INTEGER NOT NULL REFERENCES brain_expectations(id) ON DELETE CASCADE,
+  evaluated_at TEXT DEFAULT (datetime('now')),
+  verdict TEXT NOT NULL,
+  actual_json TEXT,
+  evidence_json TEXT,
+  confounders_json TEXT,
+  explanation TEXT,
+  evaluator_version TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_brain_evaluations_expectation
+  ON brain_evaluations(expectation_id, evaluated_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS brain_tool_calls (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL,
+  op TEXT NOT NULL,
+  tool TEXT NOT NULL,
+  args_summary TEXT,
+  rows_returned INTEGER,
+  latency_ms INTEGER,
+  status TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_brain_tool_calls_run
+  ON brain_tool_calls(run_id, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_brain_tool_calls_created
+  ON brain_tool_calls(created_at DESC);
+
 CREATE TABLE IF NOT EXISTS meal_plans (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   created_at TEXT DEFAULT (datetime('now')),
@@ -549,9 +647,10 @@ CREATE TABLE IF NOT EXISTS settings (
   garmin_last_sync_status TEXT DEFAULT '',    -- short result: "ok: 12 activities · 14 daily" | "failed: …"
   proactive_enabled INTEGER DEFAULT 1,        -- 1 = nightly quiet insight + weekly read/nutrition-checkin precompute (pull-never-push)
   research_enabled INTEGER DEFAULT 0,         -- 1 = host-side evidence research on (default OFF; off ⇒ deterministic, no network)
-  bg_ops_enabled INTEGER DEFAULT 1,           -- 1 = run supported agentic ops as durable background jobs (off ⇒ legacy inline blocking behavior)
+  bg_ops_enabled INTEGER DEFAULT 1,           -- legacy compatibility flag; agentic surfaces always use durable jobs
   agent_routes TEXT DEFAULT '',               -- optional JSON map { task -> agent }; empty/null = no routing (Auto everywhere, today's behavior)
-  update_check_enabled INTEGER DEFAULT 1      -- 1 = quiet daily check for a newer Cairn release (GitHub Releases API); pull-never-push, surfaced in Settings → Data
+  update_check_enabled INTEGER DEFAULT 1,     -- 1 = quiet daily check for a newer Cairn release (GitHub Releases API); pull-never-push, surfaced in Settings → Data
+  lead_mode TEXT DEFAULT 'lead'                -- lead | announce_first | review_everything — one calm autonomy control
 );
 
 -- Generated-artwork bookkeeping (see src/art.ts). art_assets records what each
@@ -862,6 +961,12 @@ CREATE TABLE IF NOT EXISTS evidence_cache (
   source_url TEXT,                    -- the URL backing the claim (http/https, validated)
   body TEXT,                          -- the supporting passage / detail
   confidence TEXT,                    -- high | moderate | low (plain-language band, never a score)
+  source_scope TEXT DEFAULT 'general',-- general | athlete | clinician (never inferred across boundaries)
+  source_version TEXT,                -- publication/guideline revision identifier
+  published_at TEXT,                  -- source publication date when supplied
+  reviewed_at TEXT,                   -- when Cairn last reviewed this claim/source pairing
+  expires_at TEXT,                    -- deterministic review/refresh boundary
+  verification_status TEXT DEFAULT 'source_only', -- claim_source | source_only | unverified
   retrieved_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_evidence_topic ON evidence_cache(topic);

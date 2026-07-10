@@ -4,7 +4,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { enqueueChatTurn, cancelTurn, onTurnEvent, getTurnPartialReply } from "../chatTurns.js";
 import { enqueueAgentJob } from "../agentJobs.js";
-import { distillChat } from "../coachOps.js";
 import {
   addChatMessage,
   archiveChat,
@@ -14,7 +13,6 @@ import {
   getArchivedConversation,
   getChatMessage,
   getChatTurn,
-  getSettings,
   listActiveChatTurns,
   listArchivedSessions,
   listChatMessages,
@@ -48,7 +46,11 @@ chatRouter.post("/", (req, res) => {
       return res.status(400).json({ error: "image_mime must be an accepted raster image type" });
     }
     let buf: Buffer;
-    try { buf = Buffer.from(String(b.image_base64), "base64"); } catch { return res.status(400).json({ error: "invalid base64" }); }
+    try {
+      buf = Buffer.from(String(b.image_base64), "base64");
+    } catch {
+      return res.status(400).json({ error: "invalid base64" });
+    }
     if (!buf.length) return res.status(400).json({ error: "empty image" });
     if (buf.length > CHAT_IMAGE_MAX_BYTES) return res.status(413).json({ error: "image too large" });
     fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -75,11 +77,12 @@ chatRouter.post("/", (req, res) => {
 // Read-only history: browse past conversations (archived by "fresh start") and
 // search across everything. These never mutate — nothing is hard-deleted.
 chatRouter.get("/search", (req, res) =>
-  res.json(searchChatMessages(String(req.query.q ?? ""), req.query.limit ? Number(req.query.limit) : 40)));
+  res.json(searchChatMessages(String(req.query.q ?? ""), req.query.limit ? Number(req.query.limit) : 40))
+);
 chatRouter.get("/sessions", (req, res) =>
-  res.json(listArchivedSessions(req.query.limit ? Number(req.query.limit) : 50)));
-chatRouter.get("/sessions/:sessionId", (req, res) =>
-  res.json(getArchivedConversation(req.params.sessionId)));
+  res.json(listArchivedSessions(req.query.limit ? Number(req.query.limit) : 50))
+);
+chatRouter.get("/sessions/:sessionId", (req, res) => res.json(getArchivedConversation(req.params.sessionId)));
 
 // "Clear" archives rather than deletes (repo.clearChat -> archiveChat): chat is
 // part of the user's history/export, so nothing is hard-deleted anymore.
@@ -90,29 +93,16 @@ chatRouter.delete("/", (_req, res) => res.json(clearChat()));
 // pre-archive history into memory in the BACKGROUND as a chat_distill job. The
 // PWA settles a "remembered" pill when the job lands; a message typed during
 // the distill just queues as a normal chat turn (archive-before-enqueue keeps the
-// ordering). When bg_ops is OFF this falls back to the legacy blocking inline path.
+// ordering). This always queues: resetting chat never waits on a coaching CLI.
 chatRouter.post("/reset", async (req, res) => {
   const history = listChatMessages(200);
   if (!history.length) return res.json({ ok: true, distilled: 0, archived: 0 });
   const agent = req.body?.agent ?? null;
-  if (getSettings().bg_ops_enabled) {
-    const snapshot = history.map((m: any) => ({ role: m.role, content: m.content }));
-    const { archived, session_id } = archiveChat();
-    const job = createAgentJob({ kind: "chat_distill", input: { agent, history: snapshot }, agent });
-    enqueueAgentJob((job as any).id);
-    return res.json({ ok: true, archived, session_id, distilling: (job as any).id });
-  }
-  // Legacy inline path (bg_ops off): distill (best-effort) then archive.
-  const r = await distillChat(agent, history.map((m: any) => ({ role: m.role, content: m.content })));
+  const snapshot = history.map((m: any) => ({ role: m.role, content: m.content }));
   const { archived, session_id } = archiveChat();
-  res.json({
-    ok: true,
-    distilled: r.distilled,
-    archived,
-    session_id,
-    ...(r.farewell ? { farewell: r.farewell } : {}),
-    ...(r.note ? { note: r.note } : {}),
-  });
+  const job = createAgentJob({ kind: "chat_distill", input: { agent, history: snapshot }, agent });
+  enqueueAgentJob((job as any).id);
+  return res.json({ ok: true, archived, session_id, distilling: (job as any).id });
 });
 
 // Active (queued + running) turns, oldest-first — the PWA reconstructs the live
@@ -149,11 +139,18 @@ chatRouter.get("/turns/:id/stream", (req, res) => {
     "X-Accel-Buffering": "no",
   });
   const send = (event: string, data: any) => {
-    try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch { /* client gone */ }
+    try {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    } catch {
+      /* client gone */
+    }
   };
 
   const turn = getChatTurn(id) as any;
-  if (!turn) { send("error", { error: "no such turn" }); return res.end(); }
+  if (!turn) {
+    send("error", { error: "no such turn" });
+    return res.end();
+  }
 
   // Initial snapshot, with the assistant message if the turn already finished, or
   // the reply prose streamed so far if it's still running (a reconnecting client —
@@ -164,12 +161,24 @@ chatRouter.get("/turns/:id/stream", (req, res) => {
   send("snapshot", { turn, message: assistantMsg, partial_reply: partialReply || undefined });
   if (["done", "error", "canceled"].includes(turn.status)) return res.end();
 
-  const keepalive = setInterval(() => { try { res.write(`: keepalive\n\n`); } catch { /* client gone */ } }, 15000);
+  const keepalive = setInterval(() => {
+    try {
+      res.write(`: keepalive\n\n`);
+    } catch {
+      /* client gone */
+    }
+  }, 15000);
   let unsubscribe = () => {};
-  const cleanup = () => { clearInterval(keepalive); unsubscribe(); };
+  const cleanup = () => {
+    clearInterval(keepalive);
+    unsubscribe();
+  };
   unsubscribe = onTurnEvent(id, (e) => {
     send(e.type, e);
-    if (e.type === "done" || e.type === "error" || e.type === "canceled") { cleanup(); res.end(); }
+    if (e.type === "done" || e.type === "error" || e.type === "canceled") {
+      cleanup();
+      res.end();
+    }
   });
   req.on("close", cleanup);
 });

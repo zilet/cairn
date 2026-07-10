@@ -9,6 +9,7 @@ import { startScheduler } from "./scheduler.js";
 import { recoverPendingEnrich } from "./enrich.js";
 import { recoverChatTurns, abortAllTurns } from "./chatTurns.js";
 import { recoverAgentJobs, abortAllJobs } from "./agentJobs.js";
+import { startBrainReviewJobSubscriber } from "./brainReviewJobs.js";
 import { warmArt } from "./art.js";
 import { maybeScheduleAgentCliAutoUpdate } from "./agentCliUpdates.js";
 import { authGuard, authEnabled, requireAuth, authStartupError, rateLimitGuard, rateLimitEnabled, tokenMatches, checkRateLimit } from "./auth.js";
@@ -20,6 +21,7 @@ import { runWithBrainSnapshot } from "./brain/snapshot.js";
 import * as repo from "./repo.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PUBLIC_DIR = path.join(__dirname, "..", "public");
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || "0.0.0.0";
 
@@ -114,7 +116,7 @@ app.delete("/mcp", methodNotAllowed);
 
 // PWA (static)
 app.use(
-  express.static(path.join(__dirname, "..", "public"), {
+  express.static(PUBLIC_DIR, {
     setHeaders(res, filePath) {
       const base = path.basename(filePath);
       if (base === "manifest.json") {
@@ -137,7 +139,10 @@ app.use(
 // real static assets are mounted above this, so this fallback stays narrow.
 app.get(/^\/app(?:\/.*)?$/, (_req, res) => {
   res.setHeader("Cache-Control", "no-cache");
-  res.sendFile(path.join(__dirname, "..", "public", "index.html"));
+  // Pass the workspace path as `root` and the shell as a relative filename.
+  // send's dotfile guard would otherwise reject an absolute path when Cairn is
+  // checked out below a hidden directory (for example `.codex/worktrees`).
+  res.sendFile("index.html", { root: PUBLIC_DIR, dotfiles: "deny" });
 });
 
 // Fail closed before binding: if the operator demanded auth (CAIRN_REQUIRE_AUTH)
@@ -159,6 +164,9 @@ const server = app.listen(PORT, HOST, () => {
       : `  auth -> none (set CAIRN_AUTH_TOKEN to gate /api and /mcp; keep the port private)`
   );
   if (rateLimitEnabled) console.log(`  rate -> per-IP limit active on /api and /mcp`);
+  // Subscribe before any scheduler/recovery work can emit a material signal.
+  // The callback only persists a bounded job and queues its async worker.
+  startBrainReviewJobSubscriber();
   startScheduler();
   maybeScheduleAgentCliAutoUpdate();
   // Re-process any free-text entries left 'pending' by a prior restart.

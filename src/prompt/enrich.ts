@@ -30,6 +30,15 @@ const ENRICH_FOOD_SCHEMA = `{
     "carbs_g": <number|null>,
     "fat_g": <number|null>,
     "fiber_g": <number|null>,
+    "nutrition_pattern": {
+      "sodium": "low|moderate|high|unknown", "potassium": "low|moderate|high|unknown",
+      "calcium": "low|moderate|high|unknown", "iron": "low|moderate|high|unknown",
+      "saturated_fat": "low|moderate|high|unknown", "added_sugar": "low|moderate|high|unknown",
+      "omega_3_source": <boolean|null>, "alcohol_servings": <number|null>,
+      "caffeine_mg": <number|null>, "caffeine_time": <string|null>,
+      "food_quality": "mostly_whole|mixed|mostly_ultra_processed|unknown",
+      "confidence": "low|medium|high", "basis": "label|user_report|estimated_from_foods"
+    },
     "notes": <string|null>
   },
   "memory": [
@@ -80,6 +89,9 @@ ${guardrails}
 - Expand the note into ingredient-level rows with quantities when stated or reasonably inferable.
 - Nutrition estimates are rough. Fill totals and per-ingredient macros when you can reasonably estimate
   them from ordinary serving sizes; use null for values that are too uncertain.
+- Use nutrition_pattern for COARSE pattern bands, not invented micronutrient milligrams. Label or explicit
+  user facts may be high confidence; ordinary-food inference is low/medium. Alcohol and caffeine stay null
+  unless the note actually identifies them.
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 ${ENRICH_FOOD_SCHEMA}
@@ -188,6 +200,9 @@ GUARDRAILS:
   use null for any single macro you truly can't estimate rather than guessing wildly.
 - "confidence" is a COARSE band, not a number: "high" (clear, familiar plate), "medium" (reasonable
   guess), "low" (hard to read — portions unclear, packaging only, dim photo).
+- A restaurant photo cannot justify precise micronutrient numbers. Use only coarse nutrition_pattern
+  bands, mark basis:"photo", and keep confidence low/medium unless a readable label or explicit user
+  statement supports it. Alcohol and caffeine stay null unless visible or stated.
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 {
@@ -198,6 +213,15 @@ OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
   "carbs_g": <number|null>,
   "fat_g": <number|null>,
   "fiber_g": <number|null>,
+  "nutrition_pattern": {
+    "sodium": "low|moderate|high|unknown", "potassium": "low|moderate|high|unknown",
+    "calcium": "low|moderate|high|unknown", "iron": "low|moderate|high|unknown",
+    "saturated_fat": "low|moderate|high|unknown", "added_sugar": "low|moderate|high|unknown",
+    "omega_3_source": <boolean|null>, "alcohol_servings": <number|null>,
+    "caffeine_mg": <number|null>, "caffeine_time": <string|null>,
+    "food_quality": "mostly_whole|mixed|mostly_ultra_processed|unknown",
+    "confidence": "low|medium|high", "basis": "photo|user_report"
+  },
   "notes": <string|null>,
   "confidence": "low|medium|high"
 }

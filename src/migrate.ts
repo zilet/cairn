@@ -563,10 +563,47 @@ export const MIGRATIONS: Migration[] = [
   // background agentic tidy (canonicalize + classify + how-to guide + good art).
   // `enrichment_status` drives that queue's status machine; `equipment` stores the
   // classified implement (guide + muscle/equipment-aware art context).
-  { version: 58, name: "exercise-enrichment", up: (db) => {
-    addColumn(db, "exercises", "equipment TEXT");
-    addColumn(db, "exercises", "enrichment_status TEXT");
-  } },
+  {
+    version: 58,
+    name: "exercise-enrichment",
+    up: (db) => {
+      addColumn(db, "exercises", "equipment TEXT");
+      addColumn(db, "exercises", "enrichment_status TEXT");
+    },
+  },
+  {
+    version: 59,
+    name: "settings-lead-mode",
+    up: (db) =>
+      // The single athlete-facing autonomy posture. The accountability ledger,
+      // server safety floors, and undo path remain the execution gate; this value
+      // only selects among the policy's allowed postures.
+      addColumn(db, "settings", "lead_mode TEXT DEFAULT 'lead'"),
+  },
+  {
+    version: 60,
+    name: "evidence-governance",
+    up: (db) => {
+      addColumn(db, "evidence_cache", "source_scope TEXT DEFAULT 'general'");
+      addColumn(db, "evidence_cache", "source_version TEXT");
+      addColumn(db, "evidence_cache", "published_at TEXT");
+      addColumn(db, "evidence_cache", "reviewed_at TEXT");
+      addColumn(db, "evidence_cache", "expires_at TEXT");
+      addColumn(db, "evidence_cache", "verification_status TEXT DEFAULT 'source_only'");
+      // Existing rows have inspectable provenance but were never checked as a
+      // claim/source pair. Preserve them as source_only and give their original
+      // retrieval a bounded review window instead of retroactively calling them verified.
+      try {
+        db.exec(`UPDATE evidence_cache
+                  SET source_scope = COALESCE(NULLIF(source_scope, ''), 'general'),
+                      reviewed_at = COALESCE(reviewed_at, retrieved_at),
+                      expires_at = COALESCE(expires_at, datetime(retrieved_at, '+90 days')),
+                      verification_status = COALESCE(NULLIF(verification_status, ''), 'source_only')`);
+      } catch {
+        /* fresh/empty cache */
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: DatabaseSync) {

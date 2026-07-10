@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { reconcileExercises } from "../../coachOps.js";
 import {
   buildPlanICS,
   deleteExercise,
@@ -21,6 +20,7 @@ import {
   upsertExercise,
 } from "../../domain/training/index.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
+import { queueMcpAgentJob } from "./background.js";
 
 const planItemShape = z.object({
   exercise: z.string().optional().describe("exercise name (required for a strength item; a label for a cardio item)"),
@@ -30,11 +30,24 @@ const planItemShape = z.object({
   target_weight: z.number().nullable().optional().describe("lb; negative = assisted, null = bodyweight"),
   note: z.string().nullable().optional(),
   warmup_sets: z.number().int().nullable().optional().describe("# of warmup sets before working sets"),
-  target_seconds: z.number().int().nullable().optional().describe("prescribed hold/duration in seconds, for timed exercises"),
-  mode: z.enum(["reps", "timed"]).nullable().optional().describe("exercise mode, applied when a new exercise is created"),
+  target_seconds: z
+    .number()
+    .int()
+    .nullable()
+    .optional()
+    .describe("prescribed hold/duration in seconds, for timed exercises"),
+  mode: z
+    .enum(["reps", "timed"])
+    .nullable()
+    .optional()
+    .describe("exercise mode, applied when a new exercise is created"),
   // First-class planned cardio (v35): a kind:'cardio' item carries an endurance
   // prescription instead of a loaded exercise (no exercise_id is stored).
-  kind: z.enum(["strength", "cardio"]).nullable().optional().describe("'cardio' = an endurance prescription with no loaded exercise; default 'strength'"),
+  kind: z
+    .enum(["strength", "cardio"])
+    .nullable()
+    .optional()
+    .describe("'cardio' = an endurance prescription with no loaded exercise; default 'strength'"),
   target_distance_km: z.number().nullable().optional().describe("planned distance in km (cardio)"),
   target_duration_min: z.number().nullable().optional().describe("planned moving time in minutes (cardio)"),
   target_zone: z.string().nullable().optional().describe("HR/effort zone, e.g. 'Z2' | 'tempo' | 'easy' (cardio)"),
@@ -59,7 +72,15 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
   server.tool(
     "get_plan_ics",
     "Export the training plan as an iCalendar (.ics) feed — each plan day as a weekly-recurring all-day event. Pull-not-push: subscribe in a calendar app. Day 1 maps to Monday by default; pass start_weekday (0=Sun..6=Sat) to shift.",
-    { start_weekday: z.number().int().min(0).max(6).optional().describe("JS weekday (0=Sun..6=Sat) that plan Day 1 lands on; default 1 (Monday)") },
+    {
+      start_weekday: z
+        .number()
+        .int()
+        .min(0)
+        .max(6)
+        .optional()
+        .describe("JS weekday (0=Sun..6=Sat) that plan Day 1 lands on; default 1 (Monday)"),
+    },
     async ({ start_weekday }) => ({
       content: [{ type: "text" as const, text: buildPlanICS({ startWeekday: start_weekday }) }],
     })
@@ -81,7 +102,8 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
       target_weight: z.number().optional(),
       target_seconds: z.number().int().optional().describe("prescribed hold/duration in seconds, for timed exercises"),
     },
-    async (target) => asText(updateTarget(target.day_number, target.exercise, target.target_weight, target.target_seconds))
+    async (target) =>
+      asText(updateTarget(target.day_number, target.exercise, target.target_weight, target.target_seconds))
   );
 
   server.tool(
@@ -107,12 +129,14 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
     "set_plan",
     "Replace the ENTIRE weekly plan — use to change frequency (e.g. 3/4/5/7 days) or to add cardio days. Days not included are removed. Each item may be a strength exercise or a kind:'cardio' endurance prescription.",
     {
-      days: z.array(z.object({
-        day_number: z.number().int().optional(),
-        name: z.string(),
-        focus: z.string().nullable().optional(),
-        items: z.array(planItemShape),
-      })),
+      days: z.array(
+        z.object({
+          day_number: z.number().int().optional(),
+          name: z.string(),
+          focus: z.string().nullable().optional(),
+          items: z.array(planItemShape),
+        })
+      ),
     },
     async ({ days }) => asText(replacePlan(days))
   );
@@ -170,12 +194,23 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
       mode: z.enum(["variations", "alternatives"]).optional(),
       bodyweight_only: z.boolean().optional(),
       avoid_equipment: z.array(z.string()).optional(),
-      injury_areas: z.array(z.string()).optional().describe("areas to keep load off (e.g. ['knee','shoulder']) — filters injury-risky swaps in 'alternatives' mode"),
+      injury_areas: z
+        .array(z.string())
+        .optional()
+        .describe(
+          "areas to keep load off (e.g. ['knee','shoulder']) — filters injury-risky swaps in 'alternatives' mode"
+        ),
     },
     async ({ exercise, mode, bodyweight_only, avoid_equipment, injury_areas }) =>
-      asText(mode === "alternatives"
-        ? suggestAlternatives(exercise, { bodyweightOnly: bodyweight_only, avoidEquipment: avoid_equipment as any, injuryAreas: injury_areas })
-        : suggestVariations(exercise))
+      asText(
+        mode === "alternatives"
+          ? suggestAlternatives(exercise, {
+              bodyweightOnly: bodyweight_only,
+              avoidEquipment: avoid_equipment as any,
+              injuryAreas: injury_areas,
+            })
+          : suggestVariations(exercise)
+      )
   );
 
   server.tool(
@@ -204,8 +239,8 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
 
   server.tool(
     "reconcile_exercise_names",
-    "Tidy descriptive / duplicate exercise titles into clean, reusable CANONICAL movement names so each lift's history merges into one trend (e.g. 'DB bench'/'Dumbbell bench press' → one movement, 'Dead hang'/'Dead hang timed' folded together) and profiles each movement's muscle group. A deterministic canonicalizer (exercise-canon) always folds the obvious cases; this AGENTIC pass learns the harder synonyms a human would catch and persists them as exercise_aliases, so future logging resolves them automatically. CONSERVATIVE — only merges unambiguous same-movement names, and NEVER changes any logged numbers (only the series merge). Returns {aligned, applied}. The mirror of reconcile_markers for movements.",
+    "Queue a conservative reconciliation of duplicate exercise titles into canonical movements. Returns a job immediately; poll get_agent_job. It never changes logged numbers.",
     { agent: z.string().optional().describe("agent name from list_agents; omit/'auto' for the rotation") },
-    async ({ agent }) => asText(await reconcileExercises(agent))
+    async ({ agent }) => asText(queueMcpAgentJob("exercise_reconcile", {}, agent))
   );
 }

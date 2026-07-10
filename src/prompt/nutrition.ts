@@ -27,6 +27,19 @@ const MEAL_SCHEMA = `{
       "meals": [ { "name": "<dish name, e.g. Chicken & rice bowl>", "items": "short ingredient list", "kcal": <number>, "protein_g": <number>, "carbs_g": <number>, "fat_g": <number> } ] }
   ],
   "shopping": ["item", "item"],
+  "practicality": {
+    "prep_pattern": "<how this fits the user's real week and available prep time>",
+    "budget_availability": "<ordinary substitutions for cost or availability>",
+    "household_fit": "<how shared meals respect the household constraints>",
+    "repeatable_staples": ["<frequent food intentionally reused>"],
+    "confidence": "low|medium|high"
+  },
+  "nutrition_pattern": {
+    "fiber": "adequate|watch|unknown", "omega_3_sources": "adequate|watch|unknown",
+    "iron_context": "adequate|watch|unknown", "calcium_potassium": "adequate|watch|unknown",
+    "saturated_fat_added_sugar": "supportive|watch|unknown",
+    "basis": "planned_food_pattern", "confidence": "low|medium|high"
+  },
   "notes": "<flags, swaps, anything the user should know>"
 }`;
 
@@ -341,6 +354,10 @@ HARD RULES:
 - Never propose intake below ~1500 kcal for this user regardless of math.
 - Favor whole foods; respect any preferences/constraints in memory.
 - Time more carbs around training days; keep it practical and repeatable, not 7 unique gourmet days.
+- Evaluate PRACTICALITY as part of adequacy: preparation time, household fit, ordinary cost/availability,
+  and reuse of the user's frequent foods. A theoretically perfect plan they will not cook is not adequate.
+- Nutrition-pattern judgments are coarse and food-pattern based. Never invent precise sodium, potassium,
+  calcium, or iron amounts without a label/source; use unknown when the menu cannot support the claim.
 
 ${longevityGuardrails(plantForward)}
 

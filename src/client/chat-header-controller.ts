@@ -3,11 +3,11 @@
 
 (() => {
   function headerControllerRecord(value: unknown): Record<string, unknown> {
-    return value && typeof value === "object" ? value as Record<string, unknown> : {};
+    return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
   }
 
   function headerControllerHtml<T extends HTMLElement = HTMLElement>(value: Element | null | undefined): T | null {
-    return value instanceof HTMLElement ? value as T : null;
+    return value instanceof HTMLElement ? (value as T) : null;
   }
 
   function settleFreshPill(distilled: unknown, token: number, deps: ChatHeaderControllerDeps): void {
@@ -51,13 +51,13 @@
     }
     if (token !== deps.currentToken() || deps.state.tab !== "chat") return;
 
-    // bg_ops OFF (legacy): the distilled count is already on the response -- settle now.
+    // Compatibility with an older server that returned the distilled count inline.
     if (!r || !r.distilling) {
       settleFreshPill(r && r.ok ? r.distilled : 0, token, deps);
       return;
     }
 
-    // bg_ops ON: stream the distill job; settle the pill on done. The job lives
+    // Current server: stream the durable distill job; settle the pill on done. The job lives
     // server-side, so it survives a reload (a re-render's chatReconnect leaves the
     // turn stream alone; this pill is best-effort and simply won't reappear).
     const distilling = r.distilling;

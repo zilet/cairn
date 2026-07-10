@@ -16,13 +16,23 @@ import {
 beforeEach(() => resetTables("food_notes", "chat_messages", "chat_turns", "profile"));
 
 test("getCoachContext carries today's food even after the chat thread is archived", () => {
-  repo.addFoodNote("breakfast", "", { summary: "Turkey sourdough plate", kcal: 400, protein_g: 52 });
+  repo.addFoodNote("breakfast", "", {
+    summary: "Turkey sourdough plate",
+    kcal: 400,
+    protein_g: 52,
+    nutrition_pattern: { whole_foods: "mostly", caffeine_mg: 80, confidence: "observed" },
+  });
   repo.addChatMessage("user", "Breakfast was logged in this thread");
   repo.archiveChat();
 
   const ctx = repo.getCoachContext();
   assert.equal(ctx.day_intake.count, 1);
   assert.equal(ctx.day_intake.entries[0].summary, "Turkey sourdough plate");
+  assert.deepEqual(ctx.day_intake.entries[0].nutrition_pattern, {
+    whole_foods: "mostly",
+    caffeine_mg: 80,
+    confidence: "observed",
+  });
 
   const prompt = buildChatPrompt([], "How am I doing today?");
   assert.match(prompt, /"day_intake"/, "fresh chat prompt includes durable day intake");

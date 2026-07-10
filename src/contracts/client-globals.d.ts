@@ -88,12 +88,31 @@ declare global {
     CALLOUTS: CairnBodyFigureCallout[];
     GLOWS: Record<string, Array<[number, number, number, number, string]>>;
     ARM_SITES: Set<string>;
-    silhouette(sex: string, ratios?: Record<string, number>): { torso: string; armR: string; armL: string };
-    muscles(sex: string, side: CairnBodyFigureSide, ratios?: Record<string, number>): Array<{ group: string; d: string }>;
-    detailStrokes(sex: string, side: CairnBodyFigureSide, ratios?: Record<string, number>): string[];
-    warpPoint(pt: [number, number], sex: string, ratios?: Record<string, number>, kind?: "torso" | "arm"): [number, number];
+    SITES: readonly string[];
+    WAIST_OF_HEIGHT: Record<string, number>;
+    REF_MULT: Record<string, Record<string, number>>;
+    MEAS_LIMITS: Record<string, [number, number]>;
+    WIDTH_EXP: Record<string, number>;
+    silhouette(sex: string): { torso: string; armR: string; armL: string };
+    muscles(sex: string, side: CairnBodyFigureSide): Array<{ group: string; d: string }>;
+    detailStrokes(sex: string, side: CairnBodyFigureSide): string[];
+    warpPoint(pt: [number, number], sex: string): [number, number];
     waistTrace(sex: string, sign: 1 | -1, guideScale?: number): string;
     figureSvg(side: CairnBodyFigureSide, tones: Record<string, string>, opts?: CairnBodyFigureOpts): string;
+    referenceTape(sex: string, heightIn: number): Record<string, number>;
+    widthScales(tape: Record<string, number>, ref: Record<string, number>): Record<string, number>;
+    measuredSilhouette(
+      sex: string,
+      tape: Partial<Record<string, number | null>> | null,
+      heightIn: number
+    ): {
+      torso: string;
+      armR: string;
+      armL: string;
+      scales: Record<string, number>;
+      ref: Record<string, number>;
+    };
+    measuredPoint(pt: [number, number], sex: string, scales: Record<string, number>, clip?: string): [number, number];
     loopD(pts: Array<[number, number]>): string;
     openD(pts: Array<[number, number]>): string;
     mirrorPts(pts: Array<[number, number]>): Array<[number, number]>;
@@ -705,7 +724,13 @@ declare global {
     root: HTMLElement;
     workingModel: Pick<
       SettingsScreenWorkingModel,
-      "garmin_username" | "garmin_password" | "enrich_enabled" | "art_enabled" | "research_enabled" | "gemini_api_key"
+      | "garmin_username"
+      | "garmin_password"
+      | "enrich_enabled"
+      | "art_enabled"
+      | "research_enabled"
+      | "gemini_api_key"
+      | "lead_mode"
     >;
     settings: Record<string, unknown>;
     data: SettingsScreenData;
@@ -2614,8 +2639,15 @@ declare global {
       garminStatusLine(settings: unknown, syncing: boolean, options?: { relTime?: (value: string) => string }): string;
       agentHealthCard(stats: unknown): string;
       agentOpLabel(op: unknown): string;
-      agentActivityCard(stats: unknown, options?: { relTime?: (value: string) => string; absDate?: (value: string) => string }): string;
-      noticedCard(data: unknown, options?: { relTime?: (value: string) => string; absDate?: (value: string) => string }): string;
+      agentActivityCard(
+        stats: unknown,
+        options?: { relTime?: (value: string) => string; absDate?: (value: string) => string }
+      ): string;
+      noticedCard(
+        data: unknown,
+        options?: { relTime?: (value: string) => string; absDate?: (value: string) => string }
+      ): string;
+      brainDiagnosticsCard(data: unknown): string;
       agentChipState(agent: Record<string, unknown>): { cls: string; label: string };
       updateCardHtml(status: unknown, options: { updateCheckEnabled: boolean }): string;
     };
@@ -2647,7 +2679,10 @@ declare global {
         garminStatusHtml: string;
       }): string;
       automationSliceHtml(options: {
-        workingModel: Pick<SettingsScreenWorkingModel, "enrich_enabled" | "art_enabled" | "research_enabled">;
+        workingModel: Pick<
+          SettingsScreenWorkingModel,
+          "enrich_enabled" | "art_enabled" | "research_enabled" | "lead_mode"
+        >;
         settings: Record<string, unknown>;
         artSpendHtml: string;
         researchEligible: { eligible?: boolean; reason?: string } | null;

@@ -169,6 +169,16 @@ New/changed components (CSS must implement, the client JS must emit):
   - **Close / dismiss — `.xbtn`.** Bare-glyph × (`--muted` → `--ink`, `--press-xs`). Migrated:
     `.chip-x` (destructive — retints to `--warn`), `.supp-x`, `.bpsheet-x`, `.agenda-x`, and the
     framed `.sheet-x` (adds a card-2 circle chrome on top).
+  - **Coach-change rationale and outcome language.** A background coaching change is rendered at the
+    affected exercise or meal, never as a global activity feed. Reuse `.ex-flag` for the compact
+    item note, `.linkbtn-quiet` for “why this,” and the actionable-toast pattern for a one-tap
+    **Undo**. A material announced change uses `.well-accent`; a calm completed evaluation may add
+    `.well-accent-sage`. The four outcome phrases are fixed: “this moved as expected,” “the result
+    didn't match what I expected,” “we can't tell yet,” and “this was stopped before we could tell.”
+    Confidence is written only as `tentative`, `observed`, or `strong`; never expose evaluator
+    scores, coefficients, internal tiers, or specialist transcripts. Undo labels name the concrete
+    effect (“Restore previous bench target”), remain available at the affected detail surface after
+    the toast expires, and use the same press/motion/reduced-motion tokens as existing actions.
 - Chat `.bubble.user` = ink on `--ink` (cream text); `.bubble.assistant` = card.
 - Health **Standing** (Me→Health, the hero read): `.hstand*` — the momentum-led capacity read
   (three-age strip, `.hstand-bc-*` live body-composition, `.hstand-lever` terracotta well = the one

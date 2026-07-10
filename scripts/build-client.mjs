@@ -243,6 +243,13 @@ export const CLIENT_OUTPUTS = [
 // REPRODUCES THE CANONICAL <script> SEQUENCE EXACTLY — this manifest is now the
 // authoritative encoding of that order. Every CLIENT_OUTPUTS output (plus the
 // hand-written classic shim public/js/10-boot.js) appears in exactly one bundle.
+//
+// Splitting the larger bundles further was evaluated and DECLINED: `defer` on
+// the <script> tags already unblocked first paint, the IIFE shared-global model
+// makes any reshape a load-order hazard, and a bundle reshape re-enters the
+// breakage class that bit the last shell reshape (smoke assertions, the
+// Dockerfile COPY list, the deploy health check) for a marginal win. Revisit
+// only alongside a move to real ES modules.
 export const BUNDLES = [
   {
     output: "public/js/bundle-01-core.js",

@@ -120,6 +120,38 @@ export interface ClientAgentStats {
   [key: string]: unknown;
 }
 
+export interface ClientBrainDecisionSummary {
+  id: number;
+  created_at?: string;
+  effective_date?: string | null;
+  kind: string;
+  domain: string;
+  summary: string;
+  rationale?: string | null;
+  status: string;
+  autonomy_tier: string;
+  reversible: boolean;
+  latest_verdict?: string | null;
+}
+
+export interface ClientBrainToolCall {
+  id: number;
+  run_id: string;
+  op: string;
+  tool: string;
+  args_summary?: string | null;
+  rows_returned?: number | null;
+  latency_ms?: number | null;
+  status?: string | null;
+  created_at: string;
+}
+
+export interface ClientBrainDiagnostics {
+  metrics?: Record<string, unknown>;
+  decisions: ClientBrainDecisionSummary[];
+  tool_calls: ClientBrainToolCall[];
+}
+
 export interface ClientAgentCliUpdateStatus {
   running?: boolean;
   status?: string;
@@ -1725,6 +1757,8 @@ export interface ClientApiResponses {
   "/api/settings": ClientSettingsResponse;
   "/api/agents": ClientAgentConfig;
   "/api/agent-stats": ClientAgentStats;
+  "/api/brain-diagnostics": ClientBrainDiagnostics;
+  "/api/brain/decisions": ClientBrainDecisionSummary[];
   "/api/agent-clis/update": ClientAgentCliUpdateStatus;
   "/api/art/manifest": ClientArtManifestResponse;
   "/api/art/stats": ClientArtStatsResponse;
@@ -1854,6 +1888,7 @@ type ClientApiResponseForCleanPath<Path extends string> =
                                       : Path extends `/meal-plans/${string}/days` ? ClientMealPlan
                                         : Path extends `/food-notes/${string}` ? ClientFoodNote | ClientDeleteResponse
                                           : Path extends `/proposals/${string}/apply` ? ClientProposalResult
+                                            : Path extends `/proposals/${string}/lead` ? ClientProposalResult
                                             : Path extends `/proposals/${string}/discard` ? ClientProposal
                                               : Path extends `/program/blocks/${string}` ? ClientProgramBlock
                                                 : Path extends `/directives/${string}` ? { ok: true; directive: ClientDirective }
@@ -1871,7 +1906,8 @@ type ClientApiResponseForCleanPath<Path extends string> =
                                                                         : Path extends `/agent-jobs/${string}/cancel` ? ClientAgentJobResponse
                                                                           : Path extends `/agent-jobs/${string}` ? ClientAgentJobResponse
                                                                             : Path extends `/agents/${string}/info` ? ClientAgentProbeResponse
-                                                                              : Path extends `/agents/${string}/models` ? ClientAgentModelsResponse
+                                                                                : Path extends `/agents/${string}/models` ? ClientAgentModelsResponse
+                                                                                  : Path extends `/brain/decisions/${string}/revert` ? ClientOkResponse & { decision?: ClientJsonObject; error?: string }
                                                                                 : unknown;
 
 export type ClientApiResponse<Path extends string> =

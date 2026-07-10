@@ -16,7 +16,7 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo } from "./_seed.js";
-import { applyFoodPhoto, processFoodPhotoJob, recoverPendingEnrich } from "../dist/enrich.js";
+import { applyFoodPhoto, coerceNutritionPattern, processFoodPhotoJob, recoverPendingEnrich } from "../dist/enrich.js";
 
 // A photo-backed food note exactly as the chat worker (logPhotoFood) creates it:
 // addFoodNote(meal, raw="", parsed, imagePath). raw="" keeps the TEXT enricher off.
@@ -102,6 +102,29 @@ test("applyFoodPhoto drops an invalid confidence value (no false precision, no s
   const p = repo.getFoodNote(note.id).parsed;
   assert.equal(p.kcal, 500);
   assert.ok(!("confidence" in p) || p.confidence === undefined, "a non low/medium/high confidence is not written");
+});
+
+test("nutrition pattern keeps coarse provenance and rejects false micronutrient precision", () => {
+  const pattern = coerceNutritionPattern(
+    {
+      sodium: "high",
+      potassium: "moderate",
+      iron: "low",
+      saturated_fat: "HIGH",
+      sodium_mg: 1_843.27,
+      omega_3_source: true,
+      caffeine_mg: 9_999,
+      food_quality: "mixed",
+      confidence: "medium",
+      basis: "photo",
+    },
+    "photo"
+  );
+  assert.equal(pattern.sodium, "high");
+  assert.equal(pattern.saturated_fat, "high");
+  assert.equal(pattern.caffeine_mg, 2_000);
+  assert.equal(pattern.basis, "photo");
+  assert.equal("sodium_mg" in pattern, false, "photo estimates do not preserve invented precision");
 });
 
 test("applyFoodPhoto returns false on a wrong-shape payload and leaves the note untouched", () => {

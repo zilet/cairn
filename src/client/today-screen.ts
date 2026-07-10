@@ -403,6 +403,32 @@ async function renderToday(opts: any = {}) {
     todayCompass,
   }));
 
+  // Autonomous changes explain themselves at the affected exercise and can be
+  // put back immediately. The server owns the exact rollback snapshot; the UI
+  // only sends the durable decision id that arrived with the plan item.
+  (Array.from(todayView.querySelectorAll("[data-decision-undo]")) as HTMLElement[]).forEach((button) => {
+    button.addEventListener("click", async () => {
+      const id = Number(button.dataset.decisionUndo);
+      if (!Number.isFinite(id) || button.dataset.busy === "1") return;
+      button.dataset.busy = "1";
+      button.setAttribute("aria-busy", "true");
+      try {
+        const result: any = await api(`/brain/decisions/${id}/revert`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reason: "one-tap undo from the affected exercise" }),
+        });
+        if (!result?.ok) throw new Error(result?.error || "This change can no longer be undone.");
+        toast("Put back the previous plan");
+        await renderToday({ soft: true });
+      } catch (error: any) {
+        toast(error?.message || "Could not undo that change");
+        button.dataset.busy = "";
+        button.removeAttribute("aria-busy");
+      }
+    });
+  });
+
   wireGuides(view);
 
   CairnTodaySessionController.wireSessionSurface({ session, hasLoggedSets }, todaySessionDeps());

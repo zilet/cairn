@@ -62,6 +62,34 @@ test("health evidence list escapes text, truncates body, and limits rows", () =>
   assert.equal((html.match(/class="hb-ev-row"/g) || []).length, 6);
 });
 
+test("health evidence exposes governed provenance and effective confidence", () => {
+  const health = loadHealthClient();
+  const html = health.evidenceListHtml([
+    {
+      source_title: "Clinical guideline",
+      confidence: "high",
+      effective_confidence: "moderate",
+      provenance: {
+        source_scope: "clinical_guideline",
+        source_version: "2026.1",
+        reviewed_at: "2026-06-01",
+        expires_at: "2027-06-01",
+        freshness: "review_due",
+        verification_status: "claim_source",
+      },
+    },
+  ]);
+
+  assert.match(html, /moderate confidence/);
+  assert.doesNotMatch(html, />high confidence</);
+  assert.match(html, /clinical guideline source/);
+  assert.match(html, /version 2026.1/);
+  assert.match(html, /reviewed 2026-06-01/);
+  assert.match(html, /review by 2027-06-01/);
+  assert.match(html, /review due/);
+  assert.match(html, /claim source/);
+});
+
 test("health evidence count map normalizes marker keys", () => {
   const health = loadHealthClient();
   const map = health.evidenceCountMap({
@@ -114,7 +142,7 @@ test("health directive renderer escapes content and exposes evidence affordance"
       rationale: "Particle burden <watch>",
     },
     2,
-    evMap,
+    evMap
   );
 
   assert.equal(JSON.stringify(health.DIRECTIVE_DOMAINS.map((row) => row[0])), '["nutrition","training","watch"]');
@@ -164,12 +192,12 @@ test("health marker ordering keeps clinical scan order before server order", () 
 
   assert.deepEqual(
     health.orderMarkersForDisplay("lipids", rows).map((m) => m.name),
-    ["LDL Cholesterol", "Direct LDL-C", "HDL Cholesterol", "Triglycerides", "Apolipoprotein B", "LDL Particle Number"],
+    ["LDL Cholesterol", "Direct LDL-C", "HDL Cholesterol", "Triglycerides", "Apolipoprotein B", "LDL Particle Number"]
   );
 
   assert.deepEqual(
     health.orderMarkersForDisplay("unknown", rows).map((m) => m.name),
-    rows.map((m) => m.name),
+    rows.map((m) => m.name)
   );
 });
 
@@ -180,10 +208,13 @@ test("health lipid subgroup labels and assay note are bounded and escaped", () =
   assert.equal(health.markerSubgroup("lipids", "LDL Particle Number"), "Advanced lipoprotein detail");
   assert.equal(health.markerSubgroup("kidney", "Creatinine"), "");
 
-  const note = health.lipidGroupNoteHtml([
-    { name: "LDL Cholesterol <std>", latest: { date: "2026-06-01" } },
-    { name: "Direct LDL-C <direct>", latest: { date: "2026-06-15" } },
-  ], { relAge: (date) => `age<${date}>` });
+  const note = health.lipidGroupNoteHtml(
+    [
+      { name: "LDL Cholesterol <std>", latest: { date: "2026-06-01" } },
+      { name: "Direct LDL-C <direct>", latest: { date: "2026-06-15" } },
+    ],
+    { relAge: (date) => `age<${date}>` }
+  );
 
   assert.match(note, /LDL-C is separated by assay/);
   assert.match(note, /LDL Cholesterol &lt;std&gt;/);

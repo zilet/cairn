@@ -404,7 +404,26 @@ const WEEKLY_READ_SCHEMA = `{
 // other quiet line. Same calm voice as the cross-domain pass; honest continuity
 // (six steady weeks is "nice", a light week is fine), never streak pressure.
 export function buildWeeklyReadPrompt(ctx?: CoachContext): string {
-  const context = ctx ?? repo.getCoachContext();
+  const base = ctx ?? repo.getCoachContext();
+  // "At most ONE calm accountability verdict" is enforced here, not just asked of
+  // the model: the weekly read's data carries only the single most recently
+  // evaluated decisive outcome, so a second verdict cannot be mentioned. Other
+  // surfaces (chat) keep the full per-decision outcomes.
+  const decisions = Array.isArray((base as any).recent_decisions) ? (base as any).recent_decisions : [];
+  const decisiveAt = (row: any) =>
+    row?.latest_outcome && ["aligned", "not_aligned"].includes(row.latest_outcome.verdict)
+      ? String(row.latest_outcome.evaluated_at ?? "")
+      : null;
+  const keep = decisions.reduce(
+    (best: any, row: any) => (String(decisiveAt(row) ?? "") > String(decisiveAt(best) ?? "") ? row : best),
+    null
+  );
+  const context = {
+    ...base,
+    recent_decisions: decisions.map((row: any) =>
+      row === keep || !decisiveAt(row) ? row : { ...row, latest_outcome: null }
+    ),
+  };
   return `${CAIRN_PERSONA}
 
 Prepare a short standing read of
@@ -419,6 +438,9 @@ THE CONSTITUTION (binding):
   is a suggestion to consider, never a directive. If the week went well and nothing needs changing,
   say that warmly and leave rationale and next_step empty. If there's genuinely nothing to report,
   return {"found": false}.
+- If DATA.recent_decisions contains a mature latest_outcome worth mentioning, include AT MOST ONE calm
+  accountability verdict: "that moved as expected", "that did not match what I expected", or "we cannot
+  tell yet". Never claim causation, never list every check, and never turn it into a grade.
 - BRIEF and HUMAN. The headline carries the read; rationale is ONE short sentence, never a paragraph.
   Speak TO the user in everyday words — NEVER narrate the data you were handed or name its internal
   fields. The one change, if any, goes in next_step.

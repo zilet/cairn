@@ -1,4 +1,17 @@
 import { db } from "../db.js";
+import { EVIDENCE_PACK } from "../evidencePack.js";
+import {
+  downgradedEvidenceConfidence,
+  evidenceFreshness,
+  type EvidenceFreshness,
+  type EvidenceSourceScope,
+  type EvidenceVerificationStatus,
+  isPlausibleSourceUrl as plausibleEvidenceUrl,
+  normalizeEvidenceDate,
+  normalizeEvidenceScope,
+  verifyClaimToSource,
+} from "../evidenceGovernance.js";
+import { allGuidelines } from "../guidelines.js";
 import { getProfile } from "./profile.js";
 import { matchOptimalZone, prioritizeMarkers } from "./propagation.js";
 import { getSettings } from "./settings.js";
@@ -13,7 +26,12 @@ export interface EvidenceInput {
   source_title?: string | null;
   source_url?: string | null;
   body?: string | null;
-  confidence?: string | null;        // high | moderate | low (plain band, never a score)
+  confidence?: string | null; // high | moderate | low (plain band, never a score)
+  source_scope?: EvidenceSourceScope | string | null;
+  source_version?: string | null;
+  published_at?: string | null;
+  reviewed_at?: string | null;
+  expires_at?: string | null;
 }
 
 export function normTopic(s: any): string {
@@ -21,6 +39,54 @@ export function normTopic(s: any): string {
 }
 
 const EVIDENCE_CONFIDENCE = new Set(["high", "moderate", "low"]);
+
+function datePlusDays(date: string, days: number): string {
+  const parsed = Date.parse(`${date}T12:00:00Z`);
+  return new Date(parsed + days * 86_400_000).toISOString().slice(0, 10);
+}
+
+export interface EvidenceProvenance {
+  source_scope: EvidenceSourceScope;
+  source_version: string | null;
+  published_at: string | null;
+  reviewed_at: string | null;
+  expires_at: string | null;
+  freshness: EvidenceFreshness;
+  verification_status: EvidenceVerificationStatus;
+  claim_verified: boolean;
+  usable_for_claim: boolean;
+}
+
+function governedEvidenceRow(row: any, asOf: Date | string | number = new Date()) {
+  if (!row) return row;
+  const source_scope = normalizeEvidenceScope(row.source_scope);
+  const verification_status: EvidenceVerificationStatus = ["claim_source", "source_only", "unverified"].includes(
+    String(row.verification_status)
+  )
+    ? row.verification_status
+    : "source_only";
+  const freshness = evidenceFreshness(row, asOf);
+  const claim_verified = verification_status === "claim_source";
+  const usable_for_claim = claim_verified && (freshness === "current" || freshness === "review_due");
+  const provenance: EvidenceProvenance = {
+    source_scope,
+    source_version: row.source_version ?? null,
+    published_at: row.published_at ?? null,
+    reviewed_at: row.reviewed_at ?? null,
+    expires_at: row.expires_at ?? null,
+    freshness,
+    verification_status,
+    claim_verified,
+    usable_for_claim,
+  };
+  return {
+    ...row,
+    source_scope,
+    freshness,
+    effective_confidence: downgradedEvidenceConfidence(row.confidence, freshness, verification_status),
+    provenance,
+  };
+}
 
 // Persist one cited evidence row. Coerced/clamped at the trust boundary like the
 // rest of the agent-fed writes. A row with neither a claim nor a body is skipped.
@@ -32,21 +98,42 @@ export function addEvidence(fields: EvidenceInput) {
   // internal URL even if a research source supplied one — mirrors the client filter
   // so the stored URL is genuinely http(s)-validated, not trusting the renderer alone.
   const rawUrl = fields.source_url == null ? null : String(fields.source_url).trim().slice(0, 600) || null;
-  const sourceUrl = rawUrl && isPlausibleSourceUrl(rawUrl) ? rawUrl : null;
+  const sourceUrl = rawUrl && plausibleEvidenceUrl(rawUrl) ? rawUrl : null;
   const confidence = EVIDENCE_CONFIDENCE.has(String(fields.confidence)) ? String(fields.confidence) : "moderate";
+  const sourceScope = normalizeEvidenceScope(fields.source_scope);
+  const reviewedAt = normalizeEvidenceDate(fields.reviewed_at) ?? new Date().toISOString().slice(0, 10);
+  const expiryDays = sourceScope === "clinician" ? 365 : 90;
+  const expiresAt = normalizeEvidenceDate(fields.expires_at) ?? datePlusDays(reviewedAt, expiryDays);
+  const publishedAt = normalizeEvidenceDate(fields.published_at);
+  const sourceTitle = fields.source_title == null ? null : String(fields.source_title).trim().slice(0, 300) || null;
+  const verification = verifyClaimToSource({
+    claim,
+    body,
+    marker: fields.marker,
+    source_title: sourceTitle,
+    source_url: sourceUrl,
+  });
   const info = db
-    .prepare(`INSERT INTO evidence_cache (topic, marker, claim, source_title, source_url, body, confidence, retrieved_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`)
+    .prepare(`INSERT INTO evidence_cache
+      (topic, marker, claim, source_title, source_url, body, confidence, source_scope, source_version,
+       published_at, reviewed_at, expires_at, verification_status, retrieved_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`)
     .run(
       fields.topic == null ? null : normTopic(fields.topic) || null,
       fields.marker == null || String(fields.marker).trim() === "" ? null : String(fields.marker).trim().slice(0, 60),
       claim,
-      fields.source_title == null ? null : String(fields.source_title).trim().slice(0, 300) || null,
+      sourceTitle,
       sourceUrl,
       body,
-      confidence
+      confidence,
+      sourceScope,
+      fields.source_version == null ? null : String(fields.source_version).trim().slice(0, 100) || null,
+      publishedAt,
+      reviewedAt,
+      expiresAt,
+      verification.status
     );
-  return db.prepare(`SELECT * FROM evidence_cache WHERE id = ?`).get(info.lastInsertRowid);
+  return governedEvidenceRow(db.prepare(`SELECT * FROM evidence_cache WHERE id = ?`).get(info.lastInsertRowid));
 }
 
 // Read cached evidence by topic and/or marker (most recent first). Pass neither
@@ -58,7 +145,7 @@ export function getEvidence(opts: { topic?: string | null; marker?: string | nul
   if (opts.topic != null && String(opts.topic).trim()) { where.push("topic = ?"); vals.push(normTopic(opts.topic)); }
   if (opts.marker != null && String(opts.marker).trim()) { where.push("marker = ? COLLATE NOCASE"); vals.push(String(opts.marker).trim()); }
   const sql = `SELECT * FROM evidence_cache ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY retrieved_at DESC, id DESC LIMIT ?`;
-  return db.prepare(sql).all(...vals, limit) as any[];
+  return (db.prepare(sql).all(...vals, limit) as any[]).map((row) => governedEvidenceRow(row));
 }
 
 // Make a directive's citation INSPECTABLE (Trust build V1). Reads the cached
@@ -74,6 +161,14 @@ export interface MarkerEvidence {
   body: string | null;
   confidence: string | null;
   retrieved_at: string | null;
+  source_scope: EvidenceSourceScope;
+  source_version: string | null;
+  published_at: string | null;
+  reviewed_at: string | null;
+  expires_at: string | null;
+  freshness: EvidenceFreshness;
+  effective_confidence: string;
+  provenance: EvidenceProvenance;
 }
 export function getEvidenceForMarker(marker: string | null | undefined, limit = 20): { marker: string | null; evidence: MarkerEvidence[] } {
   const name = marker == null ? "" : String(marker).trim();
@@ -85,6 +180,14 @@ export function getEvidenceForMarker(marker: string | null | undefined, limit = 
     body: r.body ?? null,
     confidence: r.confidence ?? null,
     retrieved_at: r.retrieved_at ?? null,
+    source_scope: r.source_scope,
+    source_version: r.source_version ?? null,
+    published_at: r.published_at ?? null,
+    reviewed_at: r.reviewed_at ?? null,
+    expires_at: r.expires_at ?? null,
+    freshness: r.freshness,
+    effective_confidence: r.effective_confidence,
+    provenance: r.provenance,
   }));
   return { marker: name || null, evidence };
 }
@@ -117,30 +220,50 @@ export function evidenceSummary(): EvidenceSummary {
   return { research_enabled, total, by_marker };
 }
 
-// Topics whose newest evidence row is older than ttlDays — the re-research pass
-// reads this to refresh stale grounding. Returns distinct {topic, marker, age_days}.
+// Topics whose newest evidence row is review-due/expired (or predates the legacy
+// TTL when metadata is absent). The scheduler/research path can refresh these
+// without treating an old source as current grounding in the meantime.
 export function staleEvidence(ttlDays = 90) {
   const ttl = Number.isFinite(ttlDays) ? Math.max(1, Number(ttlDays)) : 90;
-  const rows = db.prepare(
-    `SELECT topic, marker, MAX(retrieved_at) AS newest FROM evidence_cache
-     WHERE topic IS NOT NULL GROUP BY topic, marker`
-  ).all() as any[];
-  const out: { topic: string; marker: string | null; age_days: number }[] = [];
+  const rows = db
+    .prepare(
+      `SELECT * FROM evidence_cache WHERE topic IS NOT NULL
+     ORDER BY topic, marker, retrieved_at DESC, id DESC`
+    )
+    .all() as any[];
+  const seen = new Set<string>();
+  const out: {
+    topic: string;
+    marker: string | null;
+    age_days: number;
+    freshness: EvidenceFreshness;
+    source_scope: EvidenceSourceScope;
+  }[] = [];
   for (const r of rows) {
-    const t = Date.parse(String(r.newest ?? "").replace(" ", "T") + "Z");
+    const key = `${r.topic}\u0000${String(r.marker ?? "").toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const governed = governedEvidenceRow(r);
+    const t = Date.parse(String(r.retrieved_at ?? "").replace(" ", "T") + "Z");
     if (!Number.isFinite(t)) continue;
     const ageDays = Math.floor((Date.now() - t) / 86_400_000);
-    if (ageDays >= ttl) out.push({ topic: r.topic, marker: r.marker ?? null, age_days: ageDays });
+    if (["review_due", "expired", "unknown"].includes(governed.freshness) || ageDays >= ttl) {
+      out.push({
+        topic: r.topic,
+        marker: r.marker ?? null,
+        age_days: ageDays,
+        freshness: governed.freshness,
+        source_scope: governed.source_scope,
+      });
+    }
   }
   return out.sort((a, b) => b.age_days - a.age_days);
 }
 
 // ---------- citation verification ----------
-// Recognized guideline / evidence bodies. An agent-emitted citation naming one of
-// these is accepted on its face (they're the institutions the deterministic
-// MARKER_MAPPINGS already cite); anything else must match a cached evidence row.
-// Lowercased substring match, longest list wins — kept deliberately broad but
-// finite so a hallucinated journal title doesn't pass.
+// Recognized guideline / evidence bodies. This is now only a classification hint
+// for the explicit "organization_only" downgrade — naming one never verifies a
+// claim. Verification requires a curated or cached claim/source pair below.
 const GUIDELINE_ALLOWLIST = [
   "aha", "acc", "aha/acc", "acc/aha", "esc", "eas", "esc/eas", "ada", "aasld",
   "endocrine society", "uspstf", "nice", "who", "cochrane", "nla", "kdigo",
@@ -169,57 +292,191 @@ export interface CitationVerdict {
   citation: string | null;   // the kept citation string (null when stripped)
   uncertain: boolean;        // true when the citation could not be verified
   verified: boolean;
+  freshness: EvidenceFreshness | null;
+  source_scope: EvidenceSourceScope | null;
+  source_version: string | null;
+  reviewed_at: string | null;
+  expires_at: string | null;
+  verification_status: EvidenceVerificationStatus;
+  reason:
+    | "verified"
+    | "review_due"
+    | "expired"
+    | "claim_required"
+    | "claim_mismatch"
+    | "organization_only"
+    | "unverifiable";
 }
 
-// Verify an agent-emitted citation. Accepts when it names a recognized guideline
-// body OR matches a cached evidence_cache row (by source title/url). On failure
-// the unverifiable string is STRIPPED (returned null) and `uncertain` is set, so
-// the directive survives as a softer nudge rather than carrying a fake source.
-export function verifyCitation(citation: string | null | undefined, sourceUrl?: string | null): CitationVerdict {
-  const raw = citation == null ? "" : String(citation).trim();
-  if (!raw) return { citation: null, uncertain: true, verified: false };
-  const low = raw.toLowerCase();
-  // 1) A recognized guideline body named anywhere in the citation. SHORT acronyms
-  // (≤4 chars: who, nih, ata, …) require a WORD-BOUNDARY match — a bare `includes`
-  // false-accepts them inside unrelated words ("who" in "Whoop"/"who responds",
-  // "ada" in "Canada", "acr" in "across"). Longer / multiword entries stay
-  // substring (they're specific enough not to collide).
-  if (GUIDELINE_ALLOWLIST.some((g) => allowlistMatches(g, low, raw))) {
-    return { citation: raw.slice(0, 600), uncertain: false, verified: true };
+interface TrustedClaimSource {
+  title: string;
+  url: string;
+  body: string;
+  marker: string;
+  source_scope: EvidenceSourceScope;
+  source_version: string | null;
+  reviewed_at: string | null;
+  expires_at: string | null;
+}
+
+function normalizedCitation(value: unknown): string {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function citationTitleMatches(citation: string, title: string): boolean {
+  const raw = normalizedCitation(citation);
+  const expected = normalizedCitation(title);
+  if (!raw || !expected) return false;
+  if (raw === expected) return true;
+  const shorter = raw.length < expected.length ? raw : expected;
+  return shorter.length >= 12 && (raw.includes(expected) || expected.includes(raw));
+}
+
+function trustedClaimSources(): TrustedClaimSource[] {
+  const guidelines = allGuidelines().map((entry) => ({
+    title: entry.source,
+    url: entry.url,
+    body: entry.body,
+    marker: entry.keys.join(" "),
+    source_scope: entry.source_scope,
+    source_version: entry.source_version,
+    reviewed_at: entry.reviewed_at,
+    expires_at: entry.expires_at,
+  }));
+  const packed = EVIDENCE_PACK.map((entry) => ({
+    title: entry.source,
+    url: entry.source_url,
+    body: entry.summary,
+    marker: entry.markers.join(" "),
+    source_scope: entry.source_scope,
+    source_version: entry.source_version,
+    reviewed_at: entry.reviewed_at,
+    expires_at: entry.expires_at,
+  }));
+  return [...guidelines, ...packed];
+}
+
+function citationFailure(reason: CitationVerdict["reason"]): CitationVerdict {
+  return {
+    citation: null,
+    uncertain: true,
+    verified: false,
+    freshness: null,
+    source_scope: null,
+    source_version: null,
+    reviewed_at: null,
+    expires_at: null,
+    verification_status: "unverified",
+    reason,
+  };
+}
+
+function freshnessCitationVerdict(
+  raw: string,
+  source: {
+    freshness: EvidenceFreshness;
+    source_scope: EvidenceSourceScope;
+    source_version?: string | null;
+    reviewed_at?: string | null;
+    expires_at?: string | null;
   }
-  // 2) A cached evidence row whose title or url corroborates it.
+): CitationVerdict {
+  const { freshness } = source;
+  if (freshness === "expired" || freshness === "unknown") {
+    return {
+      citation: raw.slice(0, 600),
+      uncertain: true,
+      verified: false,
+      freshness,
+      source_scope: source.source_scope,
+      source_version: source.source_version ?? null,
+      reviewed_at: source.reviewed_at ?? null,
+      expires_at: source.expires_at ?? null,
+      verification_status: "claim_source",
+      reason: "expired",
+    };
+  }
+  return {
+    citation: raw.slice(0, 600),
+    uncertain: freshness === "review_due",
+    verified: true,
+    freshness,
+    source_scope: source.source_scope,
+    source_version: source.source_version ?? null,
+    reviewed_at: source.reviewed_at ?? null,
+    expires_at: source.expires_at ?? null,
+    verification_status: "claim_source",
+    reason: freshness === "review_due" ? "review_due" : "verified",
+  };
+}
+
+// Verify the CLAIM against a curated or cached source record. Organization names
+// alone are no longer proof: callers must provide the material claim (and marker
+// when available), and the source must have current claim-level verification.
+export function verifyCitation(
+  citation: string | null | undefined,
+  sourceUrl?: string | null,
+  claim?: string | null,
+  marker?: string | null
+): CitationVerdict {
+  const raw = citation == null ? "" : String(citation).trim();
+  if (!raw) return citationFailure("unverifiable");
+  const low = raw.toLowerCase();
   const url = sourceUrl == null ? "" : String(sourceUrl).trim();
+  const materialClaim = String(claim ?? "").trim();
+  const recognizedOrganization = GUIDELINE_ALLOWLIST.some((g) => allowlistMatches(g, low, raw));
+
+  for (const source of trustedClaimSources()) {
+    if (!citationTitleMatches(raw, source.title)) continue;
+    if (url && source.url.toLowerCase() !== url.toLowerCase()) continue;
+    if (!materialClaim) return citationFailure("claim_required");
+    const paired = verifyClaimToSource({
+      claim: materialClaim,
+      body: source.body,
+      marker: marker ?? source.marker,
+      source_title: source.title,
+      source_url: source.url,
+    });
+    if (!paired.verified) return citationFailure("claim_mismatch");
+    return freshnessCitationVerdict(raw, { ...source, freshness: evidenceFreshness(source) });
+  }
+
+  // Cached web research must already have survived claim/source validation at
+  // ingestion, and this new claim must still match that same supporting record.
   try {
-    const rows = db.prepare(`SELECT source_title, source_url FROM evidence_cache ORDER BY id DESC LIMIT 500`).all() as any[];
+    const rows = db.prepare(`SELECT * FROM evidence_cache ORDER BY id DESC LIMIT 500`).all() as any[];
     for (const r of rows) {
-      const title = String(r.source_title ?? "").trim().toLowerCase();
-      const rurl = String(r.source_url ?? "").trim().toLowerCase();
-      if (title && (low.includes(title) || title.includes(low))) return { citation: raw.slice(0, 600), uncertain: false, verified: true };
-      if (url && rurl && (rurl === url.toLowerCase())) return { citation: raw.slice(0, 600), uncertain: false, verified: true };
-      if (rurl && low.includes(rurl)) return { citation: raw.slice(0, 600), uncertain: false, verified: true };
+      const titleMatches = citationTitleMatches(raw, String(r.source_title ?? ""));
+      const rowUrl = String(r.source_url ?? "").trim();
+      const urlMatches = !!url && !!rowUrl && rowUrl.toLowerCase() === url.toLowerCase();
+      if (!titleMatches && !urlMatches) continue;
+      if (url && !urlMatches) continue;
+      if (!materialClaim) return citationFailure("claim_required");
+      const governed = governedEvidenceRow(r);
+      if (governed.provenance.verification_status !== "claim_source") return citationFailure("claim_mismatch");
+      const paired = verifyClaimToSource({
+        claim: materialClaim,
+        body: r.body,
+        marker: marker ?? r.marker,
+        source_title: r.source_title,
+        source_url: r.source_url,
+      });
+      if (!paired.verified) return citationFailure("claim_mismatch");
+      return freshnessCitationVerdict(raw, governed.provenance);
     }
-  } catch { /* evidence_cache absent on a very old DB — treat as unverifiable */ }
-  // Unverifiable → strip the string, downgrade to uncertain. Directive survives.
-  return { citation: null, uncertain: true, verified: false };
+  } catch {
+    /* evidence_cache absent on a very old DB — treat as unverifiable */
+  }
+  return citationFailure(recognizedOrganization ? "organization_only" : "unverifiable");
 }
 
 // Validate a URL is a plausible http(s) source (used by src/research.ts before a
 // claim is cached, and reusable anywhere a citation URL needs a sanity check).
 export function isPlausibleSourceUrl(url: any): boolean {
-  const s = String(url ?? "").trim();
-  if (!s) return false;
-  try {
-    const u = new URL(s);
-    if (u.protocol !== "http:" && u.protocol !== "https:") return false;
-    // host must have a dot and at least a 2-char TLD; reject bare/localhost-ish.
-    const host = u.hostname.toLowerCase();
-    if (!host.includes(".")) return false;
-    if (host === "localhost" || host.endsWith(".local")) return false;
-    if (!/\.[a-z]{2,}$/.test(host)) return false;
-    return true;
-  } catch {
-    return false;
-  }
+  return plausibleEvidenceUrl(url);
 }
 
 // ---------- supplement / interaction safety gate ----------

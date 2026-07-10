@@ -141,12 +141,88 @@ test("applyChatActions applies a signal-backed plan_update quietly and preserves
   assert.ok(repo.listMemory(10).some((m) => /evening training/.test(m.content)), "memory landed in the store");
 });
 
+test("chat put-it-back reverts the exact autonomous decision in the same turn", () => {
+  repo.savePlanDay(1, "Lower", "legs", [{ exercise: "Squat", sets: 3, rep_low: 8, rep_high: 10, target_weight: 190 }]);
+  const first = applyChatActions(
+    {
+      actions: [
+        {
+          type: "plan_update",
+          summary: "small squat progression",
+          changes: [{ day_number: 1, exercise: "Squat", target_weight: 200, reason: "Repeated crisp sessions." }],
+        },
+      ],
+    },
+    { agent: "stub", message: "Squats have been crisp for several sessions." }
+  );
+  const decisionId = first.applied[0].result.decision.id;
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 200);
+
+  const undone = applyChatActions(
+    {
+      actions: [{ type: "revert_decision", id: decisionId, reason: "That did not feel right." }],
+    },
+    { agent: "stub", message: "That did not work for me. Put it back." }
+  );
+
+  assert.equal(undone.applied[0].result.ok, true);
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 190);
+  assert.equal(repo.getBrainDecision(decisionId).status, "reverted");
+});
+
 test("applyChatActions ignores a plan update hallucinated during a food-only turn", () => {
   const { applied, drafts } = applyChatActions({
     actions: [{ type: "plan_update", summary: "unrelated", changes: [{ day_number: 1, exercise: "Squat", target_weight: 230 }] }],
   }, { agent: "stub", message: "Lunch today: double chicken salad, no dressing. Estimate it." });
   assert.deepEqual(applied, []);
   assert.deepEqual(drafts, []);
+});
+
+test("food-only turns cannot restructure training or mutate goal identity", () => {
+  repo.setProfile({ weight_lb: 180, goal_weight_lb: 170 });
+  const { applied, drafts } = applyChatActions({
+    actions: [
+      { type: "set_profile", weight_lb: 179, goal_weight_lb: 150, primary_discipline: "endurance" },
+      { type: "set_endurance_goal", mode: "race", event: "Surprise Marathon", date: "2026-11-01" },
+      {
+        type: "plan_restructure",
+        summary: "unrelated split",
+        days: [{ day_number: 1, name: "Only running", items: [] }],
+      },
+    ],
+  }, { agent: "stub", message: "Lunch today: double chicken salad, no dressing. Estimate it." });
+
+  assert.equal(applied.length, 1, "the reported weight remains a safe capture");
+  assert.equal(repo.getProfile().weight_lb, 179);
+  assert.equal(repo.getProfile().goal_weight_lb, 170);
+  assert.notEqual(repo.getProfile().primary_discipline, "endurance");
+  assert.equal(repo.getEnduranceGoal(), null);
+  assert.deepEqual(drafts, []);
+});
+
+test("goal identity changes require an explicit athlete statement", () => {
+  repo.setProfile({ goal_weight_lb: 170 });
+  const inferred = applyChatActions({
+    actions: [
+      { type: "set_profile", goal_weight_lb: 160 },
+      { type: "set_endurance_goal", mode: "standing", label: "10k-ready" },
+    ],
+  }, { agent: "stub", message: "What should my goal weight and running target be?" });
+  assert.deepEqual(inferred.applied, []);
+  assert.equal(repo.getProfile().goal_weight_lb, 170);
+  assert.equal(repo.getEnduranceGoal(), null);
+
+  const explicit = applyChatActions({
+    actions: [{ type: "set_profile", goal_weight_lb: 165 }],
+  }, { agent: "stub", message: "Set my goal weight to 165." });
+  assert.equal(explicit.applied.length, 1);
+  assert.equal(repo.getProfile().goal_weight_lb, 165);
+
+  const race = applyChatActions({
+    actions: [{ type: "set_endurance_goal", mode: "race", event: "Cambridge Half", date: "2026-11-01", distance_km: 21.1 }],
+  }, { agent: "stub", message: "I want to run the Cambridge Half on November 1." });
+  assert.equal(race.applied.length, 1);
+  assert.equal(repo.getEnduranceGoal().event, "Cambridge Half");
 });
 
 test("applyChatActions ignores unknown action types without throwing", () => {

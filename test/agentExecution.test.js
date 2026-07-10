@@ -192,6 +192,33 @@ test("uploaded-image prompts expand file access args and place image args after 
   assert.equal(argv[argv.indexOf("--image") + 1], imagePath);
 }));
 
+test("per-run MCP args expand only at the explicit capability slot", () => withTempDir((dataDir) => {
+  const configPath = path.join(dataDir, "agents.json");
+  const childProbe = "process.stdout.write(JSON.stringify({argv: process.argv.slice(1)}));";
+  fs.writeFileSync(configPath, JSON.stringify({
+    argvprobe: {
+      command: process.execPath,
+      args: ["-e", childProbe, "--", "{model_args}", "{mcp_config_args}", "{prompt}"],
+      input: "arg",
+      env_required: [],
+      model_flag: ["--model", "{model}"],
+    },
+  }));
+  const mcpArgs = ["--mcp-config", "{\"mcpServers\":{}}", "--strict-mcp-config"];
+  const runner = [
+    `import { runAgent } from ${JSON.stringify(distAgentsUrl)};`,
+    `const res = await runAgent("argvprobe", "probe", { timeoutMs: 5000, model: "terra-test", mcpConfigArgs: ${JSON.stringify(mcpArgs)} });`,
+    "process.stdout.write(JSON.stringify(res.parsed));",
+  ].join("\n");
+  const res = spawnSync(process.execPath, ["--input-type=module", "-e", runner], {
+    cwd: root,
+    env: { ...process.env, AGENTS_CONFIG: configPath, DATA_DIR: dataDir, DB_PATH: path.join(dataDir, "cairn.db") },
+    encoding: "utf8",
+  });
+  assert.equal(res.status, 0, res.stderr);
+  assert.deepEqual(JSON.parse(res.stdout).argv, ["--model", "terra-test", ...mcpArgs, "probe"]);
+}));
+
 test("streaming chat agent subprocess receives sanitized env and safe cwd", () => withTempDir((dataDir) => {
   const configPath = path.join(dataDir, "agents.json");
   const streamProbe = [
@@ -234,6 +261,68 @@ test("streaming chat agent subprocess receives sanitized env and safe cwd", () =
   assertIsWorkspace(payload.cwd, dataDir, "chat");
   assert.equal(payload.token, null);
   assert.equal(payload.dataDir, null);
+}));
+
+test("streaming agent preserves UTF-8 characters split across stdout chunks", () => withTempDir((dataDir) => {
+  const configPath = path.join(dataDir, "agents.json");
+  const streamProbe = [
+    "const line = JSON.stringify({ type: 'text', data: 'Café · 65 g protein' }) + '\\n';",
+    "const bytes = Buffer.from(line, 'utf8');",
+    "const split = bytes.indexOf(Buffer.from('·', 'utf8')) + 1;",
+    "process.stdout.write(bytes.subarray(0, split));",
+    "setTimeout(() => process.stdout.write(bytes.subarray(split)), 15);",
+  ].join("");
+  fs.writeFileSync(configPath, JSON.stringify({
+    utf8probe: {
+      command: process.execPath,
+      args: ["-e", "process.stdout.write('{}')"],
+      input: "arg",
+      env_required: [],
+      stream: { format: "grok", args: ["-e", streamProbe] },
+    },
+  }));
+
+  const runner = [
+    `import { runAgentStreaming } from ${JSON.stringify(distAgentsUrl)};`,
+    `const res = await runAgentStreaming("utf8probe", "plain chat", { timeoutMs: 5000 });`,
+    "process.stdout.write(JSON.stringify(res.raw));",
+  ].join("\n");
+  const res = spawnSync(process.execPath, ["--input-type=module", "-e", runner], {
+    cwd: root,
+    env: { ...process.env, AGENTS_CONFIG: configPath, DATA_DIR: dataDir, DB_PATH: path.join(dataDir, "cairn.db") },
+    encoding: "utf8",
+  });
+
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(JSON.parse(res.stdout), "Café · 65 g protein");
+}));
+
+test("one-shot agent preserves UTF-8 characters split across stdout chunks", () => withTempDir((dataDir) => {
+  const configPath = path.join(dataDir, "agents.json");
+  const probe = [
+    "const line = JSON.stringify({ reply: 'Café · 65 g protein' });",
+    "const bytes = Buffer.from(line, 'utf8');",
+    "const split = bytes.indexOf(Buffer.from('é', 'utf8')) + 1;",
+    "process.stdout.write(bytes.subarray(0, split));",
+    "setTimeout(() => process.stdout.write(bytes.subarray(split)), 15);",
+  ].join("");
+  fs.writeFileSync(configPath, JSON.stringify({
+    utf8oneshot: { command: process.execPath, args: ["-e", probe], input: "arg", env_required: [] },
+  }));
+
+  const runner = [
+    `import { runAgent } from ${JSON.stringify(distAgentsUrl)};`,
+    `const res = await runAgent("utf8oneshot", "plain chat", { timeoutMs: 5000 });`,
+    "process.stdout.write(JSON.stringify(res.parsed.reply));",
+  ].join("\n");
+  const res = spawnSync(process.execPath, ["--input-type=module", "-e", runner], {
+    cwd: root,
+    env: { ...process.env, AGENTS_CONFIG: configPath, DATA_DIR: dataDir, DB_PATH: path.join(dataDir, "cairn.db") },
+    encoding: "utf8",
+  });
+
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(JSON.parse(res.stdout), "Café · 65 g protein");
 }));
 
 test("streaming agent preserves UTF-8 characters split across stdout chunks", () => withTempDir((dataDir) => {

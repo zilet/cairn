@@ -4,11 +4,14 @@ import {
   activeContextEffect,
   getCoachingFocus,
   getTrajectory,
+  wholePersonTrajectory,
   listDirectives,
   listVisibleInsights,
   nextBestStep,
   nextStepDone,
   reactionModelForCoach,
+  listBrainDecisions,
+  revertDecision,
   snoozeNextStep,
   updateDirective,
   updateInsight,
@@ -41,6 +44,14 @@ export const connectedBrainRouter = Router();
 
 // ---- health insights (marker history + whole-picture agentic review) ----
 connectedBrainRouter.get("/health/markers", (_req, res) => res.json(getMarkerHistory()));
+
+connectedBrainRouter.get("/brain/decisions", (req, res) =>
+  res.json(listBrainDecisions({ limit: req.query.limit ? Number(req.query.limit) : 50 }))
+);
+
+connectedBrainRouter.post("/brain/decisions/:id/revert", (req, res) =>
+  res.json(revertDecision(Number(req.params.id), String(req.body?.reason ?? "user undo")))
+);
 
 // Pull-based health standing: a descriptive, visual-friendly orientation read.
 // Percentiles are real reference comparisons where a trustworthy curve exists
@@ -125,6 +136,14 @@ connectedBrainRouter.get("/reaction-model", (_req, res) => res.json(reactionMode
 connectedBrainRouter.get("/trajectory", (req, res) =>
   res.json(getTrajectory(typeof req.query.date === "string" ? req.query.date : undefined))
 );
+connectedBrainRouter.get("/whole-person-trajectory", (req, res) =>
+  res.json(
+    wholePersonTrajectory({
+      end: typeof req.query.end === "string" ? req.query.end : undefined,
+      days: req.query.days != null ? Number(req.query.days) : undefined,
+    })
+  )
+);
 connectedBrainRouter.get("/context-effect", (req, res) =>
   res.json(activeContextEffect(typeof req.query.date === "string" ? req.query.date : undefined))
 );
@@ -181,9 +200,7 @@ connectedBrainRouter.post("/health/synthesis", async (req, res) => {
 // as a current training/nutrition shaper while chronic findings stay put.
 connectedBrainRouter.get("/directives", (req, res) =>
   res.json({
-    directives: annotateDirectiveFreshness(
-      listDirectives({ all: req.query.all === "1" || req.query.all === "true" }),
-    ),
+    directives: annotateDirectiveFreshness(listDirectives({ all: req.query.all === "1" || req.query.all === "true" })),
   })
 );
 

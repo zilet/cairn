@@ -17,6 +17,7 @@ import * as repo from "./repo.js";
 import { runChosen } from "./runChosen.js";
 import { buildResearchPrompt } from "./prompt.js";
 import { loadAgents } from "./agents.js";
+import { normalizeEvidenceDate, verifyClaimToSource } from "./evidenceGovernance.js";
 
 export interface ResearchResult {
   ok: boolean;
@@ -82,18 +83,58 @@ export function researchAutoEligible(): ResearchAutoEligibility {
 
 // Validate + filter a single claim's sources to plausible http(s) URLs. Returns
 // the surviving {title,url} list (deduped by url). A claim with none is dropped.
-function validateSources(raw: any): { title: string; url: string }[] {
+interface ValidatedResearchSource {
+  title: string;
+  url: string;
+  source_scope: "general" | "athlete";
+  source_version: string | null;
+  published_at: string | null;
+}
+
+const ATHLETE_SOURCE =
+  /\b(athlete|athletic|sports? medicine|endurance|strength and conditioning|exercise physiology)\b/i;
+
+function validateSources(raw: any, claim: any): ValidatedResearchSource[] {
   const list = Array.isArray(raw) ? raw : [];
   const seen = new Set<string>();
-  const out: { title: string; url: string }[] = [];
+  const out: ValidatedResearchSource[] = [];
   for (const s of list) {
     if (!s || typeof s !== "object") continue;
     const url = String(s.url ?? "").trim();
     if (!repo.isPlausibleSourceUrl(url)) continue;
+    const title = String(s.title ?? "")
+      .trim()
+      .slice(0, 300);
+    if (title.length < 5) continue;
+    const paired = verifyClaimToSource({
+      claim: claim?.claim,
+      body: claim?.body,
+      marker: claim?.marker,
+      source_title: title,
+      source_url: url,
+    });
+    if (!paired.verified) continue;
     const key = url.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ title: String(s.title ?? "").trim().slice(0, 300) || url, url: url.slice(0, 600) });
+    const year = String(s.version ?? title).match(/\b((?:19|20)\d{2})\b/)?.[1] ?? null;
+    const requestedScope = String(s.source_scope ?? s.scope ?? "").toLowerCase();
+    // Web research can classify general vs athlete-specific evidence, never
+    // clinician-provided instructions; that provenance belongs to health records.
+    const athleteSpecific =
+      ATHLETE_SOURCE.test(title) ||
+      (requestedScope === "athlete" &&
+        ATHLETE_SOURCE.test(`${String(claim?.claim ?? "")} ${String(claim?.body ?? "")}`));
+    out.push({
+      title,
+      url: url.slice(0, 600),
+      source_scope: athleteSpecific ? "athlete" : "general",
+      source_version:
+        String(s.version ?? year ?? "")
+          .trim()
+          .slice(0, 100) || null,
+      published_at: normalizeEvidenceDate(s.published_at ?? (year ? `${year}-01-01` : null)),
+    });
   }
   return out;
 }
@@ -127,7 +168,8 @@ export async function researchEvidence(
   // Cache hit (unless force): no agent call.
   if (!opts.force) {
     const cached = repo.getEvidence({ topic, limit: 20 });
-    if (cached.length) return { ok: true, enabled: true, topic, evidence: cached, cached: true };
+    const usable = cached.filter((row: any) => row?.provenance?.usable_for_claim === true);
+    if (usable.length) return { ok: true, enabled: true, topic, evidence: usable, cached: true };
   }
 
   const prompt = buildResearchPrompt(question, markers);
@@ -153,7 +195,7 @@ export async function researchEvidence(
   const stored: any[] = [];
   for (const c of claims) {
     if (!c || typeof c !== "object") continue;
-    const sources = validateSources(c.sources);
+    const sources = validateSources(c.sources, c);
     if (!sources.length) continue; // sourceless claim → discarded
     const src = sources[0];
     const row = repo.addEvidence({
@@ -164,8 +206,11 @@ export async function researchEvidence(
       source_title: src.title,
       source_url: src.url,
       confidence: c.confidence ?? null,
+      source_scope: src.source_scope,
+      source_version: src.source_version,
+      published_at: src.published_at,
     });
-    if (row) stored.push(row);
+    if (row?.provenance?.claim_verified) stored.push(row);
   }
 
   if (!stored.length) {
@@ -196,9 +241,20 @@ export async function researchEvidence(
 // (when enabled) and return the cited passages buildHealthReviewPrompt injects.
 // Best-effort and bounded — a failure on any one marker is swallowed so the review
 // still runs ungrounded (today's behavior). Returns [] when research is off.
-export async function gatherReviewGrounding(
-  agent?: string
-): Promise<{ marker: string | null; claim: string | null; source_title: string | null; source_url: string | null; confidence: string | null }[]> {
+export async function gatherReviewGrounding(agent?: string): Promise<
+  {
+    marker: string | null;
+    claim: string | null;
+    source_title: string | null;
+    source_url: string | null;
+    confidence: string | null;
+    source_scope: "general" | "athlete" | "clinician";
+    source_version: string | null;
+    freshness: "current" | "review_due" | "expired" | "unknown";
+    reviewed_at: string | null;
+    expires_at: string | null;
+  }[]
+> {
   if (!researchEnabled()) return [];
   let priorityMarkers: any[] = [];
   try {
@@ -225,13 +281,21 @@ export async function gatherReviewGrounding(
       const question = `What current clinical guidance applies to ${side} ${name}, and what are the safe, evidence-based lifestyle (diet/training) levers? Informational only.`;
       try {
         const r = await researchEvidence(question, [name], { agent });
-        return r.evidence.slice(0, 4).map((e) => ({
-          marker: e.marker ?? name,
-          claim: e.claim ?? null,
-          source_title: e.source_title ?? null,
-          source_url: e.source_url ?? null,
-          confidence: e.confidence ?? null,
-        }));
+        return r.evidence
+          .filter((e) => e?.provenance?.usable_for_claim === true)
+          .slice(0, 4)
+          .map((e) => ({
+            marker: e.marker ?? name,
+            claim: e.claim ?? null,
+            source_title: e.source_title ?? null,
+            source_url: e.source_url ?? null,
+            confidence: e.effective_confidence ?? e.confidence ?? null,
+            source_scope: e.provenance.source_scope,
+            source_version: e.provenance.source_version,
+            freshness: e.provenance.freshness,
+            reviewed_at: e.provenance.reviewed_at,
+            expires_at: e.provenance.expires_at,
+          }));
       } catch {
         return []; // swallow — the review runs ungrounded for this marker
       }

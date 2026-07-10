@@ -1,7 +1,14 @@
 import { Router } from "express";
 import { getAgentCliUpdateStatus, startAgentCliUpdate } from "../agentCliUpdates.js";
 import { agentInfoOp, agentModelsOp } from "../coachOps.js";
-import { getAgentConfig, getAgentStats, getSettings, listRoutableTasks, setSettings } from "../domain/operator/index.js";
+import {
+  getAgentConfig,
+  getAgentStats,
+  getBrainDiagnostics,
+  getSettings,
+  listRoutableTasks,
+  setSettings,
+} from "../domain/operator/index.js";
 import { researchAutoEligible } from "../research.js";
 
 export const operatorRouter = Router();
@@ -44,3 +51,7 @@ operatorRouter.get("/agent-stats", (req, res) => {
   const days = req.query.days != null ? Number(req.query.days) : undefined;
   res.json(getAgentStats({ recent, days }));
 });
+
+operatorRouter.get("/brain-diagnostics", (req, res) =>
+  res.json(getBrainDiagnostics(req.query.limit != null ? Number(req.query.limit) : undefined))
+);

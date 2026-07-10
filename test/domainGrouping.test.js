@@ -189,7 +189,6 @@ test("agent job adapters use the person domain entry point", () => {
 test("day coach adapters use brain and person domain entry points", () => {
   for (const [file, brainImportPath, personImportPath] of [
     ["src/routes/day-coach.ts", "../domain/brain/index.js", "../domain/person/index.js"],
-    ["src/surfaces/mcp/day-coach.ts", "../../domain/brain/index.js", null],
   ]) {
     const src = read(file);
     assert.match(src, new RegExp(`from "${brainImportPath.replaceAll(".", "\\.")}"`), `${file} should import brain domain exports`);
@@ -198,6 +197,9 @@ test("day coach adapters use brain and person domain entry points", () => {
     }
     assert.doesNotMatch(src, /import\s+\*\s+as\s+repo\s+from\s+["'][^"']*repo\.js["']/, `${file} should not import the repo barrel`);
   }
+  const mcp = read("src/surfaces/mcp/day-coach.ts");
+  assert.match(mcp, /from "\.\/background\.js"/, "MCP day-coach should queue through the shared durable-job adapter");
+  assert.doesNotMatch(mcp, /import\s+\*\s+as\s+repo\s+from\s+["'][^"']*repo\.js["']/);
 });
 
 test("export route uses health and training domain entry points", () => {

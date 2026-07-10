@@ -18,10 +18,56 @@ import { db, isoDaysAgo, localDaysAgo, repo, resetTables, seedHealthDoc, seedInt
 // arbiter sees exactly (and only) what each test seeds.
 beforeEach(() => {
   resetTables(
-    "food_notes", "insights", "plan_proposals", "health_directives",
-    "garmin_activities", "garmin_sources", "sessions", "logged_sets", "activities",
-    "plan_days", "plan_items", "bodyweight_log", "app_state", "profile", "day_reads",
+    "food_notes",
+    "insights",
+    "plan_proposals",
+    "health_directives",
+    "garmin_activities",
+    "garmin_sources",
+    "sessions",
+    "logged_sets",
+    "activities",
+    "plan_days",
+    "plan_items",
+    "bodyweight_log",
+    "app_state",
+    "profile",
+    "day_reads",
+    "brain_evaluations",
+    "brain_expectations",
+    "brain_decisions"
   );
+});
+
+test("an announced structural change appears calmly with a working chat hold-on path", () => {
+  const decision = repo.recordDecision({
+    effective_date: localDaysAgo(-3),
+    kind: "training_structure",
+    domain: "training",
+    summary: "Shift the next block toward dumbbell pressing.",
+    rationale: "Your recent barbell pattern is stalled while the chest wall is still sensitive.",
+    source: "test",
+    source_ref_type: "plan_proposal",
+    source_ref_key: "42",
+    status: "announced",
+    autonomy_tier: "announce",
+    risk_class: "moderate",
+    reversible: true,
+    input_fingerprint: null,
+    context: null,
+    action: { proposal_id: 42 },
+    specialist: null,
+    applied_at: null,
+    reverted_at: null,
+    superseded_by: null,
+    evaluator_version: null,
+  }).decision;
+  const agenda = repo.todayAgenda();
+  const card = [...agenda.primary, ...agenda.more].find((item) => item.id === `announced-decision-${decision.id}`);
+  assert.equal(card?.kicker, "NEXT BOUNDARY");
+  assert.equal(card?.action?.label, "Hold on");
+  assert.equal(card?.action?.kind, "hold-decision", "hold is a deterministic one-tap cancel, not a chat prefill");
+  assert.equal(Number(card?.action?.payload), decision.id);
 });
 
 // ---- the hero is always the Brief; an empty day surfaces nothing else ----

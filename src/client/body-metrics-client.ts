@@ -100,6 +100,7 @@ interface BmSummary {
     hint?: string;
     range?: { min: number; max: number; typical_min: number | null; typical_max: number | null };
   }[];
+  measurement_issues?: Array<{ site: string; severity: "error" | "warning"; message: string }>;
   comp?: BmComp;
 }
 
@@ -707,6 +708,8 @@ interface BmStandModel {
   female: boolean;
   heightIn: number | null;
   bodyFatPct: number | null;
+  flaggedSites: Set<BmSiteKey>;
+  issueBySite: Partial<Record<BmSiteKey, string>>;
   unit: BmUnit;
   focus: string | null;
 }
@@ -716,12 +719,22 @@ function bmStandModel(data: BmSummary, unit: BmUnit): BmStandModel {
   const female = String(data.profile?.sex || "").toLowerCase() === "female";
   const heightIn = data.profile?.height_in ?? null;
   const bodyFat = data.indicators.find((i) => i.key === "bodyfat")?.value;
+  const flaggedSites = new Set<BmSiteKey>();
+  const issueBySite: Partial<Record<BmSiteKey, string>> = {};
+  for (const issue of data.measurement_issues || []) {
+    if (!(BM_SITE_KEYS as readonly string[]).includes(issue.site)) continue;
+    const site = issue.site as BmSiteKey;
+    flaggedSites.add(site);
+    issueBySite[site] = issue.message;
+  }
   const focus = data.comp ? deriveFigureRegions(data.comp, data.trends).focus : null;
   return {
     merged,
     female,
     heightIn,
     bodyFatPct: bodyFat != null && Number.isFinite(bodyFat) ? bodyFat : null,
+    flaggedSites,
+    issueBySite,
     unit,
     focus,
   };
@@ -774,10 +787,41 @@ function bmWaistHipTone(value: number | null, female: boolean): { text: string; 
   return value > limit ? { text: "above guide", tone: "warn" } : { text: "within guide", tone: "sage" };
 }
 
+// The reference-physique circumference (inches) for a site — the lib derives it
+// from height (reference waist just under half height; every other site as a
+// classical multiple of it). Null without a height or the vendored lib.
+function bmSiteRefIn(model: BmStandModel, key: BmSiteKey): number | null {
+  if (model.heightIn == null) return null;
+  const lib = bmFigureLib();
+  if (!lib || typeof lib.referenceTape !== "function") return null;
+  const site = Object.keys(BM_STAND_SITE_OF).find((n) => BM_STAND_SITE_OF[n] === key);
+  if (!site) return null;
+  const v = lib.referenceTape(model.female ? "female" : "male", model.heightIn)[site];
+  return v != null && Number.isFinite(v) ? v : null;
+}
+
+// Delta-vs-reference chip (design 3a semantics): within ±0.5in reads "at
+// reference"; only the waist above reference warns (central adiposity); a
+// muscle site below reference is a calm gold watch; above is simply fine.
+function bmRefChip(key: BmSiteKey, curIn: number, refIn: number): { text: string; tone: BmChipTone } {
+  const d = curIn - refIn;
+  if (Math.abs(d) <= 0.5) return { text: "at reference", tone: "sage" };
+  if (key === "waist_in") return d > 0 ? { text: "above reference", tone: "warn" } : { text: "under reference", tone: "sage" };
+  return d < 0 ? { text: "below reference", tone: "gold" } : { text: "above reference", tone: "sage" };
+}
+
 function bmSiteContext(model: BmStandModel, key: BmSiteKey): { chip: { text: string; tone: BmChipTone }; metric: string; guide: string; why: string } {
   const cur = model.merged ? (model.merged[key] as number | null) : null;
   const curIn = bmInches(cur, model.unit);
   const waistIn = bmInches(model.merged ? (model.merged.waist_in as number | null) : null, model.unit);
+  if (model.flaggedSites.has(key)) {
+    return {
+      chip: { text: "recheck tape", tone: "gold" },
+      metric: "unusual measurement",
+      guide: "held neutral on the figure",
+      why: model.issueBySite[key] || "This reading is possible, but unusual enough to recheck before using it to shape the figure.",
+    };
+  }
   if (key === "waist_in") {
     const whtr = bmRatio(curIn, model.heightIn);
     const chip = bmWaistHeightTone(whtr);
@@ -798,6 +842,17 @@ function bmSiteContext(model: BmStandModel, key: BmSiteKey): { chip: { text: str
       why: "Waist-to-hip is a central-fat context read. Hip circumference itself is not assigned a target.",
     };
   }
+  const refIn = bmSiteRefIn(model, key);
+  if (curIn != null && refIn != null) {
+    const chip = bmRefChip(key, curIn, refIn);
+    const refDisp = bmFmt(model.unit === "cm" ? refIn * 2.54 : refIn);
+    return {
+      chip,
+      metric: `reference ${refDisp} ${model.unit}`,
+      guide: "a reference for your height — never a mandate",
+      why: "The reference physique is scaled from your height (waist just under half your height, classical balance elsewhere — neck ≈ arm ≈ calf). It is context for the figure, not a target you owe anyone.",
+    };
+  }
   return {
     chip: { text: "tracking only", tone: "muted" },
     metric: "circumference logged",
@@ -806,38 +861,39 @@ function bmSiteContext(model: BmStandModel, key: BmSiteKey): { chip: { text: str
   };
 }
 
-// The elite Stand figure: fixed silhouette + selected-site glow + waist-height
-// guide trace + tappable measurement callouts. Coordinates: the library figure is
-// authored in a 0–260 space; a translate(80,0) group centers it in a 420-wide box,
-// leaving label rails on both sides. Callouts are drawn in the outer box space.
-// Neutral authored-plate baselines (inches) per sex — the figure bends toward
-// the athlete's measured/baseline ratio at each site (the lib clamps the warp).
-const BM_FIGURE_BASE: Record<"male" | "female", Partial<Record<BmSiteKey, number>>> = {
-  male: { neck_in: 15.5, shoulder_in: 46.2, chest_in: 42.2, waist_in: 35.8, hip_in: 40.5, upper_arm_in: 13.8, forearm_in: 11.8, thigh_in: 24, calf_in: 15.8 },
-  female: { neck_in: 12.5, shoulder_in: 39, chest_in: 35, waist_in: 28, hip_in: 38, upper_arm_in: 10.5, forearm_in: 9.5, thigh_in: 21.5, calf_in: 14.5 },
-};
-const bmClampRatio = (r: number): number => Math.min(1.14, Math.max(0.88, r));
+// The elite Stand figure (design 3a): the MEASURED silhouette — every body zone
+// scaled from a real tape circumference against the reference physique the lib
+// derives from height — drawn over that reference as a dashed ghost, plus the
+// selected-site glow and tappable measurement callouts. Coordinates: the library
+// figure is authored in a 0–260 space; a translate(80,0) group centers it in a
+// 420-wide box, leaving label rails on both sides.
+// Neutral fallback heights (inches) so the figure still draws before height is
+// set — the ghost and reference reads stay hidden until height is real.
+const BM_DEFAULT_HEIGHT: Record<"male" | "female", number> = { male: 69, female: 64 };
 
-// Lib-site-keyed measured/baseline ratios — the honest-figure input.
-function bmFigureRatios(model: BmStandModel): Record<string, number> {
-  const base = BM_FIGURE_BASE[model.female ? "female" : "male"];
-  const out: Record<string, number> = {};
+// Lib-site-keyed tape (inches) — the honest-figure input. A flagged (recheck)
+// site is omitted, so the lib holds that zone at the reference: visible as
+// recorded data, neutral on the silhouette until re-taped.
+function bmFigureTape(model: BmStandModel): Partial<Record<string, number>> {
+  const out: Partial<Record<string, number>> = {};
   for (const [libSite, key] of Object.entries(BM_STAND_SITE_OF)) {
-    const b = base[key];
+    if (model.flaggedSites.has(key)) continue;
     const raw = model.merged ? (model.merged[key] as number | null) : null;
     const v = bmInches(raw != null && Number.isFinite(raw) ? raw : null, model.unit);
-    if (b && v != null && v > 0) out[libSite] = v / b;
+    if (v != null && v > 0) out[libSite] = v;
   }
   return out;
 }
 
 function bmStandFigureSvg(lib: CairnBodyFigureApi, model: BmStandModel, selected: BmSiteKey | null): string {
   const sexKey = model.female ? "female" : "male";
-  // The silhouette is HONEST: each zone bends by the athlete's own tape ratio
-  // (clamped in the lib), so a 33in waist on 40in hips reads as that body.
-  const ratios = bmFigureRatios(model);
-  const kindOf = (site: string): "torso" | "arm" => (lib.ARM_SITES.has(site) ? "arm" : "torso");
-  const sil = lib.silhouette(sexKey, ratios);
+  const heightIn = model.heightIn ?? BM_DEFAULT_HEIGHT[sexKey];
+  // The silhouette is HONEST: every zone is scaled from the athlete's own tape
+  // against the height-derived reference physique (smooth tanh compression in
+  // the lib — a 33in waist on 40in hips reads as that body, never a caricature).
+  const tape = bmFigureTape(model);
+  const msil = lib.measuredSilhouette(sexKey, tape, heightIn);
+  const ghost = lib.silhouette(sexKey);
   const col = lib.COLORS;
   const merged = model.merged;
   const rawVal = (k: BmSiteKey): number | null => {
@@ -850,132 +906,59 @@ function bmStandFigureSvg(lib: CairnBodyFigureApi, model: BmStandModel, selected
     return v == null ? null : model.unit === "cm" ? v / 2.54 : v;
   };
   const dispVal = (k: BmSiteKey): string => bmFmt(rawVal(k) as number);
-  // Selected-site glow: only clinical central-adiposity ratios can warn. Other
-  // tape sites stay neutral because they are trend/proportion context, not targets.
+  // Anchor a male-coord library point on the MEASURED figure. Arm-riding sites
+  // pick their arm by which side of the centerline the authored point sits.
+  const clipFor = (site: string, pt: [number, number]): string =>
+    lib.ARM_SITES.has(site) ? (pt[0] < 130 ? "aL" : "aR") : "t";
+  // Selected-site glow: clinical central-adiposity reads can warn; a flagged
+  // (recheck) site washes gold; everything else stays calm sage.
   const gradFor = (k: BmSiteKey): string => {
+    if (model.flaggedSites.has(k)) return "bmfig2-gold";
     const read = bmSiteContext(model, k);
-    return read.chip.tone === "warn" ? "bmfig2-warn" : "bmfig2-sage";
+    return read.chip.tone === "warn" ? "bmfig2-warn" : read.chip.tone === "gold" ? "bmfig2-gold" : "bmfig2-sage";
   };
   let washes = "";
-  let tape = "";
   if (selected) {
     const name = Object.keys(BM_STAND_SITE_OF).find((n) => BM_STAND_SITE_OF[n] === selected);
     const glows = name ? lib.GLOWS[name] : null;
     if (glows) {
       const grad = gradFor(selected);
       const clipOf = (c: string) => (c === "aR" ? "bmfig2-clip-aR" : c === "aL" ? "bmfig2-clip-aL" : "bmfig2-clip-t");
-      const kind = name ? kindOf(name) : "torso";
       for (const [cx, cy, rx, ry, clip] of glows) {
-        const [wcx] = lib.warpPoint([cx, cy], sexKey, ratios, clip === "t" ? "torso" : "arm");
-        washes += `<g clip-path="url(#${clipOf(clip)})"><ellipse class="bm-pulse" cx="${bmR(wcx)}" cy="${cy}" rx="${rx}" ry="${ry}" fill="url(#${grad})"/></g>`;
-      }
-      // The tailor's tape: a fine band wrapped around the body at the selected
-      // site — front arc solid, back arc faint dashed (the wrap-around). Its
-      // center/width come from the site's own glow geometry, so the tape hugs
-      // the waist at the waist and the arm at the arm. Measuring = the tape.
-      const co = lib.CALLOUTS.find((c) => c.site === name);
-      const anchor = co ? lib.warpPoint(co.pt, sexKey, ratios, kind) : null;
-      const g = anchor
-        ? [...glows].sort((a, b) => Math.abs(a[0] - anchor[0]) - Math.abs(b[0] - anchor[0]))[0]
-        : glows[0];
-      if (g) {
-        const ty = anchor ? anchor[1] : g[1];
-        const [tcx] = lib.warpPoint([g[0], ty], sexKey, ratios, g[4] === "t" ? "torso" : "arm");
-        // Trunk sites hug the TRUE silhouette half-width at the anchor — warped
-        // per sex AND per the measured ratio, so the tape length visibly tracks
-        // the number it reports. Limb tapes ride the glow width the same way.
-        const trunkHalf: Partial<Record<BmSiteKey, number>> = { neck_in: 17, chest_in: 58, waist_in: 42, hip_in: 52 };
-        const authored = trunkHalf[selected];
-        const siteRatio = bmClampRatio(name && ratios[name] ? ratios[name] : 1);
-        const trx = authored != null
-          ? authored * (model.female ? lib.kOf(ty) : 1) * siteRatio + 4
-          : Math.max(12, g[2] * (model.female ? lib.kOf(ty) : 1) * siteRatio + 3);
-        const tryy = Math.max(3.5, trx * 0.16);
-        const L = `${bmR(tcx - trx)} ${bmR(ty)}`;
-        const R = `${bmR(tcx + trx)} ${bmR(ty)}`;
-        tape =
-          `<path class="bm-tape-back" d="M ${L} A ${bmR(trx)} ${bmR(tryy)} 0 0 1 ${R}" fill="none" stroke="#b4552d" stroke-width="1.1" stroke-dasharray="2 3.4" opacity="0.32"/>` +
-          `<path class="bm-tape" pathLength="100" d="M ${L} A ${bmR(trx)} ${bmR(tryy)} 0 0 0 ${R}" fill="none" stroke="#b4552d" stroke-width="1.7" stroke-linecap="round" opacity="0.92"/>` +
-          `<circle cx="${bmR(tcx - trx)}" cy="${bmR(ty)}" r="1.5" fill="#b4552d" opacity="0.85"/>` +
-          `<circle cx="${bmR(tcx + trx)}" cy="${bmR(ty)}" r="1.5" fill="#b4552d" opacity="0.85"/>`;
+        const [wcx, wcy] = lib.measuredPoint([cx, cy], sexKey, msil.scales, clip);
+        washes += `<g clip-path="url(#${clipOf(clip)})"><ellipse class="bm-pulse" cx="${bmR(wcx)}" cy="${bmR(wcy)}" rx="${rx}" ry="${ry}" fill="url(#${grad})"/></g>`;
       }
     }
   }
 
+  // The reference ghost — the physique the lib derives from the athlete's real
+  // height, dashed sage over the measured figure (design 3a). Hidden until a
+  // height exists, so the reference is never drawn from a stand-in height.
+  let ghostLayer = "";
+  if (model.heightIn != null) {
+    const ghostAttrs = `fill="none" stroke="#5a6a4a" stroke-width="1.3" stroke-dasharray="5 4" stroke-linecap="round" opacity="0.5"`;
+    ghostLayer = `<path d="${ghost.armL}" ${ghostAttrs}/><path d="${ghost.armR}" ${ghostAttrs}/><path d="${ghost.torso}" ${ghostAttrs}/>`;
+  }
+
   // The clinical waist-height chalk trace, only when the waist is measured and
-  // above the waist/height 0.5 guide.
+  // above the waist/height 0.5 guide. Its width rides the same circumference →
+  // frontal-width mapping as the figure, so the chalk is visually honest.
   const waistIn = inchOf("waist_in");
   const guideWaist = model.heightIn != null ? model.heightIn * 0.5 : null;
   let optTrace = "";
   if (waistIn != null && guideWaist != null && waistIn > guideWaist + 0.2) {
     const attrs = `fill="none" stroke="#5a6a4a" stroke-width="1.7" stroke-dasharray="4.5 3.5" stroke-linecap="round" opacity="0.9"`;
-    const baseWaist = BM_FIGURE_BASE[sexKey].waist_in || guideWaist;
-    const guideScale = guideWaist / baseWaist;
+    const guideScale = lib.widthScales({ ...msil.ref, waist: guideWaist }, msil.ref).waist;
     optTrace = `<path d="${lib.waistTrace(sexKey, 1, guideScale)}" ${attrs}/><path d="${lib.waistTrace(sexKey, -1, guideScale)}" ${attrs}/>`;
   }
 
-  // Surface anatomy, not a muscle chart. Definition fades with the tape body-fat
-  // estimate: at ~20% the clavicles, pec envelope, patellae and calf planes read,
-  // while abs remain under the surface; leaner bodies reveal a little more form.
-  const bf = model.bodyFatPct;
-  const definition = bf == null ? 0.48 : bf <= 12 ? 1 : bf <= 18 ? 0.68 : bf <= 24 ? 0.42 : bf <= 30 ? 0.26 : 0.16;
-  const planeGroups = new Set(["shoulders", "chest", "quads", "calves"]);
-  let surface = "";
-  for (const m of lib.muscles(sexKey, "front", ratios)) {
-    if (!planeGroups.has(m.group)) continue;
-    const op = (m.group === "shoulders" ? 0.032 : m.group === "chest" ? 0.026 : 0.02) * definition;
-    surface += `<path d="${m.d}" fill="#3f382c" fill-opacity="${op}" stroke="none" pointer-events="none"/>`;
-  }
-  const strokeD = (pts: Array<[number, number]>, kind: "torso" | "arm" = "torso") =>
-    lib.openD(pts.map((p) => lib.warpPoint(p, sexKey, ratios, kind)));
-  const stroke = (pts: Array<[number, number]>, kind: "torso" | "arm" = "torso", strength = 1) =>
-    `<path d="${strokeD(pts, kind)}" fill="none" stroke="#75654f" stroke-width="0.95" stroke-linecap="round" stroke-linejoin="round" opacity="${bmR((0.1 + 0.19 * definition) * strength)}" pointer-events="none"/>`;
-  const mirrorStroke = (pts: Array<[number, number]>, kind: "torso" | "arm" = "torso", strength = 1) => stroke(lib.mirrorPts(pts), kind, strength);
-  const torsoLandmarks: Array<{ pts: Array<[number, number]>; strength?: number }> = [
-    { pts: [[149, 81], [145, 88], [138, 94.5], [130, 97], [122, 94.5], [115, 88], [111, 81]], strength: 0.7 }, // jaw/chin plane
-    { pts: [[158, 55], [158.5, 63], [156, 70]], strength: 0.45 }, { pts: [[102, 55], [101.5, 63], [104, 70]], strength: 0.45 }, // ears
-    { pts: [[143, 101], [151, 115], [162, 121]], strength: 0.5 }, { pts: [[117, 101], [109, 115], [98, 121]], strength: 0.5 }, // sternocleidomastoid
-    { pts: [[130, 120], [115, 122], [96, 127]] }, { pts: [[130, 120], [145, 122], [164, 127]] }, // clavicles
-    { pts: [[130, 142], [130, 177]], strength: 0.45 }, // sternum
-    { pts: [[130, 184], [151, 184], [174, 176]], strength: 0.9 }, { pts: [[130, 184], [109, 184], [86, 176]], strength: 0.9 }, // pec envelope
-    { pts: [[112, 202], [109, 233], [116, 273]], strength: 0.25 }, { pts: [[148, 202], [151, 233], [144, 273]], strength: 0.25 }, // abdominal side planes
-    { pts: [[130, 304], [146, 315], [160, 333]], strength: 0.45 }, { pts: [[130, 304], [114, 315], [100, 333]], strength: 0.45 }, // inguinal fold
-    { pts: [[147, 345], [152, 401], [147, 460]], strength: 0.4 }, { pts: [[113, 345], [108, 401], [113, 460]], strength: 0.4 }, // thigh front plane
-    { pts: [[139, 466], [154, 470], [170, 466]], strength: 0.9 }, { pts: [[121, 466], [106, 470], [90, 466]], strength: 0.9 }, // patella
-    { pts: [[153, 486], [160, 513], [154, 551]], strength: 0.75 }, { pts: [[107, 486], [100, 513], [106, 551]], strength: 0.75 }, // calf belly
-    { pts: [[162, 539], [157, 574], [158, 596]], strength: 0.55 }, { pts: [[98, 539], [103, 574], [102, 596]], strength: 0.55 }, // tibia/ankle
-  ];
-  const armLandmarks: Array<{ pts: Array<[number, number]>; strength?: number }> = [
-    { pts: [[198, 170], [201, 203], [197, 236]], strength: 0.65 },
-    { pts: [[190, 247], [196, 286], [194, 326]], strength: 0.55 },
-  ];
-  for (const { pts, strength } of torsoLandmarks) surface += stroke(pts, "torso", strength);
-  for (const { pts, strength } of armLandmarks) surface += stroke(pts, "arm", strength) + mirrorStroke(pts, "arm", strength);
-  const [navelX, navelY] = lib.warpPoint([130, 246], sexKey, ratios, "torso");
-  surface += `<ellipse cx="${bmR(navelX)}" cy="${bmR(navelY)}" rx="1.7" ry="1.15" fill="#675743" opacity="${bmR(0.18 + definition * 0.2)}" pointer-events="none"/>`;
-  const surfaceLayer = `<g class="bmfig2-surface">${surface}</g>`;
-
-  // The atelier plate: the croquis reads as a shallow relief object, not a flat
-  // icon — gradient modeling light from the upper left, a soft inner form
-  // shadow along the lower-right contour (offset strokes clipped inside each
-  // part), a sternum sheen, and a still-life ground shadow under the feet.
-  const relief = (d: string, clip: string) =>
-    `<g clip-path="url(#${clip})">` +
-    `<g transform="translate(-1.7,-2.1)"><path d="${d}" fill="none" stroke="#fbf5e8" stroke-width="5" opacity="0.5" filter="url(#bmfig2-form)"/></g>` +
-    `<g transform="translate(1.7,2.3)"><path d="${d}" fill="none" stroke="#87735a" stroke-width="5.5" opacity="0.2" filter="url(#bmfig2-form)"/></g>` +
-    `</g>`;
-  // Arms draw BEHIND the torso (they emerge at the armpit like the classic
-  // croquis), each part's relief shading riding directly on its own fill.
+  // The approved plate is calm and flat: arms behind the torso, one confident
+  // line, washes clipped inside the measured body, the ghost breathing on top.
   const group = `<g transform="translate(80,0)">
-      <ellipse cx="130" cy="633" rx="84" ry="7.5" fill="#211d17" opacity="0.07" filter="url(#bmfig2-ground)"/>
-      <path d="${sil.armL}" fill="url(#bmfig2-relief)" stroke="${col.standLine}" stroke-width="1.3"/>
-      <path d="${sil.armR}" fill="url(#bmfig2-relief)" stroke="${col.standLine}" stroke-width="1.3"/>
-      ${relief(sil.armL, "bmfig2-clip-aL")}${relief(sil.armR, "bmfig2-clip-aR")}
-      <path d="${sil.torso}" fill="url(#bmfig2-relief)" stroke="${col.standLine}" stroke-width="1.3"/>
-      ${relief(sil.torso, "bmfig2-clip-t")}
-      <ellipse cx="130" cy="205" rx="30" ry="74" fill="url(#bmfig2-sheen)" clip-path="url(#bmfig2-clip-t)"/>
-      ${surfaceLayer}
-      ${washes}${optTrace}${tape}
+      <path d="${msil.armL}" fill="${col.standFill}" stroke="${col.standLine}" stroke-width="1.3"/>
+      <path d="${msil.armR}" fill="${col.standFill}" stroke="${col.standLine}" stroke-width="1.3"/>
+      <path d="${msil.torso}" fill="${col.standFill}" stroke="${col.standLine}" stroke-width="1.3"/>
+      ${washes}${ghostLayer}${optTrace}
     </g>`;
 
   // Callouts: leader line + dot from the body anchor out to a label rail, wrapped
@@ -985,7 +968,7 @@ function bmStandFigureSvg(lib: CairnBodyFigureApi, model: BmStandModel, selected
   for (const c of lib.CALLOUTS) {
     const key = BM_STAND_SITE_OF[c.site];
     if (!key || !measured(key)) continue;
-    const [wx, wy] = lib.warpPoint(c.pt, sexKey, ratios, kindOf(c.site));
+    const [wx, wy] = lib.measuredPoint(c.pt, sexKey, msil.scales, clipFor(c.site, c.pt));
     cos.push({ key, side: c.side, segY: c.y, ax: 80 + wx, ay: wy });
   }
   let callouts = "";
@@ -998,32 +981,30 @@ function bmStandFigureSvg(lib: CairnBodyFigureApi, model: BmStandModel, selected
       const tx = side === "R" ? 348 : 72;
       const lineEnd = side === "R" ? tx - 5 : tx + 5;
       const sel = c.key === selected;
+      const suspect = model.flaggedSites.has(c.key);
+      const activeColor = suspect ? "#a47c34" : "#b4552d";
+      const quietColor = suspect ? "#b99552" : "#c4b89d";
       const anchor = side === "R" ? "start" : "end";
-      callouts += `<line x1="${bmR(c.ax)}" y1="${bmR(c.ay)}" x2="${lineEnd}" y2="${y}" stroke="${sel ? "#c98b5e" : "#c4b89d"}" stroke-width="1.3" stroke-dasharray="1.5 4" stroke-linecap="round"/>`;
-      callouts += `<circle cx="${bmR(c.ax)}" cy="${bmR(c.ay)}" r="2" fill="${sel ? "#b4552d" : "#c4b89d"}"/>`;
-      const label = `<text x="${tx}" y="${y + 3.5}" text-anchor="${anchor}" font-family="ui-sans-serif, system-ui, sans-serif"><tspan font-size="8.5" letter-spacing="0.1em" fill="${sel ? "#b4552d" : "#a99c82"}">${escHtml(BM_SITE_LABEL[c.key].toUpperCase())}</tspan><tspan dx="5" font-size="13" font-weight="600" font-family="ui-serif, Georgia, serif" fill="${sel ? "#b4552d" : "#211d17"}">${escHtml(dispVal(c.key))}</tspan></text>`;
+      callouts += `<line x1="${bmR(c.ax)}" y1="${bmR(c.ay)}" x2="${lineEnd}" y2="${y}" stroke="${sel ? activeColor : quietColor}" stroke-width="1.3" stroke-dasharray="1.5 4" stroke-linecap="round"/>`;
+      callouts += `<circle cx="${bmR(c.ax)}" cy="${bmR(c.ay)}" r="2" fill="${sel ? activeColor : quietColor}"/>`;
+      const recheck = suspect ? `<tspan dx="4" font-size="6.5" font-weight="700" letter-spacing="0.08em" fill="#8a6d2e">RECHECK</tspan>` : "";
+      const label = `<text x="${tx}" y="${y + 3.5}" text-anchor="${anchor}" font-family="ui-sans-serif, system-ui, sans-serif"><tspan font-size="8.5" letter-spacing="0.1em" fill="${sel ? activeColor : suspect ? "#8a6d2e" : "#a99c82"}">${escHtml(BM_SITE_LABEL[c.key].toUpperCase())}</tspan><tspan dx="5" font-size="13" font-weight="600" font-family="ui-serif, Georgia, serif" fill="${sel ? activeColor : suspect ? "#8a6d2e" : "#211d17"}">${escHtml(dispVal(c.key))}</tspan>${recheck}</text>`;
       const hitX = side === "R" ? tx - 4 : tx - 92;
-      callouts += `<g class="bm-co2" data-site="${escAttr(c.key)}" role="button" tabindex="0" aria-label="Read your ${escAttr(BM_SITE_LABEL[c.key])} in context"${sel ? ` aria-current="true"` : ""} style="cursor:pointer"><rect x="${hitX}" y="${y - 10}" width="96" height="18" fill="transparent"/>${label}</g>`;
+      callouts += `<g class="bm-co2" data-site="${escAttr(c.key)}" role="button" tabindex="0" aria-label="Read your ${escAttr(BM_SITE_LABEL[c.key])} in context${suspect ? "; recheck recommended" : ""}"${sel ? ` aria-current="true"` : ""} style="cursor:pointer"><rect x="${hitX}" y="${y - 10}" width="96" height="18" fill="transparent"/>${label}</g>`;
     }
   }
 
   const measuredList = cos.map((c) => `${BM_SITE_LABEL[c.key]} ${dispVal(c.key)}`).join(", ");
   const aria = measuredList
-    ? `Your measurements on a body figure: ${measuredList} ${model.unit}. Tap a measurement to read its context.`
+    ? `Your measurements drawn to scale on a body figure: ${measuredList} ${model.unit}.${model.heightIn != null ? " The dashed outline is the reference physique for your height." : ""} Tap a measurement to read its context.`
     : "A body figure — log a tape session and your measurements appear as tappable callouts.";
   const defs = `<defs>
       <radialGradient id="bmfig2-warn"><stop offset="0%" stop-color="#b4552d" stop-opacity="0.32"/><stop offset="62%" stop-color="#b4552d" stop-opacity="0.15"/><stop offset="100%" stop-color="#b4552d" stop-opacity="0"/></radialGradient>
       <radialGradient id="bmfig2-sage"><stop offset="0%" stop-color="#6e7f5c" stop-opacity="0.30"/><stop offset="62%" stop-color="#6e7f5c" stop-opacity="0.14"/><stop offset="100%" stop-color="#6e7f5c" stop-opacity="0"/></radialGradient>
       <radialGradient id="bmfig2-gold"><stop offset="0%" stop-color="#c9a86a" stop-opacity="0.40"/><stop offset="62%" stop-color="#c9a86a" stop-opacity="0.18"/><stop offset="100%" stop-color="#c9a86a" stop-opacity="0"/></radialGradient>
-      <clipPath id="bmfig2-clip-t"><path d="${sil.torso}"/></clipPath>
-      <clipPath id="bmfig2-clip-aR"><path d="${sil.armR}"/></clipPath>
-      <clipPath id="bmfig2-clip-aL"><path d="${sil.armL}"/></clipPath>
-      <linearGradient id="bmfig2-relief" x1="0" y1="0" x2="0.7" y2="1">
-        <stop offset="0%" stop-color="#f2ead8"/><stop offset="45%" stop-color="${col.standFill}"/><stop offset="100%" stop-color="#ddcfb2"/>
-      </linearGradient>
-      <radialGradient id="bmfig2-sheen"><stop offset="0%" stop-color="#fffdf8" stop-opacity="0.32"/><stop offset="100%" stop-color="#fffdf8" stop-opacity="0"/></radialGradient>
-      <filter id="bmfig2-form" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="2.6"/></filter>
-      <filter id="bmfig2-ground" x="-40%" y="-160%" width="180%" height="420%"><feGaussianBlur stdDeviation="3.4"/></filter>
+      <clipPath id="bmfig2-clip-t"><path d="${msil.torso}"/></clipPath>
+      <clipPath id="bmfig2-clip-aR"><path d="${msil.armR}"/></clipPath>
+      <clipPath id="bmfig2-clip-aL"><path d="${msil.armL}"/></clipPath>
     </defs>`;
   return `<svg class="bm-figure bm-figure2" viewBox="0 0 420 645" width="100%" role="img" aria-label="${escAttr(aria)}" style="display:block;max-width:440px;margin:0 auto;overflow:visible">${defs}${group}${callouts}</svg>`;
 }
@@ -1074,20 +1055,58 @@ function bmStandRatioRows(model: BmStandModel, unit: BmUnit): string {
     const c = bmWaistHipTone(v, model.female);
     rows.push(rowHtml("WAIST/HIP", bmRatioDisplay(v), `clinical <${model.female ? "0.85" : "0.90"}`, bmChip(c.text, c.tone)));
   }
-  const tracking = [
-    ["SHOULDER/WAIST", bmRatio(shoulder, waist)],
-    ["CHEST/WAIST", bmRatio(chest, waist)],
-    ["ARM/CALF", bmRatio(arm, calf)],
-  ] as const;
-  for (const [label, value] of tracking) {
-    if (value == null) continue;
-    rows.push(rowHtml(label, bmRatioDisplay(value), "tracking only", bmChip("no target", "muted")));
+  // Tracking-only physique ratios carry the context when the reference-physique
+  // rows can't render (no height yet, or the vendored lib is absent).
+  if (model.heightIn == null || !bmFigureLib()?.referenceTape) {
+    const tracking = [
+      ["SHOULDER/WAIST", bmRatio(shoulder, waist)],
+      ["CHEST/WAIST", bmRatio(chest, waist)],
+      ["ARM/CALF", bmRatio(arm, calf)],
+    ] as const;
+    for (const [label, value] of tracking) {
+      if (value == null) continue;
+      rows.push(rowHtml(label, bmRatioDisplay(value), "tracking only", bmChip("no target", "muted")));
+    }
   }
   if (!rows.length) return "";
   return `<div class="bm-ref" style="margin-top:16px">
       <div style="font:700 10px ui-sans-serif,system-ui,sans-serif;letter-spacing:.16em;text-transform:uppercase;color:#746c5c">Ratios & context${model.heightIn != null ? ` · ${escHtml(bmHeightLabel(model.heightIn, unit))}` : ""}</div>
       <div style="margin-top:6px">${rows.join("")}</div>
       <div style="font:400 11.5px/1.55 ui-sans-serif,system-ui,sans-serif;color:#a99c82;margin-top:9px">Only waist-height and waist-hip use clinical risk guides. Shoulder/chest/arm ratios are trend context, not target measurements.</div>
+    </div>`;
+}
+
+// Reference-physique rows (design 2b): each measured site against the physique
+// the lib derives from the athlete's height — italic sage, an arrow, a calm
+// chip. References, never mandates; a flagged site shows its recheck instead.
+function bmReferenceRows(model: BmStandModel, unit: BmUnit): string {
+  const lib = bmFigureLib();
+  if (model.heightIn == null || !model.merged || !lib || typeof lib.referenceTape !== "function") return "";
+  const ref = lib.referenceTape(model.female ? "female" : "male", model.heightIn);
+  const order: BmSiteKey[] = ["shoulder_in", "chest_in", "waist_in", "hip_in", "upper_arm_in", "forearm_in", "thigh_in", "calf_in", "neck_in"];
+  const rows: string[] = [];
+  for (const key of order) {
+    const raw = model.merged[key] as number | null;
+    if (raw == null || !Number.isFinite(raw)) continue;
+    const site = Object.keys(BM_STAND_SITE_OF).find((n) => BM_STAND_SITE_OF[n] === key);
+    const refIn = site ? ref[site] : null;
+    if (refIn == null || !Number.isFinite(refIn)) continue;
+    const curIn = bmInches(raw, unit);
+    const rc = curIn != null ? bmRefChip(key, curIn, refIn) : null;
+    const chip = model.flaggedSites.has(key) ? bmChip("recheck tape", "gold") : rc ? bmChip(rc.text, rc.tone) : "";
+    const refDisp = bmFmt(unit === "cm" ? refIn * 2.54 : refIn);
+    rows.push(`<div style="display:flex;align-items:baseline;gap:10px;padding:7px 2px;border-bottom:1px solid #f2ecdf">
+        <span style="flex:0 0 88px;font:600 10px ui-sans-serif,system-ui,sans-serif;letter-spacing:.12em;color:#746c5c">${escHtml(BM_SITE_LABEL[key].toUpperCase())}</span>
+        <span style="font:560 14.5px ui-serif,Georgia,serif;color:#211d17">${escHtml(bmFmt(raw))}</span>
+        <span style="color:#c0b6a0;font-size:12px">→</span>
+        <span style="font:italic 600 14.5px ui-serif,Georgia,serif;color:#5f6e4f">${escHtml(refDisp)}</span>
+        ${chip}</div>`);
+  }
+  if (!rows.length) return "";
+  return `<div class="bm-refphys" style="margin-top:16px">
+      <div style="font:700 10px ui-sans-serif,system-ui,sans-serif;letter-spacing:.18em;text-transform:uppercase;color:#746c5c">Reference physique · ${escHtml(bmHeightLabel(model.heightIn, unit))}</div>
+      <div style="margin-top:6px">${rows.join("")}</div>
+      <div style="font:400 11.5px/1.55 ui-sans-serif,system-ui,sans-serif;color:#a99c82;margin-top:9px">References, not mandates — waist just under half your height, shoulder ≈ 1.4–1.5 × the reference waist, arm ≈ calf ≈ neck. The dashed figure above is this physique.</div>
     </div>`;
 }
 
@@ -1106,6 +1125,10 @@ function compSection(data: BmSummary, unit: BmUnit): string {
   const heading = comp.heading
     ? `<div class="sess-line bm-heading" style="color:var(--ink-2,#57503f);margin-top:10px">${escHtml(comp.heading)}</div>`
     : "";
+  const flagged = [...model.flaggedSites].map((key) => bmCap(BM_SITE_LABEL[key]));
+  const quality = flagged.length
+    ? `<div class="bm-quality" style="border-left:3px solid var(--gold-deep,#8a6d2e);padding:8px 10px;margin-top:10px;color:var(--ink-2,#57503f);font-size:.8rem;line-height:1.45"><strong style="color:var(--gold-deep,#8a6d2e)">Recheck ${escHtml(flagged.join(flagged.length === 2 ? " and " : ", "))}</strong> · Those readings look unusual for your height or proportions, so the figure is holding those areas neutral until the next tape.</div>`
+    : "";
   const focus = comp.focus
     ? `<div class="bm-focus" style="border-left:3px solid var(--accent,#b4552d);background:var(--accent-wash,rgba(180,85,45,.1));border-radius:8px;padding:10px 12px;margin-top:12px">
         <div style="font-weight:600;font-size:.78rem;letter-spacing:.04em;text-transform:uppercase;color:var(--accent,#b4552d);margin-bottom:3px">Where to point it</div>
@@ -1113,12 +1136,15 @@ function compSection(data: BmSummary, unit: BmUnit): string {
       </div>`
     : "";
   const detail = data.latest ? bmStandDetail(model, selected, unit) : "";
+  const legend = lib && data.latest && model.heightIn != null
+    ? `<div class="bm-legend" style="text-align:center;font:italic 400 12px ui-serif,Georgia,serif;color:#746c5c;margin-top:2px">solid — your tape · <span style="color:#5f6e4f">- - -</span> the reference for your height</div>`
+    : "";
   return `<div class="sess bm-comp reveal" style="padding:16px 14px;margin-bottom:12px">
       <div class="bm-sechead" style="font-weight:600;margin-bottom:2px">Where you stand</div>
-      ${sub}${heading}
+      ${sub}${heading}${quality}
       <div class="bm-figure-slot" style="margin-top:8px"><div class="bm-figure-fallback">${figure}</div></div>
-      ${detail}${focus}
-      ${bmStandRatioRows(model, unit)}
+      ${legend}${detail}${focus}
+      ${bmStandRatioRows(model, unit)}${bmReferenceRows(model, unit)}
     </div>`;
 }
 
@@ -1268,14 +1294,24 @@ function heightForm(profile: BmSummary["profile"], unit: BmUnit): string {
 // One tap from the top of the view (the monthly loop is glance → tape → log, so
 // entry never lives below the fold). Collapsed it reads as a single action row
 // with "last taped …"; open by default until the first session exists. The small
-// ⓘ affordance on each site label — tap (or focus the input) and an inline
-// note opens right on that field, so the tape landmark is visible while typing.
+// ⓘ affordance on each site label — tap (or focus the input) and a popover
+// note opens over that field, so the tape landmark is visible while typing.
 function logForm(data: BmSummary, unit: BmUnit): string {
   const sites = data.sites || [];
   // Local calendar day (localISO from date-utils) — a UTC slice would prefill
   // tomorrow's date for an evening tape session west of Greenwich.
   const today = typeof localISO === "function" ? localISO() : new Date().toISOString().slice(0, 10);
-  const inputs = sites
+  // Elite entry (design 3a): each site is a stepper row — − / value / + in
+  // 0.5in (1cm) steps, seeded from the last-known tape so a monthly session is
+  // mostly nudges — with the height-derived reference in italic sage at the end
+  // of the row. Placement hints hide behind the ⓘ (or focusing the input).
+  const merged = mergeLatestSites(data.measurements, data.latest);
+  const female = String(data.profile?.sex || "").toLowerCase() === "female";
+  const lib = bmFigureLib();
+  const refTape = data.profile?.height_in != null && lib && typeof lib.referenceTape === "function"
+    ? lib.referenceTape(female ? "female" : "male", data.profile.height_in)
+    : null;
+  const rows = sites
     .map((s) => {
       const hintId = `bmHint-${s.key}`;
       const feedbackId = `bmFeedback-${s.key}`;
@@ -1286,15 +1322,37 @@ function logForm(data: BmSummary, unit: BmUnit): string {
       const info = s.hint
         ? `<button type="button" class="bm-info" data-site="${escAttr(s.key)}" data-label="${escAttr(s.label)}" aria-controls="${escAttr(hintId)}" aria-expanded="false" aria-label="How to measure: ${escAttr(s.label)}" title="How to measure ${escAttr(s.label)}" style="width:15px;height:15px;border-radius:50%;border:1px solid var(--muted,#746c5c);color:var(--muted,#746c5c);background:transparent;font-size:.6rem;line-height:1;font-style:italic;font-family:var(--font-display,Georgia,serif);cursor:pointer;padding:0;display:inline-flex;align-items:center;justify-content:center;flex:none">i</button>`
         : "";
+      // The placement hint is a POPOVER anchored under the row (absolute, so it
+      // never reflows the grid — an opening hint must not shove the form down).
       const hint = s.hint
-        ? `<span id="${escAttr(hintId)}" class="bm-site-hint sess-line" data-site="${escAttr(s.key)}" role="note" hidden style="display:block;margin-top:6px;padding:7px 8px;border-radius:8px;background:var(--sage-bg,#eef0e6);color:var(--ink,#211d17);font-size:.76rem;line-height:1.35">${escHtml(s.hint)}</span>`
+        ? `<span id="${escAttr(hintId)}" class="bm-site-hint sess-line" data-site="${escAttr(s.key)}" role="note" hidden style="display:none;position:absolute;left:0;right:0;top:calc(100% - 2px);z-index:30;padding:8px 10px;border-radius:10px;background:var(--card,#fffdf8);border:1px solid var(--line,#e7dfd2);border-left:3px solid var(--sage,#6e7f5c);box-shadow:0 6px 18px rgba(33,29,23,.14);color:var(--ink,#211d17);font-size:.76rem;line-height:1.4">${escHtml(s.hint)}</span>`
         : "";
       const described = `${s.hint ? `${hintId} ` : ""}${feedbackId}`;
-      return `<label class="field bm-site-field" data-site-field="${escAttr(s.key)}" style="margin:0"><span style="display:inline-flex;align-items:center;gap:5px">${escHtml(s.label)}${info}</span><input class="form-input bm-site" data-site="${escAttr(s.key)}" data-label="${escAttr(s.label)}" data-typical-min="${escAttr(String(range.typical_min ?? ""))}" data-typical-max="${escAttr(String(range.typical_max ?? ""))}" type="number" inputmode="decimal" min="${escAttr(String(range.min))}" max="${escAttr(String(range.max))}" step="0.1" placeholder="${unit}" aria-describedby="${escAttr(described.trim())}" style="width:100%"><span id="${escAttr(feedbackId)}" class="bm-site-feedback sess-line" data-site-feedback="${escAttr(s.key)}" role="status" hidden style="display:block;margin-top:5px;font-size:.72rem;line-height:1.35"></span>${hint}</label>`;
+      const lastVal = merged ? (merged[s.key as BmSiteKey] as number | null) : null;
+      const prefill = lastVal != null && Number.isFinite(lastVal) ? String(lastVal) : "";
+      const libSite = Object.keys(BM_STAND_SITE_OF).find((n) => BM_STAND_SITE_OF[n] === s.key);
+      const refIn = refTape && libSite ? refTape[libSite] : null;
+      const refDisp = refIn != null && Number.isFinite(refIn) ? bmFmt(unit === "cm" ? Math.round(refIn * 2.54) : refIn) : null;
+      const ref = refDisp != null
+        ? `<span style="margin-left:auto;font:italic 600 12.5px ui-serif,Georgia,serif;color:var(--sage-text,#5f6e4f);white-space:nowrap" title="Reference for your height — never a mandate">ref ${escHtml(refDisp)}</span>`
+        : "";
+      const stepBtn = (dir: -1 | 1) =>
+        `<button type="button" class="bm-step" data-site="${escAttr(s.key)}" data-dir="${dir}" aria-label="${dir < 0 ? "Decrease" : "Increase"} ${escAttr(s.label)}" style="flex:none;width:24px;height:24px;border-radius:99px;border:none;background:var(--wash,#f0ead9);color:var(--ink-2,#57503f);font:600 14px/1 ui-sans-serif,system-ui,sans-serif;cursor:pointer;padding:0">${dir < 0 ? "−" : "+"}</button>`;
+      return `<div class="bm-site-field" data-site-field="${escAttr(s.key)}" style="position:relative;padding:6px 0;border-bottom:1px solid var(--line,#f2ecdf)">
+          <div style="display:flex;align-items:center;gap:7px">
+            <label for="bmSite-${escAttr(s.key)}" style="flex:0 0 86px;display:inline-flex;align-items:center;gap:5px;font:600 10px ui-sans-serif,system-ui,sans-serif;letter-spacing:.1em;text-transform:uppercase;color:var(--muted,#746c5c)">${escHtml(s.label)}${info}</label>
+            ${stepBtn(-1)}<input id="bmSite-${escAttr(s.key)}" class="form-input bm-site" data-site="${escAttr(s.key)}" data-label="${escAttr(s.label)}" data-prefill="${escAttr(prefill)}" data-typical-min="${escAttr(String(range.typical_min ?? ""))}" data-typical-max="${escAttr(String(range.typical_max ?? ""))}" type="number" inputmode="decimal" min="${escAttr(String(range.min))}" max="${escAttr(String(range.max))}" step="0.1" placeholder="${unit}" aria-describedby="${escAttr(described.trim())}" style="width:72px;text-align:center;padding:5px 4px">${stepBtn(1)}
+            ${ref}
+          </div>
+          <span id="${escAttr(feedbackId)}" class="bm-site-feedback sess-line" data-site-feedback="${escAttr(s.key)}" role="status" hidden style="display:none;margin-top:5px;font-size:.72rem;line-height:1.35"></span>${hint}
+        </div>`;
     })
     .join("");
   const last = data.latest?.date && typeof relAge === "function"
     ? `<span style="color:var(--muted,#746c5c);font-size:.78rem;font-weight:400">last taped ${escHtml(relAge(data.latest.date))}</span>`
+    : "";
+  const refNote = refTape
+    ? " Italic — the reference for your height, never a mandate."
     : "";
   return `<details class="sess bm-log reveal"${data.latest ? "" : " open"} style="padding:0;overflow:hidden">
       <summary style="list-style:none;display:flex;justify-content:space-between;align-items:center;gap:8px;padding:13px 14px;cursor:pointer">
@@ -1302,8 +1360,8 @@ function logForm(data: BmSummary, unit: BmUnit): string {
         ${last}
       </summary>
       <div style="padding:0 14px 14px">
-        <div class="sess-line" style="color:var(--muted,#746c5c);margin:0 0 8px">Tape, relaxed, same time of day. Fill in what you measured — the rest stays blank. Tap i on any site for where the tape goes.</div>
-        <div class="bm-site-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(6.5rem,1fr));gap:8px">${inputs}</div>
+        <div class="sess-line" style="color:var(--muted,#746c5c);margin:0 0 6px">Tape, relaxed, same time of day. Fill in what you measured — the rest stays blank. Tap ⓘ on any site for where the tape goes.${refNote}</div>
+        <div class="bm-site-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(15.5rem,1fr));gap:0 18px">${rows}</div>
         <div style="display:flex;gap:8px;align-items:flex-end;margin-top:10px;flex-wrap:wrap">
           <label class="field" style="margin:0"><span>Date</span><input id="bmDate" class="form-input" type="date" value="${escAttr(today)}"></label>
           <label class="field" style="margin:0;flex:1;min-width:9rem"><span>Note</span><input id="bmNote" class="form-input" type="text" placeholder="optional" style="width:100%"></label>
@@ -1394,7 +1452,11 @@ function wire(mount: HTMLElement, unit: BmUnit, data?: BmSummary): void {
   const setHintVisible = (site: string | null) => {
     mount.querySelectorAll(".bm-site-hint").forEach((box) => {
       const el = box as HTMLElement;
-      el.hidden = el.dataset.site !== site;
+      const show = el.dataset.site === site;
+      el.hidden = !show;
+      // The hidden attribute's UA display:none loses to an inline display, so
+      // the visible state is driven explicitly.
+      el.style.display = show ? "block" : "none";
     });
   };
   const showHint = (site: string) => {
@@ -1423,6 +1485,17 @@ function wire(mount: HTMLElement, unit: BmUnit, data?: BmSummary): void {
       const btn = mount.querySelector(`.bm-info[data-site="${site}"]`) as HTMLElement | null;
       if (btn) showHint(site);
     });
+  });
+  // Popover hygiene: a tap anywhere outside the open hint's field, or Escape,
+  // dismisses it (the hint floats over the form, so it must be easy to shed).
+  mount.addEventListener("click", (e) => {
+    if (hintSite == null) return;
+    const t = e.target as Element | null;
+    const field = t && typeof t.closest === "function" ? (t.closest(".bm-site-field") as HTMLElement | null) : null;
+    if (!field || field.dataset.siteField !== hintSite) clearHint();
+  });
+  mount.addEventListener("keydown", (e) => {
+    if ((e as KeyboardEvent).key === "Escape" && hintSite != null) clearHint();
   });
 
   // Site-specific hard limits stop impossible entries. Height-aware limits are
@@ -1453,6 +1526,7 @@ function wire(mount: HTMLElement, unit: BmUnit, data?: BmSummary): void {
     if (typeof input.setCustomValidity === "function") input.setCustomValidity(issue?.kind === "error" ? issue.message : "");
     if (box) {
       box.hidden = !issue;
+      box.style.display = issue ? "block" : "none";
       box.textContent = issue?.message || "";
       box.style.color = issue?.kind === "error" ? "var(--warn,#b3402e)" : "var(--gold-deep,#8a6d2e)";
     }
@@ -1473,6 +1547,43 @@ function wire(mount: HTMLElement, unit: BmUnit, data?: BmSummary): void {
       paintInputIssue(input);
     });
     input.addEventListener("blur", () => paintInputIssue(input));
+  });
+
+  // Stepper taps (design 3a): 0.5in / 1cm nudges. The first tap on an empty
+  // field seeds the last-known tape for that site (a monthly session is mostly
+  // small adjustments), falling back to the typical band's middle.
+  mount.querySelectorAll(".bm-step").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const el = btn as HTMLElement;
+      const site = el.dataset.site || "";
+      const input = mount.querySelector(`.bm-site[data-site="${site}"]`) as HTMLInputElement | null;
+      if (!input) return;
+      const dir = el.dataset.dir === "-1" ? -1 : 1;
+      const step = unit === "cm" ? 1 : 0.5;
+      const cur = bmNum(input);
+      let next: number;
+      if (cur == null) {
+        const seed = Number(input.dataset.prefill);
+        if (Number.isFinite(seed) && seed > 0) {
+          next = seed;
+        } else {
+          const tmin = Number(input.dataset.typicalMin);
+          const tmax = Number(input.dataset.typicalMax);
+          next = Number.isFinite(tmin) && Number.isFinite(tmax) && tmin > 0 && tmax > tmin
+            ? Math.round((tmin + tmax) / 2 / step) * step
+            : Number(input.min) || step;
+        }
+      } else {
+        next = Math.round((cur + dir * step) / step) * step;
+      }
+      const min = Number(input.min);
+      const max = Number(input.max);
+      if (Number.isFinite(min)) next = Math.max(min, next);
+      if (Number.isFinite(max)) next = Math.min(max, next);
+      input.value = String(Math.round(next * 100) / 100);
+      unusualConfirmed = false;
+      paintInputIssue(input);
+    });
   });
 
   // Figure callouts → that site's trend row (scroll + a brief sage flash).
@@ -1612,6 +1723,7 @@ function wire(mount: HTMLElement, unit: BmUnit, data?: BmSummary): void {
             if (input) input.setAttribute("aria-invalid", String(issue.severity === "error"));
             if (box) {
               box.hidden = false;
+              box.style.display = "block";
               box.textContent = issue.message || "Check this value.";
               box.style.color = issue.severity === "error" ? "var(--warn,#b3402e)" : "var(--gold-deep,#8a6d2e)";
             }
@@ -1639,7 +1751,7 @@ function renderBodyMetrics(mount: HTMLElement | null): void {
 const CAIRN_BODY_METRICS = {
   renderBodyMetrics, deriveFigureRegions, bodyFigureSvg, mergeLatestSites, mergePreviousSites,
   bmStandModel, bmStandFigureSvg, bmSiteContext, bmResolveSelected,
-  bmStandDetail, bmStandRatioRows, bmTapeValueIssue, compSection,
+  bmStandDetail, bmStandRatioRows, bmReferenceRows, bmTapeValueIssue, compSection, logForm,
 };
 Object.assign(globalThis, { CairnBodyMetrics: CAIRN_BODY_METRICS, renderBodyMetrics });
 if (typeof window !== "undefined") {

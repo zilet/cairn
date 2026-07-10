@@ -1,12 +1,22 @@
 import { db } from "../db.js";
 import { type ContextEffect, activeContextEffect, markerInTransientWindow } from "./context-effect.js";
-import { DIRECTIVE_DOMAINS, addDirective, clearDirectivesForSource, defaultDirectiveKey, hydrateDirective, listActiveDirectives, normalizeDirectiveKey } from "./coach.js";
+import {
+  DIRECTIVE_DOMAINS,
+  addDirective,
+  clearDirectivesForSource,
+  defaultDirectiveKey,
+  hydrateDirective,
+  listActiveDirectives,
+  normalizeDirectiveKey,
+} from "./coach.js";
 import { buildSafetyMarkerContext, safetyGate, verifyCitation } from "./evidence.js";
 import { activeMedications, forecastMarker, getMarkerHistory, lsqSlopePerDay } from "./health.js";
 import { invalidateDayRead } from "./intelligence.js";
 import { canonicalMarker } from "./marker-canon.js";
 import { getProfile, listWeight } from "./profile.js";
-import { localDateISO } from "./shared.js";
+import { addDaysISO, localDateISO } from "./shared.js";
+import { brainDecisionFingerprint, recordDecision } from "./brain-decisions.js";
+import type { ProposedExpectation } from "../brain/expectation-contract.js";
 import {
   type MappingDirective,
   type MarkerContext,
@@ -101,20 +111,24 @@ function wearableFitnessMarkers(days = 120): any[] {
   for (const spec of specs) {
     // One reading per day: prefer Garmin's value, else the source-agnostic one.
     const byDate = new Map<string, number>();
-    const g = db.prepare(
-      `SELECT date, ${spec.gCol} AS v FROM garmin_daily_metrics
+    const g = db
+      .prepare(
+        `SELECT date, ${spec.gCol} AS v FROM garmin_daily_metrics
        WHERE date >= ? AND date <= ? AND ${spec.gCol} IS NOT NULL ORDER BY date`
-    ).all(since, today) as any[];
+      )
+      .all(since, today) as any[];
     for (const r of g) {
       const v = Number(r.v);
       if (Number.isFinite(v) && v >= spec.lo && v <= spec.hi) byDate.set(String(r.date), v);
     }
     if (spec.label === "VO2max") {
-      const activityRows = db.prepare(
-        `SELECT date, vo2max AS v FROM garmin_activities
+      const activityRows = db
+        .prepare(
+          `SELECT date, vo2max AS v FROM garmin_activities
          WHERE date >= ? AND date <= ? AND vo2max IS NOT NULL
          ORDER BY date, id`
-      ).all(since, today) as any[];
+        )
+        .all(since, today) as any[];
       for (const r of activityRows) {
         const date = String(r.date);
         if (byDate.has(date)) continue;
@@ -123,10 +137,12 @@ function wearableFitnessMarkers(days = 120): any[] {
       }
     }
     if (spec.oCol) {
-      const o = db.prepare(
-        `SELECT date, ${spec.oCol} AS v FROM daily_metrics
+      const o = db
+        .prepare(
+          `SELECT date, ${spec.oCol} AS v FROM daily_metrics
          WHERE date >= ? AND date <= ? AND ${spec.oCol} IS NOT NULL ORDER BY date`
-      ).all(since, today) as any[];
+        )
+        .all(since, today) as any[];
       for (const r of o) {
         const date = String(r.date);
         if (byDate.has(date)) continue; // Garmin already supplied this day
@@ -153,11 +169,31 @@ function wearableFitnessMarkers(days = 120): any[] {
       const span_days = Math.round((Date.parse(last.date) - Date.parse(points[0].date)) / 864e5) || 0;
       const weekly = slope != null ? slope * 7 : null;
       const projectedMove = slope != null ? Math.abs(slope) * Math.max(1, span_days) : 0;
-      const dir = weekly == null
-        ? (range > 0 && Math.abs(change) < range * 0.05 ? "stable" : change > 0 ? "rising" : change < 0 ? "falling" : "stable")
-        : projectedMove < Math.max(range * 0.05, 1e-9) ? "stable" : weekly > 0 ? "rising" : weekly < 0 ? "falling" : "stable";
+      const dir =
+        weekly == null
+          ? range > 0 && Math.abs(change) < range * 0.05
+            ? "stable"
+            : change > 0
+              ? "rising"
+              : change < 0
+                ? "falling"
+                : "stable"
+          : projectedMove < Math.max(range * 0.05, 1e-9)
+            ? "stable"
+            : weekly > 0
+              ? "rising"
+              : weekly < 0
+                ? "falling"
+                : "stable";
       const fc = forecastMarker(points, slope, zone);
-      trend = { dir, change, span_days, n, slope_per_week: weekly == null ? null : Math.round(weekly * 1000) / 1000, projection: fc.eta_text };
+      trend = {
+        dir,
+        change,
+        span_days,
+        n,
+        slope_per_week: weekly == null ? null : Math.round(weekly * 1000) / 1000,
+        projection: fc.eta_text,
+      };
     }
     const grp = markerGroup(spec.label);
     out.push({
@@ -276,7 +312,11 @@ function mappingDirectiveKey(zoneLabel: string, d: MappingDirective): string | n
 // already on a medication that targets this marker in the direction it's off — so the
 // coaching reasons WITH the treatment (dose/adherence/add-on with the doctor) rather
 // than treating them as untreated. INFORMATIONAL, never a prescription.
-function medInteractionClause(zoneLabel: string, side: MarkerContext["side"], treating: { label: string; names: string[] }): string {
+function medInteractionClause(
+  zoneLabel: string,
+  side: MarkerContext["side"],
+  treating: { label: string; names: string[] }
+): string {
   const sideWord = side === "low" ? "below" : "above";
   const names = treating.names.join(", ");
   return `You're already on ${names} for this, so with ${zoneLabel} still ${sideWord} optimal the highest-leverage step is usually revisiting the dose, adherence, or an add-on with your doctor — not lifestyle change alone.`;
@@ -284,14 +324,18 @@ function medInteractionClause(zoneLabel: string, side: MarkerContext["side"], tr
 
 function lastDirectiveFeedback(source: string, marker: string | null, domain: string, directiveKey: string | null) {
   if (!directiveKey) return null;
-  return hydrateDirective(db.prepare(
-    `SELECT * FROM health_directives
+  return hydrateDirective(
+    db
+      .prepare(
+        `SELECT * FROM health_directives
      WHERE source = ? AND (marker = ? OR (marker IS NULL AND ? IS NULL)) AND domain = ? AND directive_key = ?
        AND status IN ('resolved', 'dismissed')
        AND status_at IS NOT NULL
      ORDER BY COALESCE(status_at, created_at) DESC, id DESC
      LIMIT 1`
-  ).get(source, marker, marker, domain, directiveKey) ?? null);
+      )
+      .get(source, marker, marker, domain, directiveKey) ?? null
+  );
 }
 
 function overageForSide(value: number, zone: OptimalZone, side: MarkerContext["side"]): number {
@@ -325,6 +369,112 @@ function shouldSuppressDirective(feedback: any, ctx: MarkerContext): boolean {
   return false;
 }
 
+function directiveSourceRef(row: any): string {
+  const source = String(row?.source || "directive").toLowerCase();
+  const domain = String(row?.domain || "watch").toLowerCase();
+  const marker = String(row?.marker || "general")
+    .toLowerCase()
+    .replace(/\s+/g, "-");
+  const key = String(row?.directive_key || "general").toLowerCase();
+  const readable = `${source}:${domain}:${marker}:${key}`;
+  if (readable.length <= 120) return readable;
+  return `${source}:${domain}:${marker.slice(0, 45)}:#${brainDecisionFingerprint(readable).slice(0, 24)}`.slice(0, 120);
+}
+
+// A propagation pass intentionally soft-resolves and replaces directive rows, so
+// their integer ids churn even when the clinical signal did not. The ledger uses
+// a semantic source key and a trigger-aware fingerprint: repeated derivation is
+// idempotent while a changed marker snapshot or changed directive becomes a new
+// future event. The latest physical row id remains bounded context for debugging.
+function recordActiveDirectiveDecisions(source: string): void {
+  let rows: any[] = [];
+  try {
+    rows = db
+      .prepare(`SELECT * FROM health_directives WHERE source = ? AND status = 'active' ORDER BY id`)
+      .all(source) as any[];
+  } catch {
+    return;
+  }
+  for (const row of rows) {
+    try {
+      const ref = directiveSourceRef(row);
+      const domain = row.domain === "training" ? "training" : row.domain === "nutrition" ? "nutrition" : "health";
+      const action = {
+        directive: row.directive ?? null,
+        citation: row.citation ?? null,
+        uncertain: !!row.uncertain,
+        trigger_value: row.trigger_value ?? null,
+        trigger_side: row.trigger_side ?? null,
+        trigger_date: row.trigger_date ?? null,
+      };
+      const effectiveDate = /^\d{4}-\d{2}-\d{2}$/.test(String(row.trigger_date || ""))
+        ? String(row.trigger_date)
+        : localDateISO();
+      const triggerValue = Number(row.trigger_value);
+      const direction = row.trigger_side === "high" ? "decrease" : row.trigger_side === "low" ? "increase" : null;
+      const expectations: ProposedExpectation[] =
+        row.marker && direction && Number.isFinite(triggerValue)
+          ? [
+              {
+                metric_key: "marker_direction",
+                subject_key: String(row.marker),
+                direction,
+                baseline: { value: triggerValue },
+                target: {},
+                window_start: effectiveDate,
+                window_end: addDaysISO(effectiveDate, 180) ?? effectiveDate,
+                minimum_data: { marker_draws: 2 },
+                confounder_policy: "next_draw",
+                confidence: row.uncertain ? "tentative" : "observed",
+                evaluator: "marker_direction",
+                evaluator_version: "directive-marker-v1",
+              },
+            ]
+          : [];
+      recordDecision(
+        {
+          effective_date: effectiveDate,
+          kind: "health_directive",
+          domain,
+          summary: String(row.directive || `${row.marker || "Health"} ${row.domain || "watch"} directive`).slice(
+            0,
+            300
+          ),
+          rationale: row.rationale ?? null,
+          source,
+          source_ref_type: "directive",
+          source_ref_key: ref,
+          status: "observed",
+          autonomy_tier: "clinician",
+          risk_class: "clinical",
+          reversible: false,
+          input_fingerprint: brainDecisionFingerprint({
+            source_ref_key: ref,
+            effective_date: row.trigger_date ?? null,
+            marker: row.marker ?? null,
+            action,
+          }),
+          context: {
+            directive_row_id: row.id,
+            marker: row.marker ?? null,
+            directive_key: row.directive_key ?? null,
+            domain: row.domain ?? "watch",
+          },
+          action,
+          specialist: null,
+          applied_at: null,
+          reverted_at: null,
+          superseded_by: null,
+          evaluator_version: expectations.length ? "directive-marker-v1" : null,
+        },
+        expectations
+      );
+    } catch {
+      // Directive propagation is authoritative; the audit trail is best effort.
+    }
+  }
+}
+
 // THE PROPAGATION ENGINE. A flagged/sub-optimal biomarker propagates into every
 // domain it touches — nutrition, training and watch — grounded in reputable
 // guideline citations where the lever is well-established, flagged uncertain
@@ -351,7 +501,13 @@ export function deriveDirectives() {
   // Active medications, read ONCE — so the brain can reason WITH a treatment (a marker
   // still off-optimal despite a med that targets it is a dose/adherence conversation,
   // not a naive lifestyle nudge). Empty when no uploaded record carries a med list.
-  const meds = (() => { try { return activeMedications(); } catch { return []; } })();
+  const meds = (() => {
+    try {
+      return activeMedications();
+    } catch {
+      return [];
+    }
+  })();
   for (const m of markers) {
     const z = matchOptimalZone(m?.name, profile);
     if (!z) continue;
@@ -400,7 +556,10 @@ export function deriveDirectives() {
         resurfaced_from_id: feedback?.id ?? null,
         status: "active",
       });
-      if (row) { saved++; if (directive_key) seen.add(directive_key); }
+      if (row) {
+        saved++;
+        if (directive_key) seen.add(directive_key);
+      }
     }
   }
 
@@ -424,7 +583,12 @@ export function deriveDirectives() {
   // place every directive change flows through) rather than at each caller — so every
   // path that re-derives (lab ingest, /directives/derive, chat log_health, a doc-date
   // edit, MCP add_health_record) refreshes the read with no per-caller bookkeeping.
-  try { invalidateDayRead(); } catch { /* cache bust is best-effort, never block */ }
+  try {
+    invalidateDayRead();
+  } catch {
+    /* cache bust is best-effort, never block */
+  }
+  recordActiveDirectiveDecisions(SOURCE);
   return { source: SOURCE, derived: saved, directives: listActiveDirectives() };
 }
 
@@ -460,9 +624,29 @@ const MARKER_CLUSTERS: MarkerCluster[] = [
         ? " Lp(a) is largely genetic and won't move with diet, which makes pushing the modifiable markers (ApoB/LDL) toward optimal matter even more."
         : "";
       return [
-        { domain: "watch", directive: `Several cardiovascular markers are elevated together (${names}) — read as one elevated-risk picture, not separate flags. This is the highest-leverage area to address; discuss the combined picture with your doctor.${lpaNote}`, rationale: "Multiple atherogenic / inflammatory markers off-optimal at once compound cardiovascular risk beyond any single value.", citation: "ACC/AHA 2018 Cholesterol Guideline; ESC/EAS 2019 Dyslipidaemia" },
-        { domain: "nutrition", directive: "Because several heart markers are elevated together, make the lipid-lowering pattern the priority: cut saturated fat, raise soluble fiber (oats, legumes, psyllium), favor oily fish and olive oil, and trim refined carbs/alcohol.", rationale: "One coherent anti-atherogenic, anti-inflammatory dietary pattern moves this whole cluster at once.", citation: "ACC/AHA 2018 Cholesterol Guideline" },
-        { domain: "training", directive: "Keep regular aerobic work in the week — it helps the whole cardiovascular cluster (lipids, inflammation, blood pressure) at once.", rationale: "Aerobic exercise is a shared lever across the atherogenic/inflammatory markers in this cluster.", citation: "ACC/AHA 2018 Cholesterol Guideline", uncertain: true },
+        {
+          domain: "watch",
+          directive: `Several cardiovascular markers are elevated together (${names}) — read as one elevated-risk picture, not separate flags. This is the highest-leverage area to address; discuss the combined picture with your doctor.${lpaNote}`,
+          rationale:
+            "Multiple atherogenic / inflammatory markers off-optimal at once compound cardiovascular risk beyond any single value.",
+          citation: "ACC/AHA 2018 Cholesterol Guideline; ESC/EAS 2019 Dyslipidaemia",
+        },
+        {
+          domain: "nutrition",
+          directive:
+            "Because several heart markers are elevated together, make the lipid-lowering pattern the priority: cut saturated fat, raise soluble fiber (oats, legumes, psyllium), favor oily fish and olive oil, and trim refined carbs/alcohol.",
+          rationale:
+            "One coherent anti-atherogenic, anti-inflammatory dietary pattern moves this whole cluster at once.",
+          citation: "ACC/AHA 2018 Cholesterol Guideline",
+        },
+        {
+          domain: "training",
+          directive:
+            "Keep regular aerobic work in the week — it helps the whole cardiovascular cluster (lipids, inflammation, blood pressure) at once.",
+          rationale: "Aerobic exercise is a shared lever across the atherogenic/inflammatory markers in this cluster.",
+          citation: "ACC/AHA 2018 Cholesterol Guideline",
+          uncertain: true,
+        },
       ];
     },
   },
@@ -496,7 +680,8 @@ function isBodyCompositionSupportOnlyMarker(name: string): boolean {
   const n = String(name ?? "").toLowerCase();
   if (!n) return false;
   if (/\bbody fat\b/.test(n) && !/\b(trunk|arms?|legs?|android|gynoid)\b/.test(n)) return false;
-  if (/\b(almi|ffmi|appendicular|skeletal muscle mass index|lean mass index|fat[-\s]?free mass index)\b/.test(n)) return false;
+  if (/\b(almi|ffmi|appendicular|skeletal muscle mass index|lean mass index|fat[-\s]?free mass index)\b/.test(n))
+    return false;
   if (/\b(bone mineral density|bmd|t[-\s]?score|z[-\s]?score)\b/.test(n)) return false;
   return (
     /\blean mass\b/.test(n) ||
@@ -513,7 +698,12 @@ function isBodyCompositionSupportOnlyMarker(name: string): boolean {
 // analyte Cairn doesn't model (potassium, ALP, PSA, WBC, cortisol, calcium, lipase, …)
 // still surfaces instead of vanishing. Always uncertain:true (no established lever) and
 // respects the same dismiss/resolve feedback memory as the mapped path.
-function deriveGenericLongTail(source: string, markers: any[], seen: Set<string>, profile?: ZoneProfile | null): number {
+function deriveGenericLongTail(
+  source: string,
+  markers: any[],
+  seen: Set<string>,
+  profile?: ZoneProfile | null
+): number {
   let saved = 0;
   let emitted = 0;
   for (const m of markers) {
@@ -555,7 +745,8 @@ function deriveGenericLongTail(source: string, markers: any[], seen: Set<string>
       marker: name,
       directive_key,
       directive: `Your lab flagged ${name}${valStr} as ${flag}. It isn't one of the levers Cairn maps, so it's worth mentioning at your next visit to understand what's driving it.`,
-      rationale: "A flagged marker outside Cairn's mapped levers is surfaced as a soft watch item so nothing the lab flagged goes unnoticed. Informational, not medical advice.",
+      rationale:
+        "A flagged marker outside Cairn's mapped levers is surfaced as a soft watch item so nothing the lab flagged goes unnoticed. Informational, not medical advice.",
       citation: null,
       uncertain: true,
       trigger_value: Number.isFinite(Number(value)) ? Number(value) : null,
@@ -564,12 +755,21 @@ function deriveGenericLongTail(source: string, markers: any[], seen: Set<string>
       resurfaced_from_id: feedback?.id ?? null,
       status: "active",
     });
-    if (row) { saved++; emitted++; if (directive_key) seen.add(directive_key); }
+    if (row) {
+      saved++;
+      emitted++;
+      if (directive_key) seen.add(directive_key);
+    }
   }
   return saved;
 }
 
-function deriveMarkerClusters(source: string, offMarkers: Map<string, MarkerContext>, seen: Set<string> = new Set(), profile?: ZoneProfile | null): number {
+function deriveMarkerClusters(
+  source: string,
+  offMarkers: Map<string, MarkerContext>,
+  seen: Set<string> = new Set(),
+  profile?: ZoneProfile | null
+): number {
   let saved = 0;
   // anemia pattern needs cross-marker reads (hemoglobin / MCV) that aren't all in
   // OPTIMAL_ZONES, so handle it specially off the marker history rather than the
@@ -587,7 +787,12 @@ function deriveMarkerClusters(source: string, offMarkers: Map<string, MarkerCont
       })
       .filter(Boolean) as { label: string; ctx: MarkerContext }[];
     if (hits.length < c.minHits) continue;
-    clusters.push({ name: c.name, directives: c.build(hits), markerLabel: hits.map((h) => h.label).join("+"), ctx: hits[0].ctx });
+    clusters.push({
+      name: c.name,
+      directives: c.build(hits),
+      markerLabel: hits.map((h) => h.label).join("+"),
+      ctx: hits[0].ctx,
+    });
   }
   if (anemia) clusters.push(anemia);
 
@@ -612,7 +817,10 @@ function deriveMarkerClusters(source: string, offMarkers: Map<string, MarkerCont
         resurfaced_from_id: feedback?.id ?? null,
         status: "active",
       });
-      if (row) { saved++; if (directive_key) seen.add(directive_key); }
+      if (row) {
+        saved++;
+        if (directive_key) seen.add(directive_key);
+      }
     }
   }
   return saved;
@@ -623,7 +831,10 @@ function deriveMarkerClusters(source: string, offMarkers: Map<string, MarkerCont
 // as iron-deficiency anemia; ferritin alone is just low stores. Reads hemoglobin
 // & MCV from the full marker history (they aren't all in OPTIMAL_ZONES). Returns
 // one synthesized cluster or null.
-function buildAnemiaCluster(offMarkers: Map<string, MarkerContext>, profile?: ZoneProfile | null): { name: string; directives: MappingDirective[]; markerLabel: string; ctx: MarkerContext } | null {
+function buildAnemiaCluster(
+  offMarkers: Map<string, MarkerContext>,
+  profile?: ZoneProfile | null
+): { name: string; directives: MappingDirective[]; markerLabel: string; ctx: MarkerContext } | null {
   const ferritin = offMarkers.get("Ferritin");
   if (!ferritin || ferritin.side !== "low") return null;
   const { markers } = getMarkerHistory();
@@ -647,9 +858,29 @@ function buildAnemiaCluster(offMarkers: Map<string, MarkerContext>, profile?: Zo
   if (hgbLow) bits.push("low hemoglobin");
   if (mcvLow) bits.push("low MCV");
   const directives: MappingDirective[] = [
-    { domain: "watch", directive: `These read together as an iron-deficiency anemia pattern (${bits.join(" + ")}), not separate flags — confirm with iron studies / a full CBC and discuss iron repletion with your doctor before training hard through it.`, rationale: "Low ferritin with low hemoglobin and/or a small MCV is the classic iron-deficiency anemia signature, which needs confirmation and repletion.", citation: "WHO 2020 Ferritin Guideline; BSH iron-deficiency anemia guidance" },
-    { domain: "training", directive: "While this anemia pattern is present, hold endurance volume and keep easy days genuinely easy — oxygen transport is limited until iron and hemoglobin recover.", rationale: "Iron and hemoglobin are rate-limiting for oxygen delivery; hard training on an anemia pattern impairs recovery and adaptation.", citation: "IOC consensus on iron in athletes" },
-    { domain: "nutrition", directive: "Pair iron-rich foods (red meat, lentils, spinach) with vitamin C, keep tea/coffee away from iron-rich meals, and follow your doctor's guidance on supplemental iron.", rationale: "Dietary and supplemental iron, with absorption-friendly pairing, repletes stores when clinically appropriate.", citation: "WHO 2020 Ferritin Guideline" },
+    {
+      domain: "watch",
+      directive: `These read together as an iron-deficiency anemia pattern (${bits.join(" + ")}), not separate flags — confirm with iron studies / a full CBC and discuss iron repletion with your doctor before training hard through it.`,
+      rationale:
+        "Low ferritin with low hemoglobin and/or a small MCV is the classic iron-deficiency anemia signature, which needs confirmation and repletion.",
+      citation: "WHO 2020 Ferritin Guideline; BSH iron-deficiency anemia guidance",
+    },
+    {
+      domain: "training",
+      directive:
+        "While this anemia pattern is present, hold endurance volume and keep easy days genuinely easy — oxygen transport is limited until iron and hemoglobin recover.",
+      rationale:
+        "Iron and hemoglobin are rate-limiting for oxygen delivery; hard training on an anemia pattern impairs recovery and adaptation.",
+      citation: "IOC consensus on iron in athletes",
+    },
+    {
+      domain: "nutrition",
+      directive:
+        "Pair iron-rich foods (red meat, lentils, spinach) with vitamin C, keep tea/coffee away from iron-rich meals, and follow your doctor's guidance on supplemental iron.",
+      rationale:
+        "Dietary and supplemental iron, with absorption-friendly pairing, repletes stores when clinically appropriate.",
+      citation: "WHO 2020 Ferritin Guideline",
+    },
   ];
   return { name: "anemia-pattern", directives, markerLabel: bits.join("+"), ctx: ferritin };
 }
@@ -706,7 +937,7 @@ export function applyReviewDirectives(directives: any[]) {
     const feedback = lastDirectiveFeedback("health_review", marker, domain, directive_key);
     // Current context for THIS marker (null when we can't resolve a numeric value
     // or there's no optimal band to judge against — e.g. a watch-only marker).
-    const ctx = marker ? markerCtxByName.get(marker.toLowerCase()) ?? null : null;
+    const ctx = marker ? (markerCtxByName.get(marker.toLowerCase()) ?? null) : null;
     // Keep suppressing prior feedback UNLESS the marker is now clearly worse than
     // it was when last handled. Conservative: with no resolvable context we can't
     // prove a worsening, so we honor the prior dismiss/resolve (skip).
@@ -716,13 +947,10 @@ export function applyReviewDirectives(directives: any[]) {
     // when it matches a recognized guideline body OR a cached evidence_cache row;
     // otherwise the unverifiable string is STRIPPED and the directive downgraded
     // to uncertain (a softer nudge). The directive itself is never dropped.
-    const verified = verifyCitation(d.citation ?? null, d.source_url ?? null);
+    const verified = verifyCitation(d.citation ?? null, d.source_url ?? null, directive, marker);
     // Supplement / interaction safety gate: annotate (never block) a supplement
     // suggestion the user's markers contraindicate (e.g. iron with replete ferritin).
-    const safe = safetyGate(
-      { domain, marker, directive, rationale: d.rationale ?? null },
-      safetyCtx
-    );
+    const safe = safetyGate({ domain, marker, directive, rationale: d.rationale ?? null }, safetyCtx);
     const row = addDirective({
       source: "health_review",
       domain,
@@ -736,12 +964,15 @@ export function applyReviewDirectives(directives: any[]) {
       // has a baseline to judge a worsening against — same machinery the
       // 'markers' path uses. When this directive RESURFACED a prior dismiss/
       // resolve, link back to it (resurfaced_from_id) for the same audit trail.
-      ...(ctx ? { trigger_value: ctx.value, trigger_side: ctx.side, trigger_date: ctx.marker?.latest?.date ?? null } : {}),
+      ...(ctx
+        ? { trigger_value: ctx.value, trigger_side: ctx.side, trigger_date: ctx.marker?.latest?.date ?? null }
+        : {}),
       resurfaced_from_id: feedback?.id ?? null,
       status: "active",
     });
     if (row) count++;
   }
+  recordActiveDirectiveDecisions("health_review");
   return count;
 }
 
@@ -754,7 +985,11 @@ export function applyReviewDirectives(directives: any[]) {
 function buildReviewMarkerContexts(): Map<string, MarkerContext> {
   const out = new Map<string, MarkerContext>();
   let markers: any[] = [];
-  try { markers = prioritizeMarkers().markers; } catch { return out; }
+  try {
+    markers = prioritizeMarkers().markers;
+  } catch {
+    return out;
+  }
   const profile = zoneProfile();
   for (const m of markers) {
     const z = matchOptimalZone(m?.name, profile);
@@ -763,7 +998,9 @@ function buildReviewMarkerContexts(): Map<string, MarkerContext> {
     if (!Number.isFinite(value)) continue;
     const flag: string | null = m?.latest?.flag === "low" || m?.latest?.flag === "high" ? m.latest.flag : null;
     const ctx: MarkerContext = { value, flag, zone: z, side: markerSide(value, z, flag), marker: m };
-    const nameKey = String(m?.name ?? "").trim().toLowerCase();
+    const nameKey = String(m?.name ?? "")
+      .trim()
+      .toLowerCase();
     if (nameKey && !out.has(nameKey)) out.set(nameKey, ctx);
     const labelKey = z.label.toLowerCase();
     if (!out.has(labelKey)) out.set(labelKey, ctx); // canonical-name fallback
@@ -781,14 +1018,16 @@ function buildReviewMarkerContexts(): Map<string, MarkerContext> {
 // reading must NOT drive today's training/nutrition as if it were current — it ages
 // into a quiet "worth a recheck" note instead of a daily cap. Chronic/structural
 // markers (ApoB, Lp(a), LDL, HbA1c, …) carry NO such decay — they stay relevant.
-const ACUTE_MARKER_RE = /\b(hs-?crp|c-?reactive|\bcrp\b|esr|sed(imentation)? rate|wbc|white blood|neutrophil|creatine kinase|\bck\b)\b/i;
+const ACUTE_MARKER_RE =
+  /\b(hs-?crp|c-?reactive|\bcrp\b|esr|sed(imentation)? rate|wbc|white blood|neutrophil|creatine kinase|\bck\b)\b/i;
 // A composite/cluster name dominated by chronic/structural markers (e.g. the lipid+
 // inflammation cluster "ApoB+LDL-C+Lp(a)+hs-CRP+Triglycerides") is NOT a point-in-time
 // acute reading — it carries durable lipid advice that must never age out just because
 // the name happens to mention CRP. Such names are kept OUT of the acute (decaying) class.
 // Word-ending tokens keep \b…\b; the paren-ending Lp(a)/lipoprotein(a) are matched
 // without a trailing \b (a ")" is already a non-word char, so \b after it never holds).
-const CHRONIC_GUARD_RE = /\b(?:apo\s?b|apolipoprotein|ldl|hdl|hba1c|a1c|triglyceride|cholesterol|glucose)\b|lp\s?\(a\)|lipoprotein\s?\(a\)/i;
+const CHRONIC_GUARD_RE =
+  /\b(?:apo\s?b|apolipoprotein|ldl|hdl|hba1c|a1c|triglyceride|cholesterol|glucose)\b|lp\s?\(a\)|lipoprotein\s?\(a\)/i;
 export function isAcuteMarker(name?: string | null): boolean {
   if (!name) return false;
   const s = String(name);
@@ -831,10 +1070,12 @@ export function acuteReadingDateMap(): Record<string, string> {
   const out: Record<string, string> = {};
   try {
     const { markers } = getMarkerHistory();
-    for (const m of (Array.isArray(markers) ? markers : [])) {
+    for (const m of Array.isArray(markers) ? markers : []) {
       if (m?.key && m?.latest?.date && isAcuteMarker(m?.name)) out[String(m.key)] = String(m.latest.date);
     }
-  } catch { /* no docs / parse failure → no anchors */ }
+  } catch {
+    /* no docs / parse failure → no anchors */
+  }
   return out;
 }
 
@@ -867,7 +1108,10 @@ function weightDeltaSince(scanISO: string | null, weights: any[]): number | null
     const t = Date.parse(String(w?.date));
     if (!Number.isFinite(t)) continue;
     const gap = Math.abs(t - scan);
-    if (gap < bestGap) { bestGap = gap; base = w; }
+    if (gap < bestGap) {
+      bestGap = gap;
+      base = w;
+    }
   }
   const baseW = Number(base?.weight_lb);
   if (!Number.isFinite(baseW)) return null;
@@ -878,7 +1122,11 @@ function weightDeltaSince(scanISO: string | null, weights: any[]): number | null
 // old AND bodyweight has since moved enough that the scan can't be asserted as current.
 // { stale, reason (plain language), delta_lb }. stale=false for non-body-comp directives,
 // a recent scan, or a weight that hasn't moved.
-export function bodyCompStaleness(d: any, weights: any[], today?: string): { stale: boolean; reason: string | null; delta_lb: number | null } {
+export function bodyCompStaleness(
+  d: any,
+  weights: any[],
+  today?: string
+): { stale: boolean; reason: string | null; delta_lb: number | null } {
   if (!isBodyCompDirective(d?.marker)) return { stale: false, reason: null, delta_lb: null };
   const anchor = d?.trigger_date || d?.created_at || null;
   const t = anchor ? Date.parse(String(anchor)) : Number.NaN;
@@ -905,7 +1153,15 @@ export function annotateDirectiveFreshness(directives: any[], today?: string, ef
   // Body-comp staleness needs the weigh-in log — fetch ONCE, and only when a body-comp
   // directive is present (the common case has none). Degrades to [] on any read error.
   const anyBodyComp = rows.some((d) => isBodyCompDirective(d?.marker));
-  const weights = anyBodyComp ? (() => { try { return listWeight(120); } catch { return []; } })() : [];
+  const weights = anyBodyComp
+    ? (() => {
+        try {
+          return listWeight(120);
+        } catch {
+          return [];
+        }
+      })()
+    : [];
   // The active life-context effect (a recent illness / injury / late night / hard block)
   // raises a transient-inflammation window. We only need it when there's an acute
   // directive to test, and we compute it ONCE. A caller may inject `eff` (testing, or a
@@ -913,12 +1169,20 @@ export function annotateDirectiveFreshness(directives: any[], today?: string, ef
   // Best-effort — never throws (a missing/erroring effect simply yields no transient flag).
   let effect: ContextEffect | undefined = eff;
   if (anyAcute && !effect) {
-    try { effect = activeContextEffect(today); } catch { effect = undefined; }
+    try {
+      effect = activeContextEffect(today);
+    } catch {
+      effect = undefined;
+    }
   }
   return rows.map((d) => {
     let anchor: string | undefined;
     if (isAcuteMarker(d?.marker)) {
-      try { anchor = map[canonicalMarker(String(d?.marker ?? "")).key]; } catch { /* unresolved → directiveFreshness falls back */ }
+      try {
+        anchor = map[canonicalMarker(String(d?.marker ?? "")).key];
+      } catch {
+        /* unresolved → directiveFreshness falls back */
+      }
     }
     const f = directiveFreshness(d, today, anchor);
     // TRANSIENT-FLARE verdict (additive — leaves acute/age_days/stale intact): a FRESH
@@ -933,8 +1197,12 @@ export function annotateDirectiveFreshness(directives: any[], today?: string, ef
       const rawDate = anchor || d?.trigger_date || null;
       const readingDate = rawDate ? String(rawDate).slice(0, 10) : null;
       if (readingDate && markerInTransientWindow(readingDate, effect)) {
-        const item = effect.active.find((a) => a.transient_inflammation && (!a.decays_on || readingDate <= a.decays_on));
-        const flare = item?.title ? `"${String(item.title).trim()}"` : "a recent flare (illness / injury / a hard block)";
+        const item = effect.active.find(
+          (a) => a.transient_inflammation && (!a.decays_on || readingDate <= a.decays_on)
+        );
+        const flare = item?.title
+          ? `"${String(item.title).trim()}"`
+          : "a recent flare (illness / injury / a hard block)";
         transient = true;
         transient_reason = `${String(d?.marker ?? "this acute marker").trim()} was likely drawn during ${flare} — informational; worth a recheck once it settles before it shapes training.`;
       }
@@ -942,7 +1210,17 @@ export function annotateDirectiveFreshness(directives: any[], today?: string, ef
     // Body-comp recency decay (additive): a directive off a month-old DEXA while the
     // athlete's weight has since moved reads as "worth a rescan", not a current fact.
     const bc = anyBodyComp ? bodyCompStaleness(d, weights, today) : { stale: false, reason: null, delta_lb: null };
-    return { ...d, acute: f.acute, age_days: f.ageDays, stale: f.stale, transient, transient_reason, stale_measurement: bc.stale, rescan_reason: bc.reason, weight_delta_lb: bc.delta_lb };
+    return {
+      ...d,
+      acute: f.acute,
+      age_days: f.ageDays,
+      stale: f.stale,
+      transient,
+      transient_reason,
+      stale_measurement: bc.stale,
+      rescan_reason: bc.reason,
+      weight_delta_lb: bc.delta_lb,
+    };
   });
 }
 
@@ -950,28 +1228,34 @@ export function directivesForCoach() {
   // Body-comp recency decay: a directive off a scan that's weeks old while bodyweight
   // has since moved is reframed as provisional ("worth a fresh scan"), so the coach
   // never asserts a stale DEXA as current. Fetch the weigh-in log once.
-  const weights = (() => { try { return listWeight(120); } catch { return []; } })();
-  return listActiveDirectives().slice(0, 24).map((d: any) => {
-    const bc = bodyCompStaleness(d, weights);
-    const directive = bc.stale && bc.reason
-      ? `${d.directive} [Note: ${bc.reason}]`
-      : d.directive;
-    return {
-      domain: d.domain,
-      marker: directiveDisplayMarker(d.marker),
-      directive,
-      rationale: d.rationale,
-      citation: d.citation,
-      uncertain: d.uncertain,
-      directive_key: d.directive_key,
-      trigger_value: d.trigger_value,
-      trigger_side: d.trigger_side,
-      trigger_date: d.trigger_date,
-      created_at: d.created_at,
-      stale_measurement: bc.stale,
-      rescan_reason: bc.reason,
-    };
-  });
+  const weights = (() => {
+    try {
+      return listWeight(120);
+    } catch {
+      return [];
+    }
+  })();
+  return listActiveDirectives()
+    .slice(0, 24)
+    .map((d: any) => {
+      const bc = bodyCompStaleness(d, weights);
+      const directive = bc.stale && bc.reason ? `${d.directive} [Note: ${bc.reason}]` : d.directive;
+      return {
+        domain: d.domain,
+        marker: directiveDisplayMarker(d.marker),
+        directive,
+        rationale: d.rationale,
+        citation: d.citation,
+        uncertain: d.uncertain,
+        directive_key: d.directive_key,
+        trigger_value: d.trigger_value,
+        trigger_side: d.trigger_side,
+        trigger_date: d.trigger_date,
+        created_at: d.created_at,
+        stale_measurement: bc.stale,
+        rescan_reason: bc.reason,
+      };
+    });
 }
 
 function directiveDisplayMarker(marker: string | null | undefined): string | null {
@@ -987,24 +1271,30 @@ function directiveDisplayMarker(marker: string | null | undefined): string | nul
 }
 
 export function directiveFeedbackForCoach(limit = 12) {
-  return (db.prepare(
-    `SELECT * FROM health_directives
+  return (
+    db
+      .prepare(
+        `SELECT * FROM health_directives
      WHERE status IN ('resolved', 'dismissed')
        AND status_at IS NOT NULL
      ORDER BY COALESCE(status_at, created_at) DESC, id DESC
      LIMIT ?`
-  ).all(limit) as any[]).map(hydrateDirective).map((d: any) => ({
-    status: d.status,
-    status_at: d.status_at || d.created_at,
-    domain: d.domain,
-    marker: d.marker,
-    directive: d.directive,
-    rationale: d.rationale,
-    directive_key: d.directive_key,
-    trigger_value: d.trigger_value,
-    trigger_side: d.trigger_side,
-    trigger_date: d.trigger_date,
-  }));
+      )
+      .all(limit) as any[]
+  )
+    .map(hydrateDirective)
+    .map((d: any) => ({
+      status: d.status,
+      status_at: d.status_at || d.created_at,
+      domain: d.domain,
+      marker: d.marker,
+      directive: d.directive,
+      rationale: d.rationale,
+      directive_key: d.directive_key,
+      trigger_value: d.trigger_value,
+      trigger_side: d.trigger_side,
+      trigger_date: d.trigger_date,
+    }));
 }
 
 // ============================================================================

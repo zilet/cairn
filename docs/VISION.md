@@ -32,8 +32,9 @@ helps. It optimizes for the long run — sustainability over intensity, consiste
 would rather you do the right easy thing for ten years than the perfect brutal thing for three weeks.
 The caliber is elite; the delivery is calm.
 
-And **you drive.** It navigates; you steer. It proposes; you decide. It never auto-applies, never
-overrides you, never guilt-trips you toward compliance. The relationship is trust, not pressure.
+And **you drive.** It navigates; you steer. It leads within explicit boundaries, while every change
+stays visible and reversible and your word wins instantly. It never overrides you or guilt-trips you
+toward compliance. The relationship is trust, not pressure.
 
 This is **your own Jarvis** — a private, deeply personal health-and-body-and-longevity intelligence that
 works *with* you. It is not a product built for a market, and it carries none of a market product's
@@ -49,13 +50,25 @@ do what you ask, the moment you ask it.
 These are load-bearing. Every feature, screen, and prompt is judged against them. When a principle and
 a feature conflict, the principle wins.
 
-1. **You drive.** The app is the navigator and dashboard; you are the driver. It surfaces, suggests,
-   and proposes — you choose. The existing **propose → review → apply** loop is the literal embodiment
-   of this and must remain the spine. Nothing plan-affecting or clinical ever auto-applies. And **every
+1. **You drive.** The app is the navigator and dashboard; you are the driver. It monitors, suggests,
+   and leads within the autonomy policy below; you retain immediate control. The decision ledger,
+   visible rationale, natural-boundary application, and one-tap undo are the spine. Goal-level and
+   clinical changes still require you; clinical decisions remain with you and your clinician. And **every
    read is only ever a suggestion** — never a gate, never imposed. From anywhere it offers, you can
    wave it off and go your own way in one move: do something else, log anything, explore your data, add
    to the plan, **ask it for a session right now**, or **pull your planned workout back in**. The smart
    default is pre-chosen for you; the wheel is always yours.
+
+> **Amendment 1 — The coach leads (2026-07).** Cairn began propose-first: nothing plan-affecting
+> applied without a tap. That rule protected trust before Cairn could remember its decisions, state
+> expectations, and be held to outcomes. Now that it can, the relationship matures: **Cairn acts like
+> an elite team — it adapts your training, meals, and week on its own initiative, at natural boundaries,
+> within hard safety floors — and tells you what changed and why, subtly, where it matters.** You still
+> drive: every change is visible, explained, reversible in one tap, and your word in chat wins instantly.
+> Structural changes are announced before they take effect; goal-level changes and anything clinical
+> still ask first — clinical decisions always remain with you and your clinician. Nothing is ever imposed
+> on your body; the plan remains a suggestion you are free to ignore. Where this amendment conflicts
+> with earlier propose-first language, this amendment governs.
 
 2. **Calm by default.** Quiet reassurance is the *normal* state. On a day when all is well, the app
    should be nearly silent — "you're good, here's your session" — not a wall of metrics to interpret.
@@ -146,7 +159,8 @@ a feature conflict, the principle wins.
     This lives entirely *inside* the constitution: "always has the next move" means **always ready**, not
     always talking. It is computed continuously but **surfaced pull-not-push** — the moment you engage, or
     at the genuinely right time — routed through the salience arbiter (§12.1) so more intelligence never
-    becomes more noise. You still drive; nothing plan-affecting or clinical auto-applies; the smartest
+    becomes more noise. You still drive; bounded changes land quietly at natural boundaries, visible
+    and reversible in one tap (Amendment 1) — anything clinical still asks first; the smartest
     move is pre-chosen and waiting, and the wheel is always yours.
 
 ---
@@ -161,8 +175,9 @@ a feature conflict, the principle wins.
 connected brain propagates findings across domains, capture is effortless (voice + frequents + Apple
 Health + Garmin), nutrition adapts adherence-neutrally, and the buddy meets you in your sport
 (strength / endurance / hybrid). The constitution held the whole way — **no scores, zero push, fully
-pull-based, nothing auto-applies.** Cairn is no longer "a logging app that doesn't read your day"; it
-reads the day and points.
+pull-based, and in that propose-first era nothing auto-applied** (Amendment 1 later matured this into
+lead-mode: visible, reversible, announced-when-structural). Cairn is no longer "a logging app that
+doesn't read your day"; it reads the day and points.
 
 **The new gap is subtler: staying calm as it got smarter.** Era 1's question was *"does it read my
 day?"* (yes). Era 2's question is *"does it stay a calm daily driver now that it knows so much?"* The
@@ -181,8 +196,9 @@ core-gap notes below are kept for the record.*
   stay-out-of-the-way buddy.
 - **Two surfaces over one repo.** `api.ts` (REST) and `mcp.ts` (MCP) are thin mirrors over `repo.ts`,
   so the buddy is reachable from the PWA *and* from any MCP client on the tailnet.
-- **Propose → review → apply is exactly right.** Coaching never auto-applies; drafts are reviewed. This
-  is "you drive" already in code. We have the hard part.
+- **Accountable autonomy is exactly right.** Bounded coaching changes can land quietly at natural
+  boundaries; structural changes are announced first; every action is ledgered, explained, and reversible.
+  Goal identity and clinical decisions retain the review boundary. This is "you drive" in mature form.
 - **`getCoachContext()` is the "inject real data before generation" pattern** — the single biggest lesson
   from studying Whoop Coach / Oura Advisor (both felt generic until grounded in the user's own data).
   Cairn already feeds profile + goal + plan + sessions + activities + Garmin recovery + memory + health +
@@ -240,7 +256,8 @@ Function Health, InsideTracker, Superpower; Cozi, PlateJoy; Duolingo, Strava, Ri
   legitimate, tracked, good state — not a gap.
 - **Adapt to reality from real data, quietly** (MacroFactor's adherence-neutral expenditure loop: derive
   true TDEE from your weigh-ins + intake, re-target weekly, *regardless of whether you "were good"* — no
-  red numbers, no good/bad foods). The adjustment surfaces *as a proposal you review*, calmly.
+  red numbers, no good/bad foods). A bounded adjustment can land at the next natural boundary with its
+  rationale and Undo; a structural shift is announced first.
 - **Autoregulation** (RP/Juggernaut: RIR → load, soreness/performance → volume; AMRAP → next block). The
   feedback that lets a plan bend to a real human. Caution: Fitbod's ML optimizing "freshness" *fights*
   progressive overload — recovery *informs* selection, never drives it.
@@ -306,8 +323,9 @@ The flow, concretely:
 4. **It writes a clear, cited note** — "moved your protein toward fish & poultry because ApoB came back
    high (per current lipid guidance); revisit at the next panel" — into the health review / memory, so the
    reasoning is transparent, revisitable, and feeds the next cycle.
-5. **You review and apply.** Nothing silently rewrites your plan; the recalculation arrives as a proposal,
-   annotated with *why* (you drive).
+5. **It acts accountably.** A bounded reversible recalculation may land at the next natural boundary with
+   its *why* and Undo; a structural change is announced before it takes effect. Goal-level and clinical
+   decisions still wait for you (you drive).
 
 Architecturally this is a **derived-directives layer**: findings → (optional research) → structured
 cross-domain directives that `getCoachContext()` carries into the meal, training, and day-read prompts,
@@ -457,7 +475,7 @@ chat show up, editable, in Memory.
 ### PHASE 3 — The quiet adaptive substance  *smart pointing at "how to get there"*
 
 **Goal:** targets and progressions adapt to what actually happened — surfaced *calmly, only on a
-meaningful change*, as a proposal you review.
+meaningful change*, at the affected item with an explanation and instant correction path.
 
 - **3A — Adaptive nutrition (MacroFactor-style, adherence-neutral).** `repo.estimateExpenditure(window)` —
   derive real TDEE from `intake − Δ(weighted-trend bodyweight)` (reuse the slope math behind
@@ -474,11 +492,12 @@ meaningful change*, as a proposal you review.
   joint-pain → de-load that movement; optional AMRAP → est-1RM → next block (we already compute Epley).
   Recovery *informs* selection; never let it override progressive overload (the Fitbod lesson).
 
-**Restraint note:** these loops run *silently* in the background and only ever produce a single, plainly
-justified proposal when something real changed — never a weekly "here's your report" you must read.
+**Restraint note:** these loops run *silently* in the background and produce at most one plainly
+justified, policy-bounded change when something real changed — never a weekly "here's your report" you
+must read.
 
-**Acceptance:** after ~3 weeks a nutrition proposal appears with a trend-justified target change to review;
-easy reps on a lift surface a small load-progression proposal; an active trip suppresses the retarget.
+**Acceptance:** after ~3 weeks a bounded nutrition target can adjust with a trend-justified note and Undo;
+easy reps on a lift can surface a small reversible progression; an active trip suppresses the retarget.
 
 **Parallelizable:** 3A and 3B fully independent.
 
@@ -609,8 +628,9 @@ relevant, hydration unless it ever drives a recommendation, and *anything gamifi
 - **Bump `sw.js` `CACHE`** on every `public/` change, same commit.
 - **Escape everything.** All server/agent strings into `innerHTML` go through `escHtml`/`escAttr`; `art.js`
   static SVGs are the only raw exception.
-- **Nothing plan-affecting or clinical auto-applies.** It routes to the review-before-apply loop. Health
-  findings are informational, not medical advice.
+- **Autonomy is policy-bound and reversible.** Low-risk coaching changes may apply only at natural
+  boundaries through code safety floors, with rationale and Undo; structural changes announce first;
+  goal-level and clinical changes never self-apply. Health findings are informational, not medical advice.
 - **Graceful degradation everywhere.** No Garmin, no Apple Health, no API key, no agent reachable — every
   feature has a sensible reduced state, exactly as art/enrichment already do.
 - **Self-hosted, own-your-data, no recurring fee, no account required to function.** A feature, not an
@@ -745,7 +765,7 @@ modes (lose/maintain/gain) + a daily fuel review & edit (v41). Schema reached **
 > (§2.2) and **restraint-over-features** (§2.4) as first-class engineering, turns the boldest promise
 > (one evidence-grounded brain, §2.11 / §5) from *capable-but-dark* into *reachable*, and closes the
 > last capture gap. Every item is bound to the constitution: pull-never-push, no scores, you-drive,
-> nothing auto-applies. Ranked by leverage.
+> and — since Amendment 1 — visible-reversible-announced rather than never-applied. Ranked by leverage.
 
 1. **A Today salience arbiter — calm becomes a guarantee, not a hope.** Today's cards each decide
    independently whether to appear; nothing arbitrates the *total*, so a full day stacks a dashboard.
@@ -805,15 +825,16 @@ modes (lose/maintain/gain) + a daily fuel review & edit (v41). Schema reached **
      to approach it," a glance at the week's shape, the retest that's due, the trip to train around — so you
      arrive primed. Built from data that already exists (day-read, plan, directives, context events),
      surfaced *through the arbiter* (item 1).
-   *Restraint note:* in-the-moment changes are things *you* initiated (still you-driving), so they apply
-   without a gate; anything the brain proposes on its own stays a waiting draft. The readiness look-ahead is
-   one calm line/card, pull-only, never a countdown or a push. Nothing clinical ever auto-applies.
+   *Restraint note:* in-the-moment changes you initiate apply immediately. Brain-proposed low-risk changes
+   follow the same bounded, reversible lead-mode policy; structural changes announce first. The readiness
+   look-ahead is one calm line/card, pull-only, never a countdown or a push. Nothing clinical ever auto-applies.
 
 **How Era 2 honors the constitution.** Items 1, 4, 5, and 7's readiness look-ahead all route *through* the
 salience arbiter, so adding intelligence cannot add noise — every new surface competes for the same scarce,
 ranked attention budget rather than claiming its own card. Item 2 makes a built capability honest and
-reachable. Item 3 finishes a planned track. Item 7's in-the-moment adaptation applies only *your own*
-deviations. Nothing here pushes, scores, gamifies, or auto-applies.
+reachable. Item 3 finishes a planned track. Item 7 follows accountable autonomy: user-initiated changes
+apply immediately; bounded coach-led changes are explainable and reversible. Nothing here pushes, scores,
+gamifies, or crosses goal-level or clinical boundaries.
 
 ---
 

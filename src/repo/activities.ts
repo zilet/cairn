@@ -1,4 +1,5 @@
 import { db, todayISO } from "../db.js";
+import { emitBrainEvent } from "../brainEvents.js";
 import { emitEnrichTransition } from "../enrichBus.js";
 import { invalidateDayRead } from "./intelligence.js";
 import { getOrCreateSession, getSessionDetail, setsForSession } from "./sessions.js";
@@ -99,6 +100,18 @@ export function addActivity(input: any) {
   }
   bumpTrainingDataVersion(); // cardio feeds weekly-stats + program-state endurance reads
   invalidateDayRead(date); // a logged activity (run/walk/class) is movement — today's Brief should reflect it
+  // Garmin's richer row is committed immediately after this helper returns; its
+  // authoritative upsert emits once there so initial syncs and re-syncs match.
+  if (source !== "garmin") {
+    emitBrainEvent({
+      kind: "activity_synced",
+      domain: "training",
+      date,
+      entity_id: row.id,
+      subject_key: row.type,
+      reason: source ? `${source} activity recorded` : "activity recorded",
+    });
+  }
   return row;
 }
 
@@ -656,7 +669,20 @@ export function upsertGarminActivity(input: GarminActivityInput, sourceId?: numb
     jsonOrNull(input.raw)
   );
   bumpTrainingDataVersion(); // a synced effort feeds weekly-stats + endurance reads
-  return hydrateJson(db.prepare(`SELECT * FROM garmin_activities WHERE source_id = ? AND external_id = ?`).get(source.id, String(input.external_id)));
+  const row = hydrateJson(
+    db
+      .prepare(`SELECT * FROM garmin_activities WHERE source_id = ? AND external_id = ?`)
+      .get(source.id, String(input.external_id))
+  );
+  emitBrainEvent({
+    kind: "activity_synced",
+    domain: "training",
+    date,
+    entity_id: row?.id ?? String(input.external_id),
+    subject_key: type,
+    reason: strength ? "garmin strength activity synced" : "garmin activity synced",
+  });
+  return row;
 }
 
 // The normalized daily columns, in the order they bind. `date`/`source_id` are
@@ -699,7 +725,17 @@ export function upsertGarminDailyMetric(input: GarminDailyMetricInput, sourceId?
   ).run(...values);
   bumpTrainingDataVersion(); // fresh recovery (HRV/RHR) shifts the program-state deload read
   invalidateDayRead(); // a Garmin sync brings fresh recovery → today's Brief recomputes
-  return hydrateJson(db.prepare(`SELECT * FROM garmin_daily_metrics WHERE source_id = ? AND date = ?`).get(source.id, input.date));
+  const row = hydrateJson(
+    db.prepare(`SELECT * FROM garmin_daily_metrics WHERE source_id = ? AND date = ?`).get(source.id, input.date)
+  );
+  emitBrainEvent({
+    kind: "recovery_metrics_changed",
+    domain: "recovery",
+    date: input.date,
+    entity_id: source.id,
+    subject_key: "garmin",
+  });
+  return row;
 }
 
 // hydrateJson + parse the per-activity JSON arrays (hr_zones, exercise_sets) into

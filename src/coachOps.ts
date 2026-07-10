@@ -37,11 +37,54 @@ import {
 } from "./prompt.js";
 import { researchEnabled, gatherReviewGrounding, researchEvidence } from "./research.js";
 import { normalizeHealthSynthesis } from "./health-synthesis.js";
+import { clampNutritionFloors } from "./repo/nutrition-safety.js";
 
 // runChosen is the shared agent-dispatch helper (see ./runChosen.ts). It's
 // re-exported here because api.ts / mcp.ts import it from coachOps as the
 // single agentic-ops entry point.
 export { runChosen };
+
+// Turn an agent's adaptive-nutrition suggestion into the bounded target the
+// proposal actually carries. The personal-response layer may tune the SIZE of
+// the nudge, but the universal 250-kcal ceiling and lean-safe kcal/protein floors
+// remain authoritative. Exported so the deterministic boundary is testable.
+export function personalizeNutritionCheckinTarget(nutrition: any, goalInput?: any): any {
+  if (!nutrition || typeof nutrition !== "object") return nutrition;
+  const goal = goalInput ?? repo.computeGoalCheck();
+  const rawTarget = Number(nutrition.target_kcal);
+  if (!Number.isFinite(rawTarget)) return nutrition;
+  const fallbackTarget = Number(goal?.effective_target?.target_kcal);
+  const suppliedPrevious = Number(nutrition.prev_target_kcal);
+  const previous = Number.isFinite(suppliedPrevious)
+    ? suppliedPrevious
+    : Number.isFinite(fallbackTarget) ? fallbackTarget : Number.NaN;
+  let target = rawTarget;
+  if (Number.isFinite(previous)) {
+    const rawDelta = rawTarget - previous;
+    const sign = rawDelta < 0 ? -1 : rawDelta > 0 ? 1 : 0;
+    const standardStep = Math.min(250, Math.abs(rawDelta));
+    const modifier = repo.whatWorksForYou()?.modifiers.find((item) => item.target === "nutrition_step") ?? null;
+    const learnedStep = repo.applyPersonalResponseModifier({
+      base: standardStep,
+      modifier,
+      min: 0,
+      max: 250,
+      safety_ceiling: 250,
+    });
+    target = Math.round(previous + sign * learnedStep);
+  }
+  const bounded = clampNutritionFloors(
+    { ...nutrition, target_kcal: target, prev_target_kcal: Number.isFinite(previous) ? Math.round(previous) : nutrition.prev_target_kcal },
+    { kcal: "target_kcal", protein: "protein_g" },
+    goal
+  );
+  if (Number.isFinite(previous)) {
+    const delta = Math.round(Number(bounded.target_kcal) - previous);
+    if ("delta_kcal" in bounded) bounded.delta_kcal = delta;
+    if ("change_kcal" in bounded) bounded.change_kcal = delta;
+  }
+  return bounded;
+}
 
 // ---- agent connect/visibility helpers (read-only; see src/agents.ts) ----
 // The two protocol surfaces (api.ts / mcp.ts) read agent connect-state through
@@ -525,17 +568,18 @@ export async function nutritionCheckin(agent: string | undefined, windowDays?: n
   if (!p.change || !p.nutrition || !Number.isFinite(Number(p.nutrition.target_kcal))) {
     return { ok: true as const, change: false, summary: typeof p.summary === "string" ? p.summary : "", agent: chosen, tried, expenditure };
   }
+  const nutrition = personalizeNutritionCheckinTarget(p.nutrition);
   // Store the target change as a DRAFT proposal (status 'draft', never applied).
   const proposal = repo.createProposal(chosen, "nutrition: adaptive check-in", result.raw, {
     kind: "nutrition_target",
     summary: typeof p.summary === "string" ? p.summary : "",
-    nutrition: p.nutrition,
+    nutrition,
     notes: typeof p.notes === "string" ? p.notes : "",
     expenditure,
   });
   // Outcome learning: record the proposed target + implied direction so a later
   // pass can check whether the bodyweight trend actually followed. Best-effort.
-  const targetKcal = Number(p.nutrition.target_kcal);
+  const targetKcal = Number(nutrition.target_kcal);
   const tdee = Number((expenditure as any)?.tdee);
   // Local day so the date matches reconcileSuggestions' local "today" cutoff
   // (date < today) — a UTC stamp could record tomorrow's date in an evening

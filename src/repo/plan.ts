@@ -1,7 +1,9 @@
 import { db } from "../db.js";
+import { emitBrainEvent } from "../brainEvents.js";
 import { constraintLimitsLoad, normalizeExerciseName, normalizedExerciseKey } from "./exercise-canon.js";
 import { findExercise, findOrCreateExercise, recentWorkingWeight } from "./exercises.js";
 import { invalidateDayRead } from "./intelligence.js";
+import { localDateISO } from "./shared.js";
 import { bumpTrainingDataVersion } from "./training-cache.js";
 
 // ---------- plan ----------
@@ -24,6 +26,72 @@ function hydratePlanItem(row: any) {
   return { ...rest, kind, interval };
 }
 
+type AccountablePlanChange = { decision_id: number; summary: string; rationale: string | null; reversible: boolean };
+
+function accountablePlanChanges(): Map<string, AccountablePlanChange> {
+  const map = new Map<string, AccountablePlanChange>();
+  try {
+    const rows = db
+      .prepare(
+        `SELECT id, summary, rationale, reversible, action_json
+         FROM brain_decisions
+        WHERE status = 'applied' AND domain = 'training' AND autonomy_tier IN ('quiet_apply','announce')
+        ORDER BY id DESC LIMIT 100`
+      )
+      .all() as any[];
+    for (const row of rows) {
+      let action: any = null;
+      try {
+        action = row.action_json ? JSON.parse(row.action_json) : null;
+      } catch {
+        action = null;
+      }
+      for (const change of Array.isArray(action?.changes) ? action.changes : []) {
+        const day = Number(change?.day_number);
+        const exercise = String(change?.exercise ?? "")
+          .trim()
+          .toLowerCase();
+        if (!Number.isFinite(day) || !exercise) continue;
+        const key = `${day}|${exercise}`;
+        if (!map.has(key))
+          map.set(key, {
+            decision_id: Number(row.id),
+            summary: String(row.summary ?? "Cairn adjusted this exercise."),
+            rationale: row.rationale == null ? null : String(row.rationale),
+            reversible: !!row.reversible,
+          });
+      }
+    }
+  } catch {
+    /* pre-ledger / partial migration: plan reads remain unchanged */
+  }
+  return map;
+}
+
+function decorateAccountablePlan(days: any[]): any[] {
+  const changes = accountablePlanChanges();
+  if (!changes.size) return days;
+  return days.map((day) => ({
+    ...day,
+    items: (day.items ?? []).map((item: any) => {
+      const change = changes.get(
+        `${Number(day.day_number)}|${String(item.exercise ?? "")
+          .trim()
+          .toLowerCase()}`
+      );
+      return change
+        ? {
+            ...item,
+            brain_decision_id: change.decision_id,
+            brain_change_summary: change.summary,
+            brain_change_reason: change.rationale,
+            brain_change_reversible: change.reversible,
+          }
+        : item;
+    }),
+  }));
+}
+
 export function getPlan() {
   const days = db.prepare(`SELECT * FROM plan_days ORDER BY day_number`).all() as any[];
   const stmt = db.prepare(
@@ -31,25 +99,31 @@ export function getPlan() {
        FROM plan_items pi LEFT JOIN exercises e ON e.id = pi.exercise_id
        WHERE pi.plan_day_id = ? ORDER BY pi.position`
   );
-  return days.map((d) => ({
-    ...d,
-    items: (stmt.all(d.id) as any[]).map(hydratePlanItem),
-  }));
+  return decorateAccountablePlan(
+    days.map((d) => ({
+      ...d,
+      items: (stmt.all(d.id) as any[]).map(hydratePlanItem),
+    }))
+  );
 }
 
 export function getPlanDay(dayNumber: number) {
   const d = db.prepare(`SELECT * FROM plan_days WHERE day_number = ?`).get(dayNumber) as any;
   if (!d) return null;
-  return {
-    ...d,
-    items: (db
-      .prepare(
-        `SELECT ${PLAN_ITEM_COLS}
+  return decorateAccountablePlan([
+    {
+      ...d,
+      items: (
+        db
+          .prepare(
+            `SELECT ${PLAN_ITEM_COLS}
          FROM plan_items pi LEFT JOIN exercises e ON e.id = pi.exercise_id
          WHERE pi.plan_day_id = ? ORDER BY pi.position`
-      )
-      .all(d.id) as any[]).map(hydratePlanItem),
-  };
+          )
+          .all(d.id) as any[]
+      ).map(hydratePlanItem),
+    },
+  ])[0];
 }
 
 // ---------- iCal plan export (pull-not-push calendar) ----------
@@ -518,6 +592,13 @@ export function savePlanDay(day_number: number, name: string, focus: string | nu
   // plan_days count feeds getWeeklyStats.week_planned; bump covers a same-count in-place
   // day rewrite too (setWeeklyRuns + replacePlan reach here, so they're covered as well).
   bumpTrainingDataVersion();
+  emitBrainEvent({
+    kind: "plan_changed",
+    domain: "training",
+    date: localDateISO(),
+    entity_id: dayId,
+    subject_key: `day:${day_number}`,
+  });
   return getPlanDay(day_number);
 }
 
@@ -585,6 +666,14 @@ export function deletePlanDay(day_number: number) {
   db.prepare(`UPDATE sessions SET plan_day_id = NULL WHERE plan_day_id = ?`).run(d.id); // keep history, drop the link
   const r = db.prepare(`DELETE FROM plan_days WHERE id = ?`).run(d.id); // plan_items cascade
   if (r.changes) bumpTrainingDataVersion(); // removing a day changes week_planned
+  if (r.changes)
+    emitBrainEvent({
+      kind: "plan_changed",
+      domain: "training",
+      date: localDateISO(),
+      entity_id: d.id,
+      subject_key: `day:${day_number}`,
+    });
   return { deleted: r.changes, day_number };
 }
 
@@ -606,5 +695,12 @@ export function replacePlan(days: { day_number?: number; name?: string; focus?: 
   // A restructure (new split/frequency) can move what today should be — bust the
   // cached Brief so a stale "train your old focus" read never survives an apply.
   invalidateDayRead();
+  emitBrainEvent({
+    kind: "plan_changed",
+    domain: "training",
+    date: localDateISO(),
+    subject_key: "full-plan",
+    material: true,
+  });
   return getPlan();
 }

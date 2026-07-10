@@ -30,6 +30,7 @@ type SettingsScreenWorkingModel = {
   coach_day: number;
   coach_hour: number;
   update_check_enabled: boolean;
+  lead_mode: "lead" | "announce_first" | "review_everything";
 };
 
 type SettingsScreenPersistBody = {
@@ -45,6 +46,7 @@ type SettingsScreenPersistBody = {
   coach_hour: number;
   agent_routes: Record<string, string>;
   update_check_enabled: boolean;
+  lead_mode: "lead" | "announce_first" | "review_everything";
   gemini_api_key?: string;
   garmin_password?: string;
 };
@@ -74,4 +76,5 @@ type SettingsScreenBundle = {
   rawArtStats: unknown;
   agentStats: unknown;
   learnings: unknown;
+  brainDiagnostics: unknown;
 };

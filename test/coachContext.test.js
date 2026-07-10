@@ -7,10 +7,7 @@ import {
   COACH_CONTEXT_REQUIRED_KEYS,
   isCoachContextEnvelope,
 } from "../dist/brain/coach-context-contract.js";
-import {
-  activeBrainSnapshotStats,
-  runWithBrainSnapshot,
-} from "../dist/brain/snapshot.js";
+import { activeBrainSnapshotStats, runWithBrainSnapshot } from "../dist/brain/snapshot.js";
 
 function reset() {
   resetTables(
@@ -32,7 +29,7 @@ function reset() {
     "garmin_activities",
     "program_blocks",
     "plan_proposals",
-    "suggestions",
+    "suggestions"
   );
 }
 
@@ -80,6 +77,7 @@ test("coach context contract recognizes the current prompt envelope", () => {
   assert.equal(isCoachContextEnvelope(ctx), true);
   assert.ok(COACH_CONTEXT_REQUIRED_KEYS.includes("coaching_focus"));
   assert.ok(COACH_CONTEXT_REQUIRED_KEYS.includes("recovery"));
+  assert.ok(COACH_CONTEXT_REQUIRED_KEYS.includes("whole_person_trajectory"));
   for (const key of COACH_CONTEXT_REQUIRED_KEYS) {
     assert.ok(Object.hasOwn(ctx, key), `required coach-context key missing from envelope: ${key}`);
   }
@@ -118,8 +116,12 @@ test("request-scoped brain snapshot reuses coach-context signal computations", (
 
 test("coach context prompt arrays stay bounded", () => {
   for (let i = 0; i < 55; i++) {
-    db.prepare(`INSERT INTO memory (kind, content, source, confidence) VALUES (?, ?, ?, ?)`)
-      .run("observation", `Unique coach-context memory ${i} about topic ${i * 17}`, "test", 1);
+    db.prepare(`INSERT INTO memory (kind, content, source, confidence) VALUES (?, ?, ?, ?)`).run(
+      "observation",
+      `Unique coach-context memory ${i} about topic ${i * 17}`,
+      "test",
+      1
+    );
   }
   for (let i = 0; i < 20; i++) {
     repo.addFoodNote("meal", "", { summary: `Food item ${i}`, kcal: 100 + i, protein_g: 10 });
@@ -209,10 +211,10 @@ test("coach context carries bounded clinical facts from non-marker health record
   assert.equal(ctx.health[0].summary, "PCP visit note with follow-up labs.");
   assert.equal(ctx.health[0].markers.length, 0);
   assert.ok(Array.isArray(ctx.health[0].clinical_facts));
-  assert.deepEqual(ctx.health[0].clinical_facts.map((f) => f.name), [
-    "Primary care follow-up",
-    "LIPID PANEL",
-  ]);
+  assert.deepEqual(
+    ctx.health[0].clinical_facts.map((f) => f.name),
+    ["Primary care follow-up", "LIPID PANEL"]
+  );
 });
 
 test("coach context does not leak conductor ranking internals", () => {
