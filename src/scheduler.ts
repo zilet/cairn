@@ -7,7 +7,7 @@ import { checkForUpdate } from "./updateCheck.js";
 import { evaluateMatureExpectations } from "./brainEvaluator.js";
 import { applyDueAnnouncedDecisions } from "./domain/brain/autonomy-service.js";
 import { enqueueAgentJob } from "./agentJobs.js";
-import { recordSchedulerFailure } from "./diagnostics.js";
+import { recordAsyncFailure, recordSchedulerFailure } from "./diagnostics.js";
 // Stream 2 (self-updating memory): quiet nightly memory housekeeping + outcome
 // reconciliation. Lazy-imported in the tick so this module stays decoupled.
 
@@ -70,6 +70,9 @@ function daysBetweenStamps(a: string, b: string): number {
 }
 
 export function startScheduler() {
+  const heartbeatTick = () => repo.setAppState("scheduler_heartbeat", new Date().toISOString());
+  // Synchronous first stamp makes readiness meaningful immediately after start.
+  heartbeatTick();
   // Wire agent-run telemetry: agents.ts can't import repo.ts (circular), so it
   // emits through a registered sink. recordAgentRun is itself failure-safe.
   setAgentRunSink((r) => repo.recordAgentRun(r));
@@ -86,10 +89,12 @@ export function startScheduler() {
       const result = applyDueAnnouncedDecisions(today);
       if (result.applied.length)
         console.log(`[brain] applied ${result.applied.length} announced change(s) at their natural boundary.`);
-      if (result.failed.length)
+      if (result.failed.length) {
+        recordAsyncFailure("apply", "announced_boundary", new Error("one or more changes need review"));
         console.error(
           `[brain] ${result.failed.length} announced change(s) could not be applied; they remain reviewable.`
         );
+      }
     } catch (e: any) {
       // Keep today's stamp: per-decision failures are isolated inside
       // applyDueAnnouncedDecisions, so a pass-level throw is an anomaly —
@@ -613,6 +618,7 @@ export function startScheduler() {
   setInterval(precomputeTick, 60_000);
   setInterval(memoryTick, 60_000); // Stream 2: nightly memory maintenance
   setInterval(updateCheckTick, 60_000); // self-hosted update check (≤ once/day)
+  setInterval(heartbeatTick, 60_000); // readiness evidence; no agent/provider dependency
   setTimeout(garminTick, 45_000); // the boot-time pass; later passes ride the minute tick
   setTimeout(updateCheckTick, 30_000); // first update check shortly after boot (then daily)
   setTimeout(boundaryApplyTick, 5_000);

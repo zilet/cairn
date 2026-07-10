@@ -106,8 +106,12 @@ From a source checkout:
 
 ```bash
 git pull
-docker compose up -d --build
+CAIRN_BUILD_SHA="$(git rev-parse HEAD)" docker compose up -d --build
 ```
+
+The SHA is exposed separately from the release version by health/readiness and
+operator diagnostics. See [`OBSERVABILITY.md`](OBSERVABILITY.md) for telemetry,
+retention, privacy, performance aggregates, and smoke-process containment.
 
 From a published image, update the image tag in `docker-compose.yml` or pull the latest tag:
 

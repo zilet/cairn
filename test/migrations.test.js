@@ -97,6 +97,23 @@ test("v49 backfills stable chat session ids for archived conversations", () => {
   d.close();
 });
 
+test("v61 clears legacy agent detail and upgrades diagnostic coalescing", () => {
+  const d = new DatabaseSync(":memory:");
+  d.exec("CREATE TABLE agent_runs (id INTEGER PRIMARY KEY, error_message TEXT);");
+  d.exec("INSERT INTO agent_runs (id,error_message) VALUES (1,'private raw CLI output');");
+  d.exec(`CREATE TABLE diagnostic_events (
+    id INTEGER PRIMARY KEY, source TEXT, kind TEXT, level TEXT, fingerprint TEXT, created_at TEXT
+  );`);
+  d.exec("INSERT INTO diagnostic_events VALUES (1,'api','slow_request','warning','slow','2026-07-10 10:00:00');");
+  d.exec("PRAGMA user_version=60;");
+  runMigrations(d);
+  assert.equal(d.prepare("SELECT error_message FROM agent_runs").get().error_message, null);
+  const row = d.prepare("SELECT occurrence_count,first_seen FROM diagnostic_events").get();
+  assert.equal(row.occurrence_count, 1);
+  assert.equal(row.first_seen, "2026-07-10 10:00:00");
+  d.close();
+});
+
 test("migration versions are gapless 1..N, unique, and strictly ascending", () => {
   const versions = MIGRATIONS.map((m) => m.version);
   const sorted = [...versions].sort((a, b) => a - b);

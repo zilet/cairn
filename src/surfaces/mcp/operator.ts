@@ -14,6 +14,7 @@ import {
 import { getAgentJob, listActiveAgentJobs } from "../../domain/person/index.js";
 import { cancelAgentJob } from "../../agentJobs.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
+import { getDiagnostics } from "../../repo/diagnostics.js";
 
 const ROUTABLE_TASK_LIST = ROUTABLE_TASKS.join(", ");
 const AGENT_JOB_KIND_LIST = AGENT_JOB_KINDS.join(", ");
@@ -129,6 +130,13 @@ export function registerOperatorTools(server: McpToolRegistrar) {
     "Operator-only bounded diagnostics for recent accountable decisions and sanitized coach read-tool calls. No raw prompts, secrets, files, chain-of-thought, or hidden scores.",
     { limit: z.number().int().min(1).max(100).optional() },
     async ({ limit }) => asText(getBrainDiagnostics(limit))
+  );
+
+  server.tool(
+    "get_diagnostics",
+    "Get bounded local operator diagnostics: build identity, grouped failures, recent sanitized events, API/MCP throughput and approximate p50/p95 latency, storage caps, and slow routes. Never includes prompts, bodies, credentials, health values, or raw agent output.",
+    { recent: z.number().int().min(1).max(200).optional(), days: z.number().int().min(1).max(30).optional() },
+    async ({ recent, days }) => asText(getDiagnostics({ recent, days }))
   );
 
   server.tool(

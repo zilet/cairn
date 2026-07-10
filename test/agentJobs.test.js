@@ -88,7 +88,7 @@ test("failAgentJob marks error; a non-terminal-only cancel returns null once ter
   repo.markAgentJobRunning(j.id);
   const failed = repo.failAgentJob(j.id, "agent down");
   assert.equal(failed.status, "error");
-  assert.match(failed.error, /agent down/);
+  assert.equal(failed.error, "Error: background operation failed");
   assert.equal(repo.cancelAgentJob(j.id), null, "cancel is a no-op on an already-terminal job");
 });
 

@@ -18,6 +18,7 @@ import { createChatStreamFilter, type LiveReplyEvent } from "./chatStreamFilter.
 import type { MemoryKind } from "./repo/memory.js";
 import { normalizeChatActions, type ChatAction, type ChatActionType, type LogFoodAction } from "./chatActions.js";
 import { applyProposalWithAutonomy, revertDecision } from "./domain/brain/autonomy-service.js";
+import { diagnosticErrorName, recordAsyncFailure } from "./diagnostics.js";
 
 // Background, in-process chat-turn engine — the durable counterpart to the
 // enrichment queue. A chat turn is no longer a blocking request/response: the
@@ -73,12 +74,13 @@ const runner = createSerialRunner(processChatTurn, (id, e) => {
   try {
     const cur = repo.getChatTurn(id) as any;
     if (cur && (cur.status === "queued" || cur.status === "running")) {
-      const assistant = repo.addChatMessage("assistant", `Something went wrong: ${e?.message ?? e}`, null, { error: true });
+      const assistant = repo.addChatMessage("assistant", "Something went wrong while finishing that turn.", null, { error: true });
       const failed = repo.failChatTurn(id, e?.message ?? String(e), (assistant as any).id);
       emit(id, { type: "error", turn: failed, message: assistant });
     }
   } catch { /* ignore */ }
-  console.error(`[chat] turn#${id} failed: ${e?.message ?? e}`);
+  recordAsyncFailure("chat_turns", "runner_backstop", e);
+  console.error(`[chat] turn#${id} failed (${diagnosticErrorName(e)})`);
 });
 
 export function enqueueChatTurn(id: number): void {
@@ -167,6 +169,7 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
     const failure = chatFailureReply(e);
     const assistant = repo.addChatMessage("assistant", failure.content, failure.agent, failure.meta);
     const failed = repo.failChatTurn(id, failure.error, (assistant as any).id);
+    recordAsyncFailure("chat_turns", "completion", e);
     emit(id, { type: "error", turn: failed, message: assistant });
   } finally {
     controllers.delete(id);
@@ -386,7 +389,7 @@ export function classifyChatAgentResult(agent: string, result: AgentResult): Cha
       ok: false,
       status: "auth_required",
       error_class: "auth_required",
-      error_message: cleanCliLine(combined) || "Not connected",
+      error_message: "Not connected",
       exit_code: result.code,
       model: result.usage?.model ?? null,
       input_tokens: result.usage?.input_tokens ?? null,
@@ -399,7 +402,7 @@ export function classifyChatAgentResult(agent: string, result: AgentResult): Cha
       ok: false,
       status: "error",
       error_class: "process_exit",
-      error_message: cleanCliLine(stderr || raw) || `Exited with code ${result.code}`,
+      error_message: "Agent process exited",
       exit_code: result.code,
       model: result.usage?.model ?? null,
       input_tokens: result.usage?.input_tokens ?? null,
@@ -412,7 +415,7 @@ export function classifyChatAgentResult(agent: string, result: AgentResult): Cha
       ok: false,
       status: "empty_reply",
       error_class: "empty_reply",
-      error_message: "Exited without a reply",
+      error_message: "Agent returned no reply",
       exit_code: result.code,
       model: result.usage?.model ?? null,
       input_tokens: result.usage?.input_tokens ?? null,
@@ -429,7 +432,7 @@ function classifyChatException(agent: string, e: any): ChatAgentAttempt {
     ok: false,
     status: /timed out/i.test(message) ? "timeout" : "error",
     error_class: /timed out/i.test(message) ? "timeout" : "process_error",
-    error_message: message || "Process error",
+    error_message: /timed out/i.test(message) ? "Agent timed out" : "Agent process failed",
   };
 }
 

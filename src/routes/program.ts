@@ -3,6 +3,7 @@ import { draftCoachProposal, evolveProgram } from "../coachOps.js";
 import { localToday } from "../dayread.js";
 import { applyProposalWithAutonomy, getCachedDayRead } from "../domain/brain/index.js";
 import { dexaTargeting } from "../domain/health/index.js";
+import { recordAsyncFailure } from "../diagnostics.js";
 import {
   advanceBlockWeek,
   applyProposal,
@@ -193,6 +194,7 @@ programRouter.post("/proposals/:id/apply", (req, res) => {
   try {
     res.json(applyProposal(Number(req.params.id)));
   } catch (e: any) {
+    recordAsyncFailure("apply", "proposal", e);
     res.status(400).json({ error: e.message });
   }
 });
@@ -208,6 +210,7 @@ programRouter.post("/proposals/:id/lead", (req, res) => {
       })
     );
   } catch (e: any) {
+    recordAsyncFailure("apply", "proposal_with_autonomy", e);
     res.status(400).json({ error: e.message });
   }
 });

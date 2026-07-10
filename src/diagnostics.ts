@@ -1,7 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
-import { getVersion } from "./version.js";
+import { getBuildStamp } from "./build-info.js";
 import { normalizeDiagnosticRoute, recordDiagnosticEvent } from "./repo/diagnostics.js";
+import { recordRequestMetric } from "./repo/request-metrics.js";
+import {
+  genericFailureMessage,
+  telemetryErrorName,
+  telemetryIdentifier,
+  telemetryStackFrames,
+} from "./telemetry-privacy.js";
 
 const DEFAULT_SLOW_REQUEST_MS = 2_000;
 const requestIds = new WeakMap<Request, string>();
@@ -13,21 +20,12 @@ export function requestId(req: Request): string {
 
 /** Error names are useful operator context; arbitrary Error.message is not. */
 export function diagnosticErrorName(error: unknown): string {
-  if (!(error instanceof Error)) return "Error";
-  const name = String(error.name || "").trim();
-  return /^[A-Za-z][A-Za-z0-9_.-]{0,63}Error$/.test(name) || name === "Error" ? name : "Error";
+  return telemetryErrorName(error);
 }
 
 /** V8's first stack line repeats Error.message, so retain frames only. */
 function diagnosticStackFrames(error: unknown): string | null {
-  if (!(error instanceof Error) || !error.stack) return null;
-  const frames = error.stack
-    .split(/\r?\n/)
-    .slice(1)
-    .filter((line) => /^\s*at\s+/.test(line))
-    .join("\n")
-    .trim();
-  return frames || null;
+  return telemetryStackFrames(error);
 }
 
 function requestRoute(req: Request): string | null {
@@ -49,6 +47,7 @@ export function apiDiagnosticMiddleware(req: Request, res: Response, next: NextF
     const status = res.statusCode;
     const configured = Number(process.env.CAIRN_SLOW_REQUEST_MS);
     const slowMs = Number.isFinite(configured) && configured >= 100 ? configured : DEFAULT_SLOW_REQUEST_MS;
+    recordRequestMetric({ protocol: "api", method: req.method, route, status, duration_ms: duration });
     // Auth failures are intentionally excluded from durable HTTP-error telemetry.
     // They still receive X-Request-ID and remain visible to the caller.
     if (status >= 400 && status !== 401 && status !== 403 && !unexpectedErrorRequests.has(req)) {
@@ -63,7 +62,7 @@ export function apiDiagnosticMiddleware(req: Request, res: Response, next: NextF
         request_id: id,
         fingerprint: `api:http_error:${req.method}:${route || "unknown"}:${status}`,
         message: `HTTP ${status}`,
-        release: getVersion(),
+        release: getBuildStamp(),
       });
     }
     if (duration >= slowMs) {
@@ -78,7 +77,7 @@ export function apiDiagnosticMiddleware(req: Request, res: Response, next: NextF
         request_id: id,
         fingerprint: `api:slow_request:${req.method}:${route || "unknown"}`,
         message: `Request exceeded ${slowMs} ms`,
-        release: getVersion(),
+        release: getBuildStamp(),
       });
     }
   });
@@ -99,7 +98,7 @@ export function recordUnexpectedApiError(error: unknown, req: Request): void {
     fingerprint: `api:server_exception:${req.method}:${requestRoute(req) || "unknown"}:${errorName}`,
     message: `${errorName}: server operation failed`,
     stack: diagnosticStackFrames(error),
-    release: getVersion(),
+    release: getBuildStamp(),
   });
 }
 
@@ -109,9 +108,7 @@ export function recordSchedulerFailure(
   error: unknown,
   sink: typeof recordDiagnosticEvent = recordDiagnosticEvent
 ): void {
-  const safeOperation = String(operation || "scheduler_task")
-    .replace(/[^A-Za-z0-9_.:-]/g, "_")
-    .slice(0, 80);
+  const safeOperation = telemetryIdentifier(operation, 80, "scheduler_task");
   const errorName = diagnosticErrorName(error);
   sink({
     source: "scheduler",
@@ -121,7 +118,24 @@ export function recordSchedulerFailure(
     fingerprint: `scheduler:task_failure:${safeOperation}:${errorName}`,
     message: `${errorName}: scheduled operation failed`,
     stack: diagnosticStackFrames(error),
-    release: getVersion(),
+    release: getBuildStamp(),
+  });
+}
+
+/** Terminal async-worker failure, coalesced by component/kind/error class. */
+export function recordAsyncFailure(component: string, operation: string, error: unknown): void {
+  const safeComponent = telemetryIdentifier(component, 50, "worker");
+  const safeOperation = telemetryIdentifier(operation, 80, "operation");
+  const errorName = diagnosticErrorName(error);
+  recordDiagnosticEvent({
+    source: "worker",
+    kind: "final_failure",
+    level: "error",
+    operation: `${safeComponent}:${safeOperation}`,
+    fingerprint: `worker:final_failure:${safeComponent}:${safeOperation}:${errorName}`,
+    message: genericFailureMessage(`${safeComponent}_${safeOperation}`, error),
+    stack: diagnosticStackFrames(error),
+    release: getBuildStamp(),
   });
 }
 
@@ -157,7 +171,7 @@ export function registerProcessDiagnosticHandlers(options: ProcessDiagnosticOpti
         fingerprint: `process:${kind}:${errorName}`,
         message,
         stack: diagnosticStackFrames(reason),
-        release: getVersion(),
+        release: getBuildStamp(),
       });
     } catch {
       /* injected sinks may throw; process handling must still be decisive */

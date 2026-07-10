@@ -1,6 +1,8 @@
 import { db } from "../db.js";
+import { getBuildInfo } from "../build-info.js";
+import { getRequestPerformance, REQUEST_METRIC_LIMITS } from "./request-metrics.js";
 
-export type DiagnosticSource = "client" | "api" | "process" | "scheduler";
+export type DiagnosticSource = "client" | "api" | "mcp" | "process" | "scheduler" | "worker";
 export type DiagnosticLevel = "warning" | "error";
 
 export interface DiagnosticEventInput {
@@ -36,7 +38,7 @@ export interface ClientDiagnosticEvent {
   fingerprint: string;
 }
 
-const SOURCES = new Set<DiagnosticSource>(["client", "api", "process", "scheduler"]);
+const SOURCES = new Set<DiagnosticSource>(["client", "api", "mcp", "process", "scheduler", "worker"]);
 const LEVELS = new Set<DiagnosticLevel>(["warning", "error"]);
 const CLIENT_KINDS = new Set<ClientDiagnosticEvent["kind"]>([
   "api_failure",
@@ -45,12 +47,32 @@ const CLIENT_KINDS = new Set<ClientDiagnosticEvent["kind"]>([
   "unhandled_rejection",
 ]);
 const DIAGNOSTIC_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
+const DIAGNOSTIC_RETENTION_DAYS = 30;
+const DIAGNOSTIC_ROW_CAP = 20_000;
+const COALESCE_MINUTES = 5;
 const SENSITIVE_KEY =
   /(?:authorization|cookie|credential|password|passwd|secret|token|api[_-]?key|prompt|chat|health|request[_-]?body|response[_-]?body|raw[_-]?output|input[_-]?tokens?|output[_-]?tokens?)/i;
 
 function scalarText(value: unknown): string | null {
   if (typeof value !== "string") return null;
   return value;
+}
+
+function clientDiagnosticMessage(kind: ClientDiagnosticEvent["kind"]): string {
+  if (kind === "api_failure") return "Client API request failed";
+  if (kind === "render_error") return "Client render failed";
+  if (kind === "unhandled_rejection") return "Unhandled client rejection";
+  return "Unhandled client error";
+}
+
+function clientStackFrames(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const frames = value
+    .split(/\r?\n/)
+    .filter((line) => /^\s*at\s+/.test(line))
+    .slice(0, 20)
+    .join("\n");
+  return sanitizeDiagnosticText(frames, 1_800);
 }
 
 /** Conservative best-effort scrubber. Callers must still never pass bodies. */
@@ -163,6 +185,16 @@ const insertDiagnosticEvent = db.prepare(
      fingerprint, message, stack, metadata_json, release)
    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 );
+const coalesceDiagnosticEvent = db.prepare(
+  `UPDATE diagnostic_events
+      SET occurrence_count=COALESCE(occurrence_count,1)+1, created_at=datetime('now'),
+          duration_ms=COALESCE(?,duration_ms), status=COALESCE(?,status),
+          request_id=COALESCE(?,request_id), release=COALESCE(?,release)
+    WHERE id=(SELECT id FROM diagnostic_events
+               WHERE source=? AND kind=? AND fingerprint=?
+                 AND created_at >= datetime('now', ?)
+               ORDER BY id DESC LIMIT 1)`
+);
 
 let nextDiagnosticPruneAt = 0;
 
@@ -195,7 +227,11 @@ function maybePruneDiagnosticEvents(now = Date.now()): void {
 /** Best-effort retention; exposed separately for deterministic maintenance/tests. */
 export function pruneDiagnosticEvents(now = Date.now()): void {
   try {
-    db.prepare(`DELETE FROM diagnostic_events WHERE created_at < datetime('now', '-30 days')`).run();
+    db.prepare(`DELETE FROM diagnostic_events WHERE created_at < datetime('now', ?)`).run(`-${DIAGNOSTIC_RETENTION_DAYS} days`);
+    db.prepare(
+      `DELETE FROM diagnostic_events WHERE id NOT IN
+       (SELECT id FROM diagnostic_events ORDER BY created_at DESC,id DESC LIMIT ?)`
+    ).run(DIAGNOSTIC_ROW_CAP);
   } catch {
     /* diagnostics must never break product paths */
   } finally {
@@ -205,10 +241,26 @@ export function pruneDiagnosticEvents(now = Date.now()): void {
   }
 }
 
+function writeDiagnosticEvent(input: DiagnosticEventInput): void {
+  const normalized = normalizeDiagnosticEvent(input);
+  const [source, kind, , , , status, duration, requestId, fingerprint, , , , release] = normalized;
+  const updated = coalesceDiagnosticEvent.run(
+    duration,
+    status,
+    requestId,
+    release,
+    source,
+    kind,
+    fingerprint,
+    `-${COALESCE_MINUTES} minutes`
+  );
+  if (Number(updated.changes) === 0) insertDiagnosticEvent.run(...normalized);
+}
+
 /** Failure-safe write. The real operation always wins over telemetry. */
 export function recordDiagnosticEvent(input: DiagnosticEventInput): void {
   try {
-    insertDiagnosticEvent.run(...normalizeDiagnosticEvent(input));
+    writeDiagnosticEvent(input);
   } catch {
     /* diagnostics must never break product paths */
   } finally {
@@ -223,7 +275,7 @@ export function recordDiagnosticEvents(inputs: DiagnosticEventInput[]): void {
   try {
     db.exec("BEGIN");
     transactionStarted = true;
-    for (const input of inputs) insertDiagnosticEvent.run(...normalizeDiagnosticEvent(input));
+    for (const input of inputs) writeDiagnosticEvent(input);
     db.exec("COMMIT");
     transactionStarted = false;
   } catch {
@@ -250,8 +302,7 @@ export function parseClientDiagnosticBatch(body: unknown): ClientDiagnosticEvent
     if (!LEVELS.has(event.level as DiagnosticLevel)) return null;
     if (typeof event.message !== "string" || typeof event.fingerprint !== "string") return null;
     const fingerprint = boundedIdentifier(event.fingerprint, 120);
-    const message = sanitizeDiagnosticText(event.message, 320);
-    if (!fingerprint || !message) return null;
+    if (!fingerprint || !event.message.trim()) return null;
     if (event.stack != null && typeof event.stack !== "string") return null;
     if (event.route != null && (typeof event.route !== "string" || !normalizeDiagnosticRoute(event.route))) return null;
     if (event.method != null && (typeof event.method !== "string" || !/^[A-Za-z]{3,10}$/.test(event.method)))
@@ -268,9 +319,9 @@ export function parseClientDiagnosticBatch(body: unknown): ClientDiagnosticEvent
       source: "client",
       kind: event.kind as ClientDiagnosticEvent["kind"],
       level: event.level as DiagnosticLevel,
-      message,
+      message: clientDiagnosticMessage(event.kind as ClientDiagnosticEvent["kind"]),
       fingerprint,
-      stack: event.stack == null ? null : sanitizeDiagnosticText(event.stack, 1800),
+      stack: event.stack == null ? null : clientStackFrames(event.stack),
       route: event.route == null ? null : normalizeDiagnosticRoute(event.route),
       method: event.method == null ? null : String(event.method).toUpperCase(),
       status: event.status == null ? null : finiteInteger(event.status, 100, 599),
@@ -296,10 +347,10 @@ export function ingestClientDiagnosticEvents(events: ClientDiagnosticEvent[], re
       duration_ms: event.duration_ms,
       request_id: event.request_id,
       fingerprint: event.fingerprint,
-      message: event.message,
-      stack: event.stack,
+      message: clientDiagnosticMessage(event.kind),
+      stack: clientStackFrames(event.stack),
       metadata: { tab: event.tab, online: event.online },
-      release: event.release || releaseFallback,
+      release: releaseFallback,
     }))
   );
 }
@@ -330,6 +381,8 @@ function rowToEvent(row: any) {
     stack: row.stack ?? null,
     metadata: parseDiagnosticMetadata(row.metadata_json),
     release: row.release ?? null,
+    occurrence_count: Number(row.occurrence_count ?? 1),
+    first_seen: row.first_seen ?? row.created_at,
     created_at: row.created_at,
   };
 }
@@ -343,24 +396,24 @@ export function getDiagnostics(opts: { recent?: number; days?: number } = {}) {
   const days = clamp(opts.days, 7, 1, 365);
   const since = `-${days} days`;
   const total = Number(
-    (db.prepare(`SELECT COUNT(*) AS n FROM diagnostic_events WHERE created_at >= datetime('now', ?)`).get(since) as any)
+    (db.prepare(`SELECT COALESCE(SUM(occurrence_count),0) AS n FROM diagnostic_events WHERE created_at >= datetime('now', ?)`).get(since) as any)
       ?.n ?? 0
   );
   const recordMap = (rows: any[], key: string) =>
     Object.fromEntries(rows.map((row) => [String(row[key]), Number(row.count)]));
   const bySource = db
     .prepare(
-      `SELECT source, COUNT(*) AS count FROM diagnostic_events WHERE created_at >= datetime('now', ?) GROUP BY source ORDER BY source`
+      `SELECT source, COALESCE(SUM(occurrence_count),0) AS count FROM diagnostic_events WHERE created_at >= datetime('now', ?) GROUP BY source ORDER BY source`
     )
     .all(since) as any[];
   const byKind = db
     .prepare(
-      `SELECT kind, COUNT(*) AS count FROM diagnostic_events WHERE created_at >= datetime('now', ?) GROUP BY kind ORDER BY kind`
+      `SELECT kind, COALESCE(SUM(occurrence_count),0) AS count FROM diagnostic_events WHERE created_at >= datetime('now', ?) GROUP BY kind ORDER BY kind`
     )
     .all(since) as any[];
   const byRoute = db
     .prepare(
-      `SELECT route, COUNT(*) AS count FROM diagnostic_events
+      `SELECT route, COALESCE(SUM(occurrence_count),0) AS count FROM diagnostic_events
         WHERE created_at >= datetime('now', ?) AND route IS NOT NULL
         GROUP BY route ORDER BY count DESC, route LIMIT 50`
     )
@@ -371,7 +424,7 @@ export function getDiagnostics(opts: { recent?: number; days?: number } = {}) {
       `WITH scoped AS (
          SELECT * FROM diagnostic_events WHERE created_at >= datetime('now', ?)
        ), grouped AS (
-         SELECT fingerprint, COUNT(*) AS count, MIN(created_at) AS first_seen,
+         SELECT fingerprint, SUM(occurrence_count) AS count, MIN(COALESCE(first_seen,created_at)) AS first_seen,
                 MAX(created_at) AS last_seen, MAX(id) AS latest_id
            FROM scoped GROUP BY fingerprint
        )
@@ -413,6 +466,7 @@ export function getDiagnostics(opts: { recent?: number; days?: number } = {}) {
       .all(since, recent) as any[]
   ).map(rowToEvent);
   return {
+    build: getBuildInfo(),
     window_days: days,
     total,
     by_source: recordMap(bySource, "source"),
@@ -421,5 +475,23 @@ export function getDiagnostics(opts: { recent?: number; days?: number } = {}) {
     issues,
     recent: recentEvents,
     slow,
+    performance: getRequestPerformance(days),
+    storage: {
+      diagnostic_events: {
+        rows: Number((db.prepare(`SELECT COUNT(*) AS n FROM diagnostic_events`).get() as any)?.n ?? 0),
+        retention_days: DIAGNOSTIC_RETENTION_DAYS,
+        row_cap: DIAGNOSTIC_ROW_CAP,
+      },
+      request_metric_buckets: {
+        rows: Number((db.prepare(`SELECT COUNT(*) AS n FROM request_metric_buckets`).get() as any)?.n ?? 0),
+        ...REQUEST_METRIC_LIMITS,
+      },
+    },
   };
 }
+
+export const DIAGNOSTIC_LIMITS = {
+  retention_days: DIAGNOSTIC_RETENTION_DAYS,
+  row_cap: DIAGNOSTIC_ROW_CAP,
+  coalesce_minutes: COALESCE_MINUTES,
+};

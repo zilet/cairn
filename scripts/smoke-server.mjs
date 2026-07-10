@@ -12,6 +12,7 @@ const requestedPort = process.env.SMOKE_PORT ? Number(process.env.SMOKE_PORT) : 
 const usedPorts = new Set();
 const RANDOM_PORT_MIN = 18000;
 const RANDOM_PORT_SPAN = 7000; // 18000-24999: avoids upper loopback ports blocked by some sandboxes.
+const activeServers = new Set();
 
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -63,6 +64,7 @@ export async function stopServer(ctx) {
       });
     }
   } finally {
+    activeServers.delete(ctx);
     try { rmSync(ctx.dir, { recursive: true, force: true }); } catch {}
   }
 }
@@ -86,6 +88,8 @@ export async function startBuiltServer({ label, authToken = "", portOffset = 0, 
       GARMIN_USERNAME: "",
       GARMIN_PASSWORD: "",
       COACH_ENABLED: "0",
+      CAIRN_SMOKE_MODE: "1",
+      CAIRN_SMOKE_MAX_RUNTIME_MS: process.env.CAIRN_SMOKE_MAX_RUNTIME_MS || String(20 * 60_000),
       ...extraEnv,
     };
 
@@ -96,6 +100,7 @@ export async function startBuiltServer({ label, authToken = "", portOffset = 0, 
     child.stderr.on("data", (d) => { serverLog += d.toString(); });
 
     const ctx = { label, port, base, dir, child, serverLog: () => serverLog };
+    activeServers.add(ctx);
     const ready = await waitForHealth(ctx);
     if (ready.ok) return ctx;
 
@@ -110,6 +115,13 @@ export async function startBuiltServer({ label, authToken = "", portOffset = 0, 
   const tail = lastLog.trim() ? `\n--- server output (tail) ---\n${lastLog.split("\n").slice(-20).join("\n")}` : "";
   throw new Error(`${label} server did not become healthy within the timeout${tail}`);
 }
+
+async function stopActiveServers(signal) {
+  await Promise.allSettled([...activeServers].map((ctx) => stopServer(ctx)));
+  process.exit(signal === "SIGINT" ? 130 : 143);
+}
+process.once("SIGINT", () => void stopActiveServers("SIGINT"));
+process.once("SIGTERM", () => void stopActiveServers("SIGTERM"));
 
 export async function withServer(opts, fn) {
   const ctx = await startBuiltServer(opts);

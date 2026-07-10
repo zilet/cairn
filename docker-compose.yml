@@ -10,6 +10,9 @@ services:
         INSTALL_ANTIGRAVITY: "1"
         INSTALL_GROK: "1"
         AGENT_CLI_CACHE_BUST: ${AGENT_CLI_CACHE_BUST:-}
+        # Source deploys should export CAIRN_BUILD_SHA=$(git rev-parse HEAD).
+        # Empty is safe: health reports source-unidentified rather than guessing.
+        CAIRN_BUILD_SHA: ${CAIRN_BUILD_SHA:-}
     image: cairn:latest
     container_name: cairn
     restart: unless-stopped

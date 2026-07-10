@@ -20,6 +20,7 @@ import { runWithTimeZone } from "./tz.js";
 import { runWithBrainSnapshot } from "./brain/snapshot.js";
 import * as repo from "./repo.js";
 import { apiDiagnosticMiddleware, registerProcessDiagnosticHandlers } from "./diagnostics.js";
+import { installSmokeLifetime } from "./smoke-lifetime.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
@@ -30,6 +31,7 @@ const HOST = process.env.HOST || "0.0.0.0";
 // recorded while the process stays available; an uncaught exception records and
 // exits so Docker can restart the single-process service from a known state.
 registerProcessDiagnosticHandlers();
+installSmokeLifetime();
 
 // Register the agent-run telemetry sink at boot, BEFORE anything can run an agent
 // (recoverChatTurns / recoverAgentJobs re-enqueue work that may fire immediately).

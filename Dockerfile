@@ -97,11 +97,14 @@ RUN mkdir -p /data \
 # local/source build — version.ts then falls back to package.json. A non-version
 # value (e.g. a branch name on a dispatch build) is ignored by version.ts.
 ARG CAIRN_VERSION=""
+ARG CAIRN_BUILD_SHA=""
+LABEL org.opencontainers.image.revision=${CAIRN_BUILD_SHA}
 
 ENV NODE_ENV=production \
     PORT=8787 \
     DATA_DIR=/data \
     CAIRN_VERSION=${CAIRN_VERSION} \
+    CAIRN_BUILD_SHA=${CAIRN_BUILD_SHA} \
     AGENT_CLI_UPDATE_SCRIPT=/usr/local/bin/cairn-update-agent-clis \
     PATH="/usr/local/bin:${PATH}"
 

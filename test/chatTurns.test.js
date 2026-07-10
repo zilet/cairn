@@ -45,7 +45,7 @@ test("chat classifies CLI login banners as auth failures, not replies", () => {
   assert.equal(attempt.status, "auth_required");
   assert.equal(attempt.error_class, "auth_required");
   assert.equal(attempt.agent, "codex");
-  assert.match(attempt.error_message, /Not logged in/);
+  assert.equal(attempt.error_message, "Not connected");
 });
 
 test("listActiveChatTurns returns queued+running oldest-first, excludes terminal", () => {

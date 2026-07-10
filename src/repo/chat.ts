@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { db } from "../db.js";
+import { telemetryErrorName } from "../telemetry-privacy.js";
 import { isAgentJobKind, type AgentJobKind } from "../agentJobKinds.js";
 import { addMemory } from "./memory.js";
 import { activeTimeZone } from "../tz.js";
@@ -204,11 +205,16 @@ export function finishChatTurn(
   return getChatTurn(id);
 }
 
-export function failChatTurn(id: number, error: string, assistantMessageId?: number | null) {
+function safeTerminalError(error: unknown): string {
+  if (error === "interrupted by a restart") return "interrupted by a restart";
+  return `${telemetryErrorName(error)}: background operation failed`;
+}
+
+export function failChatTurn(id: number, error: unknown, assistantMessageId?: number | null) {
   db.prepare(`UPDATE chat_turns
                  SET status='error', phase='error', finished_at=datetime('now'), error=?, assistant_message_id=?
                WHERE id=?`)
-    .run((error ?? "").toString().slice(0, 1000), assistantMessageId ?? null, id);
+    .run(safeTerminalError(error), assistantMessageId ?? null, id);
   return getChatTurn(id);
 }
 
@@ -436,11 +442,11 @@ export function finishAgentJob(
   return getAgentJob(id);
 }
 
-export function failAgentJob(id: number, error: string) {
+export function failAgentJob(id: number, error: unknown) {
   db.prepare(`UPDATE agent_jobs
                  SET status='error', phase='error', finished_at=datetime('now'), error=?
                WHERE id=?`)
-    .run((error ?? "").toString().slice(0, 1000), id);
+    .run(safeTerminalError(error), id);
   return getAgentJob(id);
 }
 

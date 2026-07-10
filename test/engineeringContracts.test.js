@@ -358,13 +358,14 @@ test("MCP modular tool sources are discovered without duplicate names", () => {
   assert.match(parity, /src\/surfaces\/mcp\/training-log\.ts/);
   assert.match(genDocs, /src\/surfaces\/mcp\/training-status\.ts/);
   assert.match(parity, /src\/surfaces\/mcp\/training-status\.ts/);
-  assert.equal(tools.length, 197, "tool count should stay stable while modularizing MCP");
+  assert.equal(tools.length, 198, "tool count changes only for reviewed MCP additions");
   assert.equal(new Set(tools).size, tools.length, "MCP tool names must be unique across modules");
   assert.doesNotMatch(mcp, /server\.tool\(/, "src/mcp.ts should stay a registry, not a tool-definition file");
   assert.doesNotMatch(mcp, /server\.tool\("get_chat_history"/);
   assert.doesNotMatch(mcp, /server\.tool\("reset_chat"/);
   assert.match(chatTools, /server\.tool\(\s*"get_chat_history"/);
   assert.match(chatTools, /server\.tool\(\s*"reset_chat"/);
+  assert.match(operatorTools, /server\.tool\(\s*"get_diagnostics"/);
   assert.match(connectedBrainTools, /server\.tool\(\s*"get_health_markers"/);
   assert.match(connectedBrainTools, /server\.tool\(\s*"get_cardiovascular_risk"/);
   assert.match(connectedBrainTools, /server\.tool\(\s*"get_doctor_loop"/);

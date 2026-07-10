@@ -106,6 +106,7 @@ jobs:
           # builds pass a branch name, which version.ts ignores (→ package.json).
           build-args: |
             CAIRN_VERSION=${{ github.ref_name }}
+            CAIRN_BUILD_SHA=${{ github.sha }}
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
 

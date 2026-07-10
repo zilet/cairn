@@ -954,11 +954,31 @@ CREATE TABLE IF NOT EXISTS diagnostic_events (
   stack TEXT,
   metadata_json TEXT,
   release TEXT,
+  occurrence_count INTEGER NOT NULL DEFAULT 1,
+  first_seen TEXT DEFAULT (datetime('now')),
   created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_diagnostic_events_created ON diagnostic_events(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_diagnostic_events_issue ON diagnostic_events(fingerprint, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_diagnostic_events_route ON diagnostic_events(route, created_at DESC);
+
+-- Hourly, low-cardinality request histograms. Successful API/MCP calls are
+-- aggregated rather than retained as raw request rows; percentile reads are
+-- approximate bucket upper bounds and never contain bodies or query values.
+CREATE TABLE IF NOT EXISTS request_metric_buckets (
+  hour TEXT NOT NULL,
+  protocol TEXT NOT NULL,
+  method TEXT NOT NULL,
+  route TEXT NOT NULL,
+  status_class TEXT NOT NULL,
+  latency_bucket_ms INTEGER NOT NULL,
+  count INTEGER NOT NULL DEFAULT 0,
+  total_duration_ms INTEGER NOT NULL DEFAULT 0,
+  max_duration_ms INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(hour, protocol, method, route, status_class, latency_bucket_ms)
+);
+CREATE INDEX IF NOT EXISTS idx_request_metric_hour ON request_metric_buckets(hour DESC);
+CREATE INDEX IF NOT EXISTS idx_request_metric_route ON request_metric_buckets(protocol, route, hour DESC);
 
 -- Tiny generic key/value scratchpad for scheduler bookkeeping (last-run stamps
 -- for the miss-tolerant coach draft + the weekly proactive passes). Survives a

@@ -4,6 +4,16 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-07-10 — bounded local observability closeout
+
+- Consolidated server, worker, scheduler, MCP, and agent error capture behind a
+  shared class-only privacy contract; migration v61 removes legacy raw-ish agent
+  detail and adds diagnostic coalescing metadata.
+- Added capped hourly API/MCP latency histograms for throughput and approximate
+  p50/p95 without raw successful-request rows.
+- Added build SHA provenance, queue-age/failure readiness, scheduler heartbeat,
+  operator MCP diagnostics, and smoke-only orphan-process containment.
+
 A **local-first diagnostic telemetry** round (new `diagnostic_events` table via
 `CREATE TABLE IF NOT EXISTS`; no migration; `sw.js` up to `cairn-v456`) added a
 single privacy-bounded incident spine across the PWA, REST server, and Node

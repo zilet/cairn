@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**200 tools.**
+**201 tools.**
 
 | Tool | Description |
 |---|---|
@@ -64,6 +64,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_day_intake` | A calm review of ONE day's logged food: { date, totals:{kcal,protein_g,carbs_g,fat_g,fiber_g}, entries:[{id,meal,summary,kcal,protein_g,carbs_g,fat_g,fiber_g,enrichment_status,created_at}], count, target, remaining }. target ({kcal,protein_g,mode}) and remaining are present ONLY when the profile can derive one (a loss/gain goal, or the maintenance anchor) — else null (descriptive-only). 'remaining', never 'consumed'; no score. ?date defaults to the user's local today. |
 | `get_day_read` | Queue a durable read of what KIND of day today should be — train, easy, or rest — as a calm suggestion. Returns a job immediately; poll get_agent_job for the final read. override reshapes it ('rough night' / 'short on time' / 'I want to train anyway'). |
 | `get_dexa_targeting` | DEXA-driven targeting — maps the body scan's regional read (lean asymmetry, low ALMI/FFMI, low BMD, visceral/central fat) to concrete TRAINING + one NUTRITION target, each with a plain 'path to your next scan'. T/Z-scores + ALMI are recognized reference reads (never a score); BMD/visceral stay informational (clinician-framed). {available:false} with no DEXA. |
+| `get_diagnostics` | Get bounded local operator diagnostics: build identity, grouped failures, recent sanitized events, API/MCP throughput and approximate p50/p95 latency, storage caps, and slow routes. Never includes prompts, bodies, credentials, health values, or raw agent output. |
 | `get_doctor_loop` | Doctor-loop read: structured missing-workup recommendations plus lab/DEXA retest attention derived through the adaptive attention engine. Informational, not medical advice; no PREVENT/PCE risk coefficients are computed here. |
 | `get_doctor_packet` | Export-ready doctor packet: current prioritized health focus, active connected-brain directives, doctor-loop missing-workup/retest plan, AHA PREVENT cardiovascular-risk read, and latest intervention-outcome annotations. Informational, not medical advice; no disease-labeling or wellness scores. |
 | `get_endurance_goal` | The user's endurance OBJECTIVE (v37), computed. mode 'race' carries a dated event with weeks/days-to-race + a periodization phase hint (base/build/sharpen/taper); mode 'standing' is an ongoing readiness target with no date. null when unset. Orthogonal to primary_discipline. Set it via set_profile { endurance_goal: {…} }. |

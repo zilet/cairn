@@ -604,6 +604,23 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 61,
+    name: "telemetry-privacy-and-coalescing",
+    up: (db) => {
+      // Raw-ish historical CLI detail is not useful enough to justify retaining.
+      try { db.exec(`UPDATE agent_runs SET error_message = NULL WHERE error_message IS NOT NULL`); } catch {}
+      try { db.exec(`UPDATE agent_jobs SET error='Error: background operation failed' WHERE status='error'`); } catch {}
+      try { db.exec(`UPDATE chat_turns SET error='Error: background operation failed' WHERE status='error'`); } catch {}
+      try {
+        db.exec(`UPDATE chat_messages SET meta=json_remove(meta,'$.agent_attempts')
+                  WHERE json_valid(meta) AND json_type(meta,'$.agent_attempts') IS NOT NULL`);
+      } catch {}
+      addColumn(db, "diagnostic_events", "occurrence_count INTEGER NOT NULL DEFAULT 1");
+      addColumn(db, "diagnostic_events", "first_seen TEXT");
+      try { db.exec(`UPDATE diagnostic_events SET first_seen = COALESCE(first_seen, created_at)`); } catch {}
+    },
+  },
 ];
 
 export function runMigrations(db: DatabaseSync) {

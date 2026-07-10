@@ -5,6 +5,7 @@ import { apiErrorHandler } from "../dist/api.js";
 import {
   apiDiagnosticMiddleware,
   recordSchedulerFailure,
+  recordAsyncFailure,
   registerProcessDiagnosticHandlers,
 } from "../dist/diagnostics.js";
 import { db } from "../dist/db.js";
@@ -47,7 +48,7 @@ test("diagnostic storage scrubs sensitive detail and normalizes routes", () => {
         level: "error",
         message:
           "Bearer abc.def token=secret prompt='private coaching' at /Users/me/cairn/src/a.ts https://x.test/api/foo?token=secret",
-        stack: "Error: failed at /private/tmp/cairn/src/client.ts:4:2",
+        stack: "Error: private family detail\n    at render (/private/tmp/cairn/src/client.ts:4:2)",
         route: "/api/health-docs/123?token=secret&marker=LDL",
         method: "post",
         status: 500,
@@ -69,11 +70,11 @@ test("diagnostic storage scrubs sensitive detail and normalizes routes", () => {
   const row = db.prepare("SELECT * FROM diagnostic_events").get();
   assert.equal(row.route, "/api/health-docs/:id");
   assert.equal(row.operation, "POST /api/health-docs/:id");
-  assert.doesNotMatch(row.message, /abc\.def|secret|private coaching|\/Users\//i);
+  assert.equal(row.message, "Client API request failed");
   assert.doesNotMatch(row.stack, /\/private\/tmp/);
   assert.doesNotMatch(row.metadata_json, /health|unknown_body/i);
   assert.deepEqual(JSON.parse(row.metadata_json), { tab: "stand", online: true });
-  assert.equal(row.release, "v1.2.3");
+  assert.equal(row.release, null);
   assert.doesNotMatch(sanitizeDiagnosticText("password=hunter2 cookie=abc"), /hunter2|cookie=abc/);
   assert.doesNotMatch(sanitizeDiagnosticText("LDL 150 mg/dl and weight=180 lb"), /150|180/);
 });
@@ -184,7 +185,8 @@ test("diagnostic rollups group issues and expose recent and slow events", () => 
     { route: "/api/plan", count: 1 },
   ]);
   assert.equal(stats.issues.find((issue) => issue.fingerprint === "api:plan:500").count, 2);
-  assert.equal(stats.recent.length, 3);
+  assert.equal(stats.recent.length, 2);
+  assert.equal(stats.recent.find((event) => event.fingerprint === "api:plan:500").occurrence_count, 2);
   assert.equal(stats.slow.length, 1);
   assert.equal(stats.slow[0].duration_ms, 2500);
   assert.equal(getDiagnostics({ days: 0, recent: 0 }).window_days, 1);
@@ -234,6 +236,8 @@ test("fresh schema includes diagnostic table and query indexes", () => {
     "fingerprint",
     "message",
     "stack",
+    "occurrence_count",
+    "first_seen",
     "created_at",
   ]) {
     assert.ok(columns.has(name), name);
@@ -256,14 +260,25 @@ test("readiness verifies SQLite and reports compact queue backlog", () => {
   const response = responseDouble();
   readinessHandler({}, response);
   assert.equal(response.statusCode, 200);
-  assert.deepEqual(response.body, {
-    ok: true,
-    database: "ok",
-    queues: {
-      agent_jobs: { queued: 1, running: 1 },
-      chat_turns: { queued: 1, running: 0 },
-    },
-  });
+  assert.equal(response.body.ok, true);
+  assert.equal(response.body.database, "ok");
+  assert.deepEqual(response.body.queues.agent_jobs.queued, 1);
+  assert.deepEqual(response.body.queues.agent_jobs.running, 1);
+  assert.deepEqual(response.body.queues.chat_turns.queued, 1);
+  assert.equal(response.body.queues.agent_jobs.failed_24h, 0);
+  assert.ok(["starting", "fresh"].includes(response.body.scheduler.status));
+  assert.ok(response.body.build.build_id);
+});
+
+test("async failures use generic class-only detail and coalesce duplicate storms", () => {
+  const privateText = "private family health narrative with token xyz";
+  recordAsyncFailure("agent jobs", "brain review", new TypeError(privateText));
+  recordAsyncFailure("agent jobs", "brain review", new TypeError(privateText));
+  const rows = db.prepare("SELECT * FROM diagnostic_events WHERE source='worker'").all();
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].occurrence_count, 2);
+  assert.equal(rows[0].fingerprint, "worker:final_failure:agent_jobs:brain_review:TypeError");
+  assert.doesNotMatch(JSON.stringify(rows), /private family|token xyz/);
 });
 
 test("process handler records rejections and exits after uncaught exceptions", () => {

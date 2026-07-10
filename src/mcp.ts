@@ -20,9 +20,13 @@ import { registerTrainingLogTools } from "./surfaces/mcp/training-log.js";
 import { registerTrainingStatusTools } from "./surfaces/mcp/training-status.js";
 import { registerBodyMetricsTools } from "./surfaces/mcp/body-metrics.js";
 import { registerJourneyTools } from "./surfaces/mcp/journey.js";
+import { getBuildInfo, getBuildStamp } from "./build-info.js";
+import { recordDiagnosticEvent } from "./repo/diagnostics.js";
+import { recordRequestMetric } from "./repo/request-metrics.js";
+import { telemetryErrorName, telemetryIdentifier, telemetryStackFrames } from "./telemetry-privacy.js";
 
 export function buildMcpServer(): McpServer {
-  const server = new McpServer({ name: "cairn", version: "0.1.0" });
+  const server = new McpServer({ name: "cairn", version: getBuildInfo().version });
   registerSystemTools(server);
   registerChatTools(server);
   registerConnectedBrainTools(server);
@@ -48,6 +52,17 @@ export function buildMcpServer(): McpServer {
 
 // Stateless Streamable HTTP handler: fresh server+transport per request.
 export async function handleMcpPost(req: Request, res: Response) {
+  const started = performance.now();
+  const tool = telemetryIdentifier(req.body?.params?.name ?? req.body?.method, 100, "request");
+  res.once("finish", () => {
+    recordRequestMetric({
+      protocol: "mcp",
+      method: "POST",
+      route: tool,
+      status: res.statusCode,
+      duration_ms: Math.max(0, Math.round(performance.now() - started)),
+    });
+  });
   try {
     const server = buildMcpServer();
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
@@ -57,7 +72,19 @@ export async function handleMcpPost(req: Request, res: Response) {
     });
     await server.connect(transport);
     await transport.handleRequest(req, res, req.body);
-  } catch (_err) {
+  } catch (err) {
+    const errorName = telemetryErrorName(err);
+    recordDiagnosticEvent({
+      source: "mcp",
+      kind: "server_exception",
+      level: "error",
+      operation: tool,
+      status: 500,
+      fingerprint: `mcp:server_exception:${tool}:${errorName}`,
+      message: `${errorName}: MCP request failed`,
+      stack: telemetryStackFrames(err),
+      release: getBuildStamp(),
+    });
     if (!res.headersSent) {
       res.status(500).json({ jsonrpc: "2.0", error: { code: -32603, message: "Internal error" }, id: null });
     }
@@ -65,5 +92,16 @@ export async function handleMcpPost(req: Request, res: Response) {
 }
 
 export function methodNotAllowed(_req: Request, res: Response) {
+  recordRequestMetric({ protocol: "mcp", method: _req.method, route: "request", status: 405, duration_ms: 0 });
+  recordDiagnosticEvent({
+    source: "mcp",
+    kind: "http_error",
+    level: "warning",
+    operation: telemetryIdentifier(_req.method, 20, "UNKNOWN"),
+    status: 405,
+    fingerprint: `mcp:http_error:${telemetryIdentifier(_req.method, 20, "UNKNOWN")}:405`,
+    message: "HTTP 405",
+    release: getBuildStamp(),
+  });
   res.status(405).json({ jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed." }, id: null });
 }

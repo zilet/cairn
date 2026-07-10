@@ -33,6 +33,7 @@ import {
   weeklyRunPlan,
 } from "../../domain/training/index.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
+import { recordAsyncFailure } from "../../diagnostics.js";
 
 export function registerProgramTools(server: McpToolRegistrar) {
   server.tool(
@@ -290,6 +291,7 @@ export function registerProgramTools(server: McpToolRegistrar) {
       try {
         return asText(applyProposal(id));
       } catch (error: any) {
+        recordAsyncFailure("apply", "proposal_mcp", error);
         return asText({ error: error.message });
       }
     }

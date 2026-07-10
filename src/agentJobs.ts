@@ -25,6 +25,7 @@ import { readToday } from "./domain/brain/day-read-use-case.js";
 import { runCaseConference } from "./domain/brain/case-conference.js";
 import { applyProposalWithAutonomy } from "./domain/brain/autonomy-service.js";
 import type { SpecialistDomain } from "./brain/specialist-contract.js";
+import { diagnosticErrorName, recordAsyncFailure } from "./diagnostics.js";
 
 // Durable, in-process agent-job engine — the GENERALIZATION of chatTurns.ts for
 // the other blocking agentic ops. An op is no longer a request held open for
@@ -175,12 +176,13 @@ const runner = createSerialRunner(processAgentJob, (id, e) => {
     const cur = repo.getAgentJob(id) as any;
     if (cur && (cur.status === "queued" || cur.status === "running")) {
       const failed = repo.failAgentJob(id, e?.message ?? String(e));
-      emit(id, { type: "error", job: failed, message: e?.message ?? String(e) });
+      emit(id, { type: "error", job: failed, message: "Background job failed" });
     }
   } catch {
     /* ignore */
   }
-  console.error(`[jobs] job#${id} failed: ${e?.message ?? e}`);
+  recordAsyncFailure("agent_jobs", "runner_backstop", e);
+  console.error(`[jobs] job#${id} failed (${diagnosticErrorName(e)})`);
 });
 
 export function enqueueAgentJob(id: number): void {
@@ -437,7 +439,8 @@ async function processAgentJob(id: number): Promise<void> {
     const cur = repo.getAgentJob(id) as any;
     if (cur?.status === "canceled" || controller.signal.aborted) return; // Stop, not a failure
     const failed = repo.failAgentJob(id, e?.message ?? String(e));
-    emit(id, { type: "error", job: failed, message: e?.message ?? String(e) });
+    recordAsyncFailure("agent_jobs", job.kind, e);
+    emit(id, { type: "error", job: failed, message: "Background job failed" });
   } finally {
     controllers.delete(id);
   }
@@ -474,6 +477,7 @@ export function abortAllJobs() {
 // re-enqueue the 'queued' ones that never started. Mirrors recoverChatTurns.
 export function recoverAgentJobs(): { requeued: number; interrupted: number } {
   const { requeue, interrupted } = repo.recoverAgentJobs();
+  if (interrupted) recordAsyncFailure("agent_jobs", "restart_interruption", new Error("interrupted"));
   for (const id of requeue) enqueueAgentJob(id);
   if (requeue.length || interrupted) {
     console.log(`[jobs] recovered ${requeue.length} queued + ${interrupted} interrupted job(s).`);

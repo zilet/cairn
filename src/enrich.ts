@@ -10,6 +10,7 @@ import { buildEnrichPrompt, buildExerciseEnrichPrompt, buildFoodPhotoPrompt, bui
 import { explainExercise, reconcileMarkers, synthesizeHealth } from "./coachOps.js";
 import { warmExerciseArt } from "./art.js";
 import { LB_PER_KG, round2_5 } from "./repo/shared.js";
+import { diagnosticErrorName, recordAsyncFailure } from "./diagnostics.js";
 
 // Live status-transition bus for background enrichment. The emit is wired into the
 // repo status setters (the choke point every write flows through — see enrichBus.ts);
@@ -233,11 +234,11 @@ async function drain(): Promise<void> {
         // A failing job must never break the loop. Mark it failed (regex data
         // is left intact) and continue with the next.
         try {
-          markFailed(job);
+          markFailed(job, e);
         } catch {
           /* ignore */
         }
-        console.error(`[enrich] job ${job.kind}#${job.id} failed: ${e?.message ?? e}`);
+        console.error(`[enrich] job ${job.kind}#${job.id} failed (${diagnosticErrorName(e)})`);
       }
     }
   } finally {
@@ -254,8 +255,9 @@ function markStatus(job: Job, status: string): void {
   else repo.setHealthDocEnrichStatus(job.id, status);
 }
 
-function markFailed(job: Job): void {
+function markFailed(job: Job, error: unknown = new Error("invalid enrichment output")): void {
   markStatus(job, "failed");
+  recordAsyncFailure("enrichment", job.kind, error);
 }
 
 function healthDocHasStructuredContent(id: number): boolean {
@@ -427,7 +429,7 @@ async function processJob(job: Job): Promise<void> {
       markStatus(job, "done");
       return;
     }
-    markStatus(job, "failed");
+    markFailed(job);
     return;
   }
 
@@ -528,7 +530,7 @@ async function processJob(job: Job): Promise<void> {
         return;
       }
       console.warn(`[enrich] health#${job.id}: agent returned parseable JSON but no markers/summary/memory (wrong shape?) — marking failed (nothing ingested).`);
-      markStatus(job, "failed");
+      markFailed(job);
       return;
     }
     console.warn(`[enrich] ${job.kind}#${job.id}: agent returned parseable JSON but nothing usable (wrong shape?) — kept regex parse.`);
@@ -852,7 +854,7 @@ export async function processFoodPhotoJob(id: number): Promise<void> {
   if (!wrote && (!parsed || typeof parsed !== "object")) {
     // Vision read failed / wrong shape: keep the as-logged note (its instant
     // summary stands), just no macro estimate this run. A re-trigger can retry.
-    repo.setFoodNoteEnrichStatus(id, "failed");
+    markFailed({ kind: "food_photo", id });
     return;
   }
 
@@ -860,7 +862,7 @@ export async function processFoodPhotoJob(id: number): Promise<void> {
     // Parseable JSON but nothing usable (e.g. a coach-proposal response) — the
     // as-logged note stands; surface it as failed so a re-trigger can retry.
     console.warn(`[enrich] food_photo#${id}: agent returned parseable JSON but no usable macros (wrong shape?) — kept as-logged note.`);
-    repo.setFoodNoteEnrichStatus(id, "failed");
+    markFailed({ kind: "food_photo", id });
     return;
   }
   repo.setFoodNoteEnrichStatus(id, "done");

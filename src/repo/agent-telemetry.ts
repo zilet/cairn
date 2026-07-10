@@ -1,4 +1,24 @@
 import { db } from "../db.js";
+import { agentErrorClass, telemetryIdentifier } from "../telemetry-privacy.js";
+
+const AGENT_RUN_RETENTION_DAYS = 30;
+const AGENT_RUN_ROW_CAP = 20_000;
+const PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
+let nextPruneAt = 0;
+
+export function pruneAgentRuns(now = Date.now()): void {
+  if (now < nextPruneAt) return;
+  try {
+    db.prepare(`DELETE FROM agent_runs WHERE created_at < datetime('now', ?)`).run(`-${AGENT_RUN_RETENTION_DAYS} days`);
+    db.prepare(`DELETE FROM agent_runs WHERE id NOT IN (SELECT id FROM agent_runs ORDER BY id DESC LIMIT ?)`).run(
+      AGENT_RUN_ROW_CAP
+    );
+  } catch {
+    /* telemetry maintenance is failure-safe */
+  } finally {
+    nextPruneAt = now + PRUNE_INTERVAL_MS;
+  }
+}
 
 // ---------- agent-run telemetry (see src/agents.ts) ----------
 // One row per agent ATTEMPT, written from the runChosen / runAgentWithFallback /
@@ -21,7 +41,8 @@ export function recordAgentRun(r: {
   output_tokens?: number | null;
 }) {
   try {
-    const status = r.status || (r.ok ? "ok" : "error");
+    const status = telemetryIdentifier(r.status || (r.ok ? "ok" : "error"), 60, r.ok ? "ok" : "error");
+    const classifiedError = r.ok ? null : agentErrorClass(status, r.error_class);
     const exitCode = Number(r.exit_code);
     const inputTokens = Number(r.input_tokens);
     const outputTokens = Number(r.output_tokens);
@@ -31,22 +52,24 @@ export function recordAgentRun(r: {
          status, error_class, error_message, exit_code, model, input_tokens, output_tokens
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
-      String(r.op ?? "").slice(0, 60),
-      String(r.agent ?? "").slice(0, 60),
+      telemetryIdentifier(r.op, 60),
+      telemetryIdentifier(r.agent, 60),
       r.ok ? 1 : 0,
       r.parsed ? 1 : 0,
       Number.isFinite(r.latency_ms) ? Math.round(r.latency_ms) : null,
       r.tried_json ? 1 : 0,
       String(status).slice(0, 60),
-      r.error_class ? String(r.error_class).slice(0, 80) : null,
-      r.error_message ? String(r.error_message).replace(/\s+/g, " ").trim().slice(0, 280) : null,
+      classifiedError,
+      classifiedError ? `${classifiedError}: agent attempt failed` : null,
       Number.isFinite(exitCode) ? Math.round(exitCode) : null,
-      r.model ? String(r.model).slice(0, 120) : null,
+      typeof r.model === "string" && /^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,119}$/.test(r.model) ? r.model : null,
       Number.isFinite(inputTokens) ? Math.round(inputTokens) : null,
       Number.isFinite(outputTokens) ? Math.round(outputTokens) : null
     );
   } catch {
     /* telemetry is best-effort — never break the loop on a write error */
+  } finally {
+    pruneAgentRuns();
   }
 }
 
@@ -123,7 +146,7 @@ export function getAgentStats(opts: { recent?: number; days?: number } = {}) {
     tried_json: !!r.tried_json,
     status: r.status || (r.ok ? "ok" : "error"),
     error_class: r.error_class ?? null,
-    error_message: r.error_message ?? null,
+    error_message: r.error_class ? `${r.error_class}: agent attempt failed` : null,
     exit_code: r.exit_code == null ? null : Number(r.exit_code),
     model: r.model ?? null,
     input_tokens: r.input_tokens == null ? null : Number(r.input_tokens),
@@ -139,3 +162,5 @@ export function getAgentStats(opts: { recent?: number; days?: number } = {}) {
     recent,
   };
 }
+
+export const AGENT_RUN_LIMITS = { retention_days: AGENT_RUN_RETENTION_DAYS, row_cap: AGENT_RUN_ROW_CAP };
