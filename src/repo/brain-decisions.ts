@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { db } from "../db.js";
+import { addDaysISO, localDateISO } from "./shared.js";
 import { type BrainDecision, type BrainDecisionStatus, normalizeBrainDecision } from "../brain/decision-contract.js";
 import {
   type BrainExpectation,
@@ -88,6 +89,81 @@ export function listBrainDecisions(
     )
     .all(...args, limit) as any[];
   return rows.map(hydrateDecision).filter((row): row is BrainDecision => row != null);
+}
+
+// ---- forward + rotation readers ---------------------------------------------
+// Both feed calm surfaces, so they return small plain shapes, never raw rows.
+
+// A queued change the athlete will see land soon: an ANNOUNCED decision, or a
+// quiet_apply-tier PENDING one, whose effective_date sits in (asOf, asOf+window].
+// Mirrors applyDueAnnouncedDecisions' union with the inequality flipped forward.
+export interface UpcomingBrainDecision {
+  id: number;
+  kind: string;
+  domain: string;
+  summary: string;
+  effective_date: string;
+  autonomy_tier: string;
+  status: string;
+}
+
+export function upcomingBrainDecisions(windowDays = 10, asOf = localDateISO()): UpcomingBrainDecision[] {
+  const horizon = addDaysISO(asOf, Math.max(1, Math.trunc(windowDays))) ?? asOf;
+  const candidates = [
+    ...listBrainDecisions({ status: "announced", limit: 100 }),
+    ...listBrainDecisions({ status: "pending", limit: 100 }).filter((d) => d.autonomy_tier === "quiet_apply"),
+  ];
+  return candidates
+    .filter((d) => !!d.effective_date && d.effective_date > asOf && d.effective_date <= horizon)
+    .sort((a, b) => String(a.effective_date).localeCompare(String(b.effective_date)))
+    .map((d) => ({
+      id: Number(d.id),
+      kind: String(d.kind),
+      domain: String(d.domain),
+      summary: String(d.summary ?? ""),
+      effective_date: String(d.effective_date),
+      autonomy_tier: String(d.autonomy_tier),
+      status: String(d.status),
+    }));
+}
+
+// Exercise rotations the brain (or the athlete) applied recently — the signal
+// that a stalled-lift read has already been HANDLED and the conductor should
+// speak to the new stimulus instead of re-offering buttons. Prefers the
+// structured action.swaps written by recordAppliedProposalDecision; falls back
+// to the legacy free-text `context.instruction` ("swap X -> Y") so pre-existing
+// ledger rows still count.
+export interface AppliedRotation {
+  from: string;
+  to: string;
+  date: string; // applied_at (or created_at) local date
+}
+
+const SWAP_INSTRUCTION_RE = /^swap\s+(.+?)\s*(?:->|→)\s*(.+)$/i;
+
+export function recentAppliedRotations(days = 21, asOf = localDateISO()): AppliedRotation[] {
+  const cutoff = addDaysISO(asOf, -Math.max(1, Math.trunc(days))) ?? asOf;
+  const applied = listBrainDecisions({ status: "applied", domain: "training", limit: 100 });
+  const out: AppliedRotation[] = [];
+  for (const d of applied) {
+    const stamp = String(d.applied_at ?? d.created_at ?? "").slice(0, 10);
+    if (!stamp || stamp < cutoff) continue;
+    const swaps = Array.isArray((d.action as any)?.swaps) ? ((d.action as any).swaps as any[]) : [];
+    let matched = false;
+    for (const s of swaps) {
+      const from = String(s?.from ?? "").trim();
+      const to = String(s?.to ?? "").trim();
+      if (from && to) {
+        out.push({ from, to, date: stamp });
+        matched = true;
+      }
+    }
+    if (matched) continue;
+    const instruction = String((d.context as any)?.instruction ?? "").trim();
+    const m = SWAP_INSTRUCTION_RE.exec(instruction);
+    if (m) out.push({ from: m[1].trim(), to: m[2].trim(), date: stamp });
+  }
+  return out;
 }
 
 export function insertBrainDecision(value: unknown): BrainDecision {

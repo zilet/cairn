@@ -570,6 +570,16 @@ function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?:
               rep_high: item?.rep_high ?? null,
               target_seconds: item?.target_seconds ?? null,
             })),
+            // Rotations keep their from/to shape (changes[] flattens it away) so the
+            // ledger can answer "was lift X recently rotated out" without string-parsing.
+            swaps: (Array.isArray(p.parsed?.changes) ? p.parsed.changes : [])
+              .filter((item: any) => item?.swap?.from && item?.swap?.to)
+              .slice(0, 12)
+              .map((item: any) => ({
+                day_number: item?.day_number ?? null,
+                from: String(item.swap.from),
+                to: String(item.swap.to),
+              })),
             runs: Array.isArray(result?.runs) ? result.runs.slice(0, 14) : [],
           };
     const decisionInput = {
