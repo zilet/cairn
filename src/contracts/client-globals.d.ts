@@ -1341,7 +1341,11 @@ declare global {
   declare function loadProgramBlock(): Promise<void>;
   declare function wireProgramBlock(slot: Element): void;
   declare function cfocusDomainTag(domain: unknown): string;
-  declare function coachingFocusCardHtml(focus: ClientCoachingFocus | null | undefined): string;
+  declare function coachingFocusCardHtml(
+    focus: ClientCoachingFocus | null | undefined,
+    options?: { blockLine?: boolean }
+  ): string;
+  declare function coachingFocusCompactHtml(focus: ClientCoachingFocus | null | undefined): string;
   declare function loadCoachingFocus(slotSelector: string, root?: ParentNode | null): Promise<void>;
   declare function coachingFocusThreadHtml(focus: ClientCoachingFocus | null | undefined): string;
   declare function cfocusRoute(go: unknown): void;
@@ -2953,7 +2957,8 @@ declare global {
     CairnCoachingFocus: {
       CFOCUS_DOMAIN_LABEL: Record<string, string>;
       cfocusDomainTag(domain: unknown): string;
-      coachingFocusCardHtml(focus: ClientCoachingFocus | null | undefined): string;
+      coachingFocusCardHtml(focus: ClientCoachingFocus | null | undefined, options?: { blockLine?: boolean }): string;
+      coachingFocusCompactHtml(focus: ClientCoachingFocus | null | undefined): string;
       loadCoachingFocus(slotSelector: string, root?: ParentNode | null): Promise<void>;
       coachingFocusThreadHtml(focus: ClientCoachingFocus | null | undefined): string;
       cfocusRoute(go: unknown): void;

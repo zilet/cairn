@@ -28,7 +28,19 @@ function focusItems(items: unknown): ClientCoachingFocusItem[] {
   return Array.isArray(items) ? items.filter((item): item is ClientCoachingFocusItem => !!item) : [];
 }
 
-function coachingFocusCardHtml(focus: ClientCoachingFocus | null | undefined): string {
+// The block calendar belongs to the training program — it reads right under a
+// training/running/recovery lever, and wrong under a health/nutrition one (it
+// would imply the lab work is block-scoped volume work).
+function cfocusBlockDomains(domain: unknown): boolean {
+  return domain === "training" || domain === "running" || domain === "recovery";
+}
+
+// options.blockLine=false omits the calendar line — for the Program view, which
+// already owns block truth via its own "Current block · week N of M" card.
+function coachingFocusCardHtml(
+  focus: ClientCoachingFocus | null | undefined,
+  options: { blockLine?: boolean } = {}
+): string {
   if (!focus || !focus.available || !focus.lead) return "";
   const lead = focus.lead;
   const parallel = focusItems(focus.parallel);
@@ -39,7 +51,8 @@ function coachingFocusCardHtml(focus: ClientCoachingFocus | null | undefined): s
   let html = `<div class="cfocus settle-in">`;
   html += `<span class="cfocus-mast lbl">Where to focus</span>`;
   if (focus.headline) html += `<p class="cfocus-headline">${escHtml(focus.headline)}</p>`;
-  if (focus.block_line) html += `<p class="cfocus-blockline">${escHtml(focus.block_line)}</p>`;
+  if (focus.block_line && options.blockLine !== false)
+    html += `<p class="cfocus-blockline">${escHtml(focus.block_line)}</p>`;
 
   html += `<div class="cfocus-lead cfocus-go" data-cfocus-go="${escAttr(lead.domain || "")}" role="link" tabindex="0">`;
   html += `<div class="cfocus-lead-top">${cfocusDomainTag(lead.domain)}<h3 class="cfocus-lead-title">${escHtml(lead.title || "")}</h3><span class="cfocus-go-arrow" aria-hidden="true">→</span></div>`;
@@ -83,6 +96,28 @@ function coachingFocusCardHtml(focus: ClientCoachingFocus | null | undefined): s
   return html;
 }
 
+// The COMPACT conductor — for surfaces that already carry their own depth (the
+// Stand overview renders the health synthesis right below). One voice: masthead,
+// headline, calendar line, THE lead lever — no parallel/later/connections/retest
+// (those live in the full card on Progress → Program, one tap away), so the
+// conductor and the synthesis never make rival whole-picture claims on one screen.
+function coachingFocusCompactHtml(focus: ClientCoachingFocus | null | undefined): string {
+  if (!focus || !focus.available || !focus.lead) return "";
+  const lead = focus.lead;
+  let html = `<div class="cfocus cfocus-compact settle-in">`;
+  html += `<span class="cfocus-mast lbl">Where to focus</span>`;
+  if (focus.headline) html += `<p class="cfocus-headline">${escHtml(focus.headline)}</p>`;
+  if (focus.block_line && cfocusBlockDomains(lead.domain))
+    html += `<p class="cfocus-blockline">${escHtml(focus.block_line)}</p>`;
+  html += `<div class="cfocus-lead cfocus-go" data-cfocus-go="${escAttr(lead.domain || "")}" role="link" tabindex="0">`;
+  html += `<div class="cfocus-lead-top">${cfocusDomainTag(lead.domain)}<h3 class="cfocus-lead-title">${escHtml(lead.title || "")}</h3><span class="cfocus-go-arrow" aria-hidden="true">→</span></div>`;
+  if (lead.why) html += `<p class="cfocus-lead-why">${escHtml(lead.why)}</p>`;
+  html += `</div>`;
+  html += `<button class="cfocus-full-link" type="button" data-cfocus-go="program">The full focus plan →</button>`;
+  html += `</div>`;
+  return html;
+}
+
 async function loadCoachingFocus(slotSelector: string, root?: ParentNode | null): Promise<void> {
   const fallbackScope = typeof view !== "undefined" && view ? view : document;
   const scope = root || fallbackScope;
@@ -106,9 +141,12 @@ function coachingFocusThreadHtml(focus: ClientCoachingFocus | null | undefined):
   if (!title) return "";
   const domain = isCoachingFocusDomain(focus.lead.domain) ? focus.lead.domain : "stand";
   const why = focus.lead.why ? String(focus.lead.why) : "";
-  // The block's calendar placement leads the context line, so the thread reads
-  // like a coach with a calendar: "Week 3 of 5 — building volume. <why>".
-  const context = [focus.block_line ? String(focus.block_line) : "", why].filter(Boolean).join(" ");
+  // The block's calendar placement leads the context line — but only under a
+  // training-family lever ("Week 3 of 5 — building volume. <why>"). Under a
+  // health/nutrition lead the lifting calendar would imply the lab work is
+  // block-scoped volume work; the lead's own why stands alone there.
+  const blockLine = cfocusBlockDomains(focus.lead.domain) && focus.block_line ? String(focus.block_line) : "";
+  const context = [blockLine, why].filter(Boolean).join(" ");
   return `<button class="cfocus-thread" type="button" data-cfocus-go="${escAttr(domain)}">
     <span class="cfocus-thread-arrow" aria-hidden="true">↳</span>
     <span class="cfocus-thread-copy">
@@ -199,6 +237,7 @@ const CAIRN_COACHING_FOCUS = {
   CFOCUS_DOMAIN_LABEL,
   cfocusDomainTag,
   coachingFocusCardHtml,
+  coachingFocusCompactHtml,
   loadCoachingFocus,
   coachingFocusThreadHtml,
   cfocusRoute,
@@ -209,6 +248,7 @@ Object.assign(globalThis, {
   CFOCUS_DOMAIN_LABEL,
   cfocusDomainTag,
   coachingFocusCardHtml,
+  coachingFocusCompactHtml,
   loadCoachingFocus,
   coachingFocusThreadHtml,
   cfocusRoute,
@@ -220,6 +260,7 @@ if (typeof window !== "undefined") {
     CFOCUS_DOMAIN_LABEL,
     cfocusDomainTag,
     coachingFocusCardHtml,
+    coachingFocusCompactHtml,
     loadCoachingFocus,
     coachingFocusThreadHtml,
     cfocusRoute,

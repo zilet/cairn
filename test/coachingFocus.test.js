@@ -119,7 +119,7 @@ test("coachingFocus carries the block's temporal placement in plain words", () =
   assert.match(String(deload.block_line), /^Week 5 of 5 — a deload week/);
 
   const testWeek = coachingFocus({ ...richInput(), programBlock: { phase: "realization", week_of: "week 6 of 6" } });
-  assert.match(String(testWeek.block_line), /test week — express/);
+  assert.match(String(testWeek.block_line), /test week: express/);
 
   // No active block → no placement line (and never a fabricated one).
   assert.equal(coachingFocus(richInput()).block_line, null);

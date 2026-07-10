@@ -11,7 +11,7 @@
 // Producers are imported via the repo barrel (integrator wires the export).
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { repo, resetTables, seedHealthDoc, marker } from "./_seed.js";
+import { db, localDaysAgo, repo, resetTables, seedHealthDoc, marker } from "./_seed.js";
 
 const KEY = "today_last_seen_at";
 
@@ -92,28 +92,52 @@ test("a strength PR since the stamp → continuity candidate", () => {
 
 test("the most notable change leads; the rest braid into the body by name", () => {
   repo.setAppState(KEY, sqlAgo(2 * 60 * 60 * 1000));
-  // A new lab (high notability) + an insight (lower) — the lab should lead and
-  // the insight should be NAMED in the body (connective tissue, not a count).
+  // A new lab (high notability) + a drafted-and-applied plan change (lower) —
+  // the lab should lead and the plan change should be NAMED in the body
+  // (connective tissue, not a count).
   seedHealthDoc("2026-06-23", [marker("ApoB", 92, { unit: "mg/dL" })], "bloodwork");
-  repo.addInsight({ kind: "connection", text: "Sleep dipped the weeks you ran more.", status: "new" });
+  const p = repo.createProposal("stub", "auto: weekly review", "", { changes: [] });
+  db.prepare(`UPDATE plan_proposals SET status = 'applied' WHERE id = ?`).run(p.id);
 
   const c = repo.sinceLastLookedCandidate();
   assert.ok(c);
   assert.ok(/bloodwork|result/i.test(c.title), "the lab leads the line");
   assert.ok(!/other thing/i.test(c.title), "the title never hides substance behind a count");
-  assert.ok(/connection is waiting/i.test(String(c.body)), "the braid names what else moved");
+  assert.ok(/plan picked up an adjustment/i.test(String(c.body)), "the braid names what else moved");
 });
 
-test("training done since the stamp joins the braid", () => {
+test("a waiting insight is NOT re-announced (its own card renders on the same rail)", () => {
+  repo.setAppState(KEY, sqlAgo(2 * 60 * 60 * 1000));
+  repo.addInsight({ kind: "weekly_read", text: "Solid week — held three sessions.", status: "new" });
+  repo.addInsight({ kind: "connection", text: "Sleep dipped the weeks you ran more.", status: "new" });
+
+  // Insights alone → silent; the weekly-read / connection cards are their own
+  // announcement in the same Today agenda pass.
+  assert.equal(repo.sinceLastLookedCandidate(), null);
+});
+
+test("training done on a PRIOR day joins the braid; today's own session does not", () => {
   repo.setAppState(KEY, sqlAgo(2 * 60 * 60 * 1000));
   seedHealthDoc("2026-06-23", [marker("ApoB", 92, { unit: "mg/dL" })], "bloodwork");
-  repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5 });
+  // A set logged NOW but on yesterday's session date (a backfill) counts —
+  // it happened while the athlete was away.
+  repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, date: localDaysAgo(1) });
 
-  const c = repo.sinceLastLookedCandidate();
-  assert.ok(c);
-  assert.ok(/bloodwork/i.test(c.title), "the lab still leads");
-  assert.ok(/in the books/i.test(String(c.body)), "the work is acknowledged in the braid");
-  assert.ok(!/\b\d+\b/.test(String(c.body)), "counts render as words, never digits");
+  const withPrior = repo.sinceLastLookedCandidate();
+  assert.ok(withPrior);
+  assert.ok(/in the books/i.test(String(withPrior.body)), "yesterday's work is acknowledged in the braid");
+  assert.ok(!/\b\d+\b/.test(String(withPrior.body)), "counts render as words, never digits");
+
+  // Today's own just-finished session must NOT be re-announced — the DONE hero
+  // and Lately already tell it; the braid is about time away.
+  resetTables("sessions", "logged_sets", "health_documents");
+  repo.setAppState(KEY, sqlAgo(2 * 60 * 60 * 1000));
+  repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5 });
+  const todayOnly = repo.sinceLastLookedCandidate();
+  assert.ok(
+    !todayOnly || !/in the books/i.test(String(todayOnly.title) + String(todayOnly.body ?? "")),
+    "today's session never triple-tells through the continuity line"
+  );
 });
 
 test("a multi-day gap names the real day in the kicker", () => {

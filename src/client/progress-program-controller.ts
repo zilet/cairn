@@ -17,7 +17,7 @@ function progressProgramRecord(value: unknown): ProgressProgramRecord {
 // Program body can collapse the deep read only when a usable focus card exists.
 var _progFocusCard: string | undefined;
 const PROGRESS_FOCUS_STATE = {
-  cardHtml: () => typeof _progFocusCard === "string" ? _progFocusCard : "",
+  cardHtml: () => (typeof _progFocusCard === "string" ? _progFocusCard : ""),
   hasFocusCard: () => !!_progFocusCard,
 };
 
@@ -38,27 +38,37 @@ async function triggerProgramEvolve(btn: Element, deps: ClientProgressProgramCon
     cap.className = "prog-evolve-cap job-cap lbl";
     foot.appendChild(cap);
   }
-  const cleanup = () => { restore(); cap?.remove(); };
-  await deps.runOp("evolve_program", {}, {
-    path: "/program/evolve",
-    anchor: ".prog-evolve-foot",
-    caption: [
-      "reading how your lifts are trending",
-      "spotting what's stalled",
-      "drafting how your plan should evolve",
-      "checking it against your constraints",
-    ],
-    guard: () => !document.querySelector(".prog-evolve-foot")?.isConnected,
-    render: () => {
-      cleanup();
-      deps.toast("Drafted — review it in your Plan");
-      deps.invalidate("progress:program");
-      deps.invalidate("plan:coach");
-      deps.invalidate("plan:proposals");
-      if (deps.state.tab === "progress") deps.renderSelf();
-    },
-    onFail: () => { cleanup(); deps.toast("Couldn't draft right now — try again in a bit."); },
-  });
+  const cleanup = () => {
+    restore();
+    cap?.remove();
+  };
+  await deps.runOp(
+    "evolve_program",
+    {},
+    {
+      path: "/program/evolve",
+      anchor: ".prog-evolve-foot",
+      caption: [
+        "reading how your lifts are trending",
+        "spotting what's stalled",
+        "drafting how your plan should evolve",
+        "checking it against your constraints",
+      ],
+      guard: () => !document.querySelector(".prog-evolve-foot")?.isConnected,
+      render: () => {
+        cleanup();
+        deps.toast("Drafted — review it in your Plan");
+        deps.invalidate("progress:program");
+        deps.invalidate("plan:coach");
+        deps.invalidate("plan:proposals");
+        if (deps.state.tab === "progress") deps.renderSelf();
+      },
+      onFail: () => {
+        cleanup();
+        deps.toast("Couldn't draft right now — try again in a bit.");
+      },
+    }
+  );
 }
 
 async function renderProgressProgram(deps: ClientProgressProgramControllerDeps): Promise<unknown> {
@@ -70,19 +80,25 @@ async function renderProgressProgram(deps: ClientProgressProgramControllerDeps):
 
   // Fetch the conductor in parallel. It never blocks the warm Program paint; if the
   // card presence changes, repaint from the cached program-state payload.
-  deps.api("/coaching-focus").then((focus) => {
-    const card = (typeof coachingFocusCardHtml === "function")
-      ? coachingFocusCardHtml(focus as ClientCoachingFocus | null | undefined)
-      : "";
-    const prev = _progFocusCard;
-    _progFocusCard = card;
-    if (card === prev) return;
-    if (!card && (prev === undefined || prev === "")) return;
-    if (deps.isCurrent(token) && deps.state.tab === "progress" && deps.state.progressSeg === "program") {
-      const cached = deps.peekCached<ProgressProgramState>("progress:program");
-      if (cached) paintProgressProgramBody(cached.data, deps);
-    }
-  }).catch(() => {});
+  deps
+    .api("/coaching-focus")
+    .then((focus) => {
+      // blockLine:false — this screen already owns block truth via the pblock
+      // card's "Current block · week N of M"; stating the week twice is noise.
+      const card =
+        typeof coachingFocusCardHtml === "function"
+          ? coachingFocusCardHtml(focus as ClientCoachingFocus | null | undefined, { blockLine: false })
+          : "";
+      const prev = _progFocusCard;
+      _progFocusCard = card;
+      if (card === prev) return;
+      if (!card && (prev === undefined || prev === "")) return;
+      if (deps.isCurrent(token) && deps.state.tab === "progress" && deps.state.progressSeg === "program") {
+        const cached = deps.peekCached<ProgressProgramState>("progress:program");
+        if (cached) paintProgressProgramBody(cached.data, deps);
+      }
+    })
+    .catch(() => {});
 
   return deps.paintSWR({
     key: "progress:program",
@@ -105,9 +121,13 @@ function paintProgressProgramBody(data: ProgressProgramState, deps: ClientProgre
   const adaptations = data.adaptations_due;
 
   if (!lifts.length && !volume.length && !meso && !endurance && !hybrid) {
-    deps.view.innerHTML = head + deps.hero("Program", []) +
-      deps.empty(deps.art("exercise", "barbell squat"),
-        "Not enough data yet — log a few sessions and your program intelligence will read here.");
+    deps.view.innerHTML =
+      head +
+      deps.hero("Program", []) +
+      deps.empty(
+        deps.art("exercise", "barbell squat"),
+        "Not enough data yet — log a few sessions and your program intelligence will read here."
+      );
     deps.wireSegments();
     return;
   }
@@ -122,7 +142,9 @@ function paintProgressProgramBody(data: ProgressProgramState, deps: ClientProgre
 
   const conductor = CairnProgressFocus.cardHtml();
   const hasConductor = !!conductor;
-  const headlineHtml = headline ? `<div class="prog-headline reveal" style="${stagger(1)}">${escHtml(headline)}</div>` : "";
+  const headlineHtml = headline
+    ? `<div class="prog-headline reveal" style="${stagger(1)}">${escHtml(headline)}</div>`
+    : "";
 
   const testSlot = `<div id="progTestSlot" class="ptest-slot reveal" style="${stagger(1)}"></div>`;
   const perfSlot = `<div id="progPerfSlot" class="pperf-slot reveal" style="${stagger(2)}"></div>`;
@@ -139,7 +161,8 @@ function paintProgressProgramBody(data: ProgressProgramState, deps: ClientProgre
   }
 
   const volumeHtml = volume.length
-    ? `<div class="pvol-head lbl reveal" style="${stagger(2)}">Weekly volume by muscle</div>` + volumeBlockHtml(volume, 3)
+    ? `<div class="pvol-head lbl reveal" style="${stagger(2)}">Weekly volume by muscle</div>` +
+      volumeBlockHtml(volume, 3)
     : "";
   const mesoHtml = meso ? mesoBlockHtml(meso, 4) : "";
   const endHtml = endurance ? enduranceBlockHtml(endurance, 5) : "";
@@ -154,18 +177,47 @@ function paintProgressProgramBody(data: ProgressProgramState, deps: ClientProgre
 
   let html = "";
   if (hasConductor) {
-    html = head + deps.hero("Program", heroStats) + conductor + liftsHtml +
+    html =
+      head +
+      deps.hero("Program", heroStats) +
+      conductor +
+      liftsHtml +
       `<details class="full-read reveal" style="${stagger(6)}">
         <summary>The full read</summary>
         <div class="full-read-body">${
-          headlineHtml + testSlot + perfSlot + blockSlot + adjustSlot + muscleSlot + dexaSlot +
-          adaptHtml + volumeHtml + mesoHtml + endHtml + hybridHtml
+          headlineHtml +
+          testSlot +
+          perfSlot +
+          blockSlot +
+          adjustSlot +
+          muscleSlot +
+          dexaSlot +
+          adaptHtml +
+          volumeHtml +
+          mesoHtml +
+          endHtml +
+          hybridHtml
         }</div>
-      </details>` + evolveFoot;
+      </details>` +
+      evolveFoot;
   } else {
-    html = head + deps.hero("Program", heroStats) +
-      headlineHtml + testSlot + perfSlot + blockSlot + adjustSlot + muscleSlot + dexaSlot +
-      adaptHtml + liftsHtml + volumeHtml + mesoHtml + endHtml + hybridHtml + evolveFoot;
+    html =
+      head +
+      deps.hero("Program", heroStats) +
+      headlineHtml +
+      testSlot +
+      perfSlot +
+      blockSlot +
+      adjustSlot +
+      muscleSlot +
+      dexaSlot +
+      adaptHtml +
+      liftsHtml +
+      volumeHtml +
+      mesoHtml +
+      endHtml +
+      hybridHtml +
+      evolveFoot;
   }
 
   deps.view.innerHTML = html;
@@ -173,10 +225,16 @@ function paintProgressProgramBody(data: ProgressProgramState, deps: ClientProgre
   deps.runCountUps(deps.view);
 
   const evolveBtn = deps.view.querySelector("#progEvolveBtn");
-  if (evolveBtn) evolveBtn.addEventListener("click", () => { void triggerProgramEvolve(evolveBtn, deps); });
+  if (evolveBtn)
+    evolveBtn.addEventListener("click", () => {
+      void triggerProgramEvolve(evolveBtn, deps);
+    });
 
   const tidyBtn = deps.view.querySelector("#progTidyBtn");
-  if (tidyBtn) tidyBtn.addEventListener("click", () => { void tidyExerciseNames(tidyBtn, deps); });
+  if (tidyBtn)
+    tidyBtn.addEventListener("click", () => {
+      void tidyExerciseNames(tidyBtn, deps);
+    });
 
   loadPerformance();
   loadProgramBlock();

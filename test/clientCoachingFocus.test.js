@@ -222,3 +222,31 @@ test("the block's temporal placement renders in the card and leads the thread co
   // No block → no placement anywhere (never fabricated).
   assert.doesNotMatch(focus.coachingFocusCardHtml(richFocus), /cfocus-blockline/);
 });
+
+test("the block calendar never attaches to a non-training lead; compact card carries one voice", () => {
+  const { focus } = loadCoachingFocus();
+  const healthLead = {
+    ...richFocus,
+    block_line: "Week 3 of 5 — building volume.",
+    lead: { domain: "health", title: "Lower your cardiovascular risk", why: "ApoB is the lever." },
+  };
+
+  // The lifting-block calendar under a health lever would imply the lab work is
+  // block-scoped volume work — the lead's why stands alone.
+  const thread = focus.coachingFocusThreadHtml(healthLead);
+  assert.doesNotMatch(thread, /Week 3 of 5/);
+  assert.match(thread, /ApoB is the lever\./);
+
+  // The compact conductor (Stand overview): masthead + headline + lead only —
+  // no parallel/later/connections/retest rivaling the synthesis below it.
+  const compact = focus.coachingFocusCompactHtml({ ...richFocus, block_line: "Week 3 of 5 — building volume." });
+  assert.match(compact, /cfocus-compact/);
+  assert.match(compact, /Break &lt;plateau&gt;/);
+  assert.match(compact, /Week 3 of 5/);
+  assert.match(compact, /The full focus plan/);
+  assert.doesNotMatch(compact, /Alongside|cfocus-conn|Next check-in/);
+
+  // Program view: blockLine:false omits the calendar (the pblock card owns it there).
+  const noBlock = focus.coachingFocusCardHtml({ ...richFocus, block_line: "Week 3 of 5 — building volume." }, { blockLine: false });
+  assert.doesNotMatch(noBlock, /Week 3 of 5/);
+});

@@ -349,3 +349,27 @@ test("the surprise budget never shapes a routed historical date", () => {
   repo.todayAgenda("2026-01-07");
   assert.equal(repo.getAppState("today_agenda_intro"), null, "no introductions recorded for a routed date");
 });
+
+test("markIntroduced:false computes the same agenda without spending the day's allowance", () => {
+  seedHealthDoc("2025-12-01", [
+    marker("ApoB", 130, { unit: "mg/dL", flag: "high" }),
+    marker("LDL-C", 190, { unit: "mg/dL", flag: "high" }),
+  ]);
+  repo.deriveDirectives();
+
+  // An agent's MCP read must not mark the newcomer introduced...
+  const agentView = repo.todayAgenda(undefined, { markIntroduced: false });
+  assert.ok(
+    [...agentView.primary, ...agentView.more].some((c) => c.id === "health-focus"),
+    "the agent still sees the same agenda shape"
+  );
+  assert.equal(repo.getAppState("today_agenda_intro"), null, "no ledger write from a read-only pass");
+
+  // ...so the human's next open still gets the introduction.
+  const humanView = repo.todayAgenda();
+  assert.ok(
+    humanView.primary.some((c) => c.id === "health-focus"),
+    "the human open introduces the newcomer inline"
+  );
+  assert.ok(repo.getAppState("today_agenda_intro"), "the human pass records the introduction");
+});

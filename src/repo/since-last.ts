@@ -115,25 +115,11 @@ function resolvedDirectiveChange(stampSql: string): Change | null {
   }
 }
 
-// ---- source: a new quiet insight / weekly read waiting since the stamp ----
-function newInsightChange(stampSql: string): Change | null {
-  try {
-    const row = db
-      .prepare(
-        `SELECT kind, text, created_at FROM insights
-          WHERE created_at > ? AND status IN ('new', 'seen')
-          ORDER BY (kind = 'weekly_read') DESC, created_at DESC, id DESC LIMIT 1`
-      )
-      .get(stampSql) as any;
-    if (!row) return null;
-    const kind = String(row.kind ?? "").toLowerCase();
-    const phrase = kind === "weekly_read" ? "A fresh weekly read is waiting" : "A new connection is waiting";
-    // A weekly read is a bit more notable than a routine connection.
-    return { weight: kind === "weekly_read" ? 70 : 55, phrase };
-  } catch {
-    return null;
-  }
-}
+// NOTE: there is deliberately NO insight/weekly-read source here. A visible
+// insight always renders as its own card in the SAME Today agenda pass
+// (weeklyCandidate / insightCandidate), so "a fresh weekly read is waiting"
+// would announce a card sitting one slot below — robotic double-telling.
+// The cards are their own announcement; continuity covers what has no card.
 
 // ---- source: a strength PR set since the stamp ----
 // PRs aren't stored as a flag — they're derived at log time. We recompute
@@ -203,26 +189,34 @@ function appliedPlanChange(stampSql: string): Change | null {
 // ---- source: training actually done since the stamp ----
 // The quiet backbone of continuity: before anything about labs or plans, the
 // braid acknowledges the WORK. Counts distinct lifting days (a session with sets
-// logged in the window) plus endurance activities. Words, never a streak.
+// logged in the window) plus endurance activities — but ONLY days before today:
+// today's session already speaks through the DONE hero (and Lately), and
+// re-announcing it here would triple-tell the same workout. The braid is about
+// time away. Words, never a streak.
 const COUNT_WORDS = ["", "A", "Two", "Three", "Four", "Five", "Six"];
 
 function trainingDoneChange(stampSql: string): Change | null {
   try {
+    const today = localDateISO();
     const liftDays = Number(
       (
         db
           .prepare(
             `SELECT COUNT(DISTINCT s.date) AS n FROM sessions s
-              WHERE EXISTS (SELECT 1 FROM logged_sets l WHERE l.session_id = s.id AND l.created_at > ?)`
+              WHERE s.date < ?
+                AND EXISTS (SELECT 1 FROM logged_sets l WHERE l.session_id = s.id AND l.created_at > ?)`
           )
-          .get(stampSql) as any
+          .get(today, stampSql) as any
       )?.n ?? 0
     );
     const cardio = Number(
       (
         db
-          .prepare(`SELECT COUNT(*) AS n FROM activities WHERE created_at > ? AND type IN ('run','ride','swim','hike')`)
-          .get(stampSql) as any
+          .prepare(
+            `SELECT COUNT(*) AS n FROM activities
+              WHERE created_at > ? AND date < ? AND type IN ('run','ride','swim','hike')`
+          )
+          .get(stampSql, today) as any
       )?.n ?? 0
     );
     const total = liftDays + cardio;
@@ -291,7 +285,6 @@ export function sinceLastLookedCandidate(_date?: string): TodayAgendaCandidate |
     resolvedDirectiveChange,
     journeyMilestoneChange,
     appliedPlanChange,
-    newInsightChange,
     recentPrChange,
     trainingDoneChange,
   ]) {

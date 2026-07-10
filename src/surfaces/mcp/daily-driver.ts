@@ -16,7 +16,9 @@ export function registerDailyDriverTools(server: McpToolRegistrar) {
     "get_today_agenda",
     "The Today salience arbiter (Era 2): ONE deterministic ranking + budget pass over the whole Today surface → { hero, primary[], more[], total }, so only the 1-2 things that matter most today surface inline and the rest collapse behind 'more'. Internal priorities never cross to the user (no scores). Pass `date` (YYYY-MM-DD; defaults to today).",
     { date: z.string().optional() },
-    async ({ date }) => asText(todayAgenda(date))
+    // Read-only w.r.t. the surprise budget: an agent's tool call must never spend
+    // the day's introduction allowance on a card no human saw.
+    async ({ date }) => asText(todayAgenda(date, { markIntroduced: false }))
   );
 
   server.tool(

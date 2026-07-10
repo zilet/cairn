@@ -110,8 +110,16 @@ function loadIntroLedger(): Record<string, string> {
 // Decide which candidates to HOLD OUT of the inline tier this pass, and record
 // the single introduction the day's allowance covers. Walks the sorted order
 // simulating the inline slots, so a deferred newcomer's slot backfills with the
-// next routine candidate and the inline tier never starves.
-function applySurpriseBudget(ordered: TodayAgendaCandidate[], today: string, maxInline: number): Set<string> {
+// next routine candidate and the inline tier never starves. `record: false`
+// computes the identical shape WITHOUT spending the allowance — for surfaces no
+// human is looking at (the MCP tool), so an agent's read can never mark a
+// newcomer "introduced" that nobody saw.
+function applySurpriseBudget(
+  ordered: TodayAgendaCandidate[],
+  today: string,
+  maxInline: number,
+  record: boolean
+): Set<string> {
   const deferred = new Set<string>();
   const ledger = loadIntroLedger();
   let allowance = Object.values(ledger).some((v) => v === today) ? 0 : 1;
@@ -132,7 +140,7 @@ function applySurpriseBudget(ordered: TodayAgendaCandidate[], today: string, max
       slots -= 1;
     }
   }
-  if (dirty) {
+  if (dirty && record) {
     const cutoff = Date.parse(`${today}T00:00:00Z`) - INTRO_LEDGER_MAX_AGE_DAYS * 86_400_000;
     for (const [key, value] of Object.entries(ledger)) {
       const t = Date.parse(`${String(value)}T00:00:00Z`);
@@ -520,7 +528,11 @@ function latelyCandidate(date: string, weeklyStats?: any): TodayAgendaCandidate 
 // ============================================================================
 // todayAgenda — the single ranking + budget pass.
 // ============================================================================
-export function todayAgenda(date?: string): TodayAgenda {
+// `markIntroduced` (default true) controls whether this pass may SPEND the day's
+// surprise allowance (write the intro ledger). The PWA's GET /api/today-agenda is
+// the one surface a human actually sees, so it records; the MCP tool passes false
+// so a coaching agent's read never marks a newcomer "introduced" nobody saw.
+export function todayAgenda(date?: string, opts: { markIntroduced?: boolean } = {}): TodayAgenda {
   const d = String(date || localDateISO());
   const hero = briefHero();
   const showPlanForward = planForwardAllowed(d);
@@ -574,7 +586,7 @@ export function todayAgenda(date?: string): TodayAgenda {
   let heldOut = new Set<string>();
   if (d === localDateISO()) {
     try {
-      heldOut = applySurpriseBudget(ordered, d, TODAY_PRIMARY_MAX);
+      heldOut = applySurpriseBudget(ordered, d, TODAY_PRIMARY_MAX, opts.markIntroduced !== false);
     } catch {
       heldOut = new Set();
     }

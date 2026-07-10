@@ -1880,7 +1880,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /html\(\s*deps: MeProfileControllerDeps,\s*profile: MeProfileProfile,\s*goal: MeProfileGoalCheck,\s*context: MeProfileFormContext,/);
   assert.match(clientGlobals, /CairnMeProfileController/);
   assert.match(clientGlobals, /renderProfile\(deps: MeProfileControllerDeps\): Promise<void>/);
-  assert.match(clientGlobals, /declare function coachingFocusCardHtml\(focus: ClientCoachingFocus \| null \| undefined\): string/);
+  assert.match(clientGlobals, /declare function coachingFocusCardHtml\(/);
+  assert.match(clientGlobals, /declare function coachingFocusCompactHtml\(focus: ClientCoachingFocus \| null \| undefined\): string/);
   assert.match(clientGlobals, /declare function loadCoachingFocus\(slotSelector: string, root\?: ParentNode \| null\): Promise<void>/);
   assert.match(clientGlobals, /CairnCoachingFocus/);
   assert.match(clientGlobals, /declare function settingsRouteRowsHtml/);
@@ -3889,7 +3890,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(restTimerSource, /Object\.assign\(globalThis, \{/);
   assert.match(restTimerSource, /CairnRestTimer/);
   assert.match(coachingFocusSource, /type ClientCoachingFocus = import\("\.\.\/contracts\/client\.js"\)\.ClientCoachingFocus/);
-  assert.match(coachingFocusSource, /function coachingFocusCardHtml\(focus: ClientCoachingFocus \| null \| undefined\): string/);
+  assert.match(coachingFocusSource, /function coachingFocusCardHtml\(/);
   assert.match(coachingFocusSource, /async function loadCoachingFocus\(slotSelector: string, root\?: ParentNode \| null\): Promise<void>/);
   assert.match(coachingFocusSource, /function cfocusRoute\(go: unknown\): void/);
   assert.match(coachingFocusSource, /Object\.assign\(globalThis, \{/);
@@ -5517,7 +5518,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(capture, /function loadTodayReads/);
   assert.match(capture, /function reconnectInsight/);
   assert.match(progressEnergySource, /CairnUi\.jobCaptionHtml\(\{ text: "reading your trend/);
-  assert.match(progressProgramControllerClient, /coachingFocusCardHtml\(focus\)/);
+  assert.match(progressProgramControllerClient, /coachingFocusCardHtml\(focus[^)]*\{ blockLine: false \}\)/);
   assert.doesNotMatch(progress, /coachingFocusCardHtml/);
   assert.match(meals, /function renderCoach\(\)/);
   assert.match(meals, /function renderMeals\(\)/);

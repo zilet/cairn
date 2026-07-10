@@ -920,9 +920,9 @@ function blockPlacementLine(b: ProgramBlockSummaryInput | null | undefined): str
   const phase = lc(b?.phase);
   const tail =
     phase === "deload"
-      ? "a deload week — absorb the work you've put in"
+      ? "a deload week: absorb the work you've put in"
       : phase === "realization"
-        ? "test week — express what the block built"
+        ? "test week: express what the block built"
         : phase === "intensification"
           ? "pushing intensity; the deload is in sight"
           : phase === "accumulation"
