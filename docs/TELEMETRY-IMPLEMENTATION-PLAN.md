@@ -63,13 +63,16 @@ and ignores unknown fields.
 
 Use a compact `diagnostic_events` table with bounded fields for source, kind,
 level, operation/route, status, duration, request id, fingerprint, message,
-stack, metadata, release, and timestamp. Writes are failure-safe. Query-time
-rollups provide totals, grouping by kind/source/route, recent events, and slow
-requests. Raw event retention is bounded (30 days) and pruning is best-effort.
+stack, metadata, release, and timestamp. As a brand-new table it belongs in
+`src/db.ts` via `CREATE TABLE IF NOT EXISTS` and needs no migration entry. Writes
+are failure-safe. Query-time rollups provide totals, grouping by
+kind/source/route, recent events, and slow requests. Raw event retention is
+bounded (30 days) and pruning is best-effort.
 
 Expose:
 
-- `GET /api/diagnostics?recent=N&days=N`
+- `GET /api/diagnostics?recent=N&days=N`, returning `window_days`, `total`,
+  `by_source`, `by_kind`, `by_route`, grouped `issues`, `recent`, and `slow`
 - a compact Settings -> Agents operator card reusing existing diagnostic-card
   visual patterns; no athlete-facing alarm or modal.
 
@@ -89,4 +92,3 @@ Sol owns the final contract reconciliation, API/client contract typing,
 generated docs, one service-worker cache bump, cross-track tests, full gates,
 and merging the validated branch into local `main` without disturbing pre-existing
 checkout edits.
-
