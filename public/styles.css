@@ -5088,6 +5088,8 @@ button.hmk-row:active{background:var(--card-2)}
   padding:8px 2px;color:var(--muted);font-size:.8rem;font-family:var(--font-ui)}
 .today-more-sum::-webkit-details-marker{display:none}
 .today-more-lbl{letter-spacing:.02em}
+/* a genuinely-new item waiting inside — a quiet sage whisper, never a badge */
+.today-more-new{color:var(--sage-text);font-weight:560}
 .today-more-chev{transition:transform .2s ease}
 .today-more[open] .today-more-chev{transform:rotate(180deg)}
 .today-more-body{display:flex;flex-direction:column;gap:10px;padding-top:4px}
@@ -5145,8 +5147,9 @@ button.hmk-row:active{background:var(--card-2)}
 .cfocus-compact .cfocus-lead{margin-bottom:4px}
 .cfocus-full-link{display:block;background:none;border:none;padding:6px 0 0;cursor:pointer;
   font-size:.78rem;font-weight:600;color:var(--sage-text);text-align:left;
-  transition:transform .15s ease}
-.cfocus-full-link:hover{transform:translateX(2px)}
+  transition:transform .15s ease,color .15s ease}
+.cfocus-full-link:hover{transform:translateX(2px);color:var(--sage-deep)}
+.cfocus-full-link:active{transform:var(--press-sm)}
 
 /* domain tag — a quiet reused label, no new glyph vocabulary */
 .cfocus-dom{flex:0 0 auto;color:var(--muted);letter-spacing:.1em}

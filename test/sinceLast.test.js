@@ -184,3 +184,19 @@ test("Today agenda only advances last-seen for the device-local today", () => {
   assert.equal(repo.shouldMarkTodayAgendaSeen("2026-06-26", "2026-06-27"), false, "past date review must not hide today's continuity line");
   assert.equal(repo.shouldMarkTodayAgendaSeen("2026-06-28", "2026-06-27"), false, "future date preview must not hide today's continuity line");
 });
+
+test("the continuity line is tappable — the lead change routes to its home surface", () => {
+  repo.setAppState(KEY, sqlAgo(2 * 60 * 60 * 1000));
+  seedHealthDoc("2026-06-23", [marker("ApoB", 92, { unit: "mg/dL" })], "bloodwork");
+
+  const lab = repo.sinceLastLookedCandidate();
+  assert.deepEqual(lab.action, { label: "See what came in", kind: "me-health-read" });
+
+  // A different lead → a different destination (the plan change goes to Plan).
+  resetTables("health_documents");
+  repo.setAppState(KEY, sqlAgo(2 * 60 * 60 * 1000));
+  const p = repo.createProposal("stub", "auto: weekly review", "", { changes: [] });
+  db.prepare(`UPDATE plan_proposals SET status = 'applied' WHERE id = ?`).run(p.id);
+  const plan = repo.sinceLastLookedCandidate();
+  assert.deepEqual(plan.action, { label: "See the change", kind: "plan-coach" });
+});

@@ -63,6 +63,9 @@ interface Change {
   weight: number;
   // The lead-line phrasing for this change (plain words, never a count/score).
   phrase: string;
+  // Where the LEAD change lives — one tap from the continuity line to the thing
+  // itself (an existing rail action kind; the arbiter's generic card renders it).
+  action?: { label: string; kind: string };
 }
 
 // ---- source: a new lab / health document ingested since the stamp ----
@@ -90,7 +93,7 @@ function newLabChange(stampSql: string): Change | null {
             : "A new health document";
     const phrase =
       count > 1 ? `${label} and ${count - 1} more result${count - 1 === 1 ? "" : "s"} came in` : `${label} came in`;
-    return { weight: 90, phrase };
+    return { weight: 90, phrase, action: { label: "See what came in", kind: "me-health-read" } };
   } catch {
     return null;
   }
@@ -109,7 +112,7 @@ function resolvedDirectiveChange(stampSql: string): Change | null {
     if (!row) return null;
     const marker = String(row.marker ?? "").trim();
     const phrase = marker ? `You closed out a ${marker} finding` : "You closed out a health finding";
-    return { weight: 85, phrase };
+    return { weight: 85, phrase, action: { label: "Open your read", kind: "me-health-read" } };
   } catch {
     return null;
   }
@@ -155,7 +158,11 @@ function recentPrChange(stampSql: string): Change | null {
       const prevBest = prior.reduce((m, r) => Math.max(m, epley1RM(Number(r.weight), Number(r.reps))), 0);
       if (est > prevBest && prevBest > 0) {
         const ex = String(s.exercise ?? "").trim() || "a lift";
-        return { weight: 50, phrase: `You set a new ${ex} best` };
+        return {
+          weight: 50,
+          phrase: `You set a new ${ex} best`,
+          action: { label: "See your lifts", kind: "tab:progress" },
+        };
       }
     }
     return null;
@@ -180,7 +187,11 @@ function appliedPlanChange(stampSql: string): Change | null {
       )
       .get(stampSql) as any;
     if (!row) return null;
-    return { weight: 60, phrase: "Your plan picked up an adjustment" };
+    return {
+      weight: 60,
+      phrase: "Your plan picked up an adjustment",
+      action: { label: "See the change", kind: "plan-coach" },
+    };
   } catch {
     return null;
   }
@@ -234,7 +245,11 @@ function journeyMilestoneChange(stampSql: string): Change | null {
   try {
     const m = latestJourneyMilestoneSince(stampSql);
     if (!m) return null;
-    return { weight: m.priority || 64, phrase: `You crossed ${m.label.toLowerCase()}` };
+    return {
+      weight: m.priority || 64,
+      phrase: `You crossed ${m.label.toLowerCase()}`,
+      action: { label: "See where you stand", kind: "tab:stand" },
+    };
   } catch {
     return null;
   }
@@ -320,6 +335,7 @@ export function sinceLastLookedCandidate(_date?: string): TodayAgendaCandidate |
     kicker: sinceKicker(stampSql),
     title: lead.phrase,
     ...(body ? { body } : {}),
+    ...(lead.action ? { action: lead.action } : {}),
     dismissible: true,
   };
 }

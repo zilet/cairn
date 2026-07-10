@@ -140,3 +140,30 @@ test("client buckets respect the server's tier split (surprise-budget deferral h
   assert.deepEqual(Array.from(skew.primary, (c) => c.id), ["fuel", "lately"]);
   assert.deepEqual(Array.from(skew.more, (c) => c.id), []);
 });
+
+test("the disclosure whispers when something genuinely new waits inside", () => {
+  const agenda = loadTodayAgendaClient();
+  const pending = [];
+  const html = agenda.railHtml(
+    {
+      primary: [{ id: "health-focus", kind: "health", tier: "primary", priority: 80, title: "Iron leads." }],
+      more: [
+        { id: "weekly-read", kind: "weekly", tier: "more", priority: 54, client_card: "weekly-read", waiting: true },
+        { id: "lately", kind: "lately", tier: "more", priority: 20, client_card: "lately" },
+      ],
+    },
+    pending
+  );
+  assert.match(html, /today-more-new/);
+  assert.match(html, /· one new inside/);
+
+  // No waiting items → no whisper.
+  const quiet = agenda.railHtml(
+    {
+      primary: [],
+      more: [{ id: "lately", kind: "lately", tier: "more", priority: 20, client_card: "lately" }],
+    },
+    []
+  );
+  assert.doesNotMatch(quiet, /today-more-new/);
+});

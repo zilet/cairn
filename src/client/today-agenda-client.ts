@@ -81,10 +81,16 @@ function todayAgendaRailHtml(
   const primaryHtml = buckets.primary.map(cardHtml).filter(Boolean).join("");
   const moreCards = buckets.more.map(cardHtml).filter(Boolean).join("");
   const n = buckets.more.length;
+  // A genuinely-new attention item waiting behind the disclosure gets a quiet
+  // "· one new" whisper on the summary — legible pull (the athlete can peek or
+  // let it take tomorrow's inline slot), never a badge, count, or push.
+  const nWaiting = buckets.more.filter((c) => c.waiting).length;
+  const waitingCue =
+    nWaiting > 0 ? `<span class="today-more-new">· ${nWaiting === 1 ? "one new" : "new things"} inside</span>` : "";
   const moreHtml =
     n > 0 && moreCards
       ? `<details class="today-more" id="todayMore">
-        <summary class="today-more-sum"><span class="today-more-lbl">${n === 1 ? "1 more" : `${n} more`}</span><span class="today-more-chev" aria-hidden="true">▾</span></summary>
+        <summary class="today-more-sum"><span class="today-more-lbl">${n === 1 ? "1 more" : `${n} more`}</span>${waitingCue}<span class="today-more-chev" aria-hidden="true">▾</span></summary>
         <div class="today-more-body">${moreCards}</div>
       </details>`
       : "";

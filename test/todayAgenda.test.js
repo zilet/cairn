@@ -373,3 +373,23 @@ test("markIntroduced:false computes the same agenda without spending the day's a
   );
   assert.ok(repo.getAppState("today_agenda_intro"), "the human pass records the introduction");
 });
+
+test("a genuinely-new item behind the disclosure is stamped waiting; the introduced one is not", () => {
+  seedHealthDoc("2025-12-01", [
+    marker("ApoB", 130, { unit: "mg/dL", flag: "high" }),
+    marker("LDL-C", 190, { unit: "mg/dL", flag: "high" }),
+  ]);
+  repo.deriveDirectives();
+  repo.addInsight({ kind: "weekly_read", text: "Solid week — held three sessions." });
+
+  const a = repo.todayAgenda();
+  const introduced = a.primary.find((c) => c.id === "health-focus");
+  const deferredWeekly = a.more.find((c) => c.id === "weekly-read");
+  assert.ok(introduced, "the day's one newcomer is inline");
+  assert.equal(introduced.waiting, undefined, "an introduced item never reads as waiting");
+  assert.equal(deferredWeekly?.waiting, true, "the deferred newcomer whispers from behind the disclosure");
+
+  // A routed historical date renders archival state — nothing waits there.
+  const past = repo.todayAgenda("2026-01-07");
+  assert.ok([...past.primary, ...past.more].every((c) => !c.waiting));
+});

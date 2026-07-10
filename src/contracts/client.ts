@@ -69,6 +69,9 @@ export interface ClientTodayAgendaCandidate {
   client_card?: string;
   dismissible?: boolean;
   revision?: string;
+  // A genuinely-new attention item waiting behind the "more" disclosure — the
+  // client may whisper "· one new" on the collapsed summary (pull, never push).
+  waiting?: boolean;
 }
 
 export interface ClientTodayAgenda {

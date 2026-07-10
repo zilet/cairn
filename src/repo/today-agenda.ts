@@ -67,6 +67,10 @@ export type TodayAgendaCandidate = {
   // underlying directive id: unchanged long-lived guidance keeps one revision,
   // while materially new evidence creates a new one and may surface again.
   revision?: string;
+  // A genuinely-new attention item waiting behind the "more" disclosure (the
+  // surprise budget deferred or hasn't yet introduced it). Lets the client show
+  // a quiet "· one new" cue on the disclosure — legible pull, never a push.
+  waiting?: boolean;
 };
 
 export type TodayAgenda = {
@@ -600,7 +604,17 @@ export function todayAgenda(date?: string, opts: { markIntroduced?: boolean } = 
   const inline = ordered.filter((c) => !heldOut.has(c.id));
   const primary = inline.slice(0, TODAY_PRIMARY_MAX).map((c) => ({ ...c, tier: "primary" as const }));
   const primaryIds = new Set(primary.map((c) => c.id));
-  const more = ordered.filter((c) => !primaryIds.has(c.id)).map((c) => ({ ...c, tier: "more" as const }));
+  // Stamp genuinely-new attention items that ended up behind the disclosure
+  // (deferred by the budget, or simply outranked) so the client can whisper
+  // "· one new" on the collapsed summary — the waiting item stays pull-only.
+  const ledger = d === localDateISO() ? loadIntroLedger() : null;
+  const more = ordered
+    .filter((c) => !primaryIds.has(c.id))
+    .map((c) => ({
+      ...c,
+      tier: "more" as const,
+      ...(ledger && SURPRISE_IDS.has(c.id) && !(introSig(c) in ledger) ? { waiting: true } : {}),
+    }));
 
   return { hero, primary, more, total: ordered.length };
 }

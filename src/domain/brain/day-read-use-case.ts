@@ -52,11 +52,12 @@ export function attachDayReadContext(readDate: string, read: Record<string, unkn
     arc = null;
   }
 
-  // The forward line rides on done days too: forwardLook() already resolves
-  // "next" as the day AFTER today's logged work, so it's the honest so-what
-  // that replaces the retired Start-session controls — a prospective line
-  // about TOMORROW, never a second recommendation for today (focus and
-  // est_minutes stay null on done; that contract is enforced upstream).
+  // The forward line rides on done days too: forwardLook() resolves "next"
+  // relative to today's logged work — the day AFTER a logged lifting session,
+  // or (for a cardio-only done day) the still-unstarted adaptive lifting pick.
+  // Either way it names the true next session: a prospective line, never a
+  // second recommendation for today (focus/est_minutes stay null on done;
+  // that contract is enforced upstream by enforceCompletionContract).
   let forward: string | null = null;
   try {
     forward = forwardLook(readDate).text || null;
