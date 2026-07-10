@@ -50,9 +50,9 @@ export function recordAgentRun(r: {
   try {
     const status = telemetryIdentifier(r.status || (r.ok ? "ok" : "error"), 60, r.ok ? "ok" : "error");
     const classifiedError = r.ok ? null : agentErrorClass(status, r.error_class);
-    const exitCode = Number(r.exit_code);
-    const inputTokens = Number(r.input_tokens);
-    const outputTokens = Number(r.output_tokens);
+    const exitCode = r.exit_code == null ? null : Number(r.exit_code);
+    const inputTokens = r.input_tokens == null ? null : Number(r.input_tokens);
+    const outputTokens = r.output_tokens == null ? null : Number(r.output_tokens);
     db.prepare(
       `INSERT INTO agent_runs (
          build_id, op, agent, ok, parsed, latency_ms, tried_json,
@@ -69,10 +69,10 @@ export function recordAgentRun(r: {
       String(status).slice(0, 60),
       classifiedError,
       classifiedError ? `${classifiedError}: agent attempt failed` : null,
-      Number.isFinite(exitCode) ? Math.round(exitCode) : null,
+      exitCode != null && Number.isFinite(exitCode) ? Math.round(exitCode) : null,
       telemetryModelName(r.model),
-      Number.isFinite(inputTokens) ? Math.round(inputTokens) : null,
-      Number.isFinite(outputTokens) ? Math.round(outputTokens) : null
+      inputTokens != null && Number.isFinite(inputTokens) ? Math.round(inputTokens) : null,
+      outputTokens != null && Number.isFinite(outputTokens) ? Math.round(outputTokens) : null
     );
   } catch {
     /* telemetry is best-effort — never break the loop on a write error */

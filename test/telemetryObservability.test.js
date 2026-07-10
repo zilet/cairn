@@ -27,12 +27,20 @@ test("agent telemetry persists taxonomy only and never raw CLI detail", () => {
   assert.equal(row.error_class, "invalid_json");
   assert.equal(row.error_message, "invalid_json: agent attempt failed");
   assert.ok(row.build_id);
+  assert.equal(row.exit_code, null);
+  assert.equal(row.input_tokens, null);
+  assert.equal(row.output_tokens, null);
   assert.equal(row.model, null);
   assert.doesNotMatch(JSON.stringify(row), /private ApoB|Users|secret|raw stdout/);
   db.prepare(`INSERT INTO agent_runs (build_id,op,agent,ok,parsed,tried_json) VALUES ('old-build','test','stub',1,1,0)`).run();
   const stats = getAgentStats();
   assert.equal(stats.build_id, row.build_id);
   assert.equal(stats.runs, 1);
+  assert.equal(stats.recent[0].exit_code, null);
+  assert.equal(stats.recent[0].input_tokens, null);
+  assert.equal(stats.recent[0].output_tokens, null);
+  assert.equal(stats.by_agent[0].input_tokens, null);
+  assert.equal(stats.by_agent[0].output_tokens, null);
 });
 
 test("agent telemetry retention removes old attempts", () => {
