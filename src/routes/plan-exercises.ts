@@ -15,6 +15,7 @@ import {
   listExercises,
   mergeExercises,
   reconcileExerciseGroups,
+  recoveryWeekStatus,
   replacePlan,
   savePlanDay,
   suggestAlternatives,
@@ -27,6 +28,12 @@ import {
 export const planExercisesRouter = Router();
 
 planExercisesRouter.get("/plan", (_req, res) => res.json(getPlan()));
+
+// The recovery-week story for the Plan surface: a waiting draft ('drafted'), the
+// applied lighter week in flight ('applied', ~a week from the apply stamp), or
+// null. The Plan tab's banner reads this so a reshaped week announces itself —
+// heads-up + what changed — instead of arriving silently.
+planExercisesRouter.get("/plan/recovery-status", (_req, res) => res.json(recoveryWeekStatus()));
 
 // Subscribe-able iCal of the training template — pull-not-push. Each plan day is
 // a weekly-recurring all-day event (Day 1 → Monday by default; ?start=0..6 to

@@ -6,7 +6,7 @@ All routes are mounted under **`/api`** (e.g. `GET /api/plan`). When `CAIRN_AUTH
 is set, every route except `GET /api/health` requires the token (`Authorization: Bearer …`,
 `X-Cairn-Token: …`, or `?token=…`). See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**245 routes** across 93 groups.
+**246 routes** across 93 groups.
 
 ## `/activities`
 
@@ -472,6 +472,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | GET | `/api/plan/:day` |  |
 | PUT | `/api/plan/:day` |  |
 | PUT | `/api/plan/:day/target` |  |
+| GET | `/api/plan/recovery-status` | The recovery-week story for the Plan surface: a waiting draft ('drafted'), the applied lighter week in flight ('applied', ~a week from the apply stamp), or null. The Plan tab's banner reads this so a reshaped week announces itself — heads-up + what changed — instead of arriving silently. |
 
 ## `/profile`
 

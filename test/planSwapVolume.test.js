@@ -232,6 +232,35 @@ test("recovery-week drafts: pending detection, fresh-draft supersession, failed 
   assert.equal(repo.pendingRecoveryDraft(), null);
 });
 
+test("recoveryWeekStatus tells the whole story: drafted → applied (with window) → over", () => {
+  const instr = `${repo.RECOVERY_WEEK_INSTRUCTION_PREFIX} (deload) week: cut working-set volume roughly in half.`;
+  assert.equal(repo.recoveryWeekStatus(), null, "nothing drafted, nothing running");
+
+  // Drafted: actionable state, carries the coach's own summary.
+  repo.savePlanDay(1, "Legs", "Legs", [{ exercise: "Back Squat", sets: 6, rep_low: 5, rep_high: 5, target_weight: 225 }]);
+  const p = repo.createProposal("claude", instr, "", {
+    summary: "Recovery week: working sets halved, same movements, 3-4 reps in reserve.",
+    changes: [{ day_number: 1, exercise: "Back Squat", sets: 3, target_weight: 185 }],
+  });
+  const drafted = repo.recoveryWeekStatus();
+  assert.equal(drafted?.state, "drafted");
+  assert.equal(drafted?.proposal_id, p.id);
+  assert.match(String(drafted?.summary), /halved/);
+
+  // Applying stamps the window: the Plan banner + conductor now say the lighter
+  // week is RUNNING (heads-up + what changed + when building resumes).
+  const r = repo.applyProposal(p.id);
+  assert.equal(r.ok, true);
+  const applied = repo.recoveryWeekStatus();
+  assert.equal(applied?.state, "applied");
+  assert.match(String(applied?.summary), /halved/, "the applied banner still says what changed");
+  assert.ok(applied.until > applied.applied_on, "carries when building resumes");
+
+  // The window lapses → the story ends quietly (no stale banner weeks later).
+  db.prepare(`UPDATE app_state SET value = '2020-01-01' WHERE key = 'recovery_week_applied'`).run();
+  assert.equal(repo.recoveryWeekStatus(), null);
+});
+
 // ── C6: the honest volume model ───────────────────────────────────────────────
 test("C6: warmups are excluded from working volume", () => {
   // One warmup well below the top load + three real working sets.

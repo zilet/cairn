@@ -87,7 +87,9 @@ function coachingFocusCardHtml(
     // has landed (draft_pending), the button gives way to a review LINK — state,
     // not a repeatable ask. Pure navigation via data-cfocus-go (the document-level
     // cfocusRoute listener), so it needs no per-surface wiring.
-    if (lead.domain === "recovery") {
+    if (lead.domain === "recovery" && !lead.recovery_active) {
+      // recovery_active renders NOTHING — the week is running, the lead is a
+      // confirmation, and re-offering the draft would be the same ask twice.
       // role="link" so the keydown navigator resolves the BUTTON's target
       // (plan-coach), not the surrounding lead row's.
       html += lead.draft_pending

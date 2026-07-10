@@ -104,6 +104,26 @@ test("a recovery lead speaks STATE once its one-tap draft is waiting (draft_pend
   assert.notEqual(sloppy.lead.draft_pending, true);
 });
 
+test("a RUNNING recovery week leads as a calm confirmation — no ask, even without deload signals", () => {
+  // recoveryWeekActive surfaces the lead on its own (the plan already IS the
+  // lighter week), independent of whether the original trigger still reads due.
+  const out = coachingFocus({
+    programState: { mesocycle: { phase: "accumulation" } },
+    recovery: {},
+    recoveryWeekActive: true,
+  });
+  assert.equal(out.available, true);
+  assert.equal(out.lead.domain, "recovery");
+  assert.equal(out.lead.recovery_active, true);
+  assert.match(out.lead.title, /recovery week/i);
+  assert.match(out.lead.why, /lighter/i, "explains the week is deliberately light");
+  assert.notEqual(out.lead.draft_pending, true, "never both states at once");
+
+  // Strict boolean — a truthy non-boolean never fabricates a running week.
+  const sloppy = coachingFocus({ programState: { mesocycle: { phase: "accumulation" } }, recovery: {}, recoveryWeekActive: 1 });
+  assert.notEqual(sloppy?.lead?.recovery_active, true);
+});
+
 test("coachingFocus promotes an act-now health lever to lead when training is steady", () => {
   const out = coachingFocus({
     goalMode: "maintain",

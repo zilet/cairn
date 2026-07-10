@@ -96,7 +96,17 @@ export interface ClientCoachingFocusItem {
   // A recovery lead whose one-tap draft already landed in Coach: the Program card
   // renders a "Review your recovery week →" link instead of the draft button.
   draft_pending?: boolean;
+  // The applied recovery week is running — the lead is a confirmation, no action.
+  recovery_active?: boolean;
 }
+
+// The recovery-week story for the Plan surface (GET /api/plan/recovery-status):
+// a waiting draft, the applied lighter week in flight, or null. The Plan tab's
+// banner announces a reshaped week instead of letting it arrive silently.
+export type ClientRecoveryWeekStatus =
+  | { state: "drafted"; proposal_id: number; summary: string | null }
+  | { state: "applied"; applied_on: string; until: string; summary: string | null }
+  | null;
 
 export interface ClientCoachingRetest {
   in_weeks: number | null;
