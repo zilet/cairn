@@ -37,31 +37,72 @@ export function warmToday(now: Date = new Date()): string {
 }
 
 function deterministicHeadline(r: { kind: string; focus?: string | null }): string {
-  return r.kind === "done" ? "You're done for today."
-    : r.kind === "rest" ? "Rest today."
-    : r.kind === "easy" ? "Take it easy."
-    : r.focus ? `${r.focus}.` : "Good to train.";
+  return r.kind === "done"
+    ? "You're done for today."
+    : r.kind === "rest"
+      ? "Rest today."
+      : r.kind === "easy"
+        ? "Take it easy."
+        : r.focus
+          ? `${r.focus}.`
+          : "Good to train.";
+}
+
+// Completion is a server-owned fact IN BOTH DIRECTIONS — the agent may voice a
+// DONE day warmly, but it can neither downgrade a completed day back into a
+// recommendation NOR claim "done" on a day the deterministic baseline says is
+// not done (a midnight precompute reading yesterday's session as today's would
+// otherwise lock the fresh day into a no-CTA "You're done" until the next
+// invalidation). Pure so the contract is directly unit-testable.
+export function enforceCompletionContract(out: any, baseline: any): any {
+  if (out.kind === "done" && baseline.kind !== "done") {
+    return {
+      ...baseline,
+      headline: deterministicHeadline(baseline),
+      source: "deterministic",
+      agent: out.agent,
+      tried: out.tried,
+    };
+  }
+  if (baseline.kind === "done") {
+    // An agent may phrase the debrief, but it cannot leave a prospective
+    // focus/duration behind or turn the completed work back into another
+    // recommendation. Older agents that still emit easy/train for the debrief
+    // fall all the way back to the deterministic acknowledgement.
+    if (out.kind !== "done") {
+      out.headline = deterministicHeadline(baseline);
+      out.why = baseline.why;
+    }
+    out.kind = "done";
+    out.focus = null;
+    out.est_minutes = null;
+  }
+  return out;
 }
 
 // Compute the agentic day-read with the deterministic floor as fallback. The
 // canonical (no-override) read is persisted to the day_reads cache; escape-hatch
 // overrides ("rough night" / "train anyway") are transient and never cached so
 // they can't poison tomorrow's instant open. Always resolves to a real read.
-export async function computeDayRead(
-  opts: { date?: string; override?: string; agent?: string } = {}
-): Promise<any> {
+export async function computeDayRead(opts: { date?: string; override?: string; agent?: string } = {}): Promise<any> {
   const { date, override, agent } = opts;
   const baseline = repo.dayRead(date);
   let out: any;
   try {
     const prompt = buildDayReadPrompt(undefined, { override, date });
     // Interactive (the Brief is on the morning-open path) → the short leash.
-    const { agent: chosen, result, tried } = await runChosen(agent, prompt, { op: "day_read", timeoutMs: INTERACTIVE_TIMEOUT_MS });
+    const {
+      agent: chosen,
+      result,
+      tried,
+    } = await runChosen(agent, prompt, { op: "day_read", timeoutMs: INTERACTIVE_TIMEOUT_MS });
     const p = result.parsed;
     const sane =
-      p && typeof p === "object" &&
+      p &&
+      typeof p === "object" &&
       (p.kind === "train" || p.kind === "easy" || p.kind === "rest" || p.kind === "done") &&
-      typeof p.why === "string" && p.why.trim();
+      typeof p.why === "string" &&
+      p.why.trim();
     if (sane) {
       out = {
         kind: p.kind,
@@ -84,29 +125,16 @@ export async function computeDayRead(
   } catch (e: any) {
     out = { ...baseline, headline: deterministicHeadline(baseline), source: "deterministic", error: e?.message };
   }
-  // "Already trained a real session today" is a deterministic FACT — the agent voices
-  // it (warm acknowledgement + recovery framing) but must never downgrade it to a
-  // bare easy/rest/train read (which is what mislabeled a hard session as "EASY DAY").
-  if (baseline.kind === "done") {
-    // Completion is a server-owned fact. An agent may phrase the debrief, but it
-    // cannot leave a prospective focus/duration behind or turn the completed work
-    // back into another recommendation. Older agents that still emit easy/train
-    // for the debrief fall all the way back to the deterministic acknowledgement.
-    if (out.kind !== "done") {
-      out.headline = deterministicHeadline(baseline);
-      out.why = baseline.why;
-    }
-    out.kind = "done";
-    out.focus = null;
-    out.est_minutes = null;
-  }
+  out = enforceCompletionContract(out, baseline);
   // The day-ahead `forward` line is NOT persisted here — it's attached fresh on every
   // /today-read response (it must reflect the current plan/balance, not a snapshot).
   // Record the athlete's steer on the read and ALWAYS persist it (the no-clobber
   // guard in saveDayRead protects a stored steer from a later canonical recompute).
   // Persisting the steer is what makes it survive a reload and reach the coach context.
   out.override = override && override.trim() ? override.trim() : null;
-  try { repo.saveDayRead(date || localToday(), out); } catch {}
+  try {
+    repo.saveDayRead(date || localToday(), out);
+  } catch {}
   return out;
 }
 
@@ -114,5 +142,7 @@ export async function computeDayRead(
 // never waits on an agent. Never throws — a failed compute still caches the
 // deterministic floor (instant), and the next material change re-derives it.
 export async function precomputeDayRead(date?: string): Promise<void> {
-  try { await computeDayRead({ date: date || localToday() }); } catch {}
+  try {
+    await computeDayRead({ date: date || localToday() });
+  } catch {}
 }

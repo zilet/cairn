@@ -157,3 +157,37 @@ test("absent signals never throw and never force rest (graceful degradation)", (
   assert.equal(r.kind, "easy");
   assert.equal(r.signals.consecutive_training_days, 0);
 });
+
+test("enforceCompletionContract clamps completion facts in BOTH directions", async () => {
+  const { enforceCompletionContract } = await import("../dist/dayread.js");
+
+  // Agent claims "done" on a day the server says is not done → deterministic floor.
+  const trainBaseline = { kind: "train", focus: "Lower body", why: "Recovered and due.", est_minutes: 60, signals: {} };
+  const falseDone = enforceCompletionContract(
+    { kind: "done", headline: "You're done.", why: "Great work!", focus: null, est_minutes: null, source: "agent", agent: "claude" },
+    trainBaseline
+  );
+  assert.equal(falseDone.kind, "train", "an agent can never mark an untrained day done");
+  assert.equal(falseDone.source, "deterministic");
+  assert.equal(falseDone.agent, "claude", "provenance survives the clamp");
+
+  // Agent downgrades a genuinely-done day → forced back to done, prospective residue stripped.
+  const doneBaseline = { kind: "done", focus: null, why: "Solid run in.", est_minutes: null, signals: {} };
+  const downgraded = enforceCompletionContract(
+    { kind: "easy", headline: "Take it easy.", why: "Light day.", focus: "Easy", est_minutes: 30, source: "agent" },
+    doneBaseline
+  );
+  assert.equal(downgraded.kind, "done");
+  assert.equal(downgraded.focus, null);
+  assert.equal(downgraded.est_minutes, null);
+
+  // Agent voices done correctly → its warm prose survives, residue still nulled.
+  const voiced = enforceCompletionContract(
+    { kind: "done", headline: "Strong push session.", why: "The work is in — refuel well.", focus: "Push", est_minutes: 60, source: "agent" },
+    doneBaseline
+  );
+  assert.equal(voiced.kind, "done");
+  assert.equal(voiced.headline, "Strong push session.");
+  assert.equal(voiced.focus, null);
+  assert.equal(voiced.est_minutes, null);
+});

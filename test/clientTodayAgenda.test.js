@@ -113,3 +113,30 @@ test("Today fuel card stays quiet when empty and links only to review/edit", () 
   assert.match(html, /data-cu="1220"/);
   assert.doesNotMatch(html, /chat|log something/i);
 });
+
+test("client buckets respect the server's tier split (surprise-budget deferral holds)", () => {
+  const agenda = loadTodayAgendaClient();
+  // The server's surprise budget deliberately left primary under-filled: the
+  // deferred newcomer at the top of `more` must NOT be promoted inline.
+  const buckets = agenda.renderableBuckets({
+    primary: [{ id: "health-focus", kind: "health", tier: "primary", priority: 80, title: "Iron is the priority." }],
+    more: [
+      { id: "weekly-read", kind: "weekly", tier: "more", priority: 54, client_card: "weekly-read" },
+      { id: "lately", kind: "lately", tier: "more", priority: 20, client_card: "lately" },
+    ],
+  });
+  assert.deepEqual(Array.from(buckets.primary, (c) => c.id), ["health-focus"]);
+  assert.deepEqual(Array.from(buckets.more, (c) => c.id), ["weekly-read", "lately"]);
+
+  // Forward-compat backfill still works: an UNRENDERABLE inline card's slot is
+  // filled from `more` so the surface never starves on version skew.
+  const skew = agenda.renderableBuckets({
+    primary: [
+      { id: "future", kind: "future", tier: "primary", priority: 90, client_card: "future-card" },
+      { id: "fuel", kind: "fuel", tier: "primary", priority: 8, client_card: "fuel" },
+    ],
+    more: [{ id: "lately", kind: "lately", tier: "more", priority: 5, client_card: "lately" }],
+  });
+  assert.deepEqual(Array.from(skew.primary, (c) => c.id), ["fuel", "lately"]);
+  assert.deepEqual(Array.from(skew.more, (c) => c.id), []);
+});

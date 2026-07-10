@@ -27,10 +27,26 @@ function todayAgendaCanRenderCard(candidate: ClientTodayAgendaCandidate | null |
 }
 
 function todayAgendaRenderableBuckets(agenda: Partial<ClientTodayAgenda> | null | undefined): TodayAgendaBuckets {
-  const ordered = [...(agenda?.primary || []), ...(agenda?.more || [])].filter(todayAgendaCanRenderCard);
+  // Respect the SERVER's tier split — it is the salience arbiter, and its
+  // surprise budget may deliberately leave primary under-filled while a
+  // deferred newcomer waits at the top of `more`. Re-flattening and re-slicing
+  // here would promote that newcomer inline, defeating the one-new-thing-per-day
+  // budget. Only backfill across the boundary when an inline card was dropped
+  // as UNRENDERABLE (a forward card from a newer server) — restoring exactly
+  // the forward-compat case the old flatten existed for. Server-primary items
+  // beyond the client cap still flow into `more` (never silently dropped).
+  const renderablePrimary = (agenda?.primary || []).filter(todayAgendaCanRenderCard);
+  const primary = renderablePrimary.slice(0, TODAY_PRIMARY_CLIENT_MAX);
+  const more = [
+    ...renderablePrimary.slice(TODAY_PRIMARY_CLIENT_MAX),
+    ...(agenda?.more || []).filter(todayAgendaCanRenderCard),
+  ];
+  const droppedUnrenderable = (agenda?.primary || []).length - renderablePrimary.length;
+  const backfillCount = Math.min(droppedUnrenderable, TODAY_PRIMARY_CLIENT_MAX - primary.length);
+  const backfill = backfillCount > 0 ? more.splice(0, backfillCount) : [];
   return {
-    primary: ordered.slice(0, TODAY_PRIMARY_CLIENT_MAX),
-    more: ordered.slice(TODAY_PRIMARY_CLIENT_MAX),
+    primary: [...primary, ...backfill],
+    more,
   };
 }
 
@@ -54,7 +70,7 @@ function todayAgendaGenericCardHtml(candidate: ClientTodayAgendaCandidate, revea
 
 function todayAgendaRailHtml(
   agenda: Partial<ClientTodayAgenda> | null | undefined,
-  genericPending: ClientTodayAgendaCandidate[],
+  genericPending: ClientTodayAgendaCandidate[]
 ): string {
   const buckets = todayAgendaRenderableBuckets(agenda);
   const cardHtml = (candidate: ClientTodayAgendaCandidate) => {
@@ -88,9 +104,10 @@ function todayFuelCardHtml(day: ClientDayIntake | null | undefined): string {
   let remLine = "";
   if (day?.remaining && day.target) {
     const left = Math.round(Number(day.remaining.kcal));
-    remLine = left > 0
-      ? `<span class="fuel-rem">~${left} left</span>`
-      : `<span class="fuel-rem fuel-rem-done">fuel's in for today</span>`;
+    remLine =
+      left > 0
+        ? `<span class="fuel-rem">~${left} left</span>`
+        : `<span class="fuel-rem fuel-rem-done">fuel's in for today</span>`;
   }
   const word = count === 1 ? "item" : "items";
   return `<button class="fuel-card reveal" id="fuelCard" style="--i:0" type="button" title="Review &amp; edit today's food">
