@@ -68,6 +68,7 @@ export interface ClientTodayAgendaCandidate {
   action?: ClientTodayAgendaAction;
   client_card?: string;
   dismissible?: boolean;
+  revision?: string;
 }
 
 export interface ClientTodayAgenda {

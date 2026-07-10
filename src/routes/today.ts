@@ -1,5 +1,6 @@
 import { Router } from "express";
 import {
+  acknowledgeTodayAgendaCandidate,
   confirmGoalCheckin,
   dismissGoalCheckin,
   learnedTimeline,
@@ -57,6 +58,17 @@ todayRouter.get("/today-agenda", (req, res) => {
     /* best-effort */
   }
   res.json(agenda);
+});
+
+// Presentation acknowledgement only: this retires the current semantic revision
+// from Today without resolving or dismissing the underlying health directives.
+// Materially new evidence creates a new revision and may surface again.
+todayRouter.post("/today-agenda/ack", (req, res) => {
+  const id = String(req.body?.id ?? "").trim();
+  if (!id) return res.status(400).json({ ok: false, error: "id required" });
+  const revision = typeof req.body?.revision === "string" ? req.body.revision : null;
+  const result = acknowledgeTodayAgendaCandidate(id, revision);
+  res.status(result.stale ? 409 : result.ok ? 200 : 404).json(result);
 });
 
 // The legible "what Cairn has learned about you" timeline (pull-only; no scores).

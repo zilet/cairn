@@ -253,7 +253,7 @@ test("Today rail controller wires generic agenda navigation and dismiss controls
     { id: "chat", title: "Ask", action: { label: "Ask", kind: "chat", payload: "Explain this" } },
     { id: "coach", action: { label: "Plan", kind: "plan-coach" } },
     { id: "standing", action: { label: "Standing", kind: "me-health-standing" } },
-    { id: "read", action: { label: "Read", kind: "me-health-read" } },
+    { id: "read", revision: "health-v1", action: { label: "Read", kind: "me-health-read" } },
     { id: "tab", action: { label: "Progress", kind: "tab:progress" } },
   ];
 
@@ -269,6 +269,7 @@ test("Today rail controller wires generic agenda navigation and dismiss controls
     ["chat", "Explain this"],
     ["tab", "plan"],
     ["tab", "stand"],
+    ["api", "/today-agenda/ack"],
     ["tab", "stand"],
     ["tab", "progress"],
     ["collapse", card],

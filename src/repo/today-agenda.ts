@@ -23,6 +23,8 @@
 // just the hero.
 // ============================================================================
 
+import { createHash } from "node:crypto";
+
 // Import each producer read DIRECTLY from its sibling module (never from the
 // barrel ../repo.js) — repo modules do this to avoid a circular import, since the
 // barrel re-exports this very file.
@@ -46,6 +48,7 @@ import { listProposals } from "./profile.js";
 import { sinceLastLookedCandidate } from "./since-last.js";
 import { goalCheckinCandidate } from "./goal-checkin.js";
 import { listBrainDecisions } from "./brain-decisions.js";
+import { getAppState, setAppState } from "./app-state.js";
 
 // ---- The shared Today-agenda contract (also consumed by sibling Era-2 cards) ----
 export type TodayAgendaTier = "hero" | "primary" | "more";
@@ -60,6 +63,10 @@ export type TodayAgendaCandidate = {
   action?: { label: string; kind: string; payload?: any };
   client_card?: string; // names an EXISTING client-rendered card id to render in place of generic text
   dismissible?: boolean;
+  // Semantic version of a presentation-only attention item. This is not the
+  // underlying directive id: unchanged long-lived guidance keeps one revision,
+  // while materially new evidence creates a new one and may surface again.
+  revision?: string;
 };
 
 export type TodayAgenda = {
@@ -182,7 +189,9 @@ function planDraftCandidate(): TodayAgendaCandidate | null {
   const plans = listProposals(8) as any[];
   const drafts = (Array.isArray(plans) ? plans : []).filter((p) => p && p.status === "draft");
   if (!drafts.length) return null;
-  const raw = String(drafts[0]?.instruction || "").replace(/^(auto|chat):\s*/i, "").trim();
+  const raw = String(drafts[0]?.instruction || "")
+    .replace(/^(auto|chat):\s*/i, "")
+    .trim();
   return {
     id: "draft-proposals",
     kind: "plan",
@@ -200,7 +209,47 @@ function planDraftCandidate(): TodayAgendaCandidate | null {
 // picture ranks moderate. The health line on Today (#ctxHealth) shows the review's
 // lead focus; this candidate gates that surface on whether the connected brain has
 // something genuinely pressing. Reads healthFocus + listActiveDirectives. ----
-function healthCandidate(): TodayAgendaCandidate | null {
+const HEALTH_AGENDA_SEEN_KEY = "today_agenda_seen:health-focus";
+
+function clipAgenda(value: unknown, max = 230): string {
+  const text = String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
+}
+
+function healthAgendaRevision(focus: any, directives: any[]): string {
+  const lead = focus?.lead ?? null;
+  const material = {
+    group: lead?.group ?? null,
+    tier: lead?.tier ?? null,
+    markers: Array.isArray(lead?.markers) ? lead.markers : [],
+    readings: Array.isArray(lead?.readings)
+      ? lead.readings.map((row: any) => ({
+          name: row?.name ?? null,
+          value: row?.value ?? null,
+          flag: row?.flag ?? null,
+          trend: row?.trend ?? null,
+        }))
+      : [],
+    moves: lead?.moves ?? {},
+    directives: directives
+      .map((row: any) => ({
+        key: row?.directive_key ?? `${row?.marker ?? ""}:${row?.domain ?? ""}`,
+        marker: row?.marker ?? null,
+        side: row?.trigger_side ?? null,
+        value: row?.trigger_value ?? null,
+        date: row?.trigger_date ?? null,
+      }))
+      .sort((a: any, b: any) => String(a.key).localeCompare(String(b.key))),
+  };
+  return createHash("sha256").update(JSON.stringify(material)).digest("hex").slice(0, 24);
+}
+
+function healthCandidate(date: string, opts: { includeSeen?: boolean } = {}): TodayAgendaCandidate | null {
+  // This is an attention delta for NOW, never a historical Today card. The durable
+  // health strategy remains in Stand and in the plan-shaping brain regardless.
+  if (date !== localDateISO()) return null;
   const directives = listActiveDirectives() as any[];
   if (!Array.isArray(directives) || !directives.length) return null; // nothing flagged → silent
   const focus = healthFocus();
@@ -209,16 +258,49 @@ function healthCandidate(): TodayAgendaCandidate | null {
   // No off-optimal priorities at all → the active directives are quiet/maintenance;
   // don't claim a Today slot for them.
   if (actNow <= 0 && track <= 0) return null;
+  const lead = focus?.lead as any;
+  if (!lead) return null;
+  const revision = healthAgendaRevision(focus, directives);
+  if (!opts.includeSeen && getAppState(HEALTH_AGENDA_SEEN_KEY) === revision) return null;
+  const move = lead?.moves?.nutrition || lead?.moves?.training || lead?.moves?.watch || "";
+  const body = clipAgenda(
+    move || lead?.why || "Open the connected read to see how this is already shaping training and meals."
+  );
   return {
     id: "health-focus",
     kind: "health",
     tier: actNow > 0 ? "primary" : "more",
     priority: actNow > 0 ? 80 : 46,
     kicker: "HEALTH READ",
-    title: actNow > 0 ? "A health lever is worth reading today" : "Your connected health read has an update",
-    body: "Open the full read when you want the context behind today's coaching.",
+    title: clipAgenda(focus.headline || `${lead.group} is shaping today's coaching.`, 120),
+    body,
     action: { label: "Open read", kind: "me-health-read" },
+    dismissible: true,
+    revision,
   };
+}
+
+export function acknowledgeTodayAgendaCandidate(
+  id: string,
+  revision?: string | null
+): { ok: boolean; id: string; revision?: string; stale?: boolean; error?: string } {
+  if (id !== "health-focus") return { ok: false, id, error: "candidate is not acknowledgement-aware" };
+  const current = healthCandidate(localDateISO(), { includeSeen: true });
+  if (!current?.revision) return { ok: false, id, error: "candidate is no longer active" };
+  if (revision && revision !== current.revision) {
+    return {
+      ok: false,
+      id,
+      revision: current.revision,
+      stale: true,
+      error: "candidate changed before acknowledgement",
+    };
+  }
+  setAppState(HEALTH_AGENDA_SEEN_KEY, current.revision);
+  if (getAppState(HEALTH_AGENDA_SEEN_KEY) !== current.revision) {
+    return { ok: false, id, revision: current.revision, error: "acknowledgement could not be persisted" };
+  }
+  return { ok: true, id, revision: current.revision };
 }
 
 // ---- standing momentum: a genuine win in motion (fat off since a DEXA, blood
@@ -229,7 +311,11 @@ function healthCandidate(): TodayAgendaCandidate | null {
 // trajectory in plain words. Reads standingMomentum (deterministic, null-safe). ----
 function standingMomentumCandidate(_date: string): TodayAgendaCandidate | null {
   let m: any = null;
-  try { m = standingMomentum(); } catch { m = null; }
+  try {
+    m = standingMomentum();
+  } catch {
+    m = null;
+  }
   if (!m || !m.has_momentum || !m.summary) return null;
   return {
     id: "standing-momentum",
@@ -259,9 +345,7 @@ function adjustmentsCandidate(date: string, weeklyStats?: any): TodayAgendaCandi
   if (!Array.isArray(rows) || !rows.length) return null;
   // A deload or a true gap (not a recovering / already-programmed group) lifts the
   // urgency a little above a routine progression digest.
-  const pressing = rows.some(
-    (a) => a && (a.kind === "deload" || (a.kind === "gap" && !a.recovering)),
-  );
+  const pressing = rows.some((a) => a && (a.kind === "deload" || (a.kind === "gap" && !a.recovering)));
   return {
     id: "program-adjustments",
     kind: "plan",
@@ -371,19 +455,25 @@ export function todayAgenda(date?: string): TodayAgenda {
   // Build every candidate, each isolated so one failing source never breaks the
   // agenda. Producers that read by date take `d`; the rest are date-agnostic.
   const candidates: TodayAgendaCandidate[] = [];
-  const add = (c: TodayAgendaCandidate | null) => { if (c) candidates.push(c); };
+  const add = (c: TodayAgendaCandidate | null) => {
+    if (c) candidates.push(c);
+  };
 
   // The weekly stats read is shared by three candidates below (adjustments/week-ahead/
   // lately) — compute it ONCE and thread it in rather than recomputing per candidate.
   // Null on failure (each candidate falls back to its own compute, then self-omits).
   let weeklyStats: any = null;
-  try { weeklyStats = getWeeklyStats(d); } catch { weeklyStats = null; }
+  try {
+    weeklyStats = getWeeklyStats(d);
+  } catch {
+    weeklyStats = null;
+  }
 
   add(safe(() => fuelCandidate(d)));
   add(safe(() => reconcileCandidate()));
   add(safe(() => announcedChangeCandidate()));
   add(safe(() => planDraftCandidate()));
-  add(safe(() => healthCandidate()));
+  add(safe(() => healthCandidate(d)));
   if (showPlanForward) add(safe(() => adjustmentsCandidate(d, weeklyStats)));
   add(safe(() => weeklyCandidate()));
   add(safe(() => insightCandidate()));
@@ -403,7 +493,7 @@ export function todayAgenda(date?: string): TodayAgenda {
   // Stable sort by priority desc. Array.prototype.sort is stable in modern V8, but
   // tie-break on insertion order explicitly so the budget split is deterministic.
   const indexed = candidates.map((c, i) => ({ c, i }));
-  indexed.sort((a, b) => (b.c.priority - a.c.priority) || (a.i - b.i));
+  indexed.sort((a, b) => b.c.priority - a.c.priority || a.i - b.i);
   const ordered = indexed.map((x) => x.c);
 
   // Budget: the top TODAY_PRIMARY_MAX become `primary` (rendered inline); the rest

@@ -162,9 +162,7 @@ test("surfaced candidates carry the tier of their bucket (primary vs more)", () 
 
 test("agenda-only draft, health, and running candidates render as generic cards", () => {
   repo.createProposal("stub", "auto: weekly review", "", { changes: [] });
-  repo.savePlanDay(1, "Run", "Endurance", [
-    { kind: "cardio", exercise: "Long run", target_distance_km: 16 },
-  ]);
+  repo.savePlanDay(1, "Run", "Endurance", [{ kind: "cardio", exercise: "Long run", target_distance_km: 16 }]);
   seedHealthDoc("2025-12-01", [
     marker("ApoB", 130, { unit: "mg/dL", flag: "high" }),
     marker("LDL-C", 190, { unit: "mg/dL", flag: "high" }),
@@ -183,16 +181,57 @@ test("agenda-only draft, health, and running candidates render as generic cards"
   assert.equal(byId("health-focus")?.client_card, undefined, "health focus must render as generic agenda copy");
   assert.equal(byId("health-focus")?.action?.kind, "me-health-read");
   assert.ok(byId("health-focus")?.title);
+  assert.ok(byId("health-focus")?.revision, "health attention is versioned by its material content");
+  assert.equal(byId("health-focus")?.dismissible, true);
 
   assert.equal(byId("run-compliance")?.client_card, undefined, "run compliance must render as generic agenda copy");
   assert.equal(byId("run-compliance")?.action?.kind, "plan-endurance");
   assert.ok(byId("run-compliance")?.title);
 });
 
-test("rest or easy Brief suppresses plan-forward agenda cards", () => {
-  repo.savePlanDay(1, "Run", "Endurance", [
-    { kind: "cardio", exercise: "Easy run", target_distance_km: 10 },
+test("opening a health read retires only that revision until material evidence changes", () => {
+  seedHealthDoc("2025-12-01", [
+    marker("ApoB", 130, { unit: "mg/dL", flag: "high" }),
+    marker("LDL-C", 190, { unit: "mg/dL", flag: "high" }),
   ]);
+  repo.deriveDirectives();
+
+  const first = repo.todayAgenda();
+  const health = [...first.primary, ...first.more].find((item) => item.id === "health-focus");
+  assert.ok(health?.revision);
+  assert.doesNotMatch(health.title, /worth reading/i);
+
+  const ack = repo.acknowledgeTodayAgendaCandidate("health-focus", health.revision);
+  assert.equal(ack.ok, true);
+  const quiet = repo.todayAgenda();
+  assert.ok(![...quiet.primary, ...quiet.more].some((item) => item.id === "health-focus"));
+  assert.ok(
+    (repo.listActiveDirectives() || []).length > 0,
+    "presentation acknowledgement never resolves plan-shaping directives"
+  );
+
+  // A materially different trigger value produces a new semantic revision and is
+  // allowed back onto Today once; a simple reload/re-derive of identical content is not.
+  seedHealthDoc(localDaysAgo(0), [
+    marker("ApoB", 155, { unit: "mg/dL", flag: "high" }),
+    marker("LDL-C", 220, { unit: "mg/dL", flag: "high" }),
+  ]);
+  repo.deriveDirectives();
+  const changed = repo.todayAgenda();
+  const resurfaced = [...changed.primary, ...changed.more].find((item) => item.id === "health-focus");
+  assert.ok(resurfaced?.revision);
+  assert.notEqual(resurfaced.revision, health.revision);
+});
+
+test("health attention never appears on a historical Today date", () => {
+  seedHealthDoc("2025-12-01", [marker("LDL-C", 190, { unit: "mg/dL", flag: "high" })]);
+  repo.deriveDirectives();
+  const agenda = repo.todayAgenda("2026-01-07");
+  assert.ok(![...agenda.primary, ...agenda.more].some((item) => item.id === "health-focus"));
+});
+
+test("rest or easy Brief suppresses plan-forward agenda cards", () => {
+  repo.savePlanDay(1, "Run", "Endurance", [{ kind: "cardio", exercise: "Easy run", target_distance_km: 10 }]);
   repo.savePlanDay(2, "Push", "Shoulders", [
     { exercise: "Lateral Raise", sets: 3, rep_low: 12, rep_high: 15, target_weight: 20 },
   ]);
@@ -217,9 +256,7 @@ test("rest or easy Brief suppresses plan-forward agenda cards", () => {
 });
 
 test("cold same-day Brief cache does not speculate with plan-forward agenda cards", () => {
-  repo.savePlanDay(1, "Run", "Endurance", [
-    { kind: "cardio", exercise: "Easy run", target_distance_km: 10 },
-  ]);
+  repo.savePlanDay(1, "Run", "Endurance", [{ kind: "cardio", exercise: "Easy run", target_distance_km: 10 }]);
   resetTables("day_reads");
 
   const agenda = repo.todayAgenda(localDaysAgo(0));
@@ -231,9 +268,7 @@ test("cold same-day Brief cache does not speculate with plan-forward agenda card
 });
 
 test("a routed Today date anchors weekly producers to that week", () => {
-  repo.savePlanDay(1, "Run", "Endurance", [
-    { kind: "cardio", exercise: "Easy run", target_distance_km: 10 },
-  ]);
+  repo.savePlanDay(1, "Run", "Endurance", [{ kind: "cardio", exercise: "Easy run", target_distance_km: 10 }]);
   repo.addActivity({ type: "run", date: isoDaysAgo(0), duration_min: 50, distance_km: 10 });
 
   const pastAgenda = repo.todayAgenda("2026-01-07");
@@ -255,7 +290,7 @@ test("a throwing producer is isolated — the agenda still returns the rest", ()
   // genuinely throw by dropping a table it reads. The reconcile producer reads
   // garmin_activities; with that table gone its SQL throws, and the arbiter's
   // per-producer try/catch (safe()) must still return the hero + the other candidates.
-  seedIntake(0, 700, { protein_g: 45 });                       // fuel — independent of garmin
+  seedIntake(0, 700, { protein_g: 45 }); // fuel — independent of garmin
   repo.addInsight({ kind: "connection", text: "A genuine connection." }); // insight — independent
 
   // Capture the exact CREATE statement so we can restore the table verbatim after —

@@ -101,10 +101,14 @@ function coachingFocusThreadHtml(focus: ClientCoachingFocus | null | undefined):
   if (!focus || !focus.available || !focus.lead) return "";
   const title = focus.lead.title || "";
   if (!title) return "";
-  return `<button class="cfocus-thread" type="button" data-cfocus-go="stand">
+  const domain = isCoachingFocusDomain(focus.lead.domain) ? focus.lead.domain : "stand";
+  const why = focus.lead.why ? String(focus.lead.why) : "";
+  return `<button class="cfocus-thread" type="button" data-cfocus-go="${escAttr(domain)}">
     <span class="cfocus-thread-arrow" aria-hidden="true">↳</span>
-    <span class="cfocus-thread-lbl lbl">Focus now</span>
-    <span class="cfocus-thread-txt">${escHtml(title)}</span>
+    <span class="cfocus-thread-copy">
+      <span class="cfocus-thread-top"><span class="cfocus-thread-lbl lbl">This block</span><span class="cfocus-thread-txt">${escHtml(title)}</span></span>
+      ${why ? `<span class="cfocus-thread-why">${escHtml(why)}</span>` : ""}
+    </span>
     <span class="cfocus-thread-go" aria-hidden="true">→</span>
   </button>`;
 }

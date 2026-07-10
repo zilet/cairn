@@ -74,6 +74,7 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/session-suggest",
   "/week-ahead",
   "/today-agenda",
+  "/today-agenda/ack",
   "/learned-timeline",
   "/since-last",
   "/guidelines",
