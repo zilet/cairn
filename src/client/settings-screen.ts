@@ -88,6 +88,8 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
   const diagnosticsState: SettingsDiagnosticsUiState = {
     status: "idle",
     data: null,
+    readinessStatus: "idle",
+    readiness: null,
     days: 7,
     source: "all",
     severity: "all",
@@ -245,15 +247,30 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
   async function loadSystemDiagnostics(): Promise<void> {
     const requestToken = ++diagnosticsState.requestToken;
     const days = diagnosticsState.days;
-    try {
-      const result = await api(`/diagnostics?recent=100&days=${days}`, { cache: "no-store" });
-      if (requestToken !== diagnosticsState.requestToken) return;
-      diagnosticsState.data = result as import("../contracts/client-api.js").ClientDiagnosticsResponse;
+    const [diagnosticsResult, readinessResult] = await Promise.allSettled([
+      api(`/diagnostics?recent=100&days=${days}`, { cache: "no-store" }),
+      api("/ready", { cache: "no-store", acceptErrorBody: true }),
+    ]);
+    if (requestToken !== diagnosticsState.requestToken) return;
+    if (diagnosticsResult.status === "fulfilled") {
+      diagnosticsState.data = diagnosticsResult.value as import("../contracts/client-api.js").ClientDiagnosticsResponse;
       diagnosticsState.status = "ready";
-    } catch {
-      if (requestToken !== diagnosticsState.requestToken) return;
+    } else {
       diagnosticsState.data = null;
       diagnosticsState.status = "unavailable";
+    }
+    if (readinessResult.status === "fulfilled") {
+      const readiness = readinessResult.value as import("../contracts/client-api.js").ClientReadinessResponse;
+      if (readiness && typeof readiness.ok === "boolean" && (readiness.database === "ok" || readiness.database === "unavailable")) {
+        diagnosticsState.readiness = readiness;
+        diagnosticsState.readinessStatus = "ready";
+      } else {
+        diagnosticsState.readiness = null;
+        diagnosticsState.readinessStatus = "unavailable";
+      }
+    } else {
+      diagnosticsState.readiness = null;
+      diagnosticsState.readinessStatus = "unavailable";
     }
     if (state.tab === "settings" && state.setSeg === "system") renderSystemSlice();
   }
@@ -262,10 +279,13 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
     const slot = slice();
     if (diagnosticsState.status === "idle") {
       diagnosticsState.status = "loading";
+      diagnosticsState.readinessStatus = "loading";
       void loadSystemDiagnostics();
     }
     slot.innerHTML = `<div class="reveal">${CairnSettingsClient.diagnosticsCard(diagnosticsState.data, {
       status: diagnosticsState.status,
+      readinessStatus: diagnosticsState.readinessStatus === "idle" ? "loading" : diagnosticsState.readinessStatus,
+      readiness: diagnosticsState.readiness,
       days: diagnosticsState.days,
       source: diagnosticsState.source,
       severity: diagnosticsState.severity,
@@ -285,6 +305,8 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
         diagnosticsState.recentPage = 0;
         diagnosticsState.data = null;
         diagnosticsState.status = "loading";
+        diagnosticsState.readiness = null;
+        diagnosticsState.readinessStatus = "loading";
         renderSystemSlice();
         void loadSystemDiagnostics();
       }),
@@ -301,11 +323,14 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
       diagnosticsState.recentPage = 0;
       renderSystemSlice();
     });
-    optionalEl<HTMLButtonElement>("#sysDiagRetry")?.addEventListener("click", () => {
-      diagnosticsState.status = "loading";
-      renderSystemSlice();
-      void loadSystemDiagnostics();
-    });
+    slot.querySelectorAll<HTMLButtonElement>("[data-system-retry]").forEach((button) =>
+      button.addEventListener("click", () => {
+        diagnosticsState.status = "loading";
+        diagnosticsState.readinessStatus = "loading";
+        renderSystemSlice();
+        void loadSystemDiagnostics();
+      }),
+    );
     slot.querySelectorAll<HTMLButtonElement>("[data-diag-page]").forEach((button) =>
       button.addEventListener("click", () => {
         const delta = Number(button.dataset.diagDelta) || 0;

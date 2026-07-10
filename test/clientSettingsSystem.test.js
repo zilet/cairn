@@ -12,6 +12,9 @@ test("System health is lazy, explicitly windowed, and isolated from Settings edi
   assert.match(screen, /api\("\/agent-stats\?recent=12&days=7"\)/);
   assert.doesNotMatch(screen.match(/async function fetchSettingsBundle[\s\S]*?\n}/)?.[0] || "", /\/diagnostics/);
   assert.match(screen, /api\(`\/diagnostics\?recent=100&days=\$\{days}`/);
+  assert.match(screen, /api\("\/ready", \{ cache: "no-store", acceptErrorBody: true \}\)/);
+  assert.match(screen, /readinessStatus: "idle"/);
+  assert.match(screen, /typeof readiness\.ok === "boolean"/);
   assert.match(screen, /status: "idle"/);
   assert.match(screen, /status = "unavailable"/);
   assert.match(screen, /system: renderSystemSlice/);
@@ -24,6 +27,7 @@ test("System health is lazy, explicitly windowed, and isolated from Settings edi
   assert.match(systemSlice, /#sysDiagSeverity/);
   assert.match(systemSlice, /data-diag-page/);
   assert.match(systemSlice, /data-copy-request/);
+  assert.match(systemSlice, /readinessStatus/);
   assert.doesNotMatch(systemSlice, /markDirty|persistSettings|savebar/, "diagnostic exploration never opens the Settings save bar");
   assert.match(saveBar, /closest\("\[data-save-ignore\]"\)/, "shared save tracking ignores explicitly non-editing controls");
 });

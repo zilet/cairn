@@ -9,7 +9,10 @@
 // is the natural partner of api() + the offline hairline, and because api-client
 // is already precached by the service worker.
 
-type CairnApiOptions = RequestInit & { headers?: Record<string, string> };
+type CairnApiOptions = RequestInit & {
+  headers?: Record<string, string>;
+  acceptErrorBody?: boolean;
+};
 type CairnApiResponse<Path extends string> = import("../contracts/client.js").ClientApiResponse<Path>;
 
 // ---------- optional shared-token auth ----------
@@ -376,6 +379,7 @@ function buildFetchInit(
   opts: CairnApiOptions,
   headers: Record<string, string>
 ): { init: RequestInit; cleanup: () => void } {
+  const { acceptErrorBody: _acceptErrorBody, ...fetchOptions } = opts;
   let signal = opts.signal;
   let cleanup = () => {};
   if (shouldArmGetTimeout(method, opts) && typeof AbortController === "function") {
@@ -388,7 +392,7 @@ function buildFetchInit(
       };
     }
   }
-  return { init: { ...opts, headers, signal }, cleanup };
+  return { init: { ...fetchOptions, headers, signal }, cleanup };
 }
 
 function api<Path extends string>(p: Path, opts: CairnApiOptions = {}): Promise<CairnApiResponse<Path>> {
@@ -456,6 +460,13 @@ function api<Path extends string>(p: Path, opts: CairnApiOptions = {}): Promise<
       }
       setOffline(false); // a real response landed, Cairn is reachable
       if (result.status < 200 || result.status >= 300) {
+        // Readiness uses 503 as meaningful operator truth (for example, a stale
+        // scheduler) and still returns a bounded JSON contract. Opt-in callers
+        // can consume that body without turning the expected signal into a
+        // recursive client diagnostic.
+        if (opts.acceptErrorBody && !result.invalidJson && result.body !== undefined) {
+          return result.body as CairnApiResponse<Path>;
+        }
         const error = new CairnApiError({
           kind: "http",
           method,

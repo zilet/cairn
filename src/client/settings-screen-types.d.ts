@@ -82,6 +82,8 @@ type SettingsScreenBundle = {
 type SettingsDiagnosticsUiState = {
   status: "idle" | "loading" | "ready" | "unavailable";
   data: import("../contracts/client-api.js").ClientDiagnosticsResponse | null;
+  readinessStatus: "idle" | "loading" | "ready" | "unavailable";
+  readiness: import("../contracts/client-api.js").ClientReadinessResponse | null;
   days: 1 | 7 | 30;
   source: string;
   severity: string;

@@ -1547,6 +1547,23 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
 .sysdiag-privacy{color:var(--muted);margin:9px 0 12px;line-height:1.45}
 .sysdiag-state{display:flex;align-items:flex-start;gap:11px;margin-top:13px;color:var(--ink-2)}
 .sysdiag-state p{margin:4px 0 10px;color:var(--muted);font-size:.8rem;line-height:1.45}
+.sysdiag-section-title{margin-top:15px;color:var(--muted);font-family:var(--font-ui);font-size:.62rem;
+  font-weight:700;letter-spacing:.1em;text-transform:uppercase}
+.sysdiag-readiness{margin-top:12px;padding:12px 13px;border:1px solid var(--line);border-radius:11px;background:var(--card-2)}
+.sysdiag-readiness .sysdiag-section-title{margin-top:0}
+.sysdiag-readiness-warning{border-color:rgba(184,132,35,.26);background:rgba(184,132,35,.06)}
+.sysdiag-readiness-error{border-color:rgba(161,67,52,.25);background:rgba(161,67,52,.05)}
+.sysdiag-runtime-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px 16px;margin-top:10px}
+.sysdiag-runtime-stat{display:flex;flex-direction:column;min-width:0;gap:2px}
+.sysdiag-runtime-stat>span{color:var(--muted);font-size:.61rem;text-transform:uppercase;letter-spacing:.07em;font-weight:650}
+.sysdiag-runtime-stat>b{color:var(--ink-2);font-size:.76rem;line-height:1.35;overflow-wrap:anywhere}
+.sysdiag-runtime-stat>em{color:var(--gold-deep);font-size:.67rem;font-style:normal;font-weight:650}
+.sysdiag-runtime-stat small time{display:flex;flex-direction:column;color:var(--muted);font-size:.64rem}
+.sysdiag-warnings{margin:10px 0 0;padding:9px 10px 9px 26px;border-radius:9px;background:rgba(184,132,35,.1);
+  color:var(--ink-2);font-size:.72rem;line-height:1.5}
+.sysdiag-readiness-error .sysdiag-warnings{background:rgba(161,67,52,.08)}
+.sysdiag-ready-line{margin-top:9px;color:var(--sage);font-size:.72rem;font-weight:650}
+.sysdiag-diagnostics-title{margin:17px 2px 7px}
 .sysdiag-controls{display:flex;align-items:flex-end;gap:9px;flex-wrap:wrap;padding:11px 0;
   border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
 .sysdiag-window-buttons{display:flex;gap:5px;margin-right:auto}
@@ -1583,6 +1600,21 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
 .sysdiag-empty{display:flex;flex-direction:column;gap:3px;margin-top:12px;padding:14px;border:1px dashed var(--line-2);
   border-radius:10px;color:var(--muted);font-size:.78rem}
 .sysdiag-healthy-empty b{color:var(--sage)}
+.sysdiag-operator{margin-top:14px;border-top:1px solid var(--line);padding-top:10px}
+.sysdiag-operator>summary{min-height:38px;display:flex;align-items:center;cursor:pointer;color:var(--ink-2);font-size:.74rem;font-weight:650}
+.sysdiag-operator-group{padding:10px 0;border-top:1px solid var(--line)}
+.sysdiag-operator-group h4{margin:0 0 7px;color:var(--muted);font-size:.6rem;text-transform:uppercase;letter-spacing:.08em}
+.sysdiag-build{display:flex;align-items:baseline;justify-content:space-between;gap:10px;font-size:.74rem}
+.sysdiag-build span{color:var(--muted);font-size:.66rem}
+.sysdiag-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}
+.sysdiag-metrics span{display:flex;flex-direction:column;gap:2px;padding:8px;background:var(--card-2);border-radius:8px;
+  color:var(--muted);font-size:.61rem}
+.sysdiag-metrics b{color:var(--ink-2);font-size:.76rem;font-variant-numeric:lining-nums}
+.sysdiag-route-metrics{margin-top:8px;display:grid;gap:5px}
+.sysdiag-route-metrics>div{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;font-size:.66rem}
+.sysdiag-route-metrics code{color:var(--ink-2);overflow-wrap:anywhere;word-break:break-word}
+.sysdiag-route-metrics span{color:var(--muted);white-space:nowrap}
+.sysdiag-operator-group p{margin:4px 0;color:var(--muted);font-size:.69rem;line-height:1.4}
 @media (max-width:560px){
   .sysdiag-card{padding:14px 12px}
   .sysdiag-heading{gap:8px}
@@ -1596,6 +1628,10 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
   .sysdiag-item>summary{align-items:flex-start;padding:8px 1px}
   .sysdiag-item>summary .actlog-flag{margin-top:2px}
   .sysdiag-pager{justify-content:space-between}
+  .sysdiag-runtime-grid{grid-template-columns:1fr}
+  .sysdiag-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .sysdiag-route-metrics>div{flex-direction:column;gap:2px}
+  .sysdiag-route-metrics span{white-space:normal}
 }
 /* "What Cairn has noticed" (F2) — gentle outcome-learning observations. A calm,
    editorial list; the sage dot keeps it quiet and un-alarming, never a metric. */

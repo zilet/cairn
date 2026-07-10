@@ -388,6 +388,23 @@ test("api() classifies reachable HTTP failures without marking Cairn offline", a
   assert.equal(loaded.body.classList.contains("is-offline"), false);
 });
 
+test("api() can opt into a bounded non-2xx readiness body", async () => {
+  const loaded = loadApiClient();
+  loaded.context.fetch = async (url, init) => {
+    loaded.calls.push({ url, init });
+    return {
+      status: 503,
+      headers: { get: () => null },
+      json: async () => ({ ok: false, database: "ok", scheduler: { status: "stale" } }),
+    };
+  };
+
+  const readiness = await loaded.context.api("/ready", { cache: "no-store", acceptErrorBody: true });
+  assert.equal(readiness.ok, false);
+  assert.equal(readiness.scheduler.status, "stale");
+  assert.equal(loaded.calls[0].init.acceptErrorBody, undefined, "client-only options never leak into fetch");
+});
+
 test("api() classifies invalid successful JSON and does not cache it", async () => {
   const loaded = loadApiClient();
   let calls = 0;

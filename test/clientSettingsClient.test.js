@@ -173,17 +173,48 @@ test("settings agent chips and update card render stable operator states", () =>
 
 test("system health distinguishes loading, unavailable, healthy zero, warning, and error", () => {
   const settings = loadSettingsClient();
-  assert.match(settings.diagnosticsCard(null, { status: "loading", days: 1 }), /Checking system health/);
-  assert.match(settings.diagnosticsCard(null, { status: "loading", days: 1 }), /last 24 hours/);
-  const unavailable = settings.diagnosticsCard(null, { status: "unavailable" });
+  assert.match(settings.diagnosticsCard(null, { status: "loading", readinessStatus: "loading", days: 1 }), /Checking system health/);
+  assert.match(settings.diagnosticsCard(null, { status: "loading", readinessStatus: "loading", days: 1 }), /last 24 hours/);
+  const unavailable = settings.diagnosticsCard(null, { status: "unavailable", readinessStatus: "unavailable" });
   assert.match(unavailable, /Diagnostics unavailable/);
-  assert.match(unavailable, /different from a healthy zero-event response/);
-  assert.match(unavailable, /id="sysDiagRetry"/);
+  assert.match(unavailable, /Readiness unavailable/);
+  assert.match(unavailable, /different from a valid zero-event response/);
+  assert.match(unavailable, /data-system-retry/);
 
-  const healthy = settings.diagnosticsCard({ window_days: 7, total: 0, issues: [], recent: [], slow: [] });
-  assert.match(healthy, /No issues captured/);
+  const healthy = settings.diagnosticsCard(
+    { window_days: 7, total: 0, issues: [], recent: [], slow: [] },
+    {
+      readinessStatus: "ready",
+      readiness: {
+        ok: true,
+        database: "ok",
+        scheduler: { status: "fresh", age_sec: 8 },
+        queues: {
+          agent_jobs: { queued: 0, running: 0, oldest_age_sec: null, failed_24h: 0 },
+          chat_turns: { queued: 0, running: 0, oldest_age_sec: null, failed_24h: 0 },
+        },
+      },
+    }
+  );
+  assert.match(healthy, /System is ready/);
   assert.match(healthy, /Healthy zero-event response/);
   assert.doesNotMatch(healthy, /Diagnostics unavailable/);
+
+  const older = settings.diagnosticsCard(
+    { window_days: 7, total: 0, issues: [], recent: [], slow: [] },
+    {
+      readinessStatus: "ready",
+      readiness: {
+        ok: true,
+        database: "ok",
+        queues: { agent_jobs: { queued: 0, running: 0 }, chat_turns: { queued: 0, running: 0 } },
+      },
+    }
+  );
+  assert.match(older, /Operational warnings captured/);
+  assert.match(older, /Scheduler freshness is not reported by this version/);
+  assert.match(older, /Queue age and recent-failure detail are not reported by this version/);
+  assert.doesNotMatch(older, /Healthy zero-event response/);
 
   const warning = settings.diagnosticsCard({
     window_days: 7,
@@ -191,8 +222,8 @@ test("system health distinguishes loading, unavailable, healthy zero, warning, a
     issues: [{ source: "server", kind: "slow_request", level: "warning", count: 1, route: "/api/today" }],
     recent: [],
     slow: [],
-  });
-  assert.match(warning, /Warnings captured/);
+  }, { readinessStatus: "ready", readiness: { ok: true, database: "ok" } });
+  assert.match(warning, /Operational warnings captured/);
   assert.match(warning, /actlog-warning/);
 
   const error = settings.diagnosticsCard({
@@ -201,8 +232,8 @@ test("system health distinguishes loading, unavailable, healthy zero, warning, a
     issues: [{ source: "server", kind: "request_error", level: "error", count: 1 }],
     recent: [],
     slow: [],
-  });
-  assert.match(error, /Errors need a look/);
+  }, { readinessStatus: "ready", readiness: { ok: true, database: "ok" } });
+  assert.match(error, /Runtime errors need a look/);
   assert.match(error, /actlog-error/);
 });
 
@@ -242,7 +273,7 @@ test("system health renders actionable bounded details and escapes contract fiel
       ],
       slow: [{ route: "/api/stats", duration_ms: 2100 }],
     },
-    { relTime: () => "just now", source: "all", severity: "all" }
+    { relTime: () => "just now", source: "all", severity: "all", readinessStatus: "ready", readiness: { ok: true, database: "ok" } }
   );
 
   assert.match(html, /System health/);
@@ -266,8 +297,80 @@ test("system health renders actionable bounded details and escapes contract fiel
 
   const filtered = settings.diagnosticsCard(
     { window_days: 7, total: 10, issues, recent: [], slow: [] },
-    { source: "client", severity: "error" }
+    { source: "client", severity: "error", readinessStatus: "ready", readiness: { ok: true, database: "ok" } }
   );
   assert.match(filtered, /api failure 9/);
   assert.doesNotMatch(filtered, /api failure 0/);
+});
+
+test("readiness truth overrides a zero diagnostic count and renders optional operator summaries", () => {
+  const settings = loadSettingsClient();
+  const base = {
+    window_days: 7,
+    total: 0,
+    issues: [],
+    recent: [],
+    slow: [],
+    build: { version: "1.0.0", build_id: "abc123", build_source: "environment" },
+    performance: {
+      window_days: 7,
+      requests: 42,
+      avg_ms: 125,
+      p50_ms: 100,
+      p95_ms: 2100,
+      max_ms: 15225,
+      throughput_per_hour: 0.25,
+      by_protocol: { api: 40, mcp: 2 },
+      top_routes: [{ method: "GET", route: "/api/<today>", requests: 12, errors: 1, p95_ms: 2100 }],
+    },
+    storage: {
+      diagnostic_events: { rows: 18, retention_days: 30, row_cap: 20000 },
+      request_metric_buckets: { rows: 9, retention_days: 30, row_cap: 50000 },
+    },
+  };
+  const stale = settings.diagnosticsCard(base, {
+    readinessStatus: "ready",
+    readiness: {
+      ok: false,
+      database: "ok",
+      scheduler: { status: "stale", age_sec: 640, last_at: "2026-07-10 12:00:00" },
+      queues: {
+        agent_jobs: { queued: 1, running: 0, oldest_age_sec: 1800, failed_24h: 2 },
+        chat_turns: { queued: 0, running: 0, oldest_age_sec: null, failed_24h: 0 },
+      },
+    },
+  });
+  assert.match(stale, /Runtime errors need a look/);
+  assert.match(stale, /Scheduler heartbeat is stale/);
+  assert.match(stale, /2 failed in the last 24 hours/);
+  assert.match(stale, /oldest active item is 30m old/);
+  assert.match(stale, /No diagnostic events/);
+  assert.doesNotMatch(stale, /Healthy zero-event response/);
+  assert.match(stale, /1\.0\.0 @ abc123/);
+  assert.match(stale, /42<\/b> requests/);
+  assert.match(stale, /2\.1s<\/b> p95/);
+  assert.match(stale, /100ms<\/b> p50/);
+  assert.match(stale, /0\.25<\/b> requests\/hour/);
+  assert.match(stale, /GET \/api\/&lt;today&gt;/);
+  assert.match(stale, /18 diagnostic rows/);
+  assert.match(stale, /9 metric buckets/);
+
+  const failedJobs = settings.diagnosticsCard(base, {
+    readinessStatus: "ready",
+    readiness: {
+      ok: true,
+      database: "ok",
+      scheduler: { status: "fresh", age_sec: 10 },
+      queues: { agent_jobs: { queued: 0, running: 0, failed_24h: 1 }, chat_turns: {} },
+    },
+  });
+  assert.match(failedJobs, /Operational warnings captured/);
+  assert.doesNotMatch(failedJobs, /Healthy zero-event response/);
+
+  const dbDown = settings.diagnosticsCard(base, {
+    readinessStatus: "ready",
+    readiness: { ok: false, database: "unavailable" },
+  });
+  assert.match(dbDown, /Database is unavailable/);
+  assert.match(dbDown, /Runtime errors need a look/);
 });

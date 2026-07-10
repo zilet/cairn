@@ -8,6 +8,8 @@ type SettingsDateFns = {
 
 type SettingsDiagnosticsOptions = SettingsDateFns & {
   status?: "loading" | "ready" | "unavailable";
+  readinessStatus?: "loading" | "ready" | "unavailable";
+  readiness?: unknown;
   days?: 1 | 7 | 30;
   source?: string;
   severity?: string;
@@ -311,23 +313,140 @@ function settingsDiagnosticPager(kind: "issues" | "recent", page: number, total:
   </nav>`;
 }
 
+function settingsDiagnosticAge(value: unknown): string {
+  const seconds = Math.max(0, Number(value) || 0);
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  if (seconds < 86400) return `${(seconds / 3600).toFixed(seconds < 7200 ? 1 : 0)}h`;
+  return `${(seconds / 86400).toFixed(1)}d`;
+}
+
+function settingsReadinessView(options: SettingsDiagnosticsOptions): {
+  tone: "healthy" | "warning" | "error";
+  pending: boolean;
+  html: string;
+} {
+  const status = options.readinessStatus || "unavailable";
+  if (status === "loading") {
+    return {
+      tone: "healthy",
+      pending: true,
+      html: `<div class="sysdiag-readiness" aria-busy="true"><div class="sysdiag-section-title">Readiness</div><div class="sysdiag-state"><span class="sync-dot pulse" aria-hidden="true"></span><div><b>Checking runtime readiness…</b><p>Reading database, scheduler, and durable queue health.</p></div></div></div>`,
+    };
+  }
+  if (status === "unavailable") {
+    return {
+      tone: "warning",
+      pending: false,
+      html: `<div class="sysdiag-readiness sysdiag-unavailable"><div class="sysdiag-section-title">Readiness</div><div class="sysdiag-state"><span class="sysdiag-state-icon" aria-hidden="true">!</span><div><b>Readiness unavailable</b><p>Cairn could not verify the database, scheduler, or durable queues.</p><button class="btn-sm" data-system-retry type="button">Try again</button></div></div></div>`,
+    };
+  }
+  const readiness = settingsClientRecord(options.readiness);
+  const scheduler = settingsClientRecord(readiness.scheduler);
+  const queues = settingsClientRecord(readiness.queues);
+  const warnings: string[] = [];
+  let hasError = readiness.ok === false || readiness.database === "unavailable";
+  if (readiness.database === "unavailable") warnings.push("Database is unavailable");
+  const schedulerStatus = String(scheduler.status || "");
+  if (schedulerStatus === "stale") {
+    hasError = true;
+    warnings.push("Scheduler heartbeat is stale");
+  } else if (schedulerStatus === "starting") {
+    warnings.push("Scheduler is still starting");
+  } else if (!schedulerStatus) {
+    warnings.push("Scheduler freshness is not reported by this version");
+  }
+  const queueRows = [
+    ["Agent jobs", settingsClientRecord(queues.agent_jobs)],
+    ["Chat turns", settingsClientRecord(queues.chat_turns)],
+  ] as const;
+  for (const [label, queue] of queueRows) {
+    const failures = Math.max(0, Number(queue.failed_24h) || 0);
+    const age = queue.oldest_age_sec == null ? null : Math.max(0, Number(queue.oldest_age_sec) || 0);
+    if (failures) warnings.push(`${label}: ${failures} failed in the last 24 hours`);
+    if (age != null && age >= 900) warnings.push(`${label}: oldest active item is ${settingsDiagnosticAge(age)} old`);
+  }
+  if (queueRows.some(([, queue]) => !Object.hasOwn(queue, "failed_24h") || !Object.hasOwn(queue, "oldest_age_sec"))) {
+    warnings.push("Queue age and recent-failure detail are not reported by this version");
+  }
+  const tone = hasError ? "error" : warnings.length ? "warning" : "healthy";
+  const databaseLabel = readiness.database === "ok" ? "Readable" : readiness.database === "unavailable" ? "Unavailable" : "Not reported";
+  const schedulerLabel = schedulerStatus
+    ? `${schedulerStatus}${scheduler.age_sec == null ? "" : ` · ${settingsDiagnosticAge(scheduler.age_sec)} ago`}`
+    : "Not reported by this version";
+  const queueHtml = queueRows
+    .map(([label, queue]) => {
+      const queued = Math.max(0, Number(queue.queued) || 0);
+      const running = Math.max(0, Number(queue.running) || 0);
+      const failed = Math.max(0, Number(queue.failed_24h) || 0);
+      const age = queue.oldest_age_sec == null ? "" : ` · oldest ${settingsDiagnosticAge(queue.oldest_age_sec)}`;
+      return `<div class="sysdiag-runtime-stat"><span>${escHtml(label)}</span><b>${queued} queued · ${running} running${escHtml(age)}</b>${failed ? `<em>${failed} failed / 24h</em>` : ""}</div>`;
+    })
+    .join("");
+  return {
+    tone,
+    pending: false,
+    html: `<div class="sysdiag-readiness sysdiag-readiness-${tone}">
+      <div class="sysdiag-section-title">Readiness</div>
+      <div class="sysdiag-runtime-grid">
+        <div class="sysdiag-runtime-stat"><span>Database</span><b>${escHtml(databaseLabel)}</b></div>
+        <div class="sysdiag-runtime-stat"><span>Scheduler</span><b>${escHtml(schedulerLabel)}</b>${scheduler.last_at ? `<small>${settingsDiagnosticTime(scheduler.last_at, options)}</small>` : ""}</div>
+        ${queueHtml}
+      </div>
+      ${warnings.length ? `<ul class="sysdiag-warnings">${warnings.map((warning) => `<li>${escHtml(warning)}</li>`).join("")}</ul>` : `<div class="sysdiag-ready-line">Database, scheduler, and durable queues look ready.</div>`}
+    </div>`,
+  };
+}
+
+function settingsOperatorSummary(row: Record<string, unknown>, readiness: unknown): string {
+  const ready = settingsClientRecord(readiness);
+  const build = settingsClientRecord(row.build || ready.build);
+  const performance = settingsClientRecord(row.performance);
+  const storage = settingsClientRecord(row.storage);
+  const diagnosticStorage = settingsClientRecord(storage.diagnostic_events);
+  const metricStorage = settingsClientRecord(storage.request_metric_buckets);
+  if (!Object.keys(build).length && !Object.keys(performance).length && !Object.keys(storage).length) return "";
+  const buildLabel = build.version
+    ? `${String(build.version)}${build.build_id ? ` @ ${String(build.build_id)}` : ""}`
+    : build.build_id
+      ? String(build.build_id)
+      : "Not reported";
+  const topRoutes = Array.isArray(performance.top_routes) ? performance.top_routes.map(settingsClientRecord).slice(0, 5) : [];
+  const protocol = settingsClientRecord(performance.by_protocol);
+  const perfHtml = Object.keys(performance).length
+    ? `<div class="sysdiag-operator-group"><h4>Request performance · ${Math.max(1, Number(performance.window_days) || 7)}d</h4>
+      <div class="sysdiag-metrics">
+        <span><b>${Math.max(0, Number(performance.requests) || 0)}</b> requests</span>
+        <span><b>${performance.avg_ms == null ? "—" : settingsLatency(performance.avg_ms)}</b> average</span>
+        <span><b>${performance.p95_ms == null ? "—" : settingsLatency(performance.p95_ms)}</b> p95</span>
+        <span><b>${performance.max_ms == null ? "—" : settingsLatency(performance.max_ms)}</b> max</span>
+        <span><b>${performance.p50_ms == null ? "—" : settingsLatency(performance.p50_ms)}</b> p50</span>
+        <span><b>${performance.throughput_per_hour == null ? "—" : Math.max(0, Number(performance.throughput_per_hour) || 0)}</b> requests/hour</span>
+        <span><b>${Math.max(0, Number(protocol.api) || 0)}</b> API</span>
+        <span><b>${Math.max(0, Number(protocol.mcp) || 0)}</b> MCP</span>
+      </div>
+      ${topRoutes.length ? `<div class="sysdiag-route-metrics">${topRoutes.map((route) => `<div><code>${escHtml(String(route.method || ""))} ${escHtml(String(route.route || "unknown"))}</code><span>${Math.max(0, Number(route.requests) || 0)} req · p95 ${route.p95_ms == null ? "—" : escHtml(settingsLatency(route.p95_ms))}${Number(route.errors) ? ` · ${Math.max(0, Number(route.errors) || 0)} errors` : ""}</span></div>`).join("")}</div>` : ""}
+    </div>`
+    : "";
+  const storageParts = [
+    Object.keys(diagnosticStorage).length
+      ? `${Math.max(0, Number(diagnosticStorage.rows) || 0)} diagnostic rows · ${Math.max(0, Number(diagnosticStorage.retention_days) || 0)}d retention · cap ${settingsCompactCount(diagnosticStorage.row_cap)}`
+      : "",
+    Object.keys(metricStorage).length
+      ? `${Math.max(0, Number(metricStorage.rows) || 0)} metric buckets · ${Math.max(0, Number(metricStorage.retention_days) || 0)}d retention · cap ${settingsCompactCount(metricStorage.row_cap)}`
+      : "",
+  ].filter(Boolean);
+  return `<details class="sysdiag-operator"><summary>Runtime, performance &amp; storage</summary>
+    <div class="sysdiag-operator-group"><h4>Build</h4><div class="sysdiag-build"><b>${escHtml(buildLabel)}</b>${build.build_source ? `<span>${escHtml(String(build.build_source))}</span>` : ""}</div></div>
+    ${perfHtml}
+    ${storageParts.length ? `<div class="sysdiag-operator-group"><h4>Local telemetry storage</h4>${storageParts.map((part) => `<p>${escHtml(part)}</p>`).join("")}</div>` : ""}
+  </details>`;
+}
+
 function diagnosticsCard(data: unknown, options: SettingsDiagnosticsOptions = {}): string {
   const requestedDays = options.days || 7;
   const status = options.status || "ready";
   const privacy = "Request bodies, health values, chat text, and credentials are never collected.";
-  if (status === "loading") {
-    return `<section class="sess sysdiag-card" aria-labelledby="sysdiag-title" aria-busy="true">
-      <div class="lbl" id="sysdiag-title">System health</div>
-      <div class="sysdiag-state"><span class="sync-dot pulse" aria-hidden="true"></span><div><b>Checking system health…</b><p>Loading diagnostics from the last ${requestedDays === 1 ? "24 hours" : `${requestedDays} days`}.</p></div></div>
-    </section>`;
-  }
-  if (status === "unavailable") {
-    return `<section class="sess sysdiag-card" aria-labelledby="sysdiag-title">
-      <div class="lbl" id="sysdiag-title">System health</div>
-      <div class="sysdiag-state sysdiag-unavailable"><span class="sysdiag-state-icon" aria-hidden="true">!</span><div><b>Diagnostics unavailable</b><p>Cairn could not load the local diagnostics pulse. This is different from a healthy zero-event response.</p><button class="btn-sm" id="sysDiagRetry" type="button">Try again</button></div></div>
-    </section>`;
-  }
-
   const row = settingsClientRecord(data);
   const issues = Array.isArray(row.issues) ? row.issues.map(settingsClientRecord) : [];
   const recent = Array.isArray(row.recent) ? row.recent.map(settingsClientRecord) : [];
@@ -352,8 +471,21 @@ function diagnosticsCard(data: unknown, options: SettingsDiagnosticsOptions = {}
   const sources = [...new Set([...issues, ...recent, ...slow].map((item) => String(item.source || "system")))].sort();
   const hasErrors = issues.some((item) => settingsDiagnosticLevel(item.level) === "error");
   const hasWarnings = issues.some((item) => settingsDiagnosticLevel(item.level) === "warning") || slow.length > 0;
-  const tone = hasErrors ? "error" : hasWarnings ? "warning" : "healthy";
-  const headline = total === 0 ? "No issues captured" : hasErrors ? "Errors need a look" : hasWarnings ? "Warnings captured" : "No active warning pattern";
+  const readiness = settingsReadinessView(options);
+  const diagnosticsTone = hasErrors ? "error" : hasWarnings || status === "unavailable" ? "warning" : "healthy";
+  const tone = readiness.tone === "error" || diagnosticsTone === "error"
+    ? "error"
+    : readiness.tone === "warning" || diagnosticsTone === "warning"
+      ? "warning"
+      : "healthy";
+  const pending = status === "loading" || readiness.pending;
+  const headline = pending
+    ? "Checking system health…"
+    : tone === "error"
+      ? "Runtime errors need a look"
+      : tone === "warning"
+        ? "Operational warnings captured"
+        : "System is ready";
   const windowLabel = days === 1 ? "last 24 hours" : `last ${days} days`;
   const pageSize = 8;
   const issuePages = Math.max(1, Math.ceil(filteredIssues.length / pageSize));
@@ -405,20 +537,28 @@ function diagnosticsCard(data: unknown, options: SettingsDiagnosticsOptions = {}
     })
     .join("");
   const noMatches = !filteredIssues.length && !combinedRecent.length && (sourceFilter !== "all" || severityFilter !== "all");
-  return `<section class="sess sysdiag-card sysdiag-tone-${tone}" aria-labelledby="sysdiag-title">
+  const diagnosticBody = status === "loading"
+    ? `<div class="sysdiag-state" aria-busy="true"><span class="sync-dot pulse" aria-hidden="true"></span><div><b>Loading diagnostics…</b><p>Reading the ${escHtml(windowLabel)} event window.</p></div></div>`
+    : status === "unavailable"
+      ? `<div class="sysdiag-state sysdiag-unavailable"><span class="sysdiag-state-icon" aria-hidden="true">!</span><div><b>Diagnostics unavailable</b><p>Cairn could not load the local diagnostics pulse. This is different from a valid zero-event response.</p><button class="btn-sm" data-system-retry type="button">Try again</button></div></div>`
+      : `<p class="sess-line sysdiag-privacy">${total} diagnostic event${total === 1 ? "" : "s"} captured · ${privacy}</p>
+        <div class="sysdiag-controls" aria-label="System health filters" data-save-ignore>
+          <div class="sysdiag-window-buttons" role="group" aria-label="Diagnostics window">
+            ${([1, 7, 30] as const).map((n) => `<button type="button" class="btn-sm${days === n ? " active" : ""}" data-diag-days="${n}" aria-pressed="${days === n}">${n === 1 ? "24h" : `${n}d`}</button>`).join("")}
+          </div>
+          <label>Source<select id="sysDiagSource"><option value="all">All sources</option>${sources.map((source) => `<option value="${escAttr(source)}"${source === sourceFilter ? " selected" : ""}>${escHtml(source.replaceAll("_", " "))}</option>`).join("")}</select></label>
+          <label>Severity<select id="sysDiagSeverity"><option value="all">All severities</option>${["error", "warning", "info"].map((level) => `<option value="${level}"${level === severityFilter ? " selected" : ""}>${level[0].toUpperCase() + level.slice(1)}</option>`).join("")}</select></label>
+        </div>
+        ${noMatches ? `<div class="sysdiag-empty">No diagnostics match these filters.</div>` : ""}
+        ${filteredIssues.length ? `<div class="sysdiag-section"><h3>Grouped issues <span>${filteredIssues.length}</span></h3><div class="sysdiag-list">${issueRows}</div>${settingsDiagnosticPager("issues", issuePage, filteredIssues.length, pageSize)}</div>` : ""}
+        ${combinedRecent.length ? `<div class="sysdiag-section"><h3>Recent events <span>${combinedRecent.length}</span></h3><div class="sysdiag-list">${recentRows}</div>${settingsDiagnosticPager("recent", recentPage, combinedRecent.length, pageSize)}</div>` : ""}
+        ${total === 0 && !combinedRecent.length ? `<div class="sysdiag-empty${tone === "healthy" ? " sysdiag-healthy-empty" : ""}"><b>${tone === "healthy" ? "Healthy zero-event response" : "No diagnostic events"}</b><span>No errors, warnings, or slow requests were captured in the ${escHtml(windowLabel)}.</span></div>` : ""}`;
+  return `<section class="sess sysdiag-card sysdiag-tone-${tone}" aria-labelledby="sysdiag-title"${pending ? ` aria-busy="true"` : ""}>
     <div class="sysdiag-heading"><div><div class="lbl" id="sysdiag-title">System health</div><div class="sysdiag-headline"><span class="sysdiag-state-icon" aria-hidden="true">${tone === "healthy" ? "✓" : tone === "warning" ? "!" : "×"}</span><b>${headline}</b></div></div><span class="sysdiag-window">${escHtml(windowLabel)}</span></div>
-    <p class="sess-line sysdiag-privacy">${total} diagnostic event${total === 1 ? "" : "s"} captured · ${privacy}</p>
-    <div class="sysdiag-controls" aria-label="System health filters" data-save-ignore>
-      <div class="sysdiag-window-buttons" role="group" aria-label="Diagnostics window">
-        ${([1, 7, 30] as const).map((n) => `<button type="button" class="btn-sm${days === n ? " active" : ""}" data-diag-days="${n}" aria-pressed="${days === n}">${n === 1 ? "24h" : `${n}d`}</button>`).join("")}
-      </div>
-      <label>Source<select id="sysDiagSource"><option value="all">All sources</option>${sources.map((source) => `<option value="${escAttr(source)}"${source === sourceFilter ? " selected" : ""}>${escHtml(source.replaceAll("_", " "))}</option>`).join("")}</select></label>
-      <label>Severity<select id="sysDiagSeverity"><option value="all">All severities</option>${["error", "warning", "info"].map((level) => `<option value="${level}"${level === severityFilter ? " selected" : ""}>${level[0].toUpperCase() + level.slice(1)}</option>`).join("")}</select></label>
-    </div>
-    ${noMatches ? `<div class="sysdiag-empty">No diagnostics match these filters.</div>` : ""}
-    ${filteredIssues.length ? `<div class="sysdiag-section"><h3>Grouped issues <span>${filteredIssues.length}</span></h3><div class="sysdiag-list">${issueRows}</div>${settingsDiagnosticPager("issues", issuePage, filteredIssues.length, pageSize)}</div>` : ""}
-    ${combinedRecent.length ? `<div class="sysdiag-section"><h3>Recent events <span>${combinedRecent.length}</span></h3><div class="sysdiag-list">${recentRows}</div>${settingsDiagnosticPager("recent", recentPage, combinedRecent.length, pageSize)}</div>` : ""}
-    ${total === 0 && !combinedRecent.length ? `<div class="sysdiag-empty sysdiag-healthy-empty"><b>Healthy zero-event response</b><span>No errors, warnings, or slow requests were captured in the ${escHtml(windowLabel)}.</span></div>` : ""}
+    ${readiness.html}
+    <div class="sysdiag-section-title sysdiag-diagnostics-title">Diagnostics</div>
+    ${diagnosticBody}
+    ${settingsOperatorSummary(row, options.readiness)}
   </section>`;
 }
 

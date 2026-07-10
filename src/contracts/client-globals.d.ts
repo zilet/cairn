@@ -1147,7 +1147,7 @@ declare global {
   declare function dateLabel(iso: string): string;
   declare function api<Path extends string>(
     p: Path,
-    opts?: RequestInit & { headers?: Record<string, string> },
+    opts?: RequestInit & { headers?: Record<string, string>; acceptErrorBody?: boolean },
   ): Promise<ClientApiResponse<Path>>;
   declare function setOffline(on: unknown): void;
 
@@ -2650,6 +2650,8 @@ declare global {
           relTime?: (value: string) => string;
           absDate?: (value: string) => string;
           status?: "loading" | "ready" | "unavailable";
+          readinessStatus?: "loading" | "ready" | "unavailable";
+          readiness?: unknown;
           days?: 1 | 7 | 30;
           source?: string;
           severity?: string;
