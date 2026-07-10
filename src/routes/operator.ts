@@ -1,4 +1,5 @@
 import { Router } from "express";
+import type { Request, Response } from "express";
 import { getAgentCliUpdateStatus, startAgentCliUpdate } from "../agentCliUpdates.js";
 import { agentInfoOp, agentModelsOp } from "../coachOps.js";
 import {
@@ -10,6 +11,7 @@ import {
   setSettings,
 } from "../domain/operator/index.js";
 import { researchAutoEligible } from "../research.js";
+import { getDiagnostics, ingestClientDiagnosticEvents, parseClientDiagnosticBatch } from "../repo/diagnostics.js";
 
 export const operatorRouter = Router();
 
@@ -55,3 +57,19 @@ operatorRouter.get("/agent-stats", (req, res) => {
 operatorRouter.get("/brain-diagnostics", (req, res) =>
   res.json(getBrainDiagnostics(req.query.limit != null ? Number(req.query.limit) : undefined))
 );
+
+export function clientTelemetryHandler(req: Request, res: Response) {
+  const events = parseClientDiagnosticBatch(req.body);
+  if (!events) return res.status(400).json({ error: "invalid telemetry batch" });
+  ingestClientDiagnosticEvents(events);
+  return res.status(204).end();
+}
+
+export function diagnosticsHandler(req: Request, res: Response) {
+  const recent = req.query.recent != null ? Number(req.query.recent) : undefined;
+  const days = req.query.days != null ? Number(req.query.days) : undefined;
+  res.json(getDiagnostics({ recent, days }));
+}
+
+operatorRouter.post("/telemetry/client", clientTelemetryHandler);
+operatorRouter.get("/diagnostics", diagnosticsHandler);

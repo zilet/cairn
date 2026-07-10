@@ -935,6 +935,31 @@ CREATE TABLE IF NOT EXISTS agent_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_runs_created ON agent_runs(created_at);
 
+-- Local-first diagnostic spine for browser/API/process failures. Every write is
+-- bounded + sanitized before it reaches this table; payload bodies, query values,
+-- prompts, health data, credentials and raw agent output never belong here.
+-- Regenerable operator telemetry, retained for 30 days by the repo write path.
+CREATE TABLE IF NOT EXISTS diagnostic_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source TEXT NOT NULL,                -- client | api | process | scheduler
+  kind TEXT NOT NULL,                  -- api_failure | render_error | http_error | slow_request | ...
+  level TEXT NOT NULL,                 -- warning | error
+  operation TEXT,
+  route TEXT,
+  status INTEGER,
+  duration_ms INTEGER,
+  request_id TEXT,
+  fingerprint TEXT NOT NULL,
+  message TEXT,
+  stack TEXT,
+  metadata_json TEXT,
+  release TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_diagnostic_events_created ON diagnostic_events(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_diagnostic_events_issue ON diagnostic_events(fingerprint, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_diagnostic_events_route ON diagnostic_events(route, created_at DESC);
+
 -- Tiny generic key/value scratchpad for scheduler bookkeeping (last-run stamps
 -- for the miss-tolerant coach draft + the weekly proactive passes). Survives a
 -- restart so a missed slot still fires once when the process comes back up.

@@ -21,6 +21,7 @@ import { personContextRouter } from "./routes/person-context.js";
 import { trainingLogRouter } from "./routes/training-log.js";
 import { bodyMetricsRouter } from "./routes/body-metrics.js";
 import { journeyRouter } from "./routes/journey.js";
+import { recordUnexpectedApiError, requestId } from "./diagnostics.js";
 
 export const api = Router();
 
@@ -50,7 +51,10 @@ api.use("/health-docs", healthDocsRouter);
 // Global JSON error handler — registered LAST so any uncaught route error
 // returns JSON, not Express's default HTML error page (the PWA's api() helper
 // calls r.json() and would break on HTML).
-api.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-  console.error(err);
-  res.status(500).json({ error: err?.message ?? "internal error" });
-});
+export function apiErrorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {
+  recordUnexpectedApiError(err, req);
+  console.error(`[api] request ${requestId(req) || "unknown"} failed`);
+  res.status(500).json({ error: "internal error", request_id: requestId(req) || null });
+}
+
+api.use(apiErrorHandler);

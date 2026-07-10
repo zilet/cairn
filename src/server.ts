@@ -19,22 +19,17 @@ import { reportScriptCspHash } from "./report.js";
 import { runWithTimeZone } from "./tz.js";
 import { runWithBrainSnapshot } from "./brain/snapshot.js";
 import * as repo from "./repo.js";
+import { apiDiagnosticMiddleware, registerProcessDiagnosticHandlers } from "./diagnostics.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || "0.0.0.0";
 
-// Process safety net: a single stray rejection or thrown error from any of the
-// four surfaces (PWA / API / MCP / scheduler) running in this one process must
-// NOT take the whole server down. LOG and keep serving — calm degradation over a
-// hard crash. (Truly fatal states — OOM, etc. — still terminate via the runtime.)
-process.on("unhandledRejection", (reason) => {
-  console.error("[server] unhandledRejection (kept alive):", reason);
-});
-process.on("uncaughtException", (err) => {
-  console.error("[server] uncaughtException (kept alive):", err);
-});
+// Process failures share the same bounded local diagnostic sink. A rejection is
+// recorded while the process stays available; an uncaught exception records and
+// exits so Docker can restart the single-process service from a known state.
+registerProcessDiagnosticHandlers();
 
 // Register the agent-run telemetry sink at boot, BEFORE anything can run an agent
 // (recoverChatTurns / recoverAgentJobs re-enqueue work that may fire immediately).
@@ -76,6 +71,9 @@ app.use((_req, res, next) => {
   res.setHeader("Content-Security-Policy", contentSecurityPolicy(_req.path));
   next();
 });
+
+// Correlation precedes rate-limit/auth so EVERY API response carries an id.
+app.use("/api", apiDiagnosticMiddleware);
 
 // Optional rate limiting (defense in depth) — in front of auth so it also blunts
 // token-guessing. No-op unless CAIRN_AUTH_TOKEN is set and CAIRN_RATE_LIMIT > 0.
