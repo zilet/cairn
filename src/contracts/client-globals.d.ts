@@ -1425,6 +1425,7 @@ declare global {
   declare function isOpenProposal(proposal: unknown): boolean;
   declare function dayFuelHtml(day: Record<string, unknown> | null | undefined): string;
   declare function renderPlanEditor(): unknown;
+  declare function loadPlanUpcomingNote(token: number, slotSel?: string): void;
   declare function renderHistory(): unknown;
   declare function renderProgress(): unknown;
   declare function renderWeight(): unknown;
