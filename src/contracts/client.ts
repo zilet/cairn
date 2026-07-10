@@ -117,6 +117,10 @@ export interface ClientCoachingRetest {
 export interface ClientCoachingFocus {
   available: boolean;
   headline: string;
+  // Whether the surface should offer one-tap ACTIONS (swap / draft-recovery buttons).
+  // False under lead mode — the coach applies bounded changes itself, so the card
+  // speaks state, not an ask. Absent is treated as true (the legacy behavior).
+  acts?: boolean;
   lead: ClientCoachingFocusItem | null;
   parallel: ClientCoachingFocusItem[];
   later: Array<{ domain: ClientCoachingFocusDomain; title: string }>;

@@ -386,6 +386,53 @@ test("a RUNNING recovery week renders no action at all — the lead is a confirm
   assert.match(html, /Recovery week — absorb the work/, "the lead still speaks");
 });
 
+test("under lead mode (acts:false) the card renders no one-tap action buttons — the coach acts, not the athlete", () => {
+  const { focus } = loadCoachingFocus();
+  const swapLead = {
+    ...richFocus,
+    acts: false,
+    lead: { domain: "training", title: "Break the plateau", why: "Bench stalled", swap: { from: "Barbell Bench Press", to: ["DB Bench Press", "Incline Bench Press"] } },
+  };
+  assert.doesNotMatch(focus.coachingFocusCardHtml(swapLead, { actions: true }), /data-cfocus-act/, "no swap ask under lead mode");
+
+  const recoveryLead = {
+    ...richFocus,
+    acts: false,
+    lead: { domain: "recovery", title: "Take an earned recovery week", why: "Seven loaded weeks." },
+  };
+  assert.doesNotMatch(focus.coachingFocusCardHtml(recoveryLead, { actions: true }), /data-cfocus-act/, "no draft ask under lead mode");
+
+  // A waiting draft still surfaces its review LINK (navigation, not a one-tap act).
+  const drafted = {
+    ...richFocus,
+    acts: false,
+    lead: { domain: "recovery", title: "Take an earned recovery week", why: "Queued.", draft_pending: true },
+  };
+  const draftedHtml = focus.coachingFocusCardHtml(drafted, { actions: true });
+  assert.doesNotMatch(draftedHtml, /data-cfocus-act/, "the review link is navigation, never a data-cfocus-act");
+  assert.match(draftedHtml, /Review your recovery week/, "the review link survives under lead mode");
+  assert.match(draftedHtml, /data-cfocus-go="plan-coach"/);
+});
+
+test("a RUNNING recovery week lead renders non-interactive — no route, role, or arrow", () => {
+  const { focus } = loadCoachingFocus();
+  const running = {
+    available: true,
+    headline: "",
+    lead: { domain: "recovery", title: "Recovery week — absorb the work", why: "This week is deliberately lighter.", recovery_active: true },
+    parallel: [],
+    later: [],
+    connections: [],
+    retest: null,
+  };
+  const html = focus.coachingFocusCardHtml(running, { actions: true });
+  assert.match(html, /cfocus-lead cfocus-confirm/, "the lead is a non-interactive confirmation block");
+  assert.doesNotMatch(html, /data-cfocus-go/, "no navigation target — the running week is not a destination");
+  assert.doesNotMatch(html, /cfocus-go-arrow/, "no arrow affordance");
+  assert.doesNotMatch(html, /role="link"/, "no link role");
+  assert.match(html, /Recovery week — absorb the work/, "the lead still speaks");
+});
+
 test("the plan-coach route lands on the Plan tab's Coach section (the waiting draft)", () => {
   const { focus, state, activated } = loadCoachingFocus();
   state.tab = "progress";

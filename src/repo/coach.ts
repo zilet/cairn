@@ -9,7 +9,7 @@ import { getProgramState, type ProgramState } from "./program-state.js";
 import { performanceStanding } from "./performance.js";
 import { enduranceTestsDue, runVarietyRead, runZones, weeklyRunPlan } from "./run-progression.js";
 import { dexaTargeting } from "./dexa-targeting.js";
-import { muscleGroupTrajectory, testWeekDue } from "./muscle-trajectory.js";
+import { muscleGroupTrajectory, planExerciseNames, testWeekDue } from "./muscle-trajectory.js";
 import { coachingFocus } from "./coaching-focus.js";
 import { planDayProgression, programAdjustments, programBalance, recentMuscleLoad } from "./progression.js";
 import { jaccard, memNorm, memoryForCoach, recentLearnings } from "./memory.js";
@@ -48,7 +48,13 @@ import { cardiovascularRiskRead } from "./risk.js";
 import { trainingBenchmarkRead } from "./training-milestones.js";
 import { listDueAttention } from "./attention.js";
 import { brainSignal, runWithBrainSnapshot } from "../brain/snapshot.js";
-import { listBrainDecisions, listBrainExpectations } from "./brain-decisions.js";
+import {
+  listBrainDecisions,
+  listBrainExpectations,
+  recentAppliedRotations,
+  upcomingBrainDecisions,
+} from "./brain-decisions.js";
+import { getSettings } from "./settings.js";
 import { latestBrainEvaluation } from "./brain-evaluations.js";
 
 // ---------- coach context (shared by prompts) ----------
@@ -812,9 +818,19 @@ function getCoachContextFromSnapshot(): CoachContext {
       testWeek: testWeekView,
     }).slice(0, 6)
   );
+  // Exercise rotations the brain/athlete already applied (≤21 days). Shared by the
+  // muscle-group trajectory (so a just-rotated-out lift is kept out of the vary menu)
+  // AND the conductor (so a handled plateau reads as a new stimulus, not a fresh ask).
+  const recentRotationsView = brainSignal("recent_rotations:21", () => {
+    try {
+      return recentAppliedRotations(21);
+    } catch {
+      return [];
+    }
+  });
   const groupsTrajectoryView = brainSignal(`groups_trajectory:${today}`, () => {
     try {
-      return muscleGroupTrajectory(today, { programState: fullProgramState });
+      return muscleGroupTrajectory(today, { programState: fullProgramState, recentRotations: recentRotationsView });
     } catch {
       return null;
     }
@@ -927,6 +943,33 @@ function getCoachContextFromSnapshot(): CoachContext {
             return null;
           }
         })(),
+        // Autonomy-awareness (lead-by-default): under 'lead' the coach applies bounded
+        // changes itself at natural boundaries, so the conductor drops its one-tap asks
+        // and speaks state. recentRotations + plannedNames let it tell a HANDLED plateau
+        // (lift already rotated out) from a live one; `upcoming` names the weekday an
+        // auto-set recovery week arrives.
+        leadMode: (() => {
+          try {
+            return getSettings().lead_mode;
+          } catch {
+            return "lead";
+          }
+        })(),
+        recentRotations: recentRotationsView,
+        plannedNames: brainSignal("planned_names", () => {
+          try {
+            return planExerciseNames();
+          } catch {
+            return [];
+          }
+        }),
+        upcoming: brainSignal("upcoming_decisions:10", () => {
+          try {
+            return upcomingBrainDecisions(10);
+          } catch {
+            return [];
+          }
+        }),
         // The recovery-week state machine (due → drafted → applied): a waiting draft
         // flips the Program button into a review link; an APPLIED week in flight
         // makes the lead a calm confirmation ("recovery week is on") with no action
@@ -1025,7 +1068,13 @@ registerTrainingCacheClear(() => {
 });
 
 export function getCoachingFocus() {
-  const key = `${currentTrainingDataVersion()}:${currentMarkerDataVersion()}:${localDateISO()}`;
+  // lead_mode is in the key so flipping the setting (which changes `acts` and the
+  // recovery/stall copy) busts the memo without waiting for a training/marker write.
+  let leadMode = "lead";
+  try {
+    leadMode = getSettings().lead_mode;
+  } catch {}
+  const key = `${currentTrainingDataVersion()}:${currentMarkerDataVersion()}:${localDateISO()}:${leadMode}`;
   if (
     coachingFocusMemo &&
     coachingFocusMemo.key === key &&
