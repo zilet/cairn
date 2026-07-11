@@ -50,6 +50,7 @@ test("one established regressing lift stays visible even while another lift adva
   const strength = read.domains.find((domain) => domain.domain === "strength");
   assert.equal(strength.verdict, "worse");
   assert.match(strength.why, /Bench Press/);
+  assert.match(strength.why, /Lateral Raise/);
   assert.match(strength.why, /other lift is still advancing/);
   assert.ok(read.unexplained_worse.includes("strength"));
   assert.equal(read.revision_needed, true);

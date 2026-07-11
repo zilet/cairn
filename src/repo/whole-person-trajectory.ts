@@ -95,7 +95,7 @@ function strengthRead(start: string, end: string, parked: boolean): WholePersonD
       : improving.length
         ? "better"
         : "holding";
-  const names = (items: typeof comparable) => items.slice(0, 3).map((row) => row.exercise).join(", ");
+  const names = (items: typeof comparable) => items.slice(0, 5).map((row) => row.exercise).join(", ");
   return {
     domain: "strength",
     verdict,
@@ -107,7 +107,7 @@ function strengthRead(start: string, end: string, parked: boolean): WholePersonD
           ? `${improving.length} comparable lift${improving.length === 1 ? " is" : "s are"} advancing${improving.length ? `: ${names(improving)}` : ""}.`
           : verdict === "holding"
             ? "Comparable lift capacity held steady."
-            : `${regressing.length} comparable lift${regressing.length === 1 ? " needs" : "s need"} rebuilding: ${names(regressing)}${improving.length ? `; ${improving.length} other lift${improving.length === 1 ? " is" : "s are"} still advancing` : ""}. Regression stays visible even when the overall program is improving.`,
+            : `${regressing.length} comparable lift${regressing.length === 1 ? " needs" : "s need"} rebuilding: ${names(regressing)}${improving.length ? `; ${improving.length} other lift${improving.length === 1 ? " is" : "s are"} still advancing: ${names(improving)}` : ""}. Regression stays visible even when the overall program is improving.`,
     evidence_keys: rows.length
       ? [`logged_sets:${start}..${end}:n=${rows.length}`, `strength_lifts_comparable:${comparable.length}`]
       : [],
