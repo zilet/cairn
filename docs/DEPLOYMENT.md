@@ -107,7 +107,8 @@ The PWA prompts once and stores the token. MCP/API clients send `Authorization: 
 ## Shape 3 — Raspberry Pi (always-on home box)
 
 The Pi is a common always-on target. Host Node is often older than 24; **use Docker** so the
-container bundles Node 24 and the coaching CLIs without upgrading the host.
+container provides Node 24 without upgrading the host. The image stays lean: install only the
+coaching CLI you use from **Settings → Agents**; it persists in the `cairn-tools` volume.
 
 The fastest path uses the dedicated setup script, which handles Docker install (with consent
 prompt), arm64 detection, and low-memory/swap guidance:

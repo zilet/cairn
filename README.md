@@ -30,41 +30,22 @@ the whole app runs on your **device's local clock**, so an evening log lands on 
 *and* while traveling. The product north-star lives in [`docs/VISION.md`](docs/VISION.md). One Node
 service serves:
 
-- **PWA** (`/`) - a phone-first app (with a responsive two-column desktop layout) and six tabs:
-  **Today** (the day-read **Brief** — a calm rest/easy/train suggestion with override chips and a
-  "build me a session" launchpad, **day-type-aware** so it reads *TODAY · A RUN*, *TODAY · LIFT + RUN*,
-  or a lift day, with a prescribed run that already synced flipping to a calm done card and a forward
-  look at the week ahead; effortless capture via one-tap frequent foods, voice input, and an optional
-  morning check-in; a quiet insight card; post-session 1-tap autoregulation feedback; plus the weekly
-  stats strip, bodyweight quick-add, a date picker to log any past day, set-by-set logging with
-  prefill + `N / M` progress, rest timer, PR detection, "+ Add exercise", finish-workout summary,
-  form guides + agentic "how to do it"),
-  **Plan** (a manual plan editor — add/remove/reorder days & exercises, per-exercise notes & warmup
-  sets; an **Endurance** race-coach sub-tab with a race-countdown / standing-goal banner, the current
-  phase (base → build → sharpen → taper), and this week's run shaping; plus the Coach
-  draft/proposal/meal-plan flow with accept/discard UI, where the week's runs arrive as applyable
-  prescriptions), **Progress** (est-1RM trend, bodyweight chart vs goal, session history, volume by
-  muscle, calendar heatmap, an **Endurance** view with weekly mileage, time-in-zone, pace trend,
-  endurance PRs, and an "N of M km this week" compliance line, and an **Energy Balance** view with an
-  adaptive nutrition check-in), **Chat** (talk to your coach: it logs
-  safe things instantly and stages plan changes as drafts), **Me** (a Standing / Profile / Health /
-  Life / Family / Memory sub-nav, **Standing first**: a where-you-stand review leading with your
-  coaching focus + how you compare for your age; profile with a free-text **about-me**, goal
-  feasibility check & bodyweight; a **Memory** view to curate what the coach remembers;
-  **Health** (lab data) — upload bloodwork/DEXA/other as PDF or photo for marker extraction, with a
-  **Read** view holding recovery, optimal-zone priority markers, and the cross-domain directives
-  propagated from your labs, plus Markers / Records / Share / Learned sub-tabs. Done/Dismiss on those
-  directives becomes feedback memory: handled advice stays quiet
-  for the same result, dismissed advice is not repeated unless the marker materially changes;
-  **Life** — a timeline of trips, injuries & life events the coach plans around;
-  **Family** — the roster the coach plans around), and **Settings** (agent rotation + weekly
-  auto-coach, **agentic enrichment** toggle, **Apple Health** connect via an iOS Shortcut, data
-  export/backup, first-run onboarding).
+- **PWA** (`/`) - a phone-first app (with a responsive two-column desktop layout) and six primary
+  spaces: **Today** for the calm day-read Brief, effortless capture, and upcoming-change heads-ups;
+  **Train** for history, strength trends, muscle balance, endurance, bodyweight, and energy balance;
+  **Stand** for the whole-health read, records, markers, connected directives, body measurements,
+  and clinician sharing; **Plan** for Training, Endurance, Food, and Meals — showing the current plan,
+  what is coming next, and what recently changed; **Coach** for durable streaming conversation and
+  direction; and **Settings** for agents, autonomy posture, sources, security, backup, and the profile
+  areas Cairn plans around. Safe logging happens immediately. Plan-shaping work is governed by the
+  server-owned autonomy policy: bounded reversible changes can land at natural boundaries,
+  structural changes announce first, and clinical or goal-identity decisions always ask.
 - **REST API** (`/api/*`).
 - **MCP server** (`/mcp`, Streamable HTTP) - Claude / Codex / Antigravity / Grok read & write
   everything: plan, logs, profile, goal, activities, memory, meal plans, food notes, health
   records, and life-context events (trips/injuries).
-- **Agent runner + scheduler** - drafts training-target and meal-plan proposals from your data.
+- **Agent runner + scheduler** - monitors the whole picture, prepares training and nutrition
+  adaptations, and routes each through the same accountable autonomy policy.
 
 Storage is SQLite via Node's built-in `node:sqlite`. **Requires Node 24** (where `node:sqlite`
 is unflagged). The Docker image bundles Node 24, so users do not need Node installed on the host.
@@ -99,7 +80,7 @@ is unflagged). The Docker image bundles Node 24, so users do not need Node insta
 </tr>
 <tr>
 <td valign="top"><img src="media/screens/17-recipe.png" alt="Recipe detail"><br><sub><b>Recipe on tap.</b> Any planned meal expands into a full recipe — ingredients, steps and tips — written for that exact dish.</sub></td>
-<td valign="top"><img src="media/screens/11-chat.png" alt="Coach chat"><br><sub><b>Coach chat.</b> Logs the easy things instantly and stages plan changes as drafts you approve.</sub></td>
+<td valign="top"><img src="media/screens/11-chat.png" alt="Coach chat"><br><sub><b>Coach chat.</b> Logs safe things instantly, learns from your direction, and routes plan changes through accountable autonomy.</sub></td>
 <td valign="top"><img src="media/screens/13-life.png" alt="Life timeline"><br><sub><b>Life &amp; family.</b> Trips, injuries and the people you plan around — the coach eases off accordingly.</sub></td>
 </tr>
 </table>
@@ -146,7 +127,7 @@ The script detects Docker (preferred, no Node needed on the host) or falls back 
 local Node 24, starts Cairn, waits for health, and prints the URL. Open
 **http://localhost:8787** — you land on the Brief immediately.
 
-**First paint is real**, no agent required. For chat, coaching drafts, and meal plans, add **one**
+**First paint is real**, no agent required. For chat, adaptive coaching, and meal plans, add **one**
 agent. The image stays lean and ships no provider CLI by default: open **Settings → Agents**, tap
 **Install** on the provider you use, then **Connect**. A terminal opens in the browser and walks you
 through that provider's sign-in, no `docker exec` needed. An agent you haven't connected is kept out
@@ -158,8 +139,8 @@ Prefer a terminal? It's one `docker exec` (the container is named `cairn`):
 docker exec -u app -it cairn claude auth login   # or: codex login --device-auth · agy · grok login --device-auth
 ```
 
-The built-in `stub` agent returns a canned demo proposal to explore the propose→apply UI offline (it's
-not a coach). Full detail (Grok API key, local-Node logins):
+The built-in `stub` agent returns a canned response for offline contract and integration smoke tests
+(it is not a coach). Full detail (Grok API key, local-Node logins):
 [Connect your first agent](docs/QUICKSTART.md#connect-your-first-agent).
 
 ### What works out of the box vs. what needs a coaching agent
@@ -172,18 +153,18 @@ one up.
 |---|---|
 | The Brief — calm rest/easy/train suggestion | The agentic Brief sentence (the plain-language read on top) |
 | Set-by-set logging, history, PRs, est-1RM | Coach **chat** |
-| The plan editor (add/remove/reorder days) | Plan & meal **drafting** (propose → review → apply) |
+| The plan editor (add/remove/reorder days) | Agent-shaped training and meal adaptations |
 | Bodyweight chart, goal feasibility check | Health-review **narrative** |
 | Marker extraction view & optimal-zone trends | Quiet cross-domain **insights** / weekly read |
 | Recovery view, deterministic TDEE / expenditure | Recipe generation, single-meal swaps |
 | Activities, food notes, memory, family, life context | Background enrichment of free-text logs |
-| Endurance stats, run compliance, race countdown, PRs | Weekly run **prescriptions** (drafted, then applied surgically) |
+| Endurance stats, run compliance, race countdown, PRs | Agent-refined weekly run prescriptions |
 
 A **coaching agent** means one of the supported CLIs — **Claude Code**, **Codex**,
 **Antigravity**, or **Grok** — installed into Cairn's persistent home volume **and logged in** with
-your own account. There is no shared key and no built-in model: install only providers you use. The built-in `stub` agent exercises the same
-propose/apply loop offline with no key, so you can explore the agentic flow before connecting a
-real one.
+your own account. There is no shared key and no built-in model: install only providers you use. The
+built-in `stub` agent exercises Cairn's offline agent contract with no key, for smoke testing before
+you connect a real coach.
 
 ### Pick a run target
 
@@ -219,13 +200,13 @@ spin it up on demand, stop it when idle to cut cost — see [`docs/SANDBOX.md`](
 | [`CHANGELOG.md`](CHANGELOG.md) | Release history |
 
 Coaching needs an agent. For **Claude Code**, **Codex**, and **Antigravity** that means the
-provider's CLI installed and **logged in** on the host — they use their subscription OAuth login
+provider's CLI installed and **logged in** for the Cairn process — they use their subscription OAuth login
 directory, not an environment API key (`claude -p` and `codex exec` ignore `ANTHROPIC_API_KEY` /
 `OPENAI_API_KEY` for this flow). Only **Grok headless** reliably uses an API key (`XAI_API_KEY`).
 `GEMINI_API_KEY` is for the optional generated **artwork** only — it is not a coaching path (Cairn
-even strips it from the agent subprocess env). Or pick the built-in **`stub`** agent in Settings to
-exercise the propose/apply loop offline with no key. Without an agent, draft/coach actions fall
-through silently.
+even strips it from the agent subprocess env). Or use the built-in **`stub`** agent for an offline
+contract smoke test. Without an agent, deterministic reads and logging keep working; generative
+features show a calm fallback instead of persisting empty work.
 
 ## Run With Docker
 
@@ -309,8 +290,8 @@ checklist.
   **standing** readiness target ("stay 10k-ready" — maintain, don't peak).
 - **Lifting** (precise): the 5-day plan with per-exercise targets, logged sets, est-1RM trends.
   This is the part that gets actively optimized.
-- **Running & endurance:** the coach prescribes the week's runs (easy / tempo / intervals / long,
-  each with distance, duration, and target zone) as a draft you approve; a synced Garmin run then
+- **Running & endurance:** the coach shapes the week's runs (easy / tempo / intervals / long,
+  each with distance, duration, and target zone) through the same autonomy policy; a synced Garmin run then
   reconciles against what was prescribed, so Today shows "N of M km this week" in plain words and
   next week adapts **conservatively** to the miles you actually ran (fell short → hold, never make up
   missed volume). Weekly mileage, time-in-zone, pace trend, and endurance PRs live in Progress →
@@ -330,8 +311,9 @@ checklist.
   planning keeps improving as the picture fills in. Notes come from chat, manual entry, or
   background enrichment of your logs; you can curate them in the **Me → Memory** view (or via the
   `update_memory` / `delete_memory` MCP tools).
-- **Meal plans**: goal-aware weekly drafts that use the lean-safe target and protein floor (never a
-  crash deficit), respecting food preferences in memory.
+- **Meal plans**: goal-aware weekly plans that use the lean-safe target and protein floor (never a
+  crash deficit), respect food preferences, and can be prepared ahead without replacing the current
+  week before its natural food-day boundary.
 - **Food notes** (optional, no daily logging): see below.
 - **Health records**: upload bloodwork / DEXA / other docs (PDF or photo) in Me → Health; an agent
   reads the file in the background, extracts structured markers + a plain-language summary, and
@@ -428,16 +410,17 @@ container; it should not be enabled for an internet-exposed deployment.
 Open the **Settings** tab (or `get_settings`/`set_settings` over MCP) to choose how Cairn picks an
 agent when you don't name one: **round-robin** (even rotation across your subscriptions), **random**
 (dice), or **priority** (top of the list first). Toggle individual agents on/off and reorder them —
-disable a provider that isn't logged in and the rest keep working. Any "auto" draft tries the chosen
-order and **falls through on failure**, so a dead login never blocks a proposal. In the Coach tab,
+disable a provider that isn't logged in and the rest keep working. Any automatic coaching run tries
+the chosen order and **falls through on failure**, so a dead login never blocks the read. In Coach,
 pick **⟳ Auto** to use this rotation, or pick a specific agent.
 
 ### Let it run
-In **Settings → Weekly auto-coach**, enable it and set the day/hour. Weekly it drafts a training
-proposal (via the rotation) that waits in the Coach tab. It never auto-applies; you review and tap
-Apply. (First boot seeds these from `COACH_AGENT`/`COACH_DAY`/`COACH_HOUR` in `.env` if set.)
-Sanity-check every proposal against how your body actually feels (the seed plan ships with generic
-form cues — add your own injury constraints per exercise in the Plan editor). Docker defaults to
+In **Settings → Weekly auto-coach**, enable it and set the day/hour. Weekly, the expert loop reviews
+the latest training picture and prepares the next adaptation via the configured rotation. In Lead
+mode, bounded reversible updates land at a natural boundary, structural updates are announced first,
+and Hold/Undo remain close at hand. Choose the review posture if you want every material change held
+for approval. (First boot seeds these from `COACH_AGENT`/`COACH_DAY`/`COACH_HOUR` in `.env` if set.)
+Keep your injury constraints current in the Plan editor so every automatic read sees them. Docker defaults to
 `TZ=America/New_York`; set `TZ` in `.env` to the user's local timezone so the configured day/hour
 means local time rather than UTC. For Belgrade:
 
@@ -450,7 +433,7 @@ TZ=Europe/Belgrade
 claude mcp add --transport http cairn http://localhost:8787/mcp
 ```
 Cairn registers 176 MCP tools spanning the whole app — plan & sessions, exercises, progress &
-volume, the propose/apply coach loop, profile & goal, bodyweight & activities, memory, meal plans &
+volume, the accountable coaching loop, profile & goal, bodyweight & activities, memory, meal plans &
 recipes, food notes, health records & markers, the connected-brain directives & insights, the
 day-read Brief & on-demand session suggestions, recovery & adaptive nutrition, check-ins & daily
 metrics, family, chat, Garmin sync, life-context events, and settings. A representative slice:

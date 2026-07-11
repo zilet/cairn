@@ -4,6 +4,27 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-07-11 — trustworthy autonomous intelligence and visible future change
+
+The **v1.1.0** quality round makes the expert-team model dependable at both ends of the loop. Agent
+responses now have operation-specific semantic contracts: a provider that returns valid JSON for
+the wrong job is repaired once, then rotated past, while Today and week-ahead reads fall back to
+useful deterministic or stale content instead of showing empty work. Explicit user cancellation is
+preserved through the verification and fallback layers, so a stopped request cannot quietly persist
+later. Food events are also kept separate from durable meal preferences, preventing an ordinary log
+from distorting future planning.
+
+The normal Plan and Meals experience no longer revolves around Drafts. It shows the accepted plan,
+the next scheduled change, and recent changes; Today gives a concise heads-up, with Hold, Why, and
+Undo close by. Background training and nutrition adaptations continue through the same server-owned
+autonomy policy: bounded reversible changes can land at natural boundaries, structural changes
+announce first, and clinical or goal-identity decisions always ask.
+
+The Docker runtime is leaner and provider-neutral. Coaching CLIs install on demand from Settings into
+the persistent `cairn-tools` volume, with pinned package identities/checksums and opt-in updates,
+instead of inflating every image with every provider. No schema migration was required. The PWA cache
+advances to `cairn-v472`.
+
 ## 2026-07-11 — continuous expert-team stewardship
 
 A no-schema **v1.0.3** autonomy-alignment round closes the remaining legacy

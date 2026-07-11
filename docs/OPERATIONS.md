@@ -166,9 +166,9 @@ backup (see Backups below) rather than trying to reverse the migration.
 - `runMigrations(db)` — reads `PRAGMA user_version`, runs every entry whose `version` is
   greater, then sets `user_version` to the highest applied version.
 
-The authoritative, ordered list lives in `src/migrate.ts` (`MIGRATIONS`) — kept there rather than
-duplicated here so it can't drift. As of this writing the schema is at **user_version 49**; run
-`npm run migrate` to print the current version and apply any pending ones.
+The authoritative, ordered list and current version live in `src/migrate.ts` (`MIGRATIONS`) — kept
+there rather than duplicated here so they cannot drift. Run `npm run migrate` to print the current
+version and apply any pending migrations.
 
 Every migration is additive and idempotent — an `ALTER TABLE … ADD COLUMN` wrapped in try/catch (so
 re-running is a no-op), plus a couple of `CREATE INDEX IF NOT EXISTS`. None backfill or drop data, so

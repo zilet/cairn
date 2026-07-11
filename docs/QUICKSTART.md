@@ -36,9 +36,9 @@ This binds Cairn to this computer only. Widen to your LAN, for example
 Prefer an editable config file over a long command line? Use the
 [compose file](#configure-with-a-compose-file) instead — still no clone.
 
-## 2 · Add a coaching agent — optional, for chat & drafts
+## 2 · Add a coaching agent — optional, for chat & adaptation
 
-Chat, coaching drafts, and meal-plan generation need one external agent. Cairn ships lean, with no
+Chat, adaptive coaching, and meal-plan generation need one external agent. Cairn ships lean, with no
 provider CLI in the image. Install only the provider you use, then log in.
 
 **Easiest — install and log in from the app (no terminal).** Open **Settings → Agents**, pick a
@@ -62,8 +62,8 @@ docker exec -u app -it cairn grok login --device-auth   # Grok         — devic
 Always use `-u app` here — the server runs as that user, so a login written as root is invisible to it.
 (The in-app **Connect** flow above avoids this gotcha entirely.)
 
-- **No subscription handy?** The built-in **`stub`** agent returns a canned demo proposal so you can
-  click through the propose→apply UI offline — it is not a coach; connect a real agent above for that.
+- **No subscription handy?** The built-in **`stub`** agent returns a canned response for offline
+  contract smoke tests — it is not a coach; connect a real agent above for real adaptation.
 - **Grok via API key** (instead of the interactive login): add `-e XAI_API_KEY=xai-…` to the
   `docker run` command and re-create the container.
 - Running on Node, or want the streaming / auth-directory detail? See
@@ -78,15 +78,15 @@ conversational and generative layer, and the app stays useful while you set one 
 |---|---|
 | The Brief (rest/easy/train suggestion) | The agentic Brief sentence on top |
 | Logging, history, PRs, est-1RM | Coach **chat** |
-| The plan editor | Plan & meal **drafting** (propose → review → apply) |
+| The plan editor | Agent-shaped training and meal adaptations |
 | Bodyweight chart, goal feasibility | Health-review **narrative** |
 | Marker extraction & optimal-zone trends | Quiet **insights** / weekly read |
 | Recovery view, deterministic TDEE | Recipe generation, single-meal swaps |
 
 A **coaching agent** means one of the supported CLIs — **Claude Code**, **Codex**,
-**Antigravity**, or **Grok** — installed on the host **and logged in** with your own account.
+**Antigravity**, or **Grok** — installed for the Cairn process **and logged in** with your own account.
 There is no shared key or built-in model; each provider needs its own CLI and login. The built-in
-`stub` agent exercises the same propose/apply loop offline with no key.
+`stub` agent exercises Cairn's offline response contract with no key.
 
 ## Going deeper
 
@@ -286,23 +286,24 @@ tailnet-only, a real offline-capable PWA, nothing on the public internet. The Br
 work the moment Cairn is running; phone setup and agents are completely optional at first.
 
 The plan editor, history, PRs, and connected brain (markers, recovery, directives) all work with
-no agent. Chat and draft proposals need one.
+no agent. Chat and generative adaptations need one.
 
 ### First 10 minutes
 
 1. **Me -> Profile:** replace the seeded example profile with your real weight, goal, training
    age, and any constraints.
 2. **Today:** log one set or one bodyweight entry so the charts have your first real point.
-3. **Settings -> Agents:** enable `stub` if you want to see the draft/apply workflow with no login.
+3. **Settings -> Agents:** install and connect the coaching provider you already use.
 4. **Settings -> Export:** download a JSON or DB backup once you start entering real data.
 
-After that, connect a real agent when you want chat, meal plans, and adaptive coaching drafts.
+After that, Coach is the simplest place to give direction; Cairn also prepares future training and
+meal changes in the background according to your autonomy posture.
 
 ---
 
 ## Connect your first agent
 
-Coaching drafts, chat, and meal plans need one external agent. Choose one:
+Coach chat, generated meal plans, and agent-shaped adaptations need one external agent. Choose one:
 
 | Agent | Auth |
 |---|---|
@@ -310,7 +311,7 @@ Coaching drafts, chat, and meal plans need one external agent. Choose one:
 | `codex` | Codex — ChatGPT subscription (CLI **login**, not an env key) |
 | `antigravity` | Antigravity (`agy`) — Google account (CLI **login**) |
 | `grok` | Grok Build — SuperGrok / X Premium+ (headless coaching uses `XAI_API_KEY` in `.env`) |
-| `stub` | Built-in offline stub — no key, no login, exercises the propose/apply loop |
+| `stub` | Built-in offline stub — no key, no login, contract smoke tests only |
 
 > `claude`/`codex`/`antigravity` authenticate through the CLI's own subscription login directory —
 > `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` in the environment are **not** the coaching path for them.
@@ -319,7 +320,7 @@ Coaching drafts, chat, and meal plans need one external agent. Choose one:
 
 **The easiest path is in the app.** **Settings → Agents → Connect** opens a terminal in the browser
 and runs the sign-in for you — no `docker exec`, no `-u app` to remember (see
-[step 2](#2--add-a-coaching-agent--optional-for-chat--drafts)). The sections below are the terminal /
+[step 2](#2--add-a-coaching-agent--optional-for-chat--adaptation)). The sections below are the terminal /
 Node / streaming reference, for scripting or when you prefer a shell.
 
 ### Docker: log in inside the container
@@ -337,8 +338,9 @@ docker exec -u app -it cairn agy                 # Antigravity (Google) — past
 docker exec -u app -it cairn grok login --device-auth   # Grok — device login (or use XAI_API_KEY, below)
 ```
 
-After logging in, enable that agent in **Settings → Agents** and tap **Draft plan update** to test
-it. You only need **one** to unlock chat, drafts, and meal plans; add more later for the rotation.
+After logging in, enable that agent in **Settings → Agents**, open **Coach**, and ask a simple
+question to test it. You only need **one** to unlock chat, adaptive reads, and meal planning; add
+more later for the rotation.
 
 > Started with the source checkout via `docker compose`? `docker compose exec -u app -it cairn …`
 > is equivalent — but the `docker exec` form above works for both, so prefer it.
@@ -371,13 +373,10 @@ agy           # Google
 
 ### Enable and test the agent
 
-Open **Settings → Agents**, enable your provider, and tap **Draft plan update**. The proposal
-appears in **Plan → Coach** for review; tap Apply to accept it.
-
-To try the offline stub without any login:
-
-1. **Settings → Agents** → enable `stub`
-2. Tap **Draft plan update** — it returns a canned proposal instantly.
+Open **Settings → Agents**, enable your provider, then open **Coach** and ask what it notices about
+the current week. Lead mode applies bounded reversible changes at natural boundaries, announces
+structural changes first, and always asks about clinical or goal-identity decisions. Choose the
+review posture in Settings if you want every material change held for approval.
 
 ### Agent streaming
 

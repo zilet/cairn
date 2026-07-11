@@ -5,6 +5,39 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-07-11
+
+Cairn's background expert team becomes more trustworthy and less chore-like. Intelligence outputs
+are now accepted by meaning, not merely by valid JSON; failed providers repair, rotate, and fall
+back calmly. Plan and Meals show the current plan, upcoming changes, and recent changes instead of
+making Drafts the normal workflow. The Docker image is leaner, with coaching providers installed on
+demand into a persistent tools volume. No schema migration is required. PWA cache `cairn-v472`.
+
+### Added
+
+- **Visible future adaptation** — Plan, Meals, and Today surface scheduled changes before they land,
+  with Hold, Why, and Undo near the change rather than a separate Drafts inbox.
+- **On-demand coaching CLI installation** — install only the provider you use from Settings; pinned
+  identities/checksums and a persistent `cairn-tools` volume keep upgrades reproducible.
+
+### Changed
+
+- **Semantic intelligence contracts** — each operation validates the shape and meaning it needs,
+  attempts one bounded repair, then rotates to another provider before using deterministic or stale
+  fallback content.
+- **Food intent stays clean** — ordinary food events no longer become durable meal preferences that
+  distort later planning.
+- **Autonomy language is consistent** — public docs and program-evolution prompts now match the
+  server-owned policy: bounded reversible changes can land at natural boundaries, structural changes
+  announce first, and clinical or goal-identity decisions always ask.
+
+### Fixed
+
+- **Stop remains Stop** — cancellation now propagates through verification and week-ahead fallback,
+  preventing canceled work from being persisted later.
+- **Calm degradation** — invalid agent responses no longer create empty drafts or misleading Today
+  reads, and failure telemetry retains the rejected contract for diagnosis.
+
 ## [0.8.0] — 2026-07-04
 
 The body surfaces get an **elite figure**: the crude ellipse packs are replaced by one
