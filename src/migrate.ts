@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { extractMeasuredRmr } from "./repo/metabolism-core.js";
 
 export interface Migration {
   version: number;
@@ -651,6 +652,52 @@ export const MIGRATIONS: Migration[] = [
       )`);
       db.exec(`CREATE INDEX idx_request_metric_hour ON request_metric_buckets(hour DESC)`);
       db.exec(`CREATE INDEX idx_request_metric_route ON request_metric_buckets(build_id, protocol, route, hour DESC)`);
+    },
+  },
+  {
+    version: 63,
+    name: "profile-measured-rmr",
+    up: (db) => {
+      addColumn(db, "profile", "measured_rmr_kcal REAL");
+      addColumn(db, "profile", "measured_rmr_date TEXT");
+      addColumn(db, "profile", "measured_rmr_source TEXT");
+      try {
+        const rows = db.prepare(
+          `SELECT id, kind, doc_date, parsed_json, summary
+             FROM health_documents
+            WHERE lower(COALESCE(kind,'')) = 'metabolic_test'
+            ORDER BY COALESCE(doc_date, substr(created_at,1,10)) DESC, id DESC`
+        ).all() as any[];
+        const reading = rows.map(extractMeasuredRmr).find(Boolean);
+        if (reading) {
+          db.prepare(
+            `UPDATE profile
+                SET measured_rmr_kcal = ?, measured_rmr_date = ?, measured_rmr_source = ?
+              WHERE id = 1 AND measured_rmr_kcal IS NULL`
+          ).run(reading.kcal, reading.date, reading.source);
+        }
+      } catch { /* health docs/profile may be empty on a fresh install */ }
+    },
+  },
+  {
+    version: 64,
+    name: "journey-baseline-backfill",
+    up: (db) => {
+      // Preserve the first observed point as the journey baseline. This fills only
+      // missing fields; an explicit athlete-selected baseline always wins.
+      try {
+        db.exec(`
+          UPDATE profile
+             SET start_weight_lb = COALESCE(start_weight_lb, (
+                   SELECT weight_lb FROM bodyweight_log ORDER BY date ASC, id ASC LIMIT 1
+                 )),
+                 start_date = COALESCE(start_date, (
+                   SELECT date FROM bodyweight_log ORDER BY date ASC, id ASC LIMIT 1
+                 ))
+           WHERE id = 1
+             AND (start_weight_lb IS NULL OR start_date IS NULL)
+        `);
+      } catch { /* empty profile/weight log */ }
     },
   },
 ];

@@ -162,3 +162,32 @@ test("a material nutrition correction can schedule only a bounded next-day targe
   assert.deepEqual(due.applied, [result.autonomy.decision.id]);
   assert.equal(repo.getActiveNutritionTarget().target_kcal, 2_250);
 });
+
+test("material performance fatigue triggers a bounded nutrition signal review during a cut", async () => {
+  repo.setProfile({
+    age: 44,
+    height_cm: 170.2,
+    weight_lb: 174.2,
+    goal_weight_lb: 164,
+    goal_mode: "lose",
+    activity_factor: 1.55,
+  });
+  repo.setSettings({ lead_mode: "lead" });
+  const proposal = repo.createProposal("stub", "performance fatigue", "", {
+    kind: "nutrition_target",
+    summary: "Fuel the work",
+    nutrition: { target_kcal: 2_075, protein_g: 175, carbs_g: 205, fat_g: 62, reason: "Performance is fading." },
+  });
+  let checks = 0;
+  const result = await executeBrainReviewAction(
+    { event: { kind: "session_feedback", domain: "training", date: "2026-07-11", material: true } },
+    "stub",
+    undefined,
+    { nutritionCheckin: async () => { checks += 1; return { ok: true, change: true, proposal }; } }
+  );
+
+  assert.equal(checks, 1);
+  assert.equal(result.action, "nutrition_signal_recheck");
+  assert.ok(result.reasons.some((reason) => /performance fatigue/i.test(reason)));
+  assert.ok(result.autonomy, "the proposal still travels through the autonomy path");
+});

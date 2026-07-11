@@ -26,6 +26,7 @@ import { runCaseConference } from "./domain/brain/case-conference.js";
 import { applyProposalWithAutonomy } from "./domain/brain/autonomy-service.js";
 import type { SpecialistDomain } from "./brain/specialist-contract.js";
 import { diagnosticErrorName, recordAsyncFailure } from "./diagnostics.js";
+import { addDaysISO, localDateISO } from "./repo/shared.js";
 
 // Durable, in-process agent-job engine — the GENERALIZATION of chatTurns.ts for
 // the other blocking agentic ops. An op is no longer a request held open for
@@ -88,6 +89,45 @@ export interface BrainReviewActionDeps {
   buildProgressionProposal?: typeof repo.buildProgressionProposal;
 }
 
+function nutritionReviewDue(event: any): { due: boolean; reasons: string[] } {
+  if (!["session_feedback", "weight_logged"].includes(String(event?.kind))) return { due: false, reasons: [] };
+  const today = localDateISO();
+  const last = String(repo.getAppState("nutrition_signal_recheck_last_date") ?? "");
+  if (last && last >= String(addDaysISO(today, -6) ?? today)) return { due: false, reasons: [] };
+  const goal: any = repo.computeGoalCheck();
+  if (!goal?.ok || goal.goal_mode !== "lose") return { due: false, reasons: [] };
+  const trend = Number(goal.trend_lb_wk);
+  const ideal = Number(goal.leanness_rate?.lean_ideal_rate_lb);
+  const program: any = repo.getProgramState();
+  const reasons: string[] = [];
+  if (Number.isFinite(trend) && Number.isFinite(ideal) && trend < -(ideal * 1.1))
+    reasons.push("weight trend is faster than the lean-ideal pace");
+  if (program?.hybrid?.fuel?.risk === "high") reasons.push("hybrid fuel risk is high");
+  if (event?.material === true && event?.kind === "session_feedback")
+    reasons.push("session performance fatigue was reported");
+  return { due: reasons.length >= 2 || (event?.kind === "session_feedback" && reasons.length >= 1), reasons };
+}
+
+async function runSignalNutritionReview(
+  event: any,
+  agent: string | undefined,
+  hooks: any,
+  deps: BrainReviewActionDeps
+) {
+  const due = nutritionReviewDue(event);
+  if (!due.due) return null;
+  const checkin = await (deps.nutritionCheckin ?? nutritionCheckin)(agent, undefined, hooks);
+  repo.setAppState("nutrition_signal_recheck_last_date", localDateISO());
+  const proposalId = Number(checkin?.proposal?.id);
+  if (!checkin?.change || !Number.isFinite(proposalId) || proposalId <= 0) {
+    return { ...checkin, action: "nutrition_signal_recheck", reasons: due.reasons };
+  }
+  const autonomy = (deps.applyProposalWithAutonomy ?? applyProposalWithAutonomy)(proposalId, {
+    requested_tier: "quiet_apply",
+  });
+  return { ...checkin, action: "nutrition_signal_recheck", reasons: due.reasons, autonomy };
+}
+
 /**
  * Execute the small set of signal-boundary actions that are safe without another
  * user decision. Training progression is deterministic and runs only after a
@@ -141,6 +181,9 @@ export async function executeBrainReviewAction(
     const autonomy = applyAutonomously(proposalId, { requested_tier: "quiet_apply" });
     return { ...checkin, action: "nutrition_recheck", autonomy };
   }
+
+  const signalNutrition = await runSignalNutritionReview(event, agent, hooks, deps);
+  if (signalNutrition) return signalNutrition;
 
   return insight(agent, "connection", hooks);
 }

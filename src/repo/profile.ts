@@ -17,6 +17,7 @@ import { invalidateDayRead } from "./intelligence.js";
 import { getActiveNutritionTarget, setNutritionTarget } from "./nutrition.js";
 import { type ClampAdjustment, type RunPrescription, applyPlanChange, replacePlan, setWeeklyRuns } from "./plan.js";
 import { getAppState, setAppState } from "./app-state.js";
+import { latestMeasuredRmr, measuredRmrActivityTdee } from "./metabolism.js";
 import { getProgress } from "./sessions.js";
 import { addDaysISO, LB_PER_KG, localDateISO } from "./shared.js";
 import { bumpTrainingDataVersion } from "./training-cache.js";
@@ -695,8 +696,7 @@ function cancelAnnouncementsForProposal(proposalId: number, exceptDecisionId?: n
       ...listBrainDecisions({ status: "announced", limit: 100 }),
       ...listBrainDecisions({ status: "pending", limit: 100 }),
     ].filter(
-      (decision) =>
-        decision.id !== exceptDecisionId && Number((decision.action as any)?.proposal_id) === proposalId
+      (decision) => decision.id !== exceptDecisionId && Number((decision.action as any)?.proposal_id) === proposalId
     );
     for (const decision of standing) transitionBrainDecision(decision.id!, "canceled");
   } catch {
@@ -1251,6 +1251,18 @@ export function logWeight(weight_lb: number, date?: string, note?: string) {
     date: d,
     entity_id: Number(info.lastInsertRowid),
     subject_key: "bodyweight",
+    ...(() => {
+      try {
+        const goal: any = computeGoalCheck();
+        const trend = Number(goal?.trend_lb_wk);
+        const ideal = Number(goal?.leanness_rate?.lean_ideal_rate_lb);
+        const material =
+          goal?.goal_mode === "lose" && Number.isFinite(trend) && Number.isFinite(ideal) && trend < -(ideal * 1.1);
+        return material ? { material: true, reason: "weight trend is faster than the lean-mass-preserving pace" } : {};
+      } catch {
+        return {};
+      }
+    })(),
   });
   return db.prepare(`SELECT * FROM bodyweight_log WHERE id = ?`).get(info.lastInsertRowid);
 }
@@ -1363,15 +1375,24 @@ export function computeGoalCheck(prof?: any) {
   }
   const kg = p.weight_lb / LB_PER_KG;
   const sexAdj = (p.sex || "male") === "female" ? -161 : 5;
-  const bmr = 10 * kg + 6.25 * p.height_cm - 5 * p.age + sexAdj;
+  const formulaBmr = 10 * kg + 6.25 * p.height_cm - 5 * p.age + sexAdj;
+  const measuredRmr = latestMeasuredRmr();
+  const bmr = measuredRmr?.kcal ?? formulaBmr;
   // The manual activity factor is a COLD-START seed. Once there's enough real
   // logging to trust the MacroFactor-style derivation (HIGH confidence only —
   // ≥2 weeks of intake AND weigh-ins over ≥2 weeks), prefer the athlete's
   // measured expenditure so the target reflects reality, not a guessed multiplier.
   // Thin data keeps the factor, so a light logging week never distorts the target.
-  const factorTdee = Math.round(bmr * (p.activity_factor || 1.5));
-  let tdee = factorTdee;
-  let tdee_source: "activity_factor" | "adaptive" = "activity_factor";
+  const factorTdee = Math.round(formulaBmr * (p.activity_factor || 1.5));
+  const measuredActivity = measuredRmrActivityTdee();
+  // Never multiply a measured RMR by a generic activity factor. When Garmin has
+  // enough active-calorie days, blend that direct measured-RMR anchor with the
+  // formula seed; otherwise retain the established cold-start factor.
+  const coldStartTdee = measuredActivity ? Math.round((factorTdee + measuredActivity.tdee) / 2) : factorTdee;
+  let tdee = coldStartTdee;
+  let tdee_source: "activity_factor" | "measured_rmr_plus_activity" | "adaptive" = measuredActivity
+    ? "measured_rmr_plus_activity"
+    : "activity_factor";
   try {
     const exp = estimateExpenditure();
     if (exp.confidence === "high" && exp.tdee != null && exp.tdee > 0) {
@@ -1500,6 +1521,9 @@ export function computeGoalCheck(prof?: any) {
   return {
     ok: true,
     bmr: Math.round(bmr),
+    bmr_source: measuredRmr ? "measured" : "formula",
+    bmr_formula: Math.round(formulaBmr),
+    measured_rmr: measuredRmr,
     tdee,
     tdee_source,
     lbs_to_lose: lbsToLose,

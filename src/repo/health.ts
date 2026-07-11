@@ -9,6 +9,7 @@ import { listExercises } from "./exercises.js";
 import { normalizeMarkerReading, parseLabNumber, seriesUnitsCompatible } from "./lab-units.js";
 import { canonicalMarker, canonicalMarkerForReading } from "./marker-canon.js";
 import { bumpMarkerDataVersion, currentMarkerDataVersion, resetMarkerDataVersion } from "./marker-cache.js";
+import { syncMeasuredRmrFromHealthDocs } from "./metabolism.js";
 import { bumpTrainingDataVersion } from "./training-cache.js";
 import { capStr } from "./nutrition.js";
 import { getPlan } from "./plan.js";
@@ -556,6 +557,7 @@ export function addHealthDocument(input: HealthDocInput) {
     );
   bumpMarkerHistoryVersion(); // a new doc (or a derived panel) can add marker series
   const row = getHealthDocument(Number(info.lastInsertRowid));
+  if (kind === "metabolic_test") syncMeasuredRmrFromHealthDocs();
   emitHealthDocumentSignals(row);
   return row;
 }
@@ -721,6 +723,7 @@ export function updateHealthDocFields(
   // commit, panel re-date); bump regardless of which field changed — cheap + exact.
   bumpMarkerHistoryVersion();
   const row = getHealthDocument(id) as any;
+  if (before?.kind === "metabolic_test" || row?.kind === "metabolic_test") syncMeasuredRmrFromHealthDocs();
   if (fields.parsed_json !== undefined || fields.kind !== undefined || fields.doc_date !== undefined) {
     const previous = healthDocumentSignalState(before);
     const next = healthDocumentSignalState(row);
@@ -804,6 +807,7 @@ export function confirmPendingLab(id: number, opts?: { enrichOn?: boolean; hasAg
 export function deleteHealthDocument(id: number) {
   const existing = getHealthDocument(id) as any;
   const derived = db.prepare(`SELECT * FROM health_documents WHERE source_doc_id = ?`).all(id) as any[];
+  const affectedMeasuredRmr = [existing, ...derived].some((row) => row?.kind === "metabolic_test");
   const relatedState = [existing, ...derived].reduce(
     (state, row) => {
       const next = healthDocumentSignalState(row);
@@ -817,6 +821,7 @@ export function deleteHealthDocument(id: number) {
   const deleted = db.prepare(`DELETE FROM health_documents WHERE id = ?`).run(id).changes;
   if (deleted) {
     bumpMarkerHistoryVersion();
+    if (affectedMeasuredRmr) syncMeasuredRmrFromHealthDocs();
     emitHealthDocumentSignals(existing ?? { id, doc_date: localDateISO() }, relatedState);
   }
   return { deleted, derived: derivedDeleted };

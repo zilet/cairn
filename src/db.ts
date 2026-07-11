@@ -120,6 +120,9 @@ CREATE TABLE IF NOT EXISTS profile (
   goal_date TEXT,
   goal_mode TEXT,                        -- lose | maintain | gain — the journey's shape (v41). NULL = derived from goal_weight (back-compat)
   activity_factor REAL DEFAULT 1.5,
+  measured_rmr_kcal REAL,                -- latest measured resting metabolic rate from a metabolic-test health document (v63)
+  measured_rmr_date TEXT,                -- effective date of that indirect-calorimetry result (v63)
+  measured_rmr_source TEXT,              -- provenance label, normally metabolic_test (v63)
   notes TEXT,
   about_me TEXT,                         -- rich free-text understanding (history, work, food likes/dislikes, what "better" means)
   allergies TEXT,                        -- free-text food allergies (HARD safety exclusion for meals)

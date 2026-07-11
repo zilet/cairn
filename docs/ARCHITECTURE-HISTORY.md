@@ -4,6 +4,33 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-07-11 — adaptive-cut trust and Pi defense-in-depth
+
+Migrations **v63** (`profile-measured-rmr`) and **v64**
+(`journey-baseline-backfill`; package version `1.0.1`) make the athlete's real
+journey and metabolic test durable without rewriting existing observations.
+The metabolic-test ingest extracts a plausible measured RMR into provenance-bearing
+profile fields; goal math preserves formula BMR for the activity-factor seed,
+uses the measured RMR as the displayed resting anchor, and only combines it with
+Garmin active calories once enough days exist. The journey baseline backfill
+fills only missing fields from the earliest weigh-in, so an explicit baseline
+always wins and no journey phase auto-activates during migration.
+
+The closed loop now treats repeated strength-endurance fade in session notes and
+material one-tap fatigue as real program signals. During a cut, those signals can
+trigger a cooldown-bounded nutrition recheck when loss pace or hybrid fuel risk
+also warrants it; carb-led corrections still travel through the existing
+lean-safe nutrition proposal, autonomy, and accountability path. Cut/race phases
+explicitly **protect** strength and lean-mass retention instead of parking
+strength. Case conferences accept typed nutrition-target revisions, preserve
+valid specialist findings through a conservative advice-only fallback when the
+conductor envelope is malformed, and skip only malformed optional expectations.
+Accepted nutrition targets invalidate older meal-plan assumptions.
+
+Self-host hardening passes `CAIRN_REQUIRE_AUTH` and
+`CAIRN_SETTINGS_SECRET_KEY` through Compose, keeping the app-token and encrypted
+Settings-secret contracts explicit and stable across container rebuilds.
+
 ## 2026-07-10 — bounded local observability closeout
 
 - Consolidated server, worker, scheduler, MCP, and agent error capture behind a

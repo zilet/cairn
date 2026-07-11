@@ -293,3 +293,51 @@ test("a decision whose own action carries medication changes is clinician-direct
   assert.equal(result.execution.applied, false);
   assert.equal(repo.getPlanDay(1).items[0].target_weight, 115);
 });
+
+test("a malformed conductor envelope preserves specialist findings as degraded advice", async () => {
+  const result = await runCaseConference(
+    "stub",
+    { question: "How should fueling respond to fatigue?", domains: ["nutrition", "recovery"] },
+    {
+      context: () => ({ deficit: true, recovery: "fatigue" }),
+      specialistRun: async (_agent, _prompt, domain) =>
+        opinion(domain, { recommendation: domain === "nutrition" ? "Raise fuel modestly." : "Protect recovery." }),
+      conductorRun: async () => ({ malformed: true }),
+    }
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.degraded, true);
+  assert.equal(result.decision.domain, "nutrition");
+  assert.equal(result.decision.revision, null);
+  assert.deepEqual(result.unresolved_conflicts, ["deficit_recovery"]);
+  assert.equal(result.proposal_id, undefined, "fallback advice never synthesizes a mutation");
+});
+
+test("a conference can route a typed nutrition target through the proposal and autonomy path", async () => {
+  repo.setProfile({ age: 44, height_cm: 170.2, weight_lb: 174.2, goal_weight_lb: 164, goal_mode: "lose" });
+  repo.setSettings({ lead_mode: "lead" });
+  const result = await runCaseConference(
+    "stub",
+    { question: "Adjust the cut fuel target.", domains: ["nutrition", "recovery"] },
+    {
+      context: () => ({ deficit: true, recovery: "fatigue" }),
+      specialistRun: async (_agent, _prompt, domain) => opinion(domain, { autonomy_ceiling: "quiet_apply" }),
+      conductorRun: async () => conductorDecision({
+        domain: "nutrition",
+        resolved_conflicts: [{ key: "deficit_recovery", resolution: "Use a small carb-led increase." }],
+        revision: {
+          type: "nutrition_target",
+          summary: "Fuel the work",
+          nutrition: { target_kcal: 2_075, protein_g: 175, carbs_g: 205, fat_g: 62, delta_kcal: 250 },
+          notes: "Review performance and weight trend.",
+        },
+      }),
+    }
+  );
+
+  assert.equal(result.ok, true);
+  assert.ok(result.proposal_id);
+  assert.equal(repo.getProposal(result.proposal_id).parsed.kind, "nutrition_target");
+  assert.equal(getBrainDecision(result.recorded_decision_id).action.conference_revision_type, "nutrition_target");
+});

@@ -240,6 +240,24 @@ test("mesocycle brings a reset forward when feedback fatigue stacks with hard en
   assert.match(meso.note, /hard endurance|timed\/bodyweight/i);
 });
 
+test("a free-text rapid-fade note participates in the same fatigue read", () => {
+  repo.setProfile({ primary_discipline: "hybrid", endurance_sport: "running" });
+  for (const wk of [1, 2, 3, 4]) {
+    for (const off of [1, 3]) {
+      for (let s = 1; s <= 4; s++) {
+        repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, rir: 2, date: back(wk * 7 + off) });
+      }
+    }
+  }
+  repo.addActivity({ type: "run", duration_min: 70, distance_km: 12, date: REF });
+  const session = repo.getOrCreateSession(REF);
+  repo.finishSession(session.id, "I started strong but by the end of every set I almost could not lift the same weight.");
+
+  const meso = repo.getProgramState(REF).mesocycle;
+  assert.equal(meso.phase, "deload-due");
+  assert.match(meso.note, /strength-endurance fading/i);
+});
+
 test("endurance ACWR low-base guard: a returning runner's first week reads 'building', not 'spiking'", () => {
   repo.setProfile({ primary_discipline: "hybrid", endurance_sport: "running" });
   // One real run this week; nothing in the prior four weeks (rebuilding base).

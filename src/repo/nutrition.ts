@@ -214,6 +214,10 @@ export function maxUpstreamNutritionSource(): string | null {
     const w = db.prepare(`SELECT MAX(date) AS d FROM bodyweight_log`).get() as any;
     if (w?.d) cands.push(String(w.d).slice(0, 10));
   } catch { /* ignore */ }
+  try {
+    const target = db.prepare(`SELECT MAX(effective_date) AS d FROM nutrition_targets`).get() as any;
+    if (target?.d) cands.push(String(target.d).slice(0, 10));
+  } catch { /* ignore */ }
   return cands.length ? cands.sort().at(-1)! : null;
 }
 
@@ -230,7 +234,7 @@ export function mealPlanFreshness(plan: any): { stale: boolean; reason: string |
   if (!stamped || !now || now <= stamped) return { stale: false, reason: null, source_ts: stamped };
   return {
     stale: true,
-    reason: "A newer lab or health directive has landed since this plan was drafted — worth re-drafting so meals reflect it.",
+    reason: "A newer lab, health directive, weigh-in, or nutrition target has landed since this plan was drafted — worth re-drafting so meals reflect it.",
     source_ts: stamped,
   };
 }

@@ -1,5 +1,6 @@
 import { db } from "../db.js";
 import { emitBrainEvent } from "../brainEvents.js";
+import { sessionNoteSuggestsFatigue } from "./training-fatigue.js";
 import { localDateISO } from "./shared.js";
 import { isStrengthGarminType, listActivities, listGarminActivities, listGarminDailyMetrics, listGarminSources } from "./activities.js";
 import { activitySportWhere, canonicalEnduranceSport, enduranceSportPatterns } from "./endurance-sports.js";
@@ -124,6 +125,17 @@ export function finishSession(sessionId: number, notes?: string | null) {
     entity_id: sessionId,
     subject_key: `session:${sessionId}`,
   });
+  if (sessionNoteSuggestsFatigue(notes ?? s.notes)) {
+    emitBrainEvent({
+      kind: "session_feedback",
+      domain: "training",
+      date: s.date,
+      entity_id: sessionId,
+      subject_key: `session:${sessionId}`,
+      reason: "session note reports performance fatigue",
+      material: true,
+    });
+  }
   return { ...getSessionDetail(sessionId), summary: sessionSummary(sessionId) };
 }
 
@@ -138,13 +150,26 @@ export function reopenSession(sessionId: number) {
 }
 
 // Edit a session's notes after the fact (history correction). Returns the full
-// session detail, or null if the id is unknown. trainingSignals reads sessions
-// live, so the coach sees the corrected note on its next prompt — no re-trigger.
+// session detail, or null if the id is unknown. A corrected fatigue note is a
+// material signal, so the coach can re-evaluate instead of waiting for another set.
 export function updateSessionNotes(sessionId: number, notes: string | null) {
-  const s = db.prepare(`SELECT id FROM sessions WHERE id = ?`).get(sessionId) as any;
+  const s = db.prepare(`SELECT id, date FROM sessions WHERE id = ?`).get(sessionId) as any;
   if (!s) return null;
   const clean = notes != null ? String(notes).trim().slice(0, 1000) || null : null;
   db.prepare(`UPDATE sessions SET notes = ? WHERE id = ?`).run(clean, sessionId);
+  bumpTrainingDataVersion();
+  invalidateDayRead(s.date || localDateISO());
+  if (sessionNoteSuggestsFatigue(clean)) {
+    emitBrainEvent({
+      kind: "session_feedback",
+      domain: "training",
+      date: s.date || localDateISO(),
+      entity_id: sessionId,
+      subject_key: `session:${sessionId}`,
+      reason: "corrected session note reports performance fatigue",
+      material: true,
+    });
+  }
   return getSessionDetail(sessionId);
 }
 
@@ -178,6 +203,10 @@ export function setSessionFeedback(
       entity_id: session.id,
       subject_key: `session:${session.id}`,
       reason: fields.joint_pain ? "joint discomfort reported" : "session feedback updated",
+      material:
+        (fields.performance != null && Number(fields.performance) <= 2) ||
+        Number(fields.soreness) >= 4 ||
+        !!String(fields.joint_pain ?? "").trim(),
     });
   }
   // A fresh 1-tap soreness/performance/joint signal is a day-read input (its sibling

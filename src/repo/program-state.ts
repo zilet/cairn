@@ -26,6 +26,7 @@ import { effectiveGoalMode, getPrimaryDiscipline, getProfile } from "./profile.j
 import { getProgress } from "./sessions.js";
 import { activitySportWhere, enduranceSportPatterns } from "./endurance-sports.js";
 import { recentEnduranceImpacts, type EnduranceImpact } from "./hybrid-load.js";
+import { sessionNoteSuggestsFatigue, sessionNoteSuggestsRapidFade } from "./training-fatigue.js";
 
 // ---- ACWR low-base guards ---------------------------------------------------
 // An acute-vs-chronic ratio is only meaningful once there's a real CHRONIC base
@@ -418,18 +419,23 @@ function recentFeedbackFatigue(date: string, days = 14): { high: boolean; reason
   const start = isoDaysAgo(end, Math.max(1, days) - 1);
   try {
     const rows = db.prepare(
-      `SELECT soreness, performance, joint_pain FROM sessions
+      `SELECT soreness, performance, joint_pain, notes FROM sessions
         WHERE date >= ? AND date <= ?
-          AND (soreness IS NOT NULL OR performance IS NOT NULL OR (joint_pain IS NOT NULL AND TRIM(joint_pain) != ''))`
+          AND (soreness IS NOT NULL OR performance IS NOT NULL OR
+               (joint_pain IS NOT NULL AND TRIM(joint_pain) != '') OR
+               (notes IS NOT NULL AND TRIM(notes) != ''))`
     ).all(start, end) as any[];
     if (!rows.length) return { high: false, reasons: [] };
     const highSoreness = rows.filter((r) => Number(r.soreness) >= 4).length;
     const lowPerformance = rows.filter((r) => Number(r.performance) <= 2).length;
     const jointFlags = rows.filter((r) => r.joint_pain != null && String(r.joint_pain).trim()).length;
+    const fatigueNotes = rows.filter((r) => sessionNoteSuggestsFatigue(r.notes));
+    const rapidFade = fatigueNotes.some((r) => sessionNoteSuggestsRapidFade(r.notes));
     const reasons: string[] = [];
     if (highSoreness >= 2) reasons.push("soreness is staying high");
     if (lowPerformance >= 2) reasons.push("recent sessions are feeling flat");
     if (jointFlags >= 1) reasons.push("joint feedback is still flagged");
+    if (fatigueNotes.length >= 2 || rapidFade) reasons.push("session notes repeatedly describe strength-endurance fading");
     return { high: reasons.length > 0, reasons };
   } catch {
     return { high: false, reasons: [] };

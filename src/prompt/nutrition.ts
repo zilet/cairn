@@ -462,6 +462,9 @@ WHEN TO PROPOSE A CHANGE (else change:false):
   FOR THIS GOAL MODE — see below. Otherwise set change:false and stay quiet (the common, correct answer).
 - LOSE: weight flat or rising while the goal is to lose, or losing far faster than the lean-safe ceiling
   (then a small calorie RAISE keeps it sustainable).
+- LOSE + PERFORMANCE: repeated strength-endurance fade, a high hybrid fuel-risk read, or a mileage ramp
+  while loss is already faster than the lean-ideal pace is ALSO meaningful drift. Propose a small calorie
+  RAISE—primarily carbohydrate—even when the trend has not crossed the absolute safety ceiling yet.
 - MAINTAIN: only when the weight trend has consistently drifted up OR down off steady — nudge back toward
   maintenance (~the derived TDEE). Never propose a deficit by default; holding steady is success.
 - LEAN GAIN: flag if the trend shows NO gain over time (suggest a small RAISE) or gaining too fast /
@@ -485,9 +488,9 @@ ${renderDiscipline(context, "nutrition")}${renderEnduranceGoal(context, "nutriti
 USER: profile: ${JSON.stringify(profile)}
 
 ${renderStreamingContract(
-    "write the ONE or two plain sentences you'd say to them — what the data shows and what you'd suggest, or (if nothing has meaningfully moved) why staying put is right (the same thing that goes in the JSON's \"summary\")",
-    NUTRITION_CHECKIN_SCHEMA,
-  )}`;
+  "write the ONE or two plain sentences you'd say to them — what the data shows and what you'd suggest, or (if nothing has meaningfully moved) why staying put is right (the same thing that goes in the JSON's \"summary\")",
+  NUTRITION_CHECKIN_SCHEMA
+)}`;
 }
 
 const SWAP_SCHEMA = `{ "name": "<dish>", "items": "<short ingredient list>", "kcal": <number>, "protein_g": <number>, "carbs_g": <number>, "fat_g": <number> }`;

@@ -24,7 +24,7 @@ export interface WholePersonDomainRead {
 export interface WholePersonTrajectory {
   window: { start: string; end: string; days: number };
   objective: "everything better";
-  phase: { name: string | null; optimizes: string[]; parks: WholePersonDomain[] };
+  phase: { name: string | null; optimizes: string[]; protects: WholePersonDomain[]; parks: WholePersonDomain[] };
   domains: WholePersonDomainRead[];
   unexplained_worse: WholePersonDomain[];
   revision_needed: boolean;
@@ -265,14 +265,17 @@ export function wholePersonTrajectory(opts: { end?: string; days?: number } = {}
   })() as any;
   const mode = effectiveGoalMode(getProfile());
   const parks: WholePersonDomain[] = [];
+  const protects: WholePersonDomain[] = [];
   const optimizes: string[] = [];
   if (race?.is_race) {
     optimizes.push("endurance");
-    parks.push("strength");
+    protects.push("strength");
+    optimizes.push("strength retention");
   }
   if (mode === "lose") {
     optimizes.push("body composition");
-    if (!parks.includes("strength")) parks.push("strength");
+    if (!protects.includes("strength")) protects.push("strength");
+    optimizes.push("lean mass retention");
   }
   if (mode === "gain") optimizes.push("strength and lean mass");
   if (block?.phase) optimizes.push(String(block.phase));
@@ -298,7 +301,7 @@ export function wholePersonTrajectory(opts: { end?: string; days?: number } = {}
   return {
     window: { start, end, days },
     objective: "everything better",
-    phase: { name: block?.phase ?? race?.phase ?? mode, optimizes: [...new Set(optimizes)], parks },
+    phase: { name: block?.phase ?? race?.phase ?? mode, optimizes: [...new Set(optimizes)], protects, parks },
     domains,
     unexplained_worse: unexplainedWorse,
     revision_needed: unexplainedWorse.length > 0,

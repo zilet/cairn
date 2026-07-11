@@ -123,6 +123,33 @@ test("v61-v62 clear legacy dynamic telemetry and add build-scoped storage", () =
   d.close();
 });
 
+test("v63-v64 backfill measured RMR and the journey baseline without deleting source rows", () => {
+  const d = new DatabaseSync(":memory:");
+  d.exec(`CREATE TABLE profile (
+    id INTEGER PRIMARY KEY, start_weight_lb REAL, start_date TEXT
+  );`);
+  d.exec(`CREATE TABLE bodyweight_log (
+    id INTEGER PRIMARY KEY, date TEXT, weight_lb REAL
+  );`);
+  d.exec(`CREATE TABLE health_documents (
+    id INTEGER PRIMARY KEY, kind TEXT, doc_date TEXT, created_at TEXT, parsed_json TEXT, summary TEXT
+  );`);
+  d.exec("INSERT INTO profile (id) VALUES (1)");
+  d.exec("INSERT INTO bodyweight_log VALUES (1,'2026-06-06',183)");
+  d.prepare(`INSERT INTO health_documents VALUES (1,'metabolic_test','2026-06-02','2026-06-02',NULL,?)`)
+    .run("Indirect calorimetry measured resting metabolic rate 2,078 kcal/day.");
+  d.exec("PRAGMA user_version=62");
+  runMigrations(d);
+
+  const profile = d.prepare("SELECT * FROM profile WHERE id=1").get();
+  assert.equal(profile.measured_rmr_kcal, 2078);
+  assert.equal(profile.measured_rmr_date, "2026-06-02");
+  assert.equal(profile.start_weight_lb, 183);
+  assert.equal(profile.start_date, "2026-06-06");
+  assert.equal(d.prepare("SELECT COUNT(*) n FROM health_documents").get().n, 1, "source health rows are untouched");
+  d.close();
+});
+
 // The deployed-Pi boot order: db.ts runs the SCHEMA exec BEFORE runMigrations, so a
 // statement in the main schema block that references a MIGRATED column (e.g. an index
 // on request_metric_buckets.build_id, which only v62's rebuild adds) crashes boot

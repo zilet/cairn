@@ -28,7 +28,19 @@ export interface CaseConferenceDecision {
 
 export type CaseConferenceRevision =
   | { type: "plan_update"; summary: string | null; changes: JsonObject[] }
-  | { type: "plan_restructure"; summary: string | null; days: JsonObject[] };
+  | { type: "plan_restructure"; summary: string | null; days: JsonObject[] }
+  | {
+      type: "nutrition_target";
+      summary: string | null;
+      nutrition: {
+        target_kcal: number;
+        protein_g: number;
+        carbs_g: number | null;
+        fat_g: number | null;
+        delta_kcal: number | null;
+      };
+      notes: string | null;
+    };
 
 function normalizedRevision(value: unknown): CaseConferenceRevision | null {
   const input = asRecord(value);
@@ -54,9 +66,40 @@ function normalizedRevision(value: unknown): CaseConferenceRevision | null {
       .filter((item): item is JsonObject => {
         if (!item) return false;
         const day = Number(item.day_number);
-        return Number.isInteger(day) && day > 0 && day <= 14 && cleanText(item.name, 160) != null && Array.isArray(item.items);
+        return (
+          Number.isInteger(day) &&
+          day > 0 &&
+          day <= 14 &&
+          cleanText(item.name, 160) != null &&
+          Array.isArray(item.items)
+        );
       });
     return days.length ? { type: "plan_restructure", summary, days } : null;
+  }
+  if (input.type === "nutrition_target") {
+    const nutrition = asRecord(input.nutrition);
+    const targetKcal = Number(nutrition?.target_kcal);
+    const protein = Number(nutrition?.protein_g);
+    if (!Number.isFinite(targetKcal) || targetKcal < 1_200 || targetKcal > 10_000) return null;
+    if (!Number.isFinite(protein) || protein < 0 || protein > 500) return null;
+    const optional = (value: unknown, max: number): number | null => {
+      if (value == null || value === "") return null;
+      const number = Number(value);
+      return Number.isFinite(number) ? Math.max(0, Math.min(max, Math.round(number))) : null;
+    };
+    const delta = Number(nutrition?.delta_kcal);
+    return {
+      type: "nutrition_target",
+      summary,
+      nutrition: {
+        target_kcal: Math.round(targetKcal),
+        protein_g: Math.round(protein),
+        carbs_g: optional(nutrition?.carbs_g, 2_000),
+        fat_g: optional(nutrition?.fat_g, 1_000),
+        delta_kcal: Number.isFinite(delta) ? Math.max(-500, Math.min(500, Math.round(delta))) : null,
+      },
+      notes: cleanText(input.notes, 500),
+    };
   }
   return null;
 }
@@ -94,8 +137,7 @@ export function normalizeCaseConferenceDecision(value: unknown): CaseConferenceD
   const expectations: ProposedExpectation[] = [];
   for (const item of Array.isArray(input.expectations) ? input.expectations.slice(0, 10) : []) {
     const normalized = normalizeProposedExpectation(item);
-    if (!normalized) return null;
-    expectations.push(normalized);
+    if (normalized) expectations.push(normalized);
   }
   return {
     kind,

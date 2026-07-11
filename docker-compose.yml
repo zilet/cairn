@@ -32,6 +32,10 @@ services:
       # default). Set it to gate /api and /mcp behind a bearer token — recommended
       # whenever the port is reachable beyond loopback.
       - CAIRN_AUTH_TOKEN=${CAIRN_AUTH_TOKEN:-}
+      - CAIRN_REQUIRE_AUTH=${CAIRN_REQUIRE_AUTH:-0}
+      # Encrypt connector secrets saved through Settings. Keep this stable across
+      # rebuilds; the Pi deploy helper generates it once in the preserved .env.
+      - CAIRN_SETTINGS_SECRET_KEY=${CAIRN_SETTINGS_SECRET_KEY:-}
       # Coaching auth: claude/codex/antigravity use their CLI's subscription login
       # (stored in the cairn-home volume) — NOT these env keys. Only Grok headless
       # reliably uses XAI_API_KEY. ANTHROPIC_API_KEY / OPENAI_API_KEY are passed

@@ -56,6 +56,7 @@ export interface CaseConferenceResult {
     pending: boolean;
     reasons: string[];
   };
+  degraded?: boolean;
   error?: string;
 }
 
@@ -87,7 +88,7 @@ function conductorPrompt(
   opinions: SpecialistOpinion[],
   conflicts: ConferenceConflictKey[]
 ): string {
-  return `You are Cairn's conductor. Reconcile the structured specialist opinions into ONE CaseConferenceDecision JSON object with kind, domain, summary, rationale, risk_class, reversible, autonomy_tier, parallel_actions, resolved_conflicts[{key,resolution}], deferred, expectations, review_window, user_explanation, and revision. Every deterministic conflict must appear in resolved_conflicts or the server will safely demote the decision. revision is null for advice only, or exactly {"type":"plan_update","summary":"...","changes":[...]} for bounded existing-plan changes, or {"type":"plan_restructure","summary":"...","days":[...]} for a full split rewrite. Never claim a change is live in prose; the server owns proposal creation, safety clamps, autonomy, and natural-boundary application. Never output a debate transcript. Clinical decisions stay clinician-directed. Snapshot id: ${snapshot.id}. Question: ${question}. Conflicts: ${JSON.stringify(conflicts)}. Opinions: ${JSON.stringify(opinions)}`;
+  return `You are Cairn's conductor. Reconcile the structured specialist opinions into ONE CaseConferenceDecision JSON object with kind, domain, summary, rationale, risk_class, reversible, autonomy_tier, parallel_actions, resolved_conflicts[{key,resolution}], deferred, expectations, review_window, user_explanation, and revision. Every deterministic conflict must appear in resolved_conflicts or the server will safely demote the decision. revision is null for advice only, exactly {"type":"plan_update","summary":"...","changes":[...]} for bounded existing-plan changes, {"type":"plan_restructure","summary":"...","days":[...]} for a full split rewrite, or {"type":"nutrition_target","summary":"...","nutrition":{"target_kcal":0,"protein_g":0,"carbs_g":null,"fat_g":null,"delta_kcal":0},"notes":"..."} for a bounded fueling adjustment. Never claim a change is live in prose; the server owns proposal creation, safety clamps, autonomy, and natural-boundary application. Never output a debate transcript. Clinical decisions stay clinician-directed. Snapshot id: ${snapshot.id}. Question: ${question}. Conflicts: ${JSON.stringify(conflicts)}. Opinions: ${JSON.stringify(opinions)}`;
 }
 
 const TIER_ORDER = ["observe", "quiet_apply", "announce", "ask", "clinician"] as const;
@@ -129,6 +130,41 @@ function executionSummary(result: any): NonNullable<CaseConferenceResult["execut
     announced: result?.announced === true || result?.decision?.status === "announced",
     pending: result?.pending === true || result?.decision?.status === "pending",
     reasons: boundedStrings(result?.reasons, 10),
+  };
+}
+
+function fallbackConferenceDecision(
+  opinions: SpecialistOpinion[],
+  conflicts: ConferenceConflictKey[],
+  unavailable: SpecialistDomain[]
+): CaseConferenceDecision {
+  const preferred =
+    opinions.find((opinion) => conflicts.includes("deficit_recovery") && opinion.domain === "nutrition") ??
+    opinions.find((opinion) => opinion.domain === "recovery") ??
+    opinions[0];
+  const autonomy = opinions.reduce<(typeof TIER_ORDER)[number]>(
+    (ceiling, opinion) => moreRestrictiveTier(ceiling, opinion.autonomy_ceiling),
+    conflicts.includes("clinical_autonomy") ? "clinician" : "ask"
+  );
+  const expectations = opinions.flatMap((opinion) => opinion.expected_outcomes).slice(0, 10);
+  return {
+    kind: "case_conference",
+    domain: preferred.domain,
+    summary: preferred.recommendation.slice(0, 300),
+    rationale: preferred.rationale.slice(0, 1_500),
+    risk_class: conflicts.includes("clinical_autonomy") ? "clinical" : conflicts.length ? "moderate" : "low",
+    reversible: false,
+    autonomy_tier: autonomy,
+    parallel_actions: opinions.filter((opinion) => opinion !== preferred).map((opinion) => opinion.recommendation).slice(0, 10),
+    resolved_conflicts: [],
+    deferred: [
+      ...conflicts.map((conflict) => `${conflict}: held for conservative review`),
+      ...unavailable.map((domain) => `${domain} specialist unavailable`),
+    ].slice(0, 10),
+    expectations,
+    review_window: "Review at the next material signal or within two weeks.",
+    user_explanation: preferred.recommendation.slice(0, 700),
+    revision: null,
   };
 }
 
@@ -223,18 +259,12 @@ export async function runCaseConference(
     deps.conductorRun ??
     (async (chosen, prompt) => (await runChosen(chosen, prompt, { op: "case_conference" })).result.parsed);
   const rawDecision = await conductorRun(agent, conductorPrompt(question, snapshot, opinions, conflicts));
-  const decision = normalizeCaseConferenceDecision(rawDecision);
-  if (!decision)
-    return {
-      ok: false,
-      snapshot_id: snapshot.id,
-      opinions,
-      unavailable,
-      conflicts,
-      unresolved_conflicts: conflicts,
-      decision: null,
-      error: "conductor returned no valid decision",
-    };
+  const normalizedDecision = normalizeCaseConferenceDecision(rawDecision);
+  const degraded = normalizedDecision == null;
+  // Valid specialist work must never disappear because the conductor emitted a
+  // malformed envelope. Preserve one conservative, advice-only voice, leave all
+  // conflicts unresolved, and hold it for review. No mutation is synthesized.
+  const decision = normalizedDecision ?? fallbackConferenceDecision(opinions, conflicts, unavailable);
   const accounted = new Set(
     decision.resolved_conflicts
       .map((item) => item.key)
@@ -266,7 +296,11 @@ export async function runCaseConference(
     );
   }
   const executableKind =
-    decision.revision?.type === "plan_restructure" ? "training_structure" : "training_target";
+    decision.revision?.type === "plan_restructure"
+      ? "training_structure"
+      : decision.revision?.type === "nutrition_target"
+        ? "nutrition_target"
+        : "training_target";
   const policy = decideAutonomyTier({
     kind: decision.revision ? executableKind : decision.kind,
     risk_class: decision.risk_class,
@@ -305,7 +339,14 @@ export async function runCaseConference(
           rationale: decision.rationale,
           days: decision.revision.days,
         }
-      : {
+      : decision.revision.type === "nutrition_target"
+        ? {
+            kind: "nutrition_target",
+            summary: decision.revision.summary ?? decision.summary,
+            nutrition: decision.revision.nutrition,
+            notes: decision.revision.notes ?? decision.rationale,
+          }
+        : {
           summary: decision.revision.summary ?? decision.summary,
           rationale: decision.rationale,
           changes: decision.revision.changes,
@@ -343,6 +384,7 @@ export async function runCaseConference(
         recorded_decision_id: autonomyDecision.id,
         proposal_id: proposal.id,
         execution,
+        ...(degraded ? { degraded: true } : {}),
         ...(autonomy?.ok === true ? {} : { error: String(autonomy?.error ?? "conference revision was not actionable") }),
       };
     }
@@ -392,6 +434,7 @@ export async function runCaseConference(
       recorded_decision_id: held.decision.id,
       proposal_id: proposal.id,
       execution,
+      ...(degraded ? { degraded: true } : {}),
       ...(autonomy?.ok === true ? {} : { error: String(autonomy?.error ?? "conference revision was not actionable") }),
     };
   }
@@ -440,5 +483,6 @@ export async function runCaseConference(
     unresolved_conflicts: unresolvedConflicts,
     decision,
     recorded_decision_id: recorded.decision.id,
+    ...(degraded ? { degraded: true } : {}),
   };
 }
