@@ -208,6 +208,37 @@ test("runChosenStreaming: a streamed reply with no parseable JSON falls back to 
   assert.deepEqual(out.result.parsed, { change: false, summary: "hold" });
 });
 
+test("runChosenStreaming: parseable JSON outside the operation contract falls back too", async () => {
+  let oneShotArgs = null;
+  const invalid = `${CHAT_REPLY_SENTINEL}\nDrafted.\n${CHAT_ACTION_SENTINEL}\n{"change":true,"summary":"add fuel"}`;
+  const out = await runChosenStreaming(
+    "claude",
+    "PROMPT",
+    {
+      op: "nutrition_checkin",
+      onDelta: () => {},
+      acceptParsed: (parsed) => parsed?.change === false || Number.isFinite(parsed?.nutrition?.target_kcal),
+    },
+    {
+      resolveOrder: () => ["claude", "codex"],
+      supportsStream: () => true,
+      runStreaming: (_name, _prompt, opts) => streamingAgentResult(invalid, opts, [invalid]),
+      runOneShot: async (agent, prompt, opts) => {
+        oneShotArgs = { agent, prompt, opts };
+        return {
+          agent: "codex",
+          result: agentResult('{"change":false,"summary":"hold"}', { change: false, summary: "hold" }),
+          tried: [{ agent: "claude", error: "invalid contract" }],
+        };
+      },
+    }
+  );
+  assert.equal(out.agent, "codex");
+  assert.match(out.tried[0].error, /streamed JSON missed the operation contract/);
+  assert.equal(typeof oneShotArgs.opts.acceptParsed, "function", "the semantic contract survives streaming fallback");
+  assert.equal(oneShotArgs.opts.acceptParsed(out.result.parsed), true);
+});
+
 test("runChosenStreaming: with no onDelta it delegates straight to runChosen (byte-for-byte)", async () => {
   let streamCalled = false;
   let oneShotArgs = null;

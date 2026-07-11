@@ -39,6 +39,23 @@ import { researchEnabled, gatherReviewGrounding, researchEvidence } from "./rese
 import { normalizeHealthSynthesis } from "./health-synthesis.js";
 import { clampNutritionFloors } from "./repo/nutrition-safety.js";
 import { applyMealPlanWithAutonomy, applyProposalWithAutonomy } from "./domain/brain/autonomy-service.js";
+import {
+  hasPlanProposalActions,
+  isExerciseExplanationResult,
+  isHealthReviewResult,
+  isHealthSynthesisResult,
+  isInsightResult,
+  isMealPlanResult,
+  isMealSwapResult,
+  isNutritionCheckinResult,
+  isPlanProposalResult,
+  isReactionNarrativeResult,
+  isRecipeResult,
+  isReconciliationResult,
+  isSessionSuggestionResult,
+  isVerifyResult,
+  isWeekAheadResult,
+} from "./agent-contracts.js";
 
 // runChosen is the shared agent-dispatch helper (see ./runChosen.ts). It's
 // re-exported here because api.ts / mcp.ts import it from coachOps as the
@@ -169,7 +186,12 @@ async function runVerify<T>(
   hooks?: OpHooks
 ): Promise<VerifyOutcome<T>> {
   try {
-    const { result } = await runChosen(agent, buildPrompt(draft), { op, timeoutMs: INTERACTIVE_TIMEOUT_MS, signal: hooks?.signal });
+    const { result } = await runChosen(agent, buildPrompt(draft), {
+      op,
+      timeoutMs: INTERACTIVE_TIMEOUT_MS,
+      signal: hooks?.signal,
+      acceptParsed: (parsed) => isVerifyResult(parsed, validate),
+    });
     const v: any = result.parsed;
     if (!v || typeof v !== "object") return { draft, verified: null };
     const violations: string[] = Array.isArray(v.violations)
@@ -179,9 +201,10 @@ async function runVerify<T>(
     if (v.ok === false && v.fixed_draft && typeof v.fixed_draft === "object" && validate(v.fixed_draft)) {
       return { draft: v.fixed_draft as T, verified: { checked: true, adjustments: violations.length ? violations : ["adjusted to honor your floors"] } };
     }
-    // Clean pass (or an unusable "fix" we decline to adopt) → the draft stands, but
-    // we still mark it CHECKED so the surface can show "checked against your floors".
-    return { draft, verified: { checked: true, adjustments: [] } };
+    if (v.ok === true) return { draft, verified: { checked: true, adjustments: [] } };
+    // Defensive only: acceptParsed rejects this before rotation stops. Never show
+    // "checked" for a malformed verdict or an unusable fix.
+    return { draft, verified: null };
   } catch {
     // Verify unavailable → ship the draft unverified (graceful degrade).
     return { draft, verified: null };
@@ -208,12 +231,18 @@ export async function suggestSession(
   }
   hooks?.onPhase?.("drafting your session");
   const prompt = buildSessionPrompt(undefined, opts);
+  const sessionSane = (s: any) => isSessionSuggestionResult(s);
   // Interactive: a user is waiting on the request path — short the leash. Streams the
   // session's "why" prose into the card when the chosen agent is stream-capable.
-  const { agent: chosen, result, tried } = await runChosenStreaming(agent, prompt, { op: "session_suggest", timeoutMs: INTERACTIVE_TIMEOUT_MS, signal: hooks?.signal, onDelta: hooks?.onDelta });
+  const { agent: chosen, result, tried } = await runChosenStreaming(agent, prompt, {
+    op: "session_suggest",
+    timeoutMs: INTERACTIVE_TIMEOUT_MS,
+    signal: hooks?.signal,
+    onDelta: hooks?.onDelta,
+    acceptParsed: sessionSane,
+  });
   const p = result.parsed;
-  const sane = p && typeof p === "object" && Array.isArray(p.items) && p.items.length > 0;
-  if (!sane) {
+  if (!sessionSane(p)) {
     // Nothing fresh and usable — fall back to a stale cache hit rather than fail.
     if (cached) return cached.result;
     return { ok: false as const, error: "agent returned no usable session", agent: chosen, tried, agent_status: agentStatusFor({ ok: false, agent: chosen, tried }) };
@@ -222,7 +251,6 @@ export async function suggestSession(
   // (injury, time budget, equipment, encoding) and adopt a fix if one is returned.
   // Fail-open — verify down/garbage ⇒ the draft ships exactly as before.
   hooks?.onPhase?.("checking it against your floors", { frac: { done: 1, total: 2 } });
-  const sessionSane = (s: any) => s && typeof s === "object" && Array.isArray(s.items) && s.items.length > 0;
   const { draft: session, verified } = await runVerify(
     agent, p, (d) => buildSessionVerifyPrompt(d, opts), sessionSane, "session_verify", hooks
   );
@@ -280,10 +308,14 @@ export async function draftCoachProposal(
   // frozen half-full bar (a determinate frac only fits ops with a fast tail phase, like
   // session-suggest's verify pass). The rotating client caption carries "what's happening".
   hooks?.onPhase?.("drafting your plan");
-  const { agent: chosen, result, tried } = await runChosen(agent, prompt, { signal: hooks?.signal });
+  const { agent: chosen, result, tried } = await runChosen(agent, prompt, {
+    op: "proposal",
+    signal: hooks?.signal,
+    acceptParsed: isPlanProposalResult,
+  });
   const proposal = repo.createProposal(chosen, instruction ?? "", result.raw, result.parsed);
   let autonomy: any = null;
-  if (result.parsed) {
+  if (result.parsed && hasPlanProposalActions(result.parsed)) {
     try {
       autonomy = applyProposalWithAutonomy(Number(proposal.id));
     } catch {
@@ -325,7 +357,11 @@ export async function evolveProgram(
   // (the dedup key the scheduler uses to retire prior auto-evolution drafts).
   const prompt = buildProgramEvolutionPrompt(opts?.task ?? instruction, state);
   hooks?.onPhase?.("drafting how your plan should evolve");
-  const { agent: chosen, result, tried } = await runChosen(agent, prompt, { signal: hooks?.signal });
+  const { agent: chosen, result, tried } = await runChosen(agent, prompt, {
+    op: "evolve_program",
+    signal: hooks?.signal,
+    acceptParsed: isPlanProposalResult,
+  });
   const proposal = repo.createProposal(chosen, instruction ?? "evolve program", result.raw, result.parsed);
   // A fresh recovery-week draft retires the prior one (same one-tap ask — the newest
   // read wins), so repeated taps never stack duplicate drafts in the Coach list.
@@ -344,7 +380,7 @@ export async function evolveProgram(
   // loosens. Only a genuinely parsed proposal has something to apply; a failed/unparsed draft
   // is left as a raw draft. Never throws — a bookkeeping failure never breaks the draft return.
   let autonomy: any = null;
-  if (proposal?.id != null && result.parsed) {
+  if (proposal?.id != null && result.parsed && hasPlanProposalActions(result.parsed)) {
     try {
       autonomy = applyProposalWithAutonomy(Number(proposal.id));
     } catch {
@@ -460,6 +496,7 @@ export async function explainExercise(agent: string | undefined, name: string, h
     op: EXERCISE_EXPLANATION_KIND,
     timeoutMs: INTERACTIVE_TIMEOUT_MS,
     signal: hooks?.signal,
+    acceptParsed: isExerciseExplanationResult,
   });
   const explanation = normalizeExerciseExplanation(result.parsed);
   if (!explanation) {
@@ -541,6 +578,7 @@ export async function weekAheadRead(agent: string | undefined, hooks?: OpHooks) 
       op: WEEK_AHEAD_KIND,
       timeoutMs: INTERACTIVE_TIMEOUT_MS,
       signal: hooks?.signal,
+      acceptParsed: isWeekAheadResult,
     });
     const sane = sanitizeWeekAhead(result.parsed);
     if (sane) {
@@ -573,15 +611,17 @@ export async function draftMealPlan(
 ) {
   hooks?.onPhase?.("drafting your week of meals");
   const prompt = buildMealPlanPrompt(instruction);
-  const { agent: chosen, result, tried } = await runChosen(agent, prompt, { op: "meal_plan", signal: hooks?.signal });
+  const planSane = (m: any) => isMealPlanResult(m);
+  const { agent: chosen, result, tried } = await runChosen(agent, prompt, {
+    op: "meal_plan",
+    signal: hooks?.signal,
+    acceptParsed: planSane,
+  });
   const p = result.parsed;
-  const planSane = (m: any) => !!m && typeof m === "object" && Array.isArray(m.days);
-  // Only a genuinely plan-shaped draft gets the verify pass; anything else
-  // (e.g. unparsed output) is persisted as-is. Preserve today's contract:
-  // ok mirrors !!result.parsed (createMealPlan tolerates a null parsed).
+  // Defensive only: the shared fallback already enforces this same predicate.
+  // Never persist an off-contract object as a meal plan.
   if (!planSane(p)) {
-    const plan = repo.createMealPlan(chosen, result.raw, p);
-    return { ok: !!p as boolean, plan, agent: chosen, tried, agent_status: agentStatusFor({ ok: !!p, agent: chosen, tried }) };
+    return { ok: false as const, error: "agent returned no usable meal plan", agent: chosen, tried, agent_status: agentStatusFor({ ok: false, agent: chosen, tried }) };
   }
   // Self-critique: check the plan against the lean-safe / longevity floors and
   // adopt a returned fix when it re-validates. Fail-open (verify down/garbage ⇒
@@ -622,7 +662,12 @@ export async function nutritionCheckin(agent: string | undefined, windowDays?: n
   hooks?.onPhase?.("reading your energy balance");
   const expenditure = repo.estimateExpenditure(Number.isFinite(windowDays as number) ? (windowDays as number) : 21);
   const prompt = buildNutritionCheckinPrompt(undefined, { windowDays });
-  const { agent: chosen, result, tried } = await runChosenStreaming(agent, prompt, { op: "nutrition_checkin", signal: hooks?.signal, onDelta: hooks?.onDelta });
+  const { agent: chosen, result, tried } = await runChosenStreaming(agent, prompt, {
+    op: "nutrition_checkin",
+    signal: hooks?.signal,
+    onDelta: hooks?.onDelta,
+    acceptParsed: isNutritionCheckinResult,
+  });
   const p = result.parsed;
   if (!p || typeof p !== "object") {
     return { ok: false as const, error: "agent returned no usable check-in", agent: chosen, tried, expenditure };
@@ -684,7 +729,11 @@ export async function swapMealAgentic(
   hooks?.onPhase?.("finding a swap");
   const { plan, id, day, mealIndex, hint } = args;
   const prompt = buildMealSwapPrompt({ plan, day, mealIndex, hint });
-  const { agent: chosen, result, tried } = await runChosen(agent, prompt, { op: "meal_swap", signal: hooks?.signal });
+  const { agent: chosen, result, tried } = await runChosen(agent, prompt, {
+    op: "meal_swap",
+    signal: hooks?.signal,
+    acceptParsed: isMealSwapResult,
+  });
   const p = result.parsed;
   const saneMeal = p && typeof p === "object" && typeof p.name === "string" && p.name.trim() && Number.isFinite(Number(p.kcal));
   if (!saneMeal) return { ok: false as const, error: "agent returned no usable meal", agent: chosen, tried };
@@ -705,7 +754,11 @@ export async function generateRecipe(
   hooks?.onPhase?.("writing the recipe");
   const { plan, id, day, mealIndex } = args;
   const prompt = buildRecipePrompt({ plan, day, mealIndex });
-  const { agent: chosen, result, tried } = await runChosen(agent, prompt, { op: "recipe", signal: hooks?.signal });
+  const { agent: chosen, result, tried } = await runChosen(agent, prompt, {
+    op: "recipe",
+    signal: hooks?.signal,
+    acceptParsed: isRecipeResult,
+  });
   const p = result.parsed;
   const saved = p && typeof p === "object" ? repo.setMealRecipe(id, day, mealIndex, p) : null;
   if (!saved) return { ok: false as const, error: "agent returned no usable recipe", agent: chosen, tried };
@@ -734,7 +787,11 @@ export async function runHealthReview(agent: string | undefined, hooks?: OpHooks
   }
   hooks?.onPhase?.("reading your whole picture");
   const prompt = buildHealthReviewPrompt(grounding);
-  const { agent: chosen, result, tried } = await runChosen(agent, prompt, { op: "health_review", signal: hooks?.signal });
+  const { agent: chosen, result, tried } = await runChosen(agent, prompt, {
+    op: "health_review",
+    signal: hooks?.signal,
+    acceptParsed: isHealthReviewResult,
+  });
   const review = result.parsed && typeof result.parsed === "object"
     ? repo.addHealthReview(result.parsed, chosen, result.raw)
     : null;
@@ -751,7 +808,30 @@ export async function runHealthReview(agent: string | undefined, hooks?: OpHooks
 export async function synthesizeHealth(agent: string | undefined, hooks?: OpHooks) {
   hooks?.onPhase?.("reading your whole picture");
   const prompt = buildHealthSynthesisPrompt();
-  const { agent: chosen, result, tried } = await runChosenStreaming(agent, prompt, { op: "health_synthesis", signal: hooks?.signal, onDelta: hooks?.onDelta });
+  let chosen: string | null = null;
+  let result: any = null;
+  let tried: { agent: string; error: string }[] = [];
+  try {
+    const run = await runChosenStreaming(agent, prompt, {
+      op: "health_synthesis",
+      signal: hooks?.signal,
+      onDelta: hooks?.onDelta,
+      acceptParsed: isHealthSynthesisResult,
+    });
+    chosen = run.agent;
+    result = run.result;
+    tried = run.tried;
+  } catch (error) {
+    if (hooks?.signal?.aborted) throw error;
+    return {
+      ok: false as const,
+      synthesis: repo.getHealthSynthesis(),
+      focus: repo.healthFocus(),
+      agent: chosen,
+      tried,
+      agent_status: agentStatusFor({ ok: false, agent: chosen, tried }),
+    };
+  }
   const synthesis = normalizeHealthSynthesis(result.parsed, { agent: chosen, generated_at: new Date().toISOString() });
   if (synthesis) {
     // Stamp the newest health-document date this synthesis was written against, so a
@@ -796,7 +876,29 @@ export async function generateInsight(
   // Only the weekly read is reshaped to the streaming contract + wired for deltas; a
   // connection insight keeps the bare-JSON prompt and (with no onDelta) delegates
   // straight to the one-shot rotation — unchanged.
-  const { agent: chosen, result, tried } = await runChosenStreaming(agent, prompt, { op: k === "weekly_read" ? "weekly_read" : "insight", signal: hooks?.signal, onDelta: hooks?.onDelta });
+  let chosen: string | null = null;
+  let result: any = null;
+  let tried: { agent: string; error: string }[] = [];
+  try {
+    const run = await runChosenStreaming(agent, prompt, {
+      op: k === "weekly_read" ? "weekly_read" : "insight",
+      signal: hooks?.signal,
+      onDelta: hooks?.onDelta,
+      acceptParsed: isInsightResult,
+    });
+    chosen = run.agent;
+    result = run.result;
+    tried = run.tried;
+  } catch (error) {
+    if (hooks?.signal?.aborted) throw error;
+    return {
+      ok: false as const,
+      error: "no genuine new insight",
+      agent: chosen,
+      tried,
+      agent_status: agentStatusFor({ ok: false, agent: chosen, tried }),
+    };
+  }
   const p: any = result.parsed;
   const text = p && typeof p === "object" ? String(p.text ?? "").trim() : "";
   if (!p || typeof p !== "object" || p.found === false || !text || repo.isDuplicateInsight(text, recent)) {
@@ -997,7 +1099,11 @@ export async function refreshReactionNarrative(
   hooks?.onPhase?.("summarizing how your body responds");
   try {
     const prompt = buildReactionNarrativePrompt(patterns);
-    const { agent: chosen, result, tried } = await run(agent, prompt, { op: "reaction_narrative", signal: hooks?.signal });
+    const { agent: chosen, result, tried } = await run(agent, prompt, {
+      op: "reaction_narrative",
+      signal: hooks?.signal,
+      acceptParsed: isReactionNarrativeResult,
+    });
     const p: any = result?.parsed;
     const text = p && typeof p === "object" ? String(p.narrative ?? "").trim() : "";
     if (!text) {
@@ -1008,7 +1114,8 @@ export async function refreshReactionNarrative(
     return { ok: true as const, narrative: text.slice(0, 600), agent: chosen, tried, agent_status: "ok" as const };
   } catch (e: any) {
     // Any failure degrades to a no-op; the existing narrative stands.
-    return { ok: false as const, error: e?.message ?? "reaction narrative refresh failed" };
+    if (hooks?.signal?.aborted) throw e;
+    return { ok: false as const, error: "agent returned no usable narrative" };
   }
 }
 
@@ -1035,7 +1142,11 @@ export async function reconcileMarkers(agent?: string, hooks?: OpHooks) {
   if (items.length < 2) return { ok: true as const, aligned: 0, applied: 0, candidates: items.length };
   hooks?.onPhase?.("aligning lab names");
   const prompt = buildMarkerReconcilePrompt(items.map((i) => ({ name: i.name, unit: i.unit, sample: i.sample, canonical: i.canonical })));
-  const { agent: chosen, result, tried } = await runChosen(agent, prompt, { op: "marker_reconcile", signal: hooks?.signal });
+  const { agent: chosen, result, tried } = await runChosen(agent, prompt, {
+    op: "marker_reconcile",
+    signal: hooks?.signal,
+    acceptParsed: isReconciliationResult,
+  });
   const p: any = result?.parsed;
   if (!p || typeof p !== "object" || !Array.isArray(p.groups)) {
     return { ok: false as const, error: "no usable reconciliation", agent: chosen, tried, agent_status: agentStatusFor({ ok: false, agent: chosen, tried }) };
@@ -1069,7 +1180,11 @@ export async function reconcileExercises(agent?: string, hooks?: OpHooks) {
   if (items.length < 2) return { ok: true as const, aligned: 0, applied: 0, candidates: items.length };
   hooks?.onPhase?.("tidying exercise names");
   const prompt = buildExerciseReconcilePrompt(items.map((i) => ({ name: i.name, group: i.group, sets: i.sets })));
-  const { agent: chosen, result, tried } = await runChosen(agent, prompt, { op: "exercise_reconcile", signal: hooks?.signal });
+  const { agent: chosen, result, tried } = await runChosen(agent, prompt, {
+    op: "exercise_reconcile",
+    signal: hooks?.signal,
+    acceptParsed: isReconciliationResult,
+  });
   const p: any = result?.parsed;
   if (!p || typeof p !== "object" || !Array.isArray(p.groups)) {
     return { ok: false as const, error: "no usable reconciliation", agent: chosen, tried, agent_status: agentStatusFor({ ok: false, agent: chosen, tried }) };

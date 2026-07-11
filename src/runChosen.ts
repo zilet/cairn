@@ -315,6 +315,7 @@ function recordStreamedRun(
   agent: string,
   started: number,
   parsed: boolean,
+  accepted: boolean,
   res: AgentResult | null,
   error?: string
 ): void {
@@ -322,13 +323,13 @@ function recordStreamedRun(
     repo.recordAgentRun({
       op,
       agent,
-      ok: parsed,
+      ok: accepted,
       parsed,
       latency_ms: Date.now() - started,
       tried_json: false,
-      status: parsed ? "ok" : error ? "error" : "invalid_output",
-      error_class: parsed ? null : error ? "process_error" : "invalid_json",
-      error_message: error ?? (parsed ? null : "streamed reply had no parseable JSON"),
+      status: accepted ? "ok" : error ? "error" : "invalid_output",
+      error_class: accepted ? null : error ? "process_error" : parsed ? "invalid_contract" : "invalid_json",
+      error_message: error ?? (accepted ? null : parsed ? "streamed reply missed the operation contract" : "streamed reply had no parseable JSON"),
       exit_code: res?.code ?? null,
       model: res?.usage?.model ?? null,
       input_tokens: res?.usage?.input_tokens ?? null,
@@ -369,6 +370,7 @@ export async function runChosenStreaming(
   const { onDelta, ...rest } = opts;
   const op = rest.op ?? "auto";
   const runOneShot = deps.runOneShot ?? runChosen;
+  const streamedTried: { agent: string; error: string }[] = [];
   if (onDelta) {
     const supportsStream = deps.supportsStream ?? agentSupportsStream;
     const runStreaming = deps.runStreaming ?? runAgentStreaming;
@@ -384,19 +386,33 @@ export async function runChosenStreaming(
         });
         gate.finish();
         const parsed = extractMarkedJson(res.raw);
-        if (parsed && typeof parsed === "object") {
-          recordStreamedRun(op, first, started, true, res);
+        let accepted = !!parsed && typeof parsed === "object";
+        if (accepted && rest.acceptParsed) {
+          try {
+            accepted = rest.acceptParsed(parsed) === true;
+          } catch {
+            accepted = false;
+          }
+        }
+        if (accepted) {
+          recordStreamedRun(op, first, started, true, true, res);
           return { agent: first, result: { ...res, parsed }, tried: [] as { agent: string; error: string }[] };
         }
-        // Ran but returned no parseable JSON → fall through to the one-shot rotation
-        // (which has the JSON-repair retry the streaming path deliberately skips).
-        recordStreamedRun(op, first, started, false, res);
+        // Missing JSON or a semantic contract miss → fall through to the one-shot
+        // rotation, which owns repair + cross-agent fallback.
+        recordStreamedRun(op, first, started, !!parsed, false, res);
+        streamedTried.push({
+          agent: first,
+          error: parsed ? "streamed JSON missed the operation contract" : "streamed reply had no valid JSON",
+        });
       } catch (e: any) {
         if (rest.signal?.aborted) throw e; // a deliberate Stop — never retry elsewhere
-        recordStreamedRun(op, first, started, false, null, e?.message ?? String(e));
+        recordStreamedRun(op, first, started, false, false, null, e?.message ?? String(e));
+        streamedTried.push({ agent: first, error: `streaming failed: ${e?.message ?? String(e)}` });
         // transport failure → fall through to the one-shot rotation
       }
     }
   }
-  return runOneShot(agent, prompt, rest);
+  const fallback = await runOneShot(agent, prompt, rest);
+  return streamedTried.length ? { ...fallback, tried: [...streamedTried, ...fallback.tried] } : fallback;
 }

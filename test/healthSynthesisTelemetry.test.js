@@ -1,6 +1,7 @@
 // Health synthesis is its own routed/telemetry operation, not a generic "auto"
-// agent run. The offline stub lets this exercise the real coachOps -> runChosen
-// -> runAgentWithFallback path without invoking an external model.
+// agent run. The offline stub intentionally emits a plan-proposal shape, so this
+// also pins that health synthesis rejects it semantically while retaining the
+// correct operation label in telemetry.
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { setAgentRunSink } from "../dist/agents.js";
@@ -15,11 +16,16 @@ test("synthesizeHealth records health_synthesis as the agent op", async () => {
   const runs = [];
   setAgentRunSink((r) => runs.push(r));
 
-  await synthesizeHealth("stub");
+  const out = await synthesizeHealth("stub");
 
   assert.equal(runs.length, 1);
   assert.equal(runs[0].op, "health_synthesis");
   assert.equal(runs[0].agent, "stub");
+  assert.equal(runs[0].ok, false);
+  assert.equal(runs[0].parsed, true);
+  assert.equal(runs[0].error_class, "invalid_contract");
+  assert.equal(out.ok, false);
+  assert.equal(out.synthesis, null);
 });
 
 test("normalizeHealthSynthesis clamps and filters the agent shape", () => {
