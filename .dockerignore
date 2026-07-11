@@ -1,23 +1,41 @@
-node_modules
-dist
-data
-.tsbuildcache
-public/js/*.js
+# Cairn's Docker context is allowlisted. Source checkouts contain documentation,
+# tests, local-agent instructions, media, and operator files that must never be
+# sent to the builder or become available to a COPY added later.
+**
+
+!.dockerignore
+!Dockerfile
+!package.json
+!package-lock.json
+!tsconfig.json
+!tsconfig.client.build.json
+!agents.json
+
+!src/
+!src/**
+
+!scripts/
+!scripts/build-client.mjs
+!scripts/docker-entrypoint.sh
+!scripts/update-agent-clis.sh
+
+# Static PWA inputs. Browser JS is compiled from src/client in the builder; the
+# only hand-written public/js input is the classic boot shim.
+!public/
+!public/art.js
+!public/favicon.ico
+!public/index.html
+!public/manifest.json
+!public/styles.css
+!public/sw.js
+!public/icons/
+!public/icons/**
+!public/vendor/
+!public/vendor/**
+!public/js/
 !public/js/10-boot.js
-.github
-.agents
-.codex
-docs
-test
-media
-coverage
-.git
-*.db
-*.db-wal
-*.db-shm
-*.zip
-*.log
-npm-debug.log*
-.DS_Store
-.env
-.local
+
+# Runtime seed artwork is copied into the image and installed into /data only
+# when a fresh database is seeded. It is application data, not documentation.
+!seed-art/
+!seed-art/**

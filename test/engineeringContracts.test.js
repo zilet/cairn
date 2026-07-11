@@ -3718,7 +3718,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuildCheck, /client build output generated from TypeScript/);
   assert.match(gitignore, /public\/js\/\*\.js/);
   assert.match(gitignore, /!public\/js\/10-boot\.js/);
-  assert.match(dockerignore, /public\/js\/\*\.js/);
+  assert.match(dockerignore, /^\*\*$/m);
   assert.match(dockerignore, /!public\/js\/10-boot\.js/);
   assert.match(contracts, /export \* from "\.\/client-api\.js"/);
   assert.match(contracts, /export \* from "\.\/client-api-coverage\.js"/);

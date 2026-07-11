@@ -25,6 +25,17 @@ COPY public/js/10-boot.js ./public/js/10-boot.js
 # clean, full emit every build is deterministic and only costs ~5s of tsc.
 RUN npm run build
 
+# ---- production dependencies ----
+# Keep package-lock.json in an install-only stage. The runtime needs package.json
+# for the source-build version fallback, but it does not need the lockfile.
+FROM ${NODE_IMAGE} AS production-deps
+WORKDIR /app
+ENV NPM_CONFIG_AUDIT=false \
+    NPM_CONFIG_FUND=false \
+    NPM_CONFIG_UPDATE_NOTIFIER=false
+COPY package*.json ./
+RUN --mount=type=cache,target=/root/.npm,sharing=locked npm ci --omit=dev
+
 # ---- runtime ----
 FROM ${NODE_IMAGE} AS runtime
 WORKDIR /app
@@ -78,11 +89,18 @@ RUN --mount=type=cache,target=/root/.npm,sharing=locked set -eux; \
     AGENT_INSTALL_TIMEOUT_SECONDS=300 \
     cairn-update-agent-clis
 
-COPY package*.json ./
-RUN --mount=type=cache,target=/root/.npm,sharing=locked npm ci --omit=dev
+COPY --from=production-deps /app/node_modules ./node_modules
+COPY package.json ./
 COPY --from=builder /app/dist ./dist
-COPY public ./public
+# Copy only the static runtime shell, then overlay generated browser output from
+# the builder. An accidentally-added public README/map/source file cannot enter
+# the image through a broad directory copy.
+COPY public/art.js public/favicon.ico public/index.html public/manifest.json public/styles.css public/sw.js ./public/
+COPY public/icons ./public/icons
+COPY public/vendor ./public/vendor
+COPY --from=builder /app/public/cairn-body-figure.js ./public/cairn-body-figure.js
 COPY --from=builder /app/public/js ./public/js
+COPY seed-art ./seed-art
 COPY agents.json ./
 
 # Hand the writable areas to the unprivileged `app` user. /usr/local is baked into

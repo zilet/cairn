@@ -74,6 +74,12 @@ For source-built Docker images, the Docker builder runs `npm run build`; that ty
 generates the browser client, then the runtime image overlays generated `public/js` from the
 builder over the static `public/` tree. Generated `public/js` is ignored by git, so source deploys
 compile from `src/client` instead of relying on committed transpiled browser files.
+The Docker build context is an explicit allowlist: application source, build configuration, static
+PWA inputs, agent configuration, and the offline seed-art pack only. Repository documentation,
+tests, media, local agent instructions (`CLAUDE.md` / `AGENTS.md`), and operator files are never
+sent to the builder. The final `/app` contains only `dist`, production `node_modules`, `public`,
+`seed-art`, `agents.json`, and `package.json`. Compose mounts only the durable named volumes at
+`/data` and `/home/app`; a source-build checkout on the Docker host is not mounted into Cairn.
 Docker defaults to `TZ=America/New_York`. Set `TZ` in `.env` to the user's local timezone if weekly
 auto-coach is enabled; the scheduler uses container-local `getDay()` / `getHours()` for the
 configured day and hour. For Belgrade, use `TZ=Europe/Belgrade`.
