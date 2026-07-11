@@ -17,6 +17,7 @@ on the host:
 ```bash
 docker run -d --name cairn -p 127.0.0.1:8787:8787 \
   -v cairn-data:/data -v cairn-home:/home/app \
+  -v cairn-tools:/home/app/.cairn-tools \
   --restart unless-stopped ghcr.io/zilet/cairn:latest
 ```
 
@@ -25,9 +26,9 @@ Open **http://localhost:8787** — you land on the Brief. That's the whole insta
 This binds Cairn to this computer only. Widen to your LAN, for example
 `-p 8787:8787`, only on a private network and with `CAIRN_AUTH_TOKEN` set.
 
-- **Your data survives updates.** `cairn-data` holds the SQLite DB and `cairn-home` holds your CLI
-  logins. To update: `docker pull ghcr.io/zilet/cairn:latest`, then `docker rm -f cairn` and re-run
-  the command — both volumes persist.
+- **Your data survives updates.** `cairn-data` holds SQLite, `cairn-home` holds logins, and
+  `cairn-tools` holds optional provider binaries. To update: pull, remove the container, and re-run
+  the command — all three volumes persist.
 - **Timezone:** add `-e TZ=Europe/Belgrade` (the weekly auto-coach uses the container's local time).
 - **First paint is real with no agent.** The Brief, set logging, the plan editor, charts, and marker
   views all work immediately. The next step only adds the *conversational* layer.
@@ -37,11 +38,11 @@ Prefer an editable config file over a long command line? Use the
 
 ## 2 · Add a coaching agent — optional, for chat & drafts
 
-Chat, coaching drafts, and meal-plan generation need one external agent. The CLIs are already baked
-into the image, so you never install anything — you just log into **one** provider.
+Chat, coaching drafts, and meal-plan generation need one external agent. Cairn ships lean, with no
+provider CLI in the image. Install only the provider you use, then log in.
 
-**Easiest — log in from the app (no terminal).** Open **Settings → Agents**, pick a provider, and tap
-**Connect**. A live terminal opens right in the browser and walks you through that CLI's sign-in
+**Easiest — install and log in from the app (no terminal).** Open **Settings → Agents**, pick a
+provider, tap **Install**, then **Connect**. A live terminal opens in the browser for that CLI's sign-in
 (claude / codex / antigravity / grok); follow the prompts — if a URL and a code appear, open the URL to
 authorize. The login is written by the server process itself, so it lands in the right place
 automatically and persists across restarts/updates. Once it shows **✓ Connected**, that agent joins the
@@ -121,7 +122,7 @@ prints the URL. To drive Docker yourself instead of the script:
 
 ```bash
 cp .env.example .env            # edit TZ at minimum
-docker compose up -d --build    # first build bakes the CLIs in (~minutes); rebuilds are cached
+docker compose up -d --build    # builds the lean app image; add provider tools later in Settings
 ```
 
 ### Run on Node, without Docker
@@ -349,6 +350,7 @@ than the `grok` login. With the bare `docker run`, pass it on the command and re
 docker rm -f cairn
 docker run -d --name cairn -p 127.0.0.1:8787:8787 \
   -v cairn-data:/data -v cairn-home:/home/app \
+  -v cairn-tools:/home/app/.cairn-tools \
   -e XAI_API_KEY=xai-... \
   --restart unless-stopped ghcr.io/zilet/cairn:latest
 ```

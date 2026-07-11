@@ -18,7 +18,7 @@ running in ~30 seconds. For Raspberry Pi, use `./scripts/quickstart-rpi.sh` inst
 | **Auth** | `CAIRN_AUTH_TOKEN` when any device beyond loopback can reach the port — **mandatory** for any public path (Funnel / public proxy) |
 | **Fail closed** | `CAIRN_REQUIRE_AUTH=1` on any exposed deployment — refuses to boot without a token |
 | **HTTPS** | Tailscale Serve or a private reverse proxy — required for installable/offline PWA |
-| **Backups** | `cairn-data` + `cairn-home` volumes regularly |
+| **Backups** | `cairn-data` + `cairn-home` regularly; `cairn-tools` is regenerable |
 
 > **Serve, not Funnel.** Tailscale **Serve** keeps Cairn tailnet-only (private to
 > your signed-in devices). Tailscale **Funnel** publishes it to the open internet —
@@ -41,6 +41,7 @@ Persistent state:
 |---|---|
 | `cairn-data` | SQLite DB, uploads, art cache |
 | `cairn-home` | CLI logins (`~/.claude`, `~/.codex`, `~/.gemini`, …) |
+| `cairn-tools` | Optional provider binaries; reinstall instead of backing up |
 
 Set timezone in `.env` so the weekly auto-coach fires at the right local hour:
 
@@ -156,8 +157,8 @@ cp .env.example .env   # edit TZ, optional CAIRN_AUTH_TOKEN
 docker compose up -d --build
 ```
 
-First build takes a few minutes (CLIs bake into the image). Later rebuilds are fast thanks to
-BuildKit layer caching.
+The build produces the lean app image only. Add selected provider tools later from Settings; they
+persist in `cairn-tools` independently of image rebuilds.
 
 ### Mac → Pi rsync deploy (optional pattern)
 
@@ -329,47 +330,17 @@ Restore steps: [`OPERATIONS.md`](OPERATIONS.md).
 git pull && docker compose up -d --build
 ```
 
-Schema migrations run automatically on boot (`PRAGMA user_version`). CLI tools can be refreshed
-without rebuilding. Claude Code and Codex default to pinned npm package versions; pass a new
-version deliberately when you want to bump them:
+Schema migrations run automatically on boot (`PRAGMA user_version`). Provider tools are installed
+individually from **Settings → Agents** into the persistent home volume; the image ships none.
+The bundled manifest pins npm versions and vendor checksums. The shell equivalent is:
 
 ```bash
-docker compose exec -u app cairn cairn-update-agent-clis
-docker compose exec -u app -e CLAUDE_CODE_VERSION=2.1.205 -e CODEX_CLI_VERSION=0.143.0 cairn cairn-update-agent-clis
+docker compose exec -u app cairn cairn-update-agent-clis claude codex
 ```
 
-Or **Settings → Agents → Update CLI tools**.
-
-Force fresh CLI install on image rebuild:
-
-```bash
-docker compose build \
-  --build-arg AGENT_CLI_CACHE_BUST="$(date +%s)" \
-  --build-arg CLAUDE_CODE_VERSION=2.1.205 \
-  --build-arg CODEX_CLI_VERSION=0.143.0 \
-  cairn
-docker compose up -d
-```
-
-Antigravity and Grok use vendor shell installers. The checked-in Dockerfile pins the current
-installer-script hashes so normal source/release builds include them. If a vendor changes its
-installer script before this repo updates the hash, provide the new audited checksum:
-
-```bash
-docker compose build \
-  --build-arg INSTALL_ANTIGRAVITY=1 \
-  --build-arg ANTIGRAVITY_INSTALL_SHA256=<sha256> \
-  cairn
-```
-
-For a local-only/tailnet box, you can explicitly accept the unverified installer risk:
-
-```bash
-docker compose build \
-  --build-arg INSTALL_GROK=1 \
-  --build-arg AGENT_INSTALL_ALLOW_UNVERIFIED=1 \
-  cairn
-```
+There is no unverified-install override. Antigravity/Grok installation fails closed until a Cairn
+release carries the newly audited checksum. Existing credentials remain in `cairn-home` while a
+tool is absent, so an upgrade from an older all-CLI image needs only **Install**, not a new login.
 
 ---
 
@@ -378,11 +349,11 @@ docker compose build \
 | Symptom | Check |
 |---|---|
 | Health never green | `docker compose logs --tail=120 cairn` |
-| Coaching uses stub only | No CLI logged in — Settings → Agents → Connect, or `docker compose exec -u app -it cairn claude auth login` |
+| Coaching uses stub only | No CLI ready — Settings → Agents → Install, then Connect |
 | PWA won't install offline | Need HTTPS (Tailscale Serve) |
 | Permission denied on docker | New SSH session after `usermod -aG docker`, or use `sudo` |
 | Out of disk | `docker system prune -af` (named volumes untouched) |
-| Wipe by accident | `docker compose down -v` **deletes** `cairn-data` and `cairn-home` |
+| Wipe by accident | `docker compose down -v` **deletes** data, login, and tools volumes |
 
 ---
 

@@ -122,11 +122,12 @@ amd64 + arm64) — one command, no clone, no Node:
 ```bash
 docker run -d --name cairn -p 127.0.0.1:8787:8787 \
   -v cairn-data:/data -v cairn-home:/home/app \
+  -v cairn-tools:/home/app/.cairn-tools \
   --restart unless-stopped ghcr.io/zilet/cairn:latest
 ```
 
-Open **http://localhost:8787** — you land on the Brief immediately. The two named volumes keep your
-data (`cairn-data`) and CLI logins (`cairn-home`) across updates; to update, `docker pull
+Open **http://localhost:8787** — you land on the Brief immediately. The three named volumes keep your
+data (`cairn-data`), logins (`cairn-home`), and selected tools (`cairn-tools`) across updates; to update, `docker pull
 ghcr.io/zilet/cairn:latest` and re-run the command. Add `-e TZ=Europe/Belgrade` for your timezone.
 Only widen the bind to your LAN (for example `-p 8787:8787`) on a private network and with
 `CAIRN_AUTH_TOKEN` set.
@@ -145,10 +146,10 @@ The script detects Docker (preferred, no Node needed on the host) or falls back 
 local Node 24, starts Cairn, waits for health, and prints the URL. Open
 **http://localhost:8787** — you land on the Brief immediately.
 
-**First paint is real**, no agent required. For chat, coaching drafts, and meal plans, log in to
-**one** agent — the CLIs are baked into the image, so nothing to install. Easiest path: open
-**Settings → Agents** and tap **Connect** — a terminal opens in the browser and walks you through that
-provider's sign-in, no `docker exec` needed. An agent you haven't connected is automatically kept out
+**First paint is real**, no agent required. For chat, coaching drafts, and meal plans, add **one**
+agent. The image stays lean and ships no provider CLI by default: open **Settings → Agents**, tap
+**Install** on the provider you use, then **Connect**. A terminal opens in the browser and walks you
+through that provider's sign-in, no `docker exec` needed. An agent you haven't connected is kept out
 of the rotation, and each card shows the CLI's version + current model.
 
 Prefer a terminal? It's one `docker exec` (the container is named `cairn`):
@@ -179,9 +180,8 @@ one up.
 | Endurance stats, run compliance, race countdown, PRs | Weekly run **prescriptions** (drafted, then applied surgically) |
 
 A **coaching agent** means one of the supported CLIs — **Claude Code**, **Codex**,
-**Antigravity**, or **Grok** — installed on the host **and logged in** with your own account.
-There is no shared key and no built-in model: each provider needs its own CLI and login (the
-Docker image bakes the CLIs in; you log in once). The built-in `stub` agent exercises the same
+**Antigravity**, or **Grok** — installed into Cairn's persistent home volume **and logged in** with
+your own account. There is no shared key and no built-in model: install only providers you use. The built-in `stub` agent exercises the same
 propose/apply loop offline with no key, so you can explore the agentic flow before connecting a
 real one.
 
@@ -241,6 +241,7 @@ no compose file:
 ```bash
 docker run -d --name cairn -p 127.0.0.1:8787:8787 \
   -v cairn-data:/data -v cairn-home:/home/app \
+  -v cairn-tools:/home/app/.cairn-tools \
   --restart unless-stopped ghcr.io/zilet/cairn:latest
 ```
 
@@ -268,13 +269,13 @@ cd cairn
 docker compose up -d --build
 ```
 
-The first build bakes the coaching CLIs into the image and takes ~3–6 minutes; later rebuilds are
-fast (BuildKit caches the layers).
+The image builds only Cairn and its runtime dependencies. Provider CLIs are optional, one-click
+installs from Settings and never inflate the base image.
 
 See [`docs/SHARING.md`](docs/SHARING.md) for the GHCR publishing flow and the maintainer release
 checklist.
 
-- `cairn-data` volume = SQLite DB; `cairn-home` volume = all CLI logins. Rebuilds never touch either.
+- `cairn-data` = SQLite; `cairn-home` = logins; `cairn-tools` = optional, regenerable binaries. Rebuilds touch none.
 - **No built-in auth by default** — keep Cairn behind localhost, a LAN, Tailscale/VPN, or another
   trusted private network, and never expose the port to the public internet. If the port is reachable
   beyond loopback, set **`CAIRN_AUTH_TOKEN`** (env / `.env`) to require a shared token on `/api` and
@@ -351,7 +352,7 @@ checklist.
 
 ## The chat-driven parts (food photos, free-text)
 
-The headless CLIs in the container handle scheduled/triggered **text** optimization. The inputs that
+The headless CLIs you choose to install handle scheduled/triggered **text** optimization. The inputs that
 need vision or loose natural language are best done from a **Claude client** (which has vision +
 memory) talking to Cairn's MCP server:
 
@@ -362,8 +363,8 @@ memory) talking to Cairn's MCP server:
 
 ## Coaching agents (one login per provider, then it runs)
 
-There is no single login across providers. You sign in once per provider; the `cairn-home` volume
-keeps each login across restarts.
+There is no single login across providers. Install only the tools you use, then sign in once per
+provider; `cairn-home` keeps logins and `cairn-tools` keeps selected binaries across image updates.
 
 | agent | CLI | subscription | headless | chat streaming | auth dir |
 |---|---|---|---|---|---|
@@ -377,10 +378,11 @@ keeps each login across restarts.
 > `agy` (auth under `~/.gemini`). Headless streaming is not available yet — chat falls back to
 > one-shot for Codex and Antigravity.
 
-The CLIs are baked into the published image (and into a source build via the
-`INSTALL_CLAUDE/CODEX/ANTIGRAVITY/GROK` build args). Log in **once** to **one** provider — two ways:
+The published image contains a server-owned installer manifest, not the provider binaries. In
+**Settings → Agents**, tap **Install** for one provider, then connect it:
 
-**In the app (no terminal):** **Settings → Agents → Connect** opens a live terminal in the browser and
+**In the app (no terminal):** **Settings → Agents → Install → Connect** installs the pinned tool into
+`cairn-tools`, then opens a live terminal in the browser and
 runs that CLI's sign-in for you (rendered via a PTY the server spawns as itself, so the token lands
 where it's read — no `-u app` gotcha). The card flips to **✓ Connected**, and an unconnected agent is
 auto-excluded from the rotation rather than failing requests. It also shows the CLI version + current
@@ -396,32 +398,24 @@ docker exec -u app -it cairn grok login --device-auth   # Grok, if installed (or
 Grok headless can use an API key instead of the login — pass `-e XAI_API_KEY=…` on `docker run`
 (re-create the container to apply) or set it in `.env` for the compose path. Then enable the agent
 in **Settings → Agents**. Notes: `claude -p` on subscription draws from a separate Agent SDK credit
-pool from 2026-06-15; `agy`/`grok` use vendor installers, baked into the release image only when the
-installer-script checksums in the Dockerfile match the currently fetched installer.
+pool from 2026-06-15; `agy`/`grok` installs run only after an explicit choice and only when the
+download matches the checksum bundled in `agents.json`.
 
-Cairn does **not** proxy a shared API key or shared subscription. The container only ships the
-runner binaries; each user logs in with their own Claude / ChatGPT / Google / xAI account, and
-the `cairn-home` Docker volume keeps those auth directories across restarts and image updates.
+Cairn does **not** proxy a shared API key or shared subscription. Each user chooses and installs
+their own provider tool and logs in with their own account. `cairn-tools` keeps the regenerable
+binary; `cairn-home` keeps auth state.
 
 ### Updating CLI tools
 
-The image installs pinned Claude Code and Codex CLI versions plus checksum-pinned Antigravity/Grok
-installers at build time. For a long-running install, update them from **Settings → Agents → Update
-CLI tools**, or from the shell. The updater uses each vendor CLI's own updater when available and
-falls back to the pinned installer path when a binary is missing:
+Each installed agent card has its own **Update** action. Missing providers remain absent. The
+installer reads exact npm versions or checksum-pinned vendor URLs from the bundled manifest and
+writes only under the dedicated `cairn-tools` volume. The shell equivalent names tools explicitly:
 
 ```bash
-docker exec -u app cairn cairn-update-agent-clis
+docker exec -u app cairn cairn-update-agent-clis claude codex
 ```
 
-To force a fresh CLI install during an image rebuild without a full Docker cache wipe:
-
-```bash
-docker compose build --build-arg AGENT_CLI_CACHE_BUST="$(date +%s)" cairn
-docker compose up -d
-```
-
-Automatic runtime updates are opt-in:
+Automatic runtime updates are opt-in and update only tools already installed:
 
 ```bash
 AGENT_CLI_AUTO_UPDATE=1 AGENT_CLI_AUTO_UPDATE_INTERVAL_HOURS=168 docker compose up -d

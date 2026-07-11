@@ -8,29 +8,28 @@ Tailscale/VPN, or another trusted private network.
 
 ## Architecture of state
 
-All persistent state lives in two named Docker volumes. Nothing important lives in the container
+Persistent state and optional tools live in three named Docker volumes. Nothing important lives in the container
 image itself.
 
 | Volume | Mounted at | Contents |
 |---|---|---|
 | `cairn-data` | `/data` | `cairn.db` + `-wal` + `-shm` (SQLite WAL files) |
-| `cairn-home` | `/home/app` | CLI logins: `~/.claude`, `~/.codex`, `~/.gemini` (agy), `~/.grok` (xAI) |
-
-**Never** bind-mount anything over `/usr/local/bin` — that's where the coaching CLIs
-(`claude`, `codex`, `agy`, `grok`) land at image-build time.
+| `cairn-home` | `/home/app` | Provider login directories |
+| `cairn-tools` | `/home/app/.cairn-tools` | Optional provider binaries; regenerable, omitted from backups |
 
 For local dev, the DB lives at `./data/cairn.db` (relative to the project root). The path is
 controlled by `DATA_DIR` (directory) or `DB_PATH` (explicit file override) — see `.env.example`.
 
-The agent CLI binaries are runtime tools, not app state. User logins live in `cairn-home`; binaries
-live in `/usr/local/bin` and can be refreshed without touching the database or auth volume:
+Provider CLIs are optional runtime tools and are not baked into the image. **Settings → Agents →
+Install** writes the selected tool to `cairn-tools`; Connect writes login state to `cairn-home`.
+Both survive image replacement, but only login state needs backup. The shell equivalent is:
 
 ```bash
-docker compose exec cairn cairn-update-agent-clis
+docker compose exec -u app cairn cairn-update-agent-clis claude codex
 ```
 
-The same updater backs the Settings → Agents → Update CLI tools button. Optional boot/interval
-updates use `AGENT_CLI_AUTO_UPDATE=1` and `AGENT_CLI_AUTO_UPDATE_INTERVAL_HOURS` (default 168).
+Each installed agent card exposes Update. Optional interval updates use `AGENT_CLI_AUTO_UPDATE=1`
+and update installed tools only; missing providers remain absent.
 
 ### Connecting (and re-connecting) agents
 
@@ -78,8 +77,8 @@ The Docker build context is an explicit allowlist: application source, build con
 PWA inputs, agent configuration, and the offline seed-art pack only. Repository documentation,
 tests, media, local agent instructions (`CLAUDE.md` / `AGENTS.md`), and operator files are never
 sent to the builder. The final `/app` contains only `dist`, production `node_modules`, `public`,
-`seed-art`, `agents.json`, and `package.json`. Compose mounts only the durable named volumes at
-`/data` and `/home/app`; a source-build checkout on the Docker host is not mounted into Cairn.
+`seed-art`, `agents.json`, and `package.json`. Compose mounts durable state at `/data` and
+`/home/app`, plus regenerable tools at `/home/app/.cairn-tools`; the host checkout is never mounted.
 Docker defaults to `TZ=America/New_York`. Set `TZ` in `.env` to the user's local timezone if weekly
 auto-coach is enabled; the scheduler uses container-local `getDay()` / `getHours()` for the
 configured day and hour. For Belgrade, use `TZ=Europe/Belgrade`.
@@ -126,17 +125,10 @@ docker compose pull
 docker compose up -d
 ```
 
-If the only thing you want is fresh agent CLIs in the existing image:
+If the only thing you want is fresh selected agent CLIs:
 
 ```bash
-docker compose exec cairn cairn-update-agent-clis
-```
-
-If you want the next image rebuild to re-run the CLI installers despite Docker layer cache:
-
-```bash
-AGENT_CLI_CACHE_BUST=$(date +%s) docker compose build cairn
-docker compose up -d
+docker compose exec -u app cairn cairn-update-agent-clis claude codex
 ```
 
 Either way: on every boot `runMigrations()` (called at the bottom of `src/db.ts`) reads
@@ -267,7 +259,7 @@ docker run --rm \
   busybox tar czf /backup/cairn-data-$(date +%F).tgz -C /data .
 ```
 
-To back up both volumes:
+To back up both durable state volumes (`cairn-tools` is intentionally omitted):
 
 ```bash
 for vol in cairn-data cairn-home; do

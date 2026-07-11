@@ -21,8 +21,9 @@ npm run backup   # curl /api/export -> cairn-export.json (server must be running
 docker compose up -d --build   # build/run locally on a Docker host
 ```
 
-**Docker deploy.** The container bundles Node 24 and the coaching CLIs, so the host does not need
-Node installed. Public releases are intended to publish a GHCR image plus a release
+**Docker deploy.** The lean container bundles Node 24 but no provider coaching CLI, so the host does
+not need Node installed and users install only selected tools from Settings. Tools and logins persist
+under the mounted `/home/app` volume. Public releases publish a GHCR image plus a release
 `docker-compose.yml`; see `docs/SHARING.md`. Migration/restore internals live in
 `docs/OPERATIONS.md`.
 

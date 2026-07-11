@@ -1,8 +1,8 @@
 # Sharing Cairn
 
-Cairn is easiest to share as a prebuilt Docker image — a single `docker run`, no clone. The image
-contains the app, Node 24, and the supported CLI runners. It does not contain user credentials or a
-shared AI subscription.
+Cairn is easiest to share as a prebuilt Docker image — a single `docker run`, no clone. The lean
+image contains Cairn, Node 24, and a verified per-provider installer manifest. It contains no
+provider CLI, user credential, or shared AI subscription.
 
 ## What Users Need
 
@@ -23,6 +23,7 @@ never touch the source. Shortest path — one `docker run`, no compose file:
 ```bash
 docker run -d --name cairn -p 127.0.0.1:8787:8787 \
   -v cairn-data:/data -v cairn-home:/home/app \
+  -v cairn-tools:/home/app/.cairn-tools \
   --restart unless-stopped ghcr.io/zilet/cairn:latest
 ```
 
@@ -62,8 +63,8 @@ cd cairn
 docker compose up -d --build
 ```
 
-The first build bakes the coaching CLIs in and takes a few minutes; later rebuilds are fast. Then
-open `http://localhost:8787`. Source builds run `npm run build` inside Docker, including the
+The build contains only Cairn and its runtime dependencies. Users install individual provider tools
+from Settings if they need them. Then open `http://localhost:8787`. Source builds run `npm run build` inside Docker, including the
 TypeScript browser-client build; the runtime image uses that generated `public/js` output rather
 than any checked-in browser files.
 
@@ -100,19 +101,20 @@ TZ=Europe/Belgrade
 
 ## Persistent State
 
-Cairn uses two named Docker volumes:
+Cairn uses three named Docker volumes:
 
 | Volume | Mounted at | Contents |
 |---|---|---|
 | `cairn-data` | `/data` | SQLite DB, uploads, generated art cache |
 | `cairn-home` | `/home/app` | CLI login state such as `~/.claude`, `~/.codex`, `~/.gemini`, `~/.grok` |
+| `cairn-tools` | `/home/app/.cairn-tools` | Optional provider binaries; safe to recreate and reinstall |
 
-Updating the image does not remove either volume.
+Updating the image does not remove these volumes.
 
 ## CLI Logins
 
 Each user logs into their own provider accounts. The simplest path is **in the app**: open
-**Settings → Agents** and tap **Connect** on a provider — a terminal opens in the browser and runs that
+**Settings → Agents**, tap **Install**, then **Connect** — a terminal opens in the browser and runs that
 CLI's sign-in (the server spawns the login as itself, so the token lands where it's read; no `-u app`
 needed). The card shows **✓ Connected** when done, and an unconnected agent is automatically kept out of
 the rotation.
@@ -152,15 +154,15 @@ container. Building from source? `git pull && docker compose up -d --build`.
 
 ## Updating CLI Tools
 
-The image installs pinned Claude Code and Codex CLI versions when it is built. Antigravity and Grok
-are installed from checksum-pinned vendor installers, then refreshed with their own update commands
-on long-running hosts. Update from Settings -> Agents -> Update CLI tools, or run:
+The image installs no provider CLI. Install or update one provider from its Settings → Agents card;
+the exact package pin or verified vendor installer comes from the bundled manifest. Shell users name
+the providers explicitly:
 
 ```bash
-docker exec -u app cairn cairn-update-agent-clis
+docker exec -u app cairn cairn-update-agent-clis claude codex
 ```
 
-Automatic CLI updates are available but opt-in:
+Automatic CLI updates are opt-in and refresh installed tools only:
 
 ```env
 AGENT_CLI_AUTO_UPDATE=1
@@ -170,9 +172,8 @@ AGENT_CLI_AUTO_UPDATE_INTERVAL_HOURS=168
 Only enable automatic updates on a trusted local or tailnet deployment because it
 runs vendor installer scripts inside the container.
 
-Antigravity and Grok use moving vendor shell installers. They are not baked into
-the default release image unless the maintainer supplies a checksum or explicitly
-opts into unverified installers.
+Antigravity and Grok installs fail closed if the downloaded vendor script no longer
+matches the audited checksum. There is no unverified-install override.
 
 ## Publishing Images
 

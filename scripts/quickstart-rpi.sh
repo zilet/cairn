@@ -120,6 +120,7 @@ fi
 info "Data volumes:"
 info "  cairn-data  -- SQLite DB, uploads, art cache (survives rebuilds)"
 info "  cairn-home  -- CLI logins (~/.claude, ~/.codex, etc.)"
+info "  cairn-tools -- optional provider binaries (safe to reinstall)"
 info "Back them up periodically with:"
 info "  docker run --rm -v cairn-data:/data -v \"\$PWD\":/backup busybox tar czf /backup/cairn-data-\$(date +%F).tgz -C /data ."
 
