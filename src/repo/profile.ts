@@ -1517,6 +1517,9 @@ export function computeGoalCheck(prof?: any) {
           source: "formula" as const,
           effective_date: null,
         };
+  const effectiveMessage = accepted && accepted.target_kcal != null
+    ? `Active target: ~${effective_target.target_kcal} kcal with ~${effective_target.protein_g} g protein${effective_target.carbs_g != null ? `, ${effective_target.carbs_g} g carbs` : ""}${effective_target.fat_g != null ? `, and ${effective_target.fat_g} g fat` : ""}. Cairn will recheck it against your weight trend and training performance.`
+    : message;
 
   return {
     ok: true,
@@ -1540,7 +1543,8 @@ export function computeGoalCheck(prof?: any) {
     },
     requested,
     recommended,
-    message,
+    message: effectiveMessage,
+    formula_message: message,
     // The persisted accepted target (or null) + the EFFECTIVE target every surface
     // should read (accepted wins, formula is the fallback/floor). Additive.
     accepted_target: accepted,

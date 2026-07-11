@@ -56,6 +56,8 @@ test("the fuel card + goal math + next check-in read the accepted number", () =>
   assert.equal(goal.effective_target.source, "accepted");
   assert.equal(goal.effective_target.target_kcal, 3000);
   assert.equal(goal.effective_target.protein_g, 200);
+  assert.match(goal.message, /Active target: ~3000 kcal/, "the human summary agrees with the accepted target");
+  assert.notEqual(goal.message, goal.formula_message, "the date/formula estimate remains provenance, not the active instruction");
 
   // The fuel card (getDayIntake) shows the accepted target, not the re-derived formula.
   const day = repo.getDayIntake();
