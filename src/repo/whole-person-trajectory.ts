@@ -1,5 +1,5 @@
 import { db } from "../db.js";
-import { effectiveGoalMode, getEnduranceGoal, getProfile } from "./profile.js";
+import { effectiveGoalMode, getEnduranceGoal, getPrimaryDiscipline, getProfile } from "./profile.js";
 import { getActiveBlock } from "./program-blocks.js";
 import { addDaysISO, localDateISO } from "./shared.js";
 import { getMarkerHistory } from "./health.js";
@@ -24,7 +24,7 @@ export interface WholePersonDomainRead {
 export interface WholePersonTrajectory {
   window: { start: string; end: string; days: number };
   objective: "everything better";
-  phase: { name: string | null; optimizes: string[]; protects: WholePersonDomain[]; parks: WholePersonDomain[] };
+  phase: { name: string | null; optimizes: string[]; floors: string[]; protects: WholePersonDomain[]; parks: WholePersonDomain[] };
   domains: WholePersonDomainRead[];
   unexplained_worse: WholePersonDomain[];
   revision_needed: boolean;
@@ -61,21 +61,41 @@ function compare(
 function strengthRead(start: string, end: string, parked: boolean): WholePersonDomainRead {
   const rows = db
     .prepare(
-      `SELECT s.date, ls.exercise_id, ls.weight, ls.reps
-       FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+      `SELECT s.date, ls.exercise_id, e.name AS exercise, ls.weight, ls.reps
+       FROM logged_sets ls
+       JOIN sessions s ON s.id = ls.session_id
+       JOIN exercises e ON e.id = ls.exercise_id
       WHERE s.date BETWEEN ? AND ? AND ls.weight > 0 AND ls.reps > 0
       ORDER BY s.date, ls.id LIMIT 3000`
     )
     .all(start, end) as any[];
-  const byDate = new Map<string, number>();
+  const byLift = new Map<string, Map<string, number>>();
   for (const row of rows) {
     const estimate = Number(row.weight) * (1 + Number(row.reps) / 30);
-    const key = `${row.date}|${row.exercise_id}`;
-    byDate.set(key, Math.max(byDate.get(key) ?? 0, estimate));
+    const key = `${row.exercise_id}|${row.exercise}`;
+    const dates = byLift.get(key) ?? new Map<string, number>();
+    dates.set(String(row.date), Math.max(dates.get(String(row.date)) ?? 0, estimate));
+    byLift.set(key, dates);
   }
-  const points = [...byDate.entries()].map(([key, value]) => ({ date: key.slice(0, 10), value }));
-  const split = halves(points);
-  const verdict = compare(split.first, split.last, 1.5);
+  const comparable = [...byLift.entries()]
+    .map(([key, dates]) => {
+      const points = [...dates.entries()].map(([date, value]) => ({ date, value }));
+      if (points.length < 4) return null;
+      const split = halves(points);
+      const tolerance = Math.max(1.5, Math.abs(split.first ?? 0) * 0.01);
+      return { exercise: key.split("|").slice(1).join("|"), verdict: compare(split.first, split.last, tolerance) };
+    })
+    .filter((row): row is { exercise: string; verdict: WholePersonVerdict } => row != null && row.verdict !== "unknown");
+  const improving = comparable.filter((row) => row.verdict === "better");
+  const regressing = comparable.filter((row) => row.verdict === "worse");
+  const verdict: WholePersonVerdict = !comparable.length
+    ? "unknown"
+    : regressing.length
+      ? "worse"
+      : improving.length
+        ? "better"
+        : "holding";
+  const names = (items: typeof comparable) => items.slice(0, 3).map((row) => row.exercise).join(", ");
   return {
     domain: "strength",
     verdict,
@@ -84,11 +104,13 @@ function strengthRead(start: string, end: string, parked: boolean): WholePersonD
       verdict === "unknown"
         ? "Not enough comparable loaded exposures yet."
         : verdict === "better"
-          ? "Estimated capacity rose across the window."
+          ? `${improving.length} comparable lift${improving.length === 1 ? " is" : "s are"} advancing${improving.length ? `: ${names(improving)}` : ""}.`
           : verdict === "holding"
-            ? "Estimated capacity held steady."
-            : "Estimated capacity fell across comparable exposures.",
-    evidence_keys: rows.length ? [`logged_sets:${start}..${end}:n=${rows.length}`] : [],
+            ? "Comparable lift capacity held steady."
+            : `${regressing.length} comparable lift${regressing.length === 1 ? " needs" : "s need"} rebuilding: ${names(regressing)}${improving.length ? `; ${improving.length} other lift${improving.length === 1 ? " is" : "s are"} still advancing` : ""}. Regression stays visible even when the overall program is improving.`,
+    evidence_keys: rows.length
+      ? [`logged_sets:${start}..${end}:n=${rows.length}`, `strength_lifts_comparable:${comparable.length}`]
+      : [],
   };
 }
 
@@ -264,20 +286,24 @@ export function wholePersonTrajectory(opts: { end?: string; days?: number } = {}
     }
   })() as any;
   const mode = effectiveGoalMode(getProfile());
+  const discipline = getPrimaryDiscipline();
   const parks: WholePersonDomain[] = [];
-  const protects: WholePersonDomain[] = [];
+  const protects: WholePersonDomain[] = ["strength"];
+  const floors = ["no avoidable strength regression", "no avoidable lean-mass loss"];
   const optimizes: string[] = [];
+  if (discipline === "strength" || discipline === "hybrid") {
+    optimizes.push("strength and muscle development");
+  }
   if (race?.is_race) {
     optimizes.push("endurance");
-    protects.push("strength");
-    optimizes.push("strength retention");
   }
   if (mode === "lose") {
     optimizes.push("body composition");
-    if (!protects.includes("strength")) protects.push("strength");
-    optimizes.push("lean mass retention");
   }
-  if (mode === "gain") optimizes.push("strength and lean mass");
+  if (mode === "gain") {
+    if (!optimizes.includes("strength and muscle development")) optimizes.push("strength and muscle development");
+    optimizes.push("lean mass development");
+  }
   if (block?.phase) optimizes.push(String(block.phase));
   const parked = (domain: WholePersonDomain) => parks.includes(domain);
   const domains = [
@@ -301,7 +327,7 @@ export function wholePersonTrajectory(opts: { end?: string; days?: number } = {}
   return {
     window: { start, end, days },
     objective: "everything better",
-    phase: { name: block?.phase ?? race?.phase ?? mode, optimizes: [...new Set(optimizes)], protects, parks },
+    phase: { name: block?.phase ?? race?.phase ?? mode, optimizes: [...new Set(optimizes)], floors, protects, parks },
     domains,
     unexplained_worse: unexplainedWorse,
     revision_needed: unexplainedWorse.length > 0,

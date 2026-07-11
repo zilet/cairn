@@ -92,6 +92,9 @@ NON-NEGOTIABLE GUARDRAILS:
 - Only raise a target if recent sessions hit the TOP of the rep range on ALL sets at RIR 2-3.
 - Respect every exercise's constraint_note (e.g. injury limits). Never contradict them.
 - Account for cardio load: if recent runs/rides are heavy, lean toward holding rather than adding.
+- Strength and muscle DEVELOPMENT remain the training objective during a cut or race build. Retention
+  is the universal safety floor, not the aspiration: use a deload/hold to absorb fatigue, then resume
+  earned progressive overload, address regressing lifts, and evolve stalled movements or volume.
 - Treat Garmin as a context source, not the plan authority. Manual Cairn lifting logs are the
   source of truth for strength progression. Use Garmin's endurance/recovery signals through the
   user's stated focus: strength-first users use runs/rides mainly as recovery/cardio-load

@@ -21,11 +21,36 @@ test("whole-person trajectory stays verbal, phase-aware, and flags unexplained r
   assert.doesNotMatch(JSON.stringify(read), /score|\b\d{1,3}\/100\b/);
 });
 
-test("a cut protects strength so regression remains visible instead of silently parking it", () => {
-  db.prepare(`INSERT INTO profile (id, goal_mode, weight_lb) VALUES (1, 'lose', 180)`).run();
+test("a hybrid cut optimizes strength development with retention as a universal floor", () => {
+  db.prepare(`INSERT INTO profile (id, goal_mode, weight_lb, primary_discipline) VALUES (1, 'lose', 180, 'hybrid')`).run();
   const read = wholePersonTrajectory({ end: "2026-06-25", days: 56 });
   assert.ok(read.phase.protects.includes("strength"));
-  assert.ok(read.phase.optimizes.includes("lean mass retention"));
+  assert.ok(read.phase.optimizes.includes("strength and muscle development"));
+  assert.ok(read.phase.optimizes.includes("body composition"));
+  assert.ok(read.phase.floors.includes("no avoidable lean-mass loss"));
+  assert.ok(!read.phase.optimizes.includes("strength retention"));
   assert.ok(!read.phase.parks.includes("strength"));
   assert.equal(read.domains.find((domain) => domain.domain === "strength").parked, false);
+});
+
+test("one established regressing lift stays visible even while another lift advances", () => {
+  db.prepare(`INSERT INTO profile (id, goal_mode, weight_lb, primary_discipline) VALUES (1, 'lose', 180, 'hybrid')`).run();
+  const bench = Number(db.prepare(`INSERT INTO exercises (name, muscle_group) VALUES ('Bench Press', 'chest')`).run().lastInsertRowid);
+  const raise = Number(db.prepare(`INSERT INTO exercises (name, muscle_group) VALUES ('Lateral Raise', 'shoulders')`).run().lastInsertRowid);
+  const dates = ["2026-05-20", "2026-05-30", "2026-06-10", "2026-06-20"];
+  dates.forEach((date, index) => {
+    const session = Number(db.prepare(`INSERT INTO sessions (date) VALUES (?)`).run(date).lastInsertRowid);
+    db.prepare(`INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps) VALUES (?, ?, 1, ?, 5)`)
+      .run(session, bench, 200 - index * 10);
+    db.prepare(`INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps) VALUES (?, ?, 1, ?, 12)`)
+      .run(session, raise, 10 + index * 5);
+  });
+
+  const read = wholePersonTrajectory({ end: "2026-06-25", days: 56 });
+  const strength = read.domains.find((domain) => domain.domain === "strength");
+  assert.equal(strength.verdict, "worse");
+  assert.match(strength.why, /Bench Press/);
+  assert.match(strength.why, /other lift is still advancing/);
+  assert.ok(read.unexplained_worse.includes("strength"));
+  assert.equal(read.revision_needed, true);
 });

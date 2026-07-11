@@ -4,6 +4,23 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-07-11 — strength development remains the goal
+
+A no-schema **v1.0.2** correction separates the athlete's aspiration from the
+safety floor. Hybrid/strength profiles optimize **strength and muscle
+development** during cuts and race builds; `no avoidable strength regression`
+and `no avoidable lean-mass loss` are explicit universal floors, never the
+ceiling. Training, chat, and nutrition prompts carry the same contract: a
+deload or load hold absorbs fatigue so earned progression can resume rather
+than silently redefining success as maintenance.
+
+The whole-person strength read now compares each established lift against
+itself instead of averaging unlike exercises together. Any comparable
+regressing lift remains visible and triggers the standing revision loop even
+when other lifts are advancing, while fresh lifts remain `unknown` until they
+have enough exposures. This prevents broad program gains from hiding a slipping
+bench or another specific strength objective.
+
 ## 2026-07-11 — adaptive-cut trust and Pi defense-in-depth
 
 Migrations **v63** (`profile-measured-rmr`) and **v64**
@@ -21,7 +38,7 @@ material one-tap fatigue as real program signals. During a cut, those signals ca
 trigger a cooldown-bounded nutrition recheck when loss pace or hybrid fuel risk
 also warrants it; carb-led corrections still travel through the existing
 lean-safe nutrition proposal, autonomy, and accountability path. Cut/race phases
-explicitly **protect** strength and lean-mass retention instead of parking
+introduced an explicit strength/lean-mass protection floor instead of parking
 strength. Case conferences accept typed nutrition-target revisions, preserve
 valid specialist findings through a conservative advice-only fallback when the
 conductor envelope is malformed, and skip only malformed optional expectations.
