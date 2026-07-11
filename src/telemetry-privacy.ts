@@ -4,6 +4,7 @@ const ERROR_CLASSES = new Set([
   "abort_error",
   "auth_required",
   "empty_output",
+  "invalid_contract",
   "invalid_json",
   "invalid_output",
   "process_error",

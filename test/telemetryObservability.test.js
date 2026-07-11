@@ -7,6 +7,11 @@ import { buildMcpServer, mcpMetricOperation } from "../dist/mcp.js";
 import { getAgentStats, recordAgentRun, pruneAgentRuns } from "../dist/repo/agent-telemetry.js";
 import { getRequestPerformance, isInternalMcpMetricOperation, normalizeServerMetricRoute, recordRequestMetric } from "../dist/repo/request-metrics.js";
 import { installSmokeLifetime, smokeMaxRuntimeMs } from "../dist/smoke-lifetime.js";
+import { agentErrorClass } from "../dist/telemetry-privacy.js";
+
+test("agent telemetry preserves the low-cardinality invalid-contract classification", () => {
+  assert.equal(agentErrorClass("invalid_output", "invalid_contract"), "invalid_contract");
+});
 
 test("agent telemetry persists taxonomy only and never raw CLI detail", () => {
   const privateText = "private ApoB result /Users/me/data token=secret raw stdout";
