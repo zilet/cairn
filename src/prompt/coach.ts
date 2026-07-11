@@ -1,5 +1,6 @@
 // Training-plan prompts: the coach's next-week target proposal and the deeper
-// program-evolution proposal (both emit PLAN_SCHEMA as a draft for review).
+// program-evolution proposal. Both emit PLAN_SCHEMA; the server-owned autonomy
+// policy decides whether each result lands, announces, or waits for review.
 import * as repo from "../repo.js";
 import {
   activeInjuryAreas,
@@ -70,7 +71,6 @@ function renderBlock(ctx: any): string {
   if (!b) return "";
   return `\nACTIVE TRAINING BLOCK: "${b.goal}" — ${b.focus}, ${b.phase} phase (${b.week_of}). Periodize toward this: in an accumulation phase build volume, in intensification push load, in a deload phase propose a LIGHTER week. Don't ramp volume and intensity at once.\n`;
 }
-
 // Training-target proposal prompt (existing coach).
 export function buildCoachPrompt(userInstruction?: string): string {
   const ctx = repo.getCoachContext();
@@ -217,8 +217,10 @@ export function buildProgramEvolutionPrompt(userInstruction?: string, state?: an
 
 Right now you are ${coachRole} EVOLVING a training program — not just tweaking next week, but
 reading how each lift has actually been trending and deciding how the plan should adapt so the
-user keeps progressing and doesn't stall or get bored. This is a SUGGESTION for them to review;
-nothing is applied automatically (they drive).
+user keeps progressing and doesn't stall or get bored. Return the best proposal candidate. The
+server owns autonomy: bounded reversible changes may land at a natural boundary, structural
+changes announce first, and goal-identity or clinical decisions always ask. The user's direction
+and overrides always win.
 
 A deterministic PROGRAM-STATE read has already analyzed the logged history — per-lift trend +
 plateau/stall detection (with a suggested action), volume landmarks, mesocycle position, and

@@ -5,6 +5,7 @@ import {
   nutritionCheckin,
   runHealthReview,
   suggestSession,
+  weekAheadRead,
 } from "../dist/coachOps.js";
 import { db } from "./_seed.js";
 
@@ -41,7 +42,6 @@ test("user-facing coaching operations degrade calmly after an exhausted semantic
     "failed coaching runs must not persist empty drafts or partial domain data"
   );
 });
-
 test("a user Stop still propagates as cancellation instead of graceful agent degradation", async () => {
   const controller = new AbortController();
   controller.abort();
@@ -52,6 +52,11 @@ test("a user Stop still propagates as cancellation instead of graceful agent deg
       { minutes: 20, focus: "cancellation-contract" },
       { signal: controller.signal }
     ),
+    /canceled/
+  );
+
+  await assert.rejects(
+    weekAheadRead("stub", { signal: controller.signal }),
     /canceled/
   );
 });

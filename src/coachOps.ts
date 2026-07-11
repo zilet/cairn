@@ -110,7 +110,6 @@ export function personalizeNutritionCheckinTarget(nutrition: any, goalInput?: an
   }
   return bounded;
 }
-
 // ---- agent connect/visibility helpers (read-only; see src/agents.ts) ----
 // The two protocol surfaces (api.ts / mcp.ts) read agent connect-state through
 // coachOps so they stay thin adapters. These wrap the agents.ts probes and shape
@@ -222,7 +221,11 @@ async function runVerify<T>(
     // Defensive only: acceptParsed rejects this before rotation stops. Never show
     // "checked" for a malformed verdict or an unusable fix.
     return { draft, verified: null };
-  } catch {
+  } catch (error) {
+    // A failed verifier is deliberately fail-open, but a user-initiated Stop is
+    // not an agent-quality failure. Preserve cancellation all the way to the
+    // request/job boundary so we never persist work the athlete canceled.
+    if (hooks?.signal?.aborted) throw error;
     // Verify unavailable → ship the draft unverified (graceful degrade).
     return { draft, verified: null };
   }
@@ -383,8 +386,8 @@ export async function draftCoachProposal(
 
 // Adaptive program evolution: read the deterministic program-state (per-lift
 // plateau/trend) and draft a plan EVOLUTION — progress what's working, deload/
-// rotate what's stalled, introduce novelty, periodize — as a DRAFT proposal for
-// then routes through the shared autonomy policy: Lead mode lands bounded changes
+// rotate what's stalled, introduce novelty, periodize — as a proposal candidate
+// that routes through the shared autonomy policy: Lead mode lands bounded changes
 // at natural boundaries; explicit review posture keeps a proposal.
 // Returns the program-state snapshot alongside so the surface can show "why this".
 export async function evolveProgram(
@@ -676,7 +679,10 @@ export async function weekAheadRead(agent: string | undefined, hooks?: OpHooks) 
       }
       return out;
     }
-  } catch {
+  } catch (error) {
+    // Stale/deterministic fallback is correct for an unavailable coach, not for
+    // an explicit Stop. Cancellation must remain observable to the caller.
+    if (hooks?.signal?.aborted) throw error;
     /* fall through to a stale-cache or the deterministic floor */
   }
   if (cachedSane) return { ok: true as const, ...cachedSane, source: "agent" as const, cached: true as const, stale: true as const, agent: cached?.chosen_agent ?? null };
