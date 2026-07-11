@@ -20,7 +20,8 @@ services:
       - "127.0.0.1:8787:8787"
     volumes:
       - cairn-data:/data
-      - cairn-home:/home/app
+      - cairn-home:/home/app # provider login state
+      - cairn-tools:/home/app/.cairn-tools # optional provider binaries
     environment:
       - TZ=${TZ:-America/New_York}
       # Optional shared-token auth. Unset = no auth; set it to gate /api and /mcp.
@@ -36,6 +37,7 @@ services:
       - COACH_AGENT=${COACH_AGENT:-}
       - COACH_DAY=${COACH_DAY:-0}
       - COACH_HOUR=${COACH_HOUR:-20}
+      # Updates only tools the user already installed in Settings.
       - AGENT_CLI_AUTO_UPDATE=${AGENT_CLI_AUTO_UPDATE:-0}
       - AGENT_CLI_AUTO_UPDATE_INTERVAL_HOURS=${AGENT_CLI_AUTO_UPDATE_INTERVAL_HOURS:-168}
     healthcheck:
@@ -48,3 +50,4 @@ services:
 volumes:
   cairn-data:
   cairn-home:
+  cairn-tools:

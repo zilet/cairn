@@ -27,6 +27,7 @@ test("agent CLI updater sanitizes env and redacts captured output tails", async 
     "echo \"db_path=$DB_PATH\"",
     "echo \"literal token secret-token-abc\"",
     "echo \"literal garmin garmin-secret\" >&2",
+    "echo \"agent=$1\"",
   ].join("\n"));
   fs.chmodSync(script, 0o755);
 
@@ -45,9 +46,10 @@ test("agent CLI updater sanitizes env and redacts captured output tails", async 
   process.env.CAIRN_AUTH_TOKEN = "secret-token-abc";
   process.env.GARMIN_PASSWORD = "garmin-secret";
   try {
-    startAgentCliUpdate("test");
+    startAgentCliUpdate("claude", "test");
     const status = await waitForUpdate();
     assert.equal(status.status, "succeeded");
+    assert.deepEqual(status.agents, ["claude"]);
     assert.match(status.stdout_tail, /cwd_safe=1/m, "updater should run in the isolated update workspace");
     assert.match(status.stdout_tail, /token=$/m, "secret env should not reach updater");
     assert.match(status.stdout_tail, /data_dir=$/m, "DATA_DIR should not reach updater env");
@@ -55,6 +57,7 @@ test("agent CLI updater sanitizes env and redacts captured output tails", async 
     assert.doesNotMatch(status.stdout_tail, /secret-token-abc/);
     assert.doesNotMatch(status.stderr_tail, /garmin-secret/);
     assert.match(`${status.stdout_tail}\n${status.stderr_tail}`, /\[redacted\]/);
+    assert.match(status.stdout_tail, /agent=claude/);
   } finally {
     if (prevScript === undefined) delete process.env.AGENT_CLI_UPDATE_SCRIPT; else process.env.AGENT_CLI_UPDATE_SCRIPT = prevScript;
     if (prevDataDir === undefined) delete process.env.DATA_DIR; else process.env.DATA_DIR = prevDataDir;

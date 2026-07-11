@@ -1,6 +1,11 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
-import { getAgentCliUpdateStatus, startAgentCliUpdate } from "../agentCliUpdates.js";
+import {
+  getAgentCliUpdateStatus,
+  installableAgentNames,
+  startAgentCliUpdate,
+  startInstalledAgentCliUpdate,
+} from "../agentCliUpdates.js";
 import { agentInfoOp, agentModelsOp } from "../coachOps.js";
 import {
   getAgentConfig,
@@ -25,7 +30,15 @@ operatorRouter.get("/agents/:name/info", (req, res) => res.json(agentInfoOp(req.
 operatorRouter.get("/agents/:name/models", (req, res) => res.json(agentModelsOp(req.params.name)));
 
 operatorRouter.get("/agent-clis/update", (_req, res) => res.json(getAgentCliUpdateStatus()));
-operatorRouter.post("/agent-clis/update", (_req, res) => res.status(202).json(startAgentCliUpdate("manual")));
+// Backward-compatible bulk update: refresh only CLIs the user already installed;
+// never turns a lean image back into an all-provider image.
+operatorRouter.post("/agent-clis/update", (_req, res) => res.status(202).json(startInstalledAgentCliUpdate("manual")));
+operatorRouter.post("/agent-clis/:name/install", (req, res) => {
+  if (!installableAgentNames().includes(req.params.name)) {
+    return res.status(400).json({ ok: false, error: "unknown or non-installable agent" });
+  }
+  return res.status(202).json(startAgentCliUpdate(req.params.name, "manual"));
+});
 
 // Settings + agent metadata. route_tasks is server-owned UI metadata for the
 // Settings routing controls, so frontend task labels cannot drift from the

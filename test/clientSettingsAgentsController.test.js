@@ -67,7 +67,7 @@ class FakeAgentList extends FakeElement {
   set innerHTML(value) {
     this.html = value;
     this.buttons = [];
-    const buttonRe = /<button[^>]+data-(toggle|up|down|connect|detail|models)="([^"]*)"/g;
+    const buttonRe = /<button[^>]+data-(toggle|up|down|connect|detail|models|install)="([^"]*)"/g;
     for (let match = buttonRe.exec(value); match; match = buttonRe.exec(value)) {
       const button = new FakeElement();
       button.dataset[match[1]] = match[2];
@@ -97,7 +97,7 @@ class FakeRoot extends FakeElement {
     this.children = new Map();
     this.routeSelects = [];
 
-    for (const id of ["strat", "coachEnabled", "coachDay", "coachHour", "updateAgentClis", "agentCliUpdateStatus"]) {
+    for (const id of ["strat", "coachEnabled", "coachDay", "coachHour", "agentCliUpdateStatus"]) {
       this.children.set(`#${id}`, new FakeElement(id));
     }
     this.children.set("#agentlist", new FakeAgentList("agentlist"));
@@ -171,8 +171,8 @@ function makeDeps(overrides = {}) {
     root: rootEl,
     workingModel: wm,
     meta: {
-      claude: { name: "claude", enabled: true, configured: true, can_login: true, models_list: true },
-      codex: { name: "codex", enabled: true, configured: false, can_login: false, models_list: false },
+      claude: { name: "claude", enabled: true, present: true, configured: true, can_login: true, models_list: true, installable: true },
+      codex: { name: "codex", enabled: true, present: false, configured: null, can_login: true, models_list: false, installable: true },
     },
     routeTasks: [["chat", "Chat"], ["meal_plan", "Meal plan"]],
     agentInfo,
@@ -184,10 +184,16 @@ function makeDeps(overrides = {}) {
     api: async (path, opts = {}) => {
       calls.push([path, opts.method || "GET"]);
       if (path === "/agent-clis/update") {
-        if (opts.method === "POST") return { ok: true };
         cliGets += 1;
-        return cliGets === 1 ? { status: "idle" } : { status: "succeeded", finished_at: "2026-07-01T10:30:00Z" };
+        return cliGets === 1
+          ? { status: "idle", agents: [] }
+          : { status: "succeeded", agents: ["codex"], finished_at: "2026-07-01T10:30:00Z" };
       }
+      if (path === "/agent-clis/codex/install" && opts.method === "POST") return { status: "running", agents: ["codex"] };
+      if (path === "/agents") return [
+        deps.meta.claude,
+        { ...deps.meta.codex, present: true, configured: false },
+      ];
       if (path === "/agents/claude/info") return { ok: true, version: "1.2.3", model_current: "sonnet", update_available: true };
       if (path === "/agents/claude/models") return { ok: true, models: ["sonnet", "opus"] };
       return { ok: true };
@@ -264,7 +270,7 @@ test("settings agents controller owns route pins and agent card actions", async 
   assert.equal(deps.agentModels.claude, undefined);
 });
 
-test("settings agents controller owns CLI update polling", async () => {
+test("settings agents controller owns per-agent lazy install polling", async () => {
   const controller = loadSettingsAgentsController();
   const harness = makeDeps();
   const { deps } = harness;
@@ -273,13 +279,16 @@ test("settings agents controller owns CLI update polling", async () => {
   await Promise.resolve();
   await Promise.resolve();
 
-  await deps.root.querySelector("#updateAgentClis").click();
+  const list = deps.root.querySelector("#agentlist");
+  await list.button("install", "codex").click();
 
-  assert.deepEqual(harness.calls.filter(([path]) => path === "/agent-clis/update"), [
+  assert.deepEqual(harness.calls.filter(([path]) => path.startsWith("/agent-clis") || path === "/agents"), [
     ["/agent-clis/update", "GET"],
-    ["/agent-clis/update", "POST"],
+    ["/agent-clis/codex/install", "POST"],
     ["/agent-clis/update", "GET"],
+    ["/agents", "GET"],
   ]);
-  assert.equal(deps.root.querySelector("#agentCliUpdateStatus").textContent, "Updated 2026-07-01 10:30");
-  assert.deepEqual(harness.toasts, ["CLI update finished"]);
+  assert.equal(deps.root.querySelector("#agentCliUpdateStatus").textContent, "codex ready · 2026-07-01 10:30");
+  assert.equal(deps.meta.codex.present, true);
+  assert.deepEqual(harness.toasts, ["codex is ready to connect"]);
 });

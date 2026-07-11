@@ -15,6 +15,7 @@ import { getAgentJob, listActiveAgentJobs } from "../../domain/person/index.js";
 import { cancelAgentJob } from "../../agentJobs.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 import { getDiagnostics } from "../../repo/diagnostics.js";
+import { getAgentCliUpdateStatus, startAgentCliUpdate, startInstalledAgentCliUpdate } from "../../agentCliUpdates.js";
 
 const ROUTABLE_TASK_LIST = ROUTABLE_TASKS.join(", ");
 const AGENT_JOB_KIND_LIST = AGENT_JOB_KINDS.join(", ");
@@ -22,7 +23,7 @@ const AGENT_JOB_KIND_LIST = AGENT_JOB_KINDS.join(", ");
 export function registerOperatorTools(server: McpToolRegistrar) {
   server.tool(
     "list_agents",
-    "List the configured coaching agents (claude, codex, stub, ...) with their enabled state, order, whether the CLI binary is present, the tri-state login/connected probe (configured: true|false|null), installed version, and whether each declares an interactive login / a model catalog. usable rolls these up (only a KNOWN logged-out agent — configured:false — is excluded from the rotation).",
+    "List coaching agents with enabled/order state, CLI presence, lazy-install availability, the tri-state login probe (configured: true|false|null), installed version, and login/model-catalog capabilities. usable rolls these up; missing or known-logged-out tools stay out of rotation.",
     {},
     async () => asText(getAgentConfig())
   );
@@ -39,6 +40,27 @@ export function registerOperatorTools(server: McpToolRegistrar) {
     "List the models a CLI exposes (grok/antigravity declare a catalog). Informational only — no pinning. Returns an empty list for a CLI with no catalog (claude/codex), ok:false for an unknown agent.",
     { name: z.string().describe("agent name from list_agents") },
     async ({ name }) => asText(agentModelsOp(name))
+  );
+
+  server.tool(
+    "get_agent_cli_install_status",
+    "Get the current one-at-a-time coaching-CLI install/update status. Installer output is bounded and secret-redacted.",
+    {},
+    async () => asText(getAgentCliUpdateStatus())
+  );
+
+  server.tool(
+    "install_agent_cli",
+    "Install or update one supported coaching CLI into the persistent, regenerable Cairn tools volume. Package names, versions, URLs, and checksums come only from Cairn's bundled allowlist; the caller selects an agent name, never a command.",
+    { agent: z.enum(["claude", "codex", "antigravity", "grok"]) },
+    async ({ agent }) => asText(startAgentCliUpdate(agent, "mcp"))
+  );
+
+  server.tool(
+    "update_installed_agent_clis",
+    "Update only coaching CLIs already installed by this Cairn instance. Missing providers remain uninstalled.",
+    {},
+    async () => asText(startInstalledAgentCliUpdate("mcp"))
   );
 
   server.tool(

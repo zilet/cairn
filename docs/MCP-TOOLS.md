@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**202 tools.**
+**205 tools.**
 
 | Tool | Description |
 |---|---|
@@ -45,6 +45,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `finish_session` | Mark a session finished (optionally attaching notes) and return its summary (sets, tonnage, PRs). |
 | `generate_insight` | Queue one durable whole-picture pass for a genuine connection or weekly read. Returns a job immediately; poll get_agent_job. A valid insight is deduped and waits in-app without a notification. Informational, not medical advice. |
 | `get_active_block` | The active periodization block (goal / focus / phase / week N of M), or null. The mesocycle the coach periodizes toward. |
+| `get_agent_cli_install_status` | Get the current one-at-a-time coaching-CLI install/update status. Installer output is bounded and secret-redacted. |
 | `get_agent_info` | Read-only 'what's running' for one coaching CLI: installed version and (best-effort) the model it would use. Cheap subprocess probe — no coaching/paid call, no model pinning. ok:false for an unknown agent. |
 | `get_agent_job` | Read one durable coaching job, including its terminal result or calm error when complete. |
 | `get_agent_stats` | Get current-build agent-run telemetry for the coaching loop: build id, total runs, overall ok-rate, per-agent reliability (ok/fail) + median latency, and recent attempts. Older/unknown builds remain separate. An operator/health view — NOT a user-facing score. Optional recent and days bound the read. |
@@ -127,10 +128,11 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_weekly_stats` | Compact weekly dashboard: training days, tonnage, total logged sets (incl. timed) over the last 7 days, plus the consistency streak — and an additive `endurance` block (this week's mileage, moving time, longest effort, time-in-HR-zone, pace trend) for runner/hybrid athletes. |
 | `get_whole_person_trajectory` | Read the standing everything-better objective across strength, endurance, body composition, metabolic health, and recovery. Names what this phase intentionally parks and flags only unexplained regression; plain words, no score. |
 | `grow_about_me` | Queue a coherent about-me refresh from typed memory, family, and check-ins. Returns a job immediately; poll get_agent_job. It augments user-authored content and never overwrites blindly. |
+| `install_agent_cli` | Install or update one supported coaching CLI into the persistent, regenerable Cairn tools volume. Package names, versions, URLs, and checksums come only from Cairn's bundled allowlist; the caller selects an agent name, never a command. |
 | `list_active_agent_jobs` | List durable queued/running coaching jobs. Agentic MCP tools return immediately with one of these jobs instead of blocking the request. |
 | `list_activities` | List recent logged activities. |
 | `list_agent_models` | List the models a CLI exposes (grok/antigravity declare a catalog). Informational only — no pinning. Returns an empty list for a CLI with no catalog (claude/codex), ok:false for an unknown agent. |
-| `list_agents` | List the configured coaching agents (claude, codex, stub, ...) with their enabled state, order, whether the CLI binary is present, the tri-state login/connected probe (configured: true\|false\|null), installed version, and whether each declares an interactive login / a model catalog. usable rolls these up (only a KNOWN logged-out agent — configured:false — is excluded from the rotation). |
+| `list_agents` | List coaching agents with enabled/order state, CLI presence, lazy-install availability, the tri-state login probe (configured: true\|false\|null), installed version, and login/model-catalog capabilities. usable rolls these up; missing or known-logged-out tools stay out of rotation. |
 | `list_blocks` | List periodization blocks (newest first) with status (active/completed/abandoned). |
 | `list_blood_pressure` | List blood pressure readings newest-first. BP is point-in-time, so trends come from repeated readings rather than a single profile value. |
 | `list_brain_decisions` | Read recent meaningful coaching decisions and their accountable status. Bounded, pull-only, with no raw prompts or hidden reasoning. |
@@ -202,6 +204,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `update_family` | Update a family member by id (any subset of fields). allergies are a HARD exclusion in shared meals; dietary_restrictions surface as optional household mods. |
 | `update_food_note` | Correct a logged food note (fix a macro, rename it, change the meal slot, 'I changed my mind'). Pass the id + any subset of { meal, summary, kcal, protein_g, carbs_g, fat_g, fiber_g, notes, items }. Coerced/clamped; marks the note's enrichment terminal so a background enricher can't later overwrite the correction. Returns the updated row, or an error when the id is unknown. |
 | `update_insight` | Mark an insight seen/dismissed and/or record thumbs feedback (up\|down) by id. On feedback:'up' the insight text is ALSO written to memory so the relationship learns which connections land. |
+| `update_installed_agent_clis` | Update only coaching CLIs already installed by this Cairn instance. Missing providers remain uninstalled. |
 | `update_meal_plan_days` | Replace a meal plan's days array (manual meal reorder/edit). Preserves every other parsed key (daily_kcal, shopping, notes). |
 | `update_memory` | Edit an existing memory note's content/kind/confidence by id. Use when a remembered fact CHANGED and should be corrected in place. |
 | `update_session_notes` | Edit a session's notes after the fact (history correction). |

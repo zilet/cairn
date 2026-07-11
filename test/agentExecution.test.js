@@ -53,7 +53,8 @@ test("agent spawn options use an isolated workspace and sanitized env", () => wi
   assert.equal(opts.env.HOME, "/home/app");
   assert.equal(opts.env.PATH, agentCliPath(sourceEnv));
   const pathParts = opts.env.PATH.split(path.delimiter);
-  assert.equal(pathParts[0], "/usr/local/bin");
+  assert.equal(pathParts[0], "/home/app/.cairn-tools/bin");
+  assert.ok(pathParts.includes("/usr/local/bin"));
   assert.ok(pathParts.includes("/home/app/.local/bin"));
   assert.ok(pathParts.includes("/home/app/.grok/bin"));
   assert.ok(pathParts.includes("/usr/bin"));

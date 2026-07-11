@@ -3,13 +3,6 @@ services:
     build:
       context: .
       args:
-        # Which coaching CLIs to bake into the image. claude/codex are reliable;
-        # antigravity/grok are beta installers (verify your target architecture) - set "0" to skip.
-        INSTALL_CLAUDE: "1"
-        INSTALL_CODEX: "1"
-        INSTALL_ANTIGRAVITY: "1"
-        INSTALL_GROK: "1"
-        AGENT_CLI_CACHE_BUST: ${AGENT_CLI_CACHE_BUST:-}
         # Source deploys should export CAIRN_BUILD_SHA=$(git rev-parse HEAD).
         # Empty is safe: health reports source-unidentified rather than guessing.
         CAIRN_BUILD_SHA: ${CAIRN_BUILD_SHA:-}
@@ -25,7 +18,8 @@ services:
       - "8787:8787"
     volumes:
       - cairn-data:/data        # SQLite database
-      - cairn-home:/home/app    # persists ALL CLI logins (~/.claude, ~/.codex, ~/.gemini, ~/.grok, ...)
+      - cairn-home:/home/app    # provider login state
+      - cairn-tools:/home/app/.cairn-tools # optional, regenerable provider binaries
     environment:
       - TZ=${TZ:-America/New_York}
       # Optional shared-token auth. Unset = no auth (localhost/trusted-network
@@ -51,7 +45,8 @@ services:
       - COACH_AGENT=${COACH_AGENT:-}
       - COACH_DAY=${COACH_DAY:-0}    # 0=Sun .. 6=Sat
       - COACH_HOUR=${COACH_HOUR:-20} # local hour (uses TZ)
-      # Optional CLI updater. Manual updates are available in Settings either way.
+      # Optional updater for tools already installed through Settings. Missing
+      # providers stay absent; Cairn never installs every CLI automatically.
       - AGENT_CLI_AUTO_UPDATE=${AGENT_CLI_AUTO_UPDATE:-0}
       - AGENT_CLI_AUTO_UPDATE_INTERVAL_HOURS=${AGENT_CLI_AUTO_UPDATE_INTERVAL_HOURS:-168}
     healthcheck:
@@ -65,8 +60,9 @@ services:
 #               runMigrations() applies any new schema migrations automatically
 #               on every boot (tracked via PRAGMA user_version), so a new image
 #               upgrades the schema in place — no manual migration step needed.
-# cairn-home  — CLI logins (~/.claude, ~/.codex, ~/.gemini [agy], ~/.grok, ...).
-#               Log in once per provider; the volume keeps auth across restarts.
+# cairn-home  — CLI logins (~/.claude, ~/.codex, ~/.gemini, ~/.grok).
+# cairn-tools — lazily installed, regenerable provider binaries. Keeping this
+#               separate avoids inflating credential backups.
 #
 # One-shot volume backup (run from the Docker host while the container is up):
 #   docker run --rm -v cairn-data:/data -v "$PWD":/backup busybox \
@@ -74,3 +70,4 @@ services:
 volumes:
   cairn-data:
   cairn-home:
+  cairn-tools:

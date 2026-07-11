@@ -17,6 +17,7 @@
 !scripts/
 !scripts/build-client.mjs
 !scripts/docker-entrypoint.sh
+!scripts/install-agent-cli.mjs
 !scripts/update-agent-clis.sh
 
 # Static PWA inputs. Browser JS is compiled from src/client in the builder; the

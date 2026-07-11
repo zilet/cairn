@@ -6,7 +6,7 @@ All routes are mounted under **`/api`** (e.g. `GET /api/plan`). When `CAIRN_AUTH
 is set, every route except `GET /api/health` requires the token (`Authorization: Bearer …`,
 `X-Cairn-Token: …`, or `?token=…`). See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**247 routes** across 93 groups.
+**248 routes** across 93 groups.
 
 ## `/activities`
 
@@ -27,8 +27,9 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 
 | Method | Path | Notes |
 |---|---|---|
+| POST | `/api/agent-clis/:name/install` |  |
 | GET | `/api/agent-clis/update` |  |
-| POST | `/api/agent-clis/update` |  |
+| POST | `/api/agent-clis/update` | Backward-compatible bulk update: refresh only CLIs the user already installed; never turns a lean image back into an all-provider image. |
 
 ## `/agent-jobs`
 

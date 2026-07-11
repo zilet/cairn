@@ -1,18 +1,18 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { installAgentCli, readAgentInstall, validateInstallSpec } from "../scripts/install-agent-cli.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const script = path.join(root, "scripts", "update-agent-clis.sh");
-const dockerfile = path.join(root, "Dockerfile");
-const entrypoint = path.join(root, "scripts", "docker-entrypoint.sh");
+const manifest = path.join(root, "agents.json");
 
 function withTempDir(fn) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cairn-agent-cli-script-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cairn-agent-cli-install-"));
   try {
     return fn(dir);
   } finally {
@@ -20,179 +20,130 @@ function withTempDir(fn) {
   }
 }
 
-function writeExecutable(file, body) {
+function executable(file, body) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, body);
   fs.chmodSync(file, 0o755);
 }
 
-function readIfExists(file) {
-  return fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+function envFor(dir, bin) {
+  return {
+    ...process.env,
+    HOME: path.join(dir, "home"),
+    CAIRN_CLI_ROOT: path.join(dir, "home", ".cairn-tools"),
+    PATH: [bin, "/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(path.delimiter),
+  };
 }
 
-function runUpdater(binDir, env) {
-  return spawnSync("sh", [script], {
-    cwd: root,
-    env: {
-      ...process.env,
-      PATH: [binDir, "/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(path.delimiter),
-      ...env,
-    },
-    encoding: "utf8",
+test("bundled agent manifest pins every supported lazy installer", () => {
+  const claude = readAgentInstall(manifest, "claude");
+  const codex = readAgentInstall(manifest, "codex");
+  const antigravity = readAgentInstall(manifest, "antigravity");
+  const grok = readAgentInstall(manifest, "grok");
+  assert.deepEqual(claude.spec, { method: "npm", package: "@anthropic-ai/claude-code", version: "2.1.207", args: [] });
+  assert.deepEqual(codex.spec, {
+    method: "npm",
+    package: "@openai/codex",
+    version: "0.144.1",
+    args: ["--include=optional"],
   });
-}
-
-test("agent CLI install script uses pinned npm package versions by default", () => withTempDir((dir) => {
-  const bin = path.join(dir, "bin");
-  fs.mkdirSync(bin);
-  const npmLog = path.join(dir, "npm.log");
-  writeExecutable(path.join(bin, "npm"), "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$NPM_LOG\"\n");
-  writeExecutable(path.join(bin, "claude"), "#!/bin/sh\necho claude fake\n");
-  writeExecutable(path.join(bin, "codex"), "#!/bin/sh\necho codex fake\n");
-
-  const res = runUpdater(bin, {
-    NPM_LOG: npmLog,
-    UPDATE_ANTIGRAVITY: "0",
-    UPDATE_GROK: "0",
-  });
-
-  assert.equal(res.status, 0, `${res.stdout}\n${res.stderr}`);
-  const npmCalls = fs.readFileSync(npmLog, "utf8");
-  assert.match(npmCalls, /i -g @anthropic-ai\/claude-code@2\.1\.205/);
-  assert.match(npmCalls, /i -g @openai\/codex@0\.143\.0 --include=optional/);
-}));
-
-test("agent CLI install script refuses moving npm tags unless explicitly allowed", () => withTempDir((dir) => {
-  const bin = path.join(dir, "bin");
-  fs.mkdirSync(bin);
-  const npmLog = path.join(dir, "npm.log");
-  writeExecutable(path.join(bin, "npm"), "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$NPM_LOG\"\n");
-
-  const refused = runUpdater(bin, {
-    NPM_LOG: npmLog,
-    UPDATE_CODEX: "0",
-    UPDATE_ANTIGRAVITY: "0",
-    UPDATE_GROK: "0",
-    CLAUDE_CODE_VERSION: "latest",
-  });
-
-  assert.equal(refused.status, 0, `${refused.stdout}\n${refused.stderr}`);
-  assert.match(refused.stdout, /refusing moving npm tag for claude/);
-  assert.equal(readIfExists(npmLog), "");
-
-  const allowed = runUpdater(bin, {
-    NPM_LOG: npmLog,
-    UPDATE_CODEX: "0",
-    UPDATE_ANTIGRAVITY: "0",
-    UPDATE_GROK: "0",
-    CLAUDE_CODE_VERSION: "latest",
-    AGENT_CLI_ALLOW_MOVING_TAGS: "1",
-  });
-
-  assert.equal(allowed.status, 0, `${allowed.stdout}\n${allowed.stderr}`);
-  assert.match(fs.readFileSync(npmLog, "utf8"), /@anthropic-ai\/claude-code@latest/);
-}));
-
-test("agent CLI install script gates shell installers on checksum or explicit opt-in", () => withTempDir((dir) => {
-  const bin = path.join(dir, "bin");
-  fs.mkdirSync(bin);
-  const curlLog = path.join(dir, "curl.log");
-  const bashLog = path.join(dir, "bash.log");
-  writeExecutable(path.join(bin, "curl"), [
-    "#!/bin/sh",
-    "out=",
-    "while [ \"$#\" -gt 0 ]; do",
-    "  case \"$1\" in",
-    "    -o) out=\"$2\"; shift 2 ;;",
-    "    *) shift ;;",
-    "  esac",
-    "done",
-    "printf '%s\\n' \"curl\" >> \"$CURL_LOG\"",
-    "printf '%s\\n' '#!/bin/sh' 'echo installer' > \"$out\"",
-  ].join("\n"));
-  writeExecutable(path.join(bin, "bash"), "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$BASH_LOG\"\n");
-  writeExecutable(path.join(bin, "sha256sum"), "#!/bin/sh\nprintf '%s  %s\\n' \"$FAKE_SHA256\" \"$1\"\n");
-  writeExecutable(path.join(bin, "timeout"), "#!/bin/sh\nshift\nexec \"$@\"\n");
-  writeExecutable(path.join(bin, "find"), "#!/bin/sh\nexit 0\n");
-
-  const skipped = runUpdater(bin, {
-    CURL_LOG: curlLog,
-    BASH_LOG: bashLog,
-    UPDATE_CLAUDE: "0",
-    UPDATE_CODEX: "0",
-    UPDATE_ANTIGRAVITY: "1",
-    UPDATE_GROK: "0",
-  });
-
-  assert.equal(skipped.status, 0, `${skipped.stdout}\n${skipped.stderr}`);
-  assert.match(skipped.stdout, /skipping agy installer without a matching \*_INSTALL_SHA256/);
-  assert.equal(readIfExists(curlLog), "");
-  assert.equal(readIfExists(bashLog), "");
-
-  const verified = runUpdater(bin, {
-    CURL_LOG: curlLog,
-    BASH_LOG: bashLog,
-    FAKE_SHA256: "abc123",
-    UPDATE_CLAUDE: "0",
-    UPDATE_CODEX: "0",
-    UPDATE_ANTIGRAVITY: "1",
-    UPDATE_GROK: "0",
-    ANTIGRAVITY_INSTALL_SHA256: "abc123",
-  });
-
-  assert.equal(verified.status, 0, `${verified.stdout}\n${verified.stderr}`);
-  assert.match(readIfExists(curlLog), /curl/);
-  assert.match(readIfExists(bashLog), /cairn-agy-installer/);
-}));
-
-test("agent CLI install script prefers first-party update commands for installed vendor CLIs", () => withTempDir((dir) => {
-  const bin = path.join(dir, "bin");
-  fs.mkdirSync(bin);
-  const updateLog = path.join(dir, "update.log");
-  const curlLog = path.join(dir, "curl.log");
-  writeExecutable(path.join(bin, "agy"), [
-    "#!/bin/sh",
-    "printf '%s\\n' \"agy:$*\" >> \"$UPDATE_LOG\"",
-    "echo 1.0.17",
-  ].join("\n"));
-  writeExecutable(path.join(bin, "grok"), [
-    "#!/bin/sh",
-    "printf '%s\\n' \"grok:$*\" >> \"$UPDATE_LOG\"",
-    "echo grok 0.2.78",
-  ].join("\n"));
-  writeExecutable(path.join(bin, "curl"), "#!/bin/sh\nprintf '%s\\n' curl >> \"$CURL_LOG\"\n");
-  writeExecutable(path.join(bin, "timeout"), "#!/bin/sh\nshift\nexec \"$@\"\n");
-
-  const res = runUpdater(bin, {
-    UPDATE_CLAUDE: "0",
-    UPDATE_CODEX: "0",
-    UPDATE_ANTIGRAVITY: "1",
-    UPDATE_GROK: "1",
-    UPDATE_LOG: updateLog,
-    CURL_LOG: curlLog,
-  });
-
-  assert.equal(res.status, 0, `${res.stdout}\n${res.stderr}`);
-  assert.match(fs.readFileSync(updateLog, "utf8"), /^agy:update$/m);
-  assert.match(fs.readFileSync(updateLog, "utf8"), /^grok:update$/m);
-  assert.equal(readIfExists(curlLog), "");
-}));
-
-test("Docker builds include all coaching CLIs with pinned vendor installer hashes", () => {
-  const body = fs.readFileSync(dockerfile, "utf8");
-  assert.match(body, /ARG INSTALL_CLAUDE=1/);
-  assert.match(body, /ARG INSTALL_CODEX=1/);
-  assert.match(body, /ARG INSTALL_ANTIGRAVITY=1/);
-  assert.match(body, /ARG INSTALL_GROK=1/);
-  assert.match(body, /ARG ANTIGRAVITY_INSTALL_SHA256=[0-9a-f]{64}/);
-  assert.match(body, /ARG GROK_INSTALL_SHA256=[0-9a-f]{64}/);
-  assert.doesNotMatch(body, /ARG ANTIGRAVITY_INSTALL_SHA256=\s*$/m);
-  assert.doesNotMatch(body, /ARG GROK_INSTALL_SHA256=\s*$/m);
+  assert.match(antigravity.spec.sha256, /^[a-f0-9]{64}$/);
+  assert.match(grok.spec.sha256, /^[a-f0-9]{64}$/);
+  assert.throws(() => readAgentInstall(manifest, "stub"), /not installable/);
+  assert.throws(() => validateInstallSpec("x", { method: "npm", package: "x", version: "latest" }), /exact semver/);
+  assert.throws(
+    () => validateInstallSpec("x", { method: "script", url: "http://example.com/x", sha256: "a".repeat(64) }),
+    /HTTPS/
+  );
 });
 
-test("container startup exposes mounted-home Antigravity and Grok binaries", () => {
-  const body = fs.readFileSync(entrypoint, "utf8");
-  assert.match(body, /link_home_cli agy/);
-  assert.match(body, /\/home\/app\/\.local\/bin\/agy/);
-  assert.match(body, /link_home_cli grok \/home\/app\/\.grok\/bin\/grok/);
-  assert.match(body, /\/usr\/local\/bin\/\$name/);
+test("npm CLI installs into the persistent Cairn tools root", () =>
+  withTempDir((dir) => {
+    const bin = path.join(dir, "bin");
+    const log = path.join(dir, "npm.log");
+    executable(
+      path.join(bin, "npm"),
+      [
+        "#!/bin/sh",
+        'printf \'%s\\n\' "$*" > "$NPM_LOG"',
+        'printf \'token=%s\\n\' "${' + 'CAIRN_AUTH_TOKEN:-}" >> "$NPM_LOG"',
+        'mkdir -p "$CAIRN_CLI_ROOT/bin"',
+        "printf '%s\\n' '#!/bin/sh' 'echo 2.1.207' > \"$CAIRN_CLI_ROOT/bin/claude\"",
+        'chmod +x "$CAIRN_CLI_ROOT/bin/claude"',
+      ].join("\n")
+    );
+    const env = { ...envFor(dir, bin), NPM_LOG: log, CAIRN_AUTH_TOKEN: "must-not-reach-installer" };
+    installAgentCli("claude", { manifestPath: manifest, env });
+    assert.match(fs.readFileSync(log, "utf8"), /install --global --prefix .*@anthropic-ai\/claude-code@2\.1\.207/);
+    assert.doesNotMatch(fs.readFileSync(log, "utf8"), /must-not-reach-installer/);
+    assert.ok(fs.existsSync(path.join(env.CAIRN_CLI_ROOT, "bin", "claude")));
+  }));
+
+test("installed vendor CLI uses its first-party updater and is persisted", () =>
+  withTempDir((dir) => {
+    const bin = path.join(dir, "bin");
+    const log = path.join(dir, "agy.log");
+    executable(path.join(bin, "agy"), '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$UPDATE_LOG"\necho 1.1.1\n');
+    executable(path.join(bin, "curl"), "#!/bin/sh\nexit 99\n");
+    const env = { ...envFor(dir, bin), UPDATE_LOG: log };
+    installAgentCli("antigravity", { manifestPath: manifest, env });
+    assert.match(fs.readFileSync(log, "utf8"), /^update$/m);
+    assert.ok(fs.existsSync(path.join(env.CAIRN_CLI_ROOT, "bin", "agy")));
+  }));
+
+test("vendor installer is checksum-verified before execution", () =>
+  withTempDir((dir) => {
+    const bin = path.join(dir, "bin");
+    const installer =
+      "#!/bin/sh\nmkdir -p \"$HOME/.local/bin\"\nprintf '%s\\n' '#!/bin/sh' 'echo 9.9.9' > \"$HOME/.local/bin/agy\"\nchmod +x \"$HOME/.local/bin/agy\"\n";
+    const sha256 = createHash("sha256").update(installer).digest("hex");
+    const customManifest = path.join(dir, "agents.json");
+    fs.writeFileSync(
+      customManifest,
+      JSON.stringify({
+        antigravity: { command: "agy", install: { method: "script", url: "https://example.test/install.sh", sha256 } },
+      })
+    );
+    executable(
+      path.join(bin, "curl"),
+      [
+        "#!/bin/sh",
+        'while [ $# -gt 0 ]; do case "$1" in -o) out=$2; shift 2;; *) shift;; esac; done',
+        'printf \'%s\' "$FAKE_INSTALLER" > "$out"',
+      ].join("\n")
+    );
+    const env = { ...envFor(dir, bin), FAKE_INSTALLER: installer };
+    installAgentCli("antigravity", { manifestPath: customManifest, env });
+    assert.ok(fs.existsSync(path.join(env.CAIRN_CLI_ROOT, "bin", "agy")));
+
+    fs.writeFileSync(
+      customManifest,
+      JSON.stringify({
+        antigravity: {
+          command: "agy",
+          install: { method: "script", url: "https://example.test/install.sh", sha256: "0".repeat(64) },
+        },
+      })
+    );
+    fs.rmSync(path.join(env.CAIRN_CLI_ROOT, "bin", "agy"), { force: true });
+    assert.throws(() => installAgentCli("antigravity", { manifestPath: customManifest, env }), /checksum mismatch/);
+  }));
+
+test("Docker image ships the installer but no provider CLI layer", () => {
+  const dockerfile = fs.readFileSync(path.join(root, "Dockerfile"), "utf8");
+  const entrypoint = fs.readFileSync(path.join(root, "scripts", "docker-entrypoint.sh"), "utf8");
+  assert.match(dockerfile, /COPY scripts\/install-agent-cli\.mjs \/usr\/local\/lib\/cairn/);
+  assert.match(dockerfile, /CAIRN_CLI_ROOT=\/home\/app\/\.cairn-tools/);
+  assert.doesNotMatch(dockerfile, /ARG INSTALL_CLAUDE|ARG INSTALL_CODEX|UPDATE_CLAUDE=|CLAUDE_CODE_VERSION=/);
+  assert.match(entrypoint, /mkdir -p \/data \/home\/app\/\.cairn-tools\/bin/);
+  assert.doesNotMatch(entrypoint, /link_home_cli|ln -sfn/);
+});
+
+test("stable shell wrapper delegates only to the bundled manager", () => {
+  const wrapper = fs.readFileSync(path.join(root, "scripts", "update-agent-clis.sh"), "utf8");
+  assert.match(wrapper, /install-agent-cli\.mjs/);
+  assert.match(wrapper, /exec node "\$manager" "\$@"/);
+  const result = spawnSync("sh", [path.join(root, "scripts", "update-agent-clis.sh")], { encoding: "utf8" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /usage:/);
 });

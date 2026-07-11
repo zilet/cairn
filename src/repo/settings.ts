@@ -541,6 +541,9 @@ export function getAgentConfig() {
       version: present ? agentVersion(name) : null,
       can_login: !!a.can_login,
       models_list: !!a.models_list,
+      installable: !!a.installable,
+      install_method: a.install_method ?? null,
+      install_version: a.install_version ?? null,
       web_access: !!a.web_access,
       usable: enabled && present && env_ok && configured !== false,
     };

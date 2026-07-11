@@ -19,11 +19,16 @@ export const AGENT_ENV_DENYLIST = [
   "DB_PATH",            // host filesystem layout - internal config the CLI shouldn't see
   "DATA_DIR",           // used to pick cwd; not needed (or wanted) in child env
   "GARMIN_TOKEN_DIR",
+  "NPM_TOKEN",         // public lazy installs never need registry credentials
+  "NODE_AUTH_TOKEN",
+  "GITHUB_TOKEN",
+  "GH_TOKEN",
 ];
 
 export function agentCliPath(source: NodeJS.ProcessEnv = process.env): string {
   const home = source.HOME || source.USERPROFILE || "";
   const preferred = [
+    home ? path.join(home, ".cairn-tools", "bin") : "",
     "/usr/local/bin",
     home ? path.join(home, ".local", "bin") : "",
     home ? path.join(home, ".grok", "bin") : "",

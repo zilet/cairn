@@ -141,43 +141,78 @@ function renderSettingsAgentList(deps: ClientSettingsAgentsControllerDeps): void
     }
     renderSettingsAgentList(deps);
   }));
+  wireSettingsCliInstallButtons(deps);
 }
 
 function renderSettingsCliStatus(deps: ClientSettingsAgentsControllerDeps, result: SettingsScreenCliUpdateStatus | null): void {
   const el = settingsAgentsOptional<HTMLElement>(deps.root, "#agentCliUpdateStatus");
   if (!el || !result) return;
-  if (result.status === "running") el.textContent = `Updating since ${(result.started_at || "").replace("T", " ").slice(0, 16)}`;
-  else if (result.status === "succeeded") el.textContent = `Updated ${(result.finished_at || "").replace("T", " ").slice(0, 16)}`;
-  else if (result.status === "failed") el.textContent = `Update failed${result.error ? `: ${result.error}` : ""}`;
+  const names = Array.isArray(result.agents) ? result.agents.join(", ") : "";
+  if (result.status === "running") el.textContent = `Installing ${names || "tool"}…`;
+  else if (result.status === "succeeded" && names) el.textContent = `${names} ready · ${(result.finished_at || "").replace("T", " ").slice(0, 16)}`;
+  else if (result.status === "failed") el.textContent = `Install failed${result.error ? `: ${result.error}` : ""}`;
   else el.textContent = "";
+  const list = settingsAgentsOptional<HTMLElement>(deps.root, "#agentlist");
+  list?.querySelectorAll<HTMLButtonElement>("[data-install]").forEach((button) => {
+    button.disabled = result.status === "running";
+  });
 }
 
-async function pollSettingsCliStatus(deps: ClientSettingsAgentsControllerDeps): Promise<void> {
-  const btn = settingsAgentsOptional<HTMLButtonElement>(deps.root, "#updateAgentClis");
-  if (!btn) return;
+async function pollSettingsCliStatus(deps: ClientSettingsAgentsControllerDeps): Promise<SettingsScreenCliUpdateStatus | null> {
+  if (!settingsAgentsOptional(deps.root, "#agentCliUpdateStatus")) return null;
   let result = await deps.api("/agent-clis/update") as SettingsScreenCliUpdateStatus;
   renderSettingsCliStatus(deps, result);
-  if (!btn.isConnected) return;
-  btn.disabled = result.status === "running";
   while (result.status === "running") {
     await deps.sleep(2000);
     result = await deps.api("/agent-clis/update") as SettingsScreenCliUpdateStatus;
-    if (!settingsAgentsOptional(deps.root, "#agentCliUpdateStatus")) return;
+    if (!settingsAgentsOptional(deps.root, "#agentCliUpdateStatus")) return null;
     renderSettingsCliStatus(deps, result);
-    const nextBtn = settingsAgentsOptional<HTMLButtonElement>(deps.root, "#updateAgentClis");
-    if (nextBtn) nextBtn.disabled = result.status === "running";
+  }
+  return result;
+}
+
+async function refreshSettingsAgentMeta(deps: ClientSettingsAgentsControllerDeps): Promise<void> {
+  const agents = await deps.api("/agents") as SettingsScreenAgent[];
+  if (!Array.isArray(agents)) return;
+  for (const agent of agents) {
+    if (agent && typeof agent.name === "string") deps.meta[agent.name] = agent;
   }
 }
 
+function wireSettingsCliInstallButtons(deps: ClientSettingsAgentsControllerDeps): void {
+  const list = settingsAgentsOptional<HTMLElement>(deps.root, "#agentlist");
+  list?.querySelectorAll<HTMLButtonElement>("[data-install]").forEach((button) => button.addEventListener("click", async () => {
+    const agent = button.dataset.install || "";
+    if (!agent) return;
+    button.disabled = true;
+    renderSettingsCliStatus(deps, { status: "running", agents: [agent], started_at: new Date().toISOString() });
+    let result: SettingsScreenCliUpdateStatus | null = null;
+    try {
+      const started = await deps.api(`/agent-clis/${encodeURIComponent(agent)}/install`, { method: "POST" }) as SettingsScreenCliUpdateStatus;
+      if (Array.isArray(started.agents) && !started.agents.includes(agent)) {
+        throw new Error(`Another tool is already installing (${started.agents.join(", ")})`);
+      }
+      result = await pollSettingsCliStatus(deps);
+    } catch (error) {
+      renderSettingsCliStatus(deps, {
+        status: "failed",
+        agents: [agent],
+        error: error instanceof Error ? error.message : "request failed",
+      });
+    }
+    if (result?.status === "succeeded") {
+      delete deps.agentInfo[agent];
+      delete deps.agentModels[agent];
+      await refreshSettingsAgentMeta(deps);
+      renderSettingsAgentList(deps);
+      deps.toast(`${agent} is ready to connect`);
+    } else {
+      deps.toast(`${agent} install failed`);
+    }
+  }));
+}
+
 function wireSettingsCliUpdate(deps: ClientSettingsAgentsControllerDeps): void {
-  settingsAgentsRequired<HTMLButtonElement>(deps.root, "#updateAgentClis").addEventListener("click", async () => {
-    const btn = settingsAgentsRequired<HTMLButtonElement>(deps.root, "#updateAgentClis");
-    btn.disabled = true;
-    renderSettingsCliStatus(deps, { status: "running", started_at: new Date().toISOString() });
-    await deps.api("/agent-clis/update", { method: "POST" });
-    await pollSettingsCliStatus(deps);
-    deps.toast("CLI update finished");
-  });
   pollSettingsCliStatus(deps).catch(() => {});
 }
 

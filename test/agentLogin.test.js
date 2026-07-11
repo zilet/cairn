@@ -117,7 +117,8 @@ test("sanitizeAgentEnv strips Cairn-owned secrets while preserving login-critica
   assert.equal(env.HOME, "/home/app");
   assert.equal(env.PATH, agentCliPath(source));
   const pathParts = env.PATH.split(path.delimiter);
-  assert.equal(pathParts[0], "/usr/local/bin");
+  assert.equal(pathParts[0], "/home/app/.cairn-tools/bin");
+  assert.ok(pathParts.includes("/usr/local/bin"));
   assert.ok(pathParts.includes("/home/app/.local/bin"));
   assert.ok(pathParts.includes("/home/app/.grok/bin"));
   assert.ok(pathParts.includes("/usr/bin"));

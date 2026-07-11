@@ -5,8 +5,10 @@ type SettingsScreenAgent = {
   description?: string;
   enabled?: boolean;
   configured?: boolean;
+  present?: boolean;
   can_login?: boolean;
   models_list?: boolean;
+  installable?: boolean;
 } & Record<string, unknown>;
 
 type SettingsScreenData = {
@@ -59,6 +61,7 @@ type SettingsScreenAgentInfo = {
 
 type SettingsScreenCliUpdateStatus = {
   status?: string;
+  agents?: string[];
   started_at?: string;
   finished_at?: string;
   error?: string;

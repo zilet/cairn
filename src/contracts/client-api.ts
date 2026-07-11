@@ -252,6 +252,7 @@ export interface ClientBrainDiagnostics {
 export interface ClientAgentCliUpdateStatus {
   running?: boolean;
   status?: string;
+  agents?: string[];
   started_at?: string | null;
   finished_at?: string | null;
   error?: string | null;
@@ -2028,6 +2029,7 @@ type ClientApiResponseForCleanPath<Path extends string> =
                                                                           : Path extends `/agent-jobs/${string}` ? ClientAgentJobResponse
                                                                             : Path extends `/agents/${string}/info` ? ClientAgentProbeResponse
                                                                                 : Path extends `/agents/${string}/models` ? ClientAgentModelsResponse
+                                                                                  : Path extends `/agent-clis/${string}/install` ? ClientAgentCliUpdateStatus
                                                                                   : Path extends `/brain/decisions/${string}/revert` ? ClientOkResponse & { decision?: ClientJsonObject; error?: string }
                                                                                 : unknown;
 

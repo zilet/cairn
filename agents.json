@@ -13,6 +13,11 @@
     "models_list": null,
     "model_flag": ["--model", "{model}"],
     "file_access_args": ["--add-dir", "{data_dir}"],
+    "install": {
+      "method": "npm",
+      "package": "@anthropic-ai/claude-code",
+      "version": "2.1.207"
+    },
     "stream": {
       "format": "claude",
       "args": ["{file_access_args}", "{mcp_config_args}", "-p", "{prompt}", "--output-format", "stream-json", "--include-partial-messages", "--verbose"]
@@ -30,7 +35,13 @@
     "models_list": null,
     "model_flag": ["--model", "{model}"],
     "file_access_args": ["--cd", "{data_dir}", "--add-dir", "{data_dir}"],
-    "image_args": ["--image", "{image}"]
+    "image_args": ["--image", "{image}"],
+    "install": {
+      "method": "npm",
+      "package": "@openai/codex",
+      "version": "0.144.1",
+      "args": ["--include=optional"]
+    }
   },
   "antigravity": {
     "command": "agy",
@@ -43,7 +54,13 @@
     "auth_state": [".gemini"],
     "models_list": ["models"],
     "model_flag": ["--model", "{model}"],
-    "file_access_args": ["--add-dir", "{data_dir}"]
+    "file_access_args": ["--add-dir", "{data_dir}"],
+    "install": {
+      "method": "script",
+      "url": "https://antigravity.google/cli/install.sh",
+      "sha256": "ee1ea43ce4e9e56356c4ab6dad907ef357ae4bdfcaadb682735909fb57c9c640",
+      "update_args": ["update"]
+    }
   },
   "grok": {
     "command": "grok",
@@ -57,6 +74,12 @@
     "models_list": ["models"],
     "model_flag": ["--model", "{model}"],
     "file_access_args": ["--cwd", "{data_dir}"],
+    "install": {
+      "method": "script",
+      "url": "https://x.ai/cli/install.sh",
+      "sha256": "2019f38002a2beab27f65b928db5d33d2bbe8c2828e4e41081ac23ec33b7a658",
+      "update_args": ["update"]
+    },
     "stream": {
       "format": "grok",
       "args": ["{file_access_args}", "-p", "{prompt}", "--output-format", "streaming-json"]

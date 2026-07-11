@@ -5,8 +5,11 @@ type SettingsAgentsAgent = {
   name: string;
   description?: string;
   configured?: boolean;
+  present?: boolean;
   can_login?: boolean;
   models_list?: boolean;
+  installable?: boolean;
+  install_version?: string | null;
 } & Record<string, unknown>;
 
 type SettingsAgentsInfo = {
@@ -48,15 +51,17 @@ function settingsAgentDayOptions(dayNames: string[], selectedDay: number): strin
 }
 
 function settingsAgentHourOptions(selectedHour: number): string {
-  return Array.from({ length: 24 }, (_, hour) =>
-    `<option value="${hour}" ${selectedHour === hour ? "selected" : ""}>${String(hour).padStart(2, "0")}:00</option>`
+  return Array.from(
+    { length: 24 },
+    (_, hour) =>
+      `<option value="${hour}" ${selectedHour === hour ? "selected" : ""}>${String(hour).padStart(2, "0")}:00</option>`
   ).join("");
 }
 
 function settingsAgentsSliceHtml(options: SettingsAgentsSliceOptions): string {
   return `
       <section class="set-group set-group--flush">
-        <p class="set-group-sub">The agent brain. When you draft without naming an agent (the Coach <b>Auto</b> option and the weekly auto-coach), Cairn rotates across the agents you enable here.</p>
+        <p class="set-group-sub">The agent brain. Cairn ships lean: install only the provider tools you use, connect your account, then Auto rotates across the agents you enable here.</p>
 
         <div class="field" style="margin-top:14px"><label>Selection strategy</label>
           <select id="strat">
@@ -67,10 +72,7 @@ function settingsAgentsSliceHtml(options: SettingsAgentsSliceOptions): string {
 
         <h1 class="lbl" style="margin:18px 0 8px">Agents</h1>
         <div id="agentlist"></div>
-        <div class="agent-update">
-          <button id="updateAgentClis" class="ghostbtn" style="width:100%;text-align:center;padding:11px">Update CLI tools</button>
-          <div id="agentCliUpdateStatus" class="sess-line agent-update-status"></div>
-        </div>
+        <div id="agentCliUpdateStatus" class="sess-line agent-update-status"></div>
         ${options.agentHealthHtml}
         ${options.agentActivityHtml}
         ${options.noticedHtml}
@@ -115,6 +117,10 @@ function settingsAgentCardHtml(options: SettingsAgentsListOptions, name: string,
   const models = options.agentModels[name];
   const modelsList = settingsAgentModelsHtml(models);
   const staggerStyle = options.stagger ? options.stagger(index) : "";
+  const present = agent.present !== false;
+  const installButton = agent.installable
+    ? `<button class="ghostbtn agent-install-btn" data-install="${escAttr(name)}">${present ? "Update" : "Install"}</button>`
+    : "";
   return `<div class="agent-card${off ? " off" : ""} reveal" style="${escAttr(staggerStyle)}">
         <div class="agent-card-top">
           <div class="agentmeta">
@@ -130,11 +136,13 @@ function settingsAgentCardHtml(options: SettingsAgentsListOptions, name: string,
             <button class="togglebtn${off ? "" : " on"}" data-toggle="${escAttr(name)}">${off ? "OFF" : "ON"}</button>
           </div>
           <div class="agent-card-actions">
-            ${agent.can_login ? `<button class="ghostbtn agent-connect-btn" data-connect="${escAttr(name)}">Connect</button>` : ""}
-            <button class="linkbtn-quiet agent-detail-link" data-detail="${escAttr(name)}">${cached ? "details" : "check"}</button>
-            ${agent.models_list ? `<button class="linkbtn-quiet agent-detail-link" data-models="${escAttr(name)}">${Array.isArray(models) ? "hide models" : "view models"}</button>` : ""}
+            ${installButton}
+            ${present && agent.can_login ? `<button class="ghostbtn agent-connect-btn" data-connect="${escAttr(name)}">Connect</button>` : ""}
+            ${present ? `<button class="linkbtn-quiet agent-detail-link" data-detail="${escAttr(name)}">${cached ? "details" : "check"}</button>` : ""}
+            ${present && agent.models_list ? `<button class="linkbtn-quiet agent-detail-link" data-models="${escAttr(name)}">${Array.isArray(models) ? "hide models" : "view models"}</button>` : ""}
           </div>
         </div>
+        ${!present && agent.installable ? `<div class="agent-card-note">Optional · installs into your persistent Cairn tools volume only when you choose it.</div>` : ""}
         ${agent.configured === false ? `<div class="agent-card-note">Not in rotation until connected${agent.can_login ? " — tap Connect" : ""}.</div>` : ""}
         ${infoLine ? `<div class="agent-info-line">${infoLine}</div>` : ""}
         ${Array.isArray(models) ? `<ul class="agent-models">${modelsList}</ul>` : ""}

@@ -3175,6 +3175,7 @@ body.swr-busy::after{
   flex-wrap:wrap;margin-top:11px}
 .agent-card-actions{display:flex;align-items:center;gap:8px;flex:0 0 auto}
 .agent-connect-btn{padding:6px 13px;font-size:.74rem}
+.agent-install-btn{padding:6px 13px;font-size:.74rem}
 /* quiet disclosure → .linkbtn-quiet; delta = type + disabled */
 .agent-detail-link{font-family:var(--font-ui);font-size:.7rem;letter-spacing:.04em;padding:4px 2px}
 .agent-detail-link:disabled{opacity:.5;cursor:default;text-decoration:none}

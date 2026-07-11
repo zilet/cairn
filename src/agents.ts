@@ -51,6 +51,12 @@ export interface AgentDef {
   // Codex supports `--image <file>`, which is more reliable than asking it to
   // discover a JPEG through shell tools inside its own sandbox.
   image_args?: string[];
+  // Optional, server-owned lazy-install contract. The browser can select only an
+  // agent name; package names, versions, URLs and checksums always come from this
+  // bundled manifest. Installed files live under the persistent app HOME.
+  install?:
+    | { method: "npm"; package: string; version: string; args?: string[] }
+    | { method: "script"; url: string; sha256: string; update_args?: string[] };
 }
 
 export function loadAgents(): Record<string, AgentDef> {
@@ -79,6 +85,9 @@ export function listAgents() {
     // pure config reads, surfaced so the UI can render the right affordances.
     can_login: def.login != null,
     models_list: def.models_list != null,
+    installable: !!def.install,
+    install_method: def.install?.method ?? null,
+    install_version: def.install?.method === "npm" ? def.install.version : null,
   }));
 }
 
@@ -256,8 +265,12 @@ export function invalidateAgentConfigured(name?: string): void {
     modelsRawCache.delete(name);
     modelsCache.delete(name);
     const cmd = loadAgents()[name]?.command;
-    if (cmd) versionCache.delete(cmd);
+    if (cmd) {
+      presenceCache.delete(cmd);
+      versionCache.delete(cmd);
+    }
   } else {
+    presenceCache.clear();
     configuredCache.clear();
     modelsRawCache.clear();
     modelsCache.clear();
