@@ -615,6 +615,11 @@ export interface RunOpts {
   // an option because prompt/shared.ts imports from THIS module (a direct import
   // here would be a cycle).
   extract?: (text: string) => any | null;
+  // Optional operation-level acceptance check. Parsing JSON is only the syntax
+  // boundary; callers such as the Today Brief also have a semantic contract
+  // (kind/why/etc.). When supplied, a parseable response that fails this check
+  // gets one contract-repair retry and then falls through to the next agent.
+  acceptParsed?: (parsed: any) => boolean;
   // Capability-scoped CLI arguments supplied by the caller for this run only
   // (for example Claude's --mcp-config pointing at the loopback read-only coach
   // adapter). Expanded only at an explicit {mcp_config_args} slot.
@@ -742,6 +747,20 @@ const JSON_REPAIR_SUFFIX =
   "\n\nYour previous reply was not a single valid JSON object. " +
   "Re-emit ONLY the JSON object, nothing else — no prose, no markdown fences.";
 
+const CONTRACT_REPAIR_SUFFIX =
+  "\n\nYour previous JSON did not satisfy the exact response contract requested above. " +
+  "Re-emit ONLY one JSON object matching that contract exactly — no prose, no markdown fences.";
+
+function acceptsParsed(result: AgentResult, acceptParsed?: (parsed: any) => boolean): boolean {
+  if (!result.parsed) return false;
+  if (!acceptParsed) return true;
+  try {
+    return acceptParsed(result.parsed) === true;
+  } catch {
+    return false;
+  }
+}
+
 export interface AgentUsage {
   model?: string | null;
   input_tokens?: number | null;
@@ -790,7 +809,8 @@ function emitAgentRun(r: AgentRunRecord) {
   try { agentRunSink(r); } catch { /* telemetry never breaks the loop */ }
 }
 
-// Try each agent in `order` until one returns a usable (JSON-parseable) result.
+// Try each agent in `order` until one returns a usable result: JSON-parseable,
+// and (when the operation supplies `acceptParsed`) semantically valid too.
 // Powers "auto" agent selection: a dead login or timeout falls through to the
 // next. Hardened: a circuit-broken agent is skipped while others remain (probed
 // on a short leash when it's the only option left); an agent that RAN but didn't
@@ -834,11 +854,14 @@ export async function runAgentWithFallback(
         mcpConfigArgs: o.mcpConfigArgs,
         model: o.model,
       });
-      // One-shot JSON-repair retry: it ran but emitted nothing parseable.
-      if (!result.parsed && !signal?.aborted) {
+      const parsedBeforeRepair = !!result.parsed;
+      const acceptedBeforeRepair = acceptsParsed(result, o.acceptParsed);
+      // One-shot repair retry: recover both malformed JSON and parseable JSON
+      // that missed this operation's semantic contract before rotating onward.
+      if (!acceptedBeforeRepair && !signal?.aborted) {
         triedJson = true;
         try {
-          result = await runAgent(name, prompt + JSON_REPAIR_SUFFIX, {
+          result = await runAgent(name, prompt + (parsedBeforeRepair ? CONTRACT_REPAIR_SUFFIX : JSON_REPAIR_SUFFIX), {
             timeoutMs,
             signal,
             extract: o.extract,
@@ -849,7 +872,7 @@ export async function runAgentWithFallback(
           /* keep the first (unparsed) result; fall through below */
         }
       }
-      if (result.parsed) {
+      if (acceptsParsed(result, o.acceptParsed)) {
         breakerNoteSuccess(name);
         emitAgentRun({
           op,
@@ -867,16 +890,19 @@ export async function runAgentWithFallback(
         return { agent: name, result, tried };
       }
       breakerNoteFail(name);
-      const error = `ran but returned no valid JSON (exit ${result.code})`;
+      const parsed = !!result.parsed;
+      const error = parsed
+        ? `ran but returned JSON outside the requested contract (exit ${result.code})`
+        : `ran but returned no valid JSON (exit ${result.code})`;
       emitAgentRun({
         op,
         agent: name,
         ok: false,
-        parsed: false,
+        parsed,
         latency_ms: Date.now() - started,
         tried_json: triedJson,
         status: "invalid_output",
-        error_class: "invalid_json",
+        error_class: parsed ? "invalid_contract" : "invalid_json",
         error_message: error,
         exit_code: result.code,
         model: result.usage?.model ?? null,

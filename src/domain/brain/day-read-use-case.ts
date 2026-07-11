@@ -20,6 +20,7 @@ export interface DayReadResult {
   forward: string | null;
   arc: string | null;
   agent_status?: AgentStatus;
+  agent_issue?: "invalid_response" | "unreachable";
   error?: string;
   [key: string]: unknown;
 }

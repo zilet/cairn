@@ -347,6 +347,18 @@ test("runAgentWithFallback honors RunOpts.extract on a real (stub) run", async (
   assert.deepEqual(fb.result.parsed, { via: "custom-extract" });
 });
 
+test("runAgentWithFallback repairs then rotates when parsed JSON misses the operation contract", async () => {
+  let extracts = 0;
+  const fb = await runAgentWithFallback(["stub", "stub"], "ignored", {
+    extract: () => (++extracts <= 2 ? { wrong: true } : { kind: "rest", why: "Recovery first." }),
+    acceptParsed: (parsed) => parsed?.kind === "rest" && typeof parsed?.why === "string",
+  });
+
+  assert.equal(fb.tried.length, 1, "the first agent must be rejected after its repair still misses the contract");
+  assert.match(fb.tried[0].error, /outside the requested contract/);
+  assert.deepEqual(fb.result.parsed, { kind: "rest", why: "Recovery first." });
+});
+
 test("runChosen forwards a caller extract and still parses the stub's bare JSON by default", async () => {
   const custom = await runChosen("stub", "ignored", { extract: () => ({ via: "runChosen" }) });
   assert.deepEqual(custom.result.parsed, { via: "runChosen" });

@@ -80,6 +80,24 @@ export function enforceCompletionContract(out: any, baseline: any): any {
   return out;
 }
 
+export function isValidDayReadAgentResult(value: any): boolean {
+  return !!(
+    value &&
+    typeof value === "object" &&
+    (value.kind === "train" || value.kind === "easy" || value.kind === "rest" || value.kind === "done") &&
+    typeof value.why === "string" &&
+    value.why.trim() &&
+    (value.headline == null || typeof value.headline === "string") &&
+    (value.focus == null || typeof value.focus === "string") &&
+    (value.est_minutes == null || Number.isFinite(Number(value.est_minutes)))
+  );
+}
+
+function agentIssueFor(error: unknown): "invalid_response" | "unreachable" {
+  const message = String((error as any)?.message ?? error ?? "");
+  return /outside the requested contract|no valid JSON/i.test(message) ? "invalid_response" : "unreachable";
+}
+
 // Compute the agentic day-read with the deterministic floor as fallback. The
 // canonical (no-override) read is persisted to the day_reads cache; escape-hatch
 // overrides ("rough night" / "train anyway") are transient and never cached so
@@ -95,15 +113,13 @@ export async function computeDayRead(opts: { date?: string; override?: string; a
       agent: chosen,
       result,
       tried,
-    } = await runChosen(agent, prompt, { op: "day_read", timeoutMs: INTERACTIVE_TIMEOUT_MS });
+    } = await runChosen(agent, prompt, {
+      op: "day_read",
+      timeoutMs: INTERACTIVE_TIMEOUT_MS,
+      acceptParsed: isValidDayReadAgentResult,
+    });
     const p = result.parsed;
-    const sane =
-      p &&
-      typeof p === "object" &&
-      (p.kind === "train" || p.kind === "easy" || p.kind === "rest" || p.kind === "done") &&
-      typeof p.why === "string" &&
-      p.why.trim();
-    if (sane) {
+    if (isValidDayReadAgentResult(p)) {
       out = {
         kind: p.kind,
         headline:
@@ -123,7 +139,13 @@ export async function computeDayRead(opts: { date?: string; override?: string; a
       out = { ...baseline, headline: deterministicHeadline(baseline), source: "deterministic", agent: chosen, tried };
     }
   } catch (e: any) {
-    out = { ...baseline, headline: deterministicHeadline(baseline), source: "deterministic", error: e?.message };
+    out = {
+      ...baseline,
+      headline: deterministicHeadline(baseline),
+      source: "deterministic",
+      error: e?.message,
+      agent_issue: agentIssueFor(e),
+    };
   }
   out = enforceCompletionContract(out, baseline);
   // The day-ahead `forward` line is NOT persisted here — it's attached fresh on every

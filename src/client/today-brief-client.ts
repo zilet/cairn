@@ -98,12 +98,16 @@ type TodayBriefHtmlOptions = {
     return status === "unconfigured" || status === "all_failed";
   }
 
-  function todayBriefAgentOfflineNoticeHtml(status: unknown, dismissed?: boolean): string {
+  function todayBriefAgentOfflineNoticeHtml(status: unknown, issue?: unknown, dismissed?: boolean): string {
     if (dismissed || !todayBriefAgentOffline(status)) return "";
     const line =
       status === "unconfigured"
         ? "Coaching is offline — connect an agent in Settings for the agentic read."
-        : "Couldn't reach a coaching agent just now — showing the deterministic read.";
+        : issue === "invalid_response"
+          ? "Coaching agents didn't return a usable read just now — showing Cairn's reliable baseline."
+          : issue === "unreachable"
+            ? "Couldn't reach a coaching agent just now — showing Cairn's reliable baseline."
+            : "The coaching layer couldn't complete this read just now — showing Cairn's reliable baseline.";
     return `<div class="agent-offline" role="note">
       <span class="agent-offline-dot" aria-hidden="true"></span>
       <span class="agent-offline-text">${escHtml(line)}</span>
@@ -169,7 +173,9 @@ type TodayBriefHtmlOptions = {
     const failed = !!read?._failed;
     const thinking = provisional && !failed && !options.reducedMotion ? " is-thinking" : "";
     const busy = provisional && !failed ? ` aria-busy="true"` : "";
-    const offline = provisional ? "" : todayBriefAgentOfflineNoticeHtml(read?.agent_status, options.offlineDismissed);
+    const offline = provisional
+      ? ""
+      : todayBriefAgentOfflineNoticeHtml(read?.agent_status, read?.agent_issue, options.offlineDismissed);
     return `<section class="brief brief-${kind}${morph}${enter}${thinking}" style="--i:0" aria-live="polite"${busy}>
       ${offline}
       <div class="brief-kicker lbl"><span class="brief-glyph" aria-hidden="true">${meta.glyph}</span> ${escHtml(meta.kicker ? meta.kicker.toUpperCase() : `${meta.word.toUpperCase()} DAY`)}${est ? ` · ${escHtml(est)}` : ""}</div>

@@ -127,8 +127,30 @@ test("Today Brief handles done, provisional, and offline states", () => {
   assert.doesNotMatch(done, /data-redirect=|data-override=/);
   assert.match(provisional, /aria-busy="true"/);
   assert.match(provisional, /is-thinking/);
-  assert.match(offline, /showing the deterministic read/);
-  assert.doesNotMatch(dismissed, /showing the deterministic read/);
+  assert.match(offline, /couldn't complete this read/);
+  assert.match(offline, /reliable baseline/);
+  assert.doesNotMatch(dismissed, /couldn't complete this read/);
+
+  const invalid = brief.briefHtml({
+    kind: "train",
+    headline: "Today",
+    why: "",
+    est_minutes: null,
+    signals: {},
+    agent_status: "all_failed",
+    agent_issue: "invalid_response",
+  }, { isToday: true });
+  const unreachable = brief.briefHtml({
+    kind: "train",
+    headline: "Today",
+    why: "",
+    est_minutes: null,
+    signals: {},
+    agent_status: "all_failed",
+    agent_issue: "unreachable",
+  }, { isToday: true });
+  assert.match(invalid, /didn't return a usable read/);
+  assert.match(unreachable, /Couldn't reach a coaching agent/);
 });
 
 test("Today Brief offers one quiet entry on a done read with nothing below to start training from", () => {

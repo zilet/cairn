@@ -47,6 +47,7 @@ export interface ClientDayRead {
   forward?: string | null;
   arc?: string | null;
   agent_status?: unknown;
+  agent_issue?: "invalid_response" | "unreachable";
 }
 
 export interface ClientTodayAgendaAction {

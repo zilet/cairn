@@ -191,3 +191,13 @@ test("enforceCompletionContract clamps completion facts in BOTH directions", asy
   assert.equal(voiced.focus, null);
   assert.equal(voiced.est_minutes, null);
 });
+
+test("Today agent-result validation rejects parseable off-contract JSON", async () => {
+  const { isValidDayReadAgentResult } = await import("../dist/dayread.js");
+
+  assert.equal(isValidDayReadAgentResult({ kind: "rest", why: "Three loading days in a row." }), true);
+  assert.equal(isValidDayReadAgentResult({ summary: "Rest today" }), false);
+  assert.equal(isValidDayReadAgentResult({ kind: "rest", why: "" }), false);
+  assert.equal(isValidDayReadAgentResult({ kind: "pause", why: "Take it easy." }), false);
+  assert.equal(isValidDayReadAgentResult({ kind: "easy", why: "Keep it light.", est_minutes: "soon" }), false);
+});
