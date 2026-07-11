@@ -176,7 +176,7 @@ test("progress program controller renders the empty state through the route shel
 
   context.CairnProgressProgramController.paint(
     { headline: "", lifts: [], volume: [], mesocycle: null, endurance: null, adaptations_due: [] },
-    deps,
+    deps
   );
 
   assert.match(deps.view.innerHTML, /<nav>program<\/nav>/);
@@ -263,7 +263,7 @@ test("progress program controller drafts evolved plans through runOp", async () 
   const context = loadProgramController();
   const foot = fakeElement("div");
   const button = fakeButton();
-  button.closest = (selector) => selector === ".prog-evolve-foot" ? foot : null;
+  button.closest = (selector) => (selector === ".prog-evolve-foot" ? foot : null);
   const deps = depsFor(context, {
     runOp: async (kind, body, options) => {
       assert.equal(kind, "evolve_program");
@@ -277,7 +277,7 @@ test("progress program controller drafts evolved plans through runOp", async () 
   await context.CairnProgressProgramController.triggerProgramEvolve(button, deps);
 
   assert.deepEqual(deps.busyCalls, ["Drafting your plan…", "restore"]);
-  assert.deepEqual(deps.toasts, ["Drafted — review it in your Plan"]);
+  assert.deepEqual(deps.toasts, ["Ready for your review"]);
   assert.deepEqual(deps.invalidated, ["progress:program", "plan:coach", "plan:proposals"]);
   assert.equal(deps.renderedSelf, true);
 });

@@ -13,6 +13,7 @@ type MealPlannerOptions = {
   checkedShopping?: unknown;
   verified?: unknown;
   now?: unknown;
+  upcoming?: unknown;
 };
 
 type MealPlannerPaint = {
@@ -37,6 +38,32 @@ type MealPlannerPaint = {
     return rows.find((plan) => KEPT_MEAL_PLAN_STATUSES.includes(String(plan.status)) && plan.parsed) ||
       rows.find((plan) => plan.status === "draft" && plan.parsed) ||
       null;
+  }
+
+  function scheduledMealPlan(plan: unknown): MealRecord | null {
+    const p = mealRecord(plan);
+    const autonomy = mealRecord(p.autonomy);
+    return p.status === "draft" && (autonomy.status === "announced" || autonomy.status === "pending")
+      ? autonomy
+      : null;
+  }
+
+  function mealBoundaryLabel(value: unknown): string {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ""));
+    if (!m) return "at the next food-day boundary";
+    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    return d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
+  }
+
+  function mealPlanUpcomingHtml(plan: unknown): string {
+    const p = mealRecord(plan);
+    const autonomy = scheduledMealPlan(p);
+    if (!autonomy) return "";
+    return `<div class="plan-upcoming reveal" style="${stagger(0)}">
+      <span class="lbl plan-upcoming-mast">COMING UP</span>
+      <p class="plan-upcoming-line"><span class="plan-upcoming-when">${escHtml(mealBoundaryLabel(autonomy.effective_date))}</span> — ${escHtml(autonomy.summary || "Your refreshed meal plan becomes current automatically.")}</p>
+      <p class="sess-line" style="color:var(--muted);margin-top:5px">No Apply step. Your current plan stays in place until then; Hold or Undo always wins.</p>
+    </div>`;
   }
 
   function mealPlanCardHtml(plan: unknown, index: number): string {
@@ -77,10 +104,13 @@ type MealPlannerPaint = {
         </div>`;
       body = `<div class="sess-line" style="color:var(--warn)">Unparseable output</div>`;
     }
-    const actions = p.status === "draft"
+    const autonomy = scheduledMealPlan(p);
+    const actions = p.status === "draft" && !autonomy
       ? `<div class="logrow" style="margin-top:10px"><button class="logbtn" style="width:auto;padding:0 14px;font-size:.85rem" data-accept="${escAttr(p.id)}">ACCEPT</button>
          <button class="ghostbtn" style="width:auto;padding:0 14px" data-discard="${escAttr(p.id)}">DISCARD</button></div>`
-      : "";
+      : autonomy
+        ? `<div class="sess-line" style="color:var(--muted);margin-top:10px">Becomes current ${escHtml(mealBoundaryLabel(autonomy.effective_date))} · automatic and reversible</div>`
+        : "";
     return `<div class="mp-card reveal${p.status === "superseded" ? " mp-card-faded" : ""}" style="${stagger(index)}">
       ${hero}${body}${actions}</div>`;
   }
@@ -118,8 +148,8 @@ type MealPlannerPaint = {
     return `<div class="meals-empty reveal" style="${stagger(0)}">
         <div class="artile artile-xl meals-empty-art">${art("food", "meal plate")}</div>
         <div class="meals-empty-title">No meal plan yet</div>
-        <div class="meals-empty-sub">Ask the coach to draft a week of meals built around your training and lean-safe targets.</div>
-        <button id="mealDraftBtn" class="logbtn meals-cta">DRAFT WEEKLY MEAL PLAN</button>
+        <div class="meals-empty-sub">Your expert team can build the first week around your training, health context, preferences, and lean-safe targets.</div>
+        <button id="mealDraftBtn" class="logbtn meals-cta">ASK TEAM TO PLAN THIS WEEK</button>
         <div id="mealDraftStatus" class="meals-status"></div>
       </div>${mealPrefsHtml(mealPrefs, 1)}`;
   }
@@ -129,12 +159,15 @@ type MealPlannerPaint = {
     const parsed = mealRecord(p.parsed);
     const ctx = mealsCtxFor(p);
     const isDraft = p.status === "draft";
-    const actions = isDraft
+    const autonomy = scheduledMealPlan(p);
+    const actions = isDraft && !autonomy
       ? `<div class="meals-actions">
            <button class="pillbtn pill-accent" data-mkeep="${escAttr(p.id)}">Keep this plan</button>
            <button class="pillbtn" data-mdiscard="${escAttr(p.id)}">Discard</button>
          </div>`
-      : "";
+      : autonomy
+        ? `<div class="sess-line" style="color:var(--muted);margin-top:12px">Coming ${escHtml(mealBoundaryLabel(autonomy.effective_date))} · no Apply step · Hold or Undo any time</div>`
+        : "";
     return `<div class="mealhero reveal" style="${stagger(0)}">
         <div class="mp-hero-head">
           <span class="lbl">Week of ${escHtml(ctx.weekOf)} · ${escHtml(p.agent || "")}</span>
@@ -178,13 +211,14 @@ type MealPlannerPaint = {
       : "";
     return {
       context: ctx,
-      html: `${mealPlanHeroHtml(p, options.verified)}
+      html: `${mealPlanUpcomingHtml(options.upcoming)}
+      ${mealPlanHeroHtml(p, options.verified)}
       ${mealPrefsHtml(mealPrefs, 1)}
       ${dayHtml}
       ${shopping}
       ${notes}
       <div class="meals-redraft">
-        <button id="mealDraftBtn" class="ghostbtn" style="width:100%;text-align:center;padding:11px">Draft a new weekly plan</button>
+        <button id="mealDraftBtn" class="ghostbtn" style="width:100%;text-align:center;padding:11px">Ask the team to refresh meals</button>
         <div id="mealDraftStatus" class="meals-status"></div>
       </div>`,
     };
@@ -203,6 +237,7 @@ type MealPlannerPaint = {
     mealPrefsHtml,
     mealPlanEmptyHtml,
     mealPlanHeroHtml,
+    mealPlanUpcomingHtml,
     mealShoppingHtml,
     mealPlannerBodyHtml,
     mealDayHtml,

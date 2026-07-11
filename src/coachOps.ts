@@ -38,7 +38,7 @@ import {
 import { researchEnabled, gatherReviewGrounding, researchEvidence } from "./research.js";
 import { normalizeHealthSynthesis } from "./health-synthesis.js";
 import { clampNutritionFloors } from "./repo/nutrition-safety.js";
-import { applyProposalWithAutonomy } from "./domain/brain/autonomy-service.js";
+import { applyMealPlanWithAutonomy, applyProposalWithAutonomy } from "./domain/brain/autonomy-service.js";
 
 // runChosen is the shared agent-dispatch helper (see ./runChosen.ts). It's
 // re-exported here because api.ts / mcp.ts import it from coachOps as the
@@ -260,7 +260,9 @@ function sessionSuggestCacheKey(opts: { minutes?: number; equipment?: string; fo
 // Draft a plan proposal from a free-text instruction — the agentic "ask the coach"
 // op behind the Coach tab's DRAFT PLAN UPDATE and the Plan → Endurance "shape your
 // running" composer. Runs ONE agent over buildCoachPrompt, persists the result as a
-// `draft` plan_proposals row (NEVER applied here), and returns the SAME body the
+// `draft` plan_proposals row, routes it through the shared autonomy policy, and
+// returns the same stable body plus an additive autonomy sidecar. Lead mode lands
+// bounded adaptations at natural boundaries; review posture keeps the draft.
 // synchronous /agent/run handler used to return (proposal + ok + agent + tried +
 // agent_status + exit/stderr) so both surfaces render unchanged. Backgrounded via
 // the agentJobs `proposal` kind (live caption progress + reconnect) or run inline
@@ -280,8 +282,17 @@ export async function draftCoachProposal(
   hooks?.onPhase?.("drafting your plan");
   const { agent: chosen, result, tried } = await runChosen(agent, prompt, { signal: hooks?.signal });
   const proposal = repo.createProposal(chosen, instruction ?? "", result.raw, result.parsed);
+  let autonomy: any = null;
+  if (result.parsed) {
+    try {
+      autonomy = applyProposalWithAutonomy(Number(proposal.id));
+    } catch {
+      autonomy = null;
+    }
+  }
   return {
-    proposal,
+    proposal: repo.getProposal(Number(proposal.id)),
+    autonomy,
     ok: !!result.parsed,
     agent: chosen,
     tried,
@@ -296,7 +307,8 @@ export async function draftCoachProposal(
 // Adaptive program evolution: read the deterministic program-state (per-lift
 // plateau/trend) and draft a plan EVOLUTION — progress what's working, deload/
 // rotate what's stalled, introduce novelty, periodize — as a DRAFT proposal for
-// review (never auto-applied; same propose→apply path as draftCoachProposal).
+// then routes through the shared autonomy policy: Lead mode lands bounded changes
+// at natural boundaries; explicit review posture keeps a proposal.
 // Returns the program-state snapshot alongside so the surface can show "why this".
 export async function evolveProgram(
   agent: string | undefined,
@@ -553,7 +565,12 @@ export async function weekAheadRead(agent: string | undefined, hooks?: OpHooks) 
 // VERIFIED draft (a fix is adopted only when it re-validates); `verified` carries
 // the "checked against your floors" signal. Verify fails open (no agent / garbage
 // ⇒ the original draft is persisted unverified — exactly today's behavior).
-export async function draftMealPlan(agent: string | undefined, instruction?: string, hooks?: OpHooks) {
+export async function draftMealPlan(
+  agent: string | undefined,
+  instruction?: string,
+  hooks?: OpHooks,
+  opts: { coordinated_update?: boolean } = {}
+) {
   hooks?.onPhase?.("drafting your week of meals");
   const prompt = buildMealPlanPrompt(instruction);
   const { agent: chosen, result, tried } = await runChosen(agent, prompt, { op: "meal_plan", signal: hooks?.signal });
@@ -574,11 +591,31 @@ export async function draftMealPlan(agent: string | undefined, instruction?: str
     agent, p, buildPlanVerifyPrompt, planSane, "meal_plan_verify", hooks
   );
   const plan = repo.createMealPlan(chosen, result.raw, verifiedParsed);
-  return { ok: true as const, plan, agent: chosen, tried, agent_status: "ok" as const, ...(verified ? { verified } : {}) };
+  let autonomy: any = null;
+  try {
+    autonomy = applyMealPlanWithAutonomy(Number(plan.id), {
+      requested_tier: "announce",
+      coordinated_update: opts.coordinated_update === true,
+    });
+  } catch {
+    // The durable, safety-clamped plan is still useful in review mode. Autonomy
+    // bookkeeping is fail-soft and never discards an otherwise valid week.
+    autonomy = null;
+  }
+  return {
+    ok: true as const,
+    plan: repo.getMealPlan(Number(plan.id)),
+    autonomy,
+    agent: chosen,
+    tried,
+    agent_status: "ok" as const,
+    ...(verified ? { verified } : {}),
+  };
 }
 
-// Quiet adaptive-nutrition check-in. Drafts a nutrition_target proposal only on
-// meaningful drift; change:false is the calm, common answer. ok:false is the
+// Quiet adaptive-nutrition check-in. Creates a nutrition_target proposal only on
+// meaningful drift, then routes it through the server autonomy policy; change:false
+// is the calm, common answer. ok:false is the
 // designed failure signal. windowDays is passed verbatim to both the expenditure
 // estimate (with a finite guard) and the prompt, mirroring the REST behavior.
 export async function nutritionCheckin(agent: string | undefined, windowDays?: number, hooks?: OpHooks) {
@@ -595,7 +632,9 @@ export async function nutritionCheckin(agent: string | undefined, windowDays?: n
     return { ok: true as const, change: false, summary: typeof p.summary === "string" ? p.summary : "", agent: chosen, tried, expenditure };
   }
   const nutrition = personalizeNutritionCheckinTarget(p.nutrition);
-  // Store the target change as a DRAFT proposal (status 'draft', never applied).
+  // Persist the target change, then route it through the shared autonomy policy.
+  // Lead mode schedules it for the next un-lived food day with Undo; explicit
+  // review posture keeps the same row as a reviewable draft.
   const proposal = repo.createProposal(chosen, "nutrition: adaptive check-in", result.raw, {
     kind: "nutrition_target",
     summary: typeof p.summary === "string" ? p.summary : "",
@@ -615,7 +654,22 @@ export async function nutritionCheckin(agent: string | undefined, windowDays?: n
     tdee: Number.isFinite(tdee) ? tdee : null,
     direction: Number.isFinite(targetKcal) && Number.isFinite(tdee) ? (targetKcal < tdee ? "down" : targetKcal > tdee ? "up" : "hold") : null,
   });
-  return { ok: true as const, change: true, proposal, summary: typeof p.summary === "string" ? p.summary : "", agent: chosen, tried, expenditure };
+  let autonomy: any = null;
+  try {
+    autonomy = applyProposalWithAutonomy(Number(proposal.id), { requested_tier: "quiet_apply" });
+  } catch {
+    autonomy = null;
+  }
+  return {
+    ok: true as const,
+    change: true,
+    proposal: repo.getProposal(Number(proposal.id)),
+    autonomy,
+    summary: typeof p.summary === "string" ? p.summary : "",
+    agent: chosen,
+    tried,
+    expenditure,
+  };
 }
 
 // Agentically swap ONE meal in a drafted plan, honoring an optional free-text

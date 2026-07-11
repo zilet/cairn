@@ -27,18 +27,17 @@ if (typeof window !== "undefined") {
   window.CairnProgressFocus = PROGRESS_FOCUS_STATE;
 }
 
-// The one-tap recovery-week draft: the conductor's recovery lead carries a real
-// action — reshape next week as an earned deload for REVIEW (propose→apply; the
+// The recovery-week override asks the same expert-team workflow to reshape next
+// week; in Lead mode it announces and lands at the boundary, while explicit
+// review posture keeps the legacy proposal boundary.
 // instruction rides the same durable /program/evolve job as "Evolve my plan").
 const RECOVERY_WEEK_INSTRUCTION =
   "Reshape next week into a RECOVERY (deload) week: cut working-set volume roughly in half, " +
   "keep every movement pattern, keep efforts easy and crisp (3-4 reps in reserve), no new " +
   "exercises and no load PRs — an earned reset after sustained loading, so the athlete comes back stronger.";
 
-// "Evolve my plan" button - POSTs to /api/program/evolve through durable runOp.
-// The draft lands in Plan proposals for review; nothing auto-applies. `opts`
-// focuses the same flow (the recovery-week draft passes its instruction +
-// its own anchor/copy); default is the open-ended evolution.
+// Optional athlete-initiated fresh read. Background evolution uses this same
+// shared service; the button is an override, not a periodic replan chore.
 async function triggerProgramEvolve(
   btn: Element,
   deps: ClientProgressProgramControllerDeps,
@@ -67,9 +66,17 @@ async function triggerProgramEvolve(
       "checking it against your constraints",
     ],
     guard: () => !document.querySelector(anchor)?.isConnected,
-    render: () => {
+    render: (result: unknown) => {
       cleanup();
-      deps.toast(opts.toast || "Drafted — review it in your Plan");
+      const row = progressProgramRecord(result);
+      const autonomy = progressProgramRecord(row.autonomy);
+      deps.toast(
+        autonomy.pending || autonomy.announced
+          ? "Set — your team will land it at the natural boundary"
+          : autonomy.tier === "quiet_apply"
+            ? "Updated — your plan follows the latest read"
+            : opts.toast || "Ready for your review"
+      );
       deps.invalidate("progress:program");
       deps.invalidate("plan:coach");
       deps.invalidate("plan:proposals");
@@ -216,8 +223,8 @@ function paintProgressProgramBody(data: ProgressProgramState, deps: ClientProgre
   const hybridHtml = hybrid ? hybridLoadCardHtml(hybrid, 5) : "";
 
   const evolveFoot = `<div class="prog-evolve-foot reveal" style="${stagger(7)}">
-    <button class="draftbtn prog-evolve-btn" id="progEvolveBtn" type="button">Evolve my plan</button>
-    <span class="prog-evolve-note lbl">asks the coach to draft an updated plan — you review before anything changes</span>
+    <button class="draftbtn prog-evolve-btn" id="progEvolveBtn" type="button">Ask team for a fresh program read</button>
+    <span class="prog-evolve-note lbl">Optional override — your team already monitors and adapts the program in the background</span>
     <button id="progTidyBtn" class="ghostbtn" style="width:100%;text-align:center;padding:9px;margin-top:11px" type="button">Tidy exercise names</button>
     <span class="prog-evolve-note lbl">Different logs name the same lift differently — Cairn merges duplicates so each one tracks as one line. Runs automatically as you log.</span>
   </div>`;
@@ -293,7 +300,7 @@ function paintProgressProgramBody(data: ProgressProgramState, deps: ClientProgre
           "drafting your recovery week",
           "checking it against your constraints",
         ],
-        toast: "Recovery week drafted — review it in your Plan",
+        toast: "Recovery week ready for your review",
       });
     });
 

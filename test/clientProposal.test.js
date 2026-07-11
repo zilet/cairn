@@ -79,7 +79,10 @@ test("proposal helper renders strength and run prescriptions without Dundefined"
   assert.match(timed, /Dead hang/);
   assert.match(timed, /45s/);
   assert.doesNotMatch(timed, /undefined/);
-  assert.equal(proposal.runTargetText({ target_distance_km: 8, target_duration_min: 45, target_zone: "Z2" }), "8 km · 45 min · Z2");
+  assert.equal(
+    proposal.runTargetText({ target_distance_km: 8, target_duration_min: 45, target_zone: "Z2" }),
+    "8 km · 45 min · Z2"
+  );
   assert.equal(proposal.runTargetText({}), "run");
 });
 
@@ -105,7 +108,9 @@ test("proposal helper renders Coach proposal list with actions, folds, and escap
         parsed: {
           summary: "Push <carefully>",
           changes: [{ exercise: "Bench <Press>", day_number: 2, target_weight: 155, reason: "earned <it>" }],
-          cardio: [{ day_number: 3, label: "Easy <run>", target_distance_km: 5, target_zone: "Z2", reason: "base <work>" }],
+          cardio: [
+            { day_number: 3, label: "Easy <run>", target_distance_km: 5, target_zone: "Z2", reason: "base <work>" },
+          ],
           notes: "Hold <form>",
         },
       },
@@ -144,6 +149,22 @@ test("proposal helper renders Coach proposal list with actions, folds, and escap
 test("proposal helper renders Coach proposal empty state", () => {
   const proposal = loadProposal();
 
-  assert.match(proposal.coachProposalListHtml([]), /No drafts yet/);
-  assert.match(proposal.coachProposalListHtml(null), /No drafts yet/);
+  assert.match(proposal.coachProposalListHtml([]), /No program decisions yet/);
+  assert.match(proposal.coachProposalListHtml(null), /adapt bounded details in the background/);
+});
+
+test("proposal helper treats an autonomy-scheduled draft as upcoming, not Apply work", () => {
+  const proposal = loadProposal();
+  const html = proposal.coachProposalCardHtml(
+    {
+      id: 9,
+      status: "draft",
+      agent: "team",
+      parsed: { summary: "A lighter week", days: [{ day_number: 1 }] },
+      autonomy: { status: "announced", effective_date: "2026-07-13" },
+    },
+    0
+  );
+  assert.match(html, /Scheduled for 2026-07-13/);
+  assert.doesNotMatch(html, /data-apply/);
 });

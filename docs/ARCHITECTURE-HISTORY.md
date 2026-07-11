@@ -4,6 +4,29 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-07-11 — continuous expert-team stewardship
+
+A no-schema **v1.0.3** autonomy-alignment round closes the remaining legacy
+draft/apply seams beneath Amendment 1. Manual program reviews, weekly and
+data-triggered evolution, strength progression, endurance run programming,
+adaptive nutrition, and verified meal planning now route through one
+server-owned policy. In Lead mode, bounded reversible changes land at the next
+un-lived natural boundary; structural changes announce first; review posture
+still holds a draft; goal-identity and clinical decisions still ask.
+
+Meal planning is now a coordinated downstream expression of the whole picture.
+A scheduled meal week leaves the currently accepted plan active until its food-day
+boundary, supersedes older queued alternatives, and retains the previous week as
+an exact one-tap rollback. A landed nutrition target asks the background team to
+refresh meals from the newly active calories and macros. Plan and Meals surfaces
+show calm upcoming information instead of Apply/Replan chores, while Hold, Undo,
+manual review, and chat direction remain immediate override paths. No schema
+migration was required; the rollback ledger's existing text kind now also accepts
+`meal_plan` snapshots, and the PWA cache advances to `cairn-v469`.
+The meal specialist also carries the same goal/floor distinction as training and
+chat: during a cut, continued strength and muscle development remain the objective;
+lean-mass preservation is a non-negotiable floor, never the headline aspiration.
+
 ## 2026-07-11 — strength development remains the goal
 
 A no-schema **v1.0.2** correction separates the athlete's aspiration from the

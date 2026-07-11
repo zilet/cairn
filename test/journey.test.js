@@ -140,5 +140,7 @@ test("nutrition prompts receive the journey arc without auto-applying phases", (
   const p = buildMealPlanPrompt();
   assert.match(p, /THE ARC/);
   assert.match(p, /active phase: cut/);
+  assert.match(p, /continued strength and muscle\s+DEVELOPMENT remain the objective/);
+  assert.match(p, /preservation is the universal safety floor, not the aspiration/);
   assert.match(p, /nothing auto-applies/i);
 });

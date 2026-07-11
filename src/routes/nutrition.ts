@@ -65,8 +65,9 @@ nutritionRouter.get("/nutrition/day", (req, res) => {
 });
 
 // Quiet adaptive-nutrition check-in: when the derived expenditure has drifted
-// meaningfully off the goal, the agent drafts a calorie/macro target CHANGE as a
-// DRAFT proposal to review — never auto-applied. Most weeks nothing has moved
+// meaningfully off the goal, the agent proposes a bounded calorie/macro change and
+// the server autonomy policy either schedules it for the next food-day boundary or
+// holds it under explicit review posture. Most weeks nothing has moved
 // (change:false) and no proposal is created. ok:false (status 200) is the
 // designed failure signal, mirroring the swap/recipe endpoints.
 nutritionRouter.post("/nutrition/checkin", async (req, res) => {

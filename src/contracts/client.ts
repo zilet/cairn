@@ -105,6 +105,7 @@ export interface ClientCoachingFocusItem {
 // banner announces a reshaped week instead of letting it arrive silently.
 export type ClientRecoveryWeekStatus =
   | { state: "drafted"; proposal_id: number; summary: string | null }
+  | { state: "upcoming"; proposal_id: number; decision_id: number; effective_date: string; summary: string | null }
   | { state: "applied"; applied_on: string; until: string; summary: string | null }
   | null;
 

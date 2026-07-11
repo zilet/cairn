@@ -350,8 +350,10 @@ HARD RULES:
   or a conservative surplus per GOAL MODE), NOT an aggressive crash deficit or a dirty bulk, even if
   the user's requested timeline implies more. If their goal is aggressive, build the sustainable
   plan and say so in notes.
-- Hit the protein target (goal.recommended.protein_g). Protein establishes the lean-mass safety floor;
-  adequate total energy and training-day carbs should also support continued strength development.
+- Hit the protein target (goal.recommended.protein_g). During a cut, continued strength and muscle
+  DEVELOPMENT remain the objective; preservation is the universal safety floor, not the aspiration.
+  Use adequate total energy and training-day carbs to fuel earned progression, and never frame the
+  plan summary/rationale as if merely preserving lean mass were the goal.
 - Never propose intake below ~1500 kcal for this user regardless of math.
 - Favor whole foods; respect any preferences/constraints in memory.
 - Time more carbs around training days; keep it practical and repeatable, not 7 unique gourmet days.

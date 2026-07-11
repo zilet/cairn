@@ -187,7 +187,8 @@ test("progress energy helper renders advisory proposal markup and escapes agent 
   assert.match(html, /180g protein · 250g carbs · 70g fat/);
   assert.match(html, /Add &lt;fuel&gt; around training/);
   assert.match(html, /No &lt;rush&gt; needed/);
-  assert.match(html, /Regenerate meal plan around this/);
+  assert.match(html, /Open meals/);
+  assert.match(html, /review posture/);
   assert.match(html, /Got it/);
   assert.doesNotMatch(html, /<fuel>|<rush>/);
 });
@@ -195,7 +196,14 @@ test("progress energy helper renders advisory proposal markup and escapes agent 
 test("progress energy surface paints and runs durable check-in handlers", async () => {
   const { context, hero, card, checkin, runButton, calls, state, goMeals, dismiss } = loadEnergySurface();
 
-  context.paintEnergyBody({ tdee: 2800, confidence: "high", intake_avg_kcal: 2300, trend_lb_wk: -0.2, points: 21, window_days: 21 });
+  context.paintEnergyBody({
+    tdee: 2800,
+    confidence: "high",
+    intake_avg_kcal: 2300,
+    trend_lb_wk: -0.2,
+    points: 21,
+    window_days: 21,
+  });
   assert.match(hero.innerHTML, /Energy Balance/);
   assert.match(card.innerHTML, /Run a check-in/);
   assert.equal(typeof runButton.listeners.click, "function");

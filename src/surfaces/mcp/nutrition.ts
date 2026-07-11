@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  acceptMealPlan,
   addFoodNote,
   deleteFoodNote,
   estimateExpenditure,
@@ -25,7 +26,7 @@ export function registerNutritionTools(server: McpToolRegistrar) {
 
   server.tool(
     "draft_meal_plan",
-    "Queue a durable goal-aware weekly meal-plan draft and bounded verification pass. Returns a job immediately; poll get_agent_job. The saved result remains a draft and preserves lean-safe, protein, fiber, and longevity floors.",
+    "Queue a durable goal-aware weekly meal-plan refresh and bounded verification pass. Returns a job immediately; poll get_agent_job. In Lead mode the result announces and becomes current at the next food-day boundary with Undo; review posture keeps a draft. Lean-safe, protein, fiber, and longevity floors always apply.",
     {
       agent: z.string().optional().describe("omit or 'auto' to use the configured rotation"),
       instruction: z.string().optional(),
@@ -43,7 +44,7 @@ export function registerNutritionTools(server: McpToolRegistrar) {
 
   server.tool(
     "nutrition_checkin",
-    "Queue a quiet adaptive-nutrition check-in. Returns a job immediately; poll get_agent_job. Meaningful drift may create a bounded proposal; thin logging lowers confidence and cannot itself cut the target.",
+    "Queue a quiet adaptive-nutrition check-in. Returns a job immediately; poll get_agent_job. Meaningful drift may schedule a bounded reversible target change at the next food-day boundary under Lead mode; review posture holds it. Thin logging lowers confidence and cannot itself cut the target.",
     {
       agent: z.string().optional().describe("omit or 'auto' to use the configured rotation"),
       window: z.number().int().optional().describe("days to derive expenditure over (default 21)"),
@@ -73,7 +74,7 @@ export function registerNutritionTools(server: McpToolRegistrar) {
     "set_meal_plan_status",
     "Accept or discard a drafted meal plan.",
     { id: z.number().int(), status: z.enum(["accepted", "discarded"]) },
-    async ({ id, status }) => asText(setMealPlanStatus(id, status))
+    async ({ id, status }) => asText(status === "accepted" ? acceptMealPlan(id) : setMealPlanStatus(id, status))
   );
 
   server.tool(

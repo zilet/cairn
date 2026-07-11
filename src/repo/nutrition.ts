@@ -258,13 +258,48 @@ export function createMealPlan(agent: string, raw: string, parsed: any) {
   const info = db
     .prepare(`INSERT INTO meal_plans (week_of, agent, raw_output, parsed_json) VALUES (?, ?, ?, ?)`)
     .run(todayISO(), agent, raw || "", stamped ? JSON.stringify(stamped) : null);
-  return hydrate(db.prepare(`SELECT * FROM meal_plans WHERE id = ?`).get(info.lastInsertRowid));
+  return getMealPlan(Number(info.lastInsertRowid));
 }
 
-// The current (non-discarded/non-superseded) meal plan, newest first. Null when none.
+function mealPlanAutonomy(planId: number): any | null {
+  const row = db
+    .prepare(
+      `SELECT id, status, autonomy_tier, effective_date, summary
+       FROM brain_decisions
+       WHERE kind = 'meal_plan' AND source_ref_type = 'meal_plan' AND source_ref_key = ?
+         AND status IN ('announced','pending','applied')
+       ORDER BY id DESC LIMIT 1`
+    )
+    .get(String(planId)) as any;
+  return row
+    ? {
+        id: Number(row.id),
+        status: String(row.status),
+        tier: String(row.autonomy_tier),
+        effective_date: row.effective_date == null ? null : String(row.effective_date),
+        summary: row.summary == null ? null : String(row.summary),
+      }
+    : null;
+}
+
+function withMealPlanAutonomy(plan: any): any {
+  return plan?.id ? { ...plan, autonomy: mealPlanAutonomy(Number(plan.id)) } : plan;
+}
+
+// The current meal plan prefers one that has actually landed. An announced draft is
+// an upcoming week, not today's menu; it must not silently replace the accepted plan
+// before its natural boundary. With no accepted history, a draft remains a useful
+// preview/fallback for a new installation.
 export function currentMealPlan() {
-  const row = db.prepare(`SELECT * FROM meal_plans WHERE status NOT IN ('discarded', 'superseded') ORDER BY id DESC LIMIT 1`).get();
-  return row ? hydrate(row) : null;
+  const row = db
+    .prepare(
+      `SELECT * FROM meal_plans
+       WHERE status NOT IN ('discarded', 'superseded')
+       ORDER BY CASE WHEN status IN ('accepted','applied','kept') THEN 0 ELSE 1 END, id DESC
+       LIMIT 1`
+    )
+    .get();
+  return row ? withMealPlanAutonomy(hydrate(row)) : null;
 }
 
 const WEEKDAY_ABBR = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
@@ -317,7 +352,7 @@ export function mealPlanForCoach() {
 
 export function listMealPlans(limit = 10) {
   return (db.prepare(`SELECT * FROM meal_plans ORDER BY id DESC LIMIT ?`).all(limit) as any[]).map((row) => {
-    const plan = hydrate(row);
+    const plan = withMealPlanAutonomy(hydrate(row));
     // Additive freshness flag so the PWA can show a quiet "worth re-drafting" chip on
     // a live plan that a newer lab/directive has outrun. Only meaningful for a live
     // (draft/accepted) plan; a discarded one is history.
@@ -399,17 +434,17 @@ function recordMealPlanStatusDecision(plan: any, transition: string): void {
   }
 }
 
-export function setMealPlanStatus(id: number, status: string) {
+export function setMealPlanStatus(id: number, status: string, opts: { recordDecision?: boolean } = {}) {
   db.prepare(`UPDATE meal_plans SET status = ? WHERE id = ?`).run(status, id);
-  const plan = hydrate(db.prepare(`SELECT * FROM meal_plans WHERE id = ?`).get(id));
-  if (plan) recordMealPlanStatusDecision(plan, status);
+  const plan = withMealPlanAutonomy(hydrate(db.prepare(`SELECT * FROM meal_plans WHERE id = ?`).get(id)));
+  if (plan && opts.recordDecision !== false) recordMealPlanStatusDecision(plan, status);
   return plan;
 }
 
 // Accepting a meal plan retires the OTHER open meal-plan drafts — they were
 // alternative weeks, so once one is kept the rest are stale. Marked 'superseded'
 // (the system retiring them), distinct from a user 'discarded'.
-export function acceptMealPlan(id: number) {
+export function acceptMealPlan(id: number, opts: { recordDecision?: boolean } = {}) {
   const plan = getMealPlan(id);
   if (!plan) return null;
   let goal: any = null;
@@ -427,13 +462,18 @@ export function acceptMealPlan(id: number) {
     db.prepare(`UPDATE meal_plans SET parsed_json = ? WHERE id = ?`).run(JSON.stringify(safeParsed), id);
   }
   const siblings = db
-    .prepare(`SELECT * FROM meal_plans WHERE status = 'draft' AND id != ?`)
+    .prepare(`SELECT * FROM meal_plans WHERE status IN ('draft','accepted','applied','kept') AND id != ?`)
     .all(id)
     .map(hydrate)
     .filter(Boolean);
-  db.prepare(`UPDATE meal_plans SET status = 'superseded' WHERE status = 'draft' AND id != ?`).run(id);
-  for (const sibling of siblings) recordMealPlanStatusDecision({ ...sibling, status: "superseded" }, "superseded");
-  const accepted = setMealPlanStatus(id, "accepted");
+  db.prepare(
+    `UPDATE meal_plans SET status = 'superseded'
+     WHERE status IN ('draft','accepted','applied','kept') AND id != ?`
+  ).run(id);
+  if (opts.recordDecision !== false) {
+    for (const sibling of siblings) recordMealPlanStatusDecision({ ...sibling, status: "superseded" }, "superseded");
+  }
+  const accepted = setMealPlanStatus(id, "accepted", opts);
   if (accepted)
     emitBrainEvent({
       kind: "meal_plan_changed",
@@ -447,7 +487,7 @@ export function acceptMealPlan(id: number) {
 
 export function getMealPlan(id: number) {
   const row = db.prepare(`SELECT * FROM meal_plans WHERE id = ?`).get(id);
-  return row ? hydrate(row) : null;
+  return row ? withMealPlanAutonomy(hydrate(row)) : null;
 }
 
 // Agent (and PWA) supplied meal objects are coerced/clamped before write —

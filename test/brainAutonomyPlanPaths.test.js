@@ -104,11 +104,7 @@ test("review_everything: a progression stays a plain reviewable draft — nothin
   assert.equal(out.autonomy.tier, "ask");
   assert.equal(repo.getProposal(out.proposal.id).status, "draft", "the draft parks exactly as today");
   assert.equal(repo.getPlanDay(1).items[0].target_weight, 185, "the plan is untouched");
-  assert.equal(
-    repo.listBrainDecisions({ kind: "training_target" }).length,
-    0,
-    "review_everything records no decision"
-  );
+  assert.equal(repo.listBrainDecisions({ kind: "training_target" }).length, 0, "review_everything records no decision");
 });
 
 test("lead mode: a structural days-restructure announces first, never quiet-applies", () => {
@@ -171,7 +167,11 @@ test("lead mode: the recovery-week stamp fires when the autonomy layer applies t
 
   const out = applyProposalWithAutonomy(proposal.id);
   assert.equal(out.announced, true);
-  assert.equal(repo.recoveryWeekStatus().state, "drafted", "it waits, visible as the pending recovery week");
+  assert.equal(
+    repo.recoveryWeekStatus().state,
+    "upcoming",
+    "it waits with an effective date, visible as an automatically scheduled recovery week"
+  );
 
   const due = applyDueAnnouncedDecisions(out.effective_date);
   assert.deepEqual(due.applied, [out.decision.id]);
@@ -375,7 +375,12 @@ test("the canonical recovery-week draft is stamped domain 'recovery' at write ti
   const proposal = repo.createProposal("stub", repo.RECOVERY_WEEK_INSTRUCTION, "", {
     summary: "Next week backs the volume off so the adaptation lands.",
     days: [
-      { day_number: 1, name: "Full (light)", focus: "Full", items: [{ exercise: "Barbell Bench Press", sets: 2, rep_low: 6, rep_high: 8, target_weight: 95 }] },
+      {
+        day_number: 1,
+        name: "Full (light)",
+        focus: "Full",
+        items: [{ exercise: "Barbell Bench Press", sets: 2, rep_low: 6, rep_high: 8, target_weight: 95 }],
+      },
     ],
   });
   const out = applyProposalWithAutonomy(proposal.id);
@@ -389,7 +394,12 @@ test("the canonical recovery-week draft is stamped domain 'recovery' at write ti
   const other = repo.createProposal("stub", "restructure the split", "", {
     summary: "Redistribute so legs get a lighter midweek touch.",
     days: [
-      { day_number: 1, name: "Upper", focus: "Upper", items: [{ exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 115 }] },
+      {
+        day_number: 1,
+        name: "Upper",
+        focus: "Upper",
+        items: [{ exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 115 }],
+      },
     ],
   });
   const out2 = applyProposalWithAutonomy(other.id);

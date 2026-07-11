@@ -21,7 +21,7 @@ function agentName(agent: CoachAgent): string {
 
 // ---------- Coach ----------
 async function renderCoach(): Promise<void> {
-  headerTitle.textContent = "Drafts";
+  headerTitle.textContent = "Expert team";
   state.planSeg = "coach";
   view.innerHTML = segSkeleton("coach", planSeg(), 2);
   const agents = coachMealRows<CoachAgent>(await api("/agents"));
@@ -33,7 +33,7 @@ async function renderCoach(): Promise<void> {
     ).join("");
 
   await skelSwap(() => { view.innerHTML = segBar("coach", planSeg()) + `
-    <p class="drafts-lede sess-line" style="color:var(--muted);margin:2px 2px 16px;line-height:1.5">Your coach's plan &amp; meal drafts wait here — nothing changes until you review and apply it. Talk to your coach anytime in the <button class="linkbtn linkbtn-plain" id="draftsToChat" type="button">Coach</button> tab.</p>
+    <p class="drafts-lede sess-line" style="color:var(--muted);margin:2px 2px 16px;line-height:1.5">Your expert team continuously reads training, nutrition, recovery, health, schedule, and your notes as one picture. In Lead mode, bounded changes land at natural boundaries with a calm heads-up and Undo; this screen keeps the history and manual override paths. Talk to the team anytime in the <button class="linkbtn linkbtn-plain" id="draftsToChat" type="button">Coach</button> tab.</p>
     <div class="field"><label>Agent</label>
       <select id="agentsel">${agentOpts || "<option>none configured</option>"}</select></div>
     <div class="field"><label>Instruction (optional)</label>
@@ -46,13 +46,13 @@ async function renderCoach(): Promise<void> {
     <div class="field" id="customwrap" style="display:none">
       <textarea id="custominstr" rows="3" class="form-textarea" placeholder="e.g. focus on lower body; hold everything else\u2026"></textarea>
     </div>
-    <button id="runbtn" class="logbtn" style="width:100%;height:46px;font-size:1rem;letter-spacing:.05em">DRAFT PLAN UPDATE</button>
+    <button id="runbtn" class="logbtn" style="width:100%;height:46px;font-size:1rem;letter-spacing:.05em">ASK TEAM TO REVIEW PROGRAM</button>
     <div id="runstatus" style="margin-top:10px;color:var(--muted);font-size:.85rem"></div>
-    <button id="mealbtn" class="draftbtn" style="width:100%;height:46px;font-size:1rem;margin-top:14px;letter-spacing:.05em">DRAFT WEEKLY MEAL PLAN</button>
+    <button id="mealbtn" class="draftbtn" style="width:100%;height:46px;font-size:1rem;margin-top:14px;letter-spacing:.05em">ASK TEAM TO REFRESH MEALS</button>
     <div id="mealstatus" style="margin-top:10px;color:var(--muted);font-size:.85rem"></div>
-    <h1 class="lbl" style="margin:24px 0 8px">Proposals</h1>
+    <h1 class="lbl" style="margin:24px 0 8px">Program decisions</h1>
     <div id="proplist"></div>
-    <h1 class="lbl" style="margin:24px 0 8px">Meal plans</h1>
+    <h1 class="lbl" style="margin:24px 0 8px">Meal-plan decisions</h1>
     <div id="meallist"></div>`; });
 
   wireSeg(PLAN_HANDLERS);
@@ -153,6 +153,12 @@ async function renderMeals(): Promise<unknown> {
 // wiring is idempotent (it re-queries the freshly-written DOM each time).
 function paintMealsBody(plans: unknown, mealPrefs: string): void {
   const current = CairnMealPlan.currentMealPlan(plans);
+  const upcoming = Array.isArray(plans)
+    ? plans.find((plan) => {
+        const row = plan && typeof plan === "object" ? plan as Record<string, any> : {};
+        return row.status === "draft" && ["announced", "pending"].includes(String(row.autonomy?.status));
+      })
+    : null;
   const currentPlan = current && (typeof current.id === "string" || typeof current.id === "number")
     ? current as Record<string, unknown> & { id: string | number }
     : null;
@@ -160,6 +166,7 @@ function paintMealsBody(plans: unknown, mealPrefs: string): void {
   const painted = CairnMealPlan.mealPlannerBodyHtml(current, mealPrefs, {
     checkedShopping: shopChecked,
     verified: currentPlan ? CairnMealPlannerController.verifiedForPlan(currentPlan.id) : null,
+    upcoming,
   });
   const body = painted.html;
   const ctx = painted.context;

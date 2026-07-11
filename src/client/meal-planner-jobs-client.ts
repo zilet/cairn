@@ -29,7 +29,7 @@ var MEALS_SETTINGS_KEY = "meals:settings";
 const mealPlannerJobVerifiedByPlan = new Map<string | number, unknown>();
 
 function mealPlannerJobRecord(value: unknown): MealPlannerJobRecord {
-  return value && typeof value === "object" ? value as MealPlannerJobRecord : {};
+  return value && typeof value === "object" ? (value as MealPlannerJobRecord) : {};
 }
 
 function mealPlannerJobErrorMessage(value: unknown): string | undefined {
@@ -42,7 +42,8 @@ function mealPlannerJobRestoreBusy(value: Element | null | undefined): void {
 }
 
 function mealPlannerDraftFailLine(err: unknown): string {
-  if (mealPlannerJobRecord(err).agent_status === "unconfigured") return "Drafting a plan needs a coaching agent — connect one in Settings.";
+  if (mealPlannerJobRecord(err).agent_status === "unconfigured")
+    return "Drafting a plan needs a coaching agent — connect one in Settings.";
   if (err) return "The coach replied but didn't return a plan — try again.";
   return "Couldn't reach the coach — check your connection.";
 }
@@ -87,11 +88,18 @@ function mealPlannerJobCoachMealPlanOpOpts(): MealPlannerJobOpOptions {
     render: async (r: unknown) => {
       mealPlannerRememberVerified(r);
       const status = $("#mealstatus");
-      if (status) status.textContent = "Meal plan ready.";
+      const autonomy = mealPlannerJobRecord(mealPlannerJobRecord(r).autonomy);
+      if (status)
+        status.textContent =
+          autonomy.announced || autonomy.pending
+            ? "Meal plan ready — it will become current at the next food-day boundary."
+            : "Meal plan ready.";
       const btn = $("#mealbtn");
       mealPlannerJobRestoreBusy(btn);
       swrInvalidate(MEALS_KEY);
-      try { CairnMealPlannerController.renderMealPlans(await api("/mealplans?limit=8")); } catch {}
+      try {
+        CairnMealPlannerController.renderMealPlans(await api("/mealplans?limit=8"));
+      } catch {}
     },
     onFail: (err?: unknown) => {
       const status = $("#mealstatus");
@@ -123,7 +131,10 @@ function mealPlannerJobMealPlanDraftOpOpts(): MealPlannerJobOpOptions {
     },
     render: (r: unknown) => {
       mealPlannerRememberVerified(r);
-      toast("Meal plan drafted");
+      const autonomy = mealPlannerJobRecord(mealPlannerJobRecord(r).autonomy);
+      toast(
+        autonomy.announced || autonomy.pending ? "Meals refreshed — the next plan is scheduled" : "Meal plan ready"
+      );
       swrInvalidate(MEALS_KEY);
       renderMeals();
     },
@@ -140,7 +151,7 @@ function mealPlannerJobReconnectStatusHost(
   o: MealPlannerJobOpOptions,
   statusSel: string,
   btnSel: string | null,
-  ghost: boolean,
+  ghost: boolean
 ): ClientAgentOpHandlers | null {
   const status = view.querySelector<HTMLElement>(statusSel);
   if (!status) return null;
@@ -161,15 +172,30 @@ function mealPlannerJobReconnectStatusHost(
   };
   return {
     guard: o.guard,
-    onDone: (result) => { clear(); if (o.isFail(result)) o.onFail(result); else o.render(result); },
-    onError: () => { clear(); o.onFail(null); },
-    onCanceled: () => { clear(); o.onFail(null); },
+    onDone: (result) => {
+      clear();
+      if (o.isFail(result)) o.onFail(result);
+      else o.render(result);
+    },
+    onError: () => {
+      clear();
+      o.onFail(null);
+    },
+    onCanceled: () => {
+      clear();
+      o.onFail(null);
+    },
   };
 }
 
 function mealPlannerJobReconnectMealPlan(): ClientAgentOpHandlers | null {
   if (view.querySelector("#mealDraftStatus")) {
-    return mealPlannerJobReconnectStatusHost(mealPlannerJobMealPlanDraftOpOpts(), "#mealDraftStatus", "#mealDraftBtn", true);
+    return mealPlannerJobReconnectStatusHost(
+      mealPlannerJobMealPlanDraftOpOpts(),
+      "#mealDraftStatus",
+      "#mealDraftBtn",
+      true
+    );
   }
   if (view.querySelector("#mealstatus")) {
     return mealPlannerJobReconnectStatusHost(mealPlannerJobCoachMealPlanOpOpts(), "#mealstatus", "#mealbtn", false);

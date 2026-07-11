@@ -149,6 +149,11 @@ test("a quiet nutrition adjustment waits for the next day boundary", () => {
   assert.equal(repo.getProposal(proposal.id).status, "applied");
   assert.equal(repo.getBrainDecision(pending.decision.id).status, "applied");
   assert.equal(repo.listBrainDecisions({ kind: "nutrition_target" }).length, 1);
+  assert.equal(
+    repo.getAppState("meal_plan_refresh_requested"),
+    pending.effective_date,
+    "a landed fuel target asks the background team to realign meals"
+  );
 });
 
 test("surprise-budget exhaustion requires an explicit review instead of silently announcing", () => {

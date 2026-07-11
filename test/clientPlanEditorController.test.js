@@ -314,6 +314,18 @@ test("the Plan recovery banner announces a reshaped week — drafted asks, appli
   assert.match(drafted, /id="planRecoveryReview"/, "one tap to Drafts");
   assert.match(drafted, /Working sets &lt;halved&gt;/, "the coach's summary, escaped");
 
+  // Upcoming in Lead mode: informed, automatic, and reversible — never an Apply ritual.
+  const upcoming = banner({
+    state: "upcoming",
+    proposal_id: 5,
+    decision_id: 8,
+    effective_date: "2026-07-13",
+    summary: "Working sets halved, same movement patterns.",
+  });
+  assert.match(upcoming, /lands automatically/i);
+  assert.match(upcoming, /Hold it before then or Undo after it lands/);
+  assert.doesNotMatch(upcoming, /planRecoveryReview/);
+
   // Applied: a calm heads-up — what this week is, what changed, when building resumes.
   const applied = banner({ state: "applied", applied_on: "2026-07-10", until: "2026-07-17", summary: "Volume −50% across all days." });
   assert.match(applied, /RECOVERY WEEK/);

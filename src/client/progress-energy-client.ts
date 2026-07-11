@@ -33,6 +33,7 @@ type NutritionProposal = {
 type NutritionCheckinResult = {
   proposal?: unknown;
   summary?: unknown;
+  autonomy?: unknown;
 };
 
 (() => {
@@ -138,6 +139,8 @@ function proposalPayload(result: NutritionCheckinResult | null | undefined): Nut
 
 function nutritionCheckinProposalHtml(result: NutritionCheckinResult | null | undefined): string {
   const parsed = proposalPayload(result);
+  const autonomy = record(result?.autonomy);
+  const scheduled = autonomy.pending === true || autonomy.announced === true;
   const nutrition = record(parsed.nutrition);
   const target = Number(nutrition.target_kcal);
   const prev = nutrition.prev_target_kcal != null ? Number(nutrition.prev_target_kcal) : null;
@@ -149,7 +152,7 @@ function nutritionCheckinProposalHtml(result: NutritionCheckinResult | null | un
   const reason = nutrition.reason || parsed.summary || "";
   const notes = parsed.notes && String(parsed.notes).trim();
   return `<section class="eb-proposal well-accent settle-in">
-      <div class="eb-kicker lbl"><span class="eb-glyph" aria-hidden="true">◇</span> A target worth considering</div>
+      <div class="eb-kicker lbl"><span class="eb-glyph" aria-hidden="true">◇</span> ${scheduled ? "Your team adjusted the next target" : "A target worth considering"}</div>
       <div class="eb-target">
         <span class="numeral numeral-lg"${Number.isFinite(target) ? ` data-cu="${Math.round(target)}"` : ""}>${Number.isFinite(target) ? "0" : "—"}</span>
         <span class="eb-target-unit lbl">kcal / day${delta != null ? ` · ${delta > 0 ? "+" : ""}${kcalFmt(delta)} vs now` : ""}</span>
@@ -158,10 +161,10 @@ function nutritionCheckinProposalHtml(result: NutritionCheckinResult | null | un
       ${reason ? `<p class="eb-why">${escHtml(String(reason))}</p>` : ""}
       ${notes ? `<p class="eb-body">${escHtml(notes)}</p>` : ""}
       <div class="eb-foot">
-        <button class="draftbtn" id="ckGoMeals" type="button">Regenerate meal plan around this</button>
+        <button class="draftbtn" id="ckGoMeals" type="button">Open meals</button>
         <button class="ghostbtn" id="ckDismiss" type="button">Got it</button>
       </div>
-      <div class="eb-advisory lbl">advisory — nothing changes until you act on it</div>
+      <div class="eb-advisory lbl">${scheduled ? `lands ${escHtml(String(autonomy.effective_date || "at the next food-day boundary"))} · meals refresh in the background · Undo available` : "review posture — your call before anything changes"}</div>
     </section>`;
 }
 

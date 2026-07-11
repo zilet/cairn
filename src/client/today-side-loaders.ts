@@ -127,7 +127,8 @@ type TodaySideLoaderDeps = {
     wrap.innerHTML = CairnTodayContext.contextBannerHtml(events);
   }
 
-  // Today: quiet card when the coach has drafted a plan change waiting for review.
+  // Today: quiet card only for a genuine review-posture draft. Lead-mode changes
+  // already appear in the forward-looking decision rail and must not also nag for Apply.
   async function loadDraftProposals(deps: TodaySideLoaderDeps): Promise<void> {
     const slot = deps.root.querySelector<HTMLElement>("#draftSlot");
     if (!slot) return;
@@ -135,16 +136,20 @@ type TodaySideLoaderDeps = {
     try { plans = await deps.api("/proposals?limit=8"); } catch { return; }
     if (!isCurrentToday(deps) || !slot.isConnected) return;
     const drafts = (Array.isArray(plans) ? plans : [])
-      .filter((p) => p && typeof p === "object" && (p as { status?: unknown }).status === "draft");
+      .filter((p) => {
+        if (!p || typeof p !== "object" || (p as { status?: unknown }).status !== "draft") return false;
+        const autonomy = (p as { autonomy?: { status?: unknown } }).autonomy;
+        return autonomy?.status !== "announced" && autonomy?.status !== "pending";
+      });
     if (!drafts.length) { slot.innerHTML = ""; return; }
-    const head = drafts.length > 1 ? `${drafts.length} plan changes are waiting` : "A plan change is waiting";
+    const head = drafts.length > 1 ? `${drafts.length} decisions need your call` : "A plan decision needs your call";
     const raw = String((drafts[0] as { instruction?: unknown }).instruction || "").replace(/^(auto|chat):\s*/i, "").trim();
     const sub = raw ? raw.charAt(0).toUpperCase() + raw.slice(1) : "Drafted by your coach";
     slot.innerHTML = `<button class="draft-card reveal" id="draftCard" style="--i:0" type="button">
       <span class="draft-ico" aria-hidden="true">✦</span>
       <span class="draft-body">
         <span class="draft-h">${deps.escapeHtml(head)}</span>
-        <span class="draft-sub">${deps.escapeHtml(sub)} · review</span>
+        <span class="draft-sub">${deps.escapeHtml(sub)} · review posture</span>
       </span>
       <span class="draft-go" aria-hidden="true">→</span>
     </button>`;

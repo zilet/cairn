@@ -1409,6 +1409,7 @@ export interface ClientMealPlan {
   parsed?: unknown;
   parsed_json?: unknown;
   created_at?: string;
+  autonomy?: ClientProposalAutonomy | null;
   [key: string]: unknown;
 }
 
@@ -1420,6 +1421,7 @@ export interface ClientProposal {
   parsed?: unknown;
   parsed_json?: unknown;
   created_at?: string;
+  autonomy?: ClientProposalAutonomy | null;
   [key: string]: unknown;
 }
 
@@ -1452,6 +1454,7 @@ export interface ClientMealPlanDraftResponse extends ClientOkResponse {
   ok: boolean;
   plan?: ClientMealPlan;
   verified?: ClientAgentVerification | null;
+  autonomy?: ClientProposalAutonomy | null;
   agent_status?: string;
 }
 

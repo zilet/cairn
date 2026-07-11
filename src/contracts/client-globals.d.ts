@@ -2318,7 +2318,7 @@ declare global {
       mealPlanEmptyHtml(mealPrefs: unknown): string;
       mealPlanHeroHtml(plan: unknown, verified?: unknown): string;
       mealShoppingHtml(shopping: unknown, checkedShopping: unknown, revealIndex: number): string;
-      mealPlannerBodyHtml(current: unknown, mealPrefs: unknown, options?: { checkedShopping?: unknown; verified?: unknown; now?: unknown }): {
+      mealPlannerBodyHtml(current: unknown, mealPrefs: unknown, options?: { checkedShopping?: unknown; verified?: unknown; now?: unknown; upcoming?: unknown }): {
         html: string;
         context: { weekOf: string; targetKcal: number; todayName: string } | null;
       };

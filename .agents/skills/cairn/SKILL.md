@@ -44,13 +44,16 @@ use the token support provided by the client).
   is flagged aggressive, say so and quote the lean-safe recommendation.
 - **"I'm down to 176 / push my goal date / change my weight"** → `set_profile` (any subset).
 - **"Update my plan / progress my targets for next week"** → `draft_plan_update` with `agent: "auto"`
-  (uses the user's configured rotation). It returns a DRAFT — never auto-apply. Summarize the proposed
-  changes, then ask the user to confirm before calling `apply_proposal`.
+  (uses the user's configured rotation), then route the result through `apply_proposal_with_autonomy`.
+  In Lead mode, bounded reversible changes land now or at the next natural boundary; structural changes
+  announce first. Review mode still returns a draft that needs confirmation.
 - **"Make next week 4/5/7 days / change my split"** → restructure the plan. Use `set_plan` to replace the
   whole week (days not included are removed), or `save_plan_day` / `delete_plan_day` for one day. Build
   sensible days that honor injury `constraint_note`s and carry weights over where it makes sense; show
   the proposed split and confirm before writing.
-- **"Draft a meal plan for the week"** → `draft_meal_plan` (`agent: "auto"`). Summarize; it's a draft.
+- **"Draft / refresh a meal plan for the week"** → `draft_meal_plan` (`agent: "auto"`). In Lead mode,
+  the returned `autonomy` sidecar announces when it becomes current automatically; summarize the upcoming
+  plan and date. In review posture it remains a draft and needs confirmation.
 - **"Remember that I … / I prefer …"** → `add_memory` (dedupes exact repeats). Memory feeds every
   future coach prompt. **"Fix / forget what you remember about …"** → `update_memory` / `delete_memory`
   (the user can also curate this in the app's Me → Memory view).
@@ -69,8 +72,10 @@ use the token support provided by the client).
 
 ## Rules
 
-- Coaching outputs (`draft_plan_update`, `draft_meal_plan`) are **proposals**. Show them and get
-  explicit confirmation before `apply_proposal`. Applying changes the live plan.
+- Coaching outputs are ledgered proposals governed by Cairn's server autonomy policy. Under Lead mode,
+  bounded reversible adaptations land at natural boundaries with rationale and Undo; structural changes
+  announce first. Ask explicitly only for goal-identity, clinical, user-locked, high-risk, stale, or
+  configured review-everything decisions. Never bypass the server policy with a direct apply.
 - Respect injury constraints in the plan and in `list_memory`; never suggest contradicting them.
 - For weight loss, defer to Cairn's lean-safe math (`get_goal_check`) — don't endorse crash deficits.
 - After any write, read back what was stored so the user can confirm it landed.

@@ -28,7 +28,8 @@ function loadMealPlan() {
     art: (_kind, text) => `art:${text}`,
     artImg: (_kind, text, className) => `<span class="${testEsc(className)}">${testEsc(text)}</span>`,
     statusBadge: (status) => `<span class="status">${testEsc(status)}</span>`,
-    verifiedBadgeHtml: (verified) => verified ? `<span class="verified">${testEsc(JSON.stringify(verified))}</span>` : "",
+    verifiedBadgeHtml: (verified) =>
+      verified ? `<span class="verified">${testEsc(JSON.stringify(verified))}</span>` : "",
     stagger: (index) => `--i:${index}`,
   };
   context.window = context;
@@ -227,4 +228,27 @@ test("meal-plan helper preserves draft actions in the planner shell", () => {
   assert.match(painted.html, /test&lt;ok&gt;/);
   assert.equal(painted.context.weekOf, "2026-06-30");
   assert.equal(painted.context.todayName, "mon");
+});
+
+test("meal-plan helper presents an autonomy-scheduled week as upcoming without Accept", () => {
+  const meals = loadMealPlan();
+  const upcoming = {
+    id: 12,
+    status: "draft",
+    agent: "team",
+    parsed: { summary: "Fuel the next block", daily_kcal: 2300, daily_protein_g: 175, days: [] },
+    autonomy: {
+      status: "announced",
+      effective_date: "2026-07-13",
+      summary: "Meals realigned around the next training block.",
+    },
+  };
+  const history = meals.mealPlanCardHtml(upcoming, 0);
+  const painted = meals.mealPlannerBodyHtml(upcoming, "", { upcoming });
+
+  assert.match(history, /automatic and reversible/);
+  assert.doesNotMatch(history, /data-accept|data-discard/);
+  assert.match(painted.html, /COMING UP/);
+  assert.match(painted.html, /No Apply step/);
+  assert.doesNotMatch(painted.html, /data-mkeep|data-mdiscard/);
 });

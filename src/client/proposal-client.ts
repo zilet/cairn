@@ -95,7 +95,9 @@ type ApplyResultMessage = {
   function isOpenProposal(proposal: unknown): boolean {
     const p = proposalRecord(proposal);
     const parsed = proposalRecord(p.parsed);
-    return p.status === "draft" && (
+    const autonomy = proposalRecord(p.autonomy);
+    const scheduled = autonomy.status === "announced" || autonomy.status === "pending";
+    return p.status === "draft" && !scheduled && (
       (Array.isArray(parsed.changes) && parsed.changes.length > 0) ||
       (Array.isArray(parsed.cardio) && parsed.cardio.length > 0) ||
       (Array.isArray(parsed.days) && parsed.days.length > 0)
@@ -127,6 +129,10 @@ type ApplyResultMessage = {
       ? `<div class="logrow" style="margin-top:10px"><button class="logbtn" style="width:auto;padding:0 14px;font-size:.85rem" data-apply="${escAttr(p.id)}">APPLY</button>
          <button class="ghostbtn" style="width:auto;padding:0 14px" data-discard="${escAttr(p.id)}">DISCARD</button></div>`
       : "";
+    const autonomy = proposalRecord(p.autonomy);
+    const scheduled = p.status === "draft" && (autonomy.status === "announced" || autonomy.status === "pending")
+      ? `<div class="sess-line" style="color:var(--muted);margin-top:10px">Scheduled for ${escHtml(String(autonomy.effective_date || "the next natural boundary"))} · automatic and reversible</div>`
+      : "";
     const applied = p.status === "applied"
       ? `<div class="apply-done settle-in"><span class="apply-done-mark" aria-hidden="true">✓</span> Applied to your plan</div>`
         + clampNoteHtml(appliedClampFor(p, lastApplyClamp))
@@ -136,12 +142,12 @@ type ApplyResultMessage = {
         <span class="lbl">${escHtml(p.agent)} · #${escHtml(p.id)} · ${escHtml(p.created_at || "")}</span>
         ${statusBadge(p.status)}
       </div>
-      ${body}${actions}${applied}</div>`;
+      ${body}${scheduled}${actions}${applied}</div>`;
   }
 
   function coachProposalListHtml(proposals: unknown, lastApplyClamp?: unknown): string {
     const rows = Array.isArray(proposals) ? proposals : [];
-    if (!rows.length) return `<div class="empty">No drafts yet. Ask the coach above for next week's targets — every change waits here for you to apply.</div>`;
+    if (!rows.length) return `<div class="empty">No program decisions yet. The team will adapt bounded details in the background when the signals justify it; you can also ask for a review above.</div>`;
 
     const open = rows.filter(isOpenProposal);
     const settled = rows.filter((p) => !isOpenProposal(p));

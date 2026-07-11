@@ -1,13 +1,17 @@
 import { z } from "zod";
 import { draftCoachProposal, evolveProgram } from "../../coachOps.js";
 import { localToday } from "../../dayread.js";
-import { applyProposalWithAutonomy, buildProgressionWithAutonomy, getCachedDayRead } from "../../domain/brain/index.js";
+import {
+  applyProposalWithAutonomy,
+  buildProgressionWithAutonomy,
+  buildRunPlanWithAutonomy,
+  getCachedDayRead,
+} from "../../domain/brain/index.js";
 import { dexaTargeting } from "../../domain/health/index.js";
 import {
   advanceBlockWeek,
   applyProposal,
   applySwapSmart,
-  buildRunPlanProposal,
   buildSwapProposal,
   createBlock,
   ensureActiveBlock,
@@ -50,7 +54,7 @@ export function registerProgramTools(server: McpToolRegistrar) {
 
   server.tool(
     "draft_plan_update",
-    "Run a coaching agent over recent logs to produce a DRAFT plan-update proposal. Does not change the plan; review then apply_proposal.",
+    "Run a coaching agent over recent logs and route the plan update through Cairn's autonomy policy. In Lead mode bounded reversible changes land now or at a natural boundary and structural changes announce first; review posture keeps a draft. Returns the proposal and autonomy outcome.",
     {
       agent: z
         .string()
@@ -60,7 +64,13 @@ export function registerProgramTools(server: McpToolRegistrar) {
     },
     async ({ agent, instruction }) => {
       const result = await draftCoachProposal(agent, instruction);
-      return asText({ proposal: result.proposal, ok: result.ok, agent: result.agent, tried: result.tried });
+      return asText({
+        proposal: result.proposal,
+        autonomy: result.autonomy,
+        ok: result.ok,
+        agent: result.agent,
+        tried: result.tried,
+      });
     }
   );
 
@@ -249,9 +259,9 @@ export function registerProgramTools(server: McpToolRegistrar) {
 
   server.tool(
     "apply_run_plan",
-    "Build a DRAFT plan proposal from this week's deterministic run mix (weeklyRunPlan) via the existing propose→apply path — applied through setWeeklyRuns, which keeps strength work intact and carries the interval structure. Never auto-applied. Returns { ok:true, proposal } or { ok:false, error } at 200 (the designed failure signal when there's no run plan).",
+    "Build this week's deterministic run mix (weeklyRunPlan) and route it through Cairn's autonomy policy. Lead mode lands the bounded update at a natural boundary with Undo; review posture keeps a draft. setWeeklyRuns preserves strength work and interval structure. Returns { ok:true, proposal, autonomy } or { ok:false, error }.",
     { date: z.string().optional() },
-    async ({ date }) => asText(buildRunPlanProposal(date))
+    async ({ date }) => asText(buildRunPlanWithAutonomy(date))
   );
 
   server.tool(

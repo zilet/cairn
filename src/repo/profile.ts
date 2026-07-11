@@ -71,7 +71,28 @@ function hydrateProposal(row: any) {
   } catch {
     parsed = null;
   }
-  return { ...row, parsed };
+  const autonomy = db
+    .prepare(
+      `SELECT id, status, autonomy_tier, effective_date, summary
+       FROM brain_decisions
+       WHERE source_ref_type = 'plan_proposal' AND source_ref_key = ?
+         AND status IN ('announced','pending','applied')
+       ORDER BY id DESC LIMIT 1`
+    )
+    .get(String(row.id)) as any;
+  return {
+    ...row,
+    parsed,
+    autonomy: autonomy
+      ? {
+          id: Number(autonomy.id),
+          status: String(autonomy.status),
+          tier: String(autonomy.autonomy_tier),
+          effective_date: autonomy.effective_date == null ? null : String(autonomy.effective_date),
+          summary: autonomy.summary == null ? null : String(autonomy.summary),
+        }
+      : null,
+  };
 }
 
 export function setProposalStatus(id: number, status: string) {
@@ -206,6 +227,7 @@ const RECOVERY_WEEK_APPLIED_KEY = "recovery_week_applied";
 
 export type RecoveryWeekStatus =
   | { state: "drafted"; proposal_id: number; summary: string | null }
+  | { state: "upcoming"; proposal_id: number; decision_id: number; effective_date: string; summary: string | null }
   | { state: "applied"; applied_on: string; until: string; summary: string | null }
   | null;
 
@@ -213,6 +235,15 @@ export function recoveryWeekStatus(): RecoveryWeekStatus {
   const draft = pendingRecoveryDraft();
   if (draft) {
     const p = getProposal(draft.id);
+    if ((p?.autonomy?.status === "announced" || p?.autonomy?.status === "pending") && p.autonomy.effective_date) {
+      return {
+        state: "upcoming",
+        proposal_id: draft.id,
+        decision_id: Number(p.autonomy.id),
+        effective_date: String(p.autonomy.effective_date),
+        summary: proposalSummary(p),
+      };
+    }
     return { state: "drafted", proposal_id: draft.id, summary: proposalSummary(p) };
   }
   const appliedOn = String(getAppState(RECOVERY_WEEK_APPLIED_KEY) ?? "");
@@ -1517,9 +1548,10 @@ export function computeGoalCheck(prof?: any) {
           source: "formula" as const,
           effective_date: null,
         };
-  const effectiveMessage = accepted && accepted.target_kcal != null
-    ? `Active target: ~${effective_target.target_kcal} kcal with ~${effective_target.protein_g} g protein${effective_target.carbs_g != null ? `, ${effective_target.carbs_g} g carbs` : ""}${effective_target.fat_g != null ? `, and ${effective_target.fat_g} g fat` : ""}. Cairn will recheck it against your weight trend and training performance.`
-    : message;
+  const effectiveMessage =
+    accepted && accepted.target_kcal != null
+      ? `Active target: ~${effective_target.target_kcal} kcal with ~${effective_target.protein_g} g protein${effective_target.carbs_g != null ? `, ${effective_target.carbs_g} g carbs` : ""}${effective_target.fat_g != null ? `, and ${effective_target.fat_g} g fat` : ""}. Cairn will recheck it against your weight trend and training performance.`
+      : message;
 
   return {
     ok: true,

@@ -69,18 +69,27 @@ function planEditorRoot(): HTMLElement | null {
 }
 
 // The recovery-week banner — a reshaped week announces itself instead of arriving
-// silently. Two states from /plan/recovery-status: a DRAFT waiting ("review and
-// apply it", one tap to Drafts) or the APPLIED lighter week in flight (heads-up +
+// silently. Three states from /plan/recovery-status: review-only DRAFT, an UPCOMING
+// lead-mode week that lands automatically, or the APPLIED lighter week (heads-up +
 // the coach's own summary of what changed + when building resumes). Painted
 // asynchronously into its slot; a null status leaves the plan untouched.
 function planRecoveryBannerHtml(rs: import("../contracts/client.js").ClientRecoveryWeekStatus): string {
-  if (!rs || (rs.state !== "drafted" && rs.state !== "applied")) return "";
+  if (!rs || (rs.state !== "drafted" && rs.state !== "upcoming" && rs.state !== "applied")) return "";
   if (rs.state === "drafted") {
     return `<div class="plan-recovery-banner reveal">
       <span class="lbl plan-recovery-mast">YOUR RECOVERY WEEK</span>
       <p class="plan-recovery-line">Drafted and waiting — nothing changes until you review and apply it.</p>
       ${rs.summary ? `<p class="plan-recovery-summary">${escHtml(rs.summary)}</p>` : ""}
       <button class="draftbtn plan-recovery-review" id="planRecoveryReview" type="button">Review and apply it →</button>
+    </div>`;
+  }
+  if (rs.state === "upcoming") {
+    const when = upcomingWhenLabel(rs.effective_date);
+    return `<div class="plan-recovery-banner reveal">
+      <span class="lbl plan-recovery-mast">YOUR RECOVERY WEEK</span>
+      <p class="plan-recovery-line">Set for ${escHtml(when || rs.effective_date)} — it lands automatically at the week boundary, with no Apply step.</p>
+      ${rs.summary ? `<p class="plan-recovery-summary">${escHtml(rs.summary)}</p>` : ""}
+      <p class="plan-recovery-until">Hold it before then or Undo after it lands; your word always wins.</p>
     </div>`;
   }
   const until = fmtDate(rs.until);

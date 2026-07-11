@@ -1,13 +1,17 @@
 import { Router } from "express";
 import { draftCoachProposal, evolveProgram } from "../coachOps.js";
 import { localToday } from "../dayread.js";
-import { applyProposalWithAutonomy, buildProgressionWithAutonomy, getCachedDayRead } from "../domain/brain/index.js";
+import {
+  applyProposalWithAutonomy,
+  buildProgressionWithAutonomy,
+  buildRunPlanWithAutonomy,
+  getCachedDayRead,
+} from "../domain/brain/index.js";
 import { dexaTargeting } from "../domain/health/index.js";
 import {
   advanceBlockWeek,
   applyProposal,
   applySwapSmart,
-  buildRunPlanProposal,
   buildSwapProposal,
   completeBlock,
   createBlock,
@@ -268,11 +272,10 @@ programRouter.get("/program/playbook", (req, res) => {
 // DEXA-driven targeting: the body scan's regional read → concrete training +
 // nutrition targets, each with a "path to your next scan". {available:false} w/o DEXA.
 programRouter.get("/dexa-targeting", (_req, res) => res.json(dexaTargeting()));
-// Build a DRAFT plan proposal from this week's deterministic run mix, via the same
-// propose→apply path as /program/progression/apply. Maps weeklyRunPlan(date).runs →
-// parsed.cardio[] (applyProposal → setWeeklyRuns, keeping strength intact + carrying
-// interval structure). Never auto-applied. Returns the designed ok:false at 200.
+// Build this week's deterministic run mix and route it through the same autonomy
+// policy as strength progression. Lead mode lands the bounded update at its natural
+// boundary with Undo; review posture keeps a draft. Strength work stays intact.
 programRouter.post("/program/run-plan/apply", (req, res) => {
   const date = (req.body ?? {}).date ? String((req.body as any).date) : undefined;
-  res.json(buildRunPlanProposal(date));
+  res.json(buildRunPlanWithAutonomy(date));
 });

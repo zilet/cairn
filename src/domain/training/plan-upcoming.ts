@@ -24,7 +24,7 @@ export interface PlanUpcomingNote {
 // change never appears twice. Returns null when nothing is waiting.
 export function planUpcomingNote(windowDays = 10): PlanUpcomingNote | null {
   const rs = recoveryWeekStatus();
-  const recoveryDraftId = rs && rs.state === "drafted" ? Number(rs.proposal_id) : null;
+  const recoveryDraftId = rs && (rs.state === "drafted" || rs.state === "upcoming") ? Number(rs.proposal_id) : null;
 
   const items: PlanUpcomingItem[] = [];
   for (const d of upcomingBrainDecisions(windowDays)) {

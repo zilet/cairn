@@ -12,11 +12,21 @@ import {
   transitionBrainDecision,
 } from "../../repo/brain-decisions.js";
 import { insertBrainEvaluation } from "../../repo/brain-evaluations.js";
-import { deleteNutritionTarget, getActiveNutritionTarget, setNutritionTarget } from "../../repo/nutrition.js";
+import {
+  acceptMealPlan,
+  currentMealPlan,
+  deleteNutritionTarget,
+  getActiveNutritionTarget,
+  getMealPlan,
+  setMealPlanStatus,
+  setNutritionTarget,
+} from "../../repo/nutrition.js";
 import { getPlan, replacePlan } from "../../repo/plan.js";
 import { applyProposal, getProposal, RECOVERY_WEEK_INSTRUCTION_PREFIX } from "../../repo/profile.js";
 import { buildProgressionProposal } from "../../repo/progression.js";
+import { buildRunPlanProposal } from "../../repo/run-progression.js";
 import { getSettings } from "../../repo/settings.js";
+import { setAppState } from "../../repo/app-state.js";
 import { addDaysISO, localDateISO } from "../../repo/shared.js";
 import { getSessionByDate } from "../../repo/sessions.js";
 
@@ -216,6 +226,133 @@ function materialChangesThisWeek(
   return Number(row?.n ?? 0);
 }
 
+function nextMealBoundary(today = localDateISO()): string {
+  // A meal plan changes the next un-lived food day, never the day already under
+  // way. That makes tomorrow the useful natural boundary regardless of which day
+  // the weekly coach happened to run.
+  return addDaysISO(today, 1) ?? today;
+}
+
+function liveAcceptedMealPlan(exceptId?: number): any | null {
+  const plan = currentMealPlan() as any;
+  return plan && ["accepted", "applied", "kept"].includes(String(plan.status)) && Number(plan.id) !== exceptId
+    ? plan
+    : null;
+}
+
+// Meal plans are structural enough to announce, but safe enough to land without an
+// Apply ritual in lead mode: the verified plan becomes current tomorrow, the previous
+// accepted week is retained as an exact rollback snapshot, and Hold/Undo always wins.
+export function applyMealPlanWithAutonomy(
+  planId: number,
+  input: {
+    requested_tier?: AutonomyTier;
+    user_locked?: boolean;
+    coordinated_update?: boolean;
+  } = {}
+): any {
+  const plan = getMealPlan(planId) as any;
+  if (!plan) return { ok: false, error: "meal plan not found" };
+  if (plan.status !== "draft" || !Array.isArray(plan.parsed?.days)) {
+    return { ok: true, applied: false, tier: "ask", plan, reasons: ["meal plan is not a live structured draft"] };
+  }
+  const createdAt = Date.parse(String(plan.created_at ?? ""));
+  const ageDays = Number.isFinite(createdAt) ? Math.max(0, (Date.now() - createdAt) / 86_400_000) : Infinity;
+  if (ageDays > 14) {
+    return {
+      ok: true,
+      applied: false,
+      review_required: true,
+      tier: "ask",
+      plan,
+      reasons: ["meal-plan snapshot is older than 14 days; refresh it against the current picture first"],
+    };
+  }
+  const policy = decideAutonomyTier({
+    kind: "meal_plan",
+    risk_class: "low",
+    reversible: true,
+    requested_tier: input.requested_tier,
+    lead_mode: getSettings().lead_mode,
+    user_locked: input.user_locked,
+    domain_demoted: domainIsDemoted("nutrition"),
+  });
+  if (policy.tier === "ask" || policy.tier === "clinician" || policy.tier === "observe") {
+    return { ok: true, applied: false, tier: policy.tier, plan, reasons: policy.reasons };
+  }
+  if (!input.coordinated_update && !surpriseBudgetAllows(materialChangesThisWeek("nutrition"))) {
+    return {
+      ok: true,
+      applied: false,
+      review_required: true,
+      tier: "ask",
+      plan,
+      reasons: ["weekly nutrition change budget already used; this plan stays available for an explicit review"],
+    };
+  }
+
+  // The freshest scheduled meal week wins. Retire its older queued alternatives so
+  // no second plan can surprise-land at a later boundary.
+  const queued = [
+    ...listBrainDecisions({ status: "announced", kind: "meal_plan", limit: 50 }),
+    ...listBrainDecisions({ status: "pending", kind: "meal_plan", limit: 50 }),
+  ];
+  for (const decision of queued) {
+    const olderPlanId = Number((decision.action as any)?.meal_plan_id);
+    if (olderPlanId > 0 && olderPlanId !== planId) {
+      if ((getMealPlan(olderPlanId) as any)?.status === "draft")
+        setMealPlanStatus(olderPlanId, "superseded", { recordDecision: false });
+      transitionBrainDecision(decision.id!, "superseded");
+    }
+  }
+
+  const previous = liveAcceptedMealPlan(planId);
+  const effectiveDate = nextMealBoundary();
+  const recorded = recordDecision({
+    effective_date: effectiveDate,
+    kind: "meal_plan",
+    domain: "nutrition",
+    summary: String(plan.parsed?.summary ?? "Your next meal plan is ready and will become current tomorrow.").slice(
+      0,
+      300
+    ),
+    rationale: String(
+      plan.parsed?.rationale ??
+        plan.parsed?.notes ??
+        "Refreshed against your current training, nutrition target, health directives, and preferences."
+    ).slice(0, 1_500),
+    source: plan.agent || "autonomy",
+    source_ref_type: "meal_plan",
+    source_ref_key: String(plan.id),
+    status: "announced",
+    autonomy_tier: "announce",
+    risk_class: "low",
+    reversible: true,
+    input_fingerprint: null,
+    context: {
+      natural_boundary: true,
+      coordinated_update: input.coordinated_update === true,
+      evidence_keys: [`meal_plan:${plan.id}`, "coach_context:nutrition"],
+      evidence_observed_at: new Date().toISOString(),
+    },
+    action: { meal_plan_id: plan.id, previous_meal_plan_id: previous?.id ?? null },
+    specialist: null,
+    applied_at: null,
+    reverted_at: null,
+    superseded_by: null,
+    evaluator_version: null,
+  });
+  return {
+    ok: true,
+    applied: false,
+    announced: true,
+    tier: "announce",
+    effective_date: effectiveDate,
+    decision: recorded.decision,
+    plan: getMealPlan(planId),
+  };
+}
+
 export function applyProposalWithAutonomy(
   proposalId: number,
   input: {
@@ -397,6 +534,18 @@ export function buildProgressionWithAutonomy(
   return { ok: true, proposal: built.proposal, autonomy };
 }
 
+// Endurance is a first-class programmed modality. Its deterministic weekly run
+// mix follows the same lead/review policy as strength progression instead of
+// stopping at a separate draft-and-Apply ritual.
+export function buildRunPlanWithAutonomy(
+  date?: string
+): { ok: false; error: string } | { ok: true; proposal: any; autonomy: any } {
+  const built = buildRunPlanProposal(date);
+  if (!built.ok) return built;
+  const autonomy = applyProposalWithAutonomy(Number(built.proposal.id), { requested_tier: "quiet_apply" });
+  return { ok: true, proposal: built.proposal, autonomy };
+}
+
 export function applyDueAnnouncedDecisions(asOf = localDateISO()): { applied: number[]; failed: number[] } {
   const due = [
     ...listBrainDecisions({ status: "announced", limit: 100 }),
@@ -408,7 +557,7 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): { applied: nu
       (decision) =>
         !!decision.effective_date &&
         decision.effective_date <= asOf &&
-        Number((decision.action as any)?.proposal_id) > 0
+        (Number((decision.action as any)?.proposal_id) > 0 || Number((decision.action as any)?.meal_plan_id) > 0)
     )
     // OLDEST first (listBrainDecisions returns id DESC): when several decisions share a
     // boundary the newest read must land LAST and win — otherwise a stale restructure
@@ -434,6 +583,57 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): { applied: nu
   };
   for (const announced of due) {
     try {
+      const mealPlanId = Number((announced.action as any)?.meal_plan_id);
+      if (mealPlanId > 0) {
+        const plan = getMealPlan(mealPlanId) as any;
+        if (!plan || plan.status !== "draft" || !Array.isArray(plan.parsed?.days)) {
+          transitionBrainDecision(announced.id!, "canceled");
+          failed.push(announced.id!);
+          continue;
+        }
+        const coordinated = (announced.context as any)?.coordinated_update === true;
+        if (!coordinated && !surpriseBudgetAllows(materialChangesThisWeek("nutrition", ["applied"]))) {
+          parkForReview(
+            announced,
+            "weekly nutrition change budget already used; review this meal plan before applying"
+          );
+          continue;
+        }
+        const createdAt = Date.parse(String(plan.created_at ?? ""));
+        const ageDays = Number.isFinite(createdAt) ? Math.max(0, (Date.now() - createdAt) / 86_400_000) : Infinity;
+        if (ageDays > 14) {
+          patchBrainDecision(announced.id!, {
+            status: "rejected",
+            autonomy_tier: "ask",
+            reversible: false,
+            context: { ...(announced.context ?? {}), review_required: true, stale_plan: true },
+          });
+          failed.push(announced.id!);
+          continue;
+        }
+        const previousId = Number((announced.action as any)?.previous_meal_plan_id) || null;
+        const accepted = acceptMealPlan(mealPlanId, { recordDecision: false });
+        if (!accepted) {
+          parkForReview(announced, "the meal plan could not become current");
+          continue;
+        }
+        transitionBrainDecision(announced.id!, "applied");
+        const updated = patchBrainDecision(announced.id!, {
+          context: { ...(announced.context ?? {}), rollback_available: true },
+          reversible: true,
+        });
+        saveBrainRollback(announced.id!, "meal_plan", {
+          version: 1,
+          previous_meal_plan_id: previousId,
+          applied_meal_plan_id: mealPlanId,
+        });
+        if (!updated) {
+          parkForReview(announced, "the meal-plan decision could not be finalized");
+          continue;
+        }
+        applied.push(announced.id!);
+        continue;
+      }
       const proposalId = Number((announced.action as any)?.proposal_id);
       const proposal = getProposal(proposalId);
       if (!proposal) {
@@ -501,6 +701,12 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): { applied: nu
         rollback.kind,
         rollback.kind === "training_plan" ? trainingRollbackPayload(rollback.plan) : rollback.previous
       );
+      if (shape.kind === "nutrition_target") {
+        // Meals are a downstream expression of the fuel target. Ask the background
+        // team to rebuild them from the newly active number; the scheduler owns the
+        // agent call and retry cadence, keeping this boundary pass deterministic.
+        setAppState("meal_plan_refresh_requested", asOf);
+      }
       applied.push(announced.id!);
     } catch (error: any) {
       parkForReview(announced, String(error?.message ?? error ?? "unexpected apply error"));
@@ -517,6 +723,9 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): { applied: nu
 export function revertDecision(id: number, reason = "user veto"): { ok: boolean; decision?: any; error?: string } {
   const decision = getBrainDecision(id);
   if (decision?.status === "announced") {
+    const mealPlanId = Number((decision.action as any)?.meal_plan_id);
+    if (mealPlanId > 0 && (getMealPlan(mealPlanId) as any)?.status === "draft")
+      setMealPlanStatus(mealPlanId, "superseded", { recordDecision: false });
     const canceled = transitionBrainDecision(id, "canceled");
     return { ok: true, decision: canceled };
   }
@@ -539,6 +748,16 @@ export function revertDecision(id: number, reason = "user veto"): { ok: boolean;
       if (appliedTargetId > 0) deleteNutritionTarget(appliedTargetId);
       if (rollback.payload)
         setNutritionTarget({ ...rollback.payload, source: "undo", note: `Restored after ${reason}` });
+    } else if (rollback?.kind === "meal_plan" && rollback.payload?.version === 1) {
+      const appliedId = Number(rollback.payload.applied_meal_plan_id);
+      const previousId = Number(rollback.payload.previous_meal_plan_id);
+      const current = currentMealPlan() as any;
+      // A later accepted meal plan wins. Undo only changes the meal plan when this
+      // decision still owns the current one.
+      if (appliedId > 0 && Number(current?.id) === appliedId) {
+        setMealPlanStatus(appliedId, "superseded", { recordDecision: false });
+        if (previousId > 0 && getMealPlan(previousId)) acceptMealPlan(previousId, { recordDecision: false });
+      }
     } else {
       return { ok: false, error: "rollback snapshot unavailable" };
     }

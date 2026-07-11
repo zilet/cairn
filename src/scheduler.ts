@@ -1,21 +1,22 @@
 import * as repo from "./repo.js";
 import { runAgentWithFallback, setAgentRunSink } from "./agents.js";
 import { buildCoachPrompt } from "./prompt.js";
-import { evolveProgram, generateInsight, nutritionCheckin, synthesizeHealth } from "./coachOps.js";
+import { draftMealPlan, evolveProgram, generateInsight, nutritionCheckin, synthesizeHealth } from "./coachOps.js";
 import { precomputeDayRead, localToday, warmToday } from "./dayread.js";
 import { checkForUpdate } from "./updateCheck.js";
 import { evaluateMatureExpectations } from "./brainEvaluator.js";
-import { applyDueAnnouncedDecisions } from "./domain/brain/autonomy-service.js";
+import { applyDueAnnouncedDecisions, applyProposalWithAutonomy } from "./domain/brain/autonomy-service.js";
 import { enqueueAgentJob } from "./agentJobs.js";
 import { recordAsyncFailure, recordSchedulerFailure } from "./diagnostics.js";
 // Stream 2 (self-updating memory): quiet nightly memory housekeeping + outcome
 // reconciliation. Lazy-imported in the tick so this module stays decoupled.
 
-// Weekly auto-draft + quiet proactivity. Configured in Settings (persisted in
+// Weekly expert-team review + quiet proactivity. Configured in Settings (persisted in
 // the DB, editable from the PWA at runtime — no restart needed): coach_enabled,
 // coach_day (0=Sun..6=Sat), coach_hour (local). When the slot arrives it drafts
 // ONE proposal using the configured agent rotation (round-robin / random /
-// priority, with fallthrough). It never auto-applies — you review and tap Apply.
+// priority, with fallthrough). In lead mode it routes through the same bounded,
+// reversible autonomy ledger as every other adaptation; review mode still parks it.
 //
 // The weekly coach draft is MISS-TOLERANT: rather than firing only on exact
 // hour equality (which silently skips the week if the process was asleep at that
@@ -175,14 +176,26 @@ export function startScheduler() {
     if (coachBusy) return;
     const s = repo.getSettings();
     if (!s.coach_enabled) return;
+    // The proactive evolution pass below is the richer whole-team review. Do not
+    // create a second legacy draft for the same weekly slot.
+    if (s.proactive_enabled) return;
     const now = new Date();
     if (!weeklySlotDue(now, s.coach_day, s.coach_hour, "coach_last_slot")) return;
     coachBusy = true;
     try {
       const prompt = buildCoachPrompt("Weekly automatic review.");
       const { agent, result } = await runAgentWithFallback(repo.pickAgentOrder(), prompt, { op: "coach_draft" });
-      repo.createProposal(agent, "auto: weekly review", result.raw, result.parsed);
-      console.log(`Auto-coach drafted a proposal via ${agent} (parsed=${!!result.parsed}).`);
+      const proposal = repo.createProposal(agent, "auto: weekly review", result.raw, result.parsed);
+      const autonomy = result.parsed
+        ? applyProposalWithAutonomy(Number(proposal.id), { requested_tier: "quiet_apply" })
+        : null;
+      console.log(
+        autonomy?.pending || autonomy?.announced
+          ? `Auto-coach scheduled a proposal via ${agent} for its natural boundary.`
+          : autonomy?.tier === "quiet_apply"
+            ? `Auto-coach applied a bounded proposal via ${agent}.`
+            : `Auto-coach stored a review-only proposal via ${agent} (parsed=${!!result.parsed}).`
+      );
     } catch (e: any) {
       recordSchedulerFailure("weekly_coach_draft", e);
       console.error(`Auto-coach failed: ${e.message}`);
@@ -191,8 +204,8 @@ export function startScheduler() {
     }
   };
 
-  // ---- Quiet proactivity (pull-never-push): nightly insight, weekly read,
-  //      weekly nutrition check-in. Each only STORES a waiting read/draft. ----
+  // ---- Quiet proactivity (pull-never-push): the expert team reads continuously;
+  //      bounded changes land through the autonomy ledger, never an Apply ritual. ----
   let proactiveBusy = false;
   const proactiveTick = async () => {
     if (proactiveBusy) return;
@@ -212,6 +225,15 @@ export function startScheduler() {
     //     Drafts a nutrition_target proposal ONLY on meaningful drift; the calm,
     //     common answer is change:false (no draft).
     const nutritionDue = weeklySlotDue(now, s.coach_day, s.coach_hour, "nutrition_checkin_last_slot");
+    // (c2) Weekly meals — rebuilt from the same whole-person context and activated at
+    //      tomorrow's food-day boundary. If nutrition also moves, the pending target
+    //      is threaded into the instruction so the two specialists stay coordinated.
+    const mealRefreshRequest = repo.getAppState("meal_plan_refresh_requested");
+    const mealRefreshDue =
+      !!mealRefreshRequest &&
+      mealRefreshRequest <= localToday(now) &&
+      repo.getAppState("meal_plan_refresh_attempt_for") !== mealRefreshRequest;
+    const mealPlanDue = weeklySlotDue(now, s.coach_day, s.coach_hour, "meal_plan_refresh_last_slot") || mealRefreshDue;
     // (d) Weekly plan EVOLUTION — the continuous-coach cadence (miss-tolerant). Drafts
     //     a plan-evolution proposal (progress what's working, deload/rotate what's
     //     stalled, ground targets in logged reality, rebalance toward weak points) and
@@ -249,6 +271,7 @@ export function startScheduler() {
       !insightDue &&
       !weeklyDue &&
       !nutritionDue &&
+      !mealPlanDue &&
       !evolutionDue &&
       !blockAdvanceDue &&
       !triggerCheckDue &&
@@ -337,12 +360,30 @@ export function startScheduler() {
           console.error(`[proactive] health synthesis failed: ${e?.message ?? e}`);
         }
       }
+      let mealPlanInstruction =
+        "Refresh the upcoming week of meals against the athlete's current training, recovery, health directives, preferences, schedule, and accepted nutrition target.";
       if (nutritionDue) {
         try {
           const r: any = await nutritionCheckin("auto");
+          const autonomy: any = r.autonomy;
+          if (r.ok && r.change && r.proposal?.id) {
+            const target = r.proposal?.parsed?.nutrition;
+            if (Number.isFinite(Number(target?.target_kcal))) {
+              mealPlanInstruction =
+                `Refresh the upcoming week of meals around the coordinated nutrition target that takes effect next: ` +
+                `${Math.round(Number(target.target_kcal))} kcal, ` +
+                `${Math.round(Number(target.protein_g) || 0)} g protein, ` +
+                `${Math.round(Number(target.carbs_g) || 0)} g carbs, and ` +
+                `${Math.round(Number(target.fat_g) || 0)} g fat. Keep it aligned with training, recovery, health directives, preferences, and schedule.`;
+            }
+          }
           console.log(
             r.ok && r.change
-              ? `[proactive] drafted an adaptive nutrition change (waiting for review).`
+              ? autonomy?.pending || autonomy?.announced
+                ? `[proactive] scheduled an adaptive nutrition change for its natural boundary.`
+                : autonomy?.tier === "quiet_apply"
+                  ? `[proactive] applied a bounded adaptive nutrition change.`
+                  : `[proactive] nutrition change is review-only under the configured posture.`
               : r.ok
                 ? `[proactive] nutrition steady — no change (calm no-op).`
                 : `[proactive] nutrition check-in unavailable (calm no-op).`
@@ -350,6 +391,25 @@ export function startScheduler() {
         } catch (e: any) {
           recordSchedulerFailure("nutrition_checkin", e);
           console.error(`[proactive] nutrition check-in failed: ${e?.message ?? e}`);
+        }
+      }
+      if (mealPlanDue) {
+        if (mealRefreshDue) repo.setAppState("meal_plan_refresh_attempt_for", mealRefreshRequest);
+        try {
+          const r: any = await draftMealPlan("auto", mealPlanInstruction, undefined, {
+            coordinated_update: nutritionDue || mealRefreshDue,
+          });
+          if (r.ok && mealRefreshDue) repo.setAppState("meal_plan_refresh_requested", "");
+          console.log(
+            r.ok && (r.autonomy?.announced || r.autonomy?.pending)
+              ? `[proactive] prepared the next meal plan; it lands at tomorrow's food-day boundary.`
+              : r.ok
+                ? `[proactive] prepared the next meal plan under the configured review posture.`
+                : `[proactive] meal-plan refresh unavailable (calm no-op).`
+          );
+        } catch (e: any) {
+          recordSchedulerFailure("meal_plan_refresh", e);
+          console.error(`[proactive] meal-plan refresh failed: ${e?.message ?? e}`);
         }
       }
       if (evolutionDue) {
@@ -376,9 +436,13 @@ export function startScheduler() {
               }
             }
             console.log(
-              r.ok
-                ? `[proactive] drafted a plan evolution (waiting for review).`
-                : `[proactive] plan evolution unavailable (calm no-op).`
+              r.ok && (r.autonomy?.pending || r.autonomy?.announced)
+                ? `[proactive] scheduled a plan evolution for its natural boundary.`
+                : r.ok && r.autonomy?.tier === "quiet_apply"
+                  ? `[proactive] applied a bounded plan evolution.`
+                  : r.ok
+                    ? `[proactive] plan evolution is review-only under the configured posture.`
+                    : `[proactive] plan evolution unavailable (calm no-op).`
             );
           }
         } catch (e: any) {
@@ -438,9 +502,13 @@ export function startScheduler() {
               repo.setAppState("program_evolution_last_draft_date", localToday(now));
             }
             console.log(
-              r.ok
-                ? `[proactive] data-triggered plan evolution drafted (${trig.reasons.length} reason(s), waiting for review).`
-                : `[proactive] data-triggered evolution unavailable (calm no-op).`
+              r.ok && (r.autonomy?.pending || r.autonomy?.announced)
+                ? `[proactive] data-triggered plan evolution scheduled (${trig.reasons.length} reason(s)).`
+                : r.ok && r.autonomy?.tier === "quiet_apply"
+                  ? `[proactive] data-triggered plan evolution applied (${trig.reasons.length} reason(s)).`
+                  : r.ok
+                    ? `[proactive] data-triggered plan evolution is review-only under the configured posture.`
+                    : `[proactive] data-triggered evolution unavailable (calm no-op).`
             );
           } else if (trig.due) {
             console.log(`[proactive] training shifted but already drafted / within cooldown (calm no-op).`);
