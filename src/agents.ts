@@ -781,6 +781,25 @@ export interface FallbackResult {
   tried: { agent: string; error: string }[]; // agents attempted before this one that failed
 }
 
+// Structured terminal failure for an exhausted rotation. Callers that degrade
+// to a deterministic/cached result need the attempted-agent ledger without
+// parsing a human error string. Abort errors deliberately remain ordinary errors
+// so a user Stop is never mistaken for an availability failure.
+export class AgentFallbackError extends Error {
+  readonly order: string[];
+  readonly tried: { agent: string; error: string }[];
+
+  constructor(order: string[], tried: { agent: string; error: string }[], message?: string) {
+    super(
+      message ??
+        `All ${order.length} agent(s) failed: ${tried.map((t) => `${t.agent}: ${t.error}`).join("; ")}`
+    );
+    this.name = "AgentFallbackError";
+    this.order = [...order];
+    this.tried = tried.map((t) => ({ ...t }));
+  }
+}
+
 // ---------- telemetry sink ----------
 // repo.ts imports agents.ts, so agents.ts can't statically import repo.ts back
 // (circular). The scheduler/server registers a sink at boot; until then writes
@@ -821,7 +840,9 @@ export async function runAgentWithFallback(
   prompt: string,
   opts: (RunOpts & { op?: string }) | number = {}
 ): Promise<FallbackResult> {
-  if (!order.length) throw new Error("No agents enabled — turn one on in Settings.");
+  if (!order.length) {
+    throw new AgentFallbackError([], [], "No agents enabled — turn one on in Settings.");
+  }
   // Back-compat: older call sites (enrich.ts) pass a bare timeout number.
   const o: RunOpts & { op?: string } = typeof opts === "number" ? { timeoutMs: opts } : opts;
   const baseTimeout = o.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -927,7 +948,7 @@ export async function runAgentWithFallback(
       tried.push({ agent: name, error: e.message });
     }
   }
-  throw new Error(`All ${order.length} agent(s) failed: ${tried.map((t) => `${t.agent}: ${t.error}`).join("; ")}`);
+  throw new AgentFallbackError(order, tried);
 }
 
 export function runAgent(name: string, prompt: string, opts: RunOpts | number = {}): Promise<AgentResult> {

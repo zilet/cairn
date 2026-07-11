@@ -33,6 +33,37 @@ test("readToday serves cached canonical Brief with context and records it once",
   assert.equal(countDayReads(date), 1);
 });
 
+test("a cached deterministic Brief arms one self-healing re-warm without extending it on every read", async () => {
+  resetTables("day_reads", "suggestions", "plan_days", "plan_items", "sessions", "logged_sets");
+  const date = localDaysAgo(0);
+  let armed = 0;
+  configureDayReadRefresh({
+    today: () => date,
+    setTimer: () => {
+      armed += 1;
+      return 0;
+    },
+    clearTimer: () => {},
+  });
+  repo.saveDayRead(date, {
+    kind: "rest",
+    headline: "Rest today.",
+    why: "The safe recovery floor.",
+    focus: null,
+    est_minutes: null,
+    signals: {},
+    source: "deterministic",
+    override: null,
+  });
+
+  const first = await readToday({ date });
+  const second = await readToday({ date });
+
+  assert.equal(first.cached, true);
+  assert.equal(second.cached, true);
+  assert.equal(armed, 1, "screen re-renders must not keep pushing the recovery retry farther away");
+});
+
 test("recordDayReadSuggestion dedupes canonical reads but keeps override reads distinct", () => {
   resetTables("suggestions");
   const date = localDaysAgo(0);

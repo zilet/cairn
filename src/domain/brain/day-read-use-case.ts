@@ -1,7 +1,7 @@
 import { agentStatusFor } from "../../coachOps.js";
 import { db } from "../../db.js";
 import { computeDayRead, localToday } from "../../dayread.js";
-import { scheduleDayReadRefresh } from "../../dayread-refresh.js";
+import { ensureDayReadRefresh, scheduleDayReadRefresh } from "../../dayread-refresh.js";
 import { dayRead, forwardLook, getCachedDayRead, invalidateDayRead, saveDayRead } from "../../repo/intelligence.js";
 import { recordSuggestion } from "../../repo/memory.js";
 import { getTrajectory } from "../../repo/trajectory.js";
@@ -107,6 +107,10 @@ export async function readToday(options: ReadTodayOptions = {}): Promise<DayRead
     if (!override) {
       const cached = getCachedDayRead(readDate);
       if (cached) {
+        // A transient all-agent failure may have cached the deterministic floor.
+        // Serve it instantly, then quietly ensure one agent-gated re-warm is
+        // pending so the Brief heals instead of pinning floor prose all day.
+        if (cached.source === "deterministic") ensureDayReadRefresh(readDate);
         // The cache is a prose accelerator, never the authority on whether work
         // has happened. A Garmin/manual activity can land while an older agentic
         // warm is still in flight and re-save prospective copy after invalidation.

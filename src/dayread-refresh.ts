@@ -87,6 +87,21 @@ export function scheduleDayReadRefresh(invalidatedDate?: string): void {
   }
 }
 
+// A cached deterministic Brief means the safe floor did its job during a
+// transient agent outage. Ensure one background retry is armed so that floor is
+// self-healing, but do not extend an already-pending debounce on every screen
+// render/poll. Signal invalidations above intentionally reset the window.
+export function ensureDayReadRefresh(readDate?: string): void {
+  try {
+    const today = hooks.today();
+    const target = readDate || today;
+    if (target !== today || pending != null || inFlight != null) return;
+    pending = hooks.setTimer(fire, hooks.debounceMs);
+  } catch {
+    // Best-effort recovery must never disturb the instant deterministic read.
+  }
+}
+
 function fire(): void {
   pending = null;
   inFlight = runRefresh();

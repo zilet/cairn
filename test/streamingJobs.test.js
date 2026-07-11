@@ -19,7 +19,7 @@ import {
   CHAT_REPLY_SENTINEL,
 } from "../dist/prompt.js";
 import { runChosen, runChosenStreaming } from "../dist/runChosen.js";
-import { extractJson, runAgentWithFallback } from "../dist/agents.js";
+import { AgentFallbackError, extractJson, runAgentWithFallback } from "../dist/agents.js";
 import { onJobEvent, emitJobDelta, jobStreamsDeltas, STREAM_DELTA_KINDS } from "../dist/agentJobs.js";
 
 function collectFilter() {
@@ -388,6 +388,20 @@ test("runAgentWithFallback repairs then rotates when parsed JSON misses the oper
   assert.equal(fb.tried.length, 1, "the first agent must be rejected after its repair still misses the contract");
   assert.match(fb.tried[0].error, /outside the requested contract/);
   assert.deepEqual(fb.result.parsed, { kind: "rest", why: "Recovery first." });
+});
+
+test("runAgentWithFallback exposes a structured attempt ledger when every contract fails", async () => {
+  await assert.rejects(
+    runAgentWithFallback(["stub"], "ignored", { acceptParsed: () => false }),
+    (error) => {
+      assert.ok(error instanceof AgentFallbackError);
+      assert.deepEqual(error.order, ["stub"]);
+      assert.equal(error.tried.length, 1);
+      assert.equal(error.tried[0].agent, "stub");
+      assert.match(error.tried[0].error, /outside the requested contract/);
+      return true;
+    }
+  );
 });
 
 test("runChosen forwards a caller extract and still parses the stub's bare JSON by default", async () => {

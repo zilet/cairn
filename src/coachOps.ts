@@ -9,7 +9,14 @@
 
 import * as repo from "./repo.js";
 import { localDateISO } from "./repo/shared.js";
-import { INTERACTIVE_TIMEOUT_MS, agentInfo, listAgentModels, loadAgents } from "./agents.js";
+import {
+  AgentFallbackError,
+  INTERACTIVE_TIMEOUT_MS,
+  agentInfo,
+  listAgentModels,
+  loadAgents,
+  type FallbackResult,
+} from "./agents.js";
 import { runChosen, runChosenStreaming } from "./runChosen.js";
 import {
   buildCoachPrompt,
@@ -165,6 +172,16 @@ export interface OpHooks {
   onDelta?: (chunk: string) => void;
 }
 
+function agentFailure(error: unknown, hooks?: OpHooks): { agent: null; tried: { agent: string; error: string }[] } {
+  // A user Stop is control flow, not graceful degradation: preserve cancellation
+  // so the durable job worker can mark the operation canceled instead of failed.
+  if (hooks?.signal?.aborted) throw error;
+  return {
+    agent: null,
+    tried: error instanceof AgentFallbackError ? error.tried : [],
+  };
+}
+
 // ---------- self-critique verify pass (Trust build V1) ----------
 // Run ONE bounded follow-up agent turn that checks a just-produced high-stakes
 // draft against its HARD floors/constraints and applies a returned fix. The
@@ -234,13 +251,26 @@ export async function suggestSession(
   const sessionSane = (s: any) => isSessionSuggestionResult(s);
   // Interactive: a user is waiting on the request path — short the leash. Streams the
   // session's "why" prose into the card when the chosen agent is stream-capable.
-  const { agent: chosen, result, tried } = await runChosenStreaming(agent, prompt, {
-    op: "session_suggest",
-    timeoutMs: INTERACTIVE_TIMEOUT_MS,
-    signal: hooks?.signal,
-    onDelta: hooks?.onDelta,
-    acceptParsed: sessionSane,
-  });
+  let run: FallbackResult;
+  try {
+    run = await runChosenStreaming(agent, prompt, {
+      op: "session_suggest",
+      timeoutMs: INTERACTIVE_TIMEOUT_MS,
+      signal: hooks?.signal,
+      onDelta: hooks?.onDelta,
+      acceptParsed: sessionSane,
+    });
+  } catch (error) {
+    const failure = agentFailure(error, hooks);
+    if (cached) return { ...cached.result, cached: true, stale: true };
+    return {
+      ok: false as const,
+      error: "agent returned no usable session",
+      ...failure,
+      agent_status: agentStatusFor({ ok: false, ...failure }),
+    };
+  }
+  const { agent: chosen, result, tried } = run;
   const p = result.parsed;
   if (!sessionSane(p)) {
     // Nothing fresh and usable — fall back to a stale cache hit rather than fail.
@@ -294,8 +324,8 @@ function sessionSuggestCacheKey(opts: { minutes?: number; equipment?: string; fo
 // synchronous /agent/run handler used to return (proposal + ok + agent + tried +
 // agent_status + exit/stderr) so both surfaces render unchanged. Backgrounded via
 // the agentJobs `proposal` kind (live caption progress + reconnect) or run inline
-// when bg ops are off. Degrades like the rest of the loop: no agent → result.parsed
-// is null → ok:false with agent_status, the proposal row still persists as raw.
+// when bg ops are off. Degrades like the rest of the loop: no agent → ok:false
+// with agent_status and no meaningless empty draft is persisted.
 export async function draftCoachProposal(
   agent: string | undefined,
   instruction: string | undefined,
@@ -308,11 +338,26 @@ export async function draftCoachProposal(
   // frozen half-full bar (a determinate frac only fits ops with a fast tail phase, like
   // session-suggest's verify pass). The rotating client caption carries "what's happening".
   hooks?.onPhase?.("drafting your plan");
-  const { agent: chosen, result, tried } = await runChosen(agent, prompt, {
-    op: "proposal",
-    signal: hooks?.signal,
-    acceptParsed: isPlanProposalResult,
-  });
+  let run: FallbackResult;
+  try {
+    run = await runChosen(agent, prompt, {
+      op: "proposal",
+      signal: hooks?.signal,
+      acceptParsed: isPlanProposalResult,
+    });
+  } catch (error) {
+    const failure = agentFailure(error, hooks);
+    return {
+      proposal: null,
+      autonomy: null,
+      ok: false as const,
+      ...failure,
+      agent_status: agentStatusFor({ ok: false, ...failure }),
+      exit_code: null,
+      stderr: "",
+    };
+  }
+  const { agent: chosen, result, tried } = run;
   const proposal = repo.createProposal(chosen, instruction ?? "", result.raw, result.parsed);
   let autonomy: any = null;
   if (result.parsed && hasPlanProposalActions(result.parsed)) {
@@ -357,11 +402,27 @@ export async function evolveProgram(
   // (the dedup key the scheduler uses to retire prior auto-evolution drafts).
   const prompt = buildProgramEvolutionPrompt(opts?.task ?? instruction, state);
   hooks?.onPhase?.("drafting how your plan should evolve");
-  const { agent: chosen, result, tried } = await runChosen(agent, prompt, {
-    op: "evolve_program",
-    signal: hooks?.signal,
-    acceptParsed: isPlanProposalResult,
-  });
+  let run: FallbackResult;
+  try {
+    run = await runChosen(agent, prompt, {
+      op: "evolve_program",
+      signal: hooks?.signal,
+      acceptParsed: isPlanProposalResult,
+    });
+  } catch (error) {
+    const failure = agentFailure(error, hooks);
+    return {
+      proposal: null,
+      state,
+      autonomy: null,
+      ok: false as const,
+      ...failure,
+      agent_status: agentStatusFor({ ok: false, ...failure }),
+      exit_code: null,
+      stderr: "",
+    };
+  }
+  const { agent: chosen, result, tried } = run;
   const proposal = repo.createProposal(chosen, instruction ?? "evolve program", result.raw, result.parsed);
   // A fresh recovery-week draft retires the prior one (same one-tap ask — the newest
   // read wins), so repeated taps never stack duplicate drafts in the Coach list.
@@ -492,12 +553,37 @@ export async function explainExercise(agent: string | undefined, name: string, h
 
   hooks?.onPhase?.("writing exercise cues");
   const prompt = buildExerciseExplanationPrompt(detail);
-  const { agent: chosen, result, tried } = await runChosen(agent, prompt, {
-    op: EXERCISE_EXPLANATION_KIND,
-    timeoutMs: INTERACTIVE_TIMEOUT_MS,
-    signal: hooks?.signal,
-    acceptParsed: isExerciseExplanationResult,
-  });
+  let run: FallbackResult;
+  try {
+    run = await runChosen(agent, prompt, {
+      op: EXERCISE_EXPLANATION_KIND,
+      timeoutMs: INTERACTIVE_TIMEOUT_MS,
+      signal: hooks?.signal,
+      acceptParsed: isExerciseExplanationResult,
+    });
+  } catch (error) {
+    const failure = agentFailure(error, hooks);
+    if (cachedExplanation) {
+      return {
+        ok: true as const,
+        found: true as const,
+        exercise: detail.name,
+        explanation: cachedExplanation,
+        cached: true as const,
+        stale: true as const,
+        agent: cached?.chosen_agent ?? null,
+        computed_at: cached?.computed_at ?? null,
+      };
+    }
+    return {
+      ok: false as const,
+      found: true as const,
+      exercise: detail.name,
+      error: "agent returned no usable exercise explanation",
+      ...failure,
+    };
+  }
+  const { agent: chosen, result, tried } = run;
   const explanation = normalizeExerciseExplanation(result.parsed);
   if (!explanation) {
     if (cachedExplanation) {
@@ -612,11 +698,23 @@ export async function draftMealPlan(
   hooks?.onPhase?.("drafting your week of meals");
   const prompt = buildMealPlanPrompt(instruction);
   const planSane = (m: any) => isMealPlanResult(m);
-  const { agent: chosen, result, tried } = await runChosen(agent, prompt, {
-    op: "meal_plan",
-    signal: hooks?.signal,
-    acceptParsed: planSane,
-  });
+  let run: FallbackResult;
+  try {
+    run = await runChosen(agent, prompt, {
+      op: "meal_plan",
+      signal: hooks?.signal,
+      acceptParsed: planSane,
+    });
+  } catch (error) {
+    const failure = agentFailure(error, hooks);
+    return {
+      ok: false as const,
+      error: "agent returned no usable meal plan",
+      ...failure,
+      agent_status: agentStatusFor({ ok: false, ...failure }),
+    };
+  }
+  const { agent: chosen, result, tried } = run;
   const p = result.parsed;
   // Defensive only: the shared fallback already enforces this same predicate.
   // Never persist an off-contract object as a meal plan.
@@ -662,12 +760,25 @@ export async function nutritionCheckin(agent: string | undefined, windowDays?: n
   hooks?.onPhase?.("reading your energy balance");
   const expenditure = repo.estimateExpenditure(Number.isFinite(windowDays as number) ? (windowDays as number) : 21);
   const prompt = buildNutritionCheckinPrompt(undefined, { windowDays });
-  const { agent: chosen, result, tried } = await runChosenStreaming(agent, prompt, {
-    op: "nutrition_checkin",
-    signal: hooks?.signal,
-    onDelta: hooks?.onDelta,
-    acceptParsed: isNutritionCheckinResult,
-  });
+  let run: FallbackResult;
+  try {
+    run = await runChosenStreaming(agent, prompt, {
+      op: "nutrition_checkin",
+      signal: hooks?.signal,
+      onDelta: hooks?.onDelta,
+      acceptParsed: isNutritionCheckinResult,
+    });
+  } catch (error) {
+    const failure = agentFailure(error, hooks);
+    return {
+      ok: false as const,
+      error: "agent returned no usable check-in",
+      ...failure,
+      agent_status: agentStatusFor({ ok: false, ...failure }),
+      expenditure,
+    };
+  }
+  const { agent: chosen, result, tried } = run;
   const p = result.parsed;
   if (!p || typeof p !== "object") {
     return { ok: false as const, error: "agent returned no usable check-in", agent: chosen, tried, expenditure };
@@ -729,11 +840,17 @@ export async function swapMealAgentic(
   hooks?.onPhase?.("finding a swap");
   const { plan, id, day, mealIndex, hint } = args;
   const prompt = buildMealSwapPrompt({ plan, day, mealIndex, hint });
-  const { agent: chosen, result, tried } = await runChosen(agent, prompt, {
-    op: "meal_swap",
-    signal: hooks?.signal,
-    acceptParsed: isMealSwapResult,
-  });
+  let run: FallbackResult;
+  try {
+    run = await runChosen(agent, prompt, {
+      op: "meal_swap",
+      signal: hooks?.signal,
+      acceptParsed: isMealSwapResult,
+    });
+  } catch (error) {
+    return { ok: false as const, error: "agent returned no usable meal", ...agentFailure(error, hooks) };
+  }
+  const { agent: chosen, result, tried } = run;
   const p = result.parsed;
   const saneMeal = p && typeof p === "object" && typeof p.name === "string" && p.name.trim() && Number.isFinite(Number(p.kcal));
   if (!saneMeal) return { ok: false as const, error: "agent returned no usable meal", agent: chosen, tried };
@@ -754,11 +871,17 @@ export async function generateRecipe(
   hooks?.onPhase?.("writing the recipe");
   const { plan, id, day, mealIndex } = args;
   const prompt = buildRecipePrompt({ plan, day, mealIndex });
-  const { agent: chosen, result, tried } = await runChosen(agent, prompt, {
-    op: "recipe",
-    signal: hooks?.signal,
-    acceptParsed: isRecipeResult,
-  });
+  let run: FallbackResult;
+  try {
+    run = await runChosen(agent, prompt, {
+      op: "recipe",
+      signal: hooks?.signal,
+      acceptParsed: isRecipeResult,
+    });
+  } catch (error) {
+    return { ok: false as const, error: "agent returned no usable recipe", ...agentFailure(error, hooks) };
+  }
+  const { agent: chosen, result, tried } = run;
   const p = result.parsed;
   const saved = p && typeof p === "object" ? repo.setMealRecipe(id, day, mealIndex, p) : null;
   if (!saved) return { ok: false as const, error: "agent returned no usable recipe", agent: chosen, tried };
@@ -787,11 +910,24 @@ export async function runHealthReview(agent: string | undefined, hooks?: OpHooks
   }
   hooks?.onPhase?.("reading your whole picture");
   const prompt = buildHealthReviewPrompt(grounding);
-  const { agent: chosen, result, tried } = await runChosen(agent, prompt, {
-    op: "health_review",
-    signal: hooks?.signal,
-    acceptParsed: isHealthReviewResult,
-  });
+  let run: FallbackResult;
+  try {
+    run = await runChosen(agent, prompt, {
+      op: "health_review",
+      signal: hooks?.signal,
+      acceptParsed: isHealthReviewResult,
+    });
+  } catch (error) {
+    const failure = agentFailure(error, hooks);
+    return {
+      ok: false as const,
+      error: "agent returned no usable review",
+      ...failure,
+      agent_status: agentStatusFor({ ok: false, ...failure }),
+      grounded: !!grounding,
+    };
+  }
+  const { agent: chosen, result, tried } = run;
   const review = result.parsed && typeof result.parsed === "object"
     ? repo.addHealthReview(result.parsed, chosen, result.raw)
     : null;
@@ -822,14 +958,13 @@ export async function synthesizeHealth(agent: string | undefined, hooks?: OpHook
     result = run.result;
     tried = run.tried;
   } catch (error) {
-    if (hooks?.signal?.aborted) throw error;
+    const failure = agentFailure(error, hooks);
     return {
       ok: false as const,
       synthesis: repo.getHealthSynthesis(),
       focus: repo.healthFocus(),
-      agent: chosen,
-      tried,
-      agent_status: agentStatusFor({ ok: false, agent: chosen, tried }),
+      ...failure,
+      agent_status: agentStatusFor({ ok: false, ...failure }),
     };
   }
   const synthesis = normalizeHealthSynthesis(result.parsed, { agent: chosen, generated_at: new Date().toISOString() });
@@ -890,13 +1025,12 @@ export async function generateInsight(
     result = run.result;
     tried = run.tried;
   } catch (error) {
-    if (hooks?.signal?.aborted) throw error;
+    const failure = agentFailure(error, hooks);
     return {
       ok: false as const,
       error: "no genuine new insight",
-      agent: chosen,
-      tried,
-      agent_status: agentStatusFor({ ok: false, agent: chosen, tried }),
+      ...failure,
+      agent_status: agentStatusFor({ ok: false, ...failure }),
     };
   }
   const p: any = result.parsed;
@@ -951,7 +1085,8 @@ export async function distillChat(
     } else {
       note = "agent unavailable";
     }
-  } catch {
+  } catch (error) {
+    if (hooks?.signal?.aborted) throw error;
     note = "agent unavailable";
   }
   return { ok: true as const, distilled, ...(farewell ? { farewell } : {}), ...(note ? { note } : {}) };
@@ -1001,7 +1136,10 @@ export async function onboardFromText(
       // the seeded plan is already there; the athlete adjusts it when they want to.
       if (pr.days_per_week != null && Number(pr.days_per_week) > 0) { try { repo.addMemory(`Trains about ${Number(pr.days_per_week)} days/week`, "preference", "onboard"); applied.memories++; } catch {} }
     }
-  } catch { /* fail-open: the deterministic base already applied */ }
+  } catch (error) {
+    if (hooks?.signal?.aborted) throw error;
+    // Fail-open: the deterministic base already applied.
+  }
 
   try { repo.setSettings({ onboarded: true }); } catch {}
   return { ok: true as const, source, applied };
@@ -1026,7 +1164,13 @@ export async function runResearch(
 // no-op. Scheduled nightly; also callable on demand. NEVER notifies.
 export async function consolidateMemory(agent: string | undefined) {
   const prompt = buildMemoryConsolidationPrompt();
-  const { agent: chosen, result, tried } = await runChosen(agent, prompt);
+  let run: FallbackResult;
+  try {
+    run = await runChosen(agent, prompt);
+  } catch (error) {
+    return { ok: false as const, error: "agent returned no usable plan", ...agentFailure(error) };
+  }
+  const { agent: chosen, result, tried } = run;
   const p: any = result.parsed;
   if (!p || typeof p !== "object") return { ok: false as const, error: "agent returned no usable plan", agent: chosen, tried };
 
@@ -1063,7 +1207,13 @@ export async function consolidateMemory(agent: string | undefined) {
 // (user-authored) content, and we only write when the agent reports a real change.
 export async function growAboutMe(agent: string | undefined) {
   const prompt = buildAboutMeGrowthPrompt();
-  const { agent: chosen, result, tried } = await runChosen(agent, prompt);
+  let run: FallbackResult;
+  try {
+    run = await runChosen(agent, prompt);
+  } catch (error) {
+    return { ok: false as const, changed: false as const, error: "agent returned no usable profile growth", ...agentFailure(error) };
+  }
+  const { agent: chosen, result, tried } = run;
   const p: any = result.parsed;
   const text = p && typeof p === "object" ? String(p.about_me ?? "").trim() : "";
   if (!p || typeof p !== "object" || p.changed === false || !text) {
@@ -1112,10 +1262,9 @@ export async function refreshReactionNarrative(
     }
     repo.setReactionNarrative(text);
     return { ok: true as const, narrative: text.slice(0, 600), agent: chosen, tried, agent_status: "ok" as const };
-  } catch (e: any) {
+  } catch (error) {
     // Any failure degrades to a no-op; the existing narrative stands.
-    if (hooks?.signal?.aborted) throw e;
-    return { ok: false as const, error: "agent returned no usable narrative" };
+    return { ok: false as const, error: "agent returned no usable narrative", ...agentFailure(error, hooks) };
   }
 }
 
@@ -1142,11 +1291,24 @@ export async function reconcileMarkers(agent?: string, hooks?: OpHooks) {
   if (items.length < 2) return { ok: true as const, aligned: 0, applied: 0, candidates: items.length };
   hooks?.onPhase?.("aligning lab names");
   const prompt = buildMarkerReconcilePrompt(items.map((i) => ({ name: i.name, unit: i.unit, sample: i.sample, canonical: i.canonical })));
-  const { agent: chosen, result, tried } = await runChosen(agent, prompt, {
-    op: "marker_reconcile",
-    signal: hooks?.signal,
-    acceptParsed: isReconciliationResult,
-  });
+  let run: FallbackResult;
+  try {
+    run = await runChosen(agent, prompt, {
+      op: "marker_reconcile",
+      signal: hooks?.signal,
+      acceptParsed: isReconciliationResult,
+    });
+  } catch (error) {
+    const failure = agentFailure(error, hooks);
+    return {
+      ok: false as const,
+      error: "no usable reconciliation",
+      candidates: items.length,
+      ...failure,
+      agent_status: agentStatusFor({ ok: false, ...failure }),
+    };
+  }
+  const { agent: chosen, result, tried } = run;
   const p: any = result?.parsed;
   if (!p || typeof p !== "object" || !Array.isArray(p.groups)) {
     return { ok: false as const, error: "no usable reconciliation", agent: chosen, tried, agent_status: agentStatusFor({ ok: false, agent: chosen, tried }) };
@@ -1180,11 +1342,24 @@ export async function reconcileExercises(agent?: string, hooks?: OpHooks) {
   if (items.length < 2) return { ok: true as const, aligned: 0, applied: 0, candidates: items.length };
   hooks?.onPhase?.("tidying exercise names");
   const prompt = buildExerciseReconcilePrompt(items.map((i) => ({ name: i.name, group: i.group, sets: i.sets })));
-  const { agent: chosen, result, tried } = await runChosen(agent, prompt, {
-    op: "exercise_reconcile",
-    signal: hooks?.signal,
-    acceptParsed: isReconciliationResult,
-  });
+  let run: FallbackResult;
+  try {
+    run = await runChosen(agent, prompt, {
+      op: "exercise_reconcile",
+      signal: hooks?.signal,
+      acceptParsed: isReconciliationResult,
+    });
+  } catch (error) {
+    const failure = agentFailure(error, hooks);
+    return {
+      ok: false as const,
+      error: "no usable reconciliation",
+      candidates: items.length,
+      ...failure,
+      agent_status: agentStatusFor({ ok: false, ...failure }),
+    };
+  }
+  const { agent: chosen, result, tried } = run;
   const p: any = result?.parsed;
   if (!p || typeof p !== "object" || !Array.isArray(p.groups)) {
     return { ok: false as const, error: "no usable reconciliation", agent: chosen, tried, agent_status: agentStatusFor({ ok: false, agent: chosen, tried }) };
