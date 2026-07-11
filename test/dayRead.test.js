@@ -200,4 +200,15 @@ test("Today agent-result validation rejects parseable off-contract JSON", async 
   assert.equal(isValidDayReadAgentResult({ kind: "rest", why: "" }), false);
   assert.equal(isValidDayReadAgentResult({ kind: "pause", why: "Take it easy." }), false);
   assert.equal(isValidDayReadAgentResult({ kind: "easy", why: "Keep it light.", est_minutes: "soon" }), false);
+  assert.equal(
+    isValidDayReadAgentResult({ kind: "done", why: "Your walk is in." }, { kind: "rest" }),
+    false,
+    "an easy activity cannot be promoted to completed training by the prose layer"
+  );
+  assert.equal(
+    isValidDayReadAgentResult({ kind: "rest", why: "Recover." }, { kind: "done" }),
+    false,
+    "a completed training fact cannot be downgraded by the prose layer"
+  );
+  assert.equal(isValidDayReadAgentResult({ kind: "done", why: "Session logged." }, { kind: "done" }), true);
 });

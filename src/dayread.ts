@@ -80,8 +80,8 @@ export function enforceCompletionContract(out: any, baseline: any): any {
   return out;
 }
 
-export function isValidDayReadAgentResult(value: any): boolean {
-  return !!(
+export function isValidDayReadAgentResult(value: any, baseline?: { kind?: unknown }): boolean {
+  const validShape = !!(
     value &&
     typeof value === "object" &&
     (value.kind === "train" || value.kind === "easy" || value.kind === "rest" || value.kind === "done") &&
@@ -91,6 +91,13 @@ export function isValidDayReadAgentResult(value: any): boolean {
     (value.focus == null || typeof value.focus === "string") &&
     (value.est_minutes == null || Number.isFinite(Number(value.est_minutes)))
   );
+  if (!validShape) return false;
+  // Whether meaningful training is already DONE is a server-owned fact, not a
+  // nuance the prose layer may reinterpret. Reject a mismatch before fallback
+  // stops so the same agent can repair it or the next healthy agent can answer.
+  if (baseline?.kind === "done") return value.kind === "done";
+  if (baseline?.kind != null && value.kind === "done") return false;
+  return true;
 }
 
 function agentIssueFor(error: unknown): "invalid_response" | "unreachable" {
@@ -116,10 +123,10 @@ export async function computeDayRead(opts: { date?: string; override?: string; a
     } = await runChosen(agent, prompt, {
       op: "day_read",
       timeoutMs: INTERACTIVE_TIMEOUT_MS,
-      acceptParsed: isValidDayReadAgentResult,
+      acceptParsed: (parsed) => isValidDayReadAgentResult(parsed, baseline),
     });
     const p = result.parsed;
-    if (isValidDayReadAgentResult(p)) {
+    if (isValidDayReadAgentResult(p, baseline)) {
       out = {
         kind: p.kind,
         headline:
