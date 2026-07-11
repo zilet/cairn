@@ -4455,7 +4455,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(mealPlanSource, /function currentMealPlan\(plans: unknown\): MealRecord \| null/);
   assert.match(mealPlanSource, /function mealPlanListHtml\(plans: unknown\): string/);
   assert.match(mealPlanSource, /function mealPrefsHtml\(prefs: unknown, index: number\): string/);
-  assert.match(mealPlanSource, /function mealPlannerBodyHtml\(current: unknown, mealPrefs: unknown, options: MealPlannerOptions = \{\}\): MealPlannerPaint/);
+  assert.match(
+    mealPlanSource,
+    /function mealPlannerBodyHtml\(\s*current: unknown,\s*mealPrefs: unknown,\s*options: MealPlannerOptions = \{\}\s*\): MealPlannerPaint/
+  );
   assert.match(mealPlanSource, /CairnMealPlan/);
   assert.match(mealRecipeSource, /function mealRecipeCtaHtml\(\): string/);
   assert.match(mealRecipeSource, /function mealRecipeHtml\(recipe: unknown\): string/);

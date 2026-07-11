@@ -144,7 +144,7 @@ type TodaySideLoaderDeps = {
     if (!drafts.length) { slot.innerHTML = ""; return; }
     const head = drafts.length > 1 ? `${drafts.length} decisions need your call` : "A plan decision needs your call";
     const raw = String((drafts[0] as { instruction?: unknown }).instruction || "").replace(/^(auto|chat):\s*/i, "").trim();
-    const sub = raw ? raw.charAt(0).toUpperCase() + raw.slice(1) : "Drafted by your coach";
+    const sub = raw ? raw.charAt(0).toUpperCase() + raw.slice(1) : "Prepared by your team";
     slot.innerHTML = `<button class="draft-card reveal" id="draftCard" style="--i:0" type="button">
       <span class="draft-ico" aria-hidden="true">✦</span>
       <span class="draft-body">

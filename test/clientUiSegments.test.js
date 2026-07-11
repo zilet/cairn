@@ -91,26 +91,36 @@ function segmentKeys(segments) {
   return Array.from(segments, ([key]) => key);
 }
 
+function segmentLabels(segments) {
+  return Array.from(segments, ([, label]) => label);
+}
+
 test("UI segments expose compatibility globals and Plan endurance visibility", () => {
   const context = loadSegments();
   const { controller, state } = createController(context);
 
   assert.equal(context.CairnUiSegments, context.window.CairnUiSegments);
-  assert.deepEqual(segmentKeys(controller.planSeg()), ["edit", "food", "meals", "coach"]);
+  assert.deepEqual(segmentKeys(controller.planSeg()), ["edit", "food", "meals"]);
+  assert.deepEqual(segmentLabels(controller.planSeg()), ["Training", "Food", "Meals"]);
+  assert.equal(
+    Object.hasOwn(controller.planHandlers, "coach"),
+    true,
+    "review-required changes keep the internal coach route"
+  );
 
   context.CairnUiSegments.setDiscipline("hybrid");
   assert.equal(context.primaryDiscipline, "hybrid");
   assert.equal(context.CairnUiSegments.isHybrid(), true);
-  assert.deepEqual(segmentKeys(controller.planSeg()), ["edit", "endurance", "food", "meals", "coach"]);
+  assert.deepEqual(segmentKeys(controller.planSeg()), ["edit", "endurance", "food", "meals"]);
 
   context.CairnUiSegments.setDiscipline("strength");
   context.CairnUiSegments.setEnduranceGoalSet(true);
   assert.equal(context.enduranceGoalSet, true);
-  assert.deepEqual(segmentKeys(controller.planSeg()), ["edit", "endurance", "food", "meals", "coach"]);
+  assert.deepEqual(segmentKeys(controller.planSeg()), ["edit", "endurance", "food", "meals"]);
 
   context.CairnUiSegments.setEnduranceGoalSet(false);
   state.planJump = "endurance";
-  assert.deepEqual(segmentKeys(controller.planSeg()), ["edit", "endurance", "food", "meals", "coach"]);
+  assert.deepEqual(segmentKeys(controller.planSeg()), ["edit", "endurance", "food", "meals"]);
 
   context.primaryDiscipline = "custom";
   assert.equal(context.primaryDiscipline, "custom");
@@ -233,12 +243,18 @@ test("Progress top-group buttons route to the group's default leaf", async () =>
     classList: classList(),
     dataset: { proggroup: "performance" },
     listeners: {},
-    addEventListener(type, fn) { this.listeners[type] = fn; },
-    closest() { return seg; },
+    addEventListener(type, fn) {
+      this.listeners[type] = fn;
+    },
+    closest() {
+      return seg;
+    },
   };
   const seg = {
     style: { setProperty() {} },
-    querySelectorAll() { return [groupBtn]; },
+    querySelectorAll() {
+      return [groupBtn];
+    },
   };
   const view = {
     querySelectorAll(selector) {
@@ -252,6 +268,9 @@ test("Progress top-group buttons route to the group's default leaf", async () =>
   groupBtn.listeners.click();
   await flush();
 
-  assert.ok(calls.some((call) => call[0] === "renderProgram"), "Performance group opens the Program standing read");
+  assert.ok(
+    calls.some((call) => call[0] === "renderProgram"),
+    "Performance group opens the Program standing read"
+  );
   assert.ok(calls.some((call) => call[0] === "syncRouteFromState"));
 });

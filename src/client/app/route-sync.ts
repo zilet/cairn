@@ -5,12 +5,18 @@ type RouteSyncMode = "push" | "replace";
 
 // @ts-check
 {
-  function routeSyncKey(key: unknown, items: ReadonlyArray<RouteSyncItem>, fallback: string | null = null): string | null {
+  function routeSyncKey(
+    key: unknown,
+    items: ReadonlyArray<RouteSyncItem>,
+    fallback: string | null = null
+  ): string | null {
     return window.CairnAppRouter.routeKey(key, items, fallback);
   }
 
   function routeSyncApi(): RouteSyncRoutesApi | null {
-    return window.CairnRoutes && typeof window.CairnRoutes.parseRoute === "function" && typeof window.CairnRoutes.routeToUrl === "function"
+    return window.CairnRoutes &&
+      typeof window.CairnRoutes.parseRoute === "function" &&
+      typeof window.CairnRoutes.routeToUrl === "function"
       ? window.CairnRoutes
       : null;
   }
@@ -35,7 +41,11 @@ type RouteSyncMode = "push" | "replace";
   function routeSyncCurrent(): Partial<RouteSyncRoute> {
     return window.CairnAppRouter.currentRouteState({
       state,
-      planSections: planSeg(),
+      // The visible Plan bar intentionally omits the internal Changes route.
+      // Canonical URL state still needs the complete route definition so a
+      // genuine review-required change can remain at /app/plan/coach instead
+      // of being rewritten to Training during the next state sync.
+      planSections: routeSyncApi()?.planSections || planSeg(),
       progressSections: PROGRESS_SEG,
       standSections: routeSyncStandSections(),
       meSections: ME_SEG,
@@ -46,7 +56,13 @@ type RouteSyncMode = "push" | "replace";
   }
 
   function routeSyncFromState(mode: RouteSyncMode = "push"): void {
-    window.CairnAppRouter.syncRouteFromState({ mode, routes: routeSyncApi(), route: routeSyncCurrent(), location, history });
+    window.CairnAppRouter.syncRouteFromState({
+      mode,
+      routes: routeSyncApi(),
+      route: routeSyncCurrent(),
+      location,
+      history,
+    });
   }
 
   Object.assign(globalThis, {

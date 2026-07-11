@@ -25,7 +25,12 @@ type MealPlannerPaint = {
   const mealRows = CairnMealRows;
   const MEAL_HINT_CHIPS = mealRows.MEAL_HINT_CHIPS;
   const MEAL_PREFS_PLACEHOLDER = "e.g. fasted morning training, simple prep on busy days";
-  const MEAL_PREF_CHIPS = ["Fasted AM training", "Train before lunch some days", "Simple prep, busy weekdays", "More fish, less red meat"];
+  const MEAL_PREF_CHIPS = [
+    "Fasted AM training",
+    "Train before lunch some days",
+    "Simple prep, busy weekdays",
+    "More fish, less red meat",
+  ];
   const KEPT_MEAL_PLAN_STATUSES = ["accepted", "applied", "kept"];
   const mealRecord: (value: unknown) => MealRecord = mealRows.record;
   const mealSlotFor = mealRows.mealSlotFor;
@@ -35,17 +40,17 @@ type MealPlannerPaint = {
 
   function currentMealPlan(plans: unknown): MealRecord | null {
     const rows = Array.isArray(plans) ? plans.map((plan) => mealRecord(plan)) : [];
-    return rows.find((plan) => KEPT_MEAL_PLAN_STATUSES.includes(String(plan.status)) && plan.parsed) ||
+    return (
+      rows.find((plan) => KEPT_MEAL_PLAN_STATUSES.includes(String(plan.status)) && plan.parsed) ||
       rows.find((plan) => plan.status === "draft" && plan.parsed) ||
-      null;
+      null
+    );
   }
 
   function scheduledMealPlan(plan: unknown): MealRecord | null {
     const p = mealRecord(plan);
     const autonomy = mealRecord(p.autonomy);
-    return p.status === "draft" && (autonomy.status === "announced" || autonomy.status === "pending")
-      ? autonomy
-      : null;
+    return p.status === "draft" && (autonomy.status === "announced" || autonomy.status === "pending") ? autonomy : null;
   }
 
   function mealBoundaryLabel(value: unknown): string {
@@ -55,27 +60,112 @@ type MealPlannerPaint = {
     return d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
   }
 
-  function mealPlanUpcomingHtml(plan: unknown): string {
+  function mealTargetValue(value: unknown): number | null {
+    const target = Number(value);
+    return Number.isFinite(target) && target > 0 ? Math.round(target) : null;
+  }
+
+  function mealTargetSummary(plan: unknown): string {
+    const parsed = mealRecord(mealRecord(plan).parsed);
+    const kcal = mealTargetValue(parsed.daily_kcal);
+    const protein = mealTargetValue(parsed.daily_protein_g);
+    return [kcal == null ? "" : `${kcal.toLocaleString()} kcal`, protein == null ? "" : `${protein} g protein`]
+      .filter(Boolean)
+      .join(" · ");
+  }
+
+  function mealTargetDifference(plan: unknown, current: unknown): string {
+    const nextParsed = mealRecord(mealRecord(plan).parsed);
+    const currentParsed = mealRecord(mealRecord(current).parsed);
+    const nextKcal = mealTargetValue(nextParsed.daily_kcal);
+    const currentKcal = mealTargetValue(currentParsed.daily_kcal);
+    const nextProtein = mealTargetValue(nextParsed.daily_protein_g);
+    const currentProtein = mealTargetValue(currentParsed.daily_protein_g);
+    const differences: string[] = [];
+    if (nextKcal != null && currentKcal != null && nextKcal !== currentKcal) {
+      differences.push(
+        `${Math.abs(nextKcal - currentKcal).toLocaleString()} kcal ${nextKcal > currentKcal ? "more" : "less"}`
+      );
+    }
+    if (nextProtein != null && currentProtein != null) {
+      if (nextProtein === currentProtein) differences.push(`protein stays at ${nextProtein} g`);
+      else
+        differences.push(
+          `${Math.abs(nextProtein - currentProtein)} g protein ${nextProtein > currentProtein ? "more" : "less"}`
+        );
+    }
+    return differences.join(" · ");
+  }
+
+  function mealPlanUpcomingHtml(plan: unknown, current?: unknown): string {
     const p = mealRecord(plan);
     const autonomy = scheduledMealPlan(p);
     if (!autonomy) return "";
+    const target = mealTargetSummary(p);
+    const difference = mealTargetDifference(p, current);
+    const detail = String(
+      autonomy.summary || mealRecord(p.parsed).summary || "Your next week is ready around the latest picture."
+    );
     return `<div class="plan-upcoming reveal" style="${stagger(0)}">
-      <span class="lbl plan-upcoming-mast">COMING UP</span>
-      <p class="plan-upcoming-line"><span class="plan-upcoming-when">${escHtml(mealBoundaryLabel(autonomy.effective_date))}</span> — ${escHtml(autonomy.summary || "Your refreshed meal plan becomes current automatically.")}</p>
-      <p class="sess-line" style="color:var(--muted);margin-top:5px">No Apply step. Your current plan stays in place until then; Hold or Undo always wins.</p>
+      <span class="lbl plan-upcoming-mast">COMING NEXT</span>
+      <p class="plan-upcoming-line"><span class="plan-upcoming-when">${escHtml(mealBoundaryLabel(autonomy.effective_date))}</span> — your meals refresh automatically.</p>
+      ${target ? `<p class="sess-line" style="margin:0">${escHtml(target)}</p>` : ""}
+      ${difference ? `<p class="sess-line" style="color:var(--muted);margin:0">${escHtml(difference)}</p>` : ""}
+      <div class="logrow" style="margin-top:2px">
+        <details class="hist-fold" style="margin:0;flex:1">
+          <summary>Preview changes</summary>
+          <p class="sess-line" style="color:var(--muted);margin:8px 0 0">${escHtml(detail)}</p>
+        </details>
+        ${autonomy.id == null ? "" : `<button type="button" class="linkbtn-quiet" data-meal-decision-hold="${escAttr(autonomy.id)}">Hold</button>`}
+      </div>
+    </div>`;
+  }
+
+  function mealPlanUpdateIsRecent(autonomy: MealRecord, now?: unknown): boolean {
+    const stamp = String(autonomy.applied_at || autonomy.effective_date || "");
+    const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(stamp);
+    if (!match) return true;
+    const reference = now instanceof Date ? now : new Date();
+    const appliedDay = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+    const ageDays = (reference.getTime() - appliedDay.getTime()) / 86_400_000;
+    return Number.isFinite(ageDays) && ageDays >= -1 && ageDays <= 3;
+  }
+
+  function appliedMealPlanUpdateHtml(plan: unknown, now?: unknown): string {
+    const p = mealRecord(plan);
+    const autonomy = mealRecord(p.autonomy);
+    if (
+      !KEPT_MEAL_PLAN_STATUSES.includes(String(p.status)) ||
+      autonomy.status !== "applied" ||
+      autonomy.id == null ||
+      !mealPlanUpdateIsRecent(autonomy, now)
+    )
+      return "";
+    const summary = String(autonomy.summary || "Your team updated this plan from the latest signals.");
+    const rationale = String(
+      autonomy.rationale ||
+        autonomy.reason ||
+        (Array.isArray(autonomy.reasons) ? autonomy.reasons.filter(Boolean).join(" ") : "")
+    );
+    return `<div class="sess-line" style="color:var(--muted);margin-top:12px">
+      <span class="lbl">RECENTLY UPDATED</span> · ${escHtml(summary)}
+      ${rationale ? `<details class="hist-fold" style="display:inline-block;margin:0 6px"><summary>Why</summary><span>${escHtml(rationale)}</span></details>` : ""}
+      ${autonomy.reversible === false ? "" : `<button type="button" class="linkbtn-quiet" data-meal-decision-undo="${escAttr(autonomy.id)}">Undo</button>`}
     </div>`;
   }
 
   function mealPlanCardHtml(plan: unknown, index: number): string {
     const p = mealRecord(plan);
     const parsed = mealRecord(p.parsed);
+    const autonomy = scheduledMealPlan(p);
+    const visibleStatus = autonomy ? "coming" : p.status === "draft" ? "review" : p.status;
     let hero: string;
     let body: string;
     if (p.parsed) {
       hero = `<div class="mp-hero">
           <div class="mp-hero-head">
             <span class="lbl">${escHtml(p.agent)} · #${escHtml(p.id)}</span>
-            ${statusBadge(p.status)}
+            ${statusBadge(visibleStatus)}
           </div>
           <div class="mp-hero-nums">
             <div class="mp-hero-kcal">
@@ -89,44 +179,54 @@ type MealPlannerPaint = {
           </div>
           ${parsed.summary ? `<div class="sess-line">${escHtml(parsed.summary)}</div>` : ""}
         </div>`;
-      const dayDetail = Array.isArray(parsed.days) ? parsed.days.map((day) => {
-        const d = mealRecord(day);
-        const meals = (Array.isArray(d.meals) ? d.meals : []).map((m) => mealRowHtml(m)).join("");
-        return `<div class="mp-day"><div class="mp-dayname">${escHtml(d.day || "")}</div>${meals || `<div class="sess-line" style="color:var(--muted)">No meals</div>`}</div>`;
-      }).join("") : "";
-      body = dayDetail + (parsed.notes ? `<div class="sess-line" style="color:var(--muted)">${escHtml(parsed.notes)}</div>` : "");
+      const dayDetail = Array.isArray(parsed.days)
+        ? parsed.days
+            .map((day) => {
+              const d = mealRecord(day);
+              const meals = (Array.isArray(d.meals) ? d.meals : []).map((m) => mealRowHtml(m)).join("");
+              return `<div class="mp-day"><div class="mp-dayname">${escHtml(d.day || "")}</div>${meals || `<div class="sess-line" style="color:var(--muted)">No meals</div>`}</div>`;
+            })
+            .join("")
+        : "";
+      body =
+        dayDetail +
+        (parsed.notes ? `<div class="sess-line" style="color:var(--muted)">${escHtml(parsed.notes)}</div>` : "");
     } else {
       hero = `<div class="mp-hero">
           <div class="mp-hero-head">
             <span class="lbl">${escHtml(p.agent)} · #${escHtml(p.id)}</span>
-            ${statusBadge(p.status)}
+            ${statusBadge(visibleStatus)}
           </div>
         </div>`;
       body = `<div class="sess-line" style="color:var(--warn)">Unparseable output</div>`;
     }
-    const autonomy = scheduledMealPlan(p);
-    const actions = p.status === "draft" && !autonomy
-      ? `<div class="logrow" style="margin-top:10px"><button class="logbtn" style="width:auto;padding:0 14px;font-size:.85rem" data-accept="${escAttr(p.id)}">ACCEPT</button>
+    const actions =
+      p.status === "draft" && !autonomy
+        ? `<div class="sess-line" style="color:var(--muted);margin-top:10px"><span class="lbl">NEEDS YOUR DECISION</span> · Nothing changes until you choose.</div>
+         <div class="logrow" style="margin-top:8px"><button class="logbtn" style="width:auto;padding:0 14px;font-size:.85rem" data-accept="${escAttr(p.id)}">USE THIS PLAN</button>
          <button class="ghostbtn" style="width:auto;padding:0 14px" data-discard="${escAttr(p.id)}">DISCARD</button></div>`
-      : autonomy
-        ? `<div class="sess-line" style="color:var(--muted);margin-top:10px">Becomes current ${escHtml(mealBoundaryLabel(autonomy.effective_date))} · automatic and reversible</div>`
-        : "";
+        : autonomy
+          ? `<div class="sess-line" style="color:var(--muted);margin-top:10px">Becomes current ${escHtml(mealBoundaryLabel(autonomy.effective_date))} · automatic and reversible</div>`
+          : "";
     return `<div class="mp-card reveal${p.status === "superseded" ? " mp-card-faded" : ""}" style="${stagger(index)}">
       ${hero}${body}${actions}</div>`;
   }
 
   function mealPlanListHtml(plans: unknown): string {
     const rows = Array.isArray(plans) ? plans : [];
-    if (!rows.length) return `<div class="empty">No meal plans yet. Draft one above and a week of meals built around your training lands here.</div>`;
+    if (!rows.length)
+      return `<div class="empty">No meal plans yet. Ask the team above and a week built around your training will land here.</div>`;
     const drafts = rows.filter((plan) => mealRecord(plan).status === "draft");
     const settled = rows.filter((plan) => mealRecord(plan).status !== "draft");
     const shown = [...drafts, ...settled.slice(0, 1)];
     const earlier = settled.slice(1);
-    return shown.map((plan, index) => mealPlanCardHtml(plan, index)).join("") +
+    return (
+      shown.map((plan, index) => mealPlanCardHtml(plan, index)).join("") +
       (earlier.length
         ? `<details class="hist-fold"><summary>Show earlier meal plans (${earlier.length})</summary>
            <div class="hist-fold-body">${earlier.map((plan, index) => mealPlanCardHtml(plan, index)).join("")}</div></details>`
-      : "");
+        : "")
+    );
   }
 
   function mealPrefsHtml(prefs: unknown, index: number): string {
@@ -138,8 +238,9 @@ type MealPlannerPaint = {
       </button>
       <div class="mealprefs-body" hidden>
         <textarea id="mealPrefsText" rows="3" placeholder="${escAttr(MEAL_PREFS_PLACEHOLDER)}">${escHtml(saved)}</textarea>
-        <div class="mealprefs-chips">${MEAL_PREF_CHIPS.map((chip) =>
-          `<button type="button" class="chip prefchip" data-pref="${escAttr(chip)}">${escHtml(chip)}</button>`).join("")}</div>
+        <div class="mealprefs-chips">${MEAL_PREF_CHIPS.map(
+          (chip) => `<button type="button" class="chip prefchip" data-pref="${escAttr(chip)}">${escHtml(chip)}</button>`
+        ).join("")}</div>
       </div>
     </div>`;
   }
@@ -154,24 +255,28 @@ type MealPlannerPaint = {
       </div>${mealPrefsHtml(mealPrefs, 1)}`;
   }
 
-  function mealPlanHeroHtml(plan: unknown, verified?: unknown): string {
+  function mealPlanHeroHtml(plan: unknown, verified?: unknown, now?: unknown): string {
     const p = mealRecord(plan);
     const parsed = mealRecord(p.parsed);
     const ctx = mealsCtxFor(p);
     const isDraft = p.status === "draft";
     const autonomy = scheduledMealPlan(p);
-    const actions = isDraft && !autonomy
-      ? `<div class="meals-actions">
-           <button class="pillbtn pill-accent" data-mkeep="${escAttr(p.id)}">Keep this plan</button>
+    const visibleStatus = autonomy ? "coming" : isDraft ? "review" : p.status;
+    const actions =
+      isDraft && !autonomy
+        ? `<div class="sess-line" style="color:var(--muted);margin-top:12px"><span class="lbl">NEEDS YOUR DECISION</span> · Nothing changes until you choose.</div>
+         <div class="meals-actions">
+           <button class="pillbtn pill-accent" data-mkeep="${escAttr(p.id)}">Use this plan</button>
            <button class="pillbtn" data-mdiscard="${escAttr(p.id)}">Discard</button>
          </div>`
-      : autonomy
-        ? `<div class="sess-line" style="color:var(--muted);margin-top:12px">Coming ${escHtml(mealBoundaryLabel(autonomy.effective_date))} · no Apply step · Hold or Undo any time</div>`
-        : "";
+        : autonomy
+          ? `<div class="sess-line" style="color:var(--muted);margin-top:12px">Becomes current ${escHtml(mealBoundaryLabel(autonomy.effective_date))} · automatically</div>`
+          : appliedMealPlanUpdateHtml(p, now);
+    const stateLabel = autonomy ? "COMING NEXT" : isDraft ? "REVIEW" : "CURRENT PLAN";
     return `<div class="mealhero reveal" style="${stagger(0)}">
         <div class="mp-hero-head">
-          <span class="lbl">Week of ${escHtml(ctx.weekOf)} · ${escHtml(p.agent || "")}</span>
-          ${statusBadge(p.status)}
+          <span class="lbl">${stateLabel} · Week of ${escHtml(ctx.weekOf)}${p.agent ? ` · ${escHtml(p.agent)}` : ""}</span>
+          ${statusBadge(visibleStatus)}
         </div>
         <div class="mp-hero-nums">
           <div><span class="numeral numeral-xl" data-cu="${Number(parsed.daily_kcal) || 0}">0</span><span class="lbl" style="display:block;margin-top:3px">kcal per day</span></div>
@@ -194,11 +299,19 @@ type MealPlannerPaint = {
     if (!rows.length) return "";
     const checked = checkedIndexSet(checkedShopping);
     return `<div class="detail-section reveal" style="${stagger(revealIndex)}"><div class="lbl">Shopping</div>
-          <div class="shop-chips">${rows.map((item, index) =>
-            `<button class="chip shop-chip${checked.has(index) ? " chip-done" : ""}" data-shop="${index}">${escHtml(String(item))}</button>`).join("")}</div></div>`;
+          <div class="shop-chips">${rows
+            .map(
+              (item, index) =>
+                `<button class="chip shop-chip${checked.has(index) ? " chip-done" : ""}" data-shop="${index}">${escHtml(String(item))}</button>`
+            )
+            .join("")}</div></div>`;
   }
 
-  function mealPlannerBodyHtml(current: unknown, mealPrefs: unknown, options: MealPlannerOptions = {}): MealPlannerPaint {
+  function mealPlannerBodyHtml(
+    current: unknown,
+    mealPrefs: unknown,
+    options: MealPlannerOptions = {}
+  ): MealPlannerPaint {
     const p = mealRecord(current);
     if (!p.parsed) return { html: mealPlanEmptyHtml(mealPrefs), context: null };
     const parsed = mealRecord(p.parsed);
@@ -211,8 +324,8 @@ type MealPlannerPaint = {
       : "";
     return {
       context: ctx,
-      html: `${mealPlanUpcomingHtml(options.upcoming)}
-      ${mealPlanHeroHtml(p, options.verified)}
+      html: `${mealPlanUpcomingHtml(options.upcoming, p)}
+      ${mealPlanHeroHtml(p, options.verified, options.now)}
       ${mealPrefsHtml(mealPrefs, 1)}
       ${dayHtml}
       ${shopping}

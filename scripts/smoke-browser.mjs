@@ -24,6 +24,7 @@ const routes = [
   { path: "/app/today", tab: "today" },
   { path: "/app/plan/food", tab: "plan", expectedState: { planSeg: "food" } },
   { path: "/app/plan/meals", tab: "plan", expectedState: { planSeg: "meals" } },
+  { path: "/app/plan/coach", tab: "plan", expectedState: { planSeg: "coach" } },
   { path: "/app/progress/energy", tab: "progress", expectedState: { progressSeg: "energy" } },
   { path: "/app/stand", tab: "stand", expectedState: { standSeg: null } },
   { path: "/app/stand/age", tab: "stand", expectedState: { standSeg: "age" } },

@@ -41,10 +41,7 @@ function nutritionTrendExpectation(
   let basis = "cold_start_broad_band";
   try {
     const estimate = estimateExpenditure(21);
-    if (
-      (estimate.confidence === "medium" || estimate.confidence === "high") &&
-      estimate.tdee != null
-    ) {
+    if ((estimate.confidence === "medium" || estimate.confidence === "high") && estimate.tdee != null) {
       expectedTrend = ((targetKcal - estimate.tdee) * 7) / 3_500;
       tolerance = 0.35;
       basis = "measured_expenditure";
@@ -78,14 +75,16 @@ function nutritionTrendExpectation(
       confounder_policy: "exclude_context_events",
       confidence: "tentative",
       evaluator: metric === "intake_to_weight_response" ? "intake_response" : "weight_trend",
-      evaluator_version: metric === "intake_to_weight_response" ? "nutrition-intake-response-v1" : "nutrition-weight-v1",
+      evaluator_version:
+        metric === "intake_to_weight_response" ? "nutrition-intake-response-v1" : "nutrition-weight-v1",
     },
   };
 }
 
 function recordNutritionTargetDecision(saved: AcceptedNutritionTarget): void {
   try {
-    const response = saved.target_kcal != null ? nutritionTrendExpectation(saved.target_kcal, saved.effective_date) : null;
+    const response =
+      saved.target_kcal != null ? nutritionTrendExpectation(saved.target_kcal, saved.effective_date) : null;
     recordDecision(
       {
         effective_date: saved.effective_date,
@@ -123,15 +122,18 @@ function recordNutritionTargetDecision(saved: AcceptedNutritionTarget): void {
   }
 }
 
-export function setNutritionTarget(input: {
-  target_kcal?: number | null;
-  protein_g?: number | null;
-  carbs_g?: number | null;
-  fat_g?: number | null;
-  source?: string | null;
-  note?: string | null;
-  effective_date?: string | null;
-}, opts: { recordDecision?: boolean } = {}): AcceptedNutritionTarget | null {
+export function setNutritionTarget(
+  input: {
+    target_kcal?: number | null;
+    protein_g?: number | null;
+    carbs_g?: number | null;
+    fat_g?: number | null;
+    source?: string | null;
+    note?: string | null;
+    effective_date?: string | null;
+  },
+  opts: { recordDecision?: boolean } = {}
+): AcceptedNutritionTarget | null {
   let goal: any = null;
   try {
     goal = computeGoalCheck();
@@ -176,7 +178,18 @@ export function setNutritionTarget(input: {
 
 export function getNutritionTarget(id: number): AcceptedNutritionTarget | null {
   const row = db.prepare(`SELECT * FROM nutrition_targets WHERE id = ?`).get(id) as any;
-  return row ? { id: row.id, effective_date: row.effective_date, target_kcal: row.target_kcal, protein_g: row.protein_g, carbs_g: row.carbs_g, fat_g: row.fat_g, source: row.source, note: row.note } : null;
+  return row
+    ? {
+        id: row.id,
+        effective_date: row.effective_date,
+        target_kcal: row.target_kcal,
+        protein_g: row.protein_g,
+        carbs_g: row.carbs_g,
+        fat_g: row.fat_g,
+        source: row.source,
+        note: row.note,
+      }
+    : null;
 }
 
 export function deleteNutritionTarget(id: number): boolean {
@@ -195,7 +208,18 @@ export function getActiveNutritionTarget(date?: string): AcceptedNutritionTarget
   const row = db
     .prepare(`SELECT * FROM nutrition_targets WHERE effective_date <= ? ORDER BY effective_date DESC, id DESC LIMIT 1`)
     .get(d) as any;
-  return row ? { id: row.id, effective_date: row.effective_date, target_kcal: row.target_kcal, protein_g: row.protein_g, carbs_g: row.carbs_g, fat_g: row.fat_g, source: row.source, note: row.note } : null;
+  return row
+    ? {
+        id: row.id,
+        effective_date: row.effective_date,
+        target_kcal: row.target_kcal,
+        protein_g: row.protein_g,
+        carbs_g: row.carbs_g,
+        fat_g: row.fat_g,
+        source: row.source,
+        note: row.note,
+      }
+    : null;
 }
 
 // ---------- meal plans ----------
@@ -206,18 +230,33 @@ export function getActiveNutritionTarget(date?: string): AcceptedNutritionTarget
 export function maxUpstreamNutritionSource(): string | null {
   const cands: string[] = [];
   try {
-    const d = db.prepare(`SELECT MAX(trigger_date) AS d FROM health_directives WHERE status = 'active' AND (domain = 'nutrition' OR domain = 'watch')`).get() as any;
+    const d = db
+      .prepare(
+        `SELECT MAX(trigger_date) AS d FROM health_directives WHERE status = 'active' AND (domain = 'nutrition' OR domain = 'watch')`
+      )
+      .get() as any;
     if (d?.d) cands.push(String(d.d).slice(0, 10));
-  } catch { /* table may lag on an old DB */ }
-  try { const doc = newestHealthDocDate(); if (doc) cands.push(String(doc).slice(0, 10)); } catch { /* ignore */ }
+  } catch {
+    /* table may lag on an old DB */
+  }
+  try {
+    const doc = newestHealthDocDate();
+    if (doc) cands.push(String(doc).slice(0, 10));
+  } catch {
+    /* ignore */
+  }
   try {
     const w = db.prepare(`SELECT MAX(date) AS d FROM bodyweight_log`).get() as any;
     if (w?.d) cands.push(String(w.d).slice(0, 10));
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   try {
     const target = db.prepare(`SELECT MAX(effective_date) AS d FROM nutrition_targets`).get() as any;
     if (target?.d) cands.push(String(target.d).slice(0, 10));
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   return cands.length ? cands.sort().at(-1)! : null;
 }
 
@@ -229,12 +268,15 @@ export function mealPlanFreshness(plan: any): { stale: boolean; reason: string |
   const parsed = plan?.parsed && typeof plan.parsed === "object" ? plan.parsed : null;
   const stamped = parsed?.source_ts
     ? String(parsed.source_ts).slice(0, 10)
-    : (plan?.created_at ? String(plan.created_at).slice(0, 10) : null);
+    : plan?.created_at
+      ? String(plan.created_at).slice(0, 10)
+      : null;
   const now = maxUpstreamNutritionSource();
   if (!stamped || !now || now <= stamped) return { stale: false, reason: null, source_ts: stamped };
   return {
     stale: true,
-    reason: "A newer lab, health directive, weigh-in, or nutrition target has landed since this plan was drafted — worth re-drafting so meals reflect it.",
+    reason:
+      "A newer lab, health directive, weigh-in, or nutrition target has landed since this plan was drafted — worth re-drafting so meals reflect it.",
     source_ts: stamped,
   };
 }
@@ -264,7 +306,7 @@ export function createMealPlan(agent: string, raw: string, parsed: any) {
 function mealPlanAutonomy(planId: number): any | null {
   const row = db
     .prepare(
-      `SELECT id, status, autonomy_tier, effective_date, summary
+      `SELECT id, status, autonomy_tier, effective_date, summary, rationale, reversible, applied_at
        FROM brain_decisions
        WHERE kind = 'meal_plan' AND source_ref_type = 'meal_plan' AND source_ref_key = ?
          AND status IN ('announced','pending','applied')
@@ -278,6 +320,9 @@ function mealPlanAutonomy(planId: number): any | null {
         tier: String(row.autonomy_tier),
         effective_date: row.effective_date == null ? null : String(row.effective_date),
         summary: row.summary == null ? null : String(row.summary),
+        rationale: row.rationale == null ? null : String(row.rationale),
+        reversible: Number(row.reversible) === 1,
+        applied_at: row.applied_at == null ? null : String(row.applied_at),
       }
     : null;
 }
@@ -324,7 +369,12 @@ export function mealPlanForCoach() {
   const today = localDateISO();
   const pick = (iso: string, label: string) => {
     const abbr = weekdayAbbr(iso);
-    const d = days.find((x: any) => String(x?.day ?? "").trim().toLowerCase().startsWith(abbr));
+    const d = days.find((x: any) =>
+      String(x?.day ?? "")
+        .trim()
+        .toLowerCase()
+        .startsWith(abbr)
+    );
     if (!d) return null;
     const meals = (Array.isArray(d.meals) ? d.meals : []).slice(0, 6).map((m: any) => ({
       name: capStr(m?.name, 80),
@@ -351,8 +401,7 @@ export function mealPlanForCoach() {
 }
 
 export function listMealPlans(limit = 10) {
-  return (db.prepare(`SELECT * FROM meal_plans ORDER BY id DESC LIMIT ?`).all(limit) as any[]).map((row) => {
-    const plan = withMealPlanAutonomy(hydrate(row));
+  const decorate = (plan: any) => {
     // Additive freshness flag so the PWA can show a quiet "worth re-drafting" chip on
     // a live plan that a newer lab/directive has outrun. Only meaningful for a live
     // (draft/accepted) plan; a discarded one is history.
@@ -361,7 +410,18 @@ export function listMealPlans(limit = 10) {
       return { ...plan, stale: f.stale, stale_reason: f.reason };
     }
     return plan;
-  });
+  };
+  const plans = (db.prepare(`SELECT * FROM meal_plans ORDER BY id DESC LIMIT ?`).all(limit) as any[]).map((row) =>
+    decorate(withMealPlanAutonomy(hydrate(row)))
+  );
+  // The list is a bounded history feed, but every planner consumer also relies on
+  // it to paint the CURRENT week. A run of newer discarded/superseded/review rows
+  // must never push the accepted plan outside the payload and make a draft look
+  // current. Preserve the requested history window, then append the one canonical
+  // current row when it is not already present (at most limit + 1 records).
+  const current = currentMealPlan() as any;
+  if (current?.id && !plans.some((plan) => Number(plan.id) === Number(current.id))) plans.push(decorate(current));
+  return plans;
 }
 
 function recordMealPlanStatusDecision(plan: any, transition: string): void {
@@ -377,14 +437,14 @@ function recordMealPlanStatusDecision(plan: any, transition: string): void {
         )
       )
       .filter((value: number) => value > 0);
-    const kcal = Number.isFinite(explicitKcal) && explicitKcal > 0
-      ? explicitKcal
-      : dayKcal.length
-        ? Math.round(dayKcal.reduce((sum: number, value: number) => sum + value, 0) / dayKcal.length)
-        : Number.NaN;
-    const response = accepted && Number.isFinite(kcal) && kcal > 0
-      ? nutritionTrendExpectation(kcal, localDateISO())
-      : null;
+    const kcal =
+      Number.isFinite(explicitKcal) && explicitKcal > 0
+        ? explicitKcal
+        : dayKcal.length
+          ? Math.round(dayKcal.reduce((sum: number, value: number) => sum + value, 0) / dayKcal.length)
+          : Number.NaN;
+    const response =
+      accepted && Number.isFinite(kcal) && kcal > 0 ? nutritionTrendExpectation(kcal, localDateISO()) : null;
     const days = Array.isArray(plan.parsed?.days) ? plan.parsed.days : [];
     recordDecision(
       {
@@ -564,8 +624,15 @@ export function updateMealPlanDays(id: number, days: any) {
 export function swapMealInPlan(id: number, day: string, mealIndex: number, meal: any) {
   const plan = getMealPlan(id);
   if (!plan || !plan.parsed || !Array.isArray(plan.parsed.days)) return null;
-  const dayKey = String(day ?? "").trim().toLowerCase();
-  const target = plan.parsed.days.find((d: any) => String(d?.day ?? "").trim().toLowerCase() === dayKey);
+  const dayKey = String(day ?? "")
+    .trim()
+    .toLowerCase();
+  const target = plan.parsed.days.find(
+    (d: any) =>
+      String(d?.day ?? "")
+        .trim()
+        .toLowerCase() === dayKey
+  );
   if (!target || !Array.isArray(target.meals)) return null;
   const idx = Number(mealIndex);
   if (!Number.isInteger(idx) || idx < 0 || idx >= target.meals.length) return null;
@@ -620,8 +687,15 @@ export function coerceRecipe(r: any) {
 export function setMealRecipe(planId: number, day: string, mealIndex: number, recipe: any) {
   const plan = getMealPlan(planId);
   if (!plan || !plan.parsed || !Array.isArray(plan.parsed.days)) return null;
-  const dayKey = String(day ?? "").trim().toLowerCase();
-  const target = plan.parsed.days.find((d: any) => String(d?.day ?? "").trim().toLowerCase() === dayKey);
+  const dayKey = String(day ?? "")
+    .trim()
+    .toLowerCase();
+  const target = plan.parsed.days.find(
+    (d: any) =>
+      String(d?.day ?? "")
+        .trim()
+        .toLowerCase() === dayKey
+  );
   if (!target || !Array.isArray(target.meals)) return null;
   const idx = Number(mealIndex);
   if (!Number.isInteger(idx) || idx < 0 || idx >= target.meals.length) return null;
@@ -655,9 +729,11 @@ export function addFoodNote(meal: string, raw: string, parsed: any, imagePath?: 
   const status = fromText ? (getSettings().enrich_enabled ? "pending" : "skipped") : null;
   // Stamp the LOCAL calendar day (device-zone aware) the meal belongs to, so an
   // evening log counts toward the right day; created_at stays the UTC instant.
-  const info = db.prepare(
-    `INSERT INTO food_notes (date, meal, raw_output, parsed_json, image_path, enrichment_status) VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(localDateISO(), meal || "meal", raw || "", parsed ? JSON.stringify(parsed) : null, imagePath ?? null, status);
+  const info = db
+    .prepare(
+      `INSERT INTO food_notes (date, meal, raw_output, parsed_json, image_path, enrichment_status) VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    .run(localDateISO(), meal || "meal", raw || "", parsed ? JSON.stringify(parsed) : null, imagePath ?? null, status);
   const row = hydrate(db.prepare(`SELECT * FROM food_notes WHERE id = ?`).get(info.lastInsertRowid));
   bumpFoodDataVersion(); // a new food entry moves the intake average → expenditure read
   emitBrainEvent({ kind: "food_logged", domain: "nutrition", date: row.date || localDateISO(), entity_id: row.id });
@@ -686,10 +762,7 @@ export function deleteFoodNote(id: number) {
 
 // Overwrite the parsed_json blob with the enricher's structured estimate.
 export function updateFoodNoteParsed(id: number, parsed: any) {
-  db.prepare(`UPDATE food_notes SET parsed_json = ? WHERE id = ?`).run(
-    parsed ? JSON.stringify(parsed) : null,
-    id
-  );
+  db.prepare(`UPDATE food_notes SET parsed_json = ? WHERE id = ?`).run(parsed ? JSON.stringify(parsed) : null, id);
   bumpFoodDataVersion(); // enrichment can revise kcal in place (backstop can't see it)
   const updated = getFoodNote(id);
   if (updated)
@@ -719,9 +792,11 @@ export function getDayIntake(date?: string) {
   const d = date || localDateISO();
   // Key by the stamped LOCAL day; COALESCE to the legacy UTC-date-of-created_at
   // guards any pre-migration row that somehow lacks a stamped date.
-  const rows = (db.prepare(
-    `SELECT * FROM food_notes WHERE COALESCE(date, substr(created_at,1,10)) = ? ORDER BY id ASC`
-  ).all(d) as any[]).map(hydrate);
+  const rows = (
+    db
+      .prepare(`SELECT * FROM food_notes WHERE COALESCE(date, substr(created_at,1,10)) = ? ORDER BY id ASC`)
+      .all(d) as any[]
+  ).map(hydrate);
 
   const totals = { kcal: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0 };
   const num = (v: any) => (Number.isFinite(Number(v)) ? Number(v) : 0);
@@ -769,7 +844,9 @@ export function getDayIntake(date?: string) {
       };
       remaining = { kcal: target.kcal - totals.kcal, protein_g: target.protein_g - totals.protein_g };
     }
-  } catch { /* profile incomplete → descriptive-only */ }
+  } catch {
+    /* profile incomplete → descriptive-only */
+  }
 
   return { date: d, totals, entries, count: entries.length, target, remaining };
 }
@@ -788,14 +865,20 @@ export function updateFoodNote(id: number, fields: any) {
 
   const numField = (key: string, max: number) => {
     if (f[key] === undefined) return;
-    if (f[key] === null || f[key] === "") { parsed[key] = null; return; }
+    if (f[key] === null || f[key] === "") {
+      parsed[key] = null;
+      return;
+    }
     const n = Number(f[key]);
     parsed[key] = Number.isFinite(n) ? Math.min(max, Math.max(0, Math.round(n))) : null;
   };
   if (f.summary !== undefined) parsed.summary = capStr(f.summary, 200);
   if (f.items !== undefined) {
     parsed.items = Array.isArray(f.items)
-      ? f.items.slice(0, 30).map((s: any) => capStr(s, 80)).filter(Boolean)
+      ? f.items
+          .slice(0, 30)
+          .map((s: any) => capStr(s, 80))
+          .filter(Boolean)
       : capStr(f.items, 300);
   }
   if (f.notes !== undefined) parsed.notes = f.notes == null ? null : capStr(f.notes, 500);
@@ -805,8 +888,10 @@ export function updateFoodNote(id: number, fields: any) {
   numField("fat_g", 500);
   numField("fiber_g", 200);
 
-  db.prepare(`UPDATE food_notes SET parsed_json = ?, enrichment_status = 'done' WHERE id = ?`)
-    .run(JSON.stringify(parsed), id);
+  db.prepare(`UPDATE food_notes SET parsed_json = ?, enrichment_status = 'done' WHERE id = ?`).run(
+    JSON.stringify(parsed),
+    id
+  );
   if (f.meal !== undefined && f.meal !== null && String(f.meal).trim()) {
     db.prepare(`UPDATE food_notes SET meal = ? WHERE id = ?`).run(String(f.meal).trim().slice(0, 40), id);
   }
@@ -822,6 +907,10 @@ export function updateFoodNote(id: number, fields: any) {
 export function hydrate(row: any) {
   if (!row) return row;
   let parsed: any = null;
-  try { parsed = row.parsed_json ? JSON.parse(row.parsed_json) : null; } catch { parsed = null; }
+  try {
+    parsed = row.parsed_json ? JSON.parse(row.parsed_json) : null;
+  } catch {
+    parsed = null;
+  }
   return { ...row, parsed };
 }

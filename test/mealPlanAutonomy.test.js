@@ -40,6 +40,10 @@ test("lead mode announces a meal plan, keeps today's plan, lands tomorrow, and u
   const due = applyDueAnnouncedDecisions(scheduled.effective_date);
   assert.deepEqual(due.applied, [scheduled.decision.id]);
   assert.equal(repo.currentMealPlan().id, next.id);
+  assert.equal(repo.currentMealPlan().autonomy.status, "applied");
+  assert.equal(repo.currentMealPlan().autonomy.reversible, true);
+  assert.match(repo.currentMealPlan().autonomy.rationale, /Refreshed against/);
+  assert.ok(repo.currentMealPlan().autonomy.applied_at);
   assert.equal(repo.getMealPlan(current.id).status, "superseded");
   assert.equal(repo.getBrainDecision(scheduled.decision.id).context.rollback_available, true);
   assert.equal(repo.getBrainRollback(scheduled.decision.id).kind, "meal_plan");
@@ -79,4 +83,18 @@ test("review-everything keeps a meal plan as a plain draft", () => {
   assert.equal(result.tier, "ask");
   assert.equal(repo.getMealPlan(plan.id).status, "draft");
   assert.equal(repo.getMealPlan(plan.id).autonomy, null);
+});
+
+test("bounded meal-plan history always carries the canonical current plan", () => {
+  const current = repo.createMealPlan("stub", "", week("Current"));
+  repo.acceptMealPlan(current.id);
+  for (let index = 0; index < 5; index += 1) {
+    const history = repo.createMealPlan("stub", "", week(`History ${index}`));
+    repo.setMealPlanStatus(history.id, "superseded", { recordDecision: false });
+  }
+
+  const bounded = repo.listMealPlans(3);
+  assert.equal(bounded.length, 4, "the requested history stays bounded plus one canonical current row");
+  assert.ok(bounded.some((plan) => plan.id === current.id));
+  assert.equal(repo.currentMealPlan().id, current.id);
 });

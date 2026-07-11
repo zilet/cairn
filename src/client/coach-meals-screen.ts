@@ -12,7 +12,7 @@ function coachMealRows<T extends CoachMealRecord = CoachMealRecord>(value: unkno
 }
 
 function htmlElement<T extends HTMLElement = HTMLElement>(value: Element | null | undefined): T | null {
-  return value instanceof HTMLElement ? value as T : null;
+  return value instanceof HTMLElement ? (value as T) : null;
 }
 
 function agentName(agent: CoachAgent): string {
@@ -21,49 +21,65 @@ function agentName(agent: CoachAgent): string {
 
 // ---------- Coach ----------
 async function renderCoach(): Promise<void> {
-  headerTitle.textContent = "Expert team";
+  headerTitle.textContent = "Changes";
   state.planSeg = "coach";
-  view.innerHTML = segSkeleton("coach", planSeg(), 2);
+  view.innerHTML = skelLines(2) + skelLines(3);
   const agents = coachMealRows<CoachAgent>(await api("/agents"));
   const proposals = await api("/proposals?limit=10");
   const agentOpts =
     `<option value="auto">⟳ Auto · rotate enabled agents</option>` +
-    agents.map((a) =>
-      `<option value="${escAttr(agentName(a))}"${a.enabled ? "" : " disabled"}>${escHtml(agentName(a))}${a.enabled ? "" : " (off)"}${a.env_ok ? "" : " · no key"}</option>`
-    ).join("");
+    agents
+      .map(
+        (a) =>
+          `<option value="${escAttr(agentName(a))}"${a.enabled ? "" : " disabled"}>${escHtml(agentName(a))}${a.enabled ? "" : " (off)"}${a.env_ok ? "" : " · no key"}</option>`
+      )
+      .join("");
 
-  await skelSwap(() => { view.innerHTML = segBar("coach", planSeg()) + `
-    <p class="drafts-lede sess-line" style="color:var(--muted);margin:2px 2px 16px;line-height:1.5">Your expert team continuously reads training, nutrition, recovery, health, schedule, and your notes as one picture. In Lead mode, bounded changes land at natural boundaries with a calm heads-up and Undo; this screen keeps the history and manual override paths. Talk to the team anytime in the <button class="linkbtn linkbtn-plain" id="draftsToChat" type="button">Coach</button> tab.</p>
-    <div class="field"><label>Agent</label>
-      <select id="agentsel">${agentOpts || "<option>none configured</option>"}</select></div>
-    <div class="field"><label>Instruction (optional)</label>
-      <select id="presetsel">
-        <option value="">Review recent sessions, propose next-week targets</option>
-        <option value="Only adjust lower-body lifts; hold everything else.">Lower body only</option>
-        <option value="Be extra conservative; I felt beat up this week.">Extra conservative</option>
-        <option value="custom">Custom\u2026</option>
-      </select></div>
-    <div class="field" id="customwrap" style="display:none">
-      <textarea id="custominstr" rows="3" class="form-textarea" placeholder="e.g. focus on lower body; hold everything else\u2026"></textarea>
-    </div>
-    <button id="runbtn" class="logbtn" style="width:100%;height:46px;font-size:1rem;letter-spacing:.05em">ASK TEAM TO REVIEW PROGRAM</button>
-    <div id="runstatus" style="margin-top:10px;color:var(--muted);font-size:.85rem"></div>
-    <button id="mealbtn" class="draftbtn" style="width:100%;height:46px;font-size:1rem;margin-top:14px;letter-spacing:.05em">ASK TEAM TO REFRESH MEALS</button>
-    <div id="mealstatus" style="margin-top:10px;color:var(--muted);font-size:.85rem"></div>
-    <h1 class="lbl" style="margin:24px 0 8px">Program decisions</h1>
+  await skelSwap(() => {
+    view.innerHTML = `
+    <button class="linkbtn linkbtn-plain" id="changesBackToPlan" type="button">‹ Plan</button>
+    <p class="changes-lede sess-line" style="color:var(--muted);margin:2px 2px 16px;line-height:1.5">Your expert team adapts training and meals in the background, then leaves a clear record here. Most changes need nothing from you: they arrive at the right boundary with a heads-up and Undo. Talk to the team anytime in the <button class="linkbtn linkbtn-plain" id="changesToChat" type="button">Coach</button> tab.</p>
+    <h1 class="lbl" style="margin:24px 0 8px">Program change history</h1>
     <div id="proplist"></div>
-    <h1 class="lbl" style="margin:24px 0 8px">Meal-plan decisions</h1>
-    <div id="meallist"></div>`; });
+    <h1 class="lbl" style="margin:24px 0 8px">Meal-plan change history</h1>
+    <div id="meallist"></div>
+    <details class="changes-manual" style="margin-top:24px">
+      <summary class="lbl">Manual review</summary>
+      <p class="sess-line" style="color:var(--muted);margin:10px 2px 16px;line-height:1.5">The team reviews your signals automatically. Use these controls only when you want an extra review or want to give a specific direction.</p>
+      <div class="field"><label>Agent</label>
+        <select id="agentsel">${agentOpts || "<option>none configured</option>"}</select></div>
+      <div class="field"><label>Instruction (optional)</label>
+        <select id="presetsel">
+          <option value="">Review recent sessions and prepare the next useful changes</option>
+          <option value="Only adjust lower-body lifts; hold everything else.">Lower body only</option>
+          <option value="Be extra conservative; I felt beat up this week.">Extra conservative</option>
+          <option value="custom">Custom\u2026</option>
+        </select></div>
+      <div class="field" id="customwrap" style="display:none">
+        <textarea id="custominstr" rows="3" class="form-textarea" placeholder="e.g. focus on lower body; hold everything else\u2026"></textarea>
+      </div>
+      <button id="runbtn" class="logbtn" style="width:100%;height:46px;font-size:1rem;letter-spacing:.05em">ASK TEAM TO REVIEW PROGRAM</button>
+      <div id="runstatus" style="margin-top:10px;color:var(--muted);font-size:.85rem"></div>
+      <button id="mealbtn" class="draftbtn" style="width:100%;height:46px;font-size:1rem;margin-top:14px;letter-spacing:.05em">ASK TEAM TO REFRESH MEALS</button>
+      <div id="mealstatus" style="margin-top:10px;color:var(--muted);font-size:.85rem"></div>
+    </details>`;
+  });
 
-  wireSeg(PLAN_HANDLERS);
-  $("#draftsToChat")?.addEventListener("click", () => activateTab("chat"));
+  $("#changesBackToPlan")?.addEventListener("click", () => {
+    state.planJump = "edit";
+    activateTab("plan");
+  });
+  $("#changesToChat")?.addEventListener("click", () => activateTab("chat"));
   $<HTMLSelectElement>("#presetsel")?.addEventListener("change", (e) => {
     const wrap = htmlElement($("#customwrap"));
     const target = e.target instanceof HTMLSelectElement ? e.target : null;
     if (wrap) wrap.style.display = target?.value === "custom" ? "block" : "none";
   });
   $("#runbtn")?.addEventListener("click", () => {
-    CairnCoachProposalController.runCoachProposal($<HTMLSelectElement>("#agentsel")?.value || "auto", instructionValue());
+    CairnCoachProposalController.runCoachProposal(
+      $<HTMLSelectElement>("#agentsel")?.value || "auto",
+      instructionValue()
+    );
   });
   $("#mealbtn")?.addEventListener("click", runMealPlan);
   CairnCoachProposalController.renderProposals(proposals);
@@ -85,6 +101,62 @@ function runMealPlan(): void {
   CairnMealPlannerController.runCoachMealPlan(agent, instructionValue());
 }
 
+type MealDecisionAction = "hold" | "undo";
+
+async function revertMealDecision(button: HTMLElement, action: MealDecisionAction): Promise<void> {
+  const rawId = action === "hold" ? button.dataset.mealDecisionHold : button.dataset.mealDecisionUndo;
+  const decisionId = Number(rawId);
+  if (!Number.isFinite(decisionId) || decisionId <= 0 || button.dataset.busy === "1") return;
+  button.dataset.busy = "1";
+  button.setAttribute("aria-busy", "true");
+  const holding = action === "hold";
+  try {
+    const result = await api(`/brain/decisions/${decisionId}/revert`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: holding ? "hold on — keep my current meal plan" : "undo from the meal plan" }),
+    });
+    if (!isCoachMealRecord(result) || result.ok !== true) {
+      throw new Error(
+        typeof result?.error === "string"
+          ? result.error
+          : holding
+            ? "That meal change can no longer be held."
+            : "That meal change can no longer be undone."
+      );
+    }
+    // A later accepted plan intentionally wins over an older rollback. The
+    // response confirms that the decision was reverted, but not that its prior
+    // plan became current, so keep this confirmation truthful under that race.
+    toast(holding ? "Held — your current meals stay" : "Undo recorded — showing your current meals");
+    swrInvalidate(MEALS_KEY);
+    await renderMeals();
+  } catch (error) {
+    toast(
+      error instanceof Error
+        ? error.message
+        : holding
+          ? "Could not hold that meal change"
+          : "Could not undo that meal change"
+    );
+    button.dataset.busy = "";
+    button.removeAttribute("aria-busy");
+  }
+}
+
+function wireMealDecisionActions(): void {
+  view.querySelectorAll<HTMLElement>("[data-meal-decision-hold]").forEach((button) =>
+    button.addEventListener("click", () => {
+      void revertMealDecision(button, "hold");
+    })
+  );
+  view.querySelectorAll<HTMLElement>("[data-meal-decision-undo]").forEach((button) =>
+    button.addEventListener("click", () => {
+      void revertMealDecision(button, "undo");
+    })
+  );
+}
+
 // ---------- Meals planner (Plan tab · Meals) ----------
 // A Morsel-style journal over the current weekly meal plan: big serif day names,
 // floating food art, per-meal macro chips, per-day totals. The classic mp-card
@@ -100,7 +172,9 @@ function renderFoodJournal(): void {
   headerTitle.textContent = "Plan";
   state.planSeg = "food";
   const token = ++pollToken;
-  view.innerHTML = segBar("food", planSeg()) + `<section class="meal-energy food-journal" id="mealEnergy">
+  view.innerHTML =
+    segBar("food", planSeg()) +
+    `<section class="meal-energy food-journal" id="mealEnergy">
       <div id="dayFuelSlot" class="dayfuel-slot">${loadingState("Reading today's food…")}</div>
       <div id="energyHero"></div>
       <div id="energyCard">${loadingState("Reading your trend…")}</div>
@@ -132,10 +206,15 @@ async function renderMeals(): Promise<unknown> {
   if (!peek) view.innerHTML = segSkeleton("meals", planSeg(), 3); // cold: skeleton-first
   // meal prefs come from /settings; peek it so a warm paint has the verbatim text,
   // and revalidate in the background (cheap, shares the SWR tiers).
-  let mealPrefs = String(peekCached<import("../contracts/client-api.js").ClientSettingsResponse>(MEALS_SETTINGS_KEY)?.data?.settings?.meal_prefs || "");
+  let mealPrefs = String(
+    peekCached<import("../contracts/client-api.js").ClientSettingsResponse>(MEALS_SETTINGS_KEY)?.data?.settings
+      ?.meal_prefs || ""
+  );
   cachedApi("/settings", {
     key: MEALS_SETTINGS_KEY,
-    onUpgrade: (data) => { mealPrefs = String(data.settings?.meal_prefs || ""); },
+    onUpgrade: (data) => {
+      mealPrefs = String(data.settings?.meal_prefs || "");
+    },
   }).catch(() => {});
 
   return paintSWR({
@@ -155,14 +234,17 @@ function paintMealsBody(plans: unknown, mealPrefs: string): void {
   const current = CairnMealPlan.currentMealPlan(plans);
   const upcoming = Array.isArray(plans)
     ? plans.find((plan) => {
-        const row = plan && typeof plan === "object" ? plan as Record<string, any> : {};
+        const row = plan && typeof plan === "object" ? (plan as Record<string, any>) : {};
         return row.status === "draft" && ["announced", "pending"].includes(String(row.autonomy?.status));
       })
     : null;
-  const currentPlan = current && (typeof current.id === "string" || typeof current.id === "number")
-    ? current as Record<string, unknown> & { id: string | number }
-    : null;
-  const shopChecked = currentPlan ? new Set(JSON.parse(localStorage.getItem(`shop:${currentPlan.id}`) || "[]")) : new Set();
+  const currentPlan =
+    current && (typeof current.id === "string" || typeof current.id === "number")
+      ? (current as Record<string, unknown> & { id: string | number })
+      : null;
+  const shopChecked = currentPlan
+    ? new Set(JSON.parse(localStorage.getItem(`shop:${currentPlan.id}`) || "[]"))
+    : new Set();
   const painted = CairnMealPlan.mealPlannerBodyHtml(current, mealPrefs, {
     checkedShopping: shopChecked,
     verified: currentPlan ? CairnMealPlannerController.verifiedForPlan(currentPlan.id) : null,
@@ -171,7 +253,10 @@ function paintMealsBody(plans: unknown, mealPrefs: string): void {
   const body = painted.html;
   const ctx = painted.context;
 
-  view.innerHTML = segBar("meals", planSeg()) + body + `
+  view.innerHTML =
+    segBar("meals", planSeg()) +
+    body +
+    `
     <details class="mp-history">
       <summary class="lbl">Past meal plans</summary>
       <div id="mealHist" style="margin-top:10px"></div>
@@ -181,6 +266,7 @@ function paintMealsBody(plans: unknown, mealPrefs: string): void {
 
   CairnMealPlannerController.renderMealPlans(plans, "#mealHist", () => renderMeals());
   CairnMealPlannerController.wireMealPlannerBody(currentPlan, ctx);
+  wireMealDecisionActions();
   if (currentPlan) loadMealProvenance();
 }
 
@@ -194,11 +280,19 @@ function loadMealsEnergy(token: number): void {
     if (token !== pollToken || !view.querySelector("#energyCard")) return;
     paintEnergyBody(exp);
   };
-  if (peek) { paint(peek.data); if (!peek.fresh) markRefreshing(true); }
+  if (peek) {
+    paint(peek.data);
+    if (!peek.fresh) markRefreshing(true);
+  }
   cachedApi("/nutrition/expenditure?window=21", {
     key: "progress:energy",
-    onUpgrade: (exp, { changed }) => { if (peek && !peek.fresh) markRefreshing(false); if (changed || !peek) paint(exp); },
-  }).catch(() => { if (peek && !peek.fresh) markRefreshing(false); });
+    onUpgrade: (exp, { changed }) => {
+      if (peek && !peek.fresh) markRefreshing(false);
+      if (changed || !peek) paint(exp);
+    },
+  }).catch(() => {
+    if (peek && !peek.fresh) markRefreshing(false);
+  });
 }
 
 Object.assign(globalThis, {

@@ -112,7 +112,10 @@ function uiProgressGroupDefaultLeaf(group: string): string {
 // Top group bar — mirrors segmentedNavHtml's markup (sliding thumb, aria-pressed)
 // but the buttons carry data-proggroup, wired to their group's default leaf.
 function uiProgressGroupBar(activeGroup: string): string {
-  const gi = Math.max(0, UI_PROGRESS_GROUPS.findIndex(([k]) => k === activeGroup));
+  const gi = Math.max(
+    0,
+    UI_PROGRESS_GROUPS.findIndex(([k]) => k === activeGroup)
+  );
   const buttons = UI_PROGRESS_GROUPS.map(([k, l]) => {
     const on = k === activeGroup;
     return `<button class="segbtn${on ? " active" : ""}" type="button" data-proggroup="${k}" aria-pressed="${on ? "true" : "false"}">${l}</button>`;
@@ -125,10 +128,12 @@ function uiProgressSubBar(group: string, activeLeaf: string): string {
   const leaves = uiProgressVisibleLeaves(group, activeLeaf);
   if (leaves.length < 2) return "";
   const li = Math.max(0, leaves.indexOf(activeLeaf));
-  const buttons = leaves.map((k) => {
-    const on = k === activeLeaf;
-    return `<button class="segbtn${on ? " active" : ""}" type="button" data-seg="${k}" aria-pressed="${on ? "true" : "false"}">${uiProgressLeafLabel(k)}</button>`;
-  }).join("");
+  const buttons = leaves
+    .map((k) => {
+      const on = k === activeLeaf;
+      return `<button class="segbtn${on ? " active" : ""}" type="button" data-seg="${k}" aria-pressed="${on ? "true" : "false"}">${uiProgressLeafLabel(k)}</button>`;
+    })
+    .join("");
   return `<div class="segwrap prog-subwrap"><div class="seg seg-sliding prog-subseg" role="group" aria-label="Progress view" style="--segn:${leaves.length};--segi:${li}"><span class="seg-thumb" aria-hidden="true"></span>${buttons}</div></div>`;
 }
 function uiProgressNav(activeLeaf: string): string {
@@ -172,13 +177,17 @@ function uiSegmentsShowEnduranceTab(): boolean {
 Object.defineProperty(globalThis, "primaryDiscipline", {
   configurable: true,
   get: () => uiPrimaryDiscipline,
-  set: (value) => { uiPrimaryDiscipline = uiDisciplinePropertyValue(value); },
+  set: (value) => {
+    uiPrimaryDiscipline = uiDisciplinePropertyValue(value);
+  },
 });
 
 Object.defineProperty(globalThis, "enduranceGoalSet", {
   configurable: true,
   get: () => uiEnduranceGoalSet,
-  set: (value) => { uiEnduranceGoalSet = !!value; },
+  set: (value) => {
+    uiEnduranceGoalSet = !!value;
+  },
 });
 
 function createUiSegments(deps: UiSegmentsDeps): UiSegmentsController {
@@ -210,10 +219,12 @@ function createUiSegments(deps: UiSegmentsDeps): UiSegmentsController {
         const index = [...seg.querySelectorAll<HTMLElement>(".segbtn")].indexOf(button);
         (seg as HTMLElement).style.setProperty("--segi", String(index));
       }
-      deps.withViewTransition(() => Promise.resolve(handler()).then(() => {
-        deps.syncRouteFromState();
-        return deps.viewEnter();
-      }));
+      deps.withViewTransition(() =>
+        Promise.resolve(handler()).then(() => {
+          deps.syncRouteFromState();
+          return deps.viewEnter();
+        })
+      );
     };
     deps.root.querySelectorAll<HTMLElement>(".segbtn").forEach((button) =>
       button.addEventListener("click", () => {
@@ -255,8 +266,17 @@ function createUiSegments(deps: UiSegmentsDeps): UiSegmentsController {
   function planSeg(): readonly UiSegmentsSegment[] {
     const routedToEndurance = deps.state.planSeg === "endurance" || deps.state.planJump === "endurance";
     return uiSegmentsShowEnduranceTab() || routedToEndurance
-      ? [["edit", "Training"], ["endurance", "Endurance"], ["food", "Food"], ["meals", "Meals"], ["coach", "Drafts"]]
-      : [["edit", "Training"], ["food", "Food"], ["meals", "Meals"], ["coach", "Drafts"]];
+      ? [
+          ["edit", "Training"],
+          ["endurance", "Endurance"],
+          ["food", "Food"],
+          ["meals", "Meals"],
+        ]
+      : [
+          ["edit", "Training"],
+          ["food", "Food"],
+          ["meals", "Meals"],
+        ];
   }
 
   const planHandlers: UiSegmentsHandlerMap = {

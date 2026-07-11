@@ -238,17 +238,119 @@ test("meal-plan helper presents an autonomy-scheduled week as upcoming without A
     agent: "team",
     parsed: { summary: "Fuel the next block", daily_kcal: 2300, daily_protein_g: 175, days: [] },
     autonomy: {
+      id: "decision<12>",
       status: "announced",
       effective_date: "2026-07-13",
       summary: "Meals realigned around the next training block.",
     },
   };
   const history = meals.mealPlanCardHtml(upcoming, 0);
-  const painted = meals.mealPlannerBodyHtml(upcoming, "", { upcoming });
+  const painted = meals.mealPlannerBodyHtml(
+    {
+      id: 11,
+      status: "accepted",
+      agent: "team",
+      parsed: { daily_kcal: 2400, daily_protein_g: 175, days: [] },
+    },
+    "",
+    { upcoming }
+  );
 
   assert.match(history, /automatic and reversible/);
+  assert.match(history, />coming<\/span>/);
+  assert.doesNotMatch(history, />draft<\/span>/);
   assert.doesNotMatch(history, /data-accept|data-discard/);
-  assert.match(painted.html, /COMING UP/);
-  assert.match(painted.html, /No Apply step/);
+  assert.match(painted.html, /COMING NEXT/);
+  assert.match(painted.html, /Monday, Jul 13<\/span> — your meals refresh automatically/);
+  assert.match(painted.html, /2,300 kcal · 175 g protein/);
+  assert.match(painted.html, /100 kcal less · protein stays at 175 g/);
+  assert.match(painted.html, /<summary>Preview changes<\/summary>/);
+  assert.match(painted.html, /Meals realigned around the next training block/);
+  assert.match(painted.html, /data-meal-decision-hold="decision&lt;12&gt;"/);
+  assert.doesNotMatch(painted.html, />Apply<|No Apply step/);
   assert.doesNotMatch(painted.html, /data-mkeep|data-mdiscard/);
+});
+
+test("meal-plan helper keeps review-required and applied states distinct", () => {
+  const meals = loadMealPlan();
+  const review = meals.mealPlanHeroHtml({
+    id: "review<2>",
+    status: "draft",
+    agent: "team",
+    parsed: { daily_kcal: 2200, daily_protein_g: 170, days: [] },
+  });
+  const applied = meals.mealPlanHeroHtml(
+    {
+      id: 13,
+      status: "accepted",
+      agent: "team",
+      parsed: { daily_kcal: 2300, daily_protein_g: 175, days: [] },
+      autonomy: {
+        id: "decision<13>",
+        status: "applied",
+        effective_date: "2026-07-11",
+        reversible: true,
+        summary: "Meals now support the next training block.",
+        rationale: "Training volume rose while protein remains anchored.",
+      },
+    },
+    undefined,
+    new Date(2026, 6, 12)
+  );
+
+  assert.match(review, /REVIEW · Week/);
+  assert.match(review, /NEEDS YOUR DECISION/);
+  assert.match(review, /Nothing changes until you choose/);
+  assert.match(review, />review<\/span>/);
+  assert.doesNotMatch(review, />draft<\/span>/);
+  assert.match(review, /data-mkeep="review&lt;2&gt;"/);
+  assert.doesNotMatch(review, /data-meal-decision-undo|CURRENT PLAN/);
+  assert.match(applied, /CURRENT PLAN · Week/);
+  assert.match(applied, /RECENTLY UPDATED/);
+  assert.match(applied, /<summary>Why<\/summary>/);
+  assert.match(applied, /Training volume rose while protein remains anchored/);
+  assert.match(applied, /data-meal-decision-undo="decision&lt;13&gt;"/);
+  assert.doesNotMatch(applied, /data-mkeep|NEEDS YOUR DECISION/);
+
+  const noLongerRecent = meals.mealPlanHeroHtml(
+    {
+      id: 15,
+      status: "accepted",
+      parsed: { daily_kcal: 2300, days: [] },
+      autonomy: { id: 15, status: "applied", effective_date: "2026-06-01", reversible: true },
+    },
+    undefined,
+    new Date(2026, 6, 12)
+  );
+  assert.doesNotMatch(noLongerRecent, /RECENTLY UPDATED|data-meal-decision-undo/);
+
+  const delayedButJustApplied = meals.mealPlanHeroHtml(
+    {
+      id: 16,
+      status: "accepted",
+      parsed: { daily_kcal: 2300, days: [] },
+      autonomy: {
+        id: 16,
+        status: "applied",
+        effective_date: "2026-06-01",
+        applied_at: "2026-07-12T08:30:00Z",
+        reversible: true,
+        summary: "The delayed boundary change just landed.",
+      },
+    },
+    undefined,
+    new Date(2026, 6, 12, 12)
+  );
+  assert.match(delayedButJustApplied, /RECENTLY UPDATED/);
+  assert.match(delayedButJustApplied, /The delayed boundary change just landed/);
+  assert.match(delayedButJustApplied, /data-meal-decision-undo="16"/);
+
+  const locked = meals.mealPlanHeroHtml({
+    id: 14,
+    status: "accepted",
+    parsed: { daily_kcal: 2300, days: [] },
+    autonomy: { id: 14, status: "applied", reversible: false, summary: "A protected update." },
+  });
+  assert.match(locked, /RECENTLY UPDATED/);
+  assert.doesNotMatch(locked, /data-meal-decision-undo/);
 });

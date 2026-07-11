@@ -16,17 +16,31 @@ function loadRouteSync(options = {}) {
     planSeg: null,
     tab: options.tab || "today",
   };
-  const routes = options.routes === undefined
-    ? {
-        parseRoute: () => ({ tab: "plan", section: "food" }),
-        routeToUrl: (route) => `/app/${route.tab}/${route.section || ""}`.replace(/\/$/, ""),
-      }
-    : options.routes;
+  const routes =
+    options.routes === undefined
+      ? {
+          parseRoute: () => ({ tab: "plan", section: "food" }),
+          planSections: ["edit", "food", "meals", "coach"],
+          routeToUrl: (route) => `/app/${route.tab}/${route.section || ""}`.replace(/\/$/, ""),
+        }
+      : options.routes;
   const context = {
-    HEALTH_SEG: [["read", "Read"], ["records", "Records"]],
-    ME_SEG: [["standing", "Standing"], ["health", "Health"]],
-    PROGRESS_SEG: [["sessions", "History"], ["program", "Program"]],
-    SET_SEG: [["agents", "Agents"], ["data", "Data"]],
+    HEALTH_SEG: [
+      ["read", "Read"],
+      ["records", "Records"],
+    ],
+    ME_SEG: [
+      ["standing", "Standing"],
+      ["health", "Health"],
+    ],
+    PROGRESS_SEG: [
+      ["sessions", "History"],
+      ["program", "Program"],
+    ],
+    SET_SEG: [
+      ["agents", "Agents"],
+      ["data", "Data"],
+    ],
     defaultProgressSeg: () => "sessions",
     globalThis: null,
     history: {
@@ -37,24 +51,36 @@ function loadRouteSync(options = {}) {
       pathname: options.pathname || "/app/today",
       search: options.search || "",
     },
-    planSeg: () => [["edit", "Training"], ["food", "Food"], ["coach", "Coach"]],
+    planSeg: () => [
+      ["edit", "Training"],
+      ["food", "Food"],
+      ["coach", "Coach"],
+    ],
     state,
     window: {
       CairnAppRouter: {
         applyRouteState: (route, deps) => {
-          calls.push(["applyRouteState", route, {
-            planSections: deps.planSections,
-            progressSections: deps.progressSections,
-            routeApi: !!deps.routeApi,
-          }]);
+          calls.push([
+            "applyRouteState",
+            route,
+            {
+              planSections: deps.planSections,
+              progressSections: deps.progressSections,
+              routeApi: !!deps.routeApi,
+            },
+          ]);
           deps.state.tab = route?.tab || "today";
           return deps.state.tab;
         },
         currentRouteState: (deps) => {
-          calls.push(["currentRouteState", {
-            defaultProgressSection: deps.defaultProgressSection,
-            settingsSections: deps.settingsSections,
-          }]);
+          calls.push([
+            "currentRouteState",
+            {
+              defaultProgressSection: deps.defaultProgressSection,
+              planSections: deps.planSections,
+              settingsSections: deps.settingsSections,
+            },
+          ]);
           return { tab: deps.state.tab, section: "sessions" };
         },
         routeKey: (key, items, fallback) => {
@@ -62,11 +88,14 @@ function loadRouteSync(options = {}) {
           return fallback;
         },
         syncRouteFromState: (deps) => {
-          calls.push(["syncRouteFromState", {
-            mode: deps.mode,
-            route: deps.route,
-            routes: !!deps.routes,
-          }]);
+          calls.push([
+            "syncRouteFromState",
+            {
+              mode: deps.mode,
+              route: deps.route,
+              routes: !!deps.routes,
+            },
+          ]);
           deps.history[deps.mode === "replace" ? "replaceState" : "pushState"]({ cairn: true }, "", "/app/synced");
           return "/app/synced";
         },
@@ -88,11 +117,22 @@ test("route sync wrapper exposes route API and applies parsed routes with app se
   assert.equal(env.context.applyRouteState({ tab: "plan", section: "food" }), "plan");
 
   assert.deepEqual(plain(env.calls), [
-    ["applyRouteState", { tab: "plan", section: "food" }, {
-      planSections: [["edit", "Training"], ["food", "Food"], ["coach", "Coach"]],
-      progressSections: [["sessions", "History"], ["program", "Program"]],
-      routeApi: true,
-    }],
+    [
+      "applyRouteState",
+      { tab: "plan", section: "food" },
+      {
+        planSections: [
+          ["edit", "Training"],
+          ["food", "Food"],
+          ["coach", "Coach"],
+        ],
+        progressSections: [
+          ["sessions", "History"],
+          ["program", "Program"],
+        ],
+        routeApi: true,
+      },
+    ],
   ]);
 });
 
@@ -103,19 +143,36 @@ test("route sync wrapper derives current state and delegates browser history syn
   env.context.syncRouteFromState("replace");
 
   assert.deepEqual(plain(env.calls), [
-    ["currentRouteState", {
-      defaultProgressSection: "sessions",
-      settingsSections: [["agents", "Agents"], ["data", "Data"]],
-    }],
-    ["currentRouteState", {
-      defaultProgressSection: "sessions",
-      settingsSections: [["agents", "Agents"], ["data", "Data"]],
-    }],
-    ["syncRouteFromState", {
-      mode: "replace",
-      route: { tab: "progress", section: "sessions" },
-      routes: true,
-    }],
+    [
+      "currentRouteState",
+      {
+        defaultProgressSection: "sessions",
+        planSections: ["edit", "food", "meals", "coach"],
+        settingsSections: [
+          ["agents", "Agents"],
+          ["data", "Data"],
+        ],
+      },
+    ],
+    [
+      "currentRouteState",
+      {
+        defaultProgressSection: "sessions",
+        planSections: ["edit", "food", "meals", "coach"],
+        settingsSections: [
+          ["agents", "Agents"],
+          ["data", "Data"],
+        ],
+      },
+    ],
+    [
+      "syncRouteFromState",
+      {
+        mode: "replace",
+        route: { tab: "progress", section: "sessions" },
+        routes: true,
+      },
+    ],
     ["replaceState", { cairn: true }, "", "/app/synced"],
   ]);
 });
@@ -127,9 +184,12 @@ test("route sync wrapper degrades when the route parser is unavailable", () => {
   env.context.syncRouteFromState();
 
   assert.equal(env.calls.at(-1)[0], "pushState");
-  assert.deepEqual(plain(env.calls.at(-2)), ["syncRouteFromState", {
-    mode: "push",
-    route: { tab: "today", section: "sessions" },
-    routes: false,
-  }]);
+  assert.deepEqual(plain(env.calls.at(-2)), [
+    "syncRouteFromState",
+    {
+      mode: "push",
+      route: { tab: "today", section: "sessions" },
+      routes: false,
+    },
+  ]);
 });

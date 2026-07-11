@@ -28,8 +28,8 @@ import { createHash } from "node:crypto";
 // Import each producer read DIRECTLY from its sibling module (never from the
 // barrel ../repo.js) — repo modules do this to avoid a circular import, since the
 // barrel re-exports this very file.
-import { getDayIntake } from "./nutrition.js";
-import { localDateISO } from "./shared.js";
+import { getDayIntake, getMealPlan } from "./nutrition.js";
+import { addDaysISO, localDateISO } from "./shared.js";
 import { getCachedDayRead } from "./intelligence.js";
 import { listVisibleInsights, listActiveDirectives } from "./coach.js";
 import { programAdjustments, programBalance, recentMuscleLoad } from "./progression.js";
@@ -243,23 +243,77 @@ function reconcileCandidate(): TodayAgendaCandidate | null {
 // natural boundary unless the athlete says "hold on". It is explicit without
 // becoming a notification; the action cancels the decision deterministically in
 // one tap (the server revert path), never through an agent turn. ----
-function announcedChangeCandidate(): TodayAgendaCandidate | null {
-  const decision = listBrainDecisions({ status: "announced", limit: 20 }).find((row) => !!row.effective_date);
-  if (!decision) return null;
+function upcomingDateLabel(effectiveDate: string, asOf: string): string {
+  if (effectiveDate === addDaysISO(asOf, 1)) return "Tomorrow";
+  if (effectiveDate === asOf) return "Today";
+  const parsed = new Date(`${effectiveDate}T00:00:00Z`);
+  if (!Number.isFinite(parsed.getTime())) return effectiveDate;
+  const sixDaysOut = addDaysISO(asOf, 6);
+  if (effectiveDate > asOf && sixDaysOut && effectiveDate <= sixDaysOut) {
+    return new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "long" }).format(parsed);
+  }
+  return new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short", day: "numeric" }).format(parsed);
+}
+
+function mealPlanAnnouncement(decision: any, asOf: string): Pick<TodayAgendaCandidate, "kicker" | "title" | "body"> {
+  const effective = upcomingDateLabel(String(decision.effective_date), asOf);
+  let plan: any = null;
+  try {
+    const id = Number((decision.action as any)?.meal_plan_id ?? decision.source_ref_key);
+    if (id > 0) plan = getMealPlan(id);
+  } catch {
+    plan = null;
+  }
+  const kcal = Number(plan?.parsed?.daily_kcal);
+  const protein = Number(plan?.parsed?.daily_protein_g);
+  const specifics = [
+    Number.isFinite(kcal) && kcal > 0 ? `${Math.round(kcal).toLocaleString("en-US")} kcal` : null,
+    Number.isFinite(protein) && protein > 0 ? `${Math.round(protein)} g protein` : null,
+  ].filter(Boolean);
   return {
-    id: `announced-decision-${decision.id}`,
-    kind: "plan",
-    tier: "primary",
-    priority: 82,
-    kicker: "NEXT BOUNDARY",
-    title: decision.summary,
-    body: `${decision.rationale || "Cairn found a structural change worth making."} Planned for ${decision.effective_date}.`,
-    action: {
-      label: "Hold on",
-      kind: "hold-decision",
-      payload: decision.id,
-    },
+    kicker: "COMING UP",
+    title: `${effective} — your meal plan refreshes automatically`,
+    body: specifics.length ? `Daily plan: ${specifics.join(" · ")}.` : "Your next week of meals is ready.",
   };
+}
+
+function announcedChangeCandidates(date: string): TodayAgendaCandidate[] {
+  // Announcements describe live commitments, not the state of a routed day in
+  // the past. Keeping them off historical agendas also makes relative copy such
+  // as "Tomorrow" unambiguously relative to the day the athlete is opening now.
+  const today = localDateISO();
+  if (date !== today) return [];
+
+  // Every standing announcement is accountability the athlete is owed. Return
+  // each as its own stable candidate; the shared arbiter keeps the live rail calm
+  // by placing only the highest two inline and leaving every other one reachable
+  // behind "more". Earliest boundary first, then oldest decision first for a
+  // deterministic same-day tie.
+  const decisions = listBrainDecisions({ status: "announced", limit: 100 })
+    .filter((row) => !!row.effective_date && Number(row.id) > 0)
+    .sort((a, b) => String(a.effective_date).localeCompare(String(b.effective_date)) || Number(a.id) - Number(b.id));
+  return decisions.map((decision) => {
+    const copy =
+      decision.kind === "meal_plan"
+        ? mealPlanAnnouncement(decision, today)
+        : {
+            kicker: "NEXT BOUNDARY",
+            title: decision.summary,
+            body: `${decision.rationale || "Cairn found a structural change worth making."} Planned for ${decision.effective_date}.`,
+          };
+    return {
+      id: `announced-decision-${decision.id}`,
+      kind: "plan",
+      tier: "primary",
+      priority: 82,
+      ...copy,
+      action: {
+        label: "Hold on",
+        kind: "hold-decision",
+        payload: decision.id,
+      },
+    };
+  });
 }
 
 // ---- plan: a draft that requires review under the selected autonomy mode or a
@@ -276,7 +330,7 @@ function planDraftCandidate(): TodayAgendaCandidate | null {
     kind: "plan",
     tier: "primary",
     priority: 78,
-    kicker: "PLAN DRAFT",
+    kicker: "NEEDS YOUR DECISION",
     title: drafts.length > 1 ? `${drafts.length} plan changes are waiting` : "A plan change is waiting",
     body: raw || "This one needs your decision before anything changes.",
     action: { label: "Review", kind: "plan-coach" },
@@ -560,7 +614,11 @@ export function todayAgenda(date?: string, opts: { markIntroduced?: boolean } = 
 
   add(safe(() => fuelCandidate(d)));
   add(safe(() => reconcileCandidate()));
-  add(safe(() => announcedChangeCandidate()));
+  try {
+    for (const announced of announcedChangeCandidates(d)) add(announced);
+  } catch {
+    /* one unavailable producer still degrades to the rest of Today */
+  }
   add(safe(() => planDraftCandidate()));
   add(safe(() => healthCandidate(d)));
   if (showPlanForward) add(safe(() => adjustmentsCandidate(d, weeklyStats)));

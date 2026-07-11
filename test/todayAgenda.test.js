@@ -20,6 +20,7 @@ beforeEach(() => {
   resetTables(
     "food_notes",
     "insights",
+    "meal_plans",
     "plan_proposals",
     "health_directives",
     "garmin_activities",
@@ -68,6 +69,178 @@ test("an announced structural change appears calmly with a working chat hold-on 
   assert.equal(card?.action?.label, "Hold on");
   assert.equal(card?.action?.kind, "hold-decision", "hold is a deterministic one-tap cancel, not a chat prefill");
   assert.equal(Number(card?.action?.payload), decision.id);
+});
+
+test("an upcoming meal-plan change uses calm automatic copy and concise daily targets", () => {
+  const plan = repo.createMealPlan("stub", "", {
+    summary: "A verbose agent summary that should not reach Today.",
+    rationale: "A long rationale that should stay in the detail view rather than filling the Today agenda.",
+    daily_kcal: 2075,
+    daily_protein_g: 175,
+    days: [],
+  });
+  const tomorrow = localDaysAgo(-1);
+  const decision = repo.recordDecision({
+    effective_date: tomorrow,
+    kind: "meal_plan",
+    domain: "nutrition",
+    summary: "A verbose agent summary that should not reach Today.",
+    rationale: "A long rationale that should stay in the detail view rather than filling the Today agenda.",
+    source: "test",
+    source_ref_type: "meal_plan",
+    source_ref_key: String(plan.id),
+    status: "announced",
+    autonomy_tier: "announce",
+    risk_class: "low",
+    reversible: true,
+    input_fingerprint: null,
+    context: null,
+    action: { meal_plan_id: plan.id },
+    specialist: null,
+    applied_at: null,
+    reverted_at: null,
+    superseded_by: null,
+    evaluator_version: null,
+  }).decision;
+
+  const agenda = repo.todayAgenda(localDaysAgo(0));
+  const card = [...agenda.primary, ...agenda.more].find((item) => item.id === `announced-decision-${decision.id}`);
+  assert.equal(card?.kicker, "COMING UP");
+  assert.equal(card?.title, "Tomorrow — your meal plan refreshes automatically");
+  assert.equal(card?.body, "Daily plan: 2,075 kcal · 175 g protein.");
+  assert.doesNotMatch(`${card?.title} ${card?.body}`, /verbose|long rationale/i);
+  assert.deepEqual(card?.action, { label: "Hold on", kind: "hold-decision", payload: decision.id });
+});
+
+test("an upcoming meal-plan change degrades calmly when target specifics are unavailable", () => {
+  const decision = repo.recordDecision({
+    effective_date: localDaysAgo(-3),
+    kind: "meal_plan",
+    domain: "nutrition",
+    summary: "Agent output should remain out of the compact card.",
+    rationale: "Likewise this rationale.",
+    source: "test",
+    source_ref_type: "meal_plan",
+    source_ref_key: "9999",
+    status: "announced",
+    autonomy_tier: "announce",
+    risk_class: "low",
+    reversible: true,
+    input_fingerprint: null,
+    context: null,
+    action: { meal_plan_id: 9999 },
+    specialist: null,
+    applied_at: null,
+    reverted_at: null,
+    superseded_by: null,
+    evaluator_version: null,
+  }).decision;
+
+  const agenda = repo.todayAgenda(localDaysAgo(0));
+  const card = [...agenda.primary, ...agenda.more].find((item) => item.id === `announced-decision-${decision.id}`);
+  assert.equal(card?.body, "Your next week of meals is ready.");
+  assert.ok(card?.title?.includes("your meal plan refreshes automatically"));
+});
+
+test("every live announced change remains reachable across primary and more", () => {
+  const mealPlan = repo.createMealPlan("stub", "", {
+    daily_kcal: 2150,
+    daily_protein_g: 175,
+    days: [],
+  });
+  const base = {
+    effective_date: localDaysAgo(-1),
+    source: "test",
+    status: "announced",
+    autonomy_tier: "announce",
+    risk_class: "low",
+    reversible: true,
+    input_fingerprint: null,
+    context: null,
+    specialist: null,
+    applied_at: null,
+    reverted_at: null,
+    superseded_by: null,
+    evaluator_version: null,
+  };
+  const meal = repo.recordDecision({
+    ...base,
+    kind: "meal_plan",
+    domain: "nutrition",
+    summary: "Meals refresh.",
+    rationale: "The next food week is ready.",
+    source_ref_type: "meal_plan",
+    source_ref_key: String(mealPlan.id),
+    action: { meal_plan_id: mealPlan.id },
+  }).decision;
+  const training = repo.recordDecision({
+    ...base,
+    kind: "training_structure",
+    domain: "training",
+    summary: "The next training block changes shape.",
+    rationale: "Recent performance supports a different split.",
+    source_ref_type: "plan_proposal",
+    source_ref_key: "41",
+    action: { proposal_id: 41 },
+  }).decision;
+  const recovery = repo.recordDecision({
+    ...base,
+    effective_date: localDaysAgo(-2),
+    kind: "recovery_adjustment",
+    domain: "recovery",
+    summary: "The next recovery week gets an easier opening.",
+    rationale: "Recent fatigue is worth absorbing.",
+    source_ref_type: "plan_proposal",
+    source_ref_key: "42",
+    action: { proposal_id: 42 },
+  }).decision;
+
+  const agenda = repo.todayAgenda(localDaysAgo(0));
+  const announced = [...agenda.primary, ...agenda.more].filter((item) => item.id.startsWith("announced-decision-"));
+  assert.deepEqual(
+    new Set(announced.map((item) => item.id)),
+    new Set([meal, training, recovery].map((decision) => `announced-decision-${decision.id}`))
+  );
+  assert.equal(announced.length, 3, "no standing announcement is duplicated or hidden");
+  assert.ok(
+    agenda.more.some((item) => item.id.startsWith("announced-decision-")),
+    "overflow remains quietly reachable behind more"
+  );
+  assert.ok(
+    announced.some((item) => item.id === `announced-decision-${meal.id}` && item.kicker === "COMING UP"),
+    "a newer cross-domain announcement does not hide the meal heads-up"
+  );
+});
+
+test("live announcements do not appear on a routed historical agenda", () => {
+  repo.recordDecision({
+    effective_date: localDaysAgo(-1),
+    kind: "training_structure",
+    domain: "training",
+    summary: "A live future change.",
+    rationale: "This belongs only to the live Today view.",
+    source: "test",
+    source_ref_type: "plan_proposal",
+    source_ref_key: "42",
+    status: "announced",
+    autonomy_tier: "announce",
+    risk_class: "low",
+    reversible: true,
+    input_fingerprint: null,
+    context: null,
+    action: { proposal_id: 42 },
+    specialist: null,
+    applied_at: null,
+    reverted_at: null,
+    superseded_by: null,
+    evaluator_version: null,
+  });
+
+  const agenda = repo.todayAgenda(localDaysAgo(7));
+  assert.ok(
+    ![...agenda.primary, ...agenda.more].some((item) => item.id.startsWith("announced-decision-")),
+    "historical Today stays archival instead of relabeling a live boundary"
+  );
 });
 
 // ---- the hero is always the Brief; an empty day surfaces nothing else ----
@@ -176,6 +349,7 @@ test("agenda-only draft, health, and running candidates render as generic cards"
 
   assert.equal(byId("draft-proposals")?.client_card, undefined, "drafts must not name an unmounted rail slot");
   assert.equal(byId("draft-proposals")?.action?.kind, "plan-coach");
+  assert.equal(byId("draft-proposals")?.kicker, "NEEDS YOUR DECISION");
   assert.ok(byId("draft-proposals")?.title);
 
   assert.equal(byId("health-focus")?.client_card, undefined, "health focus must render as generic agenda copy");
