@@ -639,6 +639,10 @@ export function invalidateDayRead(date?: string): void {
 export interface FrequentFood {
   summary: string;
   count: number;
+  // Number of distinct logged days behind the count. A count can be inflated by
+  // duplicate entries from one meal; planning code uses this to distinguish a
+  // recurring staple from a one-off event without weakening the capture chips.
+  distinct_days: number;
   last_at: string;
   kcal?: number | null;
   protein_g?: number | null;
@@ -674,12 +678,12 @@ export function frequentFoods(hour?: number): FrequentFood[] {
   for (let dh = -2; dh <= 2; dh++) bandHours.push((((targetHour + dh) % 24) + 24) % 24);
   const rows = db
     .prepare(
-      `SELECT created_at, meal, parsed_json FROM food_notes
+      `SELECT created_at, COALESCE(date, substr(created_at, 1, 10)) AS log_date, meal, parsed_json FROM food_notes
      WHERE CAST(substr(created_at, 12, 2) AS INTEGER) IN (${bandHours.map(() => "?").join(",")})
      ORDER BY id DESC LIMIT 400`
     )
     .all(...bandHours) as any[];
-  const agg = new Map<string, { count: number; last_at: string }>();
+  const agg = new Map<string, { count: number; last_at: string; days: Set<string> }>();
   for (const r of rows) {
     // created_at is stored UTC ("YYYY-MM-DD HH:MM:SS"); read the hour and accept
     // a ±2h window (wrapping midnight) around the target.
@@ -700,8 +704,13 @@ export function frequentFoods(hour?: number): FrequentFood[] {
     const cur = agg.get(key);
     if (cur) {
       cur.count++;
+      if (r.log_date) cur.days.add(String(r.log_date));
       if (String(r.created_at) > cur.last_at) cur.last_at = String(r.created_at);
-    } else agg.set(key, { count: 1, last_at: String(r.created_at) });
+    } else {
+      const days = new Set<string>();
+      if (r.log_date) days.add(String(r.log_date));
+      agg.set(key, { count: 1, last_at: String(r.created_at), days });
+    }
   }
   // Recover display casing from the NEWEST occurrence of each key (rows are
   // id-DESC, so the first one we see per key wins), and macros from the newest
@@ -747,6 +756,7 @@ export function frequentFoods(hour?: number): FrequentFood[] {
       return {
         summary: display.get(key) ?? key,
         count: v.count,
+        distinct_days: v.days.size,
         last_at: v.last_at,
         kcal: m?.kcal ?? null,
         protein_g: m?.protein_g ?? null,

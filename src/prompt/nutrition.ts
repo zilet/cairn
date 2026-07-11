@@ -122,7 +122,35 @@ function renderHouseholdDiet(ctx: any): string {
 // like/dislike, an allergy, a diet). Kept broad but food-specific so a non-food
 // preference ("trains in the morning") never leaks into the meal prompts.
 const FOOD_MEMORY_RE =
-  /\b(salmon|fish|seafood|shellfish|shrimp|prawn|tuna|sardine|mackerel|cod|chicken|beef|pork|lamb|turkey|steak|egg|eggs|dairy|milk|cheese|yogurt|gluten|wheat|nuts?|peanut|almond|cashew|walnut|soy|tofu|tempeh|rice|pasta|potato|bread|oats?|beans?|lentil|chickpea|quinoa|broccoli|kale|spinach|avocado|banana|berry|berries|fruit|veg|vegetable|veggies?|mushroom|onion|garlic|cilantro|coriander|spicy|spice|coffee|alcohol|meat|vegan|vegetarian|pescatarian|keto|paleo|carnivore|halal|kosher|lactose|intoleran|allerg)\b/i;
+  /\b(salmon|fish|seafood|shellfish|shrimp|prawn|tuna|sardine|mackerel|cod|chicken|beef|pork|lamb|turkey|steak|egg|eggs|dairy|milk|cheese|yogurt|gluten|wheat|nuts?|peanut|almond|cashew|walnut|soy|tofu|tempeh|rice|pasta|potato|bread|oats?|beans?|lentil|chickpea|quinoa|broccoli|kale|spinach|avocado|banana|berry|berries|fruit|veg|vegetable|veggies?|mushroom|onion|garlic|cilantro|coriander|spicy|spice|coffee|alcohol|meat|takeout|restaurant|caf[eé]|treat|home[- ]cook(?:ed|ing)?|vegan|vegetarian|pescatarian|keto|paleo|carnivore|halal|kosher|lactose|intoleran|allerg)\b/i;
+
+const MEAL_PLANNING_MEMORY_KINDS = new Set(["preference", "constraint", "decision", "goal"]);
+const ONE_OFF_FOOD_MEMORY_RE =
+  /\b(?:ate|had|ordered|tried|visited|went to|picked up|takeout from|last (?:night|week|month)|yesterday|today)\b/i;
+const STABLE_FOOD_MEMORY_RE =
+  /\b(?:prefer|usually|typically|regularly|routine|staple|always|never|avoid|allerg|intoleran|diet|home[- ]cook(?:ed|ing)?|cook(?:s|ed|ing)? at home)\b/i;
+const OPTIONAL_FOOD_MEMORY_RE =
+  /\b(?:occasionally|occasional|sometimes|infrequent|not (?:fully )?off-limits|workable (?:local )?option|when ordering|can (?:still )?(?:have|order|enjoy)|backup option)\b/i;
+
+// Meal planning gets a purpose-scoped memory view, not the raw recent-memory
+// stream. Observations are evidence that something happened; only durable
+// preference/constraint/decision/goal rows may shape a future week. Enrichment
+// must see a pattern at least twice before its inferred preference is trusted.
+// This prevents a single meal log from silently becoming a standing commitment.
+function memoryForMealPlanning(memory: any[]): any[] {
+  return (Array.isArray(memory) ? memory : []).filter((m) => {
+    if (!m || !MEAL_PLANNING_MEMORY_KINDS.has(String(m.kind ?? ""))) return false;
+    const content = String(m.content ?? "").trim();
+    if (!content) return false;
+    if (ONE_OFF_FOOD_MEMORY_RE.test(content) && !STABLE_FOOD_MEMORY_RE.test(content)) return false;
+    // Permission is not intent. "Can occasionally have baklava" and "workable
+    // takeout option" are useful answers when asked, but not defaults a weekly
+    // planner should proactively schedule.
+    if (OPTIONAL_FOOD_MEMORY_RE.test(content) && !STABLE_FOOD_MEMORY_RE.test(content)) return false;
+    if (String(m.source ?? "") === "enrich" && Number(m.confidence ?? 1) < 1.5) return false;
+    return true;
+  });
+}
 
 // Render food preferences/constraints from memory (a "hates salmon", a "dairy allergy",
 // "vegetarian") so the SWAP and RECIPE prompts honor them — otherwise a swap can happily
@@ -305,9 +333,19 @@ const MEAL_TIMING_RULES = `MEAL TIMING — slots are FLEXIBLE, schedule around t
   substantial post-training breakfast instead.
 - Use each day's "note" field to explain the timing choices for that day.`;
 
+function foodPatternIsCurrent(lastAt: unknown, maxAgeDays = 42): boolean {
+  const raw = String(lastAt ?? "").trim();
+  if (!raw) return false;
+  const stamped = /Z$|[+-]\d\d:\d\d$/.test(raw) ? raw : `${raw.replace(" ", "T")}Z`;
+  const time = Date.parse(stamped);
+  return Number.isFinite(time) && Date.now() - time <= maxAgeDays * 86_400_000;
+}
+
 // Goal-aware weekly meal-plan prompt.
 export function buildMealPlanPrompt(userInstruction?: string): string {
   const ctx = repo.getCoachContext();
+  const planningMemory = memoryForMealPlanning((ctx as any)?.memory);
+  const planningCtx = { ...ctx, memory: planningMemory };
   const prefs = (repo.getSettings().meal_prefs || "").trim();
   const split = (ctx.plan as any[])
     .map((d: any) => `Day ${d.day_number}: ${d.name}${d.focus ? ` (${d.focus})` : ""}`)
@@ -318,12 +356,16 @@ export function buildMealPlanPrompt(userInstruction?: string): string {
   const freqMap = new Map<string, any>();
   for (const h of [8, 13, 19])
     for (const f of repo.frequentFoods(h).slice(0, 4)) {
+      // Capture chips may surface a one-off for convenient re-logging. A weekly
+      // planner needs stronger evidence: at least two distinct logged days, with
+      // a recent occurrence so an old phase does not become a permanent habit.
+      if (Number(f.distinct_days ?? 0) < 2 || !foodPatternIsCurrent(f.last_at)) continue;
       const k = String(f.summary).toLowerCase();
       if (!freqMap.has(k)) freqMap.set(k, f);
     }
   const freqList = [...freqMap.values()].sort((a, b) => b.count - a.count).slice(0, 10);
   const freqBlock = freqList.length
-    ? `\nFREQUENTLY LOGGED FOODS (what the user ACTUALLY eats — build around these where they fit; reusing their own staples lifts adherence far more than novel gourmet meals):\n${freqList.map((f) => `  - ${f.summary} (logged ${f.count}×${f.protein_g != null ? `, ~${Math.round(f.protein_g)}g protein` : ""})`).join("\n")}\n`
+    ? `\nREPEATED FOOD PATTERNS (observed on 2+ DISTINCT days — optional dish/staple ideas, not preferences or future commitments; reuse only where they fit):\n${freqList.map((f) => `  - ${f.summary} (logged ${f.count}× across ${f.distinct_days} days${f.protein_g != null ? `, ~${Math.round(f.protein_g)}g protein` : ""})`).join("\n")}\n- Never infer a scheduled restaurant visit, takeout, cafe stop, or treat from these historical logs. Only an explicit current instruction or a durable preference/decision can schedule one.\n`
     : "";
   const expBlock =
     exp.tdee != null
@@ -343,7 +385,7 @@ export function buildMealPlanPrompt(userInstruction?: string): string {
 Right now you're the nutritionist — goal-aware and longevity-focused — building a 7-day
 meal plan that fuels the user's CURRENT goal (see GOAL MODE below) while eating for healthspan. The
 user's profile, goal check (with computed TDEE and a mode-correct recommended intake), training
-plan, recent activities, and food preferences in memory are in the DATA section.
+plan, recent activities, and purpose-scoped durable planning memory are in the DATA section.
 ${renderGoalMode(ctx)}${hardDiet}
 HARD RULES:
 - Anchor daily_kcal to goal.recommended (the mode-correct target — a lean-safe deficit, maintenance,
@@ -356,6 +398,13 @@ HARD RULES:
   plan summary/rationale as if merely preserving lean mass were the goal.
 - Never propose intake below ~1500 kcal for this user regardless of math.
 - Favor whole foods; respect any preferences/constraints in memory.
+- Default to practical home-cooked whole-food meals. A food log says what happened once; it does NOT
+  establish a preference, routine, scheduled takeout, restaurant visit, cafe stop, or treat. The
+  current meal_plan is prior assistant output, not evidence of what the user wants repeated. Only
+  the current TASK, USER SCHEDULE & MEAL PREFERENCES, profile/about_me, active life context, or a
+  durable preference/constraint/decision in memory can establish a future commitment.
+- Treat "occasionally allowed," "workable option," "not off-limits," and "when ordering" memories
+  as contingency guidance only — permission is not intent, so never schedule them proactively.
 - Time more carbs around training days; keep it practical and repeatable, not 7 unique gourmet days.
 - Evaluate PRACTICALITY as part of adequacy: preparation time, household fit, ordinary cost/availability,
   and reuse of the user's frequent foods. A theoretically perfect plan they will not cook is not adequate.
@@ -381,14 +430,14 @@ ${CONTEXT_GUARDRAILS}
 - HEALTH MARKERS specifically: make the ACT-NOW nutrition priorities in the PRIORITIZED HEALTH FOCUS
   the backbone of the plan (e.g. a lipid-lowering pattern, iron-rich foods for low ferritin) — let them
   shape the default meals, not just a footnote; flag the marker-driven emphasis in notes. Not medical advice.
-${renderDiscipline(ctx, "nutrition")}${renderEnduranceGoal(ctx, "nutrition")}${freqBlock}${expBlock}${fatigue}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderTrajectory(ctx)}${renderFoodMemory((ctx as any)?.memory)}${renderDexaTargeting(ctx, "nutrition")}${renderBodyComp(ctx)}${renderHouseholdDiet(ctx)}
+${renderDiscipline(ctx, "nutrition")}${renderEnduranceGoal(ctx, "nutrition")}${freqBlock}${expBlock}${fatigue}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderTrajectory(ctx)}${renderFoodMemory(planningMemory)}${renderDexaTargeting(ctx, "nutrition")}${renderBodyComp(ctx)}${renderHouseholdDiet(ctx)}
 TASK: ${userInstruction?.trim() || (disciplineOf(ctx) === "endurance" ? "Build next week's meal plan to FUEL the training week — carbs periodized around long/quality sessions, protein adequate for recovery; no forced deficit unless fat loss is the stated goal." : "Build next week's meal plan aligned to goal.recommended for the active GOAL MODE and the protein target.")}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 ${MEAL_SCHEMA}
 
 DATA:
-${JSON.stringify(ctx)}`;
+${JSON.stringify(planningCtx)}`;
 }
 
 // ---------- T3: adaptive nutrition check-in (MacroFactor-style retarget) ----------

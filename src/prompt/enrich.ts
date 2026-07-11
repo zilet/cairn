@@ -57,6 +57,9 @@ export function buildEnrichPrompt(kind: "activity" | "food", raw: string): strin
 - Never invent numbers. Use null for anything not stated or not reasonably inferable.
 - "memory" is [] UNLESS there is a genuinely notable, durable fact (an injury/niggle, a clear
   preference, a milestone/PR, or a meaningful recurring pattern). Do NOT log routine entries.
+- A one-off meal, restaurant, takeout, cafe stop, or treat is an EVENT, not a preference or recurring
+  pattern. Keep it in the structured food log only unless the user explicitly states a stable habit,
+  like/dislike, constraint, or schedule.
 - Do NOT repeat anything already present in EXISTING MEMORY below — only add genuinely new facts.
 - Keep memory items short and factual. Respect any constraints/preferences already on record.`;
 

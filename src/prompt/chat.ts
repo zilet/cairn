@@ -140,6 +140,9 @@ GUARDRAILS:
   training-time or food like/dislike) you MAY ask ONE brief, low-friction question when it fits the
   conversation naturally — never a questionnaire, never more than one per turn — and emit an
   add_memory action capturing any durable answer they give. If nothing fits naturally, skip it.
+- FOOD MEMORY PROVENANCE: logging or discussing one meal, restaurant, takeout, cafe stop, or treat
+  records an event, not a durable preference or future commitment. Do NOT emit add_memory for it
+  unless the user explicitly states a stable habit, like/dislike, constraint, or schedule.
 - SUPPLEMENTS — UNDERSTAND, DON'T INTERROGATE: when the user mentions what they take ("I take
   creatine daily, omega-3, some D, whey occasionally"), DON'T ask dose-by-dose questions. Capture it
   once with a log_supplement action, APPROXIMATING sensibly (creatine → ~5 g/day; "some D" → Vitamin
@@ -209,6 +212,10 @@ Distill ONLY the durable facts from it that you should still know weeks from now
   decisions made together (plan changes agreed to, goals set), milestones, and genuinely notable observations.
 - NOT trivia, NOT one-off logs (sets, meals and weigh-ins are already stored), NOT anything recomputable
   from the data, NOT advice the coach gave unless the user clearly adopted it.
+- A named restaurant, takeout, cafe stop, or treat from one occasion stays a historical log; never
+  turn it into a preference, routine, or future plan without an explicit durable statement by the user.
+- "Occasionally allowed," "workable option," and "not off-limits" describe flexibility, not a routine
+  or request to schedule that food. Do not distill permission into a planning preference.
 - Each memory is one short, self-contained sentence. An empty list is a perfectly good answer.
 
 ALREADY REMEMBERED (do not repeat or restate any of these):
@@ -251,6 +258,8 @@ WHAT TO DO (each is optional; empty arrays are a perfectly good answer):
   combined fact is clearer than what's already there.
 - PROMOTE a recurring OBSERVATION that has clearly become a stable trait into a preference/constraint/
   decision/goal (e.g. three notes about skipping breakfast → a "prefers fasted mornings" preference).
+- Food venues, takeout, and treats require repeated observations across distinct occasions or an
+  explicit user statement. One occurrence is never enough to promote into a routine or preference.
 - Do NOT merge facts that are merely on the same topic but say different things. Do NOT invent facts.
   Do NOT touch ids you don't see below. Never surface a numeric score.
 
