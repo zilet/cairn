@@ -4,6 +4,23 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-07-12 — private household instances from one released image
+
+Cairn **v1.1.1** remains single-user per process, but one Docker host can now run a private
+instance per household member from the same released image. Compose container
+identity, loopback bind, and host port are configurable while preserving every
+existing single-instance default; distinct Compose projects automatically keep
+the database/uploads, provider login home, and installed-tool volumes isolated.
+The release Compose now also carries fail-closed auth and the Settings encryption
+key consistently with source deployments.
+
+`CAIRN_BLANK_PROFILE=1` gives a newly created member a clean personal baseline:
+only the neutral exercise catalog is seeded; no example plan, fictional seed
+measurements, or completed training history is created. The public
+household guide covers unique tokens/keys, Tailscale identities and HTTPS origins,
+per-instance connectors/provider logins, backups, updates, and safe removal. No
+schema migration or PWA cache change was required.
+
 ## 2026-07-11 — trustworthy autonomous intelligence and visible future change
 
 The **v1.1.0** quality round makes the expert-team model dependable at both ends of the loop. Agent

@@ -5,6 +5,32 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [1.1.1] — 2026-07-12
+
+Cairn can now support a household safely by running one isolated released
+instance per person on the same private Docker host. Each member gets their own
+database, uploads, tokens, connector secrets, provider login home, tools, and
+Tailscale HTTPS origin; Cairn remains intentionally single-user per process.
+No schema migration is required. PWA cache `cairn-v473`.
+
+### Added
+
+- **Household deployment guide** — a production-oriented Compose/Tailscale path
+  for adding partners or family members without sharing clinical data or credentials.
+- **Clean personal bootstrap** — `CAIRN_BLANK_PROFILE=1` seeds only a neutral
+  exercise catalog, with no example plan, measurements, or training history.
+- **Explicit onboarding sex** — first-run setup captures the value used for
+  sex-specific health ranges instead of silently defaulting a blank profile to male.
+
+### Changed
+
+- **Reusable release Compose** — container name, loopback bind, and host port are
+  configurable while existing single-instance defaults remain unchanged.
+- **Reliable release updates** — in-app and public instructions refresh the
+  release Compose file before pulling, because tagged release assets pin exact images.
+- **Release security parity** — fail-closed auth and Settings-secret encryption
+  variables now pass through the published Compose file.
+
 ## [1.1.0] — 2026-07-11
 
 Cairn's background expert team becomes more trustworthy and less chore-like. Intelligence outputs
