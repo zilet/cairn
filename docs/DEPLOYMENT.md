@@ -92,6 +92,14 @@ sudo tailscale serve --https=443 off
 
 Serve config survives reboots; compose keeps publishing `:8787` on the host.
 
+### Multiple people on one host
+
+Cairn is single-user per instance. For a partner or family member, run another
+copy of the released image under a separate Compose project and host port; do
+not share the owner's database, token, settings key, or CLI home. Use a distinct
+Tailscale HTTPS listener so browser storage and installed PWAs stay isolated.
+The complete, copy-paste setup is in [`HOUSEHOLDS.md`](HOUSEHOLDS.md).
+
 ### Optional shared token
 
 In `.env` next to `docker-compose.yml`:

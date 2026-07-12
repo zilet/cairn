@@ -5691,7 +5691,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
 });
 
 test("public docker run quickstarts bind loopback by default", () => {
-  const blocks = ["README.md", "docs/QUICKSTART.md", "docs/SHARING.md"].flatMap((file) =>
+  const blocks = ["README.md", "docs/QUICKSTART.md", "docs/SHARING.md", "docs/HOUSEHOLDS.md"].flatMap((file) =>
     [...read(file).matchAll(/```(?:bash|sh)?\n([\s\S]*?)```/g)].map((m) => ({ file, text: m[1] }))
   );
   const unsafe = blocks.filter(

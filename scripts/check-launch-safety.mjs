@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const DOCS = ["README.md", "docs/QUICKSTART.md", "docs/SHARING.md"];
+const DOCS = ["README.md", "docs/QUICKSTART.md", "docs/SHARING.md", "docs/HOUSEHOLDS.md"];
 
 const fenced = [];
 for (const file of DOCS) {

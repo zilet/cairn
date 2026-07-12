@@ -1,4 +1,5 @@
 type OnboardingDiscipline = "strength" | "endurance" | "hybrid";
+type OnboardingSex = "female" | "male";
 
 // @ts-check
 {
@@ -33,15 +34,22 @@ type OnboardingDiscipline = "strength" | "endurance" | "hybrid";
       <h2 class="modal-title">Welcome to Cairn</h2>
       <p class="ob-lead">A few basics, then you're in — I'll learn the rest as we go.</p>
       <div class="ob-grid">
+        <div class="field"><label for="obSex">Sex <span class="ob-opt">— for health ranges</span></label>
+          <select id="obSex">
+            <option value="">Choose…</option>
+            <option value="female">Female</option>
+            <option value="male">Male</option>
+          </select></div>
         <div class="field"><label for="obAge">Age</label>
           <input id="obAge" type="number" inputmode="numeric" min="13" max="100" placeholder="years"></div>
-        <div class="field"><label id="obDaysLbl">Days / week</label>
-          <div class="seg" id="obDays" role="group" aria-labelledby="obDaysLbl">
-            <button type="button" class="segbtn" data-dpw="3">3</button>
-            <button type="button" class="segbtn active" data-dpw="4">4</button>
-            <button type="button" class="segbtn" data-dpw="5">5</button>
-            <button type="button" class="segbtn" data-dpw="6">6</button>
-          </div></div>
+      </div>
+      <div class="field"><label id="obDaysLbl">Days / week</label>
+        <div class="seg" id="obDays" role="group" aria-labelledby="obDaysLbl">
+          <button type="button" class="segbtn" data-dpw="3">3</button>
+          <button type="button" class="segbtn active" data-dpw="4">4</button>
+          <button type="button" class="segbtn" data-dpw="5">5</button>
+          <button type="button" class="segbtn" data-dpw="6">6</button>
+        </div>
       </div>
       <div class="field"><label>Your sport <span class="ob-opt">— optional</span></label>
         <div class="seg disc-seg" id="obDisc" role="group" aria-label="Primary discipline">
@@ -108,6 +116,8 @@ type OnboardingDiscipline = "strength" | "endurance" | "hybrid";
 
     function composeIntro(): string {
       const parts: string[] = [];
+      const sex = requiredElement<HTMLSelectElement>(modal, "#obSex").value as OnboardingSex | "";
+      if (sex) parts.push(`My sex is ${sex}.`);
       const age = Number(requiredElement<HTMLInputElement>(modal, "#obAge").value) || null;
       if (age) parts.push(`I'm ${age}.`);
       parts.push(`I train about ${daysPerWeek} days a week.`);
@@ -120,26 +130,37 @@ type OnboardingDiscipline = "strength" | "endurance" | "hybrid";
       return parts.join(" ").trim();
     }
 
-    async function persistDiscipline(): Promise<void> {
-      if (discipline === "strength") {
+    async function persistBasics(): Promise<void> {
+      const sex = requiredElement<HTMLSelectElement>(modal, "#obSex").value as OnboardingSex | "";
+      if (discipline === "strength" && !sex) {
         setDiscipline("strength");
         return;
       }
       try {
-        await api("/profile", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ primary_discipline: discipline }) });
+        await api("/profile", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ primary_discipline: discipline, ...(sex ? { sex } : {}) }),
+        });
         setDiscipline(discipline);
       } catch {}
     }
 
     requiredElement<HTMLButtonElement>(modal, "#obSkip").addEventListener("click", async () => {
-      await persistDiscipline();
+      await persistBasics();
       await markOnboarded();
       enterApp();
     });
 
     requiredElement<HTMLButtonElement>(modal, "#obStart").addEventListener("click", async () => {
-      const text = composeIntro();
       const status = requiredElement<HTMLElement>(modal, "#obStatus");
+      const sex = requiredElement<HTMLSelectElement>(modal, "#obSex");
+      if (!sex.value) {
+        status.textContent = "Choose sex so Cairn can use the right health ranges.";
+        sex.focus();
+        return;
+      }
+      const text = composeIntro();
       const button = requiredElement<HTMLButtonElement>(modal, "#obStart");
       button.disabled = true;
       button.textContent = "GETTING TO KNOW YOU…";
@@ -149,10 +170,10 @@ type OnboardingDiscipline = "strength" | "endurance" | "hybrid";
       if (!reducedMotion()) status.classList.add("is-thinking");
       try {
         await api("/onboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
-        await persistDiscipline();
+        await persistBasics();
         toast("You're all set");
       } catch {
-        await persistDiscipline();
+        await persistBasics();
         await markOnboarded();
         toast("Saved — you can refine anytime in Me");
       }

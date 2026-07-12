@@ -598,9 +598,9 @@ function updateCardHtml(status: unknown, options: SettingsUpdateOptions): string
         ${url ? `<div class="sess-line"><a href="${url}" target="_blank" rel="noopener noreferrer">What's new ↗</a></div>` : ""}
         <details class="route-card" style="margin-top:8px">
           <summary><b>How to update</b></summary>
-          <div class="sess-line" style="color:var(--muted);margin-top:6px">Back up first (use <b>Download SQLite snapshot</b> below), then pull the new image and restart. Your data lives in Docker volumes — updating never touches it, and schema migrations run automatically on boot.</div>
-          <div class="cmd-line">docker compose pull &amp;&amp; docker compose up -d</div>
-          <div class="sess-line" style="color:var(--muted);margin-top:6px">Started with <span class="phone-cmd-inline">docker run</span>? Pull <span class="phone-cmd-inline">ghcr.io/zilet/cairn:latest</span> and recreate the container. Building from source? <span class="phone-cmd-inline">git pull &amp;&amp; docker compose up -d --build</span>.</div>
+          <div class="sess-line" style="color:var(--muted);margin-top:6px">Back up first (use <b>Download SQLite snapshot</b> below). Release Compose files pin an exact image, so refresh the file before pulling and restarting:</div>
+          <div class="cmd-line">curl -fsSLo docker-compose.yml.new https://github.com/zilet/cairn/releases/latest/download/docker-compose.yml &amp;&amp; mv docker-compose.yml.new docker-compose.yml &amp;&amp; docker compose pull &amp;&amp; docker compose up -d</div>
+          <div class="sess-line" style="color:var(--muted);margin-top:6px">Started with <span class="phone-cmd-inline">docker run</span>? Pull <span class="phone-cmd-inline">ghcr.io/zilet/cairn:latest</span> and recreate the container. Building from source? Use <span class="phone-cmd-inline">git pull &amp;&amp; docker compose up -d --build</span> instead.</div>
         </details>`;
   }
   if (statusRow.error && !statusRow.latest) {

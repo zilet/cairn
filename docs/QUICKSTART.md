@@ -109,6 +109,10 @@ Put `TZ` / `CAIRN_AUTH_TOKEN` / `XAI_API_KEY` / `GEMINI_API_KEY` in a `.env` nex
 `docker compose up -d`. Agent logins are identical — `docker exec -u app -it cairn …` (the
 `docker compose exec …` form works too).
 
+Adding a partner or family member on the same Pi/host? Keep Cairn single-user
+per instance and follow [`HOUSEHOLDS.md`](HOUSEHOLDS.md) for isolated Compose
+projects, tokens, volumes, and Tailscale HTTPS origins.
+
 ### Build from source (to develop or change the code)
 
 ```bash

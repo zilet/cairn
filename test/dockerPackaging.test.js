@@ -27,7 +27,14 @@ test("Docker context and runtime image stay execution-only", () => {
   for (const body of [compose, releaseCompose]) {
     assert.match(body, /cairn-tools:\/home\/app\/\.cairn-tools/);
     assert.match(body, /^\s{2}cairn-tools:\s*$/m);
+    assert.match(body, /container_name: \$\{CAIRN_CONTAINER_NAME:-cairn\}/);
+    assert.match(body, /\$\{CAIRN_HOST_PORT:-8787\}:8787/);
+    assert.match(body, /CAIRN_BLANK_PROFILE=\$\{CAIRN_BLANK_PROFILE:-0\}/);
   }
+  assert.match(compose, /\$\{CAIRN_BIND_HOST:-0\.0\.0\.0\}/);
+  assert.match(releaseCompose, /\$\{CAIRN_BIND_HOST:-127\.0\.0\.1\}/);
+  assert.match(releaseCompose, /CAIRN_REQUIRE_AUTH=\$\{CAIRN_REQUIRE_AUTH:-0\}/);
+  assert.match(releaseCompose, /CAIRN_SETTINGS_SECRET_KEY=\$\{CAIRN_SETTINGS_SECRET_KEY:-\}/);
   assert.doesNotMatch(dockerfile, /COPY public \.\/public/);
 
   const runtimeDockerfile = dockerfile.split("# ---- runtime ----")[1];

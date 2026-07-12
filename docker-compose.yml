@@ -7,7 +7,10 @@ services:
         # Empty is safe: health reports source-unidentified rather than guessing.
         CAIRN_BUILD_SHA: ${CAIRN_BUILD_SHA:-}
     image: cairn:latest
-    container_name: cairn
+    # Defaults preserve the original single-instance install. Household members
+    # run the same image under a distinct Compose project, container name, and
+    # host port; see docs/HOUSEHOLDS.md.
+    container_name: ${CAIRN_CONTAINER_NAME:-cairn}
     restart: unless-stopped
     ports:
       # Reachable on the LAN by default so you can open it from your phone. If the
@@ -15,7 +18,7 @@ services:
       # bind to loopback only: "127.0.0.1:8787:8787".
       # SAFETY: never leave 8787 reachable from the public internet without
       # CAIRN_AUTH_TOKEN set. The release compose (deploy/) defaults to loopback.
-      - "8787:8787"
+      - "${CAIRN_BIND_HOST:-0.0.0.0}:${CAIRN_HOST_PORT:-8787}:8787"
     volumes:
       - cairn-data:/data        # SQLite database
       - cairn-home:/home/app    # provider login state
@@ -27,6 +30,9 @@ services:
       # whenever the port is reachable beyond loopback.
       - CAIRN_AUTH_TOKEN=${CAIRN_AUTH_TOKEN:-}
       - CAIRN_REQUIRE_AUTH=${CAIRN_REQUIRE_AUTH:-0}
+      # On a new household-member instance, seed only the neutral exercise
+      # catalog; omit the example plan, measurements, and training history.
+      - CAIRN_BLANK_PROFILE=${CAIRN_BLANK_PROFILE:-0}
       # Encrypt connector secrets saved through Settings. Keep this stable across
       # rebuilds; the Pi deploy helper generates it once in the preserved .env.
       - CAIRN_SETTINGS_SECRET_KEY=${CAIRN_SETTINGS_SECRET_KEY:-}

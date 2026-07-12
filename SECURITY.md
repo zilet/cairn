@@ -46,6 +46,19 @@ Cairn stores personal data, so an exposed instance is a real privacy risk:
 
 Treat both volumes as sensitive. Back them up privately and never commit them.
 
+## Household members
+
+The Family roster inside Cairn is coaching context, not an account or access
+boundary. Do not share one Cairn instance, bearer token, database, or provider
+home between people who need private profiles. Run one isolated Compose project
+per person with distinct `cairn-data`, `cairn-home`, `cairn-tools`,
+`CAIRN_AUTH_TOKEN`, and `CAIRN_SETTINGS_SECRET_KEY` values. Bind each host port
+to loopback and expose a distinct private HTTPS origin through Tailscale Serve.
+
+Each person should also use their own Tailscale identity and, unless a provider's
+terms explicitly permit otherwise, their own coaching-provider login. See the
+full deployment and removal procedure in [`docs/HOUSEHOLDS.md`](docs/HOUSEHOLDS.md).
+
 ## Agent CLI updates and supply-chain posture
 
 Cairn can install or refresh third-party coaching CLIs inside the container. Treat

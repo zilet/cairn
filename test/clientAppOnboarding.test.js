@@ -80,6 +80,7 @@ class FakeModal extends FakeElement {
   constructor(calls) {
     super("modal", calls);
     this.age = new FakeElement("obAge", calls);
+    this.sex = new FakeElement("obSex", calls);
     this.goal = new FakeElement("obGoal", calls);
     this.intro = new FakeElement("obIntro", calls);
     this.skip = new FakeElement("obSkip", calls);
@@ -92,6 +93,7 @@ class FakeModal extends FakeElement {
   querySelector(selector) {
     const map = {
       "#obAge": this.age,
+      "#obSex": this.sex,
       "#obGoal": this.goal,
       "#obIntro": this.intro,
       "#obSkip": this.skip,
@@ -193,6 +195,7 @@ test("onboarding skip persists the structured discipline and enters Today cleanl
 test("onboarding start composes the intro and shows calm progress", async () => {
   const env = loadOnboarding();
   env.context.openOnboarding();
+  env.modal.sex.value = "female";
   env.modal.age.value = "42";
   env.modal.goal.value = "build muscle";
   env.modal.intro.value = "Vegetarian, sore left ankle.";
@@ -203,10 +206,22 @@ test("onboarding start composes the intro and shows calm progress", async () => 
   const onboard = env.calls.find((call) => call[0] === "api" && call[1] === "/onboard");
   assert.ok(onboard, "onboard call is made");
   assert.deepEqual(JSON.parse(onboard[3]), {
-    text: "I'm 42. I train about 6 days a week. I train both strength and endurance (hybrid). My main goal is to build muscle. Vegetarian, sore left ankle.",
+    text: "My sex is female. I'm 42. I train about 6 days a week. I train both strength and endurance (hybrid). My main goal is to build muscle. Vegetarian, sore left ankle.",
   });
+  const profile = env.calls.find((call) => call[0] === "api" && call[1] === "/profile");
+  assert.deepEqual(JSON.parse(profile[3]), { primary_discipline: "hybrid", sex: "female" });
   assert.equal(env.modal.start.disabled, true);
   assert.equal(env.modal.start.textContent, "GETTING TO KNOW YOU…");
   assert.ok(env.calls.some(([kind]) => kind === "thinkingCaption"));
   assert.ok(env.calls.some((call) => call[0] === "toast" && call[1] === "You're all set"));
+});
+
+test("onboarding requires sex before analysis-oriented setup", async () => {
+  const env = loadOnboarding();
+  env.context.openOnboarding();
+  await env.modal.start.click();
+
+  assert.equal(env.modal.status.textContent, "Choose sex so Cairn can use the right health ranges.");
+  assert.ok(env.calls.some(([kind, name]) => kind === "focus" && name === "obSex"));
+  assert.equal(env.calls.some((call) => call[0] === "api" && call[1] === "/onboard"), false);
 });

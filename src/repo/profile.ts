@@ -945,7 +945,9 @@ export function setProfile(p: any) {
     // explicit '' clears it, undefined leaves the existing value intact, capped.
     name:
       p.name !== undefined ? (p.name == null ? null : String(p.name).trim().slice(0, 120) || null) : (cur.name ?? null),
-    sex: p.sex ?? cur.sex ?? "male",
+    // A genuinely blank profile must remain unknown until the athlete supplies
+    // sex; silently defaulting to male can select the wrong health ranges.
+    sex: p.sex !== undefined ? p.sex : (cur.sex ?? null),
     age: p.age ?? cur.age ?? null,
     // When only inches were ever provided, derive cm so the existing TDEE /
     // doctor-report paths (which read height_cm) light up too. An explicit cm

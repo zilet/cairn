@@ -168,6 +168,8 @@ test("settings agent chips and update card render stable operator states", () =>
   );
   assert.match(html, /v0\.8\.0 is available/);
   assert.match(html, /href="https:\/\/example\.com\/&quot;notes&quot;"/);
+  assert.match(html, /releases\/latest\/download\/docker-compose\.yml/);
+  assert.match(html, /mv docker-compose\.yml\.new docker-compose\.yml/);
   assert.match(html, /docker compose pull &amp;&amp; docker compose up -d/);
 });
 

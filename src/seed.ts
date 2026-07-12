@@ -58,7 +58,8 @@ const days: [number, string, string, Item[]][] = [
   ]],
 ];
 
-export function seed() {
+export function seed(options: { blankProfile?: boolean } = {}) {
+  const blankProfile = !!options.blankProfile;
   const insertEx = db.prepare(`INSERT INTO exercises (name, muscle_group, constraint_note, cues) VALUES (?, ?, ?, ?)`);
   const exId: Record<string, number> = {};
   const dayIdByNumber: Record<number, number> = {};
@@ -74,39 +75,41 @@ export function seed() {
   db.exec("BEGIN");
   try {
     for (const [name, mg, note, cues] of exercises) {
-      exId[name] = Number(insertEx.run(name, mg, note, cues).lastInsertRowid);
+      exId[name] = Number(insertEx.run(name, mg, blankProfile ? null : note, cues).lastInsertRowid);
     }
-    for (const [num, name, focus, items] of days) {
-      const dayId = Number(insertDay.run(num, name, focus).lastInsertRowid);
-      dayIdByNumber[num] = dayId;
-      items.forEach((it, i) => {
-        const [exName, sets, lo, hi, tw, note] = it;
-        insertItem.run(dayId, i, exId[exName], sets, lo, hi, tw, note);
-      });
-    }
+    if (!blankProfile) {
+      for (const [num, name, focus, items] of days) {
+        const dayId = Number(insertDay.run(num, name, focus).lastInsertRowid);
+        dayIdByNumber[num] = dayId;
+        items.forEach((it, i) => {
+          const [exName, sets, lo, hi, tw, note] = it;
+          insertItem.run(dayId, i, exId[exName], sets, lo, hi, tw, note);
+        });
+      }
 
-    const yesterday = new Date(Date.now() - 864e5).toISOString().slice(0, 10);
-    const baselineSessionId = Number(
-      db.prepare(`INSERT INTO sessions (date, plan_day_id, duration_min, notes) VALUES (?, ?, ?, ?)`)
-        .run(yesterday, dayIdByNumber[1], 55, "Seed baseline: completed Lower A so Today can propose the next training day.")
-        .lastInsertRowid
-    );
-    const baselineSets: [string, number, number | null, number, number | null][] = [
-      ["Back Squat", 1, 190, 8, 2],
-      ["Back Squat", 2, 190, 8, 2],
-      ["Back Squat", 3, 190, 8, 3],
-      ["Leg Extension", 1, 135, 12, 2],
-      ["Leg Extension", 2, 135, 12, 2],
-      ["Leg Extension", 3, 135, 12, 2],
-      ["Leg Curl", 1, 135, 12, 2],
-      ["Leg Curl", 2, 135, 12, 2],
-      ["Leg Curl", 3, 135, 12, 2],
-      ["Standing Calf Raise", 1, null, 15, 2],
-      ["Standing Calf Raise", 2, null, 15, 2],
-      ["Standing Calf Raise", 3, null, 15, 2],
-    ];
-    for (const [exName, setNo, weight, reps, rir] of baselineSets) {
-      insertSet.run(baselineSessionId, exId[exName], setNo, weight, reps, rir, "Seed baseline");
+      const yesterday = new Date(Date.now() - 864e5).toISOString().slice(0, 10);
+      const baselineSessionId = Number(
+        db.prepare(`INSERT INTO sessions (date, plan_day_id, duration_min, notes) VALUES (?, ?, ?, ?)`)
+          .run(yesterday, dayIdByNumber[1], 55, "Seed baseline: completed Lower A so Today can propose the next training day.")
+          .lastInsertRowid
+      );
+      const baselineSets: [string, number, number | null, number, number | null][] = [
+        ["Back Squat", 1, 190, 8, 2],
+        ["Back Squat", 2, 190, 8, 2],
+        ["Back Squat", 3, 190, 8, 3],
+        ["Leg Extension", 1, 135, 12, 2],
+        ["Leg Extension", 2, 135, 12, 2],
+        ["Leg Extension", 3, 135, 12, 2],
+        ["Leg Curl", 1, 135, 12, 2],
+        ["Leg Curl", 2, 135, 12, 2],
+        ["Leg Curl", 3, 135, 12, 2],
+        ["Standing Calf Raise", 1, null, 15, 2],
+        ["Standing Calf Raise", 2, null, 15, 2],
+        ["Standing Calf Raise", 3, null, 15, 2],
+      ];
+      for (const [exName, setNo, weight, reps, rir] of baselineSets) {
+        insertSet.run(baselineSessionId, exId[exName], setNo, weight, reps, rir, "Seed baseline");
+      }
     }
 
     db.exec("COMMIT");
@@ -114,6 +117,8 @@ export function seed() {
     db.exec("ROLLBACK");
     throw e;
   }
+
+  if (blankProfile) return;
 
   // Example starter profile — clearly a placeholder. Replace it with your own
   // numbers in your Profile (or during first-run onboarding). A lean-safe goal
@@ -157,7 +162,8 @@ export async function seedIfEmpty(): Promise<boolean> {
     seedDemo();
     return true;
   }
-  seed();
+  const blankProfile = /^(1|true|yes|on)$/i.test((process.env.CAIRN_BLANK_PROFILE || "").trim());
+  seed({ blankProfile });
   // Drop in any pre-baked studio photos that match the seeded exercises, so a
   // fresh install renders real art (not just SVGs) with no Gemini key. Offline,
   // idempotent, and a no-op when the seed-art/ pack isn't present.

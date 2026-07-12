@@ -75,6 +75,9 @@ than any checked-in browser files.
   done.
 - **Always-on home box / VM / Raspberry Pi:** keep the release compose running
   on a Docker host and access it from devices on the same LAN, VPN, or tailnet.
+- **Household members:** run the same released image as a separate Compose
+  project per person, with distinct volumes, tokens, and HTTPS origins. Follow
+  [`HOUSEHOLDS.md`](HOUSEHOLDS.md); the in-app Family roster is context, not an account.
 - **Tailscale / MagicDNS:** join the host to a tailnet and use its MagicDNS name
   from your phone or laptop. For an installable offline PWA, put HTTPS in front
   of Cairn with Tailscale Serve or another private reverse proxy.
@@ -119,7 +122,8 @@ CLI's sign-in (the server spawns the login as itself, so the token lands where i
 needed). The card shows **✓ Connected** when done, and an unconnected agent is automatically kept out of
 the rotation.
 
-From a terminal it's one `docker exec` (the container is named `cairn` whichever way you started it):
+For the default instance, a terminal login is one `docker exec` (household
+instances use their configured `CAIRN_CONTAINER_NAME`):
 
 ```bash
 docker exec -u app -it cairn claude auth login   # Claude Code — OAuth/device-code prompt
@@ -142,11 +146,15 @@ anonymous request (no data leaves your instance). One toggle ("Check for new Cai
 disables it entirely.
 
 When an update is available, back up first (Settings → Data → **Download SQLite snapshot**),
-then pull the new image and restart — your data lives in Docker volumes, so updating never
-touches it, and schema migrations run automatically on boot:
+then refresh the release Compose file, pull the new pinned image, and restart —
+your `.env` and Docker volumes remain untouched, and schema migrations run automatically on boot:
 
 ```bash
-docker compose pull && docker compose up -d
+curl -fsSLo docker-compose.yml.new \
+  https://github.com/zilet/cairn/releases/latest/download/docker-compose.yml
+mv docker-compose.yml.new docker-compose.yml
+docker compose pull
+docker compose up -d
 ```
 
 Started with the one-line `docker run`? Pull `ghcr.io/zilet/cairn:latest` and recreate the

@@ -133,7 +133,8 @@ agent. The image stays lean and ships no provider CLI by default: open **Setting
 through that provider's sign-in, no `docker exec` needed. An agent you haven't connected is kept out
 of the rotation, and each card shows the CLI's version + current model.
 
-Prefer a terminal? It's one `docker exec` (the container is named `cairn`):
+Prefer a terminal? For the default instance it's one `docker exec` (household
+instances use their configured container name):
 
 ```bash
 docker exec -u app -it cairn claude auth login   # or: codex login --device-auth · agy · grok login --device-auth
@@ -173,6 +174,7 @@ you connect a real coach.
 | Just run it on your laptop (no clone) | the `docker run … ghcr.io/zilet/cairn:latest` above |
 | Build from source / develop | `./quickstart.sh` |
 | Keep it always-on at home | `./scripts/quickstart-rpi.sh` on a Raspberry Pi or small home box |
+| Give a household member a private profile | Run one isolated released instance per person; see [`docs/HOUSEHOLDS.md`](docs/HOUSEHOLDS.md) |
 | Run it on a cheap VM | Docker + Tailscale; see [`docs/QUICKSTART.md#small-vm-private-online-box`](docs/QUICKSTART.md#small-vm-private-online-box) |
 | Try it on demand in the cloud | [`docs/SANDBOX.md`](docs/SANDBOX.md) for Daytona / Codespaces |
 
@@ -192,6 +194,7 @@ spin it up on demand, stop it when idle to cut cost — see [`docs/SANDBOX.md`](
 | [`docs/QUICKSTART.md`](docs/QUICKSTART.md) | 30-second start, Raspberry Pi, VM, Docker, Node, agent setup |
 | [`docs/SANDBOX.md`](docs/SANDBOX.md) | Run on Daytona / Codespaces (on-demand, persistent) |
 | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Tailscale, HTTPS PWA, Pi/VM, backups |
+| [`docs/HOUSEHOLDS.md`](docs/HOUSEHOLDS.md) | Private profiles for partners/family on one host |
 | [`docs/OPERATIONS.md`](docs/OPERATIONS.md) | Updates, migrations, restore |
 | [`docs/APPLE_HEALTH.md`](docs/APPLE_HEALTH.md) | iOS Shortcut → `/api/health-metrics` (Apple Health / Oura / Whoop) |
 | [`docs/API.md`](docs/API.md) · [`docs/MCP-TOOLS.md`](docs/MCP-TOOLS.md) | Generated REST + MCP reference (`npm run docs:index`) |
