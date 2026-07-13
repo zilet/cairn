@@ -4035,7 +4035,6 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todaySideLoadersSource, /async function loadWearable\(isToday: unknown, deps: TodaySideLoaderDeps\): Promise<void>/);
   assert.match(todaySideLoadersSource, /async function loadTableHint\(deps: TodaySideLoaderDeps\): Promise<void>/);
   assert.match(todaySideLoadersSource, /async function loadContextBanner\(deps: TodaySideLoaderDeps\): Promise<void>/);
-  assert.match(todaySideLoadersSource, /async function loadDraftProposals\(deps: TodaySideLoaderDeps\): Promise<void>/);
   assert.match(todaySideLoadersSource, /async function loadHealthFocusBanner\(deps: TodaySideLoaderDeps\): Promise<void>/);
   assert.match(todaySideLoadersSource, /CairnTodaySideLoaders/);
   assert.match(todayPlanSessionModelSource, /type TodayPlanSessionModelApi = \{/);

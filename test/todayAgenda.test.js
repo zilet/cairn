@@ -401,6 +401,11 @@ test("a genuinely-unowned draft still surfaces as a needs-your-decision item (re
   const draft = agendaDraftCandidate();
   assert.ok(draft, "a draft awaiting the athlete's call is still surfaced");
   assert.equal(draft.kicker, "NEEDS YOUR DECISION");
+  assert.equal(
+    draft.body,
+    "Small measured intake adjustment",
+    "the card shows the draft's own athlete-facing summary, not the internal instruction"
+  );
 });
 
 test("acknowledging a scheduled nutrition target drops it out of the Today rail", () => {

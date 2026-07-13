@@ -124,9 +124,6 @@ function loadBridge() {
       loadContextBanner: async (bridgeDeps) => {
         calls.push({ kind: "loadContextBanner", deps: bridgeDeps });
       },
-      loadDraftProposals: async (bridgeDeps) => {
-        calls.push({ kind: "loadDraftProposals", deps: bridgeDeps });
-      },
       loadHealthFocusBanner: async (bridgeDeps) => {
         calls.push({ kind: "loadHealthFocusBanner", deps: bridgeDeps });
       },
@@ -197,7 +194,6 @@ test("Today compatibility bridge routes legacy wrappers through explicit deps", 
   await harness.bridge.loadWearable(true);
   await harness.bridge.loadTableHint();
   await harness.bridge.loadContextBanner();
-  await harness.bridge.loadDraftProposals();
   await harness.bridge.loadHealthFocusBanner();
 
   assert.deepEqual(harness.calls.map((call) => call.kind), [
@@ -218,7 +214,6 @@ test("Today compatibility bridge routes legacy wrappers through explicit deps", 
     "loadWearable",
     "loadTableHint",
     "loadContextBanner",
-    "loadDraftProposals",
     "loadHealthFocusBanner",
   ]);
   assert.deepEqual(harness.depCalls, [
@@ -234,7 +229,6 @@ test("Today compatibility bridge routes legacy wrappers through explicit deps", 
     "progression",
     "addExercise",
     "addExercise",
-    "sideLoaders",
     "sideLoaders",
     "sideLoaders",
     "sideLoaders",

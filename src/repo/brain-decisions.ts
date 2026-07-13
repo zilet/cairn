@@ -166,6 +166,28 @@ export function recentAppliedRotations(days = 21, asOf = localDateISO()): Applie
   return out;
 }
 
+// A recently vetoed decision of this kind. Automatic re-proposal paths consult
+// this so one "no" is respected for a bounded window instead of being re-asked
+// at the next signal boundary (a rejected nutrition target, then a weigh-in that
+// re-triggers the same check-in). created_at is SQLite CURRENT_TIMESTAMP (UTC
+// text, e.g. "2026-07-13 19:09:48"), so a datetime() comparison against a
+// relative modifier works directly. The window string is built from a sanitized
+// integer, never raw input.
+export function hasRecentDecisionVeto(kind: string, days = 5): boolean {
+  const key = String(kind || "").trim();
+  if (!key) return false;
+  const window = Math.max(1, Math.trunc(Number(days) || 5));
+  const row = db
+    .prepare(
+      `SELECT 1 FROM brain_decisions
+       WHERE kind = ? AND status IN ('rejected','reverted')
+         AND created_at >= datetime('now', ?)
+       LIMIT 1`
+    )
+    .get(key, `-${window} days`);
+  return !!row;
+}
+
 export function insertBrainDecision(value: unknown): BrainDecision {
   const normalized = normalizeBrainDecision(value);
   if (!normalized) throw new Error("invalid brain decision");

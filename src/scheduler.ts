@@ -372,7 +372,7 @@ export function startScheduler() {
         "Refresh the upcoming week of meals against the athlete's current training, recovery, health directives, preferences, schedule, and accepted nutrition target.";
       if (nutritionDue) {
         try {
-          const r: any = await nutritionCheckin("auto");
+          const r: any = await nutritionCheckin("auto", undefined, undefined, { initiated: "auto" });
           const autonomy: any = r.autonomy;
           if (r.ok && r.change && r.proposal?.id) {
             const target = r.proposal?.parsed?.nutrition;

@@ -52,7 +52,6 @@ type TodayMainShellApi = {
     ${options.briefHtml}
     ${options.conductorHtml ? `<div class="cfocus-slot cfocus-thread-slot" id="cfocusSlot">${options.conductorHtml}</div>` : `<div class="cfocus-slot" id="cfocusSlot"></div>`}
     <div id="goalSlot">${options.conductorLeads ? "" : options.goalLineHtml}</div>
-    <div id="draftSlot" class="draft-slot"></div>
     <div id="sugSlot" class="sug-slot"></div>
     ${captureRowHtml(options.currentWeight, deps)}`;
   }

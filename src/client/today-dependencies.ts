@@ -181,7 +181,6 @@ function makeTodayDependencies(input: ClientTodayDependenciesContextInput): Clie
         loadHealthFocusBanner: input.loadHealthFocusBanner,
         loadWearable: input.loadWearable,
         loadCheckin: input.loadCheckin,
-        loadDraftProposals: input.loadDraftProposals,
         runAgendaRail: CairnTodayRailController.runAgendaRail,
         runFallbackRail: CairnTodayRailController.runFallbackRail,
         todayRailDeps: deps.rail,

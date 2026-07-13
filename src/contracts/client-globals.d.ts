@@ -486,7 +486,6 @@ declare global {
     loadWearable(isToday: unknown, deps: ClientTodaySideLoaderDeps): Promise<void>;
     loadTableHint(deps: ClientTodaySideLoaderDeps): Promise<void>;
     loadContextBanner(deps: ClientTodaySideLoaderDeps): Promise<void>;
-    loadDraftProposals(deps: ClientTodaySideLoaderDeps): Promise<void>;
     loadHealthFocusBanner(deps: ClientTodaySideLoaderDeps): Promise<void>;
   };
 
@@ -562,7 +561,6 @@ declare global {
     loadHealthFocusBanner(): unknown;
     loadWearable(isToday: boolean): unknown;
     loadCheckin(): unknown;
-    loadDraftProposals(): unknown;
     viewEnter(): void;
     invalidateTodayProgression(): void;
     scheduleRxRefresh(): void;
@@ -617,7 +615,6 @@ declare global {
     loadWearable(isToday: unknown): Promise<void>;
     loadTableHint(): Promise<void>;
     loadContextBanner(): Promise<void>;
-    loadDraftProposals(): Promise<void>;
     loadHealthFocusBanner(): Promise<void>;
   };
   type ClientTodayCompatibilityBridgesApi = {
@@ -3440,7 +3437,6 @@ declare global {
         loadHealthFocusBanner(): unknown;
         loadWearable(isToday: boolean): unknown;
         loadCheckin(): unknown;
-        loadDraftProposals(): unknown;
         runAgendaRail(
           agenda: Partial<ClientTodayAgenda> | null | undefined,
           genericPending: ClientTodayAgendaCandidate[],

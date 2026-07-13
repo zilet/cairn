@@ -39,8 +39,8 @@ import { healthFocus } from "./propagation.js";
 // The health-standing momentum read — the SAME wins-in-motion the top-level Me→Standing
 // view shows, surfaced here as a quiet pull-only "you're trending the right way" card.
 import { standingMomentum } from "./standing.js";
-// The waiting-draft proposals card reads the same proposals the client's
-// loadDraftProposals does — used for the 'plan' candidate.
+// The waiting-draft 'plan' candidate — now the ONE Today surface that points at a
+// review-needed draft (the duplicate side-loader card was retired).
 import { listProposals } from "./profile.js";
 // The two NEW Era-2 candidate producers, built by sibling agents. They land at
 // integration time; import them now (do not stub). Each returns a fully-formed
@@ -332,8 +332,8 @@ function autonomyOwnedDraft(proposal: any): boolean {
 // ---- plan: a draft that genuinely requires the athlete's review — the ask path
 // (lead_mode='review_everything', a goal/user-locked boundary, or a surprise-budget
 // hold), NOT a change the autonomy layer already scheduled. High because the athlete
-// is owed a decision. Mirrors the same autonomy filter the side-loader
-// (loadDraftProposals) and the coach list (isOpenProposal) already apply. ----
+// is owed a decision. Applies the same autonomy filter the coach list
+// (isOpenProposal) uses. ----
 function planDraftCandidate(): TodayAgendaCandidate | null {
   const plans = listProposals(8) as any[];
   const drafts = (Array.isArray(plans) ? plans : []).filter(
@@ -343,6 +343,10 @@ function planDraftCandidate(): TodayAgendaCandidate | null {
   const raw = String(drafts[0]?.instruction || "")
     .replace(/^(auto|chat):\s*/i, "")
     .trim();
+  // Prefer the draft's own athlete-facing summary over the internal instruction
+  // ("nutrition: adaptive check-in") so the one remaining card actually says what
+  // the decision is about.
+  const summary = String(drafts[0]?.parsed?.summary || "").trim();
   return {
     id: "draft-proposals",
     kind: "plan",
@@ -350,7 +354,7 @@ function planDraftCandidate(): TodayAgendaCandidate | null {
     priority: 78,
     kicker: "NEEDS YOUR DECISION",
     title: drafts.length > 1 ? `${drafts.length} plan changes are waiting` : "A plan change is waiting",
-    body: raw || "This one needs your decision before anything changes.",
+    body: clipAgenda(summary || raw || "This one needs your decision before anything changes."),
     action: { label: "Review", kind: "plan-coach" },
   };
 }

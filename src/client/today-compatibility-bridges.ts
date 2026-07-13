@@ -33,7 +33,6 @@ type TodayCompatibilityBridgesContext = {
   loadWearable(isToday: unknown): Promise<void>;
   loadTableHint(): Promise<void>;
   loadContextBanner(): Promise<void>;
-  loadDraftProposals(): Promise<void>;
   loadHealthFocusBanner(): Promise<void>;
 };
 
@@ -129,10 +128,6 @@ function makeTodayCompatibilityBridges(input: TodayCompatibilityBridgesInput): T
 
     async loadContextBanner() {
       await CairnTodaySideLoaders.loadContextBanner(sideLoaderDeps());
-    },
-
-    async loadDraftProposals() {
-      await CairnTodaySideLoaders.loadDraftProposals(sideLoaderDeps());
     },
 
     async loadHealthFocusBanner() {

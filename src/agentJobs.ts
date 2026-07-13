@@ -116,7 +116,7 @@ async function runSignalNutritionReview(
 ) {
   const due = nutritionReviewDue(event);
   if (!due.due) return null;
-  const checkin = await (deps.nutritionCheckin ?? nutritionCheckin)(agent, undefined, hooks);
+  const checkin = await (deps.nutritionCheckin ?? nutritionCheckin)(agent, undefined, hooks, { initiated: "auto" });
   repo.setAppState("nutrition_signal_recheck_last_date", localDateISO());
   const proposalId = Number(checkin?.proposal?.id);
   if (!checkin?.change || !Number.isFinite(proposalId) || proposalId <= 0) {
@@ -173,7 +173,7 @@ export async function executeBrainReviewAction(
     event?.clinical !== true
   ) {
     hooks?.onPhase?.("rechecking the next nutrition target");
-    const checkin = await (deps.nutritionCheckin ?? nutritionCheckin)(agent, undefined, hooks);
+    const checkin = await (deps.nutritionCheckin ?? nutritionCheckin)(agent, undefined, hooks, { initiated: "auto" });
     const proposalId = Number(checkin?.proposal?.id);
     if (!checkin?.change || !Number.isFinite(proposalId) || proposalId <= 0) {
       return { ...checkin, action: "nutrition_recheck" };

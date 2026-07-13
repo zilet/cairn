@@ -68,7 +68,6 @@ type TodayScreenRuntimeContext = {
   loadWearable(isToday: unknown): Promise<void>;
   loadTableHint(): Promise<void>;
   loadContextBanner(): Promise<void>;
-  loadDraftProposals(): Promise<void>;
   loadHealthFocusBanner(): Promise<void>;
   exRxLineHtml(rx: TodayScreenRuntimePrescription | null | undefined): string;
   rxMoveCount(rxByEx: TodayScreenRuntimePrescriptionByExercise): number;
@@ -315,7 +314,6 @@ function createTodayScreenRuntime(input: TodayScreenRuntimeInput): TodayScreenRu
     loadWearable: (isToday) => bridge().loadWearable(isToday),
     loadTableHint: () => bridge().loadTableHint(),
     loadContextBanner: () => bridge().loadContextBanner(),
-    loadDraftProposals: () => bridge().loadDraftProposals(),
     loadHealthFocusBanner: () => bridge().loadHealthFocusBanner(),
     exRxLineHtml,
     rxMoveCount,

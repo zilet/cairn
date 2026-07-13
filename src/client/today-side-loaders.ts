@@ -126,38 +126,6 @@ type TodaySideLoaderDeps = {
     wrap.innerHTML = CairnTodayContext.contextBannerHtml(events);
   }
 
-  // Today: quiet card only for a genuine review-posture draft. Lead-mode changes
-  // already appear in the forward-looking decision rail and must not also nag for Apply.
-  async function loadDraftProposals(deps: TodaySideLoaderDeps): Promise<void> {
-    const slot = deps.root.querySelector<HTMLElement>("#draftSlot");
-    if (!slot) return;
-    let plans: unknown = [];
-    try { plans = await deps.api("/proposals?limit=8"); } catch { return; }
-    if (!isCurrentToday(deps) || !slot.isConnected) return;
-    const drafts = (Array.isArray(plans) ? plans : [])
-      .filter((p) => {
-        if (!p || typeof p !== "object" || (p as { status?: unknown }).status !== "draft") return false;
-        const autonomy = (p as { autonomy?: { status?: unknown } }).autonomy;
-        return autonomy?.status !== "announced" && autonomy?.status !== "pending";
-      });
-    if (!drafts.length) { slot.innerHTML = ""; return; }
-    const head = drafts.length > 1 ? `${drafts.length} decisions need your call` : "A plan decision needs your call";
-    const raw = String((drafts[0] as { instruction?: unknown }).instruction || "").replace(/^(auto|chat):\s*/i, "").trim();
-    const sub = raw ? raw.charAt(0).toUpperCase() + raw.slice(1) : "Prepared by your team";
-    slot.innerHTML = `<button class="draft-card reveal" id="draftCard" style="--i:0" type="button">
-      <span class="draft-ico" aria-hidden="true">✦</span>
-      <span class="draft-body">
-        <span class="draft-h">${deps.escapeHtml(head)}</span>
-        <span class="draft-sub">${deps.escapeHtml(sub)} · review posture</span>
-      </span>
-      <span class="draft-go" aria-hidden="true">→</span>
-    </button>`;
-    slot.querySelector("#draftCard")?.addEventListener("click", () => {
-      deps.state.planJump = "coach";
-      deps.activateTab("plan");
-    });
-  }
-
   // Today: one quiet health-focus line from the latest whole-picture review.
   async function loadHealthFocusBanner(deps: TodaySideLoaderDeps): Promise<void> {
     const wrap = deps.root.querySelector<HTMLElement>("#ctxHealth");
@@ -179,7 +147,6 @@ type TodaySideLoaderDeps = {
     loadWearable,
     loadTableHint,
     loadContextBanner,
-    loadDraftProposals,
     loadHealthFocusBanner,
   };
 

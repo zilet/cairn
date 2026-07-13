@@ -824,9 +824,30 @@ export async function draftMealPlan(
 // is the calm, common answer. ok:false is the
 // designed failure signal. windowDays is passed verbatim to both the expenditure
 // estimate (with a finite guard) and the prompt, mirroring the REST behavior.
-export async function nutritionCheckin(agent: string | undefined, windowDays?: number, hooks?: OpHooks) {
+export async function nutritionCheckin(
+  agent: string | undefined,
+  windowDays?: number,
+  hooks?: OpHooks,
+  opts: { initiated?: "user" | "auto" } = {}
+) {
   hooks?.onPhase?.("reading your energy balance");
   const expenditure = repo.estimateExpenditure(Number.isFinite(windowDays as number) ? (windowDays as number) : 21);
+  // The athlete's veto is respected for a bounded window on AUTOMATIC paths only
+  // (scheduler cadence, brain signal boundaries): one "no" to a target change must
+  // not be re-asked at the next weigh-in. A manual check-in (Energy Balance button,
+  // REST, MCP) still runs because the athlete explicitly asked. Deliberately scoped
+  // to nutrition_target — a discarded meal-plan draft must NOT suppress target
+  // rechecks. Placed before every other branch so it always wins.
+  if (opts.initiated === "auto" && repo.hasRecentDecisionVeto("nutrition_target", 5)) {
+    return {
+      ok: true as const,
+      change: false as const,
+      proposal: null,
+      summary: "You recently passed on a similar nutrition change, so Cairn is holding the current target.",
+      reason: "recent_veto" as const,
+      expenditure,
+    };
+  }
   const outcomeReady = expenditure.confidence === "medium" || expenditure.confidence === "high";
   const protectiveEvidence = outcomeReady ? [] : protectiveFuelEvidence();
   if (!outcomeReady && !protectiveEvidence.length) {

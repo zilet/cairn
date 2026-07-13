@@ -50,7 +50,6 @@ type TodayPostRenderWiringDeps = {
   loadHealthFocusBanner(): unknown;
   loadWearable(isToday: boolean): unknown;
   loadCheckin(): unknown;
-  loadDraftProposals(): unknown;
   runAgendaRail(
     agenda: Partial<ClientTodayAgenda> | null | undefined,
     genericPending: ClientTodayAgendaCandidate[],
@@ -115,9 +114,6 @@ type TodayPostRenderWiringApi = {
     deps.loadContextBanner();
     if (!deps.conductorLeads) deps.loadHealthFocusBanner();
     deps.loadWearable(deps.isToday);
-    if (deps.isToday) {
-      deps.loadDraftProposals();
-    }
     if (!deps.deferRail) {
       if (deps.agenda) {
         deps.runAgendaRail(deps.agenda, deps.agendaGeneric, deps.todayRailDeps());
