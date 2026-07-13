@@ -5,7 +5,11 @@ import { draftMealPlan, evolveProgram, generateInsight, nutritionCheckin, synthe
 import { precomputeDayRead, localToday, warmToday } from "./dayread.js";
 import { checkForUpdate } from "./updateCheck.js";
 import { evaluateMatureExpectations } from "./brainEvaluator.js";
-import { applyDueAnnouncedDecisions, applyProposalWithAutonomy } from "./domain/brain/autonomy-service.js";
+import {
+  adoptOrphanedDrafts,
+  applyDueAnnouncedDecisions,
+  applyProposalWithAutonomy,
+} from "./domain/brain/autonomy-service.js";
 import { enqueueAgentJob } from "./agentJobs.js";
 import { recordAsyncFailure, recordSchedulerFailure } from "./diagnostics.js";
 import { runWithTimeZone } from "./tz.js";
@@ -92,6 +96,21 @@ export function startScheduler() {
   let boundaryApplyDate = "";
   const boundaryApplyTick = () => {
     const today = localToday();
+    // Adopt orphaned drafts on EVERY tick, ahead of the once-a-day gate below: the
+    // sweep is deterministic, agent-free, and idempotent (an adopted draft gains a
+    // ledger row and is skipped thereafter), so a bounded change that was parked as
+    // a bare draft (demoted by a since-fixed policy, or proposed in a since-elapsed
+    // budget week) flips to its scheduled state within a minute — not at the next
+    // calendar-day boundary pass. Isolated so a failure here never blocks the
+    // boundary application below.
+    try {
+      const orphans = adoptOrphanedDrafts();
+      if (orphans.adopted)
+        console.log(`[brain] adopted ${orphans.adopted} orphaned draft(s) into the autonomy ledger.`);
+    } catch (e: any) {
+      recordSchedulerFailure("adopt_orphaned_drafts", e);
+      console.error(`[brain] orphaned-draft adoption failed: ${e?.message ?? e}`);
+    }
     if (boundaryApplyDate === today) return;
     boundaryApplyDate = today;
     try {

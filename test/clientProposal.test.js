@@ -168,3 +168,52 @@ test("proposal helper treats an autonomy-scheduled draft as upcoming, not Apply 
   assert.match(html, /Scheduled for 2026-07-13/);
   assert.doesNotMatch(html, /data-apply/);
 });
+
+test("an autonomy-owned draft chip reads the scheduled truth, not a dead DRAFT", () => {
+  const proposal = loadProposal();
+  const announced = proposal.coachProposalCardHtml(
+    {
+      id: 9,
+      status: "draft",
+      agent: "team",
+      parsed: { summary: "A bounded change", changes: [{ exercise: "Bench", target_weight: 155 }] },
+      autonomy: { status: "pending", effective_date: "2026-07-14" },
+    },
+    0
+  );
+  // Sage-toned scheduled chip (the accepted/applied family), never the draft chip, and no Apply.
+  assert.match(announced, /mp-badge ok">LANDS 2026-07-14/);
+  assert.doesNotMatch(announced, /mp-badge draft/);
+  assert.doesNotMatch(announced, /data-apply/);
+
+  // An autonomy-owned draft with no effective_date falls back to a plain SCHEDULED chip.
+  const noDate = proposal.coachProposalCardHtml(
+    {
+      id: 10,
+      status: "draft",
+      agent: "team",
+      parsed: { summary: "A bounded change", changes: [{ exercise: "Bench", target_weight: 155 }] },
+      autonomy: { status: "pending", effective_date: null },
+    },
+    0
+  );
+  assert.match(noDate, /mp-badge ok">SCHEDULED/);
+  assert.doesNotMatch(noDate, /mp-badge draft/);
+});
+
+test("a plain draft still renders a DRAFT chip and an Apply button", () => {
+  const proposal = loadProposal();
+  const html = proposal.coachProposalCardHtml(
+    {
+      id: 11,
+      status: "draft",
+      agent: "team",
+      parsed: { summary: "A bounded change", changes: [{ exercise: "Bench", target_weight: 155 }] },
+      autonomy: null,
+    },
+    0
+  );
+  assert.match(html, /mp-badge draft">draft/);
+  assert.match(html, /data-apply="11"/);
+  assert.doesNotMatch(html, /LANDS|SCHEDULED/);
+});

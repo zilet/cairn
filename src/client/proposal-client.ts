@@ -21,6 +21,14 @@ type ApplyResultMessage = {
     return `<span class="mp-badge ${cls}">${escHtml(s)}</span>`;
   }
 
+  // An autonomy-owned draft (a pending quiet-apply or announced change) is NOT waiting on
+  // the athlete — it lands automatically at its natural boundary. Its chip must read the
+  // scheduled truth, sage-toned like the accepted/applied family, not a dead "draft".
+  function scheduledBadge(effectiveDate: unknown): string {
+    const date = String(effectiveDate || "").trim();
+    return `<span class="mp-badge ok">${escHtml(date ? `LANDS ${date}` : "SCHEDULED")}</span>`;
+  }
+
   function applyResultMessage(result: unknown): ApplyResultMessage {
     const r = proposalRecord(result);
     if (!result || r.ok === false || r.error) return { failed: true, message: String(r.error || "Couldn't apply — try again") };
@@ -130,7 +138,9 @@ type ApplyResultMessage = {
          <button class="ghostbtn" style="width:auto;padding:0 14px" data-discard="${escAttr(p.id)}">DISCARD</button></div>`
       : "";
     const autonomy = proposalRecord(p.autonomy);
-    const scheduled = p.status === "draft" && (autonomy.status === "announced" || autonomy.status === "pending")
+    const autonomyOwned = p.status === "draft" && (autonomy.status === "announced" || autonomy.status === "pending");
+    const chip = autonomyOwned ? scheduledBadge(autonomy.effective_date) : statusBadge(p.status);
+    const scheduled = autonomyOwned
       ? `<div class="sess-line" style="color:var(--muted);margin-top:10px">Scheduled for ${escHtml(String(autonomy.effective_date || "the next natural boundary"))} · automatic and reversible</div>`
       : "";
     const applied = p.status === "applied"
@@ -140,7 +150,7 @@ type ApplyResultMessage = {
     return `<div class="mp-card reveal${p.status === "superseded" ? " mp-card-faded" : ""}" style="${stagger(index)}">
       <div class="mp-hero">
         <span class="lbl">${escHtml(p.agent)} · #${escHtml(p.id)} · ${escHtml(p.created_at || "")}</span>
-        ${statusBadge(p.status)}
+        ${chip}
       </div>
       ${body}${scheduled}${actions}${applied}</div>`;
   }

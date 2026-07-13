@@ -2,6 +2,7 @@ import { db } from "../../db.js";
 import { decideAutonomyTier, domainShouldDemote, surpriseBudgetAllows } from "../../brain/autonomy.js";
 import type { AutonomyTier, BrainDomain } from "../../brain/decision-contract.js";
 import {
+  hasRecentDecisionVeto,
   listBrainDecisions,
   listBrainExpectations,
   getBrainDecision,
@@ -23,7 +24,7 @@ import {
   validateMealPlanForPersistence,
 } from "../../repo/nutrition.js";
 import { getPlan, replacePlan } from "../../repo/plan.js";
-import { applyProposal, getProposal, RECOVERY_WEEK_INSTRUCTION_PREFIX } from "../../repo/profile.js";
+import { applyProposal, getProposal, listProposals, RECOVERY_WEEK_INSTRUCTION_PREFIX } from "../../repo/profile.js";
 import { buildProgressionProposal } from "../../repo/progression.js";
 import { buildRunPlanProposal } from "../../repo/run-progression.js";
 import { getSettings } from "../../repo/settings.js";
@@ -574,6 +575,73 @@ export function buildRunPlanWithAutonomy(
   if (!built.ok) return built;
   const autonomy = applyProposalWithAutonomy(Number(built.proposal.id), { requested_tier: "quiet_apply" });
   return { ok: true, proposal: built.proposal, autonomy };
+}
+
+// A grace window before a bare draft is eligible for adoption. A just-created draft
+// may be mid-conversation in chat — the athlete could be looking at it right now — so
+// we never yank it into the autonomy ledger the instant it appears.
+const ORPHAN_ADOPTION_GRACE_MS = 2 * 60 * 60 * 1000;
+
+// Self-healing for orphaned drafts. A bounded, reversible change can end up parked as
+// a bare `draft` with no autonomy decision behind it — e.g. an older policy demoted it
+// to a review-only draft, or it was proposed in a week whose surprise budget was already
+// spent. Nothing re-evaluated it when conditions changed, so it sat forever showing
+// "NEEDS YOUR DECISION" while the product promises changes arrive automatically. This
+// pass re-offers each such draft to the autonomy layer so the system adapts without the
+// athlete: when the budget week rolls over, a veto ages out, or the posture is loosened,
+// a later pass adopts it (deterministic, no agent calls).
+export function adoptOrphanedDrafts(): { adopted: number; skipped: number } {
+  let adopted = 0;
+  let skipped = 0;
+  const now = Date.now();
+  // Newest first (listProposals orders id DESC): the newest draft of a kind is the
+  // canonical intent, so we handle it and leave older same-kind drafts to the existing
+  // supersede flows — at most ONE adoption per proposalShape kind per pass.
+  const handledKinds = new Set<ProposalShape["kind"]>();
+  for (const proposal of listProposals(10)) {
+    try {
+      if (proposal?.status !== "draft") continue;
+      const shape = proposalShape(proposal);
+      if (handledKinds.has(shape.kind)) continue;
+      handledKinds.add(shape.kind);
+      // Already autonomy-owned? hydrateProposal only attaches announced/pending/applied
+      // decisions, so a non-null `autonomy` means this draft already has a live decision
+      // (it will land at its own boundary) — never record a second one for it.
+      if (proposal.autonomy) {
+        skipped += 1;
+        continue;
+      }
+      // Never adopt what we can't age: an unparseable created_at is treated as
+      // ineligible rather than guessed too-old. A draft still inside the grace window
+      // waits for a later pass (not a failure — just not yet).
+      const createdAt = Date.parse(String(proposal.created_at ?? ""));
+      if (!Number.isFinite(createdAt)) {
+        skipped += 1;
+        continue;
+      }
+      if (now - createdAt < ORPHAN_ADOPTION_GRACE_MS) {
+        skipped += 1;
+        continue;
+      }
+      // After a recent same-kind veto the system does NOT silently re-apply similar
+      // substance: it ANNOUNCES (lands at the natural boundary with the Hold-on card, no
+      // decision demanded). With no veto, normal quiet-apply policy applies. Either way
+      // decideAutonomyTier only ever clamps to a MORE restrictive tier, so an ask-tier
+      // situation (review_everything posture, freshness expiry, a true same-kind budget,
+      // goal/clinical) returns applied:false with NO side effects — the draft simply
+      // stays a reviewable draft and a later pass re-evaluates it. That is the healing.
+      const requested_tier: AutonomyTier = hasRecentDecisionVeto(shape.kind, 5) ? "announce" : "quiet_apply";
+      const result = applyProposalWithAutonomy(Number(proposal.id), { requested_tier });
+      // A recorded decision (pending / announced / quiet-applied) is the true adoption
+      // signal; the held-for-review paths return no decision.
+      if (result?.decision != null) adopted += 1;
+      else skipped += 1;
+    } catch {
+      // Per-draft error isolation: a throwing adoption must never break the pass.
+      skipped += 1;
+    }
+  }
+  return { adopted, skipped };
 }
 
 export function applyDueAnnouncedDecisions(asOf = localDateISO()): { applied: number[]; failed: number[] } {
