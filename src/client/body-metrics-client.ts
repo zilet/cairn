@@ -1341,7 +1341,7 @@ function logForm(data: BmSummary, unit: BmUnit): string {
       return `<div class="bm-site-field" data-site-field="${escAttr(s.key)}" style="position:relative;padding:6px 0;border-bottom:1px solid var(--line,#f2ecdf)">
           <div style="display:flex;align-items:center;gap:7px">
             <label for="bmSite-${escAttr(s.key)}" style="flex:0 0 86px;display:inline-flex;align-items:center;gap:5px;font:600 10px ui-sans-serif,system-ui,sans-serif;letter-spacing:.1em;text-transform:uppercase;color:var(--muted,#746c5c)">${escHtml(s.label)}${info}</label>
-            ${stepBtn(-1)}<input id="bmSite-${escAttr(s.key)}" class="form-input bm-site" data-site="${escAttr(s.key)}" data-label="${escAttr(s.label)}" data-prefill="${escAttr(prefill)}" data-typical-min="${escAttr(String(range.typical_min ?? ""))}" data-typical-max="${escAttr(String(range.typical_max ?? ""))}" type="number" inputmode="decimal" min="${escAttr(String(range.min))}" max="${escAttr(String(range.max))}" step="0.1" placeholder="${unit}" aria-describedby="${escAttr(described.trim())}" style="width:72px;text-align:center;padding:5px 4px">${stepBtn(1)}
+            ${stepBtn(-1)}<input id="bmSite-${escAttr(s.key)}" class="form-input bm-site" data-site="${escAttr(s.key)}" data-label="${escAttr(s.label)}" data-prefill="${escAttr(prefill)}" data-typical-min="${escAttr(String(range.typical_min ?? ""))}" data-typical-max="${escAttr(String(range.typical_max ?? ""))}" type="number" inputmode="decimal" min="${escAttr(String(range.min))}" max="${escAttr(String(range.max))}" step="0.1" value="${escAttr(prefill)}" placeholder="${unit}" aria-describedby="${escAttr(described.trim())}" style="width:72px;text-align:center;padding:5px 4px">${stepBtn(1)}
             ${ref}
           </div>
           <span id="${escAttr(feedbackId)}" class="bm-site-feedback sess-line" data-site-feedback="${escAttr(s.key)}" role="status" hidden style="display:none;margin-top:5px;font-size:.72rem;line-height:1.35"></span>${hint}
@@ -1360,7 +1360,7 @@ function logForm(data: BmSummary, unit: BmUnit): string {
         ${last}
       </summary>
       <div style="padding:0 14px 14px">
-        <div class="sess-line" style="color:var(--muted,#746c5c);margin:0 0 6px">Tape, relaxed, same time of day. Fill in what you measured — the rest stays blank. Tap ⓘ on any site for where the tape goes.${refNote}</div>
+        <div class="sess-line" style="color:var(--muted,#746c5c);margin:0 0 6px">Tape, relaxed, same time of day. Your last measurements are prefilled — change what you measured, and sites never taped stay blank. Tap ⓘ on any site for where the tape goes.${refNote}</div>
         <div class="bm-site-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(15.5rem,1fr));gap:0 18px">${rows}</div>
         <div style="display:flex;gap:8px;align-items:flex-end;margin-top:10px;flex-wrap:wrap">
           <label class="field" style="margin:0"><span>Date</span><input id="bmDate" class="form-input" type="date" value="${escAttr(today)}"></label>

@@ -323,17 +323,25 @@ test("the Stand figure holds suspect tape sites neutral until re-taped", () => {
   assert.match(bm.compSection(data, "in"), /figure is holding those areas neutral/i);
 });
 
-test("the tape log form is elite entry: stepper rows, hidden-until-asked hints, reference values", () => {
+test("the tape log form prefills latest-known sites and leaves never-measured sites blank", () => {
   const { bm } = loadElite();
-  const data = mkData({ waist_in: 35.8, chest_in: 42.2 });
+  const data = mkData({ waist_in: 35.8 });
+  data.measurements = [
+    latest({ id: 1, date: "2026-05-20", chest_in: 42.2 }),
+    data.latest,
+  ];
   data.sites = [
     { key: "waist_in", label: "Waist", hint: "At the navel, relaxed.", range: { min: 15, max: 70, typical_min: 24, typical_max: 46 } },
     { key: "chest_in", label: "Chest", hint: "At nipple line.", range: { min: 20, max: 80, typical_min: 30, typical_max: 55 } },
+    { key: "hip_in", label: "Hips", hint: "At the widest point.", range: { min: 20, max: 80, typical_min: 30, typical_max: 58 } },
   ];
   const form = bm.logForm(data, "in");
   assert.match(form, /class="bm-step" data-site="waist_in" data-dir="-1"/, "each site gets − / + steppers");
   assert.match(form, /class="bm-step" data-site="waist_in" data-dir="1"/);
-  assert.match(form, /data-prefill="35.8"/, "the stepper seeds from the last-known tape");
+  assert.match(form, /data-site="waist_in"[^>]*data-prefill="35.8"[^>]*value="35.8"/, "the actual input, not just the stepper seed, carries the latest waist");
+  assert.match(form, /data-site="chest_in"[^>]*value="42.2"/, "an older chest carries forward when the newest session measured only waist");
+  assert.match(form, /data-site="hip_in"[^>]*data-prefill=""[^>]*value=""/, "a site with no measurement remains empty");
+  assert.match(form, /last measurements are prefilled/i, "the form explains its carry-forward behavior");
   assert.match(form, /ref 32/, "the height-derived reference rides the row in italic");
   assert.match(form, /never a mandate/i);
   // The placement hint must START hidden — the hidden attribute alone loses to
