@@ -100,8 +100,7 @@ type TodaySideLoaderDeps = {
     let plans: TodaySideMealPlan[] = [];
     try { plans = await deps.api("/mealplans?limit=6") as TodaySideMealPlan[]; } catch { return; }
     if (!isCurrentToday(deps) || !wrap.isConnected) return;
-    const p = (plans || []).find((x) => x.status === "accepted" && x.parsed) ||
-      (plans || []).find((x) => x.status === "draft" && x.parsed);
+    const p = CairnMealPlan.currentMealPlan(plans) as TodaySideMealPlan | null;
     const parsed = p?.parsed;
     const days = parsed && Array.isArray(parsed.days) ? parsed.days : [];
     const lbl = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][new Date(deps.state.logDate + "T12:00:00").getDay()];

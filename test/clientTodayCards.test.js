@@ -40,9 +40,14 @@ function loadTodayCards() {
     cardioPrescription: (item) => item.prescription || "",
   };
   context.window = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/date-utils.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/ui-components.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-training-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-session-status-client.js"), "utf8"), context);
+  // The "beat this" quiet target line: exerciseCardHtml renders it via
+  // CairnTodayPlanSurface.lastSetLineHtml, formatted by CairnTodaySessionSetModel.lastSetLineText.
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-plan-surface-client.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-session-set-model.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-cards-client.js"), "utf8"), context);
   return context.CairnTodayCards;
 }
@@ -79,6 +84,46 @@ test("Today exercise card helper preserves selectors, escaping, and timed mode",
   assert.match(html, /earned &lt;move&gt;/);
   assert.match(html, /data-logged/);
   assert.doesNotMatch(html, /Press <heavy>|keep ribs <down>|elbow <quiet>|earned <move>/);
+});
+
+test("Today exercise card helper renders the quiet last-time line only before anything's logged today", () => {
+  const cards = loadTodayCards();
+  const item = {
+    fromPlan: true,
+    exercise: "Bench Press",
+    sets: 3,
+    rep_low: 5,
+    rep_high: 8,
+    target_weight: 95,
+  };
+  const prefill = { weight: 90, reps: 5, rir: 2 };
+  const lastSet = { weight: 165, reps: 10, date: "2020-01-01" };
+
+  const notLogged = cards.exerciseCardHtml(item, [], prefill, null, null, {}, lastSet);
+  assert.match(notLogged, /class="ex-lastset"/);
+  assert.match(notLogged, /Last time: 165 × 10/);
+
+  const alreadyLogged = cards.exerciseCardHtml(
+    item,
+    [{ id: "set1", set_number: 1, weight: 165, reps: 10, rir: 1 }],
+    prefill,
+    null,
+    null,
+    {},
+    lastSet,
+  );
+  assert.doesNotMatch(alreadyLogged, /class="ex-lastset"/);
+});
+
+test("Today exercise card helper renders no last-time line without last-set data", () => {
+  const cards = loadTodayCards();
+  const item = { fromPlan: true, exercise: "Row", sets: 3, rep_low: 5, rep_high: 8 };
+
+  const withoutLastSet = cards.exerciseCardHtml(item, [], { weight: null, reps: null, rir: null }, null, null, {});
+  assert.doesNotMatch(withoutLastSet, /class="ex-lastset"/);
+
+  const withNullLastSet = cards.exerciseCardHtml(item, [], { weight: null, reps: null, rir: null }, null, null, {}, null);
+  assert.doesNotMatch(withNullLastSet, /class="ex-lastset"/);
 });
 
 test("Today cardio card helper renders planned and done states safely", () => {

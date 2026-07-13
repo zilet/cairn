@@ -468,6 +468,32 @@ export function renderTrainingSignals(ctx: any): string {
   return `\nLOGGED-PERFORMANCE SIGNALS (deterministic, from the user's OWN recent sets + feedback — evidence for whether a lift earned a bump, so the plan visibly reflects what they actually did):\n${lines.join("\n")}\n`;
 }
 
+// The single planning posture produced by the unified deterministic signal state.
+// Dimensions stay separate; this compact block tells agents which posture owns the
+// day and names conflicts without exposing the internal arbitration index.
+export function renderSignalState(ctx: any): string {
+  const state = ctx?.signal_state;
+  if (!state?.action) return "";
+  const labels: Record<string, string> = {
+    recovery_capacity: "Recovery capacity",
+    training_load_tolerance: "Training load / tolerance",
+    energy_fueling: "Energy / fueling",
+    health_constraints: "Health constraints",
+    life_capacity: "Life capacity / schedule",
+  };
+  const lines = Object.entries(state.dimensions ?? {}).map(([key, raw]: [string, any]) => {
+    const latest = raw?.latest_date ? `; latest ${raw.latest_date}` : "";
+    return `  - ${labels[key] || key}: ${raw?.status || "unknown"} (${raw?.confidence || "none"} confidence${latest}) — ${raw?.reason || "no current evidence"}`;
+  });
+  const conflicts = Array.isArray(state.conflicts) && state.conflicts.length
+    ? `\nCONFLICTS TO HOLD (do not average them away): ${state.conflicts.join(" | ")}`
+    : "";
+  const directives = state.action.directives
+    ? `\nPLANNING DIRECTIVES: training=${state.action.directives.training}; fueling=${state.action.directives.fueling}; schedule=${state.action.directives.schedule}. Fueling/schedule can change without downgrading the training posture.`
+    : "";
+  return `\nUNIFIED DAILY PLANNING STATE (deterministic; this posture is the shared planning default, still a suggestion and the athlete's felt experience wins):\nPOSTURE: ${String(state.action.posture).toUpperCase()} — ${state.action.reason}\n${lines.join("\n")}${directives}${conflicts}\n`;
+}
+
 // Active injury areas drawn from context_events (an injury's title/detail/meta.area
 // in plain words), so a variation/swap menu can FILTER out movements that load an
 // injured region — the concrete list the agent picks from must agree with the

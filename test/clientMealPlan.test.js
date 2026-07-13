@@ -140,6 +140,39 @@ test("meal-plan helper renders planner days with totals and target bar", () => {
   assert.match(html, /data-di="1" data-mi="1"/);
 });
 
+test("meal-plan helper caps the target bar at 100% width but flags a meaningfully over-target day", () => {
+  const meals = loadMealPlan();
+
+  const onTarget = meals.mealDayHtml(
+    { day: "Wednesday", meals: [{ name: "Lunch", items: "chicken", kcal: 2400, protein_g: 175 }] },
+    2,
+    { weekOf: "2026-06-30", targetKcal: 2400, todayName: "wed" }
+  );
+  assert.match(onTarget, /mealday-bar-fill barfill" style="width:100%"/);
+  assert.doesNotMatch(onTarget, /over-target/);
+
+  // 3200 of 2400 kcal = ~133% of target — well past the ~105% over-target line.
+  const overTarget = meals.mealDayHtml(
+    { day: "Thursday", meals: [{ name: "Dinner", items: "steak", kcal: 3200, protein_g: 220 }] },
+    3,
+    { weekOf: "2026-06-30", targetKcal: 2400, todayName: "thu" }
+  );
+  assert.match(overTarget, /mealday-bar-fill barfill over-target" style="width:100%"/);
+  // The bar's fill can't exceed 100% of the track, but the real numbers still
+  // show in the adjacent total, so the over-target amount isn't hidden.
+  assert.match(overTarget, /data-cu="3200"/);
+  assert.match(overTarget, /220g protein/);
+
+  // Just past target but under the ~105% line — capped width, no over-target flag.
+  const barelyOver = meals.mealDayHtml(
+    { day: "Friday", meals: [{ name: "Lunch", items: "salad", kcal: 2472, protein_g: 175 }] },
+    4,
+    { weekOf: "2026-06-30", targetKcal: 2400, todayName: "fri" }
+  );
+  assert.match(barelyOver, /mealday-bar-fill barfill" style="width:100%"/);
+  assert.doesNotMatch(barelyOver, /over-target/);
+});
+
 test("meal-plan helper renders planner preferences and empty state safely", () => {
   const meals = loadMealPlan();
   const prefsHtml = meals.mealPrefsHtml("Fasted <AM>", 1);
@@ -157,6 +190,10 @@ test("meal-plan helper renders planner preferences and empty state safely", () =
 
 test("meal-plan helper selects and renders the current weekly planner shell", () => {
   const meals = loadMealPlan();
+  const fullDays = Array.from({ length: 7 }, (_, index) => ({
+    day: index === 0 ? "Tuesday" : `Day ${index + 1}`,
+    meals: [{ name: index === 0 ? "Breakfast" : "Daily plate", items: "oats", kcal: 2400, protein_g: 180 }],
+  }));
   const plans = [
     {
       id: 1,
@@ -173,12 +210,7 @@ test("meal-plan helper selects and renders the current weekly planner shell", ()
         daily_kcal: 2400,
         daily_protein_g: 180,
         summary: "steady <week>",
-        days: [
-          {
-            day: "Tuesday",
-            meals: [{ name: "Breakfast", items: "oats", kcal: 500, protein_g: 40 }],
-          },
-        ],
+        days: fullDays,
         shopping: ["oats", "berries<script>"],
         notes: "Prep <ahead>",
       },
@@ -203,6 +235,34 @@ test("meal-plan helper selects and renders the current weekly planner shell", ()
   assert.match(painted.html, /berries&lt;script&gt;/);
   assert.match(painted.html, /Prep &lt;ahead&gt;/);
   assert.doesNotMatch(painted.html, /chef<script>|steady <week>|berries<script>|Prep <ahead>/);
+});
+
+test("meal-plan helper excludes unsafe legacy drafts from the current fallback", () => {
+  const meals = loadMealPlan();
+  const legacy = {
+    id: 1,
+    status: "draft",
+    parsed: {
+      daily_kcal: 2600,
+      daily_protein_g: 170,
+      days: [{ day: "Mon", meals: [{ name: "Legacy bowl", kcal: 650, protein_g: 45 }] }],
+    },
+  };
+  assert.equal(meals.currentMealPlan([legacy]), null);
+
+  const valid = {
+    id: 2,
+    status: "accepted",
+    parsed: {
+      daily_kcal: 2300,
+      daily_protein_g: 175,
+      days: Array.from({ length: 7 }, (_, index) => ({
+        day: `Day ${index + 1}`,
+        meals: [{ name: "Daily plate", kcal: 2300, protein_g: 175 }],
+      })),
+    },
+  };
+  assert.equal(meals.currentMealPlan([legacy, valid]).id, 2);
 });
 
 test("meal-plan helper preserves draft actions in the planner shell", () => {

@@ -5,6 +5,51 @@ type TodaySessionDeps = ClientTodaySessionControllerDeps;
 type TodaySessionSurfaceOptions = ClientTodaySessionSurfaceOptions;
 
 (() => {
+  // Bound the finish POST. api() only arms its safety timeout for GETs, so on a
+  // flaky radio a hung finish would otherwise leave the button disabled forever.
+  const FINISH_TIMEOUT_MS = 15000;
+
+  // A session note is drafted locally (keyed by log date — one session per date)
+  // so it survives a reload before the workout is finished. Mirrors the chat-draft
+  // pattern; every access is wrapped so a missing/disabled localStorage is a no-op.
+  const SESSION_NOTES_DRAFT_PREFIX = "cairn.sessnotes.";
+  function sessionNotesDraftKey(deps: TodaySessionDeps): string {
+    return SESSION_NOTES_DRAFT_PREFIX + (deps.state.logDate || "");
+  }
+  function saveSessionNotesDraft(deps: TodaySessionDeps, value: string): void {
+    try {
+      const key = sessionNotesDraftKey(deps);
+      if (value && value.trim()) localStorage.setItem(key, value);
+      else localStorage.removeItem(key);
+    } catch {}
+  }
+  function loadSessionNotesDraft(deps: TodaySessionDeps): string {
+    try {
+      return localStorage.getItem(sessionNotesDraftKey(deps)) || "";
+    } catch {
+      return "";
+    }
+  }
+  function clearSessionNotesDraft(deps: TodaySessionDeps): void {
+    try {
+      localStorage.removeItem(sessionNotesDraftKey(deps));
+    } catch {}
+  }
+
+  // Restore a locally-drafted note into an EMPTY session-notes input (a
+  // server-provided note, rendered into value=, wins — the draft only fills a
+  // blank) and persist edits as the athlete types, so a reload never loses the note.
+  function wireSessionNotesDraft(deps: TodaySessionDeps): void {
+    const notesEl = deps.root.querySelector<HTMLInputElement | HTMLTextAreaElement>("#sessNotes");
+    if (!notesEl || notesEl.dataset.wired) return;
+    notesEl.dataset.wired = "1";
+    if (!notesEl.value.trim()) {
+      const draft = loadSessionNotesDraft(deps);
+      if (draft) notesEl.value = draft;
+    }
+    notesEl.addEventListener("input", () => saveSessionNotesDraft(deps, notesEl.value));
+  }
+
   function finishedBrief(date: string, summary: Record<string, unknown>): Record<string, unknown> {
     const setCount = Number(summary.sets || 0);
     return {
@@ -30,29 +75,46 @@ type TodaySessionSurfaceOptions = ClientTodaySessionSurfaceOptions;
       finishBtn.dataset.wired = "1";
       finishBtn.addEventListener("click", async () => {
         finishBtn.disabled = true;
+        const finishPath = `/sessions/${CairnTodaySessionSetModel.sessionPathId(session)}/finish`;
         const notes = deps.root.querySelector<HTMLInputElement | HTMLTextAreaElement>("#sessNotes")?.value.trim() || "";
+        // Scope a ~15s AbortController to THIS call (guarded for environments
+        // without AbortController, mirroring api-client's own guard) so a hang
+        // takes the same offline path a thrown fetch already does. Finish replay
+        // is safe: finishSession is an idempotent UPDATE — unlike a set-log, which
+        // we never auto-time-out, since a timed-out-but-landed set could duplicate.
+        const finishOpts: RequestInit & { headers?: Record<string, string> } = {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ notes }),
+        };
+        let finishTimer: ReturnType<typeof setTimeout> | null = null;
+        if (typeof AbortController === "function") {
+          const controller = new AbortController();
+          finishOpts.signal = controller.signal;
+          if (typeof setTimeout === "function") finishTimer = setTimeout(() => controller.abort(), FINISH_TIMEOUT_MS);
+        }
         let result: Record<string, unknown>;
         try {
-          result = CairnTodaySessionSetModel.responseRecord(await deps.api(`/sessions/${CairnTodaySessionSetModel.sessionPathId(session)}/finish`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ notes }),
-          }));
+          result = CairnTodaySessionSetModel.responseRecord(await deps.api(finishPath, finishOpts));
         } catch {
           finishBtn.disabled = false;
           (globalThis as { outboxEnqueue?: (kind: string, path: string, body: unknown) => unknown }).outboxEnqueue?.(
             "finish",
-            `/sessions/${CairnTodaySessionSetModel.sessionPathId(session)}/finish`,
+            finishPath,
             { notes },
           );
+          clearSessionNotesDraft(deps); // the note is safe in the outbox now
           deps.toast("Finish saved — will sync when you're back online");
           return;
+        } finally {
+          if (finishTimer != null && typeof clearTimeout === "function") clearTimeout(finishTimer);
         }
         if (!result || result.error || result.ok === false || result.id == null) {
           finishBtn.disabled = false;
           deps.toast(result && result.error ? String(result.error) : "Couldn't finish that session");
           return;
         }
+        clearSessionNotesDraft(deps); // finished cleanly — the draft has done its job
 
         const summary = CairnTodaySessionSetModel.responseRecord(result.summary);
         CairnTodaySessionSetModel.cacheSessionTruth(deps, result);
@@ -105,7 +167,13 @@ type TodaySessionSurfaceOptions = ClientTodaySessionSurfaceOptions;
     CairnTodaySessionSetActions.wireDeletes(deps);
     CairnTodaySessionSkip.wireSkips(deps);
     wireFinishControls(session, deps);
-    deps.root.querySelectorAll(".ex .logrow").forEach((row) => CairnTodaySessionSetActions.wireLogRow(row, deps));
+    wireSessionNotesDraft(deps);
+    const lastSets = options.lastSets || {};
+    deps.root.querySelectorAll<HTMLElement>(".ex .logrow").forEach((row) => {
+      CairnTodaySessionSetActions.wireLogRow(row, deps);
+      const exercise = decodeURIComponent(row.dataset.ex || "");
+      CairnTodaySessionSetModel.wireLastSetLine(row, lastSets[exercise] ?? null, deps);
+    });
     if (options.hasLoggedSets) CairnTodaySessionFeedback.renderFeedback(deps.root.querySelector("#feedbackSlot"), session, deps);
   }
 

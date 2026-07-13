@@ -13,6 +13,7 @@ import {
   updateFoodNote,
   updateMealPlanDays,
 } from "../../domain/nutrition/index.js";
+import { goalPace } from "../../repo/goal-pace.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 import { queueMcpAgentJob } from "./background.js";
 
@@ -37,7 +38,7 @@ export function registerNutritionTools(server: McpToolRegistrar) {
   // ---- adaptive nutrition (T3) ----
   server.tool(
     "get_expenditure",
-    "Derived real daily energy expenditure (TDEE), MacroFactor-style and adherence-neutral: avg logged intake minus the recency-weighted bodyweight trend. Returns { tdee, confidence:'none'|'low'|'medium'|'high', points, window_days, intake_avg_kcal, trend_lb_wk, projected_goal_date, projection_text }. projection_text is a PLAIN-LANGUAGE goal-pace forecast off the measured weigh-in trend ('at this trend, ~Aug 20 — about 3 weeks past your date'); never a score. Null tdee / 'none' confidence when there's too little data; confidence is lowered during a travel/illness window. window defaults to 21 days.",
+    "Best-effort daily energy expenditure (TDEE), adherence-neutral and provenance-rich. Preserves the outcome anchor (avg logged intake minus recency-weighted bodyweight trend), then deterministically chooses/blends it with the strongest eligible prior: measured RMR + source-resolved active calories, Garmin total calories, or a profile seed. Returns additive basis/anchors/coverage/provenance fields; confidence remains the outcome-data confidence, so a prior-backed tdee may honestly carry 'none'. Missing days stay absent, future rows are excluded, and window is clamped to 7–90 days. projection_text remains a plain-language goal-pace forecast, never a score.",
     { window: z.number().int().optional().describe("days to derive over (default 21)") },
     async ({ window }) => asText(estimateExpenditure(window ?? 21))
   );
@@ -50,6 +51,13 @@ export function registerNutritionTools(server: McpToolRegistrar) {
       window: z.number().int().optional().describe("days to derive expenditure over (default 21)"),
     },
     async ({ agent, window }) => asText(queueMcpAgentJob("nutrition_checkin", { window }, agent))
+  );
+
+  server.tool(
+    "get_goal_pace",
+    "The goal-pace series behind the motivational weight-progress chart: { points:[{date,weight_lb}] (canonical weigh-ins, manual beats Garmin), trend:{lb_wk, line:[{date,weight_lb},{date,weight_lb}]|null} (unweighted least-squares slope over the most recent ≤21 days, projected ~28 days out; null under 2 points or a <3-day span), needed:{lb_wk, line:[…]|null} (the straight line from today's weight to goal_weight_lb by goal_date; null with no goal, a past date, or no current weight), goal:{weight_lb,date}, window_days }. Read-only, null-safe, no scores. ?days clamps to 14–365 (default 90).",
+    { days: z.number().int().optional().describe("trailing window of weigh-ins to read (default 90, clamped 14–365)") },
+    async ({ days }) => asText(goalPace(days ?? 90))
   );
 
   server.tool(

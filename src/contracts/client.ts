@@ -99,6 +99,9 @@ export interface ClientCoachingFocusItem {
   draft_pending?: boolean;
   // The applied recovery week is running — the lead is a confirmation, no action.
   recovery_active?: boolean;
+  // Daily recovery/complete posture from the unified planning state. Unlike a
+  // program deload, this must never render the "Draft recovery week" action.
+  day_posture?: "rest" | "easy" | "done";
 }
 
 // The recovery-week story for the Plan surface (GET /api/plan/recovery-status):
@@ -205,6 +208,36 @@ export interface ClientExpenditureEstimate {
   trend_lb_wk: number | null;
   projected_goal_date?: string | null;
   projection_text?: string | null;
+  outcome_tdee?: number | null;
+  prior_tdee?: number | null;
+  prior_basis?: "measured_rmr_active" | "garmin_total_calories" | "profile_seed" | null;
+  tdee_basis?:
+    | "outcome_trend"
+    | "blended_outcome_prior"
+    | "measured_rmr_active"
+    | "garmin_total_calories"
+    | "profile_seed"
+    | "unavailable";
+  basis?: string;
+  anchors?: unknown[];
+  coverage?: {
+    intake_days: number;
+    credible_intake_days: number;
+    partial_intake_days: number;
+    weigh_in_days: number;
+    weigh_in_span_days: number;
+    prior_days: number;
+    required_prior_days: number;
+  };
+  provenance?: string[];
+  fusion?: { outcome_weight: number; prior_weight: number };
+  quality?: {
+    intake: "none" | "partial" | "plausible" | "complete";
+    outcome: "unavailable" | "plausible" | "implausible_low" | "implausible_high";
+    explanation: string;
+    plausible_tdee_min: number;
+    plausible_tdee_max: number;
+  };
 }
 
 export type ClientProgressionAction = "overload" | "hold" | "deload" | "vary" | "introduce";

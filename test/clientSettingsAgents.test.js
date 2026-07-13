@@ -96,9 +96,27 @@ test("settings agent list renders escaped cards with state, controls, details, a
   assert.match(html, /CLI v1\.2\.3 · model: sonnet &lt;4&gt; · <span class="agent-upd">update available<\/span>/);
   assert.match(html, /<li>sonnet &lt;4&gt;<\/li>/);
   assert.match(html, /agent-card off/);
-  assert.match(html, /data-toggle="Gemini">OFF/);
+  assert.match(html, /data-toggle="Gemini"[^>]*>OFF/);
   assert.match(html, /Not in rotation until connected — tap Connect/);
   assert.match(html, /No models reported/);
   assert.match(html, /data-up="Claude &lt;main&gt;" disabled/);
   assert.match(html, /data-down="Gemini" disabled/);
+});
+
+test("an uninstalled provider is always Off and cannot be enabled before install", () => {
+  const settingsAgents = loadSettingsAgents();
+  const html = settingsAgents.agentListHtml({
+    order: ["antigravity"],
+    disabled: new Set(),
+    meta: {
+      antigravity: { name: "antigravity", present: false, configured: null, can_login: true, installable: true },
+    },
+    agentInfo: {},
+    agentModels: {},
+  });
+
+  assert.match(html, /agent-card off/);
+  assert.match(html, /data-toggle="antigravity" disabled aria-disabled="true">OFF/);
+  assert.match(html, /data-install="antigravity">Install/);
+  assert.doesNotMatch(html, /data-connect="antigravity"/);
 });

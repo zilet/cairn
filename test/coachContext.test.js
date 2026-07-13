@@ -25,6 +25,7 @@ function reset() {
     "insights",
     "bodyweight_log",
     "daily_metrics",
+    "checkins",
     "activities",
     "garmin_activities",
     "program_blocks",
@@ -223,6 +224,82 @@ test("coach context does not leak conductor ranking internals", () => {
   assert.doesNotMatch(conductor, /"score"/i);
   assert.doesNotMatch(conductor, /"priority"/i);
   assert.doesNotMatch(conductor, /leverage/i);
+});
+
+test("coach context keeps the conductor aligned with the protective day read", () => {
+  const today = localDaysAgo(0);
+  repo.savePlanDay(1, "Upper", "Upper body", [
+    { exercise: "Overhead Press", sets: 3, rep_low: 5, rep_high: 8, target_weight: 100 },
+  ]);
+  repo.addCheckin(today, { energy: 1, sleep_feel: 1, soreness: 2 });
+
+  const ctx = repo.getCoachContext();
+  assert.equal(ctx.signal_state.action.posture, "rest");
+  assert.equal(ctx.day_read.kind, "rest");
+  assert.equal(ctx.coaching_focus.lead?.domain, "recovery");
+  assert.equal(ctx.coaching_focus.lead?.day_posture, "rest");
+  assert.equal(
+    ctx.coaching_focus.parallel.some((item) => item.domain === "training" || item.domain === "running"),
+    false,
+    "Progress cannot advertise hard training beside Today's rest read"
+  );
+});
+
+test("coach context keeps poor recovery above injury while preserving the conductor caveat", () => {
+  const today = localDaysAgo(0);
+  repo.savePlanDay(1, "Upper", "Upper body", [
+    { exercise: "Overhead Press", sets: 3, rep_low: 5, rep_high: 8, target_weight: 100 },
+  ]);
+  db.prepare("INSERT INTO garmin_sources (id, provider, mode) VALUES (1, 'garmin', 'unofficial')").run();
+  db.prepare(
+    `INSERT INTO garmin_daily_metrics (source_id, date, training_readiness)
+     VALUES (1, ?, 20)`
+  ).run(today);
+  repo.addContextEvent({
+    kind: "injury",
+    title: "Shoulder strain",
+    detail: "Overhead work aggravates it",
+    start_date: today,
+  });
+
+  const ctx = repo.getCoachContext();
+  assert.equal(ctx.signal_state.action.posture, "easy");
+  assert.equal(ctx.signal_state.action.directives.training, "recover");
+  assert.equal(ctx.day_read.kind, "easy");
+  assert.match(ctx.day_read.why, /active injury/i);
+  assert.equal(ctx.coaching_focus.lead?.domain, "recovery");
+  assert.equal(ctx.coaching_focus.lead?.day_posture, "easy");
+  assert.match(ctx.coaching_focus.caveat, /active injury|pain-free substitutions/i);
+  assert.equal(
+    ctx.coaching_focus.parallel.some((item) => item.domain === "training" || item.domain === "running"),
+    false
+  );
+});
+
+test("thin coach context preserves the injury caveat without a plan or training lever", () => {
+  const today = localDaysAgo(0);
+  db.prepare("INSERT INTO garmin_sources (id, provider, mode) VALUES (1, 'garmin', 'unofficial')").run();
+  db.prepare(
+    `INSERT INTO garmin_daily_metrics (source_id, date, training_readiness)
+     VALUES (1, ?, 20)`
+  ).run(today);
+  repo.addContextEvent({
+    kind: "injury",
+    title: "Shoulder strain",
+    detail: "Overhead work aggravates it",
+    start_date: today,
+  });
+
+  const ctx = repo.getCoachContext();
+  assert.equal(ctx.day_read.kind, "easy");
+  assert.equal(ctx.coaching_focus.lead?.domain, "recovery");
+  assert.equal(ctx.coaching_focus.lead?.day_posture, "easy");
+  assert.equal(
+    ctx.coaching_focus.later.some((item) => item.domain === "training" || item.domain === "running"),
+    false
+  );
+  assert.match(ctx.coaching_focus.caveat, /shoulder strain/i);
+  assert.match(ctx.coaching_focus.caveat, /pain-free substitutions/i);
 });
 
 test("day-read prompt leads with conductor context before domain evidence", () => {

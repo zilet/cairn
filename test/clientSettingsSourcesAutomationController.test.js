@@ -72,6 +72,7 @@ class FakeRoot extends FakeElement {
       "garminStatus",
       "ahUrl",
       "ahUrlCopy",
+      "ahRecipeCopy",
       "enrichEnabled",
       "artEnabled",
       "researchEnabled",
@@ -125,6 +126,7 @@ function baseDeps(rootEl, wm, overrides = {}) {
       toast: (message) => toasts.push(message),
       locationOrigin: "https://cairn.test",
       clipboard: { writeText: async (value) => clipboardWrites.push(value) },
+      authToken: () => "shortcut-secret",
       setTimeout: (fn) => {
         timers.push(fn);
         return 0;
@@ -167,6 +169,13 @@ test("settings sources controller owns Garmin and Apple Health wiring", async ()
   assert.equal(rootEl.querySelector("#ahUrlCopy").textContent, "Copied");
   harness.timers[0]();
   assert.equal(rootEl.querySelector("#ahUrlCopy").textContent, "Copy");
+
+  await rootEl.querySelector("#ahRecipeCopy").click();
+  assert.match(harness.clipboardWrites[1], /source: apple_health/);
+  assert.match(harness.clipboardWrites[1], /Name: Authorization\n\s+Value: Bearer shortcut-secret/);
+  assert.match(harness.clipboardWrites[1], /source\+date upsert makes repeats safe/);
+  assert.equal(rootEl.querySelector("#ahRecipeCopy").textContent, "Build sheet copied");
+  assert.doesNotMatch(controller.appleHealthShortcutRecipe("https://cairn.test", ""), /Bearer/);
 
   await rootEl.querySelector("#garminSyncBtn").click();
   assert.deepEqual(harness.calls, [["/garmin/sync", "POST"], ["/settings", "GET"]]);

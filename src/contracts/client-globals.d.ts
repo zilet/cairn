@@ -322,6 +322,10 @@ declare global {
   type ClientTodaySessionSurfaceOptions = {
     session: Record<string, unknown>;
     hasLoggedSets: boolean;
+    // Per-exercise raw GET /last-set rows (undefined for an already-logged-today
+    // exercise, matching loadLastSets' own scoping) — feeds the live "beat this"
+    // affirmation wiring alongside each .logrow.
+    lastSets?: Record<string, unknown>;
   };
 
   type ClientHealthStandingPrimitivesApi = {
@@ -356,6 +360,14 @@ declare global {
     invalidateSessionTruth(deps: ClientTodaySessionControllerDeps): void;
     invalidateSetTruth(deps: ClientTodaySessionControllerDeps): void;
     logPayloadFromRow(row: HTMLElement, deps: ClientTodaySessionControllerDeps): ClientTodaySessionSetPayloadResult;
+    lastSetScore(weight: unknown, reps: unknown, durationSec: unknown): number;
+    lastSetLineText(lastSet: unknown, deps: { fmtDur(seconds: number): string }): string;
+    currentSetScoreFromRow(row: HTMLElement, deps: Pick<ClientTodaySessionControllerDeps, "parseDur">): number | null;
+    wireLastSetLine(
+      row: Element | null | undefined,
+      lastSet: unknown,
+      deps: Pick<ClientTodaySessionControllerDeps, "parseDur">,
+    ): void;
   };
   type ClientTodaySessionSetActionsApi = {
     wireDeletes(deps: ClientTodaySessionControllerDeps): void;
@@ -730,6 +742,7 @@ declare global {
     garminStatusLine(settings: unknown, syncing: boolean): string;
     api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
     toast(message: string): void;
+    authToken?: () => string;
     locationOrigin?: string;
     clipboard?: Pick<Clipboard, "writeText"> | null;
     setTimeout?: typeof setTimeout;
@@ -3316,6 +3329,7 @@ declare global {
           cardioPrescription(item: Record<string, unknown>): string;
           rxMoveCount(rxByEx: Record<string, unknown>): number;
           setsTonnage(sets: unknown): number;
+          lastSetLineText?(lastSet: unknown): string;
         },
       ): string;
       daySwitchHtml(
@@ -3338,6 +3352,10 @@ declare global {
         session: { sets?: unknown[] | null; notes?: unknown },
         options: { isToday: boolean; logDate: string },
         deps: { escapeAttr(value: unknown): string; setsTonnage(sets: unknown): number },
+      ): string;
+      lastSetLineHtml(
+        lastSet: unknown,
+        deps: { escapeHtml(value: unknown): string; lastSetLineText?(lastSet: unknown): string },
       ): string;
     };
 
@@ -3524,6 +3542,7 @@ declare global {
         revealIdx: unknown,
         rx: Partial<ClientPrescription> | null | undefined,
         options?: { day?: unknown; exModes?: Record<string, unknown> | null },
+        lastSet?: unknown,
       ): string;
       cardioPlanCardHtml(item: Record<string, unknown>, revealIdx: unknown, done: Record<string, unknown> | null | undefined, syncLine: string): string;
       cardioDoneCardHtml(item: Record<string, unknown>, effort: Record<string, unknown>, revealIdx: unknown): string;

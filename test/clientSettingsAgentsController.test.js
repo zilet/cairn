@@ -27,6 +27,9 @@ class FakeElement {
     this.isConnected = true;
     this.listeners = new Map();
     this.style = {};
+    this.hidden = false;
+    this.scrollHeight = 0;
+    this.scrollTop = 0;
     this.textContent = "";
     this.value = "";
     this.html = "";
@@ -97,7 +100,7 @@ class FakeRoot extends FakeElement {
     this.children = new Map();
     this.routeSelects = [];
 
-    for (const id of ["strat", "coachDay", "coachHour", "agentCliUpdateStatus"]) {
+    for (const id of ["strat", "coachDay", "coachHour", "agentCliUpdateStatus", "agentCliUpdateLog"]) {
       this.children.set(`#${id}`, new FakeElement(id));
     }
     this.children.set("#agentlist", new FakeAgentList("agentlist"));
@@ -187,7 +190,7 @@ function makeDeps(overrides = {}) {
         cliGets += 1;
         return cliGets === 1
           ? { status: "idle", agents: [] }
-          : { status: "succeeded", agents: ["codex"], finished_at: "2026-07-01T10:30:00Z" };
+          : { status: "succeeded", agents: ["codex"], finished_at: "2026-07-01T10:30:00Z", stdout_tail: "ok: codex -> 1.2.3\n" };
       }
       if (path === "/agent-clis/codex/install" && opts.method === "POST") return { status: "running", agents: ["codex"] };
       if (path === "/agents") return [
@@ -289,6 +292,8 @@ test("settings agents controller owns per-agent lazy install polling", async () 
     ["/agents", "GET"],
   ]);
   assert.equal(deps.root.querySelector("#agentCliUpdateStatus").textContent, "codex ready · 2026-07-01 10:30");
+  assert.equal(deps.root.querySelector("#agentCliUpdateLog").textContent, "ok: codex -> 1.2.3");
+  assert.equal(deps.root.querySelector("#agentCliUpdateLog").hidden, false);
   assert.equal(deps.meta.codex.present, true);
   assert.deepEqual(harness.toasts, ["codex is ready to connect"]);
 });

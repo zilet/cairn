@@ -50,7 +50,7 @@
     "description": "Google Antigravity CLI 'agy' (the successor to the Gemini CLI; Google account). Auth: ~/.gemini.",
     "env_required": [],
     "login": [],
-    "status_check": null,
+    "status_check": ["models"],
     "auth_state": [".gemini"],
     "models_list": ["models"],
     "model_flag": ["--model", "{model}"],

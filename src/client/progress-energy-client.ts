@@ -8,6 +8,9 @@ type EnergyExpenditure = {
   intake_avg_kcal?: unknown;
   points?: unknown;
   window_days?: unknown;
+  tdee_basis?: unknown;
+  basis?: unknown;
+  coverage?: unknown;
 };
 
 type EnergyRead = {
@@ -43,8 +46,21 @@ function kcalFmt(value: unknown): string {
   return Math.round(Number(value) || 0).toLocaleString();
 }
 
+function energyBasis(exp: EnergyExpenditure | null | undefined): string {
+  if (!exp) return "";
+  const explicit = typeof exp.basis === "string" ? exp.basis.trim() : "";
+  if (explicit) return explicit;
+  const basis = String(exp.tdee_basis || "");
+  if (basis === "outcome_trend") return "Learned from your intake and weight trend.";
+  if (basis === "blended_outcome_prior") return "Settling in — blending your trend with the strongest available starting anchor.";
+  if (basis === "measured_rmr_active") return "Backed by measured RMR and recent activity.";
+  if (basis === "garmin_total_calories") return "Backed by recent Garmin total-calorie days.";
+  if (basis === "profile_seed") return "Starting estimate from your profile and activity setting.";
+  return "";
+}
+
 function energyRead(exp: EnergyExpenditure | null | undefined): EnergyRead {
-  if (!exp || exp.tdee == null || exp.confidence === "none") {
+  if (!exp || exp.tdee == null) {
     return {
       lead: "Not enough logged yet to estimate.",
       body: "Keep logging meals and the odd weigh-in when you can — once there's a few weeks of data, I'll read your real energy balance here.",
@@ -59,12 +75,15 @@ function energyRead(exp: EnergyExpenditure | null | undefined): EnergyRead {
   if (dir === "down") movement = `trending down ${rate}`;
   else if (dir === "up") movement = `trending up ${rate}`;
   else if (dir === "flat") movement = "holding steady";
-  const lead = [intake, movement].filter(Boolean).join(", ") || "Reading your energy balance.";
-  return { lead: lead.charAt(0).toUpperCase() + lead.slice(1) + ".", body: "", tone: "read", dir };
+  const fallback = exp.tdee_basis === "profile_seed"
+    ? `Starting around ${kcalFmt(exp.tdee)} kcal/day`
+    : `Best estimate ~${kcalFmt(exp.tdee)} kcal/day`;
+  const lead = [intake, movement].filter(Boolean).join(", ") || fallback;
+  return { lead: lead.charAt(0).toUpperCase() + lead.slice(1) + ".", body: energyBasis(exp), tone: "read", dir };
 }
 
 function energyUsable(exp: EnergyExpenditure | null | undefined): boolean {
-  return !!(exp && exp.tdee != null && exp.confidence !== "none");
+  return !!(exp && exp.tdee != null);
 }
 
 function energyHeroHtml(exp: EnergyExpenditure | null | undefined): string {
@@ -81,8 +100,9 @@ function energyCardHtml(exp: EnergyExpenditure | null | undefined): string {
   const usable = energyUsable(exp);
   const points = Number(exp?.points);
   const windowDays = Number(exp?.window_days);
+  const confidence = exp?.confidence === "none" ? "starting estimate" : ENERGY_CONF_WORD[String(exp?.confidence)] || "";
   const ctx = usable
-    ? `<div class="eb-ctx lbl">${escHtml(ENERGY_CONF_WORD[String(exp?.confidence)] || "")} · ${Number.isFinite(points) ? points : 0} day${points === 1 ? "" : "s"} of data · ${Number.isFinite(windowDays) ? windowDays : 0}-day window</div>`
+    ? `<div class="eb-ctx lbl">${escHtml([confidence, Number.isFinite(points) && points > 0 ? `${points} outcome day${points === 1 ? "" : "s"}` : "", Number.isFinite(windowDays) ? `${windowDays}-day window` : ""].filter(Boolean).join(" · "))}</div>`
     : "";
   return `<section class="eb-card reveal" style="--i:1">
       <div class="eb-kicker lbl"><span class="eb-glyph" aria-hidden="true">◇</span> ${usable ? "How you're tracking" : "Not enough data yet"}</div>

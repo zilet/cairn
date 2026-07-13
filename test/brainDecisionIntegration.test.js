@@ -1,6 +1,6 @@
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
-import { db, localDaysAgo, repo, resetTables, seedIntake, seedWeight } from "./_seed.js";
+import { completeMealWeek, db, localDaysAgo, repo, resetTables, seedIntake, seedWeight } from "./_seed.js";
 import { evaluateMatureExpectations } from "../dist/brainEvaluator.js";
 
 beforeEach(() => {
@@ -111,21 +111,21 @@ test("direct nutrition targets enter the ledger with a thin-data expectation tha
 });
 
 test("meal plan acceptance, discard, and sibling supersession are durable ledger transitions", () => {
-  const older = repo.createMealPlan("stub", "raw older", {
+  const older = repo.createMealPlan("stub", "raw older", completeMealWeek({
     daily_kcal: 2200,
     daily_protein_g: 170,
     summary: "Earlier option",
     days: [],
-  });
-  const accepted = repo.createMealPlan("stub", "raw accepted", {
+  }));
+  const accepted = repo.createMealPlan("stub", "raw accepted", completeMealWeek({
     daily_kcal: 2300,
     daily_protein_g: 175,
     summary: "Current week",
     rationale: "Fits the current training week.",
     days: [],
-  });
+  }));
   repo.acceptMealPlan(accepted.id);
-  const declined = repo.createMealPlan("stub", "raw declined", { daily_kcal: 2400, days: [] });
+  const declined = repo.createMealPlan("stub", "raw declined", completeMealWeek({ daily_kcal: 2400 }));
   repo.setMealPlanStatus(declined.id, "discarded");
 
   const decisions = repo.listBrainDecisions({ kind: "meal_plan", limit: 20 });
@@ -138,8 +138,13 @@ test("meal plan acceptance, discard, and sibling supersession are durable ledger
   assert.equal(repo.listBrainExpectations({ decisionId: byPlan[String(older.id)].id }).length, 0);
   assert.doesNotMatch(JSON.stringify(decisions), /raw accepted|raw older|raw declined/);
 
-  repo.updateMealPlanDays(accepted.id, [{ day: "Mon", meals: [{ name: "Chicken bowl", kcal: 650, protein_g: 45 }] }]);
-  repo.swapMealInPlan(accepted.id, "Mon", 0, { name: "Salmon bowl", kcal: 675, protein_g: 44 });
+  const editedDays = accepted.parsed.days.map((day, index) =>
+    index === 0
+      ? { ...day, day: "Mon", meals: [{ name: "Chicken bowl", kcal: 2300, protein_g: 175 }] }
+      : day
+  );
+  repo.updateMealPlanDays(accepted.id, editedDays);
+  repo.swapMealInPlan(accepted.id, "Mon", 0, { name: "Salmon bowl", kcal: 2300, protein_g: 175 });
   assert.equal(
     repo.listBrainDecisions({ kind: "meal_plan", limit: 20 }).length,
     decisions.length,

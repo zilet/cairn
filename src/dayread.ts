@@ -80,6 +80,26 @@ export function enforceCompletionContract(out: any, baseline: any): any {
   return out;
 }
 
+// The agent supplies judgment and voice, but without an explicit athlete steer it
+// cannot outrank the deterministic safety posture. `rest < easy < train` is the
+// recommendation ladder: moving left is always allowed; moving right is clamped
+// to the server-owned baseline with matching deterministic wording. Completion is
+// deliberately handled separately below because it is a fact, not a posture.
+export function enforceDayReadSafetyPosture(out: any, baseline: any, hasOverride = false): any {
+  if (hasOverride || baseline?.kind === "done" || out?.kind === "done") return out;
+  const rank: Record<string, number> = { rest: 0, easy: 1, train: 2 };
+  const baselineRank = rank[String(baseline?.kind ?? "")];
+  const outRank = rank[String(out?.kind ?? "")];
+  if (baselineRank == null || outRank == null || outRank <= baselineRank) return out;
+  return {
+    ...baseline,
+    headline: deterministicHeadline(baseline),
+    source: "deterministic",
+    agent: out.agent,
+    tried: out.tried,
+  };
+}
+
 export function isValidDayReadAgentResult(value: any, baseline?: { kind?: unknown }): boolean {
   const validShape = !!(
     value &&
@@ -154,6 +174,7 @@ export async function computeDayRead(opts: { date?: string; override?: string; a
       agent_issue: agentIssueFor(e),
     };
   }
+  out = enforceDayReadSafetyPosture(out, baseline, !!override?.trim());
   out = enforceCompletionContract(out, baseline);
   // The day-ahead `forward` line is NOT persisted here — it's attached fresh on every
   // /today-read response (it must reflect the current plan/balance, not a snapshot).

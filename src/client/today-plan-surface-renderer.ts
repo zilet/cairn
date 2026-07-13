@@ -64,6 +64,7 @@ type TodayPlanSurfaceRendererDeps = {
     prefill: TodayPlanSurfaceRendererPrefill,
     index: number,
     rx: unknown,
+    lastSet?: unknown,
   ): string;
   garminSessionCard(value: unknown): string;
   sessionDoneCard(session: unknown, day: unknown, options: { isToday: boolean }): string;
@@ -138,6 +139,7 @@ type TodayPlanSurfaceRendererApi = {
         options.prefillFor(item),
         cardIdx++,
         options.rxFor(exerciseName),
+        options.lastSets[exerciseName],
       );
     }
 
@@ -160,6 +162,7 @@ type TodayPlanSurfaceRendererApi = {
         pendingPrefill(options.lastSets[pending.name]),
         cardIdx++,
         options.rxFor(pending.name),
+        options.lastSets[pending.name],
       );
     }
 

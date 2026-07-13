@@ -12,7 +12,8 @@
 // goal-checkin) stay silent and the candidate set under test is fully controlled.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { db, isoDaysAgo, localDaysAgo, repo, resetTables, seedHealthDoc, seedIntake, marker } from "./_seed.js";
+import { completeMealWeek, db, isoDaysAgo, localDaysAgo, repo, resetTables, seedHealthDoc, seedIntake, marker } from "./_seed.js";
+import { applyDueAnnouncedDecisions, applyProposalWithAutonomy } from "../dist/domain/brain/autonomy-service.js";
 
 // Tables every candidate producer reads — wiped to a known floor each case so the
 // arbiter sees exactly (and only) what each test seeds.
@@ -72,13 +73,13 @@ test("an announced structural change appears calmly with a working chat hold-on 
 });
 
 test("an upcoming meal-plan change uses calm automatic copy and concise daily targets", () => {
-  const plan = repo.createMealPlan("stub", "", {
+  const plan = repo.createMealPlan("stub", "", completeMealWeek({
     summary: "A verbose agent summary that should not reach Today.",
     rationale: "A long rationale that should stay in the detail view rather than filling the Today agenda.",
     daily_kcal: 2075,
     daily_protein_g: 175,
     days: [],
-  });
+  }));
   const tomorrow = localDaysAgo(-1);
   const decision = repo.recordDecision({
     effective_date: tomorrow,
@@ -143,11 +144,11 @@ test("an upcoming meal-plan change degrades calmly when target specifics are una
 });
 
 test("every live announced change remains reachable across primary and more", () => {
-  const mealPlan = repo.createMealPlan("stub", "", {
+  const mealPlan = repo.createMealPlan("stub", "", completeMealWeek({
     daily_kcal: 2150,
     daily_protein_g: 175,
     days: [],
-  });
+  }));
   const base = {
     effective_date: localDaysAgo(-1),
     source: "test",
@@ -361,6 +362,54 @@ test("agenda-only draft, health, and running candidates render as generic cards"
   assert.equal(byId("run-compliance")?.client_card, undefined, "run compliance must render as generic agenda copy");
   assert.equal(byId("run-compliance")?.action?.kind, "plan-endurance");
   assert.ok(byId("run-compliance")?.title);
+});
+
+// ---- the needs-your-decision rail must honor the autonomy ledger (VISION Amendment
+// 1). A bounded change the brain already scheduled under lead mode stays a `draft`
+// while its pending/announced decision carries it to a natural boundary with one-tap
+// Undo — filtering on status alone re-nagged the athlete for a decision the team
+// already made. Only a genuinely-unowned draft (the ask path) is the athlete's call. --
+function nutritionCheckinDraft() {
+  return repo.createProposal("stub", "nutrition: adaptive check-in", "", {
+    kind: "nutrition_target",
+    summary: "Small measured intake adjustment",
+    nutrition: { target_kcal: 2_250, protein_g: 170, reason: "The measured trend missed its band." },
+  });
+}
+
+function agendaDraftCandidate() {
+  const agenda = repo.todayAgenda();
+  return [...agenda.primary, ...agenda.more].find((c) => c.id === "draft-proposals");
+}
+
+test("a bounded nutrition check-in the brain scheduled under lead mode is not a needs-your-decision draft", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  const proposal = nutritionCheckinDraft();
+  const routed = applyProposalWithAutonomy(proposal.id, { requested_tier: "quiet_apply" });
+  assert.equal(routed.pending, true, "a bounded nutrition target quiet-applies at the next food-day boundary");
+  assert.equal(repo.getProposal(proposal.id).status, "draft", "the proposal stays a draft while the ledger carries it");
+  assert.equal(repo.getProposal(proposal.id).autonomy?.status, "pending", "the pending decision owns the draft");
+  assert.equal(agendaDraftCandidate(), undefined, "an autonomy-owned draft never nags as a decision on Today");
+});
+
+test("a genuinely-unowned draft still surfaces as a needs-your-decision item (review posture preserved)", () => {
+  repo.setSettings({ lead_mode: "review_everything" });
+  const proposal = nutritionCheckinDraft();
+  const routed = applyProposalWithAutonomy(proposal.id, { requested_tier: "quiet_apply" });
+  assert.equal(routed.tier, "ask", "review-everything still asks");
+  assert.equal(repo.getProposal(proposal.id).autonomy, null, "no decision owns an ask-path draft");
+  const draft = agendaDraftCandidate();
+  assert.ok(draft, "a draft awaiting the athlete's call is still surfaced");
+  assert.equal(draft.kicker, "NEEDS YOUR DECISION");
+});
+
+test("acknowledging a scheduled nutrition target drops it out of the Today rail", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  const proposal = nutritionCheckinDraft();
+  const routed = applyProposalWithAutonomy(proposal.id, { requested_tier: "quiet_apply" });
+  applyDueAnnouncedDecisions(routed.effective_date);
+  assert.equal(repo.getProposal(proposal.id).status, "applied", "the boundary applies the target");
+  assert.equal(agendaDraftCandidate(), undefined, "an applied target is no longer a waiting decision");
 });
 
 test("opening a health read retires only that revision until material evidence changes", () => {

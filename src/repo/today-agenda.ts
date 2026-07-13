@@ -316,11 +316,29 @@ function announcedChangeCandidates(date: string): TodayAgendaCandidate[] {
   });
 }
 
-// ---- plan: a draft that requires review under the selected autonomy mode or a
-// goal/user-locked boundary. High because the athlete is owed a decision. ----
+// A draft the autonomy layer already OWNS — a pending/announced/applied brain
+// decision has scheduled it for its natural boundary with one-tap Undo — is not the
+// athlete's call to make. Under lead mode a bounded (floors-clamped) nutrition or
+// training change quiet-applies exactly this way: the proposal stays a `draft` while
+// the ledger carries it, so filtering on status alone would nag "needs your decision"
+// for a change the team already made. hydrateProposal only ever attaches these three
+// statuses to a live proposal, so any autonomy row means the ledger owns it; keep the
+// check explicit so a future status can't silently start re-nagging.
+function autonomyOwnedDraft(proposal: any): boolean {
+  const status = proposal?.autonomy?.status;
+  return status === "pending" || status === "announced" || status === "applied";
+}
+
+// ---- plan: a draft that genuinely requires the athlete's review — the ask path
+// (lead_mode='review_everything', a goal/user-locked boundary, or a surprise-budget
+// hold), NOT a change the autonomy layer already scheduled. High because the athlete
+// is owed a decision. Mirrors the same autonomy filter the side-loader
+// (loadDraftProposals) and the coach list (isOpenProposal) already apply. ----
 function planDraftCandidate(): TodayAgendaCandidate | null {
   const plans = listProposals(8) as any[];
-  const drafts = (Array.isArray(plans) ? plans : []).filter((p) => p && p.status === "draft");
+  const drafts = (Array.isArray(plans) ? plans : []).filter(
+    (p) => p && p.status === "draft" && !autonomyOwnedDraft(p)
+  );
   if (!drafts.length) return null;
   const raw = String(drafts[0]?.instruction || "")
     .replace(/^(auto|chat):\s*/i, "")

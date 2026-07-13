@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { emitBrainEvent } from "./brainEvents.js";
 import * as repo from "./repo.js";
 import { localDateISO } from "./repo/shared.js";
 
@@ -59,7 +60,9 @@ function pickStr(obj: any, keys: string[]): string | null {
 }
 
 function normKey(k: string): string {
-  return String(k).toLowerCase().replace(/[^a-z0-9]+/g, "");
+  return String(k)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
 }
 
 function objectNodes(root: any, path: string[] = [], depth = 0): { obj: any; path: string[] }[] {
@@ -85,16 +88,10 @@ function pickNumDeep(root: any, keys: string[]): number | null {
 
 function contextText(node: { obj: any; path: string[] }): string {
   const obj = node.obj ?? {};
-  return [
-    ...node.path,
-    obj.sport,
-    obj.sportType,
-    obj.activityType,
-    obj.activityTypeKey,
-    obj.type,
-    obj.label,
-    obj.name,
-  ].filter(Boolean).join(" ").toLowerCase();
+  return [...node.path, obj.sport, obj.sportType, obj.activityType, obj.activityTypeKey, obj.type, obj.label, obj.name]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
 }
 
 function normalizeVo2Value(value: number, key: string): number | null {
@@ -159,7 +156,9 @@ export function extractTrainingStatus(status: any): {
     // acuteTrainingLoad nests under acuteTrainingLoadDTO on most devices — search deep.
     acute_load: pickNumDeep(statusDev, ["acuteTrainingLoad", "dailyTrainingLoadAcute"]),
     training_load_balance: pickStr(lbDev, [
-      "trainingBalanceFeedbackPhrase", "monthlyLoadBalanceFeedbackPhrase", "feedbackPhrase",
+      "trainingBalanceFeedbackPhrase",
+      "monthlyLoadBalanceFeedbackPhrase",
+      "feedbackPhrase",
     ]),
   };
 }
@@ -233,10 +232,10 @@ export function extractGarminActivityHrZones(activity: any): any[] | null {
 export function extractGarminActivityTeLabel(activity: any): string | null {
   const explicit = pickStr(activity, ["trainingEffectLabel", "trainingEffect"]);
   if (explicit) return explicit.toUpperCase().replace(/[^A-Z0-9]+/g, "_");
-  const text = [
-    activity?.aerobicTrainingEffectMessage,
-    activity?.anaerobicTrainingEffectMessage,
-  ].filter(Boolean).join(" ").toUpperCase();
+  const text = [activity?.aerobicTrainingEffectMessage, activity?.anaerobicTrainingEffectMessage]
+    .filter(Boolean)
+    .join(" ")
+    .toUpperCase();
   if (!text) return null;
   if (text.includes("VO2_MAX") || text.includes("VO2MAX")) return "VO2MAX";
   if (text.includes("LACTATE_THRESHOLD") || text.includes("THRESHOLD")) return "LACTATE_THRESHOLD";
@@ -305,8 +304,9 @@ function activityToInput(a: any): repo.GarminActivityInput {
 // exported token files. Never touches the network or the garmin-connect package.
 export function isGarminConfigured(): boolean {
   if (repo.getGarminCredentials().configured) return true;
-  return fs.existsSync(path.join(TOKEN_DIR, "oauth1_token.json"))
-    && fs.existsSync(path.join(TOKEN_DIR, "oauth2_token.json"));
+  return (
+    fs.existsSync(path.join(TOKEN_DIR, "oauth1_token.json")) && fs.existsSync(path.join(TOKEN_DIR, "oauth2_token.json"))
+  );
 }
 
 export function garminClientCredentials(username: string, password: string, hasTokenFiles: boolean) {
@@ -321,8 +321,9 @@ async function makeClient() {
   const mod = await import("garmin-connect");
   const GarminConnect = (mod as any).GarminConnect || (mod as any).default;
   const { username, password } = repo.getGarminCredentials();
-  const hasTokenFiles = fs.existsSync(path.join(TOKEN_DIR, "oauth1_token.json"))
-    && fs.existsSync(path.join(TOKEN_DIR, "oauth2_token.json"));
+  const hasTokenFiles =
+    fs.existsSync(path.join(TOKEN_DIR, "oauth1_token.json")) &&
+    fs.existsSync(path.join(TOKEN_DIR, "oauth2_token.json"));
   const credentials = garminClientCredentials(username, password, hasTokenFiles);
   if (!credentials) {
     throw new Error("GARMIN_USERNAME/GARMIN_PASSWORD or GARMIN_TOKEN_DIR tokens are required");
@@ -429,7 +430,10 @@ async function getDisplayName(client: any, activities: any[] = []): Promise<stri
 // Per-activity detail (one bounded call each): the list payload omits the training
 // load and running dynamics. /activity-service/activity/{id} carries both in
 // summaryDTO. Best-effort / null-safe like every other endpoint.
-async function fetchActivityDetail(client: any, activityId: string | number): Promise<{
+async function fetchActivityDetail(
+  client: any,
+  activityId: string | number
+): Promise<{
   training_load: number | null;
   avg_ground_contact_ms: number | null;
   avg_vertical_osc_cm: number | null;
@@ -565,27 +569,41 @@ async function syncDailyMetrics(client: any, sourceId: number, days: number, dis
     const iso = localDateISO(date);
     const metric: repo.GarminDailyMetricInput = { date: iso };
 
-    try { metric.steps = asNum(await client.getSteps(date)); } catch {}
+    try {
+      metric.steps = asNum(await client.getSteps(date));
+    } catch {}
 
     try {
       const sleep = await client.getSleepData(date);
-      if (sleep) { foldSleep(sleep, metric); metric.raw = { ...(metric.raw as any || {}), sleep }; }
+      if (sleep) {
+        foldSleep(sleep, metric);
+        metric.raw = { ...((metric.raw as any) || {}), sleep };
+      }
     } catch {}
 
     // The daily user summary is the workhorse: stress, body battery dynamics,
     // SpO2, respiration, intensity minutes, calories, floors, HR extremes.
     if (displayName) {
       const summary = await rawGet(client, `/usersummary-service/usersummary/daily/${displayName}?calendarDate=${iso}`);
-      if (summary) { foldDailySummary(summary, metric); metric.raw = { ...(metric.raw as any || {}), summary }; }
+      if (summary) {
+        foldDailySummary(summary, metric);
+        metric.raw = { ...((metric.raw as any) || {}), summary };
+      }
     }
 
     // HRV status + last-night average (richer than the sleep field alone).
     const hrv = await rawGet(client, `/hrv-service/hrv/${iso}`);
-    if (hrv) { foldHrv(hrv, metric); metric.raw = { ...(metric.raw as any || {}), hrv }; }
+    if (hrv) {
+      foldHrv(hrv, metric);
+      metric.raw = { ...((metric.raw as any) || {}), hrv };
+    }
 
     // Daily training readiness (0-100), device-dependent.
     const tr = await rawGet(client, `/metrics-service/metrics/trainingreadiness/${iso}`);
-    if (tr) { foldReadiness(tr, metric); metric.raw = { ...(metric.raw as any || {}), trainingReadiness: tr }; }
+    if (tr) {
+      foldReadiness(tr, metric);
+      metric.raw = { ...((metric.raw as any) || {}), trainingReadiness: tr };
+    }
 
     // Sleep skin-temperature deviation is optional and currently unverified for
     // this account. The Garmin client logs 404s internally before our catch can
@@ -602,11 +620,15 @@ async function syncDailyMetrics(client: any, sourceId: number, days: number, dis
           optionalKey: "skin-temperature",
           unavailable,
           quietStatuses: [403, 404, 410],
-        },
+        }
       );
       if (skin) {
         metric.skin_temp_dev_c = pickNumDeep(skin, [
-          "avgDeviation", "deviation", "sleepTemperatureDeviation", "temperatureDeviation", "avgDeviationSleep",
+          "avgDeviation",
+          "deviation",
+          "sleepTemperatureDeviation",
+          "temperatureDeviation",
+          "avgDeviationSleep",
         ]);
       }
     }
@@ -614,14 +636,26 @@ async function syncDailyMetrics(client: any, sourceId: number, days: number, dis
     // Richer sleep DTO — fills sleep_score / avg_sleep_stress / restless_count when
     // the package's getSleepData returned a reduced shape. Only when something's
     // actually missing, and only if we resolved a displayName.
-    if (displayName && (metric.sleep_score == null || metric.avg_sleep_stress == null || metric.restless_count == null)) {
-      const fullSleep = await rawGet(client, `/wellness-service/wellness/dailySleepData/${displayName}?date=${iso}&nonSleepBufferMinutes=60`);
-      if (fullSleep) { foldSleepDetail(fullSleep, metric); metric.raw = { ...(metric.raw as any || {}), fullSleep }; }
+    if (
+      displayName &&
+      (metric.sleep_score == null || metric.avg_sleep_stress == null || metric.restless_count == null)
+    ) {
+      const fullSleep = await rawGet(
+        client,
+        `/wellness-service/wellness/dailySleepData/${displayName}?date=${iso}&nonSleepBufferMinutes=60`
+      );
+      if (fullSleep) {
+        foldSleepDetail(fullSleep, metric);
+        metric.raw = { ...((metric.raw as any) || {}), fullSleep };
+      }
     }
 
     try {
       const weight = await client.getDailyWeightData(date);
-      if (weight) { foldWeight(weight, iso, metric); metric.raw = { ...(metric.raw as any || {}), weight }; }
+      if (weight) {
+        foldWeight(weight, iso, metric);
+        metric.raw = { ...((metric.raw as any) || {}), weight };
+      }
     } catch {}
 
     if (Object.keys(metric).length > 1) rows.push({ iso, metric });
@@ -669,7 +703,11 @@ async function syncDailyMetrics(client: any, sourceId: number, days: number, dis
         const rp = Array.isArray(racePred) ? racePred[racePred.length - 1] : racePred;
         latest.metric.race_predict_5k_sec = pickNumDeep(rp, ["time5K", "raceTime5K", "fiveK"]);
         latest.metric.race_predict_10k_sec = pickNumDeep(rp, ["time10K", "raceTime10K", "tenK"]);
-        latest.metric.race_predict_half_sec = pickNumDeep(rp, ["timeHalfMarathon", "raceTimeHalfMarathon", "halfMarathon"]);
+        latest.metric.race_predict_half_sec = pickNumDeep(rp, [
+          "timeHalfMarathon",
+          "raceTimeHalfMarathon",
+          "halfMarathon",
+        ]);
         latest.metric.race_predict_marathon_sec = pickNumDeep(rp, ["timeMarathon", "raceTimeMarathon", "marathon"]);
       }
     }
@@ -684,21 +722,79 @@ async function syncDailyMetrics(client: any, sourceId: number, days: number, dis
   }
 
   for (const { metric } of rows) {
-    repo.upsertGarminDailyMetric(metric, sourceId);
+    // A sync is one recovery boundary, not N per-row review candidates. The
+    // caller compares the before/after current state and may emit one material
+    // transition after the batch.
+    repo.upsertGarminDailyMetric(metric, sourceId, { emitEvent: false });
     synced++;
   }
   return synced;
+}
+
+export function materialGarminRecoveryTransition(before: any, after: any): string | null {
+  const b = before?.recovery ?? before ?? {};
+  const a = after?.recovery ?? after ?? {};
+  const bq = b?.quality?.training_readiness ?? before?.quality?.training_readiness;
+  const aq = a?.quality?.training_readiness ?? after?.quality?.training_readiness;
+  const br = asNum(b.training_readiness);
+  const ar = asNum(a.training_readiness);
+  const beforeFresh = bq?.freshness === "fresh";
+  const afterFresh = aq?.freshness === "fresh";
+  if (
+    ar != null &&
+    afterFresh &&
+    ar < 35 &&
+    (br == null || !beforeFresh)
+  ) {
+    return `fresh readiness is low (${Math.round(ar)})`;
+  }
+  if (br != null && ar != null && beforeFresh && afterFresh && (br < 35) !== (ar < 35)) {
+    return ar < 35
+      ? `fresh readiness crossed low (${Math.round(ar)})`
+      : `fresh readiness recovered above low (${Math.round(ar)})`;
+  }
+  const bs = String(b.training_status ?? "").trim();
+  const as = String(a.training_status ?? "").trim();
+  // First sync should stay quiet for ordinary/benign states. These statuses are
+  // the conservative subset that can reasonably change today's recovery bias.
+  const materialFirstStatuses = ["DETRAINING", "OVERREACHING", "STRAINED", "UNPRODUCTIVE"];
+  const canonicalStatus = as.toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/_\d+$/, "");
+  if (!bs && as && materialFirstStatuses.includes(canonicalStatus)) return `training status is ${as}`;
+  if (bs && as && bs !== as) return `training status changed from ${bs} to ${as}`;
+  return null;
+}
+
+export function emitMaterialGarminRecoveryTransition(
+  before: any,
+  after: any,
+  sourceId: string | number,
+  date = localDateISO()
+): string | null {
+  const reason = materialGarminRecoveryTransition(before, after);
+  if (!reason) return null;
+  emitBrainEvent({
+    kind: "recovery_metrics_changed",
+    domain: "recovery",
+    date,
+    entity_id: sourceId,
+    subject_key: "garmin:material-recovery",
+    reason,
+    material: true,
+  });
+  return reason;
 }
 
 // Per-activity HR time-in-zone breakdown (one call each, bounded by HR_ZONE_LIMIT).
 async function fetchHrZones(client: any, activityId: string | number): Promise<any[] | null> {
   const data = await rawGet(client, `/activity-service/activity/${activityId}/hrTimeInZones`);
   if (!Array.isArray(data) || !data.length) return null;
-  return data.map((z: any) => ({
-    zone: asNum(z?.zoneNumber),
-    secs: asNum(z?.secsInZone),
-    low_hr: asNum(z?.zoneLowBoundary),
-  })).filter((z) => z.zone != null);
+  return data
+    .map((z: any) => ({
+      zone: asNum(z?.zoneNumber),
+      secs: asNum(z?.secsInZone),
+      low_hr: asNum(z?.zoneLowBoundary),
+    }))
+    .filter((z) => z.zone != null);
 }
 
 // Detected strength exercise sets for one activity (one call each, bounded by
@@ -782,16 +878,33 @@ export async function syncGarmin(options: { days?: number; limit?: number; daily
     // physiology merge now (always), then queue the agentic narrative/extrapolation
     // layer on the serial enrichment queue (no-op when enrichment/agents are off).
     for (const id of strengthIds) {
-      try { repo.reconcileGarminStrength(id); } catch (e: any) { console.warn(`[garmin] reconcile #${id} failed: ${e?.message ?? e}`); }
+      try {
+        repo.reconcileGarminStrength(id);
+      } catch (e: any) {
+        console.warn(`[garmin] reconcile #${id} failed: ${e?.message ?? e}`);
+      }
     }
     if (strengthIds.length) {
       import("./enrich.js")
-        .then((m) => { for (const id of strengthIds) m.enqueueEnrich("garmin_strength", id); })
+        .then((m) => {
+          for (const id of strengthIds) m.enqueueEnrich("garmin_strength", id);
+        })
         .catch(() => {});
     }
+    const beforeRecovery = options.daily === false ? null : repo.getGarminCoachSummary(Math.min(days, 14));
     const displayName = options.daily === false ? null : await getDisplayName(client, rows || []);
-    const daily = options.daily === false ? 0 : await syncDailyMetrics(client, source.id, Math.min(days, 14), displayName);
-    repo.upsertGarminSource({ label: source.label, mode: "unofficial", auth_status: "connected", last_sync_at: new Date().toISOString() });
+    const daily =
+      options.daily === false ? 0 : await syncDailyMetrics(client, source.id, Math.min(days, 14), displayName);
+    if (options.daily !== false) {
+      const afterRecovery = repo.getGarminCoachSummary(Math.min(days, 14));
+      emitMaterialGarminRecoveryTransition(beforeRecovery, afterRecovery, source.id);
+    }
+    repo.upsertGarminSource({
+      label: source.label,
+      mode: "unofficial",
+      auth_status: "connected",
+      last_sync_at: new Date().toISOString(),
+    });
     repo.setGarminSyncStatus(`ok: ${activities} activit${activities === 1 ? "y" : "ies"} · ${daily} daily`);
     return { ok: true, source_id: source.id, days, activities, daily_metrics: daily };
   } catch (e: any) {
@@ -808,10 +921,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   syncGarmin({
     days: daysArg ? Number(daysArg) : undefined,
     limit: limitArg ? Number(limitArg) : undefined,
-  }).then((result) => {
-    console.log(JSON.stringify(result, null, 2));
-  }).catch((e) => {
-    console.error(e?.message ?? e);
-    process.exitCode = 1;
-  });
+  })
+    .then((result) => {
+      console.log(JSON.stringify(result, null, 2));
+    })
+    .catch((e) => {
+      console.error(e?.message ?? e);
+      process.exitCode = 1;
+    });
 }

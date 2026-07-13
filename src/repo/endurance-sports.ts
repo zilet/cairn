@@ -1,20 +1,51 @@
+const SPORT_PATTERNS: Record<string, string[]> = {
+  run: ["run", "running", "jog", "jogging"],
+  ride: ["cycling", "cycle", "bike", "biking", "ride", "riding", "mtb", "gravel", "cyclocross"],
+  swim: ["swim", "swimming"],
+  row: ["row", "rowing", "erg"],
+  walk: ["walk", "walking", "hike", "hiking"],
+};
+
+export const RUN_SPORT_PATTERNS = [...SPORT_PATTERNS.run];
+
+export function sportPatternsForKey(key: unknown): string[] {
+  return [...(SPORT_PATTERNS[String(key ?? "").toLowerCase()] ?? [])];
+}
+
+export function configuredEnduranceSportKeys(sportInput: unknown, defaultToRun = true): string[] {
+  const sport = normalizeSportText(sportInput);
+  if (!sport) return defaultToRun ? ["run"] : [];
+  if (hasAnyToken(sport, ["tri", "triathlon", "multisport"])) return ["run", "ride", "swim"];
+
+  const positions = Object.entries(SPORT_PATTERNS)
+    .map(([key, tokens]) => {
+      const offsets = tokens
+        .map((token) => ` ${sport} `.indexOf(` ${token} `))
+        .filter((offset) => offset >= 0);
+      return { key, offset: offsets.length ? Math.min(...offsets) : -1 };
+    })
+    .filter((row) => row.offset >= 0)
+    .sort((a, b) => a.offset - b.offset);
+  return positions.length ? positions.map((row) => row.key) : (defaultToRun ? ["run"] : []);
+}
+
 export function enduranceSportPatterns(sportInput: unknown = "running"): string[] {
   const sport = normalizeSportText(sportInput);
   if (hasAnyToken(sport, ["tri", "triathlon", "multisport"])) {
-    return ["run", "running", "jog", "jogging", "cycling", "cycle", "bike", "biking", "ride", "riding", "mtb", "gravel", "cyclocross", "swim", "swimming", "triathlon", "multisport"];
+    return [...SPORT_PATTERNS.run, ...SPORT_PATTERNS.ride, ...SPORT_PATTERNS.swim, "triathlon", "multisport"];
   }
   const out: string[] = [];
   const add = (xs: string[]) => {
     for (const x of xs) if (!out.includes(x)) out.push(x);
   };
-  if (hasAnyToken(sport, ["run", "running", "jog", "jogging"])) add(["run", "running", "jog", "jogging"]);
+  if (hasAnyToken(sport, SPORT_PATTERNS.run)) add(SPORT_PATTERNS.run);
   if (hasAnyToken(sport, ["cycling", "cycle", "bike", "biking", "ride", "riding", "mtb", "gravel", "cyclocross"])) {
-    add(["cycling", "cycle", "bike", "biking", "ride", "riding", "mtb", "gravel", "cyclocross"]);
+    add(SPORT_PATTERNS.ride);
   }
-  if (hasAnyToken(sport, ["swim", "swimming"])) add(["swim", "swimming"]);
-  if (hasAnyToken(sport, ["row", "rowing", "erg"])) add(["row", "rowing", "erg"]);
-  if (hasAnyToken(sport, ["walk", "walking", "hike", "hiking"])) add(["walk", "walking", "hike", "hiking"]);
-  return out.length ? out : ["run", "running", "jog", "jogging"];
+  if (hasAnyToken(sport, SPORT_PATTERNS.swim)) add(SPORT_PATTERNS.swim);
+  if (hasAnyToken(sport, SPORT_PATTERNS.row)) add(SPORT_PATTERNS.row);
+  if (hasAnyToken(sport, SPORT_PATTERNS.walk)) add(SPORT_PATTERNS.walk);
+  return out.length ? out : [...SPORT_PATTERNS.run];
 }
 
 // Fold a raw activity type into a canonical endurance sport bucket, with whether

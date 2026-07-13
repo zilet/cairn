@@ -6,7 +6,7 @@ All routes are mounted under **`/api`** (e.g. `GET /api/plan`). When `CAIRN_AUTH
 is set, every route except `GET /api/health` requires the token (`Authorization: Bearer …`,
 `X-Cairn-Token: …`, or `?token=…`). See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**248 routes** across 93 groups.
+**251 routes** across 94 groups.
 
 ## `/activities`
 
@@ -342,7 +342,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/health-metrics` | Recent metrics for a source (default all sources) over the last N days. |
-| POST | `/api/health-metrics` | The documented Apple Shortcuts automation POSTs here. The body is EITHER one row OR an array of rows (a Shortcut can batch a backfill of several days), so we normalize to a list and upsert each via UNIQUE(source,date) — fully idempotent: re-posting a day overwrites it. Each row carries an optional `source` (default 'apple') and a `date` (YYYY-MM-DD, required per row), plus any of steps/sleep_min/sleep_score/resting_hr/hrv_ms/active_calories and a free-form `raw` blob preserved verbatim for later. |
+| POST | `/api/health-metrics` | Ingest one row or a batch of source-agnostic daily metrics (Apple Health via Shortcuts). |
 
 ## `/health-report`
 
@@ -446,9 +446,10 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/api/nutrition/checkin` | Quiet adaptive-nutrition check-in: when the derived expenditure has drifted meaningfully off the goal, the agent proposes a bounded calorie/macro change and the server autonomy policy either schedules it for the next food-day boundary or holds it under explicit review posture. Most weeks nothing has moved (change:false) and no proposal is created. ok:false (status 200) is the designed failure signal, mirroring the swap/recipe endpoints. |
+| POST | `/api/nutrition/checkin` | Quiet adaptive-nutrition check-in: medium/high outcome confidence may support a bounded change; low confidence is hold-only except for a server-verified protective fuel raise from fresh hybrid/fatigue evidence. The agent proposes and the server autonomy policy either schedules it for the next food-day boundary or holds it under explicit review posture. Most weeks nothing has moved (change:false) and no proposal is created. ok:false (status 200) is the designed failure signal, mirroring the swap/recipe endpoints. |
 | GET | `/api/nutrition/day` | A calm review of ONE day's logged food (v41): the entries (each editable), the running totals, and — only when a real target exists (a loss/gain goal, or the maintenance anchor) — a gentle "remaining". ?date=YYYY-MM-DD overrides today. |
-| GET | `/api/nutrition/expenditure` | Derived real expenditure (MacroFactor-style), adherence-neutral. Read-only; powers the calm "Energy Balance" view. ?window= overrides the 21-day window. |
+| GET | `/api/nutrition/expenditure` | Best-effort chosen expenditure with explicit outcome/prior anchors. Read-only; powers the calm "Energy Balance" view. ?window= is safely clamped by the domain. |
+| GET | `/api/nutrition/goal-pace` | Goal-pace series behind the motivational weight-progress chart: the canonical weigh-in points, the recent-trend line (with a short forward projection), and the straight line to the goal. Read-only, null-safe; ?days= clamps to 14–365. |
 
 ## `/onboard`
 
@@ -592,6 +593,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | POST | `/api/sessions/:date/feedback` | Optional per-session feedback — the human side of autoregulation. A missing session for the date is a normal "not yet" state, so this returns null rather than throwing. Values are clamped in the repo. |
 | GET | `/api/sessions/:id` |  |
 | POST | `/api/sessions/:id/finish` |  |
+| GET | `/api/sessions/:id/highlights` | Motivational progress for one session: PRs set, per-exercise comparison to last session, and a small trailing-7-day rollup. Soft read — an unknown session is a normal "no highlights" state, so return 200 + null (the /sessions?date= convention), not 404. Factual, never a score. |
 | PUT | `/api/sessions/:id/notes` | Edit a finished/past session's notes (history correction). |
 | POST | `/api/sessions/:id/reopen` | Reopen a finished session to keep logging (clears finished_at). |
 | DELETE | `/api/sessions/skip` |  |
@@ -714,6 +716,12 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/week-ahead` | The week ahead — a calm forward look (lift / run / mixed / rest across the next several days). Agentic with a deterministic plan-rotation floor, so it always returns a usable shape even with no agent. Cached per day+plan+goal. |
+
+## `/week-wins`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/week-wins` | The week's motivational rollup (new bests, days trained, hard sets, filled volume, weight-trend pace) ending at ?date= (default today). Evidence of forward motion, in plain words — never a 0-100 score. |
 
 ## `/whole-person-trajectory`
 

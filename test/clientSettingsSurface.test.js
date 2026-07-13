@@ -83,6 +83,10 @@ test("settings surface renders source and automation slices without echoing secr
   assert.match(sources, /value="athlete&quot;@example\.com"/);
   assert.match(sources, /placeholder="Configured via Settings &quot;saved&quot;"/);
   assert.doesNotMatch(sources, /GARMIN_PASSWORD"/);
+  assert.match(sources, /href="shortcuts:\/\/create-shortcut"/);
+  assert.match(sources, /id="ahRecipeCopy"/);
+  assert.match(sources, /source: apple_health/);
+  assert.match(sources, /Apple still requires you to add/);
 
   const automation = surface.automationSliceHtml({
     workingModel: wm,

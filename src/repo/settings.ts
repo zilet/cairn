@@ -537,8 +537,11 @@ export function getAgentConfig() {
   const disabled = new Set(s.disabled_agents);
   return ordered.map((name) => {
     const a = byName.get(name);
-    const enabled = !disabled.has(name);
     const present = !!a.present;
+    // An absent optional CLI is not an enabled provider. Besides matching runtime
+    // reality (`usable` already required `present`), this keeps a fresh lean install
+    // visually Off until the person deliberately installs and enables the tool.
+    const enabled = present && !disabled.has(name);
     const env_ok = !!a.env_ok;
     const configured: boolean | null = a.configured ?? null;
     return {

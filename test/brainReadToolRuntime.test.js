@@ -111,8 +111,18 @@ function seedReadFixture() {
               protein_g: 65,
               recipe: { steps: ["private detail"] },
             },
+            {
+              name: "Training-day balance",
+              items: "Rice, salmon, yogurt, fruit",
+              kcal: 1765,
+              protein_g: 110,
+            },
           ],
         },
+        ...["Thursday", "Friday", "Saturday", "Sunday", "Monday", "Tuesday"].map((day) => ({
+          day,
+          meals: [{ name: "Daily plate", items: "Protein, grains, vegetables", kcal: 2400, protein_g: 175 }],
+        })),
       ],
     })
   );

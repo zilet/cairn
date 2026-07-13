@@ -454,8 +454,8 @@ function quietLayer() {
   // iron-rich for ferritin), the fasted-AM training, and the cottage-cheese dislike.
   const meal = (name: string, items: string, kcal: number, p: number, c: number, f: number) => ({ name, items, kcal, protein_g: p, carbs_g: c, fat_g: f });
   const mealPlan = repo.createMealPlan("demo", "", {
-    daily_kcal: 1850,
-    daily_protein_g: 150,
+    daily_kcal: 2050,
+    daily_protein_g: 185,
     note: "Protein-anchored, ~30g fiber, oily fish 3×/week, iron on long-run days. No pre-workout meal — breakfast lands after the fasted lift.",
     days: [
       { day: "Mon", meals: [
@@ -463,24 +463,49 @@ function quietLayer() {
         meal("Lunch", "Lentil & roasted veg bowl, tahini, pumpkin seeds", 560, 28, 62, 22),
         meal("Snack", "Greek yogurt, berries, walnuts", 230, 20, 16, 9),
         meal("Dinner", "Grilled sardines, quinoa, broccoli, olive oil", 540, 40, 44, 22),
+        meal("Savory protein side", "Chicken breast, lemon, herbs", 250, 50, 2, 6),
       ] },
       { day: "Tue", meals: [
         meal("Post-lift breakfast", "Tofu scramble, black beans, avocado, salsa", 510, 30, 40, 24),
         meal("Lunch", "Chicken thigh, farro, kale & beet salad", 560, 42, 52, 18),
         meal("Snack", "Edamame + an orange", 200, 17, 22, 6),
         meal("Dinner", "Beef & lentil chili, brown rice", 560, 40, 58, 16),
+        meal("Savory protein side", "Chicken breast, lemon, herbs", 250, 50, 2, 6),
       ] },
       { day: "Wed", meals: [
         meal("Post-lift breakfast", "Mackerel on sourdough, tomato, olive oil", 500, 32, 38, 24),
         meal("Lunch", "Salmon poke bowl, edamame, seaweed, brown rice", 580, 38, 60, 18),
         meal("Snack", "Hummus + carrots + a handful of almonds", 240, 9, 22, 14),
         meal("Dinner", "Turkey meatballs, whole-wheat pasta, marinara, side salad", 560, 42, 60, 14),
+        meal("Savory protein side", "Chicken breast, lemon, herbs", 250, 50, 2, 6),
       ] },
       { day: "Thu (long-run day)", meals: [
         meal("Pre-run", "Banana + a date", 160, 2, 38, 1),
-        meal("Post-run breakfast", "Steak & eggs, spinach, sweet potato hash", 600, 44, 42, 26),
+        meal("Post-run breakfast", "Steak & eggs, spinach, sweet potato hash", 600, 50, 42, 26),
         meal("Lunch", "Lentil soup, whole-grain roll, side of greens", 480, 26, 64, 12),
         meal("Dinner", "Grilled salmon, wild rice, asparagus", 560, 40, 48, 22),
+        meal("Savory protein side", "Chicken breast, lemon, herbs", 250, 50, 2, 6),
+      ] },
+      { day: "Fri", meals: [
+        meal("Breakfast", "Greek yogurt, oats, berries, chia", 500, 35, 58, 14),
+        meal("Lunch", "Chicken, chickpea, and greens bowl", 550, 40, 52, 18),
+        meal("Snack", "Edamame and fruit", 250, 20, 28, 7),
+        meal("Dinner", "Trout, potatoes, green beans", 550, 40, 48, 20),
+        meal("Savory protein side", "Chicken breast, lemon, herbs", 250, 50, 2, 6),
+      ] },
+      { day: "Sat", meals: [
+        meal("Breakfast", "Eggs, black beans, avocado, rye toast", 480, 32, 42, 20),
+        meal("Lunch", "Turkey and farro salad", 570, 42, 58, 18),
+        meal("Snack", "Greek yogurt and berries", 220, 18, 24, 5),
+        meal("Dinner", "Salmon, quinoa, roasted vegetables", 580, 42, 54, 21),
+        meal("Savory protein side", "Chicken breast, lemon, herbs", 250, 50, 2, 6),
+      ] },
+      { day: "Sun", meals: [
+        meal("Breakfast", "Tofu scramble, potatoes, spinach", 500, 35, 52, 18),
+        meal("Lunch", "Lentil and chicken soup with whole-grain bread", 550, 38, 60, 14),
+        meal("Snack", "Hummus, vegetables, pumpkin seeds", 220, 18, 22, 8),
+        meal("Dinner", "Lean beef, brown rice, broccoli", 580, 40, 58, 18),
+        meal("Savory protein side", "Chicken breast, lemon, herbs", 250, 50, 2, 6),
       ] },
     ],
     shopping: ["Smoked salmon", "Sardines", "Mackerel", "Lentils", "Black beans", "Spinach", "Kale", "Beets", "Quinoa", "Farro", "Greek yogurt", "Berries", "Walnuts", "Edamame", "Tofu"],

@@ -19,6 +19,10 @@ type TodayPlanSurfaceDeps = {
   cardioPrescription(item: TodayPlanSurfaceCardioItem): string;
   rxMoveCount(rxByEx: Record<string, unknown>): number;
   setsTonnage(sets: unknown): number;
+  // Optional: formats a last-set API row into "Last time: …" text (today-session-set-model.ts's
+  // lastSetLineText). Optional so existing planSurface() deps callers keep typechecking
+  // until this is wired in; lastSetLineHtml renders "" without it.
+  lastSetLineText?(lastSet: unknown): string;
 };
 type TodayPlanSurfaceApi = {
   sessionHeadHtml(options: {
@@ -34,6 +38,7 @@ type TodayPlanSurfaceApi = {
   rxBannerHtml(rxByEx: Record<string, unknown>, day: unknown, deps: Pick<TodayPlanSurfaceDeps, "escapeAttr" | "escapeHtml" | "rxMoveCount" | "stagger">): string;
   addExerciseFormHtml(): string;
   finishHtml(session: TodayPlanSurfaceSession, options: { isToday: boolean; logDate: string }, deps: Pick<TodayPlanSurfaceDeps, "escapeAttr" | "setsTonnage">): string;
+  lastSetLineHtml(lastSet: unknown, deps: Pick<TodayPlanSurfaceDeps, "escapeHtml" | "lastSetLineText">): string;
 };
 
 (() => {
@@ -142,12 +147,26 @@ type TodayPlanSurfaceApi = {
       </div>`;
   }
 
+  // The quiet "Last time: 165 × 10" target line for a not-yet-logged exercise row (empty
+  // string, i.e. nothing rendered, when there's no last-set data or the dep isn't wired).
+  // The live "That beats last time" swap is handled by today-session-set-model.ts's
+  // wireLastSetLine, which looks this element up by its .ex-lastset class.
+  function lastSetLineHtml(
+    lastSet: unknown,
+    deps: Pick<TodayPlanSurfaceDeps, "escapeHtml" | "lastSetLineText">,
+  ): string {
+    const text = deps.lastSetLineText ? deps.lastSetLineText(lastSet) : "";
+    if (!text) return "";
+    return `<div class="ex-lastset">${deps.escapeHtml(text)}</div>`;
+  }
+
   const CAIRN_TODAY_PLAN_SURFACE: TodayPlanSurfaceApi = {
     sessionHeadHtml,
     daySwitchHtml,
     rxBannerHtml,
     addExerciseFormHtml,
     finishHtml,
+    lastSetLineHtml,
   };
 
   Object.assign(globalThis, { CairnTodayPlanSurface: CAIRN_TODAY_PLAN_SURFACE });

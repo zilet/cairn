@@ -25,6 +25,7 @@ export interface EnduranceImpact {
   distance_km: number | null;
   aerobic_te: number | null;
   anaerobic_te: number | null;
+  training_load: number | null;
   intensity: "easy" | "moderate" | "hard";
   load: "light" | "moderate" | "heavy";
   regions: MuscleGroup[];
@@ -62,11 +63,17 @@ function classifyImpactLoad(
   km: number | null,
   ate: number | null,
   anate: number | null,
+  trainingLoad: number | null,
   label: string | null,
   zones45: number,
 ): Pick<EnduranceImpact, "intensity" | "load" | "why"> {
   const hardLabel = /TEMPO|THRESHOLD|VO2MAX|ANAEROBIC|LACTATE/i.test(String(label ?? ""));
-  const hard = hardLabel || (anate != null && anate >= 2) || (ate != null && ate >= 3) || zones45 >= 240;
+  const hard =
+    hardLabel ||
+    (trainingLoad != null && trainingLoad >= 80) ||
+    (anate != null && anate >= 2) ||
+    (ate != null && ate >= 3) ||
+    zones45 >= 240;
   const long = (dur != null && dur >= region.heavyMin) || (km != null && km >= region.heavyKm);
   const moderate =
     hard ||
@@ -92,6 +99,7 @@ export function recentEnduranceImpacts(days = 3, date = localDateISO()): Enduran
       `SELECT a.date AS date, a.type AS type, a.raw_text AS raw_text, a.notes AS notes,
               a.duration_min AS duration_min, a.distance_km AS distance_km,
               ga.te_label AS te_label, ga.aerobic_te AS ate, ga.anaerobic_te AS anate,
+              ga.training_load AS training_load,
               ga.hr_zones_json AS hr_zones_json
          FROM activities a
          LEFT JOIN garmin_activities ga ON ga.activity_id = a.id
@@ -106,8 +114,9 @@ export function recentEnduranceImpacts(days = 3, date = localDateISO()): Enduran
         const km = a.distance_km != null ? Number(a.distance_km) : null;
         const ate = a.ate != null ? Number(a.ate) : null;
         const anate = a.anate != null ? Number(a.anate) : null;
+        const trainingLoad = a.training_load != null ? Number(a.training_load) : null;
         const z45 = z45Seconds(a.hr_zones_json);
-        const load = classifyImpactLoad(region, dur, km, ate, anate, a.te_label ?? null, z45);
+        const load = classifyImpactLoad(region, dur, km, ate, anate, trainingLoad, a.te_label ?? null, z45);
         const detail = durPhrase(dur, km);
         return {
           date: String(a.date),
@@ -118,6 +127,7 @@ export function recentEnduranceImpacts(days = 3, date = localDateISO()): Enduran
           distance_km: Number.isFinite(km) ? km : null,
           aerobic_te: Number.isFinite(ate) ? ate : null,
           anaerobic_te: Number.isFinite(anate) ? anate : null,
+          training_load: Number.isFinite(trainingLoad) ? trainingLoad : null,
           intensity: load.intensity,
           load: load.load,
           regions: region.regions,

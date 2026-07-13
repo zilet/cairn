@@ -17,10 +17,11 @@ import { invalidateDayRead } from "./intelligence.js";
 import { getActiveNutritionTarget, setNutritionTarget } from "./nutrition.js";
 import { type ClampAdjustment, type RunPrescription, applyPlanChange, replacePlan, setWeeklyRuns } from "./plan.js";
 import { getAppState, setAppState } from "./app-state.js";
-import { latestMeasuredRmr, measuredRmrActivityTdee } from "./metabolism.js";
+import { latestMeasuredRmr, measuredRmrAssessment } from "./metabolism.js";
 import { getProgress } from "./sessions.js";
 import { addDaysISO, LB_PER_KG, localDateISO } from "./shared.js";
 import { bumpTrainingDataVersion } from "./training-cache.js";
+import { canonicalBodyweightSeries, resolvedCurrentBodyweight } from "./bodyweight.js";
 
 // ---------- exercise guide ----------
 export function getExerciseDetail(name: string) {
@@ -1402,7 +1403,9 @@ export function leannessAwareLossRates(weightLb: number, bodyFatPct?: number | n
 }
 
 export function computeGoalCheck(prof?: any) {
-  const p = prof ?? getProfile();
+  const storedProfile = prof ?? getProfile();
+  const currentWeight = resolvedCurrentBodyweight(storedProfile);
+  const p = currentWeight ? { ...storedProfile, weight_lb: currentWeight.weight_lb } : storedProfile;
   if (!p || !p.weight_lb || !p.height_cm || !p.age) {
     return { ok: false, message: "Profile incomplete (need age, height, weight)." };
   }
@@ -1410,30 +1413,35 @@ export function computeGoalCheck(prof?: any) {
   const sexAdj = (p.sex || "male") === "female" ? -161 : 5;
   const formulaBmr = 10 * kg + 6.25 * p.height_cm - 5 * p.age + sexAdj;
   const measuredRmr = latestMeasuredRmr();
-  const bmr = measuredRmr?.kcal ?? formulaBmr;
-  // The manual activity factor is a COLD-START seed. Once there's enough real
-  // logging to trust the MacroFactor-style derivation (HIGH confidence only —
-  // ≥2 weeks of intake AND weigh-ins over ≥2 weeks), prefer the athlete's
-  // measured expenditure so the target reflects reality, not a guessed multiplier.
-  // Thin data keeps the factor, so a light logging week never distorts the target.
+  const measuredRmrQuality = measuredRmr ? measuredRmrAssessment(localDateISO()) : null;
+  const measuredWeight = measuredRmrQuality?.freshness_weight ?? 0;
+  const bmr = measuredRmrQuality
+    ? formulaBmr + (measuredRmrQuality.kcal - formulaBmr) * measuredWeight
+    : formulaBmr;
+  // The manual activity factor is the cold-start seed. estimateExpenditure owns
+  // the complete prior hierarchy + outcome fusion so the Goal and Energy
+  // surfaces cannot disagree about which maintenance estimate is active.
   const factorTdee = Math.round(formulaBmr * (p.activity_factor || 1.5));
-  const measuredActivity = measuredRmrActivityTdee();
-  // Never multiply a measured RMR by a generic activity factor. When Garmin has
-  // enough active-calorie days, blend that direct measured-RMR anchor with the
-  // formula seed; otherwise retain the established cold-start factor.
-  const coldStartTdee = measuredActivity ? Math.round((factorTdee + measuredActivity.tdee) / 2) : factorTdee;
-  let tdee = coldStartTdee;
-  let tdee_source: "activity_factor" | "measured_rmr_plus_activity" | "adaptive" = measuredActivity
-    ? "measured_rmr_plus_activity"
-    : "activity_factor";
+  let tdee = factorTdee;
+  let tdee_source: "activity_factor" | "measured_rmr_plus_activity" | "garmin_total_calories" | "adaptive" | "blended" =
+    "activity_factor";
+  let tdee_basis = "profile_seed";
+  let tdee_confidence: "none" | "low" | "medium" | "high" = "none";
+  let expenditure: ReturnType<typeof estimateExpenditure> | null = null;
   try {
-    const exp = estimateExpenditure();
-    if (exp.confidence === "high" && exp.tdee != null && exp.tdee > 0) {
-      tdee = exp.tdee;
-      tdee_source = "adaptive";
+    expenditure = estimateExpenditure();
+    if (expenditure.tdee != null && expenditure.tdee > 0) {
+      tdee = expenditure.tdee;
+      tdee_basis = expenditure.tdee_basis;
+      tdee_confidence = expenditure.confidence;
+      if (expenditure.tdee_basis === "measured_rmr_active") tdee_source = "measured_rmr_plus_activity";
+      else if (expenditure.tdee_basis === "garmin_total_calories") tdee_source = "garmin_total_calories";
+      else if (expenditure.tdee_basis === "profile_seed") tdee_source = "activity_factor";
+      else if (expenditure.tdee_basis === "blended_outcome_prior") tdee_source = "blended";
+      else tdee_source = "adaptive";
     }
   } catch {
-    /* no adaptive data / DB hiccup → keep the factor-derived TDEE */
+    /* DB hiccup → retain the deterministic profile seed */
   }
 
   const mode = effectiveGoalMode(p);
@@ -1463,7 +1471,7 @@ export function computeGoalCheck(prof?: any) {
     recommended = {
       weekly_rate_lb: 0,
       daily_deficit_kcal: 0,
-      target_intake_kcal: tdee,
+      target_intake_kcal: Math.max(KCAL_ABSOLUTE_FLOOR, tdee),
       weeks_to_goal: 0,
       protein_g: Math.round((p.weight_lb || 0) * 0.9),
     };
@@ -1477,7 +1485,7 @@ export function computeGoalCheck(prof?: any) {
     recommended = {
       weekly_rate_lb: gainRate,
       daily_deficit_kcal: -dailySurplus, // negative = a surplus (field name kept for back-compat)
-      target_intake_kcal: tdee + dailySurplus,
+      target_intake_kcal: Math.max(KCAL_ABSOLUTE_FLOOR, tdee + dailySurplus),
       weeks_to_goal: 0,
       protein_g: Math.round((p.weight_lb || 0) * 1.0),
     };
@@ -1492,7 +1500,7 @@ export function computeGoalCheck(prof?: any) {
         weeks: +weeks.toFixed(1),
         weekly_rate_lb: rate,
         daily_deficit_kcal: dailyDeficit,
-        target_intake_kcal: Math.max(0, tdee - dailyDeficit),
+        target_intake_kcal: Math.max(KCAL_ABSOLUTE_FLOOR, tdee - dailyDeficit),
         aggressive: rate > safeMaxRate,
       };
     }
@@ -1500,7 +1508,7 @@ export function computeGoalCheck(prof?: any) {
     recommended = {
       weekly_rate_lb: leanIdealRate,
       daily_deficit_kcal: recDailyDeficit,
-      target_intake_kcal: tdee - recDailyDeficit,
+      target_intake_kcal: Math.max(KCAL_ABSOLUTE_FLOOR, tdee - recDailyDeficit),
       weeks_to_goal: lbsToLose > 0 ? Math.ceil(lbsToLose / leanIdealRate) : 0,
       protein_g: Math.round((p.weight_lb || 0) * 1.0),
     };
@@ -1535,7 +1543,7 @@ export function computeGoalCheck(prof?: any) {
   const effective_target =
     accepted && accepted.target_kcal != null
       ? {
-          target_kcal: Math.round(accepted.target_kcal),
+          target_kcal: Math.max(KCAL_ABSOLUTE_FLOOR, Math.round(accepted.target_kcal)),
           protein_g: Math.max(Math.round(accepted.protein_g ?? 0), Math.round(recommended.protein_g || 0)),
           carbs_g: accepted.carbs_g != null ? Math.round(accepted.carbs_g) : null,
           fat_g: accepted.fat_g != null ? Math.round(accepted.fat_g) : null,
@@ -1558,11 +1566,14 @@ export function computeGoalCheck(prof?: any) {
   return {
     ok: true,
     bmr: Math.round(bmr),
-    bmr_source: measuredRmr ? "measured" : "formula",
+    bmr_source: measuredRmrQuality?.freshness === "fresh" ? "measured" : measuredWeight > 0 ? "blended" : "formula",
     bmr_formula: Math.round(formulaBmr),
-    measured_rmr: measuredRmr,
+    measured_rmr: measuredRmrQuality,
     tdee,
     tdee_source,
+    tdee_basis,
+    tdee_confidence,
+    expenditure,
     lbs_to_lose: lbsToLose,
     // The effective journey shape (v41) — drives the day-intake target framing,
     // the pace verdict, and every nutrition prompt. Additive; older consumers ignore.
@@ -1606,10 +1617,9 @@ export function projectGoalPace(
 } {
   // Measured weekly trend over the last 28 days of weigh-ins (a bit longer than
   // the 21-day weekly-stats window so a goal forecast is steadier).
-  const since = new Date(Date.now() - 28 * 864e5).toISOString().slice(0, 10);
-  const wpts = db
-    .prepare(`SELECT date, weight_lb FROM bodyweight_log WHERE date >= ? ORDER BY date, id`)
-    .all(since) as any[];
+  const today = localDateISO();
+  const since = addDaysISO(today, -28) ?? today;
+  const wpts = canonicalBodyweightSeries({ since, through: today });
   let trend: number | null = null; // lb/week (negative = losing)
   if (wpts.length >= 2) {
     const pts = wpts
@@ -1621,8 +1631,10 @@ export function projectGoalPace(
       if (slope != null) trend = Math.round(slope * 7 * 100) / 100;
     }
   }
-  const curW = wpts.length ? Number(wpts[wpts.length - 1].weight_lb) : (p?.weight_lb ?? null);
-  if (lbsToLose <= 0 || curW == null) return { trend_lb_wk: trend, projected_goal_date: null, projection_text: null };
+  const curW = resolvedCurrentBodyweight(p, today)?.weight_lb ?? null;
+  const goalW = p?.goal_weight_lb;
+  const remainingLb = goalW != null && curW != null ? Math.max(0, curW - Number(goalW)) : lbsToLose;
+  if (remainingLb <= 0 || curW == null) return { trend_lb_wk: trend, projected_goal_date: null, projection_text: null };
   if (trend == null)
     return {
       trend_lb_wk: null,
@@ -1630,7 +1642,6 @@ export function projectGoalPace(
       projection_text: "Not enough recent weigh-ins to project a date yet — a few more and the forecast sharpens.",
     };
 
-  const goalW = p?.goal_weight_lb;
   if (goalW == null) return { trend_lb_wk: trend, projected_goal_date: null, projection_text: null };
 
   // Not actually losing (trend flat or gaining) while there's still weight to

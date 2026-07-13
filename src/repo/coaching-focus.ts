@@ -24,6 +24,7 @@
 
 import { movementKey } from "./exercise-canon.js";
 import { type FocusCandidate, type FocusDomain, focusScore } from "./focus-candidate.js";
+import type { SignalPosture, UnifiedSignalState } from "./signal-state.js";
 
 // Re-exported so existing importers keep resolving `FocusDomain` from the conductor.
 export type { FocusCandidate, FocusDomain } from "./focus-candidate.js";
@@ -46,6 +47,9 @@ export interface FocusItem {
   // A recovery week currently RUNNING (applied and inside its window): the surface
   // renders no action at all — the lead is a confirmation, not an ask.
   recovery_active?: boolean;
+  // A canonical day posture supplied by UnifiedSignalState. This distinguishes a
+  // daily rest/easy/done confirmation from a program-level recovery-week action.
+  day_posture?: Extract<SignalPosture, "rest" | "easy" | "done">;
 }
 
 export interface CoachingRetest {
@@ -103,8 +107,19 @@ interface RecoveryDeltaInput {
   rhr?: unknown;
 }
 
+interface RecoverySignalEvidenceInput {
+  latest_date?: unknown;
+  sample_count?: unknown;
+  expected_days?: unknown;
+  window_days?: unknown;
+  freshness?: unknown;
+}
+
 interface RecoveryInput {
   delta?: RecoveryDeltaInput | null;
+  quality?: Record<string, RecoverySignalEvidenceInput> | null;
+  coverage?: Record<string, RecoverySignalEvidenceInput> | null;
+  provenance?: Record<string, RecoverySignalEvidenceInput> | null;
 }
 
 interface HealthFocusMovesInput {
@@ -282,6 +297,10 @@ export interface CoachingFocusInput {
   // actually act unattended, so the conductor must keep the athlete-driven asks
   // rather than promise background work that will never run.
   proactiveEnabled?: unknown;
+  // The already-computed canonical daily state. The conductor adapts this into
+  // ordinary candidates/constraints and sends them through its existing ranker;
+  // it never computes a second readiness score.
+  signalState?: UnifiedSignalState | null;
   // Exercise rotations the brain (or the athlete) already applied — a stalled lead
   // whose lift was rotated out is ALREADY HANDLED, so the conductor speaks to the
   // new stimulus instead of re-offering the same swap. [{ from, to, date }].
@@ -383,6 +402,7 @@ function cleanFocusItem(item: FocusItem | null): FocusItem | null {
   // draft_pending / recovery_active are strict boolean flags — anything else drops.
   if (out.draft_pending !== true) delete out.draft_pending;
   if (out.recovery_active !== true) delete out.recovery_active;
+  if (!out.day_posture || !["rest", "easy", "done"].includes(out.day_posture)) delete out.day_posture;
   return out;
 }
 
@@ -392,6 +412,29 @@ const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "
 function weekdayOf(iso: unknown): string | null {
   const t = Date.parse(`${String(iso ?? "").slice(0, 10)}T12:00:00Z`);
   return Number.isFinite(t) ? WEEKDAY_NAMES[new Date(t).getUTCDay()] : null;
+}
+
+// A recent-vs-baseline delta is fit to lead only when BOTH constituent wearable
+// series are current and have enough coverage to be a trend rather than a stray
+// night. The canonical summary puts all fields in `quality`; `provenance` plus
+// `coverage` is the equivalent fallback when an older caller omitted that block.
+function recoverySignalIsDecisionGrade(recovery: RecoveryInput | null | undefined, signal: string): boolean {
+  const quality = recovery?.quality?.[signal];
+  const provenance = recovery?.provenance?.[signal];
+  const coverage = recovery?.coverage?.[signal];
+  const latestDate = String(quality?.latest_date ?? provenance?.latest_date ?? "");
+  const freshness = lc(quality?.freshness ?? provenance?.freshness);
+  const samples = num(quality?.sample_count ?? coverage?.sample_count);
+  const expected = num(
+    quality?.expected_days ?? quality?.window_days ?? coverage?.expected_days ?? coverage?.window_days
+  );
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(latestDate) || !["fresh", "recent"].includes(freshness)) return false;
+  if (samples == null || samples < 0) return false;
+  // Half of the available window, capped at a week, with a three-night floor.
+  // When the caller omits its expected window, five nights is the conservative
+  // minimum for treating a recent-vs-baseline delta as a coaching lead.
+  const requiredSamples = expected != null && expected > 0 ? Math.max(3, Math.ceil(Math.min(expected, 14) / 2)) : 5;
+  return samples >= requiredSamples;
 }
 
 function varyOptionName(option: unknown): string | null {
@@ -491,7 +534,9 @@ function recoveryCandidate(inp: CoachingFocusInput): Candidate | null {
   const deloadDue = phase.includes("deload");
   const hrv = num(inp.recovery?.delta?.hrv);
   const rhr = num(inp.recovery?.delta?.rhr);
-  const recoveringDown = hrv != null && hrv < 0 && rhr != null && rhr > 2;
+  const recoveryEvidenceIsDecisionGrade =
+    recoverySignalIsDecisionGrade(inp.recovery, "hrv_ms") && recoverySignalIsDecisionGrade(inp.recovery, "resting_hr");
+  const recoveringDown = recoveryEvidenceIsDecisionGrade && hrv != null && hrv < 0 && rhr != null && rhr > 2;
   // The applied recovery week RUNNING is its own lead — a calm confirmation, no
   // action (the plan already is the lighter week), regardless of whether the
   // original trigger signals still read due.
@@ -558,8 +603,8 @@ function recoveryCandidate(inp: CoachingFocusInput): Candidate | null {
       ...(draftPending ? { draft_pending: true } : {}),
       ...(move ? { move } : {}),
       based_on: [
-        "Mesocycle says deload is due",
-        recoveringDown ? "HRV and resting HR are drifting down together" : "Recent training load has accumulated",
+        ...(deloadDue ? ["Mesocycle says deload is due"] : []),
+        recoveringDown ? "HRV is down while resting HR is up" : "Recent training load has accumulated",
       ],
     },
   };
@@ -1152,23 +1197,192 @@ function blockPlacementLine(b: ProgramBlockSummaryInput | null | undefined): str
   return tail ? `${wk} — ${tail}.` : `${wk}.`;
 }
 
+// ---- canonical daily-state adapters ----------------------------------------
+// UnifiedSignalState has already resolved source collisions, freshness and the
+// safety posture. The conductor does not rescore those facts. It translates them
+// into its existing candidate/constraint vocabulary, then uses the same shared
+// focus ranker as every other producer.
+function signalStateCandidates(input: CoachingFocusInput): Candidate[] {
+  const state = input.signalState;
+  const action = state?.action;
+  if (!action) return [];
+  const out: Candidate[] = [];
+  const reasons = inputArray<unknown>(action.reasons)
+    .map((reason) => String(reason ?? "").trim())
+    .filter(Boolean);
+  const evidence = (fallback: string) =>
+    cleanEvidence([`Unified planning posture: ${action.posture}`, ...reasons]) ?? [fallback];
+
+  if (action.posture === "rest" || action.posture === "easy" || action.posture === "done") {
+    const posture = action.posture;
+    out.push({
+      key: "signal-daily-posture",
+      leverage: 6,
+      slot: "lead",
+      item: {
+        domain: "recovery",
+        title:
+          posture === "rest"
+            ? "Protect recovery today"
+            : posture === "easy"
+              ? "Keep today easy"
+              : "Today's work is complete",
+        why: clip(action.reason || "The unified daily read says recovery owns the next move.", 220),
+        move:
+          posture === "rest"
+            ? "Keep today restorative and let the work absorb."
+            : posture === "easy"
+              ? "Keep movement genuinely easy; leave hard loading for the next ready day."
+              : "Let today's work absorb before adding another hard effort.",
+        based_on: evidence("Unified daily planning state"),
+        day_posture: posture,
+      },
+    });
+  }
+
+  if (action.directives?.fueling === "protect") {
+    out.push({
+      key: "signal-fuel-protect",
+      leverage: 3.6,
+      slot: "parallel",
+      item: {
+        domain: "nutrition",
+        title: "Protect fuel around today's work",
+        why: clip(
+          state.dimensions?.energy_fueling?.reason ||
+            "Current training and energy signals call for protecting calories, carbohydrate and protein.",
+          220
+        ),
+        move: "Hold or raise fuel around the work; do not deepen the deficit today.",
+        based_on: evidence("Unified fueling directive: protect"),
+      },
+    });
+  }
+
+  if (
+    action.directives?.schedule === "compress" &&
+    action.posture !== "rest" &&
+    action.posture !== "easy" &&
+    action.posture !== "done"
+  ) {
+    out.push({
+      key: "signal-schedule-compress",
+      leverage: 3.5,
+      slot: "parallel",
+      item: {
+        domain: "training",
+        title: "Keep today's work inside the available window",
+        why: clip(
+          state.dimensions?.life_capacity?.reason || "A current dated commitment compresses today's training window.",
+          220
+        ),
+        move: "Prioritize the main work and defer optional volume; this is a timing constraint, not a recovery verdict.",
+        based_on: evidence("Unified schedule directive: compress"),
+      },
+    });
+  }
+  return out;
+}
+
+function activeInjuryWorkaround(input: CoachingFocusInput): string | null {
+  const injury = input.signalState?.dimensions?.health_constraints?.evidence?.find(
+    (item) => item.field === "active_injury" && item.freshness !== "stale"
+  );
+  if (!injury) return null;
+  const reason = clip(injury.summary || "An active injury calls for a work-around.", 140);
+  return clip(
+    `Any movement today must work around the active injury — use pain-free substitutions and conservative load only. ${reason}`,
+    220
+  );
+}
+
+function applySignalStateConstraints(candidates: Candidate[], input: CoachingFocusInput): Candidate[] {
+  const state = input.signalState;
+  const action = state?.action;
+  if (!action) return candidates;
+  const trainingFamily = (candidate: Candidate) =>
+    candidate.item.domain === "training" || candidate.item.domain === "running";
+  const protectsDay = action.posture === "rest" || action.posture === "easy" || action.posture === "done";
+
+  // A canonical recovery/complete posture owns the day. Training ideas remain in
+  // Later for block continuity, but cannot appear as an actionable lead/parallel
+  // beside a rest/easy Brief.
+  if (protectsDay) {
+    for (const candidate of candidates) {
+      if (trainingFamily(candidate)) candidate.slot = "later";
+    }
+  }
+
+  // Modify does not masquerade as rest. It keeps a useful training lever, but the
+  // work-around must be explicit wherever that lever lands.
+  const injuryCaveat = activeInjuryWorkaround(input);
+  if (action.posture === "modify" || injuryCaveat) {
+    const reason = clip(action.reason || "The current health constraint calls for a work-around.", 140);
+    const caveat =
+      injuryCaveat ||
+      `Modify today's work around the active constraint — use pain-free substitutions and conservative load only. ${reason}`;
+    for (const candidate of candidates) {
+      if (!trainingFamily(candidate)) continue;
+      candidate.caveat = clip(caveat, 220);
+      candidate.item.why = clip(`${candidate.item.why} ${candidate.caveat}`, 240);
+      candidate.item.based_on = cleanEvidence([
+        ...(candidate.item.based_on ?? []),
+        "Unified training directive: modify",
+      ]);
+    }
+  }
+
+  // Compression constrains time, not readiness. Preserve whichever training/run
+  // lever wins and make its concrete move fit the shorter window.
+  if (action.directives?.schedule === "compress" && !protectsDay) {
+    const timing = "Today, keep it inside the compressed window: main work first, optional volume deferred.";
+    for (const candidate of candidates) {
+      if (!trainingFamily(candidate) || candidate.key === "signal-schedule-compress") continue;
+      candidate.item.move = clip([candidate.item.move, timing].filter(Boolean).join(" "), 240);
+      candidate.item.based_on = cleanEvidence([
+        ...(candidate.item.based_on ?? []),
+        "Unified schedule directive: compress",
+      ]);
+    }
+  }
+
+  // Fuel protection must remain visible even when another nutrition producer (for
+  // example an ApoB food-pattern lever) outranks the dedicated fuel candidate.
+  if (action.directives?.fueling === "protect") {
+    const fuelMove = "Protect calories, carbohydrate and protein around the work; do not deepen the deficit today.";
+    for (const candidate of candidates) {
+      if (candidate.item.domain !== "nutrition" || candidate.key === "signal-fuel-protect") continue;
+      candidate.item.move = clip([candidate.item.move, fuelMove].filter(Boolean).join(" "), 240);
+      candidate.item.based_on = cleanEvidence([
+        ...(candidate.item.based_on ?? []),
+        "Unified fueling directive: protect",
+      ]);
+    }
+  }
+  return candidates;
+}
+
 // ---- the conductor ----------------------------------------------------------
 
 export function coachingFocus(input: CoachingFocusInput = {}): CoachingFocus {
-  const candidates: Candidate[] = [
-    recoveryCandidate(input),
-    trainingCandidate(input),
-    rotationHandledCandidate(input),
-    runningCandidate(input),
-    healthCandidate(input),
-    dexaCandidate(input),
-    bodyCandidate(input),
-    // External producers (K3) — same shared arbitration, one voice.
-    riskCandidate(input),
-    journeyCandidate(input),
-    benchmarkCandidate(input),
-    ...laterCandidates(input),
-  ].filter((c): c is Candidate => c != null);
+  const candidates = applySignalStateConstraints(
+    [
+      ...signalStateCandidates(input),
+      recoveryCandidate(input),
+      trainingCandidate(input),
+      rotationHandledCandidate(input),
+      runningCandidate(input),
+      healthCandidate(input),
+      dexaCandidate(input),
+      bodyCandidate(input),
+      // External producers (K3) — same shared arbitration, one voice.
+      riskCandidate(input),
+      journeyCandidate(input),
+      benchmarkCandidate(input),
+      ...laterCandidates(input),
+    ].filter((c): c is Candidate => c != null),
+    input
+  );
 
   // LEAD: the single highest-leverage lead-eligible candidate. Tie-break order is
   // baked into the leverage scores (recovery-deload > training stall > running >
@@ -1196,7 +1410,7 @@ export function coachingFocus(input: CoachingFocusInput = {}): CoachingFocus {
     ? lead.caveat
     : conflictedLever && conflictedLever.key !== leadKey
       ? `Held off leading with "${conflictedLever.item.title}" this block — ${conflictedLever.caveat}`
-      : null;
+      : activeInjuryWorkaround(input);
 
   // PARALLEL: up to 2 of the rest, on a DIFFERENT lever than the lead (so they can
   // genuinely be worked simultaneously — e.g. diet handles lipids while you train).

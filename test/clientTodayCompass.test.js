@@ -57,11 +57,11 @@ test("Today compass renders discipline-aware week cells and recap", () => {
   assert.match(strength.cellsHtml, /data-cu="2">0<\/span><span class="stat-frac">\/4/);
   assert.match(strength.cellsHtml, /pace-on/);
   assert.match(strength.cellsHtml, /lb → 180/);
-  assert.equal(strength.weekRecap, "2 lifts · 1 cardio · 12.4 km");
+  assert.equal(strength.weekRecap, "2 lifts · 1 cardio · run 12.4 km");
 
   const endurance = compass.build(stats, deps, { currentWeight: 184, isToday: true, isEndurance: true });
-  assert.match(endurance.cellsHtml, /Distance logged this week[\s\S]*12.4/);
-  assert.equal(endurance.weekRecap, "1 cardio · 12.4 km · 2 lifts");
+  assert.match(endurance.cellsHtml, /Endurance volume by sport this week[\s\S]*12.4/);
+  assert.equal(endurance.weekRecap, "1 cardio · run 12.4 km · 2 lifts");
 });
 
 test("Today compass pace offer is mode-aware and suppressed for maintain", () => {

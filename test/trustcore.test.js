@@ -5,7 +5,7 @@
 // pieces the harness couldn't reach when it was first written on a stale base.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { db, repo, resetTables, seedHealthDoc, marker } from "./_seed.js";
+import { completeMealWeek, db, repo, resetTables, seedHealthDoc, marker } from "./_seed.js";
 
 beforeEach(() => {
   resetTables("plan_items", "plan_days", "memory", "evidence_cache", "health_documents", "health_directives");
@@ -58,8 +58,8 @@ test("applying a training proposal retires sibling training drafts, leaves a nut
 
 test("accepting a meal plan retires the other meal-plan drafts", () => {
   resetTables("meal_plans");
-  const a = repo.createMealPlan("stub", "{}", { daily_kcal: 2200, days: [] });
-  const b = repo.createMealPlan("stub", "{}", { daily_kcal: 2300, days: [] });
+  const a = repo.createMealPlan("stub", "{}", completeMealWeek({ daily_kcal: 2200 }));
+  const b = repo.createMealPlan("stub", "{}", completeMealWeek({ daily_kcal: 2300 }));
   repo.acceptMealPlan(b.id);
   const byId = Object.fromEntries(repo.listMealPlans(20).map((p) => [p.id, p.status]));
   assert.equal(byId[b.id], "accepted", "the accepted plan is kept");

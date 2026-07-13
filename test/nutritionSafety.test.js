@@ -19,16 +19,44 @@ function safePlan(overrides = {}) {
   return {
     daily_kcal: 2600,
     daily_protein_g: 170,
-    days: [
-      {
-        day: "Mon",
-        meals: [
-          { name: "Chicken bowl", items: "chicken, rice, spinach", kcal: 650, protein_g: 45, carbs_g: 70, fat_g: 18 },
-        ],
-      },
-    ],
+    days: Array.from({ length: 7 }, (_, index) => ({
+      day: index === 0 ? "Mon" : `Day ${index + 1}`,
+      meals: [
+        {
+          name: "Chicken bowl",
+          items: "chicken, rice, spinach",
+          kcal: 2600,
+          protein_g: 170,
+          carbs_g: 70,
+          fat_g: 18,
+        },
+      ],
+    })),
     shopping: ["chicken", "rice", "spinach"],
     ...overrides,
+  };
+}
+
+function completeWeek({
+  dailyKcal = 2300,
+  dailyProtein = 175,
+  actualKcal = dailyKcal,
+  actualProtein = dailyProtein,
+} = {}) {
+  return {
+    daily_kcal: dailyKcal,
+    daily_protein_g: dailyProtein,
+    days: Array.from({ length: 7 }, (_, index) => ({
+      day: `Day ${index + 1}`,
+      meals: [
+        { name: "Breakfast", kcal: Math.round(actualKcal * 0.4), protein_g: Math.round(actualProtein * 0.4) },
+        {
+          name: "Dinner",
+          kcal: actualKcal - Math.round(actualKcal * 0.4),
+          protein_g: actualProtein - Math.round(actualProtein * 0.4),
+        },
+      ],
+    })),
   };
 }
 
@@ -42,34 +70,76 @@ test("direct nutrition-target writes cannot bypass the active lean-safe floor", 
 
 test("meal-plan persistence clamps calorie and protein targets before write", () => {
   completeProfile({ goal_mode: "maintain" });
-  const floor = repo.computeGoalCheck().recommended;
-  const plan = repo.createMealPlan("stub", "", safePlan({ daily_kcal: 800, daily_protein_g: 25 }));
-  assert.equal(plan.parsed.daily_kcal, Math.max(1500, floor.target_intake_kcal));
-  assert.equal(plan.parsed.daily_protein_g, floor.protein_g);
+  const goal = repo.computeGoalCheck();
+  const floorKcal = Math.max(1500, goal.recommended.target_intake_kcal, goal.effective_target.target_kcal);
+  const floorProtein = Math.max(goal.recommended.protein_g, goal.effective_target.protein_g);
+  const plan = repo.createMealPlan(
+    "stub",
+    "",
+    completeWeek({ dailyKcal: 800, dailyProtein: 25, actualKcal: floorKcal, actualProtein: floorProtein })
+  );
+  assert.equal(plan.parsed.daily_kcal, floorKcal);
+  assert.equal(plan.parsed.daily_protein_g, floorProtein);
 });
 
 test("an incomplete profile still gets the absolute 1500 kcal server floor", () => {
-  const plan = repo.createMealPlan("stub", "", safePlan({ daily_kcal: 700, daily_protein_g: 25 }));
+  const plan = repo.createMealPlan(
+    "stub",
+    "",
+    completeWeek({ dailyKcal: 700, dailyProtein: 25, actualKcal: 1500, actualProtein: 25 })
+  );
   assert.equal(plan.parsed.daily_kcal, 1500);
   assert.equal(plan.parsed.daily_protein_g, 25, "protein is not invented without enough profile data");
 });
 
+test("complete meal-plan persistence rejects headline laundering and accepts adequate days", () => {
+  assert.throws(
+    () => repo.createMealPlan("stub", "", completeWeek({ dailyKcal: 2300, actualKcal: 900, actualProtein: 60 })),
+    /Day 1 totals 900 kcal and 60 g protein/
+  );
+  assert.equal(repo.listMealPlans().length, 0, "the rejected weekly plan is never persisted");
+
+  const adequate = repo.createMealPlan("stub", "", completeWeek());
+  assert.equal(
+    adequate.parsed.days[0].meals.reduce((sum, meal) => sum + meal.kcal, 0),
+    2300
+  );
+  assert.equal(
+    adequate.parsed.days[0].meals.reduce((sum, meal) => sum + meal.protein_g, 0),
+    175
+  );
+});
+
+test("complete weeks enforce the current goal and expenditure floors in the meals themselves", () => {
+  completeProfile({ goal_mode: "maintain" });
+  const goal = repo.computeGoalCheck();
+  const floorKcal = Math.max(goal.recommended.target_intake_kcal, goal.effective_target.target_kcal);
+  const floorProtein = Math.max(goal.recommended.protein_g, goal.effective_target.protein_g);
+
+  const plan = repo.createMealPlan(
+    "stub",
+    "",
+    completeWeek({
+      dailyKcal: 800,
+      dailyProtein: 25,
+      actualKcal: floorKcal,
+      actualProtein: floorProtein,
+    })
+  );
+  assert.equal(plan.parsed.daily_kcal, floorKcal);
+  assert.equal(plan.parsed.daily_protein_g, floorProtein);
+});
+
 test("declared allergen aliases reject an unsafe plan atomically", () => {
   completeProfile({ allergies: "peanuts, shellfish" });
+  const unsafe = safePlan();
+  unsafe.days[0].meals[0] = {
+    ...unsafe.days[0].meals[0],
+    name: "Noodle bowl",
+    items: "rice noodles, shrimp, greens",
+  };
   assert.throws(
-    () =>
-      repo.createMealPlan(
-        "stub",
-        "",
-        safePlan({
-          days: [
-            {
-              day: "Mon",
-              meals: [{ name: "Noodle bowl", items: "rice noodles, shrimp, greens", kcal: 650, protein_g: 40 }],
-            },
-          ],
-        })
-      ),
+    () => repo.createMealPlan("stub", "", unsafe),
     /declared allergen shellfish \(shrimp\)/
   );
   assert.equal(repo.listMealPlans().length, 0, "no partial unsafe draft was stored");

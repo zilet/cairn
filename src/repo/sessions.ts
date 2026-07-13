@@ -3,7 +3,8 @@ import { emitBrainEvent } from "../brainEvents.js";
 import { sessionNoteSuggestsFatigue } from "./training-fatigue.js";
 import { localDateISO } from "./shared.js";
 import { isStrengthGarminType, listActivities, listGarminActivities, listGarminDailyMetrics, listGarminSources } from "./activities.js";
-import { activitySportWhere, canonicalEnduranceSport, enduranceSportPatterns } from "./endurance-sports.js";
+import { activitySportWhere, canonicalEnduranceSport } from "./endurance-sports.js";
+import { MUSCLE_LANDMARKS } from "./exercise-canon.js";
 import { effectiveVolumeByGroup, type VolumeSet } from "./exercise-variations.js";
 import { findExercise, findOrCreateExercise, listExercises } from "./exercises.js";
 import { listContextEvents, listHealthDocuments, listHealthReviews } from "./health.js";
@@ -20,6 +21,7 @@ import {
   trainingBackstopSignature,
 } from "./training-cache.js";
 import { deriveSessionTitle } from "./training-read.js";
+import { canonicalBodyweightSeries, resolvedCurrentBodyweight } from "./bodyweight.js";
 
 // ---------- sessions ----------
 export function getOrCreateSession(date: string, planDayId?: number | null): any {
@@ -107,6 +109,11 @@ export function sessionSummary(sessionId: number) {
 export function finishSession(sessionId: number, notes?: string | null) {
   const s = db.prepare(`SELECT * FROM sessions WHERE id = ?`).get(sessionId) as any;
   if (!s) throw new Error(`No session ${sessionId}`);
+  // COALESCE preserves the existing note ONLY when the incoming value is NULL — an
+  // empty/whitespace-only string would overwrite a real note with "". Normalize it
+  // to null here (the guard closest to the write) so a note-less re-finish — e.g. an
+  // offline outbox replay that lost the typed note — can never clobber a saved note.
+  const cleanNotes = notes != null && String(notes).trim() ? String(notes).trim() : null;
   const span = db
     .prepare(`SELECT MIN(created_at) AS first, MAX(created_at) AS last FROM logged_sets WHERE session_id = ?`)
     .get(sessionId) as any;
@@ -116,7 +123,7 @@ export function finishSession(sessionId: number, notes?: string | null) {
     if (mins > 0) duration_min = mins;
   }
   db.prepare(`UPDATE sessions SET duration_min = ?, notes = COALESCE(?, notes), finished_at = datetime('now') WHERE id = ?`)
-    .run(duration_min, notes ?? null, sessionId);
+    .run(duration_min, cleanNotes, sessionId);
   bumpTrainingDataVersion();
   emitBrainEvent({
     kind: "session_finished",
@@ -125,7 +132,7 @@ export function finishSession(sessionId: number, notes?: string | null) {
     entity_id: sessionId,
     subject_key: `session:${sessionId}`,
   });
-  if (sessionNoteSuggestsFatigue(notes ?? s.notes)) {
+  if (sessionNoteSuggestsFatigue(cleanNotes ?? s.notes)) {
     emitBrainEvent({
       kind: "session_feedback",
       domain: "training",
@@ -349,7 +356,9 @@ export function logSetByName(input: LogSetInput) {
     const prev = db
       .prepare(`SELECT weight, reps FROM logged_sets WHERE exercise_id = ? AND id != ? AND weight > 0 AND reps > 0`)
       .all(ex.id, info.lastInsertRowid) as any[];
-    const prevBest = prev.reduce((m, r) => Math.max(m, epley1RM(r.weight, r.reps)), 0);
+    // Shared with sessionHighlights' read-time PR recompute (best Epley est-1RM over
+    // loaded working sets) so the two paths can never drift subtly apart.
+    const prevBest = bestE1rm(prev);
     pr = est_1rm > prevBest;
   }
 
@@ -637,9 +646,7 @@ function computeWeeklyStats(date?: string) {
   // Weight trend: least-squares slope over the last 21 days of weigh-ins,
   // in lb/week. Needs ≥2 points spanning ≥3 days to mean anything.
   const since21 = new Date(asOf - 21 * 864e5).toISOString().slice(0, 10);
-  const wpts = db
-    .prepare(`SELECT date, weight_lb FROM bodyweight_log WHERE date >= ? AND date <= ? ORDER BY date, id`)
-    .all(since21, today) as any[];
+  const wpts = canonicalBodyweightSeries({ since: since21, through: today });
   let trend: number | null = null;
   if (wpts.length >= 2) {
     const xs = wpts.map((p) => Date.parse(p.date + "T00:00:00Z") / 864e5);
@@ -654,8 +661,8 @@ function computeWeeklyStats(date?: string) {
   }
 
   const prof = db.prepare(`SELECT weight_lb, goal_weight_lb, goal_date, goal_mode FROM profile WHERE id = 1`).get() as any;
-  const currentW = wpts.length ? Number(wpts[wpts.length - 1].weight_lb) : (prof?.weight_lb ?? null);
-  const goalMode = effectiveGoalMode(prof);
+  const currentW = resolvedCurrentBodyweight(prof, today)?.weight_lb ?? null;
+  const goalMode = effectiveGoalMode(currentW == null ? prof : { ...prof, weight_lb: currentW });
 
   // Pace verdict, in the LANGUAGE of the goal mode — never "behind" when you're
   // just maintaining (the constitution: kind, never anxious). Plain words, no score:
@@ -711,71 +718,180 @@ function computeWeeklyStats(date?: string) {
 // week's avg pace (min/km) vs the prior week's, in plain words. Everything degrades to
 // nulls/empties when there's no endurance data, never throwing.
 export interface EnduranceWeekly {
+  // Backward-compatible RUNNING fields. Cross-training never inflates these.
   week_km: number;
   week_moving_min: number;
   longest_km: number | null;
   longest_min: number | null;
   longest_type: string | null;
   time_in_zone: Record<string, number>; // { Z1: secs, Z2: secs, … } from Garmin, when present
-  pace_trend: { this_min_per_km: number | null; prev_min_per_km: number | null; dir: "faster" | "slower" | "steady" | null };
+  total_moving_min: number;
+  total_sessions: number;
+  by_sport: Record<string, EnduranceSportWeek>;
+  provenance: { distance: "activities"; load: "garmin_activities" };
+  pace_trend: {
+    this_min_per_km: number | null;
+    prev_min_per_km: number | null;
+    dir: "faster" | "slower" | "steady" | null;
+  };
+}
+
+export interface EnduranceSportWeek {
+  sport: string;
+  label: string;
+  sessions: number;
+  distance_km: number;
+  moving_min: number;
+  longest_km: number | null;
+  longest_min: number | null;
+  last_date: string | null;
+  sources: string[];
+  training_load: number | null;
+  quality_sessions: number;
+  time_in_zone: Record<string, number>;
 }
 
 function computeEnduranceWeekly(mondayISO: string, nextMondayISO?: string): EnduranceWeekly {
   const prevMonday = new Date(new Date(mondayISO + "T00:00:00Z").getTime() - 7 * 864e5).toISOString().slice(0, 10);
-  const weekEnd = nextMondayISO || new Date(new Date(mondayISO + "T00:00:00Z").getTime() + 7 * 864e5).toISOString().slice(0, 10);
+  const weekEnd =
+    nextMondayISO || new Date(new Date(mondayISO + "T00:00:00Z").getTime() + 7 * 864e5).toISOString().slice(0, 10);
 
-  // Mileage + moving time this week (activities table is the modality-agnostic log).
-  const wk = db.prepare(
-    `SELECT COALESCE(SUM(distance_km), 0) AS km, COALESCE(SUM(duration_min), 0) AS min FROM activities WHERE date >= ? AND date < ?`
-  ).get(mondayISO, weekEnd) as any;
-  const week_km = Math.round(Number(wk?.km ?? 0) * 10) / 10;
-  const week_moving_min = Math.round(Number(wk?.min ?? 0));
+  type MutableSportWeek = EnduranceSportWeek & { sourceSet: Set<string> };
+  const bySport = new Map<string, MutableSportWeek>();
+  const sportWeek = (type: unknown): MutableSportWeek => {
+    const sport = canonicalEnduranceSport(type);
+    let row = bySport.get(sport.key);
+    if (!row) {
+      row = {
+        sport: sport.key,
+        label: sport.label,
+        sessions: 0,
+        distance_km: 0,
+        moving_min: 0,
+        longest_km: null,
+        longest_min: null,
+        last_date: null,
+        sources: [],
+        sourceSet: new Set(),
+        training_load: null,
+        quality_sessions: 0,
+        time_in_zone: {},
+      };
+      bySport.set(sport.key, row);
+    }
+    return row;
+  };
 
-  // Longest single effort this week (by distance, falling back to duration).
-  const longest = db.prepare(
-    `SELECT type, distance_km, duration_min FROM activities WHERE date >= ? AND date < ?
-     ORDER BY COALESCE(distance_km, 0) DESC, COALESCE(duration_min, 0) DESC LIMIT 1`
-  ).get(mondayISO, weekEnd) as any;
-  const longest_km = longest?.distance_km != null ? Math.round(Number(longest.distance_km) * 10) / 10 : null;
-  const longest_min = longest?.duration_min != null ? Math.round(Number(longest.duration_min)) : null;
-  const longest_type = longest?.type ?? null;
+  // Activities are the source of truth for distance/session volume. Keep each
+  // modality separate: 30 km of MTB is useful load evidence, but never 30 km of
+  // running base.
+  const activityRows = db
+    .prepare(`SELECT date, type, distance_km, duration_min, source FROM activities WHERE date >= ? AND date < ?`)
+    .all(mondayISO, weekEnd) as any[];
+  for (const activity of activityRows) {
+    if (isStrengthGarminType(activity.type)) continue;
+    const row = sportWeek(activity.type);
+    const km = Number(activity.distance_km);
+    const min = Number(activity.duration_min);
+    row.sessions++;
+    if (Number.isFinite(km) && km > 0) {
+      row.distance_km += km;
+      row.longest_km = row.longest_km == null ? km : Math.max(row.longest_km, km);
+    }
+    if (Number.isFinite(min) && min > 0) {
+      row.moving_min += min;
+      row.longest_min = row.longest_min == null ? min : Math.max(row.longest_min, min);
+    }
+    const date = String(activity.date ?? "").slice(0, 10);
+    if (date && (!row.last_date || date > row.last_date)) row.last_date = date;
+    row.sourceSet.add(String(activity.source || "manual"));
+  }
 
-  // Time-in-HR-zone rolled up from this week's Garmin activities (hr_zones_json is
-  // [{zone, secs, ...}]). Best-effort: malformed JSON / no Garmin → empty object.
-  const time_in_zone: Record<string, number> = {};
-  const gz = db.prepare(
-    `SELECT hr_zones_json FROM garmin_activities WHERE date >= ? AND date < ? AND hr_zones_json IS NOT NULL`
-  ).all(mondayISO, weekEnd) as any[];
-  for (const r of gz) {
+  // Garmin adds physiological load provenance. It enriches the matching sport
+  // bucket without changing activity distance/session totals.
+  const garminRows = db
+    .prepare(
+      `SELECT date, type, training_load, te_label, aerobic_te, anaerobic_te, hr_zones_json
+         FROM garmin_activities WHERE date >= ? AND date < ?`
+    )
+    .all(mondayISO, weekEnd) as any[];
+  for (const r of garminRows) {
+    if (isStrengthGarminType(r.type)) continue;
+    const row = sportWeek(r.type);
+    row.sourceSet.add("garmin");
+    const trainingLoad = Number(r.training_load);
+    if (Number.isFinite(trainingLoad) && trainingLoad > 0) {
+      row.training_load = Math.round(((row.training_load ?? 0) + trainingLoad) * 10) / 10;
+    }
+    const quality =
+      /TEMPO|THRESHOLD|VO2MAX|ANAEROBIC|LACTATE/i.test(String(r.te_label ?? "")) ||
+      Number(r.anaerobic_te ?? 0) >= 2 ||
+      Number(r.aerobic_te ?? 0) >= 3;
+    if (quality) row.quality_sessions++;
     let zones: any = null;
-    try { zones = r.hr_zones_json ? JSON.parse(r.hr_zones_json) : null; } catch { zones = null; }
+    try {
+      zones = r.hr_zones_json ? JSON.parse(r.hr_zones_json) : null;
+    } catch {
+      zones = null;
+    }
     if (!Array.isArray(zones)) continue;
     for (const z of zones) {
       const label = z?.zone != null ? `Z${z.zone}` : z?.label != null ? String(z.label) : null;
       const secs = Number(z?.secs ?? z?.seconds ?? z?.secsInZone);
       if (!label || !Number.isFinite(secs) || secs <= 0) continue;
-      time_in_zone[label] = Math.round((time_in_zone[label] ?? 0) + secs);
+      row.time_in_zone[label] = Math.round((row.time_in_zone[label] ?? 0) + secs);
     }
   }
+
+  const normalizedBySport: Record<string, EnduranceSportWeek> = {};
+  for (const [key, row] of bySport) {
+    const { sourceSet, ...publicRow } = row;
+    normalizedBySport[key] = {
+      ...publicRow,
+      distance_km: Math.round(row.distance_km * 10) / 10,
+      moving_min: Math.round(row.moving_min),
+      longest_km: row.longest_km == null ? null : Math.round(row.longest_km * 10) / 10,
+      longest_min: row.longest_min == null ? null : Math.round(row.longest_min),
+      sources: [...sourceSet].sort(),
+    };
+  }
+  const run = normalizedBySport.run ?? null;
+  const week_km = run?.distance_km ?? 0;
+  const week_moving_min = run?.moving_min ?? 0;
+  const longest_km = run?.longest_km ?? null;
+  const longest_min = run?.longest_min ?? null;
+  const longest_type = run ? "run" : null;
+  const time_in_zone = run?.time_in_zone ?? {};
+  const total_moving_min = Math.round([...bySport.values()].reduce((sum, row) => sum + row.moving_min, 0));
+  const total_sessions = [...bySport.values()].reduce((sum, row) => sum + row.sessions, 0);
 
   // Pace trend: avg pace (min/km) this week vs the prior week, from activities that
   // carry BOTH distance and duration. Lower min/km = faster. Plain direction word.
   // SCOPED to the athlete's endurance sport (default running) — a bike ride's speed
   // mixed into a "min/km" average reads as a nonsense running pace.
-  const sport = activitySportWhere("activities", enduranceSportPatterns(getProfile()?.endurance_sport));
+  const sport = activitySportWhere("activities", ["run", "running", "jog", "jogging"]);
   const avgPace = (startIso: string, endIso?: string): number | null => {
     const rows = end(startIso, endIso);
-    let km = 0, min = 0;
+    let km = 0,
+      min = 0;
     for (const r of rows) {
-      const dk = Number(r.distance_km), dm = Number(r.duration_min);
-      if (Number.isFinite(dk) && dk > 0 && Number.isFinite(dm) && dm > 0) { km += dk; min += dm; }
+      const dk = Number(r.distance_km),
+        dm = Number(r.duration_min);
+      if (Number.isFinite(dk) && dk > 0 && Number.isFinite(dm) && dm > 0) {
+        km += dk;
+        min += dm;
+      }
     }
     return km > 0 ? Math.round((min / km) * 100) / 100 : null;
   };
   function end(startIso: string, endIso?: string): any[] {
     return endIso
-      ? (db.prepare(`SELECT distance_km, duration_min FROM activities WHERE date >= ? AND date < ? AND (${sport.sql})`).all(startIso, endIso, ...sport.params) as any[])
-      : (db.prepare(`SELECT distance_km, duration_min FROM activities WHERE date >= ? AND (${sport.sql})`).all(startIso, ...sport.params) as any[]);
+      ? (db
+          .prepare(`SELECT distance_km, duration_min FROM activities WHERE date >= ? AND date < ? AND (${sport.sql})`)
+          .all(startIso, endIso, ...sport.params) as any[])
+      : (db
+          .prepare(`SELECT distance_km, duration_min FROM activities WHERE date >= ? AND (${sport.sql})`)
+          .all(startIso, ...sport.params) as any[]);
   }
   const this_min_per_km = avgPace(mondayISO, weekEnd);
   const prev_min_per_km = avgPace(prevMonday, mondayISO);
@@ -786,9 +902,16 @@ function computeEnduranceWeekly(mondayISO: string, nextMondayISO?: string): Endu
   }
 
   return {
-    week_km, week_moving_min,
-    longest_km, longest_min, longest_type,
+    week_km,
+    week_moving_min,
+    longest_km,
+    longest_min,
+    longest_type,
     time_in_zone,
+    total_moving_min,
+    total_sessions,
+    by_sport: normalizedBySport,
+    provenance: { distance: "activities", load: "garmin_activities" },
     pace_trend: { this_min_per_km, prev_min_per_km, dir },
   };
 }
@@ -801,13 +924,12 @@ function computeEnduranceWeekly(mondayISO: string, nextMondayISO?: string): Endu
 // ("32 of 40 km this week") is fine; a 0-100 score is NOT — `pct_km` stays an
 // internal proportion the UI may render as a ratio/bar, never a grade.
 //
-// Prescribed: every cardio plan item (kind==='cardio' across getPlan() days) —
+// Prescribed: every RUN cardio plan item (kind==='cardio' across getPlan() days) —
 // count = number of cardio items, km/min summed (nulls skipped). The plan is
 // weekly, so the full template IS this week's prescription.
 // Actual: this week (Monday-anchored, same as computeEnduranceWeekly, or an
-// explicit weekStartISO) from `activities` — a "cardio activity" is any logged
-// activity that is NOT a strength type (strength is modeled as a session, never
-// an activities row), matching how the endurance code treats an effort.
+// explicit weekStartISO) from RUN activities only. Cross-training is reported in
+// endurance.by_sport, but a ride/swim/hike can never satisfy a run prescription.
 export interface RunCompliance {
   prescribed_sessions: number;
   prescribed_km: number;
@@ -833,8 +955,9 @@ export function getRunCompliance(weekStartISO?: string): RunCompliance {
   let prescribed_km = 0;
   let prescribed_min = 0;
   for (const day of getPlan() as any[]) {
-    for (const it of (day.items || [])) {
+    for (const it of day.items || []) {
       if (it.kind !== "cardio") continue;
+      if (canonicalEnduranceSport(`${it.exercise || ""} ${it.note || ""}`).key !== "run") continue;
       prescribed_sessions++;
       const km = Number(it.target_distance_km);
       const min = Number(it.target_duration_min);
@@ -845,7 +968,7 @@ export function getRunCompliance(weekStartISO?: string): RunCompliance {
   prescribed_km = Math.round(prescribed_km * 10) / 10;
   prescribed_min = Math.round(prescribed_min);
 
-  // Actual: this week's logged cardio efforts (activities, excluding strength).
+  // Actual: this week's logged RUN efforts only.
   const rows = db
     .prepare(`SELECT type, distance_km, duration_min FROM activities WHERE date >= ? AND date < ?`)
     .all(monday, nextMonday) as any[];
@@ -853,7 +976,7 @@ export function getRunCompliance(weekStartISO?: string): RunCompliance {
   let actual_km = 0;
   let actual_min = 0;
   for (const r of rows) {
-    if (isStrengthGarminType(r.type)) continue; // a stray strength row never counts as a run
+    if (canonicalEnduranceSport(r.type).key !== "run") continue;
     actual_sessions++;
     const km = Number(r.distance_km);
     const min = Number(r.duration_min);
@@ -921,7 +1044,8 @@ export function getTrainingCalendar(days = 84) {
     dates.push(new Date(Date.now() - i * 864e5).toISOString().slice(0, 10));
   }
 
-  // Aggregate lifting data per day.
+  // Aggregate lifting data per day — tonnage only ever counts loaded working sets
+  // (weight>0 AND reps>0); this is the basis for the tonnage buckets below.
   const liftRows = db
     .prepare(
       `SELECT s.date, CAST(ROUND(SUM(ls.weight * ls.reps)) AS INTEGER) AS tonnage, COUNT(*) AS sets
@@ -932,6 +1056,37 @@ export function getTrainingCalendar(days = 84) {
     .all(cutoff) as any[];
   const liftMap = new Map<string, { tonnage: number; sets: number }>();
   for (const r of liftRows) liftMap.set(r.date, { tonnage: r.tonnage, sets: r.sets });
+
+  // ALL logged sets per day, including zero-tonnage timed/bodyweight work the
+  // tonnage query above can't see (no weight to sum) — the basis for the sets
+  // signal below, so a hard bodyweight/timed session isn't invisible.
+  const allSetRows = db
+    .prepare(
+      `SELECT s.date, COUNT(*) AS sets
+       FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+       WHERE s.date >= ?
+       GROUP BY s.date`
+    )
+    .all(cutoff) as any[];
+  const totalSetsMap = new Map<string, number>();
+  for (const r of allSetRows) totalSetsMap.set(r.date, r.sets);
+
+  // Training minutes per day — a finished session's duration_min plus any logged
+  // cardio/activity duration that day — the basis for the duration signal below,
+  // so a long run/ride/hike registers honestly rather than reading as the floor.
+  const minutesMap = new Map<string, number>();
+  const sessionMinRows = db
+    .prepare(
+      `SELECT date, SUM(duration_min) AS min FROM sessions WHERE date >= ? AND duration_min IS NOT NULL GROUP BY date`
+    )
+    .all(cutoff) as any[];
+  for (const r of sessionMinRows) minutesMap.set(r.date, (minutesMap.get(r.date) ?? 0) + (r.min ?? 0));
+  const actMinRows = db
+    .prepare(
+      `SELECT date, SUM(duration_min) AS min FROM activities WHERE date >= ? AND duration_min IS NOT NULL GROUP BY date`
+    )
+    .all(cutoff) as any[];
+  for (const r of actMinRows) minutesMap.set(r.date, (minutesMap.get(r.date) ?? 0) + (r.min ?? 0));
 
   // Activity days.
   const actRows = db
@@ -945,14 +1100,39 @@ export function getTrainingCalendar(days = 84) {
     const activity = actDates.has(date);
     const tonnage = lift?.tonnage ?? 0;
     const sets = lift?.sets ?? 0;
+    const totalSets = totalSetsMap.get(date) ?? 0;
+    const minutes = minutesMap.get(date) ?? 0;
+
+    // Honest continuity, not a streak: intensity is judged per-modality rather
+    // than by tonnage alone, since a hybrid athlete's hardest days are just as
+    // often a long run/ride/hike or a bodyweight/timed session as a heavy
+    // barbell one. Each signal is independent and the day's level is their MAX,
+    // so a modality that doesn't apply never floors a day that earned more:
+    //  - tonnage buckets (unchanged 5000 lb steps) for loaded strength work;
+    //  - a sets bucket (>=10 sets=2, >=20=3) for a zero-tonnage strength day
+    //    (timed/bodyweight), so it isn't floored just because there's no load
+    //    to sum;
+    //  - a duration bucket (any=1, >=30min=2, >=60min=3, >=100min=4) over
+    //    session + activity minutes together, so a long cardio day — or a
+    //    long day of any kind — isn't flattened to the lowest active shade.
     let level: number;
-    if (!lifted && !activity) {
-      level = 0;
-    } else if (lifted) {
+    if (lifted) {
       level = 1 + Math.min(3, Math.floor(tonnage / 5000));
-    } else {
+    } else if (totalSets >= 20) {
+      level = 3;
+    } else if (totalSets >= 10) {
+      level = 2;
+    } else if (totalSets > 0 || activity) {
       level = 1;
+    } else {
+      level = 0;
     }
+    if (minutes >= 100) level = Math.max(level, 4);
+    else if (minutes >= 60) level = Math.max(level, 3);
+    else if (minutes >= 30) level = Math.max(level, 2);
+    else if (minutes > 0) level = Math.max(level, 1);
+    level = Math.min(4, level);
+
     return { date, lifted, tonnage, sets, activity, level };
   });
 
@@ -1023,6 +1203,18 @@ function exportBrainTable(
 }
 
 export function exportAll() {
+  const dailyMetrics = (db.prepare(`SELECT * FROM daily_metrics ORDER BY date DESC, id DESC`).all() as any[]).map(
+    (row) => {
+      let raw: any = null;
+      try {
+        raw = row.raw_json ? JSON.parse(row.raw_json) : null;
+      } catch {
+        raw = null;
+      }
+      const { raw_json, ...rest } = row;
+      return { ...rest, raw };
+    }
+  );
   return {
     version: 2,
     profile: getProfile(),
@@ -1041,6 +1233,9 @@ export function exportAll() {
     health_documents: listHealthDocuments(100000),
     health_reviews: listHealthReviews(100000),
     context_events: listContextEvents(),
+    // Source-agnostic wearable rows (Apple Health / Oura / manual) are first-class
+    // backup data, not only a derived recovery view. Raw payloads stay preserved.
+    daily_metrics: dailyMetrics,
     // The accountability spine is first-class backup data. Export every row (no
     // UI pagination cap), hydrating bounded JSON columns into the same structured
     // shape consumers receive from the repository.
@@ -1129,4 +1324,387 @@ export function getProgress(exerciseName: string) {
   }
   const points = [...byDate.entries()].map(([date, v]) => ({ date, ...v }));
   return { exercise: ex.name, found: true, unit: ex.unit, points };
+}
+
+// ---------- motivational progress (session highlights + week wins) ----------
+// Two read-only, deterministic, null-safe reads that surface EVIDENCE of forward
+// motion: a session's PRs/comparisons, and a week's rollup of new bests, days
+// trained, hard sets, filled volume, and weight-trend pace. Constitution: factual,
+// calm, motivational-by-evidence — never a 0-100 score, never anxious/blaming.
+// Absent data → empty arrays / nulls, never a throw.
+
+// Best est-1RM (Epley) over LOADED working sets only (weight>0 && reps>0), mirroring
+// logSetByName's PR comparison — assisted/bodyweight sets don't generate an est-1RM
+// PR, and this is the ONE definition both the live-log path and the read-time
+// recompute share. Returns 0 when no loaded set qualifies.
+function bestE1rm(rows: Array<{ weight: any; reps: any }>): number {
+  let best = 0;
+  for (const r of rows) {
+    const w = Number(r.weight);
+    const reps = Number(r.reps);
+    if (w > 0 && reps > 0) best = Math.max(best, epley1RM(w, reps));
+  }
+  return best;
+}
+
+// Best (longest) hold over timed sets. Returns 0 when none.
+function bestDuration(rows: Array<{ duration_sec: any }>): number {
+  let best = 0;
+  for (const r of rows) {
+    const d = Number(r.duration_sec);
+    if (Number.isFinite(d) && d > 0) best = Math.max(best, d);
+  }
+  return best;
+}
+
+// Display helpers — whole loads render clean, a plate-and-a-half shows one decimal;
+// a hold renders as M:SS (or Ns under a minute); a prior date renders "Jul 6".
+function fmtWeight(w: number): string {
+  return Number.isInteger(w) ? String(w) : String(Math.round(w * 10) / 10);
+}
+function fmtDuration(sec: number): string {
+  const s = Math.round(sec);
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+const SHORT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function shortDate(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso ?? ""));
+  return m ? `${SHORT_MONTHS[Number(m[2]) - 1]} ${Number(m[3])}` : String(iso ?? "");
+}
+function fmtReps(delta: number): string {
+  const n = Math.abs(delta);
+  return `${delta > 0 ? "+" : "-"}${n} rep${n === 1 ? "" : "s"}`;
+}
+
+// The 7-day window ending on (and including) a date. Anchored in UTC-midnight day
+// arithmetic like computeWeeklyStats, so a session date maps to [date-6, date].
+function window7(dateISO: string): { start: string; end: string } {
+  const end = /^\d{4}-\d{2}-\d{2}$/.test(dateISO) ? dateISO : localDateISO();
+  const start = new Date(new Date(end + "T00:00:00Z").getTime() - 6 * 864e5).toISOString().slice(0, 10);
+  return { start, end };
+}
+
+// Distinct dates with any logged set OR any activity in the trailing 7 days — the
+// same "a trained day" union getWeeklyStats' streak uses (sessions-with-sets ∪
+// activity dates), scoped to the window.
+function trainedDays7(dateISO: string): number {
+  const { start, end } = window7(dateISO);
+  const sessDates = (db
+    .prepare(`SELECT DISTINCT s.date AS d FROM sessions s JOIN logged_sets l ON l.session_id = s.id WHERE s.date >= ? AND s.date <= ?`)
+    .all(start, end) as any[]).map((r) => r.d);
+  const actDates = (db
+    .prepare(`SELECT DISTINCT date AS d FROM activities WHERE date >= ? AND date <= ?`)
+    .all(start, end) as any[]).map((r) => r.d);
+  return new Set([...sessDates, ...actDates]).size;
+}
+
+interface SessionSet {
+  exercise_id: number;
+  exercise: string;
+  mode: string | null;
+  weight: number | null;
+  reps: number | null;
+  duration_sec: number | null;
+}
+interface ExerciseGroup {
+  exId: number;
+  name: string;
+  mode: string;
+  exSets: SessionSet[];
+}
+
+function groupByExercise(rows: SessionSet[]): Map<number, ExerciseGroup> {
+  const map = new Map<number, ExerciseGroup>();
+  for (const r of rows) {
+    const exId = Number(r.exercise_id);
+    let g = map.get(exId);
+    if (!g) { g = { exId, name: String(r.exercise), mode: String(r.mode ?? "reps"), exSets: [] }; map.set(exId, g); }
+    g.exSets.push(r);
+  }
+  return map;
+}
+
+type WeightType = "loaded" | "assisted" | "bodyweight";
+function weightType(w: number | null): WeightType {
+  const n = Number(w);
+  if (Number.isFinite(n) && n > 0) return "loaded";
+  if (Number.isFinite(n) && n < 0) return "assisted"; // negative = assisted (e.g. -30 = 30lb assist)
+  return "bodyweight"; // null or 0
+}
+
+// The session's REPRESENTATIVE reps-mode set ("top set"): the loaded set with the
+// best est-1RM; else the assisted set with the LEAST assistance (highest signed
+// weight); else the bodyweight set with the most reps. null when nothing usable.
+function topRepsSet(sets: SessionSet[]): SessionSet | null {
+  let loaded: SessionSet | null = null;
+  let loadedE = -1;
+  let assisted: SessionSet | null = null;
+  let bodyweight: SessionSet | null = null;
+  for (const s of sets) {
+    const w = s.weight == null ? null : Number(s.weight);
+    const reps = Number(s.reps);
+    if (!(reps > 0)) continue;
+    if (w != null && w > 0) {
+      const e = epley1RM(w, reps);
+      if (e > loadedE) { loadedE = e; loaded = s; }
+    } else if (w != null && w < 0) {
+      if (!assisted || w > Number(assisted.weight) || (w === Number(assisted.weight) && reps > Number(assisted.reps))) assisted = s;
+    } else if (!bodyweight || reps > Number(bodyweight.reps)) {
+      bodyweight = s;
+    }
+  }
+  return loaded ?? assisted ?? bodyweight ?? null;
+}
+
+// PRs the session set (recomputed at read time — PR flags aren't persisted). A
+// first-ever logging of an exercise has no baseline and is NOT a PR (omitted).
+function prsForSession(
+  sessionId: number,
+  date: string,
+  sets?: SessionSet[]
+): Array<{ exercise: string; kind: "e1rm" | "duration"; label: string }> {
+  const rows = sets ?? (setsForSession(sessionId) as unknown as SessionSet[]);
+  const out: Array<{ exercise: string; kind: "e1rm" | "duration"; label: string }> = [];
+  for (const { exId, name, mode, exSets } of groupByExercise(rows).values()) {
+    if (mode === "timed") {
+      const sessionBest = bestDuration(exSets);
+      if (sessionBest <= 0) continue;
+      const prior = db
+        .prepare(`SELECT l.duration_sec AS duration_sec FROM logged_sets l JOIN sessions s ON s.id = l.session_id
+                  WHERE l.exercise_id = ? AND s.date < ? AND l.duration_sec IS NOT NULL`)
+        .all(exId, date) as any[];
+      if (!prior.length) continue; // no baseline — first-ever timed logging
+      if (sessionBest > bestDuration(prior)) {
+        out.push({ exercise: name, kind: "duration", label: `${fmtDuration(sessionBest)} hold — new best` });
+      }
+    } else {
+      const sessionBest = bestE1rm(exSets);
+      if (sessionBest <= 0) continue; // no loaded working set this session
+      const prior = db
+        .prepare(`SELECT l.weight AS weight, l.reps AS reps FROM logged_sets l JOIN sessions s ON s.id = l.session_id
+                  WHERE l.exercise_id = ? AND s.date < ? AND l.weight > 0 AND l.reps > 0`)
+        .all(exId, date) as any[];
+      if (!prior.length) continue; // no baseline — first-ever loaded logging
+      if (sessionBest > bestE1rm(prior)) {
+        const win = topRepsSet(exSets);
+        if (win && Number(win.weight) > 0) {
+          out.push({ exercise: name, kind: "e1rm", label: `${fmtWeight(Number(win.weight))} lb × ${Number(win.reps)} — new best` });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+// A fair plain-language description of the previous session's top effort — used when
+// a clean delta can't be computed (a mode/type mismatch, e.g. graduating off assistance).
+function describePrev(mode: string, prevSets: SessionSet[], prevDate: string): string {
+  if (mode === "timed") {
+    const d = bestDuration(prevSets);
+    return d > 0 ? `${fmtDuration(d)} hold on ${shortDate(prevDate)}` : `logged on ${shortDate(prevDate)}`;
+  }
+  const top = topRepsSet(prevSets);
+  if (top) {
+    const w = top.weight == null ? null : Number(top.weight);
+    if (w != null && w > 0) return `${fmtWeight(w)} × ${Number(top.reps)} on ${shortDate(prevDate)}`;
+    if (w != null && w < 0) return `${fmtWeight(Math.abs(w))} lb assist × ${Number(top.reps)} on ${shortDate(prevDate)}`;
+    return `${Number(top.reps)} reps on ${shortDate(prevDate)}`;
+  }
+  return `logged on ${shortDate(prevDate)}`;
+}
+
+interface Comparison {
+  exercise: string;
+  prev_date: string | null;
+  prev_label: string;
+  delta_label: string | null;
+  direction: "up" | "down" | "even" | null;
+}
+
+// Compare the session's top set for one exercise against its previous session. Like
+// is compared with like (loaded↔loaded, assisted↔assisted, bodyweight↔bodyweight,
+// timed↔timed). LESS assistance counts as an improvement (direction up). A type
+// mismatch degrades to a fair label with direction:null rather than a wrong sign.
+function buildComparison(name: string, mode: string, curSets: SessionSet[], prevSets: SessionSet[], prevDate: string): Comparison {
+  const base = { exercise: name, prev_date: prevDate };
+  if (mode === "timed") {
+    const cur = bestDuration(curSets);
+    const prev = bestDuration(prevSets);
+    if (cur > 0 && prev > 0) {
+      const d = Math.round(cur - prev);
+      return {
+        ...base,
+        prev_label: `${fmtDuration(prev)} hold on ${shortDate(prevDate)}`,
+        delta_label: d === 0 ? "matched" : `${d > 0 ? "+" : "-"}${Math.abs(d)}s`,
+        direction: d > 0 ? "up" : d < 0 ? "down" : "even",
+      };
+    }
+    return { ...base, prev_label: describePrev(mode, prevSets, prevDate), delta_label: null, direction: null };
+  }
+  const cur = topRepsSet(curSets);
+  const prev = topRepsSet(prevSets);
+  if (!cur || !prev) return { ...base, prev_label: describePrev(mode, prevSets, prevDate), delta_label: null, direction: null };
+  const ct = weightType(cur.weight);
+  const pt = weightType(prev.weight);
+  if (ct !== pt) return { ...base, prev_label: describePrev(mode, prevSets, prevDate), delta_label: null, direction: null };
+
+  if (ct === "loaded") {
+    const cw = Number(cur.weight);
+    const pw = Number(prev.weight);
+    const prev_label = `${fmtWeight(pw)} × ${Number(prev.reps)} on ${shortDate(prevDate)}`;
+    if (cw !== pw) {
+      const d = cw - pw;
+      return { ...base, prev_label, delta_label: `${d > 0 ? "+" : "-"}${fmtWeight(Math.abs(d))} lb`, direction: d > 0 ? "up" : "down" };
+    }
+    const dr = Number(cur.reps) - Number(prev.reps);
+    if (dr !== 0) return { ...base, prev_label, delta_label: fmtReps(dr), direction: dr > 0 ? "up" : "down" };
+    return { ...base, prev_label, delta_label: "matched", direction: "even" };
+  }
+  if (ct === "bodyweight") {
+    const prev_label = `${Number(prev.reps)} reps on ${shortDate(prevDate)}`;
+    const dr = Number(cur.reps) - Number(prev.reps);
+    if (dr !== 0) return { ...base, prev_label, delta_label: fmtReps(dr), direction: dr > 0 ? "up" : "down" };
+    return { ...base, prev_label, delta_label: "matched", direction: "even" };
+  }
+  // assisted: less assistance (a smaller magnitude) is the improvement.
+  const ca = Math.abs(Number(cur.weight));
+  const pa = Math.abs(Number(prev.weight));
+  const prev_label = `${fmtWeight(pa)} lb assist × ${Number(prev.reps)} on ${shortDate(prevDate)}`;
+  if (ca !== pa) {
+    const d = pa - ca; // >0 → less assist now → improvement
+    return { ...base, prev_label, delta_label: `${fmtWeight(Math.abs(d))} lb ${d > 0 ? "less" : "more"} assist`, direction: d > 0 ? "up" : "down" };
+  }
+  const dr = Number(cur.reps) - Number(prev.reps);
+  if (dr !== 0) return { ...base, prev_label, delta_label: fmtReps(dr), direction: dr > 0 ? "up" : "down" };
+  return { ...base, prev_label, delta_label: "matched", direction: "even" };
+}
+
+function comparisonsForSession(sessionId: number, date: string, sets?: SessionSet[]): Comparison[] {
+  const rows = sets ?? (setsForSession(sessionId) as unknown as SessionSet[]);
+  const out: Comparison[] = [];
+  for (const { exId, name, mode, exSets } of groupByExercise(rows).values()) {
+    const prev = db
+      .prepare(`SELECT s.date AS date FROM sessions s JOIN logged_sets l ON l.session_id = s.id
+                WHERE l.exercise_id = ? AND s.date < ? ORDER BY s.date DESC LIMIT 1`)
+      .get(exId, date) as any;
+    if (!prev) {
+      out.push({ exercise: name, prev_date: null, prev_label: "first time logged", delta_label: null, direction: null });
+      continue;
+    }
+    const prevDate = String(prev.date);
+    const prevSets = db
+      .prepare(`SELECT l.exercise_id AS exercise_id, l.weight AS weight, l.reps AS reps, l.duration_sec AS duration_sec
+                FROM logged_sets l JOIN sessions s ON s.id = l.session_id WHERE l.exercise_id = ? AND s.date = ?`)
+      .all(exId, prevDate) as unknown as SessionSet[];
+    out.push(buildComparison(name, mode, exSets, prevSets, prevDate));
+  }
+  return out;
+}
+
+// Raw PR events (one per session×exercise that set a new best) over a window, oldest
+// first — the shared basis for the week rollup count and the week-wins list.
+function prEventsInWindow(startISO: string, endISO: string): Array<{ exercise: string; kind: "e1rm" | "duration"; label: string; date: string }> {
+  const sessions = db
+    .prepare(`SELECT DISTINCT s.id AS id, s.date AS date FROM sessions s
+              JOIN logged_sets l ON l.session_id = s.id WHERE s.date >= ? AND s.date <= ? ORDER BY s.date, s.id`)
+    .all(startISO, endISO) as any[];
+  const out: Array<{ exercise: string; kind: "e1rm" | "duration"; label: string; date: string }> = [];
+  for (const sess of sessions) {
+    for (const pr of prsForSession(Number(sess.id), String(sess.date))) {
+      out.push({ ...pr, date: String(sess.date) });
+    }
+  }
+  return out;
+}
+
+// Evidence of forward motion for ONE logged session. Unknown id → null (the route's
+// soft-lookup 200 + null convention). All fields degrade to empty/zero, never throw.
+export function sessionHighlights(sessionId: number) {
+  const sess = db.prepare(`SELECT id, date FROM sessions WHERE id = ?`).get(sessionId) as any;
+  if (!sess) return null;
+  const date = String(sess.date);
+  const sets = setsForSession(sessionId) as unknown as SessionSet[];
+  const { start, end } = window7(date);
+  return {
+    prs: prsForSession(sessionId, date, sets),
+    comparisons: comparisonsForSession(sessionId, date, sets),
+    week: {
+      // Raw count of new-best events set in the trailing 7 days (may exceed the
+      // distinct-exercise weekWins list when a lift PRs on more than one day).
+      prs: prEventsInWindow(start, end).length,
+      trained_days_7: trainedDays7(date),
+    },
+  };
+}
+
+// The week's motivational rollup ending at `date` (default today, local day). Every
+// field is null-safe: an empty log yields empty arrays / zeros / null pace.
+export function weekWins(date?: string) {
+  const end = /^\d{4}-\d{2}-\d{2}$/.test(String(date || "")) ? String(date) : localDateISO();
+  const { start } = window7(end);
+
+  // New bests this week, DEDUPED to one entry per exercise (the latest supersedes an
+  // earlier one — events arrive oldest-first, so the last write is the newest label),
+  // sorted newest-first: a calm display list, not a raw event stream.
+  const byExercise = new Map<string, { exercise: string; label: string; date: string }>();
+  for (const e of prEventsInWindow(start, end)) byExercise.set(e.exercise, { exercise: e.exercise, label: e.label, date: e.date });
+  const prs = [...byExercise.values()]
+    .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
+    .map(({ exercise, label }) => ({ exercise, label }));
+
+  const ws = getWeeklyStats(end);
+  return {
+    prs,
+    trained_days_7: trainedDays7(end),
+    week_sets: Number(ws.week_sets ?? 0),
+    volume_filled: weekVolumeFilled(start, end),
+    pace: composePace(ws),
+  };
+}
+
+// Muscle groups whose THIS-WEEK effective hard-set count landed IN their productive
+// volume range (RP-style MUSCLE_LANDMARKS band), most-filled first. Reuses the ONE
+// honest-volume truth (effectiveVolumeByGroup: warmups excluded, RIR-weighted,
+// canonical groups, indirect credit) — the same model muscleVolume/getVolumeByMuscle
+// use. Groups below MEV (not enough yet) and above MRV (over-range, not a clean win)
+// are excluded. [] when nothing reached the band.
+function weekVolumeFilled(startISO: string, endISO: string): Array<{ muscle: string; label: string }> {
+  const rows = db
+    .prepare(`SELECT s.date AS date, e.name AS exercise, e.muscle_group AS muscle_group,
+                     ls.weight AS weight, ls.reps AS reps, ls.rir AS rir
+              FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+              JOIN exercises e ON e.id = ls.exercise_id WHERE s.date >= ? AND s.date <= ?`)
+    .all(startISO, endISO) as any[];
+  const byGroup = effectiveVolumeByGroup(rows as VolumeSet[]);
+  const filled: Array<{ muscle: string; sets: number }> = [];
+  for (const [group, v] of byGroup) {
+    const lm = MUSCLE_LANDMARKS[group];
+    if (!lm) continue; // mobility / no landmark
+    if (v.sets >= lm.low && v.sets <= lm.high) filled.push({ muscle: group, sets: v.sets });
+  }
+  filled.sort((a, b) => b.sets - a.sets);
+  return filled.map(({ muscle, sets }) => ({ muscle, label: `${Math.round(sets)} hard sets — productive volume` }));
+}
+
+// Compose the pace read off getWeeklyStats: a factual weight-trend phrase plus the
+// goal verdict, in plain words. status is narrowed to the shape's on|behind|fast|null
+// (maintain/gain drift states fold to null status but still describe themselves in
+// the label). label is null only when there aren't enough weigh-ins for a trend.
+function composePace(ws: any): { status: "on" | "behind" | "fast" | null; label: string | null } {
+  const raw = ws?.pace_status ?? null;
+  const status: "on" | "behind" | "fast" | null = raw === "on" || raw === "behind" || raw === "fast" ? raw : null;
+  const trend = ws?.trend_lb_wk;
+  if (trend == null || !Number.isFinite(Number(trend))) return { status, label: null };
+  const t = Number(trend);
+  const mag = Math.abs(Math.round(t * 10) / 10);
+  const phrase = t <= -0.1 ? `losing ~${mag} lb/wk` : t >= 0.1 ? `gaining ~${mag} lb/wk` : "holding steady";
+  const goalDate = ws?.goal_date;
+  let tail = "";
+  if (raw === "on") tail = goalDate ? ` — on pace for ${shortDate(goalDate)}` : " — on pace";
+  else if (raw === "behind") tail = " — a bit behind pace";
+  else if (raw === "fast") tail = t < 0 ? " — quicker than the lean-safe pace" : " — building faster than lean";
+  else if (raw === "drifting_up") tail = " — drifting up a little";
+  else if (raw === "drifting_down") tail = " — drifting down a little";
+  return { status, label: `${phrase}${tail}` };
 }

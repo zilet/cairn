@@ -40,6 +40,7 @@ function exerciseCardHtml(
   revealIdx: unknown,
   rx: TodayPrescription,
   options: TodayExerciseCardOptions = {},
+  lastSet?: unknown,
 ): string {
   const exercise = todayString(item.exercise);
   const offPlan = !item.fromPlan;
@@ -74,6 +75,16 @@ function exerciseCardHtml(
   const removeButton = (offPlan && !done)
     ? `<button class="ex-skip ex-remove" data-remove-card title="Remove" aria-label="Remove ${escAttr(exercise)}">✕</button>`
     : "";
+  // The quiet "Last time: …" target line, only before anything's logged today for
+  // this exercise — mirrors loadLastSets' own not-yet-logged scoping (today-plan-
+  // session-data-client.ts). wireLastSetLine (today-session-set-model.ts) upgrades
+  // it live to "That beats last time" once the athlete's typed set out-scores it.
+  const lastSetLine = !done
+    ? CairnTodayPlanSurface.lastSetLineHtml(lastSet, {
+        escapeHtml: escHtml,
+        lastSetLineText: (ls) => CairnTodaySessionSetModel.lastSetLineText(ls, { fmtDur }),
+      })
+    : "";
   return `<div class="ex${complete ? " ex-complete" : ""}${reveal != null ? " reveal" : ""}" data-card="${escAttr(exercise)}" data-mode="${timed ? "timed" : "reps"}"${reveal != null ? ` style="${stagger(reveal)}"` : ""}>
       <div class="ex-top">
         ${tile}
@@ -86,6 +97,7 @@ function exerciseCardHtml(
       ${item.constraint_note ? `<div class="ex-flag">${escHtml(item.constraint_note)}</div>` : ""}
       ${!complete ? CairnTodayTraining.exRxLineHtml(rx) : ""}
       <div class="logged" data-logged>${loggedSets.map(todayCardsSetChip).join("")}</div>
+      ${lastSetLine}
       ${logrow}
     </div>`;
 }

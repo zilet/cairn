@@ -7,7 +7,7 @@
 // while an un-recognized free-text preference ("no cilantro") stays soft.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { db, repo } from "./_seed.js";
+import { completeMealWeek, db, repo } from "./_seed.js";
 import * as prompt from "../dist/prompt.js";
 
 beforeEach(() => {
@@ -110,10 +110,10 @@ test("word-boundary: 'novegan' / a substring does NOT misfire", () => {
 test("the HARD vegan block reaches the swap, check-in, and recipe prompts", () => {
   repo.setProfile({ dietary_restrictions: "vegan" });
 
-  const plan = repo.createMealPlan("stub", "", {
+  const plan = repo.createMealPlan("stub", "", completeMealWeek({
     daily_kcal: 2200, daily_protein_g: 170,
     days: [{ day: "Mon", meals: [{ name: "Tofu scramble", items: "tofu, spinach", kcal: 500, protein_g: 35, carbs_g: 30, fat_g: 20 }] }],
-  });
+  }));
 
   const swap = prompt.buildMealSwapPrompt({ plan, day: "Mon", mealIndex: 0 });
   assert.match(swap, /VEGAN \(HARD RULE/);
@@ -129,10 +129,10 @@ test("the HARD vegan block reaches the swap, check-in, and recipe prompts", () =
 });
 
 test("meal-swap picks up 'I'm vegan now' from the free-text hint", () => {
-  const plan = repo.createMealPlan("stub", "", {
+  const plan = repo.createMealPlan("stub", "", completeMealWeek({
     daily_kcal: 2200, daily_protein_g: 170,
     days: [{ day: "Mon", meals: [{ name: "Chicken bowl", items: "chicken, rice", kcal: 600, protein_g: 45, carbs_g: 50, fat_g: 18 }] }],
-  });
+  }));
   const swap = prompt.buildMealSwapPrompt({ plan, day: "Mon", mealIndex: 0, hint: "I'm vegan now" });
   assert.match(swap, /VEGAN \(HARD RULE/);
 });

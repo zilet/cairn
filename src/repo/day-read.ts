@@ -12,6 +12,8 @@ import { resolveDayReadRule, type DayReadRule } from "./brain/day-read-rules.js"
 import { recordDecision } from "./brain-decisions.js";
 import { getCheckinByDate, getRecoverySummary, latestSleep } from "./coach.js";
 import { activeContextEffect } from "./context-effect.js";
+import { activitySportWhere, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
+import { listContextEvents } from "./health.js";
 import {
   nextCandidateAfter,
   planDayCandidates,
@@ -23,6 +25,7 @@ import { getPrimaryDiscipline } from "./profile.js";
 import { getProgramState } from "./program-state.js";
 import { programBalance } from "./progression.js";
 import { localDateISO } from "./shared.js";
+import { planningSignalState, type UnifiedSignalState } from "./signal-state.js";
 import { type TrainingLoad, dayLoad } from "./training-read.js";
 
 // ---------- T1: day intelligence ----------
@@ -37,7 +40,7 @@ export interface DayRead {
 // Deterministic baseline (T1 layers the agentic sentence + buildDayReadPrompt on
 // top). Rules: rest if >=3 consecutive training days OR recovery clearly low;
 // else train the suggested plan day; else easy. Never throws on missing data.
-export function dayRead(date?: string, recovery?: any): DayRead {
+export function dayRead(date?: string, recovery?: any, unifiedState?: UnifiedSignalState): DayRead {
   const d = date || localDateISO();
 
   // Discipline shapes what "a training day" means for the consecutive-days +
@@ -85,12 +88,16 @@ export function dayRead(date?: string, recovery?: any): DayRead {
   let volumeSpike = false;
   let lastWeekKm: number | null = null;
   if (countsCardio) {
+    const runSport = activitySportWhere("activities", RUN_SPORT_PATTERNS);
     const weekKm = (endIso: string): number => {
       const end = new Date(endIso + "T00:00:00Z").getTime();
       const start = new Date(end - 6 * 864e5).toISOString().slice(0, 10);
       const row = db
-        .prepare(`SELECT COALESCE(SUM(distance_km), 0) AS km FROM activities WHERE date >= ? AND date <= ?`)
-        .get(start, endIso) as any;
+        .prepare(
+          `SELECT COALESCE(SUM(distance_km), 0) AS km FROM activities
+            WHERE date >= ? AND date <= ? AND (${runSport.sql})`
+        )
+        .get(start, endIso, ...runSport.params) as any;
       return Math.round(Number(row?.km ?? 0) * 10) / 10;
     };
     const yesterdayIso = new Date(new Date(d + "T00:00:00Z").getTime() - 864e5).toISOString().slice(0, 10);
@@ -150,8 +157,19 @@ export function dayRead(date?: string, recovery?: any): DayRead {
   // Sleep running short vs their norm.
   if (dl?.sleep != null && dl.sleep < -25) recoveryDrift++;
   const acuteLoad = rec?.recovery?.acute_load ?? null;
-  // Garmin's own readiness running low is corroborating, not required.
-  const lowReadiness = rec?.recovery?.avg_training_readiness != null && rec.recovery.avg_training_readiness < 35;
+  // Readiness is a CURRENT decision signal only when its dated reading is today or
+  // yesterday relative to the day being read. The multi-day average remains useful
+  // context, but can never force a current recommendation (and a stale current value
+  // cannot either).
+  const readinessQuality = rec?.quality?.training_readiness ?? rec?.recovery?.quality?.training_readiness ?? null;
+  const readinessCurrent = rec?.recovery?.training_readiness ?? null;
+  const readinessDate = readinessQuality?.latest_date ?? null;
+  const readinessAgeDays = readinessDate
+    ? Math.round((Date.parse(`${d}T00:00:00Z`) - Date.parse(`${readinessDate}T00:00:00Z`)) / 864e5)
+    : null;
+  const readinessFresh = readinessAgeDays != null && readinessAgeDays >= 0 && readinessAgeDays <= 1;
+  const lowReadiness = readinessFresh && readinessCurrent != null && Number(readinessCurrent) < 35;
+  const readinessAverage = rec?.recovery?.avg_training_readiness ?? null;
   // Mounting fatigue: at least 2 straight training days AND recovery drifting the
   // wrong way (or readiness low) — i.e. heading toward a reset but not there yet.
   const buildingFatigue = consec >= 2 && (recoveryDrift >= 1 || lowReadiness);
@@ -183,9 +201,22 @@ export function dayRead(date?: string, recovery?: any): DayRead {
   // deterministic floor now READS it — an active injury isn't just prompt prose, it
   // biases the read (a caveat on the train branch, never a forced rest — you can
   // usually train around it). Null-safe; absent context changes nothing.
+  const contextEvents = (() => {
+    try {
+      return (listContextEvents() as any[]).filter(
+        (event) =>
+          !event?.archived &&
+          !event?.resolved &&
+          (!event?.start_date || event.start_date <= d) &&
+          (!event?.end_date || event.end_date >= d)
+      );
+    } catch {
+      return [];
+    }
+  })();
   const ctx = (() => {
     try {
-      return activeContextEffect(d);
+      return activeContextEffect(d, contextEvents);
     } catch {
       return null;
     }
@@ -244,6 +275,14 @@ export function dayRead(date?: string, recovery?: any): DayRead {
       hrv_vs_norm: dl?.hrv ?? null,
       rhr_vs_norm: dl?.rhr ?? null,
       sleep_vs_norm: dl?.sleep ?? null,
+      readiness: {
+        current: readinessCurrent,
+        current_date: readinessDate,
+        freshness: readinessFresh ? "fresh" : (readinessQuality?.freshness ?? "missing"),
+        window_average: readinessAverage,
+        sample_count: readinessQuality?.sample_count ?? null,
+        window_days: readinessQuality?.window_days ?? null,
+      },
     },
   };
 
@@ -271,6 +310,17 @@ export function dayRead(date?: string, recovery?: any): DayRead {
   const todayLoad = dayLoad(d, { countsCardio });
   (signals as any).trained_today = trainedToday || !!bigActivity;
   (signals as any).today_load = todayLoad;
+  const signalState =
+    unifiedState ??
+    planningSignalState({
+      date: d,
+      recovery: rec,
+      checkin,
+      context: ctx,
+      contextEvents,
+      completedToday: (trainedToday || !!bigActivity) && (todayLoad === "hard" || todayLoad === "moderate"),
+    });
+  (signals as any).signal_state = signalState;
   const rules: DayReadRule[] = [
     {
       name: "logged-loading-work-today",
@@ -294,6 +344,27 @@ export function dayRead(date?: string, recovery?: any): DayRead {
       },
     },
     {
+      name: "unified-protect-posture",
+      resolve: () => {
+        if (signalState.action.posture !== "rest" && signalState.action.posture !== "easy") return null;
+        const activeInjury = signalState.dimensions.health_constraints.evidence.find(
+          (item) => item.field === "active_injury" && item.freshness !== "stale"
+        );
+        if (activeInjury) {
+          (signals as any).health_workaround = { field: "active_injury", reason: activeInjury.summary };
+        }
+        return {
+          kind: signalState.action.posture,
+          focus: null,
+          why: activeInjury
+            ? `${signalState.action.reason} Any movement today should stay pain-free around the active injury: ${activeInjury.summary}`
+            : signalState.action.reason,
+          est_minutes: signalState.action.posture === "easy" ? 20 : null,
+          signals,
+        };
+      },
+    },
+    {
       name: "earned-rest",
       resolve: () => {
         // Earned rest comes from genuinely-loading days stacking up (intensity-aware
@@ -302,16 +373,18 @@ export function dayRead(date?: string, recovery?: any): DayRead {
         // noisy chronic base it fired far too readily (and "rest" contradicted its own
         // "an easier day" wording). It now rides as a caveat on the train read below,
         // so the agent still sees `volume_spike` and the athlete still gets their day.
-        if (!(consec >= 3 || lowSleep || lowSubjective)) return null;
+        if (!(consec >= 3 || lowSleep || lowSubjective || lowReadiness)) return null;
         return {
           kind: "rest",
           focus: null,
           why:
             consec >= 3
               ? "You've trained hard several days running — let it consolidate."
-              : lowSleep
-                ? "Sleep's run short lately — an easier day will serve you better."
-                : "You're feeling run-down today — rest is the smart call.",
+              : lowReadiness
+                ? "Today's fresh readiness signal is low — a lighter day is the safer suggestion."
+                : lowSleep
+                  ? "Sleep's run short lately — an easier day will serve you better."
+                  : "You're feeling run-down today — rest is the smart call.",
           est_minutes: null,
           signals,
         };
@@ -371,10 +444,23 @@ export function dayRead(date?: string, recovery?: any): DayRead {
           );
         if (volumeSpike)
           caveats.push("your running's ramped this week, so keep today's miles easy and don't pile on hard intensity");
+        const compressSchedule =
+          signalState.action.posture === "train" && signalState.action.directives.schedule === "compress";
+        if (compressSchedule) {
+          const scheduleReason = signalState.dimensions.life_capacity.reason;
+          caveats.push("a current dated commitment compresses today's training window, so keep the session focused");
+          (signals as any).schedule = {
+            directive: "compress",
+            compressed: true,
+            original_est_minutes: 60,
+            est_minutes: 40,
+            reason: scheduleReason,
+          };
+        }
         const why = caveats.length
           ? `You're good to train — ${caveats.join("; and ")}.`
           : "You're recovered and due — good to go.";
-        return { kind: "train", focus: sd.focus, why, est_minutes: 60, signals };
+        return { kind: "train", focus: sd.focus, why, est_minutes: compressSchedule ? 40 : 60, signals };
       },
     },
   ];

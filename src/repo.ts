@@ -48,6 +48,7 @@ export * from "./repo/run-progression.js"; // the deterministic RUNNING program 
 export * from "./repo/dexa-targeting.js"; // DEXA regional read → training + nutrition targets
 export * from "./repo/muscle-trajectory.js"; // per-muscle-group advance/stall + strength test-week cadence
 export * from "./repo/coaching-focus.js"; // THE CONDUCTOR — one sequenced whole-athlete focus across all domains
+export * from "./repo/signal-state.js"; // unified daily evidence dimensions + one deterministic planning posture
 export * from "./repo/attention.js"; // adaptive attention cadence kernel
 // Era 2 (the calm daily driver, docs/VISION.md §12):
 export * from "./repo/today-agenda.js"; // the Today salience arbiter
@@ -69,3 +70,4 @@ export {
 } from "./repo/context-effect.js";
 export * from "./repo/next-step.js"; // the one cross-domain next-best-step
 export * from "./repo/body-metrics.js"; // at-home body measurements + derived indicators (BMI/WHtR/WHR/Navy body-fat)
+export * from "./repo/goal-pace.js"; // motivational weight-progress series: weigh-in points + trend line + line-to-goal

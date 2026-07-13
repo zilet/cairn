@@ -16,12 +16,19 @@ import { jaccard, memNorm, memoryForCoach, recentLearnings } from "./memory.js";
 import { capStr, getDayIntake, mealPlanForCoach } from "./nutrition.js";
 import { bodyMetricsContextSlice } from "./body-metrics.js";
 import { getPlan } from "./plan.js";
-import { computeGoalCheck, effectiveGoalMode, getEnduranceGoal, getProfile, listWeight, recoveryWeekStatus } from "./profile.js";
+import {
+  computeGoalCheck,
+  effectiveGoalMode,
+  getEnduranceGoal,
+  getProfile,
+  listWeight,
+  recoveryWeekStatus,
+} from "./profile.js";
 import { bodyCompositionRead } from "./standing.js";
 import {
   directiveFeedbackForCoach,
   directivesForCoach,
-  getHealthSynthesis,
+  getHealthSynthesisView,
   healthFocus,
   markerSide,
   matchOptimalZone,
@@ -56,6 +63,9 @@ import {
 } from "./brain-decisions.js";
 import { getSettings } from "./settings.js";
 import { latestBrainEvaluation } from "./brain-evaluations.js";
+import { estimateExpenditure } from "./expenditure.js";
+import { planningSignalState, type UnifiedSignalState } from "./signal-state.js";
+import { dayLoad } from "./training-read.js";
 
 // ---------- coach context (shared by prompts) ----------
 // Compact view of a health doc for coaching: kind, date, summary, key markers
@@ -378,6 +388,7 @@ interface CoachContextSignals {
   wholePersonTrajectoryView: any;
   journeyView: any;
   coachingFocusView: any;
+  signalStateView: UnifiedSignalState;
   bodyCompositionView: any;
   // Computed once + shared: the active life-context effect, the training-signals
   // rollup, and the active context events (so buildPersonSlice/buildTrainingSlice and
@@ -652,7 +663,13 @@ function buildHealthSlice(
         return [];
       }
     })(), // symptom the athlete noted ↔ an out-of-range marker — informational "mention to your doctor" connections
-    health_synthesis: getHealthSynthesis(), // the latest elite-coach whole-picture narrative (pull artifact), so chat/coach can reference it
+    // Prompts must never reason from a narrative whose source picture has moved.
+    // The raw stale artifact remains available through the synthesis read route
+    // for history/provenance, but current coaching receives null until refreshed.
+    health_synthesis: (() => {
+      const view = getHealthSynthesisView();
+      return view.stale ? null : view.synthesis;
+    })(),
     directive_feedback: directiveFeedbackForCoach(), // Done/Dismiss memory so the coach avoids stale repeats
     recovery, // unified Garmin + Apple/other recovery view
     body_composition: bodyCompositionView, // DEXA anchor + current-weight projection, with dates
@@ -667,15 +684,25 @@ function buildBrainSlice(
   signals: CoachContextSignals
 ): Pick<
   CoachContext,
-  "coaching_focus" | "day_read" | "insights" | "next_step" | "recent_decisions" | "whole_person_trajectory"
+  | "coaching_focus"
+  | "signal_state"
+  | "day_read"
+  | "insights"
+  | "next_step"
+  | "recent_decisions"
+  | "whole_person_trajectory"
 > {
-  const { coachingFocusView, dayReadView, wholePersonTrajectoryView } = signals;
+  const { coachingFocusView, signalStateView, dayReadView, wholePersonTrajectoryView } = signals;
   return {
     // THE CONDUCTOR — the single sequenced WHOLE-ATHLETE focus (lead + parallel +
     // later + connections + one batched retest) arbitrated across training, running,
     // DEXA, health, nutrition and recovery. The brain leads with this; the rest is
     // evidence, not a checklist.
     coaching_focus: coachingFocusView,
+    // One deterministic planning state shared by the Brief and every downstream
+    // prompt. Independent dimensions retain evidence/conflicts; only the final
+    // posture is unified.
+    signal_state: signalStateView,
     // The standing cross-domain objective: what improved, what is deliberately
     // parked for this phase, and whether an unexplained regression requires a
     // revision. Weekly reads receive this directly instead of rediscovering it.
@@ -737,9 +764,6 @@ function getCoachContextFromSnapshot(): CoachContext {
   const recovery = brainSignal("recovery:14", () => getRecoverySummary(14, garmin));
   const recentSessions = brainSignal("recent_sessions:20", () => getRecentSessions(20));
   const profile = brainSignal("profile", () => getProfile() as any);
-  // Compute the day-read ONCE so both day_read and the progression digest below
-  // reference the same read (the progression is for the day this read points at).
-  const dayReadView = brainSignal(`day_read:${today}`, () => getCachedDayRead(today) ?? dayRead(today, recovery));
   // Compute the volume balance + acute load ONCE and thread them into
   // programAdjustments — which would otherwise recompute both from scratch.
   const programBal = brainSignal(`program_balance:2:${today}`, () => programBalance(2, today));
@@ -870,6 +894,38 @@ function getCoachContextFromSnapshot(): CoachContext {
       return [];
     }
   });
+  const expenditureView = brainSignal("expenditure:21", () => {
+    try {
+      return estimateExpenditure(21);
+    } catch {
+      return null;
+    }
+  });
+  const todayLoadView = brainSignal(`today_load:${today}`, () =>
+    dayLoad(today, {
+      countsCardio: profile?.primary_discipline === "endurance" || profile?.primary_discipline === "hybrid",
+    })
+  );
+  const signalStateView = brainSignal(`signal_state:${today}`, () =>
+    planningSignalState({
+      date: today,
+      recovery,
+      checkin: getCheckinByDate(today),
+      trainingSignals: trainingSignalsView,
+      programState: fullProgramState,
+      expenditure: expenditureView,
+      context: contextTodayView,
+      contextEvents: contextEventsView,
+      completedToday: todayLoadView === "hard" || todayLoadView === "moderate",
+    })
+  );
+  // The prose cache is an accelerator, not a second brain. Reattach today's
+  // canonical state even when the sentence came from an earlier warm so every
+  // prompt and deterministic planner sees one posture.
+  const dayReadView = brainSignal(`day_read:${today}`, () => {
+    const read = getCachedDayRead(today) ?? dayRead(today, recovery, signalStateView);
+    return { ...read, signals: { ...(read?.signals ?? {}), signal_state: signalStateView } };
+  });
   // External producer reads the CONDUCTOR arbitrates (K3), computed once here and
   // threaded in so coachingFocus stays a pure function: the PREVENT cardiovascular
   // risk read, benchmark milestones, and the K5 due-attention re-checks (labs/DEXA/
@@ -927,6 +983,10 @@ function getCoachContextFromSnapshot(): CoachContext {
         injuries: contextEventsView.filter((e: any) => e?.kind === "injury"),
         autoregulation: trainingSignalsView?.autoregulation ?? null,
         contextToday: contextTodayView,
+        // The conductor consumes the SAME already-resolved planning state as the
+        // Brief. It translates posture/directives into its existing candidates and
+        // constraints, so Today and Progress cannot issue competing instructions.
+        signalState: signalStateView,
         // External producers (K3): the whole picture — journey, benchmarks, the K5
         // due re-checks, and the PREVENT cardiovascular risk — arbitrated by the ONE
         // conductor alongside the domain levers, so there is a single "what's next" voice.
@@ -1035,6 +1095,7 @@ function getCoachContextFromSnapshot(): CoachContext {
     wholePersonTrajectoryView,
     journeyView,
     coachingFocusView,
+    signalStateView,
     bodyCompositionView,
     contextTodayView,
     trainingSignalsView,
@@ -1706,47 +1767,121 @@ export interface DailyMetricsInput {
   resting_hr?: number | null;
   hrv_ms?: number | null;
   active_calories?: number | null;
+  total_calories?: number | null;
+  distance_km?: number | null;
+  exercise_min?: number | null;
+  stand_hours?: number | null;
+  spo2_avg?: number | null;
+  vo2max?: number | null;
   raw?: any;
+}
+
+function realDailyMetricDate(value: unknown): string {
+  const date = String(value ?? "");
+  const parsed = /^\d{4}-\d{2}-\d{2}$/.test(date) ? new Date(`${date}T00:00:00Z`) : null;
+  if (!parsed || Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date) {
+    throw new Error("date must be a real YYYY-MM-DD");
+  }
+  if (date > localDateISO()) throw new Error("future dates are not accepted");
+  return date;
+}
+
+function dailyMetricSource(value: unknown): string {
+  const source = String(value || "apple").trim() || "apple";
+  if (source.length > 64) throw new Error("source must be 64 characters or fewer");
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: deliberate control-character rejection at the trust boundary
+  if (/[\u0000-\u001f\u007f]/.test(source)) throw new Error("source contains control characters");
+  return source;
+}
+
+function recoveryWindowDays(value: unknown, fallback = 14): number {
+  const n = Math.trunc(Number(value));
+  return Number.isFinite(n) ? Math.max(1, Math.min(366, n)) : fallback;
 }
 
 // Upsert one source's metrics for a date (mirrors upsertGarminDailyMetric, but
 // source-agnostic). `source` defaults to 'apple' — the documented Shortcuts path.
 export function recordDailyMetrics(source: string, date: string, metrics: DailyMetricsInput = {}) {
-  const src = (source || "apple").toString().trim() || "apple";
-  if (!date) throw new Error("date required");
+  const src = dailyMetricSource(source);
+  const metricDate = realDailyMetricDate(date);
   // Coerce/clamp at the trust boundary so non-numeric junk (e.g. steps:"abc" from
   // a hand-rolled Shortcut, which sqlite would otherwise store verbatim as TEXT in
   // an INTEGER column) never pollutes the metrics. Protects REST and MCP alike.
   const num = (v: any, lo: number, hi: number): number | null => {
+    if (v == null || (typeof v === "string" && v.trim() === "")) return null;
     const n = Number(v);
     return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : null;
   };
+  // HealthKit reports oxygen saturation as a 0.0-1.0 FRACTION, not a percent — a
+  // Shortcut posting 0.98 must not get clamped up into `num`'s 50-100 range and
+  // stored as a scary-but-plausible 50%. Normalize a (0,1] fraction to percent
+  // first, then REJECT (never clamp) anything still outside a plausible human
+  // SpO2 reading, so a bad value surfaces as missing rather than a wrong number.
+  const spo2Pct = (v: any): number | null => {
+    if (v == null || (typeof v === "string" && v.trim() === "")) return null;
+    let n = Number(v);
+    if (!Number.isFinite(n)) return null;
+    if (n > 0 && n <= 1) n *= 100;
+    return n >= 50 && n <= 100 ? n : null;
+  };
+  const values = {
+    steps: num(metrics.steps, 0, 200000),
+    sleep_min: num(metrics.sleep_min, 0, 1440),
+    sleep_score: num(metrics.sleep_score, 0, 100),
+    resting_hr: num(metrics.resting_hr, 0, 250),
+    hrv_ms: num(metrics.hrv_ms, 0, 500),
+    active_calories: num(metrics.active_calories, 0, 20000),
+    total_calories: num(metrics.total_calories, 0, 30000),
+    distance_km: num(metrics.distance_km, 0, 1000),
+    exercise_min: num(metrics.exercise_min, 0, 1440),
+    stand_hours: num(metrics.stand_hours, 0, 24),
+    spo2_avg: spo2Pct(metrics.spo2_avg),
+    vo2max: num(metrics.vo2max, 5, 100),
+  };
   db.prepare(
-    `INSERT INTO daily_metrics (source, date, steps, sleep_min, sleep_score, resting_hr, hrv_ms, active_calories, raw_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO daily_metrics
+       (source, date, steps, sleep_min, sleep_score, resting_hr, hrv_ms, active_calories,
+        total_calories, distance_km, exercise_min, stand_hours, spo2_avg, vo2max, raw_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(source, date) DO UPDATE SET
-       steps = excluded.steps, sleep_min = excluded.sleep_min, sleep_score = excluded.sleep_score,
-       resting_hr = excluded.resting_hr, hrv_ms = excluded.hrv_ms, active_calories = excluded.active_calories,
-       raw_json = excluded.raw_json, updated_at = datetime('now')`
+       steps = COALESCE(excluded.steps, daily_metrics.steps),
+       sleep_min = COALESCE(excluded.sleep_min, daily_metrics.sleep_min),
+       sleep_score = COALESCE(excluded.sleep_score, daily_metrics.sleep_score),
+       resting_hr = COALESCE(excluded.resting_hr, daily_metrics.resting_hr),
+       hrv_ms = COALESCE(excluded.hrv_ms, daily_metrics.hrv_ms),
+       active_calories = COALESCE(excluded.active_calories, daily_metrics.active_calories),
+       total_calories = COALESCE(excluded.total_calories, daily_metrics.total_calories),
+       distance_km = COALESCE(excluded.distance_km, daily_metrics.distance_km),
+       exercise_min = COALESCE(excluded.exercise_min, daily_metrics.exercise_min),
+       stand_hours = COALESCE(excluded.stand_hours, daily_metrics.stand_hours),
+       spo2_avg = COALESCE(excluded.spo2_avg, daily_metrics.spo2_avg),
+       vo2max = COALESCE(excluded.vo2max, daily_metrics.vo2max),
+       raw_json = COALESCE(excluded.raw_json, daily_metrics.raw_json), updated_at = datetime('now')`
   ).run(
     src,
-    date,
-    num(metrics.steps, 0, 200000),
-    num(metrics.sleep_min, 0, 1440),
-    num(metrics.sleep_score, 0, 100),
-    num(metrics.resting_hr, 0, 250),
-    num(metrics.hrv_ms, 0, 500),
-    num(metrics.active_calories, 0, 20000),
+    metricDate,
+    values.steps,
+    values.sleep_min,
+    values.sleep_score,
+    values.resting_hr,
+    values.hrv_ms,
+    values.active_calories,
+    values.total_calories,
+    values.distance_km,
+    values.exercise_min,
+    values.stand_hours,
+    values.spo2_avg,
+    values.vo2max,
     jsonOrNull(metrics.raw)
   );
   bumpTrainingDataVersion(); // fresh recovery (in-place upsert) shifts program-state's deload read
   invalidateDayRead(); // fresh recovery data feeds today's Brief — recompute on next open
-  const row = hydrateJson(db.prepare(`SELECT * FROM daily_metrics WHERE source = ? AND date = ?`).get(src, date));
+  const row = hydrateJson(db.prepare(`SELECT * FROM daily_metrics WHERE source = ? AND date = ?`).get(src, metricDate));
   emitBrainEvent({
     kind: "recovery_metrics_changed",
     domain: "recovery",
-    date,
-    entity_id: row?.id ?? `${src}:${date}`,
+    date: metricDate,
+    entity_id: row?.id ?? `${src}:${metricDate}`,
     subject_key: src,
   });
   return row;
@@ -1754,176 +1889,260 @@ export function recordDailyMetrics(source: string, date: string, metrics: DailyM
 
 // Recent rows for a source (or all sources) over the last `days`.
 export function getDailyMetrics(source?: string | null, days = 30) {
-  const since = new Date(Date.now() - Math.max(1, days - 1) * 864e5).toISOString().slice(0, 10);
-  const rows = source
+  const windowDays = recoveryWindowDays(days, 30);
+  const today = localDateISO();
+  const since = localDateISO(new Date(Date.now() - Math.max(0, windowDays - 1) * 864e5));
+  const src = source == null ? null : dailyMetricSource(source);
+  const rows = src
     ? (db
-        .prepare(`SELECT * FROM daily_metrics WHERE source = ? AND date >= ? ORDER BY date DESC, id DESC`)
-        .all(source, since) as any[])
-    : (db.prepare(`SELECT * FROM daily_metrics WHERE date >= ? ORDER BY date DESC, id DESC`).all(since) as any[]);
+        .prepare(`SELECT * FROM daily_metrics WHERE source = ? AND date >= ? AND date <= ? ORDER BY date DESC, id DESC`)
+        .all(src, since, today) as any[])
+    : (db
+        .prepare(`SELECT * FROM daily_metrics WHERE date >= ? AND date <= ? ORDER BY date DESC, id DESC`)
+        .all(since, today) as any[]);
   return rows.map((r) => hydrateJson(r));
 }
 
-// daily_metrics has UNIQUE(source, date), so an athlete who pipes BOTH Apple
-// Health AND Oura (or Whoop) into /api/health-metrics gets one ROW PER SOURCE per
-// night — and a naive AVG(...) over the window would then count each night ONCE
-// PER SOURCE, over-doubling the 7d-vs-30d acute/chronic averages on possibly
-// conflicting rows. This SELECTs ONE row per date (the most-recently-updated
-// source, id-tiebroken) so a night is counted once. A correlated NOT EXISTS keeps
-// it portable (no window functions); the single-source case is a no-op (one row
-// per date either way), so its aggregates stay byte-identical.
-const DAILY_METRICS_ONE_PER_DATE = `
-  SELECT dm.* FROM daily_metrics dm
-  WHERE NOT EXISTS (
-    SELECT 1 FROM daily_metrics dm2
-    WHERE dm2.date = dm.date
-      AND (dm2.updated_at > dm.updated_at
-        OR (dm2.updated_at = dm.updated_at AND dm2.id > dm.id))
-  )`;
-
 // ---------- unified recovery summary (Phase 5D) ----------
-// Generalize getGarminCoachSummary into a SOURCE-AGNOSTIC recovery view by
-// merging garmin_daily_metrics with daily_metrics. Garmin is preferred for
-// sleep/HRV/RHR/body-battery (richer recovery signals); steps + active calories
-// fold in from ANY source. Keeps getGarminCoachSummary working untouched — this
-// wraps it and layers the non-Garmin sources on top. Everything null-safe: no
-// data at all → zeroed/empty fields, never a throw.
+// Quality-aware SOURCE-AGNOSTIC recovery: resolve each date and each field
+// independently, preferring Garmin only where it has an overlapping value. This
+// lets complementary Apple/Oura data survive without double-counting a date.
 export function getRecoverySummary(days = 14, garminSummary?: any) {
-  // Accept a pre-fetched Garmin summary so getCoachContext can compute it once
-  // and thread it through (it otherwise fans out into getGarminCoachSummary three
-  // times per context build via the garmin/recovery/day_read paths).
-  const garmin = garminSummary ?? getGarminCoachSummary(days);
-  const since = new Date(Date.now() - Math.max(1, days - 1) * 864e5).toISOString().slice(0, 10);
-
-  // Garmin recovery aggregates (may be all-null when there's no Garmin source).
-  const g = (garmin?.recovery ?? {}) as any;
-
-  // Non-Garmin daily_metrics aggregates over the same window — averaged over ONE
-  // row per date (most-recent source), so a multi-source night isn't double-counted.
-  const other = db
-    .prepare(
-      `SELECT
-       ROUND(AVG(sleep_min), 1) AS avg_sleep_min,
-       ROUND(AVG(sleep_score), 1) AS avg_sleep_score,
-       ROUND(AVG(resting_hr), 1) AS avg_resting_hr,
-       ROUND(AVG(hrv_ms), 1) AS avg_hrv_ms,
-       ROUND(AVG(active_calories), 1) AS avg_active_calories,
-       ROUND(AVG(steps), 0) AS avg_steps,
-       MAX(date) AS last_date
-     FROM (${DAILY_METRICS_ONE_PER_DATE})
-     WHERE date >= ?`
-    )
-    .get(since) as any;
-
-  // Steps live only on garmin_daily_metrics / daily_metrics raw rows — pull a
-  // garmin steps average directly (getGarminCoachSummary doesn't surface it).
-  const garminSteps = db
-    .prepare(`SELECT ROUND(AVG(steps), 0) AS avg_steps FROM garmin_daily_metrics WHERE date >= ?`)
-    .get(since) as any;
-
-  // Prefer Garmin for recovery signals; fall back to other sources; fold steps
-  // & active calories from whichever source has them (prefer Garmin).
-  const pick = (a: any, b: any) => (a != null ? a : b != null ? b : null);
-  const recovery = {
-    avg_sleep_min: pick(g.avg_sleep_min, other?.avg_sleep_min),
-    avg_sleep_score: pick(g.avg_sleep_score, other?.avg_sleep_score),
-    avg_resting_hr: pick(g.avg_resting_hr, other?.avg_resting_hr),
-    avg_hrv_ms: pick(g.avg_hrv_ms, other?.avg_hrv_ms),
-    avg_stress: g.avg_stress ?? null, // Garmin-only signal
-    avg_body_battery: g.avg_body_battery ?? null, // Garmin-only signal
-    avg_active_calories: pick(g.avg_active_calories, other?.avg_active_calories),
-    avg_steps: pick(garminSteps?.avg_steps, other?.avg_steps),
-    // Richer Garmin-only recovery signals (null when no Garmin source / device).
-    avg_deep_sleep_min: g.avg_deep_sleep_min ?? null,
-    avg_rem_sleep_min: g.avg_rem_sleep_min ?? null,
-    hrv_status: g.hrv_status ?? null,
-    avg_body_battery_max: g.avg_body_battery_max ?? null,
-    avg_respiration: g.avg_respiration ?? null,
-    avg_spo2: g.avg_spo2 ?? null,
-    skin_temp_dev_c: g.skin_temp_dev_c ?? null,
-    avg_vigorous_min: g.avg_vigorous_min ?? null,
-    avg_training_readiness: g.avg_training_readiness ?? null,
-    // Load/fitness point-in-time signals — captured by the sync, now surfaced so
-    // the agent can ANTICIPATE fatigue (rising acute load) rather than only react.
-    acute_load: g.acute_load ?? null,
-    fitness_age: g.fitness_age ?? null,
-    vo2max: g.vo2max ?? null,
-    training_status: g.training_status ?? null,
-    weight_kg: g.weight_kg ?? null,
-    body_fat_pct: g.body_fat_pct ?? null,
-    muscle_mass_kg: g.muscle_mass_kg ?? null,
-    // Runner performance signals (null when no Garmin source / device doesn't report).
-    endurance_score: g.endurance_score ?? null,
-    hill_score: g.hill_score ?? null,
-    race_predict_5k_sec: g.race_predict_5k_sec ?? null,
-    race_predict_10k_sec: g.race_predict_10k_sec ?? null,
-    race_predict_half_sec: g.race_predict_half_sec ?? null,
-    race_predict_marathon_sec: g.race_predict_marathon_sec ?? null,
-    training_load_balance: g.training_load_balance ?? null,
-    last_date: g.last_date || other?.last_date || null,
-  };
-
-  // ---- acute-vs-chronic baselines (vs the user's OWN norm, not a population) ----
-  // The prompt asks the agent to read recovery "vs their norm" but historically
-  // got a single window average to compare against itself. Give it a real
-  // baseline: recent = last 7d, baseline = last 30d, delta = recent − baseline,
-  // for the three load-bearing recovery signals (sleep / HRV / resting HR),
-  // preferring Garmin and falling back to other sources. Null-safe throughout.
-  const avgWindow = (winDays: number): { sleep: number | null; hrv: number | null; rhr: number | null } => {
-    const s = new Date(Date.now() - Math.max(1, winDays - 1) * 864e5).toISOString().slice(0, 10);
-    const gw = db
+  const windowDays = recoveryWindowDays(days, 14);
+  const today = localDateISO();
+  const garmin = garminSummary ?? getGarminCoachSummary(windowDays);
+  const fields = [
+    "steps",
+    "sleep_min",
+    "sleep_score",
+    "resting_hr",
+    "hrv_ms",
+    "active_calories",
+    "total_calories",
+    "distance_km",
+    "exercise_min",
+    "stand_hours",
+    "spo2_avg",
+    "vo2max",
+    "deep_sleep_min",
+    "rem_sleep_min",
+    "stress_avg",
+    "body_battery_avg",
+    "body_battery_max",
+    "respiration_avg",
+    "skin_temp_dev_c",
+    "intensity_min_vigorous",
+    "training_readiness",
+    "acute_load",
+    "fitness_age",
+    "training_status",
+    "hrv_status",
+    "weight_kg",
+    "body_fat_pct",
+    "muscle_mass_kg",
+    "endurance_score",
+    "hill_score",
+    "race_predict_5k_sec",
+    "race_predict_10k_sec",
+    "race_predict_half_sec",
+    "race_predict_marathon_sec",
+    "training_load_balance",
+  ] as const;
+  type Signal = (typeof fields)[number];
+  type ResolvedRow = { date: string; values: Partial<Record<Signal, any>>; sources: Partial<Record<Signal, string>> };
+  const resolveRows = (winDays: number): ResolvedRow[] => {
+    const since = localDateISO(new Date(Date.now() - Math.max(0, winDays - 1) * 864e5));
+    const generic = db
+      .prepare(`SELECT * FROM daily_metrics WHERE date >= ? AND date <= ? ORDER BY date DESC, updated_at DESC, id DESC`)
+      .all(since, today) as Record<string, any>[];
+    const garminRows = db
       .prepare(
-        `SELECT ROUND(AVG(sleep_min),1) AS sleep, ROUND(AVG(hrv_ms),1) AS hrv, ROUND(AVG(resting_hr),1) AS rhr
-       FROM garmin_daily_metrics WHERE date >= ?`
+        `SELECT * FROM garmin_daily_metrics WHERE date >= ? AND date <= ? ORDER BY date DESC, updated_at DESC, id DESC`
       )
-      .get(s) as any;
-    const ow = db
-      .prepare(
-        `SELECT ROUND(AVG(sleep_min),1) AS sleep, ROUND(AVG(hrv_ms),1) AS hrv, ROUND(AVG(resting_hr),1) AS rhr
-       FROM (${DAILY_METRICS_ONE_PER_DATE}) WHERE date >= ?`
-      )
-      .get(s) as any;
-    return {
-      sleep: pick(gw?.sleep, ow?.sleep),
-      hrv: pick(gw?.hrv, ow?.hrv),
-      rhr: pick(gw?.rhr, ow?.rhr),
+      .all(since, today) as Record<string, any>[];
+    const dates = new Map<string, ResolvedRow>();
+    const at = (date: string) => {
+      if (!dates.has(date)) dates.set(date, { date, values: {}, sources: {} });
+      return dates.get(date)!;
     };
+    // Generic sources resolve PER FIELD, not per whole row. Thus an Apple steps
+    // value and an Oura sleep value on the same date both survive.
+    for (const row of generic) {
+      const out = at(String(row.date));
+      for (const field of fields) {
+        if (row[field] != null && out.values[field] == null) {
+          out.values[field] = row[field];
+          out.sources[field] = String(row.source || "other");
+        }
+      }
+    }
+    // Garmin is preferred only where it actually has the overlapping field;
+    // complementary generic values remain intact.
+    for (const row of [...garminRows].reverse()) {
+      const out = at(String(row.date));
+      const mapped: Record<string, any> = { ...row };
+      mapped.distance_km = row.distance_m == null ? null : Number(row.distance_m) / 1000;
+      mapped.exercise_min =
+        [row.intensity_min_moderate, row.intensity_min_vigorous]
+          .filter((v) => v != null)
+          .reduce((sum, v) => sum + Number(v), 0) || null;
+      for (const field of fields) {
+        if (mapped[field] != null) {
+          out.values[field] = mapped[field];
+          out.sources[field] = "garmin";
+        }
+      }
+    }
+    return [...dates.values()].sort((a, b) => b.date.localeCompare(a.date));
+  };
+  const rows = resolveRows(windowDays);
+  // Garmin can estimate VO2max on an activity even when its daily maxmet feed is
+  // absent. Preserve that fallback from getGarminCoachSummary in the unified
+  // resolver so value, provenance, coverage, and freshness stay aligned.
+  if (!rows.some((row) => row.values.vo2max != null)) {
+    const activityVo2 = garmin?.quality?.vo2max;
+    if (
+      activityVo2?.source === "garmin_activity" &&
+      activityVo2.latest_value != null &&
+      /^\d{4}-\d{2}-\d{2}$/.test(String(activityVo2.latest_date ?? ""))
+    ) {
+      rows.push({
+        date: String(activityVo2.latest_date),
+        values: { vo2max: activityVo2.latest_value },
+        sources: { vo2max: "garmin_activity" },
+      });
+      rows.sort((a, b) => b.date.localeCompare(a.date));
+    }
+  }
+  const round1 = (v: number) => Math.round(v * 10) / 10;
+  const average = (field: Signal, list = rows): number | null => {
+    const values = list
+      .filter((row) => row.values[field] != null)
+      .map((row) => Number(row.values[field]))
+      .filter(Number.isFinite);
+    return values.length ? round1(values.reduce((sum, value) => sum + value, 0) / values.length) : null;
+  };
+  const freshness = (date: string | null): "fresh" | "recent" | "stale" | "missing" => {
+    if (!date) return "missing";
+    const age = Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${date}T00:00:00Z`)) / 864e5);
+    return age <= 1 ? "fresh" : age <= 3 ? "recent" : "stale";
+  };
+  const quality: Record<string, any> = {};
+  for (const field of fields) {
+    const latest = rows.find((row) => row.values[field] != null);
+    const contributing = rows.filter((row) => row.values[field] != null);
+    quality[field] = {
+      latest_value: latest?.values[field] ?? null,
+      latest_date: latest?.date ?? null,
+      source: latest ? (latest.sources[field] ?? null) : null,
+      sources: [...new Set(contributing.map((row) => row.sources[field]).filter(Boolean))],
+      sample_count: contributing.length,
+      expected_days: windowDays,
+      window_days: windowDays,
+      freshness: freshness(latest?.date ?? null),
+    };
+  }
+  const current = (field: Signal) => quality[field].latest_value;
+  const recovery: Record<string, any> = {
+    avg_sleep_min: average("sleep_min"),
+    avg_sleep_score: average("sleep_score"),
+    avg_resting_hr: average("resting_hr"),
+    avg_hrv_ms: average("hrv_ms"),
+    avg_stress: average("stress_avg"),
+    avg_body_battery: average("body_battery_avg"),
+    avg_active_calories: average("active_calories"),
+    avg_total_calories: average("total_calories"),
+    avg_steps: average("steps"),
+    avg_distance_km: average("distance_km"),
+    avg_exercise_min: average("exercise_min"),
+    avg_stand_hours: average("stand_hours"),
+    avg_deep_sleep_min: average("deep_sleep_min"),
+    avg_rem_sleep_min: average("rem_sleep_min"),
+    avg_body_battery_max: average("body_battery_max"),
+    avg_respiration: average("respiration_avg"),
+    avg_spo2: average("spo2_avg"),
+    avg_skin_temp_dev_c: average("skin_temp_dev_c"),
+    avg_vigorous_min: average("intensity_min_vigorous"),
+    avg_training_readiness: average("training_readiness"),
+    // Current is always the latest dated non-null reading; averages remain separate.
+    sleep_min: current("sleep_min"),
+    resting_hr: current("resting_hr"),
+    hrv_ms: current("hrv_ms"),
+    steps: current("steps"),
+    active_calories: current("active_calories"),
+    total_calories: current("total_calories"),
+    distance_km: current("distance_km"),
+    exercise_min: current("exercise_min"),
+    stand_hours: current("stand_hours"),
+    hrv_status: current("hrv_status"),
+    spo2_avg: current("spo2_avg"),
+    skin_temp_dev_c: current("skin_temp_dev_c"),
+    training_readiness: current("training_readiness"),
+    training_status: current("training_status"),
+    acute_load: current("acute_load"),
+    fitness_age: current("fitness_age"),
+    vo2max: current("vo2max"),
+    weight_kg: current("weight_kg"),
+    body_fat_pct: current("body_fat_pct"),
+    muscle_mass_kg: current("muscle_mass_kg"),
+    endurance_score: current("endurance_score"),
+    hill_score: current("hill_score"),
+    race_predict_5k_sec: current("race_predict_5k_sec"),
+    race_predict_10k_sec: current("race_predict_10k_sec"),
+    race_predict_half_sec: current("race_predict_half_sec"),
+    race_predict_marathon_sec: current("race_predict_marathon_sec"),
+    training_load_balance: current("training_load_balance"),
+    last_date: rows.find((row) => Object.keys(row.values).length)?.date ?? null,
+    quality,
+  };
+  const avgWindow = (winDays: number) => {
+    const list = resolveRows(winDays);
+    return { sleep: average("sleep_min", list), hrv: average("hrv_ms", list), rhr: average("resting_hr", list) };
   };
   const recent = avgWindow(7);
   const baseline = avgWindow(30);
-  const round1 = (v: number) => Math.round(v * 10) / 10;
-  const diff = (a: number | null, b: number | null): number | null => (a != null && b != null ? round1(a - b) : null);
+  const diff = (a: number | null, b: number | null) => (a != null && b != null ? round1(a - b) : null);
   const delta = {
     sleep: diff(recent.sleep, baseline.sleep),
     hrv: diff(recent.hrv, baseline.hrv),
     rhr: diff(recent.rhr, baseline.rhr),
   };
-
-  // Which sources contributed, for transparency / graceful-degradation copy.
-  const sources: string[] = [];
-  if (garmin?.source) sources.push("garmin");
-  const otherSrc = db.prepare(`SELECT DISTINCT source FROM daily_metrics WHERE date >= ?`).all(since) as any[];
-  for (const r of otherSrc) if (r?.source && !sources.includes(r.source)) sources.push(r.source);
-
-  const has_data =
-    recovery.avg_sleep_min != null ||
-    recovery.avg_resting_hr != null ||
-    recovery.avg_hrv_ms != null ||
-    recovery.avg_steps != null ||
-    recovery.avg_active_calories != null;
-
+  const sources = [...new Set(Object.values(quality).flatMap((entry: any) => entry.sources ?? []))] as string[];
+  const surfaced = Object.entries(recovery).filter(([key]) => key !== "last_date" && key !== "quality");
+  const has_data = surfaced.some(([, value]) => value != null);
+  const coverage = Object.fromEntries(
+    Object.entries(quality).map(([key, value]: [string, any]) => [
+      key,
+      {
+        sample_count: value.sample_count,
+        expected_days: value.expected_days,
+        window_days: value.window_days,
+      },
+    ])
+  );
+  const provenance = Object.fromEntries(
+    Object.entries(quality).map(([key, value]: [string, any]) => [
+      key,
+      {
+        source: value.source,
+        sources: value.sources,
+        latest_date: value.latest_date,
+        freshness: value.freshness,
+      },
+    ])
+  );
   return {
-    days,
-    since,
+    days: windowDays,
+    since: localDateISO(new Date(Date.now() - Math.max(0, windowDays - 1) * 864e5)),
     sources,
     has_data,
     recovery,
-    // Acute-vs-chronic: the athlete's recent week against their 30-day norm, so
-    // the agent compares against THEIR baseline (additive — older consumers ignore).
+    quality,
+    coverage,
+    provenance,
     recent,
     baseline,
     delta,
-    // Carry the Garmin activity/hard-session detail through unchanged so any
-    // consumer that wants the sports layer still has it.
     activities: garmin?.activities ?? [],
     hard_sessions: garmin?.hard_sessions ?? [],
   };
@@ -1956,18 +2175,18 @@ export function latestSleep(): {
       `SELECT date, sleep_min, sleep_score, resting_hr, hrv_ms, hrv_status,
             deep_sleep_min, light_sleep_min, rem_sleep_min, awake_min
        FROM garmin_daily_metrics
-      WHERE sleep_min IS NOT NULL AND sleep_min > 0
+      WHERE sleep_min IS NOT NULL AND sleep_min > 0 AND date <= ?
       ORDER BY date DESC LIMIT 1`
     )
-    .get() as any;
+    .get(localDateISO()) as any;
   const o = db
     .prepare(
       `SELECT date, source, sleep_min, sleep_score, resting_hr, hrv_ms
        FROM daily_metrics
-      WHERE sleep_min IS NOT NULL AND sleep_min > 0
+      WHERE sleep_min IS NOT NULL AND sleep_min > 0 AND date <= ?
       ORDER BY date DESC LIMIT 1`
     )
-    .get() as any;
+    .get(localDateISO()) as any;
 
   // Most recent night wins; Garmin breaks a tie (richer architecture).
   let row: any = null,
@@ -1990,16 +2209,28 @@ export function latestSleep(): {
   if (!row) return null;
 
   // 30-day HRV baseline (same source family) up to — not including — last night.
-  // For the non-Garmin family, dedup to ONE row per date (same guard getRecoverySummary
-  // uses) so two wearables feeding the same nights don't double-weight the average.
-  const since30 = new Date(Date.now() - 29 * 864e5).toISOString().slice(0, 10);
-  const baseTable = source === "garmin" ? "garmin_daily_metrics" : `(${DAILY_METRICS_ONE_PER_DATE})`;
-  const hb = db
-    .prepare(
-      `SELECT ROUND(AVG(hrv_ms),1) AS h FROM ${baseTable}
+  // For the non-Garmin family, resolve HRV per date/per field (newest source row
+  // carrying HRV wins) so complementary metrics do not erase it or double-weight.
+  const since30 = localDateISO(new Date(Date.now() - 29 * 864e5));
+  const hb: any =
+    source === "garmin"
+      ? db
+          .prepare(
+            `SELECT ROUND(AVG(hrv_ms),1) AS h FROM garmin_daily_metrics
       WHERE date >= ? AND date < ? AND hrv_ms IS NOT NULL`
-    )
-    .get(since30, row.date) as any;
+          )
+          .get(since30, row.date)
+      : db
+          .prepare(
+            `SELECT ROUND(AVG(dm.hrv_ms),1) AS h FROM daily_metrics dm
+         WHERE dm.date >= ? AND dm.date < ? AND dm.hrv_ms IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM daily_metrics newer
+              WHERE newer.date = dm.date AND newer.hrv_ms IS NOT NULL
+                AND (newer.updated_at > dm.updated_at OR (newer.updated_at = dm.updated_at AND newer.id > dm.id))
+           )`
+          )
+          .get(since30, row.date);
   const baselineHrv = hb?.h ?? null;
   const hrvDelta = row.hrv_ms != null && baselineHrv != null ? Math.round((row.hrv_ms - baselineHrv) * 10) / 10 : null;
 

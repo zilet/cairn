@@ -10,6 +10,7 @@ import {
   assertMealAllergenSafe,
   assertPlanAllergenSafe,
   assertRecipeAllergenSafe,
+  assessMealPlanAdequacy,
   clampNutritionFloors,
 } from "./nutrition-safety.js";
 import { getSettings } from "./settings.js";
@@ -281,19 +282,57 @@ export function mealPlanFreshness(plan: any): { stale: boolean; reason: string |
   };
 }
 
-export function createMealPlan(agent: string, raw: string, parsed: any) {
-  // Stamp the max upstream source at draft time so freshness can later tell whether a
-  // newer lipid/health directive has outrun this plan.
+export type MealPlanPersistenceCheck =
+  | { ok: true; parsed: any; adequacy_checked: boolean }
+  | { ok: false; error: string; parsed: any; adequacy_checked: boolean };
+
+// This is the authoritative write/autonomy gate. Goal math already fuses the
+// current expenditure estimate and canonical bodyweight; an accepted adaptive
+// target may be more protective than the formula, so meal plans use the higher
+// of those live targets as their floor. Thin profiles still receive the absolute
+// 1500-kcal floor and the plan's own positive protein target remains authoritative.
+export function validateMealPlanForPersistence(parsed: any): MealPlanPersistenceCheck {
   let goal: any = null;
   try {
     goal = computeGoalCheck();
   } catch {
     goal = null;
   }
+  const recommended = goal?.ok && goal.recommended ? { ...goal.recommended } : {};
+  const effective = goal?.ok ? goal.effective_target : null;
+  if (effective?.target_kcal != null) {
+    recommended.target_intake_kcal = Math.max(
+      Number(recommended.target_intake_kcal) || 0,
+      Number(effective.target_kcal) || 0
+    );
+  }
+  if (effective?.protein_g != null) {
+    recommended.protein_g = Math.max(Number(recommended.protein_g) || 0, Number(effective.protein_g) || 0);
+  }
+  const floorGoal = goal?.ok ? { ...goal, recommended } : goal;
   const floored =
     parsed && typeof parsed === "object"
-      ? clampNutritionFloors(parsed, { kcal: "daily_kcal", protein: "daily_protein_g" }, goal)
+      ? clampNutritionFloors(parsed, { kcal: "daily_kcal", protein: "daily_protein_g" }, floorGoal)
       : parsed;
+  const adequacy = assessMealPlanAdequacy(floored);
+  if (!adequacy.ok) return { ok: false, error: adequacy.error, parsed: floored, adequacy_checked: true };
+  if (!adequacy.checked) {
+    return {
+      ok: false,
+      error: "Meal plan rejected: a current plan requires 5 to 7 complete days with meal calorie and protein totals.",
+      parsed: floored,
+      adequacy_checked: false,
+    };
+  }
+  return { ok: true, parsed: floored, adequacy_checked: adequacy.checked };
+}
+
+export function createMealPlan(agent: string, raw: string, parsed: any) {
+  // Stamp the max upstream source at draft time so freshness can later tell whether a
+  // newer lipid/health directive has outrun this plan.
+  const check = validateMealPlanForPersistence(parsed);
+  if (!check.ok) throw new Error(check.error);
+  const floored = check.parsed;
   assertPlanAllergenSafe(floored, athleteAllergies());
   const stamped =
     floored && typeof floored === "object" ? { ...floored, source_ts: maxUpstreamNutritionSource() } : floored;
@@ -336,15 +375,22 @@ function withMealPlanAutonomy(plan: any): any {
 // before its natural boundary. With no accepted history, a draft remains a useful
 // preview/fallback for a new installation.
 export function currentMealPlan() {
-  const row = db
+  const rows = db
     .prepare(
       `SELECT * FROM meal_plans
        WHERE status NOT IN ('discarded', 'superseded')
        ORDER BY CASE WHEN status IN ('accepted','applied','kept') THEN 0 ELSE 1 END, id DESC
-       LIMIT 1`
+       LIMIT 100`
     )
-    .get();
-  return row ? withMealPlanAutonomy(hydrate(row)) : null;
+    .all() as any[];
+  for (const row of rows) {
+    const plan = hydrate(row);
+    const adequacy = assessMealPlanAdequacy(plan?.parsed);
+    // Historical partial rows remain available through explicit get/list/history,
+    // but an unchecked or mismatched artifact is never the canonical current plan.
+    if (adequacy.ok && adequacy.checked) return withMealPlanAutonomy(plan);
+  }
+  return null;
 }
 
 const WEEKDAY_ABBR = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
@@ -495,6 +541,15 @@ function recordMealPlanStatusDecision(plan: any, transition: string): void {
 }
 
 export function setMealPlanStatus(id: number, status: string, opts: { recordDecision?: boolean } = {}) {
+  if (["draft", "accepted", "applied", "kept"].includes(status)) {
+    const existing = getMealPlan(id);
+    if (!existing) return null;
+    const check = validateMealPlanForPersistence(existing.parsed);
+    if (!check.ok) throw new Error(check.error);
+    if (JSON.stringify(check.parsed) !== JSON.stringify(existing.parsed)) {
+      db.prepare(`UPDATE meal_plans SET parsed_json = ? WHERE id = ?`).run(JSON.stringify(check.parsed), id);
+    }
+  }
   db.prepare(`UPDATE meal_plans SET status = ? WHERE id = ?`).run(status, id);
   const plan = withMealPlanAutonomy(hydrate(db.prepare(`SELECT * FROM meal_plans WHERE id = ?`).get(id)));
   if (plan && opts.recordDecision !== false) recordMealPlanStatusDecision(plan, status);
@@ -507,16 +562,9 @@ export function setMealPlanStatus(id: number, status: string, opts: { recordDeci
 export function acceptMealPlan(id: number, opts: { recordDecision?: boolean } = {}) {
   const plan = getMealPlan(id);
   if (!plan) return null;
-  let goal: any = null;
-  try {
-    goal = computeGoalCheck();
-  } catch {
-    goal = null;
-  }
-  const safeParsed =
-    plan.parsed && typeof plan.parsed === "object"
-      ? clampNutritionFloors(plan.parsed, { kcal: "daily_kcal", protein: "daily_protein_g" }, goal)
-      : plan.parsed;
+  const check = validateMealPlanForPersistence(plan.parsed);
+  if (!check.ok) throw new Error(check.error);
+  const safeParsed = check.parsed;
   assertPlanAllergenSafe(safeParsed, athleteAllergies());
   if (safeParsed && JSON.stringify(safeParsed) !== JSON.stringify(plan.parsed)) {
     db.prepare(`UPDATE meal_plans SET parsed_json = ? WHERE id = ?`).run(JSON.stringify(safeParsed), id);
@@ -612,7 +660,9 @@ export function updateMealPlanDays(id: number, days: any) {
   }));
   assertPlanAllergenSafe({ days: cleanDays }, athleteAllergies());
   const parsed = { ...(plan.parsed && typeof plan.parsed === "object" ? plan.parsed : {}), days: cleanDays };
-  db.prepare(`UPDATE meal_plans SET parsed_json = ? WHERE id = ?`).run(JSON.stringify(parsed), id);
+  const check = validateMealPlanForPersistence(parsed);
+  if (!check.ok) throw new Error(check.error);
+  db.prepare(`UPDATE meal_plans SET parsed_json = ? WHERE id = ?`).run(JSON.stringify(check.parsed), id);
   const updated = getMealPlan(id);
   emitBrainEvent({ kind: "meal_plan_changed", domain: "nutrition", date: localDateISO(), entity_id: id });
   return updated;
@@ -639,7 +689,9 @@ export function swapMealInPlan(id: number, day: string, mealIndex: number, meal:
   const clean = coerceMeal(meal);
   assertMealAllergenSafe(clean, athleteAllergies(), `${capStr(target.day, 40) || "meal plan"} meal ${idx + 1}`);
   target.meals[idx] = clean;
-  db.prepare(`UPDATE meal_plans SET parsed_json = ? WHERE id = ?`).run(JSON.stringify(plan.parsed), id);
+  const check = validateMealPlanForPersistence(plan.parsed);
+  if (!check.ok) throw new Error(check.error);
+  db.prepare(`UPDATE meal_plans SET parsed_json = ? WHERE id = ?`).run(JSON.stringify(check.parsed), id);
   emitBrainEvent({
     kind: "meal_plan_changed",
     domain: "nutrition",
@@ -687,6 +739,8 @@ export function coerceRecipe(r: any) {
 export function setMealRecipe(planId: number, day: string, mealIndex: number, recipe: any) {
   const plan = getMealPlan(planId);
   if (!plan || !plan.parsed || !Array.isArray(plan.parsed.days)) return null;
+  const safety = validateMealPlanForPersistence(plan.parsed);
+  if (!safety.ok) throw new Error(safety.error);
   const dayKey = String(day ?? "")
     .trim()
     .toLowerCase();

@@ -87,6 +87,40 @@ test("weeklyRunPlan stays quiet with no running goal and no logged mileage", () 
   assert.deepEqual(plan.runs, []);
 });
 
+test("weeklyRunPlan stays quiet for cycling-only history", () => {
+  repo.setProfile({ primary_discipline: "hybrid", endurance_sport: "cycling", endurance_goal: null });
+  for (const off of [2, 9, 16, 23]) {
+    repo.addActivity({ type: "mountain_biking", duration_min: 75, distance_km: 25, date: back(off) });
+  }
+  const plan = repo.weeklyRunPlan(REF);
+  assert.equal(plan.available, false);
+  assert.deepEqual(plan.runs, []);
+});
+
+test("weeklyRunPlan still plans for a configured runner with no goal and no mileage logged this week", () => {
+  // endurance_sport configured to running, but no formal endurance goal AND
+  // nothing logged in the trailing week (e.g. a Monday before the first run) —
+  // configuration alone must still supply running intent, not just a goal or
+  // recent km. Prior mileage sits well outside the compliance/base windows.
+  repo.setProfile({ primary_discipline: "hybrid", endurance_sport: "running", endurance_goal: null });
+  for (const off of [30, 37, 44, 51, 58]) {
+    repo.addActivity({ type: "run", duration_min: 50, distance_km: 8, date: back(off) });
+  }
+  const plan = repo.weeklyRunPlan(REF);
+  assert.equal(plan.available, true, "a configured runner still gets a plan with no goal and a quiet week");
+  assert.ok(plan.runs.length > 0, "the plan carries real runs, not the NO_RUN_PLAN shape");
+});
+
+test("weeklyRunPlan anchors mixed run and MTB history to running only", () => {
+  repo.setProfile({ primary_discipline: "hybrid", endurance_sport: "running, MTB" });
+  repo.addActivity({ type: "run", duration_min: 50, distance_km: 10, date: back(1) });
+  repo.addActivity({ type: "mountain_biking", duration_min: 120, distance_km: 40, date: back(1) });
+  const plan = repo.weeklyRunPlan(REF);
+  const total = plan.runs.reduce((sum, run) => sum + Number(run.target_distance_km || 0), 0);
+  assert.equal(plan.available, true);
+  assert.ok(total <= 12, `run plan should build from ~10 running km, not 50 mixed km (got ${total})`);
+});
+
 test("weeklyRunPlan produces a periodized mix with a long run + a rotated quality session", () => {
   repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
   repo.setProfile({ endurance_goal: { mode: "race", event: "Test Half", date: fwd(84), distance_km: 21.1, weekly_km: 35, weekly_sessions: 4 } });
@@ -189,6 +223,14 @@ test("enduranceTestsDue prompts a time-trial when a runner has had no hard effor
 
 test("enduranceTestsDue stays empty for a pure strength athlete with no running", () => {
   repo.setProfile({ primary_discipline: "strength", endurance_sport: "", endurance_goal: null });
+  assert.deepEqual(repo.enduranceTestsDue(REF), []);
+});
+
+test("enduranceTestsDue never prescribes running tests from cycling-only history", () => {
+  repo.setProfile({ primary_discipline: "endurance", endurance_sport: "cycling", endurance_goal: null });
+  for (const off of [3, 10, 17, 24]) {
+    repo.addActivity({ type: "cycling", duration_min: 60, distance_km: 25, date: back(off) });
+  }
   assert.deepEqual(repo.enduranceTestsDue(REF), []);
 });
 

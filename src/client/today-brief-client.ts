@@ -215,13 +215,20 @@ type TodayBriefHtmlOptions = {
 
   function todayBriefSignalsText(read: TodayBriefRead | null | undefined): string {
     const signals = read?.signals && typeof read.signals === "object" ? (read.signals as Record<string, unknown>) : {};
+    const fatigue =
+      signals.fatigue && typeof signals.fatigue === "object" ? (signals.fatigue as Record<string, unknown>) : {};
+    const sleepVsNormRaw = Number(fatigue.sleep_vs_norm);
+    const sleepVsNorm = fatigue.sleep_vs_norm == null || !Number.isFinite(sleepVsNormRaw) ? null : sleepVsNormRaw;
+    const sleepMateriallyBelowNorm = sleepVsNorm != null && sleepVsNorm < -25;
     const bits: string[] = [];
     const days = Number(signals.consecutive_training_days);
     if (Number.isFinite(days) && days > 0) {
       bits.push(`${days} day${days === 1 ? "" : "s"} of training in a row`);
     }
-    if (signals.low_sleep) bits.push("your sleep's been running short");
-    else if (signals.avg_sleep_min != null && signals.has_recovery_data) bits.push("sleep's been about normal for you");
+    if (signals.low_sleep || sleepMateriallyBelowNorm) bits.push("your sleep's been running short");
+    else if (signals.avg_sleep_min != null && signals.has_recovery_data && sleepVsNorm != null) {
+      bits.push("sleep's been about normal for you");
+    }
     if (signals.checkin) bits.push("you mentioned how you're feeling");
     if (!bits.length) return "Reading your recent training and recovery.";
     return `${bits.join("; ")}.`;

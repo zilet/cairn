@@ -15,6 +15,31 @@ function settingsSourcesAutomationInput(event: Event): HTMLInputElement {
   return event.currentTarget as HTMLInputElement;
 }
 
+function appleHealthShortcutRecipe(origin: string, token = ""): string {
+  const endpoint = origin.replace(/\/$/, "") + "/api/health-metrics";
+  const auth = token.trim()
+    ? `Authorization header\nName: Authorization\nValue: Bearer ${token.trim()}`
+    : "Authorization header\nNone — this Cairn browser session has no shared token.";
+  return `Cairn Apple Health Shortcut build sheet
+
+1. Name the shortcut "Update Cairn from Apple Health".
+2. Choose the day to summarize and Format Date as yyyy-MM-dd.
+3. Add Find Health Samples actions for only the data you want to share. Filter to that day, then calculate the appropriate sum or average.
+4. Build a Dictionary. Always include:
+   source: apple_health
+   date: <formatted date>
+   Add only available values: steps, sleep_min, resting_hr, hrv_ms, active_calories, total_calories, distance_km, exercise_min, stand_hours, spo2_avg, vo2max.
+5. Add Get Contents of URL:
+   URL: ${endpoint}
+   Method: POST
+   Request Body: JSON (the Dictionary)
+   ${auth.replace(/\n/g, "\n   ")}
+6. Read the response Dictionary. If ok is true, Show Notification "Cairn updated". Otherwise Show Alert with errors. A connection failure can be retried by running the shortcut again; source+date upsert makes repeats safe.
+7. Run once and approve the requested Health permissions. Optionally create a Time of Day personal automation that runs this shortcut.
+
+Apple requires the shortcut actions and Health permissions to be reviewed on your device. Cairn cannot generate or sign a validated .shortcut file.`;
+}
+
 function renderSettingsSources(deps: ClientSettingsSourcesAutomationControllerDeps): void {
   const wm = deps.workingModel;
   deps.root.innerHTML = CairnSettingsSurface.sourcesSliceHtml({
@@ -69,6 +94,18 @@ function renderSettingsSources(deps: ClientSettingsSourcesAutomationControllerDe
     }
     (deps.setTimeout ?? setTimeout)(() => { ahCopy.textContent = "Copy"; }, 1600);
   });
+  const recipeCopy = settingsSourcesAutomationOptional<HTMLButtonElement>(deps.root, "#ahRecipeCopy");
+  if (recipeCopy) recipeCopy.addEventListener("click", async () => {
+    const token = deps.authToken?.() ?? "";
+    try {
+      const clipboard = deps.clipboard ?? navigator.clipboard;
+      await clipboard.writeText(appleHealthShortcutRecipe(origin, token));
+      recipeCopy.textContent = "Build sheet copied";
+    } catch {
+      recipeCopy.textContent = "Copy failed";
+    }
+    (deps.setTimeout ?? setTimeout)(() => { recipeCopy.textContent = "Copy build sheet"; }, 2000);
+  });
 }
 
 function renderSettingsAutomation(deps: ClientSettingsSourcesAutomationControllerDeps): void {
@@ -114,6 +151,7 @@ function renderSettingsAutomation(deps: ClientSettingsSourcesAutomationControlle
   }
 
 const CAIRN_SETTINGS_SOURCES_AUTOMATION_CONTROLLER = {
+  appleHealthShortcutRecipe,
   renderSources: renderSettingsSources,
   renderAutomation: renderSettingsAutomation,
 };

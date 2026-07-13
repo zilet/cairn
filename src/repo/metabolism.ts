@@ -1,5 +1,15 @@
 import { db } from "../db.js";
-import { extractMeasuredRmr, type MeasuredRmrReading } from "./metabolism-core.js";
+import {
+  assessMeasuredRmr,
+  extractMeasuredRmr,
+  type MeasuredRmrAssessment,
+  type MeasuredRmrReading,
+} from "./metabolism-core.js";
+
+export function measuredRmrAssessment(referenceDate: string): MeasuredRmrAssessment | null {
+  const reading = latestMeasuredRmr();
+  return reading ? assessMeasuredRmr(reading, referenceDate) : null;
+}
 
 export function latestMeasuredRmr(): MeasuredRmrReading | null {
   const profile = db
@@ -44,19 +54,4 @@ export function syncMeasuredRmrFromHealthDocs(): MeasuredRmrReading | null {
       WHERE id = 1`
   ).run(reading.kcal, reading.date, reading.source);
   return reading;
-}
-
-export function measuredRmrActivityTdee(days = 21): { tdee: number; active_calories: number; days: number } | null {
-  const rmr = latestMeasuredRmr();
-  if (!rmr) return null;
-  const rows = db
-    .prepare(
-      `SELECT active_calories FROM garmin_daily_metrics
-        WHERE date >= date('now', ?) AND active_calories IS NOT NULL AND active_calories >= 0`
-    )
-    .all(`-${Math.max(1, Math.trunc(days) - 1)} day`) as any[];
-  const values = rows.map((row) => Number(row.active_calories)).filter(Number.isFinite);
-  if (values.length < 7) return null;
-  const active = Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
-  return { tdee: rmr.kcal + active, active_calories: active, days: values.length };
 }

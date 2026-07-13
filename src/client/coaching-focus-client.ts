@@ -96,7 +96,7 @@ function coachingFocusCardHtml(
     // (draft_pending) — or under lead mode where the coach set it up itself — the
     // button gives way to a review LINK: state, not a repeatable ask. The link is
     // pure navigation via data-cfocus-go, so it renders in every posture.
-    if (lead.domain === "recovery" && !lead.recovery_active) {
+    if (lead.domain === "recovery" && !lead.recovery_active && !lead.day_posture) {
       // recovery_active renders NOTHING — the week is running, the lead is a
       // confirmation, and re-offering the draft would be the same ask twice.
       // role="link" so the keydown navigator resolves the BUTTON's target

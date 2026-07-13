@@ -283,6 +283,7 @@ test("MCP modular tool sources are discovered without duplicate names", () => {
   const systemTools = read("src/surfaces/mcp/system.ts");
   const trainingLogTools = read("src/surfaces/mcp/training-log.ts");
   const trainingStatusTools = read("src/surfaces/mcp/training-status.ts");
+  const bodyMetricsTools = read("src/surfaces/mcp/body-metrics.ts");
   const genDocs = read("scripts/gen-docs.mjs");
   const parity = read("test/surfaceParity.test.js");
   const mcpSources = [
@@ -304,6 +305,7 @@ test("MCP modular tool sources are discovered without duplicate names", () => {
     systemTools,
     trainingLogTools,
     trainingStatusTools,
+    bodyMetricsTools,
   ];
   const tools = mcpSources.flatMap((src) => stringMatches(src, /server\.tool\(\s*"([a-z0-9_]+)"/g));
 
@@ -324,6 +326,7 @@ test("MCP modular tool sources are discovered without duplicate names", () => {
   assert.match(mcp, /registerProgramTools\(server\)/);
   assert.match(mcp, /registerTrainingLogTools\(server\)/);
   assert.match(mcp, /registerTrainingStatusTools\(server\)/);
+  assert.match(mcp, /registerBodyMetricsTools\(server\)/);
   assert.match(genDocs, /src\/surfaces\/mcp\/chat\.ts/);
   assert.match(parity, /src\/surfaces\/mcp\/chat\.ts/);
   assert.match(genDocs, /src\/surfaces\/mcp\/connected-brain\.ts/);
@@ -358,7 +361,9 @@ test("MCP modular tool sources are discovered without duplicate names", () => {
   assert.match(parity, /src\/surfaces\/mcp\/training-log\.ts/);
   assert.match(genDocs, /src\/surfaces\/mcp\/training-status\.ts/);
   assert.match(parity, /src\/surfaces\/mcp\/training-status\.ts/);
-  assert.equal(tools.length, 202, "tool count changes only for reviewed MCP additions");
+  assert.match(genDocs, /src\/surfaces\/mcp\/body-metrics\.ts/);
+  assert.match(parity, /src\/surfaces\/mcp\/body-metrics\.ts/);
+  assert.equal(tools.length, 208, "tool count changes only for reviewed MCP additions");
   assert.equal(new Set(tools).size, tools.length, "MCP tool names must be unique across modules");
   assert.doesNotMatch(mcp, /server\.tool\(/, "src/mcp.ts should stay a registry, not a tool-definition file");
   assert.doesNotMatch(mcp, /server\.tool\("get_chat_history"/);
@@ -3975,7 +3980,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todaySessionSuggestControllerSource, /CairnTodaySessionSuggestController/);
   assert.match(todaySessionStatusSource, /type ClientTrainingSession = import\("\.\.\/contracts\/client-api\.js"\)\.ClientTrainingSession/);
   assert.match(todaySessionStatusSource, /function todaySetsTonnage\(sets: unknown\): number/);
-  assert.match(todaySessionStatusSource, /function todaySessionDoneCardHtml\(session: SessionLike/);
+  assert.match(todaySessionStatusSource, /function todaySessionDoneCardHtml\(\s*session: SessionLike/);
   assert.match(todaySessionStatusSource, /function todayFeedbackFormHtml\(session: SessionLike/);
   assert.match(todaySessionStatusSource, /CairnTodaySessionStatus/);
   assert.match(todaySessionFeedbackSource, /type TodaySessionFeedbackDeps = \{/);

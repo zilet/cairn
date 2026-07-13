@@ -4,7 +4,7 @@
 (() => {
   const AGENT_LOGIN_STATUS: Record<AgentLoginStatusKey, string> = {
     connecting: "Connecting\u2026",
-    ready: "Connected \u2014 follow the prompts below.",
+    ready: "Terminal ready \u2014 follow the prompts below.",
     terminalLoadError: "Couldn't load the terminal. Reload and try again.",
     connectionOpenError: "Couldn't open the connection.",
     connected: "\u2713 Connected",
@@ -28,9 +28,14 @@
   }
 
   function agentLoginProviderHintHtml(name: string): string {
-    return name.toLowerCase() === "grok"
-      ? `<p class="agent-login-hint">Grok can also authenticate with an API key &mdash; set <code>XAI_API_KEY</code> in the server environment instead of this device login.</p>`
-      : "";
+    const provider = name.toLowerCase();
+    if (provider === "grok") {
+      return `<p class="agent-login-hint">Grok can also authenticate with an API key &mdash; set <code>XAI_API_KEY</code> in the server environment instead of this device login.</p>`;
+    }
+    if (provider === "antigravity") {
+      return `<p class="agent-login-hint">Antigravity has no login-only command yet. Complete Google OAuth; when its full prompt opens, the login is saved and you can press <b>Cancel</b> to return to Cairn.</p>`;
+    }
+    return "";
   }
 
   function agentLoginStatus(key: AgentLoginStatusKey): string {

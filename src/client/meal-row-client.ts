@@ -115,8 +115,15 @@ type MealRowPlannerContext = {
       ? `<div class="mealday-total"><span class="numeral" data-cu="${kcal}">0</span><span class="lbl"> cal${protein ? ` · ${protein}g protein` : ""}</span></div>`
       : "";
     const targetKcal = Number(context.targetKcal) || 0;
+    // The bar's track can't overflow, but the ratio it renders can — capping the
+    // width alone would make a 130%-of-target day look identical to on-target,
+    // erasing the only thing this bar is meant to answer. A distinct over-target
+    // fill (still terracotta, just deeper) keeps that signal without going
+    // alarm-red; the real numbers still live in the adjacent kcal/protein total.
+    const kcalRatio = kcal && targetKcal ? kcal / targetKcal : 0;
+    const overTarget = kcalRatio > 1.05;
     const bar = kcal && targetKcal
-      ? `<div class="mealday-bar"><div class="mealday-bar-fill barfill" style="width:${Math.min(100, Math.round((kcal / targetKcal) * 100))}%"></div></div>`
+      ? `<div class="mealday-bar"><div class="mealday-bar-fill barfill${overTarget ? " over-target" : ""}" style="width:${Math.min(100, Math.round(kcalRatio * 100))}%"></div></div>`
       : "";
     return `<section class="mealday${isToday ? " mealday-today" : ""} reveal" style="${stagger(dayIndex + 2)}" data-mday="${dayIndex}">
       <div class="mealday-head">

@@ -128,6 +128,25 @@ test("getWeeklyStats returns an endurance block with mileage, moving time, longe
   assert.ok(e.pace_trend.this_min_per_km < e.pace_trend.prev_min_per_km);
 });
 
+test("weekly endurance keeps run and MTB volume separate", () => {
+  const monday = (() => {
+    const d = new Date(localDaysAgo(0) + "T00:00:00Z");
+    d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+    return d.toISOString().slice(0, 10);
+  })();
+  seedActivity(monday, { type: "run", duration_min: 50, distance_km: 10 });
+  seedActivity(monday, { type: "mountain_biking", duration_min: 90, distance_km: 30 });
+
+  const e = repo.getWeeklyStats().endurance;
+  assert.equal(e.week_km, 10, "legacy running mileage excludes MTB distance");
+  assert.equal(e.week_moving_min, 50, "legacy running minutes stay run-specific");
+  assert.equal(e.total_moving_min, 140, "cross-training time is preserved without mixing distance");
+  assert.equal(e.by_sport.run.distance_km, 10);
+  assert.equal(e.by_sport.ride.distance_km, 30);
+  assert.deepEqual(e.by_sport.run.sources, ["manual"]);
+  assert.deepEqual(e.provenance, { distance: "activities", load: "garmin_activities" });
+});
+
 test("endurance weekly time-in-zone rolls up from synced Garmin activities", () => {
   // Need a garmin_source row to satisfy the NOT NULL source_id FK.
   const src = db.prepare(`INSERT INTO garmin_sources (provider, label) VALUES ('garmin','test')`).run();
@@ -324,6 +343,30 @@ test("Garmin activity-level VO2max feeds recovery markers when daily maxmet is a
 
   const recovery = repo.getRecoverySummary(120);
   assert.equal(recovery.recovery.vo2max, 42, "recovery summary also exposes activity-level VO2max");
+  assert.equal(recovery.quality.vo2max.source, "garmin_activity");
+  assert.equal(recovery.quality.vo2max.latest_date, date);
+  assert.equal(recovery.quality.vo2max.freshness, "stale");
+  assert.deepEqual(recovery.provenance.vo2max, {
+    source: "garmin_activity",
+    sources: ["garmin_activity"],
+    latest_date: date,
+    freshness: "stale",
+  });
+});
+
+test("strength activities never make the Endurance week non-empty", () => {
+  const src = db.prepare(`INSERT INTO garmin_sources (provider, label) VALUES ('garmin','strength-only')`).run();
+  db.prepare(
+    `INSERT INTO garmin_activities
+       (source_id, external_id, date, type, name, duration_min, training_load)
+     VALUES (?, 'strength-only-1', ?, 'strength_training', 'Gym', 50, 95)`
+  ).run(src.lastInsertRowid, localDaysAgo(1));
+  seedActivity(localDaysAgo(1), { type: "strength_training", duration_min: 50 });
+
+  const endurance = repo.getWeeklyStats().endurance;
+  assert.deepEqual(endurance.by_sport, {});
+  assert.equal(endurance.total_sessions, 0);
+  assert.equal(endurance.total_moving_min, 0);
 });
 
 // ---------- GOLDEN: endurance markers never leak a 0-100 grade / impact_score ----------
@@ -453,9 +496,16 @@ test("getCardioForDate: returns the day's cardio with distance; excludes strengt
 test("addActivity: a Garmin run retires a manual same-day same-modality run (no double count)", () => {
   resetTables("activities");
   // Athlete logs the run by hand in the morning (no source/external_id).
-  repo.addActivity({ date: "2026-03-15", type: "run", distance_km: 8, source: null });
+  repo.addActivity({ date: "2026-03-15", type: "run", duration_min: 40, distance_km: 8, source: null });
   // Garmin later syncs the SAME run (source 'garmin' + external_id, richer row).
-  repo.addActivity({ date: "2026-03-15", type: "running", distance_km: 8.2, source: "garmin", external_id: "g-123" });
+  repo.addActivity({
+    date: "2026-03-15",
+    type: "running",
+    duration_min: 41,
+    distance_km: 8.2,
+    source: "garmin",
+    external_id: "g-123",
+  });
 
   const rows = db.prepare(`SELECT * FROM activities WHERE date = '2026-03-15'`).all();
   assert.equal(rows.length, 1, "the manual duplicate was retired — only one run remains");
@@ -475,9 +525,97 @@ test("addActivity: a Garmin run does NOT touch a different-modality same-day act
 // fold to "ride" (a closing \b wrongly failed on them, so a cycling dup never merged).
 test("addActivity: Garmin 'indoor_cycling' dedups a manual 'cycling' (leading-boundary fold)", () => {
   resetTables("activities");
-  repo.addActivity({ date: "2026-03-17", type: "cycling", distance_km: 30, source: null });
-  repo.addActivity({ date: "2026-03-17", type: "indoor_cycling", distance_km: 31, source: "garmin", external_id: "g-789" });
+  repo.addActivity({ date: "2026-03-17", type: "cycling", duration_min: 60, distance_km: 30, source: null });
+  repo.addActivity({
+    date: "2026-03-17",
+    type: "indoor_cycling",
+    duration_min: 61,
+    distance_km: 31,
+    source: "garmin",
+    external_id: "g-789",
+  });
   const rows = db.prepare(`SELECT * FROM activities WHERE date = '2026-03-17'`).all();
   assert.equal(rows.length, 1, "cycling variants fold to one ride — the manual dup was retired");
   assert.equal(rows[0].source, "garmin");
+});
+
+test("addActivity: a distance-only Garmin sync never retires a manual effort", () => {
+  resetTables("activities");
+  repo.addActivity({ date: "2026-03-17", type: "run", duration_min: 75, distance_km: 8, source: null });
+  repo.addActivity({
+    date: "2026-03-17",
+    type: "running",
+    distance_km: 8,
+    source: "garmin",
+    external_id: "g-distance-only",
+  });
+
+  const rows = db.prepare(`SELECT * FROM activities WHERE date = '2026-03-17' ORDER BY id`).all();
+  assert.equal(rows.length, 2, "one matching field is insufficient evidence to erase manual work");
+  assert.equal(rows.filter((row) => row.source == null).length, 1);
+  assert.equal(rows.filter((row) => row.source === "garmin").length, 1);
+});
+
+test("addActivity: one Garmin run retires only its best manual match", () => {
+  resetTables("activities");
+  repo.addActivity({ date: "2026-03-18", type: "run", duration_min: 30, distance_km: 5, source: null });
+  repo.addActivity({ date: "2026-03-18", type: "run", duration_min: 61, distance_km: 10, source: null });
+  repo.addActivity({
+    date: "2026-03-18",
+    type: "running",
+    duration_min: 31,
+    distance_km: 5.1,
+    source: "garmin",
+    external_id: "g-best-match",
+  });
+
+  const rows = db.prepare(`SELECT * FROM activities WHERE date = '2026-03-18' ORDER BY id`).all();
+  assert.equal(rows.length, 2);
+  assert.equal(rows.filter((row) => row.source === "garmin").length, 1);
+  const manual = rows.find((row) => row.source == null);
+  assert.equal(manual.duration_min, 61, "the distinct second run survives");
+  assert.equal(manual.distance_km, 10);
+});
+
+test("addActivity: ambiguous sparse same-day runs survive Garmin insertion", () => {
+  resetTables("activities");
+  repo.addActivity({ date: "2026-03-19", type: "run", distance_km: 5, source: null });
+  repo.addActivity({ date: "2026-03-19", type: "run", distance_km: 5.2, source: null });
+  repo.addActivity({ date: "2026-03-19", type: "run", source: null });
+  repo.addActivity({
+    date: "2026-03-19",
+    type: "running",
+    distance_km: 5.1,
+    source: "garmin",
+    external_id: "g-ambiguous",
+  });
+
+  const rows = db.prepare(`SELECT * FROM activities WHERE date = '2026-03-19'`).all();
+  assert.equal(rows.length, 4, "ambiguous one-field matches and a fully sparse effort all survive");
+  assert.equal(rows.filter((row) => row.source == null).length, 3);
+});
+
+test("Garmin re-sync stays idempotent without erasing unrelated same-day work", () => {
+  resetTables("activities", "garmin_activities", "garmin_sources");
+  repo.addActivity({ date: "2026-03-20", type: "run", duration_min: 30, distance_km: 5, source: null });
+  repo.addActivity({ date: "2026-03-20", type: "run", duration_min: 75, distance_km: 12, source: null });
+  const input = {
+    external_id: "g-repeat",
+    date: "2026-03-20",
+    type: "running",
+    duration_min: 31,
+    distance_km: 5.1,
+  };
+  const first = repo.upsertGarminActivity(input);
+  const second = repo.upsertGarminActivity(input);
+
+  assert.equal(second.activity_id, first.activity_id);
+  const rows = db.prepare(`SELECT * FROM activities WHERE date = '2026-03-20' ORDER BY id`).all();
+  assert.equal(rows.length, 2, "one Garmin mirror plus the unrelated manual run survive repeated sync");
+  assert.equal(rows.filter((row) => row.source === "garmin" && row.external_id === "g-repeat").length, 1);
+  assert.equal(rows.find((row) => row.source == null)?.distance_km, 12);
+  assert.equal(
+    db.prepare(`SELECT COUNT(*) AS n FROM garmin_activities WHERE external_id = 'g-repeat'`).get().n,
+    1
+  );
 });

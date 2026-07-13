@@ -6,21 +6,27 @@ import {
   revertDecision,
 } from "../dist/domain/brain/autonomy-service.js";
 import * as repo from "../dist/repo.js";
+import { db } from "./_seed.js";
 
 function week(summary, kcal = 2200) {
   return {
     summary,
     daily_kcal: kcal,
     daily_protein_g: 175,
-    days: [
-      {
-        day: "Mon",
-        meals: [
-          { name: `${summary} breakfast`, items: "eggs and oats", kcal: 600, protein_g: 42, carbs_g: 65, fat_g: 18 },
-          { name: `${summary} dinner`, items: "salmon and potatoes", kcal: 800, protein_g: 58, carbs_g: 80, fat_g: 24 },
-        ],
-      },
-    ],
+    days: Array.from({ length: 7 }, (_, index) => ({
+      day: `Day ${index + 1}`,
+      meals: [
+        { name: `${summary} breakfast`, items: "eggs and oats", kcal: 800, protein_g: 70, carbs_g: 65, fat_g: 18 },
+        {
+          name: `${summary} dinner`,
+          items: "salmon and potatoes",
+          kcal: kcal - 800,
+          protein_g: 105,
+          carbs_g: 80,
+          fat_g: 24,
+        },
+      ],
+    })),
   };
 }
 
@@ -83,6 +89,24 @@ test("review-everything keeps a meal plan as a plain draft", () => {
   assert.equal(result.tier, "ask");
   assert.equal(repo.getMealPlan(plan.id).status, "draft");
   assert.equal(repo.getMealPlan(plan.id).autonomy, null);
+});
+
+test("autonomy refuses a legacy unsafe complete week before announcing it", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  const unsafe = week("Unsafe", 2300);
+  unsafe.days = unsafe.days.map((day) => ({
+    ...day,
+    meals: [{ name: "Tiny dinner", kcal: 900, protein_g: 60 }],
+  }));
+  const inserted = db
+    .prepare(`INSERT INTO meal_plans (week_of, agent, raw_output, parsed_json) VALUES (date('now'), 'legacy', '', ?) `)
+    .run(JSON.stringify(unsafe));
+
+  const result = applyMealPlanWithAutonomy(Number(inserted.lastInsertRowid));
+  assert.equal(result.ok, false);
+  assert.equal(result.applied, false);
+  assert.match(result.error, /Day 1 totals 900 kcal and 60 g protein/);
+  assert.equal(repo.getMealPlan(Number(inserted.lastInsertRowid)).autonomy, null, "no announcement was recorded");
 });
 
 test("bounded meal-plan history always carries the canonical current plan", () => {

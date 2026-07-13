@@ -3,6 +3,85 @@
 
 const ABSOLUTE_KCAL_FLOOR = 1500;
 
+// A weekly plan is an actionable prescription, so its headline target must be
+// true in the meals themselves. Ten percent accommodates ordinary recipe and
+// portion rounding without allowing a target to launder a materially underfed
+// day. The absolute allowances keep small protein targets / round kcal labels
+// from failing over single-digit noise. Both bounds are symmetric: large
+// overages are also a mismatch that should be re-drafted, not hidden by metadata.
+export const MEAL_PLAN_KCAL_TOLERANCE_FRACTION = 0.1;
+export const MEAL_PLAN_PROTEIN_TOLERANCE_FRACTION = 0.1;
+const MEAL_PLAN_MIN_KCAL_TOLERANCE = 100;
+const MEAL_PLAN_MIN_PROTEIN_TOLERANCE = 10;
+
+export interface MealPlanAdequacyDay {
+  day: string;
+  kcal: number;
+  protein_g: number;
+}
+
+export type MealPlanAdequacy =
+  | { ok: true; checked: boolean; days: MealPlanAdequacyDay[] }
+  | { ok: false; checked: true; error: string; days: MealPlanAdequacyDay[] };
+
+function plannedDayTotals(parsed: any): MealPlanAdequacyDay[] {
+  return (Array.isArray(parsed?.days) ? parsed.days : []).map((day: any, index: number) => {
+    const meals = Array.isArray(day?.meals) ? day.meals : [];
+    return {
+      day:
+        String(day?.day ?? "")
+          .trim()
+          .slice(0, 40) || `Day ${index + 1}`,
+      kcal: Math.round(meals.reduce((sum: number, meal: any) => sum + (Number(meal?.kcal) || 0), 0)),
+      protein_g: Math.round(meals.reduce((sum: number, meal: any) => sum + (Number(meal?.protein_g) || 0), 0)),
+    };
+  });
+}
+
+/**
+ * Validate a complete weekly plan against its canonical headline targets.
+ *
+ * Partial historical/manual artifacts are left readable for backward
+ * compatibility; the agent contract always requires 5-7 days, so every new
+ * agent-produced weekly plan is checked before it can persist or enter autonomy.
+ */
+export function assessMealPlanAdequacy(parsed: any): MealPlanAdequacy {
+  const days = plannedDayTotals(parsed);
+  if (days.length < 5 || days.length > 7) return { ok: true, checked: false, days };
+
+  const targetKcal = Number(parsed?.daily_kcal);
+  const targetProtein = Number(parsed?.daily_protein_g);
+  if (!Number.isFinite(targetKcal) || targetKcal <= 0 || !Number.isFinite(targetProtein) || targetProtein <= 0) {
+    return {
+      ok: false,
+      checked: true,
+      error: "Meal plan rejected: complete weeks require positive daily calorie and protein targets.",
+      days,
+    };
+  }
+
+  const kcalTolerance = Math.max(
+    MEAL_PLAN_MIN_KCAL_TOLERANCE,
+    Math.round(targetKcal * MEAL_PLAN_KCAL_TOLERANCE_FRACTION)
+  );
+  const proteinTolerance = Math.max(
+    MEAL_PLAN_MIN_PROTEIN_TOLERANCE,
+    Math.round(targetProtein * MEAL_PLAN_PROTEIN_TOLERANCE_FRACTION)
+  );
+  const mismatch = days.find(
+    (day) =>
+      Math.abs(day.kcal - targetKcal) > kcalTolerance || Math.abs(day.protein_g - targetProtein) > proteinTolerance
+  );
+  if (!mismatch) return { ok: true, checked: true, days };
+
+  return {
+    ok: false,
+    checked: true,
+    error: `Meal plan rejected: ${mismatch.day} totals ${mismatch.kcal} kcal and ${mismatch.protein_g} g protein, outside the daily target tolerance around ${Math.round(targetKcal)} kcal and ${Math.round(targetProtein)} g protein.`,
+    days,
+  };
+}
+
 export function clampNutritionFloors<T extends Record<string, any>>(
   value: T,
   keys: { kcal: string; protein: string },

@@ -2,8 +2,10 @@
 // Pure Health Read rail renderers for recovery and priority markers.
 
 type HealthReadRecovery = {
+  days?: unknown;
   has_data?: unknown;
   sources?: unknown[];
+  quality?: Record<string, { latest_date?: unknown; freshness?: unknown; sample_count?: unknown; expected_days?: unknown; window_days?: unknown }> | null;
   delta?: { sleep?: unknown; hrv?: unknown; rhr?: unknown } | null;
   recovery?: {
     last_date?: unknown;
@@ -17,8 +19,10 @@ type HealthReadRecovery = {
     avg_body_battery?: unknown;
     avg_respiration?: unknown;
     avg_spo2?: unknown;
+    spo2_avg?: unknown;
     skin_temp_dev_c?: unknown;
     avg_training_readiness?: unknown;
+    training_readiness?: unknown;
     vo2max?: unknown;
     training_status?: unknown;
     avg_steps?: unknown;
@@ -71,6 +75,7 @@ function recoveryLineHtml(text: unknown, sub: unknown): string {
 function recoveryHtml(summary: HealthReadRecovery | null | undefined): string {
   const recovery = summary?.recovery || {};
   const delta = summary?.delta && typeof summary.delta === "object" ? summary.delta : {};
+  const quality = summary?.quality && typeof summary.quality === "object" ? summary.quality : {};
   // The recent-week-vs-30-day-norm delta, phrased as quiet progress against the
   // athlete's OWN baseline; small drift stays silent.
   const vsNorm = (value: unknown, floor: number, unit: string): string => {
@@ -133,13 +138,23 @@ function recoveryHtml(summary: HealthReadRecovery | null | undefined): string {
   }
 
   const respiration = Number(recovery.avg_respiration);
-  const spo2 = Number(recovery.avg_spo2);
+  const currentSpo2 = Number(recovery.spo2_avg);
+  const averageSpo2 = Number(recovery.avg_spo2);
+  const spo2 = Number.isFinite(currentSpo2) && currentSpo2 > 0 ? currentSpo2 : averageSpo2;
   if ((Number.isFinite(respiration) && respiration > 0) || (Number.isFinite(spo2) && spo2 > 0)) {
+    const spo2Quality = quality.spo2_avg || {};
+    const samples = Number(spo2Quality.sample_count);
+    const expected = Number(spo2Quality.expected_days ?? spo2Quality.window_days);
+    const sparse = Number.isFinite(samples) && Number.isFinite(expected) && expected > 0 && samples < Math.max(2, expected / 2);
     const sub = [
       Number.isFinite(respiration) && respiration > 0 ? `~${Math.round(respiration)}/min` : null,
-      Number.isFinite(spo2) && spo2 > 0 ? `SpO₂ ${Math.round(spo2)}%` : null,
+      Number.isFinite(currentSpo2) && currentSpo2 > 0 ? `latest SpO₂ ${Math.round(currentSpo2)}%` : null,
+      Number.isFinite(averageSpo2) && averageSpo2 > 0 ? `window avg ${Math.round(averageSpo2)}%` : null,
+      sparse ? `${Math.round(samples)} of ${Math.round(expected)} days — sparse` : null,
     ].filter(Boolean).join(" · ");
-    const phrase = Number.isFinite(spo2) && spo2 > 0 && spo2 < 93 ? "Blood oxygen ran low overnight" : "Breathing steady overnight";
+    const phrase = Number.isFinite(spo2) && spo2 > 0 && spo2 < 93
+      ? sparse ? "One sparse blood oxygen sample ran low" : "Blood oxygen has run low"
+      : sparse ? "A few breathing samples are in" : "Breathing trend steady";
     lines.push(recoveryLineHtml(phrase, sub));
   }
 
@@ -148,14 +163,24 @@ function recoveryHtml(summary: HealthReadRecovery | null | undefined): string {
     lines.push(recoveryLineHtml(skinTemp > 0 ? "Skin temp ran warm overnight" : "Skin temp ran cool overnight", `${skinTemp > 0 ? "+" : ""}${skinTemp}°C vs baseline`));
   }
 
-  const trainingReadiness = Number(recovery.avg_training_readiness);
-  if (Number.isFinite(trainingReadiness) && trainingReadiness > 0) {
+  const currentReadiness = Number(recovery.training_readiness);
+  const averageReadiness = Number(recovery.avg_training_readiness);
+  const hasCurrentReadiness = recovery.training_readiness != null && Number.isFinite(currentReadiness);
+  const trainingReadiness = hasCurrentReadiness ? currentReadiness : averageReadiness;
+  if (Number.isFinite(trainingReadiness) && trainingReadiness >= 0) {
+    const readinessQuality = quality.training_readiness || {};
     const phrase =
       trainingReadiness >= 75 ? "Primed to train" :
       trainingReadiness >= 50 ? "Ready for a normal day" :
       trainingReadiness >= 25 ? "Ease in — recovery's partial" :
       "Body's asking for a lighter day";
-    lines.push(recoveryLineHtml(phrase, ""));
+    const sub = [
+      hasCurrentReadiness
+        ? `current ${Math.round(currentReadiness)}${readinessQuality.freshness ? ` · ${String(readinessQuality.freshness)}` : ""}`
+        : null,
+      Number.isFinite(averageReadiness) && averageReadiness > 0 ? `window avg ${Math.round(averageReadiness)}` : null,
+    ].filter(Boolean).join(" · ");
+    lines.push(recoveryLineHtml(phrase, sub));
   }
 
   const vo2max = Number(recovery.vo2max);
@@ -187,7 +212,7 @@ function recoveryHtml(summary: HealthReadRecovery | null | undefined): string {
   }
 
   const sourceLabel = (Array.isArray(summary?.sources) ? summary.sources : [])
-    .map((source) => source === "garmin" ? "Garmin" : source === "apple" ? "Apple Health" : source)
+    .map((source) => source === "garmin" ? "Garmin" : source === "apple" || source === "apple_health" ? "Apple Health" : source)
     .filter(Boolean)
     .join(" · ");
   // Date the read honestly: say when data last arrived, and if the wearable has
@@ -200,8 +225,10 @@ function recoveryHtml(summary: HealthReadRecovery | null | undefined): string {
   const lastLine = lastDate
     ? `<p class="hb-rlast${stale ? " hb-rlast-stale" : ""}" title="${escAttr(absDate(lastDate))}">Last logged ${escHtml(relAge(lastDate))}${stale ? " — this read reflects your last synced stretch, not today" : ""}</p>`
     : "";
+  const windowDays = Number(summary?.days);
+  const windowLabel = Number.isFinite(windowDays) && windowDays > 0 ? `${Math.round(windowDays)} days` : "2 weeks";
   return `<div class="hb-recovery reveal" style="${stagger(0)}">
-    <div class="hb-rtop"><span class="lbl">Recovery · last 2 weeks</span>${sourceLabel ? `<span class="hb-rsrc">${escHtml(sourceLabel)}</span>` : ""}</div>
+    <div class="hb-rtop"><span class="lbl">Recovery · last ${windowLabel}</span>${sourceLabel ? `<span class="hb-rsrc">${escHtml(sourceLabel)}</span>` : ""}</div>
     ${lastLine}
     <div class="hb-rlist">${lines.join("")}</div>
   </div>`;

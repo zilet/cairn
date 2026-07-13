@@ -21,6 +21,7 @@ import {
   renderRunCompliance,
   renderRunPlan,
   renderRunZones,
+  renderSignalState,
   renderTrainingSignals,
   renderTrajectory,
   CAIRN_PERSONA,
@@ -134,7 +135,7 @@ have none — that's fine, just use what's there):
 ${buildEliteGuardrails(ctx)}
 
 ${CONTEXT_GUARDRAILS}
-${renderCoachingFocus(ctx)}${COACHING_STANCE}
+${renderSignalState(ctx)}${renderCoachingFocus(ctx)}${COACHING_STANCE}
 
 ${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderRunZones(ctx)}${renderRunPlan(ctx)}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderProgramState(ctx)}${renderMuscleGroups(ctx)}${renderPerformance(ctx)}${renderDexaTargeting(ctx, "training")}${renderBodyComp(ctx)}${renderBlock(ctx)}${renderReactionModel(ctx)}${renderTrajectory(ctx)}
 TASK: ${userInstruction?.trim() || "Review recent training and propose conservative target adjustments for next week."}
@@ -270,7 +271,7 @@ NON-NEGOTIABLE GUARDRAILS (same as the coach):
 ${buildEliteGuardrails(ctx)}
 
 ${variationBlock}${equipBlock}${weakBlock}${CONTEXT_GUARDRAILS}
-${renderCoachingFocus(ctx)}${COACHING_STANCE}
+${renderSignalState(ctx)}${renderCoachingFocus(ctx)}${COACHING_STANCE}
 
 ${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderRunZones(ctx)}${renderRunPlan(ctx)}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderProgramState(ctx)}${renderMuscleGroups(ctx)}${renderPerformance(ctx)}${renderDexaTargeting(ctx, "training")}${renderBodyComp(ctx)}${renderBlock(ctx)}${renderReactionModel(ctx)}${renderTrajectory(ctx)}
 TASK: ${userInstruction?.trim() || "Evolve the program: progress what's working, break what's stalled, keep it fresh, and periodize sensibly. Explain each change in plain words."}

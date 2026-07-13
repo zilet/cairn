@@ -30,6 +30,7 @@ function makeTodayDependencies(input: ClientTodayDependenciesContextInput): Clie
         cardioPrescription: input.cardioPrescription,
         rxMoveCount: input.rxMoveCount,
         setsTonnage: input.setsTonnage,
+        lastSetLineText: (lastSet: unknown) => CairnTodaySessionSetModel.lastSetLineText(lastSet, { fmtDur: input.fmtDur }),
       };
     },
 

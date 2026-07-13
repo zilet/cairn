@@ -32,6 +32,7 @@ test("resolveLoginArgv returns the server-chosen login argv per agent", () => {
   assert.deepEqual(resolveLoginArgv("grok"), ["grok", "login", "--device-auth"]);
   // antigravity logs in via the bare interactive CLI (login: []).
   assert.deepEqual(resolveLoginArgv("antigravity"), ["agy"]);
+  assert.deepEqual(loadAgents().antigravity.status_check, ["models"], "models reports an explicit signed-out message");
 });
 
 test("resolveLoginArgv REJECTS an unknown agent (allowlist gate)", () => {
@@ -54,10 +55,10 @@ test("ptyInvocationFor builds EVERY platform's PTY wrapper from any host OS", ()
   // assert all three shapes in one run regardless of the host.
   const argv = ["claude", "auth", "login"];
 
-  // Linux / Docker: util-linux `script -qfc "<shell-quoted cmd>" /dev/null`.
+  // Linux / Docker: initialize the piped PTY to a usable 80x24 before exec.
   const linux = ptyInvocationFor("linux", argv);
   assert.equal(linux.command, "script");
-  assert.deepEqual(linux.args, ["-qfc", "'claude' 'auth' 'login'", "/dev/null"]);
+  assert.deepEqual(linux.args, ["-qfc", "stty cols 80 rows 24; exec 'claude' 'auth' 'login'", "/dev/null"]);
 
   // macOS: python3 pty.spawn with the argv JSON-encoded into a Python list literal.
   const mac = ptyInvocationFor("darwin", argv);
@@ -74,7 +75,7 @@ test("ptyInvocationFor shell-quotes a token with a space/quote/metachar (Linux i
   // when wrapped by `script -qfc "<cmd>"` (run via /bin/sh) — never word-split or inject.
   const inv = ptyInvocationFor("linux", ["my agent", "log'in", "; rm -rf /"]);
   assert.equal(inv.command, "script");
-  assert.deepEqual(inv.args, ["-qfc", "'my agent' 'log'\\''in' '; rm -rf /'", "/dev/null"]);
+  assert.deepEqual(inv.args, ["-qfc", "stty cols 80 rows 24; exec 'my agent' 'log'\\''in' '; rm -rf /'", "/dev/null"]);
 });
 
 test("buildPtyInvocation wraps the login argv in a real PTY (no native module)", () => {
@@ -86,7 +87,7 @@ test("buildPtyInvocation wraps the login argv in a real PTY (no native module)",
     // shell-quoted (the command runs via /bin/sh -c) so a future agents.json entry
     // with a space/metachar can't word-split or inject.
     assert.equal(inv.command, "script");
-    assert.deepEqual(inv.args, ["-qfc", "'claude' 'auth' 'login'", "/dev/null"]);
+    assert.deepEqual(inv.args, ["-qfc", "stty cols 80 rows 24; exec 'claude' 'auth' 'login'", "/dev/null"]);
   } else if (process.platform === "darwin") {
     // python3 pty.spawn — BSD `script` can't PTY with piped stdio.
     assert.equal(inv.command, "python3");

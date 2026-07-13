@@ -147,8 +147,24 @@ test("progress energy helper renders the hero and reviewed check-in card", () =>
   assert.match(html.heroHtml, /Energy Balance/);
   assert.match(html.heroHtml, /est\. expenditure/);
   assert.match(html.cardHtml, /How you're tracking/);
-  assert.match(html.cardHtml, /well-established · 21 days of data · 21-day window/);
+  assert.match(html.cardHtml, /well-established · 21 outcome days · 21-day window/);
   assert.match(html.cardHtml, /Run a check-in/);
+});
+
+test("progress energy presents a prior-backed starting estimate honestly", () => {
+  const energy = loadEnergy();
+  const html = energy.energyBodyHtml({
+    tdee: 2450,
+    confidence: "none",
+    tdee_basis: "profile_seed",
+    basis: "Starting estimate from the profile and activity setting.",
+    points: 0,
+    window_days: 21,
+  });
+  assert.match(html.heroHtml, /2450/);
+  assert.match(html.cardHtml, /Starting around 2,450 kcal\/day/);
+  assert.match(html.cardHtml, /Starting estimate from the profile and activity setting/);
+  assert.match(html.cardHtml, /starting estimate · 21-day window/);
 });
 
 test("progress energy helper renders check-in states safely", () => {

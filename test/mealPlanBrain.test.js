@@ -4,7 +4,7 @@
 // the swap/recipe prompts so a disliked food never gets reintroduced.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { repo, resetTables, localDaysAgo } from "./_seed.js";
+import { completeMealWeek, repo, resetTables, localDaysAgo } from "./_seed.js";
 import { buildMealSwapPrompt } from "../dist/prompt.js";
 
 const ABBR = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -15,7 +15,7 @@ beforeEach(() => resetTables("meal_plans", "memory", "health_directives", "bodyw
 function seedPlan(extraParsed = {}) {
   const today = localDaysAgo(0);
   const tomorrow = localDaysAgo(-1);
-  return repo.createMealPlan("stub", "", {
+  return repo.createMealPlan("stub", "", completeMealWeek({
     daily_kcal: 2400,
     daily_protein_g: 180,
     days: [
@@ -23,7 +23,7 @@ function seedPlan(extraParsed = {}) {
       { day: abbrOf(tomorrow), meals: [{ name: "Steak & potatoes", kcal: 700, protein_g: 50 }] },
     ],
     ...extraParsed,
-  });
+  }));
 }
 
 test("mealPlanForCoach exposes today's + tomorrow's meals and the daily targets", () => {

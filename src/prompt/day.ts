@@ -22,6 +22,7 @@ import {
   renderRunCompliance,
   renderRunPlan,
   renderRunZones,
+  renderSignalState,
   renderTodayFuel,
   renderTrainingSignals,
   renderTrajectory,
@@ -52,14 +53,39 @@ function trainingRhythmLine(allSessions: any[], date?: string): string {
   const last = trained[0] || sessions[0];
   const since = ageDays(last?.date);
   const within = (days: number) =>
-    sessions.filter((s) => { const a = ageDays(s?.date); return a != null && a >= 0 && a < days; }).length;
+    sessions.filter((s) => {
+      const a = ageDays(s?.date);
+      return a != null && a >= 0 && a < days;
+    }).length;
   const last7 = within(7);
   const last28 = within(28);
-  const recentFocus = [...new Set(sessions.slice(0, 3).map((s) => s?.title || s?.day_name).filter(Boolean))];
-  const jointFlags = [...new Set(sessions.slice(0, 4).map((s) => s?.joint_pain).filter(Boolean))];
+  const recentFocus = [
+    ...new Set(
+      sessions
+        .slice(0, 3)
+        .map((s) => s?.title || s?.day_name)
+        .filter(Boolean)
+    ),
+  ];
+  const jointFlags = [
+    ...new Set(
+      sessions
+        .slice(0, 4)
+        .map((s) => s?.joint_pain)
+        .filter(Boolean)
+    ),
+  ];
   const sore = sessions.slice(0, 3).filter((s) => s?.soreness != null && Number(s.soreness) >= 4).length;
   const bits: string[] = [];
-  bits.push(since == null ? "no dated sessions" : since <= 0 ? "trained today already" : since === 1 ? "last trained yesterday" : `last trained ${since} days ago`);
+  bits.push(
+    since == null
+      ? "no dated sessions"
+      : since <= 0
+        ? "trained today already"
+        : since === 1
+          ? "last trained yesterday"
+          : `last trained ${since} days ago`
+  );
   bits.push(`${last7} session${last7 === 1 ? "" : "s"} in the last 7 days · ${last28} in 28`);
   if (recentFocus.length) bits.push(`recent emphasis: ${recentFocus.join(" → ")}`);
   if (jointFlags.length) bits.push(`flagged joints recently: ${jointFlags.join(", ")}`);
@@ -98,7 +124,8 @@ function debriefFacts(date: string): string {
     if (sets.length) {
       const top = new Map<string, any>();
       for (const s of sets) {
-        const score = s.mode === "timed" ? (Number(s.duration_sec) || 0) : (Number(s.weight) || 0) * 1000 + (Number(s.reps) || 0);
+        const score =
+          s.mode === "timed" ? Number(s.duration_sec) || 0 : (Number(s.weight) || 0) * 1000 + (Number(s.reps) || 0);
         const cur = top.get(s.exercise);
         if (!cur || score > cur._score) top.set(s.exercise, { ...s, _score: score });
       }
@@ -115,10 +142,17 @@ function debriefFacts(date: string): string {
       };
       const lifts = [...top.entries()].slice(0, 8).map(([name, s]) => `${name} ${fmtSet(s)}`);
       const sum: any = repo.sessionSummary?.(sess.id) ?? null;
-      const vol = sum && sum.tonnage > 0 ? ` (${sum.sets} sets · ${Math.round(sum.tonnage).toLocaleString()} lb)` : sum ? ` (${sum.sets} sets)` : "";
+      const vol =
+        sum && sum.tonnage > 0
+          ? ` (${sum.sets} sets · ${Math.round(sum.tonnage).toLocaleString()} lb)`
+          : sum
+            ? ` (${sum.sets} sets)`
+            : "";
       lines.push(`SESSION TODAY${sess.title ? ` — ${sess.title}` : ""}${vol}: ${lifts.join("; ")}.`);
     }
-  } catch { /* no session detail → skip */ }
+  } catch {
+    /* no session detail → skip */
+  }
   // 1b) Today's CARDIO — a synced/logged run or ride, with the physiology that's
   // actually there (distance · moving time · avg HR · pace), so the agent debriefs the
   // REAL effort instead of guessing ("an easy run" when it was a hard one). Plain
@@ -132,9 +166,12 @@ function debriefFacts(date: string): string {
       if (c?.avg_hr != null) bits.push(`avg HR ${Math.round(Number(c.avg_hr))}`);
       if (c?.pace) bits.push(String(c.pace));
       const label = c?.type && c.type !== "other" ? String(c.type) : "cardio";
-      if (bits.length) lines.push(`CARDIO TODAY — ${label}: ${bits.join(" · ")}${c?.source === "garmin" ? " (synced)" : ""}.`);
+      if (bits.length)
+        lines.push(`CARDIO TODAY — ${label}: ${bits.join(" · ")}${c?.source === "garmin" ? " (synced)" : ""}.`);
     }
-  } catch { /* no cardio → skip */ }
+  } catch {
+    /* no cardio → skip */
+  }
   // 2) Forward — the day-ahead (the SAME forwardLook the Brief's forward line uses).
   try {
     const fwd: any = repo.forwardLook(date);
@@ -142,25 +179,32 @@ function debriefFacts(date: string): string {
     if (Array.isArray(fwd?.due) && fwd.due.length) {
       lines.push(`DUE THIS WEEK (under its productive range — a good forward focus): ${fwd.due.join(", ")}.`);
     }
-  } catch { /* no forward look → skip */ }
+  } catch {
+    /* no forward look → skip */
+  }
   // 3) Fuel — only a real protein gap (or a clean "in") is worth a word; never a score.
   try {
     const intake: any = repo.getDayIntake(date);
     if (intake?.target && intake?.remaining) {
       const pr = Math.round(Number(intake.remaining.protein_g));
       if (Number.isFinite(pr)) {
-        if (pr >= 25) lines.push(`FUEL: protein is ~${pr} g short of today's target so far — a brief refuel nudge fits.`);
+        if (pr >= 25)
+          lines.push(`FUEL: protein is ~${pr} g short of today's target so far — a brief refuel nudge fits.`);
         else if (pr <= -10) lines.push(`FUEL: protein target comfortably met today — no nudge needed.`);
         else lines.push(`FUEL: protein is on track today — no nudge needed.`);
       }
     }
-  } catch { /* no nutrition target → no fuel line */ }
-  return lines.length ? `\nDEBRIEF FACTS (deterministic — weave only what's true, drop the rest):\n${lines.map((l) => `- ${l}`).join("\n")}` : "";
+  } catch {
+    /* no nutrition target → no fuel line */
+  }
+  return lines.length
+    ? `\nDEBRIEF FACTS (deterministic — weave only what's true, drop the rest):\n${lines.map((l) => `- ${l}`).join("\n")}`
+    : "";
 }
 
 export function buildDayReadPrompt(ctx?: CoachContext, opts: { override?: string; date?: string } = {}): string {
   const context = ctx ?? repo.getCoachContext();
-  const baseline = repo.dayRead(opts.date);
+  const baseline = repo.dayRead(opts.date, context.recovery, context.signal_state);
   const overrideBlock = opts.override?.trim()
     ? `\nUSER OVERRIDE (honor this — they're steering): "${opts.override.trim()}". Reshape the read accordingly (e.g. "rough night" → lean easy/rest; "short on time" → a compressed session; "I want to train anyway" → a train read even if the baseline leaned rest, kept appropriately light).\n`
     : "";
@@ -170,7 +214,12 @@ export function buildDayReadPrompt(ctx?: CoachContext, opts: { override?: string
   const allSessions = Array.isArray(context?.recent_sessions) ? context.recent_sessions : [];
   const sessions = allSessions.slice(0, 6);
   const sessionLine = sessions.length
-    ? sessions.map((s: any) => { const nm = s?.title || s?.day_name; return `${s?.date ?? "?"}${nm ? ` (${nm})` : ""}`; }).join(", ")
+    ? sessions
+        .map((s: any) => {
+          const nm = s?.title || s?.day_name;
+          return `${s?.date ?? "?"}${nm ? ` (${nm})` : ""}`;
+        })
+        .join(", ")
     : "(no recent sessions logged)";
   const rhythmLine = trainingRhythmLine(allSessions, opts.date);
   // What's already on the board for today — a logged session and/or activities.
@@ -192,26 +241,33 @@ export function buildDayReadPrompt(ctx?: CoachContext, opts: { override?: string
   // Last night's sleep architecture + HRV in plain words (it's inside the signals
   // blob already, but called out so the agent actually voices it when it matters).
   const ln: any = baseline.signals && (baseline.signals as any).last_night;
-  const lastNightLine = ln && ln.text
-    ? `\nLAST NIGHT: ${ln.text}. When it's worth a mention, name last night in plain words — one calm clause in a friend's voice ("you slept well", "a bit light on deep sleep", "HRV's a touch below your norm") — never a number wall or a score, and let how they actually feel override it.`
-    : `\nSLEEP/RECOVERY: no recent sleep or HRV data has synced. Do NOT claim or imply how they slept ("you slept fine", "well-rested", etc.) — you have no sleep signal for last night. Speak only to what the data actually shows (training, recovery trend, the day ahead).`;
+  const lastNightLine =
+    ln && ln.text
+      ? `\nLAST NIGHT: ${ln.text}. When it's worth a mention, name last night in plain words — one calm clause in a friend's voice ("you slept well", "a bit light on deep sleep", "HRV's a touch below your norm") — never a number wall or a score, and let how they actually feel override it.`
+      : `\nSLEEP/RECOVERY: no recent sleep or HRV data has synced. Do NOT claim or imply how they slept ("you slept fine", "well-rested", etc.) — you have no sleep signal for last night. Speak only to what the data actually shows (training, recovery trend, the day ahead).`;
+  const readiness: any = baseline.signals && (baseline.signals as any).fatigue?.readiness;
+  const readinessLine =
+    readiness?.current != null
+      ? `\nREADINESS: current ${Math.round(Number(readiness.current))} (${readiness.current_date || "date unknown"}; ${readiness.freshness || "unknown freshness"})${readiness.window_average != null ? ` vs ${Math.round(Number(readiness.window_average))} window average` : ""}${readiness.sample_count != null && readiness.window_days != null ? ` from ${readiness.sample_count}/${readiness.window_days} days` : ""}. Treat only a FRESH current reading as a today-decision signal; an average or stale/sparse reading is context, never a gate.`
+      : `\nREADINESS: no current readiness reading. A window average, if present in DATA, is context only and must not be described as today's state.`;
   // The user has ALREADY completed a real, loading session today (a deterministic
   // fact). This becomes a post-session DEBRIEF, not a fresh suggestion: acknowledge the
   // specific work, place it in the week, give ONE forward focus, and nudge refuel only
   // if there's a real gap. The facts below are deterministic; the agent writes the prose.
-  const doneBlock = baseline.kind === "done"
-    ? `\nDEBRIEF MODE (a real, loading session is already logged today — this is a post-session debrief, NOT a fresh suggestion):
+  const doneBlock =
+    baseline.kind === "done"
+      ? `\nDEBRIEF MODE (a real, loading session is already logged today — this is a post-session debrief, NOT a fresh suggestion):
 - Do NOT propose more training unless they ask. The day's work is in.
 - "headline": acknowledge the WORK specifically — name what they actually did (a standout lift from SESSION TODAY, or the run/ride from CARDIO TODAY with its real effort) like a friend who watched you train, e.g. "Strong push session." / "Solid 6 km — you pushed that one.". If CARDIO TODAY shows a hard effort (high avg HR), don't call it "easy".
 - "why": for a DONE day you MAY use 2-3 short sentences (the one exception to one-sentence): (1) how today fits the week's rhythm, (2) ONE forward focus — what the next session leans toward / what's DUE, (3) a brief refuel nudge ONLY if FUEL shows a real protein gap. Warm, plain, never a number-wall or a score.
 - Output "kind":"done", "focus":null, "est_minutes":null. DONE is a factual temporal state, not another easy-day recommendation.${debriefFacts(opts.date || context.now?.date || new Date().toISOString().slice(0, 10))}`
-    : "";
+      : "";
   return `${CAIRN_PERSONA}
 
 This is the Brief — today's day-read. Read their WHOLE picture and
 judge what kind of day today should be: a real session, easy movement, or rest. This opens their
 app — it is the first and often only thing they see.
-${renderNow(context)}
+${renderNow(context)}${readinessLine}
 THE CONSTITUTION (binding):
 - It is a SUGGESTION you offer, never a verdict you impose. The user drives; you navigate.
 - Be KIND and never anxious. Rest is wisdom, not failure. A low signal is information, never a
@@ -235,7 +291,7 @@ You MAY disagree with the baseline when the whole picture warrants it — it is 
 RECENT TRAINING (most recent first): ${sessionLine}.
 TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${doneBlock}${lastNightLine}
 ${CONTEXT_GUARDRAILS}
-${renderCoachingFocus(context, { brief: true })}${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderRunZones(context)}${renderRunPlan(context)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderMuscleGroups(context)}${renderPerformance(context, { brief: true })}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${overrideBlock}
+${renderSignalState(context)}${renderCoachingFocus(context, { brief: true })}${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderRunZones(context)}${renderRunPlan(context)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderMuscleGroups(context)}${renderPerformance(context, { brief: true })}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${overrideBlock}
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 ${DAY_READ_SCHEMA}
 
@@ -265,14 +321,23 @@ const SESSION_SUGGEST_SCHEMA = `{
 // user's constraints (a time budget, an injury, available equipment) and the
 // day read, returning a session SUGGESTION for review (you drive — nothing is
 // applied). opts carry the constraints the launchpad chips pass through.
-export function buildSessionPrompt(ctx?: CoachContext, opts: { minutes?: number; equipment?: string; focus?: string; constraints?: string; date?: string } = {}): string {
+export function buildSessionPrompt(
+  ctx?: CoachContext,
+  opts: { minutes?: number; equipment?: string; focus?: string; constraints?: string; date?: string } = {}
+): string {
   const context = ctx ?? repo.getCoachContext();
-  const read = repo.dayRead(opts.date);
+  const read = repo.dayRead(opts.date, context.recovery, context.signal_state);
   const wants: string[] = [];
-  if (opts.minutes) wants.push(`TIME BUDGET: about ${Math.round(opts.minutes)} minutes — fit the whole session in that (drop accessories before compounds).`);
+  if (opts.minutes)
+    wants.push(
+      `TIME BUDGET: about ${Math.round(opts.minutes)} minutes — fit the whole session in that (drop accessories before compounds).`
+    );
   if (opts.focus) wants.push(`FOCUS REQUESTED: ${opts.focus.trim()}.`);
   if (opts.equipment) wants.push(`EQUIPMENT AVAILABLE: ${opts.equipment.trim()} — only program what this allows.`);
-  if (opts.constraints) wants.push(`WHAT THEY SAID (free text — read it like a coach and adapt): "${opts.constraints.trim()}". Honor the spirit: a sore/tired area → de-load or SWAP it for a different pattern / lower-impact option (see the swap menu); "easier" → lighter loads + shorter; "no <equipment>" → only what's available.`);
+  if (opts.constraints)
+    wants.push(
+      `WHAT THEY SAID (free text — read it like a coach and adapt): "${opts.constraints.trim()}". Honor the spirit: a sore/tired area → de-load or SWAP it for a different pattern / lower-impact option (see the swap menu); "easier" → lighter loads + shorter; "no <equipment>" → only what's available.`
+    );
   // When the user asks for something specific (a sore area, a focus, an
   // equipment limit), hand the agent a concrete SWAP MENU from the variation
   // library so it trades a movement for a real same-pattern alternative instead of
@@ -282,7 +347,7 @@ export function buildSessionPrompt(ctx?: CoachContext, opts: { minutes?: number;
     const injuryAreas = activeInjuryAreas(context);
     const seen = new Set<string>();
     const lines: string[] = [];
-    for (const day of Array.isArray(context?.plan) ? context.plan as any[] : []) {
+    for (const day of Array.isArray(context?.plan) ? (context.plan as any[]) : []) {
       for (const it of Array.isArray(day?.items) ? day.items : []) {
         const name = it?.exercise;
         if (!name || seen.has(name)) continue;
@@ -320,14 +385,18 @@ ${ELITE_STRENGTH_GUARDRAILS}
 ${CONTEXT_GUARDRAILS}
 ${renderCoachingFocus(context)}${COACHING_STANCE}
 
-${renderDiscipline(context, "training")}${renderEnduranceGoal(context, "training")}${renderRunZones(context)}${renderRunPlan(context)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderTrainingSignals(context)}${renderProgramState(context)}${renderMuscleGroups(context)}${renderPerformance(context)}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderReactionModel(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${wants.length ? `
+${renderDiscipline(context, "training")}${renderEnduranceGoal(context, "training")}${renderRunZones(context)}${renderRunPlan(context)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderTrainingSignals(context)}${renderProgramState(context)}${renderMuscleGroups(context)}${renderPerformance(context)}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderReactionModel(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${
+  wants.length
+    ? `
 WHAT THE USER ASKED FOR:
 ${wants.join("\n")}
-` : ""}${swapMenu}
+`
+    : ""
+}${swapMenu}
 ${renderStreamingContract(
-    "write ONE or two plain sentences on why this session fits them today (the same thought that goes in the JSON's \"why\")",
-    SESSION_SUGGEST_SCHEMA,
-  )}
+  'write ONE or two plain sentences on why this session fits them today (the same thought that goes in the JSON\'s "why")',
+  SESSION_SUGGEST_SCHEMA
+)}
 
 DATA:
 ${JSON.stringify(context)}`;
@@ -448,10 +517,10 @@ THE CONSTITUTION (binding):
 ${renderRunCompliance(context, "weekly")}
 ${renderTodayFuel(context)}
 ${renderStreamingContract(
-    "write how their week actually went in ONE or two warm plain sentences (the same reading that goes in the JSON's \"text\")",
-    WEEKLY_READ_SCHEMA,
-    { emptyAnswer: '{"found": false}' },
-  )}
+  'write how their week actually went in ONE or two warm plain sentences (the same reading that goes in the JSON\'s "text")',
+  WEEKLY_READ_SCHEMA,
+  { emptyAnswer: '{"found": false}' }
+)}
 
 DATA:
 ${JSON.stringify(context)}`;

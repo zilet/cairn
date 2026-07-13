@@ -697,7 +697,26 @@ export const MIGRATIONS: Migration[] = [
            WHERE id = 1
              AND (start_weight_lb IS NULL OR start_date IS NULL)
         `);
-      } catch { /* empty profile/weight log */ }
+      } catch {
+        /* empty profile/weight log */
+      }
+    },
+  },
+  {
+    version: 65,
+    name: "daily-metrics-apple-richness",
+    up: (db) => {
+      // Best-effort Apple Health / source-agnostic daily fields. These remain
+      // nullable: a Shortcut can post only what the device actually exposes.
+      for (const col of [
+        "total_calories REAL",
+        "distance_km REAL",
+        "exercise_min REAL",
+        "stand_hours REAL",
+        "spo2_avg REAL",
+        "vo2max REAL",
+      ])
+        addColumn(db, "daily_metrics", col);
     },
   },
 ];

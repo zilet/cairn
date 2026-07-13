@@ -8,7 +8,8 @@
 // response and never an MCP wrapper.
 
 import * as repo from "./repo.js";
-import { localDateISO } from "./repo/shared.js";
+import { addDaysISO, localDateISO } from "./repo/shared.js";
+import { sessionNoteSuggestsFatigue, sessionNoteSuggestsRapidFade } from "./repo/training-fatigue.js";
 import {
   AgentFallbackError,
   INTERACTIVE_TIMEOUT_MS,
@@ -52,7 +53,7 @@ import {
   isHealthReviewResult,
   isHealthSynthesisResult,
   isInsightResult,
-  isMealPlanResult,
+  isMealPlanStructureResult,
   isMealSwapResult,
   isNutritionCheckinResult,
   isPlanProposalResult,
@@ -69,6 +70,16 @@ import {
 // single agentic-ops entry point.
 export { runChosen };
 
+// Exported for a focused deterministic boundary test. This is the same guard
+// draftMealPlan runs immediately before persistence/autonomy; the verifier agent
+// remains advisory and cannot authorize an inadequate plan.
+export function validateMealPlanDraftForPersistence(parsed: any) {
+  const check = repo.validateMealPlanForPersistence(parsed);
+  return check.ok
+    ? { ok: true as const, parsed: check.parsed, adequacy_checked: check.adequacy_checked }
+    : { ok: false as const, error: check.error };
+}
+
 // Turn an agent's adaptive-nutrition suggestion into the bounded target the
 // proposal actually carries. The personal-response layer may tune the SIZE of
 // the nudge, but the universal 250-kcal ceiling and lean-safe kcal/protein floors
@@ -79,10 +90,17 @@ export function personalizeNutritionCheckinTarget(nutrition: any, goalInput?: an
   const rawTarget = Number(nutrition.target_kcal);
   if (!Number.isFinite(rawTarget)) return nutrition;
   const fallbackTarget = Number(goal?.effective_target?.target_kcal);
-  const suppliedPrevious = Number(nutrition.prev_target_kcal);
-  const previous = Number.isFinite(suppliedPrevious)
-    ? suppliedPrevious
-    : Number.isFinite(fallbackTarget) ? fallbackTarget : Number.NaN;
+  let activeTarget = Number.NaN;
+  if (!Number.isFinite(fallbackTarget)) {
+    try {
+      activeTarget = Number(repo.getActiveNutritionTarget()?.target_kcal);
+    } catch {
+      activeTarget = Number.NaN;
+    }
+  }
+  // Agent-supplied prev_target_kcal is display context, never authority. The
+  // active/effective server target owns both the delta and the +/-250 boundary.
+  const previous = Number.isFinite(fallbackTarget) ? fallbackTarget : activeTarget;
   let target = rawTarget;
   if (Number.isFinite(previous)) {
     const rawDelta = rawTarget - previous;
@@ -99,7 +117,7 @@ export function personalizeNutritionCheckinTarget(nutrition: any, goalInput?: an
     target = Math.round(previous + sign * learnedStep);
   }
   const bounded = clampNutritionFloors(
-    { ...nutrition, target_kcal: target, prev_target_kcal: Number.isFinite(previous) ? Math.round(previous) : nutrition.prev_target_kcal },
+    { ...nutrition, target_kcal: target, prev_target_kcal: Number.isFinite(previous) ? Math.round(previous) : null },
     { kcal: "target_kcal", protein: "protein_g" },
     goal
   );
@@ -109,6 +127,36 @@ export function personalizeNutritionCheckinTarget(nutrition: any, goalInput?: an
     if ("change_kcal" in bounded) bounded.change_kcal = delta;
   }
   return bounded;
+}
+
+// A low-confidence outcome estimate may never justify a calorie cut. It may,
+// however, support a bounded protective RAISE when fresh deterministic training
+// evidence says the athlete is under-fueled or performance is fading. These are
+// planning signals only; wearable burn is never added to the target here.
+export function protectiveFuelEvidence(date = localDateISO()): string[] {
+  const reasons: string[] = [];
+  try {
+    const program = repo.getProgramState(date) as any;
+    if (program?.hybrid?.fuel?.risk === "high") reasons.push("high hybrid fuel-risk from recent endurance load");
+  } catch {
+    /* no deterministic program read */
+  }
+  try {
+    const since = addDaysISO(date, -13) ?? date;
+    const sessions = (repo.getRecentSessions(12) as any[]).filter(
+      (session) => String(session?.date ?? "") >= since && String(session?.date ?? "") <= date
+    );
+    const lowPerformance = sessions.filter(
+      (session) => session?.performance != null && Number(session.performance) <= 2
+    ).length;
+    const fatigueNotes = sessions.filter((session) => sessionNoteSuggestsFatigue(session?.notes));
+    const rapidFade = fatigueNotes.some((session) => sessionNoteSuggestsRapidFade(session?.notes));
+    if (lowPerformance >= 2) reasons.push("repeated low performance in recent session feedback");
+    if (fatigueNotes.length >= 2 || rapidFade) reasons.push("fresh session notes describe under-fueling or performance fade");
+  } catch {
+    /* no recent session evidence */
+  }
+  return [...new Set(reasons)];
 }
 // ---- agent connect/visibility helpers (read-only; see src/agents.ts) ----
 // The two protocol surfaces (api.ts / mcp.ts) read agent connect-state through
@@ -703,7 +751,9 @@ export async function draftMealPlan(
 ) {
   hooks?.onPhase?.("drafting your week of meals");
   const prompt = buildMealPlanPrompt(instruction);
-  const planSane = (m: any) => isMealPlanResult(m);
+  // Accept the useful weekly shape into the optional verifier pass, then make
+  // actual meal totals authoritative at the deterministic server boundary below.
+  const planSane = (m: any) => isMealPlanStructureResult(m);
   let run: FallbackResult;
   try {
     run = await runChosen(agent, prompt, {
@@ -734,7 +784,19 @@ export async function draftMealPlan(
   const { draft: verifiedParsed, verified } = await runVerify(
     agent, p, buildPlanVerifyPrompt, planSane, "meal_plan_verify", hooks
   );
-  const plan = repo.createMealPlan(chosen, result.raw, verifiedParsed);
+  const safety = validateMealPlanDraftForPersistence(verifiedParsed);
+  if (!safety.ok) {
+    return {
+      ok: false as const,
+      error: safety.error,
+      agent: chosen,
+      tried,
+      agent_status: agentStatusFor({ ok: false, agent: chosen, tried }),
+    };
+  }
+  // Defense in depth: createMealPlan repeats the same check for every non-agent
+  // caller. No row exists yet, so a failure can never enter autonomy.
+  const plan = repo.createMealPlan(chosen, result.raw, safety.parsed);
   let autonomy: any = null;
   try {
     autonomy = applyMealPlanWithAutonomy(Number(plan.id), {
@@ -765,6 +827,18 @@ export async function draftMealPlan(
 export async function nutritionCheckin(agent: string | undefined, windowDays?: number, hooks?: OpHooks) {
   hooks?.onPhase?.("reading your energy balance");
   const expenditure = repo.estimateExpenditure(Number.isFinite(windowDays as number) ? (windowDays as number) : 21);
+  const outcomeReady = expenditure.confidence === "medium" || expenditure.confidence === "high";
+  const protectiveEvidence = outcomeReady ? [] : protectiveFuelEvidence();
+  if (!outcomeReady && !protectiveEvidence.length) {
+    return {
+      ok: true as const,
+      change: false as const,
+      proposal: null,
+      summary: "The outcome trend is still settling, so Cairn is holding the current target.",
+      reason: "insufficient_outcome_confidence" as const,
+      expenditure,
+    };
+  }
   const prompt = buildNutritionCheckinPrompt(undefined, { windowDays });
   let run: FallbackResult;
   try {
@@ -794,6 +868,29 @@ export async function nutritionCheckin(agent: string | undefined, windowDays?: n
     return { ok: true as const, change: false, summary: typeof p.summary === "string" ? p.summary : "", agent: chosen, tried, expenditure };
   }
   const nutrition = personalizeNutritionCheckinTarget(p.nutrition);
+  // The protective low-confidence exception is raise-only. A model cannot turn
+  // wearable/load/fatigue evidence into a deficit cut, and the delta is already
+  // measured from the server-owned active target by the boundary above.
+  if (!outcomeReady) {
+    const previous = Number(nutrition?.prev_target_kcal);
+    const target = Number(nutrition?.target_kcal);
+    // A raise-only exception is meaningless with no established target to raise
+    // from — Number(null) is 0 (finite), so prev_target_kcal must be checked
+    // explicitly rather than relying on Number.isFinite alone.
+    if (nutrition?.prev_target_kcal == null || !Number.isFinite(previous) || !Number.isFinite(target) || target <= previous) {
+      return {
+        ok: true as const,
+        change: false as const,
+        proposal: null,
+        summary: "The trend is still settling. Recent training supports protecting fuel, not lowering the target.",
+        reason: "protective_raise_only" as const,
+        protective_evidence: protectiveEvidence,
+        agent: chosen,
+        tried,
+        expenditure,
+      };
+    }
+  }
   // Persist the target change, then route it through the shared autonomy policy.
   // Lead mode schedules it for the next un-lived food day with Undo; explicit
   // review posture keeps the same row as a reviewable draft.
@@ -831,6 +928,7 @@ export async function nutritionCheckin(agent: string | undefined, windowDays?: n
     agent: chosen,
     tried,
     expenditure,
+    ...(protectiveEvidence.length ? { protective_evidence: protectiveEvidence } : {}),
   };
 }
 
@@ -876,6 +974,11 @@ export async function generateRecipe(
 ) {
   hooks?.onPhase?.("writing the recipe");
   const { plan, id, day, mealIndex } = args;
+  const livePlan = repo.getMealPlan(id);
+  const safety = repo.validateMealPlanForPersistence(livePlan?.parsed);
+  if (!safety.ok) {
+    return { ok: false as const, error: safety.error, agent: null, tried: [] };
+  }
   const prompt = buildRecipePrompt({ plan, day, mealIndex });
   let run: FallbackResult;
   try {
@@ -889,7 +992,12 @@ export async function generateRecipe(
   }
   const { agent: chosen, result, tried } = run;
   const p = result.parsed;
-  const saved = p && typeof p === "object" ? repo.setMealRecipe(id, day, mealIndex, p) : null;
+  let saved: any = null;
+  try {
+    saved = p && typeof p === "object" ? repo.setMealRecipe(id, day, mealIndex, p) : null;
+  } catch (error: any) {
+    return { ok: false as const, error: error?.message ?? "meal plan is not safe to update", agent: chosen, tried };
+  }
   if (!saved) return { ok: false as const, error: "agent returned no usable recipe", agent: chosen, tried };
   return { ok: true as const, recipe: saved.recipe, plan: saved.plan, agent: chosen, tried };
 }

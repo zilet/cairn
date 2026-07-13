@@ -10,11 +10,20 @@ import { db, repo, resetTables, seedTrainingDay, seedRecoveryDay, isoDaysAgo } f
 // A reference date well clear of the recovery window so an empty recovery fetch
 // can't accidentally flip the read.
 const REF = "2026-03-15";
-const dayBefore = (base, n) =>
-  new Date(new Date(base + "T00:00:00Z").getTime() - n * 864e5).toISOString().slice(0, 10);
+const dayBefore = (base, n) => new Date(new Date(base + "T00:00:00Z").getTime() - n * 864e5).toISOString().slice(0, 10);
 
 beforeEach(() => {
-  resetTables("logged_sets", "sessions", "session_skips", "plan_items", "plan_days", "checkins", "daily_metrics", "activities");
+  resetTables(
+    "logged_sets",
+    "sessions",
+    "session_skips",
+    "plan_items",
+    "plan_days",
+    "checkins",
+    "daily_metrics",
+    "activities",
+    "context_events"
+  );
 });
 
 test("REST on >=3 consecutive training days ending the day before", () => {
@@ -31,6 +40,54 @@ test("does NOT force rest on only 2 consecutive training days", () => {
   const r = repo.dayRead(REF, { has_data: false, recovery: {} });
   assert.notEqual(r.kind, "rest");
   assert.equal(r.signals.consecutive_training_days, 2);
+});
+
+test("an active dated obligation compresses a train day without changing its posture", () => {
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  repo.addContextEvent({
+    kind: "family_event",
+    title: "School pickup and evening event",
+    start_date: REF,
+    end_date: REF,
+  });
+
+  const r = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.equal(r.kind, "train");
+  assert.equal(r.est_minutes, 40);
+  assert.equal(r.signals.signal_state.action.posture, "train");
+  assert.equal(r.signals.signal_state.action.directives.schedule, "compress");
+  assert.deepEqual(r.signals.schedule, {
+    directive: "compress",
+    compressed: true,
+    original_est_minutes: 60,
+    est_minutes: 40,
+    reason: "School pickup and evening event adds schedule pressure today.",
+  });
+  assert.match(r.why, /dated commitment compresses today's training window/i);
+});
+
+test("poor recovery owns an injury-overlap day while the movement work-around survives", () => {
+  repo.savePlanDay(1, "Upper", "Upper body", [{ exercise: "Overhead Press", sets: 3, rep_low: 5, rep_high: 8 }]);
+  repo.addContextEvent({
+    kind: "injury",
+    title: "Shoulder strain",
+    detail: "Overhead loading aggravates it",
+    start_date: REF,
+  });
+
+  const r = repo.dayRead(REF, {
+    has_data: true,
+    recovery: { training_readiness: 20, avg_training_readiness: 50 },
+    quality: {
+      training_readiness: { latest_date: REF, source: "garmin", freshness: "fresh", sample_count: 1 },
+    },
+  });
+  assert.equal(r.kind, "easy");
+  assert.equal(r.signals.signal_state.action.posture, "easy");
+  assert.equal(r.signals.signal_state.action.directives.training, "recover");
+  assert.equal(r.signals.health_workaround.field, "active_injury");
+  assert.match(r.why, /pain-free around the active injury/i);
+  assert.match(r.why, /shoulder/i);
 });
 
 test("REST on clearly-low recovery (short average sleep) even when due", () => {
@@ -68,9 +125,7 @@ test("EASY when nothing is programmed and recovery is unremarkable", () => {
 
 test("EASY after a real activity is already logged today", () => {
   // A logged ride of >=20 min should read as 'covered', not push a fresh session.
-  db.prepare(
-    `INSERT INTO activities (date, type, duration_min, distance_km) VALUES (?, 'ride', 45, 20)`
-  ).run(REF);
+  db.prepare(`INSERT INTO activities (date, type, duration_min, distance_km) VALUES (?, 'ride', 45, 20)`).run(REF);
   repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3 }]);
   const r = repo.dayRead(REF, { has_data: false, recovery: {} });
   assert.equal(r.kind, "easy");
@@ -133,13 +188,19 @@ test("EASY (not DONE) when today's logged work was only light", () => {
 });
 
 test("forwardLook points to the NEXT session's focus (the day-ahead heads-up)", () => {
-  repo.savePlanDay(1, "Push", "Chest & shoulders", [{ exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 8, target_weight: 135 }]);
-  repo.savePlanDay(2, "Lower", "Lower body", [{ exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 8, target_weight: 225 }]);
+  repo.savePlanDay(1, "Push", "Chest & shoulders", [
+    { exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 8, target_weight: 135 },
+  ]);
+  repo.savePlanDay(2, "Lower", "Lower body", [
+    { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 8, target_weight: 225 },
+  ]);
   // Trained Push (plan day 1) the day before REF → the forward look is plan day 2.
   const ex = repo.upsertExercise({ name: "Bench Press", muscle_group: "chest" });
   const day1Id = repo.getPlanDay(1).id; // the real plan_days row id (autoincrement varies in the shared DB)
   const sess = repo.getOrCreateSession(dayBefore(REF, 1), day1Id);
-  db.prepare(`INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps, rir) VALUES (?, ?, 1, 135, 6, 2)`).run(sess.id, ex.id);
+  db.prepare(
+    `INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps, rir) VALUES (?, ?, 1, 135, 6, 2)`
+  ).run(sess.id, ex.id);
   const fl = repo.forwardLook(REF);
   assert.equal(fl.next_focus, "Lower body");
   assert.match(fl.text, /Lower body/);
@@ -164,7 +225,15 @@ test("enforceCompletionContract clamps completion facts in BOTH directions", asy
   // Agent claims "done" on a day the server says is not done → deterministic floor.
   const trainBaseline = { kind: "train", focus: "Lower body", why: "Recovered and due.", est_minutes: 60, signals: {} };
   const falseDone = enforceCompletionContract(
-    { kind: "done", headline: "You're done.", why: "Great work!", focus: null, est_minutes: null, source: "agent", agent: "claude" },
+    {
+      kind: "done",
+      headline: "You're done.",
+      why: "Great work!",
+      focus: null,
+      est_minutes: null,
+      source: "agent",
+      agent: "claude",
+    },
     trainBaseline
   );
   assert.equal(falseDone.kind, "train", "an agent can never mark an untrained day done");
@@ -183,13 +252,78 @@ test("enforceCompletionContract clamps completion facts in BOTH directions", asy
 
   // Agent voices done correctly → its warm prose survives, residue still nulled.
   const voiced = enforceCompletionContract(
-    { kind: "done", headline: "Strong push session.", why: "The work is in — refuel well.", focus: "Push", est_minutes: 60, source: "agent" },
+    {
+      kind: "done",
+      headline: "Strong push session.",
+      why: "The work is in — refuel well.",
+      focus: "Push",
+      est_minutes: 60,
+      source: "agent",
+    },
     doneBaseline
   );
   assert.equal(voiced.kind, "done");
   assert.equal(voiced.headline, "Strong push session.");
   assert.equal(voiced.focus, null);
   assert.equal(voiced.est_minutes, null);
+});
+
+test("agentic day-read posture cannot become more aggressive without an athlete override", async () => {
+  const { enforceDayReadSafetyPosture, enforceCompletionContract } = await import("../dist/dayread.js");
+  const restBaseline = {
+    kind: "rest",
+    focus: null,
+    why: "Recovery signals say rest is the smart call.",
+    est_minutes: null,
+    signals: { low_sleep: true },
+  };
+  const aggressive = {
+    kind: "train",
+    headline: "Push hard today.",
+    why: "The plan says legs.",
+    focus: "Lower body",
+    est_minutes: 60,
+    signals: restBaseline.signals,
+    source: "agent",
+    agent: "claude",
+    tried: ["claude"],
+  };
+  const clamped = enforceDayReadSafetyPosture(aggressive, restBaseline, false);
+  assert.equal(clamped.kind, "rest");
+  assert.equal(clamped.headline, "Rest today.");
+  assert.equal(clamped.why, restBaseline.why, "clamped prose must match the deterministic posture");
+  assert.equal(clamped.focus, null);
+  assert.equal(clamped.est_minutes, null);
+  assert.equal(clamped.source, "deterministic");
+  assert.equal(clamped.agent, "claude", "agent provenance survives the policy clamp");
+
+  const easyBaseline = {
+    kind: "easy",
+    focus: "Easy movement",
+    why: "Nothing programmed today.",
+    est_minutes: 30,
+    signals: {},
+  };
+  assert.equal(enforceDayReadSafetyPosture(aggressive, easyBaseline, false).kind, "easy");
+
+  const conservative = { ...aggressive, kind: "rest", headline: "Rest today.", why: "Take the recovery." };
+  assert.equal(
+    enforceDayReadSafetyPosture(conservative, { ...easyBaseline, kind: "train" }, false),
+    conservative,
+    "the agent may always become more conservative"
+  );
+
+  assert.equal(
+    enforceDayReadSafetyPosture(aggressive, restBaseline, true),
+    aggressive,
+    "an explicit athlete override preserves the bounded agent recommendation"
+  );
+  const falseDone = { ...aggressive, kind: "done", headline: "All done." };
+  const overrideStillNotDone = enforceCompletionContract(
+    enforceDayReadSafetyPosture(falseDone, restBaseline, true),
+    restBaseline
+  );
+  assert.equal(overrideStillNotDone.kind, "rest", "completion remains non-negotiable under an override");
 });
 
 test("Today agent-result validation rejects parseable off-contract JSON", async () => {

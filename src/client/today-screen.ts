@@ -430,7 +430,7 @@ async function renderToday(opts: any = {}) {
 
   wireGuides(view);
 
-  CairnTodaySessionController.wireSessionSurface({ session, hasLoggedSets }, todaySessionDeps());
+  CairnTodaySessionController.wireSessionSurface({ session, hasLoggedSets, lastSets }, todaySessionDeps());
 
   setupAddExercise();
 
@@ -661,7 +661,7 @@ async function renderSession(opts: any = {}): Promise<void> {
   // still render; refreshAdaptedRx is already a no-op here since tab !== "today".)
   todayView.querySelector(".sess-dest .rx-banner")?.remove();
 
-  CairnTodaySessionController.wireSessionSurface({ session, hasLoggedSets }, todaySessionDeps());
+  CairnTodaySessionController.wireSessionSurface({ session, hasLoggedSets, lastSets: prep.lastSets }, todaySessionDeps());
   setupAddExercise();
   wireGuides(view);
   wireSessionDestination();

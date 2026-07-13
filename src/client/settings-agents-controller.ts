@@ -140,11 +140,21 @@ function renderSettingsAgentList(deps: ClientSettingsAgentsControllerDeps): void
 function renderSettingsCliStatus(deps: ClientSettingsAgentsControllerDeps, result: SettingsScreenCliUpdateStatus | null): void {
   const el = settingsAgentsOptional<HTMLElement>(deps.root, "#agentCliUpdateStatus");
   if (!el || !result) return;
-  const names = Array.isArray(result.agents) ? result.agents.join(", ") : "";
+    const names = Array.isArray(result.agents) ? result.agents.join(", ") : "";
   if (result.status === "running") el.textContent = `Installing ${names || "tool"}…`;
   else if (result.status === "succeeded" && names) el.textContent = `${names} ready · ${(result.finished_at || "").replace("T", " ").slice(0, 16)}`;
-  else if (result.status === "failed") el.textContent = `Install failed${result.error ? `: ${result.error}` : ""}`;
-  else el.textContent = "";
+    else if (result.status === "failed") el.textContent = `Install failed${result.error ? `: ${result.error}` : ""}`;
+    else el.textContent = "";
+    const log = settingsAgentsOptional<HTMLElement>(deps.root, "#agentCliUpdateLog");
+    if (log) {
+      const output = [result.stdout_tail, result.stderr_tail]
+        .filter((part): part is string => typeof part === "string" && part.trim().length > 0)
+        .join("\n")
+        .trim();
+      log.textContent = output || (result.status === "running" ? "Preparing installer…" : "");
+      log.hidden = !log.textContent;
+      if (!log.hidden) log.scrollTop = log.scrollHeight;
+    }
   const list = settingsAgentsOptional<HTMLElement>(deps.root, "#agentlist");
   list?.querySelectorAll<HTMLButtonElement>("[data-install]").forEach((button) => {
     button.disabled = result.status === "running";

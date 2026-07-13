@@ -7,6 +7,7 @@ import {
   isHealthSynthesisResult,
   isInsightResult,
   isMealPlanResult,
+  isMealPlanStructureResult,
   isMealSwapResult,
   isNutritionCheckinResult,
   isPlanProposalResult,
@@ -66,10 +67,23 @@ test("nutrition contracts do not turn malformed changes into calm no-change answ
 
   const days = Array.from({ length: 7 }, (_, i) => ({
     day: `D${i + 1}`,
-    meals: [{ name: "Protein bowl", kcal: 600, protein_g: 45 }],
+    meals: [
+      { name: "Protein bowl", kcal: 1050, protein_g: 85 },
+      { name: "Salmon plate", kcal: 1050, protein_g: 90 },
+    ],
   }));
   assert.equal(isMealPlanResult({ daily_kcal: 2100, daily_protein_g: 175, days }), true);
   assert.equal(isMealPlanResult({ daily_kcal: 2100, daily_protein_g: 175, days: days.slice(0, 2) }), false);
+  const underfed = days.map((day) => ({
+    ...day,
+    meals: [{ name: "Small bowl", kcal: 900, protein_g: 60 }],
+  }));
+  assert.equal(isMealPlanStructureResult({ daily_kcal: 2300, daily_protein_g: 175, days: underfed }), true);
+  assert.equal(
+    isMealPlanResult({ daily_kcal: 2300, daily_protein_g: 175, days: underfed }),
+    false,
+    "a valid headline cannot launder materially inadequate daily meals"
+  );
   assert.equal(isMealSwapResult({ name: "Salmon bowl", kcal: 620, protein_g: 48 }), true);
   assert.equal(isRecipeResult({ ingredients: [{ item: "salmon", qty: "200 g" }], steps: [] }), true);
 });

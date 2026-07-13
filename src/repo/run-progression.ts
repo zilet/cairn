@@ -22,11 +22,16 @@
 // ============================================================================
 import { db } from "../db.js";
 import { getRecoverySummary } from "./coach.js";
-import { activitySportWhere, enduranceSportPatterns } from "./endurance-sports.js";
+import {
+  activitySportWhere,
+  configuredEnduranceSportKeys,
+  enduranceSportPatterns,
+  RUN_SPORT_PATTERNS,
+} from "./endurance-sports.js";
 import type { RunPrescription } from "./plan.js";
 import { getActiveBlock, type ProgramBlock } from "./program-blocks.js";
-import { type EnduranceState, getProgramState, type ProgramState } from "./program-state.js";
-import { createProposal, getEnduranceGoal, getPrimaryDiscipline, getProfile, supersedeAutoRunPlanDrafts } from "./profile.js";
+import { type EnduranceState, getProgramState, type ProgramState, weeklyKm as recordedWeeklyKm } from "./program-state.js";
+import { createProposal, getEnduranceGoal, getProfile, supersedeAutoRunPlanDrafts } from "./profile.js";
 import { getRunCompliance, type RunCompliance } from "./sessions.js";
 import { localDateISO } from "./shared.js";
 
@@ -316,21 +321,27 @@ export function weeklyRunPlan(
   const d = date || localDateISO();
   const week_start = mondayOf(d);
 
-  const discipline = getPrimaryDiscipline();
+  const profile = getProfile();
   const goal = opts?.goal ?? getEnduranceGoal(d);
   const recovery = opts?.recovery ?? (() => { try { return getRecoverySummary(14); } catch { return null; } })();
   const programState = opts?.programState ?? getProgramState(d, recovery);
   const es: EnduranceState | null = programState.endurance;
+  const runState: EnduranceState | null = es?.sport === "run" ? es : null;
   const compliance = opts?.compliance ?? (() => { try { return getRunCompliance(week_start); } catch { return null; } })();
 
-  // Gate: only shape a week for a runner — an endurance/hybrid athlete, a set
-  // running goal, or someone with real logged mileage. Otherwise stay quiet.
+  // Gate: only shape a week for a RUNNER. Endurance/hybrid alone is not enough:
+  // a cycling-only or hiking-only athlete must never receive an invented run plan.
+  // Real running history or an explicit running goal/configuration supplies intent.
   const lastActualKm = compliance?.actual_km ?? 0;
-  const baseKm = es?.last_week_km ?? 0;
-  const isRunner = discipline === "endurance" || discipline === "hybrid" || !!goal || lastActualKm > 0 || baseKm > 0;
+  const baseKm = recordedWeeklyKm(d, 0, RUN_SPORT_PATTERNS);
+  const configuredSports = configuredEnduranceSportKeys(profile?.endurance_sport, false);
+  const goalText = `${goal?.event || ""} ${goal?.label || ""}`;
+  const explicitRunningGoal =
+    configuredSports.includes("run") || (!!goal && /\b(run|running|5k|10k|half|marathon|trail)\b/i.test(goalText));
+  const isRunner = lastActualKm > 0 || baseKm > 0 || explicitRunningGoal;
   if (!isRunner) return NO_RUN_PLAN(week_start);
 
-  const zones = opts?.zones ?? runZones({ profile: getProfile(), recovery });
+  const zones = opts?.zones ?? runZones({ profile, recovery });
   const block = opts?.block ?? getActiveBlock();
   const phase = goal?.is_race && goal.phase && goal.phase !== "past" ? goal.phase : "standing";
   const ord = block?.week_index ?? weekOrdinal(week_start);
@@ -350,7 +361,7 @@ export function weeklyRunPlan(
   const rhrUp = recovery?.delta?.rhr != null && recovery.delta.rhr > 2;
   const sleepDown = recovery?.delta?.sleep != null && recovery.delta.sleep < -30;
   const recoveryDown = hrvDown || rhrUp || sleepDown;
-  const spiking = es?.status === "spiking";
+  const spiking = runState?.status === "spiking";
   const downWeek = ord % 4 === 0; // a reset week roughly every 4th
   const taper = phase === "taper";
 
@@ -359,7 +370,7 @@ export function weeklyRunPlan(
   else if (recoveryDown) { factor = 0.9; rationale.push("Recovery's down this week (sleep / HRV / resting HR) — easing volume and keeping it gentle."); }
   else if (spiking) { factor = 1.0; rationale.push("Mileage jumped recently — holding it here to let it absorb before adding more."); }
   else if (downWeek) { factor = 0.8; rationale.push("Scheduled down week — a lighter reset before the next build."); }
-  else if (es?.status === "detraining") { factor = 1.0; rationale.push("Rebuilding the base back gently — steady, not a jump."); }
+  else if (runState?.status === "detraining") { factor = 1.0; rationale.push("Rebuilding the base back gently — steady, not a jump."); }
   else { rationale.push("Building conservatively — about a 10% step on last week."); }
 
   const weeklyKm = Math.max(6, round1(anchorKm * factor));
@@ -373,15 +384,15 @@ export function weeklyRunPlan(
   // --- quality session: include unless we're protecting recovery / tapering hard / very thin base ---
   const baseTooThin = weeklyKm < 12;
   const includeQuality =
-    !recoveryDown && !baseTooThin && es?.status !== "spiking" && runDays >= 3;
+    !recoveryDown && !baseTooThin && runState?.status !== "spiking" && runDays >= 3;
   let qualityType: "tempo" | "threshold" | "vo2" | "hills" | null = null;
   if (includeQuality) {
     const pool = QUALITY_BY_PHASE[phase] ?? QUALITY_BY_PHASE.standing;
     qualityType = pool[ord % pool.length];
     // Base with no quality at all yet → make sure the first quality is gentle (tempo).
-    if (!es?.has_quality && phase !== "sharpen" && phase !== "build") qualityType = pool.includes("tempo") ? "tempo" : qualityType;
+    if (!runState?.has_quality && phase !== "sharpen" && phase !== "build") qualityType = pool.includes("tempo") ? "tempo" : qualityType;
     rationale.push(
-      es?.has_quality
+      runState?.has_quality
         ? `Rotating in a ${qualityType} session — varying the hard stimulus keeps progress honest.`
         : "It's been all one pace lately — adding a single quality session to lift your ceiling."
     );
@@ -394,7 +405,7 @@ export function weeklyRunPlan(
   // --- distance distribution ---
   const easyCount = Math.max(1, runDays - 1 - (qualityType ? 1 : 0));
   // Long run ~32–38% of weekly volume, but never a >10% jump on the recent longest.
-  const prevLong = es?.longest_km_4wk ?? 0;
+  const prevLong = runState?.longest_km_4wk ?? 0;
   let longKm = round1(weeklyKm * (taper ? 0.3 : 0.35));
   if (prevLong > 0) longKm = round1(Math.min(longKm, prevLong * 1.1));
   longKm = Math.max(longKm, round1(weeklyKm * 0.25));
@@ -528,11 +539,13 @@ const VO2_STALE_DAYS = 90;          // VO2max reading older than ~3 months → r
 
 export function enduranceTestsDue(date?: string): { exercise: string; kind: "endurance"; why: string }[] {
   const d = date || localDateISO();
-  const discipline = getPrimaryDiscipline();
+  const profile = getProfile();
   const goal = getEnduranceGoal(d);
 
-  // Gate: only for a runner — endurance/hybrid, a running goal, or real history.
-  const patterns = enduranceSportPatterns(getProfile()?.endurance_sport);
+  // Gate on RUNNING intent or history, not merely on being an endurance athlete.
+  // Cycling, swimming and hiking remain first-class training signals, but must
+  // never trigger a one-mile/5k or max-effort running test.
+  const patterns = RUN_SPORT_PATTERNS;
   const aSport = activitySportWhere("a", patterns);
   let runCount = 0;
   try {
@@ -541,7 +554,11 @@ export function enduranceTestsDue(date?: string): { exercise: string; kind: "end
     ).get(isoDaysAgo(d, 90), ...aSport.params) as any;
     runCount = Number(c?.n ?? 0);
   } catch { /* keep 0 */ }
-  const isRunner = discipline === "endurance" || discipline === "hybrid" || !!goal || runCount > 0;
+  const configuredSports = configuredEnduranceSportKeys(profile?.endurance_sport, false);
+  const goalText = `${goal?.event || ""} ${goal?.label || ""}`;
+  const explicitRunningGoal =
+    !!goal && (configuredSports.includes("run") || /\b(run|running|5k|10k|half|marathon|trail)\b/i.test(goalText));
+  const isRunner = explicitRunningGoal || runCount > 0;
   if (!isRunner) return [];
 
   const out: { exercise: string; kind: "endurance"; why: string }[] = [];

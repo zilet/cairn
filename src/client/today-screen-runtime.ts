@@ -79,6 +79,7 @@ type TodayScreenRuntimeContext = {
     prefill: Record<string, unknown>,
     revealIdx: number | null | undefined,
     rx: TodayScreenRuntimePrescription | null | undefined,
+    lastSet?: unknown,
   ): string;
   cardioPlanCard(
     item: TodayScreenRuntimePlanItem,
@@ -229,11 +230,12 @@ function createTodayScreenRuntime(input: TodayScreenRuntimeInput): TodayScreenRu
     prefill: Record<string, unknown>,
     revealIdx: number | null | undefined,
     rx: TodayScreenRuntimePrescription | null | undefined,
+    lastSet?: unknown,
   ) {
     return CairnTodayCards.exerciseCardHtml(item, logged, prefill, revealIdx, rx, {
       day: input.state.day,
       exModes: input.state.exModes,
-    });
+    }, lastSet);
   }
 
   function cardioPlanCard(

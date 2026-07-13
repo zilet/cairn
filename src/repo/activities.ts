@@ -40,6 +40,68 @@ export function parseActivity(text: string) {
   return { type, duration_min, distance_km, pace };
 }
 
+interface ManualActivityDuplicateScore {
+  id: number;
+  error: number;
+}
+
+function positiveNumber(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function duplicateMetricError(a: unknown, b: unknown, absoluteTolerance: number, relativeTolerance: number) {
+  const left = positiveNumber(a);
+  const right = positiveNumber(b);
+  if (left == null || right == null) return null;
+  const tolerance = Math.max(absoluteTolerance, Math.max(left, right) * relativeTolerance);
+  const error = Math.abs(left - right) / tolerance;
+  return error <= 1 ? error : Number.POSITIVE_INFINITY;
+}
+
+// Resolve at most one explicit manual row that is sufficiently similar to an
+// incoming Garmin mirror. `activities` has no activity start-time or provider-id
+// field for manual entries (created_at is log time, not workout time), so duration
+// and distance are the only trustworthy cross-source comparisons available here.
+// Both independent metrics must agree: one-field evidence is too weak to erase
+// a manual effort, even when it is the only same-day candidate.
+function bestManualDuplicateId(input: {
+  date: string;
+  type: unknown;
+  duration_min: unknown;
+  distance_km: unknown;
+}): number | null {
+  const modality = normalizeGarminType(input.type);
+  if (!["run", "ride", "swim", "hike"].includes(modality)) return null;
+  const candidates = db
+    .prepare(
+      `SELECT id, type, duration_min, distance_km
+         FROM activities
+        WHERE date = ? AND source IS NULL AND external_id IS NULL`
+    )
+    .all(input.date) as any[];
+  const scored: ManualActivityDuplicateScore[] = [];
+  for (const candidate of candidates) {
+    if (normalizeGarminType(candidate.type) !== modality) continue;
+    const durationError = duplicateMetricError(candidate.duration_min, input.duration_min, 3, 0.08);
+    const distanceError = duplicateMetricError(candidate.distance_km, input.distance_km, 0.3, 0.05);
+    const comparable = [durationError, distanceError].filter((value): value is number => value != null);
+    if (comparable.length < 2 || comparable.some((value) => !Number.isFinite(value))) continue;
+    scored.push({
+      id: Number(candidate.id),
+      error: comparable.reduce((sum, value) => sum + value, 0) / comparable.length,
+    });
+  }
+  scored.sort((a, b) => a.error - b.error || b.id - a.id);
+  const best = scored[0];
+  if (!best) return null;
+  const runnerUp = scored[1];
+  // Require a meaningful fit margin; otherwise two plausible manual efforts are
+  // ambiguous and neither may be erased.
+  if (runnerUp && runnerUp.error - best.error < 0.2) return null;
+  return best.id;
+}
+
 export function addActivity(input: any) {
   // Default to the LOCAL day (device-zone aware) — an evening session belongs to
   // today, not tomorrow's UTC date. An explicit input.date (e.g. a Garmin sync or
@@ -74,26 +136,11 @@ export function addActivity(input: any) {
           : "skipped"
         : null;
 
-  // Soft-dedup: a manually-logged cardio effort (source null) and the SAME effort
-  // later synced from Garmin (source 'garmin' + external_id) would otherwise be two
-  // rows — double-counting acute load + weekly mileage. When inserting a Garmin
-  // endurance activity, retire any manual same-date, same-modality, no-external-id
-  // row (the Garmin row is richer: physiology blob, HR zones, real start time). Only
-  // an OBVIOUS same-date same-modality endurance overlap qualifies — never an "other"
-  // type, never across different modalities, never another sourced row.
-  if (source === "garmin" && externalId) {
-    const modality = normalizeGarminType(type);
-    if (["run", "ride", "swim", "hike"].includes(modality)) {
-      const candidates = db
-        .prepare(`SELECT id, type FROM activities WHERE date = ? AND source IS NULL AND external_id IS NULL`)
-        .all(date) as any[];
-      for (const c of candidates) {
-        if (normalizeGarminType(c.type) === modality) {
-          db.prepare(`DELETE FROM activities WHERE id = ?`).run(c.id);
-        }
-      }
-    }
-  }
+  // Soft-dedup: resolve one sufficiently similar manual effort before inserting
+  // its richer Garmin mirror. The actual delete happens only AFTER the Garmin row
+  // is safely inserted, and never on a sparse/ambiguous same-day collision.
+  const manualDuplicateId =
+    source === "garmin" && externalId ? bestManualDuplicateId({ date, type, duration_min, distance_km }) : null;
 
   const info = db
     .prepare(
@@ -114,6 +161,9 @@ export function addActivity(input: any) {
       status
     );
   const row = db.prepare(`SELECT * FROM activities WHERE id = ?`).get(info.lastInsertRowid) as any;
+  if (manualDuplicateId != null) {
+    db.prepare(`DELETE FROM activities WHERE id = ? AND source IS NULL AND external_id IS NULL`).run(manualDuplicateId);
+  }
   // Kick the enrichment queue AFTER the row exists. enrich.ts imports repo.ts,
   // so we import lazily here to avoid a module-eval circular dependency.
   if (status === "pending") {
@@ -682,20 +732,30 @@ export function upsertGarminActivity(input: GarminActivityInput, sourceId?: numb
   if (!input.external_id || !String(input.external_id).trim()) throw new Error("external_id required");
   const source = sourceId ? getGarminSource(sourceId) : upsertGarminSource({ label: "default" });
   if (!source) throw new Error("Garmin source not found");
-  const start = input.start_time ?? null;
-  const date = input.date || (start ? String(start).slice(0, 10) : todayISO());
+  // Resolve a sparse re-sync against the normalized row BEFORE mirroring it. A
+  // provider retry can contain only an external id; treating that as "today / other"
+  // would move and erase an older rich activity in both tables.
+  const prev = db
+    .prepare(`SELECT * FROM garmin_activities WHERE source_id = ? AND external_id = ?`)
+    .get(source.id, String(input.external_id)) as Record<string, any> | undefined;
+  const start = input.start_time ?? prev?.start_time ?? null;
+  const date = input.date || (start ? String(start).slice(0, 10) : null) || prev?.date || todayISO();
   // Strength activities become enriched Cairn *sessions* (see reconcileGarminStrength),
   // so they never get a generic `activities` row that would duplicate the workout in
   // Today's RECENT list. Cardio (run/walk/ride) still surfaces as an activity.
-  const strength = isStrengthGarminType(input.type);
+  const strength = isStrengthGarminType(input.type ?? prev?.type);
   // Preserve a strength label on the STORED row. normalizeGarminType folds
   // strength_training → "other", and every later strength path filters on
   // isStrengthGarminType(stored.type) — so a folded "other" made reconciliation +
   // the unreconciled-lift card structurally blind to a synced lift. Keep the raw
   // provider type for strength (still matches isStrengthGarminType); normalize the
   // rest to the coarse modality as before.
-  const type = strength ? String(input.type ?? "").trim() || "strength_training" : normalizeGarminType(input.type);
-  const name = input.name || `Garmin ${type}`;
+  const type = strength
+    ? String(input.type ?? prev?.type ?? "").trim() || "strength_training"
+    : input.type != null
+      ? normalizeGarminType(input.type)
+      : String(prev?.type ?? "other");
+  const name = input.name ?? prev?.name ?? `Garmin ${type}`;
   const activity = strength
     ? null
     : (addActivity({
@@ -717,17 +777,6 @@ export function upsertGarminActivity(input: GarminActivityInput, sourceId?: numb
             .filter(Boolean)
             .join(" · ") || null,
       }) as any);
-  // Snapshot the day-read-relevant facts BEFORE the upsert so the invalidation
-  // below can gate on a real change (a 6-hour auto-sync re-upserts up to ~100
-  // unchanged activities across 30 days of dates; blindly invalidating each one
-  // would churn every cached Brief — and its decision-ledger write — for nothing).
-  const prev = db
-    .prepare(
-      `SELECT date, type, duration_min, distance_km FROM garmin_activities WHERE source_id = ? AND external_id = ?`
-    )
-    .get(source.id, String(input.external_id)) as
-    | { date?: string; type?: string; duration_min?: number; distance_km?: number }
-    | undefined;
   db.prepare(
     `INSERT INTO garmin_activities
        (source_id, external_id, activity_id, date, start_time, type, name, duration_min, distance_km,
@@ -739,16 +788,30 @@ export function upsertGarminActivity(input: GarminActivityInput, sourceId?: numb
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
      ON CONFLICT(source_id, external_id) DO UPDATE SET
        activity_id = COALESCE(excluded.activity_id, garmin_activities.activity_id),
-       date = excluded.date, start_time = excluded.start_time, type = excluded.type, name = excluded.name,
-       duration_min = excluded.duration_min, distance_km = excluded.distance_km, calories = excluded.calories,
-       avg_hr = excluded.avg_hr, max_hr = excluded.max_hr, ascent_m = excluded.ascent_m,
-       training_load = excluded.training_load, training_effect = excluded.training_effect,
-       moving_min = excluded.moving_min, elevation_loss_m = excluded.elevation_loss_m,
-       aerobic_te = excluded.aerobic_te, anaerobic_te = excluded.anaerobic_te, te_label = excluded.te_label,
-       avg_cadence = excluded.avg_cadence, max_cadence = excluded.max_cadence,
-       avg_power = excluded.avg_power, max_power = excluded.max_power, norm_power = excluded.norm_power,
-       avg_speed = excluded.avg_speed, max_speed = excluded.max_speed, avg_temp = excluded.avg_temp,
-       vo2max = excluded.vo2max,
+       date = excluded.date, start_time = COALESCE(excluded.start_time, garmin_activities.start_time),
+       type = excluded.type, name = COALESCE(excluded.name, garmin_activities.name),
+       duration_min = COALESCE(excluded.duration_min, garmin_activities.duration_min),
+       distance_km = COALESCE(excluded.distance_km, garmin_activities.distance_km),
+       calories = COALESCE(excluded.calories, garmin_activities.calories),
+       avg_hr = COALESCE(excluded.avg_hr, garmin_activities.avg_hr),
+       max_hr = COALESCE(excluded.max_hr, garmin_activities.max_hr),
+       ascent_m = COALESCE(excluded.ascent_m, garmin_activities.ascent_m),
+       training_load = COALESCE(excluded.training_load, garmin_activities.training_load),
+       training_effect = COALESCE(excluded.training_effect, garmin_activities.training_effect),
+       moving_min = COALESCE(excluded.moving_min, garmin_activities.moving_min),
+       elevation_loss_m = COALESCE(excluded.elevation_loss_m, garmin_activities.elevation_loss_m),
+       aerobic_te = COALESCE(excluded.aerobic_te, garmin_activities.aerobic_te),
+       anaerobic_te = COALESCE(excluded.anaerobic_te, garmin_activities.anaerobic_te),
+       te_label = COALESCE(excluded.te_label, garmin_activities.te_label),
+       avg_cadence = COALESCE(excluded.avg_cadence, garmin_activities.avg_cadence),
+       max_cadence = COALESCE(excluded.max_cadence, garmin_activities.max_cadence),
+       avg_power = COALESCE(excluded.avg_power, garmin_activities.avg_power),
+       max_power = COALESCE(excluded.max_power, garmin_activities.max_power),
+       norm_power = COALESCE(excluded.norm_power, garmin_activities.norm_power),
+       avg_speed = COALESCE(excluded.avg_speed, garmin_activities.avg_speed),
+       max_speed = COALESCE(excluded.max_speed, garmin_activities.max_speed),
+       avg_temp = COALESCE(excluded.avg_temp, garmin_activities.avg_temp),
+       vo2max = COALESCE(excluded.vo2max, garmin_activities.vo2max),
        hr_zones_json = COALESCE(excluded.hr_zones_json, garmin_activities.hr_zones_json),
        exercise_sets_json = COALESCE(excluded.exercise_sets_json, garmin_activities.exercise_sets_json),
        steps = COALESCE(excluded.steps, garmin_activities.steps),
@@ -759,7 +822,7 @@ export function upsertGarminActivity(input: GarminActivityInput, sourceId?: numb
        avg_ground_contact_ms = COALESCE(excluded.avg_ground_contact_ms, garmin_activities.avg_ground_contact_ms),
        avg_vertical_osc_cm = COALESCE(excluded.avg_vertical_osc_cm, garmin_activities.avg_vertical_osc_cm),
        avg_vertical_ratio = COALESCE(excluded.avg_vertical_ratio, garmin_activities.avg_vertical_ratio),
-       raw_json = excluded.raw_json, synced_at = datetime('now')`
+       raw_json = COALESCE(excluded.raw_json, garmin_activities.raw_json), synced_at = datetime('now')`
   ).run(
     source.id,
     String(input.external_id),
@@ -808,6 +871,36 @@ export function upsertGarminActivity(input: GarminActivityInput, sourceId?: numb
       .prepare(`SELECT * FROM garmin_activities WHERE source_id = ? AND external_id = ?`)
       .get(source.id, String(input.external_id))
   ) as Record<string, any>;
+  // Keep the general activities mirror authoritative on every normalized update.
+  // Date/type are safe because the sparse path above resolved them from `prev`;
+  // nullable richness COALESCEs so a shell retry cannot erase duration/distance or
+  // the human-readable note already used by calendar/endurance consumers.
+  if (!strength && row?.activity_id) {
+    const mirrorNotes =
+      [
+        row.avg_hr != null ? `avg HR ${Math.round(Number(row.avg_hr))}` : null,
+        row.training_load != null ? `load ${Math.round(Number(row.training_load))}` : null,
+        row.training_effect != null ? `effect ${row.training_effect}` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ") || null;
+    db.prepare(
+      `UPDATE activities SET
+         date = ?, type = ?, raw_text = COALESCE(?, raw_text),
+         duration_min = COALESCE(?, duration_min), distance_km = COALESCE(?, distance_km),
+         pace = COALESCE(?, pace), notes = COALESCE(?, notes)
+       WHERE id = ?`
+    ).run(
+      row.date,
+      normalizeGarminType(row.type),
+      row.name ?? null,
+      row.duration_min ?? null,
+      row.distance_km ?? null,
+      paceFrom(row.duration_min, row.distance_km, row.type),
+      mirrorNotes,
+      row.activity_id
+    );
+  }
   // addActivity invalidates on first insert, but a provider re-sync can enrich an
   // existing external id from a shell row into a real duration/distance effort.
   // That material fact must also retire the morning recommendation — but ONLY on
@@ -899,7 +992,19 @@ const GARMIN_DAILY_COLS = [
   "training_load_balance",
 ] as const;
 
-export function upsertGarminDailyMetric(input: GarminDailyMetricInput, sourceId?: number | null) {
+function isRealIsoDate(value: unknown): value is string {
+  const text = String(value ?? "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return false;
+  const parsed = new Date(`${text}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === text;
+}
+
+export function upsertGarminDailyMetric(
+  input: GarminDailyMetricInput,
+  sourceId?: number | null,
+  options: { emitEvent?: boolean } = {}
+) {
+  if (!isRealIsoDate(input.date)) throw new Error("date must be a real YYYY-MM-DD");
   const source = sourceId ? getGarminSource(sourceId) : upsertGarminSource({ label: "default" });
   if (!source) throw new Error("Garmin source not found");
   const cols = ["source_id", "date", ...GARMIN_DAILY_COLS, "raw_json"];
@@ -921,13 +1026,15 @@ export function upsertGarminDailyMetric(input: GarminDailyMetricInput, sourceId?
   const row = hydrateJson(
     db.prepare(`SELECT * FROM garmin_daily_metrics WHERE source_id = ? AND date = ?`).get(source.id, input.date)
   );
-  emitBrainEvent({
-    kind: "recovery_metrics_changed",
-    domain: "recovery",
-    date: input.date,
-    entity_id: source.id,
-    subject_key: "garmin",
-  });
+  if (options.emitEvent !== false) {
+    emitBrainEvent({
+      kind: "recovery_metrics_changed",
+      domain: "recovery",
+      date: input.date,
+      entity_id: source.id,
+      subject_key: "garmin",
+    });
+  }
   return row;
 }
 
@@ -1192,7 +1299,9 @@ export function listGarminDailyMetrics(limit = 30) {
 }
 
 export function getGarminCoachSummary(days = 14) {
-  const since = new Date(Date.now() - Math.max(1, days - 1) * 864e5).toISOString().slice(0, 10);
+  const windowDays = Math.max(1, Math.min(366, Math.trunc(Number(days) || 14)));
+  const today = localDateISO();
+  const since = localDateISO(new Date(Date.now() - Math.max(0, windowDays - 1) * 864e5));
   const source = listGarminSources()[0] ?? null;
   const activities = db
     .prepare(
@@ -1204,21 +1313,21 @@ export function getGarminCoachSummary(days = 14) {
             ROUND(COALESCE(SUM(training_load), 0), 1) AS training_load,
             MAX(date) AS last_date
      FROM garmin_activities
-     WHERE date >= ?
+     WHERE date >= ? AND date <= ?
      GROUP BY type
      ORDER BY minutes DESC`
     )
-    .all(since) as any[];
+    .all(since, today) as any[];
   const hard = (
     db
       .prepare(
         `SELECT date, type, name, duration_min, distance_km, avg_hr, max_hr, training_load,
             training_effect, aerobic_te, anaerobic_te, te_label, avg_power, vo2max, hr_zones_json
      FROM garmin_activities
-     WHERE date >= ? AND (training_load >= 80 OR training_effect >= 3.5 OR duration_min >= 90)
+     WHERE date >= ? AND date <= ? AND (training_load >= 80 OR training_effect >= 3.5 OR duration_min >= 90)
      ORDER BY date DESC, id DESC LIMIT 8`
       )
-      .all(since) as any[]
+      .all(since, today) as any[]
   ).map((r) => {
     let hr_zones: any = null;
     try {
@@ -1229,86 +1338,139 @@ export function getGarminCoachSummary(days = 14) {
     const { hr_zones_json, ...rest } = r;
     return { ...rest, hr_zones };
   });
-  const daily = db
+  // Resolve one Garmin row per date, newest update/id winning. Aggregates use the
+  // whole window; point-in-time fields always take the latest DATED non-null value.
+  // This avoids MAX(text/value) bugs such as an older RECOVERY_2 beating a newer
+  // PRODUCTIVE_9, while keeping e.g. readiness current=26 beside average=55.9.
+  const metricRowsRaw = db
     .prepare(
-      `SELECT
-       ROUND(AVG(sleep_min), 1) AS avg_sleep_min,
-       ROUND(AVG(sleep_score), 1) AS avg_sleep_score,
-       ROUND(AVG(deep_sleep_min), 1) AS avg_deep_sleep_min,
-       ROUND(AVG(rem_sleep_min), 1) AS avg_rem_sleep_min,
-       ROUND(AVG(resting_hr), 1) AS avg_resting_hr,
-       ROUND(AVG(hrv_ms), 1) AS avg_hrv_ms,
-       ROUND(AVG(stress_avg), 1) AS avg_stress,
-       ROUND(AVG(body_battery_avg), 1) AS avg_body_battery,
-       ROUND(AVG(body_battery_max), 1) AS avg_body_battery_max,
-       ROUND(AVG(respiration_avg), 1) AS avg_respiration,
-       ROUND(AVG(spo2_avg), 1) AS avg_spo2,
-       ROUND(AVG(active_calories), 1) AS avg_active_calories,
-       ROUND(AVG(intensity_min_vigorous), 1) AS avg_vigorous_min,
-       ROUND(AVG(training_readiness), 1) AS avg_training_readiness,
-       ROUND(AVG(acute_load), 1) AS avg_acute_load,
-       MAX(vo2max) AS vo2max,
-       MAX(training_status) AS training_status,
-       MAX(hrv_status) AS hrv_status,
-       MAX(skin_temp_dev_c) AS skin_temp_dev_c,
-       MAX(weight_kg) AS weight_kg,
-       MAX(body_fat_pct) AS body_fat_pct,
-       MAX(muscle_mass_kg) AS muscle_mass_kg,
-       MAX(date) AS last_date
-     FROM garmin_daily_metrics
-     WHERE date >= ?`
+      `SELECT * FROM garmin_daily_metrics WHERE date >= ? AND date <= ? ORDER BY date DESC, updated_at DESC, id DESC`
     )
-    .get(since) as any;
-  // Latest non-null point-in-time signals (acute training load and fitness age
-  // are CURRENT values, not things to average — take the most recent reading).
-  // These were captured by the sync but dropped here until now.
-  const latestOf = (col: string): number | null => {
-    try {
-      const r = db
-        .prepare(
-          `SELECT ${col} AS v FROM garmin_daily_metrics WHERE date >= ? AND ${col} IS NOT NULL ORDER BY date DESC LIMIT 1`
-        )
-        .get(since) as any;
-      return r?.v != null && Number.isFinite(Number(r.v)) ? Number(r.v) : null;
-    } catch {
-      return null;
-    }
+    .all(since, today) as Record<string, any>[];
+  const byDate = new Map<string, Record<string, any>>();
+  for (const row of metricRowsRaw) if (!byDate.has(String(row.date))) byDate.set(String(row.date), row);
+  const metricRows = [...byDate.values()];
+  const round1 = (value: number): number => Math.round(value * 10) / 10;
+  const avg = (col: string): number | null => {
+    const values = metricRows
+      .filter((row) => row[col] != null)
+      .map((row) => Number(row[col]))
+      .filter((value) => Number.isFinite(value));
+    return values.length ? round1(values.reduce((sum, value) => sum + value, 0) / values.length) : null;
   };
+  const freshness = (date: string | null): "fresh" | "recent" | "stale" | "missing" => {
+    if (!date) return "missing";
+    const age = Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${date}T00:00:00Z`)) / 864e5);
+    return age <= 1 ? "fresh" : age <= 3 ? "recent" : "stale";
+  };
+  const latest = (col: string): { value: any; date: string | null } => {
+    const row = metricRows.find((candidate) => candidate[col] != null);
+    return { value: row?.[col] ?? null, date: row?.date ?? null };
+  };
+  const quality: Record<string, any> = {};
+  const qualityFor = (col: string) => {
+    const point = latest(col);
+    const sampleCount = metricRows.filter((row) => row[col] != null).length;
+    return (quality[col] = {
+      latest_value: point.value,
+      latest_date: point.date,
+      source: point.date ? "garmin" : null,
+      sample_count: sampleCount,
+      expected_days: windowDays,
+      window_days: windowDays,
+      freshness: freshness(point.date),
+    });
+  };
+  const avgMap: Record<string, string> = {
+    sleep_min: "avg_sleep_min",
+    sleep_score: "avg_sleep_score",
+    deep_sleep_min: "avg_deep_sleep_min",
+    rem_sleep_min: "avg_rem_sleep_min",
+    resting_hr: "avg_resting_hr",
+    hrv_ms: "avg_hrv_ms",
+    stress_avg: "avg_stress",
+    body_battery_avg: "avg_body_battery",
+    body_battery_max: "avg_body_battery_max",
+    respiration_avg: "avg_respiration",
+    spo2_avg: "avg_spo2",
+    active_calories: "avg_active_calories",
+    intensity_min_vigorous: "avg_vigorous_min",
+    training_readiness: "avg_training_readiness",
+    acute_load: "avg_acute_load",
+    skin_temp_dev_c: "avg_skin_temp_dev_c",
+    steps: "avg_steps",
+  };
+  const daily: Record<string, any> = { last_date: metricRows[0]?.date ?? null };
+  for (const [col, out] of Object.entries(avgMap)) daily[out] = avg(col);
+  const currentCols = [
+    "sleep_min",
+    "sleep_score",
+    "resting_hr",
+    "hrv_ms",
+    "hrv_status",
+    "stress_avg",
+    "body_battery_avg",
+    "respiration_avg",
+    "spo2_avg",
+    "spo2_min",
+    "skin_temp_dev_c",
+    "active_calories",
+    "steps",
+    "training_readiness",
+    "training_status",
+    "acute_load",
+    "fitness_age",
+    "vo2max",
+    "vo2max_cycling",
+    "weight_kg",
+    "body_fat_pct",
+    "muscle_mass_kg",
+    "body_water_pct",
+    "bone_mass_kg",
+    "bmi",
+    "visceral_fat",
+    "endurance_score",
+    "hill_score",
+    "race_predict_5k_sec",
+    "race_predict_10k_sec",
+    "race_predict_half_sec",
+    "race_predict_marathon_sec",
+    "training_load_balance",
+  ];
+  for (const col of currentCols) {
+    const point = latest(col);
+    daily[col] = point.value;
+    qualityFor(col);
+  }
+  for (const col of Object.keys(avgMap)) if (!quality[col]) qualityFor(col);
+  daily.quality = quality;
   const latestActivityVo2 = (() => {
     try {
       const r = db
         .prepare(
-          `SELECT vo2max AS v FROM garmin_activities
-         WHERE date >= ? AND vo2max IS NOT NULL
+          `SELECT vo2max AS value, date FROM garmin_activities
+         WHERE date >= ? AND date <= ? AND vo2max IS NOT NULL
          ORDER BY date DESC, id DESC LIMIT 1`
         )
-        .get(since) as any;
-      return r?.v != null && Number.isFinite(Number(r.v)) ? Number(r.v) : null;
+        .get(since, today) as any;
+      return r?.value != null && Number.isFinite(Number(r.value))
+        ? { value: Number(r.value), date: String(r.date) }
+        : null;
     } catch {
       return null;
     }
   })();
-  daily.vo2max = latestOf("vo2max") ?? latestActivityVo2;
-  daily.acute_load = latestOf("acute_load");
-  daily.fitness_age = latestOf("fitness_age");
-  daily.training_readiness = latestOf("training_readiness"); // latest readiness, alongside the window avg
-  // Runner performance signals — current point-in-time values (latest non-null).
-  daily.endurance_score = latestOf("endurance_score");
-  daily.hill_score = latestOf("hill_score");
-  daily.race_predict_5k_sec = latestOf("race_predict_5k_sec");
-  daily.race_predict_10k_sec = latestOf("race_predict_10k_sec");
-  daily.race_predict_half_sec = latestOf("race_predict_half_sec");
-  daily.race_predict_marathon_sec = latestOf("race_predict_marathon_sec");
-  try {
-    const r = db
-      .prepare(
-        `SELECT training_load_balance AS v FROM garmin_daily_metrics
-       WHERE date >= ? AND training_load_balance IS NOT NULL ORDER BY date DESC LIMIT 1`
-      )
-      .get(since) as any;
-    daily.training_load_balance = r?.v ?? null;
-  } catch {
-    daily.training_load_balance = null;
+  if (daily.vo2max == null && latestActivityVo2 != null) {
+    daily.vo2max = latestActivityVo2.value;
+    quality.vo2max = {
+      latest_value: latestActivityVo2.value,
+      latest_date: latestActivityVo2.date,
+      source: "garmin_activity",
+      sample_count: 1,
+      expected_days: windowDays,
+      window_days: windowDays,
+      freshness: freshness(latestActivityVo2.date),
+    };
   }
-  return { days, since, source, activities, hard_sessions: hard, recovery: daily };
+  return { days: windowDays, since, source, activities, hard_sessions: hard, recovery: daily, quality };
 }

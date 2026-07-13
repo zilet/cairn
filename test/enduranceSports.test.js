@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { activitySportWhere, canonicalEnduranceSport, enduranceSportPatterns } from "../dist/repo/endurance-sports.js";
+import {
+  activitySportWhere,
+  canonicalEnduranceSport,
+  configuredEnduranceSportKeys,
+  enduranceSportPatterns,
+  sportPatternsForKey,
+} from "../dist/repo/endurance-sports.js";
 
 test("endurance sport patterns default to running and classify common disciplines", () => {
   assert.deepEqual(enduranceSportPatterns(), ["run", "running", "jog", "jogging"]);
@@ -8,6 +14,13 @@ test("endurance sport patterns default to running and classify common discipline
   assert.deepEqual(enduranceSportPatterns("running, MTB"), ["run", "running", "jog", "jogging", "cycling", "cycle", "bike", "biking", "ride", "riding", "mtb", "gravel", "cyclocross"]);
   assert.deepEqual(enduranceSportPatterns("triathlon"), ["run", "running", "jog", "jogging", "cycling", "cycle", "bike", "biking", "ride", "riding", "mtb", "gravel", "cyclocross", "swim", "swimming", "triathlon", "multisport"]);
   assert.deepEqual(enduranceSportPatterns("rowing erg"), ["row", "rowing", "erg"]);
+});
+
+test("configured endurance sports preserve modality order without mixing units", () => {
+  assert.deepEqual(configuredEnduranceSportKeys("running, MTB"), ["run", "ride"]);
+  assert.deepEqual(configuredEnduranceSportKeys("MTB and running"), ["ride", "run"]);
+  assert.deepEqual(configuredEnduranceSportKeys("", false), []);
+  assert.deepEqual(sportPatternsForKey("run"), ["run", "running", "jog", "jogging"]);
 });
 
 test("activity sport WHERE helper returns token-aware parameterized SQL", () => {

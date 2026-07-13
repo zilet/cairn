@@ -22,11 +22,13 @@ import {
   logSetByName,
   recentTraining,
   reopenSession,
+  sessionHighlights,
   setSessionFeedback,
   skipExercise,
   unskipExercise,
   updateSessionNotes,
   updateSet,
+  weekWins,
 } from "../domain/training/index.js";
 
 export const trainingLogRouter = Router();
@@ -54,9 +56,22 @@ trainingLogRouter.get("/sessions/:id", (req, res) => {
   res.json(s);
 });
 
+// Motivational progress for one session: PRs set, per-exercise comparison to last
+// session, and a small trailing-7-day rollup. Soft read — an unknown session is a
+// normal "no highlights" state, so return 200 + null (the /sessions?date= convention),
+// not 404. Factual, never a score.
+trainingLogRouter.get("/sessions/:id/highlights", (req, res) => res.json(sessionHighlights(Number(req.params.id))));
+
 trainingLogRouter.post("/sessions/:id/finish", (req, res) => {
   try {
-    res.json(finishSession(Number(req.params.id), (req.body ?? {}).notes ?? null));
+    // Normalize an empty/whitespace-only/missing note to null so it can never
+    // overwrite an existing note (finishSession COALESCEs — only NULL preserves).
+    // The repo guards too; this keeps an offline outbox replay's {notes:""} clean
+    // at the boundary. PUT /sessions/:id/notes below is the deliberate edit path,
+    // where an explicit "" is a real "clear this note" — so it is left untouched.
+    const raw = (req.body ?? {}).notes;
+    const notes = raw == null || !String(raw).trim() ? null : String(raw).trim();
+    res.json(finishSession(Number(req.params.id), notes));
   } catch (e: any) {
     res.status(400).json({ error: e.message });
   }
@@ -179,6 +194,13 @@ trainingLogRouter.get("/activities/:id", (req, res) => {
 trainingLogRouter.get("/activities/:id/stream", streamEnrichRow("activity", getActivity));
 
 trainingLogRouter.get("/stats", (_req, res) => res.json(getWeeklyStats()));
+
+// The week's motivational rollup (new bests, days trained, hard sets, filled volume,
+// weight-trend pace) ending at ?date= (default today). Evidence of forward motion,
+// in plain words — never a 0-100 score.
+trainingLogRouter.get("/week-wins", (req, res) =>
+  res.json(weekWins(req.query.date != null ? String(req.query.date) : undefined))
+);
 
 // Endurance PRs (v35): best efforts from the logged cardio (longest distance /
 // duration + fastest pace at standard distances). ?type=run|ride filters. Plain

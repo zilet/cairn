@@ -159,20 +159,31 @@ function settingsSourcesSliceHtml(options: SettingsSourcesSliceOptions): string 
 
         <h1 class="lbl" style="margin:22px 0 8px">Apple Health (steps, sleep, recovery)</h1>
         <div class="sess-line" style="color:var(--muted)">
-          An iOS Shortcut can post daily metrics straight to Cairn. Missing fields are fine; Cairn
-          keeps working without wearable data.
+          A personal iOS Shortcut can read permitted Health samples and post one idempotent daily summary.
+          Cairn opens Apple's editor and gives you the exact build sheet; Apple still requires you to add
+          and approve the actions on your phone.
         </div>
         <div class="ah-fields">
-          <span>date</span><span>steps</span><span>sleep_min</span><span>resting_hr</span><span>hrv_ms</span><span>active_calories</span>
+          <span>steps</span><span>sleep</span><span>resting HR</span><span>HRV</span><span>active energy</span><span>VO₂ max</span>
         </div>
         <div class="field" style="margin-top:12px"><label>POST URL</label>
           <div class="ah-url"><code id="ahUrl"></code><button id="ahUrlCopy" class="ghostbtn ah-copy" type="button">Copy</button></div>
         </div>
-        <div class="ah-example">
-          <span class="ah-example-lbl">Shortcut body</span>
-          <code>[{"date":"2026-06-13","steps":8421,"resting_hr":52}]</code>
+        <div class="ah-builder-actions">
+          <a class="ghostbtn ah-open" href="shortcuts://create-shortcut">Open Shortcuts</a>
+          <button id="ahRecipeCopy" class="ghostbtn" type="button">Copy build sheet</button>
         </div>
-        <div class="sess-line" style="color:var(--muted);margin-top:8px">Full Shortcut recipe: <code>docs/APPLE_HEALTH.md</code></div>
+        <div class="sess-line ah-secret-note" style="color:var(--muted);margin-top:8px">The build sheet includes your locally stored access token only when you tap Copy. Treat it like a password and put it in an Authorization header, never the URL.</div>
+        <details class="ah-steps">
+          <summary>What remains on the phone</summary>
+          <ol>
+            <li>Add Find Health Samples actions and allow only the metrics you want to share.</li>
+            <li>Build a Dictionary with <code>source: apple_health</code>, the date, and available summaries.</li>
+            <li>POST it with Get Contents of URL; show the returned <code>ok</code>/<code>errors</code>.</li>
+            <li>Test once, then optionally add a Time of Day personal automation.</li>
+          </ol>
+        </details>
+        <div class="sess-line" style="color:var(--muted);margin-top:8px">Full verified recipe and limitations: <code>docs/APPLE_HEALTH.md</code></div>
       </section>`;
 }
 

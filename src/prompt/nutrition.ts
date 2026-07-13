@@ -11,6 +11,7 @@ import {
   renderDexaTargeting,
   renderDiscipline,
   renderEnduranceGoal,
+  renderSignalState,
   renderTrajectory,
   renderTodayFuel,
   renderStreamingContract,
@@ -369,7 +370,7 @@ export function buildMealPlanPrompt(userInstruction?: string): string {
     : "";
   const expBlock =
     exp.tdee != null
-      ? `\nDERIVED EXPENDITURE (real — from logged intake minus the weighted weight trend; confidence ${exp.confidence}): TDEE ≈ ${exp.tdee} kcal/day; recent avg intake ${exp.intake_avg_kcal ?? "?"} kcal; weight trend ${exp.trend_lb_wk ?? "?"} lb/wk. Anchor daily_kcal to goal.recommended, but SANITY-CHECK it against this measured expenditure — if they diverge a lot, trust the lean-safe target implied by this real TDEE over a stale goal number.\n`
+      ? `\nBEST-EFFORT EXPENDITURE: TDEE ≈ ${exp.tdee} kcal/day. Basis: ${exp.basis} Outcome-trend confidence ${exp.confidence}; outcome anchor ${exp.outcome_tdee ?? "unavailable"} kcal; recent avg intake ${exp.intake_avg_kcal ?? "?"} kcal; weight trend ${exp.trend_lb_wk ?? "?"} lb/wk. The wearable/RMR/profile prior is an alternative anchor, NOT activity to add on top. goal.recommended already consumes this same chosen estimate; use that mode-correct target and protect fuel when deterministic fatigue/hybrid evidence calls for it.\n`
       : "";
   const trainingSignals = ctx.training_signals as any;
   const fatigue = trainingSignals?.autoregulation?.note
@@ -430,7 +431,7 @@ ${CONTEXT_GUARDRAILS}
 - HEALTH MARKERS specifically: make the ACT-NOW nutrition priorities in the PRIORITIZED HEALTH FOCUS
   the backbone of the plan (e.g. a lipid-lowering pattern, iron-rich foods for low ferritin) — let them
   shape the default meals, not just a footnote; flag the marker-driven emphasis in notes. Not medical advice.
-${renderDiscipline(ctx, "nutrition")}${renderEnduranceGoal(ctx, "nutrition")}${freqBlock}${expBlock}${fatigue}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderTrajectory(ctx)}${renderFoodMemory(planningMemory)}${renderDexaTargeting(ctx, "nutrition")}${renderBodyComp(ctx)}${renderHouseholdDiet(ctx)}
+${renderSignalState(ctx)}${renderDiscipline(ctx, "nutrition")}${renderEnduranceGoal(ctx, "nutrition")}${freqBlock}${expBlock}${fatigue}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderTrajectory(ctx)}${renderFoodMemory(planningMemory)}${renderDexaTargeting(ctx, "nutrition")}${renderBodyComp(ctx)}${renderHouseholdDiet(ctx)}
 TASK: ${userInstruction?.trim() || (disciplineOf(ctx) === "endurance" ? "Build next week's meal plan to FUEL the training week — carbs periodized around long/quality sessions, protein adequate for recovery; no forced deficit unless fat loss is the stated goal." : "Build next week's meal plan aligned to goal.recommended for the active GOAL MODE and the protein target.")}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
@@ -441,9 +442,9 @@ ${JSON.stringify(planningCtx)}`;
 }
 
 // ---------- T3: adaptive nutrition check-in (MacroFactor-style retarget) ----------
-// A nutrition target CHANGE, drafted as a PROPOSAL the user reviews — never
-// auto-applied. "no_change" is a first-class, common answer: most weeks nothing
-// has really moved and the calm thing is to stay quiet.
+// A nutrition target CHANGE, drafted into the ledger and routed through the
+// server autonomy policy. "no_change" is a first-class, common answer: most
+// weeks nothing has really moved and the calm thing is to stay quiet.
 const NUTRITION_CHECKIN_SCHEMA = `{
   "change": true | false,
   "summary": "<one or two plain sentences: what the data shows and what you'd suggest — or, if change is false, why staying put is right>",
@@ -452,7 +453,7 @@ const NUTRITION_CHECKIN_SCHEMA = `{
     "protein_g": <number — daily protein target, hold or raise; never drop protein under a deficit>,
     "carbs_g": <number|null>,
     "fat_g": <number|null>,
-    "prev_target_kcal": <number|null — the target this replaces, if known>,
+    "prev_target_kcal": <number|null — context only; the server replaces this with its active target>,
     "reason": "<short, kind, trend-grounded reason; never about 'being good' or adherence>"
   },
   "notes": "<optional — anything to flag, may be empty>"
@@ -492,8 +493,9 @@ export function buildNutritionCheckinPrompt(ctx?: CoachContext, opts: { windowDa
 Right now you're the nutritionist — calm, goal-aware, longevity-focused — running a
 quiet adaptive-nutrition check-in (MacroFactor-style). Their REAL energy expenditure has been derived
 from logged intake and the bodyweight trend, adherence-neutral — it does NOT care whether they "were
-good." Decide whether their calorie/macro target should change, and if so propose ONE calm adjustment
-for them to review. NOTHING is applied automatically — they drive.
+good." Decide whether their calorie/macro target should change, and if so propose ONE calm adjustment.
+The server records the decision and applies its configured autonomy policy: review posture holds it;
+Lead mode may schedule a bounded reversible change at the next food-day boundary with Undo.
 
 THE CONSTITUTION (binding):
 - Adherence-NEUTRAL and kind. NEVER mention logging gaps, willpower, "being good/bad", or guilt. A
@@ -503,15 +505,18 @@ THE CONSTITUTION (binding):
 - A SUGGESTION, never a verdict. Only propose a change when the trend has GENUINELY moved away from
   the goal — otherwise set change:false and stay quiet (the common, correct answer most weeks).
 
-DERIVED EXPENDITURE (real TDEE from intake − weighted weight trend):
+BEST-EFFORT EXPENDITURE (chosen TDEE plus explicit outcome/prior anchors; never add wearable activity twice):
 ${JSON.stringify(exp)}
 
 CURRENT TARGET: ${currentTarget != null ? `~${currentTarget} kcal/day` : "(none set)"}, protein ~${proteinTarget != null ? `${proteinTarget} g/day` : "(unset)"}${targetIsAccepted ? " (the user's ACCEPTED target from a prior check-in — set prev_target_kcal to this, and only change it if the trend has genuinely moved since)" : ""}.
 GOAL CHECK (mode-correct recommendation): ${JSON.stringify(goal)}
 ${renderGoalMode(context)}${hardDiet}${plantProteinNote}
 WHEN TO PROPOSE A CHANGE (else change:false):
-- Confidence must be at least "medium" AND the trend must have drifted meaningfully off the goal pace
-  FOR THIS GOAL MODE — see below. Otherwise set change:false and stay quiet (the common, correct answer).
+- Outcome confidence must be at least "medium" AND the trend must have drifted meaningfully off the goal
+  pace FOR THIS GOAL MODE — see below. Otherwise set change:false and stay quiet (the common, correct
+  answer). The only low-confidence exception is a protective calorie RAISE when fresh deterministic
+  hybrid fuel-risk, repeated low-performance feedback, or explicit under-fueling/performance-fade notes
+  are present. Low confidence can NEVER justify a cut.
 - LOSE: weight flat or rising while the goal is to lose, or losing far faster than the lean-safe ceiling
   (then a small calorie RAISE keeps it sustainable).
 - LOSE + PERFORMANCE: repeated strength-endurance fade, a high hybrid fuel-risk read, or a mileage ramp
@@ -536,7 +541,7 @@ WHEN TO PROPOSE A CHANGE (else change:false):
   }
 
 ${CONTEXT_GUARDRAILS}
-${renderDiscipline(context, "nutrition")}${renderEnduranceGoal(context, "nutrition")}${renderConnectedBrain(context, { domains: ["nutrition"] })}${renderTrajectory(context)}${renderDexaTargeting(context, "nutrition")}${renderBodyComp(context)}${renderAcuteLoadNote(context)}${renderTodayFuel(context)}
+${renderSignalState(context)}${renderDiscipline(context, "nutrition")}${renderEnduranceGoal(context, "nutrition")}${renderConnectedBrain(context, { domains: ["nutrition"] })}${renderTrajectory(context)}${renderDexaTargeting(context, "nutrition")}${renderBodyComp(context)}${renderAcuteLoadNote(context)}${renderTodayFuel(context)}
 USER: profile: ${JSON.stringify(profile)}
 
 ${renderStreamingContract(
@@ -598,7 +603,7 @@ REPLACEMENT RULES:
 - It must fit the rest of the day (don't duplicate another meal's main protein/dish).
 
 ${longevityGuardrails(plantForward)}
-${renderGoalMode(ctx)}${hardDiet}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderTrajectory(ctx)}${renderFoodMemory((ctx as any)?.memory)}${renderHouseholdDiet(ctx)}
+${renderGoalMode(ctx)}${hardDiet}${renderSignalState(ctx)}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderTrajectory(ctx)}${renderFoodMemory((ctx as any)?.memory)}${renderHouseholdDiet(ctx)}
 ${
   prefs
     ? `

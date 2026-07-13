@@ -25,6 +25,14 @@ async function flushAsync() {
   await Promise.resolve();
 }
 
+// Local-date (not UTC) days-ago ISO string, matching date-utils.js's localISO() convention —
+// keeps humanDate() assertions stable regardless of when the suite actually runs.
+function isoDaysAgo(days) {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 class FakeClassList {
   constructor(owner) {
     this.owner = owner;
@@ -242,7 +250,7 @@ class FakeTemplate {
   }
 }
 
-function loadController({ apiImpl } = {}) {
+function loadController({ apiImpl, contextOverrides } = {}) {
   const requests = [];
   const invalidations = [];
   const toasts = [];
@@ -276,6 +284,12 @@ function loadController({ apiImpl } = {}) {
   };
   context.window = context;
   context.globalThis = context;
+  // Opt-in host globals a case needs (AbortController + a capturing setTimeout for
+  // the finish-timeout path, a fake localStorage for the notes draft). Omitted by
+  // default so existing cases run exactly as before (no AbortController → the finish
+  // timeout logic self-skips; no localStorage → the draft helpers no-op).
+  if (contextOverrides) Object.assign(context, contextOverrides);
+  vm.runInNewContext(readFileSync(join(root, "public/js/date-utils.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-session-feedback-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-session-skip-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-session-set-model.js"), "utf8"), context);
@@ -330,6 +344,7 @@ function loadController({ apiImpl } = {}) {
 
   return {
     controller: context.CairnTodaySessionController,
+    setModel: context.CairnTodaySessionSetModel,
     rootEl,
     deps,
     requests,
@@ -362,6 +377,10 @@ function addLoggingCard(rootEl) {
   card.appendChild(new FakeElement("button", { className: "ex-skip", dataset: { skip: encodeURIComponent("Push-up") } }));
   rootEl.appendChild(new FakeElement("div", { dataset: { finishstat: "" } }));
   return { card, row, button, logged };
+}
+
+function addLastSetLine(card, text) {
+  return card.appendChild(new FakeElement("div", { className: "ex-lastset", textContent: text }));
 }
 
 test("Today session controller logs a set only after a successful POST and wires delete", async () => {
@@ -515,6 +534,94 @@ test("Today session controller queues finish when the network drops", async () =
   assert.deepEqual(harness.invalidations, []);
 });
 
+test("Today session controller times out a hung finish and queues it with the typed notes", async () => {
+  // A flaky radio can leave the finish POST hanging forever (api() only arms its
+  // safety timeout for GETs). The controller's own ~15s AbortController must abort
+  // the call so it falls into the same offline outbox path a thrown fetch takes.
+  let fireFinishTimeout = null;
+  const harness = loadController({
+    // Never resolves on its own — only rejects when the finish AbortController fires.
+    apiImpl: (_path, opts) => new Promise((_resolve, reject) => {
+      const signal = opts && opts.signal;
+      if (signal) signal.addEventListener("abort", () => reject(new Error("aborted")));
+    }),
+    contextOverrides: {
+      AbortController,
+      clearTimeout: () => {},
+      setTimeout: (fn) => { fireFinishTimeout = fn; return 1; },
+    },
+  });
+  const surface = harness.rootEl.appendChild(new FakeElement("div", { className: "plansurface" }));
+  surface.appendChild(new FakeElement("input", { id: "sessNotes", value: "heavy pulls, felt great" }));
+  const finish = surface.appendChild(new FakeElement("button", { id: "finishBtn" }));
+
+  harness.controller.wireSessionSurface({
+    session: { id: 44, date: "2026-06-30", sets: [{ exercise: "Push-up" }] },
+    hasLoggedSets: false,
+  }, harness.deps);
+  finish.click();
+  await flushAsync();
+
+  // The POST is in flight (hung): nothing queued yet and the button stays disabled.
+  assert.equal(harness.requests[0].path, "/sessions/44/finish");
+  assert.equal(harness.outbox.length, 0);
+  assert.equal(finish.disabled, true);
+
+  // The 15s timeout fires → abort → api rejects → the offline path runs.
+  assert.equal(typeof fireFinishTimeout, "function", "the finish timeout was armed");
+  fireFinishTimeout();
+  await flushAsync();
+
+  assert.deepEqual(plain(harness.outbox), [{
+    kind: "finish",
+    path: "/sessions/44/finish",
+    body: { notes: "heavy pulls, felt great" },
+  }]);
+  assert.equal(finish.disabled, false);
+  assert.deepEqual(harness.toasts.map((toast) => toast.message), ["Finish saved — will sync when you're back online"]);
+});
+
+test("Today session controller restores a notes draft into an empty input and clears it on finish", async () => {
+  const store = new Map();
+  const localStorage = {
+    getItem: (key) => (store.has(key) ? store.get(key) : null),
+    setItem: (key, value) => { store.set(key, String(value)); },
+    removeItem: (key) => { store.delete(key); },
+  };
+  // A note drafted during a session that never finished (e.g. a reload) is keyed by
+  // log date and must be restored into the empty input on the next render.
+  store.set("cairn.sessnotes.2026-06-30", "draft that survived a reload");
+
+  const harness = loadController({
+    apiImpl: async (path) => path === "/sessions/44/finish"
+      ? { id: 44, date: "2026-06-30", sets: [], summary: { sets: 1, tonnage: 100 } }
+      : { ok: true },
+    contextOverrides: { localStorage },
+  });
+  const surface = harness.rootEl.appendChild(new FakeElement("div", { className: "plansurface" }));
+  const notes = surface.appendChild(new FakeElement("input", { id: "sessNotes", value: "" }));
+  const finish = surface.appendChild(new FakeElement("button", { id: "finishBtn" }));
+
+  harness.controller.wireSessionSurface({
+    session: { id: 44, date: "2026-06-30", sets: [{ exercise: "Push-up" }] },
+    hasLoggedSets: false,
+  }, harness.deps);
+
+  // The empty input is seeded from the saved draft.
+  assert.equal(notes.value, "draft that survived a reload");
+
+  // Typing persists the latest value under the date key.
+  notes.value = "updated mid-session";
+  notes.dispatch("input");
+  assert.equal(store.get("cairn.sessnotes.2026-06-30"), "updated mid-session");
+
+  // A clean finish clears the draft — it has done its job.
+  finish.click();
+  await flushAsync();
+  assert.equal(harness.requests[0].path, "/sessions/44/finish");
+  assert.equal(store.has("cairn.sessnotes.2026-06-30"), false);
+});
+
 test("Today session controller skips, undoes, and removes off-plan cards", async () => {
   const harness = loadController();
   const plan = harness.rootEl.appendChild(new FakeElement("article", { className: "ex", dataset: { card: "Squat" } }));
@@ -565,4 +672,155 @@ test("Today session controller saves feedback and merges the returned row", asyn
   assert.deepEqual(JSON.parse(harness.requests[0].opts.body), { soreness: 1, joint_pain: null });
   assert.equal(session.soreness, 2);
   assert.deepEqual(harness.toasts.map((toast) => toast.message), ["Noted"]);
+});
+
+// ---- "beat this" last-set quiet target line (lastSetScore / lastSetLineText / wireLastSetLine) ----
+
+test("lastSetLineText formats every weight encoding and appends a humanized date", () => {
+  const harness = loadController();
+  const { setModel, deps } = harness;
+  const date = isoDaysAgo(3);
+
+  assert.equal(setModel.lastSetLineText({ weight: 165, reps: 10, date }, deps), "Last time: 165 × 10 · 3 days ago");
+  assert.equal(setModel.lastSetLineText({ weight: null, reps: 12, date }, deps), "Last time: 12 reps · 3 days ago");
+  assert.equal(setModel.lastSetLineText({ weight: -30, reps: 8, date }, deps), "Last time: -30 lb assist × 8 · 3 days ago");
+  assert.equal(setModel.lastSetLineText({ duration_sec: 90, date }, deps), "Last time: 90s · 3 days ago");
+});
+
+test("lastSetLineText omits the date suffix when absent and renders nothing for missing/malformed data", () => {
+  const harness = loadController();
+  const { setModel, deps } = harness;
+
+  assert.equal(setModel.lastSetLineText({ weight: 100, reps: 5 }, deps), "Last time: 100 × 5");
+  assert.equal(setModel.lastSetLineText(null, deps), "");
+  assert.equal(setModel.lastSetLineText(undefined, deps), "");
+  assert.equal(setModel.lastSetLineText({}, deps), "");
+  assert.equal(setModel.lastSetLineText({ weight: "not-a-number", reps: 5 }, deps), "");
+});
+
+test("lastSetScore compares timed/loaded/bodyweight/assisted sets on the same scale as progress history", () => {
+  const harness = loadController();
+  const { setModel } = harness;
+
+  assert.equal(setModel.lastSetScore(165, 10, null), 165 * (1 + 10 / 30));
+  assert.equal(setModel.lastSetScore(null, 12, null), 12);
+  assert.equal(setModel.lastSetScore(-30, 8, null), 8);
+  assert.equal(setModel.lastSetScore(null, null, 90), 90);
+  // duration_sec wins even if weight/reps are also present (defensive — shouldn't happen).
+  assert.equal(setModel.lastSetScore(999, 999, 45), 45);
+});
+
+test("wireLastSetLine swaps the quiet line for a sage affirmation once the typed set beats last time, and back", async () => {
+  const harness = loadController();
+  const { card, row } = addLoggingCard(harness.rootEl);
+  const line = addLastSetLine(card, "Last time: 165 × 10 · last week");
+  row.querySelector(".in-w").value = "165";
+  row.querySelector(".in-r").value = "10";
+
+  harness.setModel.wireLastSetLine(row, { weight: 165, reps: 10, date: "2026-06-30" }, harness.deps);
+
+  assert.equal(line.textContent, "Last time: 165 × 10 · last week");
+  assert.equal(line.classList.contains("ex-lastset-beat"), false);
+
+  row.querySelector(".in-r").value = "11";
+  row.querySelector(".in-r").dispatch("input");
+  assert.equal(line.textContent, "That beats last time");
+  assert.equal(line.classList.contains("ex-lastset-beat"), true);
+
+  row.querySelector(".in-r").value = "10";
+  row.querySelector(".in-r").dispatch("input");
+  assert.equal(line.textContent, "Last time: 165 × 10 · last week");
+  assert.equal(line.classList.contains("ex-lastset-beat"), false);
+});
+
+test("wireLastSetLine handles bodyweight/assisted reps-only comparisons and timed durations", () => {
+  const harness = loadController();
+
+  // Bodyweight: more reps at no added weight beats last time.
+  {
+    const { card, row } = addLoggingCard(harness.rootEl);
+    const line = addLastSetLine(card, "Last time: 12 reps · last week");
+    row.querySelector(".in-w").value = "";
+    row.querySelector(".in-r").value = "12";
+    harness.setModel.wireLastSetLine(row, { weight: null, reps: 12, date: "2026-06-30" }, harness.deps);
+    row.querySelector(".in-r").value = "13";
+    row.querySelector(".in-r").dispatch("input");
+    assert.equal(line.classList.contains("ex-lastset-beat"), true);
+  }
+
+  // Timed: a longer hold beats last time; a shorter one does not.
+  {
+    const rootEl = new FakeElement("section");
+    const card = rootEl.appendChild(new FakeElement("article", { className: "ex" }));
+    const row = card.appendChild(new FakeElement("div", { className: "logrow", dataset: { ex: "Plank", day: "1", mode: "timed" } }));
+    const durEl = row.appendChild(new FakeElement("input", { className: "in-dur", value: "90" }));
+    row.appendChild(new FakeElement("button", { className: "logbtn" }));
+    const line = addLastSetLine(card, "Last time: 1:30 · last week");
+    harness.setModel.wireLastSetLine(row, { duration_sec: 90, date: "2026-06-30" }, harness.deps);
+
+    durEl.value = "100";
+    durEl.dispatch("input");
+    assert.equal(line.classList.contains("ex-lastset-beat"), true);
+
+    durEl.value = "80";
+    durEl.dispatch("input");
+    assert.equal(line.classList.contains("ex-lastset-beat"), false);
+  }
+});
+
+test("wireLastSetLine is a no-op without last-set data and wires each row only once", () => {
+  const harness = loadController();
+  const { card, row } = addLoggingCard(harness.rootEl);
+  const line = addLastSetLine(card, "Last time: 165 × 10 · last week");
+
+  // No lastSet -> nothing wired, typing never flips the class.
+  harness.setModel.wireLastSetLine(row, null, harness.deps);
+  row.querySelector(".in-r").value = "50";
+  row.querySelector(".in-r").dispatch("input");
+  assert.equal(line.classList.contains("ex-lastset-beat"), false);
+  assert.equal(line.dataset.wired, undefined);
+
+  // Wiring twice with real data only attaches listeners once (idempotent guard).
+  harness.setModel.wireLastSetLine(row, { weight: 165, reps: 10, date: "2026-06-30" }, harness.deps);
+  const firstWireListenerCount = row.querySelector(".in-r").listeners.get("input").length;
+  harness.setModel.wireLastSetLine(row, { weight: 165, reps: 10, date: "2026-06-30" }, harness.deps);
+  assert.equal(row.querySelector(".in-r").listeners.get("input").length, firstWireListenerCount);
+});
+
+test("Today session controller wires each row's last-time line automatically from wireSessionSurface's lastSets map", () => {
+  const harness = loadController();
+  const { card, row } = addLoggingCard(harness.rootEl);
+  const line = addLastSetLine(card, "Last time: 165 × 10 · last week");
+  row.querySelector(".in-w").value = "165";
+  row.querySelector(".in-r").value = "10";
+
+  harness.controller.wireSessionSurface({
+    session: { id: 44, date: "2026-06-30", sets: [] },
+    hasLoggedSets: false,
+    lastSets: { "Push-up": { weight: 165, reps: 10, date: "2026-06-30" } },
+  }, harness.deps);
+
+  assert.equal(line.classList.contains("ex-lastset-beat"), false);
+
+  row.querySelector(".in-r").value = "11";
+  row.querySelector(".in-r").dispatch("input");
+  assert.equal(line.textContent, "That beats last time");
+  assert.equal(line.classList.contains("ex-lastset-beat"), true);
+});
+
+test("Today session controller's lastSets wiring is a no-op for an exercise missing last-set data", () => {
+  const harness = loadController();
+  const { card, row } = addLoggingCard(harness.rootEl);
+  const line = addLastSetLine(card, "Last time: 165 × 10 · last week");
+
+  harness.controller.wireSessionSurface({
+    session: { id: 44, date: "2026-06-30", sets: [] },
+    hasLoggedSets: false,
+    lastSets: {},
+  }, harness.deps);
+
+  row.querySelector(".in-r").value = "50";
+  row.querySelector(".in-r").dispatch("input");
+  assert.equal(line.classList.contains("ex-lastset-beat"), false);
+  assert.equal(line.dataset.wired, undefined);
 });

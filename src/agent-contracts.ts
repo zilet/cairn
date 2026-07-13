@@ -6,6 +6,8 @@
 // acceptance. Keeping them pure makes the fallback boundary deterministic and
 // directly testable across one-shot and streaming agent paths.
 
+import { assessMealPlanAdequacy } from "./repo/nutrition-safety.js";
+
 type JsonObject = Record<string, any>;
 
 function object(value: unknown): JsonObject | null {
@@ -82,7 +84,7 @@ export function isWeekAheadResult(value: unknown): boolean {
   });
 }
 
-export function isMealPlanResult(value: unknown): boolean {
+export function isMealPlanStructureResult(value: unknown): boolean {
   const p = object(value);
   if (!p || !positive(p.daily_kcal) || !positive(p.daily_protein_g) || !Array.isArray(p.days)) return false;
   if (p.days.length < 5 || p.days.length > 7) return false;
@@ -94,6 +96,10 @@ export function isMealPlanResult(value: unknown): boolean {
       return !!meal && text(meal.name) && positive(meal.kcal) && finite(meal.protein_g) && Number(meal.protein_g) >= 0;
     });
   });
+}
+
+export function isMealPlanResult(value: unknown): boolean {
+  return isMealPlanStructureResult(value) && assessMealPlanAdequacy(value).ok;
 }
 
 export function isNutritionCheckinResult(value: unknown): boolean {

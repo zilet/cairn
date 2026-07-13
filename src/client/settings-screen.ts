@@ -207,6 +207,7 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
       garminStatusLine,
       api,
       toast,
+      authToken,
     };
   }
 

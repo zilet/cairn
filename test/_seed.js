@@ -9,6 +9,31 @@ import { localDateISO } from "../dist/repo/shared.js";
 
 export { db, repo };
 
+// Build a nutritionally complete 7-day meal-plan fixture while preserving any
+// named meals a test needs to inspect. New production writes reject partial
+// historical plans, so status/prompt tests should use this helper instead of
+// accidentally depending on an unchecked one-day artifact.
+export function completeMealWeek(parsed = {}) {
+  const dailyKcal = Number(parsed.daily_kcal) > 0 ? Math.round(Number(parsed.daily_kcal)) : 2200;
+  const dailyProtein = Number(parsed.daily_protein_g) > 0 ? Math.round(Number(parsed.daily_protein_g)) : 170;
+  const supplied = Array.isArray(parsed.days) ? parsed.days : [];
+  const days = Array.from({ length: 7 }, (_, index) => {
+    const source = supplied[index] && typeof supplied[index] === "object" ? supplied[index] : {};
+    const meals = (Array.isArray(source.meals) ? source.meals : []).map((meal) => ({ ...meal }));
+    if (!meals.length) meals.push({ name: "Meal-plan fixture", kcal: dailyKcal, protein_g: dailyProtein });
+    const earlier = meals.slice(0, -1);
+    const priorKcal = earlier.reduce((sum, meal) => sum + (Number(meal.kcal) || 0), 0);
+    const priorProtein = earlier.reduce((sum, meal) => sum + (Number(meal.protein_g) || 0), 0);
+    meals[meals.length - 1] = {
+      ...meals[meals.length - 1],
+      kcal: Math.max(1, dailyKcal - priorKcal),
+      protein_g: Math.max(0, dailyProtein - priorProtein),
+    };
+    return { ...source, day: String(source.day || `Fixture ${index + 1}`), meals };
+  });
+  return { ...parsed, daily_kcal: dailyKcal, daily_protein_g: dailyProtein, days };
+}
+
 // ---- date helpers (YYYY-MM-DD) ----
 export function isoDaysAgo(n) {
   return new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);

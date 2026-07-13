@@ -9,10 +9,9 @@ export const healthMetricsRouter = Router();
 // we normalize to a list and upsert each via UNIQUE(source,date) — fully
 // idempotent: re-posting a day overwrites it. Each row carries an optional
 // `source` (default 'apple') and a `date` (YYYY-MM-DD, required per row), plus
-// any of steps/sleep_min/sleep_score/resting_hr/hrv_ms/active_calories and a
+// any of steps/sleep/recovery plus best-effort Apple activity/cardio fields and a
 // free-form `raw` blob preserved verbatim for later.
-healthMetricsRouter.post("/health-metrics", (req, res) => {
-  const body = req.body ?? {};
+export function ingestHealthMetrics(body: any = {}) {
   // Cap the batch — a year of daily rows is a sane ceiling for a Shortcuts
   // backfill; the 25mb body limit + no auth means an unbounded loop of
   // synchronous sqlite upserts is otherwise possible. Per-row values are
@@ -28,20 +27,33 @@ healthMetricsRouter.post("/health-metrics", (req, res) => {
       continue;
     }
     try {
-      saved.push(recordDailyMetrics(row.source ?? "apple", String(row.date), {
-        steps: row.steps,
-        sleep_min: row.sleep_min,
-        sleep_score: row.sleep_score,
-        resting_hr: row.resting_hr,
-        hrv_ms: row.hrv_ms,
-        active_calories: row.active_calories,
-        raw: row.raw,
-      }));
+      saved.push(
+        recordDailyMetrics(row.source ?? "apple", String(row.date), {
+          steps: row.steps,
+          sleep_min: row.sleep_min,
+          sleep_score: row.sleep_score,
+          resting_hr: row.resting_hr,
+          hrv_ms: row.hrv_ms,
+          active_calories: row.active_calories,
+          total_calories: row.total_calories,
+          distance_km: row.distance_km,
+          exercise_min: row.exercise_min,
+          stand_hours: row.stand_hours,
+          spo2_avg: row.spo2_avg,
+          vo2max: row.vo2max,
+          raw: row.raw,
+        })
+      );
     } catch (e: any) {
       errors.push({ date: row.date, error: e?.message ?? "write failed" });
     }
   }
-  res.json({ ok: errors.length === 0, saved: saved.length, rows: saved, errors });
+  return { ok: errors.length === 0, saved: saved.length, rows: saved, errors };
+}
+
+// Ingest one row or a batch of source-agnostic daily metrics (Apple Health via Shortcuts).
+healthMetricsRouter.post("/health-metrics", (req, res) => {
+  res.json(ingestHealthMetrics(req.body ?? {}));
 });
 
 // Recent metrics for a source (default all sources) over the last N days.

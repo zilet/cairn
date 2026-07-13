@@ -221,6 +221,24 @@ test("Today signal summary preserves plain-language framing", () => {
     brief.signalsText({ signals: { consecutive_training_days: 3, low_sleep: true, checkin: true } }),
     "3 days of training in a row; your sleep's been running short; you mentioned how you're feeling."
   );
+  assert.equal(
+    brief.signalsText({
+      signals: { avg_sleep_min: 420, has_recovery_data: true, fatigue: { sleep_vs_norm: -40 } },
+    }),
+    "your sleep's been running short.",
+    "adequate absolute sleep is not called normal when it is materially below the athlete's baseline"
+  );
+  assert.equal(
+    brief.signalsText({
+      signals: { avg_sleep_min: 420, has_recovery_data: true, fatigue: { sleep_vs_norm: -10 } },
+    }),
+    "sleep's been about normal for you."
+  );
+  assert.equal(
+    brief.signalsText({ signals: { avg_sleep_min: 420, has_recovery_data: true } }),
+    "Reading your recent training and recovery.",
+    "missing personal-baseline evidence produces no normality claim"
+  );
 });
 
 test("Today Brief materiallyDiffers compares only the visible fields", () => {

@@ -5,6 +5,15 @@ type TodaySessionSetPayloadResult =
   | { ok: true; body: Record<string, unknown> }
   | { ok: false; message: string; focus?: () => void };
 
+// The last logged set for an exercise, as returned by GET /last-set — used for the
+// prefill AND for the "beat this" quiet target line.
+type TodayLastSetData = {
+  weight?: unknown;
+  reps?: unknown;
+  duration_sec?: unknown;
+  date?: unknown;
+} | null | undefined;
+
 type TodaySessionSetModelApi = {
   responseRecord(value: unknown): Record<string, unknown>;
   sessionPathId(session: Record<string, unknown>): string;
@@ -12,6 +21,10 @@ type TodaySessionSetModelApi = {
   invalidateSessionTruth(deps: ClientTodaySessionControllerDeps): void;
   invalidateSetTruth(deps: ClientTodaySessionControllerDeps): void;
   logPayloadFromRow(row: HTMLElement, deps: ClientTodaySessionControllerDeps): TodaySessionSetPayloadResult;
+  lastSetScore(weight: unknown, reps: unknown, durationSec: unknown): number;
+  lastSetLineText(lastSet: TodayLastSetData, deps: ClientTodaySessionControllerDeps): string;
+  currentSetScoreFromRow(row: HTMLElement, deps: ClientTodaySessionControllerDeps): number | null;
+  wireLastSetLine(row: Element | null | undefined, lastSet: TodayLastSetData, deps: ClientTodaySessionControllerDeps): void;
 };
 
 (() => {
@@ -97,6 +110,90 @@ type TodaySessionSetModelApi = {
     };
   }
 
+  // Score used to compare "this set" against "last time" for the quiet beat-this nudge.
+  // Timed: raw duration. Loaded (weight>0): Epley est-1RM. Bodyweight/assisted (weight
+  // null or negative): reps alone — a signed assist weight can't be folded into Epley
+  // without inverting its sign, so this mirrors progressHistorySessionSetScore's
+  // established convention for the same weight-encoding edge case.
+  function lastSetScore(weight: unknown, reps: unknown, durationSec: unknown): number {
+    if (durationSec != null) return Number(durationSec) || 0;
+    const w = Number(weight);
+    const r = Number(reps);
+    return w > 0 && r ? w * (1 + r / 30) : r || 0;
+  }
+
+  function lastSetLineText(lastSet: TodayLastSetData, deps: ClientTodaySessionControllerDeps): string {
+    const data = responseRecord(lastSet);
+    let base = "";
+    if (data.duration_sec != null) {
+      base = `Last time: ${deps.fmtDur(Number(data.duration_sec))}`;
+    } else if (data.reps != null) {
+      const reps = Number(data.reps);
+      if (!Number.isFinite(reps)) return "";
+      if (data.weight == null) {
+        base = `Last time: ${reps} reps`;
+      } else {
+        const weight = Number(data.weight);
+        if (!Number.isFinite(weight)) return "";
+        base = weight < 0 ? `Last time: ${weight} lb assist × ${reps}` : `Last time: ${weight} × ${reps}`;
+      }
+    } else {
+      return "";
+    }
+    const dateIso = typeof data.date === "string" ? data.date : "";
+    return dateIso ? `${base} · ${humanDate(dateIso)}` : base;
+  }
+
+  function currentSetScoreFromRow(row: HTMLElement, deps: ClientTodaySessionControllerDeps): number | null {
+    if (row.dataset.mode === "timed") {
+      const durEl = row.querySelector<HTMLInputElement>(".in-dur");
+      const sec = deps.parseDur(durEl?.value || "");
+      return sec != null && sec > 0 ? lastSetScore(null, null, sec) : null;
+    }
+    const rEl = row.querySelector<HTMLInputElement>(".in-r");
+    const repsRaw = rEl?.value ?? "";
+    if (repsRaw === "") return null;
+    const reps = Number(repsRaw);
+    if (!Number.isFinite(reps) || reps <= 0) return null;
+    const wEl = row.querySelector<HTMLInputElement>(".in-w");
+    const weightRaw = wEl?.value ?? "";
+    const weight = weightRaw === "" ? null : Number(weightRaw);
+    return lastSetScore(weight, reps, null);
+  }
+
+  // Live "beat this" affirmation: wires an input listener on the row's value fields
+  // (mirrors wireLogRow's per-row idempotent wiring in today-session-set-actions.ts) that
+  // swaps the quiet last-time line for a sage affirmation once the athlete's typed set
+  // out-scores it, and swaps back the moment it no longer does. Looks up the line via the
+  // shared .ex card ancestor (not DOM order) so it works regardless of where the caller
+  // places the .ex-lastset element relative to .logrow.
+  function wireLastSetLine(
+    row: Element | null | undefined,
+    lastSet: TodayLastSetData,
+    deps: ClientTodaySessionControllerDeps,
+  ): void {
+    if (!(row instanceof HTMLElement) || !lastSet) return;
+    const lineEl = row.closest(".ex")?.querySelector<HTMLElement>(".ex-lastset");
+    if (!lineEl || lineEl.dataset.wired) return;
+    lineEl.dataset.wired = "1";
+    const data = responseRecord(lastSet);
+    const baseline = lastSetScore(data.weight, data.reps, data.duration_sec);
+    const baseText = lineEl.textContent || "";
+    const timed = row.dataset.mode === "timed";
+    const inputs = timed
+      ? [row.querySelector<HTMLInputElement>(".in-dur")]
+      : [row.querySelector<HTMLInputElement>(".in-w"), row.querySelector<HTMLInputElement>(".in-r")];
+    const update = () => {
+      const current = currentSetScoreFromRow(row, deps);
+      const beats = current != null && current > baseline;
+      lineEl.textContent = beats ? "That beats last time" : baseText;
+      lineEl.classList.toggle("ex-lastset-beat", beats);
+    };
+    for (const el of inputs) {
+      if (el) el.addEventListener("input", update);
+    }
+  }
+
   const CAIRN_TODAY_SESSION_SET_MODEL: TodaySessionSetModelApi = {
     responseRecord,
     sessionPathId,
@@ -104,6 +201,10 @@ type TodaySessionSetModelApi = {
     invalidateSessionTruth,
     invalidateSetTruth,
     logPayloadFromRow,
+    lastSetScore,
+    lastSetLineText,
+    currentSetScoreFromRow,
+    wireLastSetLine,
   };
 
   Object.assign(globalThis, { CairnTodaySessionSetModel: CAIRN_TODAY_SESSION_SET_MODEL });

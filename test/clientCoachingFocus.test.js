@@ -247,7 +247,10 @@ test("the block calendar never attaches to a non-training lead; compact card car
   assert.doesNotMatch(compact, /Alongside|cfocus-conn|Next check-in/);
 
   // Program view: blockLine:false omits the calendar (the pblock card owns it there).
-  const noBlock = focus.coachingFocusCardHtml({ ...richFocus, block_line: "Week 3 of 5 — building volume." }, { blockLine: false });
+  const noBlock = focus.coachingFocusCardHtml(
+    { ...richFocus, block_line: "Week 3 of 5 — building volume." },
+    { blockLine: false }
+  );
   assert.doesNotMatch(noBlock, /Week 3 of 5/);
 });
 
@@ -294,6 +297,25 @@ test("action buttons render only with options.actions, gated per lead", () => {
 
   // The compact card (Stand overview) never carries actions.
   assert.doesNotMatch(focus.coachingFocusCompactHtml(recoveryLead), /data-cfocus-act/);
+});
+
+test("a daily easy/rest conductor lead never renders the program recovery-week action", () => {
+  const { focus } = loadCoachingFocus();
+  const daily = {
+    ...richFocus,
+    headline: "Keep today easy.",
+    lead: {
+      domain: "recovery",
+      title: "Keep today easy",
+      why: "One low recovery signal supports an easier day.",
+      day_posture: "easy",
+    },
+    parallel: [],
+  };
+  const html = focus.coachingFocusCardHtml(daily, { actions: true });
+  assert.match(html, /Keep today easy/);
+  assert.match(html, /data-cfocus-go="recovery"/, "the daily recovery read remains navigable");
+  assert.doesNotMatch(html, /data-cfocus-act="recovery-week"|Draft my recovery week/);
 });
 
 test("routing to the screen you're already on settles instead of re-rendering", () => {
@@ -391,16 +413,29 @@ test("under lead mode (acts:false) the card renders no one-tap action buttons �
   const swapLead = {
     ...richFocus,
     acts: false,
-    lead: { domain: "training", title: "Break the plateau", why: "Bench stalled", swap: { from: "Barbell Bench Press", to: ["DB Bench Press", "Incline Bench Press"] } },
+    lead: {
+      domain: "training",
+      title: "Break the plateau",
+      why: "Bench stalled",
+      swap: { from: "Barbell Bench Press", to: ["DB Bench Press", "Incline Bench Press"] },
+    },
   };
-  assert.doesNotMatch(focus.coachingFocusCardHtml(swapLead, { actions: true }), /data-cfocus-act/, "no swap ask under lead mode");
+  assert.doesNotMatch(
+    focus.coachingFocusCardHtml(swapLead, { actions: true }),
+    /data-cfocus-act/,
+    "no swap ask under lead mode"
+  );
 
   const recoveryLead = {
     ...richFocus,
     acts: false,
     lead: { domain: "recovery", title: "Take an earned recovery week", why: "Seven loaded weeks." },
   };
-  assert.doesNotMatch(focus.coachingFocusCardHtml(recoveryLead, { actions: true }), /data-cfocus-act/, "no draft ask under lead mode");
+  assert.doesNotMatch(
+    focus.coachingFocusCardHtml(recoveryLead, { actions: true }),
+    /data-cfocus-act/,
+    "no draft ask under lead mode"
+  );
 
   // A waiting draft still surfaces its review LINK (navigation, not a one-tap act).
   const drafted = {
@@ -419,7 +454,12 @@ test("a RUNNING recovery week lead renders non-interactive — no route, role, o
   const running = {
     available: true,
     headline: "",
-    lead: { domain: "recovery", title: "Recovery week — absorb the work", why: "This week is deliberately lighter.", recovery_active: true },
+    lead: {
+      domain: "recovery",
+      title: "Recovery week — absorb the work",
+      why: "This week is deliberately lighter.",
+      recovery_active: true,
+    },
     parallel: [],
     later: [],
     connections: [],

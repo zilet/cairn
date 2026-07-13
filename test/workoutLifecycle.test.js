@@ -31,6 +31,38 @@ test("finishSession stamps finished_at; reopenSession clears it", () => {
   assert.equal(s.finished_at, null, "reopen clears finished_at");
 });
 
+test("finishSession never clobbers a saved note with an empty/whitespace re-finish", () => {
+  // A note-less re-finish is the common shape of the offline outbox replay (the
+  // typed note lived only in the DOM). COALESCE would preserve on NULL but overwrite
+  // on "", so the repo normalizes empty/whitespace-only to null before the write.
+  repo.logSetByName({ exercise: "Note Guard", weight: 100, reps: 5, date: DATE });
+  let s = repo.getSessionByDate(DATE);
+
+  repo.finishSession(s.id, "felt strong");
+  s = repo.getSessionByDate(DATE);
+  assert.equal(s.notes, "felt strong", "the typed note is saved");
+
+  repo.finishSession(s.id, ""); // outbox replay with a lost note
+  s = repo.getSessionByDate(DATE);
+  assert.equal(s.notes, "felt strong", "an empty re-finish preserves the saved note");
+
+  repo.finishSession(s.id, "   "); // whitespace-only
+  s = repo.getSessionByDate(DATE);
+  assert.equal(s.notes, "felt strong", "a whitespace-only re-finish preserves it too");
+
+  repo.finishSession(s.id, "even stronger"); // a real note still overwrites
+  s = repo.getSessionByDate(DATE);
+  assert.equal(s.notes, "even stronger", "a real note still updates");
+});
+
+test("finishSession on a never-noted session stores null, not an empty string", () => {
+  repo.logSetByName({ exercise: "Never Noted", weight: 80, reps: 8, date: DATE });
+  const s = repo.getSessionByDate(DATE);
+  repo.finishSession(s.id, ""); // an empty note must not persist as ""
+  const after = repo.getSessionByDate(DATE);
+  assert.equal(after.notes, null, "an empty finish leaves notes null, never \"\"");
+});
+
 test("updateSet edits only the provided fields, returns the row with exercise name", () => {
   const set = repo.logSetByName({ exercise: "Test Bench", weight: 135, reps: 8, rir: 2, date: DATE });
   const updated = repo.updateSet(set.id, { weight: 140 });

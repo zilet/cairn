@@ -22,6 +22,7 @@ import {
   updateFoodNote,
   updateMealPlanDays,
 } from "../domain/nutrition/index.js";
+import { goalPace } from "../repo/goal-pace.js";
 import { ACCEPTED_MIME } from "../uploadMime.js";
 import { UPLOADS_DIR } from "../uploadPaths.js";
 import { backgroundOp } from "./background-op.js";
@@ -49,11 +50,19 @@ nutritionRouter.get("/mealplans", (req, res) =>
 );
 
 // ---- adaptive nutrition (T3 / Phase 3A) ----
-// Derived real expenditure (MacroFactor-style), adherence-neutral. Read-only;
-// powers the calm "Energy Balance" view. ?window= overrides the 21-day window.
+// Best-effort chosen expenditure with explicit outcome/prior anchors. Read-only;
+// powers the calm "Energy Balance" view. ?window= is safely clamped by the domain.
 nutritionRouter.get("/nutrition/expenditure", (req, res) => {
   const window = req.query.window ? Number(req.query.window) : undefined;
   res.json(estimateExpenditure(Number.isFinite(window as number) ? (window as number) : 21));
+});
+
+// Goal-pace series behind the motivational weight-progress chart: the canonical
+// weigh-in points, the recent-trend line (with a short forward projection), and
+// the straight line to the goal. Read-only, null-safe; ?days= clamps to 14–365.
+nutritionRouter.get("/nutrition/goal-pace", (req, res) => {
+  const days = req.query.days ? Number(req.query.days) : undefined;
+  res.json(goalPace(Number.isFinite(days as number) ? (days as number) : 90));
 });
 
 // A calm review of ONE day's logged food (v41): the entries (each editable),
@@ -64,8 +73,9 @@ nutritionRouter.get("/nutrition/day", (req, res) => {
   res.json(getDayIntake(date));
 });
 
-// Quiet adaptive-nutrition check-in: when the derived expenditure has drifted
-// meaningfully off the goal, the agent proposes a bounded calorie/macro change and
+// Quiet adaptive-nutrition check-in: medium/high outcome confidence may support
+// a bounded change; low confidence is hold-only except for a server-verified
+// protective fuel raise from fresh hybrid/fatigue evidence. The agent proposes and
 // the server autonomy policy either schedules it for the next food-day boundary or
 // holds it under explicit review posture. Most weeks nothing has moved
 // (change:false) and no proposal is created. ok:false (status 200) is the

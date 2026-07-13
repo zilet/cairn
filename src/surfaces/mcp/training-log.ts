@@ -14,11 +14,13 @@ import {
   logSetByName,
   recentTraining,
   reopenSession,
+  sessionHighlights,
   setSessionFeedback,
   skipExercise,
   unskipExercise,
   updateSessionNotes,
   updateSet,
+  weekWins,
 } from "../../domain/training/index.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 
@@ -156,6 +158,20 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
     "Get the logged session for a specific date (YYYY-MM-DD), with its sets and any skipped exercises.",
     { date: z.string().describe("YYYY-MM-DD") },
     async ({ date }) => asText(getSessionByDate(date))
+  );
+
+  server.tool(
+    "get_session_highlights",
+    "Evidence of forward motion for one logged session: any PRs set (a new best est-1RM, or a longer timed hold), how each exercise compares to its previous session (delta + direction), and a small trailing-7-day rollup (new bests, days trained). Read-only and factual — never a score. An unknown session id returns null.",
+    { id: z.number().int() },
+    async ({ id }) => asText(sessionHighlights(id))
+  );
+
+  server.tool(
+    "get_week_wins",
+    "The week's motivational rollup ending on a date (default today): new bests set, days trained, hard sets, muscle groups whose volume reached its productive range, and weight-trend pace toward the goal in plain words. Read-only and factual — never a score.",
+    { date: z.string().optional().describe("YYYY-MM-DD; defaults to today") },
+    async ({ date }) => asText(weekWins(date))
   );
 
   server.tool(

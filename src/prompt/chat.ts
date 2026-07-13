@@ -14,6 +14,7 @@ import {
   renderCoachingFocus,
   renderNow,
   renderReactionModel,
+  renderSignalState,
   renderTodayFuel,
   renderTrainingSignals,
   CAIRN_PERSONA,
@@ -158,7 +159,7 @@ GUARDRAILS:
 ${CONTEXT_GUARDRAILS}
 
 ${renderChatActionPromptProse()}
-${renderCoachingFocus(ctx, { brief: true })}${renderTrainingSignals(ctx)}${renderReactionModel(ctx)}${renderActiveContext(ctx)}${renderTodayFuel(ctx)}
+${renderSignalState(ctx)}${renderCoachingFocus(ctx, { brief: true })}${renderTrainingSignals(ctx)}${renderReactionModel(ctx)}${renderActiveContext(ctx)}${renderTodayFuel(ctx)}
 Keep the reply short and human; confirm what you logged. Do not narrate a background plan_update.
 When the user says a lift
 "felt easy" / "felt heavy", lean on the LOGGED-PERFORMANCE SIGNALS above to decide — only emit a

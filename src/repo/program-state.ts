@@ -24,7 +24,13 @@ import { canonicalGroup, classifyMuscleGroup, MUSCLE_LANDMARKS, type MuscleGroup
 import { effectiveVolumeByGroup, type VolumeSet } from "./exercise-variations.js";
 import { effectiveGoalMode, getPrimaryDiscipline, getProfile } from "./profile.js";
 import { getProgress } from "./sessions.js";
-import { activitySportWhere, enduranceSportPatterns } from "./endurance-sports.js";
+import {
+  activitySportWhere,
+  canonicalEnduranceSport,
+  configuredEnduranceSportKeys,
+  enduranceSportPatterns,
+  sportPatternsForKey,
+} from "./endurance-sports.js";
 import { recentEnduranceImpacts, type EnduranceImpact } from "./hybrid-load.js";
 import { sessionNoteSuggestsFatigue, sessionNoteSuggestsRapidFade } from "./training-fatigue.js";
 
@@ -73,6 +79,8 @@ export interface MesocycleState {
 }
 
 export interface EnduranceState {
+  sport: string;
+  sport_label: string;
   last_week_km: number | null;
   acute_chronic_ratio: number | null; // weekly-km ACWR
   longest_km_4wk: number | null;
@@ -81,6 +89,18 @@ export interface EnduranceState {
   status: "building" | "maintaining" | "detraining" | "spiking" | null;
   suggested_action: "build" | "hold" | "add-quality" | "ease" | null;
   why: string;
+  by_sport: Record<string, EnduranceSportVolumeEvidence>;
+}
+
+export interface EnduranceSportVolumeEvidence {
+  sport: string;
+  label: string;
+  sessions: number;
+  distance_km: number;
+  moving_min: number;
+  sources: string[];
+  last_date: string | null;
+  provenance: "activities";
 }
 
 export type HybridStatus = "clear" | "watch" | "shift-legs" | "fuel-protect";
@@ -98,6 +118,7 @@ export interface HybridEnduranceImpact {
   regions: MuscleGroup[];
   detail: string;
   why: string;
+  training_load?: number | null;
 }
 
 export interface HybridStrengthConflict {
@@ -122,6 +143,7 @@ export interface HybridState {
   headline: string;
   affected_groups: MuscleGroup[];
   recent_endurance: HybridEnduranceImpact | null;
+  recent_endurance_all?: HybridEnduranceImpact[];
   next_strength: HybridStrengthConflict | null;
   fuel: HybridFuelRead | null;
 }
@@ -535,8 +557,58 @@ export function weeklyKm(date: string, weekBack: number, patterns: string[]): nu
   return Math.round(Number(row?.km ?? 0) * 10) / 10;
 }
 
+function weeklySportEvidence(date: string): Record<string, EnduranceSportVolumeEvidence> {
+  const start = isoDaysAgo(date, 6);
+  const rows = db
+    .prepare(`SELECT date, type, duration_min, distance_km, source FROM activities WHERE date >= ? AND date <= ?`)
+    .all(start, date) as any[];
+  const grouped = new Map<string, EnduranceSportVolumeEvidence & { sourceSet: Set<string> }>();
+  for (const activity of rows) {
+    const sport = canonicalEnduranceSport(activity.type);
+    let row = grouped.get(sport.key);
+    if (!row) {
+      row = {
+        sport: sport.key,
+        label: sport.label,
+        sessions: 0,
+        distance_km: 0,
+        moving_min: 0,
+        sources: [],
+        sourceSet: new Set(),
+        last_date: null,
+        provenance: "activities",
+      };
+      grouped.set(sport.key, row);
+    }
+    row.sessions++;
+    const km = Number(activity.distance_km);
+    const min = Number(activity.duration_min);
+    if (Number.isFinite(km) && km > 0) row.distance_km += km;
+    if (Number.isFinite(min) && min > 0) row.moving_min += min;
+    const activityDate = String(activity.date ?? "").slice(0, 10);
+    if (activityDate && (!row.last_date || activityDate > row.last_date)) row.last_date = activityDate;
+    row.sourceSet.add(String(activity.source || "manual"));
+  }
+  const out: Record<string, EnduranceSportVolumeEvidence> = {};
+  for (const [key, row] of grouped) {
+    const { sourceSet, ...publicRow } = row;
+    out[key] = {
+      ...publicRow,
+      distance_km: Math.round(row.distance_km * 10) / 10,
+      moving_min: Math.round(row.moving_min),
+      sources: [...sourceSet].sort(),
+    };
+  }
+  return out;
+}
+
 function enduranceState(date: string): EnduranceState {
-  const patterns = enduranceSportPatterns(getProfile()?.endurance_sport);
+  const profile = getProfile();
+  const configuredSports = configuredEnduranceSportKeys(profile?.endurance_sport);
+  const primarySport = configuredSports[0] ?? "run";
+  const patterns = sportPatternsForKey(primarySport);
+  const primaryDescriptor = canonicalEnduranceSport(primarySport);
+  const bySport = weeklySportEvidence(date);
   const lastWeek = weeklyKm(date, 0, patterns);
   const chronicWeeksKm = [1, 2, 3, 4].map((b) => weeklyKm(date, b, patterns));
   const chronic = chronicWeeksKm.reduce((a, b) => a + b, 0) / 4;
@@ -598,12 +670,13 @@ function enduranceState(date: string): EnduranceState {
     : "maintaining";
   let action: EnduranceState["suggested_action"];
   let why: string;
+  const volumeWord = primarySport === "run" ? "Mileage" : `${primaryDescriptor.label} distance`;
   if (status === "spiking") {
-    action = "ease"; why = "Mileage jumped this week — hold it here and let it absorb before adding more.";
+    action = "ease"; why = `${volumeWord} jumped this week — hold it here and let it absorb before adding more.`;
   } else if (status === "detraining") {
-    action = "build"; why = "Running's tapered off — a gentle, steady rebuild will bring the base back.";
+    action = "build"; why = `${primaryDescriptor.label} has tapered off — a gentle, steady rebuild will bring the base back.`;
   } else if (buildingBase) {
-    action = "build"; why = "You're rebuilding your aerobic base — keep runs easy and conservative; this is base-building, not overreaching.";
+    action = "build"; why = `You're rebuilding your aerobic base — keep ${primaryDescriptor.label.toLowerCase()} easy and conservative; this is base-building, not overreaching.`;
   } else if (!hasQuality && base >= 10) {
     action = "add-quality"; why = "Solid easy base, but it's all one pace — one tempo or interval session a week would lift your ceiling.";
   } else if (status === "building") {
@@ -613,9 +686,12 @@ function enduranceState(date: string): EnduranceState {
   }
 
   return {
+    sport: primarySport,
+    sport_label: primaryDescriptor.label,
     last_week_km: lastWeek, acute_chronic_ratio: acwr,
     longest_km_4wk: longest?.km != null ? Math.round(Number(longest.km) * 10) / 10 : null,
     has_quality: hasQuality, pace_trend: paceTrend, status, suggested_action: action, why,
+    by_sport: bySport,
   };
 }
 
@@ -644,10 +720,12 @@ function impactSummary(impact: EnduranceImpact): HybridEnduranceImpact {
     regions: impact.regions,
     detail: impact.detail,
     why: impact.why,
+    training_load: impact.training_load,
   };
 }
 
 interface PlannedStrengthDay {
+  plan_day_id: number;
   day_number: number;
   day_name: string;
   focus: string | null;
@@ -657,7 +735,7 @@ interface PlannedStrengthDay {
 
 function plannedStrengthDays(): PlannedStrengthDay[] {
   const rows = db.prepare(
-    `SELECT pd.day_number AS day_number, pd.name AS day_name, pd.focus AS focus,
+    `SELECT pd.id AS plan_day_id, pd.day_number AS day_number, pd.name AS day_name, pd.focus AS focus,
             e.name AS exercise, e.muscle_group AS muscle_group,
             pi.sets AS sets, pi.target_weight AS target_weight
        FROM plan_days pd
@@ -673,6 +751,7 @@ function plannedStrengthDays(): PlannedStrengthDay[] {
     const dayNumber = Number(row.day_number);
     if (!Number.isFinite(dayNumber)) continue;
     const cur = byDay.get(dayNumber) ?? {
+      plan_day_id: Number(row.plan_day_id),
       day_number: dayNumber,
       day_name: String(row.day_name || `Day ${dayNumber}`),
       focus: row.focus == null ? null : String(row.focus),
@@ -691,25 +770,53 @@ function plannedStrengthDays(): PlannedStrengthDay[] {
   return [...byDay.values()].sort((a, b) => a.day_number - b.day_number);
 }
 
-function nextStrengthConflict(date: string, affectedGroups: MuscleGroup[], impact: EnduranceImpact | null): HybridStrengthConflict | null {
+function completedPlanDayOnDate(planDayId: number, date: string): boolean {
+  const row = db
+    .prepare(
+      `SELECT 1 AS yes FROM sessions s
+        WHERE s.plan_day_id = ? AND s.date = ?
+          AND (s.finished_at IS NOT NULL OR EXISTS (SELECT 1 FROM logged_sets ls WHERE ls.session_id = s.id))
+        LIMIT 1`
+    )
+    .get(planDayId, date) as any;
+  return !!row?.yes;
+}
+
+function nextStrengthConflict(
+  date: string,
+  affectedGroups: MuscleGroup[],
+  impacts: EnduranceImpact[]
+): HybridStrengthConflict | null {
   const days = plannedStrengthDays();
   if (!days.length) return null;
   const today = weekDayNumber(date);
   const ordered = days
-    .map((d) => ({ ...d, days_until: (d.day_number - today + 7) % 7 }))
+    .map((d) => {
+      let daysUntil = (d.day_number - today + 7) % 7;
+      // Today's plan day is no longer "next" once its real session is complete;
+      // the next occurrence is a week away.
+      if (daysUntil === 0 && completedPlanDayOnDate(d.plan_day_id, date)) daysUntil = 7;
+      return { ...d, days_until: daysUntil };
+    })
     .sort((a, b) => a.days_until - b.days_until || a.day_number - b.day_number);
   const next = ordered[0];
   const affected = new Set(affectedGroups);
   const impacted = next.groups.filter((g) => affected.has(g));
   const impactedLower = impacted.some((g) => LOWER_GROUPS.has(g));
+  const overlappingImpacts = impacts.filter((impact) => impact.regions.some((group) => impacted.includes(group)));
+  const leadImpact = overlappingImpacts[0] ?? impacts[0] ?? null;
   let advice: HybridStrengthAdvice = "ok";
   let why = "The next strength day does not meaningfully overlap the recent endurance load.";
-  if (impact && impacted.length) {
-    const what = `${impact.detail ? `${impact.detail} ` : ""}${impact.label}`;
-    if (impact.load === "heavy" && next.heavy_leg_day && impactedLower && next.days_until <= 1) {
+  if (leadImpact && impacted.length) {
+    const labels = [...new Set(overlappingImpacts.map((impact) => impact.label))];
+    const what = labels.length > 1
+      ? labels.join(" + ")
+      : `${leadImpact.detail ? `${leadImpact.detail} ` : ""}${leadImpact.label}`;
+    const anyHeavy = overlappingImpacts.some((impact) => impact.load === "heavy");
+    if (anyHeavy && next.heavy_leg_day && impactedLower && next.days_until <= 1) {
       advice = "swap-or-upper";
       why = `${cap(impacted.join(", "))} just took a ${what} dose — make the next lower-body session upper/core, technique-only, or keep legs easy.`;
-    } else if (impact.load !== "light" && next.days_until <= 2) {
+    } else if (overlappingImpacts.some((impact) => impact.load !== "light") && next.days_until <= 2) {
       advice = "hold-load";
       why = `${cap(impacted.join(", "))} overlaps the recent ${what}; hold lower-body load or trim sets until it absorbs.`;
     } else {
@@ -752,9 +859,10 @@ function hybridFuelRead(profile: any, impact: EnduranceImpact | null, endurance:
 
 function hybridState(date: string, endurance: EnduranceState | null, discipline: string): HybridState | null {
   const impacts = recentEnduranceImpacts(3, date);
-  const lead = impacts.find((i) => i.load === "heavy") ?? impacts.find((i) => i.load === "moderate") ?? impacts[0] ?? null;
-  const affectedGroups = lead && lead.load !== "light" ? lead.regions : [];
-  const conflict = nextStrengthConflict(date, affectedGroups, lead);
+  const materialImpacts = impacts.filter((impact) => impact.load !== "light");
+  const lead = materialImpacts[0] ?? impacts[0] ?? null;
+  const affectedGroups = [...new Set(materialImpacts.flatMap((impact) => impact.regions))];
+  const conflict = nextStrengthConflict(date, affectedGroups, materialImpacts);
   const profile = getProfile();
   const fuel = hybridFuelRead(profile, lead, endurance);
   const shouldShow = discipline === "hybrid" || discipline === "endurance" || !!lead || fuel?.risk !== "low";
@@ -771,9 +879,11 @@ function hybridState(date: string, endurance: EnduranceState | null, discipline:
   } else if (status === "fuel-protect") {
     headline = "Endurance plus fat loss is the limiter today — protect fuel and recovery before adding load.";
   } else if (status === "shift-legs") {
-    headline = `${cap(lead.label)} loaded the legs hard; move heavy lower-body work or keep it easy.`;
+    const labels = [...new Set(materialImpacts.map((impact) => impact.label))];
+    headline = `${cap(labels.join(" + ") || lead.label)} loaded the legs hard; move heavy lower-body work or keep it easy.`;
   } else if (status === "watch") {
-    headline = `${cap(lead.label)} is in the legs; keep overlapping strength conservative until it absorbs.`;
+    const labels = [...new Set(materialImpacts.map((impact) => impact.label))];
+    headline = `${cap(labels.join(" + ") || lead.label)} is in the worked regions; keep overlapping strength conservative until it absorbs.`;
   } else {
     headline = "Endurance and strength are not meaningfully competing today.";
   }
@@ -783,6 +893,7 @@ function hybridState(date: string, endurance: EnduranceState | null, discipline:
     headline,
     affected_groups: affectedGroups,
     recent_endurance: lead ? impactSummary(lead) : null,
+    recent_endurance_all: materialImpacts.map(impactSummary).slice(0, 6),
     next_strength: conflict,
     fuel,
   };

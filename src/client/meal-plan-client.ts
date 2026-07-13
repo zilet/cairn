@@ -38,11 +38,40 @@ type MealPlannerPaint = {
   const mealRowHtml = mealRows.mealRowHtml;
   const mealDayHtml = mealRows.mealDayHtml;
 
+  // Mirror the server's canonical-current adequacy rule so a legacy partial row
+  // returned for history can never become the planner's fallback current week.
+  // The authoritative write gate remains server-side; this is presentation defense.
+  function mealPlanIsAdequate(plan: MealRecord): boolean {
+    const parsed = mealRecord(plan.parsed);
+    const days = Array.isArray(parsed.days) ? parsed.days.map((day) => mealRecord(day)) : [];
+    const targetKcal = Number(parsed.daily_kcal);
+    const targetProtein = Number(parsed.daily_protein_g);
+    if (
+      days.length < 5 ||
+      days.length > 7 ||
+      !Number.isFinite(targetKcal) ||
+      targetKcal <= 0 ||
+      !Number.isFinite(targetProtein) ||
+      targetProtein <= 0
+    )
+      return false;
+    const kcalTolerance = Math.max(100, Math.round(targetKcal * 0.1));
+    const proteinTolerance = Math.max(10, Math.round(targetProtein * 0.1));
+    return days.every((day) => {
+      const meals = Array.isArray(day.meals) ? day.meals.map((meal) => mealRecord(meal)) : [];
+      const kcal = Math.round(meals.reduce((sum, meal) => sum + (Number(meal.kcal) || 0), 0));
+      const protein = Math.round(meals.reduce((sum, meal) => sum + (Number(meal.protein_g) || 0), 0));
+      return Math.abs(kcal - targetKcal) <= kcalTolerance && Math.abs(protein - targetProtein) <= proteinTolerance;
+    });
+  }
+
   function currentMealPlan(plans: unknown): MealRecord | null {
     const rows = Array.isArray(plans) ? plans.map((plan) => mealRecord(plan)) : [];
     return (
-      rows.find((plan) => KEPT_MEAL_PLAN_STATUSES.includes(String(plan.status)) && plan.parsed) ||
-      rows.find((plan) => plan.status === "draft" && plan.parsed) ||
+      rows.find(
+        (plan) => KEPT_MEAL_PLAN_STATUSES.includes(String(plan.status)) && plan.parsed && mealPlanIsAdequate(plan)
+      ) ||
+      rows.find((plan) => plan.status === "draft" && plan.parsed && mealPlanIsAdequate(plan)) ||
       null
     );
   }

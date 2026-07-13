@@ -259,6 +259,8 @@ export interface ClientAgentCliUpdateStatus {
   started_at?: string | null;
   finished_at?: string | null;
   error?: string | null;
+  stdout_tail?: string;
+  stderr_tail?: string;
   result?: unknown;
 }
 
@@ -562,6 +564,42 @@ export interface ClientTrainingCalendarCell {
 export interface ClientTrainingCalendarResponse {
   days: number;
   cells: ClientTrainingCalendarCell[];
+}
+
+export interface ClientGoalPacePoint {
+  date: string;
+  weight_lb: number;
+}
+
+export interface ClientGoalPaceLine {
+  lb_wk: number | null;
+  line: [ClientGoalPacePoint, ClientGoalPacePoint] | null;
+}
+
+export interface ClientGoalPaceResponse {
+  points: ClientGoalPacePoint[];
+  trend: ClientGoalPaceLine;
+  needed: ClientGoalPaceLine;
+  goal: { weight_lb: number | null; date: string | null };
+  window_days: number;
+}
+
+export interface ClientWeekWinsPr {
+  exercise: string;
+  label: string;
+}
+
+export interface ClientWeekWinsVolumeFilled {
+  muscle: string;
+  label: string;
+}
+
+export interface ClientWeekWinsResponse {
+  prs: ClientWeekWinsPr[];
+  trained_days_7: number;
+  week_sets: number;
+  volume_filled: ClientWeekWinsVolumeFilled[];
+  pace: { status: "on" | "behind" | "fast" | null; label: string | null };
 }
 
 export type ClientRunZoneKey = "Z1" | "Z2" | "Z3" | "Z4" | "Z5";
@@ -1914,6 +1952,7 @@ export interface ClientApiResponses {
   "/api/endurance-goal": ClientEnduranceGoal | null;
   "/api/volume": ClientVolumeByMuscleResponse;
   "/api/calendar": ClientTrainingCalendarResponse;
+  "/api/week-wins": ClientWeekWinsResponse;
   "/api/today": ClientTodayAggregate;
   "/api/today-read": ClientDayRead;
   "/api/today-read/reshape": ClientDayRead | { ok: true; job: ClientAgentJob };
@@ -1928,6 +1967,7 @@ export interface ClientApiResponses {
   "/api/next-step": ClientNextStep | null;
   "/api/nutrition/expenditure": ClientExpenditureEstimate;
   "/api/nutrition/checkin": ClientProposalResult;
+  "/api/nutrition/goal-pace": ClientGoalPaceResponse;
   "/api/coach/mealplan": ClientMealPlanDraftResponse | ClientAgentJobEnvelope;
   "/api/mealplans": ClientMealPlan[];
   "/api/food-notes": ClientFoodNote[] | ClientFoodNote;

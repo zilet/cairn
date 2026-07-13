@@ -64,6 +64,8 @@ type SettingsScreenCliUpdateStatus = {
   started_at?: string;
   finished_at?: string;
   error?: string;
+  stdout_tail?: string;
+  stderr_tail?: string;
 };
 
 type SettingsScreenAgentInfoResponse = import("../contracts/client-api.js").ClientAgentProbeResponse;

@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { db, repo } from "./_seed.js";
+import { db, localDaysAgo, repo } from "./_seed.js";
 import { nextPrescription } from "../dist/repo/progression.js";
 import { recordDecision } from "../dist/repo/brain-decisions.js";
 import { insertBrainEvaluation } from "../dist/repo/brain-evaluations.js";
-import { personalizeNutritionCheckinTarget } from "../dist/coachOps.js";
+import { personalizeNutritionCheckinTarget, protectiveFuelEvidence } from "../dist/coachOps.js";
 import { enqueueAgentJob, executeBrainReviewAction, onJobEvent } from "../dist/agentJobs.js";
 import { applyDueAnnouncedDecisions } from "../dist/domain/brain/autonomy-service.js";
 
@@ -107,6 +107,13 @@ test("learned nutrition response changes the proposal target inside the 250-kcal
   const standard = personalizeNutritionCheckinTarget({ target_kcal: 2_400, prev_target_kcal: 2_200, protein_g: 150 }, goal);
   assert.deepEqual({ kcal: standard.target_kcal, protein: standard.protein_g }, { kcal: 2_400, protein: 170 });
 
+  const forged = personalizeNutritionCheckinTarget(
+    { target_kcal: 5_000, prev_target_kcal: 4_900, protein_g: 170 },
+    goal
+  );
+  assert.equal(forged.prev_target_kcal, 2_200, "the server target replaces the forged previous target");
+  assert.equal(forged.target_kcal, 2_450, "the server-owned delta is hard-capped at +250");
+
   learnedMiss("nutrition_target", "nutrition", "weight_trend_lb_wk", null, "1", { min: -0.8, max: -0.3 }, { value: 0 });
   learnedMiss("nutrition_target", "nutrition", "weight_trend_lb_wk", null, "2", { min: -0.8, max: -0.3 }, { value: 0 });
   const personalized = personalizeNutritionCheckinTarget(
@@ -121,6 +128,45 @@ test("learned nutrition response changes the proposal target inside the 250-kcal
   const floored = personalizeNutritionCheckinTarget({ target_kcal: 1_000, prev_target_kcal: 2_200, protein_g: 100 }, goal);
   assert.equal(floored.target_kcal, 2_050, "lean-safe floor overrides the requested downward step");
   assert.equal(floored.protein_g, 170);
+});
+
+test("fresh deterministic hybrid load opens only the protective low-confidence fuel path", () => {
+  repo.setProfile({
+    primary_discipline: "hybrid",
+    endurance_sport: "running",
+    goal_mode: "lose",
+    weight_lb: 180,
+    goal_weight_lb: 170,
+  });
+  repo.addActivity({ type: "run", duration_min: 75, distance_km: 13, date: localDaysAgo(0) });
+  assert.ok(protectiveFuelEvidence().some((reason) => /hybrid fuel-risk/i.test(reason)));
+});
+
+test("recent sessions with no 1-tap performance feedback never fabricate 'repeated low performance' evidence", () => {
+  // performance is NULL until the athlete taps a feedback value — the common
+  // case. Number(null) === 0, so an unguarded `<= 2` check used to treat every
+  // feedback-less session as a low-performance one.
+  const ex = repo.upsertExercise({ name: "Feedback-less Squat", muscle_group: "legs" });
+  for (const date of [localDaysAgo(0), localDaysAgo(1)]) {
+    const session = repo.getOrCreateSession(date, null);
+    db.prepare(
+      `INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps, rir) VALUES (?, ?, 1, 135, 8, 2)`
+    ).run(session.id, ex.id);
+  }
+  assert.ok(
+    !protectiveFuelEvidence().some((reason) => /repeated low performance/i.test(reason)),
+    "no performance feedback was given, so no low-performance evidence should be produced"
+  );
+});
+
+test("recent sessions with genuinely low 1-tap performance feedback still produce protective evidence", () => {
+  for (const date of [localDaysAgo(0), localDaysAgo(1)]) {
+    repo.setSessionFeedback(date, { performance: 2 });
+  }
+  assert.ok(
+    protectiveFuelEvidence().some((reason) => /repeated low performance/i.test(reason)),
+    "two recent sessions with performance <= 2 should still produce the protective evidence"
+  );
 });
 
 test("a finished-session brain review quietly applies the deterministic next-session progression", async () => {

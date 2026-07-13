@@ -14,6 +14,8 @@ type TodayCompassStats = {
   endurance?: {
     week_km?: unknown;
     week_moving_min?: unknown;
+    total_moving_min?: unknown;
+    by_sport?: Record<string, unknown> | null;
   } | null;
 };
 
@@ -148,12 +150,33 @@ type TodayCompassBuild = {
     const done = finiteNumber(stats.week_done) ?? 0;
     const end = stats.endurance && typeof stats.endurance === "object" ? stats.endurance : {};
     const weekKm = finiteNumber(end.week_km) ?? 0;
+    const bySport = end.by_sport && typeof end.by_sport === "object" ? end.by_sport : {};
+    const sports = Object.values(bySport)
+      .filter((row): row is Record<string, unknown> => !!row && typeof row === "object")
+      .sort((a, b) => {
+        if (a.sport === "run") return -1;
+        if (b.sport === "run") return 1;
+        return (finiteNumber(b.moving_min) ?? 0) - (finiteNumber(a.moving_min) ?? 0);
+      });
+    if (!sports.length && (weekKm > 0 || (finiteNumber(end.week_moving_min) ?? 0) > 0)) {
+      sports.push({ sport: "run", label: "Running", distance_km: weekKm, moving_min: end.week_moving_min });
+    }
+    const distanceSports = sports.filter((row) => (finiteNumber(row.distance_km) ?? 0) > 0);
+    const leadSport = distanceSports[0] ?? sports[0] ?? null;
+    const leadDistance = finiteNumber(leadSport?.distance_km) ?? 0;
+    const leadMinutes = finiteNumber(leadSport?.moving_min) ?? 0;
+    const leadValue = leadDistance || leadMinutes;
+    const leadLabel = String(leadSport?.sport || "endurance");
+    const modalityLine = distanceSports
+      .map((row) => `${String(row.sport || "other")} ${deps.formatKm(finiteNumber(row.distance_km) ?? 0)} km`)
+      .join(" · ");
     const dots = statDots(planned, done);
     const paceTile = paceTileHtml(stats, deps);
     const offer = options.isToday ? paceOffer(stats, options.currentWeight) : null;
-    const mileageTile = `<div class="stat" title="Distance logged this week">
-        <div class="stat-n numeral"><span data-cu="${weekKm}">0</span><span class="stat-frac">km</span></div>
-        <div class="stat-l lbl">this week${end.week_moving_min ? ` · ${Math.round(Number(end.week_moving_min))} min` : ""}</div>
+    const mileageTile = `<div class="stat" title="Endurance volume by sport this week">
+        <div class="stat-n numeral"><span data-cu="${leadValue}">0</span><span class="stat-frac">${leadDistance ? "km" : "min"}</span></div>
+        ${modalityLine ? `<div class="stat-sub">${deps.escapeHtml(modalityLine)}</div>` : ""}
+        <div class="stat-l lbl">${deps.escapeHtml(leadLabel)} this week${leadMinutes ? ` · ${Math.round(leadMinutes)} min` : ""}</div>
       </div>`;
     const adherenceTile = `<div class="stat" title="Training sessions logged this week vs your plan">
         <div class="stat-n numeral"><span data-cu="${done}">0</span><span class="stat-frac">/${planned || "—"}</span></div>
@@ -170,7 +193,13 @@ type TodayCompassBuild = {
     const liftBit = done ? `${done} lift${done === 1 ? "" : "s"}` : "";
     const cardioBits = [];
     if (stats.week_cardio) cardioBits.push(`${stats.week_cardio} cardio`);
-    if (weekKm) cardioBits.push(`${deps.formatKm(weekKm)} km`);
+    if (distanceSports.length) {
+      cardioBits.push(
+        distanceSports
+          .map((row) => `${String(row.sport || "other")} ${deps.formatKm(finiteNumber(row.distance_km) ?? 0)} km`)
+          .join(" · ")
+      );
+    } else if (weekKm) cardioBits.push(`run ${deps.formatKm(weekKm)} km`);
     const cardioBit = cardioBits.join(" · ");
     const weekRecap = (options.isEndurance ? [cardioBit, liftBit] : [liftBit, cardioBit]).filter(Boolean).join(" · ");
     return {

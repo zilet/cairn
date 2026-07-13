@@ -5,6 +5,56 @@ export interface MeasuredRmrReading {
   document_id?: number | null;
 }
 
+export type MeasuredRmrFreshness = "fresh" | "aging" | "expired" | "undated";
+
+export interface MeasuredRmrAssessment extends MeasuredRmrReading {
+  age_days: number | null;
+  freshness: MeasuredRmrFreshness;
+  freshness_weight: number;
+  fresh_for_days: number;
+  expires_after_days: number;
+}
+
+export const MEASURED_RMR_FRESH_DAYS = 180;
+export const MEASURED_RMR_EXPIRES_DAYS = 365;
+
+// A lab measurement is a valuable anchor, not a permanent identity. Keep it at
+// full strength for six months, then linearly fade its authority until it expires
+// at one year. Undated/future readings stay visible but do not outrank current
+// wearable or profile evidence.
+export function assessMeasuredRmr(
+  reading: MeasuredRmrReading,
+  referenceDate: string
+): MeasuredRmrAssessment {
+  const measured = /^\d{4}-\d{2}-\d{2}$/.test(String(reading.date ?? ""))
+    ? Date.parse(`${reading.date}T00:00:00Z`)
+    : Number.NaN;
+  const reference = /^\d{4}-\d{2}-\d{2}$/.test(referenceDate)
+    ? Date.parse(`${referenceDate}T00:00:00Z`)
+    : Number.NaN;
+  const age = Number.isFinite(measured) && Number.isFinite(reference) ? Math.floor((reference - measured) / 86_400_000) : null;
+  let freshness: MeasuredRmrFreshness = "undated";
+  let freshnessWeight = 0;
+  if (age != null && age >= 0 && age <= MEASURED_RMR_FRESH_DAYS) {
+    freshness = "fresh";
+    freshnessWeight = 1;
+  } else if (age != null && age > MEASURED_RMR_FRESH_DAYS && age < MEASURED_RMR_EXPIRES_DAYS) {
+    freshness = "aging";
+    freshnessWeight =
+      (MEASURED_RMR_EXPIRES_DAYS - age) / (MEASURED_RMR_EXPIRES_DAYS - MEASURED_RMR_FRESH_DAYS);
+  } else if (age != null) {
+    freshness = "expired";
+  }
+  return {
+    ...reading,
+    age_days: age,
+    freshness,
+    freshness_weight: Math.round(freshnessWeight * 1000) / 1000,
+    fresh_for_days: MEASURED_RMR_FRESH_DAYS,
+    expires_after_days: MEASURED_RMR_EXPIRES_DAYS,
+  };
+}
+
 function plausibleRmr(value: unknown): number | null {
   const parsed = Number(String(value ?? "").replaceAll(",", ""));
   if (!Number.isFinite(parsed) || parsed < 700 || parsed > 5_000) return null;

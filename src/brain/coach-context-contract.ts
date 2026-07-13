@@ -1,5 +1,6 @@
 import type { CoachingFocus } from "../repo/coaching-focus.js";
 import type { MemoryKind, MemoryRow, RecentLearning } from "../repo/memory.js";
+import type { UnifiedSignalState } from "../repo/signal-state.js";
 
 export type CoachRecord = Record<string, any>;
 export type CoachGoalMode = "lose" | "maintain" | "gain";
@@ -216,6 +217,7 @@ export interface CoachContextEnvelope {
   directives: CoachDirective[];
   health_focus: CoachRecord | null;
   coaching_focus: CoachingFocus;
+  signal_state: UnifiedSignalState;
   symptom_links: CoachSymptomLink[];
   health_synthesis: CoachRecord | null;
   directive_feedback: CoachRecord[];

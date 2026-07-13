@@ -40,6 +40,31 @@ function hasProgressEnduranceRecord(value: unknown): value is ProgressEnduranceR
   return !!value && typeof value === "object";
 }
 
+function progressEnduranceSportRows(end: ProgressEnduranceRecord): ProgressEnduranceRecord[] {
+  const raw = progressEnduranceRecord(end.by_sport);
+  return Object.values(raw)
+    .filter(hasProgressEnduranceRecord)
+    .sort((a, b) => {
+      if (a.sport === "run") return -1;
+      if (b.sport === "run") return 1;
+      return progressEnduranceNumber(b.moving_min) - progressEnduranceNumber(a.moving_min);
+    });
+}
+
+function progressEnduranceModalityLine(row: ProgressEnduranceRecord): string {
+  const bits: string[] = [];
+  const km = progressEnduranceNumber(row.distance_km);
+  const min = progressEnduranceNumber(row.moving_min);
+  if (km > 0) bits.push(`${fmtKm(km)} km`);
+  if (min > 0) bits.push(`${Math.round(min)} min`);
+  if (row.training_load != null && progressEnduranceNumber(row.training_load) > 0) {
+    bits.push(`load ${Math.round(progressEnduranceNumber(row.training_load))}`);
+  }
+  const sources = Array.isArray(row.sources) ? row.sources.filter(Boolean).join("+") : "";
+  if (sources) bits.push(sources);
+  return `<div class="end-line reveal"><span class="lbl">${escHtml(row.label || row.sport || "Other")}</span><span class="end-line-v">${escHtml(bits.join(" · "))}</span></div>`;
+}
+
 // Snapshot instant-paint, mirroring the Train overview's sessionStorage pattern
 // (progress-overview-client.ts): re-entering Endurance used to show a full
 // spinner every time (zero caching), even though this data barely changes
@@ -138,9 +163,11 @@ function paintProgressEnduranceBody(
   const runPlanHtml = weeklyRunPlanCard(runPlan);
   const hybridHtml = hybridLoadCardHtml(programState?.hybrid || null, 1);
   const syncHtml = (typeof cardioSyncLine === "function") ? cardioSyncLine(progressEnduranceRecord(settings), {}) : "";
+  const sportRows = progressEnduranceSportRows(endRow);
   const hasWeek = hasProgressEnduranceRecord(end) && (
     progressEnduranceNumber(endRow.week_km) > 0 ||
     progressEnduranceNumber(endRow.week_moving_min) > 0 ||
+    sportRows.length > 0 ||
     endRow.longest_km != null ||
     endRow.longest_min != null
   );
@@ -162,8 +189,16 @@ function paintProgressEnduranceBody(
 
   const heroStats: ProgressEnduranceStat[] = [];
   if (hasProgressEnduranceRecord(end)) {
-    heroStats.push(["km · this week", endRow.week_km || 0]);
-    if (endRow.week_moving_min != null) heroStats.push(["moving min · wk", Math.round(progressEnduranceNumber(endRow.week_moving_min))]);
+    const distanceRows = sportRows.filter((row) => progressEnduranceNumber(row.distance_km) > 0).slice(0, 2);
+    for (const row of distanceRows) {
+      const sport = String(row.sport || "endurance");
+      heroStats.push([`${sport} km · wk`, progressEnduranceNumber(row.distance_km)]);
+    }
+    if (!distanceRows.length && progressEnduranceNumber(endRow.week_km) > 0) {
+      heroStats.push(["run km · wk", endRow.week_km]);
+    }
+    const totalMoving = endRow.total_moving_min ?? endRow.week_moving_min;
+    if (totalMoving != null) heroStats.push(["moving min · wk", Math.round(progressEnduranceNumber(totalMoving))]);
     if (endRow.longest_km != null) heroStats.push(["longest · km", endRow.longest_km, { text: true }]);
     else if (endRow.longest_min != null) heroStats.push(["longest · min", Math.round(progressEnduranceNumber(endRow.longest_min)), { text: true }]);
   }
@@ -172,6 +207,10 @@ function paintProgressEnduranceBody(
   const leadHtml = deps.hero("Endurance", heroStats) + coachLineHtml + goalHtml + complianceHtml + runPlanHtml + hybridHtml;
   const hasLead = !!(runPlanHtml || goalHtml || coachLineHtml || hybridHtml);
   let deep = "";
+
+  if (sportRows.length) {
+    deep += `<div class="end-modalities reveal"><div class="lbl end-prs-head">This week by sport</div>${sportRows.map(progressEnduranceModalityLine).join("")}</div>`;
+  }
 
   if (hasProgressEnduranceRecord(end) && (endRow.longest_km != null || endRow.longest_min != null)) {
     const lbits: string[] = [];

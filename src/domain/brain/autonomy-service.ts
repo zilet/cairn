@@ -20,6 +20,7 @@ import {
   getMealPlan,
   setMealPlanStatus,
   setNutritionTarget,
+  validateMealPlanForPersistence,
 } from "../../repo/nutrition.js";
 import { getPlan, replacePlan } from "../../repo/plan.js";
 import { applyProposal, getProposal, RECOVERY_WEEK_INSTRUCTION_PREFIX } from "../../repo/profile.js";
@@ -255,6 +256,17 @@ export function applyMealPlanWithAutonomy(
   if (!plan) return { ok: false, error: "meal plan not found" };
   if (plan.status !== "draft" || !Array.isArray(plan.parsed?.days)) {
     return { ok: true, applied: false, tier: "ask", plan, reasons: ["meal plan is not a live structured draft"] };
+  }
+  const safety = validateMealPlanForPersistence(plan.parsed);
+  if (!safety.ok) {
+    return {
+      ok: false,
+      applied: false,
+      tier: "ask",
+      plan,
+      error: safety.error,
+      reasons: ["meal totals do not match the canonical daily nutrition target"],
+    };
   }
   const createdAt = Date.parse(String(plan.created_at ?? ""));
   const ageDays = Number.isFinite(createdAt) ? Math.max(0, (Date.now() - createdAt) / 86_400_000) : Infinity;

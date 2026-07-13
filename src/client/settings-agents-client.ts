@@ -72,7 +72,8 @@ function settingsAgentsSliceHtml(options: SettingsAgentsSliceOptions): string {
 
         <h1 class="lbl" style="margin:18px 0 8px">Agents</h1>
         <div id="agentlist"></div>
-        <div id="agentCliUpdateStatus" class="sess-line agent-update-status"></div>
+        <div id="agentCliUpdateStatus" class="sess-line agent-update-status" role="status"></div>
+        <pre id="agentCliUpdateLog" class="agent-install-log" aria-label="Agent installation progress" hidden></pre>
         ${options.agentHealthHtml}
         ${options.agentActivityHtml}
         ${options.noticedHtml}
@@ -110,14 +111,14 @@ function settingsAgentModelsHtml(models: unknown[] | undefined): string {
 
 function settingsAgentCardHtml(options: SettingsAgentsListOptions, name: string, index: number): string {
   const agent = options.meta[name] || ({ name } as SettingsAgentsAgent);
-  const off = options.disabled.has(name);
+  const present = agent.present !== false;
+  const off = options.disabled.has(name) || !present;
   const chip = CairnSettingsClient.agentChipState(agent);
   const cached = options.agentInfo[name];
   const infoLine = settingsAgentInfoLine(cached);
   const models = options.agentModels[name];
   const modelsList = settingsAgentModelsHtml(models);
   const staggerStyle = options.stagger ? options.stagger(index) : "";
-  const present = agent.present !== false;
   const installButton = agent.installable
     ? `<button class="ghostbtn agent-install-btn" data-install="${escAttr(name)}">${present ? "Update" : "Install"}</button>`
     : "";
@@ -133,7 +134,7 @@ function settingsAgentCardHtml(options: SettingsAgentsListOptions, name: string,
           <div class="agentctl">
             <button class="ordbtn" data-up="${escAttr(name)}" ${index === 0 ? "disabled" : ""} aria-label="Move up">↑</button>
             <button class="ordbtn" data-down="${escAttr(name)}" ${index === options.order.length - 1 ? "disabled" : ""} aria-label="Move down">↓</button>
-            <button class="togglebtn${off ? "" : " on"}" data-toggle="${escAttr(name)}">${off ? "OFF" : "ON"}</button>
+            <button class="togglebtn${off ? "" : " on"}" data-toggle="${escAttr(name)}" ${!present ? "disabled" : ""} aria-disabled="${!present ? "true" : "false"}">${off ? "OFF" : "ON"}</button>
           </div>
           <div class="agent-card-actions">
             ${installButton}

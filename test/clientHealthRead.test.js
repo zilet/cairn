@@ -45,7 +45,12 @@ function localISODaysAgo(days) {
 test("health read recovery renderer speaks in plain phrases and escapes sources", () => {
   const read = loadHealthRead();
   const html = read.recoveryHtml({
+    days: 14,
     sources: ["garmin", "apple", "watch <raw>"],
+    quality: {
+      spo2_avg: { sample_count: 1, expected_days: 14, freshness: "fresh" },
+      training_readiness: { sample_count: 8, expected_days: 14, freshness: "fresh" },
+    },
     delta: { sleep: -32.5, hrv: 4.2, rhr: 2.4 },
     recovery: {
       last_date: localISODaysAgo(0),
@@ -59,8 +64,10 @@ test("health read recovery renderer speaks in plain phrases and escapes sources"
       avg_body_battery: 72,
       avg_respiration: 14,
       avg_spo2: 92,
+      spo2_avg: 91,
       skin_temp_dev_c: 0.4,
       avg_training_readiness: 82,
+      training_readiness: 74,
       vo2max: 51,
       training_status: "productive",
       avg_steps: 9234,
@@ -70,7 +77,7 @@ test("health read recovery renderer speaks in plain phrases and escapes sources"
     },
   });
 
-  assert.match(html, /Recovery · last 2 weeks/);
+  assert.match(html, /Recovery · last 14 days/);
   assert.match(html, /Garmin · Apple Health · watch &lt;raw&gt;/);
   assert.match(html, /Last logged today/);
   assert.doesNotMatch(html, /last synced stretch/);
@@ -80,9 +87,11 @@ test("health read recovery renderer speaks in plain phrases and escapes sources"
   assert.match(html, /~52 bpm · \+2 bpm vs your month/);
   assert.match(html, /Heart-rate variability balanced/);
   assert.match(html, /~61 ms · \+4 ms vs your month/);
-  assert.match(html, /Blood oxygen ran low overnight/);
+  assert.match(html, /One sparse blood oxygen sample ran low/);
+  assert.match(html, /latest SpO₂ 91% · window avg 92% · 1 of 14 days — sparse/);
   assert.match(html, /Skin temp ran warm overnight/);
-  assert.match(html, /Primed to train/);
+  assert.match(html, /Ready for a normal day/);
+  assert.match(html, /current 74 · fresh · window avg 82/);
   assert.match(html, /VO₂max ~51 · productive/);
   assert.match(html, /~9k steps/);
   assert.match(html, /Body composition/);

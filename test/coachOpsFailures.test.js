@@ -24,13 +24,17 @@ test("user-facing coaching operations degrade calmly after an exhausted semantic
   const checkin = await nutritionCheckin("stub", 21);
   const review = await runHealthReview("stub");
 
-  for (const result of [session, mealPlan, checkin, review]) {
+  for (const result of [session, mealPlan, review]) {
     assert.equal(result.ok, false);
     assert.equal(result.agent, null);
     assert.equal(result.tried.length, 1);
     assert.equal(result.tried[0].agent, "stub");
     assert.match(result.tried[0].error, /outside the requested contract/);
   }
+  assert.equal(checkin.ok, true);
+  assert.equal(checkin.change, false);
+  assert.equal(checkin.reason, "insufficient_outcome_confidence");
+  assert.equal(checkin.proposal, null);
 
   assert.deepEqual(
     {

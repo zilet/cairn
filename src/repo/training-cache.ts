@@ -94,13 +94,17 @@ export function trainingBackstopSignature(): string {
       )
       .get() as any;
     const p = db
-      .prepare(`SELECT weight_lb, goal_weight_lb, goal_date, goal_mode, sex, age FROM profile WHERE id = 1`)
+      .prepare(`SELECT weight_lb, height_cm, activity_factor, measured_rmr_kcal, measured_rmr_date,
+                       goal_weight_lb, goal_date, goal_mode, sex, age
+                  FROM profile WHERE id = 1`)
       .get() as any;
     return [
       currentTrainingDataVersion(),
       r?.lsc, r?.lsm, r?.sc, r?.sm, r?.ec, r?.em, r?.ac, r?.am, r?.gac, r?.gam,
       r?.bwc, r?.bwm, r?.dmc, r?.dmm, r?.gdc, r?.gdm, r?.pdc, r?.pdm, r?.pic, r?.pim, r?.cec, r?.cem,
-      p?.weight_lb ?? "", p?.goal_weight_lb ?? "", p?.goal_date ?? "", p?.goal_mode ?? "", p?.sex ?? "", p?.age ?? "",
+      p?.weight_lb ?? "", p?.height_cm ?? "", p?.activity_factor ?? "", p?.measured_rmr_kcal ?? "",
+      p?.measured_rmr_date ?? "", p?.goal_weight_lb ?? "", p?.goal_date ?? "", p?.goal_mode ?? "",
+      p?.sex ?? "", p?.age ?? "",
     ].join("|");
   } catch {
     return `nocache:${currentTrainingDataVersion()}:${Math.random()}`;

@@ -124,13 +124,15 @@ export function ptyInvocationFor(
     const code = `import pty,sys; sys.exit(pty.spawn(${JSON.stringify(loginArgv)}) >> 8)`;
     return { command: "python3", args: ["-c", code] };
   }
-  // Linux (util-linux) and other POSIX with util-linux `script`: -c takes a single
-  // command STRING run via /bin/sh, so each token is shell-quoted (the argv is
-  // server-chosen, but a future agents.json entry with a space / metachar must not
-  // word-split or inject — parity with the macOS JSON.stringify path). This is the
-  // Docker path, verified end-to-end.
+  // Linux (util-linux) and other POSIX with util-linux `script`: when `script` is
+  // itself driven through pipes (our WebSocket bridge), its child PTY starts at
+  // 0x0. Most login CLIs tolerate that; Antigravity waits for a usable window and
+  // therefore renders nothing. Initialize a conservative size from inside the PTY
+  // before exec. `script -c` takes a command STRING run via /bin/sh, so each token
+  // remains shell-quoted (the argv is server-chosen, but a future agents.json entry
+  // with a space / metachar must not word-split or inject).
   const cmd = loginArgv.map((t) => `'${t.replace(/'/g, "'\\''")}'`).join(" ");
-  return { command: "script", args: ["-qfc", cmd, "/dev/null"] };
+  return { command: "script", args: ["-qfc", `stty cols 80 rows 24; exec ${cmd}`, "/dev/null"] };
 }
 
 // Build the host's PTY invocation: delegate the shape to `ptyInvocationFor` and add
