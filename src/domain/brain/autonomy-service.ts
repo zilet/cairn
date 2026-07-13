@@ -29,7 +29,7 @@ import { buildProgressionProposal } from "../../repo/progression.js";
 import { buildRunPlanProposal } from "../../repo/run-progression.js";
 import { getSettings } from "../../repo/settings.js";
 import { setAppState } from "../../repo/app-state.js";
-import { addDaysISO, localDateISO } from "../../repo/shared.js";
+import { addDaysISO, localDateISO, parseDbTime } from "../../repo/shared.js";
 import { getSessionByDate } from "../../repo/sessions.js";
 
 type ProposalShape = {
@@ -613,8 +613,12 @@ export function adoptOrphanedDrafts(): { adopted: number; skipped: number } {
       }
       // Never adopt what we can't age: an unparseable created_at is treated as
       // ineligible rather than guessed too-old. A draft still inside the grace window
-      // waits for a later pass (not a failure — just not yet).
-      const createdAt = Date.parse(String(proposal.created_at ?? ""));
+      // waits for a later pass (not a failure — just not yet). parseDbTime, NOT a raw
+      // Date.parse: created_at is SQLite UTC text with no zone marker, and a raw parse
+      // reads it as LOCAL — under a non-UTC process TZ (the deployment runs in the
+      // athlete's zone) every draft looked hours younger than it was and could sit
+      // under this grace gate indefinitely.
+      const createdAt = parseDbTime(proposal.created_at)?.getTime() ?? Number.NaN;
       if (!Number.isFinite(createdAt)) {
         skipped += 1;
         continue;

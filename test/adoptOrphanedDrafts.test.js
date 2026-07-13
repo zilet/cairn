@@ -1,8 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { adoptOrphanedDrafts, applyProposalWithAutonomy } from "../dist/domain/brain/autonomy-service.js";
 import * as repo from "../dist/repo.js";
 import { db } from "../dist/db.js";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 // The autonomy pass adopts orphaned drafts: a bounded, reversible change parked as a
 // bare `draft` with no autonomy decision behind it (demoted by a since-fixed policy, or
@@ -135,3 +142,57 @@ test("with two orphaned drafts of the same kind, only the newest is adopted", ()
   assert.equal(repo.getProposal(older.id).status, "draft", "the older draft is left for the supersede flows");
   assert.ok(!repo.getProposal(older.id).autonomy, "the older draft remains orphaned");
 });
+
+// The production regression this file exists for: created_at is written by SQLite's
+// datetime('now') — "YYYY-MM-DD HH:MM:SS", UTC, NO zone marker. A raw Date.parse reads
+// that as LOCAL time, so under a non-UTC process TZ (the deployment runs in the
+// athlete's zone) a 4-hour-old draft computed as minutes old and sat under the 2-hour
+// grace gate forever. The gate must parse DB text as UTC regardless of process TZ, so
+// this case pins it in a SUBPROCESS with a non-UTC TZ and a real SQLite-format stamp.
+test("the grace gate ages SQLite-format UTC timestamps correctly under a non-UTC process TZ", () => {
+  withTzSubprocess((dataDir) => {
+    const repoUrl = JSON.stringify(pathToFileURL(path.join(root, "dist", "repo.js")).href);
+    const dbUrl = JSON.stringify(pathToFileURL(path.join(root, "dist", "db.js")).href);
+    const autonomyUrl = JSON.stringify(pathToFileURL(path.join(root, "dist", "domain", "brain", "autonomy-service.js")).href);
+    const lines = [
+      `import * as repo from ${repoUrl};`,
+      `import { db } from ${dbUrl};`,
+      `import { adoptOrphanedDrafts } from ${autonomyUrl};`,
+      'repo.setSettings({ lead_mode: "lead" });',
+      'const draft = repo.createProposal("stub", "weekly nutrition response", "", {',
+      '  kind: "nutrition_target",',
+      '  summary: "A small measured intake adjustment",',
+      '  nutrition: { target_kcal: 2250, protein_g: 170, reason: "trend missed band" },',
+      "});",
+      "// Stamp EXACTLY what datetime('now') writes: UTC, space-separated, zone-less — 3h ago.",
+      'const stamp = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 19).replace("T", " ");',
+      'db.prepare("UPDATE plan_proposals SET created_at = ? WHERE id = ?").run(stamp, Number(draft.id));',
+      "const result = adoptOrphanedDrafts();",
+      'process.stdout.write("===RESULT===" + JSON.stringify({ adopted: result.adopted }));',
+    ];
+    return lines.join("\n");
+  });
+});
+
+function withTzSubprocess(buildScript) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cairn-adopt-tz-"));
+  try {
+    const res = spawnSync(process.execPath, ["--input-type=module", "-e", buildScript(dir)], {
+      cwd: root,
+      env: {
+        ...process.env,
+        TZ: "America/New_York", // mirrors the deployment: a non-UTC athlete zone
+        DATA_DIR: dir,
+        DB_PATH: path.join(dir, "cairn.db"),
+      },
+      encoding: "utf8",
+    });
+    assert.equal(res.status, 0, res.stderr);
+    const idx = res.stdout.lastIndexOf("===RESULT===");
+    assert.notEqual(idx, -1, `result marker missing in subprocess stdout:\n${res.stdout}`);
+    const parsed = JSON.parse(res.stdout.slice(idx + "===RESULT===".length));
+    assert.equal(parsed.adopted, 1, "a 3h-old SQLite-stamped draft must clear the 2h grace gate in any TZ");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
