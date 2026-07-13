@@ -25,6 +25,7 @@ import {
   sessionHighlights,
   setSessionFeedback,
   skipExercise,
+  trainingLoadBand,
   unskipExercise,
   updateSessionNotes,
   updateSet,
@@ -194,6 +195,12 @@ trainingLogRouter.get("/activities/:id", (req, res) => {
 trainingLogRouter.get("/activities/:id/stream", streamEnrichRow("activity", getActivity));
 
 trainingLogRouter.get("/stats", (_req, res) => res.json(getWeeklyStats()));
+
+// This week's training load vs the athlete's own trailing typical (weekly set
+// count over the prior 8 weeks) — a plain-language band, "running hot" only when
+// genuinely above typical. `{ band: null }` until there's enough history. Drives
+// the quiet load-band row in the Train overview header.
+trainingLogRouter.get("/training-load", (_req, res) => res.json({ band: trainingLoadBand() }));
 
 // The week's motivational rollup (new bests, days trained, hard sets, filled volume,
 // weight-trend pace) ending at ?date= (default today). Evidence of forward motion,

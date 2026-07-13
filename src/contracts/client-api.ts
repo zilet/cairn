@@ -1612,6 +1612,45 @@ export interface ClientRecoverySummary {
   [key: string]: unknown;
 }
 
+// Personal-baseline reading bands (VISION Amendment 2). Each dimension carries a
+// plain-language `phrase` and the [0,1] band geometry the client hands straight to
+// `baselineBandHtml`; the raw numbers ride along for depth but never surface on
+// the band row. `hot` (terracotta) marks a lever, never punishment.
+export interface ClientRecoveryBaselineDimension {
+  key: "hrv" | "rhr" | "sleep";
+  label: string;
+  phrase: string;
+  hot: boolean;
+  position: number;
+  range_start: number;
+  range_end: number;
+  current: number;
+  p25: number;
+  p75: number;
+  n: number;
+}
+
+export interface ClientRecoveryBaselineRead {
+  dimensions: ClientRecoveryBaselineDimension[];
+}
+
+export interface ClientTrainingLoadBand {
+  label: string;
+  phrase: string;
+  hot: boolean;
+  position: number;
+  range_start: number;
+  range_end: number;
+  current: number;
+  p25: number;
+  p75: number;
+  n: number;
+}
+
+export interface ClientTrainingLoadBandResponse {
+  band: ClientTrainingLoadBand | null;
+}
+
 export interface ClientDirectivesResponse {
   directives: ClientDirective[];
 }
@@ -1969,6 +2008,7 @@ export interface ClientApiResponses {
   "/api/garmin/sync": ClientGarminSyncResponse;
   "/api/recent-training": ClientRecentTrainingFeedRow[];
   "/api/stats": ClientWeeklyStats;
+  "/api/training-load": ClientTrainingLoadBandResponse;
   "/api/endurance-prs": ClientEndurancePRs;
   "/api/run-compliance": ClientRunCompliance;
   "/api/cardio": ClientCardioEffort[];
@@ -2029,6 +2069,7 @@ export interface ClientApiResponses {
   "/api/directives/derive": ClientDirectivesResponse & { ok: true; derived: number };
   "/api/markers/reconcile": ClientOkResponse & { merges?: unknown[] };
   "/api/recovery": ClientRecoverySummary;
+  "/api/recovery/baseline": ClientRecoveryBaselineRead;
   "/api/symptom-links": { links: ClientSymptomMarkerLink[] };
   "/api/evidence": ClientEvidenceRow[];
   "/api/evidence/summary": ClientEvidenceSummary;

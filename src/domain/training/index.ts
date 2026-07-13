@@ -21,5 +21,6 @@ export * from "../../repo/program-state.js";
 export * from "../../repo/progression.js";
 export * from "../../repo/run-progression.js";
 export * from "../../repo/sessions.js";
+export { trainingLoadBand, trainingLoadBaselineRead } from "../../repo/baseline-bands.js";
 export * from "../../repo/training-playbook.js";
 export * from "../../repo/training-read.js";

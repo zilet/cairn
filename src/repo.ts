@@ -34,6 +34,7 @@ export * from "./repo/doctor-packet.js"; // export-ready doctor packet composing
 export * from "./repo/prevent.js"; // AHA PREVENT (2023) base-model risk engine (pure math)
 export * from "./repo/coach-context.js";
 export * from "./repo/coach.js";
+export * from "./repo/baseline-bands.js"; // personal-baseline recovery + training-load reads
 export * from "./repo/propagation.js";
 export * from "./repo/symptom-links.js"; // deterministic symptom → off-marker reasoning
 export * from "./repo/evidence.js";

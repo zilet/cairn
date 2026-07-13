@@ -64,6 +64,7 @@ type TodayMainShellApi = {
         ${compass.cellsHtml || ""}
       </div>
       <div id="wearStrip"></div>
+      <div id="wearBands"></div>
     </details>`;
   }
 

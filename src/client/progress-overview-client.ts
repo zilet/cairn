@@ -20,6 +20,7 @@ type TovData = {
   trajectory: Record<string, unknown> | null;
   focus: Record<string, unknown> | null;
   load: Record<string, unknown> | null;
+  loadBand: Record<string, unknown> | null;
   adjustments: unknown[] | null;
   sessions: unknown[] | null;
   journey: import("../contracts/client-api.js").ClientJourneyRead | null;
@@ -96,12 +97,13 @@ function tovLoadSnapshot(): TovData | null {
 
 async function tovFetch(): Promise<TovData> {
   const grab = (path: string) => api(path).catch(() => null);
-  const [stats, balance, trajectory, focus, load, adjustments, sessions, journey, journeyMilestones] = await Promise.all([
+  const [stats, balance, trajectory, focus, load, loadBand, adjustments, sessions, journey, journeyMilestones] = await Promise.all([
     grab("/stats"),
     grab("/program/balance"),
     grab("/muscle-trajectory"),
     grab("/coaching-focus"),
     grab("/muscle-load"),
+    grab("/training-load"),
     grab("/program/adjustments"),
     grab("/sessions?limit=3"),
     grab("/journey"),
@@ -113,6 +115,7 @@ async function tovFetch(): Promise<TovData> {
     trajectory: CairnProgressData.record(trajectory),
     focus: CairnProgressData.record(focus),
     load: CairnProgressData.record(load),
+    loadBand: CairnProgressData.record(loadBand),
     adjustments: Array.isArray(adjustments) ? adjustments : null,
     sessions: Array.isArray(sessions) ? sessions : null,
     journey: journey && typeof journey === "object" && !Array.isArray(journey) ? journey as import("../contracts/client-api.js").ClientJourneyRead : null,
@@ -330,6 +333,27 @@ function tovMastHtml(data: TovData, rows: TovRow[]): string {
   </div>`;
 }
 
+// A quiet personal-baseline band under the masthead: this week's training load
+// against the athlete's OWN trailing-typical weekly volume, in plain words —
+// "running hot" (terracotta) only when genuinely above typical. Absent until
+// there's enough history. The numbers stay on the masthead stats; the band is
+// words (VISION Amendment 2). The server envelope is { band }.
+function tovLoadBandHtml(data: TovData): string {
+  const band = CairnProgressData.record(CairnProgressData.record(data.loadBand).band);
+  const phrase = CairnProgressData.string(band.phrase);
+  if (!phrase) return "";
+  const row = CairnUiReads.baselineBandHtml({
+    label: CairnProgressData.string(band.label) || "Training load",
+    position: band.position,
+    rangeStart: band.range_start,
+    rangeEnd: band.range_end,
+    phrase,
+    hot: band.hot === true,
+  });
+  if (!row) return "";
+  return `<div class="tov-loadband reveal" style="margin-top:12px;${stagger(1)}">${row}</div>`;
+}
+
 function tovVerdictChip(row: TovRow): string {
   if (row.verdict === "advancing") return `<span class="tov-chip tov-chip-adv">advancing ↗</span>`;
   if (row.verdict === "stalling") return `<span class="tov-chip tov-chip-stall">stalling</span>`;
@@ -497,6 +521,7 @@ function paintTrainOverview(data: TovData): void {
   }
   view.innerHTML = head +
     tovMastHtml(data, rows) +
+    tovLoadBandHtml(data) +
     tovStartHtml() +
     journey +
     tovMapHtml(rows) +

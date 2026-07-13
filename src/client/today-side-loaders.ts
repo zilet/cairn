@@ -55,10 +55,46 @@ type TodaySideLoaderDeps = {
     return CairnTodayLately.garminSessionCard(value);
   }
 
+  // Today: personal-baseline recovery bands under the wearable strip — today's
+  // HRV / resting HR / sleep read against the athlete's OWN last-28-day range in
+  // plain words (no score). Independent of the Garmin cell strip below: it draws
+  // from the unified recovery view, so it surfaces even when only Apple/Oura data
+  // is present. Absent/thin → the slot stays empty (the client degrades silently).
+  async function loadRecoveryBands(deps: TodaySideLoaderDeps): Promise<void> {
+    const slot = deps.root.querySelector<HTMLElement>("#wearBands");
+    if (!slot) return;
+    let data: unknown;
+    try { data = await deps.api("/recovery/baseline"); } catch { return; }
+    if (!isCurrentToday(deps) || !slot.isConnected) return;
+    const dims = data && typeof data === "object" && Array.isArray((data as { dimensions?: unknown }).dimensions)
+      ? ((data as { dimensions: Array<Record<string, unknown>> }).dimensions)
+      : [];
+    if (!dims.length) { slot.innerHTML = ""; return; }
+    const rows = dims
+      .map((d) => CairnUiReads.baselineBandHtml({
+        label: d.label,
+        position: d.position,
+        rangeStart: d.range_start,
+        rangeEnd: d.range_end,
+        phrase: d.phrase,
+        hot: d.hot === true,
+      }))
+      .filter(Boolean)
+      .join("");
+    // Layout-only inline styles (band visuals come from the §04d .read-band
+    // primitive); no new CSS, so no service-worker cache bump is needed here.
+    slot.innerHTML = rows
+      ? `<div class="wear-bands" style="display:flex;flex-direction:column;gap:12px;margin-top:14px">${rows}</div>`
+      : "";
+  }
+
   // Today: slim Garmin wearable strip under the compass.
   async function loadWearable(isToday: unknown, deps: TodaySideLoaderDeps): Promise<void> {
     const slot = deps.root.querySelector<HTMLElement>("#wearStrip");
     if (!slot || !isToday) return;
+    // The recovery bands share the wearable card's fold but their own slot + data
+    // source, so kick them off independently of the Garmin-cell early returns below.
+    void loadRecoveryBands(deps);
     let rows: unknown = [];
     try { rows = await deps.api("/garmin/daily?limit=1"); } catch { return; }
     if (!isCurrentToday(deps) || !slot.isConnected) return;
@@ -145,6 +181,7 @@ type TodaySideLoaderDeps = {
   const CAIRN_TODAY_SIDE_LOADERS = {
     garminSessionCard,
     loadWearable,
+    loadRecoveryBands,
     loadTableHint,
     loadContextBanner,
     loadHealthFocusBanner,

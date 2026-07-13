@@ -6,7 +6,7 @@ All routes are mounted under **`/api`** (e.g. `GET /api/plan`). When `CAIRN_AUTH
 is set, every route except `GET /api/health` requires the token (`Authorization: Bearer …`,
 `X-Cairn-Token: …`, or `?token=…`). See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**253 routes** across 94 groups.
+**255 routes** across 95 groups.
 
 ## `/activities`
 
@@ -555,6 +555,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/recovery` | Unified recovery view (Garmin + Apple/other merged) — graceful when empty. |
+| GET | `/api/recovery/baseline` | Personal-baseline recovery bands: today's HRV / resting HR / sleep vs the athlete's own last-28-day range, each a plain-language phrase (no score). A dimension without enough history is simply absent; `{ dimensions: [] }` when there's nothing to say. Drives the quiet band rows under the Today wearable card. |
 
 ## `/research`
 
@@ -682,6 +683,12 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 |---|---|---|
 | GET | `/api/today-read` | The day intelligence read — the soul of the product. Judges what KIND of day today should be (train / easy / rest) as a calm SUGGESTION, never a gate. ALWAYS 200: the agentic read writes the human sentence, and if no agent is reachable (or it returns garbage) it falls back to the deterministic floor so the Brief always has something true to say. ?override= lets the launchpad chips reshape the read ("rough night" / "short on time" / "train anyway").  Fast path: the canonical (no-override) read is cached per day — written nightly by the scheduler and on any miss — so the morning open is instant and never waits on an agent subprocess. Overrides always recompute (they're transient). |
 | POST | `/api/today-read/reshape` | Background the Brief OVERRIDE reshape ("rough night" / "short on time" / "train anyway") as a durable job, so a steer survives a tab switch / reload / restart like the other 7 ops. The canonical GET /api/today-read (and ?reset=1) stays synchronous (cached + deterministic floor); this POST is ONLY for the agentic override reshape. The job's `done` result is byte-for-byte what GET /api/today-read?override= returns, so the PWA reuses its Brief render. This always queues: a user-facing request never waits on a coaching CLI. |
+
+## `/training-load`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/training-load` | This week's training load vs the athlete's own trailing typical (weekly set count over the prior 8 weeks) — a plain-language band, "running hot" only when genuinely above typical. `{ band: null }` until there's enough history. Drives the quiet load-band row in the Train overview header. |
 
 ## `/trajectory`
 

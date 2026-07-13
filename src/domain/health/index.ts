@@ -7,6 +7,7 @@ export * from "../../repo/evidence.js";
 export * from "../../repo/health.js";
 export * from "../../repo/health-outcomes.js";
 export { getDailyMetrics, getRecoverySummary, recordDailyMetrics } from "../../repo/coach.js";
+export { getRecoveryBaselineRead, recoveryBaselineRead } from "../../repo/baseline-bands.js";
 export * from "../../repo/lab-units.js";
 export * from "../../repo/marker-canon.js";
 export * from "../../repo/propagation.js";

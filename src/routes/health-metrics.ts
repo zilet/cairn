@@ -1,5 +1,10 @@
 import { Router } from "express";
-import { getDailyMetrics, getRecoverySummary, recordDailyMetrics } from "../domain/health/index.js";
+import {
+  getDailyMetrics,
+  getRecoveryBaselineRead,
+  getRecoverySummary,
+  recordDailyMetrics,
+} from "../domain/health/index.js";
 
 export const healthMetricsRouter = Router();
 
@@ -67,3 +72,9 @@ healthMetricsRouter.get("/health-metrics", (req, res) => {
 healthMetricsRouter.get("/recovery", (req, res) =>
   res.json(getRecoverySummary(req.query.days ? Number(req.query.days) : 14))
 );
+
+// Personal-baseline recovery bands: today's HRV / resting HR / sleep vs the
+// athlete's own last-28-day range, each a plain-language phrase (no score). A
+// dimension without enough history is simply absent; `{ dimensions: [] }` when
+// there's nothing to say. Drives the quiet band rows under the Today wearable card.
+healthMetricsRouter.get("/recovery/baseline", (_req, res) => res.json(getRecoveryBaselineRead()));
