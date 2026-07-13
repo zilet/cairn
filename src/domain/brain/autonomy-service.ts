@@ -212,18 +212,30 @@ function domainIsDemoted(domain: BrainDomain): boolean {
 // pass instead counts only what has LANDED (['applied']): due-but-unlanded siblings must
 // not mutually block the pass — the oldest lands first, flips to 'applied', and THEN
 // blocks the rest of the week's queue.
+//
+// An optional `kind` narrows the count to one change-kind. Nutrition budgets PER KIND: the
+// standing weekly meal-plan refresh (announced, boundary-applied every week) and a bounded
+// ±kcal target nudge are one coordinated story, not two independent surprises. Counting them
+// together let the recurring meal refresh spend the whole nutrition budget, so every bounded
+// target nudge demoted to 'ask' — neutering lead mode for the number that matters most.
+// Training stays domain-wide (its per-domain churn cap is a real, intended limit). Two
+// changes of the SAME kind in one week still hold: the budget is one, per kind.
 function materialChangesThisWeek(
   domain: BrainDomain,
-  statuses: readonly string[] = ["applied", "announced", "pending"]
+  statuses: readonly string[] = ["applied", "announced", "pending"],
+  kind?: string | null
 ): number {
   const placeholders = statuses.map(() => "?").join(",");
+  const kindClause = kind ? " AND kind = ?" : "";
+  const params: any[] = [domain, ...statuses];
+  if (kind) params.push(kind);
   const row = db
     .prepare(
       `SELECT COUNT(*) AS n FROM brain_decisions
-      WHERE domain = ? AND status IN (${placeholders}) AND autonomy_tier IN ('quiet_apply','announce')
+      WHERE domain = ? AND status IN (${placeholders}) AND autonomy_tier IN ('quiet_apply','announce')${kindClause}
         AND date(created_at) >= date('now','-6 days')`
     )
-    .get(domain, ...statuses) as any;
+    .get(...params) as any;
   return Number(row?.n ?? 0);
 }
 
@@ -292,7 +304,10 @@ export function applyMealPlanWithAutonomy(
   if (policy.tier === "ask" || policy.tier === "clinician" || policy.tier === "observe") {
     return { ok: true, applied: false, tier: policy.tier, plan, reasons: policy.reasons };
   }
-  if (!input.coordinated_update && !surpriseBudgetAllows(materialChangesThisWeek("nutrition"))) {
+  if (
+    !input.coordinated_update &&
+    !surpriseBudgetAllows(materialChangesThisWeek("nutrition", undefined, "meal_plan"))
+  ) {
     return {
       ok: true,
       applied: false,
@@ -416,7 +431,10 @@ export function applyProposalWithAutonomy(
   if (policy.tier === "ask" || policy.tier === "clinician" || policy.tier === "observe") {
     return { ok: true, applied: false, tier: policy.tier, proposal, reasons: policy.reasons };
   }
-  if (!surpriseBudgetAllows(materialChangesThisWeek(shape.domain), !!input.safety_response)) {
+  // Nutrition budgets per change-kind (a bounded target nudge must not be blocked by the
+  // standing weekly meal refresh); training stays domain-wide.
+  const budgetKind = shape.domain === "nutrition" ? shape.kind : undefined;
+  if (!surpriseBudgetAllows(materialChangesThisWeek(shape.domain, undefined, budgetKind), !!input.safety_response)) {
     return {
       ok: true,
       applied: false,
@@ -604,7 +622,7 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): { applied: nu
           continue;
         }
         const coordinated = (announced.context as any)?.coordinated_update === true;
-        if (!coordinated && !surpriseBudgetAllows(materialChangesThisWeek("nutrition", ["applied"]))) {
+        if (!coordinated && !surpriseBudgetAllows(materialChangesThisWeek("nutrition", ["applied"], "meal_plan"))) {
           parkForReview(
             announced,
             "weekly nutrition change budget already used; review this meal plan before applying"
@@ -667,8 +685,10 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): { applied: nu
       // this same pass, or a mid-week quiet apply, already used this domain's budget.
       // Counting 'applied' only (not other pending/announced siblings) keeps two due
       // decisions from mutually blocking each other: the oldest lands, becomes 'applied',
-      // and then blocks the rest.
-      if (!surpriseBudgetAllows(materialChangesThisWeek(shape.domain, ["applied"]))) {
+      // and then blocks the rest. Nutrition budgets per kind here too, so a landed meal
+      // refresh cannot block a bounded target nudge at its boundary (and vice versa).
+      const boundaryBudgetKind = shape.domain === "nutrition" ? shape.kind : undefined;
+      if (!surpriseBudgetAllows(materialChangesThisWeek(shape.domain, ["applied"], boundaryBudgetKind))) {
         parkForReview(announced, "weekly surprise budget already used; review this change before applying");
         continue;
       }
