@@ -51,6 +51,7 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/sessions/:id/finish",
   "/sessions/:id/reopen",
   "/sessions/:id/notes",
+  "/sessions/:id/highlights",
   "/sessions/:date/feedback",
   "/sessions/skip",
   "/sets",

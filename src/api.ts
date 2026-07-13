@@ -22,8 +22,14 @@ import { trainingLogRouter } from "./routes/training-log.js";
 import { bodyMetricsRouter } from "./routes/body-metrics.js";
 import { journeyRouter } from "./routes/journey.js";
 import { diagnosticErrorName, recordUnexpectedApiError, requestId } from "./diagnostics.js";
+import { idempotencyGuard } from "./idempotency.js";
 
 export const api = Router();
+
+// Honor X-Idempotency-Key before any router runs, so an offline-outbox replay of a
+// mutating write returns the original response instead of applying it twice. No-op
+// when the header is absent (every non-outbox request).
+api.use(idempotencyGuard);
 
 api.use("/", todayRouter);
 api.use("/", dayCoachRouter);

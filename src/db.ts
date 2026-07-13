@@ -1049,6 +1049,22 @@ CREATE TABLE IF NOT EXISTS program_blocks (
   created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_program_blocks_status ON program_blocks(status);
+
+-- Server-side idempotency ledger for offline-outbox replays. The PWA's outbox
+-- retries queued mutating writes (sets, activities, bodyweight, food notes,
+-- session finish) with a client-generated X-Idempotency-Key; this table lets the
+-- server replay the FIRST 2xx response for a repeated key instead of applying the
+-- write twice. Regenerable (rows expire after 7 days, pruned by src/idempotency.ts)
+-- — a new table, so no migration is needed.
+CREATE TABLE IF NOT EXISTS idempotency_keys (
+  key TEXT PRIMARY KEY,
+  method TEXT NOT NULL,
+  path TEXT NOT NULL,
+  status INTEGER NOT NULL,
+  response_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_idempotency_created ON idempotency_keys(created_at);
 `);
 
 runMigrations(db);

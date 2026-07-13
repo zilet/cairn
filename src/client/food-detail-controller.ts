@@ -71,7 +71,11 @@ type FoodDetailControllerDeps = {
     const kcal = deps.foodNum(parsed?.kcal) || 0;
     const macros = parsed ? [["Protein", parsed.protein_g], ["Carbs", parsed.carbs_g], ["Fat", parsed.fat_g], ["Fiber", parsed.fiber_g]]
       .filter(([, value]) => value != null && value !== "" && !Number.isNaN(Number(value))) : [];
-    const maxG = Math.max(1, ...macros.map(([, value]) => Number(value)));
+    // Bar WIDTHS compare energy contribution (kcal/g: protein 4, carbs 4, fat 9, fiber 2) so fat's
+    // denser calories aren't visually underweighted; the "Ng" labels stay grams, the honest unit to read.
+    const macroKcalPerG: Record<string, number> = { Protein: 4, Carbs: 4, Fat: 9, Fiber: 2 };
+    const macroKcal = ([label, value]: [string, unknown]) => Number(value) * (macroKcalPerG[label] ?? 0);
+    const maxMacroKcal = Math.max(1, ...macros.map((macro) => macroKcal(macro as [string, unknown])));
     const ingredients = deps.foodNote.foodIngredients(parsed);
     const items = ingredients.length ? ingredients.map((ingredient) => deps.foodNote.ingredientLabel(ingredient)).join(", ") : deps.foodNote.foodItemsText(parsed);
     const time = foodDetailString(row.created_at).slice(11, 16);
@@ -104,7 +108,7 @@ type FoodDetailControllerDeps = {
       ${macros.length ? `<div class="detail-macros">${macros.map(([label, value]) => `
         <div class="macrobar">
           <div class="macrobar-top"><span class="lbl">${label}</span><span class="macrobar-val">${deps.escapeHtml(deps.formatFoodNum(value))}g</span></div>
-          <div class="macrobar-track"><div class="macrobar-fill barfill" style="width:${Math.max(3, Math.round((Number(value) / maxG) * 100))}%"></div></div>
+          <div class="macrobar-track"><div class="macrobar-fill barfill" style="width:${Math.max(3, Math.round((macroKcal([label, value] as [string, unknown]) / maxMacroKcal) * 100))}%"></div></div>
         </div>`).join("")}</div>` : ""}
       ${ingredients.length ? `<div class="detail-section"><div class="lbl">Ingredients</div><div class="ing-breakdown">${ingredients.map((ingredient) => `
         <div class="ing-row">

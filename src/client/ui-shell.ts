@@ -190,8 +190,17 @@ function sparklineSvg(vals: unknown, w = 132, h = 30): string {
   const v = (Array.isArray(vals) ? vals : []).map(Number).filter((x: number) => !Number.isNaN(x));
   if (v.length < 2) return "";
   const min = Math.min(...v), max = Math.max(...v);
+  const mid = (max + min) / 2;
+  // Floor the y-span so a near-flat series (e.g. bodyweight 70.0/70.1/69.9) doesn't
+  // stretch tiny noise into a dramatic full-height zigzag. A wide-range series is
+  // unaffected — its raw span already exceeds the floor, and centering a full-span
+  // band on the data's own midpoint reduces exactly to [min, max]. The tiny absolute
+  // fallback keeps an all-zero/near-zero series from hitting a zero span.
+  const floor = Math.max(0.04 * Math.max(Math.abs(max), Math.abs(min)), 1e-6);
+  const span = Math.max(max - min, floor);
+  const lo = mid - span / 2, hi = mid + span / 2;
   const x = (i: number) => 2 + (i * (w - 4)) / (v.length - 1);
-  const y = (n: number) => max === min ? h / 2 : h - 3 - ((n - min) / (max - min)) * (h - 6);
+  const y = (n: number) => h - 3 - ((n - lo) / (hi - lo)) * (h - 6);
   const pts = v.map((n: number, i: number) => `${x(i).toFixed(1)},${y(n).toFixed(1)}`).join(" ");
   const last = v[v.length - 1];
   return `<svg class="spark" viewBox="0 0 ${w} ${h}" aria-hidden="true">

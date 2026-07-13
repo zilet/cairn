@@ -3495,13 +3495,14 @@ declare global {
         };
         api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
         postExerciseMode(name: string, mode: string): Promise<unknown>;
-        exCard(item: Record<string, unknown>, logged: Array<Record<string, unknown>>, prefill: Record<string, unknown>, revealIdx: unknown, rx: unknown): string;
+        exCard(item: Record<string, unknown>, logged: Array<Record<string, unknown>>, prefill: Record<string, unknown>, revealIdx: unknown, rx: unknown, lastSet?: unknown): string;
         wireGuides(card: Element): void;
         wireLogRow(row: Element | null): void;
         wireSkips(): void;
         toast(message: string): void;
         escapeHtml(value: unknown): string;
         escapeAttr(value: unknown): string;
+        parseDur(value: string): number | null;
       }): Promise<void>;
       appendOffPlanCard(name: string, mode: string | null | undefined, deps: Parameters<Window["CairnTodayAddExerciseController"]["setupAddExercise"]>[0]): Promise<void>;
     };

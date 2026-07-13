@@ -91,9 +91,19 @@ function stripLineComments(src) {
     .join("\n");
 }
 
+// A surface sometimes stashes the global `api` helper in a local alias before
+// calling it (e.g. `const fetchApi = g.api;` ... `fetchApi("/sessions/...")`),
+// which the direct api()/cachedApi()/enqueueJob() scan below would miss. Catch
+// `const/let NAME = <chain>.api` (not `.api(...)`, which calls it immediately
+// rather than aliasing it) so NAME's own call sites get scanned too.
+function apiHelperAliasNames(src) {
+  return [...src.matchAll(/\b(?:const|let)\s+(\w+)\s*=\s*(?:\w+\.)*\bapi\b(?!\()/g)].map((m) => m[1]);
+}
+
 function apiCallPathsForFile(file) {
   const src = stripLineComments(read(file));
-  const direct = [...src.matchAll(/\b(?:api|cachedApi|enqueueJob)\(\s*(["'`])([\s\S]*?)\1/g)]
+  const callNames = ["api", "cachedApi", "enqueueJob", ...apiHelperAliasNames(src)].map(escapeRegExp).join("|");
+  const direct = [...src.matchAll(new RegExp(`\\b(?:${callNames})\\(\\s*(["'\`])([\\s\\S]*?)\\1`, "g"))]
     .map((match) => normalizeApiCallPath(match[2]));
   const staticPathOptions = [...src.matchAll(/\bpath:\s*(["'`])([\s\S]*?)\1/g)]
     .map((match) => normalizeApiCallPath(match[2]));

@@ -243,6 +243,7 @@ function makeTodayDependencies(input: ClientTodayDependenciesContextInput): Clie
         toast: input.toast,
         escapeHtml: input.escapeHtml,
         escapeAttr: input.escapeAttr,
+        parseDur: input.parseDur,
       };
     },
   };

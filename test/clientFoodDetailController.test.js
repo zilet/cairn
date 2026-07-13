@@ -199,3 +199,33 @@ test("food detail controller renders macros, goal context, and removes the note"
   assert.equal(harness.closed, 1);
   assert.equal(harness.toasts.at(-1), "Removed");
 });
+
+test("food detail macro bars are sized by energy contribution, not raw grams", async () => {
+  const { context, document } = loadController();
+  document.body.appendChild(new FakeElement("div", { className: "fnent", dataset: { noteid: "42" } }));
+  const harness = foodDeps();
+
+  // Fat 20g (180 kcal) outweighs carbs 30g (120 kcal) energy-wise despite fewer grams —
+  // a gram-based bar would render carbs wider; an energy-based bar must render fat wider.
+  await context.CairnFoodDetailController.openFoodDetail({
+    id: 42,
+    raw: "chicken and rice",
+    created_at: "2026-06-30T12:30:00Z",
+    parsed: { summary: "Chicken and rice", kcal: 500, protein_g: 25, carbs_g: 30, fat_g: 20, fiber_g: 5 },
+  }, null, harness.deps);
+
+  const html = harness.mounted.innerHTML;
+  const bars = [...html.matchAll(/<span class="lbl">(\w+)<\/span><span class="macrobar-val">([^<]+)<\/span>[\s\S]*?width:(\d+)%/g)]
+    .map((m) => ({ label: m[1], val: m[2], width: Number(m[3]) }));
+  assert.deepEqual(bars.map((b) => b.label), ["Protein", "Carbs", "Fat", "Fiber"]);
+
+  const carbs = bars.find((b) => b.label === "Carbs");
+  const fat = bars.find((b) => b.label === "Fat");
+  assert.equal(carbs.val, "30g");
+  assert.equal(fat.val, "20g");
+  assert.ok(fat.width > carbs.width, `expected fat bar (${fat.width}%) wider than carbs bar (${carbs.width}%)`);
+
+  // Fat is the top energy contributor (180 kcal of protein 100 / carbs 120 / fat 180 / fiber 10), so it fills 100%.
+  assert.equal(fat.width, 100);
+  assert.equal(carbs.width, Math.round((120 / 180) * 100));
+});

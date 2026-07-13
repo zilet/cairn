@@ -18,6 +18,7 @@ type TodayAddExerciseDeps = {
     prefill: Record<string, unknown>,
     revealIdx: unknown,
     rx: unknown,
+    lastSet?: unknown,
   ): string;
   wireGuides(card: Element): void;
   wireLogRow(row: Element | null): void;
@@ -25,6 +26,7 @@ type TodayAddExerciseDeps = {
   toast(message: string): void;
   escapeHtml(value: unknown): string;
   escapeAttr(value: unknown): string;
+  parseDur(value: string): number | null;
 };
 
 (() => {
@@ -69,19 +71,35 @@ type TodayAddExerciseDeps = {
       .find((button) => decodeURIComponent(button.dataset.unskip || "").toLowerCase() === name.toLowerCase()) || null;
   }
 
-  function replaceEmptyExistingCard(existing: HTMLElement, name: string, mode: string, deps: TodayAddExerciseDeps): HTMLElement | null {
+  // Shared GET /last-set fetch — feeds both the "Last time: …" prefill/line and the
+  // live "That beats last time" wiring, for a freshly-inserted off-plan card exactly
+  // like a plan card gets via loadLastSets. Failure (offline, unknown exercise) just
+  // means no last-set line this time; the card still renders.
+  async function fetchLastSet(name: string, deps: TodayAddExerciseDeps): Promise<Record<string, unknown> | null> {
+    try {
+      const last = await deps.api("/last-set?exercise=" + encodeURIComponent(name));
+      return last && typeof last === "object" ? last as Record<string, unknown> : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function replaceEmptyExistingCard(existing: HTMLElement, name: string, mode: string, deps: TodayAddExerciseDeps): Promise<HTMLElement | null> {
+    const lastSet = await fetchLastSet(name, deps);
     const tpl = document.createElement("template");
     tpl.innerHTML = deps.exCard({ exercise: name, fromPlan: false, mode }, [], {
       weight: null,
       reps: null,
       rir: null,
       duration_sec: null,
-    }, null, null).trim();
+    }, null, null, lastSet).trim();
     const fresh = tpl.content.firstElementChild as HTMLElement | null;
     if (!fresh) return null;
     existing.replaceWith(fresh);
     deps.wireGuides(fresh);
-    deps.wireLogRow(fresh.querySelector(".logrow"));
+    const logRow = fresh.querySelector(".logrow");
+    deps.wireLogRow(logRow);
+    CairnTodaySessionSetModel.wireLastSetLine(logRow, lastSet, deps);
     deps.wireSkips();
     fresh.scrollIntoView({ behavior: "smooth", block: "center" });
     (fresh.querySelector<HTMLElement>(".in-dur") || fresh.querySelector<HTMLElement>(".in-r"))?.focus();
@@ -95,29 +113,27 @@ type TodayAddExerciseDeps = {
       list.push({ name, mode: mode || "reps" });
     }
 
-    let prefill: Record<string, unknown> = { weight: null, reps: null, rir: null, duration_sec: null };
-    try {
-      const last = await deps.api("/last-set?exercise=" + encodeURIComponent(name));
-      if (last && typeof last === "object") {
-        const row = last as Record<string, unknown>;
-        prefill = {
-          weight: row.weight ?? null,
-          reps: row.reps ?? null,
-          rir: row.rir ?? null,
-          duration_sec: row.duration_sec ?? null,
-        };
-      }
-    } catch {}
+    const lastSet = await fetchLastSet(name, deps);
+    const prefill: Record<string, unknown> = lastSet
+      ? {
+          weight: lastSet.weight ?? null,
+          reps: lastSet.reps ?? null,
+          rir: lastSet.rir ?? null,
+          duration_sec: lastSet.duration_sec ?? null,
+        }
+      : { weight: null, reps: null, rir: null, duration_sec: null };
 
     const tpl = document.createElement("template");
-    tpl.innerHTML = deps.exCard({ exercise: name, fromPlan: false, mode: mode || null }, [], prefill, null, null).trim();
+    tpl.innerHTML = deps.exCard({ exercise: name, fromPlan: false, mode: mode || null }, [], prefill, null, null, lastSet).trim();
     const cardEl = tpl.content.firstElementChild as HTMLElement | null;
     if (!cardEl) return;
     const addBlock = deps.root.querySelector(".addex");
     if (addBlock) addBlock.before(cardEl);
     else (deps.root.querySelector(".plansurface") || deps.root).appendChild(cardEl);
     deps.wireGuides(cardEl);
-    deps.wireLogRow(cardEl.querySelector(".logrow"));
+    const logRow = cardEl.querySelector(".logrow");
+    deps.wireLogRow(logRow);
+    CairnTodaySessionSetModel.wireLastSetLine(logRow, lastSet, deps);
     deps.wireSkips();
     cardEl.scrollIntoView({ behavior: "smooth", block: "center" });
     (cardEl.querySelector<HTMLElement>(".in-r") || cardEl.querySelector<HTMLElement>(".in-dur"))?.focus();
@@ -176,7 +192,7 @@ type TodayAddExerciseDeps = {
           await deps.postExerciseMode(name, mode);
           (deps.state.exModes ??= {})[name] = mode;
         } catch {}
-        replaceEmptyExistingCard(existing, name, mode, deps);
+        await replaceEmptyExistingCard(existing, name, mode, deps);
         resetAddForm(input, form, btn, modeWrap);
         return;
       }
