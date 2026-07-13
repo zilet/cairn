@@ -163,3 +163,20 @@ test("getCoachContext carries a bounded fueling array", () => {
   assert.equal(ctx.fueling[0].energy, 2);
   assert.equal(ctx.fueling[0].hunger, 3);
 });
+
+// ---- Today surface: the card appears when due and vanishes once answered -------
+// (Acceptance: answered = gone on the next render, enforced at the agenda that the
+// client card renders from — the self-omitting candidate.)
+test("the fueling follow-up is on the agenda when due and drops off once answered", () => {
+  recordAppliedTarget(day(-1));
+  logFoodOn(TODAY);
+  const onAgenda = (agenda) =>
+    [...(agenda.primary || []), ...(agenda.more || [])].some(
+      (c) => c.id === "fueling-followup" && c.client_card === "fueling-followup"
+    );
+
+  assert.equal(onAgenda(repo.todayAgenda(TODAY)), true, "due → the fueling-followup candidate is on the agenda");
+
+  repo.setFuelingFeedback(TODAY, { energy: 2 });
+  assert.equal(onAgenda(repo.todayAgenda(TODAY)), false, "answered → gone on the next render");
+});
