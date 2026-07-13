@@ -61,9 +61,11 @@ function captureWeekWinsItems(
   if (prNames.length) {
     const shown = prNames.slice(0, 3).map((name) => escapeHtml(name));
     const extra = prNames.length - shown.length;
-    const names = shown.join(", ") + (extra > 0 ? `, +${extra} more` : "");
-    const label = prNames.length === 1 ? "1 new best" : `${prNames.length} new bests`;
-    items.push(`${label} — ${names}`);
+    // The win leads as a plain sentence — "New best(s) on …" — with the lift names
+    // as its content, rather than a count-first stat.
+    const lead = prNames.length === 1 ? "New best on" : "New bests on";
+    const names = extra > 0 ? `${shown.join(", ")}, and ${extra} more` : captureWeekWinsJoin(shown);
+    items.push(`${lead} ${names}`);
   }
 
   const filled = Array.isArray(payload.volume_filled) ? payload.volume_filled : [];

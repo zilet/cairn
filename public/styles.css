@@ -764,6 +764,8 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
 .done-head-lbl.done-head-pr{color:var(--gold-deep)}
 .done-pr-spark{color:var(--gold);margin-right:.15em;font-size:.9em}
 .done-pr-more{color:var(--muted);font-weight:400;font-size:.82em;margin-left:.35em}
+/* The PR figure supports the lift name, never leads it — muted + lighter. */
+.done-head-stat{color:var(--muted);font-weight:400;font-size:.88em}
 .done-head-vs{color:var(--muted);font-weight:400}
 .done-analysis-list{display:flex;flex-direction:column;gap:10px}
 .done-analysis-row{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
@@ -2785,7 +2787,10 @@ body.sheet-open{overflow:hidden}
   cursor:pointer;
 }
 .brief-why-more:hover{color:var(--ink-2)}
-.brief-signals{font-size:.82rem;color:var(--muted);line-height:1.5;margin:12px 0 0;font-style:italic}
+/* The "why" panel holds either reading-grammar contributor rows (.read-contribs,
+   §04d — self-styled) or the calm prose fallback (.brief-signals). */
+.brief-why-panel{margin:12px 0 0}
+.brief-signals{font-size:.82rem;color:var(--muted);line-height:1.5;margin:0;font-style:italic}
 
 /* Honest degradation — one calm, dismissible line when no coaching agent is
    reachable. A quiet hairline aside (NOT the warn band): muted ink on an inset

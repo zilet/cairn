@@ -99,14 +99,14 @@ test("captureWeekWinsItems builds up to three quiet lines in priority order, esc
 
   const items = Array.from(capture.weekWinsItems(payload, escapeHtml));
   assert.deepEqual(items, [
-    "2 new bests — Back &lt;Squat&gt;, Hammer Curl",
+    "New bests on Back &lt;Squat&gt; and Hammer Curl",
     "Chest and Back &amp; Lats hit their productive volume",
     "On pace for your goal",
   ]);
 
   const html = capture.weekWinsHtml(items);
   assert.match(html, /This week's wins/);
-  assert.match(html, /<li class="weekly-wins-item">2 new bests — Back &lt;Squat&gt;, Hammer Curl<\/li>/);
+  assert.match(html, /<li class="weekly-wins-item">New bests on Back &lt;Squat&gt; and Hammer Curl<\/li>/);
 });
 
 test("captureWeekWinsItems renders nothing for an absent, empty, or off-pace payload — adherence-neutral, no placeholder", () => {
@@ -139,7 +139,7 @@ test("captureWeekWinsItems caps the PR names shown and notes the remainder", () 
     prs: [{ exercise: "Back Squat" }, { exercise: "Bench Press" }, { exercise: "Deadlift" }, { exercise: "Overhead Press" }],
   };
   assert.deepEqual(Array.from(capture.weekWinsItems(payload, escapeHtml)), [
-    "4 new bests — Back Squat, Bench Press, Deadlift, +1 more",
+    "New bests on Back Squat, Bench Press, Deadlift, and 1 more",
   ]);
 });
 
@@ -184,7 +184,7 @@ test("loadTodayReads appends the wins strip beneath the weekly card, above the f
   assert.deepEqual(apiCalls, ["/insights", "/week-wins"]);
   assert.equal(foot.inserted.length, 1);
   assert.equal(foot.inserted[0].position, "beforebegin");
-  assert.match(foot.inserted[0].html, /1 new best — Back Squat/);
+  assert.match(foot.inserted[0].html, /New best on Back Squat/);
   assert.match(foot.inserted[0].html, /On pace for your goal/);
 });
 

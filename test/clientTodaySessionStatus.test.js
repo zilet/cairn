@@ -121,14 +121,15 @@ test("Today done card leads with PRs when highlights carry them", () => {
   // The lead line becomes the PR celebration (sparkle + "New best"), never a score.
   assert.match(html, /class="lbl done-head-lbl done-head-pr">NEW BEST</);
   assert.match(html, /done-pr-spark/);
-  assert.match(html, /Back Squat — 165 lb × 10/);
+  // The lift name leads as the plain subject; the figure supports it, muted.
+  assert.match(html, /✦<\/span> Back Squat <span class="done-head-stat">165 lb × 10<\/span>/);
   assert.match(html, /class="done-pr-more">\+1 more best</);
   // A terracotta "N PRs" chip joins the row, and it leads while tonnage sits LAST.
   assert.match(html, /class="done-chip done-chip-pr chip-in">2 PRs</);
   assert.ok(html.indexOf("2 PRs") < html.indexOf("48 min"), "PR chip precedes the duration chip");
   assert.ok(html.indexOf("48 min") < html.indexOf("2,250 lb"), "tonnage chip sits last, after duration");
-  // Calm week context reads as forward motion, not a metric wall.
-  assert.match(html, /class="done-week">This week · 4 days trained · 2 new bests</);
+  // Calm week context reads as a plain sentence of forward motion, not a metric wall.
+  assert.match(html, /class="done-week">Trained 4 of the last 7 days, with 2 new bests</);
 });
 
 test("Today done card leads with a forward comparison when there are no PRs", () => {

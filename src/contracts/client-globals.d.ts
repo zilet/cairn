@@ -3595,6 +3595,9 @@ declare global {
         b: (Partial<ClientDayRead> & { _provisional?: unknown }) | null | undefined,
       ): boolean;
       signalsText(read: Partial<ClientDayRead> | null | undefined): string;
+      signalsRows(
+        read: Partial<ClientDayRead> | null | undefined,
+      ): Array<{ label: string; state: string; tone: "ok" | "watch" | "quiet" }>;
     };
 
     CairnTodayBriefOverrideClient: {

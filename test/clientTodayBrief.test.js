@@ -18,6 +18,13 @@ function escAttr(value) {
   return escHtml(value).replaceAll('"', "&quot;");
 }
 
+// signalsRows returns objects/arrays built inside the vm realm, whose prototypes
+// differ from this test realm — deepStrictEqual rejects that. Round-trip through
+// JSON to compare structure, matching the controller test's `plain` helper.
+function plain(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
 function loadTodayBrief() {
   const context = {
     Array,
@@ -239,6 +246,91 @@ test("Today signal summary preserves plain-language framing", () => {
     "Reading your recent training and recovery.",
     "missing personal-baseline evidence produces no normality claim"
   );
+});
+
+test("signalsRows maps the read's signals to reading-grammar contributor rows", () => {
+  const brief = loadTodayBrief();
+
+  // A settled, well-fed read: training + sleep both calm (ok), a check-in noted.
+  const calm = brief.signalsRows({
+    signals: {
+      consecutive_training_days: 2,
+      avg_sleep_min: 440,
+      has_recovery_data: true,
+      fatigue: { sleep_vs_norm: -5 },
+      checkin: { energy: 4 },
+    },
+  });
+  assert.deepEqual(plain(calm), [
+    { label: "Training load", state: "2 loaded days in a row", tone: "ok" },
+    { label: "Sleep", state: "settling in about normal for you", tone: "ok" },
+    { label: "How you're feeling", state: "you checked in this morning", tone: "ok" },
+  ]);
+
+  // A stacking-up read: training high + sleep short are the two levers (watch);
+  // no more than two watch rows, per the grammar.
+  const strained = brief.signalsRows({
+    signals: { consecutive_training_days: 6, low_sleep: true, has_recovery_data: true },
+  });
+  assert.deepEqual(plain(strained), [
+    { label: "Training load", state: "running high, 6 loaded days in a row", tone: "watch" },
+    { label: "Sleep", state: "running short of your usual", tone: "watch" },
+  ]);
+  assert.equal(strained.filter((r) => r.tone === "watch").length, 2);
+
+  // An anticipated reset flips training load to a lever even below the day count.
+  const anticipated = brief.signalsRows({
+    signals: { consecutive_training_days: 2, has_recovery_data: true, fatigue: { anticipate_deload: true } },
+  });
+  assert.equal(anticipated[0].tone, "watch");
+  assert.match(anticipated[0].state, /running high, 2 loaded days in a row/);
+
+  // A rested stretch reads calmly, never as failure.
+  const rested = brief.signalsRows({ signals: { consecutive_training_days: 0, has_recovery_data: true } });
+  assert.deepEqual(plain(rested), [{ label: "Training load", state: "fresh — nothing stacked up lately", tone: "ok" }]);
+});
+
+test("signalsRows names an active life context as quiet information, escaping-safe input", () => {
+  const brief = loadTodayBrief();
+  const rows = brief.signalsRows({
+    signals: {
+      consecutive_training_days: 1,
+      has_recovery_data: true,
+      context: { reduce_load: true, active: [{ title: "Rome <trip>", kind: "travel" }] },
+    },
+  });
+  const ctx = rows.find((r) => r.label === "Life context");
+  assert.ok(ctx, "a life-context row is present");
+  // Informational (quiet) even when it reduces load — the day's own signals stay levers.
+  assert.equal(ctx.tone, "quiet");
+  assert.equal(ctx.state, "planning around Rome <trip>");
+});
+
+test("signalsRows surfaces the thin-data gap as one calm quiet line with the next small move", () => {
+  const brief = loadTodayBrief();
+
+  // No wearable + no check-in: the read is looser — name the gap, offer the move.
+  const thin = brief.signalsRows({ signals: { consecutive_training_days: 3 } });
+  const gap = thin.find((r) => r.label === "Recovery signals");
+  assert.ok(gap, "gap row present when nothing has fed the read");
+  assert.equal(gap.tone, "quiet");
+  assert.equal(gap.state, "none synced yet — a morning check-in sharpens the read");
+
+  // A check-in already sharpens the read — no gap row, no double-count.
+  const withCheckin = brief.signalsRows({
+    signals: { consecutive_training_days: 3, checkin: { energy: 3 } },
+  });
+  assert.equal(withCheckin.find((r) => r.label === "Recovery signals"), undefined);
+
+  // Recovery data present — not thin — so no gap row either.
+  const withRecovery = brief.signalsRows({
+    signals: { consecutive_training_days: 3, has_recovery_data: true },
+  });
+  assert.equal(withRecovery.find((r) => r.label === "Recovery signals"), undefined);
+
+  // A provisional/empty read yields no rows — the caller falls back to prose.
+  assert.deepEqual(plain(brief.signalsRows({ signals: {} })), []);
+  assert.deepEqual(plain(brief.signalsRows(null)), []);
 });
 
 test("Today Brief materiallyDiffers compares only the visible fields", () => {

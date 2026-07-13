@@ -198,11 +198,16 @@ type DoneRuntimeGlobals = typeof globalThis & {
     if (prs.length) {
       const lead = prs[0];
       const ex = String(lead.exercise ?? "").trim();
-      const label = String(lead.label ?? "").trim();
+      // The win leads as the plain subject (the lift); the raw figure supports it,
+      // muted, never leading. The server label reads "225 lb × 3 — new best" /
+      // "1:30 hold — new best" — the NEW BEST eyebrow already says as much, so drop
+      // the redundant suffix and keep only the bare stat.
+      const stat = String(lead.label ?? "").replace(/\s*[—-]\s*new best\s*$/i, "").trim();
       const more = prs.length - 1;
-      const headline = `${ex ? escHtml(ex) : "New best"}${label ? ` — ${escHtml(label)}` : ""}`;
+      const subject = ex ? escHtml(ex) : "New best";
+      const statHtml = stat ? ` <span class="done-head-stat">${escHtml(stat)}</span>` : "";
       const tail = more > 0 ? ` <span class="done-pr-more">+${more} more best</span>` : "";
-      return `<span class="lbl done-head-lbl done-head-pr">NEW BEST</span><strong><span class="done-pr-spark" aria-hidden="true">✦</span> ${headline}${tail}</strong>`;
+      return `<span class="lbl done-head-lbl done-head-pr">NEW BEST</span><strong><span class="done-pr-spark" aria-hidden="true">✦</span> ${subject}${statHtml}${tail}</strong>`;
     }
     const comp = doneLeadComparison(rows, highlights);
     if (comp) {
@@ -221,11 +226,20 @@ type DoneRuntimeGlobals = typeof globalThis & {
     if (!week) return "";
     const days = Number(week.trained_days_7);
     const prs = Number(week.prs);
-    const parts: string[] = [];
-    if (Number.isFinite(days) && days > 0) parts.push(`${days} day${days === 1 ? "" : "s"} trained`);
-    if (Number.isFinite(prs) && prs > 0) parts.push(`${prs} new best${prs === 1 ? "" : "s"}`);
-    if (!parts.length) return "";
-    return `<div class="done-week">This week · ${escHtml(parts.join(" · "))}</div>`;
+    const hasDays = Number.isFinite(days) && days > 0;
+    const hasPrs = Number.isFinite(prs) && prs > 0;
+    // A plain sentence the reader takes in at a glance — the consistency win leads,
+    // the bests join it. When there's no day count to lead with, the bests stand on
+    // their own; nothing to say → nothing rendered.
+    let sentence = "";
+    if (hasDays) {
+      sentence = `Trained ${days} of the last 7 days`;
+      if (hasPrs) sentence += `, with ${prs} new best${prs === 1 ? "" : "s"}`;
+    } else if (hasPrs) {
+      sentence = `${prs} new best${prs === 1 ? "" : "s"} this week`;
+    }
+    if (!sentence) return "";
+    return `<div class="done-week">${escHtml(sentence)}</div>`;
   }
 
   function doneAnalysisHtml(sets: LoggedSetLike[], highlights: DoneHighlights, idAttr: string): string {

@@ -119,15 +119,32 @@ type TodayBriefActionsDayRead = import("../contracts/client.js").ClientDayRead &
     if (whyBtn && read.signals && Object.keys(read.signals).length) {
       whyBtn.hidden = false;
       whyBtn.addEventListener("click", () => {
-        if (brief.querySelector(".brief-signals")) {
-          brief.querySelector(".brief-signals")?.remove();
+        const open = brief.querySelector(".brief-why-panel");
+        if (open) {
+          open.remove();
           whyBtn.textContent = "tap to see why";
           return;
         }
-        const sig = document.createElement("p");
-        sig.className = "brief-signals chip-in";
-        sig.textContent = CairnTodayBrief.signalsText(read);
-        whyBtn.before(sig);
+        // Reading-grammar contributor rows (Amendment 2) when the primitive is
+        // loaded and the read yields any; otherwise the calm prose summary — the
+        // panel is never empty.
+        const rows = CairnTodayBrief.signalsRows(read);
+        const reads = (globalThis as { CairnUiReads?: { contributorRowsHtml(rows: unknown): string } }).CairnUiReads;
+        const rowsHtml =
+          rows.length && reads && typeof reads.contributorRowsHtml === "function"
+            ? reads.contributorRowsHtml(rows)
+            : "";
+        const panel = document.createElement("div");
+        panel.className = "brief-why-panel chip-in";
+        if (rowsHtml) {
+          panel.innerHTML = rowsHtml;
+        } else {
+          const prose = document.createElement("p");
+          prose.className = "brief-signals";
+          prose.textContent = CairnTodayBrief.signalsText(read);
+          panel.appendChild(prose);
+        }
+        whyBtn.before(panel);
         whyBtn.textContent = "hide";
       });
     }
