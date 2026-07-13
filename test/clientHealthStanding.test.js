@@ -25,6 +25,7 @@ function loadHealthStanding() {
     "public/js/date-utils.js",
     "public/js/html-utils.js",
     "public/js/ui-components.js",
+    "public/js/ui-reads.js",
     "public/js/health-evidence-client.js",
     "public/js/health-marker-order-client.js",
     "public/js/health-client.js",
@@ -117,6 +118,12 @@ test("health standing helpers clamp age bands, percentiles, and datetime values"
   assert.equal(standing.hstandBandTone(90), "strong");
   assert.equal(standing.hstandBandTone(55), "steady");
   assert.equal(standing.hstandBandTone(20), "watch");
+  // Qualitative level word derived from the same 75 / 50 thresholds (the
+  // reading-grammar replacement for the retired percentile bar).
+  assert.equal(standing.hstandLevelWord(90), "strong");
+  assert.equal(standing.hstandLevelWord(55), "solid");
+  assert.equal(standing.hstandLevelWord(20), "building");
+  assert.equal(standing.hstandLevelWord("nope"), "");
   assert.equal(
     standing.localDateTimeInputValue({ getTime: () => Date.UTC(2026, 5, 30, 6, 7), getTimezoneOffset: () => 0 }),
     "2026-06-30T06:07",
@@ -135,6 +142,13 @@ test("health standing renderer preserves calm standing sections and escapes data
   assert.match(html, /ml\/kg\/min &lt;unit&gt;/);
   assert.match(html, /moves like age 35/);
   assert.match(html, /where to head/);
+  // Population-relative GEOMETRY is banned (VISION.md Amendment 2): the percentile
+  // fill bar/track is gone, replaced by the qualitative level chip; the number
+  // survives ONLY as prose ("ahead of 82% / 70% …").
+  assert.doesNotMatch(html, /hstand-fill|hstand-track|style="width:/);
+  assert.match(html, /class="level-chip"/);
+  assert.match(html, /ahead of <b>82%<\/b> of men your age/);
+  assert.match(html, /ahead of <b>70%<\/b>/);
   assert.match(html, /hstand-bc-win/);
   assert.match(html, /≈ 7 lb of fat off since the scan/);
   assert.match(html, /113\/72/);

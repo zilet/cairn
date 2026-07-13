@@ -133,6 +133,7 @@ const CAIRN_HEALTH_STANDING = {
   localDateTimeInputValue,
   hstandTone,
   hstandBandTone,
+  hstandLevelWord: CairnHealthStandingPrimitives.hstandLevelWord,
   hstandMeasureHtml,
   hstandCompHtml,
   hstandRefSummaryHtml,

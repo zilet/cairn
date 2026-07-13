@@ -334,6 +334,7 @@ declare global {
     localDateTimeInputValue(date?: Date): string;
     hstandTone(tone: unknown): string;
     hstandBandTone(percentile: unknown): string;
+    hstandLevelWord(percentile: unknown): string;
     hstandMeasureHtml(measure: ClientHealthStandingMeasure | null | undefined): string;
     hstandCompHtml(comparison: ClientHealthStandingComparison, sexWord: string, calendarAge: unknown): string;
     hstandRefSummaryHtml(
@@ -2112,6 +2113,7 @@ declare global {
       markerSpanWord(days: unknown): string;
       optimalPhrase(marker: Record<string, unknown> | null | undefined): string;
       optimalSideWord(marker: Record<string, unknown> | null | undefined): string;
+      markerTrendTone(marker: Record<string, unknown> | null | undefined): "toward" | "away" | "stable";
       referenceRangePhrase(marker: Record<string, unknown> | null | undefined): string;
       markerReferenceSub(marker: Record<string, unknown> | null | undefined): string;
       markerStatus(marker: Record<string, unknown> | null | undefined): "ok" | "watch" | "warn" | "mute";

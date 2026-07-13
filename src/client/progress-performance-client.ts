@@ -34,16 +34,19 @@ function pctClamp(value: unknown): number {
 }
 
 function capacityRowHtml(capacity: PerformanceCapacity, sexWord: string): string {
-  const tone = capacity.tone === "strong" ? "strong" : capacity.tone === "watch" ? "watch" : "steady";
   const pct = pctClamp(capacity.percentile);
   const sub: string[] = [];
   if (capacity.exercise) sub.push(escHtml(capacity.exercise));
   if (capacity.est_1rm) sub.push(`~${escHtml(String(capacity.est_1rm))} lb 1RM`);
+  // The population comparison lives on as PROSE only — never a percentile fill bar
+  // (VISION.md Amendment 2 bans population-relative geometry).
   sub.push(`stronger than ${pct}% of ${escHtml(sexWord || "people")} your age`);
   if (capacity.to_next) sub.push(`+${escHtml(String(capacity.to_next.lb))} lb → ${escHtml(capacity.to_next.level)}`);
+  // The qualitative strength-standards level word, on the shared level chip — the
+  // reading-grammar replacement for the retired percentile bar/mark geometry.
+  const chip = CairnUiReads.levelChipHtml({ label: capacity.level });
   return `<div class="pcap">
-    <div class="pcap-top"><span class="pcap-label">${escHtml(capacity.label)}</span><span class="pcap-level pcap-${tone}">${escHtml(capacity.level)}</span></div>
-    <div class="pcap-bar"><span class="pcap-fill pcap-fill-${tone}" style="width:${pct}%"></span><span class="pcap-mark" style="left:${pct}%"></span></div>
+    <div class="pcap-top"><span class="pcap-label">${escHtml(capacity.label)}</span>${chip}</div>
     <div class="pcap-sub lbl">${sub.join(" · ")}</div>
   </div>`;
 }

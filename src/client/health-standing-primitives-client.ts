@@ -42,6 +42,17 @@ function hstandBandTone(percentile: unknown): string {
   return value >= 75 ? "strong" : value >= 50 ? "steady" : "watch";
 }
 
+// A calm qualitative capacity word derived from an age-band percentile, using the
+// SAME thresholds as hstandBandTone (75 / 50) — the reading-grammar replacement for
+// the retired percentile fill bar (VISION.md Amendment 2 bans population-relative
+// geometry; the number lives on as prose in the read line). "" when there's no
+// percentile to read.
+function hstandLevelWord(percentile: unknown): string {
+  const value = Number(percentile);
+  if (!Number.isFinite(value)) return "";
+  return value >= 75 ? "strong" : value >= 50 ? "solid" : "building";
+}
+
 function hstandCompHtml(comparison: HealthStandingPrimitiveComparison, sexWord: string, calendarAge: unknown): string {
   const percentile = hstandPct(comparison.percentile);
   const tone = hstandBandTone(percentile);
@@ -81,12 +92,13 @@ function hstandCompHtml(comparison: HealthStandingPrimitiveComparison, sexWord: 
     comparison.source,
     reading.source ? `${String(reading.source)}${reading.date ? `, ${relAge(String(reading.date))}` : ""}` : "",
   ].filter(Boolean).join(" · ");
+  const levelChip = CairnUiReads.levelChipHtml({ label: hstandLevelWord(percentile) });
   return `<div class="hstand-comp hstand-comp-${tone}">
       <div class="hstand-comp-head">
         <span><b>${escHtml(comparison.label || comparison.key || "")}</b> <span class="lbl">${escHtml(value)}${comparison.unit ? ` ${escHtml(comparison.unit)}` : ""}</span></span>
         ${equivalentChip}
       </div>
-      <div class="hstand-comp-bar"><span class="hstand-track"><span class="hstand-fill hstand-fill-${tone}" style="width:${percentile ?? 0}%"></span></span></div>
+      ${levelChip ? `<div class="hstand-comp-bar">${levelChip}</div>` : ""}
       <div class="hstand-comp-read">${escHtml(verb)} <b>${percentile == null ? "—" : `${percentile}%`}</b> of ${escHtml(sexWord)} your age</div>
       ${where}
       ${referenceLine}
@@ -112,11 +124,14 @@ function hstandRefSummaryHtml(
     : `If you stood among ${escHtml(sexWord)} in their ${escHtml(String(referenceAge))}s`;
   const rows = list.map((comparison) => {
     const referencePercentile = hstandPct(comparison.reference_percentile);
-    const tone = hstandBandTone(referencePercentile);
     const verb = comparison.verb || "ahead of";
+    // Qualitative level word in the middle column where the percentile bar was;
+    // the number stays as prose in the read column (Amendment 2: geometry banned,
+    // words allowed).
+    const levelChip = CairnUiReads.levelChipHtml({ label: hstandLevelWord(referencePercentile) });
     return `<div class="hstand-refsum-row">
         <span class="hstand-refsum-metric">${escHtml(comparison.label || comparison.key || "")}</span>
-        <span class="hstand-refsum-bar"><span class="hstand-track"><span class="hstand-fill hstand-fill-${tone}" style="width:${referencePercentile ?? 0}%"></span></span></span>
+        <span class="hstand-refsum-bar">${levelChip}</span>
         <span class="hstand-refsum-read">${escHtml(verb)} <b>${referencePercentile == null ? "—" : `${referencePercentile}%`}</b></span>
       </div>`;
   }).join("");
@@ -223,6 +238,7 @@ const CAIRN_HEALTH_STANDING_PRIMITIVES = {
   localDateTimeInputValue,
   hstandTone,
   hstandBandTone,
+  hstandLevelWord,
   hstandMeasureHtml,
   hstandCompHtml,
   hstandRefSummaryHtml,

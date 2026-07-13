@@ -12,6 +12,7 @@ function loadPerformanceClient() {
   context.window = context;
   context._progFocusCard = "";
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-reads.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/progress-performance-client.js"), "utf8"), context);
   return context;
 }
@@ -51,10 +52,14 @@ test("progress performance renders standing safely", () => {
   assert.match(html, /pperf-chip-good/);
   assert.match(html, /pperf-chip-neutral/);
   assert.match(html, /Squat &lt;lower&gt;/);
+  // The strength-standards level word now rides the shared level chip (the
+  // reading-grammar replacement for the retired percentile fill bar).
+  assert.match(html, /class="level-chip"/);
   assert.match(html, /Advanced &lt;level&gt;/);
   assert.match(html, /Back squat &lt;bar&gt;/);
-  assert.match(html, /width:99%/);
-  assert.match(html, /left:99%/);
+  // Population-relative GEOMETRY is banned (VISION.md Amendment 2) — no width/left
+  // percentile bar or mark survives; the number lives on only as prose below.
+  assert.doesNotMatch(html, /style="width:|style="left:|pcap-bar|pcap-fill|pcap-mark/);
   assert.match(html, /stronger than 99% of men your age/);
   assert.match(html, /\+20 &lt;bad&gt; lb → Elite &lt;next&gt;/);
   assert.match(html, /VO2 &lt;good&gt;/);

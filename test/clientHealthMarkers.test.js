@@ -30,6 +30,7 @@ function loadHealthMarkers() {
     "public/js/date-utils.js",
     "public/js/html-utils.js",
     "public/js/ui-components.js",
+    "public/js/ui-reads.js",
     "public/js/health-evidence-client.js",
     "public/js/health-marker-order-client.js",
     "public/js/health-client.js",
@@ -124,6 +125,54 @@ test("single-reading marker without an optimal band stays a plain row", () => {
   assert.doesNotMatch(html, /hmk-x/);
   assert.doesNotMatch(html, /hgauge/);
   assert.match(html, /hmk-chev-ghost/);
+});
+
+test("marker rows lead with a trend-lead headline, value + range as supporting detail", () => {
+  const markers = loadHealthMarkers();
+  const rising = {
+    key: "apob", name: "ApoB", unit: "mg/dL",
+    latest: { value: 95, date: "2026-06-20", flag: null },
+    prev: { value: 80, date: "2025-05-01" },
+    optimal: { low: 0, high: 80, dir: "high" },
+    in_optimal: false,
+    trend: { dir: "rising", span_days: 420 },
+    points: [{ value: 80, date: "2025-05-01" }, { value: 95, date: "2026-06-20" }],
+  };
+  const html = markers.hmkRowHtml(rising, 0);
+  // Leads with the reading-grammar trend-lead: serif name + directional phrase.
+  assert.match(html, /class="trend-lead"/);
+  assert.match(html, /class="trend-lead-name">ApoB</);
+  assert.match(html, /rising over/);
+  // ApoB rising while above its ceiling and out of range → terracotta 'away'.
+  assert.match(html, /trend-lead-phrase away/);
+  // The latest value stays as the supporting figure; the range stays on the sub-line.
+  assert.match(html, /class="hmk-val[^"]*">95/);
+  assert.match(html, /optimal ≤ 80 mg\/dL/);
+  // The trend word is NOT duplicated in the expanded caption (the header leads it).
+  const panel = html.slice(html.indexOf("hmk-panel"));
+  assert.doesNotMatch(panel, /rising over/);
+});
+
+test("markerTrendTone: sage toward optimal, terracotta worsening-while-off, else muted", () => {
+  const markers = loadHealthMarkers();
+  const ceiling = { optimal: { low: 0, high: 80, dir: "high" }, in_optimal: false };
+  // Falling toward a 'high-is-worse' ceiling → toward (sage).
+  assert.equal(markers.markerTrendTone({ ...ceiling, latest: { value: 90 }, trend: { dir: "falling" } }), "toward");
+  // Rising away while out of range → away (terracotta lever).
+  assert.equal(markers.markerTrendTone({ ...ceiling, latest: { value: 90 }, trend: { dir: "rising" } }), "away");
+  // A 'low-is-worse' zone (e.g. vitamin D) rising → toward.
+  assert.equal(
+    markers.markerTrendTone({ optimal: { low: 40, high: 100, dir: "low" }, latest: { value: 30 }, in_optimal: false, trend: { dir: "rising" } }),
+    "toward",
+  );
+  // In-range drift the wrong way stays calm — never a false lever.
+  assert.equal(
+    markers.markerTrendTone({ optimal: { low: 0, high: 80, dir: "high" }, latest: { value: 40 }, in_optimal: true, trend: { dir: "rising" } }),
+    "stable",
+  );
+  // No optimal anchor, or no clear direction → stable.
+  assert.equal(markers.markerTrendTone({ latest: { value: 5 }, trend: { dir: "rising" } }), "stable");
+  assert.equal(markers.markerTrendTone({ ...ceiling, latest: { value: 90 }, trend: { dir: "stable" } }), "stable");
 });
 
 test("optimal phrasing and side words honor the zone direction", () => {

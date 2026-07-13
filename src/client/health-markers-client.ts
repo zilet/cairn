@@ -192,6 +192,41 @@ function optimalSideWord(marker: HealthMarkersRow | null | undefined): string {
   return value > high ? "above optimal" : value < low ? "below optimal" : "";
 }
 
+// The trend-lead tone: is the latest movement carrying this marker TOWARD its
+// optimal zone, AWAY from it, or neither? Sage 'toward' (improving), terracotta
+// 'away' (worsening AND currently out of range — a lever, never punishment),
+// muted 'stable' otherwise (no clear direction, drift inside a two-sided band, or
+// no optimal anchor to judge against). Derived only from data already on the row —
+// the trend direction plus the optimal zone's worse-direction — so it never needs
+// a server field.
+function markerTrendTone(marker: HealthMarkersRow | null | undefined): "toward" | "away" | "stable" {
+  const dir = String(marker?.trend?.dir || "");
+  if (dir !== "rising" && dir !== "falling") return "stable";
+  const band = marker?.optimal;
+  const low = Number(band?.low);
+  const high = Number(band?.high);
+  if (!band || !Number.isFinite(low) || !Number.isFinite(high)) return "stable";
+  const zoneDir = String(band.dir || "band");
+  let toward: boolean;
+  if (zoneDir === "high") {
+    toward = dir === "falling"; // high is the worse direction → falling improves
+  } else if (zoneDir === "low") {
+    toward = dir === "rising"; // low is the worse direction → rising improves
+  } else {
+    // Two-sided band: only a value already outside the band has a clear direction
+    // home; drift inside the band stays calm.
+    const value = Number(marker?.latest?.value);
+    if (!Number.isFinite(value)) return "stable";
+    if (value > high) toward = dir === "falling";
+    else if (value < low) toward = dir === "rising";
+    else return "stable";
+  }
+  if (toward) return "toward";
+  // Moving the wrong way reads as attention only when the marker is actually off —
+  // an in-range drift is calm information, not a lever.
+  return markerOutOfRange(marker) ? "away" : "stable";
+}
+
 // Richer inline progress chart: hand-built SVG, no library. Shades the optimal-zone
 // band, draws a Catmull-Rom curve, and labels endpoint dates. Values go into numeric
 // attributes; text is escaped through the same global helpers as the legacy screen.
@@ -361,8 +396,10 @@ function markerPanelHtml(marker: HealthMarkersRow | null | undefined): string {
   // The reference, already labeled ("optimal 50–150" / "range 65–175" / "in range").
   const band = markerReferenceSub(marker);
   const side = optimalSideWord(marker);
-  const trend = chart ? markerTrendWord(marker) : "single reading";
-  const caption = [band ? escHtml(band) : "", side, trend].filter(Boolean).join(" · ");
+  // The row header now LEADS with the trajectory (trend-lead), so the panel caption
+  // no longer repeats it for a multi-reading marker; a single reading still says so.
+  const single = chart ? "" : "single reading";
+  const caption = [band ? escHtml(band) : "", side, single].filter(Boolean).join(" · ");
   const latestValue = latest.value != null && latest.value !== "" ? formatMarkerNumber(latest.value) : "";
   const age = latest.date ? relAge(String(latest.date)) : "";
   const latestLine = latestValue
@@ -398,11 +435,19 @@ function hmkRowHtml(marker: HealthMarkersRow | null | undefined, index = 0): str
   // (amber/red) pops while a good reading stays calm ink with a green dot.
   const st = markerStatus(marker);
   const valClass = st === "watch" ? " mst-watch" : st === "warn" ? " mst-warn" : "";
+  // Trend-first: the row leads with what the marker is DOING (name + directional
+  // phrase, toned toward/away/stable), and the latest value + range read as the
+  // supporting detail (the figure on the right, the reference on the line below).
+  const trendLead = CairnUiReads.trendLeadHtml({
+    name: marker?.name || marker?.key || "",
+    phrase: markerTrendWord(marker),
+    tone: markerTrendTone(marker),
+  });
   const rowInner = `<span class="hdot hdot-${st}"></span>
-      <span class="hmk-id">
-        <span class="hmk-name">${escHtml(marker?.name || marker?.key || "")}</span>
+      <div class="hmk-id">
+        ${trendLead}
         ${when}
-      </span>
+      </div>
       <span class="hmk-right">
         ${delta}
         <span class="hmk-val${valClass}">${escHtml(formatMarkerNumber(latest.value))}${unit}</span>
@@ -423,6 +468,7 @@ const CAIRN_HEALTH_MARKERS = {
   markerSpanWord,
   optimalPhrase,
   optimalSideWord,
+  markerTrendTone,
   referenceRangePhrase,
   markerReferenceSub,
   markerStatus,
