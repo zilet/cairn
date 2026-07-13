@@ -89,6 +89,22 @@ a feature conflict, the principle wins.
    *concrete* way there — not a dashboard to decode. Synthesis, not data. If it can't turn a number
    into a decision, it doesn't show the number.
 
+> **Amendment 2 — The reading grammar (2026-07).** As Cairn grew more to say — a day read, an energy
+> balance, a standing capacity read, lab trajectories — the risk shifted from having *no* synthesis to
+> presenting synthesis in a dozen dialects. This amendment fixes **one grammar for every read**, so
+> that more intelligence never becomes more noise or more anxiety: **a read leads with a plain-language
+> sentence** — the meaning first, never a number, chart, or score the reader must decode into meaning;
+> **evidence of progress is made visible and comprehensible at a glance** — a win the reader can *see*,
+> not infer; **what's lacking is stated as calm information, adherence-neutral and never as failure** —
+> a gap is a fact about the situation, not a verdict on the person; **visual state is expressed against
+> the athlete's own baseline range in qualitative words** — *in your range*, *below your range*, *above
+> your range* — and **never as a 0–100 score, a letter grade, or population-relative geometry** (no
+> percentile bar, no rank against strangers); and **the presentation primitives are shared and
+> composable** — the Brief, energy balance, the standing reads, and every future surface speak the one
+> scoreless grammar rather than reinventing it. This extends principle 2 (calm), principle 9 (a low
+> signal is information, never a verdict), and §4's *relative-to-your-own-baseline, never population*.
+> Where a surface's presentation conflicts with this grammar, this amendment governs.
+
 6. **It reads your patterns and suggests the day.** It's genuinely agentic: it looks at your recent
    training, rest, recovery, and life, and *forms a view of what kind of day this could be* — rest, easy
    movement, or a real session — and opens with that. But it's an opening suggestion, not a verdict: it

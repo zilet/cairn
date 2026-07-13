@@ -216,6 +216,48 @@ New/changed components (CSS must implement, the client JS must emit):
   `.hdoc*`, `.life*`, `.enr*`, `.seg*`, `.daybtn`, `.logrow`, `.field`, `.toast`, `.rest*`,
   `.ob-*`, `.agentrow` family) — restyled to the Atelier language, same selectors.
 
+## Reading layer primitives
+
+The **shared, composable grammar every read speaks** — the Brief, Energy Balance, the Stand reads,
+the Train capacity read, and every future reading surface compose these rather than reinventing a
+read, so more intelligence never becomes a new dialect. Bound to the constitution (VISION.md
+**Amendment 2 — the reading grammar**): a read leads with a **plain-language sentence**; a **win is
+made visible**; **what's lacking is calm information, never failure**; and **visual state is expressed
+against the athlete's OWN baseline range in qualitative words** — *in / below / above your range* —
+**never a 0–100 score, a letter grade, or population-relative geometry** (no percentile bar, no rank
+against strangers). Terracotta reads **strictly as attention / a lever, never punishment**; **no
+number appears in the primary read** (depth stays one pull away on the detailed surfaces). These
+primitives live in `styles.css` **§04d**, at the TOP of the file (above every component, alongside the
+§04c interaction primitives) so a reading surface can layer its own delta on top. The HTML is emitted
+by `src/client/ui-reads.ts` (the `CairnUiReads` namespace — pure string renderers, every caller
+string escaped). They are static display primitives (no motion of their own; they inherit the global
+reduced-motion discipline); where a consumer makes one tappable it layers the press with the
+`--press*` tokens.
+
+- **`.read-band` — personal-baseline band.** A horizontal track (`.read-band-track`) carrying a soft
+  sage range region (`.read-band-range` = the athlete's OWN rolling range, positioned by inline
+  `left`/`width` percentages), a positioned dot for today (`.read-band-dot`, ink; the `.hot` modifier
+  on `.read-band` retints the dot terracotta when today's value is a lever), an optional `.lbl`
+  `.read-band-label`, and a plain-language `.read-band-phrase` slot. Fluid — reads at card width and in
+  a narrow inline slot; the `.read-band-inline` modifier lays label · track · phrase out on one row.
+  Renderer `baselineBandHtml({label, position, rangeStart, rangeEnd, phrase, hot})` clamps positions to
+  `[0,1]` and, when range data is missing, **degrades to just the phrase** — the band is never drawn
+  empty. The band region is the athlete's own range; there is no axis, no tick, no number.
+- **`.read-contribs` / `.read-contrib` — contributor rows.** One row per contributor: a small state pip
+  (`.read-contrib-pip` with `.ok` sage / `.watch` terracotta = attention or a lever / `.quiet`
+  neutral-outline = thin data, "the read is looser"), a `.read-contrib-label`, and a qualitative
+  `.read-contrib-state` line (words, not a value). Renderer `contributorRowsHtml(rows)` takes
+  `{label, state, tone: 'ok'|'watch'|'quiet'}`, clamps tone to the allowlist (unknown → `quiet`), drops
+  empty rows.
+- **`.level-chip` — qualitative level chip.** A sage-soft ground with sage text for a capacity /
+  benchmark word ("intermediate", "in your range"), plus an optional muted `.level-chip-detail`. A
+  reference read, never a graded score. Renderer `levelChipHtml({label, detail?})`. (Text uses
+  `--sage-text` — the AA-clearing sage for small type.)
+- **`.trend-lead` — trend-first headline row.** A serif `.trend-lead-name` beside a directional
+  `.trend-lead-phrase` — `.toward` sage (moving toward optimal), `.away` terracotta (away and
+  actionable), `.stable` muted. Renderer `trendLeadHtml({name, phrase, tone})` clamps tone to the
+  allowlist (unknown → `stable`). The direction is words, never an arrow on a score.
+
 ## Hard rules
 
 - `public/` stays dependency-free vanilla JS — no build step, no frameworks, no external images.

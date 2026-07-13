@@ -1942,6 +1942,20 @@ declare global {
       }): string;
     };
 
+    CairnUiReads: {
+      baselineBandHtml(options?: {
+        label?: unknown;
+        position?: unknown;
+        rangeStart?: unknown;
+        rangeEnd?: unknown;
+        phrase?: unknown;
+        hot?: boolean;
+      }): string;
+      contributorRowsHtml(rows: unknown): string;
+      levelChipHtml(options?: { label?: unknown; detail?: unknown }): string;
+      trendLeadHtml(options?: { name?: unknown; phrase?: unknown; tone?: unknown }): string;
+    };
+
     CairnUiFeedback: {
       stagger(index?: number | null): string;
       reducedMotion(): boolean;
@@ -3780,6 +3794,7 @@ declare global {
   declare const CairnExerciseDetailActions: Window["CairnExerciseDetailActions"];
   declare const CairnExerciseDetailController: Window["CairnExerciseDetailController"];
   declare const CairnUi: Window["CairnUi"];
+  declare const CairnUiReads: Window["CairnUiReads"];
   declare const CairnUiFeedback: Window["CairnUiFeedback"];
   declare const CairnUiActions: Window["CairnUiActions"];
   declare const CairnUiHeader: Window["CairnUiHeader"];
