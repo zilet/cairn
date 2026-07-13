@@ -176,8 +176,8 @@ function renderFoodJournal(): void {
     segBar("food", planSeg()) +
     `<section class="meal-energy food-journal" id="mealEnergy">
       <div id="dayFuelSlot" class="dayfuel-slot">${loadingState("Reading today's food…")}</div>
-      <div id="energyHero"></div>
       <div id="energyCard">${loadingState("Reading your trend…")}</div>
+      <div id="energyHero"></div>
       <div id="checkinResult" class="checkin-result"></div>
     </section>`;
   wireSeg(PLAN_HANDLERS);

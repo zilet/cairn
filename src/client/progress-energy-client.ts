@@ -11,6 +11,9 @@ type EnergyExpenditure = {
   tdee_basis?: unknown;
   basis?: unknown;
   coverage?: unknown;
+  // Server loss-goal signal — populated only when there's a goal with weight still to
+  // lose (see repo/profile.ts projectGoalPace), so its presence marks an intended deficit.
+  projection_text?: unknown;
 };
 
 type EnergyRead = {
@@ -18,6 +21,9 @@ type EnergyRead = {
   body: string;
   tone: "quiet" | "read";
   dir?: "down" | "up" | "flat" | null;
+  // A read where easing the deficit is the calm lever — retints the card accent
+  // terracotta (attention, never punishment). Absent/false everywhere else.
+  lever?: boolean;
 };
 
 type EnergyBodyHtml = {
@@ -42,8 +48,40 @@ type NutritionCheckinResult = {
 (() => {
 const ENERGY_CONF_WORD: Record<string, string> = { high: "well-established", medium: "settling in", low: "still early" };
 
+// Lean-safe pace anchors (lb/week). The server defines lean-safe as ≤1% of CURRENT
+// bodyweight/week; current bodyweight isn't in the expenditure payload, so the verbal
+// read leans on conservative absolute anchors that read as lean-safe across the
+// realistic weight range and NEVER alarm — a brisk pace is a calm lever, not a verdict.
+const LEAN_SAFE_CEILING_LB_WK = 1.5; // at/under ~1%/wk for anyone ~150 lb+
+const FAST_LOSS_LB_WK = 2.0; // beyond this reads as faster than lean-safe for most
+const ENERGY_FLAT_BAND_LB_WK = 0.05; // |trend| under this = holding steady
+
+// Confidence as geometry — the "maintenance zone" band widens (and, via CSS in the
+// §04d eb-zone rules, softens) as confidence drops. Uncertainty is shown as WIDTH,
+// never a number, tick, or score (VISION.md Amendment 2). `none` degrades to a
+// phrase-only band (baselineBandHtml draws no track without a range).
+const ENERGY_ZONE_RANGE: Record<string, [number, number] | null> = {
+  high: [0.4, 0.6],
+  medium: [0.32, 0.68],
+  low: [0.2, 0.8],
+  none: null,
+};
+const ENERGY_ZONE_PHRASE: Record<string, string> = {
+  high: "Your maintenance zone is dialed in.",
+  medium: "Your maintenance zone is settling in.",
+  low: "Still a wide estimate this week — more logging narrows it.",
+  none: "Not enough yet to place your maintenance zone.",
+};
+
 function kcalFmt(value: unknown): string {
   return Math.round(Number(value) || 0).toLocaleString();
+}
+
+// A weekly weight-change rate as plain words, e.g. "1.1 lb/week" (magnitude only —
+// direction rides in the surrounding sentence). Always one decimal.
+function rateWords(trend: unknown): string {
+  const abs = Math.abs(Math.round(Number(trend) * 10) / 10);
+  return `${abs} lb/week`;
 }
 
 function energyBasis(exp: EnergyExpenditure | null | undefined): string {
@@ -59,27 +97,85 @@ function energyBasis(exp: EnergyExpenditure | null | undefined): string {
   return "";
 }
 
+// The verbal headline — the reframe (VISION.md Amendment 2 / MacroFactor grammar):
+// lead with the OUTCOME the athlete intended, never a target-vs-actual shortfall.
+// Numbers may ride INSIDE the sentence as supporting facts; the sentence is the
+// object. Pure over the loaded expenditure payload. `projection_text` is the server's
+// loss-goal signal (only populated when there's a goal with weight still to lose), so
+// its presence distinguishes "the deficit you intended" from a maintenance read.
+// Adherence-neutral throughout: a thin week lowers confidence, it never blames.
 function energyRead(exp: EnergyExpenditure | null | undefined): EnergyRead {
   if (!exp || exp.tdee == null) {
     return {
-      lead: "Not enough logged yet to estimate.",
-      body: "Keep logging meals and the odd weigh-in when you can — once there's a few weeks of data, I'll read your real energy balance here.",
+      lead: "Not enough logged yet to read your energy balance.",
+      body: "Keep logging meals and the odd weigh-in when you can — a few weeks in, I'll read your real energy balance here.",
       tone: "quiet",
+      dir: null,
     };
   }
+  const conf = String(exp.confidence);
   const trend = exp.trend_lb_wk == null ? null : Number(exp.trend_lb_wk);
-  const dir = trend == null ? null : trend < -0.05 ? "down" : trend > 0.05 ? "up" : "flat";
-  const rate = trend == null ? "" : `about ${Math.abs(Math.round(trend * 10) / 10)} lb/week`;
-  const intake = exp.intake_avg_kcal != null ? `eating ~${kcalFmt(exp.intake_avg_kcal)} kcal/day` : "";
-  let movement = "";
-  if (dir === "down") movement = `trending down ${rate}`;
-  else if (dir === "up") movement = `trending up ${rate}`;
-  else if (dir === "flat") movement = "holding steady";
-  const fallback = exp.tdee_basis === "profile_seed"
-    ? `Starting around ${kcalFmt(exp.tdee)} kcal/day`
-    : `Best estimate ~${kcalFmt(exp.tdee)} kcal/day`;
-  const lead = [intake, movement].filter(Boolean).join(", ") || fallback;
-  return { lead: lead.charAt(0).toUpperCase() + lead.slice(1) + ".", body: energyBasis(exp), tone: "read", dir };
+  const dir = trend == null ? null : trend < -ENERGY_FLAT_BAND_LB_WK ? "down" : trend > ENERGY_FLAT_BAND_LB_WK ? "up" : "flat";
+  const rate = trend == null ? "" : rateWords(trend);
+  const around = exp.intake_avg_kcal != null ? `~${kcalFmt(exp.intake_avg_kcal)} kcal/day` : `~${kcalFmt(exp.tdee)} kcal/day`;
+  const hasLossGoal = typeof exp.projection_text === "string" && exp.projection_text.trim().length > 0;
+  const body = energyBasis(exp);
+
+  // Starting estimate — no outcome evidence yet. Calm, never a gap-as-failure.
+  if (conf === "none") {
+    const lead = exp.tdee_basis === "profile_seed"
+      ? `Starting around ${kcalFmt(exp.tdee)} kcal/day — a few weeks of logging turns this into a real read.`
+      : "Still early — keep logging and your real energy balance comes into focus.";
+    return { lead, body, tone: "read", dir };
+  }
+
+  // Loose week — the read is genuinely looser, so don't make a confident pace claim.
+  if (conf === "low") {
+    return {
+      lead: "The picture's a little loose this week — a few more logged days will sharpen it.",
+      body,
+      tone: "read",
+      dir,
+    };
+  }
+
+  // Medium/high confidence but no scale trend yet — speak to the steady read.
+  if (trend == null) {
+    return {
+      lead: `Best read is about ${kcalFmt(exp.tdee)} kcal/day to hold steady — a few weigh-ins will show which way you're moving.`,
+      body,
+      tone: "read",
+      dir: null,
+    };
+  }
+
+  // Medium/high confidence with a real trend — speak to the intended outcome.
+  let lead: string;
+  let lever = false;
+  if (hasLossGoal) {
+    if (dir === "down") {
+      const absTrend = Math.abs(trend);
+      if (absTrend <= LEAN_SAFE_CEILING_LB_WK) {
+        lead = `You're running the deficit you set — down about ${rate}, a steady lean-safe pace.`;
+      } else if (absTrend <= FAST_LOSS_LB_WK) {
+        lead = `Losing at a good clip — down about ${rate}. Sustainable, but if it's faster than you meant, easing the deficit protects muscle.`;
+      } else {
+        lead = `You're dropping faster than lean-safe — down about ${rate}. Easing the deficit ~100–200 kcal/day protects muscle while you keep losing.`;
+        lever = true;
+      }
+    } else if (dir === "flat") {
+      lead = `Weight's holding steady at ${around} — a small trim would start it moving toward your goal.`;
+    } else {
+      lead = `You're eating a little above a loss right now — weight's edged up about ${rate}. A small trim gets it heading down again.`;
+    }
+  } else if (dir === "flat") {
+    lead = `Holding steady around ${around} — right about where maintenance sits.`;
+  } else if (dir === "down") {
+    lead = `Drifting down gently, about ${rate}, eating ${around}.`;
+  } else {
+    lead = `Trending up gently, about ${rate}, eating ${around}.`;
+  }
+  return { lead, body, tone: "read", dir, lever };
 }
 
 function energyUsable(exp: EnergyExpenditure | null | undefined): boolean {
@@ -95,19 +191,69 @@ function energyHeroHtml(exp: EnergyExpenditure | null | undefined): string {
   ]);
 }
 
+// Quiet contributor rows for the looser reads — what's thin, stated as calm
+// information (adherence-neutral), never as a failing. `quiet` pip = thin data,
+// "the read is looser"; `ok` when a signal is solid. Words, no numbers.
+function energyContribRows(exp: EnergyExpenditure | null | undefined): Array<{ label: string; state: string; tone: "ok" | "quiet" }> {
+  const cov = record(exp?.coverage);
+  const intakeDays = Number(exp?.points ?? cov.intake_days);
+  const weighDays = Number(cov.weigh_in_days);
+  const rows: Array<{ label: string; state: string; tone: "ok" | "quiet" }> = [];
+  const loggingSolid = Number.isFinite(intakeDays) && intakeDays >= 10;
+  rows.push({
+    label: "Logging",
+    state: loggingSolid ? "steady this week — plenty to read" : "light this week — the read stays looser",
+    tone: loggingSolid ? "ok" : "quiet",
+  });
+  if (Number.isFinite(weighDays)) {
+    const weighSolid = weighDays >= 4;
+    rows.push({
+      label: "Weigh-ins",
+      state: weighSolid ? "enough to see the trend" : "a few more sharpen the trend",
+      tone: weighSolid ? "ok" : "quiet",
+    });
+  }
+  return rows;
+}
+
+// The confidence-as-geometry band: a scoreless "maintenance zone" whose WIDTH grows
+// as confidence drops (softening is CSS). No axis, tick, or number — the width IS the
+// uncertainty. Low/none also surface the quiet contributor rows. Composes the shared
+// §04d primitives (CairnUiReads) rather than reinventing a read.
+function energyZoneHtml(exp: EnergyExpenditure | null | undefined): string {
+  const raw = String(exp?.confidence ?? "none");
+  const key = raw in ENERGY_ZONE_RANGE ? raw : "none";
+  const range = ENERGY_ZONE_RANGE[key];
+  const band = CairnUiReads.baselineBandHtml({
+    label: "Maintenance zone",
+    rangeStart: range ? range[0] : undefined,
+    rangeEnd: range ? range[1] : undefined,
+    phrase: ENERGY_ZONE_PHRASE[key] || ENERGY_ZONE_PHRASE.none,
+  });
+  const loose = key === "low" || key === "none";
+  const contribs = loose ? CairnUiReads.contributorRowsHtml(energyContribRows(exp)) : "";
+  if (!band && !contribs) return "";
+  return `<div class="eb-zone eb-zone--${key}">${band}${contribs}</div>`;
+}
+
 function energyCardHtml(exp: EnergyExpenditure | null | undefined): string {
   const read = energyRead(exp);
   const usable = energyUsable(exp);
+  const conf = String(exp?.confidence);
   const points = Number(exp?.points);
   const windowDays = Number(exp?.window_days);
-  const confidence = exp?.confidence === "none" ? "starting estimate" : ENERGY_CONF_WORD[String(exp?.confidence)] || "";
+  const confidence = exp?.confidence === "none" ? "starting estimate" : ENERGY_CONF_WORD[conf] || "";
   const ctx = usable
     ? `<div class="eb-ctx lbl">${escHtml([confidence, Number.isFinite(points) && points > 0 ? `${points} outcome day${points === 1 ? "" : "s"}` : "", Number.isFinite(windowDays) ? `${windowDays}-day window` : ""].filter(Boolean).join(" · "))}</div>`
     : "";
-  return `<section class="eb-card reveal" style="--i:1">
-      <div class="eb-kicker lbl"><span class="eb-glyph" aria-hidden="true">◇</span> ${usable ? "How you're tracking" : "Not enough data yet"}</div>
+  const kicker = !usable ? "Not enough data yet" : conf === "none" ? "Getting your read" : "How you're tracking";
+  const leverClass = read.lever ? " eb-card--lever" : "";
+  const zone = usable ? energyZoneHtml(exp) : "";
+  return `<section class="eb-card reveal${leverClass}" style="--i:1">
+      <div class="eb-kicker lbl"><span class="eb-glyph" aria-hidden="true">◇</span> ${escHtml(kicker)}</div>
       <p class="eb-lead">${escHtml(read.lead)}</p>
       ${read.body ? `<p class="eb-body">${escHtml(read.body)}</p>` : ""}
+      ${zone}
       ${ctx}
       <div class="eb-foot">
         <button class="ghostbtn eb-checkin" id="runCheckin" type="button">Run a check-in</button>

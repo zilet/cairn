@@ -3205,6 +3205,24 @@ body.swr-busy::after{
 .eb-lead{font-family:var(--font-display);font-weight:480;font-variation-settings:"opsz" 40;
   font-size:1.1rem;line-height:1.42;color:var(--ink);margin:0;max-width:46ch;position:relative}
 .eb-body{font-size:.86rem;color:var(--ink-2);line-height:1.55;margin:9px 0 0;max-width:48ch;position:relative}
+/* Confidence as geometry: the maintenance-zone band widens (renderer) AND softens
+   (here) as the read loosens — uncertainty shown as WIDTH, never a number or score.
+   Composes the §04d .read-band; high confidence keeps the primitive's crisp default. */
+.eb-zone{margin:14px 0 2px;display:flex;flex-direction:column;gap:11px;position:relative}
+.eb-zone .read-band-track{height:10px}
+.eb-zone--medium .read-band-range{opacity:.82}
+.eb-zone--low .read-band-range{opacity:.5;box-shadow:none;
+  background:linear-gradient(90deg,transparent,var(--sage-bg) 20%,var(--sage-bg) 80%,transparent)}
+/* Lever read (dropping faster than lean-safe): terracotta = attention/a lever, never punishment. */
+.eb-card--lever{border-left-color:var(--accent)}
+.eb-card--lever::before{background:radial-gradient(120% 80% at 0% 0%, color-mix(in srgb,var(--accent) 8%,transparent), transparent 62%)}
+.eb-card--lever .eb-glyph{color:var(--accent)}
+/* The numeric hero, demoted BELOW the verbal read — a quiet reference strip, not a masthead. */
+#energyHero .phero{padding:2px 2px 4px}
+#energyHero .phero-title{font-family:var(--font-ui);font-variation-settings:normal;font-weight:600;
+  font-size:.68rem;text-transform:uppercase;letter-spacing:.16em;color:var(--muted)}
+#energyHero .phero-stats{margin-top:9px;gap:22px}
+#energyHero .phero-n{font-size:1.3rem}
 .eb-foot{display:flex;align-items:center;flex-wrap:wrap;gap:11px;margin-top:15px;position:relative}
 .eb-checkin{flex:none}
 .eb-note,.eb-advisory{color:var(--muted);text-transform:none;letter-spacing:.02em;font-size:.72rem}

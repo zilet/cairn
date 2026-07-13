@@ -456,9 +456,10 @@ async function renderEnergy() {
   const token = ++pollToken;
   const head = segBar("energy", PROGRESS_SEG);
   const peek = peekCached("progress:energy");
-  // Always paint the shell; only the #energyCard slot shows a loading state on cold.
-  view.innerHTML = head + `<div id="energyHero"></div>
-    <div id="energyCard">${peek ? "" : loadingState("Reading your trend…")}</div>
+  // Verbal read leads (Amendment 2); the numeric hero is demoted below it. Always
+  // paint the shell; only the #energyCard slot shows a loading state on cold.
+  view.innerHTML = head + `<div id="energyCard">${peek ? "" : loadingState("Reading your trend…")}</div>
+    <div id="energyHero"></div>
     <div id="checkinResult" class="checkin-result"></div>`;
   wireSeg(PROGRESS_HANDLERS);
 
