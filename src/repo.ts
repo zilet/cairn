@@ -13,6 +13,7 @@ export * from "./repo/memory.js";
 export * from "./repo/brain-decisions.js";
 export * from "./repo/brain-evaluations.js";
 export * from "./repo/nutrition.js";
+export * from "./repo/fueling.js"; // one-tap fueling follow-through after an applied target change
 export * from "./repo/chat.js";
 export * from "./repo/settings.js";
 export * from "./repo/art-ledger.js";

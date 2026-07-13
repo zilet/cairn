@@ -6,6 +6,7 @@ type TodayRailRecentTrainingFeedRow = import("../contracts/client.js").ClientRec
 
 type TodayRailLoadersApi = {
   loadFuelToday(date: string, deps: ClientTodayRailControllerDeps): Promise<void>;
+  loadFuelingFollowup(deps: ClientTodayRailControllerDeps): Promise<void>;
   loadWeekAhead(deps: ClientTodayRailControllerDeps): Promise<void>;
   loadProgramAdjustmentsBanner(deps: ClientTodayRailControllerDeps): Promise<void>;
   loadRecentActivities(deps: ClientTodayRailControllerDeps): Promise<void>;
@@ -29,6 +30,51 @@ type TodayRailLoadersApi = {
     const card = slot.querySelector("#fuelCard");
     if (card) card.addEventListener("click", () => { deps.state.planJump = "food"; deps.activateTab("plan"); });
     deps.runCountUps(slot);
+  }
+
+  // Fueling follow-through: after a nutrition-target change applied, offer one calm 1-tap
+  // read. Fetches the due-check; renders nothing unless due (the server gates it to the
+  // change's 7-day window, a day with logged food, and "not answered yet"). On a tap it
+  // POSTs the read and melts into a quiet one-line acknowledgement; the ✕ hides it for now.
+  // Copy is static client text and adherence-neutral — no numbers shown.
+  async function loadFuelingFollowup(deps: ClientTodayRailControllerDeps): Promise<void> {
+    const slot = deps.root.querySelector<HTMLElement>("#fuelingSlot");
+    if (!slot) return;
+    let followup: unknown = null;
+    try { followup = await deps.api("/nutrition/fueling-followup"); } catch { return; }
+    if (!isCurrentToday(deps) || !slot.isConnected) return;
+    const due = followup && typeof followup === "object" && (followup as { due?: unknown }).due === true;
+    if (!due) { slot.innerHTML = ""; return; }
+    slot.innerHTML =
+      `<div class="fueling-card reveal" style="--i:0">` +
+        `<div class="fueling-lead"><span class="fueling-kicker lbl">Since the target change</span></div>` +
+        `<div class="fueling-copy">How's fueling feeling?</div>` +
+        `<div class="fueling-opts">` +
+          `<button class="fueling-opt" data-energy="1" type="button">Running low</button>` +
+          `<button class="fueling-opt" data-energy="2" type="button">Steady</button>` +
+          `<button class="fueling-opt" data-energy="3" type="button">Plenty</button>` +
+        `</div>` +
+        `<button class="fueling-skip" id="fuelingSkip" type="button" aria-label="Not now">✕</button>` +
+      `</div>`;
+    slot.querySelector("#fuelingSkip")?.addEventListener("click", () => { slot.innerHTML = ""; });
+    slot.querySelectorAll<HTMLElement>(".fueling-opt").forEach((btn) =>
+      btn.addEventListener("click", async () => {
+        const energy = Number(btn.dataset.energy);
+        slot.querySelectorAll<HTMLButtonElement>(".fueling-opt").forEach((b) => { b.disabled = true; });
+        try {
+          await deps.api("/nutrition/fueling-feedback", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ energy }),
+          });
+        } catch {
+          slot.querySelectorAll<HTMLButtonElement>(".fueling-opt").forEach((b) => { b.disabled = false; });
+          deps.toast("Couldn't save that — try again.");
+          return;
+        }
+        if (!slot.isConnected) return;
+        slot.innerHTML =
+          `<div class="fueling-done chip-in"><span class="fueling-done-mark" aria-hidden="true">✓</span> Noted — thanks for the read.</div>`;
+      }));
   }
 
   async function loadWeekAhead(deps: ClientTodayRailControllerDeps): Promise<void> {
@@ -125,6 +171,7 @@ type TodayRailLoadersApi = {
 
   const CAIRN_TODAY_RAIL_LOADERS: TodayRailLoadersApi = {
     loadFuelToday,
+    loadFuelingFollowup,
     loadGarminReconcile,
     loadProgramAdjustmentsBanner,
     loadRecentActivities,

@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**208 tools.**
+**209 tools.**
 
 | Tool | Description |
 |---|---|
@@ -161,6 +161,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `log_blood_pressure` | Record a point-in-time blood pressure reading. Use measured_at for the actual cuff/clinic time (YYYY-MM-DD or YYYY-MM-DDTHH:mm). The reading also appears in marker history as Systolic BP, Diastolic BP, and Pulse when present. |
 | `log_body_measurement` | Log an at-home body measuring session (circumferences, in inches by default — pass unit:'cm' to log the same site fields in centimeters). Any subset of sites — the user logs what they measured. Optional height_in updates the profile so BMI / body-fat can compute. Returns the logged row plus fresh plain-language indicators (BMI, waist-to-height, waist-to-hip, Navy body-fat % estimate). Nothing auto-applies. |
 | `log_food_note` | Record a meal estimate (e.g. after looking at a plate photo): meal type, description, optional macros. |
+| `log_fueling_feedback` | Record the athlete's one-tap fueling read for a day — the follow-through after a nutrition-target change: energy on a calm 1-3 running-low/steady/plenty scale, an optional hunger read (1-3), and an optional note. Adherence-neutral, no scores. Upserts one row per day and, when an applied target change is still in its 7-day follow-through window, links the answer to it so the next check-in weighs the subjective signal. Returns the saved row. |
 | `log_set` | Log one working set. Uses today's session automatically (creates it if needed). Weight in lb; use negative weight for assisted movements (e.g. -30 = 30lb assist). For timed exercises (plank, dead hang) pass duration_sec instead of weight/reps, with exercise_mode 'timed'. |
 | `log_weight` | Record a bodyweight measurement (lb). Also updates the profile's current weight to the latest entry. |
 | `mark_next_step` | Record the user's response to a next-step: action 'done' (did it) or 'snooze' (not today) by step_key — so a handled/skipped step doesn't return tomorrow. Pull, never push. |

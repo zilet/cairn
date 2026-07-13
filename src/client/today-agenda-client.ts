@@ -12,6 +12,7 @@ type TodayAgendaBuckets = { primary: ClientTodayAgendaCandidate[]; more: ClientT
 // (a sibling shipped server-side but not in this build) and is skipped gracefully.
 const TODAY_RAIL_SLOTS: Record<string, string> = {
   fuel: `<div id="fuelSlot" class="fuel-slot card-stack-item"></div>`,
+  "fueling-followup": `<div id="fuelingSlot" class="fueling-slot card-stack-item"></div>`,
   "week-ahead": `<div id="weekAheadSlot" class="weekahead-slot card-stack-item"></div>`,
   "program-adjustments": `<div id="adjustSlot" class="adjust-slot card-stack-item"></div>`,
   "weekly-read": `<div id="weeklySlot" class="weekly-slot card-stack-item"></div>`,

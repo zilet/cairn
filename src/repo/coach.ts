@@ -14,6 +14,7 @@ import { coachingFocus } from "./coaching-focus.js";
 import { planDayProgression, programAdjustments, programBalance, recentMuscleLoad } from "./progression.js";
 import { jaccard, memNorm, memoryForCoach, recentLearnings } from "./memory.js";
 import { capStr, getDayIntake, mealPlanForCoach } from "./nutrition.js";
+import { listFuelingFeedback } from "./fueling.js";
 import { bodyMetricsContextSlice } from "./body-metrics.js";
 import { getPlan } from "./plan.js";
 import {
@@ -460,7 +461,7 @@ function buildPersonSlice(
 // Nutrition goal + today's fuel. Both goal reads reuse the already-fetched profile.
 function buildNutritionSlice(
   signals: CoachContextSignals
-): Pick<CoachContext, "goal" | "goal_mode" | "journey" | "day_intake" | "meal_plan"> {
+): Pick<CoachContext, "goal" | "goal_mode" | "journey" | "day_intake" | "meal_plan" | "fueling"> {
   const { profile, journeyView } = signals;
   return {
     goal: computeGoalCheck(profile), // reuse the profile already fetched above
@@ -486,6 +487,16 @@ function buildNutritionSlice(
         return null;
       }
     })(),
+    // Recent one-tap fueling reads (bounded) — the subjective follow-through after a
+    // nutrition-target change, so chat/coach can echo how fueling has felt since the
+    // change and the adaptive check-in can weigh it. Empty array when nothing's logged.
+    fueling: listFuelingFeedback(14).map((row: any) => ({
+      date: row.date,
+      energy: row.energy,
+      hunger: row.hunger,
+      note: row.note,
+      decision_id: row.decision_id,
+    })),
   };
 }
 

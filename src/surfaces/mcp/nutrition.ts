@@ -14,6 +14,7 @@ import {
   updateMealPlanDays,
 } from "../../domain/nutrition/index.js";
 import { goalPace } from "../../repo/goal-pace.js";
+import { setFuelingFeedback } from "../../repo/fueling.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 import { queueMcpAgentJob } from "./background.js";
 
@@ -178,5 +179,17 @@ export function registerNutritionTools(server: McpToolRegistrar) {
 
   server.tool("delete_food_note", "Delete a logged food note by id.", { id: z.number().int() }, async ({ id }) =>
     asText(deleteFoodNote(id))
+  );
+
+  server.tool(
+    "log_fueling_feedback",
+    "Record the athlete's one-tap fueling read for a day — the follow-through after a nutrition-target change: energy on a calm 1-3 running-low/steady/plenty scale, an optional hunger read (1-3), and an optional note. Adherence-neutral, no scores. Upserts one row per day and, when an applied target change is still in its 7-day follow-through window, links the answer to it so the next check-in weighs the subjective signal. Returns the saved row.",
+    {
+      date: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
+      energy: z.number().int().min(1).max(3).describe("1 running low · 2 steady · 3 plenty"),
+      hunger: z.number().int().min(1).max(3).optional().describe("optional appetite read (1-3)"),
+      note: z.string().optional(),
+    },
+    async ({ date, energy, hunger, note }) => asText(setFuelingFeedback(date ?? "", { energy, hunger, note }))
   );
 }

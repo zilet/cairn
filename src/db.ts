@@ -782,6 +782,22 @@ CREATE TABLE IF NOT EXISTS checkins (
 );
 CREATE INDEX IF NOT EXISTS idx_checkins_date ON checkins(date);
 
+-- One-tap fueling follow-through. After a nutrition-target change APPLIES, Today quietly
+-- offers a calm "how's fueling feeling?" check on days the athlete logs food, only while
+-- the change is inside its 7-day follow-through window. Adherence-neutral, no scores:
+-- energy/hunger are a small 1-3 "running low / steady / plenty" read. One row per day
+-- (date UNIQUE, upserted), linked to the triggering nutrition_target brain_decision so the
+-- next adaptive check-in can weigh the subjective signal against the change it followed.
+CREATE TABLE IF NOT EXISTS fueling_feedback (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  date TEXT UNIQUE,
+  energy INTEGER,                     -- 1-3 (running low / steady / plenty)
+  hunger INTEGER,                     -- 1-3 (NULL = not given)
+  note TEXT,
+  decision_id INTEGER,                -- applied nutrition_target brain_decision this follows (NULL if none active)
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
 -- Supplement UNDERSTANDING (not a daily log). The athlete says what they take in
 -- plain words ("creatine daily, omega-3, some D, whey occasionally"); the system
 -- APPROXIMATES each into a canonical name + typical dose + cadence + the markers /

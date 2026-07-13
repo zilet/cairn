@@ -186,6 +186,32 @@ function renderAcuteLoadNote(ctx: any): string {
   return `\nACUTE TRAINING LOAD & FATIGUE (fold this into the read): ${bits.join("; ")}. If training volume/mileage is RAMPING or fatigue is high, the calm move is usually to FUEL the work — hold or RAISE intake (protein and carbs protected), NOT cut. A sustained deficit into a mileage ramp is the thing to flag (suggest eating more, not less).\n`;
 }
 
+// The athlete's own one-tap fueling reads since the last target change (energy on a calm
+// running-low/steady/plenty scale, optional appetite + note) as plain, adherence-neutral
+// lines. This is the SUBJECTIVE follow-through the check-in weighs alongside the weight
+// trend — repeated "running low" after a cut is a reason to hold or gently raise, never to
+// cut further. Reads context.fueling when present, else the repo. "" when nothing's logged.
+const FUEL_ENERGY_WORD: Record<number, string> = { 1: "running low", 2: "steady", 3: "plenty" };
+const FUEL_HUNGER_WORD: Record<number, string> = { 1: "not hungry", 2: "satisfied", 3: "hungry" };
+function renderFuelingFeedback(context: any): string {
+  const rows = Array.isArray(context?.fueling) ? context.fueling : repo.listFuelingFeedback(14);
+  const lines = (Array.isArray(rows) ? rows : [])
+    .slice(0, 14)
+    .map((r: any) => {
+      const bits: string[] = [];
+      const energyWord = FUEL_ENERGY_WORD[Number(r?.energy)];
+      if (energyWord) bits.push(`energy ${energyWord}`);
+      const hungerWord = FUEL_HUNGER_WORD[Number(r?.hunger)];
+      if (hungerWord) bits.push(hungerWord);
+      const note = String(r?.note ?? "").trim();
+      if (note) bits.push(`"${note.slice(0, 120)}"`);
+      return bits.length ? `  - ${r?.date ?? "recent"}: ${bits.join(", ")}` : "";
+    })
+    .filter(Boolean);
+  if (!lines.length) return "";
+  return `\nFUELING FOLLOW-THROUGH (the athlete's own one-tap reads since the last target change — subjective and adherence-neutral; weigh alongside the weight trend. Repeated "running low" energy after a cut is a reason to HOLD or gently RAISE, never to cut further):\n${lines.join("\n")}\n`;
+}
+
 // Longevity + lean guardrails shared by the weekly meal-plan and meal-swap prompts.
 // The journey's SHAPE (v41) → a plain-language fueling instruction that CONDITIONS
 // the deficit / "getting-lean" framing on the actual goal mode, so a maintaining or
@@ -541,7 +567,7 @@ WHEN TO PROPOSE A CHANGE (else change:false):
   }
 
 ${CONTEXT_GUARDRAILS}
-${renderSignalState(context)}${renderDiscipline(context, "nutrition")}${renderEnduranceGoal(context, "nutrition")}${renderConnectedBrain(context, { domains: ["nutrition"] })}${renderTrajectory(context)}${renderDexaTargeting(context, "nutrition")}${renderBodyComp(context)}${renderAcuteLoadNote(context)}${renderTodayFuel(context)}
+${renderSignalState(context)}${renderDiscipline(context, "nutrition")}${renderEnduranceGoal(context, "nutrition")}${renderConnectedBrain(context, { domains: ["nutrition"] })}${renderTrajectory(context)}${renderDexaTargeting(context, "nutrition")}${renderBodyComp(context)}${renderAcuteLoadNote(context)}${renderTodayFuel(context)}${renderFuelingFeedback(context)}
 USER: profile: ${JSON.stringify(profile)}
 
 ${renderStreamingContract(

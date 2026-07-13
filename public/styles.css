@@ -3078,6 +3078,35 @@ body.swr-busy::after{
   font-size:.8rem;font-style:italic;padding:4px 2px}
 .checkin-done-mark{color:var(--sage);font-style:normal}
 
+/* fueling follow-through — after a target change, one calm 1-tap read (no numbers) */
+.fueling-slot{margin:0}
+.fueling-slot:empty{display:none}
+.fueling-card{
+  background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius-sm);
+  border-left:3px solid var(--sage);padding:13px 15px;margin:0 0 14px;position:relative;
+}
+.fueling-kicker{display:block;color:var(--sage-text);margin-bottom:2px}
+.fueling-copy{font-size:.96rem;color:var(--ink);margin-bottom:10px;padding-right:18px}
+.fueling-opts{display:flex;flex-wrap:wrap;gap:7px}
+.fueling-opt{
+  background:var(--card-2);border:1px solid var(--line);border-radius:999px;
+  padding:6px 14px;cursor:pointer;color:var(--ink);font-size:.84rem;font-weight:500;
+  transition:border-color var(--dur-1) var(--ease),box-shadow var(--dur-1) var(--ease),
+    transform var(--dur-1) var(--ease);
+}
+.fueling-opt:hover{border-color:var(--line-2);box-shadow:var(--shadow-sm)}
+.fueling-opt:active{transform:var(--press-xs)}
+.fueling-opt:disabled{opacity:.55;cursor:default}
+.fueling-skip{
+  position:absolute;top:9px;right:10px;background:none;border:none;color:var(--muted);
+  font-size:.95rem;line-height:1;cursor:pointer;padding:2px 4px;
+  transition:color var(--dur-1) var(--ease);
+}
+.fueling-skip:hover{color:var(--ink-2)}
+.fueling-done{display:inline-flex;align-items:center;gap:7px;color:var(--muted);
+  font-size:.8rem;font-style:italic;padding:4px 2px}
+.fueling-done-mark{color:var(--sage);font-style:normal}
+
 /* the quiet insight card — one connection, pull never push */
 .insight-slot{margin:0}
 .insight-slot:empty{display:none}

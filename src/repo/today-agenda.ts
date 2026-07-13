@@ -29,6 +29,7 @@ import { createHash } from "node:crypto";
 // barrel ../repo.js) — repo modules do this to avoid a circular import, since the
 // barrel re-exports this very file.
 import { getDayIntake, getMealPlan } from "./nutrition.js";
+import { fuelingFollowThroughDue } from "./fueling.js";
 import { addDaysISO, localDateISO } from "./shared.js";
 import { getCachedDayRead } from "./intelligence.js";
 import { listVisibleInsights, listActiveDirectives } from "./coach.js";
@@ -220,6 +221,28 @@ function fuelCandidate(date: string): TodayAgendaCandidate | null {
     tier: "primary",
     priority,
     client_card: "fuel",
+  };
+}
+
+// ---- fueling follow-through: after a nutrition-target change APPLIED, offer a calm
+// one-tap "how's fueling feeling?" read. fuelingFollowThroughDue gates it to the change's
+// 7-day window, a day with logged food, and "not answered yet" — so it self-omits the rest
+// of the time. A genuine coach-initiated follow-up, moderate priority (never urgent, never
+// a notification); it stays pull-only behind the quiet "more" when the day has bigger news. ----
+function fuelingFollowupCandidate(date: string): TodayAgendaCandidate | null {
+  let due = false;
+  try {
+    due = !!fuelingFollowThroughDue(date)?.due;
+  } catch {
+    due = false;
+  }
+  if (!due) return null;
+  return {
+    id: "fueling-followup",
+    kind: "fuel",
+    tier: "primary",
+    priority: 42,
+    client_card: "fueling-followup",
   };
 }
 
@@ -635,6 +658,7 @@ export function todayAgenda(date?: string, opts: { markIntroduced?: boolean } = 
   }
 
   add(safe(() => fuelCandidate(d)));
+  add(safe(() => fuelingFollowupCandidate(d)));
   add(safe(() => reconcileCandidate()));
   try {
     for (const announced of announcedChangeCandidates(d)) add(announced);

@@ -88,6 +88,8 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/nutrition/expenditure",
   "/nutrition/checkin",
   "/nutrition/goal-pace",
+  "/nutrition/fueling-followup",
+  "/nutrition/fueling-feedback",
   "/coach/mealplan",
   "/mealplans",
   "/mealplans/:id/accept",

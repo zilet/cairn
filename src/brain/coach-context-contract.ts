@@ -149,6 +149,15 @@ export interface CoachCheckin extends CoachRecord {
   date?: string;
 }
 
+export interface CoachFuelingFeedback extends CoachRecord {
+  id?: number;
+  date?: string;
+  energy?: number | null;
+  hunger?: number | null;
+  note?: string | null;
+  decision_id?: number | null;
+}
+
 export type CoachPersonalResponseConfidence = "tentative" | "observed" | "strong";
 
 export type CoachPersonalModifierTarget =
@@ -223,6 +232,7 @@ export interface CoachContextEnvelope {
   directive_feedback: CoachRecord[];
   recovery: CoachRecoveryContext;
   checkins: CoachCheckin[];
+  fueling: CoachFuelingFeedback[];
   family: CoachFamilyMember[];
   body_composition: CoachRecord | null;
   body_metrics: CoachRecord | null;
@@ -290,6 +300,7 @@ export const COACH_CONTEXT_ARRAY_KEYS = [
   "symptom_links",
   "directive_feedback",
   "checkins",
+  "fueling",
   "family",
   "supplements",
   "recent_load",

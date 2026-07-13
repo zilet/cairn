@@ -23,6 +23,7 @@ import {
   updateMealPlanDays,
 } from "../domain/nutrition/index.js";
 import { goalPace } from "../repo/goal-pace.js";
+import { fuelingFollowThroughDue, listFuelingFeedback, setFuelingFeedback } from "../repo/fueling.js";
 import { ACCEPTED_MIME } from "../uploadMime.js";
 import { UPLOADS_DIR } from "../uploadPaths.js";
 import { backgroundOp } from "./background-op.js";
@@ -89,6 +90,23 @@ nutritionRouter.post("/nutrition/checkin", async (req, res) => {
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// Fueling follow-through. After a nutrition-target change applies, Today quietly offers a
+// one-tap "how's fueling feeling?" read on days the athlete logs food, only inside the
+// change's 7-day window. Read-only due-check + recent reads; `due:false` is the calm
+// common answer, returned at status 200 like the other nutrition reads (never a 404).
+nutritionRouter.get("/nutrition/fueling-followup", (_req, res) => {
+  res.json({ ...fuelingFollowThroughDue(), recent: listFuelingFeedback(14) });
+});
+
+// Save today's (or ?date=) one-tap fueling read. Adherence-neutral; energy/hunger are the
+// 1-3 running-low/steady/plenty scale, coerced/clamped at the trust boundary. Returns the
+// saved row. Body: { date?, energy, hunger?, note? }.
+nutritionRouter.post("/nutrition/fueling-feedback", (req, res) => {
+  const b = req.body ?? {};
+  const date = typeof b.date === "string" && b.date.trim() ? b.date.trim() : "";
+  res.json(setFuelingFeedback(date, { energy: b.energy, hunger: b.hunger, note: b.note }));
 });
 
 // Agentic swap of ONE meal in a drafted plan, honoring an optional free-text

@@ -15,6 +15,7 @@ type TodayRailState = {
 
 type TodayRailLoaderKey =
   | "fuel"
+  | "fueling-followup"
   | "week-ahead"
   | "program-adjustments"
   | "weekly-read"
@@ -46,6 +47,7 @@ type TodayRailDeps = {
     const loadTodayReads = () => deps.loadTodayReads();
     return {
       fuel: () => railLoaders().loadFuelToday(deps.state.logDate, deps),
+      "fueling-followup": () => railLoaders().loadFuelingFollowup(deps),
       "week-ahead": () => railLoaders().loadWeekAhead(deps),
       "program-adjustments": () => railLoaders().loadProgramAdjustmentsBanner(deps),
       "weekly-read": loadTodayReads,

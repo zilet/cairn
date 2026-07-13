@@ -3109,6 +3109,7 @@ declare global {
 
     CairnTodayRailLoaders: {
       loadFuelToday(date: string, deps: ClientTodayRailControllerDeps): Promise<void>;
+      loadFuelingFollowup(deps: ClientTodayRailControllerDeps): Promise<void>;
       loadWeekAhead(deps: ClientTodayRailControllerDeps): Promise<void>;
       loadProgramAdjustmentsBanner(deps: ClientTodayRailControllerDeps): Promise<void>;
       loadRecentActivities(deps: ClientTodayRailControllerDeps): Promise<void>;

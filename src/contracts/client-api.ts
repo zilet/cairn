@@ -1140,6 +1140,29 @@ export interface ClientCheckin {
   [key: string]: unknown;
 }
 
+// One-tap fueling read (the follow-through after a nutrition-target change). energy/hunger
+// are a calm 1-3 running-low/steady/plenty scale; no scores.
+export interface ClientFuelingFeedback {
+  id?: number;
+  date?: ISODateString;
+  energy?: number | null;
+  hunger?: number | null;
+  note?: string | null;
+  decision_id?: number | null;
+  created_at?: string;
+  [key: string]: unknown;
+}
+
+// The fueling follow-up due-check for today plus recent reads. `due` is the calm gate;
+// most days it is false and the card stays hidden.
+export interface ClientFuelingFollowup {
+  due: boolean;
+  decision_id: number | null;
+  applied_on: string | null;
+  summary: string | null;
+  recent: ClientFuelingFeedback[];
+}
+
 export interface ClientBloodPressureReading {
   id: number;
   measured_at?: string;
@@ -1968,6 +1991,8 @@ export interface ClientApiResponses {
   "/api/nutrition/expenditure": ClientExpenditureEstimate;
   "/api/nutrition/checkin": ClientProposalResult;
   "/api/nutrition/goal-pace": ClientGoalPaceResponse;
+  "/api/nutrition/fueling-followup": ClientFuelingFollowup;
+  "/api/nutrition/fueling-feedback": ClientFuelingFeedback;
   "/api/coach/mealplan": ClientMealPlanDraftResponse | ClientAgentJobEnvelope;
   "/api/mealplans": ClientMealPlan[];
   "/api/food-notes": ClientFoodNote[] | ClientFoodNote;
