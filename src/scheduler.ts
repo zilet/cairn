@@ -8,12 +8,14 @@ import { evaluateMatureExpectations } from "./brainEvaluator.js";
 import { applyDueAnnouncedDecisions, applyProposalWithAutonomy } from "./domain/brain/autonomy-service.js";
 import { enqueueAgentJob } from "./agentJobs.js";
 import { recordAsyncFailure, recordSchedulerFailure } from "./diagnostics.js";
+import { runWithTimeZone } from "./tz.js";
+import { addDaysISO, nowContext } from "./repo/shared.js";
 // Stream 2 (self-updating memory): quiet nightly memory housekeeping + outcome
 // reconciliation. Lazy-imported in the tick so this module stays decoupled.
 
 // Weekly expert-team review + quiet proactivity. Configured in Settings (persisted in
-// the DB, editable from the PWA at runtime — no restart needed): coach_enabled,
-// coach_day (0=Sun..6=Sat), coach_hour (local). When the slot arrives it drafts
+// the DB, editable from the PWA at runtime — no restart needed): coach_day
+// (0=Sun..6=Sat), coach_hour (the last-seen device timezone). When the slot arrives it drafts
 // ONE proposal using the configured agent rotation (round-robin / random /
 // priority, with fallthrough). In lead mode it routes through the same bounded,
 // reversible autonomy ledger as every other adaptation; review mode still parks it.
@@ -35,29 +37,35 @@ import { recordAsyncFailure, recordSchedulerFailure } from "./diagnostics.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-// The most recent past (or current) occurrence of weekday `day` at hour `hour`,
-// as a local Date. Used for miss-tolerant weekly slots: if `now >= slot` and we
-// haven't run for that slot's date, the slot is due.
-function lastScheduledSlot(now: Date, day: number, hour: number): Date {
-  const slot = new Date(now);
-  slot.setHours(hour, 0, 0, 0);
-  // Walk back to the target weekday (0..6). If today IS the day but the hour
-  // hasn't arrived yet, this still lands today and the now>=slot guard defers it.
-  let back = (now.getDay() - day + 7) % 7;
-  // If it's the right weekday but before the hour, the most recent occurrence was
-  // a week ago.
-  if (back === 0 && now.getTime() < slot.getTime()) back = 7;
-  slot.setTime(slot.getTime() - back * DAY_MS);
-  return slot;
+const WEEKDAY_INDEX: Record<string, number> = {
+  Sunday: 0,
+  Monday: 1,
+  Tuesday: 2,
+  Wednesday: 3,
+  Thursday: 4,
+  Friday: 5,
+  Saturday: 6,
+};
+
+// Calendar stamp of the most recent scheduled weekly slot in `tz`. This is
+// intentionally wall-clock math, not Date#getHours/getDay: those getters always
+// use the host process timezone and were the reason a Pi could run a New York
+// athlete's work at the wrong hour. Date-only subtraction is DST-safe here.
+export function weeklySlotStamp(now: Date, day: number, hour: number, tz?: string): string {
+  const local = nowContext(now, tz);
+  const localDay = WEEKDAY_INDEX[local.weekday] ?? 0;
+  const targetDay = Math.max(0, Math.min(6, Math.trunc(Number(day) || 0)));
+  const targetHour = Math.max(0, Math.min(23, Math.trunc(Number(hour) || 0)));
+  let back = (localDay - targetDay + 7) % 7;
+  if (back === 0 && local.hour < targetHour) back = 7;
+  return addDaysISO(local.date, -back) ?? local.date;
 }
 
 // True when the weekly slot's most recent occurrence has passed and the persisted
 // last-run stamp doesn't already cover it. Records the stamp as a side effect
 // when it returns true (so it fires once per slot, restart-tolerant).
 function weeklySlotDue(now: Date, day: number, hour: number, stateKey: string): boolean {
-  const slot = lastScheduledSlot(now, day, hour);
-  if (now.getTime() < slot.getTime()) return false; // the slot hasn't arrived yet
-  const slotStamp = localToday(slot);
+  const slotStamp = weeklySlotStamp(now, day, hour);
   if (repo.getAppState(stateKey) === slotStamp) return false; // already ran for this slot
   repo.setAppState(stateKey, slotStamp);
   return true;
@@ -216,7 +224,7 @@ export function startScheduler() {
     // (a) Nightly quiet insight — once per day, in the small hours alongside the
     //     Brief precompute. generateInsight emits ONE genuine connection or
     //     ok:false (dedup-guarded); a near-repeat / nothing-real is a calm no-op.
-    const insightDue = now.getHours() === PRECOMPUTE_HOUR && repo.getAppState("insight_last_date") !== localToday(now);
+    const insightDue = nowContext(now).hour === PRECOMPUTE_HOUR && repo.getAppState("insight_last_date") !== localToday(now);
     // (b) Weekly read — on the configured coach day/hour (miss-tolerant). A
     //     standing "how the week went + the one change", stored as a weekly_read
     //     insight. Reuses the coach slot so it lands on the same cadence.
@@ -562,7 +570,7 @@ export function startScheduler() {
   const precomputeTick = async () => {
     if (precomputeBusy) return;
     const now = new Date();
-    if (now.getHours() !== PRECOMPUTE_HOUR) return;
+    if (nowContext(now).hour !== PRECOMPUTE_HOUR) return;
     // Warm the DEVICE's calendar date (recorded client zone), not the server's, so
     // a traveling owner's morning open still lands on a cached read.
     const stamp = warmToday(now);
@@ -595,7 +603,7 @@ export function startScheduler() {
   const memoryTick = async () => {
     if (memoryBusy) return;
     const now = new Date();
-    if (now.getHours() !== MEMORY_HOUR) return;
+    if (nowContext(now).hour !== MEMORY_HOUR) return;
     const stamp = localToday(now);
     if (stamp === lastMemoryDate) return; // already ran today
     lastMemoryDate = stamp;
@@ -700,39 +708,42 @@ export function startScheduler() {
   };
 
   const s = repo.getSettings(); // also lazily creates the row (seeding env defaults)
+  const schedulerZone = repo.recordedClientTimeZone() ?? "server local time until a device reports its zone";
   console.log(
-    s.coach_enabled
-      ? `Auto-coach enabled: day=${s.coach_day}, hour=${s.coach_hour}, strategy=${s.agent_strategy}.`
-      : "Auto-coach disabled (enable it in Settings)."
+    `Background coaching cadence: day=${s.coach_day}, hour=${s.coach_hour}, timezone=${schedulerZone}, strategy=${s.agent_strategy}.`
   );
   console.log(
     s.proactive_enabled
       ? "Quiet proactivity enabled (insights wait in-app; never pushed)."
       : "Quiet proactivity disabled (enable it in Settings)."
   );
-  setInterval(tick, 60_000); // check every minute
-  setInterval(boundaryApplyTick, 60_000);
-  setInterval(revisionTick, 60_000);
-  setInterval(proactiveTick, 60_000);
-  setInterval(garminTick, 60_000);
-  setInterval(precomputeTick, 60_000);
-  setInterval(memoryTick, 60_000); // Stream 2: nightly memory maintenance
-  setInterval(updateCheckTick, 60_000); // self-hosted update check (≤ once/day)
+  // Scheduler work has no request header, so re-establish the most recently
+  // observed PWA timezone for every pass. The lookup happens per tick: travel or
+  // daylight-saving changes take effect without a restart.
+  const inOwnerTimeZone = <T>(fn: () => T) => () => runWithTimeZone(repo.recordedClientTimeZone(), fn);
+  setInterval(inOwnerTimeZone(tick), 60_000); // check every minute
+  setInterval(inOwnerTimeZone(boundaryApplyTick), 60_000);
+  setInterval(inOwnerTimeZone(revisionTick), 60_000);
+  setInterval(inOwnerTimeZone(proactiveTick), 60_000);
+  setInterval(inOwnerTimeZone(garminTick), 60_000);
+  setInterval(inOwnerTimeZone(precomputeTick), 60_000);
+  setInterval(inOwnerTimeZone(memoryTick), 60_000); // Stream 2: nightly memory maintenance
+  setInterval(inOwnerTimeZone(updateCheckTick), 60_000); // self-hosted update check (≤ once/day)
   setInterval(heartbeatTick, 60_000); // readiness evidence; no agent/provider dependency
-  setTimeout(garminTick, 45_000); // the boot-time pass; later passes ride the minute tick
-  setTimeout(updateCheckTick, 30_000); // first update check shortly after boot (then daily)
-  setTimeout(boundaryApplyTick, 5_000);
-  setTimeout(revisionTick, 15_000);
+  setTimeout(inOwnerTimeZone(garminTick), 45_000); // the boot-time pass; later passes ride the minute tick
+  setTimeout(inOwnerTimeZone(updateCheckTick), 30_000); // first update check shortly after boot (then daily)
+  setTimeout(inOwnerTimeZone(boundaryApplyTick), 5_000);
+  setTimeout(inOwnerTimeZone(revisionTick), 15_000);
 
   // Boot warm: if today's read isn't cached yet (e.g. a mid-day restart), compute
   // it in the background so the very next open is instant too. Safe no-op when an
   // agent is unreachable — it caches the deterministic floor.
-  setTimeout(() => {
+  setTimeout(inOwnerTimeZone(() => {
     const today = warmToday();
     if (!repo.getCachedDayRead(today)) {
       precomputeDayRead(today)
         .then(() => console.log(`[brief] warmed today's day-read for ${today}.`))
         .catch((error) => recordSchedulerFailure("day_read_boot_warm", error));
     }
-  }, 15_000);
+  }), 15_000);
 }

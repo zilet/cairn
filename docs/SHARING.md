@@ -95,8 +95,8 @@ The release compose defaults to:
 TZ=America/New_York
 ```
 
-The weekly auto-coach scheduler uses the container's local time. Users in another
-timezone should create a `.env` next to `docker-compose.yml`, for example:
+Cairn's background scheduler follows the last valid IANA timezone reported by the PWA. Users who want a
+different first-boot fallback should create a `.env` next to `docker-compose.yml`, for example:
 
 ```env
 TZ=Europe/Belgrade

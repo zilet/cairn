@@ -79,9 +79,11 @@ tests, media, local agent instructions (`CLAUDE.md` / `AGENTS.md`), and operator
 sent to the builder. The final `/app` contains only `dist`, production `node_modules`, `public`,
 `seed-art`, `agents.json`, and `package.json`. Compose mounts durable state at `/data` and
 `/home/app`, plus regenerable tools at `/home/app/.cairn-tools`; the host checkout is never mounted.
-Docker defaults to `TZ=America/New_York`. Set `TZ` in `.env` to the user's local timezone if weekly
-auto-coach is enabled; the scheduler uses container-local `getDay()` / `getHours()` for the
-configured day and hour. For Belgrade, use `TZ=Europe/Belgrade`.
+Docker defaults to `TZ=America/New_York`. The PWA reports its current IANA timezone and Cairn remembers
+the last valid zone for weekly reviews, nightly maintenance, Brief precompute, and boundary application.
+Set `TZ` in `.env` as a sensible fallback for a new install before any device has connected. If weekly
+background work must run before the first PWA request, that fallback frames the configured day and hour.
+For Belgrade, use `TZ=Europe/Belgrade`.
 
 ---
 

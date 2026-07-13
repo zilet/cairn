@@ -28,9 +28,9 @@ type SettingsScreenWorkingModel = {
   gemini_api_key: string;
   garmin_username: string;
   garmin_password: string;
-  coach_enabled: boolean;
   coach_day: number;
   coach_hour: number;
+  time_zone: string;
   update_check_enabled: boolean;
   lead_mode: "lead" | "announce_first" | "review_everything";
 };
@@ -43,7 +43,6 @@ type SettingsScreenPersistBody = {
   art_enabled: boolean;
   research_enabled: boolean;
   garmin_username: string;
-  coach_enabled: boolean;
   coach_day: number;
   coach_hour: number;
   agent_routes: Record<string, string>;

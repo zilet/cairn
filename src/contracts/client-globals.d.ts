@@ -740,9 +740,9 @@ declare global {
     order: string[];
     disabled: Set<string>;
     routes: Record<string, string>;
-    coach_enabled: boolean;
     coach_day: number;
     coach_hour: number;
+    time_zone: string;
   };
 
   type ClientSettingsAgentsControllerAgent = Record<string, unknown> & { name: string };
@@ -2746,9 +2746,9 @@ declare global {
         agentHealthHtml: string;
         agentActivityHtml: string;
         noticedHtml: string;
-        coachEnabled: boolean;
         coachDay: number;
         coachHour: number;
+        timeZone: string;
         dayNames: string[];
       }): string;
       agentListHtml(options: {

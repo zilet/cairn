@@ -29,6 +29,13 @@ test("getSettings lazily creates the singleton with sane defaults", () => {
   assert.equal(s.update_check_enabled, true); // quiet update check on by default
 });
 
+test("settings expose the last valid device timezone used by background scheduling", () => {
+  repo.recordClientTimeZone("America/New_York");
+  assert.equal(repo.getSettings().time_zone, "America/New_York");
+  repo.recordClientTimeZone("Asia/Tokyo");
+  assert.equal(repo.getSettings().time_zone, "Asia/Tokyo");
+});
+
 test("setSettings -> getSettings persists the coach schedule + toggles", () => {
   repo.setSettings({
     agent_strategy: "priority",

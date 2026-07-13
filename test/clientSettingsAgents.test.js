@@ -40,7 +40,7 @@ function loadSettingsAgents() {
   return context.CairnSettingsAgents;
 }
 
-test("settings agents slice renders route summary, strategy, and weekly coach controls", () => {
+test("settings agents slice renders route summary, strategy, and timezone-aware weekly review cadence", () => {
   const settingsAgents = loadSettingsAgents();
   const html = settingsAgents.agentsSliceHtml({
     agentStrategy: "priority",
@@ -49,9 +49,9 @@ test("settings agents slice renders route summary, strategy, and weekly coach co
     agentHealthHtml: `<div class="agenthealth">health</div>`,
     agentActivityHtml: `<div class="agentactivity">activity</div>`,
     noticedHtml: `<div class="noticed">noticed</div>`,
-    coachEnabled: true,
     coachDay: 2,
     coachHour: 14,
+    timeZone: "America/New_York",
     dayNames: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
   });
 
@@ -62,7 +62,9 @@ test("settings agents slice renders route summary, strategy, and weekly coach co
   assert.match(html, /agenthealth/);
   assert.match(html, /agentactivity/);
   assert.match(html, /noticed/);
-  assert.match(html, /id="coachEnabled" checked/);
+  assert.doesNotMatch(html, /coachEnabled|Draft a proposal automatically/);
+  assert.match(html, /Weekly review cadence/);
+  assert.match(html, /America\/New_York/);
   assert.match(html, /value="2" selected>Tue/);
   assert.match(html, /value="14" selected>14:00/);
 });

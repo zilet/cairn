@@ -11,10 +11,6 @@ function settingsAgentsOptional<T extends Element = HTMLElement>(root: ParentNod
   return root.querySelector<T>(selector);
 }
 
-function settingsAgentsInput(event: Event): HTMLInputElement {
-  return event.currentTarget as HTMLInputElement;
-}
-
 function settingsAgentsSelect(event: Event): HTMLSelectElement {
   return event.currentTarget as HTMLSelectElement;
 }
@@ -41,17 +37,14 @@ function renderSettingsAgents(deps: ClientSettingsAgentsControllerDeps): void {
     agentHealthHtml: deps.agentHealthHtml,
     agentActivityHtml: deps.agentActivityHtml,
     noticedHtml: deps.noticedHtml,
-    coachEnabled: deps.workingModel.coach_enabled,
     coachDay: deps.workingModel.coach_day,
     coachHour: deps.workingModel.coach_hour,
+    timeZone: deps.workingModel.time_zone,
     dayNames: deps.dayNames,
   });
 
   settingsAgentsRequired<HTMLSelectElement>(deps.root, "#strat").addEventListener("change", (event) => {
     deps.workingModel.agent_strategy = settingsAgentsSelect(event).value;
-  });
-  settingsAgentsRequired<HTMLInputElement>(deps.root, "#coachEnabled").addEventListener("change", (event) => {
-    deps.workingModel.coach_enabled = settingsAgentsInput(event).checked;
   });
   settingsAgentsRequired<HTMLSelectElement>(deps.root, "#coachDay").addEventListener("change", (event) => {
     deps.workingModel.coach_day = +settingsAgentsSelect(event).value;

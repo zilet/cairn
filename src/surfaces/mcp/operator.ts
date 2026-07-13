@@ -65,14 +65,14 @@ export function registerOperatorTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_settings",
-    "Get app settings: agent selection strategy (round_robin/random/priority), agent order, disabled agents, per-task route metadata, the weekly auto-coach schedule, and Garmin sync status (garmin_last_sync_at/garmin_last_sync_status). Includes the merged agent list.",
+    "Get app settings: agent selection strategy (round_robin/random/priority), agent order, disabled agents, per-task route metadata, the timezone-aware weekly background-review cadence, and Garmin sync status (garmin_last_sync_at/garmin_last_sync_status). Includes the merged agent list.",
     {},
     async () => asText({ settings: getSettings(), agents: getAgentConfig(), route_tasks: listRoutableTasks() })
   );
 
   server.tool(
     "set_settings",
-    "Update app settings (any subset). agent_strategy: round_robin|random|priority. agent_order / disabled_agents: arrays of agent names. agent_routes is an optional per-task agent map using the server-owned route metadata returned by get_settings. coach_enabled/coach_day(0-6)/coach_hour(0-23) control the weekly auto-draft.",
+    "Update app settings (any subset). agent_strategy: round_robin|random|priority. agent_order / disabled_agents: arrays of agent names. agent_routes is an optional per-task agent map using the server-owned route metadata returned by get_settings. coach_day(0-6)/coach_hour(0-23) control the weekly background-review cadence in the last timezone reported by the PWA. coach_enabled is retained only for legacy clients; normal background coaching does not require this opt-in.",
     {
       agent_strategy: z.enum(["round_robin", "random", "priority"]).optional(),
       agent_order: z.array(z.string()).optional(),
@@ -83,7 +83,7 @@ export function registerOperatorTools(server: McpToolRegistrar) {
         .describe(
           `optional per-task agent routing: a map { task -> agent } pinning one of these tasks to a specific agent: ${ROUTABLE_TASK_LIST}. Unknown tasks or unknown/disabled agents are dropped; {} or omitted = no routing (Auto rotates as before).`
         ),
-      coach_enabled: z.boolean().optional(),
+      coach_enabled: z.boolean().optional().describe("legacy weekly-draft compatibility flag; normal background coaching does not require it"),
       coach_day: z.number().int().optional(),
       coach_hour: z.number().int().optional(),
       enrich_enabled: z.boolean().optional(),

@@ -6,6 +6,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo, resetTables } from "./_seed.js";
 import { warmDate } from "../dist/dayread.js";
+import { weeklySlotStamp } from "../dist/scheduler.js";
 import { localDateISO } from "../dist/repo/shared.js";
 
 beforeEach(() => resetTables("app_state"));
@@ -70,4 +71,15 @@ test("warmToday resolves through the recorded zone, else server-local", () => {
   // Once recorded, warm follows the device zone.
   repo.recordClientTimeZone("America/New_York");
   assert.equal(warmDate(repo.recordedClientTimeZone(), instant), "2026-07-01");
+});
+
+test("weekly scheduler slots use the owner's wall clock rather than the server clock", () => {
+  // Sunday 23:30 UTC is still Sunday 19:30 in New York (before a 20:00 slot),
+  // but already Monday morning in Tokyo (after its Sunday 20:00 slot).
+  const instant = new Date("2026-07-12T23:30:00Z");
+  assert.equal(weeklySlotStamp(instant, 0, 20, "America/New_York"), "2026-07-05");
+  assert.equal(weeklySlotStamp(instant, 0, 20, "Asia/Tokyo"), "2026-07-12");
+
+  // An hour later, New York has crossed its own 20:00 boundary.
+  assert.equal(weeklySlotStamp(new Date("2026-07-13T00:30:00Z"), 0, 20, "America/New_York"), "2026-07-12");
 });

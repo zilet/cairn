@@ -38,6 +38,7 @@ test("settings surface normalizes API data into the working model", () => {
       art_enabled: false,
       update_check_enabled: null,
       garmin_username: "athlete@example.com",
+      time_zone: "America/New_York",
     },
     agents: [
       { name: "claude", enabled: true },
@@ -57,6 +58,7 @@ test("settings surface normalizes API data into the working model", () => {
   assert.equal(wm.update_check_enabled, true);
   assert.equal(wm.lead_mode, "lead");
   assert.equal(wm.garmin_username, "athlete@example.com");
+  assert.equal(wm.time_zone, "America/New_York");
   assert.equal(surface.routeEligible(data).reason, "web_agent_connected");
 });
 

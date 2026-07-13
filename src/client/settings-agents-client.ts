@@ -25,9 +25,9 @@ type SettingsAgentsSliceOptions = {
   agentHealthHtml: string;
   agentActivityHtml: string;
   noticedHtml: string;
-  coachEnabled: boolean;
   coachDay: number;
   coachHour: number;
+  timeZone: string;
   dayNames: string[];
 };
 
@@ -83,13 +83,13 @@ function settingsAgentsSliceHtml(options: SettingsAgentsSliceOptions): string {
           <div id="routelist" class="route-list">${options.routeRowsHtml}</div>
         </details>
 
-        <h1 class="lbl" style="margin:22px 0 8px">Weekly auto-coach</h1>
-        <label class="toggle"><input type="checkbox" id="coachEnabled" ${options.coachEnabled ? "checked" : ""}>
-          <span>Draft a proposal automatically each week</span></label>
+        <h1 class="lbl" style="margin:22px 0 8px">Weekly review cadence</h1>
+        <p class="set-group-sub">Cairn keeps learning from your input in the background. This is its weekly whole-picture review; bounded changes follow your autonomy setting and stay visible and reversible.</p>
         <div class="logrow" style="margin-top:12px">
           <select id="coachDay" class="selflex">${settingsAgentDayOptions(options.dayNames, options.coachDay)}</select>
           <select id="coachHour" class="selflex">${settingsAgentHourOptions(options.coachHour)}</select>
         </div>
+        <div class="sess-line" style="color:var(--muted);margin-top:6px">Times follow <b>${escHtml(options.timeZone || "the server timezone until this device reports one")}</b>. Cairn updates this automatically when your device timezone changes.</div>
       </section>`;
 }
 

@@ -1,6 +1,7 @@
 import { db } from "../db.js";
 import { listAgents, agentVersion } from "../agents.js";
 import crypto from "node:crypto";
+import { recordedClientTimeZone } from "./client-tz.js";
 
 // ---------- settings & agent selection ----------
 export interface Settings {
@@ -11,6 +12,7 @@ export interface Settings {
   coach_enabled: boolean;
   coach_day: number;
   coach_hour: number;
+  time_zone: string | null; // last valid IANA zone reported by the PWA; scheduler clock source
   onboarded: boolean;
   enrich_enabled: boolean;
   proactive_enabled: boolean; // nightly quiet insight + weekly read/nutrition-checkin precompute (pull-never-push)
@@ -235,6 +237,7 @@ function defaultSettings(): Settings {
     coach_enabled: !!process.env.COACH_AGENT,
     coach_day: Number(process.env.COACH_DAY ?? 0),
     coach_hour: Number(process.env.COACH_HOUR ?? 20),
+    time_zone: recordedClientTimeZone() ?? null,
     onboarded: false,
     enrich_enabled: true, // background enrichment on by default
     proactive_enabled: true, // calm precompute (quiet insight / weekly read / nutrition check-in) on by default
@@ -311,6 +314,7 @@ function rowToSettings(row: any): Settings {
     coach_enabled: !!row.coach_enabled,
     coach_day: row.coach_day ?? 0,
     coach_hour: row.coach_hour ?? 20,
+    time_zone: recordedClientTimeZone() ?? null,
     onboarded: !!row.onboarded,
     // NULL on old rows (column added by migration) defaults to enabled.
     enrich_enabled: row.enrich_enabled == null ? true : !!row.enrich_enabled,
@@ -401,6 +405,7 @@ export function setSettings(patch: any): Settings {
     coach_enabled: patch.coach_enabled ?? cur.coach_enabled,
     coach_day: patch.coach_day ?? cur.coach_day,
     coach_hour: patch.coach_hour ?? cur.coach_hour,
+    time_zone: recordedClientTimeZone() ?? null,
     onboarded: patch.onboarded !== undefined ? !!patch.onboarded : cur.onboarded,
     enrich_enabled: patch.enrich_enabled !== undefined ? !!patch.enrich_enabled : cur.enrich_enabled,
     proactive_enabled: patch.proactive_enabled !== undefined ? !!patch.proactive_enabled : cur.proactive_enabled,
@@ -437,6 +442,12 @@ export function setSettings(patch: any): Settings {
       : cur.lead_mode,
   };
   if (!["round_robin", "random", "priority"].includes(merged.agent_strategy)) merged.agent_strategy = "round_robin";
+  merged.coach_day = Number.isInteger(Number(merged.coach_day))
+    ? Math.max(0, Math.min(6, Number(merged.coach_day)))
+    : 0;
+  merged.coach_hour = Number.isInteger(Number(merged.coach_hour))
+    ? Math.max(0, Math.min(23, Number(merged.coach_hour)))
+    : 20;
   // Drop any route pointing at an agent that doesn't exist (agents.json is the
   // source of truth). parseRoutes already filtered task keys + empty values; an
   // empty/"auto" value would never survive that, so this only prunes typos/stale.

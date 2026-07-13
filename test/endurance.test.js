@@ -6,7 +6,7 @@
 // 0-100 grade / impact_score. Offline + deterministic, like the rest of the suite.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { db, isoDaysAgo, repo, resetTables } from "./_seed.js";
+import { db, isoDaysAgo, localDaysAgo, repo, resetTables } from "./_seed.js";
 
 // A reference date well clear of the recovery window (so an empty recovery fetch
 // can't flip the read) — mirrors dayRead.test.js.
@@ -104,10 +104,9 @@ test("hybrid athlete: a mileage SPIKE this week earns an easier day", () => {
 // ---------- A.3 endurance weekly stats ----------
 test("getWeeklyStats returns an endurance block with mileage, moving time, longest, and pace trend", () => {
   // Two runs THIS week (Monday-anchored), one in the prior week for the pace trend.
-  const today = new Date();
   const iso = (d) => d.toISOString().slice(0, 10);
   const monday = (() => {
-    const d = new Date(iso(today) + "T00:00:00Z");
+    const d = new Date(localDaysAgo(0) + "T00:00:00Z");
     d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
     return iso(d);
   })();
@@ -132,10 +131,9 @@ test("getWeeklyStats returns an endurance block with mileage, moving time, longe
 test("endurance weekly time-in-zone rolls up from synced Garmin activities", () => {
   // Need a garmin_source row to satisfy the NOT NULL source_id FK.
   const src = db.prepare(`INSERT INTO garmin_sources (provider, label) VALUES ('garmin','test')`).run();
-  const today = new Date();
   const iso = (d) => d.toISOString().slice(0, 10);
   const monday = (() => {
-    const d = new Date(iso(today) + "T00:00:00Z");
+    const d = new Date(localDaysAgo(0) + "T00:00:00Z");
     d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
     return iso(d);
   })();
@@ -394,7 +392,7 @@ test("the endurance goal surfaces in getCoachContext (orthogonal to discipline)"
 // This-week Monday-anchored seeding, mirroring the getWeeklyStats endurance test.
 const thisWeekMonday = () => {
   const iso = (d) => d.toISOString().slice(0, 10);
-  const d = new Date(iso(new Date()) + "T00:00:00Z");
+  const d = new Date(localDaysAgo(0) + "T00:00:00Z");
   d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
   return iso(d);
 };

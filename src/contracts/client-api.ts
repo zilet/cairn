@@ -199,6 +199,9 @@ export interface ClientSettings {
   disabled_agents?: string[];
   agent_routes?: Record<string, string>;
   meal_prefs?: string | null;
+  coach_day?: number;
+  coach_hour?: number;
+  time_zone?: string | null;
 }
 
 export interface ClientSettingsResponse {

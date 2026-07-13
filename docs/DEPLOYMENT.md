@@ -43,7 +43,8 @@ Persistent state:
 | `cairn-home` | CLI logins (`~/.claude`, `~/.codex`, `~/.gemini`, …) |
 | `cairn-tools` | Optional provider binaries; reinstall instead of backing up |
 
-Set timezone in `.env` so the weekly auto-coach fires at the right local hour:
+Set a fallback timezone in `.env` for first boot. After the PWA connects, Cairn automatically remembers
+the device's IANA timezone and uses it for weekly reviews and nightly background work:
 
 ```env
 TZ=Europe/Belgrade

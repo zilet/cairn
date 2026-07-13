@@ -79,9 +79,9 @@ function settingsWorkingModel(data: SettingsScreenData): SettingsScreenWorkingMo
     gemini_api_key: "",
     garmin_username: settingsSurfaceString(s.garmin_username),
     garmin_password: "",
-    coach_enabled: settingsSurfaceBool(s.coach_enabled),
     coach_day: settingsSurfaceNumber(s.coach_day),
     coach_hour: settingsSurfaceNumber(s.coach_hour),
+    time_zone: settingsSurfaceString(s.time_zone),
     update_check_enabled: settingsSurfaceBool(s.update_check_enabled, true),
     lead_mode: ["lead", "announce_first", "review_everything"].includes(settingsSurfaceString(s.lead_mode))
       ? (settingsSurfaceString(s.lead_mode) as SettingsScreenWorkingModel["lead_mode"])

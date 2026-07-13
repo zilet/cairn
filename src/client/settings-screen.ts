@@ -142,7 +142,6 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
       art_enabled: wm.art_enabled,
       research_enabled: wm.research_enabled,
       garmin_username: wm.garmin_username.trim(),
-      coach_enabled: wm.coach_enabled,
       coach_day: +wm.coach_day,
       coach_hour: +wm.coach_hour,
       agent_routes: wm.routes,

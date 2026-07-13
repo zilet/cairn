@@ -97,7 +97,7 @@ class FakeRoot extends FakeElement {
     this.children = new Map();
     this.routeSelects = [];
 
-    for (const id of ["strat", "coachEnabled", "coachDay", "coachHour", "agentCliUpdateStatus"]) {
+    for (const id of ["strat", "coachDay", "coachHour", "agentCliUpdateStatus"]) {
       this.children.set(`#${id}`, new FakeElement(id));
     }
     this.children.set("#agentlist", new FakeAgentList("agentlist"));
@@ -155,9 +155,9 @@ function makeDeps(overrides = {}) {
     order: ["claude", "codex"],
     disabled: new Set(["codex"]),
     routes: { chat: "missing", meal_plan: "claude" },
-    coach_enabled: false,
     coach_day: 1,
     coach_hour: 8,
+    time_zone: "America/New_York",
   };
   const agentInfo = {};
   const agentModels = {};
