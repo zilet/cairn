@@ -195,7 +195,7 @@ type MeProfileFormContext = {
     return `<div class="field" style="margin-bottom:0">
       <label>Activity level</label>
       <p class="aboutme-hint">A starting estimate of how active you are day to day. Cairn refines your real energy expenditure from your logging over time.</p>
-      <div class="seg actlevel-seg" id="activityLevelSeg" role="group" aria-label="Activity level">${pills}</div>
+      <div class="pill-group actlevel-seg" id="activityLevelSeg" role="group" aria-label="Activity level">${pills}</div>
       <p class="aboutme-hint actlevel-desc" id="activityLevelDesc" style="margin:6px 0 0">${deps.escapeHtml(desc)}</p>
       <input type="hidden" id="activity_factor" value="${deps.escapeAttr(selected)}">
     </div>`;

@@ -833,6 +833,8 @@ body.resting{padding-bottom:calc(144px + var(--vvb,0px))}
   overflow-x:auto;overflow-y:hidden;scroll-behavior:smooth;
   scrollbar-width:none;-ms-overflow-style:none}
 .seg::-webkit-scrollbar{display:none}
+/* Standalone pill groups wrap naturally and never inherit segmented-nav clipping. */
+.pill-group{display:flex;flex-wrap:wrap;gap:6px;background:transparent;border:none;padding:0;overflow:visible}
 .segbtn{
   flex:1;background:transparent;border:none;color:var(--muted);
   font-family:var(--font-ui);font-weight:600;letter-spacing:.08em;text-transform:uppercase;
@@ -4535,9 +4537,8 @@ button.hmk-row:active{background:var(--card-2)}
   border-radius:999px;padding:9px 8px;font-family:var(--font-ui);font-weight:600;
   font-size:.78rem;letter-spacing:.02em;transition:background var(--dur-1) var(--ease),color var(--dur-1) var(--ease)}
 .disc-seg .segbtn.active,.goalmode-seg .segbtn.active,.triflag-seg .segbtn.active{background:var(--ink);color:var(--paper)}
-/* Activity level — 5 human-labelled pills. The labels are long, so this wraps
-   into a soft pill group rather than cramming an equal-flex bar. */
-.actlevel-seg{display:flex;flex-wrap:wrap;gap:6px;background:transparent;border:none;padding:0}
+/* Activity level — 5 human-labelled pills retain the calm segmented-button look. */
+.actlevel-seg{margin:2px 0 16px}
 .actlevel-seg .segbtn{flex:0 0 auto;border:1px solid var(--line);background:var(--card-2);color:var(--ink-2);
   border-radius:999px;padding:8px 13px;font-family:var(--font-ui);font-weight:600;
   font-size:.78rem;letter-spacing:.02em;transition:background var(--dur-1) var(--ease),color var(--dur-1) var(--ease),border-color var(--dur-1) var(--ease)}

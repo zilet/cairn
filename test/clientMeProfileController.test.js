@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import vm from "node:vm";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const styles = readFileSync(join(root, "public/styles.css"), "utf8");
 
 function decodeAttr(value) {
   return String(value || "")
@@ -370,6 +371,11 @@ test("Me Profile activity-level pills map a human label to the stored activity_f
   // "Moderately active" and seeds the hidden number input with the same value.
   const harness = profileHarness({ profile: { primary_discipline: "strength", endurance_goal_json: null } });
   await harness.context.CairnMeProfileController.renderProfile(harness.deps);
+
+  const activityGroupClasses = harness.rootEl.innerHTML.match(/<div class="([^"]*)" id="activityLevelSeg"/)?.[1] || "";
+  assert.equal(activityGroupClasses, "pill-group actlevel-seg");
+  assert.equal(activityGroupClasses.split(/\s+/).includes("seg"), false);
+  assert.match(styles, /\.pill-group\{[^}]*flex-wrap:wrap[^}]*overflow:visible[^}]*\}/);
 
   const hidden = harness.rootEl.querySelector("#activity_factor");
   assert.equal(hidden.value, "1.55", "opens on the nearest level to the stored factor");
