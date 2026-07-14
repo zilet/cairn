@@ -227,7 +227,7 @@ function renderGoalMode(ctx: any): string {
   const tgt = eff?.target_kcal ?? goal?.recommended?.target_intake_kcal;
   const protein = eff?.protein_g ?? goal?.recommended?.protein_g;
   const anchor = tgt
-    ? ` Anchor daily calories near ~${tgt} kcal with ~${protein} g protein (${accepted ? "the user's ACCEPTED adaptive-nutrition target — honor it over the formula" : "goal.recommended"}).`
+    ? ` Anchor daily calories near ~${tgt} kcal with ~${protein} g protein (${accepted ? "the user's ACCEPTED adaptive-nutrition target — honor it over the formula" : eff?.review_due ? "the prior adaptive target is review-due and visible in expired_target; use this current formula until it is reviewed" : "goal.recommended"}).`
     : "";
   if (mode === "maintain") {
     return `\nGOAL MODE: MAINTAIN — the user is holding steady, NOT losing weight. Do NOT prescribe a deficit or frame food as "getting lean"; fuel to maintenance — enough to support training and recovery, protein-forward, whole-food quality. Only flag intake if the measured weight trend genuinely drifts.${anchor}\n`;
@@ -236,6 +236,64 @@ function renderGoalMode(ctx: any): string {
     return `\nGOAL MODE: LEAN GAIN — the user is building, so eat in a CONSERVATIVE surplus (slow, muscle-biased — never a dirty bulk). Keep protein high and food quality high; the connected brain's lab directives still gate WHAT the surplus is made of (e.g. cap saturated fat if ApoB is up).${anchor}\n`;
   }
   return `\nGOAL MODE: LOSE — a lean-safe deficit toward the goal weight, protein protected, never a crash cut.${anchor}\n`;
+}
+
+// One compact strategy block shared by target check-ins and weekly meal plans.
+// It keeps whole-person signals in their proper role: completed intake/scale/RMR
+// and wearable history estimate baseline maintenance; training, recovery,
+// performance and life context shape aggressiveness/timing and may protect fuel,
+// but never masquerade as extra baseline calories or get added twice.
+function renderHolisticNutritionStrategy(ctx: any, expenditure: any): string {
+  const compactActivities = (Array.isArray(ctx?.recent_activities) ? ctx.recent_activities : [])
+    .slice(0, 10)
+    .map((activity: any) => ({
+      date: activity?.date ?? null,
+      type: activity?.type ?? activity?.activity_type ?? activity?.summary ?? null,
+      duration_min: activity?.duration_min ?? null,
+      distance_km: activity?.distance_km ?? null,
+    }));
+  const compactEvents = (Array.isArray(ctx?.context_events) ? ctx.context_events : [])
+    .slice(0, 8)
+    .map((event: any) => ({
+      kind: event?.kind ?? null,
+      title: event?.title ?? null,
+      start_date: event?.start_date ?? null,
+      end_date: event?.end_date ?? null,
+    }));
+  const strategy = {
+    maintenance: {
+      ordinary_day_kcal: expenditure?.typical_tdee ?? expenditure?.tdee ?? null,
+      long_run_average_kcal: expenditure?.tdee ?? null,
+      range: expenditure?.maintenance_range ?? null,
+      confidence: expenditure?.confidence ?? "none",
+      basis: expenditure?.basis ?? null,
+      exceptional_activity: expenditure?.exceptional_activity ?? null,
+      rule: "Exceptional activity is already frequency-amortized. Never add wearable/activity calories again.",
+    },
+    coordinated_target: ctx?.goal?.effective_target ?? null,
+    goal_mode: ctx?.goal_mode ?? ctx?.goal?.goal_mode ?? null,
+    recovery: ctx?.recovery
+      ? {
+          has_data: ctx.recovery.has_data ?? null,
+          days: ctx.recovery.days ?? null,
+          recent: ctx.recovery.recent ?? null,
+          baseline: ctx.recovery.baseline ?? null,
+          delta: ctx.recovery.delta ?? null,
+        }
+      : null,
+    performance: ctx?.performance
+      ? {
+          headline: ctx.performance.headline ?? null,
+          status: ctx.performance.status ?? null,
+          trend: ctx.performance.trend ?? null,
+        }
+      : null,
+    hybrid_fuel: ctx?.program_state?.hybrid?.fuel ?? null,
+    recent_training: compactActivities,
+    fueling_feedback: Array.isArray(ctx?.fueling) ? ctx.fueling.slice(0, 8) : [],
+    life_context: compactEvents,
+  };
+  return `\nWHOLE-PERSON NUTRITION STRATEGY:\n${JSON.stringify(strategy)}\n- Baseline maintenance comes ONLY from the completed-day expenditure evidence above. Training/recovery/performance/life signals tune deficit aggressiveness, carb timing, and protective fueling; they do not increase baseline TDEE.\n- Low recovery, performance fade, rising hybrid load, illness, or explicit under-fueling may HOLD or RAISE fuel. They can never justify lowering calories.\n`;
 }
 
 // Recognized whole-diet identities that are HARD constraints — as firm as an
@@ -335,8 +393,8 @@ function renderHardDiet(sources: Array<string | null | undefined>): string {
 // the HARD dietary-identity block above.
 function longevityGuardrails(plantForward = false): string {
   const proteinLine = plantForward
-    ? "- Anchor EVERY meal on PLANT protein (legumes, lentils, beans, chickpeas, tofu, tempeh, seitan, edamame, soy, seeds); total ~0.7-1 g per lb bodyweight per day (use goal.recommended.protein_g). Do NOT use meat, poultry, or fish to hit protein."
-    : "- Anchor EVERY meal on protein; total ~0.7-1 g per lb bodyweight per day (use goal.recommended.protein_g).";
+    ? "- Anchor EVERY meal on PLANT protein (legumes, lentils, beans, chickpeas, tofu, tempeh, seitan, edamame, soy, seeds); use goal.effective_target.protein_g when present, otherwise goal.recommended.protein_g. Do NOT use meat, poultry, or fish to hit protein."
+    : "- Anchor EVERY meal on protein; use goal.effective_target.protein_g when present, otherwise goal.recommended.protein_g.";
   const omega3Line = plantForward
     ? "- Omega-3s from plant sources 2-3x/week (ground flaxseed, chia, walnuts, hemp, algae oil) — no fish."
     : "- Oily fish 2-3x/week (salmon, sardines, mackerel) or another omega-3 source.";
@@ -346,8 +404,9 @@ ${proteinLine}
 - Build meals from mostly whole, single-ingredient foods; minimize ultra-processed food, added
   sugar, and alcohol.
 ${omega3Line}
-- Calorie target follows goal.recommended for the active GOAL MODE (a lean-safe deficit, maintenance,
-  or a conservative surplus) — never a crash deficit and never an aggressive bulk.
+- Calorie target follows goal.effective_target when present, otherwise goal.recommended for the active
+  GOAL MODE (a lean-safe deficit, maintenance, or a conservative surplus) — never a crash deficit and
+  never an aggressive bulk.
 - Keep the last meal of the day moderate, not enormous or very late.`;
 }
 
@@ -394,14 +453,11 @@ export function buildMealPlanPrompt(userInstruction?: string): string {
   const freqBlock = freqList.length
     ? `\nREPEATED FOOD PATTERNS (observed on 2+ DISTINCT days — optional dish/staple ideas, not preferences or future commitments; reuse only where they fit):\n${freqList.map((f) => `  - ${f.summary} (logged ${f.count}× across ${f.distinct_days} days${f.protein_g != null ? `, ~${Math.round(f.protein_g)}g protein` : ""})`).join("\n")}\n- Never infer a scheduled restaurant visit, takeout, cafe stop, or treat from these historical logs. Only an explicit current instruction or a durable preference/decision can schedule one.\n`
     : "";
-  const expBlock =
-    exp.tdee != null
-      ? `\nBEST-EFFORT EXPENDITURE: TDEE ≈ ${exp.tdee} kcal/day. Basis: ${exp.basis} Outcome-trend confidence ${exp.confidence}; outcome anchor ${exp.outcome_tdee ?? "unavailable"} kcal; recent avg intake ${exp.intake_avg_kcal ?? "?"} kcal; weight trend ${exp.trend_lb_wk ?? "?"} lb/wk. The wearable/RMR/profile prior is an alternative anchor, NOT activity to add on top. goal.recommended already consumes this same chosen estimate; use that mode-correct target and protect fuel when deterministic fatigue/hybrid evidence calls for it.\n`
-      : "";
-  const trainingSignals = ctx.training_signals as any;
-  const fatigue = trainingSignals?.autoregulation?.note
-    ? `\nRECOVERY DEBT (recent training feedback): ${trainingSignals.autoregulation.note} On a high-fatigue stretch keep protein high and carbs adequate for recovery — never slash intake to chase the deficit.\n`
-    : "";
+  const strategyBlock = renderHolisticNutritionStrategy(ctx, exp);
+  const defaultTask =
+    disciplineOf(ctx) === "endurance"
+      ? "Build next week's meal plan around goal.effective_target when present, otherwise goal.recommended, to FUEL the training week — carbs periodized around long/quality sessions, protein adequate for recovery; no forced deficit unless fat loss is the stated goal."
+      : "Build next week's meal plan around goal.effective_target when present, otherwise goal.recommended for the active GOAL MODE, including its protein target.";
   // A whole-diet identity can be declared in the profile, in meal prefs, OR typed
   // into the request — scan all three and treat it as hard as an allergy.
   const dietSources = [(ctx.profile as any)?.dietary_restrictions, prefs, userInstruction];
@@ -415,11 +471,12 @@ user's profile, goal check (with computed TDEE and a mode-correct recommended in
 plan, recent activities, and purpose-scoped durable planning memory are in the DATA section.
 ${renderGoalMode(ctx)}${hardDiet}
 HARD RULES:
-- Anchor daily_kcal to goal.recommended (the mode-correct target — a lean-safe deficit, maintenance,
-  or a conservative surplus per GOAL MODE), NOT an aggressive crash deficit or a dirty bulk, even if
+- Anchor daily_kcal to goal.effective_target when present (the coordinated reviewed target), otherwise
+  goal.recommended (the mode-correct formula target). Never silently replace an accepted target with a
+  newer volatile formula, and never use an aggressive crash deficit or dirty bulk, even if
   the user's requested timeline implies more. If their goal is aggressive, build the sustainable
   plan and say so in notes.
-- Hit the protein target (goal.recommended.protein_g). During a cut, continued strength and muscle
+- Hit goal.effective_target.protein_g when present, otherwise goal.recommended.protein_g. During a cut, continued strength and muscle
   DEVELOPMENT remain the objective; preservation is the universal safety floor, not the aspiration.
   Use adequate total energy and training-day carbs to fuel earned progression, and never frame the
   plan summary/rationale as if merely preserving lean mass were the goal.
@@ -457,8 +514,8 @@ ${CONTEXT_GUARDRAILS}
 - HEALTH MARKERS specifically: make the ACT-NOW nutrition priorities in the PRIORITIZED HEALTH FOCUS
   the backbone of the plan (e.g. a lipid-lowering pattern, iron-rich foods for low ferritin) — let them
   shape the default meals, not just a footnote; flag the marker-driven emphasis in notes. Not medical advice.
-${renderSignalState(ctx)}${renderDiscipline(ctx, "nutrition")}${renderEnduranceGoal(ctx, "nutrition")}${freqBlock}${expBlock}${fatigue}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderTrajectory(ctx)}${renderFoodMemory(planningMemory)}${renderDexaTargeting(ctx, "nutrition")}${renderBodyComp(ctx)}${renderHouseholdDiet(ctx)}
-TASK: ${userInstruction?.trim() || (disciplineOf(ctx) === "endurance" ? "Build next week's meal plan to FUEL the training week — carbs periodized around long/quality sessions, protein adequate for recovery; no forced deficit unless fat loss is the stated goal." : "Build next week's meal plan aligned to goal.recommended for the active GOAL MODE and the protein target.")}
+${renderSignalState(ctx)}${renderDiscipline(ctx, "nutrition")}${renderEnduranceGoal(ctx, "nutrition")}${freqBlock}${strategyBlock}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderTrajectory(ctx)}${renderFoodMemory(planningMemory)}${renderDexaTargeting(ctx, "nutrition")}${renderBodyComp(ctx)}${renderHouseholdDiet(ctx)}
+TASK: ${userInstruction?.trim() || defaultTask}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 ${MEAL_SCHEMA}
@@ -499,10 +556,10 @@ export function buildNutritionCheckinPrompt(ctx?: CoachContext, opts: { windowDa
   const profile: any = (context as any)?.profile ?? repo.getProfile();
   // The current target the user is eating to: the ACCEPTED adaptive-nutrition
   // target if one has been persisted (this loop's own prior output), else the
-  // requested deficit target, else the lean-safe recommended one.
+  // current mode-aware formula target.
   const eff = goal?.ok ? (goal as any).effective_target : null;
   const currentTarget = goal?.ok
-    ? (eff?.target_kcal ?? goal.requested?.target_intake_kcal ?? goal.recommended?.target_intake_kcal ?? null)
+    ? (eff?.target_kcal ?? goal.recommended?.target_intake_kcal ?? null)
     : null;
   const proteinTarget = goal?.ok ? (eff?.protein_g ?? goal.recommended?.protein_g ?? null) : null;
   const targetIsAccepted = eff?.source === "accepted";
@@ -553,7 +610,8 @@ WHEN TO PROPOSE A CHANGE (else change:false):
 - LEAN GAIN: flag if the trend shows NO gain over time (suggest a small RAISE) or gaining too fast /
   fat-biased (suggest easing the surplus). Never cut below maintenance.
 - Keep any change SMALL: nudge calories by roughly ±100-250 kcal toward the right pace, never a crash cut.
-  Respect goal.recommended as the floor — never below ~1500 kcal.
+  Respect the coordinated effective target and the absolute ~1500 kcal floor. A formula refresh is
+  not permission to silently rewrite a previously reviewed target.
 - MACRO FLOORS: protect PROTEIN first (hold or raise — protein_g >= the current protein target), then fat
   to a healthy minimum, and let CARBS take the adjustment.
 - If an active trip/illness window is in the data, prefer change:false — the data is disrupted; wait.${
@@ -567,6 +625,7 @@ WHEN TO PROPOSE A CHANGE (else change:false):
   }
 
 ${CONTEXT_GUARDRAILS}
+${renderHolisticNutritionStrategy(context, exp)}
 ${renderSignalState(context)}${renderDiscipline(context, "nutrition")}${renderEnduranceGoal(context, "nutrition")}${renderConnectedBrain(context, { domains: ["nutrition"] })}${renderTrajectory(context)}${renderDexaTargeting(context, "nutrition")}${renderBodyComp(context)}${renderAcuteLoadNote(context)}${renderTodayFuel(context)}${renderFuelingFeedback(context)}
 USER: profile: ${JSON.stringify(profile)}
 

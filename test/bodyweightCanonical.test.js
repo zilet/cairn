@@ -25,11 +25,11 @@ test("Garmin-only scale history drives the shared expenditure and goal trend", (
     sex: "male",
     activity_factor: 1.5,
   });
-  for (let i = 0; i < 7; i++) seedIntake(i, 2_400);
+  for (let i = 1; i <= 7; i++) seedIntake(i, 2_400);
   seedGarminWeights([
-    [localDaysAgo(8), 182],
+    [localDaysAgo(7), 182],
     [localDaysAgo(4), 181],
-    [localDaysAgo(0), 180],
+    [localDaysAgo(1), 180],
   ]);
 
   const expenditure = repo.estimateExpenditure(21);
@@ -52,14 +52,14 @@ test("same-date manual and Garmin weights resolve to one point with manual prove
   repo.setProfile({ age: 40, height_cm: 178, weight_lb: 190, sex: "male", activity_factor: 1.5 });
   seedGarminWeights([
     [localDaysAgo(7), 184],
-    [localDaysAgo(0), 181],
+    [localDaysAgo(1), 181],
   ]);
-  const manual = repo.logWeight(180, localDaysAgo(0), "manual correction");
+  const manual = repo.logWeight(180, localDaysAgo(1), "manual correction");
 
-  const series = canonicalBodyweightSeries({ since: localDaysAgo(7), through: localDaysAgo(0) });
+  const series = canonicalBodyweightSeries({ since: localDaysAgo(7), through: localDaysAgo(1) });
   assert.equal(series.length, 2, "same-date sources never become two trend points");
   assert.deepEqual(series.at(-1), {
-    date: localDaysAgo(0),
+    date: localDaysAgo(1),
     weight_lb: 180,
     source: "manual",
     source_id: manual.id,

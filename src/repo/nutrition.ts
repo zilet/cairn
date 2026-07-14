@@ -30,6 +30,37 @@ export interface AcceptedNutritionTarget {
   fat_g: number | null;
   source: string | null;
   note: string | null;
+  created_at?: string | null;
+  age_days?: number;
+  freshness?: "fresh" | "review_due" | "explicit";
+  review_due?: boolean;
+}
+
+const ADAPTIVE_TARGET_REVIEW_DAYS = 42;
+
+function hydrateNutritionTarget(row: any, referenceDate = localDateISO()): AcceptedNutritionTarget | null {
+  if (!row) return null;
+  const source = String(row.source ?? "");
+  const explicit = ["manual", "direct", "user", "chat"].includes(source);
+  const ageDays = Math.max(
+    0,
+    Math.round((Date.parse(`${referenceDate}T00:00:00Z`) - Date.parse(`${row.effective_date}T00:00:00Z`)) / 86_400_000)
+  );
+  const reviewDue = !explicit && Number.isFinite(ageDays) && ageDays > ADAPTIVE_TARGET_REVIEW_DAYS;
+  return {
+    id: row.id,
+    effective_date: row.effective_date,
+    target_kcal: row.target_kcal,
+    protein_g: row.protein_g,
+    carbs_g: row.carbs_g,
+    fat_g: row.fat_g,
+    source: row.source,
+    note: row.note,
+    created_at: row.created_at ?? null,
+    age_days: Number.isFinite(ageDays) ? ageDays : 0,
+    freshness: explicit ? "explicit" : reviewDue ? "review_due" : "fresh",
+    review_due: reviewDue,
+  };
 }
 
 function nutritionTrendExpectation(
@@ -133,7 +164,7 @@ export function setNutritionTarget(
     note?: string | null;
     effective_date?: string | null;
   },
-  opts: { recordDecision?: boolean } = {}
+  opts: { recordDecision?: boolean; preserveReviewedKcal?: boolean } = {}
 ): AcceptedNutritionTarget | null {
   let goal: any = null;
   try {
@@ -142,6 +173,14 @@ export function setNutritionTarget(
     goal = null;
   }
   const safeInput = clampNutritionFloors(input, { kcal: "target_kcal", protein: "protein_g" }, goal);
+  // A proposal already crossed the personalized/safety boundary at creation.
+  // Re-running volatile expenditure math at apply time would silently change
+  // the reviewed action. Preserve that reviewed kcal (absolute floor remains),
+  // while the current protein safety floor still applies.
+  if (opts.preserveReviewedKcal) {
+    const reviewed = Number(input.target_kcal);
+    if (Number.isFinite(reviewed)) safeInput.target_kcal = Math.max(1500, Math.round(reviewed));
+  }
   const eff =
     safeInput.effective_date && /^\d{4}-\d{2}-\d{2}$/.test(safeInput.effective_date)
       ? safeInput.effective_date
@@ -179,18 +218,7 @@ export function setNutritionTarget(
 
 export function getNutritionTarget(id: number): AcceptedNutritionTarget | null {
   const row = db.prepare(`SELECT * FROM nutrition_targets WHERE id = ?`).get(id) as any;
-  return row
-    ? {
-        id: row.id,
-        effective_date: row.effective_date,
-        target_kcal: row.target_kcal,
-        protein_g: row.protein_g,
-        carbs_g: row.carbs_g,
-        fat_g: row.fat_g,
-        source: row.source,
-        note: row.note,
-      }
-    : null;
+  return hydrateNutritionTarget(row);
 }
 
 export function deleteNutritionTarget(id: number): boolean {
@@ -205,22 +233,20 @@ export function deleteNutritionTarget(id: number): boolean {
 // The active accepted target: the newest row effective on/before `date` (today).
 // Null when nothing has been accepted yet → callers fall back to the formula.
 export function getActiveNutritionTarget(date?: string): AcceptedNutritionTarget | null {
+  const target = getLatestNutritionTarget(date);
+  return target?.review_due ? null : target;
+}
+
+// Latest historical target, including an adaptive target whose six-week review
+// window elapsed. Goal/prompt code uses this to explain why formula fallback is
+// active without allowing stale automation to control intake indefinitely.
+export function getLatestNutritionTarget(date?: string): AcceptedNutritionTarget | null {
   const d = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : localDateISO();
   const row = db
     .prepare(`SELECT * FROM nutrition_targets WHERE effective_date <= ? ORDER BY effective_date DESC, id DESC LIMIT 1`)
     .get(d) as any;
-  return row
-    ? {
-        id: row.id,
-        effective_date: row.effective_date,
-        target_kcal: row.target_kcal,
-        protein_g: row.protein_g,
-        carbs_g: row.carbs_g,
-        fat_g: row.fat_g,
-        source: row.source,
-        note: row.note,
-      }
-    : null;
+  const target = hydrateNutritionTarget(row, d);
+  return target;
 }
 
 // ---------- meal plans ----------
@@ -286,11 +312,13 @@ export type MealPlanPersistenceCheck =
   | { ok: true; parsed: any; adequacy_checked: boolean }
   | { ok: false; error: string; parsed: any; adequacy_checked: boolean };
 
+const MEAL_PLAN_TARGET_TOLERANCE_KCAL = 100;
+
 // This is the authoritative write/autonomy gate. Goal math already fuses the
-// current expenditure estimate and canonical bodyweight; an accepted adaptive
-// target may be more protective than the formula, so meal plans use the higher
-// of those live targets as their floor. Thin profiles still receive the absolute
-// 1500-kcal floor and the plan's own positive protein target remains authoritative.
+// current expenditure estimate and canonical bodyweight. An accepted adaptive
+// target is the coordinated reviewed number, not something a later volatile
+// formula may silently raise. Thin profiles still receive the absolute 1500-kcal
+// floor and the plan's own positive protein target remains authoritative.
 export function validateMealPlanForPersistence(parsed: any): MealPlanPersistenceCheck {
   let goal: any = null;
   try {
@@ -300,11 +328,9 @@ export function validateMealPlanForPersistence(parsed: any): MealPlanPersistence
   }
   const recommended = goal?.ok && goal.recommended ? { ...goal.recommended } : {};
   const effective = goal?.ok ? goal.effective_target : null;
+  const coordinatedTarget = Number(effective?.target_kcal);
   if (effective?.target_kcal != null) {
-    recommended.target_intake_kcal = Math.max(
-      Number(recommended.target_intake_kcal) || 0,
-      Number(effective.target_kcal) || 0
-    );
+    recommended.target_intake_kcal = Number(effective.target_kcal) || Number(recommended.target_intake_kcal) || 0;
   }
   if (effective?.protein_g != null) {
     recommended.protein_g = Math.max(Number(recommended.protein_g) || 0, Number(effective.protein_g) || 0);
@@ -314,6 +340,20 @@ export function validateMealPlanForPersistence(parsed: any): MealPlanPersistence
     parsed && typeof parsed === "object"
       ? clampNutritionFloors(parsed, { kcal: "daily_kcal", protein: "daily_protein_g" }, floorGoal)
       : parsed;
+  const headline = Number(floored?.daily_kcal);
+  if (
+    Number.isFinite(coordinatedTarget) &&
+    coordinatedTarget > 0 &&
+    Number.isFinite(headline) &&
+    Math.abs(headline - coordinatedTarget) > MEAL_PLAN_TARGET_TOLERANCE_KCAL
+  ) {
+    return {
+      ok: false,
+      error: `Meal plan rejected: the ${Math.round(headline)} kcal headline is outside the ±${MEAL_PLAN_TARGET_TOLERANCE_KCAL} kcal rounding tolerance around the coordinated ${Math.round(coordinatedTarget)} kcal target; re-draft or explicitly review the nutrition target first.`,
+      parsed: floored,
+      adequacy_checked: false,
+    };
+  }
   const adequacy = assessMealPlanAdequacy(floored);
   if (!adequacy.ok) return { ok: false, error: adequacy.error, parsed: floored, adequacy_checked: true };
   if (!adequacy.checked) {
@@ -323,6 +363,19 @@ export function validateMealPlanForPersistence(parsed: any): MealPlanPersistence
       parsed: floored,
       adequacy_checked: false,
     };
+  }
+  if (Number.isFinite(coordinatedTarget) && coordinatedTarget > 0) {
+    const mismatch = adequacy.days.find(
+      (day) => Math.abs(day.kcal - coordinatedTarget) > MEAL_PLAN_TARGET_TOLERANCE_KCAL
+    );
+    if (mismatch) {
+      return {
+        ok: false,
+        error: `Meal plan rejected: ${mismatch.day} totals ${mismatch.kcal} kcal, outside the ±${MEAL_PLAN_TARGET_TOLERANCE_KCAL} kcal rounding tolerance around the coordinated ${Math.round(coordinatedTarget)} kcal target.`,
+        parsed: floored,
+        adequacy_checked: true,
+      };
+    }
   }
   return { ok: true, parsed: floored, adequacy_checked: adequacy.checked };
 }

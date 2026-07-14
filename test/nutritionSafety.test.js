@@ -110,6 +110,74 @@ test("complete meal-plan persistence rejects headline laundering and accepts ade
   );
 });
 
+test("a meal plan cannot silently exceed its coordinated accepted target", () => {
+  completeProfile({ goal_mode: "lose", goal_weight_lb: 170 });
+  const proposal = repo.createProposal("stub", "reviewed", "", {
+    kind: "nutrition_target",
+    summary: "Use 2200 kcal for the cut.",
+    nutrition: { target_kcal: 2200, protein_g: 180, reason: "reviewed target" },
+  });
+  repo.applyProposal(proposal.id);
+  assert.equal(repo.computeGoalCheck().effective_target.target_kcal, 2200);
+  assert.throws(
+    () => repo.createMealPlan("stub", "", completeWeek({ dailyKcal: 2412, dailyProtein: 180 })),
+    /2412 kcal headline is outside the ±100 kcal rounding tolerance around the coordinated 2200 kcal target/
+  );
+  assert.equal(repo.listMealPlans().length, 0);
+});
+
+test("coordinated meal totals use one direct ±100 kcal boundary", () => {
+  completeProfile({ goal_mode: "lose", goal_weight_lb: 170 });
+  const proposal = repo.createProposal("stub", "reviewed", "", {
+    kind: "nutrition_target",
+    summary: "Use 2200 kcal for the cut.",
+    nutrition: { target_kcal: 2200, protein_g: 180, reason: "reviewed target" },
+  });
+  repo.applyProposal(proposal.id);
+
+  assert.doesNotThrow(() =>
+    repo.createMealPlan(
+      "stub",
+      "",
+      completeWeek({ dailyKcal: 2300, dailyProtein: 180, actualKcal: 2300, actualProtein: 180 })
+    )
+  );
+  assert.doesNotThrow(() =>
+    repo.createMealPlan(
+      "stub",
+      "",
+      completeWeek({ dailyKcal: 2200, dailyProtein: 180, actualKcal: 2100, actualProtein: 180 })
+    )
+  );
+  assert.throws(
+    () =>
+      repo.createMealPlan(
+        "stub",
+        "",
+        completeWeek({ dailyKcal: 2301, dailyProtein: 180, actualKcal: 2301, actualProtein: 180 })
+      ),
+    /2301 kcal headline is outside the ±100 kcal rounding tolerance/
+  );
+  assert.throws(
+    () =>
+      repo.createMealPlan(
+        "stub",
+        "",
+        completeWeek({ dailyKcal: 2300, dailyProtein: 180, actualKcal: 2401, actualProtein: 180 })
+      ),
+    /Day 1 totals 2401 kcal, outside the ±100 kcal rounding tolerance around the coordinated 2200 kcal target/
+  );
+  assert.throws(
+    () =>
+      repo.createMealPlan(
+        "stub",
+        "",
+        completeWeek({ dailyKcal: 2200, dailyProtein: 180, actualKcal: 2099, actualProtein: 180 })
+      ),
+    /Day 1 totals 2099 kcal, outside the ±100 kcal rounding tolerance around the coordinated 2200 kcal target/
+  );
+});
+
 test("complete weeks enforce the current goal and expenditure floors in the meals themselves", () => {
   completeProfile({ goal_mode: "maintain" });
   const goal = repo.computeGoalCheck();
@@ -138,10 +206,7 @@ test("declared allergen aliases reject an unsafe plan atomically", () => {
     name: "Noodle bowl",
     items: "rice noodles, shrimp, greens",
   };
-  assert.throws(
-    () => repo.createMealPlan("stub", "", unsafe),
-    /declared allergen shellfish \(shrimp\)/
-  );
+  assert.throws(() => repo.createMealPlan("stub", "", unsafe), /declared allergen shellfish \(shrimp\)/);
   assert.equal(repo.listMealPlans().length, 0, "no partial unsafe draft was stored");
 });
 

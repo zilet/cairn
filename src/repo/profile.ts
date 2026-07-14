@@ -14,7 +14,7 @@ import { findExercise } from "./exercises.js";
 import { estimateExpenditure } from "./expenditure.js";
 import { lsqSlopePerDay } from "./health.js";
 import { invalidateDayRead } from "./intelligence.js";
-import { getActiveNutritionTarget, setNutritionTarget } from "./nutrition.js";
+import { getLatestNutritionTarget, setNutritionTarget } from "./nutrition.js";
 import { type ClampAdjustment, type RunPrescription, applyPlanChange, replacePlan, setWeeklyRuns } from "./plan.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { latestMeasuredRmr, measuredRmrAssessment } from "./metabolism.js";
@@ -329,7 +329,10 @@ export function supersedeAutoProgressionDrafts(dayNumber: number) {
 // whichever is higher), and protein is never dropped below the recommended floor.
 // Returns the (possibly-adjusted) nutrition object plus transparent clamp records.
 const KCAL_ABSOLUTE_FLOOR = 1500; // never advise a target below this for this user (mirrors buildMealPlanPrompt)
-function clampNutritionTarget(nutrition: any): { nutrition: any; clamped: ClampAdjustment[] } {
+function clampNutritionTarget(
+  nutrition: any,
+  opts: { preserveReviewedKcal?: boolean } = {}
+): { nutrition: any; clamped: ClampAdjustment[] } {
   const clamped: ClampAdjustment[] = [];
   if (!nutrition || typeof nutrition !== "object") return { nutrition, clamped };
   const out = { ...nutrition };
@@ -344,10 +347,17 @@ function clampNutritionTarget(nutrition: any): { nutrition: any; clamped: ClampA
   // Mode-aware wording: the same floor protects against a crash deficit (lose),
   // an accidental shortfall below maintenance, or eating below the lean-gain anchor.
   const goalMode: string | null = goal?.ok ? goal.goal_mode : null;
-  const floorLabel =
-    goalMode === "gain" ? "lean-gain anchor" : goalMode === "maintain" ? "maintenance anchor" : "lean-safe floor";
+  const floorLabel = opts.preserveReviewedKcal
+    ? "absolute safety floor"
+    : goalMode === "gain"
+      ? "lean-gain anchor"
+      : goalMode === "maintain"
+        ? "maintenance anchor"
+        : "lean-safe floor";
   // kcal floor: the mode's recommended intake, never below the absolute floor.
-  const kcalFloor = Math.max(KCAL_ABSOLUTE_FLOOR, Number.isFinite(recIntake) ? recIntake : 0);
+  const kcalFloor = opts.preserveReviewedKcal
+    ? KCAL_ABSOLUTE_FLOOR
+    : Math.max(KCAL_ABSOLUTE_FLOOR, Number.isFinite(recIntake) ? recIntake : 0);
   const reqKcal = Number(out.target_kcal);
   if (Number.isFinite(reqKcal) && reqKcal < kcalFloor) {
     clamped.push({
@@ -372,6 +382,28 @@ function clampNutritionTarget(nutrition: any): { nutrition: any; clamped: ClampA
     out.protein_g = Math.round(recProtein);
   }
   return { nutrition: out, clamped };
+}
+
+function reviewedNutritionTargetIncompatibility(nutrition: any): string | null {
+  const reviewed = Number(nutrition?.target_kcal);
+  if (!Number.isFinite(reviewed)) return "Nutrition target needs review: the proposed calorie target is missing or invalid.";
+  let goal: any = null;
+  try {
+    goal = computeGoalCheck();
+  } catch {
+    goal = null;
+  }
+  const mode = goal?.ok ? String(goal.goal_mode || "") : "";
+  const modeFloor = Number(goal?.recommended?.target_intake_kcal);
+  const floor =
+    mode === "maintain" || mode === "gain"
+      ? Math.max(KCAL_ABSOLUTE_FLOOR, Number.isFinite(modeFloor) ? Math.round(modeFloor) : 0)
+      : KCAL_ABSOLUTE_FLOOR;
+  if (reviewed >= floor) return null;
+  if (mode === "maintain" || mode === "gain") {
+    return `Nutrition target needs review: ${Math.round(reviewed)} kcal is below the current ${mode === "gain" ? "lean-gain" : "maintenance"} requirement of ${Math.round(floor)} kcal. The goal mode changed or the proposal is stale, so Cairn did not apply or alter it.`;
+  }
+  return `Nutrition target needs review: ${Math.round(reviewed)} kcal is below the universal ${KCAL_ABSOLUTE_FLOOR} kcal safety floor, so Cairn did not apply or alter it.`;
 }
 
 function datePlusDays(date: string, days: number): string {
@@ -751,12 +783,16 @@ export function applyProposal(id: number, opts: { supersedeSiblings?: boolean; d
   // acknowledgement on every surface (REST + MCP) instead of throwing
   // "no valid changes or days". The PWA surfaces these via the Energy Balance
   // check-in card, not the plan-proposals apply button. Even advisory, the target
-  // is clamped to lean-safe kcal/protein floors and any adjustment is reported.
+  // keeps its already-reviewed kcal (with the absolute kcal floor) while the
+  // current protein safety floor and any adjustment remain transparent.
   if (p.parsed.kind === "nutrition_target") {
-    const { nutrition, clamped } = clampNutritionTarget(p.parsed.nutrition);
+    const incompatibility = reviewedNutritionTargetIncompatibility(p.parsed.nutrition);
+    if (incompatibility) throw new Error(incompatibility);
+    const { nutrition, clamped } = clampNutritionTarget(p.parsed.nutrition, { preserveReviewedKcal: true });
     // Close the loop: PERSIST the accepted (clamped, lean-safe) target so the fuel
     // card, goal math and next check-in read THIS number instead of re-deriving the
-    // formula. Effective from today. Failure to persist never blocks the ack.
+    // formula. Effective from today. Persistence is the authoritative mutation: if
+    // it fails, the proposal stays a reviewable draft and no applied decision is recorded.
     let accepted: any = null;
     try {
       accepted = setNutritionTarget(
@@ -768,11 +804,13 @@ export function applyProposal(id: number, opts: { supersedeSiblings?: boolean; d
           source: "checkin",
           note: nutrition.reason ?? null,
         },
-        { recordDecision: false }
+        { recordDecision: false, preserveReviewedKcal: true }
       );
-    } catch {
-      accepted = null;
+    } catch (error) {
+      const detail = error instanceof Error && error.message ? ` (${error.message})` : "";
+      throw new Error(`Nutrition target could not be saved; the proposal remains reviewable${detail}.`);
     }
+    if (!accepted) throw new Error("Nutrition target could not be saved; the proposal remains reviewable.");
     setProposalStatus(id, "applied");
     const result = {
       ok: true,
@@ -1536,12 +1574,12 @@ export function computeGoalCheck(prof?: any) {
   // protein never drops below the recommended protein floor. `accepted` is null-safe.
   let accepted: any = null;
   try {
-    accepted = getActiveNutritionTarget();
+    accepted = getLatestNutritionTarget();
   } catch {
     accepted = null;
   }
   const effective_target =
-    accepted && accepted.target_kcal != null
+    accepted && accepted.target_kcal != null && !accepted.review_due
       ? {
           target_kcal: Math.max(KCAL_ABSOLUTE_FLOOR, Math.round(accepted.target_kcal)),
           protein_g: Math.max(Math.round(accepted.protein_g ?? 0), Math.round(recommended.protein_g || 0)),
@@ -1549,6 +1587,12 @@ export function computeGoalCheck(prof?: any) {
           fat_g: accepted.fat_g != null ? Math.round(accepted.fat_g) : null,
           source: "accepted" as const,
           effective_date: accepted.effective_date,
+          age_days: accepted.age_days ?? 0,
+          freshness: accepted.freshness ?? "fresh",
+          review_due: !!accepted.review_due,
+          divergence_from_formula_kcal: Math.round(
+            Math.max(KCAL_ABSOLUTE_FLOOR, Number(accepted.target_kcal)) - Number(recommended.target_intake_kcal)
+          ),
         }
       : {
           target_kcal: Math.round(recommended.target_intake_kcal),
@@ -1557,11 +1601,28 @@ export function computeGoalCheck(prof?: any) {
           fat_g: null,
           source: "formula" as const,
           effective_date: null,
+          age_days: null,
+          freshness: null,
+          review_due: !!accepted?.review_due,
+          divergence_from_formula_kcal: 0,
+          expired_target:
+            accepted?.review_due && accepted.target_kcal != null
+              ? {
+                  target_kcal: accepted.target_kcal,
+                  protein_g: accepted.protein_g,
+                  effective_date: accepted.effective_date,
+                  age_days: accepted.age_days,
+                  freshness: accepted.freshness,
+                  source: accepted.source,
+                }
+              : null,
         };
   const effectiveMessage =
-    accepted && accepted.target_kcal != null
+    accepted && accepted.target_kcal != null && !accepted.review_due
       ? `Active target: ~${effective_target.target_kcal} kcal with ~${effective_target.protein_g} g protein${effective_target.carbs_g != null ? `, ${effective_target.carbs_g} g carbs` : ""}${effective_target.fat_g != null ? `, and ${effective_target.fat_g} g fat` : ""}. Cairn will recheck it against your weight trend and training performance.`
-      : message;
+      : accepted?.review_due
+        ? `${message} The prior adaptive target is review-due, so it remains visible in history but no longer overrides this current read.`
+        : message;
 
   return {
     ok: true,

@@ -37,7 +37,7 @@ function wipe() {
     "logged_sets", "session_skips", "sessions", "plan_items", "plan_days", "exercises",
     "bodyweight_log", "body_measurements", "activities", "daily_metrics", "garmin_activities", "garmin_daily_metrics",
     "garmin_sources", "health_documents", "blood_pressure_readings", "health_reviews", "health_directives", "insights",
-    "memory", "family_members", "context_events", "checkins", "meal_plans", "food_notes",
+    "memory", "family_members", "context_events", "checkins", "meal_plans", "nutrition_targets", "food_notes",
     "chat_messages", "day_reads", "suggestions", "plan_proposals", "evidence_cache",
     "art_assets", "art_aliases", "art_usage", "app_state",
   ];
@@ -456,6 +456,18 @@ function quietLayer() {
 
   // Active meal plan — reflects the directives (oily fish + soluble fiber for ApoB,
   // iron-rich for ferritin), the fasted-AM training, and the cottage-cheese dislike.
+  // The populated demo represents an athlete-reviewed cut target. Persist it
+  // through the same effective-target path as the real app so the plan headline
+  // and every day total cross the production coordination gate honestly.
+  repo.setNutritionTarget(
+    {
+      target_kcal: 2050,
+      protein_g: 185,
+      source: "direct",
+      note: "Athlete-reviewed demo cut target for steady fat loss while preserving training.",
+    },
+    { recordDecision: false }
+  );
   const meal = (name: string, items: string, kcal: number, p: number, c: number, f: number) => ({ name, items, kcal, protein_g: p, carbs_g: c, fat_g: f });
   const mealPlan = repo.createMealPlan("demo", "", {
     daily_kcal: 2050,

@@ -20,9 +20,9 @@ test("a metabolic-test record becomes the structured RMR anchor without losing t
     parsed_json: { markers: [{ name: "Resting Metabolic Rate (RMR)", value: 2078, unit: "kcal/day" }] },
   });
   db.prepare("INSERT INTO garmin_sources (id,provider,mode) VALUES (1,'garmin','unofficial')").run();
-  for (let day = 1; day <= 10; day++) {
+  for (let day = 1; day <= 14; day++) {
     db.prepare("INSERT INTO garmin_daily_metrics (source_id,date,active_calories) VALUES (1,?,430)").run(
-      `2026-07-${String(day).padStart(2, "0")}`
+      localDaysAgo(day)
     );
   }
 
@@ -59,17 +59,19 @@ test("a recent measured RMR remains the leading expenditure anchor with freshnes
     parsed_json: { markers: [{ name: "RMR", value: 1800, unit: "kcal/day" }] },
   });
   db.prepare("INSERT INTO garmin_sources (id,provider,mode) VALUES (1,'garmin','unofficial')").run();
-  for (let i = 0; i < 7; i++) {
-    db.prepare(
-      "INSERT INTO garmin_daily_metrics (source_id,date,active_calories,total_calories) VALUES (1,?,?,?)"
-    ).run(localDaysAgo(i), 400, 2600);
+  for (let i = 0; i < 14; i++) {
+    db.prepare("INSERT INTO garmin_daily_metrics (source_id,date,active_calories,total_calories) VALUES (1,?,?,?)").run(
+      localDaysAgo(i + 1),
+      400,
+      2600
+    );
   }
 
   const e = repo.estimateExpenditure(21);
   assert.equal(e.tdee_basis, "measured_rmr_active");
   const measured = e.anchors.find((anchor) => anchor.kind === "measured_rmr_active");
   assert.equal(measured.freshness, "fresh");
-  assert.equal(measured.age_days, 30);
+  assert.equal(measured.age_days, 29, "freshness is assessed at the last completed local day");
   assert.equal(measured.freshness_weight, 1);
   assert.equal(repo.computeGoalCheck().bmr_source, "measured");
 });
@@ -82,10 +84,12 @@ test("an aging measured RMR yields to fresher Garmin total calories", () => {
     parsed_json: { markers: [{ name: "RMR", value: 2100, unit: "kcal/day" }] },
   });
   db.prepare("INSERT INTO garmin_sources (id,provider,mode) VALUES (1,'garmin','unofficial')").run();
-  for (let i = 0; i < 7; i++) {
-    db.prepare(
-      "INSERT INTO garmin_daily_metrics (source_id,date,active_calories,total_calories) VALUES (1,?,?,?)"
-    ).run(localDaysAgo(i), 400, 2500);
+  for (let i = 0; i < 14; i++) {
+    db.prepare("INSERT INTO garmin_daily_metrics (source_id,date,active_calories,total_calories) VALUES (1,?,?,?)").run(
+      localDaysAgo(i + 1),
+      400,
+      2500
+    );
   }
 
   const e = repo.estimateExpenditure(21);
@@ -104,13 +108,18 @@ test("an expired measured RMR cannot outrank the current profile anchor", () => 
     doc_date: localDaysAgo(800),
     parsed_json: { markers: [{ name: "RMR", value: 2100, unit: "kcal/day" }] },
   });
-  for (let i = 0; i < 7; i++) {
-    db.prepare("INSERT INTO daily_metrics (source,date,active_calories) VALUES ('apple',?,400)").run(localDaysAgo(i));
+  for (let i = 0; i < 14; i++) {
+    db.prepare("INSERT INTO daily_metrics (source,date,active_calories) VALUES ('apple',?,400)").run(
+      localDaysAgo(i + 1)
+    );
   }
 
   const e = repo.estimateExpenditure(21);
   assert.equal(e.tdee_basis, "profile_seed");
-  assert.equal(e.anchors.some((anchor) => anchor.kind === "measured_rmr_active"), false);
+  assert.equal(
+    e.anchors.some((anchor) => anchor.kind === "measured_rmr_active"),
+    false
+  );
   const goal = repo.computeGoalCheck();
   assert.equal(goal.measured_rmr.freshness, "expired");
   assert.equal(goal.measured_rmr.freshness_weight, 0);

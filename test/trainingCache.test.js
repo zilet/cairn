@@ -20,9 +20,20 @@ const back = (n) => new Date(new Date(REF + "T00:00:00Z").getTime() - n * 864e5)
 
 beforeEach(() => {
   resetTables(
-    "logged_sets", "sessions", "activities", "garmin_activities", "garmin_daily_metrics",
-    "plan_items", "plan_days", "daily_metrics", "checkins", "bodyweight_log", "food_notes",
-    "context_events", "program_blocks", "exercises",
+    "logged_sets",
+    "sessions",
+    "activities",
+    "garmin_activities",
+    "garmin_daily_metrics",
+    "plan_items",
+    "plan_days",
+    "daily_metrics",
+    "checkins",
+    "bodyweight_log",
+    "food_notes",
+    "context_events",
+    "program_blocks",
+    "exercises"
   );
 });
 
@@ -30,7 +41,7 @@ beforeEach(() => {
 function seedProgressingBench() {
   const w = [135, 140, 145, 152, 160];
   [28, 21, 14, 7, 0].forEach((d, i) =>
-    repo.logSetByName({ exercise: "Bench Press", weight: w[i], reps: 5, rir: 2, date: back(d) }),
+    repo.logSetByName({ exercise: "Bench Press", weight: w[i], reps: 5, rir: 2, date: back(d) })
   );
 }
 
@@ -63,11 +74,11 @@ test("memo is GOLDEN-equivalent: a served value deep-equals a fresh uncached com
     () => repo.getWeeklyStats(REF),
     () => repo.estimateExpenditure(21),
   ]) {
-    const miss = call();          // computes + caches
-    const hit = call();           // served from the memo (a structuredClone)
+    const miss = call(); // computes + caches
+    const hit = call(); // served from the memo (a structuredClone)
     assert.deepEqual(hit, miss, "a memo hit equals the first computation");
-    bumpTrainingDataVersion();    // no data change — only forces the next call to recompute
-    const fresh = call();         // recomputes from identical data
+    bumpTrainingDataVersion(); // no data change — only forces the next call to recompute
+    const fresh = call(); // recomputes from identical data
     assert.deepEqual(fresh, miss, "the recompute equals the memoized value (golden)");
   }
 });
@@ -100,12 +111,15 @@ test("BACKSTOP path: a direct out-of-band insert (no version bump) still invalid
   const v = currentTrainingDataVersion();
   const sess = db.prepare("SELECT id FROM sessions WHERE date = ?").get(back(0));
   db.prepare(
-    "INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps, rir) VALUES (?, ?, 1, 315, 3, 2)",
+    "INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps, rir) VALUES (?, ?, 1, 315, 3, 2)"
   ).run(sess.id, dl.id);
   assert.equal(currentTrainingDataVersion(), v, "the direct insert did NOT bump the version");
 
   const after = repo.getProgramState(REF);
-  assert.ok(after.lifts.some((l) => l.exercise === "Deadlift"), "the backstop caught the out-of-band set");
+  assert.ok(
+    after.lifts.some((l) => l.exercise === "Deadlift"),
+    "the backstop caught the out-of-band set"
+  );
 });
 
 test("getWeeklyStats reflects a fresh session through the memo (behavior preserved)", () => {
@@ -116,14 +130,15 @@ test("getWeeklyStats reflects a fresh session through the memo (behavior preserv
   assert.equal(b.week_sessions, 1, "the memo re-served after the write");
 });
 
-test("estimateExpenditure reflects fresh intake through the memo", () => {
+test("a current-day food write invalidates the memo without entering completed-day expenditure", () => {
   seedWeight(back(6), 185);
   seedWeight(back(0), 184);
   const a = repo.estimateExpenditure(21);
   assert.equal(a.intake_avg_kcal, null, "no intake yet");
   repo.addFoodNote("lunch", "", { kcal: 2000 }); // bumps the food version
   const b = repo.estimateExpenditure(21);
-  assert.equal(b.intake_avg_kcal, 2000, "the food write invalidated the expenditure memo");
+  assert.equal(b.intake_avg_kcal, null, "unfinished current-day intake stays outside maintenance");
+  assert.ok(currentFoodDataVersion() > 0, "the write still invalidated the memo for other food reads");
 });
 
 test("resetTrainingDataCache resets the counters (the isolate hook)", () => {

@@ -231,12 +231,27 @@ export interface ClientExpenditureEstimate {
   };
   provenance?: string[];
   fusion?: { outcome_weight: number; prior_weight: number };
+  typical_tdee?: number | null;
+  maintenance_range?: { low: number | null; high: number | null };
+  exceptional_activity?: {
+    window_days: number;
+    observed_days: number;
+    coverage_ratio: number;
+    typical_active_kcal: number | null;
+    exceptional_days: number;
+    frequency_per_week: number;
+    allowance_kcal_per_day: number;
+  };
   quality?: {
     intake: "none" | "partial" | "plausible" | "complete";
     outcome: "unavailable" | "plausible" | "implausible_low" | "implausible_high";
     explanation: string;
     plausible_tdee_min: number;
     plausible_tdee_max: number;
+    terminal_weight_shock: boolean;
+    terminal_weight_shock_date: string | null;
+    outcome_overlap_days: number;
+    outcome_calendar_coverage: number;
   };
 }
 

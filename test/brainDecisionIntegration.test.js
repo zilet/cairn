@@ -153,8 +153,11 @@ test("meal plan acceptance, discard, and sibling supersession are durable ledger
 });
 
 test("a nutrition target gets a weight-response expectation only with a measured baseline", () => {
-  for (let daysAgo = 7; daysAgo >= 0; daysAgo--) {
-    seedWeight(localDaysAgo(daysAgo), 180 - (7 - daysAgo) * 0.1);
+  // Maintenance deliberately ignores today's unfinished intake and scale data.
+  // Keep the fixture entirely on completed, aligned days with a full 7-day span
+  // so this remains a genuinely measured baseline rather than a cold start.
+  for (let daysAgo = 8; daysAgo >= 1; daysAgo--) {
+    seedWeight(localDaysAgo(daysAgo), 180 - (8 - daysAgo) * 0.1);
     seedIntake(daysAgo, 2400);
   }
   const proposal = repo.createProposal("stub", "weekly check-in", "", {

@@ -39,41 +39,43 @@ test("uses an honest low-confidence profile seed when outcome data is missing", 
   assert.deepEqual(e.provenance, ["profile:mifflin_st_jeor", "profile.activity_factor"]);
 });
 
-test("measured RMR uses generic active-calorie days when Garmin is absent", () => {
+test("measured RMR uses meaningfully covered generic active-calorie days when Garmin is absent", () => {
   repo.setProfile({ age: 40, height_cm: 178, weight_lb: 180, sex: "male", activity_factor: 1.5 });
   repo.addHealthDocument({
     kind: "metabolic_test",
     doc_date: localDaysAgo(10),
     parsed_json: { markers: [{ name: "RMR", value: 1800, unit: "kcal/day" }] },
   });
-  for (let i = 0; i < 7; i++) {
-    db.prepare("INSERT INTO daily_metrics (source,date,active_calories) VALUES ('apple',?,400)").run(localDaysAgo(i));
+  for (let i = 0; i < 14; i++) {
+    db.prepare("INSERT INTO daily_metrics (source,date,active_calories) VALUES ('apple',?,400)").run(
+      localDaysAgo(i + 1)
+    );
   }
   const e = repo.estimateExpenditure(21);
   assert.equal(e.tdee, 2200);
   assert.equal(e.tdee_basis, "measured_rmr_active");
-  assert.equal(e.coverage.prior_days, 7);
+  assert.equal(e.coverage.prior_days, 14);
   assert.ok(e.provenance.includes("daily_active_calories:apple"));
 });
 
-test("medium outcome evidence blends two-thirds outcome with one-third strongest prior", () => {
+test("medium outcome evidence cannot own more than one-third against an independent prior", () => {
   repo.setProfile({ age: 40, height_cm: 178, weight_lb: 180, sex: "male", activity_factor: 1.5 });
-  for (let i = 0; i < 7; i++) seedIntake(i, 2400);
-  for (const d of [8, 6, 3, 0]) seedWeight(localDaysAgo(d), 180);
+  for (let i = 1; i <= 8; i++) seedIntake(i, 2400);
+  for (const d of [8, 6, 3, 1]) seedWeight(localDaysAgo(d), 180);
   const e = repo.estimateExpenditure(21);
   assert.equal(e.confidence, "medium");
   assert.equal(e.outcome_tdee, 2400);
   assert.equal(e.tdee_basis, "blended_outcome_prior");
-  assert.deepEqual(e.fusion, { outcome_weight: 2 / 3, prior_weight: 1 / 3 });
-  assert.equal(e.tdee, Math.round((e.outcome_tdee * 2 + e.prior_tdee) / 3));
+  assert.deepEqual(e.fusion, { outcome_weight: 1 / 3, prior_weight: 2 / 3 });
+  assert.equal(e.tdee, Math.round((e.outcome_tdee + e.prior_tdee * 2) / 3));
   assert.equal(repo.computeGoalCheck().tdee, e.tdee, "goal math consumes the same chosen estimate");
 });
 
 test("excludes future rows and clamps requested windows to 7..90 days", () => {
   db.prepare("INSERT INTO garmin_sources (id,provider,mode) VALUES (1,'garmin','unofficial')").run();
-  for (let i = 0; i < 7; i++) {
+  for (let i = 0; i < 14; i++) {
     db.prepare("INSERT INTO garmin_daily_metrics (source_id,date,total_calories) VALUES (1,?,2500)").run(
-      localDaysAgo(i)
+      localDaysAgo(i + 1)
     );
   }
   db.prepare("INSERT INTO garmin_daily_metrics (source_id,date,total_calories) VALUES (1,?,9999)").run(
@@ -91,8 +93,8 @@ test("excludes future rows and clamps requested windows to 7..90 days", () => {
 });
 
 test("derives a tdee from steady intake + a real weight trend", () => {
-  for (let i = 0; i < 10; i++) seedIntake(i, 2500);
-  const wdays = [14, 11, 8, 6, 3, 0];
+  for (let i = 1; i <= 14; i++) seedIntake(i, 2500);
+  const wdays = [14, 11, 8, 6, 3, 1];
   let w = 185;
   for (const d of wdays) {
     seedWeight(localDaysAgo(d), w);
@@ -107,24 +109,24 @@ test("derives a tdee from steady intake + a real weight trend", () => {
   assert.equal(e.confidence, "medium");
 });
 
-test("a THIN logging week lowers confidence but never errors or blames", () => {
-  // One intake day, two weigh-ins over a short span — adherence-neutral: this is
-  // 'low' confidence, NOT 'none', NOT an error, and tdee is still derivable.
-  seedIntake(0, 2200);
+test("a one-day intake record cannot manufacture outcome confidence", () => {
+  // Common-window alignment means a one-day intake record cannot borrow an
+  // earlier scale change and pretend both signals covered the same period.
+  seedIntake(1, 2200);
   seedWeight(localDaysAgo(4), 180);
-  seedWeight(localDaysAgo(0), 179.5);
+  seedWeight(localDaysAgo(1), 179.5);
   const e = repo.estimateExpenditure(21);
-  assert.equal(e.confidence, "low");
+  assert.equal(e.confidence, "none");
   assert.equal(e.points, 1);
-  assert.equal(typeof e.tdee, "number");
+  assert.equal(e.outcome_tdee, null);
 });
 
 test("an active trip window SUPPRESSES confidence by one step", () => {
   // Build a clean 'medium' scenario, snapshot it, then add an overlapping trip:
   // the scale and food log are both unreliable mid-trip, so confidence steps down
   // (medium -> low) without changing the number it would otherwise report.
-  for (let i = 0; i < 10; i++) seedIntake(i, 2500);
-  const wdays = [14, 11, 8, 6, 3, 0];
+  for (let i = 1; i <= 14; i++) seedIntake(i, 2500);
+  const wdays = [14, 11, 8, 6, 3, 1];
   let w = 185;
   for (const d of wdays) {
     seedWeight(localDaysAgo(d), w);
@@ -140,8 +142,8 @@ test("an active trip window SUPPRESSES confidence by one step", () => {
 });
 
 test("an illness life_event also suppresses confidence", () => {
-  for (let i = 0; i < 10; i++) seedIntake(i, 2500);
-  const wdays = [14, 11, 8, 6, 3, 0];
+  for (let i = 1; i <= 14; i++) seedIntake(i, 2500);
+  const wdays = [14, 11, 8, 6, 3, 1];
   let w = 185;
   for (const d of wdays) {
     seedWeight(localDaysAgo(d), w);
@@ -155,18 +157,18 @@ test("an illness life_event also suppresses confidence", () => {
 test("days with no food logged are absent, never counted as a zero-kcal crash diet", () => {
   // Only 3 logged intake days at 2400; their average is 2400, not diluted by the
   // unlogged days in the 21-day window.
-  seedIntake(0, 2400);
+  seedIntake(1, 2400);
   seedIntake(2, 2400);
   seedIntake(5, 2400);
   seedWeight(localDaysAgo(6), 180);
-  seedWeight(localDaysAgo(0), 180);
+  seedWeight(localDaysAgo(1), 180);
   const e = repo.estimateExpenditure(21);
   assert.equal(e.intake_avg_kcal, 2400);
   assert.equal(e.points, 3);
 });
 
 test("groups intake by stamped local day when created_at crosses UTC midnight", () => {
-  const localDay = localDaysAgo(0);
+  const localDay = localDaysAgo(1);
   const nextUtcDay = new Date(Date.parse(`${localDay}T00:00:00Z`) + 864e5).toISOString().slice(0, 10);
   db.prepare(
     `INSERT INTO food_notes (date, meal, raw_output, parsed_json, enrichment_status, created_at)
@@ -183,14 +185,21 @@ test("groups intake by stamped local day when created_at crosses UTC midnight", 
 });
 
 test("14 snack-only days stay partial and cannot become an authoritative outcome target", () => {
-  repo.setProfile({ age: 40, height_cm: 178, weight_lb: 180, sex: "male", activity_factor: 1.5, goal_mode: "maintain" });
-  for (let i = 0; i < 14; i++) {
+  repo.setProfile({
+    age: 40,
+    height_cm: 178,
+    weight_lb: 180,
+    sex: "male",
+    activity_factor: 1.5,
+    goal_mode: "maintain",
+  });
+  for (let i = 1; i <= 14; i++) {
     db.prepare(
       `INSERT INTO food_notes (date, meal, raw_output, parsed_json, enrichment_status, created_at)
        VALUES (?, 'snack', '', ?, NULL, ?)`
     ).run(localDaysAgo(i), JSON.stringify({ kcal: 250, summary: "Snack" }), `${localDaysAgo(i)} 12:00:00`);
   }
-  for (const d of [14, 12, 10, 8, 6, 4, 2, 0]) seedWeight(localDaysAgo(d), 180);
+  for (const d of [14, 12, 10, 8, 6, 4, 2, 1]) seedWeight(localDaysAgo(d), 180);
 
   const e = repo.estimateExpenditure(21);
   assert.equal(e.points, 14);
@@ -214,9 +223,9 @@ test("an implausible outcome is downgraded, bounded, and cannot create a crash t
     goal_mode: "lose",
     goal_weight_lb: 170,
   });
-  for (let i = 0; i < 14; i++) seedIntake(i, 1_500);
+  for (let i = 1; i <= 14; i++) seedIntake(i, 1_500);
   let weight = 180;
-  for (const d of [14, 12, 10, 8, 6, 4, 2, 0]) {
+  for (const d of [14, 12, 10, 8, 6, 4, 2, 1]) {
     seedWeight(localDaysAgo(d), weight);
     weight += 3;
   }
@@ -233,25 +242,244 @@ test("an implausible outcome is downgraded, bounded, and cannot create a crash t
   assert.ok(goal.effective_target.target_kcal >= 1_500, "the effective target also remains safe");
 });
 
-test("complete low-calorie days can still earn confidence when their outcome is plausible", () => {
+test("high outcome confidence requires at least a 28-day weight span", () => {
   repo.setProfile({ age: 35, height_cm: 160, weight_lb: 120, sex: "female", activity_factor: 1.3 });
-  for (let i = 0; i < 14; i++) {
-    for (const [meal, kcal] of [["breakfast", 350], ["lunch", 450], ["dinner", 500]]) {
+  for (let i = 1; i <= 29; i++) {
+    for (const [meal, kcal] of [
+      ["breakfast", 350],
+      ["lunch", 450],
+      ["dinner", 500],
+    ]) {
       db.prepare(
         `INSERT INTO food_notes (date, meal, raw_output, parsed_json, enrichment_status, created_at)
          VALUES (?, ?, '', ?, NULL, ?)`
       ).run(localDaysAgo(i), meal, JSON.stringify({ kcal }), `${localDaysAgo(i)} 12:00:00`);
     }
   }
-  let weight = 121.4;
-  for (const d of [14, 12, 10, 8, 6, 4, 2, 0]) {
+  let weight = 122.8;
+  for (const d of [29, 26, 23, 20, 17, 14, 11, 8, 5, 1]) {
     seedWeight(localDaysAgo(d), weight);
     weight -= 0.2;
   }
 
-  const e = repo.estimateExpenditure(21);
+  const e = repo.estimateExpenditure(30);
   assert.equal(e.quality.intake, "complete");
   assert.equal(e.quality.outcome, "plausible");
   assert.equal(e.confidence, "high");
-  assert.equal(e.tdee_basis, "outcome_trend");
+  assert.equal(e.tdee_basis, "blended_outcome_prior");
+  assert.deepEqual(e.fusion, { outcome_weight: 3 / 4, prior_weight: 1 / 4 });
+  assert.equal(e.coverage.weigh_in_span_days, 28);
+});
+
+test("a 27-day weight span remains medium even with otherwise complete coverage", () => {
+  repo.setProfile({ age: 35, height_cm: 160, weight_lb: 120, sex: "female", activity_factor: 1.3 });
+  for (let day = 1; day <= 28; day++) seedIntake(day, 1_700);
+  for (const day of [28, 25, 22, 19, 16, 13, 10, 7, 4, 1]) {
+    seedWeight(localDaysAgo(day), 120);
+  }
+  const e = repo.estimateExpenditure(30);
+  assert.equal(e.coverage.weigh_in_span_days, 27);
+  assert.equal(e.confidence, "medium");
+  assert.deepEqual(e.fusion, { outcome_weight: 1 / 3, prior_weight: 2 / 3 });
+});
+
+test("unfinished current-day food, weight, and activity never move maintenance", () => {
+  repo.setProfile({ age: 40, height_cm: 178, weight_lb: 180, sex: "male", activity_factor: 1.5 });
+  for (let day = 1; day <= 14; day++) seedIntake(day, 2200);
+  for (const day of [14, 11, 8, 5, 2, 1]) seedWeight(localDaysAgo(day), 180 - (14 - day) * 0.08);
+  for (let day = 1; day <= 14; day++) {
+    db.prepare("INSERT INTO daily_metrics (source,date,active_calories) VALUES ('apple',?,400)").run(localDaysAgo(day));
+  }
+  const before = repo.estimateExpenditure(21);
+
+  seedIntake(0, 5000);
+  seedWeight(localDaysAgo(0), 170);
+  db.prepare("INSERT INTO daily_metrics (source,date,active_calories) VALUES ('apple',?,3000)").run(localDaysAgo(0));
+  const after = repo.estimateExpenditure(21);
+
+  assert.equal(after.tdee, before.tdee);
+  assert.equal(after.intake_avg_kcal, before.intake_avg_kcal);
+  assert.equal(after.trend_lb_wk, before.trend_lb_wk);
+  assert.equal(after.exceptional_activity.allowance_kcal_per_day, before.exceptional_activity.allowance_kcal_per_day);
+});
+
+test("an unconfirmed terminal three-pound scale shock is surfaced but cannot inflate TDEE materially", () => {
+  repo.setProfile({ age: 40, height_cm: 178, weight_lb: 180, sex: "male", activity_factor: 1.5 });
+  for (let day = 1; day <= 14; day++) seedIntake(day, 2200);
+  for (const [day, weight] of [
+    [14, 180],
+    [11, 179.8],
+    [8, 179.6],
+    [5, 179.4],
+    [2, 179.2],
+  ]) {
+    seedWeight(localDaysAgo(day), weight);
+  }
+  const settled = repo.estimateExpenditure(21);
+  seedWeight(localDaysAgo(1), 176.1);
+  const shocked = repo.estimateExpenditure(21);
+
+  assert.equal(shocked.quality.terminal_weight_shock, true);
+  assert.equal(shocked.quality.terminal_weight_shock_date, localDaysAgo(1));
+  assert.ok(Math.abs(shocked.tdee - settled.tdee) <= 75, `${settled.tdee} -> ${shocked.tdee}`);
+});
+
+test("two matching low readings corroborate a level shift without converting the full step to tissue", () => {
+  repo.setProfile({ age: 40, height_cm: 178, weight_lb: 180, sex: "male", activity_factor: 1.5 });
+  for (let day = 1; day <= 14; day++) seedIntake(day, 2_200);
+  for (const [day, weight] of [
+    [14, 180],
+    [11, 179.8],
+    [8, 179.6],
+    [5, 179.4],
+    [3, 179.2],
+    [2, 176.2],
+    [1, 176.1],
+  ]) {
+    seedWeight(localDaysAgo(day), weight);
+  }
+
+  const e = repo.estimateExpenditure(21);
+  assert.equal(e.quality.terminal_weight_shock, false);
+  assert.equal(e.quality.weight_level_shift, "corroborated");
+  assert.match(e.quality.explanation, /admits it cautiously/i);
+  assert.ok(e.trend_lb_wk > -1.25, `cautious trend was ${e.trend_lb_wk} lb/wk`);
+});
+
+test("an abrupt step followed by a two-week plateau is learned cautiously", () => {
+  repo.setProfile({ age: 40, height_cm: 178, weight_lb: 180, sex: "male", activity_factor: 1.5 });
+  for (let day = 1; day <= 30; day++) seedIntake(day, 2_200);
+  for (const [day, weight] of [
+    [30, 180],
+    [26, 180],
+    [22, 179.9],
+    [18, 179.9],
+    [15, 176.1],
+    [10, 176],
+    [5, 176.1],
+    [1, 176],
+  ]) {
+    seedWeight(localDaysAgo(day), weight);
+  }
+
+  const e = repo.estimateExpenditure(35);
+  assert.equal(e.quality.weight_level_shift, "corroborated");
+  assert.ok(e.trend_lb_wk < -0.1, "the sustained new level becomes evidence");
+  assert.ok(e.trend_lb_wk > -1.5, `the one step did not become wholesale tissue loss: ${e.trend_lb_wk}`);
+});
+
+test("a sustained multiweek gradual loss remains learnable", () => {
+  repo.setProfile({ age: 40, height_cm: 178, weight_lb: 180, sex: "male", activity_factor: 1.5 });
+  for (let day = 1; day <= 30; day++) seedIntake(day, 2_200);
+  let weight = 180;
+  for (const day of [30, 26, 22, 18, 14, 10, 6, 1]) {
+    seedWeight(localDaysAgo(day), weight);
+    weight -= 0.5;
+  }
+
+  const e = repo.estimateExpenditure(35);
+  assert.equal(e.quality.weight_level_shift, "none");
+  assert.ok(e.trend_lb_wk < -0.5, `gradual sustained loss was learned: ${e.trend_lb_wk}`);
+  assert.ok(e.outcome_tdee > e.intake_avg_kcal);
+});
+
+test("intake and weight must overlap on completed calendar days", () => {
+  for (let day = 1; day <= 10; day++) seedIntake(day, 2300);
+  seedWeight(localDaysAgo(20), 180);
+  seedWeight(localDaysAgo(15), 179);
+  const e = repo.estimateExpenditure(21);
+  assert.equal(e.outcome_tdee, null);
+  assert.equal(e.confidence, "none");
+  assert.equal(e.coverage.weigh_in_days, 0);
+});
+
+test("rare long activity is frequency-amortized instead of promoted to an ordinary day", () => {
+  repo.setProfile({ age: 40, height_cm: 178, weight_lb: 180, sex: "male", activity_factor: 1.5 });
+  repo.addHealthDocument({
+    kind: "metabolic_test",
+    doc_date: localDaysAgo(30),
+    parsed_json: { markers: [{ name: "RMR", value: 1800, unit: "kcal/day" }] },
+  });
+  for (let day = 1; day <= 14; day++) {
+    db.prepare("INSERT INTO daily_metrics (source,date,active_calories) VALUES ('apple',?,?)").run(
+      localDaysAgo(day),
+      day === 7 ? 1800 : 400
+    );
+  }
+  const e = repo.estimateExpenditure(21);
+  assert.equal(e.typical_tdee, 2200);
+  assert.equal(e.exceptional_activity.typical_active_kcal, 400);
+  assert.equal(e.exceptional_activity.exceptional_days, 1);
+  assert.equal(e.exceptional_activity.window_days, 28);
+  assert.equal(e.exceptional_activity.allowance_kcal_per_day, 50);
+  assert.equal(e.tdee, 2250);
+});
+
+test("seven workout-only wearable rows across six weeks cannot own the ordinary prior", () => {
+  repo.setProfile({ age: 40, height_cm: 178, weight_lb: 180, sex: "male", activity_factor: 1.5 });
+  repo.addHealthDocument({
+    kind: "metabolic_test",
+    doc_date: localDaysAgo(30),
+    parsed_json: { markers: [{ name: "RMR", value: 1800, unit: "kcal/day" }] },
+  });
+  for (const day of [42, 35, 28, 21, 14, 7, 1]) {
+    db.prepare("INSERT INTO daily_metrics (source,date,active_calories) VALUES ('apple',?,?)").run(
+      localDaysAgo(day),
+      day === 21 ? 1800 : 400
+    );
+  }
+  const e = repo.estimateExpenditure(21);
+  assert.equal(e.tdee_basis, "profile_seed");
+  assert.equal(e.prior_basis, "profile_seed");
+  assert.equal(e.anchors.some((anchor) => anchor.kind === "measured_rmr_active"), false);
+  assert.equal(e.exceptional_activity.observed_days, 0);
+});
+
+test("a fused outcome subtracts the full rare-activity allowance from its ordinary-day read", () => {
+  repo.setProfile({ age: 40, height_cm: 178, weight_lb: 180, sex: "male", activity_factor: 1.5 });
+  repo.addHealthDocument({
+    kind: "metabolic_test",
+    doc_date: localDaysAgo(30),
+    parsed_json: { markers: [{ name: "RMR", value: 1800, unit: "kcal/day" }] },
+  });
+  for (let day = 1; day <= 14; day++) {
+    seedIntake(day, 2_300);
+    db.prepare("INSERT INTO daily_metrics (source,date,active_calories) VALUES ('apple',?,?)").run(
+      localDaysAgo(day),
+      day === 7 ? 1_800 : 400
+    );
+  }
+  for (const day of [14, 11, 8, 5, 2, 1]) seedWeight(localDaysAgo(day), 180);
+
+  const e = repo.estimateExpenditure(21);
+  assert.equal(e.tdee_basis, "blended_outcome_prior");
+  assert.deepEqual(e.fusion, { outcome_weight: 1 / 3, prior_weight: 2 / 3 });
+  assert.equal(e.exceptional_activity.allowance_kcal_per_day, 50);
+  assert.equal(e.typical_tdee, e.tdee - 50);
+});
+
+test("fresh measured RMR is modestly adjusted only when test-time weight is known", () => {
+  repo.setProfile({ age: 40, height_cm: 178, weight_lb: 170, sex: "male", activity_factor: 1.5 });
+  repo.addHealthDocument({
+    kind: "metabolic_test",
+    doc_date: localDaysAgo(30),
+    parsed_json: { markers: [{ name: "RMR", value: 1800, unit: "kcal/day" }] },
+  });
+  seedWeight(localDaysAgo(30), 180);
+  for (const day of [3, 2, 1]) seedWeight(localDaysAgo(day), 170);
+  for (let day = 1; day <= 14; day++) {
+    db.prepare("INSERT INTO daily_metrics (source,date,active_calories) VALUES ('apple',?,400)").run(localDaysAgo(day));
+  }
+  const e = repo.estimateExpenditure(21);
+  const measured = e.anchors.find((anchor) => anchor.kind === "measured_rmr_active");
+  assert.deepEqual(measured.rmr_adjustment, {
+    original_kcal: 1800,
+    adjusted_kcal: 1755,
+    test_weight_lb: 180,
+    current_weight_lb: 170,
+    delta_lb: -10,
+    test_weight_date: localDaysAgo(30),
+  });
+  assert.ok(measured.provenance.includes("bodyweight:rmr_test_nearest"));
+  assert.equal(e.typical_tdee, 2155);
 });

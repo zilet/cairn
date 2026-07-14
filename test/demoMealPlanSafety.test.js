@@ -13,4 +13,10 @@ test("the demo seeds a complete current meal week that passes the production ade
   const adequacy = assessMealPlanAdequacy(plan.parsed);
   assert.equal(adequacy.ok, true);
   assert.equal(adequacy.checked, true);
+  const target = repo.computeGoalCheck().effective_target;
+  assert.equal(target.target_kcal, 2050, "the populated plan uses the athlete-reviewed effective target");
+  assert.ok(
+    adequacy.days.every((day) => Math.abs(day.kcal - target.target_kcal) <= 100),
+    "every demo day stays inside the production coordination boundary"
+  );
 });
