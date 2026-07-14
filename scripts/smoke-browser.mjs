@@ -1607,6 +1607,13 @@ async function smokeSettingsAgentsSourcesAutomation(cdp, base) {
     await navigateAndHydrate(cdp, base, "/app/settings/agents", "settings");
     await assertGlobals(cdp);
 
+    const initialSettings = await apiJson(base, "/settings");
+    const initialCoachDay = Number(initialSettings?.settings?.coach_day);
+    const initialCoachHour = Number(initialSettings?.settings?.coach_hour);
+    ok(Number.isInteger(initialCoachDay), "Settings API exposes the weekly review day", JSON.stringify(initialSettings?.settings?.coach_day));
+    ok(Number.isInteger(initialCoachHour), "Settings API exposes the weekly review hour", JSON.stringify(initialSettings?.settings?.coach_hour));
+    const nextCoachDay = (initialCoachDay + 1) % 7;
+
     const agentCard = await evaluate(cdp, `(() => {
       const cards = [...document.querySelectorAll("#agentlist .agent-card")];
       const card = cards.find((el) => el.querySelector(".agentname")?.textContent?.trim() === "chat_smoke");
@@ -1642,16 +1649,20 @@ async function smokeSettingsAgentsSourcesAutomation(cdp, base) {
     })()`);
 
     await evaluate(cdp, `(() => {
-      const toggle = document.querySelector("#coachEnabled");
-      if (!toggle) throw new Error("missing weekly auto-coach toggle");
-      if (toggle.checked) throw new Error("expected coachEnabled to start unchecked from the seeded settings");
-      toggle.click();
-      return true;
+      const day = document.querySelector("#coachDay");
+      const hour = document.querySelector("#coachHour");
+      const heading = [...document.querySelectorAll("h1")].find((el) => /weekly\\s+review\\s+cadence/i.test(el.textContent || ""));
+      if (!heading || !day || !hour) throw new Error("missing weekly review cadence controls");
+      if (Number(day.value) !== ${initialCoachDay}) throw new Error("weekly review day does not match the API setting");
+      if (Number(hour.value) !== ${initialCoachHour}) throw new Error("weekly review hour does not match the API setting");
+      day.value = String(${nextCoachDay});
+      day.dispatchEvent(new Event("change", { bubbles: true }));
+      return { heading: heading.textContent.trim(), day: Number(day.value), hour: Number(hour.value) };
     })()`);
 
-    await waitForCondition(cdp, "Settings Agents toggle shows unsaved changes", `(() => ({
-      ok: Boolean(document.querySelector(".savebar.show")),
-      checked: document.querySelector("#coachEnabled")?.checked
+    await waitForCondition(cdp, "Settings Agents weekly review day shows unsaved changes", `(() => ({
+      ok: Boolean(document.querySelector(".savebar.show")) && Number(document.querySelector("#coachDay")?.value) === ${nextCoachDay},
+      day: Number(document.querySelector("#coachDay")?.value)
     }))()`);
 
     await evaluate(cdp, `(() => {
@@ -1726,12 +1737,13 @@ async function smokeSettingsAgentsSourcesAutomation(cdp, base) {
       return true;
     })()`);
 
-    await waitForCondition(cdp, "Settings save completes for the pinned weekly auto-coach change", `(() => ({
+    await waitForCondition(cdp, "Settings save completes for the weekly review cadence change", `(() => ({
       ok: !document.querySelector(".savebar.busy")
     }))()`, 10000);
 
     const savedSettings = await apiJson(base, "/settings");
-    ok(savedSettings?.settings?.coach_enabled === true, "API reflects the saved weekly auto-coach toggle", JSON.stringify(savedSettings?.settings?.coach_enabled));
+    ok(savedSettings?.settings?.coach_day === nextCoachDay, "API reflects the saved weekly review day", JSON.stringify(savedSettings?.settings?.coach_day));
+    ok(savedSettings?.settings?.coach_hour === initialCoachHour, "saving the weekly review day preserves its hour", JSON.stringify(savedSettings?.settings?.coach_hour));
     ok(
       /^failed:/.test(String(savedSettings?.settings?.garmin_last_sync_status || "")),
       "API reflects the real credential-less Garmin sync failure",
