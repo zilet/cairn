@@ -12,7 +12,7 @@
 // full-DB wiped before each test by the harness (test/_isolate.mjs).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { db, repo, isoDaysAgo } from "./_seed.js";
+import { db, repo, localDaysAgo } from "./_seed.js";
 import { refreshReactionNarrative } from "../dist/coachOps.js";
 
 // Read the raw stored narrative value ("" when cleared, "" when absent).
@@ -24,8 +24,8 @@ function storedNarrative() {
 // Fresh synced sleep silences the FIRST-CLASS data_gap pattern; with nothing else
 // seeded the reaction model then has ZERO patterns (the "emptied model" case).
 function seedFreshSleep() {
-  repo.recordDailyMetrics("apple", isoDaysAgo(0), { sleep_min: 430 });
-  repo.recordDailyMetrics("apple", isoDaysAgo(1), { sleep_min: 425 });
+  repo.recordDailyMetrics("apple", localDaysAgo(0), { sleep_min: 430 });
+  repo.recordDailyMetrics("apple", localDaysAgo(1), { sleep_min: 425 });
 }
 
 // ---------------------------------------------------------------------------

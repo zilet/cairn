@@ -4,7 +4,7 @@
 // trip/illness window suppresses confidence rather than re-targeting on noise.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { db, repo, resetTables, seedIntake, seedWeight, isoDaysAgo, localDaysAgo } from "./_seed.js";
+import { db, repo, resetTables, seedIntake, seedWeight, localDaysAgo } from "./_seed.js";
 
 beforeEach(() => {
   resetTables(
@@ -95,7 +95,7 @@ test("derives a tdee from steady intake + a real weight trend", () => {
   const wdays = [14, 11, 8, 6, 3, 0];
   let w = 185;
   for (const d of wdays) {
-    seedWeight(isoDaysAgo(d), w);
+    seedWeight(localDaysAgo(d), w);
     w -= 0.4;
   }
   const e = repo.estimateExpenditure(21);
@@ -111,8 +111,8 @@ test("a THIN logging week lowers confidence but never errors or blames", () => {
   // One intake day, two weigh-ins over a short span — adherence-neutral: this is
   // 'low' confidence, NOT 'none', NOT an error, and tdee is still derivable.
   seedIntake(0, 2200);
-  seedWeight(isoDaysAgo(4), 180);
-  seedWeight(isoDaysAgo(0), 179.5);
+  seedWeight(localDaysAgo(4), 180);
+  seedWeight(localDaysAgo(0), 179.5);
   const e = repo.estimateExpenditure(21);
   assert.equal(e.confidence, "low");
   assert.equal(e.points, 1);
@@ -127,13 +127,13 @@ test("an active trip window SUPPRESSES confidence by one step", () => {
   const wdays = [14, 11, 8, 6, 3, 0];
   let w = 185;
   for (const d of wdays) {
-    seedWeight(isoDaysAgo(d), w);
+    seedWeight(localDaysAgo(d), w);
     w -= 0.4;
   }
   const before = repo.estimateExpenditure(21);
   assert.equal(before.confidence, "medium");
 
-  repo.addContextEvent({ kind: "trip", title: "Conference", start_date: isoDaysAgo(2), end_date: isoDaysAgo(-2) });
+  repo.addContextEvent({ kind: "trip", title: "Conference", start_date: localDaysAgo(2), end_date: localDaysAgo(-2) });
   const during = repo.estimateExpenditure(21);
   assert.equal(during.confidence, "low", "trip steps confidence down");
   assert.equal(during.tdee, before.tdee, "suppression lowers confidence, not the estimate");
@@ -144,11 +144,11 @@ test("an illness life_event also suppresses confidence", () => {
   const wdays = [14, 11, 8, 6, 3, 0];
   let w = 185;
   for (const d of wdays) {
-    seedWeight(isoDaysAgo(d), w);
+    seedWeight(localDaysAgo(d), w);
     w -= 0.4;
   }
   assert.equal(repo.estimateExpenditure(21).confidence, "medium");
-  repo.addContextEvent({ kind: "life_event", title: "Down with the flu", start_date: isoDaysAgo(1), end_date: null });
+  repo.addContextEvent({ kind: "life_event", title: "Down with the flu", start_date: localDaysAgo(1), end_date: null });
   assert.equal(repo.estimateExpenditure(21).confidence, "low");
 });
 
@@ -158,8 +158,8 @@ test("days with no food logged are absent, never counted as a zero-kcal crash di
   seedIntake(0, 2400);
   seedIntake(2, 2400);
   seedIntake(5, 2400);
-  seedWeight(isoDaysAgo(6), 180);
-  seedWeight(isoDaysAgo(0), 180);
+  seedWeight(localDaysAgo(6), 180);
+  seedWeight(localDaysAgo(0), 180);
   const e = repo.estimateExpenditure(21);
   assert.equal(e.intake_avg_kcal, 2400);
   assert.equal(e.points, 3);

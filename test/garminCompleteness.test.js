@@ -8,9 +8,9 @@
 // tests cover the storage + surfacing seams those fetches feed.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { db, repo, isoDaysAgo } from "./_seed.js";
+import { db, repo, localDaysAgo } from "./_seed.js";
 
-const TODAY = isoDaysAgo(0);
+const TODAY = localDaysAgo(0);
 
 beforeEach(() => {
   for (const t of ["logged_sets", "session_skips", "sessions", "activities", "garmin_activities", "garmin_daily_metrics", "garmin_sources"]) {
