@@ -1189,6 +1189,12 @@ export function reconcileGarminStrength(garminActivityId: number) {
 
   const session = getOrCreateSession(date) as any;
 
+  // Capture whether Cairn already owns this session's sets, but leave an empty new
+  // session unresolved until its queued strength job actually starts. The athlete may
+  // log sets in that window. Once a boolean exists, preserve it forever: watch-only
+  // false remains importable on later re-syncs even after its imported sets exist.
+  const preexistingSets = setsForSession(session.id) as any[];
+
   // Link this row first, so the "all contributing rows" query below sees it (the
   // merge then reads every strength row attached to this session — including any
   // that linked on an earlier sync — and the one we're reconciling now).
@@ -1224,6 +1230,9 @@ export function reconcileGarminStrength(garminActivityId: number) {
     hr_zones: null,
   } as any);
 
+  const existingSetAuthority = existing?.cairn_sets_authoritative;
+  const setAuthority =
+    typeof existingSetAuthority === "boolean" ? existingSetAuthority : preexistingSets.length > 0 ? true : undefined;
   const blob = {
     // Identity fronted by the primary (longest) activity — preserves single-activity output.
     external_id: primary.external_id,
@@ -1241,6 +1250,12 @@ export function reconcileGarminStrength(garminActivityId: number) {
     // Plain count so the surface can note "2 activities merged" when >1 (1 = the
     // normal single-activity case). Never a score; just provenance.
     activity_count: rows.length,
+    imported_set_activity_ids: Array.isArray(existing?.imported_set_activity_ids)
+      ? [...new Set(existing.imported_set_activity_ids.map((id: any) => String(id)).filter(Boolean))].slice(-32)
+      : [],
+    // Absent means pending: processGarminStrengthJob resolves it from the current
+    // set state immediately before any watch-derived sets can be written.
+    ...(setAuthority === undefined ? {} : { cairn_sets_authoritative: setAuthority }),
     // Carry the agentic narrative forward whenever the day already had one.
     summary: existing ? (existing.summary ?? null) : null,
     intensity: existing ? (existing.intensity ?? null) : null,
@@ -1257,13 +1272,12 @@ export function reconcileGarminStrength(garminActivityId: number) {
   } catch {
     exercise_sets = null;
   }
-  const sets = setsForSession(session.id) as any[];
   bumpTrainingDataVersion(); // links a session + deletes the stale generic activity row
   // is_primary reflects whether THIS reconciled row is the day's primary (longest).
   const isPrimary = primary.external_id === (row.external_id ?? null);
   return {
     session: getSessionDetail(session.id),
-    has_manual_sets: sets.length > 0,
+    has_manual_sets: preexistingSets.length > 0,
     exercise_sets,
     is_primary: isPrimary,
   };
@@ -1273,7 +1287,14 @@ export function reconcileGarminStrength(garminActivityId: number) {
 // into a session's existing Garmin blob. Used by enrich.ts after the agent runs.
 export function updateSessionGarminNarrative(
   sessionId: number,
-  patch: { summary?: string | null; intensity?: string | null; extrapolated?: boolean; agent?: string | null }
+  patch: {
+    summary?: string | null;
+    intensity?: string | null;
+    extrapolated?: boolean;
+    agent?: string | null;
+    cairn_sets_authoritative?: boolean;
+    imported_set_activity_ids?: string[];
+  }
 ) {
   const s = db.prepare(`SELECT garmin_json FROM sessions WHERE id = ?`).get(sessionId) as any;
   if (!s) return null;
@@ -1287,6 +1308,14 @@ export function updateSessionGarminNarrative(
   if (patch.intensity !== undefined) blob.intensity = patch.intensity;
   if (patch.extrapolated !== undefined) blob.extrapolated = !!patch.extrapolated;
   if (patch.agent !== undefined) blob.agent = patch.agent;
+  if (patch.cairn_sets_authoritative !== undefined) {
+    blob.cairn_sets_authoritative = patch.cairn_sets_authoritative;
+  }
+  if (patch.imported_set_activity_ids !== undefined) {
+    blob.imported_set_activity_ids = [
+      ...new Set(patch.imported_set_activity_ids.map((id) => String(id)).filter(Boolean)),
+    ].slice(-32);
+  }
   db.prepare(`UPDATE sessions SET garmin_json = ? WHERE id = ?`).run(JSON.stringify(blob), sessionId);
   invalidateDayRead();
   return getSessionDetail(sessionId);

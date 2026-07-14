@@ -180,17 +180,15 @@ function garminSetIsTimed(set: any): boolean {
   return (reps == null || reps === 0) && dur != null && dur > 0;
 }
 
-// Deterministically log Garmin's detected exercise sets into the day's session,
-// converting kg→lb in CODE. Skips any exercise already logged (the `already` guard
-// is shared with the agentic pass below so neither double-logs). Returns the count
-// logged. Runs EVEN WITH NO AGENT — the sets are facts, not a coaching opinion.
-function logGarminDetectedSets(ga: any, already: Set<string>): number {
+// Normalize one Garmin activity's usable detected sets before handing the whole
+// batch to the repo-owned atomic importer. Repeated exercise names remain valid:
+// Garmin emits one item per working set, not one item per exercise.
+function garminDetectedSetInputs(ga: any): repo.GarminSetImportInput[] {
   const sets = Array.isArray(ga?.exercise_sets) ? ga.exercise_sets : [];
-  if (!sets.length) return 0;
-  let logged = 0;
+  const usable: repo.GarminSetImportInput[] = [];
   for (const set of sets) {
     const name = garminExerciseName(set);
-    if (!name || already.has(name.toLowerCase())) continue;
+    if (!name) continue;
     const timed = garminSetIsTimed(set);
     const reps = asNum(set?.reps);
     const duration = asNum(set?.duration_sec);
@@ -198,22 +196,37 @@ function logGarminDetectedSets(ga: any, already: Set<string>): number {
     // Must carry something loggable for its mode (reps OR a converted load for a
     // reps set; a duration for a timed hold). Otherwise skip — never log an empty set.
     if (timed ? duration == null : reps == null && weight == null) continue;
-    try {
-      repo.logSetByName({
-        exercise: name,
-        weight: timed ? null : weight,
-        reps: timed ? null : reps ?? null,
-        duration_sec: timed ? duration ?? null : null,
-        exercise_mode: timed ? "timed" : "reps",
-        date: ga.date,
-      });
-      already.add(name.toLowerCase()); // never duplicate within this pass
-      logged++;
-    } catch {
-      /* one bad set shouldn't fail the job */
-    }
+    usable.push({
+      exercise: name,
+      weight: timed ? null : weight,
+      reps: timed ? null : reps ?? null,
+      duration_sec: timed ? duration ?? null : null,
+      exercise_mode: timed ? "timed" : "reps",
+    });
   }
-  return logged;
+  return usable;
+}
+
+function agentGarminSetInputs(parsed: any): repo.GarminSetImportInput[] {
+  if (!Array.isArray(parsed?.sets)) return [];
+  const usable: repo.GarminSetImportInput[] = [];
+  for (const raw of parsed.sets) {
+    const exercise = asStr(raw?.exercise);
+    if (!exercise) continue;
+    const mode = raw?.mode === "timed" ? "timed" : "reps";
+    const weight = asNum(raw?.weight);
+    const reps = asNum(raw?.reps);
+    const duration = asNum(raw?.duration_sec);
+    if (mode === "timed" ? duration == null : reps == null && weight == null) continue;
+    usable.push({
+      exercise,
+      weight: mode === "timed" ? null : weight ?? null,
+      reps: mode === "timed" ? null : reps ?? null,
+      duration_sec: mode === "timed" ? duration ?? null : null,
+      exercise_mode: mode,
+    });
+  }
+  return usable;
 }
 
 // Push a job and start the drain loop if it isn't already running.
@@ -604,10 +617,12 @@ async function processReviewJob(): Promise<void> {
 
 // Reconcile a Garmin strength activity into the day's Cairn session. The
 // deterministic physiology merge already ran during sync (reconcileGarminStrength);
-// here the agent adds the one-line "body's reaction" read and logs the exercises
-// Garmin detected that the athlete did NOT already log by hand. Degrades to a
-// clean no-op (the deterministic merge stands) when enrichment/agents are off.
-async function processGarminStrengthJob(garminActivityId: number): Promise<void> {
+// here the agent adds the one-line "body's reaction" read. Garmin exercises are
+// imported only when set authority resolves watch-only at job start; when Cairn sets
+// are authoritative, BOTH detected and agent-returned sets are ignored. Degrades to
+// a clean no-op (the deterministic merge stands) when enrichment/agents are off.
+// Exported for focused offline policy tests.
+export async function processGarminStrengthJob(garminActivityId: number): Promise<void> {
   let ga = repo.getGarminActivity(garminActivityId) as any;
   if (!ga) return;
   // Ensure the deterministic merge happened (a re-enqueue after restart / manual
@@ -618,27 +633,22 @@ async function processGarminStrengthJob(garminActivityId: number): Promise<void>
   }
   if (!ga?.session_id) return; // not a strength activity, or no session to attach to
 
-  // Which exercises already have logged sets this session — never duplicate them.
-  // This code-level guard is the real protection; the prompt instruction is a hint.
-  // The deterministic and agentic passes SHARE this set, so they can't double-log.
-  const session = repo.getSessionDetail(ga.session_id) as any;
-  const already = new Set<string>(
-    (Array.isArray(session?.sets) ? session.sets : []).map((s: any) => String(s.exercise || "").toLowerCase())
-  );
-
-  // DETERMINISTIC FLOOR: log Garmin's detected sets with the kg→lb conversion done
-  // in CODE. This runs FIRST and ALWAYS — even when enrichment is off or no agent is
-  // reachable — because the sets (and their weights) are facts, not a coaching opinion.
-  // Delegating the conversion to the LLM risks a silent ~2.2× corruption of every load.
-  const hadDetectedSets = Array.isArray(ga?.exercise_sets) && ga.exercise_sets.length > 0;
-  let logged = logGarminDetectedSets(ga, already);
+  const setImportKey = String(ga.external_id ?? `garmin-activity:${ga.id}`);
+  const detectedSets = garminDetectedSetInputs(ga);
+  // The repo operation re-reads authority and set count inside its savepoint. This
+  // closes the reconcile→job race and commits all sets with their ledger marker.
+  const initialImport = repo.importGarminActivitySets({
+    session_id: ga.session_id,
+    date: ga.date,
+    activity_key: setImportKey,
+    sets: detectedSets,
+  });
+  let logged = initialImport.imported;
 
   const settings = repo.getSettings();
   if (!settings.enrich_enabled) {
-    // Sets are logged; the physiology already merged during sync. Mark the session's
-    // blob extrapolated if we added any, but skip the (agentic) narrative layer.
+    // The physiology and any atomic deterministic set import stand; skip narrative.
     if (logged) {
-      repo.updateSessionGarminNarrative(ga.session_id, { extrapolated: true });
       console.log(`[enrich] garmin_strength#${garminActivityId}: logged ${logged} detected set(s) deterministically (no narrative — enrichment off).`);
     }
     return;
@@ -646,7 +656,6 @@ async function processGarminStrengthJob(garminActivityId: number): Promise<void>
   const order = repo.pickAgentOrder();
   if (!order.length) {
     if (logged) {
-      repo.updateSessionGarminNarrative(ga.session_id, { extrapolated: true });
       console.log(`[enrich] garmin_strength#${garminActivityId}: logged ${logged} detected set(s) deterministically (no agent for narrative).`);
     }
     return;
@@ -663,47 +672,33 @@ async function processGarminStrengthJob(garminActivityId: number): Promise<void>
   }
   if (!parsed || typeof parsed !== "object") {
     // Deterministic sets + physiology stand; just no one-line narrative this run.
-    if (logged) repo.updateSessionGarminNarrative(ga.session_id, { extrapolated: true });
     return;
   }
 
-  // The agent's set list is the FALLBACK path only: when Garmin gave us no detected
-  // exercise_sets, the deterministic floor logged nothing, so the agent's reconstruction
-  // is all we have. When the floor DID log from exercise_sets, we do NOT re-log the
-  // agent's sets — its names may differ from the floor's ("Bench Press" vs "Barbell
-  // Bench Press") and slip past the `already` guard, double-logging the same physical
-  // work. In that case the agent only contributes the one-line narrative below.
-  if (!hadDetectedSets && Array.isArray(parsed.sets)) {
-    for (const raw of parsed.sets) {
-      const name = asStr(raw?.exercise);
-      if (!name || already.has(name.toLowerCase())) continue;
-      const mode = raw?.mode === "timed" ? "timed" : "reps";
-      const weight = asNum(raw?.weight); // agent value is already lb per the prompt
-      const reps = asNum(raw?.reps);
-      const duration = asNum(raw?.duration_sec);
-      // Must carry something loggable for its mode.
-      if (mode === "timed" ? duration == null : reps == null && weight == null) continue;
-      try {
-        repo.logSetByName({
-          exercise: name,
-          weight: mode === "timed" ? null : weight ?? null,
-          reps: mode === "timed" ? null : reps ?? null,
-          duration_sec: mode === "timed" ? duration ?? null : null,
-          exercise_mode: mode,
-          date: ga.date,
-        });
-        already.add(name.toLowerCase()); // guard against duplicate names within one response
-        logged++;
-      } catch {
-        /* one bad set shouldn't fail the job */
-      }
-    }
+  // If the deterministic pass had no usable sets, a valid agent reconstruction is
+  // the fallback. Re-read after the await so a Cairn set logged while the agent was
+  // thinking can win; the repo then checks once more inside the atomic savepoint.
+  if (detectedSets.length === 0) {
+    // This explicit refresh is also what keeps prompt-time state from being treated
+    // as current after a potentially long-running external agent call.
+    const refreshedSession = repo.getSessionDetail(ga.session_id);
+    const agentSets = refreshedSession ? agentGarminSetInputs(parsed) : [];
+    const fallbackImport = repo.importGarminActivitySets({
+      session_id: ga.session_id,
+      date: ga.date,
+      activity_key: setImportKey,
+      sets: agentSets,
+    });
+    logged += fallbackImport.imported;
   }
 
+  const session = repo.getSessionDetail(ga.session_id) as any;
   repo.updateSessionGarminNarrative(ga.session_id, {
     summary: asStr(parsed.summary) ?? null,
     intensity: ["easy", "moderate", "hard"].includes(parsed.intensity) ? parsed.intensity : null,
-    extrapolated: !!parsed.extrapolated || logged > 0,
+    // When Cairn owns the sets, an agent's ignored reconstruction must not make the
+    // session look extrapolated. Preserve only a pre-existing historical flag.
+    extrapolated: !!session?.garmin?.extrapolated,
     agent,
   });
   if (logged) console.log(`[enrich] garmin_strength#${garminActivityId}: logged ${logged} detected set(s) into session ${ga.session_id} (kg→lb in code).`);

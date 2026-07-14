@@ -301,7 +301,7 @@ export interface LogSetInput {
   note?: string;
 }
 
-export function logSetByName(input: LogSetInput) {
+function insertSetByName(input: LogSetInput, emitEffects: boolean) {
   const date = input.date || localDateISO();
   const ex = findOrCreateExercise(input.exercise, undefined, undefined, input.exercise_mode);
   // An explicitly-passed mode also updates an existing exercise (e.g. converting
@@ -330,15 +330,17 @@ export function logSetByName(input: LogSetInput) {
     )
     .run(session.id, ex.id, setNumber, input.weight ?? null, input.reps ?? null, input.rir ?? null, input.note ?? null, input.duration_sec ?? null);
 
-  bumpTrainingDataVersion(); // a new logged set moves lifts/volume/weekly reads
-  invalidateDayRead(date); // logging a set flips "trained today" → refresh the Brief
-  emitBrainEvent({
-    kind: "set_logged",
-    domain: "training",
-    date,
-    entity_id: session.id,
-    subject_key: ex.name,
-  });
+  if (emitEffects) {
+    bumpTrainingDataVersion(); // a new logged set moves lifts/volume/weekly reads
+    invalidateDayRead(date); // logging a set flips "trained today" → refresh the Brief
+    emitBrainEvent({
+      kind: "set_logged",
+      domain: "training",
+      date,
+      entity_id: session.id,
+      subject_key: ex.name,
+    });
+  }
 
   // PR check. Reps exercises: a new all-time est-1RM (Epley). Timed exercises:
   // strictly beating the previous max duration; est_1rm stays null for timed.
@@ -376,6 +378,112 @@ export function logSetByName(input: LogSetInput) {
     est_1rm,
     pr,
   };
+}
+
+export function logSetByName(input: LogSetInput) {
+  return insertSetByName(input, true);
+}
+
+export interface GarminSetImportInput {
+  exercise: string;
+  weight?: number | null;
+  reps?: number | null;
+  duration_sec?: number | null;
+  exercise_mode?: "reps" | "timed";
+}
+
+export interface GarminSetImportResult {
+  authority: boolean | null;
+  imported: number;
+  already_imported: boolean;
+}
+
+// Atomically claim set authority for one Garmin activity, write its complete set
+// batch, and append its idempotency key to the session ledger. A pending session
+// (no boolean marker) only becomes watch-authoritative when at least one usable set
+// is successfully committed. If a Cairn set arrived first, Cairn wins instead.
+export function importGarminActivitySets(input: {
+  session_id: number;
+  date: string;
+  activity_key: string;
+  sets: GarminSetImportInput[];
+}): GarminSetImportResult {
+  const sessionId = Number(input.session_id);
+  const date = String(input.date || "").trim();
+  const activityKey = String(input.activity_key || "").trim();
+  const sets = Array.isArray(input.sets) ? input.sets : [];
+  if (!Number.isInteger(sessionId) || sessionId <= 0) throw new Error("valid session_id required");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("valid date required");
+  if (!activityKey) throw new Error("activity_key required");
+
+  const savepoint = "garmin_set_import";
+  let result: GarminSetImportResult = { authority: null, imported: 0, already_imported: false };
+  let firstExercise: string | null = null;
+  db.exec(`SAVEPOINT ${savepoint}`);
+  try {
+    const session = db.prepare(`SELECT id, date, garmin_json FROM sessions WHERE id = ?`).get(sessionId) as any;
+    if (!session) throw new Error(`No session ${sessionId}`);
+    if (String(session.date) !== date) throw new Error(`Session ${sessionId} is not on ${date}`);
+
+    let garmin: any = {};
+    try { garmin = session.garmin_json ? JSON.parse(session.garmin_json) : {}; } catch { garmin = {}; }
+    if (!garmin || typeof garmin !== "object" || Array.isArray(garmin)) garmin = {};
+    const importedIds = Array.isArray(garmin.imported_set_activity_ids)
+      ? [...new Set<string>(garmin.imported_set_activity_ids.map((id: any) => String(id)).filter(Boolean))]
+      : [];
+    const storedAuthority = typeof garmin.cairn_sets_authoritative === "boolean"
+      ? garmin.cairn_sets_authoritative
+      : null;
+    const alreadyImported = importedIds.includes(activityKey);
+    const setCount = Number(
+      (db.prepare(`SELECT COUNT(*) AS n FROM logged_sets WHERE session_id = ?`).get(sessionId) as any)?.n ?? 0
+    );
+
+    if (storedAuthority === true || (storedAuthority === null && setCount > 0)) {
+      if (storedAuthority !== true) {
+        garmin.cairn_sets_authoritative = true;
+        db.prepare(`UPDATE sessions SET garmin_json = ? WHERE id = ?`).run(JSON.stringify(garmin), sessionId);
+      }
+      result = { authority: true, imported: 0, already_imported: alreadyImported };
+    } else if (alreadyImported) {
+      result = { authority: storedAuthority, imported: 0, already_imported: true };
+    } else if (sets.length === 0) {
+      // An empty or unusable Garmin payload is not evidence that Garmin owns sets.
+      // Keep a markerless session pending so a later Cairn log can still win.
+      result = { authority: storedAuthority, imported: 0, already_imported: false };
+    } else {
+      for (const set of sets) {
+        const logged = insertSetByName({ ...set, date }, false);
+        if (Number(logged.session_id) !== sessionId) {
+          throw new Error(`Garmin set landed in unexpected session ${logged.session_id}`);
+        }
+        firstExercise ??= logged.exercise;
+        result.imported++;
+      }
+      garmin.cairn_sets_authoritative = false;
+      garmin.extrapolated = true;
+      garmin.imported_set_activity_ids = [...new Set([...importedIds, activityKey])].slice(-32);
+      db.prepare(`UPDATE sessions SET garmin_json = ? WHERE id = ?`).run(JSON.stringify(garmin), sessionId);
+      result.authority = false;
+    }
+    db.exec(`RELEASE ${savepoint}`);
+  } catch (error) {
+    try { db.exec(`ROLLBACK TO ${savepoint}`); } finally { db.exec(`RELEASE ${savepoint}`); }
+    throw error;
+  }
+
+  if (result.imported > 0) {
+    bumpTrainingDataVersion();
+    invalidateDayRead(date);
+    emitBrainEvent({
+      kind: "set_logged",
+      domain: "training",
+      date,
+      entity_id: sessionId,
+      subject_key: firstExercise,
+    });
+  }
+  return result;
 }
 
 export function deleteSet(id: number) {

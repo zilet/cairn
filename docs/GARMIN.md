@@ -3,6 +3,22 @@
 Cairn treats Garmin as one input source. It does not make Garmin the plan authority:
 manual lifting logs remain the source of truth for strength progression, while Garmin
 activities and recovery metrics inform load, fatigue, conditioning, and goal context.
+For parallel strength tracking, Cairn is the workout ledger and Garmin is the sensor
+layer feeding heart-rate, recovery, and body-response context into the connected brain.
+For a same-day strength session that already has Cairn-logged sets, reconciliation
+keeps those exact exercises and sets authoritative and adds only Garmin physiology
+(duration, heart rate/zones, calories, and training effect) plus an optional narrative.
+Garmin-detected sets are imported only when the session is still empty as its queued
+strength job begins. An empty session stays pending between reconciliation and that
+job, so any Cairn sets logged in the interval become authoritative. Empty or unusable
+watch set data does not resolve that pending state: with enrichment unavailable, an
+agent failure, or no usable agent fallback, a later Cairn log can still win. A richer
+later watch sync becomes watch-authoritative only if the session is still empty when
+its usable set batch is committed. Set batches and their per-activity import markers
+commit atomically, so a failed batch is safe to retry. The resolved watch-only policy
+is preserved across later re-syncs. Legacy linked sessions without an authority marker
+resolve conservatively: any existing sets make Cairn authoritative because their
+provenance cannot be established safely.
 
 ## Current Local Connector
 
