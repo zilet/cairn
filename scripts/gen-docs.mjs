@@ -78,6 +78,7 @@ const esc = (s) => String(s ?? "").replace(/\|/g, "\\|");
 const routes = [
   ...parseApiRoutes(read("src/api.ts")),
   ...parseApiRoutes(read("src/routes/agent-jobs.ts"), { receiver: "agentJobsRouter", prefix: "/agent-jobs" }),
+  ...parseApiRoutes(read("src/routes/apple-health.ts"), { receiver: "appleHealthRouter", prefix: "" }),
   ...parseApiRoutes(read("src/routes/art.ts"), { receiver: "artRouter", prefix: "" }),
   ...parseApiRoutes(read("src/routes/chat.ts"), { receiver: "chatRouter", prefix: "/chat" }),
   ...parseApiRoutes(read("src/routes/connected-brain.ts"), { receiver: "connectedBrainRouter", prefix: "" }),
@@ -112,8 +113,11 @@ let api = `# Cairn REST API index
 > Generated from \`src/api.ts\` and \`src/routes/*\` by \`scripts/gen-docs.mjs\` — run \`npm run docs:index\` to refresh. Do not edit by hand.
 
 All routes are mounted under **\`/api\`** (e.g. \`GET /api/plan\`). When \`CAIRN_AUTH_TOKEN\`
-is set, every route except \`GET /api/health\` requires the token (\`Authorization: Bearer …\`,
-\`X-Cairn-Token: …\`, or \`?token=…\`). See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
+is set, owner routes require the token (\`Authorization: Bearer …\`, \`X-Cairn-Token: …\`, or
+\`?token=…\` on the documented GET-only allowlist). \`GET /api/health\` remains public. Apple
+Health's short-lived pairing exchange is public and passes through the instance-wide pre-auth limiter
+when that limiter is enabled; its resulting credential is scoped only to \`POST /api/health-metrics\`.
+See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
 **${routes.length} routes** across ${sortedKeys.length} groups.
 

@@ -1032,6 +1032,14 @@ test("PWA API calls are covered by shared client contracts or explicit waivers",
   assert.ok(contractPatterns.includes("/agent/run"), "/agent/run should be covered for durable proposal jobs");
   assert.ok(contractPatterns.includes("/coach/mealplan"), "/coach/mealplan should be covered for durable meal-plan jobs");
   assert.ok(contractPatterns.includes("/insights/generate"), "/insights/generate should be covered for durable insight jobs");
+  for (const path of [
+    "/apple-health/config",
+    "/apple-health/connections",
+    "/apple-health/connections/:id",
+    "/apple-health/pairings",
+  ]) {
+    assert.ok(contractPatterns.includes(path), `${path} should have a precise shared client contract`);
+  }
   assert.ok(!waiverPatterns.includes("/learnings"), "/learnings must not regress to a broad JSON waiver");
   assert.doesNotMatch(contractSource, /"\/api\/[^"]+":\s*unknown\b/, "exact API responses must not be bare unknown");
 
@@ -1076,6 +1084,15 @@ test("PWA API calls are covered by shared client contracts or explicit waivers",
     .map((call) => `${call.file}: ${call.path}`)
     .sort();
   assert.deepEqual(uncovered, []);
+});
+
+test("Apple Health credential and connection responses are explicitly non-cacheable", () => {
+  const route = read("src/routes/apple-health.ts");
+  assert.match(route, /function noStore[\s\S]*Cache-Control[\s\S]*no-store/);
+  assert.match(route, /get\("\/apple-health\/connections"[\s\S]*?noStore\(res\)/);
+  assert.match(route, /post\("\/apple-health\/pairings"[\s\S]*?noStore\(res\)/);
+  assert.match(route, /post\("\/apple-health\/pairing\/exchange"[\s\S]*?noStore\(res\)/);
+  assert.match(route, /delete\("\/apple-health\/connections\/:id"[\s\S]*?noStore\(res\)/);
 });
 
 test("chat action write contract stays typed and prompt-aligned", () => {
@@ -1124,7 +1141,13 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const rootTsconfig = read("tsconfig.json");
   const clientTsconfig = read("tsconfig.client.json");
   const clientBuildTsconfig = read("tsconfig.client.build.json");
-  const clientGlobals = read("src/contracts/client-globals.d.ts");
+  // Declaration formatting is generated and may wrap as types evolve. Collapse
+  // formatting-only whitespace before asserting the public global contracts so
+  // these checks protect signatures rather than one formatter's line breaks.
+  const clientGlobals = read("src/contracts/client-globals.d.ts")
+    .replace(/\s+/g, " ")
+    .replace(/([(<])\s+/g, "$1")
+    .replace(/\s+([)>])/g, "$1");
   const clientShellGlobals = read("src/contracts/client-shell-globals.d.ts");
   const clientState = read("src/contracts/client-state.ts");
   const contracts = read("src/contracts/client.ts");
@@ -1903,7 +1926,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /CairnFamilyController/);
   assert.match(clientGlobals, /render\(deps: ClientFamilyControllerDeps\): Promise<void>/);
   assert.match(clientGlobals, /CairnMeProfileForm/);
-  assert.match(clientGlobals, /html\(\s*deps: MeProfileControllerDeps,\s*profile: MeProfileProfile,\s*goal: MeProfileGoalCheck,\s*context: MeProfileFormContext,/);
+  assert.match(clientGlobals, /html\(\s*deps: MeProfileControllerDeps,\s*profile: MeProfileProfile,\s*goal: MeProfileGoalCheck,\s*context: MeProfileFormContext,?/);
   assert.match(clientGlobals, /CairnMeProfileController/);
   assert.match(clientGlobals, /renderProfile\(deps: MeProfileControllerDeps\): Promise<void>/);
   assert.match(clientGlobals, /declare function coachingFocusCardHtml\(/);
@@ -4330,7 +4353,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(settingsAgentsControllerSource, /function renderSettingsAgentList\(deps: ClientSettingsAgentsControllerDeps\): void/);
   assert.match(settingsAgentsControllerSource, /function wireSettingsCliUpdate\(deps: ClientSettingsAgentsControllerDeps\): void/);
   assert.match(settingsAgentsControllerSource, /CairnSettingsAgentsController/);
-  assert.match(settingsSourcesAutomationControllerSource, /function renderSettingsSources\(deps: ClientSettingsSourcesAutomationControllerDeps\): void/);
+  assert.match(settingsSourcesAutomationControllerSource, /function renderSettingsSources\(deps: ClientSettingsSourcesAutomationControllerDeps\): Promise<void>/);
   assert.match(settingsSourcesAutomationControllerSource, /function renderSettingsAutomation\(deps: ClientSettingsSourcesAutomationControllerDeps\): void/);
   assert.match(settingsSourcesAutomationControllerSource, /CairnSettingsSurface\.sourcesSliceHtml/);
   assert.match(settingsSourcesAutomationControllerSource, /CairnSettingsSurface\.automationSliceHtml/);

@@ -197,6 +197,7 @@ async function runOpenSmoke(ctx) {
 async function runAuthSmoke(ctx) {
   const base = ctx.base;
   const bearer = { authorization: `Bearer ${AUTH_TOKEN}` };
+  const ownerJsonHeaders = { ...bearer, "content-type": "application/json" };
   const q = encodeURIComponent(AUTH_TOKEN);
 
   // 9) Health remains public, but reports that auth is enforced.
@@ -258,6 +259,85 @@ async function runAuthSmoke(ctx) {
     // And the same path without a token is refused (query-token allowlist is GET-scoped).
     const denied = await fetch(`${base}${path}`);
     ok(denied.status === 401, `auth: unauthenticated ${path} → 401`, `got ${denied.status}`);
+  }
+
+  // 16) Apple Health pairing is an owner-controlled REST flow. The exchange is
+  //     public so a new Shortcut can claim its one-time code, while the issued
+  //     credential can only ingest Apple Health rows and can be revoked alone.
+  {
+    const deniedMint = await getJson(base, "/api/apple-health/pairings", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ label: "Smoke iPhone" }),
+    });
+    ok(deniedMint.status === 401, "auth: unauthenticated Apple Health pairing mint is rejected");
+
+    const deniedList = await getJson(base, "/api/apple-health/connections");
+    ok(deniedList.status === 401, "auth: unauthenticated Apple Health connection list is rejected");
+
+    const minted = await getJson(base, "/api/apple-health/pairings", {
+      method: "POST",
+      headers: ownerJsonHeaders,
+      body: JSON.stringify({ label: "Smoke iPhone", shortcut_version: "smoke-1" }),
+    });
+    ok(minted.status === 201 && /^cairn_pair_/.test(minted.body?.code), "auth: owner can mint a one-time pairing code");
+
+    const exchanged = await getJson(base, "/api/apple-health/pairing/exchange", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ pairing_code: minted.body.code, label: "Smoke iPhone", shortcut_version: "smoke-1" }),
+    });
+    ok(
+      exchanged.status === 200 && /^cairn_ah_/.test(exchanged.body?.ingest_token),
+      "auth: public pairing exchange returns a scoped ingest credential"
+    );
+    const connectionId = exchanged.body?.connection?.id;
+
+    const replay = await getJson(base, "/api/apple-health/pairing/exchange", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ pairing_code: minted.body.code }),
+    });
+    ok(replay.status === 400, "auth: Apple Health pairing code cannot be exchanged twice");
+
+    const scopedHeaders = {
+      authorization: `Bearer ${exchanged.body.ingest_token}`,
+      "content-type": "application/json",
+    };
+    const date = new Date().toISOString().slice(0, 10);
+    const ingested = await getJson(base, "/api/health-metrics", {
+      method: "POST",
+      headers: scopedHeaders,
+      body: JSON.stringify({ source: "garmin", date, steps: 4321 }),
+    });
+    ok(ingested.status === 200 && ingested.body?.saved === 1, "auth: scoped credential can ingest one metrics row");
+    ok(ingested.body?.rows?.[0]?.source === "apple_health", "auth: scoped ingest cannot spoof another source");
+
+    const scopedRead = await getJson(base, "/api/health-metrics", {
+      headers: { authorization: `Bearer ${exchanged.body.ingest_token}` },
+    });
+    ok(scopedRead.status === 401, "auth: scoped credential cannot read health metrics");
+
+    const listed = await getJson(base, "/api/apple-health/connections", { headers: bearer });
+    const connection = listed.body?.connections?.find((item) => item.id === connectionId);
+    ok(listed.status === 200 && connection?.status === "connected", "auth: owner can list the active connection");
+    ok(!!connection?.last_used_at, "auth: successful scoped ingest updates connection last-used time");
+
+    const deniedRevoke = await getJson(base, `/api/apple-health/connections/${connectionId}`, { method: "DELETE" });
+    ok(deniedRevoke.status === 401, "auth: unauthenticated Apple Health revocation is rejected");
+
+    const revoked = await getJson(base, `/api/apple-health/connections/${connectionId}`, {
+      method: "DELETE",
+      headers: bearer,
+    });
+    ok(revoked.status === 200 && revoked.body?.ok === true, "auth: owner can revoke one Apple Health connection");
+
+    const deniedAfterRevoke = await getJson(base, "/api/health-metrics", {
+      method: "POST",
+      headers: scopedHeaders,
+      body: JSON.stringify({ date, steps: 5000 }),
+    });
+    ok(deniedAfterRevoke.status === 401, "auth: revoked scoped credential cannot ingest");
   }
 }
 

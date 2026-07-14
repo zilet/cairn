@@ -844,6 +844,37 @@ CREATE TABLE IF NOT EXISTS daily_metrics (
 );
 CREATE INDEX IF NOT EXISTS idx_daily_metrics_date ON daily_metrics(date);
 
+-- Scoped Apple Health Shortcut credentials. Only SHA-256 hashes are retained:
+-- the one-time pairing code and the eventual ingest credential are shown once,
+-- then cannot be recovered from the database. Pairings are short-lived and
+-- single-use; connections can be independently revoked without rotating the
+-- owner's CAIRN_AUTH_TOKEN.
+CREATE TABLE IF NOT EXISTS apple_health_connections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  label TEXT NOT NULL,
+  shortcut_version TEXT,
+  token_hash TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  last_used_at TEXT,
+  revoked_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_apple_health_connections_active
+  ON apple_health_connections(revoked_at, expires_at);
+
+CREATE TABLE IF NOT EXISTS apple_health_pairings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  code_hash TEXT NOT NULL UNIQUE,
+  label TEXT NOT NULL,
+  shortcut_version TEXT,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  used_at TEXT,
+  connection_id INTEGER REFERENCES apple_health_connections(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_apple_health_pairings_active
+  ON apple_health_pairings(used_at, expires_at);
+
 -- Family members the coach plans around (partner, kids). Their recurring
 -- commitments live as context_events (kind:'family_event'); this is the roster.
 CREATE TABLE IF NOT EXISTS family_members (

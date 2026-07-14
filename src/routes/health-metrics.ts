@@ -5,6 +5,9 @@ import {
   getRecoverySummary,
   recordDailyMetrics,
 } from "../domain/health/index.js";
+import { appleHealthConnectionForRequest } from "../auth.js";
+import { markAppleHealthConnectionUsed } from "../repo/apple-health.js";
+import type { Request } from "express";
 
 export const healthMetricsRouter = Router();
 
@@ -16,7 +19,16 @@ export const healthMetricsRouter = Router();
 // `source` (default 'apple') and a `date` (YYYY-MM-DD, required per row), plus
 // any of steps/sleep/recovery plus best-effort Apple activity/cardio fields and a
 // free-form `raw` blob preserved verbatim for later.
-export function ingestHealthMetrics(body: any = {}) {
+export function healthMetricSource(rowSource: unknown, forcedSource?: string): string {
+  const source = forcedSource ?? rowSource;
+  return String(source || "apple");
+}
+
+export function healthMetricSourceForRequest(req: Request): string | undefined {
+  return appleHealthConnectionForRequest(req) == null ? undefined : "apple_health";
+}
+
+export function ingestHealthMetrics(body: any = {}, forcedSource?: string) {
   // Cap the batch — a year of daily rows is a sane ceiling for a Shortcuts
   // backfill; the 25mb body limit + no auth means an unbounded loop of
   // synchronous sqlite upserts is otherwise possible. Per-row values are
@@ -33,7 +45,7 @@ export function ingestHealthMetrics(body: any = {}) {
     }
     try {
       saved.push(
-        recordDailyMetrics(row.source ?? "apple", String(row.date), {
+        recordDailyMetrics(healthMetricSource(row.source, forcedSource), String(row.date), {
           steps: row.steps,
           sleep_min: row.sleep_min,
           sleep_score: row.sleep_score,
@@ -56,9 +68,21 @@ export function ingestHealthMetrics(body: any = {}) {
   return { ok: errors.length === 0, saved: saved.length, rows: saved, errors };
 }
 
+export function shouldMarkAppleHealthUsed(result: { ok?: unknown; saved?: unknown }): boolean {
+  return Number(result.saved) > 0;
+}
+
 // Ingest one row or a batch of source-agnostic daily metrics (Apple Health via Shortcuts).
 healthMetricsRouter.post("/health-metrics", (req, res) => {
-  res.json(ingestHealthMetrics(req.body ?? {}));
+  const connectionId = appleHealthConnectionForRequest(req);
+  // A scoped Shortcut credential owns its provenance: caller-supplied source
+  // values are ignored for every body shape. Owner-authenticated/manual writes
+  // retain the existing source behavior.
+  const result = ingestHealthMetrics(req.body ?? {}, healthMetricSourceForRequest(req));
+  if (connectionId != null && shouldMarkAppleHealthUsed(result)) {
+    markAppleHealthConnectionUsed(connectionId);
+  }
+  res.json(result);
 });
 
 // Recent metrics for a source (default all sources) over the last N days.

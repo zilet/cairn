@@ -16,6 +16,7 @@ export * from "./repo/nutrition.js";
 export * from "./repo/fueling.js"; // one-tap fueling follow-through after an applied target change
 export * from "./repo/chat.js";
 export * from "./repo/settings.js";
+export * from "./repo/apple-health.js";
 export * from "./repo/art-ledger.js";
 export * from "./repo/agent-telemetry.js";
 export * from "./repo/diagnostics.js";

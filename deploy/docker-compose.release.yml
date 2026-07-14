@@ -28,6 +28,10 @@ services:
       # Recommended whenever the port is reachable beyond loopback.
       - CAIRN_AUTH_TOKEN=${CAIRN_AUTH_TOKEN:-}
       - CAIRN_REQUIRE_AUTH=${CAIRN_REQUIRE_AUTH:-0}
+      # Optional maintained Apple Health Shortcut metadata. Intentionally blank
+      # until an exported, Apple-validated artifact has been published and tested.
+      - CAIRN_APPLE_HEALTH_SHORTCUT_URL=${CAIRN_APPLE_HEALTH_SHORTCUT_URL:-}
+      - CAIRN_APPLE_HEALTH_SHORTCUT_NAME=${CAIRN_APPLE_HEALTH_SHORTCUT_NAME:-Cairn Apple Health Sync}
       - CAIRN_SETTINGS_SECRET_KEY=${CAIRN_SETTINGS_SECRET_KEY:-}
       - CAIRN_BLANK_PROFILE=${CAIRN_BLANK_PROFILE:-0}
       # Coaching: claude/codex/antigravity use their CLI subscription login (in the

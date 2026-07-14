@@ -29,7 +29,12 @@ function loadSettingsSurface() {
 test("settings surface normalizes API data into the working model", () => {
   const surface = loadSettingsSurface();
   assert.deepEqual(JSON.parse(JSON.stringify(surface.SET_SEG)), [
-    ["you", "You"], ["agents", "Agents"], ["system", "System"], ["sources", "Sources"], ["automation", "Automation"], ["data", "Data"],
+    ["you", "You"],
+    ["agents", "Agents"],
+    ["system", "System"],
+    ["sources", "Sources"],
+    ["automation", "Automation"],
+    ["data", "Data"],
   ]);
   const data = surface.settingsData({
     settings: {
@@ -40,16 +45,15 @@ test("settings surface normalizes API data into the working model", () => {
       garmin_username: "athlete@example.com",
       time_zone: "America/New_York",
     },
-    agents: [
-      { name: "claude", enabled: true },
-      { name: "stub", enabled: false },
-      { description: "missing name" },
-    ],
+    agents: [{ name: "claude", enabled: true }, { name: "stub", enabled: false }, { description: "missing name" }],
     research_auto_eligible: { eligible: true, reason: "web_agent_connected" },
   });
   const wm = surface.workingModel(data);
 
-  assert.deepEqual(data.agents.map((agent) => agent.name), ["claude", "stub"]);
+  assert.deepEqual(
+    data.agents.map((agent) => agent.name),
+    ["claude", "stub"]
+  );
   assert.equal(wm.agent_strategy, "priority");
   assert.deepEqual(wm.order, ["claude", "stub"]);
   assert.equal(wm.disabled.has("stub"), true);
@@ -83,10 +87,29 @@ test("settings surface renders source and automation slices without echoing secr
   assert.match(sources, /value="athlete&quot;@example\.com"/);
   assert.match(sources, /placeholder="Configured via Settings &quot;saved&quot;"/);
   assert.doesNotMatch(sources, /GARMIN_PASSWORD"/);
-  assert.match(sources, /href="shortcuts:\/\/create-shortcut"/);
-  assert.match(sources, /id="ahRecipeCopy"/);
-  assert.match(sources, /source: apple_health/);
-  assert.match(sources, /Apple still requires you to add/);
+  assert.doesNotMatch(sources, /shortcuts:\/\/create-shortcut/);
+  assert.match(sources, /Checking connection/);
+
+  const unavailable = surface.appleHealthCardHtml({
+    config: { available: false, pairing_available: true },
+    connections: [],
+  });
+  assert.match(unavailable, /Shortcut package not published yet/);
+  assert.doesNotMatch(unavailable, /class="ghostbtn ah-install"/);
+  assert.match(unavailable, /id="ahRecipeCopy"/);
+
+  const available = surface.appleHealthCardHtml({
+    config: {
+      available: true,
+      install_url: "https://www.icloud.com/shortcuts/abc",
+      shortcut_name: "Cairn Apple Health Sync",
+      pairing_available: true,
+    },
+    connections: [{ id: 7, label: "iPhone", status: "connected", last_used_at: null }],
+  });
+  assert.match(available, /Install Apple Health Sync/);
+  assert.match(available, /id="ahConnect"/);
+  assert.match(available, /waiting for first update/);
 
   const automation = surface.automationSliceHtml({
     workingModel: wm,
@@ -108,7 +131,10 @@ test("settings surface exposes status helpers and art spend card", () => {
   const surface = loadSettingsSurface();
   const status = surface.statusHelpers({ relTime: () => "now", absDate: () => "Today" });
 
-  assert.match(status.garminStatusLine({ garmin_last_sync_at: "2026-06-29", garmin_last_sync_status: "ok: done" }, false), /Synced now · done/);
+  assert.match(
+    status.garminStatusLine({ garmin_last_sync_at: "2026-06-29", garmin_last_sync_status: "ok: done" }, false),
+    /Synced now · done/
+  );
   assert.equal(status.agentOpLabel("chat_distill"), "saved chat to memory");
   assert.equal(status.agentChipState({ configured: true }).label, "✓ Connected");
 

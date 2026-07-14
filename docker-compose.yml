@@ -30,6 +30,10 @@ services:
       # whenever the port is reachable beyond loopback.
       - CAIRN_AUTH_TOKEN=${CAIRN_AUTH_TOKEN:-}
       - CAIRN_REQUIRE_AUTH=${CAIRN_REQUIRE_AUTH:-0}
+      # Optional maintained Apple Health Shortcut metadata. No URL is published
+      # by default; see docs/APPLE_HEALTH.md for the human-authored artifact step.
+      - CAIRN_APPLE_HEALTH_SHORTCUT_URL=${CAIRN_APPLE_HEALTH_SHORTCUT_URL:-}
+      - CAIRN_APPLE_HEALTH_SHORTCUT_NAME=${CAIRN_APPLE_HEALTH_SHORTCUT_NAME:-Cairn Apple Health Sync}
       # On a new household-member instance, seed only the neutral exercise
       # catalog; omit the example plan, measurements, and training history.
       - CAIRN_BLANK_PROFILE=${CAIRN_BLANK_PROFILE:-0}

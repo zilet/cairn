@@ -126,6 +126,36 @@ test("Apple Health REST contract is idempotent and resolves one signal per date"
   assert.deepEqual(invalid.errors, [{ error: "date required" }]);
 });
 
+test("scoped Apple Health ingest forces provenance for every accepted body shape", () => {
+  const dates = [localDaysAgo(4), localDaysAgo(3), localDaysAgo(2), localDaysAgo(1)];
+
+  const single = ingestHealthMetrics({ source: "garmin", date: dates[0], steps: 1001 }, "apple_health");
+  const wrapped = ingestHealthMetrics(
+    { rows: [{ source: "manual", date: dates[1], steps: 1002 }] },
+    "apple_health"
+  );
+  const bare = ingestHealthMetrics(
+    [
+      { source: "garmin", date: dates[2], steps: 1003 },
+      { source: "manual", date: dates[3], steps: 1004 },
+    ],
+    "apple_health"
+  );
+
+  assert.equal(single.ok, true);
+  assert.equal(wrapped.ok, true);
+  assert.equal(bare.ok, true);
+  assert.equal(repo.getDailyMetrics("apple_health", 14).length, 4);
+  assert.equal(repo.getDailyMetrics("garmin", 14).length, 0);
+  assert.equal(repo.getDailyMetrics("manual", 14).length, 0);
+
+  // Owner-authenticated/manual traffic keeps its caller-selected provenance.
+  ingestHealthMetrics({ source: "manual", date: dates[0], steps: 2001 });
+  ingestHealthMetrics({ source: "garmin", date: dates[1], steps: 2002 });
+  assert.equal(repo.getDailyMetrics("manual", 14).length, 1);
+  assert.equal(repo.getDailyMetrics("garmin", 14).length, 1);
+});
+
 test("rich-only recovery counts as data and sparse SpO2 reports honest coverage", () => {
   repo.upsertGarminDailyMetric({ date: localDaysAgo(0), training_status: "PRODUCTIVE", spo2_avg: 92 });
   const summary = repo.getRecoverySummary(14);

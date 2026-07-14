@@ -162,6 +162,43 @@ export interface ClientUpdateStatus {
   enabled?: boolean;
 }
 
+export interface ClientAppleHealthConfig {
+  available: boolean;
+  install_url: string | null;
+  shortcut_name: string | null;
+  help_url: string;
+  pairing_available: boolean;
+}
+
+export interface ClientAppleHealthConnection {
+  id: number;
+  label: string;
+  shortcut_version: string | null;
+  created_at: string;
+  expires_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+  status: "connected" | "expired" | "revoked";
+}
+
+export interface ClientAppleHealthConnectionsResponse {
+  connections: ClientAppleHealthConnection[];
+}
+
+export interface ClientAppleHealthPairingResponse {
+  id: number;
+  code: string;
+  label: string;
+  shortcut_version: string | null;
+  created_at: string;
+  expires_at: string;
+}
+
+export interface ClientAppleHealthConnectionRevokeResponse {
+  ok: true;
+  id: number;
+}
+
 export interface ClientRouteTask {
   key: string;
   label: string;
@@ -1986,6 +2023,10 @@ export interface ClientApiResponses {
   "/api/agent-clis/update": ClientAgentCliUpdateStatus;
   "/api/art/manifest": ClientArtManifestResponse;
   "/api/art/stats": ClientArtStatsResponse;
+  "/api/apple-health/config": ClientAppleHealthConfig;
+  "/api/apple-health/connections": ClientAppleHealthConnectionsResponse;
+  "/api/apple-health/connections/:id": ClientAppleHealthConnectionRevokeResponse;
+  "/api/apple-health/pairings": ClientAppleHealthPairingResponse;
   "/api/profile": ClientProfile;
   "/api/goal": ClientGoalCheck;
   "/api/bodyweight": ClientWeightRow[];
@@ -2099,7 +2140,8 @@ export type ClientApiPath = ClientApiCanonicalPath extends `/api${infer Path}` ?
 
 type ClientApiResponseForCleanPath<Path extends string> =
   `/api${Path}` extends keyof ClientApiResponses ? ClientApiResponses[`/api${Path}`]
-    : Path extends `/plan/${string}/target` ? ClientPlanItem
+    : Path extends `/apple-health/connections/${string}` ? ClientAppleHealthConnectionRevokeResponse
+      : Path extends `/plan/${string}/target` ? ClientPlanItem
       : Path extends `/plan/${string}` ? ClientPlanDay | ClientDeleteResponse
         : Path extends `/exercises/${string}` ? ClientExercise | ClientDeleteResponse
           : Path extends `/exercise/${string}/explanation` ? ClientExerciseExplanation

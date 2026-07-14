@@ -21,6 +21,7 @@ import { personContextRouter } from "./routes/person-context.js";
 import { trainingLogRouter } from "./routes/training-log.js";
 import { bodyMetricsRouter } from "./routes/body-metrics.js";
 import { journeyRouter } from "./routes/journey.js";
+import { appleHealthRouter } from "./routes/apple-health.js";
 import { diagnosticErrorName, recordUnexpectedApiError, requestId } from "./diagnostics.js";
 import { idempotencyGuard } from "./idempotency.js";
 
@@ -49,6 +50,7 @@ api.use("/", personContextRouter);
 api.use("/", trainingLogRouter);
 api.use("/", bodyMetricsRouter);
 api.use("/", journeyRouter);
+api.use("/", appleHealthRouter);
 api.use("/chat", chatRouter);
 api.use("/agent-jobs", agentJobsRouter);
 

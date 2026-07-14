@@ -3,10 +3,13 @@
 > Generated from `src/api.ts` and `src/routes/*` by `scripts/gen-docs.mjs` — run `npm run docs:index` to refresh. Do not edit by hand.
 
 All routes are mounted under **`/api`** (e.g. `GET /api/plan`). When `CAIRN_AUTH_TOKEN`
-is set, every route except `GET /api/health` requires the token (`Authorization: Bearer …`,
-`X-Cairn-Token: …`, or `?token=…`). See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
+is set, owner routes require the token (`Authorization: Bearer …`, `X-Cairn-Token: …`, or
+`?token=…` on the documented GET-only allowlist). `GET /api/health` remains public. Apple
+Health's short-lived pairing exchange is public and passes through the instance-wide pre-auth limiter
+when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
+See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**255 routes** across 95 groups.
+**260 routes** across 96 groups.
 
 ## `/activities`
 
@@ -53,6 +56,16 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | GET | `/api/agents` |  |
 | GET | `/api/agents/:name/info` | Per-agent read-only visibility (subprocess probes — fetched lazily, not on every Settings open). Both return ok:false at HTTP 200, mirroring the rest of Cairn's designed failure signals. |
 | GET | `/api/agents/:name/models` |  |
+
+## `/apple-health`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/apple-health/config` | Public, non-secret install metadata. An install button is exposed only for a validated official iCloud URL or a same-origin signed .shortcut asset. |
+| GET | `/api/apple-health/connections` | Owner-only list/status. Stored credential hashes are never selected here. |
+| DELETE | `/api/apple-health/connections/:id` | Owner-only revocation of one Shortcut without rotating owner authentication. |
+| POST | `/api/apple-health/pairing/exchange` | Shortcuts-only exchange. The code is high-entropy, expires after ten minutes, and is claimed atomically exactly once. The returned ingest token is shown in this response only and the Shortcut stores it locally. |
+| POST | `/api/apple-health/pairings` | Owner-only mint of a short-lived, single-use pairing code. Pairing is disabled on auth-free instances: otherwise any network client could mint an ingest credential. Trusted-network instances retain the documented manual POST path. |
 
 ## `/art`
 

@@ -101,8 +101,16 @@ declare global {
     figureSvg(side: CairnBodyFigureSide, tones: Record<string, string>, opts?: CairnBodyFigureOpts): string;
     referenceTape(sex: string, heightIn: number): Record<string, number>;
     widthScales(tape: Record<string, number>, ref: Record<string, number>): Record<string, number>;
-    measuredSilhouette(sex: string, tape: Partial<Record<string, number | null>> | null, heightIn: number): {
-      torso: string; armR: string; armL: string; scales: Record<string, number>; ref: Record<string, number>;
+    measuredSilhouette(
+      sex: string,
+      tape: Partial<Record<string, number | null>> | null,
+      heightIn: number
+    ): {
+      torso: string;
+      armR: string;
+      armL: string;
+      scales: Record<string, number>;
+      ref: Record<string, number>;
     };
     measuredPoint(pt: [number, number], sex: string, scales: Record<string, number>, clip?: string): [number, number];
     loopD(pts: Array<[number, number]>): string;
@@ -341,7 +349,7 @@ declare global {
       comparisons: ClientHealthStandingComparison[] | null | undefined,
       referenceAge: unknown,
       actualDecade: number | null,
-      sexWord: string,
+      sexWord: string
     ): string;
     hstandDimensionHtml(dimension: ClientHealthStandingDimension, index: number): string;
     hstandBpRows(rows: ClientBloodPressureReading[] | null | undefined): string;
@@ -349,8 +357,14 @@ declare global {
     hstandBpCardHtml(bp: ClientHealthStandingBloodPressure | null | undefined): string;
   };
 
-  type ClientTodaySessionFeedbackDeps = Pick<ClientTodaySessionControllerDeps, "api" | "sessionStatus" | "state" | "toast">;
-  type ClientTodaySessionSkipDeps = Pick<ClientTodaySessionControllerDeps, "api" | "collapseEl" | "expandEl" | "invalidate" | "renderToday" | "root" | "sessionStatus" | "state" | "toast">;
+  type ClientTodaySessionFeedbackDeps = Pick<
+    ClientTodaySessionControllerDeps,
+    "api" | "sessionStatus" | "state" | "toast"
+  >;
+  type ClientTodaySessionSkipDeps = Pick<
+    ClientTodaySessionControllerDeps,
+    "api" | "collapseEl" | "expandEl" | "invalidate" | "renderToday" | "root" | "sessionStatus" | "state" | "toast"
+  >;
   type ClientTodaySessionSetPayloadResult =
     | { ok: true; body: Record<string, unknown> }
     | { ok: false; message: string; focus?: () => void };
@@ -367,7 +381,7 @@ declare global {
     wireLastSetLine(
       row: Element | null | undefined,
       lastSet: unknown,
-      deps: Pick<ClientTodaySessionControllerDeps, "parseDur">,
+      deps: Pick<ClientTodaySessionControllerDeps, "parseDur">
     ): void;
   };
   type ClientTodaySessionSetActionsApi = {
@@ -378,7 +392,10 @@ declare global {
 
   type ClientTodayBriefControllerDeps = {
     root: HTMLElement;
-    state: Pick<ClientAppState, "tab" | "logDate" | "brief" | "_briefInflight" | "_briefMorph" | "plan" | "planReveal" | "progressSeg"> & {
+    state: Pick<
+      ClientAppState,
+      "tab" | "logDate" | "brief" | "_briefInflight" | "_briefMorph" | "plan" | "planReveal" | "progressSeg"
+    > & {
       day?: number | null;
       dayPicked?: boolean;
     };
@@ -512,7 +529,11 @@ declare global {
     invalidate(keyOrPrefix: string): void;
     renderToday(opts?: Record<string, unknown>): unknown;
     withViewTransition(fn: () => unknown): Promise<unknown> | unknown;
-    runOp(kind: "day_read_override" | "session_suggest" | string, body: Record<string, unknown>, options: ClientAgentOpHandlers): Promise<unknown>;
+    runOp(
+      kind: "day_read_override" | "session_suggest" | string,
+      body: Record<string, unknown>,
+      options: ClientAgentOpHandlers
+    ): Promise<unknown>;
     runCountUps(root?: ParentNode | null, options?: { snap?: boolean }): void;
     reducedMotion(): boolean;
     collapseEl(el: Element, done?: () => void): void;
@@ -586,7 +607,9 @@ declare global {
     dataLoad(): Parameters<Window["CairnTodayDataLoader"]["load"]>[1];
     dataRefresh(): Parameters<Window["CairnTodayDataLoader"]["scheduleSoftRepaint"]>[1];
     planSession(session: unknown, isToday: boolean): any;
-    postRender(input: ClientTodayDependenciesPostRenderInput): Parameters<Window["CairnTodayPostRenderWiring"]["wirePostRender"]>[0];
+    postRender(
+      input: ClientTodayDependenciesPostRenderInput
+    ): Parameters<Window["CairnTodayPostRenderWiring"]["wirePostRender"]>[0];
     session(): ClientTodaySessionControllerDeps;
     progression(): Parameters<Window["CairnTodayProgressionController"]["scheduleRxRefresh"]>[0];
     addExercise(): Parameters<Window["CairnTodayAddExerciseController"]["setupAddExercise"]>[0];
@@ -624,16 +647,23 @@ declare global {
       dependencies(): ClientTodayDependenciesContext;
     }): ClientTodayCompatibilityBridgesContext;
   };
-  type ClientTodayScreenRuntimeState = ClientAppState & Record<string, unknown> & {
-    day: number | null;
-    exModes: Record<string, string>;
-    logDate: string;
-    planJump?: string;
-    planReveal?: { date: string; on: boolean; blank?: boolean };
-  };
+  type ClientTodayScreenRuntimeState = ClientAppState &
+    Record<string, unknown> & {
+      day: number | null;
+      exModes: Record<string, string>;
+      logDate: string;
+      planJump?: string;
+      planReveal?: { date: string; on: boolean; blank?: boolean };
+    };
   type ClientTodayScreenRuntimeContext = ClientTodayCompatibilityBridgesContext & {
-    api<Path extends string>(path: Path, opts?: RequestInit & { headers?: Record<string, string> }): Promise<ClientApiResponse<Path>>;
-    cachedApi<Path extends string>(path: Path, opts?: CachedApiOptions<ClientApiResponse<Path>>): Promise<ClientApiResponse<Path>>;
+    api<Path extends string>(
+      path: Path,
+      opts?: RequestInit & { headers?: Record<string, string> }
+    ): Promise<ClientApiResponse<Path>>;
+    cachedApi<Path extends string>(
+      path: Path,
+      opts?: CachedApiOptions<ClientApiResponse<Path>>
+    ): Promise<ClientApiResponse<Path>>;
     peekCached<T = unknown>(key: string, freshFor?: number): SwrPeek<T> | null;
     deps(): ClientTodayDependenciesContext;
     planSurfaceRendererDeps(): ReturnType<ClientTodayDependenciesContext["planSurfaceRenderer"]>;
@@ -645,12 +675,19 @@ declare global {
     cardioPlanCard(item: any, index: any, matched?: any, syncLine?: string): string;
     cardioEffortMatches(item: any, effort: any): boolean;
     suggestedPlanDayNumber(session: any, isToday: boolean): Promise<number>;
-    loadBrief(date: string, override: string, opts?: { fast?: boolean }): Promise<ClientDayRead & { _provisional?: boolean; _failed?: boolean; override?: string | null }>;
+    loadBrief(
+      date: string,
+      override: string,
+      opts?: { fast?: boolean }
+    ): Promise<ClientDayRead & { _provisional?: boolean; _failed?: boolean; override?: string | null }>;
     upgradeBriefInPlace(date: string, isToday: boolean): Promise<void>;
     reshapeToday(): Promise<void>;
     briefHtml(
-      read: (Partial<ClientDayRead> & { _provisional?: unknown; _failed?: unknown; override?: unknown }) | null | undefined,
-      options: { showPlan?: unknown; showDone?: unknown; isToday?: unknown },
+      read:
+        | (Partial<ClientDayRead> & { _provisional?: unknown; _failed?: unknown; override?: unknown })
+        | null
+        | undefined,
+      options: { showPlan?: unknown; showDone?: unknown; isToday?: unknown }
     ): string;
     briefSignalsText(read: Partial<ClientDayRead> | null | undefined): string;
     revealPlanThen(after: (() => unknown) | null | undefined, opts?: { blank?: boolean }): void;
@@ -659,8 +696,14 @@ declare global {
     create(input: {
       root: HTMLElement;
       state: ClientTodayScreenRuntimeState;
-      api<Path extends string>(path: Path, opts?: RequestInit & { headers?: Record<string, string> }): Promise<ClientApiResponse<Path>>;
-      cachedApi<Path extends string>(path: Path, opts?: CachedApiOptions<ClientApiResponse<Path>>): Promise<ClientApiResponse<Path>>;
+      api<Path extends string>(
+        path: Path,
+        opts?: RequestInit & { headers?: Record<string, string> }
+      ): Promise<ClientApiResponse<Path>>;
+      cachedApi<Path extends string>(
+        path: Path,
+        opts?: CachedApiOptions<ClientApiResponse<Path>>
+      ): Promise<ClientApiResponse<Path>>;
       peekCached<T = unknown>(key: string, freshFor?: number): SwrPeek<T> | null;
       renderToday(): Promise<unknown> | unknown;
       micGlyph(): string;
@@ -707,7 +750,11 @@ declare global {
     cachedApi?(path: string, options?: { key?: string; freshFor?: number }): Promise<unknown>;
   };
 
-  type ClientHealthPictureCache = { review?: Record<string, unknown> | null; docCount?: number; newestDocAt?: string | null };
+  type ClientHealthPictureCache = {
+    review?: Record<string, unknown> | null;
+    docCount?: number;
+    newestDocAt?: string | null;
+  };
 
   type ClientSettingsDataControllerDeps = {
     root: ParentNode;
@@ -744,6 +791,7 @@ declare global {
     locationOrigin?: string;
     clipboard?: Pick<Clipboard, "writeText"> | null;
     setTimeout?: typeof setTimeout;
+    openUrl?: (url: string) => void;
   };
 
   type ClientSettingsAgentsControllerWorkingModel = {
@@ -783,12 +831,12 @@ declare global {
     pruneRoutes?(
       routes: Record<string, string>,
       routeTasks: readonly ClientSettingsRouteTask[],
-      enabledAgents: readonly ClientSettingsAgentsControllerAgent[],
+      enabledAgents: readonly ClientSettingsAgentsControllerAgent[]
     ): Record<string, string>;
     routeRowsHtml?(
       routeTasks: readonly ClientSettingsRouteTask[],
       enabledAgents: readonly ClientSettingsAgentsControllerAgent[],
-      routes: Record<string, string>,
+      routes: Record<string, string>
     ): string;
     openAgentLoginModal?(): ((agentName: string) => unknown) | undefined;
   };
@@ -804,7 +852,10 @@ declare global {
     wireSegments(): void;
     loading(message: string): string;
     empty(image: string, message: string): string;
-    hero(title: string, stats: Array<readonly [unknown, unknown] | readonly [unknown, unknown, { text?: boolean; k?: boolean }]>): string;
+    hero(
+      title: string,
+      stats: Array<readonly [unknown, unknown] | readonly [unknown, unknown, { text?: boolean; k?: boolean }]>
+    ): string;
     art(kind: string, label: string): string;
     runCountUps(root: ParentNode): void;
     renderSelf(): unknown;
@@ -820,12 +871,15 @@ declare global {
     isCurrent(token: number): boolean;
     peekCached<T = unknown>(key: string, freshFor?: number): SwrPeek<T> | null;
     paintSWR<Path extends string>(
-      options?: PaintSwrOptions<ClientApiResponse<Path>> & { path?: Path },
+      options?: PaintSwrOptions<ClientApiResponse<Path>> & { path?: Path }
     ): Promise<ClientApiResponse<Path> | undefined>;
     segmentHtml(active: ClientProgressSection): string;
     skeletonHtml(active: ClientProgressSection, cards?: number): string;
     wireSegments(): void;
-    hero(title: string, stats: Array<readonly [unknown, unknown] | readonly [unknown, unknown, { text?: boolean; k?: boolean }]>): string;
+    hero(
+      title: string,
+      stats: Array<readonly [unknown, unknown] | readonly [unknown, unknown, { text?: boolean; k?: boolean }]>
+    ): string;
     empty(image: string, message: string): string;
     art(kind: string, label: string): string;
     busy(btn: Element | null | undefined, text: string, options?: { ghost?: boolean }): () => void;
@@ -845,7 +899,7 @@ declare global {
     journeyCardHtml(
       read: ClientJourneyRead | null | undefined,
       milestones: ClientJourneyMilestone[] | unknown,
-      deps?: { stagger?(index?: number | null): string },
+      deps?: { stagger?(index?: number | null): string }
     ): string;
     wire(root?: ParentNode): void;
   };
@@ -956,7 +1010,7 @@ declare global {
         tries?: number;
         interval?: number;
         onUpdate?: (row: Record<string, unknown>) => void;
-      },
+      }
     ): unknown;
     enrichmentActive(status: unknown): boolean;
     pollToken(): number;
@@ -994,7 +1048,7 @@ declare global {
         tries?: number;
         interval?: number;
         onUpdate?: (row: Record<string, unknown>) => void;
-      },
+      }
     ): unknown;
     pollToken(): number;
     loadHealthMarkers(token: number): void;
@@ -1084,7 +1138,11 @@ declare global {
 
   type ClientAppRouterApi = {
     ROUTE_TABS: ClientTabName[];
-    routeKey(key: unknown, items: ReadonlyArray<string | readonly [string, unknown]>, fallback?: string | null): string | null;
+    routeKey(
+      key: unknown,
+      items: ReadonlyArray<string | readonly [string, unknown]>,
+      fallback?: string | null
+    ): string | null;
     applyRouteState(
       route: ClientRoute | null | undefined,
       options: {
@@ -1096,7 +1154,7 @@ declare global {
         meSections: ReadonlyArray<string | readonly [string, unknown]>;
         healthSections: ReadonlyArray<string | readonly [string, unknown]>;
         settingsSections: ReadonlyArray<string | readonly [string, unknown]>;
-      },
+      }
     ): ClientTabName;
     currentRouteState(options: {
       state: ClientAppState;
@@ -1158,7 +1216,7 @@ declare global {
   declare function dateLabel(iso: string): string;
   declare function api<Path extends string>(
     p: Path,
-    opts?: RequestInit & { headers?: Record<string, string>; acceptErrorBody?: boolean },
+    opts?: RequestInit & { headers?: Record<string, string>; acceptErrorBody?: boolean }
   ): Promise<ClientApiResponse<Path>>;
   declare function setOffline(on: unknown): void;
 
@@ -1235,27 +1293,29 @@ declare global {
   declare function peekCached<T = unknown>(key: string, freshFor?: number): SwrPeek<T> | null;
   declare function cachedApi<Path extends string>(
     path: Path,
-    options?: CachedApiOptions<ClientApiResponse<Path>>,
+    options?: CachedApiOptions<ClientApiResponse<Path>>
   ): Promise<ClientApiResponse<Path>>;
   declare function paintSWR<Path extends string>(
-    options?: PaintSwrOptions<ClientApiResponse<Path>> & { path?: Path },
+    options?: PaintSwrOptions<ClientApiResponse<Path>> & { path?: Path }
   ): Promise<ClientApiResponse<Path> | undefined>;
   declare function swrSet<T = unknown>(key: string, data: T): void;
-  declare function optimisticMutation<T = unknown, R = unknown>(options: OptimisticMutationOptions<T, R>): Promise<R | undefined>;
+  declare function optimisticMutation<T = unknown, R = unknown>(
+    options: OptimisticMutationOptions<T, R>
+  ): Promise<R | undefined>;
   declare function markRefreshing(on: unknown): void;
   declare function swrInvalidate(keyOrPrefix: string): void;
   declare function swrSweep(): void;
   declare function routeApi(): ClientRoutesApi | null;
-  declare function routeKey(key: unknown, items: ReadonlyArray<string | readonly [string, unknown]>, fallback?: string | null): string | null;
+  declare function routeKey(
+    key: unknown,
+    items: ReadonlyArray<string | readonly [string, unknown]>,
+    fallback?: string | null
+  ): string | null;
   declare function applyRouteState(route: ClientRoute | null | undefined): ClientTabName;
   declare function currentRouteState(): Partial<ClientRoute>;
   declare function activateTab(name: unknown, opts?: { replace?: boolean; syncRoute?: boolean }): void;
   declare function toast(message: string): void;
-  declare function armDelete(
-    btn: Element,
-    onConfirm: () => unknown,
-    options?: { label?: string },
-  ): void;
+  declare function armDelete(btn: Element, onConfirm: () => unknown, options?: { label?: string }): void;
   declare function mountSaveBar(options: {
     sentinel: Element | null;
     fields: Element;
@@ -1271,7 +1331,7 @@ declare global {
   declare function countUp(
     element: Element | null | undefined,
     target: unknown,
-    options?: { dur?: number; fmt?: (value: number) => string },
+    options?: { dur?: number; fmt?: (value: number) => string }
   ): void;
   declare function isStandalonePWA(): boolean;
   declare function getInstallGuidance(): { mode: string } | null;
@@ -1281,15 +1341,25 @@ declare global {
   declare function fmtShortDate(iso: unknown): string;
   declare function progressHero(
     title: unknown,
-    stats: Array<readonly [unknown, unknown] | readonly [unknown, unknown, { text?: boolean; k?: boolean }] | null | undefined | false>,
+    stats: Array<
+      | readonly [unknown, unknown]
+      | readonly [unknown, unknown, { text?: boolean; k?: boolean }]
+      | null
+      | undefined
+      | false
+    >
   ): string;
   declare function emptyStateHtml(svg: string | null | undefined, line: unknown): string;
   declare function withAlpha(hex: unknown, alpha: number): string;
-  declare function drawLineChart(canvas: HTMLCanvasElement | null | undefined, pts: Array<{ date: string; v: number }>, opts?: {
-    goal?: number | null;
-    fmt?: (value: number) => string;
-    peak?: boolean;
-  }): void;
+  declare function drawLineChart(
+    canvas: HTMLCanvasElement | null | undefined,
+    pts: Array<{ date: string; v: number }>,
+    opts?: {
+      goal?: number | null;
+      fmt?: (value: number) => string;
+      peak?: boolean;
+    }
+  ): void;
   declare function runCountUps(scope?: ParentNode | null, options?: { snap?: boolean }): void;
   declare function fmtK(value: unknown): string;
   declare function chartColors(): {
@@ -1329,7 +1399,10 @@ declare global {
   declare function loadPerformance(): Promise<void>;
   declare function pctClamp(value: unknown): number;
   declare function capacityRowHtml(capacity: ClientPerformanceStanding["capacities"][number], sexWord: string): string;
-  declare function performanceHtml(performance: ClientPerformanceStanding | null | undefined, options?: { suppressLever?: boolean }): string;
+  declare function performanceHtml(
+    performance: ClientPerformanceStanding | null | undefined,
+    options?: { suppressLever?: boolean }
+  ): string;
   declare const PADJ_KIND: Record<string, { glyph: string; cls: string }>;
   declare function loadProgramAdjustments(): Promise<void>;
   declare function programAdjustmentsHtml(rows: unknown): string;
@@ -1368,12 +1441,12 @@ declare global {
   declare function settingsPruneRoutes(
     routes: Record<string, string>,
     routeTasks: readonly ClientSettingsRouteTask[],
-    enabledAgents: readonly { name: string }[],
+    enabledAgents: readonly { name: string }[]
   ): Record<string, string>;
   declare function settingsRouteRowsHtml(
     routeTasks: readonly ClientSettingsRouteTask[],
     enabledAgents: readonly { name: string }[],
-    routes: Record<string, string>,
+    routes: Record<string, string>
   ): string;
   declare function isCardioItem(item: unknown): boolean;
   declare function cardioIntervalNote(interval: unknown): string;
@@ -1388,13 +1461,15 @@ declare global {
   declare function garminConfigured(settings: Record<string, unknown> | null | undefined): boolean;
   declare function cardioSyncLine(
     settings: Record<string, unknown> | null | undefined,
-    opts?: { expectingRun?: unknown },
+    opts?: { expectingRun?: unknown }
   ): string;
   declare function enduranceStatusWord(status: unknown): string;
   declare function enduranceBlockHtml(end: ClientProgramState["endurance"], idx: number): string;
   declare function paceTrendWord(trend: unknown): string;
   declare function zoneBarHtml(zones: unknown): string;
-  declare function enduranceBestRows(group: ClientSportBests | null | undefined): Array<{ label: string; val: string; date: string; type: string }>;
+  declare function enduranceBestRows(
+    group: ClientSportBests | null | undefined
+  ): Array<{ label: string; val: string; date: string; type: string }>;
   declare function enduranceSportCardHtml(group: ClientSportBests | null | undefined, idx: number): string;
   declare function hybridLoadCardHtml(hybrid: ClientProgramState["hybrid"], idx?: number): string;
   declare const HR_ZONE_COLORS: string[] | undefined;
@@ -1419,7 +1494,7 @@ declare global {
     goalValue: ClientEnduranceGoal | null,
     compliance: ClientRunCompliance | null,
     plan: unknown,
-    settings: Record<string, unknown> | null,
+    settings: Record<string, unknown> | null
   ): void;
   declare function gotoChatWith(text: string): void;
   declare function enduranceComposerLock(): void;
@@ -1463,9 +1538,13 @@ declare global {
   declare function paintHealthShareTab(): void;
   declare function paintHealthLearnedTab(): void;
   declare function paintHealthPicture(): void;
-  declare function getHealthPictureCache(): { review?: Record<string, unknown> | null; docCount?: number; newestDocAt?: string | null } | null;
+  declare function getHealthPictureCache(): {
+    review?: Record<string, unknown> | null;
+    docCount?: number;
+    newestDocAt?: string | null;
+  } | null;
   declare function setHealthPictureCache(
-    cache: { review?: Record<string, unknown> | null; docCount?: number; newestDocAt?: string | null } | null,
+    cache: { review?: Record<string, unknown> | null; docCount?: number; newestDocAt?: string | null } | null
   ): { review?: Record<string, unknown> | null; docCount?: number; newestDocAt?: string | null } | null;
   declare function postExerciseMode(name: string, mode: string): Promise<unknown>;
   declare function updateHeaderCondense(): void;
@@ -1498,12 +1577,12 @@ declare global {
   };
   declare function exerciseExplanationHtml(
     exercise: { name?: unknown; muscle_group?: unknown } | null | undefined,
-    explanation?: { setup?: unknown; move?: unknown; feel?: unknown; avoid?: unknown } | null,
+    explanation?: { setup?: unknown; move?: unknown; feel?: unknown; avoid?: unknown } | null
   ): string;
   declare function replaceExerciseExplanation(
     el: ParentNode,
     exercise: { name?: unknown; muscle_group?: unknown } & Record<string, unknown>,
-    explanation?: { setup?: unknown; move?: unknown; feel?: unknown; avoid?: unknown } | null,
+    explanation?: { setup?: unknown; move?: unknown; feel?: unknown; avoid?: unknown } | null
   ): void;
   declare function openFoodDetail(note: unknown, fromTile?: Element | null): Promise<void>;
   declare function wireCardioSync(root: ParentNode, onDone?: () => unknown): void;
@@ -1525,11 +1604,13 @@ declare global {
       tries?: number;
       interval?: number;
       onUpdate?: (row: ClientActivity & Record<string, unknown>) => void;
-    },
+    }
   ): Promise<(ClientActivity & Record<string, unknown>) | null>;
   declare function enrichmentActive(status: unknown): boolean;
   declare function healthKindLabel(kind: unknown): string;
-  declare function parsedDoc(doc: unknown): { markers?: Array<Record<string, unknown>>; clinical_facts?: unknown[]; type?: unknown } | null;
+  declare function parsedDoc(
+    doc: unknown
+  ): { markers?: Array<Record<string, unknown>>; clinical_facts?: unknown[]; type?: unknown } | null;
   declare function markerFlagClass(flag: unknown): string;
   declare function markersTable(parsed: unknown): string;
   declare function docCollapsible(doc: unknown): boolean;
@@ -1538,7 +1619,11 @@ declare global {
   declare function actArtText(activity: ClientActivity & Record<string, unknown>): string;
   declare function actEntryHtml(activity: ClientActivity & Record<string, unknown>): string;
   declare function updateActEntry(el: Element, row: ClientActivity & Record<string, unknown>): void;
-  declare function runOp(kind: string, body: Record<string, unknown>, options?: ClientAgentOpHandlers): Promise<unknown>;
+  declare function runOp(
+    kind: string,
+    body: Record<string, unknown>,
+    options?: ClientAgentOpHandlers
+  ): Promise<unknown>;
   declare function collapseEl(el: Element, done?: () => void): void;
   declare function expandEl(el: Element): void;
   declare function registerJobReconnector(kind: string, factory: (job?: unknown) => unknown): void;
@@ -1583,7 +1668,9 @@ declare global {
     api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
     toast(message: string): void;
     appendMsg(message: Partial<ChatComposerControllerMessage>): HTMLElement | null;
-    rememberFuelContext(...messages: Array<Partial<ChatComposerControllerMessage> | null | undefined>): ChatComposerControllerMessage[];
+    rememberFuelContext(
+      ...messages: Array<Partial<ChatComposerControllerMessage> | null | undefined>
+    ): ChatComposerControllerMessage[];
     loadFuel(token: number, messages?: Partial<ChatComposerControllerMessage>[]): Promise<void>;
     saveDraft(value: string): void;
     loadDraft(): string;
@@ -1600,7 +1687,11 @@ declare global {
     defaultProgressSeg(): string;
     registerTabBarHandlers(): void;
     routeApi(): ClientRoutesApi | null;
-    routeKey(key: unknown, items: ReadonlyArray<string | readonly [string, unknown]>, fallback?: string | null): string | null;
+    routeKey(
+      key: unknown,
+      items: ReadonlyArray<string | readonly [string, unknown]>,
+      fallback?: string | null
+    ): string | null;
     syncRouteFromState(mode?: "push" | "replace"): void;
     switchTab(tab: unknown, opts?: { replace?: boolean; syncRoute?: boolean }): void;
     renderTab(tab: string): unknown;
@@ -1640,7 +1731,7 @@ declare global {
       userMessageSuggestsFood(message: Partial<ClientChatMessage> | null | undefined): boolean;
       wantsFuelSurface(
         messages: Partial<ClientChatMessage>[] | null | undefined,
-        options: { todayISO: string; dayISO(timestamp: unknown): string },
+        options: { todayISO: string; dayISO(timestamp: unknown): string }
       ): boolean;
       fuelHtml(day: ClientDayIntake | null | undefined): string;
       highlightTerm(text: unknown, query: unknown): string;
@@ -1662,11 +1753,7 @@ declare global {
         fileInput: HTMLInputElement;
         isSoftKeyboard(): boolean;
       }): void;
-      settleAfterNativePicker(options: {
-        isActive(): boolean;
-        measure(): void;
-        graceMs?: number;
-      }): void;
+      settleAfterNativePicker(options: { isActive(): boolean; measure(): void; graceMs?: number }): void;
     };
 
     CairnChatComposerFocus: {
@@ -1683,10 +1770,7 @@ declare global {
         isSoftKeyboard(): boolean;
         measure(): void;
       }): void;
-      settleViewport(options: {
-        isActive(): boolean;
-        measure(): void;
-      }): void;
+      settleViewport(options: { isActive(): boolean; measure(): void }): void;
       wireFocus(options: {
         input: HTMLTextAreaElement | HTMLInputElement;
         isActive(): boolean;
@@ -1711,11 +1795,16 @@ declare global {
       event(event: Event): Record<string, unknown> | null;
       id(value: unknown): number | null;
       loadDraft(): string;
-      phaseCaption(turn: (Record<string, unknown> & {
-        status?: string;
-        phase?: string | null;
-        image_url?: string | null;
-      }) | null | undefined): string;
+      phaseCaption(
+        turn:
+          | (Record<string, unknown> & {
+              status?: string;
+              phase?: string | null;
+              image_url?: string | null;
+            })
+          | null
+          | undefined
+      ): string;
       record(value: unknown): Record<string, unknown>;
       rows(value: unknown): Array<Record<string, unknown> & { id: number }>;
       saveDraft(value: string): void;
@@ -1757,7 +1846,7 @@ declare global {
           currentToken(): number;
           currentTab(): string | undefined;
           openFoodReview(): void;
-        },
+        }
       ): Promise<void>;
     };
 
@@ -1774,23 +1863,31 @@ declare global {
       };
       explanationHtml(
         exercise: { name?: unknown; muscle_group?: unknown } | null | undefined,
-        explanation?: { setup?: unknown; move?: unknown; feel?: unknown; avoid?: unknown } | null,
+        explanation?: { setup?: unknown; move?: unknown; feel?: unknown; avoid?: unknown } | null
       ): string;
-      validExplanationPayload(payload: {
-        ok?: unknown;
-        explanation?: { setup?: unknown; move?: unknown; feel?: unknown; avoid?: unknown } | null;
-      } | null | undefined): boolean;
+      validExplanationPayload(
+        payload:
+          | {
+              ok?: unknown;
+              explanation?: { setup?: unknown; move?: unknown; feel?: unknown; avoid?: unknown } | null;
+            }
+          | null
+          | undefined
+      ): boolean;
     };
 
     CairnExerciseDetailData: {
       number(value: unknown, fallback?: number): number;
       record(value: unknown): Record<string, unknown>;
       rows<T extends Record<string, unknown> = Record<string, unknown>>(value: unknown): T[];
-      view(row: Record<string, unknown>, deps: {
-        escapeHtml(value: unknown): string;
-        fmtDur(seconds: unknown): string;
-        fmtWeight(weight: unknown): string;
-      }): {
+      view(
+        row: Record<string, unknown>,
+        deps: {
+          escapeHtml(value: unknown): string;
+          fmtDur(seconds: unknown): string;
+          fmtWeight(weight: unknown): string;
+        }
+      ): {
         timed: boolean;
         heroVal: number;
         heroLbl: string;
@@ -1805,33 +1902,37 @@ declare global {
     CairnExerciseDetailExplanation: {
       exerciseExplanation(
         exercise: { name?: unknown; muscle_group?: unknown } | null | undefined,
-        deps: ExerciseDetailControllerDeps,
+        deps: ExerciseDetailControllerDeps
       ): { setup?: unknown; move?: unknown; feel?: unknown; avoid?: unknown };
       exerciseExplanationHtml(
         exercise: { name?: unknown; muscle_group?: unknown } | null | undefined,
         explanation: { setup?: unknown; move?: unknown; feel?: unknown; avoid?: unknown } | null | undefined,
-        deps: ExerciseDetailControllerDeps,
+        deps: ExerciseDetailControllerDeps
       ): string;
       hydrateExerciseExplanation(
         el: ParentNode,
         exercise: { name?: unknown; muscle_group?: unknown } & Record<string, unknown>,
-        deps: ExerciseDetailControllerDeps,
+        deps: ExerciseDetailControllerDeps
       ): Promise<void>;
       replaceExerciseExplanation(
         el: ParentNode,
         exercise: { name?: unknown; muscle_group?: unknown } & Record<string, unknown>,
         explanation: { setup?: unknown; move?: unknown; feel?: unknown; avoid?: unknown } | null | undefined,
-        deps: ExerciseDetailControllerDeps,
+        deps: ExerciseDetailControllerDeps
       ): void;
       validExerciseExplanationPayload(value: unknown, deps: ExerciseDetailControllerDeps): boolean;
     };
 
     CairnExerciseDetailRender: {
-      missingHtml(name: string, svg: string, deps: {
-        artImg(kind: string, query: unknown, className?: string, svg?: string | null): string;
-        escapeHtml(value: unknown): string;
-        sparklineSvg(values: unknown, width?: number, height?: number): string;
-      }): string;
+      missingHtml(
+        name: string,
+        svg: string,
+        deps: {
+          artImg(kind: string, query: unknown, className?: string, svg?: string | null): string;
+          escapeHtml(value: unknown): string;
+          sparklineSvg(values: unknown, width?: number, height?: number): string;
+        }
+      ): string;
       modalHtml(
         row: Record<string, unknown>,
         fallbackName: string,
@@ -1851,7 +1952,7 @@ declare global {
           artImg(kind: string, query: unknown, className?: string, svg?: string | null): string;
           escapeHtml(value: unknown): string;
           sparklineSvg(values: unknown, width?: number, height?: number): string;
-        },
+        }
       ): string;
     };
 
@@ -1861,58 +1962,60 @@ declare global {
         row: { name?: string } & Record<string, unknown>,
         fallbackName: string,
         timed: boolean,
-        deps: ExerciseDetailControllerDeps,
+        deps: ExerciseDetailControllerDeps
       ): void;
     };
 
     CairnExerciseDetailController: {
       exerciseExplanation(
         exercise: { name?: unknown; muscle_group?: unknown } | null | undefined,
-        deps: ExerciseDetailControllerDeps,
+        deps: ExerciseDetailControllerDeps
       ): { setup?: unknown; move?: unknown; feel?: unknown; avoid?: unknown };
       exerciseExplanationHtml(
         exercise: { name?: unknown; muscle_group?: unknown } | null | undefined,
         explanation: { setup?: unknown; move?: unknown; feel?: unknown; avoid?: unknown } | null | undefined,
-        deps: ExerciseDetailControllerDeps,
+        deps: ExerciseDetailControllerDeps
       ): string;
       hydrateExerciseExplanation(
         el: ParentNode,
         exercise: { name?: unknown; muscle_group?: unknown } & Record<string, unknown>,
-        deps: ExerciseDetailControllerDeps,
+        deps: ExerciseDetailControllerDeps
       ): Promise<void>;
-      openExerciseModal(nameInput: unknown, fromTile: Element | null | undefined, deps: ExerciseDetailControllerDeps): Promise<void>;
+      openExerciseModal(
+        nameInput: unknown,
+        fromTile: Element | null | undefined,
+        deps: ExerciseDetailControllerDeps
+      ): Promise<void>;
       replaceExerciseExplanation(
         el: ParentNode,
         exercise: { name?: unknown; muscle_group?: unknown } & Record<string, unknown>,
         explanation: { setup?: unknown; move?: unknown; feel?: unknown; avoid?: unknown } | null | undefined,
-        deps: ExerciseDetailControllerDeps,
+        deps: ExerciseDetailControllerDeps
       ): void;
       wireGuides(scope: ParentNode | null | undefined, deps: ExerciseDetailControllerDeps): void;
     };
 
     CairnUi: {
       attrsHtml(attrs: Record<string, unknown> | null | undefined): string;
-      actionButtonHtml(action: {
-        id?: string;
-        label: unknown;
-        className?: string;
-        attrs?: Record<string, unknown>;
-      } | null | undefined): string;
+      actionButtonHtml(
+        action:
+          | {
+              id?: string;
+              label: unknown;
+              className?: string;
+              attrs?: Record<string, unknown>;
+            }
+          | null
+          | undefined
+      ): string;
       textChipHtml(options: {
         label: unknown;
         className?: string;
         title?: unknown;
         attrs?: Record<string, unknown>;
       }): string;
-      loadingStateHtml(options: {
-        label: unknown;
-        className?: string;
-        live?: boolean;
-      }): string;
-      segmentedNavHtml(options: {
-        active: unknown;
-        items: ReadonlyArray<readonly [unknown, unknown]>;
-      }): string;
+      loadingStateHtml(options: { label: unknown; className?: string; live?: boolean }): string;
+      segmentedNavHtml(options: { active: unknown; items: ReadonlyArray<readonly [unknown, unknown]> }): string;
       jobCaptionHtml(options?: {
         text?: unknown;
         className?: string;
@@ -1960,15 +2063,11 @@ declare global {
     CairnUiFeedback: {
       stagger(index?: number | null): string;
       reducedMotion(): boolean;
-      btnBusy(
-        btn: Element | null | undefined,
-        label?: unknown,
-        options?: { ghost?: boolean },
-      ): () => void;
+      btnBusy(btn: Element | null | undefined, label?: unknown, options?: { ghost?: boolean }): () => void;
       countUp(
         element: Element | null | undefined,
         target: unknown,
-        options?: { dur?: number; fmt?: (value: number) => string },
+        options?: { dur?: number; fmt?: (value: number) => string }
       ): void;
       fmtK(value: unknown): string;
       runCountUps(scope?: ParentNode | null, options?: { snap?: boolean }): void;
@@ -1982,11 +2081,7 @@ declare global {
 
     CairnUiActions: {
       toast(message: unknown, options?: { action?: string; onAction?: () => void }): void;
-      armDelete(
-        btn: Element | null | undefined,
-        onConfirm: () => unknown,
-        options?: { label?: string },
-      ): void;
+      armDelete(btn: Element | null | undefined, onConfirm: () => unknown, options?: { label?: string }): void;
     };
 
     CairnUiHeader: {
@@ -2004,10 +2099,7 @@ declare global {
     };
 
     CairnUiViewTransitions: {
-      create(deps: {
-        view: HTMLElement;
-        reducedMotion(): boolean;
-      }): {
+      create(deps: { view: HTMLElement; reducedMotion(): boolean }): {
         viewEnter(): void;
         withViewTransition(fn: () => unknown): Promise<unknown>;
         skelSwap(fn: () => unknown): Promise<unknown>;
@@ -2033,7 +2125,9 @@ declare global {
       evidenceSafeUrl(value: unknown): string | null;
       truncateEvidenceBody(text: unknown): string;
       evidenceListHtml(evidence: unknown): string;
-      evidenceCountMap(summary: { by_marker?: Array<{ marker?: unknown; count?: unknown }> } | null | undefined): Map<string, number>;
+      evidenceCountMap(
+        summary: { by_marker?: Array<{ marker?: unknown; count?: unknown }> } | null | undefined
+      ): Map<string, number>;
       directiveHtml(
         directive: {
           id?: unknown;
@@ -2044,7 +2138,7 @@ declare global {
           rationale?: unknown;
         },
         index?: number,
-        evidenceMap?: Map<string, number> | null,
+        evidenceMap?: Map<string, number> | null
       ): string;
     };
 
@@ -2055,29 +2149,38 @@ declare global {
       lipidRank(name: unknown): number;
       lipidSubgroup(name: unknown): string | null;
       markerSubgroup(groupKey: unknown, name: unknown): string | null;
-      orderMarkersForDisplay<T extends { name?: unknown; key?: unknown }>(groupKey: unknown, list: T[] | null | undefined): T[];
+      orderMarkersForDisplay<T extends { name?: unknown; key?: unknown }>(
+        groupKey: unknown,
+        list: T[] | null | undefined
+      ): T[];
       lipidGroupNoteHtml(
         list: Array<{ name?: unknown; key?: unknown; latest?: { date?: unknown } | null }> | null | undefined,
-        options?: { relAge?: (date: string) => string },
+        options?: { relAge?: (date: string) => string }
       ): string;
     };
 
-    CairnHealthClient: Window["CairnHealthEvidence"] & Window["CairnHealthMarkerOrder"] & {
-      MAX_DOC_BYTES: number;
-      MAX_DOC_TEXT: number;
-      H_FILE_PROMPT: string;
-      HEALTH_HERO_ART: string;
-      askCoach(question: unknown): void;
-      guessUploadMime(file: { type?: unknown; name?: unknown } | null | undefined): string;
-      markersEmptyHtml(heroArt?: string): string;
-      formatMarkerNumber(value: unknown): string;
-      sparkDateLabel(value: unknown): string;
-      markerSpanWord(days: unknown): string;
-      markerTrendWord(marker: {
-        trend?: { dir?: unknown; span_days?: unknown } | null;
-        points?: Array<{ value?: unknown; date?: unknown }> | null;
-      } | null | undefined): string;
-    };
+    CairnHealthClient: Window["CairnHealthEvidence"] &
+      Window["CairnHealthMarkerOrder"] & {
+        MAX_DOC_BYTES: number;
+        MAX_DOC_TEXT: number;
+        H_FILE_PROMPT: string;
+        HEALTH_HERO_ART: string;
+        askCoach(question: unknown): void;
+        guessUploadMime(file: { type?: unknown; name?: unknown } | null | undefined): string;
+        markersEmptyHtml(heroArt?: string): string;
+        formatMarkerNumber(value: unknown): string;
+        sparkDateLabel(value: unknown): string;
+        markerSpanWord(days: unknown): string;
+        markerTrendWord(
+          marker:
+            | {
+                trend?: { dir?: unknown; span_days?: unknown } | null;
+                points?: Array<{ value?: unknown; date?: unknown }> | null;
+              }
+            | null
+            | undefined
+        ): string;
+      };
 
     CairnHealthPicture: {
       parsedReview(review: { parsed?: unknown; error?: unknown } | null | undefined): Record<string, unknown> | null;
@@ -2088,7 +2191,7 @@ declare global {
       reviewHtml(
         review: { parsed?: unknown; error?: unknown; created_at?: unknown; agent?: unknown },
         stale: unknown,
-        errorHtml: unknown,
+        errorHtml: unknown
       ): string;
     };
 
@@ -2100,16 +2203,25 @@ declare global {
       paintHealthPicture(deps: ClientHealthPictureControllerDeps): void;
       runHealthReview(deps: ClientHealthPictureControllerDeps): Promise<void>;
       reconnectHealthReview(deps: ClientHealthPictureControllerDeps): ClientAgentOpHandlers | null;
-      loadHealthPicture(token: number, docsPromise: Promise<unknown>, deps: ClientHealthPictureControllerDeps): Promise<void>;
+      loadHealthPicture(
+        token: number,
+        docsPromise: Promise<unknown>,
+        deps: ClientHealthPictureControllerDeps
+      ): Promise<void>;
     };
 
     CairnHealthMarkers: {
       formatMarkerNumber(value: unknown): string;
       sparkDateLabel(value: unknown): string;
-      markerTrendWord(marker: {
-        trend?: { dir?: unknown; span_days?: unknown } | null;
-        points?: Array<{ value?: unknown; date?: unknown }> | null;
-      } | null | undefined): string;
+      markerTrendWord(
+        marker:
+          | {
+              trend?: { dir?: unknown; span_days?: unknown } | null;
+              points?: Array<{ value?: unknown; date?: unknown }> | null;
+            }
+          | null
+          | undefined
+      ): string;
       markerSpanWord(days: unknown): string;
       optimalPhrase(marker: Record<string, unknown> | null | undefined): string;
       optimalSideWord(marker: Record<string, unknown> | null | undefined): string;
@@ -2132,14 +2244,22 @@ declare global {
 
     CairnHealthDirectives: {
       activeDirectives(rows: unknown): Array<Record<string, unknown>>;
-      evidenceCountMap(summary: { by_marker?: Array<{ marker?: unknown; count?: unknown }> } | null | undefined): Map<string, number>;
+      evidenceCountMap(
+        summary: { by_marker?: Array<{ marker?: unknown; count?: unknown }> } | null | undefined
+      ): Map<string, number>;
       directiveResearchNudgeHtml(
         active: Array<Record<string, unknown>>,
         evidenceMap: Map<string, number>,
-        summary: { research_enabled?: unknown } | null | undefined,
+        summary: { research_enabled?: unknown } | null | undefined
       ): string;
       directivesEmptyHtml(): string;
-      directivesSectionHtml(rows: unknown, evSummary: { research_enabled?: unknown; by_marker?: Array<{ marker?: unknown; count?: unknown }> } | null | undefined): string;
+      directivesSectionHtml(
+        rows: unknown,
+        evSummary:
+          | { research_enabled?: unknown; by_marker?: Array<{ marker?: unknown; count?: unknown }> }
+          | null
+          | undefined
+      ): string;
     };
 
     CairnHealthDirectiveLoader: {
@@ -2149,7 +2269,10 @@ declare global {
     CairnHealthStandingPrimitives: ClientHealthStandingPrimitivesApi;
 
     CairnHealthStanding: ClientHealthStandingPrimitivesApi & {
-      renderHealthStandingHtml(data: ClientHealthStanding | null | undefined, options?: { referenceAge?: unknown }): string;
+      renderHealthStandingHtml(
+        data: ClientHealthStanding | null | undefined,
+        options?: { referenceAge?: unknown }
+      ): string;
     };
 
     CairnHealthStandingController: {
@@ -2173,7 +2296,10 @@ declare global {
       recoveryNoDataHtml(message?: string): string;
       recoveryLineHtml(text: unknown, sub: unknown): string;
       recoveryHtml(summary: Record<string, unknown> | null | undefined): string;
-      optimalPhrase(marker: Record<string, unknown> | null | undefined): { word: string; tone: "ok" | "warn" | "watch" };
+      optimalPhrase(marker: Record<string, unknown> | null | undefined): {
+        word: string;
+        tone: "ok" | "warn" | "watch";
+      };
       priorityMarkerHtml(marker: Record<string, unknown> | null | undefined, index: number): string;
       priorityMarkersSectionHtml(markers: unknown): string;
     };
@@ -2219,13 +2345,16 @@ declare global {
 
     CairnMeHealthLogRenderer: {
       healthLogRows<T extends Record<string, unknown> = Record<string, unknown>>(value: unknown): T[];
-      wireNoteCard(el: Element, deps: {
-        state: Pick<ClientAppState, "_notesById">;
-        select<T extends Element = Element>(selector: string): T | null;
-        noteEntryHtml(note: Record<string, unknown>, index?: number): string;
-        activityEntryHtml(activity: ClientActivity & Record<string, unknown>): string;
-        openFoodDetail(note: unknown, fromTile?: Element | null): unknown;
-      }): void;
+      wireNoteCard(
+        el: Element,
+        deps: {
+          state: Pick<ClientAppState, "_notesById">;
+          select<T extends Element = Element>(selector: string): T | null;
+          noteEntryHtml(note: Record<string, unknown>, index?: number): string;
+          activityEntryHtml(activity: ClientActivity & Record<string, unknown>): string;
+          openFoodDetail(note: unknown, fromTile?: Element | null): unknown;
+        }
+      ): void;
       renderNotes(notes: unknown, deps: Parameters<Window["CairnMeHealthLogRenderer"]["wireNoteCard"]>[1]): void;
       renderActs(activities: unknown, deps: Parameters<Window["CairnMeHealthLogRenderer"]["wireNoteCard"]>[1]): void;
     };
@@ -2237,12 +2366,20 @@ declare global {
       normalizeHealthSeg(seg: unknown): ClientHealthSection;
       renderHealth(deps: ClientMeHealthTabsControllerDeps): Promise<void>;
       setHealthSegActive(seg: ClientHealthSection, deps: ClientMeHealthTabsControllerDeps): void;
-      switchHealthSeg(seg: ClientHealthSection, deps: ClientMeHealthTabsControllerDeps, opts?: { openPicker?: boolean }): void;
+      switchHealthSeg(
+        seg: ClientHealthSection,
+        deps: ClientMeHealthTabsControllerDeps,
+        opts?: { openPicker?: boolean }
+      ): void;
       paintHealthTab(deps: ClientMeHealthTabsControllerDeps): void;
     };
 
     CairnFoodDetailController: {
-      openFoodDetail(note: unknown, fromTile: Element | null | undefined, deps: FoodDetailControllerDeps): Promise<void>;
+      openFoodDetail(
+        note: unknown,
+        fromTile: Element | null | undefined,
+        deps: FoodDetailControllerDeps
+      ): Promise<void>;
     };
 
     CairnMeProfileForm: {
@@ -2253,7 +2390,7 @@ declare global {
         deps: MeProfileControllerDeps,
         profile: MeProfileProfile,
         goal: MeProfileGoalCheck,
-        context: MeProfileFormContext,
+        context: MeProfileFormContext
       ): string;
       unitPref(): "in" | "cm";
       setUnitPref(unit: "in" | "cm"): void;
@@ -2288,13 +2425,20 @@ declare global {
       dayNumber(day: Record<string, unknown>): number;
       datasetNumber(el: HTMLElement, key: string): number;
       datasetPair(value: string | undefined): [number, number];
-      syncModel(model: Array<Record<string, unknown> & { items: Array<Record<string, unknown>> }>, root: ParentNode): void;
-      serializeDays(model: Array<Record<string, unknown> & { items: Array<Record<string, unknown>> }>): Array<Record<string, unknown>>;
+      syncModel(
+        model: Array<Record<string, unknown> & { items: Array<Record<string, unknown>> }>,
+        root: ParentNode
+      ): void;
+      serializeDays(
+        model: Array<Record<string, unknown> & { items: Array<Record<string, unknown>> }>
+      ): Array<Record<string, unknown>>;
     };
 
     CairnPlanEditorController: {
       render(): Promise<void>;
-      serializeDays(model: Array<{ day_number?: unknown; name?: unknown; focus?: unknown; items: Array<Record<string, unknown>> }>): Array<Record<string, unknown>>;
+      serializeDays(
+        model: Array<{ day_number?: unknown; name?: unknown; focus?: unknown; items: Array<Record<string, unknown>> }>
+      ): Array<Record<string, unknown>>;
     };
 
     CairnDayFuel: {
@@ -2311,7 +2455,7 @@ declare global {
           isCurrent?: (token: number) => boolean;
           onRerender?: () => unknown;
           onAsk?: () => unknown;
-        },
+        }
       ): Promise<void>;
       openFoodEdit(
         id: number,
@@ -2321,7 +2465,7 @@ declare global {
           isCurrent?: (token: number) => boolean;
           onRerender?: () => unknown;
           onAsk?: () => unknown;
-        },
+        }
       ): void;
     };
 
@@ -2344,11 +2488,19 @@ declare global {
       mealPlanEmptyHtml(mealPrefs: unknown): string;
       mealPlanHeroHtml(plan: unknown, verified?: unknown): string;
       mealShoppingHtml(shopping: unknown, checkedShopping: unknown, revealIndex: number): string;
-      mealPlannerBodyHtml(current: unknown, mealPrefs: unknown, options?: { checkedShopping?: unknown; verified?: unknown; now?: unknown; upcoming?: unknown }): {
+      mealPlannerBodyHtml(
+        current: unknown,
+        mealPrefs: unknown,
+        options?: { checkedShopping?: unknown; verified?: unknown; now?: unknown; upcoming?: unknown }
+      ): {
         html: string;
         context: { weekOf: string; targetKcal: number; todayName: string } | null;
       };
-      mealDayHtml(day: unknown, dayIndex: number, context: { weekOf?: unknown; targetKcal?: unknown; todayName?: unknown }): string;
+      mealDayHtml(
+        day: unknown,
+        dayIndex: number,
+        context: { weekOf?: unknown; targetKcal?: unknown; todayName?: unknown }
+      ): string;
     };
 
     CairnMealPlannerController: {
@@ -2366,14 +2518,14 @@ declare global {
         },
         statusSelector: string,
         buttonSelector: string | null,
-        ghost: boolean,
+        ghost: boolean
       ): ClientAgentOpHandlers | null;
       renderMealPlans(plans: unknown, selector?: string, refresh?: (() => unknown) | null): void;
       runCoachMealPlan(agent: string, instruction: string): void;
       verifiedForPlan(id: unknown): unknown;
       wireMealPlannerBody(
         currentPlan: (Record<string, unknown> & { id: string | number }) | null,
-        context: { weekOf?: unknown; targetKcal?: unknown; todayName?: unknown } | null,
+        context: { weekOf?: unknown; targetKcal?: unknown; todayName?: unknown } | null
       ): void;
     };
 
@@ -2417,7 +2569,7 @@ declare global {
         },
         statusSelector: string,
         buttonSelector: string | null,
-        ghost: boolean,
+        ghost: boolean
       ): ClientAgentOpHandlers | null;
       reconnectMealPlan(job?: unknown): ClientAgentOpHandlers | null;
     };
@@ -2428,7 +2580,7 @@ declare global {
       wireShoppingChips(currentPlan: Record<string, unknown> & { id: string | number }): void;
       wireMealPlannerBody(
         currentPlan: (Record<string, unknown> & { id: string | number }) | null,
-        context: { weekOf?: unknown; targetKcal?: unknown; todayName?: unknown } | null,
+        context: { weekOf?: unknown; targetKcal?: unknown; todayName?: unknown } | null
       ): void;
     };
 
@@ -2454,7 +2606,7 @@ declare global {
         current: Record<string, unknown> & { id: string | number },
         context: { weekOf?: unknown; targetKcal?: unknown; todayName?: unknown } | null,
         dayIndex: number,
-        mealIndex: number,
+        mealIndex: number
       ): ClientAgentOpHandlers & {
         path: string;
         anchor: string;
@@ -2469,7 +2621,7 @@ declare global {
         context: { weekOf?: unknown; targetKcal?: unknown; todayName?: unknown } | null,
         dayIndex: number,
         mealIndex: number,
-        direction: number,
+        direction: number
       ): Promise<void>;
       reconnectMealSwap(job?: unknown): ClientAgentOpHandlers | null;
       submitMealSwap(
@@ -2477,12 +2629,12 @@ declare global {
         context: { weekOf?: unknown; targetKcal?: unknown; todayName?: unknown } | null,
         dayIndex: number,
         mealIndex: number,
-        panel: HTMLElement,
+        panel: HTMLElement
       ): Promise<void>;
       wireMealRows(
         scope: ParentNode,
         current: Record<string, unknown> & { id: string | number },
-        context: { weekOf?: unknown; targetKcal?: unknown; todayName?: unknown } | null,
+        context: { weekOf?: unknown; targetKcal?: unknown; todayName?: unknown } | null
       ): void;
     };
 
@@ -2496,13 +2648,17 @@ declare global {
 
     CairnMealRecipeController: {
       closeMealSheet(instant?: boolean): void;
-      openMealSheet(current: Record<string, unknown> & { id: string | number }, dayIndex: number, mealIndex: number): void;
+      openMealSheet(
+        current: Record<string, unknown> & { id: string | number },
+        dayIndex: number,
+        mealIndex: number
+      ): void;
       recipeOpOpts(
         current: Record<string, unknown> & { id: string | number },
         dayLabel: string,
         dayIndex: number,
         mealIndex: number,
-        key: string | undefined,
+        key: string | undefined
       ): ClientAgentOpHandlers;
       reconnectRecipe(job?: unknown): ClientAgentOpHandlers | null;
     };
@@ -2572,7 +2728,7 @@ declare global {
       lifeEventHtml(
         event: Record<string, unknown>,
         index: number | undefined,
-        impactsById?: Record<string, Record<string, unknown>>,
+        impactsById?: Record<string, Record<string, unknown>>
       ): string;
     };
 
@@ -2606,7 +2762,9 @@ declare global {
 
     CairnHealthDocs: {
       healthKindLabel(kind: unknown): string;
-      parsedDoc(doc: unknown): { markers?: Array<Record<string, unknown>>; clinical_facts?: unknown[]; type?: unknown } | null;
+      parsedDoc(
+        doc: unknown
+      ): { markers?: Array<Record<string, unknown>>; clinical_facts?: unknown[]; type?: unknown } | null;
       markerFlagClass(flag: unknown): string;
       markersTable(parsed: unknown): string;
       docCollapsible(doc: unknown): boolean;
@@ -2714,10 +2872,7 @@ declare global {
       settingsData(value: unknown): SettingsScreenData;
       workingModel(data: SettingsScreenData): SettingsScreenWorkingModel;
       routeEligible(data: SettingsScreenData): { eligible?: boolean; reason?: string } | null;
-      statusHelpers(options?: {
-        relTime?: (value: string) => string;
-        absDate?: (value: string) => string;
-      }): {
+      statusHelpers(options?: { relTime?: (value: string) => string; absDate?: (value: string) => string }): {
         garminStatusLine(settings: unknown, syncing: boolean): string;
         agentHealthCard(stats: unknown): string;
         agentOpLabel(op: unknown): string;
@@ -2730,6 +2885,18 @@ declare global {
         workingModel: Pick<SettingsScreenWorkingModel, "garmin_username">;
         settings: Record<string, unknown>;
         garminStatusHtml: string;
+        appleHealth?: {
+          loading?: boolean;
+          error?: string | null;
+          config?: Record<string, unknown> | null;
+          connections?: Array<Record<string, unknown>>;
+        };
+      }): string;
+      appleHealthCardHtml(state: {
+        loading?: boolean;
+        error?: string | null;
+        config?: Record<string, unknown> | null;
+        connections?: Array<Record<string, unknown>>;
       }): string;
       automationSliceHtml(options: {
         workingModel: Pick<
@@ -2760,7 +2927,9 @@ declare global {
     };
 
     CairnSettingsSourcesAutomationController: {
-      renderSources(deps: ClientSettingsSourcesAutomationControllerDeps): void;
+      appleHealthShortcutRecipe(origin: string): string;
+      appleHealthRunLink(shortcutName: string, origin: string, pairingCode: string): string;
+      renderSources(deps: ClientSettingsSourcesAutomationControllerDeps): Promise<void>;
       renderAutomation(deps: ClientSettingsSourcesAutomationControllerDeps): void;
     };
 
@@ -2825,27 +2994,38 @@ declare global {
       fmtShortDate(iso: unknown): string;
       progressHero(
         title: unknown,
-        stats: Array<readonly [unknown, unknown] | readonly [unknown, unknown, { text?: boolean; k?: boolean }] | null | undefined | false>,
+        stats: Array<
+          | readonly [unknown, unknown]
+          | readonly [unknown, unknown, { text?: boolean; k?: boolean }]
+          | null
+          | undefined
+          | false
+        >
       ): string;
       emptyStateHtml(svg: string | null | undefined, line: unknown): string;
     };
 
     CairnProgressLineChartModel: {
-      buildModel(pts: ProgressChartPoint[] | null | undefined, options: {
-        width: number;
-        height: number;
-        goal?: number | null;
-        padding?: Partial<{ left: number; right: number; top: number; bottom: number }> | null;
-      }): ProgressLineChartModel | null;
+      buildModel(
+        pts: ProgressChartPoint[] | null | undefined,
+        options: {
+          width: number;
+          height: number;
+          goal?: number | null;
+          padding?: Partial<{ left: number; right: number; top: number; bottom: number }> | null;
+        }
+      ): ProgressLineChartModel | null;
       nearestIndex(axis: readonly number[] | null | undefined, pixelX: number): number | null;
     };
 
     CairnProgressChartScrub: {
-      wire(canvas: HTMLCanvasElement & {
-        _chartXs?: number[];
-        _setTarget?: (idx: number | null, scrubbing: boolean) => void;
-        _scrubWired?: boolean;
-      }): void;
+      wire(
+        canvas: HTMLCanvasElement & {
+          _chartXs?: number[];
+          _setTarget?: (idx: number | null, scrubbing: boolean) => void;
+          _scrubWired?: boolean;
+        }
+      ): void;
     };
 
     CairnProgressChartDrawing: {
@@ -2859,14 +3039,18 @@ declare global {
         options: ProgressLineChartOptions,
         colors: ProgressChartPalette,
         width: number,
-        height: number,
+        height: number
       ): void;
       drawHighlight(ctx: CanvasRenderingContext2D, args: ProgressChartHighlightOptions): void;
     };
 
     CairnProgressChart: {
       withAlpha(hex: unknown, alpha: number): string;
-      drawLineChart(canvas: HTMLCanvasElement | null | undefined, pts: ProgressChartPoint[], opts?: ProgressLineChartOptions): void;
+      drawLineChart(
+        canvas: HTMLCanvasElement | null | undefined,
+        pts: ProgressChartPoint[],
+        opts?: ProgressLineChartOptions
+      ): void;
       chartColors(): ProgressChartPalette;
     };
 
@@ -2958,7 +3142,10 @@ declare global {
       loadPerformance(): Promise<void>;
       pctClamp(value: unknown): number;
       capacityRowHtml(capacity: ClientPerformanceStanding["capacities"][number], sexWord: string): string;
-      performanceHtml(performance: ClientPerformanceStanding | null | undefined, options?: { suppressLever?: boolean }): string;
+      performanceHtml(
+        performance: ClientPerformanceStanding | null | undefined,
+        options?: { suppressLever?: boolean }
+      ): string;
     };
 
     CairnProgressFocus: {
@@ -3014,7 +3201,10 @@ declare global {
     CairnCoachingFocus: {
       CFOCUS_DOMAIN_LABEL: Record<string, string>;
       cfocusDomainTag(domain: unknown): string;
-      coachingFocusCardHtml(focus: ClientCoachingFocus | null | undefined, options?: { blockLine?: boolean; actions?: boolean }): string;
+      coachingFocusCardHtml(
+        focus: ClientCoachingFocus | null | undefined,
+        options?: { blockLine?: boolean; actions?: boolean }
+      ): string;
       coachingFocusCompactHtml(focus: ClientCoachingFocus | null | undefined): string;
       loadCoachingFocus(slotSelector: string, root?: ParentNode | null): Promise<void>;
       coachingFocusThreadHtml(focus: ClientCoachingFocus | null | undefined): string;
@@ -3046,7 +3236,9 @@ declare global {
       enduranceBlockHtml(end: ClientProgramState["endurance"], idx: number): string;
       paceTrendWord(trend: unknown): string;
       zoneBarHtml(zones: unknown): string;
-      enduranceBestRows(group: ClientSportBests | null | undefined): Array<{ label: string; val: string; date: string; type: string }>;
+      enduranceBestRows(
+        group: ClientSportBests | null | undefined
+      ): Array<{ label: string; val: string; date: string; type: string }>;
       enduranceSportCardHtml(group: ClientSportBests | null | undefined, idx: number): string;
       hybridLoadCardHtml(hybrid: ClientProgramState["hybrid"], idx?: number): string;
     };
@@ -3061,7 +3253,7 @@ declare global {
         settings: unknown,
         runPlan: ClientWeeklyRunPlan | null,
         programState: ClientProgramState | null,
-        deps: ClientProgressEnduranceControllerDeps,
+        deps: ClientProgressEnduranceControllerDeps
       ): void;
     };
 
@@ -3081,21 +3273,24 @@ declare global {
         more: ClientTodayAgendaCandidate[];
       };
       genericCardHtml(candidate: ClientTodayAgendaCandidate, revealIdx: number): string;
-      railHtml(agenda: Partial<ClientTodayAgenda> | null | undefined, genericPending: ClientTodayAgendaCandidate[]): string;
+      railHtml(
+        agenda: Partial<ClientTodayAgenda> | null | undefined,
+        genericPending: ClientTodayAgendaCandidate[]
+      ): string;
       fuelCardHtml(day: ClientDayIntake | null | undefined): string;
     };
 
     CairnTodayRailController: {
-      fetchTodayAgenda(
-        date: string,
-        deps: ClientTodayRailControllerDeps,
-      ): Promise<ClientTodayAgenda | null>;
-      railHtml(agenda: Partial<ClientTodayAgenda> | null | undefined, genericPending: ClientTodayAgendaCandidate[]): string;
+      fetchTodayAgenda(date: string, deps: ClientTodayRailControllerDeps): Promise<ClientTodayAgenda | null>;
+      railHtml(
+        agenda: Partial<ClientTodayAgenda> | null | undefined,
+        genericPending: ClientTodayAgendaCandidate[]
+      ): string;
       fallbackRailHtml(isToday: boolean): string;
       runAgendaRail(
         agenda: Partial<ClientTodayAgenda> | null | undefined,
         genericPending: ClientTodayAgendaCandidate[],
-        deps: ClientTodayRailControllerDeps,
+        deps: ClientTodayRailControllerDeps
       ): void;
       runFallbackRail(isToday: boolean, deps: ClientTodayRailControllerDeps): void;
       loadFuelToday(date: string, deps: ClientTodayRailControllerDeps): Promise<void>;
@@ -3103,10 +3298,7 @@ declare global {
       loadProgramAdjustmentsBanner(deps: ClientTodayRailControllerDeps): Promise<void>;
       loadRecentActivities(deps: ClientTodayRailControllerDeps): Promise<void>;
       loadGarminReconcile(deps: ClientTodayRailControllerDeps): Promise<void>;
-      wireGenericAgendaCards(
-        pending: ClientTodayAgendaCandidate[],
-        deps: ClientTodayRailControllerDeps,
-      ): void;
+      wireGenericAgendaCards(pending: ClientTodayAgendaCandidate[], deps: ClientTodayRailControllerDeps): void;
     };
 
     CairnTodayRailLoaders: {
@@ -3123,33 +3315,40 @@ declare global {
     CairnTodayPlanSelection: {
       planDayNumberForSession(
         session: ClientTodayPlanSelectionSession | null | undefined,
-        plan: ClientTodayPlanSelectionDay[] | null | undefined,
+        plan: ClientTodayPlanSelectionDay[] | null | undefined
       ): number | null;
       nextPlanDayNumber(
         dayNumber: number | null | undefined,
-        plan: ClientTodayPlanSelectionDay[] | null | undefined,
+        plan: ClientTodayPlanSelectionDay[] | null | undefined
       ): number | null;
       suggestedPlanDayNumber(
         session: ClientTodayPlanSelectionSession | null | undefined,
         isToday: boolean,
-        deps: ClientTodayPlanSelectionDeps,
+        deps: ClientTodayPlanSelectionDeps
       ): Promise<number>;
     };
 
     CairnTodayPlanSessionModel: {
-      planItems(day: (Record<string, unknown> & { items?: Array<Record<string, unknown>> | null }) | null | undefined): Array<Record<string, unknown>>;
-      groupLoggedSets(session: { sets?: Array<Record<string, unknown> & { exercise?: string; set_number?: number | null }> | null } | null | undefined): Record<string, Array<Record<string, unknown>>>;
+      planItems(
+        day: (Record<string, unknown> & { items?: Array<Record<string, unknown>> | null }) | null | undefined
+      ): Array<Record<string, unknown>>;
+      groupLoggedSets(
+        session:
+          | { sets?: Array<Record<string, unknown> & { exercise?: string; set_number?: number | null }> | null }
+          | null
+          | undefined
+      ): Record<string, Array<Record<string, unknown>>>;
       selectedPlanDay(
         state: {
           day: number | null;
           plan: Array<Record<string, unknown> & { day_number: number; items?: Array<Record<string, unknown>> | null }>;
         },
-        revealBlank: boolean,
+        revealBlank: boolean
       ): Record<string, unknown> & { day_number: number; items?: Array<Record<string, unknown>> | null };
       matchCardioEfforts(
         items: Array<Record<string, unknown>>,
         efforts: Array<Record<string, unknown>>,
-        matches: (item: Record<string, unknown>, effort: Record<string, unknown> | null | undefined) => boolean,
+        matches: (item: Record<string, unknown>, effort: Record<string, unknown> | null | undefined) => boolean
       ): Map<Record<string, unknown>, Record<string, unknown>>;
       itemGroups(params: {
         items: Array<Record<string, unknown>>;
@@ -3173,12 +3372,12 @@ declare global {
           pendingOffPlan?: Record<string, Array<{ name: string; mode?: string | null }>>;
         },
         planNames: Set<string>,
-        loggedByEx: Record<string, Array<Record<string, unknown>>>,
+        loggedByEx: Record<string, Array<Record<string, unknown>>>
       ): Array<{ name: string; mode?: string | null }>;
       prefillFor(
         item: Record<string, unknown>,
         loggedByEx: Record<string, Array<Record<string, unknown>>>,
-        lastSets: Record<string, Record<string, unknown> | null>,
+        lastSets: Record<string, Record<string, unknown> | null>
       ): Record<string, unknown>;
     };
 
@@ -3190,12 +3389,12 @@ declare global {
           state: { logDate: string };
           cachedApi<T = unknown>(path: string, options?: { key?: string; freshFor?: number }): Promise<T>;
           peekCached<T = unknown>(key: string, freshFor?: number): { data: T; fresh: boolean } | null;
-        },
+        }
       ): Promise<Record<string, Record<string, unknown> | null>>;
       loadPrescriptions(
         day: number | null,
         planEx: string[],
-        deps: { cachedApi<T = unknown>(path: string, options?: { key?: string; freshFor?: number }): Promise<T> },
+        deps: { cachedApi<T = unknown>(path: string, options?: { key?: string; freshFor?: number }): Promise<T> }
       ): Promise<Record<string, unknown>>;
       loadCardioContext(
         dayItems: Array<Record<string, unknown>>,
@@ -3204,7 +3403,7 @@ declare global {
           state: { logDate: string };
           api(path: string): Promise<unknown>;
           isCardioItem(item: Record<string, unknown>): boolean;
-        },
+        }
       ): Promise<{
         allCardio: Array<Record<string, unknown>>;
         cardioEfforts: Array<Record<string, unknown>>;
@@ -3213,11 +3412,16 @@ declare global {
     };
 
     CairnTodayPlanSessionPreparation: {
-      groupLoggedSets(session: { sets?: Array<Record<string, unknown> & { exercise?: string; set_number?: number | null }> | null } | null | undefined): Record<string, Array<Record<string, unknown>>>;
+      groupLoggedSets(
+        session:
+          | { sets?: Array<Record<string, unknown> & { exercise?: string; set_number?: number | null }> | null }
+          | null
+          | undefined
+      ): Record<string, Array<Record<string, unknown>>>;
       matchCardioEfforts(
         items: Array<Record<string, unknown>>,
         efforts: Array<Record<string, unknown>>,
-        matches: (item: Record<string, unknown>, effort: Record<string, unknown> | null | undefined) => boolean,
+        matches: (item: Record<string, unknown>, effort: Record<string, unknown> | null | undefined) => boolean
       ): Map<Record<string, unknown>, Record<string, unknown>>;
       preparePlanSession(deps: {
         state: {
@@ -3237,28 +3441,30 @@ declare global {
         isCardioItem(item: Record<string, unknown>): boolean;
         cardioLabel(item: Record<string, unknown>): string;
         cardioEffortMatches(item: Record<string, unknown>, effort: Record<string, unknown> | null | undefined): boolean;
-      }): Promise<Record<string, unknown> & {
-        day: Record<string, unknown>;
-        loggedByEx: Record<string, Array<Record<string, unknown>>>;
-        cardioEfforts: Array<Record<string, unknown>>;
-        matchedCardio: Map<Record<string, unknown>, Record<string, unknown>>;
-        activeItems: Array<Record<string, unknown>>;
-        skippedItems: Array<Record<string, unknown>>;
-        cardioItems: Array<Record<string, unknown>>;
-        strengthItems: Array<Record<string, unknown>>;
-        planEx: string[];
-        offPlanEx: string[];
-        pendingOffPlan: Array<{ name: string; mode?: string | null }>;
-        lastSets: Record<string, Record<string, unknown> | null>;
-        rxByEx: Record<string, unknown>;
-        rxFor(name: unknown): unknown;
-        prefillFor(item: Record<string, unknown>): Record<string, unknown>;
-        exDone: number;
-        exTotal: number;
-        hasSyncedCardioToday: boolean;
-        isRunDay: boolean;
-        expectingRun: boolean;
-      }>;
+      }): Promise<
+        Record<string, unknown> & {
+          day: Record<string, unknown>;
+          loggedByEx: Record<string, Array<Record<string, unknown>>>;
+          cardioEfforts: Array<Record<string, unknown>>;
+          matchedCardio: Map<Record<string, unknown>, Record<string, unknown>>;
+          activeItems: Array<Record<string, unknown>>;
+          skippedItems: Array<Record<string, unknown>>;
+          cardioItems: Array<Record<string, unknown>>;
+          strengthItems: Array<Record<string, unknown>>;
+          planEx: string[];
+          offPlanEx: string[];
+          pendingOffPlan: Array<{ name: string; mode?: string | null }>;
+          lastSets: Record<string, Record<string, unknown> | null>;
+          rxByEx: Record<string, unknown>;
+          rxFor(name: unknown): unknown;
+          prefillFor(item: Record<string, unknown>): Record<string, unknown>;
+          exDone: number;
+          exTotal: number;
+          hasSyncedCardioToday: boolean;
+          isRunDay: boolean;
+          expectingRun: boolean;
+        }
+      >;
     };
 
     CairnTodayDataLoader: {
@@ -3268,14 +3474,21 @@ declare global {
           root: HTMLElement;
           state: { logDate: string; plan: unknown[]; tab?: string };
           api(path: string): Promise<unknown>;
-          cachedApi(path: string, options?: { key?: string; freshFor?: number; onUpgrade?: (data: unknown, meta: { changed: boolean }) => void }): Promise<unknown>;
+          cachedApi(
+            path: string,
+            options?: {
+              key?: string;
+              freshFor?: number;
+              onUpgrade?: (data: unknown, meta: { changed: boolean }) => void;
+            }
+          ): Promise<unknown>;
           peekCached<T = unknown>(key: string, freshFor?: number): { data: T; fresh: boolean } | null;
           storeCached(key: string, data: unknown): void;
           localISO(date?: Date): string;
           todaySkeleton(): string;
           setTodayHeaderTitle(): void;
           nextPollToken(): number;
-        },
+        }
       ): Promise<{
         soft: boolean;
         token: number;
@@ -3298,7 +3511,7 @@ declare global {
           state: { tab?: string };
           isCurrentPoll(token: number): boolean;
           renderToday(opts?: { soft?: boolean }): unknown;
-        },
+        }
       ): void;
     };
 
@@ -3315,11 +3528,11 @@ declare global {
         deps: {
           escapeHtml(value: unknown): string;
           micGlyph: string;
-        },
+        }
       ): string;
       weekFoldHtml(
         compass: { paceOfferHtml?: string; weekRecap?: string | null; cellsHtml?: string },
-        deps: { escapeHtml(value: unknown): string },
+        deps: { escapeHtml(value: unknown): string }
       ): string;
       wrapHtml(content: string, options: { railHtml: string }): string;
     };
@@ -3344,12 +3557,12 @@ declare global {
           rxMoveCount(rxByEx: Record<string, unknown>): number;
           setsTonnage(sets: unknown): number;
           lastSetLineText?(lastSet: unknown): string;
-        },
+        }
       ): string;
       daySwitchHtml(
         plan: Array<Record<string, unknown>>,
         activeDay: unknown,
-        deps: { escapeHtml(value: unknown): string },
+        deps: { escapeHtml(value: unknown): string }
       ): string;
       rxBannerHtml(
         rxByEx: Record<string, unknown>,
@@ -3359,17 +3572,17 @@ declare global {
           escapeHtml(value: unknown): string;
           rxMoveCount(rxByEx: Record<string, unknown>): number;
           stagger(index?: number | null): string;
-        },
+        }
       ): string;
       addExerciseFormHtml(): string;
       finishHtml(
         session: { sets?: unknown[] | null; notes?: unknown },
         options: { isToday: boolean; logDate: string },
-        deps: { escapeAttr(value: unknown): string; setsTonnage(sets: unknown): number },
+        deps: { escapeAttr(value: unknown): string; setsTonnage(sets: unknown): number }
       ): string;
       lastSetLineHtml(
         lastSet: unknown,
-        deps: { escapeHtml(value: unknown): string; lastSetLineText?(lastSet: unknown): string },
+        deps: { escapeHtml(value: unknown): string; lastSetLineText?(lastSet: unknown): string }
       ): string;
     };
 
@@ -3402,7 +3615,12 @@ declare global {
           hasLoggedSets: boolean;
           hasGarmin: boolean;
           isRunDay: boolean;
-          prefillFor(item: Record<string, unknown>): { weight?: unknown; reps?: unknown; rir?: unknown; duration_sec?: unknown };
+          prefillFor(item: Record<string, unknown>): {
+            weight?: unknown;
+            reps?: unknown;
+            rir?: unknown;
+            duration_sec?: unknown;
+          };
           rxFor(name: unknown): unknown;
         },
         deps: {
@@ -3411,11 +3629,17 @@ declare global {
           isCardioItem(item: Record<string, unknown>): boolean;
           cardioLabel(item: Record<string, unknown>): string;
           cardioPlanCard(item: Record<string, unknown>, index: number, matched?: unknown, syncLine?: string): string;
-          exCard(item: Record<string, unknown>, logged: unknown[], prefill: Record<string, unknown>, index: number, rx: unknown): string;
+          exCard(
+            item: Record<string, unknown>,
+            logged: unknown[],
+            prefill: Record<string, unknown>,
+            index: number,
+            rx: unknown
+          ): string;
           garminSessionCard(value: unknown): string;
           sessionDoneCard(session: unknown, day: unknown, options: { isToday: boolean }): string;
           skipLineHtml(labels: string[]): string;
-        },
+        }
       ): string;
     };
 
@@ -3457,7 +3681,7 @@ declare global {
         runAgendaRail(
           agenda: Partial<ClientTodayAgenda> | null | undefined,
           genericPending: ClientTodayAgendaCandidate[],
-          deps: ClientTodayRailControllerDeps,
+          deps: ClientTodayRailControllerDeps
         ): void;
         runFallbackRail(isToday: boolean, deps: ClientTodayRailControllerDeps): void;
         todayRailDeps(): ClientTodayRailControllerDeps;
@@ -3478,7 +3702,9 @@ declare global {
       rxTargetText(rx: Partial<ClientPrescription> | null | undefined): string;
       exRxVaryMenuHtml(rx: Partial<ClientPrescription> | null | undefined): string;
       exRxLineHtml(rx: Partial<ClientPrescription> | null | undefined): string;
-      rxMoveCount(rxByExercise: Record<string, Partial<ClientPrescription> | null | undefined> | null | undefined): number;
+      rxMoveCount(
+        rxByExercise: Record<string, Partial<ClientPrescription> | null | undefined> | null | undefined
+      ): number;
       cardioDominantZone(zones: unknown): string;
       cardioVerb(label: unknown): string;
       cardioLogPhrase(item: Record<string, unknown>): string;
@@ -3494,8 +3720,12 @@ declare global {
         moveCount(rxByEx: Record<string, unknown>): number;
         loadProgramAdjustmentsBanner(): unknown;
       }): void;
-      invalidateTodayProgression(deps: Parameters<Window["CairnTodayProgressionController"]["scheduleRxRefresh"]>[0]): void;
-      refreshAdaptedRx(deps: Parameters<Window["CairnTodayProgressionController"]["scheduleRxRefresh"]>[0]): Promise<void>;
+      invalidateTodayProgression(
+        deps: Parameters<Window["CairnTodayProgressionController"]["scheduleRxRefresh"]>[0]
+      ): void;
+      refreshAdaptedRx(
+        deps: Parameters<Window["CairnTodayProgressionController"]["scheduleRxRefresh"]>[0]
+      ): Promise<void>;
     };
 
     CairnTodayAddExerciseController: {
@@ -3508,7 +3738,14 @@ declare global {
         };
         api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
         postExerciseMode(name: string, mode: string): Promise<unknown>;
-        exCard(item: Record<string, unknown>, logged: Array<Record<string, unknown>>, prefill: Record<string, unknown>, revealIdx: unknown, rx: unknown, lastSet?: unknown): string;
+        exCard(
+          item: Record<string, unknown>,
+          logged: Array<Record<string, unknown>>,
+          prefill: Record<string, unknown>,
+          revealIdx: unknown,
+          rx: unknown,
+          lastSet?: unknown
+        ): string;
         wireGuides(card: Element): void;
         wireLogRow(row: Element | null): void;
         wireSkips(): void;
@@ -3517,14 +3754,18 @@ declare global {
         escapeAttr(value: unknown): string;
         parseDur(value: string): number | null;
       }): Promise<void>;
-      appendOffPlanCard(name: string, mode: string | null | undefined, deps: Parameters<Window["CairnTodayAddExerciseController"]["setupAddExercise"]>[0]): Promise<void>;
+      appendOffPlanCard(
+        name: string,
+        mode: string | null | undefined,
+        deps: Parameters<Window["CairnTodayAddExerciseController"]["setupAddExercise"]>[0]
+      ): Promise<void>;
     };
 
     CairnTodaySessionFeedback: {
       renderFeedback(
         slot: Element | null | undefined,
         session: Record<string, unknown>,
-        deps: ClientTodaySessionFeedbackDeps,
+        deps: ClientTodaySessionFeedbackDeps
       ): void;
     };
 
@@ -3539,7 +3780,7 @@ declare global {
       renderFeedback(
         slot: Element | null | undefined,
         session: Record<string, unknown>,
-        deps: ClientTodaySessionControllerDeps,
+        deps: ClientTodaySessionControllerDeps
       ): void;
       wireDeletes(deps: ClientTodaySessionControllerDeps): void;
       wireLogRow(row: Element | null | undefined, deps: ClientTodaySessionControllerDeps): void;
@@ -3556,9 +3797,14 @@ declare global {
         revealIdx: unknown,
         rx: Partial<ClientPrescription> | null | undefined,
         options?: { day?: unknown; exModes?: Record<string, unknown> | null },
-        lastSet?: unknown,
+        lastSet?: unknown
       ): string;
-      cardioPlanCardHtml(item: Record<string, unknown>, revealIdx: unknown, done: Record<string, unknown> | null | undefined, syncLine: string): string;
+      cardioPlanCardHtml(
+        item: Record<string, unknown>,
+        revealIdx: unknown,
+        done: Record<string, unknown> | null | undefined,
+        syncLine: string
+      ): string;
       cardioDoneCardHtml(item: Record<string, unknown>, effort: Record<string, unknown>, revealIdx: unknown): string;
       cardioEffortMatches(item: Record<string, unknown>, effort: Record<string, unknown> | null | undefined): boolean;
     };
@@ -3575,34 +3821,52 @@ declare global {
       BRIEF_KIND: Record<string, { word: string; glyph: string; lead: string; kicker?: string }>;
       BRIEF_OVERRIDES: Array<{ intent: string; label: string }>;
       kind(read: Partial<ClientDayRead> | null | undefined): string;
-      meta(read: Partial<ClientDayRead> | null | undefined): { word: string; glyph: string; lead: string; kicker?: string };
+      meta(read: Partial<ClientDayRead> | null | undefined): {
+        word: string;
+        glyph: string;
+        lead: string;
+        kicker?: string;
+      };
       provisionalRead(): ClientDayRead & { _provisional: boolean };
       redirectHtml(action: unknown, label: unknown, primary?: boolean): string;
-      visibleOverrides(args: { kind?: unknown; estMinutes?: unknown; activeOverride?: unknown }): Array<{ intent: string; label: string }>;
+      visibleOverrides(args: {
+        kind?: unknown;
+        estMinutes?: unknown;
+        activeOverride?: unknown;
+      }): Array<{ intent: string; label: string }>;
       agentOffline(status: unknown): boolean;
       agentOfflineNoticeHtml(status: unknown, dismissed?: boolean): string;
-      briefHtml(read: (Partial<ClientDayRead> & { _provisional?: unknown; _failed?: unknown; override?: unknown }) | null | undefined, options?: {
-        showPlan?: boolean;
-        showDone?: boolean;
-        isToday?: boolean;
-        activeOverride?: unknown;
-        morph?: boolean;
-        reducedMotion?: boolean;
-        offlineDismissed?: boolean;
-      }): string;
+      briefHtml(
+        read:
+          | (Partial<ClientDayRead> & { _provisional?: unknown; _failed?: unknown; override?: unknown })
+          | null
+          | undefined,
+        options?: {
+          showPlan?: boolean;
+          showDone?: boolean;
+          isToday?: boolean;
+          activeOverride?: unknown;
+          morph?: boolean;
+          reducedMotion?: boolean;
+          offlineDismissed?: boolean;
+        }
+      ): string;
       materiallyDiffers(
         a: (Partial<ClientDayRead> & { _provisional?: unknown }) | null | undefined,
-        b: (Partial<ClientDayRead> & { _provisional?: unknown }) | null | undefined,
+        b: (Partial<ClientDayRead> & { _provisional?: unknown }) | null | undefined
       ): boolean;
       signalsText(read: Partial<ClientDayRead> | null | undefined): string;
       signalsRows(
-        read: Partial<ClientDayRead> | null | undefined,
+        read: Partial<ClientDayRead> | null | undefined
       ): Array<{ label: string; state: string; tone: "ok" | "watch" | "quiet" }>;
     };
 
     CairnTodayBriefOverrideClient: {
       paintBriefReshaping(brief: Element, chip: HTMLElement | null, deps: ClientTodayBriefOverrideDeps): void;
-      dayReadOverrideOpOpts(args: { intent?: string; prevFocus?: unknown } | undefined, deps: ClientTodayBriefOverrideDeps): ClientTodayBriefOverrideRunOptions;
+      dayReadOverrideOpOpts(
+        args: { intent?: string; prevFocus?: unknown } | undefined,
+        deps: ClientTodayBriefOverrideDeps
+      ): ClientTodayBriefOverrideRunOptions;
       reconnectDayReadOverride(job: unknown, deps: ClientTodayBriefOverrideDeps): ClientAgentOpHandlers | null;
     };
 
@@ -3611,7 +3875,7 @@ declare global {
       wireBriefActions(
         read: Partial<ClientDayRead> & { _provisional?: unknown; override?: unknown },
         options: { isToday?: boolean },
-        deps: ClientTodayBriefActionsDeps,
+        deps: ClientTodayBriefActionsDeps
       ): void;
     };
 
@@ -3621,29 +3885,41 @@ declare global {
         date: string,
         override: string,
         deps: ClientTodayBriefControllerDeps,
-        opts?: { fast?: boolean },
+        opts?: { fast?: boolean }
       ): Promise<ClientDayRead & { _provisional?: boolean; _failed?: boolean; override?: string | null }>;
       upgradeBriefInPlace(date: string, isToday: boolean, deps: ClientTodayBriefControllerDeps): Promise<void>;
       reshapeToday(deps: ClientTodayBriefControllerDeps): Promise<void>;
       briefHtml(
-        read: (Partial<ClientDayRead> & { _provisional?: unknown; _failed?: unknown; override?: unknown }) | null | undefined,
+        read:
+          | (Partial<ClientDayRead> & { _provisional?: unknown; _failed?: unknown; override?: unknown })
+          | null
+          | undefined,
         options: { showPlan?: unknown; showDone?: unknown; isToday?: unknown },
-        deps: ClientTodayBriefControllerDeps,
+        deps: ClientTodayBriefControllerDeps
       ): string;
       briefSignalsText(read: Partial<ClientDayRead> | null | undefined): string;
       wireBrief(
         read: Partial<ClientDayRead> & { _provisional?: unknown; override?: unknown },
         options: { isToday?: boolean },
-        deps: ClientTodayBriefControllerDeps,
+        deps: ClientTodayBriefControllerDeps
       ): void;
       paintBriefReshaping(brief: Element, chip: HTMLElement | null, deps: ClientTodayBriefControllerDeps): void;
-      dayReadOverrideOpOpts(args: { intent?: string; prevFocus?: unknown } | undefined, deps: ClientTodayBriefControllerDeps): ClientAgentOpHandlers;
+      dayReadOverrideOpOpts(
+        args: { intent?: string; prevFocus?: unknown } | undefined,
+        deps: ClientTodayBriefControllerDeps
+      ): ClientAgentOpHandlers;
       reconnectDayReadOverride(job: unknown, deps: ClientTodayBriefControllerDeps): ClientAgentOpHandlers | null;
     };
 
     CairnCaptureProvenance: {
       activeDirectives(): Promise<ClientDirective[]>;
-      provenanceLineHtml(directive: (ClientDirective & { citation?: unknown; directive?: unknown; uncertain?: unknown }) | null | undefined, label: string): string | null;
+      provenanceLineHtml(
+        directive:
+          | (ClientDirective & { citation?: unknown; directive?: unknown; uncertain?: unknown })
+          | null
+          | undefined,
+        label: string
+      ): string | null;
       wireProvenance(scope?: ParentNode | null): void;
       loadTrainingProvenance(isToday?: boolean): Promise<void>;
       loadMealProvenance(): Promise<void>;
@@ -3674,7 +3950,11 @@ declare global {
         deps: {
           root: ParentNode;
           state: { logDate?: string; suggestedSession?: ClientSessionSuggestion | null };
-          runOp(kind: "session_suggest", body: Record<string, unknown>, options: ClientAgentOpHandlers): Promise<unknown>;
+          runOp(
+            kind: "session_suggest",
+            body: Record<string, unknown>,
+            options: ClientAgentOpHandlers
+          ): Promise<unknown>;
           thinkingCaption(el: Element, op?: string | readonly string[]): () => void;
           runCountUps(scope?: ParentNode | null, options?: { snap?: boolean }): void;
           collapseEl(el: Element, done?: () => void): void;
@@ -3682,19 +3962,31 @@ declare global {
           toast(message: string): void;
           revealPlanThen(after: () => unknown, opts?: { blank?: boolean }): unknown;
           appendOffPlanCard(name: unknown, mode: "timed" | "reps"): unknown;
-        },
+        }
       ): Promise<void>;
-      reconnectSessionSuggest(job: unknown, deps: Parameters<Window["CairnTodaySessionSuggestController"]["askForSession"]>[1]): unknown;
+      reconnectSessionSuggest(
+        job: unknown,
+        deps: Parameters<Window["CairnTodaySessionSuggestController"]["askForSession"]>[1]
+      ): unknown;
       revealSessionComposer(deps: Parameters<Window["CairnTodaySessionSuggestController"]["askForSession"]>[1]): void;
-      sessionSuggestOpOpts(deps: Parameters<Window["CairnTodaySessionSuggestController"]["askForSession"]>[1]): ClientAgentOpHandlers;
-      wireSuggestCard(slot: Element, deps: Parameters<Window["CairnTodaySessionSuggestController"]["askForSession"]>[1]): void;
+      sessionSuggestOpOpts(
+        deps: Parameters<Window["CairnTodaySessionSuggestController"]["askForSession"]>[1]
+      ): ClientAgentOpHandlers;
+      wireSuggestCard(
+        slot: Element,
+        deps: Parameters<Window["CairnTodaySessionSuggestController"]["askForSession"]>[1]
+      ): void;
     };
 
     CairnTodaySessionStatus: {
       FEEL_FACES: readonly string[];
       setChipHtml(set: Record<string, unknown> | null | undefined, index?: number): string;
       setsTonnage(sets: unknown): number;
-      sessionDoneCardHtml(session: Record<string, unknown> | null | undefined, day: { name?: unknown } | null | undefined, options?: { isToday?: boolean }): string;
+      sessionDoneCardHtml(
+        session: Record<string, unknown> | null | undefined,
+        day: { name?: unknown } | null | undefined,
+        options?: { isToday?: boolean }
+      ): string;
       hasFeedback(session: Record<string, unknown> | null | undefined): boolean;
       feedbackOpenHtml(): string;
       feedbackScaleHtml(kind: "soreness" | "performance", label: string): string;
@@ -3737,27 +4029,37 @@ declare global {
     CairnTodayCompass: {
       fmtPace(value: unknown): string;
       paceWord(stats: unknown): string;
-      paceTileHtml(stats: unknown, deps: {
-        escapeHtml(value: unknown): string;
-        escapeAttr(value: unknown): string;
-        formatKm(value: unknown): string;
-      }): string;
+      paceTileHtml(
+        stats: unknown,
+        deps: {
+          escapeHtml(value: unknown): string;
+          escapeAttr(value: unknown): string;
+          formatKm(value: unknown): string;
+        }
+      ): string;
       paceOffer(stats: unknown, currentWeight: unknown): { status: string; line: string; ask: string } | null;
-      paceOfferHtml(offer: { status: string; line: string; ask: string } | null, deps: {
-        escapeHtml(value: unknown): string;
-        escapeAttr(value: unknown): string;
-        formatKm(value: unknown): string;
-      }): string;
-      build(stats: unknown, deps: {
-        escapeHtml(value: unknown): string;
-        escapeAttr(value: unknown): string;
-        formatKm(value: unknown): string;
-      }, options?: {
-        currentWeight?: unknown;
-        isToday?: unknown;
-        isEndurance?: unknown;
-        isHybrid?: unknown;
-      }): {
+      paceOfferHtml(
+        offer: { status: string; line: string; ask: string } | null,
+        deps: {
+          escapeHtml(value: unknown): string;
+          escapeAttr(value: unknown): string;
+          formatKm(value: unknown): string;
+        }
+      ): string;
+      build(
+        stats: unknown,
+        deps: {
+          escapeHtml(value: unknown): string;
+          escapeAttr(value: unknown): string;
+          formatKm(value: unknown): string;
+        },
+        options?: {
+          currentWeight?: unknown;
+          isToday?: unknown;
+          isEndurance?: unknown;
+          isHybrid?: unknown;
+        }
+      ): {
         planned: number;
         done: number;
         weekKm: number;

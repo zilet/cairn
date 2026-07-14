@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { Request, Response, NextFunction } from "express";
+import { verifyAppleHealthIngestToken } from "./repo/apple-health.js";
 
 // OPTIONAL shared-token auth. Cairn is single-user and self-hosted; the default
 // (no token set) keeps the zero-friction localhost behaviour Cairn has always
@@ -27,16 +28,11 @@ export const authEnabled = TOKEN.length > 0;
 // serving an open instance. Default off ⇒ the trusted-network/localhost behaviour
 // is unchanged. Bake CAIRN_REQUIRE_AUTH=1 into any compose/template that exposes
 // the port so it can never boot insecurely.
-export const requireAuth = /^(1|true|yes|on)$/i.test(
-  (process.env.CAIRN_REQUIRE_AUTH || "").trim()
-);
+export const requireAuth = /^(1|true|yes|on)$/i.test((process.env.CAIRN_REQUIRE_AUTH || "").trim());
 
 // Pure + unit-testable: the message to abort boot with, or null if boot may
 // proceed. server.ts calls this before listen() and exits non-zero on a message.
-export function authStartupError(opts: {
-  requireAuth: boolean;
-  authEnabled: boolean;
-}): string | null {
+export function authStartupError(opts: { requireAuth: boolean; authEnabled: boolean }): string | null {
   if (opts.requireAuth && !opts.authEnabled) {
     return (
       "CAIRN_REQUIRE_AUTH is set but CAIRN_AUTH_TOKEN is empty — refusing to start " +
@@ -65,6 +61,16 @@ function presentedToken(req: Request): string | null {
   const q = (req.query as Record<string, unknown> | undefined)?.token;
   if (typeof q === "string" && q && queryTokenAllowedPath(req.path, req.method)) return q;
   return null;
+}
+
+const appleHealthPrincipals = new WeakMap<Request, { connection_id: number }>();
+
+export function appleHealthTokenScopeAllows(method: string, path: string): boolean {
+  return method.toUpperCase() === "POST" && path === "/api/health-metrics";
+}
+
+export function appleHealthConnectionForRequest(req: Request): number | null {
+  return appleHealthPrincipals.get(req)?.connection_id ?? null;
 }
 
 export function queryTokenAllowedPath(p: string, method = "GET"): boolean {
@@ -98,8 +104,23 @@ export function authGuard(req: Request, res: Response, next: NextFunction) {
   const p = req.path;
   if (!p.startsWith("/api") && !p.startsWith("/mcp")) return next();
   if (p === "/api/health") return next();
+  if (p === "/api/apple-health/config" && req.method === "GET") return next();
+  // The Shortcuts template exchanges a high-entropy, ten-minute, single-use
+  // code. It cannot present the owner's token yet. The global per-IP limiter
+  // still runs in front of this exception whenever auth is enabled.
+  if (p === "/api/apple-health/pairing/exchange" && req.method === "POST") return next();
   const got = presentedToken(req);
   if (got && safeEqual(got, TOKEN)) return next();
+  // A paired Shortcut credential is deliberately narrower than owner auth. It
+  // can only ingest daily health metrics; it never reaches reads, settings,
+  // exports, MCP, or any other mutation.
+  if (got && appleHealthTokenScopeAllows(req.method, p)) {
+    const connection = verifyAppleHealthIngestToken(got);
+    if (connection) {
+      appleHealthPrincipals.set(req, { connection_id: connection.id });
+      return next();
+    }
+  }
   res.status(401).json({ error: "unauthorized" });
 }
 

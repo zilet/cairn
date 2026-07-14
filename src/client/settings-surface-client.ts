@@ -21,6 +21,30 @@ type SettingsSourcesSliceOptions = {
   workingModel: Pick<SettingsScreenWorkingModel, "garmin_username">;
   settings: Record<string, unknown>;
   garminStatusHtml: string;
+  appleHealth?: AppleHealthUiState;
+};
+
+type AppleHealthConnectionView = {
+  id: number;
+  label?: string;
+  shortcut_version?: string | null;
+  created_at?: string;
+  expires_at?: string;
+  last_used_at?: string | null;
+  status?: string;
+};
+
+type AppleHealthUiState = {
+  loading?: boolean;
+  error?: string | null;
+  config?: {
+    available?: boolean;
+    install_url?: string | null;
+    shortcut_name?: string | null;
+    help_url?: string | null;
+    pairing_available?: boolean;
+  } | null;
+  connections?: AppleHealthConnectionView[];
 };
 
 type SettingsAutomationSliceOptions = {
@@ -30,7 +54,14 @@ type SettingsAutomationSliceOptions = {
   researchEligible: SettingsSurfaceRouteEligibility;
 };
 
-const SETTINGS_SURFACE_SEGMENTS: readonly ClientSegment[] = [["you", "You"], ["agents", "Agents"], ["system", "System"], ["sources", "Sources"], ["automation", "Automation"], ["data", "Data"]];
+const SETTINGS_SURFACE_SEGMENTS: readonly ClientSegment[] = [
+  ["you", "You"],
+  ["agents", "Agents"],
+  ["system", "System"],
+  ["sources", "Sources"],
+  ["automation", "Automation"],
+  ["data", "Data"],
+];
 
 function settingsSurfaceRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
@@ -52,7 +83,9 @@ function settingsSurfaceBool(value: unknown, fallback = false): boolean {
 function settingsData(value: unknown): SettingsScreenData {
   const row = settingsSurfaceRecord(value);
   const agents = Array.isArray(row.agents)
-    ? row.agents.map((agent) => settingsSurfaceRecord(agent)).filter((agent): agent is SettingsScreenAgent => typeof agent.name === "string")
+    ? row.agents
+        .map((agent) => settingsSurfaceRecord(agent))
+        .filter((agent): agent is SettingsScreenAgent => typeof agent.name === "string")
     : [];
   const eligible = row.research_auto_eligible;
   return {
@@ -138,7 +171,9 @@ function settingsArtSpendCardHtml(stats: unknown): string {
 function settingsSourcesSliceHtml(options: SettingsSourcesSliceOptions): string {
   const s = settingsSurfaceRecord(options.settings);
   const wm = options.workingModel;
-  const garminPlaceholder = s.garmin_password_configured ? `Configured via ${escAttr(s.garmin_credentials_source)}` : "Optional: GARMIN_PASSWORD";
+  const garminPlaceholder = s.garmin_password_configured
+    ? `Configured via ${escAttr(s.garmin_credentials_source)}`
+    : "Optional: GARMIN_PASSWORD";
   return `
       <section class="set-group set-group--flush">
         <p class="set-group-sub">Where your recovery and activity data come in. Both are optional and gracefully absent.</p>
@@ -157,44 +192,71 @@ function settingsSourcesSliceHtml(options: SettingsSourcesSliceOptions): string 
         </div>
         <div class="sess-line" style="color:var(--muted);margin-top:6px">Once configured, Cairn syncs automatically every ~6 hours.</div>
 
-        <h1 class="lbl" style="margin:22px 0 8px">Apple Health (steps, sleep, recovery)</h1>
-        <div class="sess-line" style="color:var(--muted)">
-          A personal iOS Shortcut can read permitted Health samples and post one idempotent daily summary.
-          Cairn opens Apple's editor and gives you the exact build sheet; Apple still requires you to add
-          and approve the actions on your phone.
-        </div>
-        <div class="ah-fields">
-          <span>steps</span><span>sleep</span><span>resting HR</span><span>HRV</span><span>active energy</span><span>VO₂ max</span>
-        </div>
-        <div class="field" style="margin-top:12px"><label>POST URL</label>
-          <div class="ah-url"><code id="ahUrl"></code><button id="ahUrlCopy" class="ghostbtn ah-copy" type="button">Copy</button></div>
-        </div>
-        <div class="ah-builder-actions">
-          <a class="ghostbtn ah-open" href="shortcuts://create-shortcut">Open Shortcuts</a>
-          <button id="ahRecipeCopy" class="ghostbtn" type="button">Copy build sheet</button>
-        </div>
-        <div class="sess-line ah-secret-note" style="color:var(--muted);margin-top:8px">The build sheet includes your locally stored access token only when you tap Copy. Treat it like a password and put it in an Authorization header, never the URL.</div>
-        <details class="ah-steps">
-          <summary>What remains on the phone</summary>
-          <ol>
-            <li>Add Find Health Samples actions and allow only the metrics you want to share.</li>
-            <li>Build a Dictionary with <code>source: apple_health</code>, the date, and available summaries.</li>
-            <li>POST it with Get Contents of URL; show the returned <code>ok</code>/<code>errors</code>.</li>
-            <li>Test once, then optionally add a Time of Day personal automation.</li>
-          </ol>
-        </details>
-        <div class="sess-line" style="color:var(--muted);margin-top:8px">Full verified recipe and limitations: <code>docs/APPLE_HEALTH.md</code></div>
+        <div id="appleHealthCard">${appleHealthCardHtml(options.appleHealth ?? { loading: true })}</div>
       </section>`;
+}
+
+function appleHealthCardHtml(state: AppleHealthUiState): string {
+  const config = state.config ?? null;
+  const connections = Array.isArray(state.connections) ? state.connections : [];
+  const active = connections.filter((connection) => connection.status === "connected");
+  const helpUrl = config?.help_url || "https://github.com/zilet/cairn/blob/main/docs/APPLE_HEALTH.md";
+  const install =
+    config?.available && config.install_url
+      ? `<a class="ghostbtn ah-install" href="${escAttr(config.install_url)}" target="_blank" rel="noopener">Install Apple Health Sync</a>`
+      : `<div class="sess-line ah-unavailable" style="color:var(--muted)"><b>Shortcut package not published yet.</b> Cairn will show the install button only when this server has a validated public Shortcut URL.</div>`;
+  const connect =
+    config?.available && config.shortcut_name && config.pairing_available
+      ? `<button id="ahConnect" class="ghostbtn" type="button">Connect &amp; test</button>`
+      : config?.available && !config.pairing_available
+        ? `<div class="sess-line" style="color:var(--muted)">Secure pairing requires <code>CAIRN_AUTH_TOKEN</code> on this instance.</div>`
+        : "";
+  const rows = active.length
+    ? active
+        .map(
+          (connection) => `<div class="syncrow ah-connection">
+        <div class="syncstatus"><b>${escHtml(connection.label || "Apple Health Shortcut")}</b><br><span style="color:var(--muted)">${connection.last_used_at ? `Last update ${escHtml(connection.last_used_at)}` : "Connected · waiting for first update"}</span></div>
+        <button class="ghostbtn ah-revoke" type="button" data-connection-id="${Number(connection.id)}">Revoke</button>
+      </div>`
+        )
+        .join("")
+    : `<div class="sess-line" style="color:var(--muted)">Not connected yet.</div>`;
+  const error = state.error
+    ? `<div class="sess-line" id="ahError" style="color:var(--danger,#b33)">${escHtml(state.error)} <button id="ahRetry" class="ghostbtn" type="button">Retry</button></div>`
+    : "";
+  return `
+    <h1 class="lbl" style="margin:22px 0 8px">Apple Health (steps, sleep, recovery)</h1>
+    <div class="sess-line" style="color:var(--muted)">Install the maintained Shortcut, then pair it to this Cairn without copying the owner token. Apple still asks you to confirm Add Shortcut and each Health permission.</div>
+    <div class="ah-fields"><span>steps</span><span>sleep</span><span>resting HR</span><span>HRV</span><span>active energy</span><span>VO₂ max</span></div>
+    ${
+      state.loading
+        ? `<div class="sess-line" style="color:var(--muted);margin-top:10px">Checking connection…</div>`
+        : `
+      <div class="ah-builder-actions">${install}${connect}<button id="ahRefresh" class="ghostbtn" type="button">Refresh status</button></div>
+      ${error}
+      <div style="margin-top:10px">${rows}</div>
+      <details class="ah-steps">
+        <summary>Advanced manual setup</summary>
+        <p class="sess-line" style="color:var(--muted)">For an unpublished template or a custom Shortcut, post an idempotent daily summary to <code id="ahUrl"></code>. Copying this endpoint never copies a credential.</p>
+        <button id="ahUrlCopy" class="ghostbtn" type="button">Copy endpoint</button>
+        <button id="ahRecipeCopy" class="ghostbtn" type="button">Copy manual recipe</button>
+      </details>
+      <div class="sess-line" style="color:var(--muted);margin-top:8px"><a href="${escAttr(helpUrl)}" target="_blank" rel="noopener">Apple Health setup, privacy, and limitations</a></div>`
+    }
+  `;
 }
 
 function settingsAutomationSliceHtml(options: SettingsAutomationSliceOptions): string {
   const s = settingsSurfaceRecord(options.settings);
   const wm = options.workingModel;
   const researchEligible = options.researchEligible;
-  const geminiPlaceholder = s.gemini_api_key_configured ? `Configured via ${escAttr(s.gemini_api_key_source)}` : "Optional: GOOGLE_AI_KEY / GEMINI_API_KEY";
-  const researchSuggest = !wm.research_enabled && researchEligible?.eligible
-    ? `<div class="sess-line" id="researchSuggest" style="margin-top:6px">✦ ${researchEligible.reason === "web_agent_connected" ? "Your coach agent can browse — turn this on for live, cited research." : "An agent is connected — you can try live evidence research."}</div>`
-    : "";
+  const geminiPlaceholder = s.gemini_api_key_configured
+    ? `Configured via ${escAttr(s.gemini_api_key_source)}`
+    : "Optional: GOOGLE_AI_KEY / GEMINI_API_KEY";
+  const researchSuggest =
+    !wm.research_enabled && researchEligible?.eligible
+      ? `<div class="sess-line" id="researchSuggest" style="margin-top:6px">✦ ${researchEligible.reason === "web_agent_connected" ? "Your coach agent can browse — turn this on for live, cited research." : "An agent is connected — you can try live evidence research."}</div>`
+      : "";
   return `
       <section class="set-group set-group--flush">
         <p class="set-group-sub">Background touches that make logging effortless. Everything falls back gracefully when off.</p>
@@ -243,6 +305,7 @@ const CAIRN_SETTINGS_SURFACE = {
   statusHelpers: settingsStatusHelpers,
   artSpendCardHtml: settingsArtSpendCardHtml,
   sourcesSliceHtml: settingsSourcesSliceHtml,
+  appleHealthCardHtml,
   automationSliceHtml: settingsAutomationSliceHtml,
 };
 
