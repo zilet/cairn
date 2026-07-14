@@ -5,6 +5,7 @@ type TodaySessionSkipPendingOffPlan = { name: string; mode?: string | null };
 type TodaySessionSkipState = {
   tab?: string;
   logDate: string;
+  sessionIdsByDate?: Record<string, string>;
   pendingOffPlan?: Record<string, TodaySessionSkipPendingOffPlan[]>;
 };
 
@@ -25,6 +26,10 @@ type TodaySessionSkipDeps = {
 };
 
 (() => {
+  function surfaceStillCurrent(deps: TodaySessionSkipDeps, date: string, tab: string | undefined): boolean {
+    return deps.state.logDate === date && deps.state.tab === tab;
+  }
+
   function responseRecord(value: unknown): Record<string, unknown> {
     return value && typeof value === "object" ? value as Record<string, unknown> : {};
   }
@@ -55,45 +60,69 @@ type TodaySessionSkipDeps = {
     if (!line.querySelector("[data-unskip]")) line.classList.add("skipline-empty");
   }
 
-  async function skipFromCard(card: HTMLElement | null, exercise: string, deps: TodaySessionSkipDeps): Promise<void> {
+  async function skipFromCard(
+    card: HTMLElement | null,
+    exercise: string,
+    deps: TodaySessionSkipDeps,
+    actionDate: string,
+    actionTab: string | undefined,
+  ): Promise<void> {
     if (!card) return;
     let result: Record<string, unknown>;
     try {
       result = responseRecord(await deps.api("/sessions/skip", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ date: deps.state.logDate, exercise }),
+        body: JSON.stringify({ date: actionDate, exercise }),
       }));
     } catch {
-      deps.toast("Couldn't skip — try again");
+      if (surfaceStillCurrent(deps, actionDate, actionTab)) deps.toast("Couldn't skip — try again");
       return;
     }
-    if (result.ok !== true) {
-      deps.toast(result.error ? "Sets already logged — delete them first" : "Couldn't skip — try again");
+    const responseDateMatches = result.date == null || String(result.date) === actionDate;
+    if (result.ok !== true || !responseDateMatches) {
+      if (surfaceStillCurrent(deps, actionDate, actionTab)) {
+        deps.toast(result.error ? "Sets already logged — delete them first" : "Couldn't skip — try again");
+      }
       return;
     }
-    deps.invalidate("today:session:" + deps.state.logDate);
+    CairnTodaySessionSetModel.rememberMutationSessionId(deps, actionDate, result);
+    if (!surfaceStillCurrent(deps, actionDate, actionTab)) return;
+    deps.invalidate("today:session:" + actionDate);
     const anchor = card.nextElementSibling;
     deps.collapseEl(card, () => {
+      if (!surfaceStillCurrent(deps, actionDate, actionTab)) return;
       card.remove();
       addSkipName(exercise, deps);
       if (deps.state.tab === "today") void deps.renderToday({ soft: true });
     });
-    deps.toast(`${exercise} skipped today`, { action: "Undo", onAction: () => { void undoSkip(card, anchor, exercise, deps); } });
+    deps.toast(`${exercise} skipped today`, {
+      action: "Undo",
+      onAction: () => { void undoSkip(card, anchor, exercise, deps, actionDate, actionTab); },
+    });
   }
 
-  async function undoSkip(card: HTMLElement, anchor: Element | null, exercise: string, deps: TodaySessionSkipDeps): Promise<void> {
+  async function undoSkip(
+    card: HTMLElement,
+    anchor: Element | null,
+    exercise: string,
+    deps: TodaySessionSkipDeps,
+    actionDate: string,
+    actionTab: string | undefined,
+  ): Promise<void> {
+    if (!surfaceStillCurrent(deps, actionDate, actionTab)) return;
     try {
       await deps.api("/sessions/skip", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ date: deps.state.logDate, exercise }),
+        body: JSON.stringify({ date: actionDate, exercise }),
       });
     } catch {
-      deps.toast("Couldn't restore — try again");
+      if (surfaceStillCurrent(deps, actionDate, actionTab)) deps.toast("Couldn't restore — try again");
       return;
     }
-    deps.invalidate("today:session:" + deps.state.logDate);
+    if (!surfaceStillCurrent(deps, actionDate, actionTab)) return;
+    deps.invalidate("today:session:" + actionDate);
     if (deps.state.tab !== "today") return;
     removeSkipName(exercise, deps);
     if (!card.isConnected) {
@@ -118,17 +147,20 @@ type TodaySessionSkipDeps = {
   }
 
   function wireSkips(deps: TodaySessionSkipDeps): void {
+    const surfaceDate = deps.state.logDate;
+    const surfaceTab = deps.state.tab;
     deps.root.querySelectorAll<HTMLElement>(".ex-skip").forEach((button) => {
       if (button.dataset.wired) return;
       button.dataset.wired = "1";
       button.addEventListener("click", (event) => {
         event.stopPropagation();
+        if (!surfaceStillCurrent(deps, surfaceDate, surfaceTab)) return;
         const card = button.closest<HTMLElement>(".ex");
         if (button.hasAttribute("data-remove-card")) {
           removeOffPlanCard(card, deps);
           return;
         }
-        void skipFromCard(card, decodeURIComponent(button.dataset.skip || ""), deps);
+        void skipFromCard(card, decodeURIComponent(button.dataset.skip || ""), deps, surfaceDate, surfaceTab);
       });
     });
 
@@ -136,6 +168,7 @@ type TodaySessionSkipDeps = {
     if (line && !line.dataset.wired) {
       line.dataset.wired = "1";
       line.addEventListener("click", async (event) => {
+        if (!surfaceStillCurrent(deps, surfaceDate, surfaceTab)) return;
         const button = (event.target as Element | null)?.closest<HTMLElement>("[data-unskip]");
         if (!button) return;
         const exercise = decodeURIComponent(button.dataset.unskip || "");
@@ -143,13 +176,14 @@ type TodaySessionSkipDeps = {
           await deps.api("/sessions/skip", {
             method: "DELETE",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ date: deps.state.logDate, exercise }),
+            body: JSON.stringify({ date: surfaceDate, exercise }),
           });
         } catch {
-          deps.toast("Couldn't restore — try again");
+          if (surfaceStillCurrent(deps, surfaceDate, surfaceTab)) deps.toast("Couldn't restore — try again");
           return;
         }
-        deps.invalidate("today:session:" + deps.state.logDate);
+        if (!surfaceStillCurrent(deps, surfaceDate, surfaceTab)) return;
+        deps.invalidate("today:session:" + surfaceDate);
         deps.toast(`${exercise} is back on`);
         deps.renderToday();
       });

@@ -4,6 +4,9 @@
 type TodaySessionSetPayloadResult =
   | { ok: true; body: Record<string, unknown> }
   | { ok: false; message: string; focus?: () => void };
+type TodaySessionIdState = ClientTodaySessionControllerDeps["state"] & {
+  sessionIdsByDate?: Record<string, string>;
+};
 
 // The last logged set for an exercise, as returned by GET /last-set — used for the
 // prefill AND for the "beat this" quiet target line.
@@ -16,8 +19,22 @@ type TodayLastSetData = {
 
 type TodaySessionSetModelApi = {
   responseRecord(value: unknown): Record<string, unknown>;
-  sessionPathId(session: Record<string, unknown>): string;
-  cacheSessionTruth(deps: ClientTodaySessionControllerDeps, value: unknown): void;
+  rememberMutationSessionId(
+    deps: Pick<ClientTodaySessionControllerDeps, "state">,
+    date: string,
+    value: unknown,
+  ): string | null;
+  rememberFullSessionId(
+    deps: Pick<ClientTodaySessionControllerDeps, "state">,
+    date: string,
+    value: unknown,
+  ): string | null;
+  sessionPathId(
+    session: Record<string, unknown>,
+    deps: Pick<ClientTodaySessionControllerDeps, "state">,
+    date: string,
+  ): string | null;
+  cacheSessionTruth(deps: ClientTodaySessionControllerDeps, date: string, value: unknown): boolean;
   invalidateSessionTruth(deps: ClientTodaySessionControllerDeps): void;
   invalidateSetTruth(deps: ClientTodaySessionControllerDeps): void;
   logPayloadFromRow(row: HTMLElement, deps: ClientTodaySessionControllerDeps): TodaySessionSetPayloadResult;
@@ -32,30 +49,84 @@ type TodaySessionSetModelApi = {
     return value && typeof value === "object" ? value as Record<string, unknown> : {};
   }
 
-  function sessionPathId(session: Record<string, unknown>): string {
-    return encodeURIComponent(String(session.id ?? ""));
+  function validSessionId(value: unknown): string | null {
+    const candidate = String(value ?? "").trim();
+    return /^[1-9]\d*$/.test(candidate) ? candidate : null;
   }
 
-  function sessionCacheKey(deps: ClientTodaySessionControllerDeps): string {
-    return "today:session:" + deps.state.logDate;
+  function responseMatchesDate(value: Record<string, unknown>, date: string): boolean {
+    return value.date == null || String(value.date) === date;
   }
 
-  function cacheSessionTruth(deps: ClientTodaySessionControllerDeps, value: unknown): void {
+  function rememberId(
+    deps: Pick<ClientTodaySessionControllerDeps, "state">,
+    date: string,
+    idValue: unknown,
+  ): string | null {
+    const id = validSessionId(idValue);
+    if (!id) return null;
+    const state = deps.state as TodaySessionIdState;
+    (state.sessionIdsByDate ??= {})[date] = id;
+    return id;
+  }
+
+  // Mutation responses use `session_id`; their `id` is another entity (for a
+  // set-log response it is the logged-set ID). Never infer one from the other.
+  function rememberMutationSessionId(
+    deps: Pick<ClientTodaySessionControllerDeps, "state">,
+    date: string,
+    value: unknown,
+  ): string | null {
+    const result = responseRecord(value);
+    if (!responseMatchesDate(result, date)) return null;
+    return rememberId(deps, date, result.session_id);
+  }
+
+  // Full GET/finish/reopen session rows use `id`. Validate their date when the
+  // server includes one before the ID can become date-scoped client truth.
+  function rememberFullSessionId(
+    deps: Pick<ClientTodaySessionControllerDeps, "state">,
+    date: string,
+    value: unknown,
+  ): string | null {
     const session = responseRecord(value);
-    if (session.id == null) return;
+    if (!responseMatchesDate(session, date)) return null;
+    return rememberId(deps, date, session.id);
+  }
+
+  function sessionPathId(
+    session: Record<string, unknown>,
+    deps: Pick<ClientTodaySessionControllerDeps, "state">,
+    date: string,
+  ): string | null {
+    const direct = responseMatchesDate(session, date) ? validSessionId(session.id) : null;
+    const state = deps.state as TodaySessionIdState;
+    const remembered = validSessionId(state.sessionIdsByDate?.[date]);
+    const id = direct ?? remembered;
+    return id ? encodeURIComponent(id) : null;
+  }
+
+  function sessionCacheKey(date: string): string {
+    return "today:session:" + date;
+  }
+
+  function cacheSessionTruth(deps: ClientTodaySessionControllerDeps, date: string, value: unknown): boolean {
+    const session = responseRecord(value);
+    if (!rememberFullSessionId(deps, date, session)) return false;
     const cacheable = { ...session };
     delete cacheable.summary;
-    deps.storeCached(sessionCacheKey(deps), cacheable);
+    deps.storeCached(sessionCacheKey(date), cacheable);
+    return true;
   }
 
   function invalidateSessionTruth(deps: ClientTodaySessionControllerDeps): void {
-    deps.invalidate(sessionCacheKey(deps));
+    deps.invalidate(sessionCacheKey(deps.state.logDate));
     deps.invalidate("history:sessions");
   }
 
   function invalidateSetTruth(deps: ClientTodaySessionControllerDeps): void {
     deps.state.brief = null;
-    deps.invalidate(sessionCacheKey(deps));
+    deps.invalidate(sessionCacheKey(deps.state.logDate));
     deps.invalidate("stats");
     deps.invalidate("history:sessions");
     deps.invalidate("progress:volume");
@@ -196,6 +267,8 @@ type TodaySessionSetModelApi = {
 
   const CAIRN_TODAY_SESSION_SET_MODEL: TodaySessionSetModelApi = {
     responseRecord,
+    rememberMutationSessionId,
+    rememberFullSessionId,
     sessionPathId,
     cacheSessionTruth,
     invalidateSessionTruth,

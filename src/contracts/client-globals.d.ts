@@ -296,6 +296,7 @@ declare global {
       logDate: string;
       brief?: unknown;
       planReveal?: { date: string; on: boolean; blank?: boolean } | null;
+      sessionIdsByDate?: Record<string, string>;
       pendingOffPlan?: Record<string, Array<{ name: string; mode?: string | null }>>;
     };
     api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
@@ -370,8 +371,22 @@ declare global {
     | { ok: false; message: string; focus?: () => void };
   type ClientTodaySessionSetModelApi = {
     responseRecord(value: unknown): Record<string, unknown>;
-    sessionPathId(session: Record<string, unknown>): string;
-    cacheSessionTruth(deps: ClientTodaySessionControllerDeps, value: unknown): void;
+    rememberMutationSessionId(
+      deps: Pick<ClientTodaySessionControllerDeps, "state">,
+      date: string,
+      value: unknown
+    ): string | null;
+    rememberFullSessionId(
+      deps: Pick<ClientTodaySessionControllerDeps, "state">,
+      date: string,
+      value: unknown
+    ): string | null;
+    sessionPathId(
+      session: Record<string, unknown>,
+      deps: Pick<ClientTodaySessionControllerDeps, "state">,
+      date: string
+    ): string | null;
+    cacheSessionTruth(deps: ClientTodaySessionControllerDeps, date: string, value: unknown): boolean;
     invalidateSessionTruth(deps: ClientTodaySessionControllerDeps): void;
     invalidateSetTruth(deps: ClientTodaySessionControllerDeps): void;
     logPayloadFromRow(row: HTMLElement, deps: ClientTodaySessionControllerDeps): ClientTodaySessionSetPayloadResult;

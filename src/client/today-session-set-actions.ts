@@ -8,6 +8,10 @@ type TodaySessionSetActionsApi = {
 };
 
 (() => {
+  function surfaceStillCurrent(deps: ClientTodaySessionControllerDeps, date: string, tab: string | undefined): boolean {
+    return deps.state.logDate === date && deps.state.tab === tab;
+  }
+
   function wireDeletes(deps: ClientTodaySessionControllerDeps): void {
     deps.root.querySelectorAll<HTMLElement>("[data-del]").forEach((button) => {
       if (button.dataset.wired) return;
@@ -105,9 +109,14 @@ type TodaySessionSetActionsApi = {
     if (!(row instanceof HTMLElement)) return;
     const logBtn = row.querySelector<HTMLButtonElement>(".logbtn");
     if (!logBtn || logBtn.dataset.wired) return;
+    const surfaceDate = deps.state.logDate;
+    const surfaceTab = deps.state.tab;
     logBtn.dataset.wired = "1";
     logBtn.addEventListener("click", async () => {
       if (logBtn.disabled) return;
+      if (!surfaceStillCurrent(deps, surfaceDate, surfaceTab)) return;
+      const actionDate = surfaceDate;
+      const actionTab = surfaceTab;
       const payload = CairnTodaySessionSetModel.logPayloadFromRow(row, deps);
       if (!payload.ok) {
         deps.toast(payload.message);
@@ -124,27 +133,41 @@ type TodaySessionSetActionsApi = {
           body: JSON.stringify(payload.body),
         }));
       } catch (error) {
-        logBtn.disabled = false;
         const classify = (globalThis as {
           CairnApiCache?: { isTransientApiFailure?: (value: unknown) => boolean };
         }).CairnApiCache?.isTransientApiFailure;
         if (typeof classify === "function" && !classify(error)) {
-          deps.toast("Couldn't log that set.");
+          if (surfaceStillCurrent(deps, actionDate, actionTab)) {
+            logBtn.disabled = false;
+            deps.toast("Couldn't log that set.");
+          }
           return;
         }
         // Dead zone on the gym floor — DON'T drop the set. Queue the exact POST and
         // replay it in order on reconnect; the persistent "N to sync" line and the
         // toast tell the user it's held, not lost.
         (globalThis as { outboxEnqueue?: (kind: string, path: string, body: unknown) => unknown }).outboxEnqueue?.("set", "/sets", payload.body);
-        deps.toast("Set saved — will sync when you're back online");
+        if (surfaceStillCurrent(deps, actionDate, actionTab)) {
+          logBtn.disabled = false;
+          deps.toast("Set saved — will sync when you're back online");
+        }
         return;
       }
-      logBtn.disabled = false;
-      if (!result || result.ok === false || result.error || result.id == null) {
-        deps.toast(result && result.error ? String(result.error) : "Couldn't log that set.");
+      const responseDateMatches = result.date == null || String(result.date) === actionDate;
+      if (!result || result.ok === false || result.error || result.id == null || !responseDateMatches) {
+        if (surfaceStillCurrent(deps, actionDate, actionTab)) {
+          logBtn.disabled = false;
+          deps.toast(result && result.error ? String(result.error) : "Couldn't log that set.");
+        }
         return;
       }
 
+      // POST /sets returns `id` for the set itself. Only its explicit
+      // `session_id` may seed Finish; older responses without that field recover
+      // via GET /sessions?date= instead of adopting the set ID.
+      CairnTodaySessionSetModel.rememberMutationSessionId(deps, actionDate, result);
+      if (!surfaceStillCurrent(deps, actionDate, actionTab)) return;
+      logBtn.disabled = false;
       CairnTodaySessionSetModel.invalidateSetTruth(deps);
 
       const card = row.closest<HTMLElement>(".ex");

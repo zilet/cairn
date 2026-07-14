@@ -13,41 +13,45 @@ type TodaySessionSurfaceOptions = ClientTodaySessionSurfaceOptions;
   // so it survives a reload before the workout is finished. Mirrors the chat-draft
   // pattern; every access is wrapped so a missing/disabled localStorage is a no-op.
   const SESSION_NOTES_DRAFT_PREFIX = "cairn.sessnotes.";
-  function sessionNotesDraftKey(deps: TodaySessionDeps): string {
-    return SESSION_NOTES_DRAFT_PREFIX + (deps.state.logDate || "");
+  function sessionNotesDraftKey(date: string): string {
+    return SESSION_NOTES_DRAFT_PREFIX + date;
   }
-  function saveSessionNotesDraft(deps: TodaySessionDeps, value: string): void {
+  function saveSessionNotesDraft(date: string, value: string): void {
     try {
-      const key = sessionNotesDraftKey(deps);
+      const key = sessionNotesDraftKey(date);
       if (value && value.trim()) localStorage.setItem(key, value);
       else localStorage.removeItem(key);
     } catch {}
   }
-  function loadSessionNotesDraft(deps: TodaySessionDeps): string {
+  function loadSessionNotesDraft(date: string): string {
     try {
-      return localStorage.getItem(sessionNotesDraftKey(deps)) || "";
+      return localStorage.getItem(sessionNotesDraftKey(date)) || "";
     } catch {
       return "";
     }
   }
-  function clearSessionNotesDraft(deps: TodaySessionDeps): void {
+  function clearSessionNotesDraft(date: string): void {
     try {
-      localStorage.removeItem(sessionNotesDraftKey(deps));
+      localStorage.removeItem(sessionNotesDraftKey(date));
     } catch {}
+  }
+
+  function surfaceStillCurrent(deps: TodaySessionDeps, date: string, tab: string | undefined): boolean {
+    return deps.state.logDate === date && deps.state.tab === tab;
   }
 
   // Restore a locally-drafted note into an EMPTY session-notes input (a
   // server-provided note, rendered into value=, wins — the draft only fills a
   // blank) and persist edits as the athlete types, so a reload never loses the note.
-  function wireSessionNotesDraft(deps: TodaySessionDeps): void {
+  function wireSessionNotesDraft(deps: TodaySessionDeps, date: string): void {
     const notesEl = deps.root.querySelector<HTMLInputElement | HTMLTextAreaElement>("#sessNotes");
     if (!notesEl || notesEl.dataset.wired) return;
     notesEl.dataset.wired = "1";
     if (!notesEl.value.trim()) {
-      const draft = loadSessionNotesDraft(deps);
+      const draft = loadSessionNotesDraft(date);
       if (draft) notesEl.value = draft;
     }
-    notesEl.addEventListener("input", () => saveSessionNotesDraft(deps, notesEl.value));
+    notesEl.addEventListener("input", () => saveSessionNotesDraft(date, notesEl.value));
   }
 
   function finishedBrief(date: string, summary: Record<string, unknown>): Record<string, unknown> {
@@ -69,14 +73,59 @@ type TodaySessionSurfaceOptions = ClientTodaySessionSurfaceOptions;
     };
   }
 
-  function wireFinishControls(session: Record<string, unknown>, deps: TodaySessionDeps): void {
+  // Resolve only a validated, real DB session ID. The normal focused-screen path
+  // gets it from the first set/skip response via rememberMutationSessionId(). The read is
+  // a recovery path for a set that was replayed from the offline outbox, another
+  // surface creating the session, or an older server response without session_id.
+  async function recoverSessionPathId(
+    deps: TodaySessionDeps,
+    date: string,
+    tab: string | undefined,
+  ): Promise<string | null> {
+    let fresh: Record<string, unknown>;
+    try {
+      fresh = CairnTodaySessionSetModel.responseRecord(
+        await deps.api("/sessions?date=" + encodeURIComponent(date)),
+      );
+    } catch {
+      return null;
+    }
+    const id = CairnTodaySessionSetModel.rememberFullSessionId(deps, date, fresh);
+    if (!id) return null;
+    if (!surfaceStillCurrent(deps, date, tab)) return null;
+    if (!CairnTodaySessionSetModel.cacheSessionTruth(deps, date, fresh)) return null;
+    return encodeURIComponent(id);
+  }
+
+  function wireFinishControls(
+    session: Record<string, unknown>,
+    deps: TodaySessionDeps,
+    surfaceDate: string,
+    surfaceTab: string | undefined,
+  ): void {
     const finishBtn = deps.root.querySelector<HTMLButtonElement>("#finishBtn");
     if (finishBtn && !finishBtn.dataset.wired) {
       finishBtn.dataset.wired = "1";
       finishBtn.addEventListener("click", async () => {
+        if (!surfaceStillCurrent(deps, surfaceDate, surfaceTab)) return;
+        const actionDate = surfaceDate;
+        const actionTab = surfaceTab;
         finishBtn.disabled = true;
-        const finishPath = `/sessions/${CairnTodaySessionSetModel.sessionPathId(session)}/finish`;
         const notes = deps.root.querySelector<HTMLInputElement | HTMLTextAreaElement>("#sessNotes")?.value.trim() || "";
+        // The action may need an async ID recovery; persist the note under the
+        // action's date before yielding so a navigation can never strand it.
+        saveSessionNotesDraft(actionDate, notes);
+        const sessionId = CairnTodaySessionSetModel.sessionPathId(session, deps, actionDate)
+          || await recoverSessionPathId(deps, actionDate, actionTab);
+        if (!sessionId) {
+          if (surfaceStillCurrent(deps, actionDate, actionTab)) {
+            finishBtn.disabled = false;
+            deps.toast("Session isn't ready yet — your note is saved");
+          }
+          return;
+        }
+        if (!surfaceStillCurrent(deps, actionDate, actionTab)) return;
+        const finishPath = `/sessions/${sessionId}/finish`;
         // Scope a ~15s AbortController to THIS call (guarded for environments
         // without AbortController, mirroring api-client's own guard) so a hang
         // takes the same offline path a thrown fetch already does. Finish replay
@@ -97,12 +146,14 @@ type TodaySessionSurfaceOptions = ClientTodaySessionSurfaceOptions;
         try {
           result = CairnTodaySessionSetModel.responseRecord(await deps.api(finishPath, finishOpts));
         } catch (error) {
-          finishBtn.disabled = false;
           const classify = (globalThis as {
             CairnApiCache?: { isTransientApiFailure?: (value: unknown) => boolean };
           }).CairnApiCache?.isTransientApiFailure;
           if (typeof classify === "function" && !classify(error)) {
-            deps.toast("Couldn't finish that session");
+            if (surfaceStillCurrent(deps, actionDate, actionTab)) {
+              finishBtn.disabled = false;
+              deps.toast("Couldn't finish that session");
+            }
             return;
           }
           (globalThis as { outboxEnqueue?: (kind: string, path: string, body: unknown) => unknown }).outboxEnqueue?.(
@@ -110,29 +161,37 @@ type TodaySessionSurfaceOptions = ClientTodaySessionSurfaceOptions;
             finishPath,
             { notes },
           );
-          clearSessionNotesDraft(deps); // the note is safe in the outbox now
-          deps.toast("Finish saved — will sync when you're back online");
+          clearSessionNotesDraft(actionDate); // the note is safe in the outbox now
+          if (surfaceStillCurrent(deps, actionDate, actionTab)) {
+            finishBtn.disabled = false;
+            deps.toast("Finish saved — will sync when you're back online");
+          }
           return;
         } finally {
           if (finishTimer != null && typeof clearTimeout === "function") clearTimeout(finishTimer);
         }
-        if (!result || result.error || result.ok === false || result.id == null) {
-          finishBtn.disabled = false;
-          deps.toast(result && result.error ? String(result.error) : "Couldn't finish that session");
+        const responseDateMatches = result.date == null || String(result.date) === actionDate;
+        const responseIdMatches = String(result.id ?? "") === decodeURIComponent(sessionId);
+        if (!result || result.error || result.ok === false || !responseDateMatches || !responseIdMatches) {
+          if (surfaceStillCurrent(deps, actionDate, actionTab)) {
+            finishBtn.disabled = false;
+            deps.toast(result && result.error ? String(result.error) : "Couldn't finish that session");
+          }
           return;
         }
-        clearSessionNotesDraft(deps); // finished cleanly — the draft has done its job
+        clearSessionNotesDraft(actionDate); // finished cleanly — the draft has done its job
+        if (!surfaceStillCurrent(deps, actionDate, actionTab)) return;
 
         const summary = CairnTodaySessionSetModel.responseRecord(result.summary);
-        CairnTodaySessionSetModel.cacheSessionTruth(deps, result);
+        if (!CairnTodaySessionSetModel.cacheSessionTruth(deps, actionDate, result)) return;
         deps.state.planReveal = null;
-        deps.state.brief = finishedBrief(deps.state.logDate, summary);
+        deps.state.brief = finishedBrief(actionDate, summary);
         deps.invalidate("stats");
         deps.invalidate("history:sessions");
         deps.stopRest();
 
         const settle = () => {
-          if (deps.state.tab !== "today" && deps.state.tab !== "session") return;
+          if (!surfaceStillCurrent(deps, actionDate, actionTab)) return;
           deps.toast(`Done · ${Number(summary.sets || 0)} sets · ${Number(summary.tonnage || 0).toLocaleString()} lb`);
           deps.renderToday();
         };
@@ -150,18 +209,46 @@ type TodaySessionSurfaceOptions = ClientTodaySessionSurfaceOptions;
     if (reopenBtn && !reopenBtn.dataset.wired) {
       reopenBtn.dataset.wired = "1";
       reopenBtn.addEventListener("click", async () => {
+        if (!surfaceStillCurrent(deps, surfaceDate, surfaceTab)) return;
+        const actionDate = surfaceDate;
+        const actionTab = surfaceTab;
         reopenBtn.disabled = true;
+        const sessionId = CairnTodaySessionSetModel.sessionPathId(session, deps, actionDate)
+          || await recoverSessionPathId(deps, actionDate, actionTab);
+        if (!sessionId) {
+          if (surfaceStillCurrent(deps, actionDate, actionTab)) {
+            reopenBtn.disabled = false;
+            deps.toast("Couldn't reopen that session");
+          }
+          return;
+        }
+        if (!surfaceStillCurrent(deps, actionDate, actionTab)) return;
         let result: Record<string, unknown> | null = null;
         try {
           result = CairnTodaySessionSetModel.responseRecord(
-            await deps.api(`/sessions/${CairnTodaySessionSetModel.sessionPathId(session)}/reopen`, { method: "POST" }),
+            await deps.api(`/sessions/${sessionId}/reopen`, { method: "POST" }),
           );
-        } catch {}
+        } catch {
+          if (surfaceStillCurrent(deps, actionDate, actionTab)) {
+            reopenBtn.disabled = false;
+            deps.toast("Couldn't reopen that session");
+          }
+          return;
+        }
+        const responseDateMatches = result?.date == null || String(result.date) === actionDate;
+        const responseIdMatches = String(result?.id ?? "") === decodeURIComponent(sessionId);
+        if (!result || result.error || result.ok === false || !responseDateMatches || !responseIdMatches) {
+          if (surfaceStillCurrent(deps, actionDate, actionTab)) {
+            reopenBtn.disabled = false;
+            deps.toast(result && result.error ? String(result.error) : "Couldn't reopen that session");
+          }
+          return;
+        }
+        if (!surfaceStillCurrent(deps, actionDate, actionTab)) return;
         deps.state.brief = null;
-        if (result && result.id != null) CairnTodaySessionSetModel.cacheSessionTruth(deps, result);
-        else deps.invalidate("today:session:" + deps.state.logDate);
+        if (!CairnTodaySessionSetModel.cacheSessionTruth(deps, actionDate, result)) return;
         deps.invalidate("history:sessions");
-        deps.state.planReveal = { date: deps.state.logDate, on: true };
+        deps.state.planReveal = { date: actionDate, on: true };
         deps.withViewTransition(() => Promise.resolve(deps.renderToday()).then(() => deps.viewEnter()));
       });
     }
@@ -171,10 +258,13 @@ type TodaySessionSurfaceOptions = ClientTodaySessionSurfaceOptions;
 
   function wireSessionSurface(options: TodaySessionSurfaceOptions, deps: TodaySessionDeps): void {
     const session = CairnTodaySessionSetModel.responseRecord(options.session);
+    const surfaceDate = deps.state.logDate;
+    const surfaceTab = deps.state.tab;
+    CairnTodaySessionSetModel.rememberFullSessionId(deps, surfaceDate, session);
     CairnTodaySessionSetActions.wireDeletes(deps);
     CairnTodaySessionSkip.wireSkips(deps);
-    wireFinishControls(session, deps);
-    wireSessionNotesDraft(deps);
+    wireFinishControls(session, deps, surfaceDate, surfaceTab);
+    wireSessionNotesDraft(deps, surfaceDate);
     const lastSets = options.lastSets || {};
     deps.root.querySelectorAll<HTMLElement>(".ex .logrow").forEach((row) => {
       CairnTodaySessionSetActions.wireLogRow(row, deps);

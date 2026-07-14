@@ -473,6 +473,527 @@ test("Today session controller does not poison the outbox on a permanent set rej
   assert.deepEqual(harness.toasts.map((toast) => toast.message), ["Couldn't log that set."]);
 });
 
+test("focused Session finishes with the real ID created by its first set without rewiring", async () => {
+  const harness = loadController({
+    apiImpl: async (path, opts) => {
+      if (path === "/sets" && opts?.method === "POST") {
+        return { id: 10, session_id: 88, set_number: 1, weight: 20, reps: 8, rir: 2 };
+      }
+      if (path === "/sessions/88/finish" && opts?.method === "POST") {
+        return {
+          id: 88,
+          date: "2026-06-30",
+          finished_at: "2026-06-30T15:00:00Z",
+          sets: [{ exercise: "Push-up", weight: 20, reps: 8 }],
+          summary: { sets: 1, tonnage: 160 },
+        };
+      }
+      throw new Error(`unexpected request: ${opts?.method || "GET"} ${path}`);
+    },
+  });
+  harness.deps.state.tab = "session";
+  const surface = harness.rootEl.appendChild(new FakeElement("div", { className: "plansurface" }));
+  surface.appendChild(new FakeElement("textarea", { id: "sessNotes", value: "focused session" }));
+  const finish = surface.appendChild(new FakeElement("button", { id: "finishBtn" }));
+  const { button } = addLoggingCard(harness.rootEl);
+
+  // Focused Session deliberately has a Finish control before a session row exists.
+  harness.controller.wireSessionSurface({ session: null, hasLoggedSets: true }, harness.deps);
+  button.click();
+  await flushAsync();
+  finish.click();
+  await flushAsync();
+
+  assert.deepEqual(harness.requests.map((request) => request.path), ["/sets", "/sessions/88/finish"]);
+  assert.equal(harness.requests.some((request) => request.path.includes("/sessions//")), false);
+  assert.equal(harness.outbox.length, 0);
+  assert.equal(harness.deps.state.brief.read.kind, "done");
+});
+
+test("focused Session finishes with the real ID created by its first skip", async () => {
+  const harness = loadController({
+    apiImpl: async (path, opts) => {
+      if (path === "/sessions/skip" && opts?.method === "POST") {
+        return { ok: true, session_id: 89, date: "2026-06-30", exercise: "Squat", skips: ["Squat"] };
+      }
+      if (path === "/sessions/89/finish" && opts?.method === "POST") {
+        return {
+          id: 89,
+          date: "2026-06-30",
+          finished_at: "2026-06-30T15:00:00Z",
+          sets: [],
+          summary: { sets: 0, tonnage: 0 },
+        };
+      }
+      throw new Error(`unexpected request: ${opts?.method || "GET"} ${path}`);
+    },
+  });
+  harness.deps.state.tab = "session";
+  const surface = harness.rootEl.appendChild(new FakeElement("div", { className: "plansurface" }));
+  const finish = surface.appendChild(new FakeElement("button", { id: "finishBtn" }));
+  const card = harness.rootEl.appendChild(new FakeElement("article", { className: "ex", dataset: { card: "Squat" } }));
+  const skip = card.appendChild(new FakeElement("button", {
+    className: "ex-skip",
+    dataset: { skip: encodeURIComponent("Squat") },
+  }));
+
+  harness.controller.wireSessionSurface({ session: null, hasLoggedSets: true }, harness.deps);
+  skip.click();
+  await flushAsync();
+  finish.click();
+  await flushAsync();
+
+  assert.deepEqual(harness.requests.map((request) => request.path), ["/sessions/skip", "/sessions/89/finish"]);
+  assert.equal(harness.requests.some((request) => request.path.includes("/sessions//")), false);
+});
+
+test("focused Session never posts or queues a malformed finish when no real session ID exists", async () => {
+  const store = new Map();
+  const localStorage = {
+    getItem: (key) => (store.has(key) ? store.get(key) : null),
+    setItem: (key, value) => { store.set(key, String(value)); },
+    removeItem: (key) => { store.delete(key); },
+  };
+  const harness = loadController({
+    apiImpl: async (path, opts) => {
+      if (path === "/sessions?date=2026-06-30" && !opts?.method) return null;
+      throw new Error(`unexpected request: ${opts?.method || "GET"} ${path}`);
+    },
+    contextOverrides: { localStorage },
+  });
+  harness.deps.state.tab = "session";
+  const surface = harness.rootEl.appendChild(new FakeElement("div", { className: "plansurface" }));
+  const notes = surface.appendChild(new FakeElement("textarea", { id: "sessNotes", value: "keep this note" }));
+  const finish = surface.appendChild(new FakeElement("button", { id: "finishBtn" }));
+
+  harness.controller.wireSessionSurface({ session: null, hasLoggedSets: true }, harness.deps);
+  finish.click();
+  await flushAsync();
+  await flushAsync(); // recovery GET + controller continuation
+
+  assert.deepEqual(harness.requests.map((request) => request.path), ["/sessions?date=2026-06-30"]);
+  assert.equal(harness.requests.some((request) => request.opts?.method === "POST"), false);
+  assert.equal(harness.requests.some((request) => request.path.includes("/sessions//")), false);
+  assert.equal(harness.outbox.length, 0);
+  assert.equal(notes.value, "keep this note");
+  assert.equal(store.get("cairn.sessnotes.2026-06-30"), "keep this note");
+  assert.equal(finish.disabled, false);
+  assert.deepEqual(harness.toasts.map((toast) => toast.message), ["Session isn't ready yet — your note is saved"]);
+  assert.equal(harness.setModel.sessionPathId({}, harness.deps, "2026-06-30"), null);
+  assert.equal(harness.setModel.sessionPathId({ id: 0 }, harness.deps, "2026-06-30"), null);
+});
+
+test("focused Session recovers the session created by an offline replay before finishing", async () => {
+  const harness = loadController({
+    apiImpl: async (path, opts) => {
+      if (path === "/sessions?date=2026-06-30" && !opts?.method) {
+        return { id: 90, date: "2026-06-30", sets: [{ exercise: "Push-up" }] };
+      }
+      if (path === "/sessions/90/finish" && opts?.method === "POST") {
+        return {
+          id: 90,
+          date: "2026-06-30",
+          finished_at: "2026-06-30T15:00:00Z",
+          sets: [{ exercise: "Push-up" }],
+          summary: { sets: 1, tonnage: 160 },
+        };
+      }
+      throw new Error(`unexpected request: ${opts?.method || "GET"} ${path}`);
+    },
+  });
+  harness.deps.state.tab = "session";
+  const surface = harness.rootEl.appendChild(new FakeElement("div", { className: "plansurface" }));
+  const finish = surface.appendChild(new FakeElement("button", { id: "finishBtn" }));
+
+  harness.controller.wireSessionSurface({ session: null, hasLoggedSets: true }, harness.deps);
+  finish.click();
+  await flushAsync();
+  await flushAsync();
+
+  assert.deepEqual(harness.requests.map((request) => request.path), [
+    "/sessions?date=2026-06-30",
+    "/sessions/90/finish",
+  ]);
+  assert.equal(harness.cachedWrites[0].key, "today:session:2026-06-30");
+});
+
+test("remembered session IDs are isolated by date", () => {
+  const harness = loadController();
+  harness.setModel.rememberMutationSessionId(harness.deps, "2026-06-30", { session_id: 91, id: 10 });
+
+  assert.equal(harness.setModel.sessionPathId({}, harness.deps, "2026-06-30"), "91");
+  harness.deps.state.logDate = "2026-07-01";
+  assert.equal(harness.setModel.sessionPathId({}, harness.deps, "2026-07-01"), null);
+});
+
+test("set mutation IDs never masquerade as session IDs when session_id is absent", async () => {
+  const harness = loadController({
+    apiImpl: async (path, opts) => {
+      if (path === "/sets" && opts?.method === "POST") {
+        return { id: 10, date: "2026-06-30", set_number: 1, weight: 20, reps: 8, rir: 2 };
+      }
+      if (path === "/sessions?date=2026-06-30" && !opts?.method) {
+        return { id: 93, date: "2026-06-30", sets: [{ exercise: "Push-up" }] };
+      }
+      if (path === "/sessions/93/finish" && opts?.method === "POST") {
+        return {
+          id: 93,
+          date: "2026-06-30",
+          finished_at: "2026-06-30T15:00:00Z",
+          sets: [{ exercise: "Push-up" }],
+          summary: { sets: 1, tonnage: 160 },
+        };
+      }
+      throw new Error(`unexpected request: ${opts?.method || "GET"} ${path}`);
+    },
+  });
+  harness.deps.state.tab = "session";
+  const surface = harness.rootEl.appendChild(new FakeElement("div", { className: "plansurface" }));
+  const finish = surface.appendChild(new FakeElement("button", { id: "finishBtn" }));
+  const { button } = addLoggingCard(harness.rootEl);
+
+  harness.controller.wireSessionSurface({ session: null, hasLoggedSets: true }, harness.deps);
+  button.click();
+  await flushAsync();
+  finish.click();
+  await flushAsync();
+  await flushAsync();
+
+  assert.deepEqual(harness.requests.map((request) => request.path), [
+    "/sets",
+    "/sessions?date=2026-06-30",
+    "/sessions/93/finish",
+  ]);
+  assert.equal(harness.requests.some((request) => request.path === "/sessions/10/finish"), false);
+});
+
+test("an in-flight set response stays scoped to its request date after navigation", async () => {
+  let resolveSet;
+  const harness = loadController({
+    apiImpl: async (path, opts) => {
+      if (path === "/sets" && opts?.method === "POST") {
+        return new Promise((resolve) => { resolveSet = resolve; });
+      }
+      throw new Error(`unexpected request: ${opts?.method || "GET"} ${path}`);
+    },
+  });
+  const { row, button, logged } = addLoggingCard(harness.rootEl);
+  harness.controller.wireLogRow(row, harness.deps);
+
+  button.click();
+  await flushAsync();
+  assert.equal(JSON.parse(harness.requests[0].opts.body).date, "2026-06-30");
+  harness.deps.state.logDate = "2026-07-01";
+  resolveSet({
+    id: 10,
+    session_id: 94,
+    date: "2026-06-30",
+    set_number: 1,
+    weight: 20,
+    reps: 8,
+    rir: 2,
+  });
+  await flushAsync();
+
+  assert.equal(harness.deps.state.sessionIdsByDate["2026-06-30"], "94");
+  assert.equal(harness.deps.state.sessionIdsByDate["2026-07-01"], undefined);
+  assert.equal(harness.setModel.sessionPathId({}, harness.deps, "2026-07-01"), null);
+  assert.equal(logged.children.length, 0);
+  assert.deepEqual(harness.invalidations, []);
+  assert.deepEqual(harness.toasts, []);
+  assert.deepEqual(harness.starts, []);
+});
+
+test("an in-flight skip response cannot mutate the next date's surface", async () => {
+  let resolveSkip;
+  const harness = loadController({
+    apiImpl: async (path, opts) => {
+      if (path === "/sessions/skip" && opts?.method === "POST") {
+        return new Promise((resolve) => { resolveSkip = resolve; });
+      }
+      throw new Error(`unexpected request: ${opts?.method || "GET"} ${path}`);
+    },
+  });
+  const card = harness.rootEl.appendChild(new FakeElement("article", { className: "ex", dataset: { card: "Squat" } }));
+  const skip = card.appendChild(new FakeElement("button", {
+    className: "ex-skip",
+    dataset: { skip: encodeURIComponent("Squat") },
+  }));
+  harness.controller.wireSkips(harness.deps);
+
+  skip.click();
+  await flushAsync();
+  assert.deepEqual(JSON.parse(harness.requests[0].opts.body), { date: "2026-06-30", exercise: "Squat" });
+  harness.deps.state.logDate = "2026-07-01";
+  resolveSkip({ ok: true, session_id: 95, date: "2026-06-30", exercise: "Squat", skips: ["Squat"] });
+  await flushAsync();
+
+  assert.equal(harness.deps.state.sessionIdsByDate["2026-06-30"], "95");
+  assert.equal(harness.deps.state.sessionIdsByDate["2026-07-01"], undefined);
+  assert.equal(card.isConnected, true);
+  assert.deepEqual(harness.invalidations, []);
+  assert.deepEqual(harness.collapses, []);
+  assert.deepEqual(harness.toasts, []);
+  assert.deepEqual(harness.renders, []);
+});
+
+test("in-flight recovery never finishes or caches its session after the date changes", async () => {
+  let resolveRecovery;
+  const store = new Map();
+  const localStorage = {
+    getItem: (key) => (store.has(key) ? store.get(key) : null),
+    setItem: (key, value) => { store.set(key, String(value)); },
+    removeItem: (key) => { store.delete(key); },
+  };
+  const harness = loadController({
+    apiImpl: async (path, opts) => {
+      if (path === "/sessions?date=2026-06-30" && !opts?.method) {
+        return new Promise((resolve) => { resolveRecovery = resolve; });
+      }
+      throw new Error(`unexpected request: ${opts?.method || "GET"} ${path}`);
+    },
+    contextOverrides: { localStorage },
+  });
+  harness.deps.state.tab = "session";
+  const surface = harness.rootEl.appendChild(new FakeElement("div", { className: "plansurface" }));
+  surface.appendChild(new FakeElement("textarea", { id: "sessNotes", value: "keep on A" }));
+  const finish = surface.appendChild(new FakeElement("button", { id: "finishBtn" }));
+  harness.controller.wireSessionSurface({ session: null, hasLoggedSets: true }, harness.deps);
+
+  finish.click();
+  await flushAsync();
+  harness.deps.state.logDate = "2026-07-01";
+  resolveRecovery({ id: 96, date: "2026-06-30", sets: [{ exercise: "Push-up" }] });
+  await flushAsync();
+  await flushAsync();
+
+  assert.deepEqual(harness.requests.map((request) => request.path), ["/sessions?date=2026-06-30"]);
+  assert.equal(harness.deps.state.sessionIdsByDate["2026-06-30"], "96");
+  assert.equal(harness.deps.state.sessionIdsByDate["2026-07-01"], undefined);
+  assert.deepEqual(harness.cachedWrites, []);
+  assert.deepEqual(harness.invalidations, []);
+  assert.deepEqual(harness.toasts, []);
+  assert.equal(store.get("cairn.sessnotes.2026-06-30"), "keep on A");
+  assert.equal(store.has("cairn.sessnotes.2026-07-01"), false);
+});
+
+test("session recovery rejects a full-session row for a different date", async () => {
+  const harness = loadController({
+    apiImpl: async (path, opts) => {
+      if (path === "/sessions?date=2026-06-30" && !opts?.method) {
+        return { id: 97, date: "2026-07-01", sets: [{ exercise: "Push-up" }] };
+      }
+      throw new Error(`unexpected request: ${opts?.method || "GET"} ${path}`);
+    },
+  });
+  harness.deps.state.tab = "session";
+  const surface = harness.rootEl.appendChild(new FakeElement("div", { className: "plansurface" }));
+  const finish = surface.appendChild(new FakeElement("button", { id: "finishBtn" }));
+  harness.controller.wireSessionSurface({ session: null, hasLoggedSets: true }, harness.deps);
+
+  finish.click();
+  await flushAsync();
+  await flushAsync();
+
+  assert.deepEqual(harness.requests.map((request) => request.path), ["/sessions?date=2026-06-30"]);
+  assert.equal(harness.deps.state.sessionIdsByDate?.["2026-06-30"], undefined);
+  assert.equal(harness.deps.state.sessionIdsByDate?.["2026-07-01"], undefined);
+  assert.deepEqual(harness.cachedWrites, []);
+  assert.deepEqual(harness.toasts.map((toast) => toast.message), ["Session isn't ready yet — your note is saved"]);
+});
+
+test("an in-flight finish response cannot cache or repaint under the next date", async () => {
+  let resolveFinish;
+  const harness = loadController({
+    apiImpl: async (path, opts) => {
+      if (path === "/sessions/44/finish" && opts?.method === "POST") {
+        return new Promise((resolve) => { resolveFinish = resolve; });
+      }
+      throw new Error(`unexpected request: ${opts?.method || "GET"} ${path}`);
+    },
+  });
+  harness.deps.state.tab = "session";
+  const surface = harness.rootEl.appendChild(new FakeElement("div", { className: "plansurface" }));
+  const finish = surface.appendChild(new FakeElement("button", { id: "finishBtn" }));
+  harness.controller.wireSessionSurface({
+    session: { id: 44, date: "2026-06-30", sets: [{ exercise: "Push-up" }] },
+    hasLoggedSets: true,
+  }, harness.deps);
+
+  finish.click();
+  await flushAsync();
+  harness.deps.state.logDate = "2026-07-01";
+  harness.deps.state.brief = { headline: "July 1" };
+  resolveFinish({
+    id: 44,
+    date: "2026-06-30",
+    finished_at: "2026-06-30T15:00:00Z",
+    sets: [{ exercise: "Push-up" }],
+    summary: { sets: 1, tonnage: 160 },
+  });
+  await flushAsync();
+
+  assert.deepEqual(harness.requests.map((request) => request.path), ["/sessions/44/finish"]);
+  assert.deepEqual(plain(harness.deps.state.brief), { headline: "July 1" });
+  assert.deepEqual(harness.cachedWrites, []);
+  assert.deepEqual(harness.invalidations, []);
+  assert.deepEqual(harness.toasts, []);
+  assert.deepEqual(harness.renders, []);
+  assert.deepEqual(harness.stops, []);
+});
+
+test("an in-flight reopen response cannot reopen or cache under the next date", async () => {
+  let resolveReopen;
+  const harness = loadController({
+    apiImpl: async (path, opts) => {
+      if (path === "/sessions/44/reopen" && opts?.method === "POST") {
+        return new Promise((resolve) => { resolveReopen = resolve; });
+      }
+      throw new Error(`unexpected request: ${opts?.method || "GET"} ${path}`);
+    },
+  });
+  harness.deps.state.tab = "session";
+  harness.deps.state.planReveal = { date: "2026-06-30", on: false };
+  const surface = harness.rootEl.appendChild(new FakeElement("div", { className: "plansurface" }));
+  const reopen = surface.appendChild(new FakeElement("button", { id: "reopenBtn" }));
+  harness.controller.wireSessionSurface({
+    session: { id: 44, date: "2026-06-30", finished_at: "2026-06-30T15:00:00Z" },
+    hasLoggedSets: true,
+  }, harness.deps);
+
+  reopen.click();
+  await flushAsync();
+  harness.deps.state.logDate = "2026-07-01";
+  harness.deps.state.brief = { headline: "July 1" };
+  harness.deps.state.planReveal = { date: "2026-07-01", on: false };
+  resolveReopen({ id: 44, date: "2026-06-30", finished_at: null, sets: [] });
+  await flushAsync();
+
+  assert.deepEqual(plain(harness.deps.state.brief), { headline: "July 1" });
+  assert.deepEqual(plain(harness.deps.state.planReveal), { date: "2026-07-01", on: false });
+  assert.deepEqual(harness.cachedWrites, []);
+  assert.deepEqual(harness.invalidations, []);
+  assert.deepEqual(harness.toasts, []);
+  assert.deepEqual(harness.renders, []);
+  assert.deepEqual(harness.transitions, []);
+});
+
+test("a failed session recovery keeps the note and never poisons the finish outbox", async () => {
+  const store = new Map();
+  const localStorage = {
+    getItem: (key) => (store.has(key) ? store.get(key) : null),
+    setItem: (key, value) => { store.set(key, String(value)); },
+    removeItem: (key) => { store.delete(key); },
+  };
+  const harness = loadController({
+    apiImpl: async () => { throw new Error("offline"); },
+    contextOverrides: { localStorage },
+  });
+  harness.deps.state.tab = "session";
+  const surface = harness.rootEl.appendChild(new FakeElement("div", { className: "plansurface" }));
+  surface.appendChild(new FakeElement("textarea", { id: "sessNotes", value: "offline note" }));
+  const finish = surface.appendChild(new FakeElement("button", { id: "finishBtn" }));
+
+  harness.controller.wireSessionSurface({ session: null, hasLoggedSets: true }, harness.deps);
+  finish.click();
+  await flushAsync();
+  await flushAsync();
+
+  assert.deepEqual(harness.requests.map((request) => request.path), ["/sessions?date=2026-06-30"]);
+  assert.equal(harness.outbox.length, 0);
+  assert.equal(store.get("cairn.sessnotes.2026-06-30"), "offline note");
+  assert.equal(finish.disabled, false);
+});
+
+test("Finish fails safe while the first set is still in flight, then adopts it on retry", async () => {
+  let resolveSet;
+  const store = new Map();
+  const localStorage = {
+    getItem: (key) => (store.has(key) ? store.get(key) : null),
+    setItem: (key, value) => { store.set(key, String(value)); },
+    removeItem: (key) => { store.delete(key); },
+  };
+  const harness = loadController({
+    apiImpl: async (path, opts) => {
+      if (path === "/sets" && opts?.method === "POST") {
+        return new Promise((resolve) => { resolveSet = resolve; });
+      }
+      if (path === "/sessions?date=2026-06-30" && !opts?.method) return null;
+      if (path === "/sessions/92/finish" && opts?.method === "POST") {
+        return {
+          id: 92,
+          date: "2026-06-30",
+          finished_at: "2026-06-30T15:00:00Z",
+          sets: [{ exercise: "Push-up" }],
+          summary: { sets: 1, tonnage: 160 },
+        };
+      }
+      throw new Error(`unexpected request: ${opts?.method || "GET"} ${path}`);
+    },
+    contextOverrides: { localStorage },
+  });
+  harness.deps.state.tab = "session";
+  const surface = harness.rootEl.appendChild(new FakeElement("div", { className: "plansurface" }));
+  surface.appendChild(new FakeElement("textarea", { id: "sessNotes", value: "race-safe note" }));
+  const finish = surface.appendChild(new FakeElement("button", { id: "finishBtn" }));
+  const { button } = addLoggingCard(harness.rootEl);
+
+  harness.controller.wireSessionSurface({ session: null, hasLoggedSets: true }, harness.deps);
+  button.click();
+  await flushAsync();
+  finish.click();
+  await flushAsync();
+  await flushAsync();
+
+  assert.deepEqual(harness.requests.map((request) => request.path), ["/sets", "/sessions?date=2026-06-30"]);
+  assert.equal(harness.outbox.length, 0);
+  assert.equal(store.get("cairn.sessnotes.2026-06-30"), "race-safe note");
+  assert.equal(finish.disabled, false);
+
+  resolveSet({ id: 10, session_id: 92, set_number: 1, weight: 20, reps: 8, rir: 2 });
+  await flushAsync();
+  await flushAsync();
+  finish.click();
+  await flushAsync();
+
+  assert.equal(harness.requests.at(-1).path, "/sessions/92/finish");
+  assert.equal(harness.requests.some((request) => request.path.includes("/sessions//")), false);
+});
+
+test("Reopen leaves the current UI intact when ID recovery or the POST fails", async () => {
+  const missing = loadController({ apiImpl: async () => null });
+  missing.deps.state.planReveal = { date: "2026-06-30", on: false };
+  const missingBrief = missing.deps.state.brief;
+  const missingSurface = missing.rootEl.appendChild(new FakeElement("div", { className: "plansurface" }));
+  const missingReopen = missingSurface.appendChild(new FakeElement("button", { id: "reopenBtn" }));
+  missing.controller.wireSessionSurface({ session: null, hasLoggedSets: false }, missing.deps);
+  missingReopen.click();
+  await flushAsync();
+  await flushAsync();
+
+  assert.equal(missing.deps.state.brief, missingBrief);
+  assert.deepEqual(plain(missing.deps.state.planReveal), { date: "2026-06-30", on: false });
+  assert.equal(missing.renders.length, 0);
+  assert.equal(missing.transitions.length, 0);
+  assert.equal(missingReopen.disabled, false);
+
+  const rejected = loadController({ apiImpl: async () => { throw new Error("offline"); } });
+  rejected.deps.state.planReveal = { date: "2026-06-30", on: false };
+  const rejectedBrief = rejected.deps.state.brief;
+  const rejectedSurface = rejected.rootEl.appendChild(new FakeElement("div", { className: "plansurface" }));
+  const rejectedReopen = rejectedSurface.appendChild(new FakeElement("button", { id: "reopenBtn" }));
+  rejected.controller.wireSessionSurface({ session: { id: 44 }, hasLoggedSets: false }, rejected.deps);
+  rejectedReopen.click();
+  await flushAsync();
+
+  assert.deepEqual(rejected.requests.map((request) => request.path), ["/sessions/44/reopen"]);
+  assert.equal(rejected.deps.state.brief, rejectedBrief);
+  assert.deepEqual(plain(rejected.deps.state.planReveal), { date: "2026-06-30", on: false });
+  assert.equal(rejected.renders.length, 0);
+  assert.equal(rejected.transitions.length, 0);
+  assert.equal(rejectedReopen.disabled, false);
+});
+
 test("Today session controller finishes into cached done mode immediately", async () => {
   const harness = loadController({
     apiImpl: async (path, opts) => {
