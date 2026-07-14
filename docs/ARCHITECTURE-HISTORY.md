@@ -4,6 +4,50 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-07-14 — trustworthy daily reads, durable capture, and Apple Health pairing
+
+Cairn **v1.2.0** applies one shared reading grammar across the daily driver. The
+Brief exposes the small set of contributors behind its suggestion, leads with
+what is going well, and presents missing or uncertain evidence as context rather
+than a score. Recovery and training-load reads now derive bounded personal
+baselines when enough history exists and fall back conservatively when it does
+not. The Energy Balance surface uses the same plain-language lead and confidence
+geometry, while accepted nutrition-target changes can trigger downstream meal
+planning through the existing autonomy, boundary, supersession, and Undo ledger.
+Expenditure estimation was hardened so sparse or anomalous inputs lower
+confidence instead of dominating the recommendation.
+
+The background brain now reasons about configured local days while preserving
+UTC timestamps for durable ordering. Schedule freshness, demo/test seed dates,
+and adoption-grace comparisons therefore behave consistently across time zones
+and midnight boundaries. Eligible orphaned drafts can re-enter the server-owned
+autonomy path after a bounded grace period, without bypassing explicit nutrition
+vetoes, natural-boundary semantics, structural-change announcements, or Undo.
+
+Capture and wearable reconciliation received reliability fixes. The offline
+outbox exposes retry/remove recovery for failed rows, preventing an unrecoverable
+“Needs attention” overlay. Garmin strength set ingestion is transaction-scoped:
+detected sets either reconcile together or roll back together, remain idempotent
+on re-sync, and never overwrite authoritative hand-entered work. Measurement
+prefill, wrapped-pill rendering, and local-date test coverage close smaller daily
+friction and determinism gaps.
+
+Apple Health gains least-privilege Shortcut pairing groundwork. Owner-authenticated
+REST endpoints create short-lived single-use pairing codes; exchange yields a
+hashed, revocable ingestion credential scoped to `POST /api/health-metrics`, and
+Settings exposes connection creation and revocation. Pairing management is
+intentionally owner-only REST rather than MCP. Migration **v65**
+(`daily-metrics-apple-richness`) adds nullable source-agnostic fields for total
+calories, distance, exercise minutes, stand hours, SpO2, and VO2max. Fresh
+`apple_health_pairings` and `apple_health_connections` tables are idempotent
+`CREATE TABLE IF NOT EXISTS` schema, so they require no migration entry. The PWA
+cache advances to `cairn-v492`.
+
+No validated Shortcut artifact ships by default. Guided iPhone installation is
+an opt-in integration surface and remains unvalidated until the operator
+configures a trusted Shortcut URL; the documented manual-builder workflow is the
+portable fallback for public self-hosters.
+
 ## 2026-07-12 — private household instances from one released image
 
 Cairn **v1.1.1** remains single-user per process, but one Docker host can now run a private

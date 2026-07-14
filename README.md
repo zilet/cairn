@@ -418,14 +418,19 @@ the chosen order and **falls through on failure**, so a dead login never blocks 
 pick **⟳ Auto** to use this rotation, or pick a specific agent.
 
 ### Let it run
-In **Settings → Weekly auto-coach**, enable it and set the day/hour. Weekly, the expert loop reviews
-the latest training picture and prepares the next adaptation via the configured rotation. In Lead
-mode, bounded reversible updates land at a natural boundary, structural updates are announced first,
-and Hold/Undo remain close at hand. Choose the review posture if you want every material change held
-for approval. (First boot seeds these from `COACH_AGENT`/`COACH_DAY`/`COACH_HOUR` in `.env` if set.)
-Keep your injury constraints current in the Plan editor so every automatic read sees them. Docker defaults to
-`TZ=America/New_York`; set `TZ` in `.env` to the user's local timezone so the configured day/hour
-means local time rather than UTC. For Belgrade:
+In **Settings → Agents → Weekly review cadence**, choose when Cairn should run its weekly
+whole-picture review. The proactive scheduler quietly keeps the picture current: it prepares the
+weekly read and any warranted training, nutrition, meal, or health follow-through, while nightly
+work precomputes the Brief and genuine cross-domain insights. Results wait in the app — Cairn never
+pushes a notification. In Lead mode, bounded reversible updates land at a natural boundary,
+structural updates are announced first, and Hold/Undo remain close at hand. Choose the review
+posture if you want every material change held for approval. (First boot seeds the cadence from
+`COACH_AGENT`/`COACH_DAY`/`COACH_HOUR` in `.env` if set.)
+
+Keep your injury constraints current in the Plan editor so every automatic read sees them. The PWA
+reports the browser/device IANA timezone and Cairn remembers the last valid zone for scheduled work,
+updating it when the device timezone changes. Docker's `TZ` value is only the fallback before a
+device has connected; for a new Belgrade install, for example:
 
 ```env
 TZ=Europe/Belgrade
@@ -435,7 +440,7 @@ TZ=Europe/Belgrade
 ```bash
 claude mcp add --transport http cairn http://localhost:8787/mcp
 ```
-Cairn registers 176 MCP tools spanning the whole app — plan & sessions, exercises, progress &
+Cairn exposes MCP tools spanning the whole app — plan & sessions, exercises, progress &
 volume, the accountable coaching loop, profile & goal, bodyweight & activities, memory, meal plans &
 recipes, food notes, health records & markers, the connected-brain directives & insights, the
 day-read Brief & on-demand session suggestions, recovery & adaptive nutrition, check-ins & daily
@@ -479,7 +484,7 @@ Ops                GET /settings  GET /export  GET /health
 ```
 
 See [`docs/API.md`](docs/API.md) for the authoritative grouped list and
-[`docs/MCP-TOOLS.md`](docs/MCP-TOOLS.md) for the parallel MCP surface (176 tools).
+[`docs/MCP-TOOLS.md`](docs/MCP-TOOLS.md) for the authoritative parallel MCP surface.
 
 ## Notes
 - Assisted lifts: negative weight. Bodyweight: null. Est-1RM = Epley on best set/day.

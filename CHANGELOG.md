@@ -5,6 +5,65 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-07-14
+
+Cairn's daily loop is calmer and more trustworthy: the Brief explains the
+signals behind its read, recovery and training load use personal baselines, and
+nutrition changes carry through to the plan instead of stopping at advice.
+Capture is more durable offline, Garmin strength imports reconcile safely, and
+Apple Health gains secure, revocable, least-privilege Shortcut pairing
+groundwork. PWA cache `cairn-v492`.
+
+### Added
+
+- **A clearer daily read** — the Brief leads with the win, names the few signals
+  that shaped the day, and frames gaps as calm context rather than a verdict.
+- **Personal recovery and load context** — wearable recovery and training-load
+  bands learn the athlete's own baseline, with sparse-data fallbacks that stay
+  useful without pretending to know more than the history supports.
+- **Nutrition follow-through** — accepted energy-target changes can refresh the
+  downstream meal plan through the existing autonomy and undo ledger; Energy
+  Balance now leads with plain-language direction and visible confidence.
+- **Apple Health pairing groundwork** — an authenticated owner can create a
+  short-lived, single-use pairing code, exchange it for a hashed, revocable
+  token scoped only to daily-metric ingestion, and manage connections through
+  REST and Settings. Pairing management is intentionally owner-only REST, not
+  an MCP capability.
+
+### Changed
+
+- **Background coaching follows local time** — scheduling, freshness, seed
+  dates, and draft-adoption grace windows use the configured local day while
+  retaining UTC timestamps for durable ordering.
+- **Adaptation survives interrupted stewardship** — eligible orphaned drafts
+  can re-enter the server-owned autonomy path after a bounded grace period,
+  preserving vetoes, natural boundaries, and Undo.
+- **Energy estimates are more robust** — expenditure reads weigh the whole
+  available picture, degrade honestly when inputs are thin, and avoid letting
+  one anomalous signal dominate a recommendation.
+
+### Fixed
+
+- **Offline logs are recoverable** — failed outbox rows can be retried or
+  removed, so a stale “Needs attention” toast no longer remains over the app.
+- **Garmin strength imports are atomic** — detected sets reconcile as one
+  transaction, respect hand-entered work, and cannot leave partial sessions
+  behind when an import fails.
+- **Small-screen polish and determinism** — wrapped pills no longer clip, tape
+  inputs prefill from the latest measurement, and local-date tests no longer
+  flake around midnight UTC.
+
+### Notes
+
+- Migration **v65** adds nullable source-agnostic daily-metric fields for total
+  calories, distance, exercise minutes, stand hours, SpO2, and VO2max. Fresh
+  Apple Health pairing/connection tables are created idempotently with
+  `CREATE TABLE IF NOT EXISTS`; down-migrations remain unsupported.
+- Cairn does **not** ship a validated Apple Shortcut artifact by default. Guided
+  iPhone installation remains opt-in and unvalidated until an operator
+  configures a trusted Shortcut URL; the documented manual-builder path remains
+  the fallback.
+
 ## [1.1.1] — 2026-07-12
 
 Cairn can now support a household safely by running one isolated released
