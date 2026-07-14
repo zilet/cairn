@@ -19,11 +19,15 @@ import { db } from "./db.js";
 import { seed } from "./seed.js";
 import { installSeedArt } from "./art.js";
 import * as repo from "./repo.js";
+import { localDateISO } from "./repo/shared.js";
 
 const DAY = 86_400_000;
 const now = new Date();
-const iso = (daysAgo: number): string =>
-  new Date(now.getTime() - daysAgo * DAY).toISOString().slice(0, 10);
+// LOCAL-day frame, not toISOString(): demo rows key on the same local day the rest
+// of the codebase uses, and recordDailyMetrics rejects future dates against
+// localDateISO() — a UTC slice here made iso(0) "tomorrow" between 00:00 and
+// ~04:00 UTC on hosts west of UTC, crashing the whole demo seed every evening.
+const iso = (daysAgo: number): string => localDateISO(new Date(now.getTime() - daysAgo * DAY));
 const round5 = (n: number) => Math.round(n / 5) * 5;
 
 // ---------- wipe (idempotent rebuild on a throwaway DB) ----------
