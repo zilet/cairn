@@ -453,6 +453,26 @@ test("Today session controller keeps card unchanged when set POST fails", async 
   assert.equal(button.disabled, false);
 });
 
+test("Today session controller does not poison the outbox on a permanent set rejection", async () => {
+  const permanent = new Error("validation");
+  const harness = loadController({
+    apiImpl: async () => { throw permanent; },
+    contextOverrides: { CairnApiCache: { isTransientApiFailure: (error) => error !== permanent } },
+  });
+  const { row, button, logged } = addLoggingCard(harness.rootEl);
+
+  harness.controller.wireLogRow(row, harness.deps);
+  button.click();
+  await flushAsync();
+
+  assert.equal(harness.outbox.length, 0);
+  assert.equal(logged.children.length, 0);
+  assert.equal(row.querySelector(".in-w").value, "20", "typed set values remain available to correct");
+  assert.equal(row.querySelector(".in-r").value, "8");
+  assert.equal(button.disabled, false);
+  assert.deepEqual(harness.toasts.map((toast) => toast.message), ["Couldn't log that set."]);
+});
+
 test("Today session controller finishes into cached done mode immediately", async () => {
   const harness = loadController({
     apiImpl: async (path, opts) => {
@@ -532,6 +552,29 @@ test("Today session controller queues finish when the network drops", async () =
   assert.deepEqual(harness.toasts.map((toast) => toast.message), ["Finish saved — will sync when you're back online"]);
   assert.deepEqual(harness.cachedWrites, []);
   assert.deepEqual(harness.invalidations, []);
+});
+
+test("Today session controller keeps finish notes and skips the outbox on a permanent rejection", async () => {
+  const permanent = new Error("missing session");
+  const harness = loadController({
+    apiImpl: async () => { throw permanent; },
+    contextOverrides: { CairnApiCache: { isTransientApiFailure: (error) => error !== permanent } },
+  });
+  const surface = harness.rootEl.appendChild(new FakeElement("div", { className: "plansurface" }));
+  const notes = surface.appendChild(new FakeElement("input", { id: "sessNotes", value: "do not lose this" }));
+  const finish = surface.appendChild(new FakeElement("button", { id: "finishBtn" }));
+
+  harness.controller.wireSessionSurface({
+    session: { id: 44, date: "2026-06-30", sets: [{ exercise: "Push-up" }] },
+    hasLoggedSets: true,
+  }, harness.deps);
+  finish.click();
+  await flushAsync();
+
+  assert.equal(harness.outbox.length, 0);
+  assert.equal(notes.value, "do not lose this");
+  assert.equal(finish.disabled, false);
+  assert.deepEqual(harness.toasts.map((toast) => toast.message), ["Couldn't finish that session"]);
 });
 
 test("Today session controller times out a hung finish and queues it with the typed notes", async () => {

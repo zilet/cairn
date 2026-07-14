@@ -137,6 +137,38 @@ test("outbox remove and clear prune the queue", () => {
   assert.equal(box.count(), 0);
 });
 
+test("outbox retry clears attention metadata without removing the saved log", async () => {
+  const { createOutbox } = loadOutbox();
+  const box = createOutbox({ storage: fakeStorage() });
+  const item = box.enqueue({ kind: "activity", path: "/activities", body: { text: "easy run" } });
+  await box.drain(async (pending) => {
+    pending.failure_status = 422;
+    return "needs_attention";
+  });
+
+  assert.equal(box.list()[0].state, "needs_attention");
+  assert.equal(box.list()[0].failure_status, 422);
+  assert.equal(box.retry(item.id), true);
+  assert.equal(box.count(), 1, "retry keeps the durable payload until replay succeeds");
+  assert.equal(box.list()[0].state, undefined);
+  assert.equal(box.list()[0].failure_status, undefined);
+  assert.equal(box.retry("missing"), false);
+});
+
+test("outbox review summaries are bounded and never lead with internal request paths", () => {
+  const outbox = loadOutbox();
+  const summary = outbox.itemSummary({
+    id: "legacy",
+    ts: 1,
+    kind: "finish",
+    path: "/sessions/44/finish",
+    body: { notes: "Strong session ".repeat(30) },
+  });
+  assert.match(summary, /^Finish session · Strong session/);
+  assert.ok(summary.length <= 140);
+  assert.doesNotMatch(summary, /\/sessions|\/api/);
+});
+
 test("outbox retains permanent failures as needs-attention without retry-looping", async () => {
   const { createOutbox } = loadOutbox();
   const box = createOutbox({ storage: fakeStorage() });

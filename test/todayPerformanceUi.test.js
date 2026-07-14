@@ -67,7 +67,7 @@ test("Today set logging only mutates the card after a successful POST", () => {
   // On a network failure the set is NOT dropped: the button re-enables and the exact
   // POST is queued in the offline outbox to replay on reconnect, with an honest
   // "will sync" toast instead of a false "logged".
-  assert.match(body, /catch\s*\{[\s\S]*?logBtn\.disabled\s*=\s*false;/);
+  assert.match(body, /catch\s*\(error\)\s*\{[\s\S]*?logBtn\.disabled\s*=\s*false;/);
   assert.match(body, /outboxEnqueue\?\.\("set",\s*"\/sets",\s*payload\.body\)/);
   assert.match(body, /deps\.toast\("Set saved — will sync/);
 });

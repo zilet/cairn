@@ -62,3 +62,60 @@ test("capture provenance line escapes directive and marker text", () => {
   assert.match(html, /ApoB &lt;high&gt;/);
   assert.doesNotMatch(html, /Tilt <easy>/);
 });
+
+test("activity capture restores the text and does not enqueue a permanent rejection", async () => {
+  const capture = loadCapture();
+  const permanent = new Error("validation");
+  const input = { value: "ran 5k" };
+  const queued = [];
+  const toasts = [];
+  capture.document = { querySelector: (selector) => selector === "#qlInput" ? input : null };
+  capture.view = { querySelector: () => null };
+  capture.api = async () => { throw permanent; };
+  capture.CairnApiCache = { isTransientApiFailure: (error) => error !== permanent };
+  capture.outboxEnqueue = (...args) => queued.push(args);
+  capture.toast = (message) => toasts.push(message);
+
+  await capture.quickLog();
+
+  assert.equal(input.value, "ran 5k");
+  assert.equal(queued.length, 0);
+  assert.deepEqual(toasts, ["Couldn't log that — try again."]);
+});
+
+test("weight and frequent-food capture only enqueue transient failures", async () => {
+  const capture = loadCapture();
+  const permanent = new Error("forbidden");
+  const queued = [];
+  const toasts = [];
+  let saveWeight;
+  const input = {
+    value: "181.5",
+    addEventListener() {},
+    focus() {},
+    scrollIntoView() {},
+  };
+  const inline = { hidden: false };
+  const go = { addEventListener: (_type, handler) => { saveWeight = handler; } };
+  const chip = { querySelector: () => null, addEventListener() {} };
+  const mini = { innerHTML: "", addEventListener() {} };
+  const elements = new Map([
+    ["#wtChip", chip], ["#wtChipMini", mini], ["#wtInline", inline],
+    ["#wtInlineInput", input], ["#wtInlineGo", go],
+  ]);
+  capture.view = { querySelector: (selector) => elements.get(selector) || null };
+  capture.api = async () => { throw permanent; };
+  capture.CairnApiCache = { isTransientApiFailure: (error) => error !== permanent };
+  capture.outboxEnqueue = (...args) => queued.push(args);
+  capture.toast = (message) => toasts.push(message);
+
+  capture.setupWeightChip();
+  await saveWeight();
+
+  const foodChip = { classList: { add() {}, remove() {} } };
+  await capture.relogFrequent("oats and berries", foodChip);
+
+  assert.equal(input.value, "181.5", "the rejected weight remains editable");
+  assert.equal(queued.length, 0);
+  assert.deepEqual(toasts, ["Couldn't log that — try again.", "Couldn't log that — try again."]);
+});

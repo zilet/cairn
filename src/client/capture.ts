@@ -1,5 +1,12 @@
 // @ts-check
 // ==== capture.ts ====
+function captureFailureIsTransient(error: unknown): boolean {
+  const classify = (globalThis as unknown as {
+    CairnApiCache?: { isTransientApiFailure?: (value: unknown) => boolean };
+  }).CairnApiCache?.isTransientApiFailure;
+  return typeof classify === "function" ? classify(error) : true;
+}
+
 async function quickLog(): Promise<void> {
   const inp = document.querySelector<HTMLInputElement>("#qlInput");
   if (!inp) return;
@@ -14,7 +21,12 @@ async function quickLog(): Promise<void> {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
     }) as unknown as CaptureActivity;
-  } catch (_e) {
+  } catch (error) {
+    if (!captureFailureIsTransient(error)) {
+      inp.value = text;
+      toast("Couldn't log that — try again.");
+      return;
+    }
     // Network dropped — DON'T lose the log. Queue the exact POST and replay it on
     // reconnect (the input was already cleared, so the text lives only in the outbox).
     outboxEnqueue("activity", "/activities", { text });
@@ -71,7 +83,11 @@ function setupWeightChip(): void {
     if (!w) { input.focus(); return; }
     try {
       await api("/bodyweight", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ weight_lb: w }) });
-    } catch {
+    } catch (error) {
+      if (!captureFailureIsTransient(error)) {
+        toast("Couldn't log that — try again.");
+        return;
+      }
       // Offline — queue the weigh-in and reflect it optimistically; it syncs on reconnect.
       outboxEnqueue("weight", "/bodyweight", { weight_lb: w });
       const pendingVal = chip && chip.querySelector("[data-wtval]");
@@ -155,10 +171,14 @@ async function relogFrequent(summary: string | undefined, chip?: HTMLElement): P
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ meal, text: summary }),
     }) as CaptureFoodNote;
-  } catch {
-    // Offline — queue the re-log and replay it on reconnect rather than dropping it.
+  } catch (error) {
     _relogInFlight = false;
     if (chip) chip.classList.remove("freq-chip-busy");
+    if (!captureFailureIsTransient(error)) {
+      toast("Couldn't log that — try again.");
+      return;
+    }
+    // Offline — queue the re-log and replay it on reconnect rather than dropping it.
     outboxEnqueue("food", "/food-notes", { meal, text: summary });
     toast("Saved · " + meal + " — will sync when you're back");
     return;
@@ -282,6 +302,7 @@ Object.assign(globalThis, {
   setupWeightChip,
   setupVoiceCapture,
   loadFrequentFoods,
+  relogFrequent,
   loadCheckin,
   loadTodayReads,
   reconnectInsight,

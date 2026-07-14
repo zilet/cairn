@@ -96,8 +96,15 @@ type TodaySessionSurfaceOptions = ClientTodaySessionSurfaceOptions;
         let result: Record<string, unknown>;
         try {
           result = CairnTodaySessionSetModel.responseRecord(await deps.api(finishPath, finishOpts));
-        } catch {
+        } catch (error) {
           finishBtn.disabled = false;
+          const classify = (globalThis as {
+            CairnApiCache?: { isTransientApiFailure?: (value: unknown) => boolean };
+          }).CairnApiCache?.isTransientApiFailure;
+          if (typeof classify === "function" && !classify(error)) {
+            deps.toast("Couldn't finish that session");
+            return;
+          }
           (globalThis as { outboxEnqueue?: (kind: string, path: string, body: unknown) => unknown }).outboxEnqueue?.(
             "finish",
             finishPath,

@@ -562,6 +562,7 @@ type OutboxController = {
   enqueue(entry: { kind: string; path: string; body: unknown }): OutboxItem;
   list(): OutboxItem[];
   count(): number;
+  retry(id: string): boolean;
   remove(id: string): void;
   clear(): void;
   drain(send: (item: OutboxItem) => Promise<OutboxSendResult>): Promise<OutboxDrainResult>;
@@ -630,6 +631,15 @@ function createOutbox(opts: {
   function count(): number {
     return read().length;
   }
+  function retry(id: string): boolean {
+    const items = read();
+    const index = items.findIndex((item) => item.id === id);
+    if (index < 0) return false;
+    const { state: _state, failure_status: _failureStatus, ...pending } = items[index];
+    items[index] = pending;
+    write(items);
+    return true;
+  }
   function remove(id: string): void {
     write(read().filter((item) => item.id !== id));
   }
@@ -673,7 +683,7 @@ function createOutbox(opts: {
     return { sent, remaining: count(), needsAttention };
   }
 
-  return { enqueue, list, count, remove, clear, drain };
+  return { enqueue, list, count, retry, remove, clear, drain };
 }
 
 // ---------- runtime: one live queue wired to api() + the affordance ----------
@@ -699,6 +709,195 @@ function outbox(): OutboxController {
 }
 
 let outboxFlushing = false;
+let outboxFlushAgain = false;
+let outboxFlushWaiters: Array<() => void> = [];
+
+function escapeOutboxHtml(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function boundedOutboxText(value: unknown, max = 140): string {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  return text.length <= max ? text : `${text.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
+}
+
+function outboxKindLabel(kind: unknown): string {
+  switch (String(kind || "").toLowerCase()) {
+    case "activity": return "Activity";
+    case "food": return "Food";
+    case "weight": return "Weight";
+    case "set": return "Training set";
+    case "finish": return "Session finish";
+    default: return "Saved log";
+  }
+}
+
+function outboxItemSummary(item: OutboxItem): string {
+  const body = item.body && typeof item.body === "object" ? item.body as Record<string, unknown> : {};
+  if (item.kind === "weight" && Number.isFinite(Number(body.weight_lb))) {
+    return `${Number(body.weight_lb)} lb`;
+  }
+  if (item.kind === "food") {
+    const meal = boundedOutboxText(body.meal, 24);
+    const text = boundedOutboxText(body.text);
+    return boundedOutboxText([meal, text].filter(Boolean).join(" · ")) || "Saved food log";
+  }
+  if (item.kind === "activity") return boundedOutboxText(body.text) || "Saved activity log";
+  if (item.kind === "set") {
+    const exercise = boundedOutboxText(body.exercise, 64);
+    const duration = Number(body.duration_sec);
+    if (Number.isFinite(duration) && duration > 0) return boundedOutboxText(`${exercise || "Timed set"} · ${duration}s`);
+    const weight = Number(body.weight);
+    const reps = Number(body.reps);
+    const detail = [Number.isFinite(weight) ? `${weight} lb` : "", Number.isFinite(reps) ? `${reps} reps` : ""]
+      .filter(Boolean).join(" × ");
+    return boundedOutboxText([exercise, detail].filter(Boolean).join(" · ")) || "Saved training set";
+  }
+  if (item.kind === "finish") {
+    const notes = boundedOutboxText(body.notes, 110);
+    return notes ? `Finish session · ${notes}` : "Finish session";
+  }
+  return "Saved log";
+}
+
+function outboxItemTime(item: OutboxItem): string {
+  const date = new Date(Number(item.ts));
+  if (!Number.isFinite(date.getTime())) return "Time unavailable";
+  try {
+    return date.toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+  } catch {
+    return date.toLocaleString();
+  }
+}
+
+let outboxReviewReturnFocus: HTMLElement | null = null;
+
+function closeOutboxReview(): void {
+  if (typeof document === "undefined") return;
+  const overlay = document.querySelector<HTMLElement>(".outbox-review-ov");
+  if (!overlay) return;
+  overlay.remove();
+  try { outboxReviewReturnFocus?.focus(); } catch {}
+  outboxReviewReturnFocus = null;
+}
+
+async function retryOutboxItem(id: string): Promise<boolean> {
+  if (!outbox().retry(id)) return false;
+  renderOutboxBar();
+  await flushOutbox();
+  return true;
+}
+
+function discardOutboxItem(id: string): boolean {
+  const exists = outbox().list().some((item) => item.id === id);
+  if (!exists) return false;
+  outbox().remove(id);
+  renderOutboxBar();
+  return true;
+}
+
+function focusOutboxReviewControl(overlay: HTMLElement): void {
+  const control = overlay.querySelector<HTMLElement>("[data-outbox-retry]") ||
+    overlay.querySelector<HTMLElement>("[data-outbox-close]");
+  try { control?.focus(); } catch {}
+}
+
+function renderOutboxReview(options: { focusControl?: boolean } = {}): void {
+  if (typeof document === "undefined") return;
+  const overlay = document.querySelector<HTMLElement>(".outbox-review-ov");
+  if (!overlay) return;
+  const sheet = overlay.querySelector<HTMLElement>(".outbox-review");
+  if (!sheet) return;
+  const failed = outbox().list().filter((item) => item.state === "needs_attention");
+  if (!failed.length) {
+    closeOutboxReview();
+    return;
+  }
+  const rows = failed.map((item) => {
+    const status = item.failure_status != null ? `Cairn couldn't accept this log (${item.failure_status}).` : "Cairn couldn't accept this log.";
+    return `<li class="outbox-review-item" data-outbox-id="${escapeOutboxHtml(item.id)}">
+      <div class="outbox-review-copy">
+        <div class="outbox-review-meta"><strong>${escapeOutboxHtml(outboxKindLabel(item.kind))}</strong><time>${escapeOutboxHtml(outboxItemTime(item))}</time></div>
+        <p>${escapeOutboxHtml(outboxItemSummary(item))}</p>
+        <small>${escapeOutboxHtml(status)}</small>
+      </div>
+      <div class="outbox-review-actions">
+        <button type="button" class="btn sm" data-outbox-retry>Retry</button>
+        <button type="button" class="btn sm ghost outbox-discard" data-outbox-discard>Discard</button>
+      </div>
+    </li>`;
+  }).join("");
+  sheet.innerHTML = `<div class="outbox-review-head">
+      <div><p class="eyebrow">Saved on this device</p><h2 id="outboxReviewTitle">Logs that need attention</h2></div>
+      <button type="button" class="outbox-review-close" data-outbox-close aria-label="Close log review">×</button>
+    </div>
+    <p class="outbox-review-intro" id="outboxReviewIntro">Retry a log after fixing the issue, or discard it if you no longer want to keep it.</p>
+    <ul class="outbox-review-list">${rows}</ul>`;
+  if (options.focusControl) focusOutboxReviewControl(overlay);
+}
+
+function openOutboxReview(): void {
+  if (typeof document === "undefined") return;
+  if (!outbox().list().some((item) => item.state === "needs_attention")) return;
+  const existing = document.querySelector<HTMLElement>(".outbox-review-ov");
+  if (existing) {
+    existing.querySelector<HTMLElement>("[data-outbox-close]")?.focus();
+    return;
+  }
+  outboxReviewReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const overlay = document.createElement("div");
+  overlay.className = "outbox-review-ov";
+  overlay.innerHTML = `<section class="outbox-review" role="dialog" aria-modal="true" aria-labelledby="outboxReviewTitle" aria-describedby="outboxReviewIntro"></section>`;
+  overlay.addEventListener("click", (event) => {
+    const target = event.target as HTMLElement;
+    if (target === overlay || target.closest("[data-outbox-close]")) {
+      closeOutboxReview();
+      return;
+    }
+    const row = target.closest<HTMLElement>("[data-outbox-id]");
+    const id = row?.dataset.outboxId;
+    if (!id) return;
+    if (target.closest("[data-outbox-discard]")) {
+      discardOutboxItem(id);
+      renderOutboxReview({ focusControl: true });
+      return;
+    }
+    const retry = target.closest<HTMLButtonElement>("[data-outbox-retry]");
+    if (retry) {
+      retry.disabled = true;
+      retry.textContent = "Retrying…";
+      void retryOutboxItem(id).finally(() => renderOutboxReview({ focusControl: true }));
+    }
+  });
+  overlay.addEventListener("keydown", (event: KeyboardEvent) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeOutboxReview();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = [...overlay.querySelectorAll<HTMLElement>("button:not(:disabled)")];
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
+  document.body.appendChild(overlay);
+  renderOutboxReview();
+  if (typeof setTimeout === "function") setTimeout(() => overlay.querySelector<HTMLElement>("[data-outbox-close]")?.focus(), 0);
+  else overlay.querySelector<HTMLElement>("[data-outbox-close]")?.focus();
+}
 
 function renderOutboxBar(): void {
   if (typeof document === "undefined") return;
@@ -712,18 +911,37 @@ function renderOutboxBar(): void {
   // will retry — don't stack a second band under it. Surface the count only when
   // we're online (actively retrying, or holding until the drain lands).
   if (pending === 0 || offline) {
-    if (bar) bar.classList.remove("show");
+    if (bar) {
+      bar.classList.remove("show");
+      bar.classList.remove("outbox-actionable");
+      bar.setAttribute("disabled", "");
+      bar.setAttribute("role", "status");
+      bar.removeAttribute("aria-label");
+    }
     return;
   }
   if (!bar) {
-    bar = document.createElement("div");
+    bar = document.createElement("button");
     bar.className = "outbox-bar";
+    bar.setAttribute("type", "button");
     bar.setAttribute("role", "status");
     bar.setAttribute("aria-live", "polite");
+    bar.addEventListener("click", openOutboxReview);
     document.body.appendChild(bar);
   }
   const label = attention ? "Needs attention" : outboxFlushing ? "Syncing" : "Waiting to sync";
-  bar.innerHTML = `<span class="outbox-dot" aria-hidden="true"></span><span class="outbox-txt">${label} · ${pending} log${pending === 1 ? "" : "s"}</span>`;
+  const displayCount = attention || pending;
+  bar.innerHTML = `<span class="outbox-dot" aria-hidden="true"></span><span class="outbox-txt">${label} · ${displayCount} log${displayCount === 1 ? "" : "s"}</span>`;
+  bar.classList.toggle("outbox-actionable", attention > 0);
+  if (attention > 0) {
+    bar.removeAttribute("role");
+    bar.removeAttribute("disabled");
+    bar.setAttribute("aria-label", `${attention} saved log${attention === 1 ? "" : "s"} need attention. Review logs.`);
+  } else {
+    bar.setAttribute("role", "status");
+    bar.setAttribute("disabled", "");
+    bar.removeAttribute("aria-label");
+  }
   const shown = bar;
   if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => shown.classList.add("show"));
   else shown.classList.add("show");
@@ -757,7 +975,13 @@ function freshenAfterSync(): void {
 
 async function flushOutbox(): Promise<void> {
   const box = outbox();
-  if (outboxFlushing || box.count() === 0) {
+  if (outboxFlushing) {
+    outboxFlushAgain = true;
+    renderOutboxBar();
+    await new Promise<void>((resolve) => outboxFlushWaiters.push(resolve));
+    return;
+  }
+  if (box.count() === 0) {
     renderOutboxBar();
     return;
   }
@@ -768,30 +992,42 @@ async function flushOutbox(): Promise<void> {
 
   outboxFlushing = true;
   renderOutboxBar();
-  let result: OutboxDrainResult = { sent: 0, remaining: box.count(), needsAttention: 0 };
+  let sent = 0;
   try {
-    result = await box.drain(async (item) => {
-      try {
-        await api(item.path as string, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-Idempotency-Key": item.id },
-          body: JSON.stringify(item.body),
-        });
-      } catch (error) {
-        if (isTransientApiFailure(error)) throw error;
-        if (error instanceof CairnApiError && error.status != null) item.failure_status = error.status;
-        return "needs_attention";
-      }
-      renderOutboxBar();
-    });
+    do {
+      outboxFlushAgain = false;
+      const result = await box.drain(async (item) => {
+        try {
+          await api(item.path as string, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-Idempotency-Key": item.id },
+            body: JSON.stringify(item.body),
+          });
+        } catch (error) {
+          if (isTransientApiFailure(error)) throw error;
+          if (error instanceof CairnApiError && error.status != null) item.failure_status = error.status;
+          return "needs_attention";
+        }
+        renderOutboxBar();
+      });
+      sent += result.sent;
+    } while (
+      outboxFlushAgain &&
+      box.count() > 0 &&
+      (typeof navigator === "undefined" || navigator.onLine !== false)
+    );
   } finally {
     outboxFlushing = false;
+    outboxFlushAgain = false;
+    const waiters = outboxFlushWaiters;
+    outboxFlushWaiters = [];
+    for (const resolve of waiters) resolve();
   }
   renderOutboxBar();
-  if (result.sent > 0) {
+  if (sent > 0) {
     freshenAfterSync();
     try {
-      toast(`${result.sent} log${result.sent === 1 ? "" : "s"} synced`);
+      toast(`${sent} log${sent === 1 ? "" : "s"} synced`);
     } catch {}
   }
 }
@@ -813,6 +1049,11 @@ const CAIRN_OUTBOX = {
   flush: flushOutbox,
   count: outboxCount,
   renderBar: renderOutboxBar,
+  openReview: openOutboxReview,
+  closeReview: closeOutboxReview,
+  retry: retryOutboxItem,
+  discard: discardOutboxItem,
+  itemSummary: outboxItemSummary,
 };
 
 // Exposes the pure api() coalescer core for tests, mirroring CairnOutbox above.

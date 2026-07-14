@@ -123,11 +123,18 @@ type TodaySessionSetActionsApi = {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload.body),
         }));
-      } catch {
+      } catch (error) {
+        logBtn.disabled = false;
+        const classify = (globalThis as {
+          CairnApiCache?: { isTransientApiFailure?: (value: unknown) => boolean };
+        }).CairnApiCache?.isTransientApiFailure;
+        if (typeof classify === "function" && !classify(error)) {
+          deps.toast("Couldn't log that set.");
+          return;
+        }
         // Dead zone on the gym floor — DON'T drop the set. Queue the exact POST and
         // replay it in order on reconnect; the persistent "N to sync" line and the
         // toast tell the user it's held, not lost.
-        logBtn.disabled = false;
         (globalThis as { outboxEnqueue?: (kind: string, path: string, body: unknown) => unknown }).outboxEnqueue?.("set", "/sets", payload.body);
         deps.toast("Set saved — will sync when you're back online");
         return;

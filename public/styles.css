@@ -2032,8 +2032,9 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
    captures / set-logs back to the server once Cairn is reachable again. A sage
    "work in progress" voice, deliberately distinct from the .offline-bar warn
    band: it means your logs are held and syncing, never an alarm. Persistent
-   while anything is pending, never a modal, taps pass through. */
+   while anything is pending. Permanent failures become a real review action. */
 .outbox-bar{
+  appearance:none;
   position:fixed;left:50%;bottom:calc(118px + var(--vvb,0px));
   transform:translate(-50%,10px);opacity:0;
   display:flex;align-items:center;gap:8px;
@@ -2046,9 +2047,53 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
   pointer-events:none;z-index:49;
 }
 .outbox-bar.show{opacity:1;transform:translate(-50%,0)}
+.outbox-bar.outbox-actionable{pointer-events:auto;cursor:pointer;background:var(--warn-bg);color:var(--warn);border-color:color-mix(in srgb,var(--warn) 24%,var(--line-2))}
+.outbox-bar.outbox-actionable:hover{transform:translate(-50%,-1px)}
+.outbox-bar.outbox-actionable:focus-visible{outline:2px solid var(--warn);outline-offset:3px}
 .outbox-dot{width:6px;height:6px;border-radius:50%;background:var(--sage);
   flex:0 0 auto;animation:offlinepulse 1.8s var(--ease) infinite}
+.outbox-actionable .outbox-dot{background:var(--warn)}
 @media (min-width:960px){ .outbox-bar{left:calc(50% + 124px)} }
+
+.outbox-review-ov{
+  position:fixed;inset:0;z-index:86;display:flex;align-items:flex-end;justify-content:center;
+  padding:max(env(safe-area-inset-top),18px) 14px max(env(safe-area-inset-bottom),14px);
+  background:rgba(33,29,23,.48);backdrop-filter:saturate(1.05) blur(2px);
+  animation:outboxReviewFade var(--dur-1) var(--ease) both;
+}
+@keyframes outboxReviewFade{from{opacity:0}to{opacity:1}}
+.outbox-review{
+  width:min(560px,100%);max-height:min(78vh,720px);overflow:auto;
+  padding:20px;background:var(--card);color:var(--ink);
+  border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow-lg);
+}
+.outbox-review-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px}
+.outbox-review-head .eyebrow{margin:0 0 4px;color:var(--accent);font-size:.69rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+.outbox-review-head h2{margin:0;font-family:var(--font-display);font-size:1.4rem;line-height:1.15}
+.outbox-review-close{
+  appearance:none;display:grid;place-items:center;flex:0 0 auto;width:36px;height:36px;
+  padding:0;border:1px solid var(--line-2);border-radius:50%;background:var(--card-2);color:var(--ink-2);
+  font:400 1.35rem/1 var(--font-ui);cursor:pointer;
+}
+.outbox-review-close:hover{color:var(--ink);border-color:var(--ink-2)}
+.outbox-review-close:focus-visible,.outbox-review-actions button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.outbox-review-intro{margin:12px 0 16px;color:var(--ink-2);font-size:.86rem;line-height:1.5}
+.outbox-review-list{display:grid;gap:10px;margin:0;padding:0;list-style:none}
+.outbox-review-item{display:grid;gap:12px;padding:14px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--card-2)}
+.outbox-review-meta{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.outbox-review-meta strong{font-size:.84rem;color:var(--ink)}
+.outbox-review-meta time{font-size:.7rem;color:var(--muted);text-align:right}
+.outbox-review-copy p{margin:6px 0 3px;color:var(--ink-2);font-size:.84rem;line-height:1.4;overflow-wrap:anywhere}
+.outbox-review-copy small{display:block;color:var(--warn);font-size:.72rem;line-height:1.35}
+.outbox-review-actions{display:flex;justify-content:flex-end;gap:8px}
+.outbox-review-actions button{appearance:none;margin:0;padding:8px 14px;border:1px solid var(--accent);border-radius:999px;background:var(--accent);color:var(--on-accent);font-size:.76rem;font-weight:700;letter-spacing:.02em}
+.outbox-review-actions button:disabled{opacity:.55;cursor:wait}
+.outbox-review-actions .outbox-discard{background:transparent;border-color:var(--line-2);color:var(--warn)}
+@media (min-width:640px){
+  .outbox-review-ov{align-items:center}
+  .outbox-review-item{grid-template-columns:minmax(0,1fr) auto;align-items:center}
+}
+@media (prefers-reduced-motion:reduce){.outbox-review-ov{animation:none}.outbox-bar.outbox-actionable:hover{transform:translate(-50%,0)}}
 
 /* -------------------------------------------------------------------
    23b · Floating unsaved-changes save bar (docks above the tab bar)

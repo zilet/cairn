@@ -12,6 +12,7 @@ function classList() {
   return {
     add: (name) => classes.add(name),
     remove: (name) => classes.delete(name),
+    toggle: (name, on) => on ? classes.add(name) : classes.delete(name),
     contains: (name) => classes.has(name),
   };
 }
@@ -29,6 +30,9 @@ function fakeElement() {
     hidden: false,
     setAttribute(name, value) {
       this.attrs[name] = value;
+    },
+    removeAttribute(name) {
+      delete this.attrs[name];
     },
     getAttribute(name) {
       return this.attrs[name];
@@ -52,11 +56,13 @@ function fakeElement() {
 function loadApiClient({ withTimers = false } = {}) {
   const storage = new Map();
   let offlineBar = null;
+  let outboxBar = null;
   const listeners = {};
   const body = {
     classList: classList(),
     appendChild(el) {
       if (el && el.className === "offline-bar") offlineBar = el;
+      if (el && el.className === "outbox-bar") outboxBar = el;
       return el;
     },
   };
@@ -64,7 +70,9 @@ function loadApiClient({ withTimers = false } = {}) {
     body,
     head: { appendChild: (el) => el },
     querySelector(selector) {
-      return selector === ".offline-bar" ? offlineBar : null;
+      if (selector === ".offline-bar") return offlineBar;
+      if (selector === ".outbox-bar") return outboxBar;
+      return null;
     },
     getElementById() {
       return null;
@@ -123,7 +131,7 @@ function loadApiClient({ withTimers = false } = {}) {
   // !== "undefined") { ... setTimeout(() => flushOutbox(), 0) }` block) — drop
   // it so `timers` only reflects what the test itself triggers via api().
   if (withTimers) timers.length = 0;
-  return { context, storage, calls, body, listeners, timers, getOfflineBar: () => offlineBar };
+  return { context, storage, calls, body, listeners, timers, getOfflineBar: () => offlineBar, getOutboxBar: () => outboxBar };
 }
 
 test("api client appends auth tokens to direct resource URLs", () => {
@@ -475,4 +483,130 @@ test("runtime outbox marks permanent HTTP failures and sends its stable idempote
   assert.equal(stored[0].state, "needs_attention");
   assert.equal(stored[0].failure_status, 400);
   assert.equal(sentInit.headers["X-Idempotency-Key"], item.id);
+});
+
+test("runtime outbox retry immediately replays and discard removes only the chosen log", async () => {
+  const loaded = loadApiClient();
+  loaded.context.fetch = async () => ({
+    status: 422,
+    headers: { get: () => null },
+    json: async () => ({ error: "invalid" }),
+  });
+  const rejected = loaded.context.outboxEnqueue("activity", "/activities", { text: "run" });
+  const kept = loaded.context.outboxEnqueue("weight", "/bodyweight", { weight_lb: 180 });
+  await loaded.context.flushOutbox();
+
+  let stored = JSON.parse(loaded.storage.get("cairn.outbox.v1"));
+  assert.equal(stored[0].state, "needs_attention");
+  assert.equal(stored[1].state, "needs_attention");
+
+  loaded.context.fetch = async () => ({ status: 200, headers: { get: () => null }, json: async () => ({ ok: true }) });
+  await loaded.context.CairnOutbox.retry(rejected.id);
+  stored = JSON.parse(loaded.storage.get("cairn.outbox.v1"));
+  assert.equal(stored.length, 1, "the retried log is removed only after successful replay");
+  assert.equal(stored[0].id, kept.id);
+
+  assert.equal(loaded.context.CairnOutbox.discard(kept.id), true);
+  assert.equal(loaded.context.CairnOutbox.count(), 0);
+  assert.equal(loaded.getOutboxBar().classList.contains("show"), false, "an empty disabled bar returns to its hidden state");
+  assert.equal(loaded.getOutboxBar().classList.contains("outbox-actionable"), false);
+  assert.equal(loaded.getOutboxBar().getAttribute("disabled"), "");
+  assert.equal(loaded.getOutboxBar().getAttribute("role"), "status");
+  assert.equal(loaded.context.CairnOutbox.discard(kept.id), false);
+});
+
+test("runtime outbox clears actionable state when an attention bar hides offline", () => {
+  const loaded = loadApiClient();
+  loaded.context.outboxEnqueue("activity", "/activities", { text: "run" });
+  const stored = JSON.parse(loaded.storage.get("cairn.outbox.v1"));
+  stored[0].state = "needs_attention";
+  stored[0].failure_status = 422;
+  loaded.storage.set("cairn.outbox.v1", JSON.stringify(stored));
+  loaded.context.CairnOutbox.renderBar();
+  assert.equal(loaded.getOutboxBar().classList.contains("outbox-actionable"), true);
+
+  loaded.context.navigator.onLine = false;
+  loaded.context.CairnOutbox.renderBar();
+
+  assert.equal(loaded.getOutboxBar().classList.contains("show"), false);
+  assert.equal(loaded.getOutboxBar().classList.contains("outbox-actionable"), false);
+  assert.equal(loaded.getOutboxBar().getAttribute("disabled"), "");
+});
+
+test("runtime outbox queues a second drain when retry is requested during an active flush", async () => {
+  const loaded = loadApiClient();
+  let resolveFirst;
+  const fetched = [];
+  loaded.context.fetch = (url) => {
+    fetched.push(url);
+    if (fetched.length === 1) {
+      return new Promise((resolve) => {
+        resolveFirst = () => resolve({ status: 200, headers: { get: () => null }, json: async () => ({ ok: true }) });
+      });
+    }
+    return Promise.resolve({ status: 200, headers: { get: () => null }, json: async () => ({ ok: true }) });
+  };
+  loaded.context.outboxEnqueue("activity", "/activities", { text: "run" });
+  const attention = loaded.context.outboxEnqueue("weight", "/bodyweight", { weight_lb: 180 });
+  const stored = JSON.parse(loaded.storage.get("cairn.outbox.v1"));
+  stored[1].state = "needs_attention";
+  stored[1].failure_status = 404;
+  loaded.storage.set("cairn.outbox.v1", JSON.stringify(stored));
+
+  const activeFlush = loaded.context.flushOutbox();
+  assert.equal(typeof resolveFirst, "function", "the first replay is held in flight");
+  const queuedRetry = loaded.context.CairnOutbox.retry(attention.id);
+  resolveFirst();
+  await Promise.all([activeFlush, queuedRetry]);
+
+  assert.deepEqual(fetched, ["/api/activities", "/api/bodyweight"]);
+  assert.equal(loaded.context.CairnOutbox.count(), 0, "the retried item was drained after the active pass settled");
+});
+
+test("needs-attention copy counts failed logs while pending copy counts the whole queue", () => {
+  const loaded = loadApiClient();
+  loaded.context.outboxEnqueue("activity", "/activities", { text: "run" });
+  loaded.context.outboxEnqueue("weight", "/bodyweight", { weight_lb: 180 });
+  const stored = JSON.parse(loaded.storage.get("cairn.outbox.v1"));
+  stored[0].state = "needs_attention";
+  stored[0].failure_status = 422;
+  loaded.storage.set("cairn.outbox.v1", JSON.stringify(stored));
+
+  loaded.context.CairnOutbox.renderBar();
+
+  assert.match(loaded.getOutboxBar().innerHTML, /Needs attention · 1 log</);
+  assert.doesNotMatch(loaded.getOutboxBar().innerHTML, /Needs attention · 2 logs/);
+});
+
+test("outbox hidden-state CSS does not force disabled bars visible", () => {
+  const styles = readFileSync(join(root, "public/styles.css"), "utf8");
+  assert.match(styles, /\.outbox-bar\.show\s*\{[^}]*opacity:1/);
+  assert.doesNotMatch(styles, /\.outbox-bar:disabled\s*\{[^}]*opacity:1/);
+});
+
+test("outbox review rerenders restore focus to a remaining dialog control", () => {
+  const client = readFileSync(join(root, "public/js/api-client.js"), "utf8");
+  assert.match(client, /function focusOutboxReviewControl\(overlay\)/);
+  assert.match(client, /querySelector\("\[data-outbox-retry\]"\)/);
+  assert.equal(
+    (client.match(/renderOutboxReview\(\{\s*focusControl:\s*true\s*\}\)/g) || []).length,
+    2,
+    "both discard and retry rerenders request an in-dialog focus target"
+  );
+});
+
+test("capture enqueue classifier treats network, timeout, and retryable HTTP as transient only", () => {
+  const loaded = loadApiClient();
+  const { ApiError, isTransientApiFailure } = loaded.context.CairnApiCache;
+  const error = (kind, status = null) => new ApiError({ kind, method: "POST", route: "/sets", status });
+
+  assert.equal(isTransientApiFailure(error("network")), true);
+  assert.equal(isTransientApiFailure(error("timeout")), true, "finish AbortError is wrapped as a retryable timeout");
+  assert.equal(isTransientApiFailure(error("http", 408)), true);
+  assert.equal(isTransientApiFailure(error("http", 429)), true);
+  assert.equal(isTransientApiFailure(error("http", 503)), true);
+  assert.equal(isTransientApiFailure(error("http", 401)), false);
+  assert.equal(isTransientApiFailure(error("http", 404)), false);
+  assert.equal(isTransientApiFailure(error("http", 422)), false);
+  assert.equal(isTransientApiFailure(error("invalid_json", 200)), false);
 });
