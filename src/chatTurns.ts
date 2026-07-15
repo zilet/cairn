@@ -5,7 +5,7 @@ import { createProgressBus, createSerialRunner } from "./jobRunner.js";
 import * as repo from "./repo.js";
 import { UPLOADS_DIR } from "./uploadPaths.js";
 import { buildChatPrompt, parseChatReply } from "./prompt.js";
-import { chatHistoryTimeLabel } from "./repo/shared.js";
+import { chatHistoryTimeLabel, localDateISO } from "./repo/shared.js";
 import { runWithTimeZone } from "./tz.js";
 import {
   runAgent,
@@ -47,7 +47,9 @@ export type TurnEvent =
   | { type: "canceled"; turn: any };
 
 const turnBus = createProgressBus<TurnEvent>("turn");
-function emit(id: number, payload: TurnEvent): void { turnBus.emit(id, payload); }
+function emit(id: number, payload: TurnEvent): void {
+  turnBus.emit(id, payload);
+}
 export function onTurnEvent(id: number, listener: (e: TurnEvent) => void): () => void {
   return turnBus.on(id, listener);
 }
@@ -59,7 +61,11 @@ export function onTurnEvent(id: number, listener: (e: TurnEvent) => void): () =>
 // turn streams, cleared when the turn goes terminal (processChatTurnInner finally).
 const streamFilters = new Map<number, ReturnType<typeof createChatStreamFilter>>();
 export function getTurnPartialReply(id: number): string {
-  try { return streamFilters.get(id)?.reply() ?? ""; } catch { return ""; }
+  try {
+    return streamFilters.get(id)?.reply() ?? "";
+  } catch {
+    return "";
+  }
 }
 
 // ---------- serial queue ----------
@@ -74,11 +80,15 @@ const runner = createSerialRunner(processChatTurn, (id, e) => {
   try {
     const cur = repo.getChatTurn(id) as any;
     if (cur && (cur.status === "queued" || cur.status === "running")) {
-      const assistant = repo.addChatMessage("assistant", "Something went wrong while finishing that turn.", null, { error: true });
+      const assistant = repo.addChatMessage("assistant", "Something went wrong while finishing that turn.", null, {
+        error: true,
+      });
       const failed = repo.failChatTurn(id, e?.message ?? String(e), (assistant as any).id);
       emit(id, { type: "error", turn: failed, message: assistant });
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   recordAsyncFailure("chat_turns", "runner_backstop", e);
   console.error(`[chat] turn#${id} failed (${diagnosticErrorName(e)})`);
 });
@@ -117,7 +127,7 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
   const prompt = buildChatPrompt(
     history,
     turn.message || "(no text — see the attached photo)",
-    turn.image_path || undefined,
+    turn.image_path || undefined
   );
 
   const controller = new AbortController();
@@ -126,7 +136,7 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
   try {
     const { agent, raw, attempts } = await runChatCompletion(id, turn, prompt, controller.signal);
     const { reply: replyText, actions } = parseChatReply(raw);
-    const reply = replyText || "(no reply)";
+    const proposedReply = replyText || "(no reply)";
 
     repo.setChatTurnPhase(id, "applying");
     emit(id, { type: "phase", turn: repo.getChatTurn(id) });
@@ -143,9 +153,11 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
 
     const { applied, drafts, labConfirms } = applyChatActions(
       { actions },
-      { agent, imagePath: turn.image_path, message: turn.message, skipLogFood: !!photoFood },
+      { agent, imagePath: turn.image_path, message: turn.message, skipLogFood: !!photoFood }
     );
     if (photoFood) applied.unshift({ type: "log_food", result: photoFood });
+    const planReply = reconcileChatPlanReply(proposedReply, turn.message, applied, drafts);
+    const reply = reconcileStrengthObjectiveReply(planReply, turn.message, applied);
     const failedAttempts = attempts.filter((a) => !a.ok);
     const meta: {
       applied: typeof applied;
@@ -160,7 +172,12 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
     if (labConfirms.length) meta.lab_confirms = labConfirms;
     if (failedAttempts.length) meta.agent_attempts = attempts;
     const assistant = repo.addChatMessage("assistant", reply, agent, meta);
-    const finished = repo.finishChatTurn(id, { reply, chosen_agent: agent, assistant_message_id: (assistant as any).id, meta });
+    const finished = repo.finishChatTurn(id, {
+      reply,
+      chosen_agent: agent,
+      assistant_message_id: (assistant as any).id,
+      meta,
+    });
     emit(id, { type: "done", turn: finished, message: assistant });
   } catch (e: any) {
     // Canceled mid-run: cancelTurn already flipped status + emitted the event.
@@ -188,8 +205,10 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
 // Lazy import of enrich.js mirrors repo.addFoodNote: enrich.ts imports chatTurns
 // is not a cycle today, but the lazy import keeps the queue trigger uniform with
 // the rest of the loop and side-steps any future ordering surprise.
-const PHOTO_FOOD_HINT_RE = /\b(food|meal|breakfast|lunch|dinner|snack|plate|bowl|ate|eating|calor(?:y|ies)|macro|protein|carb|fat|fiber|weigh(?:ed)?|grams?|oz|serving|portion|recipe|restaurant|label|packag(?:e|ing)|menu)\b/i;
-const PHOTO_NON_FOOD_HINT_RE = /\b(physique|body|mirror|pose|form|equipment|bike|run|shoe|injur(?:y|ed)?|pain|dexa|scan|lab|blood|chart|screenshot)\b/i;
+const PHOTO_FOOD_HINT_RE =
+  /\b(food|meal|breakfast|lunch|dinner|snack|plate|bowl|ate|eating|calor(?:y|ies)|macro|protein|carb|fat|fiber|weigh(?:ed)?|grams?|oz|serving|portion|recipe|restaurant|label|packag(?:e|ing)|menu)\b/i;
+const PHOTO_NON_FOOD_HINT_RE =
+  /\b(physique|body|mirror|pose|form|equipment|bike|run|shoe|injur(?:y|ed)?|pain|dexa|scan|lab|blood|chart|screenshot)\b/i;
 
 function stringOrUndefined(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
@@ -200,11 +219,11 @@ function stringOrNull(value: unknown): string | null {
 }
 
 function memoryKind(value: unknown): MemoryKind | undefined {
-  return typeof value === "string" && value.trim() ? value as MemoryKind : undefined;
+  return typeof value === "string" && value.trim() ? (value as MemoryKind) : undefined;
 }
 
 function recordOrNull(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 }
 
 function proposalMeta(draft: unknown): { id: unknown; kind: "restructure" | "plan_update"; summary: unknown } {
@@ -230,8 +249,10 @@ export function shouldCreatePhotoFoodPlaceholder(message: string | null | undefi
 // turning a food capture into a surprise training intervention. If the athlete
 // also reports a training, recovery, pain, or life signal, the targeted coaching
 // path remains available.
-const FOOD_TURN_RE = /\b(food|meal|breakfast|lunch|dinner|snack|plate|bowl|salad|chicken|restaurant|cafe|café|ate|eating|calor(?:y|ies)|macro|protein|carb|fat|fiber|portion|recipe|menu)\b/i;
-const TRAINING_SIGNAL_RE = /\b(workout|train(?:ing|ed)?|lift(?:ing|ed)?|session|exercise|bench|squat|deadlift|press|row|run|ride|cycle|pain|sore|soreness|injur(?:y|ed)|recovery|sleep|hrv|fatigue|travel|trip|ill|sick)\b/i;
+const FOOD_TURN_RE =
+  /\b(food|meal|breakfast|lunch|dinner|snack|plate|bowl|salad|chicken|restaurant|cafe|café|ate|eating|calor(?:y|ies)|macro|protein|carb|fat|fiber|portion|recipe|menu)\b/i;
+const TRAINING_SIGNAL_RE =
+  /\b(workout|train(?:ing|ed)?|lift(?:ing|ed)?|session|exercise|bench|squat|deadlift|press|row|run|ride|cycle|pain|sore|soreness|injur(?:y|ed)|recovery|sleep|hrv|fatigue|travel|trip|ill|sick)\b/i;
 export function isFoodOnlyTurn(message: string | null | undefined, imagePath?: string | null): boolean {
   const text = String(message ?? "");
   return (Boolean(imagePath) || FOOD_TURN_RE.test(text)) && !TRAINING_SIGNAL_RE.test(text);
@@ -252,17 +273,221 @@ const GOAL_IDENTITY_FIELDS = new Set([
 export function hasExplicitGoalIntent(message: string | null | undefined): boolean {
   const text = String(message ?? "").trim();
   if (!text) return false;
-  if (/\b(?:what|which)\b.{0,30}\b(?:goal|target)\b|\b(?:should|could|would)\s+i\b.{0,30}\b(?:goal|target|weigh|train|run|race)\b/i.test(text))
+  if (
+    /\b(?:what|which)\b.{0,30}\b(?:goal|target)\b|\b(?:should|could|would)\s+i\b.{0,30}\b(?:goal|target|weigh|train|run|race)\b/i.test(
+      text
+    )
+  )
     return false;
   return (
     /\bmy\s+(?:new\s+)?goal\s+(?:is|will be)\b/i.test(text) ||
     /\b(?:set|change|update)\s+(?:my\s+)?(?:goal|target|discipline)\b/i.test(text) ||
-    /\bi\s+(?:want|plan|aim|intend|am going)\s+to\b.{0,80}\b(?:weigh|lose|gain|maintain|run|race|train|lift|cycle|ride|swim|complete|finish)\b/i.test(text) ||
+    /\bi\s+(?:want|plan|aim|intend|am going)\s+to\b.{0,80}\b(?:weigh|lose|gain|maintain|run|race|train|lift|cycle|ride|swim|complete|finish)\b/i.test(
+      text
+    ) ||
     /\b(?:train(?:ing)?\s+for|signed?\s+up\s+for|keep\s+me\b.{0,40}\bready)\b/i.test(text)
   );
 }
 
-function applyBackgroundPlanUpdate(agent: string, summary: unknown, changes: unknown[]): unknown {
+// Strength objectives are narrower than general profile/race goals: one named lift
+// plus a chosen return-to-best or numeric destination. Exploratory "what should I"
+// questions and broad comeback talk never create durable state.
+export function hasExplicitStrengthObjectiveIntent(message: string | null | undefined): boolean {
+  const text = String(message ?? "").trim();
+  if (!text) return false;
+  if (
+    /\b(?:what|which|how (?:much|heavy))\b.{0,45}\b(?:goal|target|lift|bench|squat|deadlift|press)\b|\b(?:should|could|would)\s+i\b/i.test(
+      text
+    )
+  )
+    return false;
+  const namedLift =
+    /\b(?:bench(?: press)?|squat|deadlift|overhead press|ohp|barbell press|dumbbell press|db press|row|pull[- ]?up)\b/i.test(
+      text
+    );
+  if (!namedLift) return false;
+  return (
+    /\b(?:set|change|update)\s+(?:my\s+)?(?:strength\s+)?(?:goal|target|objective)\b/i.test(text) ||
+    /\b(?:set|change|update)\s+(?:my\s+)?(?:bench(?: press)?|squat|deadlift|overhead press|ohp|barbell press|dumbbell press|db press|row|pull[- ]?up)\s+(?:goal|target|objective)\b/i.test(
+      text
+    ) ||
+    /\b(?:my\s+(?:strength\s+)?goal\s+is|i\s+(?:want|aim|plan|intend)\s+to)\b.{0,100}\b(?:return|get back|build|reach|hit)\b/i.test(
+      text
+    ) ||
+    /\b(?:return|get back)\b.{0,80}\b(?:personal best|\bpb\b|\bpr\b|old max|previous max)\b/i.test(text) ||
+    /\bi\s+(?:want|aim|plan|intend)\s+to\b.{0,120}\bback\s+to\s+(?:my\s+)?(?:personal best|\bpb\b|\bpr\b|old max|previous max)\b/i.test(
+      text
+    )
+  );
+}
+
+export function hasExplicitPlanEditIntent(message: string | null | undefined): boolean {
+  const text = String(message ?? "").trim();
+  if (!text) return false;
+  const verb = /\b(adjust|update|change|edit|fix|make|optimi[sz]e|remove|delete|drop|skip|replace|swap|add)\b/i;
+  const object =
+    /\b(plan|program|session|workout|today['’]?s|today|tonight|exercise|movement|sets?|reps?|bench|press|squat|deadlift|row|run|ride|cardio|lift)\b/i;
+  return verb.test(text) && object.test(text);
+}
+
+function todayPlanUpdateChanges(message: string | null | undefined, changes: unknown[]): unknown[] {
+  const text = String(message ?? "").trim();
+  if (!hasExplicitPlanEditIntent(text) || !/\b(?:today(?:['’]s)?|tonight)\b/i.test(text)) return changes;
+  // A named future/day target is an explicit athlete override, not an implicit
+  // "today" reference. Keep it authoritative even if the sentence also compares
+  // it with today (for example, "leave today alone; change day 3").
+  if (
+    /\b(?:tomorrow|later\s+this\s+week|next\s+(?:session|workout|week|push|pull|legs?|lower|upper|full(?:[- ]body)?|run|ride|cardio)|day\s*(?:number\s*)?\d+|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(
+      text
+    )
+  )
+    return changes;
+  const rows = changes.filter(
+    (change): change is Record<string, unknown> => !!change && typeof change === "object" && !Array.isArray(change)
+  );
+  if (!rows.length || rows.length !== changes.length) return changes;
+  const namedDays = new Set(rows.map((change) => Number(change.day_number)).filter((day) => Number.isFinite(day)));
+  // Multi-day actions are structural work. Do not silently collapse them onto one
+  // session just because the prose happened to mention today.
+  if (namedDays.size > 1) return changes;
+  const selected = repo.selectedPlanDayForDate(localDateISO());
+  if (!selected) return changes;
+  return rows.map((change) => ({ ...change, day_number: selected.day_number }));
+}
+
+function planItemMatch(items: any[], name: unknown): any | null {
+  const value = String(name ?? "").trim();
+  if (!value) return null;
+  const normalized = repo.normalizeExerciseName(value);
+  const key = repo.normalizedExerciseKey(value);
+  return (
+    items.find((item) => repo.normalizeExerciseName(String(item?.exercise ?? "")) === normalized) ??
+    items.find((item) => repo.normalizedExerciseKey(String(item?.exercise ?? "")) === key) ??
+    null
+  );
+}
+
+function samePlanPrescriptionField(field: string, actualValue: unknown, expectedValue: unknown): boolean {
+  const actual = actualValue ?? null;
+  const expected = expectedValue ?? null;
+  if (field === "mode") return String(actual) === String(expected);
+  if (actual === null || expected === null) return actual === expected;
+  return Number(actual) === Number(expected);
+}
+
+function verifyPlanUpdateReadback(changes: unknown[], result: any): any {
+  const rows = changes.filter(
+    (change): change is Record<string, unknown> => !!change && typeof change === "object" && !Array.isArray(change)
+  );
+  const dayNumbers = [
+    ...new Set(rows.map((change) => Number(change.day_number)).filter((day) => Number.isFinite(day))),
+  ];
+  const days = dayNumbers.map((day) => repo.getPlanDay(day)).filter(Boolean);
+  const byDay = new Map(days.map((day: any) => [Number(day.day_number), day]));
+  const clamped = Array.isArray(result?.clamped) ? result.clamped : [];
+  const receipts = [
+    ...(Array.isArray(result?.applied) ? result.applied : []),
+    ...(Array.isArray(result?.added) ? result.added : []),
+  ];
+  const checks = rows.map((change) => {
+    const day = byDay.get(Number(change.day_number)) as any;
+    const items = Array.isArray(day?.items) ? day.items : [];
+    const remove = change.remove === true || Number(change.sets) === 0;
+    if (change.swap && typeof change.swap === "object") {
+      const swap = change.swap as Record<string, unknown>;
+      const receipt = receipts.find(
+        (entry: any) =>
+          entry?.action === "swapped" &&
+          Number(entry?.day) === Number(change.day_number) &&
+          (repo.normalizeExerciseName(String(entry?.swap?.to ?? "")) ===
+            repo.normalizeExerciseName(String(swap.to ?? "")) ||
+            repo.normalizedExerciseKey(String(entry?.exercise ?? "")) ===
+              repo.normalizedExerciseKey(String(swap.to ?? "")))
+      );
+      // The request may use a persisted alias ("flat bench") whose normalized
+      // text intentionally differs from the stored exercise ("Barbell Bench
+      // Press"). The apply receipt is the authority for both canonical identities;
+      // verify those against the stored day rather than reinterpreting raw aliases.
+      const from = planItemMatch(items, receipt?.from ?? swap.from);
+      const to = planItemMatch(items, receipt?.exercise ?? swap.to);
+      const fields = ["sets", "rep_low", "rep_high", "target_weight", "target_seconds", "mode"] as const;
+      const mismatches =
+        !receipt || !to
+          ? fields
+          : fields.filter((field) => {
+              const expected = receipt[field] ?? null;
+              const actual = to[field] ?? null;
+              return !samePlanPrescriptionField(field, actual, expected);
+            });
+      return {
+        day_number: Number(change.day_number),
+        kind: "swap",
+        ok: !from && !!to && !!receipt && mismatches.length === 0,
+        from: swap.from,
+        to: swap.to,
+        mismatches,
+      };
+    }
+    const item = planItemMatch(items, change.exercise);
+    if (remove) return { day_number: Number(change.day_number), kind: "remove", ok: !item, exercise: change.exercise };
+    if (!item) return { day_number: Number(change.day_number), kind: "upsert", ok: false, exercise: change.exercise };
+    const receipt = receipts.find(
+      (entry: any) =>
+        Number(entry?.day) === Number(change.day_number) &&
+        repo.normalizedExerciseKey(entry?.exercise) === repo.normalizedExerciseKey(item.exercise)
+    );
+    const fields = ["sets", "rep_low", "rep_high", "target_weight", "target_seconds", "mode"] as const;
+    const mismatches: string[] = [];
+    for (const field of fields) {
+      if (receipt && Object.hasOwn(receipt, field)) {
+        const expected = receipt[field] ?? null;
+        const actual = item[field] ?? null;
+        if (!samePlanPrescriptionField(field, actual, expected)) mismatches.push(field);
+        continue;
+      }
+      if (change[field] == null) continue;
+      const clamp = clamped.find(
+        (entry: any) =>
+          entry?.field === field &&
+          repo.normalizedExerciseKey(entry?.exercise) === repo.normalizedExerciseKey(item.exercise)
+      );
+      const expected = clamp ? Number(clamp.applied) : Number(change[field]);
+      if (field === "mode" ? String(item[field]) !== String(change[field]) : Number(item[field]) !== expected)
+        mismatches.push(field);
+    }
+    return {
+      day_number: Number(change.day_number),
+      kind: "upsert",
+      ok: mismatches.length === 0,
+      exercise: item.exercise,
+      mismatches,
+    };
+  });
+  return {
+    ok: checks.length > 0 && checks.every((check) => check.ok),
+    checks,
+    days: days.map((day: any) => ({
+      day_number: day.day_number,
+      name: day.name,
+      items: (day.items ?? []).map((item: any) => ({
+        exercise: item.exercise,
+        sets: item.sets,
+        rep_low: item.rep_low,
+        rep_high: item.rep_high,
+        target_weight: item.target_weight,
+        target_seconds: item.target_seconds,
+        mode: item.mode,
+      })),
+    })),
+  };
+}
+
+function applyBackgroundPlanUpdate(
+  agent: string,
+  summary: unknown,
+  changes: unknown[],
+  explicitUserRequest: boolean
+): unknown {
   const proposal = repo.createProposal(agent, "background: chat signal", "", {
     summary: String(summary ?? "Plan adjusted from a new coaching signal.").slice(0, 500),
     changes,
@@ -270,8 +495,155 @@ function applyBackgroundPlanUpdate(agent: string, summary: unknown, changes: unk
   // Route every background adjustment through the ONE autonomy policy. Lead mode
   // may quietly apply a small reversible change; announce/review modes leave it
   // waiting. The shared proposal path still owns all server-side clamps.
-  const result = applyProposalWithAutonomy((proposal as any).id, { requested_tier: "quiet_apply" }) as any;
-  return { background: true, proposal_id: (proposal as any).id, ...result };
+  const result = applyProposalWithAutonomy((proposal as any).id, {
+    requested_tier: "quiet_apply",
+    explicit_user_request: explicitUserRequest,
+  }) as any;
+  const stored = repo.getProposal((proposal as any).id) as any;
+  const verification =
+    stored?.status === "applied"
+      ? verifyPlanUpdateReadback(changes, result)
+      : { ok: false, proposal_status: stored?.status ?? null, checks: [], days: [] };
+  const persisted = stored?.status === "applied";
+  return {
+    background: !explicitUserRequest,
+    explicit_user_request: explicitUserRequest,
+    proposal_id: (proposal as any).id,
+    ...result,
+    persisted,
+    committed: persisted,
+    verified: verification.ok,
+    verification,
+  };
+}
+
+function replyClaimsPlanSuccess(reply: string): boolean {
+  return /\b(?:i(?:['’]ve| have)?\s+(?:now\s+)?(?:updated|adjusted|saved|applied|pushed|changed|removed|added)|(?:updated|adjusted|saved|applied|pushed|changed)\s+(?:your|today['’]?s|the)\s+(?:live\s+)?(?:plan|program|session|workout)|(?:plan|program|session|workout)\s+is\s+(?:now\s+)?(?:updated|saved|live))\b/i.test(
+    reply
+  );
+}
+
+export function reconcileChatPlanReply(
+  reply: string,
+  message: string | null | undefined,
+  applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>,
+  drafts: unknown[]
+): string {
+  const explicit = hasExplicitPlanEditIntent(message);
+  const planEntries = applied.filter((entry) => entry.type === "plan_update");
+  const restructureDraft = drafts.some((draft: any) => Array.isArray(draft?.parsed?.days));
+
+  if (!planEntries.length) {
+    if (restructureDraft && (explicit || replyClaimsPlanSuccess(reply))) {
+      return "That structural plan change is a draft for review; it is not live yet.";
+    }
+    if (explicit && replyClaimsPlanSuccess(reply)) {
+      return "I didn't save a plan change from that response, so your current plan is still unchanged.";
+    }
+    if (explicit) return `${reply.trim()}\n\nNo plan change was saved from this response.`.trim();
+    return reply;
+  }
+
+  const results = planEntries.map((entry) => recordOrNull(entry.result) ?? {});
+  const verifiedResults = results.filter((result) => result.ok === true && result.verified === true);
+  const verified = results.length > 0 && verifiedResults.length === results.length;
+  if (verified) {
+    if (!explicit && !replyClaimsPlanSuccess(reply)) return reply;
+    const days = [
+      ...new Set(
+        results.flatMap((result: any) =>
+          Array.isArray(result.verification?.days)
+            ? result.verification.days.map((day: any) => Number(day?.day_number)).filter(Number.isFinite)
+            : []
+        )
+      ),
+    ];
+    const receipt = `Saved and verified${days.length ? ` plan day${days.length > 1 ? "s" : ""} ${days.join(", ")}` : " the plan change"}.`;
+    const adjustments = results.flatMap((result: any) => (Array.isArray(result.clamped) ? result.clamped : []));
+    const clampReceipt = adjustments.length
+      ? ` Adjusted ${adjustments
+          .slice(0, 3)
+          .map(
+            (entry: any) =>
+              `${String(entry.field).replaceAll("_", " ")} from ${entry.requested} to ${entry.applied == null ? "no prescribed load" : entry.applied}`
+          )
+          .join("; ")} to supported safe bounds.`
+      : "";
+    return `${reply.trim()}\n\n${receipt}${clampReceipt}`.trim();
+  }
+
+  // Although the chat contract asks the model for one atomic plan_update, remain
+  // truthful when an off-contract response emits several. Each proposal is atomic,
+  // but a later one may commit after an earlier one failed. Never collapse that
+  // mixed outcome into "your plan is unchanged" (the exact failure that makes the
+  // live Today screen and coach prose disagree).
+  if (verifiedResults.length) {
+    repo.invalidateDayRead();
+    const days = [
+      ...new Set(
+        verifiedResults.flatMap((result: any) =>
+          Array.isArray(result.verification?.days)
+            ? result.verification.days.map((day: any) => Number(day?.day_number)).filter(Number.isFinite)
+            : []
+        )
+      ),
+    ];
+    const failed = results.filter((result) => !(result.ok === true && result.verified === true));
+    const firstFailed = failed[0] as any;
+    const failedEntry = planEntries[results.indexOf(firstFailed)];
+    const reason =
+      Array.isArray(firstFailed?.reasons) && firstFailed.reasons.length
+        ? String(firstFailed.reasons[0])
+        : String(firstFailed?.error ?? failedEntry?.error ?? "that part did not verify against the stored plan");
+    return `Part of that request is live: saved and verified${days.length ? ` plan day${days.length > 1 ? "s" : ""} ${days.join(", ")}` : " the successful plan change"}. Another requested plan change was not saved: ${reason} The stored plan reflects only the verified change${verifiedResults.length > 1 ? "s" : ""}.`;
+  }
+
+  const first = results[0] as any;
+  const reason =
+    Array.isArray(first?.reasons) && first.reasons.length
+      ? String(first.reasons[0])
+      : String(first?.error ?? planEntries[0]?.error ?? "the stored plan did not verify the requested final state");
+  // Do not retain model prose that claimed a write succeeded. The server receipt is
+  // authoritative and is what gets persisted/displayed after the streamed draft.
+  if (first?.ok === true && (Array.isArray(first?.applied) || first?.restructured === true)) {
+    return "The plan write completed, but I couldn't verify the full stored prescription. Reopen Today before training; I won't claim the displayed plan is confirmed.";
+  }
+  if (explicit || replyClaimsPlanSuccess(reply)) {
+    return `That plan change is not live. Your current plan is unchanged: ${reason}`;
+  }
+  return reply;
+}
+
+export function reconcileStrengthObjectiveReply(
+  reply: string,
+  message: string | null | undefined,
+  applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>
+): string {
+  if (!hasExplicitStrengthObjectiveIntent(message)) return reply;
+  const entries = applied.filter((entry) => entry.type === "set_strength_objective");
+  if (!entries.length) {
+    if (
+      /\b(?:i(?:['’]ve| have)?\s+(?:saved|set|updated|created)|(?:strength\s+)?(?:goal|target|objective)\s+is\s+(?:now\s+)?(?:saved|set|active|live))\b/i.test(
+        reply
+      )
+    ) {
+      return "I didn't save a strength objective from that response, so your existing objective is unchanged.";
+    }
+    return `${reply.trim()}\n\nNo strength objective was saved from this response.`.trim();
+  }
+  const results = entries.map((entry) => recordOrNull(entry.result) ?? {});
+  const verified = results.length > 0 && results.every((result) => result.ok === true && result.verified === true);
+  if (!verified) {
+    const reason = String(entries.find((entry) => entry.error)?.error ?? "the stored objective did not verify");
+    return `I couldn't verify that strength objective, so I won't claim it was saved: ${reason}.`;
+  }
+  const objective = results.at(-1)?.objective as any;
+  const exercise = String(objective?.exercise ?? "the anchor lift");
+  const target = Number(objective?.target_est_1rm);
+  const receipt = Number.isFinite(target)
+    ? `Strength objective saved and verified: ${exercise} to ${target} lb estimated 1RM.`
+    : `Strength objective saved and verified: ${exercise}.`;
+  return `${reply.trim()}\n\n${receipt}`.trim();
 }
 
 function logPhotoFood(actions: ChatAction[], turn: any): { id: number; [key: string]: unknown } | null {
@@ -297,7 +669,7 @@ function logPhotoFood(actions: ChatAction[], turn: any): { id: number; [key: str
   try {
     const created = repo.addFoodNote(meal, "", parsedNote, turn.image_path);
     const row = recordOrNull(created);
-    note = row && typeof row.id === "number" ? row as { id: number; [key: string]: unknown } : null;
+    note = row && typeof row.id === "number" ? (row as { id: number; [key: string]: unknown }) : null;
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e);
     console.error(`[chat] turn#${turn.id}: failed to create photo food note: ${message}`);
@@ -312,7 +684,9 @@ function logPhotoFood(actions: ChatAction[], turn: any): { id: number; [key: str
       repo.setFoodNoteEnrichStatus(note.id, "pending");
       import("./enrich.js").then((m) => m.enqueueEnrich("food_photo", note.id)).catch(() => {});
     }
-  } catch { /* settings unreadable → leave the note as-is */ }
+  } catch {
+    /* settings unreadable → leave the note as-is */
+  }
   return note;
 }
 
@@ -360,7 +734,13 @@ function cleanCliLine(value: unknown): string {
     .replace(/\s+/g, " ")
     .trim();
   if (!text) return "";
-  return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)[0]?.slice(0, 220) || "";
+  return (
+    text
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)[0]
+      ?.slice(0, 220) || ""
+  );
 }
 
 function displayAgent(name: string | null | undefined): string {
@@ -454,7 +834,9 @@ function recordChatAttempt(attempt: ChatAgentAttempt, started: number, parsed: b
       input_tokens: attempt.input_tokens ?? null,
       output_tokens: attempt.output_tokens ?? null,
     });
-  } catch { /* telemetry never breaks the loop */ }
+  } catch {
+    /* telemetry never breaks the loop */
+  }
 }
 
 function summarizeChatAttempts(attempts: ChatAgentAttempt[]): string {
@@ -466,7 +848,12 @@ function summarizeChatAttempts(attempts: ChatAgentAttempt[]): string {
     .join("; ");
 }
 
-function chatFailureReply(e: any): { content: string; agent: string | null; meta: Record<string, unknown>; error: string } {
+function chatFailureReply(e: any): {
+  content: string;
+  agent: string | null;
+  meta: Record<string, unknown>;
+  error: string;
+} {
   if (e instanceof ChatCompletionError) {
     const attempts = e.attempts.filter((a) => !a.ok);
     const first = attempts.length === 1 ? attempts[0] : null;
@@ -493,7 +880,7 @@ async function runChatCompletion(
   id: number,
   turn: any,
   prompt: string,
-  signal: AbortSignal,
+  signal: AbortSignal
 ): Promise<{ agent: string; raw: string; attempts: ChatAgentAttempt[] }> {
   // Per-task routing: a "chat → claude" pin resolves an "auto"/blank turn to that
   // one enabled agent; an explicit turn.agent or an unrouted turn is unchanged.
@@ -602,7 +989,11 @@ async function runChatCompletion(
 export function cancelTurn(id: number) {
   const turn = repo.cancelChatTurn(id);
   if (!turn) return null;
-  try { controllers.get(id)?.abort(); } catch { /* not running */ }
+  try {
+    controllers.get(id)?.abort();
+  } catch {
+    /* not running */
+  }
   emit(id, { type: "canceled", turn });
   return turn;
 }
@@ -612,7 +1003,11 @@ export function cancelTurn(id: number) {
 // re-handles any interrupted 'running' row on the next boot.
 export function abortAllTurns() {
   for (const c of controllers.values()) {
-    try { c.abort(); } catch { /* not running */ }
+    try {
+      c.abort();
+    } catch {
+      /* not running */
+    }
   }
 }
 
@@ -644,11 +1039,20 @@ export function recoverChatTurns(): { requeued: number; interrupted: number } {
 export const CHAT_LAB_CONFIRM_MIN = 8;
 export function isSubstantialLabPaste(text: string | null | undefined, agentMarkerCount = 0): boolean {
   let estimate = 0;
-  try { estimate = repo.estimateMarkerCandidates(String(text ?? "")); } catch { estimate = 0; }
+  try {
+    estimate = repo.estimateMarkerCandidates(String(text ?? ""));
+  } catch {
+    estimate = 0;
+  }
   return estimate >= CHAT_LAB_CONFIRM_MIN || agentMarkerCount >= CHAT_LAB_CONFIRM_MIN;
 }
 
-export interface LabConfirmDraft { id: number; marker_estimate: number; summary: string | null; kind: string | null; }
+export interface LabConfirmDraft {
+  id: number;
+  marker_estimate: number;
+  summary: string | null;
+  kind: string | null;
+}
 
 // Persist a substantial pasted lab as a pending_confirm health document and return the
 // meta descriptor the chat surface renders a one-tap Confirm from. The raw text lands on
@@ -656,7 +1060,11 @@ export interface LabConfirmDraft { id: number; marker_estimate: number; summary:
 // under parsed.pending_markers — a NON-leaking key (getMarkerHistory reads parsed.markers)
 // used only as the graceful-degrade fallback when confirm can't reach a transcriber.
 // Returns null on a write failure so the caller can fall back to the immediate apply.
-function persistPendingLabDraft(a: { markers?: unknown; summary?: unknown; doc_date?: unknown; kind?: string }, message: string, estimate: number): LabConfirmDraft | null {
+function persistPendingLabDraft(
+  a: { markers?: unknown; summary?: unknown; doc_date?: unknown; kind?: string },
+  message: string,
+  estimate: number
+): LabConfirmDraft | null {
   const text = String(message ?? "");
   const markers = Array.isArray(a?.markers) ? a.markers : [];
   try {
@@ -700,14 +1108,19 @@ function persistPendingLabDraft(a: { markers?: unknown; summary?: unknown; doc_d
 // guarded — one bad action records its error and the rest still apply.
 export function applyChatActions(
   parsed: { actions?: unknown } | ChatAction[] | null | undefined,
-  ctx: { agent: string; imagePath?: string | null; message?: string | null; skipLogFood?: boolean },
-): { applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>; drafts: unknown[]; labConfirms: LabConfirmDraft[] } {
+  ctx: { agent: string; imagePath?: string | null; message?: string | null; skipLogFood?: boolean }
+): {
+  applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>;
+  drafts: unknown[];
+  labConfirms: LabConfirmDraft[];
+} {
   const applied: Array<{ type: ChatActionType; result?: unknown; error?: string }> = [];
   const drafts: unknown[] = [];
   const labConfirms: LabConfirmDraft[] = [];
   const message = ctx.message ?? "";
   const foodOnly = isFoodOnlyTurn(message, ctx.imagePath);
   const explicitGoalIntent = !foodOnly && hasExplicitGoalIntent(message);
+  const explicitStrengthObjectiveIntent = !foodOnly && hasExplicitStrengthObjectiveIntent(message);
   const actions = normalizeChatActions(Array.isArray(parsed) ? parsed : parsed?.actions);
   for (const a of actions) {
     try {
@@ -716,15 +1129,14 @@ export function applyChatActions(
           applied.push({ type: a.type, result: repo.addActivity({ text: a.text, date: a.date, notes: a.notes }) });
           break;
         case "log_set":
-          applied.push({ type: a.type, result: repo.logSetByName(a) });
+          applied.push({ type: a.type, result: repo.logSetByName(repo.resolveImplicitPlanDay(a)) });
           break;
         case "set_profile": {
           const { type, ...patch } = a;
           if (!explicitGoalIntent) {
             for (const field of GOAL_IDENTITY_FIELDS) delete patch[field];
           }
-          if (Object.keys(patch).length)
-            applied.push({ type: a.type, result: repo.setProfile(patch) });
+          if (Object.keys(patch).length) applied.push({ type: a.type, result: repo.setProfile(patch) });
           break;
         }
         case "set_endurance_goal": {
@@ -735,13 +1147,43 @@ export function applyChatActions(
           applied.push({ type: a.type, result: repo.setProfile({ endurance_goal: goal }) });
           break;
         }
+        case "set_strength_objective": {
+          if (!explicitStrengthObjectiveIntent) break;
+          const objective = repo.setStrengthObjective({
+            exercise: a.exercise,
+            target_kind: a.target_kind,
+            target_est_1rm: a.target_est_1rm,
+          });
+          // Server-owned readback of the exact immutable row. Creation may close
+          // an already-reached target atomically; later verified exact-lift sets
+          // durably close an active target.
+          const stored = repo.getStrengthObjective(objective.id);
+          const verified =
+            !!stored &&
+            stored.id === objective.id &&
+            stored.exercise_key === objective.exercise_key &&
+            stored.target_kind === objective.target_kind &&
+            Number(stored.target_est_1rm) === Number(objective.target_est_1rm) &&
+            (stored.status === "active" || stored.status === "completed");
+          applied.push({
+            type: a.type,
+            result: { ok: verified, verified, objective: stored, journey: verified ? repo.getStrengthJourney() : null },
+          });
+          break;
+        }
         case "add_memory":
           applied.push({ type: a.type, result: repo.addMemory(a.content, memoryKind(a.kind), "chat") });
           break;
         case "update_memory":
           // A fact CHANGED: edit the existing memory row in place (self-updating
           // memory — the agent saw the row id in DATA.memory and is correcting it).
-          applied.push({ type: a.type, result: repo.updateMemory(Number(a.id), { content: a.content, kind: memoryKind(a.kind) }) ?? { error: "not found", id: a.id } });
+          applied.push({
+            type: a.type,
+            result: repo.updateMemory(Number(a.id), { content: a.content, kind: memoryKind(a.kind) }) ?? {
+              error: "not found",
+              id: a.id,
+            },
+          });
           break;
         case "supersede_memory":
           // A fact was CONTRADICTED/REPLACED: mark the old row superseded (never
@@ -774,7 +1216,10 @@ export function applyChatActions(
             fiber_g: a.fiber_g ?? null,
             notes: a.notes ?? null,
           };
-          applied.push({ type: a.type, result: repo.addFoodNote(String(a.meal || "meal"), "", parsedNote, ctx.imagePath ?? undefined) });
+          applied.push({
+            type: a.type,
+            result: repo.addFoodNote(String(a.meal || "meal"), "", parsedNote, ctx.imagePath ?? undefined),
+          });
           break;
         }
         case "update_food_note": {
@@ -794,54 +1239,78 @@ export function applyChatActions(
         }
         case "log_health": {
           // Lab/DEXA results reported in chat. Markers feed the trend view.
-          const parsedDocObject = a.parsed && typeof a.parsed === "object"
-            ? a.parsed as Record<string, unknown>
-            : null;
+          const parsedDocObject =
+            a.parsed && typeof a.parsed === "object" ? (a.parsed as Record<string, unknown>) : null;
           const markers = Array.isArray(a.markers)
             ? a.markers
-            : (parsedDocObject && Array.isArray(parsedDocObject.markers) ? parsedDocObject.markers : []);
+            : parsedDocObject && Array.isArray(parsedDocObject.markers)
+              ? parsedDocObject.markers
+              : [];
           // A SUBSTANTIAL pasted panel is a big write → propose→apply: persist a
           // pending_confirm draft (raw text on disk, no markers committed yet) the user
           // confirms, which then transcribes it through the completeness-first, Claude-
           // first health ingest. A small inline mention still applies immediately below.
-          const estimate = (() => { try { return repo.estimateMarkerCandidates(message); } catch { return 0; } })();
+          const estimate = (() => {
+            try {
+              return repo.estimateMarkerCandidates(message);
+            } catch {
+              return 0;
+            }
+          })();
           if (isSubstantialLabPaste(message, markers.length)) {
             const draft = persistPendingLabDraft(a, message, estimate);
-            if (draft) { labConfirms.push(draft); break; }
+            if (draft) {
+              labConfirms.push(draft);
+              break;
+            }
             // couldn't persist (fs error) → fall through to the immediate apply
           }
-          const parsedDoc = parsedDocObject
-            ? parsedDocObject
-            : (markers.length ? { markers } : null);
-          applied.push({ type: a.type, result: repo.addHealthDocument({
-            kind: a.kind,
-            doc_date: stringOrNull(a.doc_date),
-            summary: stringOrNull(a.summary),
-            parsed_json: parsedDoc,
-            enrichment_status: "done",
-          }) });
+          const parsedDoc = parsedDocObject ? parsedDocObject : markers.length ? { markers } : null;
+          applied.push({
+            type: a.type,
+            result: repo.addHealthDocument({
+              kind: a.kind,
+              doc_date: stringOrNull(a.doc_date),
+              summary: stringOrNull(a.summary),
+              parsed_json: parsedDoc,
+              enrichment_status: "done",
+            }),
+          });
           // New markers from chat → refresh the deterministic markers→directives
           // propagation (idempotent), mirroring the enrichment path.
-          try { repo.deriveDirectives(); } catch { /* never fail the chat action */ }
+          try {
+            repo.deriveDirectives();
+          } catch {
+            /* never fail the chat action */
+          }
           break;
         }
         case "add_context_event":
           // A just-mentioned event (a late concert, travel, illness) shapes TODAY via
           // the active-context effect; addContextEvent busts the cached Brief at the
           // repo layer now (so EVERY surface reacts, not just chat).
-          applied.push({ type: a.type, result: repo.addContextEvent({
-            kind: a.kind,
-            title: stringOrUndefined(a.title),
-            detail: stringOrUndefined(a.detail),
-            start_date: stringOrUndefined(a.start_date),
-            end_date: stringOrUndefined(a.end_date),
-            meta: a.meta,
-          }) });
+          applied.push({
+            type: a.type,
+            result: repo.addContextEvent({
+              kind: a.kind,
+              title: stringOrUndefined(a.title),
+              detail: stringOrUndefined(a.detail),
+              start_date: stringOrUndefined(a.start_date),
+              end_date: stringOrUndefined(a.end_date),
+              meta: a.meta,
+            }),
+          });
           break;
         case "resolve_context_event":
           // Confirmed healed / over → close it (keeps the record); resolveContextEvent
           // busts the Brief at the repo layer.
-          applied.push({ type: a.type, result: repo.resolveContextEvent(Number(a.id), stringOrUndefined(a.date)) ?? { error: "not found", id: a.id } });
+          applied.push({
+            type: a.type,
+            result: repo.resolveContextEvent(Number(a.id), stringOrUndefined(a.date)) ?? {
+              error: "not found",
+              id: a.id,
+            },
+          });
           break;
         case "log_supplement": {
           // Supplement UNDERSTANDING (not a daily log): the athlete mentioned what
@@ -861,7 +1330,15 @@ export function applyChatActions(
           break;
         case "plan_update":
           if (foodOnly) break;
-          applied.push({ type: a.type, result: applyBackgroundPlanUpdate(ctx.agent, a.summary, a.changes) });
+          applied.push({
+            type: a.type,
+            result: applyBackgroundPlanUpdate(
+              ctx.agent,
+              a.summary,
+              todayPlanUpdateChanges(message, a.changes),
+              hasExplicitPlanEditIntent(message)
+            ),
+          });
           break;
         case "plan_restructure":
           if (foodOnly) break;

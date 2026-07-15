@@ -15,6 +15,7 @@ import {
   renderNow,
   renderReactionModel,
   renderSignalState,
+  renderStrengthJourney,
   renderTodayFuel,
   renderTrainingSignals,
   CAIRN_PERSONA,
@@ -161,8 +162,11 @@ GUARDRAILS:
 ${CONTEXT_GUARDRAILS}
 
 ${renderChatActionPromptProse()}
-${renderSignalState(ctx)}${renderCoachingFocus(ctx, { brief: true })}${renderTrainingSignals(ctx)}${renderReactionModel(ctx)}${renderActiveContext(ctx)}${renderTodayFuel(ctx)}
-Keep the reply short and human; confirm what you logged. Do not narrate a background plan_update.
+${renderSignalState(ctx)}${renderCoachingFocus(ctx, { brief: true })}${renderTrainingSignals(ctx)}${renderStrengthJourney(ctx)}${renderReactionModel(ctx)}${renderActiveContext(ctx)}${renderTodayFuel(ctx)}
+Keep the reply short and human; confirm safe capture actions you logged. For plan_update/plan_restructure,
+describe the intended change only — NEVER claim it was saved, applied, updated, pushed, or made live. The
+server runs those actions after your prose and adds the truthful result from a stored-plan read-back.
+Do not narrate a background plan_update.
 When the user says a lift
 "felt easy" / "felt heavy", lean on the LOGGED-PERFORMANCE SIGNALS above to decide — only emit a
 bump for a lift that actually reads progression-ready; hold or ease one that's stalled or flagged.

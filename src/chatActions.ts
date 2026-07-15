@@ -7,6 +7,7 @@ export const CHAT_ACTION_TYPES = [
   "log_set",
   "set_profile",
   "set_endurance_goal",
+  "set_strength_objective",
   "add_memory",
   "update_memory",
   "supersede_memory",
@@ -59,6 +60,13 @@ export interface SetProfileAction extends ChatActionBase {
 export interface SetEnduranceGoalAction extends ChatActionBase {
   type: "set_endurance_goal";
   [key: string]: unknown;
+}
+
+export interface SetStrengthObjectiveAction extends ChatActionBase {
+  type: "set_strength_objective";
+  exercise: string;
+  target_kind: "return_to_personal_best" | "explicit_est_1rm";
+  target_est_1rm?: unknown;
 }
 
 export interface AddMemoryAction extends ChatActionBase {
@@ -170,6 +178,7 @@ export type ChatAction =
   | LogSetAction
   | SetProfileAction
   | SetEnduranceGoalAction
+  | SetStrengthObjectiveAction
   | AddMemoryAction
   | UpdateMemoryAction
   | SupersedeMemoryAction
@@ -219,6 +228,16 @@ export const CHAT_ACTION_PROMPT_SPECS = {
       "label": "<readiness label, e.g. '10k-ready' — standing mode>",
       "distance_km": <number|null>, "target": "<e.g. 'sub-1:45'|null>", "weekly_km": <number|null>, "weekly_sessions": <number|null> }`,
   },
+  set_strength_objective: {
+    type: "set_strength_objective",
+    applyMode: "immediate",
+    shape: `{ "type": "set_strength_objective", "exercise": "Barbell Bench Press",
+      "target_kind": "return_to_personal_best|explicit_est_1rm", "target_est_1rm": <number — required only for explicit_est_1rm> }`,
+    guidance: [
+      `Set a strength objective ONLY when the athlete explicitly chooses ONE named anchor lift and states that they want to return to its personal best or reach a specific estimated-1RM. A question like "what should my bench goal be?", comparing exercises, or general comeback talk is exploratory and MUST NOT write an objective — ask one brief clarifying question instead.`,
+      `return_to_personal_best snapshots that exact exercise's logged all-time est-1RM now. explicit_est_1rm snapshots the athlete's stated number. Barbell and dumbbell variants are different objectives; never silently merge or substitute them.`,
+    ],
+  },
   add_memory: {
     type: "add_memory",
     applyMode: "immediate",
@@ -259,11 +278,18 @@ export const CHAT_ACTION_PROMPT_SPECS = {
     shape: `{ "type": "plan_update", "summary": "...", "changes": [
       { "day_number": 1, "exercise": "Back Squat", "target_weight": 195, "reason": "..." },
       { "day_number": 1, "exercise": "Plank", "target_seconds": 60, "reason": "timed exercises progress in seconds" },
+      // UPDATE the full bounded prescription (not just load):
+      { "day_number": 1, "exercise": "Incline DB Press", "sets": 1, "rep_low": 8, "rep_high": 10, "target_weight": 40, "reason": "easy reset volume" },
+      // REMOVE one redundant movement. NEVER encode removal as sets:0.
+      { "day_number": 1, "exercise": "Incline Barbell Bench Press", "remove": true, "reason": "duplicate incline pattern" },
+      // SWAP in place; supplied prescription fields configure the incoming movement.
+      { "day_number": 1, "swap": { "from": "Incline Barbell Bench Press", "to": "Flat Barbell Bench Press" }, "sets": 2, "rep_low": 8, "rep_high": 10, "target_weight": 105, "reason": "keep one flat and one incline pattern" },
       // ADD a movement: a change whose exercise isn't on that day yet is ADDED to it.
       // Include sets + rep_low/rep_high (and the starting target_weight) so it lands complete.
       { "day_number": 1, "exercise": "Single-Arm DB Row", "sets": 3, "rep_low": 10, "rep_high": 12, "target_weight": 55, "reason": "adds back volume" } ] }`,
     guidance: [
-      `plan_update is a SMALL, safety-checked background adjustment to the existing plan. Use it only when this turn supplies a material training, recovery, pain, or life-context signal that changes the next session. It lands quietly in the plan with its reason attached to the affected exercise; do NOT announce it in the reply unless the user asks about their plan. NEVER emit it for a food-only log, meal photo, or a general nutrition question. A change whose exercise is already on that day tweaks it; a change whose exercise is not on that day adds it (include sets + rep_low/rep_high so it lands complete).`,
+      `plan_update is a SMALL, safety-checked adjustment to the existing plan. Use it when the user explicitly asks to fix today's/next session, or when this turn supplies a material training, recovery, pain, or life-context signal that changes the next session. A change can update load AND sets/rep_low/rep_high, add an absent movement, remove one with remove:true, or atomically swap {from,to} in place. NEVER use sets:0 to mean remove. Include every requested change in ONE plan_update so the server can apply the bounded edit as a unit. NEVER emit it for a food-only log, meal photo, or a general nutrition question.`,
+      `The server applies actions after your prose. Describe the intended edit, but NEVER say it was saved, updated, pushed, applied, or is live. Cairn will add a verified receipt only after reading the stored plan back.`,
     ],
   },
   plan_restructure: {
@@ -426,6 +452,12 @@ export function normalizeChatAction(value: unknown): ChatAction | null {
       return { ...value, type: "set_profile" };
     case "set_endurance_goal":
       return { ...value, type: "set_endurance_goal" };
+    case "set_strength_objective":
+      return nonBlank(value.exercise) &&
+        (value.target_kind === "return_to_personal_best" || value.target_kind === "explicit_est_1rm") &&
+        (value.target_kind !== "explicit_est_1rm" || (Number.isFinite(Number(value.target_est_1rm)) && Number(value.target_est_1rm) > 0))
+        ? { ...value, type: "set_strength_objective", exercise: value.exercise, target_kind: value.target_kind }
+        : null;
     case "add_memory":
       return nonBlank(value.content) ? { ...value, type: "add_memory", content: value.content } : null;
     case "update_memory":
