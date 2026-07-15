@@ -265,6 +265,36 @@ test("meal-plan helper excludes unsafe legacy drafts from the current fallback",
   assert.equal(meals.currentMealPlan([legacy, valid]).id, 2);
 });
 
+test("meal-plan helper explains a hard-constraint conflict and suppresses actionable meals", () => {
+  const meals = loadMealPlan();
+  const parsed = {
+    daily_kcal: 2200,
+    daily_protein_g: 170,
+    notes: "Prep the chicken tonight",
+    shopping: ["chicken", "rice"],
+    constraint_state: {
+      status: "refresh_needed",
+      conflicts: [{ kind: "dietary", detail: "contains <chicken> under the saved vegan constraint" }],
+    },
+    days: Array.from({ length: 7 }, (_, index) => ({
+      day: `Day ${index + 1}`,
+      meals: [{ name: "Chicken bowl", kcal: 2200, protein_g: 170 }],
+    })),
+  };
+  const plan = { id: 7, status: "accepted", parsed, constraint_state: parsed.constraint_state };
+  const painted = meals.mealPlannerBodyHtml(plan, "", { now: { getDay: () => 1 } });
+
+  assert.match(painted.html, /MEALS NEED A REFRESH/);
+  assert.match(painted.html, /contains &lt;chicken&gt;/);
+  assert.match(painted.html, /Ask the team to refresh meals/);
+  assert.doesNotMatch(painted.html, /Chicken bowl|Prep the chicken tonight|data-shop/);
+
+  const staleDraft = meals.mealPlanHeroHtml({ ...plan, id: "draft<7>", status: "draft" });
+  assert.match(staleDraft, /REFRESH REQUIRED/);
+  assert.match(staleDraft, /data-mdiscard="draft&lt;7&gt;"/);
+  assert.doesNotMatch(staleDraft, /Use this plan|data-mkeep/);
+});
+
 test("meal-plan helper preserves draft actions in the planner shell", () => {
   const meals = loadMealPlan();
   const painted = meals.mealPlannerBodyHtml(

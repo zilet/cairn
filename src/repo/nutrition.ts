@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { db, todayISO } from "../db.js";
 import type { ProposedExpectation } from "../brain/expectation-contract.js";
 import { emitBrainEvent } from "../brainEvents.js";
@@ -7,13 +8,23 @@ import { estimateExpenditure } from "./expenditure.js";
 import { newestHealthDocDate } from "./health.js";
 import { computeGoalCheck } from "./profile.js";
 import {
+  assertMealDietarySafe,
   assertMealAllergenSafe,
+  assertPlanDietarySafe,
   assertPlanAllergenSafe,
+  assertRecipeDietarySafe,
   assertRecipeAllergenSafe,
   assessMealPlanAdequacy,
+  canonicalAllergyKeys,
   clampNutritionFloors,
+  MEAL_PLAN_FIBER_FLOOR_G,
 } from "./nutrition-safety.js";
 import { getSettings } from "./settings.js";
+import {
+  canonicalHardDietKeys,
+  mealPlanHardDietKeys,
+  stampInstructionHardDiets,
+} from "./dietary-constraints.js";
 import { localDateISO, chatHistoryTimeLabel } from "./shared.js";
 import { bumpFoodDataVersion } from "./training-cache.js";
 
@@ -309,17 +320,207 @@ export function mealPlanFreshness(plan: any): { stale: boolean; reason: string |
 }
 
 export type MealPlanPersistenceCheck =
-  | { ok: true; parsed: any; adequacy_checked: boolean }
-  | { ok: false; error: string; parsed: any; adequacy_checked: boolean };
+  | { ok: true; parsed: any; adequacy_checked: boolean; fiber_checked: boolean }
+  | { ok: false; error: string; parsed: any; adequacy_checked: boolean; fiber_checked: boolean };
 
 const MEAL_PLAN_TARGET_TOLERANCE_KCAL = 100;
+
+function normalizeMealPlanFiber(parsed: any): any {
+  if (!parsed || typeof parsed !== "object") return parsed;
+  const days = Array.isArray(parsed.days) ? parsed.days : [];
+  const meals = days.flatMap((day: any) => (Array.isArray(day?.meals) ? day.meals : []));
+  const fullyTracked =
+    meals.length > 0 &&
+    meals.every((meal: any) => {
+      if (meal?.fiber_g == null || meal.fiber_g === "") return false;
+      const value = Number(meal.fiber_g);
+      return Number.isFinite(value) && value >= 0;
+    });
+  // A legacy target or a few estimated meals do not make the whole week
+  // fiber-tracked. Preserve that partial state so validation can label it
+  // unknown instead of manufacturing zeroes for missing values.
+  if (!fullyTracked) return parsed;
+  const daily = Number(parsed.daily_fiber_g);
+  return {
+    ...parsed,
+    daily_fiber_g: Math.min(
+      100,
+      Math.max(MEAL_PLAN_FIBER_FLOOR_G, Number.isFinite(daily) ? Math.round(daily) : MEAL_PLAN_FIBER_FLOOR_G)
+    ),
+    days: days.map((day: any) => ({
+      ...(day && typeof day === "object" ? day : {}),
+      meals: (Array.isArray(day?.meals) ? day.meals : []).map((meal: any) => {
+        const fiber = Number(meal?.fiber_g);
+        return {
+          ...(meal && typeof meal === "object" ? meal : {}),
+          fiber_g: Number.isFinite(fiber) ? Math.min(100, Math.max(0, Math.round(fiber))) : 0,
+        };
+      }),
+    })),
+  };
+}
+
+function athleteDietaryDeclarations(instruction?: unknown, parsed?: any) {
+  let restrictions: string | null = null;
+  try {
+    const row = db.prepare(`SELECT dietary_restrictions FROM profile WHERE id = 1`).get() as any;
+    restrictions = row?.dietary_restrictions == null ? null : String(row.dietary_restrictions);
+  } catch {
+    restrictions = null;
+  }
+  let mealPrefs: string | null = null;
+  try {
+    mealPrefs = getSettings().meal_prefs || null;
+  } catch {
+    mealPrefs = null;
+  }
+  return { restrictions, mealPrefs, instruction, hardDietKeys: mealPlanHardDietKeys(parsed) };
+}
+
+export interface MealPlanConstraintSnapshot {
+  version: 1;
+  fingerprint: string;
+  sources: {
+    profile_allergies: string[];
+    profile_hard_diets: string[];
+    settings_hard_diets: string[];
+    plan_hard_diets: string[];
+  };
+}
+
+export interface MealPlanConstraintState {
+  status: "current" | "refresh_needed";
+  fingerprint: string;
+  planned_for_fingerprint: string | null;
+  changed_since_planned: boolean;
+  legacy_unstamped: boolean;
+  reason: string | null;
+  conflicts: Array<{ kind: "allergy" | "dietary"; detail: string }>;
+  warnings: string[];
+}
+
+// The fingerprint covers only HARD, authoritative constraints. Soft/negated
+// preferences intentionally do not churn a current plan. Plan-scoped keys stay
+// in the snapshot so a one-week instruction remains enforceable on later reads.
+export function mealPlanConstraintSnapshot(parsed?: any): MealPlanConstraintSnapshot {
+  const dietary = athleteDietaryDeclarations(undefined, parsed);
+  const sources = {
+    profile_allergies: canonicalAllergyKeys(athleteAllergies()),
+    profile_hard_diets: canonicalHardDietKeys(dietary.restrictions, "authoritative"),
+    settings_hard_diets: canonicalHardDietKeys(dietary.mealPrefs, "meal_prefs"),
+    plan_hard_diets: mealPlanHardDietKeys(parsed),
+  };
+  const fingerprint = crypto.createHash("sha256").update(JSON.stringify(sources)).digest("hex").slice(0, 20);
+  return { version: 1, fingerprint, sources };
+}
+
+function constraintConflict(kind: "allergy" | "dietary", error: unknown): { kind: "allergy" | "dietary"; detail: string } {
+  const raw = error instanceof Error ? error.message : String(error ?? "");
+  return {
+    kind,
+    detail: raw.replace(/^.*? rejected:\s*/i, "").trim().slice(0, 300) || "The current plan conflicts with a hard food constraint.",
+  };
+}
+
+function assessMealPlanConstraints(parsed: any): {
+  snapshot: MealPlanConstraintSnapshot;
+  state: MealPlanConstraintState;
+} {
+  const snapshot = mealPlanConstraintSnapshot(parsed);
+  const prior = parsed?.constraint_provenance;
+  const plannedFor = typeof prior?.planned_for_fingerprint === "string" ? prior.planned_for_fingerprint : null;
+  const conflicts: MealPlanConstraintState["conflicts"] = [];
+  const warnings: string[] = [];
+  try {
+    assertPlanAllergenSafe(parsed, athleteAllergies());
+  } catch (error) {
+    conflicts.push(constraintConflict("allergy", error));
+  }
+  try {
+    warnings.push(...assertPlanDietarySafe(parsed, athleteDietaryDeclarations(undefined, parsed)));
+  } catch (error) {
+    conflicts.push(constraintConflict("dietary", error));
+  }
+  const status = conflicts.length ? "refresh_needed" : "current";
+  return {
+    snapshot,
+    state: {
+      status,
+      fingerprint: snapshot.fingerprint,
+      planned_for_fingerprint: plannedFor,
+      changed_since_planned: plannedFor == null || plannedFor !== snapshot.fingerprint,
+      legacy_unstamped: plannedFor == null,
+      reason: conflicts.length
+        ? "Your saved allergy or dietary constraints no longer match this meal plan. Refresh the plan before using its meals or shopping list."
+        : null,
+      conflicts,
+      warnings: [...new Set(warnings)].slice(0, 8),
+    },
+  };
+}
+
+function stampMealPlanConstraintWrite(parsed: any): any {
+  if (!parsed || typeof parsed !== "object") return parsed;
+  const assessed = assessMealPlanConstraints(parsed);
+  if (assessed.state.conflicts.length) throw new Error(`Meal plan rejected: ${assessed.state.conflicts[0].detail}`);
+  const state: MealPlanConstraintState = {
+    ...assessed.state,
+    planned_for_fingerprint: assessed.snapshot.fingerprint,
+    changed_since_planned: false,
+    legacy_unstamped: false,
+  };
+  return {
+    ...parsed,
+    constraint_provenance: {
+      version: 1,
+      planned_for_fingerprint: assessed.snapshot.fingerprint,
+      planned_for_sources: assessed.snapshot.sources,
+      current: assessed.snapshot,
+    },
+    constraint_state: state,
+    quality_validation: {
+      ...(parsed.quality_validation && typeof parsed.quality_validation === "object" ? parsed.quality_validation : {}),
+      constraint_freshness: state,
+    },
+  };
+}
+
+function refreshMealPlanConstraintState(plan: any): any {
+  if (!plan?.id || !plan.parsed || typeof plan.parsed !== "object") return plan;
+  const assessed = assessMealPlanConstraints(plan.parsed);
+  const prior = plan.parsed.constraint_provenance;
+  const parsed = {
+    ...plan.parsed,
+    constraint_provenance: {
+      version: 1,
+      planned_for_fingerprint:
+        typeof prior?.planned_for_fingerprint === "string" ? prior.planned_for_fingerprint : null,
+      planned_for_sources: prior?.planned_for_sources ?? null,
+      current: assessed.snapshot,
+    },
+    constraint_state: assessed.state,
+    quality_validation: {
+      ...(plan.parsed.quality_validation && typeof plan.parsed.quality_validation === "object"
+        ? plan.parsed.quality_validation
+        : {}),
+      constraint_freshness: assessed.state,
+    },
+  };
+  if (JSON.stringify(parsed) !== JSON.stringify(plan.parsed)) {
+    db.prepare(`UPDATE meal_plans SET parsed_json = ? WHERE id = ?`).run(JSON.stringify(parsed), Number(plan.id));
+  }
+  return { ...plan, parsed, constraint_state: assessed.state };
+}
 
 // This is the authoritative write/autonomy gate. Goal math already fuses the
 // current expenditure estimate and canonical bodyweight. An accepted adaptive
 // target is the coordinated reviewed number, not something a later volatile
 // formula may silently raise. Thin profiles still receive the absolute 1500-kcal
 // floor and the plan's own positive protein target remains authoritative.
-export function validateMealPlanForPersistence(parsed: any): MealPlanPersistenceCheck {
+export function validateMealPlanForPersistence(
+  parsed: any,
+  opts: { dietary_instruction?: unknown } = {}
+): MealPlanPersistenceCheck {
   let goal: any = null;
   try {
     goal = computeGoalCheck();
@@ -336,10 +537,11 @@ export function validateMealPlanForPersistence(parsed: any): MealPlanPersistence
     recommended.protein_g = Math.max(Number(recommended.protein_g) || 0, Number(effective.protein_g) || 0);
   }
   const floorGoal = goal?.ok ? { ...goal, recommended } : goal;
-  const floored =
+  const floored = normalizeMealPlanFiber(
     parsed && typeof parsed === "object"
       ? clampNutritionFloors(parsed, { kcal: "daily_kcal", protein: "daily_protein_g" }, floorGoal)
-      : parsed;
+      : parsed
+  );
   const headline = Number(floored?.daily_kcal);
   if (
     Number.isFinite(coordinatedTarget) &&
@@ -352,16 +554,25 @@ export function validateMealPlanForPersistence(parsed: any): MealPlanPersistence
       error: `Meal plan rejected: the ${Math.round(headline)} kcal headline is outside the ±${MEAL_PLAN_TARGET_TOLERANCE_KCAL} kcal rounding tolerance around the coordinated ${Math.round(coordinatedTarget)} kcal target; re-draft or explicitly review the nutrition target first.`,
       parsed: floored,
       adequacy_checked: false,
+      fiber_checked: false,
     };
   }
   const adequacy = assessMealPlanAdequacy(floored);
-  if (!adequacy.ok) return { ok: false, error: adequacy.error, parsed: floored, adequacy_checked: true };
+  if (!adequacy.ok)
+    return {
+      ok: false,
+      error: adequacy.error,
+      parsed: floored,
+      adequacy_checked: true,
+      fiber_checked: adequacy.fiber_checked,
+    };
   if (!adequacy.checked) {
     return {
       ok: false,
       error: "Meal plan rejected: a current plan requires 5 to 7 complete days with meal calorie and protein totals.",
       parsed: floored,
       adequacy_checked: false,
+      fiber_checked: false,
     };
   }
   if (Number.isFinite(coordinatedTarget) && coordinatedTarget > 0) {
@@ -374,16 +585,53 @@ export function validateMealPlanForPersistence(parsed: any): MealPlanPersistence
         error: `Meal plan rejected: ${mismatch.day} totals ${mismatch.kcal} kcal, outside the ±${MEAL_PLAN_TARGET_TOLERANCE_KCAL} kcal rounding tolerance around the coordinated ${Math.round(coordinatedTarget)} kcal target.`,
         parsed: floored,
         adequacy_checked: true,
+        fiber_checked: adequacy.fiber_checked,
       };
     }
   }
-  return { ok: true, parsed: floored, adequacy_checked: adequacy.checked };
+  const dietWarnings = assertPlanDietarySafe(floored, athleteDietaryDeclarations(opts.dietary_instruction, floored));
+  const validationWarnings = [
+    ...(!adequacy.fiber_checked
+      ? [
+          "Fiber could not be deterministically verified because this legacy plan does not have complete per-meal fiber estimates; re-draft before treating its fiber pattern as adequate.",
+        ]
+      : []),
+    ...dietWarnings,
+  ];
+  const qualityValidated = stampMealPlanConstraintWrite({
+    ...floored,
+    quality_validation: {
+      fiber: adequacy.fiber_checked
+        ? {
+            status: "verified",
+            target_daily_g: Math.max(MEAL_PLAN_FIBER_FLOOR_G, Number(floored.daily_fiber_g) || 0),
+            average_daily_g:
+              Math.round(
+                (adequacy.days.reduce((sum, day) => sum + Number(day.fiber_g), 0) / Math.max(1, adequacy.days.length)) *
+                  10
+              ) / 10,
+            minimum_day_g: Math.min(...adequacy.days.map((day) => Number(day.fiber_g))),
+          }
+        : { status: "unknown" },
+      dietary_constraints: dietWarnings.length
+        ? { status: "partial", warnings: dietWarnings }
+        : { status: "screened_from_labels" },
+    },
+    validation_warnings: validationWarnings,
+  });
+  return {
+    ok: true,
+    parsed: qualityValidated,
+    adequacy_checked: adequacy.checked,
+    fiber_checked: adequacy.fiber_checked,
+  };
 }
 
-export function createMealPlan(agent: string, raw: string, parsed: any) {
+export function createMealPlan(agent: string, raw: string, parsed: any, opts: { dietary_instruction?: unknown } = {}) {
   // Stamp the max upstream source at draft time so freshness can later tell whether a
   // newer lipid/health directive has outrun this plan.
-  const check = validateMealPlanForPersistence(parsed);
+  const scoped = stampInstructionHardDiets(parsed, opts.dietary_instruction);
+  const check = validateMealPlanForPersistence(scoped, opts);
   if (!check.ok) throw new Error(check.error);
   const floored = check.parsed;
   assertPlanAllergenSafe(floored, athleteAllergies());
@@ -420,7 +668,13 @@ function mealPlanAutonomy(planId: number): any | null {
 }
 
 function withMealPlanAutonomy(plan: any): any {
-  return plan?.id ? { ...plan, autonomy: mealPlanAutonomy(Number(plan.id)) } : plan;
+  return plan?.id
+    ? {
+        ...plan,
+        autonomy: mealPlanAutonomy(Number(plan.id)),
+        constraint_state: plan?.parsed?.constraint_state ?? null,
+      }
+    : plan;
 }
 
 // The current meal plan prefers one that has actually landed. An announced draft is
@@ -441,7 +695,7 @@ export function currentMealPlan() {
     const adequacy = assessMealPlanAdequacy(plan?.parsed);
     // Historical partial rows remain available through explicit get/list/history,
     // but an unchecked or mismatched artifact is never the canonical current plan.
-    if (adequacy.ok && adequacy.checked) return withMealPlanAutonomy(plan);
+    if (adequacy.ok && adequacy.checked) return refreshMealPlanConstraintState(withMealPlanAutonomy(plan));
   }
   return null;
 }
@@ -464,6 +718,18 @@ export function mealPlanForCoach() {
   const plan = currentMealPlan();
   if (!plan || !plan.parsed) return null;
   const parsed = plan.parsed;
+  const constraintState = plan.constraint_state ?? parsed.constraint_state ?? null;
+  if (constraintState?.status === "refresh_needed") {
+    return {
+      id: plan.id,
+      status: plan.status,
+      week_of: plan.week_of,
+      constraint_state: constraintState,
+      refresh_needed: true,
+      today: null,
+      tomorrow: null,
+    };
+  }
   const days = Array.isArray(parsed.days) ? parsed.days : [];
   const today = localDateISO();
   const pick = (iso: string, label: string) => {
@@ -479,6 +745,7 @@ export function mealPlanForCoach() {
       name: capStr(m?.name, 80),
       kcal: m?.kcal ?? null,
       protein_g: m?.protein_g ?? null,
+      fiber_g: m?.fiber_g ?? null,
     }));
     return { label, day: String(d.day ?? "").trim(), note: d?.note ? capStr(d.note, 200) : null, meals };
   };
@@ -489,6 +756,10 @@ export function mealPlanForCoach() {
     week_of: plan.week_of,
     daily_kcal: parsed.daily_kcal ?? null,
     daily_protein_g: parsed.daily_protein_g ?? null,
+    daily_fiber_g: parsed.daily_fiber_g ?? null,
+    quality_validation:
+      parsed.quality_validation && typeof parsed.quality_validation === "object" ? parsed.quality_validation : null,
+    validation_warnings: Array.isArray(parsed.validation_warnings) ? parsed.validation_warnings.slice(0, 8) : [],
     practicality: parsed.practicality && typeof parsed.practicality === "object" ? parsed.practicality : null,
     nutrition_pattern:
       parsed.nutrition_pattern && typeof parsed.nutrition_pattern === "object" ? parsed.nutrition_pattern : null,
@@ -496,6 +767,8 @@ export function mealPlanForCoach() {
     tomorrow: pick(addDaysISO(today, 1), "tomorrow"),
     stale: freshness.stale,
     stale_reason: freshness.reason,
+    constraint_state: constraintState,
+    refresh_needed: false,
   };
 }
 
@@ -504,7 +777,8 @@ export function listMealPlans(limit = 10) {
     // Additive freshness flag so the PWA can show a quiet "worth re-drafting" chip on
     // a live plan that a newer lab/directive has outrun. Only meaningful for a live
     // (draft/accepted) plan; a discarded one is history.
-    if (plan.status === "draft" || plan.status === "accepted") {
+    plan = refreshMealPlanConstraintState(plan);
+    if (plan.status === "draft" || plan.status === "accepted" || plan.status === "applied" || plan.status === "kept") {
       const f = mealPlanFreshness(plan);
       return { ...plan, stale: f.stale, stale_reason: f.reason };
     }
@@ -648,7 +922,12 @@ export function acceptMealPlan(id: number, opts: { recordDecision?: boolean } = 
 
 export function getMealPlan(id: number) {
   const row = db.prepare(`SELECT * FROM meal_plans WHERE id = ?`).get(id);
-  return row ? withMealPlanAutonomy(hydrate(row)) : null;
+  // Singular reads are just as authoritative as current/list. Re-run the same
+  // canonical constraint-freshness assessment so a profile allergy or dietary
+  // change cannot leave REST/MCP callers holding the stale status embedded when
+  // the plan was written. This decorates the existing ledger row in place; it
+  // never changes plan status or selects/supersedes history.
+  return row ? refreshMealPlanConstraintState(withMealPlanAutonomy(hydrate(row))) : null;
 }
 
 // Agent (and PWA) supplied meal objects are coerced/clamped before write —
@@ -672,7 +951,7 @@ export function capStr(v: any, max = 300): string {
 }
 
 export function coerceMeal(m: any) {
-  return {
+  const meal: any = {
     name: capStr(m?.name),
     items: capStr(m?.items),
     kcal: clampNum(m?.kcal, 3000),
@@ -680,6 +959,11 @@ export function coerceMeal(m: any) {
     carbs_g: clampNum(m?.carbs_g, 500),
     fat_g: clampNum(m?.fat_g, 500),
   };
+  // Fiber was introduced after meal plans already existed. Preserve omission
+  // as unknown; Number(undefined) -> NaN -> 0 would falsely claim a measured
+  // zero and make harmless legacy edits fail the modern quality gate.
+  if (m?.fiber_g != null && m.fiber_g !== "") meal.fiber_g = clampNum(m.fiber_g, 100);
+  return meal;
 }
 
 function athleteAllergies(): string | null {
@@ -724,7 +1008,13 @@ export function updateMealPlanDays(id: number, days: any) {
 // Swap one meal in place (agentic "swap this meal"). Returns { plan, meal }
 // with the coerced/clamped meal actually written, or null when the plan/day/
 // index can't be found.
-export function swapMealInPlan(id: number, day: string, mealIndex: number, meal: any) {
+export function swapMealInPlan(
+  id: number,
+  day: string,
+  mealIndex: number,
+  meal: any,
+  opts: { dietary_instruction?: unknown } = {}
+) {
   const plan = getMealPlan(id);
   if (!plan || !plan.parsed || !Array.isArray(plan.parsed.days)) return null;
   const dayKey = String(day ?? "")
@@ -741,8 +1031,13 @@ export function swapMealInPlan(id: number, day: string, mealIndex: number, meal:
   if (!Number.isInteger(idx) || idx < 0 || idx >= target.meals.length) return null;
   const clean = coerceMeal(meal);
   assertMealAllergenSafe(clean, athleteAllergies(), `${capStr(target.day, 40) || "meal plan"} meal ${idx + 1}`);
+  assertMealDietarySafe(
+    clean,
+    athleteDietaryDeclarations(opts.dietary_instruction, plan.parsed),
+    `${capStr(target.day, 40) || "meal plan"} meal ${idx + 1}`
+  );
   target.meals[idx] = clean;
-  const check = validateMealPlanForPersistence(plan.parsed);
+  const check = validateMealPlanForPersistence(plan.parsed, opts);
   if (!check.ok) throw new Error(check.error);
   db.prepare(`UPDATE meal_plans SET parsed_json = ? WHERE id = ?`).run(JSON.stringify(check.parsed), id);
   emitBrainEvent({
@@ -794,10 +1089,13 @@ export function setMealRecipe(planId: number, day: string, mealIndex: number, re
   if (!plan || !plan.parsed || !Array.isArray(plan.parsed.days)) return null;
   const safety = validateMealPlanForPersistence(plan.parsed);
   if (!safety.ok) throw new Error(safety.error);
+  // Work from the revalidated/stamped object, not the pre-check blob. This
+  // makes a compatible constraint change part of the recipe edit provenance.
+  const parsed = safety.parsed;
   const dayKey = String(day ?? "")
     .trim()
     .toLowerCase();
-  const target = plan.parsed.days.find(
+  const target = parsed.days.find(
     (d: any) =>
       String(d?.day ?? "")
         .trim()
@@ -813,11 +1111,16 @@ export function setMealRecipe(planId: number, day: string, mealIndex: number, re
     athleteAllergies(),
     `${capStr(target.day, 40) || "meal plan"} meal ${idx + 1} recipe`
   );
+  assertRecipeDietarySafe(
+    clean,
+    athleteDietaryDeclarations(undefined, parsed),
+    `${capStr(target.day, 40) || "meal plan"} meal ${idx + 1} recipe`
+  );
   target.meals[idx] = {
     ...(target.meals[idx] && typeof target.meals[idx] === "object" ? target.meals[idx] : {}),
     recipe: clean,
   };
-  db.prepare(`UPDATE meal_plans SET parsed_json = ? WHERE id = ?`).run(JSON.stringify(plan.parsed), planId);
+  db.prepare(`UPDATE meal_plans SET parsed_json = ? WHERE id = ?`).run(JSON.stringify(parsed), planId);
   emitBrainEvent({
     kind: "meal_plan_changed",
     domain: "nutrition",

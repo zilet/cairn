@@ -3,7 +3,11 @@
 
 type TodaySideMealPlan = Record<string, unknown> & {
   status?: string;
-  parsed?: { days?: Array<Record<string, unknown> & { meals?: Array<Record<string, unknown>> }> };
+  constraint_state?: { status?: string } | null;
+  parsed?: {
+    constraint_state?: { status?: string } | null;
+    days?: Array<Record<string, unknown> & { meals?: Array<Record<string, unknown>> }>;
+  };
 };
 
 type TodaySideContextEvent = Record<string, unknown> & {
@@ -137,6 +141,8 @@ type TodaySideLoaderDeps = {
     try { plans = await deps.api("/mealplans?limit=6") as TodaySideMealPlan[]; } catch { return; }
     if (!isCurrentToday(deps) || !wrap.isConnected) return;
     const p = CairnMealPlan.currentMealPlan(plans) as TodaySideMealPlan | null;
+    const constraintState = p?.constraint_state ?? p?.parsed?.constraint_state;
+    if (constraintState?.status === "refresh_needed") return;
     const parsed = p?.parsed;
     const days = parsed && Array.isArray(parsed.days) ? parsed.days : [];
     const lbl = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][new Date(deps.state.logDate + "T12:00:00").getDay()];

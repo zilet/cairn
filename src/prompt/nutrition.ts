@@ -4,6 +4,12 @@ import { todayISO } from "../db.js";
 import * as repo from "../repo.js";
 import type { CoachContext } from "../repo/coach-context.js";
 import {
+  canonicalHardDietKeys,
+  hardDietFreeRemainder,
+  mealPlanHardDietKeys,
+  type HardDietKey,
+} from "../repo/dietary-constraints.js";
+import {
   CONTEXT_GUARDRAILS,
   disciplineOf,
   renderBodyComp,
@@ -19,13 +25,14 @@ import {
 } from "./shared.js";
 
 const MEAL_SCHEMA = `{
-  "summary": "approach for the week, and the daily kcal / protein target used",
+  "summary": "approach for the week, and the daily kcal / protein / fiber targets used",
   "daily_kcal": <number>,
   "daily_protein_g": <number>,
+  "daily_fiber_g": <number — at least 30>,
   "days": [
     { "day": "Mon",
       "note": "<optional one-liner: carb timing / prep hint for this day, e.g. 'training day — carbs front-loaded'>",
-      "meals": [ { "name": "<dish name, e.g. Chicken & rice bowl>", "items": "short ingredient list", "kcal": <number>, "protein_g": <number>, "carbs_g": <number>, "fat_g": <number> } ] }
+      "meals": [ { "name": "<dish name, e.g. Chicken & rice bowl>", "items": "short ingredient list", "kcal": <number>, "protein_g": <number>, "carbs_g": <number>, "fat_g": <number>, "fiber_g": <number> } ] }
   ],
   "shopping": ["item", "item"],
   "practicality": {
@@ -80,9 +87,7 @@ function renderHouseholdDiet(ctx: any): string {
   // renderHardDiet (not here), so strip those keywords out before the softer
   // "respect strongly" line — otherwise vegan/vegetarian would read as a mere
   // preference AND double-render. Any non-diet remainder ("no cilantro") stays soft.
-  const softDiet = HARD_DIETS.reduce((s, d) => s.replace(new RegExp(d.re.source, "gi"), " "), myDiet)
-    .replace(/[\s,;/]+/g, " ")
-    .trim();
+  const softDiet = hardDietFreeRemainder(myDiet);
   const self: string[] = [];
   if (myAllergies)
     self.push(
@@ -305,55 +310,57 @@ function renderHolisticNutritionStrategy(ctx: any, expenditure: any): string {
 // re-anchors the protein/omega-3 guardrails onto plant sources (no animal
 // protein instruction). An un-recognized free-text diet stays the softer
 // "respect strongly" nudge in renderHouseholdDiet — this is ONLY the hard set.
-const HARD_DIETS: { key: string; label: string; re: RegExp; rule: string; plantForward?: boolean }[] = [
+const HARD_DIETS: { key: HardDietKey; label: string; rule: string; plantForward?: boolean }[] = [
   {
     key: "vegan",
     label: "VEGAN",
-    re: /\bvegans?\b/i,
     plantForward: true,
     rule: "NO meat, poultry, fish, seafood, dairy, eggs, honey, gelatin, or any animal-derived ingredient.",
   },
   {
     key: "vegetarian",
     label: "VEGETARIAN",
-    re: /\bvegetarians?\b/i,
     plantForward: true,
     rule: "NO meat, poultry, fish, or seafood (dairy & eggs are allowed unless also excluded).",
   },
   {
     key: "pescatarian",
     label: "PESCATARIAN",
-    re: /\bpesca?tarians?\b/i,
     rule: "NO meat or poultry (fish & seafood are allowed).",
+  },
+  {
+    key: "dairy_free",
+    label: "DAIRY-FREE",
+    rule: "NO milk, cream, butter, cheese, yogurt, whey, casein, ghee, or other dairy-derived ingredient.",
+  },
+  {
+    key: "gluten_free",
+    label: "GLUTEN-FREE",
+    rule: "NO wheat, barley, rye, seitan, gluten, or non-certified grain products that contain gluten.",
   },
   {
     key: "halal",
     label: "HALAL",
-    re: /\bhalal\b/i,
     rule: "Every ingredient must be HALAL — no pork or pork-derived ingredients, no alcohol, and only halal-permissible meat.",
   },
   {
     key: "kosher",
     label: "KOSHER",
-    re: /\bkosher\b/i,
     rule: "Every ingredient must be KOSHER — no pork or shellfish, and never mix meat and dairy in the same meal.",
   },
   {
     key: "keto",
     label: "KETO",
-    re: /\bketo(genic)?\b/i,
     rule: "Ketogenic — NO high-carb staples (bread, pasta, rice, potatoes, sugar, most fruit); keep net carbs very low.",
   },
   {
     key: "carnivore",
     label: "CARNIVORE",
-    re: /\bcarnivore\b/i,
     rule: "Carnivore — animal foods only; NO plant foods (grains, legumes, vegetables, fruit).",
   },
   {
     key: "paleo",
     label: "PALEO",
-    re: /\bpaleo\b/i,
     rule: "Paleo — NO grains, legumes, dairy, or refined sugar; whole, unprocessed foods only.",
   },
 ];
@@ -362,10 +369,34 @@ const HARD_DIETS: { key: string; label: string; re: RegExp; rule: string; plantF
 // declared it (profile.dietary_restrictions, settings.meal_prefs, a typed
 // instruction/hint), de-duped to the registry order. Kept pure for tests.
 function detectHardDiets(sources: Array<string | null | undefined>): typeof HARD_DIETS {
-  const text = sources.map((s) => String(s ?? "")).join("\n");
-  const hits: typeof HARD_DIETS = [];
-  for (const d of HARD_DIETS) if (d.re.test(text)) hits.push(d);
-  return hits;
+  const keys = new Set(sources.flatMap((source) => canonicalHardDietKeys(source, "authoritative")));
+  return HARD_DIETS.filter((diet) => keys.has(diet.key));
+}
+
+// A direct task/hint is current-turn authority, but a negated identity such as
+// "I'm not vegan" is authority that the identity does NOT apply. Strip only the
+// negated diet phrase before hard-diet detection; an affirmative identity in the
+// same instruction remains enforceable. Profile dietary_restrictions is never
+// passed through this helper because that field is the durable source of truth.
+function explicitHardDietInstruction(value: unknown): string {
+  return canonicalHardDietKeys(value, "instruction").map(hardDietDeclaration).join("\n");
+}
+
+// meal_prefs is durable free text, but it also carries ordinary scheduling and
+// menu preferences. Only explicit identity/global-must clauses may promote a
+// diet from a preference to a whole-plan hard constraint. Profile
+// dietary_restrictions remains authoritative, and a direct task/hint is handled
+// separately as the user's current instruction.
+function explicitHardDietMealPrefs(value: unknown): string {
+  return canonicalHardDietKeys(value, "meal_prefs").map(hardDietDeclaration).join("\n");
+}
+
+function hardDietDeclaration(key: HardDietKey): string {
+  return key === "dairy_free" ? "dairy-free" : key === "gluten_free" ? "gluten-free" : key;
+}
+
+function storedHardDietDeclarations(parsed: any): string {
+  return mealPlanHardDietKeys(parsed).map(hardDietDeclaration).join("\n");
 }
 
 // True when a matched diet forbids animal protein / fish (vegan, vegetarian) —
@@ -460,7 +491,11 @@ export function buildMealPlanPrompt(userInstruction?: string): string {
       : "Build next week's meal plan around goal.effective_target when present, otherwise goal.recommended for the active GOAL MODE, including its protein target.";
   // A whole-diet identity can be declared in the profile, in meal prefs, OR typed
   // into the request — scan all three and treat it as hard as an allergy.
-  const dietSources = [(ctx.profile as any)?.dietary_restrictions, prefs, userInstruction];
+  const dietSources = [
+    (ctx.profile as any)?.dietary_restrictions,
+    explicitHardDietMealPrefs(prefs),
+    explicitHardDietInstruction(userInstruction),
+  ];
   const hardDiet = renderHardDiet(dietSources);
   const plantForward = isPlantForward(dietSources);
   return `${CAIRN_PERSONA}
@@ -494,6 +529,9 @@ HARD RULES:
   and reuse of the user's frequent foods. A theoretically perfect plan they will not cook is not adequate.
 - Nutrition-pattern judgments are coarse and food-pattern based. Never invent precise sodium, potassium,
   calcium, or iron amounts without a label/source; use unknown when the menu cannot support the claim.
+- Set daily_fiber_g to at least 30 and estimate fiber_g for EVERY meal from its listed ingredients and
+  portions. The server verifies that the week averages at least this target with no day below 80% of it;
+  do not label fiber "adequate" unless the meal totals establish that.
 
 ${longevityGuardrails(plantForward)}
 
@@ -558,15 +596,13 @@ export function buildNutritionCheckinPrompt(ctx?: CoachContext, opts: { windowDa
   // target if one has been persisted (this loop's own prior output), else the
   // current mode-aware formula target.
   const eff = goal?.ok ? (goal as any).effective_target : null;
-  const currentTarget = goal?.ok
-    ? (eff?.target_kcal ?? goal.recommended?.target_intake_kcal ?? null)
-    : null;
+  const currentTarget = goal?.ok ? (eff?.target_kcal ?? goal.recommended?.target_intake_kcal ?? null) : null;
   const proteinTarget = goal?.ok ? (eff?.protein_g ?? goal.recommended?.protein_g ?? null) : null;
   const targetIsAccepted = eff?.source === "accepted";
   // A retarget must respect a HARD whole-diet identity too (it steers macros and
   // is echoed back to the coach) — scan the profile diet + meal prefs.
   const mealPrefs = (repo.getSettings().meal_prefs || "").trim();
-  const dietSources = [profile?.dietary_restrictions, mealPrefs];
+  const dietSources = [profile?.dietary_restrictions, explicitHardDietMealPrefs(mealPrefs)];
   const hardDiet = renderHardDiet(dietSources);
   const plantProteinNote = isPlantForward(dietSources)
     ? "\nPLANT-PROTEIN ANCHOR: the user's protein floor must be met with PLANT proteins (legumes, lentils, tofu, tempeh, seitan, edamame, soy, seeds) — never suggest animal protein to protect the protein floor.\n"
@@ -635,7 +671,7 @@ ${renderStreamingContract(
 )}`;
 }
 
-const SWAP_SCHEMA = `{ "name": "<dish>", "items": "<short ingredient list>", "kcal": <number>, "protein_g": <number>, "carbs_g": <number>, "fat_g": <number> }`;
+const SWAP_SCHEMA = `{ "name": "<dish>", "items": "<short ingredient list>", "kcal": <number>, "protein_g": <number>, "carbs_g": <number>, "fat_g": <number>, "fiber_g": <number> }`;
 
 // Agentic single-meal swap: replace ONE meal in an existing drafted plan,
 // honoring an optional free-text hint ("let's go with fish").
@@ -663,13 +699,18 @@ export function buildMealSwapPrompt(args: { plan: any; day: string; mealIndex: n
   const ctx = repo.getCoachContext();
   // The swap must honor a HARD whole-diet identity too — declared in the profile,
   // in meal prefs, OR in the free-text hint ("I'm vegan now").
-  const dietSources = [(profile as any)?.dietary_restrictions, prefs, hint];
+  const dietSources = [
+    (profile as any)?.dietary_restrictions,
+    explicitHardDietMealPrefs(prefs),
+    explicitHardDietInstruction(hint),
+    storedHardDietDeclarations(parsed),
+  ];
   const hardDiet = renderHardDiet(dietSources);
   const plantForward = isPlantForward(dietSources);
   const dayMeals = meals
     .map(
       (m: any, i: number) =>
-        `${i === mealIndex ? ">>> SWAP THIS ONE >>> " : ""}[${i}] ${m?.name ?? "?"} — ${m?.items ?? ""} (${m?.kcal ?? "?"} kcal, ${m?.protein_g ?? "?"}g protein, ${m?.carbs_g ?? "?"}g carbs, ${m?.fat_g ?? "?"}g fat)`
+        `${i === mealIndex ? ">>> SWAP THIS ONE >>> " : ""}[${i}] ${m?.name ?? "?"} — ${m?.items ?? ""} (${m?.kcal ?? "?"} kcal, ${m?.protein_g ?? "?"}g protein, ${m?.carbs_g ?? "?"}g carbs, ${m?.fat_g ?? "?"}g fat, ${m?.fiber_g ?? "?"}g fiber)`
     )
     .join("\n");
   return `${CAIRN_PERSONA}
@@ -685,6 +726,8 @@ PLAN DAILY TARGET: ${parsed.daily_kcal ?? "?"} kcal / ${parsed.daily_protein_g ?
 REPLACEMENT RULES:
 - Keep the new meal within ±10% of the replaced meal's kcal (${current?.kcal ?? "?"}) and protein
   (${current?.protein_g ?? "?"}g) — UNLESS the user's hint clearly asks otherwise.
+- Return a realistic fiber_g estimate and preserve the day's fiber floor; the server re-validates the
+  whole week after the swap, so a low-fiber replacement will not be saved.
 - It must fit the rest of the day (don't duplicate another meal's main protein/dish).
 
 ${longevityGuardrails(plantForward)}
@@ -738,7 +781,11 @@ export function buildRecipePrompt(args: { plan: any; day: string; mealIndex: num
   const prefs = (repo.getSettings().meal_prefs || "").trim();
   const ctx = repo.getCoachContext();
   // The recipe must comply with a HARD whole-diet identity (profile diet or meal prefs).
-  const dietSources = [(profile as any)?.dietary_restrictions, prefs];
+  const dietSources = [
+    (profile as any)?.dietary_restrictions,
+    explicitHardDietMealPrefs(prefs),
+    storedHardDietDeclarations(parsed),
+  ];
   const hardDiet = renderHardDiet(dietSources);
   const plantForward = isPlantForward(dietSources);
   return `${CAIRN_PERSONA}

@@ -68,23 +68,30 @@ test("nutrition contracts do not turn malformed changes into calm no-change answ
   const days = Array.from({ length: 7 }, (_, i) => ({
     day: `D${i + 1}`,
     meals: [
-      { name: "Protein bowl", kcal: 1050, protein_g: 85 },
-      { name: "Salmon plate", kcal: 1050, protein_g: 90 },
+      { name: "Protein bowl", kcal: 1050, protein_g: 85, fiber_g: 15 },
+      { name: "Salmon plate", kcal: 1050, protein_g: 90, fiber_g: 15 },
     ],
   }));
-  assert.equal(isMealPlanResult({ daily_kcal: 2100, daily_protein_g: 175, days }), true);
-  assert.equal(isMealPlanResult({ daily_kcal: 2100, daily_protein_g: 175, days: days.slice(0, 2) }), false);
+  assert.equal(isMealPlanResult({ daily_kcal: 2100, daily_protein_g: 175, daily_fiber_g: 30, days }), true);
+  assert.equal(
+    isMealPlanResult({ daily_kcal: 2100, daily_protein_g: 175, daily_fiber_g: 30, days: days.slice(0, 2) }),
+    false
+  );
   const underfed = days.map((day) => ({
     ...day,
-    meals: [{ name: "Small bowl", kcal: 900, protein_g: 60 }],
+    meals: [{ name: "Small bowl", kcal: 900, protein_g: 60, fiber_g: 30 }],
   }));
-  assert.equal(isMealPlanStructureResult({ daily_kcal: 2300, daily_protein_g: 175, days: underfed }), true);
   assert.equal(
-    isMealPlanResult({ daily_kcal: 2300, daily_protein_g: 175, days: underfed }),
+    isMealPlanStructureResult({ daily_kcal: 2300, daily_protein_g: 175, daily_fiber_g: 30, days: underfed }),
+    true
+  );
+  assert.equal(
+    isMealPlanResult({ daily_kcal: 2300, daily_protein_g: 175, daily_fiber_g: 30, days: underfed }),
     false,
     "a valid headline cannot launder materially inadequate daily meals"
   );
-  assert.equal(isMealSwapResult({ name: "Salmon bowl", kcal: 620, protein_g: 48 }), true);
+  assert.equal(isMealSwapResult({ name: "Salmon bowl", kcal: 620, protein_g: 48, fiber_g: 8 }), true);
+  assert.equal(isMealSwapResult({ name: "Fiber-unknown bowl", kcal: 620, protein_g: 48 }), false);
   assert.equal(isRecipeResult({ ingredients: [{ item: "salmon", qty: "200 g" }], steps: [] }), true);
 });
 

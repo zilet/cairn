@@ -86,14 +86,29 @@ export function isWeekAheadResult(value: unknown): boolean {
 
 export function isMealPlanStructureResult(value: unknown): boolean {
   const p = object(value);
-  if (!p || !positive(p.daily_kcal) || !positive(p.daily_protein_g) || !Array.isArray(p.days)) return false;
+  if (
+    !p ||
+    !positive(p.daily_kcal) ||
+    !positive(p.daily_protein_g) ||
+    !positive(p.daily_fiber_g) ||
+    !Array.isArray(p.days)
+  )
+    return false;
   if (p.days.length < 5 || p.days.length > 7) return false;
   return p.days.every((rawDay: unknown) => {
     const day = object(rawDay);
     if (!day || !text(day.day) || !Array.isArray(day.meals) || !day.meals.length) return false;
     return day.meals.every((rawMeal: unknown) => {
       const meal = object(rawMeal);
-      return !!meal && text(meal.name) && positive(meal.kcal) && finite(meal.protein_g) && Number(meal.protein_g) >= 0;
+      return (
+        !!meal &&
+        text(meal.name) &&
+        positive(meal.kcal) &&
+        finite(meal.protein_g) &&
+        Number(meal.protein_g) >= 0 &&
+        finite(meal.fiber_g) &&
+        Number(meal.fiber_g) >= 0
+      );
     });
   });
 }
@@ -112,7 +127,15 @@ export function isNutritionCheckinResult(value: unknown): boolean {
 
 export function isMealSwapResult(value: unknown): boolean {
   const p = object(value);
-  return !!p && text(p.name) && positive(p.kcal) && finite(p.protein_g) && Number(p.protein_g) >= 0;
+  return (
+    !!p &&
+    text(p.name) &&
+    positive(p.kcal) &&
+    finite(p.protein_g) &&
+    Number(p.protein_g) >= 0 &&
+    finite(p.fiber_g) &&
+    Number(p.fiber_g) >= 0
+  );
 }
 
 export function isRecipeResult(value: unknown): boolean {

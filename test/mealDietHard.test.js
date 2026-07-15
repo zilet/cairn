@@ -70,12 +70,108 @@ test("meal_prefs mentioning 'vegan' elevates to the HARD vegan block", () => {
   assert.match(p, /Anchor EVERY meal on PLANT protein/);
 });
 
+test("soft or negated meal_prefs never become a whole-diet HARD block", () => {
+  for (const meal_prefs of ["Prefer vegetarian lunches", "Mostly vegetarian", "I am not vegan"]) {
+    repo.setSettings({ meal_prefs });
+    const p = prompt.buildMealPlanPrompt();
+    assert.doesNotMatch(p, /DIETARY IDENTITY \(HARD CONSTRAINT/, meal_prefs);
+  }
+});
+
 // ---------- source 3: the typed instruction / hint ----------
 
 test("buildMealPlanPrompt(\"I'm vegan\") instruction elevates to the HARD vegan block", () => {
   const p = prompt.buildMealPlanPrompt("I'm vegan, plan my week");
   assert.match(p, /VEGAN \(HARD RULE/);
   assert.match(p, /Anchor EVERY meal on PLANT protein/);
+});
+
+test("negated direct instructions and swap hints do not activate a hard diet identity", () => {
+  const planPrompt = prompt.buildMealPlanPrompt("I'm not vegan; plan a balanced week");
+  assert.doesNotMatch(planPrompt, /VEGAN \(HARD RULE/);
+
+  const plan = repo.createMealPlan("stub", "", completeMealWeek({
+    daily_kcal: 2200, daily_protein_g: 170,
+    days: [{ day: "Mon", meals: [{ name: "Chicken bowl", items: "chicken, rice", kcal: 600, protein_g: 45, carbs_g: 50, fat_g: 18 }] }],
+  }));
+  const swap = prompt.buildMealSwapPrompt({ plan, day: "Mon", mealIndex: 0, hint: "I'm not vegan" });
+  assert.doesNotMatch(swap, /VEGAN \(HARD RULE/);
+  const terseSwap = prompt.buildMealSwapPrompt({ plan, day: "Mon", mealIndex: 0, hint: "not vegan" });
+  assert.doesNotMatch(terseSwap, /VEGAN \(HARD RULE/);
+
+  repo.setProfile({ dietary_restrictions: "vegan" });
+  const authoritative = prompt.buildMealPlanPrompt("I'm not vegan");
+  assert.match(authoritative, /VEGAN \(HARD RULE/, "the stored restriction remains authoritative until explicitly changed");
+});
+
+test("mixed hard-diet clauses parse each identity independently in prompts and persistence", () => {
+  repo.setProfile({ dietary_restrictions: "dairy-free, not gluten-free" });
+  const p = prompt.buildMealPlanPrompt();
+  assert.match(p, /DAIRY-FREE \(HARD RULE/);
+  assert.doesNotMatch(p, /GLUTEN-FREE \(HARD RULE/);
+
+  assert.doesNotThrow(() => repo.createMealPlan("stub", "", completeMealWeek({
+    daily_kcal: 2200,
+    daily_protein_g: 170,
+    days: [{ day: "Mon", meals: [{ name: "Wheat tofu bowl", items: "wheat noodles, tofu", kcal: 2200, protein_g: 170 }] }],
+  })));
+  assert.throws(() => repo.createMealPlan("stub", "", completeMealWeek({
+    daily_kcal: 2200,
+    daily_protein_g: 170,
+    days: [{ day: "Mon", meals: [{ name: "Yogurt bowl", items: "yogurt, oats", kcal: 2200, protein_g: 170 }] }],
+  })), /violates declared dairy-free diet \(yogurt\)/);
+
+  repo.setProfile({ dietary_restrictions: "I am not gluten-free" });
+  assert.doesNotMatch(prompt.buildMealPlanPrompt(), /GLUTEN-FREE \(HARD RULE/);
+});
+
+test("hard and soft diet mentions are qualified per subclause in prompts and persistence", () => {
+  repo.setSettings({ meal_prefs: "I am vegan but prefer vegetarian lunches" });
+  let p = prompt.buildMealPlanPrompt();
+  assert.match(p, /VEGAN \(HARD RULE/);
+  assert.doesNotMatch(p, /VEGETARIAN \(HARD RULE/);
+  assert.throws(() => repo.createMealPlan("stub", "", completeMealWeek({
+    daily_kcal: 2200,
+    daily_protein_g: 170,
+    days: [{ day: "Mon", meals: [{ name: "Egg bowl", items: "eggs, rice", kcal: 2200, protein_g: 170 }] }],
+  })), /violates declared vegan diet \(egg/);
+
+  repo.setSettings({ meal_prefs: "" });
+  const instruction = "Make this week vegan but occasionally include fish";
+  p = prompt.buildMealPlanPrompt(instruction);
+  assert.match(p, /VEGAN \(HARD RULE/);
+  assert.throws(() => repo.createMealPlan("stub", "", completeMealWeek({
+    daily_kcal: 2200,
+    daily_protein_g: 170,
+    days: [{ day: "Mon", meals: [{ name: "Salmon bowl", items: "salmon, rice", kcal: 2200, protein_g: 170 }] }],
+  }), { dietary_instruction: instruction }), /violates declared vegan diet \(salmon\)/);
+
+  const mixedNegation = "I am not vegan but I am vegetarian";
+  p = prompt.buildMealPlanPrompt(mixedNegation);
+  assert.doesNotMatch(p, /VEGAN \(HARD RULE/);
+  assert.match(p, /VEGETARIAN \(HARD RULE/);
+});
+
+test("a soft preference after a hard identity does not erase that identity", () => {
+  repo.setSettings({ meal_prefs: "I am vegan and prefer simple meals" });
+  const p = prompt.buildMealPlanPrompt();
+  assert.match(p, /VEGAN \(HARD RULE/);
+  assert.throws(
+    () =>
+      repo.createMealPlan(
+        "stub",
+        "",
+        completeMealWeek({
+          daily_kcal: 2200,
+          daily_protein_g: 170,
+          days: [{ day: "Mon", meals: [{ name: "Chicken bowl", items: "chicken, rice", kcal: 2200, protein_g: 170 }] }],
+        })
+      ),
+    /violates declared vegan diet \(chicken\)/
+  );
+
+  repo.setSettings({ meal_prefs: "Prefer vegan meals" });
+  assert.doesNotMatch(prompt.buildMealPlanPrompt(), /VEGAN \(HARD RULE/);
 });
 
 // ---------- non-diet free-text stays soft ----------

@@ -76,6 +76,23 @@ type MealPlannerPaint = {
     );
   }
 
+  function constraintState(plan: unknown): MealRecord {
+    const p = mealRecord(plan);
+    const parsed = mealRecord(p.parsed);
+    return mealRecord(p.constraint_state || parsed.constraint_state);
+  }
+
+  function mealPlanConstraintNoticeHtml(plan: unknown): string {
+    const state = constraintState(plan);
+    if (state.status !== "refresh_needed") return "";
+    const conflicts = Array.isArray(state.conflicts) ? state.conflicts.map((entry) => mealRecord(entry)) : [];
+    const detail = conflicts[0]?.detail ? ` ${String(conflicts[0].detail)}` : "";
+    return `<div class="plan-upcoming reveal" role="status">
+      <span class="lbl plan-upcoming-mast">MEALS NEED A REFRESH</span>
+      <p class="sess-line" style="margin:0">Your saved allergy or dietary constraints changed.${escHtml(detail)} This week is kept in history, but Cairn will not treat its meals or shopping list as current.</p>
+    </div>`;
+  }
+
   function scheduledMealPlan(plan: unknown): MealRecord | null {
     const p = mealRecord(plan);
     const autonomy = mealRecord(p.autonomy);
@@ -290,18 +307,24 @@ type MealPlannerPaint = {
     const ctx = mealsCtxFor(p);
     const isDraft = p.status === "draft";
     const autonomy = scheduledMealPlan(p);
+    const needsRefresh = constraintState(p).status === "refresh_needed";
     const visibleStatus = autonomy ? "coming" : isDraft ? "review" : p.status;
     const actions =
-      isDraft && !autonomy
-        ? `<div class="sess-line" style="color:var(--muted);margin-top:12px"><span class="lbl">NEEDS YOUR DECISION</span> · Nothing changes until you choose.</div>
+      isDraft && !autonomy && needsRefresh
+        ? `<div class="sess-line" style="color:var(--muted);margin-top:12px"><span class="lbl">REFRESH REQUIRED</span> · This draft cannot become current until it is rebuilt against your saved constraints.</div>
+         <div class="meals-actions">
+           <button class="pillbtn" data-mdiscard="${escAttr(p.id)}">Discard</button>
+         </div>`
+        : isDraft && !autonomy
+          ? `<div class="sess-line" style="color:var(--muted);margin-top:12px"><span class="lbl">NEEDS YOUR DECISION</span> · Nothing changes until you choose.</div>
          <div class="meals-actions">
            <button class="pillbtn pill-accent" data-mkeep="${escAttr(p.id)}">Use this plan</button>
            <button class="pillbtn" data-mdiscard="${escAttr(p.id)}">Discard</button>
          </div>`
-        : autonomy
-          ? `<div class="sess-line" style="color:var(--muted);margin-top:12px">Becomes current ${escHtml(mealBoundaryLabel(autonomy.effective_date))} · automatically</div>`
-          : appliedMealPlanUpdateHtml(p, now);
-    const stateLabel = autonomy ? "COMING NEXT" : isDraft ? "REVIEW" : "CURRENT PLAN";
+          : autonomy
+            ? `<div class="sess-line" style="color:var(--muted);margin-top:12px">Becomes current ${escHtml(mealBoundaryLabel(autonomy.effective_date))} · automatically</div>`
+            : appliedMealPlanUpdateHtml(p, now);
+    const stateLabel = needsRefresh ? "NEEDS REFRESH" : autonomy ? "COMING NEXT" : isDraft ? "REVIEW" : "CURRENT PLAN";
     return `<div class="mealhero reveal" style="${stagger(0)}">
         <div class="mp-hero-head">
           <span class="lbl">${stateLabel} · Week of ${escHtml(ctx.weekOf)}${p.agent ? ` · ${escHtml(p.agent)}` : ""}</span>
@@ -344,16 +367,19 @@ type MealPlannerPaint = {
     const p = mealRecord(current);
     if (!p.parsed) return { html: mealPlanEmptyHtml(mealPrefs), context: null };
     const parsed = mealRecord(p.parsed);
+    const needsRefresh = constraintState(p).status === "refresh_needed";
     const days = Array.isArray(parsed.days) ? parsed.days : [];
     const ctx = mealsCtxFor(p, options.now);
-    const dayHtml = days.map((day, index) => mealDayHtml(day, index, ctx)).join("");
-    const shopping = mealShoppingHtml(parsed.shopping, options.checkedShopping, days.length + 2);
-    const notes = parsed.notes
-      ? `<div class="sess-line reveal" style="color:var(--muted);${stagger(days.length + 3)}">${escHtml(parsed.notes)}</div>`
-      : "";
+    const dayHtml = needsRefresh ? "" : days.map((day, index) => mealDayHtml(day, index, ctx)).join("");
+    const shopping = needsRefresh ? "" : mealShoppingHtml(parsed.shopping, options.checkedShopping, days.length + 2);
+    const notes =
+      !needsRefresh && parsed.notes
+        ? `<div class="sess-line reveal" style="color:var(--muted);${stagger(days.length + 3)}">${escHtml(parsed.notes)}</div>`
+        : "";
     return {
       context: ctx,
       html: `${mealPlanUpcomingHtml(options.upcoming, p)}
+      ${mealPlanConstraintNoticeHtml(p)}
       ${mealPlanHeroHtml(p, options.verified, options.now)}
       ${mealPrefsHtml(mealPrefs, 1)}
       ${dayHtml}

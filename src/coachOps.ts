@@ -73,8 +73,8 @@ export { runChosen };
 // Exported for a focused deterministic boundary test. This is the same guard
 // draftMealPlan runs immediately before persistence/autonomy; the verifier agent
 // remains advisory and cannot authorize an inadequate plan.
-export function validateMealPlanDraftForPersistence(parsed: any) {
-  const check = repo.validateMealPlanForPersistence(parsed);
+export function validateMealPlanDraftForPersistence(parsed: any, dietaryInstruction?: string) {
+  const check = repo.validateMealPlanForPersistence(parsed, { dietary_instruction: dietaryInstruction });
   return check.ok
     ? { ok: true as const, parsed: check.parsed, adequacy_checked: check.adequacy_checked }
     : { ok: false as const, error: check.error };
@@ -784,7 +784,7 @@ export async function draftMealPlan(
   const { draft: verifiedParsed, verified } = await runVerify(
     agent, p, buildPlanVerifyPrompt, planSane, "meal_plan_verify", hooks
   );
-  const safety = validateMealPlanDraftForPersistence(verifiedParsed);
+  const safety = validateMealPlanDraftForPersistence(verifiedParsed, instruction);
   if (!safety.ok) {
     return {
       ok: false as const,
@@ -796,7 +796,7 @@ export async function draftMealPlan(
   }
   // Defense in depth: createMealPlan repeats the same check for every non-agent
   // caller. No row exists yet, so a failure can never enter autonomy.
-  const plan = repo.createMealPlan(chosen, result.raw, safety.parsed);
+  const plan = repo.createMealPlan(chosen, result.raw, safety.parsed, { dietary_instruction: instruction });
   let autonomy: any = null;
   try {
     autonomy = applyMealPlanWithAutonomy(Number(plan.id), {
@@ -979,7 +979,7 @@ export async function swapMealAgentic(
   const p = result.parsed;
   const saneMeal = p && typeof p === "object" && typeof p.name === "string" && p.name.trim() && Number.isFinite(Number(p.kcal));
   if (!saneMeal) return { ok: false as const, error: "agent returned no usable meal", agent: chosen, tried };
-  const swapped = repo.swapMealInPlan(id, day, mealIndex, p);
+  const swapped = repo.swapMealInPlan(id, day, mealIndex, p, { dietary_instruction: hint });
   if (!swapped) return { ok: false as const, error: "day or meal_index not found in plan", agent: chosen, tried };
   return { ok: true as const, plan: swapped.plan, meal: swapped.meal, agent: chosen, tried };
 }
