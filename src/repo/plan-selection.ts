@@ -9,7 +9,7 @@ import { db } from "../db.js";
 import { canonicalGroup, classifyMuscleGroup, type MuscleGroup } from "./exercise-canon.js";
 import { type RecentLoad, recentMuscleLoad } from "./hybrid-load.js";
 import { programBalance } from "./progression.js";
-import { daysBetweenISO } from "./shared.js";
+import { daysBetweenISO, localDateISO } from "./shared.js";
 
 export interface PlanDayCandidate {
   id: number;
@@ -23,6 +23,15 @@ export interface PlanDayCandidate {
 export interface ResolvedSessionPlanDay {
   day_number: number;
   method: "linked" | "exercise-overlap" | "group-overlap";
+}
+
+export interface SelectedPlanDay {
+  date: string;
+  plan_day_id: number;
+  day_number: number;
+  focus: string | null;
+  selection: Record<string, any>;
+  source: "existing-session" | "cached-day-read" | "adaptive";
 }
 
 interface SessionAnchor {
@@ -315,4 +324,69 @@ export function selectAdaptivePlanDay(date: string): { day_number: number; focus
       scores: sorted.slice(0, 5),
     },
   };
+}
+
+// One server-owned answer to "which programmed day would I train on this date?".
+// Reuse the Brief's persisted adaptive answer when available; otherwise derive it
+// from the same selector. Validate the referenced day so a deleted plan day cannot
+// survive through an old cache row.
+export function selectedPlanDayForDate(date: string): SelectedPlanDay | null {
+  const candidates = planDayCandidates();
+  if (!candidates.length) return null;
+  // Once the athlete has started or manually chosen a session, that concrete
+  // session outranks the earlier Brief/cache. This keeps chat, REST, MCP, and the
+  // Today surface on the same plan day without stealing an explicit selection.
+  const session = db.prepare(`SELECT plan_day_id FROM sessions WHERE date = ?`).get(date) as any;
+  const sessionDay = session?.plan_day_id == null
+    ? null
+    : candidates.find((candidate) => candidate.id === Number(session.plan_day_id));
+  if (sessionDay) {
+    return {
+      date,
+      plan_day_id: sessionDay.id,
+      day_number: sessionDay.day_number,
+      focus: planDayFocus(sessionDay),
+      selection: { selected: { day_number: sessionDay.day_number, focus: planDayFocus(sessionDay) } },
+      source: "existing-session",
+    };
+  }
+  try {
+    const row = db.prepare(`SELECT signals FROM day_reads WHERE date = ?`).get(date) as any;
+    const signals = row?.signals ? JSON.parse(String(row.signals)) : null;
+    const selection = signals?.plan_selection;
+    const dayNumber = Number(selection?.selected?.day_number);
+    const day = Number.isFinite(dayNumber) ? candidates.find((candidate) => candidate.day_number === dayNumber) : null;
+    if (day) return {
+      date,
+      plan_day_id: day.id,
+      day_number: day.day_number,
+      focus: planDayFocus(day),
+      selection,
+      source: "cached-day-read",
+    };
+  } catch {
+    // Missing/malformed cache is only a cache miss.
+  }
+  const selected = selectAdaptivePlanDay(date);
+  if (!selected) return null;
+  const day = candidates.find((candidate) => candidate.day_number === selected.day_number);
+  if (!day) return null;
+  return {
+    date,
+    plan_day_id: day.id,
+    day_number: day.day_number,
+    focus: planDayFocus(day),
+    selection: selected.selection,
+    source: "adaptive",
+  };
+}
+
+// Shared trust-boundary normalizer for REST, MCP, and chat set logging. Omission
+// means "use Today's canonical adaptive session"; an own day_number property —
+// including null — is an explicit caller choice and is preserved.
+export function resolveImplicitPlanDay<T extends object>(input: T): T & { day_number?: number | null } {
+  if (Object.hasOwn(input, "day_number")) return input;
+  const fields = input as { date?: unknown };
+  const date = fields.date ? String(fields.date) : localDateISO();
+  return { ...input, day_number: selectedPlanDayForDate(date)?.day_number };
 }

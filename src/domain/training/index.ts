@@ -5,6 +5,7 @@ export * from "../../repo/exercises.js";
 export * from "../../repo/muscle-trajectory.js";
 export * from "../../repo/performance.js";
 export * from "../../repo/plan.js";
+export * from "../../repo/plan-selection.js";
 export * from "./plan-upcoming.js";
 export {
   applyProposal,
@@ -19,6 +20,7 @@ export {
 export * from "../../repo/program-blocks.js";
 export * from "../../repo/program-state.js";
 export * from "../../repo/progression.js";
+export * from "../../repo/strength-objectives.js";
 export * from "../../repo/run-progression.js";
 export * from "../../repo/sessions.js";
 export { trainingLoadBand, trainingLoadBaselineRead } from "../../repo/baseline-bands.js";

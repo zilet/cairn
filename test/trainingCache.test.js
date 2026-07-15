@@ -55,6 +55,66 @@ test("a training write increments the training-data version", () => {
   assert.ok(currentTrainingDataVersion() > v1, "a weigh-in bumped the version");
 });
 
+test("updateTarget invalidates training reads only after a successful mutation", () => {
+  repo.savePlanDay(1, "Push", "Push", [
+    { exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 5, target_weight: 135 },
+  ]);
+  const beforeSuccess = currentTrainingDataVersion();
+  const updated = repo.updateTarget(1, "Bench Press", 140);
+  assert.equal(updated.updated, 1);
+  assert.ok(currentTrainingDataVersion() > beforeSuccess, "a persisted target edit invalidates cached coaching reads");
+
+  const beforeFailure = currentTrainingDataVersion();
+  assert.throws(
+    () => repo.updateTarget(1, "Bench Press", undefined, 30),
+    /timed prescription|target_seconds|reps-based/i,
+  );
+  assert.equal(currentTrainingDataVersion(), beforeFailure, "rejected validation does not invalidate or claim a write");
+});
+
+test("a rolled-back multi-change proposal does not bump the training-data version", () => {
+  repo.savePlanDay(1, "Push", "Push", [
+    { exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 5, target_weight: 135 },
+    { exercise: "Overhead Press", sets: 3, rep_low: 5, rep_high: 5, target_weight: 75 },
+  ]);
+  const proposal = repo.createProposal("stub", "test rollback", "", {
+    changes: [
+      { day_number: 1, exercise: "Bench Press", target_weight: 140 },
+      { day_number: 1, exercise: "Overhead Press", target_seconds: 30 },
+    ],
+  });
+  const before = currentTrainingDataVersion();
+  const result = repo.applyProposal(proposal.id);
+  assert.equal(result.ok, false);
+  assert.equal(repo.getPlanDay(1).items.find((item) => item.exercise === "Bench Press").target_weight, 135);
+  assert.equal(currentTrainingDataVersion(), before, "rolled-back SQL does not claim a training-data change");
+});
+
+test("mixed cardio + strength proposals defer versioning until commit", () => {
+  repo.savePlanDay(1, "Push", "Push", [
+    { exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 5, target_weight: 135 },
+  ]);
+  const failing = repo.createProposal("stub", "mixed rollback", "", {
+    changes: [{ day_number: 1, exercise: "Bench Press", target_seconds: 30 }],
+    cardio: [{ day_number: 1, label: "Easy run", target_duration_min: 25, target_zone: "Z2" }],
+  });
+  const beforeFailure = currentTrainingDataVersion();
+  const failed = repo.applyProposal(failing.id);
+  assert.equal(failed.ok, false);
+  assert.equal(repo.getPlanDay(1).items.some((item) => item.kind === "cardio"), false, "cardio write rolled back");
+  assert.equal(currentTrainingDataVersion(), beforeFailure, "rolled-back mixed proposal does not bump version");
+
+  const succeeding = repo.createProposal("stub", "mixed success", "", {
+    changes: [{ day_number: 1, exercise: "Bench Press", target_weight: 140 }],
+    cardio: [{ day_number: 1, label: "Easy run", target_duration_min: 25, target_zone: "Z2" }],
+  });
+  const beforeSuccess = currentTrainingDataVersion();
+  const applied = repo.applyProposal(succeeding.id);
+  assert.equal(applied.ok, true);
+  assert.equal(repo.getPlanDay(1).items.some((item) => item.kind === "cardio"), true);
+  assert.equal(currentTrainingDataVersion(), beforeSuccess + 1, "committed mixed proposal bumps exactly once");
+});
+
 test("a food-note write increments the SEPARATE food-data version, not the training one", () => {
   const t0 = currentTrainingDataVersion();
   const f0 = currentFoodDataVersion();

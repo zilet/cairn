@@ -202,6 +202,7 @@ async function renderToday(opts: any = {}) {
     pendingOffPlan,
     lastSets,
     rxByEx,
+    strengthJourney,
     rxFor,
     prefillFor,
     exDone,
@@ -318,7 +319,7 @@ async function renderToday(opts: any = {}) {
   // destination (logging no longer lives inline here). The done card still shows
   // inline.
   html += (showPlan && !showDone)
-    ? sessionLaunchCardHtml({ day, exDone, exTotal, isToday, hasLoggedSets, isRunDay, read })
+    ? sessionLaunchCardHtml({ day, exDone, exTotal, isToday, hasLoggedSets, isRunDay, read, strengthJourney })
     : todayPlanSurfaceRenderer.buildHtml({
     showDone,
     showPlan,
@@ -340,6 +341,7 @@ async function renderToday(opts: any = {}) {
     pendingOffPlan,
     lastSets,
     rxByEx,
+    strengthJourney,
     exDone,
     exTotal,
     hasSyncedCardioToday,
@@ -510,13 +512,14 @@ function rerenderTraining(opts?: Record<string, unknown>): Promise<unknown> | un
 // plan area shows one calm tap-card that opens the isolated Session destination.
 // Suggestion, never a gate — the Brief still leads above it.
 function sessionLaunchCardHtml(opts: {
-  day: { name?: unknown; focus?: unknown } | null | undefined;
+  day: { name?: unknown; focus?: unknown; items?: Array<{ exercise?: unknown }> | null } | null | undefined;
   exDone: number;
   exTotal: number;
   isToday: boolean;
   hasLoggedSets: boolean;
   isRunDay: boolean;
   read: { est_minutes?: unknown } | null | undefined;
+  strengthJourney?: import("../contracts/client-api.js").ClientStrengthJourney | null;
 }): string {
   const name = opts.day && opts.day.name ? String(opts.day.name) : (opts.isRunDay ? "Today's run" : "Today's session");
   const focus = opts.day && opts.day.focus ? String(opts.day.focus) : "";
@@ -527,11 +530,23 @@ function sessionLaunchCardHtml(opts: {
   const est = opts.read && opts.read.est_minutes ? `~${Number(opts.read.est_minutes)} min` : "";
   const meta = [sub, est].filter(Boolean).join("  ·  ");
   const cta = started ? "Continue" : "Start";
+  const objective = opts.strengthJourney?.available ? opts.strengthJourney.objective : null;
+  const hasAnchor = !!objective?.exercise && (opts.day?.items || []).some((item) =>
+    String(item.exercise || "").trim().toLowerCase() === String(objective.exercise).trim().toLowerCase()
+  );
+  const journeyLine = hasAnchor
+    ? objective?.status === "completed"
+      ? "Anchor milestone rebuilt · consolidate it calmly today."
+      : opts.strengthJourney?.phase === "protecting"
+        ? "Anchor day · hold or ease; the relevant safety signal leads."
+        : `Anchor day · ${escHtml(objective?.exercise)}${Number(opts.strengthJourney?.gap_lb) > 0 ? ` · ${Number(opts.strengthJourney?.gap_lb).toFixed(1)} lb estimated 1RM gap` : ""}`
+    : "";
   return `<button class="sess-launch reveal" style="--i:2" type="button" id="sessLaunch">
       <div class="sess-launch-body">
         <div class="sess-launch-kicker lbl">${opts.isToday ? "TODAY'S SESSION" : "SESSION"}</div>
         <div class="sess-launch-title">${escHtml(name)}${focus ? `<span class="sess-launch-focus"> · ${escHtml(focus)}</span>` : ""}</div>
         ${meta ? `<div class="sess-launch-meta">${escHtml(meta)}</div>` : ""}
+        ${journeyLine ? `<div class="sess-launch-journey">${journeyLine}</div>` : ""}
       </div>
       <span class="sess-launch-cta">${cta} <span class="sess-launch-arrow" aria-hidden="true">→</span></span>
     </button>`;
@@ -630,6 +645,7 @@ async function renderSession(opts: any = {}): Promise<void> {
     pendingOffPlan: prep.pendingOffPlan,
     lastSets: prep.lastSets,
     rxByEx: prep.rxByEx,
+    strengthJourney: prep.strengthJourney,
     exDone: prep.exDone,
     exTotal: prep.exTotal,
     hasSyncedCardioToday: prep.hasSyncedCardioToday,

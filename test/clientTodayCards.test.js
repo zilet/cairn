@@ -126,6 +126,20 @@ test("Today exercise card helper renders no last-time line without last-set data
   assert.doesNotMatch(withNullLastSet, /class="ex-lastset"/);
 });
 
+test("Today exercise card renders only server-provided anchor/support context", () => {
+  const cards = loadTodayCards();
+  const base = { fromPlan: true, exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 8 };
+  const anchor = cards.exerciseCardHtml(
+    { ...base, journey_role: "anchor", journey_line: "Anchor lift — hold or ease today." },
+    [], {}, null, null, {}, null,
+  );
+  assert.match(anchor, /data-journey-role="anchor"/);
+  assert.match(anchor, /Anchor lift — hold or ease today/);
+
+  const ordinary = cards.exerciseCardHtml(base, [], {}, null, null, {}, null);
+  assert.doesNotMatch(ordinary, /ex-journey|data-journey-role/);
+});
+
 test("Today cardio card helper renders planned and done states safely", () => {
   const cards = loadTodayCards();
 

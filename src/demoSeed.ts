@@ -34,7 +34,7 @@ const round5 = (n: number) => Math.round(n / 5) * 5;
 function wipe() {
   db.exec("PRAGMA foreign_keys = OFF");
   const tables = [
-    "logged_sets", "session_skips", "sessions", "plan_items", "plan_days", "exercises",
+    "logged_sets", "session_skips", "sessions", "strength_objectives", "plan_items", "plan_days", "exercises",
     "bodyweight_log", "body_measurements", "activities", "daily_metrics", "garmin_activities", "garmin_daily_metrics",
     "garmin_sources", "health_documents", "blood_pressure_readings", "health_reviews", "health_directives", "insights",
     "memory", "family_members", "context_events", "checkins", "meal_plans", "nutrition_targets", "food_notes",

@@ -122,7 +122,9 @@ test("applying a proposal ADDS a movement that isn't on the day yet (not a silen
   assert.ok(names.includes("ZSingleArmRow"), "the new movement is on the plan day");
   assert.ok(names.includes("ZAddSquat"), "the existing work is preserved");
   const row = d1.items.find((i) => i.exercise === "ZSingleArmRow");
-  assert.equal(row.target_weight, 55, "carries the proposed target");
+  assert.equal(row.target_weight, null, "no exact-exercise history means the agent does not invent a starting load");
+  assert.equal(r.added[0].target_weight, null, "the apply receipt reflects the stored bounded prescription");
+  assert.ok(r.clamped.some((entry) => entry.exercise === "ZSingleArmRow" && entry.applied === null));
   assert.match(row.note || "", /back volume/i, "carries the coach's reason as the note");
   assert.equal(repo.getProposal(p.id).status, "applied", "marked applied because it really applied");
 });

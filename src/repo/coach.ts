@@ -6,6 +6,7 @@ import { cleanClinicalFacts, getLatestHealthReview, hydrateHealthDoc, listContex
 import { dayRead, getCachedDayRead, invalidateDayRead } from "./intelligence.js";
 import { blockForCoach, getActiveBlock } from "./program-blocks.js";
 import { getProgramState, type ProgramState } from "./program-state.js";
+import { getStrengthJourney } from "./strength-objectives.js";
 import { performanceStanding } from "./performance.js";
 import { enduranceTestsDue, runVarietyRead, runZones, weeklyRunPlan } from "./run-progression.js";
 import { dexaTargeting } from "./dexa-targeting.js";
@@ -375,6 +376,7 @@ interface CoachContextSignals {
   programBal: any;
   recentLoad: any;
   fullProgramState: ProgramState;
+  strengthJourneyView: any;
   runZonesView: any;
   runPlanView: any;
   dexaTargetingView: any;
@@ -518,6 +520,7 @@ function buildTrainingSlice(
   | "program_balance"
   | "recent_load"
   | "progression"
+  | "strength_journey"
   | "program_adjustments"
   | "groups_trajectory"
   | "test_week"
@@ -531,6 +534,7 @@ function buildTrainingSlice(
     programBal,
     recentLoad,
     fullProgramState,
+    strengthJourneyView,
     performanceView,
     programAdjustmentsView,
     groupsTrajectoryView,
@@ -583,6 +587,10 @@ function buildTrainingSlice(
       const dn = nextPlanDayNumber(dayReadView);
       return dn == null ? [] : planDayProgression(dn).slice(0, 12);
     })(),
+    // One athlete-selected anchor lift and the deterministic path back to it. The
+    // read owns exact-exercise history, safety gates and projection eligibility;
+    // recovery/signal-state still outrank it in every plan-shaping prompt.
+    strength_journey: strengthJourneyView,
     // The calm "what changed & why" digest — the handful of concrete adaptations
     // due right now (lifts to push/hold/deload, groups due, missing-pattern gaps).
     program_adjustments: programAdjustmentsView,
@@ -783,6 +791,13 @@ function getCoachContextFromSnapshot(): CoachContext {
   // view AND the performance/capacity read both read from the same snapshot (and
   // the same recovery), so a single context build never computes program-state twice.
   const fullProgramState = brainSignal("program_state", () => getProgramState(undefined, recovery));
+  const strengthJourneyView = brainSignal("strength_journey", () => {
+    try {
+      return getStrengthJourney({ programState: fullProgramState });
+    } catch {
+      return null;
+    }
+  });
   // The active periodization block, computed ONCE and threaded into the run plan +
   // the test-week cadence so neither re-reads it.
   const activeBlock = brainSignal("program_block:active", () => getActiveBlock());
@@ -1092,6 +1107,7 @@ function getCoachContextFromSnapshot(): CoachContext {
     programBal,
     recentLoad,
     fullProgramState,
+    strengthJourneyView,
     runZonesView,
     runPlanView,
     dexaTargetingView,

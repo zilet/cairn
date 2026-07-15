@@ -13,6 +13,7 @@ export * from "./repo/memory.js";
 export * from "./repo/brain-decisions.js";
 export * from "./repo/brain-evaluations.js";
 export * from "./repo/nutrition.js";
+export * from "./repo/dietary-constraints.js";
 export * from "./repo/fueling.js"; // one-tap fueling follow-through after an applied target change
 export * from "./repo/chat.js";
 export * from "./repo/settings.js";
@@ -43,6 +44,7 @@ export * from "./repo/intelligence.js";
 export * from "./repo/program-state.js";
 export * from "./repo/training-playbook.js"; // plateau/adherence playbook suggestions for plan evolution
 export * from "./repo/progression.js";
+export * from "./repo/strength-objectives.js"; // athlete-selected anchor-lift comeback journey
 export * from "./repo/program-blocks.js";
 export * from "./repo/exercise-variations.js";
 export * from "./repo/performance.js"; // training-intelligence: capacity benchmark + imbalance + the lever

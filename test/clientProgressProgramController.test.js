@@ -170,6 +170,51 @@ const programState = {
   adaptations_due: ["Add carries <grip>"],
 };
 
+test("strength journey Progress states are explicit, calm, and plan-backed", () => {
+  const context = loadProgramController();
+  const card = context.CairnProgressProgramController.strengthJourneyCardHtml;
+  assert.equal(card({ available: false }), "", "unavailable journey does not create an empty card");
+
+  const base = {
+    available: true,
+    objective: {
+      exercise: "Bench <Press>", target_est_1rm: 200, status: "active",
+      achieved_date: null,
+    },
+    latest: { est_1rm: 150, date: "2026-07-14" },
+    current: { est_1rm: 160, date: "2026-07-07" },
+    gap_lb: 40,
+    trend: { direction: null, est_1rm_lb_per_week: null, exposures: 2, span_days: 7 },
+    phase: "establishing",
+    next_prescription: null,
+    planned_support: [],
+    support_suggestions: [{ role: "trunk", exercise: "Invented", why: "optional" }],
+    projection: null,
+    projection_withheld_reason: "Need four exact-lift exposures.",
+  };
+  const establishing = card(base);
+  assert.match(establishing, /160\.0 lb estimated 1RM · 2026-07-07/);
+  assert.match(establishing, /Checkpoint/);
+  assert.match(establishing, /Need four exact-lift exposures/);
+  assert.doesNotMatch(establishing, /Invented|optional/);
+
+  const protecting = card({ ...base, phase: "protecting", projection_withheld_reason: "Relevant elbow pain." });
+  assert.match(protecting, /Hold or ease the anchor/);
+  assert.match(protecting, /Relevant elbow pain/);
+
+  const completed = card({
+    ...base,
+    objective: { ...base.objective, status: "completed", achieved_date: "2026-07-10" },
+    phase: "reached",
+    gap_lb: 0,
+    planned_support: [{ role: "upper back", exercise: "Cable <Row>", why: "Stable press shelf.", plan_day_number: 2, plan_day_name: "Pull" }],
+  });
+  assert.match(completed, /milestone complete/);
+  assert.match(completed, /Target rebuilt · 2026-07-10/);
+  assert.match(completed, /Strength around it · planned/);
+  assert.match(completed, /Cable &lt;Row&gt; · Stable press shelf/);
+});
+
 test("progress program controller renders the empty state through the route shell", () => {
   const context = loadProgramController();
   const deps = depsFor(context);

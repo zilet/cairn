@@ -66,3 +66,41 @@ test("applyProposal (target change) busts today's Brief", () => {
     assert.equal(r.ok, true, "the proposal applied");
   });
 });
+
+test("direct target updates and plan-day deletion cannot leave Today on a stale Brief", () => {
+  repo.savePlanDay(1, "Push", "chest", [
+    { exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 8, target_weight: 135 },
+  ]);
+  bustsCache(() => repo.updateTarget(1, "Bench Press", 140));
+
+  repo.saveDayRead(TODAY(), { kind: "train", headline: "Old push", why: "stale", focus: "Push" });
+  assert.ok(repo.getCachedDayRead(TODAY()));
+  const deleted = repo.deletePlanDay(1);
+  assert.equal(deleted.deleted, 1);
+  assert.equal(repo.getCachedDayRead(TODAY()), null, "deleting the selected day clears its persisted text/selection");
+});
+
+test("a rolled-back multi-change proposal preserves the persisted Brief", () => {
+  repo.savePlanDay(1, "Push", "chest", [
+    { exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 8, target_weight: 135 },
+    { exercise: "Overhead Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 75 },
+  ]);
+  repo.saveDayRead(TODAY(), {
+    kind: "train",
+    headline: "Stored push read",
+    why: "this must survive a rejected transaction",
+    focus: "Push",
+    signals: { selected_plan_day: 1 },
+  });
+  const p = repo.createProposal("stub", "rollback", "", {
+    changes: [
+      { day_number: 1, exercise: "Bench Press", target_weight: 145 },
+      { day_number: 1, exercise: "Overhead Press", target_seconds: 30 },
+    ],
+  });
+
+  const result = repo.applyProposal(p.id);
+  assert.equal(result.ok, false);
+  assert.equal(repo.getPlanDay(1).items.find((item) => item.exercise === "Bench Press").target_weight, 135);
+  assert.equal(repo.getCachedDayRead(TODAY()).headline, "Stored push read");
+});

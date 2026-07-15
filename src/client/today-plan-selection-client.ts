@@ -110,15 +110,14 @@ type TodayPlanSelectionDeps = {
     if (!isToday) return plan[0]?.day_number ?? 1;
 
     try {
-      const recent = deps.cachedApi
-        ? await deps.cachedApi("/sessions?limit=20", { key: "history:sessions", freshFor: 30000 })
-        : await deps.api("/sessions?limit=20");
-      const rows = Array.isArray(recent) ? recent as TodayPlanSelectionSession[] : [];
-      const latest = rows.find((row) =>
-        row.date !== deps.state.logDate && planDayNumberForSession(row, plan)
-      );
-      const latestDay = planDayNumberForSession(latest, plan);
-      return latestDay ? (nextPlanDayNumber(latestDay, plan) ?? plan[0]?.day_number ?? 1) : (plan[0]?.day_number ?? 1);
+      // The adaptive selector is server-owned. A direct read avoids accepting a
+      // stale browser history cache after a chat or plan edit.
+      const selected = await deps.api(`/today-plan-day?date=${encodeURIComponent(deps.state.logDate)}`) as {
+        day_number?: unknown;
+      } | null;
+      const dayNumber = Number(selected?.day_number);
+      if (Number.isFinite(dayNumber) && plan.some((day) => day.day_number === dayNumber)) return dayNumber;
+      return plan[0]?.day_number ?? 1;
     } catch {
       return plan[0]?.day_number ?? 1;
     }

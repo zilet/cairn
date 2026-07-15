@@ -36,7 +36,7 @@ import {
 } from "./exercise-variations.js";
 import { findExercise, recentWorkingWeight } from "./exercises.js";
 import { loadPhrase, recentMuscleLoad, type RecentLoad } from "./hybrid-load.js";
-import { addExerciseToPlanDay, getPlan } from "./plan.js";
+import { addExerciseToPlanDay, getPlan, pressSlotKey } from "./plan.js";
 import type { CoachPersonalModifier, CoachWhatWorksForYou } from "../brain/coach-context-contract.js";
 import { applyPersonalResponseModifier, whatWorksForYou } from "./reaction-model.js";
 // createProposal + the auto-progression dedup live in profile.js; imported here (as
@@ -173,12 +173,43 @@ const JOINT_GROUP_MAP: Array<{ re: RegExp; groups: MuscleGroup[] }> = [
   { re: /ankle|achilles|\bcalf\b|\bfoot\b|shin|tib/, groups: ["calves", "quads"] },
 ];
 
+// Some pain areas load a movement through a joint even when that joint is not the
+// exercise's primary muscle group (an elbow can matter to a chest press, for
+// example). Keep that movement-level knowledge beside the progression engine's
+// muscle map so every consumer uses the same conservative relevance test.
+const JOINT_MOVEMENT_MAP: Array<{ re: RegExp; movements: RegExp }> = [
+  { re: /knee/, movements: /\b(squat|lunge|leg press|leg extension|step[ -]?up|calf)\b/ },
+  { re: /shoulder|delt|rotator|\bac\b/, movements: /\b(press|bench|push[ -]?up|dip|fly|lateral raise|row|pull[ -]?(?:up|down))\b/ },
+  { re: /elbow|cubital|forearm|\bwrist/, movements: /\b(press|bench|pushdown|extension|curl|row|pull[ -]?(?:up|down)|chin[ -]?up|dip)\b/ },
+  { re: /chest|pec|sternum|\brib\b/, movements: /\b(press|bench|push[ -]?up|dip|fly)\b/ },
+  { re: /lower ?back|lumbar|\bback\b|spine|\bsi\b|sacro/, movements: /\b(deadlift|hinge|squat|row|good morning|back extension)\b/ },
+  { re: /\bhip\b|groin|glute/, movements: /\b(squat|lunge|deadlift|hinge|hip thrust|step[ -]?up)\b/ },
+  { re: /ankle|achilles|\bcalf\b|\bfoot\b|shin|tib/, movements: /\b(calf|squat|lunge|step[ -]?up|run|jump)\b/ },
+];
+
 function jointLoadsGroup(jointText: string, group: MuscleGroup | null): boolean {
   if (!group) return false;
   const s = String(jointText || "").toLowerCase();
   if (!s) return false;
   for (const m of JOINT_GROUP_MAP) if (m.re.test(s) && m.groups.includes(group)) return true;
   return false;
+}
+
+/**
+ * Whether free-text pain feedback is relevant to one exercise. This is a
+ * loading-relevance check, not a diagnosis: unmapped text returns false rather
+ * than making every lift look injured.
+ */
+export function painAreaLoadsExercise(
+  jointText: string | null | undefined,
+  exercise: { name?: string | null; muscle_group?: string | null },
+): boolean {
+  const text = String(jointText ?? "").trim().toLowerCase();
+  if (!text) return false;
+  const group = resolveGroup(exercise.muscle_group ?? "", exercise.name ?? "");
+  if (jointLoadsGroup(text, group)) return true;
+  const name = String(exercise.name ?? "").toLowerCase();
+  return JOINT_MOVEMENT_MAP.some((entry) => entry.re.test(text) && entry.movements.test(name));
 }
 
 // Decide the ONE-step autoregulation brake for a lift, given its computed action,
@@ -493,11 +524,16 @@ export function applySwapSmart(
       const group = groupForName(f) ?? groupForName(t);
       const hostDay = group ? bestPlanDayForGroup(group) : null;
       if (hostDay == null) return { ok: false, error: `couldn't find ${f} — or a day that trains it — on your plan` };
-      const added = addExerciseToPlanDay(
-        hostDay,
-        t,
-        `Added as a fresh variation for ${f} — start light, log your actual working weight.`,
-      );
+      let added: ReturnType<typeof addExerciseToPlanDay>;
+      try {
+        added = addExerciseToPlanDay(
+          hostDay,
+          t,
+          `Added as a fresh variation for ${f} — start light, log your actual working weight.`,
+        );
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
       if (!added) return { ok: false, error: `couldn't add ${t} to your plan` };
       emitBrainEvent({
         kind: "exercise_swapped",
@@ -679,18 +715,30 @@ function loadedDeltaText(current: number | null, next: number | null): string {
 
 // Same-pattern variation MENU for a lift, ranked toward the athlete's available
 // equipment + heavier COMPOUND loading (the owner's explicit goal), never
-// re-suggesting a movement already on the day. Pure over suggestAlternatives.
+// re-suggesting a movement/slot already in the week. Pure over suggestAlternatives.
 function rankedVaryOptions(name: string, ctx?: PrescCtx): { name: string; why: string }[] {
   const equip = ctx?.availableEquipment ?? [];
   const exclude = ctx?.excludeNames ?? [];
   return (
     suggestAlternatives(name, {
-      limit: 3,
+      limit: 20,
       preferCompound: true,
       availableEquipment: equip.length ? equip : undefined,
       excludeNames: exclude.length ? exclude : undefined,
     }) as { name: string; why: string }[]
-  ).map((v) => ({ name: v.name, why: v.why }));
+  )
+    .filter((candidate) => {
+      const candidateKey = normalizedExerciseKey(candidate.name);
+      const candidateMove = movementKey(candidate.name);
+      const candidatePress = pressSlotKey(candidate.name);
+      return !exclude.some((planned) =>
+        normalizedExerciseKey(planned) === candidateKey ||
+        movementKey(planned) === candidateMove ||
+        (candidatePress != null && pressSlotKey(planned) === candidatePress)
+      );
+    })
+    .slice(0, 3)
+    .map((v) => ({ name: v.name, why: v.why }));
 }
 
 // ---- the per-lift prescription ----------------------------------------------
@@ -703,7 +751,7 @@ export interface PrescriptionOpts {
   autoreg?: AutoregSignals | null; // latest 1-tap session feedback (soreness/perf/joint)
   recentLoad?: Map<MuscleGroup, RecentLoad> | null; // acute per-group load (a just-smoked group)
   availableEquipment?: Equipment[] | null; // rank variation candidates by what the athlete can load
-  excludeNames?: string[] | null; // movements already on the day — don't re-suggest them
+  excludeNames?: string[] | null; // movements already in the week — don't re-suggest their exercise/slot
   personalModifier?: CoachPersonalModifier | null; // learned step size; never overrides constraints/recovery
 }
 
@@ -1120,19 +1168,23 @@ export function planDayProgression(dayNumber: number, opts: { forNextSession?: b
   // so the one-tap apply proposal built from these is gated too (no overload the
   // morning after soreness / a named sore joint). Equipment + the day's own movements
   // are threaded in too so a variety suggestion ranks by what the athlete can load and
-  // never re-suggests something already on the day.
+  // never re-suggests an exercise/slot already anywhere in the week.
   // At the finish boundary this proposal is for the NEXT exposure, not another
   // set today. Do not let the just-completed session masquerade as poor readiness;
   // constraints still apply here, and readiness is re-checked when that day starts.
   const autoreg = opts.forNextSession ? null : recentAutoregulation();
   const recentLoad = opts.forNextSession ? null : recentMuscleLoad(2);
   const equip = availableEquipment();
-  const dayMovements = items.filter((it) => it.kind !== "cardio" && it.name).map((it) => String(it.name));
+  const plannedMovements = getPlan().flatMap((planDay: any) =>
+    (Array.isArray(planDay?.items) ? planDay.items : [])
+      .filter((item: any) => item.kind !== "cardio" && item.exercise)
+      .map((item: any) => String(item.exercise))
+  );
   const personalResponse = whatWorksForYou();
   const out: Prescription[] = [];
   for (const it of items) {
     if (it.kind === "cardio" || !it.name) continue; // skip cardio + label-only rows
-    const excludeNames = dayMovements.filter((n) => n.toLowerCase() !== String(it.name).toLowerCase());
+    const excludeNames = plannedMovements.filter((n) => n.toLowerCase() !== String(it.name).toLowerCase());
     const personalModifier = trainingModifierFor(String(it.name), personalResponse);
     const p = nextPrescription(it.name, states, {
       autoreg,

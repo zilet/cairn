@@ -95,6 +95,7 @@ function exerciseCardHtml(
       <div class="ex-meta">${progress}</div>
       ${item.brain_decision_id ? `<div class="ex-flag"><b>${escHtml(item.brain_change_summary || "Cairn adjusted this exercise.")}</b>${item.brain_change_reason || item.note ? ` ${escHtml(item.brain_change_reason || item.note)}` : ""}${item.brain_change_reversible ? ` <button class="linkbtn-quiet" type="button" data-decision-undo="${escAttr(item.brain_decision_id)}">Undo</button>` : ""}</div>` : item.note ? `<div class="ex-note">${escHtml(item.note)}</div>` : ""}
       ${item.constraint_note ? `<div class="ex-flag">${escHtml(item.constraint_note)}</div>` : ""}
+      ${item.journey_line ? `<div class="ex-journey" data-journey-role="${escAttr(item.journey_role || "support")}">${escHtml(item.journey_line)}</div>` : ""}
       ${!complete ? CairnTodayTraining.exRxLineHtml(rx) : ""}
       <div class="logged" data-logged>${loggedSets.map(todayCardsSetChip).join("")}</div>
       ${lastSetLine}

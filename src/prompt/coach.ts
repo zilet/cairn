@@ -22,6 +22,7 @@ import {
   renderRunPlan,
   renderRunZones,
   renderSignalState,
+  renderStrengthJourney,
   renderTrainingSignals,
   renderTrajectory,
   CAIRN_PERSONA,
@@ -30,9 +31,10 @@ import {
 const PLAN_SCHEMA = `{
   "summary": "one or two sentences on the overall adjustment",
   "changes": [
-    { "day_number": <1-5>, "exercise": "<exact exercise name>", "target_weight": <number>, "reason": "<why>" },
-    { "day_number": <1-5>, "exercise": "<exact exercise name>", "target_seconds": <number>, "reason": "<why — ONLY for mode:'timed' exercises>" },
-    { "day_number": <1-5>, "swap": { "from": "<exact current exercise>", "to": "<new same-pattern movement>" }, "reason": "<why rotate it in>" }
+    { "day_number": <1-7>, "exercise": "<exact exercise name>", "target_weight": <number|null>, "sets": <number>, "rep_low": <number>, "rep_high": <number>, "reason": "<why>" },
+    { "day_number": <1-7>, "exercise": "<exact exercise name>", "target_seconds": <number>, "sets": <number>, "reason": "<why — ONLY for mode:'timed' exercises; omit reps/load>" },
+    { "day_number": <1-7>, "exercise": "<exact current exercise>", "remove": true, "reason": "<why remove it; NEVER use sets:0>" },
+    { "day_number": <1-7>, "swap": { "from": "<exact current exercise>", "to": "<new same-pattern movement>" }, "sets": <number|null>, "rep_low": <number|null>, "rep_high": <number|null>, "target_weight": <number|null>, "reason": "<why rotate it in>" }
   ],
   "cardio": [
     { "day_number": <1-7>, "label": "<e.g. Easy run / Long run / Tempo / Intervals>",
@@ -41,7 +43,9 @@ const PLAN_SCHEMA = `{
   ],
   "notes": "<optional coaching notes, may be empty>"
 }
-// "changes"  → tweak strength targets on existing plan days (applied in place). A
+// "changes"  → atomically add/update/remove/swap strength prescriptions on existing
+//              plan days. It may carry sets/rep_low/rep_high with or without a load
+//              change. Use remove:true to remove; NEVER encode removal as sets:0. A
 //              change may instead carry "swap":{from,to} to ROTATE one movement out
 //              for a same-pattern variation IN PLACE (the preferred way to break a
 //              plateau — keeps the slot + rep scheme, starts the new lift light). Use
@@ -137,7 +141,7 @@ ${buildEliteGuardrails(ctx)}
 ${CONTEXT_GUARDRAILS}
 ${renderSignalState(ctx)}${renderCoachingFocus(ctx)}${COACHING_STANCE}
 
-${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderRunZones(ctx)}${renderRunPlan(ctx)}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderProgramState(ctx)}${renderMuscleGroups(ctx)}${renderPerformance(ctx)}${renderDexaTargeting(ctx, "training")}${renderBodyComp(ctx)}${renderBlock(ctx)}${renderReactionModel(ctx)}${renderTrajectory(ctx)}
+${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderRunZones(ctx)}${renderRunPlan(ctx)}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderStrengthJourney(ctx)}${renderProgramState(ctx)}${renderMuscleGroups(ctx)}${renderPerformance(ctx)}${renderDexaTargeting(ctx, "training")}${renderBodyComp(ctx)}${renderBlock(ctx)}${renderReactionModel(ctx)}${renderTrajectory(ctx)}
 TASK: ${userInstruction?.trim() || "Review recent training and propose conservative target adjustments for next week."}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
@@ -170,16 +174,31 @@ export function buildProgramEvolutionPrompt(userInstruction?: string, state?: an
   // COMPOUND loading (their explicit goal), never re-suggesting what's already planned.
   const equip = (() => { try { return repo.availableEquipment(); } catch { return []; } })();
   const equipList = equip.length ? equip : undefined;
+  const plannedNames = (Array.isArray(ctx?.plan) ? ctx.plan : [])
+    .flatMap((day: any) => Array.isArray(day?.items) ? day.items : [])
+    .filter((item: any) => String(item?.kind ?? "strength") !== "cardio")
+    .map((item: any) => String(item?.exercise ?? "").trim())
+    .filter(Boolean);
   const variationLines = stalled
     .map((l: any) => {
       // Injury-aware: the candidate list must not include movements that load an
       // injured area (else it contradicts the "never load an injured area" rule).
       const names = (repo.suggestAlternatives(l.exercise, {
-        limit: 4,
+        limit: 20,
         injuryAreas,
         preferCompound: true,
         availableEquipment: equipList,
-      }) as any[]).map((v) => v.name);
+        excludeNames: plannedNames,
+      }) as any[])
+        .map((v) => v.name)
+        .filter((name) => {
+          const key = repo.normalizedExerciseKey(name);
+          const slot = repo.pressSlotKey(name);
+          return !plannedNames.some((planned) =>
+            repo.normalizedExerciseKey(planned) === key || (slot != null && repo.pressSlotKey(planned) === slot)
+          );
+        })
+        .slice(0, 4);
       return names.length ? `- ${l.exercise} → ${names.join(", ")}` : null;
     })
     .filter(Boolean);
@@ -273,7 +292,7 @@ ${buildEliteGuardrails(ctx)}
 ${variationBlock}${equipBlock}${weakBlock}${CONTEXT_GUARDRAILS}
 ${renderSignalState(ctx)}${renderCoachingFocus(ctx)}${COACHING_STANCE}
 
-${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderRunZones(ctx)}${renderRunPlan(ctx)}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderProgramState(ctx)}${renderMuscleGroups(ctx)}${renderPerformance(ctx)}${renderDexaTargeting(ctx, "training")}${renderBodyComp(ctx)}${renderBlock(ctx)}${renderReactionModel(ctx)}${renderTrajectory(ctx)}
+${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderRunZones(ctx)}${renderRunPlan(ctx)}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderStrengthJourney(ctx)}${renderProgramState(ctx)}${renderMuscleGroups(ctx)}${renderPerformance(ctx)}${renderDexaTargeting(ctx, "training")}${renderBodyComp(ctx)}${renderBlock(ctx)}${renderReactionModel(ctx)}${renderTrajectory(ctx)}
 TASK: ${userInstruction?.trim() || "Evolve the program: progress what's working, break what's stalled, keep it fresh, and periodize sensibly. Explain each change in plain words."}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:

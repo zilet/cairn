@@ -4,6 +4,7 @@
 type ProgressProgramRecord = Record<string, unknown>;
 type ProgressProgramStat = readonly [unknown, unknown] | readonly [unknown, unknown, { text?: boolean; k?: boolean }];
 type ProgressProgramState = import("../contracts/client-api.js").ClientProgramState;
+type ProgressStrengthJourney = import("../contracts/client-api.js").ClientStrengthJourney;
 
 function isProgressProgramRecord(value: unknown): value is ProgressProgramRecord {
   return !!value && typeof value === "object";
@@ -11,6 +12,62 @@ function isProgressProgramRecord(value: unknown): value is ProgressProgramRecord
 
 function progressProgramRecord(value: unknown): ProgressProgramRecord {
   return isProgressProgramRecord(value) ? value : {};
+}
+
+function strengthJourneyCardHtml(value: unknown): string {
+  const journey = value && typeof value === "object" ? value as Partial<ProgressStrengthJourney> : null;
+  const objective = journey?.objective;
+  if (!journey?.available || !objective?.exercise || !Number.isFinite(Number(objective.target_est_1rm))) return "";
+  const current = journey.current?.est_1rm;
+  const currentDate = journey.current?.date ? String(journey.current.date) : null;
+  const currentText = Number.isFinite(Number(current))
+    ? `${Number(current).toFixed(1)} lb estimated 1RM${currentDate ? ` · ${currentDate}` : ""}`
+    : "Estimated 1RM not established yet";
+  const targetText = `${Number(objective.target_est_1rm).toFixed(1)} lb estimated 1RM target`;
+  const gap = journey.gap_lb;
+  const completed = objective.status === "completed";
+  const gapText = completed
+    ? "milestone complete"
+    : Number.isFinite(Number(gap)) && Number(gap) > 0 ? `${Number(gap).toFixed(1)} lb to rebuild` : "at the target";
+  const phase = String(journey.phase || "establishing").replace(/_/g, " ");
+  const trend = journey.trend;
+  const trendText = trend?.direction === "rising" && Number.isFinite(Number(trend.est_1rm_lb_per_week))
+    ? `${trend.direction} · about ${Number(trend.est_1rm_lb_per_week).toFixed(1)} lb/week from ${Number(trend.exposures) || 0} exact-lift exposures`
+    : trend?.direction
+      ? `${trend.direction} · ${Number(trend.exposures) || 0} exact-lift exposures`
+      : `${Number(trend?.exposures) || 0} exact-lift exposures logged`;
+  const projection = journey.projection
+    ? `<div class="sjourney-range"><span class="lbl">Planning range</span><strong>${Number(journey.projection.earliest_weeks)}–${Number(journey.projection.latest_weeks)} weeks</strong><span>${escHtml(journey.projection.caveat)}</span></div>`
+    : "";
+  const checkpoint = completed
+    ? `<div class="sjourney-next"><span class="lbl">Checkpoint</span><strong>Target rebuilt${objective.achieved_date ? ` · ${escHtml(objective.achieved_date)}` : ""}</strong><span>Keep it steady and consolidate this milestone before choosing another goal.</span></div>`
+    : journey.phase === "protecting"
+      ? `<div class="sjourney-next"><span class="lbl">Checkpoint</span><strong>Hold or ease the anchor</strong><span>${escHtml(journey.projection_withheld_reason || "Relevant pain, injury, or a load constraint takes priority today.")}</span></div>`
+      : journey.next_prescription
+        ? `<div class="sjourney-next"><span class="lbl">Checkpoint</span><strong>${escHtml(journey.next_prescription.delta_text)}</strong><span>${escHtml(journey.next_prescription.why)}</span></div>`
+        : `<div class="sjourney-next"><span class="lbl">Checkpoint</span><strong>Establish the next clean anchor exposure</strong><span>${escHtml(journey.projection_withheld_reason || "Log another exact-lift exposure before Cairn projects the path.")}</span></div>`;
+  const support = Array.isArray(journey.planned_support) ? journey.planned_support.slice(0, 3) : [];
+  const supportHtml = support.length
+    ? `<div class="sjourney-support"><span class="lbl">Strength around it · planned</span>${support.map((item) => `<span><b>${escHtml(item.role)}</b> · ${escHtml(item.exercise)} · ${escHtml(item.why)}</span>`).join("")}</div>`
+    : "";
+  return `<section class="sjourney-card reveal" aria-label="Strength comeback journey">
+    <div class="sjourney-head"><span class="lbl">Anchor lift · ${escHtml(phase)}</span><span>${escHtml(gapText)}</span></div>
+    <h2>${escHtml(objective.exercise)}</h2>
+    <div class="sjourney-route"><span>${escHtml(currentText)}</span><i aria-hidden="true">→</i><span>${escHtml(targetText)}</span></div>
+    <div class="sjourney-trend">${escHtml(trendText)}</div>
+    ${checkpoint}${supportHtml}${projection}
+  </section>`;
+}
+
+async function loadStrengthJourney(deps: ClientProgressProgramControllerDeps): Promise<void> {
+  let result: unknown = null;
+  try {
+    result = await deps.api("/strength-journey");
+  } catch {
+    result = null;
+  }
+  const slot = deps.view.querySelector("#progStrengthJourneySlot");
+  if (slot) slot.innerHTML = strengthJourneyCardHtml(result);
 }
 
 // The conductor lead for Progress -> Program. Cached as rendered HTML so the
@@ -178,11 +235,13 @@ function paintProgressProgramBody(data: ProgressProgramState, deps: ClientProgre
     deps.view.innerHTML =
       head +
       deps.hero("Program", []) +
+      `<div id="progStrengthJourneySlot" class="sjourney-slot"></div>` +
       deps.empty(
         deps.art("exercise", "barbell squat"),
         "Not enough data yet — log a few sessions and your program intelligence will read here."
       );
     deps.wireSegments();
+    void loadStrengthJourney(deps);
     return;
   }
 
@@ -201,6 +260,7 @@ function paintProgressProgramBody(data: ProgressProgramState, deps: ClientProgre
     : "";
 
   const testSlot = `<div id="progTestSlot" class="ptest-slot reveal" style="${stagger(1)}"></div>`;
+  const strengthJourneySlot = `<div id="progStrengthJourneySlot" class="sjourney-slot" style="${stagger(1)}"></div>`;
   const perfSlot = `<div id="progPerfSlot" class="pperf-slot reveal" style="${stagger(2)}"></div>`;
   const blockSlot = `<div id="progBlockSlot" class="pblock-slot reveal" style="${stagger(2)}"></div>`;
   const adjustSlot = `<div id="progAdjustSlot" class="padj-slot reveal" style="${stagger(3)}"></div>`;
@@ -235,6 +295,7 @@ function paintProgressProgramBody(data: ProgressProgramState, deps: ClientProgre
       head +
       deps.hero("Program", heroStats) +
       conductor +
+      strengthJourneySlot +
       liftsHtml +
       `<details class="full-read reveal" style="${stagger(6)}">
         <summary>The full read</summary>
@@ -259,6 +320,7 @@ function paintProgressProgramBody(data: ProgressProgramState, deps: ClientProgre
       head +
       deps.hero("Program", heroStats) +
       headlineHtml +
+      strengthJourneySlot +
       testSlot +
       perfSlot +
       blockSlot +
@@ -277,6 +339,8 @@ function paintProgressProgramBody(data: ProgressProgramState, deps: ClientProgre
   deps.view.innerHTML = html;
   deps.wireSegments();
   deps.runCountUps(deps.view);
+
+  void loadStrengthJourney(deps);
 
   const evolveBtn = deps.view.querySelector("#progEvolveBtn");
   if (evolveBtn)
@@ -359,6 +423,7 @@ const CAIRN_PROGRESS_PROGRAM_CONTROLLER = {
   paint: paintProgressProgramBody,
   triggerProgramEvolve,
   tidyExerciseNames,
+  strengthJourneyCardHtml,
 };
 
 Object.assign(globalThis, { CairnProgressProgramController: CAIRN_PROGRESS_PROGRAM_CONTROLLER });

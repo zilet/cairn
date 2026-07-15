@@ -4885,6 +4885,25 @@ button.hmk-row:active{background:var(--card-2)}
   margin:0 0 20px;padding-bottom:14px;border-bottom:1px solid var(--line);
 }
 
+/* Athlete-selected anchor lift: a compact route from today's exact-lift estimate
+   to the immutable target snapshot. No completion meter or score. */
+.sjourney-slot:empty{display:none}
+.sjourney-card{
+  background:var(--card);
+  border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow-sm);
+  padding:16px;margin:0 0 16px;
+}
+.sjourney-head{display:flex;justify-content:space-between;gap:12px;align-items:baseline;color:var(--muted);font-size:.76rem}
+.sjourney-card h2{font-family:var(--font-display);font-size:1.13rem;font-weight:560;margin:7px 0 9px;color:var(--ink)}
+.sjourney-route{display:flex;align-items:center;gap:9px;font-family:var(--font-display);font-size:1.02rem;color:var(--ink)}
+.sjourney-route i{font-style:normal;color:var(--sage)}
+.sjourney-trend{margin-top:5px;color:var(--muted);font-size:.78rem;line-height:1.4}
+.sjourney-next,.sjourney-range,.sjourney-support{display:grid;gap:3px;margin-top:12px;padding-top:11px;border-top:1px solid var(--line);font-size:.82rem;color:var(--ink-2)}
+.sjourney-next strong,.sjourney-range strong{color:var(--ink);font-size:.91rem}
+.sjourney-support b{text-transform:capitalize;color:var(--ink);font-weight:600}
+.ex-journey,.sess-launch-journey,.done-journey{margin-top:8px;color:var(--sage);font-size:.78rem;line-height:1.4}
+@media(max-width:420px){.sjourney-head{align-items:flex-start;flex-direction:column;gap:3px}}
+
 /* Section label for the lifts list. */
 .prow-section-head{margin:4px 0 10px}
 

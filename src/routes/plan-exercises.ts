@@ -11,14 +11,15 @@ import {
   getExerciseDetail,
   getPlan,
   getPlanDay,
+  getPlanQuality,
   listExerciseAliases,
   listExercises,
   mergeExercises,
   planUpcomingNote,
   reconcileExerciseGroups,
   recoveryWeekStatus,
-  replacePlan,
-  savePlanDay,
+  replacePlanChecked,
+  savePlanDayChecked,
   suggestAlternatives,
   suggestVariations,
   updateExercise,
@@ -29,6 +30,7 @@ import {
 export const planExercisesRouter = Router();
 
 planExercisesRouter.get("/plan", (_req, res) => res.json(getPlan()));
+planExercisesRouter.get("/plan/quality", (_req, res) => res.json(getPlanQuality()));
 
 // The recovery-week story for the Plan surface: a waiting draft ('drafted'), the
 // applied lighter week in flight ('applied', ~a week from the apply stamp), or
@@ -64,33 +66,39 @@ planExercisesRouter.get("/plan/:day", (req, res) => {
 
 planExercisesRouter.put("/plan/:day/target", (req, res) => {
   try {
-    const { exercise, target_weight, target_seconds } = req.body ?? {};
+    const { exercise, target_weight, target_seconds, quality_override } = req.body ?? {};
     res.json(updateTarget(
       Number(req.params.day),
       exercise,
       target_weight !== undefined && target_weight !== null ? Number(target_weight) : undefined,
-      target_seconds !== undefined && target_seconds !== null ? Number(target_seconds) : undefined
+      target_seconds !== undefined && target_seconds !== null ? Number(target_seconds) : undefined,
+      { quality_override: quality_override === true }
     ));
   } catch (e: any) {
-    res.status(400).json({ error: e.message });
+    res.status(400).json({ error: e.message, ...(e?.report ? { quality: e.report, quality_override_available: true } : {}) });
   }
 });
 
 // ---- plan editing (manual) ----
 planExercisesRouter.put("/plan", (req, res) => {
   try {
-    res.json(replacePlan((req.body ?? {}).days));
+    const body = req.body ?? {};
+    const result = replacePlanChecked(body.days, { quality_override: body.quality_override === true });
+    // Preserve the established REST success shape (the plan array). Quality is
+    // available at GET /plan/quality; rejected writes include the report below.
+    res.json(result.plan);
   } catch (e: any) {
-    res.status(400).json({ error: e.message });
+    res.status(400).json({ error: e.message, ...(e?.report ? { quality: e.report, quality_override_available: true } : {}) });
   }
 });
 
 planExercisesRouter.put("/plan/:day", (req, res) => {
   try {
     const b = req.body ?? {};
-    res.json(savePlanDay(Number(req.params.day), b.name, b.focus ?? null, b.items ?? []));
+    const result = savePlanDayChecked(Number(req.params.day), b.name, b.focus ?? null, b.items ?? [], { quality_override: b.quality_override === true });
+    res.json(result.day);
   } catch (e: any) {
-    res.status(400).json({ error: e.message });
+    res.status(400).json({ error: e.message, ...(e?.report ? { quality: e.report, quality_override_available: true } : {}) });
   }
 });
 

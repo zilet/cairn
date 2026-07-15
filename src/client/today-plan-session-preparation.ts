@@ -32,6 +32,7 @@ type TodayPlanSessionPrepCardioEffort = import("../contracts/client.js").ClientC
 type TodayPlanSessionPrepPrescription = import("../contracts/client.js").ClientPrescription & {
   exercise?: string | null;
 };
+type TodayPlanSessionPrepStrengthJourney = import("../contracts/client-api.js").ClientStrengthJourney;
 type TodayPlanSessionPrepPendingOffPlan = { name: string; mode?: string | null };
 type TodayPlanSessionPrepPrefill = { weight: unknown; reps: unknown; rir: unknown; duration_sec?: unknown };
 type TodayPlanSessionPrepState = {
@@ -72,6 +73,7 @@ type TodayPlanSessionPrepResult = {
   pendingOffPlan: TodayPlanSessionPrepPendingOffPlan[];
   lastSets: Record<string, Record<string, unknown> | null>;
   rxByEx: Record<string, TodayPlanSessionPrepPrescription | null | undefined>;
+  strengthJourney: TodayPlanSessionPrepStrengthJourney | null;
   rxFor(name: unknown): TodayPlanSessionPrepPrescription | null;
   prefillFor(item: TodayPlanSessionPrepPlanItem): TodayPlanSessionPrepPrefill;
   exDone: number;
@@ -184,10 +186,13 @@ type TodayPlanSessionPrepDataApi = {
     });
     const pendingOffPlan = todayPlanSessionModel.prunePendingOffPlan(deps.state, early.planNames, loggedByEx);
 
-    const [{ allCardio, cardioEfforts, todaySettings }, lastSets, rxByEx] = await Promise.all([
+    const [{ allCardio, cardioEfforts, todaySettings }, lastSets, rxByEx, strengthJourney] = await Promise.all([
       todayPlanSessionData.loadCardioContext(items, deps.isToday, deps),
       todayPlanSessionData.loadLastSets([...early.planEx, ...pendingOffPlan.map((item) => item.name)], loggedByEx, deps),
       todayPlanSessionData.loadPrescriptions(deps.state.day, early.planEx, deps),
+      deps.api("/strength-journey")
+        .then((value) => value && typeof value === "object" ? value as TodayPlanSessionPrepStrengthJourney : null)
+        .catch(() => null),
     ]);
 
     const matchedCardio = todayPlanSessionModel.matchCardioEfforts(allCardio, cardioEfforts, deps.cardioEffortMatches);
@@ -234,6 +239,7 @@ type TodayPlanSessionPrepDataApi = {
       pendingOffPlan,
       lastSets,
       rxByEx,
+      strengthJourney,
       rxFor,
       prefillFor,
       exDone,

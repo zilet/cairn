@@ -2,7 +2,13 @@ import { db } from "../db.js";
 import { emitBrainEvent } from "../brainEvents.js";
 import { sessionNoteSuggestsFatigue } from "./training-fatigue.js";
 import { localDateISO } from "./shared.js";
-import { isStrengthGarminType, listActivities, listGarminActivities, listGarminDailyMetrics, listGarminSources } from "./activities.js";
+import {
+  isStrengthGarminType,
+  listActivities,
+  listGarminActivities,
+  listGarminDailyMetrics,
+  listGarminSources,
+} from "./activities.js";
 import { activitySportWhere, canonicalEnduranceSport } from "./endurance-sports.js";
 import { MUSCLE_LANDMARKS } from "./exercise-canon.js";
 import { effectiveVolumeByGroup, type VolumeSet } from "./exercise-variations.js";
@@ -22,6 +28,11 @@ import {
 } from "./training-cache.js";
 import { deriveSessionTitle } from "./training-read.js";
 import { canonicalBodyweightSeries, resolvedCurrentBodyweight } from "./bodyweight.js";
+import {
+  completeStrengthObjectiveFromLoggedSet,
+  reconcileStrengthObjectiveFromLoggedSets,
+  strengthJourneySessionMovement,
+} from "./strength-objective-ledger.js";
 
 // ---------- sessions ----------
 export function getOrCreateSession(date: string, planDayId?: number | null): any {
@@ -33,9 +44,7 @@ export function getOrCreateSession(date: string, planDayId?: number | null): any
     }
     return s;
   }
-  const info = db
-    .prepare(`INSERT INTO sessions (date, plan_day_id) VALUES (?, ?)`)
-    .run(date, planDayId ?? null);
+  const info = db.prepare(`INSERT INTO sessions (date, plan_day_id) VALUES (?, ?)`).run(date, planDayId ?? null);
   return db.prepare(`SELECT * FROM sessions WHERE id = ?`).get(info.lastInsertRowid);
 }
 
@@ -44,7 +53,11 @@ export function getOrCreateSession(date: string, planDayId?: number | null): any
 function hydrateSession(s: any) {
   if (!s) return s;
   let garmin: any = null;
-  try { garmin = s.garmin_json ? JSON.parse(s.garmin_json) : null; } catch { garmin = null; }
+  try {
+    garmin = s.garmin_json ? JSON.parse(s.garmin_json) : null;
+  } catch {
+    garmin = null;
+  }
   const { garmin_json, ...rest } = s;
   return { ...rest, garmin };
 }
@@ -81,16 +94,19 @@ export function getSessionByDate(date: string) {
 }
 
 export function getSessionDetail(id: number) {
-  const s = db.prepare(
-    `SELECT s.*, pd.name AS day_name FROM sessions s
+  const s = db
+    .prepare(
+      `SELECT s.*, pd.name AS day_name FROM sessions s
      LEFT JOIN plan_days pd ON pd.id = s.plan_day_id WHERE s.id = ?`
-  ).get(id) as any;
+    )
+    .get(id) as any;
   if (!s) return null;
   return {
     ...hydrateSession(s),
     title: deriveSessionTitle(s.id, s.plan_day_id, s.day_name),
     sets: setsForSession(id),
     skips: skipsForSession(id),
+    strength_journey_movement: s.finished_at ? strengthJourneySessionMovement(id) : null,
   };
 }
 
@@ -122,8 +138,9 @@ export function finishSession(sessionId: number, notes?: string | null) {
     const mins = Math.round((new Date(span.last + "Z").getTime() - new Date(span.first + "Z").getTime()) / 60000);
     if (mins > 0) duration_min = mins;
   }
-  db.prepare(`UPDATE sessions SET duration_min = ?, notes = COALESCE(?, notes), finished_at = datetime('now') WHERE id = ?`)
-    .run(duration_min, cleanNotes, sessionId);
+  db.prepare(
+    `UPDATE sessions SET duration_min = ?, notes = COALESCE(?, notes), finished_at = datetime('now') WHERE id = ?`
+  ).run(duration_min, cleanNotes, sessionId);
   bumpTrainingDataVersion();
   emitBrainEvent({
     kind: "session_finished",
@@ -196,9 +213,18 @@ export function setSessionFeedback(
   };
   const sets: string[] = [];
   const vals: any[] = [];
-  if (fields.soreness !== undefined) { sets.push("soreness = ?"); vals.push(fields.soreness == null ? null : clamp15(fields.soreness)); }
-  if (fields.performance !== undefined) { sets.push("performance = ?"); vals.push(fields.performance == null ? null : clamp15(fields.performance)); }
-  if (fields.joint_pain !== undefined) { sets.push("joint_pain = ?"); vals.push(fields.joint_pain == null ? null : String(fields.joint_pain).trim().slice(0, 300) || null); }
+  if (fields.soreness !== undefined) {
+    sets.push("soreness = ?");
+    vals.push(fields.soreness == null ? null : clamp15(fields.soreness));
+  }
+  if (fields.performance !== undefined) {
+    sets.push("performance = ?");
+    vals.push(fields.performance == null ? null : clamp15(fields.performance));
+  }
+  if (fields.joint_pain !== undefined) {
+    sets.push("joint_pain = ?");
+    vals.push(fields.joint_pain == null ? null : String(fields.joint_pain).trim().slice(0, 300) || null);
+  }
   if (sets.length) {
     vals.push(session.id);
     db.prepare(`UPDATE sessions SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
@@ -259,7 +285,10 @@ export function skipExercise(exercise: string, date?: string) {
       return {
         ok: false as const,
         error: "exercise already has logged sets this session",
-        date: d, exercise: name, session_id: session.id, skips: skipsForSession(session.id),
+        date: d,
+        exercise: name,
+        session_id: session.id,
+        skips: skipsForSession(session.id),
       };
     }
   }
@@ -297,7 +326,7 @@ export interface LogSetInput {
   exercise_mode?: string; // 'reps' | 'timed' — applied on create; updates mode if explicitly passed
   set_number?: number;
   date?: string;
-  day_number?: number;
+  day_number?: number | null;
   note?: string;
 }
 
@@ -328,7 +357,16 @@ function insertSetByName(input: LogSetInput, emitEffects: boolean) {
       `INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps, rir, note, duration_sec)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(session.id, ex.id, setNumber, input.weight ?? null, input.reps ?? null, input.rir ?? null, input.note ?? null, input.duration_sec ?? null);
+    .run(
+      session.id,
+      ex.id,
+      setNumber,
+      input.weight ?? null,
+      input.reps ?? null,
+      input.rir ?? null,
+      input.note ?? null,
+      input.duration_sec ?? null
+    );
 
   if (emitEffects) {
     bumpTrainingDataVersion(); // a new logged set moves lifts/volume/weekly reads
@@ -349,7 +387,9 @@ function insertSetByName(input: LogSetInput, emitEffects: boolean) {
   if (ex.mode === "timed") {
     if ((input.duration_sec ?? 0) > 0) {
       const prev = db
-        .prepare(`SELECT MAX(duration_sec) AS m FROM logged_sets WHERE exercise_id = ? AND id != ? AND duration_sec IS NOT NULL`)
+        .prepare(
+          `SELECT MAX(duration_sec) AS m FROM logged_sets WHERE exercise_id = ? AND id != ? AND duration_sec IS NOT NULL`
+        )
         .get(ex.id, info.lastInsertRowid) as any;
       pr = input.duration_sec! > (prev?.m ?? 0);
     }
@@ -362,6 +402,7 @@ function insertSetByName(input: LogSetInput, emitEffects: boolean) {
     // loaded working sets) so the two paths can never drift subtly apart.
     const prevBest = bestE1rm(prev);
     pr = est_1rm > prevBest;
+    if (emitEffects) completeStrengthObjectiveFromLoggedSet({ exercise: ex.name, est_1rm, date });
   }
 
   return {
@@ -426,14 +467,17 @@ export function importGarminActivitySets(input: {
     if (String(session.date) !== date) throw new Error(`Session ${sessionId} is not on ${date}`);
 
     let garmin: any = {};
-    try { garmin = session.garmin_json ? JSON.parse(session.garmin_json) : {}; } catch { garmin = {}; }
+    try {
+      garmin = session.garmin_json ? JSON.parse(session.garmin_json) : {};
+    } catch {
+      garmin = {};
+    }
     if (!garmin || typeof garmin !== "object" || Array.isArray(garmin)) garmin = {};
     const importedIds = Array.isArray(garmin.imported_set_activity_ids)
       ? [...new Set<string>(garmin.imported_set_activity_ids.map((id: any) => String(id)).filter(Boolean))]
       : [];
-    const storedAuthority = typeof garmin.cairn_sets_authoritative === "boolean"
-      ? garmin.cairn_sets_authoritative
-      : null;
+    const storedAuthority =
+      typeof garmin.cairn_sets_authoritative === "boolean" ? garmin.cairn_sets_authoritative : null;
     const alreadyImported = importedIds.includes(activityKey);
     const setCount = Number(
       (db.prepare(`SELECT COUNT(*) AS n FROM logged_sets WHERE session_id = ?`).get(sessionId) as any)?.n ?? 0
@@ -468,7 +512,11 @@ export function importGarminActivitySets(input: {
     }
     db.exec(`RELEASE ${savepoint}`);
   } catch (error) {
-    try { db.exec(`ROLLBACK TO ${savepoint}`); } finally { db.exec(`RELEASE ${savepoint}`); }
+    try {
+      db.exec(`ROLLBACK TO ${savepoint}`);
+    } finally {
+      db.exec(`RELEASE ${savepoint}`);
+    }
     throw error;
   }
 
@@ -499,27 +547,72 @@ export function deleteSet(id: number) {
 // every coach prompt, so a correction flows into future planning with no extra step.
 export function updateSet(
   id: number,
-  fields: { weight?: number | null; reps?: number | null; rir?: number | null; note?: string | null; duration_sec?: number | null }
+  fields: {
+    weight?: number | null;
+    reps?: number | null;
+    rir?: number | null;
+    note?: string | null;
+    duration_sec?: number | null;
+  }
 ) {
-  const cur = db.prepare(`SELECT id FROM logged_sets WHERE id = ?`).get(id) as any;
+  const cur = db
+    .prepare(
+      `SELECT ls.id, e.name AS exercise, s.date AS date
+       FROM logged_sets ls
+       JOIN exercises e ON e.id=ls.exercise_id
+       JOIN sessions s ON s.id=ls.session_id
+      WHERE ls.id=?`
+    )
+    .get(id) as any;
   if (!cur) return null;
-  const num = (v: any): number | null => (v == null ? null : (Number.isFinite(Number(v)) ? Number(v) : null));
+  const num = (v: any): number | null => (v == null ? null : Number.isFinite(Number(v)) ? Number(v) : null);
   const sets: string[] = [];
   const vals: any[] = [];
-  if (fields.weight !== undefined) { sets.push("weight = ?"); vals.push(num(fields.weight)); }
-  if (fields.reps !== undefined) { sets.push("reps = ?"); vals.push(num(fields.reps)); }
-  if (fields.rir !== undefined) { sets.push("rir = ?"); vals.push(num(fields.rir)); }
-  if (fields.duration_sec !== undefined) { sets.push("duration_sec = ?"); vals.push(num(fields.duration_sec)); }
-  if (fields.note !== undefined) { sets.push("note = ?"); vals.push(fields.note == null ? null : String(fields.note).trim().slice(0, 500) || null); }
+  if (fields.weight !== undefined) {
+    sets.push("weight = ?");
+    vals.push(num(fields.weight));
+  }
+  if (fields.reps !== undefined) {
+    sets.push("reps = ?");
+    vals.push(num(fields.reps));
+  }
+  if (fields.rir !== undefined) {
+    sets.push("rir = ?");
+    vals.push(num(fields.rir));
+  }
+  if (fields.duration_sec !== undefined) {
+    sets.push("duration_sec = ?");
+    vals.push(num(fields.duration_sec));
+  }
+  if (fields.note !== undefined) {
+    sets.push("note = ?");
+    vals.push(fields.note == null ? null : String(fields.note).trim().slice(0, 500) || null);
+  }
   if (sets.length) {
-    vals.push(id);
-    db.prepare(`UPDATE logged_sets SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
+    db.exec("SAVEPOINT update_set_correction");
+    try {
+      vals.push(id);
+      db.prepare(`UPDATE logged_sets SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
+      if (fields.weight !== undefined || fields.reps !== undefined) {
+        reconcileStrengthObjectiveFromLoggedSets({ exercise: cur.exercise, preferred_date: cur.date });
+      }
+      db.exec("RELEASE update_set_correction");
+    } catch (error) {
+      try {
+        db.exec("ROLLBACK TO update_set_correction");
+      } finally {
+        db.exec("RELEASE update_set_correction");
+      }
+      throw error;
+    }
     bumpTrainingDataVersion(); // an in-place set correction the SQL backstop can't see
   }
-  return db.prepare(
-    `SELECT ls.*, e.name AS exercise, e.mode AS mode FROM logged_sets ls
+  return db
+    .prepare(
+      `SELECT ls.*, e.name AS exercise, e.mode AS mode FROM logged_sets ls
      JOIN exercises e ON e.id = ls.exercise_id WHERE ls.id = ?`
-  ).get(id);
+    )
+    .get(id);
 }
 
 // Most recent logged set for an exercise across all sessions (for prefill).
@@ -558,14 +651,14 @@ function epley1RM(weight: number, reps: number): number {
 // much they've logged. The flat top-level fields mirror that lead sport for
 // back-compat with older callers.
 export interface SportBests {
-  sport: string;  // canonical key: "run" | "walk" | "ride" | "swim" | "row" | <raw>
-  label: string;  // display label, e.g. "Running" / "Cycling"
-  count: number;  // # of logged efforts with distance or duration (relevance/ordering)
+  sport: string; // canonical key: "run" | "walk" | "ride" | "swim" | "row" | <raw>
+  label: string; // display label, e.g. "Running" / "Cycling"
+  count: number; // # of logged efforts with distance or duration (relevance/ordering)
   paced: boolean; // pace (min/km) is the meaningful metric for this sport
   longest_km: { value: number; date: string; type: string } | null;
   longest_min: { value: number; date: string; type: string } | null;
   best_pace: { distance_km: number; min_per_km: number; date: string; type: string }[]; // paced sports only
-  best_speed_kmh: { value: number; date: string; type: string } | null;                 // non-paced sports only
+  best_speed_kmh: { value: number; date: string; type: string } | null; // non-paced sports only
 }
 export interface EndurancePRs {
   type: string | null;
@@ -595,8 +688,10 @@ function computeSportBests(key: string, label: string, paced: boolean, rows: any
     const hasKm = Number.isFinite(km) && km > 0;
     const hasMin = Number.isFinite(min) && min > 0;
     if (hasKm || hasMin) count++;
-    if (hasKm && (!longest_km || km > longest_km.value)) longest_km = { value: Math.round(km * 100) / 100, date: r.date, type: rowType };
-    if (hasMin && (!longest_min || min > longest_min.value)) longest_min = { value: Math.round(min), date: r.date, type: rowType };
+    if (hasKm && (!longest_km || km > longest_km.value))
+      longest_km = { value: Math.round(km * 100) / 100, date: r.date, type: rowType };
+    if (hasMin && (!longest_min || min > longest_min.value))
+      longest_min = { value: Math.round(min), date: r.date, type: rowType };
     // A pace/speed PR needs BOTH distance and duration.
     if (hasKm && hasMin) {
       if (paced) {
@@ -604,11 +699,13 @@ function computeSportBests(key: string, label: string, paced: boolean, rows: any
         for (const dist of PR_DISTANCES_KM) {
           if (km + 1e-9 < dist) continue; // effort didn't reach this distance
           const cur = bestPace.get(dist);
-          if (!cur || pace < cur.min_per_km) bestPace.set(dist, { min_per_km: Math.round(pace * 100) / 100, date: r.date, type: rowType });
+          if (!cur || pace < cur.min_per_km)
+            bestPace.set(dist, { min_per_km: Math.round(pace * 100) / 100, date: r.date, type: rowType });
         }
       } else {
         const kmh = (km / min) * 60; // km/h (higher is faster) — the metric riders read
-        if (!best_speed || kmh > best_speed.value) best_speed = { value: Math.round(kmh * 10) / 10, date: r.date, type: rowType };
+        if (!best_speed || kmh > best_speed.value)
+          best_speed = { value: Math.round(kmh * 10) / 10, date: r.date, type: rowType };
       }
     }
   }
@@ -617,28 +714,46 @@ function computeSportBests(key: string, label: string, paced: boolean, rows: any
     .sort((a, b) => a[0] - b[0])
     .map(([distance_km, v]) => ({ distance_km, min_per_km: v.min_per_km, date: v.date, type: v.type }));
 
-  return { sport: key, label, count, paced, longest_km, longest_min, best_pace, best_speed_kmh: paced ? null : best_speed };
+  return {
+    sport: key,
+    label,
+    count,
+    paced,
+    longest_km,
+    longest_min,
+    best_pace,
+    best_speed_kmh: paced ? null : best_speed,
+  };
 }
 
 export function getEndurancePRs(type?: string | null): EndurancePRs {
   const t = type != null && String(type).trim() ? String(type).trim().toLowerCase() : null;
-  const rows = (t
-    ? db.prepare(
-        `SELECT date, type, distance_km, duration_min FROM activities
+  const rows = (
+    t
+      ? db
+          .prepare(
+            `SELECT date, type, distance_km, duration_min FROM activities
          WHERE lower(COALESCE(type,'')) = ? AND (distance_km IS NOT NULL OR duration_min IS NOT NULL)
          ORDER BY date`
-      ).all(t)
-    : db.prepare(
-        `SELECT date, type, distance_km, duration_min FROM activities
+          )
+          .all(t)
+      : db
+          .prepare(
+            `SELECT date, type, distance_km, duration_min FROM activities
          WHERE (distance_km IS NOT NULL OR duration_min IS NOT NULL) ORDER BY date`
-      ).all()) as any[];
+          )
+          .all()
+  ) as any[];
 
   // Bucket every effort into its canonical sport, then compute that sport's own bests.
   const groups = new Map<string, { label: string; paced: boolean; rows: any[] }>();
   for (const r of rows) {
     const sp = canonicalEnduranceSport(r.type);
     let g = groups.get(sp.key);
-    if (!g) { g = { label: sp.label, paced: sp.paced, rows: [] }; groups.set(sp.key, g); }
+    if (!g) {
+      g = { label: sp.label, paced: sp.paced, rows: [] };
+      groups.set(sp.key, g);
+    }
     g.rows.push(r);
   }
 
@@ -676,7 +791,9 @@ export function getEndurancePRs(type?: string | null): EndurancePRs {
 // a date, so memoize on (date, training version + SQL backstop) and serve a
 // structuredClone. Single-slot — the hot path is always `today`.
 let weeklyStatsCache: { key: string; value: WeeklyStats } | null = null;
-registerTrainingCacheClear(() => { weeklyStatsCache = null; });
+registerTrainingCacheClear(() => {
+  weeklyStatsCache = null;
+});
 
 type WeeklyStats = ReturnType<typeof computeWeeklyStats>;
 
@@ -701,7 +818,9 @@ function computeWeeklyStats(date?: string) {
   const sixtyAgo = new Date(asOf - 60 * 864e5).toISOString().slice(0, 10);
 
   const weekSess = db
-    .prepare(`SELECT DISTINCT s.date FROM sessions s JOIN logged_sets l ON l.session_id = s.id WHERE s.date >= ? AND s.date <= ?`)
+    .prepare(
+      `SELECT DISTINCT s.date FROM sessions s JOIN logged_sets l ON l.session_id = s.id WHERE s.date >= ? AND s.date <= ?`
+    )
     .all(weekAgo, today) as any[];
   const ton = db
     .prepare(
@@ -712,18 +831,35 @@ function computeWeeklyStats(date?: string) {
   // ALL logged sets count here — including timed sets, which the tonnage math
   // above intentionally excludes (weight > 0 AND reps > 0).
   const weekSets = db
-    .prepare(`SELECT COUNT(*) AS c FROM logged_sets l JOIN sessions s ON s.id = l.session_id WHERE s.date >= ? AND s.date <= ?`)
+    .prepare(
+      `SELECT COUNT(*) AS c FROM logged_sets l JOIN sessions s ON s.id = l.session_id WHERE s.date >= ? AND s.date <= ?`
+    )
     .get(weekAgo, today) as any;
 
   const sessDates = new Set(
-    (db.prepare(`SELECT DISTINCT s.date AS d FROM sessions s JOIN logged_sets l ON l.session_id = s.id WHERE s.date >= ? AND s.date <= ?`).all(sixtyAgo, today) as any[]).map((r) => r.d)
+    (
+      db
+        .prepare(
+          `SELECT DISTINCT s.date AS d FROM sessions s JOIN logged_sets l ON l.session_id = s.id WHERE s.date >= ? AND s.date <= ?`
+        )
+        .all(sixtyAgo, today) as any[]
+    ).map((r) => r.d)
   );
-  const actDates = new Set((db.prepare(`SELECT DISTINCT date AS d FROM activities WHERE date >= ? AND date <= ?`).all(sixtyAgo, today) as any[]).map((r) => r.d));
+  const actDates = new Set(
+    (
+      db
+        .prepare(`SELECT DISTINCT date AS d FROM activities WHERE date >= ? AND date <= ?`)
+        .all(sixtyAgo, today) as any[]
+    ).map((r) => r.d)
+  );
   const active = (d: string) => sessDates.has(d) || actDates.has(d);
   let streak = 0;
   let t = new Date(today + "T00:00:00Z").getTime();
   if (!active(today)) t -= 864e5; // grace: an unbroken streak can end yesterday
-  while (active(new Date(t).toISOString().slice(0, 10))) { streak++; t -= 864e5; }
+  while (active(new Date(t).toISOString().slice(0, 10))) {
+    streak++;
+    t -= 864e5;
+  }
 
   // --- compass: plan adherence this calendar week + weight-trend pace vs goal ---
   // Monday-start week (the plan is weekly; the rolling-7d "sessions" count
@@ -735,7 +871,9 @@ function computeWeeklyStats(date?: string) {
   })();
   const nextMonday = new Date(new Date(monday + "T00:00:00Z").getTime() + 7 * 864e5).toISOString().slice(0, 10);
   const weekDone = db
-    .prepare(`SELECT COUNT(DISTINCT s.date) AS c FROM sessions s JOIN logged_sets l ON l.session_id = s.id WHERE s.date >= ? AND s.date < ?`)
+    .prepare(
+      `SELECT COUNT(DISTINCT s.date) AS c FROM sessions s JOIN logged_sets l ON l.session_id = s.id WHERE s.date >= ? AND s.date < ?`
+    )
     .get(monday, nextMonday) as any;
   const weekPlanned = db.prepare(`SELECT COUNT(*) AS c FROM plan_days`).get() as any;
   // Cardio this week (activities table) — so the "This Week" summary speaks to
@@ -762,13 +900,19 @@ function computeWeeklyStats(date?: string) {
     if (xs[xs.length - 1] - xs[0] >= 3) {
       const mx = xs.reduce((a, b) => a + b, 0) / xs.length;
       const my = ys.reduce((a, b) => a + b, 0) / ys.length;
-      let num = 0, den = 0;
-      for (let i = 0; i < xs.length; i++) { num += (xs[i] - mx) * (ys[i] - my); den += (xs[i] - mx) ** 2; }
+      let num = 0,
+        den = 0;
+      for (let i = 0; i < xs.length; i++) {
+        num += (xs[i] - mx) * (ys[i] - my);
+        den += (xs[i] - mx) ** 2;
+      }
       if (den > 0) trend = Math.round((num / den) * 7 * 10) / 10; // lb/day → lb/wk
     }
   }
 
-  const prof = db.prepare(`SELECT weight_lb, goal_weight_lb, goal_date, goal_mode FROM profile WHERE id = 1`).get() as any;
+  const prof = db
+    .prepare(`SELECT weight_lb, goal_weight_lb, goal_date, goal_mode FROM profile WHERE id = 1`)
+    .get() as any;
   const currentW = resolvedCurrentBodyweight(prof, today)?.weight_lb ?? null;
   const goalMode = effectiveGoalMode(currentW == null ? prof : { ...prof, weight_lb: currentW });
 
@@ -792,7 +936,8 @@ function computeWeeklyStats(date?: string) {
     if (trend != null && currentW != null) {
       const tooFast = currentW * 0.01; // >1% bodyweight/wk gain is fat-biased
       if (trend > tooFast) pace = "fast";
-      else if (trend >= gainRate - 0.15) pace = "on"; // building at/above the lean rate
+      else if (trend >= gainRate - 0.15)
+        pace = "on"; // building at/above the lean rate
       else pace = "behind"; // not building yet
     }
   } else {
@@ -810,11 +955,21 @@ function computeWeeklyStats(date?: string) {
   }
 
   return {
-    week_sessions: weekSess.length, week_tonnage: Math.round(ton.t || 0), week_sets: Number(weekSets?.c ?? 0), streak,
-    week_done: Number(weekDone?.c ?? 0), week_planned: Number(weekPlanned?.c ?? 0),
-    week_cardio: Number(weekCardio?.c ?? 0), week_cardio_km: Math.round(Number(weekCardio?.km ?? 0) * 10) / 10,
-    trend_lb_wk: trend, needed_lb_wk: needed, pace_status: pace, goal_mode: goalMode,
-    weight_lb: currentW, goal_weight_lb: prof?.goal_weight_lb ?? null, goal_date: prof?.goal_date ?? null,
+    week_sessions: weekSess.length,
+    week_tonnage: Math.round(ton.t || 0),
+    week_sets: Number(weekSets?.c ?? 0),
+    streak,
+    week_done: Number(weekDone?.c ?? 0),
+    week_planned: Number(weekPlanned?.c ?? 0),
+    week_cardio: Number(weekCardio?.c ?? 0),
+    week_cardio_km: Math.round(Number(weekCardio?.km ?? 0) * 10) / 10,
+    trend_lb_wk: trend,
+    needed_lb_wk: needed,
+    pace_status: pace,
+    goal_mode: goalMode,
+    weight_lb: currentW,
+    goal_weight_lb: prof?.goal_weight_lb ?? null,
+    goal_date: prof?.goal_date ?? null,
     // Endurance/runner-first weekly read (v35) — additive; existing consumers ignore.
     endurance,
   };
@@ -1045,17 +1200,19 @@ export interface RunCompliance {
   actual_sessions: number;
   actual_km: number;
   actual_min: number;
-  pct_km: number | null;  // actual_km / prescribed_km when prescribed_km>0, else null — a proportion, never a 0-100 grade
+  pct_km: number | null; // actual_km / prescribed_km when prescribed_km>0, else null — a proportion, never a 0-100 grade
   in_words: string;
 }
 
 export function getRunCompliance(weekStartISO?: string): RunCompliance {
   // Monday-anchored week start (mirror computeEnduranceWeekly / getWeeklyStats).
-  const monday = weekStartISO || (() => {
-    const d = new Date(localDateISO() + "T00:00:00Z");
-    d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
-    return d.toISOString().slice(0, 10);
-  })();
+  const monday =
+    weekStartISO ||
+    (() => {
+      const d = new Date(localDateISO() + "T00:00:00Z");
+      d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+      return d.toISOString().slice(0, 10);
+    })();
   const nextMonday = new Date(new Date(monday + "T00:00:00Z").getTime() + 7 * 864e5).toISOString().slice(0, 10);
 
   // Prescribed: the current plan's cardio items.
@@ -1100,16 +1257,26 @@ export function getRunCompliance(weekStartISO?: string): RunCompliance {
   // native unit); fall back to session count when there's no prescribed mileage.
   let in_words: string;
   if (prescribed_sessions === 0) {
-    in_words = actual_sessions > 0
-      ? `${actual_sessions} run${actual_sessions === 1 ? "" : "s"} this week, none prescribed`
-      : "no runs prescribed this week";
+    in_words =
+      actual_sessions > 0
+        ? `${actual_sessions} run${actual_sessions === 1 ? "" : "s"} this week, none prescribed`
+        : "no runs prescribed this week";
   } else if (prescribed_km > 0) {
     in_words = `${actual_km} of ${prescribed_km} km this week`;
   } else {
     in_words = `${actual_sessions} of ${prescribed_sessions} run${prescribed_sessions === 1 ? "" : "s"} this week`;
   }
 
-  return { prescribed_sessions, prescribed_km, prescribed_min, actual_sessions, actual_km, actual_min, pct_km, in_words };
+  return {
+    prescribed_sessions,
+    prescribed_km,
+    prescribed_min,
+    actual_sessions,
+    actual_km,
+    actual_min,
+    pct_km,
+    in_words,
+  };
 }
 
 export function getVolumeByMuscle(days = 30) {
@@ -1197,9 +1364,7 @@ export function getTrainingCalendar(days = 84) {
   for (const r of actMinRows) minutesMap.set(r.date, (minutesMap.get(r.date) ?? 0) + (r.min ?? 0));
 
   // Activity days.
-  const actRows = db
-    .prepare(`SELECT DISTINCT date FROM activities WHERE date >= ?`)
-    .all(cutoff) as any[];
+  const actRows = db.prepare(`SELECT DISTINCT date FROM activities WHERE date >= ?`).all(cutoff) as any[];
   const actDates = new Set(actRows.map((r: any) => r.date as string));
 
   const cells = dates.map((date) => {
@@ -1330,6 +1495,10 @@ export function exportAll() {
     plan: getPlan(),
     exercises: listExercises(),
     sessions: getRecentSessions(100000),
+    // The athlete-selected anchor and its immutable target snapshot are durable
+    // coaching state, not a derived card. Keep superseded rows for a lossless
+    // history just like memories and brain decisions.
+    strength_objectives: db.prepare(`SELECT * FROM strength_objectives ORDER BY id DESC`).all(),
     activities: listActivities(100000),
     // Include superseded rows in the export — they're history we MARK rather than
     // destroy, so a backup/restore is lossless.
@@ -1422,8 +1591,8 @@ export function getProgress(exerciseName: string) {
     // Rank sets: a non-null 1RM always beats a null one; among non-nulls, higher wins.
     const betterThan = (candidate: number | null): boolean => {
       if (!cur) return true;
-      if (candidate === null) return false;          // a null can't beat anything
-      if (cur.best1rm === null) return true;         // anything beats null
+      if (candidate === null) return false; // a null can't beat anything
+      if (cur.best1rm === null) return true; // anything beats null
       return candidate > cur.best1rm;
     };
     if (betterThan(best1rm)) {
@@ -1498,12 +1667,16 @@ function window7(dateISO: string): { start: string; end: string } {
 // activity dates), scoped to the window.
 function trainedDays7(dateISO: string): number {
   const { start, end } = window7(dateISO);
-  const sessDates = (db
-    .prepare(`SELECT DISTINCT s.date AS d FROM sessions s JOIN logged_sets l ON l.session_id = s.id WHERE s.date >= ? AND s.date <= ?`)
-    .all(start, end) as any[]).map((r) => r.d);
-  const actDates = (db
-    .prepare(`SELECT DISTINCT date AS d FROM activities WHERE date >= ? AND date <= ?`)
-    .all(start, end) as any[]).map((r) => r.d);
+  const sessDates = (
+    db
+      .prepare(
+        `SELECT DISTINCT s.date AS d FROM sessions s JOIN logged_sets l ON l.session_id = s.id WHERE s.date >= ? AND s.date <= ?`
+      )
+      .all(start, end) as any[]
+  ).map((r) => r.d);
+  const actDates = (
+    db.prepare(`SELECT DISTINCT date AS d FROM activities WHERE date >= ? AND date <= ?`).all(start, end) as any[]
+  ).map((r) => r.d);
   return new Set([...sessDates, ...actDates]).size;
 }
 
@@ -1527,7 +1700,10 @@ function groupByExercise(rows: SessionSet[]): Map<number, ExerciseGroup> {
   for (const r of rows) {
     const exId = Number(r.exercise_id);
     let g = map.get(exId);
-    if (!g) { g = { exId, name: String(r.exercise), mode: String(r.mode ?? "reps"), exSets: [] }; map.set(exId, g); }
+    if (!g) {
+      g = { exId, name: String(r.exercise), mode: String(r.mode ?? "reps"), exSets: [] };
+      map.set(exId, g);
+    }
     g.exSets.push(r);
   }
   return map;
@@ -1555,9 +1731,13 @@ function topRepsSet(sets: SessionSet[]): SessionSet | null {
     if (!(reps > 0)) continue;
     if (w != null && w > 0) {
       const e = epley1RM(w, reps);
-      if (e > loadedE) { loadedE = e; loaded = s; }
+      if (e > loadedE) {
+        loadedE = e;
+        loaded = s;
+      }
     } else if (w != null && w < 0) {
-      if (!assisted || w > Number(assisted.weight) || (w === Number(assisted.weight) && reps > Number(assisted.reps))) assisted = s;
+      if (!assisted || w > Number(assisted.weight) || (w === Number(assisted.weight) && reps > Number(assisted.reps)))
+        assisted = s;
     } else if (!bodyweight || reps > Number(bodyweight.reps)) {
       bodyweight = s;
     }
@@ -1597,7 +1777,11 @@ function prsForSession(
       if (sessionBest > bestE1rm(prior)) {
         const win = topRepsSet(exSets);
         if (win && Number(win.weight) > 0) {
-          out.push({ exercise: name, kind: "e1rm", label: `${fmtWeight(Number(win.weight))} lb × ${Number(win.reps)} — new best` });
+          out.push({
+            exercise: name,
+            kind: "e1rm",
+            label: `${fmtWeight(Number(win.weight))} lb × ${Number(win.reps)} — new best`,
+          });
         }
       }
     }
@@ -1616,7 +1800,8 @@ function describePrev(mode: string, prevSets: SessionSet[], prevDate: string): s
   if (top) {
     const w = top.weight == null ? null : Number(top.weight);
     if (w != null && w > 0) return `${fmtWeight(w)} × ${Number(top.reps)} on ${shortDate(prevDate)}`;
-    if (w != null && w < 0) return `${fmtWeight(Math.abs(w))} lb assist × ${Number(top.reps)} on ${shortDate(prevDate)}`;
+    if (w != null && w < 0)
+      return `${fmtWeight(Math.abs(w))} lb assist × ${Number(top.reps)} on ${shortDate(prevDate)}`;
     return `${Number(top.reps)} reps on ${shortDate(prevDate)}`;
   }
   return `logged on ${shortDate(prevDate)}`;
@@ -1634,7 +1819,13 @@ interface Comparison {
 // is compared with like (loaded↔loaded, assisted↔assisted, bodyweight↔bodyweight,
 // timed↔timed). LESS assistance counts as an improvement (direction up). A type
 // mismatch degrades to a fair label with direction:null rather than a wrong sign.
-function buildComparison(name: string, mode: string, curSets: SessionSet[], prevSets: SessionSet[], prevDate: string): Comparison {
+function buildComparison(
+  name: string,
+  mode: string,
+  curSets: SessionSet[],
+  prevSets: SessionSet[],
+  prevDate: string
+): Comparison {
   const base = { exercise: name, prev_date: prevDate };
   if (mode === "timed") {
     const cur = bestDuration(curSets);
@@ -1652,10 +1843,12 @@ function buildComparison(name: string, mode: string, curSets: SessionSet[], prev
   }
   const cur = topRepsSet(curSets);
   const prev = topRepsSet(prevSets);
-  if (!cur || !prev) return { ...base, prev_label: describePrev(mode, prevSets, prevDate), delta_label: null, direction: null };
+  if (!cur || !prev)
+    return { ...base, prev_label: describePrev(mode, prevSets, prevDate), delta_label: null, direction: null };
   const ct = weightType(cur.weight);
   const pt = weightType(prev.weight);
-  if (ct !== pt) return { ...base, prev_label: describePrev(mode, prevSets, prevDate), delta_label: null, direction: null };
+  if (ct !== pt)
+    return { ...base, prev_label: describePrev(mode, prevSets, prevDate), delta_label: null, direction: null };
 
   if (ct === "loaded") {
     const cw = Number(cur.weight);
@@ -1663,7 +1856,12 @@ function buildComparison(name: string, mode: string, curSets: SessionSet[], prev
     const prev_label = `${fmtWeight(pw)} × ${Number(prev.reps)} on ${shortDate(prevDate)}`;
     if (cw !== pw) {
       const d = cw - pw;
-      return { ...base, prev_label, delta_label: `${d > 0 ? "+" : "-"}${fmtWeight(Math.abs(d))} lb`, direction: d > 0 ? "up" : "down" };
+      return {
+        ...base,
+        prev_label,
+        delta_label: `${d > 0 ? "+" : "-"}${fmtWeight(Math.abs(d))} lb`,
+        direction: d > 0 ? "up" : "down",
+      };
     }
     const dr = Number(cur.reps) - Number(prev.reps);
     if (dr !== 0) return { ...base, prev_label, delta_label: fmtReps(dr), direction: dr > 0 ? "up" : "down" };
@@ -1681,7 +1879,12 @@ function buildComparison(name: string, mode: string, curSets: SessionSet[], prev
   const prev_label = `${fmtWeight(pa)} lb assist × ${Number(prev.reps)} on ${shortDate(prevDate)}`;
   if (ca !== pa) {
     const d = pa - ca; // >0 → less assist now → improvement
-    return { ...base, prev_label, delta_label: `${fmtWeight(Math.abs(d))} lb ${d > 0 ? "less" : "more"} assist`, direction: d > 0 ? "up" : "down" };
+    return {
+      ...base,
+      prev_label,
+      delta_label: `${fmtWeight(Math.abs(d))} lb ${d > 0 ? "less" : "more"} assist`,
+      direction: d > 0 ? "up" : "down",
+    };
   }
   const dr = Number(cur.reps) - Number(prev.reps);
   if (dr !== 0) return { ...base, prev_label, delta_label: fmtReps(dr), direction: dr > 0 ? "up" : "down" };
@@ -1697,7 +1900,13 @@ function comparisonsForSession(sessionId: number, date: string, sets?: SessionSe
                 WHERE l.exercise_id = ? AND s.date < ? ORDER BY s.date DESC LIMIT 1`)
       .get(exId, date) as any;
     if (!prev) {
-      out.push({ exercise: name, prev_date: null, prev_label: "first time logged", delta_label: null, direction: null });
+      out.push({
+        exercise: name,
+        prev_date: null,
+        prev_label: "first time logged",
+        delta_label: null,
+        direction: null,
+      });
       continue;
     }
     const prevDate = String(prev.date);
@@ -1712,7 +1921,10 @@ function comparisonsForSession(sessionId: number, date: string, sets?: SessionSe
 
 // Raw PR events (one per session×exercise that set a new best) over a window, oldest
 // first — the shared basis for the week rollup count and the week-wins list.
-function prEventsInWindow(startISO: string, endISO: string): Array<{ exercise: string; kind: "e1rm" | "duration"; label: string; date: string }> {
+function prEventsInWindow(
+  startISO: string,
+  endISO: string
+): Array<{ exercise: string; kind: "e1rm" | "duration"; label: string; date: string }> {
   const sessions = db
     .prepare(`SELECT DISTINCT s.id AS id, s.date AS date FROM sessions s
               JOIN logged_sets l ON l.session_id = s.id WHERE s.date >= ? AND s.date <= ? ORDER BY s.date, s.id`)
@@ -1756,7 +1968,8 @@ export function weekWins(date?: string) {
   // earlier one — events arrive oldest-first, so the last write is the newest label),
   // sorted newest-first: a calm display list, not a raw event stream.
   const byExercise = new Map<string, { exercise: string; label: string; date: string }>();
-  for (const e of prEventsInWindow(start, end)) byExercise.set(e.exercise, { exercise: e.exercise, label: e.label, date: e.date });
+  for (const e of prEventsInWindow(start, end))
+    byExercise.set(e.exercise, { exercise: e.exercise, label: e.label, date: e.date });
   const prs = [...byExercise.values()]
     .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
     .map(({ exercise, label }) => ({ exercise, label }));

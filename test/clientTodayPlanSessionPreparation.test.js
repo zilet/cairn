@@ -148,6 +148,6 @@ test("Today plan/session preparation assembles cardio, pending off-plan, prescri
   assert.equal(result.rxFor("Bench").action, "overload");
   assert.equal(result.hasSyncedCardioToday, true);
   assert.equal(result.expectingRun, false);
-  assert.deepEqual(apiRequests, ["/cardio?date=2026-06-30", "/settings"]);
+  assert.deepEqual(apiRequests, ["/cardio?date=2026-06-30", "/settings", "/strength-journey"]);
   assert.equal(cachedRequests.some((request) => request.path === "/program/progression?day=1"), true);
 });

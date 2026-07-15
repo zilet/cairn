@@ -6,6 +6,7 @@ type TodayPlanSurfaceRendererRecord = Record<string, unknown>;
 type TodayPlanSurfaceRendererItem = TodayPlanSurfaceRendererRecord & {
   exercise?: unknown;
 };
+type TodayPlanSurfaceRendererJourney = import("../contracts/client-api.js").ClientStrengthJourney;
 type TodayPlanSurfaceRendererPendingOffPlan = {
   name: string;
   mode?: string | null;
@@ -43,6 +44,7 @@ type TodayPlanSurfaceRendererOptions = {
   pendingOffPlan: TodayPlanSurfaceRendererPendingOffPlan[];
   lastSets: Record<string, TodayPlanSurfaceRendererLastSet | null | undefined>;
   rxByEx: Record<string, unknown>;
+  strengthJourney: TodayPlanSurfaceRendererJourney | null;
   exDone: number;
   exTotal: number;
   hasSyncedCardioToday: boolean;
@@ -75,6 +77,39 @@ type TodayPlanSurfaceRendererApi = {
 };
 
 (() => {
+  function sameJourneyExercise(left: unknown, right: unknown): boolean {
+    return String(left || "").trim().toLowerCase() === String(right || "").trim().toLowerCase();
+  }
+
+  function journeyItem(
+    item: TodayPlanSurfaceRendererItem,
+    day: TodayPlanSurfaceRendererRecord,
+    journey: TodayPlanSurfaceRendererJourney | null,
+  ): TodayPlanSurfaceRendererItem {
+    const exercise = String(item.exercise || "");
+    const objective = journey?.available ? journey.objective : null;
+    if (!objective?.exercise || !exercise) return item;
+    if (sameJourneyExercise(exercise, objective.exercise)) {
+      const current = journey?.current;
+      const gap = journey?.gap_lb;
+      const line = objective.status === "completed"
+        ? "Anchor milestone complete — keep this lift steady and consolidate it."
+        : journey?.phase === "protecting"
+          ? "Anchor lift — hold or ease today; the relevant safety signal takes priority."
+          : current
+            ? `Anchor lift — ${Number(current.est_1rm).toFixed(1)} lb estimated 1RM on ${current.date}${Number(gap) > 0 ? ` · ${Number(gap).toFixed(1)} lb to target` : ""}.`
+            : "Anchor lift — establish one clean exact-lift checkpoint today.";
+      return { ...item, journey_role: "anchor", journey_line: line };
+    }
+    const dayNumber = Number(day.day_number);
+    const support = (Array.isArray(journey?.planned_support) ? journey.planned_support : []).find((entry) =>
+      sameJourneyExercise(entry.exercise, exercise) && Number(entry.plan_day_number) === dayNumber
+    );
+    return support
+      ? { ...item, journey_role: "support", journey_line: `${support.role} for ${objective.exercise} — ${support.why}` }
+      : item;
+  }
+
   function orderedSurfaceItems(options: TodayPlanSurfaceRendererOptions, deps: TodayPlanSurfaceRendererDeps): TodayPlanSurfaceRendererItem[] {
     if (options.isRunDay || options.cardioItems.length > 1 || (options.cardioItems.length && options.strengthItems.length)) {
       return [
@@ -134,7 +169,7 @@ type TodayPlanSurfaceRendererApi = {
       }
       const exerciseName = String(item.exercise || "");
       html += deps.exCard(
-        { ...item, fromPlan: true },
+        { ...journeyItem(item, options.day, options.strengthJourney), fromPlan: true },
         options.loggedByEx[exerciseName] || [],
         options.prefillFor(item),
         cardIdx++,

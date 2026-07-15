@@ -85,6 +85,31 @@ CREATE INDEX IF NOT EXISTS idx_sets_session ON logged_sets(session_id);
 CREATE INDEX IF NOT EXISTS idx_sets_exercise ON logged_sets(exercise_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_date ON sessions(date);
 
+-- One athlete-selected anchor lift for the current strength comeback. The target
+-- is snapped when the objective is created (a then-current personal best or an
+-- explicit est-1RM), so later history never moves the finish line. Old objectives
+-- stay as history when a new one supersedes them.
+CREATE TABLE IF NOT EXISTS strength_objectives (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  exercise TEXT NOT NULL,
+  exercise_key TEXT NOT NULL,
+  target_kind TEXT NOT NULL,             -- return_to_personal_best | explicit_est_1rm
+  target_est_1rm REAL NOT NULL,           -- immutable snapshot for this objective
+  baseline_est_1rm REAL,                  -- latest exact-lift estimate when selected
+  baseline_date TEXT,
+  source TEXT NOT NULL DEFAULT 'user',    -- objectives are athlete-selected only
+  status TEXT NOT NULL DEFAULT 'active',  -- active | superseded | completed | archived
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  superseded_at TEXT,
+  completed_at TEXT,
+  achieved_est_1rm REAL,
+  achieved_date TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_strength_objectives_status ON strength_objectives(status, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_strength_objectives_one_active
+  ON strength_objectives(status) WHERE status = 'active';
+
 -- Planned exercises consciously skipped ("not today") for one session. A skip
 -- only holds while the exercise has no logged sets that session — logging wins.
 CREATE TABLE IF NOT EXISTS session_skips (

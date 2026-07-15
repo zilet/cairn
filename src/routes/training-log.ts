@@ -11,6 +11,7 @@ import {
   getEndurancePRs,
   getLastSet,
   getProgress,
+  getStrengthJourney,
   getRecentSessions,
   getRunCompliance,
   getSessionByDate,
@@ -21,9 +22,11 @@ import {
   listActivities,
   logSetByName,
   recentTraining,
+  resolveImplicitPlanDay,
   reopenSession,
   sessionHighlights,
   setSessionFeedback,
+  setStrengthObjective,
   skipExercise,
   trainingLoadBand,
   unskipExercise,
@@ -136,7 +139,7 @@ trainingLogRouter.post("/sets", (req, res) => {
   try {
     const b = req.body ?? {};
     if (!b.exercise) return res.status(400).json({ error: "exercise is required" });
-    res.json(logSetByName(b));
+    res.json(logSetByName(resolveImplicitPlanDay(b)));
   } catch (e: any) {
     res.status(400).json({ error: e.message });
   }
@@ -164,6 +167,24 @@ trainingLogRouter.put("/sets/:id", (req, res) => {
 trainingLogRouter.get("/progress/:exercise", (req, res) =>
   res.json(getProgress(decodeURIComponent(req.params.exercise)))
 );
+
+// One explicit athlete-selected anchor lift. GET is strictly read-only; PUT snaps
+// the target now and supersedes the prior active objective atomically.
+trainingLogRouter.get("/strength-journey", (_req, res) => res.json(getStrengthJourney()));
+
+trainingLogRouter.put("/strength-journey", (req, res) => {
+  try {
+    const body = req.body ?? {};
+    const objective = setStrengthObjective({
+      exercise: body.exercise,
+      target_kind: body.target_kind,
+      target_est_1rm: body.target_est_1rm,
+    });
+    res.json({ objective, journey: getStrengthJourney() });
+  } catch (error: any) {
+    res.status(400).json({ error: error?.message ?? String(error) });
+  }
+});
 
 // ---- activities (free text or structured) ----
 trainingLogRouter.post("/activities", (req, res) => {

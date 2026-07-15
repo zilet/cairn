@@ -3207,6 +3207,7 @@ declare global {
       paint(data: ClientProgramState, deps: ClientProgressProgramControllerDeps): void;
       triggerProgramEvolve(btn: Element, deps: ClientProgressProgramControllerDeps): Promise<void>;
       tidyExerciseNames(btn: Element, deps: ClientProgressProgramControllerDeps): Promise<void>;
+      strengthJourneyCardHtml(value: unknown): string;
     };
 
     CairnProgressJourney: ClientProgressJourneyApi;
@@ -3471,6 +3472,7 @@ declare global {
           pendingOffPlan: Array<{ name: string; mode?: string | null }>;
           lastSets: Record<string, Record<string, unknown> | null>;
           rxByEx: Record<string, unknown>;
+          strengthJourney: ClientStrengthJourney | null;
           rxFor(name: unknown): unknown;
           prefillFor(item: Record<string, unknown>): Record<string, unknown>;
           exDone: number;
@@ -3624,6 +3626,7 @@ declare global {
           pendingOffPlan: Array<{ name: string; mode?: string | null }>;
           lastSets: Record<string, Record<string, unknown> | null | undefined>;
           rxByEx: Record<string, unknown>;
+          strengthJourney: ClientStrengthJourney | null;
           exDone: number;
           exTotal: number;
           hasSyncedCardioToday: boolean;

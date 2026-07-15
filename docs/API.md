@@ -9,7 +9,7 @@ Health's short-lived pairing exchange is public and passes through the instance-
 when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**260 routes** across 96 groups.
+**265 routes** across 98 groups.
 
 ## `/activities`
 
@@ -422,6 +422,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/mealplans` |  |
+| GET | `/api/mealplans/:id` |  |
 | POST | `/api/mealplans/:id/:status` |  |
 
 ## `/memory`
@@ -489,6 +490,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | GET | `/api/plan/:day` |  |
 | PUT | `/api/plan/:day` |  |
 | PUT | `/api/plan/:day/target` |  |
+| GET | `/api/plan/quality` |  |
 | GET | `/api/plan/recovery-status` | The recovery-week story for the Plan surface: a waiting draft ('drafted'), the applied lighter week in flight ('applied', ~a week from the apply stamp), or null. The Plan tab's banner reads this so a reshaped week announces itself — heads-up + what changed — instead of arriving silently. |
 | GET | `/api/plan/upcoming` | A calm forward look for the Plan surface: the training/recovery changes the brain will land soon (a recovery week landing Monday, a bounded target change), so a reshaped week announces itself instead of arriving silently. Deduped against the recovery banner's draft; null when nothing is waiting. |
 
@@ -642,6 +644,13 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 |---|---|---|
 | GET | `/api/stats` |  |
 
+## `/strength-journey`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/strength-journey` | One explicit athlete-selected anchor lift. GET is strictly read-only; PUT snaps the target now and supersedes the prior active objective atomically. |
+| PUT | `/api/strength-journey` |  |
+
 ## `/suggestions`
 
 | Method | Path | Notes |
@@ -689,6 +698,12 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 |---|---|---|
 | GET | `/api/today-agenda` | The Today salience arbiter: ONE ranking + budget pass over the whole Today surface, so only the 1-2 things that matter most today render inline and the rest collapse behind a quiet "more". Marking "seen" at the end (debounced) powers the "since you last looked" continuity line. |
 | POST | `/api/today-agenda/ack` | Presentation acknowledgement only: this retires the current semantic revision from Today without resolving or dismissing the underlying health directives. Materially new evidence creates a new revision and may surface again. |
+
+## `/today-plan-day`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/today-plan-day` | Canonical implicit plan-day choice for Today/Session. Manual day selection is an explicit client override and therefore does not call this route. The public DTO is deliberately bounded: internal candidate scores and load arrays stay on the server. |
 
 ## `/today-read`
 

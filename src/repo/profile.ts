@@ -15,7 +15,15 @@ import { estimateExpenditure } from "./expenditure.js";
 import { lsqSlopePerDay } from "./health.js";
 import { invalidateDayRead } from "./intelligence.js";
 import { getLatestNutritionTarget, setNutritionTarget } from "./nutrition.js";
-import { type ClampAdjustment, type RunPrescription, applyPlanChange, replacePlan, setWeeklyRuns } from "./plan.js";
+import {
+  type ClampAdjustment,
+  type RunPrescription,
+  applyPlanChange,
+  getPlan,
+  replacePlan,
+  setWeeklyRuns,
+} from "./plan.js";
+import { PlanQualityError, type PlanQualityReport, qualityIssueKey, validateTrainingPlan } from "./plan-quality.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { latestMeasuredRmr, measuredRmrAssessment } from "./metabolism.js";
 import { getProgress } from "./sessions.js";
@@ -96,9 +104,12 @@ function hydrateProposal(row: any) {
   };
 }
 
-export function setProposalStatus(id: number, status: string) {
+export function setProposalStatus(id: number, status: string, opts: { deferTrainingVersionBump?: boolean } = {}) {
   db.prepare(`UPDATE plan_proposals SET status = ? WHERE id = ?`).run(status, id);
-  bumpTrainingDataVersion(); // proposal state feeds the conductor's memoized read
+  // applyProposal batches the plan mutation and its proposal-state transition into
+  // one logical cache invalidation after the SQL unit commits. Other callers keep
+  // the immediate invalidation contract.
+  if (!opts.deferTrainingVersionBump) bumpTrainingDataVersion(); // proposal state feeds the conductor's memoized read
   // A retired draft (the user's explicit discard, or a fresher draft superseding it)
   // makes any standing announced/pending brain decision pointing at it MOOT — cancel
   // those decisions NOW so the boundary pass can never apply a proposal that is no
@@ -117,7 +128,7 @@ export function setProposalStatus(id: number, status: string) {
 // 'superseded' (the system retiring them), distinct from a user 'discarded'. Scoped
 // to training drafts only: an advisory nutrition_target draft is a different category
 // (surfaced via Energy Balance) and is left untouched.
-function supersedeSiblingTrainingDrafts(appliedId: number) {
+function supersedeSiblingTrainingDrafts(appliedId: number, opts: { deferTrainingVersionBump?: boolean } = {}) {
   const drafts = db
     .prepare(`SELECT id, parsed_json FROM plan_proposals WHERE status = 'draft' AND id != ?`)
     .all(appliedId) as any[];
@@ -131,7 +142,7 @@ function supersedeSiblingTrainingDrafts(appliedId: number) {
     if (kind === "nutrition_target") continue; // different category — leave it
     // Through setProposalStatus so any standing announced/pending decision on the
     // retired draft is canceled too (the boundary pass must never apply it).
-    setProposalStatus(Number(d.id), "superseded");
+    setProposalStatus(Number(d.id), "superseded", opts);
   }
 }
 
@@ -386,7 +397,8 @@ function clampNutritionTarget(
 
 function reviewedNutritionTargetIncompatibility(nutrition: any): string | null {
   const reviewed = Number(nutrition?.target_kcal);
-  if (!Number.isFinite(reviewed)) return "Nutrition target needs review: the proposed calorie target is missing or invalid.";
+  if (!Number.isFinite(reviewed))
+    return "Nutrition target needs review: the proposed calorie target is missing or invalid.";
   let goal: any = null;
   try {
     goal = computeGoalCheck();
@@ -826,11 +838,14 @@ export function applyProposal(id: number, opts: { supersedeSiblings?: boolean; d
   }
   // Restructure proposal: full plan replacement (changed frequency / split).
   if (Array.isArray(p.parsed.days)) {
+    const quality = validateTrainingPlan(p.parsed.days);
+    if (!quality.ok)
+      throw new Error(`Plan quality check failed: ${quality.errors.map((entry) => entry.message).join(" ")}`);
     replacePlan(p.parsed.days);
     setProposalStatus(id, "applied");
     stampRecoveryWeekIfApplies(p);
     if (opts.supersedeSiblings !== false) supersedeSiblingTrainingDrafts(id);
-    const result = { ok: true, id, restructured: true, days: p.parsed.days.length };
+    const result = { ok: true, id, restructured: true, days: p.parsed.days.length, quality };
     recordAppliedProposalDecision(p, result, opts.decisionId);
     return result;
   }
@@ -846,6 +861,10 @@ export function applyProposal(id: number, opts: { supersedeSiblings?: boolean; d
   const skipped: any[] = [];
   const clamped: ClampAdjustment[] = [];
   const cardioRuns: any[] = [];
+  let caughtQuality: PlanQualityReport | null = null;
+  const savepoint = `apply_plan_proposal_${Math.trunc(Number(id))}`;
+  const beforeQuality = validateTrainingPlan(getPlan());
+  db.exec(`SAVEPOINT ${savepoint}`);
   for (const c of hasChanges ? p.parsed.changes : []) {
     try {
       // A cardio entry inside `changes` has no loaded exercise to tweak — route it to
@@ -859,11 +878,18 @@ export function applyProposal(id: number, opts: { supersedeSiblings?: boolean; d
       // applyPlanChange UPSERTS: it updates the matching prescription, or ADDS the
       // movement when it isn't on that day yet (an UPDATE that matched zero rows used
       // to be silently reported as "applied" — that lie is fixed here + below).
-      const r = applyPlanChange(c, { clamp: true });
+      const r = applyPlanChange(c, {
+        clamp: true,
+        defer_cache_bump: true,
+        defer_day_read_invalidation: true,
+      });
       if (Array.isArray(r.clamped)) clamped.push(...r.clamped);
-      if (r.action === "added") added.push({ ...c, exercise: r.exercise });
-      else applied.push({ ...c, exercise: r.exercise, updated: r.updated });
+      if (r.action === "added") added.push({ ...c, ...r });
+      else applied.push({ ...c, ...r });
     } catch (e: any) {
+      if (e instanceof PlanQualityError || (e?.name === "PlanQualityError" && e?.report)) {
+        caughtQuality = e.report as PlanQualityReport;
+      }
       skipped.push({ ...c, error: e.message });
     }
   }
@@ -871,10 +897,57 @@ export function applyProposal(id: number, opts: { supersedeSiblings?: boolean; d
   let runs: { applied: any[] } | undefined;
   if (cardioRuns.length) {
     try {
-      runs = setWeeklyRuns(cardioRuns.map(toRunPrescription).filter((r): r is RunPrescription => r != null));
+      runs = setWeeklyRuns(
+        cardioRuns.map(toRunPrescription).filter((r): r is RunPrescription => r != null),
+        { deferTrainingVersionBump: true, deferDayReadInvalidation: true }
+      );
     } catch (e: any) {
       skipped.push({ kind: "cardio", error: e.message });
     }
+  }
+  // A multi-change session correction is one intent. If removal, addition, or a
+  // prescription edit fails, roll the whole unit back so Today never shows a
+  // half-fixed session with the accidental extra still present.
+  if (skipped.length) {
+    db.exec(`ROLLBACK TO ${savepoint}`);
+    db.exec(`RELEASE ${savepoint}`);
+    return {
+      ok: false,
+      id,
+      applied: [],
+      added: [],
+      skipped,
+      ...(caughtQuality ? { quality: caughtQuality } : {}),
+      error: caughtQuality
+        ? "No changes were saved because the resulting plan failed its structural quality check."
+        : "No changes were saved because one part of this plan update could not be applied.",
+      ...(clamped.length ? { clamped } : {}),
+    };
+  }
+  const touchedDays = new Set<number>(
+    [
+      ...(hasChanges ? p.parsed.changes : []).map((change: any) => Number(change?.day_number)),
+      ...cardioRuns.map((run: any) => Number(run?.day_number)),
+    ].filter(Number.isFinite)
+  );
+  const priorIssues = new Set(beforeQuality.errors.map(qualityIssueKey));
+  const quality = validateTrainingPlan(getPlan());
+  const blockingQuality = quality.errors.filter(
+    (entry) =>
+      !priorIssues.has(qualityIssueKey(entry)) || (entry.day_number != null && touchedDays.has(entry.day_number))
+  );
+  if (blockingQuality.length) {
+    db.exec(`ROLLBACK TO ${savepoint}`);
+    db.exec(`RELEASE ${savepoint}`);
+    return {
+      ok: false,
+      id,
+      applied: [],
+      added: [],
+      skipped: blockingQuality.map((entry) => ({ error: entry.message, quality_code: entry.code })),
+      quality,
+      error: "No changes were saved because the resulting plan failed its structural quality check.",
+    };
   }
   // Truthful apply: did anything CONCRETELY change? A target tweak that matched zero
   // rows (updated:0) is not a change — it used to flip the proposal to "applied" and
@@ -883,6 +956,8 @@ export function applyProposal(id: number, opts: { supersedeSiblings?: boolean; d
   // surface says so honestly instead of lying.
   const changedAny = applied.some((a) => Number(a.updated) > 0) || added.length > 0 || (runs?.applied.length ?? 0) > 0;
   if (!changedAny) {
+    db.exec(`ROLLBACK TO ${savepoint}`);
+    db.exec(`RELEASE ${savepoint}`);
     return {
       ok: false,
       id,
@@ -895,9 +970,12 @@ export function applyProposal(id: number, opts: { supersedeSiblings?: boolean; d
       ...(clamped.length ? { clamped } : {}),
     };
   }
-  setProposalStatus(id, "applied");
+  db.exec(`RELEASE ${savepoint}`);
+  setProposalStatus(id, "applied", { deferTrainingVersionBump: true });
   stampRecoveryWeekIfApplies(p);
-  if (opts.supersedeSiblings !== false) supersedeSiblingTrainingDrafts(id);
+  if (opts.supersedeSiblings !== false) {
+    supersedeSiblingTrainingDrafts(id, { deferTrainingVersionBump: true });
+  }
   // An applied target tweak / added movement / week of runs can change today's read —
   // bust the cached Brief so the next open reflects the change, not the stale plan.
   invalidateDayRead();
@@ -909,8 +987,12 @@ export function applyProposal(id: number, opts: { supersedeSiblings?: boolean; d
     skipped,
     ...(runs ? { runs: runs.applied } : {}),
     ...(clamped.length ? { clamped } : {}),
+    quality,
   };
   recordAppliedProposalDecision(p, result, opts.decisionId);
+  // Exactly one in-process invalidation for the committed plan + proposal-state
+  // unit. Failed savepoints return above without touching the counter.
+  bumpTrainingDataVersion();
   return result;
 }
 
@@ -1136,8 +1218,9 @@ export function setProfile(p: any) {
       date: localDateISO(),
       subject_key: "profile:identity",
       reason: `changed: ${profileChanges.join(", ")}`,
-      // Allergies are a hard meal-safety exclusion; a change there is material.
-      material: profileChanges.includes("allergies"),
+      // User-declared allergies and hard dietary identities both change what a
+      // current meal plan may safely remain authoritative for.
+      material: profileChanges.includes("allergies") || profileChanges.includes("dietary_restrictions"),
     });
   return getProfile();
 }
@@ -1453,9 +1536,7 @@ export function computeGoalCheck(prof?: any) {
   const measuredRmr = latestMeasuredRmr();
   const measuredRmrQuality = measuredRmr ? measuredRmrAssessment(localDateISO()) : null;
   const measuredWeight = measuredRmrQuality?.freshness_weight ?? 0;
-  const bmr = measuredRmrQuality
-    ? formulaBmr + (measuredRmrQuality.kcal - formulaBmr) * measuredWeight
-    : formulaBmr;
+  const bmr = measuredRmrQuality ? formulaBmr + (measuredRmrQuality.kcal - formulaBmr) * measuredWeight : formulaBmr;
   // The manual activity factor is the cold-start seed. estimateExpenditure owns
   // the complete prior hierarchy + outcome fusion so the Goal and Energy
   // surfaces cannot disagree about which maintenance estimate is active.

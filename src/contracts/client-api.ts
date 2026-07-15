@@ -497,6 +497,13 @@ export interface ClientTrainingSession {
   finished_at?: string | null;
   sets?: ClientLoggedSet[];
   skipped?: unknown[];
+  strength_journey_movement?: {
+    exercise: string;
+    current_est_1rm: number;
+    current_date: ISODateString | string;
+    capacity_delta_lb: number;
+    gap_closed_lb: number;
+  } | null;
   [key: string]: unknown;
 }
 
@@ -1069,6 +1076,97 @@ export interface ClientProgramState {
   adaptations_due: string[];
 }
 
+export type ClientStrengthObjectiveTargetKind = "return_to_personal_best" | "explicit_est_1rm";
+export type ClientStrengthJourneyPhase =
+  | "establishing"
+  | "rebuilding"
+  | "building"
+  | "consolidating"
+  | "protecting"
+  | "reached";
+
+export interface ClientStrengthObjective {
+  id: number;
+  exercise: string;
+  exercise_key: string;
+  target_kind: ClientStrengthObjectiveTargetKind;
+  target_est_1rm: number;
+  baseline_est_1rm: number | null;
+  baseline_date: ISODateString | string | null;
+  source: "user";
+  status: "active" | "superseded" | "completed" | "archived";
+  created_at: string;
+  updated_at: string;
+  superseded_at: string | null;
+  completed_at: string | null;
+  achieved_est_1rm: number | null;
+  achieved_date: ISODateString | string | null;
+}
+
+export interface ClientStrengthJourney {
+  available: boolean;
+  objective: ClientStrengthObjective | null;
+  latest: { est_1rm: number; date: ISODateString | string } | null;
+  current: { est_1rm: number; date: ISODateString | string } | null;
+  best: { est_1rm: number; date: ISODateString | string } | null;
+  baseline: { est_1rm: number; date: ISODateString | string | null } | null;
+  gap_lb: number | null;
+  trend: {
+    direction: "rising" | "stable" | "falling" | null;
+    est_1rm_lb_per_week: number | null;
+    exposures: number;
+    span_days: number;
+  };
+  phase: ClientStrengthJourneyPhase | null;
+  next_prescription: {
+    exercise: string;
+    action: "overload" | "hold" | "deload" | "vary" | "introduce";
+    delta_text: string;
+    why: string;
+    suggested: {
+      sets: number;
+      rep_low?: number;
+      rep_high?: number;
+      weight?: number | null;
+      seconds?: number;
+    };
+  } | null;
+  planned_support: Array<{
+    role: string;
+    exercise: string;
+    why: string;
+    plan_day_number: number;
+    plan_day_name: string;
+  }>;
+  support_suggestions: Array<{
+    role: string;
+    exercise: string;
+    why: string;
+    plan_day_number: number;
+    plan_day_name: string;
+  }>;
+  projection: {
+    earliest_weeks: number;
+    latest_weeks: number;
+    basis: string;
+    caveat: string;
+  } | null;
+  projection_withheld_reason: string | null;
+  safety: {
+    load_constraint: boolean;
+    recent_joint_pain: string | null;
+    relevant_joint_pain: string | null;
+    relevant_active_injuries: string[];
+    stalled_or_regressing: boolean;
+  };
+  capacity_basis: string | null;
+}
+
+export interface ClientStrengthJourneySetResponse {
+  objective: ClientStrengthObjective;
+  journey: ClientStrengthJourney;
+}
+
 export type ClientPerformanceSex = "male" | "female";
 export type ClientPerformanceTone = "strong" | "steady" | "watch" | "missing";
 export type ClientStrengthLevel = "beginner" | "novice" | "intermediate" | "advanced" | "elite";
@@ -1156,6 +1254,13 @@ export interface ClientTodayAggregate {
   stats: ClientWeeklyStats;
   profile: ClientProfile | null;
   exercises: ClientExercise[];
+}
+
+export interface ClientTodayPlanDaySelection {
+  day_number: number;
+  focus: string | null;
+  source: "existing-session" | "cached-day-read" | "adaptive";
+  reason: string | null;
 }
 
 export interface ClientWeightRow {
@@ -1504,6 +1609,17 @@ export interface ClientFrequentFood {
   [key: string]: unknown;
 }
 
+export interface ClientMealPlanConstraintState {
+  status: "current" | "refresh_needed";
+  fingerprint: string;
+  planned_for_fingerprint: string | null;
+  changed_since_planned: boolean;
+  legacy_unstamped: boolean;
+  reason: string | null;
+  conflicts: Array<{ kind: "allergy" | "dietary"; detail: string }>;
+  warnings: string[];
+}
+
 export interface ClientMealPlan {
   id: number;
   status?: string;
@@ -1512,6 +1628,7 @@ export interface ClientMealPlan {
   parsed_json?: unknown;
   created_at?: string;
   autonomy?: ClientProposalAutonomy | null;
+  constraint_state?: ClientMealPlanConstraintState | null;
   [key: string]: unknown;
 }
 
@@ -2041,6 +2158,7 @@ export interface ClientApiResponses {
   "/api/sessions/skip": ClientOkResponse;
   "/api/sets": ClientLoggedSet;
   "/api/last-set": ClientLoggedSet | null;
+  "/api/strength-journey": ClientStrengthJourney | ClientStrengthJourneySetResponse;
   "/api/activities": ClientActivity[];
   "/api/agent/run": ClientProposalResult | ClientAgentJobEnvelope;
   "/api/garmin/daily": ClientGarminDailyMetric[];
@@ -2058,6 +2176,7 @@ export interface ClientApiResponses {
   "/api/calendar": ClientTrainingCalendarResponse;
   "/api/week-wins": ClientWeekWinsResponse;
   "/api/today": ClientTodayAggregate;
+  "/api/today-plan-day": ClientTodayPlanDaySelection | null;
   "/api/today-read": ClientDayRead;
   "/api/today-read/reshape": ClientDayRead | { ok: true; job: ClientAgentJob };
   "/api/session-suggest": ClientSessionSuggestResponse;

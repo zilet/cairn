@@ -388,6 +388,9 @@ export function applyProposalWithAutonomy(
     safety_response?: boolean;
     user_locked?: boolean;
     clamp_refused?: boolean;
+    // A direct, current-turn request to edit the active plan is not a surprise and
+    // has already named its boundary. This does not loosen lead_mode or safety tiers.
+    explicit_user_request?: boolean;
   } = {}
 ): any {
   const proposal = getProposal(proposalId);
@@ -435,7 +438,10 @@ export function applyProposalWithAutonomy(
   // Nutrition budgets per change-kind (a bounded target nudge must not be blocked by the
   // standing weekly meal refresh); training stays domain-wide.
   const budgetKind = shape.domain === "nutrition" ? shape.kind : undefined;
-  if (!surpriseBudgetAllows(materialChangesThisWeek(shape.domain, undefined, budgetKind), !!input.safety_response)) {
+  if (!surpriseBudgetAllows(
+    materialChangesThisWeek(shape.domain, undefined, budgetKind),
+    !!input.safety_response || !!input.explicit_user_request
+  )) {
     return {
       ok: true,
       applied: false,
@@ -486,7 +492,7 @@ export function applyProposalWithAutonomy(
     };
   }
 
-  if (quietApplyMustWait(shape)) {
+  if (quietApplyMustWait(shape) && !input.explicit_user_request) {
     const effectiveDate = nextBoundary(shape.kind);
     const recorded = recordDecision({
       effective_date: effectiveDate,

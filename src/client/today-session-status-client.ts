@@ -302,12 +302,19 @@ type DoneRuntimeGlobals = typeof globalThis & {
     const sid = row.id != null ? String(row.id) : "";
     const idAttr = escAttr(sid);
     const seq = ++doneRenderSeq;
+    const journeyMove = row.strength_journey_movement && typeof row.strength_journey_movement === "object"
+      ? row.strength_journey_movement
+      : null;
+    const journeyMoveHtml = journeyMove && Number(journeyMove.capacity_delta_lb) > 0
+      ? `<div class="done-journey">${escHtml(journeyMove.exercise)} estimated 1RM moved +${Number(journeyMove.capacity_delta_lb).toFixed(1)} lb${Number(journeyMove.gap_closed_lb) > 0 ? ` · ${Number(journeyMove.gap_closed_lb).toFixed(1)} lb of the gap closed` : ""}.</div>`
+      : "";
     if (!highlights) scheduleDoneCardHydration(row.duration_min, sets, sid, seq);
     return `<div class="sessiondone reveal" style="--i:2" id="doneCard-${idAttr}" data-done-seq="${seq}">
       <div class="done-mark" aria-hidden="true">✓</div>
       <div class="done-kicker lbl">${options.isToday ? "Today · complete" : "Complete"}</div>
       <h2 class="done-title">${escHtml(name)}</h2>
       <div class="done-chips" id="doneChips-${idAttr}">${doneChipSpans(row.duration_min, sets, highlights)}</div>
+      ${journeyMoveHtml}
       ${doneAnalysisHtml(sets, highlights, idAttr)}
       ${row.notes ? `<div class="done-notes">“${escHtml(row.notes)}”</div>` : ""}
       <div id="feedbackSlot" class="feedback-slot done-feedback"></div>

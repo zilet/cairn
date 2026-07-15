@@ -7,13 +7,14 @@ import {
   getExerciseDetail,
   getPlan,
   getPlanDay,
+  getPlanQuality,
   listExerciseAliases,
   listExercises,
   mergeExercises,
   planUpcomingNote,
   reconcileExerciseGroups,
-  replacePlan,
-  savePlanDay,
+  replacePlanChecked,
+  savePlanDayChecked,
   suggestAlternatives,
   suggestVariations,
   updateExercise,
@@ -71,6 +72,13 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
   );
 
   server.tool(
+    "get_plan_quality",
+    "Validate the current training week for structural errors and evidence-based quality warnings.",
+    {},
+    async () => asText(getPlanQuality())
+  );
+
+  server.tool(
     "get_plan_upcoming",
     "The calm forward look for the Plan surface: queued training/recovery changes the brain will land soon (e.g. a recovery week landing Monday, a bounded target change), each with its summary and effective_date. Deduped against the recovery-week draft; returns null when nothing is waiting.",
     {},
@@ -109,9 +117,12 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
       exercise: z.string(),
       target_weight: z.number().optional(),
       target_seconds: z.number().int().optional().describe("prescribed hold/duration in seconds, for timed exercises"),
+      quality_override: z.boolean().optional().describe("Explicitly allow an incoherent manual target edit after reviewing the quality report"),
     },
     async (target) =>
-      asText(updateTarget(target.day_number, target.exercise, target.target_weight, target.target_seconds))
+      asText(updateTarget(target.day_number, target.exercise, target.target_weight, target.target_seconds, {
+        quality_override: target.quality_override === true,
+      }))
   );
 
   server.tool(
@@ -122,8 +133,14 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
       name: z.string(),
       focus: z.string().nullable().optional(),
       items: z.array(planItemShape),
+      quality_override: z.boolean().optional().describe("Explicitly allow a structurally invalid manual edit after reviewing the returned quality report"),
     },
-    async (day) => asText(savePlanDay(day.day_number, day.name, day.focus ?? null, day.items))
+    async (day) => {
+      const result = savePlanDayChecked(day.day_number, day.name, day.focus ?? null, day.items, {
+        quality_override: day.quality_override,
+      });
+      return asText(result.day);
+    }
   );
 
   server.tool(
@@ -137,6 +154,7 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
     "set_plan",
     "Replace the ENTIRE weekly plan — use to change frequency (e.g. 3/4/5/7 days) or to add cardio days. Days not included are removed. Each item may be a strength exercise or a kind:'cardio' endurance prescription.",
     {
+      quality_override: z.boolean().optional().describe("Explicitly allow a structurally invalid manual plan after reviewing the returned quality report"),
       days: z.array(
         z.object({
           day_number: z.number().int().optional(),
@@ -146,7 +164,10 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
         })
       ),
     },
-    async ({ days }) => asText(replacePlan(days))
+    async ({ days, quality_override }) => {
+      const result = replacePlanChecked(days, { quality_override });
+      return asText(result.plan);
+    }
   );
 
   server.tool(

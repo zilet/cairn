@@ -11,7 +11,7 @@ import {
 } from "../domain/brain/index.js";
 import { allGuidelines, guidelineFor } from "../domain/health/index.js";
 import { getProfile } from "../domain/person/index.js";
-import { getPlan, getSessionByDate, getWeeklyStats, listExercises } from "../domain/training/index.js";
+import { getPlan, getSessionByDate, getWeeklyStats, listExercises, selectedPlanDayForDate } from "../domain/training/index.js";
 import { localDateISO } from "../repo/shared.js";
 
 export const todayRouter = Router();
@@ -41,6 +41,28 @@ export function todayAggregate(dateQuery?: unknown) {
 // unchanged and the client still primes their individual SWR keys.
 todayRouter.get("/today", (req, res) => {
   res.json(todayAggregate(req.query.date));
+});
+
+export function publicTodayPlanDay(dateQuery?: unknown) {
+  const selected = selectedPlanDayForDate(todayDateParam(dateQuery));
+  if (!selected) return null;
+  const adaptiveReason = typeof selected.selection?.reason === "string"
+    ? selected.selection.reason.trim().slice(0, 240)
+    : null;
+  return {
+    day_number: selected.day_number,
+    focus: selected.focus,
+    source: selected.source,
+    reason: adaptiveReason || (selected.source === "existing-session" ? "Continue the session already linked to this date." : null),
+  };
+}
+
+// Canonical implicit plan-day choice for Today/Session. Manual day selection is
+// an explicit client override and therefore does not call this route. The public
+// DTO is deliberately bounded: internal candidate scores and load arrays stay on
+// the server.
+todayRouter.get("/today-plan-day", (req, res) => {
+  res.json(publicTodayPlanDay(req.query.date));
 });
 
 // The Today salience arbiter: ONE ranking + budget pass over the whole Today

@@ -468,6 +468,29 @@ export function renderTrainingSignals(ctx: any): string {
   return `\nLOGGED-PERFORMANCE SIGNALS (deterministic, from the user's OWN recent sets + feedback — evidence for whether a lift earned a bump, so the plan visibly reflects what they actually did):\n${lines.join("\n")}\n`;
 }
 
+// One explicit anchor-lift journey. It informs exercise selection and supporting
+// work, but the daily recovery/safety posture above it always wins. Projection is
+// already conservatively gated in the repo; prompts must not invent one when absent.
+export function renderStrengthJourney(ctx: any): string {
+  const journey = ctx?.strength_journey;
+  const objective = journey?.objective;
+  if (!journey?.available || !objective?.exercise) return "";
+  const current = journey.current?.est_1rm != null ? `${journey.current.est_1rm} lb` : "not established yet";
+  const target = `${objective.target_est_1rm} lb`;
+  const support = Array.isArray(journey.planned_support)
+    ? journey.planned_support.slice(0, 3).map((item: any) => `${item.role}: ${item.exercise} (${item.why})`).join("; ")
+    : "";
+  const next = journey.next_prescription;
+  const nextLine = next?.suggested
+    ? ` Next safe anchor prescription: ${next.exercise} — ${next.delta_text}; ${next.why}`
+    : "";
+  const projection = journey.projection
+    ? ` Evidence-supported planning range: ${journey.projection.earliest_weeks}-${journey.projection.latest_weeks} weeks (${journey.projection.caveat})`
+    : ` Do not invent a date or timeline: ${journey.projection_withheld_reason || "the evidence gate is not met"}`;
+  return `\nSTRENGTH COMEBACK JOURNEY (athlete-selected anchor; exact exercise only): ${objective.exercise}, current ${current}, snapped target ${target}, phase ${journey.phase || "establishing"}.${nextLine}${support ? ` Support roles (max three; assistance, not extra competing main presses): ${support}.` : ""}${projection}
+BOUNDARY: Recovery, active pain/injury, load constraints, and the unified daily planning posture outrank this journey. Use it to organize the anchor plus support work; never chase the target through pain, add a duplicate same-angle press, promise an outcome, or create a numeric score.\n`;
+}
+
 // The single planning posture produced by the unified deterministic signal state.
 // Dimensions stay separate; this compact block tells agents which posture owns the
 // day and names conflicts without exposing the internal arbitration index.

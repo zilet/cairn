@@ -398,3 +398,26 @@ export function recentWorkingWeight(name: string, sessionsBack = 3): number | nu
   }
   return best;
 }
+
+// Timed-movement twin of recentWorkingWeight. It deliberately resolves the exact
+// stored exercise row before reading history: a dead-hang duration is not a safe
+// anchor for a different grip/variation merely because the names share a movement
+// family. The hardest completed hold across the last few sessions is the trustworthy
+// baseline used when an agent proposes a new timed prescription.
+export function recentWorkingSeconds(name: string, sessionsBack = 3): number | null {
+  const ex = findExercise(name);
+  if (!ex) return null;
+  const row = db.prepare(
+    `SELECT MAX(recent.best_seconds) AS best_seconds
+       FROM (
+         SELECT s.date, MAX(ls.duration_sec) AS best_seconds
+           FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+          WHERE ls.exercise_id = ? AND ls.duration_sec IS NOT NULL AND ls.duration_sec > 0
+          GROUP BY s.date
+          ORDER BY s.date DESC
+          LIMIT ?
+       ) recent`
+  ).get(ex.id, sessionsBack) as any;
+  const value = Number(row?.best_seconds);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}

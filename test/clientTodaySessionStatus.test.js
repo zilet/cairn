@@ -99,6 +99,27 @@ test("Today session done card preserves calm completion selectors and escaping",
   assert.doesNotMatch(html, /data-done-ex/);
 });
 
+test("finished anchor session shows bounded capacity movement only when provided", () => {
+  const status = loadTodaySessionStatus();
+  const moved = status.sessionDoneCardHtml({
+    id: 9,
+    title: "Push",
+    sets: [{ exercise: "Bench Press", weight: 120, reps: 5 }],
+    strength_journey_movement: {
+      exercise: "Bench <Press>",
+      current_est_1rm: 140,
+      current_date: "2026-07-14",
+      capacity_delta_lb: 5.2,
+      gap_closed_lb: 5.2,
+    },
+  }, {}, { isToday: true });
+  assert.match(moved, /class="done-journey"/);
+  assert.match(moved, /Bench &lt;Press&gt; estimated 1RM moved \+5\.2 lb · 5\.2 lb of the gap closed/);
+
+  const unchanged = status.sessionDoneCardHtml({ id: 10, title: "Push", sets: [] }, {}, { isToday: true });
+  assert.doesNotMatch(unchanged, /done-journey|estimated 1RM moved/);
+});
+
 test("Today done card leads with PRs when highlights carry them", () => {
   const status = loadTodaySessionStatus();
   const html = status.sessionDoneCardHtml(

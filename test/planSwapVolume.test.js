@@ -179,6 +179,85 @@ test("applySwapSmart swaps the movement-family slot and says what actually happe
   assert.ok(names.includes("Lateral Raise"), "the rest of the day is untouched");
 });
 
+test("swap apply rejects an accidental same-angle press duplicate and leaves the day unchanged", () => {
+  repo.savePlanDay(2, "Push", "Push", [
+    { exercise: "DB Bench Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 70 },
+    { exercise: "Incline DB Press", sets: 2, rep_low: 8, rep_high: 10, target_weight: 40 },
+  ]);
+  const before = repo.getPlanDay(2).items.map((item) => item.exercise);
+  const result = applySwapSmart("Barbell Bench Press", "Incline Bench Press", null);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /same press angle/i);
+  assert.deepEqual(repo.getPlanDay(2).items.map((item) => item.exercise), before, "rejected swap is atomic");
+  assert.equal(repo.findExercise("Incline Bench Press"), undefined, "collision check runs before creating the rejected exercise");
+});
+
+test("press-angle guard allows replacing the occupied slot and allows flat plus incline", () => {
+  repo.savePlanDay(2, "Push", "Push", [
+    { exercise: "Incline DB Press", sets: 2, rep_low: 8, rep_high: 10, target_weight: 40 },
+  ]);
+  const direct = applySwapSmart("Incline DB Press", "Incline Bench Press", 2);
+  assert.equal(direct.ok, true, "the outgoing slot itself does not collide");
+  assert.deepEqual(repo.getPlanDay(2).items.map((item) => item.exercise), ["Incline Bench Press"]);
+
+  const addFlat = repo.applyProposal(repo.createProposal("stub", "", "", {
+    changes: [{ day_number: 2, exercise: "Barbell Bench Press", sets: 2, rep_low: 8, rep_high: 10, target_weight: 105 }],
+  }).id);
+  assert.equal(addFlat.ok, true, "a distinct flat slot remains allowed");
+  assert.deepEqual(repo.getPlanDay(2).items.map((item) => item.exercise), ["Incline Bench Press", "Barbell Bench Press"]);
+});
+
+test("smart-swap fallback cannot append a same-angle press variant", () => {
+  repo.savePlanDay(2, "Push", "Push", [
+    { exercise: "Incline DB Press", sets: 2, rep_low: 8, rep_high: 10, target_weight: 40 },
+  ]);
+  const result = applySwapSmart("Cable Fly", "Incline Bench Press", null);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /same press angle/i);
+  assert.deepEqual(repo.getPlanDay(2).items.map((item) => item.exercise), ["Incline DB Press"]);
+});
+
+test("autonomous restructure rejects duplicate press slots while manual plan storage stays untouched", () => {
+  repo.savePlanDay(2, "Push", "Push", [
+    { exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 115 },
+  ]);
+  const proposal = repo.createProposal("stub", "", "", {
+    days: [{
+      day_number: 2,
+      name: "Push",
+      items: [
+        { exercise: "Incline DB Press", sets: 2, rep_low: 8, rep_high: 10, target_weight: 40 },
+        { exercise: "Incline Bench Press", sets: 2, rep_low: 8, rep_high: 10, target_weight: 95 },
+      ],
+    }],
+  });
+  assert.throws(() => repo.applyProposal(proposal.id), /duplicates incline pressing/i);
+  assert.deepEqual(repo.getPlanDay(2).items.map((item) => item.exercise), ["Barbell Bench Press"]);
+  assert.equal(repo.getProposal(proposal.id).status, "draft");
+});
+
+test("added prescriptions clamp volume bounds and reject an inverted rep range atomically", () => {
+  repo.savePlanDay(1, "Pull", "Pull", [
+    { exercise: "Barbell Row", sets: 3, rep_low: 8, rep_high: 10, target_weight: 115 },
+  ]);
+  const bounded = repo.createProposal("stub", "", "", {
+    changes: [{ day_number: 1, exercise: "Face Pull", sets: 999, rep_low: 12, rep_high: 15, target_weight: 30 }],
+  });
+  assert.equal(repo.applyProposal(bounded.id).ok, true);
+  assert.equal(repo.getPlanDay(1).items.find((item) => item.exercise === "Face Pull").sets, 20);
+
+  const invalid = repo.createProposal("stub", "", "", {
+    changes: [
+      { day_number: 1, exercise: "Barbell Row", sets: 2 },
+      { day_number: 1, exercise: "Rear Delt Row", sets: 3, rep_low: 15, rep_high: 8 },
+    ],
+  });
+  const result = repo.applyProposal(invalid.id);
+  assert.equal(result.ok, false);
+  assert.equal(repo.getPlanDay(1).items.find((item) => item.exercise === "Barbell Row").sets, 3);
+  assert.equal(repo.findExercise("Rear Delt Row"), undefined, "failed ADD is rolled back with the whole proposal");
+});
+
 test("applySwapSmart with a from that isn't represented ADDS the variation to the muscle group's day instead of erroring", () => {
   repo.upsertExercise({ name: "Back Squat", muscle_group: "quads" });
   repo.upsertExercise({ name: "Leg Extension", muscle_group: "quads" });

@@ -66,17 +66,14 @@ test("Today plan selection wraps to the next ordered day", () => {
   assert.equal(client.nextPlanDayNumber(null, []), null);
 });
 
-test("Today plan selection suggests current, first, next recent, and fallback days", async () => {
+test("Today plan selection uses the server-owned adaptive day unless the athlete picked/logged a day", async () => {
   const client = loadClient();
   const calls = [];
   const deps = {
     state: { logDate: "2026-07-01", plan },
     api: async (path) => {
       calls.push(path);
-      return [
-        { date: "2026-07-01", sets: [{ exercise: "Squat" }] },
-        { date: "2026-06-30", sets: [{ exercise: "Deadlift" }] },
-      ];
+      return { date: "2026-07-01", plan_day_id: 13, day_number: 3, focus: "Run" };
     },
   };
 
@@ -85,11 +82,20 @@ test("Today plan selection suggests current, first, next recent, and fallback da
   assert.equal(await client.suggestedPlanDayNumber({ sets: [] }, false, deps), 1);
   assert.deepEqual(calls, []);
   assert.equal(await client.suggestedPlanDayNumber({ sets: [] }, true, deps), 3);
-  assert.deepEqual(calls, ["/sessions?limit=20"]);
+  assert.deepEqual(calls, ["/today-plan-day?date=2026-07-01"]);
 
   const failingDeps = {
     state: { logDate: "2026-07-01", plan },
     api: async () => { throw new Error("offline"); },
   };
   assert.equal(await client.suggestedPlanDayNumber({ sets: [] }, true, failingDeps), 1);
+});
+
+test("Today plan selection rejects a stale server day that is no longer in the loaded plan", async () => {
+  const client = loadClient();
+  const deps = {
+    state: { logDate: "2026-07-01", plan },
+    api: async () => ({ date: "2026-07-01", plan_day_id: 999, day_number: 9, focus: "Deleted day" }),
+  };
+  assert.equal(await client.suggestedPlanDayNumber({ sets: [] }, true, deps), 1);
 });

@@ -5,6 +5,7 @@ import {
   finishSession,
   getLastSet,
   getProgress,
+  getStrengthJourney,
   getRecentSessions,
   getSessionByDate,
   getSessionDetail,
@@ -13,9 +14,11 @@ import {
   listActivities,
   logSetByName,
   recentTraining,
+  resolveImplicitPlanDay,
   reopenSession,
   sessionHighlights,
   setSessionFeedback,
+  setStrengthObjective,
   skipExercise,
   unskipExercise,
   updateSessionNotes,
@@ -40,7 +43,7 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
       day_number: z.number().int().optional(),
       note: z.string().optional(),
     },
-    async (args) => asText(logSetByName(args))
+    async (args) => asText(logSetByName(resolveImplicitPlanDay(args)))
   );
 
   server.tool(
@@ -48,6 +51,27 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
     "Get logged history and estimated-1RM trend (Epley) for one exercise over time.",
     { exercise: z.string() },
     async ({ exercise }) => asText(getProgress(exercise))
+  );
+
+  server.tool(
+    "get_strength_journey",
+    "Read the athlete-selected anchor-lift comeback journey: exact-lift history, current/best/baseline/gap/trend, safe next prescription, support roles, and a conditional wide projection. Read-only; never selects a goal.",
+    {},
+    async () => asText(getStrengthJourney())
+  );
+
+  server.tool(
+    "set_strength_objective",
+    "Set one athlete-explicit anchor-lift objective. Supersedes the prior active objective and snapshots either the exact exercise's current personal best or an explicit estimated-1RM target.",
+    {
+      exercise: z.string().min(1),
+      target_kind: z.enum(["return_to_personal_best", "explicit_est_1rm"]),
+      target_est_1rm: z.number().positive().max(5000).optional(),
+    },
+    async (input) => {
+      const objective = setStrengthObjective(input);
+      return asText({ objective, journey: getStrengthJourney() });
+    }
   );
 
   server.tool(

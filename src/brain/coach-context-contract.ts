@@ -244,6 +244,7 @@ export interface CoachContextEnvelope {
   program_balance: CoachRecord | null;
   recent_load: CoachRecord[];
   progression: CoachRecord[];
+  strength_journey: CoachRecord | null;
   program_adjustments: CoachAdjustment[];
   run_zones: CoachRecord | null;
   run_plan: CoachRecord | null;
