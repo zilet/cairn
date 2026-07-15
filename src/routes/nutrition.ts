@@ -50,6 +50,12 @@ nutritionRouter.get("/mealplans", (req, res) =>
   res.json(listMealPlans(req.query.limit ? Number(req.query.limit) : 10))
 );
 
+nutritionRouter.get("/mealplans/:id", (req, res) => {
+  const plan = getMealPlan(Number(req.params.id));
+  if (!plan) return res.status(404).json({ error: "not found" });
+  res.json(plan);
+});
+
 // ---- adaptive nutrition (T3 / Phase 3A) ----
 // Best-effort chosen expenditure with explicit outcome/prior anchors. Read-only;
 // powers the calm "Energy Balance" view. ?window= is safely clamped by the domain.
