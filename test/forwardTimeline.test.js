@@ -109,6 +109,25 @@ test("dates are drawn from real data, never fabricated", () => {
   assert.match(recheck.label, /ApoB/, "a lab re-check names the real marker");
   assert.match(String(recheck.when.date), /^\d{4}-\d{2}-\d{2}$/, "a re-check carries a real due date");
 
+  // A review-followup row must read as the human action from its reason —
+  // never a prettified machine slug ("Review Followup:hs Crp:…").
+  repo.upsertAttentionSchedule({
+    signal_key: "review-followup:hs-crp:recheck-hs-crp-when-rested",
+    domain: "health",
+    tier: "active",
+    next_due: ahead(12),
+    last_checked: today,
+    reason: "Health review follow-up: Recheck hs-CRP (when rested, not sick, and not coming off hard training)",
+    release_condition: "the follow-up lands",
+    source: "health-review",
+    state: {},
+  });
+  const followup = repo
+    .forwardTimeline()
+    .find((e) => e.kind === "recheck" && e.id.includes("review-followup"));
+  assert.equal(followup.label, "Recheck hs-CRP", "a follow-up reads as its human action");
+  assert.doesNotMatch(followup.label, /followup|:/i, "no machine-slug residue in the label");
+
   const milestone = timeline.find((e) => e.kind === "milestone");
   assert.equal(milestone.when.date ?? null, null, "a standards milestone is undated");
   assert.ok(milestone.label.length > 0, "a standards milestone reads as a direction of travel");

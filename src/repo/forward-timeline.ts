@@ -194,6 +194,18 @@ function attentionDetail(entry: AttentionScheduleEntry): string | null {
   return reason || null;
 }
 
+// A review-followup row's signal_key is machinery ("review-followup:hs-crp:…");
+// the human action lives in its reason ("Health review follow-up: Recheck hs-CRP
+// (when rested…)"). Use that action as the label, minus any trailing timing note.
+function followupLabel(entry: AttentionScheduleEntry): string | null {
+  const reason = String(entry.reason ?? "").trim();
+  const core = reason
+    .replace(/^health review follow-up:\s*/i, "")
+    .replace(/\s*\([^)]*\)\s*\.?\s*$/, "")
+    .trim();
+  return core ? clip(core, 90) : null;
+}
+
 // A sort key for chronological ordering: dated entries by their date, window
 // entries by the window start, undated (horizon) entries always last.
 function sortKey(entry: ForwardTimelineEntry): string {
@@ -338,14 +350,17 @@ export function forwardTimeline(today = localDateISO(), opts: ForwardTimelineOpt
   const seenRecheck = new Set<string>();
   for (const entry of healthEntries) {
     if (dated.filter((e) => e.kind === "recheck").length >= MAX_RECHECKS) break;
-    const label = labels.get(entry.signal_key) ?? prettifySlug(entry.signal_key.replace(/^marker:/, ""));
+    const isFollowup = entry.signal_key.startsWith("review-followup:");
+    const label = isFollowup
+      ? (followupLabel(entry) ?? "Lab follow-up from your last review")
+      : `${labels.get(entry.signal_key) ?? prettifySlug(entry.signal_key.replace(/^marker:/, ""))} re-check`;
     if (seenRecheck.has(label)) continue;
     seenRecheck.add(label);
     dated.push({
       id: `recheck:${entry.signal_key}`,
       kind: "recheck",
       when: { date: iso(entry.next_due) },
-      label: `${label} re-check`,
+      label,
       detail: attentionDetail(entry),
       basis: attentionBasis(entry, today),
     });
