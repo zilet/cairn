@@ -1440,6 +1440,28 @@ declare global {
   declare function volTrendGlyph(trend: unknown): string;
   declare function phaseWord(phase: unknown): string;
   declare function liftRowHtml(lift: ClientProgramState["lifts"][number] | null | undefined, index: number): string;
+  declare function needsLookLifts(lifts: ClientProgramState["lifts"] | null | undefined): ClientProgramState["lifts"];
+  declare function climbingLifts(lifts: ClientProgramState["lifts"] | null | undefined): ClientProgramState["lifts"];
+  declare function familyGroups(
+    lifts: ClientProgramState["lifts"] | null | undefined
+  ): Array<{ key: string; label: string; lifts: ClientProgramState["lifts"] }>;
+  declare function recencyLabel(iso: unknown): string;
+  declare function compactLiftRowHtml(
+    lift: ClientProgramState["lifts"][number] | null | undefined,
+    index: number
+  ): string;
+  declare function variantRowHtml(
+    lift: ClientProgramState["lifts"][number] | null | undefined,
+    index: number
+  ): string;
+  declare function familyGroupHtml(
+    group: { key: string; label: string; lifts: ClientProgramState["lifts"] } | null | undefined,
+    index: number
+  ): string;
+  declare function curatedLiftsHtml(
+    lifts: ClientProgramState["lifts"] | null | undefined,
+    startIndex?: number
+  ): string;
   declare function volumeBlockHtml(volume: ClientProgramState["volume"] | null | undefined, startIdx: number): string;
   declare function mesoBlockHtml(meso: ClientProgramState["mesocycle"] | null | undefined, index: number): string;
   declare function adaptationsHtml(adaptations: string[] | null | undefined, index: number): string;
@@ -3201,6 +3223,19 @@ declare global {
       volTrendGlyph(trend: unknown): string;
       phaseWord(phase: unknown): string;
       liftRowHtml(lift: ClientProgramState["lifts"][number] | null | undefined, index: number): string;
+      needsLookLifts(lifts: ClientProgramState["lifts"] | null | undefined): ClientProgramState["lifts"];
+      climbingLifts(lifts: ClientProgramState["lifts"] | null | undefined): ClientProgramState["lifts"];
+      familyGroups(
+        lifts: ClientProgramState["lifts"] | null | undefined
+      ): Array<{ key: string; label: string; lifts: ClientProgramState["lifts"] }>;
+      recencyLabel(iso: unknown): string;
+      compactLiftRowHtml(lift: ClientProgramState["lifts"][number] | null | undefined, index: number): string;
+      variantRowHtml(lift: ClientProgramState["lifts"][number] | null | undefined, index: number): string;
+      familyGroupHtml(
+        group: { key: string; label: string; lifts: ClientProgramState["lifts"] } | null | undefined,
+        index: number
+      ): string;
+      curatedLiftsHtml(lifts: ClientProgramState["lifts"] | null | undefined, startIndex?: number): string;
       volumeBlockHtml(volume: ClientProgramState["volume"] | null | undefined, startIdx: number): string;
       mesoBlockHtml(meso: ClientProgramState["mesocycle"] | null | undefined, index: number): string;
       adaptationsHtml(adaptations: string[] | null | undefined, index: number): string;

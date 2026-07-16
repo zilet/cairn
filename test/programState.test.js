@@ -337,6 +337,56 @@ test("endurance ACWR low-base guard: a returning runner's first week reads 'buil
   assert.equal(e.suggested_action, "build");
 });
 
+// ===========================================================================
+// Wave E2: the curated exercise surface — movement-family fields, the junk-name
+// filter, and last-trained recency the read groups and dates lifts by.
+// ===========================================================================
+
+test("lift states carry a movement family: re-implemented siblings share it, distinct movements don't", () => {
+  repo.setProfile({ primary_discipline: "strength" });
+  const seed = (name) => [21, 14, 7, 0].forEach((d, i) => repo.logSetByName({ exercise: name, weight: 135 + i * 5, reps: 5, rir: 2, date: back(d) }));
+  seed("Barbell Bench Press");
+  seed("DB Bench Press");
+  seed("Back Squat");
+  seed("Bulgarian Split Squat");
+
+  const lifts = repo.getProgramState(REF).lifts;
+  const byName = new Map(lifts.map((l) => [l.exercise, l]));
+
+  // Barbell and DB bench are one family (implement tokens stripped).
+  const bb = byName.get("Barbell Bench Press");
+  const db = byName.get("DB Bench Press");
+  assert.ok(bb && db, "both bench variants are analyzed");
+  assert.equal(bb.family_key, "bench press");
+  assert.equal(bb.family_label, "Bench Press");
+  assert.equal(bb.family_key, db.family_key, "barbell and DB bench share a family");
+
+  // Back Squat and Bulgarian Split Squat are NOT the same family.
+  const backSquat = byName.get("Back Squat");
+  const bulgarian = byName.get("Bulgarian Split Squat");
+  assert.ok(backSquat && bulgarian, "both squat patterns are analyzed");
+  assert.equal(backSquat.family_key, "back squat");
+  assert.equal(bulgarian.family_key, "bulgarian split squat");
+  assert.notEqual(backSquat.family_key, bulgarian.family_key, "squat patterns stay distinct families");
+
+  // last_trained is the most recent loaded session date.
+  assert.equal(bb.last_trained, back(0));
+});
+
+test("a junk exercise name (an 'Unknown' Garmin block) never pollutes the curated read", () => {
+  repo.setProfile({ primary_discipline: "strength" });
+  // An importer wrote real sets under a placeholder name — the data stays in the DB.
+  for (let s = 1; s <= 5; s++) repo.logSetByName({ exercise: "Unknown", weight: 100, reps: 5, rir: 2, date: back(s) });
+  repo.logSetByName({ exercise: "Bench Press", weight: 185, reps: 5, rir: 2, date: back(0) });
+
+  const lifts = repo.getProgramState(REF).lifts;
+  assert.ok(!lifts.some((l) => l.exercise.toLowerCase() === "unknown"), "the placeholder row is skipped by the read");
+  assert.ok(lifts.some((l) => l.exercise === "Bench Press"), "real lifts still surface");
+  // The underlying data is untouched — the row is still in the DB.
+  const stillThere = db.prepare(`SELECT 1 FROM exercises WHERE name = 'Unknown'`).get();
+  assert.ok(stillThere, "the exercise row is NOT deleted — the filter is read-only");
+});
+
 test("muscleVolume buckets by the canonical taxonomy (legacy 'legs' folds to 'quads')", () => {
   repo.setProfile({ primary_discipline: "strength" });
   // Stored with the LEGACY group 'legs' (written RAW to bypass the canonicalizing

@@ -16,7 +16,14 @@ import { db } from "../db.js";
 import { localDateISO } from "./shared.js";
 import { getRecoverySummary } from "./coach.js";
 import { currentTrainingDataVersion, registerTrainingCacheClear, trainingBackstopSignature } from "./training-cache.js";
-import { canonicalGroup, classifyMuscleGroup, MUSCLE_LANDMARKS, type MuscleGroup } from "./exercise-canon.js";
+import {
+  canonicalGroup,
+  classifyMuscleGroup,
+  movementKey,
+  MUSCLE_LANDMARKS,
+  type MuscleGroup,
+  normalizeExerciseName,
+} from "./exercise-canon.js";
 import { effectiveVolumeByGroup, type VolumeSet } from "./exercise-variations.js";
 import {
   activeRecoveryWeek,
@@ -66,6 +73,31 @@ export interface LiftState {
   weeks_static: number | null; // weeks the top load/hold hasn't moved
   suggested_action: LiftAction;
   why: string; // one plain sentence
+  family_key: string; // movementKey — re-implemented siblings ("Barbell/DB Bench Press") share it
+  family_label: string; // title-cased family_key, for grouping the read
+  last_trained: string | null; // ISO date of the most recent loaded session for this lift
+}
+
+// The grade functions produce everything EXCEPT the family/recency fields, which
+// liftStates stitches on afterward (it holds the source name + last date). Keeping
+// the split here means the graders never have to know how the read is grouped.
+type GradedLift = Omit<LiftState, "family_key" | "family_label" | "last_trained">;
+
+// Placeholder / junk exercise names a faithful importer sometimes writes (e.g. a
+// Garmin strength block with no detected movement lands as "Unknown"). The DATA
+// stays — the read just skips these rows so they never pollute the curated list.
+const JUNK_EXERCISE_NAMES = new Set(["unknown", "other", "misc", "exercise", "workout"]);
+function isJunkExerciseName(name: string): boolean {
+  return JUNK_EXERCISE_NAMES.has(normalizeExerciseName(name));
+}
+
+// Title-case a movementKey ("bench press" → "Bench Press") for the family header.
+function familyLabelFromKey(key: string): string {
+  return key
+    .split(" ")
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
 }
 
 export interface MuscleVolumeState {
@@ -226,7 +258,7 @@ function comparableLiftDates(name: string): Set<string> {
   );
 }
 
-function gradeRepsLift(name: string, mg: string | null): LiftState | null {
+function gradeRepsLift(name: string, mg: string | null): GradedLift | null {
   const prog = getProgress(name) as any;
   // getProgress can now emit points with best1rm === null (a bodyweight/weight-0
   // set, or an assisted lift logged before bodyweight was known). Those carry no
@@ -349,7 +381,7 @@ function gradeRepsLift(name: string, mg: string | null): LiftState | null {
   };
 }
 
-function gradeTimedLift(name: string, mg: string | null): LiftState | null {
+function gradeTimedLift(name: string, mg: string | null): GradedLift | null {
   const ex = db.prepare(`SELECT id FROM exercises WHERE name = ? COLLATE NOCASE`).get(name) as any;
   if (!ex) return null;
   const rows = db
@@ -436,8 +468,17 @@ function liftStates(date: string): LiftState[] {
 
   const out: LiftState[] = [];
   for (const e of exs) {
-    const st = String(e.mode) === "timed" ? gradeTimedLift(e.name, e.mg) : gradeRepsLift(e.name, e.mg);
-    if (st) out.push(st);
+    const name = String(e.name);
+    if (isJunkExerciseName(name)) continue; // non-destructive: the row stays in the DB, the read skips it
+    const graded = String(e.mode) === "timed" ? gradeTimedLift(name, e.mg) : gradeRepsLift(name, e.mg);
+    if (!graded) continue;
+    const family_key = movementKey(name) || normalizeExerciseName(name);
+    out.push({
+      ...graded,
+      family_key,
+      family_label: familyLabelFromKey(family_key),
+      last_trained: e.last_date ? String(e.last_date) : null,
+    });
   }
   return out;
 }

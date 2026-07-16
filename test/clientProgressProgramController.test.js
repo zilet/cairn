@@ -91,6 +91,9 @@ function loadProgramController() {
     coachingFocusCardHtml(focus) {
       return focus?.show ? `<section class="focus-card">FOCUS CARD</section>` : "";
     },
+    wireGuides() {
+      /* tap-through wiring — no-op in the controller unit test */
+    },
   };
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
@@ -300,6 +303,37 @@ test("progress program controller tidies exercise names and refreshes on merge",
 
   assert.deepEqual(deps.busyCalls, ["tidying…", "restore"]);
   assert.deepEqual(deps.toasts, ["Tidied 2 exercise names"]);
+  assert.deepEqual(deps.invalidated, ["progress:program"]);
+  assert.equal(deps.renderedSelf, true);
+});
+
+test("progress program controller surfaces merged + muscle-group counts from the tidy response", async () => {
+  const context = loadProgramController();
+  const deps = depsFor(context, {
+    api: async () => ({
+      ok: true,
+      aligned: 1,
+      merged: [{ from: "DB Bench Press", into: "Bench Press" }, { from: "Bench (BB)", into: "Bench Press" }],
+      groups_fixed: 2,
+    }),
+  });
+
+  await context.CairnProgressProgramController.tidyExerciseNames(fakeButton(), deps);
+
+  assert.deepEqual(deps.toasts, ["Tidied 1 name · merged 2 duplicates · fixed 2 muscle groups"]);
+  assert.deepEqual(deps.invalidated, ["progress:program"]);
+  assert.equal(deps.renderedSelf, true);
+});
+
+test("progress program controller reports muscle-group fixes even when no names changed", async () => {
+  const context = loadProgramController();
+  const deps = depsFor(context, {
+    api: async () => ({ ok: true, aligned: 0, groups_fixed: 1 }),
+  });
+
+  await context.CairnProgressProgramController.tidyExerciseNames(fakeButton(), deps);
+
+  assert.deepEqual(deps.toasts, ["Fixed 1 muscle group"]);
   assert.deepEqual(deps.invalidated, ["progress:program"]);
   assert.equal(deps.renderedSelf, true);
 });

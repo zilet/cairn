@@ -952,6 +952,14 @@ export type ClientExerciseNameReconcileResponse =
       aligned: number;
       applied: number;
       candidates: number;
+      // Additive detail from the exercise-identity merge (all optional so older
+      // servers and standalone branches stay valid): the duplicate rows folded
+      // into one tracked movement, softer suggestions, rows deliberately left
+      // alone, and how many muscle groups the tidy corrected.
+      merged?: { from: string; into: string }[];
+      suggested?: { from: string; into: string; why?: string; confidence?: string }[];
+      skipped?: { from: string; into: string; reason: string }[];
+      groups_fixed?: number;
       agent?: string | null;
       tried?: ClientAgentAttempt[] | null;
       agent_status?: string | null;
@@ -1102,6 +1110,9 @@ export interface ClientProgramLiftState {
   weeks_static: number | null;
   suggested_action: ClientProgramLiftAction;
   why: string;
+  family_key: string;
+  family_label: string;
+  last_trained: string | null;
 }
 
 export interface ClientProgramVolumeState {

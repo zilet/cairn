@@ -351,11 +351,7 @@ function paintProgressProgramBody(data: ProgressProgramState, deps: ClientProgre
   const dexaSlot = `<div id="progDexaSlot" class="pdexa-slot reveal" style="${stagger(3)}"></div>`;
   const adaptHtml = adaptations.length ? adaptationsHtml(adaptations, 4) : "";
 
-  let liftsHtml = "";
-  if (sorted.length) {
-    liftsHtml += `<div class="prow-section-head lbl reveal" style="${stagger(5)}">Lifts</div>`;
-    liftsHtml += sorted.map((lift, i) => liftRowHtml(lift, 6 + i)).join("");
-  }
+  const liftsHtml = curatedLiftsHtml(lifts, 5);
 
   const volumeHtml = volume.length
     ? `<div class="pvol-head lbl reveal" style="${stagger(2)}">Weekly volume by muscle</div>` +
@@ -422,6 +418,9 @@ function paintProgressProgramBody(data: ProgressProgramState, deps: ClientProgre
   deps.view.innerHTML = html;
   deps.wireSegments();
   deps.runCountUps(deps.view);
+  // Every lift row (full, compact, or long-tail variant) carries data-guide;
+  // wireGuides opens the exercise detail on tap.
+  wireGuides(deps.view);
 
   void loadStrengthJourney(deps);
 
@@ -493,8 +492,26 @@ async function tidyExerciseNames(btn: Element, deps: ClientProgressProgramContro
     return;
   }
   const n = Number(row.aligned ?? row.applied) || 0;
-  deps.toast(n ? `Tidied ${n} exercise name${n === 1 ? "" : "s"}` : "Names already tidy");
-  if (n) {
+  // A later wave folds duplicate movements into one tracked line (and can correct
+  // the muscle group in the process); read the additive fields defensively so this
+  // branch works standalone.
+  const merged = Array.isArray(row.merged) ? row.merged.length : 0;
+  const groupsFixed = Number(row.groups_fixed) || 0;
+  let msg =
+    n && merged
+      ? `Tidied ${n} name${n === 1 ? "" : "s"} · merged ${merged} duplicate${merged === 1 ? "" : "s"}`
+      : n
+        ? `Tidied ${n} exercise name${n === 1 ? "" : "s"}`
+        : merged
+          ? `Merged ${merged} duplicate${merged === 1 ? "" : "s"}`
+          : "";
+  if (groupsFixed) {
+    const groupBit = `${msg ? "fixed" : "Fixed"} ${groupsFixed} muscle group${groupsFixed === 1 ? "" : "s"}`;
+    msg = msg ? `${msg} · ${groupBit}` : groupBit;
+  }
+  if (!msg) msg = "Names already tidy";
+  deps.toast(msg);
+  if (n || merged || groupsFixed) {
     deps.invalidate("progress:program");
     deps.renderSelf();
   }
