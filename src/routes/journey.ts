@@ -9,11 +9,19 @@ import {
   journeyTransitionSuggestion,
   listJourneyPhases,
 } from "../repo/journey.js";
+import { forwardTimeline } from "../repo/forward-timeline.js";
 
 export const journeyRouter = Router();
 
 journeyRouter.get("/journey", (req, res) => {
   res.json(journeyRead(req.query.date ? String(req.query.date) : undefined));
+});
+
+// The road ahead: one ordered forward-looking timeline (goal, phase window,
+// scheduled re-checks/re-tests, DEXA re-scan window, block boundary, nearest
+// strength standards). A calm plan, never a countdown — empty DB yields [].
+journeyRouter.get("/journey/timeline", (req, res) => {
+  res.json(forwardTimeline(req.query.date ? String(req.query.date) : undefined));
 });
 
 journeyRouter.get("/journey/milestones", (req, res) => {

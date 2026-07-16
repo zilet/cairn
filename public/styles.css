@@ -4926,6 +4926,37 @@ button.hmk-row:active{background:var(--card-2)}
 .ex-journey,.sess-launch-journey,.done-journey{margin-top:8px;color:var(--sage);font-size:.78rem;line-height:1.4}
 @media(max-width:420px){.sjourney-head{align-items:flex-start;flex-direction:column;gap:3px}}
 
+/* The quiet anchor-lift invitation (shown only when no objective is chosen). */
+.sjourney-suggest{border-style:dashed}
+.sjourney-suggest-detail{margin:2px 0 8px;color:var(--ink-2);font-size:.86rem;line-height:1.5}
+.sjourney-suggest-basis{color:var(--muted);font-size:.72rem;margin-bottom:13px;font-style:italic}
+.sjourney-suggest-actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.sjourney-suggest-actions .draftbtn{flex:1 1 auto;margin:0}
+.sjourney-suggest-dismiss{flex:0 0 auto}
+
+/* "The road ahead": a calm vertical timeline — dated checkpoints, soft windows,
+   and an undated "on the horizon" tail. No countdown, no meter, no score. */
+.ftl-card{margin:14px 0;padding:16px 18px 6px}
+.ftl-head{margin-bottom:4px}
+.ftl-lead{font-family:var(--font-display);font-size:1.05rem;font-weight:560;color:var(--ink);margin:3px 0 0;line-height:1.35}
+.ftl-list{list-style:none;margin:14px 0 0;padding:0;position:relative}
+.ftl-list::before{content:"";position:absolute;left:6px;top:8px;bottom:14px;width:2px;background:linear-gradient(var(--sage),var(--line));border-radius:2px}
+.ftl-today,.ftl-row{position:relative;padding:0 0 15px 26px}
+.ftl-dot{position:absolute;left:0;top:3px;width:14px;height:14px;border-radius:50%;border:2px solid var(--line);background:var(--card);box-sizing:border-box}
+.ftl-dot-now{border-color:var(--accent);background:var(--accent);box-shadow:0 0 0 4px var(--accent-wash)}
+.ftl-today-label{font-size:.72rem;font-weight:650;letter-spacing:.03em;text-transform:uppercase;color:var(--muted)}
+.ftl-goal>.ftl-dot{border-color:var(--accent);background:var(--accent)}
+.ftl-phase>.ftl-dot,.ftl-rescan>.ftl-dot{border-color:var(--sage);background:var(--sage)}
+.ftl-recheck>.ftl-dot,.ftl-retest>.ftl-dot{border-color:var(--gold);background:var(--gold)}
+.ftl-block>.ftl-dot{border-color:var(--muted)}
+.ftl-milestone>.ftl-dot{border-style:dashed}
+.ftl-when{font-size:.73rem;color:var(--muted);font-weight:600}
+.ftl-label{font-family:var(--font-display);font-size:.97rem;color:var(--ink);font-weight:540;margin-top:1px;line-height:1.3}
+.ftl-detail{font-size:.8rem;line-height:1.45;color:var(--ink-2);margin-top:3px}
+.ftl-basis{font-size:.69rem;color:var(--muted);margin-top:4px;font-style:italic}
+.ftl-horizon-head{position:relative;padding:2px 0 10px 26px;margin-top:2px}
+.ftl-horizon-head::before{content:"";position:absolute;left:0;top:9px;width:14px;height:2px;background:var(--line)}
+
 /* Section label for the lifts list. */
 .prow-section-head{margin:4px 0 10px}
 

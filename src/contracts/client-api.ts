@@ -483,6 +483,29 @@ export interface ClientRecompositionRead {
   evidence_keys: string[];
 }
 
+export type ClientForwardTimelineKind =
+  | "goal"
+  | "phase"
+  | "recheck"
+  | "retest"
+  | "rescan"
+  | "milestone"
+  | "block";
+
+export interface ClientForwardTimelineWhen {
+  date?: string | null;
+  window?: { start: string; end: string } | null;
+}
+
+export interface ClientForwardTimelineEntry {
+  id: string;
+  kind: ClientForwardTimelineKind;
+  when: ClientForwardTimelineWhen;
+  label: string;
+  detail: string | null;
+  basis: string;
+}
+
 export interface ClientJourneyRead {
   profile: {
     start_weight_lb: number | null;
@@ -1193,6 +1216,17 @@ export interface ClientStrengthObjective {
   achieved_date: ISODateString | string | null;
 }
 
+export interface ClientAnchorObjectiveSuggestion {
+  exercise: string;
+  target_kind: ClientStrengthObjectiveTargetKind;
+  target_est_1rm: number;
+  current_est_1rm: number | null;
+  gap_lb: number | null;
+  title: string;
+  detail: string;
+  basis: string;
+}
+
 export interface ClientStrengthJourney {
   available: boolean;
   objective: ClientStrengthObjective | null;
@@ -1250,6 +1284,8 @@ export interface ClientStrengthJourney {
     stalled_or_regressing: boolean;
   };
   capacity_basis: string | null;
+  // A reachable anchor-lift suggestion, present only when no objective exists yet.
+  suggestion?: ClientAnchorObjectiveSuggestion | null;
 }
 
 // The pre-session primer (GET /api/session-primer) — a calm "a coach was already
@@ -2325,6 +2361,7 @@ export interface ClientApiResponses {
   "/api/sets": ClientLoggedSet;
   "/api/last-set": ClientLoggedSet | null;
   "/api/strength-journey": ClientStrengthJourney | ClientStrengthJourneySetResponse;
+  "/api/strength-journey/suggestion/dismiss": { dismissed_at: string };
   "/api/activities": ClientActivity[];
   "/api/agent/run": ClientProposalResult | ClientAgentJobEnvelope;
   "/api/garmin/daily": ClientGarminDailyMetric[];
@@ -2384,6 +2421,7 @@ export interface ClientApiResponses {
   "/api/dexa-targeting": ClientDexaTargeting;
   "/api/journey": ClientJourneyRead;
   "/api/journey/milestones": ClientJourneyMilestone[];
+  "/api/journey/timeline": ClientForwardTimelineEntry[];
   "/api/journey/transition-suggestion": ClientJourneyTransitionSuggestion | null;
   "/api/program/run-plan/apply": ClientProposalResult;
   "/api/coaching-focus": ClientCoachingFocus;

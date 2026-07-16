@@ -5,6 +5,7 @@
 // normalizedExerciseKey (never movementKey). Barbell and dumbbell histories therefore
 // remain separate even when they train the same movement pattern.
 import { db } from "../db.js";
+import { getAppState, setAppState } from "./app-state.js";
 import { classifyConstraint, normalizedExerciseKey } from "./exercise-canon.js";
 import { classifyPattern, type Equipment, type MovementPattern } from "./exercise-variations.js";
 import { injuryAffectsExercise, listContextEvents } from "./health.js";
@@ -89,6 +90,34 @@ export interface StrengthJourney {
     stalled_or_regressing: boolean;
   };
   capacity_basis: string | null;
+  // Populated by the surfaces (route/MCP) only when NO objective exists yet — a
+  // quiet invitation into the anchor-lift journey. Left unset elsewhere.
+  suggestion?: AnchorObjectiveSuggestion | null;
+}
+
+// A ready-to-start anchor-lift objective proposed from logged history. Its fields
+// map straight onto the existing create path (setStrengthObjective).
+export interface AnchorObjectiveSuggestion {
+  exercise: string;
+  target_kind: StrengthObjectiveTargetKind;
+  target_est_1rm: number;
+  current_est_1rm: number | null;
+  gap_lb: number | null;
+  title: string;
+  detail: string;
+  basis: string;
+}
+
+// The standards-read capacity shape this module consumes. Injected by the caller
+// (the REST/MCP surface, which may safely import performance.ts) so this module
+// never imports the performance/standards layer — that would close a cycle
+// (performance -> coach -> strength-objectives).
+export interface AnchorCapacityInput {
+  exercise: string;
+  label?: string | null;
+  est_1rm: number;
+  level?: string | null;
+  to_next?: { level: string; lb: number } | null;
 }
 
 function asObjective(row: any): StrengthObjective | null {
@@ -665,4 +694,127 @@ export function getStrengthJourney(opts: { programState?: ProgramState } = {}): 
       ? "Best exact-lift estimated 1RM across the latest three exposures, refreshed within 28 days."
       : null,
   };
+}
+
+// ---- anchor-lift activation -------------------------------------------------
+// The strength-journey feature has zero uptake until something invites the
+// athlete in. From logged history (plus injected standards capacities) this
+// proposes 1-2 reachable, identity-shaped anchor objectives — a top lift nearing
+// a strength standard, or a clear comeback to a personal best. A suggestion,
+// never a gate; dismissing it quiets it for a long while.
+
+const ANCHOR_DISMISS_KEY = "strength_anchor_suggestion_dismissed_at";
+const ANCHOR_DISMISS_COOLDOWN_DAYS = 60;
+const STANDARD_REACHABLE_MAX_LB = 35;
+const PB_REGRESSION_MIN_LB = 10;
+const PB_BEST_MAX_AGE_DAYS = 540;
+const ANCHOR_HISTORY_FRESH_DAYS = 45;
+
+function round5(value: number): number {
+  return Math.round(value / 5) * 5;
+}
+
+function daysSinceStamp(stamp: string | null): number | null {
+  if (!stamp) return null;
+  const t = Date.parse(stamp);
+  return Number.isFinite(t) ? (Date.now() - t) / 864e5 : null;
+}
+
+export function dismissAnchorObjectiveSuggestion(): { dismissed_at: string } {
+  const now = new Date().toISOString();
+  setAppState(ANCHOR_DISMISS_KEY, now);
+  return { dismissed_at: now };
+}
+
+export function suggestAnchorObjectives(
+  opts: { capacities?: AnchorCapacityInput[]; programState?: ProgramState; today?: string } = {}
+): AnchorObjectiveSuggestion[] {
+  // Never overlap an existing journey — the card already renders active/completed
+  // objectives; the suggestion is only for the truly-empty state.
+  if (currentJourneyObjective()) return [];
+  const dismissedDays = daysSinceStamp(getAppState(ANCHOR_DISMISS_KEY));
+  if (dismissedDays != null && dismissedDays < ANCHOR_DISMISS_COOLDOWN_DAYS) return [];
+
+  const today = opts.today ?? localDateISO();
+  const todayNum = dayNumber(today);
+  // Candidate (B) scans the trained lifts. Default to the current program state so
+  // the surfaces can ask for a suggestion with just the standards capacities and
+  // still receive comeback-to-best candidates.
+  const programState = opts.programState ?? getProgramState(today);
+  const out: Array<AnchorObjectiveSuggestion & { priority: number }> = [];
+  const seen = new Set<string>();
+
+  // (A) A top lift nearing the next strength standard — a forward identity target.
+  for (const cap of opts.capacities ?? []) {
+    const exercise = String(cap?.exercise ?? "").trim();
+    const est = Number(cap?.est_1rm);
+    const toNext = cap?.to_next;
+    if (!exercise || !(est > 0) || !toNext) continue;
+    const addLb = Number(toNext.lb);
+    if (!(addLb > 0) || addLb > STANDARD_REACHABLE_MAX_LB) continue;
+    const key = normalizedExerciseKey(exercise);
+    if (!key || seen.has(key)) continue;
+    const history = strengthObjectiveHistory(exercise);
+    const latest = history.at(-1);
+    if (!latest || todayNum - dayNumber(latest.date) > ANCHOR_HISTORY_FRESH_DAYS) continue;
+    const target = round5(est + addLb);
+    if (!(target > est)) continue;
+    seen.add(key);
+    const label = String(cap.label ?? exercise).trim();
+    out.push({
+      exercise,
+      target_kind: "explicit_est_1rm",
+      target_est_1rm: target,
+      current_est_1rm: round1(est),
+      gap_lb: round1(target - est),
+      title: `Reach the ${toNext.level} ${label.toLowerCase()} standard`,
+      detail: `Your ${exercise} is about ${addLb} lb from the ${toNext.level} strength standard — a reachable identity to train toward.`,
+      basis: "a reachable next standard from your logged lifts",
+      priority: 200 - addLb,
+    });
+  }
+
+  // (B) A clear comeback to a personal best on a lift they still train.
+  for (const lift of programState.lifts ?? []) {
+    const exercise = String((lift as any)?.exercise ?? "").trim();
+    if (!exercise) continue;
+    const key = normalizedExerciseKey(exercise);
+    if (!key || seen.has(key)) continue;
+    const history = strengthObjectiveHistory(exercise);
+    if (history.length < 4) continue;
+    const latest = history.at(-1)!;
+    if (todayNum - dayNumber(latest.date) > ANCHOR_HISTORY_FRESH_DAYS) continue;
+    const best = history.reduce<StrengthExposure | null>(
+      (b, point) => (!b || point.est_1rm > b.est_1rm ? point : b),
+      null
+    );
+    const current = capacityEnvelope(history);
+    if (!best || !current) continue;
+    const regression = round1(best.est_1rm - current.est_1rm);
+    if (regression < PB_REGRESSION_MIN_LB) continue;
+    if (todayNum - dayNumber(best.date) > PB_BEST_MAX_AGE_DAYS) continue;
+    seen.add(key);
+    out.push({
+      exercise,
+      target_kind: "return_to_personal_best",
+      target_est_1rm: round1(best.est_1rm),
+      current_est_1rm: round1(current.est_1rm),
+      gap_lb: regression,
+      title: `Rebuild your ${exercise} to its best`,
+      detail: `You've reached about ${round1(best.est_1rm)} lb estimated 1RM on ${exercise} before and you're near ${round1(current.est_1rm)} lb now — a clear comeback to train toward.`,
+      basis: "a level you have reached before",
+      priority: 120 + Math.min(40, regression),
+    });
+  }
+
+  return out
+    .sort((a, b) => b.priority - a.priority || a.exercise.localeCompare(b.exercise))
+    .slice(0, 2)
+    .map(({ priority: _priority, ...rest }) => rest);
+}
+
+export function suggestAnchorObjective(
+  opts: { capacities?: AnchorCapacityInput[]; programState?: ProgramState; today?: string } = {}
+): AnchorObjectiveSuggestion | null {
+  return suggestAnchorObjectives(opts)[0] ?? null;
 }

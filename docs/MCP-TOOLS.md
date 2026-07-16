@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**214 tools.**
+**215 tools.**
 
 | Tool | Description |
 |---|---|
@@ -37,6 +37,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `delete_supplement` | Remove one supplement from the regimen by id. |
 | `derive_directives` | Re-run the deterministic propagation engine over the latest markers: clears the 'markers' directive source and re-derives evidence-based nutrition/training/watch directives for every out-of-optimal marker, while honoring prior Done/Dismiss feedback. Idempotent; leaves agent-emitted 'health_review' directives untouched. |
 | `discard_proposal` | Discard a draft proposal without applying it. |
+| `dismiss_anchor_objective_suggestion` | Quiet the anchor-lift comeback suggestion for a long while. A suggestion is never a gate; this only stops it from resurfacing until well later. |
 | `dismiss_goal_checkin` | Wave off the gentle goal check-in (Era 2): starts a long cooldown so it stays quiet. Dismissible to silence; pull-never-push. |
 | `draft_meal_plan` | Queue a durable goal-aware weekly meal-plan refresh and bounded verification pass. Returns a job immediately; poll get_agent_job. In Lead mode the result announces and becomes current at the next food-day boundary with Undo; review posture keeps a draft. Lean-safe, protein, fiber, and longevity floors always apply. |
 | `draft_plan_update` | Run a coaching agent over recent logs and route the plan update through Cairn's autonomy policy. In Lead mode bounded reversible changes land now or at a natural boundary and structural changes announce first; review posture keeps a draft. Returns the proposal and autonomy outcome. |
@@ -121,7 +122,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_session_highlights` | Evidence of forward motion for one logged session: any PRs set (a new best est-1RM, or a longer timed hold), how each exercise compares to its previous session (delta + direction), and a small trailing-7-day rollup (new bests, days trained). Read-only and factual — never a score. An unknown session id returns null. |
 | `get_session_primer` | Read the calm, deterministic pre-session primer for a day — why today's session is what it is (from the Brief), what changed since last time, what to watch, and what's deliberately fresh. Returns immediately (no agent). null when there's nothing worth saying beyond the Brief. |
 | `get_settings` | Get app settings: agent selection strategy (round_robin/random/priority), agent order, disabled agents, per-task route metadata, the timezone-aware weekly background-review cadence, and Garmin sync status (garmin_last_sync_at/garmin_last_sync_status). Includes the merged agent list. |
-| `get_strength_journey` | Read the athlete-selected anchor-lift comeback journey: exact-lift history, current/best/baseline/gap/trend, safe next prescription, support roles, and a conditional wide projection. Read-only; never selects a goal. |
+| `get_strength_journey` | Read the athlete-selected anchor-lift comeback journey: exact-lift history, current/best/baseline/gap/trend, safe next prescription, support roles, and a conditional wide projection. When no objective exists yet, folds in a reachable anchor suggestion. Read-only; never selects a goal. |
 | `get_symptom_links` | Symptom ↔ marker connections: a symptom the user logged (in a life event or a check-in note — e.g. blurry vision, fatigue, headaches) co-occurring with a genuinely out-of-optimal lab marker (e.g. an elevated systolic BP, low ferritin). A quiet 'worth mentioning to your clinician' read — INFORMATIONAL, never a diagnosis; returns [] when nothing co-occurs. The connected brain reaching across the logs. |
 | `get_team_week` | The team's-week digest: a calm, deterministic read over the last 7 days of what your expert team DID (applied/announced ledger decisions, with the specialist voice when stored), what it FLAGGED for you, what it's WATCHING, how earlier calls LANDED (in words), and the connections it surfaced. Pull-only; words, never scores. Read-only here — it never drains the insight backlog (the app's weekly card does that). |
 | `get_test_week` | The cadenced strength TEST-WEEK read — whether a re-test is due (the active block's realization phase, or ~7 weeks since the last test week) and the benchmark lifts worth re-testing to re-anchor true capacity. Read-only (never stamps the cadence). due:false for a new user (never nags). |

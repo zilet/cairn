@@ -3,7 +3,10 @@ import { localToday } from "../dayread.js";
 import { streamEnrichRow } from "./enrich-stream.js";
 import {
   addActivity,
+  currentLiftCapacities,
   deleteSet,
+  dismissAnchorObjectiveSuggestion,
+  suggestAnchorObjective,
   finishSession,
   getActivity,
   getCardioForDate,
@@ -169,8 +172,19 @@ trainingLogRouter.get("/progress/:exercise", (req, res) =>
 );
 
 // One explicit athlete-selected anchor lift. GET is strictly read-only; PUT snaps
-// the target now and supersedes the prior active objective atomically.
-trainingLogRouter.get("/strength-journey", (_req, res) => res.json(getStrengthJourney()));
+// the target now and supersedes the prior active objective atomically. When no
+// objective exists, the GET folds in a reachable anchor suggestion (computed from
+// the standards capacities only in that case, so an existing journey pays nothing).
+trainingLogRouter.get("/strength-journey", (_req, res) => {
+  const journey = getStrengthJourney();
+  if (!journey.available) journey.suggestion = suggestAnchorObjective({ capacities: currentLiftCapacities() });
+  res.json(journey);
+});
+
+// Quiet the anchor-lift invitation for a long while (a suggestion, never a nag).
+trainingLogRouter.post("/strength-journey/suggestion/dismiss", (_req, res) => {
+  res.json(dismissAnchorObjectiveSuggestion());
+});
 
 trainingLogRouter.put("/strength-journey", (req, res) => {
   try {

@@ -1,11 +1,14 @@
 import { z } from "zod";
 import {
   addActivity,
+  currentLiftCapacities,
   deleteSet,
+  dismissAnchorObjectiveSuggestion,
   finishSession,
   getLastSet,
   getProgress,
   getStrengthJourney,
+  suggestAnchorObjective,
   getRecentSessions,
   getSessionByDate,
   getSessionDetail,
@@ -55,9 +58,20 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_strength_journey",
-    "Read the athlete-selected anchor-lift comeback journey: exact-lift history, current/best/baseline/gap/trend, safe next prescription, support roles, and a conditional wide projection. Read-only; never selects a goal.",
+    "Read the athlete-selected anchor-lift comeback journey: exact-lift history, current/best/baseline/gap/trend, safe next prescription, support roles, and a conditional wide projection. When no objective exists yet, folds in a reachable anchor suggestion. Read-only; never selects a goal.",
     {},
-    async () => asText(getStrengthJourney())
+    async () => {
+      const journey = getStrengthJourney();
+      if (!journey.available) journey.suggestion = suggestAnchorObjective({ capacities: currentLiftCapacities() });
+      return asText(journey);
+    }
+  );
+
+  server.tool(
+    "dismiss_anchor_objective_suggestion",
+    "Quiet the anchor-lift comeback suggestion for a long while. A suggestion is never a gate; this only stops it from resurfacing until well later.",
+    {},
+    async () => asText(dismissAnchorObjectiveSuggestion())
   );
 
   server.tool(

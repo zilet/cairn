@@ -919,6 +919,13 @@ declare global {
     wire(root?: ParentNode): void;
   };
 
+  type ClientJourneyTimelineApi = {
+    timelineCardHtml(
+      entries: ClientForwardTimelineEntry[] | unknown,
+      deps?: { stagger?(index?: number | null): string }
+    ): string;
+  };
+
   type ClientHealthPictureControllerDeps = {
     root: ParentNode;
     state: Pick<ClientAppState, "healthReview">;
@@ -3212,6 +3219,8 @@ declare global {
 
     CairnProgressJourney: ClientProgressJourneyApi;
 
+    CairnJourneyTimeline: ClientJourneyTimelineApi;
+
     CairnProgressRouteDeps: ClientProgressRouteDeps;
 
     CairnCoachingFocus: {
@@ -4250,6 +4259,7 @@ declare global {
   declare const CairnProgressProgramBlock: Window["CairnProgressProgramBlock"];
   declare const CairnProgressProgramController: Window["CairnProgressProgramController"];
   declare const CairnProgressJourney: Window["CairnProgressJourney"];
+  declare const CairnJourneyTimeline: Window["CairnJourneyTimeline"];
   declare const CairnProgressRouteDeps: Window["CairnProgressRouteDeps"];
   declare const CairnCoachingFocus: Window["CairnCoachingFocus"];
   declare const CairnCardioPlan: Window["CairnCardioPlan"];

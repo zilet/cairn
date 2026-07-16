@@ -25,6 +25,7 @@ type TovData = {
   sessions: unknown[] | null;
   journey: import("../contracts/client-api.js").ClientJourneyRead | null;
   journeyMilestones: import("../contracts/client-api.js").ClientJourneyMilestone[] | null;
+  timeline: import("../contracts/client-api.js").ClientForwardTimelineEntry[] | null;
 };
 
 // SVG paint attrs don't reliably resolve CSS var() — hardcoded Atelier hexes,
@@ -97,7 +98,7 @@ function tovLoadSnapshot(): TovData | null {
 
 async function tovFetch(): Promise<TovData> {
   const grab = (path: string) => api(path).catch(() => null);
-  const [stats, balance, trajectory, focus, load, loadBand, adjustments, sessions, journey, journeyMilestones] = await Promise.all([
+  const [stats, balance, trajectory, focus, load, loadBand, adjustments, sessions, journey, journeyMilestones, timeline] = await Promise.all([
     grab("/stats"),
     grab("/program/balance"),
     grab("/muscle-trajectory"),
@@ -108,6 +109,7 @@ async function tovFetch(): Promise<TovData> {
     grab("/sessions?limit=3"),
     grab("/journey"),
     grab("/journey/milestones"),
+    grab("/journey/timeline"),
   ]);
   return {
     stats: CairnProgressData.record(stats),
@@ -120,6 +122,7 @@ async function tovFetch(): Promise<TovData> {
     sessions: Array.isArray(sessions) ? sessions : null,
     journey: journey && typeof journey === "object" && !Array.isArray(journey) ? journey as import("../contracts/client-api.js").ClientJourneyRead : null,
     journeyMilestones: Array.isArray(journeyMilestones) ? journeyMilestones as import("../contracts/client-api.js").ClientJourneyMilestone[] : null,
+    timeline: Array.isArray(timeline) ? timeline as import("../contracts/client-api.js").ClientForwardTimelineEntry[] : null,
   };
 }
 
@@ -501,6 +504,10 @@ function tovJourneyHtml(data: TovData): string {
   return CairnProgressJourney?.journeyCardHtml?.(data.journey, data.journeyMilestones, { stagger }) || "";
 }
 
+function tovTimelineHtml(data: TovData): string {
+  return CairnJourneyTimeline?.timelineCardHtml?.(data.timeline, { stagger }) || "";
+}
+
 // ---- paint ----------------------------------------------------------------------
 
 function paintTrainOverview(data: TovData): void {
@@ -508,9 +515,11 @@ function paintTrainOverview(data: TovData): void {
   const rows = tovFoldRows(data);
   const hasAny = rows.some((r) => r.sets > 0) || CairnProgressData.rows(data.sessions).length > 0;
   const journey = tovJourneyHtml(data);
+  const timeline = tovTimelineHtml(data);
   if (!hasAny) {
     view.innerHTML = head + `<div class="tov-empty">` +
       journey +
+      timeline +
       tovStartHtml() +
       emptyStateHtml(art("exercise", "barbell row"), "Log a session and this becomes your training map — what's trained, what's due, and where to push next.") +
       `</div>`;
@@ -524,6 +533,7 @@ function paintTrainOverview(data: TovData): void {
     tovLoadBandHtml(data) +
     tovStartHtml() +
     journey +
+    timeline +
     tovMapHtml(rows) +
     tovFocusHtml(data) +
     tovRowsHtml(rows) +

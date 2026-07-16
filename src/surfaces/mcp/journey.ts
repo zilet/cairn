@@ -9,6 +9,7 @@ import {
   journeyTransitionSuggestion,
   listJourneyPhases,
 } from "../../repo/journey.js";
+import { forwardTimeline } from "../../repo/forward-timeline.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 
 const phaseKind = z.enum(["cut", "maintenance", "diet_break", "reverse", "gain"]);
@@ -27,6 +28,13 @@ export function registerJourneyTools(server: McpToolRegistrar) {
     "Read deterministic journey milestones (weight-loss thresholds, percent-to-goal crossings, body-fat bands). Calm in-app progress markers only; no scores or push notifications.",
     { date: z.string().optional().describe("YYYY-MM-DD; defaults to today") },
     async ({ date }) => asText(journeyMilestones(date))
+  );
+
+  server.tool(
+    "get_journey_timeline",
+    "Read the road ahead: one ordered forward-looking timeline composed from the goal date, the phase projection window, scheduled lab re-checks and strength re-tests, a DEXA re-scan window, the program block boundary, and the nearest strength standards. Dated entries carry a real date, projections are windows, and standards are undated direction-of-travel. A calm plan, never a countdown or a gate; empty when there is nothing to plan yet.",
+    { date: z.string().optional().describe("YYYY-MM-DD; defaults to today") },
+    async ({ date }) => asText(forwardTimeline(date))
   );
 
   server.tool(

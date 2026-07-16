@@ -375,6 +375,19 @@ export function liftCapacities(
   return out.sort((a, b) => b.percentile - a.percentile);
 }
 
+// The athlete's current benchmarked lift capacities, resolved with their own
+// bodyweight/sex/age — the lightweight slice of performanceStanding that callers
+// outside the Standing read (the forward timeline, anchor-lift suggestions) reuse
+// without paying for the full endurance/DEXA/lever assembly.
+export function currentLiftCapacities(opts: { programState?: ProgramState } = {}): LiftCapacity[] {
+  const profile = getProfile();
+  const sex = sexOf(profile);
+  const age = profile?.age != null ? Number(profile.age) : null;
+  const bodyweight = currentBodyweight(profile);
+  const programState = opts.programState ?? getProgramState();
+  return liftCapacities(programState.lifts || [], bodyweight, sex, age);
+}
+
 // Benchmark patterns the athlete TRAINS but only through a non-standard variation
 // (leg press but no back squat, RDLs but no conventional deadlift, assisted pull-ups
 // but no bodyweight pull) — so capacity can't be read honestly. Each becomes a gentle

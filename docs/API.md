@@ -9,7 +9,7 @@ Health's short-lived pairing exchange is public and passes through the instance-
 when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**267 routes** across 100 groups.
+**268 routes** across 100 groups.
 
 ## `/activities`
 
@@ -654,8 +654,9 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/strength-journey` | One explicit athlete-selected anchor lift. GET is strictly read-only; PUT snaps the target now and supersedes the prior active objective atomically. |
+| GET | `/api/strength-journey` | One explicit athlete-selected anchor lift. GET is strictly read-only; PUT snaps the target now and supersedes the prior active objective atomically. When no objective exists, the GET folds in a reachable anchor suggestion (computed from the standards capacities only in that case, so an existing journey pays nothing). |
 | PUT | `/api/strength-journey` |  |
+| POST | `/api/strength-journey/suggestion/dismiss` | Quiet the anchor-lift invitation for a long while (a suggestion, never a nag). |
 
 ## `/suggestions`
 

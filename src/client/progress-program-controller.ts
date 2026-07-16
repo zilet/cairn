@@ -5,6 +5,7 @@ type ProgressProgramRecord = Record<string, unknown>;
 type ProgressProgramStat = readonly [unknown, unknown] | readonly [unknown, unknown, { text?: boolean; k?: boolean }];
 type ProgressProgramState = import("../contracts/client-api.js").ClientProgramState;
 type ProgressStrengthJourney = import("../contracts/client-api.js").ClientStrengthJourney;
+type ProgressAnchorSuggestion = import("../contracts/client-api.js").ClientAnchorObjectiveSuggestion;
 
 function isProgressProgramRecord(value: unknown): value is ProgressProgramRecord {
   return !!value && typeof value === "object";
@@ -14,10 +15,35 @@ function progressProgramRecord(value: unknown): ProgressProgramRecord {
   return isProgressProgramRecord(value) ? value : {};
 }
 
+// The quiet invitation into the anchor-lift journey, shown only when nothing is
+// chosen yet. A suggestion, never a gate: one tap starts it (the existing create
+// path), a second tap dismisses it for a long while.
+function strengthSuggestionCardHtml(suggestion: ProgressAnchorSuggestion): string {
+  const gap = Number(suggestion.gap_lb);
+  const gapText = Number.isFinite(gap) && gap > 0 ? `${gap.toFixed(1)} lb to go` : "within reach";
+  const target = Number(suggestion.target_est_1rm);
+  const targetAttr = Number.isFinite(target) ? String(target) : "";
+  return `<section class="sjourney-card sjourney-suggest reveal" aria-label="Anchor-lift suggestion">
+    <div class="sjourney-head"><span class="lbl">Anchor lift · a suggestion</span><span>${escHtml(gapText)}</span></div>
+    <h2>${escHtml(suggestion.title)}</h2>
+    <div class="sjourney-suggest-detail">${escHtml(suggestion.detail)}</div>
+    <div class="sjourney-suggest-basis lbl">${escHtml(suggestion.basis)}</div>
+    <div class="sjourney-suggest-actions">
+      <button class="draftbtn" type="button" data-sjug-start
+        data-sjug-exercise="${escAttr(suggestion.exercise)}"
+        data-sjug-kind="${escAttr(suggestion.target_kind)}"
+        data-sjug-target="${escAttr(targetAttr)}">Make this my anchor</button>
+      <button class="ghostbtn sjourney-suggest-dismiss" type="button" data-sjug-dismiss>Not now</button>
+    </div>
+  </section>`;
+}
+
 function strengthJourneyCardHtml(value: unknown): string {
   const journey = value && typeof value === "object" ? value as Partial<ProgressStrengthJourney> : null;
   const objective = journey?.objective;
-  if (!journey?.available || !objective?.exercise || !Number.isFinite(Number(objective.target_est_1rm))) return "";
+  if (!journey?.available || !objective?.exercise || !Number.isFinite(Number(objective.target_est_1rm))) {
+    return journey?.suggestion ? strengthSuggestionCardHtml(journey.suggestion) : "";
+  }
   const current = journey.current?.est_1rm;
   const currentDate = journey.current?.date ? String(journey.current.date) : null;
   const currentText = Number.isFinite(Number(current))
@@ -67,7 +93,64 @@ async function loadStrengthJourney(deps: ClientProgressProgramControllerDeps): P
     result = null;
   }
   const slot = deps.view.querySelector("#progStrengthJourneySlot");
-  if (slot) slot.innerHTML = strengthJourneyCardHtml(result);
+  if (!slot) return;
+  slot.innerHTML = strengthJourneyCardHtml(result);
+  wireStrengthSuggestion(slot, deps);
+}
+
+// One tap starts the suggested anchor (the existing create path); "Not now"
+// quiets it for a long while. Both re-render in place from the fresh read.
+function wireStrengthSuggestion(slot: Element, deps: ClientProgressProgramControllerDeps): void {
+  const startBtn = slot.querySelector<HTMLElement>("[data-sjug-start]");
+  if (startBtn)
+    startBtn.addEventListener("click", () => {
+      void (async () => {
+        const restore = deps.busy(startBtn, "Setting your anchor…");
+        const targetRaw = startBtn.getAttribute("data-sjug-target") || "";
+        const body: Record<string, unknown> = {
+          exercise: startBtn.getAttribute("data-sjug-exercise") || "",
+          target_kind: startBtn.getAttribute("data-sjug-kind") || "",
+        };
+        if (targetRaw) body.target_est_1rm = Number(targetRaw);
+        let ok = false;
+        try {
+          const res = (await deps.api("/strength-journey", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          })) as { objective?: unknown; error?: string } | null;
+          ok = !!res && !!res.objective;
+        } catch {
+          ok = false;
+        }
+        if (ok) {
+          deps.toast("Anchor set — your comeback journey starts here");
+          deps.invalidate("progress:program");
+          await loadStrengthJourney(deps);
+          return;
+        }
+        restore();
+        deps.toast("Couldn't set that anchor — try again in a bit.");
+      })();
+    });
+
+  const dismissBtn = slot.querySelector<HTMLElement>("[data-sjug-dismiss]");
+  if (dismissBtn)
+    dismissBtn.addEventListener("click", () => {
+      void (async () => {
+        try {
+          await deps.api("/strength-journey/suggestion/dismiss", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: "{}",
+          });
+        } catch {
+          /* best-effort — hide it regardless */
+        }
+        slot.innerHTML = "";
+        deps.toast("Set aside — you can choose an anchor anytime");
+      })();
+    });
 }
 
 // The conductor lead for Progress -> Program. Cached as rendered HTML so the
