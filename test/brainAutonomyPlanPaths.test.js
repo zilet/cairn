@@ -335,8 +335,14 @@ test("a pending quiet-apply counts against the same-week surprise budget at deci
   dbInsertSet(plank.id, repo.findExercise("Plank").id, { set_number: 1, duration_sec: 60 });
   repo.setSettings({ lead_mode: "lead" });
 
-  const first = buildProgressionWithAutonomy(1);
-  assert.equal(first.autonomy.pending, true, "the first bounded change is committed, waiting for its boundary");
+  // A GENUINE agentic bounded change spends the budget — a routine auto-progression is
+  // budget-exempt (Ruling A), so it would not gate the second change.
+  const firstProposal = repo.createProposal("stub", "first bounded change", "", {
+    summary: "First bench change",
+    changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 190 }],
+  });
+  const first = applyProposalWithAutonomy(firstProposal.id, { requested_tier: "quiet_apply" });
+  assert.equal(first.pending, true, "the first bounded change is committed, waiting for its boundary");
 
   // A second bounded training change the same week must now be held for review — a
   // scheduled-but-unlanded change already spends the domain's budget.
@@ -360,8 +366,14 @@ test("the boundary re-checks the budget: the oldest due change lands, the second
   dbInsertSet(plank.id, repo.findExercise("Plank").id, { set_number: 1, duration_sec: 60 });
   repo.setSettings({ lead_mode: "lead" });
 
-  const first = buildProgressionWithAutonomy(1);
-  assert.equal(first.autonomy.pending, true);
+  // A GENUINE agentic first change spends the budget at the boundary — a routine
+  // auto-progression is exempt (Ruling A) and would not force the second to park.
+  const firstProposal = repo.createProposal("stub", "first bounded change", "", {
+    summary: "First bench change",
+    changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 190 }],
+  });
+  const first = applyProposalWithAutonomy(firstProposal.id, { requested_tier: "quiet_apply" });
+  assert.equal(first.pending, true);
   // The second gets scheduled only because it's a safety response (bypasses the
   // creation-time budget) — the boundary must still enforce one landing per week.
   const second = repo.createProposal("stub", "safety follow-up", "", {
@@ -371,9 +383,9 @@ test("the boundary re-checks the budget: the oldest due change lands, the second
   const b = applyProposalWithAutonomy(second.id, { requested_tier: "quiet_apply", safety_response: true });
   assert.equal(b.pending, true);
 
-  const asOf = [first.autonomy.effective_date, b.effective_date].sort().pop();
+  const asOf = [first.effective_date, b.effective_date].sort().pop();
   const due = applyDueAnnouncedDecisions(asOf);
-  assert.deepEqual(due.applied, [first.autonomy.decision.id], "the oldest change lands");
+  assert.deepEqual(due.applied, [first.decision.id], "the oldest change lands");
   assert.deepEqual(due.failed, [b.decision.id], "the second is held, not silently applied");
   const parked = repo.getBrainDecision(b.decision.id);
   assert.equal(parked.status, "review", "parked for review per the existing pattern");

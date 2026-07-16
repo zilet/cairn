@@ -111,9 +111,11 @@ export function listReviewHeldProposals(limit = 20) {
   return rows.map(hydrateProposal);
 }
 
-// Coach-led Today only interrupts for independent-review boundaries. Filter those
-// reason codes in SQL BEFORE the bounded limit so a stream of generic requested-
-// review bookkeeping cannot crowd an older safety/user-lock/policy hold out.
+// Coach-led Today only interrupts for independent-review boundaries. A budget hold is a
+// WAIT, not an ask: it lands automatically when the surprise-budget week rolls over (orphan
+// adoption re-offers it), so it never belongs on Today and is intentionally NOT in this list.
+// Filter the interrupting reason codes in SQL BEFORE the bounded limit so a stream of generic
+// requested-review bookkeeping cannot crowd an older safety/user-lock/policy hold out.
 export function listAttentionReviewHeldProposals(limit = 20) {
   const rows = db
     .prepare(
@@ -127,7 +129,7 @@ export function listAttentionReviewHeldProposals(limit = 20) {
                AND d.source_ref_key = CAST(p.id AS TEXT)
                AND d.status = 'review'
                AND json_extract(d.context_json, '$.review_reason_code') IN
-                   ('safety_floor','user_lock','domain_policy','budget_review','clinical')
+                   ('safety_floor','user_lock','domain_policy','clinical')
           )
         ORDER BY (
           SELECT MAX(d.id)
@@ -136,7 +138,7 @@ export function listAttentionReviewHeldProposals(limit = 20) {
              AND d.source_ref_key = CAST(p.id AS TEXT)
              AND d.status = 'review'
              AND json_extract(d.context_json, '$.review_reason_code') IN
-                 ('safety_floor','user_lock','domain_policy','budget_review','clinical')
+                 ('safety_floor','user_lock','domain_policy','clinical')
         ) DESC
         LIMIT ?`
     )

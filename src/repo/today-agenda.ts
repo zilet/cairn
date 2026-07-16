@@ -385,10 +385,10 @@ function autonomyOwnedDraft(proposal: any): boolean {
 }
 
 // ---- plan: a draft that genuinely requires the athlete's review — the ask path
-// (lead_mode='review_everything', a goal/user-locked boundary, or a surprise-budget
-// hold), NOT a change the autonomy layer already scheduled. High because the athlete
-// is owed a decision. Applies the same autonomy filter the coach list
-// (isOpenProposal) uses. ----
+// (lead_mode='review_everything', or a goal/user-locked/safety boundary), NOT a change
+// the autonomy layer already scheduled and NOT a budget hold (which waits quietly and
+// lands automatically when the surprise-budget week rolls). High because the athlete is
+// owed a decision. Applies the same autonomy filter the coach list (isOpenProposal) uses. ----
 function planDraftCandidate(): TodayAgendaCandidate | null {
   const leadMode = getSettings().lead_mode;
   const reviewHolds = (
@@ -410,9 +410,10 @@ function planDraftCandidate(): TodayAgendaCandidate | null {
     if (leadMode === "review_everything") return true;
     if (p.autonomy?.status !== "review" || p.autonomy?.review_required !== true) return false;
     // Only genuine independent-review boundaries may interrupt Today in lead /
-    // announce-first. Ordinary requested-review or stale-draft bookkeeping is
-    // handled in conversation/repair, not pushed back as a generic plan review.
-    return ["safety_floor", "user_lock", "domain_policy", "budget_review", "clinical"].includes(
+    // announce-first. Ordinary requested-review, stale-draft, or budget-hold
+    // bookkeeping is handled in conversation/repair or waits for the budget week to
+    // roll — never pushed back as a generic plan review.
+    return ["safety_floor", "user_lock", "domain_policy", "clinical"].includes(
       String(p.autonomy?.review_reason_code ?? "")
     );
   });

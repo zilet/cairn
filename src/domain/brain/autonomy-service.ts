@@ -45,6 +45,16 @@ import { addDaysISO, localDateISO, parseDbTime } from "../../repo/shared.js";
 import { getSessionByDate } from "../../repo/sessions.js";
 import { withSqliteSavepoint } from "../../repo/sqlite-savepoint.js";
 
+// Ruling A: the two deterministic progression builders — buildProgressionProposal
+// (createProposal agent "auto-progression", src/repo/progression.ts) and
+// buildRunPlanProposal (agent "auto-run-plan", src/repo/run-progression.ts) — emit
+// bounded, guardrail-clamped, reversible, ledgered target nudges: the coach's standing
+// job, not a surprise. A routine progression neither consumes the weekly surprise budget
+// nor is blocked by it. decideAutonomyTier's clamps (domain demotion / review posture /
+// clinical) and the boundary + freshness gates still apply unchanged. These agent
+// literals are stable contract values written by createProposal, not free text.
+const ROUTINE_CHANGE_SOURCES = new Set(["auto-progression", "auto-run-plan"]);
+
 type ProposalShape = {
   kind: "nutrition_target" | "training_structure" | "training_target" | "exercise_rotation";
   domain: "nutrition" | "training" | "recovery";
@@ -360,6 +370,10 @@ function domainIsDemoted(domain: BrainDomain): boolean {
 // target nudge demoted to 'ask' — neutering lead mode for the number that matters most.
 // Training stays domain-wide (its per-domain churn cap is a real, intended limit). Two
 // changes of the SAME kind in one week still hold: the budget is one, per kind.
+//
+// Ruling A: routine deterministic progressions (ROUTINE_CHANGE_SOURCES) are excluded — a
+// standing, guardrail-clamped nudge is not a material surprise, so it neither consumes the
+// budget nor counts against another change trying to land the same week.
 function materialChangesThisWeek(
   domain: BrainDomain,
   statuses: readonly string[] = ["applied", "announced", "pending"],
@@ -367,12 +381,18 @@ function materialChangesThisWeek(
 ): number {
   const placeholders = statuses.map(() => "?").join(",");
   const kindClause = kind ? " AND kind = ?" : "";
+  const routinePlaceholders = [...ROUTINE_CHANGE_SOURCES].map(() => "?").join(",");
   const params: any[] = [domain, ...statuses];
   if (kind) params.push(kind);
+  params.push(...ROUTINE_CHANGE_SOURCES);
   const row = db
     .prepare(
+      // NULL-safe: `source NOT IN (...)` alone is SQL three-valued logic — a material-tier
+      // writer that left source NULL would evaluate NULL and be silently excluded,
+      // undercounting the budget. A NULL source is not a routine progression, so keep it.
       `SELECT COUNT(*) AS n FROM brain_decisions
       WHERE domain = ? AND status IN (${placeholders}) AND autonomy_tier IN ('quiet_apply','announce')${kindClause}
+        AND (source IS NULL OR source NOT IN (${routinePlaceholders}))
         AND date(created_at) >= date('now','-6 days')`
     )
     .get(...params) as any;
@@ -521,6 +541,23 @@ export function applyMealPlanWithAutonomy(
   };
 }
 
+// A later successful routing of the SAME proposal (announce / pending quiet-apply /
+// immediate apply) makes any earlier HOLD on that proposal moot — the hold said "wait",
+// and the system has now landed or scheduled it. Retire the stale live `review` rows to
+// 'superseded' so a freed budget hold never leaves a dangling open review decision in the
+// ledger (which listReviewHeldProposals / planDraftCandidate would otherwise keep reading).
+function supersedePriorReviewHolds(proposalId: number): void {
+  for (const decision of listBrainDecisions({ status: "review", limit: 100 })) {
+    if (
+      decision.source_ref_type === "plan_proposal" &&
+      decision.source_ref_key === String(proposalId) &&
+      decision.id != null
+    ) {
+      transitionBrainDecision(decision.id, "superseded");
+    }
+  }
+}
+
 export function applyProposalWithAutonomy(
   proposalId: number,
   input: {
@@ -614,10 +651,14 @@ export function applyProposalWithAutonomy(
   // Nutrition budgets per change-kind (a bounded target nudge must not be blocked by the
   // standing weekly meal refresh); training stays domain-wide.
   const budgetKind = shape.domain === "nutrition" ? shape.kind : undefined;
+  // Ruling A: a routine deterministic progression bypasses the surprise-budget gate
+  // (materialChangesThisWeek also excludes it from the count, so it never spends the
+  // budget for other changes either).
+  const routineChange = ROUTINE_CHANGE_SOURCES.has(String(proposal.agent ?? ""));
   if (
     !surpriseBudgetAllows(
       materialChangesThisWeek(shape.domain, undefined, budgetKind),
-      !!input.safety_response || !!input.explicit_user_request
+      !!input.safety_response || !!input.explicit_user_request || routineChange
     )
   ) {
     return holdProposalForReview(proposal, shape, {
@@ -663,6 +704,7 @@ export function applyProposalWithAutonomy(
       superseded_by: null,
       evaluator_version: null,
     });
+    supersedePriorReviewHolds(Number(proposal.id));
     return {
       ok: true,
       applied: false,
@@ -708,6 +750,7 @@ export function applyProposalWithAutonomy(
       superseded_by: null,
       evaluator_version: null,
     });
+    supersedePriorReviewHolds(Number(proposal.id));
     return {
       ok: true,
       applied: false,
@@ -750,6 +793,7 @@ export function applyProposalWithAutonomy(
         },
       });
       if (!updated) throw new Error("the autonomous apply decision could not be finalized");
+      supersedePriorReviewHolds(proposalId);
       return { ...result, tier: "quiet_apply", decision: updated };
     });
   } catch (error) {
@@ -1092,7 +1136,14 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): { applied: nu
       // refresh cannot block a bounded target nudge at its boundary (and vice versa).
       const boundaryBudgetKind = shape.domain === "nutrition" ? shape.kind : undefined;
       const coordinated = (announced.context as any)?.coordinated_update === true;
-      if (!surpriseBudgetAllows(materialChangesThisWeek(shape.domain, ["applied"], boundaryBudgetKind), coordinated)) {
+      // Ruling A: a routine deterministic progression is exempt from the surprise budget
+      // at the boundary too. recordDecision stored source = proposal.agent, so the routine
+      // literals identify it here as at decision time.
+      const routineChange = ROUTINE_CHANGE_SOURCES.has(String(announced.source ?? ""));
+      if (
+        !routineChange &&
+        !surpriseBudgetAllows(materialChangesThisWeek(shape.domain, ["applied"], boundaryBudgetKind), coordinated)
+      ) {
         parkForReview(announced, "weekly surprise budget already used; review this change before applying");
         continue;
       }

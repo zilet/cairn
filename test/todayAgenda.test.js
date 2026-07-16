@@ -596,7 +596,7 @@ test("an older safety review survives nine newer generic requested-review decisi
   assert.equal(draft.body, "Keep the safety-floor decision visible");
 });
 
-test("a weekly budget hold is persisted and remains visible on Today under lead posture", () => {
+test("a weekly budget hold is persisted but waits quietly off the Today rail under lead posture", () => {
   repo.setSettings({ lead_mode: "lead" });
   const first = nutritionCheckinDraft();
   assert.equal(applyProposalWithAutonomy(first.id, { requested_tier: "quiet_apply" }).pending, true);
@@ -609,7 +609,9 @@ test("a weekly budget hold is persisted and remains visible on Today under lead 
   const held = applyProposalWithAutonomy(second.id, { requested_tier: "quiet_apply" });
   assert.equal(held.review_reason_code, "budget_review");
   assert.equal(repo.getProposal(second.id).autonomy?.review_reason_code, "budget_review");
-  assert.ok(agendaDraftCandidate(), "budget review is genuine, not auto-adoptable orphan noise");
+  // Ruling B: a budget hold is a WAIT, not an ask — it lands automatically when the
+  // surprise-budget week rolls (orphan adoption re-offers it), so it never interrupts Today.
+  assert.equal(agendaDraftCandidate(), undefined, "a budget hold never nags as a decision on Today");
 });
 
 test("acknowledging a scheduled nutrition target drops it out of the Today rail", () => {
