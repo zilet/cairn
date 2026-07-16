@@ -66,7 +66,8 @@ test("teamWeekSectionsHtml renders every populated section with escaping, domain
   const cards = loadCards();
   const html = cards.teamWeekSectionsHtml(fullTeam(), escapeHtml);
 
-  assert.match(html, /What your team did/);
+  assert.match(html, /Week in review/);
+  assert.doesNotMatch(html, /What your team did/, "the old section name is gone");
   assert.match(html, /class="team-domain">Nutrition</);
   assert.match(html, /Raised your target &lt;2225&gt;/);
   assert.match(html, /class="team-voice">Nutrition lead: fuel &lt;up&gt;/);
@@ -75,8 +76,9 @@ test("teamWeekSectionsHtml renders every populated section with escaping, domain
   assert.match(html, /Anchor meals around &lt;fibre&gt;/);
 
   assert.match(html, /What we're watching/);
-  assert.match(html, /Watching how your weight trend answers the nutrition change/);
-  assert.match(html, /through Jul 22/);
+  assert.match(html, /how your weight trend answers the nutrition change/);
+  assert.doesNotMatch(html, /Watching how your weight trend/, "the 'Watching' prefix is gone");
+  assert.match(html, /· through Jul 22/);
 
   assert.match(html, /How it landed/);
   assert.match(html, /class="team-item team-good"/);
@@ -85,7 +87,50 @@ test("teamWeekSectionsHtml renders every populated section with escaping, domain
   assert.match(html, /Connections worth a look/);
   assert.match(html, /Sleep &lt;dipped&gt; when mileage ramped/);
 
+  // No expander when nothing exceeds a display cap.
+  assert.doesNotMatch(html, /team-fold/);
+
   assert.doesNotMatch(html, /<2225>|<up>|<fibre>|<dipped>/);
+});
+
+test("display caps fold the overflow into a quiet expander per section", () => {
+  const cards = loadCards();
+  const team = {
+    lead: "",
+    did: [
+      {
+        domain: "training",
+        label: "Training",
+        changes: [
+          { text: "Change one", specialist: null, when: "2026-07-14" },
+          { text: "Change two", specialist: null, when: "2026-07-13" },
+          { text: "Change three", specialist: null, when: "2026-07-12" },
+          { text: "Change four", specialist: null, when: "2026-07-11" },
+        ],
+      },
+    ],
+    flagged: [
+      { kind: "directive", text: "Ask one", domain: "health", when: "2026-07-14" },
+      { kind: "directive", text: "Ask two", domain: "health", when: "2026-07-13" },
+      { kind: "directive", text: "Ask three", domain: "health", when: "2026-07-12" },
+      { kind: "directive", text: "Ask four", domain: "health", when: "2026-07-11" },
+    ],
+    watching: [],
+    landed: [],
+    insights: [],
+  };
+  const html = cards.teamWeekSectionsHtml(team, escapeHtml);
+
+  // Week in review: ≤2 per domain visible, the other two folded.
+  assert.match(html, /Change one/);
+  assert.match(html, /Change two/);
+  assert.match(html, /<details class="team-fold"><summary class="team-fold-sum">Show 2 more/);
+  // Waiting for you: ≤3 visible, one folded.
+  assert.match(html, /Ask three/);
+  assert.match(html, /Show 1 more/);
+  // The folded items are still present in the DOM (behind the disclosure).
+  assert.match(html, /Change four/);
+  assert.match(html, /Ask four/);
 });
 
 test("teamWeekSectionsHtml and teamWeekHasContent stay quiet on an empty week", () => {
@@ -110,7 +155,7 @@ test("the weekly card leads with the agentic sentence, then the deterministic te
   assert.match(target.innerHTML, /weekly-text">The week went well\./);
   assert.match(target.innerHTML, /One change/);
   assert.match(target.innerHTML, /team-week/);
-  assert.match(target.innerHTML, /What your team did/);
+  assert.match(target.innerHTML, /Week in review/);
 });
 
 test("with no agentic weekly read, the deterministic team body stands alone under a calm lead", () => {
@@ -119,7 +164,7 @@ test("with no agentic weekly read, the deterministic team body stands alone unde
   cards.renderTeamWeekInSlot(target, fullTeam(), cardDeps);
   assert.match(target.innerHTML, /Your team this week/);
   assert.match(target.innerHTML, /This week your team made 2 changes/);
-  assert.match(target.innerHTML, /What your team did/);
+  assert.match(target.innerHTML, /Week in review/);
   // No feedback foot — there is no agentic insight to react to.
   assert.doesNotMatch(target.innerHTML, /data-ifb/);
 });

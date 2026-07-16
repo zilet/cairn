@@ -24,6 +24,7 @@ import { getMarkerHistory } from "./health.js";
 import { normalizedExerciseKey, canonicalGroup, isMobility } from "./exercise-canon.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { addMemory } from "./memory.js";
+import { metricLabel } from "./shared.js";
 // Single sources of truth (function-level cycle, resolved at call time — the same
 // pattern coach↔intelligence↔propagation already rely on): the acute-marker classifier
 // (with its chronic-cluster guard) and the prior-week training-load helpers.
@@ -853,24 +854,6 @@ function measurementCount(row: EvaluatedDecisionRow): number {
     if (match) values.push(Number(match[1]));
   }
   return values.length ? Math.max(...values) : 0;
-}
-
-function metricLabel(metric: string): string {
-  const labels: Record<string, string> = {
-    weight_trend_lb_wk: "weight trend",
-    intake_to_weight_response: "intake-to-weight response",
-    exercise_target_completion: "exercise target completion",
-    exercise_est_1rm_trend: "strength progression",
-    session_performance_feedback: "session performance",
-    joint_pain_or_soreness: "joint-pain or soreness response",
-    plan_day_adherence: "plan-day adherence",
-    recovery_hrv_delta: "HRV response",
-    recovery_rhr_delta: "resting-heart-rate response",
-    sleep_duration_delta: "sleep response",
-    marker_direction: "marker direction",
-    body_measurement_direction: "body-measurement direction",
-  };
-  return labels[metric] ?? metric.replace(/_/g, " ");
 }
 
 function expectedText(row: EvaluatedDecisionRow): string {

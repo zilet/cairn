@@ -157,9 +157,18 @@ function captureTeamShortDate(iso: unknown): string {
   return new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short", day: "numeric" }).format(parsed);
 }
 
-// The team's-week sections (did / flagged / watching / landed / connections) as
-// one calm block. Every server string is escaped. Empty sections are omitted; no
-// content → "".
+// Per-section display caps. The server returns the full coalesced/deduped read;
+// anything beyond these caps is kept, just folded behind a quiet expander so the
+// card stays short. "Week in review" is additionally capped to ≤2 lines per domain.
+const TEAM_DID_TOTAL_CAP = 5;
+const TEAM_DID_DOMAIN_CAP = 2;
+const TEAM_FLAGGED_CAP = 3;
+const TEAM_WATCHING_CAP = 4;
+const TEAM_CONN_CAP = 2;
+
+// The team's-week ("week in review") sections (did / flagged / watching / landed /
+// connections) as one calm block. Every server string is escaped. Empty sections are
+// omitted; no content → "". Items hidden by a display cap fold into a quiet expander.
 function captureTeamWeekSectionsHtml(
   team: CaptureTeamWeek | null | undefined,
   esc: (value: unknown) => string,
@@ -168,35 +177,47 @@ function captureTeamWeekSectionsHtml(
   const t = team as CaptureTeamWeek;
   const blocks: string[] = [];
 
-  const didItems: string[] = [];
+  // "Week in review" — ≤2 lines per domain, ≤5 lines total visible; the rest fold.
+  const didVisible: string[] = [];
+  const didOverflow: string[] = [];
   for (const group of Array.isArray(t.did) ? t.did : []) {
+    let shownInDomain = 0;
     for (const change of Array.isArray(group?.changes) ? group.changes : []) {
       const line = String(change?.text || "").trim();
       if (!line) continue;
       const voice = String(change?.specialist || "").trim();
-      didItems.push(`<li class="team-item">
+      const li = `<li class="team-item">
           <span class="team-item-line"><span class="team-domain">${esc(group?.label || group?.domain || "")}</span> ${esc(line)}</span>
           ${voice ? `<span class="team-voice">${esc(voice)}</span>` : ""}
-        </li>`);
+        </li>`;
+      if (shownInDomain < TEAM_DID_DOMAIN_CAP && didVisible.length < TEAM_DID_TOTAL_CAP) {
+        didVisible.push(li);
+        shownInDomain++;
+      } else {
+        didOverflow.push(li);
+      }
     }
   }
-  if (didItems.length) blocks.push(captureTeamSectionHtml("What your team did", didItems));
+  if (didVisible.length) blocks.push(captureTeamSectionHtml("Week in review", didVisible, didOverflow));
 
   const flaggedItems = (Array.isArray(t.flagged) ? t.flagged : [])
     .map((f) => String(f?.text || "").trim())
     .filter(Boolean)
     .map((line) => `<li class="team-item"><span class="team-item-line">${esc(line)}</span></li>`);
-  if (flaggedItems.length) blocks.push(captureTeamSectionHtml("Waiting for you", flaggedItems));
+  const flagged = captureTeamSplitByCap(flaggedItems, TEAM_FLAGGED_CAP);
+  if (flagged.visible.length) blocks.push(captureTeamSectionHtml("Waiting for you", flagged.visible, flagged.overflow));
 
   const watchingItems = (Array.isArray(t.watching) ? t.watching : [])
     .map((w) => {
       const line = String(w?.text || "").trim();
       if (!line) return "";
       const through = captureTeamShortDate(w?.through);
-      return `<li class="team-item"><span class="team-item-line">Watching ${esc(line)}${through ? ` <span class="team-when">through ${esc(through)}</span>` : ""}</span></li>`;
+      return `<li class="team-item"><span class="team-item-line">${esc(line)}${through ? ` <span class="team-when">· through ${esc(through)}</span>` : ""}</span></li>`;
     })
     .filter(Boolean);
-  if (watchingItems.length) blocks.push(captureTeamSectionHtml("What we're watching", watchingItems));
+  const watching = captureTeamSplitByCap(watchingItems, TEAM_WATCHING_CAP);
+  if (watching.visible.length)
+    blocks.push(captureTeamSectionHtml("What we're watching", watching.visible, watching.overflow));
 
   const landedItems = (Array.isArray(t.landed) ? t.landed : [])
     .map((l) => {
@@ -212,16 +233,33 @@ function captureTeamWeekSectionsHtml(
     .map((i) => String(i?.text || "").trim())
     .filter(Boolean)
     .map((line) => `<li class="team-item"><span class="team-item-line">${esc(line)}</span></li>`);
-  if (connItems.length) blocks.push(captureTeamSectionHtml("Connections worth a look", connItems));
+  const conn = captureTeamSplitByCap(connItems, TEAM_CONN_CAP);
+  if (conn.visible.length)
+    blocks.push(captureTeamSectionHtml("Connections worth a look", conn.visible, conn.overflow));
 
   if (!blocks.length) return "";
   return `<div class="team-week">${blocks.join("")}</div>`;
 }
 
-function captureTeamSectionHtml(label: string, items: string[]): string {
+// Split rendered `<li>` strings into the visible head (≤cap) and the folded tail.
+function captureTeamSplitByCap(items: string[], cap: number): { visible: string[]; overflow: string[] } {
+  return { visible: items.slice(0, cap), overflow: items.slice(cap) };
+}
+
+// A calm native disclosure holding the items a display cap hid; "" when nothing is
+// hidden. No JS wiring needed (the card HTML is set via innerHTML).
+function captureTeamFoldHtml(items: string[]): string {
+  if (!items.length) return "";
+  return `<details class="team-fold"><summary class="team-fold-sum">Show ${items.length} more</summary>
+      <ul class="team-list team-fold-list">${items.join("")}</ul>
+    </details>`;
+}
+
+function captureTeamSectionHtml(label: string, items: string[], overflow: string[] = []): string {
   return `<div class="team-sec">
       <span class="team-sec-lbl lbl">${label}</span>
       <ul class="team-list">${items.join("")}</ul>
+      ${captureTeamFoldHtml(overflow)}
     </div>`;
 }
 

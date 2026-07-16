@@ -4,6 +4,7 @@ import { listProposals } from "./profile.js";
 import { listBrainDecisions, listBrainExpectations } from "./brain-decisions.js";
 import { latestBrainEvaluation } from "./brain-evaluations.js";
 import { whatWorksForYou } from "./reaction-model.js";
+import { metricLabel } from "./shared.js";
 import { specialistVoiceLine } from "../brain/specialist-voice.js";
 import type { BrainDecision } from "../brain/decision-contract.js";
 import type { BrainEvaluation } from "../brain/evaluation-contract.js";
@@ -205,24 +206,6 @@ function appliedItems(): LearnedItem[] {
 }
 
 const VISIBLE_DECISION_STATUSES = new Set(["applied", "reverted", "superseded", "rejected", "canceled"]);
-
-function metricLabel(metric: string): string {
-  const labels: Record<string, string> = {
-    weight_trend_lb_wk: "weight trend",
-    intake_to_weight_response: "intake-to-weight response",
-    exercise_target_completion: "exercise completion",
-    exercise_est_1rm_trend: "strength progression",
-    session_performance_feedback: "session performance",
-    joint_pain_or_soreness: "joint-pain or soreness response",
-    plan_day_adherence: "plan adherence",
-    recovery_hrv_delta: "HRV response",
-    recovery_rhr_delta: "resting-heart-rate response",
-    sleep_duration_delta: "sleep response",
-    marker_direction: "marker direction",
-    body_measurement_direction: "body-measurement direction",
-  };
-  return labels[metric] ?? metric.replace(/_/g, " ");
-}
 
 function latestExpectationOutcome(decision: BrainDecision): {
   expectation: BrainExpectation | null;

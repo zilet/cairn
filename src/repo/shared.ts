@@ -144,6 +144,30 @@ export function chatHistoryTimeLabel(createdAt: unknown, now: Date = new Date(),
   return `${zonedMonthDay(d, tz)} ${time}`;
 }
 
+// Plain words for a brain expectation metric key. The single source of truth for
+// the team's-week read (src/repo/team-week.ts), the Learned timeline
+// (src/repo/learned-timeline.ts) and the reaction model (src/repo/reaction-model.ts),
+// so all three speak with one identical vocabulary — do not re-inline a private copy
+// in any consumer.
+const METRIC_LABELS: Record<string, string> = {
+  weight_trend_lb_wk: "weight trend",
+  intake_to_weight_response: "intake-to-weight response",
+  exercise_target_completion: "exercise completion",
+  exercise_est_1rm_trend: "strength progression",
+  session_performance_feedback: "session performance",
+  joint_pain_or_soreness: "joint-pain or soreness response",
+  plan_day_adherence: "plan adherence",
+  recovery_hrv_delta: "HRV response",
+  recovery_rhr_delta: "resting-heart-rate response",
+  sleep_duration_delta: "sleep response",
+  marker_direction: "marker direction",
+  body_measurement_direction: "body-measurement direction",
+};
+export function metricLabel(metric: unknown): string {
+  const key = String(metric ?? "");
+  return METRIC_LABELS[key] ?? key.replace(/_/g, " ");
+}
+
 // Pounds per kilogram — the single conversion constant (was duplicated in profile.ts
 // and, less precisely as 2.2046, in enrich.ts's Garmin kg→lb path).
 export const LB_PER_KG = 2.2046226218;

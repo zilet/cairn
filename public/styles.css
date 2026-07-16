@@ -3248,6 +3248,18 @@ body.swr-busy::after{
 .team-when{color:var(--muted)}
 .team-item.team-good .team-item-line{color:var(--sage-text,var(--ink-2))}
 .team-item.team-watch .team-item-line{color:var(--accent)}
+/* Quiet expander holding the items a display cap folded away (calm, editorial —
+   a ▸ that rotates open, like .hist-fold but tucked inside a team section). */
+.team-fold{margin-top:2px}
+.team-fold>summary{
+  list-style:none;cursor:pointer;font-family:var(--font-ui);font-size:.72rem;
+  letter-spacing:.03em;color:var(--muted);display:inline-flex;align-items:center;gap:5px;
+}
+.team-fold>summary::-webkit-details-marker{display:none}
+.team-fold>summary::before{content:"▸";font-size:.65rem;transition:transform .15s ease}
+.team-fold[open]>summary::before{transform:rotate(90deg)}
+.team-fold>summary:hover{color:var(--ink-2)}
+.team-fold-list{margin-top:6px}
 
 /* autoregulation feedback (Today · finish bar) — reuses the check-in language.
    Optional, calm, dismissible; recovery INFORMS the coach, never auto-applies. */
