@@ -371,3 +371,54 @@ test("a bare recovery draft is routed through autonomy and is never described as
   assert.match(result.reason, /not scheduled/i);
   assert.equal(repo.listProposals(20).filter((proposal) => String(proposal.instruction).startsWith(repo.RECOVERY_WEEK_INSTRUCTION_PREFIX)).length, 1);
 });
+
+test("under review posture, a persistent strain never stacks more than one open protective fuel + recovery draft", () => {
+  // Persistent strain schedules BOTH a bounded fuel correction and a coordinated recovery
+  // week. Under review posture neither is owned and the branch stamps no cooldown, so —
+  // without supersession — a daily scheduler pass would mint a fresh held nutrition draft
+  // AND a fresh recovery review decision every day. Guard: at most one of each survives.
+  repo.setSettings({ lead_mode: "review_everything", proactive_enabled: true });
+  seedTarget();
+  seedPlan();
+
+  const sig = "persistent-strain-review-sig";
+  for (let pass = 0; pass < 3; pass++) {
+    const result = runUnderfuelingControlLoop(today(), { read: read("persistent_strain", sig) });
+    assert.equal(result.action, "none", "a held package reports no owned action");
+  }
+
+  // Exactly one open protective-fuel NUTRITION review draft + one live review decision.
+  const nutritionDrafts = repo
+    .listReviewHeldProposals(50)
+    .filter((p) => p.agent === "underfuel-brain" && p.instruction === "auto: protective fuel correction");
+  assert.equal(nutritionDrafts.length, 1, "held protective-fuel nutrition drafts do not pile up daily");
+  const liveNutritionReview = repo
+    .listBrainDecisions({ status: "review", kind: "nutrition_target", domain: "nutrition", limit: 100 })
+    .filter((d) => {
+      const p = repo.getProposal(Number(d.source_ref_key));
+      return p && p.agent === "underfuel-brain" && p.instruction === "auto: protective fuel correction";
+    });
+  assert.equal(liveNutritionReview.length, 1, "no live duplicate nutrition review decisions accumulate");
+
+  // Exactly one open protective RECOVERY draft + one live review decision (the draft is
+  // reused across passes, so what would otherwise pile is the review decision on it).
+  const recoveryDrafts = repo
+    .listProposals(50)
+    .filter(
+      (p) =>
+        p.agent === "underfuel-brain" &&
+        p.status === "draft" &&
+        String(p.instruction).startsWith(repo.RECOVERY_WEEK_INSTRUCTION_PREFIX)
+    );
+  assert.equal(recoveryDrafts.length, 1, "the coordinated recovery draft is reused, never duplicated");
+  const liveRecoveryReview = repo
+    .listBrainDecisions({ status: "review", kind: "training_structure", domain: "recovery", limit: 100 })
+    .filter((d) => {
+      const p = repo.getProposal(Number(d.source_ref_key));
+      return p && p.agent === "underfuel-brain" && String(p.instruction).startsWith(repo.RECOVERY_WEEK_INSTRUCTION_PREFIX);
+    });
+  assert.equal(liveRecoveryReview.length, 1, "no live duplicate recovery review decisions accumulate");
+
+  // Retry-ability preserved: persistent strain never stamps a cooldown on the held branch.
+  assert.equal(repo.getAppState("underfuel_prescription_last_action"), null, "the held branch stamps no cooldown");
+});

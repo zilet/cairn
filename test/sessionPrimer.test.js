@@ -12,6 +12,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo, localDaysAgo, seedSleep } from "./_seed.js";
 import { sessionPrimer } from "../dist/repo/session-primer.js";
+import { recordDecision } from "../dist/repo/brain-decisions.js";
 
 function reset() {
   for (const t of [
@@ -121,6 +122,58 @@ test("fresh day: a movement new this week surfaces in fresh[] against an establi
   assert.ok(primer.fresh.some((f) => /bulgarian/i.test(f.exercise)), "the new movement is flagged fresh");
   assert.ok(!primer.fresh.some((f) => /back squat/i.test(f.exercise)), "the established movement is not fresh");
   assert.ok(primer.fresh.every((f) => f.why && f.why.length > 0), "every fresh row carries a rationale");
+});
+
+test("an applied rotation reads as 'Swapped in X for Y' in changed[] and suppresses its fresh[] duplicate", () => {
+  makeExercise("Back Squat", "quads");
+  makeExercise("Front Squat", "quads");
+  // An established training base (6 distinct session-days on Back Squat, the lift that
+  // was later rotated out) so the fresh signal is active — Front Squat would otherwise
+  // read as "fresh on your plan".
+  for (const d of [35, 30, 25, 20, 15, 10]) logSet("Back Squat", localDaysAgo(d), { weight: 225, reps: 5, rir: 2 });
+  // Post-swap the plan carries Front Squat (Back Squat was rotated out).
+  planDay(1, "Lower", [{ exercise: "Front Squat", sets: 3, rep_low: 5, rep_high: 5, target_weight: 185 }]);
+
+  // The applied exercise-rotation decision + its source proposal carrying the swap.
+  const proposal = repo.createProposal("exercise-swap", "rotate a same-pattern variation", "", {
+    summary: "Rotated Front Squat in for Back Squat to break the plateau.",
+    changes: [
+      { day_number: 1, swap: { from: "Back Squat", to: "Front Squat" }, reason: "Rotate a same-pattern variation in for Back Squat." },
+    ],
+  });
+  recordDecision({
+    effective_date: localDaysAgo(3),
+    kind: "exercise_rotation",
+    domain: "training",
+    summary: "Rotated Front Squat in for Back Squat to break the plateau.",
+    rationale: "The lift stalled; a same-pattern variation keeps the stimulus fresh.",
+    source: "exercise-swap",
+    source_ref_type: "plan_proposal",
+    source_ref_key: String(proposal.id),
+    status: "applied",
+    autonomy_tier: "quiet_apply",
+    risk_class: "low",
+    reversible: true,
+    input_fingerprint: null,
+    context: {},
+    action: { proposal_id: proposal.id },
+    specialist: null,
+    applied_at: `${localDaysAgo(3)}T12:00:00.000Z`,
+    reverted_at: null,
+    superseded_by: null,
+    evaluator_version: null,
+  });
+
+  const primer = sessionPrimer(undefined, { dayNumber: 1 });
+  assert.ok(primer, "a primer is produced");
+  const rotation = primer.changed.find((c) => c.kind === "rotation");
+  assert.ok(rotation, "the applied rotation surfaces as a rotation change");
+  assert.match(rotation.text, /Swapped in Front Squat for Back Squat/i, "it names the swap in/out");
+  assert.ok(
+    !primer.fresh.some((f) => /front squat/i.test(f.exercise)),
+    "the swapped-in movement is NOT also listed as a mysteriously-fresh row"
+  );
+  assert.match(primer.approach, /fresh/i, "the approach reflects the fresh variation");
 });
 
 test("bare inputs: no plan → null, and a plan day with no signals → null (silence beats filler)", () => {

@@ -6,11 +6,12 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**216 tools.**
+**225 tools.**
 
 | Tool | Description |
 |---|---|
 | `ack_today_agenda` | Presentation acknowledgement for a Today-agenda attention item (currently 'health-focus'): retires the current semantic revision from Today WITHOUT resolving or dismissing the underlying health directives — they keep shaping meals/training. Materially new evidence creates a new revision and may surface again. Mirrors POST /api/today-agenda/ack. |
+| `activate_journey_phase` | Explicitly activate a journey phase. Any other active phase is completed; this never happens automatically from a suggestion. |
 | `add_checkin` | Record an optional morning check-in (a day-read signal — offered, never required). All fields optional; mood/energy/sleep_feel/soreness are 1-5 (clamped). Several per day are allowed; the latest wins for reads. |
 | `add_context_event` | Record a life-timeline event the coach should plan around: a trip (training disruption), an injury (deload/swap affected movements), a life_event (high stress / poor sleep / illness → reduce volume), or a family_event (a family/kids commitment like 'Tue 17:00 soccer' → keep that day shorter / more flexible). meta is kind-specific: trip {location}, injury {area, severity}, life_event {impact}, family_event {member, recurrence}. |
 | `add_family` | Add a family member to the roster. relationship is e.g. son / daughter / partner / parent; color is an optional swatch; birthdate is optional YYYY-MM-DD; notes is free-text. allergies are a HARD exclusion in any shared/household meal; dietary_restrictions surface as optional kid-friendly / shared-meal mods. |
@@ -26,6 +27,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `confirm_goal_checkin` | Restart the gentle 'is this still your goal?' clock (Era 2): records that the user confirmed (or changed) their goal, so the quiet check-in stays away for ~3 months. You-drive — changes nothing else. |
 | `consolidate_memory` | Queue a quiet memory consolidation: merge near-duplicates, supersede contradictions, and promote recurring observations. Returns a job immediately; poll get_agent_job. Marks, never hard-deletes. |
 | `create_block` | Start a periodization block (a mesocycle with a goal, focus, phase, and week count) so progression is structured rather than random. |
+| `create_journey_phase` | Create a proposed journey phase (cut, maintenance, diet break, reverse, or gain). Does not activate automatically; review then call activate_journey_phase. |
 | `delete_context_event` | Delete a life-timeline event by id. To close a healed injury while KEEPING the record, prefer resolve_context_event. |
 | `delete_exercise` | Delete an exercise by name. Refuses (ok:false) if it still has logged sets or is referenced in a plan — remove those first. |
 | `delete_family` | Delete a family member by id. |
@@ -36,6 +38,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `delete_set` | Delete one logged set by id (e.g. a mis-entry). |
 | `delete_supplement` | Remove one supplement from the regimen by id. |
 | `derive_directives` | Re-run the deterministic propagation engine over the latest markers: clears the 'markers' directive source and re-derives evidence-based nutrition/training/watch directives for every out-of-optimal marker, while honoring prior Done/Dismiss feedback. Idempotent; leaves agent-emitted 'health_review' directives untouched. |
+| `discard_journey_phase` | Discard a proposed or inactive journey phase. |
 | `discard_proposal` | Discard a draft proposal without applying it. |
 | `dismiss_anchor_objective_suggestion` | Quiet the anchor-lift comeback suggestion for a long while. A suggestion is never a gate; this only stops it from resurfacing until well later. |
 | `dismiss_goal_checkin` | Wave off the gentle goal check-in (Era 2): starts a long cooldown so it stays quiet. Dismissible to silence; pull-never-push. |
@@ -90,6 +93,11 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_health_standing` | A pull-based health standing read: actual-age vs selectable reference-age percentiles for markers with real reference curves (VO2max/body composition), plus BP, labs, activity, Garmin/recovery signals, and a plain signal_age synthesis. Motivational orientation only — no 0-100 score and not medical advice. |
 | `get_health_synthesis` | The cached elite-coach whole-picture health story (the headline, the 2-3 connected priorities + their concrete moves, the single highest-leverage change), plus the deterministic focus tiering and a `stale` flag (true when newer labs landed than the synthesis was written against). Returns the last generated narrative (or null); regenerate with synthesize_health. |
 | `get_injury_impacts` | For each ACTIVE injury on the life timeline, the planned exercises it loads (with where they appear in the plan + any existing constraint note) and a few safe alternative exercises to consider. Deterministic, offline. Suggestions only — it never changes the plan. |
+| `get_journey` | Read the body-composition journey: profile baseline/target, current body-fat estimate, active/proposed phase, transition suggestion, leanness-aware rate, and calm milestones. Read-only; suggestions never auto-apply. |
+| `get_journey_milestones` | Read deterministic journey milestones (weight-loss thresholds, percent-to-goal crossings, body-fat bands). Calm in-app progress markers only; no scores or push notifications. |
+| `get_journey_phase` | Read one journey phase by id. |
+| `get_journey_timeline` | Read the road ahead: one ordered forward-looking timeline composed from the goal date, the phase projection window, scheduled lab re-checks and strength re-tests, a DEXA re-scan window, the program block boundary, and the nearest strength standards. Dated entries carry a real date, projections are windows, and standards are undated direction-of-travel. A calm plan, never a countdown or a gate; empty when there is nothing to plan yet. |
+| `get_journey_transition_suggestion` | Read the deterministic possible next-phase suggestion, such as maintenance after arrival or a stabilization break after a long cut. Pure read: it does not schedule, create, or activate a phase. Use it as context for optional Coach discussion; goal-identity changes still require explicit approval. |
 | `get_last_set` | Get the most recent logged set for an exercise (for prefill). |
 | `get_learned_timeline` | A calm, pull-only read of what Cairn has understood about you and the changes it's made — load-bearing memories, outcome learnings, connected-brain directives, and applied plan changes. Newest-first, bounded. Explains, never grades; no scores. |
 | `get_meal_plan` | Get one meal plan by id (hydrated: parsed days/meals/macros). |
@@ -156,6 +164,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `list_garmin_sources` | List configured Garmin source records without token material. |
 | `list_health_records` | List recent health documents (bloodwork / DEXA / other) with their kind, test date, summary, key markers and analysis status. Does not include the binary file. |
 | `list_insights` | List the live stream of quiet cross-domain insights (new + seen, most recent first). The Brief surfaces ONE at a time when the app is opened; dismissed insights are hidden here but remain in the DB/exports. Never pushed. |
+| `list_journey_phases` | List body-composition journey phases. Phases are proposed first; only explicit activation makes one active. |
 | `list_meal_plans` | List recent meal plans. |
 | `list_memory` | List accumulated memory notes (most recent first, superseded rows hidden). Set include_superseded for the full history. |
 | `list_proposals` | List recent plan-update proposals and their status (draft/applied/discarded). |

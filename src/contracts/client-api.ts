@@ -1306,7 +1306,7 @@ export interface ClientStrengthJourney {
 // worth saying beyond the Brief (a bare plan day with no signals).
 export interface ClientSessionPrimerChange {
   exercise: string;
-  kind: "target" | "recovery_cap";
+  kind: "target" | "recovery_cap" | "rotation";
   text: string;
 }
 export interface ClientSessionPrimerWatch {

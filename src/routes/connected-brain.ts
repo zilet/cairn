@@ -67,7 +67,13 @@ connectedBrainRouter.get("/health/risk", (_req, res) => res.json(cardiovascularR
 
 // Doctor-loop read: missing-workup recommendations plus lab/DEXA retest attention
 // rows derived through the adaptive attention engine. Informational, not medical advice.
-connectedBrainRouter.get("/health/doctor-loop", (_req, res) => res.json(doctorLoopRead({ refresh: true })));
+// READ-ONLY by default (like /health/next-checkup): the nightly scheduler op owns the
+// attention-schedule refresh, so a passive PWA/tool open never triggers the write pass.
+// Pass ?refresh=1 to force a fresh deterministic pass.
+connectedBrainRouter.get("/health/doctor-loop", (req, res) => {
+  const refresh = req.query.refresh === "1" || req.query.refresh === "true";
+  res.json(doctorLoopRead({ refresh }));
+});
 
 // Next-checkup read: the athlete-facing composition over the doctor-loop — rechecks
 // whose window is open/opening, visible follow-through on active supplements &
@@ -87,7 +93,10 @@ connectedBrainRouter.get("/health/next-checkup", (req, res) => {
 // latest intervention-outcome annotations. Informational, not medical advice.
 connectedBrainRouter.get("/health/doctor-packet", (req, res) => {
   const asOf = typeof req.query.as_of === "string" ? req.query.as_of : undefined;
-  res.json(doctorPacketRead({ refresh: true, asOf }));
+  // READ-ONLY by default; ?refresh=1 forces a fresh attention pass (the doctor Share
+  // packet is an explicit user action that may want the newest data).
+  const refresh = req.query.refresh === "1" || req.query.refresh === "true";
+  res.json(doctorPacketRead({ refresh, asOf }));
 });
 
 // Intervention -> outcome annotations: compare follow-up marker readings against

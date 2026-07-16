@@ -24,7 +24,9 @@
 import { db } from "../db.js";
 import { getCachedDayRead } from "./day-read.js";
 import { dayRead } from "./day-read.js";
+import { listBrainDecisions } from "./brain-decisions.js";
 import { planDayFocus, planDayCandidates, selectAdaptivePlanDay } from "./plan-selection.js";
+import { getProposal } from "./profile.js";
 import {
   movementTenureWeeks,
   painAreaLoadsExercise,
@@ -36,7 +38,7 @@ import { directivesForCoach } from "./propagation.js";
 import { localDateISO } from "./shared.js";
 
 // ---- the public contract (mirrored in src/contracts/client-api.ts) ----------
-export type SessionPrimerChangeKind = "target" | "recovery_cap";
+export type SessionPrimerChangeKind = "target" | "recovery_cap" | "rotation";
 
 export interface SessionPrimerChange {
   exercise: string;
@@ -146,6 +148,80 @@ function changedFromPrescriptions(prescriptions: Prescription[]): SessionPrimerC
       });
     }
     if (out.length >= MAX_CHANGED) break;
+  }
+  return out;
+}
+
+// The last logged session-day strictly before `before` — the "since you last trained"
+// anchor for what counts as newly changed. Null when there's no prior session.
+function lastComparableSessionDate(before: string): string | null {
+  try {
+    const row = db
+      .prepare(
+        `SELECT MAX(s.date) AS d FROM sessions s JOIN logged_sets l ON l.session_id = s.id WHERE s.date < ?`
+      )
+      .get(before) as any;
+    const d = row?.d ? String(row.d).slice(0, 10) : null;
+    return d && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : null;
+  } catch {
+    return null;
+  }
+}
+
+// Applied exercise-rotation decisions (a swap the coach landed) that sit on today's
+// plan day and landed since the athlete last trained — surfaced as "Swapped in X for Y"
+// so a rotated-in movement reads as a deliberate coaching move, not a mystery. Reads the
+// swap {from,to,reason} off the decision's source proposal; null-safe and bounded. An
+// undated decision, one off today's day, or one whose incoming movement is no longer on
+// the plan is skipped.
+function appliedRotationsForDay(
+  dayNumber: number,
+  movements: string[],
+  windowStart: string | null
+): Array<{ to: string; change: SessionPrimerChange }> {
+  const out: Array<{ to: string; change: SessionPrimerChange }> = [];
+  const onDay = new Set(movements.map((m) => m.trim().toLowerCase()));
+  const seen = new Set<string>();
+  let decisions: any[] = [];
+  try {
+    decisions = listBrainDecisions({ status: "applied", kind: "exercise_rotation", limit: 100 }) as any[];
+  } catch {
+    return out;
+  }
+  for (const decision of decisions) {
+    const when = String(decision?.applied_at ?? decision?.created_at ?? "").slice(0, 10);
+    if (!when || (windowStart && when < windowStart)) continue;
+    const action = (decision?.action ?? {}) as any;
+    const proposalId = Number(
+      action.proposal_id ??
+        action.plan_proposal_id ??
+        (String(decision?.source_ref_type) === "plan_proposal" ? decision?.source_ref_key : Number.NaN)
+    );
+    if (!(proposalId > 0)) continue;
+    let proposal: any = null;
+    try {
+      proposal = getProposal(proposalId);
+    } catch {
+      proposal = null;
+    }
+    const changes = Array.isArray(proposal?.parsed?.changes) ? proposal.parsed.changes : [];
+    for (const change of changes) {
+      const from = String(change?.swap?.from ?? "").trim();
+      const to = String(change?.swap?.to ?? "").trim();
+      if (!from || !to) continue;
+      // Touches today's plan day: the swap named this day AND the incoming movement is on it now.
+      if (Number(change?.day_number) !== dayNumber) continue;
+      const key = to.toLowerCase();
+      if (!onDay.has(key) || seen.has(key)) continue;
+      seen.add(key);
+      const why = String(decision?.summary ?? change?.reason ?? "").replace(/\s+/g, " ").trim();
+      const text = why ? `Swapped in ${to} for ${from} — ${why}` : `Swapped in ${to} for ${from}`;
+      out.push({
+        to,
+        change: { exercise: to, kind: "rotation", text: text.length > 160 ? `${text.slice(0, 159).trimEnd()}...` : text },
+      });
+      if (out.length >= MAX_CHANGED) return out;
+    }
   }
   return out;
 }
@@ -261,7 +337,7 @@ function buildApproach(
   if (changed.some((c) => c.kind === "target")) {
     return "You've earned a step up — warm up properly, then chase the new target with clean reps.";
   }
-  if (fresh.length) {
+  if (fresh.length || changed.some((c) => c.kind === "rotation")) {
     return "There's something fresh in the mix — start light, find the groove, and only add load once it moves well.";
   }
   return "Solid session ahead — log honestly and the plan follows your lead.";
@@ -325,9 +401,18 @@ export function sessionPrimer(
     }
   })();
   const movements = strengthMovementsForDay(dayNumber);
-  const changed = changedFromPrescriptions(prescriptions);
+  // Earned/recovery target deltas from the prescriptions, plus applied exercise
+  // rotations the coach landed since the athlete last trained — both are "what changed".
+  const rotations = appliedRotationsForDay(dayNumber, movements, lastComparableSessionDate(d));
+  const changed = [...changedFromPrescriptions(prescriptions), ...rotations.map((r) => r.change)].slice(0, MAX_CHANGED);
   const watch = buildWatch(movements, read);
-  const fresh = buildFresh(movements, d);
+  // A movement the coach deliberately swapped in reads as a rotation in changed[], so it
+  // must not ALSO surface as a mysteriously-"fresh" row (only suppress the ones actually
+  // shown after the changed[] cap).
+  const shownRotations = new Set(
+    changed.filter((c) => c.kind === "rotation").map((c) => c.exercise.trim().toLowerCase())
+  );
+  const fresh = buildFresh(movements, d).filter((f) => !shownRotations.has(f.exercise.trim().toLowerCase()));
 
   // Silence beats filler: with no changes, no watch items and nothing fresh, the
   // primer would only echo the Brief — so there's genuinely nothing to say.

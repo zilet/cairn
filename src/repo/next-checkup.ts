@@ -23,6 +23,8 @@ import { getLatestHealthReview, getMarkerHistory } from "./health.js";
 import { listDirectives } from "./coach.js";
 import { listSupplements } from "./supplements.js";
 import { canonicalMarker } from "./marker-canon.js";
+import { followupLabel, markerSlugFromSignalKey } from "./attention-labels.js";
+import { dexaRescanWhenText, dexaRescanWindow, latestDexaDate } from "./dexa-window.js";
 
 export type CheckupItemKind = "lab" | "dexa" | "review" | "add";
 
@@ -149,22 +151,31 @@ function describeSignal(
     return { label: m?.name ? String(m.name) : titleFromSlug(key.slice(7)), kind: "lab" };
   }
   if (key.startsWith("dexa:")) return { label: "Body composition (DEXA)", kind: "dexa" };
-  if (key.startsWith("review-followup:")) return { label: "Lab follow-up from your last review", kind: "review" };
+  // Speak each review follow-up as its own action ("Recheck hs-CRP") instead of one
+  // generic "Lab follow-up" line that renders identically for every different follow-up.
+  if (key.startsWith("review-followup:"))
+    return { label: followupLabel(entry.reason) ?? "Lab follow-up from your last review", kind: "review" };
   return { label: titleFromSlug(key), kind: "lab" };
 }
 
 function toCheckupItem(
   entry: AttentionScheduleEntry,
   asOf: string,
-  markerBySignal: Map<string, MarkerLike>
+  markerBySignal: Map<string, MarkerLike>,
+  dexaWhenText: string | null
 ): CheckupItem {
   const { label, kind } = describeSignal(entry, markerBySignal);
+  // The DEXA re-scan reads as a soft window ("worth considering around …"), matching
+  // Train's forward timeline — never a bare due date, though attention's next_due stays
+  // the scheduling key. Falls back to the calm horizon phrasing if no window is known.
+  const when_text =
+    kind === "dexa" && dexaWhenText ? dexaWhenText : dueWhenText(entry.next_due, asOf);
   return {
     signal_key: entry.signal_key,
     label,
     kind,
     next_due: entry.next_due,
-    when_text: dueWhenText(entry.next_due, asOf),
+    when_text,
     why: entry.reason,
   };
 }
@@ -460,6 +471,18 @@ export function nextCheckupRead(opts: { refresh?: boolean; asOf?: string } = {})
     const sig = markerSignalKey(m as any);
     if (sig && !markerBySignal.has(sig)) markerBySignal.set(sig, m);
   }
+  // The DEXA re-scan window is derived once from the baseline scan and shared with
+  // Train's timeline, so both surfaces frame the re-scan as the same suggestion window.
+  // A current/future window reads as a dated suggestion ("worth considering around …");
+  // an OVERDUE window (its end already past asOf) reads as due/overdue instead of a
+  // nonsensical past date range — matching Train's timeline, which drops a stale window.
+  const dexaWindow = dexaRescanWindow(latestDexaDate(markers as any[]));
+  const dexaWhenText =
+    dexaWindow == null
+      ? null
+      : dexaWindow.end < asOf
+        ? "window is open — worth scheduling"
+        : dexaRescanWhenText(dexaWindow);
 
   const schedule = [
     ...listAttentionSchedule({ domain: "health", limit: 80 }),
@@ -472,23 +495,30 @@ export function nextCheckupRead(opts: { refresh?: boolean; asOf?: string } = {})
     ...listDueAttention(asOf, { domain: "health", limit: 50 }),
     ...listDueAttention(asOf, { domain: "body", limit: 20 }),
   ];
+  // Dedupe at the MARKER level, not the raw signal_key: a marker's periodic cadence
+  // recheck (`marker:hs-crp`) and a review follow-up on that same marker
+  // (`review-followup:hs-crp:…`) are one story — surface the sooner one only. Non-marker
+  // signals (dexa, add-ons) keep keying on their own signal_key.
+  const dedupeKey = (signalKey: string): string => markerSlugFromSignalKey(signalKey) ?? signalKey;
   const dueSeen = new Set<string>();
   const dueNow: CheckupItem[] = [];
   for (const e of due.sort((a, b) => String(a.next_due).localeCompare(String(b.next_due)))) {
-    if (dueSeen.has(e.signal_key)) continue;
-    dueSeen.add(e.signal_key);
-    dueNow.push(toCheckupItem(e, asOf, markerBySignal));
+    const k = dedupeKey(e.signal_key);
+    if (dueSeen.has(k)) continue;
+    dueSeen.add(k);
+    dueNow.push(toCheckupItem(e, asOf, markerBySignal, dexaWhenText));
   }
 
   // Upcoming = dated entries not yet due, within the horizon.
   const upcomingDated: CheckupItem[] = [];
   const upSeen = new Set<string>();
   for (const e of schedule) {
-    if (!e.next_due || dueSeen.has(e.signal_key) || upSeen.has(e.signal_key)) continue;
+    const k = dedupeKey(e.signal_key);
+    if (!e.next_due || dueSeen.has(k) || upSeen.has(k)) continue;
     const days = daysBetween(asOf, e.next_due);
     if (days == null || days <= 0 || days > UPCOMING_HORIZON_DAYS) continue;
-    upSeen.add(e.signal_key);
-    upcomingDated.push(toCheckupItem(e, asOf, markerBySignal));
+    upSeen.add(k);
+    upcomingDated.push(toCheckupItem(e, asOf, markerBySignal, dexaWhenText));
   }
   upcomingDated.sort((a, b) => String(a.next_due).localeCompare(String(b.next_due)));
 

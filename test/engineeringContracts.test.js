@@ -304,6 +304,7 @@ test("MCP modular tool sources are discovered without duplicate names", () => {
   const garminTools = read("src/surfaces/mcp/garmin.ts");
   const healthMetricsTools = read("src/surfaces/mcp/health-metrics.ts");
   const healthRecordTools = read("src/surfaces/mcp/health-records.ts");
+  const journeyTools = read("src/surfaces/mcp/journey.ts");
   const memoryLearningTools = read("src/surfaces/mcp/memory-learning.ts");
   const nutritionTools = read("src/surfaces/mcp/nutrition.ts");
   const operatorTools = read("src/surfaces/mcp/operator.ts");
@@ -326,6 +327,7 @@ test("MCP modular tool sources are discovered without duplicate names", () => {
     garminTools,
     healthMetricsTools,
     healthRecordTools,
+    journeyTools,
     memoryLearningTools,
     nutritionTools,
     operatorTools,
@@ -348,6 +350,7 @@ test("MCP modular tool sources are discovered without duplicate names", () => {
   assert.match(mcp, /registerGarminTools\(server\)/);
   assert.match(mcp, /registerHealthMetricsTools\(server\)/);
   assert.match(mcp, /registerHealthRecordTools\(server\)/);
+  assert.match(mcp, /registerJourneyTools\(server\)/);
   assert.match(mcp, /registerMemoryLearningTools\(server\)/);
   assert.match(mcp, /registerNutritionTools\(server\)/);
   assert.match(mcp, /registerOperatorTools\(server\)/);
@@ -372,6 +375,8 @@ test("MCP modular tool sources are discovered without duplicate names", () => {
   assert.match(parity, /src\/surfaces\/mcp\/health-metrics\.ts/);
   assert.match(genDocs, /src\/surfaces\/mcp\/health-records\.ts/);
   assert.match(parity, /src\/surfaces\/mcp\/health-records\.ts/);
+  assert.match(genDocs, /src\/surfaces\/mcp\/journey\.ts/);
+  assert.match(parity, /src\/surfaces\/mcp\/journey\.ts/);
   assert.match(genDocs, /src\/surfaces\/mcp\/memory-learning\.ts/);
   assert.match(parity, /src\/surfaces\/mcp\/memory-learning\.ts/);
   assert.match(genDocs, /src\/surfaces\/mcp\/nutrition\.ts/);
@@ -394,7 +399,7 @@ test("MCP modular tool sources are discovered without duplicate names", () => {
   assert.match(parity, /src\/surfaces\/mcp\/training-status\.ts/);
   assert.match(genDocs, /src\/surfaces\/mcp\/body-metrics\.ts/);
   assert.match(parity, /src\/surfaces\/mcp\/body-metrics\.ts/);
-  assert.equal(tools.length, 216, "tool count changes only for reviewed MCP additions");
+  assert.equal(tools.length, 225, "tool count changes only for reviewed MCP additions");
   assert.equal(new Set(tools).size, tools.length, "MCP tool names must be unique across modules");
   assert.doesNotMatch(mcp, /server\.tool\(/, "src/mcp.ts should stay a registry, not a tool-definition file");
   assert.doesNotMatch(mcp, /server\.tool\("get_chat_history"/);
@@ -726,6 +731,10 @@ test("generated API docs include mounted route modules", () => {
   assert.match(genDocs, /receiver:\s*"healthMetricsRouter",\s*prefix:\s*""/);
   assert.match(parity, /src\/routes\/health-metrics\.ts/);
   assert.match(parity, /"healthMetricsRouter"/);
+  assert.match(genDocs, /src\/routes\/journey\.ts/);
+  assert.match(genDocs, /receiver:\s*"journeyRouter",\s*prefix:\s*""/);
+  assert.match(parity, /src\/routes\/journey\.ts/);
+  assert.match(parity, /"journeyRouter"/);
   assert.match(genDocs, /src\/routes\/memory-learning\.ts/);
   assert.match(genDocs, /receiver:\s*"memoryLearningRouter",\s*prefix:\s*""/);
   assert.match(parity, /src\/routes\/memory-learning\.ts/);

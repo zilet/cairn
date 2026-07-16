@@ -22,6 +22,8 @@ import { canonicalMarker } from "./marker-canon.js";
 import { normalizedExerciseKey } from "./exercise-canon.js";
 import { currentLiftCapacities } from "./performance.js";
 import { strengthBenchmarkMilestones, type StrengthMilestoneInput } from "./training-milestones.js";
+import { followupLabel, markerSlugFromSignalKey } from "./attention-labels.js";
+import { dexaRescanWindow, latestDexaDate } from "./dexa-window.js";
 import { addDaysISO, daysBetweenISO, localDateISO } from "./shared.js";
 
 export type ForwardTimelineKind = "goal" | "phase" | "recheck" | "retest" | "rescan" | "milestone" | "block";
@@ -156,21 +158,6 @@ function liftLabelMap(programState: ProgramState): Map<string, string> {
   return map;
 }
 
-function latestDexaDate(markers: any[]): string | null {
-  let latest: string | null = null;
-  for (const marker of markers) {
-    const name = String(marker?.name ?? "").toLowerCase();
-    const looksDexa =
-      marker?.latest?.kind === "dexa" ||
-      (Array.isArray(marker?.points) && marker.points.some((p: any) => p?.kind === "dexa")) ||
-      /\b(dexa|visceral|almi|ffmi|bmd|t-score|z-score)\b/.test(name);
-    if (!looksDexa) continue;
-    const date = iso(marker?.latest?.date ?? marker?.points?.at?.(-1)?.date);
-    if (date && (!latest || date > latest)) latest = date;
-  }
-  return latest;
-}
-
 // A scheduled attention checkpoint is on the road ahead when its next_due sits
 // inside the forward horizon (a small backward grace keeps a just-passed re-check
 // visible instead of silently dropping it).
@@ -192,18 +179,6 @@ function attentionBasis(entry: AttentionScheduleEntry, today: string): string {
 function attentionDetail(entry: AttentionScheduleEntry): string | null {
   const reason = clip(entry.reason, 180);
   return reason || null;
-}
-
-// A review-followup row's signal_key is machinery ("review-followup:hs-crp:…");
-// the human action lives in its reason ("Health review follow-up: Recheck hs-CRP
-// (when rested…)"). Use that action as the label, minus any trailing timing note.
-function followupLabel(entry: AttentionScheduleEntry): string | null {
-  const reason = String(entry.reason ?? "").trim();
-  const core = reason
-    .replace(/^health review follow-up:\s*/i, "")
-    .replace(/\s*\([^)]*\)\s*\.?\s*$/, "")
-    .trim();
-  return core ? clip(core, 90) : null;
 }
 
 // A sort key for chronological ordering: dated entries by their date, window
@@ -303,11 +278,11 @@ export function forwardTimeline(today = localDateISO(), opts: ForwardTimelineOpt
   const stageKind = recomposition?.stage?.kind ?? null;
   const rescanWarranted =
     mode === "lose" || stageKind === "early_cut" || stageKind === "mid_cut" || stageKind === "leaning_out";
-  if (dexaBaseline && rescanWarranted) {
-    const start = addDaysISO(dexaBaseline, 84);
-    const end = addDaysISO(dexaBaseline, 112);
-    const endDelta = end ? daysBetweenISO(end, today) : null;
-    if (start && end && endDelta != null && endDelta >= -OVERDUE_GRACE_DAYS) {
+  const rescanWindow = dexaBaseline ? dexaRescanWindow(dexaBaseline) : null;
+  if (rescanWindow && rescanWarranted) {
+    const { start, end } = rescanWindow;
+    const endDelta = daysBetweenISO(end, today);
+    if (endDelta != null && endDelta >= -OVERDUE_GRACE_DAYS) {
       dated.push({
         id: "rescan:dexa",
         kind: "rescan",
@@ -352,10 +327,17 @@ export function forwardTimeline(today = localDateISO(), opts: ForwardTimelineOpt
     if (dated.filter((e) => e.kind === "recheck").length >= MAX_RECHECKS) break;
     const isFollowup = entry.signal_key.startsWith("review-followup:");
     const label = isFollowup
-      ? (followupLabel(entry) ?? "Lab follow-up from your last review")
+      ? (followupLabel(entry.reason) ?? "Lab follow-up from your last review")
       : `${labels.get(entry.signal_key) ?? prettifySlug(entry.signal_key.replace(/^marker:/, ""))} re-check`;
-    if (seenRecheck.has(label)) continue;
-    seenRecheck.add(label);
+    // Dedupe at the MARKER level, not the display label: a marker's periodic cadence
+    // recheck (`marker:hs-crp`) and a review follow-up on that same marker
+    // (`review-followup:hs-crp:…`) carry different labels but are one story. Entries
+    // are ascending by next_due, so the first seen (soonest) wins. A signal with no
+    // real marker slug (a dexa signal, or a sentinel non-marker follow-up) falls back to
+    // its FULL signal_key so distinct follow-ups are never collapsed into one.
+    const dedupeKey = markerSlugFromSignalKey(entry.signal_key) ?? entry.signal_key;
+    if (seenRecheck.has(dedupeKey)) continue;
+    seenRecheck.add(dedupeKey);
     dated.push({
       id: `recheck:${entry.signal_key}`,
       kind: "recheck",

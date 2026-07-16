@@ -133,6 +133,73 @@ test("dates are drawn from real data, never fabricated", () => {
   assert.ok(milestone.label.length > 0, "a standards milestone reads as a direction of travel");
 });
 
+test("a marker's cadence recheck and a review follow-up on the SAME marker dedupe to one", () => {
+  // One marker (hs-CRP), two signal keys: a periodic cadence recheck and a review
+  // follow-up. They carry different display labels but are one story — they must collapse
+  // to a single recheck entry, and the sooner (soonest next_due) one wins.
+  repo.upsertAttentionSchedule({
+    signal_key: "marker:hs-crp",
+    domain: "health",
+    tier: "surveillance",
+    next_due: ahead(20),
+    last_checked: today,
+    reason: "hs-CRP periodic recheck cadence.",
+    release_condition: "clean and stable",
+    source: "doctor-loop",
+    state: {},
+  });
+  repo.upsertAttentionSchedule({
+    signal_key: "review-followup:hs-crp:recheck-hs-crp-when-rested",
+    domain: "health",
+    tier: "active",
+    next_due: ahead(30),
+    last_checked: today,
+    reason: "Health review follow-up: Recheck hs-CRP (when rested).",
+    release_condition: "the follow-up lands",
+    source: "health-review",
+    state: {},
+  });
+  const hs = repo
+    .forwardTimeline()
+    .filter((e) => e.kind === "recheck" && /hs-crp/i.test(`${e.id} ${e.label}`));
+  assert.equal(hs.length, 1, "the two hs-CRP signals collapse to one recheck entry");
+  assert.equal(hs[0].when.date, ahead(20), "the sooner of the two survives");
+});
+
+test("two different non-marker review follow-ups both survive on the timeline (no sentinel collision)", () => {
+  // Both file under the "lab-follow-up" sentinel slug; that sentinel must not be a dedupe
+  // key, so distinct follow-ups fall back to their full signal_key and both survive.
+  repo.upsertAttentionSchedule({
+    signal_key: "review-followup:lab-follow-up:repeat-sleep-study",
+    domain: "health",
+    tier: "active",
+    next_due: ahead(15),
+    last_checked: today,
+    reason: "Health review follow-up: Repeat sleep study.",
+    release_condition: "x",
+    source: "health-review",
+    state: {},
+  });
+  repo.upsertAttentionSchedule({
+    signal_key: "review-followup:lab-follow-up:repeat-colonoscopy",
+    domain: "health",
+    tier: "active",
+    next_due: ahead(20),
+    last_checked: today,
+    reason: "Health review follow-up: Repeat colonoscopy.",
+    release_condition: "x",
+    source: "health-review",
+    state: {},
+  });
+  const followups = repo
+    .forwardTimeline()
+    .filter((e) => e.kind === "recheck" && e.id.includes("review-followup:lab-follow-up"));
+  assert.equal(followups.length, 2, "both non-marker follow-ups survive");
+  const labels = followups.map((e) => e.label);
+  assert.ok(labels.some((l) => /^Repeat sleep study/.test(l)), "the sleep-study follow-up is present");
+  assert.ok(labels.some((l) => /^Repeat colonoscopy/.test(l)), "the colonoscopy follow-up is present");
+});
+
 test("an empty database yields an empty timeline", () => {
   resetTables(
     "profile",

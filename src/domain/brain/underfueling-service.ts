@@ -15,6 +15,7 @@ import {
   getProposal,
   recompositionStageAt,
   RECOVERY_WEEK_INSTRUCTION,
+  RECOVERY_WEEK_INSTRUCTION_PREFIX,
   recoveryWeekStatus,
   setProposalStatus,
 } from "../../repo/profile.js";
@@ -342,6 +343,10 @@ function recoveryProposal(read: UnderfuelingRead, coordinationKey: string): any 
     summary: "A coordinated recovery week is scheduled so strength and recovery can absorb the current block.",
     rationale: read.rationale,
     coordination_key: coordinationKey,
+    // The same-read match key for the recovery pile-up guard (mirrors nutrition's
+    // parsed.nutrition.underfueling_signature), so a fresh held recovery draft/review can
+    // retire its stale same-signature predecessor instead of stacking daily.
+    underfueling_signature: read.signature,
     days,
   });
 }
@@ -384,6 +389,44 @@ function supersedeStaleProtectiveFuelReviewDrafts(signature: string, exceptPropo
     }
     setProposalStatus(proposalId, "superseded");
   }
+}
+
+// The recovery half of the same pile-up guard. Unlike the nutrition draft (a FRESH
+// proposal is minted per pass), the recovery-week draft is REUSED across daily passes —
+// recoveryWeekStatus finds it as 'drafted' and re-routes it — so what stacks under review
+// posture is a fresh review DECISION on the same draft every day. Keep only the freshest
+// same-signature protective recovery review decision, superseding the rest, and retire any
+// recovery draft the kept decision no longer owns. Matches the underfueling recovery draft
+// by agent + RECOVERY_WEEK_INSTRUCTION_PREFIX + parsed.underfueling_signature.
+function supersedeStaleProtectiveFuelRecoveryDrafts(signature: string, keepDecisionId?: number): void {
+  const sig = String(signature ?? "");
+  if (!sig) return;
+  const held = listBrainDecisions({ status: "review", kind: "training_structure", domain: "recovery", limit: 100 });
+  const ours = held.filter((decision) => {
+    if (String(decision.source_ref_type) !== "plan_proposal") return false;
+    const proposalId = Number(decision.source_ref_key);
+    if (!(proposalId > 0)) return false;
+    const proposal = getProposal(proposalId) as any;
+    return (
+      !!proposal &&
+      proposal.status === "draft" &&
+      String(proposal.agent) === UNDERFUEL_BRAIN_AGENT &&
+      String(proposal.instruction ?? "").startsWith(RECOVERY_WEEK_INSTRUCTION_PREFIX) &&
+      String(proposal.parsed?.underfueling_signature ?? "") === sig
+    );
+  });
+  const keptProposalId =
+    keepDecisionId != null ? Number(ours.find((d) => Number(d.id) === keepDecisionId)?.source_ref_key) || null : null;
+  const orphaned = new Set<number>();
+  for (const decision of ours) {
+    if (keepDecisionId != null && Number(decision.id) === keepDecisionId) continue;
+    transitionBrainDecision(Number(decision.id), "superseded");
+    const proposalId = Number(decision.source_ref_key);
+    // Only retire the draft itself if the kept decision does not still own it (in the
+    // common reuse case every stale decision shares the one kept draft, so nothing is retired).
+    if (keptProposalId == null || proposalId !== keptProposalId) orphaned.add(proposalId);
+  }
+  for (const proposalId of orphaned) setProposalStatus(proposalId, "superseded");
 }
 
 function scheduleNutrition(
@@ -507,6 +550,11 @@ export function runUnderfuelingControlLoop(
         : towardMaintenance >= 100
           ? scheduleNutrition(read, today, coordinationKey, towardMaintenance, Math.min(250, towardMaintenance))
           : null;
+      // A held (review-posture) fuel correction leaves the cooldown unstamped so it stays
+      // retry-able; retire the older same-signature review draft so held nutrition drafts
+      // don't pile up daily, exactly like prescription_strain.
+      if (nutrition?.review_required)
+        supersedeStaleProtectiveFuelReviewDrafts(read.signature, Number(nutrition.proposal?.id));
       const existingRecovery = recoveryWeekStatus(today);
       let recovery: any | null = null;
       const existingRecoveryDecision = recoveryDecisionForStatus(existingRecovery, today);
@@ -521,6 +569,10 @@ export function runUnderfuelingControlLoop(
         const proposal = recoveryProposal(read, coordinationKey);
         if (proposal) recovery = routeRecoveryProposal(Number(proposal.id), coordinationKey);
       }
+      // Same guard for the recovery half: a held recovery review keeps at most one live
+      // same-signature review decision instead of minting a fresh one every daily pass.
+      if (recovery?.review_required)
+        supersedeStaleProtectiveFuelRecoveryDrafts(read.signature, Number(recovery.decision?.id));
       if (!nutrition && !recovery && !existingRecovery)
         return none("No active nutrition target or training plan is available to coordinate.");
       const nutritionOwned = towardMaintenance < 100 || resultOwnsDecision(nutrition);

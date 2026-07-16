@@ -176,6 +176,139 @@ test("nextCheckupRead reads the persisted schedule when refresh is off", () => {
   assert.ok(warm.due_now.some((i) => /apob/i.test(i.label)), "the read surfaces the persisted recheck");
 });
 
+// Item 1: marker-level dedupe — a marker's cadence recheck and a review follow-up on
+// that same marker are one story, not two rows.
+test("a marker's cadence recheck and a review follow-up on the same marker dedupe to one", () => {
+  const asOf = "2026-07-10";
+  repo.upsertAttentionSchedule({
+    signal_key: "marker:hs-crp",
+    domain: "health",
+    tier: "active",
+    next_due: "2026-07-01", // due first
+    last_checked: "2026-04-01",
+    reason: "hs-CRP is off optimal; recheck after the inflammation window.",
+    release_condition: "clean",
+    source: "doctor-loop",
+    state: {},
+  });
+  repo.upsertAttentionSchedule({
+    signal_key: "review-followup:hs-crp:recheck-hs-crp-when-rested",
+    domain: "health",
+    tier: "active",
+    next_due: "2026-07-05", // also due, but later
+    last_checked: "2026-04-01",
+    reason: "Health review follow-up: Recheck hs-CRP (when rested).",
+    release_condition: "the follow-up lands",
+    source: "health_review",
+    state: {},
+  });
+  const read = repo.nextCheckupRead({ refresh: false, asOf });
+  // Only the RECHECK signals for hs-CRP (a cadence `marker:` or a `review-followup:`),
+  // not the "add:" missing-workup suggestion which is a separate concern.
+  const hs = [...read.due_now, ...read.upcoming].filter((i) => /^(marker|review-followup):hs-crp/.test(i.signal_key));
+  assert.equal(hs.length, 1, "the two hs-CRP recheck signals collapse to one checkup item");
+  assert.equal(hs[0].signal_key, "marker:hs-crp", "the sooner (cadence) recheck wins");
+});
+
+// Item 2: two different review follow-ups must read as their two different actions,
+// not one hardcoded "Lab follow-up from your last review" line.
+test("review follow-ups read as their own human action, never one generic label", () => {
+  const asOf = "2026-07-10";
+  repo.upsertAttentionSchedule({
+    signal_key: "review-followup:hs-crp:recheck-hs-crp",
+    domain: "health",
+    tier: "active",
+    next_due: "2026-07-01",
+    last_checked: "2026-04-01",
+    reason: "Health review follow-up: Recheck hs-CRP (when rested).",
+    release_condition: "x",
+    source: "health_review",
+    state: {},
+  });
+  repo.upsertAttentionSchedule({
+    signal_key: "review-followup:ferritin:recheck-ferritin",
+    domain: "health",
+    tier: "active",
+    next_due: "2026-07-02",
+    last_checked: "2026-04-01",
+    reason: "Health review follow-up: Recheck ferritin after iron repletion.",
+    release_condition: "x",
+    source: "health_review",
+    state: {},
+  });
+  const read = repo.nextCheckupRead({ refresh: false, asOf });
+  const labels = read.due_now.map((i) => i.label);
+  assert.ok(labels.includes("Recheck hs-CRP"), "hs-CRP follow-up reads as its action");
+  assert.ok(labels.some((l) => /^Recheck ferritin/i.test(l)), "ferritin follow-up reads as its own action");
+  assert.ok(
+    !labels.every((l) => l === "Lab follow-up from your last review"),
+    "the two follow-ups are not one identical generic label"
+  );
+});
+
+// Item 3: the DEXA re-scan reads as a soft suggestion window (matching Train's
+// forward timeline), never a bare "window is open" due date.
+test("the DEXA re-scan reads as a suggestion window, not an appointment", () => {
+  const asOf = "2026-07-10";
+  // A flagged body-comp DEXA baseline → an active dexa attention signal + a re-scan window.
+  seedHealthDoc("2026-04-01", [marker("Body Fat %", 33, { unit: "%", flag: "high" })], "dexa");
+  repo.refreshDoctorLoopAttention();
+  const read = repo.nextCheckupRead({ refresh: false, asOf });
+  const dexa = [...read.due_now, ...read.upcoming].find((i) => i.kind === "dexa");
+  assert.ok(dexa, "a DEXA re-scan item is present");
+  assert.match(dexa.when_text, /worth considering around /, "DEXA reads as a soft window");
+  assert.doesNotMatch(String(dexa.when_text), /window is open|opens in/, "never a bare due-date phrase");
+  assert.ok(dexa.next_due, "attention's next_due stays the scheduling key");
+});
+
+// Item 1 (fix): two DIFFERENT non-marker follow-ups are both filed under the
+// "lab-follow-up" sentinel slug — that sentinel must NOT be a dedupe key, or one is
+// silently dropped. They dedupe on their full signal_key instead and both survive.
+test("two different non-marker review follow-ups both survive (no sentinel-slug collision)", () => {
+  const asOf = "2026-07-10";
+  repo.upsertAttentionSchedule({
+    signal_key: "review-followup:lab-follow-up:repeat-sleep-study",
+    domain: "health",
+    tier: "active",
+    next_due: "2026-07-01",
+    last_checked: "2026-04-01",
+    reason: "Health review follow-up: Repeat sleep study.",
+    release_condition: "x",
+    source: "health_review",
+    state: {},
+  });
+  repo.upsertAttentionSchedule({
+    signal_key: "review-followup:lab-follow-up:repeat-colonoscopy",
+    domain: "health",
+    tier: "active",
+    next_due: "2026-07-02",
+    last_checked: "2026-04-01",
+    reason: "Health review follow-up: Repeat colonoscopy.",
+    release_condition: "x",
+    source: "health_review",
+    state: {},
+  });
+  const read = repo.nextCheckupRead({ refresh: false, asOf });
+  const reviewItems = read.due_now.filter((i) => i.kind === "review");
+  assert.equal(reviewItems.length, 2, "both non-marker follow-ups survive the sentinel dedupe");
+  assert.ok(reviewItems.some((i) => /^Repeat sleep study/.test(i.label)), "the sleep-study follow-up is present");
+  assert.ok(reviewItems.some((i) => /^Repeat colonoscopy/.test(i.label)), "the colonoscopy follow-up is present");
+});
+
+// Item 3 (fix): an OVERDUE flagged body-comp — its 12–16-week window already past — must
+// not render a nonsensical PAST date range; it reads as due/overdue, matching Train's
+// timeline (which drops the stale window entirely).
+test("an overdue DEXA re-scan reads as due, never a past dated window", () => {
+  const asOf = "2026-07-10";
+  seedHealthDoc("2026-01-01", [marker("Body Fat %", 33, { unit: "%", flag: "high" })], "dexa");
+  repo.refreshDoctorLoopAttention();
+  const read = repo.nextCheckupRead({ refresh: false, asOf });
+  const dexa = [...read.due_now, ...read.upcoming].find((i) => i.kind === "dexa");
+  assert.ok(dexa, "the overdue DEXA re-scan still surfaces");
+  assert.match(dexa.when_text, /window is open/, "reads as due/overdue");
+  assert.doesNotMatch(String(dexa.when_text), /\b(Jan|Feb|Mar|Apr|May)\b/, "no past-month date in when_text");
+});
+
 test("nextCheckupRead is calm and empty on a fresh DB, never throwing", () => {
   const read = repo.nextCheckupRead({ refresh: true });
   assert.deepEqual(read.due_now, []);

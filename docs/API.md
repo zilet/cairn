@@ -9,7 +9,7 @@ Health's short-lived pairing exchange is public and passes through the instance-
 when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**269 routes** across 100 groups.
+**278 routes** across 101 groups.
 
 ## `/activities`
 
@@ -317,7 +317,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/health` | Liveness only: process identity plus exact build provenance. It deliberately does not probe optional coaching CLIs or other external providers. |
-| GET | `/api/health/doctor-loop` | Doctor-loop read: missing-workup recommendations plus lab/DEXA retest attention rows derived through the adaptive attention engine. Informational, not medical advice. |
+| GET | `/api/health/doctor-loop` | Doctor-loop read: missing-workup recommendations plus lab/DEXA retest attention rows derived through the adaptive attention engine. Informational, not medical advice. READ-ONLY by default (like /health/next-checkup): the nightly scheduler op owns the attention-schedule refresh, so a passive PWA/tool open never triggers the write pass. Pass ?refresh=1 to force a fresh deterministic pass. |
 | GET | `/api/health/doctor-packet` | Export-ready doctor packet: current prioritized health focus, active directives, doctor-loop retest/missing-workup plan, PREVENT cardiovascular-risk read, and latest intervention-outcome annotations. Informational, not medical advice. |
 | GET | `/api/health/focus` | The elite-coach synthesis layer: the deterministic TIERED focus (priorities, not a flat directive flood) + the latest cached agentic health-story narrative. Both informational, no scores. The narrative is regenerated via POST below. |
 | GET | `/api/health/markers` |  |
@@ -383,6 +383,20 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | GET | `/api/insights` | The Brief surfaces ONE at a time when the app is opened. GET returns the live stream (new + seen, most recent first); dismissed insights stay in the DB and exports but are hidden here. |
 | PUT | `/api/insights/:id` | Mark an insight seen/dismissed and/or record thumbs feedback. On feedback:'up' we ALSO write the insight text to memory so the relationship learns what kind of connection lands. 404 on unknown id (a real lookup, unlike the soft reads). |
 | POST | `/api/insights/generate` | Run ONE agentic pass over the whole picture for a single genuine cross-domain connection, dedupe against what we've already said, and store it. Like the health review, ok:false at status 200 is the designed failure signal: the agent found nothing real (found:false) or returned an unusable shape. NO push notification ever fires; the result simply waits in-app. |
+
+## `/journey`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/journey` |  |
+| GET | `/api/journey/milestones` |  |
+| GET | `/api/journey/phases` |  |
+| POST | `/api/journey/phases` |  |
+| GET | `/api/journey/phases/:id` |  |
+| POST | `/api/journey/phases/:id/activate` |  |
+| POST | `/api/journey/phases/:id/discard` |  |
+| GET | `/api/journey/timeline` | The road ahead: one ordered forward-looking timeline (goal, phase window, scheduled re-checks/re-tests, DEXA re-scan window, block boundary, nearest strength standards). A calm plan, never a countdown — empty DB yields []. |
+| GET | `/api/journey/transition-suggestion` |  |
 
 ## `/last-set`
 
