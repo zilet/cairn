@@ -9,7 +9,7 @@ Health's short-lived pairing exchange is public and passes through the instance-
 when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**278 routes** across 101 groups.
+**279 routes** across 102 groups.
 
 ## `/activities`
 
@@ -689,6 +689,12 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | DELETE | `/api/supplements/:id` |  |
 | PUT | `/api/supplements/:id` |  |
 | POST | `/api/supplements/understand` | The headline: free text -> understood + approximated + stored. Returns the items. |
+
+## `/support-work`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/support-work` | Support-work read: for each lagging COMPOUND lift (plateaued/regressing) whose CONTRIBUTING muscles run under their productive volume, one targeted supporting- work suggestion (build the weak synergist — e.g. direct triceps for a stalled bench — instead of only rotating the movement; if the lift's own prime mover is under-trained it says the lift may simply be under-practiced). Plain words, suggestion-not-a-gate, no scores; [] when nothing lags. ?date= optional. |
 
 ## `/symptom-links`
 
