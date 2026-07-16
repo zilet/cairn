@@ -88,9 +88,9 @@ test("cardHtml tones: an earned target is a sage 'ok' pip; a recovery cap and so
   const primer = loadPrimer();
   const html = primer.cardHtml(FULL_PRIMER);
   // Earned target → ok pip
-  assert.match(html, /read-contrib-pip ok[^]*Back Squat/, "the earned target row carries a sage 'ok' pip");
+  assert.match(html, /read-contrib-pip ok[\s\S]*Back Squat/, "the earned target row carries a sage 'ok' pip");
   // A non-soft directive → watch pip
-  assert.match(html, /read-contrib-pip watch[^]*spinal loading/, "the hard directive carries a terracotta 'watch' pip");
+  assert.match(html, /read-contrib-pip watch[\s\S]*spinal loading/, "the hard directive carries a terracotta 'watch' pip");
 });
 
 test("cardHtml escapes every server-supplied string", () => {
