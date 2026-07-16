@@ -132,13 +132,28 @@ export interface ClientDiagnosticsResponse {
     slow: ClientDiagnosticEvent[];
   };
   performance: {
-    build_id: string; window_days: number; requests: number; avg_ms: number | null;
-    p50_ms: number | null; p95_ms: number | null; max_ms: number | null;
-    observed_hours: number; throughput_per_hour: number;
+    build_id: string;
+    window_days: number;
+    requests: number;
+    avg_ms: number | null;
+    p50_ms: number | null;
+    p95_ms: number | null;
+    max_ms: number | null;
+    observed_hours: number;
+    throughput_per_hour: number;
     traffic: { product: number; internal: number };
     by_protocol: Record<string, number>;
-    top_routes: Array<{ protocol: string; method: string; route: string; requests: number; errors: number;
-      avg_ms: number | null; p50_ms: number | null; p95_ms: number | null; max_ms: number }>;
+    top_routes: Array<{
+      protocol: string;
+      method: string;
+      route: string;
+      requests: number;
+      errors: number;
+      avg_ms: number | null;
+      p50_ms: number | null;
+      p95_ms: number | null;
+      max_ms: number;
+    }>;
   };
   storage: {
     diagnostic_events: { rows: number; retention_days: number; row_cap: number };
@@ -283,8 +298,24 @@ export interface ClientBrainToolCall {
   created_at: string;
 }
 
+export interface ClientBrainConferenceDiagnostics {
+  jobs?: number;
+  /** Compatibility aggregate: complete plus useful degraded/incomplete results. */
+  successful?: number;
+  complete_successful?: number;
+  useful_degraded_or_incomplete?: number;
+  degraded?: number;
+  incomplete?: number;
+  [key: string]: unknown;
+}
+
+export interface ClientBrainDiagnosticsMetrics {
+  conferences?: ClientBrainConferenceDiagnostics;
+  [key: string]: unknown;
+}
+
 export interface ClientBrainDiagnostics {
-  metrics?: Record<string, unknown>;
+  metrics?: ClientBrainDiagnosticsMetrics;
   decisions: ClientBrainDecisionSummary[];
   tool_calls: ClientBrainToolCall[];
 }
@@ -362,7 +393,13 @@ export interface ClientProfile {
 
 export type ClientJourneyPhaseKind = "cut" | "maintenance" | "diet_break" | "reverse" | "gain" | string;
 export type ClientJourneyPhaseStatus = "proposed" | "active" | "completed" | "discarded" | string;
-export type ClientJourneyMilestoneKind = "weight_loss" | "goal_progress" | "goal_reached" | "bodyfat_band" | "bodyfat_goal" | string;
+export type ClientJourneyMilestoneKind =
+  | "weight_loss"
+  | "goal_progress"
+  | "goal_reached"
+  | "bodyfat_band"
+  | "bodyfat_goal"
+  | string;
 
 export interface ClientJourneyPhase {
   id?: number;
@@ -402,6 +439,50 @@ export interface ClientJourneyMilestone {
   priority: number;
 }
 
+export interface ClientRecompositionRead {
+  as_of: string;
+  stage: {
+    kind: "early_cut" | "mid_cut" | "leaning_out" | "stabilizing" | "maintenance" | "lean_gain" | "uncertain" | string;
+    label: string;
+    confidence: "low" | "medium" | "high" | string;
+    basis: string[];
+  };
+  progress: {
+    start_weight_lb: number | null;
+    current_weight_lb: number | null;
+    goal_weight_lb: number | null;
+    lost_lb: number | null;
+    remaining_lb: number | null;
+    progress_fraction: number | null;
+    robust_trend_lb_wk: number | null;
+    target_rate: { low: number; ideal: number; high: number } | null;
+    timeline: {
+      earliest_weeks: number;
+      likely_weeks: number;
+      latest_weeks: number;
+      confidence: "low" | "medium" | "high" | string;
+      includes_stabilization: boolean;
+    } | null;
+  };
+  scale: { state: string; line: string };
+  muscle: { state: string; evidence: string[] };
+  fuel: { state: string; evidence: string[] };
+  action: {
+    kind: string;
+    status: "active" | "settling" | "recommended" | "holding" | string;
+    label: string;
+    kcal_delta: number | null;
+    carb_forward: boolean;
+    training_directive: string;
+    autonomy: string;
+    effective_boundary: string | null;
+    line: string;
+  };
+  line: string;
+  reassurance: string | null;
+  evidence_keys: string[];
+}
+
 export interface ClientJourneyRead {
   profile: {
     start_weight_lb: number | null;
@@ -421,6 +502,7 @@ export interface ClientJourneyRead {
   transition_suggestion: ClientJourneyTransitionSuggestion | null;
   milestones: ClientJourneyMilestone[];
   leanness_rate?: unknown;
+  recomposition: ClientRecompositionRead;
 }
 
 export interface ClientGoalCheck {
@@ -843,21 +925,21 @@ export interface ClientInjuryImpactsResponse {
 
 export type ClientExerciseNameReconcileResponse =
   | {
-    ok: true;
-    aligned: number;
-    applied: number;
-    candidates: number;
-    agent?: string | null;
-    tried?: ClientAgentAttempt[] | null;
-    agent_status?: string | null;
-  }
+      ok: true;
+      aligned: number;
+      applied: number;
+      candidates: number;
+      agent?: string | null;
+      tried?: ClientAgentAttempt[] | null;
+      agent_status?: string | null;
+    }
   | {
-    ok: false;
-    error?: string;
-    agent?: string | null;
-    tried?: ClientAgentAttempt[] | null;
-    agent_status?: string | null;
-  };
+      ok: false;
+      error?: string;
+      agent?: string | null;
+      tried?: ClientAgentAttempt[] | null;
+      agent_status?: string | null;
+    };
 
 export type ClientWeekAheadDayKind = "lift" | "run" | "mixed" | "rest";
 
@@ -870,25 +952,25 @@ export interface ClientWeekAheadDay {
 
 export type ClientWeekAheadResponse =
   | {
-    ok: true;
-    days: ClientWeekAheadDay[];
-    summary: string;
-    source: "deterministic";
-    cached: false;
-  }
+      ok: true;
+      days: ClientWeekAheadDay[];
+      summary: string;
+      source: "deterministic";
+      cached: false;
+    }
   | {
-    ok: true;
-    days: ClientWeekAheadDay[];
-    summary: string;
-    source: "agent";
-    cached: boolean;
-    stale?: boolean;
-    agent?: string | null;
-  }
+      ok: true;
+      days: ClientWeekAheadDay[];
+      summary: string;
+      source: "agent";
+      cached: boolean;
+      stale?: boolean;
+      agent?: string | null;
+    }
   | {
-    ok: false;
-    error?: string;
-  };
+      ok: false;
+      error?: string;
+    };
 
 export interface ClientRecentTrainingMovement {
   name: string;
@@ -1013,6 +1095,13 @@ export interface ClientProgramMesocycleState {
   note: string;
 }
 
+export interface ClientActiveRecoveryWeek {
+  state: "applied";
+  applied_on: ISODateString | string;
+  until: ISODateString | string;
+  summary: string | null;
+}
+
 export interface ClientProgramEnduranceState {
   last_week_km: number | null;
   acute_chronic_ratio: number | null;
@@ -1070,6 +1159,7 @@ export interface ClientProgramState {
   lifts: ClientProgramLiftState[];
   volume: ClientProgramVolumeState[];
   mesocycle: ClientProgramMesocycleState;
+  recovery_week: ClientActiveRecoveryWeek | null;
   endurance: ClientProgramEnduranceState | null;
   hybrid: ClientHybridState | null;
   headline: string;
@@ -1650,11 +1740,13 @@ export interface ClientProposal {
 // (tier 'ask' / review_required). Loose on purpose — the server shape is the truth.
 export interface ClientProposalAutonomy {
   ok?: boolean;
+  status?: "review" | "pending" | "announced" | "applied" | string;
   tier?: string;
   applied?: unknown; // false when held; the applied-change list when it landed now
   pending?: boolean;
   announced?: boolean;
   review_required?: boolean;
+  review_reason_code?: string | null;
   effective_date?: string;
   reasons?: string[];
   [key: string]: unknown;
@@ -1979,20 +2071,20 @@ export interface ClientAgentJob {
 
 export type ClientSessionSuggestResponse =
   | {
-    ok: true;
-    session: ClientSessionSuggestion;
-    verified?: ClientAgentVerification;
-    agent?: string | null;
-    tried?: ClientAgentAttempt[] | null;
-    agent_status?: string;
-  }
+      ok: true;
+      session: ClientSessionSuggestion;
+      verified?: ClientAgentVerification;
+      agent?: string | null;
+      tried?: ClientAgentAttempt[] | null;
+      agent_status?: string;
+    }
   | {
-    ok: false;
-    error?: string;
-    agent?: string | null;
-    tried?: ClientAgentAttempt[] | null;
-    agent_status?: string;
-  }
+      ok: false;
+      error?: string;
+      agent?: string | null;
+      tried?: ClientAgentAttempt[] | null;
+      agent_status?: string;
+    }
   | ClientAgentJobEnvelope;
 
 export interface ClientAgentJobsResponse {
@@ -2257,53 +2349,98 @@ export type ClientApiCanonicalPath = keyof ClientApiResponses;
 
 export type ClientApiPath = ClientApiCanonicalPath extends `/api${infer Path}` ? Path : never;
 
-type ClientApiResponseForCleanPath<Path extends string> =
-  `/api${Path}` extends keyof ClientApiResponses ? ClientApiResponses[`/api${Path}`]
-    : Path extends `/apple-health/connections/${string}` ? ClientAppleHealthConnectionRevokeResponse
-      : Path extends `/plan/${string}/target` ? ClientPlanItem
-      : Path extends `/plan/${string}` ? ClientPlanDay | ClientDeleteResponse
-        : Path extends `/exercises/${string}` ? ClientExercise | ClientDeleteResponse
-          : Path extends `/exercise/${string}/explanation` ? ClientExerciseExplanation
-            : Path extends `/exercise/${string}` ? ClientExerciseDetail
-              : Path extends `/sessions/${string}/finish` ? ClientTrainingSession
-                : Path extends `/sessions/${string}/reopen` ? ClientTrainingSession
-                  : Path extends `/sessions/${string}/notes` ? ClientTrainingSession
-                    : Path extends `/sessions/${string}/feedback` ? ClientJsonObject | null
-                      : Path extends `/sessions/${string}` ? ClientTrainingSession
-                        : Path extends `/sets/${string}` ? ClientLoggedSet | ClientDeleteResponse
-                          : Path extends `/progress/${string}` ? ClientJsonObject
-                            : Path extends `/activities/${string}` ? ClientActivity
-                              : Path extends `/mealplans/${string}/accept` ? ClientMealPlan
-                                : Path extends `/mealplans/${string}/discard` ? ClientMealPlan
-                                  : Path extends `/meal-plans/${string}/swap` ? ClientMealSwapResponse | ClientAgentJobEnvelope
-                                    : Path extends `/meal-plans/${string}/recipe` ? ClientMealRecipeResponse | ClientAgentJobEnvelope
-                                      : Path extends `/meal-plans/${string}/days` ? ClientMealPlan
-                                        : Path extends `/food-notes/${string}` ? ClientFoodNote | ClientDeleteResponse
-                                          : Path extends `/proposals/${string}/apply` ? ClientProposalResult
-                                            : Path extends `/proposals/${string}/lead` ? ClientProposalResult
-                                            : Path extends `/proposals/${string}/discard` ? ClientProposal
-                                              : Path extends `/program/blocks/${string}` ? ClientProgramBlock
-                                                : Path extends `/directives/${string}` ? { ok: true; directive: ClientDirective }
-                                                  : Path extends `/insights/${string}` ? ClientInsight
-                                                    : Path extends `/health-docs/${string}/reanalyze` ? ClientHealthDocument
-                                                      : Path extends `/health-docs/${string}` ? ClientHealthDocument | ClientDeleteResponse
-                                                        : Path extends `/context-events/${string}` ? ClientContextEvent | ClientDeleteResponse
-                                                          : Path extends `/family/${string}` ? ClientFamilyMember | ClientDeleteResponse
+type ClientApiResponseForCleanPath<Path extends string> = `/api${Path}` extends keyof ClientApiResponses
+  ? ClientApiResponses[`/api${Path}`]
+  : Path extends `/apple-health/connections/${string}`
+    ? ClientAppleHealthConnectionRevokeResponse
+    : Path extends `/plan/${string}/target`
+      ? ClientPlanItem
+      : Path extends `/plan/${string}`
+        ? ClientPlanDay | ClientDeleteResponse
+        : Path extends `/exercises/${string}`
+          ? ClientExercise | ClientDeleteResponse
+          : Path extends `/exercise/${string}/explanation`
+            ? ClientExerciseExplanation
+            : Path extends `/exercise/${string}`
+              ? ClientExerciseDetail
+              : Path extends `/sessions/${string}/finish`
+                ? ClientTrainingSession
+                : Path extends `/sessions/${string}/reopen`
+                  ? ClientTrainingSession
+                  : Path extends `/sessions/${string}/notes`
+                    ? ClientTrainingSession
+                    : Path extends `/sessions/${string}/feedback`
+                      ? ClientJsonObject | null
+                      : Path extends `/sessions/${string}`
+                        ? ClientTrainingSession
+                        : Path extends `/sets/${string}`
+                          ? ClientLoggedSet | ClientDeleteResponse
+                          : Path extends `/progress/${string}`
+                            ? ClientJsonObject
+                            : Path extends `/activities/${string}`
+                              ? ClientActivity
+                              : Path extends `/mealplans/${string}/accept`
+                                ? ClientMealPlan
+                                : Path extends `/mealplans/${string}/discard`
+                                  ? ClientMealPlan
+                                  : Path extends `/meal-plans/${string}/swap`
+                                    ? ClientMealSwapResponse | ClientAgentJobEnvelope
+                                    : Path extends `/meal-plans/${string}/recipe`
+                                      ? ClientMealRecipeResponse | ClientAgentJobEnvelope
+                                      : Path extends `/meal-plans/${string}/days`
+                                        ? ClientMealPlan
+                                        : Path extends `/food-notes/${string}`
+                                          ? ClientFoodNote | ClientDeleteResponse
+                                          : Path extends `/proposals/${string}/apply`
+                                            ? ClientProposalResult
+                                            : Path extends `/proposals/${string}/lead`
+                                              ? ClientProposalResult
+                                              : Path extends `/proposals/${string}/discard`
+                                                ? ClientProposal
+                                                : Path extends `/program/blocks/${string}`
+                                                  ? ClientProgramBlock
+                                                  : Path extends `/directives/${string}`
+                                                    ? { ok: true; directive: ClientDirective }
+                                                    : Path extends `/insights/${string}`
+                                                      ? ClientInsight
+                                                      : Path extends `/health-docs/${string}/reanalyze`
+                                                        ? ClientHealthDocument
+                                                        : Path extends `/health-docs/${string}`
+                                                          ? ClientHealthDocument | ClientDeleteResponse
+                                                          : Path extends `/context-events/${string}`
+                                                            ? ClientContextEvent | ClientDeleteResponse
+                                                            : Path extends `/family/${string}`
+                                                              ? ClientFamilyMember | ClientDeleteResponse
                                                             : Path extends `/memory/${string}/supersede` ? ClientMemorySupersedeResponse
-                                                              : Path extends `/memory/${string}` ? ClientMemory | ClientDeleteResponse
-                                                                : Path extends `/supplements/${string}` ? ClientSupplement | ClientDeleteResponse
-                                                                  : Path extends `/chat/sessions/${string}` ? ClientChatMessage[]
-                                                                    : Path extends `/chat/turns/${string}/cancel` ? ClientChatTurnCancelResponse
-                                                                      : Path extends `/chat/turns/${string}` ? ClientChatTurn | null
-                                                                        : Path extends `/agent-jobs/${string}/cancel` ? ClientAgentJobResponse
-                                                                          : Path extends `/agent-jobs/${string}` ? ClientAgentJobResponse
-                                                                            : Path extends `/agents/${string}/info` ? ClientAgentProbeResponse
-                                                                                : Path extends `/agents/${string}/models` ? ClientAgentModelsResponse
-                                                                                  : Path extends `/agent-clis/${string}/install` ? ClientAgentCliUpdateStatus
-                                                                                  : Path extends `/brain/decisions/${string}/revert` ? ClientOkResponse & { decision?: ClientJsonObject; error?: string }
-                                                                                : unknown;
+                                                                : Path extends `/memory/${string}`
+                                                                  ? ClientMemory | ClientDeleteResponse
+                                                                  : Path extends `/supplements/${string}`
+                                                                    ? ClientSupplement | ClientDeleteResponse
+                                                                    : Path extends `/chat/sessions/${string}`
+                                                                      ? ClientChatMessage[]
+                                                                      : Path extends `/chat/turns/${string}/cancel`
+                                                                        ? ClientChatTurnCancelResponse
+                                                                        : Path extends `/chat/turns/${string}`
+                                                                          ? ClientChatTurn | null
+                                                                          : Path extends `/agent-jobs/${string}/cancel`
+                                                                            ? ClientAgentJobResponse
+                                                                            : Path extends `/agent-jobs/${string}`
+                                                                              ? ClientAgentJobResponse
+                                                                              : Path extends `/agents/${string}/info`
+                                                                                ? ClientAgentProbeResponse
+                                                                                : Path extends `/agents/${string}/models`
+                                                                                  ? ClientAgentModelsResponse
+                                                                                  : Path extends `/agent-clis/${string}/install`
+                                                                                    ? ClientAgentCliUpdateStatus
+                                                                                    : Path extends `/brain/decisions/${string}/revert`
+                                                                                      ? ClientOkResponse & {
+                                                                                          decision?: ClientJsonObject;
+                                                                                          error?: string;
+                                                                                        }
+                                                                                      : unknown;
 
-export type ClientApiResponse<Path extends string> =
-  Path extends `/api${infer Rest}` ? ClientApiResponse<Rest>
-    : Path extends `${infer Base}?${string}` ? ClientApiResponseForCleanPath<Base>
-      : ClientApiResponseForCleanPath<Path>;
+export type ClientApiResponse<Path extends string> = Path extends `/api${infer Rest}`
+  ? ClientApiResponse<Rest>
+  : Path extends `${infer Base}?${string}`
+    ? ClientApiResponseForCleanPath<Base>
+    : ClientApiResponseForCleanPath<Path>;

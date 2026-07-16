@@ -1,5 +1,5 @@
 import { db } from "../db.js";
-import { getHealthSynthesis, healthFocus, isAcuteMarker } from "./propagation.js";
+import { getHealthSynthesisView, healthFocus, isAcuteMarker } from "./propagation.js";
 import { programBalance } from "./progression.js";
 import { dayRead } from "./intelligence.js";
 import { computeGoalCheck } from "./profile.js";
@@ -267,7 +267,8 @@ function produceRecover(read: ReturnType<typeof dayRead>): Candidate | null {
 // CHRONIC lab group (leverage 2). An acute/stale CRP/ESR yields at MOST a
 // leverage-1 "recheck when you've had a quiet week" — NEVER a training cap.
 function produceRecheck(): Candidate | null {
-  const synth = getHealthSynthesis();
+  const synthesisView = getHealthSynthesisView();
+  const synth = synthesisView.stale ? null : synthesisView.synthesis;
   const oneChange = synth?.one_change ? String(synth.one_change).trim() : "";
   if (oneChange) {
     return {

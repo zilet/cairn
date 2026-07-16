@@ -176,7 +176,7 @@ test("groups intake by stamped local day when created_at crosses UTC midnight", 
   ).run(localDay, JSON.stringify({ kcal: 500 }), `${localDay} 23:30:00`);
   db.prepare(
     `INSERT INTO food_notes (date, meal, raw_output, parsed_json, enrichment_status, created_at)
-     VALUES (?, 'snack', '', ?, NULL, ?)`
+     VALUES (?, 'lunch', '', ?, NULL, ?)`
   ).run(localDay, JSON.stringify({ kcal: 700 }), `${nextUtcDay} 00:30:00`);
 
   const e = repo.estimateExpenditure(21);
@@ -202,14 +202,17 @@ test("14 snack-only days stay partial and cannot become an authoritative outcome
   for (const d of [14, 12, 10, 8, 6, 4, 2, 1]) seedWeight(localDaysAgo(d), 180);
 
   const e = repo.estimateExpenditure(21);
-  assert.equal(e.points, 14);
+  assert.equal(e.points, 0, "partial days are visible coverage, never usable outcome points");
+  assert.equal(e.intake_avg_kcal, null);
   assert.equal(e.quality.intake, "partial");
+  assert.equal(e.coverage.intake_days, 0);
   assert.equal(e.coverage.credible_intake_days, 0);
   assert.equal(e.coverage.partial_intake_days, 14);
-  assert.equal(e.confidence, "low");
-  assert.equal(e.tdee_basis, "blended_outcome_prior");
-  assert.ok(e.fusion.prior_weight > 0, "a safer user-specific prior keeps authority while coverage settles");
-  assert.notEqual(e.tdee, e.outcome_tdee, "the snack-only outcome cannot set maintenance by itself");
+  assert.equal(e.outcome_tdee, null);
+  assert.equal(e.confidence, "none");
+  assert.equal(e.tdee_basis, "profile_seed");
+  assert.deepEqual(e.fusion, { outcome_weight: 0, prior_weight: 1 });
+  assert.equal(e.tdee, e.prior_tdee, "the independent prior owns maintenance while coverage settles");
   assert.match(e.quality.explanation, /partial/i);
 });
 

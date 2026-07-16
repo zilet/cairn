@@ -124,11 +124,19 @@ type TodayRailDeps = {
         const kind = button.getAttribute("data-agenda-act") || "";
         const id = button.getAttribute("data-agenda-id") || "";
         const candidate = pending.find((item) => item.id === id);
-        const action = candidate?.action;
+        // A card may carry a quieter secondary action alongside its primary one;
+        // resolve which one this button is so we read the matching payload.
+        const action =
+          candidate?.action?.kind === kind
+            ? candidate.action
+            : candidate?.secondary_action?.kind === kind
+              ? candidate.secondary_action
+              : candidate?.action;
         const payload = action?.payload;
         if (kind === "hold-decision") {
           // Deterministic one-tap cancel: the server revert path flips the
-          // announced decision to canceled; no agent turn is involved.
+          // announced decision to canceled (and supersedes its draft); no agent
+          // turn is involved, so a held change never waits on a reachable coach.
           const decisionId = Number(payload);
           if (!Number.isFinite(decisionId) || button.dataset.busy === "1") return;
           button.dataset.busy = "1";

@@ -2,6 +2,7 @@ import {
   asRecord,
   cleanText,
   enumValue,
+  hasOwnProperties,
   normalizeJsonObject,
   normalizeStringList,
   type JsonObject,
@@ -104,6 +105,176 @@ function normalizedRevision(value: unknown): CaseConferenceRevision | null {
   return null;
 }
 
+function ownKeysAllowed(input: Record<string, unknown>, allowed: readonly string[]): boolean {
+  const set = new Set(allowed);
+  return Object.keys(input).every((key) => set.has(key));
+}
+
+function nullableString(value: unknown): boolean {
+  return value == null || typeof value === "string";
+}
+
+function nullableBoundedFinite(value: unknown, min: number, max: number): boolean {
+  return value == null || (typeof value === "number" && Number.isFinite(value) && value >= min && value <= max);
+}
+
+function nullableInteger(value: unknown, min: number, max: number): boolean {
+  return value == null || (typeof value === "number" && Number.isInteger(value) && value >= min && value <= max);
+}
+
+const PLAN_CHANGE_KEYS = [
+  "day_number",
+  "exercise",
+  "remove",
+  "target_weight",
+  "target_seconds",
+  "sets",
+  "rep_low",
+  "rep_high",
+  "reason",
+  "note",
+  "mode",
+  "swap",
+] as const;
+
+function strictPlanChange(value: unknown): JsonObject | null {
+  const input = asRecord(value);
+  if (!input || !ownKeysAllowed(input, PLAN_CHANGE_KEYS)) return null;
+  if (typeof input.day_number !== "number" || !Number.isInteger(input.day_number)) return null;
+  if (input.day_number < 1 || input.day_number > 14) return null;
+  if (input.exercise != null && (typeof input.exercise !== "string" || !input.exercise.trim())) return null;
+  if (input.remove != null && typeof input.remove !== "boolean") return null;
+  if (!nullableBoundedFinite(input.target_weight, 0, 5_000)) return null;
+  if (!nullableInteger(input.target_seconds, 1, 3_600)) return null;
+  if (!nullableInteger(input.sets, 0, 20)) return null;
+  if (!nullableInteger(input.rep_low, 1, 100) || !nullableInteger(input.rep_high, 1, 100)) return null;
+  if (typeof input.rep_low === "number" && typeof input.rep_high === "number" && input.rep_low > input.rep_high)
+    return null;
+  if (!nullableString(input.reason) || !nullableString(input.note)) return null;
+  if (input.mode != null && input.mode !== "reps" && input.mode !== "timed") return null;
+  const swap = input.swap == null ? null : asRecord(input.swap);
+  if (input.swap != null) {
+    if (!swap || !ownKeysAllowed(swap, ["from", "to"]) || !hasOwnProperties(swap, ["from", "to"])) return null;
+    if (typeof swap.from !== "string" || !swap.from.trim() || typeof swap.to !== "string" || !swap.to.trim())
+      return null;
+  }
+  if (!(typeof input.exercise === "string" && input.exercise.trim()) && !swap) return null;
+  if (input.mode === "timed" && (input.target_weight != null || input.rep_low != null || input.rep_high != null))
+    return null;
+  if (input.mode === "reps" && input.target_seconds != null) return null;
+  return normalizeJsonObject(input);
+}
+
+const PLAN_ITEM_KEYS = [
+  "exercise",
+  "sets",
+  "rep_low",
+  "rep_high",
+  "target_weight",
+  "note",
+  "warmup_sets",
+  "target_seconds",
+  "superset_group",
+  "mode",
+  "kind",
+  "target_distance_km",
+  "target_duration_min",
+  "target_zone",
+  "interval",
+  "interval_json",
+] as const;
+
+function strictPlanItem(value: unknown): boolean {
+  const input = asRecord(value);
+  if (!input || !ownKeysAllowed(input, PLAN_ITEM_KEYS)) return false;
+  const kind = input.kind == null ? "strength" : input.kind;
+  if (kind !== "strength" && kind !== "cardio") return false;
+  if (!nullableString(input.exercise) || !nullableString(input.note) || !nullableString(input.target_zone))
+    return false;
+  if (!nullableInteger(input.sets, 1, 20)) return false;
+  if (!nullableInteger(input.rep_low, 1, 100) || !nullableInteger(input.rep_high, 1, 100)) return false;
+  if (typeof input.rep_low === "number" && typeof input.rep_high === "number" && input.rep_low > input.rep_high)
+    return false;
+  if (!nullableBoundedFinite(input.target_weight, 0, 5_000)) return false;
+  if (!nullableInteger(input.warmup_sets, 0, 20)) return false;
+  if (!nullableInteger(input.target_seconds, 1, 3_600)) return false;
+  if (!nullableInteger(input.superset_group, 1, 100)) return false;
+  if (input.mode != null && input.mode !== "reps" && input.mode !== "timed") return false;
+  if (!nullableBoundedFinite(input.target_distance_km, 0, 1_000)) return false;
+  if (!nullableBoundedFinite(input.target_duration_min, 0, 1_440)) return false;
+  if (input.interval != null && !asRecord(input.interval)) return false;
+  if (input.interval_json != null) {
+    if (typeof input.interval_json !== "string") return false;
+    try {
+      JSON.parse(input.interval_json);
+    } catch {
+      return false;
+    }
+  }
+  if (kind === "cardio") {
+    if (input.mode != null || input.target_weight != null || input.target_seconds != null) return false;
+    if (input.rep_low != null || input.rep_high != null || input.warmup_sets != null) return false;
+    return true;
+  }
+  if (typeof input.exercise !== "string" || !input.exercise.trim()) return false;
+  if (input.mode === "timed" && (input.target_weight != null || input.rep_low != null || input.rep_high != null))
+    return false;
+  if (input.mode === "reps" && input.target_seconds != null) return false;
+  return true;
+}
+
+function strictPlanDay(value: unknown): JsonObject | null {
+  const input = asRecord(value);
+  if (!input || !ownKeysAllowed(input, ["day_number", "name", "focus", "items"])) return null;
+  if (!hasOwnProperties(input, ["day_number", "name", "items"])) return null;
+  if (typeof input.day_number !== "number" || !Number.isInteger(input.day_number)) return null;
+  if (input.day_number < 1 || input.day_number > 14) return null;
+  if (typeof input.name !== "string" || !input.name.trim()) return null;
+  if (!nullableString(input.focus) || !Array.isArray(input.items) || !input.items.every(strictPlanItem)) return null;
+  return normalizeJsonObject(input);
+}
+
+function strictRevision(value: unknown): CaseConferenceRevision | null {
+  const input = asRecord(value);
+  const normalized = normalizedRevision(value);
+  if (!input || !normalized) return null;
+  if (!hasOwnProperties(input, ["type", "summary"])) return null;
+  if (input.summary != null && typeof input.summary !== "string") return null;
+  if (input.type === "plan_update") {
+    if (!ownKeysAllowed(input, ["type", "summary", "changes"])) return null;
+    if (!hasOwnProperties(input, ["changes"])) return null;
+    if (!Array.isArray(input.changes) || !input.changes.length || input.changes.length > 24) return null;
+    const changes = input.changes.map(strictPlanChange);
+    if (changes.some((change) => change === null) || normalized.type !== "plan_update") return null;
+    return { ...normalized, changes: changes as JsonObject[] };
+  }
+  if (input.type === "plan_restructure") {
+    if (!ownKeysAllowed(input, ["type", "summary", "days"])) return null;
+    if (!hasOwnProperties(input, ["days"])) return null;
+    if (!Array.isArray(input.days) || !input.days.length || input.days.length > 14) return null;
+    const days = input.days.map(strictPlanDay);
+    if (days.some((day) => day === null) || normalized.type !== "plan_restructure") return null;
+    return { ...normalized, days: days as JsonObject[] };
+  }
+  if (input.type === "nutrition_target") {
+    const nutrition = asRecord(input.nutrition);
+    if (!ownKeysAllowed(input, ["type", "summary", "nutrition", "notes"])) return null;
+    if (!hasOwnProperties(input, ["nutrition", "notes"])) return null;
+    if (!nutrition || normalized.type !== "nutrition_target") return null;
+    if (!ownKeysAllowed(nutrition, ["target_kcal", "protein_g", "carbs_g", "fat_g", "delta_kcal"])) return null;
+    if (!hasOwnProperties(nutrition, ["target_kcal", "protein_g", "carbs_g", "fat_g", "delta_kcal"])) return null;
+    if (typeof nutrition.target_kcal !== "number" || !Number.isFinite(nutrition.target_kcal)) return null;
+    if (typeof nutrition.protein_g !== "number" || !Number.isFinite(nutrition.protein_g)) return null;
+    for (const key of ["carbs_g", "fat_g", "delta_kcal"] as const) {
+      if (nutrition[key] != null && (typeof nutrition[key] !== "number" || !Number.isFinite(nutrition[key])))
+        return null;
+    }
+    if (input.notes != null && typeof input.notes !== "string") return null;
+    return normalized;
+  }
+  return null;
+}
+
 export function normalizeCaseConferenceDecision(value: unknown): CaseConferenceDecision | null {
   const input = asRecord(value);
   if (!input) return null;
@@ -155,4 +326,42 @@ export function normalizeCaseConferenceDecision(value: unknown): CaseConferenceD
     user_explanation: userExplanation,
     revision: input.revision == null ? null : normalizedRevision(input.revision),
   };
+}
+
+/** Conductor boundary: case-conference kind and every non-null nested revision
+ * must satisfy its typed shape. The general normalizer remains intentionally
+ * tolerant for historical stored rows, but an agent may not turn malformed
+ * executable intent into an apparently valid advice-only decision. */
+export function normalizeStrictCaseConferenceDecision(value: unknown): CaseConferenceDecision | null {
+  const input = asRecord(value);
+  if (!input || input.kind !== "case_conference") return null;
+  if (
+    !hasOwnProperties(input, [
+      "kind",
+      "domain",
+      "summary",
+      "rationale",
+      "risk_class",
+      "reversible",
+      "autonomy_tier",
+      "parallel_actions",
+      "resolved_conflicts",
+      "deferred",
+      "expectations",
+      "review_window",
+      "user_explanation",
+      "revision",
+    ]) ||
+    !Array.isArray(input.parallel_actions) ||
+    !Array.isArray(input.resolved_conflicts) ||
+    !Array.isArray(input.deferred) ||
+    !Array.isArray(input.expectations)
+  )
+    return null;
+  if (input.revision !== null && strictRevision(input.revision) === null) return null;
+  const normalized = normalizeCaseConferenceDecision(value);
+  if (!normalized || normalized.kind !== "case_conference") return null;
+  if (normalized.resolved_conflicts.length !== input.resolved_conflicts.length) return null;
+  if (normalized.expectations.length !== input.expectations.length) return null;
+  return input.revision === null ? normalized : { ...normalized, revision: strictRevision(input.revision) };
 }

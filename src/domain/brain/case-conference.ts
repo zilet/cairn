@@ -1,9 +1,21 @@
 import { db } from "../../db.js";
 import { decideAutonomyTier } from "../../brain/autonomy.js";
-import { normalizeCaseConferenceDecision, type CaseConferenceDecision } from "../../brain/case-conference-contract.js";
+import {
+  normalizeStrictCaseConferenceDecision,
+  type CaseConferenceDecision,
+} from "../../brain/case-conference-contract.js";
+import { AUTONOMY_TIERS, BRAIN_DOMAINS, BRAIN_RISK_CLASSES } from "../../brain/decision-contract.js";
+import {
+  BRAIN_METRIC_KEYS,
+  EXPECTATION_CONFIDENCE,
+  EXPECTATION_CONFOUNDER_POLICIES,
+  EXPECTATION_DIRECTIONS,
+  EXPECTATION_EVALUATORS,
+} from "../../brain/expectation-contract.js";
 import { normalizeJsonObject } from "../../brain/contract-utils.js";
 import { createImmutableBrainSnapshot, type ImmutableBrainSnapshot } from "../../brain/snapshot-id.js";
 import {
+  isSpecialistOpinion,
   normalizeSpecialistOpinion,
   type SpecialistDomain,
   type SpecialistOpinion,
@@ -70,8 +82,227 @@ export interface CaseConferenceDeps {
     maxCalls: number
   ) => Promise<unknown>;
   conductorRun?: (agent: string | undefined, prompt: string) => Promise<unknown>;
+  chosenWithReads?: typeof runChosenWithCoachReads;
+  chosen?: typeof runChosen;
   now?: () => Date;
+  /** Running durable job, excluded when counting prior daily attempts. */
+  jobId?: number;
+  signal?: AbortSignal;
 }
+
+const EXPECTATION_PROMPT_SCHEMA = {
+  type: "object",
+  required: [
+    "metric_key",
+    "subject_key",
+    "direction",
+    "baseline",
+    "target",
+    "window_start",
+    "window_end",
+    "minimum_data",
+    "confounder_policy",
+    "confidence",
+    "evaluator",
+    "evaluator_version",
+  ],
+  properties: {
+    metric_key: { type: "string", enum: BRAIN_METRIC_KEYS },
+    subject_key: { type: ["string", "null"] },
+    direction: { type: "string", enum: EXPECTATION_DIRECTIONS },
+    baseline: { type: ["object", "null"] },
+    target: { type: "object" },
+    window_start: { type: "string", format: "YYYY-MM-DD" },
+    window_end: { type: "string", format: "YYYY-MM-DD" },
+    minimum_data: { type: ["object", "null"] },
+    confounder_policy: { type: "string", enum: EXPECTATION_CONFOUNDER_POLICIES },
+    confidence: { type: "string", enum: EXPECTATION_CONFIDENCE },
+    evaluator: { type: "string", enum: EXPECTATION_EVALUATORS },
+    evaluator_version: { type: "string" },
+  },
+};
+
+const SPECIALIST_PROMPT_SCHEMA = JSON.stringify({
+  type: "object",
+  required: [
+    "domain",
+    "recommendation",
+    "rationale",
+    "evidence_keys",
+    "risks",
+    "contraindications",
+    "uncertainties",
+    "expected_outcomes",
+    "autonomy_ceiling",
+  ],
+  properties: {
+    domain: { type: "string", enum: ["training", "nutrition", "health", "recovery", "lifestyle"] },
+    recommendation: { type: "string" },
+    rationale: { type: "string" },
+    evidence_keys: { type: "array", minItems: 1, items: { type: "string" } },
+    risks: { type: "array", items: { type: "string" } },
+    contraindications: { type: "array", items: { type: "string" } },
+    uncertainties: { type: "array", items: { type: "string" } },
+    expected_outcomes: { type: "array", items: EXPECTATION_PROMPT_SCHEMA },
+    autonomy_ceiling: { type: "string", enum: AUTONOMY_TIERS },
+  },
+});
+
+const PLAN_ITEM_PROMPT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    exercise: { type: ["string", "null"] },
+    sets: { type: ["integer", "null"], minimum: 1, maximum: 20 },
+    rep_low: { type: ["integer", "null"], minimum: 1, maximum: 100 },
+    rep_high: { type: ["integer", "null"], minimum: 1, maximum: 100 },
+    target_weight: { type: ["number", "null"], minimum: 0, maximum: 5_000 },
+    note: { type: ["string", "null"] },
+    warmup_sets: { type: ["integer", "null"], minimum: 0, maximum: 20 },
+    target_seconds: { type: ["integer", "null"], minimum: 1, maximum: 3_600 },
+    superset_group: { type: ["integer", "null"], minimum: 1, maximum: 100 },
+    mode: { enum: ["reps", "timed", null] },
+    kind: { enum: ["strength", "cardio", null] },
+    target_distance_km: { type: ["number", "null"], minimum: 0, maximum: 1_000 },
+    target_duration_min: { type: ["number", "null"], minimum: 0, maximum: 1_440 },
+    target_zone: { type: ["string", "null"] },
+    interval: { type: ["object", "null"] },
+    interval_json: { type: ["string", "null"] },
+  },
+};
+
+const PLAN_CHANGE_PROMPT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["day_number"],
+  properties: {
+    day_number: { type: "integer", minimum: 1, maximum: 14 },
+    exercise: { type: ["string", "null"] },
+    remove: { type: ["boolean", "null"] },
+    target_weight: { type: ["number", "null"], minimum: 0, maximum: 5_000 },
+    target_seconds: { type: ["integer", "null"], minimum: 1, maximum: 3_600 },
+    sets: { type: ["integer", "null"], minimum: 0, maximum: 20 },
+    rep_low: { type: ["integer", "null"], minimum: 1, maximum: 100 },
+    rep_high: { type: ["integer", "null"], minimum: 1, maximum: 100 },
+    reason: { type: ["string", "null"] },
+    note: { type: ["string", "null"] },
+    mode: { enum: ["reps", "timed", null] },
+    swap: {
+      type: ["object", "null"],
+      additionalProperties: false,
+      required: ["from", "to"],
+      properties: { from: { type: "string" }, to: { type: "string" } },
+    },
+  },
+  anyOf: [{ required: ["exercise"] }, { required: ["swap"] }],
+};
+
+const CONFERENCE_PROMPT_SCHEMA = JSON.stringify({
+  type: "object",
+  required: [
+    "kind",
+    "domain",
+    "summary",
+    "rationale",
+    "risk_class",
+    "reversible",
+    "autonomy_tier",
+    "parallel_actions",
+    "resolved_conflicts",
+    "deferred",
+    "expectations",
+    "review_window",
+    "user_explanation",
+    "revision",
+  ],
+  properties: {
+    kind: { type: "string", enum: ["case_conference"] },
+    domain: { type: "string", enum: BRAIN_DOMAINS },
+    summary: { type: "string" },
+    rationale: { type: "string" },
+    risk_class: { type: "string", enum: BRAIN_RISK_CLASSES },
+    reversible: { type: "boolean" },
+    autonomy_tier: { type: "string", enum: AUTONOMY_TIERS },
+    parallel_actions: { type: "array", items: { type: "string" } },
+    resolved_conflicts: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["key", "resolution"],
+        properties: { key: { type: "string" }, resolution: { type: "string" } },
+      },
+    },
+    deferred: { type: "array", items: { type: "string" } },
+    expectations: { type: "array", items: EXPECTATION_PROMPT_SCHEMA },
+    review_window: { type: "string" },
+    user_explanation: { type: "string" },
+    revision: {
+      oneOf: [
+        { type: "null" },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["type", "summary", "changes"],
+          properties: {
+            type: { const: "plan_update" },
+            summary: { type: ["string", "null"] },
+            changes: {
+              type: "array",
+              minItems: 1,
+              maxItems: 24,
+              items: PLAN_CHANGE_PROMPT_SCHEMA,
+            },
+          },
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["type", "summary", "days"],
+          properties: {
+            type: { const: "plan_restructure" },
+            summary: { type: ["string", "null"] },
+            days: {
+              type: "array",
+              minItems: 1,
+              maxItems: 14,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: ["day_number", "name", "items"],
+                properties: {
+                  day_number: { type: "integer", minimum: 1, maximum: 14 },
+                  name: { type: "string" },
+                  focus: { type: ["string", "null"] },
+                  items: { type: "array", items: PLAN_ITEM_PROMPT_SCHEMA },
+                },
+              },
+            },
+          },
+        },
+        {
+          type: "object",
+          required: ["type", "summary", "nutrition", "notes"],
+          properties: {
+            type: { const: "nutrition_target" },
+            summary: { type: ["string", "null"] },
+            nutrition: {
+              type: "object",
+              required: ["target_kcal", "protein_g", "carbs_g", "fat_g", "delta_kcal"],
+              properties: {
+                target_kcal: { type: "number", minimum: 1200, maximum: 10000 },
+                protein_g: { type: "number", minimum: 0, maximum: 500 },
+                carbs_g: { type: ["number", "null"] },
+                fat_g: { type: ["number", "null"] },
+                delta_kcal: { type: ["number", "null"], minimum: -500, maximum: 500 },
+              },
+            },
+            notes: { type: ["string", "null"] },
+          },
+        },
+      ],
+    },
+  },
+});
 
 function specialistPrompt(
   domain: SpecialistDomain,
@@ -79,7 +310,7 @@ function specialistPrompt(
   snapshot: ImmutableBrainSnapshot,
   conflicts: ConferenceConflictKey[]
 ): string {
-  return `You are Cairn's ${domain} specialist in a multidisciplinary case conference. Return ONLY a SpecialistOpinion JSON object; no hidden reasoning or transcript. Use evidence_keys for the facts that matter, name uncertainty, and never exceed clinical or safety boundaries. Snapshot id: ${snapshot.id}. Question: ${question}. Deterministic conflicts already detected: ${JSON.stringify(conflicts)}. Immutable bounded context: ${JSON.stringify(snapshot.context)}`;
+  return `You are Cairn's ${domain} specialist in a multidisciplinary case conference. Return ONLY a SpecialistOpinion JSON object; no hidden reasoning or transcript. The literal contract is ${SPECIALIST_PROMPT_SCHEMA}. domain MUST be exactly ${JSON.stringify(domain)}. Use evidence_keys for the facts that matter, name uncertainty, and never exceed clinical or safety boundaries. Snapshot id: ${snapshot.id}. Question: ${question}. Deterministic conflicts already detected: ${JSON.stringify(conflicts)}. Immutable bounded context: ${JSON.stringify(snapshot.context)}`;
 }
 
 function conductorPrompt(
@@ -88,7 +319,7 @@ function conductorPrompt(
   opinions: SpecialistOpinion[],
   conflicts: ConferenceConflictKey[]
 ): string {
-  return `You are Cairn's conductor. Reconcile the structured specialist opinions into ONE CaseConferenceDecision JSON object with kind, domain, summary, rationale, risk_class, reversible, autonomy_tier, parallel_actions, resolved_conflicts[{key,resolution}], deferred, expectations, review_window, user_explanation, and revision. Every deterministic conflict must appear in resolved_conflicts or the server will safely demote the decision. revision is null for advice only, exactly {"type":"plan_update","summary":"...","changes":[...]} for bounded existing-plan changes, {"type":"plan_restructure","summary":"...","days":[...]} for a full split rewrite, or {"type":"nutrition_target","summary":"...","nutrition":{"target_kcal":0,"protein_g":0,"carbs_g":null,"fat_g":null,"delta_kcal":0},"notes":"..."} for a bounded fueling adjustment. Never claim a change is live in prose; the server owns proposal creation, safety clamps, autonomy, and natural-boundary application. Never output a debate transcript. Clinical decisions stay clinician-directed. Snapshot id: ${snapshot.id}. Question: ${question}. Conflicts: ${JSON.stringify(conflicts)}. Opinions: ${JSON.stringify(opinions)}`;
+  return `You are Cairn's conductor. Reconcile the structured specialist opinions into ONE CaseConferenceDecision JSON object. The literal contract is ${CONFERENCE_PROMPT_SCHEMA}. kind MUST be "case_conference". Every deterministic conflict must appear in resolved_conflicts or the server will safely demote the decision. revision is null for advice only, exactly {"type":"plan_update","summary":"...","changes":[...]} for bounded existing-plan changes, {"type":"plan_restructure","summary":"...","days":[...]} for a full split rewrite, or {"type":"nutrition_target","summary":"...","nutrition":{"target_kcal":1200,"protein_g":0,"carbs_g":null,"fat_g":null,"delta_kcal":0},"notes":"..."} for a bounded fueling adjustment. Never claim a change is live in prose; the server owns proposal creation, safety clamps, autonomy, and natural-boundary application. Never output a debate transcript. Clinical decisions stay clinician-directed. Snapshot id: ${snapshot.id}. Question: ${question}. Conflicts: ${JSON.stringify(conflicts)}. Opinions: ${JSON.stringify(opinions)}`;
 }
 
 const TIER_ORDER = ["observe", "quiet_apply", "announce", "ask", "clinician"] as const;
@@ -110,7 +341,7 @@ function conferenceContext(
   base: unknown,
   input: { trajectory?: unknown; optimizes?: unknown; parks?: unknown }
 ): unknown {
-  const root = base && typeof base === "object" && !Array.isArray(base) ? base as Record<string, unknown> : {};
+  const root = base && typeof base === "object" && !Array.isArray(base) ? (base as Record<string, unknown>) : {};
   if (input.trajectory == null && input.optimizes == null && input.parks == null) return root;
   return {
     ...root,
@@ -155,7 +386,10 @@ function fallbackConferenceDecision(
     risk_class: conflicts.includes("clinical_autonomy") ? "clinical" : conflicts.length ? "moderate" : "low",
     reversible: false,
     autonomy_tier: autonomy,
-    parallel_actions: opinions.filter((opinion) => opinion !== preferred).map((opinion) => opinion.recommendation).slice(0, 10),
+    parallel_actions: opinions
+      .filter((opinion) => opinion !== preferred)
+      .map((opinion) => opinion.recommendation)
+      .slice(0, 10),
     resolved_conflicts: [],
     deferred: [
       ...conflicts.map((conflict) => `${conflict}: held for conservative review`),
@@ -179,6 +413,10 @@ export async function runCaseConference(
   },
   deps: CaseConferenceDeps = {}
 ): Promise<CaseConferenceResult> {
+  const assertActive = () => {
+    if (deps.signal?.aborted) throw new Error("canceled");
+  };
+  assertActive();
   const question = String(input.question || "")
     .trim()
     .slice(0, 1_000);
@@ -187,17 +425,20 @@ export async function runCaseConference(
     .slice(0, 5);
   const now = (deps.now ?? (() => new Date()))();
   const today = now.toISOString().slice(0, 10);
-  const count = Number(
+  const priorAttempts = Number(
     (
       db
         .prepare(
-          `SELECT COUNT(*) AS n FROM brain_decisions
-           WHERE (kind = 'case_conference' OR source = 'case_conference') AND substr(created_at,1,10) = ?`
+          `SELECT COUNT(*) AS n FROM agent_jobs
+           WHERE kind = 'case_conference'
+             AND started_at IS NOT NULL
+             AND substr(started_at,1,10) = ?
+             AND (? IS NULL OR id <> ?)`
         )
-        .get(today) as any
+        .get(today, deps.jobId ?? null, deps.jobId ?? null) as any
     )?.n ?? 0
   );
-  if (count >= 3)
+  if (priorAttempts >= 3)
     return {
       ok: false,
       snapshot_id: "",
@@ -208,20 +449,19 @@ export async function runCaseConference(
       decision: null,
       error: "daily conference budget exhausted",
     };
-  const snapshot = createImmutableBrainSnapshot(
-    conferenceContext((deps.context ?? getCoachContext)(), input),
-    now
-  );
+  const snapshot = createImmutableBrainSnapshot(conferenceContext((deps.context ?? getCoachContext)(), input), now);
   const conflicts = deterministicConferenceConflicts(snapshot.context);
   const perSpecialistCalls = Math.max(1, Math.floor(12 / Math.max(1, domains.length)));
   const specialistRun =
     deps.specialistRun ??
     (async (chosen, prompt, domain, snap, maxCalls) => {
-      const out = await runChosenWithCoachReads(chosen, prompt, {
+      const out = await (deps.chosenWithReads ?? runChosenWithCoachReads)(chosen, prompt, {
         op: `conference_${domain}`,
         mode: "conference",
         maxCalls,
         runId: `${snap.id}:${domain}`,
+        acceptParsed: (parsed) => isSpecialistOpinion(parsed) && parsed.domain === domain,
+        signal: deps.signal,
       });
       return out.result.parsed;
     });
@@ -234,11 +474,12 @@ export async function runCaseConference(
         snapshot,
         perSpecialistCalls
       );
-      const opinion = normalizeSpecialistOpinion(value);
+      const opinion = isSpecialistOpinion(value) ? normalizeSpecialistOpinion(value) : null;
       if (!opinion || opinion.domain !== domain) throw new Error("invalid specialist opinion");
       return opinion;
     })
   );
+  assertActive();
   const opinions: SpecialistOpinion[] = [];
   const unavailable: SpecialistDomain[] = [];
   settled.forEach((result, index) =>
@@ -257,9 +498,26 @@ export async function runCaseConference(
     };
   const conductorRun =
     deps.conductorRun ??
-    (async (chosen, prompt) => (await runChosen(chosen, prompt, { op: "case_conference" })).result.parsed);
+    (async (chosen, prompt) => {
+      try {
+        return (
+          await (deps.chosen ?? runChosen)(chosen, prompt, {
+            op: "case_conference",
+            acceptParsed: (parsed) => normalizeStrictCaseConferenceDecision(parsed) !== null,
+            signal: deps.signal,
+          })
+        ).result.parsed;
+      } catch {
+        if (deps.signal?.aborted) throw new Error("canceled");
+        // Valid specialist findings remain useful even when every conductor
+        // provider/process/contract attempt fails. The advice-only fallback below
+        // cannot mutate anything and keeps every conflict unresolved.
+        return null;
+      }
+    });
   const rawDecision = await conductorRun(agent, conductorPrompt(question, snapshot, opinions, conflicts));
-  const normalizedDecision = normalizeCaseConferenceDecision(rawDecision);
+  assertActive();
+  const normalizedDecision = normalizeStrictCaseConferenceDecision(rawDecision);
   const degraded = normalizedDecision == null;
   // Valid specialist work must never disappear because the conductor emitted a
   // malformed envelope. Preserve one conservative, advice-only voice, leave all
@@ -285,8 +543,7 @@ export async function runCaseConference(
     conflicts.includes("clinical_autonomy") || /diagnos|medication|dosage|\bdose\b|prescri/.test(clinicalActionText);
   if (deterministicClinical && decision.risk_class !== "clinical") decision.risk_class = "clinical";
   let specialistCeiling = opinions.reduce<(typeof TIER_ORDER)[number]>(
-    (ceiling, opinion) =>
-      moreRestrictiveTier(ceiling, opinion.autonomy_ceiling),
+    (ceiling, opinion) => moreRestrictiveTier(ceiling, opinion.autonomy_ceiling),
     decision.autonomy_tier
   );
   if (unresolvedConflicts.length) {
@@ -313,64 +570,76 @@ export async function runCaseConference(
 
   const trajectory = (snapshot.context as any).whole_person_trajectory ?? null;
   const focus = (snapshot.context as any).conference_focus ?? {};
-  const sharedContext = normalizeJsonObject({
-    snapshot_id: snapshot.id,
-    question,
-    conflicts,
-    unresolved_conflicts: unresolvedConflicts,
-    unavailable,
-    review_window: decision.review_window,
-    trajectory,
-    optimizes: boundedStrings(focus.optimizes),
-    parks: boundedStrings(focus.parks),
-  }) ?? {};
-  const sharedSpecialist = normalizeJsonObject({
-    snapshot_id: snapshot.id,
-    opinions,
-    trajectory,
-    optimizes: boundedStrings(focus.optimizes),
-    parks: boundedStrings(focus.parks),
-  }) ?? {};
+  const sharedContext =
+    normalizeJsonObject({
+      snapshot_id: snapshot.id,
+      question,
+      conflicts,
+      unresolved_conflicts: unresolvedConflicts,
+      unavailable,
+      review_window: decision.review_window,
+      trajectory,
+      optimizes: boundedStrings(focus.optimizes),
+      parks: boundedStrings(focus.parks),
+    }) ?? {};
+  const sharedSpecialist =
+    normalizeJsonObject({
+      snapshot_id: snapshot.id,
+      opinions,
+      trajectory,
+      optimizes: boundedStrings(focus.optimizes),
+      parks: boundedStrings(focus.parks),
+    }) ?? {};
 
   if (decision.revision) {
-    const parsed = decision.revision.type === "plan_restructure"
-      ? {
-          summary: decision.revision.summary ?? decision.summary,
-          rationale: decision.rationale,
-          days: decision.revision.days,
-        }
-      : decision.revision.type === "nutrition_target"
+    const parsed =
+      decision.revision.type === "plan_restructure"
         ? {
-            kind: "nutrition_target",
             summary: decision.revision.summary ?? decision.summary,
-            nutrition: decision.revision.nutrition,
-            notes: decision.revision.notes ?? decision.rationale,
+            rationale: decision.rationale,
+            days: decision.revision.days,
           }
-        : {
-          summary: decision.revision.summary ?? decision.summary,
-          rationale: decision.rationale,
-          changes: decision.revision.changes,
-        };
-    const proposal = createProposal("case_conference", `case conference: ${question}`, JSON.stringify(rawDecision), parsed);
+        : decision.revision.type === "nutrition_target"
+          ? {
+              kind: "nutrition_target",
+              summary: decision.revision.summary ?? decision.summary,
+              nutrition: decision.revision.nutrition,
+              notes: decision.revision.notes ?? decision.rationale,
+            }
+          : {
+              summary: decision.revision.summary ?? decision.summary,
+              rationale: decision.rationale,
+              changes: decision.revision.changes,
+            };
+    assertActive();
+    const proposal = createProposal(
+      "case_conference",
+      `case conference: ${question}`,
+      JSON.stringify(rawDecision),
+      parsed
+    );
+    assertActive();
     const autonomy = applyProposalWithAutonomy(proposal.id, { requested_tier: policy.tier });
     const execution = executionSummary(autonomy);
-    const autonomyDecision = autonomy?.decision?.id ? patchBrainDecision(Number(autonomy.decision.id), {
-      source: "case_conference",
-      context: { ...(autonomy.decision.context ?? {}), ...sharedContext },
-      action: {
-        ...(autonomy.decision.action ?? {}),
-        conference_revision_type: decision.revision.type,
-        parallel_actions: decision.parallel_actions,
-        resolved_conflicts: decision.resolved_conflicts,
-        deferred: decision.deferred,
-        user_explanation: decision.user_explanation,
-      },
-      specialist: sharedSpecialist,
-      evaluator_version: decision.expectations.length
-        ? "case-conference-v2"
-        : autonomy.decision.evaluator_version,
-    }) : null;
+    assertActive();
+    const autonomyDecision = autonomy?.decision?.id
+      ? patchBrainDecision(Number(autonomy.decision.id), {
+          source: "case_conference",
+          context: { ...(autonomy.decision.context ?? {}), ...sharedContext },
+          action: {
+            ...(autonomy.decision.action ?? {}),
+            conference_revision_type: decision.revision.type,
+            parallel_actions: decision.parallel_actions,
+            resolved_conflicts: decision.resolved_conflicts,
+            deferred: decision.deferred,
+            user_explanation: decision.user_explanation,
+          },
+          specialist: sharedSpecialist,
+          evaluator_version: decision.expectations.length ? "case-conference-v2" : autonomy.decision.evaluator_version,
+        })
+      : null;
     if (autonomyDecision) {
+      assertActive();
       recordDecision(autonomyDecision, decision.expectations);
       decision.autonomy_tier = autonomyDecision.autonomy_tier;
       return {
@@ -385,7 +654,9 @@ export async function runCaseConference(
         proposal_id: proposal.id,
         execution,
         ...(degraded ? { degraded: true } : {}),
-        ...(autonomy?.ok === true ? {} : { error: String(autonomy?.error ?? "conference revision was not actionable") }),
+        ...(autonomy?.ok === true
+          ? {}
+          : { error: String(autonomy?.error ?? "conference revision was not actionable") }),
       };
     }
 
@@ -394,6 +665,7 @@ export async function runCaseConference(
     // proposal decision, which prevents inert announcements.
     const heldTier = policy.tier === "observe" ? "observe" : policy.tier === "clinician" ? "clinician" : "ask";
     decision.autonomy_tier = heldTier;
+    assertActive();
     const held = recordDecision({
       effective_date: null,
       kind: "case_conference",
@@ -444,6 +716,7 @@ export async function runCaseConference(
   // zombie announced decision.
   const advisoryTier = policy.tier === "observe" ? "observe" : policy.tier === "clinician" ? "clinician" : "ask";
   decision.autonomy_tier = advisoryTier;
+  assertActive();
   const recorded = recordDecision(
     {
       effective_date: null,

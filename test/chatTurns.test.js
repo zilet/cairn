@@ -18,6 +18,7 @@ import { db, repo } from "./_seed.js";
 import {
   applyChatActions,
   classifyChatAgentResult,
+  hasExplicitDecisionRevertIntent,
   hasExplicitPlanEditIntent,
   reconcileChatPlanReply,
   shouldCreatePhotoFoodPlaceholder,
@@ -565,6 +566,143 @@ test("post-action reconciliation removes a false success claim when autonomy kee
   assert.equal(repo.getPlanDay(1).items[0].sets, 3);
 });
 
+test("an explicit chat restructure is announced for its natural boundary with Discuss and Undo in lead mode", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  repo.savePlanDay(1, "Full Body", "strength", [
+    { exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 100 },
+  ]);
+  const message = "Move me to a two-day upper/lower split.";
+  assert.equal(hasExplicitPlanEditIntent(message), true);
+  const out = applyChatActions(
+    {
+      actions: [
+        {
+          type: "plan_restructure",
+          summary: "Move to a two-day upper/lower split",
+          days: [
+            {
+              day_number: 1,
+              name: "Upper",
+              focus: "Upper",
+              items: [{ exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 100 }],
+            },
+            {
+              day_number: 2,
+              name: "Lower",
+              focus: "Lower",
+              items: [{ exercise: "Back Squat", sets: 3, rep_low: 6, rep_high: 8, target_weight: 180 }],
+            },
+          ],
+        },
+      ],
+    },
+    { agent: "stub", message }
+  );
+
+  assert.deepEqual(out.drafts, [], "current chat restructures never become bare review drafts");
+  const result = out.applied[0].result;
+  assert.equal(result.announced, true);
+  assert.equal(result.scheduled, true);
+  assert.equal(result.decision.status, "announced");
+  assert.equal(
+    result.decision.reversible,
+    false,
+    "the scheduled decision can be canceled, but does not claim rollback reversibility before it lands"
+  );
+  assert.equal(repo.getBrainRollback(result.decision.id), null);
+  assert.equal(repo.getProposal(result.proposal_id).autonomy.status, "announced");
+  const card = [...repo.todayAgenda().primary, ...repo.todayAgenda().more].find(
+    (item) => item.id === `announced-decision-${result.decision.id}`
+  );
+  assert.equal(card.action.label, "Discuss with coach");
+  const reply = reconcileChatPlanReply("I will reshape that split.", message, out.applied, out.drafts);
+  assert.match(reply, /scheduled for/i);
+  assert.match(reply, /Discuss with coach/i);
+  assert.match(reply, /Undo/i);
+  assert.doesNotMatch(reply, /draft for review/i);
+
+  const undone = applyChatActions(
+    { actions: [{ type: "revert_decision", id: result.decision.id, reason: "Keep the current split." }] },
+    { agent: "stub", message: "Undo that split change." }
+  );
+  assert.equal(undone.applied[0].result.ok, true);
+  assert.equal(repo.getBrainDecision(result.decision.id).status, "canceled");
+});
+
+test("a model restructure action cannot mutate or schedule from a non-edit training question", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  repo.savePlanDay(1, "Full Body", "strength", [
+    { exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 100 },
+  ]);
+  const message = "How does my current training split look?";
+  assert.equal(hasExplicitPlanEditIntent(message), false);
+  const beforePlan = repo.getPlan();
+  const beforeProposalCount = repo.listProposals(100).length;
+  const beforeDecisionCount = repo.listBrainDecisions({ limit: 100 }).length;
+  const out = applyChatActions(
+    {
+      actions: [
+        {
+          type: "plan_restructure",
+          summary: "Model-invented two-day split",
+          days: [{ day_number: 1, name: "Upper", focus: "Upper", items: [] }],
+        },
+      ],
+    },
+    { agent: "stub", message }
+  );
+
+  assert.deepEqual(out.applied, [], "the off-contract structural action is ignored");
+  assert.deepEqual(out.drafts, []);
+  assert.deepEqual(repo.getPlan(), beforePlan, "the active plan is unchanged");
+  assert.equal(repo.listProposals(100).length, beforeProposalCount, "no proposal is created");
+  assert.equal(repo.listBrainDecisions({ limit: 100 }).length, beforeDecisionCount, "no announcement is recorded");
+  const advice = "Your current split is balanced, with one recovery tradeoff worth watching.";
+  assert.equal(
+    reconcileChatPlanReply(advice, message, out.applied, out.drafts),
+    advice,
+    "advice-only prose remains intact"
+  );
+  assert.match(
+    reconcileChatPlanReply("I changed your program to two days.", message, out.applied, out.drafts),
+    /haven't changed or scheduled/i,
+    "an off-contract success claim is corrected truthfully"
+  );
+});
+
+test("review-everything still holds a current chat restructure as an explicit review decision", () => {
+  repo.setSettings({ lead_mode: "review_everything" });
+  const message = "Move me to a two-day upper/lower split.";
+  const out = applyChatActions(
+    {
+      actions: [
+        {
+          type: "plan_restructure",
+          summary: "Move to two days",
+          days: [
+            {
+              day_number: 1,
+              name: "Upper",
+              focus: "Upper",
+              items: [{ exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 100 }],
+            },
+          ],
+        },
+      ],
+    },
+    { agent: "stub", message }
+  );
+  const result = out.applied[0].result;
+  assert.equal(result.review_required, true);
+  assert.equal(result.decision.status, "review");
+  assert.equal(result.decision.context.review_reason_code, "review_posture");
+  assert.equal(repo.getProposal(result.proposal_id).status, "draft");
+  assert.ok([...repo.todayAgenda().primary, ...repo.todayAgenda().more].some((item) => item.id === "draft-proposals"));
+  const reply = reconcileChatPlanReply("I changed it.", message, out.applied, out.drafts);
+  assert.match(reply, /held for review/i);
+  assert.doesNotMatch(reply, /is scheduled|scheduled for|draft for review/i);
+});
+
 test("chat put-it-back reverts the exact autonomous decision in the same turn", () => {
   repo.savePlanDay(1, "Lower", "legs", [{ exercise: "Squat", sets: 3, rep_low: 8, rep_high: 10, target_weight: 190 }]);
   const first = applyChatActions(
@@ -592,6 +730,130 @@ test("chat put-it-back reverts the exact autonomous decision in the same turn", 
   assert.equal(undone.applied[0].result.ok, true);
   assert.equal(repo.getPlanDay(1).items[0].target_weight, 190);
   assert.equal(repo.getBrainDecision(decisionId).status, "reverted");
+});
+
+test("a model cannot turn decision discussion or explanation questions into Undo", () => {
+  const announced = repo.recordDecision({
+    effective_date: localDateISO(),
+    kind: "training_structure",
+    domain: "training",
+    summary: "Move the next block to upper/lower",
+    rationale: "Match the current recovery envelope.",
+    source: "test",
+    source_ref_type: "plan_proposal",
+    source_ref_key: "77",
+    status: "announced",
+    autonomy_tier: "announce",
+    risk_class: "moderate",
+    reversible: true,
+    action: { proposal_id: 77 },
+  }).decision;
+  const hallucinated = { actions: [{ type: "revert_decision", id: announced.id, reason: "model guessed veto" }] };
+  const neutral = `Discuss scheduled Cairn decision #${announced.id}. Please explain how this fits my current data.`;
+  for (const message of [
+    neutral,
+    "Why is this scheduled?",
+    "Discuss this with me.",
+    "What would undo do?",
+    "Can you explain the change?",
+    "Could you undo this if I decide to?",
+    "Undo sounds useful; can you explain it?",
+  ]) {
+    assert.equal(hasExplicitDecisionRevertIntent(message, announced.id), false, message);
+    assert.deepEqual(applyChatActions(hallucinated, { agent: "stub", message }).applied, [], message);
+    assert.equal(repo.getBrainDecision(announced.id).status, "announced", message);
+  }
+});
+
+test("explicit cancel and rollback commands retain exact server-owned Undo behavior", () => {
+  const announced = repo.recordDecision({
+    effective_date: localDateISO(),
+    kind: "training_structure",
+    domain: "training",
+    summary: "Replace the current split next week",
+    rationale: "A bounded block change.",
+    source: "test",
+    source_ref_type: "plan_proposal",
+    source_ref_key: "78",
+    status: "announced",
+    autonomy_tier: "announce",
+    risk_class: "moderate",
+    reversible: true,
+    action: { proposal_id: 78 },
+  }).decision;
+  assert.equal(hasExplicitDecisionRevertIntent("Keep my current split.", announced.id), true);
+  assert.equal(hasExplicitDecisionRevertIntent("Stop this scheduled change.", announced.id), true);
+  assert.equal(hasExplicitDecisionRevertIntent("Should I cancel the scheduled change?", announced.id), false);
+  const cancelMessage = `Cancel the scheduled change in decision #${announced.id}.`;
+  assert.equal(hasExplicitDecisionRevertIntent(cancelMessage, announced.id), true);
+  const canceled = applyChatActions(
+    { actions: [{ type: "revert_decision", id: announced.id, reason: "Keep the current split." }] },
+    { agent: "stub", message: cancelMessage }
+  );
+  assert.equal(canceled.applied[0].result.ok, true);
+  assert.equal(repo.getBrainDecision(announced.id).status, "canceled");
+
+  repo.savePlanDay(1, "Lower", "legs", [{ exercise: "Squat", sets: 3, rep_low: 8, rep_high: 10, target_weight: 190 }]);
+  const changed = applyChatActions(
+    {
+      actions: [
+        {
+          type: "plan_update",
+          summary: "small squat progression",
+          changes: [{ day_number: 1, exercise: "Squat", target_weight: 200, reason: "Repeated crisp sessions." }],
+        },
+      ],
+    },
+    { agent: "stub", message: "Squats have been crisp for several sessions." }
+  );
+  const appliedId = changed.applied[0].result.decision.id;
+  const rolledBack = applyChatActions(
+    { actions: [{ type: "revert_decision", id: appliedId, reason: "Put it back." }] },
+    { agent: "stub", message: `Revert decision #${appliedId}.` }
+  );
+  assert.equal(rolledBack.applied[0].result.ok, true);
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 190);
+  assert.equal(repo.getBrainDecision(appliedId).status, "reverted");
+});
+
+test("revert intent cannot redirect ids and invalid or nonreversible decisions remain unchanged", () => {
+  const locked = repo.recordDecision({
+    effective_date: localDateISO(),
+    kind: "health_directive",
+    domain: "health",
+    summary: "Keep the clinical observation immutable.",
+    rationale: "It is evidence, not a reversible plan write.",
+    source: "test",
+    source_ref_type: "directive",
+    source_ref_key: "locked-1",
+    status: "applied",
+    autonomy_tier: "ask",
+    risk_class: "clinical",
+    reversible: false,
+    action: null,
+  }).decision;
+  assert.equal(hasExplicitDecisionRevertIntent(`Undo decision #${locked.id + 1}.`, locked.id), false);
+  assert.deepEqual(
+    applyChatActions(
+      { actions: [{ type: "revert_decision", id: locked.id, reason: "wrong model id" }] },
+      { agent: "stub", message: `Undo decision #${locked.id + 1}.` }
+    ).applied,
+    []
+  );
+  const nonreversible = applyChatActions(
+    { actions: [{ type: "revert_decision", id: locked.id, reason: "explicit request" }] },
+    { agent: "stub", message: `Undo decision #${locked.id}.` }
+  );
+  assert.equal(nonreversible.applied[0].result.ok, false);
+  assert.equal(repo.getBrainDecision(locked.id).status, "applied");
+
+  const missingId = locked.id + 10_000;
+  const missing = applyChatActions(
+    { actions: [{ type: "revert_decision", id: missingId, reason: "explicit request" }] },
+    { agent: "stub", message: `Undo decision #${missingId}.` }
+  );
+  assert.equal(missing.applied[0].result.ok, false);
+  assert.equal(repo.getBrainDecision(locked.id).status, "applied");
 });
 
 test("applyChatActions ignores a plan update hallucinated during a food-only turn", () => {

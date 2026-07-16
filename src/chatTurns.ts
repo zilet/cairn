@@ -324,10 +324,98 @@ export function hasExplicitStrengthObjectiveIntent(message: string | null | unde
 export function hasExplicitPlanEditIntent(message: string | null | undefined): boolean {
   const text = String(message ?? "").trim();
   if (!text) return false;
-  const verb = /\b(adjust|update|change|edit|fix|make|optimi[sz]e|remove|delete|drop|skip|replace|swap|add)\b/i;
+  const verb =
+    /\b(adjust|update|change|edit|fix|make|move|restructure|reshape|rebuild|switch|optimi[sz]e|remove|delete|drop|skip|replace|swap|add)\b/i;
   const object =
-    /\b(plan|program|session|workout|today['’]?s|today|tonight|exercise|movement|sets?|reps?|bench|press|squat|deadlift|row|run|ride|cardio|lift)\b/i;
+    /\b(plan|program|split|session|workout|today['’]?s|today|tonight|exercise|movement|sets?|reps?|bench|press|squat|deadlift|row|run|ride|cardio|lift)\b/i;
   return verb.test(text) && object.test(text);
+}
+
+function decisionReferences(text: string): number[] {
+  return [...text.matchAll(/\bdecision\s*(?:#\s*|id\s*)?(\d+)\b/gi)]
+    .map((match) => Number(match[1]))
+    .filter((id) => Number.isInteger(id) && id > 0);
+}
+
+function decisionCanReplaceCurrentPlan(decisionId: number, phrase: string): boolean {
+  const decision = repo.getBrainDecision(decisionId) as any;
+  if (!decision) return false;
+  const kind = String(decision.kind ?? "");
+  if (/\bmeal\s+plan\b/i.test(phrase)) return kind === "meal_plan";
+  if (/\b(?:training|workout)\s+plan\b|\b(?:split|program)\b/i.test(phrase)) return kind === "training_structure";
+  return kind === "training_structure" || kind === "meal_plan";
+}
+
+// A model-emitted revert_decision is only a proposal until the athlete's own
+// message independently authorizes it. The model may select an id, but it cannot
+// turn a discussion/explanation request into a veto. Keep this deliberately
+// deterministic and narrower than ordinary intent classification: a direct
+// command wins; hypotheticals, feature questions, and broad negative sentiment do
+// not mutate state.
+export function hasExplicitDecisionRevertIntent(
+  message: string | null | undefined,
+  decisionId?: number | null
+): boolean {
+  const text = String(message ?? "")
+    .replace(/[‘’]/g, "'")
+    .replace(/[–—]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return false;
+
+  const id = Number(decisionId);
+  const refs = decisionReferences(text);
+  // An explicit id is authoritative. Never let the agent redirect a command
+  // naming one decision onto another decision's action.
+  if (Number.isInteger(id) && id > 0 && refs.length && refs.some((ref) => ref !== id)) return false;
+
+  const sentences = text
+    .split(/[.!?;]+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+  for (const sentence of sentences) {
+    let command = sentence.toLowerCase();
+    command = command.replace(/^please\s+/, "");
+    command = command.replace(/^(?:can|could|would|will)\s+you\s+/, "");
+    command = command.replace(/^i\s+(?:want|need|would like|would prefer)\s+(?:you\s+)?to\s+/, "");
+    command = command.replace(/^i\s+want\s+you\s+to\s+/, "");
+    if (/\b(?:if|whether)\b/.test(command)) continue;
+
+    // "Undo is available" and "revert would..." describe the feature; an
+    // imperative/request beginning with the same verb is an athlete command.
+    if (
+      /^(?:undo|revert)\b/.test(command) &&
+      !/^(?:undo|revert)\s+(?:is|means|can|would|could|should|might|sounds|seems|appears|button|option|feature)\b/.test(
+        command
+      )
+    )
+      return true;
+    if (/^(?:put|roll)\s+(?:it|this|that|the\s+.{1,80})\s+back\b/.test(command)) return true;
+
+    // Cancel/stop are intentionally object-bound. "Stop" in a health or workout
+    // conversation is otherwise far too broad. A pronoun is accepted only when
+    // the athlete's message itself names the exact decision id.
+    if (/^(?:cancel|stop)\s+(?:it)\b/.test(command) && refs.length && refs.every((ref) => ref === id)) return true;
+    if (
+      /^(?:cancel|stop)\s+(?:decision\s*(?:#\s*|id\s*)?\d+|(?:this|that|the)\s+(?:(?:specific|scheduled|upcoming|announced|planned|meal|training|workout)\s+){0,5}(?:change|decision|update|refresh|plan|program|split))\b/.test(
+        command
+      )
+    )
+      return true;
+
+    const keepCurrent =
+      /^(?:keep|leave)\s+(?:my|the)\s+(?:current|existing)\s+(?:meal\s+plan|training\s+plan|workout\s+plan|plan|split|program)(?:\s+(?:alone|unchanged|as\s+is))?\b/.exec(
+        command
+      ) ??
+      /^(?:stick|stay)\s+with\s+(?:my|the)\s+(?:current|existing)\s+(?:meal\s+plan|training\s+plan|workout\s+plan|plan|split|program)\b/.exec(
+        command
+      ) ??
+      /^(?:do\s+not|don't)\s+(?:replace|change|switch)\s+(?:my|the)\s+(?:current|existing)\s+(?:meal\s+plan|training\s+plan|workout\s+plan|plan|split|program)\b/.exec(
+        command
+      );
+    if (keepCurrent && Number.isInteger(id) && id > 0 && decisionCanReplaceCurrentPlan(id, keepCurrent[0])) return true;
+  }
+  return false;
 }
 
 function todayPlanUpdateChanges(message: string | null | undefined, changes: unknown[]): unknown[] {
@@ -517,6 +605,31 @@ function applyBackgroundPlanUpdate(
   };
 }
 
+function routeChatPlanRestructure(agent: string, summary: unknown, days: unknown[]): unknown {
+  const proposal = repo.createProposal(agent, "chat: restructure", "", {
+    summary: String(
+      summary ?? "Restructure the training week around the athlete's current goals and constraints."
+    ).slice(0, 500),
+    days,
+  });
+  const result = applyProposalWithAutonomy((proposal as any).id, {
+    requested_tier: "announce",
+    explicit_user_request: true,
+  }) as any;
+  const stored = repo.getProposal((proposal as any).id) as any;
+  const status = String(result?.decision?.status ?? stored?.autonomy?.status ?? "");
+  return {
+    background: false,
+    explicit_user_request: true,
+    proposal_id: (proposal as any).id,
+    ...result,
+    persisted: stored?.status === "applied",
+    committed: stored?.status === "applied",
+    scheduled: status === "pending" || status === "announced",
+    review_required: status === "review" || result?.review_required === true,
+  };
+}
+
 function replyClaimsPlanSuccess(reply: string): boolean {
   return /\b(?:i(?:['’]ve| have)?\s+(?:now\s+)?(?:updated|adjusted|saved|applied|pushed|changed|removed|added)|(?:updated|adjusted|saved|applied|pushed|changed)\s+(?:your|today['’]?s|the)\s+(?:live\s+)?(?:plan|program|session|workout)|(?:plan|program|session|workout)\s+is\s+(?:now\s+)?(?:updated|saved|live))\b/i.test(
     reply
@@ -530,8 +643,30 @@ export function reconcileChatPlanReply(
   drafts: unknown[]
 ): string {
   const explicit = hasExplicitPlanEditIntent(message);
+  const restructureEntries = applied.filter((entry) => entry.type === "plan_restructure");
   const planEntries = applied.filter((entry) => entry.type === "plan_update");
   const restructureDraft = drafts.some((draft: any) => Array.isArray(draft?.parsed?.days));
+
+  if (restructureEntries.length) {
+    const result = recordOrNull(restructureEntries[0].result) ?? {};
+    const decision = recordOrNull(result.decision);
+    const status = String(decision?.status ?? "");
+    if (result.scheduled === true || status === "announced" || status === "pending") {
+      const boundary = String(result.effective_date ?? decision?.effective_date ?? "the next training boundary");
+      const receipt = `Scheduled for ${boundary}; Cairn will adapt the structural plan automatically. Use Discuss with coach on Today to work through it, or say Undo before it lands.`;
+      return replyClaimsPlanSuccess(reply) ? receipt : `${reply.trim()}\n\n${receipt}`.trim();
+    }
+    if (result.review_required === true || status === "review") {
+      const receipt =
+        "That structural plan change is held for review under the current policy; it is not scheduled or live yet.";
+      return replyClaimsPlanSuccess(reply) ? receipt : `${reply.trim()}\n\n${receipt}`.trim();
+    }
+    if (result.persisted === true || status === "applied") {
+      return "The structural plan change is live and recorded with its Undo history.";
+    }
+    const reason = String(result.error ?? restructureEntries[0].error ?? "the server could not own the change");
+    return `That structural plan change was not scheduled, so your current plan is unchanged: ${reason}`;
+  }
 
   if (!planEntries.length) {
     if (restructureDraft && (explicit || replyClaimsPlanSuccess(reply))) {
@@ -541,6 +676,9 @@ export function reconcileChatPlanReply(
       return "I didn't save a plan change from that response, so your current plan is still unchanged.";
     }
     if (explicit) return `${reply.trim()}\n\nNo plan change was saved from this response.`.trim();
+    if (replyClaimsPlanSuccess(reply)) {
+      return "I haven't changed or scheduled your plan from that question; your current training split is unchanged.";
+    }
     return reply;
   }
 
@@ -1341,10 +1479,11 @@ export function applyChatActions(
           });
           break;
         case "plan_restructure":
-          if (foodOnly) break;
-          drafts.push(repo.createProposal(ctx.agent, "chat: restructure", "", { summary: a.summary, days: a.days }));
+          if (foodOnly || !hasExplicitPlanEditIntent(message)) break;
+          applied.push({ type: a.type, result: routeChatPlanRestructure(ctx.agent, a.summary, a.days) });
           break;
         case "revert_decision":
+          if (!hasExplicitDecisionRevertIntent(message, Number(a.id))) break;
           applied.push({
             type: a.type,
             result: revertDecision(Number(a.id), stringOrUndefined(a.reason) ?? "user veto"),

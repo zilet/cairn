@@ -1,6 +1,7 @@
 import { db } from "../../db.js";
 import { listBrainDecisions, listBrainExpectations } from "../../repo/brain-decisions.js";
 import { latestBrainEvaluation, listBrainToolCalls } from "../../repo/brain-evaluations.js";
+import { normalizeStrictCaseConferenceDecision } from "../../brain/case-conference-contract.js";
 
 const METRIC_WINDOW_DAYS = 90;
 const MATERIAL_KINDS = new Set([
@@ -64,18 +65,18 @@ function brainAggregateMetrics() {
   const latestByExpectation = new Map(latestEvaluations.map((row) => [Number(row.expectation_id), row]));
   const expectationDecisionIds = new Set(expectations.map((row) => Number(row.decision_id)));
   const activeMaterial = decisions.filter(
-    (row) => MATERIAL_KINDS.has(String(row.kind)) && !["rejected", "canceled", "superseded"].includes(String(row.status))
+    (row) =>
+      MATERIAL_KINDS.has(String(row.kind)) && !["rejected", "canceled", "superseded"].includes(String(row.status))
   );
   const materialWithExpectations = activeMaterial.filter((row) => expectationDecisionIds.has(Number(row.id))).length;
   const today = new Date().toISOString().slice(0, 10);
-  const matured = expectations.filter(
-    (row) => String(row.window_end) <= today && String(row.status) !== "canceled"
-  );
+  const matured = expectations.filter((row) => String(row.window_end) <= today && String(row.status) !== "canceled");
   const evaluatedMatured = matured.filter((row) => latestByExpectation.has(Number(row.id)));
   const reverted = decisions.filter((row) => row.status === "reverted").length;
   const resolved = decisions.filter((row) => ["applied", "reverted"].includes(String(row.status))).length;
   const autonomous = decisions.filter(
-    (row) => ["quiet_apply", "announce"].includes(String(row.autonomy_tier)) &&
+    (row) =>
+      ["quiet_apply", "announce"].includes(String(row.autonomy_tier)) &&
       ["applied", "reverted", "announced", "pending"].includes(String(row.status))
   );
   const autonomousResolved = autonomous.filter((row) => ["applied", "reverted"].includes(String(row.status)));
@@ -85,7 +86,8 @@ function brainAggregateMetrics() {
     const domainMaterial = activeMaterial.filter((row) => row.domain === domain);
     const withExpectations = domainMaterial.filter((row) => expectationDecisionIds.has(Number(row.id))).length;
     const autonomousResolvedRows = domainRows.filter(
-      (row) => ["quiet_apply", "announce"].includes(String(row.autonomy_tier)) &&
+      (row) =>
+        ["quiet_apply", "announce"].includes(String(row.autonomy_tier)) &&
         ["applied", "reverted"].includes(String(row.status))
     );
     const domainReverted = autonomousResolvedRows.filter((row) => row.status === "reverted").length;
@@ -98,7 +100,9 @@ function brainAggregateMetrics() {
       autonomous_resolved: autonomousResolvedRows.length,
       autonomous_reverted: domainReverted,
       autonomy_demoted:
-        autonomousResolvedRows.length >= 3 && domainReverted >= 2 && domainReverted / autonomousResolvedRows.length >= 0.5,
+        autonomousResolvedRows.length >= 3 &&
+        domainReverted >= 2 &&
+        domainReverted / autonomousResolvedRows.length >= 0.5,
     };
   });
 
@@ -108,7 +112,10 @@ function brainAggregateMetrics() {
        WHERE created_at >= datetime('now', ?)`
     )
     .all(modifier) as any[];
-  const latencies = toolCalls.map((row) => Number(row.latency_ms)).filter(Number.isFinite).sort((a, b) => a - b);
+  const latencies = toolCalls
+    .map((row) => Number(row.latency_ms))
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b);
   const toolFailures = toolCalls.filter((row) => row.status && row.status !== "ok").length;
   const budgetExhausted = toolCalls.filter((row) => /budget|limit|exhaust/i.test(String(row.status ?? ""))).length;
 
@@ -118,7 +125,18 @@ function brainAggregateMetrics() {
        WHERE kind = 'case_conference' AND created_at >= datetime('now', ?)`
     )
     .all(modifier) as any[];
+  const specialistAgentRuns = db
+    .prepare(
+      `SELECT ok, parsed, status, error_class FROM agent_runs
+       WHERE op LIKE 'conference\\_%' ESCAPE '\\'
+         AND created_at >= datetime('now', ?)`
+    )
+    .all(modifier) as any[];
   let conferenceSuccessful = 0;
+  let conferenceCompleteSuccessful = 0;
+  let conferenceUsefulDegradedOrIncomplete = 0;
+  let conferenceDegraded = 0;
+  let conferenceIncomplete = 0;
   let conferenceBudgetExhausted = 0;
   let conflictsDetected = 0;
   let conflictsUnresolved = 0;
@@ -127,8 +145,22 @@ function brainAggregateMetrics() {
   let conferenceDoneUnsuccessful = 0;
   for (const row of conferenceRows) {
     const result = parsed(row.result_json);
-    if (result?.ok === true) conferenceSuccessful += 1;
-    else if (row.status === "done") conferenceDoneUnsuccessful += 1;
+    if (result?.ok === true) {
+      conferenceSuccessful += 1;
+      const complete =
+        result.degraded !== true &&
+        normalizeStrictCaseConferenceDecision(result.decision) !== null &&
+        Array.isArray(result.unavailable) &&
+        result.unavailable.length === 0 &&
+        Array.isArray(result.unresolved_conflicts) &&
+        result.unresolved_conflicts.length === 0;
+      if (complete) conferenceCompleteSuccessful += 1;
+      else {
+        conferenceUsefulDegradedOrIncomplete += 1;
+        if (result.degraded === true) conferenceDegraded += 1;
+        else conferenceIncomplete += 1;
+      }
+    } else if (row.status === "done") conferenceDoneUnsuccessful += 1;
     if (/budget exhausted/i.test(String(result?.error ?? row.error ?? ""))) conferenceBudgetExhausted += 1;
     const opinions = Array.isArray(result?.opinions) ? result.opinions.length : 0;
     const unavailable = Array.isArray(result?.unavailable) ? result.unavailable.length : 0;
@@ -137,6 +169,16 @@ function brainAggregateMetrics() {
     conflictsDetected += Array.isArray(result?.conflicts) ? result.conflicts.length : 0;
     conflictsUnresolved += Array.isArray(result?.unresolved_conflicts) ? result.unresolved_conflicts.length : 0;
   }
+  const specialistContractFailures = specialistAgentRuns.filter((row) => row.error_class === "invalid_contract").length;
+  const specialistParseFailures = specialistAgentRuns.filter((row) => row.error_class === "invalid_json").length;
+  const specialistProviderProcessFailures = specialistAgentRuns.filter((row) =>
+    ["auth_required", "timeout", "process_error", "agent_unavailable"].includes(
+      String(row.error_class ?? row.status ?? "")
+    )
+  ).length;
+  const specialistKnownFailures =
+    specialistContractFailures + specialistParseFailures + specialistProviderProcessFailures;
+  const specialistOtherFailures = specialistAgentRuns.filter((row) => !row.ok).length - specialistKnownFailures;
 
   const latestVerdicts = evaluatedMatured.map((row) => latestByExpectation.get(Number(row.id))).filter(Boolean);
   // The *_pct fields below are OPERATOR TELEMETRY (system coverage/revert rates),
@@ -180,11 +222,17 @@ function brainAggregateMetrics() {
       average_latency_ms: latencies.length
         ? Math.round(latencies.reduce((sum, value) => sum + value, 0) / latencies.length)
         : null,
-      p95_latency_ms: latencies.length ? latencies[Math.min(latencies.length - 1, Math.floor(latencies.length * 0.95))] : null,
+      p95_latency_ms: latencies.length
+        ? latencies[Math.min(latencies.length - 1, Math.floor(latencies.length * 0.95))]
+        : null,
     },
     conferences: {
       jobs: conferenceRows.length,
       successful: conferenceSuccessful,
+      complete_successful: conferenceCompleteSuccessful,
+      useful_degraded_or_incomplete: conferenceUsefulDegradedOrIncomplete,
+      degraded: conferenceDegraded,
+      incomplete: conferenceIncomplete,
       failed_or_canceled:
         conferenceDoneUnsuccessful +
         conferenceRows.filter((row) => ["error", "canceled"].includes(String(row.status))).length,
@@ -193,6 +241,16 @@ function brainAggregateMetrics() {
       conflicts_detected: conflictsDetected,
       conflicts_unresolved: conflictsUnresolved,
       specialists_requested: specialistsRequested,
+      specialist_valid_opinions: specialistsAvailable,
+      specialist_valid_opinion_yield_pct: pct(specialistsAvailable, specialistsRequested),
+      specialist_agent_attempts: specialistAgentRuns.length,
+      specialist_agent_accepted_turns: specialistAgentRuns.filter((row) => !!row.ok).length,
+      specialist_contract_failures: specialistContractFailures,
+      specialist_parse_failures: specialistParseFailures,
+      specialist_provider_process_failures: specialistProviderProcessFailures,
+      specialist_other_failures: Math.max(0, specialistOtherFailures),
+      // Deprecated compatibility aliases. These measure valid-opinion yield,
+      // never raw provider availability; keep them until installed clients move.
       specialists_available: specialistsAvailable,
       specialist_availability_pct: pct(specialistsAvailable, specialistsRequested),
     },

@@ -59,6 +59,8 @@ import { enduranceTestsDue, weeklyRunPlan, type WeeklyRunPlan } from "./run-prog
 import { dexaTargeting, type DexaTargeting } from "./dexa-targeting.js";
 import { testWeekDue, type TestWeekDue } from "./muscle-trajectory.js";
 import { trainingPlaybook, type TrainingPlaybookRead } from "./training-playbook.js";
+import { currentUnderfuelingRead } from "./underfueling-snapshot.js";
+import type { UnderfuelingRead } from "./underfueling.js";
 
 export { loadPhrase, recentMuscleLoad, type RecentLoad } from "./hybrid-load.js";
 
@@ -1181,6 +1183,7 @@ export function planDayProgression(dayNumber: number, opts: { forNextSession?: b
       .map((item: any) => String(item.exercise))
   );
   const personalResponse = whatWorksForYou();
+  const fuelProtection = currentUnderfuelingRead(localDateISO());
   const out: Prescription[] = [];
   for (const it of items) {
     if (it.kind === "cardio" || !it.name) continue; // skip cardio + label-only rows
@@ -1193,9 +1196,67 @@ export function planDayProgression(dayNumber: number, opts: { forNextSession?: b
       excludeNames,
       personalModifier,
     });
-    if (p) out.push({ ...p, plan_item_id: it.plan_item_id, day_number: dayNumber });
+    if (p) {
+      const protectedPrescription = applyFuelProtection(p, fuelProtection);
+      out.push({ ...protectedPrescription, plan_item_id: it.plan_item_id, day_number: dayNumber });
+    }
   }
   return out;
+}
+
+function applyFuelProtection(prescription: Prescription, read: UnderfuelingRead): Prescription {
+  if (read.action.training === "proceed") return prescription;
+  if (read.action.training === "hold_aggression") {
+    if (!["overload", "vary", "introduce"].includes(prescription.action)) {
+      return prescription.action === "hold"
+        ? {
+            ...prescription,
+            autoregulated: true,
+            why: `${prescription.why} ${read.action.line}`,
+          }
+        : prescription;
+    }
+    const current = prescription.current ?? prescription.suggested;
+    return {
+      ...prescription,
+      action: "hold",
+      suggested: { ...current },
+      delta_text: prescription.mode === "timed"
+        ? current.seconds == null ? "hold" : `hold ${current.seconds}s`
+        : current.weight == null ? "hold" : `hold ${current.weight}`,
+      vary_to: undefined,
+      vary_options: undefined,
+      rep_step: undefined,
+      autoregulated: true,
+      why: `${read.action.line} Hold this progression step while the independent fuel and outcome signals settle.`,
+    };
+  }
+  if (prescription.action === "deload")
+    return {
+      ...prescription,
+      autoregulated: true,
+      why: `${prescription.why} ${read.action.line}`,
+    };
+  const base = prescription.current ?? prescription.suggested;
+  const reduced: PrescriptionTarget = {
+    ...base,
+    sets: Math.max(1, Math.ceil(Number(base.sets || prescription.suggested.sets || 1) / 2)),
+  };
+  if (prescription.mode === "timed" && Number.isFinite(Number(base.seconds)))
+    reduced.seconds = Math.max(10, Math.round(Number(base.seconds) * 0.8));
+  if (prescription.mode === "reps" && Number.isFinite(Number(base.weight)) && Number(base.weight) > 0)
+    reduced.weight = Math.round(Number(base.weight) * 0.9 * 2) / 2;
+  return {
+    ...prescription,
+    action: "deload",
+    suggested: reduced,
+    delta_text: "recovery dose",
+    vary_to: undefined,
+    vary_options: undefined,
+    rep_step: undefined,
+    autoregulated: true,
+    why: `${read.action.line} The next exposure uses a reversible recovery dose instead of another progression step.`,
+  };
 }
 
 // Turn a day's per-lift prescriptions into a DRAFT plan proposal (the one-tap

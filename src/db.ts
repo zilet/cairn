@@ -1076,6 +1076,28 @@ CREATE TABLE IF NOT EXISTS app_state (
   updated_at TEXT DEFAULT (datetime('now'))
 );
 
+-- Durable scheduler ownership. One row owns one logical operation in one
+-- calendar slot, so a provider outage cannot consume the slot and a restart can
+-- recover an expired in-flight lease. claim_token fences a late worker after
+-- its lease has been reclaimed by a newer attempt.
+CREATE TABLE IF NOT EXISTS scheduler_operations (
+  operation TEXT NOT NULL,
+  slot_stamp TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending','running','retry_wait','succeeded','no_op','exhausted')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  claim_token TEXT,
+  lease_expires_at TEXT,
+  next_retry_at TEXT,
+  last_error TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  completed_at TEXT,
+  PRIMARY KEY (operation, slot_stamp)
+);
+CREATE INDEX IF NOT EXISTS idx_scheduler_operations_due
+  ON scheduler_operations(status, next_retry_at, lease_expires_at);
+
 -- Host-side research / evidence cache (Stream 4 — grounding). When research is
 -- enabled, src/research.ts runs a dedicated web-capable agent over a question and
 -- stores each cited claim here: a plain-language body + its source title/url +

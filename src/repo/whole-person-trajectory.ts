@@ -4,6 +4,7 @@ import { getActiveBlock } from "./program-blocks.js";
 import { addDaysISO, localDateISO } from "./shared.js";
 import { getMarkerHistory } from "./health.js";
 import { matchOptimalZone, optimalDistance } from "./propagation.js";
+import { recoverySessionDose } from "./training-read.js";
 
 export type WholePersonVerdict = "better" | "holding" | "worse" | "unknown";
 export type WholePersonDomain =
@@ -24,7 +25,13 @@ export interface WholePersonDomainRead {
 export interface WholePersonTrajectory {
   window: { start: string; end: string; days: number };
   objective: "everything better";
-  phase: { name: string | null; optimizes: string[]; floors: string[]; protects: WholePersonDomain[]; parks: WholePersonDomain[] };
+  phase: {
+    name: string | null;
+    optimizes: string[];
+    floors: string[];
+    protects: WholePersonDomain[];
+    parks: WholePersonDomain[];
+  };
   domains: WholePersonDomainRead[];
   unexplained_worse: WholePersonDomain[];
   revision_needed: boolean;
@@ -61,7 +68,7 @@ function compare(
 function strengthRead(start: string, end: string, parked: boolean): WholePersonDomainRead {
   const rows = db
     .prepare(
-      `SELECT s.date, ls.exercise_id, e.name AS exercise, ls.weight, ls.reps
+      `SELECT s.id AS session_id, s.date, ls.exercise_id, e.name AS exercise, ls.weight, ls.reps
        FROM logged_sets ls
        JOIN sessions s ON s.id = ls.session_id
        JOIN exercises e ON e.id = ls.exercise_id
@@ -69,8 +76,17 @@ function strengthRead(start: string, end: string, parked: boolean): WholePersonD
       ORDER BY s.date, ls.id LIMIT 3000`
     )
     .all(start, end) as any[];
+  const trajectoryEligibility = new Map<number, boolean>();
+  const comparableRows = rows.filter((row) => {
+    const sessionId = Number(row.session_id);
+    const cached = trajectoryEligibility.get(sessionId);
+    if (cached != null) return cached;
+    const eligible = recoverySessionDose(sessionId).classification !== "compliant";
+    trajectoryEligibility.set(sessionId, eligible);
+    return eligible;
+  });
   const byLift = new Map<string, Map<string, number>>();
-  for (const row of rows) {
+  for (const row of comparableRows) {
     const estimate = Number(row.weight) * (1 + Number(row.reps) / 30);
     const key = `${row.exercise_id}|${row.exercise}`;
     const dates = byLift.get(key) ?? new Map<string, number>();
@@ -85,7 +101,9 @@ function strengthRead(start: string, end: string, parked: boolean): WholePersonD
       const tolerance = Math.max(1.5, Math.abs(split.first ?? 0) * 0.01);
       return { exercise: key.split("|").slice(1).join("|"), verdict: compare(split.first, split.last, tolerance) };
     })
-    .filter((row): row is { exercise: string; verdict: WholePersonVerdict } => row != null && row.verdict !== "unknown");
+    .filter(
+      (row): row is { exercise: string; verdict: WholePersonVerdict } => row != null && row.verdict !== "unknown"
+    );
   const improving = comparable.filter((row) => row.verdict === "better");
   const regressing = comparable.filter((row) => row.verdict === "worse");
   const verdict: WholePersonVerdict = !comparable.length
@@ -95,7 +113,11 @@ function strengthRead(start: string, end: string, parked: boolean): WholePersonD
       : improving.length
         ? "better"
         : "holding";
-  const names = (items: typeof comparable) => items.slice(0, 5).map((row) => row.exercise).join(", ");
+  const names = (items: typeof comparable) =>
+    items
+      .slice(0, 5)
+      .map((row) => row.exercise)
+      .join(", ");
   return {
     domain: "strength",
     verdict,
@@ -109,7 +131,11 @@ function strengthRead(start: string, end: string, parked: boolean): WholePersonD
             ? "Comparable lift capacity held steady."
             : `${regressing.length} comparable lift${regressing.length === 1 ? " needs" : "s need"} rebuilding: ${names(regressing)}${improving.length ? `; ${improving.length} other lift${improving.length === 1 ? " is" : "s are"} still advancing: ${names(improving)}` : ""}. Regression stays visible even when the overall program is improving.`,
     evidence_keys: rows.length
-      ? [`logged_sets:${start}..${end}:n=${rows.length}`, `strength_lifts_comparable:${comparable.length}`]
+      ? [
+          `logged_sets:${start}..${end}:n=${rows.length}`,
+          `strength_exposures_comparable:${comparableRows.length}`,
+          `strength_lifts_comparable:${comparable.length}`,
+        ]
       : [],
   };
 }

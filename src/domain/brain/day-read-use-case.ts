@@ -1,6 +1,6 @@
 import { agentStatusFor } from "../../coachOps.js";
 import { db } from "../../db.js";
-import { computeDayRead, localToday } from "../../dayread.js";
+import { computeDayRead, dayReadProseConsistencyIssue, localToday } from "../../dayread.js";
 import { ensureDayReadRefresh, scheduleDayReadRefresh } from "../../dayread-refresh.js";
 import { dayRead, forwardLook, getCachedDayRead, invalidateDayRead, saveDayRead } from "../../repo/intelligence.js";
 import { recordSuggestion } from "../../repo/memory.js";
@@ -125,7 +125,21 @@ export async function readToday(options: ReadTodayOptions = {}): Promise<DayRead
         const cachedHasWork =
           Number(cachedLogged?.sets ?? 0) > 0 ||
           (Array.isArray(cachedLogged?.activities) && cachedLogged.activities.length > 0);
-        if (liveHasWork && (!cachedHasWork || (live.kind === "done" && cached.kind !== "done"))) {
+        const liveLoad = String(live?.signals?.today_load ?? "");
+        const cachedLoad = String(cached?.signals?.today_load ?? "");
+        const loadClassificationChanged = !!liveLoad && !!cachedLoad && liveLoad !== cachedLoad;
+        const trainedFactChanged =
+          typeof cached?.signals?.trained_today === "boolean" &&
+          Boolean(live?.signals?.trained_today) !== Boolean(cached.signals.trained_today);
+        const completionChanged = (live.kind === "done") !== (cached.kind === "done");
+        const proseContradiction = dayReadProseConsistencyIssue(cached, live?.signals);
+        const materialTruthChanged =
+          completionChanged ||
+          liveHasWork !== cachedHasWork ||
+          loadClassificationChanged ||
+          trainedFactChanged ||
+          proseContradiction != null;
+        if (materialTruthChanged) {
           const factual = {
             ...live,
             headline: dayReadHeadline(live),

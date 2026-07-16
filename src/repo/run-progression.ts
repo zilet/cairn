@@ -361,12 +361,14 @@ export function weeklyRunPlan(
   const rhrUp = recovery?.delta?.rhr != null && recovery.delta.rhr > 2;
   const sleepDown = recovery?.delta?.sleep != null && recovery.delta.sleep < -30;
   const recoveryDown = hrvDown || rhrUp || sleepDown;
+  const recoveryWeek = programState.mesocycle?.phase === "deload" && programState.recovery_week?.state === "applied";
   const spiking = runState?.status === "spiking";
   const downWeek = ord % 4 === 0; // a reset week roughly every 4th
   const taper = phase === "taper";
 
   let factor = 1.1; // default ~10% build
   if (taper) { factor = 0.55; rationale.push("Race week — tapering volume right down so you arrive fresh."); }
+  else if (recoveryWeek) { factor = 0.8; rationale.push("Recovery week is active — keeping the running rhythm with less volume and easy aerobic work."); }
   else if (recoveryDown) { factor = 0.9; rationale.push("Recovery's down this week (sleep / HRV / resting HR) — easing volume and keeping it gentle."); }
   else if (spiking) { factor = 1.0; rationale.push("Mileage jumped recently — holding it here to let it absorb before adding more."); }
   else if (downWeek) { factor = 0.8; rationale.push("Scheduled down week — a lighter reset before the next build."); }
@@ -384,7 +386,7 @@ export function weeklyRunPlan(
   // --- quality session: include unless we're protecting recovery / tapering hard / very thin base ---
   const baseTooThin = weeklyKm < 12;
   const includeQuality =
-    !recoveryDown && !baseTooThin && runState?.status !== "spiking" && runDays >= 3;
+    !recoveryWeek && !recoveryDown && !baseTooThin && runState?.status !== "spiking" && runDays >= 3;
   let qualityType: "tempo" | "threshold" | "vo2" | "hills" | null = null;
   if (includeQuality) {
     const pool = QUALITY_BY_PHASE[phase] ?? QUALITY_BY_PHASE.standing;
@@ -396,6 +398,8 @@ export function weeklyRunPlan(
         ? `Rotating in a ${qualityType} session — varying the hard stimulus keeps progress honest.`
         : "It's been all one pace lately — adding a single quality session to lift your ceiling."
     );
+  } else if (recoveryWeek) {
+    rationale.push("Skipping quality during the recovery week — keep every run in easy Z2.");
   } else if (recoveryDown) {
     rationale.push("Skipping the hard session this week — all easy aerobic while you recover.");
   } else if (baseTooThin) {

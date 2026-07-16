@@ -2,6 +2,7 @@ import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { completeMealWeek, db, localDaysAgo, repo, resetTables, seedIntake, seedWeight } from "./_seed.js";
 import { evaluateMatureExpectations } from "../dist/brainEvaluator.js";
+import { automaticOrphanIntent } from "../dist/repo/proposal-intent.js";
 
 beforeEach(() => {
   resetTables(
@@ -170,22 +171,32 @@ test("a nutrition target gets a weight-response expectation only with a measured
   assert.equal(decision.context.expectation_basis, "measured_expenditure");
   const expectations = repo.listBrainExpectations({ decisionId: decision.id });
   assert.equal(expectations.length, 1);
-  assert.equal(expectations[0].metric_key, "weight_trend_lb_wk");
+  assert.equal(expectations[0].metric_key, "intake_to_weight_response");
   assert.equal(expectations[0].direction, "within_band");
   assert.equal(expectations[0].minimum_data.weigh_ins, 6);
+  assert.equal(expectations[0].minimum_data.intake_days, 10);
+  assert.equal(expectations[0].baseline.recomposition_stage, "maintenance");
 });
 
 test("discarded and superseded proposal states are retained in the decision ledger", () => {
   repo.savePlanDay(1, "Lower", "legs", [{ exercise: "State Squat", sets: 3, target_weight: 100 }]);
-  const superseded = repo.createProposal("stub", "first read", "", {
+  const superseded = repo.createProposal("stub", "auto: weekly squat target", "", {
     summary: "First training read.",
     changes: [{ day_number: 1, exercise: "State Squat", target_weight: 102, reason: "first read" }],
   });
-  const applied = repo.createProposal("stub", "newer read", "", {
+  const applied = repo.createProposal("stub", "auto: weekly squat target", "", {
     summary: "Newer training read.",
     changes: [{ day_number: 1, exercise: "State Squat", target_weight: 105, reason: "newer data" }],
   });
-  repo.applyProposal(applied.id);
+  const intent = automaticOrphanIntent(applied);
+  assert.ok(intent);
+  repo.applyProposal(applied.id, {
+    orphanSiblingCleanup: {
+      intent_key: intent.key,
+      eligible_before: new Date(Date.now() + 1_000).toISOString(),
+      provenance: "automatic",
+    },
+  });
 
   const discarded = repo.createProposal("stub", "not wanted", "", {
     summary: "Optional training change.",

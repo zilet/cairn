@@ -1,7 +1,7 @@
 // The personal-response model (src/repo/reaction-model.ts) — how THIS athlete
 // reacts, the keystone the higher coaching layers read. Invariants under test:
-//   - deficit_response speaks only when estimateExpenditure confidence is
-//     medium/high (the engine's ladder); silent on a thin window
+//   - deterministic output never turns the circular intake/TDEE identity into
+//     a personal logging or metabolic-response claim
 //   - load_crp stays SILENT with <3 hs-CRP draws and speaks (observational) at
 //     >=3 when the readings track prior-week training load
 //   - data_gap is FIRST-CLASS: fires when synced sleep/HRV is absent or stale
@@ -14,7 +14,12 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo } from "./_seed.js";
-import { buildReactionModel, reactionModelForCoach, saveReactionModel } from "../dist/repo/reaction-model.js";
+import {
+  buildReactionModel,
+  reactionModelForCoach,
+  saveReactionModel,
+  setReactionNarrative,
+} from "../dist/repo/reaction-model.js";
 
 // ---- local seeding (kept in-file; we never touch the shared _seed.js) ----
 function reset() {
@@ -103,9 +108,10 @@ function seedTonnage(date, sets = 4, weight = 200, reps = 5) {
 beforeEach(reset);
 
 // ---------------------------------------------------------------------------
-// deficit_response — the expenditure confidence ladder gate
+// Personal energy response only comes from evaluated interventions (v2), not
+// the circular TDEE = intake - weight-change identity used by expenditure.
 // ---------------------------------------------------------------------------
-test("deficit_response is silent on a thin window (low/none confidence)", () => {
+test("deterministic reaction model makes no deficit-response claim on a thin window", () => {
   // Only two weigh-ins a couple days apart, almost no intake — confidence stays
   // below medium, so no kcal-per-lb sensitivity is claimed.
   seedWeight(2, 200);
@@ -118,19 +124,17 @@ test("deficit_response is silent on a thin window (low/none confidence)", () => 
   );
 });
 
-test("deficit_response speaks on a rich, drifting window", () => {
-  // ~18 days of daily weigh-ins trending down ~0.4 lb/wk + daily intake under a
-  // derived maintenance → medium/high confidence, a real deficit + direction.
+test("deterministic reaction model makes no logging/metabolic bias claim from rich dependent estimates", () => {
   for (let d = 18; d >= 0; d--) {
     seedWeight(d, 200 - (18 - d) * 0.06); // ~0.42 lb/wk down
     seedIntake(d, 2100);
   }
   const model = buildReactionModel();
-  const dr = model.patterns.find((p) => p.id === "deficit_response");
-  assert.ok(dr, "expected a deficit_response pattern on a rich window");
-  assert.match(dr.statement, /lb\/wk/);
-  assert.ok(["observed", "strong"].includes(dr.confidence));
-  assert.equal(dr.domains.includes("nutrition"), true);
+  assert.equal(
+    model.patterns.find((p) => p.id === "deficit_response"),
+    undefined
+  );
+  assert.doesNotMatch(JSON.stringify(model), /logging bias|metabolic bias|deficit_response/i);
 });
 
 // ---------------------------------------------------------------------------
@@ -254,6 +258,31 @@ test("saveReactionModel promotes strong/observed patterns into memory", () => {
   assert.ok(rows.length >= 1, "expected at least one reaction memory row");
 });
 
+test("generic coach memory excludes reaction-model rows without deleting them from curation or export", () => {
+  const legacy = repo.addMemory(
+    "Your logged deficit implies a fixed metabolic response from the same intake-derived TDEE.",
+    "reaction",
+    "reaction-model"
+  );
+  assert.ok(legacy?.id);
+
+  const context = repo.getCoachContext();
+  assert.ok(!context.memory.some((row) => row.id === legacy.id));
+  assert.ok(repo.listMemory(50, { includeSuperseded: true }).some((row) => row.id === legacy.id));
+  assert.ok(repo.exportAll().memory.some((row) => row.id === legacy.id));
+});
+
+test("saving a rebuilt nonempty model clears prose tied to the prior evidence set", () => {
+  saveReactionModel();
+  setReactionNarrative("An older narrative over a different deterministic model.");
+  assert.match(reactionModelForCoach().narrative ?? "", /older narrative/i);
+
+  saveReactionModel();
+  const rebuilt = reactionModelForCoach();
+  assert.ok(rebuilt.patterns.length > 0, "the no-recovery data-gap pattern keeps this rebuild nonempty");
+  assert.equal(rebuilt.narrative, null);
+});
+
 test("reactionModelForCoach caps the surfaced patterns at 6, strongest first", () => {
   const read = reactionModelForCoach();
   assert.ok(read.patterns.length <= 6);
@@ -277,6 +306,7 @@ test("GOLDEN: serialized reactionModelForCoach() leaks NO params/score/grade fie
   const json = JSON.stringify(read);
   // The internal coefficient/score keys must NEVER appear in the surfaced JSON.
   assert.doesNotMatch(json, /"params"/);
+  assert.doesNotMatch(json, /"scale"/);
   assert.doesNotMatch(json, /"impact_score"/);
   assert.doesNotMatch(json, /"score"/);
   assert.doesNotMatch(json, /"deficit_kcal"/);

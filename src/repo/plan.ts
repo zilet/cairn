@@ -6,6 +6,7 @@ import { invalidateDayRead } from "./intelligence.js";
 import { localDateISO } from "./shared.js";
 import { bumpTrainingDataVersion } from "./training-cache.js";
 import { PlanQualityError, pressSlotKey, qualityIssueKey, validateTrainingPlan } from "./plan-quality.js";
+import { afterSqliteCommit, withSqliteSavepoint } from "./sqlite-savepoint.js";
 
 export { PlanQualityError, pressSlotKey, validateTrainingPlan } from "./plan-quality.js";
 
@@ -514,7 +515,7 @@ export function updateTarget(
   const info = db
     .prepare(`UPDATE plan_items SET ${sets.join(", ")} WHERE plan_day_id = ? AND exercise_id = ?`)
     .run(...vals);
-  if (info.changes && opts.bump_cache !== false) bumpTrainingDataVersion();
+  if (info.changes && opts.bump_cache !== false) afterSqliteCommit(bumpTrainingDataVersion);
   if (info.changes && opts.invalidate_day_read !== false) invalidateDayRead();
   return {
     updated: info.changes,
@@ -768,7 +769,7 @@ export function applyPlanChange(
   // name-match path because a swap change carries {from,to}, not a single `exercise`.
   if (c.swap && (c.swap.from || c.swap.to)) {
     const result = applyPlanSwap(day.id, dayNumber, c, c.reason ?? c.note ?? null, opts);
-    if (result.updated && opts.defer_cache_bump !== true) bumpTrainingDataVersion();
+    if (result.updated && opts.defer_cache_bump !== true) afterSqliteCommit(bumpTrainingDataVersion);
     if (result.updated && opts.defer_day_read_invalidation !== true) invalidateDayRead();
     return result;
   }
@@ -804,7 +805,7 @@ export function applyPlanChange(
       )
       .run(day.id, match.ex_name);
     if (!info.changes) throw new Error(`"${match.ex_name}" could not be removed from day ${dayNumber}`);
-    if (opts.defer_cache_bump !== true) bumpTrainingDataVersion();
+    if (opts.defer_cache_bump !== true) afterSqliteCommit(bumpTrainingDataVersion);
     if (opts.defer_day_read_invalidation !== true) invalidateDayRead();
     return { action: "removed", day: dayNumber, exercise: match.ex_name, updated: Number(info.changes) };
   }
@@ -884,7 +885,8 @@ export function applyPlanChange(
       .get(day.id, match.ex_name) as any;
     // updateTarget owns the cache bump for load edits; a volume/note-only update
     // must do the same here. Proposal savepoints defer both signals until commit.
-    if (tw === undefined && ts === undefined && opts.defer_cache_bump !== true) bumpTrainingDataVersion();
+    if (tw === undefined && ts === undefined && opts.defer_cache_bump !== true)
+      afterSqliteCommit(bumpTrainingDataVersion);
     if (opts.defer_day_read_invalidation !== true) invalidateDayRead();
     return {
       action: "updated",
@@ -957,7 +959,7 @@ export function applyPlanChange(
     target_seconds: targetSeconds ?? null,
     kind: "strength",
   });
-  if (opts.defer_cache_bump !== true) bumpTrainingDataVersion();
+  if (opts.defer_cache_bump !== true) afterSqliteCommit(bumpTrainingDataVersion);
   if (opts.defer_day_read_invalidation !== true) invalidateDayRead();
   return {
     action: "added",
@@ -1144,7 +1146,7 @@ export function addExerciseToPlanDay(
     note ? String(note).slice(0, 500) : null,
     timed ? 30 : null
   );
-  bumpTrainingDataVersion();
+  afterSqliteCommit(bumpTrainingDataVersion);
   invalidateDayRead();
   return { day: Number(dayNumber), exercise: ex.name };
 }
@@ -1264,14 +1266,16 @@ export function savePlanDay(
   if (!opts.deferDayReadInvalidation) invalidateDayRead();
   // plan_days count feeds getWeeklyStats.week_planned; bump covers a same-count in-place
   // day rewrite too (setWeeklyRuns + replacePlan reach here, so they're covered as well).
-  if (!opts.deferTrainingVersionBump) bumpTrainingDataVersion();
-  emitBrainEvent({
-    kind: "plan_changed",
-    domain: "training",
-    date: localDateISO(),
-    entity_id: dayId,
-    subject_key: `day:${day_number}`,
-  });
+  if (!opts.deferTrainingVersionBump) afterSqliteCommit(bumpTrainingDataVersion);
+  afterSqliteCommit(() =>
+    emitBrainEvent({
+      kind: "plan_changed",
+      domain: "training",
+      date: localDateISO(),
+      entity_id: dayId,
+      subject_key: `day:${day_number}`,
+    })
+  );
   return getPlanDay(day_number);
 }
 
@@ -1351,16 +1355,18 @@ export function deletePlanDay(
   if (!d) return { deleted: 0, day_number };
   db.prepare(`UPDATE sessions SET plan_day_id = NULL WHERE plan_day_id = ?`).run(d.id); // keep history, drop the link
   const r = db.prepare(`DELETE FROM plan_days WHERE id = ?`).run(d.id); // plan_items cascade
-  if (r.changes && !opts.deferTrainingVersionBump) bumpTrainingDataVersion(); // removing a day changes week_planned
+  if (r.changes && !opts.deferTrainingVersionBump) afterSqliteCommit(bumpTrainingDataVersion); // removing a day changes week_planned
   if (r.changes && !opts.deferDayReadInvalidation) invalidateDayRead();
   if (r.changes)
-    emitBrainEvent({
-      kind: "plan_changed",
-      domain: "training",
-      date: localDateISO(),
-      entity_id: d.id,
-      subject_key: `day:${day_number}`,
-    });
+    afterSqliteCommit(() =>
+      emitBrainEvent({
+        kind: "plan_changed",
+        domain: "training",
+        date: localDateISO(),
+        entity_id: d.id,
+        subject_key: `day:${day_number}`,
+      })
+    );
   return { deleted: r.changes, day_number };
 }
 
@@ -1369,8 +1375,7 @@ export function replacePlan(
   days: { day_number?: number; name?: string; focus?: string | null; items?: PlanItemInput[] }[]
 ) {
   if (!Array.isArray(days) || !days.length) throw new Error("replacePlan needs a non-empty days array");
-  db.exec("BEGIN");
-  try {
+  const result = withSqliteSavepoint("replace_plan", () => {
     const normalized = days.map((d, i) => ({ ...d, day_number: Number(d.day_number ?? i + 1) }));
     const keep = new Set(normalized.map((d) => d.day_number));
     const existing = db.prepare(`SELECT day_number FROM plan_days`).all() as any[];
@@ -1385,21 +1390,20 @@ export function replacePlan(
         deferDayReadInvalidation: true,
       })
     );
-    db.exec("COMMIT");
-  } catch (e) {
-    db.exec("ROLLBACK");
-    throw e;
-  }
+    return getPlan();
+  });
   // A restructure (new split/frequency) can move what today should be — bust the
   // cached Brief so a stale "train your old focus" read never survives an apply.
   invalidateDayRead();
-  bumpTrainingDataVersion();
-  emitBrainEvent({
-    kind: "plan_changed",
-    domain: "training",
-    date: localDateISO(),
-    subject_key: "full-plan",
-    material: true,
-  });
-  return getPlan();
+  afterSqliteCommit(bumpTrainingDataVersion);
+  afterSqliteCommit(() =>
+    emitBrainEvent({
+      kind: "plan_changed",
+      domain: "training",
+      date: localDateISO(),
+      subject_key: "full-plan",
+      material: true,
+    })
+  );
+  return result;
 }

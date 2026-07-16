@@ -9,6 +9,11 @@ import {
   projectGoalPace,
 } from "./profile.js";
 import { localDateISO } from "./shared.js";
+import { recompositionRead } from "./recomposition.js";
+import type { ExpenditureEstimate } from "./expenditure.js";
+import type { ProgramState } from "./program-state.js";
+import type { WholePersonTrajectory } from "./whole-person-trajectory.js";
+import { currentUnderfuelingRead } from "./underfueling-snapshot.js";
 
 export type JourneyPhaseKind = "cut" | "maintenance" | "diet_break" | "reverse" | "gain";
 export type JourneyPhaseStatus = "proposed" | "active" | "completed" | "discarded";
@@ -66,13 +71,17 @@ function num(v: unknown, min: number, max: number): number | null {
 }
 
 function normKind(v: unknown): JourneyPhaseKind {
-  const s = String(v || "").trim().toLowerCase();
+  const s = String(v || "")
+    .trim()
+    .toLowerCase();
   if (KINDS.has(s as JourneyPhaseKind)) return s as JourneyPhaseKind;
   throw new Error("journey phase kind must be cut, maintenance, diet_break, reverse, or gain");
 }
 
 function normStatus(v: unknown): JourneyPhaseStatus {
-  const s = String(v || "proposed").trim().toLowerCase();
+  const s = String(v || "proposed")
+    .trim()
+    .toLowerCase();
   return STATUSES.has(s as JourneyPhaseStatus) ? (s as JourneyPhaseStatus) : "proposed";
 }
 
@@ -91,7 +100,11 @@ function hydratePhase(row: any) {
 export function listJourneyPhases(status?: JourneyPhaseStatus | "all") {
   const s = status && status !== "all" ? normStatus(status) : null;
   const rows = s
-    ? db.prepare(`SELECT * FROM journey_phases WHERE status = ? ORDER BY COALESCE(start_date, created_at) DESC, id DESC`).all(s)
+    ? db
+        .prepare(
+          `SELECT * FROM journey_phases WHERE status = ? ORDER BY COALESCE(start_date, created_at) DESC, id DESC`
+        )
+        .all(s)
     : db.prepare(`SELECT * FROM journey_phases ORDER BY COALESCE(start_date, created_at) DESC, id DESC`).all();
   return (rows as any[]).map(hydratePhase);
 }
@@ -103,8 +116,10 @@ export function getJourneyPhase(id: number) {
 export function activeJourneyPhase() {
   return hydratePhase(
     db
-      .prepare(`SELECT * FROM journey_phases WHERE status = 'active' ORDER BY COALESCE(start_date, created_at) DESC, id DESC LIMIT 1`)
-      .get(),
+      .prepare(
+        `SELECT * FROM journey_phases WHERE status = 'active' ORDER BY COALESCE(start_date, created_at) DESC, id DESC LIMIT 1`
+      )
+      .get()
   );
 }
 
@@ -118,7 +133,7 @@ export function createJourneyPhase(input: JourneyPhaseInput) {
     input.planned_rate_lb_wk !== undefined
       ? num(input.planned_rate_lb_wk, -5, 5)
       : kind === "cut"
-        ? (goal as any)?.recommended?.weekly_rate_lb ?? null
+        ? ((goal as any)?.recommended?.weekly_rate_lb ?? null)
         : kind === "gain"
           ? leanGainRate(Number(profile.weight_lb) || 0)
           : 0;
@@ -126,20 +141,24 @@ export function createJourneyPhase(input: JourneyPhaseInput) {
     .prepare(
       `INSERT INTO journey_phases
        (kind, start_date, end_date, start_weight_lb, target_weight_lb, start_bodyfat_pct, target_bodyfat_pct, planned_rate_lb_wk, status, reason, source)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       kind,
       iso(input.start_date) ?? localDateISO(),
       iso(input.end_date),
       input.start_weight_lb !== undefined ? num(input.start_weight_lb, 50, 700) : num(profile.weight_lb, 50, 700),
-      input.target_weight_lb !== undefined ? num(input.target_weight_lb, 50, 700) : num(profile.goal_weight_lb, 50, 700),
+      input.target_weight_lb !== undefined
+        ? num(input.target_weight_lb, 50, 700)
+        : num(profile.goal_weight_lb, 50, 700),
       input.start_bodyfat_pct !== undefined ? num(input.start_bodyfat_pct, 3, 70) : (bodyFat?.body_fat_pct ?? null),
-      input.target_bodyfat_pct !== undefined ? num(input.target_bodyfat_pct, 3, 70) : num(profile.goal_bodyfat_pct, 3, 70),
+      input.target_bodyfat_pct !== undefined
+        ? num(input.target_bodyfat_pct, 3, 70)
+        : num(profile.goal_bodyfat_pct, 3, 70),
       planned,
       status,
       input.reason == null ? null : String(input.reason).trim().slice(0, 400) || null,
-      input.source == null ? "manual" : String(input.source).trim().slice(0, 80) || "manual",
+      input.source == null ? "manual" : String(input.source).trim().slice(0, 80) || "manual"
     );
   return getJourneyPhase(Number(info.lastInsertRowid));
 }
@@ -149,8 +168,9 @@ export function activateJourneyPhase(id: number) {
   if (!row) throw new Error(`No journey phase ${id}`);
   db.exec("BEGIN");
   try {
-    db.prepare(`UPDATE journey_phases SET status = 'completed', end_date = COALESCE(end_date, ?), updated_at = datetime('now') WHERE status = 'active' AND id != ?`)
-      .run(row.start_date ?? localDateISO(), id);
+    db.prepare(
+      `UPDATE journey_phases SET status = 'completed', end_date = COALESCE(end_date, ?), updated_at = datetime('now') WHERE status = 'active' AND id != ?`
+    ).run(row.start_date ?? localDateISO(), id);
     db.prepare(`UPDATE journey_phases SET status = 'active', updated_at = datetime('now') WHERE id = ?`).run(id);
     db.exec("COMMIT");
   } catch (e) {
@@ -188,7 +208,7 @@ function firstWeightAtOrBelow(targetWeight: number, startDate?: string | null): 
         .prepare(
           `SELECT date, weight_lb, created_at FROM bodyweight_log
             WHERE date >= ? AND weight_lb <= ?
-            ORDER BY date ASC, id ASC LIMIT 1`,
+            ORDER BY date ASC, id ASC LIMIT 1`
         )
         .get(since, targetWeight) || null
     );
@@ -198,20 +218,25 @@ function firstWeightAtOrBelow(targetWeight: number, startDate?: string | null): 
       .prepare(
         `SELECT date, weight_lb, created_at FROM bodyweight_log
           WHERE weight_lb <= ?
-          ORDER BY date ASC, id ASC LIMIT 1`,
+          ORDER BY date ASC, id ASC LIMIT 1`
       )
       .get(targetWeight) || null
   );
 }
 
 function latestWeightPoint(): any {
-  return db.prepare(`SELECT date, weight_lb, created_at FROM bodyweight_log ORDER BY date DESC, id DESC LIMIT 1`).get() || null;
+  return (
+    db.prepare(`SELECT date, weight_lb, created_at FROM bodyweight_log ORDER BY date DESC, id DESC LIMIT 1`).get() ||
+    null
+  );
 }
 
 function measurementCreatedAt(date?: string | null): string | null {
   const d = iso(date);
   if (!d) return null;
-  const row = db.prepare(`SELECT created_at FROM body_measurements WHERE date = ? ORDER BY id DESC LIMIT 1`).get(d) as any;
+  const row = db
+    .prepare(`SELECT created_at FROM body_measurements WHERE date = ? ORDER BY id DESC LIMIT 1`)
+    .get(d) as any;
   return row?.created_at ?? null;
 }
 
@@ -342,7 +367,11 @@ export function journeyMilestones(today = localDateISO()): JourneyMilestone[] {
     }
   }
 
-  return out.sort((a, b) => b.priority - a.priority || String(b.achieved_date ?? "").localeCompare(String(a.achieved_date ?? ""))).slice(0, 8);
+  return out
+    .sort(
+      (a, b) => b.priority - a.priority || String(b.achieved_date ?? "").localeCompare(String(a.achieved_date ?? ""))
+    )
+    .slice(0, 8);
 }
 
 export function latestJourneyMilestoneSince(stampSql: string): JourneyMilestone | null {
@@ -361,9 +390,13 @@ export function journeyTransitionSuggestion(today = localDateISO()): JourneyTran
   const goalWeight = Number(p.goal_weight_lb);
   const targetBf = Number(p.goal_bodyfat_pct);
 
-  const reachedWeight = Number.isFinite(weight) && Number.isFinite(goalWeight) && goalWeight > 0 && weight <= goalWeight + 0.5;
+  const reachedWeight =
+    Number.isFinite(weight) && Number.isFinite(goalWeight) && goalWeight > 0 && weight <= goalWeight + 0.5;
   const reachedBf =
-    bodyFat?.body_fat_pct != null && Number.isFinite(targetBf) && targetBf > 0 && bodyFat.body_fat_pct <= targetBf + 0.3;
+    bodyFat?.body_fat_pct != null &&
+    Number.isFinite(targetBf) &&
+    targetBf > 0 &&
+    bodyFat.body_fat_pct <= targetBf + 0.3;
   if ((reachedWeight || reachedBf) && phase?.kind !== "maintenance") {
     return {
       kind: "maintenance",
@@ -408,10 +441,26 @@ export function journeyTransitionSuggestion(today = localDateISO()): JourneyTran
   return null;
 }
 
-export function journeyRead(today = localDateISO()) {
+export function journeyRead(
+  today = localDateISO(),
+  opts: {
+    // `null` means the caller already attempted the estimate and it was
+    // unavailable; do not silently perform the expensive read again.
+    expenditure?: ExpenditureEstimate | null;
+    programState?: ProgramState;
+    wholePerson?: WholePersonTrajectory;
+  } = {}
+) {
   const p = getProfile();
   const bodyFat = currentBodyFatEstimate(p);
-  const goal = p ? computeGoalCheck(p) : null;
+  const goal = p ? computeGoalCheck(p, { expenditure: opts.expenditure }) : null;
+  const activePhase = activeJourneyPhase();
+  const underfueling = currentUnderfuelingRead(today, {
+    expenditure: opts.expenditure,
+    goal,
+    programState: opts.programState,
+    wholePerson: opts.wholePerson,
+  });
   return {
     profile: p
       ? {
@@ -423,10 +472,18 @@ export function journeyRead(today = localDateISO()) {
         }
       : null,
     body_fat: bodyFat,
-    active_phase: activeJourneyPhase(),
+    active_phase: activePhase,
     proposed_phases: listJourneyPhases("proposed"),
     transition_suggestion: journeyTransitionSuggestion(today),
     milestones: journeyMilestones(today),
     leanness_rate: (goal as any)?.leanness_rate ?? null,
+    recomposition: recompositionRead(today, {
+      activePhase,
+      expenditure: opts.expenditure,
+      programState: opts.programState,
+      wholePerson: opts.wholePerson,
+      underfueling,
+    }),
+    underfueling,
   };
 }

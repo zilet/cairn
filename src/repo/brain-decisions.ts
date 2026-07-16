@@ -8,6 +8,7 @@ import {
   normalizeBrainExpectation,
   normalizeProposedExpectation,
 } from "../brain/expectation-contract.js";
+import { withSqliteSavepoint } from "./sqlite-savepoint.js";
 
 function json(value: unknown): string | null {
   return value == null ? null : JSON.stringify(value);
@@ -235,23 +236,25 @@ export function transitionBrainDecision(
   status: BrainDecisionStatus,
   opts: { supersededBy?: number | null; effectiveDate?: string | null } = {}
 ): BrainDecision | null {
-  const current = getBrainDecision(id);
-  if (!current) return null;
-  const nowColumn =
-    status === "applied"
-      ? ", applied_at = COALESCE(applied_at, datetime('now'))"
-      : status === "reverted"
-        ? ", reverted_at = COALESCE(reverted_at, datetime('now'))"
-        : "";
-  db.prepare(
-    `UPDATE brain_decisions SET status = ?, superseded_by = ?, effective_date = COALESCE(?, effective_date)${nowColumn} WHERE id = ?`
-  ).run(status, opts.supersededBy ?? current.superseded_by, opts.effectiveDate ?? null, id);
-  if (["reverted", "superseded", "canceled", "rejected"].includes(status)) {
+  return withSqliteSavepoint(`transition_decision_${Math.trunc(Number(id))}`, () => {
+    const current = getBrainDecision(id);
+    if (!current) return null;
+    const nowColumn =
+      status === "applied"
+        ? ", applied_at = COALESCE(applied_at, datetime('now'))"
+        : status === "reverted"
+          ? ", reverted_at = COALESCE(reverted_at, datetime('now'))"
+          : "";
     db.prepare(
-      `UPDATE brain_expectations SET status = 'canceled' WHERE decision_id = ? AND status IN ('pending','mature')`
-    ).run(id);
-  }
-  return getBrainDecision(id);
+      `UPDATE brain_decisions SET status = ?, superseded_by = ?, effective_date = COALESCE(?, effective_date)${nowColumn} WHERE id = ?`
+    ).run(status, opts.supersededBy ?? current.superseded_by, opts.effectiveDate ?? null, id);
+    if (["reverted", "superseded", "canceled", "rejected"].includes(status)) {
+      db.prepare(
+        `UPDATE brain_expectations SET status = 'canceled' WHERE decision_id = ? AND status IN ('pending','mature')`
+      ).run(id);
+    }
+    return getBrainDecision(id);
+  });
 }
 
 export function patchBrainDecision(id: number, patch: Partial<BrainDecision>): BrainDecision | null {
@@ -419,24 +422,49 @@ export function recordDecision(
 } {
   const record = input && typeof input === "object" ? { ...(input as Record<string, unknown>) } : input;
   if (record && typeof record === "object" && !(record as any).input_fingerprint) {
-    (record as any).input_fingerprint = brainDecisionFingerprint({
+    const rootFingerprint = brainDecisionFingerprint({
       kind: (record as any).kind,
       source_ref_type: (record as any).source_ref_type,
       source_ref_key: (record as any).source_ref_key,
       effective_date: (record as any).effective_date,
       action: (record as any).action,
     });
+    let fingerprint = rootFingerprint;
+    let existing = findBrainDecisionByFingerprint(fingerprint);
+    let lifecycleAfter: number | null = null;
+    const scheduling = ["review", "announced", "pending"].includes(String((record as any).status));
+    const terminal = new Set(["canceled", "rejected", "reverted", "superseded"]);
+    // A terminal row is immutable history, not ownership of a new scheduling
+    // attempt. Walk the lifecycle chain until we find either a live owner or a
+    // free fingerprint; repeated retries while live remain idempotent.
+    while (scheduling && existing && terminal.has(String(existing.status))) {
+      lifecycleAfter = Number(existing.id);
+      fingerprint = brainDecisionFingerprint({ root_fingerprint: rootFingerprint, lifecycle_after: lifecycleAfter });
+      existing = findBrainDecisionByFingerprint(fingerprint);
+    }
+    (record as any).input_fingerprint = fingerprint;
+    if (lifecycleAfter != null) {
+      const context =
+        (record as any).context &&
+        typeof (record as any).context === "object" &&
+        !Array.isArray((record as any).context)
+          ? (record as any).context
+          : {};
+      (record as any).context = { ...context, lifecycle_after_decision_id: lifecycleAfter };
+    }
   }
   const normalized = normalizeBrainDecision(record);
   if (!normalized) throw new Error("invalid brain decision");
-  const decision = insertBrainDecision(normalized);
-  const existing = new Set(
-    listBrainExpectations({ decisionId: decision.id! }).map(
-      (item) => `${item.metric_key}|${item.subject_key}|${item.window_end}`
-    )
-  );
-  const stored = expectations
-    .filter((item) => !existing.has(`${item.metric_key}|${item.subject_key}|${item.window_end}`))
-    .map((expectation) => insertBrainExpectation(decision.id!, expectation));
-  return { decision, expectations: stored };
+  return withSqliteSavepoint("record_decision", () => {
+    const decision = insertBrainDecision(normalized);
+    const existing = new Set(
+      listBrainExpectations({ decisionId: decision.id! }).map(
+        (item) => `${item.metric_key}|${item.subject_key}|${item.window_end}`
+      )
+    );
+    const stored = expectations
+      .filter((item) => !existing.has(`${item.metric_key}|${item.subject_key}|${item.window_end}`))
+      .map((expectation) => insertBrainExpectation(decision.id!, expectation));
+    return { decision, expectations: stored };
+  });
 }

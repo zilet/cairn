@@ -29,6 +29,7 @@ function reset() {
     "activities",
     "garmin_activities",
     "program_blocks",
+    "app_state",
     "plan_proposals",
     "suggestions"
   );
@@ -71,6 +72,26 @@ test("getCoachContext returns the stable prompt envelope", () => {
   assert.ok(Array.isArray(ctx.program_state.lifts));
   assert.ok(Array.isArray(ctx.program_adjustments));
   assert.ok(Array.isArray(ctx.progression));
+});
+
+test("coach context carries one recovery phase instead of stale accumulation prose", () => {
+  const proposal = repo.createProposal("stub", repo.RECOVERY_WEEK_INSTRUCTION, "", {
+    summary: "Reduced recovery prescription.",
+    days: [],
+  });
+  repo.setProposalStatus(proposal.id, "applied");
+  repo.setAppState(
+    "recovery_week_applied",
+    JSON.stringify({ applied_on: localDaysAgo(1), proposal_id: proposal.id })
+  );
+  repo.createBlock({ goal: "Build strength", focus: "strength", phase: "accumulation", week_index: 2, total_weeks: 6 });
+
+  const ctx = repo.getCoachContext();
+  assert.equal(ctx.program_state.recovery_week?.state, "applied");
+  assert.equal(ctx.program_state.mesocycle.phase, "deload");
+  assert.equal(ctx.program_block.phase, "deload");
+  assert.match(ctx.coaching_focus.block_line, /deload week|absorb the work/i);
+  assert.doesNotMatch(ctx.coaching_focus.block_line, /building volume/i);
 });
 
 test("coach context contract recognizes the current prompt envelope", () => {

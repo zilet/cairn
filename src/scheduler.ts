@@ -14,6 +14,15 @@ import { enqueueAgentJob } from "./agentJobs.js";
 import { recordAsyncFailure, recordSchedulerFailure } from "./diagnostics.js";
 import { runWithTimeZone } from "./tz.js";
 import { addDaysISO, nowContext } from "./repo/shared.js";
+import { runUnderfuelingControlLoop } from "./domain/brain/underfueling-service.js";
+import {
+  MEAL_REFRESH_INSTRUCTION_KEY,
+  MEAL_REFRESH_REQUEST_KEY,
+  mealRefreshRetryDue,
+  runOwnedMealRefreshAttempt,
+} from "./repo/meal-refresh-retry.js";
+import { isPlanProposalResult } from "./agent-contracts.js";
+import { createHash } from "node:crypto";
 // Stream 2 (self-updating memory): quiet nightly memory housekeeping + outcome
 // reconciliation. Lazy-imported in the tick so this module stays decoupled.
 
@@ -27,8 +36,9 @@ import { addDaysISO, nowContext } from "./repo/shared.js";
 // The weekly coach draft is MISS-TOLERANT: rather than firing only on exact
 // hour equality (which silently skips the week if the process was asleep at that
 // minute), it fires when the most recent scheduled slot has passed and it hasn't
-// run for that slot yet — tracked via a persisted last-run stamp (app_state), so
-// a missed slot still drafts once when the server comes back.
+// completed that slot yet. Durable per-operation ownership retries transient
+// failure with bounded backoff and recovers expired leases after restart; legacy
+// app_state stamps remain a compatibility read.
 //
 // Proactivity (gated behind settings.proactive_enabled, default on) is PULL,
 // NEVER push: it only STORES a waiting read (a quiet nightly insight, a weekly
@@ -65,14 +75,70 @@ export function weeklySlotStamp(now: Date, day: number, hour: number, tz?: strin
   return addDaysISO(local.date, -back) ?? local.date;
 }
 
-// True when the weekly slot's most recent occurrence has passed and the persisted
-// last-run stamp doesn't already cover it. Records the stamp as a side effect
-// when it returns true (so it fires once per slot, restart-tolerant).
+export function brainRevisionSlotStamp(month: string, phaseSig: string, regressionSig: string): string {
+  return createHash("sha256")
+    .update(JSON.stringify({ month, phase: phaseSig, regression: regressionSig }))
+    .digest("hex");
+}
+
+// True when the weekly slot's most recent occurrence has passed and durable
+// scheduler ownership says it can be claimed. Legacy app_state stamps remain a
+// compatibility read only; new work is acknowledged after success/no-op, never
+// before an agent or deterministic operation actually completes.
 function weeklySlotDue(now: Date, day: number, hour: number, stateKey: string): boolean {
   const slotStamp = weeklySlotStamp(now, day, hour);
   if (repo.getAppState(stateKey) === slotStamp) return false; // already ran for this slot
-  repo.setAppState(stateKey, slotStamp);
-  return true;
+  return repo.schedulerOperationDue(stateKey, slotStamp, now);
+}
+
+function dailySlotDue(now: Date, stateKey: string): boolean {
+  const slotStamp = localToday(now);
+  if (repo.getAppState(stateKey) === slotStamp) return false;
+  return repo.schedulerOperationDue(stateKey, slotStamp, now);
+}
+
+// Initial insight scheduling is small-hours-only; once today's row exists, its
+// persisted retry/expired-lease state stays pollable for the rest of the day.
+// Crucially, the after-hours read does not create a new row by itself.
+export function dailyWindowOperationDue(now: Date, hour: number, stateKey: string): boolean {
+  const slotStamp = localToday(now);
+  if (repo.getAppState(stateKey) === slotStamp) return false;
+  const existing = repo.getSchedulerOperation(stateKey, slotStamp);
+  if (existing) return repo.schedulerOperationDue(stateKey, slotStamp, now);
+  return nowContext(now).hour === hour && repo.schedulerOperationDue(stateKey, slotStamp, now);
+}
+
+export function acceptsWeeklyCoachProposal(parsed: unknown): boolean {
+  return isPlanProposalResult(parsed);
+}
+
+function schedulerTerminal(status: repo.SchedulerOperationStatus): boolean {
+  return status === "succeeded" || status === "no_op";
+}
+
+// Isolate every operation so one provider outage never suppresses its siblings.
+// Effect-producing tasks still rely on their existing proposal/decision/dedup
+// ledgers; this wrapper provides at-least-once retry ownership, not a false claim
+// of exactly-once execution across a process crash after the effect commits.
+async function runScheduled<T>(
+  operation: string,
+  slotStamp: string,
+  legacyStateKey: string,
+  task: () => Promise<repo.SchedulerTaskCompletion<T>> | repo.SchedulerTaskCompletion<T>
+): Promise<repo.SchedulerRunResult<T> | null> {
+  try {
+    const result = await repo.runSchedulerOperation(operation, slotStamp, task);
+    if (schedulerTerminal(result.status)) repo.setAppState(legacyStateKey, slotStamp);
+    if (result.attempted && result.error) {
+      recordSchedulerFailure(operation, new Error(result.error));
+      console.error(`[scheduler] ${operation} ${result.status}: ${result.error}`);
+    }
+    return result;
+  } catch (error: any) {
+    recordSchedulerFailure(operation, error);
+    console.error(`[scheduler] ${operation} ownership failed: ${error?.message ?? error}`);
+    return null;
+  }
 }
 
 // Whole-day gap between two YYYY-MM-DD stamps (both produced by localToday). Used
@@ -145,6 +211,7 @@ export function startScheduler() {
     // specialist pool from being retried every minute. Successful phase/month
     // signatures are written by the completed case-conference job only.
     repo.setAppState("brain_revision_check_date", today);
+    let revisionClaim: repo.SchedulerOperationClaim | null = null;
     try {
       const trajectory = repo.wholePersonTrajectory({ end: today, days: 56 });
       const month = today.slice(0, 7);
@@ -156,6 +223,21 @@ export function startScheduler() {
       const previousRegression = repo.getAppState("brain_revision_regression_sig");
       const regressionDue = !!regressionSig && regressionSig !== previousRegression;
       if (!monthlyDue && !phaseDue && !regressionDue) return;
+      const revisionSlot = brainRevisionSlotStamp(month, phaseSig, regressionSig);
+      if (!repo.schedulerOperationDue("brain_revision_conference", revisionSlot)) return;
+      const revisionClaimResult = repo.claimSchedulerOperationWithStatus("brain_revision_conference", revisionSlot, {
+        maxAttempts: 3,
+        leaseMs: 6 * 60 * 60_000,
+      });
+      revisionClaim = revisionClaimResult.claim;
+      if (revisionClaimResult.terminalized_expired_lease) {
+        const terminalError = new Error(
+          revisionClaimResult.operation.last_error || "revision conference lease exhausted"
+        );
+        recordSchedulerFailure("brain_revision_conference", terminalError);
+        console.error(`[brain] revision conference exhausted after an expired final lease.`);
+      }
+      if (!revisionClaim) return;
       const reason = regressionDue
         ? `Unexplained regression requires a revision: ${trajectory.unexplained_worse.join(", ")}.`
         : phaseDue
@@ -175,6 +257,12 @@ export function startScheduler() {
             brain_revision_phase_sig: phaseSig,
             brain_revision_regression_sig: regressionSig,
           },
+          scheduler_operation: {
+            operation: revisionClaim.operation,
+            slot_stamp: revisionClaim.slot_stamp,
+            claim_token: revisionClaim.claim_token,
+            attempts: revisionClaim.attempts,
+          },
         },
       }) as any;
       enqueueAgentJob(Number(job.id));
@@ -182,6 +270,12 @@ export function startScheduler() {
         `[brain] queued a whole-person revision conference (${regressionDue ? "regression" : phaseDue ? "phase" : "monthly"}).`
       );
     } catch (e: any) {
+      if (revisionClaim) {
+        repo.failSchedulerOperation(revisionClaim, e, {
+          maxAttempts: 3,
+          backoffMs: [12 * 60 * 60_000, 36 * 60 * 60_000],
+        });
+      }
       repo.setAppState("brain_revision_check_date", "");
       recordSchedulerFailure("brain_revision_check", e);
       console.error(`[brain] revision conference check failed: ${e?.message ?? e}`);
@@ -208,24 +302,26 @@ export function startScheduler() {
     if (s.proactive_enabled) return;
     const now = new Date();
     if (!weeklySlotDue(now, s.coach_day, s.coach_hour, "coach_last_slot")) return;
+    const slot = weeklySlotStamp(now, s.coach_day, s.coach_hour);
     coachBusy = true;
     try {
-      const prompt = buildCoachPrompt("Weekly automatic review.");
-      const { agent, result } = await runAgentWithFallback(repo.pickAgentOrder(), prompt, { op: "coach_draft" });
-      const proposal = repo.createProposal(agent, "auto: weekly review", result.raw, result.parsed);
-      const autonomy = result.parsed
-        ? applyProposalWithAutonomy(Number(proposal.id), { requested_tier: "quiet_apply" })
-        : null;
-      console.log(
-        autonomy?.pending || autonomy?.announced
-          ? `Auto-coach scheduled a proposal via ${agent} for its natural boundary.`
-          : autonomy?.tier === "quiet_apply"
-            ? `Auto-coach applied a bounded proposal via ${agent}.`
-            : `Auto-coach stored a review-only proposal via ${agent} (parsed=${!!result.parsed}).`
-      );
-    } catch (e: any) {
-      recordSchedulerFailure("weekly_coach_draft", e);
-      console.error(`Auto-coach failed: ${e.message}`);
+      await runScheduled("coach_last_slot", slot, "coach_last_slot", async () => {
+        const prompt = buildCoachPrompt("Weekly automatic review.");
+        const { agent, result } = await runAgentWithFallback(repo.pickAgentOrder(), prompt, {
+          op: "coach_draft",
+          acceptParsed: acceptsWeeklyCoachProposal,
+        });
+        const proposal = repo.createProposal(agent, "auto: weekly review", result.raw, result.parsed);
+        const autonomy = applyProposalWithAutonomy(Number(proposal.id), { requested_tier: "quiet_apply" });
+        console.log(
+          autonomy?.pending || autonomy?.announced
+            ? `Auto-coach scheduled a proposal via ${agent} for its natural boundary.`
+            : autonomy?.tier === "quiet_apply"
+              ? `Auto-coach applied a bounded proposal via ${agent}.`
+              : `Auto-coach stored a review-only proposal via ${agent}.`
+        );
+        return { outcome: "succeeded", value: { proposal, autonomy } };
+      });
     } finally {
       coachBusy = false;
     }
@@ -243,11 +339,12 @@ export function startScheduler() {
     // (a) Nightly quiet insight — once per day, in the small hours alongside the
     //     Brief precompute. generateInsight emits ONE genuine connection or
     //     ok:false (dedup-guarded); a near-repeat / nothing-real is a calm no-op.
-    const insightDue = nowContext(now).hour === PRECOMPUTE_HOUR && repo.getAppState("insight_last_date") !== localToday(now);
+    const insightDue = dailyWindowOperationDue(now, PRECOMPUTE_HOUR, "insight_last_date");
     // (b) Weekly read — on the configured coach day/hour (miss-tolerant). A
     //     standing "how the week went + the one change", stored as a weekly_read
     //     insight. Reuses the coach slot so it lands on the same cadence.
     const weeklyDue = weeklySlotDue(now, s.coach_day, s.coach_hour, "weekly_read_last_slot");
+    const weeklyHealthDue = weeklySlotDue(now, s.coach_day, s.coach_hour, "weekly_health_synthesis_last_slot");
     // (c) Weekly nutrition check-in — on the coach day/hour too (miss-tolerant).
     //     Drafts a nutrition_target proposal ONLY on meaningful drift; the calm,
     //     common answer is change:false (no draft).
@@ -255,12 +352,14 @@ export function startScheduler() {
     // (c2) Weekly meals — rebuilt from the same whole-person context and activated at
     //      tomorrow's food-day boundary. If nutrition also moves, the pending target
     //      is threaded into the instruction so the two specialists stay coordinated.
-    const mealRefreshRequest = repo.getAppState("meal_plan_refresh_requested");
-    const mealRefreshDue =
-      !!mealRefreshRequest &&
-      mealRefreshRequest <= localToday(now) &&
-      repo.getAppState("meal_plan_refresh_attempt_for") !== mealRefreshRequest;
-    const mealPlanDue = weeklySlotDue(now, s.coach_day, s.coach_hour, "meal_plan_refresh_last_slot") || mealRefreshDue;
+    const mealRefreshRequest = repo.getAppState(MEAL_REFRESH_REQUEST_KEY);
+    const mealRefreshDue = mealRefreshRetryDue(mealRefreshRequest, now, localToday(now));
+    const weeklyMealPlanDue =
+      !mealRefreshRequest && weeklySlotDue(now, s.coach_day, s.coach_hour, "meal_plan_refresh_last_slot");
+    // An owned protective reshape has priority. While its retry backoff is
+    // active, the ordinary weekly cadence must not bypass the owner or duplicate
+    // the pending work.
+    const mealPlanDue = mealRefreshDue || (weeklyMealPlanDue && !mealRefreshRequest);
     // (d) Weekly plan EVOLUTION — the continuous-coach cadence (miss-tolerant). Drafts
     //     a plan-evolution proposal (progress what's working, deload/rotate what's
     //     stalled, ground targets in logged reality, rebalance toward weak points) and
@@ -277,7 +376,7 @@ export function startScheduler() {
     //     most once/day (cheap deterministic read); skipped on a tick where the
     //     weekly slot is already drafting (that path owns this evolution). The
     //     firing decision (signature changed + cooldown) is made inside the block.
-    const triggerCheckDue = !evolutionDue && repo.getAppState("program_evolution_trigger_date") !== localToday(now);
+    const triggerCheckDue = !evolutionDue && dailySlotDue(now, "program_evolution_trigger_date");
     // (f) Keep the TRAINING BENCHMARK attention (K5) fresh — a cheap, deterministic,
     //     no-agent pass (≤1×/day) that writes each tracked lift's + the test-week's
     //     re-test cadence onto the shared attention engine. This is what lets
@@ -285,46 +384,56 @@ export function startScheduler() {
     //     plateau/block checkpoint, released on clean progress) instead of a fixed
     //     interval — rule 2a. Without this pass the entries never exist and the reads
     //     fall back to the legacy cadence.
-    const benchmarkAttnDue = repo.getAppState("benchmark_attention_date") !== localToday(now);
+    const benchmarkAttnDue = dailySlotDue(now, "benchmark_attention_date");
     // (g) LEAD-MODE recovery auto-draft (≤1×/day). When the conductor's lead is the
     //     recovery-deload ASK (due, not running, nothing drafted) and the athlete has
     //     chosen lead posture, the coach drafts the recovery week ITSELF — the draft
     //     rides the exact one-tap path (evolveProgram → autonomy → announce → lands
     //     at the week boundary, Undo from Plan). This is the mechanism behind the
     //     conductor's "your coach sets this up automatically" line.
-    const recoveryAutoDue = repo.getAppState("recovery_auto_draft_date") !== localToday(now);
+    const recoveryAutoDue = dailySlotDue(now, "recovery_auto_draft_date");
+    // The fuel-protection read is deterministic and cheap enough for one daily
+    // pass. It normally holds; only multi-channel agreement schedules a bounded
+    // target/meal/recovery action through the existing autonomy ledger.
+    const underfuelDue = dailySlotDue(now, "underfuel_control_last_date");
 
     if (
       !insightDue &&
       !weeklyDue &&
+      !weeklyHealthDue &&
       !nutritionDue &&
       !mealPlanDue &&
       !evolutionDue &&
       !blockAdvanceDue &&
       !triggerCheckDue &&
       !benchmarkAttnDue &&
-      !recoveryAutoDue
+      !recoveryAutoDue &&
+      !underfuelDue
     )
       return;
     proactiveBusy = true;
     try {
+      if (underfuelDue) {
+        await runScheduled("underfuel_control_last_date", localToday(now), "underfuel_control_last_date", () => {
+          const result = runUnderfuelingControlLoop(localToday(now));
+          if (result.action !== "none") console.log(`[proactive] fuel-protection loop scheduled ${result.action}.`);
+          return { outcome: result.action === "none" ? "no_op" : "succeeded", value: result };
+        });
+      }
       if (benchmarkAttnDue) {
-        // Stamp first (cheap deterministic read; runs ≤1×/day). Only for a training
-        // athlete with a plan — nothing to benchmark otherwise.
-        repo.setAppState("benchmark_attention_date", localToday(now));
-        try {
+        await runScheduled("benchmark_attention_date", localToday(now), "benchmark_attention_date", () => {
           const hasPlan = (repo.getPlan() as any[]).some((d) => Array.isArray(d.items) && d.items.length);
           if (hasPlan) {
             const entries = repo.refreshTrainingBenchmarkAttention();
             console.log(`[proactive] refreshed training benchmark attention (${entries.length} signal(s)).`);
+            return { outcome: "succeeded", value: entries };
           }
-        } catch (e: any) {
-          recordSchedulerFailure("benchmark_attention_refresh", e);
-          console.error(`[proactive] benchmark attention refresh failed: ${e?.message ?? e}`);
-        }
+          return { outcome: "no_op" };
+        });
       }
       if (blockAdvanceDue) {
-        try {
+        const blockSlot = weeklySlotStamp(now, s.coach_day, s.coach_hour);
+        await runScheduled("block_advance_last_slot", blockSlot, "block_advance_last_slot", () => {
           const hasPlan = (repo.getPlan() as any[]).some((d) => Array.isArray(d.items) && d.items.length);
           if (hasPlan) {
             // Auto-create a sensible block when none is running (idempotent — never
@@ -343,112 +452,152 @@ export function startScheduler() {
             } else {
               console.log(`[proactive] ensured an active training block (${block.focus}, week ${block.week_index}).`);
             }
+            return { outcome: "succeeded", value: block };
           }
-        } catch (e: any) {
-          recordSchedulerFailure("training_block_advance", e);
-          console.error(`[proactive] block advance failed: ${e?.message ?? e}`);
-        }
+          return { outcome: "no_op" };
+        });
       }
       if (insightDue) {
-        repo.setAppState("insight_last_date", localToday(now));
-        try {
+        await runScheduled("insight_last_date", localToday(now), "insight_last_date", async () => {
           // Warm the ai_cache with a 12h freshness so the morning open is a
           // guaranteed instant hit (no agent wait on the request path), like the
           // nightly Brief precompute → saveDayRead.
           const r = await generateInsight("auto", "connection", undefined, { freshForMs: 12 * 60 * 60 * 1000 });
+          if (!r.ok && r.agent_status !== "ok") throw new Error(String(r.error || "insight provider unavailable"));
           console.log(
             r.ok ? `[proactive] stored a quiet insight.` : `[proactive] no genuine insight tonight (calm no-op).`
           );
-        } catch (e: any) {
-          recordSchedulerFailure("quiet_insight", e);
-          console.error(`[proactive] insight pass failed: ${e?.message ?? e}`);
-        }
+          return { outcome: r.ok ? "succeeded" : "no_op", value: r };
+        });
       }
       if (weeklyDue) {
-        try {
+        const weeklySlot = weeklySlotStamp(now, s.coach_day, s.coach_hour);
+        await runScheduled("weekly_read_last_slot", weeklySlot, "weekly_read_last_slot", async () => {
           const r = await generateInsight("auto", "weekly_read", undefined, { freshForMs: 12 * 60 * 60 * 1000 });
+          if (!r.ok && r.agent_status !== "ok") throw new Error(String(r.error || "weekly read provider unavailable"));
           console.log(
             r.ok ? `[proactive] stored the weekly read.` : `[proactive] no weekly read this week (calm no-op).`
           );
-        } catch (e: any) {
-          recordSchedulerFailure("weekly_read", e);
-          console.error(`[proactive] weekly read failed: ${e?.message ?? e}`);
-        }
+          return { outcome: r.ok ? "succeeded" : "no_op", value: r };
+        });
+      }
+      if (weeklyHealthDue) {
         // Refresh the whole-picture health synthesis weekly too, so it absorbs
         // training/recovery drift (new labs already refresh it immediately via the
         // enrich review pass). Pull artifact — cached, never pushed.
-        try {
-          const r = await synthesizeHealth("auto");
-          console.log(
-            r.ok ? `[proactive] refreshed the health synthesis.` : `[proactive] health synthesis steady (calm no-op).`
-          );
-        } catch (e: any) {
-          recordSchedulerFailure("health_synthesis", e);
-          console.error(`[proactive] health synthesis failed: ${e?.message ?? e}`);
-        }
+        const weeklySlot = weeklySlotStamp(now, s.coach_day, s.coach_hour);
+        await runScheduled(
+          "weekly_health_synthesis_last_slot",
+          weeklySlot,
+          "weekly_health_synthesis_last_slot",
+          async () => {
+            const r = await synthesizeHealth("auto");
+            if (!r.ok) throw new Error("health synthesis provider unavailable");
+            console.log(`[proactive] refreshed the health synthesis.`);
+            return { outcome: "succeeded", value: r };
+          }
+        );
       }
       let mealPlanInstruction =
         "Refresh the upcoming week of meals against the athlete's current training, recovery, health directives, preferences, schedule, and accepted nutrition target.";
+      let nutritionChanged = false;
+      if (mealRefreshDue) {
+        const protectiveInstruction = repo.getAppState(MEAL_REFRESH_INSTRUCTION_KEY);
+        if (protectiveInstruction) mealPlanInstruction = protectiveInstruction;
+      }
       if (nutritionDue) {
-        try {
-          const r: any = await nutritionCheckin("auto", undefined, undefined, { initiated: "auto" });
-          const autonomy: any = r.autonomy;
-          if (r.ok && r.change && r.proposal?.id) {
-            const target = r.proposal?.parsed?.nutrition;
-            if (Number.isFinite(Number(target?.target_kcal))) {
-              mealPlanInstruction =
-                `Refresh the upcoming week of meals around the coordinated nutrition target that takes effect next: ` +
-                `${Math.round(Number(target.target_kcal))} kcal, ` +
-                `${Math.round(Number(target.protein_g) || 0)} g protein, ` +
-                `${Math.round(Number(target.carbs_g) || 0)} g carbs, and ` +
-                `${Math.round(Number(target.fat_g) || 0)} g fat. Keep it aligned with training, recovery, health directives, preferences, and schedule.`;
-            }
+        const weeklySlot = weeklySlotStamp(now, s.coach_day, s.coach_hour);
+        const nutritionRun = await runScheduled(
+          "nutrition_checkin_last_slot",
+          weeklySlot,
+          "nutrition_checkin_last_slot",
+          async () => {
+            const r: any = await nutritionCheckin("auto", undefined, undefined, { initiated: "auto" });
+            if (!r.ok) throw new Error(String(r.error || "nutrition check-in provider unavailable"));
+            const autonomy: any = r.autonomy;
+            console.log(
+              r.change
+                ? autonomy?.pending || autonomy?.announced
+                  ? `[proactive] scheduled an adaptive nutrition change for its natural boundary.`
+                  : autonomy?.tier === "quiet_apply"
+                    ? `[proactive] applied a bounded adaptive nutrition change.`
+                    : `[proactive] nutrition change is review-only under the configured posture.`
+                : `[proactive] nutrition steady — no change (calm no-op).`
+            );
+            return { outcome: r.change ? "succeeded" : "no_op", value: r };
           }
-          console.log(
-            r.ok && r.change
-              ? autonomy?.pending || autonomy?.announced
-                ? `[proactive] scheduled an adaptive nutrition change for its natural boundary.`
-                : autonomy?.tier === "quiet_apply"
-                  ? `[proactive] applied a bounded adaptive nutrition change.`
-                  : `[proactive] nutrition change is review-only under the configured posture.`
-              : r.ok
-                ? `[proactive] nutrition steady — no change (calm no-op).`
-                : `[proactive] nutrition check-in unavailable (calm no-op).`
-          );
-        } catch (e: any) {
-          recordSchedulerFailure("nutrition_checkin", e);
-          console.error(`[proactive] nutrition check-in failed: ${e?.message ?? e}`);
+        );
+        const nutritionResult: any = nutritionRun?.value;
+        nutritionChanged = nutritionResult?.ok === true && nutritionResult.change === true;
+        if (nutritionResult?.ok && nutritionResult.change && nutritionResult.proposal?.id) {
+          const target = nutritionResult.proposal?.parsed?.nutrition;
+          if (Number.isFinite(Number(target?.target_kcal))) {
+            mealPlanInstruction =
+              `Refresh the upcoming week of meals around the coordinated nutrition target that takes effect next: ` +
+              `${Math.round(Number(target.target_kcal))} kcal, ` +
+              `${Math.round(Number(target.protein_g) || 0)} g protein, ` +
+              `${Math.round(Number(target.carbs_g) || 0)} g carbs, and ` +
+              `${Math.round(Number(target.fat_g) || 0)} g fat. Keep it aligned with training, recovery, health directives, preferences, and schedule.`;
+          }
         }
       }
       if (mealPlanDue) {
-        if (mealRefreshDue) repo.setAppState("meal_plan_refresh_attempt_for", mealRefreshRequest);
-        try {
-          const r: any = await draftMealPlan("auto", mealPlanInstruction, undefined, {
-            coordinated_update: nutritionDue || mealRefreshDue,
+        if (mealRefreshDue && mealRefreshRequest) {
+          try {
+            const attempt = await runOwnedMealRefreshAttempt(
+              mealRefreshRequest,
+              () => draftMealPlan("auto", mealPlanInstruction, undefined, { coordinated_update: true }),
+              { today: localToday(now) }
+            );
+            const r: any = attempt.result ?? { ok: false, error: attempt.error };
+            if (attempt.ok) {
+              // The owned protective reshape fulfills this week's ordinary meal
+              // refresh too; acknowledging that slot prevents a second plan from
+              // being drafted on the next minute after ownership clears.
+              const weeklySlot = weeklySlotStamp(now, s.coach_day, s.coach_hour);
+              repo.supersedeSchedulerOperation("meal_plan_refresh_last_slot", weeklySlot);
+              repo.setAppState("meal_plan_refresh_last_slot", weeklySlot);
+            }
+            console.log(
+              r.ok && (r.autonomy?.announced || r.autonomy?.pending)
+                ? `[proactive] prepared the owned meal reshape; it lands at tomorrow's food-day boundary.`
+                : r.ok
+                  ? `[proactive] prepared the owned meal reshape under the configured review posture.`
+                  : `[proactive] owned meal reshape remains queued for retry.`
+            );
+          } catch (e: any) {
+            recordSchedulerFailure("meal_plan_refresh_owned", e);
+            console.error(`[proactive] owned meal reshape failed: ${e?.message ?? e}`);
+          }
+        } else {
+          const weeklySlot = weeklySlotStamp(now, s.coach_day, s.coach_hour);
+          await runScheduled("meal_plan_refresh_last_slot", weeklySlot, "meal_plan_refresh_last_slot", async () => {
+            const r: any = await draftMealPlan("auto", mealPlanInstruction, undefined, {
+              coordinated_update: nutritionChanged,
+            });
+            if (!r.ok) throw new Error(String(r.error || "meal-plan provider unavailable"));
+            console.log(
+              r.autonomy?.announced || r.autonomy?.pending
+                ? `[proactive] prepared the next meal plan; it lands at tomorrow's food-day boundary.`
+                : `[proactive] prepared the next meal plan under the configured review posture.`
+            );
+            return { outcome: "succeeded", value: r };
           });
-          if (r.ok && mealRefreshDue) repo.setAppState("meal_plan_refresh_requested", "");
-          console.log(
-            r.ok && (r.autonomy?.announced || r.autonomy?.pending)
-              ? `[proactive] prepared the next meal plan; it lands at tomorrow's food-day boundary.`
-              : r.ok
-                ? `[proactive] prepared the next meal plan under the configured review posture.`
-                : `[proactive] meal-plan refresh unavailable (calm no-op).`
-          );
-        } catch (e: any) {
-          recordSchedulerFailure("meal_plan_refresh", e);
-          console.error(`[proactive] meal-plan refresh failed: ${e?.message ?? e}`);
         }
       }
       if (evolutionDue) {
-        try {
+        const weeklySlot = weeklySlotStamp(now, s.coach_day, s.coach_hour);
+        await runScheduled("program_evolution_last_slot", weeklySlot, "program_evolution_last_slot", async () => {
           // Nothing to evolve for a brand-new user with no plan — skip the agent call.
           const hasPlan = (repo.getPlan() as any[]).some((d) => Array.isArray(d.items) && d.items.length);
           if (!hasPlan) {
             console.log(`[proactive] no plan to evolve yet (calm no-op).`);
+            return { outcome: "no_op" };
           } else {
             const r: any = await evolveProgram("auto", repo.AUTO_EVOLUTION_INSTRUCTION);
+            if (!r.ok) throw new Error(String(r.error || "program evolution provider unavailable"));
             // A successful fresh draft retires the prior unreviewed auto one (no pile-up).
-            if (r.ok && r.proposal?.id) {
+            if (r.proposal?.id) {
               repo.supersedeAutoEvolutionDrafts(r.proposal.id);
               // Coordinate with the data-triggered path: the weekly draft has just
               // addressed whatever the data currently says, so reset the trigger's
@@ -463,24 +612,18 @@ export function startScheduler() {
               }
             }
             console.log(
-              r.ok && (r.autonomy?.pending || r.autonomy?.announced)
+              r.autonomy?.pending || r.autonomy?.announced
                 ? `[proactive] scheduled a plan evolution for its natural boundary.`
-                : r.ok && r.autonomy?.tier === "quiet_apply"
+                : r.autonomy?.tier === "quiet_apply"
                   ? `[proactive] applied a bounded plan evolution.`
-                  : r.ok
-                    ? `[proactive] plan evolution is review-only under the configured posture.`
-                    : `[proactive] plan evolution unavailable (calm no-op).`
+                  : `[proactive] plan evolution is review-only under the configured posture.`
             );
+            return { outcome: "succeeded", value: r };
           }
-        } catch (e: any) {
-          recordSchedulerFailure("program_evolution", e);
-          console.error(`[proactive] plan evolution failed: ${e?.message ?? e}`);
-        }
+        });
       }
       if (recoveryAutoDue) {
-        // Stamp first (≤1×/day even when nothing drafts) so it can't re-run every tick.
-        repo.setAppState("recovery_auto_draft_date", localToday(now));
-        try {
+        await runScheduled("recovery_auto_draft_date", localToday(now), "recovery_auto_draft_date", async () => {
           const focus: any = repo.getCoachingFocus();
           const draft = repo.shouldAutoDraftRecoveryWeek({
             lead_mode: s.lead_mode,
@@ -490,60 +633,58 @@ export function startScheduler() {
           });
           if (draft) {
             const r: any = await evolveProgram("auto", repo.RECOVERY_WEEK_INSTRUCTION);
+            if (!r.ok) throw new Error(String(r.error || "recovery auto-draft provider unavailable"));
             console.log(
-              r.ok
-                ? `[proactive] lead mode: auto-drafted the recovery week (lands at the boundary; Undo from Plan).`
-                : `[proactive] recovery auto-draft unavailable (calm no-op).`
+              `[proactive] lead mode: auto-drafted the recovery week (lands at the boundary; Undo from Plan).`
             );
+            return { outcome: "succeeded", value: r };
           }
-        } catch (e: any) {
-          recordSchedulerFailure("recovery_auto_draft", e);
-          console.error(`[proactive] recovery auto-draft failed: ${e?.message ?? e}`);
-        }
+          return { outcome: "no_op" };
+        });
       }
       if (triggerCheckDue) {
-        // Stamp the daily check first (cheap deterministic read; runs ≤1×/day even
-        // if no draft results) so it can't re-run every 60s tick.
-        repo.setAppState("program_evolution_trigger_date", localToday(now));
-        try {
-          const hasPlan = (repo.getPlan() as any[]).some((d) => Array.isArray(d.items) && d.items.length);
-          const trig = hasPlan
-            ? repo.programEvolutionTrigger()
-            : { due: false, reasons: [] as string[], signature: "" };
-          // Fire ONLY on a genuine shift: the condition signature changed since the
-          // last auto-evolution draft (a standing weak point drafts once, not daily)
-          // AND a calm minimum spacing has elapsed (never two drafts within 5 days).
-          const MIN_GAP_DAYS = 5;
-          const lastSig = repo.getAppState("program_evolution_trigger_sig");
-          const lastDraft = repo.getAppState("program_evolution_last_draft_date");
-          const gapOk = !lastDraft || daysBetweenStamps(lastDraft, localToday(now)) >= MIN_GAP_DAYS;
-          const sigChanged = !!trig.signature && trig.signature !== lastSig;
-          if (trig.due && sigChanged && gapOk) {
-            const task = `The athlete's logged training data has materially shifted: ${trig.reasons.join(" ")} Evolve the plan to address this NOW — rotate a close variation into what has stalled (don't just add load), build toward the under-trained groups (core / grip / a lagging pattern), and keep it fresh. Prefer 1-3 focused, well-justified changes. Explain each in plain words.`;
-            const r: any = await evolveProgram("auto", repo.AUTO_EVOLUTION_INSTRUCTION, undefined, { task });
-            if (r.ok && r.proposal?.id) {
-              // Shares the weekly draft's single-slot dedup AND records the condition
-              // it covered + resets the cooldown clock.
-              repo.supersedeAutoEvolutionDrafts(r.proposal.id);
-              repo.setAppState("program_evolution_trigger_sig", trig.signature);
-              repo.setAppState("program_evolution_last_draft_date", localToday(now));
+        await runScheduled(
+          "program_evolution_trigger_date",
+          localToday(now),
+          "program_evolution_trigger_date",
+          async () => {
+            const hasPlan = (repo.getPlan() as any[]).some((d) => Array.isArray(d.items) && d.items.length);
+            const trig = hasPlan
+              ? repo.programEvolutionTrigger()
+              : { due: false, reasons: [] as string[], signature: "" };
+            // Fire ONLY on a genuine shift: the condition signature changed since the
+            // last auto-evolution draft (a standing weak point drafts once, not daily)
+            // AND a calm minimum spacing has elapsed (never two drafts within 5 days).
+            const MIN_GAP_DAYS = 5;
+            const lastSig = repo.getAppState("program_evolution_trigger_sig");
+            const lastDraft = repo.getAppState("program_evolution_last_draft_date");
+            const gapOk = !lastDraft || daysBetweenStamps(lastDraft, localToday(now)) >= MIN_GAP_DAYS;
+            const sigChanged = !!trig.signature && trig.signature !== lastSig;
+            if (trig.due && sigChanged && gapOk) {
+              const task = `The athlete's logged training data has materially shifted: ${trig.reasons.join(" ")} Evolve the plan to address this NOW — rotate a close variation into what has stalled (don't just add load), build toward the under-trained groups (core / grip / a lagging pattern), and keep it fresh. Prefer 1-3 focused, well-justified changes. Explain each in plain words.`;
+              const r: any = await evolveProgram("auto", repo.AUTO_EVOLUTION_INSTRUCTION, undefined, { task });
+              if (!r.ok) throw new Error(String(r.error || "triggered evolution provider unavailable"));
+              if (r.proposal?.id) {
+                // Shares the weekly draft's single-slot dedup AND records the condition
+                // it covered + resets the cooldown clock.
+                repo.supersedeAutoEvolutionDrafts(r.proposal.id);
+                repo.setAppState("program_evolution_trigger_sig", trig.signature);
+                repo.setAppState("program_evolution_last_draft_date", localToday(now));
+              }
+              console.log(
+                r.autonomy?.pending || r.autonomy?.announced
+                  ? `[proactive] data-triggered plan evolution scheduled (${trig.reasons.length} reason(s)).`
+                  : r.autonomy?.tier === "quiet_apply"
+                    ? `[proactive] data-triggered plan evolution applied (${trig.reasons.length} reason(s)).`
+                    : `[proactive] data-triggered plan evolution is review-only under the configured posture.`
+              );
+              return { outcome: "succeeded", value: r };
+            } else if (trig.due) {
+              console.log(`[proactive] training shifted but already drafted / within cooldown (calm no-op).`);
             }
-            console.log(
-              r.ok && (r.autonomy?.pending || r.autonomy?.announced)
-                ? `[proactive] data-triggered plan evolution scheduled (${trig.reasons.length} reason(s)).`
-                : r.ok && r.autonomy?.tier === "quiet_apply"
-                  ? `[proactive] data-triggered plan evolution applied (${trig.reasons.length} reason(s)).`
-                  : r.ok
-                    ? `[proactive] data-triggered plan evolution is review-only under the configured posture.`
-                    : `[proactive] data-triggered evolution unavailable (calm no-op).`
-            );
-          } else if (trig.due) {
-            console.log(`[proactive] training shifted but already drafted / within cooldown (calm no-op).`);
+            return { outcome: "no_op" };
           }
-        } catch (e: any) {
-          recordSchedulerFailure("program_evolution_trigger", e);
-          console.error(`[proactive] evolution trigger failed: ${e?.message ?? e}`);
-        }
+        );
       }
     } finally {
       proactiveBusy = false;
@@ -700,27 +841,26 @@ export function startScheduler() {
   // ---- Self-hosted update check (pull-never-push). Once per day at most, gated
   //      on settings.update_check_enabled. Reaches the GitHub Releases API and
   //      STORES the result in app_state; nothing notifies — the Settings → Data
-  //      card reads it. Stamp-first so a persistent-offline box checks at most
-  //      once/day instead of hammering every minute; a transient failure just
-  //      waits for tomorrow (the manual "Check now" button covers an immediate
-  //      retry, and getUpdateStatus still serves the last good cache). ----
+  //      card reads it. Provider failures use the same bounded durable retry
+  //      contract as coaching work; a legitimate successful check acknowledges
+  //      the day while the last good cache remains available throughout. ----
   let updateCheckBusy = false;
   const updateCheckTick = async () => {
     if (updateCheckBusy) return;
     if (!repo.getSettings().update_check_enabled) return;
     const today = localToday();
-    if (repo.getAppState("update_check_last_date") === today) return; // already checked today
+    const now = new Date();
+    if (!dailySlotDue(now, "update_check_last_date")) return;
     updateCheckBusy = true;
-    repo.setAppState("update_check_last_date", today); // stamp first → at most one check/day
     try {
-      const r = await checkForUpdate();
-      if (r.error) console.log(`[update] check unavailable (calm no-op): ${r.error}`);
-      else if (r.update_available)
-        console.log(`[update] a newer Cairn is available: ${r.latest} (running ${r.current}) — see Settings → Data.`);
-      else console.log(`[update] up to date (${r.current}).`);
-    } catch (e: any) {
-      recordSchedulerFailure("update_check", e);
-      console.error(`[update] check error: ${e?.message ?? e}`);
+      await runScheduled("update_check_last_date", today, "update_check_last_date", async () => {
+        const r = await checkForUpdate();
+        if (r.error) throw new Error(String(r.error));
+        if (r.update_available)
+          console.log(`[update] a newer Cairn is available: ${r.latest} (running ${r.current}) — see Settings → Data.`);
+        else console.log(`[update] up to date (${r.current}).`);
+        return { outcome: "succeeded", value: r };
+      });
     } finally {
       updateCheckBusy = false;
     }
@@ -739,7 +879,10 @@ export function startScheduler() {
   // Scheduler work has no request header, so re-establish the most recently
   // observed PWA timezone for every pass. The lookup happens per tick: travel or
   // daylight-saving changes take effect without a restart.
-  const inOwnerTimeZone = <T>(fn: () => T) => () => runWithTimeZone(repo.recordedClientTimeZone(), fn);
+  const inOwnerTimeZone =
+    <T>(fn: () => T) =>
+    () =>
+      runWithTimeZone(repo.recordedClientTimeZone(), fn);
   setInterval(inOwnerTimeZone(tick), 60_000); // check every minute
   setInterval(inOwnerTimeZone(boundaryApplyTick), 60_000);
   setInterval(inOwnerTimeZone(revisionTick), 60_000);
@@ -757,12 +900,15 @@ export function startScheduler() {
   // Boot warm: if today's read isn't cached yet (e.g. a mid-day restart), compute
   // it in the background so the very next open is instant too. Safe no-op when an
   // agent is unreachable — it caches the deterministic floor.
-  setTimeout(inOwnerTimeZone(() => {
-    const today = warmToday();
-    if (!repo.getCachedDayRead(today)) {
-      precomputeDayRead(today)
-        .then(() => console.log(`[brief] warmed today's day-read for ${today}.`))
-        .catch((error) => recordSchedulerFailure("day_read_boot_warm", error));
-    }
-  }), 15_000);
+  setTimeout(
+    inOwnerTimeZone(() => {
+      const today = warmToday();
+      if (!repo.getCachedDayRead(today)) {
+        precomputeDayRead(today)
+          .then(() => console.log(`[brief] warmed today's day-read for ${today}.`))
+          .catch((error) => recordSchedulerFailure("day_read_boot_warm", error));
+      }
+    }),
+    15_000
+  );
 }

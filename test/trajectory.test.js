@@ -24,7 +24,7 @@ function reset() {
   for (const t of [
     "logged_sets", "plan_items", "plan_days", "sessions", "exercises",
     "bodyweight_log", "program_blocks", "activities", "garmin_activities",
-    "day_reads", "health_documents", "profile", "app_state",
+    "day_reads", "health_documents", "profile", "app_state", "plan_proposals",
   ]) {
     try { db.prepare(`DELETE FROM ${t}`).run(); } catch { /* table may not exist */ }
   }
@@ -90,6 +90,24 @@ test("horizon clamps DOWN to 12 for a long block", () => {
   assert.ok(t.horizon_weeks >= 8 && t.horizon_weeks <= 12, "always within the calm band");
   assert.equal(t.week_of, 1);
   assert.equal(t.phase, "accumulation");
+});
+
+test("historical trajectory threads its requested date into the recovery-aware block phase", () => {
+  seedProfile();
+  repo.createBlock({ goal: "Strength base", focus: "strength", phase: "accumulation", total_weeks: 8, week_index: 2 });
+  const appliedOn = isoDaysAgo(1);
+  const proposal = repo.createProposal("stub", repo.RECOVERY_WEEK_INSTRUCTION, "", {
+    summary: "Reduced recovery prescription.",
+    days: [],
+  });
+  repo.setProposalStatus(proposal.id, "applied");
+  repo.setAppState(
+    "recovery_week_applied",
+    JSON.stringify({ applied_on: appliedOn, proposal_id: proposal.id })
+  );
+
+  assert.equal(getTrajectory(isoDaysAgo(10)).phase, "accumulation", "history before the window keeps its stored phase");
+  assert.equal(getTrajectory(isoDaysAgo(0)).phase, "deload", "the current window reads as recovery/deload");
 });
 
 test("horizon clamps UP to 8 for a short remaining block", () => {

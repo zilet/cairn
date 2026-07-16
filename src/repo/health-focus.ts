@@ -234,6 +234,68 @@ export interface HealthDriftSignature {
   session_count: number;
   weight_bucket: "up" | "down" | "flat" | "none";
   injury_ids: number[];
+  nutrition_target: {
+    id: number;
+    effective_date: string;
+    target_kcal: number | null;
+    protein_g: number | null;
+  } | null;
+}
+
+function latestNutritionTargetForDrift(today = localDateISO()): any | null {
+  try {
+    return db
+      .prepare(
+        `SELECT id, effective_date, target_kcal, protein_g, created_at
+           FROM nutrition_targets WHERE effective_date <= ?
+          ORDER BY effective_date DESC, id DESC LIMIT 1`
+      )
+      .get(today) as any;
+  } catch {
+    return null;
+  }
+}
+
+function materialNutritionTargetChange(a: any, b: any): boolean {
+  if (!a && !b) return false;
+  if (!a || !b) return true;
+  const kcalA = Number(a.target_kcal);
+  const kcalB = Number(b.target_kcal);
+  const proteinA = Number(a.protein_g);
+  const proteinB = Number(b.protein_g);
+  const kcalChanged = Number.isFinite(kcalA) && Number.isFinite(kcalB) ? Math.abs(kcalA - kcalB) >= 75 : kcalA !== kcalB;
+  const proteinChanged = Number.isFinite(proteinA) && Number.isFinite(proteinB)
+    ? Math.abs(proteinA - proteinB) >= 10
+    : proteinA !== proteinB;
+  return kcalChanged || proteinChanged;
+}
+
+function sqliteTime(value: unknown): number {
+  const raw = String(value ?? "").trim();
+  if (!raw) return Number.NaN;
+  return Date.parse(raw.includes("T") ? raw : `${raw.replace(" ", "T")}Z`);
+}
+
+// Backward-compatible bridge for syntheses saved before nutrition_target joined
+// the drift signature. A materially different accepted target written after the
+// synthesis makes its old kcal advice ineligible immediately.
+function newerMaterialNutritionTargetThan(synthesis: any): boolean {
+  const generated = sqliteTime(synthesis?.generated_at);
+  if (!Number.isFinite(generated)) return false;
+  try {
+    const rows = db
+      .prepare(
+        `SELECT id, effective_date, target_kcal, protein_g, created_at
+           FROM nutrition_targets
+          ORDER BY effective_date DESC, id DESC LIMIT 2`
+      )
+      .all() as any[];
+    const current = rows[0] ?? null;
+    if (!current || sqliteTime(current.created_at) <= generated) return false;
+    return materialNutritionTargetChange(current, rows[1] ?? null);
+  } catch {
+    return false;
+  }
 }
 
 // Least-squares bodyweight trend over the last 21 days, bucketed. Mirrors the
@@ -290,7 +352,16 @@ export function computeHealthDriftSignature(): HealthDriftSignature | null {
         )
         .all(today, today) as any[]
     ).map((r) => Number(r.id));
-    return { directive_keys, latest_review_id, session_count, weight_bucket, injury_ids };
+    const target = latestNutritionTargetForDrift(today);
+    const nutrition_target = target
+      ? {
+          id: Number(target.id),
+          effective_date: String(target.effective_date),
+          target_kcal: target.target_kcal == null ? null : Number(target.target_kcal),
+          protein_g: target.protein_g == null ? null : Number(target.protein_g),
+        }
+      : null;
+    return { directive_keys, latest_review_id, session_count, weight_bucket, injury_ids, nutrition_target };
   } catch {
     return null;
   }
@@ -315,6 +386,13 @@ function hasMeaningfulDrift(saved: any): boolean {
 
   if (sortedArraysDiffer(saved.directive_keys, current.directive_keys)) return true;
   if (sortedArraysDiffer(saved.injury_ids, current.injury_ids)) return true;
+  if (
+    Object.hasOwn(saved, "nutrition_target") &&
+    Number(saved?.nutrition_target?.id ?? 0) !== Number(current?.nutrition_target?.id ?? 0) &&
+    materialNutritionTargetChange(saved.nutrition_target, current.nutrition_target)
+  ) {
+    return true;
+  }
 
   const savedSessions = Number(saved.session_count);
   if (Number.isFinite(savedSessions) && current.session_count - savedSessions >= SESSION_DRIFT_THRESHOLD) return true;
@@ -358,6 +436,27 @@ export function getHealthSynthesis(): any | null {
   }
 }
 
+function synthesisForStalePresentation(synthesis: any, reason: "new_labs" | "drift"): any {
+  const priorities = Array.isArray(synthesis?.priorities)
+    ? synthesis.priorities.map((priority: any) =>
+        priority && typeof priority === "object" ? { ...priority, the_move: null } : priority
+      )
+    : synthesis?.priorities;
+  return {
+    ...synthesis,
+    ...(priorities !== undefined ? { priorities } : {}),
+    one_change: null,
+    stale_note:
+      reason === "new_labs"
+        ? "New health results are in. Refresh this read before using its earlier action advice."
+        : "Your current plan or signals have moved since this read. Refresh it before using its earlier action advice.",
+  };
+}
+
+function staleSynthesisView(synthesis: any, reason: "new_labs" | "drift") {
+  return { synthesis: synthesisForStalePresentation(synthesis, reason), stale: true, stale_reason: reason } as const;
+}
+
 // The cached synthesis plus a FRESHNESS verdict for the PWA. `stale` is true when
 // EITHER: (1) a health document exists whose effective date is NEWER than the
 // synthesis was last written against (source_doc_at, falling back to generated_at)
@@ -384,8 +483,11 @@ export function getHealthSynthesisView(): {
       ? synthesis.source_doc_at.trim().slice(0, 10)
       : String(synthesis.generated_at ?? "").slice(0, 10);
   if (newestDoc && against && newestDoc > against) {
-    return { synthesis, stale: true, stale_reason: "new_labs" };
+    return staleSynthesisView(synthesis, "new_labs");
+  }
+  if (newerMaterialNutritionTargetThan(synthesis)) {
+    return staleSynthesisView(synthesis, "drift");
   }
   const drift = hasMeaningfulDrift(synthesis?.drift_sig);
-  return { synthesis, stale: drift, stale_reason: drift ? "drift" : null };
+  return drift ? staleSynthesisView(synthesis, "drift") : { synthesis, stale: false, stale_reason: null };
 }

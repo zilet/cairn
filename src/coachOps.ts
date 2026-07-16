@@ -47,6 +47,7 @@ import { researchEnabled, gatherReviewGrounding, researchEvidence } from "./rese
 import { normalizeHealthSynthesis } from "./health-synthesis.js";
 import { clampNutritionFloors } from "./repo/nutrition-safety.js";
 import { applyMealPlanWithAutonomy, applyProposalWithAutonomy } from "./domain/brain/autonomy-service.js";
+import { personalizedNutritionStep } from "./domain/brain/underfueling-service.js";
 import {
   hasPlanProposalActions,
   isExerciseExplanationResult,
@@ -105,15 +106,11 @@ export function personalizeNutritionCheckinTarget(nutrition: any, goalInput?: an
   if (Number.isFinite(previous)) {
     const rawDelta = rawTarget - previous;
     const sign = rawDelta < 0 ? -1 : rawDelta > 0 ? 1 : 0;
+    // Any requested change becomes the same phase-aware, canonical 100-250 kcal
+    // step the deterministic underfuel controller uses. The model chooses the
+    // direction; Cairn owns magnitude, 25-kcal rounding and safety authority.
     const standardStep = Math.min(250, Math.abs(rawDelta));
-    const modifier = repo.whatWorksForYou()?.modifiers.find((item) => item.target === "nutrition_step") ?? null;
-    const learnedStep = repo.applyPersonalResponseModifier({
-      base: standardStep,
-      modifier,
-      min: 0,
-      max: 250,
-      safety_ceiling: 250,
-    });
+    const learnedStep = sign === 0 ? 0 : personalizedNutritionStep(standardStep, localDateISO(), 250);
     target = Math.round(previous + sign * learnedStep);
   }
   const bounded = clampNutritionFloors(
@@ -152,7 +149,8 @@ export function protectiveFuelEvidence(date = localDateISO()): string[] {
     const fatigueNotes = sessions.filter((session) => sessionNoteSuggestsFatigue(session?.notes));
     const rapidFade = fatigueNotes.some((session) => sessionNoteSuggestsRapidFade(session?.notes));
     if (lowPerformance >= 2) reasons.push("repeated low performance in recent session feedback");
-    if (fatigueNotes.length >= 2 || rapidFade) reasons.push("fresh session notes describe under-fueling or performance fade");
+    if (fatigueNotes.length >= 2 || rapidFade)
+      reasons.push("fresh session notes describe under-fueling or performance fade");
   } catch {
     /* no recent session evidence */
   }
@@ -186,21 +184,26 @@ export function agentModelsOp(name: string) {
 //   'all_failed'   — agents WERE available but every attempt failed (fell to the floor)
 //   'ok'           — an agent produced the result
 // A `result` carries `source`/`agent`/`tried`/`ok` from the op; any subset is fine.
-export function agentStatusFor(result: {
+export function agentStatusFor(
+  result: {
   source?: string | null;
   agent?: string | null;
   ok?: boolean;
   tried?: { agent: string; error: string }[] | null;
-} = {}): "ok" | "unconfigured" | "all_failed" {
+  } = {}
+): "ok" | "unconfigured" | "all_failed" {
   let configured = true;
-  try { configured = repo.pickAgentOrder().length > 0; } catch { configured = true; }
+  try {
+    configured = repo.pickAgentOrder().length > 0;
+  } catch {
+    configured = true;
+  }
   if (!configured) return "unconfigured";
   // An agentic result is one that came from an agent (source === 'agent') or that
   // succeeded (ok !== false with a chosen agent). The deterministic floor / a
   // failed op means every available attempt failed.
   const agentic =
-    result.source === "agent" ||
-    (result.ok !== false && !!result.agent && result.source !== "deterministic");
+    result.source === "agent" || (result.ok !== false && !!result.agent && result.source !== "deterministic");
   return agentic ? "ok" : "all_failed";
 }
 
@@ -263,7 +266,10 @@ async function runVerify<T>(
       : [];
     // A real fix that re-validates against the schema → adopt it.
     if (v.ok === false && v.fixed_draft && typeof v.fixed_draft === "object" && validate(v.fixed_draft)) {
-      return { draft: v.fixed_draft as T, verified: { checked: true, adjustments: violations.length ? violations : ["adjusted to honor your floors"] } };
+      return {
+        draft: v.fixed_draft as T,
+        verified: { checked: true, adjustments: violations.length ? violations : ["adjusted to honor your floors"] },
+      };
     }
     if (v.ok === true) return { draft, verified: { checked: true, adjustments: [] } };
     // Defensive only: acceptParsed rejects this before rotation stops. Never show
@@ -326,36 +332,72 @@ export async function suggestSession(
   if (!sessionSane(p)) {
     // Nothing fresh and usable — fall back to a stale cache hit rather than fail.
     if (cached) return cached.result;
-    return { ok: false as const, error: "agent returned no usable session", agent: chosen, tried, agent_status: agentStatusFor({ ok: false, agent: chosen, tried }) };
+    return {
+      ok: false as const,
+      error: "agent returned no usable session",
+      agent: chosen,
+      tried,
+      agent_status: agentStatusFor({ ok: false, agent: chosen, tried }),
+    };
   }
   // Self-critique: check the suggestion against the athlete's HARD constraints
   // (injury, time budget, equipment, encoding) and adopt a fix if one is returned.
   // Fail-open — verify down/garbage ⇒ the draft ships exactly as before.
   hooks?.onPhase?.("checking it against your floors", { frac: { done: 1, total: 2 } });
   const { draft: session, verified } = await runVerify(
-    agent, p, (d) => buildSessionVerifyPrompt(d, opts), sessionSane, "session_verify", hooks
+    agent,
+    p,
+    (d) => buildSessionVerifyPrompt(d, opts),
+    sessionSane,
+    "session_verify",
+    hooks
   );
   // Outcome learning: record what was suggested so a later pass can compare it to
   // what the athlete actually trained. Best-effort; never blocks the response.
   repo.recordSuggestion("session_suggest", opts.date ?? null, {
-    minutes: opts.minutes ?? null, focus: opts.focus ?? null,
-    est_minutes: Number(session.est_minutes) || null, item_count: session.items.length,
+    minutes: opts.minutes ?? null,
+    focus: opts.focus ?? null,
+    est_minutes: Number(session.est_minutes) || null,
+    item_count: session.items.length,
   });
-  const out = { ok: true as const, session, agent: chosen, tried, agent_status: "ok" as const, ...(verified ? { verified } : {}) };
-  try { repo.saveAiCache("session_suggest", cacheKey, { result: out, chosen_agent: chosen, freshForMs: 3 * 60 * 60 * 1000 }); } catch { /* cache write never breaks the op */ }
+  const out = {
+    ok: true as const,
+    session,
+    agent: chosen,
+    tried,
+    agent_status: "ok" as const,
+    ...(verified ? { verified } : {}),
+  };
+  try {
+    repo.saveAiCache("session_suggest", cacheKey, {
+      result: out,
+      chosen_agent: chosen,
+      freshForMs: 3 * 60 * 60 * 1000,
+  });
+  } catch {
+    /* cache write never breaks the op */
+  }
   return out;
 }
 
 // Fingerprint a session-suggest request: the normalized explicit constraints +
 // a coarse day-context stamp (the calendar date + the suggested plan day) so a
 // new day or a re-plan busts the cache while an identical same-day repeat hits it.
-function sessionSuggestCacheKey(opts: { minutes?: number; equipment?: string; focus?: string; constraints?: string; date?: string }): string {
+function sessionSuggestCacheKey(opts: {
+  minutes?: number;
+  equipment?: string;
+  focus?: string;
+  constraints?: string;
+  date?: string;
+}): string {
   const date = opts.date || localDateISO();
   let dayContext = "";
   try {
     const dr = repo.dayRead(date);
     dayContext = `${dr.kind}|${dr.focus ?? ""}`;
-  } catch { /* a missing read just yields a coarser key */ }
+  } catch {
+    /* a missing read just yields a coarser key */
+  }
   return repo.fingerprint({
     minutes: opts.minutes ?? null,
     equipment: (opts.equipment ?? "").trim().toLowerCase(),
@@ -377,11 +419,7 @@ function sessionSuggestCacheKey(opts: { minutes?: number; equipment?: string; fo
 // the agentJobs `proposal` kind (live caption progress + reconnect) or run inline
 // when bg ops are off. Degrades like the rest of the loop: no agent → ok:false
 // with agent_status and no meaningless empty draft is persisted.
-export async function draftCoachProposal(
-  agent: string | undefined,
-  instruction: string | undefined,
-  hooks?: OpHooks
-) {
+export async function draftCoachProposal(agent: string | undefined, instruction: string | undefined, hooks?: OpHooks) {
   hooks?.onPhase?.("reading your training");
   const prompt = buildCoachPrompt(instruction);
   // No determinate `frac` here: the single draft call IS the long, opaque step, so we
@@ -486,8 +524,8 @@ export async function evolveProgram(
   // with a decision + one-tap Undo, while a structural restructure (parsed.days → kind
   // 'training_structure') ANNOUNCES first and lands at the boundary pass via repo.applyProposal
   // (so the recovery-week stamp + supersession still fire); under 'announce_first' bounded
-  // changes also announce; under 'review_everything' the layer returns tier 'ask' and the draft
-  // stays a plain reviewable draft (no decision recorded) — exactly today's behavior. No
+  // changes also announce; under 'review_everything' the layer records an explicit review hold
+  // and keeps the draft unchanged, so Today can show the real reason without guessing. No
   // requested_tier: decideAutonomyTier derives the default from the proposal shape and never
   // loosens. Only a genuinely parsed proposal has something to apply; a failed/unparsed draft
   // is left as a raw draft. Never throws — a bookkeeping failure never breaks the draft return.
@@ -544,8 +582,12 @@ export function normalizeExerciseExplanation(input: any): ExerciseExplanation | 
 
 export function exerciseExplanationCacheKey(detail: any): string {
   return repo.fingerprint({
-    name: String(detail?.name ?? "").trim().toLowerCase(),
-    muscle_group: String(detail?.muscle_group ?? "").trim().toLowerCase(),
+    name: String(detail?.name ?? "")
+      .trim()
+      .toLowerCase(),
+    muscle_group: String(detail?.muscle_group ?? "")
+      .trim()
+      .toLowerCase(),
     mode: detail?.mode ?? "reps",
     constraint_note: String(detail?.constraint_note ?? "").trim(),
     cues: String(detail?.cues ?? "").trim(),
@@ -649,10 +691,25 @@ export async function explainExercise(agent: string | undefined, name: string, h
         computed_at: cached?.computed_at ?? null,
       };
     }
-    return { ok: false as const, found: true as const, exercise: detail.name, error: "agent returned no usable exercise explanation", agent: chosen, tried };
+    return {
+      ok: false as const,
+      found: true as const,
+      exercise: detail.name,
+      error: "agent returned no usable exercise explanation",
+      agent: chosen,
+      tried,
+    };
   }
 
-  const out = { ok: true as const, found: true as const, exercise: detail.name, explanation, cached: false as const, agent: chosen, tried };
+  const out = {
+    ok: true as const,
+    found: true as const,
+    exercise: detail.name,
+    explanation,
+    cached: false as const,
+    agent: chosen,
+    tried,
+  };
   try {
     repo.saveAiCache(EXERCISE_EXPLANATION_KIND, cacheKey, {
       result: out,
@@ -680,12 +737,23 @@ function sanitizeWeekAhead(input: any): { days: any[]; summary: string } | null 
     .map((d: any) => ({
       day: d?.day == null ? null : String(d.day).replace(/\s+/g, " ").trim().slice(0, 16) || null,
       kind: WEEK_AHEAD_DAY_KINDS.has(String(d?.kind)) ? String(d.kind) : "lift",
-      label: String(d?.label ?? "").replace(/\s+/g, " ").trim().slice(0, 60),
-      ...(d?.note != null && String(d.note).trim() ? { note: String(d.note).replace(/\s+/g, " ").trim().slice(0, 90) } : {}),
+      label: String(d?.label ?? "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 60),
+      ...(d?.note != null && String(d.note).trim()
+        ? { note: String(d.note).replace(/\s+/g, " ").trim().slice(0, 90) }
+        : {}),
     }))
     .filter((d: any) => d.label);
   if (!days.length) return null;
-  return { days, summary: String(input?.summary ?? "").replace(/\s+/g, " ").trim().slice(0, 240) };
+  return {
+    days,
+    summary: String(input?.summary ?? "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 240),
+  };
 }
 
 // A calm sketch of the next several days (lift / run / mixed / rest), the day-read
@@ -693,7 +761,13 @@ function sanitizeWeekAhead(input: any): { days: any[]; summary: string } | null 
 // always-available fallback; cached per day+plan+goal (serve-stale-then-revalidate).
 export async function weekAheadRead(agent: string | undefined, hooks?: OpHooks) {
   const floor = repo.weekAheadPlan();
-  const floorResult = { ok: true as const, days: floor.days, summary: floor.summary, source: "deterministic" as const, cached: false as const };
+  const floorResult = {
+    ok: true as const,
+    days: floor.days,
+    summary: floor.summary,
+    source: "deterministic" as const,
+    cached: false as const,
+  };
   const profile: any = repo.getProfile();
   const cacheKey = repo.fingerprint({
     op: WEEK_AHEAD_KIND,
@@ -705,7 +779,13 @@ export async function weekAheadRead(agent: string | undefined, hooks?: OpHooks) 
   const cachedSane = sanitizeWeekAhead(cached?.result);
   if (cached && cachedSane && !cached.stale) {
     hooks?.onPhase?.("served from cache");
-    return { ok: true as const, ...cachedSane, source: "agent" as const, cached: true as const, agent: cached.chosen_agent };
+    return {
+      ok: true as const,
+      ...cachedSane,
+      source: "agent" as const,
+      cached: true as const,
+      agent: cached.chosen_agent,
+    };
   }
 
   hooks?.onPhase?.("sketching your week");
@@ -721,7 +801,11 @@ export async function weekAheadRead(agent: string | undefined, hooks?: OpHooks) 
     if (sane) {
       const out = { ok: true as const, ...sane, source: "agent" as const, cached: false as const, agent: chosen };
       try {
-        repo.saveAiCache(WEEK_AHEAD_KIND, cacheKey, { result: out, chosen_agent: chosen, freshForMs: WEEK_AHEAD_FRESH_MS });
+        repo.saveAiCache(WEEK_AHEAD_KIND, cacheKey, {
+          result: out,
+          chosen_agent: chosen,
+          freshForMs: WEEK_AHEAD_FRESH_MS,
+        });
       } catch {
         /* cache write never breaks the op */
       }
@@ -733,7 +817,15 @@ export async function weekAheadRead(agent: string | undefined, hooks?: OpHooks) 
     if (hooks?.signal?.aborted) throw error;
     /* fall through to a stale-cache or the deterministic floor */
   }
-  if (cachedSane) return { ok: true as const, ...cachedSane, source: "agent" as const, cached: true as const, stale: true as const, agent: cached?.chosen_agent ?? null };
+  if (cachedSane)
+    return {
+      ok: true as const,
+      ...cachedSane,
+      source: "agent" as const,
+      cached: true as const,
+      stale: true as const,
+      agent: cached?.chosen_agent ?? null,
+    };
   return floorResult;
 }
 
@@ -775,14 +867,25 @@ export async function draftMealPlan(
   // Defensive only: the shared fallback already enforces this same predicate.
   // Never persist an off-contract object as a meal plan.
   if (!planSane(p)) {
-    return { ok: false as const, error: "agent returned no usable meal plan", agent: chosen, tried, agent_status: agentStatusFor({ ok: false, agent: chosen, tried }) };
+    return {
+      ok: false as const,
+      error: "agent returned no usable meal plan",
+      agent: chosen,
+      tried,
+      agent_status: agentStatusFor({ ok: false, agent: chosen, tried }),
+    };
   }
   // Self-critique: check the plan against the lean-safe / longevity floors and
   // adopt a returned fix when it re-validates. Fail-open (verify down/garbage ⇒
   // the original draft is persisted, exactly today's behavior).
   hooks?.onPhase?.("checking it against your floors", { frac: { done: 1, total: 2 } });
   const { draft: verifiedParsed, verified } = await runVerify(
-    agent, p, buildPlanVerifyPrompt, planSane, "meal_plan_verify", hooks
+    agent,
+    p,
+    buildPlanVerifyPrompt,
+    planSane,
+    "meal_plan_verify",
+    hooks
   );
   const safety = validateMealPlanDraftForPersistence(verifiedParsed, instruction);
   if (!safety.ok) {
@@ -886,7 +989,14 @@ export async function nutritionCheckin(
   }
   // No meaningful drift → no proposal. The calm, common answer.
   if (!p.change || !p.nutrition || !Number.isFinite(Number(p.nutrition.target_kcal))) {
-    return { ok: true as const, change: false, summary: typeof p.summary === "string" ? p.summary : "", agent: chosen, tried, expenditure };
+    return {
+      ok: true as const,
+      change: false,
+      summary: typeof p.summary === "string" ? p.summary : "",
+      agent: chosen,
+      tried,
+      expenditure,
+    };
   }
   const nutrition = personalizeNutritionCheckinTarget(p.nutrition);
   // The protective low-confidence exception is raise-only. A model cannot turn
@@ -898,7 +1008,12 @@ export async function nutritionCheckin(
     // A raise-only exception is meaningless with no established target to raise
     // from — Number(null) is 0 (finite), so prev_target_kcal must be checked
     // explicitly rather than relying on Number.isFinite alone.
-    if (nutrition?.prev_target_kcal == null || !Number.isFinite(previous) || !Number.isFinite(target) || target <= previous) {
+    if (
+      nutrition?.prev_target_kcal == null ||
+      !Number.isFinite(previous) ||
+      !Number.isFinite(target) ||
+      target <= previous
+    ) {
       return {
         ok: true as const,
         change: false as const,
@@ -932,7 +1047,14 @@ export async function nutritionCheckin(
   repo.recordSuggestion("nutrition_checkin", localDateISO(), {
     target_kcal: Number.isFinite(targetKcal) ? targetKcal : null,
     tdee: Number.isFinite(tdee) ? tdee : null,
-    direction: Number.isFinite(targetKcal) && Number.isFinite(tdee) ? (targetKcal < tdee ? "down" : targetKcal > tdee ? "up" : "hold") : null,
+    direction:
+      Number.isFinite(targetKcal) && Number.isFinite(tdee)
+        ? targetKcal < tdee
+          ? "down"
+          : targetKcal > tdee
+            ? "up"
+            : "hold"
+        : null,
   });
   let autonomy: any = null;
   try {
@@ -977,7 +1099,8 @@ export async function swapMealAgentic(
   }
   const { agent: chosen, result, tried } = run;
   const p = result.parsed;
-  const saneMeal = p && typeof p === "object" && typeof p.name === "string" && p.name.trim() && Number.isFinite(Number(p.kcal));
+  const saneMeal =
+    p && typeof p === "object" && typeof p.name === "string" && p.name.trim() && Number.isFinite(Number(p.kcal));
   if (!saneMeal) return { ok: false as const, error: "agent returned no usable meal", agent: chosen, tried };
   const swapped = repo.swapMealInPlan(id, day, mealIndex, p, { dietary_instruction: hint });
   if (!swapped) return { ok: false as const, error: "day or meal_index not found in plan", agent: chosen, tried };
@@ -1063,9 +1186,8 @@ export async function runHealthReview(agent: string | undefined, hooks?: OpHooks
     };
   }
   const { agent: chosen, result, tried } = run;
-  const review = result.parsed && typeof result.parsed === "object"
-    ? repo.addHealthReview(result.parsed, chosen, result.raw)
-    : null;
+  const review =
+    result.parsed && typeof result.parsed === "object" ? repo.addHealthReview(result.parsed, chosen, result.raw) : null;
   if (!review) return { ok: false as const, error: "agent returned no usable review", agent: chosen, tried };
   return { ok: true as const, review, agent: chosen, tried, grounded: !!grounding };
 }
@@ -1177,12 +1299,28 @@ export async function generateInsight(
     const status = p && typeof p === "object" ? ("ok" as const) : agentStatusFor({ ok: false, agent: chosen, tried });
     return { ok: false as const, error: "no genuine new insight", agent: chosen, tried, agent_status: status };
   }
-  const insight = repo.addInsight({ kind: k, text, rationale: p.rationale ?? null, next_step: p.next_step ?? null, status: "new" });
+  const insight = repo.addInsight({
+    kind: k,
+    text,
+    rationale: p.rationale ?? null,
+    next_step: p.next_step ?? null,
+    status: "new",
+  });
   const out = { ok: true as const, insight, agent: chosen, tried, agent_status: "ok" as const };
   // Short freshness by default (a quiet insight should refresh within the hour);
   // the nightly scheduler passes a longer window so the morning open is a fresh hit.
   const freshForMs = Number.isFinite(opts?.freshForMs as number) ? (opts!.freshForMs as number) : 60 * 60 * 1000;
-  try { repo.saveAiCache(cacheKind, cacheKey, { result: out, chosen_agent: chosen, ref_table: "insights", ref_id: (insight as any)?.id ?? null, freshForMs }); } catch { /* cache write never breaks the op */ }
+  try {
+    repo.saveAiCache(cacheKind, cacheKey, {
+      result: out,
+      chosen_agent: chosen,
+      ref_table: "insights",
+      ref_id: (insight as any)?.id ?? null,
+      freshForMs,
+    });
+  } catch {
+    /* cache write never breaks the op */
+  }
   return out;
 }
 
@@ -1237,46 +1375,110 @@ export async function onboardFromText(
   agent: string | undefined,
   text: string,
   hooks?: OpHooks
-): Promise<{ ok: true; source: "agent" | "deterministic" | "empty"; applied: { about_me: boolean; profile: boolean; supplements: number; memories: number; context_events: number } }> {
+): Promise<{
+  ok: true;
+  source: "agent" | "deterministic" | "empty";
+  applied: { about_me: boolean; profile: boolean; supplements: number; memories: number; context_events: number };
+}> {
   const raw = String(text ?? "").trim();
   const applied = { about_me: false, profile: false, supplements: 0, memories: 0, context_events: 0 };
-  if (!raw) { try { repo.setSettings({ onboarded: true }); } catch {} return { ok: true as const, source: "empty", applied }; }
+  if (!raw) {
+    try {
+      repo.setSettings({ onboarded: true });
+    } catch {}
+    return { ok: true as const, source: "empty", applied };
+  }
 
   // Deterministic base — never lose what they said.
-  try { repo.setProfile({ about_me: raw.slice(0, 8000) }); applied.about_me = true; } catch {}
-  try { applied.supplements = repo.understandSupplements(raw, { strict: true }).length; } catch {}
+  try {
+    repo.setProfile({ about_me: raw.slice(0, 8000) });
+    applied.about_me = true;
+  } catch {}
+  try {
+    applied.supplements = repo.understandSupplements(raw, { strict: true }).length;
+  } catch {}
 
   let source: "agent" | "deterministic" = "deterministic";
   try {
     hooks?.onPhase?.("getting to know you");
-    const { result } = await runChosen(agent, buildOnboardPrompt(raw), { op: "onboard", timeoutMs: INTERACTIVE_TIMEOUT_MS, signal: hooks?.signal });
+    const { result } = await runChosen(agent, buildOnboardPrompt(raw), {
+      op: "onboard",
+      timeoutMs: INTERACTIVE_TIMEOUT_MS,
+      signal: hooks?.signal,
+    });
     const p: any = result.parsed;
     if (p && typeof p === "object") {
       source = "agent";
-      if (typeof p.about_me === "string" && p.about_me.trim()) { try { repo.setProfile({ about_me: p.about_me.trim().slice(0, 8000) }); applied.about_me = true; } catch {} }
+      if (typeof p.about_me === "string" && p.about_me.trim()) {
+        try {
+          repo.setProfile({ about_me: p.about_me.trim().slice(0, 8000) });
+          applied.about_me = true;
+        } catch {}
+      }
       const pr = p.profile && typeof p.profile === "object" ? p.profile : {};
       const patch: any = {};
-      for (const k of ["sex", "age", "height_cm", "weight_lb", "goal_weight_lb", "goal_date"]) if (pr[k] != null && pr[k] !== "") patch[k] = pr[k];
-      if (Object.keys(patch).length) { try { repo.setProfile(patch); applied.profile = true; } catch {} }
+      for (const k of ["sex", "age", "height_cm", "weight_lb", "goal_weight_lb", "goal_date"])
+        if (pr[k] != null && pr[k] !== "") patch[k] = pr[k];
+      if (Object.keys(patch).length) {
+        try {
+          repo.setProfile(patch);
+          applied.profile = true;
+        } catch {}
+      }
       if (Array.isArray(p.supplements) && p.supplements.length) {
         let n = 0;
-        for (const it of p.supplements) { if (it?.name) { try { repo.addSupplement(it); n++; } catch {} } }
+        for (const it of p.supplements) {
+          if (it?.name) {
+            try {
+              repo.addSupplement(it);
+              n++;
+            } catch {}
+          }
+        }
         if (n) applied.supplements = n; // the agent's structured set supersedes the deterministic count
       }
-      if (Array.isArray(p.memories)) for (const m of p.memories) { if (m?.content) { try { repo.addMemory(String(m.content), m.kind, "onboard"); applied.memories++; } catch {} } }
-      if (Array.isArray(p.context_events)) for (const ev of p.context_events) {
-        if (ev?.title || ev?.kind) { try { repo.addContextEvent({ kind: ev.kind, title: ev.title, detail: ev.detail, start_date: ev.start_date, end_date: ev.end_date, meta: ev.meta }); applied.context_events++; } catch {} }
+      if (Array.isArray(p.memories))
+        for (const m of p.memories) {
+          if (m?.content) {
+            try {
+              repo.addMemory(String(m.content), m.kind, "onboard");
+              applied.memories++;
+            } catch {}
+          }
+        }
+      if (Array.isArray(p.context_events))
+        for (const ev of p.context_events) {
+          if (ev?.title || ev?.kind) {
+            try {
+              repo.addContextEvent({
+                kind: ev.kind,
+                title: ev.title,
+                detail: ev.detail,
+                start_date: ev.start_date,
+                end_date: ev.end_date,
+                meta: ev.meta,
+              });
+              applied.context_events++;
+            } catch {}
+          }
       }
       // days_per_week stays a soft signal (remembered), not an auto plan rewrite —
       // the seeded plan is already there; the athlete adjusts it when they want to.
-      if (pr.days_per_week != null && Number(pr.days_per_week) > 0) { try { repo.addMemory(`Trains about ${Number(pr.days_per_week)} days/week`, "preference", "onboard"); applied.memories++; } catch {} }
+      if (pr.days_per_week != null && Number(pr.days_per_week) > 0) {
+        try {
+          repo.addMemory(`Trains about ${Number(pr.days_per_week)} days/week`, "preference", "onboard");
+          applied.memories++;
+        } catch {}
+      }
     }
   } catch (error) {
     if (hooks?.signal?.aborted) throw error;
     // Fail-open: the deterministic base already applied.
   }
 
-  try { repo.setSettings({ onboarded: true }); } catch {}
+  try {
+    repo.setSettings({ onboarded: true });
+  } catch {}
   return { ok: true as const, source, applied };
 }
 
@@ -1307,10 +1509,13 @@ export async function consolidateMemory(agent: string | undefined) {
   }
   const { agent: chosen, result, tried } = run;
   const p: any = result.parsed;
-  if (!p || typeof p !== "object") return { ok: false as const, error: "agent returned no usable plan", agent: chosen, tried };
+  if (!p || typeof p !== "object")
+    return { ok: false as const, error: "agent returned no usable plan", agent: chosen, tried };
 
   const idSet = new Set((repo.listMemory(200, { includeSuperseded: true }) as any[]).map((m: any) => Number(m.id)));
-  let merged = 0, superseded = 0, promoted = 0;
+  let merged = 0,
+    superseded = 0,
+    promoted = 0;
 
   // MERGES: fold every other id into the first, with one combined sentence.
   for (const m of Array.isArray(p.merges) ? p.merges : []) {
@@ -1319,20 +1524,31 @@ export async function consolidateMemory(agent: string | undefined) {
     const [keep, ...rest] = ids;
     try {
       repo.updateMemory(keep, { content: String(m.content), kind: m.kind });
-      for (const dup of rest) { repo.supersedeMemory(dup, { replacementId: keep, reason: "merged duplicate" }); merged++; }
-    } catch { /* skip a bad row, keep going */ }
+      for (const dup of rest) {
+        repo.supersedeMemory(dup, { replacementId: keep, reason: "merged duplicate" });
+        merged++;
+      }
+    } catch {
+      /* skip a bad row, keep going */
+    }
   }
   // SUPERSEDES: a later fact contradicts an older one.
   for (const s of Array.isArray(p.supersedes) ? p.supersedes : []) {
     const id = Number(s?.id);
     if (!idSet.has(id)) continue;
-    try { repo.supersedeMemory(id, { content: s?.replacement, reason: s?.reason || "superseded" }); superseded++; } catch {}
+    try {
+      repo.supersedeMemory(id, { content: s?.replacement, reason: s?.reason || "superseded" });
+      superseded++;
+    } catch {}
   }
   // PROMOTIONS: a recurring observation has become a stable trait.
   for (const pr of Array.isArray(p.promotions) ? p.promotions : []) {
     const id = Number(pr?.id);
     if (!idSet.has(id) || !pr?.kind) continue;
-    try { repo.updateMemory(id, { content: pr?.content, kind: String(pr.kind) }); promoted++; } catch {}
+    try {
+      repo.updateMemory(id, { content: pr?.content, kind: String(pr.kind) });
+      promoted++;
+    } catch {}
   }
   return { ok: true as const, merged, superseded, promoted, agent: chosen, tried };
 }
@@ -1346,7 +1562,12 @@ export async function growAboutMe(agent: string | undefined) {
   try {
     run = await runChosen(agent, prompt);
   } catch (error) {
-    return { ok: false as const, changed: false as const, error: "agent returned no usable profile growth", ...agentFailure(error) };
+    return {
+      ok: false as const,
+      changed: false as const,
+      error: "agent returned no usable profile growth",
+      ...agentFailure(error),
+    };
   }
   const { agent: chosen, result, tried } = run;
   const p: any = result.parsed;
@@ -1367,7 +1588,8 @@ export async function growAboutMe(agent: string | undefined) {
 // to narrate, so it SKIPS the agent entirely (a cheap, calm no-op that never touches
 // an existing narrative). Otherwise ONE agent turn writes 2-3 grounded sentences,
 // validated to a non-empty string and clamped before persist. Fail-open: no agent /
-// a wrong-shape reply / any throw is a no-op — it NEVER clears a prior narrative.
+// a wrong-shape reply / any throw is a no-op; deterministic rebuilds already clear
+// prose tied to the prior evidence set.
 // The `run` dep is injectable so tests can drive the success path offline without a
 // CLI; production callers (the nightly scheduler) omit it and get the real rotation.
 export async function refreshReactionNarrative(
@@ -1378,13 +1600,17 @@ export async function refreshReactionNarrative(
   const run = deps?.run ?? runChosen;
   const model = repo.reactionModelForCoach();
   const patterns = Array.isArray(model?.patterns) ? model.patterns : [];
-  // No patterns → nothing to say. Skip the agent call; leave any narrative as-is
-  // (an emptied model already cleared it in repo.saveReactionModel).
+  // No patterns → nothing to say. Skip the agent call; saveReactionModel already
+  // cleared prose tied to the prior evidence set.
   if (!patterns.length) return { ok: true as const, skipped: true as const };
   hooks?.onPhase?.("summarizing how your body responds");
   try {
     const prompt = buildReactionNarrativePrompt(patterns);
-    const { agent: chosen, result, tried } = await run(agent, prompt, {
+    const {
+      agent: chosen,
+      result,
+      tried,
+    } = await run(agent, prompt, {
       op: "reaction_narrative",
       signal: hooks?.signal,
       acceptParsed: isReactionNarrativeResult,
@@ -1393,7 +1619,13 @@ export async function refreshReactionNarrative(
     const text = p && typeof p === "object" ? String(p.narrative ?? "").trim() : "";
     if (!text) {
       // Wrong-shape / empty reply → keep the prior narrative untouched.
-      return { ok: false as const, error: "agent returned no usable narrative", agent: chosen, tried, agent_status: agentStatusFor({ ok: false, agent: chosen, tried }) };
+      return {
+        ok: false as const,
+        error: "agent returned no usable narrative",
+        agent: chosen,
+        tried,
+        agent_status: agentStatusFor({ ok: false, agent: chosen, tried }),
+      };
     }
     repo.setReactionNarrative(text);
     return { ok: true as const, narrative: text.slice(0, 600), agent: chosen, tried, agent_status: "ok" as const };
@@ -1425,7 +1657,9 @@ export async function reconcileMarkers(agent?: string, hooks?: OpHooks) {
   const items = repo.distinctMarkerNames();
   if (items.length < 2) return { ok: true as const, aligned: 0, applied: 0, candidates: items.length };
   hooks?.onPhase?.("aligning lab names");
-  const prompt = buildMarkerReconcilePrompt(items.map((i) => ({ name: i.name, unit: i.unit, sample: i.sample, canonical: i.canonical })));
+  const prompt = buildMarkerReconcilePrompt(
+    items.map((i) => ({ name: i.name, unit: i.unit, sample: i.sample, canonical: i.canonical }))
+  );
   let run: FallbackResult;
   try {
     run = await runChosen(agent, prompt, {
@@ -1446,18 +1680,41 @@ export async function reconcileMarkers(agent?: string, hooks?: OpHooks) {
   const { agent: chosen, result, tried } = run;
   const p: any = result?.parsed;
   if (!p || typeof p !== "object" || !Array.isArray(p.groups)) {
-    return { ok: false as const, error: "no usable reconciliation", agent: chosen, tried, agent_status: agentStatusFor({ ok: false, agent: chosen, tried }) };
+    return {
+      ok: false as const,
+      error: "no usable reconciliation",
+      agent: chosen,
+      tried,
+      agent_status: agentStatusFor({ ok: false, agent: chosen, tried }),
+    };
   }
   // Validate the agent's groups into concrete alias rows (pure guards: verbatim
   // members, ≥2 members, unit-compatible, real merge) and persist each one.
-  const merges = repo.planMarkerMerges(items.map((i) => ({ name: i.name, unit: i.unit })), p.groups);
+  const merges = repo.planMarkerMerges(
+    items.map((i) => ({ name: i.name, unit: i.unit })),
+    p.groups
+  );
   for (const m of merges) repo.setMarkerAlias(m.rawNorm, m.canonicalKey, m.canonicalName, "agent");
   // Realigned analyte series shift the connected-brain read → bust today's cached
   // Brief HERE so BOTH surfaces (REST /markers/reconcile, MCP reconcile_markers) stay
   // consistent, instead of only the REST route remembering to.
-  if (merges.length) { try { repo.invalidateDayRead(); } catch { /* best-effort */ } }
+  if (merges.length) {
+    try {
+      repo.invalidateDayRead();
+    } catch {
+      /* best-effort */
+    }
+  }
   const aligned = new Set(merges.map((m) => m.canonicalKey)).size;
-  return { ok: true as const, aligned, applied: merges.length, candidates: items.length, agent: chosen, tried, agent_status: "ok" as const };
+  return {
+    ok: true as const,
+    aligned,
+    applied: merges.length,
+    candidates: items.length,
+    agent: chosen,
+    tried,
+    agent_status: "ok" as const,
+  };
 }
 
 // ---------- agentic exercise reconciliation ----------
@@ -1497,31 +1754,63 @@ export async function reconcileExercises(agent?: string, hooks?: OpHooks) {
   const { agent: chosen, result, tried } = run;
   const p: any = result?.parsed;
   if (!p || typeof p !== "object" || !Array.isArray(p.groups)) {
-    return { ok: false as const, error: "no usable reconciliation", agent: chosen, tried, agent_status: agentStatusFor({ ok: false, agent: chosen, tried }) };
+    return {
+      ok: false as const,
+      error: "no usable reconciliation",
+      agent: chosen,
+      tried,
+      agent_status: agentStatusFor({ ok: false, agent: chosen, tried }),
+    };
   }
   // Validate the agent's clusters into concrete alias rows (pure guards: verbatim
   // members, ≥2 distinct names, a real merge) and persist each one.
-  const aliases = repo.planExerciseAliases(items.map((i) => ({ name: i.name })), p.groups);
+  const aliases = repo.planExerciseAliases(
+    items.map((i) => ({ name: i.name })),
+    p.groups
+  );
   for (const a of aliases) repo.setExerciseAlias(a.rawNorm, a.canonical, "agent");
 
   // Conservatively IMPROVE a canonical movement's muscle group only when it's
   // currently null/"other" AND the agent supplied a confident group for the cluster.
   // Never overwrite a good group; never throw on a bad row.
-  const validGroups = (() => { try { return new Set<string>([...repo.MUSCLE_GROUPS]); } catch { return null; } })();
+  const validGroups = (() => {
+    try {
+      return new Set<string>([...repo.MUSCLE_GROUPS]);
+    } catch {
+      return null;
+    }
+  })();
   for (const g of p.groups) {
-    const canonical = String(g?.canonical ?? "").replace(/\s+/g, " ").trim();
-    const suggested = String(g?.group ?? g?.muscle_group ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+    const canonical = String(g?.canonical ?? "")
+      .replace(/\s+/g, " ")
+      .trim();
+    const suggested = String(g?.group ?? g?.muscle_group ?? "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
     if (!canonical || !suggested || suggested === "other") continue;
     if (validGroups && !validGroups.has(suggested)) continue; // only a recognized canonical group
     try {
       const ex: any = repo.findExercise(canonical);
-      const cur = String(ex?.muscle_group ?? "").trim().toLowerCase();
+      const cur = String(ex?.muscle_group ?? "")
+        .trim()
+        .toLowerCase();
       if (ex && (!cur || cur === "other") && cur !== suggested) {
         repo.updateExercise(Number(ex.id), { muscle_group: suggested });
       }
-    } catch { /* skip a bad row, keep going */ }
+    } catch {
+      /* skip a bad row, keep going */
+    }
   }
 
   const aligned = new Set(aliases.map((a) => a.canonical)).size;
-  return { ok: true as const, aligned, applied: aliases.length, candidates: items.length, agent: chosen, tried, agent_status: "ok" as const };
+  return {
+    ok: true as const,
+    aligned,
+    applied: aliases.length,
+    candidates: items.length,
+    agent: chosen,
+    tried,
+    agent_status: "ok" as const,
+  };
 }

@@ -13,6 +13,7 @@ type HealthReadSynthesisPayload = HealthReadSynthesisRecord & {
     story?: string;
     priorities?: HealthReadSynthesisPriority[];
     one_change?: string;
+    stale_note?: string;
     generated_at?: string;
     stale?: unknown;
   }) | null;
@@ -53,6 +54,7 @@ type HealthReadSynthesisPayload = HealthReadSynthesisRecord & {
       body = `
       <h3 class="hsyn-headline">${deps.escapeHtml(s.headline)}</h3>
       ${s.story ? `<p class="hsyn-story">${deps.escapeHtml(s.story)}</p>` : ""}
+      ${stale && s.stale_note ? `<div class="hsyn-onechange well-accent-sm"><span class="lbl">Updated picture</span><span>${deps.escapeHtml(s.stale_note)}</span></div>` : ""}
       ${prios.length ? `<div class="hsyn-prios">${prios.map((p) => `
         <div class="hsyn-prio">
           <div class="hsyn-ptop">

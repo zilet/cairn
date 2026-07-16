@@ -42,7 +42,7 @@ import { healthFocus } from "./propagation.js";
 import { standingMomentum } from "./standing.js";
 // The waiting-draft 'plan' candidate — now the ONE Today surface that points at a
 // review-needed draft (the duplicate side-loader card was retired).
-import { listProposals } from "./profile.js";
+import { listAttentionReviewHeldProposals, listProposals, listReviewHeldProposals } from "./profile.js";
 // The two NEW Era-2 candidate producers, built by sibling agents. They land at
 // integration time; import them now (do not stub). Each returns a fully-formed
 // TodayAgendaCandidate or null.
@@ -50,6 +50,7 @@ import { sinceLastLookedCandidate } from "./since-last.js";
 import { goalCheckinCandidate } from "./goal-checkin.js";
 import { listBrainDecisions } from "./brain-decisions.js";
 import { getAppState, setAppState } from "./app-state.js";
+import { getSettings } from "./settings.js";
 
 // ---- The shared Today-agenda contract (also consumed by sibling Era-2 cards) ----
 export type TodayAgendaTier = "hero" | "primary" | "more";
@@ -62,6 +63,11 @@ export type TodayAgendaCandidate = {
   title?: string; // one calm plain-language line (NO scores)
   body?: string; // optional secondary line
   action?: { label: string; kind: string; payload?: any };
+  // An optional quieter SECOND action rendered beside the primary one. Used by the
+  // announced-change card to keep a deterministic one-tap "Hold this" alongside the
+  // conversational "Discuss with coach" primary, so cancelling a scheduled change
+  // never depends on an agent being reachable.
+  secondary_action?: { label: string; kind: string; payload?: any };
   client_card?: string; // names an EXISTING client-rendered card id to render in place of generic text
   dismissible?: boolean;
   // Semantic version of a presentation-only attention item. This is not the
@@ -263,9 +269,11 @@ function reconcileCandidate(): TodayAgendaCandidate | null {
 }
 
 // ---- announced change: a structural coaching decision that will land at its
-// natural boundary unless the athlete says "hold on". It is explicit without
-// becoming a notification; the action cancels the decision deterministically in
-// one tap (the server revert path), never through an agent turn. ----
+// natural boundary. The card is accountability, not a veto gate. Its primary
+// action opens a Coach conversation carrying the exact ledger id so the athlete
+// can understand or modify it in ordinary language; a quieter secondary "Hold
+// this" is the deterministic escape hatch — one tap cancels the scheduled change
+// through the server revert path, never depending on an agent being reachable. ----
 function upcomingDateLabel(effectiveDate: string, asOf: string): string {
   if (effectiveDate === addDaysISO(asOf, 1)) return "Tomorrow";
   if (effectiveDate === asOf) return "Today";
@@ -331,7 +339,21 @@ function announcedChangeCandidates(date: string): TodayAgendaCandidate[] {
       priority: 82,
       ...copy,
       action: {
-        label: "Hold on",
+        label: "Discuss with coach",
+        kind: "chat-decision",
+        payload: [
+          `Discuss scheduled Cairn decision #${decision.id}.`,
+          `Summary: ${decision.summary}.`,
+          `Rationale: ${decision.rationale || "Cairn found a structural change worth making."}`,
+          `Effective date: ${decision.effective_date}.`,
+          "Please explain how this fits my current data and what it changes compared with my current plan.",
+        ].join(" "),
+      },
+      // A quiet deterministic stop, always available: one tap cancels the scheduled
+      // decision through the server revert path (no agent turn), so the athlete is
+      // never left waiting on a conversation to hold a change they don't want.
+      secondary_action: {
+        label: "Hold this",
         kind: "hold-decision",
         payload: decision.id,
       },
@@ -358,10 +380,32 @@ function autonomyOwnedDraft(proposal: any): boolean {
 // is owed a decision. Applies the same autonomy filter the coach list
 // (isOpenProposal) uses. ----
 function planDraftCandidate(): TodayAgendaCandidate | null {
-  const plans = listProposals(8) as any[];
-  const drafts = (Array.isArray(plans) ? plans : []).filter(
-    (p) => p && p.status === "draft" && !autonomyOwnedDraft(p)
-  );
+  const leadMode = getSettings().lead_mode;
+  const reviewHolds = (
+    leadMode === "review_everything" ? listReviewHeldProposals(8) : listAttentionReviewHeldProposals(8)
+  ) as any[];
+  const recentPlans = listProposals(8) as any[];
+  const reviewIds = new Set((Array.isArray(reviewHolds) ? reviewHolds : []).map((p) => Number(p?.id)));
+  // Genuine review holds are intentionally first and independently bounded. The
+  // secondary recent scan is only for bare chat/manual drafts or review posture.
+  const plans = [
+    ...(Array.isArray(reviewHolds) ? reviewHolds : []),
+    ...(Array.isArray(recentPlans) ? recentPlans.filter((p) => !reviewIds.has(Number(p?.id))) : []),
+  ];
+  const drafts = plans.filter((p) => {
+    if (!p || p.status !== "draft" || autonomyOwnedDraft(p)) return false;
+    // Review-everything intentionally preserves the traditional review queue,
+    // including bare drafts. Coach-led postures never turn an orphaned chat or
+    // manual artifact into a generic Review wall.
+    if (leadMode === "review_everything") return true;
+    if (p.autonomy?.status !== "review" || p.autonomy?.review_required !== true) return false;
+    // Only genuine independent-review boundaries may interrupt Today in lead /
+    // announce-first. Ordinary requested-review or stale-draft bookkeeping is
+    // handled in conversation/repair, not pushed back as a generic plan review.
+    return ["safety_floor", "user_lock", "domain_policy", "budget_review", "clinical"].includes(
+      String(p.autonomy?.review_reason_code ?? "")
+    );
+  });
   if (!drafts.length) return null;
   const raw = String(drafts[0]?.instruction || "")
     .replace(/^(auto|chat):\s*/i, "")

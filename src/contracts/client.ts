@@ -67,6 +67,9 @@ export interface ClientTodayAgendaCandidate {
   title?: string;
   body?: string;
   action?: ClientTodayAgendaAction;
+  // A quieter second action rendered beside the primary one (e.g. the announced
+  // change card's deterministic "Hold this" alongside "Discuss with coach").
+  secondary_action?: ClientTodayAgendaAction;
   client_card?: string;
   dismissible?: boolean;
   revision?: string;

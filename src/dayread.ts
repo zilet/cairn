@@ -48,6 +48,76 @@ function deterministicHeadline(r: { kind: string; focus?: string | null }): stri
           : "Good to train.";
 }
 
+export interface DayReadProseConsistencyIssue {
+  code: "completed_load_understated";
+  classified_load: "moderate" | "hard";
+  evidence: string;
+}
+
+const COMPLETED_ACTIVITY =
+  /\b(?:that|this|today(?:'s)?|the|your)\s+(?:run|ride|session|workout|lift|training|activity|effort|work)\b/gi;
+const EASY_DESCRIPTOR = /\b(?:easy|light|gentle|recovery(?:-paced)?)\b/gi;
+const FUTURE_OR_RECOVERY_CUE =
+  /\b(?:next|tomorrow(?:'s)?|later|upcoming|afterward|afterwards|follow(?:-?up)?|cool(?:-?down)?|remainder)\b/i;
+const NEGATED_EASY = /\b(?:not|never|wasn't|weren't|isn't|no)\s+(?:an?\s+)?(?:easy|light|gentle)\b/i;
+
+// Structured, deliberately conservative semantic guard for the one contradiction
+// that materially changes the athlete's read: a completed moderate/hard effort
+// described as easy. It does NOT reject forward-looking recovery advice such as
+// "keep tomorrow easy"; the completed activity must be the grammatical subject
+// near the easy descriptor (or an "easy run complete" construction).
+export function dayReadProseConsistencyIssue(
+  read: { kind?: unknown; headline?: unknown; why?: unknown },
+  signals: Record<string, any> | null | undefined,
+): DayReadProseConsistencyIssue | null {
+  const classifiedLoad = String(signals?.today_load ?? "").toLowerCase();
+  if (classifiedLoad !== "moderate" && classifiedLoad !== "hard") return null;
+  if (signals?.trained_today !== true && read?.kind !== "done") return null;
+
+  const prose = [read?.headline, read?.why]
+    .filter((value): value is string => typeof value === "string" && !!value.trim())
+    .join("\n");
+  const sentences = prose.split(/(?:\r?\n|(?<=[.!?])\s+)/).map((sentence) => sentence.trim()).filter(Boolean);
+  for (const sentence of sentences) {
+    if (NEGATED_EASY.test(sentence)) continue;
+
+    COMPLETED_ACTIVITY.lastIndex = 0;
+    EASY_DESCRIPTOR.lastIndex = 0;
+    const subjects = [...sentence.matchAll(COMPLETED_ACTIVITY)];
+    const descriptors = [...sentence.matchAll(EASY_DESCRIPTOR)];
+    for (const subject of subjects) {
+      const subjectEnd = (subject.index ?? 0) + subject[0].length;
+      for (const descriptor of descriptors) {
+        const descriptorAt = descriptor.index ?? 0;
+        if (descriptorAt < subjectEnd || descriptorAt - subjectEnd > 90) continue;
+        const bridge = sentence.slice(subjectEnd, descriptorAt);
+        if (FUTURE_OR_RECOVERY_CUE.test(bridge)) continue;
+        return {
+          code: "completed_load_understated",
+          classified_load: classifiedLoad,
+          evidence: sentence.slice(0, 240),
+        };
+      }
+    }
+
+    // Headline-style construction: "Easy run complete." This is kept narrower
+    // than a generic "easy run" match so suggested future easy work remains valid.
+    if (
+      /\b(?:easy|light|gentle|recovery(?:-paced)?)\s+(?:run|ride|session|workout|lift|training|activity|effort)\b.{0,30}\b(?:complete|completed|done|finished|logged|in the books)\b/i.test(
+        sentence,
+      ) &&
+      !FUTURE_OR_RECOVERY_CUE.test(sentence)
+    ) {
+      return {
+        code: "completed_load_understated",
+        classified_load: classifiedLoad,
+        evidence: sentence.slice(0, 240),
+      };
+    }
+  }
+  return null;
+}
+
 // Completion is a server-owned fact IN BOTH DIRECTIONS — the agent may voice a
 // DONE day warmly, but it can neither downgrade a completed day back into a
 // recommendation NOR claim "done" on a day the deterministic baseline says is
@@ -100,7 +170,10 @@ export function enforceDayReadSafetyPosture(out: any, baseline: any, hasOverride
   };
 }
 
-export function isValidDayReadAgentResult(value: any, baseline?: { kind?: unknown }): boolean {
+export function isValidDayReadAgentResult(
+  value: any,
+  baseline?: { kind?: unknown; signals?: Record<string, any> },
+): boolean {
   const validShape = !!(
     value &&
     typeof value === "object" &&
@@ -112,6 +185,7 @@ export function isValidDayReadAgentResult(value: any, baseline?: { kind?: unknow
     (value.est_minutes == null || Number.isFinite(Number(value.est_minutes)))
   );
   if (!validShape) return false;
+  if (dayReadProseConsistencyIssue(value, baseline?.signals)) return false;
   // Whether meaningful training is already DONE is a server-owned fact, not a
   // nuance the prose layer may reinterpret. Reject a mismatch before fallback
   // stops so the same agent can repair it or the next healthy agent can answer.

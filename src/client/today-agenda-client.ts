@@ -59,13 +59,19 @@ function todayAgendaGenericCardHtml(candidate: ClientTodayAgendaCandidate, revea
     candidate.action && candidate.action.label
       ? `<button class="agenda-act" type="button" data-agenda-act="${escAttr(candidate.action.kind || "")}" data-agenda-id="${escAttr(candidate.id || "")}">${escHtml(candidate.action.label)}</button>`
       : "";
+  // A quieter deterministic sibling (e.g. "Hold this" on an announced change),
+  // rendered as a calm text button beside the primary pill it accompanies.
+  const secondaryAct =
+    candidate.secondary_action && candidate.secondary_action.label
+      ? `<button class="linkbtn-quiet" type="button" style="align-self:center" data-agenda-act="${escAttr(candidate.secondary_action.kind || "")}" data-agenda-id="${escAttr(candidate.id || "")}">${escHtml(candidate.secondary_action.label)}</button>`
+      : "";
   const dismiss = candidate.dismissible
     ? `<button class="xbtn agenda-x" type="button" data-agenda-dismiss="${escAttr(candidate.id || "")}" aria-label="Dismiss">✕</button>`
     : "";
   return `<div class="agenda-card card-stack-item reveal" data-agenda-card="${escAttr(candidate.id || "")}" data-agenda-kind="${escAttr(candidate.kind || "")}" style="${stagger(revealIdx || 0)}">
       ${dismiss}
       ${kicker}${title}${body}
-      ${act ? `<div class="agenda-foot">${act}</div>` : ""}
+      ${act || secondaryAct ? `<div class="agenda-foot">${act}${secondaryAct}</div>` : ""}
     </div>`;
 }
 

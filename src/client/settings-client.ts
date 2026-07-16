@@ -245,7 +245,10 @@ function brainDiagnosticsCard(data: unknown): string {
       ? `${Number(toolMetrics.calls) || 0} bounded chart reads · ${Number(toolMetrics.failed) || 0} failed · ${Number(toolMetrics.budget_exhausted) || 0} exhausted a budget`
       : "",
     Number(conferenceMetrics.jobs) > 0
-      ? `${Number(conferenceMetrics.successful) || 0} of ${Number(conferenceMetrics.jobs) || 0} case conferences completed`
+      ? `${Number(conferenceMetrics.complete_successful) || 0} of ${Number(conferenceMetrics.jobs) || 0} case conferences were complete`
+      : "",
+    Number(conferenceMetrics.useful_degraded_or_incomplete) > 0
+      ? `${Number(conferenceMetrics.useful_degraded_or_incomplete) || 0} returned useful partial or degraded advice`
       : "",
   ].filter(Boolean);
   const demoted = Array.isArray(autonomyMetrics.demoted_domains) ? autonomyMetrics.demoted_domains : [];
@@ -370,7 +373,8 @@ function settingsReadinessView(options: SettingsDiagnosticsOptions): {
     warnings.push("Queue age and recent-failure detail are not reported by this version");
   }
   const tone = hasError ? "error" : warnings.length ? "warning" : "healthy";
-  const databaseLabel = readiness.database === "ok" ? "Readable" : readiness.database === "unavailable" ? "Unavailable" : "Not reported";
+  const databaseLabel =
+    readiness.database === "ok" ? "Readable" : readiness.database === "unavailable" ? "Unavailable" : "Not reported";
   const schedulerLabel = schedulerStatus
     ? `${schedulerStatus}${scheduler.age_sec == null ? "" : ` · ${settingsDiagnosticAge(scheduler.age_sec)} ago`}`
     : "Not reported by this version";
@@ -411,7 +415,9 @@ function settingsOperatorSummary(row: Record<string, unknown>, readiness: unknow
     : build.build_id
       ? String(build.build_id)
       : "Not reported";
-  const topRoutes = Array.isArray(performance.top_routes) ? performance.top_routes.map(settingsClientRecord).slice(0, 5) : [];
+  const topRoutes = Array.isArray(performance.top_routes)
+    ? performance.top_routes.map(settingsClientRecord).slice(0, 5)
+    : [];
   const protocol = settingsClientRecord(performance.by_protocol);
   const perfHtml = Object.keys(performance).length
     ? `<div class="sysdiag-operator-group"><h4>Request performance · ${Math.max(1, Number(performance.window_days) || 7)}d</h4>
@@ -473,22 +479,27 @@ function diagnosticsCard(data: unknown, options: SettingsDiagnosticsOptions = {}
   const combinedRecent = [
     ...recent,
     ...slow
-      .filter((item) => item.id == null || !recent.some((entry) => entry.id != null && String(entry.id) === String(item.id)))
-      .map((item): Record<string, unknown> => ({
-        ...item,
-        level: settingsDiagnosticLevel(item.level) === "info" ? "warning" : item.level,
-      })),
+      .filter(
+        (item) => item.id == null || !recent.some((entry) => entry.id != null && String(entry.id) === String(item.id))
+      )
+      .map(
+        (item): Record<string, unknown> => ({
+          ...item,
+          level: settingsDiagnosticLevel(item.level) === "info" ? "warning" : item.level,
+        })
+      ),
   ].filter(matches);
   const sources = [...new Set([...issues, ...recent, ...slow].map((item) => String(item.source || "system")))].sort();
   const hasErrors = issues.some((item) => settingsDiagnosticLevel(item.level) === "error");
   const hasWarnings = issues.some((item) => settingsDiagnosticLevel(item.level) === "warning") || slow.length > 0;
   const readiness = settingsReadinessView(options);
   const diagnosticsTone = hasErrors ? "error" : hasWarnings || status === "unavailable" ? "warning" : "healthy";
-  const tone = readiness.tone === "error" || diagnosticsTone === "error"
-    ? "error"
-    : readiness.tone === "warning" || diagnosticsTone === "warning"
-      ? "warning"
-      : "healthy";
+  const tone =
+    readiness.tone === "error" || diagnosticsTone === "error"
+      ? "error"
+      : readiness.tone === "warning" || diagnosticsTone === "warning"
+        ? "warning"
+        : "healthy";
   const pending = status === "loading" || readiness.pending;
   const headline = pending
     ? "Checking system health…"
@@ -547,12 +558,14 @@ function diagnosticsCard(data: unknown, options: SettingsDiagnosticsOptions = {}
       </details>`;
     })
     .join("");
-  const noMatches = !filteredIssues.length && !combinedRecent.length && (sourceFilter !== "all" || severityFilter !== "all");
-  const diagnosticBody = status === "loading"
-    ? `<div class="sysdiag-state" aria-busy="true"><span class="sync-dot pulse" aria-hidden="true"></span><div><b>Loading diagnostics…</b><p>Reading the ${escHtml(windowLabel)} event window.</p></div></div>`
-    : status === "unavailable"
-      ? `<div class="sysdiag-state sysdiag-unavailable"><span class="sysdiag-state-icon" aria-hidden="true">!</span><div><b>Diagnostics unavailable</b><p>Cairn could not load the local diagnostics pulse. This is different from a valid zero-event response.</p><button class="btn-sm" data-system-retry type="button">Try again</button></div></div>`
-      : `<p class="sess-line sysdiag-privacy">${total} diagnostic event${total === 1 ? "" : "s"} captured · ${privacy}</p>
+  const noMatches =
+    !filteredIssues.length && !combinedRecent.length && (sourceFilter !== "all" || severityFilter !== "all");
+  const diagnosticBody =
+    status === "loading"
+      ? `<div class="sysdiag-state" aria-busy="true"><span class="sync-dot pulse" aria-hidden="true"></span><div><b>Loading diagnostics…</b><p>Reading the ${escHtml(windowLabel)} event window.</p></div></div>`
+      : status === "unavailable"
+        ? `<div class="sysdiag-state sysdiag-unavailable"><span class="sysdiag-state-icon" aria-hidden="true">!</span><div><b>Diagnostics unavailable</b><p>Cairn could not load the local diagnostics pulse. This is different from a valid zero-event response.</p><button class="btn-sm" data-system-retry type="button">Try again</button></div></div>`
+        : `<p class="sess-line sysdiag-privacy">${total} diagnostic event${total === 1 ? "" : "s"} captured · ${privacy}</p>
         ${hasCurrentBuild ? `<div class="sysdiag-build-scope"><b>${currentBuildLabel ? `Current build ${escHtml(currentBuildLabel)}` : "Current build"}</b><span>${total} current-build event${total === 1 ? "" : "s"}.${priorBuildTotal ? ` ${priorBuildTotal} earlier-build event${priorBuildTotal === 1 ? " remains" : "s remain"} as history and do not affect current health.` : " No earlier-build events are in this window."}</span></div>` : ""}
         <div class="sysdiag-controls" aria-label="System health filters" data-save-ignore>
           <div class="sysdiag-window-buttons" role="group" aria-label="Diagnostics window">

@@ -346,3 +346,30 @@ test("Today agent-result validation rejects parseable off-contract JSON", async 
   );
   assert.equal(isValidDayReadAgentResult({ kind: "done", why: "Session logged." }, { kind: "done" }), true);
 });
+
+test("completed-load prose consistency rejects understatement but permits future easy advice", async () => {
+  const { dayReadProseConsistencyIssue, isValidDayReadAgentResult } = await import("../dist/dayread.js");
+  const baseline = {
+    kind: "done",
+    signals: { trained_today: true, today_load: "moderate" },
+  };
+  const contradiction = {
+    kind: "done",
+    headline: "Run complete.",
+    why: "That run keeps your easy rhythm ticking along.",
+  };
+  const futureEasy = {
+    kind: "done",
+    headline: "Tempo work complete.",
+    why: "That run was a solid moderate effort. Keep tomorrow's run easy so it can settle.",
+  };
+
+  assert.deepEqual(dayReadProseConsistencyIssue(contradiction, baseline.signals), {
+    code: "completed_load_understated",
+    classified_load: "moderate",
+    evidence: contradiction.why,
+  });
+  assert.equal(isValidDayReadAgentResult(contradiction, baseline), false);
+  assert.equal(dayReadProseConsistencyIssue(futureEasy, baseline.signals), null);
+  assert.equal(isValidDayReadAgentResult(futureEasy, baseline), true);
+});

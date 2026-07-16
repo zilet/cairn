@@ -20,6 +20,7 @@ test("computeHealthDriftSignature never throws on an empty DB and returns the ca
   assert.equal(sig.session_count, 0);
   assert.equal(sig.weight_bucket, "none");
   assert.deepEqual(sig.injury_ids, []);
+  assert.equal(sig.nutrition_target, null);
 });
 
 test("no cached synthesis → not stale, no reason", () => {
@@ -208,4 +209,36 @@ test("new-labs staleness takes precedence over a concurrent drift condition", ()
   const view = repo.getHealthSynthesisView();
   assert.equal(view.stale, true);
   assert.equal(view.stale_reason, "new_labs", "the doc-date check is checked first and wins the reason");
+});
+
+test("a newer material accepted nutrition target stales obsolete synthesis advice and cannot lead next-step", () => {
+  repo.saveHealthSynthesis({
+    headline: "Old energy advice",
+    story: "The earlier lab context remains useful.",
+    priorities: [{ label: "Fuel", why_it_matters: "Training quality matters.", the_move: "Stay around 1,800–2,000 kcal." }],
+    one_change: "Keep intake between 1,800 and 2,000 kcal.",
+    generated_at: new Date(Date.now() - 60_000).toISOString(),
+  });
+  assert.equal(repo.getHealthSynthesisView().stale, false);
+
+  repo.setNutritionTarget({
+    target_kcal: 2_225,
+    protein_g: 175,
+    effective_date: localDaysAgo(0),
+    source: "manual",
+    note: "Protect fuel after a fast outcome trend.",
+  });
+
+  const view = repo.getHealthSynthesisView();
+  assert.equal(view.stale, true);
+  assert.equal(view.stale_reason, "drift");
+  assert.equal(view.synthesis.story, "The earlier lab context remains useful.", "evidence/context remains readable");
+  assert.equal(view.synthesis.priorities[0].why_it_matters, "Training quality matters.");
+  assert.equal(view.synthesis.priorities[0].the_move, null, "stale move is not presented as current advice");
+  assert.equal(view.synthesis.one_change, null, "stale one-change advice is not presented as current");
+  assert.match(view.synthesis.stale_note, /current plan or signals have moved.*refresh/i);
+  const historical = repo.getHealthSynthesis();
+  assert.equal(historical.priorities[0].the_move, "Stay around 1,800–2,000 kcal.", "historical artifact is untouched");
+  assert.equal(historical.one_change, "Keep intake between 1,800 and 2,000 kcal.");
+  assert.notEqual(repo.nextBestStep()?.step_key, "recheck:synthesis-one-change");
 });

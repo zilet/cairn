@@ -1,5 +1,6 @@
 // @ts-check
-// Progress journey arc: phase, milestone moment, and reviewable transition prompt.
+// Progress journey arc: current phase, recomposition strategy, and a possible
+// next phase. Coach is an optional conversation, never an approval gate.
 
 type JourneyProgressRead = import("../contracts/client-api.js").ClientJourneyRead;
 type JourneyProgressMilestone = import("../contracts/client-api.js").ClientJourneyMilestone;
@@ -18,6 +19,7 @@ function jpRows<T = Record<string, unknown>>(value: unknown): T[] {
 }
 
 function jpNumber(value: unknown): number | null {
+  if (value == null || (typeof value === "string" && !value.trim())) return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
 }
@@ -64,6 +66,7 @@ function jpHasRead(read: JourneyProgressRead | null | undefined, milestones?: un
   if (!read) return jpRows(milestones).length > 0;
   return !!(
     read.active_phase ||
+    read.recomposition ||
     read.transition_suggestion ||
     jpRows(read.proposed_phases).length ||
     jpRows(read.milestones).length ||
@@ -75,14 +78,15 @@ function jpArcSteps(read: JourneyProgressRead | null | undefined, transition: Jo
   const phase = jpRecord(read?.active_phase);
   const active = jpPhaseLabel(phase.kind || transition?.kind || read?.profile?.goal_mode || "journey");
   const target = jpPounds(phase.target_weight_lb || read?.profile?.goal_weight_lb) || jpBodyFat(phase.target_bodyfat_pct || read?.profile?.goal_bodyfat_pct);
-  const next = transition ? jpPhaseLabel(transition.kind) : "Steady";
+  const next = transition ? `Possible ${jpPhaseLabel(transition.kind)}` : "Steady";
   return ["Started", active, target || "Target", next];
 }
 
 function jpPhaseLine(read: JourneyProgressRead | null | undefined): string {
+  const strategy = read?.recomposition;
   const phase = jpRecord(read?.active_phase);
   if (phase.kind) {
-    const bits = [jpPhaseLabel(phase.kind)];
+    const bits = [jpText(strategy?.stage?.label) || jpPhaseLabel(phase.kind)];
     const started = jpDate(phase.start_date);
     const target = jpPounds(phase.target_weight_lb) || jpBodyFat(phase.target_bodyfat_pct);
     if (started) bits.push(`since ${started}`);
@@ -90,15 +94,16 @@ function jpPhaseLine(read: JourneyProgressRead | null | undefined): string {
     return bits.join(" / ");
   }
   const suggestion = read?.transition_suggestion;
-  if (suggestion) return `${jpPhaseLabel(suggestion.kind)} is ready to review`;
+  if (strategy?.stage?.label) return jpText(strategy.stage.label);
+  if (suggestion) return `${jpPhaseLabel(suggestion.kind)} is a possible next phase`;
   const mode = read?.profile?.goal_mode ? jpPhaseLabel(read.profile.goal_mode) : "";
   return mode ? `${mode} goal arc` : "Journey arc";
 }
 
-function jpReviewQuestion(suggestion: JourneyProgressTransition): string {
+function jpDiscussQuestion(suggestion: JourneyProgressTransition): string {
   const kind = jpPhaseLabel(suggestion.kind).toLowerCase();
   const reason = jpText(suggestion.reason);
-  return `Review this journey phase suggestion as a draft, but do not apply it automatically: ${kind}. ${reason}`;
+  return `Discuss a possible Cairn journey phase: ${kind}. ${reason} This is a read-only possibility, not a scheduled change or approval gate; explain how it fits my data and adjust the plan if our conversation changes the best path.`;
 }
 
 function jpSuggestionHtml(suggestion: JourneyProgressTransition | null | undefined): string {
@@ -106,12 +111,50 @@ function jpSuggestionHtml(suggestion: JourneyProgressTransition | null | undefin
   const target = jpPounds(suggestion.target_weight_lb) || jpBodyFat(suggestion.target_bodyfat_pct);
   return `<div class="jprog-suggestion">
     <div>
-      <div class="lbl">Reviewable suggestion</div>
+      <div class="lbl">Possible next phase</div>
       <div class="jprog-sug-title">${escHtml(jpPhaseLabel(suggestion.kind))}</div>
       <div class="jprog-sug-reason">${escHtml(suggestion.reason)}</div>
       ${target ? `<div class="jprog-sug-meta">Target holds around ${escHtml(target)}</div>` : ""}
     </div>
-    <button class="linkbtn linkbtn-plain linkbtn-sm jprog-review" type="button" data-jpreview="${escAttr(jpReviewQuestion(suggestion))}">Review in Coach &rarr;</button>
+    <button class="linkbtn linkbtn-quiet linkbtn-sm jprog-review" type="button" data-jpreview="${escAttr(jpDiscussQuestion(suggestion))}">Discuss with coach &rarr;</button>
+  </div>`;
+}
+
+function jpStrategyHtml(read: JourneyProgressRead | null | undefined): string {
+  const strategy = read?.recomposition;
+  if (!strategy) return "";
+  const progress = strategy.progress;
+  const rate = progress?.target_rate;
+  const timeline = progress?.timeline;
+  const progressBits = [
+    progress?.lost_lb != null ? `${jpPounds(progress.lost_lb)} down` : "",
+    progress?.remaining_lb != null ? `${jpPounds(progress.remaining_lb)} remaining` : "",
+  ].filter(Boolean);
+  const rateLine = rate
+    ? `Current phase range: ${jpNumber(rate.low)?.toFixed(1)}–${jpNumber(rate.high)?.toFixed(1)} lb per week.`
+    : "";
+  const timelineLine = timeline
+    ? `Likely path: about ${timeline.earliest_weeks}–${timeline.latest_weeks} weeks${timeline.includes_stabilization ? ", including room to stabilize" : ""}.`
+    : "";
+  const muscleLabel = jpPhaseLabel(strategy.muscle?.state || "unknown");
+  const fuelLabel = jpPhaseLabel(strategy.fuel?.state || "unknown");
+  const actionLabel = jpText(strategy.action?.label)
+    || (strategy.action?.status === "recommended" || strategy.action?.kind === "protect_fuel"
+      ? "Next protective adjustment"
+      : "What Cairn is doing");
+  return `<div class="jprog-strategy">
+    <div class="jprog-sug-reason">${escHtml(strategy.line)}</div>
+    ${progressBits.length ? `<div class="jprog-sug-meta">${escHtml(progressBits.join(" · "))}</div>` : ""}
+    ${rateLine ? `<div class="jprog-sug-meta">${escHtml(rateLine)}</div>` : ""}
+    ${timelineLine ? `<div class="jprog-sug-meta">${escHtml(timelineLine)}</div>` : ""}
+    <div class="jprog-suggestion">
+      <div><div class="lbl">What the scale says</div><div class="jprog-sug-reason">${escHtml(strategy.scale?.line || "The trend is still settling.")}</div></div>
+      <div><div class="lbl">Muscle / fuel</div><div class="jprog-sug-reason">${escHtml(`${muscleLabel} · ${fuelLabel}`)}</div></div>
+    </div>
+    <div class="jprog-moment">
+      <div class="jprog-moment-mark" aria-hidden="true"></div>
+      <div><div class="lbl">${escHtml(actionLabel)}</div><div class="jprog-moment-detail">${escHtml(strategy.action?.line || "Holding the current plan while the signal settles.")}</div>${strategy.reassurance ? `<div class="jprog-moment-date">${escHtml(strategy.reassurance)}</div>` : ""}</div>
+    </div>
   </div>`;
 }
 
@@ -158,9 +201,10 @@ function journeyProgressCardHtml(
         <div class="lbl">Journey</div>
         <h3 class="jprog-title">${escHtml(phaseLine)}</h3>
       </div>
-      <span class="jprog-chip">${escHtml(latest ? "earned" : suggestion ? "review" : "reading")}</span>
+      <span class="jprog-chip">${escHtml(latest ? "earned" : suggestion ? "possible next" : "current")}</span>
     </div>
     ${jpArcHtml(steps)}
+    ${jpStrategyHtml(read)}
     ${jpMilestoneHtml(latest)}
     ${jpSuggestionHtml(suggestion)}
     ${fallback}

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { COACH_READ_STRICT_MCP_ARGS, runChosenWithCoachReads } from "../dist/runChosen.js";
+import { runAgentWithFallback } from "../dist/agents.js";
 
 function chosen(parsed, agent = "terra") {
   return {
@@ -87,6 +88,97 @@ test("coach-read query loop validates, executes, and returns a final answer from
   assert.deepEqual(executions[0].context, { run_id: "run-depth", op: "case_conference" });
   assert.ok(phases.some((entry) => entry.phase === "coach_read_query"));
   assert.ok(phases.some((entry) => entry.phase === "coach_read_done"));
+});
+
+test("coach-read query loop propagates the final semantic contract while admitting only valid read turns", async () => {
+  const domainOpinion = {
+    domain: "nutrition",
+    recommendation: "Hold the bounded target.",
+    rationale: "The verified trend is stable.",
+    evidence_keys: ["nutrition:trend"],
+    risks: [],
+    contraindications: [],
+    uncertainties: [],
+    expected_outcomes: [],
+    autonomy_ceiling: "ask",
+  };
+  const calls = [];
+  const turns = [chosen({ kind: "coach_read", requests: [trainingRequest()] }), chosen(domainOpinion)];
+  const out = await runChosenWithCoachReads(
+    "auto",
+    "BASE",
+    {
+      op: "conference_nutrition",
+      mode: "conference",
+      timeoutMs: 5_000,
+      acceptParsed: (value) => value?.domain === "nutrition" && Array.isArray(value?.evidence_keys),
+    },
+    {},
+    {
+      run: async (_agent, _prompt, opts) => {
+        calls.push(opts);
+        return turns.shift();
+      },
+      execute: () => trainingResult(),
+      createRunId: () => "run-semantic",
+    }
+  );
+
+  assert.deepEqual(out.result.parsed, domainOpinion);
+  assert.equal(calls.length, 2);
+  for (const opts of calls) {
+    assert.equal(opts.acceptParsed({ kind: "coach_read", requests: [trainingRequest()] }), true);
+    assert.equal(opts.acceptParsed({ kind: "coach_read", requests: [] }), false);
+    assert.equal(opts.acceptParsed({ domain: "training", evidence_keys: ["x"] }), false);
+    assert.equal(opts.acceptParsed(domainOpinion), true);
+  }
+});
+
+test("coach-read wrapper drives contract repair and provider rotation for a wrong specialist payload", async () => {
+  const specialist = (domain) => ({
+    domain,
+    recommendation: "Keep the next step bounded.",
+    rationale: "The available evidence supports a cautious change.",
+    evidence_keys: [`${domain}:evidence`],
+    risks: [],
+    contraindications: [],
+    uncertainties: [],
+    expected_outcomes: [],
+    autonomy_ceiling: "ask",
+  });
+  let parses = 0;
+  const out = await runChosenWithCoachReads(
+    "auto",
+    "SPECIALIST BASELINE",
+    {
+      op: "conference_nutrition",
+      mode: "conference",
+      timeoutMs: 5_000,
+      acceptParsed: (value) => value?.domain === "nutrition" && Array.isArray(value?.evidence_keys),
+    },
+    {},
+    {
+      run: async (_agent, prompt, opts) =>
+        runAgentWithFallback(["stub", "stub"], prompt, {
+          ...opts,
+          // First turn requests a real bounded read. On the final turn, the first
+          // provider + its repair both return parseable JSON for the wrong
+          // specialist; the second provider returns the requested domain.
+          extract: () => {
+            parses += 1;
+            if (parses === 1) return { kind: "coach_read", requests: [trainingRequest()] };
+            return parses <= 3 ? specialist("training") : specialist("nutrition");
+          },
+        }),
+      execute: () => trainingResult({ events: [{ date: "2026-07-10", load: 40 }] }),
+      createRunId: () => "run-real-semantic-fallback",
+    }
+  );
+
+  assert.equal(parses, 4);
+  assert.equal(out.tried.length, 1);
+  assert.match(out.tried[0].error, /outside the requested contract/);
+  assert.deepEqual(out.result.parsed, specialist("nutrition"));
 });
 
 test("malformed, empty, and over-budget requests degrade to the untouched snapshot-only run", async (t) => {

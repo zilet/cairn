@@ -5,6 +5,7 @@ export const BRAIN_EVENT_KINDS = [
   "set_logged",
   "session_finished",
   "session_feedback",
+  "fueling_feedback",
   "exercise_skipped",
   "exercise_swapped",
   "food_logged",
@@ -110,6 +111,7 @@ export function brainEventNeedsReview(event: BrainEvent): boolean {
   return [
     "session_finished",
     "session_feedback",
+    "fueling_feedback",
     "exercise_swapped",
     "nutrition_target_changed",
     "health_marker_changed",

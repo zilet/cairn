@@ -17,6 +17,7 @@ import { goalPace } from "../../repo/goal-pace.js";
 import { setFuelingFeedback } from "../../repo/fueling.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 import { queueMcpAgentJob } from "./background.js";
+import { currentUnderfuelingRead } from "../../domain/brain/underfueling-service.js";
 
 export function registerNutritionTools(server: McpToolRegistrar) {
   server.tool(
@@ -41,7 +42,10 @@ export function registerNutritionTools(server: McpToolRegistrar) {
     "get_expenditure",
     "Best-effort daily energy expenditure (TDEE), adherence-neutral and provenance-rich. Preserves the outcome anchor (avg logged intake minus recency-weighted bodyweight trend), then deterministically chooses/blends it with the strongest eligible prior: measured RMR + source-resolved active calories, Garmin total calories, or a profile seed. Returns additive basis/anchors/coverage/provenance fields; confidence remains the outcome-data confidence, so a prior-backed tdee may honestly carry 'none'. Missing days stay absent, future rows are excluded, and window is clamped to 7–90 days. projection_text remains a plain-language goal-pace forecast, never a score.",
     { window: z.number().int().optional().describe("days to derive over (default 21)") },
-    async ({ window }) => asText(estimateExpenditure(window ?? 21))
+    async ({ window }) => {
+      const expenditure = estimateExpenditure(window ?? 21);
+      return asText({ ...expenditure, underfueling: currentUnderfuelingRead(undefined, { expenditure }) });
+    }
   );
 
   server.tool(

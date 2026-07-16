@@ -1,12 +1,12 @@
 import crypto from "node:crypto";
 import { db, todayISO } from "../db.js";
 import type { ProposedExpectation } from "../brain/expectation-contract.js";
-import { emitBrainEvent } from "../brainEvents.js";
+import { emitBrainEvent as queueBrainEvent } from "../brainEvents.js";
 import { emitEnrichTransition } from "../enrichBus.js";
 import { recordDecision } from "./brain-decisions.js";
 import { estimateExpenditure } from "./expenditure.js";
 import { newestHealthDocDate } from "./health.js";
-import { computeGoalCheck } from "./profile.js";
+import { computeGoalCheck, recompositionStageAt } from "./profile.js";
 import {
   assertMealDietarySafe,
   assertMealAllergenSafe,
@@ -20,12 +20,9 @@ import {
   MEAL_PLAN_FIBER_FLOOR_G,
 } from "./nutrition-safety.js";
 import { getSettings } from "./settings.js";
-import {
-  canonicalHardDietKeys,
-  mealPlanHardDietKeys,
-  stampInstructionHardDiets,
-} from "./dietary-constraints.js";
+import { canonicalHardDietKeys, mealPlanHardDietKeys, stampInstructionHardDiets } from "./dietary-constraints.js";
 import { localDateISO, chatHistoryTimeLabel } from "./shared.js";
+import { afterSqliteCommit, withSqliteSavepoint } from "./sqlite-savepoint.js";
 import { bumpFoodDataVersion } from "./training-cache.js";
 
 // ---------- accepted nutrition targets (adaptive-nutrition loop OUTPUT) ----------
@@ -48,6 +45,10 @@ export interface AcceptedNutritionTarget {
 }
 
 const ADAPTIVE_TARGET_REVIEW_DAYS = 42;
+
+function emitBrainEvent(value: unknown): void {
+  afterSqliteCommit(() => queueBrainEvent(value));
+}
 
 function hydrateNutritionTarget(row: any, referenceDate = localDateISO()): AcceptedNutritionTarget | null {
   if (!row) return null;
@@ -77,7 +78,8 @@ function hydrateNutritionTarget(row: any, referenceDate = localDateISO()): Accep
 function nutritionTrendExpectation(
   targetKcal: number,
   effectiveDate: string,
-  metric: "weight_trend_lb_wk" | "intake_to_weight_response" = "intake_to_weight_response"
+  metric: "weight_trend_lb_wk" | "intake_to_weight_response" = "intake_to_weight_response",
+  opts: { targetDeltaKcal?: number | null } = {}
 ): { expectation: ProposedExpectation; basis: string } {
   let expectedTrend = 0;
   let tolerance = 0.75;
@@ -101,13 +103,22 @@ function nutritionTrendExpectation(
     // A cold start still gets a falsifiable, deliberately broad expectation.
     // Minimum-data rules make it inconclusive until enough logs arrive.
   }
+  const stage = recompositionStageAt(effectiveDate).kind;
   return {
     basis,
     expectation: {
       metric_key: metric,
       subject_key: null,
       direction: "within_band",
-      baseline: { target_kcal: targetKcal, basis },
+      baseline: {
+        target_kcal: targetKcal,
+        target_delta_kcal: Number.isFinite(Number(opts.targetDeltaKcal))
+          ? Math.round(Number(opts.targetDeltaKcal))
+          : null,
+        predicted_trend_lb_wk: Math.round(expectedTrend * 100) / 100,
+        recomposition_stage: stage,
+        basis,
+      },
       target: {
         min: Math.round((expectedTrend - tolerance) * 100) / 100,
         max: Math.round((expectedTrend + tolerance) * 100) / 100,
@@ -119,15 +130,33 @@ function nutritionTrendExpectation(
       confidence: "tentative",
       evaluator: metric === "intake_to_weight_response" ? "intake_response" : "weight_trend",
       evaluator_version:
-        metric === "intake_to_weight_response" ? "nutrition-intake-response-v1" : "nutrition-weight-v1",
+        metric === "intake_to_weight_response" ? "nutrition-intake-response-v2" : "nutrition-weight-v2",
     },
   };
 }
 
+function previousNutritionTargetKcal(saved: AcceptedNutritionTarget): number | null {
+  const row = db
+    .prepare(
+      `SELECT target_kcal FROM nutrition_targets
+        WHERE id <> ? AND effective_date <= ? AND target_kcal IS NOT NULL
+        ORDER BY effective_date DESC, id DESC LIMIT 1`
+    )
+    .get(saved.id, saved.effective_date) as any;
+  const value = Number(row?.target_kcal);
+  return Number.isFinite(value) ? value : null;
+}
+
 function recordNutritionTargetDecision(saved: AcceptedNutritionTarget): void {
   try {
+    const previousKcal = previousNutritionTargetKcal(saved);
     const response =
-      saved.target_kcal != null ? nutritionTrendExpectation(saved.target_kcal, saved.effective_date) : null;
+      saved.target_kcal != null
+        ? nutritionTrendExpectation(saved.target_kcal, saved.effective_date, "intake_to_weight_response", {
+            targetDeltaKcal: previousKcal == null ? null : saved.target_kcal - previousKcal,
+          })
+        : null;
+    const stage = response?.expectation.baseline?.recomposition_stage ?? null;
     recordDecision(
       {
         effective_date: saved.effective_date,
@@ -145,6 +174,7 @@ function recordNutritionTargetDecision(saved: AcceptedNutritionTarget): void {
         input_fingerprint: null,
         context: {
           expectation_basis: response?.basis ?? "protein_only_no_supported_evaluator",
+          recomposition_stage: stage,
         },
         action: {
           target_kcal: saved.target_kcal,
@@ -414,11 +444,18 @@ export function mealPlanConstraintSnapshot(parsed?: any): MealPlanConstraintSnap
   return { version: 1, fingerprint, sources };
 }
 
-function constraintConflict(kind: "allergy" | "dietary", error: unknown): { kind: "allergy" | "dietary"; detail: string } {
+function constraintConflict(
+  kind: "allergy" | "dietary",
+  error: unknown
+): { kind: "allergy" | "dietary"; detail: string } {
   const raw = error instanceof Error ? error.message : String(error ?? "");
   return {
     kind,
-    detail: raw.replace(/^.*? rejected:\s*/i, "").trim().slice(0, 300) || "The current plan conflicts with a hard food constraint.",
+    detail:
+      raw
+        .replace(/^.*? rejected:\s*/i, "")
+        .trim()
+        .slice(0, 300) || "The current plan conflicts with a hard food constraint.",
   };
 }
 
@@ -846,6 +883,7 @@ function recordMealPlanStatusDecision(plan: any, transition: string): void {
           transition,
           week_of: plan.week_of ?? null,
           expectation_basis: response?.basis ?? (accepted ? "daily_kcal_unavailable" : null),
+          recomposition_stage: response?.expectation.baseline?.recomposition_stage ?? null,
         },
         action: {
           meal_plan_id: plan.id,
@@ -887,28 +925,30 @@ export function setMealPlanStatus(id: number, status: string, opts: { recordDeci
 // alternative weeks, so once one is kept the rest are stale. Marked 'superseded'
 // (the system retiring them), distinct from a user 'discarded'.
 export function acceptMealPlan(id: number, opts: { recordDecision?: boolean } = {}) {
-  const plan = getMealPlan(id);
-  if (!plan) return null;
-  const check = validateMealPlanForPersistence(plan.parsed);
-  if (!check.ok) throw new Error(check.error);
-  const safeParsed = check.parsed;
-  assertPlanAllergenSafe(safeParsed, athleteAllergies());
-  if (safeParsed && JSON.stringify(safeParsed) !== JSON.stringify(plan.parsed)) {
-    db.prepare(`UPDATE meal_plans SET parsed_json = ? WHERE id = ?`).run(JSON.stringify(safeParsed), id);
-  }
-  const siblings = db
-    .prepare(`SELECT * FROM meal_plans WHERE status IN ('draft','accepted','applied','kept') AND id != ?`)
-    .all(id)
-    .map(hydrate)
-    .filter(Boolean);
-  db.prepare(
-    `UPDATE meal_plans SET status = 'superseded'
-     WHERE status IN ('draft','accepted','applied','kept') AND id != ?`
-  ).run(id);
-  if (opts.recordDecision !== false) {
-    for (const sibling of siblings) recordMealPlanStatusDecision({ ...sibling, status: "superseded" }, "superseded");
-  }
-  const accepted = setMealPlanStatus(id, "accepted", opts);
+  const accepted = withSqliteSavepoint(`accept_meal_plan_${Math.trunc(Number(id))}`, () => {
+    const plan = getMealPlan(id);
+    if (!plan) return null;
+    const check = validateMealPlanForPersistence(plan.parsed);
+    if (!check.ok) throw new Error(check.error);
+    const safeParsed = check.parsed;
+    assertPlanAllergenSafe(safeParsed, athleteAllergies());
+    if (safeParsed && JSON.stringify(safeParsed) !== JSON.stringify(plan.parsed)) {
+      db.prepare(`UPDATE meal_plans SET parsed_json = ? WHERE id = ?`).run(JSON.stringify(safeParsed), id);
+    }
+    const siblings = db
+      .prepare(`SELECT * FROM meal_plans WHERE status IN ('draft','accepted','applied','kept') AND id != ?`)
+      .all(id)
+      .map(hydrate)
+      .filter(Boolean);
+    db.prepare(
+      `UPDATE meal_plans SET status = 'superseded'
+       WHERE status IN ('draft','accepted','applied','kept') AND id != ?`
+    ).run(id);
+    if (opts.recordDecision !== false) {
+      for (const sibling of siblings) recordMealPlanStatusDecision({ ...sibling, status: "superseded" }, "superseded");
+    }
+    return setMealPlanStatus(id, "accepted", opts);
+  });
   if (accepted)
     emitBrainEvent({
       kind: "meal_plan_changed",
@@ -918,6 +958,34 @@ export function acceptMealPlan(id: number, opts: { recordDecision?: boolean } = 
       material: true,
     });
   return accepted;
+}
+
+// Undo for an autonomously accepted week is intentionally narrower than ordinary
+// acceptance: retire only the plan owned by that decision and restore its exact
+// predecessor. Newer drafts/announcements are independent future options and stay
+// untouched instead of being swept as sibling alternatives.
+export function restoreMealPlanAfterUndo(
+  appliedId: number,
+  previousId: number | null
+): { applied: any; previous: any | null } | null {
+  const restored = withSqliteSavepoint(`restore_meal_plan_${Math.trunc(Number(appliedId))}`, () => {
+    const applied = getMealPlan(appliedId);
+    if (!applied) return null;
+    const previous = previousId != null && previousId > 0 ? getMealPlan(previousId) : null;
+    setMealPlanStatus(appliedId, "superseded", { recordDecision: false });
+    if (previous) setMealPlanStatus(previous.id, "accepted", { recordDecision: false });
+    return { applied: getMealPlan(appliedId), previous: previous ? getMealPlan(previous.id) : null };
+  });
+  if (restored) {
+    emitBrainEvent({
+      kind: "meal_plan_changed",
+      domain: "nutrition",
+      date: localDateISO(),
+      entity_id: restored.previous?.id ?? appliedId,
+      material: true,
+    });
+  }
+  return restored;
 }
 
 export function getMealPlan(id: number) {

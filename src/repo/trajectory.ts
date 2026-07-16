@@ -181,7 +181,7 @@ export function getTrajectory(
 
   // ---- the active periodization block (top precedence for horizon + phase) ----
   const block = safe<any>(() => getActiveBlock(), null);
-  const blockSummary = safe<any>(() => blockForCoach(), null);
+  const blockSummary = safe<any>(() => blockForCoach(today), null);
 
   // ---- the endurance race countdown ----
   const goal = safe<any>(() => getEnduranceGoal(today), null);
@@ -248,7 +248,7 @@ export function getTrajectory(
     // Weeks REMAINING in the block anchor the arc (the road still ahead), clamped.
     const remaining = total != null && weekIdx != null ? Math.max(1, total - weekIdx + 1) : total;
     horizon_weeks = clampHorizon(remaining ?? total);
-    phase = typeof block.phase === "string" ? block.phase : (blockSummary?.phase ?? null);
+    phase = typeof blockSummary?.phase === "string" ? blockSummary.phase : (block.phase ?? null);
     week_of = weekIdx;
   } else if (raceInBuild && weeksToRace != null) {
     horizon_weeks = clampHorizon(weeksToRace);

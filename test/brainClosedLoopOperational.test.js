@@ -6,10 +6,20 @@ import { recordDecision } from "../dist/repo/brain-decisions.js";
 import { insertBrainEvaluation } from "../dist/repo/brain-evaluations.js";
 import { personalizeNutritionCheckinTarget, protectiveFuelEvidence } from "../dist/coachOps.js";
 import { enqueueAgentJob, executeBrainReviewAction, onJobEvent } from "../dist/agentJobs.js";
-import { applyDueAnnouncedDecisions } from "../dist/domain/brain/autonomy-service.js";
+import { applyDueAnnouncedDecisions, applyProposalWithAutonomy } from "../dist/domain/brain/autonomy-service.js";
 
-function learnedMiss(kind, domain, metricKey, subjectKey, key, target = { exposures: 2 }, actual = { exposures: 2, completed: 0 }) {
-  const recorded = recordDecision({
+function learnedMiss(
+  kind,
+  domain,
+  metricKey,
+  subjectKey,
+  key,
+  target = { exposures: 2 },
+  actual = { exposures: 2, completed: 0 },
+  stage = null
+) {
+  const recorded = recordDecision(
+    {
     effective_date: "2026-06-01",
     kind,
     domain,
@@ -23,18 +33,20 @@ function learnedMiss(kind, domain, metricKey, subjectKey, key, target = { exposu
     risk_class: "low",
     reversible: true,
     input_fingerprint: null,
-    context: {},
+      context: stage ? { recomposition_stage: stage } : {},
     action: {},
     specialist: null,
     applied_at: "2026-06-01T12:00:00.000Z",
     reverted_at: null,
     superseded_by: null,
     evaluator_version: "closed-loop-test-v1",
-  }, [{
+    },
+    [
+      {
     metric_key: metricKey,
     subject_key: subjectKey,
     direction: metricKey === "weight_trend_lb_wk" ? "within_band" : "complete",
-    baseline: null,
+        baseline: stage ? { recomposition_stage: stage } : null,
     target,
     window_start: "2026-06-01",
     window_end: "2026-06-21",
@@ -43,7 +55,9 @@ function learnedMiss(kind, domain, metricKey, subjectKey, key, target = { exposu
     confidence: "tentative",
     evaluator: metricKey === "weight_trend_lb_wk" ? "weight_trend" : "exercise_completion",
     evaluator_version: "closed-loop-test-v1",
-  }]);
+      },
+    ]
+  );
   insertBrainEvaluation({
     expectation_id: recorded.expectations[0].id,
     verdict: "not_aligned",
@@ -74,8 +88,14 @@ function seedEarnedBench({ constrained = false } = {}) {
 async function runJob(id) {
   const done = new Promise((resolve, reject) => {
     const off = onJobEvent(id, (event) => {
-      if (event.type === "done") { off(); resolve(event); }
-      if (event.type === "error") { off(); reject(new Error(event.message)); }
+      if (event.type === "done") {
+        off();
+        resolve(event);
+      }
+      if (event.type === "error") {
+        off();
+        reject(new Error(event.message));
+      }
     });
   });
   enqueueAgentJob(id);
@@ -84,7 +104,10 @@ async function runJob(id) {
 
 test("learned training response changes the real next target but never overrides an injury constraint", () => {
   seedEarnedBench();
-  assert.equal(nextPrescription("Barbell Bench Press", undefined, { autoreg: null, recentLoad: null }).suggested.weight, 190);
+  assert.equal(
+    nextPrescription("Barbell Bench Press", undefined, { autoreg: null, recentLoad: null }).suggested.weight,
+    190
+  );
 
   learnedMiss("training_target", "training", "exercise_target_completion", "Barbell Bench Press", "1");
   learnedMiss("training_target", "training", "exercise_target_completion", "Barbell Bench Press", "2");
@@ -92,19 +115,31 @@ test("learned training response changes the real next target but never overrides
   assert.equal(personalized.suggested.weight, 187.5, "the learned conservative step reaches the actual prescription");
   assert.ok(personalized.suggested.weight - 185 <= 5, "the universal compound ceiling still wins");
 
-  repo.updateExercise(repo.findExercise("Barbell Bench Press").id, { constraint_note: "chest wall pain — hold load until pain-free" });
+  repo.updateExercise(repo.findExercise("Barbell Bench Press").id, {
+    constraint_note: "chest wall pain — hold load until pain-free",
+  });
   const constrained = nextPrescription("Barbell Bench Press", undefined, { autoreg: null, recentLoad: null });
   assert.equal(constrained.action, "hold");
   assert.equal(constrained.suggested.weight, 185);
 });
 
 test("learned nutrition response changes the proposal target inside the 250-kcal and lean-safe clamps", () => {
+  repo.setProfile({
+    goal_mode: "lose",
+    start_weight_lb: 200,
+    weight_lb: 190,
+    goal_weight_lb: 170,
+  });
+  assert.equal(repo.recompositionStageAt().kind, "early_cut");
   const goal = {
     ok: true,
     effective_target: { target_kcal: 2_200 },
     recommended: { target_intake_kcal: 2_050, protein_g: 170 },
   };
-  const standard = personalizeNutritionCheckinTarget({ target_kcal: 2_400, prev_target_kcal: 2_200, protein_g: 150 }, goal);
+  const standard = personalizeNutritionCheckinTarget(
+    { target_kcal: 2_400, prev_target_kcal: 2_200, protein_g: 150 },
+    goal
+  );
   assert.deepEqual({ kcal: standard.target_kcal, protein: standard.protein_g }, { kcal: 2_400, protein: 170 });
 
   const forged = personalizeNutritionCheckinTarget(
@@ -114,20 +149,91 @@ test("learned nutrition response changes the proposal target inside the 250-kcal
   assert.equal(forged.prev_target_kcal, 2_200, "the server target replaces the forged previous target");
   assert.equal(forged.target_kcal, 2_450, "the server-owned delta is hard-capped at +250");
 
-  learnedMiss("nutrition_target", "nutrition", "weight_trend_lb_wk", null, "1", { min: -0.8, max: -0.3 }, { value: 0 });
-  learnedMiss("nutrition_target", "nutrition", "weight_trend_lb_wk", null, "2", { min: -0.8, max: -0.3 }, { value: 0 });
+  learnedMiss(
+    "nutrition_target",
+    "nutrition",
+    "weight_trend_lb_wk",
+    null,
+    "1",
+    { min: -0.8, max: -0.3 },
+    { value: 0 },
+    "early_cut"
+  );
+  learnedMiss(
+    "nutrition_target",
+    "nutrition",
+    "weight_trend_lb_wk",
+    null,
+    "2",
+    { min: -0.8, max: -0.3 },
+    { value: 0 },
+    "early_cut"
+  );
   const personalized = personalizeNutritionCheckinTarget(
     { target_kcal: 2_400, prev_target_kcal: 2_200, protein_g: 150, delta_kcal: 200 },
     goal
   );
-  assert.equal(personalized.target_kcal, 2_430);
-  assert.equal(personalized.delta_kcal, 230);
+  assert.equal(personalized.target_kcal, 2_425);
+  assert.equal(personalized.delta_kcal, 225);
   assert.ok(personalized.target_kcal - 2_200 <= 250);
   assert.equal(personalized.protein_g, 170, "personal learning cannot lower the protein floor");
 
-  const floored = personalizeNutritionCheckinTarget({ target_kcal: 1_000, prev_target_kcal: 2_200, protein_g: 100 }, goal);
+  const floored = personalizeNutritionCheckinTarget(
+    { target_kcal: 1_000, prev_target_kcal: 2_200, protein_g: 100 },
+    goal
+  );
   assert.equal(floored.target_kcal, 2_050, "lean-safe floor overrides the requested downward step");
   assert.equal(floored.protein_g, 170);
+});
+
+test("agentic nutrition steps ignore another recomposition stage and canonicalize tiny model deltas", () => {
+  repo.setProfile({
+    goal_mode: "lose",
+    start_weight_lb: 200,
+    weight_lb: 190,
+    goal_weight_lb: 170,
+  });
+  assert.equal(repo.recompositionStageAt().kind, "early_cut");
+  learnedMiss(
+    "nutrition_target",
+    "nutrition",
+    "weight_trend_lb_wk",
+    null,
+    "other-1",
+    { min: -0.8, max: -0.3 },
+    { value: 0 },
+    "mid_cut"
+  );
+  learnedMiss(
+    "nutrition_target",
+    "nutrition",
+    "weight_trend_lb_wk",
+    null,
+    "other-2",
+    { min: -0.8, max: -0.3 },
+    { value: 0 },
+    "mid_cut"
+  );
+  const goal = {
+    ok: true,
+    effective_target: { target_kcal: 2_200 },
+    recommended: { target_intake_kcal: 2_050, protein_g: 170 },
+  };
+
+  const ordinary = personalizeNutritionCheckinTarget(
+    { target_kcal: 2_400, prev_target_kcal: 2_200, protein_g: 150, delta_kcal: 200 },
+    goal
+  );
+  assert.equal(ordinary.target_kcal, 2_400, "a mid-cut learning cannot season an early-cut decision");
+  assert.equal(ordinary.delta_kcal, 200);
+
+  const tiny = personalizeNutritionCheckinTarget(
+    { target_kcal: 2_237, prev_target_kcal: 2_200, protein_g: 150, delta_kcal: 37 },
+    goal
+  );
+  assert.equal(tiny.target_kcal, 2_300, "a nonzero model-authored delta becomes the canonical 100-kcal minimum");
+  assert.equal(tiny.delta_kcal, 100);
+  assert.equal(tiny.protein_g, 170, "canonicalization still ends at the protein floor");
 });
 
 test("fresh deterministic hybrid load opens only the protective low-confidence fuel path", () => {
@@ -194,15 +300,29 @@ test("a material nutrition correction can schedule only a bounded next-day targe
     summary: "Small measured nutrition correction",
     nutrition: { target_kcal: 2_250, protein_g: 170, reason: "The corrected intake changed the weekly read." },
   });
+  let duplicateAutonomyCalls = 0;
   const result = await executeBrainReviewAction(
     { event: { kind: "food_corrected", domain: "nutrition", date: "2026-07-09", material: true } },
     "stub",
     undefined,
-    { nutritionCheckin: async () => ({ ok: true, change: true, proposal }) }
+    {
+      runUnderfuelingControlLoop: () => ({ action: "none" }),
+      nutritionCheckin: async () => ({
+        ok: true,
+        change: true,
+        proposal,
+        autonomy: applyProposalWithAutonomy(proposal.id, { requested_tier: "quiet_apply" }),
+      }),
+      applyProposalWithAutonomy: () => {
+        duplicateAutonomyCalls += 1;
+        throw new Error("duplicate autonomy transition");
+      },
+    }
   );
 
   assert.equal(result.action, "nutrition_recheck");
   assert.equal(result.autonomy.pending, true);
+  assert.equal(duplicateAutonomyCalls, 0, "the brain-review wrapper never applies the proposal a second time");
   assert.equal(repo.getActiveNutritionTarget(), null, "a partly-lived food day is never rewritten");
   const due = applyDueAnnouncedDecisions(result.autonomy.effective_date);
   assert.deepEqual(due.applied, [result.autonomy.decision.id]);
@@ -225,15 +345,56 @@ test("material performance fatigue triggers a bounded nutrition signal review du
     nutrition: { target_kcal: 2_075, protein_g: 175, carbs_g: 205, fat_g: 62, reason: "Performance is fading." },
   });
   let checks = 0;
+  let duplicateAutonomyCalls = 0;
   const result = await executeBrainReviewAction(
     { event: { kind: "session_feedback", domain: "training", date: "2026-07-11", material: true } },
     "stub",
     undefined,
-    { nutritionCheckin: async () => { checks += 1; return { ok: true, change: true, proposal }; } }
+    {
+      runUnderfuelingControlLoop: () => ({ action: "none" }),
+      nutritionCheckin: async () => {
+        checks += 1;
+        return {
+          ok: true,
+          change: true,
+          proposal,
+          autonomy: applyProposalWithAutonomy(proposal.id, { requested_tier: "quiet_apply" }),
+        };
+      },
+      applyProposalWithAutonomy: () => {
+        duplicateAutonomyCalls += 1;
+        throw new Error("duplicate autonomy transition");
+      },
+    }
   );
 
   assert.equal(checks, 1);
   assert.equal(result.action, "nutrition_signal_recheck");
   assert.ok(result.reasons.some((reason) => /performance fatigue/i.test(reason)));
   assert.ok(result.autonomy, "the proposal still travels through the autonomy path");
+  assert.equal(duplicateAutonomyCalls, 0, "the signal wrapper preserves nutritionCheckin's single autonomy result");
+});
+
+test("a controller-owned settling window blocks any second signal-driven nutrition proposal", async () => {
+  let checks = 0;
+  const result = await executeBrainReviewAction(
+    { event: { kind: "session_feedback", domain: "training", date: localDaysAgo(0), material: true } },
+    "stub",
+    undefined,
+    {
+      runUnderfuelingControlLoop: () => ({
+        ok: true,
+        action: "none",
+        read: { state: "settling" },
+        reason: "The prior correction is still settling.",
+      }),
+      nutritionCheckin: async () => {
+        checks += 1;
+        throw new Error("a second correction should not be proposed");
+      },
+    }
+  );
+  assert.equal(result.source, "underfueling_control");
+  assert.equal(result.action, "none");
+  assert.equal(checks, 0);
 });

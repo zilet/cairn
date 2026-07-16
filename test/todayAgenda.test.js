@@ -12,7 +12,17 @@
 // goal-checkin) stay silent and the candidate set under test is fully controlled.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { completeMealWeek, db, isoDaysAgo, localDaysAgo, repo, resetTables, seedHealthDoc, seedIntake, marker } from "./_seed.js";
+import {
+  completeMealWeek,
+  db,
+  isoDaysAgo,
+  localDaysAgo,
+  repo,
+  resetTables,
+  seedHealthDoc,
+  seedIntake,
+  marker,
+} from "./_seed.js";
 import { applyDueAnnouncedDecisions, applyProposalWithAutonomy } from "../dist/domain/brain/autonomy-service.js";
 
 // Tables every candidate producer reads — wiped to a known floor each case so the
@@ -41,7 +51,7 @@ beforeEach(() => {
   );
 });
 
-test("an announced structural change appears calmly with a working chat hold-on path", () => {
+test("an announced structural change proceeds automatically with an exact-id Coach discussion path", () => {
   const decision = repo.recordDecision({
     effective_date: localDaysAgo(-3),
     kind: "training_structure",
@@ -67,19 +77,62 @@ test("an announced structural change appears calmly with a working chat hold-on 
   const agenda = repo.todayAgenda();
   const card = [...agenda.primary, ...agenda.more].find((item) => item.id === `announced-decision-${decision.id}`);
   assert.equal(card?.kicker, "NEXT BOUNDARY");
-  assert.equal(card?.action?.label, "Hold on");
-  assert.equal(card?.action?.kind, "hold-decision", "hold is a deterministic one-tap cancel, not a chat prefill");
-  assert.equal(Number(card?.action?.payload), decision.id);
+  assert.equal(card?.action?.label, "Discuss with coach");
+  assert.equal(card?.action?.kind, "chat-decision");
+  assert.match(String(card?.action?.payload), new RegExp(`decision #${decision.id}\\b`));
+  assert.match(String(card?.action?.payload), /Shift the next block toward dumbbell pressing/);
+  assert.match(String(card?.action?.payload), /recent barbell pattern is stalled/);
+  assert.match(String(card?.action?.payload), new RegExp(String(decision.effective_date)));
+  assert.match(String(card?.action?.payload), /explain how this fits my current data/i);
+  assert.doesNotMatch(String(card?.action?.payload), /\b(?:cancel|undo|revert|hold)\b/i);
+});
+
+test("an announced change keeps a deterministic one-tap Hold beside the Coach path", () => {
+  const decision = repo.recordDecision({
+    effective_date: localDaysAgo(-3),
+    kind: "training_structure",
+    domain: "training",
+    summary: "Shift the next block toward dumbbell pressing.",
+    rationale: "Your recent barbell pattern is stalled while the chest wall is still sensitive.",
+    source: "test",
+    source_ref_type: "plan_proposal",
+    source_ref_key: "42",
+    status: "announced",
+    autonomy_tier: "announce",
+    risk_class: "moderate",
+    reversible: true,
+    input_fingerprint: null,
+    context: null,
+    action: { proposal_id: 42 },
+    specialist: null,
+    applied_at: null,
+    reverted_at: null,
+    superseded_by: null,
+    evaluator_version: null,
+  }).decision;
+  const agenda = repo.todayAgenda();
+  const card = [...agenda.primary, ...agenda.more].find((item) => item.id === `announced-decision-${decision.id}`);
+  // The conversational primary stays put...
+  assert.equal(card?.action?.kind, "chat-decision");
+  // ...and a quieter deterministic Hold sits beside it, carrying the exact
+  // decision id so cancelling never depends on an agent being reachable.
+  assert.equal(card?.secondary_action?.label, "Hold this");
+  assert.equal(card?.secondary_action?.kind, "hold-decision");
+  assert.equal(card?.secondary_action?.payload, decision.id);
 });
 
 test("an upcoming meal-plan change uses calm automatic copy and concise daily targets", () => {
-  const plan = repo.createMealPlan("stub", "", completeMealWeek({
-    summary: "A verbose agent summary that should not reach Today.",
-    rationale: "A long rationale that should stay in the detail view rather than filling the Today agenda.",
-    daily_kcal: 2075,
-    daily_protein_g: 175,
-    days: [],
-  }));
+  const plan = repo.createMealPlan(
+    "stub",
+    "",
+    completeMealWeek({
+      summary: "A verbose agent summary that should not reach Today.",
+      rationale: "A long rationale that should stay in the detail view rather than filling the Today agenda.",
+      daily_kcal: 2075,
+      daily_protein_g: 175,
+      days: [],
+    })
+  );
   const tomorrow = localDaysAgo(-1);
   const decision = repo.recordDecision({
     effective_date: tomorrow,
@@ -110,7 +163,9 @@ test("an upcoming meal-plan change uses calm automatic copy and concise daily ta
   assert.equal(card?.title, "Tomorrow — your meal plan refreshes automatically");
   assert.equal(card?.body, "Daily plan: 2,075 kcal · 175 g protein.");
   assert.doesNotMatch(`${card?.title} ${card?.body}`, /verbose|long rationale/i);
-  assert.deepEqual(card?.action, { label: "Hold on", kind: "hold-decision", payload: decision.id });
+  assert.equal(card?.action?.label, "Discuss with coach");
+  assert.equal(card?.action?.kind, "chat-decision");
+  assert.match(String(card?.action?.payload), new RegExp(`decision #${decision.id}\\b`));
 });
 
 test("an upcoming meal-plan change degrades calmly when target specifics are unavailable", () => {
@@ -144,11 +199,15 @@ test("an upcoming meal-plan change degrades calmly when target specifics are una
 });
 
 test("every live announced change remains reachable across primary and more", () => {
-  const mealPlan = repo.createMealPlan("stub", "", completeMealWeek({
-    daily_kcal: 2150,
-    daily_protein_g: 175,
-    days: [],
-  }));
+  const mealPlan = repo.createMealPlan(
+    "stub",
+    "",
+    completeMealWeek({
+      daily_kcal: 2150,
+      daily_protein_g: 175,
+      days: [],
+    })
+  );
   const base = {
     effective_date: localDaysAgo(-1),
     source: "test",
@@ -280,6 +339,7 @@ test("the fuel candidate surfaces once there's logged food to evaluate", () => {
 // ---- the budget: more than MAX candidates → exactly MAX primary, rest in more,
 //      sorted by priority desc ----
 test("more than TODAY_PRIMARY_MAX candidates → exactly MAX primary, rest in more, sorted", () => {
+  repo.setSettings({ lead_mode: "review_everything" });
   const MAX = repo.TODAY_PRIMARY_MAX;
   assert.ok(MAX >= 1, "the budget is at least one");
 
@@ -334,7 +394,8 @@ test("surfaced candidates carry the tier of their bucket (primary vs more)", () 
   assert.equal(a.total, a.primary.length + a.more.length);
 });
 
-test("agenda-only draft, health, and running candidates render as generic cards", () => {
+test("review posture renders agenda-only draft, health, and running candidates as generic cards", () => {
+  repo.setSettings({ lead_mode: "review_everything" });
   repo.createProposal("stub", "auto: weekly review", "", { changes: [] });
   repo.savePlanDay(1, "Run", "Endurance", [{ kind: "cardio", exercise: "Long run", target_distance_km: 16 }]);
   seedHealthDoc("2025-12-01", [
@@ -392,12 +453,27 @@ test("a bounded nutrition check-in the brain scheduled under lead mode is not a 
   assert.equal(agendaDraftCandidate(), undefined, "an autonomy-owned draft never nags as a decision on Today");
 });
 
+test("bare duplicate training drafts never create a Today review wall in lead or announce-first posture", () => {
+  for (const lead_mode of ["lead", "announce_first"]) {
+    repo.setSettings({ lead_mode });
+    repo.createProposal("stub", "auto: first training read", "", { summary: "First read", changes: [] });
+    repo.createProposal("stub", "auto: second training read", "", { summary: "Second read", changes: [] });
+    assert.equal(
+      agendaDraftCandidate(),
+      undefined,
+      `${lead_mode} must not turn orphan cleanup into an athlete review task`
+    );
+    resetTables("plan_proposals", "brain_decisions", "brain_expectations", "brain_evaluations", "app_state");
+  }
+});
+
 test("a genuinely-unowned draft still surfaces as a needs-your-decision item (review posture preserved)", () => {
   repo.setSettings({ lead_mode: "review_everything" });
   const proposal = nutritionCheckinDraft();
   const routed = applyProposalWithAutonomy(proposal.id, { requested_tier: "quiet_apply" });
   assert.equal(routed.tier, "ask", "review-everything still asks");
-  assert.equal(repo.getProposal(proposal.id).autonomy, null, "no decision owns an ask-path draft");
+  assert.equal(repo.getProposal(proposal.id).autonomy?.status, "review", "the explicit ask reason is persisted");
+  assert.equal(repo.getProposal(proposal.id).autonomy?.review_reason_code, "review_posture");
   const draft = agendaDraftCandidate();
   assert.ok(draft, "a draft awaiting the athlete's call is still surfaced");
   assert.equal(draft.kicker, "NEEDS YOUR DECISION");
@@ -406,6 +482,134 @@ test("a genuinely-unowned draft still surfaces as a needs-your-decision item (re
     "Small measured intake adjustment",
     "the card shows the draft's own athlete-facing summary, not the internal instruction"
   );
+});
+
+test("four bare same-intent legacy chat drafts never create a Today review wall in coach-led postures", () => {
+  for (const lead_mode of ["lead", "announce_first"]) {
+    repo.setSettings({ lead_mode });
+    for (let i = 0; i < 4; i++) {
+      repo.createProposal("claude", "chat: optimize bench reset", "", {
+        summary: `Bench reset ${i + 1}`,
+        changes: [
+          { day_number: 1, exercise: "Flat Barbell Bench Press", sets: 2, target_weight: 105 + i },
+          { day_number: 1, exercise: "Incline Barbell Bench Press", remove: true },
+        ],
+      });
+    }
+    assert.equal(
+      agendaDraftCandidate(),
+      undefined,
+      `${lead_mode} keeps legacy chat repair off the athlete's Today rail`
+    );
+    resetTables("plan_proposals", "brain_decisions", "brain_expectations", "brain_evaluations", "app_state");
+  }
+});
+
+test("review-everything preserves a bare chat draft as an explicit Review item", () => {
+  repo.setSettings({ lead_mode: "review_everything" });
+  repo.createProposal("claude", "chat: restructure", "", { summary: "The split we discussed", days: [] });
+  const draft = agendaDraftCandidate();
+  assert.ok(draft);
+  assert.equal(draft.kicker, "NEEDS YOUR DECISION");
+  assert.equal(draft.body, "The split we discussed");
+});
+
+test("safety and user-lock asks stay visible in lead posture with explicit persisted reasons", () => {
+  for (const [input, reason] of [
+    [{ clamp_refused: true }, "safety_floor"],
+    [{ user_locked: true }, "user_lock"],
+  ]) {
+    repo.setSettings({ lead_mode: "lead" });
+    const proposal = repo.createProposal("stub", "auto: bounded nutrition read", "", {
+      kind: "nutrition_target",
+      summary: `Held for ${reason}`,
+      nutrition: { target_kcal: 2_250, protein_g: 170 },
+    });
+    const held = applyProposalWithAutonomy(proposal.id, { requested_tier: "quiet_apply", ...input });
+    assert.equal(held.tier, "ask");
+    assert.equal(held.review_reason_code, reason);
+    assert.equal(repo.getProposal(proposal.id).autonomy?.status, "review");
+    assert.equal(repo.getProposal(proposal.id).autonomy?.review_reason_code, reason);
+    assert.ok(agendaDraftCandidate(), `${reason} must reach Today under lead posture`);
+    resetTables("plan_proposals", "brain_decisions", "brain_expectations", "brain_evaluations", "app_state");
+  }
+});
+
+test("an older safety review survives newer automatic and legacy-chat orphan noise", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  const heldProposal = repo.createProposal("stub", "auto: bounded nutrition read", "", {
+    kind: "nutrition_target",
+    summary: "Protect the safety floor",
+    nutrition: { target_kcal: 2_250, protein_g: 170 },
+  });
+  const held = applyProposalWithAutonomy(heldProposal.id, {
+    requested_tier: "quiet_apply",
+    clamp_refused: true,
+  });
+  assert.equal(held.review_reason_code, "safety_floor");
+
+  for (let i = 0; i < 8; i++) {
+    repo.createProposal("stub", `auto: newer nutrition noise ${i}`, "", {
+      kind: "nutrition_target",
+      summary: `Automatic read ${i}`,
+      nutrition: { target_kcal: 2_260 + i, protein_g: 170 },
+    });
+  }
+  for (let i = 0; i < 4; i++) {
+    repo.createProposal("claude", "chat: optimize bench reset", "", {
+      summary: `Chat bench noise ${i}`,
+      changes: [{ day_number: 1, exercise: "Barbell Bench Press", sets: 2 }],
+    });
+  }
+
+  const draft = agendaDraftCandidate();
+  assert.ok(draft, "a bounded recent-history scan must not erase a real review hold");
+  assert.equal(draft.kicker, "NEEDS YOUR DECISION");
+  assert.equal(draft.body, "Protect the safety floor");
+});
+
+test("an older safety review survives nine newer generic requested-review decisions before the SQL limit", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  const safety = repo.createProposal("stub", "auto: safety floor", "", {
+    kind: "nutrition_target",
+    summary: "Keep the safety-floor decision visible",
+    nutrition: { target_kcal: 2_200, protein_g: 170 },
+  });
+  const held = applyProposalWithAutonomy(safety.id, {
+    requested_tier: "quiet_apply",
+    clamp_refused: true,
+  });
+  assert.equal(held.review_reason_code, "safety_floor");
+
+  for (let i = 0; i < 9; i++) {
+    const generic = repo.createProposal("stub", `auto: generic review ${i}`, "", {
+      kind: "nutrition_target",
+      summary: `Generic requested review ${i}`,
+      nutrition: { target_kcal: 2_250 + i, protein_g: 170 },
+    });
+    const routed = applyProposalWithAutonomy(generic.id, { requested_tier: "ask" });
+    assert.equal(routed.review_reason_code, "requested_review");
+  }
+
+  const draft = agendaDraftCandidate();
+  assert.ok(draft, "attention-bearing review reasons are filtered before Today's bounded query");
+  assert.equal(draft.body, "Keep the safety-floor decision visible");
+});
+
+test("a weekly budget hold is persisted and remains visible on Today under lead posture", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  const first = nutritionCheckinDraft();
+  assert.equal(applyProposalWithAutonomy(first.id, { requested_tier: "quiet_apply" }).pending, true);
+  const second = repo.createProposal("stub", "auto: follow-up nutrition read", "", {
+    kind: "nutrition_target",
+    summary: "A second change needs a decision",
+    nutrition: { target_kcal: 2_300, protein_g: 170 },
+  });
+
+  const held = applyProposalWithAutonomy(second.id, { requested_tier: "quiet_apply" });
+  assert.equal(held.review_reason_code, "budget_review");
+  assert.equal(repo.getProposal(second.id).autonomy?.review_reason_code, "budget_review");
+  assert.ok(agendaDraftCandidate(), "budget review is genuine, not auto-adoptable orphan noise");
 });
 
 test("acknowledging a scheduled nutrition target drops it out of the Today rail", () => {
@@ -542,6 +746,7 @@ test("a throwing producer is isolated — the agenda still returns the rest", ()
 
 // ---- the surprise budget: one NEW attention item inline per day -------------
 test("the surprise budget introduces at most one brand-new attention item inline per day", () => {
+  repo.setSettings({ lead_mode: "review_everything" });
   // Seed three first-time attention items that would all like a Today slot:
   // a pressing health revision (~80), a waiting plan draft (~78), a weekly read (~54).
   seedHealthDoc("2025-12-01", [

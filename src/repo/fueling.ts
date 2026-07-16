@@ -6,8 +6,11 @@
 // triggering nutrition_target decision so the next adaptive check-in can weigh the
 // subjective signal against the change it followed. No scores, never a nag.
 import { db } from "../db.js";
+import { emitBrainEvent } from "../brainEvents.js";
 import { listBrainDecisions } from "./brain-decisions.js";
+import { invalidateDayRead } from "./day-read.js";
 import { daysBetweenISO, localDateISO } from "./shared.js";
+import { bumpTrainingDataVersion } from "./training-cache.js";
 
 // A target change follows through for a week: long enough to feel the difference,
 // short enough that the offer disappears before it becomes background noise.
@@ -21,6 +24,7 @@ export interface FuelingFeedbackInput {
 
 // The 1-3 scale is clamped at the trust boundary (running low / steady / plenty).
 function clampScale13(value: unknown): number | null {
+  if (value == null || (typeof value === "string" && value.trim() === "")) return null;
   const n = Number(value);
   if (!Number.isFinite(n)) return null;
   return Math.min(3, Math.max(1, Math.round(n)));
@@ -95,6 +99,20 @@ export function setFuelingFeedback(date: string, fields: FuelingFeedbackInput = 
        energy = excluded.energy, hunger = excluded.hunger,
        note = excluded.note, decision_id = excluded.decision_id`
   ).run(d, energy, hunger, note, decisionId);
+  // Fueling feedback is an input to the shared under-fueling snapshot. Upserts
+  // can keep row count/max-id and even SUM(energy+hunger) unchanged (1/3 →
+  // 3/1), so the write-version is the collision-proof invalidation signal.
+  bumpTrainingDataVersion();
+  invalidateDayRead(d);
+  if (d !== localDateISO()) invalidateDayRead();
+  emitBrainEvent({
+    kind: "fueling_feedback",
+    domain: "nutrition",
+    date: d,
+    subject_key: "subjective-fuel",
+    material: energy === 1 || hunger === 3,
+    reason: "The athlete updated the one-tap fueling follow-through read.",
+  });
   return getFuelingFeedback(d);
 }
 

@@ -2,7 +2,17 @@ import { db } from "../db.js";
 import { localDateISO } from "./shared.js";
 import { getSessionByDate, getWeeklyStats, sessionSummary } from "./sessions.js";
 
-export type KnownMemoryKind = "note" | "preference" | "constraint" | "goal" | "fact" | "observation" | "injury" | "decision" | "milestone" | "learning";
+export type KnownMemoryKind =
+  | "note"
+  | "preference"
+  | "constraint"
+  | "goal"
+  | "fact"
+  | "observation"
+  | "injury"
+  | "decision"
+  | "milestone"
+  | "learning";
 export type MemoryKind = KnownMemoryKind | (string & {});
 
 export interface MemoryRow {
@@ -38,17 +48,28 @@ export interface RecentLearning {
 // directive-feedback pattern (a new observation either reinforces or replaces a
 // prior one) to free-text memory.
 
-
 // Normalize for a forgiving similarity check (lowercase, drop punctuation,
 // collapse whitespace) — shared by memory dedup and insight dedup. A handful of
 // generic words are dropped (via memTokens) so "prefers training in the morning"
 // and "trains mornings" overlap on the load-bearing tokens, not on filler.
-const MEM_STOPWORDS = new Set("the a an and or to of in on for is are i im my me you your he she they it that this with at as be been being do does prefer prefers like likes".split(" "));
+const MEM_STOPWORDS = new Set(
+  "the a an and or to of in on for is are i im my me you your he she they it that this with at as be been being do does prefer prefers like likes".split(
+    " "
+  )
+);
 export function memNorm(s: string): string {
-  return String(s ?? "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+  return String(s ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 function memTokens(s: string): Set<string> {
-  return new Set(memNorm(s).split(" ").filter((w) => w && !MEM_STOPWORDS.has(w)));
+  return new Set(
+    memNorm(s)
+      .split(" ")
+      .filter((w) => w && !MEM_STOPWORDS.has(w))
+  );
 }
 // Jaccard word-overlap between two token sets (0..1). Shared by the memory
 // near-dup fold (stopword-trimmed tokens) and the insight dedup guard.
@@ -78,32 +99,48 @@ export function addMemory(content: string, kind: MemoryKind = "observation", sou
   if (!trimmed) {
     // Nothing to remember — return the most recent live row as a harmless no-op
     // value so callers that read `.id` don't crash (matches prior truthy return).
-    return (db.prepare(`SELECT * FROM memory WHERE superseded_by IS NULL ORDER BY id DESC LIMIT 1`).get() as MemoryRow | undefined) ?? null;
+    return (
+      (db.prepare(`SELECT * FROM memory WHERE superseded_by IS NULL ORDER BY id DESC LIMIT 1`).get() as
+        | MemoryRow
+        | undefined) ?? null
+    );
   }
   // 1. exact repeat (any kind) — reinforce, never duplicate.
-  const exact = db.prepare(`SELECT * FROM memory WHERE content = ? COLLATE NOCASE AND superseded_by IS NULL`).get(trimmed) as MemoryRow | undefined;
+  const exact = db
+    .prepare(`SELECT * FROM memory WHERE content = ? COLLATE NOCASE AND superseded_by IS NULL`)
+    .get(trimmed) as MemoryRow | undefined;
   if (exact) {
-    db.prepare(`UPDATE memory SET updated_at = datetime('now'), confidence = MIN(5, COALESCE(confidence,1) + 0.5) WHERE id = ?`).run(exact.id);
+    db.prepare(
+      `UPDATE memory SET updated_at = datetime('now'), confidence = MIN(5, COALESCE(confidence,1) + 0.5) WHERE id = ?`
+    ).run(exact.id);
     return getMemory(exact.id);
   }
   // 2. semantic near-duplicate among recent same-kind live rows.
-  const recent = db.prepare(
-    `SELECT * FROM memory WHERE superseded_by IS NULL AND kind = ? ORDER BY id DESC LIMIT 60`
-  ).all(kind) as unknown as MemoryRow[];
-  let best: MemoryRow | null = null, bestScore = 0;
+  const recent = db
+    .prepare(`SELECT * FROM memory WHERE superseded_by IS NULL AND kind = ? ORDER BY id DESC LIMIT 60`)
+    .all(kind) as unknown as MemoryRow[];
+  let best: MemoryRow | null = null,
+    bestScore = 0;
   for (const r of recent) {
     const score = memOverlap(trimmed, String(r.content ?? ""));
-    if (score > bestScore) { bestScore = score; best = r; }
+    if (score > bestScore) {
+      bestScore = score;
+      best = r;
+    }
   }
   if (best && bestScore >= MEM_DUP_THRESHOLD) {
     // Fold in: keep the richer phrasing (longer wins, ties keep the new one),
     // advance updated_at, raise confidence. No new row.
     const keep = trimmed.length > String(best.content ?? "").length ? trimmed : String(best.content);
-    db.prepare(`UPDATE memory SET content = ?, updated_at = datetime('now'), confidence = MIN(5, COALESCE(confidence,1) + 0.5) WHERE id = ?`).run(keep, best.id);
+    db.prepare(
+      `UPDATE memory SET content = ?, updated_at = datetime('now'), confidence = MIN(5, COALESCE(confidence,1) + 0.5) WHERE id = ?`
+    ).run(keep, best.id);
     return getMemory(best.id);
   }
   // 3. genuinely new fact.
-  const info = db.prepare(`INSERT INTO memory (kind, content, source, confidence) VALUES (?, ?, ?, 1)`).run(kind, trimmed, source);
+  const info = db
+    .prepare(`INSERT INTO memory (kind, content, source, confidence) VALUES (?, ?, ?, 1)`)
+    .run(kind, trimmed, source);
   return (db.prepare(`SELECT * FROM memory WHERE id = ?`).get(info.lastInsertRowid) as MemoryRow | undefined) ?? null;
 }
 
@@ -120,10 +157,15 @@ export function getMemory(id: number): MemoryRow | null {
   return (db.prepare(`SELECT * FROM memory WHERE id = ?`).get(id) as MemoryRow | undefined) ?? null;
 }
 
-export function updateMemory(id: number, patch: { content?: string; kind?: MemoryKind; confidence?: number }): MemoryRow | null {
+export function updateMemory(
+  id: number,
+  patch: { content?: string; kind?: MemoryKind; confidence?: number }
+): MemoryRow | null {
   const cur = getMemory(id);
   if (!cur) return null;
-  const conf = Number.isFinite(patch.confidence as number) ? Math.min(5, Math.max(0, Number(patch.confidence))) : cur.confidence ?? null;
+  const conf = Number.isFinite(patch.confidence as number)
+    ? Math.min(5, Math.max(0, Number(patch.confidence)))
+    : (cur.confidence ?? null);
   db.prepare(`UPDATE memory SET content = ?, kind = ?, confidence = ?, updated_at = datetime('now') WHERE id = ?`).run(
     patch.content != null ? String(patch.content).trim() : cur.content,
     patch.kind ?? cur.kind,
@@ -137,7 +179,10 @@ export function updateMemory(id: number, patch: { content?: string; kind?: Memor
 // stays in the DB and exports for an audit trail, just hidden from live reads).
 // If replacementContent is given, a new row is created first and the old one
 // points at it; otherwise the caller passes an existing replacementId.
-export function supersedeMemory(id: number, replacement?: { content?: string; kind?: MemoryKind; replacementId?: number; reason?: string }): MemorySupersedeResult | null {
+export function supersedeMemory(
+  id: number,
+  replacement?: { content?: string; kind?: MemoryKind; replacementId?: number; reason?: string }
+): MemorySupersedeResult | null {
   const cur = getMemory(id);
   if (!cur) return null;
   let newId = replacement?.replacementId ?? null;
@@ -165,7 +210,13 @@ export function deleteMemory(id: number) {
 function touchMemoryReferenced(ids: number[]) {
   if (!ids?.length) return;
   const stmt = db.prepare(`UPDATE memory SET last_referenced_at = datetime('now') WHERE id = ?`);
-  for (const id of ids.slice(0, 60)) { try { stmt.run(id); } catch { /* best effort */ } }
+  for (const id of ids.slice(0, 60)) {
+    try {
+      stmt.run(id);
+    } catch {
+      /* best effort */
+    }
+  }
 }
 
 // Ranked retrieval for the coaching context. Instead of a raw recency dump, this
@@ -174,16 +225,24 @@ function touchMemoryReferenced(ids: number[]) {
 // excludes superseded rows, and is bounded. Surfacing a memory stamps its
 // last_referenced_at so the consolidation pass can tell live facts from stale ones.
 export function memoryForCoach(limit = 40): MemoryRow[] {
-  const loadBearing = db.prepare(
+  const loadBearing = db
+    .prepare(
     `SELECT * FROM memory
-     WHERE superseded_by IS NULL AND kind IN ('constraint','injury','preference','decision','milestone','goal')
+     WHERE superseded_by IS NULL
+       AND COALESCE(source, '') <> 'reaction-model'
+       AND kind IN ('constraint','injury','preference','decision','milestone','goal')
      ORDER BY COALESCE(confidence,1) DESC, COALESCE(updated_at, created_at) DESC, id DESC
      LIMIT ?`
-  ).all(Math.max(8, Math.floor(limit * 0.7))) as unknown as MemoryRow[];
+    )
+    .all(Math.max(8, Math.floor(limit * 0.7))) as unknown as MemoryRow[];
   const seen = new Set(loadBearing.map((r) => r.id));
-  const recent = db.prepare(
-    `SELECT * FROM memory WHERE superseded_by IS NULL ORDER BY id DESC LIMIT ?`
-  ).all(limit) as unknown as MemoryRow[];
+  const recent = db
+    .prepare(
+      `SELECT * FROM memory
+      WHERE superseded_by IS NULL AND COALESCE(source, '') <> 'reaction-model'
+      ORDER BY id DESC LIMIT ?`
+    )
+    .all(limit) as unknown as MemoryRow[];
   const merged: MemoryRow[] = [...loadBearing];
   for (const r of recent) {
     if (merged.length >= limit) break;
@@ -205,9 +264,9 @@ export type SuggestionKind = "day_read" | "session_suggest" | "nutrition_checkin
 
 export function recordSuggestion(kind: SuggestionKind, date: string | null, payload: any) {
   try {
-    const info = db.prepare(
-      `INSERT INTO suggestions (kind, date, payload_json) VALUES (?, ?, ?)`
-    ).run(kind, date ?? null, payload != null ? JSON.stringify(payload).slice(0, 8000) : null);
+    const info = db
+      .prepare(`INSERT INTO suggestions (kind, date, payload_json) VALUES (?, ?, ?)`)
+      .run(kind, date ?? null, payload != null ? JSON.stringify(payload).slice(0, 8000) : null);
     return db.prepare(`SELECT * FROM suggestions WHERE id = ?`).get(info.lastInsertRowid);
   } catch {
     return null; // recording an outcome is never allowed to break the producer
@@ -216,9 +275,14 @@ export function recordSuggestion(kind: SuggestionKind, date: string | null, payl
 
 function hydrateSuggestion(r: any) {
   if (!r) return null;
-  let payload: any = null, outcome: any = null;
-  try { payload = r.payload_json ? JSON.parse(r.payload_json) : null; } catch {}
-  try { outcome = r.outcome_json ? JSON.parse(r.outcome_json) : null; } catch {}
+  let payload: any = null,
+    outcome: any = null;
+  try {
+    payload = r.payload_json ? JSON.parse(r.payload_json) : null;
+  } catch {}
+  try {
+    outcome = r.outcome_json ? JSON.parse(r.outcome_json) : null;
+  } catch {}
   return { ...r, payload, outcome };
 }
 
@@ -230,11 +294,20 @@ export function listSuggestions(limit = 50) {
 // Durable learnings drawn from reconciliation are stored as memory rows of kind
 // 'learning' (source 'outcome-learning'); surfaced to the coach via getCoachContext.
 export function recentLearnings(limit = 6): RecentLearning[] {
-  return (db.prepare(
+  return (
+    db
+      .prepare(
     `SELECT id, kind, content, source, COALESCE(updated_at, created_at) AS updated_at FROM memory
      WHERE kind = 'learning' AND superseded_by IS NULL
      ORDER BY COALESCE(updated_at, created_at) DESC, id DESC LIMIT ?`
-  ).all(Math.max(1, Math.min(20, Number(limit) || 6))) as Array<{ id: number; content: string; source: string | null; updated_at?: string | null }>).map((r) => ({
+      )
+      .all(Math.max(1, Math.min(20, Number(limit) || 6))) as Array<{
+      id: number;
+      content: string;
+      source: string | null;
+      updated_at?: string | null;
+    }>
+  ).map((r) => ({
     id: Number(r.id),
     kind: "learning",
     content: String(r.content),
@@ -248,21 +321,31 @@ export function recentLearnings(limit = 6): RecentLearning[] {
 // show — gentle observations drawn from suggestion → actual reconciliation, never
 // a score or a gate. Live (non-superseded) learnings only, newest-first. Returns
 // { learnings:[{id, content, noticed_at}] } so the panel is a thin projection.
-export interface OutcomeLearning { id: number; content: string; noticed_at: string | null }
+export interface OutcomeLearning {
+  id: number;
+  content: string;
+  noticed_at: string | null;
+}
 export function getOutcomeLearnings(limit = 12): { learnings: OutcomeLearning[] } {
   const n = Math.max(1, Math.min(50, Number(limit) || 12));
   let learnings: OutcomeLearning[] = [];
   try {
-    learnings = (db.prepare(
+    learnings = (
+      db
+        .prepare(
       `SELECT id, content, COALESCE(updated_at, created_at) AS noticed_at FROM memory
        WHERE kind = 'learning' AND superseded_by IS NULL
        ORDER BY COALESCE(updated_at, created_at) DESC, id DESC LIMIT ?`
-    ).all(n) as any[]).map((r) => ({
+        )
+        .all(n) as any[]
+    ).map((r) => ({
       id: Number(r.id),
       content: String(r.content),
       noticed_at: r.noticed_at ? String(r.noticed_at) : null,
     }));
-  } catch { /* memory table absent on a very old DB — empty */ }
+  } catch {
+    /* memory table absent on a very old DB — empty */
+  }
   return { learnings };
 }
 
@@ -275,11 +358,15 @@ export function reconcileSuggestions(opts: { maxPerPass?: number } = {}): { reco
   const max = Math.max(1, Math.min(40, opts.maxPerPass ?? 20));
   // Only reconcile suggestions whose target date is strictly in the past (so the
   // day's logging is settled) — never today's open suggestion.
-  const rows = (db.prepare(
+  const rows = (
+    db
+      .prepare(
     `SELECT * FROM suggestions
      WHERE reconciled_at IS NULL AND date IS NOT NULL AND date < ?
      ORDER BY id ASC LIMIT ?`
-  ).all(today, max) as any[]).map(hydrateSuggestion);
+      )
+      .all(today, max) as any[]
+  ).map(hydrateSuggestion);
   let learnings = 0;
   for (const s of rows) {
     let outcome: any = null;
@@ -288,23 +375,30 @@ export function reconcileSuggestions(opts: { maxPerPass?: number } = {}): { reco
       const r = reconcileOneSuggestion(s);
       outcome = r.outcome;
       lesson = r.lesson;
-    } catch { outcome = { error: true }; }
+    } catch {
+      outcome = { error: true };
+    }
     if (lesson) {
       // A learning is durable & curatable like any memory (it can be edited or
       // superseded by a later, contradicting learning).
       addMemory(lesson, "learning", "outcome-learning");
       learnings++;
     }
-    db.prepare(`UPDATE suggestions SET outcome_json = ?, reconciled_at = datetime('now') WHERE id = ?`)
-      .run(outcome != null ? JSON.stringify(outcome).slice(0, 8000) : null, s.id);
+    db.prepare(`UPDATE suggestions SET outcome_json = ?, reconciled_at = datetime('now') WHERE id = ?`).run(
+      outcome != null ? JSON.stringify(outcome).slice(0, 8000) : null,
+      s.id
+    );
   }
   return { reconciled: rows.length, learnings };
 }
 
 const OUTCOME_LESSONS = {
-  restTrainedFlat: "Earned-rest reads matter for you: when you trained through one and felt flat, the coach should keep rest prominent next time.",
-  restTrainedFine: "Rest-day reads can be conservative for you: training through one went fine, so the coach can tolerate slightly higher frequency before calling rest.",
-  deficitTrendUp: "Deficit check-ins may be underestimating intake or expenditure when bodyweight trends up; lean toward the higher TDEE next time.",
+  restTrainedFlat:
+    "Earned-rest reads matter for you: when you trained through one and felt flat, the coach should keep rest prominent next time.",
+  restTrainedFine:
+    "Rest-day reads can be conservative for you: training through one went fine, so the coach can tolerate slightly higher frequency before calling rest.",
+  deficitTrendUp:
+    "Deficit check-ins may be underestimating intake or expenditure when bodyweight trends up; lean toward the higher TDEE next time.",
 };
 
 // Compare ONE suggestion to what actually happened. Returns the recorded outcome
@@ -341,7 +435,12 @@ function reconcileOneSuggestion(s: any): { outcome: any; lesson: string | null }
     const sess = getSessionByDate(date) as any;
     const summary = sess ? sessionSummary(sess.id) : null;
     const suggestedMin = Number(p.est_minutes ?? p.minutes);
-    const outcome = { suggested_minutes: Number.isFinite(suggestedMin) ? suggestedMin : null, trained: !!(summary && summary.sets > 0), sets: summary?.sets ?? 0, actual_minutes: sess?.duration_min ?? null };
+    const outcome = {
+      suggested_minutes: Number.isFinite(suggestedMin) ? suggestedMin : null,
+      trained: !!(summary && summary.sets > 0),
+      sets: summary?.sets ?? 0,
+      actual_minutes: sess?.duration_min ?? null,
+    };
     // Reserved for a future minutes-drift lesson; calm by default.
     return { outcome, lesson: null };
   }
@@ -350,8 +449,14 @@ function reconcileOneSuggestion(s: any): { outcome: any; lesson: string | null }
     // existing weekly trend slope rather than recomputing.
     const stats = getWeeklyStats() as any;
     const trend = Number(stats?.trend_lb_wk);
-    const expected = String(p.direction ?? (Number(p.target_kcal) && p.tdee && Number(p.target_kcal) < Number(p.tdee) ? "down" : ""));
-    const outcome = { proposed_target_kcal: p.target_kcal ?? null, expected_direction: expected || null, trend_lb_wk: Number.isFinite(trend) ? trend : null };
+    const expected = String(
+      p.direction ?? (Number(p.target_kcal) && p.tdee && Number(p.target_kcal) < Number(p.tdee) ? "down" : "")
+    );
+    const outcome = {
+      proposed_target_kcal: p.target_kcal ?? null,
+      expected_direction: expected || null,
+      trend_lb_wk: Number.isFinite(trend) ? trend : null,
+    };
     if (expected === "down" && Number.isFinite(trend) && trend > 0.2) {
       return { outcome, lesson: OUTCOME_LESSONS.deficitTrendUp };
     }

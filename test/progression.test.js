@@ -27,7 +27,7 @@ import { registerProgramTools } from "../dist/surfaces/mcp/program.js";
 
 // ---- local seeding (kept in-file so we don't touch the shared _seed.js) ----
 function reset() {
-  for (const t of ["logged_sets", "plan_items", "plan_days", "sessions", "exercises", "bodyweight_log", "program_blocks", "activities", "garmin_activities", "plan_proposals"]) {
+  for (const t of ["logged_sets", "plan_items", "plan_days", "sessions", "exercises", "bodyweight_log", "program_blocks", "activities", "garmin_activities", "plan_proposals", "food_notes", "fueling_feedback", "nutrition_targets"]) {
     try { db.prepare(`DELETE FROM ${t}`).run(); } catch { /* table may not exist */ }
   }
 }
@@ -315,6 +315,35 @@ test("planDayProgression covers every strength item and skips cardio", () => {
   assert.ok(names.includes("Incline Press"));
   assert.ok(!names.some((n) => /run/i.test(n)), "cardio is skipped");
   for (const r of rows) assert.ok(typeof r.plan_item_id === "number", "each row carries its plan_item_id for the apply path");
+});
+
+test("multi-channel execution strain holds an earned progression in the actual next-session prescription", () => {
+  makeExercise("Barbell Bench Press", { muscle_group: "chest" });
+  planWith(1, { exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185, focus: "Push" });
+  logSet("Barbell Bench Press", isoDaysAgo(28), { weight: 175, reps: 8, rir: 2 });
+  logSet("Barbell Bench Press", isoDaysAgo(21), { weight: 180, reps: 8, rir: 2 });
+  logSet("Barbell Bench Press", isoDaysAgo(10), { weight: 185, reps: 8, rir: 2 });
+  db.prepare(
+    `INSERT INTO nutrition_targets (effective_date, target_kcal, protein_g, source)
+     VALUES (?, 2200, 175, 'test')`
+  ).run(isoDaysAgo(30));
+  for (const daysAgo of [1, 2, 3, 4]) {
+    for (const [meal, kcal] of [["breakfast", 750], ["dinner", 1000]]) {
+      db.prepare(
+        `INSERT INTO food_notes (date, meal, raw_output, parsed_json) VALUES (?, ?, '', ?)`
+      ).run(isoDaysAgo(daysAgo), meal, JSON.stringify({ kcal }));
+    }
+  }
+  for (const daysAgo of [1, 2]) {
+    db.prepare(`INSERT INTO fueling_feedback (date, energy, hunger) VALUES (?, 1, 3)`).run(isoDaysAgo(daysAgo));
+    db.prepare(`INSERT INTO sessions (date, performance, finished_at) VALUES (?, 2, datetime('now'))`).run(isoDaysAgo(daysAgo));
+  }
+
+  const prescription = planDayProgression(1).find((item) => item.exercise === "Barbell Bench Press");
+  assert.equal(prescription.action, "hold", "the next exposure cannot add load while the fuel/performance pattern is unresolved");
+  assert.equal(prescription.suggested.weight, 185);
+  assert.equal(prescription.autoregulated, true);
+  assert.match(prescription.why, /fuel|meal pattern|complete/i);
 });
 
 test("MCP apply_progression mirrors REST proposal shape and supersedes stale same-day drafts", async () => {

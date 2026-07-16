@@ -294,7 +294,7 @@ test("set correction preserves alternate evidence and never rewrites superseded 
   assert.equal(objective.status, "completed");
   const secondHit = log("Back Squat", 125, 5, 0);
   repo.updateSet(firstHit.id, { weight: 100 });
-  let stored = repo.getStrengthObjective(objective.id);
+  const stored = repo.getStrengthObjective(objective.id);
   assert.equal(stored.status, "completed", "another exact supporting set keeps the objective complete");
   assert.equal(stored.achieved_est_1rm, 145.8);
   assert.equal(stored.achieved_date, back(0));

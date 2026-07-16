@@ -91,6 +91,27 @@ function stripLineComments(src) {
     .join("\n");
 }
 
+test("coach reuses its computed program, whole-person, and expenditure reads for the journey", () => {
+  const coach = read("src/repo/coach.ts");
+  assert.match(coach, /journeyRead\(today,\s*\{[\s\S]*?programState:\s*fullProgramState/);
+  assert.match(coach, /journeyRead\(today,\s*\{[\s\S]*?wholePerson:\s*wholePersonTrajectoryView/);
+  assert.match(coach, /journeyRead\(today,\s*\{[\s\S]*?expenditure:\s*expenditureView/);
+  assert.match(
+    coach,
+    /computeGoalCheck\(profile,\s*\{\s*expenditure:\s*expenditureView\s*\}\)/,
+    "the nutrition slice must not re-enter expenditure/signature calculation",
+  );
+  const journey = read("src/repo/journey.ts");
+  assert.match(journey, /computeGoalCheck\(p,\s*\{\s*expenditure:\s*opts\.expenditure\s*\}\)/);
+  const recomposition = read("src/repo/recomposition.ts");
+  assert.match(
+    recomposition,
+    /opts\.expenditure\s*===\s*undefined\s*\?\s*estimateExpenditure\(21\)\s*:\s*opts\.expenditure/,
+    "a precomputed null must remain an unavailable sentinel instead of triggering a duplicate estimate",
+  );
+  assert.doesNotMatch(coach, /journeyRead\(today\)\s*\)/, "coach must not trigger recomposition's fallback reads");
+});
+
 // A surface sometimes stashes the global `api` helper in a local alias before
 // calling it (e.g. `const fetchApi = g.api;` ... `fetchApi("/sessions/...")`),
 // which the direct api()/cachedApi()/enqueueJob() scan below would miss. Catch
@@ -1119,11 +1140,11 @@ test("chat action write contract stays typed and prompt-aligned", () => {
     chatActionPromptSpecs().map((spec) => spec.type),
     [...CHAT_ACTION_TYPES]
   );
-  assert.deepEqual(draftActions, ["plan_restructure"]);
+  assert.deepEqual(draftActions, []);
   assert.equal(immediateActions.includes("plan_update"), true);
-  assert.equal(immediateActions.includes("plan_restructure"), false);
-  assert.match(actionProse, /APPLIED immediately/);
-  assert.match(actionProse, /DRAFTS for the user to review and apply/);
+  assert.equal(immediateActions.includes("plan_restructure"), true);
+  assert.match(actionProse, /ROUTED immediately/);
+  assert.doesNotMatch(actionProse, /DRAFTS for the user to review and apply/);
 
   for (const actionType of CHAT_ACTION_TYPES) {
     assert.match(chatActions, new RegExp(`"${actionType}"`), `${actionType} should be owned by chatActions.ts`);
@@ -5763,9 +5784,15 @@ test("the recovery-week instruction prefix is one contract across client and ser
   // either side rewords its literal, the button/review-link state machine silently
   // dies — pin them to each other.
   const server = read("src/repo/profile.ts");
+  const ledger = read("src/repo/recovery-week-ledger.ts");
   const client = read("src/client/progress-program-controller.ts");
-  const m = server.match(/RECOVERY_WEEK_INSTRUCTION_PREFIX = "([^"]+)"/);
-  assert.ok(m, "profile.ts exports RECOVERY_WEEK_INSTRUCTION_PREFIX");
+  assert.match(
+    server,
+    /export\s*\{[^}]*\bRECOVERY_WEEK_INSTRUCTION_PREFIX\b[^}]*\}/,
+    "profile.ts exports RECOVERY_WEEK_INSTRUCTION_PREFIX",
+  );
+  const m = ledger.match(/RECOVERY_WEEK_INSTRUCTION_PREFIX = "([^"]+)"/);
+  assert.ok(m, "the recovery ledger declares the instruction prefix");
   const prefix = m[1];
   const c = client.match(/const RECOVERY_WEEK_INSTRUCTION =\s*\n?\s*"([^"]+)"/);
   assert.ok(c, "the client declares RECOVERY_WEEK_INSTRUCTION");

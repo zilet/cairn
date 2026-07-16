@@ -12,7 +12,7 @@ beforeEach(() =>
   resetTables(
     "context_events", "sessions", "logged_sets", "exercises",
     "plan_items", "plan_days", "plan_proposals", "day_reads",
-    "bodyweight_log", "profile",
+    "bodyweight_log", "profile", "brain_decisions", "brain_expectations", "brain_evaluations",
   ),
 );
 
@@ -103,4 +103,27 @@ test("a rolled-back multi-change proposal preserves the persisted Brief", () => 
   assert.equal(result.ok, false);
   assert.equal(repo.getPlanDay(1).items.find((item) => item.exercise === "Bench Press").target_weight, 135);
   assert.equal(repo.getCachedDayRead(TODAY()).headline, "Stored push read");
+});
+
+test("saving changed reads keeps immutable history while one current observation supersedes the rest", () => {
+  const date = TODAY();
+  repo.saveDayRead(date, { kind: "train", headline: "Push today", why: "The plan and recovery support it." });
+  repo.saveDayRead(date, { kind: "train", headline: "Push today", why: "The plan and recovery support it." });
+  repo.saveDayRead(date, { kind: "easy", headline: "Keep it easy", why: "A hard run has now landed." });
+  repo.saveDayRead(date, { kind: "done", headline: "Work is covered", why: "The tempo session is already logged." });
+
+  const history = repo
+    .listBrainDecisions({ kind: "day_read", limit: 20 })
+    .filter((row) => row.source_ref_key === date);
+  const current = history.filter((row) => row.status === "observed");
+  const superseded = history.filter((row) => row.status === "superseded");
+  assert.equal(current.length, 1, "one date owns one current observation");
+  assert.equal(current[0].summary, "Work is covered");
+  assert.equal(current[0].action?.kind, "done");
+  assert.equal(history.length, 3, "an identical repeat is idempotent while material changes append");
+  assert.equal(superseded.length, 2);
+  assert.deepEqual(new Set(superseded.map((row) => row.summary)), new Set(["Push today", "Keep it easy"]));
+  assert.deepEqual(new Set(superseded.map((row) => row.action?.kind)), new Set(["train", "easy"]));
+  assert.ok(superseded.every((row) => row.superseded_by != null));
+  assert.equal(superseded.find((row) => row.summary === "Keep it easy")?.superseded_by, current[0].id);
 });

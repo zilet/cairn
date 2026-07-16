@@ -9,7 +9,7 @@ import { db } from "../db.js";
 import { scheduleDayReadRefresh } from "../dayread-refresh.js";
 import { invalidateBrainSnapshot } from "../brain/snapshot.js";
 import { resolveDayReadRule, type DayReadRule } from "./brain/day-read-rules.js";
-import { recordDecision } from "./brain-decisions.js";
+import { insertBrainDecision, transitionBrainDecision } from "./brain-decisions.js";
 import { getCheckinByDate, getRecoverySummary, latestSleep } from "./coach.js";
 import { activeContextEffect } from "./context-effect.js";
 import { activitySportWhere, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
@@ -21,12 +21,15 @@ import {
   resolveSessionPlanDay,
   selectAdaptivePlanDay,
 } from "./plan-selection.js";
-import { getPrimaryDiscipline } from "./profile.js";
+import { activeRecoveryWeek, getPrimaryDiscipline } from "./profile.js";
 import { getProgramState } from "./program-state.js";
 import { programBalance } from "./progression.js";
 import { localDateISO } from "./shared.js";
 import { planningSignalState, type UnifiedSignalState } from "./signal-state.js";
-import { type TrainingLoad, dayLoad } from "./training-read.js";
+import { afterSqliteCommit } from "./sqlite-savepoint.js";
+import { type TrainingLoad, dayLoad, recoverySessionDose } from "./training-read.js";
+import { currentUnderfuelingRead } from "./underfueling-snapshot.js";
+import type { UnderfuelingRead } from "./underfueling.js";
 
 // ---------- T1: day intelligence ----------
 export interface DayRead {
@@ -40,8 +43,14 @@ export interface DayRead {
 // Deterministic baseline (T1 layers the agentic sentence + buildDayReadPrompt on
 // top). Rules: rest if >=3 consecutive training days OR recovery clearly low;
 // else train the suggested plan day; else easy. Never throws on missing data.
-export function dayRead(date?: string, recovery?: any, unifiedState?: UnifiedSignalState): DayRead {
+export function dayRead(
+  date?: string,
+  recovery?: any,
+  unifiedState?: UnifiedSignalState,
+  underfuelingSnapshot?: UnderfuelingRead,
+): DayRead {
   const d = date || localDateISO();
+  const recoveryWeek = activeRecoveryWeek(d);
 
   // Discipline shapes what "a training day" means for the consecutive-days +
   // earned-rest rules. For a strength athlete a logged lifting session counts;
@@ -68,19 +77,38 @@ export function dayRead(date?: string, recovery?: any, unifiedState?: UnifiedSig
   // and count only genuinely LOADING days: a real recovery day BREAKS the streak,
   // which is how a coach reads it. The per-day grades ride along in `signals` so
   // the agentic layer understands the rhythm too, not just the bare count.
-  const loadAt = (iso: string): TrainingLoad | "none" => dayLoad(iso, { countsCardio });
-  const recentLoads: { date: string; load: TrainingLoad | "none" }[] = [];
+  // Classify each historical day against ITS calendar state. Using only today's
+  // active window made the first build day retroactively grade the preceding
+  // compliant deload sessions as ordinary loading.
+  const recoveryByDate = new Map<string, ReturnType<typeof activeRecoveryWeek>>();
+  const recoveryForDate = (iso: string) => {
+    if (!recoveryByDate.has(iso)) recoveryByDate.set(iso, activeRecoveryWeek(iso));
+    return recoveryByDate.get(iso) ?? null;
+  };
+  const loadAt = (iso: string): TrainingLoad | "none" =>
+    dayLoad(iso, { countsCardio, recoveryWeekActive: !!recoveryForDate(iso) });
+  const recentLoads: { date: string; load: TrainingLoad | "none"; recovery_dose?: any[] }[] = [];
   let consec = 0; // consecutive LOADING (hard/moderate) days ending yesterday
   let streakOpen = true;
   for (let back = 1; back <= 10; back++) {
     const iso = new Date(new Date(d + "T00:00:00Z").getTime() - back * 864e5).toISOString().slice(0, 10);
     const load = loadAt(iso);
-    if (back <= 5) recentLoads.push({ date: iso, load });
+    if (back <= 5) {
+      const dose = recoveryForDate(iso)
+        ? (db.prepare(`SELECT id FROM sessions WHERE date = ? ORDER BY id`).all(iso) as any[]).map((row) =>
+            recoverySessionDose(Number(row.id))
+          )
+        : [];
+      recentLoads.push({ date: iso, load, ...(dose.length ? { recovery_dose: dose } : {}) });
+    }
     const loading = load === "hard" || load === "moderate";
     if (streakOpen && loading) consec++;
     else streakOpen = false;
     if (!streakOpen && back > 5) break;
   }
+  const yesterdayRecoveryOverdose = !!recentLoads[0]?.recovery_dose?.some(
+    (dose: any) => dose?.classification === "overdose"
+  );
 
   // Endurance volume spike: a weekly-mileage jump well above the prior weeks'
   // average is its own earned-rest signal (consecutive-day counting can miss a
@@ -239,6 +267,7 @@ export function dayRead(date?: string, recovery?: any, unifiedState?: UnifiedSig
     // The last few days' actual load grade (hard/moderate/easy/none), so the read
     // reflects intensity, not just "did something get logged".
     recent_load: recentLoads,
+    recovery_week: recoveryWeek,
     // Discipline-aware context (v35): what "training day" counts as, and the
     // endurance volume read when it applies. Strength athletes see discipline
     // 'strength' + a null volume block (today's behavior).
@@ -307,9 +336,11 @@ export function dayRead(date?: string, recovery?: any, unifiedState?: UnifiedSig
   // "Rest today" vs planned-Pull contradiction). A light/none-load log (a short mobility
   // flush, or an easy spin a lifter doesn't count) stays soft and is handled lower down.
   // The grade + fact ride in `signals` for the agent regardless of which branch wins.
-  const todayLoad = dayLoad(d, { countsCardio });
+  const todayLoad = dayLoad(d, { countsCardio, recoveryWeekActive: !!recoveryWeek });
   (signals as any).trained_today = trainedToday || !!bigActivity;
   (signals as any).today_load = todayLoad;
+  const fuelProtection = underfuelingSnapshot ?? currentUnderfuelingRead(d);
+  (signals as any).underfueling = fuelProtection;
   const signalState =
     unifiedState ??
     planningSignalState({
@@ -318,6 +349,7 @@ export function dayRead(date?: string, recovery?: any, unifiedState?: UnifiedSig
       checkin,
       context: ctx,
       contextEvents,
+      underfueling: fuelProtection,
       completedToday: (trainedToday || !!bigActivity) && (todayLoad === "hard" || todayLoad === "moderate"),
     });
   (signals as any).signal_state = signalState;
@@ -373,12 +405,17 @@ export function dayRead(date?: string, recovery?: any, unifiedState?: UnifiedSig
         // noisy chronic base it fired far too readily (and "rest" contradicted its own
         // "an easier day" wording). It now rides as a caveat on the train read below,
         // so the agent still sees `volume_spike` and the athlete still gets their day.
-        if (!(consec >= 3 || lowSleep || lowSubjective || lowReadiness)) return null;
+        // A recovery week is already the periodized answer to accumulated load.
+        // Pre-deload hard days cannot turn every reduced session into another rest
+        // day; acute safety signals and actual dose overruns retain full authority.
+        const stackedLoadingRest = consec >= 3 && !recoveryWeek;
+        if (!(yesterdayRecoveryOverdose || stackedLoadingRest || lowSleep || lowSubjective || lowReadiness)) return null;
         return {
           kind: "rest",
           focus: null,
-          why:
-            consec >= 3
+          why: yesterdayRecoveryOverdose
+            ? "Yesterday's recovery session materially exceeded its reduced dose — take today to absorb it before continuing."
+            : stackedLoadingRest
               ? "You've trained hard several days running — let it consolidate."
               : lowReadiness
                 ? "Today's fresh readiness signal is low — a lighter day is the safer suggestion."
@@ -431,6 +468,8 @@ export function dayRead(date?: string, recovery?: any, unifiedState?: UnifiedSig
         // caveats so it's coach-level, not a blunt "go": fatigue quietly building toward
         // a reset, and/or running ramped this week (keep today's miles easy).
         const caveats: string[] = [];
+        if (recoveryWeek)
+          caveats.push("this is the reduced recovery-week dose, so keep every set crisp and well shy of failure");
         if (reduceItem)
           caveats.push(
             reduceItem.kind === "injury"
@@ -444,6 +483,10 @@ export function dayRead(date?: string, recovery?: any, unifiedState?: UnifiedSig
           );
         if (volumeSpike)
           caveats.push("your running's ramped this week, so keep today's miles easy and don't pile on hard intensity");
+        const holdAggression = signalState.action.directives.training === "hold_aggression";
+        if (holdAggression && signalState.action.reason) {
+          caveats.push(`${signalState.action.reason} Hold load and volume progression until that protection settles`);
+        }
         const compressSchedule =
           signalState.action.posture === "train" && signalState.action.directives.schedule === "compress";
         if (compressSchedule) {
@@ -457,9 +500,13 @@ export function dayRead(date?: string, recovery?: any, unifiedState?: UnifiedSig
             reason: scheduleReason,
           };
         }
-        const why = caveats.length
+        const why = holdAggression
+          ? `Keep today's work conservative — ${caveats.join("; and ")}.`
+          : caveats.length
           ? `You're good to train — ${caveats.join("; and ")}.`
-          : "You're recovered and due — good to go.";
+          : recoveryWeek
+            ? `${sd.focus || "Training"} keeps the recovery-week rhythm — use the reduced prescription and leave the reps crisp.`
+            : "You're recovered and due — good to go.";
         return { kind: "train", focus: sd.focus, why, est_minutes: compressSchedule ? 40 : 60, signals };
       },
     },
@@ -670,7 +717,7 @@ export function saveDayRead(date: string, read: any): void {
   // runs after the canonical cache write and is intentionally fail-soft: an audit
   // outage must never make the Brief unavailable.
   try {
-    recordDecision({
+    const decisionInput = {
       effective_date: date,
       kind: "day_read",
       domain: "cross_domain",
@@ -696,7 +743,40 @@ export function saveDayRead(date: string, read: any): void {
       reverted_at: null,
       superseded_by: null,
       evaluator_version: null,
-    });
+    } as const;
+    // The cache has one mutable row per date; the accountability ledger does not.
+    // Preserve each materially different observation as a new immutable entry,
+    // then supersede every prior current observation for the same date. A byte-for-
+    // byte repeat is idempotent, while its older legacy siblings are still closed.
+    const existing = db
+      .prepare(
+        `SELECT id, summary, rationale, source, context_json, action_json
+           FROM brain_decisions
+          WHERE kind = 'day_read' AND source_ref_type = 'day_read'
+            AND source_ref_key = ? AND status = 'observed'
+          ORDER BY id DESC`
+      )
+      .all(date) as any[];
+    const material = {
+      summary: decisionInput.summary,
+      rationale: decisionInput.rationale,
+      source: decisionInput.source,
+      context_json: JSON.stringify(decisionInput.context),
+      action_json: JSON.stringify(decisionInput.action),
+    };
+    const newest = existing[0] ?? null;
+    const sameMaterial = !!newest
+      && String(newest.summary ?? "") === material.summary
+      && (newest.rationale ?? null) === material.rationale
+      && (newest.source ?? null) === material.source
+      && (newest.context_json ?? null) === material.context_json
+      && (newest.action_json ?? null) === material.action_json;
+    const current = sameMaterial ? newest : insertBrainDecision(decisionInput);
+    if (current?.id) {
+      for (const prior of sameMaterial ? existing.slice(1) : existing) {
+        transitionBrainDecision(Number(prior.id), "superseded", { supersededBy: Number(current.id) });
+      }
+    }
   } catch {
     // The day-read cache is authoritative; learning/audit recording is best effort.
   }
@@ -704,7 +784,6 @@ export function saveDayRead(date: string, read: any): void {
 
 export function invalidateDayRead(date?: string): void {
   const d = date || localDateISO();
-  invalidateBrainSnapshot("day_read");
   try {
     db.prepare(`DELETE FROM day_reads WHERE date = ?`).run(d);
   } catch {}
@@ -712,9 +791,12 @@ export function invalidateDayRead(date?: string): void {
   // recompute so the athlete's next open serves a warm agentic read instead of
   // paying the ~90s agent run inline. Best-effort + off the write path — it only
   // acts when `d` covers today AND an agent is usable (see src/dayread-refresh.ts).
-  try {
-    scheduleDayReadRefresh(d);
-  } catch {}
+  afterSqliteCommit(() => {
+    invalidateBrainSnapshot("day_read");
+    try {
+      scheduleDayReadRefresh(d);
+    } catch {}
+  });
 }
 
 // ---------- T5: frequent foods by time of day ----------

@@ -20,6 +20,7 @@ import { bodyMetricsContextSlice } from "./body-metrics.js";
 import { getPlan } from "./plan.js";
 import {
   computeGoalCheck,
+  activeRecoveryWeek,
   effectiveGoalMode,
   getEnduranceGoal,
   getProfile,
@@ -68,6 +69,7 @@ import { latestBrainEvaluation } from "./brain-evaluations.js";
 import { estimateExpenditure } from "./expenditure.js";
 import { planningSignalState, type UnifiedSignalState } from "./signal-state.js";
 import { dayLoad } from "./training-read.js";
+import { currentUnderfuelingRead } from "./underfueling-snapshot.js";
 
 // ---------- coach context (shared by prompts) ----------
 // Compact view of a health doc for coaching: kind, date, summary, key markers
@@ -331,6 +333,7 @@ function programStateForCoach(st: ProgramState): CoachProgramState {
     })),
     volume: (Array.isArray(st.volume) ? st.volume : []).slice(0, 14),
     mesocycle: st.mesocycle,
+    recovery_week: st.recovery_week,
     endurance: st.endurance,
     hybrid: st.hybrid,
     adaptations_due: (Array.isArray(st.adaptations_due) ? st.adaptations_due : []).slice(0, 6),
@@ -390,6 +393,8 @@ interface CoachContextSignals {
   trajectoryView: any;
   wholePersonTrajectoryView: any;
   journeyView: any;
+  expenditureView: any;
+  underfuelingView: any;
   coachingFocusView: any;
   signalStateView: UnifiedSignalState;
   bodyCompositionView: any;
@@ -463,10 +468,10 @@ function buildPersonSlice(
 // Nutrition goal + today's fuel. Both goal reads reuse the already-fetched profile.
 function buildNutritionSlice(
   signals: CoachContextSignals
-): Pick<CoachContext, "goal" | "goal_mode" | "journey" | "day_intake" | "meal_plan" | "fueling"> {
-  const { profile, journeyView } = signals;
+): Pick<CoachContext, "goal" | "goal_mode" | "journey" | "day_intake" | "meal_plan" | "fueling" | "underfueling"> {
+  const { profile, journeyView, expenditureView, underfuelingView } = signals;
   return {
-    goal: computeGoalCheck(profile), // reuse the profile already fetched above
+    goal: computeGoalCheck(profile, { expenditure: expenditureView }), // reuse profile + expenditure already fetched above
     // The journey's SHAPE (v41) — lose | maintain | gain. Always present (even when
     // the profile is too thin for goal math), so every prompt and the PWA agree on
     // the framing: a deficit for 'lose', anchor-to-TDEE for 'maintain', a lean
@@ -499,6 +504,9 @@ function buildNutritionSlice(
       note: row.note,
       decision_id: row.decision_id,
     })),
+    // Shared deterministic control read: completed days only, multiple independent
+    // channels, explicit uncertainty/deadband, and no single-day calorie reaction.
+    underfueling: underfuelingView,
   };
 }
 
@@ -528,6 +536,7 @@ function buildTrainingSlice(
   | "trajectory"
 > {
   const {
+    today,
     garmin,
     recentSessions,
     dayReadView,
@@ -557,7 +566,7 @@ function buildTrainingSlice(
     // periodizes against the current mesocycle instead of progressing blindly.
     // Null when no block is running — then the deterministic mesocycle read in
     // program-state still gives deload timing. Additive, never a gate.
-    program_block: blockForCoach(),
+    program_block: blockForCoach(today),
     // The elite program brain (deterministic floor): per-lift status/trend +
     // stall detection, volume bands, mesocycle position, endurance trends, and
     // the "what to evolve next" list — so EVERY plan-shaping prompt sees the
@@ -901,7 +910,28 @@ function getCoachContextFromSnapshot(): CoachContext {
   });
   const trajectoryView = brainSignal("trajectory", () => getTrajectory(undefined, { programState: fullProgramState }));
   const wholePersonTrajectoryView = brainSignal("whole_person_trajectory", () => wholePersonTrajectory());
-  const journeyView = brainSignal(`journey:${today}`, () => journeyRead(today));
+  const expenditureView = brainSignal("expenditure:21", () => {
+    try {
+      return estimateExpenditure(21);
+    } catch {
+      return null;
+    }
+  });
+  const journeyView = brainSignal(`journey:${today}`, () =>
+    journeyRead(today, {
+      programState: fullProgramState,
+      wholePerson: wholePersonTrajectoryView,
+      expenditure: expenditureView,
+    })
+  );
+  const underfuelingView = brainSignal(`underfueling:${today}`, () =>
+    currentUnderfuelingRead(today, {
+      expenditure: expenditureView,
+      goal: computeGoalCheck(profile, { expenditure: expenditureView }),
+      programState: fullProgramState,
+      wholePerson: wholePersonTrajectoryView,
+    })
+  );
   // The active life-context effect, the training-signals rollup and the active context
   // events, computed ONCE and shared by the person/training slices AND the conductor
   // (life/soreness awareness) so nothing recomputes them.
@@ -920,16 +950,10 @@ function getCoachContextFromSnapshot(): CoachContext {
       return [];
     }
   });
-  const expenditureView = brainSignal("expenditure:21", () => {
-    try {
-      return estimateExpenditure(21);
-    } catch {
-      return null;
-    }
-  });
   const todayLoadView = brainSignal(`today_load:${today}`, () =>
     dayLoad(today, {
       countsCardio: profile?.primary_discipline === "endurance" || profile?.primary_discipline === "hybrid",
+      recoveryWeekActive: !!activeRecoveryWeek(today),
     })
   );
   const signalStateView = brainSignal(`signal_state:${today}`, () =>
@@ -940,6 +964,7 @@ function getCoachContextFromSnapshot(): CoachContext {
       trainingSignals: trainingSignalsView,
       programState: fullProgramState,
       expenditure: expenditureView,
+      underfueling: underfuelingView,
       context: contextTodayView,
       contextEvents: contextEventsView,
       completedToday: todayLoadView === "hard" || todayLoadView === "moderate",
@@ -949,7 +974,7 @@ function getCoachContextFromSnapshot(): CoachContext {
   // canonical state even when the sentence came from an earlier warm so every
   // prompt and deterministic planner sees one posture.
   const dayReadView = brainSignal(`day_read:${today}`, () => {
-    const read = getCachedDayRead(today) ?? dayRead(today, recovery, signalStateView);
+    const read = getCachedDayRead(today) ?? dayRead(today, recovery, signalStateView, underfuelingView);
     return { ...read, signals: { ...(read?.signals ?? {}), signal_state: signalStateView } };
   });
   // External producer reads the CONDUCTOR arbitrates (K3), computed once here and
@@ -1024,7 +1049,7 @@ function getCoachContextFromSnapshot(): CoachContext {
         // "This block" carries its calendar ("week 3 of 5 — building volume").
         programBlock: (() => {
           try {
-            return blockForCoach();
+            return blockForCoach(today);
           } catch {
             return null;
           }
@@ -1121,6 +1146,8 @@ function getCoachContextFromSnapshot(): CoachContext {
     trajectoryView,
     wholePersonTrajectoryView,
     journeyView,
+    expenditureView,
+    underfuelingView,
     coachingFocusView,
     signalStateView,
     bodyCompositionView,
@@ -1222,6 +1249,7 @@ export interface CheckinInput {
 }
 
 function clampScale15(v: any): number | null {
+  if (v == null || (typeof v === "string" && v.trim() === "")) return null;
   const n = Number(v);
   if (!Number.isFinite(n)) return null;
   return Math.min(5, Math.max(1, Math.round(n)));

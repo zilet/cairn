@@ -334,6 +334,11 @@ test("recoveryWeekStatus tells the whole story: drafted → applied (with window
   assert.equal(applied?.state, "applied");
   assert.match(String(applied?.summary), /halved/, "the applied banner still says what changed");
   assert.ok(applied.until > applied.applied_on, "carries when building resumes");
+  assert.equal(repo.activeRecoveryWeek("2020-01-01"), null, "a historical read before the applied stamp is inactive");
+  assert.equal(repo.activeRecoveryWeek(applied.applied_on)?.state, "applied", "the applied date is inside the window");
+  assert.equal(repo.activeRecoveryWeek(applied.until), null, "the until date is the exclusive boundary");
+  db.prepare(`UPDATE app_state SET value = ? WHERE key = 'recovery_week_applied'`).run(applied.applied_on);
+  assert.equal(repo.activeRecoveryWeek(applied.applied_on)?.state, "applied", "legacy date-only Pi stamps stay readable");
 
   // The window lapses → the story ends quietly (no stale banner weeks later).
   db.prepare(`UPDATE app_state SET value = '2020-01-01' WHERE key = 'recovery_week_applied'`).run();

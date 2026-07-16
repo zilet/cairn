@@ -181,7 +181,7 @@ connectedBrainRouter.get("/coaching-focus", (_req, res) => res.json(getCoachingF
 // "refresh this read" affordance when newer labs/training have drifted past it.
 connectedBrainRouter.get("/health/synthesis", (_req, res) => {
   const view = getHealthSynthesisView();
-  res.json({ synthesis: view.synthesis, focus: healthFocus(), stale: view.stale });
+  res.json({ synthesis: view.synthesis, focus: healthFocus(), stale: view.stale, stale_reason: view.stale_reason });
 });
 
 connectedBrainRouter.post("/health/synthesis", async (req, res) => {

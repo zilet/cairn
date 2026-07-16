@@ -19,18 +19,31 @@ import {
   deleteNutritionTarget,
   getActiveNutritionTarget,
   getMealPlan,
+  getNutritionTarget,
+  restoreMealPlanAfterUndo,
   setMealPlanStatus,
   setNutritionTarget,
   validateMealPlanForPersistence,
 } from "../../repo/nutrition.js";
 import { getPlan, replacePlan } from "../../repo/plan.js";
-import { applyProposal, getProposal, listProposals, RECOVERY_WEEK_INSTRUCTION_PREFIX } from "../../repo/profile.js";
+import {
+  applyProposal,
+  getProposal,
+  listProposals,
+  type NormalizedProposalApplyPayload,
+  type OrphanSiblingCleanup,
+  RECOVERY_WEEK_INSTRUCTION_PREFIX,
+  revertRecoveryWeekIfOwned,
+} from "../../repo/profile.js";
+import { MEAL_REFRESH_REQUEST_KEY } from "../../repo/meal-refresh-retry.js";
+import { automaticOrphanIntent, chatOrphanIntent } from "../../repo/proposal-intent.js";
 import { buildProgressionProposal } from "../../repo/progression.js";
 import { buildRunPlanProposal } from "../../repo/run-progression.js";
 import { getSettings } from "../../repo/settings.js";
-import { setAppState } from "../../repo/app-state.js";
+import { setAppStateStrict } from "../../repo/app-state.js";
 import { addDaysISO, localDateISO, parseDbTime } from "../../repo/shared.js";
 import { getSessionByDate } from "../../repo/sessions.js";
+import { withSqliteSavepoint } from "../../repo/sqlite-savepoint.js";
 
 type ProposalShape = {
   kind: "nutrition_target" | "training_structure" | "training_target" | "exercise_rotation";
@@ -55,6 +68,72 @@ function proposalShape(proposal: any): ProposalShape {
   if (Array.isArray(proposal?.parsed?.changes) && proposal.parsed.changes.some((change: any) => change?.swap))
     return { kind: "exercise_rotation", domain: "training", risk: "low" };
   return { kind: "training_target", domain: "training", risk: "low" };
+}
+
+type ProposalReviewReasonCode =
+  | "stale_snapshot"
+  | "safety_floor"
+  | "user_lock"
+  | "review_posture"
+  | "requested_review"
+  | "domain_policy"
+  | "budget_review";
+
+function holdProposalForReview(
+  proposal: any,
+  shape: ProposalShape,
+  input: {
+    code: ProposalReviewReasonCode;
+    reasons: string[];
+    tier?: AutonomyTier;
+    policy_inputs?: Record<string, unknown>;
+    coordination_key?: string | null;
+    coordinated_update?: boolean;
+  }
+): any {
+  const reasons = input.reasons.map((reason) => String(reason).trim().slice(0, 300)).filter(Boolean);
+  const tier = input.tier === "clinician" ? "clinician" : "ask";
+  const recorded = recordDecision({
+    effective_date: null,
+    kind: shape.kind,
+    domain: shape.domain,
+    summary: String(proposal.parsed?.summary ?? "A coaching change needs your decision.").slice(0, 300),
+    rationale: String(proposal.parsed?.rationale ?? proposal.instruction ?? "").slice(0, 1_500) || null,
+    source: proposal.agent || "autonomy",
+    source_ref_type: "plan_proposal",
+    source_ref_key: String(proposal.id),
+    status: "review",
+    autonomy_tier: tier,
+    risk_class: shape.risk,
+    reversible: false,
+    input_fingerprint: null,
+    context: {
+      review_required: true,
+      review_reason_code: input.code,
+      review_reasons: reasons,
+      policy_inputs: input.policy_inputs ?? {},
+      coordination_key: input.coordination_key ?? null,
+      coordinated_update: input.coordinated_update === true,
+      evidence_keys: [`plan_proposal:${proposal.id}`, `current_plan:${shape.domain}`],
+      evidence_observed_at: new Date().toISOString(),
+    },
+    action: { proposal_id: proposal.id, review_reason_code: input.code },
+    specialist: null,
+    applied_at: null,
+    reverted_at: null,
+    superseded_by: null,
+    evaluator_version: null,
+  }).decision;
+  return {
+    ok: true,
+    applied: false,
+    review_required: true,
+    tier,
+    proposal: getProposal(Number(proposal.id)),
+    reasons,
+    decision: recorded,
+    review_reason_code: input.code,
+  };
 }
 
 function nextBoundary(kind: ProposalShape["kind"], today = localDateISO()): string {
@@ -118,10 +197,32 @@ function rollbackItem(before: any, after: any, current: any): any {
   return merged;
 }
 
+function planItemIdentityBase(item: any): string {
+  const kind = item?.kind === "cardio" ? "cardio" : "strength";
+  const label = String(
+    kind === "cardio" ? (item?.exercise ?? item?.note ?? item?.target_zone ?? "cardio") : (item?.exercise ?? "")
+  )
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  return `${kind}|${label || "unknown"}`;
+}
+
+function indexedPlanItems(items: any[]): Array<{ key: string; base: string; item: any }> {
+  const counts = new Map<string, number>();
+  return (Array.isArray(items) ? items : []).map((item) => {
+    const base = planItemIdentityBase(item);
+    const occurrence = (counts.get(base) ?? 0) + 1;
+    counts.set(base, occurrence);
+    return { key: `${base}#${occurrence}`, base, item };
+  });
+}
+
 // Undo only the fields still owned by this decision. A later manual edit or a newer
 // coaching decision wins: reverting an old bench target must never restore a stale
 // whole-plan snapshot over a newly added run day, exercise, note, or target.
-function mergeTrainingRollback(before: any[], after: any[], current: any[]): any[] {
+function mergeTrainingRollback(before: any[], after: any[], current: any[], swaps: any[] = []): any[] {
   const byDay = (days: any[]) => new Map(days.map((day) => [Number(day.day_number), day]));
   const beforeDays = byDay(before);
   const afterDays = byDay(after);
@@ -146,10 +247,48 @@ function mergeTrainingRollback(before: any[], after: any[], current: any[]): any
       if (c != null) merged.push(c);
       continue;
     }
-    const itemCount = Math.max(b.items?.length ?? 0, a.items?.length ?? 0, c.items?.length ?? 0);
+    const beforeItems = indexedPlanItems(b.items);
+    const afterItems = indexedPlanItems(a.items);
+    const currentItems = indexedPlanItems(c.items);
+    const beforeByKey = new Map(beforeItems.map((entry) => [entry.key, entry]));
+    const afterByKey = new Map(afterItems.map((entry) => [entry.key, entry]));
+    const rotations = new Map<string, { beforeKey: string; afterKey: string }>();
+    const usedBefore = new Set<string>();
+    const usedAfter = new Set<string>();
+    for (const swap of (Array.isArray(swaps) ? swaps : []).filter(
+      (entry: any) => Number(entry?.day_number) === dayNumber
+    )) {
+      const fromBase = planItemIdentityBase({ kind: "strength", exercise: swap?.from });
+      const toBase = planItemIdentityBase({ kind: "strength", exercise: swap?.to });
+      const from = beforeItems.find((entry) => entry.base === fromBase && !usedBefore.has(entry.key));
+      const to = afterItems.find((entry) => entry.base === toBase && !usedAfter.has(entry.key));
+      if (!from || !to) continue;
+      usedBefore.add(from.key);
+      usedAfter.add(to.key);
+      rotations.set(to.key, { beforeKey: from.key, afterKey: to.key });
+    }
     const items: any[] = [];
-    for (let position = 0; position < itemCount; position += 1) {
-      const item = rollbackItem(b.items?.[position], a.items?.[position], c.items?.[position]);
+    const handledBefore = new Set<string>();
+    for (const currentEntry of currentItems) {
+      const rotation = rotations.get(currentEntry.key);
+      const rotatedFrom = rotation ? beforeByKey.get(rotation.beforeKey) : null;
+      const rotatedTo = rotation ? afterByKey.get(rotation.afterKey) : null;
+      if (rotatedFrom && rotatedTo && sameValue(currentEntry.item, rotatedTo.item)) {
+        items.push(rotatedFrom.item);
+        handledBefore.add(rotatedFrom.key);
+        continue;
+      }
+      const beforeEntry = beforeByKey.get(currentEntry.key);
+      const afterEntry = afterByKey.get(currentEntry.key);
+      const item = rollbackItem(beforeEntry?.item, afterEntry?.item, currentEntry.item);
+      if (item != null) items.push(item);
+      if (beforeEntry) handledBefore.add(beforeEntry.key);
+    }
+    // A decision-owned removal (including the `from` side of a rotation) is the
+    // only missing item restored. Current-only insertions and user removals remain.
+    for (const beforeEntry of beforeItems) {
+      if (handledBefore.has(beforeEntry.key)) continue;
+      const item = rollbackItem(beforeEntry.item, afterByKey.get(beforeEntry.key)?.item, null);
       if (item != null) items.push(item);
     }
     merged.push({
@@ -163,7 +302,7 @@ function mergeTrainingRollback(before: any[], after: any[], current: any[]): any
 }
 
 function rollbackSnapshot(shape: ProposalShape): any {
-  return shape.domain === "training"
+  return shape.domain !== "nutrition"
     ? { kind: "training_plan", plan: trainingPlanSnapshot() }
     : { kind: "nutrition_target", previous: getActiveNutritionTarget() };
 }
@@ -319,56 +458,57 @@ export function applyMealPlanWithAutonomy(
     };
   }
 
-  // The freshest scheduled meal week wins. Retire its older queued alternatives so
-  // no second plan can surprise-land at a later boundary.
-  const queued = [
-    ...listBrainDecisions({ status: "announced", kind: "meal_plan", limit: 50 }),
-    ...listBrainDecisions({ status: "pending", kind: "meal_plan", limit: 50 }),
-  ];
-  for (const decision of queued) {
-    const olderPlanId = Number((decision.action as any)?.meal_plan_id);
-    if (olderPlanId > 0 && olderPlanId !== planId) {
-      if ((getMealPlan(olderPlanId) as any)?.status === "draft")
-        setMealPlanStatus(olderPlanId, "superseded", { recordDecision: false });
-      transitionBrainDecision(decision.id!, "superseded");
-    }
-  }
-
-  const previous = liveAcceptedMealPlan(planId);
   const effectiveDate = nextMealBoundary();
-  const recorded = recordDecision({
-    effective_date: effectiveDate,
-    kind: "meal_plan",
-    domain: "nutrition",
-    summary: String(plan.parsed?.summary ?? "Your next meal plan is ready and will become current tomorrow.").slice(
-      0,
-      300
-    ),
-    rationale: String(
-      plan.parsed?.rationale ??
-        plan.parsed?.notes ??
-        "Refreshed against your current training, nutrition target, health directives, and preferences."
-    ).slice(0, 1_500),
-    source: plan.agent || "autonomy",
-    source_ref_type: "meal_plan",
-    source_ref_key: String(plan.id),
-    status: "announced",
-    autonomy_tier: "announce",
-    risk_class: "low",
-    reversible: true,
-    input_fingerprint: null,
-    context: {
-      natural_boundary: true,
-      coordinated_update: input.coordinated_update === true,
-      evidence_keys: [`meal_plan:${plan.id}`, "coach_context:nutrition"],
-      evidence_observed_at: new Date().toISOString(),
-    },
-    action: { meal_plan_id: plan.id, previous_meal_plan_id: previous?.id ?? null },
-    specialist: null,
-    applied_at: null,
-    reverted_at: null,
-    superseded_by: null,
-    evaluator_version: null,
+  const recorded = withSqliteSavepoint(`schedule_meal_plan_${planId}`, () => {
+    // The freshest scheduled meal week wins. Retire its older queued alternatives
+    // in the same commit as the new owner so a ledger failure cannot strand both.
+    const queued = [
+      ...listBrainDecisions({ status: "announced", kind: "meal_plan", limit: 50 }),
+      ...listBrainDecisions({ status: "pending", kind: "meal_plan", limit: 50 }),
+    ];
+    for (const decision of queued) {
+      const olderPlanId = Number((decision.action as any)?.meal_plan_id);
+      if (olderPlanId > 0 && olderPlanId !== planId) {
+        if ((getMealPlan(olderPlanId) as any)?.status === "draft")
+          setMealPlanStatus(olderPlanId, "superseded", { recordDecision: false });
+        transitionBrainDecision(decision.id!, "superseded");
+      }
+    }
+    const previous = liveAcceptedMealPlan(planId);
+    return recordDecision({
+      effective_date: effectiveDate,
+      kind: "meal_plan",
+      domain: "nutrition",
+      summary: String(plan.parsed?.summary ?? "Your next meal plan is ready and will become current tomorrow.").slice(
+        0,
+        300
+      ),
+      rationale: String(
+        plan.parsed?.rationale ??
+          plan.parsed?.notes ??
+          "Refreshed against your current training, nutrition target, health directives, and preferences."
+      ).slice(0, 1_500),
+      source: plan.agent || "autonomy",
+      source_ref_type: "meal_plan",
+      source_ref_key: String(plan.id),
+      status: "announced",
+      autonomy_tier: "announce",
+      risk_class: "low",
+      reversible: false,
+      input_fingerprint: null,
+      context: {
+        natural_boundary: true,
+        coordinated_update: input.coordinated_update === true,
+        evidence_keys: [`meal_plan:${plan.id}`, "coach_context:nutrition"],
+        evidence_observed_at: new Date().toISOString(),
+      },
+      action: { meal_plan_id: plan.id, previous_meal_plan_id: previous?.id ?? null },
+      specialist: null,
+      applied_at: null,
+      reverted_at: null,
+      superseded_by: null,
+      evaluator_version: null,
+    });
   });
   return {
     ok: true,
@@ -391,6 +531,18 @@ export function applyProposalWithAutonomy(
     // A direct, current-turn request to edit the active plan is not a surprise and
     // has already named its boundary. This does not loosen lead_mode or safety tiers.
     explicit_user_request?: boolean;
+    // Internal scheduler repair metadata. Only explicit-provenance orphan adoption
+    // supplies this; ordinary chat/manual/public callers cannot request sibling cleanup.
+    orphan_sibling_cleanup?: OrphanSiblingCleanup;
+    // A history-preserving compatibility payload used only by the exact legacy
+    // background-chat repair. The source proposal row remains byte-for-byte intact.
+    normalized_apply_payload?: NormalizedProposalApplyPayload;
+    // Several bounded decisions may form one protective package (for example a
+    // recovery week plus fuel moving toward maintenance). The key links their
+    // ledger rows; `coordinated_update` lets that package cross a natural boundary
+    // together without each half consuming the other's surprise budget.
+    coordination_key?: string;
+    coordinated_update?: boolean;
   } = {}
 ): any {
   const proposal = getProposal(proposalId);
@@ -400,14 +552,12 @@ export function applyProposalWithAutonomy(
   const ageDays = Number.isFinite(createdAt) ? Math.max(0, (Date.now() - createdAt) / 86_400_000) : Infinity;
   const freshnessDays = shape.kind === "training_structure" ? 14 : 7;
   if (ageDays > freshnessDays) {
-    return {
-      ok: true,
-      applied: false,
-      review_required: true,
-      tier: "ask",
-      proposal,
+    return holdProposalForReview(proposal, shape, {
+      code: "stale_snapshot",
       reasons: [`proposal snapshot is older than ${freshnessDays} days; refresh it against the current plan first`],
-    };
+      coordination_key: input.coordination_key,
+      coordinated_update: input.coordinated_update,
+    });
   }
   // The magnitude gate must not trust an agent-declared delta (the payload rarely
   // carries one): derive it from the proposed target against the active target so
@@ -421,35 +571,62 @@ export function applyProposalWithAutonomy(
         ? proposedKcal - activeKcal
         : Number(proposal.parsed?.nutrition?.delta_kcal ?? proposal.parsed?.nutrition?.change_kcal ?? 0);
   }
+  const domainDemoted = domainIsDemoted(shape.domain);
+  const leadMode = getSettings().lead_mode;
   const policy = decideAutonomyTier({
     kind: shape.kind,
     risk_class: shape.risk,
     reversible: true,
     requested_tier: input.requested_tier,
-    lead_mode: getSettings().lead_mode,
+    lead_mode: leadMode,
     magnitude: nutritionDelta,
     user_locked: input.user_locked,
     clamp_refused: input.clamp_refused,
-    domain_demoted: domainIsDemoted(shape.domain),
+    domain_demoted: domainDemoted,
   });
   if (policy.tier === "ask" || policy.tier === "clinician" || policy.tier === "observe") {
-    return { ok: true, applied: false, tier: policy.tier, proposal, reasons: policy.reasons };
+    const code: ProposalReviewReasonCode = input.clamp_refused
+      ? "safety_floor"
+      : input.user_locked
+        ? "user_lock"
+        : leadMode === "review_everything"
+          ? "review_posture"
+          : input.requested_tier === "ask"
+            ? "requested_review"
+            : domainDemoted
+              ? "domain_policy"
+              : "requested_review";
+    return holdProposalForReview(proposal, shape, {
+      code,
+      reasons: policy.reasons.length ? policy.reasons : ["This change was explicitly routed for review."],
+      tier: policy.tier,
+      policy_inputs: {
+        requested_tier: input.requested_tier ?? null,
+        lead_mode: leadMode,
+        user_locked: !!input.user_locked,
+        clamp_refused: !!input.clamp_refused,
+        domain_demoted: domainDemoted,
+      },
+      coordination_key: input.coordination_key,
+      coordinated_update: input.coordinated_update,
+    });
   }
   // Nutrition budgets per change-kind (a bounded target nudge must not be blocked by the
   // standing weekly meal refresh); training stays domain-wide.
   const budgetKind = shape.domain === "nutrition" ? shape.kind : undefined;
-  if (!surpriseBudgetAllows(
-    materialChangesThisWeek(shape.domain, undefined, budgetKind),
-    !!input.safety_response || !!input.explicit_user_request
-  )) {
-    return {
-      ok: true,
-      applied: false,
-      review_required: true,
-      tier: "ask",
-      proposal,
+  if (
+    !surpriseBudgetAllows(
+      materialChangesThisWeek(shape.domain, undefined, budgetKind),
+      !!input.safety_response || !!input.explicit_user_request
+    )
+  ) {
+    return holdProposalForReview(proposal, shape, {
+      code: "budget_review",
       reasons: ["weekly surprise budget already used; review this change before applying"],
-    };
+      policy_inputs: { lead_mode: leadMode, safety_response: !!input.safety_response },
+      coordination_key: input.coordination_key,
+      coordinated_update: input.coordinated_update,
+    });
   }
   if (policy.tier === "announce") {
     const effectiveDate = nextBoundary(shape.kind);
@@ -468,10 +645,14 @@ export function applyProposalWithAutonomy(
       status: "announced",
       autonomy_tier: "announce",
       risk_class: shape.risk,
-      reversible: true,
+      reversible: false,
       input_fingerprint: null,
       context: {
         natural_boundary: true,
+        coordination_key: input.coordination_key ?? null,
+        coordinated_update: input.coordinated_update === true,
+        orphan_sibling_cleanup: input.orphan_sibling_cleanup ?? null,
+        normalized_apply_payload: input.normalized_apply_payload ?? null,
         evidence_keys: [`plan_proposal:${proposal.id}`, `current_plan:${shape.domain}`],
         evidence_observed_at: new Date().toISOString(),
       },
@@ -508,11 +689,15 @@ export function applyProposalWithAutonomy(
       status: "pending",
       autonomy_tier: "quiet_apply",
       risk_class: shape.risk,
-      reversible: true,
+      reversible: false,
       input_fingerprint: null,
       context: {
         natural_boundary: true,
         quiet: true,
+        coordination_key: input.coordination_key ?? null,
+        coordinated_update: input.coordinated_update === true,
+        orphan_sibling_cleanup: input.orphan_sibling_cleanup ?? null,
+        normalized_apply_payload: input.normalized_apply_payload ?? null,
         evidence_keys: [`plan_proposal:${proposal.id}`, `current_plan:${shape.domain}`],
         evidence_observed_at: new Date().toISOString(),
       },
@@ -534,21 +719,47 @@ export function applyProposalWithAutonomy(
   }
 
   const rollback = rollbackSnapshot(shape);
-  const result = applyProposal(proposalId, { supersedeSiblings: false }) as any;
-  if (!result?.ok) return { ...result, tier: policy.tier };
-  const decision = decisionForAppliedProposal(proposalId, result);
-  if (!decision) return { ...result, tier: policy.tier, decision: null };
-  const updated = patchBrainDecision(decision.id!, {
-    autonomy_tier: "quiet_apply",
-    reversible: true,
-    context: { ...(decision.context ?? {}), rollback_available: true },
-  });
-  saveBrainRollback(
-    decision.id!,
-    rollback.kind,
-    rollback.kind === "training_plan" ? trainingRollbackPayload(rollback.plan) : rollback.previous
-  );
-  return { ...result, tier: "quiet_apply", decision: updated };
+  try {
+    return withSqliteSavepoint(`autonomy_apply_${proposalId}`, () => {
+      const result = applyProposal(proposalId, {
+        orphanSiblingCleanup: input.orphan_sibling_cleanup,
+        normalizedApplyPayload: input.normalized_apply_payload,
+        requireDecisionLedger: true,
+      }) as any;
+      if (!result?.ok) return { ...result, tier: policy.tier };
+      const decision = decisionForAppliedProposal(proposalId, result);
+      if (!decision?.id) throw new Error("the autonomous apply decision was not stored");
+      if (
+        !saveBrainRollback(
+          decision.id,
+          rollback.kind,
+          rollback.kind === "training_plan" ? trainingRollbackPayload(rollback.plan) : rollback.previous
+        )
+      ) {
+        throw new Error("the autonomous rollback snapshot was not stored");
+      }
+      const updated = patchBrainDecision(decision.id, {
+        autonomy_tier: "quiet_apply",
+        reversible: true,
+        context: {
+          ...(decision.context ?? {}),
+          rollback_available: true,
+          coordination_key: input.coordination_key ?? null,
+          coordinated_update: input.coordinated_update === true,
+          ...(input.normalized_apply_payload ? { legacy_migration: input.normalized_apply_payload.migration } : {}),
+        },
+      });
+      if (!updated) throw new Error("the autonomous apply decision could not be finalized");
+      return { ...result, tier: "quiet_apply", decision: updated };
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      applied: false,
+      tier: policy.tier,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 // Build the deterministic per-day auto-progression draft, then route it through the
@@ -556,9 +767,9 @@ export function applyProposalWithAutonomy(
 // REST). Under lead_mode='lead' a bounded, reversible target nudge (buildProgression
 // only ever emits `changes`, i.e. kind 'training_target') quiet-applies at its natural
 // boundary with the decision + Undo bookkeeping applyProposalWithAutonomy already owns;
-// under 'announce_first' it announces first; under 'review_everything' the layer returns
-// tier 'ask' and the draft stays a plain reviewable draft (no decision recorded), exactly
-// as before. `requested_tier:'quiet_apply'` mirrors the brain-review boundary path
+// under 'announce_first' it announces first; under 'review_everything' the layer records
+// an explicit review decision so Today can distinguish a genuine ask from automatic
+// orphan noise. `requested_tier:'quiet_apply'` mirrors the brain-review boundary path
 // (executeBrainReviewAction) and never LOOSENS policy — decideAutonomyTier only ever
 // clamps to a MORE restrictive tier. A designed ok:false (nothing to propose) passes
 // straight through unchanged.
@@ -588,6 +799,48 @@ export function buildRunPlanWithAutonomy(
 // we never yank it into the autonomy ledger the instant it appears.
 const ORPHAN_ADOPTION_GRACE_MS = 2 * 60 * 60 * 1000;
 
+function legacyBackgroundNormalizedPayload(
+  proposal: any,
+  sourceBurstProposalIds: number[]
+): NormalizedProposalApplyPayload | undefined {
+  const changes = Array.isArray(proposal?.parsed?.changes) ? proposal.parsed.changes : null;
+  if (!changes) return undefined;
+  const normalizedChanges: NormalizedProposalApplyPayload["migration"]["normalized_changes"] = [];
+  const normalized = changes.map((change: any) => {
+    const sets = change?.sets;
+    const isLegacyZero =
+      sets != null &&
+      !(typeof sets === "string" && sets.trim() === "") &&
+      Number.isFinite(Number(sets)) &&
+      Number(sets) === 0 &&
+      change?.remove !== true;
+    if (!isLegacyZero) return { ...change };
+    const { sets: _legacySets, ...rest } = change;
+    normalizedChanges.push({
+      day_number: Number.isFinite(Number(change?.day_number)) ? Math.trunc(Number(change.day_number)) : null,
+      exercise: change?.exercise == null ? null : String(change.exercise),
+      from: "sets:0",
+      to: "remove:true",
+    });
+    return { ...rest, remove: true };
+  });
+  if (!normalizedChanges.length) return undefined;
+  return {
+    parsed: { ...proposal.parsed, changes: normalized },
+    migration: {
+      code: "legacy_background_sets_zero_to_remove",
+      reason:
+        "Historical background-chat plan actions encoded an intended skip as sets:0; repair translates only that retired encoding to explicit remove:true before current quality validation.",
+      source_ref_type: "plan_proposal",
+      source_proposal_id: Number(proposal.id),
+      source_burst_proposal_ids: [...new Set(sourceBurstProposalIds.map(Number).filter(Number.isFinite))].sort(
+        (a, b) => a - b
+      ),
+      normalized_changes: normalizedChanges,
+    },
+  };
+}
+
 // Self-healing for orphaned drafts. A bounded, reversible change can end up parked as
 // a bare `draft` with no autonomy decision behind it — e.g. an older policy demoted it
 // to a review-only draft, or it was proposed in a week whose surprise budget was already
@@ -600,52 +853,123 @@ export function adoptOrphanedDrafts(): { adopted: number; skipped: number } {
   let adopted = 0;
   let skipped = 0;
   const now = Date.now();
-  // Newest first (listProposals orders id DESC): the newest draft of a kind is the
-  // canonical intent, so we handle it and leave older same-kind drafts to the existing
-  // supersede flows — at most ONE adoption per proposalShape kind per pass.
-  const handledKinds = new Set<ProposalShape["kind"]>();
-  for (const proposal of listProposals(10)) {
+  const leadMode = getSettings().lead_mode;
+  // Newest first (listProposals orders id DESC): at most one orphan per explicit
+  // provenance + SEMANTIC intent is adopted. Legacy chat drafts qualify only in
+  // coach-led postures and only through an explicit persisted chat provenance.
+  // The historical `background: chat signal` path additionally clusters iterative
+  // same-day retries into bounded 30-minute bursts; a later/earlier burst remains
+  // independently evaluable instead of being blocked forever by one owned retry.
+  const handledIntents = new Set<string>();
+  const backgroundBurstAnchors = new Map<string, number[]>();
+  const eligibleBefore = new Date(now - ORPHAN_ADOPTION_GRACE_MS).toISOString();
+  const proposals = listProposals(50) as any[];
+  for (const proposal of proposals) {
     try {
       if (proposal?.status !== "draft") continue;
       const shape = proposalShape(proposal);
-      if (handledKinds.has(shape.kind)) continue;
-      handledKinds.add(shape.kind);
-      // Already autonomy-owned? hydrateProposal only attaches announced/pending/applied
-      // decisions, so a non-null `autonomy` means this draft already has a live decision
-      // (it will land at its own boundary) — never record a second one for it.
-      if (proposal.autonomy) {
+      const automaticIntent = automaticOrphanIntent(proposal);
+      const chatIntent = leadMode === "review_everything" ? null : chatOrphanIntent(proposal);
+      const orphanIntent = automaticIntent ?? chatIntent;
+      const provenance = automaticIntent ? ("automatic" as const) : chatIntent?.provenance;
+      if (!orphanIntent) {
         skipped += 1;
         continue;
       }
       // Never adopt what we can't age: an unparseable created_at is treated as
-      // ineligible rather than guessed too-old. A draft still inside the grace window
-      // waits for a later pass (not a failure — just not yet). parseDbTime, NOT a raw
-      // Date.parse: created_at is SQLite UTC text with no zone marker, and a raw parse
-      // reads it as LOCAL — under a non-UTC process TZ (the deployment runs in the
-      // athlete's zone) every draft looked hours younger than it was and could sit
-      // under this grace gate indefinitely.
+      // ineligible rather than guessed too-old. parseDbTime, NOT a raw Date.parse:
+      // created_at is SQLite UTC text with no zone marker.
       const createdAt = parseDbTime(proposal.created_at)?.getTime() ?? Number.NaN;
       if (!Number.isFinite(createdAt)) {
         skipped += 1;
         continue;
       }
+      let handlingKey = orphanIntent.key;
+      let burstAfter: string | undefined;
+      let burstBefore: string | undefined;
+      if (provenance === "background_chat") {
+        const windowMs = Math.max(1, Number(chatIntent?.burst_window_ms) || 30 * 60 * 1000);
+        const anchors = backgroundBurstAnchors.get(orphanIntent.key) ?? [];
+        let anchor = anchors.find((candidate) => candidate >= createdAt && candidate - createdAt <= windowMs);
+        if (anchor == null) {
+          anchor = createdAt;
+          anchors.push(anchor);
+          backgroundBurstAnchors.set(orphanIntent.key, anchors);
+        }
+        handlingKey = `${orphanIntent.key}:burst:${new Date(anchor).toISOString()}`;
+        burstAfter = new Date(anchor - windowMs).toISOString();
+        burstBefore = new Date(anchor).toISOString();
+      }
+      if (handledIntents.has(handlingKey)) continue;
+      // Already scheduled/applied? A review decision is intentionally re-evaluated when
+      // posture changes; a pending/announced/applied decision already owns its boundary.
+      if (["pending", "announced", "applied"].includes(String(proposal.autonomy?.status ?? ""))) {
+        handledIntents.add(handlingKey);
+        skipped += 1;
+        continue;
+      }
+      // A draft still inside the grace window waits for a later pass (not a failure —
+      // just not yet). Its burst anchor remains useful for keeping adjacent retries
+      // together, but it is never adopted or swept while fresh.
       if (now - createdAt < ORPHAN_ADOPTION_GRACE_MS) {
         skipped += 1;
         continue;
       }
+      if (provenance !== "background_chat") handledIntents.add(handlingKey);
       // After a recent same-kind veto the system does NOT silently re-apply similar
-      // substance: it ANNOUNCES (lands at the natural boundary with the Hold-on card, no
-      // decision demanded). With no veto, normal quiet-apply policy applies. Either way
+      // substance: it ANNOUNCES (lands at the natural boundary with a Coach discussion
+      // path, no decision demanded). With no veto, normal quiet-apply policy applies. Either way
       // decideAutonomyTier only ever clamps to a MORE restrictive tier, so an ask-tier
       // situation (review_everything posture, freshness expiry, a true same-kind budget,
-      // goal/clinical) returns applied:false with NO side effects — the draft simply
-      // stays a reviewable draft and a later pass re-evaluates it. That is the healing.
-      const requested_tier: AutonomyTier = hasRecentDecisionVeto(shape.kind, 5) ? "announce" : "quiet_apply";
-      const result = applyProposalWithAutonomy(Number(proposal.id), { requested_tier });
-      // A recorded decision (pending / announced / quiet-applied) is the true adoption
-      // signal; the held-for-review paths return no decision.
-      if (result?.decision != null) adopted += 1;
-      else skipped += 1;
+      // goal/clinical) records an explicit review hold and leaves the draft unchanged;
+      // a later pass can re-evaluate it when posture or policy inputs change.
+      const requested_tier: AutonomyTier =
+        provenance !== "automatic" && shape.kind === "training_structure"
+          ? "announce"
+          : hasRecentDecisionVeto(shape.kind, 5)
+            ? "announce"
+            : "quiet_apply";
+      const burstSourceProposalIds =
+        provenance === "background_chat"
+          ? proposals
+              .filter((candidate) => {
+                if (candidate?.status !== "draft") return false;
+                const intent = chatOrphanIntent(candidate);
+                if (intent?.provenance !== "background_chat" || intent.key !== orphanIntent.key) return false;
+                const candidateTime = parseDbTime(candidate.created_at)?.getTime() ?? Number.NaN;
+                const after = burstAfter ? Date.parse(burstAfter) : Number.NaN;
+                const before = burstBefore ? Date.parse(burstBefore) : Number.NaN;
+                return Number.isFinite(candidateTime) && candidateTime >= after && candidateTime <= before;
+              })
+              .map((candidate) => Number(candidate.id))
+          : [];
+      const normalizedApplyPayload =
+        provenance === "background_chat"
+          ? legacyBackgroundNormalizedPayload(proposal, burstSourceProposalIds)
+          : undefined;
+      const result = applyProposalWithAutonomy(Number(proposal.id), {
+        requested_tier,
+        explicit_user_request: provenance !== "automatic",
+        orphan_sibling_cleanup: {
+          intent_key: orphanIntent.key,
+          eligible_before: eligibleBefore,
+          provenance,
+          burst_after: burstAfter,
+          burst_before: burstBefore,
+        },
+        normalized_apply_payload: normalizedApplyPayload,
+      });
+      // Pending / announced / quiet-applied are true adoption signals. A persisted
+      // review decision is still a hold, not an automatic adoption.
+      if (["pending", "announced", "applied"].includes(String(result?.decision?.status ?? ""))) {
+        handledIntents.add(handlingKey);
+        adopted += 1;
+      } else {
+        // A legacy retry may be invalid under today's structural quality contract.
+        // Its savepoint already rolled back atomically; keep walking newest→oldest
+        // inside the same burst until one candidate genuinely owns the repair.
+        skipped += 1;
+      }
     } catch {
       // Per-draft error isolation: a throwing adoption must never break the pass.
       skipped += 1;
@@ -720,25 +1044,26 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): { applied: nu
           continue;
         }
         const previousId = Number((announced.action as any)?.previous_meal_plan_id) || null;
-        const accepted = acceptMealPlan(mealPlanId, { recordDecision: false });
-        if (!accepted) {
-          parkForReview(announced, "the meal plan could not become current");
-          continue;
-        }
-        transitionBrainDecision(announced.id!, "applied");
-        const updated = patchBrainDecision(announced.id!, {
-          context: { ...(announced.context ?? {}), rollback_available: true },
-          reversible: true,
+        withSqliteSavepoint(`due_meal_plan_${announced.id}`, () => {
+          const accepted = acceptMealPlan(mealPlanId, { recordDecision: false });
+          if (!accepted) throw new Error("the meal plan could not become current");
+          const transitioned = transitionBrainDecision(announced.id!, "applied");
+          if (!transitioned) throw new Error("the meal-plan decision could not reach applied status");
+          if (
+            !saveBrainRollback(announced.id!, "meal_plan", {
+              version: 1,
+              previous_meal_plan_id: previousId,
+              applied_meal_plan_id: mealPlanId,
+            })
+          ) {
+            throw new Error("the meal-plan rollback snapshot was not stored");
+          }
+          const updated = patchBrainDecision(announced.id!, {
+            context: { ...(transitioned.context ?? {}), rollback_available: true },
+            reversible: true,
+          });
+          if (!updated) throw new Error("the meal-plan decision could not be finalized");
         });
-        saveBrainRollback(announced.id!, "meal_plan", {
-          version: 1,
-          previous_meal_plan_id: previousId,
-          applied_meal_plan_id: mealPlanId,
-        });
-        if (!updated) {
-          parkForReview(announced, "the meal-plan decision could not be finalized");
-          continue;
-        }
         applied.push(announced.id!);
         continue;
       }
@@ -766,7 +1091,8 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): { applied: nu
       // and then blocks the rest. Nutrition budgets per kind here too, so a landed meal
       // refresh cannot block a bounded target nudge at its boundary (and vice versa).
       const boundaryBudgetKind = shape.domain === "nutrition" ? shape.kind : undefined;
-      if (!surpriseBudgetAllows(materialChangesThisWeek(shape.domain, ["applied"], boundaryBudgetKind))) {
+      const coordinated = (announced.context as any)?.coordinated_update === true;
+      if (!surpriseBudgetAllows(materialChangesThisWeek(shape.domain, ["applied"], boundaryBudgetKind), coordinated)) {
         parkForReview(announced, "weekly surprise budget already used; review this change before applying");
         continue;
       }
@@ -788,35 +1114,60 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): { applied: nu
         failed.push(announced.id!);
         continue;
       }
+      const orphanCleanup = (announced.context as any)?.orphan_sibling_cleanup;
       const rollback = rollbackSnapshot(shape);
-      const result = applyProposal(proposalId, {
-        supersedeSiblings: false,
-        decisionId: announced.id!,
-      }) as any;
-      if (!result?.ok) {
-        parkForReview(announced, String(result?.error ?? "the change could not be applied"));
-        continue;
-      }
-      const updated = getBrainDecision(announced.id!);
-      if (!updated || updated.status !== "applied") {
-        parkForReview(announced, "the decision did not reach applied status");
-        continue;
-      }
-      patchBrainDecision(announced.id!, {
-        context: { ...(updated.context ?? {}), rollback_available: true },
-        reversible: true,
+      withSqliteSavepoint(`due_proposal_${announced.id}`, () => {
+        const result = applyProposal(proposalId, {
+          // Only the orphan-repair path carries a semantic intent + grace cutoff.
+          // Ordinary parallel, chat, and user-authored decisions pass no cleanup.
+          orphanSiblingCleanup:
+            orphanCleanup &&
+            typeof orphanCleanup.intent_key === "string" &&
+            typeof orphanCleanup.eligible_before === "string"
+              ? {
+                  intent_key: orphanCleanup.intent_key,
+                  eligible_before: orphanCleanup.eligible_before,
+                  provenance:
+                    orphanCleanup.provenance === "background_chat"
+                      ? "background_chat"
+                      : orphanCleanup.provenance === "chat"
+                        ? "chat"
+                        : "automatic",
+                  burst_after: typeof orphanCleanup.burst_after === "string" ? orphanCleanup.burst_after : undefined,
+                  burst_before: typeof orphanCleanup.burst_before === "string" ? orphanCleanup.burst_before : undefined,
+                }
+              : undefined,
+          normalizedApplyPayload:
+            (announced.context as any)?.normalized_apply_payload?.parsed &&
+            (announced.context as any)?.normalized_apply_payload?.migration
+              ? (announced.context as any).normalized_apply_payload
+              : undefined,
+          decisionId: announced.id!,
+          requireDecisionLedger: true,
+        }) as any;
+        if (!result?.ok) throw new Error(String(result?.error ?? "the change could not be applied"));
+        const updated = getBrainDecision(announced.id!);
+        if (!updated || updated.status !== "applied") throw new Error("the decision did not reach applied status");
+        if (
+          !saveBrainRollback(
+            announced.id!,
+            rollback.kind,
+            rollback.kind === "training_plan" ? trainingRollbackPayload(rollback.plan) : rollback.previous
+          )
+        ) {
+          throw new Error("the autonomous rollback snapshot was not stored");
+        }
+        const reversible = patchBrainDecision(announced.id!, {
+          context: { ...(updated.context ?? {}), rollback_available: true },
+          reversible: true,
+        });
+        if (!reversible) throw new Error("the decision could not be finalized as reversible");
+        if (shape.kind === "nutrition_target") {
+          // This handoff is part of the nutrition-target commit: a target cannot
+          // land while silently losing the required meal realignment request.
+          setAppStateStrict(MEAL_REFRESH_REQUEST_KEY, asOf);
+        }
       });
-      saveBrainRollback(
-        announced.id!,
-        rollback.kind,
-        rollback.kind === "training_plan" ? trainingRollbackPayload(rollback.plan) : rollback.previous
-      );
-      if (shape.kind === "nutrition_target") {
-        // Meals are a downstream expression of the fuel target. Ask the background
-        // team to rebuild them from the newly active number; the scheduler owns the
-        // agent call and retry cadence, keeping this boundary pass deterministic.
-        setAppState("meal_plan_refresh_requested", asOf);
-      }
       applied.push(announced.id!);
     } catch (error: any) {
       parkForReview(announced, String(error?.message ?? error ?? "unexpected apply error"));
@@ -833,59 +1184,85 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): { applied: nu
 export function revertDecision(id: number, reason = "user veto"): { ok: boolean; decision?: any; error?: string } {
   const decision = getBrainDecision(id);
   if (decision?.status === "announced") {
-    const mealPlanId = Number((decision.action as any)?.meal_plan_id);
-    if (mealPlanId > 0 && (getMealPlan(mealPlanId) as any)?.status === "draft")
-      setMealPlanStatus(mealPlanId, "superseded", { recordDecision: false });
-    const canceled = transitionBrainDecision(id, "canceled");
-    return { ok: true, decision: canceled };
+    try {
+      return withSqliteSavepoint(`cancel_announced_${id}`, () => {
+        const mealPlanId = Number((decision.action as any)?.meal_plan_id);
+        if (mealPlanId > 0 && (getMealPlan(mealPlanId) as any)?.status === "draft")
+          setMealPlanStatus(mealPlanId, "superseded", { recordDecision: false });
+        const canceled = transitionBrainDecision(id, "canceled");
+        if (!canceled) throw new Error("the announced decision could not be canceled");
+        return { ok: true, decision: canceled };
+      });
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
   }
   if (!decision || decision.status !== "applied" || !decision.reversible)
     return { ok: false, error: "decision is not reversible" };
   const rollback = getBrainRollback(id);
   try {
-    if (rollback?.kind === "training_plan" && Array.isArray(rollback.payload)) {
-      // Legacy snapshots remain reversible. New writes use a three-way snapshot below.
-      replacePlan(rollback.payload);
-    } else if (
-      rollback?.kind === "training_plan" &&
-      rollback.payload?.version === 2 &&
-      Array.isArray(rollback.payload.before) &&
-      Array.isArray(rollback.payload.after)
-    ) {
-      replacePlan(mergeTrainingRollback(rollback.payload.before, rollback.payload.after, trainingPlanSnapshot()));
-    } else if (rollback?.kind === "nutrition_target") {
-      const appliedTargetId = Number(decision.source_ref_type === "nutrition_target" ? decision.source_ref_key : 0);
-      if (appliedTargetId > 0) deleteNutritionTarget(appliedTargetId);
-      if (rollback.payload)
-        setNutritionTarget({ ...rollback.payload, source: "undo", note: `Restored after ${reason}` });
-    } else if (rollback?.kind === "meal_plan" && rollback.payload?.version === 1) {
-      const appliedId = Number(rollback.payload.applied_meal_plan_id);
-      const previousId = Number(rollback.payload.previous_meal_plan_id);
-      const current = currentMealPlan() as any;
-      // A later accepted meal plan wins. Undo only changes the meal plan when this
-      // decision still owns the current one.
-      if (appliedId > 0 && Number(current?.id) === appliedId) {
-        setMealPlanStatus(appliedId, "superseded", { recordDecision: false });
-        if (previousId > 0 && getMealPlan(previousId)) acceptMealPlan(previousId, { recordDecision: false });
+    return withSqliteSavepoint(`revert_decision_${id}`, () => {
+      if (rollback?.kind === "training_plan" && Array.isArray(rollback.payload)) {
+        // Legacy snapshots remain reversible. New writes use a three-way snapshot below.
+        replacePlan(rollback.payload);
+      } else if (
+        rollback?.kind === "training_plan" &&
+        rollback.payload?.version === 2 &&
+        Array.isArray(rollback.payload.before) &&
+        Array.isArray(rollback.payload.after)
+      ) {
+        replacePlan(
+          mergeTrainingRollback(
+            rollback.payload.before,
+            rollback.payload.after,
+            trainingPlanSnapshot(),
+            Array.isArray((decision.action as any)?.swaps) ? (decision.action as any).swaps : []
+          )
+        );
+      } else if (rollback?.kind === "nutrition_target") {
+        const appliedTargetId = Number(decision.source_ref_type === "nutrition_target" ? decision.source_ref_key : 0);
+        const activeBeforeUndo = getActiveNutritionTarget();
+        const stillOwnsActiveSlot = appliedTargetId > 0 && Number(activeBeforeUndo?.id) === appliedTargetId;
+        if (appliedTargetId > 0) deleteNutritionTarget(appliedTargetId);
+        if (stillOwnsActiveSlot && rollback.payload) {
+          const previousId = Number(rollback.payload?.id);
+          if (!(previousId > 0 && getNutritionTarget(previousId))) {
+            setNutritionTarget({ ...rollback.payload, source: "undo", note: `Restored after ${reason}` });
+          }
+        }
+      } else if (rollback?.kind === "meal_plan" && rollback.payload?.version === 1) {
+        const appliedId = Number(rollback.payload.applied_meal_plan_id);
+        const previousId = Number(rollback.payload.previous_meal_plan_id);
+        const current = currentMealPlan() as any;
+        // A later accepted meal plan wins. Undo only changes the meal plan when this
+        // decision still owns the current one.
+        if (appliedId > 0 && Number(current?.id) === appliedId) {
+          restoreMealPlanAfterUndo(appliedId, previousId > 0 ? previousId : null);
+        }
+      } else {
+        throw new Error("rollback snapshot unavailable");
       }
-    } else {
-      return { ok: false, error: "rollback snapshot unavailable" };
-    }
-    for (const expectation of listBrainExpectations({ decisionId: id })) {
-      try {
-        insertBrainEvaluation({
-          expectation_id: expectation.id!,
-          verdict: "canceled",
-          actual: null,
-          evidence_keys: [],
-          confounders: [reason],
-          explanation: "This was stopped before we could tell because the user asked to put it back.",
-          evaluator_version: `${expectation.evaluator_version}/user-veto`,
-        });
-      } catch {}
-    }
-    const reverted = transitionBrainDecision(id, "reverted");
-    return { ok: true, decision: reverted };
+      if (rollback.kind === "training_plan") {
+        const proposalId = Number((decision.action as any)?.plan_proposal_id ?? (decision.action as any)?.proposal_id);
+        if (proposalId > 0) revertRecoveryWeekIfOwned(proposalId, { strict: true });
+      }
+      for (const expectation of listBrainExpectations({ decisionId: id })) {
+        try {
+          insertBrainEvaluation({
+            expectation_id: expectation.id!,
+            verdict: "canceled",
+            actual: null,
+            evidence_keys: [],
+            confounders: [reason],
+            explanation: "This was stopped before we could tell because the user asked to put it back.",
+            evaluator_version: `${expectation.evaluator_version}/user-veto`,
+          });
+        } catch {}
+      }
+      const reverted = transitionBrainDecision(id, "reverted");
+      if (!reverted) throw new Error("the decision could not transition to reverted");
+      return { ok: true, decision: reverted };
+    });
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }

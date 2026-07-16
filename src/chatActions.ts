@@ -23,7 +23,7 @@ export const CHAT_ACTION_TYPES = [
   "revert_decision",
 ] as const;
 
-export type ChatActionType = typeof CHAT_ACTION_TYPES[number];
+export type ChatActionType = (typeof CHAT_ACTION_TYPES)[number];
 
 export type ChatActionApplyMode = "immediate" | "draft";
 
@@ -294,13 +294,13 @@ export const CHAT_ACTION_PROMPT_SPECS = {
   },
   plan_restructure: {
     type: "plan_restructure",
-    applyMode: "draft",
+    applyMode: "immediate",
     shape: `{ "type": "plan_restructure", "summary": "move to 5 days", "days": [
       { "day_number": 1, "name": "Lower A", "focus": "Quad", "items": [
         { "exercise": "Back Squat", "sets": 3, "rep_low": 8, "rep_high": 10, "target_weight": 190, "note": "" },
         { "exercise": "Plank", "sets": 3, "target_seconds": 45, "mode": "timed", "note": "" } ] } ] }`,
     guidance: [
-      `plan_restructure (changing the split or days-per-week) is saved as a DRAFT for the user to review and apply — never assume it's live. Use plan_restructure only when the split/frequency itself changes ("5 days a week"), proposing a full plan with sensible exercises that honor their constraints and carrying over weights where it makes sense.`,
+      `plan_restructure changes the split or days-per-week. Use it only when the athlete explicitly asks for a structural change (for example, "move me to 5 days"), proposing a complete plan that honors constraints and carries forward supported loads. The server routes it through autonomy immediately: coach-led postures announce it for the next natural boundary with Discuss/Undo; review-everything still holds it for review. Never describe it as a bare draft and never claim it is live before the server receipt.`,
     ],
   },
   log_health: {
@@ -362,7 +362,7 @@ export const CHAT_ACTION_PROMPT_SPECS = {
     applyMode: "immediate",
     shape: `{ "type": "revert_decision", "id": <reversible id from DATA.recent_decisions>, "reason": "<what did not work>" }`,
     guidance: [
-      `When the user says “put it back”, “undo that”, or “that didn't work for me” about a reversible change in DATA.recent_decisions, emit revert_decision with that exact id. Their word wins immediately. Never invent an id and never use this for a clinical observation.`,
+      `Only when the user directly says “put it back”, “undo/revert that”, “cancel/stop that scheduled change”, or explicitly asks to keep the current plan/split instead of its announced replacement, emit revert_decision with that exact reversible id from DATA.recent_decisions. A question, request for explanation, hypothetical about Undo, or “that didn't work for me” without a direct revert command is not authority to mutate. Never invent an id and never use this for a clinical observation.`,
     ],
   },
 } as const satisfies { [K in ChatActionType]: ChatActionPromptSpec<K> };
@@ -372,11 +372,15 @@ export function chatActionPromptSpecs(): ChatActionPromptSpec[] {
 }
 
 export function immediateChatActionTypes(): ChatActionType[] {
-  return chatActionPromptSpecs().filter((spec) => spec.applyMode === "immediate").map((spec) => spec.type);
+  return chatActionPromptSpecs()
+    .filter((spec) => spec.applyMode === "immediate")
+    .map((spec) => spec.type);
 }
 
 export function draftChatActionTypes(): ChatActionType[] {
-  return chatActionPromptSpecs().filter((spec) => spec.applyMode === "draft").map((spec) => spec.type);
+  return chatActionPromptSpecs()
+    .filter((spec) => spec.applyMode === "draft")
+    .map((spec) => spec.type);
 }
 
 function renderActionGuidance(types: readonly ChatActionType[]): string {
@@ -389,16 +393,21 @@ function renderActionGuidance(types: readonly ChatActionType[]): string {
 export function renderChatActionSchema(): string {
   return `[
     // zero or more — ONLY when the user clearly asked to log or change something.
-    ${chatActionPromptSpecs().map((spec) => spec.shape).join(",\n    ")}
+    ${chatActionPromptSpecs()
+      .map((spec) => spec.shape)
+      .join(",\n    ")}
 ]`;
 }
 
 export function renderChatActionPromptProse(): string {
+  const draftTypes = draftChatActionTypes();
+  const draftSection = draftTypes.length
+    ? `\n- ${draftTypes.join(" and ")} are saved as DRAFTS for the user to review and apply — never assume they're live.\n${renderActionGuidance(draftTypes)}`
+    : "";
   return `ACTIONS — only when the user clearly asks to log or change something:
-- ${immediateChatActionTypes().join(", ")} are APPLIED immediately.
+- ${immediateChatActionTypes().join(", ")} are ROUTED immediately. Safe captures apply now; coached plan changes follow the server's apply/schedule/review autonomy result.
 ${renderActionGuidance(immediateChatActionTypes())}
-- ${draftChatActionTypes().join(" and ")} are saved as DRAFTS for the user to review and apply — never assume they're live.
-${renderActionGuidance(draftChatActionTypes())}
+${draftSection}
 - If they're just asking a question, write ONLY the prose reply — no actions block at all.`;
 }
 
@@ -455,7 +464,8 @@ export function normalizeChatAction(value: unknown): ChatAction | null {
     case "set_strength_objective":
       return nonBlank(value.exercise) &&
         (value.target_kind === "return_to_personal_best" || value.target_kind === "explicit_est_1rm") &&
-        (value.target_kind !== "explicit_est_1rm" || (Number.isFinite(Number(value.target_est_1rm)) && Number(value.target_est_1rm) > 0))
+        (value.target_kind !== "explicit_est_1rm" ||
+          (Number.isFinite(Number(value.target_est_1rm)) && Number(value.target_est_1rm) > 0))
         ? { ...value, type: "set_strength_objective", exercise: value.exercise, target_kind: value.target_kind }
         : null;
     case "add_memory":
@@ -486,9 +496,7 @@ export function normalizeChatAction(value: unknown): ChatAction | null {
       return finiteId(value.id) ? { ...value, type: "resolve_context_event", id: value.id } : null;
     case "log_supplement": {
       const items = Array.isArray(value.items) ? value.items.filter(isRecord) : undefined;
-      return items?.length
-        ? { ...value, type: "log_supplement", items }
-        : { ...value, type: "log_supplement" };
+      return items?.length ? { ...value, type: "log_supplement", items } : { ...value, type: "log_supplement" };
     }
     case "log_measurement":
       // Keep it only when at least one measurable field (a *_in site or height) is present —

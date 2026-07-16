@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import { deterministicConferenceConflicts, runCaseConference } from "../dist/domain/brain/case-conference.js";
 import { getBrainDecision } from "../dist/repo/brain-decisions.js";
 import { applyDueAnnouncedDecisions } from "../dist/domain/brain/autonomy-service.js";
-import { repo } from "./_seed.js";
+import { normalizeStrictCaseConferenceDecision } from "../dist/brain/case-conference-contract.js";
+import { runAgentWithFallback } from "../dist/agents.js";
+import { db, repo } from "./_seed.js";
 
 const opinion = (domain, overrides = {}) => ({
   domain,
@@ -102,14 +104,15 @@ test("an unaccounted deterministic conflict demotes an executable revision to re
     {
       context: () => ({ injury: "shoulder pain", training: "progress load" }),
       specialistRun: async (_agent, _prompt, domain) => opinion(domain, { autonomy_ceiling: "quiet_apply" }),
-      conductorRun: async () => conductorDecision({
-        domain: "training",
-        revision: {
-          type: "plan_update",
-          summary: "Small bench step",
-          changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 120 }],
-        },
-      }),
+      conductorRun: async () =>
+        conductorDecision({
+          domain: "training",
+          revision: {
+            type: "plan_update",
+            summary: "Small bench step",
+            changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 120 }],
+          },
+        }),
     }
   );
 
@@ -140,15 +143,16 @@ test("a resolved bounded plan update executes through autonomy and keeps traject
     {
       context: () => ({ injury: "shoulder pain", training: "progress load" }),
       specialistRun: async (_agent, _prompt, domain) => opinion(domain, { autonomy_ceiling: "quiet_apply" }),
-      conductorRun: async () => conductorDecision({
-        domain: "training",
-        resolved_conflicts: [{ key: "injury_load", resolution: "Use only the already-cleared small load step." }],
-        revision: {
-          type: "plan_update",
-          summary: "Small bench step",
-          changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 120 }],
-        },
-      }),
+      conductorRun: async () =>
+        conductorDecision({
+          domain: "training",
+          resolved_conflicts: [{ key: "injury_load", resolution: "Use only the already-cleared small load step." }],
+          revision: {
+            type: "plan_update",
+            summary: "Small bench step",
+            changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 120 }],
+          },
+        }),
     }
   );
 
@@ -175,27 +179,28 @@ test("a plan restructure announcement always points at an executable proposal", 
     {
       context: () => ({ training: "stable" }),
       specialistRun: async (_agent, _prompt, domain) => opinion(domain, { autonomy_ceiling: "quiet_apply" }),
-      conductorRun: async () => conductorDecision({
-        domain: "training",
-        revision: {
-          type: "plan_restructure",
-          summary: "Two-day split",
-          days: [
-            {
-              day_number: 1,
-              name: "Upper",
-              focus: "Upper",
-              items: [{ exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 115 }],
-            },
-            {
-              day_number: 2,
-              name: "Lower",
-              focus: "Lower",
-              items: [{ exercise: "Back Squat", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185 }],
-            },
-          ],
-        },
-      }),
+      conductorRun: async () =>
+        conductorDecision({
+          domain: "training",
+          revision: {
+            type: "plan_restructure",
+            summary: "Two-day split",
+            days: [
+              {
+                day_number: 1,
+                name: "Upper",
+                focus: "Upper",
+                items: [{ exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 115 }],
+              },
+              {
+                day_number: 2,
+                name: "Lower",
+                focus: "Lower",
+                items: [{ exercise: "Back Squat", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185 }],
+              },
+            ],
+          },
+        }),
     }
   );
 
@@ -314,6 +319,332 @@ test("a malformed conductor envelope preserves specialist findings as degraded a
   assert.equal(result.proposal_id, undefined, "fallback advice never synthesizes a mutation");
 });
 
+test("default specialist and conductor dispatch enforce literal contracts and provider fallthrough predicates", async () => {
+  const specialistPrompts = [];
+  let conductorPrompt = "";
+  const controller = new AbortController();
+  const result = await runCaseConference(
+    "auto",
+    { question: "Reconcile fuel and recovery.", domains: ["nutrition", "recovery"] },
+    {
+      context: () => ({ deficit: true, recovery: "fatigue" }),
+      chosenWithReads: async (_agent, prompt, opts) => {
+        assert.equal(opts.signal, controller.signal);
+        specialistPrompts.push(prompt);
+        const domain = String(opts.op).replace("conference_", "");
+        assert.equal(opts.acceptParsed(opinion("training")), domain === "training");
+        assert.equal(opts.acceptParsed(opinion(domain)), true);
+        const incomplete = opinion(domain);
+        delete incomplete.risks;
+        assert.equal(opts.acceptParsed(incomplete), false);
+        const parsed = opinion(domain);
+        return {
+          agent: "terra",
+          result: { code: 0, raw: JSON.stringify(parsed), stderr: "", parsed, usage: {} },
+          tried: [],
+        };
+      },
+      chosen: async (_agent, prompt, opts) => {
+        assert.equal(opts.signal, controller.signal);
+        conductorPrompt = prompt;
+        const invalid = { kind: "case_conference" };
+        const parsed = conductorDecision({
+          domain: "nutrition",
+          resolved_conflicts: [{ key: "deficit_recovery", resolution: "Keep the adjustment bounded." }],
+        });
+        assert.equal(opts.acceptParsed(invalid), false);
+        assert.equal(opts.acceptParsed({ ...parsed, kind: "training_target" }), false);
+        assert.equal(
+          opts.acceptParsed({
+            ...parsed,
+            revision: {
+              type: "nutrition_target",
+              summary: "Malformed nested revision",
+              nutrition: { target_kcal: "not-a-number", protein_g: 175 },
+              notes: null,
+            },
+          }),
+          false
+        );
+        assert.equal(opts.acceptParsed(parsed), true);
+        return {
+          agent: "sol",
+          result: { code: 0, raw: JSON.stringify(parsed), stderr: "", parsed, usage: {} },
+          tried: [],
+        };
+      },
+      signal: controller.signal,
+    }
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.degraded, undefined);
+  assert.equal(specialistPrompts.length, 2);
+  assert.match(
+    specialistPrompts[0],
+    /"autonomy_ceiling":\{"type":"string","enum":\["observe","quiet_apply","announce","ask","clinician"\]/
+  );
+  assert.match(specialistPrompts[0], /"metric_key":\{"type":"string","enum":\["weight_trend_lb_wk"/);
+  assert.match(specialistPrompts[0], /domain MUST be exactly "nutrition"/);
+  assert.match(conductorPrompt, /kind MUST be "case_conference"/);
+  assert.match(conductorPrompt, /"risk_class":\{"type":"string","enum":\["low","moderate","high","clinical"\]/);
+});
+
+test("post-run specialist validation rejects incomplete opinions before conductor or persistence", async () => {
+  let conductorCalled = false;
+  const result = await runCaseConference(
+    "stub",
+    { question: "Reconcile the next training step.", domains: ["training", "recovery"] },
+    {
+      context: () => ({ training: "stable" }),
+      specialistRun: async (_agent, _prompt, domain) => {
+        const incomplete = opinion(domain);
+        delete incomplete.risks;
+        return incomplete;
+      },
+      conductorRun: async () => {
+        conductorCalled = true;
+        return conductorDecision();
+      },
+    }
+  );
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.opinions, []);
+  assert.deepEqual(result.unavailable, ["training", "recovery"]);
+  assert.equal(conductorCalled, false);
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM plan_proposals`).get().n, 0);
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM brain_decisions`).get().n, 0);
+});
+
+test("strict conductor contract rejects a wrong kind and malformed nested executable revision", () => {
+  const valid = conductorDecision();
+  assert.ok(normalizeStrictCaseConferenceDecision(valid));
+  assert.equal(normalizeStrictCaseConferenceDecision({ ...valid, kind: "training_target" }), null);
+  assert.equal(
+    normalizeStrictCaseConferenceDecision({
+      ...valid,
+      revision: {
+        type: "nutrition_target",
+        summary: "Malformed nested revision",
+        nutrition: { target_kcal: "2075", protein_g: 175, carbs_g: null, fat_g: null, delta_kcal: 100 },
+        notes: null,
+      },
+    }),
+    null
+  );
+});
+
+test("strict conductor contract rejects coercible or out-of-range nested plan fields", () => {
+  const validUpdate = conductorDecision({
+    domain: "training",
+    revision: {
+      type: "plan_update",
+      summary: "Bounded update",
+      changes: [{ day_number: 1, exercise: "Barbell Bench Press", sets: 3, target_weight: 120 }],
+    },
+  });
+  assert.ok(normalizeStrictCaseConferenceDecision(validUpdate));
+  for (const change of [
+    { day_number: "1", exercise: "Barbell Bench Press", sets: 3, target_weight: 120 },
+    { day_number: 1, exercise: "Barbell Bench Press", sets: "3", target_weight: 120 },
+    { day_number: 1, exercise: "Barbell Bench Press", sets: 3, target_weight: "120" },
+    { day_number: 1, exercise: "Barbell Bench Press", sets: 21, target_weight: 120 },
+    { day_number: 1, exercise: "Barbell Bench Press", sets: 3, target_weight: -1 },
+  ]) {
+    assert.equal(
+      normalizeStrictCaseConferenceDecision({
+        ...validUpdate,
+        revision: { ...validUpdate.revision, changes: [change] },
+      }),
+      null
+    );
+  }
+
+  const validRestructure = conductorDecision({
+    domain: "training",
+    revision: {
+      type: "plan_restructure",
+      summary: "Two-day split",
+      days: [
+        {
+          day_number: 1,
+          name: "Upper",
+          focus: "Upper",
+          items: [{ exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 115 }],
+        },
+      ],
+    },
+  });
+  assert.ok(normalizeStrictCaseConferenceDecision(validRestructure));
+  for (const days of [
+    [{ ...validRestructure.revision.days[0], day_number: "1" }],
+    [
+      {
+        ...validRestructure.revision.days[0],
+        items: [{ exercise: "Barbell Bench Press", sets: "3", target_weight: 115 }],
+      },
+    ],
+    [
+      {
+        ...validRestructure.revision.days[0],
+        items: [{ exercise: "Barbell Bench Press", sets: 3, target_weight: "115" }],
+      },
+    ],
+  ]) {
+    assert.equal(
+      normalizeStrictCaseConferenceDecision({
+        ...validRestructure,
+        revision: { ...validRestructure.revision, days },
+      }),
+      null
+    );
+  }
+});
+
+test("conductor repair rejects wrong kind and malformed revision before rotating to a valid provider", async () => {
+  const valid = conductorDecision({ domain: "nutrition" });
+  let parses = 0;
+  const result = await runCaseConference(
+    "auto",
+    { question: "Reconcile the next fuel step.", domains: ["nutrition", "recovery"] },
+    {
+      context: () => ({ recovery: "stable" }),
+      specialistRun: async (_agent, _prompt, domain) => opinion(domain),
+      chosen: async (_agent, prompt, opts) =>
+        runAgentWithFallback(["stub", "stub"], prompt, {
+          ...opts,
+          extract: () => {
+            parses += 1;
+            if (parses === 1) return { ...valid, kind: "training_target" };
+            if (parses === 2)
+              return {
+                ...valid,
+                revision: {
+                  type: "plan_update",
+                  summary: "Malformed nested revision",
+                  changes: [{ day_number: 1, exercise: "Barbell Bench Press", sets: "3", target_weight: 120 }],
+                },
+              };
+            return valid;
+          },
+        }),
+    }
+  );
+
+  assert.equal(parses, 3);
+  assert.equal(result.ok, true);
+  assert.equal(result.degraded, undefined);
+  assert.equal(result.decision.kind, "case_conference");
+});
+
+test("a malformed nested conductor revision degrades to advice and never becomes a proposal", async () => {
+  let parses = 0;
+  const result = await runCaseConference(
+    "auto",
+    { question: "Adjust fuel carefully.", domains: ["nutrition", "recovery"] },
+    {
+      context: () => ({ deficit: true, recovery: "fatigue" }),
+      specialistRun: async (_agent, _prompt, domain) => opinion(domain),
+      chosen: async (_agent, prompt, opts) =>
+        runAgentWithFallback(["stub"], prompt, {
+          ...opts,
+          extract: () => {
+            parses += 1;
+            return conductorDecision({
+              domain: "nutrition",
+              revision: {
+                type: "nutrition_target",
+                summary: "Malformed fuel target",
+                nutrition: { target_kcal: "2075", protein_g: 175, carbs_g: null, fat_g: null, delta_kcal: 100 },
+                notes: null,
+              },
+            });
+          },
+        }),
+    }
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(parses, 2, "the malformed nested revision receives one repair attempt before safe degradation");
+  assert.equal(result.degraded, true);
+  assert.equal(result.decision.revision, null);
+  assert.equal(result.proposal_id, undefined);
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM plan_proposals`).get().n, 0);
+});
+
+test("cancellation after specialist work propagates and persists no proposal or decision", async () => {
+  seedPlan();
+  repo.setSettings({ lead_mode: "lead" });
+  const controller = new AbortController();
+  await assert.rejects(
+    runCaseConference(
+      "auto",
+      { question: "Make a bounded bench adjustment.", domains: ["training", "recovery"] },
+      {
+        context: () => ({ training: "stable" }),
+        specialistRun: async (_agent, _prompt, domain) => opinion(domain, { autonomy_ceiling: "quiet_apply" }),
+        conductorRun: async () => {
+          controller.abort();
+          return conductorDecision({
+            domain: "training",
+            revision: {
+              type: "plan_update",
+              summary: "Small bench step",
+              changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 120 }],
+            },
+          });
+        },
+        signal: controller.signal,
+      }
+    ),
+    /canceled/
+  );
+
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 115);
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM plan_proposals`).get().n, 0);
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM brain_decisions`).get().n, 0);
+});
+
+test("all invalid conductor attempts preserve valid specialists as safe degraded advice", async () => {
+  const result = await runCaseConference(
+    "auto",
+    { question: "Reconcile fuel and recovery.", domains: ["nutrition", "recovery"] },
+    {
+      context: () => ({ deficit: true, recovery: "fatigue" }),
+      specialistRun: async (_agent, _prompt, domain) => opinion(domain),
+      chosen: async () => {
+        throw new Error("all conductor contracts invalid");
+      },
+    }
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.degraded, true);
+  assert.equal(result.decision.revision, null);
+  assert.equal(result.proposal_id, undefined);
+  assert.deepEqual(result.unresolved_conflicts, ["deficit_recovery"]);
+});
+
+test("daily conference budget counts durable started attempts even when none produced a decision", async () => {
+  for (let i = 0; i < 3; i++) {
+    db.prepare(
+      `INSERT INTO agent_jobs (status, kind, started_at, input_json)
+       VALUES ('error', 'case_conference', '2026-07-09 08:00:00', '{}')`
+    ).run();
+  }
+
+  const result = await runCaseConference(
+    "stub",
+    { question: "Try once more.", domains: ["training"] },
+    { now: () => new Date("2026-07-09T12:00:00Z") }
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "daily conference budget exhausted");
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM brain_decisions`).get().n, 0);
+});
+
 test("a conference can route a typed nutrition target through the proposal and autonomy path", async () => {
   repo.setProfile({ age: 44, height_cm: 170.2, weight_lb: 174.2, goal_weight_lb: 164, goal_mode: "lose" });
   repo.setSettings({ lead_mode: "lead" });
@@ -323,16 +654,17 @@ test("a conference can route a typed nutrition target through the proposal and a
     {
       context: () => ({ deficit: true, recovery: "fatigue" }),
       specialistRun: async (_agent, _prompt, domain) => opinion(domain, { autonomy_ceiling: "quiet_apply" }),
-      conductorRun: async () => conductorDecision({
-        domain: "nutrition",
-        resolved_conflicts: [{ key: "deficit_recovery", resolution: "Use a small carb-led increase." }],
-        revision: {
-          type: "nutrition_target",
-          summary: "Fuel the work",
-          nutrition: { target_kcal: 2_075, protein_g: 175, carbs_g: 205, fat_g: 62, delta_kcal: 250 },
-          notes: "Review performance and weight trend.",
-        },
-      }),
+      conductorRun: async () =>
+        conductorDecision({
+          domain: "nutrition",
+          resolved_conflicts: [{ key: "deficit_recovery", resolution: "Use a small carb-led increase." }],
+          revision: {
+            type: "nutrition_target",
+            summary: "Fuel the work",
+            nutrition: { target_kcal: 2_075, protein_g: 175, carbs_g: 205, fat_g: 62, delta_kcal: 250 },
+            notes: "Review performance and weight trend.",
+          },
+        }),
     }
   );
 

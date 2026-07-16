@@ -266,7 +266,7 @@ function planningDirectives(dimensions: Record<SignalDimension, SignalDimensionS
       ? "recover"
       : health === "constrained"
         ? "modify"
-        : recovery === "watch" || trainingLoad === "watch" || health === "watch"
+        : recovery === "watch" || trainingLoad === "watch" || health === "watch" || energy === "constrained"
           ? "hold_aggression"
           : "proceed";
   return {
@@ -309,6 +309,11 @@ function actionState(dimensions: Record<SignalDimension, SignalDimensionState>) 
   );
   if (healthConstraints.length)
     return { readiness: "caution" as const, posture: "modify" as const, evidence: healthConstraints };
+  const fuelPrescription = active.find(
+    (item) => item.dimension === "energy_fueling" && item.field === "underfueling_control" && item.direction === "constraint"
+  );
+  if (fuelPrescription)
+    return { readiness: "caution" as const, posture: "modify" as const, evidence: [fuelPrescription] };
   const arbitration = privateArbitration(dimensions);
   const brakes = active.filter((item) => item.direction === "constraint" || item.direction === "caution");
   if (arbitration.value <= -8) return { readiness: "protect" as const, posture: "rest" as const, evidence: brakes };
@@ -385,6 +390,7 @@ export function planningSignalState(input: {
   trainingSignals?: any;
   programState?: any;
   expenditure?: any;
+  underfueling?: any;
   context?: any;
   contextEvents?: any[];
   completedToday?: boolean;
@@ -665,6 +671,44 @@ export function planningSignalState(input: {
         }
       )
     );
+
+  const underfueling = input.underfueling;
+  if (["execution_gap", "prescription_strain", "settling", "persistent_strain"].includes(String(underfueling?.state))) {
+    const persistent = underfueling.state === "persistent_strain";
+    const protective = ["prescription_strain", "persistent_strain"].includes(String(underfueling.state));
+    observations.push(
+      observation(
+        "energy_fueling",
+        "underfueling_control",
+        date,
+        "cairn_underfueling",
+        protective ? "constraint" : "caution",
+        String(underfueling.action?.line || underfueling.rationale || "Fuel availability is being protected."),
+        {
+          coverage: { samples: Number(underfueling.agreeing_channels?.length) || 1, window_days: 14 },
+          max_age_days: 1,
+        }
+      )
+    );
+    if (
+      persistent ||
+      (underfueling.action?.training === "hold_aggression" && underfueling.state !== "prescription_strain")
+    ) {
+      observations.push(
+        observation(
+          "training_load_tolerance",
+          "fuel_protection",
+          date,
+          "cairn_underfueling",
+          persistent ? "constraint" : "caution",
+          persistent
+            ? "Independent fuel, performance, and recovery channels still show strain after the correction settled, so the next training dose should reduce."
+            : "Fuel and outcome signals agree enough to hold progression aggression while the next correction settles.",
+          { max_age_days: 1 }
+        )
+      );
+    }
+  }
 
   const context = input.context;
   const activeLoadContexts = Array.isArray(context?.active)

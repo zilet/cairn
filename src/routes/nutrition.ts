@@ -28,6 +28,7 @@ import { ACCEPTED_MIME } from "../uploadMime.js";
 import { UPLOADS_DIR } from "../uploadPaths.js";
 import { backgroundOp } from "./background-op.js";
 import { streamEnrichRow } from "./enrich-stream.js";
+import { currentUnderfuelingRead } from "../domain/brain/underfueling-service.js";
 
 export const nutritionRouter = Router();
 
@@ -61,7 +62,8 @@ nutritionRouter.get("/mealplans/:id", (req, res) => {
 // powers the calm "Energy Balance" view. ?window= is safely clamped by the domain.
 nutritionRouter.get("/nutrition/expenditure", (req, res) => {
   const window = req.query.window ? Number(req.query.window) : undefined;
-  res.json(estimateExpenditure(Number.isFinite(window as number) ? (window as number) : 21));
+  const expenditure = estimateExpenditure(Number.isFinite(window as number) ? (window as number) : 21);
+  res.json({ ...expenditure, underfueling: currentUnderfuelingRead(undefined, { expenditure }) });
 });
 
 // Goal-pace series behind the motivational weight-progress chart: the canonical

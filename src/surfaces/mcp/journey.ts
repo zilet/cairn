@@ -78,7 +78,7 @@ export function registerJourneyTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_journey_transition_suggestion",
-    "Read the deterministic next-phase suggestion, such as a maintenance phase after arrival or a diet break after a long/stalled cut. Pure read; no phase is written.",
+    "Read the deterministic possible next-phase suggestion, such as maintenance after arrival or a stabilization break after a long cut. Pure read: it does not schedule, create, or activate a phase. Use it as context for optional Coach discussion; goal-identity changes still require explicit approval.",
     { date: z.string().optional().describe("YYYY-MM-DD; defaults to today") },
     async ({ date }) => asText(journeyTransitionSuggestion(date))
   );

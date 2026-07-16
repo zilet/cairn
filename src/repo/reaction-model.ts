@@ -21,7 +21,6 @@
 
 import { db } from "../db.js";
 import { getMarkerHistory } from "./health.js";
-import { estimateExpenditure } from "./intelligence.js";
 import { normalizedExerciseKey, canonicalGroup, isMobility } from "./exercise-canon.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { addMemory } from "./memory.js";
@@ -177,40 +176,6 @@ const ENDURANCE_PATTERNS = ["run", "ride", "cycl", "bike", "swim", "row", "walk"
 
 // weeklyTonnage / weeklyKm (prior-week training load) are imported from program-state
 // (their canonical home — weeklyKm there uses the shared sport matcher, not a raw LIKE).
-
-// ---------------------------------------------------------------------------
-// 1) deficit_response — revealed kcal-per-lb sensitivity, off the expenditure
-//    engine's recency-weighted weight slope + intake avg + confidence ladder.
-// ---------------------------------------------------------------------------
-function deficitResponse(): ReactionPattern | null {
-  const exp = estimateExpenditure(21);
-  // Reuse the engine's confidence ladder — only speak at medium/high.
-  if (exp.confidence !== "medium" && exp.confidence !== "high") return null;
-  if (exp.tdee == null || exp.intake_avg_kcal == null || exp.trend_lb_wk == null) return null;
-  // Revealed deficit = TDEE − intake (a positive number means eating under
-  // maintenance). The measured weekly weight change is the response to it.
-  const deficit = Math.round(exp.tdee - exp.intake_avg_kcal);
-  const lbWk = exp.trend_lb_wk; // negative = losing
-  // Only speak when there's a real deficit AND a real direction to it — a
-  // maintenance week (tiny deficit, flat scale) has no sensitivity to reveal.
-  if (Math.abs(deficit) < 150 || Math.abs(lbWk) < 0.1) return null;
-  const dir = lbWk < 0 ? "down" : "up";
-  const absLb = round(Math.abs(lbWk), 2);
-  const statement =
-    deficit > 0
-      ? `A roughly ${Math.abs(deficit)} kcal/day deficit has been moving your weight ${dir} about ${absLb} lb/wk.`
-      : `A roughly ${Math.abs(deficit)} kcal/day surplus has been moving your weight ${dir} about ${absLb} lb/wk.`;
-  return {
-    id: "deficit_response",
-    kind: "nutrition_response",
-    statement,
-    confidence: exp.confidence === "high" ? "strong" : "observed",
-    evidence_n: exp.points,
-    domains: ["nutrition"],
-    last_observed: new Date().toISOString().slice(0, 10),
-    params: { deficit_kcal: deficit, lb_per_wk: lbWk, points: exp.points },
-  };
-}
 
 // ---------------------------------------------------------------------------
 // 2) load_crp — does hs-CRP / ESR move ALONGSIDE prior-week training load?
@@ -716,7 +681,6 @@ export function buildReactionModel(): { version: number; patterns: ReactionPatte
       return null;
     }
   };
-  candidates.push(safe(deficitResponse));
   candidates.push(safe(loadCrp));
   candidates.push(safe(eventRecovery));
   candidates.push(safe(foodRecovery));
@@ -745,6 +709,8 @@ interface EvaluatedDecisionRow {
   direction: string;
   expectation_confidence: CoachPersonalResponseConfidence;
   target: Record<string, unknown> | null;
+  baseline: Record<string, unknown> | null;
+  context: Record<string, unknown> | null;
   verdict: "aligned" | "not_aligned";
   actual: Record<string, unknown> | null;
   evidence_keys: string[];
@@ -785,7 +751,8 @@ function evaluatedDecisionRows(): EvaluatedDecisionRow[] {
         `SELECT d.id AS decision_id, d.kind AS decision_kind, d.domain,
               d.status AS decision_status, d.superseded_by,
               x.metric_key, x.subject_key, x.direction,
-              x.confidence AS expectation_confidence, x.target_json,
+              x.confidence AS expectation_confidence, x.target_json, x.baseline_json,
+              d.context_json,
               e.verdict, e.actual_json, e.evidence_json, e.confounders_json,
               e.explanation, e.evaluated_at
          FROM brain_evaluations e
@@ -819,6 +786,8 @@ function evaluatedDecisionRows(): EvaluatedDecisionRow[] {
                 ? "observed"
                 : "tentative",
           target: parseObject(row.target_json),
+          baseline: parseObject(row.baseline_json),
+          context: parseObject(row.context_json),
           verdict: row.verdict === "not_aligned" ? "not_aligned" : "aligned",
           actual: parseObject(row.actual_json),
           evidence_keys: parseList(row.evidence_json),
@@ -838,8 +807,26 @@ function evaluatedDecisionRows(): EvaluatedDecisionRow[] {
   }
 }
 
+const RECOMPOSITION_STAGES = new Set([
+  "early_cut",
+  "mid_cut",
+  "leaning_out",
+  "stabilizing",
+  "maintenance",
+  "lean_gain",
+  "uncertain",
+]);
+
+function outcomeStage(row: EvaluatedDecisionRow): string {
+  const stage = String(row.baseline?.recomposition_stage ?? row.context?.recomposition_stage ?? "unknown");
+  return RECOMPOSITION_STAGES.has(stage) ? stage : "unknown";
+}
+
 function comparableKey(row: EvaluatedDecisionRow): string {
-  return [row.decision_kind, row.metric_key, row.subject_key ?? "all", row.direction].join(":");
+  const phase = ["weight_trend_lb_wk", "intake_to_weight_response"].includes(row.metric_key)
+    ? `stage=${outcomeStage(row)}`
+    : "all-phases";
+  return [row.decision_kind, row.metric_key, row.subject_key ?? "all", row.direction, phase].join(":");
 }
 
 function dayGap(later: string, earlier: string): number {
@@ -946,6 +933,7 @@ function modifierFor(
   return {
     key: comparableKey(row),
     target,
+    stage: ["weight_trend_lb_wk", "intake_to_weight_response"].includes(row.metric_key) ? outcomeStage(row) : null,
     scale,
     bounds,
     confidence,
@@ -1012,6 +1000,9 @@ function learningForGroup(
       domain: latest.domain,
       metric_key: latest.metric_key,
       subject_key: latest.subject_key,
+      stage: ["weight_trend_lb_wk", "intake_to_weight_response"].includes(latest.metric_key)
+        ? outcomeStage(latest)
+        : null,
       statement,
       expected: expectedText(latest),
       observed:
@@ -1046,6 +1037,19 @@ export function whatWorksForYou(): CoachWhatWorksForYou | null {
     learnings: learned.map((item) => item.learning),
     modifiers: learned.flatMap((item) => (item.modifier ? [item.modifier] : [])).slice(0, 4),
   };
+}
+
+export function personalResponseModifierFor(
+  target: CoachPersonalModifierTarget,
+  opts: { stage?: string | null; response?: CoachWhatWorksForYou | null } = {}
+): CoachPersonalModifier | null {
+  const response = opts.response === undefined ? whatWorksForYou() : opts.response;
+  if (!response) return null;
+  return (
+    response.modifiers.find(
+      (modifier) => modifier.target === target && (opts.stage == null || modifier.stage === opts.stage)
+    ) ?? null
+  );
 }
 
 export function applyPersonalResponseModifier(input: {
@@ -1117,6 +1121,12 @@ export function reactionModelForCoach(): {
     patterns = buildReactionModel().patterns;
   }
 
+  // Older caches may contain the retired circular intake/TDEE identity. Never
+  // surface that row (or a narrative generated from it) after this upgrade.
+  const retiredCircularClaim = patterns.some((pattern) => pattern.id === "deficit_response");
+  patterns = patterns.filter((pattern) => pattern.id !== "deficit_response");
+  if (retiredCircularClaim) narrative = null;
+
   // Strongest first (by confidence WORD, then evidence_n), capped at 6 — calm,
   // bounded output. Public shape strips the internal params number blob.
   const ranked = [...patterns]
@@ -1149,11 +1159,11 @@ export function saveReactionModel(): void {
   const builtAt = new Date().toISOString();
   setAppState("reaction_model", JSON.stringify(model));
   setAppState("reaction_model_built_at", builtAt);
-  // A narrative speaks to patterns that were actually found; when the freshly built
-  // model has ZERO, any cached narrative is now stale (it describes a response the
-  // data no longer shows). Clear it so the surfaced read stays honest. A non-empty
-  // model LEAVES the prior narrative intact — coachOps refreshes it separately.
-  if (model.patterns.length === 0) setReactionNarrative(null);
+  // Every deterministic rebuild invalidates the prior prose, even when the new
+  // model is non-empty: its evidence set or ordering may have changed. The later
+  // agentic narrative pass may write fresh prose; until then the structured model
+  // stands alone rather than leaking a stale interpretation.
+  setReactionNarrative(null);
   // Promote the load-bearing patterns into coach memory so the agent has them in
   // its working context even outside the structured read. Only strong/observed —
   // a tentative pattern isn't durable enough to memorialize. addMemory dedupes.

@@ -104,7 +104,10 @@ test("review_everything: a progression stays a plain reviewable draft — nothin
   assert.equal(out.autonomy.tier, "ask");
   assert.equal(repo.getProposal(out.proposal.id).status, "draft", "the draft parks exactly as today");
   assert.equal(repo.getPlanDay(1).items[0].target_weight, 185, "the plan is untouched");
-  assert.equal(repo.listBrainDecisions({ kind: "training_target" }).length, 0, "review_everything records no decision");
+  const reviews = repo.listBrainDecisions({ kind: "training_target" });
+  assert.equal(reviews.length, 1, "review_everything persists why the athlete's decision is required");
+  assert.equal(reviews[0].status, "review");
+  assert.equal(reviews[0].context?.review_reason_code, "review_posture");
 });
 
 test("lead mode: a structural days-restructure announces first, never quiet-applies", () => {
@@ -146,6 +149,7 @@ test("lead mode: the recovery-week stamp fires when the autonomy layer applies t
   repo.savePlanDay(1, "Full", "Full", [
     { exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185 },
   ]);
+  repo.createBlock({ goal: "Build strength", focus: "strength", phase: "accumulation", week_index: 2, total_weeks: 6 });
   repo.setSettings({ lead_mode: "lead" });
   // The one-tap recovery week is a structural reshape tagged by the stable instruction prefix.
   const proposal = repo.createProposal(
@@ -179,6 +183,14 @@ test("lead mode: the recovery-week stamp fires when the autonomy layer applies t
   // The reshape landed via repo.applyProposal → stampRecoveryWeekIfApplies fired, so the
   // Plan banner reads the running recovery week (due → drafted → applied → done).
   assert.equal(repo.recoveryWeekStatus().state, "applied", "the recovery-week stamp fired on the autonomy apply");
+  assert.equal(repo.blockForCoach()?.phase, "deload", "the active recovery ledger overrides the coaching phase");
+
+  const undone = revertDecision(out.decision.id, "continue the prior build");
+  assert.equal(undone.ok, true);
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 185, "Undo restores the prior plan");
+  assert.equal(repo.getProposal(proposal.id).status, "reverted", "the recovery proposal is no longer authoritative");
+  assert.equal(repo.recoveryWeekStatus(), null, "Undo clears the owned recovery window");
+  assert.equal(repo.blockForCoach()?.phase, "accumulation", "the prior program phase resumes");
 });
 
 // A structural two-day proposal used by the retired-draft tests below.

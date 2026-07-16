@@ -6,6 +6,7 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { completeMealWeek, db, repo, resetTables, seedHealthDoc, marker } from "./_seed.js";
+import { automaticOrphanIntent } from "../dist/repo/proposal-intent.js";
 
 beforeEach(() => {
   resetTables("plan_items", "plan_days", "memory", "evidence_cache", "health_documents", "health_directives");
@@ -37,18 +38,25 @@ test("apply-path clamp holds load on an injury-constrained exercise", () => {
   assert.ok(item.target_weight <= 100, `constrained exercise held on increase, got ${item.target_weight}`);
 });
 
-// Applying one training proposal retires the OTHER open training drafts (they were
-// alternative reads of the same week) — marked 'superseded', distinct from a user
-// 'discarded'. An advisory nutrition_target draft is a different category and is left
-// alone (it's applied from Energy Balance, not the proposals list).
-test("applying a training proposal retires sibling training drafts, leaves a nutrition_target draft", () => {
+// Scheduler convergence retires only an older explicit automatic alternative with
+// the SAME semantic target. This is distinct from chat/manual/current drafts, which
+// remain independently reviewable. Nutrition is a separate intent and stays untouched.
+test("applying an adopted automatic intent retires its matching older alternative only", () => {
   resetTables("plan_proposals", "plan_items", "plan_days");
   repo.savePlanDay(1, "Day 1", "legs", [{ exercise: "ZSupSquat", sets: 3, target_weight: 190 }]);
-  const draftA = repo.createProposal("stub", "", "{}", { summary: "a", changes: [{ day_number: 1, exercise: "ZSupSquat", target_weight: 195, reason: "x" }] });
-  const draftB = repo.createProposal("stub", "", "{}", { summary: "b", changes: [{ day_number: 1, exercise: "ZSupSquat", target_weight: 200, reason: "y" }] });
+  const draftA = repo.createProposal("stub", "auto: weekly squat target", "{}", { summary: "a", changes: [{ day_number: 1, exercise: "ZSupSquat", target_weight: 195, reason: "x" }] });
+  const draftB = repo.createProposal("stub", "auto: weekly squat target", "{}", { summary: "b", changes: [{ day_number: 1, exercise: "ZSupSquat", target_weight: 200, reason: "y" }] });
   const nut = repo.createProposal("stub", "", "{}", { kind: "nutrition_target", nutrition: { target_kcal: 2400, protein_g: 180 } });
 
-  repo.applyProposal(draftB.id);
+  const intent = automaticOrphanIntent(draftB);
+  assert.ok(intent);
+  repo.applyProposal(draftB.id, {
+    orphanSiblingCleanup: {
+      intent_key: intent.key,
+      eligible_before: new Date(Date.now() + 1_000).toISOString(),
+      provenance: "automatic",
+    },
+  });
 
   const byId = Object.fromEntries(repo.listProposals(20).map((p) => [p.id, p.status]));
   assert.equal(byId[draftB.id], "applied", "the applied proposal is applied");

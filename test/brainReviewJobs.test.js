@@ -154,6 +154,7 @@ test("the case-conference job returns advisory output without persisting special
 
 test("scheduler revision stamps are committed only after a successful conference result", () => {
   const input = {
+    domains: ["training", "nutrition"],
     scheduler_success: {
       brain_revision_last_month: "2026-07",
       brain_revision_phase_sig: '{"name":"build"}',
@@ -164,9 +165,80 @@ test("scheduler revision stamps are committed only after a successful conference
   assert.equal(applyCaseConferenceSchedulerSuccess(input, { ok: false }), false);
   assert.equal(repo.getAppState("brain_revision_last_month"), null);
 
-  assert.equal(applyCaseConferenceSchedulerSuccess(input, { ok: true }), true);
+  const decision = {
+    kind: "case_conference",
+    domain: "cross_domain",
+    summary: "Hold the bounded course.",
+    rationale: "Both specialists agree on the next step.",
+    risk_class: "low",
+    reversible: false,
+    autonomy_tier: "ask",
+    parallel_actions: [],
+    resolved_conflicts: [],
+    deferred: [],
+    expectations: [],
+    review_window: "Review in two weeks.",
+    user_explanation: "I am holding the bounded course.",
+    revision: null,
+  };
+  const complete = {
+    ok: true,
+    opinions: [{ domain: "training" }, { domain: "nutrition" }],
+    unavailable: [],
+    unresolved_conflicts: [],
+    decision,
+  };
+  assert.equal(applyCaseConferenceSchedulerSuccess(input, { ...complete, degraded: true }), false);
+  assert.equal(applyCaseConferenceSchedulerSuccess(input, { ...complete, unavailable: ["nutrition"] }), false);
+  assert.equal(
+    applyCaseConferenceSchedulerSuccess(input, { ...complete, unresolved_conflicts: ["deficit_recovery"] }),
+    false
+  );
+  assert.equal(applyCaseConferenceSchedulerSuccess(input, complete), true);
   assert.equal(repo.getAppState("brain_revision_last_month"), "2026-07");
   assert.equal(repo.getAppState("brain_revision_phase_sig"), '{"name":"build"}');
   assert.equal(repo.getAppState("brain_revision_regression_sig"), "recovery_wellbeing");
   assert.equal(repo.getAppState("unrelated_key"), null);
+});
+
+test("an incomplete scheduled conference enters persisted bounded retry ownership", () => {
+  const slot = "a".repeat(64);
+  const incomplete = {
+    ok: true,
+    degraded: true,
+    opinions: [{ domain: "training" }],
+    unavailable: ["nutrition"],
+    unresolved_conflicts: [],
+    decision: null,
+  };
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    if (attempt > 1) {
+      db.prepare(
+        `UPDATE scheduler_operations SET next_retry_at=datetime('now','-1 second')
+         WHERE operation='brain_revision_conference' AND slot_stamp=?`
+      ).run(slot);
+    }
+    const claim = repo.claimSchedulerOperation("brain_revision_conference", slot, {
+      maxAttempts: 3,
+      leaseMs: 6 * 60 * 60_000,
+    });
+    assert.ok(claim);
+    const input = {
+      domains: ["training", "nutrition"],
+      scheduler_success: { brain_revision_last_month: "2026-07" },
+      scheduler_operation: {
+        operation: claim.operation,
+        slot_stamp: claim.slot_stamp,
+        claim_token: claim.claim_token,
+        attempts: claim.attempts,
+      },
+    };
+    assert.equal(applyCaseConferenceSchedulerSuccess(input, incomplete), false);
+    const state = repo.getSchedulerOperation("brain_revision_conference", slot);
+    assert.equal(state.attempts, attempt);
+    assert.equal(state.status, attempt === 3 ? "exhausted" : "retry_wait");
+    assert.match(state.last_error, /conference incomplete/);
+  }
+  assert.equal(repo.schedulerOperationDue("brain_revision_conference", slot), false);
+  assert.equal(repo.getAppState("brain_revision_last_month"), null);
 });

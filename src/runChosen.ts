@@ -243,12 +243,27 @@ export async function runChosenWithCoachReads(
   const invoke = async (chosenAgent: string | undefined, nextPrompt: string): Promise<ChosenRun> => {
     assertActive();
     const remaining = Math.max(1, deadline - now());
+    // A read request is an intermediate protocol turn, not the operation's final
+    // payload. Keep it admissible only when the whole request normalizes, while
+    // forwarding the caller's semantic contract for every final payload. This is
+    // what lets runAgentWithFallback repair/rotate on a parseable-but-wrong
+    // specialist result instead of incorrectly treating it as success.
+    const acceptParsed = (parsed: unknown): boolean => {
+      if (isCoachReadQueryTurn(parsed)) return normalizeCoachReadQueryTurn(parsed) !== null;
+      if (!opts.acceptParsed) return true;
+      try {
+        return opts.acceptParsed(parsed) === true;
+      } catch {
+        return false;
+      }
+    };
     return awaitBounded(
       run(chosenAgent, nextPrompt, {
         op,
         signal: externalSignal,
         timeoutMs: remaining,
         extract: opts.extract,
+        acceptParsed,
         mcpConfigArgs: [...COACH_READ_STRICT_MCP_ARGS],
       })
     );
@@ -329,7 +344,13 @@ function recordStreamedRun(
       tried_json: false,
       status: accepted ? "ok" : error ? "error" : "invalid_output",
       error_class: accepted ? null : error ? "process_error" : parsed ? "invalid_contract" : "invalid_json",
-      error_message: error ?? (accepted ? null : parsed ? "streamed reply missed the operation contract" : "streamed reply had no parseable JSON"),
+      error_message:
+        error ??
+        (accepted
+          ? null
+          : parsed
+            ? "streamed reply missed the operation contract"
+            : "streamed reply had no parseable JSON"),
       exit_code: res?.code ?? null,
       model: res?.usage?.model ?? null,
       input_tokens: res?.usage?.input_tokens ?? null,

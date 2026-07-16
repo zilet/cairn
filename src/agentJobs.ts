@@ -25,8 +25,10 @@ import { readToday } from "./domain/brain/day-read-use-case.js";
 import { runCaseConference } from "./domain/brain/case-conference.js";
 import { applyProposalWithAutonomy } from "./domain/brain/autonomy-service.js";
 import type { SpecialistDomain } from "./brain/specialist-contract.js";
+import { normalizeStrictCaseConferenceDecision } from "./brain/case-conference-contract.js";
 import { diagnosticErrorName, recordAsyncFailure } from "./diagnostics.js";
 import { addDaysISO, localDateISO } from "./repo/shared.js";
+import { runUnderfuelingControlLoop } from "./domain/brain/underfueling-service.js";
 
 // Durable, in-process agent-job engine — the GENERALIZATION of chatTurns.ts for
 // the other blocking agentic ops. An op is no longer a request held open for
@@ -87,6 +89,7 @@ export interface BrainReviewActionDeps {
   generateInsight?: typeof generateInsight;
   applyProposalWithAutonomy?: typeof applyProposalWithAutonomy;
   buildProgressionProposal?: typeof repo.buildProgressionProposal;
+  runUnderfuelingControlLoop?: typeof runUnderfuelingControlLoop;
 }
 
 function nutritionReviewDue(event: any): { due: boolean; reasons: string[] } {
@@ -122,10 +125,9 @@ async function runSignalNutritionReview(
   if (!checkin?.change || !Number.isFinite(proposalId) || proposalId <= 0) {
     return { ...checkin, action: "nutrition_signal_recheck", reasons: due.reasons };
   }
-  const autonomy = (deps.applyProposalWithAutonomy ?? applyProposalWithAutonomy)(proposalId, {
-    requested_tier: "quiet_apply",
-  });
-  return { ...checkin, action: "nutrition_signal_recheck", reasons: due.reasons, autonomy };
+  // nutritionCheckin owns propose -> autonomy exactly once. Re-applying here used
+  // to create a second ledger row for the same proposal.
+  return { ...checkin, action: "nutrition_signal_recheck", reasons: due.reasons };
 }
 
 /**
@@ -144,6 +146,19 @@ export async function executeBrainReviewAction(
   const event = input?.event;
   const insight = deps.generateInsight ?? generateInsight;
   const applyAutonomously = deps.applyProposalWithAutonomy ?? applyProposalWithAutonomy;
+
+  if (
+    ["fueling_feedback", "session_feedback", "weight_logged", "food_corrected"].includes(String(event?.kind)) &&
+    event?.clinical !== true
+  ) {
+    const controlled = (deps.runUnderfuelingControlLoop ?? runUnderfuelingControlLoop)(localDateISO());
+    const controlOwnsBoundary = ["execution_gap", "prescription_strain", "persistent_strain", "settling"].includes(
+      String(controlled.read?.state ?? "")
+    );
+    if (event?.kind === "fueling_feedback" || controlled.action !== "none" || controlOwnsBoundary) {
+      return { ...controlled, action: controlled.action, source: "underfueling_control" };
+    }
+  }
 
   if (event?.kind === "session_finished" && event?.domain === "training" && event?.clinical !== true) {
     const sessionId = Number(event.entity_id);
@@ -178,8 +193,9 @@ export async function executeBrainReviewAction(
     if (!checkin?.change || !Number.isFinite(proposalId) || proposalId <= 0) {
       return { ...checkin, action: "nutrition_recheck" };
     }
-    const autonomy = applyAutonomously(proposalId, { requested_tier: "quiet_apply" });
-    return { ...checkin, action: "nutrition_recheck", autonomy };
+    // nutritionCheckin already routed this proposal through autonomy. Preserve its
+    // returned decision instead of invoking the same transition a second time.
+    return { ...checkin, action: "nutrition_recheck" };
   }
 
   const signalNutrition = await runSignalNutritionReview(event, agent, hooks, deps);
@@ -193,10 +209,71 @@ const CONFERENCE_SUCCESS_STATE_KEYS = new Set([
   "brain_revision_phase_sig",
   "brain_revision_regression_sig",
 ]);
+const CONFERENCE_SCHEDULER_OPERATION = "brain_revision_conference";
+const CONFERENCE_RETRY_MAX_ATTEMPTS = 3;
+const CONFERENCE_RETRY_BACKOFF_MS = [12 * 60 * 60_000, 36 * 60 * 60_000];
+
+function conferenceSchedulerClaim(input: any): repo.SchedulerOperationClaim | null {
+  const raw = input?.scheduler_operation;
+  if (!raw || raw.operation !== CONFERENCE_SCHEDULER_OPERATION) return null;
+  const slot = String(raw.slot_stamp ?? "");
+  const token = String(raw.claim_token ?? "");
+  const attempts = Math.trunc(Number(raw.attempts));
+  if (!/^[a-f0-9]{64}$/.test(slot) || !token || !Number.isInteger(attempts) || attempts < 1) return null;
+  return {
+    operation: CONFERENCE_SCHEDULER_OPERATION,
+    slot_stamp: slot,
+    claim_token: token,
+    attempts,
+  } as repo.SchedulerOperationClaim;
+}
+
+function completeCaseConferenceResult(input: any, result: any): boolean {
+  if (
+    result?.ok !== true ||
+    result?.degraded === true ||
+    normalizeStrictCaseConferenceDecision(result?.decision) === null ||
+    !Array.isArray(result?.opinions) ||
+    !Array.isArray(result?.unavailable) ||
+    result.unavailable.length > 0 ||
+    !Array.isArray(result?.unresolved_conflicts) ||
+    result.unresolved_conflicts.length > 0
+  )
+    return false;
+  const requested = [
+    ...new Set<string>(
+      (Array.isArray(input.domains) ? input.domains : [])
+        .map(String)
+        .filter((domain: string) => ["training", "nutrition", "health", "recovery", "lifestyle"].includes(domain))
+    ),
+  ];
+  const delivered = new Set(
+    result.opinions
+      .map((opinion: any) => String(opinion?.domain ?? ""))
+      .filter((domain: string) => requested.includes(domain))
+  );
+  return requested.length > 0 && delivered.size === requested.length;
+}
+
+export function failCaseConferenceSchedulerOperation(input: any, error: unknown): boolean {
+  const claim = conferenceSchedulerClaim(input);
+  if (!claim) return false;
+  return !!repo.failSchedulerOperation(claim, error, {
+    maxAttempts: CONFERENCE_RETRY_MAX_ATTEMPTS,
+    backoffMs: CONFERENCE_RETRY_BACKOFF_MS,
+  });
+}
 
 /** Stamp scheduler success only after a conference returned a valid result. */
 export function applyCaseConferenceSchedulerSuccess(input: any, result: any): boolean {
-  if (result?.ok !== true || !input?.scheduler_success || typeof input.scheduler_success !== "object") return false;
+  if (!completeCaseConferenceResult(input, result)) {
+    const missing = Array.isArray(result?.unavailable) ? result.unavailable.join(",") : "unknown";
+    failCaseConferenceSchedulerOperation(input, new Error(`case conference incomplete; unavailable=${missing}`));
+    return false;
+  }
+  if (!input?.scheduler_success || typeof input.scheduler_success !== "object") return false;
+  const claim = conferenceSchedulerClaim(input);
+  if (claim && !repo.completeSchedulerOperation(claim, "succeeded")) return false;
   let stamped = false;
   for (const [key, raw] of Object.entries(input.scheduler_success)) {
     if (!CONFERENCE_SUCCESS_STATE_KEYS.has(key) || typeof raw !== "string") continue;
@@ -380,13 +457,17 @@ async function processAgentJob(id: number): Promise<void> {
                 ["training", "nutrition", "health", "recovery", "lifestyle"].includes(domain)
               )
           : [];
-        result = await runCaseConference(agent, {
-          question: String(input.question ?? "Review the current whole-person plan at this phase boundary."),
-          domains,
-          trajectory: input.trajectory,
-          optimizes: Array.isArray(input.optimizes) ? input.optimizes.map(String) : undefined,
-          parks: Array.isArray(input.parks) ? input.parks.map(String) : undefined,
-        });
+        result = await runCaseConference(
+          agent,
+          {
+            question: String(input.question ?? "Review the current whole-person plan at this phase boundary."),
+            domains,
+            trajectory: input.trajectory,
+            optimizes: Array.isArray(input.optimizes) ? input.optimizes.map(String) : undefined,
+            parks: Array.isArray(input.parks) ? input.parks.map(String) : undefined,
+          },
+          { jobId: id, signal: controller.signal }
+        );
         if (result?.proposal_id) ref = { ref_table: "plan_proposals", ref_id: Number(result.proposal_id) };
         break;
       }
@@ -481,6 +562,7 @@ async function processAgentJob(id: number): Promise<void> {
   } catch (e: any) {
     const cur = repo.getAgentJob(id) as any;
     if (cur?.status === "canceled" || controller.signal.aborted) return; // Stop, not a failure
+    if (job.kind === "case_conference") failCaseConferenceSchedulerOperation(input, e);
     const failed = repo.failAgentJob(id, e?.message ?? String(e));
     recordAsyncFailure("agent_jobs", job.kind, e);
     emit(id, { type: "error", job: failed, message: "Background job failed" });

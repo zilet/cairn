@@ -36,7 +36,7 @@ function expectation(overrides = {}) {
     metric_key: "weight_trend_lb_wk",
     subject_key: null,
     direction: "within_band",
-    baseline: { value: -1.2 },
+    baseline: { value: -1.2, recomposition_stage: "mid_cut" },
     target: { min: -1, max: -0.2 },
     window_start: "2026-01-01",
     window_end: "2026-01-21",
@@ -106,11 +106,19 @@ test("repeated clean misses earn a bounded modifier and appear in coach context"
   assert.equal(learned.learnings[0].missed_n, 2);
   assert.match(learned.learnings[0].statement, /missed the expectation/i);
   assert.equal(learned.modifiers[0].target, "nutrition_step");
+  assert.equal(learned.modifiers[0].stage, "mid_cut");
   assert.equal(learned.modifiers[0].scale, 1.15);
   assert.deepEqual(learned.modifiers[0].never_overrides, ["injury", "allergy", "clinical", "lean_safe"]);
 
   const context = repo.getCoachContext().what_works_for_you;
   assert.equal(context.modifiers[0].scale, 1.15);
+});
+
+test("nutrition outcomes from different recomposition stages do not combine into one learned trial group", () => {
+  recordOutcome("1", "not_aligned", { expectation: { baseline: { value: -1.2, recomposition_stage: "mid_cut" } } });
+  recordOutcome("2", "not_aligned", { expectation: { baseline: { value: -0.6, recomposition_stage: "leaning_out" } } });
+
+  assert.equal(whatWorksForYou(), null);
 });
 
 test("a later contradiction lowers confidence before a repeated new response supersedes the old one", () => {

@@ -7,6 +7,7 @@ import { recordDecision } from "../dist/domain/brain/decision-service.js";
 import { transitionBrainDecision } from "../dist/repo/brain-decisions.js";
 import { listBrainEvaluations } from "../dist/repo/brain-evaluations.js";
 import { db } from "../dist/db.js";
+import { repo } from "./_seed.js";
 
 function decision(overrides = {}) {
   return {
@@ -249,4 +250,80 @@ test("plan adherence with an expected count but zero logged sessions stays incon
   assert.equal(result.evaluations[0].verdict, "inconclusive");
   assert.ok(result.evaluations[0].confounders.some((item) => /no sessions were logged/i.test(item)));
   assert.equal(listBrainEvaluations(recorded.expectations[0].id).length, 1);
+});
+
+test("snack-only partial intake plus a terminal scale shock cannot yield a decisive nutrition outcome", () => {
+  const recorded = recordDecision(decision(), [
+    weightExpectation({
+      metric_key: "intake_to_weight_response",
+      baseline: { target_kcal: 2200, predicted_trend_lb_wk: -0.5, recomposition_stage: "mid_cut" },
+      minimum_data: { weigh_ins: 6, intake_days: 3 },
+      evaluator: "intake_response",
+    }),
+  ]);
+  addWeights([
+    ["2026-01-01", 200],
+    ["2026-01-03", 199.9],
+    ["2026-01-05", 199.8],
+    ["2026-01-07", 199.7],
+    ["2026-01-09", 199.6],
+    ["2026-01-11", 199.5],
+    ["2026-01-14", 190],
+  ]);
+  for (const date of ["2026-01-02", "2026-01-04", "2026-01-06", "2026-01-08"]) {
+    db.prepare(
+      `INSERT INTO food_notes (date, meal, raw_output, parsed_json) VALUES (?, 'snack', '', ?)`
+    ).run(date, JSON.stringify({ kcal: 250 }));
+  }
+
+  const result = evaluateMatureExpectations("2026-01-15");
+  assert.equal(result.evaluations[0].verdict, "inconclusive");
+  assert.equal(result.evaluations[0].actual, null, "no credible completed intake exposure exists");
+  assert.ok(result.evaluations[0].confounders.some((item) => /terminal scale change/i.test(item)));
+  assert.ok(result.evaluations[0].confounders.some((item) => /credible completed intake/i.test(item)));
+  assert.equal(listBrainEvaluations(recorded.expectations[0].id).length, 1);
+});
+
+test("stored applied nutrition expectations use supported clean counts and mature with credible exposure", () => {
+  repo.setProfile({
+    age: 40,
+    sex: "male",
+    height_cm: 180,
+    start_weight_lb: 200,
+    weight_lb: 190,
+    goal_weight_lb: 175,
+    goal_date: "2026-06-01",
+  });
+  repo.setNutritionTarget({ target_kcal: 2200, protein_g: 170, effective_date: "2026-01-01", source: "test" });
+  const row = db.prepare(
+    `SELECT expectation.* FROM brain_expectations expectation
+      JOIN brain_decisions decision ON decision.id = expectation.decision_id
+     WHERE decision.kind = 'nutrition_target' ORDER BY expectation.id DESC LIMIT 1`
+  ).get();
+  assert.equal(row.metric_key, "intake_to_weight_response");
+  assert.deepEqual(JSON.parse(row.minimum_data_json), { weigh_ins: 6, intake_days: 10 });
+  assert.equal(JSON.parse(row.baseline_json).recomposition_stage, "mid_cut");
+
+  for (let index = 0; index < 10; index++) {
+    const date = `2026-01-${String(index + 1).padStart(2, "0")}`;
+    for (const [meal, kcal] of [["breakfast", 900], ["dinner", 1300]]) {
+      db.prepare(
+        `INSERT INTO food_notes (date, meal, raw_output, parsed_json) VALUES (?, ?, '', ?)`
+      ).run(date, meal, JSON.stringify({ kcal }));
+    }
+  }
+  addWeights([
+    ["2026-01-01", 190],
+    ["2026-01-06", 189.8],
+    ["2026-01-11", 189.6],
+    ["2026-01-16", 189.4],
+    ["2026-01-21", 189.2],
+    ["2026-01-28", 189.0],
+  ]);
+
+  const result = evaluateMatureExpectations("2026-01-29");
+  assert.ok(["aligned", "not_aligned"].includes(result.evaluations[0].verdict));
+  assert.equal(result.evaluations[0].actual.credible_intake_days, 10);
+  assert.equal(result.evaluations[0].actual.weigh_ins, 6);
+  assert.equal(result.evaluations[0].confounders.some((item) => /not supported/i.test(item)), false);
 });

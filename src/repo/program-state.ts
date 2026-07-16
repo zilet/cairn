@@ -15,15 +15,19 @@
 import { db } from "../db.js";
 import { localDateISO } from "./shared.js";
 import { getRecoverySummary } from "./coach.js";
-import {
-  currentTrainingDataVersion,
-  registerTrainingCacheClear,
-  trainingBackstopSignature,
-} from "./training-cache.js";
+import { currentTrainingDataVersion, registerTrainingCacheClear, trainingBackstopSignature } from "./training-cache.js";
 import { canonicalGroup, classifyMuscleGroup, MUSCLE_LANDMARKS, type MuscleGroup } from "./exercise-canon.js";
 import { effectiveVolumeByGroup, type VolumeSet } from "./exercise-variations.js";
-import { effectiveGoalMode, getPrimaryDiscipline, getProfile } from "./profile.js";
+import {
+  activeRecoveryWeek,
+  type ActiveRecoveryWeek,
+  effectiveGoalMode,
+  getPrimaryDiscipline,
+  getProfile,
+} from "./profile.js";
+import { completedRecoveryWeekLedger, type CompletedRecoveryWeekLedger } from "./recovery-week-ledger.js";
 import { getProgress } from "./sessions.js";
+import { recoverySessionDose } from "./training-read.js";
 import {
   activitySportWhere,
   canonicalEnduranceSport,
@@ -53,20 +57,20 @@ export interface LiftState {
   exercise: string;
   muscle_group: string | null;
   mode: "reps" | "timed";
-  sessions: number;            // logged sessions that included this lift (loaded)
-  est_1rm: number | null;      // latest best est-1RM (reps lifts); null for timed
+  sessions: number; // logged sessions that included this lift (loaded)
+  est_1rm: number | null; // latest best est-1RM (reps lifts); null for timed
   best_seconds: number | null; // latest best hold (timed lifts); null for reps
   trend_per_wk: number | null; // est-1RM lb/wk (or seconds/wk for timed), least-squares
   status: LiftStatus;
-  stall_signals: string[];     // plain-language tells ("same load 4 sessions", "grinding")
+  stall_signals: string[]; // plain-language tells ("same load 4 sessions", "grinding")
   weeks_static: number | null; // weeks the top load/hold hasn't moved
   suggested_action: LiftAction;
-  why: string;                 // one plain sentence
+  why: string; // one plain sentence
 }
 
 export interface MuscleVolumeState {
   muscle_group: string;
-  weekly_sets: number;         // avg working sets/wk over the window
+  weekly_sets: number; // avg working sets/wk over the window
   band: "low" | "productive" | "high";
   trend: "rising" | "falling" | "stable" | null;
 }
@@ -84,7 +88,7 @@ export interface EnduranceState {
   last_week_km: number | null;
   acute_chronic_ratio: number | null; // weekly-km ACWR
   longest_km_4wk: number | null;
-  has_quality: boolean;        // any tempo/interval/Z4+ effort in the window
+  has_quality: boolean; // any tempo/interval/Z4+ effort in the window
   pace_trend: "improving" | "declining" | "stable" | null; // easy-pace efficiency
   status: "building" | "maintaining" | "detraining" | "spiking" | null;
   suggested_action: "build" | "hold" | "add-quality" | "ease" | null;
@@ -154,10 +158,11 @@ export interface ProgramState {
   lifts: LiftState[];
   volume: MuscleVolumeState[];
   mesocycle: MesocycleState;
+  recovery_week: ActiveRecoveryWeek | null;
   endurance: EnduranceState | null;
   hybrid: HybridState | null;
-  headline: string;            // one plain sentence, no score
-  adaptations_due: string[];   // the plain-language "what to evolve next" list
+  headline: string; // one plain sentence, no score
+  adaptations_due: string[]; // the plain-language "what to evolve next" list
 }
 
 // ---- small deterministic helpers ----
@@ -166,8 +171,12 @@ function lsqSlopePerDay(pts: { x: number; y: number }[]): number | null {
   const n = pts.length;
   const mx = pts.reduce((s, p) => s + p.x, 0) / n;
   const my = pts.reduce((s, p) => s + p.y, 0) / n;
-  let num = 0, den = 0;
-  for (const p of pts) { num += (p.x - mx) * (p.y - my); den += (p.x - mx) ** 2; }
+  let num = 0,
+    den = 0;
+  for (const p of pts) {
+    num += (p.x - mx) * (p.y - my);
+    den += (p.x - mx) ** 2;
+  }
   if (den === 0) return null;
   return num / den;
 }
@@ -183,6 +192,40 @@ function isoDaysAgo(d: string, n: number): string {
 // ---- per-lift progression ----
 const REPS_RECENT = 8; // analyze the most recent N sessions (state, not ancient history)
 
+// A deliberately reduced, compliant recovery exposure is not a failed strength
+// test. Keep the raw log intact, but exclude that session from comparable-lift
+// trajectory math. Above-plan / overdosed / unknown sessions remain ordinary
+// evidence. The recovery-dose ledger is the one policy owner for this decision.
+let trajectorySessionEligibility = new Map<number, boolean>();
+registerTrainingCacheClear(() => {
+  trajectorySessionEligibility = new Map();
+});
+
+function sessionCountsTowardLiftTrajectory(sessionId: number): boolean {
+  const id = Number(sessionId);
+  const cached = trajectorySessionEligibility.get(id);
+  if (cached != null) return cached;
+  const eligible = recoverySessionDose(id).classification !== "compliant";
+  trajectorySessionEligibility.set(id, eligible);
+  return eligible;
+}
+
+function comparableLiftDates(name: string): Set<string> {
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT s.id AS session_id, s.date AS date
+       FROM logged_sets ls
+       JOIN sessions s ON s.id = ls.session_id
+       JOIN exercises e ON e.id = ls.exercise_id
+      WHERE e.name = ? COLLATE NOCASE
+      ORDER BY s.date, s.id`
+    )
+    .all(name) as any[];
+  return new Set(
+    rows.filter((row) => sessionCountsTowardLiftTrajectory(Number(row.session_id))).map((row) => String(row.date))
+  );
+}
+
 function gradeRepsLift(name: string, mg: string | null): LiftState | null {
   const prog = getProgress(name) as any;
   // getProgress can now emit points with best1rm === null (a bodyweight/weight-0
@@ -190,13 +233,24 @@ function gradeRepsLift(name: string, mg: string | null): LiftState | null {
   // 1RM trajectory, so drop them before grading — Math.round(null)/null-as-y would
   // otherwise read as 0 / NaN. A lift left with too few real points falls to the
   // "new" baseline path below, exactly like a lift that's only just been logged.
-  const points: any[] = (Array.isArray(prog.points) ? prog.points : []).filter((p: any) => p.best1rm != null);
+  const comparableDates = comparableLiftDates(name);
+  const points: any[] = (Array.isArray(prog.points) ? prog.points : []).filter(
+    (p: any) => p.best1rm != null && comparableDates.has(String(p.date))
+  );
   if (points.length < 2) {
     return points.length
       ? {
-          exercise: name, muscle_group: mg, mode: "reps", sessions: points.length,
-          est_1rm: Math.round(points[points.length - 1].best1rm), best_seconds: null, trend_per_wk: null,
-          status: "new", stall_signals: [], weeks_static: null, suggested_action: "hold",
+          exercise: name,
+          muscle_group: mg,
+          mode: "reps",
+          sessions: points.length,
+          est_1rm: Math.round(points[points.length - 1].best1rm),
+          best_seconds: null,
+          trend_per_wk: null,
+          status: "new",
+          stall_signals: [],
+          weeks_static: null,
+          suggested_action: "hold",
           why: "Just getting started — a couple more sessions and the trend reads clearly.",
         }
       : null;
@@ -215,18 +269,26 @@ function gradeRepsLift(name: string, mg: string | null): LiftState | null {
     if (recent[i].topWeight >= latest.topWeight - 0.01) staticCount++;
     else break;
   }
-  const weeksStatic = staticCount >= 2 ? Math.max(1, Math.round(dayIndex(latest.date, recent[recent.length - staticCount].date) / 7)) : null;
+  const weeksStatic =
+    staticCount >= 2
+      ? Math.max(1, Math.round(dayIndex(latest.date, recent[recent.length - staticCount].date) / 7))
+      : null;
 
   // Grinding: recent top sets taken at RIR 0-1 while the load isn't moving.
   const ex = db.prepare(`SELECT id FROM exercises WHERE name = ? COLLATE NOCASE`).get(name) as any;
   let grinding = false;
   if (ex) {
-    const rirRows = db.prepare(
-      `SELECT ls.rir AS rir FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
-       WHERE ls.exercise_id = ? AND ls.rir IS NOT NULL ORDER BY s.date DESC, ls.id DESC LIMIT 6`
-    ).all(ex.id) as any[];
-    const lowRir = rirRows.filter((r) => Number(r.rir) <= 1).length;
-    grinding = rirRows.length >= 3 && lowRir >= 2;
+    const rirRows = db
+      .prepare(
+        `SELECT ls.rir AS rir, s.id AS session_id FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+       WHERE ls.exercise_id = ? AND ls.rir IS NOT NULL ORDER BY s.date DESC, ls.id DESC LIMIT 24`
+      )
+      .all(ex.id) as any[];
+    const comparableRirRows = rirRows
+      .filter((row) => sessionCountsTowardLiftTrajectory(Number(row.session_id)))
+      .slice(0, 6);
+    const lowRir = comparableRirRows.filter((r) => Number(r.rir) <= 1).length;
+    grinding = comparableRirRows.length >= 3 && lowRir >= 2;
   }
 
   // Status — judged on the recent trend, with enough history to be fair. A lift
@@ -255,7 +317,7 @@ function gradeRepsLift(name: string, mg: string | null): LiftState | null {
       why = "Drifting down — back the load off a touch and let it rebuild.";
       break;
     case "plateaued":
-      suggested_action = grinding ? "deload" : (weeksStatic && weeksStatic >= 3 ? "vary" : "technique");
+      suggested_action = grinding ? "deload" : weeksStatic && weeksStatic >= 3 ? "vary" : "technique";
       why = grinding
         ? "Stuck and grinding — a light deload, then a fresh run usually breaks it."
         : weeksStatic && weeksStatic >= 3
@@ -272,23 +334,41 @@ function gradeRepsLift(name: string, mg: string | null): LiftState | null {
   }
 
   return {
-    exercise: name, muscle_group: mg, mode: "reps", sessions: points.length,
-    est_1rm: est1rm, best_seconds: null, trend_per_wk: trendWk,
-    status, stall_signals, weeks_static: weeksStatic, suggested_action, why,
+    exercise: name,
+    muscle_group: mg,
+    mode: "reps",
+    sessions: points.length,
+    est_1rm: est1rm,
+    best_seconds: null,
+    trend_per_wk: trendWk,
+    status,
+    stall_signals,
+    weeks_static: weeksStatic,
+    suggested_action,
+    why,
   };
 }
 
 function gradeTimedLift(name: string, mg: string | null): LiftState | null {
   const ex = db.prepare(`SELECT id FROM exercises WHERE name = ? COLLATE NOCASE`).get(name) as any;
   if (!ex) return null;
-  const rows = db.prepare(
-    `SELECT s.date AS date, MAX(ls.duration_sec) AS best FROM logged_sets ls
+  const rows = db
+    .prepare(
+      `SELECT s.id AS session_id, s.date AS date, MAX(ls.duration_sec) AS best FROM logged_sets ls
      JOIN sessions s ON s.id = ls.session_id
      WHERE ls.exercise_id = ? AND ls.duration_sec IS NOT NULL
-     GROUP BY s.date ORDER BY s.date`
-  ).all(ex.id) as any[];
-  if (!rows.length) return null;
-  const recent = rows.slice(-REPS_RECENT);
+     GROUP BY s.id, s.date ORDER BY s.date, s.id`
+    )
+    .all(ex.id) as any[];
+  const comparableRows = rows.filter((row) => sessionCountsTowardLiftTrajectory(Number(row.session_id)));
+  const byDate = new Map<string, number>();
+  for (const row of comparableRows) {
+    const date = String(row.date);
+    byDate.set(date, Math.max(byDate.get(date) ?? 0, Number(row.best)));
+  }
+  const points = [...byDate.entries()].map(([date, best]) => ({ date, best }));
+  if (!points.length) return null;
+  const recent = points.slice(-REPS_RECENT);
   const base = recent[0].date;
   const slopeDay = lsqSlopePerDay(recent.map((p) => ({ x: dayIndex(p.date, base), y: Number(p.best) })));
   const trendWk = slopeDay == null ? null : Math.round(slopeDay * 7);
@@ -305,24 +385,43 @@ function gradeTimedLift(name: string, mg: string | null): LiftState | null {
   else if (trendWk != null && trendWk <= -2) status = "regressing";
   else status = "maintaining";
   const suggested_action: LiftAction =
-    status === "progressing" ? "overload" : status === "regressing" ? "deload" : status === "maintaining" ? "overload" : "hold";
+    status === "progressing"
+      ? "overload"
+      : status === "regressing"
+        ? "deload"
+        : status === "maintaining"
+          ? "overload"
+          : "hold";
   const why =
-    status === "progressing" ? `Holds are getting longer (~${trendWk}s/wk) — keep extending.`
-    : status === "maintaining" ? "Holding steady — add a few seconds when it feels solid (or a harder variation)."
-    : status === "regressing" ? "Holds shortening — reset and rebuild."
-    : "Building a baseline on this hold.";
+    status === "progressing"
+      ? `Holds are getting longer (~${trendWk}s/wk) — keep extending.`
+      : status === "maintaining"
+        ? "Holding steady — add a few seconds when it feels solid (or a harder variation)."
+        : status === "regressing"
+          ? "Holds shortening — reset and rebuild."
+          : "Building a baseline on this hold.";
   return {
-    exercise: name, muscle_group: mg, mode: "timed", sessions: rows.length,
-    est_1rm: null, best_seconds: Number(latest.best), trend_per_wk: trendWk,
-    status, stall_signals: [], weeks_static: null, suggested_action, why,
+    exercise: name,
+    muscle_group: mg,
+    mode: "timed",
+    sessions: points.length,
+    est_1rm: null,
+    best_seconds: Number(latest.best),
+    trend_per_wk: trendWk,
+    status,
+    stall_signals: [],
+    weeks_static: null,
+    suggested_action,
+    why,
   };
 }
 
 function liftStates(date: string): LiftState[] {
   // Lifts with real logged history (a reps lift needs loaded sets; a timed lift
   // needs duration). One row per exercise, newest activity first.
-  const exs = db.prepare(
-    `SELECT e.name AS name, e.muscle_group AS mg, e.mode AS mode,
+  const exs = db
+    .prepare(
+      `SELECT e.name AS name, e.muscle_group AS mg, e.mode AS mode,
             MAX(s.date) AS last_date, COUNT(DISTINCT s.date) AS days
        FROM logged_sets ls JOIN exercises e ON e.id = ls.exercise_id
        JOIN sessions s ON s.id = ls.session_id
@@ -332,7 +431,8 @@ function liftStates(date: string): LiftState[] {
       GROUP BY e.id
       HAVING days >= 1
       ORDER BY last_date DESC`
-  ).all(date) as any[];
+    )
+    .all(date) as any[];
 
   const out: LiftState[] = [];
   for (const e of exs) {
@@ -352,13 +452,15 @@ function liftStates(date: string): LiftState[] {
 function muscleVolume(date: string, weeks = 3): MuscleVolumeState[] {
   const start = isoDaysAgo(date, weeks * 7 - 1);
   const half = isoDaysAgo(date, Math.floor((weeks * 7) / 2));
-  const rows = db.prepare(
-    `SELECT e.muscle_group AS muscle_group, e.name AS exercise, s.date AS date,
+  const rows = db
+    .prepare(
+      `SELECT e.muscle_group AS muscle_group, e.name AS exercise, s.date AS date,
             ls.weight AS weight, ls.reps AS reps, ls.rir AS rir
        FROM logged_sets ls JOIN exercises e ON e.id = ls.exercise_id
        JOIN sessions s ON s.id = ls.session_id
       WHERE s.date >= ? AND s.date <= ?`
-  ).all(start, date) as any[];
+    )
+    .all(start, date) as any[];
 
   // ONE honest-volume truth (shared with programBalance / getVolumeByMuscle): warmups
   // excluded, RIR-weighted, indirect credit, canon taxonomy (mobility never counts).
@@ -389,10 +491,12 @@ function muscleVolume(date: string, weeks = 3): MuscleVolumeState[] {
 export function weeklyTonnage(date: string, weekBack: number): number {
   const end = isoDaysAgo(date, weekBack * 7);
   const start = isoDaysAgo(date, weekBack * 7 + 6);
-  const row = db.prepare(
-    `SELECT COALESCE(SUM(ls.weight * ls.reps), 0) AS t FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+  const row = db
+    .prepare(
+      `SELECT COALESCE(SUM(ls.weight * ls.reps), 0) AS t FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
      WHERE ls.weight > 0 AND ls.reps > 0 AND s.date >= ? AND s.date <= ?`
-  ).get(start, end) as any;
+    )
+    .get(start, end) as any;
   return Math.round(Number(row?.t ?? 0));
 }
 
@@ -401,52 +505,70 @@ export function weeklyTonnage(date: string, weekBack: number): number {
 // EVEN for an athlete who has NEVER deloaded (the exact case that most needs one).
 const DELOAD_DUE_CONSECUTIVE_WEEKS = 6;
 
-function weeklyNonTonnageLoad(date: string, weekBack: number): { units: number; timed_seconds: number; bodyweight_sets: number; endurance_minutes: number } {
+function weeklyNonTonnageLoad(
+  date: string,
+  weekBack: number
+): { units: number; timed_seconds: number; bodyweight_sets: number; endurance_minutes: number } {
   const end = isoDaysAgo(date, weekBack * 7);
   const start = isoDaysAgo(date, weekBack * 7 + 6);
   let timedSeconds = 0;
   let bodyweightSets = 0;
   try {
-    const row = db.prepare(
-      `SELECT
+    const row = db
+      .prepare(
+        `SELECT
           COALESCE(SUM(CASE WHEN ls.duration_sec IS NOT NULL AND ls.duration_sec > 0 THEN ls.duration_sec ELSE 0 END), 0) AS timed_seconds,
           COALESCE(SUM(CASE WHEN ls.reps IS NOT NULL AND ls.reps > 0 AND (ls.weight IS NULL OR ls.weight <= 0) THEN 1 ELSE 0 END), 0) AS bodyweight_sets
          FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
         WHERE s.date >= ? AND s.date <= ?`
-    ).get(start, end) as any;
+      )
+      .get(start, end) as any;
     timedSeconds = Number(row?.timed_seconds ?? 0) || 0;
     bodyweightSets = Number(row?.bodyweight_sets ?? 0) || 0;
-  } catch { /* older DB → no non-tonnage load */ }
+  } catch {
+    /* older DB → no non-tonnage load */
+  }
 
   let enduranceMinutes = 0;
   let enduranceKm = 0;
   try {
     const patterns = enduranceSportPatterns(getProfile()?.endurance_sport);
     const sport = activitySportWhere("activities", patterns);
-    const row = db.prepare(
-      `SELECT COALESCE(SUM(duration_min), 0) AS min, COALESCE(SUM(distance_km), 0) AS km
+    const row = db
+      .prepare(
+        `SELECT COALESCE(SUM(duration_min), 0) AS min, COALESCE(SUM(distance_km), 0) AS km
          FROM activities
         WHERE date >= ? AND date <= ? AND (${sport.sql})`
-    ).get(start, end, ...sport.params) as any;
+      )
+      .get(start, end, ...sport.params) as any;
     enduranceMinutes = Number(row?.min ?? 0) || 0;
     enduranceKm = Number(row?.km ?? 0) || 0;
-  } catch { /* no endurance rows */ }
+  } catch {
+    /* no endurance rows */
+  }
 
-  const units = Math.round(((timedSeconds / 60) + bodyweightSets + (enduranceMinutes / 25) + (enduranceKm / 5)) * 10) / 10;
-  return { units, timed_seconds: Math.round(timedSeconds), bodyweight_sets: Math.round(bodyweightSets), endurance_minutes: Math.round(enduranceMinutes) };
+  const units = Math.round((timedSeconds / 60 + bodyweightSets + enduranceMinutes / 25 + enduranceKm / 5) * 10) / 10;
+  return {
+    units,
+    timed_seconds: Math.round(timedSeconds),
+    bodyweight_sets: Math.round(bodyweightSets),
+    endurance_minutes: Math.round(enduranceMinutes),
+  };
 }
 
 function recentFeedbackFatigue(date: string, days = 14): { high: boolean; reasons: string[] } {
   const end = String(date).slice(0, 10);
   const start = isoDaysAgo(end, Math.max(1, days) - 1);
   try {
-    const rows = db.prepare(
-      `SELECT soreness, performance, joint_pain, notes FROM sessions
+    const rows = db
+      .prepare(
+        `SELECT soreness, performance, joint_pain, notes FROM sessions
         WHERE date >= ? AND date <= ?
           AND (soreness IS NOT NULL OR performance IS NOT NULL OR
                (joint_pain IS NOT NULL AND TRIM(joint_pain) != '') OR
                (notes IS NOT NULL AND TRIM(notes) != ''))`
-    ).all(start, end) as any[];
+      )
+      .all(start, end) as any[];
     if (!rows.length) return { high: false, reasons: [] };
     const highSoreness = rows.filter((r) => Number(r.soreness) >= 4).length;
     const lowPerformance = rows.filter((r) => Number(r.performance) <= 2).length;
@@ -457,14 +579,20 @@ function recentFeedbackFatigue(date: string, days = 14): { high: boolean; reason
     if (highSoreness >= 2) reasons.push("soreness is staying high");
     if (lowPerformance >= 2) reasons.push("recent sessions are feeling flat");
     if (jointFlags >= 1) reasons.push("joint feedback is still flagged");
-    if (fatigueNotes.length >= 2 || rapidFade) reasons.push("session notes repeatedly describe strength-endurance fading");
+    if (fatigueNotes.length >= 2 || rapidFade)
+      reasons.push("session notes repeatedly describe strength-endurance fading");
     return { high: reasons.length > 0, reasons };
   } catch {
     return { high: false, reasons: [] };
   }
 }
 
-function mesocycle(date: string, recovery?: any): MesocycleState {
+function mesocycle(
+  date: string,
+  recovery?: any,
+  recoveryWeek?: ActiveRecoveryWeek | null,
+  completedRecoveryWeek?: CompletedRecoveryWeekLedger | null
+): MesocycleState {
   // A "deload week" = a COMPLETED week whose tonnage fell well below the trailing
   // base. Start at w=1 (the current week is in-progress — a half-logged week early
   // in the week would otherwise read as a deload). Walk back up to 8 weeks.
@@ -473,7 +601,10 @@ function mesocycle(date: string, recovery?: any): MesocycleState {
     const here = weeklyTonnage(date, w);
     const base = [w + 1, w + 2, w + 3].map((b) => weeklyTonnage(date, b));
     const chronic = base.reduce((a, b) => a + b, 0) / base.length;
-    if (chronic > 0 && here > 0 && here < chronic * 0.6) { weeksSince = w; break; }
+    if (chronic > 0 && here > 0 && here < chronic * 0.6) {
+      weeksSince = w;
+      break;
+    }
   }
   // Consecutive COMPLETED loaded weeks (from w=1) with no reset — a training gap
   // (an empty week) or the detected deload above breaks the streak. This is what
@@ -521,8 +652,31 @@ function mesocycle(date: string, recovery?: any): MesocycleState {
   // periodization block's phase, not from this completed-week detector.)
   let phase: MesoPhase;
   let note: string;
-  if (weeksSince != null && weeksSince >= 4) { phase = "deload-due"; note = `~${weeksSince} weeks since a deload${recoveryDrifting ? " and recovery's drifting" : ""} — a reset week is about due.`; }
-  else if (fatigueDeload) {
+  if (recoveryWeek) {
+    phase = "deload";
+    note = `Recovery week is active through ${recoveryWeek.until} — keep the programmed frequency, reduced working-set dose, and easy aerobic continuation.`;
+    weeksSince = 0;
+  } else if (completedRecoveryWeek) {
+    // Prefer whichever reset is newer: the deliberate applied recovery ledger,
+    // or a later low-load week detected from the logs.
+    weeksSince =
+      weeksSince == null
+        ? completedRecoveryWeek.weeks_since_completion
+        : Math.min(weeksSince, completedRecoveryWeek.weeks_since_completion);
+    if (weeksSince >= 4) {
+      phase = "deload-due";
+      note = `~${weeksSince} weeks since the completed recovery week${recoveryDrifting ? " and recovery's drifting" : ""} — a reset week is about due.`;
+    } else {
+      phase = "accumulation";
+      note =
+        weeksSince === 0
+          ? "Recovery week completed — resume the build conservatively and let normal progression earn its next step."
+          : `${weeksSince} week${weeksSince === 1 ? "" : "s"} since the completed recovery week — building.`;
+    }
+  } else if (weeksSince != null && weeksSince >= 4) {
+    phase = "deload-due";
+    note = `~${weeksSince} weeks since a deload${recoveryDrifting ? " and recovery's drifting" : ""} — a reset week is about due.`;
+  } else if (fatigueDeload) {
     phase = "deload-due";
     const fatigue = feedbackFatigue.reasons.join(" and ");
     const loadText = recentHybridHeavy
@@ -531,15 +685,25 @@ function mesocycle(date: string, recovery?: any): MesocycleState {
         ? "with timed/bodyweight work adding fatigue beyond tonnage"
         : "with recovery drifting";
     note = `~${loadedStreak} loaded weeks plus ${fatigue} ${loadText} — a reset week is about due.`;
+  } else if (buildingBase) {
+    phase = "accumulation";
+    note =
+      "You're rebuilding your training base — keep volume steady and conservative; the load will feel like a jump only because the base is still thin, not because you're overreaching.";
+  } else if (deloadDueByStreak) {
+    const source =
+      weeklyTonnage(date, 1) > 0 ? "" : " — timed/bodyweight/endurance work counts here even when tonnage is low";
+    phase = "deload-due";
+    note = `You've strung ~${loadedStreak} loaded weeks together with no reset${recoveryDrifting ? " and recovery's drifting" : ""}${source} — a deload week is about due, even though there's no prior deload on record.`;
+  } else if (acwr != null && acwr >= 1.4) {
+    phase = "intensification";
+    note = "Load's ramped this block — hold the line, don't pile on.";
+  } else if (weeksSince == null) {
+    phase = "accumulation";
+    note = "No recent deload on record — keep building, plan a reset every 4–6 weeks.";
+  } else {
+    phase = "accumulation";
+    note = `${weeksSince} week${weeksSince === 1 ? "" : "s"} since your last deload — building.`;
   }
-  else if (buildingBase) { phase = "accumulation"; note = "You're rebuilding your training base — keep volume steady and conservative; the load will feel like a jump only because the base is still thin, not because you're overreaching."; }
-  else if (deloadDueByStreak) {
-    const source = weeklyTonnage(date, 1) > 0 ? "" : " — timed/bodyweight/endurance work counts here even when tonnage is low";
-    phase = "deload-due"; note = `You've strung ~${loadedStreak} loaded weeks together with no reset${recoveryDrifting ? " and recovery's drifting" : ""}${source} — a deload week is about due, even though there's no prior deload on record.`;
-  }
-  else if (acwr != null && acwr >= 1.4) { phase = "intensification"; note = "Load's ramped this block — hold the line, don't pile on."; }
-  else if (weeksSince == null) { phase = "accumulation"; note = "No recent deload on record — keep building, plan a reset every 4–6 weeks."; }
-  else { phase = "accumulation"; note = `${weeksSince} week${weeksSince === 1 ? "" : "s"} since your last deload — building.`; }
 
   return { weeks_since_deload: weeksSince, phase, acute_chronic_ratio: acwr, note };
 }
@@ -550,10 +714,12 @@ export function weeklyKm(date: string, weekBack: number, patterns: string[]): nu
   const end = isoDaysAgo(date, weekBack * 7);
   const start = isoDaysAgo(date, weekBack * 7 + 6);
   const sport = activitySportWhere("activities", patterns);
-  const row = db.prepare(
-    `SELECT COALESCE(SUM(distance_km), 0) AS km FROM activities
+  const row = db
+    .prepare(
+      `SELECT COALESCE(SUM(distance_km), 0) AS km FROM activities
       WHERE date >= ? AND date <= ? AND (${sport.sql})`
-  ).get(start, end, ...sport.params) as any;
+    )
+    .get(start, end, ...sport.params) as any;
   return Math.round(Number(row?.km ?? 0) * 10) / 10;
 }
 
@@ -624,27 +790,33 @@ function enduranceState(date: string): EnduranceState {
   const activitySport = activitySportWhere("activities", patterns);
   const aSport = activitySportWhere("a", patterns);
 
-  const longest = db.prepare(
-    `SELECT MAX(distance_km) AS km FROM activities
+  const longest = db
+    .prepare(
+      `SELECT MAX(distance_km) AS km FROM activities
       WHERE date >= ? AND date <= ? AND (${activitySport.sql})`
-  ).get(start4, date, ...activitySport.params) as any;
+    )
+    .get(start4, date, ...activitySport.params) as any;
 
   // Quality = a synced effort with a hard label or meaningful Z4+ time.
-  const quality = db.prepare(
-    `SELECT COUNT(*) AS n FROM activities a JOIN garmin_activities g ON g.activity_id = a.id
+  const quality = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM activities a JOIN garmin_activities g ON g.activity_id = a.id
      WHERE a.date >= ? AND a.date <= ?
        AND (${aSport.sql})
        AND (UPPER(COALESCE(g.te_label,'')) IN ('TEMPO','THRESHOLD','VO2MAX','ANAEROBIC','LACTATE_THRESHOLD')
             OR COALESCE(g.anaerobic_te,0) >= 2)`
-  ).get(start4, date, ...aSport.params) as any;
+    )
+    .get(start4, date, ...aSport.params) as any;
   const hasQuality = Number(quality?.n ?? 0) > 0;
 
   // Easy-pace efficiency: avg pace (min/km) of the chosen endurance sport, recent half vs older half.
-  const paceRows = db.prepare(
-    `SELECT a.date AS date, a.duration_min AS dur, a.distance_km AS km FROM activities a
+  const paceRows = db
+    .prepare(
+      `SELECT a.date AS date, a.duration_min AS dur, a.distance_km AS km FROM activities a
      WHERE a.date >= ? AND a.date <= ? AND a.distance_km > 1 AND a.duration_min > 0
        AND (${aSport.sql}) ORDER BY a.date`
-  ).all(isoDaysAgo(date, 41), date, ...aSport.params) as any[];
+    )
+    .all(isoDaysAgo(date, 41), date, ...aSport.params) as any[];
   let paceTrend: EnduranceState["pace_trend"] = null;
   if (paceRows.length >= 4) {
     const paces = paceRows.map((r) => ({ date: r.date, pace: Number(r.dur) / Number(r.km) }));
@@ -662,35 +834,49 @@ function enduranceState(date: string): EnduranceState {
   // buildingBase (returning runner, thin chronic base, ACWR suppressed) reads as
   // "building" — NEVER "spiking" — so the action is a calm conservative build, not
   // a scary "ease off". A real ACWR only kicks in once the base clears the floor.
-  const status: EnduranceState["status"] =
-    buildingBase ? "building"
-    : acwr != null && acwr >= 1.5 ? "spiking"
-    : acwr != null && acwr < 0.7 && chronic > 0 ? "detraining"
-    : acwr != null && acwr >= 1.1 ? "building"
-    : "maintaining";
+  const status: EnduranceState["status"] = buildingBase
+    ? "building"
+    : acwr != null && acwr >= 1.5
+      ? "spiking"
+      : acwr != null && acwr < 0.7 && chronic > 0
+        ? "detraining"
+        : acwr != null && acwr >= 1.1
+          ? "building"
+          : "maintaining";
   let action: EnduranceState["suggested_action"];
   let why: string;
   const volumeWord = primarySport === "run" ? "Mileage" : `${primaryDescriptor.label} distance`;
   if (status === "spiking") {
-    action = "ease"; why = `${volumeWord} jumped this week — hold it here and let it absorb before adding more.`;
+    action = "ease";
+    why = `${volumeWord} jumped this week — hold it here and let it absorb before adding more.`;
   } else if (status === "detraining") {
-    action = "build"; why = `${primaryDescriptor.label} has tapered off — a gentle, steady rebuild will bring the base back.`;
+    action = "build";
+    why = `${primaryDescriptor.label} has tapered off — a gentle, steady rebuild will bring the base back.`;
   } else if (buildingBase) {
-    action = "build"; why = `You're rebuilding your aerobic base — keep ${primaryDescriptor.label.toLowerCase()} easy and conservative; this is base-building, not overreaching.`;
+    action = "build";
+    why = `You're rebuilding your aerobic base — keep ${primaryDescriptor.label.toLowerCase()} easy and conservative; this is base-building, not overreaching.`;
   } else if (!hasQuality && base >= 10) {
-    action = "add-quality"; why = "Solid easy base, but it's all one pace — one tempo or interval session a week would lift your ceiling.";
+    action = "add-quality";
+    why = "Solid easy base, but it's all one pace — one tempo or interval session a week would lift your ceiling.";
   } else if (status === "building") {
-    action = "build"; why = "Base is building nicely — keep the weekly step conservative (~10%).";
+    action = "build";
+    why = "Base is building nicely — keep the weekly step conservative (~10%).";
   } else {
-    action = "hold"; why = "Endurance is ticking over steadily.";
+    action = "hold";
+    why = "Endurance is ticking over steadily.";
   }
 
   return {
     sport: primarySport,
     sport_label: primaryDescriptor.label,
-    last_week_km: lastWeek, acute_chronic_ratio: acwr,
+    last_week_km: lastWeek,
+    acute_chronic_ratio: acwr,
     longest_km_4wk: longest?.km != null ? Math.round(Number(longest.km) * 10) / 10 : null,
-    has_quality: hasQuality, pace_trend: paceTrend, status, suggested_action: action, why,
+    has_quality: hasQuality,
+    pace_trend: paceTrend,
+    status,
+    suggested_action: action,
+    why,
     by_sport: bySport,
   };
 }
@@ -734,8 +920,9 @@ interface PlannedStrengthDay {
 }
 
 function plannedStrengthDays(): PlannedStrengthDay[] {
-  const rows = db.prepare(
-    `SELECT pd.id AS plan_day_id, pd.day_number AS day_number, pd.name AS day_name, pd.focus AS focus,
+  const rows = db
+    .prepare(
+      `SELECT pd.id AS plan_day_id, pd.day_number AS day_number, pd.name AS day_name, pd.focus AS focus,
             e.name AS exercise, e.muscle_group AS muscle_group,
             pi.sets AS sets, pi.target_weight AS target_weight
        FROM plan_days pd
@@ -743,7 +930,8 @@ function plannedStrengthDays(): PlannedStrengthDay[] {
        LEFT JOIN exercises e ON e.id = pi.exercise_id
       WHERE COALESCE(pi.kind, 'strength') != 'cardio'
       ORDER BY pd.day_number, pi.position`
-  ).all() as any[];
+    )
+    .all() as any[];
   const byDay = new Map<number, PlannedStrengthDay>();
   for (const row of rows) {
     const group = canonicalGroup(row.muscle_group) ?? classifyMuscleGroup(String(row.exercise || ""));
@@ -761,7 +949,9 @@ function plannedStrengthDays(): PlannedStrengthDay[] {
     if (!cur.groups.includes(group)) cur.groups.push(group);
     const lower = LOWER_GROUPS.has(group);
     const loaded = Number(row.target_weight ?? 0) > 0 || Number(row.sets ?? 0) >= 3;
-    const heavyName = /\b(squat|deadlift|hinge|leg press|lunge|split squat|step up|hack|rdl)\b/i.test(String(row.exercise || ""));
+    const heavyName = /\b(squat|deadlift|hinge|leg press|lunge|split squat|step up|hack|rdl)\b/i.test(
+      String(row.exercise || "")
+    );
     if (lower && (loaded || heavyName || /leg|lower|squat|hinge/i.test(`${row.day_name || ""} ${row.focus || ""}`))) {
       cur.heavy_leg_day = true;
     }
@@ -809,9 +999,8 @@ function nextStrengthConflict(
   let why = "The next strength day does not meaningfully overlap the recent endurance load.";
   if (leadImpact && impacted.length) {
     const labels = [...new Set(overlappingImpacts.map((impact) => impact.label))];
-    const what = labels.length > 1
-      ? labels.join(" + ")
-      : `${leadImpact.detail ? `${leadImpact.detail} ` : ""}${leadImpact.label}`;
+    const what =
+      labels.length > 1 ? labels.join(" + ") : `${leadImpact.detail ? `${leadImpact.detail} ` : ""}${leadImpact.label}`;
     const anyHeavy = overlappingImpacts.some((impact) => impact.load === "heavy");
     if (anyHeavy && next.heavy_leg_day && impactedLower && next.days_until <= 1) {
       advice = "swap-or-upper";
@@ -836,11 +1025,18 @@ function nextStrengthConflict(
   };
 }
 
-function hybridFuelRead(profile: any, impact: EnduranceImpact | null, endurance: EnduranceState | null): HybridFuelRead | null {
+function hybridFuelRead(
+  profile: any,
+  impact: EnduranceImpact | null,
+  endurance: EnduranceState | null
+): HybridFuelRead | null {
   const mode = effectiveGoalMode(profile);
   if (mode !== "lose") return null;
   if (!impact) {
-    return { risk: "low", why: "Fat-loss mode is active, but there is no recent endurance load competing for recovery right now." };
+    return {
+      risk: "low",
+      why: "Fat-loss mode is active, but there is no recent endurance load competing for recovery right now.",
+    };
   }
   if (impact.load === "heavy" || endurance?.status === "spiking") {
     return {
@@ -916,7 +1112,9 @@ function hybridState(date: string, endurance: EnduranceState | null, discipline:
 // Single-slot (bounded) — the hot path is always `today`; a rare historical ?date=
 // simply misses and replaces. Registered for the test-isolate reset.
 let programStateCache: { key: string; value: ProgramState } | null = null;
-registerTrainingCacheClear(() => { programStateCache = null; });
+registerTrainingCacheClear(() => {
+  programStateCache = null;
+});
 
 export function getProgramState(date?: string, recovery?: any): ProgramState {
   const d = date || localDateISO();
@@ -932,30 +1130,48 @@ function computeProgramState(date?: string, recovery?: any): ProgramState {
   const discipline = getPrimaryDiscipline();
   const lifts = liftStates(d);
   const volume = muscleVolume(d);
-  const meso = mesocycle(d, recovery);
+  const recoveryWeek = activeRecoveryWeek(d);
+  const completedRecoveryWeek = recoveryWeek ? null : completedRecoveryWeekLedger(d);
+  const meso = mesocycle(d, recovery, recoveryWeek, completedRecoveryWeek);
   const endurance = discipline === "endurance" || discipline === "hybrid" ? enduranceState(d) : null;
   const hybrid = hybridState(d, endurance, discipline);
 
   // The "what to evolve next" list — plain language, deduped, most actionable first.
   const adaptations: string[] = [];
+  if (recoveryWeek)
+    adaptations.push("Continue the reduced recovery-week sessions; resume progression after the week has absorbed.");
   const plateaued = lifts.filter((l) => l.status === "plateaued");
   const progressing = lifts.filter((l) => l.status === "progressing");
   const regressing = lifts.filter((l) => l.status === "regressing");
   for (const l of plateaued) {
     adaptations.push(
-      l.suggested_action === "vary" ? `Rotate a variation for ${l.exercise} — it's been flat${l.weeks_static ? ` ~${l.weeks_static} wk` : ""}.`
-      : l.suggested_action === "deload" ? `Deload ${l.exercise}, then re-run — it's grinding without moving.`
-      : `Unstick ${l.exercise}: tighten technique / add a rep before chasing load.`
+      l.suggested_action === "vary"
+        ? `Rotate a variation for ${l.exercise} — it's been flat${l.weeks_static ? ` ~${l.weeks_static} wk` : ""}.`
+        : l.suggested_action === "deload"
+          ? `Deload ${l.exercise}, then re-run — it's grinding without moving.`
+          : `Unstick ${l.exercise}: tighten technique / add a rep before chasing load.`
     );
   }
   for (const l of regressing) adaptations.push(`Back off ${l.exercise} and let it rebuild.`);
   if (meso.phase === "deload-due") adaptations.push(meso.note);
-  if (endurance && endurance.suggested_action && endurance.suggested_action !== "hold") adaptations.push(endurance.why);
+  if (
+    endurance &&
+    endurance.suggested_action &&
+    endurance.suggested_action !== "hold" &&
+    (!recoveryWeek || endurance.suggested_action === "ease")
+  )
+    adaptations.push(endurance.why);
   if (hybrid?.next_strength?.advice === "swap-or-upper" || hybrid?.next_strength?.advice === "hold-load") {
     adaptations.push(hybrid.next_strength.why);
   }
   if (hybrid?.fuel?.risk === "high") adaptations.push(hybrid.fuel.why);
-  if (progressing.length) adaptations.push(`Push the next load step on ${progressing.slice(0, 3).map((l) => l.exercise).join(", ")}.`);
+  if (progressing.length && !recoveryWeek)
+    adaptations.push(
+      `Push the next load step on ${progressing
+        .slice(0, 3)
+        .map((l) => l.exercise)
+        .join(", ")}.`
+    );
 
   // Headline — one calm sentence, no score.
   const parts: string[] = [];
@@ -964,11 +1180,24 @@ function computeProgramState(date?: string, recovery?: any): ProgramState {
   if (regressing.length) parts.push(`${regressing.length} slipping`);
   if (hybrid?.status === "shift-legs") parts.push("legs absorbing endurance");
   else if (hybrid?.status === "fuel-protect") parts.push("fuel/recovery is the limiter");
-  const headline = parts.length
-    ? `${parts.join(", ")}${meso.phase === "deload-due" ? "; a deload's about due" : ""}.`
-    : lifts.length
-      ? "Everything's holding steady — room for a deliberate push."
-      : "Not enough logged yet to read your program — keep training and it'll come into focus.";
+  const headline = recoveryWeek
+    ? "Recovery week is active — keep the training rhythm and let the reduced dose absorb."
+    : parts.length
+      ? `${parts.join(", ")}${meso.phase === "deload-due" ? "; a deload's about due" : ""}.`
+      : lifts.length
+        ? "Everything's holding steady — room for a deliberate push."
+        : "Not enough logged yet to read your program — keep training and it'll come into focus.";
 
-  return { generated_for: d, discipline, lifts, volume, mesocycle: meso, endurance, hybrid, headline, adaptations_due: adaptations };
+  return {
+    generated_for: d,
+    discipline,
+    lifts,
+    volume,
+    mesocycle: meso,
+    recovery_week: recoveryWeek,
+    endurance,
+    hybrid,
+    headline,
+    adaptations_due: adaptations,
+  };
 }

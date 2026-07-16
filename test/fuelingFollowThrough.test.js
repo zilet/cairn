@@ -3,12 +3,14 @@ import assert from "node:assert/strict";
 import { db, repo, resetTables } from "./_seed.js";
 import { buildNutritionCheckinPrompt } from "../dist/prompt.js";
 import { addDaysISO } from "../dist/repo/shared.js";
+import { flushBrainEventsForTest, resetBrainEventsForTest } from "../dist/brainEvents.js";
 
 // A fixed "today" so window math is deterministic regardless of the wall clock.
 const TODAY = "2026-07-13";
 const day = (delta) => addDaysISO(TODAY, delta);
 
 beforeEach(() => {
+  resetBrainEventsForTest();
   resetTables("fueling_feedback", "food_notes", "brain_decisions", "brain_expectations", "nutrition_targets");
 });
 
@@ -106,6 +108,10 @@ test("setFuelingFeedback clamps the 1-3 scale and trims the note", () => {
   const rounded = repo.setFuelingFeedback(day(-1), { energy: 2.4 });
   assert.equal(rounded.energy, 2, "a fractional energy rounds into the scale");
   assert.equal(rounded.hunger, null, "an omitted hunger stays null");
+
+  const nullable = repo.setFuelingFeedback(day(-2), { energy: null, hunger: "" });
+  assert.equal(nullable.energy, null, "an explicit null energy read remains unknown");
+  assert.equal(nullable.hunger, null, "a blank hunger read remains unknown");
 });
 
 test("setFuelingFeedback upserts one row per day (latest wins)", () => {
@@ -115,6 +121,16 @@ test("setFuelingFeedback upserts one row per day (latest wins)", () => {
   assert.equal(updated.note, "much better");
   const all = repo.listFuelingFeedback(14).filter((r) => r.date === TODAY);
   assert.equal(all.length, 1, "one row per date");
+});
+
+test("fueling feedback emits a bounded deterministic review boundary without calling an agent from the write", () => {
+  repo.setFuelingFeedback(TODAY, { energy: 1, hunger: 3 });
+  const events = flushBrainEventsForTest();
+  assert.equal(events.length, 1);
+  assert.equal(events[0].kind, "fueling_feedback");
+  assert.equal(events[0].domain, "nutrition");
+  assert.equal(events[0].material, true);
+  assert.equal(events[0].review, true);
 });
 
 test("a fueling read links to an applied target change only inside its window", () => {

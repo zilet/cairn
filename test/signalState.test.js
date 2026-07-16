@@ -182,6 +182,36 @@ test("partial expenditure shapes fueling without downgrading training posture", 
   assert.equal(fuelProtect.action.directives.fueling, "protect");
 });
 
+test("the shared under-fueling read protects actual daily planning at the proportional dose", () => {
+  const date = localDaysAgo(0);
+  const prescription = repo.planningSignalState({
+    date,
+    underfueling: {
+      state: "prescription_strain",
+      agreeing_channels: ["weight_trend", "performance", "recovery"],
+      rationale: "Independent channels agree.",
+      action: { training: "hold_aggression", line: "One bounded fuel step is settling." },
+    },
+  });
+  assert.equal(prescription.dimensions.energy_fueling.status, "constrained");
+  assert.equal(prescription.action.posture, "modify", "a bounded correction holds aggression rather than forcing rest");
+  assert.equal(prescription.action.directives.training, "hold_aggression");
+  assert.equal(prescription.action.directives.fueling, "protect");
+
+  const persistent = repo.planningSignalState({
+    date,
+    underfueling: {
+      state: "persistent_strain",
+      agreeing_channels: ["weight_trend", "performance", "recovery"],
+      rationale: "The prior correction has settled and strain persists.",
+      action: { training: "reduce", line: "Coordinate a recovery week and fuel toward maintenance." },
+    },
+  });
+  assert.equal(persistent.dimensions.training_load_tolerance.status, "constrained");
+  assert.equal(persistent.action.posture, "easy");
+  assert.equal(persistent.action.directives.training, "recover");
+});
+
 test("Apple-only daily activity contributes one conservative generic load observation", () => {
   const date = localDaysAgo(0);
   const state = repo.planningSignalState({

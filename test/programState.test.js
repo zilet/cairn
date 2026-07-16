@@ -11,7 +11,7 @@ const REF = "2026-04-20";
 const back = (n) => new Date(new Date(REF + "T00:00:00Z").getTime() - n * 864e5).toISOString().slice(0, 10);
 
 beforeEach(() => {
-  resetTables("logged_sets", "session_skips", "sessions", "activities", "garmin_activities", "garmin_sources", "plan_items", "plan_days", "daily_metrics", "checkins");
+  resetTables("logged_sets", "session_skips", "sessions", "activities", "garmin_activities", "garmin_sources", "plan_items", "plan_days", "program_blocks", "plan_proposals", "daily_metrics", "checkins", "app_state");
 });
 
 test("a lift whose est-1RM is climbing reads 'progressing' → overload", () => {
@@ -70,6 +70,73 @@ test("a steady (flat) timed hold reads 'maintaining' → overload, NOT a false p
   assert.equal(plank.mode, "timed");
   assert.equal(plank.status, "maintaining");
   assert.equal(plank.suggested_action, "overload");
+});
+
+function startReducedRecoveryWeek(appliedOn) {
+  repo.savePlanDay(1, "Recovery Push", "Push", [
+    { exercise: "Recovery Trajectory Press", sets: 2, rep_low: 5, rep_high: 8, target_weight: 100 },
+  ]);
+  const proposal = repo.createProposal("stub", repo.RECOVERY_WEEK_INSTRUCTION, "", {
+    summary: "Reduced recovery prescription.",
+    days: repo.getPlan(),
+  });
+  repo.setProposalStatus(proposal.id, "applied");
+  repo.setAppState("recovery_week_applied", JSON.stringify({ applied_on: appliedOn, proposal_id: proposal.id }));
+  db.prepare(`UPDATE app_state SET updated_at = ? WHERE key = 'recovery_week_applied'`).run(`${appliedOn} 00:00:00`);
+  return repo.getPlanDay(1);
+}
+
+function logRecoveryTrajectoryExposure(date, planDayId, { sets = 2, weight = 100, rir = 5, performance = null } = {}) {
+  const ex = repo.findExercise("Recovery Trajectory Press") ?? repo.upsertExercise({
+    name: "Recovery Trajectory Press",
+    muscle_group: "chest",
+  });
+  const session = repo.getOrCreateSession(date, planDayId);
+  if (performance != null) db.prepare(`UPDATE sessions SET performance = ? WHERE id = ?`).run(performance, session.id);
+  for (let set = 1; set <= sets; set++) {
+    db.prepare(
+      `INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps, rir)
+       VALUES (?, ?, ?, ?, 5, ?)`,
+    ).run(session.id, ex.id, set, weight, rir);
+  }
+  return session;
+}
+
+function seedStableRecoveryTrajectory() {
+  for (const daysAgo of [28, 21, 14, 7]) {
+    repo.logSetByName({ exercise: "Recovery Trajectory Press", weight: 200, reps: 5, rir: 2, date: back(daysAgo) });
+  }
+}
+
+test("a compliant reduced recovery exposure is not manufactured lift regression", () => {
+  seedStableRecoveryTrajectory();
+  const planDay = startReducedRecoveryWeek(back(1));
+  const session = logRecoveryTrajectoryExposure(REF, planDay.id);
+  assert.equal(repo.recoverySessionDose(session.id).classification, "compliant");
+
+  const program = repo.getProgramState(REF);
+  const lift = program.lifts.find((row) => row.exercise === "Recovery Trajectory Press");
+  assert.notEqual(lift.status, "regressing");
+  assert.equal(lift.est_1rm, 233, "the deliberately reduced exposure is not treated as lost capacity");
+
+  const whole = repo.wholePersonTrajectory({ end: REF, days: 56 });
+  assert.notEqual(whole.domains.find((domain) => domain.domain === "strength").verdict, "worse");
+  const fuel = repo.underfuelingRead(REF, { programState: program, wholePerson: whole });
+  assert.notEqual(fuel.channels.find((channel) => channel.key === "performance").direction, "strain");
+});
+
+test("an overdosed or poor-feedback recovery exposure remains comparable evidence", () => {
+  for (const mode of ["overdose", "poor-feedback"]) {
+    resetTables("logged_sets", "sessions", "plan_items", "plan_days", "plan_proposals", "app_state");
+    seedStableRecoveryTrajectory();
+    const planDay = startReducedRecoveryWeek(back(1));
+    const session = logRecoveryTrajectoryExposure(REF, planDay.id, mode === "overdose"
+      ? { sets: 4, weight: 100, rir: 5 }
+      : { sets: 2, weight: 100, rir: 5, performance: 1 });
+    assert.equal(repo.recoverySessionDose(session.id).classification, mode === "overdose" ? "overdose" : "above-plan");
+    const lift = repo.getProgramState(REF).lifts.find((row) => row.exercise === "Recovery Trajectory Press");
+    assert.equal(lift.status, "regressing", `${mode} remains eligible trajectory evidence`);
+  }
 });
 
 test("hybrid endurance: a one-pace base flags 'add-quality'", () => {
@@ -316,4 +383,46 @@ test("programBalance includes programmed groups with zero recent logged rows", (
   assert.equal(groups.get("chest")?.sets, 0);
   assert.equal(groups.get("shoulders")?.status, "due");
   assert.ok(bal.due.includes("triceps"), "a programmed but unlogged group is due, not invisible");
+});
+
+test("an applied recovery window coherently overrides deload-due and accumulation state", () => {
+  const proposal = repo.createProposal("stub", repo.RECOVERY_WEEK_INSTRUCTION, "", {
+    summary: "Reduced recovery prescription.",
+    days: [],
+  });
+  repo.setProposalStatus(proposal.id, "applied");
+  repo.setAppState("recovery_week_applied", JSON.stringify({ applied_on: back(2), proposal_id: proposal.id }));
+  repo.createBlock({ goal: "Build strength", focus: "strength", phase: "accumulation", week_index: 2, total_weeks: 6 });
+  // Build enough completed load that the ordinary detector would call a deload due.
+  for (let week = 1; week <= 6; week++) {
+    repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, rir: 2, date: back(week * 7) });
+  }
+
+  const state = repo.getProgramState(REF);
+  assert.equal(state.recovery_week?.state, "applied");
+  assert.equal(state.mesocycle.phase, "deload");
+  assert.match(state.mesocycle.note, /recovery week is active/i);
+  assert.doesNotMatch(state.headline, /due|building/i);
+  assert.equal(repo.blockForCoach(REF)?.phase, "deload");
+});
+
+test("the first post-recovery date resumes accumulation from the completed applied ledger", () => {
+  const proposal = repo.createProposal("stub", repo.RECOVERY_WEEK_INSTRUCTION, "", {
+    summary: "Reduced recovery prescription.",
+    days: [],
+  });
+  repo.setProposalStatus(proposal.id, "applied");
+  repo.setAppState("recovery_week_applied", JSON.stringify({ applied_on: back(7), proposal_id: proposal.id }));
+  // Without the completed-ledger reset, this history immediately calls another
+  // deload due on the first date outside the exclusive active window.
+  for (let week = 1; week <= 6; week++) {
+    repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, rir: 2, date: back(week * 7) });
+  }
+
+  const state = repo.getProgramState(REF);
+  assert.equal(state.recovery_week, null, "the active [applied_on, until) window remains exclusive");
+  assert.equal(state.mesocycle.weeks_since_deload, 0);
+  assert.equal(state.mesocycle.phase, "accumulation");
+  assert.match(state.mesocycle.note, /recovery week completed/i);
+  assert.doesNotMatch(state.headline, /deload|due/i);
 });

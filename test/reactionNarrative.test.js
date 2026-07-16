@@ -2,8 +2,8 @@
 // deterministic reaction-model (src/repo/reaction-model.ts) produces the PATTERNS;
 // this covers the NARRATIVE written over them:
 //   - repo.setReactionNarrative: trim / collapse / cap(600) / clear round-trip
-//   - repo.saveReactionModel: CLEARS a stale narrative when the rebuilt model has
-//     ZERO patterns, PRESERVES it otherwise (a non-empty model never clears)
+//   - repo.saveReactionModel: every deterministic rebuild CLEARS prose tied to
+//     the prior evidence set, whether or not the rebuilt model has patterns
 //   - coachOps.refreshReactionNarrative: skip-on-empty (no agent call), success via
 //     an INJECTED fake runner, and a wrong-shape reply (the real offline `stub`)
 //     degrading to a no-op that leaves the prior narrative intact
@@ -52,7 +52,7 @@ test("setReactionNarrative(null) and (\"\") clear the slot", () => {
 });
 
 // ---------------------------------------------------------------------------
-// repo.saveReactionModel — clear-on-empty, preserve otherwise
+// repo.saveReactionModel — every deterministic rebuild invalidates prose
 // ---------------------------------------------------------------------------
 test("saveReactionModel CLEARS a stale narrative when the rebuilt model is empty", () => {
   seedFreshSleep(); // data_gap silent → no other seed → ZERO patterns
@@ -66,14 +66,14 @@ test("saveReactionModel CLEARS a stale narrative when the rebuilt model is empty
   assert.equal(read.narrative, null);
 });
 
-test("saveReactionModel PRESERVES the narrative when the model has patterns", () => {
+test("saveReactionModel CLEARS stale narrative even when the rebuilt model has patterns", () => {
   // Empty DB → the data_gap pattern fires (no synced recovery) → non-empty model.
-  repo.setReactionNarrative("keep this narrative");
+  repo.setReactionNarrative("this prose describes the prior evidence set");
   repo.saveReactionModel();
-  assert.equal(storedNarrative(), "keep this narrative");
+  assert.equal(storedNarrative(), "");
   const read = repo.reactionModelForCoach();
   assert.ok(read.patterns.length >= 1, "expected at least the data_gap pattern");
-  assert.equal(read.narrative, "keep this narrative");
+  assert.equal(read.narrative, null);
 });
 
 // ---------------------------------------------------------------------------

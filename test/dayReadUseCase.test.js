@@ -116,6 +116,86 @@ test("a live completed run overrides stale cached prospective copy immediately",
   assert.match(read.why, /already got a solid run/i);
 });
 
+test("a materially harder live run replaces stale done copy that still calls it easy", async () => {
+  resetTables(
+    "day_reads",
+    "suggestions",
+    "activities",
+    "plan_days",
+    "plan_items",
+    "sessions",
+    "logged_sets",
+    "profile"
+  );
+  const date = localDaysAgo(0);
+  repo.setProfile({ primary_discipline: "hybrid" });
+  db.prepare(
+    `INSERT INTO activities (date, type, duration_min, distance_km, source) VALUES (?, 'run', 30, 5, 'garmin')`
+  ).run(date);
+  repo.saveDayRead(date, {
+    kind: "done",
+    headline: "Run complete.",
+    why: "That run keeps your easy rhythm ticking along.",
+    focus: null,
+    est_minutes: null,
+    signals: {
+      logged_today: { sets: 0, activities: [{ type: "run" }] },
+      trained_today: true,
+      today_load: "moderate",
+    },
+    source: "agent",
+    override: null,
+  });
+
+  const read = await readToday({ date });
+
+  assert.equal(read.kind, "done");
+  assert.equal(read.signals.today_load, "moderate");
+  assert.equal(read.source, "deterministic");
+  assert.equal(read.cached, undefined);
+  assert.match(read.why, /already got a solid run/i);
+  assert.doesNotMatch(read.why, /easy rhythm/i);
+  assert.equal(repo.getCachedDayRead(date)?.signals?.today_load, "moderate");
+});
+
+test("future easy-work advice survives the completed-load consistency guard", async () => {
+  resetTables(
+    "day_reads",
+    "suggestions",
+    "activities",
+    "plan_days",
+    "plan_items",
+    "sessions",
+    "logged_sets",
+    "profile"
+  );
+  const date = localDaysAgo(0);
+  repo.setProfile({ primary_discipline: "hybrid" });
+  db.prepare(
+    `INSERT INTO activities (date, type, duration_min, distance_km, source) VALUES (?, 'run', 30, 5, 'garmin')`
+  ).run(date);
+  repo.saveDayRead(date, {
+    kind: "done",
+    headline: "Tempo work complete.",
+    why: "That run was a solid moderate effort. Keep tomorrow's run easy so it can settle.",
+    focus: null,
+    est_minutes: null,
+    signals: {
+      logged_today: { sets: 0, activities: [{ type: "run" }] },
+      trained_today: true,
+      today_load: "moderate",
+    },
+    source: "agent",
+    override: null,
+  });
+
+  const read = await readToday({ date });
+
+  assert.equal(read.cached, true);
+  assert.equal(read.source, "agent");
+  assert.match(read.why, /tomorrow's run easy/i);
+});
+
 test("the factual race-fix save arms a background agentic re-warm (never pins floor prose)", async () => {
   resetTables(
     "day_reads",

@@ -82,13 +82,54 @@ test("brain diagnostics aggregate accountability, autonomy, tools, and conferenc
   db.prepare(
     `INSERT INTO agent_jobs (status, kind, result_json, finished_at)
      VALUES ('done', 'case_conference', ?, datetime('now'))`
-  ).run(JSON.stringify({
-    ok: true,
-    opinions: [{ domain: "training" }, { domain: "nutrition" }],
-    unavailable: ["recovery"],
-    conflicts: ["deficit_recovery"],
-    unresolved_conflicts: [],
-  }));
+  ).run(
+    JSON.stringify({
+      ok: true,
+      opinions: [{ domain: "training" }, { domain: "nutrition" }],
+      unavailable: ["recovery"],
+      conflicts: ["deficit_recovery"],
+      unresolved_conflicts: [],
+    })
+  );
+  db.prepare(
+    `INSERT INTO agent_jobs (status, kind, result_json, finished_at)
+     VALUES ('done', 'case_conference', ?, datetime('now'))`
+  ).run(
+    JSON.stringify({
+      ok: true,
+      opinions: [{ domain: "recovery" }],
+      unavailable: [],
+      conflicts: [],
+      unresolved_conflicts: [],
+      decision: {
+        kind: "case_conference",
+        domain: "recovery",
+        summary: "Keep recovery protected.",
+        rationale: "The complete conference supports a bounded recovery focus.",
+        risk_class: "low",
+        reversible: false,
+        autonomy_tier: "ask",
+        parallel_actions: [],
+        resolved_conflicts: [],
+        deferred: [],
+        expectations: [],
+        review_window: "Review in two weeks.",
+        user_explanation: "I am keeping recovery protected.",
+        revision: null,
+      },
+    })
+  );
+  const addSpecialistAttempt = (op, ok, parsed, errorClass = null, status = ok ? "ok" : "invalid_output") =>
+    db
+      .prepare(
+        `INSERT INTO agent_runs (op, agent, ok, parsed, tried_json, status, error_class)
+       VALUES (?, 'stub', ?, ?, 0, ?, ?)`
+      )
+      .run(op, ok ? 1 : 0, parsed ? 1 : 0, status, errorClass);
+  addSpecialistAttempt("conference_training", true, true);
+  addSpecialistAttempt("conference_nutrition", false, true, "invalid_contract");
+  addSpecialistAttempt("conference_recovery", false, false, "process_error", "error");
+  addSpecialistAttempt("conference_health", false, false, "invalid_json");
 
   const diagnostics = getBrainDiagnostics(10);
   assert.equal(diagnostics.metrics.decisions.material, 4);
@@ -104,9 +145,20 @@ test("brain diagnostics aggregate accountability, autonomy, tools, and conferenc
   assert.equal(diagnostics.metrics.tools.runs, 1);
   assert.equal(diagnostics.metrics.tools.budget_exhausted, 1);
   assert.equal(diagnostics.metrics.tools.average_latency_ms, 20);
-  assert.equal(diagnostics.metrics.conferences.jobs, 1);
-  assert.equal(diagnostics.metrics.conferences.successful, 1);
+  assert.equal(diagnostics.metrics.conferences.jobs, 2);
+  assert.equal(diagnostics.metrics.conferences.successful, 2);
+  assert.equal(diagnostics.metrics.conferences.complete_successful, 1);
+  assert.equal(diagnostics.metrics.conferences.useful_degraded_or_incomplete, 1);
+  assert.equal(diagnostics.metrics.conferences.degraded, 0);
+  assert.equal(diagnostics.metrics.conferences.incomplete, 1);
   assert.equal(diagnostics.metrics.conferences.conflicts_detected, 1);
   assert.equal(diagnostics.metrics.conferences.conflicts_unresolved, 0);
-  assert.equal(diagnostics.metrics.conferences.specialist_availability_pct, 66.7);
+  assert.equal(diagnostics.metrics.conferences.specialist_valid_opinions, 3);
+  assert.equal(diagnostics.metrics.conferences.specialist_valid_opinion_yield_pct, 75);
+  assert.equal(diagnostics.metrics.conferences.specialist_agent_attempts, 4);
+  assert.equal(diagnostics.metrics.conferences.specialist_agent_accepted_turns, 1);
+  assert.equal(diagnostics.metrics.conferences.specialist_contract_failures, 1);
+  assert.equal(diagnostics.metrics.conferences.specialist_parse_failures, 1);
+  assert.equal(diagnostics.metrics.conferences.specialist_provider_process_failures, 1);
+  assert.equal(diagnostics.metrics.conferences.specialist_availability_pct, 75);
 });

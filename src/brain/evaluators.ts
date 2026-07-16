@@ -3,6 +3,9 @@ import type { BrainDecision } from "./decision-contract.js";
 import type { BrainEvaluation, BrainEvaluationVerdict } from "./evaluation-contract.js";
 import { BRAIN_METRIC_KEYS, type BrainExpectation, type BrainMetricKey } from "./expectation-contract.js";
 import type { JsonObject } from "./contract-utils.js";
+import { completedIntakeRange } from "../repo/intake-window.js";
+import { addDaysISO } from "../repo/shared.js";
+import { robustWeightEvidence } from "../repo/weight-evidence.js";
 
 export const MATURITY_EVALUATOR_VERSION = "brain-maturity-v1";
 
@@ -56,49 +59,41 @@ function stableEvidence(
   return [`${table}:${start}..${end}:n=${rows.length}:ids=${String(first.id ?? "-")}-${String(last.id ?? "-")}`];
 }
 
-function slopePerWeek(points: Array<{ date: string; value: number }>): number | null {
-  if (points.length < 2) return null;
-  const xs = points.map((point) => Date.parse(`${point.date}T00:00:00Z`) / 86_400_000);
-  const span = xs[xs.length - 1] - xs[0];
-  if (span < 3) return null;
-  const ys = points.map((point) => point.value);
-  const meanX = xs.reduce((sum, value) => sum + value, 0) / xs.length;
-  const meanY = ys.reduce((sum, value) => sum + value, 0) / ys.length;
-  let numerator = 0;
-  let denominator = 0;
-  for (let index = 0; index < xs.length; index++) {
-    numerator += (xs[index] - meanX) * (ys[index] - meanY);
-    denominator += (xs[index] - meanX) ** 2;
-  }
-  return denominator > 0 ? rounded((numerator / denominator) * 7) : null;
-}
-
 function windowEnd(context: EvaluatorContext): string {
   return context.expectation.confounder_policy === "next_draw" ? context.as_of : context.expectation.window_end;
+}
+
+function closedThrough(context: EvaluatorContext): string {
+  return addDaysISO(context.as_of, -1) ?? context.as_of;
+}
+
+function intakeForExpectation(context: EvaluatorContext, end = windowEnd(context)) {
+  return completedIntakeRange(context.expectation.window_start, end, closedThrough(context));
+}
+
+function predictionFields(expectation: BrainExpectation, observedTrend: number | null): JsonObject {
+  const explicit = numberFrom(expectation.baseline, ["predicted_trend_lb_wk"]);
+  const min = numberFrom(expectation.target, ["min", "minimum", "min_value"]);
+  const max = numberFrom(expectation.target, ["max", "maximum", "max_value"]);
+  const predicted = explicit ?? (min != null && max != null ? rounded((min + max) / 2) : null);
+  return {
+    predicted_trend_lb_wk: predicted,
+    observed_trend_lb_wk: observedTrend,
+    trend_residual_lb_wk:
+      predicted == null || observedTrend == null ? null : rounded(observedTrend - predicted),
+    recomposition_stage: String(expectation.baseline?.recomposition_stage ?? "unknown"),
+    target_delta_kcal: numberFrom(expectation.baseline, ["target_delta_kcal"]),
+  };
 }
 
 function weightObservation(context: EvaluatorContext): MetricObservation {
   const { expectation } = context;
   const end = windowEnd(context);
-  const rows = db
-    .prepare(
-      `SELECT id, date, weight_lb FROM bodyweight_log
-      WHERE date BETWEEN ? AND ? ORDER BY date, id LIMIT 500`
-    )
-    .all(expectation.window_start, end) as Array<{ id: number; date: string; weight_lb: number }>;
-  const byDate = new Map<string, { id: number; date: string; weight_lb: number }>();
-  for (const row of rows) byDate.set(row.date, row);
-  const distinct = [...byDate.values()];
-  const points = distinct
-    .map((row) => ({ date: row.date, value: Number(row.weight_lb) }))
-    .filter((point) => Number.isFinite(point.value));
-  const slope = slopePerWeek(points);
-  const spanDays =
-    points.length > 1
-      ? Math.round(
-          (Date.parse(`${points.at(-1)!.date}T00:00:00Z`) - Date.parse(`${points[0].date}T00:00:00Z`)) / 86_400_000
-        )
-      : 0;
+  const weight = robustWeightEvidence(expectation.window_start, end);
+  const intake = intakeForExpectation(context, end);
+  const slope = weight.trend_lb_wk;
+  const first = weight.points[0];
+  const last = weight.points.at(-1);
   return {
     actual:
       slope == null
@@ -106,39 +101,42 @@ function weightObservation(context: EvaluatorContext): MetricObservation {
         : {
             value: slope,
             trend_lb_wk: slope,
-            first_weight_lb: rounded(points[0]?.value ?? 0, 1),
-            last_weight_lb: rounded(points.at(-1)?.value ?? 0, 1),
-            weigh_ins: points.length,
-            span_days: spanDays,
+            ...predictionFields(expectation, slope),
+            first_weight_lb: first ? rounded(first.weight_lb, 1) : null,
+            last_weight_lb: last ? rounded(last.weight_lb, 1) : null,
+            weigh_ins: weight.weigh_ins,
+            raw_weigh_ins: weight.raw_points,
+            span_days: weight.span_days,
+            credible_intake_days: intake.credible_days,
+            partial_intake_days: intake.partial_days,
+            intake_calendar_days: intake.calendar_days,
+            terminal_weight_shock: weight.terminal_shock,
+            terminal_weight_shock_date: weight.terminal_shock_date,
+            weight_level_shift: weight.level_shift,
           },
-    evidence_keys: stableEvidence("bodyweight_log", distinct, expectation.window_start, end),
-    counts: { weigh_ins: points.length, data_points: points.length, span_days: spanDays },
-    issues: slope == null ? ["Weight data did not cover enough distinct days for a stable trend."] : [],
+    evidence_keys: weight.evidence_keys,
+    counts: {
+      weigh_ins: weight.weigh_ins,
+      intake_days: intake.credible_days,
+      partial_intake_days: intake.partial_days,
+      data_points: weight.weigh_ins,
+      span_days: weight.span_days,
+    },
+    issues: [
+      ...(slope == null ? ["Weight data did not cover enough distinct days for a stable trend."] : []),
+      ...(weight.terminal_shock
+        ? ["The terminal scale change is unconfirmed and cannot support a decisive nutrition outcome."]
+        : []),
+    ],
   };
 }
 
 function intakeObservation(context: EvaluatorContext): MetricObservation {
   const { expectation } = context;
   const end = windowEnd(context);
-  const rows = db
-    .prepare(
-      `SELECT id, COALESCE(date, substr(created_at, 1, 10)) AS date, parsed_json
-       FROM food_notes
-      WHERE COALESCE(date, substr(created_at, 1, 10)) BETWEEN ? AND ?
-      ORDER BY COALESCE(date, substr(created_at, 1, 10)), id LIMIT 1000`
-    )
-    .all(expectation.window_start, end) as Array<{ id: number; date: string; parsed_json: string | null }>;
-  const totals = new Map<string, number>();
-  for (const row of rows) {
-    try {
-      const parsed = row.parsed_json ? JSON.parse(row.parsed_json) : null;
-      const kcal = finite(parsed?.kcal ?? parsed?.calories ?? parsed?.estimated_kcal);
-      if (kcal != null && kcal > 0) totals.set(row.date, (totals.get(row.date) ?? 0) + kcal);
-    } catch {
-      // Malformed historical enrichment is ignored and lowers coverage.
-    }
-  }
-  const values = [...totals.values()];
+  const intake = intakeForExpectation(context, end);
+  const credible = intake.days.filter((day) => day.credible);
+  const values = credible.map((day) => day.kcal);
   const intakeAverage = values.length ? rounded(values.reduce((sum, value) => sum + value, 0) / values.length) : null;
   const weights = weightObservation(context);
   const trend = finite(weights.actual?.trend_lb_wk);
@@ -150,20 +148,26 @@ function intakeObservation(context: EvaluatorContext): MetricObservation {
         : {
             value: trend,
             trend_lb_wk: trend,
+            ...predictionFields(expectation, trend),
             intake_avg_kcal: intakeAverage,
             intake_delta_kcal: baselineIntake == null ? 0 : rounded(intakeAverage - baselineIntake),
             intake_days: values.length,
+            credible_intake_days: intake.credible_days,
+            partial_intake_days: intake.partial_days,
+            missing_intake_days: intake.missing_days,
+            intake_calendar_days: intake.calendar_days,
             weigh_ins: weights.counts.weigh_ins ?? 0,
           },
-    evidence_keys: [...stableEvidence("food_notes", rows, expectation.window_start, end), ...weights.evidence_keys],
+    evidence_keys: [...intake.evidence_keys, ...weights.evidence_keys],
     counts: {
-      intake_days: values.length,
+      intake_days: intake.credible_days,
+      partial_intake_days: intake.partial_days,
       weigh_ins: weights.counts.weigh_ins ?? 0,
       data_points: Math.min(values.length, weights.counts.weigh_ins ?? 0),
       span_days: weights.counts.span_days ?? 0,
     },
     issues: [
-      ...(values.length ? [] : ["There were no usable calorie totals in the evaluation window."]),
+      ...(values.length ? [] : ["There were no credible completed intake days in the evaluation window."]),
       ...weights.issues,
     ],
   };

@@ -30,6 +30,8 @@ function resetAll() {
     "daily_metrics",
     "garmin_daily_metrics",
     "program_blocks",
+    "plan_proposals",
+    "app_state",
     "bodyweight_log",
     "profile"
   );
@@ -139,6 +141,24 @@ test("weeklyRunPlan produces a periodized mix with a long run + a rotated qualit
   assert.ok(plan.runs.every((r) => typeof r.target_zone === "string" && r.target_zone.length > 0), "each run has a zone");
   assert.ok(plan.mix_summary.includes("long"), "mix summary names the long run");
   NO_SCORE(plan, "weeklyRunPlan");
+});
+
+test("weeklyRunPlan keeps recovery-week frequency as easy Z2 continuation without quality work", () => {
+  repo.setProfile({ age: 40, primary_discipline: "hybrid", endurance_sport: "running" });
+  seedRunner({ weeks: 8, perWeek: 3, km: 8 });
+  const proposal = repo.createProposal("stub", repo.RECOVERY_WEEK_INSTRUCTION, "", {
+    summary: "Reduced recovery prescription.",
+    days: [],
+  });
+  repo.setProposalStatus(proposal.id, "applied");
+  repo.setAppState("recovery_week_applied", JSON.stringify({ applied_on: back(2), proposal_id: proposal.id }));
+
+  const plan = repo.weeklyRunPlan(REF);
+  assert.equal(plan.available, true);
+  assert.ok(plan.runs.length >= 2, "the recovery week retains running frequency");
+  assert.ok(plan.runs.every((run) => run.kind_label !== "quality"), "quality work is removed during the deload");
+  assert.ok(plan.runs.every((run) => /Z2|easy/i.test(String(run.target_zone))), "every continuation stays easy Z2");
+  assert.match(plan.rationale.join(" "), /recovery week|easy Z2/i);
 });
 
 test("weeklyRunPlan emits a populated interval structure for interval-type quality sessions", () => {

@@ -11,7 +11,7 @@ import {
   transitionBrainDecision,
 } from "./brain-decisions.js";
 import { findExercise } from "./exercises.js";
-import { estimateExpenditure } from "./expenditure.js";
+import { estimateExpenditure, type ExpenditureEstimate } from "./expenditure.js";
 import { lsqSlopePerDay } from "./health.js";
 import { invalidateDayRead } from "./intelligence.js";
 import { getLatestNutritionTarget, setNutritionTarget } from "./nutrition.js";
@@ -24,12 +24,27 @@ import {
   setWeeklyRuns,
 } from "./plan.js";
 import { PlanQualityError, type PlanQualityReport, qualityIssueKey, validateTrainingPlan } from "./plan-quality.js";
-import { getAppState, setAppState } from "./app-state.js";
 import { latestMeasuredRmr, measuredRmrAssessment } from "./metabolism.js";
 import { getProgress } from "./sessions.js";
-import { addDaysISO, LB_PER_KG, localDateISO } from "./shared.js";
+import { addDaysISO, LB_PER_KG, localDateISO, parseDbTime } from "./shared.js";
 import { bumpTrainingDataVersion } from "./training-cache.js";
 import { canonicalBodyweightSeries, resolvedCurrentBodyweight } from "./bodyweight.js";
+import { automaticOrphanIntent, chatOrphanIntent } from "./proposal-intent.js";
+import { classifyRecompositionStage } from "./recomposition-stage.js";
+import {
+  activeRecoveryWeekLedger,
+  clearRecoveryWeekStampIfOwned,
+  clearRecoveryWeekStampIfOwnedStrict,
+  RECOVERY_WEEK_ACTIVE_DAYS,
+  RECOVERY_WEEK_INSTRUCTION_PREFIX,
+  stampRecoveryWeekApplied,
+  stampRecoveryWeekAppliedStrict,
+} from "./recovery-week-ledger.js";
+import { afterSqliteCommit, withSqliteSavepoint } from "./sqlite-savepoint.js";
+
+// Keep these public through profile/repo without duplicating the ledger's source
+// of truth. The explicit local export is also legible to source-contract checks.
+export { RECOVERY_WEEK_ACTIVE_DAYS, RECOVERY_WEEK_INSTRUCTION_PREFIX };
 
 // ---------- exercise guide ----------
 export function getExerciseDetail(name: string) {
@@ -59,12 +74,73 @@ export function createProposal(agent: string, instruction: string, raw: string, 
     .run(agent, instruction || "", raw || "", parsed ? JSON.stringify(parsed) : null);
   // Proposal state feeds the conductor (a pending recovery draft flips its button
   // into a review link) — invalidate the version-keyed memos on every write.
-  bumpTrainingDataVersion();
+  afterSqliteCommit(bumpTrainingDataVersion);
   return getProposal(Number(info.lastInsertRowid));
 }
 
 export function listProposals(limit = 20) {
   const rows = db.prepare(`SELECT * FROM plan_proposals ORDER BY id DESC LIMIT ?`).all(limit) as any[];
+  return rows.map(hydrateProposal);
+}
+
+// Review posture needs the complete review queue, including generic requested
+// reviews. Coach-led Today uses the attention-filtered variant below instead.
+export function listReviewHeldProposals(limit = 20) {
+  const rows = db
+    .prepare(
+      `SELECT p.*
+         FROM plan_proposals p
+        WHERE p.status = 'draft'
+          AND EXISTS (
+            SELECT 1
+              FROM brain_decisions d
+             WHERE d.source_ref_type = 'plan_proposal'
+               AND d.source_ref_key = CAST(p.id AS TEXT)
+               AND d.status = 'review'
+          )
+        ORDER BY (
+          SELECT MAX(d.id)
+            FROM brain_decisions d
+           WHERE d.source_ref_type = 'plan_proposal'
+             AND d.source_ref_key = CAST(p.id AS TEXT)
+             AND d.status = 'review'
+        ) DESC
+        LIMIT ?`
+    )
+    .all(limit) as any[];
+  return rows.map(hydrateProposal);
+}
+
+// Coach-led Today only interrupts for independent-review boundaries. Filter those
+// reason codes in SQL BEFORE the bounded limit so a stream of generic requested-
+// review bookkeeping cannot crowd an older safety/user-lock/policy hold out.
+export function listAttentionReviewHeldProposals(limit = 20) {
+  const rows = db
+    .prepare(
+      `SELECT p.*
+         FROM plan_proposals p
+        WHERE p.status = 'draft'
+          AND EXISTS (
+            SELECT 1
+              FROM brain_decisions d
+             WHERE d.source_ref_type = 'plan_proposal'
+               AND d.source_ref_key = CAST(p.id AS TEXT)
+               AND d.status = 'review'
+               AND json_extract(d.context_json, '$.review_reason_code') IN
+                   ('safety_floor','user_lock','domain_policy','budget_review','clinical')
+          )
+        ORDER BY (
+          SELECT MAX(d.id)
+            FROM brain_decisions d
+           WHERE d.source_ref_type = 'plan_proposal'
+             AND d.source_ref_key = CAST(p.id AS TEXT)
+             AND d.status = 'review'
+             AND json_extract(d.context_json, '$.review_reason_code') IN
+                 ('safety_floor','user_lock','domain_policy','budget_review','clinical')
+        ) DESC
+        LIMIT ?`
+    )
+    .all(limit) as any[];
   return rows.map(hydrateProposal);
 }
 
@@ -82,13 +158,19 @@ function hydrateProposal(row: any) {
   }
   const autonomy = db
     .prepare(
-      `SELECT id, status, autonomy_tier, effective_date, summary
+      `SELECT id, status, autonomy_tier, effective_date, summary, context_json
        FROM brain_decisions
        WHERE source_ref_type = 'plan_proposal' AND source_ref_key = ?
-         AND status IN ('announced','pending','applied')
+         AND status IN ('review','announced','pending','applied')
        ORDER BY id DESC LIMIT 1`
     )
     .get(String(row.id)) as any;
+  let autonomyContext: any = null;
+  try {
+    autonomyContext = autonomy?.context_json ? JSON.parse(String(autonomy.context_json)) : null;
+  } catch {
+    autonomyContext = null;
+  }
   return {
     ...row,
     parsed,
@@ -99,6 +181,9 @@ function hydrateProposal(row: any) {
           tier: String(autonomy.autonomy_tier),
           effective_date: autonomy.effective_date == null ? null : String(autonomy.effective_date),
           summary: autonomy.summary == null ? null : String(autonomy.summary),
+          review_required: autonomy.status === "review" || autonomyContext?.review_required === true,
+          review_reason_code: autonomyContext?.review_reason_code ?? null,
+          reasons: Array.isArray(autonomyContext?.review_reasons) ? autonomyContext.review_reasons : [],
         }
       : null,
   };
@@ -109,7 +194,7 @@ export function setProposalStatus(id: number, status: string, opts: { deferTrain
   // applyProposal batches the plan mutation and its proposal-state transition into
   // one logical cache invalidation after the SQL unit commits. Other callers keep
   // the immediate invalidation contract.
-  if (!opts.deferTrainingVersionBump) bumpTrainingDataVersion(); // proposal state feeds the conductor's memoized read
+  if (!opts.deferTrainingVersionBump) afterSqliteCommit(bumpTrainingDataVersion); // proposal state feeds the conductor's memoized read
   // A retired draft (the user's explicit discard, or a fresher draft superseding it)
   // makes any standing announced/pending brain decision pointing at it MOOT — cancel
   // those decisions NOW so the boundary pass can never apply a proposal that is no
@@ -123,23 +208,73 @@ export function setProposalStatus(id: number, status: string, opts: { deferTrain
   return proposal;
 }
 
-// Applying a training proposal retires the OTHER open training drafts — they were
-// alternative reads of the same week, so once one lands the rest are stale. Marked
-// 'superseded' (the system retiring them), distinct from a user 'discarded'. Scoped
-// to training drafts only: an advisory nutrition_target draft is a different category
-// (surfaced via Energy Balance) and is left untouched.
-function supersedeSiblingTrainingDrafts(appliedId: number, opts: { deferTrainingVersionBump?: boolean } = {}) {
+export interface OrphanSiblingCleanup {
+  intent_key: string;
+  eligible_before: string;
+  provenance?: "automatic" | "chat" | "background_chat";
+  burst_after?: string;
+  burst_before?: string;
+}
+
+export interface NormalizedProposalApplyPayload {
+  parsed: any;
+  migration: {
+    code: string;
+    reason: string;
+    source_ref_type: "plan_proposal";
+    source_proposal_id: number;
+    source_burst_proposal_ids: number[];
+    normalized_changes: Array<{ day_number: number | null; exercise: string | null; from: string; to: string }>;
+  };
+}
+
+// Scheduler orphan repair may converge OLDER alternatives, but only when they
+// carry the same explicit provenance + semantic intent, were already outside the
+// adoption grace window, and have never acquired autonomy/review ownership. The
+// historical background-chat path is additionally bounded by one short retry burst.
+// Ordinary apply/manual paths never call this helper.
+function supersedeMatchingOrphanDrafts(
+  appliedId: number,
+  cleanup: OrphanSiblingCleanup,
+  opts: { deferTrainingVersionBump?: boolean } = {}
+) {
+  const cutoff = Date.parse(String(cleanup.eligible_before));
+  const burstAfter = cleanup.burst_after ? Date.parse(String(cleanup.burst_after)) : Number.NaN;
+  const burstBefore = cleanup.burst_before ? Date.parse(String(cleanup.burst_before)) : Number.NaN;
+  if (!cleanup.intent_key || !Number.isFinite(cutoff)) return;
   const drafts = db
-    .prepare(`SELECT id, parsed_json FROM plan_proposals WHERE status = 'draft' AND id != ?`)
+    .prepare(
+      `SELECT id, agent, instruction, parsed_json, created_at
+         FROM plan_proposals
+        WHERE status = 'draft' AND id != ?`
+    )
     .all(appliedId) as any[];
   for (const d of drafts) {
-    let kind: any = null;
-    try {
-      kind = d.parsed_json ? JSON.parse(d.parsed_json).kind : null;
-    } catch {
-      /* keep null */
-    }
-    if (kind === "nutrition_target") continue; // different category — leave it
+    if (cleanup.provenance !== "background_chat" && Number(d.id) > appliedId) continue;
+    const createdAt = parseDbTime(d.created_at)?.getTime() ?? Number.NaN;
+    if (!Number.isFinite(createdAt) || createdAt > cutoff) continue;
+    if (
+      cleanup.provenance === "background_chat" &&
+      (!Number.isFinite(burstAfter) ||
+        !Number.isFinite(burstBefore) ||
+        createdAt < burstAfter ||
+        createdAt > burstBefore)
+    )
+      continue;
+    const siblingIntent =
+      cleanup.provenance === "chat" || cleanup.provenance === "background_chat"
+        ? chatOrphanIntent(d)
+        : automaticOrphanIntent(d);
+    if (siblingIntent?.key !== cleanup.intent_key) continue;
+    if (
+      cleanup.provenance === "background_chat" &&
+      (!siblingIntent || !("provenance" in siblingIntent) || siblingIntent.provenance !== "background_chat")
+    )
+      continue;
+    const owned = db
+      .prepare(`SELECT 1 FROM brain_decisions WHERE source_ref_type = 'plan_proposal' AND source_ref_key = ? LIMIT 1`)
+      .get(String(d.id));
+    if (owned) continue;
     // Through setProposalStatus so any standing announced/pending decision on the
     // retired draft is canceled too (the boundary pass must never apply it).
     setProposalStatus(Number(d.id), "superseded", opts);
@@ -171,8 +306,6 @@ export function supersedeAutoEvolutionDrafts(exceptId?: number) {
 // pendingRecoveryDraft() flips the Program button into a "Review your recovery
 // week →" link while a draft waits, and supersedeRecoveryWeekDrafts() retires the
 // prior draft when a fresh one lands so repeated taps never pile up drafts.
-export const RECOVERY_WEEK_INSTRUCTION_PREFIX = "Reshape next week into a RECOVERY";
-
 // The canonical full recovery-week instruction — shared by the lead-mode auto-draft
 // (scheduler) and kept prefix-compatible with the PWA's one-tap draft so the
 // drafted/active state machine (pendingRecoveryDraft, supersedeRecoveryWeekDrafts)
@@ -234,16 +367,35 @@ export function supersedeRecoveryWeekDrafts(exceptId?: number) {
 // actionable, wins over informational), the applied week is running ('applied',
 // active for RECOVERY_WEEK_ACTIVE_DAYS from the apply stamp), or null. The Plan
 // banner, the conductor's recovery lead, and the Program button all speak from this.
-export const RECOVERY_WEEK_ACTIVE_DAYS = 7;
-const RECOVERY_WEEK_APPLIED_KEY = "recovery_week_applied";
-
 export type RecoveryWeekStatus =
   | { state: "drafted"; proposal_id: number; summary: string | null }
   | { state: "upcoming"; proposal_id: number; decision_id: number; effective_date: string; summary: string | null }
   | { state: "applied"; applied_on: string; until: string; summary: string | null }
   | null;
 
-export function recoveryWeekStatus(): RecoveryWeekStatus {
+export type ActiveRecoveryWeek = Extract<RecoveryWeekStatus, { state: "applied" }>;
+
+// The authoritative date-bound answer to "is the reduced recovery plan running?".
+// It is ledger state, never inferred from a proposal summary or agent prose. The
+// optional date keeps historical reads and deterministic tests independent of the
+// wall clock; the interval is [applied_on, until), matching the seven plan dates.
+export function activeRecoveryWeek(date = localDateISO()): ActiveRecoveryWeek | null {
+  const ledger = activeRecoveryWeekLedger(date);
+  if (!ledger) return null;
+  return {
+    state: "applied",
+    applied_on: ledger.applied_on,
+    until: ledger.until,
+    summary: proposalSummary({ parsed: ledger.parsed }),
+  };
+}
+
+export function recoveryWeekStatus(date = localDateISO()): RecoveryWeekStatus {
+  // A running week is the primary truth even if a later draft exists. Surfaces may
+  // still show that future draft after this window closes, but never at the cost of
+  // making the active deload disappear from the daily/program brain.
+  const active = activeRecoveryWeek(date);
+  if (active) return active;
   const draft = pendingRecoveryDraft();
   if (draft) {
     const p = getProposal(draft.id);
@@ -258,18 +410,7 @@ export function recoveryWeekStatus(): RecoveryWeekStatus {
     }
     return { state: "drafted", proposal_id: draft.id, summary: proposalSummary(p) };
   }
-  const appliedOn = String(getAppState(RECOVERY_WEEK_APPLIED_KEY) ?? "");
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(appliedOn)) return null;
-  const until = addDaysISO(appliedOn, RECOVERY_WEEK_ACTIVE_DAYS);
-  if (!until || localDateISO() >= until) return null;
-  const p = db
-    .prepare(
-      `SELECT * FROM plan_proposals
-        WHERE status = 'applied' AND instruction LIKE ?
-        ORDER BY id DESC LIMIT 1`
-    )
-    .get(`${RECOVERY_WEEK_INSTRUCTION_PREFIX}%`) as any;
-  return { state: "applied", applied_on: appliedOn, until, summary: proposalSummary(p ? hydrateProposal(p) : null) };
+  return null;
 }
 
 function proposalSummary(p: any): string | null {
@@ -277,16 +418,34 @@ function proposalSummary(p: any): string | null {
   return s ? s.slice(0, 300) : null;
 }
 
-// Applying a recovery-week draft stamps its window so the plan (and the conductor)
-// can SAY this week is deliberately light. Bookkeeping — never blocks the apply.
-function stampRecoveryWeekIfApplies(p: any): void {
+// Applying a recovery-week draft stamps its exact owner so Undo can restore only
+// the recovery week this decision owns. Autonomous applies use the strict path so
+// the stamp commits with the plan; manual applies keep legacy fail-soft telemetry.
+function stampRecoveryWeekIfApplies(p: any, strict = false): void {
+  if (strict) {
+    if (String(p?.instruction ?? "").startsWith(RECOVERY_WEEK_INSTRUCTION_PREFIX)) {
+      stampRecoveryWeekAppliedStrict(Number(p.id), localDateISO());
+    }
+    return;
+  }
   try {
     if (String(p?.instruction ?? "").startsWith(RECOVERY_WEEK_INSTRUCTION_PREFIX)) {
-      setAppState(RECOVERY_WEEK_APPLIED_KEY, localDateISO());
+      stampRecoveryWeekApplied(Number(p.id), localDateISO());
     }
   } catch {
     /* never blocks the apply */
   }
+}
+
+// Autonomy Undo restores the plan and retires only the recovery proposal that
+// owned that decision. A newer recovery window keeps its stamp and plan intact.
+export function revertRecoveryWeekIfOwned(proposalId: number, opts: { strict?: boolean } = {}): boolean {
+  const p = getProposal(Number(proposalId));
+  if (!p || !String(p.instruction ?? "").startsWith(RECOVERY_WEEK_INSTRUCTION_PREFIX)) return false;
+  if (opts.strict) clearRecoveryWeekStampIfOwnedStrict(Number(proposalId));
+  else clearRecoveryWeekStampIfOwned(Number(proposalId));
+  if (p.status === "applied") setProposalStatus(Number(proposalId), "reverted");
+  return true;
 }
 
 // A fresh weekly run-plan draft retires any prior un-applied one (agent
@@ -499,11 +658,10 @@ function recordProposalStatusDecision(p: any, proposalStatus: string): void {
   }
 }
 
-// Decision telemetry is deliberately fail-soft: the plan/nutrition mutation above
-// is authoritative and must never be rolled back because its learning record could
-// not be written. Only bounded facts needed to evaluate the decision are retained;
-// raw agent output and prompts stay in their existing proposal row.
-function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?: number): void {
+// Manual apply telemetry remains fail-soft. Autonomy-owned apply passes `required`
+// because its decision + expectations are part of the authoritative mutation and
+// must commit in the same savepoint as the proposal and rollback snapshot.
+function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?: number, required = false): void {
   try {
     const today = localDateISO();
     const nutrition = p.parsed?.kind === "nutrition_target";
@@ -549,6 +707,15 @@ function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?:
     const accepted = result?.accepted ?? null;
     let nutritionBaseline: ReturnType<typeof estimateExpenditure> | null = null;
     let nutritionExpectationBasis: string | null = null;
+    const nutritionEffectiveDate = accepted?.effective_date || today;
+    const nutritionStage =
+      nutrition && accepted?.target_kcal != null ? recompositionStageAt(nutritionEffectiveDate).kind : null;
+    const nutritionTargetDelta = Number(p.parsed?.nutrition?.delta_kcal);
+    const storedTargetDelta = Number.isFinite(nutritionTargetDelta)
+      ? Math.round(nutritionTargetDelta)
+      : Number.isFinite(Number(p.parsed?.nutrition?.prev_target_kcal))
+        ? Math.round(Number(accepted?.target_kcal) - Number(p.parsed.nutrition.prev_target_kcal))
+        : null;
     if (nutrition && accepted?.target_kcal != null) {
       try {
         const estimate = estimateExpenditure(21);
@@ -561,7 +728,7 @@ function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?:
           nutritionExpectationBasis = "measured_expenditure";
           const expectedTrend = ((Number(accepted.target_kcal) - estimate.tdee) * 7) / KCAL_PER_LB;
           expectations.push({
-            metric_key: "weight_trend_lb_wk",
+            metric_key: "intake_to_weight_response",
             subject_key: null,
             direction: "within_band",
             baseline: {
@@ -569,18 +736,22 @@ function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?:
               tdee: estimate.tdee,
               intake_avg_kcal: estimate.intake_avg_kcal,
               confidence: estimate.confidence,
+              target_kcal: Number(accepted.target_kcal),
+              target_delta_kcal: storedTargetDelta,
+              predicted_trend_lb_wk: Math.round(expectedTrend * 100) / 100,
+              recomposition_stage: nutritionStage,
             },
             target: {
               min: Math.round((expectedTrend - 0.35) * 100) / 100,
               max: Math.round((expectedTrend + 0.35) * 100) / 100,
             },
-            window_start: accepted.effective_date || today,
-            window_end: datePlusDays(accepted.effective_date || today, 28),
+            window_start: nutritionEffectiveDate,
+            window_end: datePlusDays(nutritionEffectiveDate, 28),
             minimum_data: { weigh_ins: 6, intake_days: 10 },
             confounder_policy: "exclude_context_events",
             confidence: "tentative",
-            evaluator: "weight_trend",
-            evaluator_version: "nutrition-weight-v1",
+            evaluator: "intake_response",
+            evaluator_version: "nutrition-intake-response-v2",
           });
         }
       } catch {
@@ -604,21 +775,27 @@ function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?:
         // requirement will yield inconclusive rather than a fabricated verdict.
       }
       expectations.push({
-        metric_key: "weight_trend_lb_wk",
+        metric_key: "intake_to_weight_response",
         subject_key: null,
         direction: "within_band",
-        baseline: { target_kcal: Number(accepted.target_kcal), basis: nutritionExpectationBasis },
+        baseline: {
+          target_kcal: Number(accepted.target_kcal),
+          target_delta_kcal: storedTargetDelta,
+          predicted_trend_lb_wk: Math.round(expectedTrend * 100) / 100,
+          recomposition_stage: nutritionStage,
+          basis: nutritionExpectationBasis,
+        },
         target: {
           min: Math.round((expectedTrend - tolerance) * 100) / 100,
           max: Math.round((expectedTrend + tolerance) * 100) / 100,
         },
-        window_start: accepted.effective_date || today,
-        window_end: datePlusDays(accepted.effective_date || today, 28),
-        minimum_data: { weigh_ins: 6 },
+        window_start: nutritionEffectiveDate,
+        window_end: datePlusDays(nutritionEffectiveDate, 28),
+        minimum_data: { weigh_ins: 6, intake_days: 10 },
         confounder_policy: "exclude_context_events",
         confidence: "tentative",
-        evaluator: "weight_trend",
-        evaluator_version: "nutrition-weight-v1",
+        evaluator: "intake_response",
+        evaluator_version: "nutrition-intake-response-v2",
       });
     }
     if (!nutrition && !expectations.length) {
@@ -651,7 +828,7 @@ function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?:
         ? [`nutrition_target:${accepted?.id ?? p.id}`, `expenditure:${nutritionExpectationBasis ?? "thin"}`]
         : exercises.map((exercise) => `exercise:${exercise}:plan-and-history`).slice(0, 12)),
     ];
-    const action = nutrition
+    const baseAction = nutrition
       ? {
           target_kcal: result?.nutrition?.target_kcal ?? null,
           protein_g: result?.nutrition?.protein_g ?? null,
@@ -692,6 +869,7 @@ function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?:
               })),
             runs: Array.isArray(result?.runs) ? result.runs.slice(0, 14) : [],
           };
+    const action = result?.legacy_migration ? { ...baseAction, legacy_migration: result.legacy_migration } : baseAction;
     const decisionInput = {
       effective_date: nutrition && accepted?.effective_date ? accepted.effective_date : today,
       kind: shape.kind,
@@ -712,10 +890,12 @@ function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?:
         instruction: p.instruction || null,
         evidence_keys: evidenceKeys,
         evidence_observed_at: new Date().toISOString(),
+        ...(result?.legacy_migration ? { legacy_migration: result.legacy_migration } : {}),
         ...(nutrition
           ? {
               expectation_basis: nutritionExpectationBasis,
               baseline_confidence: nutritionBaseline?.confidence ?? null,
+              recomposition_stage: nutritionStage,
             }
           : {}),
       },
@@ -729,7 +909,7 @@ function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?:
     if (existingDecisionId) {
       const existing = getBrainDecision(existingDecisionId);
       if (!existing) throw new Error(`No brain decision ${existingDecisionId}`);
-      patchBrainDecision(existingDecisionId, {
+      const patched = patchBrainDecision(existingDecisionId, {
         effective_date: decisionInput.effective_date,
         kind: decisionInput.kind,
         domain: decisionInput.domain,
@@ -745,6 +925,7 @@ function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?:
         applied_at: decisionInput.applied_at,
         evaluator_version: decisionInput.evaluator_version,
       });
+      if (!patched) throw new Error(`Brain decision ${existingDecisionId} could not be updated`);
       const stored = new Set(
         listBrainExpectations({ decisionId: existingDecisionId }).map(
           (item) => `${item.metric_key}|${item.subject_key}|${item.window_end}`
@@ -757,16 +938,17 @@ function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?:
     } else {
       recordDecision(decisionInput, expectations);
     }
-  } catch {
-    // The authoritative apply/accept path already succeeded. Learning must never
-    // turn a valid plan or nutrition action into an error.
+  } catch (error) {
+    if (required) throw error;
+    // A direct/manual apply is authoritative even when optional learning telemetry
+    // is unavailable. Autonomous apply never takes this branch.
   }
 }
 
 // An apply outside the announced decision's own boundary pass (a manual tap, chat,
 // MCP) makes the standing announcement moot: cancel it so the boundary never
 // re-applies the same proposal on top of the user's action.
-function cancelAnnouncementsForProposal(proposalId: number, exceptDecisionId?: number) {
+function cancelAnnouncementsForProposal(proposalId: number, exceptDecisionId?: number, strict = false) {
   try {
     const standing = [
       ...listBrainDecisions({ status: "announced", limit: 100 }),
@@ -775,21 +957,29 @@ function cancelAnnouncementsForProposal(proposalId: number, exceptDecisionId?: n
       (decision) => decision.id !== exceptDecisionId && Number((decision.action as any)?.proposal_id) === proposalId
     );
     for (const decision of standing) transitionBrainDecision(decision.id!, "canceled");
-  } catch {
+  } catch (error) {
+    if (strict) throw error;
     // Bookkeeping must never block the authoritative apply.
   }
 }
 
-export function applyProposal(id: number, opts: { supersedeSiblings?: boolean; decisionId?: number } = {}) {
+export interface ProposalApplyOptions {
+  orphanSiblingCleanup?: OrphanSiblingCleanup;
+  decisionId?: number;
+  normalizedApplyPayload?: NormalizedProposalApplyPayload;
+  requireDecisionLedger?: boolean;
+}
+
+function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
   const p = getProposal(id);
   if (!p) throw new Error(`No proposal ${id}`);
-  if (!p.parsed) throw new Error("Proposal has no parsed payload");
+  const parsed = opts.normalizedApplyPayload?.parsed ?? p.parsed;
+  if (!parsed) throw new Error("Proposal has no parsed payload");
   if (p.status === "applied") {
     // Re-running an applied proposal would duplicate its side effects (a second
     // nutrition_targets row, a re-run replacePlan over newer edits).
     return { ok: false, id, error: "proposal already applied" };
   }
-  cancelAnnouncementsForProposal(id, opts.decisionId);
   // Adaptive nutrition-target drafts (from the nutrition check-in) are advisory —
   // there is no plan to mutate. Recognize the shape so "applying" one is a clean
   // acknowledgement on every surface (REST + MCP) instead of throwing
@@ -797,10 +987,10 @@ export function applyProposal(id: number, opts: { supersedeSiblings?: boolean; d
   // check-in card, not the plan-proposals apply button. Even advisory, the target
   // keeps its already-reviewed kcal (with the absolute kcal floor) while the
   // current protein safety floor and any adjustment remain transparent.
-  if (p.parsed.kind === "nutrition_target") {
-    const incompatibility = reviewedNutritionTargetIncompatibility(p.parsed.nutrition);
+  if (parsed.kind === "nutrition_target") {
+    const incompatibility = reviewedNutritionTargetIncompatibility(parsed.nutrition);
     if (incompatibility) throw new Error(incompatibility);
-    const { nutrition, clamped } = clampNutritionTarget(p.parsed.nutrition, { preserveReviewedKcal: true });
+    const { nutrition, clamped } = clampNutritionTarget(parsed.nutrition, { preserveReviewedKcal: true });
     // Close the loop: PERSIST the accepted (clamped, lean-safe) target so the fuel
     // card, goal math and next check-in read THIS number instead of re-deriving the
     // formula. Effective from today. Persistence is the authoritative mutation: if
@@ -823,6 +1013,7 @@ export function applyProposal(id: number, opts: { supersedeSiblings?: boolean; d
       throw new Error(`Nutrition target could not be saved; the proposal remains reviewable${detail}.`);
     }
     if (!accepted) throw new Error("Nutrition target could not be saved; the proposal remains reviewable.");
+    cancelAnnouncementsForProposal(id, opts.decisionId, opts.requireDecisionLedger === true);
     setProposalStatus(id, "applied");
     const result = {
       ok: true,
@@ -833,26 +1024,34 @@ export function applyProposal(id: number, opts: { supersedeSiblings?: boolean; d
       ...(accepted ? { accepted } : {}),
       ...(clamped.length ? { clamped } : {}),
     };
-    recordAppliedProposalDecision(p, result, opts.decisionId);
+    recordAppliedProposalDecision(p, result, opts.decisionId, opts.requireDecisionLedger === true);
     return result;
   }
   // Restructure proposal: full plan replacement (changed frequency / split).
-  if (Array.isArray(p.parsed.days)) {
-    const quality = validateTrainingPlan(p.parsed.days);
+  if (Array.isArray(parsed.days)) {
+    const quality = validateTrainingPlan(parsed.days);
     if (!quality.ok)
       throw new Error(`Plan quality check failed: ${quality.errors.map((entry) => entry.message).join(" ")}`);
-    replacePlan(p.parsed.days);
+    replacePlan(parsed.days);
+    cancelAnnouncementsForProposal(id, opts.decisionId, opts.requireDecisionLedger === true);
     setProposalStatus(id, "applied");
-    stampRecoveryWeekIfApplies(p);
-    if (opts.supersedeSiblings !== false) supersedeSiblingTrainingDrafts(id);
-    const result = { ok: true, id, restructured: true, days: p.parsed.days.length, quality };
-    recordAppliedProposalDecision(p, result, opts.decisionId);
+    stampRecoveryWeekIfApplies(p, opts.requireDecisionLedger === true);
+    if (opts.orphanSiblingCleanup) supersedeMatchingOrphanDrafts(id, opts.orphanSiblingCleanup);
+    const result = {
+      ok: true,
+      id,
+      restructured: true,
+      days: parsed.days.length,
+      quality,
+      ...(opts.normalizedApplyPayload ? { legacy_migration: opts.normalizedApplyPayload.migration } : {}),
+    };
+    recordAppliedProposalDecision(p, result, opts.decisionId, opts.requireDecisionLedger === true);
     return result;
   }
   // A proposal may carry strength `changes`, a week of run prescriptions (`cardio`),
   // or both. (A full split/frequency rewrite uses `days` → replacePlan above.)
-  const hasChanges = Array.isArray(p.parsed.changes);
-  const hasCardio = Array.isArray(p.parsed.cardio) && p.parsed.cardio.length;
+  const hasChanges = Array.isArray(parsed.changes);
+  const hasCardio = Array.isArray(parsed.cardio) && parsed.cardio.length;
   if (!hasChanges && !hasCardio) {
     throw new Error("Proposal has no valid changes, cardio, or days");
   }
@@ -865,7 +1064,7 @@ export function applyProposal(id: number, opts: { supersedeSiblings?: boolean; d
   const savepoint = `apply_plan_proposal_${Math.trunc(Number(id))}`;
   const beforeQuality = validateTrainingPlan(getPlan());
   db.exec(`SAVEPOINT ${savepoint}`);
-  for (const c of hasChanges ? p.parsed.changes : []) {
+  for (const c of hasChanges ? parsed.changes : []) {
     try {
       // A cardio entry inside `changes` has no loaded exercise to tweak — route it to
       // the weekly-runs applier instead of skipping it (so mixed proposals apply runs).
@@ -893,7 +1092,7 @@ export function applyProposal(id: number, opts: { supersedeSiblings?: boolean; d
       skipped.push({ ...c, error: e.message });
     }
   }
-  if (hasCardio) cardioRuns.push(...p.parsed.cardio);
+  if (hasCardio) cardioRuns.push(...parsed.cardio);
   let runs: { applied: any[] } | undefined;
   if (cardioRuns.length) {
     try {
@@ -926,7 +1125,7 @@ export function applyProposal(id: number, opts: { supersedeSiblings?: boolean; d
   }
   const touchedDays = new Set<number>(
     [
-      ...(hasChanges ? p.parsed.changes : []).map((change: any) => Number(change?.day_number)),
+      ...(hasChanges ? parsed.changes : []).map((change: any) => Number(change?.day_number)),
       ...cardioRuns.map((run: any) => Number(run?.day_number)),
     ].filter(Number.isFinite)
   );
@@ -971,10 +1170,11 @@ export function applyProposal(id: number, opts: { supersedeSiblings?: boolean; d
     };
   }
   db.exec(`RELEASE ${savepoint}`);
+  cancelAnnouncementsForProposal(id, opts.decisionId, opts.requireDecisionLedger === true);
   setProposalStatus(id, "applied", { deferTrainingVersionBump: true });
-  stampRecoveryWeekIfApplies(p);
-  if (opts.supersedeSiblings !== false) {
-    supersedeSiblingTrainingDrafts(id, { deferTrainingVersionBump: true });
+  stampRecoveryWeekIfApplies(p, opts.requireDecisionLedger === true);
+  if (opts.orphanSiblingCleanup) {
+    supersedeMatchingOrphanDrafts(id, opts.orphanSiblingCleanup, { deferTrainingVersionBump: true });
   }
   // An applied target tweak / added movement / week of runs can change today's read —
   // bust the cached Brief so the next open reflects the change, not the stale plan.
@@ -988,12 +1188,17 @@ export function applyProposal(id: number, opts: { supersedeSiblings?: boolean; d
     ...(runs ? { runs: runs.applied } : {}),
     ...(clamped.length ? { clamped } : {}),
     quality,
+    ...(opts.normalizedApplyPayload ? { legacy_migration: opts.normalizedApplyPayload.migration } : {}),
   };
-  recordAppliedProposalDecision(p, result, opts.decisionId);
+  recordAppliedProposalDecision(p, result, opts.decisionId, opts.requireDecisionLedger === true);
   // Exactly one in-process invalidation for the committed plan + proposal-state
   // unit. Failed savepoints return above without touching the counter.
-  bumpTrainingDataVersion();
+  afterSqliteCommit(bumpTrainingDataVersion);
   return result;
+}
+
+export function applyProposal(id: number, opts: ProposalApplyOptions = {}) {
+  return withSqliteSavepoint(`apply_proposal_${Math.trunc(Number(id))}`, () => applyProposalUnit(id, opts));
 }
 
 // Map a coach-emitted cardio entry (from parsed.cardio, or a kind:'cardio' change)
@@ -1492,6 +1697,42 @@ export function currentBodyFatEstimate(prof?: any): BodyFatEstimate | null {
   return navyTapeBodyFat(p) ?? latestGarminBodyFat();
 }
 
+// Decision-time phase snapshot. The classifier itself is pure/cycle-free; this
+// adapter only gathers current canonical profile/bodyweight/phase inputs so an
+// intervention can retain the phase it actually belonged to.
+export function recompositionStageAt(today = localDateISO()) {
+  const profile = getProfile() as any;
+  const resolved = resolvedCurrentBodyweight(profile, today);
+  const current = Number(resolved?.weight_lb ?? profile?.weight_lb);
+  const start = Number(profile?.start_weight_lb);
+  const goal = Number(profile?.goal_weight_lb);
+  const validCurrent = Number.isFinite(current) && current > 0 ? current : null;
+  const validStart = Number.isFinite(start) && start > 0 ? start : null;
+  const validGoal = Number.isFinite(goal) && goal > 0 ? goal : null;
+  const lost = validStart != null && validCurrent != null ? Math.max(0, validStart - validCurrent) : null;
+  const total = validStart != null && validGoal != null && validStart > validGoal ? validStart - validGoal : null;
+  const progress = total != null && lost != null ? Math.max(0, Math.min(1, lost / total)) : null;
+  const remaining = validCurrent != null && validGoal != null ? Math.max(0, validCurrent - validGoal) : null;
+  const phase = db
+    .prepare(
+      `SELECT kind FROM journey_phases WHERE status = 'active'
+       ORDER BY COALESCE(start_date, created_at) DESC, id DESC LIMIT 1`
+    )
+    .get() as any;
+  const bodyFat = currentBodyFatEstimate(profile);
+  return classifyRecompositionStage({
+    mode: effectiveGoalMode(profile),
+    phaseKind: phase?.kind ?? null,
+    progress,
+    remaining,
+    current: validCurrent,
+    bodyFatPct: bodyFat?.body_fat_pct ?? null,
+    bodyFatDate: bodyFat?.date ?? null,
+    goalBodyFat: Number.isFinite(Number(profile?.goal_bodyfat_pct)) ? Number(profile.goal_bodyfat_pct) : null,
+    today,
+  });
+}
+
 export function leannessAwareLossRates(weightLb: number, bodyFatPct?: number | null) {
   const w = Number(weightLb);
   const baseMax = Number.isFinite(w) ? 0.01 * w : 0;
@@ -1523,7 +1764,7 @@ export function leannessAwareLossRates(weightLb: number, bodyFatPct?: number | n
   };
 }
 
-export function computeGoalCheck(prof?: any) {
+export function computeGoalCheck(prof?: any, opts: { expenditure?: ExpenditureEstimate | null } = {}) {
   const storedProfile = prof ?? getProfile();
   const currentWeight = resolvedCurrentBodyweight(storedProfile);
   const p = currentWeight ? { ...storedProfile, weight_lb: currentWeight.weight_lb } : storedProfile;
@@ -1546,10 +1787,18 @@ export function computeGoalCheck(prof?: any) {
     "activity_factor";
   let tdee_basis = "profile_seed";
   let tdee_confidence: "none" | "low" | "medium" | "high" = "none";
-  let expenditure: ReturnType<typeof estimateExpenditure> | null = null;
+  let expenditure: ExpenditureEstimate | null = null;
+  if (opts.expenditure !== undefined) {
+    expenditure = opts.expenditure;
+  } else {
+    try {
+      expenditure = estimateExpenditure();
+    } catch {
+      expenditure = null;
+    }
+  }
   try {
-    expenditure = estimateExpenditure();
-    if (expenditure.tdee != null && expenditure.tdee > 0) {
+    if (expenditure && expenditure.tdee != null && expenditure.tdee > 0) {
       tdee = expenditure.tdee;
       tdee_basis = expenditure.tdee_basis;
       tdee_confidence = expenditure.confidence;
@@ -1560,7 +1809,7 @@ export function computeGoalCheck(prof?: any) {
       else tdee_source = "adaptive";
     }
   } catch {
-    /* DB hiccup → retain the deterministic profile seed */
+    /* malformed optional estimate → retain the deterministic profile seed */
   }
 
   const mode = effectiveGoalMode(p);

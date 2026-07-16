@@ -11,6 +11,8 @@ import { KCAL_PER_LB, getProfile, projectGoalPace } from "./profile.js";
 import { LB_PER_KG, addDaysISO, localDateISO } from "./shared.js";
 import { foodBackstopSignature, registerTrainingCacheClear, trainingBackstopSignature } from "./training-cache.js";
 import { canonicalBodyweightSeries, resolvedCurrentBodyweight } from "./bodyweight.js";
+import { completedIntakeWindow } from "./intake-window.js";
+import { robustWeightEvidence } from "./weight-evidence.js";
 
 export interface ExpenditureEstimate {
   // Best current maintenance estimate. The outcome-calibrated value remains an
@@ -132,94 +134,6 @@ function median(values: number[]): number {
   return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
-function theilSenSlope(xs: number[], ys: number[]): number {
-  const slopes: number[] = [];
-  for (let i = 0; i < xs.length; i++) {
-    for (let j = i + 1; j < xs.length; j++) {
-      const dx = xs[j] - xs[i];
-      if (dx > 0) slopes.push((ys[j] - ys[i]) / dx);
-    }
-  }
-  const value = median(slopes);
-  return Number.isFinite(value) ? value : 0;
-}
-
-function robustWeightTrend<T extends { date: string; weight_lb: number }>(
-  points: T[]
-): {
-  points: T[];
-  terminalShock: boolean;
-  terminalShockDate: string | null;
-  corroboratedShift: boolean;
-} {
-  const settled = { points, terminalShock: false, terminalShockDate: null, corroboratedShift: false };
-  if (points.length < 4) return settled;
-  const last = points.at(-1)!;
-  const prior = points.slice(0, -1);
-  const recent = prior.slice(-3).map((point) => Number(point.weight_lb));
-  const recentMedian = median(recent);
-  const xs = prior.map((point) => Date.parse(`${point.date}T00:00:00Z`) / 86_400_000);
-  const ys = prior.map((point) => Number(point.weight_lb));
-  const slope = theilSenSlope(xs, ys);
-  const lastX = Date.parse(`${last.date}T00:00:00Z`) / 86_400_000;
-  const predicted = median(ys.map((y, i) => y + slope * (lastX - xs[i])));
-  const reference = Number.isFinite(predicted) ? predicted : recentMedian;
-  const threshold = Math.max(2, Math.abs(recentMedian) * 0.0125);
-  const shock = Number.isFinite(reference) && Math.abs(Number(last.weight_lb) - reference) >= threshold;
-
-  // A second nearby reading at the same new level corroborates that the scale
-  // moved, but not that the whole jump was tissue. Find the trailing level-shift
-  // cluster, then let only a time-earned portion of that residual influence the
-  // trend. As the new level persists across weeks, progressively more of it is
-  // admitted; a lone reading remains fully withheld.
-  const clusterTolerance = Math.max(0.75, threshold * 0.4);
-  let clusterStart = points.length - 1;
-  while (
-    clusterStart > 0 &&
-    Math.abs(Number(points[clusterStart - 1].weight_lb) - Number(last.weight_lb)) <= clusterTolerance
-  ) {
-    clusterStart--;
-  }
-  const cluster = points.slice(clusterStart);
-  const baseline = points.slice(0, clusterStart);
-  if (baseline.length < 3) {
-    return shock
-      ? { points: prior, terminalShock: true, terminalShockDate: last.date, corroboratedShift: false }
-      : settled;
-  }
-
-  const baselineXs = baseline.map((point) => Date.parse(`${point.date}T00:00:00Z`) / 86_400_000);
-  const baselineYs = baseline.map((point) => Number(point.weight_lb));
-  const baselineSlope = theilSenSlope(baselineXs, baselineYs);
-  const firstClusterX = Date.parse(`${cluster[0].date}T00:00:00Z`) / 86_400_000;
-  const predictedFirst = median(baselineYs.map((y, i) => y + baselineSlope * (firstClusterX - baselineXs[i])));
-  const firstResidual = Number(cluster[0].weight_lb) - predictedFirst;
-  if (!Number.isFinite(firstResidual) || Math.abs(firstResidual) < threshold) {
-    return shock
-      ? { points: prior, terminalShock: true, terminalShockDate: last.date, corroboratedShift: false }
-      : settled;
-  }
-  if (cluster.length < 2) {
-    return { points: prior, terminalShock: true, terminalShockDate: last.date, corroboratedShift: false };
-  }
-
-  const persistedDays = calendarSpanDays(cluster[0].date, last.date) + 1;
-  const baselineWeight = Math.abs(predictedFirst || recentMedian);
-  const earnedShift = Math.max(0.75, baselineWeight * 0.005 * Math.max(1, persistedDays / 7));
-  const shrink = Math.min(1, earnedShift / Math.abs(firstResidual));
-  const adjusted = cluster.map((point) => {
-    const x = Date.parse(`${point.date}T00:00:00Z`) / 86_400_000;
-    const expected = median(baselineYs.map((y, i) => y + baselineSlope * (x - baselineXs[i])));
-    return { ...point, weight_lb: expected + (Number(point.weight_lb) - expected) * shrink };
-  });
-  return {
-    points: [...baseline, ...adjusted] as T[],
-    terminalShock: false,
-    terminalShockDate: null,
-    corroboratedShift: true,
-  };
-}
-
 function activityPattern(byDay: Map<string, number>): {
   typical: number;
   allowance: number;
@@ -298,35 +212,8 @@ function computeExpenditure(windowDays = 21): ExpenditureEstimate {
 
   // Intake is read first so scale and intake evidence can be restricted to one
   // common completed-day interval. Missing food days stay absent, never zero.
-  const notes = db
-    .prepare(
-      `SELECT COALESCE(date, substr(created_at, 1, 10)) AS day, meal, parsed_json
-      FROM food_notes
-      WHERE COALESCE(date, substr(created_at, 1, 10)) >= ?
-        AND COALESCE(date, substr(created_at, 1, 10)) <= ?`
-    )
-    .all(since, completedThrough) as any[];
-  const kcalByDay = new Map<string, number>();
-  const mealsByDay = new Map<string, string[]>();
-  for (const n of notes) {
-    let parsed: any = null;
-    try {
-      parsed = n.parsed_json ? JSON.parse(n.parsed_json) : null;
-    } catch {
-      parsed = null;
-    }
-    const kcal = Number(parsed?.kcal);
-    if (!Number.isFinite(kcal) || kcal <= 0) continue;
-    const day = String(n.day ?? "").slice(0, 10);
-    if (!day) continue;
-    kcalByDay.set(day, (kcalByDay.get(day) ?? 0) + kcal);
-    mealsByDay.set(day, [
-      ...(mealsByDay.get(day) ?? []),
-      String(n.meal || "meal")
-        .trim()
-        .toLowerCase(),
-    ]);
-  }
+  const intakeWindow = completedIntakeWindow(windowDays, today);
+  const kcalByDay = new Map(intakeWindow.days.filter((day) => day.credible).map((day) => [day.date, day.kcal]));
   const intakeDates = [...kcalByDay.keys()].sort();
   const overlapStart = intakeDates[0] ?? since;
   const overlapEnd = intakeDates.at(-1) ?? completedThrough;
@@ -336,47 +223,25 @@ function computeExpenditure(windowDays = 21): ExpenditureEstimate {
   // treated as an unconfirmed scale/fluid shock and withheld until a later
   // weigh-in corroborates the new level. Theil-Sen then keeps any remaining
   // single noisy point from owning the energy calculation.
-  const allWpts = canonicalBodyweightSeries({ since: overlapStart, through: overlapEnd });
-  const robust = robustWeightTrend(allWpts);
+  const robust = robustWeightEvidence(overlapStart, overlapEnd);
   const wpts = robust.points;
-  let trend: number | null = null;
-  const weighDays = new Set(wpts.map((p) => String(p.date))).size;
-  let weighSpanDays = 0; // first→last calendar span, for confidence
-  if (wpts.length >= 2) {
-    const xs = wpts.map((p) => Date.parse(p.date + "T00:00:00Z") / 864e5);
-    const ys = wpts.map((p) => Number(p.weight_lb));
-    weighSpanDays = xs[xs.length - 1] - xs[0];
-    if (weighSpanDays >= 3) trend = theilSenSlope(xs, ys) * 7;
-  }
+  const trend = robust.trend_lb_wk;
+  const weighDays = robust.weigh_ins;
+  const weighSpanDays = robust.span_days;
 
   const dayTotals = [...kcalByDay.values()];
   const intakeAvg = dayTotals.length ? Math.round(dayTotals.reduce((a, b) => a + b, 0) / dayTotals.length) : null;
 
   const points = dayTotals.length;
-  let credibleIntakeDays = 0;
-  let partialIntakeDays = 0;
-  for (const [day, total] of kcalByDay) {
-    const meals = mealsByDay.get(day) ?? [];
-    const snackOnly = meals.length > 0 && meals.every((meal) => /^(snack|treat|drink|beverage)$/.test(meal));
-    const primarySlots = new Set(meals.filter((meal) => /^(breakfast|brunch|lunch|dinner|supper)$/.test(meal))).size;
-    const genericDayTotal = meals.some((meal) => meal === "meal") && total >= 1_000;
-    if (
-      !snackOnly &&
-      (primarySlots >= 2 ||
-        meals.filter((meal) => !/^(snack|treat|drink|beverage)$/.test(meal)).length >= 2 ||
-        genericDayTotal)
-    ) {
-      credibleIntakeDays++;
-    } else {
-      partialIntakeDays++;
-    }
-  }
+  const credibleIntakeDays = intakeWindow.credible_days;
+  const partialIntakeDays = intakeWindow.partial_days;
+  const observedIntakeDays = credibleIntakeDays + partialIntakeDays;
   const intakeQuality: ExpenditureEstimate["quality"]["intake"] =
-    points === 0
+    observedIntakeDays === 0
       ? "none"
       : partialIntakeDays === 0 && credibleIntakeDays === points
         ? "complete"
-        : credibleIntakeDays >= Math.ceil(points * 0.6)
+        : credibleIntakeDays >= Math.ceil(observedIntakeDays * 0.6)
           ? "plausible"
           : "partial";
   // TDEE = intake − (weekly Δweight as a daily kcal balance). This stays
@@ -411,13 +276,13 @@ function computeExpenditure(windowDays = 21): ExpenditureEstimate {
       weighDays >= 10 &&
       weighSpanDays >= 28 &&
       calendarCoverage >= 0.7 &&
-      !robust.terminalShock
+      !robust.terminal_shock
     )
       confidence = "high";
     else if (points >= 7 && weighDays >= 4 && weighSpanDays >= 7 && calendarCoverage >= 0.45) confidence = "medium";
     else confidence = "low";
   }
-  if (robust.terminalShock && confidence === "high") confidence = "medium";
+  if (robust.terminal_shock && confidence === "high") confidence = "medium";
   if (confidence === "high" && intakeQuality !== "complete") confidence = "medium";
   if (confidence === "medium" && intakeQuality === "partial") confidence = "low";
   if (outcomeQuality === "implausible_low" || outcomeQuality === "implausible_high") confidence = "low";
@@ -524,9 +389,9 @@ function computeExpenditure(windowDays = 21): ExpenditureEstimate {
     quality: {
       intake: intakeQuality,
       outcome: outcomeQuality,
-      explanation: robust.terminalShock
+      explanation: robust.terminal_shock
         ? "The latest abrupt scale change is unconfirmed, so it stays visible but is withheld from tissue-energy math until another weigh-in corroborates it."
-        : robust.corroboratedShift
+        : robust.level_shift === "corroborated"
           ? "Repeated weigh-ins corroborate a new scale level, so Cairn admits it cautiously over time instead of converting the whole step into tissue-energy change."
         : intakeQuality === "partial"
           ? "Some logged days look partial, so the outcome trend stays low-confidence and is blended with a safer starting anchor."
@@ -537,9 +402,9 @@ function computeExpenditure(windowDays = 21): ExpenditureEstimate {
               : "The estimate is still settling as intake and weight coverage grows.",
       plausible_tdee_min: plausibleMin,
       plausible_tdee_max: plausibleMax,
-      terminal_weight_shock: robust.terminalShock,
-      terminal_weight_shock_date: robust.terminalShockDate,
-      weight_level_shift: robust.terminalShock ? "unconfirmed" : robust.corroboratedShift ? "corroborated" : "none",
+      terminal_weight_shock: robust.terminal_shock,
+      terminal_weight_shock_date: robust.terminal_shock_date,
+      weight_level_shift: robust.level_shift,
       outcome_overlap_days: overlapCalendarDays,
       outcome_calendar_coverage: Math.round(calendarCoverage * 1000) / 1000,
     },

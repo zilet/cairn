@@ -114,6 +114,7 @@ export interface CoachProgramState {
   lifts: CoachRecord[];
   volume: unknown[];
   mesocycle?: unknown;
+  recovery_week?: unknown;
   endurance?: unknown;
   hybrid?: unknown;
   adaptations_due: unknown[];
@@ -171,6 +172,7 @@ export type CoachPersonalSafetyGuardrail = "injury" | "allergy" | "clinical" | "
 export interface CoachPersonalModifier {
   key: string;
   target: CoachPersonalModifierTarget;
+  stage: string | null;
   scale: number;
   bounds: { min: number; max: number };
   confidence: CoachPersonalResponseConfidence;
@@ -184,6 +186,7 @@ export interface CoachOutcomeLearning {
   domain: string;
   metric_key: string;
   subject_key: string | null;
+  stage: string | null;
   statement: string;
   expected: string;
   observed: string;
@@ -233,6 +236,7 @@ export interface CoachContextEnvelope {
   recovery: CoachRecoveryContext;
   checkins: CoachCheckin[];
   fueling: CoachFuelingFeedback[];
+  underfueling: CoachRecord | null;
   family: CoachFamilyMember[];
   body_composition: CoachRecord | null;
   body_metrics: CoachRecord | null;

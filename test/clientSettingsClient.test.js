@@ -120,7 +120,7 @@ test("brain diagnostics stay bounded, qualitative, and escaped", () => {
       expectations: { matured: 2, matured_evaluated: 2 },
       autonomy: { resolved: 3, reverted: 1, demoted_domains: ["training"] },
       tools: { calls: 8, failed: 1, budget_exhausted: 0 },
-      conferences: { jobs: 2, successful: 1 },
+      conferences: { jobs: 3, successful: 3, complete_successful: 1, useful_degraded_or_incomplete: 2 },
     },
     decisions: [
       { summary: "<b>Small plan change</b>", domain: "training", status: "applied", latest_verdict: "not_aligned" },
@@ -134,6 +134,9 @@ test("brain diagnostics stay bounded, qualitative, and escaped", () => {
   assert.match(html, /8 rows/);
   assert.match(html, /3 of 4 material decisions/);
   assert.match(html, /2 of 2 mature expectations/);
+  assert.match(html, /1 of 3 case conferences were complete/);
+  assert.match(html, /2 returned useful partial or degraded advice/);
+  assert.doesNotMatch(html, /3 of 3 case conferences completed/);
   assert.match(html, /Review-first after repeated reversals: training/);
   assert.doesNotMatch(html, /hidden_reasoning_payload/i);
 });
@@ -175,8 +178,14 @@ test("settings agent chips and update card render stable operator states", () =>
 
 test("system health distinguishes loading, unavailable, healthy zero, warning, and error", () => {
   const settings = loadSettingsClient();
-  assert.match(settings.diagnosticsCard(null, { status: "loading", readinessStatus: "loading", days: 1 }), /Checking system health/);
-  assert.match(settings.diagnosticsCard(null, { status: "loading", readinessStatus: "loading", days: 1 }), /last 24 hours/);
+  assert.match(
+    settings.diagnosticsCard(null, { status: "loading", readinessStatus: "loading", days: 1 }),
+    /Checking system health/
+  );
+  assert.match(
+    settings.diagnosticsCard(null, { status: "loading", readinessStatus: "loading", days: 1 }),
+    /last 24 hours/
+  );
   const unavailable = settings.diagnosticsCard(null, { status: "unavailable", readinessStatus: "unavailable" });
   assert.match(unavailable, /Diagnostics unavailable/);
   assert.match(unavailable, /Readiness unavailable/);
@@ -218,23 +227,29 @@ test("system health distinguishes loading, unavailable, healthy zero, warning, a
   assert.match(older, /Queue age and recent-failure detail are not reported by this version/);
   assert.doesNotMatch(older, /Healthy zero-event response/);
 
-  const warning = settings.diagnosticsCard({
-    window_days: 7,
-    total: 1,
-    issues: [{ source: "server", kind: "slow_request", level: "warning", count: 1, route: "/api/today" }],
-    recent: [],
-    slow: [],
-  }, { readinessStatus: "ready", readiness: { ok: true, database: "ok" } });
+  const warning = settings.diagnosticsCard(
+    {
+      window_days: 7,
+      total: 1,
+      issues: [{ source: "server", kind: "slow_request", level: "warning", count: 1, route: "/api/today" }],
+      recent: [],
+      slow: [],
+    },
+    { readinessStatus: "ready", readiness: { ok: true, database: "ok" } }
+  );
   assert.match(warning, /Operational warnings captured/);
   assert.match(warning, /actlog-warning/);
 
-  const error = settings.diagnosticsCard({
-    window_days: 7,
-    total: 1,
-    issues: [{ source: "server", kind: "request_error", level: "error", count: 1 }],
-    recent: [],
-    slow: [],
-  }, { readinessStatus: "ready", readiness: { ok: true, database: "ok" } });
+  const error = settings.diagnosticsCard(
+    {
+      window_days: 7,
+      total: 1,
+      issues: [{ source: "server", kind: "request_error", level: "error", count: 1 }],
+      recent: [],
+      slow: [],
+    },
+    { readinessStatus: "ready", readiness: { ok: true, database: "ok" } }
+  );
   assert.match(error, /Runtime errors need a look/);
   assert.match(error, /actlog-error/);
 });
@@ -275,7 +290,13 @@ test("system health renders actionable bounded details and escapes contract fiel
       ],
       slow: [{ route: "/api/stats", duration_ms: 2100 }],
     },
-    { relTime: () => "just now", source: "all", severity: "all", readinessStatus: "ready", readiness: { ok: true, database: "ok" } }
+    {
+      relTime: () => "just now",
+      source: "all",
+      severity: "all",
+      readinessStatus: "ready",
+      readiness: { ok: true, database: "ok" },
+    }
   );
 
   assert.match(html, /System health/);
@@ -293,7 +314,11 @@ test("system health renders actionable bounded details and escapes contract fiel
   assert.match(html, /Last seen/);
   assert.match(html, /sysdiag-absolute/);
   assert.match(html, /Page 1 of 2/);
-  assert.equal((html.match(/<details class="sysdiag-item/g) || []).length, 10, "eight grouped and two recent rows bound the DOM");
+  assert.equal(
+    (html.match(/<details class="sysdiag-item/g) || []).length,
+    10,
+    "eight grouped and two recent rows bound the DOM"
+  );
   assert.match(html, /Request bodies, health values, chat text, and credentials are never collected/);
   assert.doesNotMatch(html, /<script>/);
 

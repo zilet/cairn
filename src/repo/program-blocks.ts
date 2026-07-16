@@ -12,7 +12,7 @@
  */
 
 import { db } from "../db.js";
-import { getEnduranceGoal } from "./profile.js";
+import { activeRecoveryWeek, getEnduranceGoal } from "./profile.js";
 import { recordTestWeek } from "./muscle-trajectory.js";
 import { bumpTrainingDataVersion } from "./training-cache.js";
 
@@ -373,13 +373,17 @@ export function abandonBlock(id: number): ProgramBlock | null {
  * Example: { goal: "Build squat + base", focus: "strength",
  *             phase: "accumulation", week_of: "week 2 of 5" }
  */
-export function blockForCoach(): BlockCoachSummary | null {
+export function blockForCoach(date?: string): BlockCoachSummary | null {
   const block = getActiveBlock();
   if (!block) return null;
+  const recoveryWeek = activeRecoveryWeek(date);
   return {
     goal: block.goal,
     focus: block.focus,
-    phase: block.phase,
+    // The stored block remains the long-running structural program. During an
+    // applied recovery window, its effective coaching phase is deload so prompts
+    // never receive "accumulation/build volume" beside "recovery week active".
+    phase: recoveryWeek ? "deload" : block.phase,
     week_of: `week ${block.week_index} of ${block.total_weeks}`,
   };
 }
