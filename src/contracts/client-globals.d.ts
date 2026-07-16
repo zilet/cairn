@@ -22,6 +22,7 @@ import type {
   ClientLearnedItem,
   ClientLearnedKind,
   ClientLearnedTimeline,
+  ClientNextCheckup,
   ClientMemory,
   ClientMemoryKind,
 } from "./client.js";
@@ -1220,6 +1221,7 @@ declare global {
   declare function humanizeReviewText(text: string, latestISO: string | null | undefined): string;
   declare function latestReviewDate(parsed: unknown): string | null;
   declare function learnedTimelineHtml(data: ClientLearnedTimeline | null | undefined): string;
+  declare function checkupHtml(data: ClientNextCheckup | null | undefined): string;
   declare function foodNum(value: unknown): number | null;
   declare function formatFoodNum(value: unknown): string;
   declare function fmtWeight(weight: unknown): string;
@@ -2701,6 +2703,10 @@ declare global {
       LEARNED_GROUPS: readonly (readonly [ClientLearnedKind, string, string])[];
       learnedItemHtml(item: Partial<ClientLearnedItem> | null | undefined, index: number): string;
       learnedTimelineHtml(data: ClientLearnedTimeline | null | undefined): string;
+    };
+
+    CairnHealthCheckup: {
+      checkupHtml(data: ClientNextCheckup | null | undefined): string;
     };
 
     CairnMemory: {

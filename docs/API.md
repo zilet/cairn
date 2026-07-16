@@ -9,7 +9,7 @@ Health's short-lived pairing exchange is public and passes through the instance-
 when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**268 routes** across 100 groups.
+**269 routes** across 100 groups.
 
 ## `/activities`
 
@@ -321,6 +321,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | GET | `/api/health/doctor-packet` | Export-ready doctor packet: current prioritized health focus, active directives, doctor-loop retest/missing-workup plan, PREVENT cardiovascular-risk read, and latest intervention-outcome annotations. Informational, not medical advice. |
 | GET | `/api/health/focus` | The elite-coach synthesis layer: the deterministic TIERED focus (priorities, not a flat directive flood) + the latest cached agentic health-story narrative. Both informational, no scores. The narrative is regenerated via POST below. |
 | GET | `/api/health/markers` |  |
+| GET | `/api/health/next-checkup` | Next-checkup read: the athlete-facing composition over the doctor-loop — rechecks whose window is open/opening, visible follow-through on active supplements & directives (target marker + trend + recheck state), and a deterministic prep list (ordered labs, what to bring, what to ask). Informational, not medical advice; no scores. The read is READ-ONLY by default: the nightly scheduler op owns the attention-schedule refresh, so a PWA open never triggers the write pass. Pass ?refresh=1 to force a fresh deterministic pass (kept for tools / a manual refresh). |
 | GET | `/api/health/outcomes` | Intervention -> outcome annotations: compare follow-up marker readings against the directive/intervention anchor that created the follow-up. Directional only: this never claims causation and never auto-resolves or escalates a directive. |
 | POST | `/api/health/outcomes/record` | Explicitly persist the outcome read into the quiet insight stream + learning memory. Kept POST-only so a read of the page/tool cannot create memories. |
 | GET | `/api/health/review` | Latest review or null — a soft lookup like /sessions?date= (200 + null on absence, never 404): "no review yet" is a normal state the PWA renders. |

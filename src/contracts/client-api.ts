@@ -2150,6 +2150,52 @@ export interface ClientTeamWeek {
   insights: ClientTeamWeekInsight[];
 }
 
+// ---- Next checkup (the doctor-loop, surfaced) --------------------------------
+export type ClientCheckupItemKind = "lab" | "dexa" | "review" | "add";
+export interface ClientCheckupItem {
+  signal_key: string;
+  label: string;
+  kind: ClientCheckupItemKind;
+  next_due: string | null;
+  when_text: string | null;
+  why: string;
+}
+export type ClientFollowThroughStatus = "moving_your_way" | "not_yet" | "awaiting_recheck";
+export type ClientFollowThroughRecheck = "due" | "upcoming" | "none";
+export interface ClientFollowThroughItem {
+  marker: string;
+  marker_key: string;
+  via: string[];
+  status: ClientFollowThroughStatus;
+  status_text: string;
+  latest_value: string | null;
+  latest_date: string | null;
+  trend_dir: "rising" | "falling" | "stable" | null;
+  trend_text: string | null;
+  recheck: ClientFollowThroughRecheck;
+  recheck_next_due: string | null;
+  recheck_text: string;
+}
+export interface ClientCheckupOrderedLab {
+  label: string;
+  detail: string | null;
+  source: "review" | "visit_note";
+}
+export interface ClientCheckupPrep {
+  ordered_labs: ClientCheckupOrderedLab[];
+  bring: string[];
+  questions: string[];
+}
+export interface ClientNextCheckup {
+  lede: string;
+  due_now: ClientCheckupItem[];
+  upcoming: ClientCheckupItem[];
+  follow_through: ClientFollowThroughItem[];
+  prep: ClientCheckupPrep;
+  has_content: boolean;
+  frame: string;
+}
+
 export interface ClientInsight {
   id: number;
   title?: string | null;
@@ -2389,6 +2435,7 @@ export interface ClientApiResponses {
   "/api/today-agenda/ack": ClientTodayAgendaAckResponse;
   "/api/learned-timeline": ClientLearnedTimeline;
   "/api/team-week": ClientTeamWeek;
+  "/api/health/next-checkup": ClientNextCheckup;
   "/api/since-last": ClientTodayAgendaCandidate | null;
   "/api/guidelines": ClientGuidelinesResponse;
   "/api/nutrition/day": ClientDayIntake;

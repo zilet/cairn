@@ -327,6 +327,22 @@ const MARKER_ALIASES: AliasEntry[] = [
     canonical: "Omega-3 Total",
     aliases: ["omega-3 total", "omega 3 total", "omega-3 total / omegacheck", "omega 3 total omegacheck", "omegacheck"],
   },
+  {
+    // Blood-pressure components. Labs/MyChart imports and the in-app BP capture print
+    // the same vital under different names ("Systolic BP" vs "Systolic Blood Pressure"),
+    // which otherwise splits one history into parallel series. `key` matches the label
+    // expandBloodPressureMarker + the blood_pressure_readings path already file under,
+    // so the vitals series stays unified. Bare "systolic"/"diastolic" are intentionally
+    // NOT aliased (too ambiguous outside a BP context to merge safely).
+    key: "systolic bp",
+    canonical: "Systolic BP",
+    aliases: ["systolic bp", "systolic blood pressure", "blood pressure systolic", "bp systolic", "systolic pressure"],
+  },
+  {
+    key: "diastolic bp",
+    canonical: "Diastolic BP",
+    aliases: ["diastolic bp", "diastolic blood pressure", "blood pressure diastolic", "bp diastolic", "diastolic pressure"],
+  },
 ];
 
 // normalized alias → { key, canonical }.

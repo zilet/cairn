@@ -562,6 +562,11 @@ async function processJob(job: Job): Promise<void> {
     // below. Fail-open: the deterministic normalizer + KB already ran at read time.
     try { await reconcileMarkers("auto"); } catch (e: any) { console.warn(`[enrich] marker reconcile failed: ${e?.message}`); }
     try { repo.deriveDirectives(); } catch (e: any) { console.warn(`[enrich] deriveDirectives failed: ${e?.message}`); }
+    // Recompute the lab/marker recheck cadence NOW (event-driven), alongside the
+    // directive propagation, so a mid-day upload's "next checkup" recheck surfaces
+    // immediately instead of waiting for the nightly checkup_attention_date op. The
+    // GET /health/next-checkup read is otherwise read-only. Fail-open like the rest.
+    try { repo.refreshDoctorLoopAttention(); } catch (e: any) { console.warn(`[enrich] doctor-loop attention refresh failed: ${e?.message}`); }
     // deriveDirectives() busts today's cached Brief itself (a lab reshapes the read).
     enqueueReviewRefresh();
   }

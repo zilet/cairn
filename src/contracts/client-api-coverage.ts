@@ -137,6 +137,7 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/health/risk",
   "/health/review",
   "/health/synthesis",
+  "/health/next-checkup",
   "/directives",
   "/directives/:id",
   "/directives/derive",

@@ -218,3 +218,24 @@ test("marker reconciler prompt shows raw label plus internal display hint", () =
   ]);
   assert.match(prompt, /"LDL Chol Calc \(NIH\)" -> internal "LDL-C" \[mg\/dL\] e\.g\. 173/);
 });
+
+test("blood-pressure component spellings canonicalize onto one stable key", () => {
+  assert.equal(repo.canonicalMarker("Systolic Blood Pressure").key, "systolic bp");
+  assert.equal(repo.canonicalMarker("Systolic BP").key, "systolic bp");
+  assert.equal(repo.canonicalMarker("Blood Pressure Systolic").key, "systolic bp");
+  assert.equal(repo.canonicalMarker("Diastolic Blood Pressure").key, "diastolic bp");
+  assert.equal(repo.canonicalMarker("Diastolic BP").key, "diastolic bp");
+  // The clean display label wins over the long spelling.
+  assert.equal(repo.canonicalMarker("Systolic Blood Pressure").name, "Systolic BP");
+  assert.equal(repo.canonicalMarker("Diastolic Blood Pressure").name, "Diastolic BP");
+});
+
+test("split BP spellings unify into one marker history series", () => {
+  seedHealthDoc("2026-01-01", [marker("Systolic Blood Pressure", 128, { unit: "mmHg" })]);
+  seedHealthDoc("2026-04-01", [marker("Systolic BP", 122, { unit: "mmHg" })]);
+  const { markers } = repo.getMarkerHistory();
+  const sys = markers.filter((m) => m.key === "systolic bp");
+  assert.equal(sys.length, 1, "the two spellings collapse into ONE series");
+  assert.equal(sys[0].points.length, 2, "both readings land on the unified series");
+  assert.equal(sys[0].name, "Systolic BP", "the clean canonical label is used");
+});

@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**215 tools.**
+**216 tools.**
 
 | Tool | Description |
 |---|---|
@@ -96,6 +96,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_meal_recipe` | Get a cached recipe immediately, or queue a durable recipe-writing job when absent/forced. Poll get_agent_job for a queued result. |
 | `get_muscle_load` | Acute per-muscle freshness over the last ~2 days — recent strength sets AND endurance sessions folded onto the regions they fatigue (a long ride loads the legs). heavy:true means a real dose (the muscle wants a day). Plain words, no scores. |
 | `get_muscle_trajectory` | Per-canonical-muscle-group ADVANCING vs STALLING read (the user's own mental model) — folds each group's member-lift statuses + its volume band/trend into one plain verdict (advancing/stalling/building/maintaining), and for a stalling group names the lead stalled lift + a MENU of same-pattern variations to rotate in. Plain words, no scores. {available:false} when nothing's logged. |
+| `get_next_checkup` | Next-checkup read: the athlete-facing view of the recheck-cadence engine. Returns { lede, due_now[], upcoming[], follow_through[], prep, has_content, frame }: rechecks whose window is open (due_now) or opening (upcoming) plus worth-adding workups, visible follow-through on active supplements & directives (each target marker's latest value, trend words, recheck state, and a plain status — moving your way / not yet / awaiting first recheck), and a deterministic prep list (ordered labs from your last visit/review, what to bring, what to ask). Informational, not medical advice; no scores. |
 | `get_next_step` | The single highest-leverage next action across ALL domains (train/fuel/recover/recheck/life) right now — one calm thing, or null on a quiet day. A suggestion the user drives, never a to-do wall. |
 | `get_outcome_learnings` | The quiet 'What Cairn has noticed' read: durable, plain-language learnings drawn from suggestion → actual reconciliation (e.g. 'tolerates higher training frequency than the read assumed'). Returns { learnings:[{id, content, noticed_at}] }, newest-first. These season the coach's defaults — never a score, never a gate; pull-never-push. |
 | `get_performance` | The TRAINING-INTELLIGENCE / performance read — where the user actually STANDS, benchmarked like a coach would: each benchmark lift's CAPACITY as a sex- and age-adjusted percentile/level (beginner→elite) against proven strength standards, VO2max-for-age, the strength IMBALANCES (press vs pull, lower vs upper) to address, the single highest-leverage LEVER, lifts worth RE-TESTING (a heavy low-rep test to re-measure true capacity), a VARIETY nudge (don't run the identical rotation forever), motivational momentum, and a holistic balance line. Percentile/level are recognized reference reads, never a 0-100 score. The athletic counterpart to get_health_standing. |

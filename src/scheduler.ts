@@ -385,6 +385,14 @@ export function startScheduler() {
     //     interval — rule 2a. Without this pass the entries never exist and the reads
     //     fall back to the legacy cadence.
     const benchmarkAttnDue = dailySlotDue(now, "benchmark_attention_date");
+    // (f2) Keep the LAB/MARKER attention (the doctor-loop half of K5) fresh — the
+    //      counterpart of the training-benchmark pass. A cheap, deterministic,
+    //      no-agent refresh (≤1×/day) that re-runs refreshDoctorLoopAttention() so
+    //      each marker's recheck cadence advances (a released signal reactivates on a
+    //      fresh off-optimal reading; a clean one converges to quiet) WITHOUT anyone
+    //      opening the doctor-loop / next-checkup endpoint. The next-checkup read then
+    //      reflects the same persisted attention state on the very next open.
+    const checkupAttnDue = dailySlotDue(now, "checkup_attention_date");
     // (g) LEAD-MODE recovery auto-draft (≤1×/day). When the conductor's lead is the
     //     recovery-deload ASK (due, not running, nothing drafted) and the athlete has
     //     chosen lead posture, the coach drafts the recovery week ITSELF — the draft
@@ -407,6 +415,7 @@ export function startScheduler() {
       !blockAdvanceDue &&
       !triggerCheckDue &&
       !benchmarkAttnDue &&
+      !checkupAttnDue &&
       !recoveryAutoDue &&
       !underfuelDue
     )
@@ -426,6 +435,19 @@ export function startScheduler() {
           if (hasPlan) {
             const entries = repo.refreshTrainingBenchmarkAttention();
             console.log(`[proactive] refreshed training benchmark attention (${entries.length} signal(s)).`);
+            return { outcome: "succeeded", value: entries };
+          }
+          return { outcome: "no_op" };
+        });
+      }
+      if (checkupAttnDue) {
+        await runScheduled("checkup_attention_date", localToday(now), "checkup_attention_date", () => {
+          // Only when there are markers on file — a fresh user with no labs has
+          // nothing to schedule a recheck for (calm no-op, no churn).
+          const hasMarkers = ((repo.getMarkerHistory() as any).markers || []).length > 0;
+          if (hasMarkers) {
+            const entries = repo.refreshDoctorLoopAttention();
+            console.log(`[proactive] refreshed lab/marker recheck attention (${entries.length} signal(s)).`);
             return { outcome: "succeeded", value: entries };
           }
           return { outcome: "no_op" };

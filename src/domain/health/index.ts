@@ -3,6 +3,7 @@ export * from "../../repo/ccda.js";
 export * from "../../repo/dexa-targeting.js";
 export * from "../../repo/doctor-loop.js";
 export * from "../../repo/doctor-packet.js";
+export * from "../../repo/next-checkup.js";
 export * from "../../repo/evidence.js";
 export * from "../../repo/health.js";
 export * from "../../repo/health-outcomes.js";

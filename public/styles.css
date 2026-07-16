@@ -4214,6 +4214,34 @@ button.hmk-row:active{background:var(--card-2)}
 .stand-supp-m{font-size:.82rem;color:var(--ink-2);font-variant-numeric:lining-nums}
 .stand-supp-rel{font-size:.72rem;color:var(--muted);width:100%}
 
+/* Next checkup — the doctor-loop surfaced. Editorial recheck / follow-through read:
+   due & coming-up rechecks, visible follow-through on what you've started, calm prep. */
+.chk-sec{margin:0 0 22px}
+.chk-sec-sub{font-size:.82rem;color:var(--muted);line-height:1.45;margin:0 2px 11px;max-width:60ch}
+.chk-subhead{font-size:.62rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:14px 2px 8px}
+.chk-item{display:flex;gap:10px;align-items:flex-start;background:var(--card);border:1px solid var(--line);
+  border-radius:13px;padding:12px 14px;margin-bottom:8px}
+.chk-item .hdot{margin-top:5px;flex:0 0 auto}
+.chk-item-body{flex:1;min-width:0}
+.chk-item-top{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.chk-item-label{font-weight:640;font-size:.92rem;color:var(--ink)}
+.chk-item-why{font-size:.82rem;color:var(--muted);line-height:1.45;margin-top:5px}
+.chk-ft-grid{display:flex;flex-direction:column;gap:10px}
+.chk-ft{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:12px 14px}
+.chk-ft .trend-lead{margin-bottom:2px}
+.chk-ft-meta{font-size:.8rem;color:var(--ink-2);line-height:1.4;margin-top:5px;font-variant-numeric:lining-nums}
+.chk-ft-via{color:var(--muted);margin-top:6px;text-transform:none;letter-spacing:0;font-weight:600;font-size:.74rem}
+.chk-ft-recheck{display:flex;align-items:center;gap:7px;font-size:.78rem;color:var(--ink-2);margin-top:8px;
+  padding-top:8px;border-top:1px solid var(--line)}
+.chk-prep-block{margin:0 0 12px}
+.chk-prep-block .lbl{display:block;margin-bottom:7px}
+.chk-prep-block.well-accent-sm{padding:12px 14px;background:var(--card-2)}
+.chk-list,.chk-ol{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px}
+.chk-list li,.chk-ol li{font-size:.86rem;color:var(--ink-2);line-height:1.45}
+.chk-ol-name{font-weight:600;color:var(--ink)}
+.chk-ol-detail{color:var(--muted)}
+.chk-frame{font-size:.75rem;color:var(--muted);line-height:1.5;margin:18px 2px 0;max-width:60ch}
+
 /* Settings → You: the about-you & context home (Profile / Family / Life / Memory). */
 .set-you{display:flex;flex-direction:column;gap:10px}
 .set-you-card{display:flex;flex-direction:column;gap:3px;background:var(--card);border:1px solid var(--line);

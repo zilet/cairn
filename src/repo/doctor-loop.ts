@@ -312,6 +312,17 @@ function applyMarkerAttention(marker: MarkerLike, activeMarkers: Set<string>): A
   });
 }
 
+// The attention signal_key this marker's lab retest cadence is filed under, or
+// null when the marker has no recheck policy. Encapsulates the doctor-loop's
+// internal label→slug mapping so composition layers (the next-checkup read) can
+// join a marker from getMarkerHistory back to its attention_schedule row without
+// re-deriving the policy internals.
+export function markerSignalKey(marker: MarkerLike): string | null {
+  const label = markerLabel(marker);
+  if (!policyForLabel(label)) return null;
+  return `marker:${signalSlug(label)}`;
+}
+
 function latestDexaDate(markers: MarkerLike[]): string | null {
   let latest: string | null = null;
   for (const marker of markers) {

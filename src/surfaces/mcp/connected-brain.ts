@@ -27,6 +27,7 @@ import {
   cardiovascularRiskRead,
   doctorLoopRead,
   doctorPacketRead,
+  nextCheckupRead,
   healthFocus,
   healthStanding,
   prioritizeMarkers,
@@ -83,6 +84,13 @@ export function registerConnectedBrainTools(server: McpToolRegistrar) {
     "Doctor-loop read: structured missing-workup recommendations plus lab/DEXA retest attention derived through the adaptive attention engine. Informational, not medical advice; no PREVENT/PCE risk coefficients are computed here.",
     {},
     async () => asText(doctorLoopRead({ refresh: true }))
+  );
+
+  server.tool(
+    "get_next_checkup",
+    "Next-checkup read: the athlete-facing view of the recheck-cadence engine. Returns { lede, due_now[], upcoming[], follow_through[], prep, has_content, frame }: rechecks whose window is open (due_now) or opening (upcoming) plus worth-adding workups, visible follow-through on active supplements & directives (each target marker's latest value, trend words, recheck state, and a plain status — moving your way / not yet / awaiting first recheck), and a deterministic prep list (ordered labs from your last visit/review, what to bring, what to ask). Informational, not medical advice; no scores.",
+    { as_of: z.string().optional().describe("YYYY-MM-DD for due/upcoming checks; defaults to today.") },
+    async ({ as_of }) => asText(nextCheckupRead({ refresh: true, asOf: as_of }))
   );
 
   server.tool(

@@ -35,6 +35,7 @@ type StandSynthesis = {
   one_change?: unknown;
   generated_at?: unknown;
 };
+type StandCheckup = import("../contracts/client-api.js").ClientNextCheckup;
 type StandData = {
   markers: StandMarker[];
   groups: StandGroup[];
@@ -46,6 +47,7 @@ type StandData = {
   recovery: Record<string, unknown> | null;
   supplements: Array<Record<string, unknown>>;
   directives: Array<Record<string, unknown>>;
+  checkup: StandCheckup | null;
 };
 type StandStatus = "ok" | "watch" | "warn" | "mute";
 
@@ -94,7 +96,8 @@ type StandStatus = "ok" | "watch" | "warn" | "mute";
     | "share"
     | "learned"
     | "connections"
-    | "age";
+    | "age"
+    | "checkup";
   let curView: StandView = "overview";
   let quietPaint = false;
   const SNAP_KEY = "cairn.stand.v1";
@@ -397,6 +400,22 @@ type StandStatus = "ok" | "watch" | "warn" | "mute";
     </button>`;
   }
 
+  // ---- next checkup (the doctor-loop, surfaced) — quiet + conditional -------------
+  // Pull-only: the tile appears ONLY when something is due, opening soon, or a lab
+  // was ordered (has_content). No badge count, no urgency — the whole read is always
+  // reachable from the ⋯ menu regardless.
+  function checkupTile(): string {
+    const c = DATA?.checkup;
+    if (!c || !c.has_content) return "";
+    const due = Array.isArray(c.due_now) && c.due_now.length > 0;
+    const st: StandStatus = due ? "warn" : "watch";
+    const read = typeof c.lede === "string" && c.lede.trim() ? c.lede.trim() : "something worth checking";
+    return `<button class="stand-tile reveal" data-checkup>
+      <span class="stand-tile-top"><span class="hdot hdot-${st}"></span><span class="stand-tile-name">Next checkup</span></span>
+      <span class="stand-tile-read ${st}">${escHtml(read)}</span><span class="stand-tile-arw" aria-hidden="true">›</span>
+    </button>`;
+  }
+
   // ---- age (the biological-age / percentile standing read, hosted one tap down) ---
   function ageTile(): string {
     if (!(DATA?.markers || []).length) return "";
@@ -431,6 +450,8 @@ type StandStatus = "ok" | "watch" | "warn" | "mute";
     if (b) tiles.push({ st: bodyStatus(), html: b });
     const rec = recoveryTile();
     if (rec) tiles.push({ st: recoveryStatus(), html: rec });
+    const checkup = checkupTile();
+    if (checkup) tiles.push({ st: DATA?.checkup?.due_now?.length ? "warn" : "watch", html: checkup });
     const conn = connectionsTile();
     if (conn) tiles.push({ st: activeDirectives().length ? "watch" : "mute", html: conn });
     const supp = supplementsTile();
@@ -464,6 +485,7 @@ type StandStatus = "ok" | "watch" | "warn" | "mute";
       <div class="stand-more">
         <button class="stand-morebtn" type="button" aria-label="More health tools" aria-expanded="false" data-morebtn>⋯</button>
         <div class="stand-moremenu" data-moremenu hidden>
+          <button class="stand-moreitem" data-tool="checkup" type="button">Next checkup</button>
           <button class="stand-moreitem" data-tool="share" type="button">Share with your doctor</button>
           <button class="stand-moreitem" data-tool="records" type="button">Records</button>
           <button class="stand-moreitem" data-tool="learned" type="button">Learned</button>
@@ -970,6 +992,21 @@ type StandStatus = "ok" | "watch" | "warn" | "mute";
     paint(recoveryDetailHtml());
     wireBack();
   }
+  function showCheckup(): void {
+    curView = "checkup";
+    setStandSeg("checkup");
+    paint(
+      toolShellHtml(
+        "Next checkup",
+        `<div id="standCheckup"></div>`,
+        "What your elite team would prepare you for at your next visit — what's due, what's coming up, and how the changes you've made are landing. Informational, never medical advice."
+      )
+    );
+    wireBack();
+    const wrap = view.querySelector<HTMLElement>("#standCheckup");
+    if (wrap)
+      wrap.innerHTML = checkupHtml((DATA?.checkup || null) as Parameters<typeof checkupHtml>[0]);
+  }
   function showSupplements(): void {
     curView = "supplements";
     setStandSeg("supplements");
@@ -994,6 +1031,7 @@ type StandStatus = "ok" | "watch" | "warn" | "mute";
     view.querySelector<HTMLElement>("[data-recovery]")?.addEventListener("click", () => showRecovery());
     view.querySelector<HTMLElement>("[data-supps]")?.addEventListener("click", () => showSupplements());
     view.querySelector<HTMLElement>("[data-connections]")?.addEventListener("click", () => showConnections());
+    view.querySelector<HTMLElement>("[data-checkup]")?.addEventListener("click", () => showCheckup());
     view.querySelector<HTMLElement>("[data-age]")?.addEventListener("click", () => showAge());
     view.querySelector<HTMLElement>("[data-allmarkers]")?.addEventListener("click", () => showAllMarkers());
     view.querySelectorAll<HTMLElement>("[data-tool]").forEach((b) =>
@@ -1003,6 +1041,7 @@ type StandStatus = "ok" | "watch" | "warn" | "mute";
         else if (tool === "records") showRecords();
         else if (tool === "share") showShare();
         else if (tool === "learned") showLearned();
+        else if (tool === "checkup") showCheckup();
       })
     );
     // The agentic whole-picture read: generate on first run, refresh after new labs.
@@ -1075,7 +1114,7 @@ type StandStatus = "ok" | "watch" | "warn" | "mute";
   // returns the built payload and never touches module state, so the caller decides
   // whether it wins the token race and whether the change warrants a repaint.
   async function fetchStandData(): Promise<StandData> {
-    const [priority, focus, body, synthRes, insightsRes, recoveryRes, suppRes, dirRes] = await Promise.all([
+    const [priority, focus, body, synthRes, insightsRes, recoveryRes, suppRes, dirRes, checkupRes] = await Promise.all([
       api("/markers/priority") as unknown as Promise<{ markers?: StandMarker[]; groups?: StandGroup[] }>,
       (api("/coaching-focus") as unknown as Promise<Record<string, unknown>>).catch(() => null),
       (api("/body-metrics?unit=in") as unknown as Promise<Record<string, unknown>>).catch(() => null),
@@ -1086,6 +1125,7 @@ type StandStatus = "ok" | "watch" | "warn" | "mute";
       (api("/recovery") as unknown as Promise<Record<string, unknown>>).catch(() => null),
       (api("/supplements") as unknown as Promise<unknown>).catch(() => null),
       (api("/directives") as unknown as Promise<{ directives?: unknown[] }>).catch(() => null),
+      (api("/health/next-checkup") as unknown as Promise<StandCheckup>).catch(() => null),
     ]);
     const insightsArr = Array.isArray(insightsRes)
       ? (insightsRes as Array<{ text?: unknown; kind?: unknown }>)
@@ -1115,6 +1155,7 @@ type StandStatus = "ok" | "watch" | "warn" | "mute";
       directives: Array.isArray(dirRes?.directives)
         ? (dirRes.directives as unknown[]).filter((d): d is Record<string, unknown> => !!d && typeof d === "object")
         : [],
+      checkup: checkupRes && typeof checkupRes === "object" ? (checkupRes as StandCheckup) : null,
     };
   }
 
@@ -1248,6 +1289,10 @@ type StandStatus = "ok" | "watch" | "warn" | "mute";
     }
     if (seg === "recovery") {
       showRecovery();
+      return;
+    }
+    if (seg === "checkup") {
+      showCheckup();
       return;
     }
     showOverview();

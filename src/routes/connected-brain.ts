@@ -29,6 +29,7 @@ import {
   cardiovascularRiskRead,
   doctorLoopRead,
   doctorPacketRead,
+  nextCheckupRead,
   getSettings,
   healthFocus,
   healthStanding,
@@ -67,6 +68,19 @@ connectedBrainRouter.get("/health/risk", (_req, res) => res.json(cardiovascularR
 // Doctor-loop read: missing-workup recommendations plus lab/DEXA retest attention
 // rows derived through the adaptive attention engine. Informational, not medical advice.
 connectedBrainRouter.get("/health/doctor-loop", (_req, res) => res.json(doctorLoopRead({ refresh: true })));
+
+// Next-checkup read: the athlete-facing composition over the doctor-loop — rechecks
+// whose window is open/opening, visible follow-through on active supplements &
+// directives (target marker + trend + recheck state), and a deterministic prep list
+// (ordered labs, what to bring, what to ask). Informational, not medical advice; no
+// scores. The read is READ-ONLY by default: the nightly scheduler op owns the
+// attention-schedule refresh, so a PWA open never triggers the write pass. Pass
+// ?refresh=1 to force a fresh deterministic pass (kept for tools / a manual refresh).
+connectedBrainRouter.get("/health/next-checkup", (req, res) => {
+  const asOf = typeof req.query.as_of === "string" ? req.query.as_of : undefined;
+  const refresh = req.query.refresh === "1" || req.query.refresh === "true";
+  res.json(nextCheckupRead({ refresh, asOf }));
+});
 
 // Export-ready doctor packet: current prioritized health focus, active directives,
 // doctor-loop retest/missing-workup plan, PREVENT cardiovascular-risk read, and
