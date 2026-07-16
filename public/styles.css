@@ -5977,6 +5977,38 @@ body[data-tab="session"] .tabbar{display:none}
   .tov-fig{width:150px}
 }
 
+/* ─── Train · compact "Journey" fold ─────────────────────────────────────────
+   The journey story + the road-ahead timeline, folded behind one calm two-line
+   read so Train leads with the muscle-group progress. Native <details> in the
+   app's fold idiom (like .team-fold / .full-read) but sized to sit among the
+   .tov cards; a ▸ chevron rotates open. Default collapsed; the cards inside keep
+   their own .well-accent styling untouched. */
+.tov-jfold{margin:16px 0}
+.tov-jfold>summary{
+  list-style:none;cursor:pointer;display:flex;align-items:center;gap:12px;
+  padding:13px 16px;background:var(--card);border-radius:var(--radius-sm);
+  box-shadow:var(--shadow-sm);
+}
+.tov-jfold>summary::-webkit-details-marker{display:none}
+.tov-jfold-sum-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+.tov-jfold-kick{color:var(--muted)}
+.tov-jfold-phase{
+  font-family:var(--font-ui);font-size:.9rem;font-weight:600;color:var(--ink);
+  line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.tov-jfold-next{
+  font-size:.76rem;color:var(--muted);line-height:1.35;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.tov-jfold-chev{flex:none;color:var(--muted);font-size:.7rem;transition:transform .15s ease}
+.tov-jfold[open] .tov-jfold-chev{transform:rotate(90deg)}
+.tov-jfold>summary:hover .tov-jfold-phase{color:var(--ink-2)}
+.tov-jfold-body{margin-top:14px;display:flex;flex-direction:column;gap:14px}
+/* The nested cards keep their own styling; only drop their outer margins here so
+   the fold's own gap governs the rhythm (cards' internals are left untouched). */
+.tov-jfold-body>.jprog-card,.tov-jfold-body>.ftl-card{margin:0}
+@media (prefers-reduced-motion: reduce){ .tov-jfold-chev{transition:none} }
+
 /* ---- Body figure: the focus wash breathes (body-metrics fitting sheet) ---- */
 @keyframes bm-pulse{0%,100%{opacity:.55}50%{opacity:1}}
 .bm-pulse{animation:bm-pulse 3.4s var(--ease, ease-in-out) infinite}

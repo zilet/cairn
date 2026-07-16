@@ -95,6 +95,24 @@ function ftlRowHtml(entry: ForwardTimelineEntry): string {
   </li>`;
 }
 
+// A one-line "what's next" read for a compact fold summary: names the nearest
+// dated checkpoint and folds in the road-ahead lead, e.g.
+// "Next: DEXA re-scan window · Aug 25 – Sep 22 — The road to November: 6
+// checkpoints and a re-scan worth planning." Falls back to whichever half exists;
+// "" when there is nothing dated on the road. Entries arrive chronologically, so
+// the first dated entry is the nearest one.
+function timelineNextLabel(value: unknown): string {
+  const entries = ftlRows(value);
+  if (!entries.length) return "";
+  const next = entries.find(ftlIsDated) || null;
+  const lead = ftlLead(entries);
+  const when = next ? ftlWhenLabel(next) : "";
+  const nextPart = next
+    ? `Next: ${ftlText(next.label)}${when ? ` · ${when}` : ""}`
+    : "";
+  return [nextPart, lead].filter(Boolean).join(" — ");
+}
+
 function journeyTimelineCardHtml(value: unknown, deps: JourneyTimelineDeps = {}): string {
   const entries = ftlRows(value);
   if (!entries.length) return "";
@@ -120,6 +138,7 @@ function journeyTimelineCardHtml(value: unknown, deps: JourneyTimelineDeps = {})
 
 const CAIRN_JOURNEY_TIMELINE = {
   timelineCardHtml: journeyTimelineCardHtml,
+  nextLabel: timelineNextLabel,
 };
 
 Object.assign(globalThis, { CairnJourneyTimeline: CAIRN_JOURNEY_TIMELINE });

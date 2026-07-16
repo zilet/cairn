@@ -211,6 +211,17 @@ function journeyProgressCardHtml(
   </section>`;
 }
 
+// A one-line plain-language phase read for a compact fold summary: the same lead
+// string the card's header shows (phase name + pace/status, e.g. "Mid-cut / since
+// Jul 1 / toward 180 lb"), or "" when there is no journey read yet. No score.
+function journeyPhaseSummary(
+  read: JourneyProgressRead | null | undefined,
+  milestones?: unknown,
+): string {
+  if (!jpHasRead(read, milestones)) return "";
+  return jpPhaseLine(read);
+}
+
 function wireJourneyProgress(root: ParentNode = document): void {
   root.querySelectorAll<HTMLElement>("[data-jpreview]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -233,6 +244,7 @@ function wireJourneyProgress(root: ParentNode = document): void {
 const CAIRN_PROGRESS_JOURNEY = {
   hasRead: jpHasRead,
   journeyCardHtml: journeyProgressCardHtml,
+  phaseSummary: journeyPhaseSummary,
   wire: wireJourneyProgress,
 };
 

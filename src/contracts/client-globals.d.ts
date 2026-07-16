@@ -917,6 +917,10 @@ declare global {
       milestones: ClientJourneyMilestone[] | unknown,
       deps?: { stagger?(index?: number | null): string }
     ): string;
+    phaseSummary(
+      read: ClientJourneyRead | null | undefined,
+      milestones?: unknown
+    ): string;
     wire(root?: ParentNode): void;
   };
 
@@ -925,6 +929,7 @@ declare global {
       entries: ClientForwardTimelineEntry[] | unknown,
       deps?: { stagger?(index?: number | null): string }
     ): string;
+    nextLabel(entries: ClientForwardTimelineEntry[] | unknown): string;
   };
 
   type ClientHealthPictureControllerDeps = {

@@ -508,18 +508,47 @@ function tovTimelineHtml(data: TovData): string {
   return CairnJourneyTimeline?.timelineCardHtml?.(data.timeline, { stagger }) || "";
 }
 
+// The compact "Journey" fold: the journey story + the road-ahead timeline, tucked
+// behind one calm two-line read so Train leads with the muscle-group progress.
+// Line 1 is the journey phase read; line 2 is the nearest checkpoint on the road.
+// Both cards render UNCHANGED inside the body. Collapsed by default; `open` only
+// when the muscle sections have nothing to lead with (a fresh install), so the
+// journey story is never hidden behind an empty screen. Returns "" when neither
+// card has anything to say.
+function tovJfoldHtml(data: TovData, opts: { open?: boolean } = {}): string {
+  const journey = tovJourneyHtml(data);
+  const timeline = tovTimelineHtml(data);
+  if (!journey && !timeline) return "";
+  const phase = CairnProgressJourney?.phaseSummary?.(data.journey, data.journeyMilestones) || "";
+  const next = CairnJourneyTimeline?.nextLabel?.(data.timeline) || "";
+  const lines = [phase, next].filter(Boolean);
+  const primary = lines[0] || "Your journey so far";
+  const secondary = lines.length > 1 ? lines[1] : "";
+  const open = opts.open ? " open" : "";
+  return `<details class="tov-jfold reveal"${open} style="${stagger(5)}">
+    <summary class="tov-jfold-sum">
+      <span class="tov-jfold-sum-main">
+        <span class="lbl tov-jfold-kick">Journey &amp; the road ahead</span>
+        <span class="tov-jfold-phase">${escHtml(primary)}</span>
+        ${secondary ? `<span class="tov-jfold-next">${escHtml(secondary)}</span>` : ""}
+      </span>
+      <span class="tov-jfold-chev" aria-hidden="true">&#9656;</span>
+    </summary>
+    <div class="tov-jfold-body">${journey}${timeline}</div>
+  </details>`;
+}
+
 // ---- paint ----------------------------------------------------------------------
 
 function paintTrainOverview(data: TovData): void {
   const head = segBar("overview", PROGRESS_SEG);
   const rows = tovFoldRows(data);
   const hasAny = rows.some((r) => r.sets > 0) || CairnProgressData.rows(data.sessions).length > 0;
-  const journey = tovJourneyHtml(data);
-  const timeline = tovTimelineHtml(data);
   if (!hasAny) {
+    // Nothing trained yet — lead with the journey story (fold auto-open) so a
+    // fresh install still opens to something, not an empty screen.
     view.innerHTML = head + `<div class="tov-empty">` +
-      journey +
-      timeline +
+      tovJfoldHtml(data, { open: true }) +
       tovStartHtml() +
       emptyStateHtml(art("exercise", "barbell row"), "Log a session and this becomes your training map — what's trained, what's due, and where to push next.") +
       `</div>`;
@@ -528,15 +557,16 @@ function paintTrainOverview(data: TovData): void {
     CairnProgressJourney?.wire?.(view);
     return;
   }
+  // Train leads with the muscle-group progress read; the journey story and the
+  // road-ahead timeline auto-compact into one calm fold (collapsed by default).
   view.innerHTML = head +
     tovMastHtml(data, rows) +
     tovLoadBandHtml(data) +
     tovStartHtml() +
-    journey +
-    timeline +
     tovMapHtml(rows) +
     tovFocusHtml(data) +
     tovRowsHtml(rows) +
+    tovJfoldHtml(data, { open: false }) +
     tovMovesHtml(data) +
     tovSessionsHtml(data);
   wireSeg(PROGRESS_HANDLERS);
@@ -573,5 +603,8 @@ function paintTrainOverview(data: TovData): void {
   });
 }
 
-Object.assign(globalThis, { renderTrainOverview });
-if (typeof window !== "undefined") Object.assign(window, { renderTrainOverview });
+// tovJfoldHtml is exposed alongside the render entry so the compact-Journey-fold
+// grammar can be unit-tested in isolation (test/clientRoadFold.test.js), the same
+// way the journey/timeline card renderers are.
+Object.assign(globalThis, { renderTrainOverview, tovJfoldHtml });
+if (typeof window !== "undefined") Object.assign(window, { renderTrainOverview, tovJfoldHtml });
