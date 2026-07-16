@@ -3787,6 +3787,19 @@ declare global {
       ): void;
     };
 
+    CairnSessionPrimer: {
+      cardHtml(primer: unknown, opts?: { collapsed?: boolean }): string;
+      freshChipHtml(why: unknown): string;
+      hydrate(opts: {
+        root?: unknown;
+        date?: string | null;
+        dayNumber?: number | null;
+        hasLoggedSets?: boolean;
+        api?: (path: string) => Promise<unknown>;
+        guard?: () => boolean;
+      }): Promise<void>;
+    };
+
     CairnTodaySessionSkip: {
       wireSkips(deps: ClientTodaySessionSkipDeps): void;
     };
@@ -4265,6 +4278,7 @@ declare global {
   declare const CairnTodayProgressionController: Window["CairnTodayProgressionController"];
   declare const CairnTodayAddExerciseController: Window["CairnTodayAddExerciseController"];
   declare const CairnTodaySessionFeedback: Window["CairnTodaySessionFeedback"];
+  declare const CairnSessionPrimer: Window["CairnSessionPrimer"];
   declare const CairnTodaySessionSkip: Window["CairnTodaySessionSkip"];
   declare const CairnTodaySessionSetModel: Window["CairnTodaySessionSetModel"];
   declare const CairnTodaySessionSetActions: Window["CairnTodaySessionSetActions"];

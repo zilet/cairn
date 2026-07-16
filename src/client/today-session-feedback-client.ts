@@ -31,10 +31,27 @@ type TodaySessionFeedbackDeps = {
     slot.querySelector("#feedbackEdit")?.addEventListener("click", () => renderFeedbackForm(slot, session, deps));
   }
 
+  // Whether this feedback slot lives inside a finished-session DONE card. There the
+  // 1-tap capture folds in OPEN (it's the natural "how did that feel" moment); the
+  // mid-session finish slot keeps the quiet collapsed affordance so it never nags
+  // between sets. Guarded — `closest` is absent under the vm test harness.
+  function inDoneCard(slot: Element): boolean {
+    return typeof (slot as Element & { closest?: (s: string) => Element | null }).closest === "function"
+      ? !!slot.closest(".sessiondone")
+      : false;
+  }
+
   function renderFeedback(slot: Element | null | undefined, session: Record<string, unknown>, deps: TodaySessionFeedbackDeps): void {
     if (!slot) return;
     if (deps.sessionStatus.hasFeedback(session)) {
       renderFeedbackDone(slot, session, deps);
+      return;
+    }
+    // Fold the capture into the done moment: render the 1-tap form in place (not a
+    // buried "how did that feel?" button) so the affordance is where the moment is.
+    // Once answered it pre-dismisses to the compact done summary on the next render.
+    if (inDoneCard(slot)) {
+      renderFeedbackForm(slot, session, deps);
       return;
     }
     slot.innerHTML = deps.sessionStatus.feedbackOpenHtml();

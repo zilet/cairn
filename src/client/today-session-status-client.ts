@@ -417,6 +417,7 @@ type DoneRuntimeGlobals = typeof globalThis & {
   function todayFeedbackFormHtml(session: SessionLike): string {
     const row = session && typeof session === "object" ? session : {};
     return `<div class="checkin-form feedback-form chip-in">
+      <div class="feedback-prompt lbl">how did that feel?</div>
       ${todayFeedbackScaleHtml("soreness", "soreness")}
       ${todayFeedbackScaleHtml("performance", "performance")}
       <input id="feedbackJoint" class="feedback-joint" type="text" autocomplete="off"

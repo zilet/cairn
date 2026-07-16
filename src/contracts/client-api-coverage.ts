@@ -85,6 +85,7 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/today-read",
   "/today-read/reshape",
   "/session-suggest",
+  "/session-primer",
   "/week-ahead",
   "/today-agenda",
   "/today-agenda/ack",

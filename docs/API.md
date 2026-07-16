@@ -9,7 +9,7 @@ Health's short-lived pairing exchange is public and passes through the instance-
 when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**265 routes** across 98 groups.
+**266 routes** across 99 groups.
 
 ## `/activities`
 
@@ -596,6 +596,12 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/run-zones` |  |
+
+## `/session-primer`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/session-primer` | The pre-session primer — a calm, DETERMINISTIC "a coach was already here" read the /app/session surface shows on open: why today's session is what it is (reused from the Brief), what changed since last time, what to watch, and what's fresh. Synchronous + agent-free (never blocks on a CLI). Returns the primer, or `null` (200) when there's nothing worth saying beyond the Brief — the PWA api() helper reads the body regardless of status, so null reads as a clean "no primer". |
 
 ## `/session-suggest`
 

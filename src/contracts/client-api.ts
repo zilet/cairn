@@ -1252,6 +1252,35 @@ export interface ClientStrengthJourney {
   capacity_basis: string | null;
 }
 
+// The pre-session primer (GET /api/session-primer) — a calm "a coach was already
+// here" read the /app/session surface shows on open. why_today reuses the Brief's
+// judgment; the three quiet sections carry what changed, what to watch, and what's
+// deliberately fresh. Plain words only, never a score. `null` when there's nothing
+// worth saying beyond the Brief (a bare plan day with no signals).
+export interface ClientSessionPrimerChange {
+  exercise: string;
+  kind: "target" | "recovery_cap";
+  text: string;
+}
+export interface ClientSessionPrimerWatch {
+  text: string;
+  soft?: boolean;
+}
+export interface ClientSessionPrimerFresh {
+  exercise: string;
+  why: string;
+}
+export interface ClientSessionPrimer {
+  date: ISODateString | string;
+  day_number: number | null;
+  focus: string | null;
+  why_today: string;
+  changed: ClientSessionPrimerChange[];
+  watch: ClientSessionPrimerWatch[];
+  fresh: ClientSessionPrimerFresh[];
+  approach: string | null;
+}
+
 export interface ClientStrengthJourneySetResponse {
   objective: ClientStrengthObjective;
   journey: ClientStrengthJourney;
@@ -2272,6 +2301,7 @@ export interface ClientApiResponses {
   "/api/today-read": ClientDayRead;
   "/api/today-read/reshape": ClientDayRead | { ok: true; job: ClientAgentJob };
   "/api/session-suggest": ClientSessionSuggestResponse;
+  "/api/session-primer": ClientSessionPrimer | null;
   "/api/week-ahead": ClientWeekAheadResponse;
   "/api/today-agenda": ClientTodayAgenda;
   "/api/today-agenda/ack": ClientTodayAgendaAckResponse;

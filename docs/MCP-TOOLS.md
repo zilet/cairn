@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**212 tools.**
+**213 tools.**
 
 | Tool | Description |
 |---|---|
@@ -119,6 +119,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_session` | Get the logged session for a specific date (YYYY-MM-DD), with its sets and any skipped exercises. |
 | `get_session_detail` | Get one logged session by its id, with all its sets. |
 | `get_session_highlights` | Evidence of forward motion for one logged session: any PRs set (a new best est-1RM, or a longer timed hold), how each exercise compares to its previous session (delta + direction), and a small trailing-7-day rollup (new bests, days trained). Read-only and factual — never a score. An unknown session id returns null. |
+| `get_session_primer` | Read the calm, deterministic pre-session primer for a day — why today's session is what it is (from the Brief), what changed since last time, what to watch, and what's deliberately fresh. Returns immediately (no agent). null when there's nothing worth saying beyond the Brief. |
 | `get_settings` | Get app settings: agent selection strategy (round_robin/random/priority), agent order, disabled agents, per-task route metadata, the timezone-aware weekly background-review cadence, and Garmin sync status (garmin_last_sync_at/garmin_last_sync_status). Includes the merged agent list. |
 | `get_strength_journey` | Read the athlete-selected anchor-lift comeback journey: exact-lift history, current/best/baseline/gap/trend, safe next prescription, support roles, and a conditional wide projection. Read-only; never selects a goal. |
 | `get_symptom_links` | Symptom ↔ marker connections: a symptom the user logged (in a life event or a check-in note — e.g. blurry vision, fatigue, headaches) co-occurring with a genuinely out-of-optimal lab marker (e.g. an elevated systolic BP, low ferritin). A quiet 'worth mentioning to your clinician' read — INFORMATIONAL, never a diagnosis; returns [] when nothing co-occurs. The connected brain reaching across the logs. |

@@ -5663,6 +5663,34 @@ body[data-tab="session"] .tabbar{display:none}
 .sess-body{padding-bottom:calc(env(safe-area-inset-bottom) + 44px)}
 .sess-dest .plansurface{margin-top:2px}
 .sess-dest .day-switch{padding-top:2px}
+
+/* The pre-session primer — "a coach was already here". A calm editorial card:
+   a lead sentence, three reading-grammar sections (.read-contribs), an approach
+   footnote. Collapses to a one-line strip once the session has logged sets. */
+.sess-primer-slot:empty{display:none}
+.sess-primer{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+  padding:14px 16px;margin-bottom:12px}
+.sess-primer-head{display:flex;align-items:baseline;gap:10px;width:100%;background:none;border:0;
+  padding:0;text-align:left;cursor:pointer;color:inherit}
+.sess-primer-head-text{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1}
+.sess-primer-kicker{color:var(--muted)}
+.sess-primer-why{color:var(--ink);font-size:.95rem;line-height:1.4}
+.sess-primer-chev{flex:0 0 auto;color:var(--muted);font-size:.7rem;transition:transform .2s ease;margin-top:2px}
+.sess-primer.collapsed .sess-primer-chev{transform:rotate(-90deg)}
+.sess-primer.collapsed .sess-primer-why{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sess-primer-body{display:flex;flex-direction:column;gap:14px;margin-top:13px}
+.sess-primer.collapsed .sess-primer-body{display:none}
+.sess-primer-sec{display:flex;flex-direction:column;gap:7px}
+.sess-primer-sec-t{color:var(--muted)}
+.sess-primer-approach{color:var(--ink-2);font-size:.85rem;line-height:1.45;font-style:italic;
+  border-top:1px solid var(--line);padding-top:11px}
+
+/* "new this week" chip on a fresh movement's card, and its tap-revealed rationale. */
+.sess-fresh-chip{flex:0 0 auto;font-size:.6rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--sage-text);background:var(--sage-bg);border:0;border-radius:99px;padding:3px 9px;cursor:pointer;
+  align-self:center;margin-left:6px}
+.sess-fresh-why{color:var(--ink-2);font-size:.8rem;line-height:1.45;margin-top:6px}
+.feedback-prompt{margin-bottom:2px}
 /* The Session destination is deliberately still — no entrance stagger. Beyond
    being calmer, it keeps the cards off their own GPU layers so the sticky top
    bar paints above them (a transformed .reveal card would composite over it). */

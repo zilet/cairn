@@ -3,6 +3,7 @@ import { enqueueAgentJob } from "../agentJobs.js";
 import { suggestSession, weekAheadRead } from "../coachOps.js";
 import { readToday } from "../domain/brain/index.js";
 import { createAgentJob } from "../domain/person/index.js";
+import { sessionPrimer } from "../repo.js";
 import { backgroundOp } from "./background-op.js";
 
 export const dayCoachRouter = Router();
@@ -76,6 +77,23 @@ dayCoachRouter.post("/session-suggest", async (req, res) => {
     );
   } catch (e: any) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// The pre-session primer — a calm, DETERMINISTIC "a coach was already here" read
+// the /app/session surface shows on open: why today's session is what it is (reused
+// from the Brief), what changed since last time, what to watch, and what's fresh.
+// Synchronous + agent-free (never blocks on a CLI). Returns the primer, or `null`
+// (200) when there's nothing worth saying beyond the Brief — the PWA api() helper
+// reads the body regardless of status, so null reads as a clean "no primer".
+dayCoachRouter.get("/session-primer", (req, res) => {
+  const date = req.query.date ? String(req.query.date) : undefined;
+  const dayRaw = req.query.day != null ? Number(req.query.day) : undefined;
+  const dayNumber = dayRaw != null && Number.isFinite(dayRaw) ? dayRaw : null;
+  try {
+    res.json(sessionPrimer(date, { dayNumber }));
+  } catch (e: any) {
+    res.json({ ok: false, error: e?.message });
   }
 });
 

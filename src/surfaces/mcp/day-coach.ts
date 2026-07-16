@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { sessionPrimer } from "../../repo.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 import { queueMcpAgentJob } from "./background.js";
 
@@ -27,6 +28,17 @@ export function registerDayCoachTools(server: McpToolRegistrar) {
     },
     async ({ minutes, equipment, focus, constraints, date, agent }) =>
       asText(queueMcpAgentJob("session_suggest", { minutes, equipment, focus, constraints, date }, agent))
+  );
+
+  server.tool(
+    "get_session_primer",
+    "Read the calm, deterministic pre-session primer for a day — why today's session is what it is (from the Brief), what changed since last time, what to watch, and what's deliberately fresh. Returns immediately (no agent). null when there's nothing worth saying beyond the Brief.",
+    {
+      date: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
+      day: z.number().int().optional().describe("explicit plan-day number to prime; omit to use the adaptive pick"),
+    },
+    async ({ date, day }) =>
+      asText(sessionPrimer(date, { dayNumber: day != null && Number.isFinite(day) ? day : null }))
   );
 
   server.tool(

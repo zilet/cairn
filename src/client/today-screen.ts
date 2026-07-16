@@ -577,7 +577,7 @@ function sessionShellHtml(inner: string, meta: {
       <div class="sess-topbar-side">${prog}</div>
     </div>
     ${dots}
-    <div class="sess-body">${inner}</div>
+    <div class="sess-body"><div id="sessionPrimerSlot" class="sess-primer-slot"></div>${inner}</div>
   </div>`;
 }
 
@@ -681,6 +681,20 @@ async function renderSession(opts: any = {}): Promise<void> {
   setupAddExercise();
   wireGuides(view);
   wireSessionDestination();
+
+  // The pre-session primer — "a coach was already here". Best-effort + off the paint
+  // path: fetch GET /api/session-primer and hydrate #sessionPrimerSlot (collapsed once
+  // the session has logged sets), decorating any fresh movement rows. A missing lib /
+  // null payload / a stale render is a calm no-op. Not awaited (never blocks logging).
+  const primerDay = Number(todayState.day);
+  window.CairnSessionPrimer?.hydrate({
+    root: todayView,
+    date: todayState.logDate,
+    dayNumber: Number.isFinite(primerDay) ? primerDay : null,
+    hasLoggedSets,
+    api: todayApi,
+    guard: () => todayState.tab === "session" && todayState.logDate === enteredDate,
+  });
 
   if (fresh) { try { window.scrollTo(0, 0); } catch {} }
   else { try { window.scrollTo(0, prevY); } catch {} }
