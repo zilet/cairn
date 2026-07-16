@@ -848,7 +848,9 @@ export function startScheduler() {
       //    progression read stays clean (never touches logged numbers).
       try {
         const { reconcileExercises } = await import("./coachOps.js");
-        const x: any = await reconcileExercises("auto");
+        // Nightly, background: fill only empty groups — never override a group the
+        // athlete may have set (that override is reserved for the user-initiated "Tidy").
+        const x: any = await reconcileExercises("auto", undefined, { authoritativeGroups: false });
         if (x.ok && x.applied)
           console.log(`[memory] tidied exercise names: ${x.applied} alias(es) across ${x.aligned} movement(s).`);
       } catch (e: any) {

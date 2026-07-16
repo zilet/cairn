@@ -364,15 +364,114 @@ test("planExerciseAliases (pure validator) folds messy variants onto a clean can
   assert.equal(bad.length, 0, "non-verbatim members are dropped");
 });
 
-test("distinctExerciseNames returns logged/planned movements with group + set count", () => {
+test("distinctExerciseNames returns logged/planned movements with group + usage context", () => {
   const ex = repo.findOrCreateExercise("Barbell Bench Press", "chest");
   const today = new Date().toISOString().slice(0, 10);
   const sess = repo.getOrCreateSession(today);
   db.prepare("INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps) VALUES (?, ?, 1, 135, 8)").run(sess.id, ex.id);
+  db.prepare("INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps) VALUES (?, ?, 2, 135, 8)").run(sess.id, ex.id);
   const names = repo.distinctExerciseNames();
   const bench = names.find((n) => /bench press/i.test(n.name));
   assert.ok(bench, "the logged movement appears");
-  assert.ok(bench.sets >= 1, "carries a logged-set count");
+  assert.ok(bench.sets >= 2, "carries a logged-set count");
+  assert.equal(bench.days, 1, "one distinct logged day");
+  assert.equal(bench.last_used, today, "last-used date");
+  assert.equal(bench.mode, "reps", "carries the mode");
+  assert.equal(bench.in_plan, false, "not in the plan");
+});
+
+// ---- normalizedExerciseKey: plural fold ----
+
+test("normalizedExerciseKey: singular and plural fold to one key", () => {
+  const { normalizedExerciseKey } = repo;
+  assert.equal(normalizedExerciseKey("Leg Extensions"), normalizedExerciseKey("Leg Extension"));
+  assert.equal(normalizedExerciseKey("Lat Pulldowns"), normalizedExerciseKey("Lat Pulldown"));
+  assert.equal(normalizedExerciseKey("Hammer Curls"), normalizedExerciseKey("Hammer Curl"));
+  assert.equal(normalizedExerciseKey("Walking Lunges"), normalizedExerciseKey("Walking Lunge"));
+  // "triceps"/"biceps" fold to their singular so a "Tricep Pushdown" reads the same.
+  assert.equal(normalizedExerciseKey("Triceps Pushdown"), normalizedExerciseKey("Tricep Pushdown"));
+});
+
+test("normalizedExerciseKey: ss / short-word tokens are left intact by the fold", () => {
+  const { normalizedExerciseKey } = repo;
+  // "press" ends in ss, "abs" is too short — never singularized.
+  assert.match(normalizedExerciseKey("Bench Press"), /press/);
+  assert.match(normalizedExerciseKey("Overhead Press"), /press/);
+  assert.match(normalizedExerciseKey("Weighted Abs"), /\babs\b/);
+  // and the fold doesn't collapse genuinely different movements.
+  assert.notEqual(normalizedExerciseKey("Barbell Bench Press"), normalizedExerciseKey("Dumbbell Bench Press"));
+});
+
+// ---- authoritativeGroup: high-precision group correction ----
+
+test("authoritativeGroup: unambiguous movements resolve, contested ones stay null", () => {
+  const { authoritativeGroup } = repo;
+  assert.equal(authoritativeGroup("Wide-Grip Pulldown"), "back");
+  assert.equal(authoritativeGroup("Barbell Bench Press"), "chest");
+  assert.equal(authoritativeGroup("Back Squat"), "quads");
+  assert.equal(authoritativeGroup("Lying Leg Curl"), "hamstrings");
+  assert.equal(authoritativeGroup("Dead Hang"), "forearms");
+  assert.equal(authoritativeGroup("Standing Calf Raise"), "calves");
+  // contested single-token names are deliberately NOT authoritative (agent's call).
+  assert.equal(authoritativeGroup("Weighted Dip"), null);
+  assert.equal(authoritativeGroup("DB Pullover"), null);
+  assert.equal(authoritativeGroup("Cable Curl"), null);
+});
+
+// ---- validateExerciseMergePlan: the pure merge safety net ----
+
+test("validateExerciseMergePlan: accepts a same-lift rename, rejects real differences", () => {
+  const { validateExerciseMergePlan } = repo;
+  const ok = (from, into) => validateExerciseMergePlan(from, into).ok;
+
+  // same lift under a different name — accepted (the stray duplicate has little history)
+  assert.equal(ok({ name: "Squat", days: 2 }, { name: "Back Squat", days: 20 }), true);
+  assert.equal(ok({ name: "Bench Press", days: 3 }, { name: "Barbell Bench Press", days: 25 }), true);
+  assert.equal(ok({ name: "Single arm DB pulls", days: 2 }, { name: "Single-Arm DB Row", days: 12 }), true);
+  // pure plural variant keys identically → always allowed
+  assert.equal(ok({ name: "Leg Extensions", days: 10 }, { name: "Leg Extension", days: 12 }), true);
+
+  // assisted ≠ unassisted
+  assert.equal(ok({ name: "Assisted Pull-Up", days: 5 }, { name: "Pull Up", days: 6 }), false);
+  // a variation token one side lacks
+  assert.equal(ok({ name: "Incline Bench Press", days: 6 }, { name: "Barbell Bench Press", days: 20 }), false);
+  // timed ≠ reps
+  assert.equal(ok({ name: "Plank", mode: "timed", days: 4 }, { name: "Crunch", mode: "reps", days: 4 }), false);
+  // two independently well-trained lifts (different keys) are protected
+  assert.equal(ok({ name: "Back Squat", days: 12 }, { name: "Front Squat", days: 10 }), false);
+  // identical names / empty are rejected
+  assert.equal(ok({ name: "Row" }, { name: "Row" }), false);
+  assert.equal(ok({ name: "" }, { name: "Row" }), false);
+});
+
+test("validateExerciseMergePlan: reports which relation justified the pass", () => {
+  const { validateExerciseMergePlan } = repo;
+  const rel = (from, into) => validateExerciseMergePlan(from, into).relation;
+  // pure plural/naming variant → same key
+  assert.equal(rel({ name: "Leg Extensions", days: 10 }, { name: "Leg Extension", days: 12 }), "same-key");
+  // one name's tokens ⊂ the other's → subset
+  assert.equal(rel({ name: "Squat", days: 2 }, { name: "Back Squat", days: 20 }), "subset");
+  assert.equal(rel({ name: "Bench Press", days: 3 }, { name: "Barbell Bench Press", days: 25 }), "subset");
+  // only a shared muscle group (no subset, no same key) → group-only
+  assert.equal(rel({ name: "Single arm DB pulls", days: 2 }, { name: "Single-Arm DB Row", days: 12 }), "group-only");
+  assert.equal(rel({ name: "Pendlay Row", days: 5 }, { name: "Barbell Bent-Over Row", days: 20 }), "group-only");
+});
+
+test("shouldAutoApplyMerge: only structural, high-confidence merges auto-apply", () => {
+  const { validateExerciseMergePlan, shouldAutoApplyMerge } = repo;
+  const auto = (from, into, conf) => shouldAutoApplyMerge(validateExerciseMergePlan(from, into), conf);
+  // structural (subset / same-key) + high → auto-apply
+  assert.equal(auto({ name: "Squat", days: 2 }, { name: "Back Squat", days: 20 }, "high"), true);
+  assert.equal(auto({ name: "Bench Press", days: 3 }, { name: "Barbell Bench Press", days: 25 }, "high"), true);
+  assert.equal(auto({ name: "Leg Extensions", days: 10 }, { name: "Leg Extension", days: 12 }, "high"), true);
+  // group-only + high → DEMOTED (never auto-applied), even for a legit rename
+  assert.equal(auto({ name: "Single arm DB pulls", days: 2 }, { name: "Single-Arm DB Row", days: 12 }, "high"), false);
+  // group-only + high → DEMOTED for a distinct movement the group branch would admit
+  assert.equal(auto({ name: "Pendlay Row", days: 5 }, { name: "Barbell Bent-Over Row", days: 20 }, "high"), false);
+  // structural but only medium confidence → not auto-applied
+  assert.equal(auto({ name: "Squat", days: 2 }, { name: "Back Squat", days: 20 }, "medium"), false);
+  // a rejected verdict never auto-applies
+  assert.equal(auto({ name: "Assisted Pull-Up", days: 5 }, { name: "Pull Up", days: 6 }, "high"), false);
 });
 
 test("classifyConstraint: grip/form cue progresses load; pain/load cue caps", () => {

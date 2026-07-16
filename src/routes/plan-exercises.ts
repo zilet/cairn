@@ -192,7 +192,8 @@ planExercisesRouter.post("/exercises/merge", (req, res) => {
 planExercisesRouter.get("/exercises/aliases", (_req, res) => res.json(listExerciseAliases()));
 planExercisesRouter.post("/exercises/reconcile-names", async (req, res) => {
   try {
-    res.json(await reconcileExercises(req.body?.agent));
+    // User-initiated "Tidy" — allowed to override a clearly-wrong non-null muscle group.
+    res.json(await reconcileExercises(req.body?.agent, undefined, { authoritativeGroups: true }));
   } catch (e: any) {
     res.json({ ok: false, error: e?.message || "reconcile failed" });
   }

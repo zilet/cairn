@@ -491,7 +491,9 @@ async function processAgentJob(id: number): Promise<void> {
         break;
       }
       case "exercise_reconcile": {
-        result = await reconcileExercises(agent, hooks);
+        // User-initiated (MCP reconcile_exercise_names / the PWA "Tidy" button) — may
+        // override a clearly-wrong non-null group, since the user asked for the cleanup.
+        result = await reconcileExercises(agent, hooks, { authoritativeGroups: true });
         chosen = result?.agent ?? null;
         break;
       }

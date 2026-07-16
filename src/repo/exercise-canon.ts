@@ -76,16 +76,27 @@ export function normalizeExerciseName(raw: string): string {
     .trim();
 }
 
+// Fold a simple English plural to its singular for KEYING only (never for display).
+// Strip a single trailing "s" only when the token is long enough to be a real word
+// (>3 chars) and doesn't already end in "ss" — so "extensions" → "extension",
+// "pulldowns" → "pulldown", "raises" → "raise", "curls" → "curl", "triceps" →
+// "tricep", while "press"/"abs" (ss / too short) stay intact. Conservative: it only
+// ever removes ONE trailing "s", so it can't collapse two genuinely different words.
+function foldPluralToken(t: string): string {
+  return t.length > 3 && t.endsWith("s") && !t.endsWith("ss") ? t.slice(0, -1) : t;
+}
+
 // The MERGE key for duplicate detection. CONSERVATIVE: we only drop tokens that do
 // NOT distinguish a movement — "timed" (a mode, not a different lift) and a trailing
-// "machine"/"-machine" qualifier when it's just describing the same station. We do
-// NOT strip implement words (barbell vs dumbbell ARE different lifts), so the key
-// stays tight. "Dead hang" / "Dead hang timed" → "dead hang".
+// "machine"/"-machine" qualifier when it's just describing the same station — and we
+// singularize each token (a plural is the same movement: "Leg Extensions" ≡ "Leg
+// Extension"). We do NOT strip implement words (barbell vs dumbbell ARE different
+// lifts), so the key stays tight. "Dead hang" / "Dead hang timed" → "dead hang".
 const NON_DISTINGUISHING = new Set(["timed"]);
 export function normalizedExerciseKey(name: string): string {
   const tokens = normalizeExerciseName(name).split(" ").filter(Boolean);
-  const kept = tokens.filter((t) => !NON_DISTINGUISHING.has(t));
-  return (kept.length ? kept : tokens).join(" ");
+  const kept = tokens.filter((t) => !NON_DISTINGUISHING.has(t)).map(foldPluralToken);
+  return (kept.length ? kept : tokens.map(foldPluralToken)).join(" ");
 }
 
 // The SWAP-SLOT key: additionally strips implement/equipment tokens so a lift and its
@@ -210,6 +221,33 @@ export function classifyMuscleGroup(name: string): MuscleGroup | null {
 // a stored (canonicalized) group wins; else classify by name. Used by reconcile.
 export function resolveGroup(name: string, storedGroup: string | null | undefined): MuscleGroup | null {
   return canonicalGroup(storedGroup ?? null) ?? classifyMuscleGroup(name);
+}
+
+// A HIGH-PRECISION subset of the classifier: it returns a group ONLY for names whose
+// PRIMARY MOVER is unambiguous, so it's safe to OVERRIDE a clearly-wrong stored group
+// (the corruption case: a "Wide-Grip Pulldown" imported as muscle_group "forearms").
+// It deliberately EXCLUDES the contested single-token matches a program legitimately
+// files differently (a bare "curl"/"press"/"fly", "dip", "pullover", or a plain
+// "deadlift" some file under back) — those stay the agent's / the user's call. Returns
+// null when the name isn't unambiguous, so the caller leaves the stored group alone.
+const AUTHORITATIVE_GROUP_RULES: Array<[MuscleGroup, RegExp[]]> = [
+  ["core", [/\bplank/, /\bcrunch/, /\bsit up/, /dead bug/, /hanging (leg|knee) raise/, /ab wheel/, /\bpallof/]],
+  ["forearms", [/dead hang/, /farmer.*(carry|carries|walk)/, /wrist (curl|roller|extension)/]],
+  ["calves", [/calf raise/, /calf press/]],
+  ["hamstrings", [/leg curl/, /lying (leg )?curl/, /seated (leg )?curl/, /romanian deadlift/, /\brdl\b/, /good morning/]],
+  ["glutes", [/hip thrust/, /glute bridge/]],
+  ["quads", [/\bsquat\b/, /leg press/, /leg extension/, /hack squat/, /split squat/]],
+  ["back", [/pulldown/, /pull down/, /pull up/, /pullup/, /chin up/, /chinup/, /lat pulldown/]],
+  ["chest", [/bench press/, /chest press/]],
+  ["shoulders", [/overhead press/, /\bohp\b/, /shoulder press/, /military press/, /lateral raise/]],
+];
+export function authoritativeGroup(name: string): MuscleGroup | null {
+  const norm = normalizeExerciseName(name);
+  if (!norm) return null;
+  for (const [group, regexes] of AUTHORITATIVE_GROUP_RULES) {
+    for (const re of regexes) if (re.test(norm)) return group;
+  }
+  return null;
 }
 
 // ---- exercise_aliases (the persisted dedup decisions) -----------------------
@@ -522,6 +560,109 @@ export function planExerciseMerges(
     }
   }
   return out;
+}
+
+// Tokens that mark a genuinely DIFFERENT exercise even when the rest of the name
+// matches: a qualifier one side carries and the other lacks means they are NOT the
+// same lift (incline vs flat bench, sumo vs conventional, seated vs standing calf
+// raise, single-arm vs two-arm). "assisted" is checked separately — it also inverts
+// the load direction, so it's an even harder stop.
+const VARIATION_TOKENS = new Set([
+  "incline", "decline", "pause", "paused", "deficit", "sumo", "seated", "standing",
+  "single", "close", "wide", "narrow", "reverse", "kneeling", "staggered", "tempo",
+  "pin", "snatch",
+]);
+
+function exerciseTokens(name: string): Set<string> {
+  return new Set(normalizeExerciseName(name).split(" ").filter(Boolean));
+}
+function isTokenSubset(a: Set<string>, b: Set<string>): boolean {
+  for (const t of a) if (!b.has(t)) return false;
+  return true;
+}
+
+export interface MergeCandidate {
+  name: string;
+  group?: string | null;
+  mode?: string | null;
+  days?: number; // distinct logged days — the "how well-trained" signal
+}
+
+// Which relation let a merge PASS, from strongest to weakest structural evidence:
+//   - "same-key"   — the two names normalize to the same movement key (a pure
+//                    naming/plural variant: "Leg Extensions" ≡ "Leg Extension");
+//   - "subset"     — one name's tokens are a subset of the other's (a rename with an
+//                    added qualifier we've already cleared: "Squat" ⊂ "Back Squat");
+//   - "group-only" — they merely share a resolved muscle group (weakest — it admits
+//                    genuinely different movements like Pendlay Row vs Bent-Over Row).
+// The auto-apply gate (shouldAutoApplyMerge) only trusts the two STRUCTURAL relations.
+export type MergeRelation = "same-key" | "subset" | "group-only";
+export interface MergeVerdict {
+  ok: boolean;
+  relation?: MergeRelation;
+  reason?: string;
+}
+
+// PURE validator of a proposed "merge `from` INTO `into`". No DB access, so the safety
+// guards are unit-testable without a fixture. Mirrors planMarkerMerges' role: an
+// over-merge (folding two different movements into one) is the only real harm, so
+// every guard is conservative. Guards, in order (all must pass):
+//   - both named, and not the same exercise;
+//   - modes compatible (never fold a timed hold with a rep-counted lift);
+//   - no "assisted" asymmetry (assisted pull-up ≠ pull-up);
+//   - no variation token one side carries and the other lacks (incline ≠ flat);
+//   - not two independently well-trained lifts (both ≥8 logged days) UNLESS they
+//     already key identically (a pure naming/plural variant);
+//   - resolved muscle groups agree, OR one name's tokens ⊂ the other's, OR same key.
+// On acceptance it reports WHICH relation justified the pass (see MergeRelation) so the
+// caller can gate irreversible auto-application on a structural relation.
+export function validateExerciseMergePlan(from: MergeCandidate, into: MergeCandidate): MergeVerdict {
+  const fromName = String(from?.name ?? "").trim();
+  const intoName = String(into?.name ?? "").trim();
+  const fromNorm = normalizeExerciseName(fromName);
+  const intoNorm = normalizeExerciseName(intoName);
+  if (!fromNorm || !intoNorm) return { ok: false, reason: "both exercises must be named" };
+  if (fromNorm === intoNorm) return { ok: false, reason: "from and into are the same exercise" };
+
+  const fromMode = from.mode === "timed" ? "timed" : detectExerciseMode(fromName);
+  const intoMode = into.mode === "timed" ? "timed" : detectExerciseMode(intoName);
+  if (fromMode !== intoMode) return { ok: false, reason: "different logging mode (timed vs reps)" };
+
+  const fromTokens = exerciseTokens(fromName);
+  const intoTokens = exerciseTokens(intoName);
+
+  if (fromTokens.has("assisted") !== intoTokens.has("assisted")) {
+    return { ok: false, reason: "one side is assisted and the other is not" };
+  }
+  for (const t of VARIATION_TOKENS) {
+    if (fromTokens.has(t) !== intoTokens.has(t)) {
+      return { ok: false, reason: `variation mismatch on "${t}"` };
+    }
+  }
+
+  const sameKey = normalizedExerciseKey(fromName) === normalizedExerciseKey(intoName);
+  if (!sameKey && Number(from.days ?? 0) >= 8 && Number(into.days ?? 0) >= 8) {
+    return { ok: false, reason: "both lifts have substantial independent history" };
+  }
+
+  const fromGroup = canonicalGroup(from.group ?? null) ?? classifyMuscleGroup(fromName);
+  const intoGroup = canonicalGroup(into.group ?? null) ?? classifyMuscleGroup(intoName);
+  const groupsAgree = !!fromGroup && !!intoGroup && fromGroup === intoGroup;
+  const subset = isTokenSubset(fromTokens, intoTokens) || isTokenSubset(intoTokens, fromTokens);
+  if (!(groupsAgree || subset || sameKey)) {
+    return { ok: false, reason: "different muscle groups" };
+  }
+  const relation: MergeRelation = sameKey ? "same-key" : subset ? "subset" : "group-only";
+  return { ok: true, relation };
+}
+
+// The auto-apply gate for an AGENT-proposed merge: apply automatically ONLY when the
+// agent is confident AND the pair is structurally related (same key or token subset).
+// A "group-only" pass (they just share a muscle group) is demoted to a suggestion no
+// matter the confidence — that branch admits distinct movements, and a merge can't be
+// undone, so it deserves one-tap human confirmation instead of silent application.
+export function shouldAutoApplyMerge(verdict: MergeVerdict, confidence: string): boolean {
+  return verdict.ok === true && confidence === "high" && verdict.relation !== "group-only";
 }
 
 // ---------- constraint taxonomy (grip/form ≠ load) ---------------------------

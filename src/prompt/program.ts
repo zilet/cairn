@@ -128,19 +128,39 @@ ${JSON.stringify(ex)}`;
 // miss is harmless; an over-merge (folding two different movements together) is
 // the only real risk. Hence: when unsure, do NOT merge.
 export function buildExerciseReconcilePrompt(
-  items: Array<{ name: string; group: string | null; sets: number }>
+  items: Array<{
+    name: string;
+    group: string | null;
+    sets: number;
+    days?: number;
+    mode?: string | null;
+    last_used?: string | null;
+    in_plan?: boolean;
+  }>
 ): string {
   const list = items
-    .map((it) => `  - "${it.name}" [${it.group ? it.group : "no group"}, ${it.sets} logged set${it.sets === 1 ? "" : "s"}]`)
+    .map((it) => {
+      const days = Number(it.days ?? 0);
+      const usage =
+        `${it.sets} set${it.sets === 1 ? "" : "s"}` +
+        (days ? ` over ${days} day${days === 1 ? "" : "s"}` : "") +
+        (it.last_used ? `, last ${it.last_used}` : "") +
+        (it.mode ? `, ${it.mode}` : "") +
+        (it.in_plan ? ", in plan" : "");
+      return `  - "${it.name}" [${it.group ? it.group : "no group"}; ${usage}]`;
+    })
     .join("\n");
   return `${CAIRN_PERSONA}
 
 Right now you're acting as a strength-training data librarian. Below is a list of EXERCISE NAMES from one
-user's training log — many are messy, descriptive, or the same movement worded different ways.
-Your job: cluster names that are the SAME MOVEMENT to a clean canonical title and profile each (muscle
-group + mode), so the app can reuse one tidy entry per movement.
+user's training log — many are messy, descriptive, or the same movement worded different ways. Each line
+also shows usage context: [muscle group; set count over distinct logged days, last-used date, logging
+mode, whether it's in the current plan].
+Your job has TWO parts:
+  1. tidy each name to a clean canonical title + muscle group + mode (the "groups" array);
+  2. propose MERGES — pairs where the SAME lift was logged under two different names (the "merges" array).
 
-RULES (a wrong merge folds two different movements together — be CONSERVATIVE):
+RULES for "groups" (a wrong merge folds two different movements together — be CONSERVATIVE):
 - Group two names ONLY if they are unambiguously the SAME MOVEMENT. A different IMPLEMENT or ANGLE is a
   DIFFERENT exercise — do NOT merge across them:
     • barbell vs dumbbell ("Barbell Bench Press" ≠ "Dumbbell Bench Press")
@@ -161,12 +181,26 @@ RULES (a wrong merge folds two different movements together — be CONSERVATIVE)
 - "mode" = "timed" for held positions measured in seconds (plank, dead hang, wall sit, a stretch);
   "reps" for everything counted in reps.
 
-This ONLY tidies names and tags muscle groups for reuse — it NEVER changes the user's logged numbers
-(weights, reps, dates). Plain words, no scores.
+RULES for "merges" — TWO separate exercise ROWS that are the SAME lift, so their split history should
+become one. This ACTUALLY moves logged history, so the bar is HIGHER than tidying a name:
+- Propose a merge ONLY when "from" and "into" are the SAME lift under a different name — e.g.
+  "Squat" → "Back Squat", "Bench Press" → "Barbell Bench Press", "Single arm DB pulls" → "Single-Arm DB Row".
+- NEVER merge across a real difference — a different implement, angle, grip, stance, or assistance is a
+  DIFFERENT lift: barbell ≠ dumbbell, incline ≠ flat, assisted ≠ unassisted, Pendlay ≠ bent-over,
+  sumo ≠ conventional, single-arm ≠ two-arm, seated ≠ standing.
+- "into" should be the fuller / cleaner / better-established name (more logged days, or in the plan);
+  "from" is the stray duplicate that should fold into it. Both MUST be verbatim names from the list.
+- "confidence" = "high" only when you are certain it's the same lift; "medium"/"low" when plausible but
+  not sure. Only "high" merges are applied automatically; the rest are surfaced as suggestions.
+- If two names each have a lot of independent history, they are probably two real lifts — do NOT merge.
 
-OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdown fences:
-{"groups": [{"members": ["<verbatim name>", "<verbatim name>", ...], "canonical": "<clean Title-Case name>", "group": "<one group above or null>", "mode": "reps|timed"}]}
-If nothing should be tidied or merged, return {"groups": []}.
+This ONLY tidies names, tags muscle groups, and folds duplicate ROWS of the same lift — it NEVER changes
+the user's logged numbers (weights, reps, dates). Plain words, no scores.
+
+OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdown fences. ALWAYS include
+BOTH keys (use [] when empty):
+{"groups": [{"members": ["<verbatim name>", ...], "canonical": "<clean Title-Case name>", "group": "<one group above or null>", "mode": "reps|timed"}],
+ "merges": [{"from": "<verbatim name>", "into": "<verbatim name>", "why": "<short reason>", "confidence": "high|medium|low"}]}
 
 EXERCISE NAMES (${items.length}):
 ${list}`;

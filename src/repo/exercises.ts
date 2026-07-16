@@ -12,6 +12,7 @@ import {
   resolveGroup,
   setExerciseAlias,
 } from "./exercise-canon.js";
+import { withSqliteSavepoint } from "./sqlite-savepoint.js";
 import { bumpTrainingDataVersion } from "./training-cache.js";
 
 // ---------- exercises ----------
@@ -266,20 +267,36 @@ export function reconcileExerciseGroups(): {
 }
 
 // Distinct exercise names that carry signal — those with logged sets OR that sit in
-// a plan — with their muscle_group and a logged-set count. The input the agentic
-// exercise reconciler clusters (mirrors repo.distinctMarkerNames' shape). Null-safe.
-export function distinctExerciseNames(): Array<{ name: string; group: string | null; sets: number }> {
+// a plan — with their muscle_group, mode, logged-set + distinct-logged-day counts,
+// last-used date, and whether they're in the plan. The input the agentic exercise
+// reconciler clusters (mirrors repo.distinctMarkerNames' shape) — the day count +
+// last-used + in-plan give the agent (and the deterministic survivor pick) the usage
+// context to judge which of two names is the real, well-trained lift. Null-safe.
+export function distinctExerciseNames(): Array<{
+  name: string;
+  group: string | null;
+  mode: string | null;
+  sets: number;
+  days: number;
+  last_used: string | null;
+  in_plan: boolean;
+}> {
   try {
     return (
       db
         .prepare(
           `SELECT e.name AS name,
                   e.muscle_group AS group_,
-                  COUNT(ls.id) AS sets
+                  e.mode AS mode,
+                  COUNT(ls.id) AS sets,
+                  COUNT(DISTINCT s.date) AS days,
+                  MAX(s.date) AS last_used,
+                  EXISTS (SELECT 1 FROM plan_items p WHERE p.exercise_id = e.id) AS in_plan
              FROM exercises e
              LEFT JOIN logged_sets ls ON ls.exercise_id = e.id
-            WHERE EXISTS (SELECT 1 FROM logged_sets s WHERE s.exercise_id = e.id)
-               OR EXISTS (SELECT 1 FROM plan_items p WHERE p.exercise_id = e.id)
+             LEFT JOIN sessions s ON s.id = ls.session_id
+            WHERE EXISTS (SELECT 1 FROM logged_sets s2 WHERE s2.exercise_id = e.id)
+               OR EXISTS (SELECT 1 FROM plan_items p2 WHERE p2.exercise_id = e.id)
             GROUP BY e.id
             ORDER BY e.name`
         )
@@ -287,32 +304,113 @@ export function distinctExerciseNames(): Array<{ name: string; group: string | n
     ).map((r) => ({
       name: String(r.name),
       group: r.group_ != null ? String(r.group_) : null,
+      mode: r.mode != null ? String(r.mode) : null,
       sets: Number(r.sets) || 0,
+      days: Number(r.days) || 0,
+      last_used: r.last_used != null ? String(r.last_used) : null,
+      in_plan: !!Number(r.in_plan),
     }));
   } catch {
     return [];
   }
 }
 
-// Merge one exercise into another: re-point all logged_sets.exercise_id and
-// plan_items.exercise_id from `fromName` to `intoName`, then delete the now-empty
-// `from` exercise. Guards: `into` must exist; `from` must exist. Idempotent —
-// if `from` is already gone, returns ok:true with 0 moves.
+// The strength re-test cadence row is keyed by a lift slug, not a FK
+// (training-milestones.ts writes `training:strength:${slug(name)}`). Mirror that slug
+// so a merge can follow the cadence to the survivor instead of orphaning a stale
+// "<from> re-test" in the forward timeline. Kept in lockstep with that module's slug.
+function strengthSignalKey(name: string): string {
+  const slug = normalizedExerciseKey(name || "benchmark").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "benchmark";
+  return `training:strength:${slug}`;
+}
+
+// Merge one exercise into another: the single write that de-duplicates a movement
+// logged under two names. Re-points logged_sets + plan_items, carries the anchor-lift
+// objective + learned aliases + one-session skips onto the survivor, records the
+// from-name as an alias so it resolves to the survivor forever, remaps the strength
+// re-test cadence, then deletes the now-empty `from` row. Savepoint-wrapped so a
+// mid-way failure leaves the split untouched. Guards: `into` must exist; `from` must
+// exist (idempotent — ok:true with 0 moves when already gone); refuses a timed↔reps
+// merge (incompatible logging shapes). NEVER touches logged numbers — only which
+// exercise a set/plan row belongs to. `objectives`/`aliases`/`session_skips` are the
+// non-FK references re-pointed; `moved_sets`/`moved_plan_items` the FK repoints.
 export function mergeExercises(
   fromName: string,
   intoName: string
-): { ok: boolean; moved_sets: number; moved_plan_items: number; error?: string } {
+): {
+  ok: boolean;
+  moved_sets: number;
+  moved_plan_items: number;
+  objectives: number;
+  aliases: number;
+  session_skips: number;
+  error?: string;
+} {
+  const empty = { moved_sets: 0, moved_plan_items: 0, objectives: 0, aliases: 0, session_skips: 0 };
   const into = findExercise(intoName);
-  if (!into) return { ok: false, moved_sets: 0, moved_plan_items: 0, error: `target exercise "${intoName}" not found` };
+  if (!into) return { ok: false, ...empty, error: `target exercise "${intoName}" not found` };
   const from = findExercise(fromName);
-  if (!from) return { ok: true, moved_sets: 0, moved_plan_items: 0 }; // already gone — idempotent
-  if (from.id === into.id) return { ok: true, moved_sets: 0, moved_plan_items: 0 }; // same exercise
+  if (!from) return { ok: true, ...empty }; // already gone — idempotent
+  if (from.id === into.id) return { ok: true, ...empty }; // same exercise
 
-  const moved_sets = Number(db.prepare("UPDATE logged_sets SET exercise_id = ? WHERE exercise_id = ?").run(into.id, from.id).changes);
-  const moved_plan_items = Number(db.prepare("UPDATE plan_items SET exercise_id = ? WHERE exercise_id = ?").run(into.id, from.id).changes);
-  // Remove the now-empty exercise row (no FKs remain pointing at it).
-  db.prepare("DELETE FROM exercises WHERE id = ?").run(from.id);
-  return { ok: true, moved_sets, moved_plan_items };
+  // A timed hold logs duration_sec; a reps lift logs weight/reps. They must never share
+  // one series, so refuse the merge rather than silently corrupt the progression read.
+  const fromMode = from.mode === "timed" ? "timed" : "reps";
+  const intoMode = into.mode === "timed" ? "timed" : "reps";
+  if (fromMode !== intoMode) {
+    return { ok: false, ...empty, error: "cannot merge a timed movement with a reps movement" };
+  }
+
+  return withSqliteSavepoint("merge_exercises", () => {
+    const moved_sets = Number(db.prepare("UPDATE logged_sets SET exercise_id = ? WHERE exercise_id = ?").run(into.id, from.id).changes);
+    const moved_plan_items = Number(db.prepare("UPDATE plan_items SET exercise_id = ? WHERE exercise_id = ?").run(into.id, from.id).changes);
+
+    // strength_objectives references a lift by NAME + normalizedExerciseKey (resolved
+    // at read time, not by FK) — repoint any row keyed on the from-lift so an active
+    // anchor-lift journey follows the survivor instead of losing its exact-lift anchor.
+    const intoKey = normalizedExerciseKey(into.name);
+    const fromKey = normalizedExerciseKey(from.name);
+    const objectives = Number(
+      db
+        .prepare("UPDATE strength_objectives SET exercise = ?, exercise_key = ? WHERE exercise_key = ? OR exercise = ? COLLATE NOCASE")
+        .run(into.name, intoKey, fromKey, from.name).changes
+    );
+
+    // Learned aliases that resolved TO the from-name now resolve to the survivor.
+    const rewritten = Number(
+      db.prepare("UPDATE exercise_aliases SET canonical = ? WHERE canonical = ? COLLATE NOCASE").run(into.name, from.name).changes
+    );
+    // One-session "not today" skips reference the exercise by name (COLLATE NOCASE,
+    // UNIQUE(session_id, exercise)) — carry them over, ignoring a same-session dup.
+    const session_skips = Number(
+      db.prepare("UPDATE OR IGNORE session_skips SET exercise = ? WHERE exercise = ? COLLATE NOCASE").run(into.name, from.name).changes
+    );
+
+    // Follow the strength re-test cadence to the survivor. Best-effort: a schema-absent
+    // DB, or a collision with the survivor's own row, must never fail the merge.
+    try {
+      const fromSig = strengthSignalKey(from.name);
+      const intoSig = strengthSignalKey(into.name);
+      if (fromSig !== intoSig) {
+        db.prepare("UPDATE OR IGNORE attention_schedule SET signal_key = ? WHERE signal_key = ?").run(intoSig, fromSig);
+        db.prepare("DELETE FROM attention_schedule WHERE signal_key = ?").run(fromSig);
+      }
+    } catch {
+      /* the re-test cadence is a downstream consequence, not merge integrity */
+    }
+
+    // Remove the now-empty exercise row, then record the from-name → survivor alias so
+    // a future log/plan of the old name self-aligns (findOrCreateExercise path (a)).
+    // setExerciseAlias is an UPSERT, so only count it when it actually adds/changes a
+    // mapping (an identical alias already present is not a new change — no off-by-one).
+    db.prepare("DELETE FROM exercises WHERE id = ?").run(from.id);
+    const priorAlias = getExerciseAlias(from.name);
+    setExerciseAlias(from.name, into.name, "merge");
+    const aliasRecorded = !priorAlias || priorAlias.canonical !== into.name ? 1 : 0;
+
+    bumpTrainingDataVersion(); // the merged history re-grades lifts in program-state
+    return { ok: true, moved_sets, moved_plan_items, objectives, aliases: rewritten + aliasRecorded, session_skips };
+  });
 }
 
 export function updateExercise(

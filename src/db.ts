@@ -725,9 +725,9 @@ CREATE TABLE IF NOT EXISTS marker_aliases (
 -- floor; the reconciler (repo.mergeExercises) persists learned aliases here.
 CREATE TABLE IF NOT EXISTS exercise_aliases (
   id INTEGER PRIMARY KEY,
-  alias TEXT NOT NULL UNIQUE,                 -- normalizedExerciseKey(variant name)
+  alias TEXT NOT NULL UNIQUE,                 -- normalizeExerciseName(variant name) — the lookup key
   canonical TEXT NOT NULL,                    -- the exercise name to merge into
-  source TEXT,                                -- agent | manual | seed
+  source TEXT,                                -- agent | manual | seed | merge
   created_at TEXT DEFAULT (datetime('now'))
 );
 

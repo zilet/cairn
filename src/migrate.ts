@@ -719,6 +719,54 @@ export const MIGRATIONS: Migration[] = [
         addColumn(db, "daily_metrics", col);
     },
   },
+  {
+    version: 66,
+    name: "exercise-key-plural-fold",
+    up: (db) => {
+      // normalizedExerciseKey now singularizes each token ("leg extensions" ≡ "leg
+      // extension"), so any PERSISTED key computed by the old function must be re-keyed
+      // through the new fold, or an active anchor-lift objective would stop matching
+      // its lift (strength_objectives.exercise_key is compared to a fresh
+      // normalizedExerciseKey(exercise.name) at read time in strength-objective-ledger).
+      //
+      // Inlined on purpose: migrations are frozen snapshots and must NOT import repo
+      // modules. Keep this fold in lockstep with src/repo/exercise-canon.ts
+      // (normalizedExerciseKey + foldPluralToken).
+      //
+      // NOTE: exercise_aliases.alias is intentionally NOT re-keyed here — despite its
+      // schema comment, every reader/writer keys that column via normalizeExerciseName
+      // (NOT normalizedExerciseKey), which the plural fold does not change; re-keying it
+      // would break alias resolution in findOrCreateExercise.
+      const NON_DISTINGUISHING = new Set(["timed"]);
+      const foldPlural = (t: string) => (t.length > 3 && t.endsWith("s") && !t.endsWith("ss") ? t.slice(0, -1) : t);
+      const rekey = (raw: string) => {
+        const tokens = String(raw ?? "")
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, " ")
+          .replace(/\s+/g, " ")
+          .trim()
+          .split(" ")
+          .filter(Boolean);
+        const kept = tokens.filter((t) => !NON_DISTINGUISHING.has(t)).map(foldPlural);
+        return (kept.length ? kept : tokens.map(foldPlural)).join(" ");
+      };
+      try {
+        const rows = db.prepare("SELECT id, exercise, exercise_key FROM strength_objectives").all() as Array<{
+          id: number;
+          exercise: string;
+          exercise_key: string;
+        }>;
+        for (const r of rows) {
+          const next = rekey(r.exercise ?? r.exercise_key);
+          if (next && next !== r.exercise_key) {
+            db.prepare("UPDATE strength_objectives SET exercise_key = ? WHERE id = ?").run(next, r.id);
+          }
+        }
+      } catch {
+        /* table absent / empty on a fresh DB — nothing to re-key */
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: DatabaseSync) {

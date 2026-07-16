@@ -1729,11 +1729,97 @@ export async function reconcileMarkers(agent?: string, hooks?: OpHooks) {
 // Conservatively, when a cluster's canonical movement has a missing/"other" group
 // and the agent gave a confident group, we IMPROVE it (never overwrite a real one).
 // Fail-open: no agent / bad shape → nothing persisted, the deterministic floor stands.
-export async function reconcileExercises(agent?: string, hooks?: OpHooks) {
-  const items = repo.distinctExerciseNames();
-  if (items.length < 2) return { ok: true as const, aligned: 0, applied: 0, candidates: items.length };
+export async function reconcileExercises(
+  agent?: string,
+  hooks?: OpHooks,
+  opts: { authoritativeGroups?: boolean } = {}
+) {
+  let items = repo.distinctExerciseNames();
+  if (items.length < 2) {
+    return {
+      ok: true as const,
+      aligned: 0,
+      applied: 0,
+      candidates: items.length,
+      aliased: 0,
+      groups_fixed: 0,
+      merged: [] as Array<{ from: string; into: string }>,
+      suggested: [] as Array<{ from: string; into: string; why: string; confidence: string }>,
+      skipped: [] as Array<{ from: string; into: string; reason: string }>,
+    };
+  }
   hooks?.onPhase?.("tidying exercise names");
-  const prompt = buildExerciseReconcilePrompt(items.map((i) => ({ name: i.name, group: i.group, sets: i.sets })));
+
+  const merged: Array<{ from: string; into: string }> = [];
+  const skipped: Array<{ from: string; into: string; reason: string }> = [];
+  const suggested: Array<{ from: string; into: string; why: string; confidence: string }> = [];
+  const mergedFrom = new Set<string>(); // normalized from-names already merged
+  let groups_fixed = 0;
+
+  // ---- 1. DETERMINISTIC auto-merge: exact-key clusters are one movement ----
+  // Rows sharing normalizedExerciseKey ("Leg Extensions" / "Leg Extension", "Dead hang
+  // timed" / "Dead hang") are the same lift — fold them with no agent. Survivor = most
+  // distinct logged days; tie → the cleaner display name. A mode-incompatible pair
+  // (a rare mis-tag) is refused by mergeExercises and lands in `skipped`.
+  const clusters = new Map<string, typeof items>();
+  for (const it of items) {
+    const key = repo.normalizedExerciseKey(it.name);
+    if (!key) continue;
+    const bucket = clusters.get(key);
+    if (bucket) bucket.push(it);
+    else clusters.set(key, [it]);
+  }
+  const cleaner = (a: string, b: string): number => {
+    const ca = repo.cleanExerciseName(a) === a ? 0 : 1;
+    const cb = repo.cleanExerciseName(b) === b ? 0 : 1;
+    return ca - cb || a.length - b.length || a.localeCompare(b);
+  };
+  for (const bucket of clusters.values()) {
+    const distinct = [...new Map(bucket.map((m) => [m.name, m])).values()];
+    if (distinct.length < 2) continue;
+    distinct.sort((a, b) => b.days - a.days || cleaner(a.name, b.name));
+    const into = distinct[0].name;
+    for (const m of distinct.slice(1)) {
+      const res = repo.mergeExercises(m.name, into);
+      if (res.ok) {
+        merged.push({ from: m.name, into });
+        mergedFrom.add(repo.normalizeExerciseName(m.name));
+      } else {
+        skipped.push({ from: m.name, into, reason: res.error ?? "merge refused" });
+      }
+    }
+  }
+
+  // ---- 2. DETERMINISTIC group correction: fill an empty group; optionally override ----
+  // authoritativeGroup fires ONLY for unambiguous movements (a "pulldown" imported as
+  // forearms → back), skipping the contested single-token cases (dip/pullover/curl).
+  // An empty/unknown group is ALWAYS filled. OVERRIDING a valid-but-wrong non-null group
+  // happens only when the caller opts in (`authoritativeGroups`) — the user-initiated
+  // "Tidy" fixes a wrong group on demand, while the nightly pass never re-litigates a
+  // group the athlete may have set (no background tug-of-war).
+  const overrideGroups = opts.authoritativeGroups === true;
+  for (const ex of repo.listExercises()) {
+    const auth = repo.authoritativeGroup(ex.name);
+    if (!auth) continue;
+    const cur = repo.canonicalGroup(ex.muscle_group ?? null);
+    if (cur === auth) continue;
+    if (cur == null || overrideGroups) {
+      // cur == null means the stored group is empty/"other"/unknown (fill), else it's a
+      // recognized-but-wrong group we only touch under an explicit override.
+      try {
+        repo.updateExercise(Number(ex.id), { muscle_group: auth });
+        groups_fixed++;
+      } catch {
+        /* skip a bad row, keep going */
+      }
+    }
+  }
+
+  // Re-read after the deterministic merges/corrections so the agent sees the tidied
+  // list (no folded-away ghost names, corrected groups).
+  items = repo.distinctExerciseNames();
+  const prompt = buildExerciseReconcilePrompt(items);
+
   let run: FallbackResult;
   try {
     run = await runChosen(agent, prompt, {
@@ -1743,10 +1829,16 @@ export async function reconcileExercises(agent?: string, hooks?: OpHooks) {
     });
   } catch (error) {
     const failure = agentFailure(error, hooks);
+    // The deterministic pass already did real work — report it even when the agent is
+    // unavailable (ok:false still signals the agentic reconcile didn't complete).
     return {
       ok: false as const,
       error: "no usable reconciliation",
       candidates: items.length,
+      merged,
+      suggested,
+      skipped,
+      groups_fixed,
       ...failure,
       agent_status: agentStatusFor({ ok: false, ...failure }),
     };
@@ -1759,6 +1851,11 @@ export async function reconcileExercises(agent?: string, hooks?: OpHooks) {
       error: "no usable reconciliation",
       agent: chosen,
       tried,
+      candidates: items.length,
+      merged,
+      suggested,
+      skipped,
+      groups_fixed,
       agent_status: agentStatusFor({ ok: false, agent: chosen, tried }),
     };
   }
@@ -1784,22 +1881,75 @@ export async function reconcileExercises(agent?: string, hooks?: OpHooks) {
     const canonical = String(g?.canonical ?? "")
       .replace(/\s+/g, " ")
       .trim();
-    const suggested = String(g?.group ?? g?.muscle_group ?? "")
+    const suggestedGroup = String(g?.group ?? g?.muscle_group ?? "")
       .replace(/\s+/g, " ")
       .trim()
       .toLowerCase();
-    if (!canonical || !suggested || suggested === "other") continue;
-    if (validGroups && !validGroups.has(suggested)) continue; // only a recognized canonical group
+    if (!canonical || !suggestedGroup || suggestedGroup === "other") continue;
+    if (validGroups && !validGroups.has(suggestedGroup)) continue; // only a recognized canonical group
     try {
       const ex: any = repo.findExercise(canonical);
       const cur = String(ex?.muscle_group ?? "")
         .trim()
         .toLowerCase();
-      if (ex && (!cur || cur === "other") && cur !== suggested) {
-        repo.updateExercise(Number(ex.id), { muscle_group: suggested });
+      if (ex && (!cur || cur === "other") && cur !== suggestedGroup) {
+        repo.updateExercise(Number(ex.id), { muscle_group: suggestedGroup });
+        groups_fixed++;
       }
     } catch {
       /* skip a bad row, keep going */
+    }
+  }
+
+  // ---- AGENTIC merges — the same lift under two names. Each is validated by the pure
+  // guard (repo.validateExerciseMergePlan). A merge is AUTO-APPLIED only when it's
+  // confidence:"high" AND structurally related (same key / token subset) — a pass that
+  // rests only on a shared muscle group is irreversible and ambiguous, so it's demoted
+  // to a suggestion for one-tap confirmation. Everything else (medium/low, group-only)
+  // returns as a suggestion; a validator rejection is skipped. ----
+  const daysByNorm = new Map<string, number>();
+  for (const it of items) daysByNorm.set(repo.normalizeExerciseName(it.name), it.days);
+  const seenPair = new Set<string>();
+  for (const m of Array.isArray(p.merges) ? p.merges : []) {
+    const from = String(m?.from ?? "").trim();
+    const into = String(m?.into ?? "").trim();
+    const confidence = String(m?.confidence ?? "").toLowerCase();
+    const fromNorm = repo.normalizeExerciseName(from);
+    const intoNorm = repo.normalizeExerciseName(into);
+    if (!fromNorm || !intoNorm || fromNorm === intoNorm) continue;
+    if (mergedFrom.has(fromNorm)) continue; // already folded deterministically
+    const pairKey = `${fromNorm}=>${intoNorm}`;
+    if (seenPair.has(pairKey)) continue;
+    seenPair.add(pairKey);
+    const fromRow: any = repo.findExercise(from);
+    const intoRow: any = repo.findExercise(into);
+    if (!fromRow || !intoRow) {
+      skipped.push({ from, into, reason: "exercise not found" });
+      continue;
+    }
+    const verdict = repo.validateExerciseMergePlan(
+      { name: fromRow.name, group: fromRow.muscle_group, mode: fromRow.mode, days: daysByNorm.get(fromNorm) ?? 0 },
+      { name: intoRow.name, group: intoRow.muscle_group, mode: intoRow.mode, days: daysByNorm.get(intoNorm) ?? 0 }
+    );
+    if (!verdict.ok) {
+      skipped.push({ from, into, reason: verdict.reason ?? "rejected" });
+      continue;
+    }
+    if (repo.shouldAutoApplyMerge(verdict, confidence)) {
+      const res = repo.mergeExercises(fromRow.name, intoRow.name);
+      if (res.ok) {
+        merged.push({ from: fromRow.name, into: intoRow.name });
+        mergedFrom.add(fromNorm);
+      } else {
+        skipped.push({ from, into, reason: res.error ?? "merge refused" });
+      }
+    } else {
+      suggested.push({
+        from: fromRow.name,
+        into: intoRow.name,
+        why: String(m?.why ?? "").slice(0, 200),
+        confidence: confidence || "medium",
+      });
     }
   }
 
@@ -1809,6 +1959,11 @@ export async function reconcileExercises(agent?: string, hooks?: OpHooks) {
     aligned,
     applied: aliases.length,
     candidates: items.length,
+    aliased: aliases.length,
+    groups_fixed,
+    merged,
+    suggested,
+    skipped,
     agent: chosen,
     tried,
     agent_status: "ok" as const,

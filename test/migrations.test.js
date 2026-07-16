@@ -150,6 +150,38 @@ test("v63-v64 backfill measured RMR and the journey baseline without deleting so
   d.close();
 });
 
+test("v66 re-keys strength_objectives.exercise_key through the plural fold, leaving aliases untouched", () => {
+  const d = new DatabaseSync(":memory:");
+  d.exec(`CREATE TABLE strength_objectives (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    exercise TEXT NOT NULL, exercise_key TEXT NOT NULL,
+    target_kind TEXT, target_est_1rm REAL, status TEXT DEFAULT 'active'
+  );`);
+  d.exec(`CREATE TABLE exercise_aliases (
+    id INTEGER PRIMARY KEY, alias TEXT NOT NULL UNIQUE, canonical TEXT NOT NULL, source TEXT, created_at TEXT
+  );`);
+  // A row keyed with the OLD (plural) normalizedExerciseKey output.
+  d.exec("INSERT INTO strength_objectives (exercise, exercise_key, target_kind, target_est_1rm) VALUES ('Leg Extensions','leg extensions','explicit_est_1rm',200)");
+  // An alias keyed by normalizeExerciseName (NOT the fold) — must NOT be re-keyed.
+  d.exec("INSERT INTO exercise_aliases (alias, canonical, source) VALUES ('leg extensions','Leg Extension','agent')");
+  d.exec("PRAGMA user_version = 65;");
+
+  runMigrations(d);
+  assert.equal(Number(d.prepare("PRAGMA user_version").get().user_version), MAX_VERSION);
+
+  assert.equal(
+    d.prepare("SELECT exercise_key FROM strength_objectives WHERE id=1").get().exercise_key,
+    "leg extension",
+    "the objective key is re-folded so it still matches its lift"
+  );
+  assert.equal(
+    d.prepare("SELECT alias FROM exercise_aliases WHERE id=1").get().alias,
+    "leg extensions",
+    "exercise_aliases.alias (normalizeExerciseName-keyed) is left intact"
+  );
+  d.close();
+});
+
 // The deployed-Pi boot order: db.ts runs the SCHEMA exec BEFORE runMigrations, so a
 // statement in the main schema block that references a MIGRATED column (e.g. an index
 // on request_metric_buckets.build_id, which only v62's rebuild adds) crashes boot
