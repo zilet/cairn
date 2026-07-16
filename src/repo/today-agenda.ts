@@ -49,6 +49,7 @@ import { listAttentionReviewHeldProposals, listProposals, listReviewHeldProposal
 import { sinceLastLookedCandidate } from "./since-last.js";
 import { goalCheckinCandidate } from "./goal-checkin.js";
 import { listBrainDecisions } from "./brain-decisions.js";
+import { specialistVoiceLine } from "../brain/specialist-voice.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { getSettings } from "./settings.js";
 
@@ -324,13 +325,22 @@ function announcedChangeCandidates(date: string): TodayAgendaCandidate[] {
     .filter((row) => !!row.effective_date && Number(row.id) > 0)
     .sort((a, b) => String(a.effective_date).localeCompare(String(b.effective_date)) || Number(a.id) - Number(b.id));
   return decisions.map((decision) => {
+    // When the conference stored a specialist opinion, lead the body with its
+    // attributed voice ("Lab reader: ApoB is the one to move") so the athlete
+    // sees WHO on the team made the call — surfaced only when it already exists.
+    const voice = specialistVoiceLine((decision as any).specialist, decision.domain);
     const copy =
       decision.kind === "meal_plan"
         ? mealPlanAnnouncement(decision, today)
         : {
             kicker: "NEXT BOUNDARY",
             title: decision.summary,
-            body: `${decision.rationale || "Cairn found a structural change worth making."} Planned for ${decision.effective_date}.`,
+            body: [
+              voice ? `${voice.line}.` : null,
+              `${decision.rationale || "Cairn found a structural change worth making."} Planned for ${decision.effective_date}.`,
+            ]
+              .filter(Boolean)
+              .join(" "),
           };
     return {
       id: `announced-decision-${decision.id}`,

@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**213 tools.**
+**214 tools.**
 
 | Tool | Description |
 |---|---|
@@ -123,6 +123,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_settings` | Get app settings: agent selection strategy (round_robin/random/priority), agent order, disabled agents, per-task route metadata, the timezone-aware weekly background-review cadence, and Garmin sync status (garmin_last_sync_at/garmin_last_sync_status). Includes the merged agent list. |
 | `get_strength_journey` | Read the athlete-selected anchor-lift comeback journey: exact-lift history, current/best/baseline/gap/trend, safe next prescription, support roles, and a conditional wide projection. Read-only; never selects a goal. |
 | `get_symptom_links` | Symptom ↔ marker connections: a symptom the user logged (in a life event or a check-in note — e.g. blurry vision, fatigue, headaches) co-occurring with a genuinely out-of-optimal lab marker (e.g. an elevated systolic BP, low ferritin). A quiet 'worth mentioning to your clinician' read — INFORMATIONAL, never a diagnosis; returns [] when nothing co-occurs. The connected brain reaching across the logs. |
+| `get_team_week` | The team's-week digest: a calm, deterministic read over the last 7 days of what your expert team DID (applied/announced ledger decisions, with the specialist voice when stored), what it FLAGGED for you, what it's WATCHING, how earlier calls LANDED (in words), and the connections it surfaced. Pull-only; words, never scores. Read-only here — it never drains the insight backlog (the app's weekly card does that). |
 | `get_test_week` | The cadenced strength TEST-WEEK read — whether a re-test is due (the active block's realization phase, or ~7 weeks since the last test week) and the benchmark lifts worth re-testing to re-anchor true capacity. Read-only (never stamps the cadence). due:false for a new user (never nags). |
 | `get_today_agenda` | The Today salience arbiter (Era 2): ONE deterministic ranking + budget pass over the whole Today surface → { hero, primary[], more[], total }, so only the 1-2 things that matter most today surface inline and the rest collapse behind 'more'. Internal priorities never cross to the user (no scores). Pass `date` (YYYY-MM-DD; defaults to today). |
 | `get_training_playbook` | The deterministic TRAINING PLAYBOOK — the plateau-type plays (strength plateau, endurance plateau, mono-stimulus, hybrid interference) and an adherence-fit restructure read the evolve-program loop can focus a proposal on. Each play carries a plain-language why + a short menu of adaptations, grounded in the program-state. Suggestion only: never mutates the plan, never a score; quiet ('no signal strong enough to change the plan') at steady state. |

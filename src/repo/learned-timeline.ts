@@ -4,6 +4,7 @@ import { listProposals } from "./profile.js";
 import { listBrainDecisions, listBrainExpectations } from "./brain-decisions.js";
 import { latestBrainEvaluation } from "./brain-evaluations.js";
 import { whatWorksForYou } from "./reaction-model.js";
+import { specialistVoiceLine } from "../brain/specialist-voice.js";
 import type { BrainDecision } from "../brain/decision-contract.js";
 import type { BrainEvaluation } from "../brain/evaluation-contract.js";
 import type { BrainExpectation } from "../brain/expectation-contract.js";
@@ -35,6 +36,7 @@ export interface LearnedItem {
   title: string;         // plain-language headline — NEVER a score
   detail?: string;       // optional plain-language elaboration
   source?: string;       // a quiet provenance hint (e.g. "memory:injury", "connected brain")
+  voice?: string;        // an attributed case-conference specialist line, when one is stored
 }
 
 interface LearnedDirectiveSource {
@@ -268,6 +270,9 @@ function brainDecisionItems(): LearnedItem[] {
         : "";
       const observed = evaluation?.explanation ? clip(evaluation.explanation, 220) : "";
       const detail = clip([summary, expected, observed].filter(Boolean).join(" "), 420);
+      // Attribute the call to the case-conference specialist who owned it, when the
+      // conference durably stored a structured opinion on this decision.
+      const voice = specialistVoiceLine((decision as any).specialist, decision.domain);
       out.push({
         when: toWhen(
           evaluation?.evaluated_at ||
@@ -280,6 +285,7 @@ function brainDecisionItems(): LearnedItem[] {
         title: decisionOutcomeTitle(decision, evaluation),
         detail,
         source: `accountability · ${clip(decision.domain, 24)}`,
+        ...(voice ? { voice: voice.line } : {}),
       });
     }
   } catch {

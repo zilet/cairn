@@ -2063,10 +2063,55 @@ export interface ClientLearnedItem {
   title: string;
   detail?: string;
   source?: string;
+  // An attributed case-conference specialist line when one is durably stored on
+  // the decision ("Lab reader: ApoB is the one to move"). Optional + null-safe.
+  voice?: string;
 }
 
 export interface ClientLearnedTimeline {
   items: ClientLearnedItem[];
+}
+
+// ---- the team's-week digest (GET /api/team-week) ----------------------------
+export interface ClientTeamWeekChange {
+  text: string;
+  specialist: string | null;
+  when: string;
+}
+export interface ClientTeamWeekDomainGroup {
+  domain: string;
+  label: string;
+  changes: ClientTeamWeekChange[];
+}
+export interface ClientTeamWeekFlag {
+  kind: "directive" | "review" | string;
+  text: string;
+  domain: string;
+  when: string;
+}
+export interface ClientTeamWeekWatch {
+  text: string;
+  through: string | null;
+  source: "attention" | "expectation" | string;
+}
+export interface ClientTeamWeekLanded {
+  text: string;
+  verdict: string;
+  when: string;
+}
+export interface ClientTeamWeekInsight {
+  id: number;
+  text: string;
+  when: string;
+  backlog: boolean;
+}
+export interface ClientTeamWeek {
+  lead: string;
+  did: ClientTeamWeekDomainGroup[];
+  flagged: ClientTeamWeekFlag[];
+  watching: ClientTeamWeekWatch[];
+  landed: ClientTeamWeekLanded[];
+  insights: ClientTeamWeekInsight[];
 }
 
 export interface ClientInsight {
@@ -2306,6 +2351,7 @@ export interface ClientApiResponses {
   "/api/today-agenda": ClientTodayAgenda;
   "/api/today-agenda/ack": ClientTodayAgendaAckResponse;
   "/api/learned-timeline": ClientLearnedTimeline;
+  "/api/team-week": ClientTeamWeek;
   "/api/since-last": ClientTodayAgendaCandidate | null;
   "/api/guidelines": ClientGuidelinesResponse;
   "/api/nutrition/day": ClientDayIntake;

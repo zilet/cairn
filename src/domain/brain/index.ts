@@ -14,6 +14,7 @@ export * from "../../repo/learned-timeline.js";
 export * from "../../repo/next-step.js";
 export * from "../../repo/reaction-model.js";
 export * from "../../repo/since-last.js";
+export * from "../../repo/team-week.js";
 export * from "../../repo/today-agenda.js";
 export * from "../../repo/trajectory.js";
 export * from "../../repo/whole-person-trajectory.js";

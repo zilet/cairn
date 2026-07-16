@@ -3,6 +3,7 @@ import {
   acknowledgeTodayAgendaCandidate,
   learnedTimeline,
   listVisibleInsights,
+  teamWeekRead,
   todayAgenda,
   updateInsight,
 } from "../../domain/brain/index.js";
@@ -32,6 +33,13 @@ export function registerDailyDriverTools(server: McpToolRegistrar) {
         .describe("the revision shown to the user; omitted = acknowledge whatever is current"),
     },
     async ({ id, revision }) => asText(acknowledgeTodayAgendaCandidate(id, revision ?? null))
+  );
+
+  server.tool(
+    "get_team_week",
+    "The team's-week digest: a calm, deterministic read over the last 7 days of what your expert team DID (applied/announced ledger decisions, with the specialist voice when stored), what it FLAGGED for you, what it's WATCHING, how earlier calls LANDED (in words), and the connections it surfaced. Pull-only; words, never scores. Read-only here — it never drains the insight backlog (the app's weekly card does that).",
+    {},
+    async () => asText(teamWeekRead({ drainBacklog: false }))
   );
 
   server.tool(

@@ -7,6 +7,7 @@ import {
   markTodaySeen,
   shouldMarkTodayAgendaSeen,
   sinceLastLookedCandidate,
+  teamWeekRead,
   todayAgenda,
 } from "../domain/brain/index.js";
 import { allGuidelines, guidelineFor } from "../domain/health/index.js";
@@ -91,6 +92,14 @@ todayRouter.post("/today-agenda/ack", (req, res) => {
   const revision = typeof req.body?.revision === "string" ? req.body.revision : null;
   const result = acknowledgeTodayAgendaCandidate(id, revision);
   res.status(result.stale ? 409 : result.ok ? 200 : 404).json(result);
+});
+
+// The team's-week digest — the deterministic "here's what your team did this
+// week" read that sits under the agentic weekly sentence (pull-only; words, no
+// scores). This is the human-facing surface, so it MAY drain the oldest 1-2
+// unseen backlog insights (flipping new→seen) so nothing rots unseen.
+todayRouter.get("/team-week", (_req, res) => {
+  res.json(teamWeekRead({ drainBacklog: true }));
 });
 
 // The legible "what Cairn has learned about you" timeline (pull-only; no scores).

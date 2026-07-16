@@ -35,6 +35,33 @@ type LearnedGroup = readonly [kind: ClientLearnedKind, label: string, blurb: str
     ],
   ];
 
+// A reading-grammar level chip (CairnUiReads.levelChipHtml), guarded so a missing
+// library (or the classic-script test harness) degrades to "" — mirrors the app's
+// `art()` accessor pattern. NEVER throws; unknown → "".
+function learnedLevelChip(label: string, detail?: string): string {
+  const reads = (globalThis as unknown as { CairnUiReads?: { levelChipHtml?: (o: unknown) => string } }).CairnUiReads;
+  if (!reads || typeof reads.levelChipHtml !== "function") return "";
+  try {
+    return reads.levelChipHtml({ label, detail }) || "";
+  } catch {
+    return "";
+  }
+}
+
+// The attributed case-conference specialist line ("Lab reader: ApoB is the one to
+// move"): the specialist's VOICE reads as a level chip, the recommendation follows
+// in plain words. Falls back to a plain label when the reading-grammar lib is absent.
+function learnedVoiceHtml(voice: string): string {
+  const trimmed = voice.trim();
+  if (!trimmed) return "";
+  const split = trimmed.indexOf(": ");
+  const name = split > 0 ? trimmed.slice(0, split) : "";
+  const rest = split > 0 ? trimmed.slice(split + 2) : trimmed;
+  const chip = name ? learnedLevelChip(name) : "";
+  const nameHtml = name && !chip ? `<span class="learned-voice-name">${escHtml(name)}</span> ` : chip;
+  return `<div class="sess-line learned-voice">${nameHtml}<span class="learned-voice-text">${escHtml(rest)}</span></div>`;
+}
+
 function learnedItemHtml(item: Partial<ClientLearnedItem> | null | undefined, index: number): string {
   const row = item ?? {};
   const when = row.when ? String(row.when) : "";
@@ -44,10 +71,12 @@ function learnedItemHtml(item: Partial<ClientLearnedItem> | null | undefined, in
     ? `<span class="sess-day"${abs ? ` title="${escAttr(abs)}"` : ""}>${escHtml(rel)}</span>`
     : "";
   const detail = row.detail ? `<div class="sess-line">${escHtml(row.detail)}</div>` : "";
+  const voice = row.voice ? learnedVoiceHtml(String(row.voice)) : "";
   const source = row.source ? `<div class="sess-line lbl" style="color:var(--muted);margin-top:6px">${escHtml(row.source)}</div>` : "";
   return `<div class="sess reveal" style="${stagger(index + 1)}">
       <div class="sess-head"><span class="sess-date">${escHtml(row.title || "")}</span>${dateHtml}</div>
       ${detail}
+      ${voice}
       ${source}
     </div>`;
 }

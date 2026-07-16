@@ -292,6 +292,12 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
 .level-chip-detail{font-weight:600;font-size:.68rem;text-transform:none;letter-spacing:0;
   color:var(--muted)}
 
+/* the attributed specialist voice on a Learned outcome ("Lab reader: …") — a
+   level chip for the specialist, the recommendation in quiet plain words. */
+.learned-voice{display:flex;align-items:baseline;flex-wrap:wrap;gap:8px;margin-top:6px}
+.learned-voice-name{font-family:var(--font-ui);font-size:.72rem;font-weight:700;letter-spacing:.04em;color:var(--muted)}
+.learned-voice-text{font-size:.86rem;color:var(--ink-2);line-height:1.45}
+
 .trend-lead{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
 .trend-lead-name{font-family:var(--font-display);font-variation-settings:"opsz" 40;font-weight:560;
   font-size:1.05rem;color:var(--ink);line-height:1.25}
@@ -3226,6 +3232,22 @@ body.swr-busy::after{
 .weekly-wins-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
 .weekly-wins-item{font-size:.88rem;color:var(--ink-2);line-height:1.4}
 .weekly-wins-item::before{content:"· ";color:var(--faint)}
+
+/* the team's-week digest — the deterministic "here's what your team did" body
+   beneath the weekly card's agentic sentence. Quiet, sectioned, words not scores. */
+.team-week{margin-top:14px;padding-top:12px;border-top:1px solid var(--line);
+  display:flex;flex-direction:column;gap:13px;position:relative}
+.team-sec{display:flex;flex-direction:column;gap:5px}
+.team-sec-lbl{display:block;color:var(--muted)}
+.team-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.team-item{font-size:.88rem;color:var(--ink-2);line-height:1.45;display:flex;flex-direction:column;gap:2px}
+.team-item-line::before{content:"· ";color:var(--faint)}
+.team-domain{font-family:var(--font-ui);font-size:.66rem;font-weight:700;letter-spacing:.05em;
+  text-transform:uppercase;color:var(--muted);margin-right:2px}
+.team-voice{font-size:.82rem;color:var(--muted);font-style:italic;padding-left:12px}
+.team-when{color:var(--muted)}
+.team-item.team-good .team-item-line{color:var(--sage-text,var(--ink-2))}
+.team-item.team-watch .team-item-line{color:var(--accent)}
 
 /* autoregulation feedback (Today · finish bar) — reuses the check-in language.
    Optional, calm, dismissible; recovery INFORMS the coach, never auto-applies. */

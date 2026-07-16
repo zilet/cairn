@@ -8,7 +8,7 @@ import ts from "typescript";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-function loadHealthLearned() {
+function loadHealthLearned(extra = {}) {
   const context = {
     Array,
     Object,
@@ -16,6 +16,7 @@ function loadHealthLearned() {
     absDate: (iso) => `abs ${iso}`,
     relAge: (iso) => `age ${iso}`,
     stagger: (index) => `--i:${index}`,
+    ...extra,
   };
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
@@ -76,6 +77,32 @@ test("health learned timeline groups known item kinds and stays pull-only", () =
   assert.match(html, /Plan &lt;change&gt;/);
   assert.doesNotMatch(html, /Hidden|<known>|<read>|<result>|<linked>|<change>/);
   assert.equal(learned.LEARNED_GROUPS.length, 5);
+});
+
+test("an outcome's specialist voice renders as plain text when the reading-grammar lib is absent", () => {
+  const learned = loadHealthLearned();
+  const html = learned.learnedItemHtml(
+    { kind: "outcome", title: "A change that landed as expected", voice: "Lab reader: ApoB <is> the one to move" },
+    0,
+  );
+  assert.match(html, /learned-voice/);
+  assert.match(html, /learned-voice-name">Lab reader</);
+  assert.match(html, /ApoB &lt;is&gt; the one to move/);
+  assert.doesNotMatch(html, /<is>/);
+});
+
+test("an outcome's specialist voice uses the reading-grammar level chip when available", () => {
+  const learned = loadHealthLearned({
+    CairnUiReads: {
+      levelChipHtml: ({ label }) => `<span class="level-chip">${label}</span>`,
+    },
+  });
+  const html = learned.learnedItemHtml(
+    { kind: "outcome", title: "A change that landed as expected", voice: "Lab reader: ApoB is the one to move" },
+    0,
+  );
+  assert.match(html, /<span class="level-chip">Lab reader<\/span>/);
+  assert.match(html, /learned-voice-text">ApoB is the one to move/);
 });
 
 test("health learned timeline renders a quiet empty state", () => {

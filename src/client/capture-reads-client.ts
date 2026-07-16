@@ -130,6 +130,10 @@ function createCaptureReadsController(deps: CaptureReadsDeps): CaptureReadsContr
     cards.renderInsightInSlot(target, insight, cardDeps);
   const renderWeeklyInSlot = (target: HTMLElement, insight: CaptureInsight) =>
     cards.renderWeeklyInSlot(target, insight, cardDeps);
+  const renderWeeklyWithTeam = (target: HTMLElement, insight: CaptureInsight, team: CaptureTeamWeek | null) =>
+    cards.renderWeeklyInSlot(target, insight, cardDeps, team);
+  const renderTeamWeekInSlot = (target: HTMLElement, team: CaptureTeamWeek | null) =>
+    cards.renderTeamWeekInSlot(target, team, cardDeps);
   const jobs = captureReadJobsApi().createController({
     state: deps.state,
     runOp: deps.runOp,
@@ -147,8 +151,17 @@ function createCaptureReadsController(deps: CaptureReadsDeps): CaptureReadsContr
     const iSlot = slot("#insightSlot");
     if (!wSlot && !iSlot) return;
     let list: CaptureInsight[] = [];
+    // The team's-week digest sits under the weekly card; fetch it alongside the
+    // insights (best-effort — a failed fetch just drops the team sections). Only
+    // ask for it when the weekly slot is on screen.
+    let team: CaptureTeamWeek | null = null;
     try {
-      list = await deps.api("/insights") as CaptureInsight[];
+      const [insights, teamWeek] = await Promise.all([
+        deps.api("/insights") as Promise<CaptureInsight[]>,
+        wSlot ? (deps.api("/team-week") as Promise<CaptureTeamWeek>).catch(() => null) : Promise.resolve(null),
+      ]);
+      list = insights;
+      team = teamWeek;
     } catch {
       list = [];
     }
@@ -157,8 +170,13 @@ function createCaptureReadsController(deps: CaptureReadsDeps): CaptureReadsContr
     if (wSlot && wSlot.isConnected) {
       const weekly = arr.find((i) => i && i.kind === "weekly_read");
       if (weekly) {
-        renderWeeklyInSlot(wSlot, weekly);
+        renderWeeklyWithTeam(wSlot, weekly, team);
         void captureRenderWeekWins(wSlot, deps);
+      } else if (cards.teamWeekHasContent(team)) {
+        // No agentic weekly read yet — the deterministic team body stands alone
+        // (graceful degradation), and we still nudge a weekly read to generate.
+        renderTeamWeekInSlot(wSlot, team);
+        jobs.maybeGenerateWeekly();
       } else {
         wSlot.innerHTML = "";
         jobs.maybeGenerateWeekly();

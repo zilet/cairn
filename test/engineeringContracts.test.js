@@ -394,7 +394,7 @@ test("MCP modular tool sources are discovered without duplicate names", () => {
   assert.match(parity, /src\/surfaces\/mcp\/training-status\.ts/);
   assert.match(genDocs, /src\/surfaces\/mcp\/body-metrics\.ts/);
   assert.match(parity, /src\/surfaces\/mcp\/body-metrics\.ts/);
-  assert.equal(tools.length, 213, "tool count changes only for reviewed MCP additions");
+  assert.equal(tools.length, 214, "tool count changes only for reviewed MCP additions");
   assert.equal(new Set(tools).size, tools.length, "MCP tool names must be unique across modules");
   assert.doesNotMatch(mcp, /server\.tool\(/, "src/mcp.ts should stay a registry, not a tool-definition file");
   assert.doesNotMatch(mcp, /server\.tool\("get_chat_history"/);
@@ -4333,7 +4333,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(captureReadDateSource, /function captureReadWeekRangeLabel\(iso: unknown\): string/);
   assert.match(captureReadDateSource, /CairnCaptureReadDate/);
   assert.match(captureReadCardsSource, /function captureReadRenderInsightInSlot\(target: HTMLElement, ins: CaptureInsight, deps: CaptureReadCardDeps\): void/);
-  assert.match(captureReadCardsSource, /function captureReadRenderWeeklyInSlot\(target: HTMLElement, ins: CaptureInsight, deps: CaptureReadCardDeps\): void/);
+  assert.match(captureReadCardsSource, /function captureReadRenderWeeklyInSlot\(\s*target: HTMLElement,\s*ins: CaptureInsight,\s*deps: CaptureReadCardDeps,\s*team\?: CaptureTeamWeek \| null,\s*\): void/);
+  assert.match(captureReadCardsSource, /function captureReadRenderTeamWeekInSlot\(target: HTMLElement, team: CaptureTeamWeek \| null, deps: CaptureReadCardDeps\): void/);
   assert.match(captureReadCardsSource, /CairnCaptureReadCards/);
   assert.match(captureReadJobsSource, /function createCaptureReadJobsController\(deps: CaptureReadJobsDeps\): CaptureReadJobsController/);
   assert.match(captureReadJobsSource, /function reconnectInsight\(\): ClientAgentOpHandlers \| null/);

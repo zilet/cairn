@@ -52,9 +52,18 @@ type CaptureReadCardDeps = {
   escapeHtml(value: unknown): string;
   weekRangeLabel(iso: unknown): string;
 };
+type CaptureTeamWeek = import("../contracts/client-api.js").ClientTeamWeek;
 type CaptureReadCardsApi = {
   renderInsightInSlot(target: HTMLElement, insight: CaptureInsight, deps: CaptureReadCardDeps): void;
-  renderWeeklyInSlot(target: HTMLElement, insight: CaptureInsight, deps: CaptureReadCardDeps): void;
+  renderWeeklyInSlot(
+    target: HTMLElement,
+    insight: CaptureInsight,
+    deps: CaptureReadCardDeps,
+    team?: CaptureTeamWeek | null,
+  ): void;
+  renderTeamWeekInSlot(target: HTMLElement, team: CaptureTeamWeek | null, deps: CaptureReadCardDeps): void;
+  teamWeekSectionsHtml(team: CaptureTeamWeek | null | undefined, esc: (value: unknown) => string): string;
+  teamWeekHasContent(team: CaptureTeamWeek | null | undefined): boolean;
 };
 type CaptureReadJobsDeps = {
   state: Pick<ClientAppState, "tab">;

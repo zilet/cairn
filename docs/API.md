@@ -9,7 +9,7 @@ Health's short-lived pairing exchange is public and passes through the instance-
 when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**266 routes** across 99 groups.
+**267 routes** across 100 groups.
 
 ## `/activities`
 
@@ -679,6 +679,12 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/symptom-links` | Symptom <-> marker connections: a symptom the user logged (in a life event or a check-in note) co-occurring with a genuinely out-of-optimal marker: a quiet "worth mentioning to your clinician" read. Informational, never diagnostic; [] when nothing co-occurs. The connected brain reaching ACROSS the logs. |
+
+## `/team-week`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/team-week` | The team's-week digest — the deterministic "here's what your team did this week" read that sits under the agentic weekly sentence (pull-only; words, no scores). This is the human-facing surface, so it MAY drain the oldest 1-2 unseen backlog insights (flipping new→seen) so nothing rots unseen. |
 
 ## `/telemetry`
 

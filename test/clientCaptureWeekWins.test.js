@@ -77,6 +77,9 @@ function loadCaptureReads({ renderWeeklyInSlot, renderInsightInSlot } = {}) {
   context.CairnCaptureReadCards = {
     renderWeeklyInSlot: renderWeeklyInSlot || (() => {}),
     renderInsightInSlot: renderInsightInSlot || (() => {}),
+    renderTeamWeekInSlot: () => {},
+    teamWeekHasContent: () => false,
+    teamWeekSectionsHtml: () => "",
   };
   context.CairnCaptureReadJobs = {
     createController: () => ({
@@ -181,7 +184,8 @@ test("loadTodayReads appends the wins strip beneath the weekly card, above the f
   await controller.loadTodayReads();
   await flush();
 
-  assert.deepEqual(apiCalls, ["/insights", "/week-wins"]);
+  // The weekly card now also pulls the team's-week digest alongside the insights.
+  assert.deepEqual(apiCalls, ["/insights", "/team-week", "/week-wins"]);
   assert.equal(foot.inserted.length, 1);
   assert.equal(foot.inserted[0].position, "beforebegin");
   assert.match(foot.inserted[0].html, /New best on Back Squat/);
