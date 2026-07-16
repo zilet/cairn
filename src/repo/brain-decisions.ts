@@ -174,6 +174,16 @@ export function recentAppliedRotations(days = 21, asOf = localDateISO()): Applie
 // text, e.g. "2026-07-13 19:09:48"), so a datetime() comparison against a
 // relative modifier works directly. The window string is built from a sanitized
 // integer, never raw input.
+//
+// Two veto shapes count. `rejected`/`reverted` are the explicit "undo/no". A
+// `canceled` row counts ONLY when it carries the user-hold marker
+// (context_json.held_by_user) stamped by revertDecision when the athlete taps
+// "Hold this" on an announced change — a deliberate "not this, for now". SYSTEM
+// cancels (cancelAnnouncementsForProposal firing on a weekly supersede, a fresh
+// draft retiring an older one) never carry that marker, so they are correctly NOT
+// vetoes. `canceled` is deliberately kept OUT of the demotion counters
+// (domainShouldDemote) — this read is only about respecting a recent "no" before
+// re-proposing the same kind, never about eroding autonomy.
 export function hasRecentDecisionVeto(kind: string, days = 5): boolean {
   const key = String(kind || "").trim();
   if (!key) return false;
@@ -181,8 +191,12 @@ export function hasRecentDecisionVeto(kind: string, days = 5): boolean {
   const row = db
     .prepare(
       `SELECT 1 FROM brain_decisions
-       WHERE kind = ? AND status IN ('rejected','reverted')
+       WHERE kind = ?
          AND created_at >= datetime('now', ?)
+         AND (
+           status IN ('rejected','reverted')
+           OR (status = 'canceled' AND json_extract(context_json, '$.held_by_user') = 1)
+         )
        LIMIT 1`
     )
     .get(key, `-${window} days`);
@@ -255,6 +269,26 @@ export function transitionBrainDecision(
     }
     return getBrainDecision(id);
   });
+}
+
+// Retire every live `review` brain_decision that holds this plan proposal to
+// 'superseded'. A held draft's terminal transition (applied / discarded /
+// superseded) makes its outstanding review hold moot — the hold said "wait", and
+// the proposal has now landed or been retired — so a dangling open review row must
+// never keep reading as an active hold (listReviewHeldProposals / planDraftCandidate).
+// Idempotent: a double-call after the rows are already superseded is a no-op. This is
+// the shared repo-level implementation; the autonomy layer's supersedePriorReviewHolds
+// delegates here so the two never drift.
+export function supersedeReviewDecisionsForProposal(proposalId: number): void {
+  for (const decision of listBrainDecisions({ status: "review", limit: 100 })) {
+    if (
+      decision.source_ref_type === "plan_proposal" &&
+      decision.source_ref_key === String(proposalId) &&
+      decision.id != null
+    ) {
+      transitionBrainDecision(decision.id, "superseded");
+    }
+  }
 }
 
 export function patchBrainDecision(id: number, patch: Partial<BrainDecision>): BrainDecision | null {

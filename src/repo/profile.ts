@@ -8,6 +8,7 @@ import {
   listBrainExpectations,
   patchBrainDecision,
   recordDecision,
+  supersedeReviewDecisionsForProposal,
   transitionBrainDecision,
 } from "./brain-decisions.js";
 import { findExercise } from "./exercises.js";
@@ -205,6 +206,15 @@ export function setProposalStatus(id: number, status: string, opts: { deferTrain
   // (applyProposal) already cancels around its own decision, passing the applying
   // decision as the exception.
   if (status === "discarded" || status === "superseded") cancelAnnouncementsForProposal(id);
+  // A terminal transition of the underlying draft also retires any live `review`
+  // hold on it (a freed budget hold, a lead-mode review posture). Without this, a
+  // held draft that is later applied/discarded/superseded through a path OTHER than
+  // applyProposalWithAutonomy's own supersedePriorReviewHolds (a manual apply, a
+  // weekly supersede, the user's discard) leaves a dangling open review decision the
+  // ledger keeps reading as an active hold. Idempotent — a no-op when the autonomy
+  // layer already superseded the rows.
+  if (status === "applied" || status === "discarded" || status === "superseded")
+    supersedeReviewDecisionsForProposal(id);
   const proposal = getProposal(id);
   if (proposal && status !== "applied") recordProposalStatusDecision(proposal, status);
   return proposal;

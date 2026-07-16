@@ -10,6 +10,7 @@ import {
   patchBrainDecision,
   recordDecision,
   saveBrainRollback,
+  supersedeReviewDecisionsForProposal,
   transitionBrainDecision,
 } from "../../repo/brain-decisions.js";
 import { insertBrainEvaluation } from "../../repo/brain-evaluations.js";
@@ -34,6 +35,7 @@ import {
   type OrphanSiblingCleanup,
   RECOVERY_WEEK_INSTRUCTION_PREFIX,
   revertRecoveryWeekIfOwned,
+  setProposalStatus,
 } from "../../repo/profile.js";
 import { MEAL_REFRESH_REQUEST_KEY } from "../../repo/meal-refresh-retry.js";
 import { automaticOrphanIntent, chatOrphanIntent } from "../../repo/proposal-intent.js";
@@ -546,16 +548,10 @@ export function applyMealPlanWithAutonomy(
 // and the system has now landed or scheduled it. Retire the stale live `review` rows to
 // 'superseded' so a freed budget hold never leaves a dangling open review decision in the
 // ledger (which listReviewHeldProposals / planDraftCandidate would otherwise keep reading).
+// Delegates to the shared repo-level implementation so the two never drift; setProposalStatus
+// applies the identical retirement on every terminal proposal transition.
 function supersedePriorReviewHolds(proposalId: number): void {
-  for (const decision of listBrainDecisions({ status: "review", limit: 100 })) {
-    if (
-      decision.source_ref_type === "plan_proposal" &&
-      decision.source_ref_key === String(proposalId) &&
-      decision.id != null
-    ) {
-      transitionBrainDecision(decision.id, "superseded");
-    }
-  }
+  supersedeReviewDecisionsForProposal(proposalId);
 }
 
 export function applyProposalWithAutonomy(
@@ -1242,6 +1238,25 @@ export function revertDecision(id: number, reason = "user veto"): { ok: boolean;
           setMealPlanStatus(mealPlanId, "superseded", { recordDecision: false });
         const canceled = transitionBrainDecision(id, "canceled");
         if (!canceled) throw new Error("the announced decision could not be canceled");
+        // A user "Hold this" on an announced plan-proposal change is a deliberate
+        // veto, not a system supersede. (1) Retire the underlying draft so orphan
+        // adoption can never silently re-adopt it — through setProposalStatus, which
+        // also retires any live review holds (FIX 1) and cancels sibling
+        // announcements. (2) Stamp the canceled decision with a user-hold marker so
+        // hasRecentDecisionVeto counts it as a recent "no" for the bounded window
+        // (system cancels carry no marker, so a weekly supersede never registers as a
+        // veto, and `canceled` never touches the demotion counters).
+        if (decision.source_ref_type === "plan_proposal") {
+          const proposalId = Number(decision.source_ref_key);
+          if (Number.isFinite(proposalId) && proposalId > 0) {
+            const draft = getProposal(proposalId);
+            if (draft?.status === "draft") setProposalStatus(proposalId, "superseded");
+          }
+          const held = patchBrainDecision(id, {
+            context: { ...((canceled.context as Record<string, unknown>) ?? {}), held_by_user: true },
+          });
+          return { ok: true, decision: held ?? canceled };
+        }
         return { ok: true, decision: canceled };
       });
     } catch (error) {
