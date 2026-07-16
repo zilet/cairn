@@ -50,6 +50,7 @@ export * from "./repo/intelligence.js";
 export * from "./repo/program-state.js";
 export * from "./repo/training-playbook.js"; // plateau/adherence playbook suggestions for plan evolution
 export * from "./repo/progression.js";
+export * from "./repo/support-work.js"; // lagging compound → build the under-trained contributing muscle
 export * from "./repo/session-primer.js"; // the pre-session "a coach was already here" read
 export * from "./repo/strength-objectives.js"; // athlete-selected anchor-lift comeback journey
 export * from "./repo/program-blocks.js";

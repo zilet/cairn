@@ -31,6 +31,7 @@ import {
   runZones,
   setEquipmentProfile,
   setProposalStatus,
+  supportWorkRead,
   testWeekDue,
   trainingPlaybook,
   updateBlock,
@@ -163,6 +164,16 @@ programRouter.get("/program/progression", (req, res) => {
 // The handful of concrete adaptations due right now — lifts to push/hold/deload,
 // groups that are due, missing-pattern gaps. Plain words, most-actionable first.
 programRouter.get("/program/adjustments", (_req, res) => res.json(programAdjustments()));
+
+// Support-work read: for each lagging COMPOUND lift (plateaued/regressing) whose
+// CONTRIBUTING muscles run under their productive volume, one targeted supporting-
+// work suggestion (build the weak synergist — e.g. direct triceps for a stalled
+// bench — instead of only rotating the movement; if the lift's own prime mover is
+// under-trained it says the lift may simply be under-practiced). Plain words,
+// suggestion-not-a-gate, no scores; [] when nothing lags. ?date= optional.
+programRouter.get("/support-work", (req, res) =>
+  res.json(supportWorkRead(req.query.date ? String(req.query.date) : undefined))
+);
 
 // Build a DRAFT plan proposal from the current day's per-lift prescriptions, then
 // route it through the autonomy layer (buildProgressionWithAutonomy, shared with MCP

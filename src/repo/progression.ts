@@ -52,6 +52,7 @@ import {
 } from "./profile.js";
 import { type LiftState, getProgramState } from "./program-state.js";
 import { addDaysISO, daysBetweenISO, localDateISO, round2_5 } from "./shared.js";
+import { supportWorkRead } from "./support-work.js";
 // Run-plan / DEXA / test-week digest producers. Imported for their types + a lazy
 // compute when programAdjustments is called standalone (Today/Progress). The module
 // cycle (progression → run-progression → coach → progression) is resolved at call
@@ -1991,6 +1992,20 @@ export function programEvolutionTrigger(
         : `${wantsVary.slice(0, 3).join(", ")} have stalled — time to rotate variations in.`
     );
     sigParts.push(`vary:${wantsVary.join(",")}`);
+  }
+
+  // (1b) Support-work: a lagging COMPOUND whose CONTRIBUTING muscles are under-
+  //      trained wants targeted supporting work, not just a movement rotation — the
+  //      elite-coach read ("bench is stuck and the triceps are the weak link; build
+  //      them before rotating the lift"). Deterministic, driven off the same
+  //      program-state read. Each entry folds its plain-language suggestion into the
+  //      reasons and a stable {lift + weak-link groups} digest into the signature, so
+  //      a standing weak-link condition drafts once and re-arms only when the picture
+  //      changes. Reuses the already-resolved `ps` (no recompute; injectable in tests).
+  const supportEntries = supportWorkRead(date, { programState: ps });
+  for (const entry of supportEntries) {
+    reasons.push(entry.suggestion);
+    sigParts.push(entry.signature);
   }
 
   // (3) A cadenced re-test come due — re-measure true capacity before the next

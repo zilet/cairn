@@ -30,6 +30,7 @@ import {
   runZones,
   setEquipmentProfile,
   setProposalStatus,
+  supportWorkRead,
   testWeekDue,
   trainingPlaybook,
   updateBlock,
@@ -211,6 +212,13 @@ export function registerProgramTools(server: McpToolRegistrar) {
     "The handful of concrete adaptations due right now — lifts to push/hold/deload, groups that are due, missing core/grip/mobility gaps — as a plain-language digest. Most-actionable first. Pull-never-push: the user reviews these; nothing auto-applies.",
     {},
     async () => asText(programAdjustments())
+  );
+
+  server.tool(
+    "get_support_work",
+    "Support-work intelligence — for each lagging COMPOUND lift (plateaued/regressing) whose CONTRIBUTING muscles are running under their productive volume, a targeted supporting-exercise suggestion: build the weak synergist (e.g. direct triceps work for a stalled bench, grip work for a stuck deadlift) instead of only rotating the movement. If the lift's OWN prime mover is under-trained it says the lift may simply be under-practiced. Plain words, suggestion-not-a-gate, no scores; [] when nothing lags. Pull-never-push.",
+    { date: z.string().optional() },
+    async ({ date }) => asText(supportWorkRead(date))
   );
 
   server.tool(
