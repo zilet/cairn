@@ -820,8 +820,18 @@ test("service worker caches core assets strictly and optional assets best-effort
   const sw = read("public/sw.js");
   assert.match(sw, /const\s+CORE_ASSETS\s*=/);
   assert.match(sw, /const\s+OPTIONAL_ASSETS\s*=/);
-  assert.match(sw, /addAll\(CORE_ASSETS\)/);
-  assert.match(sw, /OPTIONAL_ASSETS\.map[\s\S]*catch\(\(\)\s*=>\s*null\)/);
+  // Precache fetches bypass the HTTP cache (cache: "reload") so a version bump
+  // always installs fresh bytes instead of a browser-cached stale response.
+  assert.match(
+    sw,
+    /addAll\(CORE_ASSETS\.map\(\(u\)\s*=>\s*new Request\(u,\s*\{\s*cache:\s*"reload"\s*\}\)\)\)/,
+    "CORE_ASSETS install must bypass the HTTP cache for fresh precache bytes",
+  );
+  assert.match(
+    sw,
+    /OPTIONAL_ASSETS\.map[\s\S]*new Request\(asset,\s*\{\s*cache:\s*"reload"\s*\}\)[\s\S]*catch\(\(\)\s*=>\s*null\)/,
+    "OPTIONAL_ASSETS install must also bypass the HTTP cache",
+  );
   // The shell ships as a handful of concatenated bundles; CORE_ASSETS must precache
   // exactly those bundles (in manifest order) and no individual module file.
   const cachedJs = [...sw.matchAll(/"(\/js\/[^"]+)"/g)].map((m) => m[1]);

@@ -25,8 +25,11 @@ const OPTIONAL_ASSETS = [
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then(async (c) => {
-    await c.addAll(CORE_ASSETS);
-    await Promise.all(OPTIONAL_ASSETS.map((asset) => c.add(asset).catch(() => null)));
+    // Bypass the HTTP cache on install: a browser-cached (not just service-worker
+    // cached) response for these urls would otherwise defeat the whole point of
+    // fetching fresh precache bytes on every version bump.
+    await c.addAll(CORE_ASSETS.map((u) => new Request(u, { cache: "reload" })));
+    await Promise.all(OPTIONAL_ASSETS.map((asset) => c.add(new Request(asset, { cache: "reload" })).catch(() => null)));
   }));
   // Single-user self-hosted app: a deploy should always be live on the next open,
   // never stranded behind a manual tap (which is how a client once fell ~40 cache

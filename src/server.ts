@@ -119,10 +119,13 @@ app.use(
   express.static(PUBLIC_DIR, {
     setHeaders(res, filePath) {
       const base = path.basename(filePath);
-      if (base === "manifest.json") {
+      if (base === "manifest.json" || base === "sw.js") {
         // Always revalidate: an install-capable browser (Chrome/Android/desktop)
         // re-reads the manifest to refresh the home-screen icon, so a bumped icon
-        // set must never be served stale from an HTTP cache.
+        // set must never be served stale from an HTTP cache. sw.js is the same
+        // deal one level up — the browser's own periodic/registration.update()
+        // re-fetch of the worker script must see the new CACHE version bump
+        // immediately rather than a browser-HTTP-cached copy of the old one.
         res.setHeader("Cache-Control", "no-cache");
       } else if (filePath.includes(`${path.sep}icons${path.sep}`) && /\.v\d+\./.test(base)) {
         // Versioned icon urls (…v2.*) are immutable — the filename changes when the
