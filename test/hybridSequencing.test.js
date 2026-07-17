@@ -10,7 +10,7 @@
 //       best-effort placement + note on a packed week (recovery gating stays outermost).
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
-import { db, repo, resetTables } from "./_seed.js";
+import { repo, resetTables } from "./_seed.js";
 import { renderHybridSequencing } from "../dist/prompt.js";
 
 const REF = "2026-05-15";

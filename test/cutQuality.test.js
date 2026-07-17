@@ -4,7 +4,7 @@
 // without heavy DB fixtures; a few DB-path tests pin the wiring end-to-end.
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
-import { db, repo, resetTables } from "./_seed.js";
+import { repo, resetTables } from "./_seed.js";
 import { addDaysISO } from "../dist/repo/shared.js";
 import { cutQualityRead, cutQualityWeekLine } from "../dist/repo/cut-quality.js";
 import { teamWeekRead } from "../dist/repo/team-week.js";
