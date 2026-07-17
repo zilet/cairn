@@ -5,6 +5,70 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-07-17
+
+Endurance becomes a first-class citizen alongside the barbell: runs and hikes
+shape recovery, rest, fueling, and the week, and the coaching brain learns how
+the athlete responds to mileage the same way it learns lifts. Training identity
+got sharper — one lift is one row everywhere — and the daily surfaces read
+faster: a muscle-first Train tab, a week-in-review that reads in seconds, and a
+workout moment with a pre-session primer. PWA cache `cairn-v506`.
+
+### Added
+
+- **Endurance, first-class** — runs and hikes participate in recovery, rest-day
+  logic, fueling guidance, and the week view; a hybrid week sequences the
+  runner and the lifter so the two don't compete on the same day.
+- **The brain learns endurance** — run-volume expectations in the decision
+  ledger, VO2max and easy-pace response patterns, and a hold/ease-only learned
+  run-volume step.
+- **Cut-quality read** — whether a cut is preserving muscle: weight trending
+  down while strength holds, read calmly from Energy Balance.
+- **Exercise identity** — one lift, one row, everywhere: plural and possessive
+  variants fold into a single identity, with one-tap merge suggestions for
+  near-duplicates and a curated lift read replacing the uncapped scroll.
+- **Support-work intelligence** — a lagging lift proposes building its weak
+  link, not just more of itself.
+- **The workout moment** — a pre-session primer, felt freshness, and
+  finish-moment feedback folded into the done card.
+- **Week-in-review and the road ahead** — a latest-state, grouped weekly card
+  that reads in seconds, plus one dated forward timeline of what's coming.
+- **Next checkup** — the doctor loop surfaced: ordered future labs and
+  follow-through tracked to completion.
+- **The team's week** — a digest of the coaching brain's specialist voices with
+  visible evaluations.
+
+### Changed
+
+- **Train leads with muscle groups** — the journey story folds beneath a
+  muscle-first overview.
+- **The weekly read persists compactly** — acknowledging it is not dismissing
+  it; the read stays quietly available.
+- **A resumed PWA checks for updates actively** — an installed client catches
+  up on next open instead of sitting stale.
+- **A sturdier brain under the hood** — metabolic control loop, autonomy
+  atomicity, and scheduler durability; meal quality and constraint freshness
+  enforced on nutrition writes.
+
+### Fixed
+
+- **iOS agent-login paste** — a native paste box under the login terminal; iOS
+  never offers its paste menu on xterm's hidden textarea, so OAuth codes were
+  impossible to enter from a phone.
+- **"Hold this" sticks** — holds persist and review holds retire on every
+  terminal transition; routine progressions no longer consume the surprise
+  budget, and budget holds wait quietly instead of interrupting Today.
+- **Chat verifies plan writes before confirming** — no confident confirmations
+  over failed writes; newly created sessions finish reliably.
+- **Cross-domain marker asks dedupe** — the same lab request no longer arrives
+  from two domains at once.
+
+### Notes
+
+- Migration **v66** (`exercise-key-plural-fold`) singularizes exercise-key
+  tokens so plural variants fold into one identity; down-migrations remain
+  unsupported.
+
 ## [1.2.0] — 2026-07-14
 
 Cairn's daily loop is calmer and more trustworthy: the Brief explains the
