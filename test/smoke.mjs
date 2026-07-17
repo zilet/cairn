@@ -143,9 +143,10 @@ async function runOpenSmoke(ctx) {
     ok(/<link rel="manifest" href="\/manifest\.json">/.test(text), `GET ${route} includes manifest`);
   }
 
-  // 7) Create a plan day end-to-end (PUT /plan/:day), then read it back. Uses a
-  //    high day_number so it never clobbers a seeded day.
-  const smokeDay = 91;
+  // 7) Create a plan day end-to-end (PUT /plan/:day), then read it back. Uses the
+  //    top of the valid 1–14 range (plan quality rejects higher day numbers) so it
+  //    still never clobbers a seeded day.
+  const smokeDay = 14;
   {
     const put = await getJson(base, `/api/plan/${smokeDay}`, {
       method: "PUT",
@@ -156,12 +157,12 @@ async function runOpenSmoke(ctx) {
         items: [{ exercise: "Smoke Squat", sets: 3, rep_low: 5, rep_high: 8, target_weight: 135 }],
       }),
     });
-    ok(put.status === 200, "PUT /api/plan/91 → 200", `got ${put.status}`);
+    ok(put.status === 200, `PUT /api/plan/${smokeDay} → 200`, `got ${put.status}`);
     ok(put.body && put.body.day_number === smokeDay, "created day echoes day_number", JSON.stringify(put.body?.day_number));
     ok(Array.isArray(put.body?.items) && put.body.items.some((i) => i.exercise === "Smoke Squat"), "created day has the item", JSON.stringify(put.body?.items));
 
     const get = await getJson(base, `/api/plan/${smokeDay}`);
-    ok(get.status === 200 && get.body?.name === "Smoke Day", "GET /api/plan/91 reads it back", JSON.stringify(get.body?.name));
+    ok(get.status === 200 && get.body?.name === "Smoke Day", `GET /api/plan/${smokeDay} reads it back`, JSON.stringify(get.body?.name));
   }
 
   // 8) Log a set, then read it back via the session-by-date lookup. Asserts the
