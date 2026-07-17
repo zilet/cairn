@@ -134,6 +134,21 @@
     term.onData?.((data: string) => {
       if (ws.readyState === 1) ws.send(data);
     });
+    // iOS never offers its paste callout on xterm's hidden textarea, so OAuth
+    // codes go through this native input instead — sent as if typed + Enter.
+    const sendPasted = (): void => {
+      const text = modal.pasteInput.value.trim();
+      if (!text || ws.readyState !== 1) return;
+      ws.send(text + "\r");
+      modal.pasteInput.value = "";
+    };
+    modal.pasteSend.addEventListener("click", sendPasted);
+    modal.pasteInput.addEventListener("keydown", (event: KeyboardEvent) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        sendPasted();
+      }
+    });
     term.onResize?.(({ cols, rows }: { cols: number; rows: number }) => {
       if (ws.readyState === 1) {
         try { ws.send(JSON.stringify({ t: "resize", cols, rows })); } catch {}

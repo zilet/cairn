@@ -37,6 +37,11 @@
 .agent-login-hint{font-size:12.5px;color:var(--muted,#746c5c);line-height:1.5;margin:0}
 .agent-login-hint code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;
   background:var(--paper,#f4efe7);padding:1px 5px;border-radius:5px;border:1px solid var(--line,#e7dfd2)}
+.agent-login-paste{display:flex;gap:8px}
+.agent-login-paste-in{flex:1;min-width:0;font-family:inherit;font-size:16px;padding:8px 12px;
+  border-radius:11px;border:1px solid var(--line,#e7dfd2);background:var(--paper,#f4efe7);color:var(--ink,#211d17)}
+.agent-login-paste-in::placeholder{color:var(--muted,#746c5c)}
+.agent-login-paste-in:focus-visible{outline:2px solid var(--accent,#b4552d);outline-offset:2px}
 .agent-login-ft{display:flex;justify-content:flex-end;gap:10px;padding-top:2px}
 .agent-login-btn{appearance:none;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer;
   padding:9px 16px;border-radius:11px;border:1px solid var(--line,#e7dfd2);
@@ -72,8 +77,14 @@
       <div class="agent-login-bd">
         <div class="agent-login-status" role="status">${model.status("connecting")}</div>
         <div class="agent-login-term"></div>
+        <div class="agent-login-paste">
+          <input class="agent-login-paste-in" type="text" autocomplete="off" autocapitalize="off"
+            autocorrect="off" spellcheck="false" enterkeyhint="send"
+            placeholder="Paste the login code here" aria-label="Paste an authorization code">
+          <button class="agent-login-btn" type="button" data-paste-send>Send</button>
+        </div>
         ${model.providerHintHtml(name)}
-        <p class="agent-login-hint">Follow the prompts. If a URL and a code appear, open the URL in your browser to authorize.</p>
+        <p class="agent-login-hint">Follow the prompts. If a URL and a code appear, open the URL in your browser to authorize, then paste the code in the box above &mdash; on phones the terminal itself can't take a paste.</p>
         <div class="agent-login-ft">
           <button class="agent-login-btn" type="button" data-close>Cancel</button>
         </div>
@@ -83,9 +94,11 @@
 
     const statusEl = overlay.querySelector<HTMLElement>(".agent-login-status");
     const termHost = overlay.querySelector<HTMLElement>(".agent-login-term");
+    const pasteInput = overlay.querySelector<HTMLInputElement>(".agent-login-paste-in");
+    const pasteSend = overlay.querySelector<HTMLButtonElement>("[data-paste-send]");
     const closeBtn = overlay.querySelector<HTMLButtonElement>(".agent-login-ft [data-close]");
     const footer = overlay.querySelector<HTMLElement>(".agent-login-ft");
-    if (!statusEl || !termHost || !closeBtn || !footer) {
+    if (!statusEl || !termHost || !pasteInput || !pasteSend || !closeBtn || !footer) {
       overlay.remove();
       return null;
     }
@@ -119,8 +132,8 @@
         return;
       }
       if (event.key !== "Tab") return;
-      const focusable = [...overlay.querySelectorAll<HTMLButtonElement>("button")]
-        .filter((button) => button.offsetParent !== null);
+      const focusable = [...overlay.querySelectorAll<HTMLElement>("button, input")]
+        .filter((el) => el.offsetParent !== null);
       if (focusable.length < 2) return;
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
@@ -141,6 +154,8 @@
     return {
       overlay,
       termHost,
+      pasteInput,
+      pasteSend,
       isOk: () => statusEl.classList.contains("is-ok"),
       markFailed,
       setStatus,

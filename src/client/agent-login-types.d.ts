@@ -61,6 +61,8 @@ type AgentLoginAssetsApi = {
 type AgentLoginModalHandle = {
   overlay: AgentLoginOverlay;
   termHost: HTMLElement;
+  pasteInput: HTMLInputElement;
+  pasteSend: HTMLButtonElement;
   isOk(): boolean;
   markFailed(message: string): void;
   setStatus(text: string, cls?: string): void;
