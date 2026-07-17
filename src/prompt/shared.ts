@@ -915,6 +915,57 @@ export function renderRunPlan(ctx: PartialCoachContext): string {
   return lines.length ? `\n${lines.join("\n")}\n` : "";
 }
 
+// renderHybridSequencing: the runner+lifter interference/synergy note for the on-demand
+// session builder. A concurrent runner+lifter loads the SAME legs from two directions, so
+// today's session is SEQUENCED against yesterday's cardio, tomorrow's key run, and any run
+// already in today (repo.hybridDayContext supplies the deterministic reads). Suggestion
+// words, never a gate; no scores. "" when nothing fires (the quiet-by-default pattern).
+// `today` anchors the "tomorrow" check so a key run several days out doesn't fire it.
+const HYBRID_SPORT_NOUN: Record<string, string> = { run: "run", ride: "ride", swim: "swim", row: "row", walk: "hike" };
+export function renderHybridSequencing(hc: any, today?: string): string {
+  if (!hc) return "";
+  const lines: string[] = [];
+  // Same-day double — TIERED so a short errand walk never reads as a competing stimulus:
+  //   (a) a genuinely HARD outing → the full "one stimulus, lift first, fuel both" framing;
+  //   (b) a real-but-easy endurance outing (run/ride/swim/row, or ≥40 sustained min) → ONE
+  //       soft fuel-around-both line; (c) anything shorter/lighter → no note at all.
+  const ct = hc.cardio_today;
+  if (ct) {
+    const noun = HYBRID_SPORT_NOUN[String(ct.sport)] || "session";
+    const mins = ct.minutes ? `, ${ct.minutes} min` : "";
+    const realEndurance =
+      ["run", "ride", "swim", "row"].includes(String(ct.sport)) || (ct.minutes != null && Number(ct.minutes) >= 40);
+    if (ct.hard) {
+      lines.push(
+        `  - DOUBLE DAY: a ${noun} is already in today${mins}. Treat the day as ONE stimulus — for a strength goal put the quality lifting work FIRST and keep it crisp, and fuel around BOTH efforts (protein + carbs protected). Don't let the ${noun}'s fatigue quietly gut the lift.`,
+      );
+    } else if (realEndurance) {
+      lines.push(`  - DOUBLE DAY: you've also got a ${noun} in today${mins} — fuel around both.`);
+    }
+  }
+  if (hc.hard_cardio_yesterday) {
+    lines.push(
+      `  - HARD CARDIO YESTERDAY (${String(hc.hard_cardio_yesterday.why || "a hard effort yesterday")}): keep lower-body loading MODERATE today — quality over volume, leave a rep or two in reserve on the big leg work.`,
+    );
+  }
+  // A quality/long run landing TOMORROW protects today's heavy leg work. STRICT: with no
+  // valid `today` we can't know it's tomorrow, so we stay quiet rather than over-fire.
+  const nr = hc.planned_run_next;
+  const tomorrow =
+    today && /^\d{4}-\d{2}-\d{2}$/.test(today)
+      ? new Date(new Date(`${today}T00:00:00Z`).getTime() + 864e5).toISOString().slice(0, 10)
+      : null;
+  if (nr && nr.kind && nr.kind !== "easy" && tomorrow && nr.date === tomorrow) {
+    const km = nr.km != null ? ` (~${nr.km} km)` : "";
+    lines.push(
+      `  - KEY RUN TOMORROW: a ${nr.kind} run${km} is on deck tomorrow. Protect the legs — keep heavy lower work shy of failure today so tomorrow's quality run isn't compromised.`,
+    );
+  }
+  return lines.length
+    ? `\nHYBRID SEQUENCING (runner + lifter — sequence the two so they don't compete; a suggestion, never a gate):\n${lines.join("\n")}\n`
+    : "";
+}
+
 // renderMuscleGroups: the per-canonical-group ADVANCING vs STALLING read (the
 // user's own mental model), plus — when a group is stalling — the MENU of
 // same-pattern variations to rotate in. Optionally a short TEST WEEK line when a

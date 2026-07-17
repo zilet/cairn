@@ -31,6 +31,7 @@ import {
   type TrainingLoad,
   dayLoad,
   hardCardioDay,
+  hybridDayContext,
   recentCardioLoadMedian,
   recoverySessionDose,
 } from "./training-read.js";
@@ -371,6 +372,28 @@ export function dayRead(
       completedToday: (trainedToday || !!bigActivity) && (todayLoad === "hard" || todayLoad === "moderate"),
     });
   (signals as any).signal_state = signalState;
+  // Hybrid runner+lifter sequencing (one additive signal entry). Purely informational —
+  // it NEVER changes the kind decision or adds an interruption; the agentic layer voices
+  // it warmly when it fits. Omitted entirely when nothing sequences, so existing reads are
+  // byte-for-byte unchanged. Null-safe: any failure leaves it off.
+  try {
+    const hc = hybridDayContext(d);
+    const tomorrow = new Date(new Date(`${d}T00:00:00Z`).getTime() + 864e5).toISOString().slice(0, 10);
+    const protectRunNext = !!(
+      hc.planned_run_next &&
+      hc.planned_run_next.kind !== "easy" &&
+      hc.planned_run_next.date === tomorrow
+    );
+    if (hc.cardio_today || hc.hard_cardio_yesterday || protectRunNext) {
+      (signals as any).hybrid = {
+        cardio_today: !!hc.cardio_today,
+        hard_cardio_yesterday: !!hc.hard_cardio_yesterday,
+        protect_run_next: protectRunNext,
+      };
+    }
+  } catch {
+    /* hybrid sequencing is additive context only — never block the read */
+  }
   const rules: DayReadRule[] = [
     {
       name: "logged-loading-work-today",

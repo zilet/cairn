@@ -13,9 +13,15 @@
 // a cycle.
 import { db } from "../db.js";
 import { canonicalEnduranceSport } from "./endurance-sports.js";
-import { normalizeExerciseName, normalizedExerciseKey } from "./exercise-canon.js";
+import {
+  canonicalGroup,
+  classifyMuscleGroup,
+  normalizeExerciseName,
+  normalizedExerciseKey,
+} from "./exercise-canon.js";
 import { CARDIO_GRADE } from "./heavy-load.js";
 import { activeRecoveryWeekLedger } from "./recovery-week-ledger.js";
+import { addDaysISO, localDateISO } from "./shared.js";
 
 export type MovementBucket = "push" | "pull" | "lower" | "core" | "mobility" | "other";
 export type TrainingLoad = "hard" | "moderate" | "easy";
@@ -632,4 +638,236 @@ export function hardCardioDay(date: string, loadMedian?: number | null): boolean
     if (dur >= (isEnduranceSession ? HARD_CARDIO_MIN : CARDIO_GRADE.walkHikeModerateMin)) return true;
   }
   return false;
+}
+
+// ---------- hybrid interference/synergy: runner + lifter sequencing ----------
+// A concurrent runner+lifter loads the SAME legs from two directions (a hard run and a
+// heavy squat day compete for the same recovery). These deterministic, cheap, null-safe
+// reads let the session prompt + Brief SEQUENCE the two: keep lower-body loading moderate
+// the day after hard cardio, protect the legs before a quality/long run, and treat a
+// same-day double as ONE stimulus. Every field comes from logged activities + the stored
+// plan — never subjective input (which this athlete rarely supplies). Suggestions, never
+// gates; no scores.
+
+// Lower-body groups that make a plan day a genuine "heavy lower" (squat/hinge) day. Calves
+// are excluded — a calf-raise day is not a leg day that gates a run.
+const HEAVY_LOWER_GROUPS: ReadonlySet<string> = new Set(["quads", "hamstrings", "glutes"]);
+
+export interface PlanDayGroups {
+  day_number: number;
+  focus: string | null;
+  groups: string[]; // canonical strength muscle groups (cardio items ignored)
+  heavy_lower: boolean;
+}
+
+// Each plan day's strength muscle groups, classified against the canon (cardio items are
+// ignored — a run item never makes a day "lower"). Deterministic; [] when there's no plan.
+// Mirrors plan-selection's per-day grouping but lives HERE so run-progression can reach it
+// without an import cycle (plan-selection → progression → run-progression).
+export function planDayStrengthGroups(): PlanDayGroups[] {
+  let rows: any[] = [];
+  try {
+    rows = db
+      .prepare(
+        `SELECT pd.day_number AS day_number, pd.focus AS focus,
+                pi.kind AS kind, e.name AS exercise, e.muscle_group AS muscle_group
+           FROM plan_days pd
+           LEFT JOIN plan_items pi ON pi.plan_day_id = pd.id
+           LEFT JOIN exercises e ON e.id = pi.exercise_id
+          ORDER BY pd.day_number, pi.position`
+      )
+      .all() as any[];
+  } catch {
+    return [];
+  }
+  const map = new Map<number, PlanDayGroups>();
+  for (const r of rows) {
+    const dn = Number(r.day_number);
+    if (!Number.isFinite(dn)) continue;
+    const cur =
+      map.get(dn) ?? { day_number: dn, focus: r.focus == null ? null : String(r.focus), groups: [], heavy_lower: false };
+    const exercise = r.exercise == null ? "" : String(r.exercise).trim();
+    if (exercise && r.kind !== "cardio") {
+      const group = canonicalGroup(r.muscle_group) ?? classifyMuscleGroup(exercise);
+      if (group && group !== "mobility" && !cur.groups.includes(group)) cur.groups.push(group);
+    }
+    map.set(dn, cur);
+  }
+  const out = [...map.values()].sort((a, b) => a.day_number - b.day_number);
+  for (const d of out) d.heavy_lower = d.groups.some((g) => HEAVY_LOWER_GROUPS.has(g));
+  return out;
+}
+
+// The plan day_numbers that are genuine heavy-lower (squat/hinge) days — the axis the
+// run-plan placement reads to keep a quality run off the day right after leg day.
+export function lowerBodyPlanDayNumbers(): Set<number> {
+  const set = new Set<number>();
+  for (const d of planDayStrengthGroups()) if (d.heavy_lower) set.add(d.day_number);
+  return set;
+}
+
+interface PlanRunItem {
+  day_number: number;
+  label: string;
+  kind: "easy" | "long" | "quality";
+  km: number | null;
+  min: number | null;
+}
+
+// Every RUN cardio item in the stored plan, keyed by day_number (a cardio item's label
+// rides in `note`, exercise_id NULL — see plan.savePlanDay). A ride/swim/hike is skipped:
+// it doesn't load the legs the way a run does. Kind is inferred from the note/zone/interval
+// structure (long > quality > easy). Deterministic; [] on no plan / no runs.
+function planRunItems(): PlanRunItem[] {
+  let rows: any[] = [];
+  try {
+    rows = db
+      .prepare(
+        `SELECT pd.day_number AS day_number, pi.note AS note,
+                pi.target_distance_km AS km, pi.target_duration_min AS min,
+                pi.target_zone AS zone, pi.interval_json AS interval_json
+           FROM plan_days pd JOIN plan_items pi ON pi.plan_day_id = pd.id
+          WHERE pi.kind = 'cardio'`
+      )
+      .all() as any[];
+  } catch {
+    return [];
+  }
+  const out: PlanRunItem[] = [];
+  for (const r of rows) {
+    const note = String(r.note ?? "");
+    if (canonicalEnduranceSport(note).key !== "run") continue;
+    const zone = String(r.zone ?? "");
+    const hard = !!r.interval_json || /tempo|threshold|vo2|hill|interval|z[345]/i.test(`${note} ${zone}`);
+    const kind: PlanRunItem["kind"] = /\blong\b/i.test(note) ? "long" : hard ? "quality" : "easy";
+    out.push({
+      day_number: Number(r.day_number),
+      label: note.trim() || "Run",
+      kind,
+      km: r.km != null ? Number(r.km) : null,
+      min: r.min != null ? Number(r.min) : null,
+    });
+  }
+  return out;
+}
+
+// The primary (longest) endurance outing logged on a date — the type + minutes for the
+// hybrid reads. Strength is modeled as a session, not an activities row, so any activities
+// row is a cardio-ish outing; the longest with real effort wins. null when nothing's logged.
+function primaryCardioOuting(date: string): { type: string; minutes: number | null } | null {
+  let rows: any[] = [];
+  try {
+    rows = db
+      .prepare(
+        `SELECT type, duration_min, distance_km FROM activities
+          WHERE date = ? ORDER BY COALESCE(duration_min, 0) DESC, id DESC`
+      )
+      .all(date) as any[];
+  } catch {
+    return null;
+  }
+  for (const r of rows) {
+    const hasEffort =
+      (r.duration_min != null && Number(r.duration_min) > 0) || (r.distance_km != null && Number(r.distance_km) > 0);
+    if (!hasEffort) continue;
+    const label = r.type ? String(r.type) : canonicalEnduranceSport(r.type).label;
+    return { type: label, minutes: r.duration_min != null ? Math.round(Number(r.duration_min)) : null };
+  }
+  return null;
+}
+
+// Project the weekly plan template onto a future date using the SAME Monday-anchored
+// day-number→weekday convention as the rotation fallback (plan-selection.weekdayCandidate):
+// the plan days in day_number order fill Mon..Sun (wrapping for a <7-day plan). A best-effort
+// forward HEADS-UP over the template, never a committed calendar (the agent owns the real
+// day-by-day; the primary same-day signals never depend on this).
+function planDayForFutureDate(date: string, ordered: PlanDayGroups[]): PlanDayGroups | null {
+  if (!ordered.length) return null;
+  const wd = (new Date(`${date}T00:00:00Z`).getUTCDay() + 6) % 7; // Mon=0
+  return ordered[wd % ordered.length] ?? null;
+}
+
+export interface HybridDayContext {
+  // A genuinely hard run/hike/ride yesterday still loads today's legs — keep lower work moderate.
+  hard_cardio_yesterday: { type: string; minutes: number | null; why: string } | null;
+  // Cardio already logged today (the same-day-double signal). `hard` = it cleared hardCardioDay;
+  // `sport` is the canonical bucket (run|ride|swim|row|walk|…) the session note tiers off.
+  cardio_today: { type: string; minutes: number | null; hard: boolean; sport: string } | null;
+  // The next planned run over the coming days (projected from the stored plan). Protect the
+  // legs before a quality/long one landing tomorrow.
+  planned_run_next: { date: string; kind: "easy" | "long" | "quality"; km: number | null } | null;
+  // The next heavy-lower (squat/hinge) plan day, projected forward — informational.
+  heavy_lower_next: { date: string; focus: string | null } | null;
+}
+
+// The deterministic hybrid-sequencing read for a date. Cheap + null-safe end to end: any
+// sub-query that throws degrades that field to null, never the whole read.
+export function hybridDayContext(date?: string): HybridDayContext {
+  const d = date || localDateISO();
+  const yesterday = addDaysISO(d, -1);
+  // One recent cardio-load median, threaded into both hardCardioDay calls (avoids a re-query).
+  const median = recentCardioLoadMedian(d);
+
+  let hard_cardio_yesterday: HybridDayContext["hard_cardio_yesterday"] = null;
+  try {
+    if (yesterday && hardCardioDay(yesterday, median)) {
+      const o = primaryCardioOuting(yesterday);
+      const sportLabel = o ? canonicalEnduranceSport(o.type).label.toLowerCase() : "cardio effort";
+      hard_cardio_yesterday = {
+        type: o?.type ?? "cardio",
+        minutes: o?.minutes ?? null,
+        why: `a hard ${sportLabel}${o?.minutes ? ` (${o.minutes} min)` : ""} yesterday`,
+      };
+    }
+  } catch {
+    hard_cardio_yesterday = null;
+  }
+
+  let cardio_today: HybridDayContext["cardio_today"] = null;
+  try {
+    const o = primaryCardioOuting(d);
+    if (o) {
+      cardio_today = {
+        type: o.type,
+        minutes: o.minutes,
+        hard: hardCardioDay(d, median),
+        sport: canonicalEnduranceSport(o.type).key,
+      };
+    }
+  } catch {
+    cardio_today = null;
+  }
+
+  // Forward projections over the weekly template (best-effort — see planDayForFutureDate).
+  let planned_run_next: HybridDayContext["planned_run_next"] = null;
+  let heavy_lower_next: HybridDayContext["heavy_lower_next"] = null;
+  try {
+    const ordered = planDayStrengthGroups();
+    const runByDay = new Map<number, PlanRunItem[]>();
+    for (const r of planRunItems()) {
+      const arr = runByDay.get(r.day_number);
+      if (arr) arr.push(r);
+      else runByDay.set(r.day_number, [r]);
+    }
+    for (let ahead = 1; ahead <= 6 && (!planned_run_next || !heavy_lower_next); ahead++) {
+      const fd = addDaysISO(d, ahead);
+      if (!fd) break;
+      const pd = planDayForFutureDate(fd, ordered);
+      if (!pd) break;
+      if (!planned_run_next) {
+        const runs = runByDay.get(pd.day_number);
+        if (runs?.length) {
+          // Surface the hardest run on that day (quality > long > easy) for the heads-up.
+          const pick = runs.find((r) => r.kind === "quality") ?? runs.find((r) => r.kind === "long") ?? runs[0];
+          planned_run_next = { date: fd, kind: pick.kind, km: pick.km };
+        }
+      }
+      if (!heavy_lower_next && pd.heavy_lower) heavy_lower_next = { date: fd, focus: pd.focus };
+    }
+  } catch {
+    planned_run_next = null;
+    heavy_lower_next = null;
+  }
+
+  return { hard_cardio_yesterday, cardio_today, planned_run_next, heavy_lower_next };
 }

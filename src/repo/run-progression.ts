@@ -40,6 +40,7 @@ import {
 import { createProposal, getEnduranceGoal, getProfile, supersedeAutoRunPlanDrafts } from "./profile.js";
 import { getRunCompliance, type RunCompliance } from "./sessions.js";
 import { localDateISO } from "./shared.js";
+import { lowerBodyPlanDayNumbers } from "./training-read.js";
 
 // ---------------------------------------------------------------------------
 // Shared small helpers
@@ -649,7 +650,41 @@ export function weeklyRunPlan(
   const easyEach = round1(easyTotal / easyCount);
 
   // --- slot assignment (day_number 1–7): quality mid-week, long late, easy spread —
-  //     never two hard days back-to-back (quality on 2, long on 6). ---
+  //     never two hard days back-to-back (defaults: quality on 2, long on 6). ---
+  // HYBRID PLACEMENT (runner + lifter): read the plan's heavy-lower (squat/hinge) days and
+  // (a) keep the QUALITY run off the day right AFTER a leg day, (b) prefer the LONG run on a
+  // day with no planned lower session — so the two big leg stimuli don't stack. Best-effort:
+  // on a packed week we place anyway and note it. This only moves WHICH slot; it never
+  // reorders or weakens the recovery gating / directive caps above (those stay final).
+  let lowerDays: Set<number>;
+  try {
+    lowerDays = lowerBodyPlanDayNumbers();
+  } catch {
+    lowerDays = new Set();
+  }
+  const dayAfterLower = new Set<number>();
+  for (const n of lowerDays) if (n + 1 <= 7) dayAfterLower.add(n + 1);
+
+  // LONG run: default late (6); prefer a slot that is NOT a planned lower day.
+  const longSlot = [6, 5, 7, 4].find((s) => !lowerDays.has(s)) ?? 6;
+  // QUALITY run: default mid-week (2); avoid the day right after a leg day, and keep it clear
+  // of the long run (never adjacent → no two hard days back-to-back).
+  const qualitySlot =
+    [2, 3, 4, 5].find((s) => !dayAfterLower.has(s) && Math.abs(s - longSlot) >= 2) ??
+    [2, 3, 4, 5].find((s) => Math.abs(s - longSlot) >= 2) ??
+    2;
+
+  if (q && qualitySlot !== 2 && !dayAfterLower.has(qualitySlot)) {
+    rationale.push("Shifted the quality run off the day after your leg day so the hard efforts don't stack.");
+  } else if (q && dayAfterLower.has(qualitySlot)) {
+    rationale.push("The week's packed enough that the quality run still lands near a leg day — keep it controlled and well fuelled.");
+  }
+  if (longSlot !== 6) {
+    rationale.push("Placed the long run clear of your planned leg days so the legs are fresh for it.");
+  } else if (lowerDays.has(6)) {
+    rationale.push("Couldn't fully separate the long run from a leg day this week — keep it easy so the legs stay honest.");
+  }
+
   const runs: RunPlanPrescription[] = [];
   const z2 = zoneTag("Z2", zones);
   // Easy slots, prefer non-adjacent to the hard days.
@@ -670,7 +705,7 @@ export function weeklyRunPlan(
   }
   if (q) {
     runs.push({
-      day_number: 2,
+      day_number: qualitySlot,
       label: q.label,
       kind_label: "quality",
       target_distance_km: q.distance,
@@ -683,7 +718,7 @@ export function weeklyRunPlan(
     });
   }
   runs.push({
-    day_number: 6,
+    day_number: longSlot,
     label: "Long run",
     kind_label: "long",
     target_distance_km: longKm,
@@ -696,11 +731,11 @@ export function weeklyRunPlan(
   });
 
   // De-dupe day slots (an easy slot must never collide with the quality/long days).
-  const used = new Set<number>([2, 6]);
+  const used = new Set<number>([qualitySlot, longSlot]);
   for (const r of runs) {
     if (r.kind_label !== "easy") continue;
     if (used.has(r.day_number)) {
-      const free = [1, 3, 4, 5, 7].find((s) => !used.has(s));
+      const free = [1, 4, 7, 3, 5, 2, 6].find((s) => !used.has(s));
       if (free) r.day_number = free;
     }
     used.add(r.day_number);

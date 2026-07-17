@@ -2,6 +2,7 @@
 // cross-domain insight, and the standing weekly read.
 import * as repo from "../repo.js";
 import type { CoachContext } from "../repo/coach-context.js";
+import { localDateISO } from "../repo/shared.js";
 import {
   activeInjuryAreas,
   COACHING_STANCE,
@@ -14,6 +15,7 @@ import {
   renderDexaTargeting,
   renderDiscipline,
   renderEnduranceGoal,
+  renderHybridSequencing,
   renderMuscleGroups,
   renderNow,
   renderPerformance,
@@ -327,6 +329,16 @@ export function buildSessionPrompt(
 ): string {
   const context = ctx ?? repo.getCoachContext();
   const read = repo.dayRead(opts.date, context.recovery, context.signal_state);
+  // Runner+lifter sequencing (hybrid interference/synergy) — deterministic, quiet when
+  // there's nothing to sequence. Anchored to the same date the day-read used.
+  const dateISO = opts.date || (context as any).now?.date || localDateISO();
+  const hybrid = (() => {
+    try {
+      return repo.hybridDayContext(dateISO);
+    } catch {
+      return null;
+    }
+  })();
   const wants: string[] = [];
   if (opts.minutes)
     wants.push(
@@ -385,7 +397,7 @@ ${ELITE_STRENGTH_GUARDRAILS}
 ${CONTEXT_GUARDRAILS}
 ${renderCoachingFocus(context)}${COACHING_STANCE}
 
-${renderDiscipline(context, "training")}${renderEnduranceGoal(context, "training")}${renderRunZones(context)}${renderRunPlan(context)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderTrainingSignals(context)}${renderProgramState(context)}${renderMuscleGroups(context)}${renderPerformance(context)}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderReactionModel(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${
+${renderDiscipline(context, "training")}${renderEnduranceGoal(context, "training")}${renderRunZones(context)}${renderRunPlan(context)}${renderHybridSequencing(hybrid, dateISO)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderTrainingSignals(context)}${renderProgramState(context)}${renderMuscleGroups(context)}${renderPerformance(context)}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderReactionModel(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${
   wants.length
     ? `
 WHAT THE USER ASKED FOR:
