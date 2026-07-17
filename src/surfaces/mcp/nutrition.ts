@@ -18,6 +18,7 @@ import { setFuelingFeedback } from "../../repo/fueling.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 import { queueMcpAgentJob } from "./background.js";
 import { currentUnderfuelingRead } from "../../domain/brain/underfueling-service.js";
+import { cutQualityRead } from "../../repo/cut-quality.js";
 
 export function registerNutritionTools(server: McpToolRegistrar) {
   server.tool(
@@ -44,7 +45,11 @@ export function registerNutritionTools(server: McpToolRegistrar) {
     { window: z.number().int().optional().describe("days to derive over (default 21)") },
     async ({ window }) => {
       const expenditure = estimateExpenditure(window ?? 21);
-      return asText({ ...expenditure, underfueling: currentUnderfuelingRead(undefined, { expenditure }) });
+      return asText({
+        ...expenditure,
+        underfueling: currentUnderfuelingRead(undefined, { expenditure }),
+        cut_quality: cutQualityRead(undefined, { expenditure }),
+      });
     }
   );
 

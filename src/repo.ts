@@ -76,6 +76,7 @@ export * from "./repo/trajectory.js"; // one periodized arc to the goals, today 
 export * from "./repo/whole-person-trajectory.js"; // standing "everything better" objective, per-domain words not a score
 export * from "./repo/journey.js"; // body-composition journey phases + leanness-aware cut foundation
 export * from "./repo/recomposition.js"; // phase-aware fat-loss + muscle/fuel protection synthesis
+export * from "./repo/cut-quality.js"; // is the weight-loss phase preserving muscle? (goal-aware complement to under-fueling)
 export * from "./repo/forward-timeline.js"; // the road ahead: one dated forward-looking timeline read
 // context-effect: explicit re-export — its local isAcuteMarker would clash with propagation's `export *`
 export {

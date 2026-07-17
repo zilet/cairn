@@ -633,6 +633,16 @@ export function buildNutritionCheckinPrompt(ctx?: CoachContext, opts: { windowDa
   const plantProteinNote = isPlantForward(dietSources)
     ? "\nPLANT-PROTEIN ANCHOR: the user's protein floor must be met with PLANT proteins (legumes, lentils, tofu, tempeh, seitan, edamame, soy, seeds) — never suggest animal protein to protect the protein floor.\n"
     : "";
+  // Cut-quality fold (deterministic): during an active cut, is strength holding as the
+  // weight drops? 'sliding' strengthens the protective-raise lean; 'preserving' reinforces
+  // that change:false is the calm answer. Silent off a cut or when the read is inconclusive.
+  const cq = (context as any)?.cut_quality;
+  const cutQualityFold =
+    cq?.active && cq.verdict === "sliding"
+      ? `\n- CUT QUALITY (deterministic): anchor lifts are SLIDING while the weight drops${cq.rate?.vs_lean_safe === "above" ? ", and loss is running above the lean-safe pace" : ""} — treat this as meaningful drift: lean toward a small PROTECTIVE calorie RAISE (carbohydrate-first, protein held or raised), even if the trend has not crossed the absolute safety ceiling.`
+      : cq?.active && cq.verdict === "preserving"
+        ? "\n- CUT QUALITY (deterministic): strength is HOLDING as the weight comes down — the cut is preserving muscle. This reinforces change:false; keep the current target and protein floor unless the trend has genuinely moved."
+        : "";
   return `${CAIRN_PERSONA}
 
 Right now you're the nutritionist — calm, goal-aware, longevity-focused — running a
@@ -666,7 +676,7 @@ WHEN TO PROPOSE A CHANGE (else change:false):
   (then a small calorie RAISE keeps it sustainable).
 - LOSE + PERFORMANCE: repeated strength-endurance fade, a high hybrid fuel-risk read, or a mileage ramp
   while loss is already faster than the lean-ideal pace is ALSO meaningful drift. Propose a small calorie
-  RAISE—primarily carbohydrate—even when the trend has not crossed the absolute safety ceiling yet.
+  RAISE—primarily carbohydrate—even when the trend has not crossed the absolute safety ceiling yet.${cutQualityFold}
 - MAINTAIN: only when the weight trend has consistently drifted up OR down off steady — nudge back toward
   maintenance (~the derived TDEE). Never propose a deficit by default; holding steady is success.
 - LEAN GAIN: flag if the trend shows NO gain over time (suggest a small RAISE) or gaining too fast /

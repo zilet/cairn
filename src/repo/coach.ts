@@ -70,6 +70,7 @@ import { estimateExpenditure } from "./expenditure.js";
 import { planningSignalState, type UnifiedSignalState } from "./signal-state.js";
 import { dayLoad } from "./training-read.js";
 import { currentUnderfuelingRead } from "./underfueling-snapshot.js";
+import { cutQualityRead } from "./cut-quality.js";
 
 // ---------- coach context (shared by prompts) ----------
 // Compact view of a health doc for coaching: kind, date, summary, key markers
@@ -395,6 +396,7 @@ interface CoachContextSignals {
   journeyView: any;
   expenditureView: any;
   underfuelingView: any;
+  cutQualityView: any;
   coachingFocusView: any;
   signalStateView: UnifiedSignalState;
   bodyCompositionView: any;
@@ -468,8 +470,11 @@ function buildPersonSlice(
 // Nutrition goal + today's fuel. Both goal reads reuse the already-fetched profile.
 function buildNutritionSlice(
   signals: CoachContextSignals
-): Pick<CoachContext, "goal" | "goal_mode" | "journey" | "day_intake" | "meal_plan" | "fueling" | "underfueling"> {
-  const { profile, journeyView, expenditureView, underfuelingView } = signals;
+): Pick<
+  CoachContext,
+  "goal" | "goal_mode" | "journey" | "day_intake" | "meal_plan" | "fueling" | "underfueling" | "cut_quality"
+> {
+  const { profile, journeyView, expenditureView, underfuelingView, cutQualityView } = signals;
   return {
     goal: computeGoalCheck(profile, { expenditure: expenditureView }), // reuse profile + expenditure already fetched above
     // The journey's SHAPE (v41) — lose | maintain | gain. Always present (even when
@@ -507,6 +512,9 @@ function buildNutritionSlice(
     // Shared deterministic control read: completed days only, multiple independent
     // channels, explicit uncertainty/deadband, and no single-day calorie reaction.
     underfueling: underfuelingView,
+    // Goal-aware complement: during an active cut (losing), is strength holding while
+    // the weight comes down? { active:false } off a cut. Adherence-neutral; no score.
+    cut_quality: cutQualityView,
   };
 }
 
@@ -932,6 +940,15 @@ function getCoachContextFromSnapshot(): CoachContext {
       wholePerson: wholePersonTrajectoryView,
     })
   );
+  // Goal-aware cut-quality read — reuses the shared expenditure / goal / program-state
+  // so it never recomputes. Active only during a genuine weight-loss phase.
+  const cutQualityView = brainSignal(`cut_quality:${today}`, () =>
+    cutQualityRead(today, {
+      expenditure: expenditureView,
+      goal: computeGoalCheck(profile, { expenditure: expenditureView }),
+      programState: fullProgramState,
+    })
+  );
   // The active life-context effect, the training-signals rollup and the active context
   // events, computed ONCE and shared by the person/training slices AND the conductor
   // (life/soreness awareness) so nothing recomputes them.
@@ -1148,6 +1165,7 @@ function getCoachContextFromSnapshot(): CoachContext {
     journeyView,
     expenditureView,
     underfuelingView,
+    cutQualityView,
     coachingFocusView,
     signalStateView,
     bodyCompositionView,

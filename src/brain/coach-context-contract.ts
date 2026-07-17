@@ -237,6 +237,7 @@ export interface CoachContextEnvelope {
   checkins: CoachCheckin[];
   fueling: CoachFuelingFeedback[];
   underfueling: CoachRecord | null;
+  cut_quality: CoachRecord | null;
   family: CoachFamilyMember[];
   body_composition: CoachRecord | null;
   body_metrics: CoachRecord | null;

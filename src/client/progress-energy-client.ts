@@ -14,6 +14,14 @@ type EnergyExpenditure = {
   // Server loss-goal signal — populated only when there's a goal with weight still to
   // lose (see repo/profile.ts projectGoalPace), so its presence marks an intended deficit.
   projection_text?: unknown;
+  // Goal-aware cut-quality read (repo/cut-quality.ts). During an active cut, is strength
+  // holding as the weight drops? { active:false } off a cut. Rendered as the loss-branch
+  // quality line. Loosely typed here (the client reads active/verdict/words defensively).
+  cut_quality?: {
+    active?: unknown;
+    verdict?: unknown;
+    words?: unknown;
+  } | null;
 };
 
 type EnergyRead = {
@@ -24,6 +32,9 @@ type EnergyRead = {
   // A read where easing the deficit is the calm lever — retints the card accent
   // terracotta (attention, never punishment). Absent/false everywhere else.
   lever?: boolean;
+  // The goal-aware cut-quality line (loss branch only) — "is the cut preserving
+  // muscle?", rendered as a quiet second line under the lead. Absent off a cut.
+  quality?: string | null;
 };
 
 type EnergyBodyHtml = {
@@ -120,6 +131,15 @@ function energyRead(exp: EnergyExpenditure | null | undefined): EnergyRead {
   const around = exp.intake_avg_kcal != null ? `~${kcalFmt(exp.intake_avg_kcal)} kcal/day` : `~${kcalFmt(exp.tdee)} kcal/day`;
   const hasLossGoal = typeof exp.projection_text === "string" && exp.projection_text.trim().length > 0;
   const body = energyBasis(exp);
+  // Cut-quality line — server-gated: only active during a genuine weight-loss phase, so
+  // it naturally rides the loss reads below and stays absent everywhere else. An
+  // 'insufficient' verdict is a data-gap note with no action, so it stays quiet here too
+  // (matching team-week's cutQualityWeekLine) — only preserving/mixed/sliding render.
+  const cq = exp.cut_quality;
+  const cutWords =
+    cq && cq.active === true && cq.verdict !== "insufficient" && typeof cq.words === "string" && cq.words.trim()
+      ? String(cq.words)
+      : null;
 
   // Starting estimate — no outcome evidence yet. Calm, never a gap-as-failure.
   if (conf === "none") {
@@ -175,7 +195,7 @@ function energyRead(exp: EnergyExpenditure | null | undefined): EnergyRead {
   } else {
     lead = `Trending up gently, about ${rate}, eating ${around}.`;
   }
-  return { lead, body, tone: "read", dir, lever };
+  return { lead, body, tone: "read", dir, lever, quality: hasLossGoal ? cutWords : null };
 }
 
 function energyUsable(exp: EnergyExpenditure | null | undefined): boolean {
@@ -252,6 +272,7 @@ function energyCardHtml(exp: EnergyExpenditure | null | undefined): string {
   return `<section class="eb-card reveal${leverClass}" style="--i:1">
       <div class="eb-kicker lbl"><span class="eb-glyph" aria-hidden="true">◇</span> ${escHtml(kicker)}</div>
       <p class="eb-lead">${escHtml(read.lead)}</p>
+      ${read.quality ? `<p class="eb-quality">${escHtml(read.quality)}</p>` : ""}
       ${read.body ? `<p class="eb-body">${escHtml(read.body)}</p>` : ""}
       ${zone}
       ${ctx}

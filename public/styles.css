@@ -3327,6 +3327,10 @@ body.swr-busy::after{
 .eb-lead{font-family:var(--font-display);font-weight:480;font-variation-settings:"opsz" 40;
   font-size:1.1rem;line-height:1.42;color:var(--ink);margin:0;max-width:46ch;position:relative}
 .eb-body{font-size:.86rem;color:var(--ink-2);line-height:1.55;margin:9px 0 0;max-width:48ch;position:relative}
+/* The goal-aware cut-quality line — is the cut preserving muscle? A calm second read
+   under the lead, set off with a quiet sage rule so it reads as its own quality note. */
+.eb-quality{font-size:.9rem;color:var(--ink);line-height:1.5;margin:10px 0 0;max-width:48ch;
+  padding-left:11px;border-left:2px solid var(--sage);position:relative}
 /* Confidence as geometry: the maintenance-zone band widens (renderer) AND softens
    (here) as the read loosens — uncertainty shown as WIDTH, never a number or score.
    Composes the §04d .read-band; high confidence keeps the primitive's crisp default. */

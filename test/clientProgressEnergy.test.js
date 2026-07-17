@@ -179,6 +179,30 @@ test("progress energy read speaks the intended outcome when a loss goal is activ
   assert.match(flat.lead, /holding steady at ~2,400 kcal\/day — a small trim/);
 });
 
+test("the cut-quality line renders for a confident cut but stays quiet when the read is insufficient", () => {
+  const energy = loadEnergy();
+  const goal = { projection_text: "At your current trend, ~Aug 12." };
+  const lossRead = { ...goal, tdee: 2400, confidence: "high", intake_avg_kcal: 1900, trend_lb_wk: -1.1 };
+
+  // preserving → the quality line rides the loss read.
+  const preserving = energy.energyRead({
+    ...lossRead,
+    cut_quality: { active: true, verdict: "preserving", words: "Strength is holding while you lean out." },
+  });
+  assert.equal(preserving.quality, "Strength is holding while you lean out.");
+
+  // insufficient → a data-gap note with no action stays quiet (matches team-week).
+  const insufficient = energy.energyRead({
+    ...lossRead,
+    cut_quality: { active: true, verdict: "insufficient", words: "Not enough recent lifting logged yet." },
+  });
+  assert.equal(insufficient.quality, null);
+
+  // inactive → nothing to say.
+  const inactive = energy.energyRead({ ...lossRead, cut_quality: { active: false } });
+  assert.equal(inactive.quality, null);
+});
+
 test("progress energy read stays calm and honest when the picture is loose or still forming", () => {
   const energy = loadEnergy();
 

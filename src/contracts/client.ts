@@ -202,6 +202,25 @@ export interface ClientNextStep {
   leverage: number;
 }
 
+// Cut-quality read (goal-aware): during an active weight-loss phase, is strength
+// holding as the weight drops? `{ active: false }` off a cut. Calm, banded, no score.
+export type ClientCutQuality =
+  | { active: false }
+  | {
+      active: true;
+      verdict: "preserving" | "mixed" | "sliding" | "insufficient";
+      words: string;
+      weight: { trend_lb_wk: number | null; window_days: number };
+      strength: {
+        considered: number;
+        holding: number;
+        regressing: number;
+        anchors: Array<{ name: string; status: string }>;
+      };
+      endurance: { note: string } | null;
+      rate: { vs_lean_safe: "within" | "above" | null };
+    };
+
 export interface ClientExpenditureEstimate {
   tdee: number | null;
   confidence: "none" | "low" | "medium" | "high";
@@ -256,6 +275,9 @@ export interface ClientExpenditureEstimate {
     outcome_overlap_days: number;
     outcome_calendar_coverage: number;
   };
+  // Additive (older consumers ignore): the goal-aware cut-quality read the Energy
+  // Balance view renders as a quality line in the loss branch.
+  cut_quality?: ClientCutQuality | null;
 }
 
 export type ClientProgressionAction = "overload" | "hold" | "deload" | "vary" | "introduce";

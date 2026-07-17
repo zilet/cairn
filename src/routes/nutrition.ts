@@ -29,6 +29,7 @@ import { UPLOADS_DIR } from "../uploadPaths.js";
 import { backgroundOp } from "./background-op.js";
 import { streamEnrichRow } from "./enrich-stream.js";
 import { currentUnderfuelingRead } from "../domain/brain/underfueling-service.js";
+import { cutQualityRead } from "../repo/cut-quality.js";
 
 export const nutritionRouter = Router();
 
@@ -63,7 +64,11 @@ nutritionRouter.get("/mealplans/:id", (req, res) => {
 nutritionRouter.get("/nutrition/expenditure", (req, res) => {
   const window = req.query.window ? Number(req.query.window) : undefined;
   const expenditure = estimateExpenditure(Number.isFinite(window as number) ? (window as number) : 21);
-  res.json({ ...expenditure, underfueling: currentUnderfuelingRead(undefined, { expenditure }) });
+  res.json({
+    ...expenditure,
+    underfueling: currentUnderfuelingRead(undefined, { expenditure }),
+    cut_quality: cutQualityRead(undefined, { expenditure }),
+  });
 });
 
 // Goal-pace series behind the motivational weight-progress chart: the canonical

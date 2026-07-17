@@ -36,6 +36,7 @@ import { markerGroup } from "./propagation.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { getRunCompliance, weeklyAerobicLoad } from "./sessions.js";
 import { addDaysISO, localDateISO, metricLabel } from "./shared.js";
+import { cutQualityRead, cutQualityWeekLine } from "./cut-quality.js";
 
 // app_state stamp bounding the unseen-insight backlog drain to once per LOCAL day
 // (its value is the read's local day). See insightItems for why.
@@ -82,6 +83,9 @@ export interface TeamWeekEndurance {
   sessions: number; // count of endurance outings this week
   longest_km: number | null; // longest single outing (fuel-relevant), or null
 }
+export interface TeamWeekCut {
+  text: string; // one plain line — present only during a confident, active cut (verdict !== 'insufficient')
+}
 export interface TeamWeekRead {
   lead: string; // a short deterministic summary sentence; "" on a genuinely empty week
   did: TeamWeekDomainGroup[];
@@ -90,6 +94,7 @@ export interface TeamWeekRead {
   landed: TeamWeekLanded[];
   insights: TeamWeekInsight[];
   endurance: TeamWeekEndurance | null; // present ONLY when endurance activity exists this week; never a nag/zero-shame line
+  cut: TeamWeekCut | null; // present ONLY during a confident active cut — is strength holding as weight drops?
 }
 
 // Plain domain labels for the brain's decision domains.
@@ -729,6 +734,18 @@ function enduranceLine(asOf: string): TeamWeekEndurance | null {
   }
 }
 
+// ---- cut: one line only during a confident, active weight-loss phase --------------
+// The goal-aware complement to the endurance line: while the athlete is genuinely
+// leaning out, is strength holding as the weight drops? Silent off a cut and when the
+// read is too thin to call (verdict 'insufficient') — never a nag, never a zero-shame line.
+function cutLine(asOf: string): TeamWeekCut | null {
+  try {
+    return cutQualityWeekLine(cutQualityRead(asOf));
+  } catch {
+    return null; // profile/training tables absent → no line
+  }
+}
+
 function composeLead(read: Omit<TeamWeekRead, "lead">): string {
   const changes = read.did.reduce((sum, group) => sum + group.changes.length, 0);
   const parts: string[] = [];
@@ -761,6 +778,7 @@ export function teamWeekRead(opts: { asOf?: string; drainBacklog?: boolean } = {
     landed: landedItems(windowStart, asOf),
     insights: insightItems(windowStart, asOf, drainBacklog),
     endurance: enduranceLine(asOf),
+    cut: cutLine(asOf),
   };
   return { lead: composeLead(body), ...body };
 }
