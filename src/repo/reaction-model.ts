@@ -21,6 +21,7 @@
 
 import { db } from "../db.js";
 import { getMarkerHistory } from "./health.js";
+import { activitySportWhere, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
 import { normalizedExerciseKey, canonicalGroup, isMobility } from "./exercise-canon.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { addMemory } from "./memory.js";
@@ -669,6 +670,175 @@ function interventionMarker(): ReactionPattern | null {
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// 8) mileage_recovery — do bigger RUNNING weeks show up in the NEXT week's
+//    resting heart rate? Weekly km (this week) vs the change in weekly-average
+//    resting HR into the following week, pearson-style like load_crp. Resting HR
+//    is the workhorse recovery signal (far better coverage than HRV), so this
+//    reads off it. Gate: >=6 weeks having BOTH a run week AND both weeks' resting-
+//    HR averages, so a thin RHR history can never manufacture the pattern.
+// ---------------------------------------------------------------------------
+function weekAvgRestingHr(endISO: string): number | null {
+  const start = isoDaysAgo(endISO, 6);
+  try {
+    const g = db
+      .prepare(
+        `SELECT AVG(resting_hr) AS a, COUNT(*) AS n FROM garmin_daily_metrics
+        WHERE date >= ? AND date <= ? AND resting_hr IS NOT NULL AND resting_hr > 0`
+      )
+      .get(start, endISO) as any;
+    if (g && Number(g.n) >= 2 && g.a != null) return Number(g.a); // >=2 nights for a stable weekly avg
+    const o = db
+      .prepare(
+        `SELECT AVG(resting_hr) AS a, COUNT(*) AS n FROM daily_metrics
+        WHERE date >= ? AND date <= ? AND resting_hr IS NOT NULL AND resting_hr > 0`
+      )
+      .get(start, endISO) as any;
+    if (o && Number(o.n) >= 2 && o.a != null) return Number(o.a);
+  } catch {
+    /* fall through */
+  }
+  return null;
+}
+
+function mileageRecovery(): ReactionPattern | null {
+  const today = new Date().toISOString().slice(0, 10);
+  const weeks: Array<{ km: number; rhrDelta: number }> = [];
+  let lastObserved: string | null = null;
+  // Consecutive 7-day windows, most recent first. Week w ends at today−w·7; its
+  // "next week" is week w−1 (more recent). Look back ~18 weeks.
+  for (let w = 1; w <= 18; w++) {
+    const km = weeklyKm(today, w, RUN_SPORT_PATTERNS);
+    if (km <= 0) continue;
+    const rhrThis = weekAvgRestingHr(isoDaysAgo(today, w * 7));
+    const rhrNext = weekAvgRestingHr(isoDaysAgo(today, (w - 1) * 7));
+    if (rhrThis == null || rhrNext == null) continue;
+    weeks.push({ km, rhrDelta: rhrNext - rhrThis });
+    const nextEnd = isoDaysAgo(today, (w - 1) * 7);
+    if (!lastObserved || nextEnd > lastObserved) lastObserved = nextEnd;
+  }
+  if (weeks.length < 6) return null; // gate: >=6 paired weeks
+  const r = pearson(weeks.map((wk) => ({ x: wk.km, y: wk.rhrDelta })));
+  if (r == null || Math.abs(r) < 0.4) return null; // only speak on a real coincidence
+  const risesWithLoad = r > 0;
+  const confidence: ReactionPattern["confidence"] =
+    Math.abs(r) >= 0.75 && weeks.length >= 8 ? "strong" : Math.abs(r) >= 0.6 ? "observed" : "tentative";
+  const statement = risesWithLoad
+    ? "Your bigger running weeks tend to be followed by a higher resting heart rate the next week — a sign your body is still absorbing the load. Worth easing off in the days after a volume jump."
+    : "After your bigger running weeks, your resting heart rate has tended to settle a little lower the following week — a sign the aerobic work is landing well.";
+  return {
+    id: "mileage_recovery",
+    kind: "endurance_response",
+    statement,
+    confidence,
+    evidence_n: weeks.length,
+    domains: ["endurance", "recovery"],
+    last_observed: lastObserved,
+    params: { r: round(r, 3), weeks: weeks.length },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 9) easy_pace_efficiency — at the SAME easy heart rate, is easy-run pace
+//    improving? Over easy runs only (aerobic training effect < 3.5 — or an easy
+//    Garmin te_label — AND avg HR inside the athlete's own observed easy band),
+//    compare pace in matched ±5 bpm HR buckets, older half vs newer half, over the
+//    last ~120 days. Controlling for HR is what makes a pace change meaningful
+//    (faster at the same effort = a fitter aerobic engine). Gate: >=4 qualifying
+//    easy runs per half AND enough matched-HR overlap between the halves.
+// ---------------------------------------------------------------------------
+const EASY_TE_LABELS = new Set(["RECOVERY", "BASE", "EASY", "AEROBIC_BASE", "LOW_AEROBIC"]);
+
+function easyPaceEfficiency(): ReactionPattern | null {
+  const today = new Date().toISOString().slice(0, 10);
+  const since = isoDaysAgo(today, 120);
+  const sport = activitySportWhere("a", RUN_SPORT_PATTERNS);
+  let rows: any[] = [];
+  try {
+    rows = db
+      .prepare(
+        `SELECT a.date AS date, a.distance_km AS km, a.duration_min AS min,
+              g.avg_hr AS hr, g.aerobic_te AS aerobic_te, g.te_label AS te_label
+         FROM activities a JOIN garmin_activities g ON g.activity_id = a.id
+        WHERE a.date >= ? AND a.date <= ? AND (${sport.sql})
+          AND g.avg_hr IS NOT NULL AND g.avg_hr > 0 AND a.distance_km > 0 AND a.duration_min > 0
+        ORDER BY a.date`
+      )
+      .all(since, today, ...sport.params) as any[];
+  } catch {
+    return null;
+  }
+  if (rows.length < 8) return null; // need a real pool before splitting halves
+
+  // The athlete's OWN easy band: the ~60th percentile of their run heart rates.
+  const hrs = rows
+    .map((r) => Number(r.hr))
+    .filter((h) => Number.isFinite(h) && h > 0)
+    .sort((a, b) => a - b);
+  if (!hrs.length) return null;
+  const easyCeiling = hrs[Math.floor(hrs.length * 0.6)];
+
+  const easy = rows
+    .map((r) => ({
+      date: String(r.date),
+      hr: Number(r.hr),
+      pace: Number(r.min) / Number(r.km), // min per km
+      te: r.aerobic_te == null ? null : Number(r.aerobic_te),
+      label: String(r.te_label ?? "").toUpperCase(),
+    }))
+    .filter(
+      (r) =>
+        Number.isFinite(r.pace) &&
+        r.pace > 2 &&
+        r.pace < 12 && // sane min/km bounds
+        r.hr <= easyCeiling &&
+        (r.te != null ? r.te < 3.5 : EASY_TE_LABELS.has(r.label))
+    );
+  if (easy.length < 8) return null;
+
+  // Older half vs newer half by date (a middle run is dropped on an odd count).
+  const half = Math.floor(easy.length / 2);
+  const older = easy.slice(0, half);
+  const newer = easy.slice(easy.length - half);
+  if (older.length < 4 || newer.length < 4) return null; // gate: >=4 per half
+
+  // Match ±5 bpm HR buckets present in BOTH halves; weighted pace delta (newer − older).
+  const bucket = (hr: number): number => Math.round(hr / 5) * 5;
+  const olderByBucket = new Map<number, number[]>();
+  const newerByBucket = new Map<number, number[]>();
+  for (const r of older) olderByBucket.set(bucket(r.hr), [...(olderByBucket.get(bucket(r.hr)) ?? []), r.pace]);
+  for (const r of newer) newerByBucket.set(bucket(r.hr), [...(newerByBucket.get(bucket(r.hr)) ?? []), r.pace]);
+  let weight = 0;
+  let deltaSum = 0;
+  for (const [b, olderPaces] of olderByBucket) {
+    const newerPaces = newerByBucket.get(b);
+    if (!newerPaces || !newerPaces.length) continue;
+    const w = Math.min(olderPaces.length, newerPaces.length);
+    deltaSum += (mean(newerPaces) - mean(olderPaces)) * w;
+    weight += w;
+  }
+  if (weight < 3) return null; // need enough matched-HR overlap to trust the comparison
+  const paceDelta = deltaSum / weight; // min/km; negative = faster now
+  if (Math.abs(paceDelta) < 0.1) return null; // < ~6 s/km is noise
+
+  const secPerKm = Math.round(Math.abs(paceDelta) * 60);
+  const faster = paceDelta < 0;
+  const confidence: ReactionPattern["confidence"] = older.length >= 6 && newer.length >= 6 ? "observed" : "tentative";
+  const statement = faster
+    ? `At the same easy heart rate, you're running about ${secPerKm} sec/km faster than a few months ago — your aerobic base is getting stronger.`
+    : `At the same easy heart rate, your easy pace has drifted about ${secPerKm} sec/km slower than a few months ago — worth a look at recovery, consistency, or whether easy days have crept too hard.`;
+  return {
+    id: "easy_pace_efficiency",
+    kind: "endurance_response",
+    statement,
+    confidence,
+    evidence_n: older.length + newer.length,
+    domains: ["endurance"],
+    last_observed: newer[newer.length - 1]?.date ?? null,
+    params: { pace_delta_min_km: round(paceDelta, 3), matched_weight: weight },
+  };
+}
+
 // ---- assembly ---------------------------------------------------------------
 
 export function buildReactionModel(): { version: number; patterns: ReactionPattern[]; built_at_note?: string } {
@@ -689,6 +859,8 @@ export function buildReactionModel(): { version: number; patterns: ReactionPatte
   candidates.push(safe(volumeSoreness));
   candidates.push(safe(dataGap));
   candidates.push(safe(interventionMarker));
+  candidates.push(safe(mileageRecovery));
+  candidates.push(safe(easyPaceEfficiency));
 
   const patterns = candidates.filter((p): p is ReactionPattern => p != null);
   return { version: REACTION_MODEL_VERSION, patterns };
@@ -900,6 +1072,15 @@ function modifierFor(
   ) {
     target = "training_progression_step";
     bounds = { min: 0.85, max: 1.1 };
+    scale = verdict === "not_aligned" ? 0.9 : 1;
+  } else if (row.metric_key === "run_volume_adherence") {
+    // A missed run-volume expectation (the athlete isn't absorbing the prescribed km)
+    // eases the weekly build step; a met one holds the standard build (it never
+    // accelerates — mirroring training_progression_step). vo2max_trend is deliberately
+    // NOT wired here: a flat 4-week VO2max is normal and no reason to ease volume, so it
+    // stays a pure ledger-accountability read with no modifier.
+    target = "run_volume_step";
+    bounds = { min: 0.85, max: 1.15 };
     scale = verdict === "not_aligned" ? 0.9 : 1;
   } else if (["recovery_hrv_delta", "recovery_rhr_delta", "sleep_duration_delta"].includes(row.metric_key)) {
     target = "recovery_adjustment";

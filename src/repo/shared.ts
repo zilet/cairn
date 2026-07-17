@@ -157,6 +157,8 @@ const METRIC_LABELS: Record<string, string> = {
   session_performance_feedback: "session performance",
   joint_pain_or_soreness: "joint-pain or soreness response",
   plan_day_adherence: "plan adherence",
+  run_volume_adherence: "run-volume adherence",
+  vo2max_trend: "VO2max trend",
   recovery_hrv_delta: "HRV response",
   recovery_rhr_delta: "resting-heart-rate response",
   sleep_duration_delta: "sleep response",

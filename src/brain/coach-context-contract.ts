@@ -164,6 +164,7 @@ export type CoachPersonalResponseConfidence = "tentative" | "observed" | "strong
 export type CoachPersonalModifierTarget =
   | "nutrition_step"
   | "training_progression_step"
+  | "run_volume_step"
   | "recovery_adjustment"
   | "plan_complexity";
 

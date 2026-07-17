@@ -38,9 +38,11 @@ import {
   weeklyKm as recordedWeeklyKm,
 } from "./program-state.js";
 import { createProposal, getEnduranceGoal, getProfile, supersedeAutoRunPlanDrafts } from "./profile.js";
+import { applyPersonalResponseModifier, personalResponseModifierFor } from "./reaction-model.js";
 import { getRunCompliance, type RunCompliance } from "./sessions.js";
 import { localDateISO } from "./shared.js";
 import { lowerBodyPlanDayNumbers } from "./training-read.js";
+import type { CoachPersonalModifier } from "../brain/coach-context-contract.js";
 
 // ---------------------------------------------------------------------------
 // Shared small helpers
@@ -464,6 +466,7 @@ export function weeklyRunPlan(
     block?: ProgramBlock | null;
     zones?: RunZones;
     directives?: any[];
+    responseModifier?: CoachPersonalModifier | null;
   }
 ): WeeklyRunPlan {
   const d = date || localDateISO();
@@ -583,6 +586,37 @@ export function weeklyRunPlan(
     rationale.push("Rebuilding the base back gently — steady, not a jump.");
   } else {
     rationale.push("Building conservatively — about a 10% step on last week.");
+  }
+
+  // Personal response: a LEARNED run-volume step bends the weekly build multiplicatively.
+  // It only ever HOLDS or eases (never accelerates — mirroring the training step), and it
+  // is capped at the current factor, so the recovery gating above and the directive caps
+  // below stay the outermost, FINAL word: a learned default can never push volume past a
+  // recovery- or health-driven reduction. never_overrides (injury/clinical/lean_safe) are
+  // untouched. Injectable for tests; otherwise read from what_works_for_you.
+  const runModifier =
+    opts?.responseModifier === undefined
+      ? (() => {
+          try {
+            return personalResponseModifierFor("run_volume_step");
+          } catch {
+            return null;
+          }
+        })()
+      : opts.responseModifier;
+  if (runModifier && runModifier.scale < 1) {
+    const eased = applyPersonalResponseModifier({
+      base: factor,
+      modifier: runModifier,
+      min: Math.min(0.5, factor),
+      max: factor,
+    });
+    if (eased < factor) {
+      factor = eased;
+      rationale.push(
+        "Easing the weekly build a touch — your own recent results point to a more conservative volume step."
+      );
+    }
   }
 
   // A firm endurance-limiting directive caps the build (never below an already-lower

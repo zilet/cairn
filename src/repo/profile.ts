@@ -26,7 +26,7 @@ import {
 } from "./plan.js";
 import { PlanQualityError, type PlanQualityReport, qualityIssueKey, validateTrainingPlan } from "./plan-quality.js";
 import { latestMeasuredRmr, measuredRmrAssessment } from "./metabolism.js";
-import { getProgress } from "./sessions.js";
+import { getProgress, getRunCompliance } from "./sessions.js";
 import { addDaysISO, LB_PER_KG, localDateISO, parseDbTime } from "./shared.js";
 import { bumpTrainingDataVersion } from "./training-cache.js";
 import { canonicalBodyweightSeries, resolvedCurrentBodyweight } from "./bodyweight.js";
@@ -716,6 +716,59 @@ function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?:
         evaluator_version: "plan-adherence-v1",
       });
     }
+    // Run-plan apply: a week of run prescriptions (result.runs — the auto-run-plan
+    // proposal, or a chat/manual cardio update). Emit falsifiable, windowed run
+    // expectations mirroring the exercise/nutrition branches, so run-plan decisions
+    // earn real evaluations instead of only the generic plan-adherence proxy below:
+    //   (a) run_volume_adherence — did the prescribed weekly km actually get run?
+    //   (b) a recovery guard (recovery_rhr_delta) — ONLY when this plan RAISES weekly
+    //       km vs the prior prescription: expect resting-HR recovery not materially
+    //       worse. Distances read from the applied plan (getRunCompliance, post-
+    //       mutation), never the ledger-less result.runs shape.
+    const appliedRuns = Array.isArray(result?.runs) ? result.runs : [];
+    if (!nutrition && appliedRuns.length) {
+      let newWeeklyKm = 0;
+      try {
+        newWeeklyKm = Number(getRunCompliance().prescribed_km) || 0;
+      } catch {
+        newWeeklyKm = 0;
+      }
+      if (newWeeklyKm > 0) {
+        const runWindowDays = 28;
+        const expectedWindowKm = Math.round(newWeeklyKm * (runWindowDays / 7) * 10) / 10;
+        expectations.push({
+          metric_key: "run_volume_adherence",
+          subject_key: null,
+          direction: "complete",
+          baseline: { weekly_prescribed_km: newWeeklyKm },
+          target: { rate: 0.8, expected_km: expectedWindowKm },
+          window_start: today,
+          window_end: datePlusDays(today, runWindowDays),
+          minimum_data: { outings: 2 },
+          confounder_policy: "exclude_context_events",
+          confidence: "tentative",
+          evaluator: "run_volume_adherence",
+          evaluator_version: "run-volume-adherence-v1",
+        });
+        const priorWeeklyKm = Number(result?.prior_run_km);
+        if (Number.isFinite(priorWeeklyKm) && priorWeeklyKm > 0 && newWeeklyKm > priorWeeklyKm * 1.05) {
+          expectations.push({
+            metric_key: "recovery_rhr_delta",
+            subject_key: null,
+            direction: "at_most",
+            baseline: { prior_weekly_km: Math.round(priorWeeklyKm * 10) / 10, new_weekly_km: newWeeklyKm },
+            target: { max: 3 },
+            window_start: today,
+            window_end: datePlusDays(today, runWindowDays),
+            minimum_data: { nights: 6 },
+            confounder_policy: "exclude_context_events",
+            confidence: "tentative",
+            evaluator: "recovery_delta",
+            evaluator_version: "run-recovery-guard-v1",
+          });
+        }
+      }
+    }
     const accepted = result?.accepted ?? null;
     let nutritionBaseline: ReturnType<typeof estimateExpenditure> | null = null;
     let nutritionExpectationBasis: string | null = null;
@@ -1106,7 +1159,15 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
   }
   if (hasCardio) cardioRuns.push(...parsed.cardio);
   let runs: { applied: any[] } | undefined;
+  // The plan's run km BEFORE this apply — the "prior prescription" the run-plan
+  // recovery guard compares against (read now while the plan is still pre-mutation).
+  let priorRunKm: number | null = null;
   if (cardioRuns.length) {
+    try {
+      priorRunKm = getRunCompliance().prescribed_km;
+    } catch {
+      priorRunKm = null;
+    }
     try {
       runs = setWeeklyRuns(
         cardioRuns.map(toRunPrescription).filter((r): r is RunPrescription => r != null),
@@ -1198,6 +1259,7 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
     added,
     skipped,
     ...(runs ? { runs: runs.applied } : {}),
+    ...(cardioRuns.length ? { prior_run_km: priorRunKm } : {}),
     ...(clamped.length ? { clamped } : {}),
     quality,
     ...(opts.normalizedApplyPayload ? { legacy_migration: opts.normalizedApplyPayload.migration } : {}),

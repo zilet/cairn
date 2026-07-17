@@ -4,6 +4,8 @@ import type { BrainEvaluation, BrainEvaluationVerdict } from "./evaluation-contr
 import { BRAIN_METRIC_KEYS, type BrainExpectation, type BrainMetricKey } from "./expectation-contract.js";
 import type { JsonObject } from "./contract-utils.js";
 import { completedIntakeRange } from "../repo/intake-window.js";
+import { canonicalEnduranceSport } from "../repo/endurance-sports.js";
+import { lsqSlopePerDay } from "../repo/health.js";
 import { addDaysISO } from "../repo/shared.js";
 import { robustWeightEvidence } from "../repo/weight-evidence.js";
 
@@ -382,6 +384,142 @@ function planAdherenceObservation(context: EvaluatorContext): MetricObservation 
   };
 }
 
+// Prescribed vs actually-run weekly km over the plan window. The expected window
+// distance is stored on the expectation target at apply time; the actual is summed
+// from RUN activities in the window (a ride/hike can never satisfy a run
+// prescription). ZERO run outings → no evidence rows → inconclusive by contract.
+//
+// Athlete-favouring asymmetry: a MISS can never be declared while a run was logged
+// WITHOUT a distance, but a PASS can. A distance-less run is presence without
+// measurement — never evidence of a shortfall. So the MEASURED km alone must clear the
+// bar for a clean pass (unmeasured presence irrelevant); if the measured total falls
+// short AND any distance-less run exists, the shortfall is unverifiable → inconclusive;
+// only when EVERY counted outing carries a distance and the total still falls short is
+// it a real not_aligned.
+function runVolumeAdherenceObservation(context: EvaluatorContext): MetricObservation {
+  const { expectation } = context;
+  const end = windowEnd(context);
+  const rows = db
+    .prepare(
+      `SELECT id, date, type, distance_km FROM activities
+      WHERE date BETWEEN ? AND ? ORDER BY date, id LIMIT 500`
+    )
+    .all(expectation.window_start, end) as Array<{
+    id: number;
+    date: string;
+    type: string;
+    distance_km: number | null;
+  }>;
+  const runRows = rows.filter((row) => canonicalEnduranceSport(row.type).key === "run");
+  // Only distance-carrying outings can measure adherence; the rest are unmeasured.
+  const measuredRows = runRows.filter((row) => {
+    const km = finite(row.distance_km);
+    return km != null && km > 0;
+  });
+  const unmeasuredOutings = runRows.length - measuredRows.length;
+  let actualKm = 0;
+  for (const row of measuredRows) actualKm += Number(row.distance_km);
+  actualKm = rounded(actualKm, 1);
+  const expectedKm = numberFrom(expectation.target, ["expected_km", "prescribed_km"]) ?? 0;
+  const completionRate = expectedKm > 0 ? rounded(actualKm / expectedKm) : 0;
+  // The completion bar (matches compareExpectation's 'complete' reading of the target).
+  const bar = numberFrom(expectation.target, ["rate", "value", "target"]) ?? 1;
+  const measuredClearsBar = expectedKm > 0 && completionRate >= bar;
+  // A shortfall a distance-less outing makes impossible to verify → inconclusive.
+  const unverifiableShortfall = expectedKm > 0 && !measuredClearsBar && unmeasuredOutings > 0;
+  return {
+    actual:
+      expectedKm > 0
+        ? {
+            value: completionRate,
+            completion_rate: completionRate,
+            actual_km: actualKm,
+            expected_km: rounded(expectedKm, 1),
+            outings: runRows.length,
+            measured_outings: measuredRows.length,
+            unmeasured_outings: unmeasuredOutings,
+          }
+        : null,
+    // Evidence is the measured runs — the only outings that can support a km verdict.
+    evidence_keys: stableEvidence("activities", measuredRows, expectation.window_start, end),
+    counts: { outings: runRows.length, data_points: runRows.length },
+    issues: [
+      ...(expectedKm > 0 ? [] : ["No prescribed running distance was stored to compare against."]),
+      ...(runRows.length ? [] : ["No running was logged in the evaluation window."]),
+      ...(unverifiableShortfall
+        ? ["Runs were logged without distance — adherence can't be verified against the prescribed km."]
+        : []),
+    ],
+  };
+}
+
+// VO2max trend over the window — the slow-moving aerobic-fitness read. VO2max only
+// updates on hard/long efforts, so it is deliberately gated hard: fewer than 4
+// readings OR a span under 21 days stays inconclusive (a slope off 2–3 noisy dots
+// is meaningless). Readings are merged across the Garmin daily/activity feeds and the
+// source-agnostic daily_metrics table, one (max) per date.
+function vo2maxTrendObservation(context: EvaluatorContext): MetricObservation {
+  const { expectation } = context;
+  const end = windowEnd(context);
+  const daily = db
+    .prepare(
+      `SELECT date, vo2max FROM garmin_daily_metrics
+      WHERE date BETWEEN ? AND ? AND vo2max IS NOT NULL ORDER BY date LIMIT 500`
+    )
+    .all(expectation.window_start, end) as Array<{ date: string; vo2max: number }>;
+  const acts = db
+    .prepare(
+      `SELECT date, vo2max FROM garmin_activities
+      WHERE date BETWEEN ? AND ? AND vo2max IS NOT NULL ORDER BY date LIMIT 500`
+    )
+    .all(expectation.window_start, end) as Array<{ date: string; vo2max: number }>;
+  const other = db
+    .prepare(
+      `SELECT date, vo2max FROM daily_metrics
+      WHERE date BETWEEN ? AND ? AND vo2max IS NOT NULL ORDER BY date LIMIT 500`
+    )
+    .all(expectation.window_start, end) as Array<{ date: string; vo2max: number }>;
+  const byDate = new Map<string, number>();
+  for (const row of [...daily, ...acts, ...other]) {
+    const value = finite(row.vo2max);
+    if (value == null || value <= 0) continue;
+    byDate.set(String(row.date), Math.max(byDate.get(String(row.date)) ?? 0, value));
+  }
+  const points = [...byDate.entries()]
+    .map(([date, value]) => ({ date, value }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const spanDays =
+    points.length >= 2
+      ? Math.round(
+          (Date.parse(points[points.length - 1].date + "T00:00:00Z") - Date.parse(points[0].date + "T00:00:00Z")) /
+            864e5
+        )
+      : 0;
+  const enough = points.length >= 4 && spanDays >= 21;
+  const slope = enough ? lsqSlopePerDay(points) : null;
+  const first = points[0]?.value ?? null;
+  const last = points.at(-1)?.value ?? null;
+  const delta = enough && first != null && last != null ? rounded(last - first, 2) : null;
+  const evidenceRows = points.map((point) => ({ id: point.date, date: point.date }));
+  return {
+    actual:
+      enough && slope != null
+        ? {
+            value: rounded(slope * 7, 3), // per-week slope — the readable trend
+            delta,
+            slope_per_day: rounded(slope, 4),
+            first_vo2max: rounded(first!, 1),
+            last_vo2max: rounded(last!, 1),
+            readings: points.length,
+            span_days: spanDays,
+          }
+        : null,
+    evidence_keys: enough ? stableEvidence("garmin_daily_metrics", evidenceRows, expectation.window_start, end) : [],
+    counts: { readings: points.length, data_points: points.length, span_days: spanDays },
+    issues: enough ? [] : ["VO2max needs at least 4 readings spanning 3+ weeks to read a trend."],
+  };
+}
+
 function recoveryRows(start: string, end: string): Array<Record<string, unknown>> {
   const other = db
     .prepare(
@@ -574,6 +712,8 @@ export const EVALUATOR_REGISTRY: Readonly<Record<BrainMetricKey, MetricEvaluator
   session_performance_feedback: entry("session_performance_feedback", "session_feedback", performanceObservation),
   joint_pain_or_soreness: entry("joint_pain_or_soreness", "symptom_load", symptomObservation),
   plan_day_adherence: entry("plan_day_adherence", "plan_adherence", planAdherenceObservation),
+  run_volume_adherence: entry("run_volume_adherence", "run_volume_adherence", runVolumeAdherenceObservation),
+  vo2max_trend: entry("vo2max_trend", "vo2max_trend", vo2maxTrendObservation),
   recovery_hrv_delta: entry("recovery_hrv_delta", "recovery_delta", recoveryObservation),
   recovery_rhr_delta: entry("recovery_rhr_delta", "recovery_delta", recoveryObservation),
   sleep_duration_delta: entry("sleep_duration_delta", "recovery_delta", recoveryObservation),

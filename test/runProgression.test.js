@@ -379,6 +379,55 @@ test("enduranceTestsDue never prescribes running tests from cycling-only history
   assert.deepEqual(repo.enduranceTestsDue(REF), []);
 });
 
+// ── weeklyRunPlan: the learned run-volume personal modifier ───────────────────
+
+// A learned CONSERVATIVE run-volume default (the shape whatWorksForYou emits for a
+// missed run_volume_adherence / vo2max_trend expectation): scale < 1, bounded 0.85–1.15.
+const RUN_MODIFIER_EASE = {
+  key: "training_target:run_volume_adherence:all:complete:all-phases",
+  target: "run_volume_step",
+  stage: null,
+  scale: 0.9,
+  bounds: { min: 0.85, max: 1.15 },
+  confidence: "observed",
+  evidence_n: 3,
+  rationale: "a slightly more conservative run volume step is the earned default",
+  never_overrides: ["injury", "allergy", "clinical", "lean_safe"],
+};
+
+test("weeklyRunPlan: a learned conservative run-volume modifier eases the weekly build", () => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  seedRunner({ weeks: 8, perWeek: 3, km: 12 });
+  const base = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, responseModifier: null });
+  const eased = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, responseModifier: RUN_MODIFIER_EASE });
+  assert.ok(totalRunKm(eased) < totalRunKm(base), `the modifier eases volume (${totalRunKm(eased)} < ${totalRunKm(base)})`);
+  assert.ok(eased.rationale.some((r) => /conservative volume step|easing the weekly build/i.test(r)), "the ease is explained in plain words");
+  NO_SCORE(eased, "run plan eased by modifier");
+});
+
+test("weeklyRunPlan: an aligned (scale 1) run-volume modifier changes nothing", () => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  seedRunner({ weeks: 8, perWeek: 3, km: 12 });
+  const base = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, responseModifier: null });
+  const aligned = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, responseModifier: { ...RUN_MODIFIER_EASE, scale: 1 } });
+  assert.equal(totalRunKm(aligned), totalRunKm(base), "a met expectation holds the standard build, never accelerates it");
+});
+
+test("weeklyRunPlan: the run-volume modifier never exceeds the recovery/directive caps (they stay final)", () => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  seedRunner({ weeks: 8, perWeek: 3, km: 12 });
+  // Recovery-down: an easing modifier can only ease FURTHER, never push the recovery-
+  // reduced volume back up.
+  const recDown = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, recovery: recoveryFixture({ band: "low" }), responseModifier: null });
+  const recDownMod = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, recovery: recoveryFixture({ band: "low" }), responseModifier: RUN_MODIFIER_EASE });
+  assert.ok(totalRunKm(recDownMod) <= totalRunKm(recDown), "the modifier never lifts a recovery-reduced week");
+  // A firm anemia directive caps the build; the directive stays the outermost word, so
+  // the eased plan lands at or below the (non-modified) firm-hold plan.
+  const held = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, directives: [ANEMIA_DIRECTIVE], responseModifier: null });
+  const heldMod = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, directives: [ANEMIA_DIRECTIVE], responseModifier: RUN_MODIFIER_EASE });
+  assert.ok(totalRunKm(heldMod) <= totalRunKm(held), "the modifier never exceeds the directive cap");
+});
+
 // ── buildRunPlanProposal (the apply path, shared by REST + MCP) ────────────────
 
 test("buildRunPlanProposal drafts a proposal whose cardio carries day_number + interval structure", () => {

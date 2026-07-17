@@ -284,6 +284,199 @@ test("snack-only partial intake plus a terminal scale shock cannot yield a decis
   assert.equal(listBrainEvaluations(recorded.expectations[0].id).length, 1);
 });
 
+// ── endurance evaluators: run_volume_adherence + vo2max_trend ────────────────
+
+test("the two new endurance metric keys are registered with their own evaluators", () => {
+  for (const key of ["run_volume_adherence", "vo2max_trend"]) {
+    assert.ok(BRAIN_METRIC_KEYS.includes(key), `${key} is a frozen metric key`);
+    assert.equal(EVALUATOR_REGISTRY[key].evaluator, key, `${key} maps to its own evaluator`);
+    assert.match(EVALUATOR_REGISTRY[key].version, /^brain-maturity-v1\//);
+  }
+});
+
+function runVolumeExpectation(overrides = {}) {
+  return {
+    id: 1,
+    decision_id: 1,
+    metric_key: "run_volume_adherence",
+    subject_key: null,
+    direction: "complete",
+    baseline: { weekly_prescribed_km: 25 },
+    target: { rate: 0.8, expected_km: 100 },
+    window_start: "2026-04-01",
+    window_end: "2026-04-28",
+    minimum_data: { outings: 2 },
+    confounder_policy: "exclude_context_events",
+    confidence: "tentative",
+    status: "mature",
+    evaluator: "run_volume_adherence",
+    evaluator_version: "run-volume-adherence-v1",
+    ...overrides,
+  };
+}
+
+function observe(metricKey, expectation, asOf = "2026-05-15") {
+  return EVALUATOR_REGISTRY[metricKey].observe({ expectation, decision: {}, as_of: asOf });
+}
+
+test("run_volume_adherence: running the prescribed km aligns", () => {
+  const expectation = runVolumeExpectation();
+  for (const [date, km] of [
+    ["2026-04-03", 25],
+    ["2026-04-10", 25],
+    ["2026-04-17", 25],
+    ["2026-04-24", 25],
+  ]) {
+    repo.addActivity({ type: "run", distance_km: km, duration_min: km * 6, date });
+  }
+  const obs = observe("run_volume_adherence", expectation);
+  assert.equal(obs.counts.outings, 4);
+  assert.ok(obs.actual.completion_rate >= 0.99, `completion ${obs.actual.completion_rate}`);
+  assert.equal(evaluateMetricObservation(expectation, obs).verdict, "aligned");
+});
+
+test("run_volume_adherence: materially under-running the prescription is not_aligned", () => {
+  const expectation = runVolumeExpectation();
+  // ~45 of 100 prescribed km → 0.45 completion, below the 0.8 bar.
+  for (const [date, km] of [
+    ["2026-04-05", 15],
+    ["2026-04-12", 15],
+    ["2026-04-19", 15],
+  ]) {
+    repo.addActivity({ type: "run", distance_km: km, duration_min: km * 6, date });
+  }
+  const obs = observe("run_volume_adherence", expectation);
+  assert.ok(obs.actual.completion_rate < 0.8);
+  assert.equal(evaluateMetricObservation(expectation, obs).verdict, "not_aligned");
+});
+
+test("run_volume_adherence: zero run outings stays inconclusive (zero-evidence contract), never a miss", () => {
+  const expectation = runVolumeExpectation();
+  // A ride and a hike in the window can NEVER satisfy a run prescription.
+  repo.addActivity({ type: "cycling", distance_km: 40, duration_min: 90, date: "2026-04-08" });
+  repo.addActivity({ type: "hike", distance_km: 10, duration_min: 120, date: "2026-04-15" });
+  const obs = observe("run_volume_adherence", expectation);
+  assert.equal(obs.counts.outings, 0);
+  assert.deepEqual(obs.evidence_keys, []);
+  const evaluation = evaluateMetricObservation(expectation, obs);
+  assert.equal(evaluation.verdict, "inconclusive");
+  assert.ok(evaluation.confounders.some((item) => /no running was logged/i.test(item)));
+});
+
+// Distance-less-run asymmetry: a MISS can never be declared while an unmeasured run
+// exists, but a PASS can (measured km alone clearing the bar is enough).
+function seedDistancelessRun(date) {
+  db.prepare(`INSERT INTO activities (type, distance_km, duration_min, date) VALUES ('run', NULL, 40, ?)`).run(date);
+}
+
+test("run_volume_adherence: all distance-less run outings stay inconclusive, never a false miss", () => {
+  const expectation = runVolumeExpectation();
+  seedDistancelessRun("2026-04-05");
+  seedDistancelessRun("2026-04-12");
+  seedDistancelessRun("2026-04-19"); // 3 runs, none carrying a distance
+  const obs = observe("run_volume_adherence", expectation);
+  assert.equal(obs.counts.outings, 3);
+  assert.equal(obs.actual.measured_outings, 0);
+  assert.equal(obs.actual.actual_km, 0);
+  const evaluation = evaluateMetricObservation(expectation, obs);
+  assert.equal(evaluation.verdict, "inconclusive");
+  assert.ok(evaluation.confounders.some((item) => /without distance/i.test(item)));
+});
+
+test("run_volume_adherence: a measured shortfall WITH a distance-less run present is inconclusive, not a miss", () => {
+  const expectation = runVolumeExpectation();
+  repo.addActivity({ type: "run", distance_km: 30, duration_min: 180, date: "2026-04-05" });
+  repo.addActivity({ type: "run", distance_km: 20, duration_min: 120, date: "2026-04-12" }); // 50 of 100 measured
+  seedDistancelessRun("2026-04-19"); // an unmeasured outing makes the shortfall unverifiable
+  const obs = observe("run_volume_adherence", expectation);
+  assert.ok(obs.actual.completion_rate < 0.8);
+  assert.equal(obs.actual.unmeasured_outings, 1);
+  assert.equal(evaluateMetricObservation(expectation, obs).verdict, "inconclusive");
+});
+
+test("run_volume_adherence: measured km alone clears the bar with an unmeasured run present → aligned", () => {
+  const expectation = runVolumeExpectation();
+  repo.addActivity({ type: "run", distance_km: 45, duration_min: 270, date: "2026-04-05" });
+  repo.addActivity({ type: "run", distance_km: 45, duration_min: 270, date: "2026-04-12" }); // 90 of 100 → clears 0.8
+  seedDistancelessRun("2026-04-19"); // unmeasured presence is irrelevant to a PASS
+  const obs = observe("run_volume_adherence", expectation);
+  assert.ok(obs.actual.completion_rate >= 0.8);
+  assert.equal(obs.actual.unmeasured_outings, 1);
+  assert.equal(evaluateMetricObservation(expectation, obs).verdict, "aligned");
+});
+
+function vo2Expectation(overrides = {}) {
+  return {
+    id: 1,
+    decision_id: 1,
+    metric_key: "vo2max_trend",
+    subject_key: null,
+    direction: "increase",
+    baseline: null,
+    target: {},
+    window_start: "2026-04-01",
+    window_end: "2026-05-20",
+    minimum_data: null,
+    confounder_policy: "exclude_context_events",
+    confidence: "tentative",
+    status: "mature",
+    evaluator: "vo2max_trend",
+    evaluator_version: "vo2max-trend-v1",
+    ...overrides,
+  };
+}
+
+function seedVo2(date, value) {
+  db.prepare(
+    `INSERT INTO daily_metrics (source, date, vo2max, updated_at) VALUES ('apple', ?, ?, datetime('now'))`
+  ).run(date, value);
+}
+
+test("vo2max_trend: an improving slope over ≥4 readings and ≥3 weeks reads as increasing", () => {
+  const expectation = vo2Expectation();
+  for (const [date, v] of [
+    ["2026-04-02", 48],
+    ["2026-04-12", 49],
+    ["2026-04-22", 50],
+    ["2026-05-02", 51],
+    ["2026-05-12", 52],
+  ]) {
+    seedVo2(date, v);
+  }
+  const obs = observe("vo2max_trend", expectation);
+  assert.equal(obs.counts.readings, 5);
+  assert.ok(obs.actual.delta > 0, "vo2max rose across the window");
+  assert.equal(evaluateMetricObservation(expectation, obs).verdict, "aligned");
+});
+
+test("vo2max_trend: stays inconclusive under the 4-reading gate", () => {
+  const expectation = vo2Expectation();
+  seedVo2("2026-04-02", 48);
+  seedVo2("2026-04-20", 50);
+  seedVo2("2026-05-05", 51); // only 3 readings
+  const obs = observe("vo2max_trend", expectation);
+  assert.equal(obs.actual, null);
+  assert.equal(evaluateMetricObservation(expectation, obs).verdict, "inconclusive");
+});
+
+test("vo2max_trend: stays inconclusive under the 21-day span gate even with 4 readings", () => {
+  const expectation = vo2Expectation();
+  for (const [date, v] of [
+    ["2026-04-02", 48],
+    ["2026-04-05", 49],
+    ["2026-04-09", 50],
+    ["2026-04-14", 51], // 4 readings but only a 12-day span
+  ]) {
+    seedVo2(date, v);
+  }
+  const obs = observe("vo2max_trend", expectation);
+  assert.equal(obs.counts.readings, 4);
+  assert.equal(obs.actual, null);
+  const evaluation = evaluateMetricObservation(expectation, obs);
+  assert.equal(evaluation.verdict, "inconclusive");
+  assert.ok(evaluation.confounders.some((item) => /at least 4 readings/i.test(item)));
+});
+
 test("stored applied nutrition expectations use supported clean counts and mature with credible exposure", () => {
   repo.setProfile({
     age: 40,
