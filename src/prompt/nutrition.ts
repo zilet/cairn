@@ -185,6 +185,32 @@ function renderAcuteLoadNote(ctx: any): string {
   const comp = ctx?.run_compliance;
   const ranSomething = Number(comp?.actual_sessions) > 0 || Number(comp?.actual_km) > 0;
   if (comp?.in_words && ranSomething) bits.push(`running this week: ${String(comp.in_words).trim()}`);
+  // This week's WHOLE aerobic load (runs + hikes + rides), so a big aerobic week is
+  // visible even with no run PLAN — the run-compliance line above is run-only. Gated by
+  // a load-bearing FLOOR so a daily-stroll habit doesn't fire the FUEL-the-work section
+  // on nearly every check-in: it renders only for a genuinely meaningful week — ≥3
+  // outings OR ≥90 total aerobic minutes OR a single long outing (≥60 min or ≥8 km).
+  const aero =
+    ctx?.aerobic_week ??
+    (() => {
+      try {
+        return repo.weeklyAerobicLoad();
+      } catch {
+        return null;
+      }
+    })();
+  const aeroLoadBearing =
+    aero &&
+    (Number(aero.outings) >= 3 ||
+      Number(aero.minutes) >= 90 ||
+      (aero.longest_min != null && Number(aero.longest_min) >= 60) ||
+      (aero.longest_km != null && Number(aero.longest_km) >= 8));
+  if (aeroLoadBearing) {
+    let line = `aerobic load this week: ${String(aero.in_words).trim()}`;
+    if (aero.longest_km != null) line += `, longest ${aero.longest_km} km`;
+    else if (aero.longest_min != null) line += `, longest ${aero.longest_min} min`;
+    bits.push(line);
+  }
   const hard = Array.isArray(ctx?.recovery?.hard_sessions) ? ctx.recovery.hard_sessions.length : 0;
   if (hard) bits.push(`${hard} hard session${hard === 1 ? "" : "s"} in the recent window`);
   if (!bits.length) return "";

@@ -27,7 +27,13 @@ import { programBalance } from "./progression.js";
 import { localDateISO } from "./shared.js";
 import { planningSignalState, type UnifiedSignalState } from "./signal-state.js";
 import { afterSqliteCommit } from "./sqlite-savepoint.js";
-import { type TrainingLoad, dayLoad, recoverySessionDose } from "./training-read.js";
+import {
+  type TrainingLoad,
+  dayLoad,
+  hardCardioDay,
+  recentCardioLoadMedian,
+  recoverySessionDose,
+} from "./training-read.js";
 import { currentUnderfuelingRead } from "./underfueling-snapshot.js";
 import type { UnderfuelingRead } from "./underfueling.js";
 
@@ -47,7 +53,7 @@ export function dayRead(
   date?: string,
   recovery?: any,
   unifiedState?: UnifiedSignalState,
-  underfuelingSnapshot?: UnderfuelingRead,
+  underfuelingSnapshot?: UnderfuelingRead
 ): DayRead {
   const d = date || localDateISO();
   const recoveryWeek = activeRecoveryWeek(d);
@@ -85,8 +91,20 @@ export function dayRead(
     if (!recoveryByDate.has(iso)) recoveryByDate.set(iso, activeRecoveryWeek(iso));
     return recoveryByDate.get(iso) ?? null;
   };
-  const loadAt = (iso: string): TrainingLoad | "none" =>
-    dayLoad(iso, { countsCardio, recoveryWeekActive: !!recoveryForDate(iso) });
+  // A genuinely HARD cardio day loads recovery for EVERY athlete, so it counts as a
+  // loading day even for a strength-primary lifter (whose discipline otherwise makes
+  // dayLoad ignore cardio). Easy strolls clear none of hardCardioDay's bars, so they
+  // never count. Endurance/hybrid athletes already count all their cardio via dayLoad,
+  // so the bump is a no-op for them (and hardCardioDay is never consulted). The recent
+  // cardio-load median is computed once and threaded, avoiding a per-day re-query.
+  const cardioLoadMedian = countsCardio ? null : recentCardioLoadMedian(d);
+  const gradeDay = (iso: string, recoveryWeekActive: boolean): TrainingLoad | "none" => {
+    const base = dayLoad(iso, { countsCardio, recoveryWeekActive });
+    if (base === "hard") return base;
+    if (!countsCardio && hardCardioDay(iso, cardioLoadMedian)) return "moderate";
+    return base;
+  };
+  const loadAt = (iso: string): TrainingLoad | "none" => gradeDay(iso, !!recoveryForDate(iso));
   const recentLoads: { date: string; load: TrainingLoad | "none"; recovery_dose?: any[] }[] = [];
   let consec = 0; // consecutive LOADING (hard/moderate) days ending yesterday
   let streakOpen = true;
@@ -336,7 +354,7 @@ export function dayRead(
   // "Rest today" vs planned-Pull contradiction). A light/none-load log (a short mobility
   // flush, or an easy spin a lifter doesn't count) stays soft and is handled lower down.
   // The grade + fact ride in `signals` for the agent regardless of which branch wins.
-  const todayLoad = dayLoad(d, { countsCardio, recoveryWeekActive: !!recoveryWeek });
+  const todayLoad = gradeDay(d, !!recoveryWeek);
   (signals as any).trained_today = trainedToday || !!bigActivity;
   (signals as any).today_load = todayLoad;
   const fuelProtection = underfuelingSnapshot ?? currentUnderfuelingRead(d);
@@ -409,7 +427,8 @@ export function dayRead(
         // Pre-deload hard days cannot turn every reduced session into another rest
         // day; acute safety signals and actual dose overruns retain full authority.
         const stackedLoadingRest = consec >= 3 && !recoveryWeek;
-        if (!(yesterdayRecoveryOverdose || stackedLoadingRest || lowSleep || lowSubjective || lowReadiness)) return null;
+        if (!(yesterdayRecoveryOverdose || stackedLoadingRest || lowSleep || lowSubjective || lowReadiness))
+          return null;
         return {
           kind: "rest",
           focus: null,
@@ -503,10 +522,10 @@ export function dayRead(
         const why = holdAggression
           ? `Keep today's work conservative — ${caveats.join("; and ")}.`
           : caveats.length
-          ? `You're good to train — ${caveats.join("; and ")}.`
-          : recoveryWeek
-            ? `${sd.focus || "Training"} keeps the recovery-week rhythm — use the reduced prescription and leave the reps crisp.`
-            : "You're recovered and due — good to go.";
+            ? `You're good to train — ${caveats.join("; and ")}.`
+            : recoveryWeek
+              ? `${sd.focus || "Training"} keeps the recovery-week rhythm — use the reduced prescription and leave the reps crisp.`
+              : "You're recovered and due — good to go.";
         return { kind: "train", focus: sd.focus, why, est_minutes: compressSchedule ? 40 : 60, signals };
       },
     },
@@ -765,12 +784,13 @@ export function saveDayRead(date: string, read: any): void {
       action_json: JSON.stringify(decisionInput.action),
     };
     const newest = existing[0] ?? null;
-    const sameMaterial = !!newest
-      && String(newest.summary ?? "") === material.summary
-      && (newest.rationale ?? null) === material.rationale
-      && (newest.source ?? null) === material.source
-      && (newest.context_json ?? null) === material.context_json
-      && (newest.action_json ?? null) === material.action_json;
+    const sameMaterial =
+      !!newest &&
+      String(newest.summary ?? "") === material.summary &&
+      (newest.rationale ?? null) === material.rationale &&
+      (newest.source ?? null) === material.source &&
+      (newest.context_json ?? null) === material.context_json &&
+      (newest.action_json ?? null) === material.action_json;
     const current = sameMaterial ? newest : insertBrainDecision(decisionInput);
     if (current?.id) {
       for (const prior of sameMaterial ? existing.slice(1) : existing) {

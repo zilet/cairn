@@ -1962,6 +1962,18 @@ export function getDailyMetrics(source?: string | null, days = 30) {
 // Quality-aware SOURCE-AGNOSTIC recovery: resolve each date and each field
 // independently, preferring Garmin only where it has an overlapping value. This
 // lets complementary Apple/Oura data survive without double-counting a date.
+// Garmin training_readiness is 0-100; the constitution forbids surfacing the number.
+// Band it into plain words for prompts + gating: low (<35), primed (>=70), else steady.
+// null when there's no reading, so every consumer degrades quietly.
+export function readinessBand(value: unknown): "low" | "steady" | "primed" | null {
+  if (value == null || value === "") return null; // guard Number(null)===0 → never a false "low"
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  if (n < 35) return "low";
+  if (n >= 70) return "primed";
+  return "steady";
+}
+
 export function getRecoverySummary(days = 14, garminSummary?: any) {
   const windowDays = recoveryWindowDays(days, 14);
   const today = localDateISO();
@@ -2133,6 +2145,10 @@ export function getRecoverySummary(days = 14, garminSummary?: any) {
     spo2_avg: current("spo2_avg"),
     skin_temp_dev_c: current("skin_temp_dev_c"),
     training_readiness: current("training_readiness"),
+    // Banded plain-words read of the CURRENT 0-100 readiness (the constitution bans
+    // surfacing the number). Additive + null-safe: null when there's no reading. low
+    // (<35) is the conservative "clearly low" gate the run plan / day read weigh.
+    readiness_band: readinessBand(current("training_readiness")),
     training_status: current("training_status"),
     acute_load: current("acute_load"),
     fitness_age: current("fitness_age"),

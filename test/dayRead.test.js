@@ -123,13 +123,75 @@ test("EASY when nothing is programmed and recovery is unremarkable", () => {
   assert.match(r.why, /nothing programmed/i);
 });
 
-test("EASY after a real activity is already logged today", () => {
-  // A logged ride of >=20 min should read as 'covered', not push a fresh session.
-  db.prepare(`INSERT INTO activities (date, type, duration_min, distance_km) VALUES (?, 'ride', 45, 20)`).run(REF);
+test("EASY after a LIGHT activity is already logged today", () => {
+  // A short easy outing (a 25-min stroll — below the hard-cardio bar) reads as
+  // 'covered', not a fresh session, but stays easy: it isn't real loading work.
+  db.prepare(`INSERT INTO activities (date, type, duration_min) VALUES (?, 'walk', 25)`).run(REF);
   repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3 }]);
   const r = repo.dayRead(REF, { has_data: false, recovery: {} });
   assert.equal(r.kind, "easy");
   assert.match(r.why, /already/i);
+});
+
+// ── PART 2: a genuinely HARD cardio day counts REGARDLESS of discipline ──────────
+test("a HARD cardio day (40+ min run) reads DONE for a strength-primary athlete", () => {
+  // A strength-primary lifter's genuinely hard run is real work: it reads DONE (a
+  // solid run in, recover the rest of the day), not a fresh session and not merely
+  // "keep it easy". Cardio is no longer invisible just because the discipline is strength.
+  repo.setProfile({ primary_discipline: "strength" });
+  db.prepare(`INSERT INTO activities (date, type, duration_min, distance_km) VALUES (?, 'run', 48, 9)`).run(REF);
+  const r = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.equal(r.kind, "done");
+  assert.equal(r.signals.trained_today, true);
+  assert.equal(r.signals.today_load !== "none" && r.signals.today_load !== "easy", true, "hard cardio grades as loading");
+});
+
+test("hard cardio stacks toward earned rest REGARDLESS of discipline", () => {
+  // Three straight 45-min runs make a strength-primary athlete's Brief suggest rest,
+  // exactly as three straight lifting days would — the streak counts hard cardio.
+  repo.setProfile({ primary_discipline: "strength" });
+  for (let i = 1; i <= 3; i++) {
+    db.prepare(`INSERT INTO activities (date, type, duration_min, distance_km) VALUES (?, 'run', 45, 8)`).run(dayBefore(REF, i));
+  }
+  const r = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.equal(r.kind, "rest");
+  assert.equal(r.signals.consecutive_training_days, 3);
+});
+
+test("an easy stroll never counts toward the loading streak (negative case)", () => {
+  // Short 25-min walks are below every hard-cardio bar, so they break (never build)
+  // the loading streak — no forced rest off strolls, no false 'done'.
+  repo.setProfile({ primary_discipline: "strength" });
+  for (let i = 1; i <= 3; i++) {
+    db.prepare(`INSERT INTO activities (date, type, duration_min) VALUES (?, 'walk', 25)`).run(dayBefore(REF, i));
+  }
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  const r = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.notEqual(r.kind, "rest");
+  assert.equal(r.signals.consecutive_training_days, 0);
+});
+
+test("a ~43-min easy hike today does NOT flip a planned-lift day to DONE", () => {
+  // Fix round: an easy hike (no wearable data) must not grade as loading — it reads as
+  // "covered but easy", never DONE/recover, so it never suppresses the planned session.
+  repo.setProfile({ primary_discipline: "strength" });
+  db.prepare(`INSERT INTO activities (date, type, duration_min, distance_km) VALUES (?, 'hike', 43, 4)`).run(REF);
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  const r = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.notEqual(r.kind, "done");
+  assert.notEqual(r.kind, "rest");
+});
+
+test("prior ~43-min easy hikes do NOT stack toward earned rest (planned lift still suggested)", () => {
+  repo.setProfile({ primary_discipline: "strength" });
+  for (let i = 1; i <= 3; i++) {
+    db.prepare(`INSERT INTO activities (date, type, duration_min, distance_km) VALUES (?, 'hike', 43, 4)`).run(dayBefore(REF, i));
+  }
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  const r = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.equal(r.signals.consecutive_training_days, 0, "easy hikes never stack loading days");
+  assert.equal(r.kind, "train");
+  assert.equal(r.focus, "Lower body");
 });
 
 test("DONE (not EASY) when a real loading session is already logged today", () => {

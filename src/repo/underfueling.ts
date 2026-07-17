@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { db } from "../db.js";
+import { canonicalEnduranceSport } from "./endurance-sports.js";
 import { completedIntakeWindow, type CompletedIntakeDay } from "./intake-window.js";
+import { getRunCompliance } from "./sessions.js";
 import { addDaysISO, daysBetweenISO, localDateISO } from "./shared.js";
 
 export type UnderfuelingState =
@@ -382,6 +384,85 @@ function subjectiveChannels(
   };
 }
 
+// The endurance analogue of the same-lift performance read, feeding the SAME
+// performance channel. A genuine decline in endurance OUTPUT — run pace slipping while
+// weekly mileage holds, or prescribed runs falling well short two weeks running while
+// still training — is a performance-under-strain tell. Conservative + adherence-neutral:
+// both signals need real, repeated running (a thin/skipped week never fires), and it
+// only ever pushes the protective (fuel-the-work) direction. null when nothing qualifies.
+function enduranceStrainSignal(today: string): { reason: string; evidence: string } | null {
+  return runPaceDeclineWhileVolumeHeld(today) ?? sustainedRunComplianceDrop(today);
+}
+
+// Pace decline while volume held: the last ~14 days of RUN efforts vs the ~14 before.
+// Both halves need ≥2 runs with pace; recent mileage must be HELD (≥85% of prior, so a
+// taper/ease is excluded) AND recent average pace materially slower (≥5%).
+function runPaceDeclineWhileVolumeHeld(today: string): { reason: string; evidence: string } | null {
+  const start = addDaysISO(today, -27) ?? today;
+  const mid = addDaysISO(today, -13) ?? today; // last 14 days = "recent"
+  let rows: any[] = [];
+  try {
+    rows = db
+      .prepare(`SELECT date, type, distance_km, duration_min FROM activities WHERE date BETWEEN ? AND ? ORDER BY date`)
+      .all(start, today) as any[];
+  } catch {
+    return null;
+  }
+  const recent: { km: number; pace: number }[] = [];
+  const prior: { km: number; pace: number }[] = [];
+  for (const r of rows) {
+    if (canonicalEnduranceSport(r.type).key !== "run") continue; // pace is a foot-sport read
+    const km = Number(r.distance_km);
+    const min = Number(r.duration_min);
+    if (!(km > 0) || !(min > 0)) continue;
+    (String(r.date) >= mid ? recent : prior).push({ km, pace: min / km });
+  }
+  if (recent.length < 2 || prior.length < 2) return null;
+  const total = (xs: { km: number; pace: number }[], f: (x: { km: number; pace: number }) => number) =>
+    xs.reduce((a, b) => a + f(b), 0);
+  const recentKm = total(recent, (x) => x.km);
+  const priorKm = total(prior, (x) => x.km);
+  const recentPace = total(recent, (x) => x.pace) / recent.length;
+  const priorPace = total(prior, (x) => x.pace) / prior.length;
+  if (recentKm < priorKm * 0.85) return null; // volume dropped (a taper/ease) — not a strain read
+  if (recentPace < priorPace * 1.05) return null; // pace not materially slower
+  return {
+    reason: "Run pace has slipped while weekly mileage held — endurance output is under strain.",
+    evidence: `run_pace_decline:${Math.round(priorPace * 100) / 100}->${Math.round(recentPace * 100) / 100}min_per_km`,
+  };
+}
+
+// Sustained run-compliance drop: two consecutive weeks where the plan prescribed real
+// mileage, the athlete still ran GENUINELY (≥2 outings each week), yet fell well short
+// (<60%). Requiring ≥2 real outings per week keeps a busy-but-fine fortnight (a thin run
+// week, or ran-just-under-plan) from ever reading as strain — a thin logging week lowers
+// confidence, it never signals under-fuelling (adherence-neutral by constitution).
+function sustainedRunComplianceDrop(today: string): { reason: string; evidence: string } | null {
+  const monday = (() => {
+    const d = new Date(today + "T00:00:00Z");
+    d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+    return d.toISOString().slice(0, 10);
+  })();
+  const lastMonday = addDaysISO(monday, -7);
+  if (!lastMonday) return null;
+  try {
+    const cur = getRunCompliance(monday);
+    const prev = getRunCompliance(lastMonday);
+    const short = (c: any) =>
+      c.prescribed_km > 0 && c.actual_sessions >= 2 && c.actual_km > 0 && c.pct_km != null && c.pct_km < 0.6;
+    if (short(cur) && short(prev)) {
+      return {
+        reason:
+          "Prescribed runs have fallen well short two weeks running while still training — endurance output is under strain.",
+        evidence: `run_compliance_drop:${prev.pct_km}->${cur.pct_km}`,
+      };
+    }
+  } catch {
+    /* no plan / table absent → no signal */
+  }
+  return null;
+}
+
 function performanceChannel(since: string, today: string, program: any, whole: any): UnderfuelingChannel {
   const rows = db
     .prepare(
@@ -396,20 +477,27 @@ function performanceChannel(since: string, today: string, program: any, whole: a
     (lift: any) => lift?.status === "progressing"
   );
   const wholeStrength = (Array.isArray(whole?.domains) ? whole.domains : []).find((d: any) => d?.domain === "strength");
-  const strain = lowDays.size >= 2 || regressing.length >= 2 || wholeStrength?.verdict === "worse";
+  const endurance = enduranceStrainSignal(today);
+  const strengthStrain = lowDays.size >= 2 || regressing.length >= 2 || wholeStrength?.verdict === "worse";
+  const strain = strengthStrain || !!endurance;
   const support = !strain && (progressing.length >= 2 || wholeStrength?.verdict === "better");
   return {
     key: "performance",
     direction: strain ? "strain" : support ? "support" : "unknown",
     summary: strain
-      ? "Repeated session feedback or same-lift trends show performance under strain."
+      ? strengthStrain && endurance
+        ? "Same-lift trends and endurance output both show performance under strain."
+        : strengthStrain
+          ? "Repeated session feedback or same-lift trends show performance under strain."
+          : String(endurance!.reason)
       : support
         ? "Same-lift performance is holding or progressing, which argues against an urgent fuel correction."
         : "Performance evidence is mixed or too thin to call.",
-    samples: rows.length + regressing.length + progressing.length,
+    samples: rows.length + regressing.length + progressing.length + (endurance ? 1 : 0),
     evidence_keys: [
       ...(rows.length ? [`sessions.performance:${since}..${today}:n=${rows.length}`] : []),
       ...(regressing.length ? [`program_state:regressing=${regressing.length}`] : []),
+      ...(endurance ? [endurance.evidence] : []),
       ...(wholeStrength?.evidence_keys ?? []),
     ],
   };

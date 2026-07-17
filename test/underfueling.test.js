@@ -324,3 +324,58 @@ test("fresh athlete response plus an energy-balance outcome can escalate after s
     "the escalation is explicitly anchored to a dated response after the correction took effect"
   );
 });
+
+// ── PART 4a: an endurance-strain path feeds the same performance channel ──────────
+const perfChannel = (read) => read.channels.find((c) => c.key === "performance");
+
+test("run pace decline while weekly volume held flags the performance channel as strain", () => {
+  target(2200);
+  // prior ~14d: 3 runs @ 5.0 min/km (10 km in 50 min); recent ~14d: 3 runs @ 5.6 min/km
+  // (10 km in 56 min) — volume held (~30 km each half), pace materially slower.
+  for (const d of [-15, -18, -21]) repo.addActivity({ type: "run", distance_km: 10, duration_min: 50, date: day(d) });
+  for (const d of [-3, -6, -9]) repo.addActivity({ type: "run", distance_km: 10, duration_min: 56, date: day(d) });
+  const read = underfuelingRead(TODAY, { expenditure: onPathExp, goal, programState: stableProgram, wholePerson: stableWhole });
+  const perf = perfChannel(read);
+  assert.equal(perf.direction, "strain", "endurance output decline strains the performance channel");
+  assert.match(perf.summary, /endurance|pace/i);
+  assert.ok(perf.evidence_keys.some((k) => /run_pace_decline/.test(k)), "the strain cites the pace-decline evidence");
+});
+
+test("stable run pace at held volume does NOT strain the performance channel", () => {
+  target(2200);
+  for (const d of [-15, -18, -21, -3, -6, -9]) repo.addActivity({ type: "run", distance_km: 10, duration_min: 50, date: day(d) });
+  const read = underfuelingRead(TODAY, { expenditure: onPathExp, goal, programState: stableProgram, wholePerson: stableWhole });
+  assert.notEqual(perfChannel(read).direction, "strain", "steady endurance output raises no fuel alarm");
+});
+
+test("a taper (dropped volume) is not misread as endurance strain even when pace slips", () => {
+  target(2200);
+  for (const d of [-15, -18, -21]) repo.addActivity({ type: "run", distance_km: 10, duration_min: 50, date: day(d) }); // prior ~30 km
+  for (const d of [-4, -7]) repo.addActivity({ type: "run", distance_km: 5, duration_min: 30, date: day(d) }); // recent ~10 km, slower
+  const read = underfuelingRead(TODAY, { expenditure: onPathExp, goal, programState: stableProgram, wholePerson: stableWhole });
+  assert.notEqual(perfChannel(read).direction, "strain", "a genuine ease/taper is not blamed as under-fuelling");
+});
+
+// ── PART 4a fix round: the run-compliance drop is adherence-neutral — it needs ≥2 real
+// outings in EACH week, so a thin/busy fortnight never reads as strain.
+test("a thin run week (1 outing under plan, both weeks) does NOT read as endurance strain", () => {
+  target(2200);
+  repo.savePlanDay(1, "Run", "Easy run", [{ exercise: "Easy run", kind: "cardio", target_distance_km: 20, target_duration_min: 100 }]);
+  // 1 short run this week + 1 last week, both well under plan — a thin week, not strain.
+  repo.addActivity({ type: "run", distance_km: 4, duration_min: 24, date: day(-1) }); // this week (Mon 07-13..)
+  repo.addActivity({ type: "run", distance_km: 4, duration_min: 24, date: day(-8) }); // last week
+  const read = underfuelingRead(TODAY, { expenditure: onPathExp, goal, programState: stableProgram, wholePerson: stableWhole });
+  assert.notEqual(perfChannel(read).direction, "strain", "a thin logging week lowers confidence, never signals");
+});
+
+test("a sustained 2-outings-each shortfall still fires the compliance-drop strain", () => {
+  target(2200);
+  repo.savePlanDay(1, "Run", "Easy run", [{ exercise: "Easy run", kind: "cardio", target_distance_km: 40, target_duration_min: 200 }]);
+  // 2 short runs each week, both far under the 40 km plan (<60%) — a genuine shortfall.
+  for (const d of [-1, -2]) repo.addActivity({ type: "run", distance_km: 4, duration_min: 24, date: day(d) }); // this week
+  for (const d of [-8, -9]) repo.addActivity({ type: "run", distance_km: 4, duration_min: 24, date: day(d) }); // last week
+  const read = underfuelingRead(TODAY, { expenditure: onPathExp, goal, programState: stableProgram, wholePerson: stableWhole });
+  const perf = perfChannel(read);
+  assert.equal(perf.direction, "strain");
+  assert.ok(perf.evidence_keys.some((k) => /run_compliance_drop/.test(k)), "cites the compliance-drop evidence");
+});

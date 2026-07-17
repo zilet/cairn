@@ -668,3 +668,32 @@ test("a read-only pass (drainBacklog:false) mutates nothing and never spends the
     "a drainable pass still drains after a read-only one"
   );
 });
+
+// ── PART 5: a quiet factual endurance line, only when aerobic activity exists ─────
+test("teamWeekRead adds an endurance line only when there was aerobic activity this week", () => {
+  // Empty week → no line (never a zero-shame "you didn't run").
+  assert.equal(repo.teamWeekRead({ asOf: ASOF }).endurance, null);
+
+  // Two runs + a hike this week → one plain factual line + structured totals.
+  repo.addActivity({ type: "run", distance_km: 10, duration_min: 55, date: ASOF });
+  repo.addActivity({ type: "run", distance_km: 8, duration_min: 44, date: ASOF });
+  repo.addActivity({ type: "hike", distance_km: 6, duration_min: 80, date: ASOF });
+  const read = repo.teamWeekRead({ asOf: ASOF });
+  assert.ok(read.endurance, "an endurance line appears when there was aerobic activity");
+  assert.equal(read.endurance.sessions, 3);
+  assert.equal(read.endurance.km, 24);
+  assert.equal(read.endurance.longest_km, 10);
+  assert.match(read.endurance.text, /24 km over 3 outings/i);
+  assert.doesNotMatch(read.endurance.text, /didn't|no runs|no aerobic/i, "never a zero-shame line");
+});
+
+test("teamWeekRead frames the endurance line as plan compliance when a run plan exists", () => {
+  // A plan prescribing a run + some logged mileage → the line reads as compliance.
+  repo.savePlanDay(1, "Run day", "Easy run", [
+    { exercise: "Easy run", kind: "cardio", target_distance_km: 10, target_duration_min: 55 },
+  ]);
+  repo.addActivity({ type: "run", distance_km: 6, duration_min: 34, date: ASOF });
+  const read = repo.teamWeekRead({ asOf: ASOF });
+  assert.ok(read.endurance);
+  assert.match(read.endurance.text, /of .* km this week/i, "compliance framing (actual of prescribed)");
+});

@@ -393,3 +393,44 @@ test("dayRead shifts away from a recovering pull rotation toward fresher due pus
   assert.equal(r.signals.plan_selection.adapted, true);
   assert.match(r.why, /due|recover/i);
 });
+
+// ── PART 2 fix round: the sport-aware hard-cardio bar (walk/hike must clear a much
+// longer / intensity bar than a run, so a ~43-min easy hike never grades as loading).
+function seedHcActivity(date, { type = "run", duration_min = null, distance_km = null } = {}) {
+  return db
+    .prepare(`INSERT INTO activities (date, type, duration_min, distance_km) VALUES (?, ?, ?, ?)`)
+    .run(date, type, duration_min, distance_km);
+}
+function seedHcGarmin(activityId, date, { type = "run", aerobic_te = null, te_label = null, hr_zones_json = null, training_load = null } = {}) {
+  const src = db.prepare(`INSERT INTO garmin_sources (provider, mode, label) VALUES ('garmin','unofficial','hc-test')`).run();
+  db.prepare(
+    `INSERT INTO garmin_activities (source_id, external_id, activity_id, date, type, aerobic_te, te_label, hr_zones_json, training_load)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(src.lastInsertRowid, `hc-${activityId}-${date}`, activityId, date, type, aerobic_te, te_label, hr_zones_json, training_load);
+}
+
+test("hardCardioDay: a ~43-min EASY hike with no wearable data is NOT hard", () => {
+  seedHcActivity(REF, { type: "hike", duration_min: 43, distance_km: 4 });
+  assert.equal(repo.hardCardioDay(REF), false);
+});
+
+test("hardCardioDay: a long ~95-min hike with no Garmin data IS hard", () => {
+  seedHcActivity(REF, { type: "hike", duration_min: 95, distance_km: 7 });
+  assert.equal(repo.hardCardioDay(REF), true);
+});
+
+test("hardCardioDay: a 45-min hike with a hard training-effect IS hard (intensity qualifies any type)", () => {
+  const a = seedHcActivity(REF, { type: "hike", duration_min: 45, distance_km: 5 });
+  seedHcGarmin(a.lastInsertRowid, REF, { type: "hiking", aerobic_te: 4.2 });
+  assert.equal(repo.hardCardioDay(REF), true);
+});
+
+test("hardCardioDay: a 42-min run (endurance sport) IS hard on duration alone", () => {
+  seedHcActivity(REF, { type: "run", duration_min: 42, distance_km: 8 });
+  assert.equal(repo.hardCardioDay(REF), true);
+});
+
+test("hardCardioDay: a 25-min run stays easy (below the endurance duration bar)", () => {
+  seedHcActivity(REF, { type: "run", duration_min: 25, distance_km: 5 });
+  assert.equal(repo.hardCardioDay(REF), false);
+});

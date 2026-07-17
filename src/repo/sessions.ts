@@ -1279,6 +1279,86 @@ export function getRunCompliance(weekStartISO?: string): RunCompliance {
   };
 }
 
+// ---------- this week's aerobic load (closing the runner loop, all sports) ----------
+// The broad endurance picture for the CURRENT week — runs, hikes, rides, swims, rows —
+// so a fueling read can see a big aerobic week even when there's no run PLAN (the
+// run-compliance read above is run-only). Deterministic + null-safe: an empty week is
+// zeros, never a throw. Distance/duration are plain numbers, never a score.
+export interface WeeklyAerobicLoad {
+  week_start: string;
+  outings: number; // count of endurance outings this week (any sport)
+  runs: number;
+  hikes: number; // the walk/hike bucket
+  rides: number;
+  km: number; // total distance across outings
+  minutes: number; // total duration
+  longest_km: number | null;
+  longest_min: number | null;
+  in_words: string; // e.g. "24.3 km over 6 outings this week (3 runs, 3 hikes)"
+}
+
+export function weeklyAerobicLoad(weekStartISO?: string): WeeklyAerobicLoad {
+  const monday =
+    weekStartISO ||
+    (() => {
+      const d = new Date(localDateISO() + "T00:00:00Z");
+      d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+      return d.toISOString().slice(0, 10);
+    })();
+  const nextMonday = new Date(new Date(monday + "T00:00:00Z").getTime() + 7 * 864e5).toISOString().slice(0, 10);
+  let rows: any[] = [];
+  try {
+    rows = db
+      .prepare(`SELECT type, distance_km, duration_min FROM activities WHERE date >= ? AND date < ?`)
+      .all(monday, nextMonday) as any[];
+  } catch {
+    /* activities table absent → zeros */
+  }
+  const ENDURANCE_KEYS = new Set(["run", "walk", "ride", "swim", "row"]);
+  let outings = 0;
+  let runs = 0;
+  let hikes = 0;
+  let rides = 0;
+  let km = 0;
+  let minutes = 0;
+  let longestKm = 0;
+  let longestMin = 0;
+  for (const r of rows) {
+    const key = canonicalEnduranceSport(r.type).key;
+    if (!ENDURANCE_KEYS.has(key)) continue; // endurance outings only (strength is a session)
+    outings++;
+    if (key === "run") runs++;
+    else if (key === "walk") hikes++;
+    else if (key === "ride") rides++;
+    const d = Number(r.distance_km);
+    const m = Number(r.duration_min);
+    if (Number.isFinite(d) && d > 0) {
+      km += d;
+      if (d > longestKm) longestKm = d;
+    }
+    if (Number.isFinite(m) && m > 0) {
+      minutes += m;
+      if (m > longestMin) longestMin = m;
+    }
+  }
+  km = Math.round(km * 10) / 10;
+  minutes = Math.round(minutes);
+  const longest_km = longestKm > 0 ? Math.round(longestKm * 10) / 10 : null;
+  const longest_min = longestMin > 0 ? Math.round(longestMin) : null;
+  const mix: string[] = [];
+  if (runs) mix.push(`${runs} run${runs === 1 ? "" : "s"}`);
+  if (hikes) mix.push(`${hikes} hike${hikes === 1 ? "" : "s"}`);
+  if (rides) mix.push(`${rides} ride${rides === 1 ? "" : "s"}`);
+  const outingWord = `${outings} outing${outings === 1 ? "" : "s"}`;
+  const in_words =
+    outings === 0
+      ? "no aerobic outings this week"
+      : km > 0
+        ? `${km} km over ${outingWord} this week${mix.length ? ` (${mix.join(", ")})` : ""}`
+        : `${outingWord} this week${mix.length ? ` (${mix.join(", ")})` : ""}`;
+  return { week_start: monday, outings, runs, hikes, rides, km, minutes, longest_km, longest_min, in_words };
+}
+
 export function getVolumeByMuscle(days = 30) {
   const cutoff = new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
   // UNIFIED onto the ONE honest-volume truth (effectiveVolumeByGroup): folds sets

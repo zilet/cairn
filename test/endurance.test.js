@@ -54,12 +54,14 @@ test("a brand-new profile defaults primary_discipline to 'strength'", () => {
 });
 
 // ---------- A.4 discipline-aware day-read rest behavior ----------
-test("strength athlete: a cardio activity does NOT count toward consecutive training days", () => {
-  // 3 cardio days running, no lifting — a strength athlete's rest rule ignores cardio.
-  for (let i = 1; i <= 3; i++) seedActivity(dayBefore(REF, i), { type: "run", duration_min: 45, distance_km: 8 });
+test("strength athlete: EASY cardio does NOT count toward consecutive training days", () => {
+  // 3 short easy walks — below the hard-cardio bar — stay invisible to a strength
+  // athlete's rest rule. (A genuinely HARD cardio day now DOES count regardless of
+  // discipline — see the hard-cardio cases in dayRead.test.js.)
+  for (let i = 1; i <= 3; i++) seedActivity(dayBefore(REF, i), { type: "walk", duration_min: 15 });
   repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
   const r = repo.dayRead(REF, { has_data: false, recovery: {} });
-  assert.equal(r.signals.consecutive_training_days, 0, "cardio days are invisible to a strength athlete");
+  assert.equal(r.signals.consecutive_training_days, 0, "easy cardio is invisible to a strength athlete");
   assert.notEqual(r.kind, "rest");
 });
 

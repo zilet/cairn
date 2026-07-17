@@ -208,6 +208,131 @@ test("weeklyRunPlan applies conservative caps — a race-week taper cuts volume 
   assert.ok(taper.rationale.some((r) => /taper/i.test(r)), "the taper is explained in plain words");
 });
 
+// ── weeklyRunPlan: PART 1 readiness/status gating + PART 3 directive shaping ──────
+
+// A getRecoverySummary-shaped object with a chosen readiness band / training status,
+// so the gating logic can be driven without wall-clock-anchored metric seeding.
+function recoveryFixture({ band = "steady", readinessFresh = "fresh", status = null, statusFresh = "fresh" } = {}) {
+  const tr = band === "low" ? 22 : band === "primed" ? 82 : 50;
+  return {
+    days: 14,
+    has_data: true,
+    sources: ["garmin"],
+    recovery: {
+      avg_training_readiness: tr,
+      training_readiness: tr,
+      readiness_band: band,
+      training_status: status,
+      acute_load: null,
+    },
+    quality: {
+      training_readiness: { latest_value: tr, latest_date: REF, source: "garmin", sample_count: 5, window_days: 14, freshness: readinessFresh },
+      training_status: { latest_value: status, latest_date: REF, source: "garmin", sample_count: 5, window_days: 14, freshness: statusFresh },
+    },
+    delta: { hrv: null, rhr: null, sleep: null },
+    recent: { sleep: null, hrv: null, rhr: null },
+    baseline: { sleep: null, hrv: null, rhr: null },
+  };
+}
+
+const totalRunKm = (plan) => plan.runs.reduce((s, r) => s + (r.target_distance_km ?? 0), 0);
+
+test("weeklyRunPlan eases volume + drops quality when fresh readiness is clearly LOW", () => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  seedRunner({ weeks: 8, perWeek: 3, km: 12 }); // ~36 km base
+  const steady = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, recovery: recoveryFixture({ band: "steady" }) });
+  const low = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, recovery: recoveryFixture({ band: "low" }) });
+  assert.ok(steady.available && low.available);
+  assert.equal(low.quality_focus, null, "no hard session while readiness reads low");
+  assert.ok(totalRunKm(low) < totalRunKm(steady), `low readiness eases volume (${totalRunKm(low)} < ${totalRunKm(steady)})`);
+  assert.ok(low.rationale.some((r) => /readiness/i.test(r)), "the readiness ease is explained in plain words");
+  NO_SCORE(low, "run plan low readiness"); // banded words only — never the 0-100 number
+});
+
+test("weeklyRunPlan ignores a STALE low readiness (staleness never gates)", () => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  seedRunner({ weeks: 8, perWeek: 3, km: 12 });
+  const steady = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, recovery: recoveryFixture({ band: "steady" }) });
+  const staleLow = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, recovery: recoveryFixture({ band: "low", readinessFresh: "stale" }) });
+  assert.equal(totalRunKm(staleLow), totalRunKm(steady), "a stale low readiness changes nothing");
+  assert.equal(staleLow.quality_focus, steady.quality_focus);
+});
+
+test("weeklyRunPlan eases volume on a fresh STRAINED training status", () => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  seedRunner({ weeks: 8, perWeek: 3, km: 12 });
+  const steady = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, recovery: recoveryFixture({ status: "PRODUCTIVE" }) });
+  const strained = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, recovery: recoveryFixture({ status: "STRAINED" }) });
+  assert.ok(totalRunKm(strained) < totalRunKm(steady), "a strained status eases the week");
+  assert.equal(strained.quality_focus, null);
+  assert.ok(strained.rationale.some((r) => /strained/i.test(r)));
+  NO_SCORE(strained, "run plan strained status");
+});
+
+// A firm anemia directive (real ledger shape): a "+"-joined marker label + a citation.
+const ANEMIA_DIRECTIVE = {
+  domain: "training",
+  marker: "low ferritin+low hemoglobin+low MCV",
+  directive: "While this anemia pattern is present, hold endurance volume and keep easy days genuinely easy.",
+  citation: "IOC consensus on iron in athletes",
+  uncertain: false,
+};
+
+test("a FIRM endurance-limiting directive caps volume + drops quality, cited in plain words", () => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  seedRunner({ weeks: 8, perWeek: 3, km: 12 });
+  const base = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, directives: [] });
+  const held = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, directives: [ANEMIA_DIRECTIVE] });
+  assert.ok(base.available && held.available);
+  assert.notEqual(base.quality_focus, null, "the base week has a quality session to drop");
+  assert.equal(held.quality_focus, null, "a firm hold drops the quality session");
+  assert.ok(totalRunKm(held) < totalRunKm(base), `a firm hold caps the build (${totalRunKm(held)} < ${totalRunKm(base)})`);
+  assert.match(held.why + " " + held.rationale.join(" "), /iron|hemoglobin|volume/i);
+  assert.ok(held.runs.every((r) => r.kind_label !== "quality"), "no quality run remains");
+  NO_SCORE(held, "firm hold plan");
+});
+
+test("an UNCERTAIN endurance-limiting directive drops quality but LEAVES volume", () => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  seedRunner({ weeks: 8, perWeek: 3, km: 12 });
+  const base = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, directives: [] });
+  const soft = repo.weeklyRunPlan(REF, {
+    block: { week_index: 1 },
+    directives: [{ domain: "training", marker: "Ferritin", directive: "Ease running while ferritin recovers.", uncertain: true, citation: null }],
+  });
+  assert.equal(soft.quality_focus, null, "quality is suppressed even for an uncertain hold");
+  assert.ok(Math.abs(totalRunKm(soft) - totalRunKm(base)) < 3, "but the weekly volume is left where it was");
+});
+
+test("a CV pro-aerobic directive (encourages aerobic work) does NOT suppress the run plan", () => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  seedRunner({ weeks: 8, perWeek: 3, km: 12 });
+  const base = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, directives: [] });
+  const withCv = repo.weeklyRunPlan(REF, {
+    block: { week_index: 1 },
+    directives: [{ domain: "training", marker: "ApoB+LDL Cholesterol", directive: "Keep regular aerobic work in the week — it helps the whole cardiovascular cluster at once.", uncertain: true, citation: "ACC/AHA 2018" }],
+  });
+  assert.equal(withCv.quality_focus, base.quality_focus, "a pro-aerobic nudge leaves the quality session intact");
+  assert.equal(totalRunKm(withCv), totalRunKm(base), "and leaves the volume unchanged");
+});
+
+test("weeklyRunPlan consumes an active anemia directive from the ledger (listActiveDirectives path)", () => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  seedRunner({ weeks: 8, perWeek: 3, km: 12 });
+  repo.addDirective({
+    source: "markers",
+    domain: "training",
+    marker: "low ferritin+low hemoglobin+low MCV",
+    directive: "While this anemia pattern is present, hold endurance volume and keep easy days genuinely easy.",
+    citation: "IOC consensus on iron in athletes",
+    uncertain: false,
+    status: "active",
+  });
+  const plan = repo.weeklyRunPlan(REF, { block: { week_index: 1 } }); // no injected directives — reads the ledger
+  assert.equal(plan.quality_focus, null);
+  assert.match(plan.rationale.join(" "), /iron|hemoglobin/i);
+});
+
 // ── runVarietyRead ────────────────────────────────────────────────────────────
 
 test("runVarietyRead flags mono-stimulus (all-easy) running and names the missing stimulus", () => {

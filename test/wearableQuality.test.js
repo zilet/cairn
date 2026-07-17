@@ -338,3 +338,28 @@ test("first Garmin sync emits one material event only for low readiness or an ad
     null
   );
 });
+
+test("getRecoverySummary surfaces readiness/status/acute_load + a banded readiness_band (additive, null-safe)", () => {
+  // With a FRESH garmin daily metric, the depth signals are all present and the 0-100
+  // readiness bands to plain words (never the number) via readiness_band.
+  repo.upsertGarminDailyMetric({ date: localDaysAgo(0), training_readiness: 22, training_status: "STRAINED", acute_load: 320 });
+  const rec = repo.getRecoverySummary(14).recovery;
+  assert.equal(rec.training_readiness, 22);
+  assert.equal(rec.training_status, "STRAINED");
+  assert.equal(rec.acute_load, 320);
+  assert.equal(rec.readiness_band, "low", "22 bands to low (<35)");
+
+  // The pure band helper covers the three bands + the null-safe path.
+  assert.equal(repo.readinessBand(82), "primed");
+  assert.equal(repo.readinessBand(50), "steady");
+  assert.equal(repo.readinessBand(20), "low");
+  assert.equal(repo.readinessBand(null), null);
+  assert.equal(repo.readinessBand(undefined), null);
+});
+
+test("getRecoverySummary readiness_band is null when there is no reading (absence changes nothing)", () => {
+  const rec = repo.getRecoverySummary(14).recovery;
+  assert.equal(rec.training_readiness, null);
+  assert.equal(rec.readiness_band, null);
+  assert.equal(rec.training_status, null);
+});

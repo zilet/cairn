@@ -34,6 +34,7 @@ import { listAttentionSchedule } from "./attention.js";
 import { canonicalMarker } from "./marker-canon.js";
 import { markerGroup } from "./propagation.js";
 import { getAppState, setAppState } from "./app-state.js";
+import { getRunCompliance, weeklyAerobicLoad } from "./sessions.js";
 import { addDaysISO, localDateISO, metricLabel } from "./shared.js";
 
 // app_state stamp bounding the unseen-insight backlog drain to once per LOCAL day
@@ -75,6 +76,12 @@ export interface TeamWeekInsight {
   when: string;
   backlog: boolean; // true = drained from the unseen backlog (older than this week)
 }
+export interface TeamWeekEndurance {
+  text: string; // one quiet factual line (plan compliance when a run plan exists, else "moved X km over N outings")
+  km: number; // this week's total endurance distance (runs + hikes + rides), a plain number never a score
+  sessions: number; // count of endurance outings this week
+  longest_km: number | null; // longest single outing (fuel-relevant), or null
+}
 export interface TeamWeekRead {
   lead: string; // a short deterministic summary sentence; "" on a genuinely empty week
   did: TeamWeekDomainGroup[];
@@ -82,6 +89,7 @@ export interface TeamWeekRead {
   watching: TeamWeekWatch[];
   landed: TeamWeekLanded[];
   insights: TeamWeekInsight[];
+  endurance: TeamWeekEndurance | null; // present ONLY when endurance activity exists this week; never a nag/zero-shame line
 }
 
 // Plain domain labels for the brain's decision domains.
@@ -695,6 +703,32 @@ function insightItems(windowStart: string, asOf: string, drainBacklog: boolean):
 }
 
 // ---- lead: a short deterministic summary sentence (or "" on an empty week) --------
+// ---- endurance: one quiet factual line, only when there was aerobic activity -------
+// The team's week is strength-first, so a runner/hiker's aerobic work would otherwise
+// go unspoken. This adds ONE plain, factual line — the plan's run compliance when a run
+// plan exists, else "moved X km over N outings" — anchored to the current calendar week
+// (matching getRunCompliance/getWeeklyStats). Emitted ONLY when endurance activity
+// exists this week; never a nag, never a zero-shame "you didn't run" line.
+function enduranceLine(asOf: string): TeamWeekEndurance | null {
+  try {
+    const monday = (() => {
+      const d = new Date(asOf + "T00:00:00Z");
+      d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+      return d.toISOString().slice(0, 10);
+    })();
+    const aero = weeklyAerobicLoad(monday);
+    if (!aero || aero.outings === 0) return null; // only when endurance activity exists
+    const comp = getRunCompliance(monday);
+    // A run plan exists → frame as compliance (prescribed vs actual); otherwise the
+    // simple broad-aerobic "moved X km over N outings".
+    const line = comp.prescribed_sessions > 0 ? comp.in_words : aero.in_words;
+    const text = `${capitalize(String(line).trim())}.`;
+    return { text, km: aero.km, sessions: aero.outings, longest_km: aero.longest_km };
+  } catch {
+    return null; // activities/plan tables absent → no line
+  }
+}
+
 function composeLead(read: Omit<TeamWeekRead, "lead">): string {
   const changes = read.did.reduce((sum, group) => sum + group.changes.length, 0);
   const parts: string[] = [];
@@ -726,6 +760,7 @@ export function teamWeekRead(opts: { asOf?: string; drainBacklog?: boolean } = {
     watching: watchingItems(asOf),
     landed: landedItems(windowStart, asOf),
     insights: insightItems(windowStart, asOf, drainBacklog),
+    endurance: enduranceLine(asOf),
   };
   return { lead: composeLead(body), ...body };
 }

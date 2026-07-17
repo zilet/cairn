@@ -21,7 +21,8 @@
 // auto-applied; this module computes, it never writes plan rows.
 // ============================================================================
 import { db } from "../db.js";
-import { getRecoverySummary } from "./coach.js";
+import { getRecoverySummary, listActiveDirectives } from "./coach.js";
+import { canonicalMarker } from "./marker-canon.js";
 import {
   activitySportWhere,
   configuredEnduranceSportKeys,
@@ -30,7 +31,12 @@ import {
 } from "./endurance-sports.js";
 import type { RunPrescription } from "./plan.js";
 import { getActiveBlock, type ProgramBlock } from "./program-blocks.js";
-import { type EnduranceState, getProgramState, type ProgramState, weeklyKm as recordedWeeklyKm } from "./program-state.js";
+import {
+  type EnduranceState,
+  getProgramState,
+  type ProgramState,
+  weeklyKm as recordedWeeklyKm,
+} from "./program-state.js";
 import { createProposal, getEnduranceGoal, getProfile, supersedeAutoRunPlanDrafts } from "./profile.js";
 import { getRunCompliance, type RunCompliance } from "./sessions.js";
 import { localDateISO } from "./shared.js";
@@ -49,6 +55,9 @@ function isoDaysAgo(dateISO: string, n: number): string {
 function round1(n: number): number {
   return Math.round(n * 10) / 10;
 }
+function cap1(s: string): string {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
 // A deterministic week ordinal (no app_state side-effects on a read): epoch weeks
 // since the Unix Monday. Used for the ~every-4th down week + quality rotation, so a
 // context build never mutates state or rotates differently on each call.
@@ -64,10 +73,10 @@ export type ZoneKey = "Z1" | "Z2" | "Z3" | "Z4" | "Z5";
 
 export interface RunZone {
   zone: ZoneKey;
-  label: string;     // Recovery | Easy | Tempo | Threshold | VO2max
+  label: string; // Recovery | Easy | Tempo | Threshold | VO2max
   low_bpm: number;
   high_bpm: number;
-  feel: string;      // plain-words effort cue
+  feel: string; // plain-words effort cue
 }
 
 export interface RunZones {
@@ -75,12 +84,12 @@ export interface RunZones {
   max_hr: number | null;
   rest_hr: number | null;
   method:
-    | "explicit"          // a max-HR the athlete set
-    | "age"               // Tanaka 208 − 0.7·age
-    | "garmin-observed"   // highest HR Garmin has recorded
-    | "garmin-zones"      // Garmin's own zone boundaries (low_hr per zone)
+    | "explicit" // a max-HR the athlete set
+    | "age" // Tanaka 208 − 0.7·age
+    | "garmin-observed" // highest HR Garmin has recorded
+    | "garmin-zones" // Garmin's own zone boundaries (low_hr per zone)
     | null;
-  reserve: boolean;       // true = Karvonen (%HRR, resting HR known); false = %HRmax
+  reserve: boolean; // true = Karvonen (%HRR, resting HR known); false = %HRmax
   zones: RunZone[];
   note: string;
 }
@@ -96,7 +105,12 @@ const ZONE_BANDS: { zone: ZoneKey; label: string; lo: number; hi: number; feel: 
 ];
 
 const NO_ZONES: RunZones = {
-  available: false, max_hr: null, rest_hr: null, method: null, reserve: false, zones: [],
+  available: false,
+  max_hr: null,
+  rest_hr: null,
+  method: null,
+  reserve: false,
+  zones: [],
   note: "Add your age (or sync a watch with heart-rate) and Cairn can ground your run zones in real bpm bands.",
 };
 
@@ -106,29 +120,37 @@ function latestGarminMaxHr(): number | null {
     const d = db.prepare(`SELECT MAX(max_hr) AS m FROM garmin_daily_metrics WHERE max_hr IS NOT NULL`).get() as any;
     const vals = [Number(a?.m), Number(d?.m)].filter((v) => Number.isFinite(v) && v >= 120 && v <= 230);
     return vals.length ? Math.max(...vals) : null;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 function latestGarminRestHr(): number | null {
   try {
-    const r = db.prepare(
-      `SELECT resting_hr FROM garmin_daily_metrics WHERE resting_hr IS NOT NULL ORDER BY date DESC LIMIT 1`
-    ).get() as any;
+    const r = db
+      .prepare(`SELECT resting_hr FROM garmin_daily_metrics WHERE resting_hr IS NOT NULL ORDER BY date DESC LIMIT 1`)
+      .get() as any;
     const n = Number(r?.resting_hr);
     return Number.isFinite(n) && n >= 25 && n <= 90 ? Math.round(n) : null;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 // Garmin's own zone boundaries from the most recent activity that carries them.
 // hr_zones_json = [{zone, secs, low_hr}] — each zone's low_hr is its lower bound.
 function garminZoneBoundaries(): { zone: ZoneKey; low_bpm: number; high_bpm: number }[] | null {
   try {
-    const rows = db.prepare(
-      `SELECT hr_zones_json FROM garmin_activities WHERE hr_zones_json IS NOT NULL ORDER BY date DESC LIMIT 8`
-    ).all() as any[];
+    const rows = db
+      .prepare(`SELECT hr_zones_json FROM garmin_activities WHERE hr_zones_json IS NOT NULL ORDER BY date DESC LIMIT 8`)
+      .all() as any[];
     for (const r of rows) {
       let zones: any = null;
-      try { zones = r.hr_zones_json ? JSON.parse(r.hr_zones_json) : null; } catch { zones = null; }
+      try {
+        zones = r.hr_zones_json ? JSON.parse(r.hr_zones_json) : null;
+      } catch {
+        zones = null;
+      }
       if (!Array.isArray(zones)) continue;
       const lows: { z: number; low: number }[] = [];
       for (const z of zones) {
@@ -149,17 +171,26 @@ function garminZoneBoundaries(): { zone: ZoneKey; low_bpm: number; high_bpm: num
       return out;
     }
     return null;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
-export function runZones(opts?: { profile?: any; recovery?: any; maxHr?: number | null; restHr?: number | null }): RunZones {
+export function runZones(opts?: {
+  profile?: any;
+  recovery?: any;
+  maxHr?: number | null;
+  restHr?: number | null;
+}): RunZones {
   const profile = opts?.profile ?? getProfile();
   // Resting HR (for Karvonen) — explicit, else recovery aggregate, else latest Garmin night.
   const recovery = opts?.recovery;
   const restHr =
     (Number.isFinite(Number(opts?.restHr)) ? Number(opts?.restHr) : null) ??
     (Number.isFinite(Number(profile?.resting_hr)) ? Number(profile?.resting_hr) : null) ??
-    (Number.isFinite(Number(recovery?.recovery?.avg_resting_hr)) ? Math.round(Number(recovery.recovery.avg_resting_hr)) : null) ??
+    (Number.isFinite(Number(recovery?.recovery?.avg_resting_hr))
+      ? Math.round(Number(recovery.recovery.avg_resting_hr))
+      : null) ??
     latestGarminRestHr();
 
   // Max HR: explicit (a set value) → Tanaka from age → Garmin observed → Garmin's
@@ -171,12 +202,17 @@ export function runZones(opts?: { profile?: any; recovery?: any; maxHr?: number 
   let maxHr: number | null = null;
   let method: RunZones["method"] = null;
   if (explicitMax != null && explicitMax >= 120 && explicitMax <= 230) {
-    maxHr = Math.round(explicitMax); method = "explicit";
+    maxHr = Math.round(explicitMax);
+    method = "explicit";
   } else if (Number.isFinite(age) && age > 0 && age < 110) {
-    maxHr = Math.round(208 - 0.7 * age); method = "age";
+    maxHr = Math.round(208 - 0.7 * age);
+    method = "age";
   } else {
     const observed = latestGarminMaxHr();
-    if (observed != null) { maxHr = observed; method = "garmin-observed"; }
+    if (observed != null) {
+      maxHr = observed;
+      method = "garmin-observed";
+    }
   }
 
   // No modellable max HR → fall to Garmin's own zone boundaries if present.
@@ -184,11 +220,20 @@ export function runZones(opts?: { profile?: any; recovery?: any; maxHr?: number 
     const gz = garminZoneBoundaries();
     if (gz) {
       return {
-        available: true, max_hr: gz[gz.length - 1]?.high_bpm ?? null, rest_hr: restHr, method: "garmin-zones",
+        available: true,
+        max_hr: gz[gz.length - 1]?.high_bpm ?? null,
+        rest_hr: restHr,
+        method: "garmin-zones",
         reserve: false,
         zones: gz.map((z) => {
           const band = ZONE_BANDS.find((b) => b.zone === z.zone);
-          return { zone: z.zone, label: band?.label ?? z.zone, low_bpm: z.low_bpm, high_bpm: z.high_bpm, feel: band?.feel ?? "" };
+          return {
+            zone: z.zone,
+            label: band?.label ?? z.zone,
+            low_bpm: z.low_bpm,
+            high_bpm: z.high_bpm,
+            feel: band?.feel ?? "",
+          };
         }),
         note: "Run zones read straight from your watch's recorded HR zones.",
       };
@@ -200,14 +245,28 @@ export function runZones(opts?: { profile?: any; recovery?: any; maxHr?: number 
   const bpm = (frac: number): number =>
     useReserve ? Math.round(restHr! + frac * (maxHr! - restHr!)) : Math.round(frac * maxHr!);
   const zones: RunZone[] = ZONE_BANDS.map((b) => ({
-    zone: b.zone, label: b.label, low_bpm: bpm(b.lo), high_bpm: bpm(b.hi), feel: b.feel,
+    zone: b.zone,
+    label: b.label,
+    low_bpm: bpm(b.lo),
+    high_bpm: bpm(b.hi),
+    feel: b.feel,
   }));
   const note =
-    method === "explicit" ? `Zones from your max HR (${maxHr})${useReserve ? ` and resting HR (${restHr}), Karvonen` : ""}.`
-    : method === "age" ? `Zones estimated from your age (max HR ≈ ${maxHr})${useReserve ? `, personalised with resting HR ${restHr}` : ""}.`
-    : `Zones from your watch's highest recorded HR (${maxHr})${useReserve ? `, resting HR ${restHr}` : ""}.`;
+    method === "explicit"
+      ? `Zones from your max HR (${maxHr})${useReserve ? ` and resting HR (${restHr}), Karvonen` : ""}.`
+      : method === "age"
+        ? `Zones estimated from your age (max HR ≈ ${maxHr})${useReserve ? `, personalised with resting HR ${restHr}` : ""}.`
+        : `Zones from your watch's highest recorded HR (${maxHr})${useReserve ? `, resting HR ${restHr}` : ""}.`;
 
-  return { available: true, max_hr: maxHr, rest_hr: useReserve ? restHr : null, method, reserve: useReserve, zones, note };
+  return {
+    available: true,
+    max_hr: maxHr,
+    rest_hr: useReserve ? restHr : null,
+    method,
+    reserve: useReserve,
+    zones,
+    note,
+  };
 }
 
 // A "Z2 (135–145 bpm)" tag for a prescription's target_zone, falling back to the
@@ -224,8 +283,8 @@ function zoneTag(zoneKey: ZoneKey, zones: RunZones): string {
 // ---------------------------------------------------------------------------
 export interface IntervalRep {
   reps: number;
-  on: string;   // e.g. "800m" / "3 min" / "45s uphill"
-  off: string;  // recovery, e.g. "90s jog" / "jog down"
+  on: string; // e.g. "800m" / "3 min" / "45s uphill"
+  off: string; // recovery, e.g. "90s jog" / "jog down"
   zone: ZoneKey;
 }
 
@@ -241,14 +300,19 @@ export interface WeeklyRunPlan {
   available: boolean;
   week_start: string;
   runs: RunPlanPrescription[];
-  rationale: string[];      // the per-decision plain-words "why this week looks like this"
+  rationale: string[]; // the per-decision plain-words "why this week looks like this"
   quality_focus: string | null; // e.g. "Threshold intervals" (null on an all-easy/taper week)
-  mix_summary: string;      // e.g. "3 easy + 1 long + 1 threshold"
-  why: string;              // one calm headline sentence
+  mix_summary: string; // e.g. "3 easy + 1 long + 1 threshold"
+  why: string; // one calm headline sentence
 }
 
 const NO_RUN_PLAN = (week_start: string): WeeklyRunPlan => ({
-  available: false, week_start, runs: [], rationale: [], quality_focus: null, mix_summary: "",
+  available: false,
+  week_start,
+  runs: [],
+  rationale: [],
+  quality_focus: null,
+  mix_summary: "",
   why: "No running in the picture yet — set a running goal or log a few runs and Cairn will shape a week.",
 });
 
@@ -267,30 +331,44 @@ function qualitySpec(
   phase: string,
   zones: RunZones,
   workKm: number
-): { label: string; zoneKey: ZoneKey; interval: IntervalRep[] | null; distance: number | null; duration: number | null; note: string } {
+): {
+  label: string;
+  zoneKey: ZoneKey;
+  interval: IntervalRep[] | null;
+  distance: number | null;
+  duration: number | null;
+  note: string;
+} {
   switch (type) {
     case "tempo":
       // Continuous comfortably-hard effort — no rep structure, a sustained block.
       return {
-        label: "Tempo run", zoneKey: "Z3", interval: null,
-        distance: round1(Math.max(4, workKm)), duration: null,
+        label: "Tempo run",
+        zoneKey: "Z3",
+        interval: null,
+        distance: round1(Math.max(4, workKm)),
+        duration: null,
         note: `Continuous tempo at ${zoneTag("Z3", zones)} after an easy warm-up.`,
       };
     case "threshold": {
       const reps = phase === "sharpen" ? 4 : 5;
       return {
-        label: "Threshold intervals", zoneKey: "Z4",
+        label: "Threshold intervals",
+        zoneKey: "Z4",
         interval: [{ reps, on: "1km", off: "60s jog", zone: "Z4" }],
-        distance: round1(Math.max(5, workKm)), duration: null,
+        distance: round1(Math.max(5, workKm)),
+        duration: null,
         note: `${reps} × 1km at ${zoneTag("Z4", zones)}, 60s easy jog between, with warm-up + cool-down.`,
       };
     }
     case "vo2": {
       const reps = phase === "taper" ? 4 : phase === "sharpen" ? 5 : 6;
       return {
-        label: "VO2 intervals", zoneKey: "Z5",
+        label: "VO2 intervals",
+        zoneKey: "Z5",
         interval: [{ reps, on: "800m", off: "90s jog", zone: "Z5" }],
-        distance: round1(Math.max(5, workKm)), duration: null,
+        distance: round1(Math.max(5, workKm)),
+        duration: null,
         note: `${reps} × 800m hard at ${zoneTag("Z5", zones)}, 90s jog recovery, bookended by easy running.`,
       };
     }
@@ -298,14 +376,82 @@ function qualitySpec(
       // hills
       const reps = phase === "base" ? 8 : 10;
       return {
-        label: "Hill repeats", zoneKey: "Z4",
+        label: "Hill repeats",
+        zoneKey: "Z4",
         interval: [{ reps, on: "45s uphill", off: "jog down", zone: "Z4" }],
-        distance: round1(Math.max(4, workKm)), duration: null,
+        distance: round1(Math.max(4, workKm)),
+        duration: null,
         note: `${reps} × 45s uphill at ${zoneTag("Z4", zones)} effort, jog down to recover — strength + economy.`,
       };
     }
   }
 }
+
+// ---- the connected brain: endurance-limiting health directives shape the week ----
+// Iron / oxygen-transport markers whose depletion caps endurance capacity — the
+// canonical keys (marker-canon) an anemia/iron directive is built on. Matching on the
+// structured `marker` field (canonicalized, so lab-name variants + a "low "/"high "
+// label prefix all resolve) is robust where brittle text matching is not.
+const ENDURANCE_LIMITING_MARKER_KEYS = new Set<string>([
+  "ferritin",
+  "hemoglobin",
+  "hematocrit",
+  "mean corpuscular volume",
+  "serum iron",
+  "transferrin saturation",
+  "total iron binding capacity",
+  "transferrin",
+  "red blood cell count",
+]);
+
+// A cluster directive stores its marker as a "+"-joined label ("low ferritin+low
+// hemoglobin+low MCV"). Split it, drop any leading flag word, and canonicalize each
+// token to its stable merge key.
+function directiveMarkerKeys(marker: string | null | undefined): string[] {
+  return String(marker ?? "")
+    .split("+")
+    .map((tok) => tok.replace(/^\s*(?:low|high|elevated|borderline|reduced|raised)\s+/i, "").trim())
+    .filter(Boolean)
+    .map((tok) => canonicalMarker(tok).key)
+    .filter(Boolean);
+}
+
+// Does an active TRAINING directive counsel HOLDING endurance volume? Primary signal
+// is the structured marker (an iron/oxygen-transport limiter); a conservative text
+// fallback catches an explicitly-worded endurance hold when no marker resolves. A
+// directive that ENCOURAGES aerobic work ("keep regular aerobic work") carries no hold
+// verb and never matches, so a CV-cluster nudge to move more is left untouched.
+function isEnduranceHoldDirective(d: any): boolean {
+  if (!d || String(d.domain) !== "training") return false;
+  if (directiveMarkerKeys(d.marker).some((k) => ENDURANCE_LIMITING_MARKER_KEYS.has(k))) return true;
+  const text = String(d.directive ?? "").toLowerCase();
+  const holdVerb = /\b(hold|reduce|limit|cap|cut|lower|ease|scale back|pull back)\b/;
+  const enduranceObj = /\b(endurance|aerobic|mileage|running|run volume|cardio)\b/;
+  return holdVerb.test(text) && enduranceObj.test(text);
+}
+
+// A plain-words citation of the hold, for the plan's why/notes ("holding running
+// volume while your iron stores recover"). Derived from the directive's markers.
+function holdMarkerPhrase(d: any): string {
+  const keys = directiveMarkerKeys(d?.marker);
+  const iron = keys.some((k) =>
+    ["ferritin", "serum iron", "transferrin saturation", "total iron binding capacity", "transferrin"].includes(k)
+  );
+  const blood = keys.some((k) =>
+    ["hemoglobin", "hematocrit", "red blood cell count", "mean corpuscular volume"].includes(k)
+  );
+  const which =
+    iron && blood
+      ? "your iron and hemoglobin"
+      : iron
+        ? "your iron stores"
+        : blood
+          ? "your hemoglobin"
+          : "your bloodwork";
+  return `holding running volume while ${which} recover`;
+}
+
+const DIRECTIVE_HOLD_FACTOR = 0.9; // a firm endurance-limiting directive caps the weekly build
 
 export function weeklyRunPlan(
   date?: string,
@@ -316,6 +462,7 @@ export function weeklyRunPlan(
     compliance?: RunCompliance;
     block?: ProgramBlock | null;
     zones?: RunZones;
+    directives?: any[];
   }
 ): WeeklyRunPlan {
   const d = date || localDateISO();
@@ -323,11 +470,27 @@ export function weeklyRunPlan(
 
   const profile = getProfile();
   const goal = opts?.goal ?? getEnduranceGoal(d);
-  const recovery = opts?.recovery ?? (() => { try { return getRecoverySummary(14); } catch { return null; } })();
+  const recovery =
+    opts?.recovery ??
+    (() => {
+      try {
+        return getRecoverySummary(14);
+      } catch {
+        return null;
+      }
+    })();
   const programState = opts?.programState ?? getProgramState(d, recovery);
   const es: EnduranceState | null = programState.endurance;
   const runState: EnduranceState | null = es?.sport === "run" ? es : null;
-  const compliance = opts?.compliance ?? (() => { try { return getRunCompliance(week_start); } catch { return null; } })();
+  const compliance =
+    opts?.compliance ??
+    (() => {
+      try {
+        return getRunCompliance(week_start);
+      } catch {
+        return null;
+      }
+    })();
 
   // Gate: only shape a week for a RUNNER. Endurance/hybrid alone is not enough:
   // a cycling-only or hiking-only athlete must never receive an invented run plan.
@@ -348,6 +511,24 @@ export function weeklyRunPlan(
 
   const rationale: string[] = [];
 
+  // Connected brain: an active endurance-limiting health directive (e.g. an anemia /
+  // low-iron pattern → "hold endurance volume until iron/hemoglobin recover") shapes the
+  // SUGGESTED week. A FIRM directive caps the weekly build AND drops the quality session;
+  // an UNCERTAIN/uncited one softens only (drops quality, leaves volume). Informational —
+  // it shapes the suggestion, never gates. Null-safe: no directive → no change.
+  const enduranceHolds = (
+    opts?.directives ??
+    (() => {
+      try {
+        return listActiveDirectives();
+      } catch {
+        return [];
+      }
+    })()
+  ).filter(isEnduranceHoldDirective);
+  const firmHold = enduranceHolds.find((d: any) => !d.uncertain) ?? null;
+  const softHold = enduranceHolds[0] ?? null;
+
   // --- weekly volume target (periodized, conservative ~10% caps) ---
   // Anchor to what actually happened last week (or the chronic base), seed a gentle
   // starter when there's no history.
@@ -360,39 +541,86 @@ export function weeklyRunPlan(
   const hrvDown = recovery?.delta?.hrv != null && recovery.delta.hrv < 0;
   const rhrUp = recovery?.delta?.rhr != null && recovery.delta.rhr > 2;
   const sleepDown = recovery?.delta?.sleep != null && recovery.delta.sleep < -30;
-  const recoveryDown = hrvDown || rhrUp || sleepDown;
+  // Wearable readiness/status weigh in ONLY when present and clearly low/strained — a
+  // stale or missing reading changes nothing (absence never gates). Readiness is banded
+  // to plain words upstream (readiness_band); a strained/overreaching/unproductive
+  // training status is a fatigue tell (detraining is undertraining, not fatigue, so it
+  // is deliberately excluded). Both behave like the existing recoveryDown path.
+  const readinessFresh = ["fresh", "recent"].includes(String(recovery?.quality?.training_readiness?.freshness ?? ""));
+  const readinessLow = readinessFresh && (recovery?.recovery?.readiness_band ?? null) === "low";
+  const statusFresh = ["fresh", "recent"].includes(String(recovery?.quality?.training_status?.freshness ?? ""));
+  const statusWord = String(recovery?.recovery?.training_status ?? "").toLowerCase();
+  const statusStrained = statusFresh && /strain|overreach|unproductive/.test(statusWord);
+  const recoveryDown = hrvDown || rhrUp || sleepDown || readinessLow || statusStrained;
   const recoveryWeek = programState.mesocycle?.phase === "deload" && programState.recovery_week?.state === "applied";
   const spiking = runState?.status === "spiking";
   const downWeek = ord % 4 === 0; // a reset week roughly every 4th
   const taper = phase === "taper";
 
   let factor = 1.1; // default ~10% build
-  if (taper) { factor = 0.55; rationale.push("Race week — tapering volume right down so you arrive fresh."); }
-  else if (recoveryWeek) { factor = 0.8; rationale.push("Recovery week is active — keeping the running rhythm with less volume and easy aerobic work."); }
-  else if (recoveryDown) { factor = 0.9; rationale.push("Recovery's down this week (sleep / HRV / resting HR) — easing volume and keeping it gentle."); }
-  else if (spiking) { factor = 1.0; rationale.push("Mileage jumped recently — holding it here to let it absorb before adding more."); }
-  else if (downWeek) { factor = 0.8; rationale.push("Scheduled down week — a lighter reset before the next build."); }
-  else if (runState?.status === "detraining") { factor = 1.0; rationale.push("Rebuilding the base back gently — steady, not a jump."); }
-  else { rationale.push("Building conservatively — about a 10% step on last week."); }
+  if (taper) {
+    factor = 0.55;
+    rationale.push("Race week — tapering volume right down so you arrive fresh.");
+  } else if (recoveryWeek) {
+    factor = 0.8;
+    rationale.push("Recovery week is active — keeping the running rhythm with less volume and easy aerobic work.");
+  } else if (recoveryDown) {
+    factor = 0.9;
+    const bits: string[] = [];
+    if (hrvDown || rhrUp || sleepDown) bits.push("sleep / HRV / resting HR");
+    if (readinessLow) bits.push("this week's readiness is reading low");
+    if (statusStrained) bits.push(`your watch reads training as ${statusWord}`);
+    rationale.push(`Recovery's down this week (${bits.join("; ")}) — easing volume and keeping it gentle.`);
+  } else if (spiking) {
+    factor = 1.0;
+    rationale.push("Mileage jumped recently — holding it here to let it absorb before adding more.");
+  } else if (downWeek) {
+    factor = 0.8;
+    rationale.push("Scheduled down week — a lighter reset before the next build.");
+  } else if (runState?.status === "detraining") {
+    factor = 1.0;
+    rationale.push("Rebuilding the base back gently — steady, not a jump.");
+  } else {
+    rationale.push("Building conservatively — about a 10% step on last week.");
+  }
+
+  // A firm endurance-limiting directive caps the build (never below an already-lower
+  // taper/recovery factor); an uncertain one only softens the quality decision below.
+  if (firmHold) {
+    factor = Math.min(factor, DIRECTIVE_HOLD_FACTOR);
+    rationale.push(
+      `${cap1(holdMarkerPhrase(firmHold))} — easing volume and keeping every run easy (from your health flags).`
+    );
+  } else if (softHold) {
+    rationale.push(
+      `A health flag is worth respecting for now (${holdMarkerPhrase(softHold)}) — keeping the hard session out while it settles.`
+    );
+  }
 
   const weeklyKm = Math.max(6, round1(anchorKm * factor));
 
   // --- run-day count ---
-  let runDays = goal?.weekly_sessions && goal.weekly_sessions > 0
-    ? Math.min(6, Math.max(2, Math.round(goal.weekly_sessions)))
-    : weeklyKm >= 35 ? 5 : weeklyKm >= 20 ? 4 : 3;
+  let runDays =
+    goal?.weekly_sessions && goal.weekly_sessions > 0
+      ? Math.min(6, Math.max(2, Math.round(goal.weekly_sessions)))
+      : weeklyKm >= 35
+        ? 5
+        : weeklyKm >= 20
+          ? 4
+          : 3;
   if (recoveryDown && runDays > 3) runDays -= 1; // one fewer run when run-down
 
   // --- quality session: include unless we're protecting recovery / tapering hard / very thin base ---
   const baseTooThin = weeklyKm < 12;
   const includeQuality =
-    !recoveryWeek && !recoveryDown && !baseTooThin && runState?.status !== "spiking" && runDays >= 3;
+    !recoveryWeek && !recoveryDown && !baseTooThin && runState?.status !== "spiking" && runDays >= 3 && !softHold;
   let qualityType: "tempo" | "threshold" | "vo2" | "hills" | null = null;
   if (includeQuality) {
     const pool = QUALITY_BY_PHASE[phase] ?? QUALITY_BY_PHASE.standing;
     qualityType = pool[ord % pool.length];
     // Base with no quality at all yet → make sure the first quality is gentle (tempo).
-    if (!runState?.has_quality && phase !== "sharpen" && phase !== "build") qualityType = pool.includes("tempo") ? "tempo" : qualityType;
+    if (!runState?.has_quality && phase !== "sharpen" && phase !== "build")
+      qualityType = pool.includes("tempo") ? "tempo" : qualityType;
     rationale.push(
       runState?.has_quality
         ? `Rotating in a ${qualityType} session — varying the hard stimulus keeps progress honest.`
@@ -428,25 +656,43 @@ export function weeklyRunPlan(
   const easySlots = [1, 4, 7, 3, 5].slice(0, easyCount);
   for (const slot of easySlots) {
     runs.push({
-      day_number: slot, label: "Easy run", kind_label: "easy",
-      target_distance_km: easyEach, target_duration_min: null, target_zone: z2,
+      day_number: slot,
+      label: "Easy run",
+      kind_label: "easy",
+      target_distance_km: easyEach,
+      target_duration_min: null,
+      target_zone: z2,
       note: `Easy aerobic at ${z2} — relaxed and conversational.`,
-      day_name: "Easy run", focus: "Endurance", interval: null,
+      day_name: "Easy run",
+      focus: "Endurance",
+      interval: null,
     });
   }
   if (q) {
     runs.push({
-      day_number: 2, label: q.label, kind_label: "quality",
-      target_distance_km: q.distance, target_duration_min: q.duration,
-      target_zone: zoneTag(q.zoneKey, zones), note: q.note,
-      day_name: q.label, focus: "Endurance · quality", interval: q.interval,
+      day_number: 2,
+      label: q.label,
+      kind_label: "quality",
+      target_distance_km: q.distance,
+      target_duration_min: q.duration,
+      target_zone: zoneTag(q.zoneKey, zones),
+      note: q.note,
+      day_name: q.label,
+      focus: "Endurance · quality",
+      interval: q.interval,
     });
   }
   runs.push({
-    day_number: 6, label: "Long run", kind_label: "long",
-    target_distance_km: longKm, target_duration_min: null, target_zone: z2,
+    day_number: 6,
+    label: "Long run",
+    kind_label: "long",
+    target_distance_km: longKm,
+    target_duration_min: null,
+    target_zone: z2,
     note: `Long, steady at ${z2} — build aerobic durability, keep it easy throughout.`,
-    day_name: "Long run", focus: "Endurance · long", interval: null,
+    day_name: "Long run",
+    focus: "Endurance · long",
+    interval: null,
   });
 
   // De-dupe day slots (an easy slot must never collide with the quality/long days).
@@ -465,7 +711,12 @@ export function weeklyRunPlan(
   const easyLabel = `${easyCount} easy`;
   const mix_summary = `${easyLabel} + 1 long${q ? ` + 1 ${qualityType}` : ""}`;
   const phaseWord = goal?.is_race && goal.phase ? `${goal.phase} phase` : "steady";
-  const why = `~${Math.round(weeklyKm)} km this week (${phaseWord}): ${mix_summary}${q ? `, with ${q.label.toLowerCase()} as the quality work` : ", all easy aerobic"}.`;
+  const holdClause = firmHold
+    ? `, ${holdMarkerPhrase(firmHold)}`
+    : softHold
+      ? ", going easy on hard running while a health flag settles"
+      : "";
+  const why = `~${Math.round(weeklyKm)} km this week (${phaseWord}): ${mix_summary}${q ? `, with ${q.label.toLowerCase()} as the quality work` : ", all easy aerobic"}${holdClause}.`;
 
   return { available: true, week_start, runs, rationale, quality_focus, mix_summary, why };
 }
@@ -485,14 +736,18 @@ export function runVarietyRead(date?: string): { note: string; suggestions: stri
 
   let rows: any[] = [];
   try {
-    rows = db.prepare(
-      `SELECT a.date AS date, a.distance_km AS km,
+    rows = db
+      .prepare(
+        `SELECT a.date AS date, a.distance_km AS km,
               g.te_label AS te_label, g.anaerobic_te AS anaerobic_te, g.hr_zones_json AS hr_zones_json
          FROM activities a LEFT JOIN garmin_activities g ON g.activity_id = a.id
         WHERE a.date >= ? AND a.date <= ? AND (${aSport.sql})
         ORDER BY a.date`
-    ).all(since, d, ...aSport.params) as any[];
-  } catch { return null; }
+      )
+      .all(since, d, ...aSport.params) as any[];
+  } catch {
+    return null;
+  }
 
   if (rows.length < RUN_VARIETY_MIN_RUNS) return null; // not enough runs to read variety honestly
 
@@ -506,18 +761,30 @@ export function runVarietyRead(date?: string): { note: string; suggestions: stri
     let z45 = 0;
     try {
       const z = r.hr_zones_json ? JSON.parse(r.hr_zones_json) : null;
-      if (Array.isArray(z)) for (const it of z) { if (Number(it?.zone) >= 4) z45 += Number(it?.secs ?? it?.seconds ?? 0) || 0; }
-    } catch { /* ignore */ }
+      if (Array.isArray(z))
+        for (const it of z) {
+          if (Number(it?.zone) >= 4) z45 += Number(it?.secs ?? it?.seconds ?? 0) || 0;
+        }
+    } catch {
+      /* ignore */
+    }
     if (HARD.has(label) || anaerobic >= 2 || z45 >= 240) hardRuns++;
     const km = Number(r.km);
-    if (Number.isFinite(km) && km > 0) { distances.push(km); if (km > longest) longest = km; }
+    if (Number.isFinite(km) && km > 0) {
+      distances.push(km);
+      if (km > longest) longest = km;
+    }
   }
 
   // Mono-stimulus tells, most useful first.
   if (hardRuns === 0) {
     return {
       note: `All ${rows.length} of your last runs have been easy aerobic — no faster work in 6 weeks. A weekly tempo, threshold or interval session would lift your ceiling without adding much mileage.`,
-      suggestions: ["A tempo run (sustained comfortably-hard)", "Threshold intervals (e.g. 5 × 1km)", "VO2 intervals (e.g. 6 × 800m)"],
+      suggestions: [
+        "A tempo run (sustained comfortably-hard)",
+        "Threshold intervals (e.g. 5 × 1km)",
+        "VO2 intervals (e.g. 6 × 800m)",
+      ],
     };
   }
   // Same distance over and over (low spread) → missing a long run / variety.
@@ -527,7 +794,11 @@ export function runVarietyRead(date?: string): { note: string; suggestions: stri
     if (mean > 0 && spread / mean < 0.15) {
       return {
         note: `Almost every run is the same ~${round1(mean)} km — your training is one distance on repeat. Mixing in a genuinely long run and a shorter, faster session would round it out.`,
-        suggestions: ["A longer easy run (build aerobic durability)", "A short quality session (tempo or intervals)", "A recovery-paced shakeout"],
+        suggestions: [
+          "A longer easy run (build aerobic durability)",
+          "A short quality session (tempo or intervals)",
+          "A recovery-paced shakeout",
+        ],
       };
     }
   }
@@ -538,8 +809,8 @@ export function runVarietyRead(date?: string): { note: string; suggestions: stri
 // (4) enduranceTestsDue — running fitness re-tests (the endurance mirror of
 //     performance.testsDue). Plain-words "why", kind:'endurance'.
 // ---------------------------------------------------------------------------
-const HARD_EFFORT_STALE_DAYS = 28;  // no quality effort in ~4 weeks → time-trial worth it
-const VO2_STALE_DAYS = 90;          // VO2max reading older than ~3 months → refresh it
+const HARD_EFFORT_STALE_DAYS = 28; // no quality effort in ~4 weeks → time-trial worth it
+const VO2_STALE_DAYS = 90; // VO2max reading older than ~3 months → refresh it
 
 export function enduranceTestsDue(date?: string): { exercise: string; kind: "endurance"; why: string }[] {
   const d = date || localDateISO();
@@ -553,11 +824,13 @@ export function enduranceTestsDue(date?: string): { exercise: string; kind: "end
   const aSport = activitySportWhere("a", patterns);
   let runCount = 0;
   try {
-    const c = db.prepare(
-      `SELECT COUNT(*) AS n FROM activities a WHERE a.date >= ? AND (${aSport.sql})`
-    ).get(isoDaysAgo(d, 90), ...aSport.params) as any;
+    const c = db
+      .prepare(`SELECT COUNT(*) AS n FROM activities a WHERE a.date >= ? AND (${aSport.sql})`)
+      .get(isoDaysAgo(d, 90), ...aSport.params) as any;
     runCount = Number(c?.n ?? 0);
-  } catch { /* keep 0 */ }
+  } catch {
+    /* keep 0 */
+  }
   const configuredSports = configuredEnduranceSportKeys(profile?.endurance_sport, false);
   const goalText = `${goal?.event || ""} ${goal?.label || ""}`;
   const explicitRunningGoal =
@@ -570,22 +843,29 @@ export function enduranceTestsDue(date?: string): { exercise: string; kind: "end
   // (a) No hard/quality effort in N weeks → a time-trial re-reads pace + estimates fitness.
   let lastHard: string | null = null;
   try {
-    const r = db.prepare(
-      `SELECT MAX(a.date) AS last FROM activities a JOIN garmin_activities g ON g.activity_id = a.id
+    const r = db
+      .prepare(
+        `SELECT MAX(a.date) AS last FROM activities a JOIN garmin_activities g ON g.activity_id = a.id
         WHERE (${aSport.sql})
           AND (UPPER(COALESCE(g.te_label,'')) IN ('TEMPO','THRESHOLD','VO2MAX','ANAEROBIC','LACTATE_THRESHOLD')
                OR COALESCE(g.anaerobic_te,0) >= 2)`
-    ).get(...aSport.params) as any;
+      )
+      .get(...aSport.params) as any;
     lastHard = r?.last ?? null;
-  } catch { /* keep null */ }
-  const hardDays = lastHard ? Math.round((Date.parse(d + "T00:00:00Z") - Date.parse(lastHard + "T00:00:00Z")) / 864e5) : null;
+  } catch {
+    /* keep null */
+  }
+  const hardDays = lastHard
+    ? Math.round((Date.parse(d + "T00:00:00Z") - Date.parse(lastHard + "T00:00:00Z")) / 864e5)
+    : null;
   if (runCount >= 3 && (hardDays == null || hardDays > HARD_EFFORT_STALE_DAYS)) {
     out.push({
       exercise: "1-mile or 5k time-trial",
       kind: "endurance",
-      why: hardDays == null
-        ? "You've been running all easy — a 1-mile or 5k time-trial would re-read your real pace and estimate your current fitness."
-        : `It's been ~${Math.round(hardDays / 7)} weeks since a hard effort — a 1-mile or 5k time-trial re-anchors your pace and fitness.`,
+      why:
+        hardDays == null
+          ? "You've been running all easy — a 1-mile or 5k time-trial would re-read your real pace and estimate your current fitness."
+          : `It's been ~${Math.round(hardDays / 7)} weeks since a hard effort — a 1-mile or 5k time-trial re-anchors your pace and fitness.`,
     });
   }
 
@@ -596,7 +876,9 @@ export function enduranceTestsDue(date?: string): { exercise: string; kind: "end
     const b = db.prepare(`SELECT MAX(date) AS last FROM garmin_activities WHERE vo2max IS NOT NULL`).get() as any;
     const cands = [a?.last, b?.last].filter((x) => typeof x === "string" && x);
     lastVo2 = cands.length ? cands.sort().slice(-1)[0] : null;
-  } catch { /* keep null */ }
+  } catch {
+    /* keep null */
+  }
   if (lastVo2) {
     const vo2Days = Math.round((Date.parse(d + "T00:00:00Z") - Date.parse(lastVo2 + "T00:00:00Z")) / 864e5);
     if (vo2Days > VO2_STALE_DAYS) {
