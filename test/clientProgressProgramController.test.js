@@ -25,6 +25,9 @@ function fakeElement(tag = "div") {
     querySelector() {
       return null;
     },
+    querySelectorAll() {
+      return [];
+    },
   };
 }
 
@@ -40,6 +43,37 @@ function fakeButton() {
     },
   };
 }
+
+// A fake "#progMergeSuggestSlot" that can actually be clicked: since fakeElement
+// doesn't parse innerHTML into real nodes, querySelectorAll here returns a
+// pre-built accept/skip button PER pair (selector-aware), each wired with
+// getAttribute/closest so wireMergeSuggestions' real production code — not a
+// stand-in — attaches its listeners and can find/remove the owning card.
+function fakeMergeSuggestionSlot(pairs) {
+  const cards = pairs.map((_pair, idx) => {
+    const card = fakeElement("div");
+    card.className = "exmerge-card";
+    const acceptBtn = fakeButton();
+    acceptBtn.getAttribute = (name) => (name === "data-exmerge-accept" ? String(idx) : null);
+    acceptBtn.closest = (selector) => (selector === ".exmerge-card" ? card : null);
+    const skipBtn = fakeButton();
+    skipBtn.getAttribute = (name) => (name === "data-exmerge-skip" ? String(idx) : null);
+    skipBtn.closest = (selector) => (selector === ".exmerge-card" ? card : null);
+    card.acceptBtn = acceptBtn;
+    card.skipBtn = skipBtn;
+    return card;
+  });
+  const slot = fakeElement("div");
+  slot.cards = cards;
+  slot.querySelectorAll = (selector) => {
+    if (selector === "[data-exmerge-accept]") return cards.map((c) => c.acceptBtn);
+    if (selector === "[data-exmerge-skip]") return cards.map((c) => c.skipBtn);
+    return [];
+  };
+  return slot;
+}
+
+const flushAsync = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 function loadProgramController() {
   const calls = [];
@@ -181,7 +215,9 @@ test("strength journey Progress states are explicit, calm, and plan-backed", () 
   const base = {
     available: true,
     objective: {
-      exercise: "Bench <Press>", target_est_1rm: 200, status: "active",
+      exercise: "Bench <Press>",
+      target_est_1rm: 200,
+      status: "active",
       achieved_date: null,
     },
     latest: { est_1rm: 150, date: "2026-07-14" },
@@ -210,7 +246,15 @@ test("strength journey Progress states are explicit, calm, and plan-backed", () 
     objective: { ...base.objective, status: "completed", achieved_date: "2026-07-10" },
     phase: "reached",
     gap_lb: 0,
-    planned_support: [{ role: "upper back", exercise: "Cable <Row>", why: "Stable press shelf.", plan_day_number: 2, plan_day_name: "Pull" }],
+    planned_support: [
+      {
+        role: "upper back",
+        exercise: "Cable <Row>",
+        why: "Stable press shelf.",
+        plan_day_number: 2,
+        plan_day_name: "Pull",
+      },
+    ],
   });
   assert.match(completed, /milestone complete/);
   assert.match(completed, /Target rebuilt · 2026-07-10/);
@@ -313,7 +357,10 @@ test("progress program controller surfaces merged + muscle-group counts from the
     api: async () => ({
       ok: true,
       aligned: 1,
-      merged: [{ from: "DB Bench Press", into: "Bench Press" }, { from: "Bench (BB)", into: "Bench Press" }],
+      merged: [
+        { from: "DB Bench Press", into: "Bench Press" },
+        { from: "Bench (BB)", into: "Bench Press" },
+      ],
       groups_fixed: 2,
     }),
   });
@@ -323,6 +370,174 @@ test("progress program controller surfaces merged + muscle-group counts from the
   assert.deepEqual(deps.toasts, ["Tidied 1 name · merged 2 duplicates · fixed 2 muscle groups"]);
   assert.deepEqual(deps.invalidated, ["progress:program"]);
   assert.equal(deps.renderedSelf, true);
+});
+
+test("progress program controller renders the agent's suggested merges with escaped strings", async () => {
+  const context = loadProgramController();
+  const suggestSlot = fakeElement("div");
+  const deps = depsFor(context, {
+    view: {
+      innerHTML: "",
+      querySelector(selector) {
+        if (selector === "#progMergeSuggestSlot") return suggestSlot;
+        return null;
+      },
+      querySelectorAll() {
+        return [];
+      },
+    },
+    api: async () => ({
+      ok: true,
+      aligned: 0,
+      suggested: [
+        {
+          from: "DB Bench <Press>",
+          into: "Bench Press",
+          why: "Same movement, different equipment tag.",
+          confidence: "medium",
+        },
+      ],
+    }),
+  });
+
+  await context.CairnProgressProgramController.tidyExerciseNames(fakeButton(), deps);
+
+  assert.match(suggestSlot.innerHTML, /Merge <b>DB Bench &lt;Press&gt;<\/b> into <b>Bench Press<\/b>/);
+  assert.match(suggestSlot.innerHTML, /Same movement, different equipment tag\./);
+  assert.doesNotMatch(suggestSlot.innerHTML, /<Press>/, "the raw unescaped tag never reaches innerHTML");
+  assert.deepEqual(deps.toasts, ["Names already tidy"]);
+  assert.equal(deps.renderedSelf, false, "nothing deterministic changed, so the suggestion cards are left in place");
+});
+
+test("progress program controller clears the suggestion slot when Tidy finds no candidates", async () => {
+  const context = loadProgramController();
+  const suggestSlot = fakeElement("div");
+  suggestSlot.innerHTML = "<div>stale from a previous run</div>";
+  const deps = depsFor(context, {
+    view: {
+      innerHTML: "",
+      querySelector(selector) {
+        if (selector === "#progMergeSuggestSlot") return suggestSlot;
+        return null;
+      },
+      querySelectorAll() {
+        return [];
+      },
+    },
+    api: async () => ({ ok: true, aligned: 1 }),
+  });
+
+  await context.CairnProgressProgramController.tidyExerciseNames(fakeButton(), deps);
+
+  assert.equal(suggestSlot.innerHTML, "");
+});
+
+test("progress program controller accepts a suggested merge: busy state, card removed, invalidate + re-render", async () => {
+  const context = loadProgramController();
+  const pairs = [{ from: "DB Bench Press", into: "Bench Press", why: "Same movement.", confidence: "medium" }];
+  const suggestSlot = fakeMergeSuggestionSlot(pairs);
+  const apiCalls = [];
+  const deps = depsFor(context, {
+    view: {
+      innerHTML: "",
+      querySelector(selector) {
+        if (selector === "#progMergeSuggestSlot") return suggestSlot;
+        return null;
+      },
+      querySelectorAll() {
+        return [];
+      },
+    },
+    api: async (path, options) => {
+      apiCalls.push({ path, options });
+      if (path === "/exercises/reconcile-names") return { ok: true, aligned: 0, suggested: pairs };
+      if (path === "/exercises/merge") return { ok: true };
+      return {};
+    },
+  });
+
+  await context.CairnProgressProgramController.tidyExerciseNames(fakeButton(), deps);
+  assert.equal(typeof suggestSlot.cards[0].acceptBtn.listeners.click, "function", "the accept button is wired");
+
+  suggestSlot.cards[0].acceptBtn.listeners.click();
+  await flushAsync();
+
+  const mergeCall = apiCalls.find((c) => c.path === "/exercises/merge");
+  assert.ok(mergeCall, "the merge endpoint was called");
+  assert.equal(mergeCall.options.method, "POST");
+  assert.deepEqual(JSON.parse(mergeCall.options.body), { from: "DB Bench Press", into: "Bench Press" });
+  assert.deepEqual(deps.busyCalls, ["tidying…", "restore", "merging…"], "a per-card busy state guards the merge");
+  assert.equal(suggestSlot.cards[0].removed, true, "the accepted card is removed on success");
+  assert.deepEqual(deps.invalidated, ["progress:program"]);
+  assert.equal(deps.renderedSelf, true);
+  assert.ok(deps.toasts.some((t) => /Merged DB Bench Press into Bench Press/.test(t)));
+});
+
+test("progress program controller surfaces a failed merge suggestion and leaves the card in place", async () => {
+  const context = loadProgramController();
+  const pairs = [{ from: "DB Bench Press", into: "Bench Press", why: "Same movement.", confidence: "low" }];
+  const suggestSlot = fakeMergeSuggestionSlot(pairs);
+  const deps = depsFor(context, {
+    view: {
+      innerHTML: "",
+      querySelector(selector) {
+        if (selector === "#progMergeSuggestSlot") return suggestSlot;
+        return null;
+      },
+      querySelectorAll() {
+        return [];
+      },
+    },
+    api: async (path) => {
+      if (path === "/exercises/reconcile-names") return { ok: true, aligned: 0, suggested: pairs };
+      if (path === "/exercises/merge") return { ok: false, error: "different muscle groups" };
+      return {};
+    },
+  });
+
+  await context.CairnProgressProgramController.tidyExerciseNames(fakeButton(), deps);
+  suggestSlot.cards[0].acceptBtn.listeners.click();
+  await flushAsync();
+
+  assert.deepEqual(
+    deps.busyCalls,
+    ["tidying…", "restore", "merging…", "restore"],
+    "the button is restored after a failed merge"
+  );
+  assert.equal(suggestSlot.cards[0].removed, false, "a failed merge leaves the card in place");
+  assert.ok(deps.toasts.includes("different muscle groups"), "the server's error message is surfaced calmly");
+  assert.deepEqual(deps.invalidated, [], "a failed merge never invalidates the cache");
+  assert.equal(deps.renderedSelf, false, "a failed merge never triggers a re-render");
+});
+
+test("progress program controller drops a skipped suggestion card with no server call", async () => {
+  const context = loadProgramController();
+  const pairs = [{ from: "DB Bench Press", into: "Bench Press", why: "Same movement.", confidence: "low" }];
+  const suggestSlot = fakeMergeSuggestionSlot(pairs);
+  const apiCalls = [];
+  const deps = depsFor(context, {
+    view: {
+      innerHTML: "",
+      querySelector(selector) {
+        if (selector === "#progMergeSuggestSlot") return suggestSlot;
+        return null;
+      },
+      querySelectorAll() {
+        return [];
+      },
+    },
+    api: async (path) => {
+      apiCalls.push(path);
+      if (path === "/exercises/reconcile-names") return { ok: true, aligned: 0, suggested: pairs };
+      return {};
+    },
+  });
+
+  await context.CairnProgressProgramController.tidyExerciseNames(fakeButton(), deps);
+  suggestSlot.cards[0].skipBtn.listeners.click();
+
+  assert.equal(suggestSlot.cards[0].removed, true, "skip removes the card immediately, client-side only");
+  assert.ok(!apiCalls.includes("/exercises/merge"), "skip never calls the server (no persistence, by design)");
 });
 
 test("progress program controller reports muscle-group fixes even when no names changed", async () => {

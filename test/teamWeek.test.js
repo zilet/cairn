@@ -260,6 +260,233 @@ test('"Waiting for you" dedupes near-twin asks and drops informational explainer
   );
 });
 
+test('"Waiting for you" — the marker-key pre-pass never collapses two distinct-domain, distinct-wording asks for one marker', () => {
+  // A cross-domain pair for the SAME canonical marker with NO wording overlap —
+  // a real nutrition lever vs an unrelated watch retest reminder — must NOT
+  // collapse. MARKER_MAPPINGS routinely emits exactly this shape (one directive
+  // per domain per marker), and silently folding the nutrition action behind the
+  // retest reminder would drop real cross-domain guidance from the digest. (Two
+  // directives sharing BOTH the same canonical marker AND the same domain never
+  // reach this far as separate rows in the first place — listActiveDirectives'
+  // own read-time dedup, keyed on (marker, domain), already collapses those
+  // upstream; the same-domain branch below exists for defense/correctness, not
+  // because this specific path can exercise it.)
+  repo.addDirective({
+    source: "markers",
+    domain: "nutrition",
+    marker: "ApoB",
+    directive: "Lower saturated fat and add soluble fiber to bring ApoB toward optimal.",
+    status: "active",
+  });
+  repo.addDirective({
+    source: "markers",
+    domain: "watch",
+    marker: "Apolipoprotein B",
+    directive: "Retest a full lipid panel (with ApoB) in ~12 weeks to confirm the response.",
+    status: "active",
+  });
+
+  // (b) STRING: a marker-less review decision and a directive ask the same thing,
+  // but the directive inserts "fasting" in the MIDDLE of the phrase — a
+  // whole-string includes() test misses this (the shorter phrase is not a
+  // contiguous substring of the longer one); a token-SUBSET test catches it
+  // because every word of the shorter ask is present in the longer one. Domain
+  // "training" (a real DIRECTIVE_DOMAINS value, not "watch") — addDirective
+  // clamps any unrecognized domain to "watch", which would otherwise pull this
+  // into the SAME watch-panel lipids cluster as the ApoB pair above and hide the
+  // very collapse this sub-test is trying to isolate.
+  repo.addDirective({
+    source: "markers",
+    domain: "training",
+    marker: "Triglycerides",
+    directive: "Recheck your fasting lipid work in a couple months.",
+    status: "active",
+  });
+  recordDecision(
+    decision("rev-lipid-mid", {
+      domain: "health",
+      summary: "Recheck your lipid work in a couple months.",
+      status: "review",
+      applied_at: null,
+    }),
+    []
+  );
+
+  // A genuinely different ask — a different marker AND a different verb — must
+  // survive untouched (no over-collapsing).
+  repo.addDirective({
+    source: "markers",
+    domain: "nutrition",
+    marker: "Vitamin D",
+    directive: "Add a vitamin D3 supplement and retest in 8-12 weeks.",
+    status: "active",
+  });
+
+  const read = repo.teamWeekRead({ asOf: ASOF });
+
+  const apobAsks = read.flagged.filter((f) => /lipid panel|soluble fiber/i.test(f.text));
+  assert.equal(apobAsks.length, 2, "the cross-domain, differently-worded pair for one marker both survive");
+  assert.ok(
+    apobAsks.some((f) => /^Retest a full lipid panel \(with ApoB\)/.test(f.text)),
+    "the watch retest reminder survives as its own ask"
+  );
+  assert.ok(
+    apobAsks.some((f) => /soluble fiber/.test(f.text)),
+    "the nutrition action survives as its own ask"
+  );
+
+  const fastingAsks = read.flagged.filter((f) => /lipid work/i.test(f.text));
+  assert.equal(fastingAsks.length, 1, "a mid-string insertion no longer defeats the twin test");
+  assert.match(fastingAsks[0].text, /fasting/, "the more specific (longer) wording is kept");
+
+  assert.ok(
+    read.flagged.some((f) => /vitamin d3/i.test(f.text)),
+    "a genuinely different marker ask survives"
+  );
+});
+
+test('"Waiting for you" — the watch-panel recheck collapse groups by clinical marker group, not canonical marker (the live lipid-panel wart)', () => {
+  // Ferritin (low side): deriveDirectives emits ONE directive per domain — a
+  // nutrition lever, a training caution, and a watch retest — all for the SAME
+  // canonical marker. These are three genuinely different asks and must ALL
+  // survive, cross-domain (collapseFlagsByMarker's same-marker rule doesn't
+  // touch them — different domains, no wording overlap).
+  repo.addDirective({
+    source: "markers",
+    domain: "nutrition",
+    marker: "Ferritin",
+    directive:
+      "Add iron-rich foods (red meat, lentils, spinach) with vitamin C, and avoid tea/coffee around iron-rich meals while ferritin is low.",
+    status: "active",
+  });
+  repo.addDirective({
+    source: "markers",
+    domain: "training",
+    marker: "Ferritin",
+    directive: "While ferritin runs low, be cautious adding endurance volume and keep easy sessions easy.",
+    status: "active",
+  });
+  repo.addDirective({
+    source: "markers",
+    domain: "watch",
+    marker: "Ferritin",
+    directive: "Recheck ferritin with iron studies / CBC after ~8-12 weeks; discuss supplementation with your doctor.",
+    status: "active",
+  });
+
+  // A full lipid panel flags ApoB, LDL-C and Non-HDL-C independently, so
+  // deriveDirectives emits THREE separate watch retest reminders — one per
+  // canonical marker. All three are "Lipids & Cardiovascular" in the shared
+  // MARKER_GROUPS taxonomy and all read as a recheck/retest, so they must
+  // collapse to ONE line — this is the actual live wart (three differently-
+  // worded lipid retest asks under three DIFFERENT canonical markers, which
+  // collapseFlagsByMarker's same-marker-only rule can never touch since each
+  // marker only ever appears once here).
+  repo.addDirective({
+    source: "markers",
+    domain: "nutrition",
+    marker: "ApoB",
+    directive:
+      "Lower saturated fat (swap toward olive oil, nuts, oily fish) and add ~10g/day soluble fiber (oats, legumes, psyllium) to bring ApoB toward optimal.",
+    status: "active",
+  });
+  repo.addDirective({
+    source: "markers",
+    domain: "watch",
+    marker: "ApoB",
+    directive:
+      "Recheck ApoB (and a full lipid panel) in ~12 weeks after dietary changes; discuss with your doctor if it stays elevated.",
+    status: "active",
+  });
+  repo.addDirective({
+    source: "markers",
+    domain: "watch",
+    marker: "LDL-C",
+    directive: "Retest lipids in ~12 weeks; if LDL-C remains high despite diet, raise it with your doctor.",
+    status: "active",
+  });
+  repo.addDirective({
+    source: "markers",
+    domain: "watch",
+    marker: "Non-HDL-C",
+    directive: "Retest a full lipid panel in ~12 weeks and discuss persistent elevation with your doctor.",
+    status: "active",
+  });
+
+  const read = repo.teamWeekRead({ asOf: ASOF });
+
+  // (a) ferritin's three cross-domain asks all survive.
+  assert.ok(
+    read.flagged.some((f) => /^Add iron-rich foods/.test(f.text)),
+    "ferritin's nutrition action survives"
+  );
+  assert.ok(
+    read.flagged.some((f) => /cautious adding endurance volume/.test(f.text)),
+    "ferritin's training caution survives"
+  );
+  assert.ok(
+    read.flagged.some((f) => /^Recheck ferritin/.test(f.text)),
+    "ferritin's own watch retest survives"
+  );
+
+  // (b) the three different-canonical-marker lipid watch rechecks collapse to ONE.
+  const lipidWatch = read.flagged.filter((f) => /lipid panel|retest lipids|recheck apob/i.test(f.text));
+  assert.equal(lipidWatch.length, 1, "three different-canonical-marker lipid rechecks collapse to one");
+  assert.match(lipidWatch[0].text, /^Recheck ApoB/, "the longest, most specific wording is kept");
+
+  // (c) the nutrition ApoB action survives alongside the collapsed watch line.
+  assert.ok(
+    read.flagged.some((f) => /soluble fiber/.test(f.text)),
+    "the nutrition ApoB action is a distinct ask from the watch retest line"
+  );
+
+  // (d) the watch-domain ferritin recheck (a DIFFERENT clinical group) is not
+  // swept into the lipid collapse — two separate "Recheck …" lines survive.
+  assert.equal(
+    read.flagged.filter((f) => /^Recheck /.test(f.text)).length,
+    2,
+    "ferritin's recheck and the lipid recheck are two separate lines (different marker groups)"
+  );
+});
+
+test('"Waiting for you" — a watch directive merely containing "order" (as in "in order to") is not swept into the panel collapse', () => {
+  // A real "Recheck ApoB" retest line — eligible for the panel collapse.
+  repo.addDirective({
+    source: "markers",
+    domain: "watch",
+    marker: "ApoB",
+    directive:
+      "Recheck ApoB (and a full lipid panel) in ~12 weeks after dietary changes; discuss with your doctor if it stays elevated.",
+    status: "active",
+  });
+  // Same clinical group (lipids), same watch domain, but NOT a recheck/retest/
+  // follow-up ask — "order" only appears inside "in order to", which the old
+  // bare \border\b alternative would have wrongly matched.
+  repo.addDirective({
+    source: "markers",
+    domain: "watch",
+    marker: "LDL-C",
+    directive: "Cut saturated fat in order to lower LDL-C toward optimal.",
+    status: "active",
+  });
+
+  const read = repo.teamWeekRead({ asOf: ASOF });
+
+  assert.ok(
+    read.flagged.some((f) => /^Recheck ApoB/.test(f.text)),
+    "the real recheck line survives"
+  );
+  assert.ok(
+    read.flagged.some((f) => /^Cut saturated fat in order to/.test(f.text)),
+    "the unrelated 'in order to' line is not swept into the panel collapse"
+  );
+  assert.equal(
+    read.flagged.filter((f) => /lipid panel|ldl-c/i.test(f.text)).length,
+    2,
+    "both lipid-group watch items survive as two separate lines"
+  );
+});
+
 test("a nutrition-target retune and a meal-plan regeneration stay two distinct lines (no cross-count)", () => {
   recordDecision(
     decision("nt", {
@@ -389,7 +616,10 @@ test("the backlog drain is bounded to one pair per LOCAL day and never re-drains
   // Day 1: the oldest pair drains.
   const first = repo.teamWeekRead({ asOf: ASOF, drainBacklog: true });
   assert.deepEqual(
-    first.insights.filter((i) => i.backlog).map((i) => i.text).sort(),
+    first.insights
+      .filter((i) => i.backlog)
+      .map((i) => i.text)
+      .sort(),
     ["Backlog A", "Backlog B"],
     "the oldest two are surfaced first"
   );
@@ -432,5 +662,9 @@ test("a read-only pass (drainBacklog:false) mutates nothing and never spends the
   );
   // The read-only pass must not have stamped the day: a later human render still drains it.
   const drained = repo.teamWeekRead({ asOf: ASOF, drainBacklog: true }).insights.filter((i) => i.backlog);
-  assert.deepEqual(drained.map((i) => i.text), ["Untouched backlog"], "a drainable pass still drains after a read-only one");
+  assert.deepEqual(
+    drained.map((i) => i.text),
+    ["Untouched backlog"],
+    "a drainable pass still drains after a read-only one"
+  );
 });

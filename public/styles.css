@@ -5109,6 +5109,21 @@ button.prow-name:hover{color:var(--accent)}
 .prog-evolve-btn{flex-shrink:0}
 .prog-evolve-note{font-size:.72rem;color:var(--muted)}
 .prog-evolve-cap{flex-basis:100%;font-size:.78rem;color:var(--accent)}
+/* One-tap review of the agent's lower-confidence exercise-name merge suggestions
+   (Tidy exercise names → not confident/safe enough to auto-apply). Ephemeral —
+   rendered fresh after each Tidy run, no server-side memory. */
+.exmerge-list:empty{display:none}
+.exmerge-list{flex-basis:100%;margin-top:14px;display:grid;gap:10px}
+.exmerge-head{margin-bottom:2px}
+.exmerge-card{
+  background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+  box-shadow:var(--shadow-sm);padding:12px 14px;
+}
+.exmerge-text{font-size:.88rem;color:var(--ink);line-height:1.4}
+.exmerge-text b{font-weight:600}
+.exmerge-why{margin-top:4px;color:var(--muted);font-size:.76rem;font-style:italic;line-height:1.4}
+.exmerge-actions{display:flex;gap:10px;margin-top:10px}
+.exmerge-actions .ghostbtn{flex:1 1 auto;width:auto;padding:8px 12px}
 /* periodization block card */
 .pblock-slot:empty{display:none}
 .pblock{

@@ -6,17 +6,34 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo, resetTables } from "./_seed.js";
+import { familyLabelFromKey } from "../dist/repo/program-state.js";
 
 const REF = "2026-04-20";
 const back = (n) => new Date(new Date(REF + "T00:00:00Z").getTime() - n * 864e5).toISOString().slice(0, 10);
 
 beforeEach(() => {
-  resetTables("logged_sets", "session_skips", "sessions", "activities", "garmin_activities", "garmin_sources", "plan_items", "plan_days", "program_blocks", "plan_proposals", "daily_metrics", "checkins", "app_state");
+  resetTables(
+    "logged_sets",
+    "session_skips",
+    "sessions",
+    "activities",
+    "garmin_activities",
+    "garmin_sources",
+    "plan_items",
+    "plan_days",
+    "program_blocks",
+    "plan_proposals",
+    "daily_metrics",
+    "checkins",
+    "app_state"
+  );
 });
 
 test("a lift whose est-1RM is climbing reads 'progressing' → overload", () => {
   const w = [135, 140, 145, 152, 160];
-  [28, 21, 14, 7, 0].forEach((d, i) => repo.logSetByName({ exercise: "Bench Press", weight: w[i], reps: 5, rir: 2, date: back(d) }));
+  [28, 21, 14, 7, 0].forEach((d, i) =>
+    repo.logSetByName({ exercise: "Bench Press", weight: w[i], reps: 5, rir: 2, date: back(d) })
+  );
   const st = repo.getProgramState(REF);
   const bench = st.lifts.find((l) => l.exercise === "Bench Press");
   assert.ok(bench, "bench is analyzed");
@@ -26,14 +43,25 @@ test("a lift whose est-1RM is climbing reads 'progressing' → overload", () => 
 });
 
 test("a stuck-and-grinding lift reads 'plateaued' with a stall signal", () => {
-  [28, 21, 14, 7, 0].forEach((d) => repo.logSetByName({ exercise: "Overhead Press", weight: 115, reps: 5, rir: 1, date: back(d) }));
+  [28, 21, 14, 7, 0].forEach((d) =>
+    repo.logSetByName({ exercise: "Overhead Press", weight: 115, reps: 5, rir: 1, date: back(d) })
+  );
   const st = repo.getProgramState(REF);
   const ohp = st.lifts.find((l) => l.exercise === "Overhead Press");
   assert.equal(ohp.status, "plateaued");
   assert.ok(["deload", "vary", "technique"].includes(ohp.suggested_action));
-  assert.ok(ohp.stall_signals.some((s) => /same top load/.test(s)), "flags the static load");
-  assert.ok(ohp.stall_signals.some((s) => /grind/.test(s)), "flags grinding at RIR 0–1");
-  assert.ok(st.adaptations_due.some((a) => /Overhead Press/.test(a)), "shows up in what to evolve next");
+  assert.ok(
+    ohp.stall_signals.some((s) => /same top load/.test(s)),
+    "flags the static load"
+  );
+  assert.ok(
+    ohp.stall_signals.some((s) => /grind/.test(s)),
+    "flags grinding at RIR 0–1"
+  );
+  assert.ok(
+    st.adaptations_due.some((a) => /Overhead Press/.test(a)),
+    "shows up in what to evolve next"
+  );
 });
 
 test("a lift with only a couple of sessions reads 'new', never a false plateau", () => {
@@ -46,7 +74,9 @@ test("a lift with only a couple of sessions reads 'new', never a false plateau",
 test("a completed low-tonnage week is detected as a deload (the in-progress week is NOT judged)", () => {
   // Solid weeks 2-4 back, then a clearly lighter COMPLETED week 1 back. A partial
   // current week must never be mistaken for a deliberate deload (the bug fix).
-  for (const wk of [2, 3, 4]) for (const off of [0, 2]) repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, date: back(wk * 7 + off) });
+  for (const wk of [2, 3, 4])
+    for (const off of [0, 2])
+      repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, date: back(wk * 7 + off) });
   repo.logSetByName({ exercise: "Back Squat", weight: 135, reps: 5, date: back(7) }); // light completed week (w=1)
   const meso = repo.getProgramState(REF).mesocycle;
   assert.equal(meso.weeks_since_deload, 1, "the light completed week one back is the deload");
@@ -54,7 +84,9 @@ test("a completed low-tonnage week is detected as a deload (the in-progress week
 
 test("a timed lift progresses on hold duration, not load", () => {
   const secs = [20, 25, 30, 35, 45];
-  [28, 21, 14, 7, 0].forEach((d, i) => repo.logSetByName({ exercise: "Plank", duration_sec: secs[i], exercise_mode: "timed", date: back(d) }));
+  [28, 21, 14, 7, 0].forEach((d, i) =>
+    repo.logSetByName({ exercise: "Plank", duration_sec: secs[i], exercise_mode: "timed", date: back(d) })
+  );
   const plank = repo.getProgramState(REF).lifts.find((l) => l.exercise === "Plank");
   assert.equal(plank.mode, "timed");
   assert.equal(plank.status, "progressing");
@@ -65,7 +97,9 @@ test("a timed lift progresses on hold duration, not load", () => {
 test("a steady (flat) timed hold reads 'maintaining' → overload, NOT a false plateau/vary", () => {
   // A plank held at a consistent 45s for 5 sessions is healthy maintenance, not a
   // stall that needs a harder variation (the dead-branch bug classified it plateaued).
-  [28, 21, 14, 7, 0].forEach((d) => repo.logSetByName({ exercise: "Plank", duration_sec: 45, exercise_mode: "timed", date: back(d) }));
+  [28, 21, 14, 7, 0].forEach((d) =>
+    repo.logSetByName({ exercise: "Plank", duration_sec: 45, exercise_mode: "timed", date: back(d) })
+  );
   const plank = repo.getProgramState(REF).lifts.find((l) => l.exercise === "Plank");
   assert.equal(plank.mode, "timed");
   assert.equal(plank.status, "maintaining");
@@ -87,16 +121,18 @@ function startReducedRecoveryWeek(appliedOn) {
 }
 
 function logRecoveryTrajectoryExposure(date, planDayId, { sets = 2, weight = 100, rir = 5, performance = null } = {}) {
-  const ex = repo.findExercise("Recovery Trajectory Press") ?? repo.upsertExercise({
-    name: "Recovery Trajectory Press",
-    muscle_group: "chest",
-  });
+  const ex =
+    repo.findExercise("Recovery Trajectory Press") ??
+    repo.upsertExercise({
+      name: "Recovery Trajectory Press",
+      muscle_group: "chest",
+    });
   const session = repo.getOrCreateSession(date, planDayId);
   if (performance != null) db.prepare(`UPDATE sessions SET performance = ? WHERE id = ?`).run(performance, session.id);
   for (let set = 1; set <= sets; set++) {
     db.prepare(
       `INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps, rir)
-       VALUES (?, ?, ?, ?, 5, ?)`,
+       VALUES (?, ?, ?, ?, 5, ?)`
     ).run(session.id, ex.id, set, weight, rir);
   }
   return session;
@@ -130,9 +166,11 @@ test("an overdosed or poor-feedback recovery exposure remains comparable evidenc
     resetTables("logged_sets", "sessions", "plan_items", "plan_days", "plan_proposals", "app_state");
     seedStableRecoveryTrajectory();
     const planDay = startReducedRecoveryWeek(back(1));
-    const session = logRecoveryTrajectoryExposure(REF, planDay.id, mode === "overdose"
-      ? { sets: 4, weight: 100, rir: 5 }
-      : { sets: 2, weight: 100, rir: 5, performance: 1 });
+    const session = logRecoveryTrajectoryExposure(
+      REF,
+      planDay.id,
+      mode === "overdose" ? { sets: 4, weight: 100, rir: 5 } : { sets: 2, weight: 100, rir: 5, performance: 1 }
+    );
     assert.equal(repo.recoverySessionDose(session.id).classification, mode === "overdose" ? "overdose" : "above-plan");
     const lift = repo.getProgramState(REF).lifts.find((row) => row.exercise === "Recovery Trajectory Press");
     assert.equal(lift.status, "regressing", `${mode} remains eligible trajectory evidence`);
@@ -142,7 +180,10 @@ test("an overdosed or poor-feedback recovery exposure remains comparable evidenc
 test("hybrid endurance: a one-pace base flags 'add-quality'", () => {
   repo.setProfile({ primary_discipline: "hybrid", endurance_sport: "running" });
   // ~12 km/wk of easy running over 4 weeks, no quality session.
-  for (const wk of [3, 2, 1, 0]) { repo.addActivity({ type: "run", duration_min: 40, distance_km: 7, date: back(wk * 7 + 1) }); repo.addActivity({ type: "run", duration_min: 30, distance_km: 5, date: back(wk * 7 + 4) }); }
+  for (const wk of [3, 2, 1, 0]) {
+    repo.addActivity({ type: "run", duration_min: 40, distance_km: 7, date: back(wk * 7 + 1) });
+    repo.addActivity({ type: "run", duration_min: 30, distance_km: 5, date: back(wk * 7 + 4) });
+  }
   const e = repo.getProgramState(REF).endurance;
   assert.ok(e, "endurance block present for a hybrid athlete");
   assert.equal(e.has_quality, false);
@@ -156,7 +197,9 @@ test("hybrid runner endurance ignores bike and walk distance, spikes, and qualit
   }
   const hardBike = repo.addActivity({ type: "ride", duration_min: 160, distance_km: 80, date: back(2) });
   repo.addActivity({ type: "walking", duration_min: 150, distance_km: 12, date: back(3) });
-  const source = db.prepare(`INSERT INTO garmin_sources (provider, label) VALUES ('garmin', 'program-state-test')`).run();
+  const source = db
+    .prepare(`INSERT INTO garmin_sources (provider, label) VALUES ('garmin', 'program-state-test')`)
+    .run();
   db.prepare(
     `INSERT INTO garmin_activities (source_id, external_id, activity_id, date, type, te_label, anaerobic_te)
      VALUES (?, 'bike-quality-1', ?, ?, 'cycling', 'VO2MAX', 3)`
@@ -199,7 +242,10 @@ test("hybrid read shifts heavy lower-body lifting after a hard run", () => {
   assert.equal(st.hybrid.next_strength.day_number, 2);
   assert.equal(st.hybrid.next_strength.advice, "swap-or-upper");
   assert.ok(/upper|easy|lower/i.test(st.hybrid.next_strength.why));
-  assert.ok(st.adaptations_due.some((a) => /lower-body|legs|quads/i.test(a)), "hybrid conflict appears in adaptations due");
+  assert.ok(
+    st.adaptations_due.some((a) => /lower-body|legs|quads/i.test(a)),
+    "hybrid conflict appears in adaptations due"
+  );
 });
 
 test("hybrid read does not overreact to a short easy run before legs", () => {
@@ -213,7 +259,10 @@ test("hybrid read does not overreact to a short easy run before legs", () => {
   assert.equal(st.hybrid.status, "clear");
   assert.equal(st.hybrid.recent_endurance.load, "light");
   assert.equal(st.hybrid.next_strength.advice, "ok");
-  assert.ok(!st.adaptations_due.some((a) => /upper\/core|lower-body session/i.test(a)), "easy aerobic work should not force a leg-day swap");
+  assert.ok(
+    !st.adaptations_due.some((a) => /upper\/core|lower-body session/i.test(a)),
+    "easy aerobic work should not force a leg-day swap"
+  );
 });
 
 test("hybrid read protects fuel when hard endurance lands during fat loss", () => {
@@ -230,12 +279,17 @@ test("hybrid read protects fuel when hard endurance lands during fat loss", () =
   assert.equal(st.hybrid.status, "fuel-protect");
   assert.equal(st.hybrid.fuel.risk, "high");
   assert.match(st.hybrid.fuel.why, /protein|carbs|lean-safe|recovery/i);
-  assert.ok(st.adaptations_due.some((a) => /protect protein|lean-safe|carbs/i.test(a)), "fuel protection is an adaptation");
+  assert.ok(
+    st.adaptations_due.some((a) => /protect protein|lean-safe|carbs/i.test(a)),
+    "fuel protection is an adaptation"
+  );
 });
 
 test("a strength athlete gets no endurance block; the aggregate has a headline", () => {
   repo.setProfile({ primary_discipline: "strength" });
-  [21, 14, 7, 0].forEach((d, i) => repo.logSetByName({ exercise: "Deadlift", weight: 300 + i * 10, reps: 3, rir: 2, date: back(d) }));
+  [21, 14, 7, 0].forEach((d, i) =>
+    repo.logSetByName({ exercise: "Deadlift", weight: 300 + i * 10, reps: 3, rir: 2, date: back(d) })
+  );
   const st = repo.getProgramState(REF);
   assert.equal(st.endurance, null);
   assert.equal(typeof st.headline, "string");
@@ -252,7 +306,8 @@ test("ACWR low-base guard: a first big week off ~0 chronic tonnage is NOT 'spiki
   // ONLY the current week carries tonnage; the four prior weeks are empty — a
   // returning athlete's first real week, which read as a scary spike before.
   for (const d of [0, 1, 2]) {
-    for (let s = 1; s <= 5; s++) repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, rir: 2, date: back(d) });
+    for (let s = 1; s <= 5; s++)
+      repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, rir: 2, date: back(d) });
   }
   const meso = repo.getProgramState(REF).mesocycle;
   assert.equal(meso.acute_chronic_ratio, null, "ACWR suppressed below the chronic-base floor, not an absurd ratio");
@@ -265,7 +320,8 @@ test("tonnage ACWR is computed normally once a real chronic base exists", () => 
   // Four solid prior weeks (real chronic base) + a comparable current week.
   for (const wk of [0, 1, 2, 3, 4]) {
     for (const off of [0, 2, 4]) {
-      for (let s = 1; s <= 5; s++) repo.logSetByName({ exercise: "Back Squat", weight: 315, reps: 5, rir: 2, date: back(wk * 7 + off) });
+      for (let s = 1; s <= 5; s++)
+        repo.logSetByName({ exercise: "Back Squat", weight: 315, reps: 5, rir: 2, date: back(wk * 7 + off) });
     }
   }
   const meso = repo.getProgramState(REF).mesocycle;
@@ -318,7 +374,10 @@ test("a free-text rapid-fade note participates in the same fatigue read", () => 
   }
   repo.addActivity({ type: "run", duration_min: 70, distance_km: 12, date: REF });
   const session = repo.getOrCreateSession(REF);
-  repo.finishSession(session.id, "I started strong but by the end of every set I almost could not lift the same weight.");
+  repo.finishSession(
+    session.id,
+    "I started strong but by the end of every set I almost could not lift the same weight."
+  );
 
   const meso = repo.getProgramState(REF).mesocycle;
   assert.equal(meso.phase, "deload-due");
@@ -344,7 +403,10 @@ test("endurance ACWR low-base guard: a returning runner's first week reads 'buil
 
 test("lift states carry a movement family: re-implemented siblings share it, distinct movements don't", () => {
   repo.setProfile({ primary_discipline: "strength" });
-  const seed = (name) => [21, 14, 7, 0].forEach((d, i) => repo.logSetByName({ exercise: name, weight: 135 + i * 5, reps: 5, rir: 2, date: back(d) }));
+  const seed = (name) =>
+    [21, 14, 7, 0].forEach((d, i) =>
+      repo.logSetByName({ exercise: name, weight: 135 + i * 5, reps: 5, rir: 2, date: back(d) })
+    );
   seed("Barbell Bench Press");
   seed("DB Bench Press");
   seed("Back Squat");
@@ -381,7 +443,10 @@ test("a junk exercise name (an 'Unknown' Garmin block) never pollutes the curate
 
   const lifts = repo.getProgramState(REF).lifts;
   assert.ok(!lifts.some((l) => l.exercise.toLowerCase() === "unknown"), "the placeholder row is skipped by the read");
-  assert.ok(lifts.some((l) => l.exercise === "Bench Press"), "real lifts still surface");
+  assert.ok(
+    lifts.some((l) => l.exercise === "Bench Press"),
+    "real lifts still surface"
+  );
   // The underlying data is untouched — the row is still in the DB.
   const stillThere = db.prepare(`SELECT 1 FROM exercises WHERE name = 'Unknown'`).get();
   assert.ok(stillThere, "the exercise row is NOT deleted — the filter is read-only");
@@ -395,7 +460,8 @@ test("muscleVolume buckets by the canonical taxonomy (legacy 'legs' folds to 'qu
   db.prepare(`INSERT INTO exercises (name, muscle_group, mode) VALUES ('Leg Press', 'legs', 'reps')`).run();
   repo.upsertExercise({ name: "Bench Press", muscle_group: "chest" });
   for (const d of [10, 7, 3]) {
-    for (let s = 1; s <= 4; s++) repo.logSetByName({ exercise: "Leg Press", weight: 360, reps: 10, rir: 2, date: back(d) });
+    for (let s = 1; s <= 4; s++)
+      repo.logSetByName({ exercise: "Leg Press", weight: 360, reps: 10, rir: 2, date: back(d) });
   }
   repo.logSetByName({ exercise: "Bench Press", weight: 185, reps: 8, rir: 2, date: back(4) });
 
@@ -417,7 +483,10 @@ test("muscleVolume EXCLUDES mobility from the landmark / set-count math", () => 
 
   const vol = repo.getProgramState(REF).volume;
   assert.ok(!vol.some((v) => v.muscle_group === "mobility"), "mobility never inflates the working-set bands");
-  assert.ok(vol.some((v) => v.muscle_group === "quads"), "loaded groups are still counted");
+  assert.ok(
+    vol.some((v) => v.muscle_group === "quads"),
+    "loaded groups are still counted"
+  );
 });
 
 test("programBalance includes programmed groups with zero recent logged rows", () => {
@@ -475,4 +544,23 @@ test("the first post-recovery date resumes accumulation from the completed appli
   assert.equal(state.mesocycle.phase, "accumulation");
   assert.match(state.mesocycle.note, /recovery week completed/i);
   assert.doesNotMatch(state.headline, /deload|due/i);
+});
+
+// ===========================================================================
+// familyLabelFromKey: display-only possessive fix. family_key strips punctuation
+// ("Farmer's Carry" keys as "farmer s carry"), so a bare title-case pass reads
+// "Farmer S Carry" — a stranded "S" token needs to fold back onto the previous
+// word as a possessive. movementKey/normalizeExerciseName and the key itself are
+// untouched; this only affects the display label built from that key.
+// ===========================================================================
+test("familyLabelFromKey collapses a stranded 's' token into a possessive", () => {
+  assert.equal(familyLabelFromKey("farmer s carry"), "Farmer's Carry");
+});
+
+test("familyLabelFromKey leaves a normal key untouched", () => {
+  assert.equal(familyLabelFromKey("bench press"), "Bench Press");
+});
+
+test("familyLabelFromKey handles a leading 's' token without crashing", () => {
+  assert.equal(familyLabelFromKey("s carry"), "S Carry");
 });

@@ -92,12 +92,23 @@ function isJunkExerciseName(name: string): boolean {
 }
 
 // Title-case a movementKey ("bench press" → "Bench Press") for the family header.
-function familyLabelFromKey(key: string): string {
-  return key
-    .split(" ")
-    .filter(Boolean)
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(" ");
+// A bare "s" token straight after another word is a stranded possessive apostrophe
+// — family_key strips punctuation, so "Farmer's Carry" keys as "farmer s carry" —
+// so it's collapsed back onto the previous word ("Farmer's") instead of being
+// title-cased as its own word. This is DISPLAY-only: family_key itself (and
+// normalizeExerciseName/movementKey, which produce it) are untouched. A LEADING
+// "s" token (no previous word to attach to) is left as its own word.
+export function familyLabelFromKey(key: string): string {
+  const words = key.split(" ").filter(Boolean);
+  const out: string[] = [];
+  for (const word of words) {
+    if (word.toLowerCase() === "s" && out.length > 0) {
+      out[out.length - 1] = `${out[out.length - 1]}'s`;
+      continue;
+    }
+    out.push(word.charAt(0).toUpperCase() + word.slice(1));
+  }
+  return out.join(" ");
 }
 
 export interface MuscleVolumeState {

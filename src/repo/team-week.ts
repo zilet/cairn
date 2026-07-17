@@ -31,6 +31,8 @@ import { specialistVoiceLine } from "../brain/specialist-voice.js";
 import { listActiveDirectives, updateInsight } from "./coach.js";
 import { getBrainDecision, listBrainDecisions, listBrainExpectations } from "./brain-decisions.js";
 import { listAttentionSchedule } from "./attention.js";
+import { canonicalMarker } from "./marker-canon.js";
+import { markerGroup } from "./propagation.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { addDaysISO, localDateISO, metricLabel } from "./shared.js";
 
@@ -53,6 +55,9 @@ export interface TeamWeekFlag {
   text: string;
   domain: string;
   when: string;
+  marker: string | null; // the source lab marker, when this flag came from a directive — lets a
+  // same-marker ask collapse across domains/wording (see collapseFlagsByMarker); review
+  // decisions never carry one and always fall through to the text-based pass.
 }
 export interface TeamWeekWatch {
   text: string;
@@ -157,28 +162,63 @@ function normalizeForDedup(text: unknown): string {
     .trim();
 }
 
-// Collapse near-twin items (same normalized text, or same leading verb where one
-// normalized form contains the other) keeping the LONGER, more specific original.
-// Input order is preserved for the survivors.
+// Order-independent token-subset test: every token in `a` also appears in `b`.
+// A local equivalent of exercise-canon's isTokenSubset — kept here so a mid-string
+// insertion ("fasting" landing between "your" and "lipid panel") no longer defeats
+// the near-twin test the way a whole-string includes() check did (the shorter
+// phrase is not a contiguous substring of the longer one, even though every word
+// of it is present).
+function tokenSet(norm: string): Set<string> {
+  return new Set(norm.split(" ").filter(Boolean));
+}
+function isTokenSubset(a: Set<string>, b: Set<string>): boolean {
+  for (const t of a) if (!b.has(t)) return false;
+  return true;
+}
+
+// A text reduced to its comparable shape (normalized form, leading verb, token
+// set), computed once and reused across every pairwise near-twin check below.
+interface TextShape {
+  norm: string;
+  verb: string;
+  tokens: Set<string>;
+}
+function textShape(raw: string): TextShape | null {
+  const norm = normalizeForDedup(raw);
+  if (!norm) return null;
+  return { norm, verb: norm.split(" ")[0] ?? "", tokens: tokenSet(norm) };
+}
+
+// Two shapes are near-twins when they normalize identically, or share a leading
+// verb AND one's token set is a subset of the other's — with at least 3 tokens on
+// both sides, so a 1-2 word overlap ("recheck it") never counts as meaningful.
+// The single definition of "near-twin" shared by dedupeNearTwins AND
+// collapseFlagsByMarker's cross-domain fallback.
+function isNearTwinShape(a: TextShape, b: TextShape): boolean {
+  return (
+    a.norm === b.norm ||
+    (a.verb === b.verb &&
+      a.verb.length > 2 &&
+      a.tokens.size >= 3 &&
+      b.tokens.size >= 3 &&
+      (isTokenSubset(a.tokens, b.tokens) || isTokenSubset(b.tokens, a.tokens)))
+  );
+}
+
+// Collapse near-twin items (see isNearTwinShape) keeping the LONGER, more
+// specific original. Input order is preserved for the survivors.
 function dedupeNearTwins<T>(items: T[], getText: (item: T) => string): T[] {
-  const kept: { norm: string; verb: string; item: T }[] = [];
+  const kept: { shape: TextShape; item: T }[] = [];
   for (const it of items) {
     const raw = String(getText(it) ?? "").trim();
-    const norm = normalizeForDedup(raw);
-    if (!norm) continue;
-    const verb = norm.split(" ")[0] ?? "";
-    const twin = kept.find(
-      (k) =>
-        k.norm === norm ||
-        (k.verb === verb &&
-          verb.length > 2 &&
-          ((k.norm.length >= 8 && norm.includes(k.norm)) || (norm.length >= 8 && k.norm.includes(norm))))
-    );
+    const shape = textShape(raw);
+    if (!shape) continue;
+    const twin = kept.find((k) => isNearTwinShape(shape, k.shape));
     if (twin) {
       if (raw.length > String(getText(twin.item) ?? "").trim().length) twin.item = it;
       continue;
     }
-    kept.push({ norm, verb, item: it });
+    kept.push({ shape, item: it });
   }
   return kept.map((k) => k.item);
 }
@@ -212,7 +252,8 @@ function isRotation(raw: RawChange): boolean {
 }
 function isAutoProgression(raw: RawChange): boolean {
   return (
-    raw.kind === "training_target" && (raw.source === "auto-progression" || /^auto-progression for day/i.test(raw.summary))
+    raw.kind === "training_target" &&
+    (raw.source === "auto-progression" || /^auto-progression for day/i.test(raw.summary))
   );
 }
 function isNutritionTarget(raw: RawChange): boolean {
@@ -364,7 +405,101 @@ function isInformationalNote(text: string): boolean {
   const s = text.trim();
   if (!s) return true;
   const lower = s.toLowerCase();
-  return /\bnot a diet\b|\blargely genetic\b|\bmeasure (it|this) once\b|\bone[-\s]?time (measurement|baseline|test)\b|\bbaseline you (can't|cannot)\b/.test(lower);
+  return /\bnot a diet\b|\blargely genetic\b|\bmeasure (it|this) once\b|\bone[-\s]?time (measurement|baseline|test)\b|\bbaseline you (can't|cannot)\b/.test(
+    lower
+  );
+}
+
+// Structural pre-pass: collapse items that share the same CANONICAL marker key
+// ("ApoB" and "Apolipoprotein B" both key to "apob") ONLY when they're genuinely
+// the same ask — same domain (deriveDirectives emits at most one directive per
+// domain per marker, so two same-domain rows for one marker are always a real
+// duplicate/near-twin), OR the wording itself is a near-twin even across domains
+// (see isNearTwinShape). A DIFFERENT domain with DIFFERENT wording — e.g. a
+// nutrition action ("lower saturated fat...") and a watch retest reminder
+// ("recheck ApoB in 12 weeks...") for the SAME marker — is two distinct, real
+// asks that must both survive: MARKER_MAPPINGS routinely emits exactly that
+// shape per marker (nutrition/training lever + a watch retest), and collapsing
+// them would silently drop real cross-domain guidance from the digest. Items
+// with no marker (review decisions never carry one) fall straight through
+// untouched, to be collapsed — or not — by the later passes.
+function collapseFlagsByMarker(items: TeamWeekFlag[]): TeamWeekFlag[] {
+  interface MarkerCluster {
+    key: string;
+    domain: string;
+    shape: TextShape | null;
+    item: TeamWeekFlag;
+  }
+  type Slot = { kind: "cluster"; cluster: MarkerCluster } | { kind: "flag"; flag: TeamWeekFlag };
+  const clusters: MarkerCluster[] = [];
+  const slots: Slot[] = [];
+  for (const it of items) {
+    const key = it.marker ? canonicalMarker(it.marker).key : "";
+    if (!key) {
+      slots.push({ kind: "flag", flag: it });
+      continue;
+    }
+    const shape = textShape(it.text);
+    const match = clusters.find(
+      (c) => c.key === key && (c.domain === it.domain || (shape && c.shape && isNearTwinShape(shape, c.shape)))
+    );
+    if (match) {
+      if (it.text.length > match.item.text.length) {
+        match.item = it;
+        match.domain = it.domain;
+        match.shape = shape;
+      }
+      continue;
+    }
+    const cluster: MarkerCluster = { key, domain: it.domain, shape, item: it };
+    clusters.push(cluster);
+    slots.push({ kind: "cluster", cluster });
+  }
+  return slots.map((s) => (s.kind === "cluster" ? s.cluster.item : s.flag));
+}
+
+// A deliberately simple, conservative recheck/retest verb match. No bare "order"
+// — every shipped MARKER_MAPPINGS watch string already matches on
+// recheck/retest/follow-up, and a bare \border\b risks a false positive on an
+// unrelated future watch directive phrased "...in order to...".
+const RECHECK_VERB_RE = /\b(recheck|retest|re-test|follow[\s-]?up)\b/i;
+
+// A SEPARATE, coarser collapse scoped to the watch domain only: two watch asks
+// whose MARKERS land in the same clinical marker group (the exact MARKER_GROUPS
+// taxonomy getMarkerHistory uses for group/group_label — see markerGroup) AND
+// both read as a recheck/retest request collapse to one, keeping the longer
+// text. This is what actually closes the live lipid wart: deriveDirectives runs
+// per-marker, so a lipid panel with ApoB + LDL-C + Non-HDL-C all flagged emits
+// THREE separate watch directives with three DIFFERENT canonical marker keys —
+// collapseFlagsByMarker (same marker only) never touches them. A different
+// group, a non-watch domain, or watch text with no recheck-type verb are all
+// left untouched (a marker-less item is never eligible — there's no group to
+// compute), so they still get a shot at the text-based dedupeNearTwins pass.
+function collapseWatchPanelRechecks(items: TeamWeekFlag[]): TeamWeekFlag[] {
+  interface PanelCluster {
+    group: string;
+    item: TeamWeekFlag;
+  }
+  type Slot = { kind: "cluster"; cluster: PanelCluster } | { kind: "flag"; flag: TeamWeekFlag };
+  const clusters: PanelCluster[] = [];
+  const slots: Slot[] = [];
+  for (const it of items) {
+    const eligible = it.domain === "watch" && !!it.marker && RECHECK_VERB_RE.test(it.text);
+    if (!eligible) {
+      slots.push({ kind: "flag", flag: it });
+      continue;
+    }
+    const group = markerGroup(it.marker as string).key;
+    const match = clusters.find((c) => c.group === group);
+    if (match) {
+      if (it.text.length > match.item.text.length) match.item = it;
+      continue;
+    }
+    const cluster: PanelCluster = { group, item: it };
+    clusters.push(cluster);
+    slots.push({ kind: "cluster", cluster });
+  }
+  return slots.map((s) => (s.kind === "cluster" ? s.cluster.item : s.flag));
 }
 
 function flaggedItems(windowStart: string, asOf: string): TeamWeekFlag[] {
@@ -375,7 +510,8 @@ function flaggedItems(windowStart: string, asOf: string): TeamWeekFlag[] {
       if (!when || when < windowStart || when > asOf) continue;
       const text = clip(d?.directive, 200);
       if (!text || isInformationalNote(text)) continue;
-      out.push({ kind: "directive", text, domain: String(d?.domain ?? "watch"), when });
+      const marker = d?.marker ? String(d.marker).trim() : "";
+      out.push({ kind: "directive", text, domain: String(d?.domain ?? "watch"), when, marker: marker || null });
     }
   } catch {
     /* directives table absent — skip */
@@ -386,16 +522,22 @@ function flaggedItems(windowStart: string, asOf: string): TeamWeekFlag[] {
       if (!when || when < windowStart || when > asOf) continue;
       const text = clip(d.summary, 200);
       if (!text || isInformationalNote(text)) continue;
-      out.push({ kind: "review", text, domain: String(d.domain ?? "cross_domain"), when });
+      out.push({ kind: "review", text, domain: String(d.domain ?? "cross_domain"), when, marker: null });
     }
   } catch {
     /* ledger absent — skip */
   }
   out.sort(byWhenDesc);
-  // Dedupe near-twins from the two sources (a directive and a held-for-review
-  // decision that name the same panel with the same leading verb), keeping the more
-  // specific. A generous safety bound only — the client applies the display cap.
-  return dedupeNearTwins(out, (f) => f.text).slice(0, 12);
+  // Three complementary passes, narrowest-scope first: (1) collapse same-marker
+  // asks that are genuinely the same ask (collapseFlagsByMarker), (2) collapse
+  // same-clinical-group watch-domain recheck asks across DIFFERENT markers
+  // (collapseWatchPanelRechecks — the fix for a lipid panel flagging ApoB, LDL-C
+  // and Non-HDL-C as three separate retest reminders), then (3) dedupe whatever
+  // near-twins remain by wording alone (a directive and a held-for-review
+  // decision that name the same thing with the same leading verb). Each pass
+  // keeps the more specific (longer) survivor. A generous safety bound only —
+  // the client applies the display cap.
+  return dedupeNearTwins(collapseWatchPanelRechecks(collapseFlagsByMarker(out)), (f) => f.text).slice(0, 12);
 }
 
 // ---- watching[]: near-due attention entries + still-maturing expectations --------
@@ -435,7 +577,9 @@ function watchingItems(asOf: string): TeamWeekWatch[] {
       const decision = getBrainDecision(exp.decision_id);
       if (!decision || (decision.status !== "applied" && decision.status !== "announced")) continue;
       out.push({
-        text: capitalize(`how your ${metricLabel(exp.metric_key)} answers the ${domainLabel(decision.domain).toLowerCase()} change`),
+        text: capitalize(
+          `how your ${metricLabel(exp.metric_key)} answers the ${domainLabel(decision.domain).toLowerCase()} change`
+        ),
         through: end,
         source: "expectation",
       });
@@ -450,9 +594,7 @@ function watchingItems(asOf: string): TeamWeekWatch[] {
     if (!prior) seen.set(item.text, item);
     else if (item.through && (!prior.through || item.through < prior.through)) seen.set(item.text, item);
   }
-  return [...seen.values()]
-    .sort((a, b) => String(a.through ?? "").localeCompare(String(b.through ?? "")))
-    .slice(0, 10);
+  return [...seen.values()].sort((a, b) => String(a.through ?? "").localeCompare(String(b.through ?? ""))).slice(0, 10);
 }
 
 // ---- landed[]: evaluations that closed CONCLUSIVELY this week, verdict in words --
@@ -563,8 +705,7 @@ function composeLead(read: Omit<TeamWeekRead, "lead">): string {
   if (read.landed.length && !changes && !read.watching.length)
     parts.push(`checked how ${plural(read.landed.length, "call", "calls")} landed`);
   if (!parts.length) return "";
-  const joined =
-    parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+  const joined = parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
   return capitalize(`this week your team ${joined}.`);
 }
 

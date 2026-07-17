@@ -39,7 +39,7 @@ function strengthSuggestionCardHtml(suggestion: ProgressAnchorSuggestion): strin
 }
 
 function strengthJourneyCardHtml(value: unknown): string {
-  const journey = value && typeof value === "object" ? value as Partial<ProgressStrengthJourney> : null;
+  const journey = value && typeof value === "object" ? (value as Partial<ProgressStrengthJourney>) : null;
   const objective = journey?.objective;
   if (!journey?.available || !objective?.exercise || !Number.isFinite(Number(objective.target_est_1rm))) {
     return journey?.suggestion ? strengthSuggestionCardHtml(journey.suggestion) : "";
@@ -54,14 +54,17 @@ function strengthJourneyCardHtml(value: unknown): string {
   const completed = objective.status === "completed";
   const gapText = completed
     ? "milestone complete"
-    : Number.isFinite(Number(gap)) && Number(gap) > 0 ? `${Number(gap).toFixed(1)} lb to rebuild` : "at the target";
+    : Number.isFinite(Number(gap)) && Number(gap) > 0
+      ? `${Number(gap).toFixed(1)} lb to rebuild`
+      : "at the target";
   const phase = String(journey.phase || "establishing").replace(/_/g, " ");
   const trend = journey.trend;
-  const trendText = trend?.direction === "rising" && Number.isFinite(Number(trend.est_1rm_lb_per_week))
-    ? `${trend.direction} · about ${Number(trend.est_1rm_lb_per_week).toFixed(1)} lb/week from ${Number(trend.exposures) || 0} exact-lift exposures`
-    : trend?.direction
-      ? `${trend.direction} · ${Number(trend.exposures) || 0} exact-lift exposures`
-      : `${Number(trend?.exposures) || 0} exact-lift exposures logged`;
+  const trendText =
+    trend?.direction === "rising" && Number.isFinite(Number(trend.est_1rm_lb_per_week))
+      ? `${trend.direction} · about ${Number(trend.est_1rm_lb_per_week).toFixed(1)} lb/week from ${Number(trend.exposures) || 0} exact-lift exposures`
+      : trend?.direction
+        ? `${trend.direction} · ${Number(trend.exposures) || 0} exact-lift exposures`
+        : `${Number(trend?.exposures) || 0} exact-lift exposures logged`;
   const projection = journey.projection
     ? `<div class="sjourney-range"><span class="lbl">Planning range</span><strong>${Number(journey.projection.earliest_weeks)}–${Number(journey.projection.latest_weeks)} weeks</strong><span>${escHtml(journey.projection.caveat)}</span></div>`
     : "";
@@ -366,6 +369,7 @@ function paintProgressProgramBody(data: ProgressProgramState, deps: ClientProgre
     <span class="prog-evolve-note lbl">Optional override — your team already monitors and adapts the program in the background</span>
     <button id="progTidyBtn" class="ghostbtn" style="width:100%;text-align:center;padding:9px;margin-top:11px" type="button">Tidy exercise names</button>
     <span class="prog-evolve-note lbl">Different logs name the same lift differently — Cairn merges duplicates so each one tracks as one line. Runs automatically as you log.</span>
+    <div id="progMergeSuggestSlot" class="exmerge-list"></div>
   </div>`;
 
   let html = "";
@@ -472,6 +476,84 @@ function paintProgressProgramBody(data: ProgressProgramState, deps: ClientProgre
   loadDexaTargeting("progDexaSlot");
 }
 
+// A merge the agent found plausible but wasn't confident/structurally-related
+// enough to auto-apply (see shouldAutoApplyMerge server-side) — surfaced instead
+// as a one-tap suggestion.
+type ExerciseMergeSuggestion = { from: string; into: string; why: string; confidence: string };
+
+function mergeSuggestionCardHtml(pair: ExerciseMergeSuggestion, idx: number): string {
+  const why = String(pair.why || "").trim();
+  return `<div class="exmerge-card" data-exmerge-card="${idx}">
+    <div class="exmerge-text">Merge <b>${escHtml(pair.from)}</b> into <b>${escHtml(pair.into)}</b></div>
+    ${why ? `<div class="exmerge-why">${escHtml(why)}</div>` : ""}
+    <div class="exmerge-actions">
+      <button class="ghostbtn" type="button" data-exmerge-accept="${idx}">Accept</button>
+      <button class="ghostbtn" type="button" data-exmerge-skip="${idx}">Skip</button>
+    </div>
+  </div>`;
+}
+
+function mergeSuggestionsInnerHtml(pairs: ExerciseMergeSuggestion[]): string {
+  return (
+    `<div class="exmerge-head lbl">Cairn's not sure — take a look</div>` +
+    pairs.map((p, i) => mergeSuggestionCardHtml(p, i)).join("")
+  );
+}
+
+// One tap confirms a suggested merge via the existing deterministic /exercises/merge
+// endpoint (no agent turn). A per-card busy state guards the double-tap; a failed
+// merge surfaces the server's message and leaves the card in place, unlike a
+// success which removes it and refreshes the program read.
+async function acceptMergeSuggestion(
+  acceptBtn: HTMLElement,
+  pairs: ExerciseMergeSuggestion[],
+  deps: ClientProgressProgramControllerDeps
+): Promise<void> {
+  const idx = Number(acceptBtn.getAttribute("data-exmerge-accept"));
+  const pair = pairs[idx];
+  const card = acceptBtn.closest(".exmerge-card");
+  if (!pair || !card) return;
+  const restore = deps.busy(acceptBtn, "merging…");
+  let result: { ok?: boolean; error?: string } | null = null;
+  try {
+    result = (await deps.api("/exercises/merge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ from: pair.from, into: pair.into }),
+    })) as { ok?: boolean; error?: string } | null;
+  } catch {
+    result = null;
+  }
+  if (result?.ok) {
+    deps.toast(`Merged ${pair.from} into ${pair.into}`);
+    deps.invalidate("progress:program");
+    card.remove();
+    if (deps.state.tab === "progress") deps.renderSelf();
+    return;
+  }
+  restore();
+  deps.toast(result?.error || "Couldn't merge that — try again.");
+}
+
+// Skip just drops the card for THIS run — deliberately no server-side memory, so
+// the same suggestion can resurface on the next Tidy.
+function wireMergeSuggestions(
+  slot: Element,
+  pairs: ExerciseMergeSuggestion[],
+  deps: ClientProgressProgramControllerDeps
+): void {
+  slot.querySelectorAll<HTMLElement>("[data-exmerge-skip]").forEach((skipBtn) => {
+    skipBtn.addEventListener("click", () => {
+      skipBtn.closest(".exmerge-card")?.remove();
+    });
+  });
+  slot.querySelectorAll<HTMLElement>("[data-exmerge-accept]").forEach((acceptBtn) => {
+    acceptBtn.addEventListener("click", () => {
+      void acceptMergeSuggestion(acceptBtn, pairs, deps);
+    });
+  });
+}
+
 // "Tidy exercise names" merges duplicate movements so each lift tracks as one line.
 async function tidyExerciseNames(btn: Element, deps: ClientProgressProgramControllerDeps): Promise<void> {
   const restore = deps.busy(btn, "tidying…");
@@ -511,6 +593,19 @@ async function tidyExerciseNames(btn: Element, deps: ClientProgressProgramContro
   }
   if (!msg) msg = "Names already tidy";
   deps.toast(msg);
+
+  // Lower-confidence merge candidates the agent found (structurally related but
+  // not auto-applied) get a one-tap review card. Rendered into the dedicated slot
+  // right after the Tidy button; a subsequent full repaint below (when a
+  // deterministic change also happened this run) will replace it like any other
+  // slot, same as the rest of this screen's async cards.
+  const suggested = Array.isArray(row.suggested) ? (row.suggested as ExerciseMergeSuggestion[]) : [];
+  const suggestSlot = deps.view.querySelector("#progMergeSuggestSlot");
+  if (suggestSlot) {
+    suggestSlot.innerHTML = suggested.length ? mergeSuggestionsInnerHtml(suggested) : "";
+    if (suggested.length) wireMergeSuggestions(suggestSlot, suggested, deps);
+  }
+
   if (n || merged || groupsFixed) {
     deps.invalidate("progress:program");
     deps.renderSelf();
