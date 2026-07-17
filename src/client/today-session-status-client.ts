@@ -314,10 +314,10 @@ type DoneRuntimeGlobals = typeof globalThis & {
       <div class="done-kicker lbl">${options.isToday ? "Today · complete" : "Complete"}</div>
       <h2 class="done-title">${escHtml(name)}</h2>
       <div class="done-chips" id="doneChips-${idAttr}">${doneChipSpans(row.duration_min, sets, highlights)}</div>
+      <div id="feedbackSlot" class="feedback-slot done-feedback"></div>
       ${journeyMoveHtml}
       ${doneAnalysisHtml(sets, highlights, idAttr)}
       ${row.notes ? `<div class="done-notes">“${escHtml(row.notes)}”</div>` : ""}
-      <div id="feedbackSlot" class="feedback-slot done-feedback"></div>
       <div class="done-actions">
         <button class="ghostbtn done-reopen" id="reopenBtn">Log more</button>
         <button class="ghostbtn done-history" id="toHistoryBtn">In your history →</button>
@@ -416,12 +416,20 @@ type DoneRuntimeGlobals = typeof globalThis & {
 
   function todayFeedbackFormHtml(session: SessionLike): string {
     const row = session && typeof session === "object" ? session : {};
+    // The two feel scales lead; the joint free-text starts collapsed behind a small
+    // "anything ache?" affordance so the moment reads as two calm taps, not a form.
+    // A session already carrying a joint note opens with the field shown (editing).
+    const joint = String(row.joint_pain || "");
+    const hasJoint = joint.trim() !== "";
     return `<div class="checkin-form feedback-form chip-in">
       <div class="feedback-prompt lbl">how did that feel?</div>
       ${todayFeedbackScaleHtml("soreness", "soreness")}
       ${todayFeedbackScaleHtml("performance", "performance")}
-      <input id="feedbackJoint" class="feedback-joint" type="text" autocomplete="off"
-        placeholder="any joint or area? (e.g. left knee)" value="${escAttr(row.joint_pain || "")}">
+      <div class="feedback-joint-wrap">
+        <button class="feedback-joint-toggle" id="feedbackJointToggle" type="button"${hasJoint ? " hidden" : ""}>anything ache?</button>
+        <input id="feedbackJoint" class="feedback-joint" type="text" autocomplete="off"
+          placeholder="any joint or area? (e.g. left knee)" value="${escAttr(joint)}"${hasJoint ? "" : " hidden"}>
+      </div>
       <button class="checkin-dismiss" id="feedbackDismiss" type="button" aria-label="Not now">✕</button>
     </div>`;
   }

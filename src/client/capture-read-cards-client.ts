@@ -83,15 +83,30 @@ function captureReadRenderWeeklyCard(
   ins: CaptureInsight,
   deps: CaptureReadCardDeps,
   team?: CaptureTeamWeek | null,
+  opts: { expanded?: boolean } = {},
 ): void {
+  // Once acknowledged ("Got it"), the week's read persists as a COMPACT settled line
+  // — never destroyed for the week — until the athlete pulls it back open for the day.
+  if (ins.feedback === "up" && !opts.expanded) {
+    captureReadRenderWeeklyAcked(target, ins, deps, team);
+    return;
+  }
   const text = deps.escapeHtml(String(ins.text || ""));
   const change = String(ins.next_step || "").trim();
   const why = String(ins.rationale || "").trim();
   const range = deps.weekRangeLabel(ins.created_at);
-  // The weekly card leads with the agentic sentence, then the deterministic team
-  // sections beneath it. The lead line is the agent's, so the team block omits its
-  // own summary lead here.
-  const sections = captureTeamWeekSectionsHtml(team, deps.escapeHtml);
+  // Reading grammar: the HERO carries the read + the one change (+ the wins strip,
+  // injected by the caller), and the deterministic team-week detail sits one pull
+  // away behind a native fold. The lead line is the agent's, so the team block omits
+  // its own summary lead; the connections section is dropped (the #insightSlot card
+  // already surfaces that) so the fold never duplicates it.
+  const sections = captureTeamWeekSectionsHtml(team, deps.escapeHtml, { omitConnections: true });
+  const depth = sections
+    ? `<details class="weekly-depth">
+        <summary class="weekly-depth-sum">The week in detail</summary>
+        <div class="weekly-depth-body">${sections}</div>
+      </details>`
+    : "";
   target.innerHTML = `<section class="weekly-card well-accent well-accent-sage settle-in">
       <div class="weekly-head">
         <span class="weekly-kicker lbl">The week</span>
@@ -102,7 +117,7 @@ function captureReadRenderWeeklyCard(
           <span class="weekly-change-lbl lbl">One change</span>
           <p class="weekly-change-text">${deps.escapeHtml(change)}</p>
         </div>` : ""}
-      ${sections}
+      ${depth}
       ${why ? `<p class="weekly-why" hidden>${deps.escapeHtml(why)}</p>` : ""}
       <div class="weekly-foot">
         <div class="insight-acts">
@@ -113,8 +128,76 @@ function captureReadRenderWeeklyCard(
       </div>
     </section>`;
   target.querySelectorAll<HTMLElement>("[data-ifb]").forEach((button) =>
-    button.addEventListener("click", () => captureReadInsightFeedback(target, ins, button.dataset.ifb, deps, ".weekly-card")));
+    button.addEventListener("click", () => captureReadWeeklyFeedback(target, ins, button.dataset.ifb, deps, team)));
   captureReadWireWhyToggle(target, ".weekly-why");
+}
+
+// The acknowledged weekly read — compact + persistent for the week. One quiet
+// "✓ The week, read" line, the "One change" carried as a lasting chip, and a link
+// back to the full read for the current view. Rendered on ack and on every later
+// render while ins.feedback === "up" (the server field, not localStorage, so the
+// settled state is consistent across devices).
+function captureReadRenderWeeklyAcked(
+  target: HTMLElement,
+  ins: CaptureInsight,
+  deps: CaptureReadCardDeps,
+  team?: CaptureTeamWeek | null,
+): void {
+  const change = String(ins.next_step || "").trim();
+  target.innerHTML = `<section class="weekly-acked settle-in">
+      <div class="weekly-acked-line">
+        <span class="weekly-acked-mark" aria-hidden="true">✓</span>
+        <span class="weekly-acked-lbl">The week, read</span>
+        <button class="linkbtn-quiet weekly-acked-more" data-weekly-expand type="button">see the full read</button>
+      </div>
+      ${change ? `<div class="weekly-acked-change well-accent-sm">
+          <span class="weekly-acked-change-lbl lbl">One change</span>
+          <span class="weekly-acked-change-text">${deps.escapeHtml(change)}</span>
+        </div>` : ""}
+    </section>`;
+  target.querySelector<HTMLElement>("[data-weekly-expand]")?.addEventListener("click", () =>
+    captureReadRenderWeeklyCard(target, ins, deps, team, { expanded: true }));
+}
+
+// The payload the weekly controls send. "Got it" ACKNOWLEDGES (up + seen) so the
+// read persists compactly for the week — it is NOT dismissed. "Not useful" is the
+// only path that removes the read for the week (down + dismissed).
+function captureWeeklyFeedbackBody(dir: string | undefined): { feedback: string; status: string } {
+  return dir === "up"
+    ? { feedback: "up", status: "seen" }
+    : { feedback: "down", status: "dismissed" };
+}
+
+// Weekly-read feedback. Distinct from the connection-insight handler: "Got it"
+// keeps the read alive (compact acknowledged variant), while "Not useful" collapses
+// and clears it for the week. Cross-device consistency rides the server fields.
+async function captureReadWeeklyFeedback(
+  target: HTMLElement,
+  ins: CaptureInsight,
+  dir: string | undefined,
+  deps: CaptureReadCardDeps,
+  team?: CaptureTeamWeek | null,
+): Promise<void> {
+  const body = captureWeeklyFeedbackBody(dir);
+  deps.api(`/insights/${ins.id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }).catch(() => {});
+  if (dir === "up") {
+    // Reflect the ack on the in-memory insight so this and later renders settle to
+    // the compact variant without waiting on a refetch.
+    ins.feedback = "up";
+    ins.status = "seen";
+    deps.toast("Noted — kept for the week");
+    captureReadRenderWeeklyAcked(target, ins, deps, team);
+    return;
+  }
+  const card = target.querySelector(".weekly-card");
+  if (card) deps.collapseEl(card, () => {
+    target.innerHTML = "";
+  });
+  else target.innerHTML = "";
 }
 
 // The deterministic body standing alone: when no agentic weekly_read exists yet,
@@ -169,9 +252,12 @@ const TEAM_CONN_CAP = 2;
 // The team's-week ("week in review") sections (did / flagged / watching / landed /
 // connections) as one calm block. Every server string is escaped. Empty sections are
 // omitted; no content → "". Items hidden by a display cap fold into a quiet expander.
+// `omitConnections` drops the "Connections worth a look" section — the weekly card
+// passes it because the standalone #insightSlot connection card already carries that.
 function captureTeamWeekSectionsHtml(
   team: CaptureTeamWeek | null | undefined,
   esc: (value: unknown) => string,
+  opts: { omitConnections?: boolean } = {},
 ): string {
   if (!captureTeamWeekHasContent(team)) return "";
   const t = team as CaptureTeamWeek;
@@ -229,13 +315,15 @@ function captureTeamWeekSectionsHtml(
     .filter(Boolean);
   if (landedItems.length) blocks.push(captureTeamSectionHtml("How it landed", landedItems));
 
-  const connItems = (Array.isArray(t.insights) ? t.insights : [])
-    .map((i) => String(i?.text || "").trim())
-    .filter(Boolean)
-    .map((line) => `<li class="team-item"><span class="team-item-line">${esc(line)}</span></li>`);
-  const conn = captureTeamSplitByCap(connItems, TEAM_CONN_CAP);
-  if (conn.visible.length)
-    blocks.push(captureTeamSectionHtml("Connections worth a look", conn.visible, conn.overflow));
+  if (!opts.omitConnections) {
+    const connItems = (Array.isArray(t.insights) ? t.insights : [])
+      .map((i) => String(i?.text || "").trim())
+      .filter(Boolean)
+      .map((line) => `<li class="team-item"><span class="team-item-line">${esc(line)}</span></li>`);
+    const conn = captureTeamSplitByCap(connItems, TEAM_CONN_CAP);
+    if (conn.visible.length)
+      blocks.push(captureTeamSectionHtml("Connections worth a look", conn.visible, conn.overflow));
+  }
 
   if (!blocks.length) return "";
   return `<div class="team-week">${blocks.join("")}</div>`;
@@ -286,6 +374,7 @@ const CAIRN_CAPTURE_READ_CARDS: CaptureReadCardsApi = {
   renderTeamWeekInSlot: captureReadRenderTeamWeekInSlot,
   teamWeekSectionsHtml: captureTeamWeekSectionsHtml,
   teamWeekHasContent: captureTeamWeekHasContent,
+  weeklyFeedbackBody: captureWeeklyFeedbackBody,
 };
 
 Object.assign(globalThis, { CairnCaptureReadCards: CAIRN_CAPTURE_READ_CARDS });

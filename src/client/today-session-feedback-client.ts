@@ -58,6 +58,15 @@ type TodaySessionFeedbackDeps = {
     slot.querySelector("#feedbackOpen")?.addEventListener("click", () => renderFeedbackForm(slot, session, deps));
   }
 
+  // The calm settled line once both scales are in — a persistent confirmation that
+  // the signal will bend next week, never a nag. (The reload state still shows the
+  // recorded values with an edit affordance via feedbackDoneHtml.)
+  function renderFeedbackNoted(slot: Element): void {
+    slot.innerHTML = `<div class="checkin-done feedback-done chip-in">
+      <span class="checkin-done-mark" aria-hidden="true">✓</span> Noted — it'll shape next week.
+    </div>`;
+  }
+
   function renderFeedbackForm(slot: Element, session: Record<string, unknown>, deps: TodaySessionFeedbackDeps): void {
     slot.innerHTML = deps.sessionStatus.feedbackFormHtml(session);
     const date = String(session.date || deps.state.logDate);
@@ -106,6 +115,10 @@ type TodaySessionFeedbackDeps = {
             notified = true;
             deps.toast("Noted");
           }
+          // Both scales in → collapse to the calm settled line (the joint note, if
+          // any, was already carried on this same save). The finish moment stays two
+          // taps, never a lingering form.
+          if (picked.soreness != null && picked.performance != null) renderFeedbackNoted(slot);
           return;
         }
         // Roll back the optimistic fill to exactly what was showing before the tap.
@@ -114,7 +127,16 @@ type TodaySessionFeedbackDeps = {
         deps.toast("Couldn't save that — try again.");
       }));
 
+    // The joint free-text starts collapsed behind "anything ache?"; reveal it in place.
+    const jointToggle = slot.querySelector<HTMLElement>("#feedbackJointToggle");
     const joint = slot.querySelector<HTMLInputElement>("#feedbackJoint");
+    jointToggle?.addEventListener("click", () => {
+      jointToggle.hidden = true;
+      if (joint) {
+        joint.hidden = false;
+        joint.focus();
+      }
+    });
     if (joint) joint.addEventListener("change", () => {
       if (picked.soreness || picked.performance || joint.value.trim()) void save();
     });

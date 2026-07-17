@@ -3233,6 +3233,33 @@ body.swr-busy::after{
 .weekly-wins-item{font-size:.88rem;color:var(--ink-2);line-height:1.4}
 .weekly-wins-item::before{content:"· ";color:var(--faint)}
 
+/* Depth one pull away — the deterministic team-week detail folds behind a native
+   disclosure so the HERO (read + one change + wins) stays short. Fold idiom mirrors
+   .team-fold / .tov-jfold: a ▸ that rotates open, quiet UI type. */
+.weekly-depth{margin:14px 0 0;padding-top:12px;border-top:1px solid var(--line);position:relative}
+.weekly-depth>summary{
+  list-style:none;cursor:pointer;font-family:var(--font-ui);font-size:.72rem;
+  letter-spacing:.04em;color:var(--muted);display:inline-flex;align-items:center;gap:6px;
+}
+.weekly-depth>summary::-webkit-details-marker{display:none}
+.weekly-depth>summary::before{content:"▸";font-size:.65rem;transition:transform .15s ease}
+.weekly-depth[open]>summary::before{transform:rotate(90deg)}
+.weekly-depth>summary:hover{color:var(--ink-2)}
+/* Inside the fold the team-week block drops its own top rule (the fold owns it). */
+.weekly-depth .team-week{margin-top:11px;padding-top:0;border-top:none}
+
+/* The acknowledged weekly read — compact + persistent for the week. One quiet line
+   + the One change as a lasting chip, with a link back to the full read. */
+.weekly-acked{padding:12px 4px;margin:0 0 14px;position:relative}
+.weekly-acked-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.weekly-acked-mark{color:var(--sage);font-size:.9rem;line-height:1}
+.weekly-acked-lbl{font-family:var(--font-ui);font-size:.82rem;color:var(--ink-2)}
+.weekly-acked-more{margin-left:auto;font-family:var(--font-ui);font-size:.7rem;letter-spacing:.03em}
+.weekly-acked-change{margin:9px 0 0;padding:9px 13px;background:var(--card-2);
+  display:flex;flex-direction:column;gap:2px}
+.weekly-acked-change-lbl{display:block;color:var(--accent)}
+.weekly-acked-change-text{font-size:.88rem;line-height:1.4;color:var(--ink)}
+
 /* the team's-week digest — the deterministic "here's what your team did" body
    beneath the weekly card's agentic sentence. Quiet, sectioned, words not scores. */
 .team-week{margin-top:14px;padding-top:12px;border-top:1px solid var(--line);
@@ -3272,6 +3299,15 @@ body.swr-busy::after{
   padding:8px 11px;font-family:var(--font-ui);font-size:.85rem;color:var(--ink);
 }
 .feedback-joint::placeholder{color:var(--muted)}
+.feedback-joint-wrap{width:100%;display:flex;flex-direction:column}
+/* the joint free-text starts collapsed behind this quiet affordance (same voice as
+   .checkin-open — italic, muted, no chrome) so the finish moment reads as two taps */
+.feedback-joint-toggle{
+  align-self:flex-start;background:none;border:none;cursor:pointer;padding:3px 2px;
+  font-family:var(--font-ui);font-size:.76rem;font-style:italic;color:var(--muted);
+  transition:color var(--dur-1) var(--ease);
+}
+.feedback-joint-toggle:hover{color:var(--ink-2)}
 .feedback-form .checkin-dismiss{position:absolute;top:8px;right:10px;margin-left:0}
 .feedback-done{font-size:.82rem}
 /* accent action → .linkbtn.linkbtn-plain.linkbtn-sm; delta = spacing only */

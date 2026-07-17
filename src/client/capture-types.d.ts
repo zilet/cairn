@@ -62,8 +62,13 @@ type CaptureReadCardsApi = {
     team?: CaptureTeamWeek | null,
   ): void;
   renderTeamWeekInSlot(target: HTMLElement, team: CaptureTeamWeek | null, deps: CaptureReadCardDeps): void;
-  teamWeekSectionsHtml(team: CaptureTeamWeek | null | undefined, esc: (value: unknown) => string): string;
+  teamWeekSectionsHtml(
+    team: CaptureTeamWeek | null | undefined,
+    esc: (value: unknown) => string,
+    opts?: { omitConnections?: boolean },
+  ): string;
   teamWeekHasContent(team: CaptureTeamWeek | null | undefined): boolean;
+  weeklyFeedbackBody(dir: string | undefined): { feedback: string; status: string };
 };
 type CaptureReadJobsDeps = {
   state: Pick<ClientAppState, "tab">;

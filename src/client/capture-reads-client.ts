@@ -111,8 +111,10 @@ async function captureRenderWeekWins(wSlot: HTMLElement, deps: CaptureReadsDeps)
   if (!card) return;
   const html = captureWeekWinsHtml(captureWeekWinsItems(payload, deps.escapeHtml));
   if (!html) return;
-  const foot = card.querySelector(".weekly-foot");
-  if (foot) foot.insertAdjacentHTML("beforebegin", html);
+  // Keep the wins in the HERO: land them above the depth fold when it's present,
+  // otherwise just before the foot. Either way they sit with the read + one change.
+  const anchor = card.querySelector(".weekly-depth") || card.querySelector(".weekly-foot");
+  if (anchor) anchor.insertAdjacentHTML("beforebegin", html);
   else card.insertAdjacentHTML("beforeend", html);
 }
 
