@@ -38,7 +38,7 @@ type TodayScreenRuntimeInput = {
 type TodayScreenRuntimeContext = {
   api<Path extends string>(
     path: Path,
-    opts?: RequestInit & { headers?: Record<string, string> },
+    opts?: RequestInit & { headers?: Record<string, string>; acceptErrorBody?: boolean },
   ): Promise<TodayScreenRuntimeApiResponse<Path>>;
   cachedApi<Path extends string>(
     path: Path,
@@ -105,7 +105,7 @@ type TodayScreenRuntimeApi = {
 
 function todayScreenRuntimeApi<Path extends string>(
   path: Path,
-  opts?: RequestInit & { headers?: Record<string, string> },
+  opts?: RequestInit & { headers?: Record<string, string>; acceptErrorBody?: boolean },
 ): Promise<TodayScreenRuntimeApiResponse<Path>> {
   return api(path, opts);
 }

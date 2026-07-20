@@ -46,13 +46,13 @@ test("Today plan/session model groups sets, matches cardio once, prunes pending 
   const loggedByEx = model.groupLoggedSets(session);
   assert.deepEqual(plain(loggedByEx.Bench.map((set) => set.set_number)), [1, 2]);
 
-  const items = [
-    { exercise: "Bench" },
-    { exercise: "Squat" },
-    { kind: "cardio", label: "Easy run" },
-  ];
+  const items = [{ exercise: "Bench" }, { exercise: "Squat" }, { kind: "cardio", label: "Easy run" }];
   const efforts = [{ label: "Easy run" }, { label: "Easy run" }];
-  const matchedCardio = model.matchCardioEfforts(items.filter((item) => item.kind === "cardio"), efforts, (item, effort) => item.label === effort?.label);
+  const matchedCardio = model.matchCardioEfforts(
+    items.filter((item) => item.kind === "cardio"),
+    efforts,
+    (item, effort) => item.label === effort?.label
+  );
   assert.equal(matchedCardio.size, 1);
   const groups = model.itemGroups({
     items,
@@ -66,29 +66,46 @@ test("Today plan/session model groups sets, matches cardio once, prunes pending 
   assert.deepEqual(plain(groups.offPlanEx), ["Curl"]);
   assert.deepEqual(plain(groups.skippedItems), [{ exercise: "Squat" }]);
 
-  const state = { logDate: "2026-06-30", day: 1, plan: [{ day_number: 1, items }], pendingOffPlan: { "2026-06-30": [{ name: "Curl" }, { name: "Lateral raise" }] } };
+  const state = {
+    logDate: "2026-06-30",
+    day: 1,
+    plan: [{ day_number: 1, items }],
+    pendingOffPlan: { "2026-06-30": [{ name: "Curl" }, { name: "Lateral raise" }] },
+  };
   assert.deepEqual(plain(model.prunePendingOffPlan(state, groups.planNames, loggedByEx)), [{ name: "Lateral raise" }]);
   assert.deepEqual(plain(state.pendingOffPlan["2026-06-30"]), [{ name: "Lateral raise" }]);
-  assert.deepEqual(plain(model.prefillFor({ exercise: "Bench", target_weight: 180, rep_low: 5 }, loggedByEx, {})), { weight: 190, reps: 4, rir: 1, duration_sec: null });
-  assert.deepEqual(plain(model.selectedPlanDay({ day: 9, plan: [{ day_number: 2, name: "Fallback" }] }, false)), { day_number: 2, name: "Fallback" });
+  assert.deepEqual(plain(model.prefillFor({ exercise: "Bench", target_weight: 180, rep_low: 5 }, loggedByEx, {})), {
+    weight: 190,
+    reps: 4,
+    rir: 1,
+    duration_sec: null,
+  });
+  assert.deepEqual(plain(model.selectedPlanDay({ day: 9, plan: [{ day_number: 2, name: "Fallback" }] }, false)), {
+    day_number: 2,
+    name: "Fallback",
+  });
 });
 
 test("Today plan/session data helper loads cached last sets and refreshes stale data", async () => {
   const context = loadPreparation();
   const requests = [];
   const data = context.CairnTodayPlanSessionData;
-  const result = await data.loadLastSets(["Bench", "Squat", "Bench"], {
-    Squat: [{ exercise: "Squat", set_number: 1, weight: 225 }],
-  }, {
-    state: { logDate: "2026-06-30" },
-    peekCached: (key) => key === "last-set:Bench" ? { data: { weight: 185, reps: 5, rir: 2 }, fresh: true } : null,
-    cachedApi: async (path, opts) => {
-      requests.push({ path, opts });
-      return { weight: 0 };
+  const result = await data.loadLastSets(
+    ["Bench", "Squat", "Bench"],
+    {
+      Squat: [{ exercise: "Squat", set_number: 1, weight: 225 }],
     },
-    api: async () => ({}),
-    isCardioItem: () => false,
-  });
+    {
+      state: { logDate: "2026-06-30" },
+      peekCached: (key) => (key === "last-set:Bench" ? { data: { weight: 185, reps: 5, rir: 2 }, fresh: true } : null),
+      cachedApi: async (path, opts) => {
+        requests.push({ path, opts });
+        return { weight: 0 };
+      },
+      api: async () => ({}),
+      isCardioItem: () => false,
+    }
+  );
 
   assert.deepEqual(plain(result), { Bench: { weight: 185, reps: 5, rir: 2 } });
   assert.deepEqual(plain(requests), [{ path: "/last-set?exercise=Bench", opts: { key: "last-set:Bench" } }]);
@@ -103,14 +120,16 @@ test("Today plan/session preparation assembles cardio, pending off-plan, prescri
     logDate: "2026-06-30",
     day: 1,
     dayPicked: true,
-    plan: [{
-      day_number: 1,
-      name: "Strength + run",
-      items: [
-        { exercise: "Bench", target_weight: 180, rep_low: 5, target_seconds: null },
-        { kind: "cardio", label: "Easy run", target_duration_min: 40, target_zone: "Z2" },
-      ],
-    }],
+    plan: [
+      {
+        day_number: 1,
+        name: "Strength + run",
+        items: [
+          { exercise: "Bench", target_weight: 180, rep_low: 5, target_seconds: null },
+          { kind: "cardio", label: "Easy run", target_duration_min: 40, target_zone: "Z2" },
+        ],
+      },
+    ],
     pendingOffPlan: {
       "2026-06-30": [{ name: "Curl" }, { name: "Bench" }],
     },
@@ -144,10 +163,158 @@ test("Today plan/session preparation assembles cardio, pending off-plan, prescri
   assert.equal(result.skippedItems.length, 0);
   assert.deepEqual(result.pendingOffPlan, [{ name: "Curl" }]);
   assert.deepEqual(state.pendingOffPlan["2026-06-30"], [{ name: "Curl" }]);
-  assert.deepEqual(plain(result.prefillFor({ exercise: "Bench", rep_low: 5 })), { weight: 185, reps: 5, rir: 1, duration_sec: null });
+  assert.deepEqual(plain(result.prefillFor({ exercise: "Bench", rep_low: 5 })), {
+    weight: 185,
+    reps: 5,
+    rir: 1,
+    duration_sec: null,
+  });
   assert.equal(result.rxFor("Bench").action, "overload");
   assert.equal(result.hasSyncedCardioToday, true);
   assert.equal(result.expectingRun, false);
   assert.deepEqual(apiRequests, ["/cardio?date=2026-06-30", "/settings", "/strength-journey"]);
-  assert.equal(cachedRequests.some((request) => request.path === "/program/progression?day=1"), true);
+  assert.equal(
+    cachedRequests.some((request) => request.path === "/program/progression?day=1"),
+    true
+  );
+});
+
+test("durable daily composition wins over the weekly plan and preserves saved order and source", async () => {
+  const context = loadPreparation();
+  const prep = context.CairnTodayPlanSessionPreparation;
+  const cachedRequests = [];
+  const state = {
+    logDate: "2026-07-20",
+    day: 1,
+    dayPicked: false,
+    plan: [
+      {
+        id: 11,
+        day_number: 1,
+        name: "Pull",
+        focus: "Back",
+        items: [{ exercise: "Lat Pulldown", sets: 3, rep_low: 8, rep_high: 12 }],
+      },
+    ],
+    pendingOffPlan: {},
+  };
+  const dailySession = {
+    id: 41,
+    version: 1,
+    session_id: 9,
+    date: "2026-07-20",
+    source: "agent_suggest",
+    status: "active",
+    plan_day_id: null,
+    title: "Deadlift + bench",
+    focus: "Full body",
+    why: "Legs are ready and upper body is fresh.",
+    est_minutes: 42,
+    items: [
+      { position: 2, kind: "strength", exercise: "Pallof Press", sets: 2, rep_low: 10, rep_high: 12, mode: "reps" },
+      {
+        position: 0,
+        kind: "strength",
+        exercise: "Deadlift",
+        sets: 3,
+        rep_low: 4,
+        rep_high: 6,
+        target_weight: 225,
+        mode: "reps",
+      },
+      { position: 1, kind: "cardio", exercise: "Easy ride", target_duration_min: 12, target_zone: "easy" },
+    ],
+  };
+
+  const result = await prep.preparePlanSession({
+    state,
+    session: { id: 9, sets: [], skips: [], daily_session: dailySession },
+    isToday: true,
+    suggestedPlanDayNumber: async () => {
+      throw new Error("durable composition should bypass selection");
+    },
+    isCardioItem: (item) => item.kind === "cardio",
+    cardioLabel: (item) => item.exercise || "Cardio",
+    cardioEffortMatches: () => false,
+    api: async (path) => (path === "/strength-journey" ? {} : []),
+    peekCached: () => null,
+    cachedApi: async (path) => {
+      cachedRequests.push(path);
+      if (path.startsWith("/last-set")) return null;
+      return [];
+    },
+  });
+
+  assert.equal(result.dailySession.source, "agent_suggest");
+  assert.equal(result.day.name, "Deadlift + bench");
+  assert.equal(result.day.focus, "Full body");
+  assert.equal(state.day, null, "custom session does not inherit Pull's day number");
+  assert.deepEqual(plain(result.activeItems.map((item) => item.exercise)), ["Deadlift", "Easy ride", "Pallof Press"]);
+  assert.equal(result.activeItems[0].fromSession, true);
+  assert.equal(result.activeItems[0].fromPlan, false);
+  assert.equal(
+    cachedRequests.some((path) => path.startsWith("/program/progression")),
+    false
+  );
+});
+
+test("plan-backed daily composition remains an immutable strength and cardio snapshot", async () => {
+  const context = loadPreparation();
+  const prep = context.CairnTodayPlanSessionPreparation;
+  const state = {
+    logDate: "2026-07-20",
+    day: 5,
+    dayPicked: true,
+    plan: [
+      {
+        id: 51,
+        day_number: 5,
+        name: "Full body",
+        items: [
+          { exercise: "Changed weekly squat", sets: 5 },
+          { kind: "cardio", exercise: "Smoke easy run", note: "Smoke easy run", target_duration_min: 32 },
+        ],
+      },
+    ],
+    pendingOffPlan: {},
+  };
+  const dailySession = {
+    id: 61,
+    version: 1,
+    session_id: 71,
+    date: "2026-07-20",
+    source: "adaptive_plan",
+    status: "active",
+    plan_day_id: 51,
+    title: "Accepted full body",
+    focus: "Strength",
+    items: [{ position: 0, kind: "strength", exercise: "Snapshot squat", sets: 3 }],
+  };
+
+  const result = await prep.preparePlanSession({
+    state,
+    session: { id: 71, sets: [{ exercise: "Off-plan curl", set_number: 1 }], skips: [], daily_session: dailySession },
+    isToday: true,
+    suggestedPlanDayNumber: async () => {
+      throw new Error("durable composition should bypass selection");
+    },
+    isCardioItem: (item) => item.kind === "cardio",
+    cardioLabel: (item) => item.note || item.exercise || "Cardio",
+    cardioEffortMatches: () => false,
+    api: async (path) => (path === "/strength-journey" ? {} : []),
+    peekCached: () => null,
+    cachedApi: async () => null,
+  });
+
+  assert.deepEqual(plain(result.activeItems.map((item) => item.exercise)), ["Snapshot squat"]);
+  assert.equal(
+    result.activeItems.some((item) => item.exercise === "Changed weekly squat"),
+    false
+  );
+  assert.equal(result.activeItems[0].fromSession, true);
+  assert.equal(
+    result.activeItems.some((item) => item.exercise === "Smoke easy run"),
+    false,
+    "later weekly-plan cardio must not be appended to the accepted snapshot"
+  );
 });

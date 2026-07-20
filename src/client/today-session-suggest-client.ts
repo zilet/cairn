@@ -59,10 +59,11 @@ type SuggestedSessionLike = Partial<ClientSessionSuggestion> | null | undefined;
       ${CairnProposal.verifiedBadgeHtml(verified)}
       ${s.notes ? `<div class="sug-notes">${escHtml(s.notes)}</div>` : ""}
       <div class="sug-actions">
-        <button class="pillbtn pill-accent" data-sugaction="log">Log these</button>
+        <button class="pillbtn pill-accent" data-sugaction="use">Use this session</button>
         <button class="pillbtn" data-sugaction="dismiss">Not now</button>
       </div>
-      <div class="sug-hint">A suggestion to follow or ignore — it isn't saved as your plan.</div>
+      <div class="sug-save-status" role="status" aria-live="polite"></div>
+      <div class="sug-hint">A suggestion to follow or ignore — using it saves today only, not your plan.</div>
     </section>`;
   }
 

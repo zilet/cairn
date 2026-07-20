@@ -388,5 +388,16 @@ export function resolveImplicitPlanDay<T extends object>(input: T): T & { day_nu
   if (Object.hasOwn(input, "day_number")) return input;
   const fields = input as { date?: unknown };
   const date = fields.date ? String(fields.date) : localDateISO();
+  // A prepared custom session deliberately has no weekly-template link. Do not
+  // let the ordinary implicit logger attach today's adaptive day behind its back.
+  // (Explicit day_number remains an athlete-directed override, as before.)
+  const custom = db
+    .prepare(
+      `SELECT id FROM daily_session_compositions
+        WHERE date = ? AND status = 'active' AND source IN ('agent_suggest','athlete_override')
+        LIMIT 1`
+    )
+    .get(date);
+  if (custom) return { ...input, day_number: null };
   return { ...input, day_number: selectedPlanDayForDate(date)?.day_number };
 }

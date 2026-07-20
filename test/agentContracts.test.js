@@ -17,7 +17,9 @@ import {
   isSessionSuggestionResult,
   isVerifyResult,
   isWeekAheadResult,
+  normalizeSessionSuggestionResult,
 } from "../dist/agent-contracts.js";
+import { repo } from "./_seed.js";
 
 test("agent contracts reject parseable wrong-operation objects", () => {
   const wrong = { summary: "Looks fine" };
@@ -39,12 +41,38 @@ test("agent contracts reject parseable wrong-operation objects", () => {
 });
 
 test("training contracts require useful prescriptions before rotation stops", () => {
-  assert.equal(isSessionSuggestionResult({
-    name: "Lower body",
-    why: "Recovered and due.",
-    items: [{ exercise: "Back Squat", sets: 3 }],
-  }), true);
-  assert.equal(isSessionSuggestionResult({ name: "Run", why: "Easy aerobic work.", items: [{ kind: "cardio", exercise: "Run" }] }), false);
+  const session = (item) => ({ name: "Lower body", why: "Recovered and due.", items: [item] });
+  assert.equal(isSessionSuggestionResult(session({ exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 8 })), true);
+  assert.equal(
+    isSessionSuggestionResult(session({ exercise: "Back Squat", kind: "mobility", sets: 3, rep_low: 8 })),
+    false
+  );
+  assert.equal(isSessionSuggestionResult(session({ exercise: "Back Squat", sets: 3 })), false);
+  assert.equal(isSessionSuggestionResult(session({ exercise: "Plank", mode: "timed", sets: 3 })), false);
+  assert.equal(
+    isSessionSuggestionResult(session({ exercise: "Plank", sets: 3, target_seconds: 45 })),
+    true,
+    "positive seconds infer timed mode"
+  );
+  repo.upsertExercise({ name: "Contract Timer", mode: "timed" });
+  assert.equal(
+    isSessionSuggestionResult(session({ exercise: "Contract Timer", sets: 3, rep_low: 8 })),
+    false,
+    "DB-backed timed mode cannot accept a reps prescription"
+  );
+  assert.equal(
+    isSessionSuggestionResult(session({ exercise: "Contract Timer", sets: 3, target_seconds: 45 })),
+    true,
+    "DB-backed timed mode and positive seconds agree"
+  );
+  assert.equal(
+    isSessionSuggestionResult({ name: "Run", why: "Easy aerobic work.", items: [{ kind: "cardio", exercise: "Run" }] }),
+    false
+  );
+  const longCardio = normalizeSessionSuggestionResult(
+    session({ kind: "cardio", exercise: "Run", target_duration_min: 361 })
+  );
+  assert.equal(longCardio.items[0].target_duration_min, 360);
 
   assert.equal(isPlanProposalResult({ summary: "Hold steady.", changes: [] }), true);
   assert.equal(hasPlanProposalActions({ summary: "Hold steady.", changes: [] }), false);

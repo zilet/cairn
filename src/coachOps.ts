@@ -49,6 +49,7 @@ import { clampNutritionFloors } from "./repo/nutrition-safety.js";
 import { applyMealPlanWithAutonomy, applyProposalWithAutonomy } from "./domain/brain/autonomy-service.js";
 import { personalizedNutritionStep } from "./domain/brain/underfueling-service.js";
 import {
+  DAILY_SESSION_SUGGESTION_NORMALIZATION,
   hasPlanProposalActions,
   isExerciseExplanationResult,
   isHealthReviewResult,
@@ -64,6 +65,7 @@ import {
   isSessionSuggestionResult,
   isVerifyResult,
   isWeekAheadResult,
+  normalizeSessionSuggestionResult,
 } from "./agent-contracts.js";
 
 // runChosen is the shared agent-dispatch helper (see ./runChosen.ts). It's
@@ -299,13 +301,28 @@ export async function suggestSession(
   // job worker calls again and rewrites the cache.
   const cacheKey = sessionSuggestCacheKey(opts);
   const cached = repo.getAiCache("session_suggest", cacheKey);
-  if (cached && !cached.stale) {
+  // Exercise mode is durable identity. Re-check even a fresh cache hit against
+  // the current database so a suggestion can never render as actionable and then
+  // fail preparation because that movement is authoritatively timed/reps work.
+  const sessionSane = (s: any) => isSessionSuggestionResult(s);
+  const cachedSession = normalizeSessionSuggestionResult(cached?.result?.session);
+  const usableCached =
+    cached && cachedSession && cached.result && typeof cached.result === "object"
+      ? {
+          ...cached,
+          result: {
+            ...cached.result,
+            session: cachedSession,
+            session_normalization: DAILY_SESSION_SUGGESTION_NORMALIZATION,
+          },
+        }
+      : null;
+  if (usableCached && !usableCached.stale) {
     hooks?.onPhase?.("served from cache");
-    return cached.result;
+    return usableCached.result;
   }
   hooks?.onPhase?.("drafting your session");
   const prompt = buildSessionPrompt(undefined, opts);
-  const sessionSane = (s: any) => isSessionSuggestionResult(s);
   // Interactive: a user is waiting on the request path — short the leash. Streams the
   // session's "why" prose into the card when the chosen agent is stream-capable.
   let run: FallbackResult;
@@ -319,7 +336,7 @@ export async function suggestSession(
     });
   } catch (error) {
     const failure = agentFailure(error, hooks);
-    if (cached) return { ...cached.result, cached: true, stale: true };
+    if (usableCached) return { ...usableCached.result, cached: true, stale: true };
     return {
       ok: false as const,
       error: "agent returned no usable session",
@@ -328,10 +345,10 @@ export async function suggestSession(
     };
   }
   const { agent: chosen, result, tried } = run;
-  const p = result.parsed;
-  if (!sessionSane(p)) {
+  const p = normalizeSessionSuggestionResult(result.parsed);
+  if (!p) {
     // Nothing fresh and usable — fall back to a stale cache hit rather than fail.
-    if (cached) return cached.result;
+    if (usableCached) return usableCached.result;
     return {
       ok: false as const,
       error: "agent returned no usable session",
@@ -344,7 +361,7 @@ export async function suggestSession(
   // (injury, time budget, equipment, encoding) and adopt a fix if one is returned.
   // Fail-open — verify down/garbage ⇒ the draft ships exactly as before.
   hooks?.onPhase?.("checking it against your floors", { frac: { done: 1, total: 2 } });
-  const { draft: session, verified } = await runVerify(
+  const { draft, verified } = await runVerify(
     agent,
     p,
     (d) => buildSessionVerifyPrompt(d, opts),
@@ -352,6 +369,7 @@ export async function suggestSession(
     "session_verify",
     hooks
   );
+  const session = normalizeSessionSuggestionResult(draft) ?? p;
   // Outcome learning: record what was suggested so a later pass can compare it to
   // what the athlete actually trained. Best-effort; never blocks the response.
   repo.recordSuggestion("session_suggest", opts.date ?? null, {
@@ -366,6 +384,7 @@ export async function suggestSession(
     agent: chosen,
     tried,
     agent_status: "ok" as const,
+    session_normalization: DAILY_SESSION_SUGGESTION_NORMALIZATION,
     ...(verified ? { verified } : {}),
   };
   try {

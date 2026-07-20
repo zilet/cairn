@@ -67,7 +67,7 @@ function makeDeps(overrides = {}) {
       if (options.onUpgrade) options.onUpgrade(payload, { changed: true });
       return payload;
     },
-    peekCached: (key) => peeks[key] || null,
+    peekCached: (key) => overrides.peekCached ? overrides.peekCached(key) : peeks[key] || null,
     storeCached: (key, data) => writes.push({ key, data }),
     localISO: () => "2026-01-02",
     todaySkeleton: () => "<section>Loading</section>",
@@ -129,6 +129,38 @@ test("Today data loader lets a fresh aggregate replace warm-but-stale slices", a
     "exercises",
   ]);
   assert.equal(result.revalidations.length, 0);
+});
+
+test("an aggregate read superseded by session preparation cannot repaint or cache the old session", async () => {
+  const loader = loadDataLoader();
+  const cache = new Map();
+  const prepared = { id: 22, date: "2026-01-02", sets: [], daily_session: { id: 9, version: 2 } };
+  const { deps, writes } = makeDeps({
+    peekCached: (key) => cache.has(key) ? { data: cache.get(key), fresh: true } : null,
+    cachedApi: async (path) => {
+      if (!path.startsWith("/today?")) return null;
+      cache.set("today:session:2026-01-02", prepared);
+      return {
+        date: "2026-01-02",
+        plan: [],
+        session: { id: 12, date: "2026-01-02", sets: [], daily_session: null },
+        stats: {},
+        profile: {},
+        exercises: [],
+      };
+    },
+  });
+  const originalStore = deps.storeCached;
+  deps.storeCached = (key, data) => {
+    cache.set(key, data);
+    originalStore(key, data);
+  };
+
+  const result = await loader.load({}, deps);
+
+  assert.deepEqual(result.session, prepared);
+  assert.deepEqual(cache.get("today:session:2026-01-02"), prepared);
+  assert.equal(writes.some((row) => row.key === "today:session:2026-01-02"), false);
 });
 
 test("Today data loader falls back to independent reads when the aggregate is unavailable", async () => {

@@ -20,9 +20,7 @@ function plain(value) {
 }
 
 async function flushAsync() {
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let i = 0; i < 10; i++) await Promise.resolve();
 }
 
 // Local-date (not UTC) days-ago ISO string, matching date-utils.js's localISO() convention —
@@ -263,6 +261,7 @@ function loadController({ apiImpl, contextOverrides } = {}) {
   const cachedWrites = [];
   const collapses = [];
   const expands = [];
+  let mutationSeq = 0;
   const context = {
     Element: FakeElement,
     HTMLElement: FakeElement,
@@ -276,7 +275,18 @@ function loadController({ apiImpl, contextOverrides } = {}) {
     window: null,
     globalThis: null,
     navigator: {},
-    outboxEnqueue: (kind, path, body) => outbox.push({ kind, path, body }),
+    outboxEnqueue: (kind, path, body, options) => {
+      const item = {
+        kind,
+        path,
+        body,
+        ...(options?.method === "DELETE" ? { method: "DELETE" } : {}),
+        ...(options?.dependsOn ? { depends_on: options.dependsOn } : {}),
+        ...(options?.groupId ? { group_id: options.groupId } : {}),
+      };
+      outbox.push(item);
+      return item;
+    },
     document: {
       createElement: (tag) => tag === "template" ? new FakeTemplate() : new FakeElement(tag),
     },
@@ -284,6 +294,42 @@ function loadController({ apiImpl, contextOverrides } = {}) {
   };
   context.window = context;
   context.globalThis = context;
+  context.runSessionMutation = async (input, send) => {
+    const identity = input.identity || {};
+    const groupId = identity.sessionId != null
+      ? `session:${identity.sessionId}`
+      : identity.dailySessionId != null
+        ? `daily:${identity.dailySessionId}`
+        : `date:${input.date}`;
+    const idempotencyKey = `test-mutation-${++mutationSeq}`;
+    const blocked = (prerequisite) => ({
+      status: "blocked",
+      reason: prerequisite.reason || "phantom",
+      prerequisiteId: prerequisite.id || null,
+      groupId,
+    });
+    let prerequisite = context.outboxSessionPrerequisite?.(input.date) || { status: "none", id: null };
+    if (prerequisite.status === "blocked") return blocked(prerequisite);
+    const queue = async (dependsOn) => {
+      const item = await context.outboxEnqueue(input.kind, input.path, input.body, {
+        dependsOn,
+        groupId,
+        method: input.method,
+      });
+      return item ? { status: "queued", item, groupId } : { status: "storage_error", groupId };
+    };
+    if (prerequisite.status === "ready") return queue(prerequisite.id);
+    if (outbox.some((item) => item.group_id === groupId)) return queue(null);
+    try {
+      return { status: "sent", value: await send(idempotencyKey), groupId };
+    } catch (error) {
+      const classify = context.CairnApiCache?.isTransientApiFailure;
+      if (typeof classify === "function" && !classify(error)) return { status: "failed", error, groupId };
+      prerequisite = context.outboxSessionPrerequisite?.(input.date) || { status: "none", id: null };
+      if (prerequisite.status === "blocked") return blocked(prerequisite);
+      return queue(prerequisite.status === "ready" ? prerequisite.id : null);
+    }
+  };
   // Opt-in host globals a case needs (AbortController + a capturing setTimeout for
   // the finish-timeout path, a fake localStorage for the notes draft). Omitted by
   // default so existing cases run exactly as before (no AbortController → the finish
@@ -473,6 +519,92 @@ test("Today session controller does not poison the outbox on a permanent set rej
   assert.deepEqual(harness.toasts.map((toast) => toast.message), ["Couldn't log that set."]);
 });
 
+test("offline set logging carries the current staged prepare dependency", async () => {
+  const harness = loadController({
+    apiImpl: async () => { throw new Error("offline"); },
+    contextOverrides: {
+      outboxSessionPrerequisite: () => ({ status: "ready", id: "prepare-local-1" }),
+    },
+  });
+  const { row, button } = addLoggingCard(harness.rootEl);
+
+  harness.controller.wireLogRow(row, harness.deps);
+  button.click();
+  await flushAsync();
+
+  assert.deepEqual(plain(harness.outbox), [{
+    kind: "set",
+    path: "/sets",
+    body: { exercise: "Push-up", weight: 20, reps: 8, rir: 2, day_number: 1, date: "2026-06-30" },
+    depends_on: "prepare-local-1",
+    group_id: "date:2026-06-30",
+  }]);
+});
+
+test("a reloaded staged session queues its new set behind reconciliation before any direct POST", async () => {
+  const harness = loadController({
+    apiImpl: async () => { throw new Error("direct set POST must not run before reconciliation"); },
+    contextOverrides: {
+      outboxSessionPrerequisite: () => ({ status: "ready", id: "prepare-reload-1" }),
+    },
+  });
+  const { row, button } = addLoggingCard(harness.rootEl);
+
+  harness.controller.wireLogRow(row, harness.deps);
+  button.click();
+  await flushAsync();
+
+  assert.deepEqual(harness.requests, []);
+  assert.deepEqual(plain(harness.outbox), [{
+    kind: "set",
+    path: "/sets",
+    body: { exercise: "Push-up", weight: 20, reps: 8, rir: 2, day_number: 1, date: "2026-06-30" },
+    depends_on: "prepare-reload-1",
+    group_id: "date:2026-06-30",
+  }]);
+  assert.deepEqual(harness.toasts.map((toast) => toast.message), ["Set saved — reconciling this session"]);
+});
+
+test("cross-tab prepare barriers prevent direct set and finish POSTs in every shared queue state", async () => {
+  for (const state of ["pending", "prepared", "needs_attention"]) {
+    const prerequisite = () => ({ status: "blocked", id: `prepare-${state}`, reason: "other_tab" });
+    const setHarness = loadController({
+      apiImpl: async () => { throw new Error("direct set POST must stay blocked"); },
+      contextOverrides: { outboxSessionPrerequisite: prerequisite },
+    });
+    const { row, button } = addLoggingCard(setHarness.rootEl);
+    setHarness.controller.wireLogRow(row, setHarness.deps);
+    button.click();
+    await flushAsync();
+
+    assert.deepEqual(setHarness.requests, [], `${state} set barrier made no direct request`);
+    assert.deepEqual(setHarness.outbox, []);
+    assert.deepEqual(setHarness.toasts.map((toast) => toast.message), [
+      "This session is being prepared in another tab or view — refresh before logging more sets.",
+    ]);
+
+    const finishHarness = loadController({
+      apiImpl: async () => { throw new Error("direct finish POST must stay blocked"); },
+      contextOverrides: { outboxSessionPrerequisite: prerequisite },
+    });
+    const surface = finishHarness.rootEl.appendChild(new FakeElement("div", { className: "plansurface" }));
+    surface.appendChild(new FakeElement("input", { id: "sessNotes", value: "saved note" }));
+    const finish = surface.appendChild(new FakeElement("button", { id: "finishBtn" }));
+    finishHarness.controller.wireSessionSurface({
+      session: { id: 44, date: "2026-06-30", sets: [{ exercise: "Push-up" }] },
+      hasLoggedSets: true,
+    }, finishHarness.deps);
+    finish.click();
+    await flushAsync();
+
+    assert.deepEqual(finishHarness.requests, [], `${state} finish barrier made no direct request`);
+    assert.deepEqual(finishHarness.outbox, []);
+    assert.deepEqual(finishHarness.toasts.map((toast) => toast.message), [
+      "This session is being prepared in another tab or view — refresh before finishing.",
+    ]);
+  }
+});
+
 test("focused Session finishes with the real ID created by its first set without rewiring", async () => {
   const harness = loadController({
     apiImpl: async (path, opts) => {
@@ -505,6 +637,11 @@ test("focused Session finishes with the real ID created by its first set without
   await flushAsync();
 
   assert.deepEqual(harness.requests.map((request) => request.path), ["/sets", "/sessions/88/finish"]);
+  assert.equal(harness.requests.every((request) => /^test-mutation-\d+$/.test(request.opts.headers["X-Idempotency-Key"])), true);
+  assert.notEqual(
+    harness.requests[0].opts.headers["X-Idempotency-Key"],
+    harness.requests[1].opts.headers["X-Idempotency-Key"],
+  );
   assert.equal(harness.requests.some((request) => request.path.includes("/sessions//")), false);
   assert.equal(harness.outbox.length, 0);
   assert.equal(harness.deps.state.brief.read.kind, "done");
@@ -544,6 +681,7 @@ test("focused Session finishes with the real ID created by its first skip", asyn
   await flushAsync();
 
   assert.deepEqual(harness.requests.map((request) => request.path), ["/sessions/skip", "/sessions/89/finish"]);
+  assert.equal(harness.requests.every((request) => /^test-mutation-\d+$/.test(request.opts.headers["X-Idempotency-Key"])), true);
   assert.equal(harness.requests.some((request) => request.path.includes("/sessions//")), false);
 });
 
@@ -1051,6 +1189,9 @@ test("Today session controller queues finish when the network drops", async () =
     apiImpl: async () => {
       throw new Error("offline");
     },
+    contextOverrides: {
+      outboxSessionPrerequisite: () => ({ status: "ready", id: "prepare-local-1" }),
+    },
   });
   const surface = harness.rootEl.appendChild(new FakeElement("div", { className: "plansurface" }));
   surface.appendChild(new FakeElement("input", { id: "sessNotes", value: "felt strong but tired" }));
@@ -1063,16 +1204,58 @@ test("Today session controller queues finish when the network drops", async () =
   finish.click();
   await flushAsync();
 
-  assert.equal(harness.requests[0].path, "/sessions/44/finish");
+  assert.deepEqual(harness.requests, []);
   assert.deepEqual(plain(harness.outbox), [{
     kind: "finish",
     path: "/sessions/44/finish",
     body: { notes: "felt strong but tired" },
+    depends_on: "prepare-local-1",
+    group_id: "session:44",
   }]);
   assert.equal(finish.disabled, false);
-  assert.deepEqual(harness.toasts.map((toast) => toast.message), ["Finish saved — will sync when you're back online"]);
+  assert.deepEqual(harness.toasts.map((toast) => toast.message), ["Finish saved — reconciling this session"]);
   assert.deepEqual(harness.cachedWrites, []);
   assert.deepEqual(harness.invalidations, []);
+});
+
+test("Today session controller reports when a transient finish cannot be stored locally", async () => {
+  const harness = loadController({
+    apiImpl: async () => { throw new Error("offline"); },
+    contextOverrides: { outboxEnqueue: () => null },
+  });
+  const surface = harness.rootEl.appendChild(new FakeElement("div", { className: "plansurface" }));
+  surface.appendChild(new FakeElement("input", { id: "sessNotes", value: "keep this note" }));
+  const finish = surface.appendChild(new FakeElement("button", { id: "finishBtn" }));
+
+  harness.controller.wireSessionSurface({
+    session: { id: 44, date: "2026-06-30", sets: [{ exercise: "Push-up" }] },
+    hasLoggedSets: true,
+  }, harness.deps);
+  finish.click();
+  await flushAsync();
+
+  assert.equal(finish.disabled, false);
+  assert.deepEqual(harness.toasts.map((toast) => toast.message), [
+    "Couldn’t save that finish on this device — free storage and try again.",
+  ]);
+});
+
+test("Today set logging reports when a transient set cannot be stored locally", async () => {
+  const harness = loadController({
+    apiImpl: async () => { throw new Error("offline"); },
+    contextOverrides: { outboxEnqueue: () => null },
+  });
+  const { row, button, logged } = addLoggingCard(harness.rootEl);
+  harness.controller.wireLogRow(row, harness.deps);
+
+  button.click();
+  await flushAsync();
+
+  assert.equal(button.disabled, false);
+  assert.equal(logged.children.length, 0);
+  assert.deepEqual(harness.toasts.map((toast) => toast.message), [
+    "Couldn’t save that set on this device — free storage and try again.",
+  ]);
 });
 
 test("Today session controller keeps finish notes and skips the outbox on a permanent rejection", async () => {
@@ -1140,6 +1323,7 @@ test("Today session controller times out a hung finish and queues it with the ty
     kind: "finish",
     path: "/sessions/44/finish",
     body: { notes: "heavy pulls, felt great" },
+    group_id: "session:44",
   }]);
   assert.equal(finish.disabled, false);
   assert.deepEqual(harness.toasts.map((toast) => toast.message), ["Finish saved — will sync when you're back online"]);
@@ -1207,6 +1391,12 @@ test("Today session controller skips, undoes, and removes off-plan cards", async
   harness.toasts.at(-1).options.onAction();
   await flushAsync();
 
+  assert.deepEqual(harness.requests.map((request) => request.opts.method), ["POST", "DELETE"]);
+  assert.equal(harness.requests.every((request) => /^test-mutation-\d+$/.test(request.opts.headers["X-Idempotency-Key"])), true);
+  assert.notEqual(
+    harness.requests[0].opts.headers["X-Idempotency-Key"],
+    harness.requests[1].opts.headers["X-Idempotency-Key"],
+  );
   assert.equal(plan.isConnected, true);
   assert.equal(harness.rootEl.children.indexOf(plan) < harness.rootEl.children.indexOf(addex), true);
   assert.equal(harness.expands[0], plan);
@@ -1220,6 +1410,104 @@ test("Today session controller skips, undoes, and removes off-plan cards", async
 
   assert.equal(offPlan.isConnected, false);
   assert.deepEqual(plain(harness.deps.state.pendingOffPlan["2026-06-30"]), [{ name: "Lunge" }]);
+});
+
+test("same-tab staged skip and restore queue behind preparation without a direct request", async () => {
+  const harness = loadController({
+    apiImpl: async () => { throw new Error("staged skip/restore must not POST directly"); },
+    contextOverrides: {
+      outboxSessionPrerequisite: () => ({ status: "ready", id: "prepare-local-1" }),
+    },
+  });
+  const plan = harness.rootEl.appendChild(new FakeElement("article", {
+    className: "ex",
+    dataset: { card: "Squat" },
+  }));
+  const skip = plan.appendChild(new FakeElement("button", {
+    className: "ex-skip",
+    dataset: { skip: encodeURIComponent("Squat") },
+  }));
+  harness.rootEl.appendChild(new FakeElement("div", { className: "addex" }));
+  const line = harness.rootEl.appendChild(new FakeElement("div", {
+    id: "skipLine",
+    className: "skipline skipline-empty",
+  }));
+  line.appendChild(new FakeElement("span", { className: "skipline-names" }));
+
+  harness.controller.wireSkips(harness.deps);
+  skip.click();
+  await flushAsync();
+  assert.deepEqual(harness.requests, []);
+  assert.deepEqual(plain(harness.outbox), [{
+    kind: "skip",
+    path: "/sessions/skip",
+    body: { date: "2026-06-30", exercise: "Squat" },
+    depends_on: "prepare-local-1",
+    group_id: "date:2026-06-30",
+  }]);
+  assert.equal(plan.isConnected, false);
+
+  harness.toasts.at(-1).options.onAction();
+  await flushAsync();
+  assert.deepEqual(harness.requests, []);
+  assert.deepEqual(plain(harness.outbox), [
+    {
+      kind: "skip",
+      path: "/sessions/skip",
+      body: { date: "2026-06-30", exercise: "Squat" },
+      depends_on: "prepare-local-1",
+      group_id: "date:2026-06-30",
+    },
+    {
+      kind: "restore",
+      path: "/sessions/skip",
+      body: { date: "2026-06-30", exercise: "Squat" },
+      method: "DELETE",
+      depends_on: "prepare-local-1",
+      group_id: "date:2026-06-30",
+    },
+  ]);
+  assert.equal(plan.isConnected, true);
+});
+
+test("cross-tab prepare states block direct skip and restore with refresh guidance", async () => {
+  for (const state of ["pending", "prepared", "needs_attention"]) {
+    const harness = loadController({
+      apiImpl: async () => { throw new Error("cross-tab barrier must prevent direct mutation"); },
+      contextOverrides: {
+        outboxSessionPrerequisite: () => ({
+          status: "blocked",
+          id: `prepare-${state}`,
+          reason: "other_tab",
+        }),
+      },
+    });
+    const plan = harness.rootEl.appendChild(new FakeElement("article", { className: "ex" }));
+    const skip = plan.appendChild(new FakeElement("button", {
+      className: "ex-skip",
+      dataset: { skip: encodeURIComponent("Squat") },
+    }));
+    const line = harness.rootEl.appendChild(new FakeElement("div", { id: "skipLine", className: "skipline" }));
+    const names = line.appendChild(new FakeElement("span", { className: "skipline-names" }));
+    const restore = names.appendChild(new FakeElement("button", {
+      dataset: { unskip: encodeURIComponent("Bench") },
+    }));
+
+    harness.controller.wireSkips(harness.deps);
+    skip.click();
+    await flushAsync();
+    line.dispatch("click", { target: restore });
+    await flushAsync();
+
+    assert.deepEqual(harness.requests, [], state);
+    assert.deepEqual(harness.outbox, [], state);
+    assert.equal(plan.isConnected, true);
+    assert.equal(restore.isConnected, true);
+    assert.deepEqual(harness.toasts.map((toast) => toast.message), [
+      "This session is being prepared in another tab or view — refresh before skipping.",
+      "This session is being prepared in another tab or view — refresh before restoring.",
+    ]);
+  }
 });
 
 test("Today session controller saves feedback and merges the returned row", async () => {

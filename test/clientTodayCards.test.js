@@ -29,13 +29,14 @@ function loadTodayCards() {
     escHtml,
     escAttr,
     fmtDur: (seconds) => `${seconds}s`,
-    fmtWeight: (weight) => weight == null ? "BW" : `${weight} lb`,
+    fmtWeight: (weight) => (weight == null ? "BW" : `${weight} lb`),
     fmtKm: (km) => Number(km).toFixed(1),
     stagger: (index) => `--i:${index}`,
     art: (kind, q) => `<svg data-art="${escAttr(`${kind}:${q}`)}"></svg>`,
-    artImg: (kind, q, className, svg) => `<span class="${escAttr(className)}" data-kind="${escAttr(kind)}" data-q="${escAttr(q)}">${svg || ""}</span>`,
-    cardioArtPhrase: (item) => item.note || "run",
-    cardioLabel: (item) => item.label || item.note || "Cardio",
+    artImg: (kind, q, className, svg) =>
+      `<span class="${escAttr(className)}" data-kind="${escAttr(kind)}" data-q="${escAttr(q)}">${svg || ""}</span>`,
+    cardioArtPhrase: (item) => item.note || item.exercise || "run",
+    cardioLabel: (item) => item.label || item.note || item.exercise || "Cardio",
     cardioDescription: (item) => item.description || "",
     cardioPrescription: (item) => item.prescription || "",
   };
@@ -70,7 +71,7 @@ test("Today exercise card helper preserves selectors, escaping, and timed mode",
     { weight: 95, reps: 5, rir: 2 },
     2,
     { action: "overload", suggested: { sets: 3, rep_low: 5, rep_high: 8, weight: 100 }, why: "earned <move>" },
-    { day: 4, exModes: { "Press <heavy>": "timed" } },
+    { day: 4, exModes: { "Press <heavy>": "timed" } }
   );
 
   assert.match(html, /class="ex reveal"/);
@@ -110,7 +111,7 @@ test("Today exercise card helper renders the quiet last-time line only before an
     null,
     null,
     {},
-    lastSet,
+    lastSet
   );
   assert.doesNotMatch(alreadyLogged, /class="ex-lastset"/);
 });
@@ -122,7 +123,15 @@ test("Today exercise card helper renders no last-time line without last-set data
   const withoutLastSet = cards.exerciseCardHtml(item, [], { weight: null, reps: null, rir: null }, null, null, {});
   assert.doesNotMatch(withoutLastSet, /class="ex-lastset"/);
 
-  const withNullLastSet = cards.exerciseCardHtml(item, [], { weight: null, reps: null, rir: null }, null, null, {}, null);
+  const withNullLastSet = cards.exerciseCardHtml(
+    item,
+    [],
+    { weight: null, reps: null, rir: null },
+    null,
+    null,
+    {},
+    null
+  );
   assert.doesNotMatch(withNullLastSet, /class="ex-lastset"/);
 });
 
@@ -131,7 +140,12 @@ test("Today exercise card renders only server-provided anchor/support context", 
   const base = { fromPlan: true, exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 8 };
   const anchor = cards.exerciseCardHtml(
     { ...base, journey_role: "anchor", journey_line: "Anchor lift — hold or ease today." },
-    [], {}, null, null, {}, null,
+    [],
+    {},
+    null,
+    null,
+    {},
+    null
   );
   assert.match(anchor, /data-journey-role="anchor"/);
   assert.match(anchor, /Anchor lift — hold or ease today/);
@@ -154,7 +168,7 @@ test("Today cardio card helper renders planned and done states safely", () => {
     },
     1,
     null,
-    '<span class="sync">synced</span>',
+    '<span class="sync">synced</span>'
   );
 
   assert.match(planned, /data-cardio-card/);
@@ -167,8 +181,15 @@ test("Today cardio card helper renders planned and done states safely", () => {
   const done = cards.cardioPlanCardHtml(
     { note: "Easy run" },
     0,
-    { type: "run", source: "garmin", distance_km: 5.2, duration_min: 31, avg_hr: 142, zones: [{ zone: 2, secs: 1200 }] },
-    "",
+    {
+      type: "run",
+      source: "garmin",
+      distance_km: 5.2,
+      duration_min: 31,
+      avg_hr: 142,
+      zones: [{ zone: 2, secs: 1200 }],
+    },
+    ""
   );
   assert.match(done, /ex-cardio-done/);
   assert.match(done, /Easy run/);
@@ -184,4 +205,35 @@ test("Today cardio matching accepts compatible sports and generic efforts", () =
   assert.equal(cards.cardioEffortMatches({ note: "tempo run" }, { type: "ride" }), false);
   assert.equal(cards.cardioEffortMatches({ note: "conditioning" }, { type: "walk" }), true);
   assert.equal(cards.cardioEffortMatches({ note: "row workout" }, null), false);
+});
+
+test("Today cardio cards and matching honor exercise-only generated modalities", () => {
+  const cards = loadTodayCards();
+  const ride = { kind: "cardio", exercise: "Easy ride", target_duration_min: 40, target_zone: "Z2" };
+  const html = cards.cardioPlanCardHtml(ride, null, null, "");
+
+  assert.match(html, /cardio-name-txt">Easy ride</);
+  assert.match(html, /data-cardio-log="rode 40 min \(Z2\)"/);
+  assert.equal(cards.cardioEffortMatches(ride, { type: "ride" }), true);
+  assert.equal(cards.cardioEffortMatches(ride, { type: "run" }), false);
+  assert.equal(cards.cardioEffortMatches({ kind: "cardio", exercise: "Pool swim" }, { type: "ride" }), false);
+  assert.equal(cards.cardioEffortMatches({ kind: "cardio", exercise: "Erg row" }, { type: "row" }), true);
+  assert.equal(cards.cardioEffortMatches({ kind: "cardio", exercise: "Trail hike" }, { type: "hike" }), true);
+});
+
+test("specific modality outranks long and interval modifiers for capture and synced matching", () => {
+  const cards = loadTodayCards();
+  for (const [exercise, modality, capture] of [
+    ["Long ride", "ride", "rode 30 min"],
+    ["Bike intervals", "ride", "rode 30 min"],
+    ["Long swim", "swim", "swam 30 min"],
+    ["Row intervals", "row", "rowed 30 min"],
+  ]) {
+    const item = { kind: "cardio", exercise, target_duration_min: 30 };
+    const html = cards.cardioPlanCardHtml(item, null, null, "");
+    assert.match(html, new RegExp(`cardio-name-txt">${exercise}`));
+    assert.match(html, new RegExp(`data-cardio-log="${capture}"`));
+    assert.equal(cards.cardioEffortMatches(item, { type: modality }), true);
+    assert.equal(cards.cardioEffortMatches(item, { type: "run" }), false);
+  }
 });

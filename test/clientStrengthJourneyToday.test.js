@@ -107,7 +107,73 @@ test("support provenance is day-specific and unavailable journeys stay silent", 
 test("Today launch integration stays inside the existing card and checks exact anchor membership", () => {
   const source = readFileSync(join(root, "src/client/today-screen.ts"), "utf8");
   assert.match(source, /class="sess-launch-journey"/);
-  assert.match(source, /const hasAnchor = !!objective\?\.exercise/);
+  assert.match(
+    source,
+    /const\s+hasAnchor\s*=\s*!!objective\?\.exercise\s*&&\s*\(opts\.day\?\.items\s*\|\|\s*\[\]\)\.some\(/,
+  );
+  assert.match(
+    source,
+    /String\(item\.exercise\s*\|\|\s*""\)[\s\S]*?\.trim\(\)[\s\S]*?\.toLowerCase\(\)\s*===\s*String\(objective\.exercise\)\.trim\(\)\.toLowerCase\(\)/,
+  );
   assert.match(source, /Anchor day · hold or ease/);
   assert.doesNotMatch(source, /strength-journey-card|sjourney-card/);
+});
+
+test("durable mixed composition preserves saved order and current-session prescription semantics", () => {
+  const renderer = loadRenderer();
+  const order = [];
+  const items = [
+    { exercise: "Deadlift", kind: "strength", fromPlan: false, fromSession: true },
+    { exercise: "Easy ride", kind: "cardio", fromPlan: false, fromSession: true },
+    { exercise: "Pallof Press", kind: "strength", fromPlan: false, fromSession: true },
+  ];
+  renderer.buildHtml({
+    showDone: false,
+    showPlan: true,
+    focus: true,
+    session: null,
+    day: { day_number: 0, name: "Built for today", items },
+    isToday: true,
+    plan: [],
+    activeDay: null,
+    logDate: "2026-07-20",
+    cardioItems: [items[1]],
+    strengthItems: [items[0], items[2]],
+    activeItems: items,
+    skippedItems: [],
+    matchedCardio: new Map(),
+    syncedLine: "",
+    loggedByEx: {},
+    offPlanEx: [],
+    pendingOffPlan: [],
+    lastSets: {},
+    rxByEx: {},
+    strengthJourney: null,
+    exDone: 0,
+    exTotal: 2,
+    hasSyncedCardioToday: false,
+    hasLoggedSets: false,
+    hasGarmin: false,
+    isRunDay: false,
+    preserveItemOrder: true,
+    prefillFor: () => ({}),
+    rxFor: () => null,
+  }, {
+    planSurface: {
+      sessionHeadHtml: () => "",
+      daySwitchHtml: () => "",
+      rxBannerHtml: () => "",
+      addExerciseFormHtml: () => "",
+      finishHtml: () => "",
+    },
+    planSurfaceDeps: () => ({}),
+    isCardioItem: (item) => item.kind === "cardio",
+    cardioLabel: (item) => item.exercise,
+    cardioPlanCard: (item) => { order.push(item.exercise); return ""; },
+    exCard: (item) => { order.push(item.exercise); assert.equal(item.fromSession, true); return ""; },
+    garminSessionCard: () => "",
+    sessionDoneCard: () => "",
+    skipLineHtml: () => "",
+  });
+  assert.deepEqual(order, ["Deadlift", "Easy ride", "Pallof Press"]);
 });

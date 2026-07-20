@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 // CI guard for the repo's #1 footgun: a cache-first service worker.
 //
-// If a change touches any file under public/ (other than sw.js itself), the
-// `const CACHE = "cairn-vNN"` constant at the top of public/sw.js MUST move in the
-// same diff — otherwise already-installed PWA clients keep serving the STALE bundle
-// forever (a client once silently fell ~40 versions behind). See CONTRIBUTING.md
-// "The PWA cache version". Also validates that the classic app-shell script
-// graph and service-worker precache list stay aligned. Pure git plumbing, no deps.
+// If a change touches an app-shell asset, a generated client source, or the client
+// bundle manifest, the `const CACHE = "cairn-vNN"` constant at the top of
+// public/sw.js MUST move in the same diff — otherwise already-installed PWA clients
+// keep serving the STALE bundle forever (a client once silently fell ~40 versions
+// behind). See CONTRIBUTING.md "The PWA cache version". Also validates that the
+// classic app-shell script graph and service-worker precache list stay aligned.
+// Pure git plumbing, no deps.
 //
 // Usage: node scripts/check-sw-cache.mjs [baseRef]   (baseRef defaults to origin/main)
 import { execFileSync } from "node:child_process";
@@ -115,9 +116,19 @@ const localChanged = [
 ];
 changed = [...new Set([...changed, ...localChanged])];
 
-const assetChanges = changed.filter((f) => f.startsWith("public/") && f !== "public/sw.js");
+// public/js is generated and ignored, so a source-only client change can alter a
+// cache-first bundle without appearing as a public/ diff. Treat every client
+// source (and the build manifest that composes those sources) as an app-shell
+// asset change too. This stays deliberately bounded to inputs that can affect a
+// precached browser artifact.
+const assetChanges = changed.filter(
+  (f) =>
+    (f.startsWith("public/") && f !== "public/sw.js") ||
+    f.startsWith("src/client/") ||
+    f === "scripts/build-client.mjs"
+);
 if (assetChanges.length === 0) {
-  console.log("✓ no public/ asset changes — sw.js cache bump not required");
+  console.log("✓ no app-shell asset or generated-client source changes — sw.js cache bump not required");
   process.exit(0);
 }
 
@@ -139,10 +150,10 @@ const addedCache = [...swDiff.matchAll(/^\+\s*const CACHE\s*=\s*["']([^"']+)["']
 const cacheBumped = addedCache.some((next) => removedCache.some((prev) => prev !== next));
 
 if (!cacheBumped) {
-  console.error("✗ public/ assets changed but the public/sw.js CACHE version was not bumped:");
+  console.error("✗ app-shell assets or generated-client sources changed but the public/sw.js CACHE version was not bumped:");
   for (const f of assetChanges) console.error(`    ${f}`);
   console.error('\n  Bump the `const CACHE = "cairn-vNN"` constant at the top of public/sw.js in');
   console.error("  the same change, or installed PWA clients will serve stale assets forever.");
   process.exit(1);
 }
-console.log(`✓ public/ assets changed and sw.js CACHE was bumped (${assetChanges.length} asset file(s))`);
+console.log(`✓ app-shell assets or generated-client sources changed and sw.js CACHE was bumped (${assetChanges.length} input file(s))`);

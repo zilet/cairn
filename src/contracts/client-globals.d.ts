@@ -274,7 +274,10 @@ declare global {
     segments: readonly ClientSegment[];
     handlers: Record<string, () => unknown>;
     headerTitle: HTMLElement;
-    api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+    api(
+      path: string,
+      opts?: RequestInit & { headers?: Record<string, string>; acceptErrorBody?: boolean }
+    ): Promise<unknown>;
     armDelete(btn: Element, action: () => unknown): void;
     escapeAttr(value: unknown): string;
     invalidatePoll(): void;
@@ -300,7 +303,10 @@ declare global {
       sessionIdsByDate?: Record<string, string>;
       pendingOffPlan?: Record<string, Array<{ name: string; mode?: string | null }>>;
     };
-    api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+    api(
+      path: string,
+      opts?: RequestInit & { headers?: Record<string, string>; acceptErrorBody?: boolean }
+    ): Promise<unknown>;
     storeCached(key: string, data: unknown): void;
     invalidate(key: string): void;
     invalidateTodayProgression(): void;
@@ -538,7 +544,10 @@ declare global {
   type ClientTodayDependenciesContextInput = {
     root: HTMLElement;
     state: ClientTodayScreenRuntimeState;
-    api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+    api(
+      path: string,
+      opts?: RequestInit & { headers?: Record<string, string>; acceptErrorBody?: boolean }
+    ): Promise<unknown>;
     cachedApi(path: string, options?: CachedApiOptions<unknown>): Promise<unknown>;
     peekCached<T = unknown>(key: string, freshFor?: number): SwrPeek<T> | null;
     storeCached(key: string, data: unknown): void;
@@ -659,7 +668,10 @@ declare global {
   };
   type ClientTodayCompatibilityBridgesApi = {
     create(input: {
-      api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+      api(
+        path: string,
+        opts?: RequestInit & { headers?: Record<string, string>; acceptErrorBody?: boolean }
+      ): Promise<unknown>;
       dependencies(): ClientTodayDependenciesContext;
     }): ClientTodayCompatibilityBridgesContext;
   };
@@ -674,7 +686,7 @@ declare global {
   type ClientTodayScreenRuntimeContext = ClientTodayCompatibilityBridgesContext & {
     api<Path extends string>(
       path: Path,
-      opts?: RequestInit & { headers?: Record<string, string> }
+      opts?: RequestInit & { headers?: Record<string, string>; acceptErrorBody?: boolean }
     ): Promise<ClientApiResponse<Path>>;
     cachedApi<Path extends string>(
       path: Path,
@@ -714,7 +726,7 @@ declare global {
       state: ClientTodayScreenRuntimeState;
       api<Path extends string>(
         path: Path,
-        opts?: RequestInit & { headers?: Record<string, string> }
+        opts?: RequestInit & { headers?: Record<string, string>; acceptErrorBody?: boolean }
       ): Promise<ClientApiResponse<Path>>;
       cachedApi<Path extends string>(
         path: Path,
@@ -917,10 +929,7 @@ declare global {
       milestones: ClientJourneyMilestone[] | unknown,
       deps?: { stagger?(index?: number | null): string }
     ): string;
-    phaseSummary(
-      read: ClientJourneyRead | null | undefined,
-      milestones?: unknown
-    ): string;
+    phaseSummary(read: ClientJourneyRead | null | undefined, milestones?: unknown): string;
     wire(root?: ParentNode): void;
   };
 
@@ -1251,14 +1260,59 @@ declare global {
 
   // Offline outbox — a durable localStorage queue that replays failed capture /
   // set-log POSTs when Cairn is reachable again (see api-client.ts).
-  type ClientOutboxItem = { id: string; ts: number; kind: string; path: string; body: unknown };
+  type ClientOutboxItem = {
+    id: string;
+    ts: number;
+    kind: string;
+    path: string;
+    method?: "POST" | "DELETE";
+    body: unknown;
+    session_date?: string;
+    state?: "pending" | "sending" | "prepared" | "needs_attention";
+    in_flight_until?: number;
+    claim_token?: string;
+    failure_status?: number;
+    depends_on?: string;
+    group_id?: string;
+    prepare_intent?: Record<string, unknown>;
+    retry_body?: Record<string, unknown>;
+    retry_intent?: Record<string, unknown>;
+  };
+  type ClientOutboxEnqueueOptions = {
+    dependsOn?: string | null;
+    groupId?: string | null;
+    sessionDate?: string | null;
+    method?: "POST" | "DELETE";
+    prepareIntent?: Record<string, unknown> | null;
+    retryBody?: Record<string, unknown> | null;
+    retryIntent?: Record<string, unknown> | null;
+  };
+  type ClientOutboxReviewEntry = { item: ClientOutboxItem; role: "attention" | "blocked_dependent" };
   type ClientOutboxController = {
-    enqueue(entry: { kind: string; path: string; body: unknown }): ClientOutboxItem;
+    enqueue(entry: {
+      kind: string;
+      path: string;
+      method?: "POST" | "DELETE";
+      body: unknown;
+      session_date?: string;
+      depends_on?: string;
+      group_id?: string;
+      prepare_intent?: Record<string, unknown>;
+      retry_body?: Record<string, unknown>;
+      retry_intent?: Record<string, unknown>;
+    }): ClientOutboxItem | null;
     list(): ClientOutboxItem[];
+    review(): ClientOutboxReviewEntry[];
     count(): number;
-    remove(id: string): void;
+    retry(id: string): boolean;
+    remove(id: string): boolean;
+    hasDependents(id: string): boolean;
     clear(): void;
-    drain(send: (item: ClientOutboxItem) => Promise<unknown>): Promise<{ sent: number; remaining: number }>;
+    drain(send: (item: ClientOutboxItem) => Promise<unknown>): Promise<{
+      sent: number;
+      remaining: number;
+      needsAttention: number;
+    }>;
   };
   type ClientOutboxApi = {
     createOutbox(opts: {
@@ -1267,13 +1321,78 @@ declare global {
       key?: string;
       max?: number;
     }): ClientOutboxController;
-    enqueue(kind: string, path: string, body: unknown): ClientOutboxItem;
+    enqueue(
+      kind: string,
+      path: string,
+      body: unknown,
+      options?: ClientOutboxEnqueueOptions,
+    ): Promise<ClientOutboxItem | null>;
     flush(): Promise<void>;
     count(): number;
+    list(): ClientOutboxItem[];
+    reviewItems(): ClientOutboxReviewEntry[];
     renderBar(): void;
+    retry(id: string): Promise<boolean>;
+    discard(id: string): Promise<boolean>;
+    sessionDependency(date: string): string | null;
+    sessionGroupId(
+      date: string,
+      identity?: { dailySessionId?: unknown; sessionId?: unknown },
+    ): string;
+    runSessionMutation(
+      input: ClientOutboxSessionMutationInput,
+      send: (idempotencyKey: string) => Promise<unknown>,
+    ): Promise<ClientOutboxSessionMutationResult>;
+    sessionPrerequisite(date: string): {
+      status: "none" | "ready" | "blocked";
+      id: string | null;
+      reason?: "attention" | "other_tab" | "phantom";
+    };
   };
   declare const CairnOutbox: ClientOutboxApi;
-  declare function outboxEnqueue(kind: string, path: string, body: unknown): ClientOutboxItem;
+  declare function outboxEnqueue(
+    kind: string,
+    path: string,
+    body: unknown,
+    options?: ClientOutboxEnqueueOptions,
+  ): Promise<ClientOutboxItem | null>;
+  declare function outboxSessionDependency(date: string): string | null;
+  declare function outboxSessionGroupId(
+    date: string,
+    identity?: { dailySessionId?: unknown; sessionId?: unknown },
+  ): string;
+  declare function outboxSessionPrerequisite(
+    date: string,
+  ): {
+    status: "none" | "ready" | "blocked";
+    id: string | null;
+    reason?: "attention" | "other_tab" | "phantom";
+  };
+  declare function outboxResolveSessionPrerequisite(date: string): void;
+  declare function outboxBlockSessionPrerequisite(date: string): void;
+  type ClientOutboxSessionMutationInput = {
+    date: string;
+    kind: string;
+    path: string;
+    body: unknown;
+    method?: "POST" | "DELETE";
+    identity?: { dailySessionId?: unknown; sessionId?: unknown };
+  };
+  type ClientOutboxSessionMutationResult =
+    | { status: "sent"; value: unknown; groupId: string }
+    | { status: "queued"; item: ClientOutboxItem; groupId: string }
+    | {
+        status: "blocked";
+        reason: "attention" | "other_tab" | "phantom";
+        prerequisiteId: string | null;
+        groupId: string;
+      }
+    | { status: "storage_error"; groupId: string }
+    | { status: "failed"; error: unknown; groupId: string };
+  declare function runSessionMutation(
+    input: ClientOutboxSessionMutationInput,
+    send: (idempotencyKey: string) => Promise<unknown>,
+  ): Promise<ClientOutboxSessionMutationResult>;
   declare function flushOutbox(): Promise<void>;
   declare function outboxCount(): number;
 
@@ -1455,18 +1574,12 @@ declare global {
     lift: ClientProgramState["lifts"][number] | null | undefined,
     index: number
   ): string;
-  declare function variantRowHtml(
-    lift: ClientProgramState["lifts"][number] | null | undefined,
-    index: number
-  ): string;
+  declare function variantRowHtml(lift: ClientProgramState["lifts"][number] | null | undefined, index: number): string;
   declare function familyGroupHtml(
     group: { key: string; label: string; lifts: ClientProgramState["lifts"] } | null | undefined,
     index: number
   ): string;
-  declare function curatedLiftsHtml(
-    lifts: ClientProgramState["lifts"] | null | undefined,
-    startIndex?: number
-  ): string;
+  declare function curatedLiftsHtml(lifts: ClientProgramState["lifts"] | null | undefined, startIndex?: number): string;
   declare function volumeBlockHtml(volume: ClientProgramState["volume"] | null | undefined, startIdx: number): string;
   declare function mesoBlockHtml(meso: ClientProgramState["mesocycle"] | null | undefined, index: number): string;
   declare function adaptationsHtml(adaptations: string[] | null | undefined, index: number): string;
@@ -1531,7 +1644,19 @@ declare global {
   declare function renderTab(tab: string): unknown;
   declare function renderToday(): unknown;
   declare function renderSession(opts?: Record<string, unknown>): unknown;
-  declare function openSession(date?: string | null): void;
+  declare function openSession(
+    date?: string | null,
+    options?: {
+      source?: "adaptive_plan" | "agent_suggest" | "manual_plan" | "athlete_override";
+      dayNumber?: number | null;
+      replace?: boolean;
+      agentJobId?: number | null;
+      session?: ClientSessionSuggestion | null;
+      constraints?: Record<string, unknown>;
+      trigger?: HTMLElement | null;
+      provenance?: Record<string, unknown>;
+    }
+  ): Promise<boolean>;
   declare function renderFoodJournal(): unknown;
   declare function renderMeals(): unknown;
   declare function renderCoach(): unknown;
@@ -1829,7 +1954,28 @@ declare global {
     startAppShell(): void;
     CairnAppRouter: ClientAppRouterApi;
     CairnOutbox: ClientOutboxApi;
-    outboxEnqueue(kind: string, path: string, body: unknown): ClientOutboxItem;
+    outboxEnqueue(
+      kind: string,
+      path: string,
+      body: unknown,
+      options?: ClientOutboxEnqueueOptions,
+    ): Promise<ClientOutboxItem | null>;
+    outboxSessionDependency(date: string): string | null;
+    outboxSessionGroupId(
+      date: string,
+      identity?: { dailySessionId?: unknown; sessionId?: unknown },
+    ): string;
+    outboxSessionPrerequisite(date: string): {
+      status: "none" | "ready" | "blocked";
+      id: string | null;
+      reason?: "attention" | "other_tab" | "phantom";
+    };
+    outboxResolveSessionPrerequisite(date: string): void;
+    outboxBlockSessionPrerequisite(date: string): void;
+    runSessionMutation(
+      input: ClientOutboxSessionMutationInput,
+      send: (idempotencyKey: string) => Promise<unknown>,
+    ): Promise<ClientOutboxSessionMutationResult>;
     flushOutbox(): Promise<void>;
     outboxCount(): number;
     CairnApiCache: ClientApiCacheApi;
@@ -3787,6 +3933,7 @@ declare global {
           hasLoggedSets: boolean;
           hasGarmin: boolean;
           isRunDay: boolean;
+          preserveItemOrder?: boolean;
           prefillFor(item: Record<string, unknown>): {
             weight?: unknown;
             reps?: unknown;
@@ -3823,6 +3970,7 @@ declare global {
           day: number | null;
           dayPicked?: boolean;
           chatPrefill?: string | null;
+          capturePrefill?: string | null;
         };
         read: { _provisional?: boolean } | null | undefined;
         isToday: boolean;
@@ -3861,7 +4009,9 @@ declare global {
         withViewTransition(fn: () => unknown): Promise<unknown> | unknown;
         viewEnter(): void;
         localISO(): string;
+        toast(message: string): void;
       }): void;
+      applyPendingCapture(deps: Parameters<Window["CairnTodayPostRenderWiring"]["wirePostRender"]>[0]): boolean;
     };
 
     CairnTodayDependencies: ClientTodayDependenciesApi;
@@ -4134,7 +4284,22 @@ declare global {
         opts: { minutes?: unknown; focus?: unknown; equipment?: unknown; constraints?: unknown } | undefined,
         deps: {
           root: ParentNode;
-          state: { logDate?: string; suggestedSession?: ClientSessionSuggestion | null };
+          state: {
+            logDate?: string;
+            suggestedSession?: ClientSessionSuggestion | null;
+            suggestedSessionContext?: {
+              agentJobId?: number | null;
+              constraints?: Record<string, unknown>;
+              provenance?: Record<string, unknown>;
+            } | null;
+          };
+          api(
+            path: string,
+            opts?: RequestInit & { headers?: Record<string, string>; acceptErrorBody?: boolean }
+          ): Promise<unknown>;
+          storeCached(key: string, data: unknown): void;
+          invalidate(key: string): void;
+          openSession(date?: string | null, options?: Record<string, unknown>): unknown;
           runOp(
             kind: "session_suggest",
             body: Record<string, unknown>,
@@ -4145,17 +4310,48 @@ declare global {
           collapseEl(el: Element, done?: () => void): void;
           reducedMotion(): boolean;
           toast(message: string): void;
-          revealPlanThen(after: () => unknown, opts?: { blank?: boolean }): unknown;
-          appendOffPlanCard(name: unknown, mode: "timed" | "reps"): unknown;
         }
       ): Promise<void>;
+      cachedContinuation(
+        cachedSession: unknown,
+        cachedDailySession: unknown,
+        explicitReplacement: boolean,
+        hasPreparePrerequisite?: (id: string) => boolean
+      ): {
+        ok: true;
+        reused: true;
+        staged: boolean;
+        session: Record<string, unknown>;
+        daily_session: Record<string, unknown>;
+      } | null;
+      stageCachedContinuation(
+        continuation: { session: Record<string, unknown>; daily_session: Record<string, unknown> },
+        localPrepareId: string
+      ): {
+        ok: true;
+        reused: true;
+        staged: true;
+        session: Record<string, unknown>;
+        daily_session: Record<string, unknown>;
+      } | null;
+      snapshotRecovery(
+        dailySession: unknown,
+        originalRequest: unknown
+      ): { body: Record<string, unknown>; intent: Record<string, unknown> } | null;
+      createPrepareCoordinator(): {
+        run<T>(
+          date: string,
+          task: () => Promise<T>
+        ): Promise<{ current: boolean; ok: true; value: T } | { current: boolean; ok: false; error: unknown }>;
+      };
       reconnectSessionSuggest(
         job: unknown,
         deps: Parameters<Window["CairnTodaySessionSuggestController"]["askForSession"]>[1]
       ): unknown;
       revealSessionComposer(deps: Parameters<Window["CairnTodaySessionSuggestController"]["askForSession"]>[1]): void;
       sessionSuggestOpOpts(
-        deps: Parameters<Window["CairnTodaySessionSuggestController"]["askForSession"]>[1]
+        deps: Parameters<Window["CairnTodaySessionSuggestController"]["askForSession"]>[1],
+        request?: Record<string, unknown>
       ): ClientAgentOpHandlers;
       wireSuggestCard(
         slot: Element,

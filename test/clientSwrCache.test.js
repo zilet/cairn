@@ -90,6 +90,27 @@ test("SWR cache can be primed directly from mutation results", () => {
   assert.equal(loaded.storage.has("cairn.swr.v1.today:session:2026-07-01"), true);
 });
 
+test("an older revalidate cannot overwrite a newer mutation result", async () => {
+  let resolveRead;
+  const loaded = loadSwrCache({
+    apiImpl: () => new Promise((resolve) => { resolveRead = resolve; }),
+  });
+  const upgrades = [];
+  const read = loaded.context.cachedApi("/sessions?date=2026-07-01", {
+    key: "today:session:2026-07-01",
+    onUpgrade: (data) => upgrades.push(data),
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const prepared = { id: 22, daily_session: { id: 7, version: 2 } };
+  loaded.context.swrSet("today:session:2026-07-01", prepared);
+  resolveRead({ id: 12, daily_session: null });
+
+  assert.deepEqual(await read, prepared);
+  assert.deepEqual(loaded.context.peekCached("today:session:2026-07-01").data, prepared);
+  assert.deepEqual(upgrades, [], "superseded GET must not repaint");
+});
+
 test("optimisticMutation primes locally, commits server truth, and rolls back on failure", async () => {
   const loaded = loadSwrCache();
   const changes = [];

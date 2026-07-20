@@ -69,6 +69,37 @@ CREATE TABLE IF NOT EXISTS sessions (
   kind TEXT DEFAULT 'strength',          -- strength | cardio — a logged cardio effort (run/ride) is a reviewable session too (v35)
   created_at TEXT DEFAULT (datetime('now'))
 );
+-- Durable, versioned prescription for what the athlete chose to do on one day.
+-- The weekly plan remains a reusable template: plan-backed compositions copy its
+-- items here, and replacements mark the old row superseded instead of deleting it.
+CREATE TABLE IF NOT EXISTS daily_session_compositions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  version INTEGER NOT NULL,
+  session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  source TEXT NOT NULL CHECK (source IN ('adaptive_plan','agent_suggest','manual_plan','athlete_override')),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','superseded')),
+  plan_day_id INTEGER REFERENCES plan_days(id) ON DELETE SET NULL,
+  title TEXT,
+  focus TEXT,
+  why TEXT,
+  est_minutes INTEGER,
+  items_json TEXT NOT NULL,
+  constraints_json TEXT,
+  provenance_json TEXT,
+  request_fingerprint TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  superseded_at TEXT,
+  UNIQUE(date, version)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_session_active_date
+  ON daily_session_compositions(date) WHERE status = 'active';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_session_active_session
+  ON daily_session_compositions(session_id) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_daily_session_history
+  ON daily_session_compositions(date, version DESC);
+CREATE INDEX IF NOT EXISTS idx_daily_session_fingerprint
+  ON daily_session_compositions(date, request_fingerprint, status);
 CREATE TABLE IF NOT EXISTS logged_sets (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -1270,8 +1301,10 @@ CREATE INDEX IF NOT EXISTS idx_program_blocks_status ON program_blocks(status);
 -- retries queued mutating writes (sets, activities, bodyweight, food notes,
 -- session finish) with a client-generated X-Idempotency-Key; this table lets the
 -- server replay the FIRST 2xx response for a repeated key instead of applying the
--- write twice. Regenerable (rows expire after 7 days, pruned by src/idempotency.ts)
--- — a new table, so no migration is needed.
+-- write twice. Only durable-outbox routes are admitted. Successful responses are
+-- retained for the lifetime of the database because that outbox has no expiry;
+-- keys are capped at 120 characters and stored response bodies at 64 KiB. This is
+-- a new table, so no migration is needed.
 CREATE TABLE IF NOT EXISTS idempotency_keys (
   key TEXT PRIMARY KEY,
   method TEXT NOT NULL,

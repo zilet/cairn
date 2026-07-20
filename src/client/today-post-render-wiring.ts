@@ -7,6 +7,7 @@ type TodayPostRenderState = {
   day: number | null;
   dayPicked?: boolean;
   chatPrefill?: string | null;
+  capturePrefill?: string | null;
 };
 
 type TodayPostRenderRead = {
@@ -61,13 +62,29 @@ type TodayPostRenderWiringDeps = {
   withViewTransition(fn: () => unknown): Promise<unknown> | unknown;
   viewEnter(): void;
   localISO(): string;
+  toast(message: string): void;
 };
 
 type TodayPostRenderWiringApi = {
+  applyPendingCapture(deps: TodayPostRenderWiringDeps): boolean;
   wirePostRender(deps: TodayPostRenderWiringDeps): void;
 };
 
 (() => {
+  function applyPendingCapture(deps: TodayPostRenderWiringDeps): boolean {
+    const phrase = String(deps.state.capturePrefill || "").trim();
+    if (!phrase) return false;
+    const input = deps.root.querySelector<HTMLInputElement>("#qlInput");
+    if (!input) return false;
+    deps.state.capturePrefill = null;
+    input.value = phrase;
+    input.focus();
+    try { input.setSelectionRange(input.value.length, input.value.length); } catch {}
+    input.scrollIntoView({ behavior: deps.reducedMotion() ? "auto" : "smooth", block: "center" });
+    deps.toast("Review the activity, then press Enter to log it");
+    return true;
+  }
+
   function wirePostRender(deps: TodayPostRenderWiringDeps): void {
     deps.updateHeaderCondense();
     deps.runCountUps(deps.root, { snap: deps.soft });
@@ -78,6 +95,7 @@ type TodayPostRenderWiringApi = {
     quickLogInput?.addEventListener("keydown", (event) => {
       if (event.key === "Enter") deps.quickLog();
     });
+    applyPendingCapture(deps);
 
     deps.root.querySelectorAll<HTMLElement>("[data-cardio-log]").forEach((button) => button.addEventListener("click", () => {
       const input = deps.root.querySelector<HTMLInputElement>("#qlInput");
@@ -143,6 +161,7 @@ type TodayPostRenderWiringApi = {
   }
 
   const CAIRN_TODAY_POST_RENDER_WIRING: TodayPostRenderWiringApi = {
+    applyPendingCapture,
     wirePostRender,
   };
 

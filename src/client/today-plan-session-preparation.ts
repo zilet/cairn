@@ -2,10 +2,15 @@
 // Today plan/session preparation: selected day, skips, cardio matches, last-set
 // prefill, pending off-plan cards, and adaptive prescriptions.
 
-type TodayPlanSessionPrepCachedApiOptions<T> = { key?: string; freshFor?: number; onUpgrade?: (data: T, meta: { changed: boolean }) => void };
+type TodayPlanSessionPrepCachedApiOptions<T> = {
+  key?: string;
+  freshFor?: number;
+  onUpgrade?: (data: T, meta: { changed: boolean }) => void;
+};
 type TodayPlanSessionPrepSwrPeek<T> = { data: T; fresh: boolean };
 type TodayPlanSessionPrepPlanItem = import("../contracts/client.js").ClientPlanItem & {
   fromPlan?: boolean;
+  fromSession?: boolean;
   target_distance_km?: number | null;
   target_duration_min?: number | null;
   target_zone?: string | null;
@@ -28,6 +33,7 @@ type TodayPlanSessionPrepSession = import("../contracts/client.js").ClientTraini
   skips?: unknown[];
   sets?: TodayPlanSessionPrepLoggedSet[] | null;
 };
+type TodayPlanSessionPrepDailySession = import("../contracts/client-api.js").ClientDailySessionComposition;
 type TodayPlanSessionPrepCardioEffort = import("../contracts/client.js").ClientCardioEffort;
 type TodayPlanSessionPrepPrescription = import("../contracts/client.js").ClientPrescription & {
   exercise?: string | null;
@@ -53,11 +59,15 @@ type TodayPlanSessionPrepDeps = {
   suggestedPlanDayNumber(session: TodayPlanSessionPrepSession | null | undefined, isToday: boolean): Promise<number>;
   isCardioItem(item: TodayPlanSessionPrepPlanItem): boolean;
   cardioLabel(item: TodayPlanSessionPrepPlanItem): string;
-  cardioEffortMatches(item: TodayPlanSessionPrepPlanItem, effort: TodayPlanSessionPrepCardioEffort | null | undefined): boolean;
+  cardioEffortMatches(
+    item: TodayPlanSessionPrepPlanItem,
+    effort: TodayPlanSessionPrepCardioEffort | null | undefined
+  ): boolean;
 };
 type TodayPlanSessionPrepResult = {
   revealBlank: boolean;
   day: TodayPlanSessionPrepPlanDay;
+  dailySession: TodayPlanSessionPrepDailySession | null;
   loggedByEx: Record<string, TodayPlanSessionPrepLoggedSet[]>;
   planNames: Set<string>;
   allCardio: TodayPlanSessionPrepPlanItem[];
@@ -83,22 +93,26 @@ type TodayPlanSessionPrepResult = {
   expectingRun: boolean;
 };
 type TodayPlanSessionPreparationApi = {
-  groupLoggedSets(session: TodayPlanSessionPrepSession | null | undefined): Record<string, TodayPlanSessionPrepLoggedSet[]>;
+  groupLoggedSets(
+    session: TodayPlanSessionPrepSession | null | undefined
+  ): Record<string, TodayPlanSessionPrepLoggedSet[]>;
   matchCardioEfforts(
     items: TodayPlanSessionPrepPlanItem[],
     efforts: TodayPlanSessionPrepCardioEffort[],
-    matches: TodayPlanSessionPrepDeps["cardioEffortMatches"],
+    matches: TodayPlanSessionPrepDeps["cardioEffortMatches"]
   ): Map<TodayPlanSessionPrepPlanItem, TodayPlanSessionPrepCardioEffort>;
   preparePlanSession(deps: TodayPlanSessionPrepDeps): Promise<TodayPlanSessionPrepResult>;
 };
 type TodayPlanSessionPrepModelApi = {
   planItems(day: TodayPlanSessionPrepPlanDay | null | undefined): TodayPlanSessionPrepPlanItem[];
-  groupLoggedSets(session: TodayPlanSessionPrepSession | null | undefined): Record<string, TodayPlanSessionPrepLoggedSet[]>;
+  groupLoggedSets(
+    session: TodayPlanSessionPrepSession | null | undefined
+  ): Record<string, TodayPlanSessionPrepLoggedSet[]>;
   selectedPlanDay(state: TodayPlanSessionPrepState, revealBlank: boolean): TodayPlanSessionPrepPlanDay;
   matchCardioEfforts(
     items: TodayPlanSessionPrepPlanItem[],
     efforts: TodayPlanSessionPrepCardioEffort[],
-    matches: TodayPlanSessionPrepDeps["cardioEffortMatches"],
+    matches: TodayPlanSessionPrepDeps["cardioEffortMatches"]
   ): Map<TodayPlanSessionPrepPlanItem, TodayPlanSessionPrepCardioEffort>;
   itemGroups(params: {
     items: TodayPlanSessionPrepPlanItem[];
@@ -119,52 +133,96 @@ type TodayPlanSessionPrepModelApi = {
   prunePendingOffPlan(
     state: TodayPlanSessionPrepState,
     planNames: Set<string>,
-    loggedByEx: Record<string, TodayPlanSessionPrepLoggedSet[]>,
+    loggedByEx: Record<string, TodayPlanSessionPrepLoggedSet[]>
   ): TodayPlanSessionPrepPendingOffPlan[];
   prefillFor(
     item: TodayPlanSessionPrepPlanItem,
     loggedByEx: Record<string, TodayPlanSessionPrepLoggedSet[]>,
-    lastSets: Record<string, Record<string, unknown> | null>,
+    lastSets: Record<string, Record<string, unknown> | null>
   ): TodayPlanSessionPrepPrefill;
 };
 type TodayPlanSessionPrepDataApi = {
   loadLastSets(
     names: string[],
     loggedByEx: Record<string, TodayPlanSessionPrepLoggedSet[]>,
-    deps: TodayPlanSessionPrepDeps,
+    deps: TodayPlanSessionPrepDeps
   ): Promise<Record<string, Record<string, unknown> | null>>;
   loadPrescriptions(
     day: number | null,
     planEx: string[],
-    deps: Pick<TodayPlanSessionPrepDeps, "cachedApi">,
+    deps: Pick<TodayPlanSessionPrepDeps, "cachedApi">
   ): Promise<Record<string, TodayPlanSessionPrepPrescription | null | undefined>>;
   loadCardioContext(
     dayItems: TodayPlanSessionPrepPlanItem[],
     isToday: boolean,
-    deps: TodayPlanSessionPrepDeps,
-  ): Promise<{ allCardio: TodayPlanSessionPrepPlanItem[]; cardioEfforts: TodayPlanSessionPrepCardioEffort[]; todaySettings: unknown }>;
+    deps: TodayPlanSessionPrepDeps
+  ): Promise<{
+    allCardio: TodayPlanSessionPrepPlanItem[];
+    cardioEfforts: TodayPlanSessionPrepCardioEffort[];
+    todaySettings: unknown;
+  }>;
 };
 
 (() => {
-  const todayPlanSessionModel = (globalThis as unknown as {
-    CairnTodayPlanSessionModel: TodayPlanSessionPrepModelApi;
-  }).CairnTodayPlanSessionModel;
-  const todayPlanSessionData = (globalThis as unknown as {
-    CairnTodayPlanSessionData: TodayPlanSessionPrepDataApi;
-  }).CairnTodayPlanSessionData;
+  const todayPlanSessionModel = (
+    globalThis as unknown as {
+      CairnTodayPlanSessionModel: TodayPlanSessionPrepModelApi;
+    }
+  ).CairnTodayPlanSessionModel;
+  const todayPlanSessionData = (
+    globalThis as unknown as {
+      CairnTodayPlanSessionData: TodayPlanSessionPrepDataApi;
+    }
+  ).CairnTodayPlanSessionData;
 
   async function preparePlanSession(deps: TodayPlanSessionPrepDeps): Promise<TodayPlanSessionPrepResult> {
     const loggedByEx = todayPlanSessionModel.groupLoggedSets(deps.session);
-    const revealBlank = !!(deps.state.planReveal && deps.state.planReveal.date === deps.state.logDate && deps.state.planReveal.on && deps.state.planReveal.blank);
-    const hasSelectedDay = deps.state.plan.some((day) => day.day_number === deps.state.day);
-    if (revealBlank && !deps.state.dayPicked) {
-      deps.state.day = null;
-    } else if (!deps.state.dayPicked || deps.state.day === null || !hasSelectedDay) {
-      deps.state.day = await deps.suggestedPlanDayNumber(deps.session, deps.isToday);
-      deps.state.dayPicked = false;
+    const dailySession =
+      deps.session?.daily_session && Array.isArray(deps.session.daily_session.items)
+        ? (deps.session.daily_session as TodayPlanSessionPrepDailySession)
+        : null;
+    const revealBlank = !!(
+      deps.state.planReveal &&
+      deps.state.planReveal.date === deps.state.logDate &&
+      deps.state.planReveal.on &&
+      deps.state.planReveal.blank
+    );
+    const linked =
+      dailySession?.plan_day_id == null
+        ? null
+        : deps.state.plan.find((day) => Number(day.id) === Number(dailySession.plan_day_id)) || null;
+    if (dailySession) {
+      deps.state.day = linked?.day_number ?? null;
+      deps.state.dayPicked = dailySession.source === "manual_plan";
+    } else {
+      const hasSelectedDay = deps.state.plan.some((day) => day.day_number === deps.state.day);
+      if (revealBlank && !deps.state.dayPicked) {
+        deps.state.day = null;
+      } else if (!deps.state.dayPicked || deps.state.day === null || !hasSelectedDay) {
+        deps.state.day = await deps.suggestedPlanDayNumber(deps.session, deps.isToday);
+        deps.state.dayPicked = false;
+      }
     }
 
-    const day = todayPlanSessionModel.selectedPlanDay(deps.state, revealBlank);
+    const planSource = dailySession?.source === "adaptive_plan" || dailySession?.source === "manual_plan";
+    const day = dailySession
+      ? (() => {
+          const snapshotItems = [...dailySession.items]
+            .sort((left, right) => Number(left.position) - Number(right.position))
+            .map((item) => ({ ...item, fromPlan: planSource, fromSession: true }));
+          return {
+            id: dailySession.plan_day_id ?? undefined,
+            day_number: deps.state.day ?? 0,
+            name: dailySession.title || (planSource ? "Today's session" : "Built for today"),
+            focus: dailySession.focus,
+            // The accepted one-day composition is the complete prescription.
+            // Later weekly-plan edits require an explicit prepare/replace and can
+            // never leak into this durable snapshot, including cardio items.
+            items: snapshotItems,
+            daily_session: dailySession,
+          };
+        })()
+      : todayPlanSessionModel.selectedPlanDay(deps.state, revealBlank);
     const items = todayPlanSessionModel.planItems(day);
     const skips = (deps.session && deps.session.skips) || [];
 
@@ -188,30 +246,28 @@ type TodayPlanSessionPrepDataApi = {
 
     const [{ allCardio, cardioEfforts, todaySettings }, lastSets, rxByEx, strengthJourney] = await Promise.all([
       todayPlanSessionData.loadCardioContext(items, deps.isToday, deps),
-      todayPlanSessionData.loadLastSets([...early.planEx, ...pendingOffPlan.map((item) => item.name)], loggedByEx, deps),
-      todayPlanSessionData.loadPrescriptions(deps.state.day, early.planEx, deps),
-      deps.api("/strength-journey")
-        .then((value) => value && typeof value === "object" ? value as TodayPlanSessionPrepStrengthJourney : null)
+      todayPlanSessionData.loadLastSets(
+        [...early.planEx, ...pendingOffPlan.map((item) => item.name)],
+        loggedByEx,
+        deps
+      ),
+      todayPlanSessionData.loadPrescriptions(dailySession && !planSource ? null : deps.state.day, early.planEx, deps),
+      deps
+        .api("/strength-journey")
+        .then((value) => (value && typeof value === "object" ? (value as TodayPlanSessionPrepStrengthJourney) : null))
         .catch(() => null),
     ]);
 
     const matchedCardio = todayPlanSessionModel.matchCardioEfforts(allCardio, cardioEfforts, deps.cardioEffortMatches);
-    const {
-      planNames,
-      activeItems,
-      skippedItems,
-      cardioItems,
-      strengthItems,
-      planEx,
-      offPlanEx,
-    } = todayPlanSessionModel.itemGroups({
-      items,
-      loggedByEx,
-      matchedCardio,
-      skips,
-      isCardioItem: deps.isCardioItem,
-      cardioLabel: deps.cardioLabel,
-    });
+    const { planNames, activeItems, skippedItems, cardioItems, strengthItems, planEx, offPlanEx } =
+      todayPlanSessionModel.itemGroups({
+        items,
+        loggedByEx,
+        matchedCardio,
+        skips,
+        isCardioItem: deps.isCardioItem,
+        cardioLabel: deps.cardioLabel,
+      });
     const rxFor = (name: unknown) => (name ? rxByEx[String(name).toLowerCase()] || null : null);
     const prefillFor = (item: TodayPlanSessionPrepPlanItem): TodayPlanSessionPrepPrefill =>
       todayPlanSessionModel.prefillFor(item, loggedByEx, lastSets);
@@ -224,6 +280,7 @@ type TodayPlanSessionPrepDataApi = {
     return {
       revealBlank,
       day,
+      dailySession,
       loggedByEx,
       planNames,
       allCardio,

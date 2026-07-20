@@ -45,9 +45,9 @@ function exRxVaryMenuHtml(rx: ClientPrescriptionLike): string {
     ? rx.vary_options.filter((o) => o && typeof o === "object" && o.name)
     : [];
   if (!opts.length) return "";
-  // Each chip is ACTIONABLE: tapping it swaps this option in RIGHT NOW (from → this
-  // option) via /program/swap/apply — the plan adapts and the new movement is ready
-  // to log against immediately. Carries the from-exercise + the plan day for the handler.
+  // Each chip updates the weekly plan (from → this option) via
+  // /program/swap/apply. An already accepted Today snapshot is immutable, so the
+  // change is deliberately future-facing rather than changing this workout.
   const from = rx?.exercise ? String(rx.exercise) : "";
   const day = rx?.day_number != null ? String(rx.day_number) : "";
   const swappable = !!from && !!day;
@@ -70,14 +70,12 @@ function exRxVaryMenuHtml(rx: ClientPrescriptionLike): string {
       })
     )
     .join("");
-  return `<div class="ex-rx-vary-menu"><span class="ex-rx-vary-lbl lbl">rotate one in</span><div class="ex-rx-opts">${chips}</div></div>`;
+  return `<div class="ex-rx-vary-menu"><span class="ex-rx-vary-lbl lbl">update a future session</span><div class="ex-rx-opts">${chips}</div></div>`;
 }
 
-// Swap the movement in RIGHT NOW — "adapts as I go", no Coach review gate. The swap
-// lands in the plan immediately (/program/swap/apply) and the surface the athlete is
-// looking at re-renders so the new movement's card is ready to log against. The plan
-// quietly follows what they actually do. Best-effort: uses the global api()/toast()
-// when present; a no-op outside the browser (tests) or when api() is absent.
+// Update the weekly plan without mutating the accepted composition for today.
+// Best-effort: uses the global api()/toast() when present; a no-op outside the
+// browser (tests) or when api() is absent.
 async function requestRxSwap(from: string, to: string, day: number | null): Promise<void> {
   if (typeof api !== "function" || !from || !to || day == null) return;
   try {
@@ -85,12 +83,10 @@ async function requestRxSwap(from: string, to: string, day: number | null): Prom
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ day, from, to }),
-    })) as
-      | { ok?: boolean; error?: string }
-      | null;
+    })) as { ok?: boolean; error?: string } | null;
     if (r && r.ok) {
-      if (typeof toast === "function") toast(`Swapped in ${to} — log your sets.`);
-      refreshAfterSwap(day);
+      if (typeof toast === "function") toast("Weekly plan updated — today’s accepted session stays the same.");
+      refreshWeeklyPlanAfterSwap(day);
     } else if (typeof toast === "function") {
       toast((r && r.error) || "Couldn't make that swap.");
     }
@@ -99,30 +95,17 @@ async function requestRxSwap(from: string, to: string, day: number | null): Prom
   }
 }
 
-// The swap changed the plan — drop the cached plan/prescriptions and re-render
-// wherever the athlete is (Session or Today) so the new movement appears in place,
-// ready to log. Mirrors the coach-apply refresh (state.plan = [] forces a fresh
-// /plan fetch). All guarded: a missing global is simply skipped.
-function refreshAfterSwap(day: number): void {
+// Drop only future-plan caches. Never invalidate or re-render Today's accepted
+// daily-session snapshot; the athlete may already be logging against it.
+function refreshWeeklyPlanAfterSwap(day: number): void {
   const g = globalThis as Record<string, unknown> & {
-    state?: { tab?: string; plan?: unknown[]; brief?: unknown };
+    state?: { plan?: unknown[] };
     swrInvalidate?(keyOrPrefix: string): void;
-    renderSession?(opts?: unknown): unknown;
-    reshapeToday?(): unknown;
   };
   try {
-    if (g.state) {
-      g.state.plan = [];
-      g.state.brief = null;
-    }
+    if (g.state) g.state.plan = [];
     g.swrInvalidate?.("plan");
-    g.swrInvalidate?.("today");
     g.swrInvalidate?.(`program:progression:${day}`);
-  } catch {}
-  try {
-    const tab = g.state && g.state.tab;
-    if (tab === "session" && typeof g.renderSession === "function") g.renderSession();
-    else if (typeof g.reshapeToday === "function") g.reshapeToday();
   } catch {}
 }
 
@@ -195,19 +178,32 @@ function cardioDominantZone(zones: unknown): string {
 }
 
 function cardioVerb(label: unknown): string {
-  const l = String(label || "").toLowerCase();
-  if (/run|jog|tempo|interval|long/.test(l)) return "run";
-  if (/ride|bike|cycl|spin/.test(l)) return "ride";
-  if (/swim/.test(l)) return "swim";
-  if (/row/.test(l)) return "row";
+  const l = String(label || "").toLowerCase().replace(/[_-]+/g, " ");
+  // Explicit modality always outranks generic workout modifiers. Otherwise
+  // "Bike intervals" or "Long swim" silently becomes a run, corrupting both
+  // capture language and synced-effort matching.
+  if (/\b(ride|riding|bike|biking|cycle|cycling|cyclist|spin|spinning)\b/.test(l)) return "ride";
+  if (/\b(swim|swimming)\b/.test(l)) return "swim";
+  if (/\b(row|rowing|erg)\b/.test(l)) return "row";
+  if (/\b(hike|hiking)\b/.test(l)) return "hike";
+  if (/\b(walk|walking)\b/.test(l)) return "walk";
+  if (/\b(run|running|jog|jogging)\b/.test(l)) return "run";
+  if (/\b(tempo|intervals?|long)\b/.test(l)) return "run";
   return "effort";
 }
 
 function cardioLogPhrase(item: Record<string, unknown>): string {
   const label = item.label || item.note || item.exercise || "";
   const verb = cardioVerb(label);
-  const v =
-    verb === "run" ? "ran" : verb === "ride" ? "rode" : verb === "swim" ? "swam" : verb === "row" ? "rowed" : "did";
+  const pastTense: Record<string, string> = {
+    run: "ran",
+    ride: "rode",
+    swim: "swam",
+    row: "rowed",
+    hike: "hiked",
+    walk: "walked",
+  };
+  const v = pastTense[verb] || "did";
   const bits = [];
   if (item.target_distance_km != null) bits.push(`${fmtKm(item.target_distance_km)} km`);
   else if (item.target_duration_min != null) bits.push(`${Math.round(Number(item.target_duration_min))} min`);
@@ -225,5 +221,7 @@ Object.assign(globalThis, {
     cardioDominantZone,
     cardioVerb,
     cardioLogPhrase,
+    requestRxSwap,
+    refreshWeeklyPlanAfterSwap,
   },
 });

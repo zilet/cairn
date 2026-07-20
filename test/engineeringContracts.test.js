@@ -399,7 +399,7 @@ test("MCP modular tool sources are discovered without duplicate names", () => {
   assert.match(parity, /src\/surfaces\/mcp\/training-status\.ts/);
   assert.match(genDocs, /src\/surfaces\/mcp\/body-metrics\.ts/);
   assert.match(parity, /src\/surfaces\/mcp\/body-metrics\.ts/);
-  assert.equal(tools.length, 226, "tool count changes only for reviewed MCP additions");
+  assert.equal(tools.length, 228, "tool count changes only for reviewed MCP additions");
   assert.equal(new Set(tools).size, tools.length, "MCP tool names must be unique across modules");
   assert.doesNotMatch(mcp, /server\.tool\(/, "src/mcp.ts should stay a registry, not a tool-definition file");
   assert.doesNotMatch(mcp, /server\.tool\("get_chat_history"/);
@@ -418,6 +418,8 @@ test("MCP modular tool sources are discovered without duplicate names", () => {
   assert.match(dailyDriverTools, /server\.tool\(\s*"get_today_agenda"/);
   assert.match(dailyDriverTools, /server\.tool\(\s*"get_guidelines"/);
   assert.match(dailyDriverTools, /server\.tool\(\s*"generate_insight"/);
+  assert.match(dayCoachTools, /server\.tool\(\s*"get_daily_session"/);
+  assert.match(dayCoachTools, /server\.tool\(\s*"prepare_daily_session"/);
   assert.doesNotMatch(mcp, /server\.tool\("get_day_read"/);
   assert.doesNotMatch(mcp, /server\.tool\("suggest_session"/);
   assert.doesNotMatch(mcp, /server\.tool\("get_week_ahead"/);
@@ -554,6 +556,8 @@ test("generated API docs include mounted route modules", () => {
   assert.match(dayCoachRoutes, /dayCoachRouter\.get\("\/today-read"/);
   assert.match(dayCoachRoutes, /dayCoachRouter\.post\("\/today-read\/reshape"/);
   assert.match(dayCoachRoutes, /dayCoachRouter\.post\("\/session-suggest"/);
+  assert.match(dayCoachRoutes, /dayCoachRouter\.get\("\/daily-session"/);
+  assert.match(dayCoachRoutes, /dayCoachRouter\.post\("\/daily-session\/prepare"/);
   assert.match(dayCoachRoutes, /dayCoachRouter\.get\("\/week-ahead"/);
   assert.match(dayCoachRoutes, /readToday\(\{\s*date,\s*override,\s*agent:\s*agentParam,\s*reset,\s*recordOutcome:\s*true\s*\}\)/);
   assert.match(dayReadUseCase, /recordDayReadSuggestion/);
@@ -3833,6 +3837,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   );
   assert.match(apiContracts, /"\/api\/chat\/sessions": ClientChatSessionSummary\[\]/);
   assert.match(apiContracts, /"\/api\/session-suggest": ClientSessionSuggestResponse/);
+  assert.match(apiContracts, /"\/api\/daily-session": ClientDailySessionComposition \| null/);
+  assert.match(apiContracts, /"\/api\/daily-session\/prepare": ClientDailySessionPrepareResponse/);
   assert.match(apiContracts, /"\/api\/exercises\/reconcile-names": ClientExerciseNameReconcileResponse/);
   assert.match(apiContracts, /"\/api\/week-ahead": ClientWeekAheadResponse/);
   assert.match(apiContracts, /"\/api\/recent-training": ClientRecentTrainingFeedRow\[\]/);
@@ -4051,8 +4057,21 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todaySessionSuggestSource, /function todaySuggestComposerHtml/);
   assert.match(todaySessionSuggestSource, /CairnTodaySessionSuggest/);
   assert.match(todaySessionSuggestControllerSource, /type TodaySessionSuggestDeps = \{/);
-  assert.match(todaySessionSuggestControllerSource, /function sessionSuggestOpOpts\(deps: TodaySessionSuggestDeps\): TodaySessionSuggestRunOptions/);
-  assert.match(todaySessionSuggestControllerSource, /function reconnectSessionSuggest\(_job: unknown, deps: TodaySessionSuggestDeps\)/);
+  assert.match(
+    todaySessionSuggestControllerSource,
+    /function sessionSuggestOpOpts\(\s*deps: TodaySessionSuggestDeps,\s*request: Record<string, unknown> = \{},\s*\): TodaySessionSuggestRunOptions/,
+  );
+  assert.match(todaySessionSuggestControllerSource, /function reconnectSessionSuggest\(job: unknown, deps: TodaySessionSuggestDeps\)/);
+  assert.match(
+    todaySessionSuggestControllerSource,
+    /const agentJobId\s*=\s*jobRow\.id\s*!=\s*null[\s\S]*?Number\.isInteger\(Number\(jobRow\.id\)\)[\s\S]*?Number\(jobRow\.id\)[\s\S]*?:\s*null/,
+    "session suggestion job IDs are normalized to positive integers before acceptance",
+  );
+  assert.match(
+    todaySessionSuggestControllerSource,
+    /agentJobId,\s*constraints,\s*provenance:\s*\{[\s\S]*?agent_job_id:\s*agentJobId/,
+    "the normalized job identity is carried into canonical suggestion provenance",
+  );
   assert.match(todaySessionSuggestControllerSource, /CairnTodaySessionSuggestController/);
   assert.match(todaySessionStatusSource, /type ClientTrainingSession = import\("\.\.\/contracts\/client-api\.js"\)\.ClientTrainingSession/);
   assert.match(todaySessionStatusSource, /function todaySetsTonnage\(sets: unknown\): number/);

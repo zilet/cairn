@@ -83,14 +83,16 @@ function makeTodayDependencies(input: ClientTodayDependenciesContextInput): Clie
       return {
         root: input.root,
         state: input.state,
+        api: input.api,
+        storeCached: input.storeCached,
+        invalidate: input.invalidate,
+        openSession: (date?: string | null, options?: Record<string, unknown>) => openSession(date, options),
         runOp: input.runOp,
         thinkingCaption: input.thinkingCaption,
         runCountUps: input.runCountUps,
         collapseEl: input.collapseEl,
         reducedMotion: input.reducedMotion,
         toast: input.toast,
-        revealPlanThen: input.revealPlanThen,
-        appendOffPlanCard: input.appendOffPlanCard,
       };
     },
 
@@ -188,6 +190,7 @@ function makeTodayDependencies(input: ClientTodayDependenciesContextInput): Clie
         withViewTransition: input.withViewTransition,
         viewEnter: input.viewEnter,
         localISO: input.localISO,
+        toast: input.toast,
       };
     },
 

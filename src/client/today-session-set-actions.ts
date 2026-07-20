@@ -125,34 +125,61 @@ type TodaySessionSetActionsApi = {
       }
 
       logBtn.disabled = true;
-      let result: Record<string, unknown>;
-      try {
-        result = CairnTodaySessionSetModel.responseRecord(await deps.api("/sets", {
+      const runtime = globalThis as {
+        runSessionMutation?: (
+          input: {
+            date: string;
+            kind: string;
+            path: string;
+            body: unknown;
+            method?: "POST" | "DELETE";
+            identity?: { sessionId?: unknown; dailySessionId?: unknown };
+          },
+          send: (idempotencyKey: string) => Promise<unknown>,
+        ) => Promise<{
+          status: "sent" | "queued" | "blocked" | "storage_error" | "failed";
+          value?: unknown;
+          reason?: unknown;
+          item?: { depends_on?: unknown };
+        }>;
+      };
+      if (typeof runtime.runSessionMutation !== "function") {
+        logBtn.disabled = false;
+        deps.toast("Couldn’t safely save that set — refresh and try again.");
+        return;
+      }
+      const mutation = await runtime.runSessionMutation({
+        date: actionDate,
+        kind: "set",
+        path: "/sets",
+        body: payload.body,
+        identity: { sessionId: deps.state.sessionIdsByDate?.[actionDate] },
+      }, (idempotencyKey) => deps.api("/sets", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "X-Idempotency-Key": idempotencyKey },
           body: JSON.stringify(payload.body),
         }));
-      } catch (error) {
-        const classify = (globalThis as {
-          CairnApiCache?: { isTransientApiFailure?: (value: unknown) => boolean };
-        }).CairnApiCache?.isTransientApiFailure;
-        if (typeof classify === "function" && !classify(error)) {
-          if (surfaceStillCurrent(deps, actionDate, actionTab)) {
-            logBtn.disabled = false;
-            deps.toast("Couldn't log that set.");
-          }
-          return;
-        }
-        // Dead zone on the gym floor — DON'T drop the set. Queue the exact POST and
-        // replay it in order on reconnect; the persistent "N to sync" line and the
-        // toast tell the user it's held, not lost.
-        (globalThis as { outboxEnqueue?: (kind: string, path: string, body: unknown) => unknown }).outboxEnqueue?.("set", "/sets", payload.body);
-        if (surfaceStillCurrent(deps, actionDate, actionTab)) {
-          logBtn.disabled = false;
-          deps.toast("Set saved — will sync when you're back online");
+      if (mutation.status !== "sent") {
+        if (!surfaceStillCurrent(deps, actionDate, actionTab)) return;
+        logBtn.disabled = false;
+        if (mutation.status === "queued") {
+          deps.toast(mutation.item?.depends_on
+            ? "Set saved — reconciling this session"
+            : "Set saved — will sync when you're back online");
+        } else if (mutation.status === "blocked") {
+          deps.toast(
+            mutation.reason === "other_tab"
+              ? "This session is being prepared in another tab or view — refresh before logging more sets."
+              : "This saved session needs attention before more sets can be logged.",
+          );
+        } else if (mutation.status === "storage_error") {
+          deps.toast("Couldn’t save that set on this device — free storage and try again.");
+        } else {
+          deps.toast("Couldn't log that set.");
         }
         return;
       }
+      const result = CairnTodaySessionSetModel.responseRecord(mutation.value);
       const responseDateMatches = result.date == null || String(result.date) === actionDate;
       if (!result || result.ok === false || result.error || result.id == null || !responseDateMatches) {
         if (surfaceStillCurrent(deps, actionDate, actionTab)) {

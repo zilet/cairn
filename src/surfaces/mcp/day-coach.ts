@@ -1,5 +1,7 @@
 import { z } from "zod";
-import { sessionPrimer } from "../../repo.js";
+import { dailySessionErrorBody, prepareDailySessionUseCase } from "../../domain/training/index.js";
+import { getActiveDailySession, sessionPrimer } from "../../repo.js";
+import { localDateISO } from "../../repo/shared.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 import { queueMcpAgentJob } from "./background.js";
 
@@ -17,7 +19,7 @@ export function registerDayCoachTools(server: McpToolRegistrar) {
 
   server.tool(
     "suggest_session",
-    "Queue one session suggestion for today, honoring time, equipment, focus, injury, and the day read. Returns a job immediately; poll get_agent_job. The result is for review and is not applied as the plan.",
+    "Queue one session suggestion for today, honoring time, equipment, focus, injury, and the day read. Returns a job immediately; poll get_agent_job. The result is preview-only until prepare_daily_session is called; it never mutates the weekly plan.",
     {
       minutes: z.number().int().optional().describe("time budget in minutes (compresses the session)"),
       equipment: z.string().optional().describe("equipment available, e.g. 'dumbbells only' / 'hotel gym'"),
@@ -27,7 +29,59 @@ export function registerDayCoachTools(server: McpToolRegistrar) {
       agent: z.string().optional().describe("omit or 'auto' to use the configured rotation"),
     },
     async ({ minutes, equipment, focus, constraints, date, agent }) =>
-      asText(queueMcpAgentJob("session_suggest", { minutes, equipment, focus, constraints, date }, agent))
+      asText(
+        queueMcpAgentJob(
+          "session_suggest",
+          { minutes, equipment, focus, constraints, date: date ?? localDateISO() },
+          agent
+        )
+      )
+  );
+
+  server.tool(
+    "get_daily_session",
+    "Read the active durable daily-session composition for a date, including its exact prescribed strength/cardio items and session_id. Returns null when none has been prepared.",
+    { date: z.string().optional().describe("YYYY-MM-DD; defaults to today") },
+    async ({ date }) => asText(getActiveDailySession(date))
+  );
+
+  server.tool(
+    "prepare_daily_session",
+    "Explicitly persist a daily session without changing the weekly plan. Pass expected_active_id alone to assert that a cached composition still owns the date without creating or replacing anything. adaptive_plan/manual_plan snapshot a plan day; agent_suggest requires its completed session-suggest agent_job_id; athlete_override accepts a user-authored session, including an empty open session. Exact retries reuse safely; a different replace is refused after the session starts.",
+    {
+      date: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
+      expected_active_id: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe("assertion-only active composition id; needs no source/session and never writes"),
+      day_number: z.number().int().optional().describe("explicit plan day; omit for the adaptive selection"),
+      agent_job_id: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe("required completed session-suggest job id for agent_suggest"),
+      source: z
+        .enum(["adaptive_plan", "agent_suggest", "manual_plan", "athlete_override"])
+        .optional()
+        .describe("composition provenance; defaults to adaptive_plan"),
+      session: z.unknown().optional().describe("user-authored session shape; used only by athlete_override"),
+      constraints: z.unknown().optional().describe("optional bounded JSON constraints captured with the snapshot"),
+      provenance: z
+        .unknown()
+        .optional()
+        .describe("optional bounded JSON provenance for athlete_override; agent_suggest provenance is server-derived"),
+      replace: z.boolean().optional().describe("supersede the active composition before logging starts"),
+    },
+    async (input) => {
+      try {
+        return asText(prepareDailySessionUseCase(input));
+      } catch (error) {
+        return asText(dailySessionErrorBody(error));
+      }
+    }
   );
 
   server.tool(

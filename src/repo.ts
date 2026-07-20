@@ -7,6 +7,7 @@ export * from "./repo/exercise-canon.js";
 export * from "./repo/plan.js";
 export * from "./repo/training-read.js";
 export * from "./repo/sessions.js";
+export * from "./repo/adaptive-session.js";
 export * from "./repo/profile.js";
 export * from "./repo/activities.js";
 export * from "./repo/memory.js";

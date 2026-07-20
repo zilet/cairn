@@ -4,6 +4,26 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-07-20 — durable daily-session compositions
+
+Daily session acceptance now persists a full, immutable execution snapshot in
+the additive `daily_session_compositions` table. A composition has ordered
+prescription items, presentation fields, constraints, provenance, a required
+training-session link, an optional weekly-plan link, and active/superseded
+version history. Its stored snapshot remains the execution source of truth even
+if the weekly plan is edited later.
+
+The shared training use case owns preparation, normalization, identity, and
+replacement policy; REST and MCP are thin wrappers over that same behavior.
+The PWA prepares the canonical snapshot before opening a session, restores it
+after reload, and renders plan-backed versus built-for-today identity without
+collapsing custom work into a template. Equivalent prepare retries reuse the
+active composition. A different replacement is permitted only before meaningful
+session state exists; once work, feedback, completion, notes, or matching logged
+cardio evidence establishes a started session, the server refuses the change.
+Supersession is retained for provenance and idempotency, while older sessions
+and clients remain compatible through a nullable daily-session association.
+
 ## 2026-07-14 — trustworthy daily reads, durable capture, and Apple Health pairing
 
 Cairn **v1.2.0** applies one shared reading grammar across the daily driver. The
@@ -178,7 +198,15 @@ non-2xx responses, preserves designed `200 + {ok:false}` outcomes, marks offline
 only for real connectivity failures, and caches only successful GETs. Durable
 capture outbox replay retains transient failures and marks permanent rejections
 for attention instead of silently dropping them, carrying a stable idempotency
-key. `GET /api/diagnostics` powers a compact Settings operator card with grouped
+key. Successful keyed responses stay in the server ledger for the database's
+lifetime because client outbox entries do not expire. The guard admits only the
+durable capture/session mutation routes, caps keys at 120 characters and stored
+responses at 64 KiB, and records a small non-retry replay error when a successful
+response exceeds that envelope. Same-process overlapping retries wait for the
+owning request instead of applying twice, while cross-operation key reuse fails
+closed with a coded conflict. That modest household-scale storage is the safer
+durability tradeoff.
+`GET /api/diagnostics` powers a compact Settings operator card with grouped
 issues/recent slow calls; `GET /api/ready` proves SQLite readability and reports
 only queue counts. Uncaught process exceptions record generic diagnostics and
 exit for container restart instead of continuing in uncertain state. Raw events

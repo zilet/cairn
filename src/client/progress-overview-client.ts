@@ -440,7 +440,11 @@ function wireTovStart(): void {
   if (!btn) return;
   btn.addEventListener("click", () => {
     state.dayPicked = false;
-    if (typeof openSession === "function") openSession(localISO());
+    if (typeof openSession === "function") void openSession(localISO(), {
+      source: "adaptive_plan",
+      trigger: btn,
+      provenance: { entry: "train_overview" },
+    });
   });
 }
 

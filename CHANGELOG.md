@@ -5,6 +5,14 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+### Added
+
+- **Durable daily sessions** — accepting a suggested or chosen session now creates
+  a full, versioned snapshot that survives reloads and keeps custom work distinct
+  from weekly-plan templates. The Today flow restores that session, preserves its
+  prescription, and explains when a different replacement is no longer safe after
+  meaningful work has started.
+
 ## [1.4.0] — 2026-07-19
 
 Cairn can now keep medical imaging with the written findings that give it

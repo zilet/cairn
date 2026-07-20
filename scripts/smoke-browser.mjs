@@ -655,6 +655,7 @@ async function smokeTodayCardioSkip(cdp, base) {
   const { failures, off } = collectFailures(cdp, base);
   const label = `Smoke easy run ${Date.now()}`;
   const labelJson = JSON.stringify(label);
+  const smokeDate = "2000-01-03";
   try {
     await navigateAndHydrate(cdp, base, "/app/today", "today");
     await assertGlobals(cdp);
@@ -673,11 +674,16 @@ async function smokeTodayCardioSkip(cdp, base) {
         window.state.day = Number(${JSON.stringify(dayState.day)});
         window.state.dayPicked = true;
       }
-      // The planned-cardio card + skip line now live in the isolated Session
-      // destination (opened from Today), not inline on the Brief. openSession()
-      // sets planReveal, pushes /app/session, and renders the plan surface.
+      // Prepare a fresh, explicit snapshot after mutating the weekly plan. A
+      // previously accepted daily composition is immutable and must not absorb
+      // this smoke-only cardio item implicitly.
       if (typeof openSession !== "function") throw new Error("missing openSession");
-      openSession();
+      openSession(${JSON.stringify(smokeDate)}, {
+        source: "manual_plan",
+        dayNumber: Number(${JSON.stringify(dayState.day)}),
+        replace: true,
+        provenance: { entry: "browser_smoke_cardio_skip" }
+      });
       return true;
     })()`);
     await waitForCondition(cdp, "Session destination renders a planned cardio card", `(() => {
@@ -760,6 +766,7 @@ async function smokeTodaySyncedCardioOverridesSkip(cdp, base) {
   const { failures, off } = collectFailures(cdp, base);
   const label = `Smoke synced run ${Date.now()}`;
   const labelJson = JSON.stringify(label);
+  const smokeDate = "2000-01-04";
   try {
     await navigateAndHydrate(cdp, base, "/app/today", "today");
     await assertGlobals(cdp);
@@ -774,9 +781,15 @@ async function smokeTodaySyncedCardioOverridesSkip(cdp, base) {
     await evaluate(cdp, `(() => {
       if (typeof swrInvalidate === "function") swrInvalidate("plan");
       if (window.state) window.state.plan = [];
-      // Planned cardio + skip line live in the isolated Session destination now.
+      // Prepare a fresh snapshot after the plan mutation; the prior smoke's
+      // accepted composition remains immutable on its own date.
       if (typeof openSession !== "function") throw new Error("missing openSession");
-      openSession();
+      openSession(${JSON.stringify(smokeDate)}, {
+        source: "manual_plan",
+        dayNumber: Number(${JSON.stringify(dayState.day)}),
+        replace: true,
+        provenance: { entry: "browser_smoke_synced_cardio" }
+      });
       return true;
     })()`);
 
@@ -811,7 +824,7 @@ async function smokeTodaySyncedCardioOverridesSkip(cdp, base) {
     await apiJson(base, "/activities", {
       method: "POST",
       body: JSON.stringify({
-        date: dayState.logDate,
+        date: smokeDate,
         type: "run",
         text: label,
         duration_min: 31,
@@ -838,7 +851,7 @@ async function smokeTodaySyncedCardioOverridesSkip(cdp, base) {
 
     await waitForCondition(cdp, "Synced cardio overrides the skipped planned card", `(async () => {
       const label = ${labelJson};
-      const date = ${JSON.stringify(dayState.logDate)};
+      const date = ${JSON.stringify(smokeDate)};
       let apiCardio = null;
       try { apiCardio = await fetch("/api/cardio?date=" + encodeURIComponent(date)).then((r) => r.json()); } catch (error) { apiCardio = { error: String(error) }; }
       const done = [...document.querySelectorAll(".ex-cardio-done")]

@@ -43,7 +43,10 @@ class FakeElement {
       this.append(new FakeElement("div", { id: "planstatus" }));
       return;
     }
-    if (this.id === "planedit") this.parsePlanEditorHtml(this._innerHTML);
+    if (this.id === "planedit") {
+      if (this._innerHTML.includes('id="planEmptyStart"')) this.append(new FakeElement("button", { id: "planEmptyStart" }));
+      this.parsePlanEditorHtml(this._innerHTML);
+    }
   }
 
   get innerHTML() {
@@ -152,7 +155,7 @@ function loadPlanEditorController(plan) {
   let dirtyCount = 0;
   let saveOptions = null;
   const context = {
-    openSession: (date) => { openSessionCalls.push(date); },
+    openSession: (date, options) => { openSessionCalls.push({ date, options }); return Promise.resolve(true); },
     localISO: () => "2026-07-10",
     Array,
     Math,
@@ -355,5 +358,22 @@ test("plan editor controller 'Train this day' starts logging the selected day to
 
   assert.equal(harness.context.state.day, 4);
   assert.equal(harness.context.state.dayPicked, true);
-  assert.deepEqual(harness.openSessionCalls, ["2026-07-10"], "opens the Session surface logged against today");
+  assert.equal(harness.openSessionCalls.length, 1, "opens the Session surface once");
+  assert.equal(harness.openSessionCalls[0].date, "2026-07-10");
+  assert.equal(harness.openSessionCalls[0].options.source, "manual_plan");
+  assert.equal(harness.openSessionCalls[0].options.dayNumber, 4);
+  assert.equal(harness.openSessionCalls[0].options.replace, true);
+});
+
+test("empty plan starts a durable athlete-owned open session", async () => {
+  const harness = loadPlanEditorController([]);
+  await harness.context.renderPlanEditor();
+
+  const start = harness.view.querySelector("#planEmptyStart");
+  assert.ok(start);
+  start.click();
+
+  assert.equal(harness.openSessionCalls.length, 1);
+  assert.equal(harness.openSessionCalls[0].options.source, "athlete_override");
+  assert.equal(harness.openSessionCalls[0].options.provenance.entry, "empty_plan");
 });

@@ -10,6 +10,7 @@ import type {
   ClientNextStep,
   ClientPrescription,
   ClientSessionSuggestion,
+  ClientSessionSuggestionItem,
   ClientTodayAgenda,
   ClientTodayAgendaCandidate,
   ISODateString,
@@ -601,6 +602,7 @@ export interface ClientTrainingSession {
   notes?: string | null;
   finished_at?: string | null;
   sets?: ClientLoggedSet[];
+  daily_session?: ClientDailySessionComposition | null;
   skipped?: unknown[];
   strength_journey_movement?: {
     exercise: string;
@@ -611,6 +613,53 @@ export interface ClientTrainingSession {
   } | null;
   [key: string]: unknown;
 }
+
+export interface ClientDailySessionItem extends ClientSessionSuggestionItem {
+  position: number;
+  warmup_sets?: number | null;
+  superset_group?: number | null;
+}
+
+export interface ClientDailySessionComposition {
+  id: number;
+  version: number;
+  session_id: number;
+  date: ISODateString | string;
+  source: "adaptive_plan" | "agent_suggest" | "manual_plan" | "athlete_override";
+  status: "active" | "superseded";
+  plan_day_id: number | null;
+  title: string | null;
+  focus: string | null;
+  why: string | null;
+  est_minutes: number | null;
+  items: ClientDailySessionItem[];
+  constraints: unknown;
+  provenance: unknown;
+  created_at: string;
+  superseded_at: string | null;
+}
+
+export interface ClientDailySessionPrepareRequest {
+  date: ISODateString | string;
+  /** Assertion-only cached composition check; when present, no source/session payload is required and no write occurs. */
+  expected_active_id?: number;
+  source?: "adaptive_plan" | "agent_suggest" | "manual_plan" | "athlete_override";
+  day_number?: number;
+  agent_job_id?: number;
+  session?: ClientSessionSuggestion;
+  constraints?: unknown;
+  provenance?: unknown;
+  replace?: boolean;
+}
+
+export type ClientDailySessionPrepareResponse =
+  | {
+      ok: true;
+      daily_session: ClientDailySessionComposition;
+      session: ClientTrainingSession;
+      reused: boolean;
+    }
+  | { ok: false; code: string; error: string };
 
 export interface ClientActivity {
   id: number;
@@ -2570,6 +2619,8 @@ export interface ClientApiResponses {
   "/api/today-read": ClientDayRead;
   "/api/today-read/reshape": ClientDayRead | { ok: true; job: ClientAgentJob };
   "/api/session-suggest": ClientSessionSuggestResponse;
+  "/api/daily-session": ClientDailySessionComposition | null;
+  "/api/daily-session/prepare": ClientDailySessionPrepareResponse;
   "/api/session-primer": ClientSessionPrimer | null;
   "/api/week-ahead": ClientWeekAheadResponse;
   "/api/today-agenda": ClientTodayAgenda;

@@ -40,13 +40,29 @@ test("planned cardio helpers separate short labels from coach prose", () => {
   assert.equal(cardio.cardioLabel({ note: "Long run" }), "Long run");
   assert.equal(
     cardio.cardioLabel({ note: "Nasal-breathing pace. Watch the third kilometer dip.", target_zone: "Z2" }),
-    "Easy run",
+    "Easy run"
   );
   assert.equal(
     cardio.cardioDescription({ note: "Nasal-breathing pace. Watch the third kilometer dip." }),
-    "Nasal-breathing pace. Watch the third kilometer dip.",
+    "Nasal-breathing pace. Watch the third kilometer dip."
   );
   assert.equal(cardio.cardioArtPhrase({ note: "" }), "run");
+});
+
+test("exercise-only generated cardio preserves its label, art phrase, and modality", () => {
+  const cardio = loadCardioPlan();
+
+  for (const [exercise, sport] of [
+    ["Easy ride", "ride"],
+    ["Tempo run", "run"],
+    ["Pool swim", "swim"],
+    ["Erg row", "row"],
+    ["Trail hike", "hike"],
+  ]) {
+    assert.equal(cardio.cardioLabel({ kind: "cardio", exercise }), exercise);
+    assert.equal(cardio.cardioArtPhrase({ kind: "cardio", exercise }), exercise);
+    assert.equal(cardio.cardioSport({ kind: "cardio", exercise }), sport);
+  }
 });
 
 test("planned cardio prescription prefers concrete distance, zone, and intervals", () => {
@@ -58,7 +74,10 @@ test("planned cardio prescription prefers concrete distance, zone, and intervals
       target_zone: "Z2",
       interval: [{ reps: 4, on: "1 km", off: "2 min", zone: "Z4" }],
     }),
-    "12.3 km · 4 × 1 km @ Z4, 2 min jog",
+    "12.3 km · 4 × 1 km @ Z4, 2 min jog"
   );
-  assert.equal(cardio.cardioPrescription({ target_duration_min: 45, target_zone: "Z3", interval_note: "steady" }), "45 min · Z3 · steady");
+  assert.equal(
+    cardio.cardioPrescription({ target_duration_min: 45, target_zone: "Z3", interval_note: "steady" }),
+    "45 min · Z3 · steady"
+  );
 });

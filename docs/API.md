@@ -9,7 +9,7 @@ Health's short-lived pairing exchange is public and passes through the instance-
 when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**291 routes** across 102 groups.
+**293 routes** across 103 groups.
 
 ## `/activities`
 
@@ -184,6 +184,13 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | DELETE | `/api/context-events/:id` |  |
 | PUT | `/api/context-events/:id` |  |
 | POST | `/api/context-events/:id/resolve` | Close a context event as healed/over (one-tap resolve) without hard-deleting it — it stays on the timeline and in exports but stops gating the day-read/conductor. |
+
+## `/daily-session`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/daily-session` | Read the durable composition the athlete accepted for a day. Agent suggestions remain preview-only until the explicit prepare call below writes this snapshot. |
+| POST | `/api/daily-session/prepare` | Prepare (or explicitly replace) today's durable session without mutating the weekly plan. Plan sources snapshot a plan day; agent_suggest resolves a completed canonical job; athlete_override snapshots a user-authored payload. expected_active_id is assertion-only: it returns the matching active snapshot and bound session without creating/replacing anything. Different replacements stop once logging begins; exact retries remain safe. |
 
 ## `/dexa-targeting`
 

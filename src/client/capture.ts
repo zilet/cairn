@@ -29,7 +29,12 @@ async function quickLog(): Promise<void> {
     }
     // Network dropped — DON'T lose the log. Queue the exact POST and replay it on
     // reconnect (the input was already cleared, so the text lives only in the outbox).
-    outboxEnqueue("activity", "/activities", { text });
+    const saved = await outboxEnqueue("activity", "/activities", { text });
+    if (!saved) {
+      inp.value = text;
+      toast("Couldn’t save that on this device — free storage and try again.");
+      return;
+    }
     toast("Saved — will sync when you're back online");
     return;
   }
@@ -89,7 +94,11 @@ function setupWeightChip(): void {
         return;
       }
       // Offline — queue the weigh-in and reflect it optimistically; it syncs on reconnect.
-      outboxEnqueue("weight", "/bodyweight", { weight_lb: w });
+      const saved = await outboxEnqueue("weight", "/bodyweight", { weight_lb: w });
+      if (!saved) {
+        toast("Couldn’t save that on this device — free storage and try again.");
+        return;
+      }
       const pendingVal = chip && chip.querySelector("[data-wtval]");
       if (pendingVal) pendingVal.innerHTML = `${w}<span class="stat-plus">+</span>`;
       if (mini) mini.innerHTML = `${w}<span class="wt-mini-unit">lb</span><span class="stat-plus">+</span>`;
@@ -179,7 +188,11 @@ async function relogFrequent(summary: string | undefined, chip?: HTMLElement): P
       return;
     }
     // Offline — queue the re-log and replay it on reconnect rather than dropping it.
-    outboxEnqueue("food", "/food-notes", { meal, text: summary });
+    const saved = await outboxEnqueue("food", "/food-notes", { meal, text: summary });
+    if (!saved) {
+      toast("Couldn’t save that on this device — free storage and try again.");
+      return;
+    }
     toast("Saved · " + meal + " — will sync when you're back");
     return;
   }

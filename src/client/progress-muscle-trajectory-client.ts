@@ -70,7 +70,7 @@ function muscleGroupRowHtml(group: MuscleGroupTrajectoryRow): string {
   const options = Array.isArray(group.vary_options) ? group.vary_options.filter((option) => option && option.name) : [];
   const varyHtml =
     group.verdict === "stalling" && options.length
-      ? `<div class="pmus-vary"><span class="pmus-vary-lbl lbl">rotate one in</span><div class="pmus-opts">${options
+      ? `<div class="pmus-vary"><span class="pmus-vary-lbl lbl">update a future session</span><div class="pmus-opts">${options
           .slice(0, 3)
           .map((option) => `<span class="pmus-opt"${option.why ? ` title="${escAttr(option.why)}"` : ""}>${escHtml(option.name)}</span>`)
           .join("")}</div></div>`

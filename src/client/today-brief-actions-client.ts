@@ -23,7 +23,7 @@ type TodayBriefActionsDayRead = import("../contracts/client.js").ClientDayRead &
       }));
   }
 
-  function handleBriefRedirect(action: string | undefined, deps: ClientTodayBriefActionsDeps): void {
+  function handleBriefRedirect(action: string | undefined, trigger: HTMLElement, deps: ClientTodayBriefActionsDeps): void {
     if (action === "ask-session") {
       deps.revealSessionComposer();
       return;
@@ -39,12 +39,23 @@ type TodayBriefActionsDayRead = import("../contracts/client.js").ClientDayRead &
     }
     if (action === "start-session" || action === "reveal-plan") {
       // Logging lives in the isolated Session destination now, not inline on Today.
-      openSession();
+      void openSession(undefined, {
+        source: "adaptive_plan",
+        trigger,
+        provenance: { entry: action === "reveal-plan" ? "train_anyway" : "brief_start" },
+      });
       return;
     }
     if (action === "pull-plan") {
-      deps.state.dayPicked = true;
-      openSession();
+      const rawDay = (deps.state as typeof deps.state & { day?: unknown }).day;
+      const dayNumber = rawDay == null ? null : Number(rawDay);
+      void openSession(undefined, {
+        source: "manual_plan",
+        dayNumber: Number.isFinite(dayNumber) ? dayNumber : null,
+        replace: true,
+        trigger,
+        provenance: { entry: "pull_plan" },
+      });
     }
   }
 
@@ -106,7 +117,7 @@ type TodayBriefActionsDayRead = import("../contracts/client.js").ClientDayRead &
 
     brief.querySelectorAll<HTMLElement>("[data-redirect]").forEach((button) =>
       button.addEventListener("click", () => {
-        handleBriefRedirect(button.dataset.redirect, deps);
+        handleBriefRedirect(button.dataset.redirect, button, deps);
       })
     );
 

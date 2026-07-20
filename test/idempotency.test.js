@@ -5,7 +5,7 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo } from "./_seed.js";
-import { idempotencyGuard, pruneIdempotencyKeys } from "../dist/idempotency.js";
+import { IDEMPOTENCY_LIMITS, idempotencyGuard } from "../dist/idempotency.js";
 
 const DATE = "2030-02-01";
 
@@ -27,14 +27,30 @@ function makeReq({ method = "POST", path = "/sets", key = null } = {}) {
 }
 
 function makeRes() {
+  const listeners = new Map();
+  let resolveSent;
+  const sent = new Promise((resolve) => { resolveSent = resolve; });
   return {
     statusCode: 200,
     headers: {},
     body: undefined,
+    sent,
     setHeader(name, value) { this.headers[String(name).toLowerCase()] = String(value); return this; },
     getHeader(name) { return this.headers[String(name).toLowerCase()]; },
     status(code) { this.statusCode = code; return this; },
-    json(b) { this.body = b; return this; },
+    once(name, callback) {
+      const event = String(name);
+      listeners.set(event, [...(listeners.get(event) || []), callback]);
+      return this;
+    },
+    emit(name, ...args) {
+      const event = String(name);
+      const callbacks = listeners.get(event) || [];
+      listeners.delete(event);
+      for (const callback of callbacks) callback(...args);
+      return callbacks.length > 0;
+    },
+    json(b) { this.body = b; resolveSent(this); return this; },
   };
 }
 
@@ -92,6 +108,52 @@ test("no key header → behavior is unchanged (nothing stored, always re-execute
   );
 });
 
+test("an oversized key remains pass-through", () => {
+  const key = "k".repeat(IDEMPOTENCY_LIMITS.max_key_length + 1);
+  assert.equal(run(makeReq({ key }), makeRes(), logSetHandler), true);
+  assert.equal(run(makeReq({ key }), makeRes(), logSetHandler), true);
+  assert.equal(countSets(), 2);
+  assert.equal(db.prepare("SELECT COUNT(*) AS c FROM idempotency_keys").get().c, 0);
+});
+
+test("a keyed mutation outside the durable outbox route allowlist remains pass-through", () => {
+  let calls = 0;
+  const handler = (_req, res) => {
+    calls++;
+    res.json({ ok: true, calls });
+  };
+  assert.equal(run(makeReq({ key: "unscoped", path: "/profile" }), makeRes(), handler), true);
+  assert.equal(run(makeReq({ key: "unscoped", path: "/profile" }), makeRes(), handler), true);
+  assert.equal(calls, 2);
+  assert.equal(db.prepare("SELECT COUNT(*) AS c FROM idempotency_keys").get().c, 0);
+});
+
+test("every current durable outbox mutation route is tracked", () => {
+  const scopes = [
+    ["POST", "/sets"],
+    ["POST", "/sessions/skip"],
+    ["DELETE", "/sessions/skip"],
+    ["POST", "/sessions/42/finish"],
+    ["POST", "/daily-session/prepare"],
+    ["POST", "/activities"],
+    ["POST", "/bodyweight"],
+    ["POST", "/food-notes"],
+  ];
+  for (const [index, [method, path]] of scopes.entries()) {
+    const key = `scope-${index}`;
+    let calls = 0;
+    const handler = (_req, res) => {
+      calls++;
+      res.json({ ok: true, path });
+    };
+    run(makeReq({ key, method, path }), makeRes(), handler);
+    const replay = makeRes();
+    assert.equal(run(makeReq({ key, method, path }), replay, handler), false, `${method} ${path} replays`);
+    assert.equal(calls, 1, `${method} ${path} executes once`);
+    assert.equal(replay.getHeader("x-idempotency-replayed"), "1");
+  }
+});
+
 test("a non-2xx response is not cached — a retry re-executes", () => {
   const key = "fails-first";
   const badHandler = (_req, res) => res.status(400).json({ error: "bad request" });
@@ -108,7 +170,7 @@ test("a non-2xx response is not cached — a retry re-executes", () => {
   );
 });
 
-test("the same key on a different path passes through (a collision never replays the wrong body)", () => {
+test("the same key on a different tracked path returns a coded conflict without executing", () => {
   const key = "shared-key";
   run(makeReq({ key, path: "/sets" }), makeRes(), logSetHandler);
 
@@ -118,21 +180,198 @@ test("the same key on a different path passes through (a collision never replays
     res2,
     (_req, res) => res.json({ ok: true, where: "activities" })
   );
-  assert.equal(ran2, true, "a different path re-executes rather than replaying");
+  assert.equal(ran2, false, "a different tracked path never reaches its handler");
+  assert.equal(res2.statusCode, 409);
   assert.equal(res2.getHeader("x-idempotency-replayed"), undefined, "no replay header on a collision");
-  assert.deepEqual(res2.body, { ok: true, where: "activities" }, "returns the real handler body");
+  assert.equal(res2.body.code, "idempotency_key_conflict");
+  assert.equal(countSets(), 1);
 });
 
-test("prune removes rows older than the TTL and keeps fresh ones", () => {
-  const insert = db.prepare(
+test("the same key on a different tracked method returns a coded conflict without executing", () => {
+  const key = "shared-method-key";
+  run(makeReq({ key, path: "/sessions/skip" }), makeRes(), (_req, res) => res.json({ ok: true }));
+
+  let calls = 0;
+  const response = makeRes();
+  const ran = run(makeReq({ key, method: "DELETE", path: "/sessions/skip" }), response, (_req, res) => {
+    calls++;
+    res.json({ ok: true });
+  });
+  assert.equal(ran, false);
+  assert.equal(calls, 0);
+  assert.equal(response.statusCode, 409);
+  assert.equal(response.body.code, "idempotency_key_conflict");
+});
+
+test("overlapping exact requests execute one async mutation and the waiter replays it", async () => {
+  const key = "overlapping-response-loss";
+  let releaseFirst;
+  const gate = new Promise((resolve) => { releaseFirst = resolve; });
+  let mutations = 0;
+  const first = makeRes();
+  const second = makeRes();
+  const conflicting = makeRes();
+
+  const firstRan = run(makeReq({ key }), first, async (_req, res) => {
+    mutations++;
+    await gate;
+    res.json({ ok: true, mutation_id: 44 });
+  });
+  const secondRan = run(makeReq({ key }), second, (_req, res) => {
+    mutations++;
+    res.json({ ok: true, mutation_id: 45 });
+  });
+
+  assert.equal(firstRan, true);
+  assert.equal(secondRan, false, "the overlapping request waits instead of entering its handler");
+  assert.equal(
+    run(makeReq({ key, path: "/activities" }), conflicting, () => assert.fail("conflict must not execute")),
+    false
+  );
+  assert.equal(conflicting.statusCode, 409);
+  assert.equal(conflicting.body.code, "idempotency_key_conflict");
+  assert.equal(mutations, 1);
+  releaseFirst();
+  await Promise.all([first.sent, second.sent]);
+
+  assert.equal(mutations, 1, "only the owning handler applies the mutation");
+  assert.equal(second.getHeader("x-idempotency-replayed"), "1");
+  assert.deepEqual(second.body, first.body);
+});
+
+test("an exact waiter acquires and executes after the owner returns a non-cacheable failure", async () => {
+  const key = "overlapping-owner-failure";
+  let releaseFirst;
+  const gate = new Promise((resolve) => { releaseFirst = resolve; });
+  let calls = 0;
+  const first = makeRes();
+  const second = makeRes();
+
+  run(makeReq({ key }), first, async (_req, res) => {
+    calls++;
+    await gate;
+    res.status(503).json({ ok: false, error: "temporary" });
+  });
+  const secondRanImmediately = run(makeReq({ key }), second, (_req, res) => {
+    calls++;
+    res.json({ ok: true, recovered: true });
+  });
+
+  assert.equal(secondRanImmediately, false, "the waiter does not overlap the original handler");
+  assert.equal(calls, 1);
+  releaseFirst();
+  await Promise.all([first.sent, second.sent]);
+
+  assert.equal(calls, 2, "the waiter becomes the next owner after a non-2xx response");
+  assert.equal(second.getHeader("x-idempotency-replayed"), undefined);
+  assert.deepEqual(second.body, { ok: true, recovered: true });
+  assert.equal(db.prepare("SELECT status FROM idempotency_keys WHERE key = ?").get(key).status, 200);
+});
+
+test("finish, close, and error release an owner that did not produce JSON", async () => {
+  for (const event of ["finish", "close", "error"]) {
+    const key = `owner-${event}`;
+    let calls = 0;
+    const owner = makeRes();
+    const waiter = makeRes();
+    run(makeReq({ key }), owner, () => { calls++; });
+    assert.equal(run(makeReq({ key }), waiter, (_req, res) => {
+      calls++;
+      res.json({ ok: true, event });
+    }), false);
+
+    owner.emit(event, event === "error" ? new Error("connection failed") : undefined);
+    await waiter.sent;
+    assert.equal(calls, 2, `${event} lets the waiter become owner`);
+    assert.equal(waiter.getHeader("x-idempotency-replayed"), undefined);
+  }
+});
+
+test("a response exactly at the byte limit is stored and replayed verbatim", () => {
+  const emptyBytes = Buffer.byteLength(JSON.stringify({ payload: "" }), "utf8");
+  const body = { payload: "x".repeat(IDEMPOTENCY_LIMITS.max_response_bytes - emptyBytes) };
+  const key = "max-response";
+  const first = makeRes();
+  run(makeReq({ key }), first, (_req, res) => res.json(body));
+
+  const stored = db.prepare("SELECT status, response_json FROM idempotency_keys WHERE key = ?").get(key);
+  assert.equal(stored.status, 200);
+  assert.equal(Buffer.byteLength(stored.response_json, "utf8"), IDEMPOTENCY_LIMITS.max_response_bytes);
+
+  const replay = makeRes();
+  assert.equal(run(makeReq({ key }), replay, () => assert.fail("replay must not execute")), false);
+  assert.equal(replay.getHeader("x-idempotency-replayed"), "1");
+  assert.deepEqual(replay.body, body);
+});
+
+test("an oversized successful response stores a bounded replay error and never repeats the effect", () => {
+  const oversized = { payload: "x".repeat(IDEMPOTENCY_LIMITS.max_response_bytes + 1) };
+  const key = "oversized-response";
+  let mutations = 0;
+  const first = makeRes();
+  run(makeReq({ key }), first, (_req, res) => {
+    mutations++;
+    res.json(oversized);
+  });
+  assert.deepEqual(first.body, oversized, "the first successful caller receives its real response");
+
+  const stored = db.prepare("SELECT status, response_json FROM idempotency_keys WHERE key = ?").get(key);
+  assert.equal(stored.status, 409);
+  assert.ok(Buffer.byteLength(stored.response_json, "utf8") <= IDEMPOTENCY_LIMITS.max_response_bytes);
+
+  const replay = makeRes();
+  const ran = run(makeReq({ key }), replay, (_req, res) => {
+    mutations++;
+    res.json({ ok: true });
+  });
+  assert.equal(ran, false);
+  assert.equal(mutations, 1, "the already-committed mutation is never re-applied");
+  assert.equal(replay.statusCode, 409);
+  assert.equal(replay.getHeader("x-idempotency-replayed"), "1");
+  assert.equal(replay.body.code, "idempotency_response_unavailable");
+});
+
+test("boot bounds an oversized response stored by an older build", async () => {
+  const legacyBody = JSON.stringify({ payload: "x".repeat(IDEMPOTENCY_LIMITS.max_response_bytes + 1) });
+  db.prepare(
     `INSERT INTO idempotency_keys (key, method, path, status, response_json, created_at)
      VALUES (?, ?, ?, ?, ?, ?)`
-  );
-  insert.run("old", "POST", "/sets", 200, "{}", "2000-01-01T00:00:00.000Z");
-  insert.run("fresh", "POST", "/sets", 200, "{}", new Date().toISOString());
+  ).run("legacy-oversized", "POST", "/sets", 200, legacyBody, "2026-01-01T00:00:00.000Z");
 
-  const removed = pruneIdempotencyKeys();
-  assert.ok(removed >= 1, "at least the stale row is pruned");
-  assert.equal(db.prepare("SELECT 1 FROM idempotency_keys WHERE key = 'old'").get(), undefined, "stale row gone");
-  assert.ok(db.prepare("SELECT 1 FROM idempotency_keys WHERE key = 'fresh'").get(), "fresh row kept");
+  await import("../dist/idempotency.js?bounded-legacy-regression");
+  const stored = db.prepare("SELECT status, response_json FROM idempotency_keys WHERE key = ?").get("legacy-oversized");
+  assert.equal(stored.status, 409);
+  assert.ok(Buffer.byteLength(stored.response_json, "utf8") <= IDEMPOTENCY_LIMITS.max_response_bytes);
+  assert.equal(JSON.parse(stored.response_json).code, "idempotency_response_unavailable");
+});
+
+test("a response older than seven days survives boot and requests without re-applying the write", async () => {
+  const cachedBody = { id: 71, exercise: "Idem Squat", weight: 100, reps: 5 };
+  db.prepare(
+    `INSERT INTO idempotency_keys (key, method, path, status, response_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run("old-response-lost", "POST", "/sets", 200, JSON.stringify(cachedBody), "2000-01-01T00:00:00.000Z");
+
+  // A fresh module evaluation used to prune old rows during service boot.
+  await import("../dist/idempotency.js?retention-boot-regression");
+  assert.ok(
+    db.prepare("SELECT 1 FROM idempotency_keys WHERE key = 'old-response-lost'").get(),
+    "service boot retains an old committed response"
+  );
+
+  // A later successful keyed request used to trigger age-pruning on this path.
+  run(makeReq({ key: "new-request", path: "/activities" }), makeRes(), (_req, res) =>
+    res.json({ ok: true })
+  );
+
+  const replay = makeRes();
+  const ran = run(makeReq({ key: "old-response-lost" }), replay, logSetHandler);
+  assert.equal(ran, false, "the original handler is never re-run after a long offline interval");
+  assert.equal(replay.getHeader("x-idempotency-replayed"), "1");
+  assert.deepEqual(replay.body, cachedBody, "the original committed response remains available");
+  assert.equal(countSets(), 0, "the mutation is not applied a second time");
+  assert.ok(
+    db.prepare("SELECT 1 FROM idempotency_keys WHERE key = 'old-response-lost'").get(),
+    "the durable ledger row remains stored"
+  );
 });

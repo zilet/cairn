@@ -64,10 +64,13 @@ test("Today set logging only mutates the card after a successful POST", () => {
   assert.ok(chipAppend > errorGuard, "wireLogRow appends the chip only after the error guard");
   assert.match(body, /if\s*\(logBtn\.disabled\)\s*return;/);
   assert.match(body, /logBtn\.disabled\s*=\s*true;/);
-  // On a network failure the set is NOT dropped: the button re-enables and the exact
-  // POST is queued in the offline outbox to replay on reconnect, with an honest
-  // "will sync" toast instead of a false "logged".
-  assert.match(body, /catch\s*\(error\)\s*\{[\s\S]*?logBtn\.disabled\s*=\s*false;/);
-  assert.match(body, /outboxEnqueue\?\.\("set",\s*"\/sets",\s*payload\.body\)/);
-  assert.match(body, /deps\.toast\("Set saved — will sync/);
+  // The shared mutation runner owns the direct request and any transient outbox
+  // fallback under one lock. Every non-sent outcome re-enables the button, while
+  // only a validated sent response reaches the card mutation below.
+  assert.match(body, /await\s+runtime\.runSessionMutation\s*\(\s*\{[\s\S]*?kind:\s*"set"[\s\S]*?path:\s*"\/sets"[\s\S]*?body:\s*payload\.body[\s\S]*?\},\s*\(idempotencyKey\)\s*=>\s*deps\.api\s*\(\s*"\/sets"/);
+  assert.match(body, /"X-Idempotency-Key":\s*idempotencyKey/);
+  assert.match(body, /if\s*\(mutation\.status\s*!==\s*"sent"\)\s*\{[\s\S]*?logBtn\.disabled\s*=\s*false;[\s\S]*?return;/);
+  assert.match(body, /const\s+result\s*=\s*CairnTodaySessionSetModel\.responseRecord\(mutation\.value\)/);
+  assert.match(body, /"Set saved — will sync/);
+  assert.match(body, /Couldn’t save that set on this device/);
 });

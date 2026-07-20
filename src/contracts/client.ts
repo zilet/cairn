@@ -314,6 +314,7 @@ export interface ClientPrescription {
 
 export interface ClientSessionSuggestionItem {
   exercise: string;
+  kind?: "strength" | "cardio" | string | null;
   sets?: number | null;
   rep_low?: number | null;
   rep_high?: number | null;
@@ -321,6 +322,10 @@ export interface ClientSessionSuggestionItem {
   target_seconds?: number | null;
   mode?: "reps" | "timed" | string | null;
   note?: string | null;
+  target_distance_km?: number | null;
+  target_duration_min?: number | null;
+  target_zone?: string | null;
+  interval?: unknown;
   [key: string]: unknown;
 }
 

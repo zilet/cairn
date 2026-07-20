@@ -1,4 +1,6 @@
 export * from "../../repo/activities.js";
+export * from "../../repo/adaptive-session.js";
+export * from "./adaptive-session-use-case.js";
 export * from "../../repo/exercise-canon.js";
 export * from "../../repo/exercise-variations.js";
 export * from "../../repo/exercises.js";

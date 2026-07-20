@@ -109,17 +109,20 @@ type TodayDataLoaderApi = {
         });
         if (isTodayAggregate(value)) {
           aggregate = value;
-          if (aggregateFresh || !peeks.plan) deps.storeCached("plan", value.plan);
-          if (aggregateFresh || !peeks.session) deps.storeCached(sessKey, value.session);
-          if (aggregateFresh || !peeks.stats) deps.storeCached("stats", value.stats);
-          if (aggregateFresh || !peeks.profile) deps.storeCached("profile", value.profile);
-          if (aggregateFresh || !peeks.exercises) deps.storeCached("exercises", value.exercises);
+          // Re-check each slice now: a preparation mutation may have primed a
+          // newer session while the aggregate GET was in flight.
+          if (aggregateFresh || !deps.peekCached("plan")) deps.storeCached("plan", value.plan);
+          if (aggregateFresh || !deps.peekCached(sessKey)) deps.storeCached(sessKey, value.session);
+          if (aggregateFresh || !deps.peekCached("stats")) deps.storeCached("stats", value.stats);
+          if (aggregateFresh || !deps.peekCached("profile")) deps.storeCached("profile", value.profile);
+          if (aggregateFresh || !deps.peekCached("exercises")) deps.storeCached("exercises", value.exercises);
         }
       } catch {
         aggregate = null;
       }
     }
     const useFreshAggregate = !!aggregate && aggregateFresh;
+    const latestSessionPeek = deps.peekCached(sessKey);
 
     const planPromise = useFreshAggregate
       ? Promise.resolve(aggregate!.plan)
@@ -132,6 +135,8 @@ type TodayDataLoaderApi = {
           : deps.api("/plan");
     const sessionPromise = useFreshAggregate
       ? Promise.resolve(aggregate!.session)
+      : latestSessionPeek
+      ? Promise.resolve(latestSessionPeek.data)
       : peeks.session
       ? Promise.resolve(peeks.session.data)
       : aggregate

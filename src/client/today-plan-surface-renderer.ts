@@ -5,6 +5,8 @@
 type TodayPlanSurfaceRendererRecord = Record<string, unknown>;
 type TodayPlanSurfaceRendererItem = TodayPlanSurfaceRendererRecord & {
   exercise?: unknown;
+  fromPlan?: unknown;
+  fromSession?: unknown;
 };
 type TodayPlanSurfaceRendererJourney = import("../contracts/client-api.js").ClientStrengthJourney;
 type TodayPlanSurfaceRendererPendingOffPlan = {
@@ -51,6 +53,7 @@ type TodayPlanSurfaceRendererOptions = {
   hasLoggedSets: boolean;
   hasGarmin: boolean;
   isRunDay: boolean;
+  preserveItemOrder?: boolean;
   prefillFor(item: TodayPlanSurfaceRendererItem): TodayPlanSurfaceRendererPrefill;
   rxFor(name: unknown): unknown;
 };
@@ -111,6 +114,7 @@ type TodayPlanSurfaceRendererApi = {
   }
 
   function orderedSurfaceItems(options: TodayPlanSurfaceRendererOptions, deps: TodayPlanSurfaceRendererDeps): TodayPlanSurfaceRendererItem[] {
+    if (options.preserveItemOrder) return options.activeItems;
     if (options.isRunDay || options.cardioItems.length > 1 || (options.cardioItems.length && options.strengthItems.length)) {
       return [
         ...options.activeItems.filter(deps.isCardioItem),
@@ -169,7 +173,11 @@ type TodayPlanSurfaceRendererApi = {
       }
       const exerciseName = String(item.exercise || "");
       html += deps.exCard(
-        { ...journeyItem(item, options.day, options.strengthJourney), fromPlan: true },
+        {
+          ...journeyItem(item, options.day, options.strengthJourney),
+          fromPlan: item.fromPlan !== false,
+          fromSession: item.fromSession === true,
+        },
         options.loggedByEx[exerciseName] || [],
         options.prefillFor(item),
         cardIdx++,

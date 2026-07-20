@@ -67,6 +67,9 @@ test("Today session suggestion card renders escaped suggested items", () => {
   assert.match(html, /3 × 6–8 · 30 assist/);
   assert.match(html, /2 × 45s/);
   assert.match(html, /2 × 12 · BW/);
+  assert.match(html, />Use this session</);
+  assert.match(html, /role="status" aria-live="polite"/);
+  assert.doesNotMatch(html, />Log these</);
   assert.match(html, /protein &lt;floor&gt;/);
   assert.doesNotMatch(html, /Upper <pull>|smooth reps <only>|protein <floor>/);
 });

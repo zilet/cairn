@@ -234,7 +234,8 @@ async function triggerProgramEvolve(
 
 // The conductor's stalled-lift lead may carry a one-tap variation swap. Applied
 // DETERMINISTICALLY via /program/swap/apply (no agent turn) — the plan follows
-// immediately. Double-taps are guarded while the request is in flight.
+// immediately for future sessions; an accepted Today snapshot stays immutable.
+// Double-taps are guarded while the request is in flight.
 async function applyCoachingFocusSwap(btn: Element, deps: ClientProgressProgramControllerDeps): Promise<void> {
   const el = btn instanceof HTMLElement ? btn : null;
   if (el?.dataset.busy === "1") return;
@@ -254,9 +255,7 @@ async function applyCoachingFocusSwap(btn: Element, deps: ClientProgressProgramC
     result = null;
   }
   if (result?.ok) {
-    // The server says what actually happened ("Rotated X in for the plan's Y slot" /
-    // "added to day N") — surface its words, not a generic line.
-    deps.toast(result.message ? String(result.message) : "Rotated in — your plan follows you");
+    deps.toast("Weekly plan updated — today’s accepted session stays the same.");
     deps.invalidate("progress:program");
     deps.invalidate("plan:coach");
     deps.invalidate("plan:proposals");

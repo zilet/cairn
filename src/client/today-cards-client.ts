@@ -22,7 +22,11 @@ function todayFinite(value: unknown): number | null {
   return value == null || !Number.isFinite(Number(value)) ? null : Number(value);
 }
 
-function todayCardsExTimed(item: TodayExerciseItem, logged: unknown, exModes?: Record<string, unknown> | null): boolean {
+function todayCardsExTimed(
+  item: TodayExerciseItem,
+  logged: unknown,
+  exModes?: Record<string, unknown> | null
+): boolean {
   if (item.mode === "timed" || item.target_seconds != null) return true;
   const exercise = todayString(item.exercise);
   if (exercise && exModes?.[exercise] === "timed") return true;
@@ -40,12 +44,15 @@ function exerciseCardHtml(
   revealIdx: unknown,
   rx: TodayPrescription,
   options: TodayExerciseCardOptions = {},
-  lastSet?: unknown,
+  lastSet?: unknown
 ): string {
   const exercise = todayString(item.exercise);
-  const offPlan = !item.fromPlan;
+  // A durable one-day composition is prescribed for this session even when it is
+  // intentionally NOT part of the weekly plan. Keep its sets/reps/load visible;
+  // only truly ad-hoc cards retain the legacy "off-plan" treatment.
+  const offPlan = !item.fromPlan && !item.fromSession;
   const timed = todayCardsExTimed(item, loggedSets, options.exModes);
-  const range = offPlan ? "" : (item.rep_low === item.rep_high ? `${item.rep_low}` : `${item.rep_low}–${item.rep_high}`);
+  const range = offPlan ? "" : item.rep_low === item.rep_high ? `${item.rep_low}` : `${item.rep_low}–${item.rep_high}`;
   const targetText = timed
     ? `${item.sets ?? "?"} × ${item.target_seconds != null ? fmtDur(item.target_seconds) : "time"}`
     : `${item.sets} × ${range}`;
@@ -53,7 +60,7 @@ function exerciseCardHtml(
     ? `<span class="ex-sets ex-offplan">off-plan</span>`
     : `<span class="ex-sets">${targetText}${!timed && item.target_weight != null ? ` @ <span class="ex-target numeral">${fmtWeight(item.target_weight)}</span>` : ""}</span>`;
   const done = loggedSets.length;
-  const goal = offPlan ? 0 : (Number(item.sets) || 0);
+  const goal = offPlan ? 0 : Number(item.sets) || 0;
   const complete = !!goal && done >= goal;
   const progress = `<span class="ex-prog${complete ? " done" : ""}" data-prog>${done}${goal ? ` / ${goal}` : ""} <span>set${done === 1 && !goal ? "" : "s"}</span></span>`;
   const tile = artImg("exercise", exercise, "artile-sm ex-art", art("exercise", exercise, item.muscle_group));
@@ -69,12 +76,14 @@ function exerciseCardHtml(
         <input type="number" inputmode="decimal" placeholder="RIR" title="Reps in reserve — how many more you could have done" aria-label="RIR (reps in reserve)" value="${prefill.rir ?? ""}">
         <button class="logbtn">+</button>
       </div>`;
-  const skipButton = (!offPlan && !done)
-    ? `<button class="ex-skip" data-skip="${encodeURIComponent(exercise)}" title="Not today" aria-label="Skip ${escAttr(exercise)} today">✕</button>`
-    : "";
-  const removeButton = (offPlan && !done)
-    ? `<button class="ex-skip ex-remove" data-remove-card title="Remove" aria-label="Remove ${escAttr(exercise)}">✕</button>`
-    : "";
+  const skipButton =
+    !offPlan && !done
+      ? `<button class="ex-skip" data-skip="${encodeURIComponent(exercise)}" title="Not today" aria-label="Skip ${escAttr(exercise)} today">✕</button>`
+      : "";
+  const removeButton =
+    offPlan && !done
+      ? `<button class="ex-skip ex-remove" data-remove-card title="Remove" aria-label="Remove ${escAttr(exercise)}">✕</button>`
+      : "";
   // The quiet "Last time: …" target line, only before anything's logged today for
   // this exercise — mirrors loadLastSets' own not-yet-logged scoping (today-plan-
   // session-data-client.ts). wireLastSetLine (today-session-set-model.ts) upgrades
@@ -105,7 +114,12 @@ function exerciseCardHtml(
 
 function cardioDoneCardHtml(item: TodayExerciseItem, effort: Record<string, unknown>, revealIdx: unknown): string {
   const label = cardioLabel(item);
-  const tile = artImg("activity", cardioArtPhrase(item), "artile-sm ex-art", art("activity", effort.type || cardioArtPhrase(item)));
+  const tile = artImg(
+    "activity",
+    cardioArtPhrase(item),
+    "artile-sm ex-art",
+    art("activity", effort.type || cardioArtPhrase(item))
+  );
   const dist = todayFinite(effort.distance_km);
   const duration = todayFinite(effort.duration_min);
   const headBits: string[] = [];
@@ -118,7 +132,8 @@ function cardioDoneCardHtml(item: TodayExerciseItem, effort: Record<string, unkn
   if (effort.pace) chips.push(`${String(effort.pace)}/km`);
   const avgHr = todayFinite(effort.avg_hr);
   if (avgHr != null) chips.push(`${Math.round(avgHr)} avg hr`);
-  if (duration != null && duration > 0 && headBits[0] && !headBits[0].includes("min")) chips.push(`${Math.round(duration)} min`);
+  if (duration != null && duration > 0 && headBits[0] && !headBits[0].includes("min"))
+    chips.push(`${Math.round(duration)} min`);
   const reveal = revealIdx != null ? Number(revealIdx) : null;
   const chipHtml = chips.map((chip) => `<span class="done-chip">${escHtml(chip)}</span>`).join("");
   return `<div class="ex ex-cardio ex-cardio-done${reveal != null ? " reveal" : ""}" data-cardio-card${reveal != null ? ` style="${stagger(reveal)}"` : ""}>
@@ -133,7 +148,12 @@ function cardioDoneCardHtml(item: TodayExerciseItem, effort: Record<string, unkn
     </div>`;
 }
 
-function cardioPlanCardHtml(item: TodayExerciseItem, revealIdx: unknown, done: Record<string, unknown> | null | undefined, syncLine: string): string {
+function cardioPlanCardHtml(
+  item: TodayExerciseItem,
+  revealIdx: unknown,
+  done: Record<string, unknown> | null | undefined,
+  syncLine: string
+): string {
   if (done) return cardioDoneCardHtml(item, done, revealIdx);
   const label = cardioLabel(item);
   const tile = artImg("activity", cardioArtPhrase(item), "artile-sm ex-art", art("activity", cardioArtPhrase(item)));
@@ -151,15 +171,18 @@ function cardioPlanCardHtml(item: TodayExerciseItem, revealIdx: unknown, done: R
       </div>
       ${description ? `<div class="ex-note">${escHtml(description)}</div>` : ""}
       <div class="cardio-logrow">
-        <button class="ghostbtn cardio-log-btn" data-cardio-log="${escAttr(logPhrase)}">Log this ${escHtml(verb)} →</button>
+        <button class="ghostbtn cardio-log-btn" data-cardio-log="${escAttr(logPhrase)}">Review &amp; log this ${escHtml(verb)} →</button>
       </div>
       ${syncLine || ""}
     </div>`;
 }
 
-function todayCardsCardioEffortMatches(item: TodayExerciseItem, effort: Record<string, unknown> | null | undefined): boolean {
+function todayCardsCardioEffortMatches(
+  item: TodayExerciseItem,
+  effort: Record<string, unknown> | null | undefined
+): boolean {
   if (!effort) return false;
-  const want = CairnTodayTraining.cardioVerb(item.note || cardioLabel(item));
+  const want = CairnTodayTraining.cardioVerb(item.exercise || item.note || cardioLabel(item));
   const got = CairnTodayTraining.cardioVerb(effort.type || effort.name || "");
   if (want === "effort" || got === "effort") return true;
   return want === got;

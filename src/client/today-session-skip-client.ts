@@ -25,6 +25,25 @@ type TodaySessionSkipDeps = {
   sessionStatus: TodaySessionSkipStatusApi;
 };
 
+type TodaySessionSkipOutboxGlobals = {
+  runSessionMutation?: (
+    input: {
+      date: string;
+      kind: string;
+      path: string;
+      body: unknown;
+      method?: "POST" | "DELETE";
+      identity?: { sessionId?: unknown; dailySessionId?: unknown };
+    },
+    send: (idempotencyKey: string) => Promise<unknown>,
+  ) => Promise<{
+    status: "sent" | "queued" | "blocked" | "storage_error" | "failed";
+    value?: unknown;
+    reason?: unknown;
+    item?: { depends_on?: unknown };
+  }>;
+};
+
 (() => {
   function surfaceStillCurrent(deps: TodaySessionSkipDeps, date: string, tab: string | undefined): boolean {
     return deps.state.logDate === date && deps.state.tab === tab;
@@ -32,6 +51,45 @@ type TodaySessionSkipDeps = {
 
   function responseRecord(value: unknown): Record<string, unknown> {
     return value && typeof value === "object" ? value as Record<string, unknown> : {};
+  }
+
+  function skipOutboxGlobals(): TodaySessionSkipOutboxGlobals {
+    return globalThis as TodaySessionSkipOutboxGlobals;
+  }
+
+  function prepareBarrierMessage(reason: unknown, action: "skip" | "restore"): string {
+    if (reason === "other_tab") {
+      return `This session is being prepared in another tab or view — refresh before ${action === "skip" ? "skipping" : "restoring"}.`;
+    }
+    return `This saved session needs attention before exercises can be ${action === "skip" ? "skipped" : "restored"}.`;
+  }
+
+  async function runSkipMutation(
+    kind: "skip" | "restore",
+    method: "POST" | "DELETE",
+    body: Record<string, unknown>,
+    date: string,
+    deps: TodaySessionSkipDeps,
+  ): Promise<{
+    status: "sent" | "queued" | "blocked" | "storage_error" | "failed";
+    value?: unknown;
+    reason?: unknown;
+    item?: { depends_on?: unknown };
+  }> {
+    const globals = skipOutboxGlobals();
+    if (typeof globals.runSessionMutation !== "function") return { status: "failed" };
+    return globals.runSessionMutation({
+      date,
+      kind,
+      path: "/sessions/skip",
+      body,
+      method,
+      identity: { sessionId: deps.state.sessionIdsByDate?.[date] },
+    }, (idempotencyKey) => deps.api("/sessions/skip", {
+      method,
+      headers: { "Content-Type": "application/json", "X-Idempotency-Key": idempotencyKey },
+      body: JSON.stringify(body),
+    }));
   }
 
   function addSkipName(name: string, deps: TodaySessionSkipDeps): void {
@@ -68,35 +126,37 @@ type TodaySessionSkipDeps = {
     actionTab: string | undefined,
   ): Promise<void> {
     if (!card) return;
-    let result: Record<string, unknown>;
-    try {
-      result = responseRecord(await deps.api("/sessions/skip", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ date: actionDate, exercise }),
-      }));
-    } catch {
-      if (surfaceStillCurrent(deps, actionDate, actionTab)) deps.toast("Couldn't skip — try again");
-      return;
-    }
-    const responseDateMatches = result.date == null || String(result.date) === actionDate;
-    if (result.ok !== true || !responseDateMatches) {
-      if (surfaceStillCurrent(deps, actionDate, actionTab)) {
-        deps.toast(result.error ? "Sets already logged — delete them first" : "Couldn't skip — try again");
+    const body = { date: actionDate, exercise };
+    const mutation = await runSkipMutation("skip", "POST", body, actionDate, deps);
+    let result: Record<string, unknown> = { ok: true, _queued: true };
+    if (mutation.status === "sent") {
+      result = responseRecord(mutation.value);
+      const responseDateMatches = result.date == null || String(result.date) === actionDate;
+      if (result.ok !== true || !responseDateMatches) {
+        if (surfaceStillCurrent(deps, actionDate, actionTab)) {
+          deps.toast(result.error ? "Sets already logged — delete them first" : "Couldn't skip — try again");
+        }
+        return;
       }
+      CairnTodaySessionSetModel.rememberMutationSessionId(deps, actionDate, result);
+    } else if (mutation.status !== "queued") {
+      if (!surfaceStillCurrent(deps, actionDate, actionTab)) return;
+      if (mutation.status === "blocked") deps.toast(prepareBarrierMessage(mutation.reason, "skip"));
+      else if (mutation.status === "storage_error") {
+        deps.toast("Couldn’t save that skip on this device — free storage and try again.");
+      } else deps.toast("Couldn't skip — try again");
       return;
     }
-    CairnTodaySessionSetModel.rememberMutationSessionId(deps, actionDate, result);
     if (!surfaceStillCurrent(deps, actionDate, actionTab)) return;
-    deps.invalidate("today:session:" + actionDate);
+    if (result._queued !== true) deps.invalidate("today:session:" + actionDate);
     const anchor = card.nextElementSibling;
     deps.collapseEl(card, () => {
       if (!surfaceStillCurrent(deps, actionDate, actionTab)) return;
       card.remove();
       addSkipName(exercise, deps);
-      if (deps.state.tab === "today") void deps.renderToday({ soft: true });
+      if (result._queued !== true && deps.state.tab === "today") void deps.renderToday({ soft: true });
     });
-    deps.toast(`${exercise} skipped today`, {
+    deps.toast(result._queued === true ? `${exercise} skip saved — will sync` : `${exercise} skipped today`, {
       action: "Undo",
       onAction: () => { void undoSkip(card, anchor, exercise, deps, actionDate, actionTab); },
     });
@@ -111,18 +171,25 @@ type TodaySessionSkipDeps = {
     actionTab: string | undefined,
   ): Promise<void> {
     if (!surfaceStillCurrent(deps, actionDate, actionTab)) return;
-    try {
-      await deps.api("/sessions/skip", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ date: actionDate, exercise }),
-      });
-    } catch {
-      if (surfaceStillCurrent(deps, actionDate, actionTab)) deps.toast("Couldn't restore — try again");
+    const body = { date: actionDate, exercise };
+    const mutation = await runSkipMutation("restore", "DELETE", body, actionDate, deps);
+    const queued = mutation.status === "queued";
+    if (mutation.status === "sent") {
+      const result = responseRecord(mutation.value);
+      if (result.ok === false || result.error) {
+        if (surfaceStillCurrent(deps, actionDate, actionTab)) deps.toast("Couldn't restore — try again");
+        return;
+      }
+    } else if (!queued) {
+      if (!surfaceStillCurrent(deps, actionDate, actionTab)) return;
+      if (mutation.status === "blocked") deps.toast(prepareBarrierMessage(mutation.reason, "restore"));
+      else if (mutation.status === "storage_error") {
+        deps.toast("Couldn’t save that restore on this device — free storage and try again.");
+      } else deps.toast("Couldn't restore — try again");
       return;
     }
     if (!surfaceStillCurrent(deps, actionDate, actionTab)) return;
-    deps.invalidate("today:session:" + actionDate);
+    if (!queued) deps.invalidate("today:session:" + actionDate);
     if (deps.state.tab !== "today") return;
     removeSkipName(exercise, deps);
     if (!card.isConnected) {
@@ -134,6 +201,7 @@ type TodaySessionSkipDeps = {
       before.parentNode.insertBefore(card, before);
     }
     deps.expandEl(card);
+    if (queued) deps.toast(`${exercise} restore saved — will sync`);
   }
 
   function removeOffPlanCard(card: HTMLElement | null, deps: TodaySessionSkipDeps): void {
@@ -172,20 +240,28 @@ type TodaySessionSkipDeps = {
         const button = (event.target as Element | null)?.closest<HTMLElement>("[data-unskip]");
         if (!button) return;
         const exercise = decodeURIComponent(button.dataset.unskip || "");
-        try {
-          await deps.api("/sessions/skip", {
-            method: "DELETE",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ date: surfaceDate, exercise }),
-          });
-        } catch {
-          if (surfaceStillCurrent(deps, surfaceDate, surfaceTab)) deps.toast("Couldn't restore — try again");
+        const body = { date: surfaceDate, exercise };
+        const mutation = await runSkipMutation("restore", "DELETE", body, surfaceDate, deps);
+        const queued = mutation.status === "queued";
+        if (mutation.status === "sent") {
+          const result = responseRecord(mutation.value);
+          if (result.ok === false || result.error) {
+            if (surfaceStillCurrent(deps, surfaceDate, surfaceTab)) deps.toast("Couldn't restore — try again");
+            return;
+          }
+        } else if (!queued) {
+          if (!surfaceStillCurrent(deps, surfaceDate, surfaceTab)) return;
+          if (mutation.status === "blocked") deps.toast(prepareBarrierMessage(mutation.reason, "restore"));
+          else if (mutation.status === "storage_error") {
+            deps.toast("Couldn’t save that restore on this device — free storage and try again.");
+          } else deps.toast("Couldn't restore — try again");
           return;
         }
         if (!surfaceStillCurrent(deps, surfaceDate, surfaceTab)) return;
-        deps.invalidate("today:session:" + surfaceDate);
-        deps.toast(`${exercise} is back on`);
-        deps.renderToday();
+        if (!queued) deps.invalidate("today:session:" + surfaceDate);
+        removeSkipName(exercise, deps);
+        deps.toast(queued ? `${exercise} restore saved — will sync` : `${exercise} is back on`);
+        if (!queued) deps.renderToday();
       });
     }
   }

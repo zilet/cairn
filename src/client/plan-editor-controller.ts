@@ -228,7 +228,12 @@ async function renderPlanEditor(): Promise<void> {
       </div>`;
       root.querySelector("#planEmptyStart")?.addEventListener("click", () => {
         state.dayPicked = false;
-        if (typeof openSession === "function") openSession(localISO());
+        if (typeof openSession === "function") void openSession(localISO(), {
+          source: "athlete_override",
+          replace: true,
+          trigger: root.querySelector<HTMLElement>("#planEmptyStart"),
+          provenance: { entry: "empty_plan" },
+        });
       });
       return;
     }
@@ -250,7 +255,13 @@ async function renderPlanEditor(): Promise<void> {
       if (!day) return;
       state.day = form.dayNumber(day);
       state.dayPicked = true;
-      if (typeof openSession === "function") openSession(localISO());
+      if (typeof openSession === "function") void openSession(localISO(), {
+        source: "manual_plan",
+        dayNumber: state.day,
+        replace: true,
+        trigger: button,
+        provenance: { entry: "plan_day_train" },
+      });
     }));
     view.querySelectorAll<HTMLElement>("[data-doneday]").forEach((button) => button.addEventListener("click", () => {
       sync();

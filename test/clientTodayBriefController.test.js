@@ -180,7 +180,7 @@ function loadController(opts = {}) {
     URLSearchParams,
     HTMLElement: FakeElement,
     HTMLButtonElement: FakeElement,
-    openSession: () => { openSessions.push(true); },
+    openSession: (date, options) => { openSessions.push({ date, options }); return Promise.resolve(true); },
     window: null,
     globalThis: null,
     document: {
@@ -317,7 +317,10 @@ test("Today Brief controller preserves redirect wiring and override reconnect be
 
   assert.equal(harness.composerCount, 1);
   // start-session now opens the isolated Session destination (no inline reveal/scroll).
-  assert.deepEqual(harness.openSessions, [true]);
+  assert.equal(harness.openSessions.length, 1);
+  assert.equal(harness.openSessions[0].options.source, "adaptive_plan");
+  assert.equal(harness.openSessions[0].options.provenance.entry, "brief_start");
+  assert.equal(harness.openSessions[0].options.trigger, start);
   assert.deepEqual(harness.reveals, []);
   assert.deepEqual(plain(surface.scrolls), []);
   assert.equal(harness.runOps[0].kind, "day_read_override");

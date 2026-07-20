@@ -3,7 +3,9 @@ import { enqueueAgentJob } from "../agentJobs.js";
 import { suggestSession, weekAheadRead } from "../coachOps.js";
 import { readToday } from "../domain/brain/index.js";
 import { createAgentJob } from "../domain/person/index.js";
-import { sessionPrimer } from "../repo.js";
+import { dailySessionErrorBody, prepareDailySessionUseCase } from "../domain/training/index.js";
+import { getActiveDailySession, sessionPrimer } from "../repo.js";
+import { localDateISO } from "../repo/shared.js";
 import { backgroundOp } from "./background-op.js";
 
 export const dayCoachRouter = Router();
@@ -62,7 +64,9 @@ dayCoachRouter.post("/session-suggest", async (req, res) => {
     equipment: b.equipment != null ? String(b.equipment) : undefined,
     focus: b.focus != null ? String(b.focus) : undefined,
     constraints: b.constraints != null ? String(b.constraints) : undefined,
-    date: b.date != null ? String(b.date) : undefined,
+    // Persist the resolved local date with the job. Preparing an agent suggestion
+    // later must be able to prove that its canonical job belongs to this day.
+    date: b.date != null ? String(b.date) : localDateISO(),
   };
   if (backgroundOp(res, "session_suggest", input, b.agent)) return;
   try {
@@ -77,6 +81,43 @@ dayCoachRouter.post("/session-suggest", async (req, res) => {
     );
   } catch (e: any) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// Read the durable composition the athlete accepted for a day. Agent suggestions
+// remain preview-only until the explicit prepare call below writes this snapshot.
+dayCoachRouter.get("/daily-session", (req, res) => {
+  try {
+    res.json(getActiveDailySession(req.query.date != null ? String(req.query.date) : undefined));
+  } catch (error: any) {
+    res.status(400).json({ ok: false, error: error?.message ?? String(error) });
+  }
+});
+
+// Prepare (or explicitly replace) today's durable session without mutating the
+// weekly plan. Plan sources snapshot a plan day; agent_suggest resolves a
+// completed canonical job; athlete_override snapshots a user-authored payload.
+// expected_active_id is assertion-only: it returns the matching active snapshot
+// and bound session without creating/replacing anything. Different replacements
+// stop once logging begins; exact retries remain safe.
+dayCoachRouter.post("/daily-session/prepare", (req, res) => {
+  const body = req.body ?? {};
+  try {
+    res.json(
+      prepareDailySessionUseCase({
+        date: body.date,
+        expected_active_id: body.expected_active_id,
+        day_number: body.day_number,
+        source: body.source,
+        agent_job_id: body.agent_job_id,
+        session: body.session,
+        constraints: body.constraints,
+        provenance: body.provenance,
+        replace: body.replace === true,
+      })
+    );
+  } catch (error: any) {
+    res.status(400).json(dailySessionErrorBody(error));
   }
 });
 

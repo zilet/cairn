@@ -136,7 +136,7 @@ type TodaySessionSetModelApi = {
   function logPayloadFromRow(row: HTMLElement, deps: ClientTodaySessionControllerDeps): TodaySessionSetPayloadResult {
     const timed = row.dataset.mode === "timed";
     const exercise = decodeURIComponent(row.dataset.ex || "");
-    const dayNumber = Number(row.dataset.day);
+    const dayNumber = row.dataset.day == null || row.dataset.day === "" ? null : Number(row.dataset.day);
     if (timed) {
       const durEl = row.querySelector<HTMLInputElement>(".in-dur");
       const sec = deps.parseDur(durEl?.value || "");

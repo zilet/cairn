@@ -115,8 +115,38 @@ type TodaySessionSurfaceOptions = ClientTodaySessionSurfaceOptions;
         // The action may need an async ID recovery; persist the note under the
         // action's date before yielding so a navigation can never strand it.
         saveSessionNotesDraft(actionDate, notes);
-        const sessionId = CairnTodaySessionSetModel.sessionPathId(session, deps, actionDate)
-          || await recoverSessionPathId(deps, actionDate, actionTab);
+        const knownSessionId = CairnTodaySessionSetModel.sessionPathId(session, deps, actionDate);
+        const runtime = globalThis as {
+          outboxSessionPrerequisite?: (date: string) => { status?: unknown; reason?: unknown };
+          runSessionMutation?: (
+            input: {
+              date: string;
+              kind: string;
+              path: string;
+              body: unknown;
+              identity?: { sessionId?: unknown; dailySessionId?: unknown };
+            },
+            send: (idempotencyKey: string) => Promise<unknown>,
+          ) => Promise<{
+            status: "sent" | "queued" | "blocked" | "storage_error" | "failed";
+            value?: unknown;
+            reason?: unknown;
+            item?: { depends_on?: unknown };
+          }>;
+        };
+        if (!knownSessionId) {
+          const prerequisite = runtime.outboxSessionPrerequisite?.(actionDate);
+          if (prerequisite && prerequisite.status !== "none") {
+            finishBtn.disabled = false;
+            deps.toast(
+              prerequisite?.status === "blocked" && prerequisite.reason === "other_tab"
+                ? "This session is being prepared in another tab or view — refresh before finishing."
+                : "Session isn’t reconciled yet — your note is saved",
+            );
+            return;
+          }
+        }
+        const sessionId = knownSessionId || await recoverSessionPathId(deps, actionDate, actionTab);
         if (!sessionId) {
           if (surfaceStillCurrent(deps, actionDate, actionTab)) {
             finishBtn.disabled = false;
@@ -131,45 +161,65 @@ type TodaySessionSurfaceOptions = ClientTodaySessionSurfaceOptions;
         // takes the same offline path a thrown fetch already does. Finish replay
         // is safe: finishSession is an idempotent UPDATE — unlike a set-log, which
         // we never auto-time-out, since a timed-out-but-landed set could duplicate.
+        const finishHeaders: Record<string, string> = { "Content-Type": "application/json" };
         const finishOpts: RequestInit & { headers?: Record<string, string> } = {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: finishHeaders,
           body: JSON.stringify({ notes }),
         };
         let finishTimer: ReturnType<typeof setTimeout> | null = null;
+        let finishController: AbortController | null = null;
         if (typeof AbortController === "function") {
-          const controller = new AbortController();
-          finishOpts.signal = controller.signal;
-          if (typeof setTimeout === "function") finishTimer = setTimeout(() => controller.abort(), FINISH_TIMEOUT_MS);
+          finishController = new AbortController();
+          finishOpts.signal = finishController.signal;
         }
-        let result: Record<string, unknown>;
-        try {
-          result = CairnTodaySessionSetModel.responseRecord(await deps.api(finishPath, finishOpts));
-        } catch (error) {
-          const classify = (globalThis as {
-            CairnApiCache?: { isTransientApiFailure?: (value: unknown) => boolean };
-          }).CairnApiCache?.isTransientApiFailure;
-          if (typeof classify === "function" && !classify(error)) {
-            if (surfaceStillCurrent(deps, actionDate, actionTab)) {
-              finishBtn.disabled = false;
-              deps.toast("Couldn't finish that session");
-            }
-            return;
-          }
-          (globalThis as { outboxEnqueue?: (kind: string, path: string, body: unknown) => unknown }).outboxEnqueue?.(
-            "finish",
-            finishPath,
-            { notes },
-          );
-          clearSessionNotesDraft(actionDate); // the note is safe in the outbox now
-          if (surfaceStillCurrent(deps, actionDate, actionTab)) {
-            finishBtn.disabled = false;
-            deps.toast("Finish saved — will sync when you're back online");
-          }
+        if (typeof runtime.runSessionMutation !== "function") {
+          finishBtn.disabled = false;
+          deps.toast("Couldn’t safely finish that session — refresh and try again.");
           return;
+        }
+        let mutation: Awaited<ReturnType<NonNullable<typeof runtime.runSessionMutation>>>;
+        try {
+          mutation = await runtime.runSessionMutation({
+            date: actionDate,
+            kind: "finish",
+            path: finishPath,
+            body: { notes },
+            identity: { sessionId },
+          }, (idempotencyKey) => {
+            if (finishController && typeof setTimeout === "function") {
+              finishTimer = setTimeout(() => finishController?.abort(), FINISH_TIMEOUT_MS);
+            }
+            return deps.api(finishPath, {
+              ...finishOpts,
+              headers: { ...finishHeaders, "X-Idempotency-Key": idempotencyKey },
+            });
+          });
         } finally {
           if (finishTimer != null && typeof clearTimeout === "function") clearTimeout(finishTimer);
         }
+        if (mutation.status !== "sent") {
+          if (mutation.status === "queued") clearSessionNotesDraft(actionDate);
+          if (!surfaceStillCurrent(deps, actionDate, actionTab)) return;
+          finishBtn.disabled = false;
+          if (mutation.status === "queued") {
+            deps.toast(mutation.item?.depends_on
+              ? "Finish saved — reconciling this session"
+              : "Finish saved — will sync when you're back online");
+          } else if (mutation.status === "blocked") {
+            deps.toast(
+              mutation.reason === "other_tab"
+                ? "This session is being prepared in another tab or view — refresh before finishing."
+                : "This saved session needs attention before it can be finished.",
+            );
+          } else if (mutation.status === "storage_error") {
+            deps.toast("Couldn’t save that finish on this device — free storage and try again.");
+          } else {
+            deps.toast("Couldn't finish that session");
+          }
+          return;
+        }
+        const result = CairnTodaySessionSetModel.responseRecord(mutation.value);
         const responseDateMatches = result.date == null || String(result.date) === actionDate;
         const responseIdMatches = String(result.id ?? "") === decodeURIComponent(sessionId);
         if (!result || result.error || result.ok === false || !responseDateMatches || !responseIdMatches) {

@@ -39,6 +39,7 @@ export type ClientAppState = {
   pendingHealthDocId?: string | null;
   pendingHealthScroll?: "hbDirectives" | string | null;
   chatPrefill?: string | null;
+  capturePrefill?: string | null;
   brief?: ClientBriefCache | null;
   _briefInflight?: { date: string; override: string; promise: Promise<ClientDayRead> } | null;
   _briefMorph?: boolean;

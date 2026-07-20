@@ -1,12 +1,18 @@
-// Pure semantic acceptance contracts for agent-produced intelligence.
+// Semantic acceptance contracts for agent-produced intelligence.
 //
 // Parsing JSON only proves syntax. These predicates define the smallest useful
 // shape each operation must produce before the shared rotation may stop. They do
-// not coerce, persist, or apply anything; domain safety clamps still run after
-// acceptance. Keeping them pure makes the fallback boundary deterministic and
-// directly testable across one-shot and streaming agent paths.
+// not persist or apply anything. Session suggestions are the deliberate
+// exception to boolean-only validation: they normalize at acceptance so the
+// actionable preview is already identical to the later durable snapshot.
 
 import { assessMealPlanAdequacy } from "./repo/nutrition-safety.js";
+import {
+  DAILY_SESSION_SUGGESTION_NORMALIZATION,
+  normalizeSessionSuggestionResult,
+} from "./repo/adaptive-session.js";
+
+export { DAILY_SESSION_SUGGESTION_NORMALIZATION, normalizeSessionSuggestionResult };
 
 type JsonObject = Record<string, any>;
 
@@ -27,14 +33,7 @@ function positive(value: unknown): boolean {
 }
 
 export function isSessionSuggestionResult(value: unknown): boolean {
-  const p = object(value);
-  if (!p || !text(p.name) || !text(p.why) || !Array.isArray(p.items) || !p.items.length) return false;
-  return p.items.every((raw: unknown) => {
-    const item = object(raw);
-    if (!item || !text(item.exercise)) return false;
-    if (item.kind === "cardio") return positive(item.target_duration_min) || positive(item.target_distance_km);
-    return positive(item.sets);
-  });
+  return normalizeSessionSuggestionResult(value) != null;
 }
 
 export function isPlanProposalResult(value: unknown): boolean {

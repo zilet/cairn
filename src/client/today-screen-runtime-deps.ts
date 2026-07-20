@@ -12,7 +12,7 @@ type TodayScreenRuntimeDepsInput = {
   state: TodayScreenRuntimeDepsState;
   api<Path extends string>(
     path: Path,
-    opts?: RequestInit & { headers?: Record<string, string> },
+    opts?: RequestInit & { headers?: Record<string, string>; acceptErrorBody?: boolean },
   ): Promise<TodayScreenRuntimeDepsApiResponse<Path>>;
   cachedApi<Path extends string>(
     path: Path,

@@ -10,6 +10,7 @@ type CardioIntervalSegment = {
 
 type CardioPlanItem = {
   kind?: unknown;
+  exercise?: unknown;
   note?: unknown;
   interval?: unknown;
   interval_note?: unknown;
@@ -55,7 +56,9 @@ function cardioIntervalStructure(interval: unknown, targetZone: unknown): string
       const on = String(segment.on || "").trim();
       if (!on) return "";
       const reps = segment.reps != null ? Number(segment.reps) : null;
-      let zone = String(segment.zone || "").trim().toUpperCase();
+      let zone = String(segment.zone || "")
+        .trim()
+        .toUpperCase();
       if (zone && tzZone && zone === String(tzZone).toUpperCase() && tzBand) zone = tzBand;
       const head = reps != null && reps > 0 ? `${reps} × ${on}` : on;
       let text = zone ? `${head} @ ${zone}` : head;
@@ -69,7 +72,7 @@ function cardioIntervalStructure(interval: unknown, targetZone: unknown): string
 
 function cardioArtPhrase(item: CardioPlanItem | null | undefined): string {
   const row = cardioRecord(item);
-  const label = String(row.note || "").trim();
+  const label = String(row.note || row.exercise || "").trim();
   return label || "run";
 }
 
@@ -81,10 +84,12 @@ function cardioNoteIsDescriptive(note: unknown): boolean {
 
 function cardioSport(item: CardioPlanItem | null | undefined): string {
   const row = cardioRecord(item);
-  const text = `${row.note || ""} ${cardioIntervalNote(row.interval) || row.interval_note || ""}`.toLowerCase();
+  const text =
+    `${row.exercise || ""} ${row.note || ""} ${cardioIntervalNote(row.interval) || row.interval_note || ""}`.toLowerCase();
   if (/ride|bike|cycl|spin/.test(text)) return "ride";
   if (/swim/.test(text)) return "swim";
   if (/\brow|erg\b/.test(text)) return "row";
+  if (/hike|hiking/.test(text)) return "hike";
   return "run";
 }
 
@@ -94,7 +99,7 @@ function derivedCardioLabel(item: CardioPlanItem | null | undefined): string {
   const cap = (value: string): string => value.charAt(0).toUpperCase() + value.slice(1);
   const interval = String(cardioIntervalNote(row.interval) || row.interval_note || "").toLowerCase();
   const zone = String(row.target_zone || "").toLowerCase();
-  const blob = `${row.note || ""} ${zone}`.toLowerCase();
+  const blob = `${row.exercise || ""} ${row.note || ""} ${zone}`.toLowerCase();
   if (/interval|fartlek|\d\s*[×x]\s*\d/.test(`${interval} ${blob}`)) return `${cap(sport)} intervals`;
   const km = row.target_distance_km != null ? Number(row.target_distance_km) : null;
   let mood = "";
@@ -111,6 +116,8 @@ function cardioLabel(item: CardioPlanItem | null | undefined): string {
   const note = String(row.note || "").trim();
   if (note && !cardioNoteIsDescriptive(note)) return note;
   if (note) return derivedCardioLabel(row);
+  const exercise = String(row.exercise || "").trim();
+  if (exercise) return exercise;
   if (row.target_distance_km != null && Number(row.target_distance_km) >= 12) return "Long run";
   return "Cardio";
 }

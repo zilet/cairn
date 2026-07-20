@@ -8,7 +8,10 @@
 // score; the server hands us finished plain words (delta_text + why), we just frame
 // them. The whole day's prescriptions become a DRAFT plan proposal via the apply
 // control in the session head — nothing auto-applies.
-type TodayScreenDayRead = import("../contracts/client.js").ClientDayRead & { _provisional?: boolean; override?: string | null };
+type TodayScreenDayRead = import("../contracts/client.js").ClientDayRead & {
+  _provisional?: boolean;
+  override?: string | null;
+};
 type TodayScreenPlanItem = import("../contracts/client.js").ClientPlanItem & {
   fromPlan?: boolean;
   muscle_group?: string | null;
@@ -36,6 +39,7 @@ type TodayState = Omit<typeof state, "brief" | "_briefInflight" | "exModes" | "p
   planJump?: string;
   chatPrefill?: string;
   pendingOffPlan?: Record<string, Array<{ name: string; mode?: string | null }>>;
+  capturePrefill?: string | null;
   meSeg?: string;
   healthSeg?: string;
   healthSegPicked?: boolean;
@@ -58,21 +62,31 @@ const todayApi = todayRuntime.api;
 const todayDeps = todayRuntime.deps;
 const todayPlanSurfaceRendererDeps = todayRuntime.planSurfaceRendererDeps;
 const todayMainShellDeps = todayRuntime.mainShellDeps;
-const todayPlanSessionPreparation = (globalThis as unknown as {
-  CairnTodayPlanSessionPreparation: TodayPlanSessionPreparationApi;
-}).CairnTodayPlanSessionPreparation;
-const todayDataLoader = (globalThis as unknown as {
-  CairnTodayDataLoader: Window["CairnTodayDataLoader"];
-}).CairnTodayDataLoader;
-const todayMainShell = (globalThis as unknown as {
-  CairnTodayMainShell: Window["CairnTodayMainShell"];
-}).CairnTodayMainShell;
-const todayPlanSurfaceRenderer = (globalThis as unknown as {
-  CairnTodayPlanSurfaceRenderer: Window["CairnTodayPlanSurfaceRenderer"];
-}).CairnTodayPlanSurfaceRenderer;
-const todayRenderState = (globalThis as unknown as {
-  CairnTodayRenderState: TodayRenderStateApi;
-}).CairnTodayRenderState;
+const todayPlanSessionPreparation = (
+  globalThis as unknown as {
+    CairnTodayPlanSessionPreparation: TodayPlanSessionPreparationApi;
+  }
+).CairnTodayPlanSessionPreparation;
+const todayDataLoader = (
+  globalThis as unknown as {
+    CairnTodayDataLoader: Window["CairnTodayDataLoader"];
+  }
+).CairnTodayDataLoader;
+const todayMainShell = (
+  globalThis as unknown as {
+    CairnTodayMainShell: Window["CairnTodayMainShell"];
+  }
+).CairnTodayMainShell;
+const todayPlanSurfaceRenderer = (
+  globalThis as unknown as {
+    CairnTodayPlanSurfaceRenderer: Window["CairnTodayPlanSurfaceRenderer"];
+  }
+).CairnTodayPlanSurfaceRenderer;
+const todayRenderState = (
+  globalThis as unknown as {
+    CairnTodayRenderState: TodayRenderStateApi;
+  }
+).CairnTodayRenderState;
 
 const {
   sessionDeps: todaySessionDeps,
@@ -146,7 +160,11 @@ const TODAY_PLAN_SNAP_KEY = "cairn.today.plan.v1";
 let todayPaintedRealFor: string | null = null; // date last given the REAL (non-snapshot) write this session
 
 function todaySaveSurfaceSnapshot(date: string, html: string): void {
-  try { sessionStorage.setItem(TODAY_PLAN_SNAP_KEY, JSON.stringify({ date, html })); } catch { /* quota — skip */ }
+  try {
+    sessionStorage.setItem(TODAY_PLAN_SNAP_KEY, JSON.stringify({ date, html }));
+  } catch {
+    /* quota — skip */
+  }
 }
 function todayLoadSurfaceSnapshot(date: string): string | null {
   try {
@@ -154,7 +172,9 @@ function todayLoadSurfaceSnapshot(date: string): string | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as { date?: unknown; html?: unknown } | null;
     return parsed && parsed.date === date && typeof parsed.html === "string" ? parsed.html : null;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 async function renderToday(opts: any = {}) {
@@ -184,7 +204,8 @@ async function renderToday(opts: any = {}) {
   // day/prescriptions) — kicking off both waves together instead of serially
   // saves one full round-trip on cold entry. (See the Brief comment further
   // down for what `loadBrief`'s fast mode does.)
-  const briefOverride = todayState.brief && todayState.brief.date === todayState.logDate ? todayState.brief.override : "";
+  const briefOverride =
+    todayState.brief && todayState.brief.date === todayState.logDate ? todayState.brief.override : "";
   const [prep, read] = await Promise.all([
     todayPlanSessionPreparation.preparePlanSession(todayDeps().planSession(session, isToday)),
     loadBrief(todayState.logDate, briefOverride, { fast: true }),
@@ -213,23 +234,30 @@ async function renderToday(opts: any = {}) {
   } = prep;
 
   const [stats, profile, exercises]: any[] = [todayData.stats, todayData.profile, todayData.exercises];
-  if (profile) { setDiscipline(profile.primary_discipline); setEnduranceGoalSet(!!profile.endurance_goal_json); } // keep the emphasis globals warm for Progress/Today/Plan
+  if (profile) {
+    setDiscipline(profile.primary_discipline);
+    setEnduranceGoalSet(!!profile.endurance_goal_json);
+  } // keep the emphasis globals warm for Progress/Today/Plan
   // exercise → mode map ('reps'|'timed'), used by exCard + the add-exercise flow
   todayState.exModes = Object.fromEntries((exercises || []).map((e: any) => [e.name, e.mode || "reps"]));
   const curW = stats.weight_lb ?? (profile && profile.weight_lb != null ? profile.weight_lb : null);
   // Compass strip: adherence to this week's plan + weight-trend pace vs the goal.
   // The pure helper owns the mode wording and week recap markup; Today keeps
   // placement and the click into Chat.
-  const todayCompass = CairnTodayCompass.build(stats, {
-    escapeHtml: escHtml,
-    escapeAttr: escAttr,
-    formatKm: fmtKm,
-  }, {
-    currentWeight: curW,
-    isToday,
-    isEndurance: isEndurance(),
-    isHybrid: isHybrid(),
-  });
+  const todayCompass = CairnTodayCompass.build(
+    stats,
+    {
+      escapeHtml: escHtml,
+      escapeAttr: escAttr,
+      formatKm: fmtKm,
+    },
+    {
+      currentWeight: curW,
+      isToday,
+      isEndurance: isEndurance(),
+      isHybrid: isHybrid(),
+    }
+  );
 
   // ---- The Brief: the day-read leads. A suggestion, never a gate. ----
   // The plan/logging surface is revealed when the read says "train", when the
@@ -241,12 +269,7 @@ async function renderToday(opts: any = {}) {
   // (painted with the .is-thinking filament) and the real agentic read swaps in
   // via upgradeBriefInPlace() once it lands. First paint never waits on
   // agent:"auto". (Honors an active override.)
-  const {
-    hasLoggedSets,
-    hasGarmin,
-    showPlan,
-    showDone,
-  } = todayRenderState.derive({
+  const { hasLoggedSets, hasGarmin, showPlan, showDone } = todayRenderState.derive({
     logDate: todayState.logDate,
     session,
     day,
@@ -265,7 +288,9 @@ async function renderToday(opts: any = {}) {
   // synced yet?" nudge fires when a run is prescribed today but no synced effort has
   // landed AND the last sync is stale (see cardioSyncLine). One shared line under the
   // run card (and on the Endurance view).
-  const syncline = cardioItems.length ? cardioSyncLine(todaySettings as Record<string, unknown> | null | undefined, { expectingRun }) : "";
+  const syncline = cardioItems.length
+    ? cardioSyncLine(todaySettings as Record<string, unknown> | null | undefined, { expectingRun })
+    : "";
 
   // In focus mode the chrome (context banner, Brief, insight, capture) gives way to
   // the slim sticky focus header; otherwise the Brief leads as always.
@@ -306,51 +331,69 @@ async function renderToday(opts: any = {}) {
   // final form, in phase two.
   const goalLineHtml = CairnTodayContext.goalLineHtml(stats, curW, isToday);
 
-  let html = todayMainShell.leadHtml({
-    isToday,
-    briefHtml: briefHtml(read, { showPlan, showDone, isToday }),
-    conductorHtml: "",
-    conductorLeads: false,
-    goalLineHtml: "",
-    currentWeight: curW,
-  }, todayMainShellDeps());
+  let html = todayMainShell.leadHtml(
+    {
+      isToday,
+      briefHtml: briefHtml(read, { showPlan, showDone, isToday }),
+      conductorHtml: "",
+      conductorLeads: false,
+      goalLineHtml: "",
+      currentWeight: curW,
+    },
+    todayMainShellDeps()
+  );
 
   // On Today, the plan area is a calm launch card into the isolated Session
   // destination (logging no longer lives inline here). The done card still shows
   // inline.
-  html += (showPlan && !showDone)
-    ? sessionLaunchCardHtml({ day, exDone, exTotal, isToday, hasLoggedSets, isRunDay, read, strengthJourney })
-    : todayPlanSurfaceRenderer.buildHtml({
-    showDone,
-    showPlan,
-    focus: false,
-    session,
-    day,
-    isToday,
-    plan: todayState.plan,
-    activeDay: todayState.day,
-    logDate: todayState.logDate,
-    cardioItems,
-    strengthItems,
-    activeItems,
-    skippedItems,
-    matchedCardio,
-    syncedLine: syncline,
-    loggedByEx,
-    offPlanEx,
-    pendingOffPlan,
-    lastSets,
-    rxByEx,
-    strengthJourney,
-    exDone,
-    exTotal,
-    hasSyncedCardioToday,
-    hasLoggedSets,
-    hasGarmin,
-    isRunDay,
-    prefillFor,
-    rxFor,
-  }, todayPlanSurfaceRendererDeps());
+  html +=
+    showPlan && !showDone
+      ? sessionLaunchCardHtml({
+          day,
+          dailySession: prep.dailySession,
+          exDone,
+          exTotal,
+          isToday,
+          hasLoggedSets,
+          isRunDay,
+          read,
+          strengthJourney,
+        })
+      : todayPlanSurfaceRenderer.buildHtml(
+          {
+            showDone,
+            showPlan,
+            focus: false,
+            session,
+            day,
+            isToday,
+            plan: todayState.plan,
+            activeDay: todayState.day,
+            logDate: todayState.logDate,
+            cardioItems,
+            strengthItems,
+            activeItems,
+            skippedItems,
+            matchedCardio,
+            syncedLine: syncline,
+            loggedByEx,
+            offPlanEx,
+            pendingOffPlan,
+            lastSets,
+            rxByEx,
+            strengthJourney,
+            exDone,
+            exTotal,
+            hasSyncedCardioToday,
+            hasLoggedSets,
+            hasGarmin,
+            isRunDay,
+            preserveItemOrder: !!prep.dailySession,
+            prefillFor,
+            rxFor,
+          },
+          todayPlanSurfaceRendererDeps()
+        );
 
   // ---- Trajectory tier (this week), quiet, below the fold ----
   html += todayMainShell.weekFoldHtml(todayCompass, todayMainShellDeps());
@@ -369,15 +412,27 @@ async function renderToday(opts: any = {}) {
   // since the CSS `rise` animation fires on insertion. toggle() also clears it on
   // the next hard render so real entrances still animate.
   todayView.classList.toggle("today-soft", !!soft);
-  const todayWrappedHtml = todayMainShell.wrapHtml(html, { railHtml: `<aside class="today-rail" aria-busy="true"></aside>` });
+  const todayWrappedHtml = todayMainShell.wrapHtml(html, {
+    railHtml: `<aside class="today-rail" aria-busy="true"></aside>`,
+  });
   todayView.innerHTML = todayWrappedHtml;
-  if (soft) { try { window.scrollTo(0, prevY); } catch {} }
+  if (soft) {
+    try {
+      window.scrollTo(0, prevY);
+    } catch {}
+  }
   // Snapshot this REAL write for next entry's instant paint (see above).
   todayPaintedRealFor = enteredDate;
   todaySaveSurfaceSnapshot(enteredDate, todayWrappedHtml);
 
   // The lead entry: one tap opens the isolated Session destination.
-  todayView.querySelector("#sessLaunch")?.addEventListener("click", () => openSession());
+  (todayView.querySelector("#sessLaunch") as HTMLElement | null)?.addEventListener("click", (event: Event) => {
+    void openSession(undefined, {
+      source: "adaptive_plan",
+      trigger: event.currentTarget as HTMLElement,
+      provenance: { entry: "today_launch" },
+    });
+  });
 
   // Calm, dismissible "add to home screen" coach — appended to the primary column AFTER
   // the wholesale innerHTML write above (mounting before it would be silently wiped).
@@ -392,17 +447,19 @@ async function renderToday(opts: any = {}) {
   // health lever are deferred to phase two: deferRail skips both rail loaders, and
   // conductorLeads:true holds the health-lever load so the conductor can decide whether
   // it shows at all — one voice, and no late-write race to clean up.
-  CairnTodayPostRenderWiring.wirePostRender(todayDeps().postRender({
-    read,
-    isToday,
-    showPlan,
-    soft,
-    conductorLeads: true,
-    deferRail: true,
-    agenda: null,
-    agendaGeneric: [],
-    todayCompass,
-  }));
+  CairnTodayPostRenderWiring.wirePostRender(
+    todayDeps().postRender({
+      read,
+      isToday,
+      showPlan,
+      soft,
+      conductorLeads: true,
+      deferRail: true,
+      agenda: null,
+      agendaGeneric: [],
+      todayCompass,
+    })
+  );
 
   // Autonomous changes explain themselves at the affected exercise and can be
   // put back immediately. The server owns the exact rollback snapshot; the UI
@@ -495,12 +552,418 @@ async function renderToday(opts: any = {}) {
 // back button, which the router handles for free since openSession pushes a URL).
 let sessionFreshNext = false;
 
-function openSession(date?: string | null): void {
-  if (date) todayState.logDate = date;
-  todayState.planReveal = { date: todayState.logDate, on: true };
+type OpenSessionOptions = {
+  source?: "adaptive_plan" | "agent_suggest" | "manual_plan" | "athlete_override";
+  dayNumber?: number | null;
+  replace?: boolean;
+  agentJobId?: number | null;
+  session?: import("../contracts/client.js").ClientSessionSuggestion | null;
+  constraints?: Record<string, unknown>;
+  trigger?: HTMLElement | null;
+  provenance?: Record<string, unknown>;
+};
+
+const todaySessionSuggestController = CairnTodaySessionSuggestController as typeof CairnTodaySessionSuggestController & {
+  meaningfulLegacySession(cachedSession: unknown, explicitReplacement: boolean): boolean;
+  stageCachedContinuation(
+    continuation: { session: Record<string, unknown>; daily_session: Record<string, unknown> },
+    localPrepareId: string,
+  ): Record<string, unknown> | null;
+  snapshotRecovery(
+    dailySession: unknown,
+    originalRequest: unknown,
+  ): { body: Record<string, unknown>; intent: Record<string, unknown> } | null;
+  stagedPrepareResponse(input: {
+    date: string;
+    request: Record<string, unknown>;
+    plan: Array<Record<string, unknown>>;
+    selectedDay: number | null;
+    suggestedSession?: Record<string, unknown> | null;
+    localPrepareId: string;
+  }): Record<string, unknown> | null;
+};
+const sessionPrepareCoordinator = todaySessionSuggestController.createPrepareCoordinator();
+let sessionPrepareAnnouncement = 0;
+
+function announceSessionPrepare(message: string): void {
+  if (typeof document === "undefined" || !document.body) return;
+  let status = document.getElementById("sessionPrepareLive");
+  let mounted = false;
+  if (!status) {
+    status = document.createElement("div");
+    status.id = "sessionPrepareLive";
+    status.setAttribute("role", "status");
+    status.setAttribute("aria-live", "polite");
+    status.setAttribute("aria-atomic", "true");
+    status.setAttribute(
+      "style",
+      "position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0"
+    );
+    document.body.appendChild(status);
+    mounted = true;
+  }
+  // A live region needs to exist before its first text mutation for reliable
+  // announcement across VoiceOver/NVDA. Later updates can land synchronously.
+  const announcement = ++sessionPrepareAnnouncement;
+  if (mounted && typeof setTimeout === "function") {
+    setTimeout(() => {
+      if (status && announcement === sessionPrepareAnnouncement) status.textContent = message;
+    }, 0);
+  } else status.textContent = message;
+}
+
+function sessionPrepareBusy(trigger: HTMLElement | null | undefined, busy: boolean, message = ""): void {
+  if (!trigger) return;
+  trigger.toggleAttribute("disabled", busy);
+  if (busy) trigger.setAttribute("aria-busy", "true");
+  else trigger.removeAttribute("aria-busy");
+  const host = trigger.closest(".sess-launch") || trigger.parentElement;
+  const status = host?.querySelector<HTMLElement>(".sess-launch-status, [data-session-prepare-status]");
+  if (status) status.textContent = message;
+}
+
+function cachePreparedSession(date: string, response: Record<string, unknown>): void {
+  if (response.session) swrSet(`today:session:${date}`, response.session);
+  if (response.daily_session) swrSet(`today:daily-session:${date}`, response.daily_session);
+  swrInvalidate(`today:aggregate:${date}`);
+  swrInvalidate("history:sessions");
+}
+
+function enterSession(date: string, response?: Record<string, unknown> | null): void {
+  if (response) cachePreparedSession(date, response);
+  todayState.logDate = date;
+  const daily = response?.daily_session as Record<string, unknown> | null | undefined;
+  if (daily?.source === "manual_plan") {
+    const linked = todayState.plan.find((day) => Number(day.id) === Number(daily.plan_day_id));
+    if (linked) todayState.day = linked.day_number;
+    todayState.dayPicked = true;
+  } else if (daily && daily.source !== "adaptive_plan") {
+    todayState.day = null;
+    todayState.dayPicked = false;
+  }
+  todayState.planReveal = { date, on: true };
   sessionFreshNext = true;
-  try { window.scrollTo(0, 0); } catch {}
+  try {
+    window.scrollTo(0, 0);
+  } catch {}
   activateTab("session");
+}
+
+async function openSession(date?: string | null, options: OpenSessionOptions = {}): Promise<boolean> {
+  const targetDate = date || todayState.logDate || localISO();
+  const trigger = options.trigger || null;
+  let source = options.source || (options.dayNumber != null || todayState.dayPicked ? "manual_plan" : "adaptive_plan");
+  // Replacement is an explicit action, not an inference from retained UI state.
+  // Every real plan-day switch passes replace:true; dayPicked also survives a
+  // reload/reopen and must not turn continuation into an unsafe replacement.
+  const explicitReplacement = options.replace === true;
+
+  // Historic/legacy sessions remain usable exactly as they were. A composition is
+  // additive; never force a migration-like prepare over already-logged work.
+  const cachedSession = peekCached<any>(`today:session:${targetDate}`)?.data || null;
+  const cachedDaily =
+    cachedSession?.daily_session || peekCached<any>(`today:daily-session:${targetDate}`)?.data || null;
+  const livePreparePrerequisite = (id: string): boolean => {
+    const rows = (globalThis as {
+      CairnOutbox?: { list?(): Array<{ id?: unknown; kind?: unknown; state?: unknown }> };
+    }).CairnOutbox?.list?.() || [];
+    return rows.some((item) =>
+      String(item.id || "") === id &&
+      item.kind === "daily_session_prepare" &&
+      item.state !== "needs_attention"
+    );
+  };
+  const continuation = todaySessionSuggestController.cachedContinuation(
+    cachedSession,
+    cachedDaily,
+    explicitReplacement,
+    livePreparePrerequisite,
+  );
+  if (continuation) {
+    // Locally staged work may continue only while its exact prepare barrier is
+    // still live. A cached server composition must be asserted by ID before the
+    // athlete can log against it; status:"active" alone is never authority.
+    if (continuation.staged === true) {
+      const intent = await sessionPrepareCoordinator.run(targetDate, async () => continuation);
+      if (!intent.current || !intent.ok) return false;
+      announceSessionPrepare("Today’s session is ready.");
+      enterSession(targetDate, intent.value);
+      return true;
+    }
+
+    const expectedActiveId = Number(continuation.daily_session.id);
+    if (!Number.isInteger(expectedActiveId) || expectedActiveId <= 0) {
+      swrInvalidate(`today:session:${targetDate}`);
+      swrInvalidate(`today:daily-session:${targetDate}`);
+    } else {
+      const assertionBody: import("../contracts/client-api.js").ClientDailySessionPrepareRequest = {
+        date: targetDate,
+        expected_active_id: expectedActiveId,
+      };
+      sessionPrepareBusy(trigger, true, "Confirming today’s session…");
+      announceSessionPrepare("Confirming today’s session…");
+      const asserted = await sessionPrepareCoordinator.run(targetDate, () =>
+        todayApi("/daily-session/prepare", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(assertionBody),
+          acceptErrorBody: true,
+        })
+      );
+      if (!asserted.current) {
+        sessionPrepareBusy(trigger, false);
+        return false;
+      }
+      if (asserted.ok) {
+        const response = asserted.value as Record<string, unknown>;
+        const daily = response.daily_session && typeof response.daily_session === "object"
+          ? response.daily_session as Record<string, unknown>
+          : null;
+        const session = response.session && typeof response.session === "object"
+          ? response.session as Record<string, unknown>
+          : null;
+        if (response.ok === true && daily && session && Number(daily.id) === expectedActiveId) {
+          swrSet(`today:session:${targetDate}`, { ...session, daily_session: daily });
+          swrSet(`today:daily-session:${targetDate}`, daily);
+          outboxResolveSessionPrerequisite(targetDate);
+          sessionPrepareBusy(trigger, false, "Today’s session is ready.");
+          announceSessionPrepare("Today’s session is ready.");
+          enterSession(targetDate, { ...response, session: { ...session, daily_session: daily } });
+          return true;
+        }
+        // Reachable mismatch/missing truth: retire only this stale continuation.
+        swrInvalidate(`today:session:${targetDate}`);
+        swrInvalidate(`today:daily-session:${targetDate}`);
+        const message = String(response.error || "Today’s session changed elsewhere. Open it again to use the current version.");
+        sessionPrepareBusy(trigger, false, message);
+        announceSessionPrepare(message);
+        toast(message);
+        return false;
+      }
+
+      const classify = (globalThis as {
+        CairnApiCache?: { isTransientApiFailure?: (value: unknown) => boolean };
+      }).CairnApiCache?.isTransientApiFailure;
+      const transient = typeof classify !== "function" || classify(asserted.error);
+      if (transient) {
+        const savedDaily = continuation.daily_session;
+        const recovery = todaySessionSuggestController.snapshotRecovery(savedDaily, assertionBody);
+        const queued = await (globalThis as {
+          outboxEnqueue?: (
+            kind: string,
+            path: string,
+            body: unknown,
+            options?: {
+              prepareIntent?: Record<string, unknown> | null;
+              retryBody?: Record<string, unknown> | null;
+              retryIntent?: Record<string, unknown> | null;
+            },
+          ) => Promise<{ id?: unknown } | null>;
+        }).outboxEnqueue?.("daily_session_prepare", "/daily-session/prepare", assertionBody, {
+          prepareIntent: savedDaily,
+          retryBody: recovery?.body,
+          retryIntent: recovery?.intent,
+        });
+        const localPrepareId = String(queued?.id || "").trim();
+        const staged = localPrepareId
+          ? todaySessionSuggestController.stageCachedContinuation(continuation, localPrepareId)
+          : null;
+        if (staged) {
+          const stagedRecord = staged as {
+            session: Record<string, unknown>;
+            daily_session: Record<string, unknown>;
+          };
+          swrSet(`today:session:${targetDate}`, stagedRecord.session);
+          swrSet(`today:daily-session:${targetDate}`, stagedRecord.daily_session);
+          const message = "Session confirmed on this device — Cairn will reconcile it when you’re back online.";
+          sessionPrepareBusy(trigger, false, message);
+          announceSessionPrepare(message);
+          toast(message);
+          enterSession(targetDate, staged);
+          return true;
+        }
+      }
+      const message = transient
+        ? "Could not save this session check on this device — free storage and try again."
+        : "Could not confirm today’s session. Try again when you’re ready.";
+      sessionPrepareBusy(trigger, false, message);
+      announceSessionPrepare(message);
+      toast(message);
+      return false;
+    }
+  }
+  if (
+    (cachedSession?._staged_offline === true || cachedDaily?._staged_offline === true) &&
+    !explicitReplacement
+  ) {
+    const stagedId = String(cachedSession?._local_prepare_id || cachedDaily?._local_prepare_id || "");
+    const stagedPrerequisite = (globalThis as {
+      CairnOutbox?: { list?(): Array<{ id?: unknown; kind?: unknown; state?: unknown }> };
+    }).CairnOutbox?.list?.().find((item) => String(item.id || "") === stagedId && item.kind === "daily_session_prepare");
+    if (stagedPrerequisite?.state === "needs_attention") {
+      const message = "This saved session needs attention before you can keep logging.";
+      sessionPrepareBusy(trigger, false, message);
+      announceSessionPrepare(message);
+      toast(message);
+      return false;
+    }
+    // A staged cache without its queued/prepared barrier is a phantom. Retire
+    // only this date's staged pair and latch the mounted surface until a fresh
+    // server reconciliation succeeds.
+    outboxBlockSessionPrerequisite(targetDate);
+    swrInvalidate(`today:session:${targetDate}`);
+    swrInvalidate(`today:daily-session:${targetDate}`);
+  }
+  if (todaySessionSuggestController.meaningfulLegacySession(cachedSession, explicitReplacement)) {
+    const intent = await sessionPrepareCoordinator.run(targetDate, async () => cachedSession);
+    if (!intent.current || !intent.ok) return false;
+    announceSessionPrepare("Today’s session is ready.");
+    enterSession(targetDate);
+    return true;
+  }
+
+  let customSession = options.session || null;
+  // An empty weekly plan still has a useful durable destination: an explicit,
+  // zero-item athlete override where exercises can be added as the session unfolds.
+  if ((source === "adaptive_plan" && !todayState.plan.length) || (source === "athlete_override" && !customSession)) {
+    source = "athlete_override";
+    customSession = {
+      name: "Open session",
+      focus: "Choose as you go",
+      why: "A blank session for whatever feels useful today.",
+      est_minutes: null,
+      items: [],
+    };
+  }
+  const dayNumber =
+    options.dayNumber != null
+      ? Number(options.dayNumber)
+      : source === "manual_plan" && todayState.day != null
+        ? Number(todayState.day)
+        : null;
+  const override =
+    todayState.brief && todayState.brief.date === targetDate ? String(todayState.brief.override || "").trim() : "";
+  const body: import("../contracts/client-api.js").ClientDailySessionPrepareRequest = {
+    date: targetDate,
+    source,
+  };
+  if (source === "agent_suggest") {
+    const agentJobId = Number(options.agentJobId);
+    if (!Number.isInteger(agentJobId) || agentJobId <= 0) {
+      const message = "This suggested session can’t be verified yet. Draft it again, then use the new result.";
+      sessionPrepareBusy(trigger, false, message);
+      announceSessionPrepare(message);
+      toast(message);
+      return false;
+    }
+    body.agent_job_id = agentJobId;
+    body.constraints = options.constraints || {};
+    body.provenance = options.provenance || {
+      verification: "verified_agent_job",
+      operation: "session_suggest",
+      agent_job_id: agentJobId,
+    };
+  } else {
+    body.constraints = options.constraints || (override ? { day_read_override: override } : {});
+    body.provenance = { entry: "pwa", ...(options.provenance || {}) };
+    if (source === "athlete_override" && customSession) body.session = customSession;
+  }
+  if (source === "manual_plan" && dayNumber != null) body.day_number = dayNumber;
+  // Ordinary opens accept the server's existing composition. Only a deliberate
+  // athlete/agent/plan-day choice may replace an unstarted accepted session.
+  // The server remains the authority and refuses replacement after work starts.
+  body.replace = explicitReplacement;
+
+  const offlineStageInput = {
+    date: targetDate,
+    request: body as unknown as Record<string, unknown>,
+    plan: todayState.plan as Array<Record<string, unknown>>,
+    selectedDay: todayState.day == null ? null : Number(todayState.day),
+    suggestedSession:
+      source === "agent_suggest" && todayState.suggestedSession
+        ? (todayState.suggestedSession as unknown as Record<string, unknown>)
+        : null,
+  };
+  const canStageOffline = todaySessionSuggestController.stagedPrepareResponse({
+    ...offlineStageInput,
+    localPrepareId: "validation",
+  });
+
+  sessionPrepareBusy(trigger, true, "Preparing today’s session…");
+  announceSessionPrepare("Preparing today’s session…");
+  const result = await sessionPrepareCoordinator.run(targetDate, () =>
+    todayApi("/daily-session/prepare", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      acceptErrorBody: true,
+    })
+  );
+  if (!result.current) {
+    sessionPrepareBusy(trigger, false);
+    return false;
+  }
+  if (!result.ok) {
+    const error = result.error as { message?: unknown } | null;
+    const classify = (globalThis as {
+      CairnApiCache?: { isTransientApiFailure?: (value: unknown) => boolean };
+    }).CairnApiCache?.isTransientApiFailure;
+    const transient = typeof classify !== "function" || classify(error);
+    if (transient && canStageOffline) {
+      const stagedIntent = canStageOffline.daily_session && typeof canStageOffline.daily_session === "object"
+        ? canStageOffline.daily_session as Record<string, unknown>
+        : null;
+      const recovery = todaySessionSuggestController.snapshotRecovery(stagedIntent, body);
+      const queued = await (globalThis as {
+        outboxEnqueue?: (
+          kind: string,
+          path: string,
+          body: unknown,
+          options?: {
+            prepareIntent?: Record<string, unknown> | null;
+            retryBody?: Record<string, unknown> | null;
+            retryIntent?: Record<string, unknown> | null;
+          },
+        ) => Promise<{ id?: unknown } | null>;
+      }).outboxEnqueue?.("daily_session_prepare", "/daily-session/prepare", body, {
+        prepareIntent: stagedIntent,
+        retryBody: recovery?.body,
+        retryIntent: recovery?.intent,
+      });
+      const localPrepareId = String(queued?.id || "").trim();
+      const staged = localPrepareId
+        ? todaySessionSuggestController.stagedPrepareResponse({ ...offlineStageInput, localPrepareId })
+        : null;
+      if (staged) {
+        const message = "Session saved on this device — it will sync when you’re back online.";
+        sessionPrepareBusy(trigger, false, message);
+        announceSessionPrepare(message);
+        toast(message);
+        enterSession(targetDate, staged);
+        return true;
+      }
+    }
+    const message = transient && canStageOffline
+      ? "Could not save this session on this device — free storage and try again."
+      : String(error?.message || "Could not save today’s session. Try again when you’re ready.");
+    sessionPrepareBusy(trigger, false, message);
+    announceSessionPrepare(message);
+    toast(message);
+    return false;
+  }
+  const response = result.value as Record<string, unknown>;
+  if (response?.ok !== true || !response.daily_session || !response.session) {
+    const message = String(response?.error || "This session could not be prepared.");
+    sessionPrepareBusy(trigger, false, message);
+    announceSessionPrepare(message);
+    toast(message);
+    return false;
+  }
+  sessionPrepareBusy(trigger, false, "Today’s session is ready.");
+  announceSessionPrepare("Today’s session is ready.");
+  outboxResolveSessionPrerequisite(targetDate);
+  enterSession(targetDate, response);
+  return true;
 }
 
 function rerenderTraining(opts?: Record<string, unknown>): Promise<unknown> | unknown {
@@ -513,6 +976,7 @@ function rerenderTraining(opts?: Record<string, unknown>): Promise<unknown> | un
 // Suggestion, never a gate — the Brief still leads above it.
 function sessionLaunchCardHtml(opts: {
   day: { name?: unknown; focus?: unknown; items?: Array<{ exercise?: unknown }> | null } | null | undefined;
+  dailySession?: import("../contracts/client-api.js").ClientDailySessionComposition | null;
   exDone: number;
   exTotal: number;
   isToday: boolean;
@@ -521,19 +985,30 @@ function sessionLaunchCardHtml(opts: {
   read: { est_minutes?: unknown } | null | undefined;
   strengthJourney?: import("../contracts/client-api.js").ClientStrengthJourney | null;
 }): string {
-  const name = opts.day && opts.day.name ? String(opts.day.name) : (opts.isRunDay ? "Today's run" : "Today's session");
-  const focus = opts.day && opts.day.focus ? String(opts.day.focus) : "";
+  const name =
+    opts.dailySession?.title ||
+    (opts.day && opts.day.name ? String(opts.day.name) : opts.isRunDay ? "Today's run" : "Today's session");
+  const focus = opts.dailySession?.focus || (opts.day && opts.day.focus ? String(opts.day.focus) : "");
   const started = opts.exDone > 0 || opts.hasLoggedSets;
   const sub = opts.exTotal
-    ? (started ? `${opts.exDone} of ${opts.exTotal} logged` : `${opts.exTotal} lift${opts.exTotal === 1 ? "" : "s"}`)
+    ? started
+      ? `${opts.exDone} of ${opts.exTotal} logged`
+      : `${opts.exTotal} lift${opts.exTotal === 1 ? "" : "s"}`
     : "";
-  const est = opts.read && opts.read.est_minutes ? `~${Number(opts.read.est_minutes)} min` : "";
+  const estimate =
+    opts.dailySession?.est_minutes ?? (opts.read && opts.read.est_minutes ? Number(opts.read.est_minutes) : null);
+  const est = estimate ? `~${Number(estimate)} min` : "";
   const meta = [sub, est].filter(Boolean).join("  ·  ");
   const cta = started ? "Continue" : "Start";
   const objective = opts.strengthJourney?.available ? opts.strengthJourney.objective : null;
-  const hasAnchor = !!objective?.exercise && (opts.day?.items || []).some((item) =>
-    String(item.exercise || "").trim().toLowerCase() === String(objective.exercise).trim().toLowerCase()
-  );
+  const hasAnchor =
+    !!objective?.exercise &&
+    (opts.day?.items || []).some(
+      (item) =>
+        String(item.exercise || "")
+          .trim()
+          .toLowerCase() === String(objective.exercise).trim().toLowerCase()
+    );
   const journeyLine = hasAnchor
     ? objective?.status === "completed"
       ? "Anchor milestone rebuilt · consolidate it calmly today."
@@ -541,25 +1016,39 @@ function sessionLaunchCardHtml(opts: {
         ? "Anchor day · hold or ease; the relevant safety signal leads."
         : `Anchor day · ${escHtml(objective?.exercise)}${Number(opts.strengthJourney?.gap_lb) > 0 ? ` · ${Number(opts.strengthJourney?.gap_lb).toFixed(1)} lb estimated 1RM gap` : ""}`
     : "";
+  const source = opts.dailySession
+    ? opts.dailySession.source === "adaptive_plan" || opts.dailySession.source === "manual_plan"
+      ? `From plan${opts.day?.name ? ` · ${String(opts.day.name)}` : ""}`
+      : "Built for today"
+    : opts.isToday
+      ? "TODAY'S SESSION"
+      : "SESSION";
   return `<button class="sess-launch reveal" style="--i:2" type="button" id="sessLaunch">
       <div class="sess-launch-body">
-        <div class="sess-launch-kicker lbl">${opts.isToday ? "TODAY'S SESSION" : "SESSION"}</div>
+        <div class="sess-launch-kicker lbl">${escHtml(source)}</div>
         <div class="sess-launch-title">${escHtml(name)}${focus ? `<span class="sess-launch-focus"> · ${escHtml(focus)}</span>` : ""}</div>
         ${meta ? `<div class="sess-launch-meta">${escHtml(meta)}</div>` : ""}
+        ${opts.dailySession?.why ? `<div class="sess-launch-why">${escHtml(opts.dailySession.why)}</div>` : ""}
+        <span class="sess-launch-status" role="status" aria-live="polite"></span>
         ${journeyLine ? `<div class="sess-launch-journey">${journeyLine}</div>` : ""}
       </div>
       <span class="sess-launch-cta">${cta} <span class="sess-launch-arrow" aria-hidden="true">→</span></span>
     </button>`;
 }
 
-function sessionShellHtml(inner: string, meta: {
-  fresh: boolean;
-  kicker: string;
-  dayName: string;
-  dayFocus: string;
-  exDone: number;
-  exTotal: number;
-}): string {
+function sessionShellHtml(
+  inner: string,
+  meta: {
+    fresh: boolean;
+    kicker: string;
+    dayName: string;
+    dayFocus: string;
+    why?: string;
+    estimate?: number | null;
+    exDone: number;
+    exTotal: number;
+  }
+): string {
   const capped = Math.min(meta.exTotal, 12);
   const dots = meta.exTotal
     ? `<div class="sess-dots" aria-hidden="true">${Array.from({ length: capped }, (_v, i) => `<span class="sess-dot${i < meta.exDone ? " on" : ""}"></span>`).join("")}</div>`
@@ -572,7 +1061,8 @@ function sessionShellHtml(inner: string, meta: {
       <button class="sess-close" id="sessClose" type="button" aria-label="Back to today">←</button>
       <div class="sess-topbar-mid">
         <div class="sess-kicker lbl">${escHtml(meta.kicker)}</div>
-        <div class="sess-dayname">${escHtml(meta.dayName)}${meta.dayFocus ? `<span class="sess-focus"> · ${escHtml(meta.dayFocus)}</span>` : ""}</div>
+        <div class="sess-dayname" role="heading" aria-level="1" tabindex="-1">${escHtml(meta.dayName)}${meta.dayFocus ? `<span class="sess-focus"> · ${escHtml(meta.dayFocus)}</span>` : ""}</div>
+        ${meta.why || meta.estimate ? `<div class="sess-topbar-why">${meta.why ? escHtml(meta.why) : ""}${meta.estimate ? `${meta.why ? " · " : ""}${Math.round(meta.estimate)} min` : ""}</div>` : ""}
       </div>
       <div class="sess-topbar-side">${prog}</div>
     </div>
@@ -585,16 +1075,36 @@ function wireSessionDestination(): void {
   const close = view.querySelector<HTMLButtonElement>("#sessClose");
   if (close && !close.dataset.wired) {
     close.dataset.wired = "1";
-    close.addEventListener("click", () => { todayState.planReveal = undefined; activateTab("today"); });
+    close.addEventListener("click", () => {
+      todayState.planReveal = undefined;
+      activateTab("today");
+    });
   }
   view.querySelectorAll<HTMLElement>(".sess-dest .daybtn").forEach((btn) => {
     if (btn.dataset.wired) return;
     btn.dataset.wired = "1";
     btn.addEventListener("click", () => {
-      todayState.day = Number(btn.dataset.day);
-      (todayState as { dayPicked?: boolean }).dayPicked = true;
-      sessionFreshNext = true;
-      void renderSession();
+      const dayNumber = Number(btn.dataset.day);
+      void openSession(todayState.logDate, {
+        source: "manual_plan",
+        dayNumber,
+        replace: true,
+        trigger: btn,
+        provenance: { entry: "session_day_switch" },
+      });
+    });
+  });
+  // Focus mode intentionally omits the quick-capture field. Route the cardio CTA
+  // back to that existing reviewed capture path with its draft prefilled; nothing
+  // is logged until the athlete confirms it there.
+  view.querySelectorAll<HTMLElement>(".sess-dest [data-cardio-log]").forEach((button) => {
+    if (button.dataset.wired) return;
+    button.dataset.wired = "1";
+    button.addEventListener("click", () => {
+      const phrase = String(button.dataset.cardioLog || "").trim();
+      if (!phrase) return;
+      todayState.capturePrefill = phrase;
+      activateTab("today");
     });
   });
 }
@@ -613,52 +1123,76 @@ async function renderSession(opts: any = {}): Promise<void> {
 
   const profile: any = todayData.profile;
   const exercises: any[] = (todayData.exercises as any[]) || [];
-  if (profile) { setDiscipline(profile.primary_discipline); setEnduranceGoalSet(!!profile.endurance_goal_json); }
+  if (profile) {
+    setDiscipline(profile.primary_discipline);
+    setEnduranceGoalSet(!!profile.endurance_goal_json);
+  }
   todayState.exModes = Object.fromEntries(exercises.map((e: any) => [e.name, e.mode || "reps"]));
 
   const day = prep.day;
+  const dailySession = prep.dailySession as import("../contracts/client-api.js").ClientDailySessionComposition | null;
   const hasLoggedSets = !!(session && (session.sets || []).length);
   const hasGarmin = !!(session && session.garmin);
   const isFinished = !!(session && session.finished_at);
-  const revealOn = !!(todayState.planReveal && todayState.planReveal.date === todayState.logDate && todayState.planReveal.on);
+  const revealOn = !!(
+    todayState.planReveal &&
+    todayState.planReveal.date === todayState.logDate &&
+    todayState.planReveal.on
+  );
   const showDone = isFinished && !revealOn;
   const showPlan = !showDone;
 
-  const surface = todayPlanSurfaceRenderer.buildHtml({
-    showDone,
-    showPlan,
-    focus: true,
-    session,
-    day,
-    isToday,
-    plan: todayState.plan,
-    activeDay: todayState.day,
-    logDate: todayState.logDate,
-    cardioItems: prep.cardioItems,
-    strengthItems: prep.strengthItems,
-    activeItems: prep.activeItems,
-    skippedItems: prep.skippedItems,
-    matchedCardio: prep.matchedCardio,
-    syncedLine: "",
-    loggedByEx: prep.loggedByEx,
-    offPlanEx: prep.offPlanEx,
-    pendingOffPlan: prep.pendingOffPlan,
-    lastSets: prep.lastSets,
-    rxByEx: prep.rxByEx,
-    strengthJourney: prep.strengthJourney,
-    exDone: prep.exDone,
-    exTotal: prep.exTotal,
-    hasSyncedCardioToday: prep.hasSyncedCardioToday,
-    hasLoggedSets: true,
-    hasGarmin,
-    isRunDay: prep.isRunDay,
-    prefillFor: prep.prefillFor,
-    rxFor: prep.rxFor,
-  }, todayPlanSurfaceRendererDeps());
+  const surface = todayPlanSurfaceRenderer.buildHtml(
+    {
+      showDone,
+      showPlan,
+      focus: true,
+      session,
+      day,
+      isToday,
+      plan: todayState.plan,
+      activeDay: todayState.day,
+      logDate: todayState.logDate,
+      cardioItems: prep.cardioItems,
+      strengthItems: prep.strengthItems,
+      activeItems: prep.activeItems,
+      skippedItems: prep.skippedItems,
+      matchedCardio: prep.matchedCardio,
+      syncedLine: "",
+      loggedByEx: prep.loggedByEx,
+      offPlanEx: prep.offPlanEx,
+      pendingOffPlan: prep.pendingOffPlan,
+      lastSets: prep.lastSets,
+      rxByEx: prep.rxByEx,
+      strengthJourney: prep.strengthJourney,
+      exDone: prep.exDone,
+      exTotal: prep.exTotal,
+      hasSyncedCardioToday: prep.hasSyncedCardioToday,
+      hasLoggedSets: true,
+      hasGarmin,
+      isRunDay: prep.isRunDay,
+      preserveItemOrder: !!dailySession,
+      prefillFor: prep.prefillFor,
+      rxFor: prep.rxFor,
+    },
+    todayPlanSurfaceRendererDeps()
+  );
 
-  const dayName = day && day.name ? String(day.name) : (prep.isRunDay ? "Today's run" : "Session");
-  const dayFocus = day && day.focus ? String(day.focus) : "";
-  const kicker = isToday ? "TODAY · SESSION" : (typeof humanDate === "function" ? humanDate(todayState.logDate) : todayState.logDate);
+  const dayName =
+    dailySession?.title || (day && day.name ? String(day.name) : prep.isRunDay ? "Today's run" : "Session");
+  const dayFocus = dailySession?.focus || (day && day.focus ? String(day.focus) : "");
+  const sourceLabel = dailySession
+    ? dailySession.source === "adaptive_plan" || dailySession.source === "manual_plan"
+      ? `From plan${day && day.name ? ` · ${String(day.name)}` : ""}`
+      : "Built for today"
+    : null;
+  const kicker =
+    sourceLabel ||
+    (isToday
+      ? "TODAY · SESSION"
+      : typeof humanDate === "function"
+        ? humanDate(todayState.logDate)
+        : todayState.logDate);
 
   // Same stale-render bail as renderToday: the loads above can outlast leaving
   // the Session destination, and this paint must never land on another tab.
@@ -668,6 +1202,8 @@ async function renderSession(opts: any = {}): Promise<void> {
     kicker,
     dayName,
     dayFocus,
+    why: dailySession?.why || "",
+    estimate: dailySession?.est_minutes || null,
     exDone: prep.exDone,
     exTotal: prep.exTotal,
   });
@@ -677,27 +1213,45 @@ async function renderSession(opts: any = {}): Promise<void> {
   // still render; refreshAdaptedRx is already a no-op here since tab !== "today".)
   todayView.querySelector(".sess-dest .rx-banner")?.remove();
 
-  CairnTodaySessionController.wireSessionSurface({ session, hasLoggedSets, lastSets: prep.lastSets }, todaySessionDeps());
+  CairnTodaySessionController.wireSessionSurface(
+    { session, hasLoggedSets, lastSets: prep.lastSets },
+    todaySessionDeps()
+  );
   setupAddExercise();
   wireGuides(view);
   wireSessionDestination();
+
+  // A fresh entry places assistive-tech focus on the one session heading. The
+  // visual scroll remains at the top and reduced-motion users get no animation.
+  if (fresh) {
+    try {
+      (todayView.querySelector(".sess-dayname") as HTMLElement | null)?.focus({ preventScroll: true });
+    } catch {}
+  }
 
   // The pre-session primer — "a coach was already here". Best-effort + off the paint
   // path: fetch GET /api/session-primer and hydrate #sessionPrimerSlot (collapsed once
   // the session has logged sets), decorating any fresh movement rows. A missing lib /
   // null payload / a stale render is a calm no-op. Not awaited (never blocks logging).
-  const primerDay = Number(todayState.day);
+  const primerDay = todayState.day == null ? null : Number(todayState.day);
   window.CairnSessionPrimer?.hydrate({
     root: todayView,
     date: todayState.logDate,
-    dayNumber: Number.isFinite(primerDay) ? primerDay : null,
+    dayNumber: primerDay != null && Number.isFinite(primerDay) ? primerDay : null,
     hasLoggedSets,
     api: todayApi,
     guard: () => todayState.tab === "session" && todayState.logDate === enteredDate,
   });
 
-  if (fresh) { try { window.scrollTo(0, 0); } catch {} }
-  else { try { window.scrollTo(0, prevY); } catch {} }
+  if (fresh) {
+    try {
+      window.scrollTo(0, 0);
+    } catch {}
+  } else {
+    try {
+      window.scrollTo(0, prevY);
+    } catch {}
+  }
 }
 
 Object.assign(globalThis, {

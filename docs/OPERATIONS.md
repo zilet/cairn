@@ -176,14 +176,16 @@ Every migration is additive and idempotent — an `ALTER TABLE … ADD COLUMN` w
 re-running is a no-op), plus a couple of `CREATE INDEX IF NOT EXISTS`. None backfill or drop data, so
 existing rows need no manual step — just deploy and let boot apply them. Brand-new tables
 (`health_documents`, `context_events`, `checkins`, `daily_metrics`, `family_members`,
-`health_directives`, `insights`, and the `art_*` cache tables) are created via
+`health_directives`, `insights`, `daily_session_compositions`, and the `art_*` cache tables) are created via
 `CREATE TABLE IF NOT EXISTS` on boot, so they need no migration entry. Down-migrations are not
 supported — **back up before deploying a schema change** (see Backups below).
 
 **Uploaded files.** Health-document uploads (bloodwork/DEXA/etc.) are written to `data/uploads/`
 inside the mounted `cairn-data` volume — so they survive rebuilds and are captured by the same
-volume backup as the DB. The JSON export (`/api/export`) includes the
-parsed markers + summaries but NOT the raw binaries; rely on the volume backup for the files.
+volume backup as the DB. The JSON export (`/api/export`) includes data records, including active
+and superseded daily-session composition history, plus parsed markers and summaries, but NOT raw
+binaries. It is an export only: Cairn has no JSON-import or JSON-restore endpoint. Rely on the
+SQLite snapshot or volume backup for restore, and on the volume backup for uploaded files.
 `data/art/` (generated artwork PNGs, see `src/art.ts`) is a regenerable cache — safe to exclude
 from backups; missing images are simply re-generated on demand.
 
@@ -239,7 +241,7 @@ The two export endpoints are available from the **Settings tab** in the PWA, via
 via `npm run backup`:
 
 ```bash
-# Full JSON snapshot (all tables serialised)
+# Portable JSON data export (curated application data; not a restore format)
 curl -fsS http://localhost:8787/api/export -o cairn-export.json
 npm run backup     # same, saves to ./cairn-export.json
 
@@ -247,8 +249,8 @@ npm run backup     # same, saves to ./cairn-export.json
 curl -fsS http://localhost:8787/api/export/db -o cairn-snapshot.db
 ```
 
-The VACUUM INTO snapshot is a single consistent file with the WAL checkpointed in — safe to
-copy without stopping the container. Private runtime secrets, including the key used to compare
+The VACUUM INTO SQLite snapshot is the restore artifact: it is a single consistent file with the
+WAL checkpointed in and is safe to copy without stopping the container. Private runtime secrets, including the key used to compare
 DICOM patient identity without storing Patient ID, live only inside SQLite: they survive this DB
 snapshot and volume backups but are intentionally excluded from the JSON export. Restore the
 SQLite snapshot when DICOM studies must continue accepting later instances under the same private

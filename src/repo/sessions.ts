@@ -33,19 +33,12 @@ import {
   reconcileStrengthObjectiveFromLoggedSets,
   strengthJourneySessionMovement,
 } from "./strength-objective-ledger.js";
+import { getActiveDailySessionForSession, listDailySessionCompositions } from "./adaptive-session.js";
+import { getAuthoritativeSessionRow, getOrCreateSessionRow } from "./session-core.js";
 
 // ---------- sessions ----------
 export function getOrCreateSession(date: string, planDayId?: number | null): any {
-  const s = db.prepare(`SELECT * FROM sessions WHERE date = ?`).get(date) as any;
-  if (s) {
-    if (planDayId && !s.plan_day_id) {
-      db.prepare(`UPDATE sessions SET plan_day_id = ? WHERE id = ?`).run(planDayId, s.id);
-      s.plan_day_id = planDayId;
-    }
-    return s;
-  }
-  const info = db.prepare(`INSERT INTO sessions (date, plan_day_id) VALUES (?, ?)`).run(date, planDayId ?? null);
-  return db.prepare(`SELECT * FROM sessions WHERE id = ?`).get(info.lastInsertRowid);
+  return getOrCreateSessionRow(date, planDayId);
 }
 
 // Parse the reconciled Garmin strength physiology blob off a session row into a
@@ -73,6 +66,7 @@ export function getRecentSessions(limit = 10) {
   return sessions.map((s) => ({
     ...hydrateSession(s),
     title: deriveSessionTitle(s.id, s.plan_day_id, s.day_name),
+    daily_session: getActiveDailySessionForSession(s.id),
     sets: setsForSession(s.id),
     skips: skipsForSession(s.id),
   }));
@@ -82,12 +76,17 @@ export function getSessionByDate(date: string) {
   const s = db
     .prepare(`SELECT s.*, pd.name AS day_name FROM sessions s
               LEFT JOIN plan_days pd ON pd.id = s.plan_day_id
-              WHERE s.date = ?`)
+              LEFT JOIN daily_session_compositions dsc
+                ON dsc.session_id = s.id AND dsc.status = 'active'
+              WHERE s.date = ?
+              ORDER BY CASE WHEN dsc.id IS NOT NULL THEN 0 ELSE 1 END, s.id
+              LIMIT 1`)
     .get(date) as any;
   if (!s) return null;
   return {
     ...hydrateSession(s),
     title: deriveSessionTitle(s.id, s.plan_day_id, s.day_name),
+    daily_session: getActiveDailySessionForSession(s.id),
     sets: setsForSession(s.id),
     skips: skipsForSession(s.id),
   };
@@ -104,6 +103,7 @@ export function getSessionDetail(id: number) {
   return {
     ...hydrateSession(s),
     title: deriveSessionTitle(s.id, s.plan_day_id, s.day_name),
+    daily_session: getActiveDailySessionForSession(s.id),
     sets: setsForSession(id),
     skips: skipsForSession(id),
     strength_journey_movement: s.finished_at ? strengthJourneySessionMovement(id) : null,
@@ -310,10 +310,26 @@ export function skipExercise(exercise: string, date?: string) {
 export function unskipExercise(exercise: string, date?: string) {
   const d = date || localDateISO();
   const name = exercise.trim();
-  const s = db.prepare(`SELECT id FROM sessions WHERE date = ?`).get(d) as any;
-  if (!s) return { ok: true as const, date: d, exercise: name, removed: 0, skips: [] as string[] };
+  const s = getAuthoritativeSessionRow(d);
+  if (!s) {
+    return {
+      ok: true as const,
+      date: d,
+      exercise: name,
+      session_id: null,
+      removed: 0,
+      skips: [] as string[],
+    };
+  }
   const removed = db.prepare(`DELETE FROM session_skips WHERE session_id = ? AND exercise = ?`).run(s.id, name).changes;
-  return { ok: true as const, date: d, exercise: name, removed, skips: skipsForSession(s.id) };
+  return {
+    ok: true as const,
+    date: d,
+    exercise: name,
+    session_id: s.id,
+    removed,
+    skips: skipsForSession(s.id),
+  };
 }
 
 // ---------- logging ----------
@@ -1575,6 +1591,7 @@ export function exportAll() {
     plan: getPlan(),
     exercises: listExercises(),
     sessions: getRecentSessions(100000),
+    daily_session_compositions: listDailySessionCompositions(),
     // The athlete-selected anchor and its immutable target snapshot are durable
     // coaching state, not a derived card. Keep superseded rows for a lossless
     // history just like memories and brain decisions.

@@ -48,6 +48,22 @@ type ClientPaintSwrOptions<T> = {
 // for the Brief.
 const SWR_NS = "cairn.swr.v1."; // bump the version segment in lockstep with any payload-shape change
 const _swrMem = new Map<string, ClientSwrEntry<unknown>>(); // key -> { data, ts } (this-session tier, fastest)
+const _swrWriteRevision = new Map<string, number>();
+const _swrPrefixRevision = new Map<string, number>();
+
+function _swrRevision(key: string): number {
+  return _swrWriteRevision.get(key) || 0;
+}
+
+function _swrBump(key: string): void {
+  _swrWriteRevision.set(key, _swrRevision(key) + 1);
+}
+
+function _swrPrefixStamp(key: string): number {
+  let stamp = 0;
+  for (const [prefix, revision] of _swrPrefixRevision) if (key.startsWith(prefix)) stamp += revision;
+  return stamp;
+}
 
 // Health-sensitive surfaces stay in the MEMORY tier only, never written to disk.
 // Lab markers, recovery (HRV / RHR / sleep / body-battery), and the Stand health
@@ -103,6 +119,9 @@ function _swrStore<T>(key: string, data: T): ClientSwrEntry<T> {
 // gap on hot paths like finishing a workout.
 function swrSet<T>(key: string, data: T): void {
   if (!key) return;
+  // A mutation response is newer authority than any GET that was already in
+  // flight. Bump before storing so that GET can detect it was superseded.
+  _swrBump(key);
   _swrStore(key, data);
 }
 
@@ -157,8 +176,16 @@ function cachedApi<Path extends string>(
   const { key, freshFor = 60000, onUpgrade } = options;
   const k = key || path;
   const prior = peekCached<ClientApiResponse<Path>>(k, freshFor);
+  const revisionAtStart = _swrRevision(k);
+  const prefixAtStart = _swrPrefixStamp(k);
   return api(path)
     .then((data) => {
+      // A mutation write or explicit invalidation landed after this read began.
+      // Never let the older response replace or repaint over that newer truth.
+      if (_swrRevision(k) !== revisionAtStart || _swrPrefixStamp(k) !== prefixAtStart) {
+        const current = peekCached<ClientApiResponse<Path>>(k, freshFor);
+        return current ? current.data : prior ? prior.data : data;
+      }
       const changed = !prior || !_swrSame(prior.data, data);
       _swrStore(k, data);
       if (onUpgrade) {
@@ -229,6 +256,7 @@ function swrInvalidate(keyOrPrefix: string): void {
   if (!keyOrPrefix) return;
   const prefix = keyOrPrefix.endsWith(":") || keyOrPrefix.endsWith(".");
   if (prefix) {
+    _swrPrefixRevision.set(keyOrPrefix, (_swrPrefixRevision.get(keyOrPrefix) || 0) + 1);
     for (const k of [..._swrMem.keys()]) if (k.startsWith(keyOrPrefix)) _swrMem.delete(k);
     try {
       for (let i = localStorage.length - 1; i >= 0; i--) {
@@ -237,6 +265,7 @@ function swrInvalidate(keyOrPrefix: string): void {
       }
     } catch {}
   } else {
+    _swrBump(keyOrPrefix);
     _swrMem.delete(keyOrPrefix);
     try {
       localStorage.removeItem(SWR_NS + keyOrPrefix);
