@@ -8,6 +8,10 @@ import { queryTokenAllowedPath, authStartupError, appleHealthTokenScopeAllows } 
 
 test("query-token auth is limited to browser-only GET surfaces", () => {
   assert.equal(queryTokenAllowedPath("/api/health-docs/12/file"), true);
+  assert.equal(queryTokenAllowedPath("/api/health-docs/12/imaging-files/7"), true);
+  assert.equal(queryTokenAllowedPath("/api/health-docs/0/imaging-files/7"), false);
+  assert.equal(queryTokenAllowedPath("/api/health-docs/12/imaging-files/7/extra"), false);
+  assert.equal(queryTokenAllowedPath("/api/health-docs/12/imaging-files/not-a-number"), false);
   assert.equal(queryTokenAllowedPath("/api/chat/turns/12/stream"), true);
   assert.equal(queryTokenAllowedPath("/api/agent-jobs/12/stream"), true);
   // Background-enrichment status streams (EventSource — no header).
@@ -72,6 +76,13 @@ test("auth middleware accepts an active Apple Health token only for metrics inge
       auth.authGuard(req, res, () => { next = true; });
       return { next, status, req };
     };
+    const runQuery = (method, path, token) => {
+      let next = false, status = 0;
+      const req = { method, path, query: { token }, get() { return undefined; } };
+      const res = { status(value) { status = value; return this; }, json() { return this; } };
+      auth.authGuard(req, res, () => { next = true; });
+      return { next, status };
+    };
     const scoped = run("POST", "/api/health-metrics", exchanged.ingest_token);
     assert.deepEqual({ next: scoped.next, status: scoped.status }, { next: true, status: 0 });
     assert.equal(metricsRoute.healthMetricSourceForRequest(scoped.req), "apple_health");
@@ -82,6 +93,8 @@ test("auth middleware accepts an active Apple Health token only for metrics inge
     for (const [method, path, token, expected] of [
       ["GET", "/api/health-metrics", exchanged.ingest_token, { next: false, status: 401 }],
       ["POST", "/mcp", exchanged.ingest_token, { next: false, status: 401 }],
+      ["GET", "/api/health-docs/12/imaging-files/7", "owner-test-token", { next: true, status: 0 }],
+      ["GET", "/api/health-docs/12/imaging-files/7", null, { next: false, status: 401 }],
       ["GET", "/api/apple-health/config", null, { next: true, status: 0 }],
     ]) {
       const actual = run(method, path, token);
@@ -90,6 +103,8 @@ test("auth middleware accepts an active Apple Health token only for metrics inge
     repo.revokeAppleHealthConnection(exchanged.connection.id);
     const revoked = run("POST", "/api/health-metrics", exchanged.ingest_token);
     assert.deepEqual({ next: revoked.next, status: revoked.status }, { next: false, status: 401 });
+    assert.deepEqual(runQuery("GET", "/api/health-docs/12/imaging-files/7", "owner-test-token"), { next: true, status: 0 });
+    assert.deepEqual(runQuery("GET", "/api/health-docs/12/imaging-files/not-a-number", "owner-test-token"), { next: false, status: 401 });
   `;
   try {
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {

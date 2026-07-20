@@ -167,6 +167,9 @@ function healthDocInner(doc: HealthDocRow): string {
 }
 
 function healthDocHtml(doc: HealthDocRow, index?: number): string {
+  if (doc.kind === "imaging" && CairnImaging.imagingStudy(doc as import("../contracts/client-api.js").ClientHealthDocument)) {
+    return CairnImaging.imagingCard(doc as import("../contracts/client-api.js").ClientHealthDocument, index);
+  }
   const reveal = typeof index === "number";
   const collapsed = docCollapsible(doc) && reveal && Number(index) > 0;
   return `<div class="sess hdoc${reveal ? " reveal" : ""}${collapsed ? " hdoc-collapsed" : ""}" data-hdoc="${escAttr(doc.id || "")}"${reveal ? ` style="${stagger(index)}"` : ""}>${healthDocInner(doc)}</div>`;

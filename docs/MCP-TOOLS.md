@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**226 tools.**
+**237 tools.**
 
 | Tool | Description |
 |---|---|
@@ -18,6 +18,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `add_health_record` | Record a health-document ANALYSIS without uploading a binary (e.g. after reading a lab report image in a Claude client). Stores extracted markers + summary directly; status is 'done'. |
 | `add_memory` | Add a durable note Cairn should remember (preference, constraint, insight, observation). |
 | `advance_block_week` | Advance a block to its next week — bumps week_index, transitions the phase per the deload schedule, and auto-completes past the last week. Omit id to advance the active block. |
+| `analyze_imaging_study` | Queue joint analysis of an imaging study's sequentially uploaded report/images. Idempotent while already pending/running; written radiologist reports remain authoritative. |
 | `apply_progression` | Build a DRAFT plan proposal from the current day's per-lift prescriptions (planDayProgression), then route it through the autonomy layer (shared with REST so the two never drift). Under lead_mode='lead' a bounded target nudge quiet-applies at its natural boundary with a decision + one-tap Undo; under 'review_everything' it stays a plain reviewable draft. A stalled lift's 'vary' becomes a real swap change; an autoregulation-braked hold is dropped. Returns { ok:true, proposal, autonomy } or { ok:false, error } at 200 (the designed failure signal when there's nothing to propose). |
 | `apply_proposal` | Apply a draft proposal's target changes to the plan. |
 | `apply_proposal_with_autonomy` | Route a proposal through Cairn's server autonomy policy. It may quiet-apply, announce for a natural boundary, or hold for review; clinical and user-locked changes never auto-apply. |
@@ -25,14 +26,17 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `cancel_agent_job` | Stop a queued or running coaching job. Safe no-op after it is already terminal. |
 | `check_for_update` | Force an immediate check against the GitHub Releases API for a newer Cairn version, then return the fresh status. Use when you want to refresh now rather than wait for the daily background check. Never throws — a network/rate-limit failure is reported in the status `error` field. |
 | `confirm_goal_checkin` | Restart the gentle 'is this still your goal?' clock (Era 2): records that the user confirmed (or changed) their goal, so the quiet check-in stays away for ~3 months. You-drive — changes nothing else. |
+| `confirm_imaging_study` | Confirm the current extraction as reviewed by the user. Idempotent and preserves the original confirmation timestamp. |
 | `consolidate_memory` | Queue a quiet memory consolidation: merge near-duplicates, supersede contradictions, and promote recurring observations. Returns a job immediately; poll get_agent_job. Marks, never hard-deletes. |
 | `create_block` | Start a periodization block (a mesocycle with a goal, focus, phase, and week count) so progression is structured rather than random. |
+| `create_imaging_study` | Create an empty imaging-study draft. Upload JPEG/PNG/PDF attachments through REST, or supply a structured analysis with update_imaging_study. |
 | `create_journey_phase` | Create a proposed journey phase (cut, maintenance, diet break, reverse, or gain). Does not activate automatically; review then call activate_journey_phase. |
 | `delete_context_event` | Delete a life-timeline event by id. To close a healed injury while KEEPING the record, prefer resolve_context_event. |
 | `delete_exercise` | Delete an exercise by name. Refuses (ok:false) if it still has logged sets or is referenced in a plan — remove those first. |
 | `delete_family` | Delete a family member by id. |
 | `delete_food_note` | Delete a logged food note by id. |
 | `delete_health_record` | Delete a health document by id. |
+| `delete_imaging_study` | Delete an imaging study and all owned attachment files. |
 | `delete_memory` | Delete a memory note by id. |
 | `delete_plan_day` | Remove a training day from the plan (logged history is kept). |
 | `delete_set` | Delete one logged set by id (e.g. a mis-entry). |
@@ -70,6 +74,8 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_day_read` | Queue a durable read of what KIND of day today should be — train, easy, or rest — as a calm suggestion. Returns a job immediately; poll get_agent_job for the final read. override reshapes it ('rough night' / 'short on time' / 'I want to train anyway'). |
 | `get_dexa_targeting` | DEXA-driven targeting — maps the body scan's regional read (lean asymmetry, low ALMI/FFMI, low BMD, visceral/central fat) to concrete TRAINING + one NUTRITION target, each with a plain 'path to your next scan'. T/Z-scores + ALMI are recognized reference reads (never a score); BMD/visceral stay informational (clinician-framed). {available:false} with no DEXA. |
 | `get_diagnostics` | Get bounded local diagnostics: preserved release-scoped history plus a marked current-build issue/recent/slow subset, product API/MCP throughput and approximate p50/p95 latency, separately counted internal telemetry, and storage caps. SSE lifetime is excluded. Never includes prompts, bodies, credentials, health values, or raw agent output. |
+| `get_dicom_import_job` | Read the durable status and path-free result of a DICOM import. Binary upload remains REST-only. |
+| `get_dicom_manifest` | Read a study-owned DICOM technical manifest with opaque numeric IDs and preview limitations. Raw UIDs and files are omitted. |
 | `get_doctor_loop` | Doctor-loop read: structured missing-workup recommendations plus lab/DEXA retest attention derived through the adaptive attention engine. Informational, not medical advice; no PREVENT/PCE risk coefficients are computed here. |
 | `get_doctor_packet` | Export-ready doctor packet: current prioritized health focus, active connected-brain directives, doctor-loop missing-workup/retest plan, AHA PREVENT cardiovascular-risk read, and latest intervention-outcome annotations. Informational, not medical advice; no disease-labeling or wellness scores. |
 | `get_endurance_goal` | The user's endurance OBJECTIVE (v37), computed. mode 'race' carries a dated event with weeks/days-to-race + a periodization phase hint (base/build/sharpen/taper); mode 'standing' is an ongoing readiness target with no date. null when unset. Orthogonal to primary_discipline. Set it via set_profile { endurance_goal: {…} }. |
@@ -92,6 +98,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_health_review` | Get the latest whole-picture health review (headline, wins, watchlist, focus areas, follow-ups, training/nutrition impact) — or null when none has been run yet. |
 | `get_health_standing` | A pull-based health standing read: actual-age vs selectable reference-age percentiles for markers with real reference curves (VO2max/body composition), plus BP, labs, activity, Garmin/recovery signals, and a plain signal_age synthesis. Motivational orientation only — no 0-100 score and not medical advice. |
 | `get_health_synthesis` | The cached elite-coach whole-picture health story (the headline, the 2-3 connected priorities + their concrete moves, the single highest-leverage change), plus the deterministic focus tiering and a `stale` flag (true when newer labs landed than the synthesis was written against). Returns the last generated narrative (or null); regenerate with synthesize_health. |
+| `get_imaging_study` | Get one first-class imaging study and its ordered attachment metadata. Binary paths are private. |
 | `get_injury_impacts` | For each ACTIVE injury on the life timeline, the planned exercises it loads (with where they appear in the plan + any existing constraint note) and a few safe alternative exercises to consider. Deterministic, offline. Suggestions only — it never changes the plan. |
 | `get_journey` | Read the body-composition journey: profile baseline/target, current body-fat estimate, active/proposed phase, transition suggestion, leanness-aware rate, and calm milestones. Read-only; suggestions never auto-apply. |
 | `get_journey_milestones` | Read deterministic journey milestones (weight-loss thresholds, percent-to-goal crossings, body-fat bands). Calm in-app progress markers only; no scores or push notifications. |
@@ -164,6 +171,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `list_food_notes` | List recent logged food notes (meal type, description, parsed macros, enrichment status). |
 | `list_garmin_sources` | List configured Garmin source records without token material. |
 | `list_health_records` | List recent health documents (bloodwork / DEXA / other) with their kind, test date, summary, key markers and analysis status. Does not include the binary file. |
+| `list_imaging_studies` | List every structured imaging study with metadata, report impression, source-distinguished findings, nested measurements, source-stated recommendations, provenance, and confirmation state. No file paths or raw model output. |
 | `list_insights` | List the live stream of quiet cross-domain insights (new + seen, most recent first). The Brief surfaces ONE at a time when the app is opened; dismissed insights are hidden here but remain in the DB/exports. Never pushed. |
 | `list_journey_phases` | List body-composition journey phases. Phases are proposed first; only explicit activation makes one active. |
 | `list_meal_plans` | List recent meal plans. |
@@ -191,6 +199,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `reconcile_markers` | Queue a conservative reconciliation of differently named versions of the same lab analyte. Returns a job immediately; poll get_agent_job. It never merges incompatible analytes/units or changes measured values. |
 | `reconcile_outcomes` | Compare past suggestions to what actually happened (logged sets, weight trend, autoregulation) and write durable learning memories. Deterministic, no agent. Returns the counts. |
 | `record_daily_metrics` | Upsert one source's daily wearable metrics for a real, non-future YYYY-MM-DD (idempotent on source+date) — the Apple Health via Shortcuts path. `source` defaults to 'apple' and is capped at 64 characters. Partial re-posts preserve previously recorded fields. Supports steps, sleep/recovery, calories, distance, exercise/stand time, SpO2 and VO2max; `raw` keeps the source payload verbatim. |
+| `record_imaging_analysis` | Store a source-grounded imaging extraction already produced by a file-capable client. Image-AI observations stay unconfirmed and cannot create follow-up recommendations. |
 | `reopen_session` | Reopen a finished session to keep logging (clears its finished stamp). |
 | `research` | Queue one cited health/longevity evidence pass and cache its verified claims. Returns a job immediately; poll get_agent_job. Gated by research_enabled; off means no network. Informational, not medical advice. |
 | `reset_chat` | Start a fresh coaching conversation: distill durable facts (preferences, constraints, decisions) from the live chat into memory via one agent call, then archive every current message. Never deletes — archived turns stay in the DB and exports. Archiving never blocks on the agent; on agent failure the chat is still reset with distilled=0. |
@@ -224,6 +233,8 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `update_exercise` | Update an existing exercise by name: mode (reps\|timed), muscle_group, cues, constraint_note (any subset). |
 | `update_family` | Update a family member by id (any subset of fields). allergies are a HARD exclusion in shared meals; dietary_restrictions surface as optional household mods. |
 | `update_food_note` | Correct a logged food note (fix a macro, rename it, change the meal slot, 'I changed my mind'). Pass the id + any subset of { meal, summary, kcal, protein_g, carbs_g, fat_g, fiber_g, notes, items }. Coerced/clamped; marks the note's enrichment terminal so a background enricher can't later overwrite the correction. Returns the updated row, or an error when the id is unknown. |
+| `update_imaging_followup_status` | Update the user's source-stated follow-up status without changing the report recommendation itself. |
+| `update_imaging_study` | Correct a study with a FHIR DiagnosticReport-shaped imaging_study payload. Strongly coerced; resets user confirmation until reconfirmed. |
 | `update_insight` | Mark an insight seen/dismissed and/or record thumbs feedback (up\|down) by id. On feedback:'up' the insight text is ALSO written to memory so the relationship learns which connections land. |
 | `update_installed_agent_clis` | Update only coaching CLIs already installed by this Cairn instance. Missing providers remain uninstalled. |
 | `update_meal_plan_days` | Replace a meal plan's days array (manual meal reorder/edit). Preserves every other parsed key (daily_kcal, shopping, notes). |

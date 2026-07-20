@@ -3,7 +3,9 @@ import { HEALTH_DOCUMENT_KINDS } from "../../healthDocumentKinds.js";
 import {
   addHealthDocument,
   deleteHealthDocument,
+  deleteImagingStudy,
   deriveDirectives,
+  getHealthDocument,
   listHealthDocuments,
 } from "../../domain/health/index.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
@@ -26,6 +28,9 @@ export function registerHealthRecordTools(server: McpToolRegistrar) {
       parsed: z.any().optional().describe("structured markers, e.g. { markers: [{name,value,unit,flag}], type }"),
     },
     async (record) => {
+      if (record.kind === "imaging") {
+        return asText({ ok: false, error: "use create_imaging_study and record_imaging_analysis" });
+      }
       const doc = addHealthDocument({
         kind: record.kind,
         doc_date: record.doc_date ?? null,
@@ -33,15 +38,16 @@ export function registerHealthRecordTools(server: McpToolRegistrar) {
         parsed_json: record.parsed ?? null,
         enrichment_status: "done",
       });
-      try { deriveDirectives(); } catch { /* never fail the record */ }
+      try {
+        deriveDirectives();
+      } catch {
+        /* never fail the record */
+      }
       return asText(doc);
     }
   );
 
-  server.tool(
-    "delete_health_record",
-    "Delete a health document by id.",
-    { id: z.number().int() },
-    async ({ id }) => asText(deleteHealthDocument(id))
+  server.tool("delete_health_record", "Delete a health document by id.", { id: z.number().int() }, async ({ id }) =>
+    asText(getHealthDocument(id)?.kind === "imaging" ? deleteImagingStudy(id) : deleteHealthDocument(id))
   );
 }

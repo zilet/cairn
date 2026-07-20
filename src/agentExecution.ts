@@ -88,7 +88,11 @@ function chmodPrivate(p: string): void {
 function promptReferencesDataDirPath(prompt: string | undefined, dataDir: string): boolean {
   if (!prompt) return false;
   const root = path.resolve(dataDir);
-  return prompt.includes(root + path.sep) || prompt.includes(root + "/");
+  return (
+    prompt.includes(root + path.sep) ||
+    prompt.includes(root + "/") ||
+    prompt.includes("CAIRN_AGENT_DATA_FILES:")
+  );
 }
 
 export function promptReferencesDataDir(

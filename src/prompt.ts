@@ -7,6 +7,7 @@ export * from "./prompt/coach.js";
 export * from "./prompt/chat.js";
 export * from "./prompt/enrich.js";
 export * from "./prompt/health.js";
+export * from "./prompt/imaging.js";
 export * from "./prompt/nutrition.js";
 export * from "./prompt/day.js";
 export * from "./prompt/program.js";

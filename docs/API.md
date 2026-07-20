@@ -9,7 +9,7 @@ Health's short-lived pairing exchange is public and passes through the instance-
 when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**279 routes** across 102 groups.
+**291 routes** across 102 groups.
 
 ## `/activities`
 
@@ -341,9 +341,21 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | GET | `/api/health-docs/:id` | Single row (poll fallback for watching enrichment_status). |
 | PUT | `/api/health-docs/:id` |  |
 | POST | `/api/health-docs/:id/confirm` | Confirm a pending_confirm lab paste — the chat propose→apply gate for a bulk panel. When a transcriber is reachable it flips the draft into the completeness-first, Claude-first health ingest (the same path the paste box uses); otherwise it commits the chat agent's inline markers directly. Nothing writes to Health until this fires. |
+| GET | `/api/health-docs/:id/dicom/instances/:instanceId/file` |  |
+| GET | `/api/health-docs/:id/dicom/instances/:instanceId/frames/:frame` |  |
+| GET | `/api/health-docs/:id/dicom/manifest` |  |
 | GET | `/api/health-docs/:id/file` | Stream the original file. Only raster images / PDF are served inline. |
+| POST | `/api/health-docs/:id/imaging-analyze` |  |
+| POST | `/api/health-docs/:id/imaging-confirm` |  |
+| PUT | `/api/health-docs/:id/imaging-details` |  |
+| POST | `/api/health-docs/:id/imaging-files` |  |
+| GET | `/api/health-docs/:id/imaging-files/:fileId` |  |
+| PUT | `/api/health-docs/:id/imaging-recommendations/:recommendationId/status` |  |
 | POST | `/api/health-docs/:id/reanalyze` | Re-run the agentic scan over a document's original file. |
 | GET | `/api/health-docs/:id/stream` | Live enrichment status for one health document (Server-Sent Events) — the SSE-first path the PWA uses instead of polling; snapshot then transitions, close on terminal. getHealthDocument returns the PUBLIC shape (never the raw file_path). EventSource can't set headers, so the PWA reaches this with ?token=. |
+| POST | `/api/health-docs/imaging` | Create the durable study shell first; files can then arrive sequentially over separate bounded requests without pretending each page/image is a new record. |
+| POST | `/api/health-docs/imaging/dicom-imports` |  |
+| GET | `/api/health-docs/imaging/dicom-imports/:jobId` |  |
 
 ## `/health-export`
 

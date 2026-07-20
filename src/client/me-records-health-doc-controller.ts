@@ -83,6 +83,13 @@ function wireHealthUpload(deps: HealthRecordsControllerDeps): void {
 }
 
 function wireHealthDoc(el: HTMLElement | null, deps: HealthRecordsControllerDeps): void {
+  if (el?.classList.contains("imaging-card")) {
+    const id = Number(el.dataset.hdoc);
+    void deps.api(`/health-docs/${id}`).then((doc) => {
+      if (!doc || typeof doc !== "object") return;
+      CairnImaging.wireImaging(doc as HealthDocument, el, { api: deps.api, toast: deps.toast, refresh: () => { swrInvalidate(RECORDS_CACHE_KEY); void loadHealthDocs(deps); deps.paintHealthPicture(); } });
+    });
+  }
   CairnHealthDocActionsController.wireDoc(el, healthDocActionsDeps(deps));
 }
 

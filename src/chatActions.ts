@@ -1,4 +1,4 @@
-import { HEALTH_DOCUMENT_KIND_SCHEMA } from "./healthDocumentKinds.js";
+import { HEALTH_DOCUMENT_KINDS, normalizeHealthDocumentKind, type HealthDocumentKind } from "./healthDocumentKinds.js";
 
 type ChatActionRecord = Record<string, unknown>;
 
@@ -195,6 +195,25 @@ export type ChatAction =
 
 const CHAT_ACTION_TYPE_SET = new Set<string>(CHAT_ACTION_TYPES);
 
+// Chat's log_health action is the marker-oriented capture path. Imaging has its
+// own Records upload/draft/confirmation workflow and must never be squeezed into
+// a marker document by a forged or off-contract chat action.
+export const CHAT_LOG_HEALTH_KINDS = HEALTH_DOCUMENT_KINDS.filter((kind) => kind !== "imaging");
+export type ChatLogHealthKind = Exclude<HealthDocumentKind, "imaging">;
+const CHAT_LOG_HEALTH_KIND_SET = new Set<string>(CHAT_LOG_HEALTH_KINDS);
+export const CHAT_LOG_HEALTH_KIND_SCHEMA = CHAT_LOG_HEALTH_KINDS.join("|");
+
+export function normalizeChatLogHealthKind(value: unknown): ChatLogHealthKind | null {
+  if (!nonBlank(value)) return null;
+  const normalizedInput = value
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  const kind = normalizeHealthDocumentKind(value);
+  if (kind === "other" && normalizedInput !== "other") return null;
+  return CHAT_LOG_HEALTH_KIND_SET.has(kind) ? (kind as ChatLogHealthKind) : null;
+}
+
 export const CHAT_ACTION_PROMPT_SPECS = {
   log_activity: {
     type: "log_activity",
@@ -306,13 +325,14 @@ export const CHAT_ACTION_PROMPT_SPECS = {
   log_health: {
     type: "log_health",
     applyMode: "immediate",
-    shape: `{ "type": "log_health", "kind": "${HEALTH_DOCUMENT_KIND_SCHEMA}", "doc_date": "YYYY-MM-DD|null",
+    shape: `{ "type": "log_health", "kind": "${CHAT_LOG_HEALTH_KIND_SCHEMA}", "doc_date": "YYYY-MM-DD|null",
       "summary": "<plain-language 1-2 sentence read on the results>",
       "markers": [ { "name": "Ferritin", "value": 45, "unit": "ng/mL", "flag": "low|high|normal|null" } ] }`,
     guidance: [
       `log_health records lab/bloodwork/DEXA/ECG results the user reports in chat — transcribe EVERY marker verbatim with its value, unit and a low/high/normal flag vs the usual range, plus a short plain-language summary.`,
       `Do NOT curate to "the interesting ones": an in-range/normal/boring marker (the full CBC differential, electrolytes, the whole urinalysis, omega sub-fractions, every hormone) is just as required as a flagged one — if it has a name and a value, include it. Lands straight in their health Records (Stand → Records) and feeds the marker trends. Never invent a value.`,
       `Preserve source units exactly as reported; do not convert US/SI/EU units yourself. Informational, not medical advice.`,
+      `Do NOT use log_health for MRI, CT, X-ray, ultrasound, radiology, or any other imaging study. Direct the athlete to Stand → Records to upload the report or scan through the first-class imaging draft and confirmation flow.`,
       `NOTE: for a big pasted panel (dozens of markers), the paste box on Stand → Records is the more reliable, complete path — you may mention it in passing.`,
     ],
   },
@@ -488,8 +508,10 @@ export function normalizeChatAction(value: unknown): ChatAction | null {
       const days = arrayOrEmpty(value.days);
       return days.length ? { ...value, type: "plan_restructure", days } : null;
     }
-    case "log_health":
-      return nonBlank(value.kind) ? { ...value, type: "log_health", kind: value.kind } : null;
+    case "log_health": {
+      const kind = normalizeChatLogHealthKind(value.kind);
+      return kind ? { ...value, type: "log_health", kind } : null;
+    }
     case "add_context_event":
       return nonBlank(value.kind) ? { ...value, type: "add_context_event", kind: value.kind } : null;
     case "resolve_context_event":

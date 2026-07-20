@@ -49,6 +49,12 @@ const HEALTH_INGEST_SCHEMA = `{
       "source": "<source section/file, e.g. 'Medications', 'Allergies', 'Problems'>"
     }
   ],
+  "imaging_studies_complete": true,
+  "imaging_studies": [
+    // Radiology/imaging reports found in a MyChart/export bundle. Each entry uses
+    // the imaging_study shape from Cairn's imaging contract; [] when none exist.
+    { "imaging_study": { "schema_version": 1, "report_status": "final|preliminary|amended|corrected|unknown", "study": { "modality": "<normalized>", "raw_modality": "<verbatim>", "procedure": "<verbatim>", "accession": null, "study_instance_uid": null, "study_date": "YYYY-MM-DD|null", "issued_at": null, "facility": null, "ordering_clinician": null, "interpreting_clinician": null }, "anatomy": { "clinical_system": "<system|unknown>", "body_region": "<hierarchical region|unknown>", "verbatim_site": null, "laterality": "left|right|bilateral|midline|not_applicable|unknown", "code": null }, "report": { "history": null, "technique": null, "comparison": null, "findings": null, "impression": null, "addendum": null }, "findings": [], "recommendations": [], "provenance": { "source_kind": "mychart", "extraction": "mychart", "extractor": "health-ingest", "source_doc_id": null, "source_hash": null, "confidence": "unknown" }, "verification": { "needs_confirmation": true, "user_confirmed": false, "clinician_confirmed": false, "user_confirmed_at": null, "clinician_confirmed_at": null, "corrected_at": null, "notes": null }, "dicom": { "study_instance_uid": null, "series": [] } } }
+  ],
   "summary": "<1-3 sentence read across the WHOLE import: span of dates, what stands out>",
   "memory": [
     { "content": "<durable notable fact, e.g. 'LDL-C trending up since 2022, 207 mg/dL in 2026'>", "kind": "observation|injury|milestone" }
@@ -63,7 +69,7 @@ export function buildHealthIngestPrompt(
   absPath: string,
   isDir: boolean,
   kindHint: string,
-  opts?: { emphasizeCompleteness?: boolean; missed?: { got: number; expected: number } },
+  opts?: { emphasizeCompleteness?: boolean; missed?: { got: number; expected: number } }
 ): string {
   const profile = repo.getProfile();
   const recentMemory = (repo.listMemory(40) as any[]).map((m) => m.content);
@@ -135,6 +141,19 @@ PRESERVE NON-MARKER MYCHART / CCDA FACTS TOO:
 - Keep facts source-grounded and compact. Do not infer diagnoses, medication intent, or allergy
   severity unless the source states it.
 
+PRESERVE IMAGING REPORTS AS FIRST-CLASS STUDIES:
+- Put every radiology/imaging report found in an export under top-level imaging_studies[], one
+  imaging_study per actual study. Do NOT flatten imaging findings or measurements into panels,
+  markers, clinical_facts, lab priority, or optimal-zone data.
+- Transcribe the report sections faithfully. The written radiologist report is authoritative;
+  use source="mychart" for report findings/recommendations and preserve source-stated severity,
+  certainty, measurements, negation and follow-up. Never invent a diagnosis or recommendation.
+- A prose-only imaging report is valid even when findings[] is empty. Leave reserved DICOM UIDs
+  null unless the export explicitly states them. Every derived study remains linked to this source.
+- Set imaging_studies_complete=true only after the entire source was successfully read and every
+  imaging study in it was included. Use false when file access, parsing, pagination, or extraction
+  was incomplete. An absent or empty imaging_studies array never authorizes removal of prior studies.
+
 OTHER GUARDRAILS:
 - This is informational structuring, NOT medical diagnosis or advice. Transcribe and summarize only.
 - Never invent values. Include only markers you can actually read. Use the source's range column to
@@ -161,11 +180,15 @@ OTHER GUARDRAILS:
   create memory for every routine encounter or immunization. Keep items short. Do NOT repeat
   anything in EXISTING MEMORY.
 - It is fine to return many panels (dozens). If the source truly has only one date, return one panel.
-${opts?.emphasizeCompleteness ? `
+${
+  opts?.emphasizeCompleteness
+    ? `
 RETRY — THE PREVIOUS ATTEMPT WAS INCOMPLETE${opts.missed ? ` (it returned ${opts.missed.got} markers but the source lists about ${opts.missed.expected})` : ""}.
 Read the WHOLE source again and transcribe EVERY single result line this time — do not skip in-range,
 normal, qualitative, or "uninteresting" markers. Every named result with a value must appear.
-` : ""}
+`
+    : ""
+}
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 ${HEALTH_INGEST_SCHEMA}
 
@@ -201,7 +224,15 @@ const HEALTH_REVIEW_SCHEMA = `{
 // (deterministic degrade). This is a LOCALIZED, additive edit; the directives/
 // connected-brain framing it sits beside overlaps conceptually with Stream 3's
 // prompt edits — see the stream summary's clean-merge note.
-export function buildHealthReviewPrompt(grounding?: { passages?: { marker?: string | null; claim?: string | null; source_title?: string | null; source_url?: string | null; confidence?: string | null }[] }): string {
+export function buildHealthReviewPrompt(grounding?: {
+  passages?: {
+    marker?: string | null;
+    claim?: string | null;
+    source_title?: string | null;
+    source_url?: string | null;
+    confidence?: string | null;
+  }[];
+}): string {
   const ctx = repo.getCoachContext();
   const markers = repo.getMarkerHistory();
   const passages = Array.isArray(grounding?.passages) ? grounding!.passages!.slice(0, 12) : [];
@@ -255,7 +286,9 @@ ${evidencePack}\n`
     // only; never restate it as a number/score.
     forecast: m.forecast?.eta_text
       ? { direction: m.forecast.direction, projection: m.forecast.eta_text }
-      : (m.trend?.projection ? { direction: null, projection: m.trend.projection } : null),
+      : m.trend?.projection
+        ? { direction: null, projection: m.trend.projection }
+        : null,
     recency: recencyOf(m.latest?.date),
   }));
   return `${CAIRN_PERSONA}
@@ -346,8 +379,13 @@ const RESEARCH_SCHEMA = `{
 }`;
 
 export function buildResearchPrompt(question: string, markers: string[] = []): string {
-  const q = String(question ?? "").trim().slice(0, 600);
-  const m = (Array.isArray(markers) ? markers : []).map((x) => String(x ?? "").trim()).filter(Boolean).slice(0, 12);
+  const q = String(question ?? "")
+    .trim()
+    .slice(0, 600);
+  const m = (Array.isArray(markers) ? markers : [])
+    .map((x) => String(x ?? "").trim())
+    .filter(Boolean)
+    .slice(0, 12);
   return `${CAIRN_PERSONA}
 
 Right now you're acting as a careful clinical-evidence researcher for this longevity & wellness tool.
@@ -388,7 +426,9 @@ export function buildMarkerReconcilePrompt(
 ): string {
   const list = items
     .map((it) => {
-      const canonical = String(it.canonical ?? "").replace(/\s+/g, " ").trim();
+      const canonical = String(it.canonical ?? "")
+        .replace(/\s+/g, " ")
+        .trim();
       const hint = canonical && canonical !== it.name ? ` -> internal "${canonical}"` : "";
       return `  - "${it.name}"${hint}${it.unit ? ` [${it.unit}]` : " [no unit]"}${it.sample != null && it.sample !== "" ? ` e.g. ${JSON.stringify(it.sample)}` : ""}`;
     })
@@ -459,11 +499,16 @@ function renderHealthDrivers(ctx: any): string {
     const body = (Array.isArray(pm?.markers) ? pm.markers : []).filter(
       (m: any) => m?.group === "body" || /body comp/i.test(m?.group_label || "")
     );
-    const bc = body.slice(0, 5).map((m: any) =>
-      `${m.name} ${m?.latest?.value ?? "?"}${m.unit ? ` ${m.unit}` : ""}${m?.trend?.dir && m.trend.dir !== "stable" ? ` (${m.trend.dir})` : ""}`
-    );
+    const bc = body
+      .slice(0, 5)
+      .map(
+        (m: any) =>
+          `${m.name} ${m?.latest?.value ?? "?"}${m.unit ? ` ${m.unit}` : ""}${m?.trend?.dir && m.trend.dir !== "stable" ? ` (${m.trend.dir})` : ""}`
+      );
     if (bc.length) bits.push(`BODY COMPOSITION: ${bc.join("; ")}`);
-  } catch { /* best-effort */ }
+  } catch {
+    /* best-effort */
+  }
   const g: any = ctx?.goal;
   if (g) {
     const w = [
@@ -525,10 +570,10 @@ ${renderHealthDrivers(context)}
 ${CONTEXT_GUARDRAILS}
 ${renderConnectedBrain(context, { domains: ["nutrition", "training", "watch"] })}${renderReactionModel(context)}${renderBodyComp(context)}
 ${renderStreamingContract(
-    "give them the whole-picture reading in a few warm sentences — the ONE lead finding and the connected story of how their labs, body composition, training, recovery and nutrition relate (the same reading that goes in the JSON's \"headline\" and \"story\")",
-    HEALTH_SYNTHESIS_SCHEMA,
-    { emptyAnswer: '{"found": false}' },
-  )}
+  'give them the whole-picture reading in a few warm sentences — the ONE lead finding and the connected story of how their labs, body composition, training, recovery and nutrition relate (the same reading that goes in the JSON\'s "headline" and "story")',
+  HEALTH_SYNTHESIS_SCHEMA,
+  { emptyAnswer: '{"found": false}' }
+)}
 
 DATA:
 ${JSON.stringify(context)}`;

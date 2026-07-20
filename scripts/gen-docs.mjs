@@ -142,6 +142,7 @@ const mcpSources = [
   "src/surfaces/mcp/garmin.ts",
   "src/surfaces/mcp/health-metrics.ts",
   "src/surfaces/mcp/health-records.ts",
+  "src/surfaces/mcp/imaging.ts",
   "src/surfaces/mcp/journey.ts",
   "src/surfaces/mcp/memory-learning.ts",
   "src/surfaces/mcp/nutrition.ts",

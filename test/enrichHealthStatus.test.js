@@ -1,12 +1,62 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { repo } from "./_seed.js";
-import { enqueueEnrich } from "../dist/enrich.js";
+import { applyHealthIngestResult, enqueueEnrich, settleStaleImagingJob } from "../dist/enrich.js";
+import { UPLOADS_DIR } from "../dist/uploadPaths.js";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function addImagingFile(studyId, suffix) {
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+  const bytes = Buffer.from(`%PDF-1.7 ${suffix}`);
+  const fp = path.join(UPLOADS_DIR, `${crypto.randomUUID()}.pdf`);
+  fs.writeFileSync(fp, bytes);
+  return repo.addImagingStudyFile({
+    study_id: studyId,
+    original_name: `${suffix}.pdf`,
+    mime: "application/pdf",
+    file_path: fp,
+    size_bytes: bytes.length,
+    sha256: crypto.createHash("sha256").update(bytes).digest("hex"),
+    source_kind: "report",
+  });
+}
+
+test("stale imaging worker marks attachment changes pending and schedules exactly one fresh pass", () => {
+  const draft = repo.createImagingStudy();
+  addImagingFile(draft.id, "initial");
+  const base = repo.imagingStudyRevisionState(draft.id);
+  addImagingFile(draft.id, "added-mid-run");
+
+  const result = applyHealthIngestResult(draft.id, {}, { imagingBaseRevisionState: base });
+  assert.deepEqual(result, { status: "stale", reason: "attachments_changed" });
+  const scheduled = [];
+  const settled = settleStaleImagingJob(draft.id, result.reason, (job) => scheduled.push(job));
+  assert.deepEqual(settled, { status: "pending", requeued: true });
+  assert.deepEqual(scheduled, [{ kind: "health", id: draft.id }]);
+  assert.equal(repo.getHealthDocument(draft.id).enrichment_status, "pending");
+});
+
+test("stale imaging worker preserves user state and exposes a calm retry-needed outcome", () => {
+  const draft = repo.createImagingStudy();
+  addImagingFile(draft.id, "source");
+  const base = repo.imagingStudyRevisionState(draft.id);
+  repo.confirmImagingStudy(draft.id, "checked while analysis was running");
+
+  const result = applyHealthIngestResult(draft.id, {}, { imagingBaseRevisionState: base });
+  assert.deepEqual(result, { status: "stale", reason: "user_state_changed" });
+  const scheduled = [];
+  const settled = settleStaleImagingJob(draft.id, result.reason, (job) => scheduled.push(job));
+  assert.deepEqual(settled, { status: "retry_needed", requeued: false });
+  assert.deepEqual(scheduled, []);
+  const after = repo.getImagingStudy(draft.id);
+  assert.equal(after.enrichment_status, "retry_needed");
+  assert.equal(after.parsed.imaging_study.verification.user_confirmed, true);
+});
 
 test("health reanalysis keeps an existing structured ingest when the agent returns a wrong shape", async () => {
   repo.setSettings({

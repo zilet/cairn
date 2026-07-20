@@ -5,6 +5,38 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-07-19
+
+Cairn can now keep medical imaging with the written findings that give it
+meaning. Bring in JPEG, PNG, PDF, or MyChart findings and organize them by
+body region and marker; import DICOM Part-10 files or ZIP archives into a
+durable, recoverable study library. The viewer is deliberately non-diagnostic:
+it helps you navigate supported classic monochrome images, while the written
+report remains authoritative. PWA cache `cairn-v510`.
+
+### Added
+
+- **Imaging alongside findings** — JPEG, PNG, PDF, and MyChart findings can be
+  associated with clinically organized body-region and marker groups.
+- **Durable DICOM import** — direct Part-10 and ZIP import with resumable jobs,
+  recovery after interruption, Study/Series/Instance indexing, and safeguards
+  against UID and patient-identity conflicts.
+- **A bounded, non-diagnostic viewer** — supported classic monochrome studies
+  offer window/level, frame, and instance navigation; unsupported objects say
+  clearly why they cannot be shown.
+- **Careful image assistance** — AI use is limited to representative PNGs, and
+  any image observations remain explicitly unconfirmed; written reports are
+  the clinical authority.
+- **Privacy-first imaging controls** — authentication and no-store responses,
+  privacy-redacted public and export surfaces, crash-safe deletion/quarantine,
+  and read-only MCP imaging tools. Raw imaging files are PHI.
+
+### Notes
+
+- Imaging schema updates run automatically on boot. The current migration is
+  **v67** (`dicom-private-identity-hardening`); down-migrations remain
+  unsupported.
+
 ## [1.3.0] — 2026-07-17
 
 Endurance becomes a first-class citizen alongside the barbell: runs and hikes

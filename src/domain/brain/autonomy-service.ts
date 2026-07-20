@@ -84,6 +84,7 @@ function proposalShape(proposal: any): ProposalShape {
 
 type ProposalReviewReasonCode =
   | "stale_snapshot"
+  | "clinical_ceiling"
   | "safety_floor"
   | "user_lock"
   | "review_posture"
@@ -99,6 +100,8 @@ function holdProposalForReview(
     reasons: string[];
     tier?: AutonomyTier;
     policy_inputs?: Record<string, unknown>;
+    clinical?: boolean;
+    clinical_provenance?: Record<string, unknown> | null;
     coordination_key?: string | null;
     coordinated_update?: boolean;
   }
@@ -116,7 +119,7 @@ function holdProposalForReview(
     source_ref_key: String(proposal.id),
     status: "review",
     autonomy_tier: tier,
-    risk_class: shape.risk,
+    risk_class: input.clinical ? "clinical" : shape.risk,
     reversible: false,
     input_fingerprint: null,
     context: {
@@ -124,6 +127,8 @@ function holdProposalForReview(
       review_reason_code: input.code,
       review_reasons: reasons,
       policy_inputs: input.policy_inputs ?? {},
+      clinical: input.clinical === true,
+      clinical_provenance: input.clinical_provenance ?? null,
       coordination_key: input.coordination_key ?? null,
       coordinated_update: input.coordinated_update === true,
       evidence_keys: [`plan_proposal:${proposal.id}`, `current_plan:${shape.domain}`],
@@ -146,6 +151,15 @@ function holdProposalForReview(
     decision: recorded,
     review_reason_code: input.code,
   };
+}
+
+function serverClinicalProvenance(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const provenance = value as Record<string, unknown>;
+  return provenance.server_owned === true &&
+    (provenance.source === "chat_clinical_detection" || provenance.source === "chat_clinical_lineage")
+    ? provenance
+    : null;
 }
 
 function nextBoundary(kind: ProposalShape["kind"], today = localDateISO()): string {
@@ -558,6 +572,11 @@ export function applyProposalWithAutonomy(
   proposalId: number,
   input: {
     requested_tier?: AutonomyTier;
+    // Clinical provenance is derived by a server-owned caller (chat inspects the
+    // athlete message, action rationale/constraints, study refs, and attachment).
+    // It is persisted on the proposal so later routing cannot lose the ceiling.
+    clinical?: boolean;
+    clinical_provenance?: Record<string, unknown>;
     safety_response?: boolean;
     user_locked?: boolean;
     clamp_refused?: boolean;
@@ -581,13 +600,23 @@ export function applyProposalWithAutonomy(
   const proposal = getProposal(proposalId);
   if (!proposal) return { ok: false, error: "proposal not found" };
   const shape = proposalShape(proposal);
+  const clinicalProvenance =
+    serverClinicalProvenance(input.clinical_provenance) ??
+    serverClinicalProvenance(proposal.parsed?.clinical_provenance);
+  const clinical = input.clinical === true || clinicalProvenance !== null;
   const createdAt = Date.parse(String(proposal.created_at ?? ""));
   const ageDays = Number.isFinite(createdAt) ? Math.max(0, (Date.now() - createdAt) / 86_400_000) : Infinity;
   const freshnessDays = shape.kind === "training_structure" ? 14 : 7;
   if (ageDays > freshnessDays) {
     return holdProposalForReview(proposal, shape, {
       code: "stale_snapshot",
-      reasons: [`proposal snapshot is older than ${freshnessDays} days; refresh it against the current plan first`],
+      reasons: [
+        `proposal snapshot is older than ${freshnessDays} days; refresh it against the current plan first`,
+        ...(clinical ? ["clinical decisions remain clinician-directed"] : []),
+      ],
+      tier: clinical ? "clinician" : undefined,
+      clinical,
+      clinical_provenance: clinicalProvenance,
       coordination_key: input.coordination_key,
       coordinated_update: input.coordinated_update,
     });
@@ -608,7 +637,7 @@ export function applyProposalWithAutonomy(
   const leadMode = getSettings().lead_mode;
   const policy = decideAutonomyTier({
     kind: shape.kind,
-    risk_class: shape.risk,
+    risk_class: clinical ? "clinical" : shape.risk,
     reversible: true,
     requested_tier: input.requested_tier,
     lead_mode: leadMode,
@@ -616,19 +645,22 @@ export function applyProposalWithAutonomy(
     user_locked: input.user_locked,
     clamp_refused: input.clamp_refused,
     domain_demoted: domainDemoted,
+    clinical,
   });
   if (policy.tier === "ask" || policy.tier === "clinician" || policy.tier === "observe") {
-    const code: ProposalReviewReasonCode = input.clamp_refused
-      ? "safety_floor"
-      : input.user_locked
-        ? "user_lock"
-        : leadMode === "review_everything"
-          ? "review_posture"
-          : input.requested_tier === "ask"
-            ? "requested_review"
-            : domainDemoted
-              ? "domain_policy"
-              : "requested_review";
+    const code: ProposalReviewReasonCode = clinical
+      ? "clinical_ceiling"
+      : input.clamp_refused
+        ? "safety_floor"
+        : input.user_locked
+          ? "user_lock"
+          : leadMode === "review_everything"
+            ? "review_posture"
+            : input.requested_tier === "ask"
+              ? "requested_review"
+              : domainDemoted
+                ? "domain_policy"
+                : "requested_review";
     return holdProposalForReview(proposal, shape, {
       code,
       reasons: policy.reasons.length ? policy.reasons : ["This change was explicitly routed for review."],
@@ -639,7 +671,11 @@ export function applyProposalWithAutonomy(
         user_locked: !!input.user_locked,
         clamp_refused: !!input.clamp_refused,
         domain_demoted: domainDemoted,
+        clinical,
+        clinical_provenance: clinicalProvenance,
       },
+      clinical,
+      clinical_provenance: clinicalProvenance,
       coordination_key: input.coordination_key,
       coordinated_update: input.coordinated_update,
     });

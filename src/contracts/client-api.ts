@@ -1868,6 +1868,136 @@ export interface ClientHealthDocument {
   enrichment_status?: string | null;
   created_at?: string;
   parsed_json?: unknown;
+  parsed?: ClientHealthDocumentParsed | null;
+  study_files?: ClientImagingStudyFile[];
+  [key: string]: unknown;
+}
+
+export interface ClientHealthDocumentParsed {
+  imaging_study?: ClientImagingStudy;
+  markers?: ClientHealthMarker[];
+  [key: string]: unknown;
+}
+export interface ClientDicomImportJob {
+  id: number;
+  status: "queued" | "running" | "done" | "failed";
+  progress?: { entries_seen?: number; instances_indexed?: number; studies_created?: number };
+  warnings?: string[];
+  result?: { study_ids?: number[]; instances_indexed?: number; studies_created?: number };
+  error?: { code?: string };
+}
+export interface ClientDicomManifest {
+  study_id: number;
+  series: Array<{
+    id: number;
+    modality?: string;
+    description?: string;
+    previewable?: boolean;
+    preview_support_reason?: string | null;
+    instances: Array<{
+      id: number;
+      instance_number?: number;
+      number_of_frames?: number;
+      rows?: number;
+      columns?: number;
+      previewable?: boolean;
+      preview_support_reason?: string | null;
+      photometric_interpretation?: string | null;
+      pixel_spacing?: string | null;
+      image_orientation?: string | null;
+      laterality?: string | null;
+      [key: string]: unknown;
+    }>;
+  }>;
+}
+export interface ClientImagingStudyFile {
+  id: number;
+  sequence?: number;
+  original_name: string;
+  mime: string;
+  size_bytes?: number;
+  source_kind: "report" | "image" | "mychart";
+  has_file?: boolean;
+}
+export interface ClientImagingFinding {
+  id?: string;
+  source?: "report" | "image_ai" | "mychart" | "patient";
+  clinical_system?: string;
+  body_region?: string;
+  verbatim_site?: string | null;
+  laterality?: string;
+  finding_text?: string;
+  quarantined?: boolean;
+  quarantine_reason?: "image_ai_free_text_not_published" | null;
+  severity?: string;
+  certainty?: string;
+  measurements?: Array<{
+    name?: string;
+    label?: string;
+    value?: number | null;
+    value_text?: string | null;
+    unit?: string | null;
+    qualifier?: string | null;
+    method?: string | null;
+  }>;
+  source_spans?: unknown[];
+}
+export type ClientImagingRecommendationStatus =
+  | "recommended"
+  | "scheduled"
+  | "completed"
+  | "declined"
+  | "not_needed"
+  | "unknown";
+export interface ClientImagingRecommendation {
+  id?: string;
+  source?: string;
+  recommendation_text?: string;
+  timeframe?: string;
+  action?: string;
+  status?: ClientImagingRecommendationStatus;
+  source_spans?: unknown[];
+}
+export interface ClientImagingStudy {
+  report_status?: string;
+  study?: {
+    modality?: string;
+    raw_modality?: string;
+    procedure?: string;
+    accession?: string;
+    study_date?: string;
+    facility?: string;
+    ordering_clinician?: string;
+    interpreting_clinician?: string;
+    [key: string]: unknown;
+  };
+  anatomy?: {
+    clinical_system?: string;
+    body_region?: string;
+    verbatim_site?: string;
+    laterality?: string;
+    code?: string;
+    [key: string]: unknown;
+  };
+  report?: {
+    history?: string;
+    technique?: string;
+    comparison?: string;
+    findings?: string;
+    impression?: string;
+    addendum?: string;
+    [key: string]: unknown;
+  };
+  findings?: ClientImagingFinding[];
+  recommendations?: ClientImagingRecommendation[];
+  provenance?: unknown;
+  verification?: {
+    needs_confirmation?: boolean;
+    user_confirmed?: boolean;
+    clinician_confirmed?: boolean;
+    [key: string]: unknown;
+  };
+  dicom?: { series?: unknown[]; [key: string]: unknown } | null;
   [key: string]: unknown;
 }
 
@@ -2500,6 +2630,8 @@ export interface ClientApiResponses {
   "/api/insights": ClientInsight[];
   "/api/insights/generate": ClientInsightGenerateResponse | ClientAgentJobEnvelope;
   "/api/health-docs": ClientHealthDocument[];
+  "/api/health-docs/imaging": ClientHealthDocument;
+  "/api/health-docs/imaging/dicom-imports": ClientDicomImportJob;
   "/api/context-events": ClientContextEvent[];
   "/api/injury-impacts": ClientInjuryImpactsResponse;
   "/api/family": ClientFamilyMember[];
@@ -2577,39 +2709,59 @@ type ClientApiResponseForCleanPath<Path extends string> = `/api${Path}` extends 
                                                       ? ClientInsight
                                                       : Path extends `/health-docs/${string}/reanalyze`
                                                         ? ClientHealthDocument
-                                                        : Path extends `/health-docs/${string}`
-                                                          ? ClientHealthDocument | ClientDeleteResponse
-                                                          : Path extends `/context-events/${string}`
-                                                            ? ClientContextEvent | ClientDeleteResponse
-                                                            : Path extends `/family/${string}`
-                                                              ? ClientFamilyMember | ClientDeleteResponse
-                                                            : Path extends `/memory/${string}/supersede` ? ClientMemorySupersedeResponse
-                                                                : Path extends `/memory/${string}`
-                                                                  ? ClientMemory | ClientDeleteResponse
-                                                                  : Path extends `/supplements/${string}`
-                                                                    ? ClientSupplement | ClientDeleteResponse
-                                                                    : Path extends `/chat/sessions/${string}`
-                                                                      ? ClientChatMessage[]
-                                                                      : Path extends `/chat/turns/${string}/cancel`
-                                                                        ? ClientChatTurnCancelResponse
-                                                                        : Path extends `/chat/turns/${string}`
-                                                                          ? ClientChatTurn | null
-                                                                          : Path extends `/agent-jobs/${string}/cancel`
-                                                                            ? ClientAgentJobResponse
-                                                                            : Path extends `/agent-jobs/${string}`
-                                                                              ? ClientAgentJobResponse
-                                                                              : Path extends `/agents/${string}/info`
-                                                                                ? ClientAgentProbeResponse
-                                                                                : Path extends `/agents/${string}/models`
-                                                                                  ? ClientAgentModelsResponse
-                                                                                  : Path extends `/agent-clis/${string}/install`
-                                                                                    ? ClientAgentCliUpdateStatus
-                                                                                    : Path extends `/brain/decisions/${string}/revert`
-                                                                                      ? ClientOkResponse & {
-                                                                                          decision?: ClientJsonObject;
-                                                                                          error?: string;
-                                                                                        }
-                                                                                      : unknown;
+                                                        : Path extends `/health-docs/imaging/dicom-imports/${string}`
+                                                          ? ClientDicomImportJob
+                                                          : Path extends `/health-docs/${string}/dicom/manifest`
+                                                            ? ClientDicomManifest
+                                                            : Path extends `/health-docs/${string}/imaging-files/${string}`
+                                                              ? Blob
+                                                              : Path extends `/health-docs/${string}/imaging-files`
+                                                                ? ClientImagingStudyFile
+                                                                : Path extends `/health-docs/${string}/imaging-analyze`
+                                                                  ? ClientHealthDocument
+                                                                  : Path extends `/health-docs/${string}/imaging-details`
+                                                                    ? ClientHealthDocument
+                                                                    : Path extends `/health-docs/${string}/imaging-confirm`
+                                                                      ? ClientHealthDocument
+                                                                      : Path extends `/health-docs/${string}/imaging-recommendations/${string}/status`
+                                                                        ? ClientHealthDocument
+                                                                        : Path extends `/health-docs/${string}`
+                                                                          ? ClientHealthDocument | ClientDeleteResponse
+                                                                          : Path extends `/context-events/${string}`
+                                                                            ? ClientContextEvent | ClientDeleteResponse
+                                                                            : Path extends `/family/${string}`
+                                                                              ?
+                                                                                  | ClientFamilyMember
+                                                                                  | ClientDeleteResponse
+                                                                              : Path extends `/memory/${string}/supersede` ? ClientMemorySupersedeResponse
+                                                                                : Path extends `/memory/${string}`
+                                                                                  ? ClientMemory | ClientDeleteResponse
+                                                                                  : Path extends `/supplements/${string}`
+                                                                                    ?
+                                                                                        | ClientSupplement
+                                                                                        | ClientDeleteResponse
+                                                                                    : Path extends `/chat/sessions/${string}`
+                                                                                      ? ClientChatMessage[]
+                                                                                      : Path extends `/chat/turns/${string}/cancel`
+                                                                                        ? ClientChatTurnCancelResponse
+                                                                                        : Path extends `/chat/turns/${string}`
+                                                                                          ? ClientChatTurn | null
+                                                                                          : Path extends `/agent-jobs/${string}/cancel`
+                                                                                            ? ClientAgentJobResponse
+                                                                                            : Path extends `/agent-jobs/${string}`
+                                                                                              ? ClientAgentJobResponse
+                                                                                              : Path extends `/agents/${string}/info`
+                                                                                                ? ClientAgentProbeResponse
+                                                                                                : Path extends `/agents/${string}/models`
+                                                                                                  ? ClientAgentModelsResponse
+                                                                                                  : Path extends `/agent-clis/${string}/install`
+                                                                                                    ? ClientAgentCliUpdateStatus
+                                                                                                    : Path extends `/brain/decisions/${string}/revert`
+                                                                                                      ? ClientOkResponse & {
+                                                                                                          decision?: ClientJsonObject;
+                                                                                                          error?: string;
+                                                                                                        }
+                                                                                                      : unknown;
 
 export type ClientApiResponse<Path extends string> = Path extends `/api${infer Rest}`
   ? ClientApiResponse<Rest>

@@ -9,6 +9,7 @@ import { startScheduler } from "./scheduler.js";
 import { recoverPendingEnrich } from "./enrich.js";
 import { recoverChatTurns, abortAllTurns } from "./chatTurns.js";
 import { recoverAgentJobs, abortAllJobs } from "./agentJobs.js";
+import { recoverDicomImports } from "./dicomImports.js";
 import { startBrainReviewJobSubscriber } from "./brainReviewJobs.js";
 import { warmArt } from "./art.js";
 import { maybeScheduleAgentCliAutoUpdate } from "./agentCliUpdates.js";
@@ -180,6 +181,9 @@ const server = app.listen(PORT, HOST, () => {
   // Same for the durable agent-job spine: re-enqueue queued ops, fail interrupted
   // ones (their coachOp may have partially persisted a draft — see recoverAgentJobs).
   recoverAgentJobs();
+  // DICOM archives are durable staged jobs. A crash only resets running work to
+  // queued; the serial importer re-validates the source before writing records.
+  recoverDicomImports();
   // Warm the generated-art cache shortly after boot so PWA tiles have photos
   // immediately. requestArt() no-ops without a Gemini key / art_enabled.
   setTimeout(() => {

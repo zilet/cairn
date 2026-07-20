@@ -8,6 +8,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo } from "./_seed.js";
 import { applyChatActions, isSubstantialLabPaste, CHAT_LAB_CONFIRM_MIN } from "../dist/chatTurns.js";
+import { CHAT_LOG_HEALTH_KIND_SCHEMA, normalizeChatAction } from "../dist/chatActions.js";
 
 beforeEach(() => {
   for (const t of ["health_documents", "health_directives", "chat_messages", "chat_turns", "memory"]) {
@@ -136,4 +137,24 @@ test("a small inline lab mention still applies directly (no confirm friction)", 
   assert.equal(applied.length, 1, "applied immediately");
   assert.equal(applied[0].type, "log_health");
   assert.ok(repo.getMarkerHistory().markers.some((m) => /ldl/i.test(m.name)), "the single marker is live at once");
+});
+
+test("chat log_health excludes imaging from schema, normalization, and application", () => {
+  assert.doesNotMatch(CHAT_LOG_HEALTH_KIND_SCHEMA, /(?:^|\|)imaging(?:\||$)/);
+  assert.equal(normalizeChatAction({ type: "log_health", kind: "imaging", summary: "forged" }), null);
+  assert.equal(normalizeChatAction({ type: "log_health", kind: "MRI", summary: "forged alias" }), null);
+  assert.equal(normalizeChatAction({ type: "log_health", kind: "x-ray", summary: "forged alias" }), null);
+  assert.equal(normalizeChatAction({ type: "log_health", kind: "not-a-real-kind" }), null);
+  assert.equal(normalizeChatAction({ type: "log_health" }), null);
+  assert.equal(normalizeChatAction({ type: "log_health", kind: "DEXA", markers: [] }).kind, "dexa");
+
+  const before = repo.listHealthDocuments().length;
+  for (const kind of ["imaging", "MRI", "x-ray", "radiology"]) {
+    const out = applyChatActions(
+      { actions: [{ type: "log_health", kind, summary: "must use Records imaging flow", markers: [] }] },
+      { agent: "stub", message: "Here is my imaging report." },
+    );
+    assert.deepEqual(out.applied, [], `${kind} was rejected before the health-document write path`);
+  }
+  assert.equal(repo.listHealthDocuments().length, before, "no malformed imaging health_documents row was created");
 });

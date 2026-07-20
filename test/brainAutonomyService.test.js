@@ -134,6 +134,33 @@ test("review-everything and clinical boundaries never auto-apply", () => {
   assert.equal(repo.getPlanDay(1).items[0].target_weight, 115);
 });
 
+test("server-owned clinical provenance persists the clinician ceiling across later routing", () => {
+  seedPlan();
+  repo.setSettings({ lead_mode: "lead" });
+  const proposal = repo.createProposal("stub", "chat imaging change", "", {
+    summary: "MRI-informed bench change",
+    changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 100 }],
+    clinical_provenance: {
+      server_owned: true,
+      source: "chat_clinical_detection",
+      detected_from: ["user_message", "study_reference"],
+      signals: ["imaging"],
+      study_reference_paths: ["imaging_study_id"],
+      attached_image: false,
+    },
+  });
+
+  // Intentionally omit the current-turn clinical input: the persisted server
+  // provenance must still prevent a later caller from quietly applying it.
+  const held = applyProposalWithAutonomy(proposal.id, { requested_tier: "quiet_apply", explicit_user_request: true });
+  assert.equal(held.tier, "clinician");
+  assert.equal(held.review_required, true);
+  assert.equal(held.decision.risk_class, "clinical");
+  assert.equal(held.decision.context.review_reason_code, "clinical_ceiling");
+  assert.equal(repo.getProposal(proposal.id).status, "draft");
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 115);
+});
+
 test("a quiet nutrition adjustment waits for the next day boundary", () => {
   repo.setSettings({ lead_mode: "lead" });
   const proposal = repo.createProposal("stub", "weekly nutrition response", "", {

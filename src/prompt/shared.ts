@@ -89,6 +89,11 @@ export const CONTEXT_GUARDRAILS = `PERSONAL-CONTEXT GUARDRAILS (use the "context
 - HEALTH REVIEW: when "health_review" is present in DATA, factor its focus areas and watchlist
   actions into training plans and meals (e.g. iron-supporting foods while ferritin is on the
   watchlist, recovery emphasis while a marker is being retested).
+- IMAGING: the separate "imaging" array preserves the written report and any clearly-labeled
+  image_ai observations. Treat the radiologist report as authoritative. Never turn an unconfirmed
+  image_ai observation into an injury event, diagnosis, restriction, or quiet plan change. Any
+  training/care implication from imaging is informational and must be asked/clinician-tier, not
+  silently applied; preserve source distinctions when explaining it.
 - HEALTH DIRECTIVES (the connected brain): when "directives" is present in DATA, treat them as the
   cross-domain consequences of this person's flagged labs already propagated into each domain. FOLD
   the nutrition and training directives directly into the plans/meals you produce (e.g. raise soluble

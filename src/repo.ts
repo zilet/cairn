@@ -32,6 +32,7 @@ export * from "./repo/client-tz.js"; // last-seen device zone for the TZ-correct
 export * from "./repo/lab-units.js";
 export * from "./repo/marker-canon.js";
 export * from "./repo/health.js";
+export * from "./repo/imaging.js";
 export * from "./repo/health-outcomes.js"; // intervention -> follow-up marker outcome annotations
 export * from "./repo/ccda.js";
 export * from "./repo/standing.js";

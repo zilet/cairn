@@ -49,8 +49,13 @@ function pollLifecycleHealthDoc(id: string | number, deps: ClientHealthDocAction
       if (deps.state.standSeg !== "records") return;
       const el = hdocLifecycleRow(doc.id);
       if (el) {
-        el.innerHTML = CairnHealthDocs.healthDocInner(doc);
-        deps.wireHealthDoc(el);
+        if (doc.kind === "imaging" && CairnImaging.imagingStudy(doc)) {
+          el.outerHTML = CairnImaging.imagingCard(doc);
+          deps.wireHealthDoc(hdocLifecycleRow(doc.id));
+        } else {
+          el.innerHTML = CairnHealthDocs.healthDocInner(doc);
+          deps.wireHealthDoc(el);
+        }
       }
       if (doc.enrichment_status === "done") {
         deps.loadHealthDocs();
@@ -77,8 +82,13 @@ async function reanalyzeHealthDoc(id: string | number, deps: ClientHealthDocActi
   }
   deps.toast("Re-analyzing…");
   if (row) {
-    row.innerHTML = CairnHealthDocs.healthDocInner(doc);
-    deps.wireHealthDoc(row);
+    if (doc.kind === "imaging" && CairnImaging.imagingStudy(doc)) {
+      row.outerHTML = CairnImaging.imagingCard(doc);
+      deps.wireHealthDoc(hdocLifecycleRow(doc.id));
+    } else {
+      row.innerHTML = CairnHealthDocs.healthDocInner(doc);
+      deps.wireHealthDoc(row);
+    }
   }
   pollLifecycleHealthDoc(id, deps);
 }

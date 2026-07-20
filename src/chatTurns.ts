@@ -1,11 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { db } from "./db.js";
 import { createProgressBus, createSerialRunner } from "./jobRunner.js";
 import * as repo from "./repo.js";
 import { UPLOADS_DIR } from "./uploadPaths.js";
 import { buildChatPrompt, parseChatReply } from "./prompt.js";
-import { chatHistoryTimeLabel, localDateISO } from "./repo/shared.js";
+import { chatHistoryTimeLabel, localDateISO, parseDbTime } from "./repo/shared.js";
 import { runWithTimeZone } from "./tz.js";
 import {
   runAgent,
@@ -153,7 +154,14 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
 
     const { applied, drafts, labConfirms } = applyChatActions(
       { actions },
-      { agent, imagePath: turn.image_path, message: turn.message, skipLogFood: !!photoFood }
+      {
+        agent,
+        imagePath: turn.image_path,
+        message: turn.message,
+        skipLogFood: !!photoFood,
+        turnId: id,
+        userMessageId: beforeId,
+      }
     );
     if (photoFood) applied.unshift({ type: "log_food", result: photoFood });
     const planReply = reconcileChatPlanReply(proposedReply, turn.message, applied, drafts);
@@ -164,6 +172,7 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
       drafts: unknown[];
       lab_confirms?: typeof labConfirms;
       agent_attempts?: ChatAgentAttempt[];
+      clinical_lineage?: ClinicalConversationLineage;
     } = {
       applied,
       drafts: drafts.map(proposalMeta),
@@ -171,6 +180,14 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
     // A substantial pasted lab awaits one-tap confirmation before it writes to Health.
     if (labConfirms.length) meta.lab_confirms = labConfirms;
     if (failedAttempts.length) meta.agent_attempts = attempts;
+    const directTurnClinical = clinicalPlanProvenance({
+      message: turn.message,
+      action: {},
+      imagePath: turn.image_path,
+      imageAloneIsClinical: false,
+    });
+    const clinicalLineage = clinicalLineageForTurn(applied, id, directTurnClinical);
+    if (clinicalLineage) meta.clinical_lineage = clinicalLineage;
     const assistant = repo.addChatMessage("assistant", reply, agent, meta);
     const finished = repo.finishChatTurn(id, {
       reply,
@@ -256,6 +273,278 @@ const TRAINING_SIGNAL_RE =
 export function isFoodOnlyTurn(message: string | null | undefined, imagePath?: string | null): boolean {
   const text = String(message ?? "");
   return (Boolean(imagePath) || FOOD_TURN_RE.test(text)) && !TRAINING_SIGNAL_RE.test(text);
+}
+
+type ClinicalPlanSignal = {
+  label: string;
+  pattern: RegExp;
+};
+
+const CLINICAL_PLAN_SIGNALS: readonly ClinicalPlanSignal[] = [
+  { label: "imaging", pattern: /\b(?:mri|magnetic resonance|imaging|radiolog(?:y|ist|ical))\b/i },
+  { label: "ct", pattern: /\b(?:ct (?:scan|study|report)|computed tomography)\b/i },
+  { label: "xray", pattern: /\b(?:x[- ]?ray|radiograph)\b/i },
+  { label: "ultrasound", pattern: /\b(?:ultrasound|sonogram)\b/i },
+  { label: "scoliosis", pattern: /\bscoliosis\b/i },
+  { label: "injury", pattern: /\b(?:injur(?:y|ies|ed)|return[- ]to[- ]play)\b/i },
+  {
+    label: "rehab",
+    pattern: /\b(?:rehab(?:ilitation)?|physical therap(?:y|ist)|physiotherap(?:y|ist)|post[- ]?op(?:erative)?)\b/i,
+  },
+  {
+    label: "clinician",
+    pattern:
+      /\b(?:clinician|physician|doctor|orthop(?:edic|aedist|edist)|medical (?:finding|advice)|diagnos(?:is|ed)|prescribed)\b/i,
+  },
+  {
+    label: "clinical_finding",
+    pattern:
+      /\b(?:fracture|torn? (?:muscle|tendon|ligament)|herniated disc|disc (?:bulge|protrusion)|stenosis|lesion|impingement)\b/i,
+  },
+];
+
+const CLINICAL_STUDY_REFERENCE_KEY_RE =
+  /(?:^|_)(?:imaging|radiology|study|scan|xray|x_ray|mri|ct|ultrasound|health_document|source_document|clinical_finding|diagnosis)(?:_|$)/i;
+
+export type ClinicalPlanProvenance = {
+  server_owned: true;
+  source: "chat_clinical_detection" | "chat_clinical_lineage";
+  detected_from: Array<
+    | "user_message"
+    | "action_rationale_or_constraints"
+    | "study_reference"
+    | "attached_chat_image"
+    | "conversation_lineage"
+  >;
+  signals: string[];
+  study_reference_paths: string[];
+  attached_image: boolean;
+  lineage?: { turn_id: number; proposal_id: number | null; decision_id: number | null };
+};
+
+export type ClinicalConversationLineage = {
+  server_owned: true;
+  source: "chat_clinical_lineage";
+  turn_id: number;
+  proposal_id: number | null;
+  decision_id: number | null;
+  provenance: ClinicalPlanProvenance;
+};
+
+function clinicalTextSignals(text: string): string[] {
+  return CLINICAL_PLAN_SIGNALS.filter((signal) => signal.pattern.test(text)).map((signal) => signal.label);
+}
+
+function actionClinicalEvidence(action: unknown): { text: string; referencePaths: string[] } {
+  const strings: string[] = [];
+  const referencePaths: string[] = [];
+  const visit = (value: unknown, pathParts: string[], depth: number): void => {
+    if (depth > 6 || strings.length >= 200) return;
+    if (typeof value === "string") {
+      strings.push(value.slice(0, 2_000));
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.slice(0, 100).forEach((entry, index) => visit(entry, [...pathParts, String(index)], depth + 1));
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>).slice(0, 100)) {
+      const nextPath = [...pathParts, key];
+      if (CLINICAL_STUDY_REFERENCE_KEY_RE.test(key) && entry != null && entry !== "") {
+        referencePaths.push(nextPath.join(".").slice(0, 160));
+      }
+      visit(entry, nextPath, depth + 1);
+    }
+  };
+  visit(action, [], 0);
+  return { text: strings.join("\n"), referencePaths: [...new Set(referencePaths)].slice(0, 20) };
+}
+
+// Server-owned clinical classification for chat plan actions. The model cannot
+// opt out with a boolean: we inspect the athlete's words, action rationale and
+// constraints, and any study/document reference fields. Plan-action callers treat
+// an attached ad-hoc image as sufficient provenance so an unverified picture cannot
+// quietly rewrite training; prose-only turn persistence disables that image-only rule.
+export function clinicalPlanProvenance(input: {
+  message?: string | null;
+  action: unknown;
+  imagePath?: string | null;
+  imageAloneIsClinical?: boolean;
+}): ClinicalPlanProvenance | null {
+  const messageSignals = clinicalTextSignals(String(input.message ?? ""));
+  const actionEvidence = actionClinicalEvidence(input.action);
+  const actionSignals = clinicalTextSignals(actionEvidence.text);
+  const signals = [...new Set([...messageSignals, ...actionSignals])];
+  const imageAloneIsClinical = input.imageAloneIsClinical !== false;
+  if (!signals.length && !actionEvidence.referencePaths.length && !(input.imagePath && imageAloneIsClinical))
+    return null;
+
+  const detectedFrom: ClinicalPlanProvenance["detected_from"] = [];
+  if (messageSignals.length) detectedFrom.push("user_message");
+  if (actionSignals.length) detectedFrom.push("action_rationale_or_constraints");
+  if (actionEvidence.referencePaths.length) detectedFrom.push("study_reference");
+  if (input.imagePath) detectedFrom.push("attached_chat_image");
+  return {
+    server_owned: true,
+    source: "chat_clinical_detection",
+    detected_from: detectedFrom,
+    signals,
+    study_reference_paths: actionEvidence.referencePaths,
+    attached_image: Boolean(input.imagePath),
+  };
+}
+
+export function clinicalLineageForTurn(
+  applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>,
+  turnId: number,
+  directTurnClinical: ClinicalPlanProvenance | null = null
+): ClinicalConversationLineage | null {
+  for (let index = applied.length - 1; index >= 0; index--) {
+    const result = recordOrNull(applied[index]?.result);
+    const decision = recordOrNull(result?.decision);
+    const context = recordOrNull(decision?.context);
+    const provenance = recordOrNull(context?.clinical_provenance) as ClinicalPlanProvenance | null;
+    const proposalId = Number(result?.proposal_id);
+    const decisionId = Number(decision?.id);
+    if (
+      result?.tier === "clinician" &&
+      result?.review_required === true &&
+      provenance?.server_owned === true &&
+      Number.isInteger(proposalId) &&
+      proposalId > 0 &&
+      Number.isInteger(decisionId) &&
+      decisionId > 0
+    ) {
+      return {
+        server_owned: true,
+        source: "chat_clinical_lineage",
+        turn_id: turnId,
+        proposal_id: proposalId,
+        decision_id: decisionId,
+        provenance,
+      };
+    }
+  }
+  if (!directTurnClinical) return null;
+  return {
+    server_owned: true,
+    source: "chat_clinical_lineage",
+    turn_id: turnId,
+    proposal_id: null,
+    decision_id: null,
+    provenance: directTurnClinical,
+  };
+}
+
+const CLINICAL_LINEAGE_MAX_AGE_MS = 45 * 60_000;
+const CLINICAL_LINEAGE_REFERENCE_RE =
+  /\b(?:yes|yeah|yep|ok(?:ay)?|sure|sounds good|go ahead|proceed|do it|please do|the (?:change|exercise|movement|variation)|as discussed|you (?:mentioned|suggested|recommended)|we discussed|same (?:change|exercise|movement|variation))\b|\b(?:that|this|those|these)\s+(?:change|exercise|movement|variation|one|plan)\b|\b(?:apply|make|add|change|adjust|use)\s+(?:that|this|it)\b/i;
+const CLINICAL_LINEAGE_TOPIC_CHANGE_RE =
+  /\b(?:different|new|unrelated) topic\b|\b(?:separately|moving on|change of subject|unrelated to (?:that|this|the (?:mri|scan|injury|rehab)))\b/i;
+const INDEPENDENT_TRAINING_SUBJECT_RE =
+  /\b(?:bench(?: press)?|squat|deadlift|press|row|pull[- ]?up|run|ride|cycle|cardio|workout|session|sets?|reps?|load|weight)\b/i;
+const INDEPENDENT_TRAINING_SIGNAL_RE =
+  /\b(?:felt|feels?|was|were|seems?|hit|completed|finished|managed|performed)\b.{0,50}\b(?:easy|easier|hard|harder|crisp|smooth|heavy|light|pain[- ]?free|reps?|sets?|rir|rpe)\b|\b(?:increase|decrease|progress|bump|reduce|add|remove|swap|replace)\b.{0,50}\b(?:load|weight|sets?|reps?|exercise|movement)\b|\b(?:\d+(?:\.\d+)?\s*(?:sets?|reps?)|rir\s*\d+|rpe\s*\d+)\b/i;
+const INDEPENDENT_PLAN_REQUEST_RE =
+  /\b(?:increase|decrease|bump|reduce|raise|lower|progress|set)\b.{0,60}\b(?:bench(?: press)?|squat|deadlift|press|row|pull[- ]?up|run|ride|load|weight|sets?|reps?)\b/i;
+
+// A plan action immediately after clinical context inherits by default. Break the
+// lineage only when the athlete clearly opens a different topic/request, or gives
+// a self-contained new performance signal. Anaphoric language ("that exercise",
+// "do it") always wins because it explicitly links back to the prior turn.
+function explicitlyBreaksClinicalLineage(message: string): boolean {
+  if (CLINICAL_LINEAGE_REFERENCE_RE.test(message)) return false;
+  if (CLINICAL_LINEAGE_TOPIC_CHANGE_RE.test(message)) return true;
+  if (INDEPENDENT_TRAINING_SUBJECT_RE.test(message) && INDEPENDENT_TRAINING_SIGNAL_RE.test(message)) return true;
+  return INDEPENDENT_PLAN_REQUEST_RE.test(message);
+}
+
+function inheritedClinicalLineage(input: {
+  turnId?: number | null;
+  userMessageId?: number | null;
+  message?: string | null;
+}): ClinicalPlanProvenance | null {
+  const turnId = Number(input.turnId);
+  const userMessageId = Number(input.userMessageId);
+  const message = String(input.message ?? "").trim();
+  if (
+    !Number.isInteger(turnId) ||
+    turnId <= 0 ||
+    !Number.isInteger(userMessageId) ||
+    userMessageId <= 0 ||
+    explicitlyBreaksClinicalLineage(message)
+  )
+    return null;
+
+  const row = db
+    .prepare(
+      `SELECT prior.id, prior.status, prior.finished_at, prior.meta,
+              prior.assistant_message_id, prior_assistant.archived_at AS assistant_archived_at
+         FROM chat_turns prior
+         LEFT JOIN chat_messages prior_assistant
+           ON prior_assistant.id = prior.assistant_message_id
+         JOIN chat_messages current_user
+           ON current_user.id = ?
+          AND current_user.archived_at IS NULL
+        WHERE prior.id < ?
+        ORDER BY prior.id DESC LIMIT 1`
+    )
+    .get(userMessageId, turnId) as any;
+  const finishedAt = parseDbTime(row?.finished_at)?.getTime() ?? Number.NaN;
+  if (
+    !row ||
+    row.status !== "done" ||
+    row.assistant_message_id == null ||
+    row.assistant_archived_at != null ||
+    !Number.isFinite(finishedAt) ||
+    Date.now() - finishedAt > CLINICAL_LINEAGE_MAX_AGE_MS
+  )
+    return null;
+
+  let meta: any = null;
+  try {
+    meta = row.meta ? JSON.parse(row.meta) : null;
+  } catch {
+    return null;
+  }
+  const lineage = recordOrNull(meta?.clinical_lineage);
+  const provenance = recordOrNull(lineage?.provenance) as ClinicalPlanProvenance | null;
+  if (
+    lineage?.server_owned !== true ||
+    lineage?.source !== "chat_clinical_lineage" ||
+    Number(lineage.turn_id) !== Number(row.id) ||
+    provenance?.server_owned !== true
+  )
+    return null;
+
+  const proposalId = lineage.proposal_id == null ? null : Number(lineage.proposal_id);
+  const decisionId = lineage.decision_id == null ? null : Number(lineage.decision_id);
+  if ((proposalId == null) !== (decisionId == null)) return null;
+  if (proposalId != null && decisionId != null) {
+    const proposal = repo.getProposal(proposalId) as any;
+    const decision = repo.getBrainDecision(decisionId) as any;
+    if (
+      proposal?.status !== "draft" ||
+      decision?.status !== "review" ||
+      decision?.autonomy_tier !== "clinician" ||
+      decision?.source_ref_type !== "plan_proposal" ||
+      String(decision?.source_ref_key ?? "") !== String(proposalId)
+    )
+      return null;
+  }
+
+  return {
+    server_owned: true,
+    source: "chat_clinical_lineage",
+    detected_from: ["conversation_lineage"],
+    signals: Array.isArray(provenance.signals) ? provenance.signals.slice(0, 20).map(String) : [],
+    study_reference_paths: Array.isArray(provenance.study_reference_paths)
+      ? provenance.study_reference_paths.slice(0, 20).map(String)
+      : [],
+    attached_image: provenance.attached_image === true,
+    lineage: { turn_id: Number(row.id), proposal_id: proposalId, decision_id: decisionId },
+  };
 }
 
 const GOAL_IDENTITY_FIELDS = new Set([
@@ -574,11 +863,13 @@ function applyBackgroundPlanUpdate(
   agent: string,
   summary: unknown,
   changes: unknown[],
-  explicitUserRequest: boolean
+  explicitUserRequest: boolean,
+  clinicalProvenance: ClinicalPlanProvenance | null
 ): unknown {
   const proposal = repo.createProposal(agent, "background: chat signal", "", {
     summary: String(summary ?? "Plan adjusted from a new coaching signal.").slice(0, 500),
     changes,
+    ...(clinicalProvenance ? { clinical_provenance: clinicalProvenance } : {}),
   });
   // Route every background adjustment through the ONE autonomy policy. Lead mode
   // may quietly apply a small reversible change; announce/review modes leave it
@@ -586,6 +877,8 @@ function applyBackgroundPlanUpdate(
   const result = applyProposalWithAutonomy((proposal as any).id, {
     requested_tier: "quiet_apply",
     explicit_user_request: explicitUserRequest,
+    clinical: Boolean(clinicalProvenance),
+    clinical_provenance: clinicalProvenance ?? undefined,
   }) as any;
   const stored = repo.getProposal((proposal as any).id) as any;
   const verification =
@@ -605,16 +898,24 @@ function applyBackgroundPlanUpdate(
   };
 }
 
-function routeChatPlanRestructure(agent: string, summary: unknown, days: unknown[]): unknown {
+function routeChatPlanRestructure(
+  agent: string,
+  summary: unknown,
+  days: unknown[],
+  clinicalProvenance: ClinicalPlanProvenance | null
+): unknown {
   const proposal = repo.createProposal(agent, "chat: restructure", "", {
     summary: String(
       summary ?? "Restructure the training week around the athlete's current goals and constraints."
     ).slice(0, 500),
     days,
+    ...(clinicalProvenance ? { clinical_provenance: clinicalProvenance } : {}),
   });
   const result = applyProposalWithAutonomy((proposal as any).id, {
     requested_tier: "announce",
     explicit_user_request: true,
+    clinical: Boolean(clinicalProvenance),
+    clinical_provenance: clinicalProvenance ?? undefined,
   }) as any;
   const stored = repo.getProposal((proposal as any).id) as any;
   const status = String(result?.decision?.status ?? stored?.autonomy?.status ?? "");
@@ -1246,7 +1547,14 @@ function persistPendingLabDraft(
 // guarded — one bad action records its error and the rest still apply.
 export function applyChatActions(
   parsed: { actions?: unknown } | ChatAction[] | null | undefined,
-  ctx: { agent: string; imagePath?: string | null; message?: string | null; skipLogFood?: boolean }
+  ctx: {
+    agent: string;
+    imagePath?: string | null;
+    message?: string | null;
+    skipLogFood?: boolean;
+    turnId?: number | null;
+    userMessageId?: number | null;
+  }
 ): {
   applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>;
   drafts: unknown[];
@@ -1259,6 +1567,11 @@ export function applyChatActions(
   const foodOnly = isFoodOnlyTurn(message, ctx.imagePath);
   const explicitGoalIntent = !foodOnly && hasExplicitGoalIntent(message);
   const explicitStrengthObjectiveIntent = !foodOnly && hasExplicitStrengthObjectiveIntent(message);
+  const inheritedClinical = inheritedClinicalLineage({
+    turnId: ctx.turnId,
+    userMessageId: ctx.userMessageId,
+    message,
+  });
   const actions = normalizeChatActions(Array.isArray(parsed) ? parsed : parsed?.actions);
   for (const a of actions) {
     try {
@@ -1376,6 +1689,10 @@ export function applyChatActions(
           break;
         }
         case "log_health": {
+          // Defense in depth: normalizeChatActions already rejects the imaging kind
+          // and aliases such as MRI/X-ray. Never let a future direct caller bypass
+          // the first-class Records imaging workflow through this marker path.
+          if (a.kind === "imaging") break;
           // Lab/DEXA results reported in chat. Markers feed the trend view.
           const parsedDocObject =
             a.parsed && typeof a.parsed === "object" ? (a.parsed as Record<string, unknown>) : null;
@@ -1467,20 +1784,36 @@ export function applyChatActions(
           applied.push({ type: a.type, result: repo.applyMeasurementAction(a) });
           break;
         case "plan_update":
-          if (foodOnly) break;
-          applied.push({
-            type: a.type,
-            result: applyBackgroundPlanUpdate(
-              ctx.agent,
-              a.summary,
-              todayPlanUpdateChanges(message, a.changes),
-              hasExplicitPlanEditIntent(message)
-            ),
-          });
+          // Text-only food turns still cannot trigger plan edits. An attached
+          // image action is allowed to reach autonomy only because the server
+          // classifies that attachment as clinical and guarantees a review hold.
+          if (foodOnly && !ctx.imagePath) break;
+          {
+            const clinicalProvenance =
+              clinicalPlanProvenance({ message, action: a, imagePath: ctx.imagePath }) ?? inheritedClinical;
+            applied.push({
+              type: a.type,
+              result: applyBackgroundPlanUpdate(
+                ctx.agent,
+                a.summary,
+                todayPlanUpdateChanges(message, a.changes),
+                hasExplicitPlanEditIntent(message),
+                clinicalProvenance
+              ),
+            });
+          }
           break;
         case "plan_restructure":
           if (foodOnly || !hasExplicitPlanEditIntent(message)) break;
-          applied.push({ type: a.type, result: routeChatPlanRestructure(ctx.agent, a.summary, a.days) });
+          applied.push({
+            type: a.type,
+            result: routeChatPlanRestructure(
+              ctx.agent,
+              a.summary,
+              a.days,
+              clinicalPlanProvenance({ message, action: a, imagePath: ctx.imagePath }) ?? inheritedClinical
+            ),
+          });
           break;
         case "revert_decision":
           if (!hasExplicitDecisionRevertIntent(message, Number(a.id))) break;

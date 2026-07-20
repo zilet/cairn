@@ -763,6 +763,128 @@ CREATE TABLE IF NOT EXISTS health_documents (
   source_doc_id INTEGER               -- the upload this dated panel was split out of (NULL = standalone / the source itself)
 );
 
+-- A first-class imaging study is one health_documents row (kind = 'imaging').
+-- Its report + image pages live as ordered attachments here so a multi-file study
+-- remains one clinical record. DICOM is not ingested yet; the optional identifiers
+-- reserve the later Study/Series/SOP linkage without changing this ownership model.
+CREATE TABLE IF NOT EXISTS imaging_study_files (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  health_document_id INTEGER NOT NULL,
+  sequence INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  original_name TEXT,
+  mime TEXT NOT NULL,
+  file_path TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  source_kind TEXT NOT NULL DEFAULT 'image', -- report | image | mychart
+  dicom_study_uid TEXT,
+  dicom_series_uid TEXT,
+  dicom_sop_uid TEXT,
+  UNIQUE(health_document_id, sequence),
+  UNIQUE(health_document_id, sha256),
+  FOREIGN KEY(health_document_id) REFERENCES health_documents(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_imaging_files_study ON imaging_study_files(health_document_id, sequence);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_imaging_files_study_hash ON imaging_study_files(health_document_id, sha256);
+
+-- Durable, serial DICOM ingestion. The archive path is private staging state and
+-- is removed at every terminal outcome. Public projections never select it.
+CREATE TABLE IF NOT EXISTS dicom_import_jobs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  status TEXT NOT NULL DEFAULT 'queued',       -- queued | running | done | failed
+  source_mime TEXT NOT NULL,
+  staging_path TEXT,
+  source_bytes INTEGER NOT NULL,
+  target_study_id INTEGER,
+  analyze INTEGER NOT NULL DEFAULT 0,
+  entries_seen INTEGER NOT NULL DEFAULT 0,
+  instances_indexed INTEGER NOT NULL DEFAULT 0,
+  studies_created INTEGER NOT NULL DEFAULT 0,
+  warnings_json TEXT,
+  result_json TEXT,
+  error_code TEXT,
+  FOREIGN KEY(target_study_id) REFERENCES health_documents(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_dicom_jobs_status ON dicom_import_jobs(status, id);
+
+CREATE TABLE IF NOT EXISTS dicom_series (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  health_document_id INTEGER NOT NULL,
+  study_instance_uid TEXT NOT NULL,
+  series_instance_uid TEXT NOT NULL,
+  modality TEXT,
+  series_number INTEGER,
+  study_date TEXT,
+  study_description TEXT,
+  description TEXT,
+  body_part TEXT,
+  laterality TEXT,
+  frame_of_reference_uid TEXT,
+  patient_fingerprint TEXT,
+  instance_count INTEGER NOT NULL DEFAULT 0,
+  frame_count INTEGER NOT NULL DEFAULT 0,
+  preview_support_reason TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(health_document_id, series_instance_uid),
+  FOREIGN KEY(health_document_id) REFERENCES health_documents(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_dicom_series_study ON dicom_series(health_document_id, series_number, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_dicom_series_uid ON dicom_series(series_instance_uid);
+
+CREATE TABLE IF NOT EXISTS dicom_instances (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  series_id INTEGER NOT NULL,
+  imaging_study_file_id INTEGER NOT NULL UNIQUE,
+  sop_class_uid TEXT NOT NULL,
+  sop_instance_uid TEXT NOT NULL,
+  transfer_syntax_uid TEXT NOT NULL,
+  instance_number INTEGER,
+  number_of_frames INTEGER NOT NULL DEFAULT 1,
+  rows INTEGER,
+  columns INTEGER,
+  samples_per_pixel INTEGER,
+  photometric_interpretation TEXT,
+  bits_allocated INTEGER,
+  bits_stored INTEGER,
+  high_bit INTEGER,
+  pixel_representation INTEGER,
+  planar_configuration INTEGER,
+  rescale_slope REAL,
+  rescale_intercept REAL,
+  window_center REAL,
+  window_width REAL,
+  pixel_spacing TEXT,
+  image_position TEXT,
+  image_orientation TEXT,
+  slice_location REAL,
+  frame_of_reference_uid TEXT,
+  body_part TEXT,
+  laterality TEXT,
+  burned_in_annotation TEXT,
+  source_deidentification_claim TEXT,
+  preview_support_reason TEXT,
+  preview_path TEXT,
+  sha256 TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(series_id, sop_instance_uid),
+  FOREIGN KEY(series_id) REFERENCES dicom_series(id) ON DELETE CASCADE,
+  FOREIGN KEY(imaging_study_file_id) REFERENCES imaging_study_files(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_dicom_instances_series ON dicom_instances(series_id, instance_number, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_dicom_instances_sop_uid ON dicom_instances(sop_instance_uid);
+
+-- Runtime-only cryptographic material. SQLite snapshots preserve this table;
+-- JSON/public exports never select it.
+CREATE TABLE IF NOT EXISTS private_runtime_secrets (
+  key TEXT PRIMARY KEY,
+  value BLOB NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Whole-picture health reviews: an agent's longevity/wellness read over the
 -- athlete's full context + aggregated marker history (see repo.getMarkerHistory).
 -- parsed_json is the coerced/clamped review contract (headline, wins, watchlist,

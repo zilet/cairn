@@ -305,7 +305,9 @@ async function runAuthSmoke(ctx) {
       authorization: `Bearer ${exchanged.body.ingest_token}`,
       "content-type": "application/json",
     };
-    const date = new Date().toISOString().slice(0, 10);
+    // Use a guaranteed past date: UTC may already be tomorrow while Cairn's
+    // configured local calendar is still today, and future metrics are rejected.
+    const date = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
     const ingested = await getJson(base, "/api/health-metrics", {
       method: "POST",
       headers: scopedHeaders,

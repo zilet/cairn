@@ -662,6 +662,19 @@ function extractPromptImagePaths(prompt: string, sourceEnv: NodeJS.ProcessEnv = 
       /* ignore malformed paths */
     }
   }
+  if (prompt.includes("CAIRN_AGENT_DATA_FILES:")) {
+    const relativeRe = /"relative_path":"(uploads\/[a-zA-Z0-9._-]+)"/g;
+    for (const match of prompt.matchAll(relativeRe)) {
+      try {
+        const p = path.resolve(dataDir, match[1]);
+        if (!p.startsWith(dataDir + path.sep) || seen.has(p) || !UPLOAD_IMAGE_RE.test(p) || !fs.existsSync(p)) continue;
+        seen.add(p);
+        out.push(p);
+      } catch {
+        /* ignore malformed relative upload paths */
+      }
+    }
+  }
   return out.slice(0, 8);
 }
 

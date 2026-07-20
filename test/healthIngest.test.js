@@ -119,6 +119,9 @@ test("buildHealthIngestPrompt preserves non-marker MyChart facts separately", ()
   assert.match(prompt, /procedures\/surgeries/i);
   assert.match(prompt, /encounters\/visits/i);
   assert.match(prompt, /Do NOT force non-measurement sections into markers/);
+  assert.match(prompt, /"imaging_studies_complete": true/);
+  assert.match(prompt, /entire source was successfully read/i);
+  assert.match(prompt, /empty imaging_studies array never authorizes removal/i);
 });
 
 test("replaceHealthPanels preserves bounded clinical facts on derived records", () => {

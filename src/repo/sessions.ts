@@ -13,7 +13,7 @@ import { activitySportWhere, canonicalEnduranceSport } from "./endurance-sports.
 import { MUSCLE_LANDMARKS } from "./exercise-canon.js";
 import { effectiveVolumeByGroup, type VolumeSet } from "./exercise-variations.js";
 import { findExercise, findOrCreateExercise, listExercises } from "./exercises.js";
-import { listContextEvents, listHealthDocuments, listHealthReviews } from "./health.js";
+import { listContextEvents, listHealthReviews } from "./health.js";
 import { invalidateDayRead } from "./intelligence.js";
 import { listMemory, listSuggestions } from "./memory.js";
 import { listFoodNotes, listMealPlans } from "./nutrition.js";
@@ -1587,7 +1587,42 @@ export function exportAll() {
     bodyweight: listWeight(100000),
     meal_plans: listMealPlans(100000),
     food_notes: listFoodNotes(100000),
-    health_documents: listHealthDocuments(100000),
+    health_documents: (
+      db
+        .prepare(
+          `SELECT id, created_at, kind, doc_date, original_name, mime, parsed_json, summary,
+                enrichment_status, source_doc_id
+           FROM health_documents ORDER BY COALESCE(doc_date, substr(created_at,1,10)) DESC, id DESC`
+        )
+        .all() as any[]
+    ).map(({ parsed_json, ...row }) => ({ ...row, parsed: parseExportJson(parsed_json) })),
+    imaging_study_files: db
+      .prepare(
+        `SELECT id, health_document_id, sequence, created_at, original_name, mime, size_bytes, sha256, source_kind,
+              dicom_study_uid, dicom_series_uid, dicom_sop_uid
+         FROM imaging_study_files ORDER BY health_document_id, sequence, id`
+      )
+      .all(),
+    dicom_series: db
+      .prepare(
+        `SELECT id, health_document_id, study_instance_uid, series_instance_uid, modality, series_number,
+                study_date, study_description, description, body_part, laterality, frame_of_reference_uid, instance_count, frame_count,
+                preview_support_reason, created_at
+           FROM dicom_series ORDER BY health_document_id, COALESCE(series_number,2147483647), id`
+      )
+      .all(),
+    dicom_instances: db
+      .prepare(
+        `SELECT id, series_id, imaging_study_file_id, sop_class_uid, sop_instance_uid, transfer_syntax_uid,
+                instance_number, number_of_frames, rows, columns, samples_per_pixel, photometric_interpretation,
+                bits_allocated, bits_stored, high_bit, pixel_representation, planar_configuration,
+                rescale_slope, rescale_intercept, window_center, window_width, pixel_spacing, image_position,
+                image_orientation, slice_location, frame_of_reference_uid, body_part, laterality,
+                burned_in_annotation, source_deidentification_claim, preview_support_reason, sha256, size_bytes,
+                created_at
+           FROM dicom_instances ORDER BY series_id, COALESCE(instance_number,2147483647), id`
+      )
+      .all(),
     health_reviews: listHealthReviews(100000),
     context_events: listContextEvents(),
     // Source-agnostic wearable rows (Apple Health / Oura / manual) are first-class

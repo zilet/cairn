@@ -87,6 +87,9 @@ export function queryTokenAllowedPath(p: string, method = "GET"): boolean {
   // and route-local, so query-token auth is the browser-compatible path.
   if (/^\/api\/chat-images\/[0-9a-f-]+\.(?:jpg|png|webp|gif|heic|heif)$/i.test(p)) return true;
   if (/^\/api\/health-docs\/\d+\/file$/.test(p)) return true;
+  // Imaging attachments render in <img>/<iframe> elements. Both ownership ids
+  // must be exact positive decimal segments; broader health-doc paths stay denied.
+  if (/^\/api\/health-docs\/[1-9]\d*\/imaging-files\/[1-9]\d*$/.test(p)) return true;
   if (/^\/api\/chat\/turns\/\d+\/stream$/.test(p)) return true;
   if (/^\/api\/agent-jobs\/\d+\/stream$/.test(p)) return true;
   // Background-enrichment status streams (EventSource — no header): the PWA watches

@@ -3,6 +3,7 @@ import { emitBrainEvent } from "../brainEvents.js";
 import { canonicalMarker } from "./marker-canon.js";
 import { getGarminCoachSummary, hydrateJson, jsonOrNull, listActivities } from "./activities.js";
 import { cleanClinicalFacts, getLatestHealthReview, hydrateHealthDoc, listContextEvents } from "./health.js";
+import { imagingForCoach } from "./imaging.js";
 import { dayRead, getCachedDayRead, invalidateDayRead } from "./intelligence.js";
 import { blockForCoach, getActiveBlock } from "./program-blocks.js";
 import { getProgramState, type ProgramState } from "./program-state.js";
@@ -676,6 +677,7 @@ function buildHealthSlice(
 ): Pick<
   CoachContext,
   | "health"
+  | "imaging"
   | "health_review"
   | "directives"
   | "health_focus"
@@ -689,6 +691,9 @@ function buildHealthSlice(
   const { recovery, healthFocusView, bodyCompositionView } = signals;
   return {
     health: healthForCoach(),
+    // A compact study index plus a bounded detailed recent slice. Imaging stays
+    // separate from lab summaries so measurements never enter marker reasoning.
+    imaging: imagingForCoach(),
     health_review: healthReviewForCoach(),
     directives: directivesForCoach(), // cross-domain consequences of flagged findings (condensed, bounded)
     health_focus: healthFocusView, // the TIERED, deduped priorities (act-now/track) — so coaching leads with what matters most, not a flat directive flood

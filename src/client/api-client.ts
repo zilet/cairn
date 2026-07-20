@@ -501,6 +501,19 @@ function api<Path extends string>(p: Path, opts: CairnApiOptions = {}): Promise<
     });
 }
 
+// Binary API reads share the normal token/time-zone headers but intentionally do
+// not enter the JSON coalescer or any persistent browser cache.
+async function apiBinary(p: string, opts: RequestInit = {}): Promise<{ body: ArrayBuffer; headers: Headers }> {
+  const headers = new Headers(opts.headers || {});
+  const token = authToken();
+  if (token) headers.set("X-Cairn-Token", token);
+  const tz = deviceTimeZone();
+  if (tz) headers.set("X-Cairn-TZ", tz);
+  const response = await fetch(`/api${p}`, { ...opts, headers, cache: "no-store" });
+  if (!response.ok) throw new Error(`Binary request failed (${response.status})`);
+  return { body: await response.arrayBuffer(), headers: response.headers };
+}
+
 // ---------- offline hairline ----------
 // A calm, non-alarming banner that rides just under the header whenever a fetch
 // fails or the browser reports offline. It clears itself the moment any request
@@ -1090,6 +1103,7 @@ Object.assign(globalThis, {
   withToken,
   deviceTimeZone,
   api,
+  apiBinary,
   setOffline,
   CairnOutbox: CAIRN_OUTBOX,
   CairnApiCache: CAIRN_API_CACHE,

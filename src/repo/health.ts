@@ -1,8 +1,10 @@
+import fs from "node:fs";
 import { db } from "../db.js";
 import { emitBrainEvent } from "../brainEvents.js";
 import { emitEnrichTransition } from "../enrichBus.js";
 import { inferHealthDocumentKind, normalizeHealthDocumentKind } from "../healthDocumentKinds.js";
 import { activeTimeZone } from "../tz.js";
+import { safeUploadPath } from "../uploadPaths.js";
 import { invalidateDayRead } from "./intelligence.js";
 import { daysBetweenISO, localDateISO } from "./shared.js";
 import { listExercises } from "./exercises.js";
@@ -16,7 +18,15 @@ import { getPlan } from "./plan.js";
 import { getProfile, listWeight } from "./profile.js";
 import { matchClinicalReferenceRange } from "./reference-ranges.js";
 import { getSettings, pickHealthAgentOrder } from "./settings.js";
-import { type OptimalZone, applyReviewDirectives, isNonClinicalMarker, markerGroup, matchOptimalZone, optimalDistance, presentGroups } from "./propagation.js";
+import {
+  type OptimalZone,
+  applyReviewDirectives,
+  isNonClinicalMarker,
+  markerGroup,
+  matchOptimalZone,
+  optimalDistance,
+  presentGroups,
+} from "./propagation.js";
 
 // A modern comprehensive panel (e.g. Function Health) lists 100+ markers. Cap
 // generously so a complete transcription is never silently clipped, while still
@@ -52,7 +62,9 @@ export function cleanClinicalFacts(raw: any, max = MAX_CLINICAL_FACTS_PER_DOC): 
     const status = capStr(f.status, 80);
     const detail = capStr(f.detail, 500);
     const source = capStr(f.source, 160);
-    const key = [kind, date ?? "", name.toLowerCase(), (status ?? "").toLowerCase(), (detail ?? "").toLowerCase()].join("|");
+    const key = [kind, date ?? "", name.toLowerCase(), (status ?? "").toLowerCase(), (detail ?? "").toLowerCase()].join(
+      "|"
+    );
     if (seen.has(key)) continue;
     seen.add(key);
     out.push({
@@ -125,7 +137,8 @@ function emitHealthDocumentSignals(row: any, changed?: { markers?: boolean; medi
 // wins), with clearly inactive/discontinued entries dropped. Names are returned verbatim
 // for the connected brain to reason WITH (e.g. an off-optimal marker despite a medication
 // that targets it). INFORMATIONAL, never a prescription.
-const INACTIVE_MED_STATUS = /\b(discontinued|inactive|stopped|resolved|completed|historical|no longer|d\/c'?d|expired|held)\b/i;
+const INACTIVE_MED_STATUS =
+  /\b(discontinued|inactive|stopped|resolved|completed|historical|no longer|d\/c'?d|expired|held)\b/i;
 export function activeMedications(): Array<{ name: string; status: string | null; date: string | null }> {
   const rows = db
     .prepare(
@@ -136,7 +149,11 @@ export function activeMedications(): Array<{ name: string; status: string | null
   const byName = new Map<string, { name: string; status: string | null; date: string | null }>();
   for (const row of rows) {
     let parsed: any = null;
-    try { parsed = row.parsed_json ? JSON.parse(row.parsed_json) : null; } catch { continue; }
+    try {
+      parsed = row.parsed_json ? JSON.parse(row.parsed_json) : null;
+    } catch {
+      continue;
+    }
     for (const f of cleanClinicalFacts(parsed?.clinical_facts, 500)) {
       if (f.kind !== "medication") continue;
       if (f.status && INACTIVE_MED_STATUS.test(f.status)) continue;
@@ -148,9 +165,14 @@ export function activeMedications(): Array<{ name: string; status: string | null
 }
 
 function isNonResultMarkerValue(value: unknown): boolean {
-  const v = String(value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+  const v = String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
   if (!v) return true;
-  return /^(?:tnp(?:\s+index)?|test not performed|not performed|not tested|not done|cancelled|canceled|not run)$/i.test(v);
+  return /^(?:tnp(?:\s+index)?|test not performed|not performed|not tested|not done|cancelled|canceled|not run)$/i.test(
+    v
+  );
 }
 
 function isAnthropometricMarkerKey(key: string): boolean {
@@ -178,7 +200,10 @@ export function estimateMarkerCandidates(text: string): number {
     const line = rawLine.trim();
     if (!line) continue;
     // A value line: starts with a number, sign, comparator or decimal point…
-    if (/^[<>≤≥=]?\s*[+-]?(\d|\.\d)/.test(line)) { n++; continue; }
+    if (/^[<>≤≥=]?\s*[+-]?(\d|\.\d)/.test(line)) {
+      n++;
+      continue;
+    }
     // …or is a short qualitative result (not a flag word, not a sentence).
     if (line.length <= 24 && QUALITATIVE_RESULT.test(line)) n++;
   }
@@ -207,41 +232,41 @@ function clampInt(value: any, min: number, max: number): number | null {
 // so the floor's real job is rejecting an impossible NEGATIVE; ceilings sit far beyond
 // the worst real value, so only a typo / unit error trips them.
 const MARKER_PLAUSIBILITY: Record<string, [number, number]> = {
-  "ApoB": [0, 400],
+  ApoB: [0, 400],
   "LDL-C": [0, 600],
   "Non-HDL-C": [0, 700],
-  "Triglycerides": [0, 15000],
+  Triglycerides: [0, 15000],
   "HDL-C": [0, 250],
   "Total cholesterol": [0, 900],
   "hs-CRP": [0, 600],
-  "Homocysteine": [0, 300],
-  "HbA1c": [0, 25],
+  Homocysteine: [0, 300],
+  HbA1c: [0, 25],
   "Fasting glucose": [0, 3000],
   "Fasting insulin": [0, 2000],
-  "Ferritin": [0, 100000],
+  Ferritin: [0, 100000],
   "Vitamin D": [0, 400],
-  "eGFR": [0, 250],
-  "Creatinine": [0, 50],
-  "ALT": [0, 20000],
-  "AST": [0, 20000],
-  "GGT": [0, 20000],
-  "TSH": [0, 500],
+  eGFR: [0, 250],
+  Creatinine: [0, 50],
+  ALT: [0, 20000],
+  AST: [0, 20000],
+  GGT: [0, 20000],
+  TSH: [0, 500],
   "Free T3": [0, 60],
   "Free T4": [0, 30],
   "Vitamin B12": [0, 50000],
-  "Folate": [0, 200],
-  "Magnesium": [0, 20],
-  "Testosterone": [0, 5000],
-  "Estradiol": [0, 10000],
+  Folate: [0, 200],
+  Magnesium: [0, 20],
+  Testosterone: [0, 5000],
+  Estradiol: [0, 10000],
   "Lp(a)": [0, 2000],
   "Uric acid": [0, 50],
   "Body fat": [0, 80],
-  "Mercury": [0, 1000],
+  Mercury: [0, 1000],
   "Systolic BP": [30, 350],
   "Diastolic BP": [15, 250],
-  "VO2max": [0, 120],
+  VO2max: [0, 120],
   "Resting HR": [10, 300],
-  "HRV": [0, 600],
+  HRV: [0, 600],
 };
 
 export interface MarkerPlausibility {
@@ -278,8 +303,9 @@ export function plausibleMarkerValue(name: string, value: unknown, unit?: string
   if (unit != null && String(unit).trim()) {
     const norm = normalizeMarkerReading(name, value, String(unit), zone);
     if (norm && typeof norm.value === "number") {
-      if (norm.unit_mismatch) comparable = false; // couldn't safely convert → don't magnitude-judge
-      else v = norm.value;                         // expected-unit value (possibly converted)
+      if (norm.unit_mismatch)
+        comparable = false; // couldn't safely convert → don't magnitude-judge
+      else v = norm.value; // expected-unit value (possibly converted)
     }
   }
 
@@ -287,8 +313,14 @@ export function plausibleMarkerValue(name: string, value: unknown, unit?: string
   // Sign is universally meaningful across every family here (all are non-negative).
   if (num < 0 || v < 0) return { plausible: false, reason: `${zone.label} can't be negative (${num})`, value: num };
   if (!comparable) return { plausible: true, reason: null, value: num };
-  if (v < floor) return { plausible: false, reason: `${zone.label} ${roundForMsg(v)} sits below any physiologic value`, value: num };
-  if (v > ceil) return { plausible: false, reason: `${zone.label} ${roundForMsg(v)} exceeds any physiologic value — likely a unit or transcription error`, value: num };
+  if (v < floor)
+    return { plausible: false, reason: `${zone.label} ${roundForMsg(v)} sits below any physiologic value`, value: num };
+  if (v > ceil)
+    return {
+      plausible: false,
+      reason: `${zone.label} ${roundForMsg(v)} exceeds any physiologic value — likely a unit or transcription error`,
+      value: num,
+    };
   return { plausible: true, reason: null, value: num };
 }
 
@@ -349,10 +381,12 @@ export function addBloodPressureReading(input: {
   note?: string | null;
 }) {
   const row = normalizeBpInput(input);
-  const info = db.prepare(
-    `INSERT INTO blood_pressure_readings (measured_at, systolic, diastolic, pulse, source, position, note)
+  const info = db
+    .prepare(
+      `INSERT INTO blood_pressure_readings (measured_at, systolic, diastolic, pulse, source, position, note)
      VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).run(row.measured_at, row.systolic, row.diastolic, row.pulse, row.source, row.position, row.note);
+    )
+    .run(row.measured_at, row.systolic, row.diastolic, row.pulse, row.source, row.position, row.note);
   bumpMarkerHistoryVersion(); // BP readings feed getMarkerHistory's Systolic/Diastolic/Pulse series
   const inserted = db.prepare(`SELECT * FROM blood_pressure_readings WHERE id = ?`).get(info.lastInsertRowid) as any;
   emitBrainEvent({
@@ -427,22 +461,40 @@ export function bpRead(rows: any[]): {
   category: BpCategory | null;
   label: string;
   tone: "strong" | "steady" | "watch";
-  trajectory: { from: { systolic: number; diastolic: number; at: string | null }; to: { systolic: number; diastolic: number; at: string | null }; dir: "improving" | "rising" | "holding" } | null;
+  trajectory: {
+    from: { systolic: number; diastolic: number; at: string | null };
+    to: { systolic: number; diastolic: number; at: string | null };
+    dir: "improving" | "rising" | "holding";
+  } | null;
   read: string;
 } {
-  const list = Array.isArray(rows) ? rows.filter((r) => r && Number.isFinite(Number(r.systolic)) && Number.isFinite(Number(r.diastolic))) : [];
+  const list = Array.isArray(rows)
+    ? rows.filter((r) => r && Number.isFinite(Number(r.systolic)) && Number.isFinite(Number(r.diastolic)))
+    : [];
   const latest = list[0] ?? null;
-  if (!latest) return { latest: null, category: null, label: "No readings yet", tone: "watch", trajectory: null, read: "Log a couple of resting home readings and Cairn can read the pattern." };
+  if (!latest)
+    return {
+      latest: null,
+      category: null,
+      label: "No readings yet",
+      tone: "watch",
+      trajectory: null,
+      read: "Log a couple of resting home readings and Cairn can read the pattern.",
+    };
   const sys = Number(latest.systolic);
   const dia = Number(latest.diastolic);
   const category: BpCategory =
     sys < 90 || dia < 60 ? "low" : sys >= 130 || dia >= 80 ? "high" : sys >= 120 ? "elevated" : "optimal";
   const label =
-    category === "optimal" ? "in a calm, optimal home range" :
-    category === "elevated" ? "a touch above the optimal target" :
-    category === "high" ? "above the calm home target" :
-    "running on the low side";
-  const tone: "strong" | "steady" | "watch" = category === "optimal" ? "strong" : category === "elevated" ? "steady" : "watch";
+    category === "optimal"
+      ? "in a calm, optimal home range"
+      : category === "elevated"
+        ? "a touch above the optimal target"
+        : category === "high"
+          ? "above the calm home target"
+          : "running on the low side";
+  const tone: "strong" | "steady" | "watch" =
+    category === "optimal" ? "strong" : category === "elevated" ? "steady" : "watch";
 
   // Trajectory: the most striking honest move — the highest prior systolic vs the latest.
   let trajectory: any = null;
@@ -452,11 +504,23 @@ export function bpRead(rows: any[]): {
     const priorMin = prior.reduce((a, b) => (Number(b.systolic) < Number(a.systolic) ? b : a));
     const at = (r: any) => (r?.measured_at ? String(r.measured_at).replace(" ", "T") : null);
     if (sys <= Number(priorMax.systolic) - 10) {
-      trajectory = { from: { systolic: Number(priorMax.systolic), diastolic: Number(priorMax.diastolic), at: at(priorMax) }, to: { systolic: sys, diastolic: dia, at: at(latest) }, dir: "improving" };
+      trajectory = {
+        from: { systolic: Number(priorMax.systolic), diastolic: Number(priorMax.diastolic), at: at(priorMax) },
+        to: { systolic: sys, diastolic: dia, at: at(latest) },
+        dir: "improving",
+      };
     } else if (sys >= Number(priorMin.systolic) + 10) {
-      trajectory = { from: { systolic: Number(priorMin.systolic), diastolic: Number(priorMin.diastolic), at: at(priorMin) }, to: { systolic: sys, diastolic: dia, at: at(latest) }, dir: "rising" };
+      trajectory = {
+        from: { systolic: Number(priorMin.systolic), diastolic: Number(priorMin.diastolic), at: at(priorMin) },
+        to: { systolic: sys, diastolic: dia, at: at(latest) },
+        dir: "rising",
+      };
     } else {
-      trajectory = { from: { systolic: Number(priorMax.systolic), diastolic: Number(priorMax.diastolic), at: at(priorMax) }, to: { systolic: sys, diastolic: dia, at: at(latest) }, dir: "holding" };
+      trajectory = {
+        from: { systolic: Number(priorMax.systolic), diastolic: Number(priorMax.diastolic), at: at(priorMax) },
+        to: { systolic: sys, diastolic: dia, at: at(latest) },
+        dir: "holding",
+      };
     }
   }
 
@@ -505,7 +569,11 @@ function expandBloodPressureMarker(rawName: string, marker: any): any[] {
 export function hydrateHealthDoc(row: any) {
   if (!row) return row;
   let parsed: any = null;
-  try { parsed = row.parsed_json ? JSON.parse(row.parsed_json) : null; } catch { parsed = null; }
+  try {
+    parsed = row.parsed_json ? JSON.parse(row.parsed_json) : null;
+  } catch {
+    parsed = null;
+  }
   return { ...row, parsed };
 }
 
@@ -513,8 +581,40 @@ export function hydrateHealthDoc(row: any) {
 // file is served via a dedicated streaming endpoint, not exposed as a path.
 function publicHealthDoc(row: any) {
   if (!row) return row;
-  const { file_path, ...rest } = hydrateHealthDoc(row);
-  return { ...rest, has_file: !!file_path };
+  const { file_path, parsed_json: _parsedJson, ...rest } = hydrateHealthDoc(row);
+  if (row.kind === "imaging" && rest.parsed?.imaging_study) {
+    const imaging = structuredClone(rest.parsed.imaging_study);
+    if (imaging.study) {
+      delete imaging.study.accession;
+      delete imaging.study.study_instance_uid;
+    }
+    if (imaging.provenance) delete imaging.provenance.source_hash;
+    const series = Array.isArray(imaging.dicom?.series) ? imaging.dicom.series : [];
+    imaging.dicom = {
+      series_count: series.length,
+      instance_count: series.reduce((sum: number, item: any) => sum + Number(item?.instance_count ?? 0), 0),
+      frame_count: series.reduce((sum: number, item: any) => sum + Number(item?.frame_count ?? 0), 0),
+      preview_limitations: [...new Set(series.map((item: any) => item?.preview_support_reason).filter(Boolean))].slice(
+        0,
+        8
+      ),
+    };
+    rest.parsed = { ...rest.parsed, imaging_study: imaging };
+  }
+  const study_files =
+    row.kind === "imaging"
+      ? (
+          db
+            .prepare(
+              `SELECT id, health_document_id, sequence, created_at,
+              CASE WHEN source_kind='dicom' THEN NULL ELSE original_name END AS original_name,
+              mime, size_bytes, source_kind
+         FROM imaging_study_files WHERE health_document_id = ? ORDER BY sequence, id`
+            )
+            .all(row.id) as any[]
+        ).map((file) => ({ ...file, has_file: true }))
+      : undefined;
+  return { ...rest, has_file: !!file_path, ...(study_files ? { study_files } : {}) };
 }
 
 export interface HealthDocInput {
@@ -578,7 +678,7 @@ export interface HealthPanelInput {
 // pointing back at `sourceId`; the binary stays only on the source row. Returns
 // the rows created. `original_name` is carried through for provenance.
 export function replaceHealthPanels(sourceId: number, panels: HealthPanelInput[], originalName?: string | null) {
-  deleteDerivedHealthDocs(sourceId);
+  deleteDerivedHealthDocs(sourceId, false);
   return insertHealthPanels(sourceId, panels, originalName);
 }
 
@@ -588,18 +688,18 @@ function insertHealthPanels(sourceId: number, panels: HealthPanelInput[], origin
     if (!p || typeof p !== "object") continue;
     const markers = Array.isArray(p.markers)
       ? p.markers
-        .filter((m: any) => m && typeof m === "object")
-        .slice(0, MAX_MARKERS_PER_PANEL)
-        .map((m: any) => ({
-          name: String(m.name ?? "").slice(0, 120),
-          value: typeof m.value === "number" ? m.value : (m.value == null ? null : String(m.value).slice(0, 80)),
-          unit: m.unit == null ? null : String(m.unit).slice(0, 40),
-          flag: ["low", "normal", "high"].includes(m.flag) ? m.flag : null,
-        }))
-        // Drop a physiologically-impossible numeric reading (a transcription typo / unit
-        // error) so it can't poison the connected brain's directives. Conservative — only
-        // CLEAR impossibilities are skipped; qualitative + unknown-family values pass.
-        .filter((m: any) => m.name && plausibleMarkerValue(m.name, m.value, m.unit).plausible)
+          .filter((m: any) => m && typeof m === "object")
+          .slice(0, MAX_MARKERS_PER_PANEL)
+          .map((m: any) => ({
+            name: String(m.name ?? "").slice(0, 120),
+            value: typeof m.value === "number" ? m.value : m.value == null ? null : String(m.value).slice(0, 80),
+            unit: m.unit == null ? null : String(m.unit).slice(0, 40),
+            flag: ["low", "normal", "high"].includes(m.flag) ? m.flag : null,
+          }))
+          // Drop a physiologically-impossible numeric reading (a transcription typo / unit
+          // error) so it can't poison the connected brain's directives. Conservative — only
+          // CLEAR impossibilities are skipped; qualitative + unknown-family values pass.
+          .filter((m: any) => m.name && plausibleMarkerValue(m.name, m.value, m.unit).plausible)
       : [];
     const date = typeof p.doc_date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(p.doc_date) ? p.doc_date : null;
     const summary = p.summary == null ? null : String(p.summary).slice(0, 1000);
@@ -619,7 +719,7 @@ function insertHealthPanels(sourceId: number, panels: HealthPanelInput[], origin
       }),
       doc_date: date,
       original_name: originalName ?? null,
-      file_path: null,             // the binary lives on the source row only
+      file_path: null, // the binary lives on the source row only
       parsed_json: parsed,
       summary,
       enrichment_status: "done",
@@ -630,8 +730,12 @@ function insertHealthPanels(sourceId: number, panels: HealthPanelInput[], origin
   return created;
 }
 
-function deleteDerivedHealthDocs(sourceId: number) {
-  const changes = db.prepare(`DELETE FROM health_documents WHERE source_doc_id = ?`).run(sourceId).changes;
+function deleteDerivedHealthDocs(sourceId: number, includeImaging = true) {
+  // Imaging studies imported from the same MyChart artifact are a separate
+  // derived stream. Replacing dated lab panels must never erase them.
+  const changes = includeImaging
+    ? db.prepare(`DELETE FROM health_documents WHERE source_doc_id = ?`).run(sourceId).changes
+    : db.prepare(`DELETE FROM health_documents WHERE source_doc_id = ? AND kind != 'imaging'`).run(sourceId).changes;
   if (changes) bumpMarkerHistoryVersion();
   return changes;
 }
@@ -643,7 +747,11 @@ function deleteDerivedHealthDocsByType(sourceId: number, type: string) {
   let deleted = 0;
   for (const row of rows) {
     let parsed: any = null;
-    try { parsed = row.parsed_json ? JSON.parse(row.parsed_json) : null; } catch { parsed = null; }
+    try {
+      parsed = row.parsed_json ? JSON.parse(row.parsed_json) : null;
+    } catch {
+      parsed = null;
+    }
     if (String(parsed?.type ?? "") !== type) continue;
     deleted += Number(db.prepare(`DELETE FROM health_documents WHERE id = ?`).run(row.id).changes);
   }
@@ -654,7 +762,12 @@ function deleteDerivedHealthDocsByType(sourceId: number, type: string) {
 // Refresh one deterministic derived stream without disturbing the agent-split
 // lab timeline. Used for CCDA vitals, which are facts adjacent to a MyChart
 // export rather than a replacement for its dated lab panels.
-export function replaceHealthPanelsByType(sourceId: number, type: string, panels: HealthPanelInput[], originalName?: string | null) {
+export function replaceHealthPanelsByType(
+  sourceId: number,
+  type: string,
+  panels: HealthPanelInput[],
+  originalName?: string | null
+) {
   deleteDerivedHealthDocsByType(sourceId, type);
   const typed = (Array.isArray(panels) ? panels : []).map((p) => ({ ...p, type }));
   return insertHealthPanels(sourceId, typed, originalName);
@@ -676,9 +789,24 @@ export function listHealthDocuments(limit = 50) {
   // back to upload time) so a split multi-year import reads as a clean timeline.
   // A 'pending_confirm' draft (a bulk lab pasted in chat, awaiting one-tap confirm)
   // is NOT a record yet — hide it from Records until the user confirms it.
-  return (db
-    .prepare(`SELECT * FROM health_documents WHERE COALESCE(enrichment_status,'') != 'pending_confirm' ORDER BY COALESCE(doc_date, substr(created_at,1,10)) DESC, id DESC LIMIT ?`)
-    .all(limit) as any[]).map(publicHealthDoc);
+  return (
+    db
+      .prepare(
+        `SELECT * FROM health_documents WHERE COALESCE(enrichment_status,'') != 'pending_confirm' ORDER BY COALESCE(doc_date, substr(created_at,1,10)) DESC, id DESC`
+      )
+      .all() as any[]
+  )
+    .filter((row) => {
+      if (row.kind !== "imaging") return true;
+      try {
+        const study = row.parsed_json ? JSON.parse(row.parsed_json)?.imaging_study : null;
+        return !study?.provenance?.record_status || study.provenance.record_status === "current";
+      } catch {
+        return true;
+      }
+    })
+    .slice(0, limit)
+    .map(publicHealthDoc);
 }
 
 // The single source of truth for "newest health document date" — the effective
@@ -687,13 +815,15 @@ export function listHealthDocuments(limit = 50) {
 // to READ whether it's gone stale, so both sides derive the date the same way.
 export function newestHealthDocDate(): string | null {
   try {
-    const row = db.prepare(
-      `SELECT COALESCE(doc_date, substr(created_at, 1, 10)) AS d
+    const row = db
+      .prepare(
+        `SELECT COALESCE(doc_date, substr(created_at, 1, 10)) AS d
          FROM health_documents
         WHERE COALESCE(enrichment_status,'') != 'pending_confirm'
         ORDER BY COALESCE(doc_date, substr(created_at, 1, 10)) DESC, id DESC
         LIMIT 1`
-    ).get() as any;
+      )
+      .get() as any;
     const d = row?.d ? String(row.d).trim().slice(0, 10) : "";
     return d || null;
   } catch {
@@ -708,14 +838,23 @@ export function updateHealthDocFields(
   const before = getHealthDocument(id) as any;
   const sets: string[] = [];
   const vals: any[] = [];
-  if (fields.parsed_json !== undefined) { sets.push("parsed_json = ?"); vals.push(fields.parsed_json != null ? JSON.stringify(fields.parsed_json) : null); }
-  if (fields.summary !== undefined) { sets.push("summary = ?"); vals.push(fields.summary ?? null); }
+  if (fields.parsed_json !== undefined) {
+    sets.push("parsed_json = ?");
+    vals.push(fields.parsed_json != null ? JSON.stringify(fields.parsed_json) : null);
+  }
+  if (fields.summary !== undefined) {
+    sets.push("summary = ?");
+    vals.push(fields.summary ?? null);
+  }
   if (fields.kind !== undefined) {
     const kind = normalizeHealthDocumentKind(fields.kind);
     sets.push("kind = ?");
     vals.push(kind);
   }
-  if (fields.doc_date !== undefined) { sets.push("doc_date = ?"); vals.push(fields.doc_date ?? null); }
+  if (fields.doc_date !== undefined) {
+    sets.push("doc_date = ?");
+    vals.push(fields.doc_date ?? null);
+  }
   if (!sets.length) return getHealthDocument(id);
   vals.push(id);
   db.prepare(`UPDATE health_documents SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
@@ -757,7 +896,7 @@ export interface ConfirmLabResult {
   ok: boolean;
   reason?: string;
   doc?: any;
-  enqueue?: boolean;   // caller should enqueue the health enrich job (reliable path)
+  enqueue?: boolean; // caller should enqueue the health enrich job (reliable path)
   committed?: boolean; // markers were committed inline (graceful degrade)
 }
 
@@ -775,8 +914,24 @@ export function confirmPendingLab(id: number, opts?: { enrichOn?: boolean; hasAg
     // Already confirmed / not a draft — idempotent success, nothing to do.
     return { ok: true, doc: getHealthDocument(id), enqueue: false, committed: false };
   }
-  const enrichOn = opts?.enrichOn ?? (() => { try { return !!getSettings().enrich_enabled; } catch { return false; } })();
-  const hasAgent = opts?.hasAgent ?? (() => { try { return pickHealthAgentOrder().length > 0; } catch { return false; } })();
+  const enrichOn =
+    opts?.enrichOn ??
+    (() => {
+      try {
+        return !!getSettings().enrich_enabled;
+      } catch {
+        return false;
+      }
+    })();
+  const hasAgent =
+    opts?.hasAgent ??
+    (() => {
+      try {
+        return pickHealthAgentOrder().length > 0;
+      } catch {
+        return false;
+      }
+    })();
   if (labConfirmCanTranscribe(enrichOn, hasAgent)) {
     setHealthDocEnrichStatus(id, "pending");
     return { ok: true, doc: getHealthDocument(id), enqueue: true, committed: false };
@@ -784,14 +939,18 @@ export function confirmPendingLab(id: number, opts?: { enrichOn?: boolean; hasAg
   // Graceful degrade: no transcriber reachable → commit the chat agent's inline markers
   // (better than dropping them). Coerce/clamp + plausibility-filter like insertHealthPanels.
   let parsed: any = null;
-  try { parsed = row.parsed_json ? JSON.parse(row.parsed_json) : null; } catch { parsed = null; }
+  try {
+    parsed = row.parsed_json ? JSON.parse(row.parsed_json) : null;
+  } catch {
+    parsed = null;
+  }
   const rawMarkers = Array.isArray(parsed?.pending_markers) ? parsed.pending_markers : [];
   const markers = rawMarkers
     .filter((m: any) => m && typeof m === "object")
     .slice(0, MAX_MARKERS_PER_PANEL)
     .map((m: any) => ({
       name: String(m.name ?? "").slice(0, 120),
-      value: typeof m.value === "number" ? m.value : (m.value == null ? null : String(m.value).slice(0, 80)),
+      value: typeof m.value === "number" ? m.value : m.value == null ? null : String(m.value).slice(0, 80),
       unit: m.unit == null ? null : String(m.unit).slice(0, 40),
       flag: ["low", "normal", "high"].includes(m.flag) ? m.flag : null,
     }))
@@ -805,8 +964,26 @@ export function confirmPendingLab(id: number, opts?: { enrichOn?: boolean; hasAg
 }
 
 export function deleteHealthDocument(id: number) {
+  const existingRaw = getHealthDocumentRaw(id) as any;
   const existing = getHealthDocument(id) as any;
   const derived = db.prepare(`SELECT * FROM health_documents WHERE source_doc_id = ?`).all(id) as any[];
+  const derivedImagingFiles = db
+    .prepare(
+      `SELECT f.file_path
+       FROM imaging_study_files f
+       JOIN health_documents d ON d.id = f.health_document_id
+      WHERE d.source_doc_id = ? AND d.kind = 'imaging'`
+    )
+    .all(id) as any[];
+  const derivedDicomPreviews = db
+    .prepare(
+      `SELECT i.preview_path AS file_path
+       FROM dicom_instances i
+       JOIN dicom_series s ON s.id=i.series_id
+       JOIN health_documents d ON d.id=s.health_document_id
+      WHERE d.source_doc_id=? AND d.kind='imaging' AND i.preview_path IS NOT NULL`
+    )
+    .all(id) as any[];
   const affectedMeasuredRmr = [existing, ...derived].some((row) => row?.kind === "metabolic_test");
   const relatedState = [existing, ...derived].reduce(
     (state, row) => {
@@ -815,16 +992,59 @@ export function deleteHealthDocument(id: number) {
     },
     { markers: false, medications: false }
   );
-  // Deleting a source upload takes its derived dated panels with it (they have
-  // no binary of their own and are meaningless without the source).
-  const derivedDeleted = deleteDerivedHealthDocs(id);
-  const deleted = db.prepare(`DELETE FROM health_documents WHERE id = ?`).run(id).changes;
+  // Delete every owned file before its ownership row. If the filesystem refuses,
+  // leave the DB state discoverable and return an explicit failure instead of
+  // silently orphaning PHI after a successful-looking record deletion.
+  let derivedFilesDeleted = 0;
+  const ownedPaths: Array<{ path: unknown; derived: boolean; recursive?: boolean }> = [
+    ...derivedImagingFiles.map((file) => ({ path: file.file_path, derived: true })),
+    ...derivedDicomPreviews.map((file) => ({ path: file.file_path, derived: true })),
+  ];
+  if (existingRaw?.file_path) {
+    ownedPaths.push({ path: existingRaw.file_path, derived: false });
+    ownedPaths.push({ path: `${existingRaw.file_path}-x`, derived: false, recursive: true });
+  }
+  for (const owned of ownedPaths) {
+    const fp = safeUploadPath(owned.path);
+    if (!fp) {
+      return {
+        deleted: 0,
+        derived: 0,
+        derived_files: derivedFilesDeleted,
+        error: "unsafe owned health-document file path",
+      };
+    }
+    try {
+      fs.rmSync(fp, { recursive: owned.recursive === true, force: true });
+      if (owned.derived) derivedFilesDeleted++;
+    } catch (error: any) {
+      return {
+        deleted: 0,
+        derived: 0,
+        derived_files: derivedFilesDeleted,
+        error: `failed to remove owned health-document file: ${error?.message ?? error}`,
+      };
+    }
+  }
+  let derivedDeleted = 0;
+  let deleted = 0;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    // Deleting a source upload takes its derived dated panels with it (they have
+    // no binary of their own and are meaningless without the source).
+    derivedDeleted = Number(deleteDerivedHealthDocs(id));
+    deleted = Number(db.prepare(`DELETE FROM health_documents WHERE id = ?`).run(id).changes);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
   if (deleted) {
     bumpMarkerHistoryVersion();
     if (affectedMeasuredRmr) syncMeasuredRmrFromHealthDocs();
     emitHealthDocumentSignals(existing ?? { id, doc_date: localDateISO() }, relatedState);
   }
-  return { deleted, derived: derivedDeleted };
+  return { deleted, derived: derivedDeleted, derived_files: derivedFilesDeleted };
 }
 
 // ---------- marker forecasting (least-squares slope → plain-language projection) ----------
@@ -840,8 +1060,8 @@ interface MarkerForecast {
   // worsening = drifting away the bad way, stable = no meaningful drift,
   // null = not enough data / no zone to judge against.
   direction: "improving" | "worsening" | "stable" | null;
-  eta_text: string | null;      // human ETA to reach (or leave) optimal, or null
-  eta_weeks: number | null;     // INTERNAL ordering signal — never surfaced as a grade
+  eta_text: string | null; // human ETA to reach (or leave) optimal, or null
+  eta_weeks: number | null; // INTERNAL ordering signal — never surfaced as a grade
   crossing: "entering" | "leaving" | null; // projected to cross the optimal edge
 }
 
@@ -852,7 +1072,9 @@ interface MarkerForecast {
 // is 'stable'. Matched on the display name, substring, case-insensitive.
 export function isNonTrendingMarker(name?: string | null): boolean {
   if (!name) return false;
-  return /lp\s?\(a\)|lipoprotein\s?\(a\)|apo\s?e\b|apolipoprotein e|mthfr|\bgenotype\b|\bgenetic\b|\bhla\b/i.test(String(name));
+  return /lp\s?\(a\)|lipoprotein\s?\(a\)|apo\s?e\b|apolipoprotein e|mthfr|\bgenotype\b|\bgenetic\b|\bhla\b/i.test(
+    String(name)
+  );
 }
 
 // Ordinary least-squares slope (value per DAY) over ascending (date,value)
@@ -864,8 +1086,12 @@ export function lsqSlopePerDay(points: { date: string; value: number }[]): numbe
   const n = xs.length;
   const mx = xs.reduce((a, b) => a + b, 0) / n;
   const my = ys.reduce((a, b) => a + b, 0) / n;
-  let num = 0, den = 0;
-  for (let i = 0; i < n; i++) { num += (xs[i] - mx) * (ys[i] - my); den += (xs[i] - mx) ** 2; }
+  let num = 0,
+    den = 0;
+  for (let i = 0; i < n; i++) {
+    num += (xs[i] - mx) * (ys[i] - my);
+    den += (xs[i] - mx) ** 2;
+  }
   if (den <= 0) return null;
   return num / den; // value units per day
 }
@@ -922,16 +1148,23 @@ export function forecastMarker(
   let improving: boolean;
   let edge: number | null = null; // the optimal edge it would cross
   if (zone.dir === "high") {
-    improving = weekly < 0;                 // falling = toward optimal
-    edge = hi;                              // crossing the upper edge either way
+    improving = weekly < 0; // falling = toward optimal
+    edge = hi; // crossing the upper edge either way
   } else if (zone.dir === "low") {
-    improving = weekly > 0;                 // rising = toward optimal
+    improving = weekly > 0; // rising = toward optimal
     edge = lo;
   } else {
     // band: judge against the nearer edge it's heading at.
-    if (latest > hi) { improving = weekly < 0; edge = hi; }
-    else if (latest < lo) { improving = weekly > 0; edge = lo; }
-    else { improving = weekly < 0 ? latest <= (lo + hi) / 2 : latest >= (lo + hi) / 2; edge = weekly > 0 ? hi : lo; }
+    if (latest > hi) {
+      improving = weekly < 0;
+      edge = hi;
+    } else if (latest < lo) {
+      improving = weekly > 0;
+      edge = lo;
+    } else {
+      improving = weekly < 0 ? latest <= (lo + hi) / 2 : latest >= (lo + hi) / 2;
+      edge = weekly > 0 ? hi : lo;
+    }
   }
   // ETA to cross the relevant edge, when the slope actually heads there.
   let eta_weeks: number | null = null;
@@ -953,11 +1186,7 @@ export function forecastMarker(
         ? `trending toward optimal, ${when}`
         : `drifting further from optimal, ${when}`;
   } else {
-    eta_text = inside
-      ? "holding within optimal"
-      : improving
-        ? "trending toward optimal"
-        : "drifting away from optimal";
+    eta_text = inside ? "holding within optimal" : improving ? "trending toward optimal" : "drifting away from optimal";
   }
   return { direction, eta_text, eta_weeks, crossing };
 }
@@ -1051,8 +1280,12 @@ function computeMarkerHistory() {
   // so the trend/forecast reads "toward optimal" against the athlete's OWN band, not
   // the male/generic default. Null-safe: a fresh DB profile yields the default.
   const zoneProfile = (() => {
-    try { const p = getProfile(); return p ? { sex: p.sex ?? null, age: p.age ?? null } : null; }
-    catch { return null; }
+    try {
+      const p = getProfile();
+      return p ? { sex: p.sex ?? null, age: p.age ?? null } : null;
+    } catch {
+      return null;
+    }
   })();
 
   interface Reading {
@@ -1075,10 +1308,19 @@ function computeMarkerHistory() {
   }
   const readingValueKey = (value: number | string) => {
     if (typeof value === "number") return String(Math.round(value * 1_000_000) / 1_000_000);
-    return String(value ?? "").trim().toLowerCase();
+    return String(value ?? "")
+      .trim()
+      .toLowerCase();
   };
-  const readingDedupeKey = (r: Reading) => [r.date, readingValueKey(r.value), String(r.unit ?? "").trim().toLowerCase()].join("|");
-  const flagRank = (flag: string | null) => flag === "high" || flag === "low" ? 3 : flag === "normal" ? 2 : 1;
+  const readingDedupeKey = (r: Reading) =>
+    [
+      r.date,
+      readingValueKey(r.value),
+      String(r.unit ?? "")
+        .trim()
+        .toLowerCase(),
+    ].join("|");
+  const flagRank = (flag: string | null) => (flag === "high" || flag === "low" ? 3 : flag === "normal" ? 2 : 1);
   const mergeDuplicateReading = (first: Reading, next: Reading): Reading => ({
     ...first,
     // Prefer the later upload for display/source identity, but keep any extra
@@ -1086,7 +1328,7 @@ function computeMarkerHistory() {
     name: next.name || first.name,
     doc_id: next.doc_id ?? first.doc_id,
     kind: next.kind || first.kind,
-    flag: flagRank(next.flag) > flagRank(first.flag) ? next.flag : first.flag ?? next.flag,
+    flag: flagRank(next.flag) > flagRank(first.flag) ? next.flag : (first.flag ?? next.flag),
     ref_low: first.ref_low ?? next.ref_low,
     ref_high: first.ref_high ?? next.ref_high,
     ref_source: first.ref_source ?? next.ref_source,
@@ -1115,17 +1357,29 @@ function computeMarkerHistory() {
   const byKey = new Map<string, Reading[]>();
 
   for (const d of docs) {
+    // Imaging measurements/findings have their own DiagnosticReport/Observation
+    // path. Even a legacy/malformed imaging row carrying parsed.markers must never
+    // enter lab optimal zones, marker priority, or deterministic directives.
+    if (d.kind === "imaging") continue;
     let parsed: any = null;
-    try { parsed = d.parsed_json ? JSON.parse(d.parsed_json) : null; } catch { parsed = null; }
+    try {
+      parsed = d.parsed_json ? JSON.parse(d.parsed_json) : null;
+    } catch {
+      parsed = null;
+    }
     const markers = Array.isArray(parsed?.markers) ? parsed.markers : [];
     const date = (d.doc_date && String(d.doc_date).trim()) || String(d.created_at ?? "").slice(0, 10);
     for (const m of markers) {
       if (!m || typeof m !== "object") continue;
-      const rawName = String(m.name ?? "").replace(/\s+/g, " ").trim();
+      const rawName = String(m.name ?? "")
+        .replace(/\s+/g, " ")
+        .trim();
       if (!rawName) continue;
       const expanded = expandBloodPressureMarker(rawName, m);
       for (const em of expanded) {
-        const name = String(em.name ?? rawName).replace(/\s+/g, " ").trim();
+        const name = String(em.name ?? rawName)
+          .replace(/\s+/g, " ")
+          .trim();
         if (!name) continue;
         // Drop non-clinical extractions (e.g. an eyeglass Rx pulled from an eye-exam
         // doc) so they never form a marker series — non-destructive, the doc stays.
@@ -1145,7 +1399,8 @@ function computeMarkerHistory() {
         // display name is the curated internal label, while raw source labels stay
         // attached for verification in app/report provenance.
         let flag = ["low", "normal", "high"].includes(em.flag) ? em.flag : null;
-        const sourceUnit = em.unit !== null && em.unit !== undefined && String(em.unit).trim() ? String(em.unit).trim() : null;
+        const sourceUnit =
+          em.unit !== null && em.unit !== undefined && String(em.unit).trim() ? String(em.unit).trim() : null;
         const resolved = canonicalMarkerForReading(name, sourceUnit);
         const key = resolved.key || name.toLowerCase();
         if (isAnthropometricMarkerKey(key)) flag = null;
@@ -1194,7 +1449,13 @@ function computeMarkerHistory() {
   const bpRows = db
     .prepare(`SELECT * FROM blood_pressure_readings ORDER BY measured_at ASC, id ASC LIMIT 1000`)
     .all() as any[];
-  const addBpMarker = (name: "Systolic BP" | "Diastolic BP" | "Pulse", value: any, unit: string, flag: string | null, row: any) => {
+  const addBpMarker = (
+    name: "Systolic BP" | "Diastolic BP" | "Pulse",
+    value: any,
+    unit: string,
+    flag: string | null,
+    row: any
+  ) => {
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) return;
     const key = canonicalMarker(name).key || name.toLowerCase();
@@ -1247,7 +1508,10 @@ function computeMarkerHistory() {
     // Most recent non-null unit seen for this marker.
     let unit: string | null = null;
     for (let i = readings.length - 1; i >= 0; i--) {
-      if (readings[i].unit) { unit = readings[i].unit; break; }
+      if (readings[i].unit) {
+        unit = readings[i].unit;
+        break;
+      }
     }
     const sameUnitReadings = readings.filter((r) => seriesUnitsCompatible(r.unit, unit));
     // Readings in an INCOMPATIBLE unit family are kept out of the trend (we never
@@ -1291,8 +1555,17 @@ function computeMarkerHistory() {
         flag: r.flag,
         doc_id: r.doc_id,
         ...(r.name && r.name !== displayName ? { source_name: r.name } : {}),
-        ...(r.unit_converted ? { source_value: r.source_value ?? null, source_unit: r.source_unit ?? null, unit_converted: true } : {}),
-        ...(r.unit_mismatch ? { source_value: r.source_value ?? r.value, source_unit: r.source_unit ?? r.unit ?? null, unit_mismatch: true, expected_unit: r.expected_unit ?? null } : {}),
+        ...(r.unit_converted
+          ? { source_value: r.source_value ?? null, source_unit: r.source_unit ?? null, unit_converted: true }
+          : {}),
+        ...(r.unit_mismatch
+          ? {
+              source_value: r.source_value ?? r.value,
+              source_unit: r.source_unit ?? r.unit ?? null,
+              unit_mismatch: true,
+              expected_unit: r.expected_unit ?? null,
+            }
+          : {}),
       }))
       .filter((p) => Number.isFinite(p.value));
     // Deterministic trend over the numeric series (ascending by date). n<2 is
@@ -1303,11 +1576,18 @@ function computeMarkerHistory() {
     const zone = last.unit_mismatch ? null : matchOptimalZone(displayName, zoneProfile);
     const sourceReference =
       last.ref_low != null || last.ref_high != null
-        ? { low: last.ref_low ?? null, high: last.ref_high ?? null, source: last.ref_source ?? "source_lab", source_url: last.ref_source_url ?? null }
+        ? {
+            low: last.ref_low ?? null,
+            high: last.ref_high ?? null,
+            source: last.ref_source ?? "source_lab",
+            source_url: last.ref_source_url ?? null,
+          }
         : null;
-    const curatedReference = sourceReference || last.unit_mismatch
-      ? null
-      : matchClinicalReferenceRange(displayName, unit, zoneProfile) ?? matchClinicalReferenceRange(last.name, unit, zoneProfile);
+    const curatedReference =
+      sourceReference || last.unit_mismatch
+        ? null
+        : (matchClinicalReferenceRange(displayName, unit, zoneProfile) ??
+          matchClinicalReferenceRange(last.name, unit, zoneProfile));
     const reference = sourceReference
       ? { low: sourceReference.low, high: sourceReference.high }
       : curatedReference
@@ -1318,8 +1598,8 @@ function computeMarkerHistory() {
       change: number | null;
       span_days: number | null;
       n: number;
-      slope_per_week: number | null;        // least-squares slope, value/week (rounded)
-      projection: string | null;            // PLAIN-LANGUAGE forecast vs optimal — words, no score
+      slope_per_week: number | null; // least-squares slope, value/week (rounded)
+      projection: string | null; // PLAIN-LANGUAGE forecast vs optimal — words, no score
     };
     let forecast: MarkerForecast = { direction: null, eta_text: null, eta_weeks: null, crossing: null };
     if (n < 2) {
@@ -1341,10 +1621,20 @@ function computeMarkerHistory() {
       const projectedMove = slope != null ? Math.abs(slope) * Math.max(1, span_days) : 0;
       const dir: "rising" | "falling" | "stable" | null =
         weekly == null
-          ? (range > 0 && Math.abs(change) < range * 0.05 ? "stable" : change > 0 ? "rising" : change < 0 ? "falling" : "stable")
+          ? range > 0 && Math.abs(change) < range * 0.05
+            ? "stable"
+            : change > 0
+              ? "rising"
+              : change < 0
+                ? "falling"
+                : "stable"
           : projectedMove < Math.max(range * 0.05, 1e-9)
             ? "stable"
-            : weekly > 0 ? "rising" : weekly < 0 ? "falling" : "stable";
+            : weekly > 0
+              ? "rising"
+              : weekly < 0
+                ? "falling"
+                : "stable";
       // Forecast vs the OPTIMAL band — plain-language projection + eta direction.
       forecast = forecastMarker(points, slope, zone);
       // Don't project a confident trend the data can't support:
@@ -1354,7 +1644,11 @@ function computeMarkerHistory() {
       //    ~3 weeks to optimal" off two dots) — keep the raw direction, drop the ETA.
       //  • an implausibly steep slope (>50%/week of the value) won't hold — drop the ETA.
       const nonTrending = isNonTrendingMarker(displayName);
-      const implausibleSlope = weekly != null && Number.isFinite(lastP.value) && lastP.value !== 0 && Math.abs(weekly) > Math.abs(lastP.value) * 0.5;
+      const implausibleSlope =
+        weekly != null &&
+        Number.isFinite(lastP.value) &&
+        lastP.value !== 0 &&
+        Math.abs(weekly) > Math.abs(lastP.value) * 0.5;
       const suppressProjection = nonTrending || n < 3 || implausibleSlope;
       if (nonTrending) forecast = { direction: "stable", eta_text: null, eta_weeks: null, crossing: null };
       else if (suppressProjection) forecast = { direction: null, eta_text: null, eta_weeks: null, crossing: null };
@@ -1381,8 +1675,8 @@ function computeMarkerHistory() {
       // a range for a standard marker, a curated source-backed clinical reference
       // interval may fill it; source_lab always wins over this fallback.
       reference,
-      reference_source: sourceReference ? "source_lab" : curatedReference?.source ?? null,
-      reference_source_url: sourceReference ? null : curatedReference?.source_url ?? null,
+      reference_source: sourceReference ? "source_lab" : (curatedReference?.source ?? null),
+      reference_source_url: sourceReference ? null : (curatedReference?.source_url ?? null),
       latest: toPublicReading(last, true),
       prev: before && seriesUnitsCompatible(before.unit, unit) ? toPublicReading(before) : null,
       trend,
@@ -1414,7 +1708,11 @@ function computeMarkerHistory() {
 function hydrateHealthReview(row: any) {
   if (!row) return null;
   let parsed: any = null;
-  try { parsed = row.parsed_json ? JSON.parse(row.parsed_json) : null; } catch { parsed = null; }
+  try {
+    parsed = row.parsed_json ? JSON.parse(row.parsed_json) : null;
+  } catch {
+    parsed = null;
+  }
   return { ...row, parsed };
 }
 
@@ -1487,14 +1785,20 @@ export function getLatestHealthReview() {
 }
 
 export function listHealthReviews(limit = 10) {
-  return (db.prepare(`SELECT * FROM health_reviews ORDER BY id DESC LIMIT ?`).all(limit) as any[]).map(hydrateHealthReview);
+  return (db.prepare(`SELECT * FROM health_reviews ORDER BY id DESC LIMIT ?`).all(limit) as any[]).map(
+    hydrateHealthReview
+  );
 }
 
 // ---------- context events (life timeline the coach plans around) ----------
 function hydrateContextEvent(row: any) {
   if (!row) return row;
   let meta: any = null;
-  try { meta = row.meta_json ? JSON.parse(row.meta_json) : null; } catch { meta = null; }
+  try {
+    meta = row.meta_json ? JSON.parse(row.meta_json) : null;
+  } catch {
+    meta = null;
+  }
   const { meta_json, ...rest } = row;
   return { ...rest, meta };
 }
@@ -1520,12 +1824,15 @@ const INJURY_WINDOW_BY_SEVERITY: Record<string, number> = { mild: 5, moderate: 1
 const DEFAULT_INJURY_WINDOW_DAYS = 7;
 
 export function defaultInjuryWindow(severity?: string | null): number {
-  const s = String(severity ?? "").trim().toLowerCase();
+  const s = String(severity ?? "")
+    .trim()
+    .toLowerCase();
   return INJURY_WINDOW_BY_SEVERITY[s] ?? DEFAULT_INJURY_WINDOW_DAYS;
 }
 
 export function addContextEvent(input: ContextEventInput) {
-  const kind = input.kind && ["trip", "injury", "life_event", "family_event"].includes(input.kind) ? input.kind : "life_event";
+  const kind =
+    input.kind && ["trip", "injury", "life_event", "family_event"].includes(input.kind) ? input.kind : "life_event";
   // Injuries get an expected healing window so the brain can let them fade: honor an
   // explicit value, else default from severity. Non-injury events stay open-ended.
   let erd: number | null = null;
@@ -1553,7 +1860,11 @@ export function addContextEvent(input: ContextEventInput) {
   // A just-added trip/injury/life event shapes TODAY (ease the load / expect worse
   // sleep / plan around it) — bust the cached Brief so the next open reflects it,
   // from EVERY surface (REST/MCP/chat), not just the chat path.
-  try { invalidateDayRead(); } catch { /* best-effort */ }
+  try {
+    invalidateDayRead();
+  } catch {
+    /* best-effort */
+  }
   bumpTrainingDataVersion(); // an active trip/illness suppresses expenditure confidence
   const row = getContextEvent(Number(info.lastInsertRowid));
   emitBrainEvent({
@@ -1582,7 +1893,9 @@ export function listContextEvents(opts: { activeOnly?: boolean } = {}) {
       )
       .all(today, today) as any[];
   } else {
-    rows = db.prepare(`SELECT * FROM context_events ORDER BY (start_date IS NULL), start_date DESC, id DESC`).all() as any[];
+    rows = db
+      .prepare(`SELECT * FROM context_events ORDER BY (start_date IS NULL), start_date DESC, id DESC`)
+      .all() as any[];
   }
   return rows.map((r) => annotateHealing(hydrateContextEvent(r)));
 }
@@ -1595,7 +1908,8 @@ export function getContextEvent(id: number) {
 export function updateContextEvent(id: number, patch: ContextEventInput) {
   const cur = db.prepare(`SELECT * FROM context_events WHERE id = ?`).get(id) as any;
   if (!cur) return null;
-  const kind = patch.kind && ["trip", "injury", "life_event", "family_event"].includes(patch.kind) ? patch.kind : cur.kind;
+  const kind =
+    patch.kind && ["trip", "injury", "life_event", "family_event"].includes(patch.kind) ? patch.kind : cur.kind;
   const merged = {
     kind,
     title: patch.title !== undefined ? patch.title : cur.title,
@@ -1604,17 +1918,35 @@ export function updateContextEvent(id: number, patch: ContextEventInput) {
     end_date: patch.end_date !== undefined ? patch.end_date : cur.end_date,
     meta_json: patch.meta !== undefined ? (patch.meta != null ? JSON.stringify(patch.meta) : null) : cur.meta_json,
     archived: patch.archived !== undefined ? (patch.archived ? 1 : 0) : cur.archived,
-    expected_recovery_days: patch.expected_recovery_days !== undefined
-      ? (patch.expected_recovery_days == null || !Number.isFinite(Number(patch.expected_recovery_days)) ? null : Math.max(1, Math.round(Number(patch.expected_recovery_days))))
-      : cur.expected_recovery_days,
+    expected_recovery_days:
+      patch.expected_recovery_days !== undefined
+        ? patch.expected_recovery_days == null || !Number.isFinite(Number(patch.expected_recovery_days))
+          ? null
+          : Math.max(1, Math.round(Number(patch.expected_recovery_days)))
+        : cur.expected_recovery_days,
     resolved_at: patch.resolved_at !== undefined ? patch.resolved_at : cur.resolved_at,
   };
   db.prepare(
     `UPDATE context_events SET kind=?, title=?, detail=?, start_date=?, end_date=?, meta_json=?, archived=?, expected_recovery_days=?, resolved_at=? WHERE id=?`
-  ).run(merged.kind, merged.title, merged.detail, merged.start_date, merged.end_date, merged.meta_json, merged.archived, merged.expected_recovery_days, merged.resolved_at, id);
+  ).run(
+    merged.kind,
+    merged.title,
+    merged.detail,
+    merged.start_date,
+    merged.end_date,
+    merged.meta_json,
+    merged.archived,
+    merged.expected_recovery_days,
+    merged.resolved_at,
+    id
+  );
   // An edited event can change what shapes today (a new end date, a resolution) —
   // refresh the Brief from every surface.
-  try { invalidateDayRead(); } catch { /* best-effort */ }
+  try {
+    invalidateDayRead();
+  } catch {
+    /* best-effort */
+  }
   bumpTrainingDataVersion(); // an in-place edit (end date/resolution) the backstop can't see
   const row = getContextEvent(id);
   emitBrainEvent({
@@ -1638,7 +1970,11 @@ export function resolveContextEvent(id: number, date?: string) {
   const when = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : localDateISO();
   db.prepare(`UPDATE context_events SET resolved_at = ? WHERE id = ?`).run(when, id);
   // A resolved injury no longer eases load — the next Brief should reflect that.
-  try { invalidateDayRead(); } catch { /* best-effort */ }
+  try {
+    invalidateDayRead();
+  } catch {
+    /* best-effort */
+  }
   bumpTrainingDataVersion(); // resolving an event re-opens expenditure confidence
   const row = getContextEvent(id);
   emitBrainEvent({
@@ -1668,7 +2004,7 @@ const PCP_CONTEXT_TEXT =
 
 function compactText(...parts: unknown[]): string {
   return parts
-    .flatMap((p) => Array.isArray(p) ? p : [p])
+    .flatMap((p) => (Array.isArray(p) ? p : [p]))
     .filter((p) => p != null)
     .map((p) => String(p).replace(/\s+/g, " ").trim())
     .filter(Boolean)
@@ -1692,7 +2028,7 @@ function healthDocVisitText(doc: any): string {
     doc?.kind,
     doc?.summary,
     doc?.original_name,
-    facts.flatMap((f: any) => [f?.kind, f?.name, f?.status, f?.source, f?.detail]),
+    facts.flatMap((f: any) => [f?.kind, f?.name, f?.status, f?.source, f?.detail])
   );
 }
 
@@ -1700,7 +2036,13 @@ function healthDocLooksLikeCompletedVisit(doc: any): boolean {
   const kind = String(doc?.kind ?? "");
   if (kind === "visit_note" || kind === "after_visit_summary") return true;
   const facts = Array.isArray(doc?.parsed?.clinical_facts) ? doc.parsed.clinical_facts : [];
-  if (facts.some((f: any) => f?.kind === "encounter" && /\b(completed|done|visit|televisit|office)\b/i.test(compactText(f?.status, f?.name, f?.detail)))) {
+  if (
+    facts.some(
+      (f: any) =>
+        f?.kind === "encounter" &&
+        /\b(completed|done|visit|televisit|office)\b/i.test(compactText(f?.status, f?.name, f?.detail))
+    )
+  ) {
     return true;
   }
   return VISIT_DOCUMENT_TEXT.test(healthDocVisitText(doc));
@@ -1715,9 +2057,17 @@ function scoreVisitEventMatch(event: any, docDate: string | null, docText: strin
 
   let score = 2;
   const reasons: string[] = ["planned clinical event"];
-  if (/\b(pcp|primary care)\b/i.test(eventText)) { score += 3; reasons.push("PCP wording"); }
-  if (/\b(appointment|visit|follow[-\s]?up|televisit)\b/i.test(eventText)) { score += 1; reasons.push("visit wording"); }
-  if (/\b(pcp|primary care|after visit summary|visit note|televisit|office visit|adult patient visit)\b/i.test(docText)) {
+  if (/\b(pcp|primary care)\b/i.test(eventText)) {
+    score += 3;
+    reasons.push("PCP wording");
+  }
+  if (/\b(appointment|visit|follow[-\s]?up|televisit)\b/i.test(eventText)) {
+    score += 1;
+    reasons.push("visit wording");
+  }
+  if (
+    /\b(pcp|primary care|after visit summary|visit note|televisit|office visit|adult patient visit)\b/i.test(docText)
+  ) {
     score += 2;
     reasons.push("matching visit document");
   }
@@ -1725,10 +2075,16 @@ function scoreVisitEventMatch(event: any, docDate: string | null, docText: strin
   const eventDate = String(event.start_date ?? "").slice(0, 10);
   if (docDate && /^\d{4}-\d{2}-\d{2}$/.test(eventDate)) {
     const delta = Math.abs(daysBetweenISO(docDate, eventDate) ?? 99);
-    if (delta === 0) { score += 5; reasons.push("same date"); }
-    else if (delta === 1) { score += 3; reasons.push("one-day date match"); }
-    else if (delta <= 3) { score += 1; reasons.push("nearby date"); }
-    else return { score: 0, reason: "" };
+    if (delta === 0) {
+      score += 5;
+      reasons.push("same date");
+    } else if (delta === 1) {
+      score += 3;
+      reasons.push("one-day date match");
+    } else if (delta <= 3) {
+      score += 1;
+      reasons.push("nearby date");
+    } else return { score: 0, reason: "" };
   } else if (docDate || eventDate) {
     score += 1;
   }
@@ -1755,9 +2111,8 @@ export function reconcileHealthDocumentContextEvents(healthDocumentId: number): 
   if (!best) return [];
 
   const resolvedAt = docDate ?? localDateISO();
-  const existingMeta = best.event.meta && typeof best.event.meta === "object" && !Array.isArray(best.event.meta)
-    ? best.event.meta
-    : {};
+  const existingMeta =
+    best.event.meta && typeof best.event.meta === "object" && !Array.isArray(best.event.meta) ? best.event.meta : {};
   const matched = {
     id: doc.id,
     kind: doc.kind,
@@ -1768,13 +2123,15 @@ export function reconcileHealthDocumentContextEvents(healthDocumentId: number): 
     meta: { ...existingMeta, matched_health_doc: matched },
     resolved_at: best.event.resolved_at ?? resolvedAt,
   });
-  return [{
-    event_id: best.event.id,
-    health_document_id: doc.id,
-    score: best.score,
-    resolved_at: resolvedAt,
-    reason: best.reason,
-  }];
+  return [
+    {
+      event_id: best.event.id,
+      health_document_id: doc.id,
+      score: best.score,
+      resolved_at: resolvedAt,
+      reason: best.reason,
+    },
+  ];
 }
 
 export function deleteContextEvent(id: number) {
@@ -1809,11 +2166,11 @@ export function deleteContextEvent(id: number) {
 // offline); `trained_since` reads the log. Re-mention resets the clock naturally —
 // the athlete (or the chat resolve hook) updates start_date / the window.
 export interface ContextEventHealing {
-  resolved: boolean;          // explicitly closed (resolved_at on/before today)
-  past_window: boolean;       // an injury past start_date + expected_recovery_days
-  trained_since: boolean;     // the injured area was trained after the window ended
-  likely_resolved: boolean;   // past_window && trained_since && !resolved → soft, not a gate
-  window_end: string | null;  // YYYY-MM-DD the expected window closes, or null
+  resolved: boolean; // explicitly closed (resolved_at on/before today)
+  past_window: boolean; // an injury past start_date + expected_recovery_days
+  trained_since: boolean; // the injured area was trained after the window ended
+  likely_resolved: boolean; // past_window && trained_since && !resolved → soft, not a gate
+  window_end: string | null; // YYYY-MM-DD the expected window closes, or null
 }
 
 function addDaysISOLocal(iso: string, days: number): string | null {
@@ -1895,26 +2252,77 @@ interface BodyArea {
   load: string[];
 }
 const BODY_AREAS: BodyArea[] = [
-  { key: "knee", label: "knee", injury: ["knee", "patella", "patellar", "acl", "mcl", "meniscus", "quad tendon", "vmo"],
-    load: ["leg", "quad", "squat", "lunge", "split squat", "leg extension", "leg press", "step up", "calf"] },
-  { key: "hip", label: "hip", injury: ["hip", "glute", "groin", "adductor", "hip flexor"],
-    load: ["hip", "glute", "squat", "lunge", "split squat", "deadlift", "hinge", "thrust", "leg"] },
-  { key: "lower_back", label: "lower back", injury: ["lower back", "low back", "lumbar", "spine", "disc", "si joint", "sciatic", "back strain"],
-    load: ["deadlift", "romanian", "rdl", "hinge", "squat", "good morning", "bent-over row", "barbell row", "posterior", "back extension"] },
-  { key: "hamstring", label: "hamstring", injury: ["hamstring", "ham string"],
-    load: ["hamstring", "leg curl", "deadlift", "romanian", "rdl", "hinge", "posterior", "good morning"] },
-  { key: "calf", label: "calf", injury: ["calf", "achilles", "ankle", "shin"],
-    load: ["calf", "calves", "jump", "sprint", "run"] },
-  { key: "shoulder", label: "shoulder", injury: ["shoulder", "rotator cuff", "deltoid", "delt", "ac joint", "labrum", "impingement"],
-    load: ["shoulder", "delt", "press", "overhead", "bench", "incline", "lateral raise", "chest", "push-up", "dip"] },
-  { key: "elbow", label: "elbow", injury: ["elbow", "tricep tendon", "tennis elbow", "golfer", "forearm"],
-    load: ["tricep", "bicep", "curl", "pushdown", "press", "pull-up", "chin-up", "row", "extension"] },
-  { key: "wrist", label: "wrist", injury: ["wrist", "hand", "thumb", "carpal"],
-    load: ["curl", "press", "pull-up", "chin-up", "row", "deadlift", "grip", "front squat"] },
-  { key: "chest", label: "chest", injury: ["chest", "pec", "sternum", "rib"],
-    load: ["chest", "bench", "incline", "press", "fly", "dip", "push-up"] },
-  { key: "neck", label: "neck", injury: ["neck", "cervical", "trap"],
-    load: ["overhead", "shrug", "press", "deadlift", "row", "face pull"] },
+  {
+    key: "knee",
+    label: "knee",
+    injury: ["knee", "patella", "patellar", "acl", "mcl", "meniscus", "quad tendon", "vmo"],
+    load: ["leg", "quad", "squat", "lunge", "split squat", "leg extension", "leg press", "step up", "calf"],
+  },
+  {
+    key: "hip",
+    label: "hip",
+    injury: ["hip", "glute", "groin", "adductor", "hip flexor"],
+    load: ["hip", "glute", "squat", "lunge", "split squat", "deadlift", "hinge", "thrust", "leg"],
+  },
+  {
+    key: "lower_back",
+    label: "lower back",
+    injury: ["lower back", "low back", "lumbar", "spine", "disc", "si joint", "sciatic", "back strain"],
+    load: [
+      "deadlift",
+      "romanian",
+      "rdl",
+      "hinge",
+      "squat",
+      "good morning",
+      "bent-over row",
+      "barbell row",
+      "posterior",
+      "back extension",
+    ],
+  },
+  {
+    key: "hamstring",
+    label: "hamstring",
+    injury: ["hamstring", "ham string"],
+    load: ["hamstring", "leg curl", "deadlift", "romanian", "rdl", "hinge", "posterior", "good morning"],
+  },
+  {
+    key: "calf",
+    label: "calf",
+    injury: ["calf", "achilles", "ankle", "shin"],
+    load: ["calf", "calves", "jump", "sprint", "run"],
+  },
+  {
+    key: "shoulder",
+    label: "shoulder",
+    injury: ["shoulder", "rotator cuff", "deltoid", "delt", "ac joint", "labrum", "impingement"],
+    load: ["shoulder", "delt", "press", "overhead", "bench", "incline", "lateral raise", "chest", "push-up", "dip"],
+  },
+  {
+    key: "elbow",
+    label: "elbow",
+    injury: ["elbow", "tricep tendon", "tennis elbow", "golfer", "forearm"],
+    load: ["tricep", "bicep", "curl", "pushdown", "press", "pull-up", "chin-up", "row", "extension"],
+  },
+  {
+    key: "wrist",
+    label: "wrist",
+    injury: ["wrist", "hand", "thumb", "carpal"],
+    load: ["curl", "press", "pull-up", "chin-up", "row", "deadlift", "grip", "front squat"],
+  },
+  {
+    key: "chest",
+    label: "chest",
+    injury: ["chest", "pec", "sternum", "rib"],
+    load: ["chest", "bench", "incline", "press", "fly", "dip", "push-up"],
+  },
+  {
+    key: "neck",
+    label: "neck",
+    injury: ["neck", "cervical", "trap"],
+    load: ["overhead", "shrug", "press", "deadlift", "row", "face pull"],
+  },
 ];
 
 // Tokens drawn from an exercise to match against a body-area's load list:
@@ -1929,7 +2337,13 @@ function exerciseTokens(ex: { name?: string; muscle_group?: string | null }): st
 // signal). meta may arrive parsed (hydrateContextEvent) or as a raw string.
 function injuryText(ev: any): string {
   let meta: any = ev?.meta;
-  if (meta == null && ev?.meta_json) { try { meta = JSON.parse(ev.meta_json); } catch { meta = null; } }
+  if (meta == null && ev?.meta_json) {
+    try {
+      meta = JSON.parse(ev.meta_json);
+    } catch {
+      meta = null;
+    }
+  }
   const area = meta && typeof meta === "object" ? meta.area : null;
   return `${ev?.title ?? ""} ${ev?.detail ?? ""} ${area ?? ""}`.toLowerCase();
 }
@@ -2011,7 +2425,9 @@ function suggestSwapsFor(
 export function getInjuryImpacts() {
   // A likely-resolved injury (past its window with the area trained since) no longer
   // gates exercises as a hard constraint — it's downgraded to a soft note elsewhere.
-  const injuries = (listContextEvents({ activeOnly: true }) as any[]).filter((e) => e.kind === "injury" && !e.likely_resolved);
+  const injuries = (listContextEvents({ activeOnly: true }) as any[]).filter(
+    (e) => e.kind === "injury" && !e.likely_resolved
+  );
   if (!injuries.length) return { injuries: [], count: 0 };
 
   const allExercises = listExercises() as any[];
@@ -2025,7 +2441,12 @@ export function getInjuryImpacts() {
       if (!key) continue;
       if (!plannedByName.has(key)) {
         plannedByName.set(key, {
-          ex: { name: it.exercise, muscle_group: it.muscle_group ?? null, mode: it.mode ?? "reps", constraint_note: it.constraint_note ?? null },
+          ex: {
+            name: it.exercise,
+            muscle_group: it.muscle_group ?? null,
+            mode: it.mode ?? "reps",
+            constraint_note: it.constraint_note ?? null,
+          },
           days: [],
         });
       }
@@ -2036,13 +2457,26 @@ export function getInjuryImpacts() {
   const out = injuries.map((inj) => {
     const areas = injuryAreas(inj);
     let meta: any = inj.meta;
-    if (meta == null && inj.meta_json) { try { meta = JSON.parse(inj.meta_json); } catch { meta = null; } }
+    if (meta == null && inj.meta_json) {
+      try {
+        meta = JSON.parse(inj.meta_json);
+      } catch {
+        meta = null;
+      }
+    }
     meta = meta && typeof meta === "object" ? meta : {};
     const affected = [...plannedByName.values()]
-      .filter(({ ex }) =>
-        injuryAffectsExercise(inj, ex, areas) ||
-        // a constraint_note that names the injured area is itself an affected signal
-        (ex.constraint_note && areas.some((a) => String(ex.constraint_note).toLowerCase().includes(a.label) || a.injury.some((w) => String(ex.constraint_note).toLowerCase().includes(w)))))
+      .filter(
+        ({ ex }) =>
+          injuryAffectsExercise(inj, ex, areas) ||
+          // a constraint_note that names the injured area is itself an affected signal
+          (ex.constraint_note &&
+            areas.some(
+              (a) =>
+                String(ex.constraint_note).toLowerCase().includes(a.label) ||
+                a.injury.some((w) => String(ex.constraint_note).toLowerCase().includes(w))
+            ))
+      )
       .map(({ ex, days }) => ({
         exercise: ex.name,
         muscle_group: ex.muscle_group,

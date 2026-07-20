@@ -225,6 +225,13 @@ export interface CoachContextEnvelope {
   memory: CoachMemory[];
   learnings: CoachLearning[];
   health: CoachRecord[];
+  imaging: {
+    total: number;
+    truncated: boolean;
+    index: CoachRecord[];
+    details: CoachRecord[];
+    measurement_trends: CoachRecord[];
+  };
   health_review: CoachRecord | null;
   context_events: CoachContextEvent[];
   directives: CoachDirective[];

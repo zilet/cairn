@@ -248,7 +248,11 @@ curl -fsS http://localhost:8787/api/export/db -o cairn-snapshot.db
 ```
 
 The VACUUM INTO snapshot is a single consistent file with the WAL checkpointed in — safe to
-copy without stopping the container.
+copy without stopping the container. Private runtime secrets, including the key used to compare
+DICOM patient identity without storing Patient ID, live only inside SQLite: they survive this DB
+snapshot and volume backups but are intentionally excluded from the JSON export. Restore the
+SQLite snapshot when DICOM studies must continue accepting later instances under the same private
+identity.
 
 ### Volume-level (full backup including OAuth tokens)
 

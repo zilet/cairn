@@ -14,6 +14,7 @@ type UploadFileLike = {
 
 (() => {
 const MAX_DOC_BYTES = 15 * 1024 * 1024;
+const MAX_DICOM_BYTES = 256 * 1024 * 1024;
 const MAX_DOC_TEXT = 400000;
 const H_FILE_PROMPT = "Drop a lab PDF, MyChart export (.zip), HTML, XML, a photo, or text…";
 
@@ -33,6 +34,7 @@ function guessUploadMime(file: UploadFileLike | null | undefined): string {
   if (explicitType) return explicitType;
   const name = String(file?.name || "").toLowerCase();
   if (name.endsWith(".zip")) return "application/zip";
+  if (name.endsWith(".dcm")) return "application/dicom";
   if (name.endsWith(".html") || name.endsWith(".htm")) return "text/html";
   if (name.endsWith(".xml")) return "application/xml";
   if (name.endsWith(".pdf")) return "application/pdf";
@@ -106,6 +108,7 @@ function askCoach(question: unknown): void {
 
 const CAIRN_HEALTH_CLIENT = {
   MAX_DOC_BYTES,
+  MAX_DICOM_BYTES,
   MAX_DOC_TEXT,
   H_FILE_PROMPT,
   HEALTH_HERO_ART,

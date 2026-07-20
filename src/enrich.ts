@@ -6,11 +6,12 @@ import { db } from "./db.js";
 import { inferHealthDocumentKind, normalizeHealthDocumentKind } from "./healthDocumentKinds.js";
 import * as repo from "./repo.js";
 import { extractJson, runAgentWithFallback } from "./agents.js";
-import { buildEnrichPrompt, buildExerciseEnrichPrompt, buildFoodPhotoPrompt, buildHealthIngestPrompt, buildHealthReviewPrompt, buildGarminStrengthPrompt } from "./prompt.js";
+import { buildEnrichPrompt, buildExerciseEnrichPrompt, buildFoodPhotoPrompt, buildHealthIngestPrompt, buildHealthReviewPrompt, buildGarminStrengthPrompt, buildImagingStudyPrompt } from "./prompt.js";
 import { explainExercise, reconcileMarkers, synthesizeHealth } from "./coachOps.js";
 import { warmExerciseArt } from "./art.js";
 import { LB_PER_KG, round2_5 } from "./repo/shared.js";
 import { diagnosticErrorName, recordAsyncFailure } from "./diagnostics.js";
+import { safeUploadPath } from "./uploadPaths.js";
 
 // Live status-transition bus for background enrichment. The emit is wired into the
 // repo status setters (the choke point every write flows through — see enrichBus.ts);
@@ -54,10 +55,33 @@ interface HealthSource {
   mime: string;
   kind: string;
   isDir: boolean;
+  imaging?: boolean;
 }
 
 const queue: Job[] = [];
 let draining = false;
+
+export function staleImagingWorkerAction(reason: "attachments_changed" | "user_state_changed"): {
+  status: "pending" | "retry_needed";
+  requeue: boolean;
+} {
+  return reason === "attachments_changed"
+    ? { status: "pending", requeue: true }
+    : { status: "retry_needed", requeue: false };
+}
+
+export function settleStaleImagingJob(
+  id: number,
+  reason: "attachments_changed" | "user_state_changed",
+  schedule: (job: Job) => void = (job) => {
+    if (!queue.some((queued) => queued.kind === job.kind && queued.id === job.id)) queue.push(job);
+  }
+): { status: "pending" | "retry_needed"; requeued: boolean } {
+  const action = staleImagingWorkerAction(reason);
+  repo.setHealthDocEnrichStatus(id, action.status);
+  if (action.requeue) schedule({ kind: "health", id });
+  return { status: action.status, requeued: action.requeue };
+}
 
 // Re-entry guard: at most ONE review-refresh job sits in the queue at a time.
 // Several health docs finishing back-to-back collapse into a single refresh
@@ -286,6 +310,7 @@ function healthDocHasStructuredContent(id: number): boolean {
       }
     })();
   return (
+    repo.imagingStudyHasContent(parsed?.imaging_study) ||
     (Array.isArray(parsed?.markers) && parsed.markers.length > 0) ||
     (Array.isArray(parsed?.clinical_facts) && parsed.clinical_facts.length > 0) ||
     (Array.isArray(parsed?.panels) && parsed.panels.some((p: any) =>
@@ -350,43 +375,72 @@ async function processJob(job: Job): Promise<void> {
   // Carry the health source out of the branch so the completeness retry below can
   // re-read it (text sources only) and re-prompt without re-deriving the path.
   let healthSource: HealthSource | null = null;
+  let imagingBaseRevisionState: repo.ImagingStudyRevisionState | null = null;
   let ccdaExtraction: ReturnType<typeof repo.extractCcdaHealthData> | null = null;
   if (job.kind === "health") {
     const row = repo.getHealthDocumentRaw(job.id) as any;
-    const fp = (row?.file_path ?? "").toString().trim();
-    if (!fp) {
-      // No binary on disk (e.g. a client-recorded analysis); nothing to read.
-      markStatus(job, "skipped");
-      return;
-    }
-    // Uploaded files are always stored as an absolute path under UPLOADS_DIR.
-    // Refuse anything else rather than resolving it relative to cwd — that's the
-    // only thing keeping the agent's file read constrained to uploaded docs.
-    if (!path.isAbsolute(fp)) {
-      markStatus(job, "skipped");
-      return;
-    }
-    // Mark in-progress before any slow work (unzip / agent) so a crash leaves a
-    // recoverable marker rather than a stuck 'pending'.
-    markStatus(job, "in_progress");
-    let target = fp;
-    let isDir = false;
-    if (looksLikeZip(fp, row?.mime)) {
-      const dir = await unzipToFolder(fp);
-      if (dir) { target = dir; isDir = true; extractedDir = dir; }
-    }
-    healthSource = { fp: target, mime: (row?.mime ?? "").toString(), kind: row?.kind || "other", isDir };
-    try {
-      ccdaExtraction = repo.extractCcdaHealthData(target);
-      if (ccdaExtraction.files && (ccdaExtraction.clinical_facts.length || ccdaExtraction.vitals_panels.length)) {
-        console.log(`[enrich] health#${job.id}: deterministic CCDA found ${ccdaExtraction.clinical_facts.length} fact(s), ${ccdaExtraction.vitals_panels.length} vitals panel(s), ${ccdaExtraction.blood_pressure_readings.length} BP reading(s).`);
+    if (row?.kind === "imaging") {
+      imagingBaseRevisionState = repo.imagingStudyRevisionState(job.id);
+      // Raw DICOM objects never enter an agent prompt. Only ordinary written
+      // attachments and bounded server-rendered representative PNGs are eligible.
+      const files = repo.listImagingPromptFilesRaw(job.id) as any[];
+      const promptFiles = files.map((file) => {
+        const safe = safeUploadPath(file.file_path);
+        return safe && fs.existsSync(safe) ? {
+          id: file.id,
+          sequence: file.sequence,
+          path: safe,
+          mime: file.mime,
+          source_kind: file.source_kind,
+          original_name: file.original_name,
+        } : null;
+      }).filter(Boolean) as any[];
+      if (!promptFiles.length) {
+        markStatus(job, "skipped");
+        return;
       }
-    } catch (e: any) {
-      console.warn(`[enrich] health#${job.id}: deterministic CCDA extraction skipped (${e?.message ?? e}).`);
-      ccdaExtraction = null;
+      markStatus(job, "in_progress");
+      healthSource = { fp: promptFiles[0].path, mime: promptFiles[0].mime, kind: "imaging", isDir: false, imaging: true };
+      let existing: any = null;
+      try { existing = row.parsed_json ? JSON.parse(row.parsed_json)?.imaging_study : null; } catch {}
+      prompt = buildImagingStudyPrompt(promptFiles, existing);
+      timeoutMs = HEALTH_INGEST_TIMEOUT_MS;
+    } else {
+      const fp = (row?.file_path ?? "").toString().trim();
+      if (!fp) {
+        // No binary on disk (e.g. a client-recorded analysis); nothing to read.
+        markStatus(job, "skipped");
+        return;
+      }
+      // Uploaded files are always stored as an absolute path under UPLOADS_DIR.
+      // Refuse anything else rather than resolving it relative to cwd — that's the
+      // only thing keeping the agent's file read constrained to uploaded docs.
+      if (!path.isAbsolute(fp)) {
+        markStatus(job, "skipped");
+        return;
+      }
+      // Mark in-progress before any slow work (unzip / agent) so a crash leaves a
+      // recoverable marker rather than a stuck 'pending'.
+      markStatus(job, "in_progress");
+      let target = fp;
+      let isDir = false;
+      if (looksLikeZip(fp, row?.mime)) {
+        const dir = await unzipToFolder(fp);
+        if (dir) { target = dir; isDir = true; extractedDir = dir; }
+      }
+      healthSource = { fp: target, mime: (row?.mime ?? "").toString(), kind: row?.kind || "other", isDir };
+      try {
+        ccdaExtraction = repo.extractCcdaHealthData(target);
+        if (ccdaExtraction.files && (ccdaExtraction.clinical_facts.length || ccdaExtraction.vitals_panels.length)) {
+          console.log(`[enrich] health#${job.id}: deterministic CCDA found ${ccdaExtraction.clinical_facts.length} fact(s), ${ccdaExtraction.vitals_panels.length} vitals panel(s), ${ccdaExtraction.blood_pressure_readings.length} BP reading(s).`);
+        }
+      } catch (e: any) {
+        console.warn(`[enrich] health#${job.id}: deterministic CCDA extraction skipped (${e?.message ?? e}).`);
+        ccdaExtraction = null;
+      }
+      prompt = buildHealthIngestPrompt(target, isDir, row?.kind || "other");
+      timeoutMs = HEALTH_INGEST_TIMEOUT_MS;
     }
-    prompt = buildHealthIngestPrompt(target, isDir, row?.kind || "other");
-    timeoutMs = HEALTH_INGEST_TIMEOUT_MS;
   } else {
     const raw = jobRawText(job);
     if (!raw) {
@@ -458,7 +512,7 @@ async function processJob(job: Job): Promise<void> {
   //     other doc, which legitimately carries few rows) is left alone so we don't waste
   //     a re-run. An unpacked archive (isDir) is never retried — too many source files
   //     to attribute a single count to.
-  if (healthSource && !healthSource.isDir) {
+  if (healthSource && !healthSource.isDir && !healthSource.imaging) {
     const got = countIngestMarkers(parsed);
     const isText = /^text\/plain/i.test(healthSource.mime);
     let shouldRetry = false;
@@ -493,8 +547,19 @@ async function processJob(job: Job): Promise<void> {
   // Apply the structured fields the agent provided; keep regex values otherwise.
   // Health docs carry a top-level `summary` alongside `structured`, so they take
   // a dedicated apply path.
-  const appliedFields =
-    job.kind === "health" ? applyHealthIngest(job.id, parsed) : applyStructured(job, parsed.structured);
+  const healthApply =
+    job.kind === "health"
+      ? applyHealthIngestResult(job.id, parsed, { imagingBaseRevisionState })
+      : null;
+  if (healthApply?.status === "stale") {
+    const settled = settleStaleImagingJob(job.id, healthApply.reason);
+    console.warn(
+      `[enrich] imaging#${job.id}: analysis became stale (${healthApply.reason}); ` +
+        (settled.requeued ? "queued one fresh pass." : "kept user state; manual retry needed.")
+    );
+    return;
+  }
+  const appliedFields = job.kind === "health" ? healthApply?.status === "applied" : applyStructured(job, parsed.structured);
   const ccdaBackfill =
     job.kind === "health" && ccdaExtraction ? repo.applyCcdaHealthBackfill(job.id, ccdaExtraction) : null;
   if (ccdaBackfill?.wrote) {
@@ -556,7 +621,7 @@ async function processJob(job: Job): Promise<void> {
   // only the 'markers' source) so the connected brain reflects the latest panel
   // without waiting for a manual Derive, then refresh the whole-picture health
   // review as a follow-on job on this same serial queue. Never for activity/food.
-  if (job.kind === "health") {
+  if (job.kind === "health" && !healthSource?.imaging) {
     // First, let the agent align any new analyte synonyms this lab introduced
     // (e.g. an abbreviation the KB never saw) so the merged series feed everything
     // below. Fail-open: the deterministic normalizer + KB already ran at read time.
@@ -1317,7 +1382,53 @@ function applyTextVisitNoteFallback(id: number, source: HealthSource | null): { 
   return { applied: true, facts: fallback.clinical_facts.length, addedMemory };
 }
 
-function applyHealthIngest(id: number, parsed: any): boolean {
+export type HealthIngestApplyResult =
+  | { status: "applied" }
+  | { status: "not_applied" }
+  | { status: "stale"; reason: "attachments_changed" | "user_state_changed" };
+
+export function applyHealthIngestResult(
+  id: number,
+  parsed: any,
+  opts: { imagingBaseRevision?: string | null; imagingBaseRevisionState?: repo.ImagingStudyRevisionState | null } = {}
+): HealthIngestApplyResult {
+  const row = repo.getHealthDocumentRaw(id) as any;
+  if (row?.kind === "imaging") {
+    const result = repo.applyImagingAnalysisResult(id, parsed, {
+      sourceKind: repo.imagingStudySourceKind(id),
+      extractor: "health-enrichment",
+      sourceDocId: row.source_doc_id ?? null,
+      sha256: repo.imagingStudySourceHash(id),
+      baseRevision: opts.imagingBaseRevision,
+      baseRevisionState: opts.imagingBaseRevisionState,
+    });
+    return result.status === "applied"
+      ? { status: "applied" }
+      : result.status === "stale"
+        ? { status: "stale", reason: result.reason }
+        : { status: "not_applied" };
+  }
+  return applyHealthIngestNonImaging(id, parsed) ? { status: "applied" } : { status: "not_applied" };
+}
+
+export function applyHealthIngest(
+  id: number,
+  parsed: any,
+  opts: { imagingBaseRevision?: string | null; imagingBaseRevisionState?: repo.ImagingStudyRevisionState | null } = {}
+): boolean {
+  return applyHealthIngestResult(id, parsed, opts).status === "applied";
+}
+
+function applyHealthIngestNonImaging(id: number, parsed: any): boolean {
+  const row = repo.getHealthDocumentRaw(id) as any;
+  // MyChart/CCDA bundles may carry radiology reports alongside labs. Persist
+  // those as derived first-class imaging records linked to the source artifact;
+  // they are never flattened into lab panels or markers.
+  const derivedImaging = Array.isArray(parsed?.imaging_studies)
+    ? repo.replaceDerivedImagingStudies(id, parsed.imaging_studies, row?.original_name ?? null, {
+        complete: parsed?.imaging_studies_complete === true,
+      })
+    : [];
   const panels = ingestPanels(parsed);
   const panelFacts = panels.flatMap((p: any) => Array.isArray(p?.clinical_facts) ? p.clinical_facts : []);
   const clinicalFacts = repo.cleanClinicalFacts([
@@ -1378,12 +1489,11 @@ function applyHealthIngest(id: number, parsed: any): boolean {
     })
     .filter((p) => p.markers.length || p.summary);
 
-  const row = repo.getHealthDocumentRaw(id) as any;
   const markerCount = cleaned.reduce((n, p) => n + p.markers.length, 0);
   // A health-document result with only prose is not an ingest. This catches agent
   // sandbox/file-access failures like "I could not read the upload" before they
   // overwrite a previously valid marker panel with {"markers":[]}.
-  if (!markerCount && !clinicalFacts.length) return false;
+  if (!markerCount && !clinicalFacts.length) return derivedImaging.length > 0;
   if (!cleaned.length) {
     const summary = asStr(parsed?.summary) ?? null;
     const out: Record<string, any> = { markers: [] };

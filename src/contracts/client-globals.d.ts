@@ -1732,6 +1732,77 @@ declare global {
   };
 
   interface Window {
+    CairnDicomViewerModel: {
+      dicomWindowPixels(
+        pixels: Float32Array,
+        meta: { rows: number; columns: number; windowCenter: number; windowWidth: number; inverted: boolean },
+        center?: number,
+        width?: number
+      ): Uint8ClampedArray;
+      dicomManifestFallback(value: unknown): { series: any[]; reason: string | null };
+      dicomOrientationCosines(value: unknown): number[] | null;
+      dicomPreviewReason(value: unknown): string;
+      dicomResponseIsCurrent(
+        activeToken: number,
+        responseToken: number,
+        responseSelection: string,
+        currentSelection: string,
+        connected: boolean
+      ): boolean;
+    };
+    CairnDicomViewer: {
+      openDicomViewer(
+        studyId: number,
+        origin: Element,
+        api: (path: string, opts?: RequestInit & { headers?: Record<string, string> }) => Promise<unknown>,
+        toast: (message: string) => void
+      ): void;
+      dicomViewerHtml(): string;
+    };
+    CairnImagingUploadModel: {
+      DICOM_IMPORT_MAX_BYTES: number;
+      DICOM_IMPORT_SESSION_KEY: string;
+      imagingUploadRoute(file: { name?: unknown; type?: unknown; size?: unknown }): {
+        role: "report" | "image" | "mychart" | "dicom";
+        mime: string;
+        maxBytes: number;
+        accepted: boolean;
+        maxLabel: string;
+      };
+      uniqueDicomStudyIds(values: unknown): number[];
+      readActiveDicomJobIds(storage?: Pick<Storage, "getItem" | "setItem" | "removeItem">): number[];
+      writeActiveDicomJobIds(ids: unknown, storage?: Pick<Storage, "getItem" | "setItem" | "removeItem">): number[];
+      rememberActiveDicomJob(id: number, storage?: Pick<Storage, "getItem" | "setItem" | "removeItem">): number[];
+      forgetActiveDicomJob(id: number, storage?: Pick<Storage, "getItem" | "setItem" | "removeItem">): number[];
+      dicomStudyChoiceLabel(doc: unknown): string;
+      imagingAssociationTarget(
+        studyIds: unknown,
+        hasOrdinaryFiles: boolean,
+        selectedStudyId: unknown
+      ): { state: "none" | "ready" | "choose"; studyId: number | null };
+      imagingAnalysisTargets(studyIds: unknown, hasOrdinaryFiles: boolean, associatedStudyId: unknown): number[];
+      processDicomImportBatch(
+        items: Array<{
+          file: File;
+          mime: string;
+          jobId?: number;
+          state?: "queued" | "importing" | "failed" | "status_unknown";
+        }>,
+        deps: {
+          start(item: {
+            file: File;
+            mime: string;
+            jobId?: number;
+            state?: string;
+          }): Promise<import("./client-api.js").ClientDicomImportJob>;
+          wait(id: number): Promise<import("./client-api.js").ClientDicomImportJob>;
+          remember(id: number): void;
+          forget(id: number): void;
+          onState(item: { file: File; mime: string; jobId?: number; state?: string }): void;
+          onDone(item: { file: File; mime: string; jobId?: number; state?: string }): void;
+        }
+      ): Promise<{ ok: boolean; reason: "done" | "failed" | "status_unknown" | "start_failed"; studyIds: number[] }>;
+    };
     activateTab(name: unknown, opts?: { replace?: boolean; syncRoute?: boolean }): void;
     applyRouteState(route: ClientRoute | null | undefined): ClientTabName;
     currentRouteState(): Partial<ClientRoute>;
@@ -2213,6 +2284,7 @@ declare global {
     CairnHealthClient: Window["CairnHealthEvidence"] &
       Window["CairnHealthMarkerOrder"] & {
         MAX_DOC_BYTES: number;
+        MAX_DICOM_BYTES: number;
         MAX_DOC_TEXT: number;
         H_FILE_PROMPT: string;
         HEALTH_HERO_ART: string;
@@ -2825,6 +2897,33 @@ declare global {
       docCollapsible(doc: unknown): boolean;
       healthDocInner(doc: unknown): string;
       healthDocHtml(doc: unknown, index?: number): string;
+    };
+
+    CairnImaging: {
+      imagingStudy(doc: ClientHealthDocument): import("./client-api.js").ClientImagingStudy | null;
+      imagingHasDicomSeries(study: import("./client-api.js").ClientImagingStudy | null): boolean;
+      imagingLabel(value: unknown): string;
+      imagingGroups(study: import("./client-api.js").ClientImagingStudy): unknown[];
+      imagingStudyGrouping(study: import("./client-api.js").ClientImagingStudy | null): {
+        system: string;
+        region: string;
+        laterality: string | null;
+      };
+      imagingCorrectionPayload(
+        study: import("./client-api.js").ClientImagingStudy,
+        values: Record<string, unknown>
+      ): import("./client-api.js").ClientImagingStudy;
+      imagingInner(doc: ClientHealthDocument): string;
+      imagingCard(doc: ClientHealthDocument, index?: number): string;
+      wireImaging(
+        doc: ClientHealthDocument,
+        el: HTMLElement,
+        deps: {
+          api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+          toast(message: string): void;
+          refresh(): void;
+        }
+      ): void;
     };
 
     CairnHealthRecords: {
@@ -4194,6 +4293,9 @@ declare global {
   declare const CairnUiHeader: Window["CairnUiHeader"];
   declare const CairnUiViewTransitions: Window["CairnUiViewTransitions"];
   declare const CairnDetailOverlay: Window["CairnDetailOverlay"];
+  declare const CairnDicomViewerModel: Window["CairnDicomViewerModel"];
+  declare const CairnDicomViewer: Window["CairnDicomViewer"];
+  declare const CairnImagingUploadModel: Window["CairnImagingUploadModel"];
   declare const CairnUiMotion: Window["CairnUiMotion"];
   declare const CairnHealthEvidence: Window["CairnHealthEvidence"];
   declare const CairnHealthMarkerOrder: Window["CairnHealthMarkerOrder"];
@@ -4251,6 +4353,7 @@ declare global {
   declare const CairnLifeTimelineActions: Window["CairnLifeTimelineActions"];
   declare const CairnLifeController: Window["CairnLifeController"];
   declare const CairnHealthDocs: Window["CairnHealthDocs"];
+  declare const CairnImaging: Window["CairnImaging"];
   declare const CairnHealthRecords: Window["CairnHealthRecords"];
   declare const CairnHealthRecordsController: Window["CairnHealthRecordsController"];
   declare const CairnHealthDocUploadController: Window["CairnHealthDocUploadController"];

@@ -18,6 +18,8 @@ import { db, repo } from "./_seed.js";
 import {
   applyChatActions,
   classifyChatAgentResult,
+  clinicalLineageForTurn,
+  clinicalPlanProvenance,
   hasExplicitDecisionRevertIntent,
   hasExplicitPlanEditIntent,
   reconcileChatPlanReply,
@@ -172,6 +174,7 @@ test("applyChatActions applies a signal-backed plan_update quietly and preserves
   assert.equal(applied[0].type, "add_memory");
   assert.equal(applied[1].type, "plan_update");
   assert.equal(applied[1].result.background, true);
+  assert.equal(applied[1].result.tier, "quiet_apply", "ordinary load progression keeps the existing autonomy path");
   assert.equal(drafts.length, 0, "small plan adjustments do not interrupt chat with a draft");
   const prop = repo.getProposal(applied[1].result.proposal_id);
   assert.equal(prop.status, "applied");
@@ -182,6 +185,395 @@ test("applyChatActions applies a signal-backed plan_update quietly and preserves
     repo.listMemory(10).some((m) => /evening training/.test(m.content)),
     "memory landed in the store"
   );
+});
+
+test("an MRI-driven plan change is clinician-held even when Lead mode and the model request quiet apply", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  repo.savePlanDay(1, "Lower", "legs", [
+    { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 8, target_weight: 185 },
+  ]);
+
+  const out = applyChatActions(
+    {
+      actions: [
+        {
+          type: "plan_update",
+          summary: "Modify lower day from lumbar MRI findings",
+          imaging_study_id: "lumbar-mri-2026-07-18",
+          changes: [
+            {
+              day_number: 1,
+              exercise: "Back Squat",
+              sets: 1,
+              reason: "Lumbar MRI reports a disc protrusion; keep this as a clinician-directed rehab constraint.",
+            },
+          ],
+        },
+      ],
+    },
+    { agent: "stub", message: "Please adjust my lower session based on yesterday's MRI." }
+  );
+
+  const result = out.applied[0].result;
+  assert.equal(result.applied, false);
+  assert.equal(result.persisted, false);
+  assert.equal(result.review_required, true);
+  assert.equal(result.tier, "clinician");
+  assert.equal(result.decision.autonomy_tier, "clinician");
+  assert.equal(result.decision.risk_class, "clinical");
+  assert.equal(result.decision.context.review_reason_code, "clinical_ceiling");
+  assert.equal(result.decision.context.clinical_provenance.server_owned, true);
+  assert.ok(result.decision.context.clinical_provenance.detected_from.includes("study_reference"));
+  assert.equal(repo.getProposal(result.proposal_id).status, "draft");
+  assert.equal(repo.getPlanDay(1).items[0].sets, 3, "the clinical change did not quiet-apply");
+});
+
+test("an attached ad-hoc image is sufficient clinical provenance for a plan change", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  repo.savePlanDay(1, "Lower", "legs", [
+    { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 8, target_weight: 185 },
+  ]);
+
+  const out = applyChatActions(
+    {
+      actions: [
+        {
+          type: "plan_update",
+          summary: "Make today's session safer",
+          changes: [
+            {
+              day_number: 1,
+              exercise: "Back Squat",
+              remove: true,
+              reason: "Adjust the session based on the attached picture.",
+            },
+          ],
+        },
+      ],
+    },
+    {
+      agent: "stub",
+      message: "Adjust this based on the picture.",
+      imagePath: "/tmp/chat-clinical-image.jpg",
+    }
+  );
+
+  const result = out.applied[0].result;
+  assert.equal(result.tier, "clinician");
+  assert.equal(result.review_required, true);
+  assert.equal(result.persisted, false);
+  assert.equal(result.decision.context.clinical_provenance.attached_image, true);
+  assert.ok(result.decision.context.clinical_provenance.detected_from.includes("attached_chat_image"));
+  assert.deepEqual(result.decision.context.clinical_provenance.signals, [], "no clinical keyword was required");
+  assert.equal(repo.getPlanDay(1).items.length, 1, "the image-derived clinical edit stayed out of the live plan");
+});
+
+test("a generic confirmation inherits the immediately prior unresolved clinical proposal across durable turn storage", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  repo.savePlanDay(1, "Lower", "legs", [
+    { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 8, target_weight: 185 },
+  ]);
+
+  const firstUser = repo.addChatMessage("user", "Adjust my lower session around the MRI findings.", null);
+  const firstTurn = repo.createChatTurn({ message: firstUser.content, user_message_id: firstUser.id });
+  repo.markChatTurnRunning(firstTurn.id);
+  const first = applyChatActions(
+    {
+      actions: [
+        {
+          type: "plan_update",
+          summary: "MRI-informed lower-day change",
+          changes: [{ day_number: 1, exercise: "Back Squat", sets: 2, reason: "MRI-informed constraint" }],
+        },
+      ],
+    },
+    { agent: "stub", message: firstUser.content }
+  );
+  const firstLineage = clinicalLineageForTurn(first.applied, firstTurn.id);
+  assert.ok(firstLineage);
+  const firstAssistant = repo.addChatMessage("assistant", "I can hold that change for clinical review.", "stub", {
+    applied: first.applied,
+    clinical_lineage: firstLineage,
+  });
+  repo.finishChatTurn(firstTurn.id, {
+    reply: firstAssistant.content,
+    assistant_message_id: firstAssistant.id,
+    meta: { applied: first.applied, clinical_lineage: firstLineage },
+  });
+
+  const followupUser = repo.addChatMessage("user", "Yes, make that change.", null);
+  const followupTurn = repo.createChatTurn({ message: followupUser.content, user_message_id: followupUser.id });
+  const followup = applyChatActions(
+    {
+      actions: [
+        {
+          type: "plan_update",
+          summary: "Make the discussed change",
+          changes: [{ day_number: 1, exercise: "Back Squat", sets: 2, reason: "As discussed" }],
+        },
+      ],
+    },
+    {
+      agent: "stub",
+      message: followupUser.content,
+      turnId: followupTurn.id,
+      userMessageId: followupUser.id,
+    }
+  );
+
+  const result = followup.applied[0].result;
+  assert.equal(result.tier, "clinician");
+  assert.equal(result.review_required, true);
+  assert.equal(result.persisted, false);
+  assert.equal(result.decision.context.clinical_provenance.source, "chat_clinical_lineage");
+  assert.deepEqual(result.decision.context.clinical_provenance.lineage, {
+    turn_id: firstTurn.id,
+    proposal_id: first.applied[0].result.proposal_id,
+    decision_id: first.applied[0].result.decision.id,
+  });
+  assert.equal(repo.getPlanDay(1).items[0].sets, 3);
+
+  const followupLineage = clinicalLineageForTurn(followup.applied, followupTurn.id);
+  const followupAssistant = repo.addChatMessage("assistant", "That remains held for clinical review.", "stub", {
+    applied: followup.applied,
+    clinical_lineage: followupLineage,
+  });
+  repo.finishChatTurn(followupTurn.id, {
+    reply: followupAssistant.content,
+    assistant_message_id: followupAssistant.id,
+    meta: { applied: followup.applied, clinical_lineage: followupLineage },
+  });
+
+  const ordinaryUser = repo.addChatMessage("user", "My squat felt easy again today.", null);
+  const ordinaryTurn = repo.createChatTurn({ message: ordinaryUser.content, user_message_id: ordinaryUser.id });
+  const ordinary = applyChatActions(
+    {
+      actions: [
+        {
+          type: "plan_update",
+          summary: "Routine earned load progression",
+          changes: [{ day_number: 1, exercise: "Back Squat", target_weight: 190, reason: "Repeated crisp sets" }],
+        },
+      ],
+    },
+    {
+      agent: "stub",
+      message: ordinaryUser.content,
+      turnId: ordinaryTurn.id,
+      userMessageId: ordinaryUser.id,
+    }
+  );
+  assert.equal(ordinary.applied[0].result.tier, "quiet_apply", "an unrelated later turn is not permanently tainted");
+  assert.equal(ordinary.applied[0].result.persisted, true);
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 190);
+});
+
+test("a prose-only MRI turn keeps clinician lineage for 'add that exercise' after restart", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  repo.savePlanDay(1, "Lower", "legs", [
+    { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 8, target_weight: 185 },
+  ]);
+
+  const firstUser = repo.addChatMessage("user", "What exercises fit my MRI findings?", null);
+  const firstTurn = repo.createChatTurn({ message: firstUser.content, user_message_id: firstUser.id });
+  repo.markChatTurnRunning(firstTurn.id);
+  const provenance = clinicalPlanProvenance({
+    message: firstUser.content,
+    action: {},
+    imageAloneIsClinical: false,
+  });
+  const lineage = clinicalLineageForTurn([], firstTurn.id, provenance);
+  assert.equal(lineage.proposal_id, null, "the server persists clinical context even before a proposal exists");
+  const assistant = repo.addChatMessage("assistant", "A supported squat variation could be considered.", "stub", {
+    applied: [],
+    clinical_lineage: lineage,
+  });
+  repo.finishChatTurn(firstTurn.id, {
+    reply: assistant.content,
+    assistant_message_id: assistant.id,
+    meta: { applied: [], clinical_lineage: lineage },
+  });
+
+  // No in-memory handoff is used below: the follow-up resolves lineage from the
+  // completed chat_turn row, which is the same path used after a process restart.
+  const followupUser = repo.addChatMessage("user", "Can you add that exercise to my plan?", null);
+  const followupTurn = repo.createChatTurn({ message: followupUser.content, user_message_id: followupUser.id });
+  const followup = applyChatActions(
+    {
+      actions: [
+        {
+          type: "plan_update",
+          summary: "Make the discussed exercise change",
+          changes: [
+            {
+              day_number: 1,
+              exercise: "Supported Split Squat",
+              sets: 2,
+              rep_low: 8,
+              rep_high: 10,
+              reason: "Add the exercise the coach just discussed",
+            },
+          ],
+        },
+      ],
+    },
+    {
+      agent: "stub",
+      message: followupUser.content,
+      turnId: followupTurn.id,
+      userMessageId: followupUser.id,
+    }
+  );
+  assert.equal(followup.applied[0].result.tier, "clinician");
+  assert.equal(followup.applied[0].result.review_required, true);
+  assert.equal(followup.applied[0].result.decision.context.clinical_provenance.lineage.proposal_id, null);
+  assert.equal(
+    repo.getPlanDay(1).items.some((item) => item.exercise === "Supported Split Squat"),
+    false,
+    "the clinically linked exercise was not quietly added"
+  );
+});
+
+function applyGenericPlanFollowupAfterProseOnlyMri(
+  message,
+  changes = [{ day_number: 1, exercise: "Back Squat", sets: 2 }]
+) {
+  repo.setSettings({ lead_mode: "lead" });
+  repo.savePlanDay(1, "Lower", "legs", [
+    { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 8, target_weight: 185 },
+  ]);
+  const firstUser = repo.addChatMessage("user", "What exercises fit my MRI findings?", null);
+  const firstTurn = repo.createChatTurn({ message: firstUser.content, user_message_id: firstUser.id });
+  repo.markChatTurnRunning(firstTurn.id);
+  const provenance = clinicalPlanProvenance({
+    message: firstUser.content,
+    action: {},
+    imageAloneIsClinical: false,
+  });
+  const lineage = clinicalLineageForTurn([], firstTurn.id, provenance);
+  const assistant = repo.addChatMessage("assistant", "I suggest reducing squat volume to two sets.", "stub", {
+    applied: [],
+    clinical_lineage: lineage,
+  });
+  repo.finishChatTurn(firstTurn.id, {
+    reply: assistant.content,
+    assistant_message_id: assistant.id,
+    meta: { applied: [], clinical_lineage: lineage },
+  });
+
+  const followupUser = repo.addChatMessage("user", message, null);
+  const followupTurn = repo.createChatTurn({ message: followupUser.content, user_message_id: followupUser.id });
+  return applyChatActions(
+    { actions: [{ type: "plan_update", changes }] },
+    {
+      agent: "stub",
+      message: followupUser.content,
+      turnId: followupTurn.id,
+      userMessageId: followupUser.id,
+    }
+  );
+}
+
+test("'Change my plan accordingly' inherits clinician lineage from prose-only MRI context", () => {
+  const out = applyGenericPlanFollowupAfterProseOnlyMri("Change my plan accordingly");
+  assert.equal(out.applied[0].result.tier, "clinician");
+  assert.equal(out.applied[0].result.review_required, true);
+  assert.equal(out.applied[0].result.persisted, false);
+  assert.equal(repo.getPlanDay(1).items[0].sets, 3);
+});
+
+test("'Update my plan with your suggestion' inherits clinician lineage from prose-only MRI context", () => {
+  const out = applyGenericPlanFollowupAfterProseOnlyMri("Update my plan with your suggestion");
+  assert.equal(out.applied[0].result.tier, "clinician");
+  assert.equal(out.applied[0].result.review_required, true);
+  assert.equal(out.applied[0].result.persisted, false);
+  assert.equal(repo.getPlanDay(1).items[0].sets, 3);
+});
+
+test("a self-contained named plan request does not inherit unrelated MRI lineage", () => {
+  const out = applyGenericPlanFollowupAfterProseOnlyMri("Increase my squat to 190 pounds.", [
+    { day_number: 1, exercise: "Back Squat", target_weight: 190, reason: "independent load request" },
+  ]);
+  assert.equal(out.applied[0].result.tier, "quiet_apply");
+  assert.equal(out.applied[0].result.persisted, true);
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 190);
+});
+
+test("an explicit topic change starts an unrelated plan request outside prior MRI lineage", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  repo.savePlanDay(1, "Lower", "legs", [
+    { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 8, target_weight: 185 },
+  ]);
+
+  const firstUser = repo.addChatMessage("user", "What exercises fit my MRI findings?", null);
+  const firstTurn = repo.createChatTurn({ message: firstUser.content, user_message_id: firstUser.id });
+  repo.markChatTurnRunning(firstTurn.id);
+  const provenance = clinicalPlanProvenance({
+    message: firstUser.content,
+    action: {},
+    imageAloneIsClinical: false,
+  });
+  const lineage = clinicalLineageForTurn([], firstTurn.id, provenance);
+  const assistant = repo.addChatMessage("assistant", "A supported squat variation could be considered.", "stub", {
+    applied: [],
+    clinical_lineage: lineage,
+  });
+  repo.finishChatTurn(firstTurn.id, {
+    reply: assistant.content,
+    assistant_message_id: assistant.id,
+    meta: { applied: [], clinical_lineage: lineage },
+  });
+
+  const nextUser = repo.addChatMessage("user", "Different topic: change my squat to two sets.", null);
+  const nextTurn = repo.createChatTurn({ message: nextUser.content, user_message_id: nextUser.id });
+  const next = applyChatActions(
+    { actions: [{ type: "plan_update", changes: [{ day_number: 1, exercise: "Back Squat", sets: 2 }] }] },
+    {
+      agent: "stub",
+      message: nextUser.content,
+      turnId: nextTurn.id,
+      userMessageId: nextUser.id,
+    }
+  );
+  assert.equal(next.applied[0].result.tier, "quiet_apply");
+  assert.equal(next.applied[0].result.persisted, true);
+  assert.equal(repo.getPlanDay(1).items[0].sets, 2);
+});
+
+test("resolved clinical review lineage cannot be reused by a generic confirmation", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  repo.savePlanDay(1, "Lower", "legs", [
+    { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 8, target_weight: 185 },
+  ]);
+  const firstUser = repo.addChatMessage("user", "Adjust this from my MRI.", null);
+  const firstTurn = repo.createChatTurn({ message: firstUser.content, user_message_id: firstUser.id });
+  repo.markChatTurnRunning(firstTurn.id);
+  const first = applyChatActions(
+    { actions: [{ type: "plan_update", changes: [{ day_number: 1, exercise: "Back Squat", sets: 2 }] }] },
+    { agent: "stub", message: firstUser.content }
+  );
+  const lineage = clinicalLineageForTurn(first.applied, firstTurn.id);
+  const assistant = repo.addChatMessage("assistant", "Held for review.", "stub", { clinical_lineage: lineage });
+  repo.finishChatTurn(firstTurn.id, {
+    reply: assistant.content,
+    assistant_message_id: assistant.id,
+    meta: { clinical_lineage: lineage },
+  });
+  repo.transitionBrainDecision(first.applied[0].result.decision.id, "rejected");
+
+  const followupUser = repo.addChatMessage("user", "Yes, make that change.", null);
+  const followupTurn = repo.createChatTurn({ message: followupUser.content, user_message_id: followupUser.id });
+  const followup = applyChatActions(
+    { actions: [{ type: "plan_update", changes: [{ day_number: 1, exercise: "Back Squat", sets: 2 }] }] },
+    {
+      agent: "stub",
+      message: followupUser.content,
+      turnId: followupTurn.id,
+      userMessageId: followupUser.id,
+    }
+  );
+  assert.equal(followup.applied[0].result.tier, "quiet_apply");
+  assert.equal(followup.applied[0].result.persisted, true);
 });
 
 test("an explicit same-day chat edit bypasses the surprise budget, applies the whole prescription, and verifies read-back", () => {

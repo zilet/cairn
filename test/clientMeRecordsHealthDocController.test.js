@@ -244,6 +244,11 @@ function loadController() {
       setItem: (key, value) => localStorage.set(key, String(value)),
       getItem: (key) => localStorage.get(key) || null,
     },
+    sessionStorage: {
+      setItem: (key, value) => localStorage.set(`session:${key}`, String(value)),
+      getItem: (key) => localStorage.get(`session:${key}`) || null,
+      removeItem: (key) => localStorage.delete(`session:${key}`),
+    },
     $: (selector) => document.querySelector(selector),
     peekCached: () => null,
     swrSet: () => {},
@@ -251,6 +256,7 @@ function loadController() {
     CairnHealthClient: {
       H_FILE_PROMPT: "Drop docs",
       MAX_DOC_BYTES: 15 * 1024 * 1024,
+      MAX_DICOM_BYTES: 256 * 1024 * 1024,
       MAX_DOC_TEXT: 400000,
       guessUploadMime: () => "text/plain",
     },
@@ -266,6 +272,7 @@ function loadController() {
   };
   context.window = context;
   context.globalThis = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/imaging-upload-model.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/health-doc-upload-controller.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/health-doc-date-actions-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/health-doc-lifecycle-actions-client.js"), "utf8"), context);

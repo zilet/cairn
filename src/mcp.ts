@@ -8,6 +8,7 @@ import { registerDayCoachTools } from "./surfaces/mcp/day-coach.js";
 import { registerGarminTools } from "./surfaces/mcp/garmin.js";
 import { registerHealthMetricsTools } from "./surfaces/mcp/health-metrics.js";
 import { registerHealthRecordTools } from "./surfaces/mcp/health-records.js";
+import { registerImagingTools } from "./surfaces/mcp/imaging.js";
 import { registerMemoryLearningTools } from "./surfaces/mcp/memory-learning.js";
 import { registerNutritionTools } from "./surfaces/mcp/nutrition.js";
 import { registerOperatorTools } from "./surfaces/mcp/operator.js";
@@ -22,11 +23,19 @@ import { registerBodyMetricsTools } from "./surfaces/mcp/body-metrics.js";
 import { registerJourneyTools } from "./surfaces/mcp/journey.js";
 import { getBuildInfo, getBuildStamp } from "./build-info.js";
 import { recordDiagnosticEvent } from "./repo/diagnostics.js";
-import { isInternalMcpMetricOperation, normalizeMcpMetricOperation, recordRequestMetric, registerMcpMetricOperation } from "./repo/request-metrics.js";
+import {
+  isInternalMcpMetricOperation,
+  normalizeMcpMetricOperation,
+  recordRequestMetric,
+  registerMcpMetricOperation,
+} from "./repo/request-metrics.js";
 import { telemetryErrorName, telemetryIdentifier, telemetryStackFrames } from "./telemetry-privacy.js";
 
 const KNOWN_MCP_METHODS = new Map([
-  ["initialize", "initialize"], ["notifications/initialized", "initialized"], ["tools/list", "tools_list"], ["ping", "ping"],
+  ["initialize", "initialize"],
+  ["notifications/initialized", "initialized"],
+  ["tools/list", "tools_list"],
+  ["ping", "ping"],
 ]);
 
 function instrumentTelemetry(server: McpServer): McpServer {
@@ -55,6 +64,7 @@ export function buildMcpServer(): McpServer {
   registerGarminTools(server);
   registerHealthMetricsTools(server);
   registerHealthRecordTools(server);
+  registerImagingTools(server);
   registerMemoryLearningTools(server);
   registerNutritionTools(server);
   registerOperatorTools(server);
@@ -113,7 +123,14 @@ export async function handleMcpPost(req: Request, res: Response) {
 }
 
 export function methodNotAllowed(_req: Request, res: Response) {
-  recordRequestMetric({ protocol: "mcp", method: _req.method, route: "unknown", status: 405, duration_ms: 0, scope: "internal" });
+  recordRequestMetric({
+    protocol: "mcp",
+    method: _req.method,
+    route: "unknown",
+    status: 405,
+    duration_ms: 0,
+    scope: "internal",
+  });
   recordDiagnosticEvent({
     source: "mcp",
     kind: "http_error",

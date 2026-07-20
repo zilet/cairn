@@ -1,6 +1,7 @@
 import { db } from "../db.js";
 import { listActiveDirectives } from "./coach.js";
 import { cleanClinicalFacts } from "./health.js";
+import { dicomTechnicalExport, listImagingStudiesStructured } from "./imaging.js";
 import { getProfile } from "./profile.js";
 import { prioritizeMarkers } from "./propagation.js";
 import { listSupplements } from "./supplements.js";
@@ -19,7 +20,7 @@ import { listSupplements } from "./supplements.js";
 // which direction is worse), and the deterministic trend. CONSTITUTION: no 0-100
 // score anywhere — `status` is optimal-zone framing, never a grade; the internal
 // impact_score never crosses this boundary (prioritizeMarkers already strips it).
-export const HEALTH_EXPORT_VERSION = 2;
+export const HEALTH_EXPORT_VERSION = 3;
 
 // Optimal-zone status for one marker, in plain FHIR-ish words. `interpretation`
 // mirrors FHIR's interpretation concept loosely: "within-optimal" or, when out,
@@ -32,7 +33,8 @@ function exportOptimalStatus(m: any): {
 } {
   const o = m?.optimal; // {low, high, dir} from prioritizeMarkers, or null
   if (!o) return { interpretation: "no-optimal-reference", inOptimal: null, worseDirection: null };
-  if (m.in_optimal === true) return { interpretation: "within-optimal", inOptimal: true, worseDirection: o.dir ?? null };
+  if (m.in_optimal === true)
+    return { interpretation: "within-optimal", inOptimal: true, worseDirection: o.dir ?? null };
   if (m.in_optimal === false) {
     const num = typeof m?.latest?.value === "number" ? m.latest.value : Number(m?.latest?.value);
     // Which side it fell on (only meaningful when out of optimal + numeric).
@@ -62,9 +64,14 @@ function healthExportClinicalFacts() {
   const seen = new Set<string>();
   for (const row of rows) {
     let parsed: any = null;
-    try { parsed = row.parsed_json ? JSON.parse(row.parsed_json) : null; } catch { parsed = null; }
+    try {
+      parsed = row.parsed_json ? JSON.parse(row.parsed_json) : null;
+    } catch {
+      parsed = null;
+    }
     const facts = cleanClinicalFacts(parsed?.clinical_facts, 500);
-    const recordDate = (row.doc_date && String(row.doc_date).slice(0, 10)) || String(row.created_at ?? "").slice(0, 10) || null;
+    const recordDate =
+      (row.doc_date && String(row.doc_date).slice(0, 10)) || String(row.created_at ?? "").slice(0, 10) || null;
     for (const f of facts) {
       const key = [
         f.kind,
@@ -100,16 +107,17 @@ export function buildHealthExport() {
   const observations = markers.map((m: any) => {
     const status = exportOptimalStatus(m);
     // Every historical reading as a tiny Observation-component (ascending by date).
-    const history = (Array.isArray(m.points) ? m.points : [])
-      .map((p: any) => ({
-        effectiveDate: p.date,
-        value: p.value,
-        flag: p.flag ?? null, // the lab's own low/normal/high flag, when present
-        ...(p.unit_converted || p.unit_mismatch ? {
-          sourceValue: p.source_value ?? null,
-          sourceUnit: p.source_unit ?? null,
-        } : {}),
-      }));
+    const history = (Array.isArray(m.points) ? m.points : []).map((p: any) => ({
+      effectiveDate: p.date,
+      value: p.value,
+      flag: p.flag ?? null, // the lab's own low/normal/high flag, when present
+      ...(p.unit_converted || p.unit_mismatch
+        ? {
+            sourceValue: p.source_value ?? null,
+            sourceUnit: p.source_unit ?? null,
+          }
+        : {}),
+    }));
     const t = m.trend || {};
     return {
       // Observation-like identity.
@@ -120,10 +128,12 @@ export function buildHealthExport() {
       // The latest reading (FHIR "valueQuantity" + "effectiveDateTime").
       value: m.latest?.value ?? null,
       unit: m.unit ?? null,
-      ...(m.latest?.unit_converted || m.latest?.unit_mismatch ? {
-        sourceValue: m.latest?.source_value ?? null,
-        sourceUnit: m.latest?.source_unit ?? null,
-      } : {}),
+      ...(m.latest?.unit_converted || m.latest?.unit_mismatch
+        ? {
+            sourceValue: m.latest?.source_value ?? null,
+            sourceUnit: m.latest?.source_unit ?? null,
+          }
+        : {}),
       effectiveDate: m.latest?.date ?? null,
       // The lab's own reference flag (low/normal/high) for the latest reading.
       labFlag: m.latest?.flag ?? null,
@@ -171,8 +181,58 @@ export function buildHealthExport() {
   // `observations`; this is a convenience pointer, not a duplicate source.
   const bodyComposition = observations
     .filter((o: any) => o.category === "body")
-    .map((o: any) => ({ name: o.name, value: o.value, unit: o.unit, effectiveDate: o.effectiveDate, trend: o.trend.direction }));
+    .map((o: any) => ({
+      name: o.name,
+      value: o.value,
+      unit: o.unit,
+      effectiveDate: o.effectiveDate,
+      trend: o.trend.direction,
+    }));
   const clinicalFacts = healthExportClinicalFacts();
+  const imagingStudies = listImagingStudiesStructured().map((study: any) => ({
+    resourceType: "DiagnosticReport",
+    id: `imaging-${study.id}`,
+    status: study.report_status,
+    category: "imaging",
+    effectiveDate: study.study?.study_date ?? study.doc_date ?? null,
+    issued: study.study?.issued_at ?? null,
+    code: {
+      text: study.study?.procedure ?? null,
+      modality: study.study?.modality ?? "UNKNOWN",
+      rawModality: study.study?.raw_modality ?? null,
+    },
+    performer: study.study?.interpreting_clinician ?? null,
+    facility: study.study?.facility ?? null,
+    anatomy: study.anatomy,
+    conclusion: study.impression ?? null,
+    result: study.findings.map((finding: any) => ({
+      resourceType: "Observation",
+      id: finding.id,
+      status: finding.source === "image_ai" ? "preliminary" : "final",
+      category: "imaging",
+      source: finding.source,
+      bodySite: {
+        system: finding.clinical_system,
+        region: finding.body_region,
+        text: finding.verbatim_site,
+        laterality: finding.laterality,
+      },
+      valueString: finding.finding_text,
+      interpretation: { severity: finding.severity, certainty: finding.certainty },
+      components: finding.measurements.map((measurement: any) => ({
+        code: { text: measurement.name },
+        valueQuantity: measurement.value == null ? null : { value: measurement.value, unit: measurement.unit },
+        valueString: measurement.value_text ?? null,
+        qualifier: measurement.qualifier ?? null,
+        method: measurement.method ?? null,
+      })),
+      sourceSpans: finding.source_spans,
+    })),
+    recommendations: study.recommendations,
+    provenance: study.provenance,
+    verification: study.verification,
+    dicom: dicomTechnicalExport(Number(study.id)),
+  }));
 
   return {
     // Self-describing metadata header (FHIR-ish Bundle-meta, hand-rolled).
@@ -195,10 +255,12 @@ export function buildHealthExport() {
       markerCount: observations.length,
       flaggedCount: flagged_count, // markers the lab flagged low/high (count, not a grade)
       clinicalFactCount: clinicalFacts.length,
+      imagingStudyCount: imagingStudies.length,
       categories: Array.isArray(groups) ? groups : [],
     },
     observations,
     clinicalFacts,
+    imagingStudies,
     bodyComposition,
     supplements,
     directives,
