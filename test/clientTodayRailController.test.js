@@ -138,6 +138,7 @@ function makeDeps(rootEl = new FakeElement("section")) {
       if (path === "/recent-training?limit=6") {
         return [{ kind: "cardio", title: "Run", date: "2026-07-01" }];
       }
+      if (path === "/today-agenda/ack") return { ok: true };
       return { hero: {}, primary: [], more: [], total: 0 };
     },
     activateTab: (tab) => calls.push(["tab", tab]),
@@ -248,6 +249,9 @@ test("Today rail controller wires generic agenda navigation and dismiss controls
   const tabBtn = rootEl.appendChild(new FakeElement("button", {
     dataset: { agendaAct: "tab:progress", agendaId: "tab" },
   }));
+  const energyBtn = rootEl.appendChild(new FakeElement("button", {
+    dataset: { agendaAct: "progress-energy", agendaId: "energy" },
+  }));
   const card = rootEl.appendChild(new FakeElement("article", { className: "agenda-card" }));
   const dismissBtn = card.appendChild(new FakeElement("button", {
     dataset: { agendaDismiss: "", agendaId: "gone" },
@@ -261,6 +265,7 @@ test("Today rail controller wires generic agenda navigation and dismiss controls
     { id: "read", revision: "health-v1", action: { label: "Read", kind: "me-health-read" } },
     { id: "since", action: { label: "Read", kind: "me-health-read" } },
     { id: "tab", action: { label: "Progress", kind: "tab:progress" } },
+    { id: "energy", action: { label: "Review the read", kind: "progress-energy" } },
   ];
 
   controller.wireGenericAgendaCards(pending, deps);
@@ -270,6 +275,7 @@ test("Today rail controller wires generic agenda navigation and dismiss controls
   readBtn.click();
   sinceBtn.click();
   tabBtn.click();
+  energyBtn.click();
   dismissBtn.click();
 
   assert.deepEqual(calls, [
@@ -280,10 +286,54 @@ test("Today rail controller wires generic agenda navigation and dismiss controls
     ["tab", "stand"],
     ["tab", "stand"], // since-last (no revision) navigates but does NOT ack
     ["tab", "progress"],
+    ["tab", "progress"],
     ["collapse", card],
   ]);
   assert.equal(deps.state.planJump, "coach");
   // The whole-picture read lives on the Stand overview now.
   assert.equal(deps.state.standSeg, null);
+  assert.equal(deps.state.progressSeg, "energy");
   assert.equal(card.removed, true);
+});
+
+test("revision dismiss waits for durable acknowledgement and stays visible when it fails", async () => {
+  const rootEl = new FakeElement("section");
+  const card = rootEl.appendChild(
+    new FakeElement("article", {
+      className: "agenda-card",
+      dataset: { agendaCard: "fast-loss-attention" },
+    })
+  );
+  const dismissBtn = card.appendChild(
+    new FakeElement("button", {
+      dataset: { agendaDismiss: "fast-loss-attention" },
+    })
+  );
+  const { deps, calls } = makeDeps(rootEl);
+  deps.api = async (path) => {
+    calls.push(["api", path]);
+    return { ok: false };
+  };
+  const controller = loadController();
+  controller.wireGenericAgendaCards([{ id: "fast-loss-attention", revision: "cut-v1", dismissible: true }], deps);
+
+  dismissBtn.click();
+  assert.equal(card.removed, false, "the UI does not claim durable dismissal before the request settles");
+  await flushRailLoaders();
+  assert.equal(card.removed, false, "a failed acknowledgement leaves the attention item available");
+  assert.deepEqual(calls, [["api", "/today-agenda/ack"]]);
+
+  deps.api = async (path) => {
+    calls.push(["api", path]);
+    return { ok: true };
+  };
+  dismissBtn.click();
+  assert.equal(card.removed, false, "even success waits for the acknowledgement response");
+  await flushRailLoaders();
+  assert.equal(card.removed, true);
+  assert.deepEqual(calls, [
+    ["api", "/today-agenda/ack"],
+    ["api", "/today-agenda/ack"],
+    ["collapse", card],
+  ]);
 });

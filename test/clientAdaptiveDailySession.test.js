@@ -66,41 +66,24 @@ test("one-day custom prescriptions render as prescribed without becoming weekly-
   assert.match(suggestion, /agentJobId: context\.agentJobId/);
 });
 
-test("focused cardio returns to reviewed quick capture instead of logging implicitly", () => {
+test("focused cardio and legacy capture-prefill route to Chat without logging implicitly", () => {
   assert.match(today, /\.sess-dest \[data-cardio-log\]/);
-  assert.match(today, /todayState\.capturePrefill = phrase;[\s\S]*activateTab\("today"\)/);
-  assert.match(postRender, /Review the activity, then press Enter to log it/);
+  assert.match(today, /todayState\.chatPrefill = phrase;[\s\S]*activateTab\("chat"\)/);
+  assert.doesNotMatch(today, /todayState\.capturePrefill = phrase/);
 
   const context = { window: null, globalThis: null, Object, String };
   context.window = context;
   context.globalThis = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/today-post-render-wiring.js"), "utf8"), context);
-  const notices = [];
-  const input = {
-    value: "",
-    focusCount: 0,
-    selections: [],
-    scrolls: [],
-    focus() {
-      this.focusCount += 1;
-    },
-    setSelectionRange(start, end) {
-      this.selections.push([start, end]);
-    },
-    scrollIntoView(options) {
-      this.scrolls.push(options);
-    },
-  };
+  const activated = [];
   const deps = {
-    root: { querySelector: (selector) => (selector === "#qlInput" ? input : null) },
+    root: { querySelector: () => null },
     state: { capturePrefill: "ran 8 km (Z2)" },
-    reducedMotion: () => true,
-    toast: (message) => notices.push(message),
+    activateTab: (tab) => activated.push(tab),
   };
 
   assert.equal(context.CairnTodayPostRenderWiring.applyPendingCapture(deps), true);
-  assert.equal(input.value, "ran 8 km (Z2)");
-  assert.equal(input.focusCount, 1);
   assert.equal(deps.state.capturePrefill, null);
-  assert.deepEqual(notices, ["Review the activity, then press Enter to log it"]);
+  assert.equal(deps.state.chatPrefill, "ran 8 km (Z2)");
+  assert.deepEqual(activated, ["chat"]);
 });

@@ -1838,7 +1838,10 @@ export function leannessAwareLossRates(weightLb: number, bodyFatPct?: number | n
   };
 }
 
-export function computeGoalCheck(prof?: any, opts: { expenditure?: ExpenditureEstimate | null } = {}) {
+export function computeGoalCheck(
+  prof?: any,
+  opts: { expenditure?: ExpenditureEstimate | null; syncMeasuredRmr?: boolean } = {}
+) {
   const storedProfile = prof ?? getProfile();
   const currentWeight = resolvedCurrentBodyweight(storedProfile);
   const p = currentWeight ? { ...storedProfile, weight_lb: currentWeight.weight_lb } : storedProfile;
@@ -1848,8 +1851,9 @@ export function computeGoalCheck(prof?: any, opts: { expenditure?: ExpenditureEs
   const kg = p.weight_lb / LB_PER_KG;
   const sexAdj = (p.sex || "male") === "female" ? -161 : 5;
   const formulaBmr = 10 * kg + 6.25 * p.height_cm - 5 * p.age + sexAdj;
-  const measuredRmr = latestMeasuredRmr();
-  const measuredRmrQuality = measuredRmr ? measuredRmrAssessment(localDateISO()) : null;
+  const measuredRmrOpts = { syncHealthDocs: opts.syncMeasuredRmr !== false };
+  const measuredRmr = latestMeasuredRmr(measuredRmrOpts);
+  const measuredRmrQuality = measuredRmr ? measuredRmrAssessment(localDateISO(), measuredRmrOpts) : null;
   const measuredWeight = measuredRmrQuality?.freshness_weight ?? 0;
   const bmr = measuredRmrQuality ? formulaBmr + (measuredRmrQuality.kcal - formulaBmr) * measuredWeight : formulaBmr;
   // The manual activity factor is the cold-start seed. estimateExpenditure owns
@@ -1866,7 +1870,7 @@ export function computeGoalCheck(prof?: any, opts: { expenditure?: ExpenditureEs
     expenditure = opts.expenditure;
   } else {
     try {
-      expenditure = estimateExpenditure();
+      expenditure = estimateExpenditure(21, { syncMeasuredRmr: opts.syncMeasuredRmr });
     } catch {
       expenditure = null;
     }

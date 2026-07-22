@@ -10,7 +10,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
 | Tool | Description |
 |---|---|
-| `ack_today_agenda` | Presentation acknowledgement for a Today-agenda attention item (currently 'health-focus'): retires the current semantic revision from Today WITHOUT resolving or dismissing the underlying health directives — they keep shaping meals/training. Materially new evidence creates a new revision and may surface again. Mirrors POST /api/today-agenda/ack. |
+| `ack_today_agenda` | Presentation acknowledgement for a Today-agenda attention item: 'health-focus' retires the current semantic revision WITHOUT resolving or dismissing its underlying health directives; 'fast-loss-attention' retires the current cut-quality episode for 14 days, then allows it to resurface if still active. Materially new evidence may create a new revision sooner. Mirrors POST /api/today-agenda/ack. |
 | `activate_journey_phase` | Explicitly activate a journey phase. Any other active phase is completed; this never happens automatically from a suggestion. |
 | `add_checkin` | Record an optional morning check-in (a day-read signal — offered, never required). All fields optional; mood/energy/sleep_feel/soreness are 1-5 (clamped). Several per day are allowed; the latest wins for reads. |
 | `add_context_event` | Record a life-timeline event the coach should plan around: a trip (training disruption), an injury (deload/swap affected movements), a life_event (high stress / poor sleep / illness → reduce volume), or a family_event (a family/kids commitment like 'Tue 17:00 soccer' → keep that day shorter / more flexible). meta is kind-specific: trip {location}, injury {area, severity}, life_event {impact}, family_event {member, recurrence}. |

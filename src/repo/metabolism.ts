@@ -6,12 +6,17 @@ import {
   type MeasuredRmrReading,
 } from "./metabolism-core.js";
 
-export function measuredRmrAssessment(referenceDate: string): MeasuredRmrAssessment | null {
-  const reading = latestMeasuredRmr();
+export type MeasuredRmrReadOptions = { syncHealthDocs?: boolean };
+
+export function measuredRmrAssessment(
+  referenceDate: string,
+  opts: MeasuredRmrReadOptions = {}
+): MeasuredRmrAssessment | null {
+  const reading = latestMeasuredRmr(opts);
   return reading ? assessMeasuredRmr(reading, referenceDate) : null;
 }
 
-export function latestMeasuredRmr(): MeasuredRmrReading | null {
+export function latestMeasuredRmr(opts: MeasuredRmrReadOptions = {}): MeasuredRmrReading | null {
   const profile = db
     .prepare(`SELECT measured_rmr_kcal, measured_rmr_date, measured_rmr_source FROM profile WHERE id = 1`)
     .get() as any;
@@ -23,10 +28,10 @@ export function latestMeasuredRmr(): MeasuredRmrReading | null {
       source: profile?.measured_rmr_source || "metabolic_test",
     };
   }
-  return syncMeasuredRmrFromHealthDocs();
+  return opts.syncHealthDocs === false ? readMeasuredRmrFromHealthDocs() : syncMeasuredRmrFromHealthDocs();
 }
 
-export function syncMeasuredRmrFromHealthDocs(): MeasuredRmrReading | null {
+function readMeasuredRmrFromHealthDocs(): MeasuredRmrReading | null {
   const rows = db
     .prepare(
       `SELECT id, kind, doc_date, parsed_json, summary
@@ -35,7 +40,11 @@ export function syncMeasuredRmrFromHealthDocs(): MeasuredRmrReading | null {
         ORDER BY COALESCE(doc_date, substr(created_at,1,10)) DESC, id DESC`
     )
     .all() as any[];
-  const reading = rows.map(extractMeasuredRmr).find((row): row is MeasuredRmrReading => row != null) ?? null;
+  return rows.map(extractMeasuredRmr).find((row): row is MeasuredRmrReading => row != null) ?? null;
+}
+
+export function syncMeasuredRmrFromHealthDocs(): MeasuredRmrReading | null {
+  const reading = readMeasuredRmrFromHealthDocs();
   if (!reading) {
     // A deleted/reclassified source must not leave a ghost measurement behind.
     // Only clear values owned by this importer; a future explicit/manual source

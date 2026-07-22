@@ -136,3 +136,30 @@ test("weight and frequent-food capture only enqueue transient failures", async (
   assert.equal(queued.length, 0);
   assert.deepEqual(toasts, ["Couldn't log that — try again.", "Couldn't log that — try again."]);
 });
+
+test("bodyweight quick-add updates both the always-reachable chip and folded tile", async () => {
+  const capture = loadCapture();
+  let saveWeight;
+  const value = { innerHTML: "" };
+  const chip = { querySelector: (selector) => selector === "[data-wtval]" ? value : null, addEventListener() {} };
+  const mini = { innerHTML: "", addEventListener() {} };
+  const inline = { hidden: false };
+  const input = { value: "172.6", addEventListener() {}, focus() {}, scrollIntoView() {} };
+  const go = { addEventListener: (_type, handler) => { saveWeight = handler; } };
+  const elements = new Map([
+    ["#wtChip", chip], ["#wtChipMini", mini], ["#wtInline", inline],
+    ["#wtInlineInput", input], ["#wtInlineGo", go],
+  ]);
+  capture.view = { querySelector: (selector) => elements.get(selector) || null };
+  capture.api = async () => ({ ok: true });
+  capture.swrInvalidate = () => {};
+  capture.toast = () => {};
+
+  capture.setupWeightChip();
+  await saveWeight();
+
+  assert.match(value.innerHTML, /^172\.6/);
+  assert.match(mini.innerHTML, /^172\.6<span class="wt-mini-unit">lb/);
+  assert.equal(input.value, "");
+  assert.equal(inline.hidden, true);
+});

@@ -3,10 +3,6 @@
 // while this module assembles controller adapters for the classic-script modules.
 
 function makeTodayDependencies(input: ClientTodayDependenciesContextInput): ClientTodayDependenciesContext {
-  const micGlyph = (): string => {
-    const value = input.micGlyph;
-    return typeof value === "function" ? value() : value;
-  };
   const deps: ClientTodayDependenciesContext = {
     sideLoaders() {
       return {
@@ -51,7 +47,6 @@ function makeTodayDependencies(input: ClientTodayDependenciesContextInput): Clie
     mainShell() {
       return {
         escapeHtml: input.escapeHtml,
-        micGlyph: micGlyph(),
       };
     },
 
@@ -164,10 +159,8 @@ function makeTodayDependencies(input: ClientTodayDependenciesContextInput): Clie
         deferRail: renderInput.deferRail,
         agenda: renderInput.agenda,
         agendaGeneric: renderInput.agendaGeneric,
-        todayCompass: renderInput.todayCompass,
         updateHeaderCondense: input.updateHeaderCondense,
         runCountUps: input.runCountUps,
-        quickLog: input.quickLog,
         reducedMotion: input.reducedMotion,
         wireCardioSync: input.wireCardioSync,
         renderToday: input.renderToday,
@@ -177,7 +170,6 @@ function makeTodayDependencies(input: ClientTodayDependenciesContextInput): Clie
         loadTrainingProvenance: input.loadTrainingProvenance,
         loadTableHint: input.loadTableHint,
         setupWeightChip: input.setupWeightChip,
-        setupVoiceCapture: input.setupVoiceCapture,
         loadFrequentFoods: input.loadFrequentFoods,
         loadContextBanner: input.loadContextBanner,
         loadHealthFocusBanner: input.loadHealthFocusBanner,

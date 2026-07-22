@@ -384,17 +384,6 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
 .stat-pace.pace-behind .stat-n,.stat-pace.pace-behind .stat-sub{color:var(--accent)}
 .stat-pace.pace-fast .stat-n,.stat-pace.pace-fast .stat-sub{color:var(--warn)}
 
-/* pace offer under the compass: a calm optional line into Chat (only on a real
-   trend deviation — an offer to look together, never a verdict or a nag) */
-.pace-offer{display:flex;align-items:center;gap:6px;width:100%;margin:-6px 0 14px;padding:9px 14px;
-  border:0;border-radius:var(--radius-sm);background:var(--card-2);cursor:pointer;
-  font-family:var(--font-ui);font-size:.78rem;color:var(--ink-2);text-align:left}
-.pace-offer::before{content:"";width:7px;height:7px;border-radius:50%;flex:0 0 auto}
-.pace-offer-fast::before{background:var(--warn)}
-.pace-offer-behind::before{background:var(--accent)}
-.pace-offer-cta{margin-left:auto;color:var(--accent);font-weight:600;white-space:nowrap}
-.pace-offer:active{transform:var(--press-lg)}
-
 /* "Table" hint: one-line shortcut from Today to Plan → Meals */
 .tablehint{display:flex;align-items:baseline;gap:8px;width:100%;margin:2px 0 12px;padding:8px 14px;
   border:0;border-radius:var(--radius-sm);background:transparent;cursor:pointer;
@@ -405,7 +394,7 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
 .tablehint-go{margin-left:auto;color:var(--accent);flex:0 0 auto}
 .tablehint:active{transform:var(--press-lg)}
 
-/* bodyweight quick-add chip lives in the strip */
+/* bodyweight quick-add tile lives inside the collapsed week trajectory */
 .stat-wt{cursor:pointer;font:inherit}
 .stat-wt .stat-n{display:inline-flex;align-items:baseline;justify-content:center;gap:3px}
 .stat-plus{font-size:.85rem;color:var(--accent);font-weight:700;line-height:1;font-family:var(--font-ui)}
@@ -2926,9 +2915,9 @@ body.sheet-open{overflow:hidden}
 .brief-rest .brief-redirect-primary:hover,.brief-easy .brief-redirect-primary:hover{
   background:var(--ink);border-color:var(--ink);color:var(--paper);box-shadow:var(--shadow-md);transform:translateY(-1px)}
 
-/* always-on capture row — quiet, there until you want it */
+/* always-on bodyweight quick action — quiet, there until you want it */
 .capture-row{margin:0 0 12px}
-/* bodyweight quick-add chip living in the capture row (display + toggle) */
+/* bodyweight quick-add chip living above the week fold (display + toggle) */
 .wt-mini{
   flex:0 0 auto;background:var(--card-2);border:1px solid var(--line);color:var(--ink-2);
   border-radius:999px;padding:0 13px;height:42px;display:inline-flex;align-items:center;gap:3px;

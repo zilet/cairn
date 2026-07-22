@@ -1807,7 +1807,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /goalLineHtml\(stats: unknown, currentWeight: unknown, isToday: unknown, todayISO\?: string\): string/);
   assert.match(clientGlobals, /healthFocusBannerHtml\(data: unknown\): string/);
   assert.match(clientGlobals, /CairnTodayCompass/);
-  assert.match(clientGlobals, /paceOffer\(stats: unknown, currentWeight: unknown\): \{ status: string; line: string; ask: string \} \| null/);
+  assert.doesNotMatch(clientGlobals, /paceOffer\(stats: unknown/);
   assert.match(clientGlobals, /cellsHtml: string/);
   assert.match(clientGlobals, /CairnTodayGarminReconciliation/);
   assert.match(clientGlobals, /root: ParentNode \| null \| undefined/);
@@ -4107,7 +4107,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayContextSource, /CairnTodayContext/);
   assert.match(todayCompassSource, /type TodayCompassBuild = \{/);
   assert.match(todayCompassSource, /function paceTileHtml\(statsValue: unknown, deps: TodayCompassDeps\): string/);
-  assert.match(todayCompassSource, /function paceOffer\(statsValue: unknown, currentWeight: unknown\): TodayPaceOffer \| null/);
+  assert.doesNotMatch(todayCompassSource, /function paceOffer\(|TodayPaceOffer/);
   assert.match(todayCompassSource, /function build\(statsValue: unknown, deps: TodayCompassDeps, options: TodayCompassOptions = \{\}\): TodayCompassBuild/);
   assert.match(todayCompassSource, /CairnTodayCompass/);
   assert.match(todayGarminReconciliationSource, /type TodayGarminReconcileOptions = \{/);
@@ -5087,7 +5087,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayCompassClient, /Object\.assign\(globalThis, \{ CairnTodayCompass: CAIRN_TODAY_COMPASS \}\)/);
   assert.match(todayCompassClient, /window\.CairnTodayCompass = CAIRN_TODAY_COMPASS/);
   assert.match(todayCompassClient, /paceTileHtml,/);
-  assert.match(todayCompassClient, /paceOfferHtml,/);
+  assert.doesNotMatch(todayCompassClient, /paceOffer|ask the coach/);
   assert.match(todayCompassClient, /build,/);
   assert.doesNotMatch(todayCompassClient, /^const\s+PACE_WORDS|^function\s+paceTileHtml|^function\s+build/m);
   assert.match(todayGarminReconciliationClient, /Object\.assign\(globalThis, \{ CairnTodayGarminReconciliation: CAIRN_TODAY_GARMIN_RECONCILIATION \}\)/);
@@ -5600,7 +5600,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayRailLoadersSource, /CairnTodayWeekAhead\.cardHtml/);
   assert.doesNotMatch(today, /CairnTodayWeekAhead\.cardHtml/);
   assert.doesNotMatch(today, /const\s+WEEK_AHEAD_GLYPH|class="weekahead reveal"|class="wa-row/);
-  assert.match(today, /CairnTodayContext\.goalLineHtml/);
+  assert.doesNotMatch(today, /CairnTodayContext\.goalLineHtml|goalSlot|paceOffer/);
   assert.match(todaySideLoadersClient, /CairnTodayContext\.contextBannerHtml/);
   assert.match(todaySideLoadersClient, /CairnTodayContext\.healthFocusBannerHtml/);
   assert.match(today, /CairnTodayCompass\.build/);

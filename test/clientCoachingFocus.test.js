@@ -316,6 +316,17 @@ test("a daily easy/rest conductor lead never renders the program recovery-week a
   assert.match(html, /Keep today easy/);
   assert.match(html, /data-cfocus-go="recovery"/, "the daily recovery read remains navigable");
   assert.doesNotMatch(html, /data-cfocus-act="recovery-week"|Draft my recovery week/);
+  assert.equal(
+    focus.coachingFocusThreadHtml(daily),
+    "",
+    "Today suppresses the duplicate daily-posture thread because the Brief owns that judgment",
+  );
+
+  const distinct = focus.coachingFocusThreadHtml({
+    ...daily,
+    lead: { domain: "recovery", title: "A lighter week starts tomorrow", why: "Sustained load needs room to land." },
+  });
+  assert.match(distinct, /A lighter week starts tomorrow/);
 });
 
 test("routing to the screen you're already on settles instead of re-rendering", () => {

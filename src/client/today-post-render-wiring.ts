@@ -15,10 +15,6 @@ type TodayPostRenderRead = {
   _cached?: boolean;
 };
 
-type TodayPostRenderCompass = {
-  paceOffer?: { ask?: string | null } | null;
-};
-
 type TodayPostRenderWiringDeps = {
   root: HTMLElement;
   state: TodayPostRenderState;
@@ -32,10 +28,8 @@ type TodayPostRenderWiringDeps = {
   deferRail?: boolean;
   agenda: Partial<ClientTodayAgenda> | null | undefined;
   agendaGeneric: ClientTodayAgendaCandidate[];
-  todayCompass: TodayPostRenderCompass;
   updateHeaderCondense(): void;
   runCountUps(root?: ParentNode | null, options?: { snap?: boolean }): void;
-  quickLog(): unknown;
   reducedMotion(): boolean;
   wireCardioSync(root: ParentNode, onSync: () => unknown): unknown;
   renderToday(opts?: Record<string, unknown>): unknown;
@@ -45,7 +39,6 @@ type TodayPostRenderWiringDeps = {
   loadTrainingProvenance(isToday: boolean): unknown;
   loadTableHint(): unknown;
   setupWeightChip(): unknown;
-  setupVoiceCapture(): unknown;
   loadFrequentFoods(): unknown;
   loadContextBanner(): unknown;
   loadHealthFocusBanner(): unknown;
@@ -74,14 +67,9 @@ type TodayPostRenderWiringApi = {
   function applyPendingCapture(deps: TodayPostRenderWiringDeps): boolean {
     const phrase = String(deps.state.capturePrefill || "").trim();
     if (!phrase) return false;
-    const input = deps.root.querySelector<HTMLInputElement>("#qlInput");
-    if (!input) return false;
     deps.state.capturePrefill = null;
-    input.value = phrase;
-    input.focus();
-    try { input.setSelectionRange(input.value.length, input.value.length); } catch {}
-    input.scrollIntoView({ behavior: deps.reducedMotion() ? "auto" : "smooth", block: "center" });
-    deps.toast("Review the activity, then press Enter to log it");
+    deps.state.chatPrefill = phrase;
+    deps.activateTab("chat");
     return true;
   }
 
@@ -89,23 +77,13 @@ type TodayPostRenderWiringApi = {
     deps.updateHeaderCondense();
     deps.runCountUps(deps.root, { snap: deps.soft });
 
-    const quickLogButton = deps.root.querySelector("#qlBtn");
-    const quickLogInput = deps.root.querySelector<HTMLInputElement>("#qlInput");
-    quickLogButton?.addEventListener("click", () => deps.quickLog());
-    quickLogInput?.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") deps.quickLog();
-    });
-    applyPendingCapture(deps);
+    if (applyPendingCapture(deps)) return;
 
     deps.root.querySelectorAll<HTMLElement>("[data-cardio-log]").forEach((button) => button.addEventListener("click", () => {
-      const input = deps.root.querySelector<HTMLInputElement>("#qlInput");
-      if (!input) return;
-      input.value = button.dataset.cardioLog || "";
-      input.focus();
-      try {
-        input.setSelectionRange(input.value.length, input.value.length);
-      } catch {}
-      input.scrollIntoView({ behavior: deps.reducedMotion() ? "auto" : "smooth", block: "center" });
+      const phrase = String(button.dataset.cardioLog || "").trim();
+      if (!phrase) return;
+      deps.state.chatPrefill = phrase;
+      deps.activateTab("chat");
     }));
 
     deps.wireCardioSync(deps.root, () => deps.renderToday({ soft: true }));
@@ -125,7 +103,6 @@ type TodayPostRenderWiringApi = {
 
     deps.loadTableHint();
     deps.setupWeightChip();
-    deps.setupVoiceCapture();
     // Frequents ("Usual around now") + the "how are you feeling?" check-in were
     // removed from Today — food variations weren't useful and Chat handles logging
     // and how-you-feel far more naturally (where the user actually does it).
@@ -139,13 +116,6 @@ type TodayPostRenderWiringApi = {
         deps.runFallbackRail(deps.isToday, deps.todayRailDeps());
       }
     }
-    deps.root.querySelector("#goalLine")?.addEventListener("click", () => deps.activateTab("progress"));
-
-    deps.root.querySelector("#paceOffer")?.addEventListener("click", () => {
-      deps.state.chatPrefill = deps.todayCompass.paceOffer?.ask || "";
-      deps.activateTab("chat");
-    });
-
     deps.root.querySelector("#backToday")?.addEventListener("click", () => {
       deps.state.logDate = deps.localISO();
       deps.state.day = null;

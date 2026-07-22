@@ -11,6 +11,7 @@ type TodayRailState = {
   chatPrefill?: string | null;
   meSeg?: string | null;
   standSeg?: string | null;
+  progressSeg?: string | null;
 };
 
 type TodayRailLoaderKey =
@@ -198,6 +199,11 @@ type TodayRailDeps = {
           deps.activateTab("stand");
           return;
         }
+        if (kind === "progress-energy") {
+          deps.state.progressSeg = "energy";
+          deps.activateTab("progress");
+          return;
+        }
         if (kind.startsWith("tab:")) deps.activateTab(kind.slice(4));
       });
     });
@@ -206,17 +212,28 @@ type TodayRailDeps = {
       if (button.dataset.wired) return;
       button.dataset.wired = "1";
       button.addEventListener("click", () => {
+        if (button.dataset.ackPending) return;
         const card = button.closest(".agenda-card");
         const id = button.getAttribute("data-agenda-dismiss") || card?.getAttribute("data-agenda-card") || "";
         const candidate = pending.find((item) => item.id === id);
         if (candidate?.revision) {
+          button.dataset.ackPending = "1";
           void deps
             .api("/today-agenda/ack", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ id, revision: candidate.revision }),
             })
-            .catch(() => {});
+            .then((result) => {
+              if (!(result as { ok?: unknown } | null)?.ok) return;
+              if (card) deps.collapseEl(card, () => card.remove());
+              else button.remove();
+            })
+            .catch(() => {})
+            .finally(() => {
+              delete button.dataset.ackPending;
+            });
+          return;
         }
         if (card) deps.collapseEl(card, () => card.remove());
         else button.remove();

@@ -24,6 +24,7 @@ import {
   marker,
 } from "./_seed.js";
 import { applyDueAnnouncedDecisions, applyProposalWithAutonomy } from "../dist/domain/brain/autonomy-service.js";
+import { todayRouter } from "../dist/routes/today.js";
 
 // Tables every candidate producer reads — wiped to a known floor each case so the
 // arbiter sees exactly (and only) what each test seeds.
@@ -657,11 +658,198 @@ test("opening a health read retires only that revision until material evidence c
   assert.notEqual(resurfaced.revision, health.revision);
 });
 
+test("health acknowledgement keeps its captured current-day date through a local-day rollover", () => {
+  seedHealthDoc("2025-12-01", [marker("LDL-C", 190, { unit: "mg/dL", flag: "high" })]);
+  repo.deriveDirectives();
+  const agenda = repo.todayAgenda();
+  const health = [...agenda.primary, ...agenda.more].find((item) => item.id === "health-focus");
+  assert.ok(health?.revision);
+
+  const RealDate = globalThis.Date;
+  // Two noon UTC instants 48 hours apart remain distinct local calendar dates in
+  // every IANA zone. The acknowledgement captures the first; any later implicit
+  // clock read must see the second, so recomputing healthCandidate's guard date
+  // would reject this otherwise-current revision.
+  const beforeRollover = "2040-01-01T12:00:00.000Z";
+  const afterRollover = "2040-01-03T12:00:00.000Z";
+  let firstCurrentDateRead = true;
+  class RollingDate extends RealDate {
+    constructor(...args) {
+      if (args.length === 0) {
+        super(firstCurrentDateRead ? beforeRollover : afterRollover);
+        firstCurrentDateRead = false;
+      } else {
+        super(...args);
+      }
+    }
+  }
+  globalThis.Date = RollingDate;
+  try {
+    const ack = repo.acknowledgeTodayAgendaCandidate("health-focus", health.revision);
+    assert.equal(ack.ok, true);
+  } finally {
+    globalThis.Date = RealDate;
+  }
+});
+
 test("health attention never appears on a historical Today date", () => {
   seedHealthDoc("2025-12-01", [marker("LDL-C", 190, { unit: "mg/dL", flag: "high" })]);
   repo.deriveDirectives();
   const agenda = repo.todayAgenda("2026-01-07");
   assert.ok(![...agenda.primary, ...agenda.more].some((item) => item.id === "health-focus"));
+});
+
+function seedFastLossEpisode({ lifts = 3, intakeDays = 14 } = {}) {
+  repo.setProfile({
+    age: 44,
+    height_cm: 178,
+    weight_lb: 185,
+    sex: "male",
+    activity_factor: 1.5,
+    goal_mode: "lose",
+    goal_weight_lb: 170,
+    goal_date: localDaysAgo(-120),
+  });
+  for (let i = 1; i <= intakeDays; i++) seedIntake(i, 2_250, { protein_g: 175 });
+  [14, 11, 8, 6, 3, 1].forEach((daysAgo, index) => {
+    repo.logWeight(185 - index * 0.9, localDaysAgo(daysAgo));
+  });
+  const names = ["Back Squat", "Bench Press", "Barbell Row"].slice(0, lifts);
+  for (const name of names) {
+    [27, 20, 13, 6, 1].forEach((daysAgo) => {
+      repo.logSetByName({ exercise: name, weight: 185, reps: 5, rir: 3, date: localDaysAgo(daysAgo) });
+    });
+  }
+}
+
+function fastLossCard() {
+  const agenda = repo.todayAgenda();
+  return [...agenda.primary, ...agenda.more].find((item) => item.id === "fast-loss-attention");
+}
+
+test("robust fast loss competes in Today's attention budget and opens Energy Balance", () => {
+  seedFastLossEpisode();
+  const card = fastLossCard();
+
+  assert.ok(card, "robust fast loss with established strength evidence should surface");
+  assert.equal(card.dismissible, true);
+  assert.ok(card.revision);
+  assert.equal(card.action?.label, "Review the read");
+  assert.equal(card.action?.kind, "progress-energy");
+  assert.match(card.title, /faster than the muscle-preserving band/i);
+  assert.match(card.body, /strength is holding/i);
+  assert.ok(card.tier === "primary" || card.tier === "more", "the shared salience arbiter owns placement");
+
+  const historical = repo.todayAgenda("2026-01-07");
+  assert.ok(![...historical.primary, ...historical.more].some((item) => item.id === "fast-loss-attention"));
+});
+
+test("sparse strength or low-confidence outcome evidence never creates fast-loss attention", () => {
+  seedFastLossEpisode({ lifts: 2 });
+  assert.equal(fastLossCard(), undefined, "two established lifts are insufficient for a cut-quality verdict");
+
+  resetTables("food_notes", "bodyweight_log", "logged_sets", "sessions", "exercises", "profile", "app_state");
+  seedFastLossEpisode({ intakeDays: 2 });
+  assert.equal(fastLossCard(), undefined, "a loose outcome trend cannot create the notice");
+});
+
+test("fast-loss dismissal persists for an episode, rejects stale revisions, and cools down after 14 days", () => {
+  seedFastLossEpisode();
+  const first = fastLossCard();
+  assert.ok(first?.revision);
+
+  const acknowledged = repo.acknowledgeTodayAgendaCandidate("fast-loss-attention", first.revision);
+  assert.equal(acknowledged.ok, true);
+  assert.equal(fastLossCard(), undefined, "the same semantic episode stays dismissed");
+
+  repo.setProfile({ goal_weight_lb: 160 });
+  const changed = fastLossCard();
+  assert.ok(changed?.revision, "a materially revised goal band resurfaces the notice");
+  assert.notEqual(changed.revision, first.revision);
+  const stale = repo.acknowledgeTodayAgendaCandidate("fast-loss-attention", first.revision);
+  assert.equal(stale.stale, true);
+  assert.equal(stale.revision, changed.revision);
+
+  assert.equal(repo.acknowledgeTodayAgendaCandidate("fast-loss-attention", changed.revision).ok, true);
+  assert.equal(fastLossCard(), undefined);
+  repo.setAppState(
+    "today_agenda_seen:fast-loss-attention",
+    JSON.stringify({ revision: changed.revision, acknowledged_on: localDaysAgo(13) })
+  );
+  assert.equal(fastLossCard(), undefined, "the same episode remains suppressed through day 13");
+  repo.setAppState(
+    "today_agenda_seen:fast-loss-attention",
+    JSON.stringify({ revision: changed.revision, acknowledged_on: localDaysAgo(14) })
+  );
+  assert.ok(fastLossCard(), "the same episode may return after the 14-day cooldown");
+});
+
+test("fast-loss candidate reads imported metabolic RMR without materializing it or writing outside the optional intro ledger", () => {
+  seedFastLossEpisode();
+  db.prepare(
+    `INSERT INTO health_documents (kind, doc_date, parsed_json, summary, enrichment_status)
+     VALUES ('metabolic_test', ?, ?, ?, 'done')`
+  ).run(
+    localDaysAgo(30),
+    JSON.stringify({ markers: [{ name: "Resting Metabolic Rate (RMR)", value: 2078, unit: "kcal/day" }] }),
+    "Imported indirect calorimetry measured resting metabolic rate 2,078 kcal/day."
+  );
+  const before = db.prepare("SELECT * FROM profile WHERE id = 1").get();
+  assert.equal(before.measured_rmr_kcal, null, "the imported document starts unmaterialized");
+  const changesBefore = Number(db.prepare("SELECT total_changes() AS n").get().n);
+
+  const readOnly = repo.acknowledgeTodayAgendaCandidate("fast-loss-attention", "stale-test-revision");
+
+  assert.equal(readOnly.stale, true, "the current candidate was generated for the stale-revision comparison");
+  assert.ok(readOnly.revision);
+  assert.deepEqual(db.prepare("SELECT * FROM profile WHERE id = 1").get(), before);
+  assert.equal(
+    Number(db.prepare("SELECT total_changes() AS n").get().n),
+    changesBefore,
+    "the read-only pass makes no writes"
+  );
+  assert.equal(repo.getAppState("today_agenda_intro"), null);
+
+  repo.computeGoalCheck();
+  assert.equal(
+    db.prepare("SELECT measured_rmr_kcal FROM profile WHERE id = 1").get().measured_rmr_kcal,
+    2078,
+    "ordinary goal callers retain lazy materialization",
+  );
+  repo.todayAgenda();
+  assert.deepEqual(
+    db.prepare("SELECT key FROM app_state ORDER BY key").all().map((row) => row.key),
+    ["today_agenda_intro"],
+    "the human pass may write only the existing Today surprise-introduction ledger"
+  );
+});
+
+test("Today agenda acknowledgement route returns 409 for a stale fast-loss revision", () => {
+  seedFastLossEpisode();
+  const first = fastLossCard();
+  assert.ok(first?.revision);
+  repo.setProfile({ goal_weight_lb: 160 });
+
+  const layer = todayRouter.stack.find(
+    (entry) => entry.route?.path === "/today-agenda/ack" && entry.route?.methods?.post
+  );
+  let status = null;
+  let payload = null;
+  const res = {
+    status(value) {
+      status = value;
+      return this;
+    },
+    json(value) {
+      payload = value;
+      return this;
+    },
+  };
+  layer.route.stack.at(-1).handle({ body: { id: "fast-loss-attention", revision: first.revision } }, res);
+
+  assert.equal(status, 409);
+  assert.equal(payload?.stale, true);
+  assert.notEqual(payload?.revision, first.revision);
 });
 
 test("rest or easy Brief suppresses plan-forward agenda cards", () => {

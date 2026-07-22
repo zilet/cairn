@@ -184,16 +184,17 @@ registerTrainingCacheClear(() => {
   expenditureCache = null;
 });
 
-export function estimateExpenditure(windowDays = 21): ExpenditureEstimate {
+export function estimateExpenditure(windowDays = 21, opts: { syncMeasuredRmr?: boolean } = {}): ExpenditureEstimate {
   const normalizedWindow = normalizeWindowDays(windowDays);
-  const key = `${normalizedWindow}|${localDateISO()}|${trainingBackstopSignature()}|${foodBackstopSignature()}`;
+  const syncMeasuredRmr = opts.syncMeasuredRmr !== false;
+  const key = `${normalizedWindow}|${syncMeasuredRmr ? "sync-rmr" : "read-rmr"}|${localDateISO()}|${trainingBackstopSignature()}|${foodBackstopSignature()}`;
   if (expenditureCache && expenditureCache.key === key) return structuredClone(expenditureCache.value);
-  const value = computeExpenditure(normalizedWindow);
+  const value = computeExpenditure(normalizedWindow, { syncMeasuredRmr });
   expenditureCache = { key, value };
   return structuredClone(value);
 }
 
-function computeExpenditure(windowDays = 21): ExpenditureEstimate {
+function computeExpenditure(windowDays = 21, opts: { syncMeasuredRmr: boolean }): ExpenditureEstimate {
   const today = localDateISO();
   // Today's food, movement and scale picture is incomplete until the local day
   // closes. It can inform the live diary, but never maintenance estimation.
@@ -295,7 +296,12 @@ function computeExpenditure(windowDays = 21): ExpenditureEstimate {
   }
 
   const activitySince = addDaysISO(completedThrough, -(ACTIVITY_WINDOW_DAYS - 1)) ?? since;
-  const priors = priorAnchors({ since: activitySince, today: completedThrough, profile: prof });
+  const priors = priorAnchors({
+    since: activitySince,
+    today: completedThrough,
+    profile: prof,
+    syncMeasuredRmr: opts.syncMeasuredRmr,
+  });
   if (outcomeTdee != null && priors.length === 0 && (intakeQuality === "partial" || outcomeQuality !== "plausible")) {
     priors.push({
       kind: "profile_seed",
@@ -462,9 +468,9 @@ function basisText(
   return "Not enough information to form an expenditure estimate yet.";
 }
 
-function priorAnchors(opts: { since: string; today: string; profile: any }): PriorAnchor[] {
+function priorAnchors(opts: { since: string; today: string; profile: any; syncMeasuredRmr: boolean }): PriorAnchor[] {
   const candidates: PriorAnchor[] = [];
-  const measured = measuredRmrActiveAnchor(opts.since, opts.today, opts.profile);
+  const measured = measuredRmrActiveAnchor(opts.since, opts.today, opts.profile, opts.syncMeasuredRmr);
   const garminTotal = garminTotalAnchor(opts.since, opts.today);
   if (measured?.freshness === "fresh") candidates.push(measured);
   if (garminTotal) candidates.push(garminTotal);
@@ -474,8 +480,13 @@ function priorAnchors(opts: { since: string; today: string; profile: any }): Pri
   return candidates;
 }
 
-function measuredRmrActiveAnchor(since: string, today: string, profile: any): PriorAnchor | null {
-  const rmr = measuredRmrAssessment(today);
+function measuredRmrActiveAnchor(
+  since: string,
+  today: string,
+  profile: any,
+  syncMeasuredRmr = true
+): PriorAnchor | null {
+  const rmr = measuredRmrAssessment(today, { syncHealthDocs: syncMeasuredRmr });
   if (!rmr || rmr.freshness === "expired" || rmr.freshness === "undated") return null;
   const activeByDay = new Map<string, { value: number; source: string }>();
   const garminRows = db

@@ -1,5 +1,5 @@
 // @ts-check
-// Pure Today weekly compass and pace-offer helpers.
+// Pure Today weekly compass helpers.
 
 type TodayCompassStats = {
   week_planned?: unknown;
@@ -32,19 +32,11 @@ type TodayCompassOptions = {
   isHybrid?: unknown;
 };
 
-type TodayPaceOffer = {
-  status: string;
-  line: string;
-  ask: string;
-};
-
 type TodayCompassBuild = {
   planned: number;
   done: number;
   weekKm: number;
   cellsHtml: string;
-  paceOfferHtml: string;
-  paceOffer: TodayPaceOffer | null;
   weekRecap: string;
 };
 
@@ -105,45 +97,6 @@ type TodayCompassBuild = {
       </div>`;
   }
 
-  function paceOffer(statsValue: unknown, currentWeight: unknown): TodayPaceOffer | null {
-    const stats = todayCompassStats(statsValue);
-    const mode = String(stats.goal_mode || "lose");
-    const status = String(stats.pace_status || "");
-    if (mode === "maintain") return null;
-    if (mode === "gain") {
-      const offers: Record<string, Omit<TodayPaceOffer, "status">> = {
-        behind: {
-          line: "Not building yet — want to look at fueling together?",
-          ask: `My weight trend is ${fmtPace(stats.trend_lb_wk ?? 0)} lb/wk but I'm aiming for a lean gain of about ${fmtPace(stats.needed_lb_wk ?? 0)} lb/wk. Should we add some calories to build lean mass?`,
-        },
-        fast: {
-          line: "Building a little fast — want to ease the surplus?",
-          ask: `My weight trend is ${fmtPace(stats.trend_lb_wk ?? 0)} lb/wk, faster than my lean-gain pace (~${fmtPace(stats.needed_lb_wk ?? 0)} lb/wk). Should we trim calories so it stays muscle, not fat?`,
-        },
-      };
-      return offers[status] ? { status, ...offers[status] } : null;
-    }
-    const curW = finiteNumber(currentWeight);
-    const maxSafe = curW != null ? Math.round(curW * 0.01 * 10) / 10 : null;
-    const offers: Record<string, Omit<TodayPaceOffer, "status">> = {
-      fast: {
-        line: "Trending a bit fast — want to look at your pace together?",
-        ask: `My weight trend is ${fmtPace(stats.trend_lb_wk ?? 0)} lb/wk but the lean-safe ceiling for me is about -${maxSafe} lb/wk (needed pace ${fmtPace(stats.needed_lb_wk ?? 0)}). Should we add calories or adjust the plan to protect lean mass?`,
-      },
-      behind: {
-        line: "A little behind your goal pace — want to look together?",
-        ask: `My weight trend is ${fmtPace(stats.trend_lb_wk ?? 0)} lb/wk but I need ${fmtPace(stats.needed_lb_wk ?? 0)} lb/wk to hit ${stats.goal_weight_lb} lb by ${stats.goal_date}. What should we tighten — meals, cardio, or the timeline?`,
-      },
-    };
-    return offers[status] ? { status, ...offers[status] } : null;
-  }
-
-  function paceOfferHtml(offer: TodayPaceOffer | null, deps: TodayCompassDeps): string {
-    return offer
-      ? `<button class="pace-offer pace-offer-${offer.status}" id="paceOffer">${deps.escapeHtml(offer.line)} · <span class="pace-offer-cta">ask the coach →</span></button>`
-      : "";
-  }
-
   function build(statsValue: unknown, deps: TodayCompassDeps, options: TodayCompassOptions = {}): TodayCompassBuild {
     const stats = todayCompassStats(statsValue);
     const planned = finiteNumber(stats.week_planned) ?? 0;
@@ -172,7 +125,6 @@ type TodayCompassBuild = {
       .join(" · ");
     const dots = statDots(planned, done);
     const paceTile = paceTileHtml(stats, deps);
-    const offer = options.isToday ? paceOffer(stats, options.currentWeight) : null;
     const mileageTile = `<div class="stat" title="Endurance volume by sport this week">
         <div class="stat-n numeral"><span data-cu="${leadValue}">0</span><span class="stat-frac">${leadDistance ? "km" : "min"}</span></div>
         ${modalityLine ? `<div class="stat-sub">${deps.escapeHtml(modalityLine)}</div>` : ""}
@@ -207,8 +159,6 @@ type TodayCompassBuild = {
       done,
       weekKm,
       cellsHtml,
-      paceOfferHtml: paceOfferHtml(offer, deps),
-      paceOffer: offer,
       weekRecap,
     };
   }
@@ -217,8 +167,6 @@ type TodayCompassBuild = {
     fmtPace,
     paceWord,
     paceTileHtml,
-    paceOffer,
-    paceOfferHtml,
     build,
   };
 

@@ -24,13 +24,17 @@ export function registerDailyDriverTools(server: McpToolRegistrar) {
 
   server.tool(
     "ack_today_agenda",
-    "Presentation acknowledgement for a Today-agenda attention item (currently 'health-focus'): retires the current semantic revision from Today WITHOUT resolving or dismissing the underlying health directives — they keep shaping meals/training. Materially new evidence creates a new revision and may surface again. Mirrors POST /api/today-agenda/ack.",
+    "Presentation acknowledgement for a Today-agenda attention item: 'health-focus' retires the current semantic revision WITHOUT resolving or dismissing its underlying health directives; 'fast-loss-attention' retires the current cut-quality episode for 14 days, then allows it to resurface if still active. Materially new evidence may create a new revision sooner. Mirrors POST /api/today-agenda/ack.",
     {
-      id: z.string().describe("agenda candidate id, e.g. 'health-focus'"),
+      id: z
+        .enum(["health-focus", "fast-loss-attention"])
+        .describe("acknowledgement-aware agenda id: 'health-focus' or 'fast-loss-attention'"),
       revision: z
         .string()
         .optional()
-        .describe("the revision shown to the user; omitted = acknowledge whatever is current"),
+        .describe(
+          "the revision shown to the user, e.g. a health evidence hash or cut-quality episode hash; omitted = acknowledge whatever is current"
+        ),
     },
     async ({ id, revision }) => asText(acknowledgeTodayAgendaCandidate(id, revision ?? null))
   );

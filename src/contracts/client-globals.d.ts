@@ -497,6 +497,8 @@ declare global {
       meSeg?: string | null;
       healthSeg?: string | null;
       healthSegPicked?: boolean;
+      standSeg?: string | null;
+      progressSeg?: string | null;
     };
     api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
     activateTab(tab: string): unknown;
@@ -538,7 +540,6 @@ declare global {
     deferRail?: boolean;
     agenda: Partial<ClientTodayAgenda> | null | undefined;
     agendaGeneric: ClientTodayAgendaCandidate[];
-    todayCompass: { paceOffer?: { ask?: string | null } | null };
   };
 
   type ClientTodayDependenciesContextInput = {
@@ -3838,17 +3839,14 @@ declare global {
           isToday: boolean;
           briefHtml: string;
           conductorHtml: string;
-          conductorLeads: boolean;
-          goalLineHtml: string;
           currentWeight: unknown;
         },
         deps: {
           escapeHtml(value: unknown): string;
-          micGlyph: string;
         }
       ): string;
       weekFoldHtml(
-        compass: { paceOfferHtml?: string; weekRecap?: string | null; cellsHtml?: string },
+        compass: { weekRecap?: string | null; cellsHtml?: string },
         deps: { escapeHtml(value: unknown): string }
       ): string;
       wrapHtml(content: string, options: { railHtml: string }): string;
@@ -3979,10 +3977,8 @@ declare global {
         conductorLeads: boolean;
         agenda: Partial<ClientTodayAgenda> | null | undefined;
         agendaGeneric: ClientTodayAgendaCandidate[];
-        todayCompass: { paceOffer?: { ask?: string | null } | null };
         updateHeaderCondense(): void;
         runCountUps(root?: ParentNode | null, options?: { snap?: boolean }): void;
-        quickLog(): unknown;
         reducedMotion(): boolean;
         wireCardioSync(root: ParentNode, onSync: () => unknown): unknown;
         renderToday(opts?: Record<string, unknown>): unknown;
@@ -3992,7 +3988,6 @@ declare global {
         loadTrainingProvenance(isToday: boolean): unknown;
         loadTableHint(): unknown;
         setupWeightChip(): unknown;
-        setupVoiceCapture(): unknown;
         loadFrequentFoods(): unknown;
         loadContextBanner(): unknown;
         loadHealthFocusBanner(): unknown;
@@ -4418,15 +4413,6 @@ declare global {
           formatKm(value: unknown): string;
         }
       ): string;
-      paceOffer(stats: unknown, currentWeight: unknown): { status: string; line: string; ask: string } | null;
-      paceOfferHtml(
-        offer: { status: string; line: string; ask: string } | null,
-        deps: {
-          escapeHtml(value: unknown): string;
-          escapeAttr(value: unknown): string;
-          formatKm(value: unknown): string;
-        }
-      ): string;
       build(
         stats: unknown,
         deps: {
@@ -4445,8 +4431,6 @@ declare global {
         done: number;
         weekKm: number;
         cellsHtml: string;
-        paceOfferHtml: string;
-        paceOffer: { status: string; line: string; ask: string } | null;
         weekRecap: string;
       };
     };

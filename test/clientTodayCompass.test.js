@@ -64,20 +64,17 @@ test("Today compass renders discipline-aware week cells and recap", () => {
   assert.equal(endurance.weekRecap, "1 cardio · run 12.4 km · 2 lifts");
 });
 
-test("Today compass pace offer is mode-aware and suppressed for maintain", () => {
+test("Today compass keeps pace only in the collapsed trajectory and emits no standalone ask", () => {
   const compass = loadTodayCompass();
-
-  assert.equal(
-    compass.build({ goal_mode: "maintain", pace_status: "drifting_up", trend_lb_wk: 0.3, needed_lb_wk: 0 }, deps, { isToday: true }).paceOffer,
-    null,
+  const fast = compass.build(
+    { goal_mode: "lose", pace_status: "fast", trend_lb_wk: -1.7, needed_lb_wk: -0.6 },
+    deps,
+    { isToday: true, currentWeight: 172 },
   );
 
-  const gain = compass.build({ goal_mode: "gain", pace_status: "behind", trend_lb_wk: 0, needed_lb_wk: 0.4 }, deps, { isToday: true });
-  assert.equal(gain.paceOffer?.status, "behind");
-  assert.match(gain.paceOfferHtml, /Not building yet/);
-  assert.match(gain.paceOffer?.ask || "", /lean gain/);
-
-  const notToday = compass.build({ goal_mode: "lose", pace_status: "behind", trend_lb_wk: -0.1, needed_lb_wk: -0.6 }, deps, { isToday: false });
-  assert.equal(notToday.paceOffer, null);
-  assert.equal(notToday.paceOfferHtml, "");
+  assert.match(fast.cellsHtml, /pace-fast/);
+  assert.equal("paceOffer" in fast, false);
+  assert.equal("paceOfferHtml" in fast, false);
+  assert.equal(compass.paceOffer, undefined);
+  assert.equal(compass.paceOfferHtml, undefined);
 });

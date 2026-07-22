@@ -29,6 +29,9 @@ import { createHash } from "node:crypto";
 // barrel ../repo.js) — repo modules do this to avoid a circular import, since the
 // barrel re-exports this very file.
 import { getDayIntake, getMealPlan } from "./nutrition.js";
+import { estimateExpenditure } from "./expenditure.js";
+import { computeGoalCheck } from "./profile.js";
+import { cutQualityRead, type CutQualityActive } from "./cut-quality.js";
 import { fuelingFollowThroughDue } from "./fueling.js";
 import { addDaysISO, localDateISO } from "./shared.js";
 import { getCachedDayRead } from "./intelligence.js";
@@ -103,7 +106,13 @@ export const TODAY_PRIMARY_MAX = 2;
 // presentation) are never budgeted. The ledger lives in app_state as a bounded
 // { "<id>:<revision|title>": "YYYY-MM-DD introduced" } map.
 const TODAY_INTRO_KEY = "today_agenda_intro";
-const SURPRISE_IDS = new Set(["health-focus", "connection-insight", "weekly-read", "draft-proposals"]);
+const SURPRISE_IDS = new Set([
+  "health-focus",
+  "fast-loss-attention",
+  "connection-insight",
+  "weekly-read",
+  "draft-proposals",
+]);
 const INTRO_LEDGER_MAX_AGE_DAYS = 60;
 
 function introSig(c: TodayAgendaCandidate): string {
@@ -443,6 +452,8 @@ function planDraftCandidate(): TodayAgendaCandidate | null {
 // lead focus; this candidate gates that surface on whether the connected brain has
 // something genuinely pressing. Reads healthFocus + listActiveDirectives. ----
 const HEALTH_AGENDA_SEEN_KEY = "today_agenda_seen:health-focus";
+const FAST_LOSS_AGENDA_SEEN_KEY = "today_agenda_seen:fast-loss-attention";
+const FAST_LOSS_ACK_COOLDOWN_DAYS = 14;
 
 function clipAgenda(value: unknown, max = 230): string {
   const text = String(value ?? "")
@@ -479,10 +490,13 @@ function healthAgendaRevision(focus: any, directives: any[]): string {
   return createHash("sha256").update(JSON.stringify(material)).digest("hex").slice(0, 24);
 }
 
-function healthCandidate(date: string, opts: { includeSeen?: boolean } = {}): TodayAgendaCandidate | null {
+function healthCandidate(
+  date: string,
+  opts: { includeSeen?: boolean; asOf?: string } = {}
+): TodayAgendaCandidate | null {
   // This is an attention delta for NOW, never a historical Today card. The durable
   // health strategy remains in Stand and in the plan-shaping brain regardless.
-  if (date !== localDateISO()) return null;
+  if (date !== (opts.asOf ?? localDateISO())) return null;
   const directives = listActiveDirectives() as any[];
   if (!Array.isArray(directives) || !directives.length) return null; // nothing flagged → silent
   const focus = healthFocus();
@@ -513,12 +527,127 @@ function healthCandidate(date: string, opts: { includeSeen?: boolean } = {}): To
   };
 }
 
+type TodayAgendaAckRecord = { revision: string; acknowledged_on: string };
+
+function readTodayAgendaAckRecord(key: string): TodayAgendaAckRecord | null {
+  try {
+    const parsed = JSON.parse(getAppState(key) || "null") as Partial<TodayAgendaAckRecord> | null;
+    const revision = typeof parsed?.revision === "string" ? parsed.revision : "";
+    const acknowledgedOn = typeof parsed?.acknowledged_on === "string" ? parsed.acknowledged_on : "";
+    return revision && /^\d{4}-\d{2}-\d{2}$/.test(acknowledgedOn)
+      ? { revision, acknowledged_on: acknowledgedOn }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function acknowledgementStillCurrent(key: string, revision: string, date: string, cooldownDays: number): boolean {
+  const record = readTodayAgendaAckRecord(key);
+  if (!record || record.revision !== revision) return false;
+  const resurfacesOn = addDaysISO(record.acknowledged_on, cooldownDays);
+  return !!resurfacesOn && date < resurfacesOn;
+}
+
+function rateBand(value: unknown): string | null {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? `q${Math.round(n / 0.25)}` : null;
+}
+
+function goalWeightBand(value: unknown): string | null {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? `q${Math.round(n / 5)}` : null;
+}
+
+function trendSeverityBucket(trend: number, safeMax: number): "above" | "well-above" | "far-above" {
+  const ratio = Math.abs(trend) / safeMax;
+  if (ratio >= 1.35) return "far-above";
+  if (ratio >= 1.15) return "well-above";
+  return "above";
+}
+
+function fastLossAgendaRevision(goal: any, expenditure: any, cut: CutQualityActive): string {
+  const safeMax = Number(goal?.leanness_rate?.safe_max_rate_lb ?? goal?.safe_max_rate_lb);
+  const trend = Number(expenditure?.trend_lb_wk);
+  const material = {
+    goal: {
+      mode: goal?.goal_mode ?? null,
+      requested_rate_band: rateBand(goal?.requested?.weekly_rate_lb),
+      remaining_weight_band: goalWeightBand(goal?.lbs_to_lose),
+      ideal_rate_band: rateBand(goal?.leanness_rate?.lean_ideal_rate_lb ?? goal?.recommended?.weekly_rate_lb),
+      safe_rate_band: rateBand(safeMax),
+    },
+    severity: trendSeverityBucket(trend, safeMax),
+    verdict: cut.verdict,
+    anchors: cut.strength.anchors
+      .map((anchor) => ({
+        name: String(anchor?.name || "").trim().toLowerCase(),
+        status: anchor?.status ?? null,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+  };
+  return createHash("sha256").update(JSON.stringify(material)).digest("hex").slice(0, 24);
+}
+
+// A whole-context CUT-QUALITY attention item. This deliberately ignores the
+// weekly compass's simple OLS pace flag: it requires the robust 21-day outcome
+// trend, medium/high confidence, the leanness-aware safe band, and enough recent
+// established lifting to say whether strength is holding, mixed, or sliding.
+function fastLossCandidate(
+  date: string,
+  opts: { includeSeen?: boolean; asOf?: string } = {}
+): TodayAgendaCandidate | null {
+  if (date !== (opts.asOf ?? localDateISO())) return null;
+  const expenditure = estimateExpenditure(21, { syncMeasuredRmr: false });
+  if (!["medium", "high"].includes(String(expenditure?.confidence))) return null;
+  const goal: any = computeGoalCheck(undefined, { expenditure, syncMeasuredRmr: false });
+  const cut = cutQualityRead(date, { goal, expenditure });
+  if (!cut.active || cut.verdict === "insufficient" || cut.rate.vs_lean_safe !== "above") return null;
+  const safeMax = Number(goal?.leanness_rate?.safe_max_rate_lb ?? goal?.safe_max_rate_lb);
+  const trend = Number(expenditure?.trend_lb_wk);
+  if (!Number.isFinite(safeMax) || safeMax <= 0 || !Number.isFinite(trend) || Math.abs(trend) <= safeMax) return null;
+
+  const revision = fastLossAgendaRevision(goal, expenditure, cut);
+  if (
+    !opts.includeSeen &&
+    acknowledgementStillCurrent(FAST_LOSS_AGENDA_SEEN_KEY, revision, date, FAST_LOSS_ACK_COOLDOWN_DAYS)
+  ) {
+    return null;
+  }
+  const strengthBody =
+    cut.verdict === "preserving"
+      ? "Strength is holding, which is a good sign; the loss rate is still above your lean-safe band."
+      : cut.verdict === "mixed"
+        ? "Strength is mixed while the faster loss continues, so this is worth reviewing in context."
+        : "Strength is sliding alongside the faster loss, so protecting the training signal matters now.";
+  return {
+    id: "fast-loss-attention",
+    kind: "fuel",
+    tier: "primary",
+    priority: cut.verdict === "sliding" ? 81 : cut.verdict === "mixed" ? 77 : 73,
+    kicker: "CUT QUALITY",
+    title: "Your cut is moving faster than the muscle-preserving band.",
+    body: strengthBody,
+    action: { label: "Review the read", kind: "progress-energy" },
+    dismissible: true,
+    revision,
+  };
+}
+
 export function acknowledgeTodayAgendaCandidate(
   id: string,
   revision?: string | null
 ): { ok: boolean; id: string; revision?: string; stale?: boolean; error?: string } {
-  if (id !== "health-focus") return { ok: false, id, error: "candidate is not acknowledgement-aware" };
-  const current = healthCandidate(localDateISO(), { includeSeen: true });
+  const asOf = localDateISO();
+  const current =
+    id === "health-focus"
+      ? healthCandidate(asOf, { includeSeen: true, asOf })
+      : id === "fast-loss-attention"
+        ? fastLossCandidate(asOf, { includeSeen: true, asOf })
+        : null;
+  if (id !== "health-focus" && id !== "fast-loss-attention") {
+    return { ok: false, id, error: "candidate is not acknowledgement-aware" };
+  }
   if (!current?.revision) return { ok: false, id, error: "candidate is no longer active" };
   if (revision && revision !== current.revision) {
     return {
@@ -529,8 +658,11 @@ export function acknowledgeTodayAgendaCandidate(
       error: "candidate changed before acknowledgement",
     };
   }
-  setAppState(HEALTH_AGENDA_SEEN_KEY, current.revision);
-  if (getAppState(HEALTH_AGENDA_SEEN_KEY) !== current.revision) {
+  const key = id === "health-focus" ? HEALTH_AGENDA_SEEN_KEY : FAST_LOSS_AGENDA_SEEN_KEY;
+  const stored =
+    id === "health-focus" ? current.revision : JSON.stringify({ revision: current.revision, acknowledged_on: asOf });
+  setAppState(key, stored);
+  if (getAppState(key) !== stored) {
     return { ok: false, id, revision: current.revision, error: "acknowledgement could not be persisted" };
   }
   return { ok: true, id, revision: current.revision };
@@ -722,6 +854,7 @@ export function todayAgenda(date?: string, opts: { markIntroduced?: boolean } = 
   }
   add(safe(() => planDraftCandidate()));
   add(safe(() => healthCandidate(d)));
+  add(safe(() => fastLossCandidate(d)));
   if (showPlanForward) add(safe(() => adjustmentsCandidate(d, weeklyStats)));
   add(safe(() => weeklyCandidate()));
   add(safe(() => insightCandidate()));

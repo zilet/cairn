@@ -83,9 +83,10 @@ todayRouter.get("/today-agenda", (req, res) => {
   res.json(agenda);
 });
 
-// Presentation acknowledgement only: this retires the current semantic revision
-// from Today without resolving or dismissing the underlying health directives.
-// Materially new evidence creates a new revision and may surface again.
+// Presentation acknowledgement only: health-focus retires its current semantic
+// revision without resolving/dismissing the underlying directives; the
+// fast-loss-attention item retires the current cut-quality episode for 14 days.
+// Materially new evidence can create a new revision and surface either item sooner.
 todayRouter.post("/today-agenda/ack", (req, res) => {
   const id = String(req.body?.id ?? "").trim();
   if (!id) return res.status(400).json({ ok: false, error: "id required" });

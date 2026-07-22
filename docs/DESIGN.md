@@ -484,11 +484,14 @@ plan, falls back to the newest draft):
   (`parseDur`), normalised back to `m:ss` after each log.
 - The "+ Add exercise" form carries a Reps/Timed `.addex-mode` toggle (`.modebtn`).
 
-## Stat strip (Today)
+## Today trajectory and bodyweight capture
 
-Five `.stat` cells — sessions · 7d, **lb moved · 7d** (humanized `12.4k`), sets · 7d,
-day streak (flame in `.stat-flame`), and the bodyweight quick-add chip. All numerals
-count up on render via `data-cu`.
+The collapsed `This week` fold owns the `.statstrip`: discipline-aware training volume,
+weight pace, and its bodyweight tile. Pace is trajectory here, never a standalone warning
+or prewritten coach ask. A second small `#wtChipMini` bodyweight quick action stays above
+the fold beside its hidden inline input/save row, so one-tap weight capture is always
+reachable; saving updates both visible weight controls. Typed and microphone capture live
+in Chat rather than as separate Today controls. Stat numerals count up via `data-cu`.
 
 ## Marker trends (Me → Health → Markers)
 

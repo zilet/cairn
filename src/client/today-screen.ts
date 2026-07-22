@@ -156,7 +156,7 @@ function todayRailDeps() {
 // fetch; the normal fetch-then-write flow below still always runs afterward and
 // settles on the true content, so this is purely an earlier, best-effort paint —
 // never a substitute for it.
-const TODAY_PLAN_SNAP_KEY = "cairn.today.plan.v1";
+const TODAY_PLAN_SNAP_KEY = "cairn.today.plan.v2";
 let todayPaintedRealFor: string | null = null; // date last given the REAL (non-snapshot) write this session
 
 function todaySaveSurfaceSnapshot(date: string, html: string): void {
@@ -242,8 +242,7 @@ async function renderToday(opts: any = {}) {
   todayState.exModes = Object.fromEntries((exercises || []).map((e: any) => [e.name, e.mode || "reps"]));
   const curW = stats.weight_lb ?? (profile && profile.weight_lb != null ? profile.weight_lb : null);
   // Compass strip: adherence to this week's plan + weight-trend pace vs the goal.
-  // The pure helper owns the mode wording and week recap markup; Today keeps
-  // placement and the click into Chat.
+  // It is trajectory only and stays inside the collapsed "This week" fold.
   const todayCompass = CairnTodayCompass.build(
     stats,
     {
@@ -326,18 +325,11 @@ async function renderToday(opts: any = {}) {
   const agendaPromise = CairnTodayRailController.fetchTodayAgenda(todayState.logDate, todayRailDeps());
   const conductorPromise = todayApi("/coaching-focus").catch(() => null);
 
-  // The goal line is deferred into #goalSlot: painting it now and then hiding it when
-  // the conductor turns out to lead would flip on screen, so it renders once, in its
-  // final form, in phase two.
-  const goalLineHtml = CairnTodayContext.goalLineHtml(stats, curW, isToday);
-
   let html = todayMainShell.leadHtml(
     {
       isToday,
       briefHtml: briefHtml(read, { showPlan, showDone, isToday }),
       conductorHtml: "",
-      conductorLeads: false,
-      goalLineHtml: "",
       currentWeight: curW,
     },
     todayMainShellDeps()
@@ -457,7 +449,6 @@ async function renderToday(opts: any = {}) {
       deferRail: true,
       agenda: null,
       agendaGeneric: [],
-      todayCompass,
     })
   );
 
@@ -510,12 +501,6 @@ async function renderToday(opts: any = {}) {
     // markup into the slot is enough — no per-render wiring to re-run.
     cfocusSlot.innerHTML = conductorHtml;
     cfocusSlot.classList.toggle("cfocus-thread-slot", conductorLeads);
-  }
-  // The goal line renders now, in final form, unless the conductor leads and subsumes it.
-  const goalSlot = todayView.querySelector("#goalSlot");
-  if (goalSlot) {
-    goalSlot.innerHTML = conductorLeads ? "" : goalLineHtml;
-    goalSlot.querySelector("#goalLine")?.addEventListener("click", () => activateTab("progress"));
   }
   // The standalone health lever was held in phase one; load it only when the conductor
   // isn't already carrying the one highest-leverage line.
@@ -1094,17 +1079,16 @@ function wireSessionDestination(): void {
       });
     });
   });
-  // Focus mode intentionally omits the quick-capture field. Route the cardio CTA
-  // back to that existing reviewed capture path with its draft prefilled; nothing
-  // is logged until the athlete confirms it there.
+  // Focus mode intentionally omits capture. Route the cardio CTA to Chat with the
+  // natural-language phrase ready for review; nothing is logged implicitly.
   view.querySelectorAll<HTMLElement>(".sess-dest [data-cardio-log]").forEach((button) => {
     if (button.dataset.wired) return;
     button.dataset.wired = "1";
     button.addEventListener("click", () => {
       const phrase = String(button.dataset.cardioLog || "").trim();
       if (!phrase) return;
-      todayState.capturePrefill = phrase;
-      activateTab("today");
+      todayState.chatPrefill = phrase;
+      activateTab("chat");
     });
   });
 }

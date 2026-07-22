@@ -195,6 +195,10 @@ async function loadCoachingFocus(slotSelector: string, root?: ParentNode | null)
 
 function coachingFocusThreadHtml(focus: ClientCoachingFocus | null | undefined): string {
   if (!focus || !focus.available || !focus.lead) return "";
+  // The Brief already owns Today's daily rest/easy/done judgment. Repeating the
+  // same posture as a compact conductor thread is duplicate narration; genuine
+  // block, health, nutrition, and other distinct conductor threads still render.
+  if (focus.lead.day_posture) return "";
   const title = focus.lead.title || "";
   if (!title) return "";
   const domain = isCoachingFocusDomain(focus.lead.domain) ? focus.lead.domain : "stand";
