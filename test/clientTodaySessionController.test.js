@@ -155,6 +155,11 @@ class FakeElement {
     }
   }
 
+  dispatchEvent(event) {
+    this.dispatch(event.type, event);
+    return true;
+  }
+
   click() {
     this.dispatch("click");
   }
@@ -424,6 +429,165 @@ function addLoggingCard(rootEl) {
   rootEl.appendChild(new FakeElement("div", { dataset: { finishstat: "" } }));
   return { card, row, button, logged };
 }
+
+function addTimedLoggingCard(rootEl, duration = "90") {
+  const card = rootEl.appendChild(new FakeElement("article", { className: "ex", dataset: { card: "Plank" } }));
+  const row = card.appendChild(new FakeElement("div", {
+    className: "logrow",
+    dataset: { ex: encodeURIComponent("Plank"), day: "1", mode: "timed" },
+  }));
+  const durationEl = row.appendChild(new FakeElement("input", { className: "in-dur", value: duration }));
+  const timer = row.appendChild(new FakeElement("button", { className: "timerbtn", dataset: { stopwatchState: "idle" }, textContent: "Start" }));
+  const button = row.appendChild(new FakeElement("button", { className: "logbtn" }));
+  const logged = card.appendChild(new FakeElement("div", { dataset: { logged: "" } }));
+  card.appendChild(new FakeElement("div", { dataset: { prog: "" }, textContent: "0 / 3 sets" }));
+  rootEl.appendChild(new FakeElement("div", { dataset: { finishstat: "" } }));
+  return { card, row, durationEl, timer, button, logged };
+}
+
+test("timed logging stopwatch starts from zero, uses an absolute clock, resumes, pauses for log, and cleans detached rows", async () => {
+  let now = 100_000;
+  let timerId = 0;
+  const intervals = new Map();
+  function FakeDate(...args) {
+    return new Date(...(args.length ? args : [now]));
+  }
+  FakeDate.now = () => now;
+  const harness = loadController({
+    contextOverrides: {
+      Date: FakeDate,
+      Event: class FakeEvent {
+        constructor(type, options = {}) {
+          this.type = type;
+          this.bubbles = Boolean(options.bubbles);
+        }
+      },
+      setInterval: (fn) => {
+        const id = ++timerId;
+        intervals.set(id, fn);
+        return id;
+      },
+      clearInterval: (id) => intervals.delete(id),
+    },
+    apiImpl: async (path, opts) => {
+      if (path === "/sets" && opts?.method === "POST") return { ok: true, id: 12, set_number: 1, duration_sec: 6 };
+      return { ok: true };
+    },
+  });
+  const { card, row, durationEl, timer, button } = addTimedLoggingCard(harness.rootEl);
+  harness.deps.parseDur = (value) => Number(String(value).replace(/s$/, "")) || null;
+  harness.controller.wireLogRow(row, harness.deps);
+
+  timer.click();
+  assert.equal(durationEl.value, "0s");
+  assert.equal(timer.textContent, "Stop");
+  assert.equal(timer.ariaLabel, "Stop Plank stopwatch");
+  assert.equal(timer.ariaPressed, "true");
+  now += 3_700;
+  [...intervals.values()].forEach((tick) => tick());
+  assert.equal(durationEl.value, "3s", "elapsed comes from the clock, not tick count");
+
+  timer.click();
+  assert.equal(timer.textContent, "Resume");
+  now += 20_000;
+  assert.equal(durationEl.value, "3s", "a paused stopwatch does not advance");
+  timer.click();
+  now += 2_300;
+  [...intervals.values()].forEach((tick) => tick());
+  assert.equal(durationEl.value, "6s", "resume retains the prior fractional second");
+
+  now += 1_100;
+  button.click();
+  await flushAsync();
+  assert.equal(JSON.parse(harness.requests[0].opts.body).duration_sec, 7, "logging preserves accumulated milliseconds before payload parsing");
+  assert.equal(timer.textContent, "Start");
+  assert.equal(timer.dataset.stopwatchState, "idle");
+  assert.equal(timer.ariaPressed, "false");
+  assert.equal(intervals.size, 0, "successful logging resets the stopwatch interval");
+
+  timer.click();
+  assert.equal(intervals.size, 1);
+  row.remove();
+  [...intervals.values()].forEach((tick) => tick());
+  assert.equal(intervals.size, 0, "a detached row clears its own interval");
+});
+
+test("timed stopwatch updates the last-time line and only lets one timed row run", () => {
+  let now = 200_000;
+  let timerId = 0;
+  const intervals = new Map();
+  function FakeDate(...args) {
+    return new Date(...(args.length ? args : [now]));
+  }
+  FakeDate.now = () => now;
+  const harness = loadController({
+    contextOverrides: {
+      Date: FakeDate,
+      Event: class FakeEvent {
+        constructor(type, options = {}) { this.type = type; this.bubbles = Boolean(options.bubbles); }
+      },
+      setInterval: (fn) => { const id = ++timerId; intervals.set(id, fn); return id; },
+      clearInterval: (id) => intervals.delete(id),
+    },
+  });
+  const first = addTimedLoggingCard(harness.rootEl);
+  const second = addTimedLoggingCard(harness.rootEl);
+  harness.deps.parseDur = (value) => Number(String(value).replace(/s$/, "")) || null;
+  const line = addLastSetLine(first.card, "Last time: 0:05 · last week");
+  harness.setModel.wireLastSetLine(first.row, { duration_sec: 5, date: "2026-06-30" }, harness.deps);
+  harness.controller.wireLogRow(first.row, harness.deps);
+  harness.controller.wireLogRow(second.row, harness.deps);
+
+  first.timer.click();
+  now += 6_100;
+  [...intervals.values()].forEach((tick) => tick());
+  assert.equal(line.textContent, "That beats last time", "stopwatch display changes notify the existing last-set listener");
+
+  second.timer.click();
+  assert.equal(first.timer.textContent, "Resume", "starting a second hold pauses the first");
+  assert.equal(first.durationEl.value, "6s");
+  assert.equal(second.timer.textContent, "Stop");
+  assert.equal(harness.stops.length, 2, "each newly started hold stops the rest countdown");
+});
+
+test("a queued timed log keeps the captured duration paused and resumable", async () => {
+  let now = 300_000;
+  let timerId = 0;
+  const intervals = new Map();
+  function FakeDate(...args) {
+    return new Date(...(args.length ? args : [now]));
+  }
+  FakeDate.now = () => now;
+  const harness = loadController({
+    apiImpl: async () => { throw new Error("offline"); },
+    contextOverrides: {
+      Date: FakeDate,
+      Event: class FakeEvent {
+        constructor(type, options = {}) { this.type = type; this.bubbles = Boolean(options.bubbles); }
+      },
+      CairnApiCache: { isTransientApiFailure: () => true },
+      setInterval: (fn) => { const id = ++timerId; intervals.set(id, fn); return id; },
+      clearInterval: (id) => intervals.delete(id),
+    },
+  });
+  const { row, durationEl, timer, button } = addTimedLoggingCard(harness.rootEl);
+  harness.deps.parseDur = (value) => Number(String(value).replace(/s$/, "")) || null;
+  harness.controller.wireLogRow(row, harness.deps);
+
+  timer.click();
+  now += 3_200;
+  [...intervals.values()].forEach((tick) => tick());
+  button.click();
+  await flushAsync();
+  assert.equal(harness.outbox.length, 1);
+  assert.equal(durationEl.value, "3s");
+  assert.equal(timer.textContent, "Resume");
+
+  timer.click();
+  now += 2_100;
+  [...intervals.values()].forEach((tick) => tick());
+  assert.equal(durationEl.value, "5s");
+});
 
 function addLastSetLine(card, text) {
   return card.appendChild(new FakeElement("div", { className: "ex-lastset", textContent: text }));

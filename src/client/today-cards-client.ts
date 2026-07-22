@@ -67,7 +67,8 @@ function exerciseCardHtml(
   const reveal = revealIdx != null ? Number(revealIdx) : null;
   const logrow = timed
     ? `<div class="logrow" data-ex="${encodeURIComponent(exercise)}" data-day="${escAttr(options.day ?? "")}" data-mode="timed">
-        <input type="text" inputmode="numeric" autocomplete="off" placeholder="TIME · 1:30" class="in-dur" value="${prefill.duration_sec != null ? fmtDur(prefill.duration_sec) : ""}">
+        <input type="text" inputmode="numeric" autocomplete="off" placeholder="TIME · 1:30" class="in-dur" aria-label="${escAttr(`${exercise} duration`)}" value="${prefill.duration_sec != null ? fmtDur(prefill.duration_sec) : ""}">
+        <button type="button" class="timerbtn" data-stopwatch-state="idle" aria-label="${escAttr(`Start ${exercise} stopwatch`)}" aria-pressed="false">Start</button>
         <button class="logbtn">+</button>
       </div>`
     : `<div class="logrow" data-ex="${encodeURIComponent(exercise)}" data-day="${escAttr(options.day ?? "")}">

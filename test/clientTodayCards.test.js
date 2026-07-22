@@ -79,12 +79,26 @@ test("Today exercise card helper preserves selectors, escaping, and timed mode",
   assert.match(html, /data-mode="timed"/);
   assert.match(html, /data-day="4"/);
   assert.match(html, /class="in-dur"/);
+  assert.match(html, /class="in-dur"[^>]*aria-label="Press &lt;heavy&gt; duration"/);
+  assert.match(html, /class="timerbtn"[^>]*data-stopwatch-state="idle"[^>]*aria-label="Start Press &lt;heavy&gt; stopwatch"[^>]*aria-pressed="false"/);
   assert.match(html, /Press &lt;heavy&gt;/);
   assert.match(html, /keep ribs &lt;down&gt;/);
   assert.match(html, /elbow &lt;quiet&gt;/);
   assert.match(html, /earned &lt;move&gt;/);
   assert.match(html, /data-logged/);
   assert.doesNotMatch(html, /Press <heavy>|keep ribs <down>|elbow <quiet>|earned <move>/);
+});
+
+test("Today exercise card stopwatch control is timed-only", () => {
+  const cards = loadTodayCards();
+  const shared = { fromPlan: true, exercise: "Plank", sets: 3, rep_low: 8, rep_high: 12 };
+
+  const timed = cards.exerciseCardHtml({ ...shared, mode: "timed", target_seconds: 60 }, [], {}, null, null, {});
+  const reps = cards.exerciseCardHtml(shared, [], { weight: 20, reps: 8, rir: 2 }, null, null, {});
+
+  assert.match(timed, /class="timerbtn"/);
+  assert.match(timed, /aria-label="Start Plank stopwatch"/);
+  assert.doesNotMatch(reps, /timerbtn|stopwatch/);
 });
 
 test("Today exercise card helper renders the quiet last-time line only before anything's logged today", () => {

@@ -662,6 +662,13 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
 .logrow input:focus,.quicklog input:focus,.wt-inline input:focus,.chatbar input:focus,.chatbar textarea:focus{
   outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(180,85,45,.12);
 }
+.timerbtn{
+  flex:0 0 auto;min-width:56px;height:44px;padding:0 9px;border:1px solid var(--line);border-radius:999px;
+  background:var(--card-2);color:var(--muted);font-family:var(--font-ui);font-size:.72rem;font-weight:700;
+  letter-spacing:.02em;
+}
+.timerbtn[data-stopwatch-state="running"]{border-color:var(--accent);color:var(--accent-deep);background:rgba(180,85,45,.08)}
+.timerbtn:focus-visible{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(180,85,45,.12)}
 
 /* primary action button — solid terracotta, cream glyph */
 .logbtn{
