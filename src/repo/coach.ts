@@ -41,6 +41,8 @@ import {
   supplementsForCoach,
 } from "./propagation.js";
 import { symptomMarkerLinks } from "./symptom-links.js";
+import { classifyDirectiveIntent } from "./propagation-data.js";
+import { getAppState, setAppState } from "./app-state.js";
 import { getProgress, getRecentSessions, getRunCompliance } from "./sessions.js";
 import { localDateISO, nowContext } from "./shared.js";
 import { bumpTrainingDataVersion, currentTrainingDataVersion, registerTrainingCacheClear } from "./training-cache.js";
@@ -58,6 +60,10 @@ import { nextBestStep } from "./next-step.js";
 import { cardiovascularRiskRead } from "./risk.js";
 import { trainingBenchmarkRead } from "./training-milestones.js";
 import { listDueAttention } from "./attention.js";
+// Function-level cycle (doctor-loop imports listDirectives/directiveIntentOf back from
+// here); scheduleDirectiveRecheck is only called at runtime inside updateDirective, so
+// the hoisted binding is always resolved by call time.
+import { scheduleDirectiveRecheck } from "./doctor-loop.js";
 import { brainSignal, runWithBrainSnapshot } from "../brain/snapshot.js";
 import {
   listBrainDecisions,
@@ -1380,6 +1386,7 @@ export interface DirectiveInput {
   domain?: string | null; // nutrition | training | watch
   marker?: string | null; // the source marker key (e.g. 'LDL-C') when applicable
   directive_key?: string | null; // stable advice family key for repeat suppression
+  intent_key?: string | null; // semantic intent: recheck | lever | notice (identity axis)
   directive?: string | null;
   rationale?: string | null;
   citation?: string | null;
@@ -1450,6 +1457,12 @@ export function addDirective(fields: DirectiveInput = {}) {
     fields.directive_key == null
       ? defaultDirectiveKey(marker, domain, directive)
       : normalizeDirectiveKey(fields.directive_key);
+  // The semantic intent (recheck | lever | notice) is part of directive identity. Prefer
+  // an explicit value from the caller (the mapped path passes it); else classify the text.
+  const intent_key =
+    fields.intent_key === "recheck" || fields.intent_key === "lever" || fields.intent_key === "notice"
+      ? fields.intent_key
+      : classifyDirectiveIntent(directive, null);
   const triggerSide = ["low", "high", "unknown"].includes(String(fields.trigger_side))
     ? String(fields.trigger_side)
     : null;
@@ -1458,13 +1471,14 @@ export function addDirective(fields: DirectiveInput = {}) {
       ? null
       : Number(fields.trigger_value);
   const info = db
-    .prepare(`INSERT INTO health_directives (source, domain, marker, directive_key, directive, rationale, citation, uncertain, status, status_at, trigger_value, trigger_side, trigger_date, resurfaced_from_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .prepare(`INSERT INTO health_directives (source, domain, marker, directive_key, intent_key, directive, rationale, citation, uncertain, status, status_at, trigger_value, trigger_side, trigger_date, resurfaced_from_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(
       fields.source == null ? null : String(fields.source).trim().slice(0, 120) || null,
       domain,
       marker,
       directive_key,
+      intent_key,
       directive,
       fields.rationale == null ? null : String(fields.rationale).trim().slice(0, 600) || null,
       fields.citation == null || String(fields.citation).trim() === ""
@@ -1526,24 +1540,68 @@ function directiveTextKey(d: any): string {
     .trim();
 }
 
-// A stable (canonical marker, domain) key — same analyte under different lab names
-// ("Glucose Random"/"Glucose (random)") folds to one, so a 'markers' directive and a
-// 'health_review' one for the same marker+domain are recognized as the same concern.
-// Empty marker → "" (no cross-marker collapse for marker-less directives).
-function directiveMarkerDomainKey(d: any): string {
-  const raw = String(d?.marker || "").trim();
-  const canon = raw ? canonicalMarker(raw).key : "";
-  return `${canon}|${String(d?.domain || "watch").toLowerCase()}`;
+// The semantic intent of a stored row: the persisted intent_key, else classified from
+// the directive text on the fly (legacy rows written before the intent_key column, and
+// the cross-source suppression that must recognize them).
+export function directiveIntentOf(d: any): string {
+  const stored = d?.intent_key;
+  if (stored === "recheck" || stored === "lever" || stored === "notice") return stored;
+  return classifyDirectiveIntent(d?.directive, null);
 }
 
-// Prefer the deterministic 'markers' source over the agent 'health_review' one, and
-// within a source prefer the non-uncertain (settled-lever) directive.
+// The stable IDENTITY of a directive across sources: (canonical marker, domain, intent).
+// Same analyte under different lab names folds to one; a 'markers' directive and a
+// 'health_review' one for the same finding+intent are recognized as the same concern,
+// so one Done clears both and near-twins collapse. Marker-less rows key on "" (no
+// cross-marker collapse). Cluster markers ("A+B+C") key on their own compound label.
+export function directiveIdentityKey(d: any): string {
+  const raw = String(d?.marker || "").trim();
+  const canon = raw ? (raw.includes("+") ? raw.toLowerCase() : canonicalMarker(raw).key) : "";
+  return `${canon}|${String(d?.domain || "watch").toLowerCase()}|${directiveIntentOf(d)}`;
+}
+
+// Monotonic counter bumped on every USER directive status flip. It feeds the derive
+// signature so a Done/Dismiss (which changes what's suppressed) always forces the next
+// propagation pass instead of short-circuiting on an unchanged marker snapshot.
+const DIRECTIVE_FEEDBACK_COUNTER_KEY = "directive_feedback_counter";
+export function directiveFeedbackCounter(): string {
+  return getAppState(DIRECTIVE_FEEDBACK_COUNTER_KEY) || "0";
+}
+function bumpDirectiveFeedbackCounter(): void {
+  const n = Number(getAppState(DIRECTIVE_FEEDBACK_COUNTER_KEY) || "0");
+  setAppState(DIRECTIVE_FEEDBACK_COUNTER_KEY, String((Number.isFinite(n) ? n : 0) + 1));
+}
+
+// Cascade a USER status flip to every ACTIVE twin sharing the row's identity tuple
+// (any source), so one Done/Dismiss clears the deterministic 'markers' directive AND
+// its agent-emitted 'health_review' echo at once. Uses the SAME status_at as the
+// primary flip so the feedback timeline stays coherent. Returns the number of twins
+// updated. Machine soft-resolves never call this (they go through direct SQL).
+function cascadeDirectiveStatus(primary: any, status: string): number {
+  if (!primary || (status !== "resolved" && status !== "dismissed")) return 0;
+  const identity = directiveIdentityKey(primary);
+  const statusAt = primary.status_at ?? null;
+  const rows = db
+    .prepare(`SELECT * FROM health_directives WHERE status = 'active' AND id != ?`)
+    .all(Number(primary.id)) as any[];
+  let changed = 0;
+  for (const r of rows) {
+    if (directiveIdentityKey(r) !== identity) continue;
+    db.prepare(`UPDATE health_directives SET status = ?, status_at = ? WHERE id = ?`).run(status, statusAt, r.id);
+    changed++;
+  }
+  return changed;
+}
+
+// When two active directives share an identity tuple, keep the strongest evidence:
+// a cited (settled-lever) directive beats an uncertain one, then the deterministic
+// 'markers' source beats the agent 'health_review' one, then the newest wins.
 function directivePreferred(a: any, b: any): any {
+  const cited = (d: any) => (d?.citation && String(d.citation).trim() && !d?.uncertain ? 0 : 1);
+  if (cited(a) !== cited(b)) return cited(a) < cited(b) ? a : b;
   const srcRank = (d: any) => (String(d?.source || "") === "markers" ? 0 : 1);
   if (srcRank(a) !== srcRank(b)) return srcRank(a) < srcRank(b) ? a : b;
-  const unc = (d: any) => (d?.uncertain ? 1 : 0);
-  if (unc(a) !== unc(b)) return unc(a) < unc(b) ? a : b;
-  return a; // same source + certainty → keep the first-seen (the input order is id-DESC)
+  return a; // same evidence + source → keep the first-seen (the input order is id-DESC = newest)
 }
 
 function dedupeActiveDirectives(rows: any[]) {
@@ -1558,11 +1616,11 @@ function dedupeActiveDirectives(rows: any[]) {
     if (txtKey) seenText.add(txtKey);
     out.push(row);
   }
-  // Cross-source collapse on (canonical marker, domain): when 'markers' and
-  // 'health_review' both kept a directive for the SAME marker+domain (different
-  // directive_key, so they survived the dedup above), they can read as contradictory.
-  // Keep ONE — the deterministic source, else the non-uncertain one. Conservative:
-  // only collapses when both marker AND domain match; marker-less rows are untouched.
+  // Cross-source collapse on IDENTITY (canonical marker, domain, intent): when
+  // 'markers' and 'health_review' both kept a directive for the SAME marker+domain+intent
+  // (different directive_key, so they survived the dedup above), they read as one concern
+  // said twice. Keep ONE — cited > deterministic 'markers' source > newest. Conservative:
+  // only collapses when marker AND domain AND intent match; marker-less rows are untouched.
   const byMd = new Map<string, any>();
   const collapsed: any[] = [];
   for (const row of out) {
@@ -1571,7 +1629,7 @@ function dedupeActiveDirectives(rows: any[]) {
       collapsed.push(row);
       continue;
     } // no marker → never cross-collapse
-    const key = directiveMarkerDomainKey(row);
+    const key = directiveIdentityKey(row);
     const prior = byMd.get(key);
     if (!prior) {
       byMd.set(key, row);
@@ -1595,6 +1653,7 @@ export function updateDirective(id: number, fields: DirectiveInput) {
   const sets: string[] = [];
   const vals: any[] = [];
   let statusChanged = false;
+  let nextStatus = cur.status;
   if (fields.source !== undefined) {
     sets.push("source = ?");
     vals.push(fields.source == null ? null : String(fields.source).trim().slice(0, 120) || null);
@@ -1610,6 +1669,14 @@ export function updateDirective(id: number, fields: DirectiveInput) {
   if (fields.directive_key !== undefined) {
     sets.push("directive_key = ?");
     vals.push(fields.directive_key == null ? null : normalizeDirectiveKey(fields.directive_key));
+  }
+  if (fields.intent_key !== undefined) {
+    sets.push("intent_key = ?");
+    vals.push(
+      fields.intent_key === "recheck" || fields.intent_key === "lever" || fields.intent_key === "notice"
+        ? fields.intent_key
+        : classifyDirectiveIntent(fields.directive ?? cur.directive, null)
+    );
   }
   if (fields.directive !== undefined) {
     sets.push("directive = ?");
@@ -1632,7 +1699,7 @@ export function updateDirective(id: number, fields: DirectiveInput) {
     vals.push(fields.uncertain ? 1 : 0);
   }
   if (fields.status !== undefined) {
-    const nextStatus = DIRECTIVE_STATUSES.has(String(fields.status)) ? String(fields.status) : cur.status;
+    nextStatus = DIRECTIVE_STATUSES.has(String(fields.status)) ? String(fields.status) : cur.status;
     sets.push("status = ?");
     vals.push(nextStatus);
     statusChanged = nextStatus !== cur.status;
@@ -1693,7 +1760,35 @@ export function updateDirective(id: number, fields: DirectiveInput) {
     vals.push(id);
     db.prepare(`UPDATE health_directives SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
   }
-  return getDirective(id);
+  const updated = getDirective(id);
+  // A USER status flip to resolved/dismissed is feedback: bump the derive-signature
+  // counter (so the next propagation pass never short-circuits past it) and cascade the
+  // same verdict onto every ACTIVE twin sharing this directive's identity, so one Done
+  // clears the 'markers' directive AND its 'health_review' echo at once.
+  if (statusChanged && (nextStatus === "resolved" || nextStatus === "dismissed")) {
+    bumpDirectiveFeedbackCounter();
+    const twins = cascadeDirectiveStatus(updated, nextStatus);
+    if (twins > 0) {
+      try {
+        invalidateDayRead();
+      } catch {
+        /* cache bust is best-effort */
+      }
+    }
+    // Marking a RECHECK directive Done ("Retest lipids in ~12 weeks", "Confirm
+    // testosterone with a morning repeat") schedules the follow-up on the attention
+    // engine so it actually comes back around, instead of the card just vanishing.
+    // Only on Done (resolved) — a dismiss means "not relevant", never a new retest.
+    // No-op for non-recheck directives. Best-effort; a hiccup never blocks the flip.
+    if (nextStatus === "resolved") {
+      try {
+        scheduleDirectiveRecheck(updated);
+      } catch {
+        /* scheduling is additive; never block the status flip */
+      }
+    }
+  }
+  return updated;
 }
 
 // Clear a whole source's directives before re-deriving them, so a fresh
@@ -1706,6 +1801,82 @@ export function clearDirectivesForSource(source: string) {
       .prepare(`UPDATE health_directives SET status = 'resolved' WHERE source = ? AND status = 'active'`)
       .run(source).changes,
   };
+}
+
+// Whether an existing active row already carries the desired content, so a re-derive can
+// leave it untouched (id + created_at preserved). Compares the fields the diff contract
+// tracks — directive text, the trigger snapshot, AND the rationale/uncertain/citation
+// content — after applying the same normalization addDirective would on insert, so a
+// "kept" row truly equals a fresh write. The rationale/uncertain comparison matters
+// because applyStaleness (propagation.ts) rewrites ONLY the rationale + uncertain of an
+// aging directive (its text + trigger snapshot stay identical); without them here that
+// staleness clause would be silently dropped as an "unchanged" row.
+function directiveContentUnchanged(cur: any, d: DirectiveInput): boolean {
+  const normText = (v: any) => (v == null ? null : String(v).trim().slice(0, 600) || null);
+  const normDate = (v: any) => (v == null ? null : String(v).trim().slice(0, 20) || null);
+  const numEq = (a: any, b: any) => {
+    const an = a == null || !Number.isFinite(Number(a)) ? null : Number(a);
+    const bn = b == null || !Number.isFinite(Number(b)) ? null : Number(b);
+    if (an == null && bn == null) return true;
+    if (an == null || bn == null) return false;
+    return Math.abs(an - bn) < 1e-9;
+  };
+  const side = (v: any) => (["low", "high", "unknown"].includes(String(v)) ? String(v) : null);
+  return (
+    normText(cur.directive) === normText(d.directive) &&
+    numEq(cur.trigger_value, d.trigger_value) &&
+    side(cur.trigger_side) === side(d.trigger_side) &&
+    normDate(cur.trigger_date) === normDate(d.trigger_date) &&
+    normText(cur.rationale) === normText(d.rationale) &&
+    normText(cur.citation) === normText(d.citation) &&
+    !!cur.uncertain === !!d.uncertain
+  );
+}
+
+// Diff-based reconcile of one source's ACTIVE directives toward a desired set — the
+// zero-churn replacement for clear-all + reinsert. An existing active row with the same
+// directive_key and unchanged content is KEPT untouched (id + created_at preserved); a
+// changed one is UPDATED in place (status stays active, so no status_at stamp / cascade);
+// a row no longer desired is SOFT-RESOLVED (status_at stays NULL — a machine resolve,
+// never user feedback); a genuinely new directive is INSERTED. Idempotent: an unchanged
+// desired set produces zero inserts/updates/resolves. Returns the change tally.
+export function reconcileDirectives(source: string, desired: DirectiveInput[]) {
+  const existing = db
+    .prepare(`SELECT * FROM health_directives WHERE source = ? AND status = 'active'`)
+    .all(source) as any[];
+  const existingByKey = new Map<string, any>();
+  for (const r of existing) if (r.directive_key) existingByKey.set(String(r.directive_key), r);
+  const desiredKeys = new Set<string>();
+  const processed = new Set<string>();
+  let inserted = 0;
+  let updated = 0;
+  let resolved = 0;
+  for (const d of desired) {
+    const key = d.directive_key
+      ? normalizeDirectiveKey(d.directive_key)
+      : defaultDirectiveKey(d.marker ?? null, String(d.domain || "watch"), d.directive ?? null);
+    if (key) {
+      desiredKeys.add(key);
+      if (processed.has(key)) continue; // guard against a duplicate desired key within the run
+      processed.add(key);
+    }
+    const cur = key ? existingByKey.get(key) : null;
+    if (!cur) {
+      addDirective(d);
+      inserted++;
+      continue;
+    }
+    if (directiveContentUnchanged(cur, d)) continue; // keep untouched
+    updateDirective(cur.id, { ...d, status: undefined, status_at: undefined }); // in place, stays active
+    updated++;
+  }
+  for (const r of existing) {
+    if (!r.directive_key || !desiredKeys.has(String(r.directive_key))) {
+      db.prepare(`UPDATE health_directives SET status = 'resolved' WHERE id = ? AND status = 'active'`).run(r.id);
+      resolved++;
+    }
+  }
+  return { changed: inserted + updated + resolved, inserted, updated, resolved, saved: inserted + updated };
 }
 
 // ---------- insights (quiet cross-domain intelligence — Phase 6) ----------

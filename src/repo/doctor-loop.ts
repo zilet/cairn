@@ -1,15 +1,18 @@
 import { todayISO } from "../db.js";
 import {
   applyAttentionObservation,
+  getAttentionSchedule,
+  listAttentionBySource,
   listAttentionSchedule,
   listDueAttention,
   type AttentionScheduleEntry,
   type AttentionSignalStatus,
+  type AttentionTier,
   type CadencePolicy,
 } from "./attention.js";
 import { canonicalMarker } from "./marker-canon.js";
 import { getLatestHealthReview, getMarkerHistory } from "./health.js";
-import { listDirectives } from "./coach.js";
+import { directiveIntentOf, listDirectives } from "./coach.js";
 import { matchOptimalZone, optimalDistance } from "./propagation-data.js";
 
 type WorkupKind = "lab" | "dexa";
@@ -323,6 +326,226 @@ export function markerSignalKey(marker: MarkerLike): string | null {
   return `marker:${signalSlug(label)}`;
 }
 
+// ---------- directive-sourced rechecks (the doctor loop's other half) ----------
+// A watch card such as "Retest lipids in ~12 weeks" or "Confirm testosterone with a
+// morning repeat" is prose until the athlete acts on it. When they mark that recheck
+// DONE, we file a scheduled follow-up on the SAME adaptive attention engine — a
+// separate signal_key from the periodic `marker:` cadence, so the doctor-loop's daily
+// marker pass never clobbers this directive-sourced provenance/horizon. It advances
+// through the existing tier machine: a fresh reading closes the loop (clean → toward
+// released; still off → another window), so it never nags.
+const DIRECTIVE_RECHECK_SOURCE = "directive-recheck";
+
+// A directive is a recheck to SCHEDULE when its stored intent says so, OR its text
+// carries a clear retest/repeat instruction the deterministic intent classifier can
+// miss — the canonical case being the testosterone "morning repeat" watch note, which
+// classifies as a lever yet is exactly a recheck the athlete is asking us to schedule.
+const LOCAL_RECHECK_RE =
+  /\bmorning repeat\b|\brepeat\b[^.]*\b(in the morning|reading|readings|test|panel|lab|labs|measurement|draw|scan)\b|\bre-?draw\b|\bre-?test\b|\bre-?check\b|\bre-?measure\b/i;
+
+function isRecheckDirective(directive: any): boolean {
+  try {
+    if (directiveIntentOf(directive) === "recheck") return true;
+  } catch {
+    /* legacy row / classifier hiccup — fall through to the local text scan */
+  }
+  return LOCAL_RECHECK_RE.test(String(directive?.directive ?? ""));
+}
+
+// A YYYY-MM-DD from a date, a full timestamp, or a fallback.
+function toDate(value: unknown, fallback: string = todayISO()): string {
+  const raw = String(value ?? "").trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
+  const parsed = raw ? new Date(raw) : null;
+  if (parsed && Number.isFinite(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+  return fallback;
+}
+
+// The attention signal_key a directive recheck for `markerName` is filed under, or null
+// when there's no usable single marker. Canonicalizes through the SAME markerLabel +
+// signalSlug the periodic cadence uses, so a directive's "LDL-C" and a marker reading's
+// "LDL Cholesterol" resolve to the same slug and dedupe as one story downstream.
+export function directiveRecheckSignalKey(markerName: string | null | undefined): string | null {
+  const raw = String(markerName ?? "").trim();
+  if (!raw || raw.includes("+")) return null; // compound cluster markers have no single retest
+  const slug = signalSlug(markerLabel({ name: raw }));
+  return slug ? `${DIRECTIVE_RECHECK_SOURCE}:${slug}` : null;
+}
+
+// Per-marker-class default recheck horizon (days), used when the directive text carries
+// no parseable timeframe. Ordered longest-match-wins by intent of the panel.
+function recheckHorizonClassDays(markerName: string): number {
+  const n = lc(markerName);
+  if (/\b(apo\s?b|apolipoprotein|ldl|hdl|non-?hdl|cholesterol|triglyceride|lp\s?\(a\)|lipid)\b/.test(n)) return 84; // lipids ~12w
+  if (/\b(vitamin d|25-?oh|25 hydroxy)\b/.test(n)) return 84; // vitamin D ~12w
+  if (/\b(hs-?crp|c-?reactive)\b/.test(n)) return 35; // hs-CRP ~5w (acute-flavored, 4-6w)
+  if (/\b(testosterone|estradiol|estrogen|shbg|sex hormone|dhea|cortisol|progesterone|prolactin|igf|\blh\b|\bfsh\b)\b/.test(n)) return 28; // hormones ~4w
+  if (/\b(omega|epa|dha)\b/.test(n)) return 112; // omega ~16w
+  return 84; // generic ~12w
+}
+
+// Parse a recheck horizon (days) from directive text. Unlike the mid-point read the
+// review-followup path uses, a directive recheck takes the FAR end of a range ("in 3-4
+// months" → 4 months) so the retest window opens no earlier than the response allows.
+// Returns null when there's no timeframe (e.g. "morning repeat"), so the caller falls
+// to the per-class default.
+export function parseRecheckHorizonDays(text: unknown): number | null {
+  const s = lc(text);
+  if (!s) return null;
+  const clamp = (d: number) => Math.max(7, Math.min(730, Math.round(d)));
+  const range = s.match(/(\d{1,2})\s*[-–—]\s*~?\s*(\d{1,2})\s*(week|weeks|wk|wks|month|months|mo|mos)\b/);
+  if (range) {
+    const far = Math.max(Number(range[1]), Number(range[2]));
+    return clamp(/mo|month/.test(range[3]) ? far * 30 : far * 7);
+  }
+  const single = s.match(/~?\s*(\d{1,3})\s*(day|days|week|weeks|wk|wks|month|months|mo|mos)\b/);
+  if (single) {
+    const n = Number(single[1]);
+    const unit = single[2];
+    if (/day/.test(unit)) return clamp(n);
+    return clamp(/mo|month/.test(unit) ? n * 30 : n * 7);
+  }
+  if (/annual|yearly|1 year|12 months/.test(s)) return 365; // prefix-tolerant ("annually")
+  if (/quarter|90 days/.test(s)) return 90; // "3 months" already handled by the single-unit match
+  return null;
+}
+
+// The cadence policy a directive recheck advances under. The horizon sets the active
+// window (when the retest first comes due); once a clean reading lands it converges
+// toward released through the shared tier machine, so we never keep asking.
+function directiveRecheckPolicy(markerName: string, horizonDays: number, reason?: string): CadencePolicy {
+  return {
+    signal_class: DIRECTIVE_RECHECK_SOURCE,
+    domain: "health",
+    source: DIRECTIVE_RECHECK_SOURCE,
+    active_days: horizonDays,
+    confirming_days: horizonDays,
+    surveillance_initial_days: Math.max(120, horizonDays * 2),
+    surveillance_multiplier: 1.75,
+    surveillance_max_days: 365,
+    surveillance_checks_before_release: 2,
+    reason:
+      reason ??
+      `You scheduled a ${markerName} recheck from a directive; it comes back around after the expected response window.`,
+    release_condition: `${markerName} reads back in its optimal range on the recheck, or you clear this follow-up.`,
+  };
+}
+
+// Create/refresh the scheduled follow-up for a recheck directive the athlete marked
+// DONE. No-op (returns null) for a non-recheck directive, a marker-less directive, or a
+// compound-marker one. Idempotent by signal_key — a repeated Done just re-dates the
+// window rather than piling up rows.
+export function scheduleDirectiveRecheck(
+  directive: any,
+  opts: { asOf?: string } = {}
+): AttentionScheduleEntry | null {
+  if (!directive) return null;
+  const markerName = String(directive.marker ?? "").trim();
+  if (!markerName || !isRecheckDirective(directive)) return null;
+  const signalKey = directiveRecheckSignalKey(markerName);
+  if (!signalKey) return null;
+  const label = markerLabel({ name: markerName });
+  const horizonDays = parseRecheckHorizonDays(directive.directive) ?? recheckHorizonClassDays(label);
+  const checkedAt = toDate(directive.status_at ?? opts.asOf);
+  const reason = `You scheduled a ${label} recheck from a directive; it comes back around after the expected response window (~${Math.round(horizonDays / 7)} weeks).`;
+  return applyAttentionObservation({
+    signal_key: signalKey,
+    policy: directiveRecheckPolicy(label, horizonDays, reason),
+    observation: {
+      checked_at: checkedAt,
+      status: "active",
+      event: "intervention_started",
+      source: DIRECTIVE_RECHECK_SOURCE,
+      reason,
+    },
+  });
+}
+
+// Close the loop: when a NEW reading lands for a marker with a scheduled directive
+// recheck, record the measurement so the entry advances (clean → toward released, still
+// off → another window) instead of staying stuck at its original due date. Called from
+// the daily/ingest doctor-loop refresh. Only observes existing entries; never creates.
+function refreshDirectiveRecheckAttention(markers: MarkerLike[]): AttentionScheduleEntry[] {
+  const entries = listAttentionBySource(DIRECTIVE_RECHECK_SOURCE);
+  if (!entries.length) return [];
+  const bySignal = new Map<string, MarkerLike>();
+  for (const m of markers) {
+    const key = directiveRecheckSignalKey(String(m.name ?? m.key ?? ""));
+    if (key && !bySignal.has(key)) bySignal.set(key, m);
+  }
+  const out: AttentionScheduleEntry[] = [];
+  for (const entry of entries) {
+    const m = bySignal.get(entry.signal_key);
+    if (!m) continue;
+    const readingDate = markerDate(m);
+    // Only when the reading is NEWER than the state driving this entry — otherwise the
+    // same reading would be observed on every refresh and never let it settle.
+    if (!(readingDate > String(entry.last_checked || ""))) continue;
+    const label = markerLabel(m);
+    out.push(
+      applyAttentionObservation({
+        signal_key: entry.signal_key,
+        policy: directiveRecheckPolicy(label, recheckHorizonClassDays(label)),
+        observation: {
+          checked_at: readingDate,
+          status: markerStatus(m),
+          event: "measurement",
+          source: DIRECTIVE_RECHECK_SOURCE,
+        },
+      })
+    );
+  }
+  return out;
+}
+
+export type DirectiveRecheckTier = AttentionTier;
+
+export interface DirectiveRecheckAnnotation {
+  scheduled: true;
+  signal_key: string;
+  next_due: string | null;
+  due: boolean; // the recheck window is open as of the read
+  tier: AttentionTier;
+  when_text: string; // calm plain-language state for the UI
+}
+
+// The scheduled-recheck state for one directive (null when nothing is scheduled or it
+// has already been released). Lets the /directives surfaces render "scheduled — comes
+// back around <date>" without re-deriving the attention internals.
+export function directiveRecheckState(
+  directive: any,
+  asOf: string = todayISO()
+): DirectiveRecheckAnnotation | null {
+  const markerName = String(directive?.marker ?? "").trim();
+  if (!markerName) return null;
+  const signalKey = directiveRecheckSignalKey(markerName);
+  if (!signalKey) return null;
+  const entry = getAttentionSchedule(signalKey);
+  if (!entry || entry.tier === "released" || !entry.next_due) return null;
+  const due = String(entry.next_due) <= toDate(asOf);
+  return {
+    scheduled: true,
+    signal_key: signalKey,
+    next_due: entry.next_due,
+    due,
+    tier: entry.tier,
+    when_text: due ? "recheck window is open" : "recheck scheduled",
+  };
+}
+
+// Annotate a directive list with each row's scheduled-recheck state (a `recheck` key on
+// the rows that have one; others pass through untouched). Additive to whatever freshness
+// annotation ran before it, so REST + MCP can share the same enriched shape.
+export function annotateDirectiveRecheck<T extends { marker?: unknown }>(
+  directives: T[],
+  asOf: string = todayISO()
+): Array<T & { recheck?: DirectiveRecheckAnnotation }> {
+  return (Array.isArray(directives) ? directives : []).map((d) => {
+    const recheck = directiveRecheckState(d, asOf);
+    return recheck ? { ...d, recheck } : d;
+  });
+}
+
 function latestDexaDate(markers: MarkerLike[]): string | null {
   let latest: string | null = null;
   for (const marker of markers) {
@@ -480,6 +703,13 @@ export function refreshDoctorLoopAttention(): AttentionScheduleEntry[] {
   const dexa = applyDexaAttention(markers);
   if (dexa && !seen.has(dexa.signal_key)) out.push(dexa);
   for (const entry of applyReviewFollowups()) {
+    if (seen.has(entry.signal_key)) continue;
+    seen.add(entry.signal_key);
+    out.push(entry);
+  }
+  // Close the doctor loop on directive-sourced rechecks: a fresh reading for a marker
+  // the athlete scheduled a recheck for advances that entry (toward released when clean).
+  for (const entry of refreshDirectiveRecheckAttention(markers)) {
     if (seen.has(entry.signal_key)) continue;
     seen.add(entry.signal_key);
     out.push(entry);

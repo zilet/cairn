@@ -1078,6 +1078,7 @@ CREATE TABLE IF NOT EXISTS health_directives (
   domain TEXT,                        -- nutrition | training | watch
   marker TEXT,                        -- the source marker key (e.g. 'LDL-C') this propagated from, when applicable
   directive_key TEXT,                 -- stable family key for suppressing repeats across re-derives
+  intent_key TEXT,                    -- semantic intent (recheck | lever | notice) — identity axis across sources
   directive TEXT,                     -- the concrete cross-domain instruction
   rationale TEXT,                     -- plain-language why
   citation TEXT,                      -- evidence link/reference (NULL when the mapping is uncertain)

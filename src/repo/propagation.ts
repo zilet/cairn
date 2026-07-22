@@ -2,13 +2,15 @@ import { db } from "../db.js";
 import { type ContextEffect, activeContextEffect, markerInTransientWindow } from "./context-effect.js";
 import {
   DIRECTIVE_DOMAINS,
-  addDirective,
-  clearDirectivesForSource,
+  type DirectiveInput,
   defaultDirectiveKey,
+  directiveFeedbackCounter,
   hydrateDirective,
   listActiveDirectives,
   normalizeDirectiveKey,
+  reconcileDirectives,
 } from "./coach.js";
+import { getAppState, setAppState } from "./app-state.js";
 import { buildSafetyMarkerContext, safetyGate, verifyCitation } from "./evidence.js";
 import { activeMedications, forecastMarker, getMarkerHistory, lsqSlopePerDay } from "./health.js";
 import { invalidateDayRead } from "./intelligence.js";
@@ -18,11 +20,13 @@ import { addDaysISO, localDateISO } from "./shared.js";
 import { brainDecisionFingerprint, recordDecision } from "./brain-decisions.js";
 import type { ProposedExpectation } from "../brain/expectation-contract.js";
 import {
+  type CompanionReading,
   type MappingDirective,
   type MarkerContext,
   type OptimalZone,
   type ZoneProfile,
   MARKER_MAPPINGS,
+  classifyDirectiveIntent,
   markerGroup,
   markerSide,
   matchOptimalZone,
@@ -57,6 +61,7 @@ function zoneProfile(): ZoneProfile | null {
 export {
   MARKER_MAPPINGS,
   OPTIMAL_ZONES,
+  classifyDirectiveIntent,
   cystatinHighBound,
   dheasBand,
   egfrLowBound,
@@ -70,7 +75,7 @@ export {
   presentGroups,
   psaHighBound,
 } from "./propagation-data.js";
-export type { OptimalZone, ZoneProfile } from "./propagation-data.js";
+export type { DirectiveIntent, OptimalZone, ZoneProfile } from "./propagation-data.js";
 export * from "./supplements.js";
 export * from "./health-export.js";
 export * from "./health-focus.js";
@@ -322,20 +327,39 @@ function medInteractionClause(
   return `You're already on ${names} for this, so with ${zoneLabel} still ${sideWord} optimal the highest-leverage step is usually revisiting the dose, adherence, or an add-on with your doctor — not lifestyle change alone.`;
 }
 
-function lastDirectiveFeedback(source: string, marker: string | null, domain: string, directiveKey: string | null) {
-  if (!directiveKey) return null;
-  return hydrateDirective(
-    db
-      .prepare(
-        `SELECT * FROM health_directives
-     WHERE source = ? AND (marker = ? OR (marker IS NULL AND ? IS NULL)) AND domain = ? AND directive_key = ?
-       AND status IN ('resolved', 'dismissed')
-       AND status_at IS NOT NULL
-     ORDER BY COALESCE(status_at, created_at) DESC, id DESC
-     LIMIT 1`
-      )
-      .get(source, marker, marker, domain, directiveKey) ?? null
-  );
+// The last USER feedback (Done/Dismiss — status_at NOT NULL) for a directive's IDENTITY
+// (canonical marker, domain, intent), matched ACROSS sources so a Done on the 'markers'
+// directive suppresses the 'health_review' twin and vice-versa. Machine soft-resolves
+// (status_at NULL) never count. Legacy rows written before intent_key existed are matched
+// by classifying their text on the fly, with a directive_key fallback for same-source
+// repeats. Marker-less directives match on the empty canonical key.
+function lastDirectiveFeedback(
+  marker: string | null,
+  domain: string,
+  intentKey: string | null,
+  directiveKey: string | null
+) {
+  const canon = marker ? canonicalMarker(String(marker)).key : "";
+  const rows = db
+    .prepare(
+      `SELECT * FROM health_directives
+     WHERE domain = ? AND status IN ('resolved', 'dismissed') AND status_at IS NOT NULL
+     ORDER BY COALESCE(status_at, created_at) DESC, id DESC`
+    )
+    .all(domain) as any[];
+  for (const r of rows) {
+    const rCanon = r.marker ? canonicalMarker(String(r.marker)).key : "";
+    if (rCanon !== canon) continue;
+    const rIntent =
+      r.intent_key === "recheck" || r.intent_key === "lever" || r.intent_key === "notice"
+        ? r.intent_key
+        : classifyDirectiveIntent(r.directive, null);
+    if (intentKey && rIntent === intentKey) return hydrateDirective(r);
+    // Legacy fallback: a row without a stored intent can still match a same-source repeat
+    // by its directive_key even if intent classification would drift.
+    if (!r.intent_key && directiveKey && String(r.directive_key || "") === directiveKey) return hydrateDirective(r);
+  }
+  return null;
 }
 
 function overageForSide(value: number, zone: OptimalZone, side: MarkerContext["side"]): number {
@@ -475,29 +499,89 @@ function recordActiveDirectiveDecisions(source: string): void {
   }
 }
 
+// After a source reading is older than this, a derived directive gets a calm staleness
+// note and is softened to uncertain — an old value is worth confirming before acting on
+// it. Separate from the acute-marker directiveFreshness decay (which is a daily-surface
+// cap on point-in-time reactants); this is a simple, universal age note.
+const STALE_READING_DAYS = 365;
+const DERIVE_SIG_KEY = "directive_derive_sig";
+
+function stalenessClause(readingDate: string | null | undefined, today?: string): string | null {
+  if (!readingDate) return null;
+  const t = Date.parse(String(readingDate).slice(0, 10));
+  if (!Number.isFinite(t)) return null;
+  const now = today ? Date.parse(today) : Date.now();
+  if (!Number.isFinite(now)) return null;
+  const ageDays = Math.floor((now - t) / 864e5);
+  if (ageDays <= STALE_READING_DAYS) return null;
+  const months = Math.max(12, Math.round(ageDays / 30));
+  return `This reading is from ~${months} months ago — a recheck would confirm it still holds.`;
+}
+
+// Fold the staleness note into a desired directive: append the clause to its rationale
+// and soften it to uncertain. Idempotent — built fresh from the base rationale each pass.
+function applyStaleness(input: DirectiveInput, readingDate: string | null | undefined, today?: string): DirectiveInput {
+  const clause = stalenessClause(readingDate, today);
+  if (!clause) return input;
+  const rationale = input.rationale ? `${input.rationale} ${clause}` : clause;
+  return { ...input, rationale, uncertain: true };
+}
+
+// A cheap fingerprint of everything that affects derivation: the marker snapshot, the
+// sex/age zone profile, active meds, a counter bumped on every user Done/Dismiss, and a
+// coarse reading-AGE bucket per off-optimal marker. When it's unchanged since the last
+// pass, deriveDirectives can skip the whole thing.
+function deriveSignature(
+  markers: any[],
+  profile: ZoneProfile | null,
+  meds: any[],
+  offMarkers?: Map<string, MarkerContext>
+): string {
+  const snap = (Array.isArray(markers) ? markers : []).map((m) => ({
+    k: canonicalMarker(String(m?.name ?? "")).key,
+    v: m?.latest?.value ?? null,
+    f: m?.latest?.flag ?? null,
+    d: m?.latest?.date ?? null,
+  }));
+  // Fold a coarse reading-age bucket (~one tick per month) for each off-optimal marker, so
+  // the passage of TIME itself moves the fingerprint. Otherwise a directive whose source
+  // reading ages past the staleness threshold (STALE_READING_DAYS) with no new value/flag/
+  // date would be short-circuited away, and applyStaleness's clause would never be applied.
+  const now = Date.now();
+  const ages = offMarkers
+    ? [...offMarkers.values()]
+        .map((ctx) => {
+          const raw = ctx?.marker?.latest?.date;
+          const t = raw ? Date.parse(String(raw).slice(0, 10)) : NaN;
+          if (!Number.isFinite(t)) return null;
+          return { k: ctx.zone?.label ?? "", a: Math.floor(Math.max(0, now - t) / 864e5 / 30) };
+        })
+        .filter((x): x is { k: string; a: number } => x != null)
+        .sort((a, b) => (a.k < b.k ? -1 : a.k > b.k ? 1 : 0))
+    : [];
+  return brainDecisionFingerprint({
+    snap,
+    profile: profile ? { sex: profile.sex ?? null, age: profile.age ?? null } : null,
+    meds: (Array.isArray(meds) ? meds : []).map((x: any) => String(x?.label ?? x?.name ?? x ?? "")).sort(),
+    fb: directiveFeedbackCounter(),
+    ages,
+  });
+}
+
 // THE PROPAGATION ENGINE. A flagged/sub-optimal biomarker propagates into every
 // domain it touches — nutrition, training and watch — grounded in reputable
 // guideline citations where the lever is well-established, flagged uncertain
-// (citation null) where the mapping is real but not settled. Idempotent: clears
-// the 'markers' source then re-derives, so directives never pile up across runs.
+// (citation null) where the mapping is real but not settled. DIFF-BASED + idempotent:
+// it computes the desired 'markers' directive set and reconciles the active rows toward
+// it (keep unchanged, update changed in place, soft-resolve dropped, insert new) instead
+// of clearing + reinserting — so an unchanged marker snapshot churns ZERO rows. A cheap
+// signature short-circuits the whole pass when nothing that affects derivation moved.
 // Leaves the 'health_review' source untouched. INFORMATIONAL, not medical advice.
 // Return shape kept as { source:'markers', derived, directives } for back-compat.
 export function deriveDirectives() {
   const SOURCE = "markers";
-  clearDirectivesForSource(SOURCE);
   const { markers } = prioritizeMarkers();
   const profile = zoneProfile(); // sex/age-personalized optimal bands (null-safe default)
-  let saved = 0;
-  // Collect every off-optimal marker as we go — the cluster layer (below) reads
-  // this to make markers COMPOUND into one read instead of firing in isolation.
-  const offMarkers = new Map<string, MarkerContext>();
-  // Dedup within the run: the SAME zone can be reached by several marker entries
-  // (name variants like "Glucose" / "Fasting Glucose", or repeat lab rows), which
-  // would otherwise emit the identical directive once per entry. A directive is
-  // about the zone+domain, so the first (highest-priority) one wins; the rest are
-  // skipped. markers are sorted flagged-first then impact-desc, so first == most
-  // significant.
-  const seen = new Set<string>();
   // Active medications, read ONCE — so the brain can reason WITH a treatment (a marker
   // still off-optimal despite a med that targets it is a dose/adherence conversation,
   // not a naive lifestyle nudge). Empty when no uploaded record carries a med list.
@@ -508,6 +592,74 @@ export function deriveDirectives() {
       return [];
     }
   })();
+
+  // 1. The COMPLETE off-optimal picture (one MarkerContext per zone, highest-priority
+  //    marker wins), plus the cross-marker view every derive can reason with: the set of
+  //    zones off elsewhere in the panel (RF ⇄ hs-CRP) and the hormone companions
+  //    (testosterone ⇄ Free T / SHBG / LH). Built ONCE and threaded onto each context.
+  //    Built BEFORE the signature so an aging reading moves the fingerprint (see below).
+  const offMarkers = buildOffMarkers(markers, profile);
+
+  // Short-circuit: nothing that drives derivation changed since the last pass — including
+  // the reading-age of each off-optimal marker, so a directive that crosses the staleness
+  // threshold purely by time re-derives instead of being skipped.
+  const sig = deriveSignature(markers, profile, meds, offMarkers);
+  if (getAppState(DERIVE_SIG_KEY) === sig) {
+    return { source: SOURCE, derived: 0, directives: listActiveDirectives() };
+  }
+
+  const desired: DirectiveInput[] = [];
+  // Dedup within the run: the SAME zone can be reached by several marker entries (name
+  // variants like "Glucose" / "Fasting Glucose", or repeat lab rows). A directive is
+  // about the zone+domain+intent, so the first (highest-priority) one wins.
+  const seen = new Set<string>();
+
+  const offZones = new Set(offMarkers.keys());
+  const companions = buildCompanionIndex(markers);
+  for (const ctx of offMarkers.values()) {
+    ctx.offZones = offZones;
+    ctx.companions = companions;
+  }
+
+  // 2. Which clusters FIRE, and which member zones a firing cluster CONSUMES — a cluster
+  //    that folds its members into one synthesized read (the essential-fatty-acid story)
+  //    marks their zones consumed so the mapped + generic layers don't ALSO emit scattered
+  //    per-marker cards for them. The CV / anemia clusters consume nothing (their members
+  //    keep their distinct individual levers), preserving existing behavior.
+  const firing = computeFiringClusters(offMarkers, profile);
+  const consumedZones = new Set<string>();
+  for (const cl of firing) for (const z of cl.consumesZones) consumedZones.add(z);
+
+  // 3. Mapped levers (skipping zones a firing cluster consumed), then the generic
+  //    long-tail (same skip + the cluster-participant-only guard), then the synthesized
+  //    cluster directives LAST (unchanged emit order, so `seen` semantics hold).
+  collectMappedDirectives(SOURCE, offMarkers, meds, seen, consumedZones, desired);
+  collectGenericLongTail(SOURCE, markers, seen, profile, consumedZones, desired);
+  emitFiringClusters(SOURCE, firing, seen, desired);
+
+  const result = reconcileDirectives(SOURCE, desired);
+  setAppState(DERIVE_SIG_KEY, sig);
+  if (result.changed > 0) {
+    // Directives actually changed → today's cached Brief is stale. Invalidate HERE (the
+    // one place every real directive change flows through) and record the decisions only
+    // when something moved — an unchanged pass touches nothing.
+    try {
+      invalidateDayRead();
+    } catch {
+      /* cache bust is best-effort, never block */
+    }
+    recordActiveDirectiveDecisions(SOURCE);
+  }
+  return { source: SOURCE, derived: result.saved, directives: listActiveDirectives() };
+}
+
+// The COMPLETE off-optimal picture: one MarkerContext per optimal-zone label (the
+// highest-priority marker for that zone wins, since `markers` arrives priority-sorted),
+// for every marker that's flagged low/high OR sits outside its optimal band the worse
+// way. Consumed by the mapped path, the cluster layer, and (as `offZones`) any derive
+// that reasons cross-marker. Pure read over the prioritized markers; no writes.
+function buildOffMarkers(markers: any[], profile: ZoneProfile | null): Map<string, MarkerContext> {
+  const offMarkers = new Map<string, MarkerContext>();
   for (const m of markers) {
     const z = matchOptimalZone(m?.name, profile);
     if (!z) continue;
@@ -517,79 +669,96 @@ export function deriveDirectives() {
     const comparable = m?.latest?.unit_mismatch !== true;
     if (!comparable && !flag) continue;
     if (comparable && !offOptimal(numericVal, z, flag)) continue;
-    const ctx: MarkerContext = { value: numericVal, flag, zone: z, side: markerSide(numericVal, z, flag), marker: m };
-    if (!offMarkers.has(z.label)) offMarkers.set(z.label, ctx);
+    if (offMarkers.has(z.label)) continue; // first (highest-priority) marker for this zone wins
+    offMarkers.set(z.label, { value: numericVal, flag, zone: z, side: markerSide(numericVal, z, flag), marker: m });
+  }
+  return offMarkers;
+}
+
+// Companion-marker snapshot for the hormone-panel correlation: the same-era Free
+// Testosterone, SHBG and LH readings a testosterone directive is calibrated against.
+// These analytes carry no optimal zone (zoneNameTrustworthy rightly keeps free-T / SHBG
+// off the serum bands), so we read the LAB's own value/flag/date straight from the
+// prioritized marker history. Null entry = the panel didn't carry that companion.
+function buildCompanionIndex(markers: any[]): Record<string, CompanionReading | null> {
+  const find = (re: RegExp) =>
+    (Array.isArray(markers) ? markers : []).find((m) => re.test(String(m?.name ?? "").toLowerCase()));
+  const reading = (m: any): CompanionReading | null => {
+    if (!m) return null;
+    const v = typeof m?.latest?.value === "number" ? m.latest.value : Number(m?.latest?.value);
+    const flag = m?.latest?.flag === "low" || m?.latest?.flag === "high" ? m.latest.flag : null;
+    return { value: Number.isFinite(v) ? v : null, flag, date: m?.latest?.date ?? null };
+  };
+  return {
+    free_testosterone: reading(find(/free\s*testosterone|testosterone[,\s]+free|bioavailable\s*testosterone/)),
+    shbg: reading(find(/\bshbg\b|sex hormone[-\s]?binding globulin/)),
+    lh: reading(find(/\blh\b|luteini[sz]ing hormone/)),
+  };
+}
+
+// Build the mapped directives (zone → MARKER_MAPPINGS lever) into `desired`, honoring
+// within-run dedup, med-aware augmentation, feedback suppression, and staleness. Iterates
+// the pre-built offMarkers (one context per zone) so a firing cluster can fold members
+// away via `consumedZones` before their individual levers are emitted.
+function collectMappedDirectives(
+  source: string,
+  offMarkers: Map<string, MarkerContext>,
+  meds: any[],
+  seen: Set<string>,
+  consumedZones: Set<string>,
+  desired: DirectiveInput[]
+): void {
+  for (const ctx of offMarkers.values()) {
+    const z = ctx.zone;
+    if (consumedZones.has(z.label)) continue; // folded into a firing cluster's synthesized read
+    const m = ctx.marker;
+    const numericVal = ctx.value;
     const mapping = MARKER_MAPPINGS.find((x) => x.zone === z.label);
     if (!mapping) continue;
     const derived = mapping.derive(ctx);
     // Med-aware augmentation: if the user is already on a med that targets THIS zone in
     // the direction it's off, fold a "still off despite <med> → discuss dose/adherence"
-    // clause into ONE directive (the `watch` one — its "discuss with your doctor" framing
-    // fits best — else the first), so the set reasons WITH the treatment instead of
-    // repeating the note across domains. It stays the SAME directive (same key), so it
-    // never adds a row or trips the read-time collapse. INFORMATIONAL, flagged uncertain.
+    // clause into ONE directive (the `watch` one, else the first). It stays the SAME
+    // directive (same key/intent). INFORMATIONAL, flagged uncertain.
     const treating = meds.length ? medsTreatingZone(z.label, ctx.side, meds) : null;
     let medAugmentIdx = -1;
     if (treating) {
       medAugmentIdx = derived.findIndex((d) => d.domain === "watch");
       if (medAugmentIdx < 0) medAugmentIdx = 0;
     }
+    const readingDate: string | null = m?.latest?.date ?? null;
     for (let i = 0; i < derived.length; i++) {
       const d = derived[i];
       const directive_key = mappingDirectiveKey(z.label, d);
       if (directive_key && seen.has(directive_key)) continue; // already emitted this zone+domain directive this run
-      const feedback = lastDirectiveFeedback(SOURCE, z.label, d.domain, directive_key);
+      const intent = classifyDirectiveIntent(d.directive, d.intent ?? null);
+      const feedback = lastDirectiveFeedback(z.label, d.domain, intent, directive_key);
       if (shouldSuppressDirective(feedback, ctx)) continue;
       const augment = !!treating && i === medAugmentIdx;
-      const row = addDirective({
-        source: SOURCE,
-        domain: d.domain,
-        marker: z.label,
-        directive_key,
-        directive: augment ? `${d.directive} ${medInteractionClause(z.label, ctx.side, treating!)}` : d.directive,
-        rationale: d.rationale,
-        citation: d.citation ?? null,
-        uncertain: d.uncertain || !d.citation || augment,
-        trigger_value: numericVal,
-        trigger_side: ctx.side,
-        trigger_date: m?.latest?.date ?? null,
-        resurfaced_from_id: feedback?.id ?? null,
-        status: "active",
-      });
-      if (row) {
-        saved++;
-        if (directive_key) seen.add(directive_key);
-      }
+      desired.push(
+        applyStaleness(
+          {
+            source,
+            domain: d.domain,
+            marker: z.label,
+            directive_key,
+            intent_key: intent,
+            directive: augment ? `${d.directive} ${medInteractionClause(z.label, ctx.side, treating!)}` : d.directive,
+            rationale: d.rationale,
+            citation: d.citation ?? null,
+            uncertain: d.uncertain || !d.citation || augment,
+            trigger_value: numericVal,
+            trigger_side: ctx.side,
+            trigger_date: readingDate,
+            resurfaced_from_id: feedback?.id ?? null,
+            status: "active",
+          },
+          readingDate
+        )
+      );
+      if (directive_key) seen.add(directive_key);
     }
   }
-
-  // ---- generic long-tail fallback ----
-  // The mapped loop above only fires for the ~37 analytes with BOTH an optimal zone
-  // AND a MARKER_MAPPINGS lever. A lab-FLAGGED marker outside that set (potassium,
-  // ALP, PSA, WBC, cortisol, calcium, lipase, …) would otherwise propagate NOTHING —
-  // so each is surfaced as ONE soft, clearly-uncertain `watch` note, so nothing the
-  // lab flagged goes unnoticed. Informational, never a mapped lever.
-  saved += deriveGenericLongTail(SOURCE, markers, seen, profile);
-
-  // ---- cross-marker synthesis (the cluster layer) ----
-  // Some findings only make sense TOGETHER: ApoB + Lp(a) + hs-CRP is one
-  // elevated-cardiovascular-risk story, not three; low ferritin + low hemoglobin
-  // + a low/altered MCV is an anemia PATTERN, not three loose flags. These fire
-  // ONE synthesized directive when the cluster is genuinely present, so the brain
-  // reasons across markers instead of repeating itself. Still INFORMATIONAL.
-  saved += deriveMarkerClusters(SOURCE, offMarkers, seen, profile);
-
-  // Directives just changed → today's cached Brief is stale. Invalidate HERE (the one
-  // place every directive change flows through) rather than at each caller — so every
-  // path that re-derives (lab ingest, /directives/derive, chat log_health, a doc-date
-  // edit, MCP add_health_record) refreshes the read with no per-caller bookkeeping.
-  try {
-    invalidateDayRead();
-  } catch {
-    /* cache bust is best-effort, never block */
-  }
-  recordActiveDirectiveDecisions(SOURCE);
-  return { source: SOURCE, derived: saved, directives: listActiveDirectives() };
 }
 
 // Cluster definitions: each names the off-optimal zones (and required sides) that
@@ -603,6 +772,12 @@ interface MarkerCluster {
   members: { label: string; side?: "low" | "high" }[];
   minHits: number;
   build: (hits: { label: string; ctx: MarkerContext }[]) => MappingDirective[];
+  // When true, a FIRING cluster CONSUMES its member zones — the mapped + generic layers
+  // skip those markers so the panel reads as ONE synthesized story instead of the cluster
+  // card PLUS a scattered per-marker card for each member (essential fatty acids: omega-3
+  // + linoleic share a single oily-fish/EPA+DHA lever, so one read is right). Default
+  // (undefined/false) keeps members' individual levers alongside the cluster (CV/anemia).
+  suppressesMembers?: boolean;
 }
 
 const MARKER_CLUSTERS: MarkerCluster[] = [
@@ -650,6 +825,55 @@ const MARKER_CLUSTERS: MarkerCluster[] = [
       ];
     },
   },
+  {
+    // Essential fatty acids running low OVERALL — the omega-3 status (serum OmegaCheck
+    // and/or the RBC index) and the essential omega-6 (linoleic acid) low together. Read
+    // as ONE story (commonly a lean, low-fat diet) with a single lever, NOT scattered
+    // per-marker "low X" cards. suppressesMembers folds the members' individual
+    // levers/notes into this synthesized read.
+    name: "low-essential-fatty-acids",
+    suppressesMembers: true,
+    members: [
+      { label: "Omega-3 Total", side: "low" },
+      { label: "Omega-3 index", side: "low" },
+      { label: "Linoleic acid", side: "low" },
+    ],
+    minHits: 2,
+    build: (hits) => {
+      // Friendly, de-duplicated member phrasing (both omega-3 measures collapse to one).
+      const parts: string[] = [];
+      let sawOmega3 = false;
+      for (const h of hits) {
+        if (h.label === "Linoleic acid") parts.push("linoleic acid (omega-6)");
+        else if (!sawOmega3) {
+          parts.push("omega-3");
+          sawOmega3 = true;
+        }
+      }
+      const names = parts.join(" and ");
+      return [
+        {
+          domain: "nutrition",
+          directive: `Your essential fatty acids are running low (${names}) — commonly seen with a lean, low-fat diet. The simple lever is oily fish 2-3×/week (salmon, sardines, trout) or an EPA+DHA supplement, plus some whole-food omega-6 from nuts and seeds.`,
+          rationale:
+            "Several essential fatty-acid markers low together points to overall low intake rather than any single deficiency, and one dietary lever (oily fish / EPA+DHA + whole-food omega-6) moves them together.",
+          citation: "AHA 2017 Omega-3 Science Advisory",
+          uncertain: true,
+          intent: "lever",
+        },
+        {
+          domain: "watch",
+          directive:
+            "Recheck your fatty-acid panel in ~3-4 months after raising intake — red-cell and serum fatty-acid levels turn over slowly, so a retest is meaningful only after a sustained change.",
+          rationale:
+            "Fatty-acid fractions reflect weeks-to-months of intake, so a retest confirms the change took.",
+          citation: "AHA 2017 Omega-3 Science Advisory",
+          uncertain: true,
+          intent: "recheck",
+        },
+      ];
+    },
+  },
   // The anemia PATTERN (ferritin + hemoglobin + MCV) needs cross-marker reads
   // that aren't all in OPTIMAL_ZONES, so it's handled by buildAnemiaCluster()
   // rather than this declarative table.
@@ -676,6 +900,14 @@ function groupFullyModeledByMappings(name: string): boolean {
   return GROUPS_FULLY_MODELED_BY_MAPPINGS.has(markerGroup(name).key);
 }
 
+// Optimal-zone labels that ONLY carry meaning as part of a cross-marker cluster, never as
+// a standalone finding — so they must never emit a lone generic "isn't one of the levers
+// Cairn maps" note even when the cluster doesn't fire. Linoleic acid is the case: a low LA
+// in isolation is benign and mostly a dietary-intake artifact, so it stays quiet unless
+// the essential-fatty-acid cluster synthesizes it. (When the cluster DOES fire, the
+// dynamic consumedZones set suppresses the members; this static guard covers the lone case.)
+const CLUSTER_PARTICIPANT_ZONE_LABELS = new Set(["Linoleic acid"]);
+
 function isBodyCompositionSupportOnlyMarker(name: string): boolean {
   const n = String(name ?? "").toLowerCase();
   if (!n) return false;
@@ -696,15 +928,17 @@ function isBodyCompositionSupportOnlyMarker(name: string): boolean {
 
 // One soft `watch` note per lab-FLAGGED marker that has no mapped lever, so a flagged
 // analyte Cairn doesn't model (potassium, ALP, PSA, WBC, cortisol, calcium, lipase, …)
-// still surfaces instead of vanishing. Always uncertain:true (no established lever) and
-// respects the same dismiss/resolve feedback memory as the mapped path.
-function deriveGenericLongTail(
+// still surfaces instead of vanishing. Always intent 'notice' + uncertain:true (no
+// established lever) and respects the same dismiss/resolve feedback memory as the mapped
+// path. Pushes DirectiveInput objects into `desired` for the diff-based reconcile.
+function collectGenericLongTail(
   source: string,
   markers: any[],
   seen: Set<string>,
-  profile?: ZoneProfile | null
-): number {
-  let saved = 0;
+  profile: ZoneProfile | null,
+  consumedZones: Set<string>,
+  desired: DirectiveInput[]
+): void {
   let emitted = 0;
   for (const m of markers) {
     if (emitted >= MAX_GENERIC_DIRECTIVES) break;
@@ -722,11 +956,14 @@ function deriveGenericLongTail(
     const z = matchOptimalZone(m?.name, profile);
     // Skip anything the mapped path already covers (a zone WITH a lever).
     if (z && MARKER_MAPPINGS.some((x) => x.zone === z.label)) continue;
+    // Skip a zone a firing cluster CONSUMED (its members are folded into the synthesized
+    // read) or a cluster-participant-only zone (linoleic acid — no standalone card).
+    if (z && (consumedZones.has(z.label) || CLUSTER_PARTICIPANT_ZONE_LABELS.has(z.label))) continue;
     const name = canonicalMarker(String(m?.name ?? "")).name || String(m?.name ?? "").trim();
     if (!name) continue;
     const directive_key = normalizeDirectiveKey(`generic:${name}:watch`);
     if (directive_key && seen.has(directive_key)) continue;
-    const feedback = lastDirectiveFeedback(source, name, "watch", directive_key);
+    const feedback = lastDirectiveFeedback(name, "watch", "notice", directive_key);
     // Suppress a note the athlete already dismissed/resolved at this same flag, unless the
     // flag direction changed or a newer reading landed (there's no numeric optimal band
     // here to judge "materially worse", so anchor on the flag side + reading date).
@@ -739,44 +976,48 @@ function deriveGenericLongTail(
     }
     const value = m?.latest?.value;
     const valStr = value != null && value !== "" ? ` (${value}${m?.unit ? ` ${m.unit}` : ""})` : "";
-    const row = addDirective({
-      source,
-      domain: "watch",
-      marker: name,
-      directive_key,
-      directive: `Your lab flagged ${name}${valStr} as ${flag}. It isn't one of the levers Cairn maps, so it's worth mentioning at your next visit to understand what's driving it.`,
-      rationale:
-        "A flagged marker outside Cairn's mapped levers is surfaced as a soft watch item so nothing the lab flagged goes unnoticed. Informational, not medical advice.",
-      citation: null,
-      uncertain: true,
-      trigger_value: Number.isFinite(Number(value)) ? Number(value) : null,
-      trigger_side: flag,
-      trigger_date: m?.latest?.date ?? null,
-      resurfaced_from_id: feedback?.id ?? null,
-      status: "active",
-    });
-    if (row) {
-      saved++;
-      emitted++;
-      if (directive_key) seen.add(directive_key);
-    }
+    const readingDate: string | null = m?.latest?.date ?? null;
+    desired.push(
+      applyStaleness(
+        {
+          source,
+          domain: "watch",
+          marker: name,
+          directive_key,
+          intent_key: "notice",
+          directive: `Your lab flagged ${name}${valStr} as ${flag}. It isn't one of the levers Cairn maps, so it's worth mentioning at your next visit to understand what's driving it.`,
+          rationale:
+            "A flagged marker outside Cairn's mapped levers is surfaced as a soft watch item so nothing the lab flagged goes unnoticed. Informational, not medical advice.",
+          citation: null,
+          uncertain: true,
+          trigger_value: Number.isFinite(Number(value)) ? Number(value) : null,
+          trigger_side: flag,
+          trigger_date: readingDate,
+          resurfaced_from_id: feedback?.id ?? null,
+          status: "active",
+        },
+        readingDate
+      )
+    );
+    emitted++;
+    if (directive_key) seen.add(directive_key);
   }
-  return saved;
 }
 
-function deriveMarkerClusters(
-  source: string,
-  offMarkers: Map<string, MarkerContext>,
-  seen: Set<string> = new Set(),
-  profile?: ZoneProfile | null
-): number {
-  let saved = 0;
-  // anemia pattern needs cross-marker reads (hemoglobin / MCV) that aren't all in
-  // OPTIMAL_ZONES, so handle it specially off the marker history rather than the
-  // off-optimal map alone.
-  const anemia = buildAnemiaCluster(offMarkers, profile);
-  const clusters: { name: string; directives: MappingDirective[]; markerLabel: string; ctx: MarkerContext }[] = [];
+// A cluster that met its threshold this pass: its synthesized directives plus the zone
+// labels it CONSUMES (member zones a suppressing cluster folds away from the mapped +
+// generic layers). Computed BEFORE the mapped/generic passes so their consumedZones skip
+// is available; emitted AFTER them (unchanged order) so `seen` semantics hold.
+interface FiringCluster {
+  name: string;
+  directives: MappingDirective[];
+  markerLabel: string;
+  ctx: MarkerContext;
+  consumesZones: string[];
+}
 
+function computeFiringClusters(offMarkers: Map<string, MarkerContext>, profile: ZoneProfile | null): FiringCluster[] {
+  const firing: FiringCluster[] = [];
   for (const c of MARKER_CLUSTERS) {
     const hits = c.members
       .map((mem) => {
@@ -787,43 +1028,62 @@ function deriveMarkerClusters(
       })
       .filter(Boolean) as { label: string; ctx: MarkerContext }[];
     if (hits.length < c.minHits) continue;
-    clusters.push({
+    firing.push({
       name: c.name,
       directives: c.build(hits),
       markerLabel: hits.map((h) => h.label).join("+"),
       ctx: hits[0].ctx,
+      // A suppressing cluster consumes exactly the member zones that hit, so their
+      // individual mapped/generic cards fold into this one synthesized read.
+      consumesZones: c.suppressesMembers ? hits.map((h) => h.label) : [],
     });
   }
-  if (anemia) clusters.push(anemia);
+  // The anemia pattern needs cross-marker reads (hemoglobin / MCV) that aren't all in
+  // OPTIMAL_ZONES, so it's built specially off the marker history. It does not consume its
+  // members (their individual context stays), matching prior behavior.
+  const anemia = buildAnemiaCluster(offMarkers, profile);
+  if (anemia) firing.push({ ...anemia, consumesZones: [] });
+  return firing;
+}
 
-  for (const cl of clusters) {
+function emitFiringClusters(
+  source: string,
+  firing: FiringCluster[],
+  seen: Set<string>,
+  desired: DirectiveInput[]
+): void {
+  for (const cl of firing) {
+    const readingDate: string | null = cl.ctx.marker?.latest?.date ?? null;
     for (const d of cl.directives) {
       const directive_key = normalizeDirectiveKey(`cluster:${cl.name}:${d.domain}:${d.key || d.directive}`);
       if (directive_key && seen.has(directive_key)) continue; // already emitted this cluster directive this run
-      const feedback = lastDirectiveFeedback(source, cl.markerLabel, d.domain, directive_key);
+      const intent = classifyDirectiveIntent(d.directive, d.intent ?? null);
+      const feedback = lastDirectiveFeedback(cl.markerLabel, d.domain, intent, directive_key);
       if (shouldSuppressDirective(feedback, cl.ctx)) continue;
-      const row = addDirective({
-        source,
-        domain: d.domain,
-        marker: cl.markerLabel,
-        directive_key,
-        directive: d.directive,
-        rationale: d.rationale,
-        citation: d.citation ?? null,
-        uncertain: d.uncertain || !d.citation,
-        trigger_value: cl.ctx.value,
-        trigger_side: cl.ctx.side,
-        trigger_date: cl.ctx.marker?.latest?.date ?? null,
-        resurfaced_from_id: feedback?.id ?? null,
-        status: "active",
-      });
-      if (row) {
-        saved++;
-        if (directive_key) seen.add(directive_key);
-      }
+      desired.push(
+        applyStaleness(
+          {
+            source,
+            domain: d.domain,
+            marker: cl.markerLabel,
+            directive_key,
+            intent_key: intent,
+            directive: d.directive,
+            rationale: d.rationale,
+            citation: d.citation ?? null,
+            uncertain: d.uncertain || !d.citation,
+            trigger_value: cl.ctx.value,
+            trigger_side: cl.ctx.side,
+            trigger_date: readingDate,
+            resurfaced_from_id: feedback?.id ?? null,
+            status: "active",
+          },
+          readingDate
+        )
+      );
+      if (directive_key) seen.add(directive_key);
     }
   }
-  return saved;
 }
 
 // Anemia is a PATTERN across iron + red-cell indices, not a single zone. Low
@@ -913,7 +1173,6 @@ export function applyReviewDirectives(directives: any[]) {
   // and SHOULD clear stale directives. The CALLER (addHealthReview) gates this so
   // it's only invoked when the agent actually addressed directives — an ABSENT
   // field (partial / old-shape response) preserves the prior set instead.
-  clearDirectivesForSource("health_review");
   const list = Array.isArray(directives) ? directives : [];
   // Loop-invariant: the safety context is a full marker snapshot (scans + parses
   // every health-doc blob). Build it ONCE, not once per directive.
@@ -924,7 +1183,7 @@ export function applyReviewDirectives(directives: any[]) {
   // it must come back at 140). We resolve the current value/side for each named
   // marker ONCE from the live priority snapshot, then reuse markerMateriallyWorse.
   const markerCtxByName = buildReviewMarkerContexts();
-  let count = 0;
+  const desired: DirectiveInput[] = [];
   for (const d of list) {
     if (!d || typeof d !== "object") continue;
     const domain = DIRECTIVE_DOMAINS.has(String(d.domain)) ? String(d.domain) : "watch";
@@ -934,7 +1193,9 @@ export function applyReviewDirectives(directives: any[]) {
     const marker = rawMarker ? (canonicalDirectiveMarker(rawMarker) ?? rawMarker).slice(0, 60) : null;
     const directive = d.directive == null ? null : String(d.directive).trim().slice(0, 600) || null;
     const directive_key = defaultDirectiveKey(marker, domain, directive);
-    const feedback = lastDirectiveFeedback("health_review", marker, domain, directive_key);
+    // Classify intent from the agent's text — its identity axis, matched across sources.
+    const intent = classifyDirectiveIntent(directive, null);
+    const feedback = lastDirectiveFeedback(marker, domain, intent, directive_key);
     // Current context for THIS marker (null when we can't resolve a numeric value
     // or there's no optimal band to judge against — e.g. a watch-only marker).
     const ctx = marker ? (markerCtxByName.get(marker.toLowerCase()) ?? null) : null;
@@ -951,11 +1212,12 @@ export function applyReviewDirectives(directives: any[]) {
     // Supplement / interaction safety gate: annotate (never block) a supplement
     // suggestion the user's markers contraindicate (e.g. iron with replete ferritin).
     const safe = safetyGate({ domain, marker, directive, rationale: d.rationale ?? null }, safetyCtx);
-    const row = addDirective({
+    desired.push({
       source: "health_review",
       domain,
       marker,
       directive_key,
+      intent_key: intent,
       directive: safe.directive,
       rationale: safe.rationale,
       citation: verified.citation,
@@ -970,10 +1232,12 @@ export function applyReviewDirectives(directives: any[]) {
       resurfaced_from_id: feedback?.id ?? null,
       status: "active",
     });
-    if (row) count++;
   }
-  recordActiveDirectiveDecisions("health_review");
-  return count;
+  // Diff-based reconcile (never clear-all + reinsert): an unchanged review re-save churns
+  // zero rows, a changed directive updates in place, a dropped one soft-resolves.
+  const result = reconcileDirectives("health_review", desired);
+  if (result.changed > 0) recordActiveDirectiveDecisions("health_review");
+  return result.saved;
 }
 
 // Build a name→MarkerContext map from the live priority snapshot, so the review

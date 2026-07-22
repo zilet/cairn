@@ -1264,6 +1264,30 @@ export const MIGRATIONS: Migration[] = [
       addColumn(db, "dicom_series", "patient_fingerprint TEXT");
     },
   },
+  // v68-v74 are RESERVED no-ops: those version numbers were already consumed on the live
+  // primary deployment by parallel-session checkouts that deploy without merging here
+  // first (PRAGMA user_version on that DB reached 74 while this ladder ended at 67), so a
+  // new migration numbered at-or-below 74 would be silently skipped there and its schema
+  // change would never apply (fresh DBs mask the miss via CREATE TABLE IF NOT EXISTS).
+  // Keeping the slots as explicit no-ops preserves the gapless-ladder invariant and makes
+  // the next real migration number safely 76+. Before numbering a migration, check the
+  // LIVE deployment's user_version, not just this array's tail. If a parallel round later
+  // merges its schema change into this file, it should KEEP its reserved slot number and
+  // replace that placeholder's up() with the real (idempotent) change.
+  ...[68, 69, 70, 71, 72, 73, 74].map((version) => ({
+    version,
+    name: `reserved-parallel-deploy-v${version}`,
+    up: () => {},
+  })),
+  {
+    version: 75,
+    name: "directive-intent-key",
+    // Semantic identity axis for health directives: recheck | lever | notice. Legacy
+    // rows stay NULL (the feedback lookup classifies their text on the fly); every new
+    // insert classifies + stores it, so identity is stable across the markers /
+    // health_review sources.
+    up: (db) => addColumn(db, "health_directives", "intent_key TEXT"),
+  },
 ];
 
 export function runMigrations(db: DatabaseSync) {

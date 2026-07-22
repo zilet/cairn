@@ -307,7 +307,10 @@ export function startScheduler() {
     try {
       await runScheduled("coach_last_slot", slot, "coach_last_slot", async () => {
         const prompt = buildCoachPrompt("Weekly automatic review.");
-        const { agent, result } = await runAgentWithFallback(repo.pickAgentOrder(), prompt, {
+        // Same "proposal" task the interactive draftCoachProposal/evolveProgram ops
+        // route through (see runChosen.ts taskForOp) — an agent_routes.proposal pin
+        // applies here too, even though this legacy tick bypasses runChosen.
+        const { agent, result } = await runAgentWithFallback(repo.pickAgentOrderForTask("proposal"), prompt, {
           op: "coach_draft",
           acceptParsed: acceptsWeeklyCoachProposal,
         });

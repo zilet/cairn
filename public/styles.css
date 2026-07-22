@@ -4520,7 +4520,9 @@ button.hmk-row:active{background:var(--card-2)}
 .hb-dtext{font-size:.9rem;color:var(--ink);line-height:1.5;margin:0}
 .hb-directive-soft .hb-dtext{font-style:italic;color:var(--ink-2)}
 .hb-dsoft{color:var(--gold);font-style:normal;font-weight:600}
+.hb-dresurfaced{font-size:.76rem;color:var(--accent);font-style:italic;line-height:1.45;margin:0 0 6px}
 .hb-drat{font-size:.8rem;color:var(--muted);line-height:1.45;margin:5px 0 0;max-width:50ch}
+.hb-dwhen{font-size:.68rem;color:var(--muted);margin:6px 0 0}
 .hb-dcite{font-size:.68rem;color:var(--muted);font-style:italic;margin-top:6px;opacity:.85}
 /* "see the evidence" — a calm disclosure that turns a cited claim into a verifiable
    one. Quiet underlined affordance; the box opens into the source(s). */

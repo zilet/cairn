@@ -2070,6 +2070,8 @@ export interface ClientDirective {
   stale?: boolean;
   acute?: boolean;
   age_days?: number | null;
+  trigger_date?: string | null;
+  resurfaced_from_id?: number | null;
   [key: string]: unknown;
 }
 

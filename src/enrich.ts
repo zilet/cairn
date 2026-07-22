@@ -347,7 +347,9 @@ async function processJob(job: Job): Promise<void> {
   // Health-record ingestion is accuracy-critical (a curated panel silently drops
   // markers), so it deterministically prefers the strongest faithful transcriber
   // (Claude-first) instead of the load-spreading round-robin. Other kinds rotate.
-  const order = job.kind === "health" ? repo.pickHealthAgentOrder() : repo.pickAgentOrder();
+  // pickAgentOrderForTask resolves an `agent_routes.health`/`.enrich` pin first (if
+  // usable), then falls to that task class's policy.
+  const order = repo.pickAgentOrderForTask(job.kind === "health" ? "health" : "enrich");
   if (!order.length) {
     if (job.kind === "health") {
       const backfill = repo.backfillCcdaHealthDocument(job.id);
@@ -530,7 +532,7 @@ async function processJob(job: Job): Promise<void> {
       console.warn(`[enrich] health#${job.id}: extracted ${got} markers but ${why} — retrying Claude-first for completeness.`);
       try {
         const fb2 = await runAgentWithFallback(
-          repo.pickHealthAgentOrder(),
+          repo.pickAgentOrderForTask("health"),
           buildHealthIngestPrompt(healthSource.fp, false, healthSource.kind, { emphasizeCompleteness: true, missed: { got, expected } }),
           HEALTH_INGEST_TIMEOUT_MS,
         );
@@ -645,9 +647,10 @@ async function processReviewJob(): Promise<void> {
   const settings = repo.getSettings();
   if (!settings.enrich_enabled) return;
   // Faithful clinical reading matters more than spreading load: default the whole-picture
-  // health review to the Claude-first health order (an explicit `health` pin still wins),
-  // NOT the round-robin rotation.
-  const order = repo.pickHealthAgentOrder();
+  // health review to the Claude-first health order (an explicit `health_review` pin still
+  // wins — same task label the interactive runHealthReview op uses), NOT the round-robin
+  // rotation.
+  const order = repo.pickAgentOrderForTask("health_review");
   if (!order.length) return;
 
   const prompt = buildHealthReviewPrompt();
@@ -723,7 +726,7 @@ export async function processGarminStrengthJob(garminActivityId: number): Promis
     }
     return;
   }
-  const order = repo.pickAgentOrder();
+  const order = repo.pickAgentOrderForTask("enrich");
   if (!order.length) {
     if (logged) {
       console.log(`[enrich] garmin_strength#${garminActivityId}: logged ${logged} detected set(s) deterministically (no agent for narrative).`);
@@ -794,7 +797,7 @@ export async function processExerciseJob(id: number): Promise<void> {
     return;
   }
 
-  const order = repo.pickAgentOrder();
+  const order = repo.pickAgentOrderForTask("enrich");
   let finalName = String(ex.name);
   let group: string | null = ex.muscle_group ?? null;
   let equipment: string | null = ex.equipment ?? null;
@@ -880,9 +883,9 @@ export async function processFoodPhotoJob(id: number): Promise<void> {
     return;
   }
   // A vision read hands the agent a local file to look at — prefer the strongest
-  // file-reading transcriber (Claude-first), the same ordering the 'health' kind
-  // uses, rather than the load-spreading round-robin.
-  const order = repo.pickHealthAgentOrder();
+  // file-reading transcriber (Claude-first), the same "health" task the doc-ingest
+  // kind uses (and pin), rather than the load-spreading round-robin.
+  const order = repo.pickAgentOrderForTask("health");
   const hasGeminiVision = !!repo.getGeminiApiKey();
   if (!hasGeminiVision && !order.length) {
     repo.setFoodNoteEnrichStatus(id, "skipped");

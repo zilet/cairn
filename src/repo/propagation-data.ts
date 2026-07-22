@@ -38,7 +38,7 @@ const MARKER_GROUPS: MarkerGroup[] = [
   { key: "inflammation", label: "Inflammation", keys: ["crp", "c-reactive", "c reactive", "homocysteine", "esr", "sed rate", "fibrinogen"] },
   { key: "thyroid", label: "Thyroid", keys: ["tsh", "free t3", "free t4", "thyroxine", "triiodo", "thyroid", "thyroglobulin", "thyroid peroxidase", "tpo antibod", "thyroid antibod", "thyroxine binding globulin"] },
   { key: "hormones", label: "Hormones", keys: ["testosterone", "estradiol", "estrogen", "cortisol", "dhea", "shbg", "sex hormone binding globulin", "progesterone", "prolactin", "igf", "lh", "fsh", "leptin"] },
-  { key: "vitamins", label: "Vitamins & Minerals", keys: ["vitamin d", "25-oh", "25 hydroxy", "25(oh)", "b12", "cobalamin", "folate", "vitamin b", "methylmalonic", "magnesium", "zinc", "calcium", "selenium", "copper", "omega", "arachidonic"] },
+  { key: "vitamins", label: "Vitamins & Minerals", keys: ["vitamin d", "25-oh", "25 hydroxy", "25(oh)", "b12", "cobalamin", "folate", "vitamin b", "methylmalonic", "magnesium", "zinc", "calcium", "selenium", "copper", "omega", "arachidonic", "linoleic", "eicosapentaenoic", "docosahexaenoic"] },
   { key: "cardiac", label: "Cardiac", keys: ["troponin", "nt-probnp", "nt probnp", "pro-bnp", "probnp", "bnp", "ecg", "ekg", "electrocardiogram", "heart rhythm", "sinus rhythm", "atrial fibrillation", "afib", "qt interval", "qtc", "qrs", "pr interval", "rhythm"] },
   { key: "autoimmune", label: "Autoimmune & Antibodies", keys: ["antinuclear", "ana screen", "rheumatoid", "anti-ccp", "ccp antibod", "anti-dsdna", "dsdna"] },
   { key: "infectious", label: "Infectious Disease Screening", keys: ["hepatitis", "hiv", "hcv", "hbv", "surface antibody", "surface antigen"] },
@@ -152,7 +152,23 @@ export const OPTIMAL_ZONES: OptimalZone[] = [
   { keys: ["triglyceride"], unit: "mg/dL", optimal: [40, 100], dir: "high", actionable: true, label: "Triglycerides" },
   { keys: ["hdl"], unit: "mg/dL", optimal: [50, 90], dir: "low", actionable: true, label: "HDL-C" },
   { keys: ["total cholesterol"], unit: "mg/dL", optimal: [125, 200], dir: "high", actionable: true, label: "Total cholesterol" },
-  { keys: ["omega-3 index", "omega 3 index", "omegacheck"], unit: "%", optimal: [8, 12], dir: "low", actionable: true, label: "Omega-3 index" },
+  // Omega-3 status comes on two DIFFERENT scales that must not share a band. The RBC
+  // "Omega-3 Index" (EPA+DHA as % of red-cell membrane fatty acids) is desirable ≥8%.
+  { keys: ["omega-3 index", "omega 3 index"], unit: "%", optimal: [8, 12], dir: "low", actionable: true, label: "Omega-3 index" },
+  // The serum "OmegaCheck" / "Omega-3 Total" measure (EPA+DHA+DPA as % by WEIGHT of total
+  // serum fatty acids) runs on a lower scale: >5.4-5.5 % by wt is the commonly cited
+  // desirable / low-risk threshold (OmegaCheck / Cleveland HeartLab risk stratification:
+  // <3.8 % high, 3.8-5.4 % moderate, >5.4 % desirable). marker-canon folds the lab's
+  // "Omega-3 Total / OmegaCheck" / "OmegaCheck" names onto "Omega-3 Total", so the
+  // "omega-3 total" key is what reaches this zone in the pipeline. Evidence for the exact
+  // cutpoint is softer than the RBC index, so the mapped recheck is flagged uncertain.
+  { keys: ["omega-3 total", "omega 3 total", "omegacheck"], unit: "% by wt", optimal: [5.5, 12], dir: "low", actionable: true, label: "Omega-3 Total" },
+  // Linoleic acid (the essential omega-6, % by wt of serum fatty acids). Low LA is
+  // UNUSUAL and mostly a low-fat / very lean dietary-intake signal rather than a disease
+  // marker — so this is a soft, low-side-only, NON-actionable band (no standalone lever;
+  // it exists to let LA participate in the essential-fatty-acid cluster). ~18 % by wt is a
+  // rough lower orienting edge; anchor is soft, hence the mapping keeps it informational.
+  { keys: ["linoleic acid", "linoleic"], unit: "% by wt", optimal: [18, 35], dir: "low", actionable: false, label: "Linoleic acid" },
   // CBC / iron-study orientation ranges. These are conventional clinical ranges,
   // not lifestyle targets; most are non-actionable so they populate app/report
   // context without generating coaching directives.
@@ -323,8 +339,13 @@ function suppressNonMorningCortisolZone(name: string, z: OptimalZone | null): bo
 // advanced lipoprotein subfractions (particle count/size — different units than the band).
 function zoneNameTrustworthy(name: string): boolean {
   const n = String(name ?? "").toLowerCase();
+  // "Omega-3 Total / OmegaCheck" is a DUAL-NAME for one serum %-by-wt analyte, not a
+  // ratio — the composite-slash guard below would wrongly reject it (that was the live
+  // "isn't one of the levers Cairn maps" bug). Genuine fatty-acid RATIOS ("AA/EPA Ratio",
+  // "Omega-6/3 Ratio") still carry the word "ratio" and are rejected by the guard above.
+  const isOmegaCheckSerum = n.includes("omegacheck") || /omega-?\s?3 total/.test(n);
   if (/\bratio\b|\bpattern\b|\burine\b/.test(n)) return false;
-  if (n.includes("/")) return false;                                  // composite "x / y" names
+  if (n.includes("/") && !isOmegaCheckSerum) return false;            // composite "x / y" names
   if (n.includes("free") && (n.includes("testosterone") || n.includes("psa"))) return false; // free-T / free-PSA are distinct measures, no total-band
   if (/\b(sex hormone binding globulin|shbg|thyroxine binding globulin)\b/.test(n)) return false; // binding globulins are not serum globulin
   if (/\b(ldl|hdl)\b/.test(n) && /\b(particle|small|medium|large|peak|number|size)\b/.test(n)) return false;
@@ -378,11 +399,54 @@ export function optimalDistance(value: number, z: OptimalZone): number {
 // `derive` returns the per-domain rows. citation is filled where the lever is a
 // well-established guideline; left null (with uncertain:true) where the mapping
 // is real but not settled, so the user/coach sees it flagged research-recommended.
-export interface MappingDirective { key?: string; domain: "nutrition" | "training" | "watch"; directive: string; rationale: string; citation?: string | null; uncertain?: boolean; }
-export interface MarkerContext { value: number; flag: string | null; zone: OptimalZone; side: "low" | "high" | "unknown"; marker: any; }
+// The semantic INTENT of a directive — its identity axis alongside (marker, domain).
+// `recheck` = a retest/confirm/re-measure instruction; `lever` = an actionable
+// lifestyle change; `notice` = a soft "worth mentioning" long-tail note. Two
+// directives for the SAME marker+domain but different intent are genuinely distinct
+// concerns (a "retest lipids" and a "cut saturated fat" both key off LDL-C+watch/
+// nutrition but should never collapse into or suppress each other), which is why
+// intent is part of directive identity.
+export type DirectiveIntent = "recheck" | "lever" | "notice";
+export interface MappingDirective { key?: string; domain: "nutrition" | "training" | "watch"; directive: string; rationale: string; citation?: string | null; uncertain?: boolean; intent?: DirectiveIntent; }
+// A companion-marker reading a mapping can reason WITH (the engine resolves these from
+// the marker history and threads them into MarkerContext — this file stays DB-free).
+// `flag` is the LAB's own low/high flag (null = the lab read it normal / in-range).
+export interface CompanionReading { value: number | null; flag: string | null; date: string | null; }
+// MarkerContext carries the marker's own reading PLUS an optional cross-marker view so a
+// derive can be CALIBRATED by the rest of the panel (testosterone read against Free T /
+// SHBG / LH, rheumatoid factor read against hs-CRP). Both are optional so every existing
+// caller/test that builds a bare context keeps working; the connected-brain engine
+// populates them.
+export interface MarkerContext {
+  value: number;
+  flag: string | null;
+  zone: OptimalZone;
+  side: "low" | "high" | "unknown";
+  marker: any;
+  companions?: Record<string, CompanionReading | null>;  // keyed hormone companions (free_testosterone / shbg / lh)
+  offZones?: Set<string>;                                 // OPTIMAL_ZONES labels off-optimal elsewhere in the same panel
+}
 export interface MarkerMapping {
   zone: string;            // OPTIMAL_ZONES label this keys off
   derive: (ctx: MarkerContext) => MappingDirective[];
+}
+
+// Classify a directive's semantic intent from its text (deterministic, keyword-based),
+// unless an explicit intent is supplied (the mapped path prefers an explicit `intent`
+// on the MappingDirective; agent-emitted health_review text falls through to this).
+// Precision matters more on `recheck`: a genuine retest instruction must be caught, but
+// an incidental "confirm the dose with your doctor" (a lever) must NOT read as a recheck,
+// so `confirm` only counts alongside a measurement/lab word, never on its own.
+const RECHECK_RE =
+  /\b(recheck|re-?check|retest|re-?test|re-?measure|remeasure|reconfirm|rescan)\b|\brepeat\b[^.]*\b(test|panel|lab|labs|reading|readings|measurement|draw|scan)\b|\bconfirm\b[^.]*\b(reading|readings|panel|labs?|lab result|hba1c|a1c|iron studies|egfr|cystatin|free t\d|the number|repeated home|home reading)\b|\bmeasure it once\b|repeated home readings|home readings|a fresh scan|fresh scan would confirm|worth a fresh scan/i;
+const NOTICE_RE = /worth mentioning|isn'?t one of the levers|not one of the levers/i;
+export function classifyDirectiveIntent(text: string | null | undefined, explicit?: string | null): DirectiveIntent {
+  if (explicit === "recheck" || explicit === "lever" || explicit === "notice") return explicit;
+  const s = String(text ?? "").toLowerCase();
+  if (!s) return "lever";
+  if (NOTICE_RE.test(s)) return "notice";
+  if (RECHECK_RE.test(s)) return "recheck";
+  return "lever";
 }
 
 export function markerSide(value: number, zone: OptimalZone, flag: string | null): MarkerContext["side"] {
@@ -391,6 +455,39 @@ export function markerSide(value: number, zone: OptimalZone, flag: string | null
   if (value < zone.optimal[0]) return "low";
   if (value > zone.optimal[1]) return "high";
   return "unknown";
+}
+
+// Two dated readings are "same-era" when they fall within `days` of each other. Pure —
+// used to require a companion marker to be from roughly the SAME draw as the primary
+// (a year-old normal Free T doesn't reassure about a total-T reading taken today).
+export function withinDays(a: string | null | undefined, b: string | null | undefined, days: number): boolean {
+  if (!a || !b) return false;
+  const ta = Date.parse(String(a).slice(0, 10));
+  const tb = Date.parse(String(b).slice(0, 10));
+  if (!Number.isFinite(ta) || !Number.isFinite(tb)) return false;
+  return Math.abs(ta - tb) <= Math.max(0, days) * 864e5;
+}
+
+// A companion reading is "reassuring" when it has a value, the lab did NOT flag it
+// low/high, and it's same-era with the primary marker. Pure.
+function companionReassuring(r: CompanionReading | null | undefined, primaryDate: string | null, days: number): boolean {
+  return !!r && r.value != null && r.flag !== "low" && r.flag !== "high" && withinDays(r.date, primaryDate, days);
+}
+
+// The hormone-panel correlation for a below-optimal TOTAL testosterone: when the same-era
+// Free Testosterone reads normal AND at least one of SHBG / LH reads normal, the picture
+// is usually unremarkable — so the coach can CALIBRATE (a soft "routine morning draw next
+// panel is enough") instead of the alarmist "confirm a low testosterone" card. When Free
+// T is itself low/flagged, or the companions are absent/stale (>~60d), we keep the
+// confirm-with-a-morning-repeat card. Deterministic; reads only ctx.companions.
+export function testosteroneCompanionsReassuring(ctx: MarkerContext): boolean {
+  const c = ctx.companions;
+  if (!c) return false;
+  const primaryDate = ctx.marker?.latest?.date ?? null;
+  const freeOk = companionReassuring(c.free_testosterone, primaryDate, 60);
+  const bindingOk =
+    companionReassuring(c.shbg, primaryDate, 60) || companionReassuring(c.lh, primaryDate, 60);
+  return freeOk && bindingOk;
 }
 
 // ---------- medication ⇄ marker interaction table (pure) ----------
@@ -583,15 +680,15 @@ export function personalizeZone(base: OptimalZone, profile?: ZoneProfile | null)
 export const MARKER_MAPPINGS: MarkerMapping[] = [
   { zone: "ApoB", derive: () => [
     { domain: "nutrition", directive: "Lower saturated fat (swap toward olive oil, nuts, oily fish) and add ~10g/day soluble fiber (oats, legumes, psyllium) to bring ApoB toward optimal.", rationale: "ApoB counts atherogenic particles; lowering it is the most direct dietary lever for cardiovascular risk.", citation: "AHA/ACC 2018 Cholesterol Guideline; ESC/EAS 2019 Dyslipidaemia" },
-    { domain: "watch", directive: "Recheck ApoB (and a full lipid panel) in ~12 weeks after dietary changes; discuss with your doctor if it stays elevated.", rationale: "ApoB is the preferred residual-risk marker; a 12-week retest captures dietary response.", citation: "AHA/ACC 2018 Cholesterol Guideline" },
+    { domain: "watch", directive: "Recheck ApoB (and a full lipid panel) in ~12 weeks after dietary changes; discuss with your doctor if it stays elevated.", rationale: "ApoB is the preferred residual-risk marker; a 12-week retest captures dietary response.", citation: "AHA/ACC 2018 Cholesterol Guideline", intent: "recheck" },
   ] },
   { zone: "LDL-C", derive: () => [
     { domain: "nutrition", directive: "Reduce saturated fat and add soluble fiber + plant sterols to nudge LDL-C toward optimal; favor unsaturated fats.", rationale: "Dietary saturated-fat reduction is a first-line, evidence-backed LDL lever.", citation: "AHA/ACC 2018 Cholesterol Guideline" },
-    { domain: "watch", directive: "Retest lipids in ~12 weeks; if LDL-C remains high despite diet, raise it with your doctor.", rationale: "Elevated LDL-C is a well-established atherosclerosis driver worth tracking and discussing clinically.", citation: "AHA/ACC 2018 Cholesterol Guideline" },
+    { domain: "watch", directive: "Retest lipids in ~12 weeks; if LDL-C remains high despite diet, raise it with your doctor.", rationale: "Elevated LDL-C is a well-established atherosclerosis driver worth tracking and discussing clinically.", citation: "AHA/ACC 2018 Cholesterol Guideline", intent: "recheck" },
   ] },
   { zone: "Non-HDL-C", derive: () => [
     { domain: "nutrition", directive: "Cut saturated fat and refined carbs and raise fiber — non-HDL captures all atherogenic cholesterol, so the lipid-lowering diet applies.", rationale: "Non-HDL-C sums LDL + other atherogenic particles; the same dietary levers move it.", citation: "AHA/ACC 2018 Cholesterol Guideline" },
-    { domain: "watch", directive: "Retest a full lipid panel in ~12 weeks and discuss persistent elevation with your doctor.", rationale: "Non-HDL-C is a strong residual-risk marker worth confirming.", citation: "AHA/ACC 2018 Cholesterol Guideline" },
+    { domain: "watch", directive: "Retest a full lipid panel in ~12 weeks and discuss persistent elevation with your doctor.", rationale: "Non-HDL-C is a strong residual-risk marker worth confirming.", citation: "AHA/ACC 2018 Cholesterol Guideline", intent: "recheck" },
   ] },
   { zone: "Triglycerides", derive: () => [
     { domain: "nutrition", directive: "Cut added sugar, refined carbs and alcohol; add oily fish 2-3×/week — the strongest dietary levers for high triglycerides.", rationale: "Triglycerides respond sharply to carbohydrate/alcohol load and omega-3 intake.", citation: "AHA 2021 Scientific Statement on Triglycerides; Endocrine Society 2012" },
@@ -707,11 +804,24 @@ export const MARKER_MAPPINGS: MarkerMapping[] = [
   ] : [
     { domain: "watch", directive: "A high magnesium is unusual outside supplementation or reduced kidney clearance — if you aren't supplementing heavily, mention it to your doctor.", rationale: "Elevated magnesium can reflect over-supplementation or impaired renal clearance.", citation: "Magnesium status literature", uncertain: true },
   ] },
-  { zone: "Testosterone", derive: (ctx) => ctx.side === "low" ? [
-    { domain: "training", directive: "Low testosterone (alongside fatigue or stalled progress) is often downstream of under-recovery — protect sleep, avoid chronic over-reaching, and keep resistance training in the week; don't read it as a reason to train harder.", rationale: "Low total testosterone in active men frequently reflects low energy availability and under-recovery, which lifestyle addresses before any clinical step.", citation: "Endocrine Society 2018 Testosterone Therapy Guideline", uncertain: true },
-    { domain: "nutrition", directive: "Make sure you're eating enough (not stuck in a deep deficit), getting adequate fat and zinc, and recovering — chronic under-fueling suppresses testosterone. Discuss a confirmed low level with your doctor.", rationale: "Energy and fat availability influence endogenous testosterone; a deep, prolonged deficit can suppress it.", citation: "Endocrine Society 2018 Testosterone Therapy Guideline", uncertain: true },
-    { domain: "watch", directive: "Confirm a low testosterone with a morning repeat (and LH/SHBG) before drawing conclusions, and discuss it with your doctor — diurnal variation is large.", rationale: "Testosterone peaks in the morning and varies day to day, so a single low value needs confirmation.", citation: "Endocrine Society 2018 Testosterone Therapy Guideline" },
-  ] : [
+  { zone: "Testosterone", derive: (ctx) => ctx.side === "low"
+    ? (testosteroneCompanionsReassuring(ctx)
+      // Companion-calibrated: Free T normal AND (SHBG or LH) normal in the same era → the
+      // mildly-low TOTAL is usually unremarkable. ONE soft watch card, not the alarmist
+      // "go confirm a low testosterone" (which sent the athlete to re-measure values already
+      // sitting normal next to it). Keeps the Endocrine Society diurnal point.
+      ? [
+        // A NOTICE, not a recheck: the card explicitly says not to chase it, so tagging it
+        // `recheck` would contradict itself by filing a 28-day follow-up on Done. (The
+        // non-reassured confirm-with-a-morning-repeat card below rightly stays `recheck`.)
+        { domain: "watch", directive: "Your total testosterone reads a touch below Cairn's optimal band, but your free testosterone, SHBG and LH all look normal — that combination is usually unremarkable, since free testosterone is the bioavailable fraction. No need to chase it; a routine morning draw on your next panel is plenty.", rationale: "When total testosterone is only mildly below optimal while free testosterone and the binding/pituitary markers (SHBG, LH) read normal in the same panel, the picture is typically benign; total T also varies with diurnal timing.", citation: "Endocrine Society 2018 Testosterone Therapy Guideline", uncertain: true, intent: "notice" },
+      ]
+      : [
+        { domain: "training", directive: "Low testosterone (alongside fatigue or stalled progress) is often downstream of under-recovery — protect sleep, avoid chronic over-reaching, and keep resistance training in the week; don't read it as a reason to train harder.", rationale: "Low total testosterone in active men frequently reflects low energy availability and under-recovery, which lifestyle addresses before any clinical step.", citation: "Endocrine Society 2018 Testosterone Therapy Guideline", uncertain: true },
+        { domain: "nutrition", directive: "Make sure you're eating enough (not stuck in a deep deficit), getting adequate fat and zinc, and recovering — chronic under-fueling suppresses testosterone. Discuss a confirmed low level with your doctor.", rationale: "Energy and fat availability influence endogenous testosterone; a deep, prolonged deficit can suppress it.", citation: "Endocrine Society 2018 Testosterone Therapy Guideline", uncertain: true },
+        { domain: "watch", directive: "Confirm a low testosterone with a morning repeat (and LH/SHBG) before drawing conclusions, and discuss it with your doctor — diurnal variation is large.", rationale: "Testosterone peaks in the morning and varies day to day, so a single low value needs confirmation.", citation: "Endocrine Society 2018 Testosterone Therapy Guideline", intent: "recheck" },
+      ])
+    : [
     { domain: "watch", directive: "A high testosterone in a man not on therapy is worth mentioning to your doctor; if you're using exogenous hormones, that's the likely cause.", rationale: "Unexplained high testosterone warrants clinical context.", citation: "Endocrine Society 2018 Testosterone Therapy Guideline", uncertain: true },
   ] },
   { zone: "Estradiol", derive: () => [
@@ -750,11 +860,37 @@ export const MARKER_MAPPINGS: MarkerMapping[] = [
     { domain: "watch", directive: "Retest a full lipid panel (with ApoB) in ~12 weeks and discuss a persistently high total cholesterol with your doctor.", rationale: "A 12-week retest captures dietary response and frames total cholesterol within the fuller lipid picture.", citation: "AHA/ACC 2018 Cholesterol Guideline" },
   ] },
   { zone: "Omega-3 index", derive: (ctx) => ctx.side === "low" ? [
-    { domain: "nutrition", directive: "Your omega-3 index is below the protective range — eat oily fish 2-3×/week (favor smaller, lower-mercury species: salmon, sardines, trout, herring) or add an EPA+DHA supplement; it supports triglycerides, inflammation and heart rhythm.", rationale: "A low omega-3 index tracks with higher cardiovascular risk and responds reliably to EPA/DHA intake.", citation: "AHA 2017 Omega-3 Science Advisory" },
-    { domain: "watch", directive: "Recheck the omega-3 index in ~3-4 months after raising intake — red-cell omega-3 turns over slowly.", rationale: "The omega-3 index reflects months of intake, so a retest is meaningful only after a sustained change.", citation: "AHA 2017 Omega-3 Science Advisory", uncertain: true },
+    { domain: "nutrition", directive: "Your omega-3 index is below the protective range — eat oily fish 2-3×/week (favor smaller, lower-mercury species: salmon, sardines, trout, herring) or add an EPA+DHA supplement; it supports triglycerides, inflammation and heart rhythm.", rationale: "A low omega-3 index tracks with higher cardiovascular risk and responds reliably to EPA/DHA intake.", citation: "AHA 2017 Omega-3 Science Advisory", intent: "lever" },
+    { domain: "watch", directive: "Recheck the omega-3 index in ~3-4 months after raising intake — red-cell omega-3 turns over slowly.", rationale: "The omega-3 index reflects months of intake, so a retest is meaningful only after a sustained change.", citation: "AHA 2017 Omega-3 Science Advisory", uncertain: true, intent: "recheck" },
+  ] : [] },
+  // Serum OmegaCheck / Omega-3 Total (% by wt) — the SAME oily-fish/EPA+DHA lever family as
+  // the RBC index, on its own scale. When ≥2 essential-fatty-acid markers run low together
+  // the cluster layer folds this into ONE synthesized read (see the low-essential-fatty-acids
+  // cluster); on its own it stands as this lever.
+  { zone: "Omega-3 Total", derive: (ctx) => ctx.side === "low" ? [
+    { domain: "nutrition", directive: "Your total omega-3 (OmegaCheck) is below the desirable range — eat oily fish 2-3×/week (salmon, sardines, trout, herring) or add an EPA+DHA supplement; it supports triglycerides, inflammation and heart rhythm.", rationale: "A low serum omega-3 (EPA+DHA+DPA % by wt) tracks with higher cardiovascular risk and responds reliably to EPA/DHA intake.", citation: "AHA 2017 Omega-3 Science Advisory", intent: "lever" },
+    { domain: "watch", directive: "Recheck your omega-3 (OmegaCheck) in ~3-4 months after raising intake — fatty-acid levels turn over slowly, so a retest is meaningful only after a sustained change.", rationale: "Serum fatty-acid fractions reflect weeks-to-months of intake, so a retest is meaningful only after a sustained change; the exact desirable cutpoint is less settled than the RBC index.", citation: "AHA 2017 Omega-3 Science Advisory", uncertain: true, intent: "recheck" },
   ] : [] },
   { zone: "Mercury", derive: () => [
     { domain: "nutrition", directive: "Blood mercury is on the high side — keep getting your omega-3s, but shift away from large predatory fish (tuna, swordfish, king mackerel) toward smaller species (salmon, sardines, trout); this lowers mercury while protecting omega-3 intake.", rationale: "Mercury accumulates from large, long-lived predatory fish; smaller oily fish deliver omega-3 with far less mercury.", citation: "EPA/FDA fish-consumption advice" },
     { domain: "watch", directive: "Recheck mercury after a few months of lower-mercury fish choices; discuss a persistently elevated level with your doctor.", rationale: "Blood mercury falls over months once high-mercury intake drops.", citation: "EPA/FDA fish-consumption advice", uncertain: true },
   ] },
+  // Rheumatoid factor — an INFORMATIONAL watch note, not a lever (actionable:false zone).
+  // A single, mildly-elevated RF without joint symptoms has low specificity and is common,
+  // so the register is "mention it and recheck", never "react". When hs-CRP is ALSO
+  // off-optimal in the SAME panel (ctx.offZones), the two are folded into one inflammation
+  // conversation rather than told separately. Always uncertain (a soft nudge).
+  { zone: "Rheumatoid factor", derive: (ctx) => {
+    const crpOff = ctx.offZones?.has("hs-CRP") ?? false;
+    const valuePart = Number.isFinite(ctx.value) ? ` (${ctx.value} IU/mL)` : "";
+    const crpClause = crpOff
+      ? " Since your hs-CRP is also up, it's worth raising the two together as one inflammation question rather than separately."
+      : "";
+    const crpRationale = crpOff
+      ? " Paired with an elevated hs-CRP it becomes a more coherent inflammation conversation to have together."
+      : "";
+    return [
+      { domain: "watch", directive: `Rheumatoid factor is mildly elevated${valuePart} — but a single borderline RF without joint pain or swelling is common and often means nothing on its own. Worth mentioning at your next visit and rechecking rather than reacting.${crpClause}`, rationale: `An isolated, mildly-elevated rheumatoid factor has low specificity in someone without symptoms, so it warrants a mention and a recheck rather than alarm.${crpRationale}`, citation: "ACR/EULAR 2010 Rheumatoid Arthritis Classification Criteria", uncertain: true, intent: "notice" },
+    ];
+  } },
 ];

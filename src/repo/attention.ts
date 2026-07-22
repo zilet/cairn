@@ -332,6 +332,23 @@ export function listAttentionSchedule(opts: { domain?: AttentionDomain; includeR
   return rows.map((row) => hydrate(row)).filter((entry): entry is AttentionScheduleEntry => entry != null);
 }
 
+// Every schedule row filed under one `source` (e.g. "directive-recheck"), so a
+// composition layer that owns a source can advance/read its own entries without
+// scanning by domain. Excludes released rows unless asked (they carry no next_due).
+export function listAttentionBySource(
+  source: string,
+  opts: { includeReleased?: boolean; limit?: number } = {}
+): AttentionScheduleEntry[] {
+  const where = ["source = ?"];
+  const params: string[] = [String(source)];
+  if (!opts.includeReleased) where.push("tier != 'released'");
+  const limit = Math.min(500, Math.max(1, Math.round(Number(opts.limit) || 200)));
+  const rows = db
+    .prepare(`SELECT * FROM attention_schedule WHERE ${where.join(" AND ")} ORDER BY (next_due IS NULL), next_due ASC, signal_key ASC LIMIT ?`)
+    .all(...params, limit) as unknown as AttentionRow[];
+  return rows.map((row) => hydrate(row)).filter((entry): entry is AttentionScheduleEntry => entry != null);
+}
+
 export function listDueAttention(asOf: string = todayISO(), opts: { domain?: AttentionDomain; limit?: number } = {}): AttentionScheduleEntry[] {
   const where = ["next_due IS NOT NULL", "next_due <= ?", "tier != 'released'"];
   const params: string[] = [normalizeDate(asOf)];

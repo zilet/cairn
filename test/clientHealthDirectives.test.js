@@ -31,6 +31,7 @@ function loadHealthDirectives() {
   };
   context.window = context;
   for (const file of [
+    "public/js/date-utils.js",
     "public/js/html-utils.js",
     "public/js/ui-components.js",
     "public/js/health-evidence-client.js",
@@ -114,6 +115,41 @@ test("health directives groups rows and exposes evidence affordances", () => {
   assert.match(html, /see the evidence/);
   assert.match(html, /turn on research in Settings/);
   assert.doesNotMatch(html, /<risk>|<now>|<watch>/);
+});
+
+test("health directives render measured date, resurfaced framing, and updated Done/Dismiss copy", () => {
+  const directives = loadHealthDirectives();
+  const html = directives.directivesSectionHtml(
+    [
+      {
+        id: 1,
+        domain: "nutrition",
+        marker: "ApoB",
+        directive: "Lower saturated fat",
+        trigger_date: "2020-01-01",
+        resurfaced_from_id: 7,
+      },
+    ],
+    { research_enabled: true },
+  );
+
+  assert.match(html, /hb-dwhen/);
+  assert.match(html, /measured/);
+  assert.match(html, /hb-dresurfaced/);
+  assert.match(html, /You've handled this before — newer results bring it back\./);
+  assert.match(html, /title="Got it — this comes back only if new results change the picture"/);
+  assert.match(html, /title="Not useful — stay quiet unless it gets materially worse"/);
+});
+
+test("health directives omit measured date and resurfaced framing when absent", () => {
+  const directives = loadHealthDirectives();
+  const html = directives.directivesSectionHtml(
+    [{ id: 2, domain: "nutrition", marker: "ApoB", directive: "Lower saturated fat" }],
+    { research_enabled: true },
+  );
+
+  assert.doesNotMatch(html, /hb-dwhen/);
+  assert.doesNotMatch(html, /hb-dresurfaced/);
 });
 
 test("health directives suppresses research nudge when sourced or research enabled", () => {

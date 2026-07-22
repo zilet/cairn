@@ -63,7 +63,7 @@ test("legacy synthesis without drift_sig never reads stale from drift", () => {
   assert.equal(view.stale_reason, null);
 });
 
-test("re-deriving directives with unchanged content does not flip stale (row ids churn, content doesn't)", () => {
+test("re-deriving directives with unchanged content does not flip stale (rows are kept, content doesn't drift)", () => {
   seedHealthDoc(localDaysAgo(5), [marker("ApoB", 130, { unit: "mg/dL", flag: "high" })]);
   repo.deriveDirectives();
   repo.saveHealthSynthesis({ headline: "Lipids flagged", source_doc_at: repo.newestHealthDocDate() });
@@ -71,9 +71,10 @@ test("re-deriving directives with unchanged content does not flip stale (row ids
   let view = repo.getHealthSynthesisView();
   assert.equal(view.stale, false);
 
-  // deriveDirectives() idempotently CLEARS + REWRITES the 'markers' source on every
-  // call — same content gets brand-new autoincrement ids. That churn alone must
-  // never read as drift (this is why the signature keys on directive_key, not id).
+  // deriveDirectives() is now DIFF-BASED: an unchanged marker snapshot keeps the exact
+  // same active rows untouched (stable ids, zero churn), so re-deriving can never read
+  // as drift. (The signature keying on directive_key was the earlier defense against
+  // clear+reinsert id churn; the diff removes the churn at the source.)
   const before = repo
     .listActiveDirectives()
     .map((d) => d.id)
@@ -83,7 +84,7 @@ test("re-deriving directives with unchanged content does not flip stale (row ids
     .listActiveDirectives()
     .map((d) => d.id)
     .sort();
-  assert.notDeepEqual(before, after, "sanity: the ids really did change on re-derive");
+  assert.deepEqual(before, after, "the same active rows are kept untouched on re-derive (zero churn)");
 
   view = repo.getHealthSynthesisView();
   assert.equal(view.stale, false, "unchanged directive content must not flip stale");

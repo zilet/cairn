@@ -18,6 +18,7 @@ import {
 } from "../domain/brain/index.js";
 import {
   annotateDirectiveFreshness,
+  annotateDirectiveRecheck,
   deriveDirectives,
   evidenceSummary,
   getEvidence,
@@ -223,7 +224,9 @@ connectedBrainRouter.post("/health/synthesis", async (req, res) => {
 // as a current training/nutrition shaper while chronic findings stay put.
 connectedBrainRouter.get("/directives", (req, res) =>
   res.json({
-    directives: annotateDirectiveFreshness(listDirectives({ all: req.query.all === "1" || req.query.all === "true" })),
+    directives: annotateDirectiveRecheck(
+      annotateDirectiveFreshness(listDirectives({ all: req.query.all === "1" || req.query.all === "true" }))
+    ),
   })
 );
 

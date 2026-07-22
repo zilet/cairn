@@ -26,6 +26,8 @@ type HealthDirectiveRow = {
   citation?: unknown;
   directive?: unknown;
   rationale?: unknown;
+  trigger_date?: unknown;
+  resurfaced_from_id?: unknown;
 };
 
 (() => {
@@ -109,6 +111,18 @@ type HealthDirectiveRow = {
     const marker = d.marker ? `<span class="hb-dmarker">${escHtml(d.marker)}</span>` : "";
     const lead = soft ? `<span class="hb-dsoft">Worth looking into · </span>` : "";
     const cite = d.citation ? `<div class="hb-dcite">${escHtml(d.citation)}</div>` : "";
+    const triggerDate = typeof d.trigger_date === "string" ? d.trigger_date.trim() : "";
+    // relAge/absDate live in a sibling <script>; guard the cross-module reference (function
+    // hoisting doesn't cross script boundaries) and fall back to no date line if absent.
+    const when =
+      triggerDate && typeof relAge === "function" && typeof absDate === "function"
+        ? `<p class="hb-dwhen" title="${escAttr(absDate(triggerDate))}">measured ${escHtml(relAge(triggerDate))}</p>`
+        : "";
+    // Status-neutral: resurfaced_from_id follows a Done'd OR a Dismissed directive that
+    // materially worsened — so this must not assume the athlete "marked this done".
+    const resurfaced = d.resurfaced_from_id
+      ? `<p class="hb-dresurfaced">You've handled this before — newer results bring it back.</p>`
+      : "";
     const evCount = d.marker && evMap ? evMap.get(String(d.marker).toLowerCase()) || 0 : 0;
     const evidence =
       d.marker && (d.citation || evCount > 0)
@@ -118,14 +132,16 @@ type HealthDirectiveRow = {
     return `<div class="hb-directive reveal${soft ? " hb-directive-soft" : ""}" style="${stagger(i + 1)}" data-dir="${escAttr(d.id)}">
     <div class="hb-dmain">
       ${marker}
+      ${resurfaced}
       <p class="hb-dtext">${lead}${escHtml(d.directive || "")}</p>
       ${d.rationale ? `<p class="hb-drat">${escHtml(d.rationale)}</p>` : ""}
+      ${when}
       ${cite}
       ${evidence}
     </div>
     <div class="hb-dctl">
-      <button class="hb-dbtn hb-ddone" data-ddone="${escAttr(d.id)}" title="Mark handled; the coach will stop carrying this unless new results change">Done</button>
-      <button class="hb-dbtn hb-ddismiss" data-ddismiss="${escAttr(d.id)}" title="Dismiss; the coach will avoid repeating this unless the marker materially changes">Dismiss</button>
+      <button class="hb-dbtn hb-ddone" data-ddone="${escAttr(d.id)}" title="Got it — this comes back only if new results change the picture">Done</button>
+      <button class="hb-dbtn hb-ddismiss" data-ddismiss="${escAttr(d.id)}" title="Not useful — stay quiet unless it gets materially worse">Dismiss</button>
     </div>
   </div>`;
   }

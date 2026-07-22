@@ -10,6 +10,8 @@ type HealthDirectivesRow = {
   uncertain?: unknown;
   directive?: unknown;
   rationale?: unknown;
+  trigger_date?: unknown;
+  resurfaced_from_id?: unknown;
 };
 
 type HealthDirectivesEvidenceSummary = {

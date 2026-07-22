@@ -16,6 +16,7 @@ import {
 } from "../../domain/brain/index.js";
 import {
   annotateDirectiveFreshness,
+  annotateDirectiveRecheck,
   buildHealthExport,
   deriveDirectives,
   evidenceSummary,
@@ -230,7 +231,7 @@ export function registerConnectedBrainTools(server: McpToolRegistrar) {
     "list_directives",
     "List the connected-brain cross-domain health directives (a flagged finding propagated into nutrition/training/watch, with rationale, an evidence citation where well-established, and an `uncertain` flag where the lever is real but unsettled). Active by default; pass all:true for the full history incl. resolved/dismissed feedback rows.",
     { all: z.boolean().optional() },
-    async ({ all }) => asText(annotateDirectiveFreshness(listDirectives({ all: !!all })))
+    async ({ all }) => asText(annotateDirectiveRecheck(annotateDirectiveFreshness(listDirectives({ all: !!all }))))
   );
 
   server.tool(

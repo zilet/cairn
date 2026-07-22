@@ -150,6 +150,14 @@ function describeSignal(
     const m = markerBySignal.get(key);
     return { label: m?.name ? String(m.name) : titleFromSlug(key.slice(7)), kind: "lab" };
   }
+  // A directive-sourced recheck joins back to its marker (same slug as the periodic
+  // cadence). Falls to a clean title from the slug for markers with no cadence policy
+  // (e.g. "Testosterone"), which reads well on its own.
+  if (key.startsWith("directive-recheck:")) {
+    const slug = key.slice("directive-recheck:".length);
+    const m = markerBySignal.get(`marker:${slug}`);
+    return { label: m?.name ? String(m.name) : titleFromSlug(slug), kind: "lab" };
+  }
   if (key.startsWith("dexa:")) return { label: "Body composition (DEXA)", kind: "dexa" };
   // Speak each review follow-up as its own action ("Recheck hs-CRP") instead of one
   // generic "Lab follow-up" line that renders identically for every different follow-up.

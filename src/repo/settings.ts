@@ -50,6 +50,21 @@ export const ROUTABLE_TASKS = [
   "insight",
   "weekly_read",
   "day_read",
+  // Generalizes the health-ingestion routing pattern (originally hardcoded as
+  // pickHealthAgentOrder's Claude-first default) to every agentic task class:
+  //   - health: raw lab/scan transcription + food-photo vision reads — accuracy-
+  //     critical, so a pin here also backs pickHealthAgentOrder's own default
+  //     `agent_routes.health` lookup used by direct (non-runChosen) callers.
+  //   - brain_review: the case-conference conductor + its per-domain specialist
+  //     calls (see runChosen.ts taskForOp) — accuracy-critical multi-agent review.
+  //   - enrich: the background activity/food/garmin-strength/exercise queue —
+  //     high-volume, rotation by default.
+  //   - proposal: a coaching-cadence draft or a program-evolution draft (see
+  //     taskForOp) — both shape a plan change, rotation by default.
+  "health",
+  "brain_review",
+  "enrich",
+  "proposal",
 ] as const;
 export type RoutableTask = (typeof ROUTABLE_TASKS)[number];
 const ROUTABLE_TASK_SET = new Set<string>(ROUTABLE_TASKS);
@@ -66,10 +81,60 @@ export const ROUTABLE_TASK_LABELS: Record<RoutableTask, string> = {
   weekly_read: "Weekly read",
   health_review: "Health review",
   health_synthesis: "Health synthesis",
+  health: "Lab & document ingestion",
+  brain_review: "Case conference (brain review)",
+  enrich: "Background enrichment",
+  proposal: "Plan proposals & evolution",
 };
 
 export function listRoutableTasks() {
   return ROUTABLE_TASKS.map((key) => ({ key, label: ROUTABLE_TASK_LABELS[key] }));
+}
+
+// Default routing POLICY per task class. "accuracy" tasks deterministically prefer
+// the strongest faithful transcriber/reasoner FIRST (Claude, then Codex, then the
+// rest — no round-robin cursor side effect), because a curated/plausible-but-wrong
+// result is costly (medical transcription, multi-specialist case review). "rotation"
+// tasks spread load across enabled agents exactly like the base pickAgentOrder() —
+// both interactive replies (chat/day_read/session_suggest/…) and high-volume
+// background work (enrich/insight/weekly_read/proposal), where availability matters
+// more than a fixed preference. Unlisted/unknown tasks fall through to "rotation" in
+// pickAgentOrderForTask, which is the same as "no policy = the global rotation".
+export const TASK_POLICY: Record<RoutableTask, "accuracy" | "rotation"> = {
+  chat: "rotation",
+  day_read: "rotation",
+  session_suggest: "rotation",
+  nutrition_checkin: "rotation",
+  meal_plan: "rotation",
+  meal_swap: "rotation",
+  recipe: "rotation",
+  insight: "rotation",
+  weekly_read: "rotation",
+  enrich: "rotation",
+  proposal: "rotation",
+  health: "accuracy",
+  health_review: "accuracy",
+  health_synthesis: "accuracy",
+  brain_review: "accuracy",
+};
+
+// Folds a runChosen `op` label down to its routable task class. Most ops ARE their
+// own class (the common case — pass-through), so this only needs entries where
+// several ops deliberately share one pin/default:
+//   - the case-conference conductor (`case_conference`) and its per-domain
+//     specialist calls (`conference_<domain>`, one per specialist) both route as
+//     the single "brain_review" task.
+//   - a program-evolution draft (`evolve_program`) shares the "proposal" task with
+//     the ordinary coach-draft op (`proposal`) — both shape a plan change.
+//   - marker reconciliation (`marker_reconcile`) shares the "health" task — it's
+//     the same accuracy-critical lab-data domain as document ingestion.
+// Extending this table is the only thing needed when a future op should share an
+// existing class instead of inventing a new one.
+export function taskForOp(op: string): string {
+  if (op === "case_conference" || op.startsWith("conference_")) return "brain_review";
+  if (op === "evolve_program") return "proposal";
+  if (op === "marker_reconcile") return "health";
+  return op;
 }
 
 const SETTINGS_COLUMN_REPAIRS: [string, string][] = [
@@ -671,4 +736,53 @@ export function pickResearchAgentOrder(cfg?: { agents?: { name: string; web_acce
   if (enabled.length <= 1) return enabled;
   const web = all.filter((a) => a.web_access).map((a) => a.name);
   return [...web, ...enabled.filter((n) => !web.includes(n))];
+}
+
+// THE generalized task-based order resolver — the "right model for the job" layer.
+// Resolution order: (1) an explicit, usable `agent_routes.<task>` pin WINS — for a
+// ROTATION-policy task as a one-element order (exclusive-pin semantics mirroring
+// resolveAgentForTask everywhere else: a pin means "only this agent"), but for an
+// ACCURACY-policy task as pin-FIRST WITH a fallthrough tail (the accuracy paths must not
+// hard-fail on a dead pinned CLI — a downgraded-but-faithful transcriber beats none); else
+// (2) the task class's default POLICY order (TASK_POLICY: strongest-first for
+// "accuracy", the ordinary rotation for "rotation"/unknown); there is no separate
+// "(3) global rotation" step because the rotation policy already IS pickAgentOrder().
+//
+// This is the single source of truth consulted by BOTH runChosen (op-labeled calls,
+// via taskForOp) and callers that bypass runChosen entirely (the background
+// enrichment queue, the legacy scheduled coach-draft) — so a pin/policy behaves
+// identically no matter which path reaches an agent. `cfg` lets tests inject the
+// usable set + routes without touching the DB or the round-robin cursor.
+export function pickAgentOrderForTask(
+  task: string,
+  cfg?: { enabled?: string[]; routes?: Record<string, string> }
+): string[] {
+  const enabled = cfg?.enabled ?? getAgentConfig().filter((a) => a.usable).map((a) => a.name);
+  const routed = resolveAgentForTask(task, "auto", { routes: cfg?.routes ?? getSettings().agent_routes, enabled });
+  const accuracy = TASK_POLICY[task as RoutableTask] === "accuracy";
+  if (routed && routed !== "auto") {
+    // Asymmetric pin semantics by policy. A ROTATION-policy pin is exclusive ("only this
+    // agent"), matching resolveAgentForTask everywhere else. But an ACCURACY-critical pin
+    // (health / health_review / health_synthesis / brain_review) is pin-FIRST WITH a
+    // fallthrough tail — these paths must never hard-fail on a dead pinned CLI, because an
+    // un-transcribed lab is worse than a downgraded-but-faithful transcriber. The tail is
+    // the same accuracy default order (Claude→Codex→rest), minus the pin itself.
+    if (accuracy) {
+      const tail = pickHealthAgentOrder(["claude", "codex"], { enabled, route: "" }).filter((n) => n !== routed);
+      return [routed, ...tail];
+    }
+    return [routed];
+  }
+  if (accuracy) {
+    // route:"" suppresses pickHealthAgentOrder's OWN internal `agent_routes.health`
+    // lookup — the pin check above already resolved (or didn't find) a route for
+    // THIS task, and pickHealthAgentOrder must not fall back to a DIFFERENT task's
+    // (health's) pin for e.g. brain_review or health_review.
+    return pickHealthAgentOrder(["claude", "codex"], { enabled, route: "" });
+  }
+  if (enabled.length <= 1) return enabled;
+  // rotation policy, no pin: cfg-injected calls (tests) get the given set as-is —
+  // there's no live settings/cursor to rotate in a test double. Real callers get
+  // the ordinary rotation (round-robin/random/priority + cursor advance).
+  return cfg ? enabled : pickAgentOrder();
 }

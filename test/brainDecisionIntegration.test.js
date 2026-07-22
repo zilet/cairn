@@ -233,7 +233,7 @@ test("saved day reads are date-linked and duplicate saves stay idempotent", () =
   assert.deepEqual(decisions[0].context.signals, read.signals);
 });
 
-test("active directive decisions use semantic links and dedupe across row replacement", () => {
+test("active directive decisions use semantic links and dedupe across a diff-based re-apply", () => {
   const input = [
     {
       domain: "watch",
@@ -245,9 +245,11 @@ test("active directive decisions use semantic links and dedupe across row replac
   ];
   assert.equal(repo.applyReviewDirectives(input), 1);
   const firstRow = db.prepare("SELECT id FROM health_directives WHERE status = 'active'").get();
-  assert.equal(repo.applyReviewDirectives(input), 1);
+  // A re-apply with identical content is now a zero-churn no-op: the diff keeps the exact
+  // same physical row untouched (no clear+reinsert), so nothing is saved.
+  assert.equal(repo.applyReviewDirectives(input), 0, "an unchanged re-apply churns nothing");
   const secondRow = db.prepare("SELECT id FROM health_directives WHERE status = 'active'").get();
-  assert.notEqual(firstRow.id, secondRow.id, "directive storage intentionally replaces the physical row");
+  assert.equal(firstRow.id, secondRow.id, "the diff keeps the same physical row (stable id)");
 
   const decisions = repo.listBrainDecisions({ kind: "health_directive" });
   assert.equal(decisions.length, 1, "semantic directive identity prevents scheduler churn");

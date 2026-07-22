@@ -35,6 +35,9 @@ const FOLLOWUP_SENTINEL_SLUG = "lab-follow-up";
 export function markerSlugFromSignalKey(key: unknown): string | null {
   const s = String(key ?? "");
   if (s.startsWith("marker:")) return s.slice("marker:".length) || null;
+  // A directive-sourced recheck ("directive-recheck:<slug>") is filed under the SAME
+  // marker slug as the periodic cadence, so it dedupes into one recheck story.
+  if (s.startsWith("directive-recheck:")) return s.slice("directive-recheck:".length) || null;
   if (s.startsWith("review-followup:")) {
     const slug = s.split(":")[1] || null;
     return slug === FOLLOWUP_SENTINEL_SLUG ? null : slug;

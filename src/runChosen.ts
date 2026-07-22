@@ -31,28 +31,30 @@ import type { OpHooks } from "./coachOps.js";
 import { extractMarkedJson } from "./prompt.js";
 import { createJobStreamFilter } from "./jobStreamFilter.js";
 
-// Ops that ANALYZE medical data. Faithful clinical reasoning matters more than
-// spreading load, so when the user hasn't pinned an agent these default to the
-// Claude-first health order (repo.pickHealthAgentOrder) instead of the round-robin
-// rotation — the same principle the health-doc ingest already follows.
-const HEALTH_OPS = new Set(["health_review", "health_synthesis", "marker_reconcile"]);
-
-// Pick the default agent order for an UNPINNED op. Health ops → Claude-first health
-// order; the research op → web-capable-first; everything else → the configured
-// rotation. Kept pure/testable: the injected repo funcs decide the actual order.
+// Pick the agent order for an op left "auto"/blank by the caller — generalized over
+// EVERY task class via repo.pickAgentOrderForTask, which itself resolves a pin
+// (agent_routes.<task>) before the class's default policy. research is the one
+// bespoke case (web-capable-first; deliberately not a routable task, since a pin
+// would defeat the point of grounding a claim in a live browse — see
+// repo.pickResearchAgentOrder's own doc). Every other op folds to its task class via
+// repo.taskForOp (most ops ARE their own class — case_conference/conference_*  →
+// brain_review, evolve_program → proposal, marker_reconcile → health) and then to
+// that class's policy: accuracy-critical (health/health_review/health_synthesis/
+// brain_review) gets the Claude-first order; everything else rotates. Kept
+// pure/testable: the injected repo funcs decide the actual order.
 export function defaultOrderForOp(op: string): string[] {
-  if (HEALTH_OPS.has(op)) return repo.pickHealthAgentOrder();
   if (op === "research") return repo.pickResearchAgentOrder();
-  return repo.pickAgentOrder();
+  return repo.pickAgentOrderForTask(repo.taskForOp(op));
 }
 
-// Resolve the agent ORDER for an op: an explicit/pinned agent → a one-element order,
-// else the op-aware default rotation. Shared by runChosen and runChosenStreaming so
-// "the first agent in the order" means the same thing to both (the streaming path only
-// streams when that first agent is stream-capable).
+// Resolve the agent ORDER for an op: an explicitly-named agent (not "auto"/blank) is
+// always a one-element order; otherwise defer entirely to defaultOrderForOp, which
+// resolves any task pin before falling to the class default. Shared by runChosen and
+// runChosenStreaming so "the first agent in the order" means the same thing to both
+// (the streaming path only streams when that first agent is stream-capable).
 export function resolveOrder(agent: string | undefined, op: string): string[] {
-  const routed = repo.resolveAgentForTask(op, agent);
-  return !routed || routed === "auto" ? defaultOrderForOp(op) : [routed];
+  if (agent && agent !== "auto") return [agent];
+  return defaultOrderForOp(op);
 }
 
 export async function runChosen(agent: string | undefined, prompt: string, opts: RunOpts & { op?: string } = {}) {
