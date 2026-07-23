@@ -15,4 +15,5 @@ declare global {
   declare function isHybrid(): boolean;
   declare function showEnduranceTab(): boolean;
   declare function withViewTransition(fn: () => unknown): Promise<unknown>;
+  declare function loadChatFuel(token: number, messages?: unknown[]): Promise<void>;
 }

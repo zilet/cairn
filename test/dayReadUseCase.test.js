@@ -263,6 +263,94 @@ test("an unchanged Garmin re-sync leaves the cached day read alone; a material c
   assert.equal(repo.getCachedDayRead(date), null, "a materially changed effort must retire the cached read");
 });
 
+test("a lunch that meets the protein target heals a cached 'behind' fuel read", async () => {
+  resetTables(
+    "day_reads",
+    "suggestions",
+    "food_notes",
+    "profile",
+    "bodyweight_log",
+    "nutrition_targets",
+    "plan_days",
+    "plan_items",
+    "sessions",
+    "logged_sets"
+  );
+  const date = localDaysAgo(0);
+  let armed = 0;
+  configureDayReadRefresh({
+    today: () => date,
+    setTimer: () => {
+      armed += 1;
+      return 0;
+    },
+    clearTimer: () => {},
+  });
+  // A complete-enough profile so a protein target derives (maintain → ~162 g).
+  repo.setProfile({ age: 40, height_cm: 178, weight_lb: 180, sex: "male", activity_factor: 1.5, goal_mode: "maintain" });
+  // This morning's cached read said protein was light. Nothing else has moved.
+  repo.saveDayRead(date, {
+    kind: "train",
+    headline: "Train today.",
+    why: "You're recovered and due.",
+    focus: "Lower body",
+    est_minutes: 60,
+    signals: { fuel: { bucket: "behind", protein_so_far_g: 20, target_g: 162 }, logged_today: { sets: 0, activities: [] } },
+    source: "agent",
+    override: null,
+  });
+  // A protein-dense lunch lands — the live fuel bucket is now 'met' (target-independent
+  // of the clock), so the cached 'behind' must no longer pin.
+  db.prepare(
+    `INSERT INTO food_notes (date, meal, raw_output, parsed_json, enrichment_status) VALUES (?, 'lunch', '', ?, 'done')`
+  ).run(date, JSON.stringify({ summary: "chicken & rice", protein_g: 170, kcal: 700 }));
+
+  const read = await readToday({ date });
+
+  assert.equal(read.source, "deterministic", "a fuel-bucket flip retires the stale cached prose");
+  assert.equal(read.cached, undefined);
+  assert.equal(read.signals.fuel.bucket, "met", "the healed factual row carries the fresh bucket");
+  assert.equal(repo.getCachedDayRead(date)?.signals?.fuel?.bucket, "met");
+  assert.ok(armed >= 1, "a background agentic re-warm is armed so the DONE/updated prose still arrives");
+});
+
+test("a pre-deploy cached read with no fuel signal is never churned by the fuel recheck", async () => {
+  resetTables(
+    "day_reads",
+    "suggestions",
+    "food_notes",
+    "profile",
+    "bodyweight_log",
+    "nutrition_targets",
+    "plan_days",
+    "plan_items",
+    "sessions",
+    "logged_sets"
+  );
+  const date = localDaysAgo(0);
+  configureDayReadRefresh({ today: () => date, setTimer: () => 0, clearTimer: () => {} });
+  repo.setProfile({ age: 40, height_cm: 178, weight_lb: 180, sex: "male", activity_factor: 1.5, goal_mode: "maintain" });
+  // A row cached before this feature existed: signals carry NO fuel key.
+  repo.saveDayRead(date, {
+    kind: "train",
+    headline: "Train today.",
+    why: "You're recovered and due.",
+    focus: "Lower body",
+    est_minutes: 60,
+    signals: { logged_today: { sets: 0, activities: [] } },
+    source: "agent",
+    override: null,
+  });
+  db.prepare(
+    `INSERT INTO food_notes (date, meal, raw_output, parsed_json, enrichment_status) VALUES (?, 'lunch', '', ?, 'done')`
+  ).run(date, JSON.stringify({ summary: "chicken & rice", protein_g: 170, kcal: 700 }));
+
+  const read = await readToday({ date });
+
+  assert.equal(read.cached, true, "a missing cached fuel signal must read as no-change, not a flip");
+  assert.equal(read.source, "agent");
+});
+
 test("a done read still carries the day-ahead forward line (the so-what after the work)", async () => {
   resetTables(
     "day_reads",

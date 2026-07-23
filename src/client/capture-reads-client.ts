@@ -126,6 +126,9 @@ function createCaptureReadsController(deps: CaptureReadsDeps): CaptureReadsContr
     collapseEl: deps.collapseEl,
     escapeHtml: deps.escapeHtml,
     weekRangeLabel: captureReadsWeekRangeLabel,
+    // Deferred to call time (after `jobs` is initialized below) so the stale
+    // re-read tap regenerates through the existing weekly-read op.
+    rereadWeekly: () => jobs.forceGenerateWeekly(),
   };
   const cards = captureReadCardsApi();
   const renderInsightInSlot = (target: HTMLElement, insight: CaptureInsight) =>

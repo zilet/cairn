@@ -112,6 +112,17 @@ export function nowContext(d: Date = new Date(), tz: string | undefined = active
   };
 }
 
+// Local fractional hour-of-day (e.g. 11.85 for 11:51 AM) of an instant in the
+// active device zone — the minute-precise companion to nowContext().hour. Built
+// on the same cached zonedParts machinery (never bare-string UTC math), so it
+// follows the traveling device the way localDateISO/nowContext do. Used by the
+// fuel-state pace model, where hour-only precision (±1h of a ~14h eating window)
+// would swing the "expected by now" estimate too far to trust.
+export function localHourFraction(d: Date = new Date(), tz: string | undefined = activeTimeZone()): number {
+  const p = zonedParts(d, tz);
+  return p.hour + p.minute / 60;
+}
+
 // Parse a stored timestamp into a Date INSTANT. SQLite's datetime('now') yields
 // "YYYY-MM-DD HH:MM:SS" with NO zone marker but in UTC — and `new Date(that)`
 // would (wrongly) read it as LOCAL. So normalize to ISO-UTC unless the string

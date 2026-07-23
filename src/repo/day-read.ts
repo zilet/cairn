@@ -35,6 +35,7 @@ import {
   recentCardioLoadMedian,
   recoverySessionDose,
 } from "./training-read.js";
+import { dayFuelState } from "./fuel-state.js";
 import { currentUnderfuelingRead } from "./underfueling-snapshot.js";
 import type { UnderfuelingRead } from "./underfueling.js";
 
@@ -360,6 +361,24 @@ export function dayRead(
   (signals as any).today_load = todayLoad;
   const fuelProtection = underfuelingSnapshot ?? currentUnderfuelingRead(d);
   (signals as any).underfueling = fuelProtection;
+  // Pace-aware protein state for `d` (behind / on_pace / met), so the Brief's FUEL
+  // line speaks to where you'd EXPECT to be at this point in the day, not a raw
+  // "grams remaining" that reads as a gap all morning. Rides in `signals` so the
+  // cached row carries it AND the serve-time recheck can detect a stale bucket
+  // (e.g. a lunch that moved behind→on_pace) and heal the prose. Null-safe: no
+  // derivable target → no fuel key, exactly as before.
+  try {
+    const fuel = dayFuelState(d);
+    if (fuel) {
+      (signals as any).fuel = {
+        bucket: fuel.bucket,
+        protein_so_far_g: fuel.protein_so_far_g,
+        target_g: fuel.target_g,
+      };
+    }
+  } catch {
+    /* fuel state is additive context only — never block the read */
+  }
   const signalState =
     unifiedState ??
     planningSignalState({

@@ -257,6 +257,19 @@ ${evidencePack}\n`
   // Impact-ranked view (distance from OPTIMAL, most-actionable first) so the
   // review LEADS with the highest-impact markers, not just lab-flagged ones.
   const priority = repo.prioritizeMarkers();
+  // The lab loop, closed: at most ONE calm line when a past plan/meal change coincided
+  // with a marker moving (or not) — surfaced pull-only so the coach can weigh repeating
+  // what worked. Humble correlation framing, never causal, no scores. Silent otherwise.
+  const learnedMarkerLine = (() => {
+    try {
+      return repo.markerResponseCoachLine();
+    } catch {
+      return null;
+    }
+  })();
+  const learnedMarkerBlock = learnedMarkerLine
+    ? `\nLEARNED (this athlete's own lab-loop history — pull, never push; weave in only where it genuinely fits, it is a correlation not a promise): ${learnedMarkerLine}\n`
+    : "";
   // Plain-language "how recent" from a YYYY-MM-DD reading date — so the agent
   // can say "3 months ago" rather than restate a raw date.
   const recencyOf = (date?: string | null): string | null => {
@@ -342,7 +355,7 @@ EVIDENCE & THE CONNECTED BRAIN (this is what makes the review act across the who
   & poultry over red meat, raise soluble fiber, cap saturated fat" + training "note cardiovascular
   load"; low ferritin → training "hold endurance volume, watch fatigue" + nutrition "iron-rich foods
   paired with vitamin C". Keep "directives" empty when nothing is out of optimal — silence on good markers.
-${evidenceBlock}${groundingBlock}${renderBodyComp(ctx)}
+${learnedMarkerBlock}${evidenceBlock}${groundingBlock}${renderBodyComp(ctx)}
 ${CONTEXT_GUARDRAILS}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:

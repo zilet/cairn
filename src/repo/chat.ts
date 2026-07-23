@@ -34,6 +34,7 @@ function hydrateChat(row: any) {
     }
   }
   stampLabConfirms(meta);
+  stampCaptureFood(meta);
   return { ...row, meta };
 }
 
@@ -47,6 +48,48 @@ function stampLabConfirms(meta: any): void {
     if (l?.id == null) continue;
     const d = db.prepare(`SELECT enrichment_status FROM health_documents WHERE id = ?`).get(l.id) as any;
     l.status = d ? (d.enrichment_status ?? "done") : "missing";
+  }
+}
+
+// A chat food capture (instant lane or an agent log_food) links a food_notes row
+// whose macros fill in later via background enrichment. The applied action's stored
+// result is a snapshot from the moment of capture ('pending', no macros). Re-stamp
+// each log_food result with the note's CURRENT enrichment_status + a compact
+// {meal,summary,kcal,protein_g} so every read path (turn snapshot, turns list, the
+// message log) renders the live "filling in details…" / enriched state without a
+// schema change. A deleted note is flagged so the chip settles quietly. Mirrors the
+// draft/lab-confirm stamping above; meta is freshly parsed per call, so mutation is safe.
+function foodNoteMacro(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+function stampCaptureFood(meta: any): void {
+  const applied = Array.isArray(meta?.applied) ? meta.applied : null;
+  if (!applied) return;
+  for (const a of applied) {
+    if (!a || a.type !== "log_food") continue;
+    const result = a.result;
+    if (!result || typeof result !== "object") continue;
+    const id = Number((result as any).id);
+    if (!Number.isSafeInteger(id) || id <= 0) continue;
+    const row = db.prepare(`SELECT meal, enrichment_status, parsed_json FROM food_notes WHERE id = ?`).get(id) as any;
+    if (!row) {
+      (result as any).food_note_missing = true;
+      continue;
+    }
+    (result as any).enrichment_status = row.enrichment_status ?? null;
+    let parsed: any = null;
+    try {
+      parsed = row.parsed_json ? JSON.parse(row.parsed_json) : null;
+    } catch {
+      parsed = null;
+    }
+    (result as any).food = {
+      meal: (result as any).meal ?? row.meal ?? null,
+      summary: parsed && typeof parsed.summary === "string" ? parsed.summary : null,
+      kcal: foodNoteMacro(parsed?.kcal),
+      protein_g: foodNoteMacro(parsed?.protein_g),
+    };
   }
 }
 
@@ -168,6 +211,7 @@ function hydrateChatTurn(row: any) {
     }
   }
   stampLabConfirms(meta);
+  stampCaptureFood(meta);
   return { ...row, meta, routing };
 }
 

@@ -112,6 +112,13 @@ function renderHealthLead(ctx: any): string {
 // score. repo.dayRead computes deterministic signals first; this builder asks
 // the agent to make the nuanced call and write the human sentence. opts let the
 // caller pass an escape-hatch override ("rough night" / "short on time").
+// Round a minutes-ago gap to the nearest HALF hour for natural phrasing: 90 → 1.5,
+// 120 → 2 (JS renders a whole number with no trailing ".0"), 105 → 2. Coarser than
+// per-minute, kinder than the old whole-hour round that read 90 min as "about 2 h".
+export function roundMinutesToHalfHour(mins: number): number {
+  return Math.round(mins / 30) / 2;
+}
+
 // The deterministic facts behind a post-session DEBRIEF (the "done" read): what was
 // trained today (top set per lift), how it fits the week, what the next session leans
 // toward + what's due, and where fuel sits. Plain facts only — the agent turns them
@@ -184,16 +191,28 @@ function debriefFacts(date: string): string {
   } catch {
     /* no forward look → skip */
   }
-  // 3) Fuel — only a real protein gap (or a clean "in") is worth a word; never a score.
+  // 3) Fuel — PACE-AWARE. A raw "grams remaining" reads as a gap all morning (110 g
+  // "short" at 11 AM is trivially true before dinner), so grade protein against where
+  // you'd EXPECT to be at this point in the eating window: only genuinely-behind earns
+  // a nudge; on-pace (even with grams still to eat) and comfortably-met do not. Never
+  // a score. No derivable target → no fuel line, exactly as before.
   try {
-    const intake: any = repo.getDayIntake(date);
-    if (intake?.target && intake?.remaining) {
-      const pr = Math.round(Number(intake.remaining.protein_g));
-      if (Number.isFinite(pr)) {
-        if (pr >= 25)
-          lines.push(`FUEL: protein is ~${pr} g short of today's target so far — a brief refuel nudge fits.`);
-        else if (pr <= -10) lines.push(`FUEL: protein target comfortably met today — no nudge needed.`);
-        else lines.push(`FUEL: protein is on track today — no nudge needed.`);
+    const fuel = repo.dayFuelState(date);
+    if (fuel) {
+      if (fuel.bucket === "behind") {
+        const recency =
+          fuel.last_meal && fuel.last_meal.minutes_ago >= 90
+            ? ` Last logged intake was about ${roundMinutesToHalfHour(fuel.last_meal.minutes_ago)} h ago.`
+            : "";
+        lines.push(
+          `FUEL: protein's running behind pace — ${fuel.protein_so_far_g} g in so far vs ~${fuel.expected_by_now_g} g you'd expect by now on a ${fuel.target_g} g day.${recency} A brief refuel nudge fits.`
+        );
+      } else if (fuel.bucket === "on_pace") {
+        lines.push(
+          `FUEL: protein's on pace for this point in the day (${fuel.protein_so_far_g} of ${fuel.target_g} g) — no nudge needed, even with more to eat later.`
+        );
+      } else {
+        lines.push(`FUEL: protein target comfortably met today — no nudge needed.`);
       }
     }
   } catch {
@@ -207,6 +226,22 @@ function debriefFacts(date: string): string {
 export function buildDayReadPrompt(ctx?: CoachContext, opts: { override?: string; date?: string } = {}): string {
   const context = ctx ?? repo.getCoachContext();
   const baseline = repo.dayRead(opts.date, context.recovery, context.signal_state);
+  // ===== FELT SIGNALS block (wave/felt-signals — self-contained, delimited) =====
+  // What the athlete's OWN subjective signals reveal, relevant to TODAY: a recurring
+  // Brief-override rhythm on this weekday (pre-acknowledge, never gate), a persistent
+  // check-in read, or how a recent fuel change has felt. Calm, humble, adherence-
+  // neutral; "" when there's nothing to say.
+  const feltDate = opts.date || (context as any).now?.date || new Date().toISOString().slice(0, 10);
+  let feltBlock = "";
+  try {
+    const feltLines = repo.feltSignalDayLines(feltDate, (context as any).felt_signals?.patterns);
+    if (feltLines.length) {
+      feltBlock = `\nFELT SIGNALS (learned from THEIR OWN steers, check-ins and fuel reads — a suggestion to pre-acknowledge in a friend's voice when it fits, NEVER a gate or a number; usually one calm clause is plenty):\n${feltLines.map((l) => `- ${l}`).join("\n")}\n`;
+    }
+  } catch {
+    feltBlock = "";
+  }
+  // ===== end FELT SIGNALS block =====
   const overrideBlock = opts.override?.trim()
     ? `\nUSER OVERRIDE (honor this — they're steering): "${opts.override.trim()}". Reshape the read accordingly (e.g. "rough night" → lean easy/rest; "short on time" → a compressed session; "I want to train anyway" → a train read even if the baseline leaned rest, kept appropriately light).\n`
     : "";
@@ -293,7 +328,7 @@ You MAY disagree with the baseline when the whole picture warrants it — it is 
 RECENT TRAINING (most recent first): ${sessionLine}.
 TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${doneBlock}${lastNightLine}
 ${CONTEXT_GUARDRAILS}
-${renderSignalState(context)}${renderCoachingFocus(context, { brief: true })}${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderRunZones(context)}${renderRunPlan(context)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderMuscleGroups(context)}${renderPerformance(context, { brief: true })}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${overrideBlock}
+${renderSignalState(context)}${renderCoachingFocus(context, { brief: true })}${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderRunZones(context)}${renderRunPlan(context)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderMuscleGroups(context)}${renderPerformance(context, { brief: true })}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${feltBlock}${overrideBlock}
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 ${DAY_READ_SCHEMA}
 

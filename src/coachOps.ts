@@ -18,7 +18,7 @@ import {
   loadAgents,
   type FallbackResult,
 } from "./agents.js";
-import { runChosen, runChosenStreaming } from "./runChosen.js";
+import { runChosen, runChosenStreaming, runChosenWithCoachReads } from "./runChosen.js";
 import {
   buildCoachPrompt,
   buildProgramEvolutionPrompt,
@@ -324,7 +324,8 @@ export async function suggestSession(
   hooks?.onPhase?.("drafting your session");
   const prompt = buildSessionPrompt(undefined, opts);
   // Interactive: a user is waiting on the request path — short the leash. Streams the
-  // session's "why" prose into the card when the chosen agent is stream-capable.
+  // session's "why" prose into the card when the chosen agent is stream-capable;
+  // otherwise (no delta sink / non-streaming agent) it gets depth-on-demand reads.
   let run: FallbackResult;
   try {
     run = await runChosenStreaming(agent, prompt, {
@@ -332,6 +333,7 @@ export async function suggestSession(
       timeoutMs: INTERACTIVE_TIMEOUT_MS,
       signal: hooks?.signal,
       onDelta: hooks?.onDelta,
+      boundedReads: true,
       acceptParsed: sessionSane,
     });
   } catch (error) {
@@ -989,6 +991,7 @@ export async function nutritionCheckin(
       op: "nutrition_checkin",
       signal: hooks?.signal,
       onDelta: hooks?.onDelta,
+      boundedReads: true,
       acceptParsed: isNutritionCheckinResult,
     });
   } catch (error) {
@@ -1189,8 +1192,13 @@ export async function runHealthReview(agent: string | undefined, hooks?: OpHooks
   const prompt = buildHealthReviewPrompt(grounding);
   let run: FallbackResult;
   try {
-    run = await runChosen(agent, prompt, {
+    // Depth-on-demand: the review is accuracy-critical and NOT streamed, so it routes
+    // through the bounded coach-read loop. Same success criterion (isHealthReviewResult),
+    // same signal, same default (300s) timeout envelope treated as the total deadline;
+    // an agent that answers straight makes exactly one call as before.
+    run = await runChosenWithCoachReads(agent, prompt, {
       op: "health_review",
+      mode: "ordinary",
       signal: hooks?.signal,
       acceptParsed: isHealthReviewResult,
     });
@@ -1229,6 +1237,7 @@ export async function synthesizeHealth(agent: string | undefined, hooks?: OpHook
       signal: hooks?.signal,
       onDelta: hooks?.onDelta,
       acceptParsed: isHealthSynthesisResult,
+      boundedReads: true,
     });
     chosen = run.agent;
     result = run.result;
@@ -1295,6 +1304,7 @@ export async function generateInsight(
       op: k === "weekly_read" ? "weekly_read" : "insight",
       signal: hooks?.signal,
       onDelta: hooks?.onDelta,
+      boundedReads: true,
       acceptParsed: isInsightResult,
     });
     chosen = run.agent;
@@ -1325,6 +1335,11 @@ export async function generateInsight(
     next_step: p.next_step ?? null,
     status: "new",
   });
+  // Stamp the weekly read's freshness signature so a later serve can tell when the
+  // picture has moved past this read (pull-only staleness — see weeklyReadFreshness).
+  if (k === "weekly_read" && (insight as any)?.id != null) {
+    repo.stampWeeklyReadFreshness(Number((insight as any).id));
+  }
   const out = { ok: true as const, insight, agent: chosen, tried, agent_status: "ok" as const };
   // Short freshness by default (a quiet insight should refresh within the hour);
   // the nightly scheduler passes a longer window so the morning open is a fresh hit.

@@ -1401,6 +1401,14 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
   font-family:var(--font-ui);font-size:.58rem;font-weight:700;letter-spacing:.1em;
   text-transform:uppercase;white-space:nowrap}
 .bubble.user .bubble-meta .bubble-tag{background:rgba(255,253,248,.14);color:#d8c9b2}
+/* A capture food log: the enriched chip carries a readable meal + macros, so drop
+   the all-caps pill treatment; while it fills in, a calm muted state + spinner dot. */
+.bubble-tag.capture-food{text-transform:none;letter-spacing:.01em;font-weight:650}
+.bubble-tag.capture-food.pending{background:var(--card-2);color:var(--muted);border:1px solid var(--line-2)}
+.bubble-tag.capture-food.pending .enr-dot{display:inline-block;width:7px;height:7px;margin-right:5px;
+  border-radius:50%;border:1.5px solid var(--accent);border-top-color:transparent;
+  animation:enrspin .7s linear infinite;vertical-align:-1px}
+@media (prefers-reduced-motion:reduce){.bubble-tag.capture-food.pending .enr-dot{animation:none;opacity:.6}}
 .agentcheck{
   display:inline-flex;align-items:center;gap:7px;margin-top:8px;max-width:100%;
   background:var(--card-2);border:1px solid var(--line);color:var(--muted);
@@ -3228,6 +3236,14 @@ body.swr-busy::after{
 .weekly-change{margin:14px 0 0;padding:11px 14px;background:var(--card-2);position:relative}
 .weekly-change-lbl{display:block;color:var(--accent);margin-bottom:3px}
 .weekly-change-text{margin:0;font-size:.92rem;line-height:1.45;color:var(--ink)}
+/* moved-on staleness (pull-only) — a calm "the week has shifted" note that replaces
+   the one change, plus a quiet re-read tap. Softens rather than nags. */
+.weekly-stale-chip{font-family:var(--font-ui);font-size:.6rem;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--accent-deep);border:1px solid var(--accent);border-radius:999px;padding:1px 8px;align-self:center}
+.weekly-stale{margin:14px 0 0;padding:11px 14px;background:var(--card-2);position:relative}
+.weekly-stale-lbl{display:block;color:var(--accent);margin-bottom:3px}
+.weekly-stale-text{margin:0 0 6px;font-size:.9rem;line-height:1.45;color:var(--ink-2)}
+.weekly-reread{color:var(--accent-deep)}
 .weekly-why{font-size:.85rem;color:var(--ink-2);line-height:1.5;margin:12px 0 0;max-width:72ch;position:relative}
 .weekly-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:15px;position:relative}
 .weekly-wins{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}

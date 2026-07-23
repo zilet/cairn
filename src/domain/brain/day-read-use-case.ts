@@ -133,11 +133,20 @@ export async function readToday(options: ReadTodayOptions = {}): Promise<DayRead
           Boolean(live?.signals?.trained_today) !== Boolean(cached.signals.trained_today);
         const completionChanged = (live.kind === "done") !== (cached.kind === "done");
         const proseContradiction = dayReadProseConsistencyIssue(cached, live?.signals);
+        // Fuel bucket flip (e.g. a lunch that moved protein from behind → on_pace
+        // after the morning read cached "protein's light so far"). Only a real flip
+        // between two PRESENT buckets counts — a cached row from before this signal
+        // existed (pre-deploy) has no fuel key, and must NOT churn the whole cache on
+        // deploy, so a missing side is treated as no-change.
+        const liveFuel = (live?.signals?.fuel as { bucket?: unknown } | undefined)?.bucket;
+        const cachedFuel = (cached?.signals?.fuel as { bucket?: unknown } | undefined)?.bucket;
+        const fuelBucketChanged = liveFuel != null && cachedFuel != null && liveFuel !== cachedFuel;
         const materialTruthChanged =
           completionChanged ||
           liveHasWork !== cachedHasWork ||
           loadClassificationChanged ||
           trainedFactChanged ||
+          fuelBucketChanged ||
           proseContradiction != null;
         if (materialTruthChanged) {
           const factual = {

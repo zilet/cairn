@@ -7,7 +7,7 @@
 import * as repo from "./repo.js";
 import { buildDayReadPrompt } from "./prompt.js";
 import { INTERACTIVE_TIMEOUT_MS } from "./agents.js";
-import { runChosen } from "./runChosen.js";
+import { runChosenWithCoachReads } from "./runChosen.js";
 import { localDateISO } from "./repo/shared.js";
 import { isValidTimeZone } from "./tz.js";
 
@@ -209,13 +209,17 @@ export async function computeDayRead(opts: { date?: string; override?: string; a
   let out: any;
   try {
     const prompt = buildDayReadPrompt(undefined, { override, date });
-    // Interactive (the Brief is on the morning-open path) → the short leash.
+    // Interactive (the Brief is on the morning-open path) → the short leash, which
+    // the bounded-read loop treats as the TOTAL deadline across all query rounds, so
+    // the timeout envelope is unchanged. An agent that just answers makes exactly one
+    // call (same as before); depth-on-demand reads only run when it requests them.
     const {
       agent: chosen,
       result,
       tried,
-    } = await runChosen(agent, prompt, {
+    } = await runChosenWithCoachReads(agent, prompt, {
       op: "day_read",
+      mode: "ordinary",
       timeoutMs: INTERACTIVE_TIMEOUT_MS,
       acceptParsed: (parsed) => isValidDayReadAgentResult(parsed, baseline),
     });

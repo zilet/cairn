@@ -170,3 +170,81 @@ test("'Not useful' wiring PUTs down+dismissed and clears the card for the week",
   assert.deepEqual(JSON.parse(calls[0].opts.body), { feedback: "down", status: "dismissed" });
   assert.equal(target.innerHTML, "");
 });
+
+// ---- staleness (pull-only "Moved on" affordance) ----
+
+// A target that also serves the re-read control so we can assert its wiring.
+function makeStaleTarget(rereadBtn) {
+  let html = "";
+  return {
+    get innerHTML() {
+      return html;
+    },
+    set innerHTML(value) {
+      html = String(value);
+    },
+    querySelector: (sel) => (sel === "[data-weekly-reread]" ? rereadBtn : null),
+    querySelectorAll: () => [],
+  };
+}
+
+test("stale weekly card shows the Moved-on note + re-read tap in place of the one change", () => {
+  const ctx = loadCards();
+  const target = makeStaleTarget(null);
+  const stale = weeklyIns({
+    stale: true,
+    stale_note: "This was the week's read when it was written — your training has moved since.",
+    next_step: null, // the server defangs the one change when stale
+  });
+  ctx.CairnCaptureReadCards.renderWeeklyInSlot(target, stale, baseDeps(ctx, []), teamFixture());
+  const html = target.innerHTML;
+  assert.match(html, /weekly-card-stale/);
+  assert.match(html, /weekly-stale-chip/);
+  assert.match(html, /Moved on/);
+  assert.match(html, /your training has moved since/);
+  assert.match(html, /data-weekly-reread/);
+  // The stale read no longer asserts a "One change" action.
+  assert.doesNotMatch(html, /One change/);
+});
+
+test("stale takes precedence over the acked-compact form (re-read stays reachable)", () => {
+  const ctx = loadCards();
+  const target = makeStaleTarget(null);
+  ctx.CairnCaptureReadCards.renderWeeklyInSlot(
+    target,
+    weeklyIns({ feedback: "up", stale: true, stale_note: "Things moved.", next_step: null }),
+    baseDeps(ctx, []),
+    teamFixture(),
+  );
+  const html = target.innerHTML;
+  assert.doesNotMatch(html, /weekly-acked/); // not the settled compact line
+  assert.match(html, /weekly-stale/);
+  assert.match(html, /data-weekly-reread/);
+});
+
+test("re-read tap invokes deps.rereadWeekly", () => {
+  const ctx = loadCards();
+  const rereadBtn = makeButton("reread");
+  const target = makeStaleTarget(rereadBtn);
+  let rereadCalls = 0;
+  const deps = { ...baseDeps(ctx, []), rereadWeekly: () => (rereadCalls += 1) };
+  ctx.CairnCaptureReadCards.renderWeeklyInSlot(
+    target,
+    weeklyIns({ stale: true, stale_note: "Moved.", next_step: null }),
+    deps,
+    teamFixture(),
+  );
+  rereadBtn._click();
+  assert.equal(rereadCalls, 1);
+});
+
+test("a fresh (non-stale) weekly card renders normally with no Moved-on affordance", () => {
+  const ctx = loadCards();
+  const target = makeStaleTarget(null);
+  ctx.CairnCaptureReadCards.renderWeeklyInSlot(target, weeklyIns(), baseDeps(ctx, []), teamFixture());
+  const html = target.innerHTML;
+  assert.doesNotMatch(html, /weekly-card-stale/);
+  assert.doesNotMatch(html, /Moved on/);
+  assert.doesNotMatch(html, /data-weekly-reread/);
+  assert.match(html, /One change/);
+});

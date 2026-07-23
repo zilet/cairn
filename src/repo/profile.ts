@@ -32,6 +32,7 @@ import { bumpTrainingDataVersion } from "./training-cache.js";
 import { canonicalBodyweightSeries, resolvedCurrentBodyweight } from "./bodyweight.js";
 import { automaticOrphanIntent, chatOrphanIntent } from "./proposal-intent.js";
 import { classifyRecompositionStage } from "./recomposition-stage.js";
+import { type MarkerInterventionRecording, markerInterventionRecording } from "./marker-response.js";
 import {
   activeRecoveryWeekLedger,
   clearRecoveryWeekStampIfOwned,
@@ -887,6 +888,23 @@ function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?:
     const sourceRefKey = String(nutrition && accepted?.id ? accepted.id : p.id);
     const shape = proposalDecisionShape(p);
     const rationale = shape.rationale;
+    // Close the lab loop: when this plan/nutrition change is applied while a marker-sourced
+    // directive is active in its domain, anchor a falsifiable "<marker> should move toward
+    // optimal at the next reading" expectation to THIS intervention (the primary driver; the
+    // rest ride along in meta). Zero-evidence -> inconclusive keeps it honest until a new lab
+    // lands. Nothing to anchor -> null, and the apply behaves exactly as before.
+    let markerAnchorMeta: MarkerInterventionRecording["meta"] | null = null;
+    if (shape.domain === "nutrition" || shape.domain === "training") {
+      try {
+        const recording = markerInterventionRecording(shape.domain, nutrition ? nutritionEffectiveDate : today);
+        if (recording) {
+          markerAnchorMeta = recording.meta;
+          expectations.push(recording.expectation);
+        }
+      } catch {
+        // Marker anchoring is best-effort telemetry; a direct apply is authoritative.
+      }
+    }
     const evidenceKeys: string[] = [
       `plan_proposal:${p.id}`,
       ...(nutrition
@@ -963,6 +981,7 @@ function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?:
               recomposition_stage: nutritionStage,
             }
           : {}),
+        ...(markerAnchorMeta ? { marker_anchor: markerAnchorMeta } : {}),
       },
       action,
       specialist: null,

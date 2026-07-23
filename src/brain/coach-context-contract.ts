@@ -269,6 +269,11 @@ export interface CoachContextEnvelope {
   day_read: CoachRecord | null;
   insights: CoachRecord[];
   reaction_model: CoachRecord | null;
+  // Learned from the athlete's OWN subjective signals (Brief overrides / morning
+  // check-ins / post-target fueling reads). Additive + null-safe; a bounded few
+  // humble patterns, params stripped. Optional so partial context builders and
+  // imported DBs never need to synthesize it.
+  felt_signals?: CoachRecord | null;
   what_works_for_you: CoachWhatWorksForYou | null;
   recent_decisions: CoachRecord[];
   trajectory: CoachRecord | null;

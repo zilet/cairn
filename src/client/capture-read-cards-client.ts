@@ -87,7 +87,9 @@ function captureReadRenderWeeklyCard(
 ): void {
   // Once acknowledged ("Got it"), the week's read persists as a COMPACT settled line
   // — never destroyed for the week — until the athlete pulls it back open for the day.
-  if (ins.feedback === "up" && !opts.expanded) {
+  // A STALE read is the exception: it re-opens to the full card so its "Moved on" note
+  // + re-read tap stay reachable (the read no longer holds as a settled truth).
+  if (ins.feedback === "up" && !opts.expanded && ins.stale !== true) {
     captureReadRenderWeeklyAcked(target, ins, deps, team);
     return;
   }
@@ -95,6 +97,12 @@ function captureReadRenderWeeklyCard(
   const change = String(ins.next_step || "").trim();
   const why = String(ins.rationale || "").trim();
   const range = deps.weekRangeLabel(ins.created_at);
+  // Staleness (pull-only): when the picture has moved past this read, the server
+  // nulls the "one change" and hands us a calm stale_note. We soften the card — a
+  // quiet "Moved on" chip + the note in place of the action, with a re-read tap —
+  // rather than keep asserting a stale change. Never a nag; a fresh read is untouched.
+  const stale = ins.stale === true;
+  const staleNote = String(ins.stale_note || "").trim();
   // Reading grammar: the HERO carries the read + the one change (+ the wins strip,
   // injected by the caller), and the deterministic team-week detail sits one pull
   // away behind a native fold. The lead line is the agent's, so the team block omits
@@ -107,9 +115,17 @@ function captureReadRenderWeeklyCard(
         <div class="weekly-depth-body">${sections}</div>
       </details>`
     : "";
-  target.innerHTML = `<section class="weekly-card well-accent well-accent-sage settle-in">
+  const staleBlock = stale
+    ? `<div class="weekly-stale well-accent-sm">
+          <span class="weekly-stale-lbl lbl">Moved on</span>
+          <p class="weekly-stale-text">${deps.escapeHtml(staleNote || "Your week has moved since this read.")}</p>
+          <button class="linkbtn-quiet weekly-reread" data-weekly-reread type="button">Re-read the week</button>
+        </div>`
+    : "";
+  target.innerHTML = `<section class="weekly-card well-accent well-accent-sage settle-in${stale ? " weekly-card-stale" : ""}">
       <div class="weekly-head">
         <span class="weekly-kicker lbl">The week</span>
+        ${stale ? `<span class="weekly-stale-chip">Moved on</span>` : ""}
         ${range ? `<span class="weekly-range">${deps.escapeHtml(range)}</span>` : ""}
       </div>
       <p class="weekly-text">${text}</p>
@@ -117,6 +133,7 @@ function captureReadRenderWeeklyCard(
           <span class="weekly-change-lbl lbl">One change</span>
           <p class="weekly-change-text">${deps.escapeHtml(change)}</p>
         </div>` : ""}
+      ${staleBlock}
       ${depth}
       ${why ? `<p class="weekly-why" hidden>${deps.escapeHtml(why)}</p>` : ""}
       <div class="weekly-foot">
@@ -129,6 +146,7 @@ function captureReadRenderWeeklyCard(
     </section>`;
   target.querySelectorAll<HTMLElement>("[data-ifb]").forEach((button) =>
     button.addEventListener("click", () => captureReadWeeklyFeedback(target, ins, button.dataset.ifb, deps, team)));
+  target.querySelector<HTMLElement>("[data-weekly-reread]")?.addEventListener("click", () => deps.rereadWeekly?.());
   captureReadWireWhyToggle(target, ".weekly-why");
 }
 

@@ -373,6 +373,8 @@ export interface StreamingRunDeps {
   supportsStream?: (name: string) => boolean;
   runStreaming?: (name: string, prompt: string, opts: StreamRunOpts) => Promise<AgentResult>;
   runOneShot?: typeof runChosen;
+  /** The bounded-read terminal, used when `boundedReads` is set and the run does NOT stream. */
+  runBounded?: (agent: string | undefined, prompt: string, opts: CoachReadRunOptions) => Promise<ChosenRun>;
 }
 
 // Streaming sibling of runChosen for the prose-bearing job ops. When `onDelta` is
@@ -382,19 +384,29 @@ export interface StreamingRunDeps {
 // trailing JSON never reaches the card), and the structured JSON is re-parsed from the
 // full text with extractMarkedJson. On ANY streaming failure (transport error, or a
 // reply that carried no parseable JSON) — and whenever `onDelta` is absent or the first
-// agent can't stream — it falls back to the ordinary one-shot runChosen rotation, which
-// keeps its own JSON-repair retry + circuit breaker + telemetry. The stub and every
+// agent can't stream — it falls back to the ordinary one-shot rotation, which keeps
+// its own JSON-repair retry + circuit breaker + telemetry. The stub and every
 // non-streaming agent therefore behave byte-for-byte as today. Returns runChosen's
 // { agent, result, tried } shape so callers are unchanged.
+//
+// `boundedReads` opts an interactive op into depth-on-demand WITHOUT duplicating the
+// would-stream check: this function is the single source of truth for "would this run
+// stream". When set, a run that DOES stream is unchanged (the streaming success returns
+// early below), but a run that never enters the streaming branch (onDelta absent, or the
+// resolved first agent is not stream-capable) takes its non-streaming terminal through
+// the bounded coach-read loop (mode "ordinary") instead of a plain runChosen — same op,
+// acceptParsed, timeout envelope and signal. A run that attempted streaming and failed
+// keeps the exact one-shot fallback, so the "would stream" path stays byte-for-byte.
 export async function runChosenStreaming(
   agent: string | undefined,
   prompt: string,
-  opts: RunOpts & { op?: string; onDelta?: (chunk: string) => void } = {},
+  opts: RunOpts & { op?: string; onDelta?: (chunk: string) => void; boundedReads?: boolean } = {},
   deps: StreamingRunDeps = {}
 ) {
-  const { onDelta, ...rest } = opts;
+  const { onDelta, boundedReads, ...rest } = opts;
   const op = rest.op ?? "auto";
   const runOneShot = deps.runOneShot ?? runChosen;
+  const runBounded = deps.runBounded ?? runChosenWithCoachReads;
   const streamedTried: { agent: string; error: string }[] = [];
   if (onDelta) {
     const supportsStream = deps.supportsStream ?? agentSupportsStream;
@@ -441,6 +453,12 @@ export async function runChosenStreaming(
       }
     }
   }
-  const fallback = await runOneShot(agent, prompt, rest);
+  // Non-streaming terminal. Route through the bounded loop only when the caller opted
+  // in AND this run never attempted streaming; a stream-attempt fallback (streamedTried
+  // populated) preserves the exact one-shot rotation.
+  const fallback =
+    boundedReads && streamedTried.length === 0
+      ? await runBounded(agent, prompt, { ...rest, op, mode: "ordinary" })
+      : await runOneShot(agent, prompt, rest);
   return streamedTried.length ? { ...fallback, tried: [...streamedTried, ...fallback.tried] } : fallback;
 }

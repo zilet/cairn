@@ -823,6 +823,16 @@ export function startScheduler() {
         recordSchedulerFailure("reaction_model_rebuild", e);
         console.error(`[memory] reaction-model rebuild failed: ${e?.message ?? e}`);
       }
+      // 1b′. Rebuild the FELT-SIGNALS model (deterministic) — what the athlete's own
+      //      subjective steers / check-ins / fueling reads reveal — and cache it so
+      //      getCoachContext + the Brief read it cheaply. Pull, never push; sparse
+      //      data yields nothing. Isolated so it never sinks the nightly pass.
+      try {
+        repo.saveFeltSignals();
+      } catch (e: any) {
+        recordSchedulerFailure("felt_signals_rebuild", e);
+        console.error(`[memory] felt-signals rebuild failed: ${e?.message ?? e}`);
+      }
       // 1c. Write the plain-language NARRATIVE over the freshly rebuilt patterns
       //     (agentic, best-effort). A quiet/failed agent leaves the prior narrative,
       //     and an emptied model already cleared it in saveReactionModel. Pull, never push.

@@ -114,6 +114,67 @@ function attachLongPressCopy(el: Element, text: unknown): void {
 
 const COPY_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2.2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg>`;
 
+// One applied-action pill. A capture-lane food log renders a live chip tied to its
+// food_notes row (data-capture-note): a calm "filling in details…" while background
+// enrichment runs, upgraded in place to "✓ Dinner · 640 kcal · 40g protein" when it
+// lands. Every other action keeps the plain "✓ log food" tag.
+function chatAppliedTagHtml(a: ChatScreenAppliedAction): string {
+  const info = CairnChatClient.captureFoodInfo(a);
+  if (info && !info.missing) {
+    const active = CairnChatClient.captureFoodActive(info.status);
+    return `<span class="bubble-tag capture-food${active ? " pending" : ""}" data-capture-note="${escAttr(info.id)}">${CairnChatClient.captureFoodTagInner(info.status, info.food)}</span>`;
+  }
+  const record = a as Record<string, unknown>;
+  return `<span class="bubble-tag">✓ ${escHtml(String(record.type).replace(/_/g, " "))}${record.error ? " ⚠" : ""}</span>`;
+}
+
+// Re-render a capture chip in place from a fetched food-note row (found anywhere in
+// the log by its note id, so it survives a re-render that rebuilt the bubble).
+function applyCaptureFoodRow(id: number, row: unknown): void {
+  const tag = document.querySelector(`.capture-food[data-capture-note="${id}"]`);
+  if (!(tag instanceof HTMLElement)) return;
+  const { status, food } = CairnChatClient.captureFoodFromRow(row);
+  tag.classList.toggle("pending", CairnChatClient.captureFoodActive(status));
+  tag.innerHTML = CairnChatClient.captureFoodTagInner(status, food);
+}
+
+// Guards against arming two concurrent watchers for the same note+render token; a
+// re-render bumps pollToken (stopping stale watchers via pollEnrichment's own guard),
+// so a fresh render re-arms cleanly.
+const captureFoodWatched = new Set<string>();
+
+// Follow a still-enriching capture note over its existing SSE stream (poll fallback),
+// upgrade the chip in place on each transition, and refresh the chat fuel strip once
+// the macros land. The pollToken/tab stale guard is inherited from pollEnrichment.
+function watchCaptureFoodNote(id: number): void {
+  if (typeof pollEnrichment !== "function") return;
+  const token = pollToken;
+  const key = `${token}:${id}`;
+  if (captureFoodWatched.has(key)) return;
+  captureFoodWatched.add(key);
+  const done = () => {
+    captureFoodWatched.delete(key);
+    if (state.tab === "chat" && typeof loadChatFuel === "function") void loadChatFuel(pollToken);
+  };
+  Promise.resolve(
+    pollEnrichment("/food-notes", id, {
+      tab: "chat",
+      token,
+      onUpdate: (row) => applyCaptureFoodRow(id, row),
+    }),
+  ).then((row) => {
+    if (row) applyCaptureFoodRow(id, row);
+    done();
+  }, done);
+}
+
+function armCaptureFoodWatches(applied: ChatScreenAppliedAction[]): void {
+  for (const a of applied) {
+    const info = CairnChatClient.captureFoodInfo(a);
+    if (info && !info.missing && CairnChatClient.captureFoodActive(info.status)) watchCaptureFoodNote(info.id);
+  }
+}
+
 // Render one chat turn. `opts.readonly` (history overlay) renders drafts as a
 // static note instead of an Apply button. Consecutive same-role turns group:
 // the previous one drops its tail + time, this one becomes the run's last.
@@ -179,7 +240,7 @@ function appendMsg(
   // the affected exercise, where it is useful when the athlete starts the session.
   const applied = chatMessageApplied(meta.applied).filter((a) => chatMessageRecord((a as Record<string, unknown>).result).background !== true);
   if (applied.length) {
-    extra += `<div class="bubble-meta">${applied.map((a) => `<span class="bubble-tag">✓ ${escHtml(String(a.type).replace(/_/g, " "))}${a.error ? " ⚠" : ""}</span>`).join("")}</div>`;
+    extra += `<div class="bubble-meta">${applied.map(chatAppliedTagHtml).join("")}</div>`;
   }
   const drafts = chatMessageDrafts(meta.drafts);
   if (drafts.length) {
@@ -284,6 +345,10 @@ function appendMsg(
     el.querySelector(".bubble-copy")?.addEventListener("click", () => copyText(m.content));
     attachLongPressCopy(el, m.content);
   }
+  // Resume the enrichment watch for any still-filling capture chip — on a live turn,
+  // a reload, or a tab-switch re-render. The read-only history overlay never arms it
+  // (its notes have long settled). pollEnrichment's stale guard tears it down.
+  if (!readonly && applied.length) armCaptureFoodWatches(applied);
   if (!noScroll && log && stickBottom && (!before || before === host.lastElementChild)) log.scrollTop = log.scrollHeight;
   return el;
 }

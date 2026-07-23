@@ -17,6 +17,8 @@ type CaptureInsight = import("../contracts/client.js").ClientInsight & {
   next_step?: unknown;
   rationale?: unknown;
   uncertain?: unknown;
+  stale?: unknown;
+  stale_note?: unknown;
 };
 type CaptureInsightResult = {
   ok?: boolean;
@@ -51,6 +53,9 @@ type CaptureReadCardDeps = {
   collapseEl(el: Element, done?: () => void): void;
   escapeHtml(value: unknown): string;
   weekRangeLabel(iso: unknown): string;
+  // Pull-only re-read of the weekly card — regenerates through the existing
+  // weekly-read op, bypassing the calendar/cooldown gates on an explicit tap.
+  rereadWeekly?(): void;
 };
 type CaptureTeamWeek = import("../contracts/client-api.js").ClientTeamWeek;
 type CaptureReadCardsApi = {
@@ -81,6 +86,7 @@ type CaptureReadJobsDeps = {
 type CaptureReadJobsController = {
   maybeGenerateInsight(): void;
   maybeGenerateWeekly(): void;
+  forceGenerateWeekly(): void;
   reconnectInsight(): ClientAgentOpHandlers | null;
 };
 type CaptureReadJobsApi = {

@@ -4,6 +4,8 @@ import type { ProposedExpectation } from "../brain/expectation-contract.js";
 import { emitBrainEvent as queueBrainEvent } from "../brainEvents.js";
 import { emitEnrichTransition } from "../enrichBus.js";
 import { recordDecision } from "./brain-decisions.js";
+import { markerInterventionRecording } from "./marker-response.js";
+import { invalidateDayRead } from "./day-read.js";
 import { estimateExpenditure } from "./expenditure.js";
 import { newestHealthDocDate } from "./health.js";
 import { computeGoalCheck, recompositionStageAt } from "./profile.js";
@@ -328,6 +330,34 @@ export function maxUpstreamNutritionSource(): string | null {
   return cands.length ? cands.sort().at(-1)! : null;
 }
 
+// SQLite `datetime('now')` timestamps are "YYYY-MM-DD HH:MM:SS" (UTC, no zone marker).
+function parseNutritionSqliteTs(value: unknown): number {
+  const raw = String(value ?? "").trim();
+  if (!raw) return Number.NaN;
+  return Date.parse(raw.includes("T") ? raw : `${raw.replace(" ", "T")}Z`);
+}
+
+// Same-day boundary guard: the day-granular compare below misses a nutrition/watch
+// directive derived intra-day AFTER this plan was drafted (both share the plan's
+// date, so `now <= stamped` reads not-stale). Fall to a finer instant comparison for
+// exactly that case — a directive whose creation instant postdates the plan's.
+function newerNutritionDirectiveThanPlan(plan: any): boolean {
+  const planMs = parseNutritionSqliteTs(plan?.created_at);
+  if (!Number.isFinite(planMs)) return false;
+  try {
+    const row = db
+      .prepare(
+        `SELECT MAX(created_at) AS c FROM health_directives
+          WHERE status = 'active' AND (domain = 'nutrition' OR domain = 'watch')`
+      )
+      .get() as any;
+    const dirMs = parseNutritionSqliteTs(row?.c);
+    return Number.isFinite(dirMs) && dirMs > planMs;
+  } catch {
+    return false;
+  }
+}
+
 // Is a drafted/accepted meal plan outrun by newer upstream data since it was stamped?
 // Compares the plan's stamped source_ts (fallback: its created_at day) against the
 // current max upstream source. Quiet by default: stale:false when there's nothing
@@ -339,14 +369,15 @@ export function mealPlanFreshness(plan: any): { stale: boolean; reason: string |
     : plan?.created_at
       ? String(plan.created_at).slice(0, 10)
       : null;
+  if (!stamped) return { stale: false, reason: null, source_ts: stamped };
+  const reason =
+    "A newer lab, health directive, weigh-in, or nutrition target has landed since this plan was drafted — worth re-drafting so meals reflect it.";
   const now = maxUpstreamNutritionSource();
-  if (!stamped || !now || now <= stamped) return { stale: false, reason: null, source_ts: stamped };
-  return {
-    stale: true,
-    reason:
-      "A newer lab, health directive, weigh-in, or nutrition target has landed since this plan was drafted — worth re-drafting so meals reflect it.",
-    source_ts: stamped,
-  };
+  if (now && now > stamped) return { stale: true, reason, source_ts: stamped };
+  // A directive sharing the plan's date but written later (same-day boundary) still
+  // makes the plan stale — the day-granular compare above can't see intra-day order.
+  if (newerNutritionDirectiveThanPlan(plan)) return { stale: true, reason, source_ts: stamped };
+  return { stale: false, reason: null, source_ts: stamped };
 }
 
 export type MealPlanPersistenceCheck =
@@ -855,6 +886,14 @@ function recordMealPlanStatusDecision(plan: any, transition: string): void {
           : Number.NaN;
     const response =
       accepted && Number.isFinite(kcal) && kcal > 0 ? nutritionTrendExpectation(kcal, localDateISO()) : null;
+    // Close the lab loop for meals: an accepted plan applied while a nutrition marker-directive
+    // is active anchors a falsifiable "<marker> should move toward optimal" expectation to THIS
+    // meal plan (the primary driver). Best-effort; null when there's nothing to anchor.
+    const markerRecording = accepted ? markerInterventionRecording("nutrition", localDateISO()) : null;
+    const expectations = [
+      ...(response ? [response.expectation] : []),
+      ...(markerRecording ? [markerRecording.expectation] : []),
+    ];
     const days = Array.isArray(plan.parsed?.days) ? plan.parsed.days : [];
     recordDecision(
       {
@@ -884,6 +923,7 @@ function recordMealPlanStatusDecision(plan: any, transition: string): void {
           week_of: plan.week_of ?? null,
           expectation_basis: response?.basis ?? (accepted ? "daily_kcal_unavailable" : null),
           recomposition_stage: response?.expectation.baseline?.recomposition_stage ?? null,
+          ...(markerRecording ? { marker_anchor: markerRecording.meta } : {}),
         },
         action: {
           meal_plan_id: plan.id,
@@ -896,9 +936,10 @@ function recordMealPlanStatusDecision(plan: any, transition: string): void {
         applied_at: accepted ? new Date().toISOString() : null,
         reverted_at: null,
         superseded_by: null,
-        evaluator_version: response?.expectation.evaluator_version ?? null,
+        evaluator_version:
+          response?.expectation.evaluator_version ?? markerRecording?.expectation.evaluator_version ?? null,
       },
-      response ? [response.expectation] : []
+      expectations
     );
   } catch {
     // Meal-plan status is authoritative; accountability telemetry is fail-soft.
@@ -949,7 +990,7 @@ export function acceptMealPlan(id: number, opts: { recordDecision?: boolean } = 
     }
     return setMealPlanStatus(id, "accepted", opts);
   });
-  if (accepted)
+  if (accepted) {
     emitBrainEvent({
       kind: "meal_plan_changed",
       domain: "nutrition",
@@ -957,6 +998,10 @@ export function acceptMealPlan(id: number, opts: { recordDecision?: boolean } = 
       entity_id: id,
       material: true,
     });
+    // Accepting a plan changes what today's fuel plan actually is — the cached
+    // Brief must recompute against it, same as a plan/training restructure does.
+    invalidateDayRead();
+  }
   return accepted;
 }
 
@@ -984,6 +1029,8 @@ export function restoreMealPlanAfterUndo(
       entity_id: restored.previous?.id ?? appliedId,
       material: true,
     });
+    // The undo restores a different plan as current — same reasoning as acceptMealPlan.
+    invalidateDayRead();
   }
   return restored;
 }
@@ -1070,6 +1117,8 @@ export function updateMealPlanDays(id: number, days: any) {
   db.prepare(`UPDATE meal_plans SET parsed_json = ? WHERE id = ?`).run(JSON.stringify(check.parsed), id);
   const updated = getMealPlan(id);
   emitBrainEvent({ kind: "meal_plan_changed", domain: "nutrition", date: localDateISO(), entity_id: id });
+  // Reordering/editing days changes what the plan actually says to eat.
+  invalidateDayRead();
   return updated;
 }
 
@@ -1115,6 +1164,8 @@ export function swapMealInPlan(
     entity_id: id,
     subject_key: `${target.day}:${idx}`,
   });
+  // A swapped meal is a real content change to the plan.
+  invalidateDayRead();
   return { plan: getMealPlan(id), meal: clean };
 }
 
@@ -1196,6 +1247,8 @@ export function setMealRecipe(planId: number, day: string, mealIndex: number, re
     entity_id: planId,
     subject_key: `${target.day}:${idx}:recipe`,
   });
+  // Deliberately no invalidateDayRead here — caching a recipe doesn't change
+  // what/how much the plan says to eat, so today's Brief has nothing to redo.
   return { plan: getMealPlan(planId), recipe: clean };
 }
 
@@ -1211,10 +1264,23 @@ function insertFoodNote(meal: string, raw: string, parsed: any, imagePath: strin
   return hydrate(db.prepare(`SELECT * FROM food_notes WHERE id = ?`).get(info.lastInsertRowid));
 }
 
+// Bust the cached Brief for a food entry's local day, and — when that day isn't
+// today — today's cache too, since a past-day intake change still feeds the
+// trailing-average expenditure/fuel reads that shape today's Brief. Mirrors
+// setFuelingFeedback's date-vs-today pattern in fueling.ts.
+function invalidateDayReadForDate(d: string): void {
+  invalidateDayRead(d);
+  if (d !== localDateISO()) invalidateDayRead();
+}
+
 function scheduleFoodNoteEffects(row: any, enrichKind: "food" | "food_photo" | null): void {
   afterSqliteCommit(() => {
     bumpFoodDataVersion(); // a new food entry moves the intake average → expenditure read
-    queueBrainEvent({ kind: "food_logged", domain: "nutrition", date: row.date || localDateISO(), entity_id: row.id });
+    const d = row.date || localDateISO();
+    queueBrainEvent({ kind: "food_logged", domain: "nutrition", date: d, entity_id: row.id });
+    // A new food entry can change what today's Brief should say (fuel target,
+    // "already logged" reads).
+    invalidateDayReadForDate(d);
     // Lazy import to avoid a circular dependency (enrich.ts imports repo.ts).
     if (enrichKind) import("../enrich.js").then((m) => m.enqueueEnrich(enrichKind, row.id)).catch(() => {});
   });
@@ -1283,6 +1349,7 @@ export function deleteFoodNote(id: number) {
   if (!row) return { deleted: false, id };
   db.prepare(`DELETE FROM food_notes WHERE id = ?`).run(id);
   bumpFoodDataVersion();
+  invalidateDayReadForDate(row.date || localDateISO());
   return { deleted: true, id };
 }
 
@@ -1291,13 +1358,16 @@ export function updateFoodNoteParsed(id: number, parsed: any) {
   db.prepare(`UPDATE food_notes SET parsed_json = ? WHERE id = ?`).run(parsed ? JSON.stringify(parsed) : null, id);
   bumpFoodDataVersion(); // enrichment can revise kcal in place (backstop can't see it)
   const updated = getFoodNote(id);
-  if (updated)
+  if (updated) {
+    const d = updated.date || localDateISO();
     emitBrainEvent({
       kind: "food_corrected",
       domain: "nutrition",
-      date: updated.date || localDateISO(),
+      date: d,
       entity_id: id,
     });
+    invalidateDayReadForDate(d);
+  }
   return updated;
 }
 
@@ -1426,7 +1496,9 @@ export function updateFoodNote(id: number, fields: any) {
   // A manual edit stamps enrichment_status 'done' OUTSIDE the queue/setter, so emit
   // here too — a still-open SSE watcher (Fuel card) must see the row settle.
   emitEnrichTransition("food", id, updated);
-  emitBrainEvent({ kind: "food_corrected", domain: "nutrition", date: updated.date || localDateISO(), entity_id: id });
+  const d = updated.date || localDateISO();
+  emitBrainEvent({ kind: "food_corrected", domain: "nutrition", date: d, entity_id: id });
+  invalidateDayReadForDate(d);
   return updated;
 }
 

@@ -2,7 +2,13 @@ import { db } from "../db.js";
 import { emitBrainEvent } from "../brainEvents.js";
 import { canonicalMarker } from "./marker-canon.js";
 import { getGarminCoachSummary, hydrateJson, jsonOrNull, listActivities } from "./activities.js";
-import { cleanClinicalFacts, getLatestHealthReview, hydrateHealthDoc, listContextEvents } from "./health.js";
+import {
+  cleanClinicalFacts,
+  getLatestHealthReview,
+  hydrateHealthDoc,
+  listContextEvents,
+  newestHealthDocDate,
+} from "./health.js";
 import { imagingForCoach } from "./imaging.js";
 import { dayRead, getCachedDayRead, invalidateDayRead } from "./intelligence.js";
 import { blockForCoach, getActiveBlock } from "./program-blocks.js";
@@ -51,6 +57,7 @@ import type { CoachContext, CoachDayIntake, CoachProgramState } from "./coach-co
 // The "knows-me" layer — additive context keys (function-level cycle, same shape as
 // the existing coach↔intelligence import; resolved at call time, never at module init).
 import { reactionModelForCoach, whatWorksForYou } from "./reaction-model.js";
+import { feltSignalsForCoach } from "./felt-signals.js";
 import { getTrajectory } from "./trajectory.js";
 import { wholePersonTrajectory } from "./whole-person-trajectory.js";
 import { journeyRead } from "./journey.js";
@@ -430,6 +437,7 @@ function buildPersonSlice(
   | "family"
   | "checkins"
   | "reaction_model"
+  | "felt_signals"
   | "what_works_for_you"
   | "context_today"
 > {
@@ -464,6 +472,12 @@ function buildPersonSlice(
     // weight rate, hs-CRP↔training-load, late-event→sleep, adherence, a data-gap signal so
     // the coach never fabricates recovery). The personalization spine every brain reads.
     reaction_model: reactionModelForCoach(),
+    // Learned from the athlete's OWN subjective felt signals: recurring Brief
+    // overrides (a weekday that keeps ending up rest), persistent morning check-in
+    // reads (energy running low), and post-target fueling follow-through. Calm,
+    // adherence-neutral, a suggestion never a gate — surfaces at most a couple of
+    // humble lines, and nothing at all on sparse data.
+    felt_signals: feltSignalsForCoach(),
     // Outcomes earned from the decision -> expectation -> evaluation ledger. Null
     // until repeated clean evidence exists, so an empty ledger preserves today's
     // coaching defaults exactly.
@@ -1969,25 +1983,217 @@ export const INSIGHT_VISIBLE_WINDOW_DAYS = 14;
 // "today's"; weekly_read is exempt (it persists for the week on its own cadence).
 export function listVisibleInsights(limit = 20) {
   const cutoff = new Date(Date.now() - INSIGHT_VISIBLE_WINDOW_DAYS * 864e5).toISOString().slice(0, 10);
-  return db
+  const rows = db
     .prepare(
       `SELECT * FROM insights
         WHERE status IN ('new', 'seen')
           AND (kind = 'weekly_read' OR substr(created_at, 1, 10) >= ?)
         ORDER BY id DESC LIMIT ?`
     )
-    .all(cutoff, limit);
+    .all(cutoff, limit) as any[];
+  return annotateWeeklyReadFreshness(rows);
 }
+
+// ---------------------------------------------------------------------------
+// Weekly-read staleness (pull, never push) — mirrors the health-synthesis
+// drift_sig pattern (repo/health-focus.ts). The weekly read ("how the week
+// went + the one change") legitimately persists for its slot, so mid-week it
+// keeps asserting last slot's advice. We stamp a coarse freshness signature at
+// generation, compare it live at serve, and — when the picture has moved —
+// mark the read `stale` and DEFANG its "one change" so no surface asserts a
+// stale action. The re-read affordance is a quiet tap (client), never a nag.
+//
+// Signature shape (each a meaningfully-sized change on its own, not daily churn):
+//  - week_sessions: distinct training days this local week (a workout completed
+//    since the read is material to a "how the week went" story).
+//  - latest_doc_date: newest health-doc effective date (new labs landed).
+//  - directive_keys: the active cross-domain directive identity set (a flagged
+//    finding opened/closed/changed).
+//  - weight_bucket: latest weigh-in rounded to a 2 lb bucket (a real move, not a
+//    0.2 lb wiggle).
+//  - latest_context_event_id: max non-archived context-event id (a NEW trip /
+//    injury / life event since the read).
+// A cached read with NO stored signature (legacy) or an id mismatch compares as
+// "can't tell" → never stale. Never throws.
+// ---------------------------------------------------------------------------
+const WEEKLY_READ_FRESHNESS_KEY = "weekly_read_freshness";
+
+export interface WeeklyReadSignature {
+  week_sessions: number;
+  latest_doc_date: string | null;
+  directive_keys: string[];
+  weight_bucket: number | null;
+  latest_context_event_id: number | null;
+}
+
+function weeklyReadWeekStartISO(today = localDateISO()): string {
+  const d = new Date(`${today}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7)); // back to Monday
+  return d.toISOString().slice(0, 10);
+}
+
+export function computeWeeklyReadSignature(): WeeklyReadSignature {
+  const today = localDateISO();
+  let week_sessions = 0;
+  try {
+    const row = db
+      .prepare(`SELECT COUNT(DISTINCT date) AS c FROM sessions WHERE date >= ?`)
+      .get(weeklyReadWeekStartISO(today)) as any;
+    week_sessions = Number(row?.c ?? 0);
+  } catch {
+    week_sessions = 0;
+  }
+  let latest_doc_date: string | null = null;
+  try {
+    latest_doc_date = newestHealthDocDate();
+  } catch {
+    latest_doc_date = null;
+  }
+  let directive_keys: string[] = [];
+  try {
+    directive_keys = (listActiveDirectives() as any[])
+      .map((d) => directiveKey(d))
+      .filter(Boolean)
+      .sort();
+  } catch {
+    directive_keys = [];
+  }
+  let weight_bucket: number | null = null;
+  try {
+    const w = db.prepare(`SELECT weight_lb FROM bodyweight_log ORDER BY date DESC, id DESC LIMIT 1`).get() as any;
+    const lb = Number(w?.weight_lb);
+    weight_bucket = Number.isFinite(lb) ? Math.round(lb / 2) * 2 : null; // 2 lb dead-band
+  } catch {
+    weight_bucket = null;
+  }
+  let latest_context_event_id: number | null = null;
+  try {
+    const c = db.prepare(`SELECT MAX(id) AS id FROM context_events WHERE archived = 0`).get() as any;
+    latest_context_event_id = c?.id != null ? Number(c.id) : null;
+  } catch {
+    latest_context_event_id = null;
+  }
+  return { week_sessions, latest_doc_date, directive_keys, weight_bucket, latest_context_event_id };
+}
+
+// Stamp the freshness signature for the just-written weekly read. Keyed by the
+// insight id so a serve-time comparison only trusts the signature that belongs
+// to the read on screen. Called from generateInsight after the row is stored.
+export function stampWeeklyReadFreshness(insightId: number): void {
+  try {
+    setAppState(
+      WEEKLY_READ_FRESHNESS_KEY,
+      JSON.stringify({ insight_id: Number(insightId), sig: computeWeeklyReadSignature() })
+    );
+  } catch {
+    /* freshness stamping never blocks generation */
+  }
+}
+
+function readWeeklyReadFreshness(): { insight_id: number; sig: any } | null {
+  const raw = getAppState(WEEKLY_READ_FRESHNESS_KEY);
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw);
+    const id = Number(v?.insight_id);
+    if (!Number.isFinite(id)) return null;
+    return { insight_id: id, sig: v?.sig ?? null };
+  } catch {
+    return null;
+  }
+}
+
+function weeklyKeysDiffer(a: unknown, b: unknown): boolean {
+  const sa = Array.isArray(a) ? [...a].map(String).sort() : [];
+  const sb = Array.isArray(b) ? [...b].map(String).sort() : [];
+  return JSON.stringify(sa) !== JSON.stringify(sb);
+}
+
+// Conservative, threshold-biased comparison. Any single true trigger flags stale
+// (each shape is already a meaningfully-sized change — see the doc comment above).
+function weeklyReadSignatureDiffers(saved: any): boolean {
+  if (!saved || typeof saved !== "object") return false; // legacy, no signature → can't tell
+  const cur = computeWeeklyReadSignature();
+  if (Number(saved.week_sessions) !== cur.week_sessions) return true;
+  if (String(saved.latest_doc_date ?? "") !== String(cur.latest_doc_date ?? "")) return true;
+  if (weeklyKeysDiffer(saved.directive_keys, cur.directive_keys)) return true;
+  const sw = saved.weight_bucket;
+  const cw = cur.weight_bucket;
+  if ((sw == null) !== (cw == null)) return true;
+  if (sw != null && cw != null && Number(sw) !== Number(cw)) return true;
+  if (Number(saved.latest_context_event_id ?? 0) !== Number(cur.latest_context_event_id ?? 0)) return true;
+  return false;
+}
+
+export interface WeeklyReadFreshness {
+  stale: boolean;
+  as_of: string | null;
+}
+
+// The freshness verdict for a weekly_read insight row. Legacy / mismatched rows
+// read as fresh (can't tell → never stale), matching the synthesis contract.
+export function weeklyReadFreshness(weekly: any): WeeklyReadFreshness {
+  const as_of = weekly?.created_at ? String(weekly.created_at).slice(0, 10) : null;
+  if (!weekly || weekly.kind !== "weekly_read") return { stale: false, as_of };
+  const stored = readWeeklyReadFreshness();
+  if (!stored || stored.insight_id !== Number(weekly.id)) return { stale: false, as_of };
+  return { stale: weeklyReadSignatureDiffers(stored.sig), as_of };
+}
+
+// Annotate the most-recent weekly_read row (the one the Today card shows) with a
+// freshness verdict, and — when stale — DEFANG it: null the "one change"
+// (next_step) and attach a calm stale_note so no surface asserts a moved-on
+// action. Additive + copy-on-write (the DB row is never mutated); rows without a
+// weekly read, or a fresh one, pass through untouched.
+function annotateWeeklyReadFreshness(rows: any[]): any[] {
+  const idx = Array.isArray(rows) ? rows.findIndex((r) => r && r.kind === "weekly_read") : -1;
+  if (idx < 0) return rows;
+  const { stale } = weeklyReadFreshness(rows[idx]);
+  if (!stale) return rows;
+  const copy = [...rows];
+  copy[idx] = {
+    ...rows[idx],
+    stale: true,
+    stale_note:
+      "This was the week's read when it was written — your training, labs, or weight have moved since. Re-read it when you like.",
+    next_step: null,
+  };
+  return copy;
+}
+
+// How many downvoted insight texts stay in the dedup corpus, beyond the recency
+// window. A thumbs-down means "don't say this again" — so the theme has to keep
+// suppressing new near-repeats even after it ages past `limit`. Bounded so the
+// corpus can never grow without limit.
+export const DOWNVOTED_DEDUP_LIMIT = 30;
 
 // A compact, bounded list of recent insight TEXTS (any status) so the generator
 // can tell the agent what it already said and avoid repeating a connection.
 // Dedup is a soft prompt hint here; isDuplicateInsight() is the real guard.
+// Downvoted insight texts are UNIONED in (beyond the recency window) so a
+// connection the athlete waved off doesn't resurface once it scrolls past `limit`
+// — a downvoted THEME stays suppressed, keeping the existing soft+real dedup shape.
 export function recentInsightTexts(limit = 12): string[] {
-  return db
+  const recent = db
     .prepare(`SELECT text FROM insights ORDER BY id DESC LIMIT ?`)
     .all(limit)
     .map((r: any) => String(r?.text ?? "").trim())
     .filter(Boolean);
+  const downvoted = db
+    .prepare(`SELECT text FROM insights WHERE feedback = 'down' ORDER BY id DESC LIMIT ?`)
+    .all(DOWNVOTED_DEDUP_LIMIT)
+    .map((r: any) => String(r?.text ?? "").trim())
+    .filter(Boolean);
+  // Recent first (newest-first order preserved), then any downvoted not already present.
+  const seen = new Set(recent);
+  const out = [...recent];
+  for (const t of downvoted) {
+    if (!seen.has(t)) {
+      seen.add(t);
+      out.push(t);
+    }
+  }
+  return out;
 }
 
 // True when a candidate insight essentially repeats one of the recent ones:

@@ -15,6 +15,7 @@ import { buildSafetyMarkerContext, safetyGate, verifyCitation } from "./evidence
 import { activeMedications, forecastMarker, getMarkerHistory, lsqSlopePerDay } from "./health.js";
 import { invalidateDayRead } from "./intelligence.js";
 import { canonicalMarker } from "./marker-canon.js";
+import { maybeRequestMealRefreshForDirectives } from "./meal-directive-trigger.js";
 import { getProfile, listWeight } from "./profile.js";
 import { addDaysISO, localDateISO } from "./shared.js";
 import { brainDecisionFingerprint, recordDecision } from "./brain-decisions.js";
@@ -649,6 +650,13 @@ export function deriveDirectives() {
       /* cache bust is best-effort, never block */
     }
     recordActiveDirectiveDecisions(SOURCE);
+    // A material directive change may make the accepted meal plan stale — enqueue a
+    // regeneration through the owned-refresh channel (autonomy-gated, never inline).
+    try {
+      maybeRequestMealRefreshForDirectives();
+    } catch {
+      /* reactivity is best-effort; a derivation must never fail on it */
+    }
   }
   return { source: SOURCE, derived: result.saved, directives: listActiveDirectives() };
 }
@@ -1236,7 +1244,14 @@ export function applyReviewDirectives(directives: any[]) {
   // Diff-based reconcile (never clear-all + reinsert): an unchanged review re-save churns
   // zero rows, a changed directive updates in place, a dropped one soft-resolves.
   const result = reconcileDirectives("health_review", desired);
-  if (result.changed > 0) recordActiveDirectiveDecisions("health_review");
+  if (result.changed > 0) {
+    recordActiveDirectiveDecisions("health_review");
+    try {
+      maybeRequestMealRefreshForDirectives();
+    } catch {
+      /* reactivity is best-effort; a review save must never fail on it */
+    }
+  }
   return result.saved;
 }
 

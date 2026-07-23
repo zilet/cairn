@@ -14,6 +14,7 @@ export * from "./repo/memory.js";
 export * from "./repo/brain-decisions.js";
 export * from "./repo/brain-evaluations.js";
 export * from "./repo/nutrition.js";
+export * from "./repo/fuel-state.js"; // pace-aware protein read for the Brief's FUEL line + day-read signal
 export * from "./repo/intake-window.js"; // completed-day food coverage; missing days stay unknown
 export * from "./repo/underfueling.js"; // uncertainty-aware multi-channel fuel protection read
 export * from "./repo/underfueling-snapshot.js"; // fully hydrated, memoized protective read shared by every planning surface
@@ -28,6 +29,7 @@ export * from "./repo/diagnostics.js";
 export * from "./repo/request-metrics.js";
 export * from "./repo/app-state.js";
 export * from "./repo/meal-refresh-retry.js";
+export * from "./repo/meal-directive-trigger.js";
 export * from "./repo/scheduler-operations.js";
 export * from "./repo/client-tz.js"; // last-seen device zone for the TZ-correct Brief warm
 export * from "./repo/lab-units.js";
@@ -46,6 +48,7 @@ export * from "./repo/coach-context.js";
 export * from "./repo/coach.js";
 export * from "./repo/baseline-bands.js"; // personal-baseline recovery + training-load reads
 export * from "./repo/propagation.js";
+export * from "./repo/marker-response.js"; // the lab loop: anchor an applied plan/meal change to its marker + learn which change coincided with which direction
 export * from "./repo/symptom-links.js"; // deterministic symptom → off-marker reasoning
 export * from "./repo/evidence.js";
 export * from "./repo/intelligence.js";
@@ -74,6 +77,7 @@ export * from "./repo/team-week.js"; // the deterministic "here's what your team
 export { guidelineFor, allGuidelines, type GuidelineEntry } from "./guidelines.js"; // offline trusted-guidelines pack
 // The "knows-me" layer (docs/VISION.md — the personal coaching team):
 export * from "./repo/reaction-model.js"; // how THIS athlete actually reacts (the personalization foundation)
+export * from "./repo/felt-signals.js"; // learns from subjective felt signals (overrides / check-ins / fueling feedback)
 export * from "./repo/trajectory.js"; // one periodized arc to the goals, today as the next step
 export * from "./repo/whole-person-trajectory.js"; // standing "everything better" objective, per-domain words not a score
 export * from "./repo/journey.js"; // body-composition journey phases + leanness-aware cut foundation

@@ -67,6 +67,32 @@ function createCaptureReadJobsController(deps: CaptureReadJobsDeps): CaptureRead
     });
   }
 
+  // An EXPLICIT athlete-pulled re-read of the weekly card (the stale affordance).
+  // Same op + streaming as maybeGenerateWeekly, but with NO calendar/cooldown gate
+  // — a pull is always honored. Still agent-gated and calm on failure, and it burns
+  // the background cooldown so the quiet fallback doesn't immediately re-fire.
+  function forceGenerateWeekly(): void {
+    const target = deps.slot("#weeklySlot");
+    if (!target) return;
+    deps.runOp("weekly_read", { kind: "weekly_read" }, {
+      path: "/insights/generate",
+      anchor: "#weeklySlot",
+      stream: true,
+      guard: () => !deps.slot("#weeklySlot")?.isConnected,
+      isFail: (r: unknown) => insightFailed(r as CaptureInsightResult | null),
+      render: (r: unknown) => {
+        const result = r as CaptureInsightResult;
+        burnGate("cairn:lastWeeklyGen");
+        if (deps.state.tab !== "today") return;
+        const s = deps.slot("#weeklySlot");
+        if (s && result.insight) deps.renderWeeklyInSlot(s, result.insight);
+      },
+      onFail: (err: unknown) => {
+        if (err) burnGate("cairn:lastWeeklyGen");
+      },
+    });
+  }
+
   function reconnectInsight(): ClientAgentOpHandlers | null {
     if (deps.state.tab !== "today") return null;
     const target = deps.slot("#insightSlot");
@@ -92,6 +118,7 @@ function createCaptureReadJobsController(deps: CaptureReadJobsDeps): CaptureRead
   return {
     maybeGenerateInsight,
     maybeGenerateWeekly,
+    forceGenerateWeekly,
     reconnectInsight,
   };
 }

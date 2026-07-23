@@ -2008,6 +2008,12 @@ declare global {
       highlightTerm(text: unknown, query: unknown): string;
       historySessionRow(session: Partial<ClientChatSessionSummary>, whenLabel: string): string;
       historyHitRow(hit: Partial<ClientChatSearchHit>, query: unknown, whenLabel: string): string;
+      captureFoodActive(status: unknown): boolean;
+      captureFoodInfo(action: unknown):
+        | { id: number; status: string; food: Record<string, unknown>; missing: boolean }
+        | null;
+      captureFoodFromRow(row: unknown): { status: string; food: Record<string, unknown> };
+      captureFoodTagInner(status: unknown, food: unknown): string;
     };
 
     CairnChatHeaderController: {

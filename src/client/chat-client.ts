@@ -174,6 +174,77 @@ function chatFuelHtml(day: ChatClientDayIntake | null | undefined): string {
     </button>`;
 }
 
+// ---- chat food-capture feedback ----------------------------------------
+// A capture-lane food log links a food_notes row whose macros fill in later via
+// background enrichment. The server stamps the applied log_food result with the
+// note's live enrichment_status + a compact {meal,summary,kcal,protein_g}; these
+// pure helpers turn that into the in-thread chip and keep it in sync as the note's
+// SSE stream settles (see chat-message-client.ts).
+type CaptureFood = { meal?: unknown; summary?: unknown; kcal?: unknown; protein_g?: unknown };
+type CaptureFoodInfo = { id: number; status: string; food: CaptureFood; missing: boolean };
+
+function captureFoodActive(status: unknown): boolean {
+  const s = String(status || "");
+  return s === "pending" || s === "in_progress";
+}
+
+function capMealLabel(value: unknown): string {
+  const s = String(value ?? "").trim();
+  if (!s) return "Meal";
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+// Pull the linked-note descriptor out of an applied log_food action, or null when
+// this isn't a capture we can track (wrong type, no note id, or note deleted).
+function captureFoodInfo(action: unknown): CaptureFoodInfo | null {
+  const a = action && typeof action === "object" ? (action as Record<string, unknown>) : null;
+  if (!a || String(a.type || "") !== "log_food") return null;
+  const result = a.result && typeof a.result === "object" ? (a.result as Record<string, unknown>) : null;
+  if (!result) return null;
+  const id = Number(result.id);
+  if (!Number.isSafeInteger(id) || id <= 0) return null;
+  const food: CaptureFood = result.food && typeof result.food === "object" ? { ...(result.food as CaptureFood) } : {};
+  if (food.meal == null && result.meal != null) food.meal = result.meal;
+  return { id, status: String(result.enrichment_status || ""), food, missing: result.food_note_missing === true };
+}
+
+// Map a fetched food-note row (SSE update / poll) back to {status, food} so the chip
+// updates in place from the same rendering path as the initial server-stamped state.
+function captureFoodFromRow(row: unknown): { status: string; food: CaptureFood } {
+  const r = row && typeof row === "object" ? (row as Record<string, unknown>) : {};
+  let parsed: unknown = r.parsed;
+  if (typeof parsed === "string") {
+    try { parsed = JSON.parse(parsed); } catch { parsed = null; }
+  }
+  if ((parsed == null || typeof parsed !== "object") && r.parsed_json) {
+    try { parsed = JSON.parse(String(r.parsed_json)); } catch { parsed = null; }
+  }
+  const p = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+  return {
+    status: String(r.enrichment_status || ""),
+    food: { meal: r.meal, summary: p.summary, kcal: p.kcal, protein_g: p.protein_g },
+  };
+}
+
+// The chip's inner HTML for a given status. Active -> a calm "filling in details…"
+// with the spinner dot; done -> "✓ Dinner · 640 kcal · 40g protein" (or "✓ Dinner
+// logged" when no macros came back); failed/skipped -> a calm "logged — details
+// unavailable" (the log itself is never in doubt). escHtml is the ambient global.
+function captureFoodTagInner(status: unknown, food: unknown): string {
+  const s = String(status || "");
+  const f = food && typeof food === "object" ? (food as CaptureFood) : {};
+  if (captureFoodActive(s)) return `<span class="enr-dot" aria-hidden="true"></span>filling in details…`;
+  const meal = capMealLabel(f.meal);
+  if (s === "failed" || s === "skipped") return `✓ ${escHtml(meal)} logged — details unavailable`;
+  const bits: string[] = [];
+  const kcal = Number(f.kcal);
+  const protein = Number(f.protein_g);
+  if (Number.isFinite(kcal) && kcal > 0) bits.push(`${Math.round(kcal)} kcal`);
+  if (Number.isFinite(protein) && protein > 0) bits.push(`${Math.round(protein)}g protein`);
+  if (!bits.length) return `✓ ${escHtml(meal)} logged`;
+  return `✓ ${escHtml(`${meal} · ${bits.join(" · ")}`)}`;
+}
+
 function highlightTerm(text: unknown, query: unknown): string {
   const escaped = escHtml(text);
   const term = String(query || "").trim();
@@ -224,6 +295,10 @@ const CAIRN_CHAT_CLIENT = {
   userMessageSuggestsFood: chatUserMessageSuggestsFood,
   wantsFuelSurface: chatWantsFuelSurface,
   fuelHtml: chatFuelHtml,
+  captureFoodActive,
+  captureFoodInfo,
+  captureFoodFromRow,
+  captureFoodTagInner,
   highlightTerm,
   historySessionRow: chatHistorySessionRow,
   historyHitRow: chatHistoryHitRow,
