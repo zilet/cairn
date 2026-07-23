@@ -1,15 +1,27 @@
 import crypto from "node:crypto";
 import { db } from "../db.js";
+import { getBuildInfo } from "../build-info.js";
 import { telemetryErrorName } from "../telemetry-privacy.js";
 import { isAgentJobKind, type AgentJobKind } from "../agentJobKinds.js";
 import { addMemory } from "./memory.js";
 import { activeTimeZone } from "../tz.js";
+import {
+  escalateChatRouting,
+  normalizeChatRoutingDecision,
+  type ChatLane,
+  type ChatRoutingDecision,
+} from "../chatRouting.js";
+import { withSqliteSavepoint } from "./sqlite-savepoint.js";
 
 // ---------- chat ----------
 function hydrateChat(row: any) {
   if (!row) return row;
   let meta: any = null;
-  try { meta = row.meta ? JSON.parse(row.meta) : null; } catch { meta = null; }
+  try {
+    meta = row.meta ? JSON.parse(row.meta) : null;
+  } catch {
+    meta = null;
+  }
   // A draft's apply button is rendered from this meta on every load, but the
   // proposal lives on independently — once applied (here or from the proposals
   // list) the chat message must reflect that, not keep offering "Apply". Stamp
@@ -54,18 +66,23 @@ export function getChatMessage(id: number) {
 // The live conversation: archived turns are excluded (they stay in the DB and
 // in /api/export, but a "fresh start" or clear removes them from view).
 export function listChatMessages(limit = 50) {
-  const rows = db.prepare(`SELECT * FROM chat_messages WHERE archived_at IS NULL ORDER BY id DESC LIMIT ?`).all(limit) as any[];
+  const rows = db
+    .prepare(`SELECT * FROM chat_messages WHERE archived_at IS NULL ORDER BY id DESC LIMIT ?`)
+    .all(limit) as any[];
   return rows.reverse().map(hydrateChat);
 }
 
 // "Fresh start" / clear both archive rather than delete: chat turns are part of
 // the athlete's history and exports, so nothing is ever hard-deleted anymore.
 export function archiveChat() {
-  const row = db.prepare(`SELECT MIN(id) AS first_id, COUNT(*) AS count FROM chat_messages WHERE archived_at IS NULL`).get() as any;
+  const row = db
+    .prepare(`SELECT MIN(id) AS first_id, COUNT(*) AS count FROM chat_messages WHERE archived_at IS NULL`)
+    .get() as any;
   const count = Number(row?.count ?? 0);
   if (count <= 0 || row?.first_id == null) return { archived: 0, session_id: null };
   const sessionId = `chat_${Number(row.first_id)}`;
-  const changes = db.prepare(`UPDATE chat_messages SET archived_at = datetime('now'), session_id = ? WHERE archived_at IS NULL`)
+  const changes = db
+    .prepare(`UPDATE chat_messages SET archived_at = datetime('now'), session_id = ? WHERE archived_at IS NULL`)
     .run(sessionId).changes;
   return { archived: changes, session_id: sessionId };
 }
@@ -130,7 +147,17 @@ export function listChatMessagesBefore(beforeId: number, limit = 20) {
 function hydrateChatTurn(row: any) {
   if (!row) return row;
   let meta: any = null;
-  try { meta = row.meta ? JSON.parse(row.meta) : null; } catch { meta = null; }
+  try {
+    meta = row.meta ? JSON.parse(row.meta) : null;
+  } catch {
+    meta = null;
+  }
+  let routing: ChatRoutingDecision | null = null;
+  try {
+    routing = row.routing_json ? normalizeChatRoutingDecision(JSON.parse(row.routing_json)) : null;
+  } catch {
+    routing = null;
+  }
   // Stamp each draft with its CURRENT proposal status (mirrors hydrateChat) so a
   // turn snapshot reflects an applied/missing proposal, never a stale "Apply".
   if (meta?.drafts?.length) {
@@ -141,7 +168,7 @@ function hydrateChatTurn(row: any) {
     }
   }
   stampLabConfirms(meta);
-  return { ...row, meta };
+  return { ...row, meta, routing };
 }
 
 export function createChatTurn(t: {
@@ -150,16 +177,148 @@ export function createChatTurn(t: {
   image_url?: string | null;
   agent?: string | null;
   user_message_id?: number | null;
+  routing?: unknown;
+  capture_food_note_id?: number | null;
+  request_id?: string | null;
 }) {
   // Capture the device timezone NOW, while we're still inside the request (the
   // X-Cairn-TZ middleware set it). The worker drains later, with no request in
   // scope, so it re-establishes this zone from the row to frame "now"/day-keys.
   const tz = activeTimeZone() ?? null;
+  const routing = t.routing === undefined ? null : normalizeChatRoutingDecision(t.routing);
+  if (t.routing !== undefined && !routing) throw new Error("invalid chat routing decision");
+  const captureFoodNoteId = normalizeCaptureFoodNoteId(t.capture_food_note_id);
   const info = db
-    .prepare(`INSERT INTO chat_turns (status, phase, message, image_path, image_url, agent, user_message_id, tz)
-              VALUES ('queued', 'queued', ?, ?, ?, ?, ?, ?)`)
-    .run(t.message ?? null, t.image_path ?? null, t.image_url ?? null, t.agent ?? null, t.user_message_id ?? null, tz);
+    .prepare(`INSERT INTO chat_turns
+                (status, phase, created_at, message, image_path, image_url, agent, user_message_id, tz,
+                 routing_json, capture_food_note_id, request_id, build_id)
+              VALUES ('queued', 'queued', strftime('%Y-%m-%d %H:%M:%f','now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(
+      t.message ?? null,
+      t.image_path ?? null,
+      t.image_url ?? null,
+      t.agent ?? null,
+      t.user_message_id ?? null,
+      tz,
+      routing ? JSON.stringify(routing) : null,
+      captureFoodNoteId,
+      t.request_id ?? null,
+      getBuildInfo().build_id
+    );
   return getChatTurn(Number(info.lastInsertRowid));
+}
+
+export function getChatTurnByRequestId(requestId: string) {
+  return hydrateChatTurn(db.prepare(`SELECT * FROM chat_turns WHERE request_id = ?`).get(requestId));
+}
+
+// Count and return a durable retry receipt without repeating any side effect.
+// The request key is operational metadata only; no content hash/fingerprint is
+// stored. The increment is synchronous on the shared SQLite connection.
+export function replayChatRequest(requestId: string) {
+  const changed = db
+    .prepare(`UPDATE chat_turns SET idempotent_replays = idempotent_replays + 1 WHERE request_id = ?`)
+    .run(requestId);
+  if (Number(changed.changes) !== 1) return null;
+  const turn = getChatTurnByRequestId(requestId) as any;
+  return {
+    turn,
+    user_message: turn?.user_message_id ? getChatMessage(Number(turn.user_message_id)) : null,
+  };
+}
+
+// Persist the user bubble and its durable turn as one unit. request_id is unique
+// when present, so even a future multi-process deployment cannot commit two
+// messages for the same retry key.
+export function createChatRequest(
+  t: Parameters<typeof createChatTurn>[0] & {
+    user_content: string;
+    user_meta?: any;
+  }
+) {
+  return withSqliteSavepoint("create_chat_request", () => {
+    const userMessage = addChatMessage("user", t.user_content, null, t.user_meta);
+    const turn = createChatTurn({ ...t, user_message_id: (userMessage as any).id });
+    return { turn, user_message: userMessage };
+  });
+}
+
+function normalizeCaptureFoodNoteId(value: unknown): number | null {
+  if (value == null) return null;
+  const id = Number(value);
+  if (!Number.isSafeInteger(id) || id <= 0) throw new Error("invalid capture food note id");
+  return id;
+}
+
+// First-write-wins: recovery reads and reuses the persisted decision instead of
+// silently reclassifying a queued turn under a newer process/policy invocation.
+export function setChatTurnRouting(id: number, decision: unknown) {
+  const normalized = normalizeChatRoutingDecision(decision);
+  if (!normalized) throw new Error("invalid chat routing decision");
+  const current = getChatTurn(id) as any;
+  if (!current) return null;
+  if (current.routing) return current;
+  db.prepare(
+    `UPDATE chat_turns SET routing_json = ?
+       WHERE id = ? AND status = 'queued' AND (routing_json IS NULL OR routing_json = '')`
+  ).run(JSON.stringify(normalized), id);
+  return getChatTurn(id);
+}
+
+export function getChatTurnRouting(id: number): ChatRoutingDecision | null {
+  return (getChatTurn(id) as any)?.routing ?? null;
+}
+
+// Monotonic model-requested escalation. Only the taxonomy decision is updated;
+// source text, prompts, replies and image paths never enter routing_json.
+export function escalateChatTurnRouting(id: number, lane: ChatLane) {
+  const current = getChatTurn(id) as any;
+  if (!current?.routing) throw new Error("chat turn has no adaptive routing decision");
+  const next = escalateChatRouting(current.routing, lane);
+  db.prepare(`UPDATE chat_turns SET routing_json = ? WHERE id = ? AND status = 'running'`).run(
+    JSON.stringify(next),
+    id
+  );
+  return getChatTurn(id);
+}
+
+// First-write-wins link used by instant food capture and crash recovery.
+export function setChatTurnCaptureFoodNoteId(id: number, foodNoteId: unknown) {
+  const normalized = normalizeCaptureFoodNoteId(foodNoteId);
+  if (normalized == null) throw new Error("invalid capture food note id");
+  db.prepare(
+    `UPDATE chat_turns SET capture_food_note_id = ?
+       WHERE id = ? AND status IN ('queued','running') AND capture_food_note_id IS NULL`
+  ).run(normalized, id);
+  return getChatTurn(id);
+}
+
+// The instant path must be terminal before POST /chat returns, and recovery must
+// not duplicate its confirmation. Insert the assistant row and finish the turn in
+// one SQLite unit; a repeated call simply returns the already-linked message.
+export function finishInstantCaptureChatTurn(id: number, fields: { reply: string; meta: any }) {
+  return withSqliteSavepoint(`finish_instant_chat_${id}`, () => {
+    const current = getChatTurn(id) as any;
+    if (!current) return null;
+    if (current.assistant_message_id) {
+      return { turn: current, message: getChatMessage(Number(current.assistant_message_id)) };
+    }
+    if (!["queued", "running"].includes(String(current.status))) return { turn: current, message: null };
+    const info = db
+      .prepare(`INSERT INTO chat_messages (role, content, agent, meta) VALUES ('assistant', ?, NULL, ?)`)
+      .run(String(fields.reply ?? ""), fields.meta ? JSON.stringify(fields.meta) : null);
+    const assistantId = Number(info.lastInsertRowid);
+    db.prepare(`UPDATE chat_turns
+                   SET status='done', phase='done', finished_at=strftime('%Y-%m-%d %H:%M:%f','now'),
+                       reply=?, chosen_agent=NULL, assistant_message_id=?, meta=?
+                 WHERE id=? AND status IN ('queued','running') AND assistant_message_id IS NULL`).run(
+      String(fields.reply ?? ""),
+      assistantId,
+      fields.meta ? JSON.stringify(fields.meta) : null,
+      id
+    );
+    return { turn: getChatTurn(id), message: getChatMessage(assistantId) };
+  });
 }
 
 export function getChatTurn(id: number) {
@@ -177,7 +336,7 @@ export function listActiveChatTurns() {
 
 // queued → running (guarded so a canceled-while-queued turn is never picked up).
 export function markChatTurnRunning(id: number) {
-  db.prepare(`UPDATE chat_turns SET status='running', phase='running', started_at=datetime('now')
+  db.prepare(`UPDATE chat_turns SET status='running', phase='running', started_at=strftime('%Y-%m-%d %H:%M:%f','now')
               WHERE id=? AND status='queued'`).run(id);
   return getChatTurn(id);
 }
@@ -192,16 +351,15 @@ export function finishChatTurn(
   fields: { reply: string; chosen_agent?: string | null; assistant_message_id?: number | null; meta?: any }
 ) {
   db.prepare(`UPDATE chat_turns
-                 SET status='done', phase='done', finished_at=datetime('now'),
+                 SET status='done', phase='done', finished_at=strftime('%Y-%m-%d %H:%M:%f','now'),
                      reply=?, chosen_agent=?, assistant_message_id=?, meta=?
-               WHERE id=?`)
-    .run(
-      (fields.reply ?? "").toString(),
-      fields.chosen_agent ?? null,
-      fields.assistant_message_id ?? null,
-      fields.meta ? JSON.stringify(fields.meta) : null,
-      id,
-    );
+               WHERE id=?`).run(
+    (fields.reply ?? "").toString(),
+    fields.chosen_agent ?? null,
+    fields.assistant_message_id ?? null,
+    fields.meta ? JSON.stringify(fields.meta) : null,
+    id
+  );
   return getChatTurn(id);
 }
 
@@ -212,9 +370,8 @@ function safeTerminalError(error: unknown): string {
 
 export function failChatTurn(id: number, error: unknown, assistantMessageId?: number | null) {
   db.prepare(`UPDATE chat_turns
-                 SET status='error', phase='error', finished_at=datetime('now'), error=?, assistant_message_id=?
-               WHERE id=?`)
-    .run(safeTerminalError(error), assistantMessageId ?? null, id);
+                 SET status='error', phase='error', finished_at=strftime('%Y-%m-%d %H:%M:%f','now'), error=?, assistant_message_id=?
+               WHERE id=?`).run(safeTerminalError(error), assistantMessageId ?? null, id);
   return getChatTurn(id);
 }
 
@@ -224,7 +381,9 @@ export function failChatTurn(id: number, error: unknown, assistantMessageId?: nu
 export function cancelChatTurn(id: number) {
   const row = getChatTurn(id) as any;
   if (!row || !["queued", "running"].includes(row.status)) return null;
-  db.prepare(`UPDATE chat_turns SET status='canceled', phase='canceled', finished_at=datetime('now') WHERE id=?`).run(id);
+  db.prepare(
+    `UPDATE chat_turns SET status='canceled', phase='canceled', finished_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=?`
+  ).run(id);
   return getChatTurn(id);
 }
 
@@ -242,10 +401,12 @@ export function recoverChatTurns(): { requeue: number[]; interrupted: number } {
         "assistant",
         "That turn was interrupted by a restart — ask again if you still need it.",
         null,
-        { error: true },
+        { error: true }
       );
       amid = (msg as any)?.id ?? null;
-    } catch { /* never block recovery on the note */ }
+    } catch {
+      /* never block recovery on the note */
+    }
     failChatTurn(r.id, "interrupted by a restart", amid);
   }
   const queued = db.prepare(`SELECT id FROM chat_turns WHERE status='queued' ORDER BY id ASC`).all() as any[];
@@ -267,11 +428,23 @@ export function recoverChatTurns(): { requeue: number[]; interrupted: number } {
 function hydrateAgentJob(row: any): any {
   if (!row) return null;
   let input: any = null;
-  try { input = row.input_json ? JSON.parse(row.input_json) : null; } catch { input = null; }
+  try {
+    input = row.input_json ? JSON.parse(row.input_json) : null;
+  } catch {
+    input = null;
+  }
   let result: any = null;
-  try { result = row.result_json ? JSON.parse(row.result_json) : null; } catch { result = null; }
+  try {
+    result = row.result_json ? JSON.parse(row.result_json) : null;
+  } catch {
+    result = null;
+  }
   let meta: any = null;
-  try { meta = row.meta ? JSON.parse(row.meta) : null; } catch { meta = null; }
+  try {
+    meta = row.meta ? JSON.parse(row.meta) : null;
+  } catch {
+    meta = null;
+  }
   const out: any = { ...row, input, meta };
   delete out.input_json;
   delete out.result_json;
@@ -286,22 +459,12 @@ function hydrateAgentJob(row: any): any {
   return out;
 }
 
-export function createAgentJob(j: {
-  kind: AgentJobKind;
-  input?: any;
-  agent?: string | null;
-  phase?: string | null;
-}) {
+export function createAgentJob(j: { kind: AgentJobKind; input?: any; agent?: string | null; phase?: string | null }) {
   if (!isAgentJobKind(j.kind)) throw new Error(`unknown job kind: ${j.kind}`);
   const info = db
     .prepare(`INSERT INTO agent_jobs (status, kind, phase, input_json, agent)
               VALUES ('queued', ?, ?, ?, ?)`)
-    .run(
-      String(j.kind),
-      j.phase ?? "queued",
-      j.input != null ? JSON.stringify(j.input) : null,
-      j.agent ?? null,
-    );
+    .run(String(j.kind), j.phase ?? "queued", j.input != null ? JSON.stringify(j.input) : null, j.agent ?? null);
   return getAgentJob(Number(info.lastInsertRowid));
 }
 
@@ -393,7 +556,11 @@ export function getAgentJob(id: number) {
 export function getAgentJobRawInput(id: number): any {
   const row = db.prepare(`SELECT input_json FROM agent_jobs WHERE id = ?`).get(id) as any;
   if (!row || !row.input_json) return null;
-  try { return JSON.parse(row.input_json); } catch { return null; }
+  try {
+    return JSON.parse(row.input_json);
+  } catch {
+    return null;
+  }
 }
 
 // Active = not yet terminal, oldest-first — the worker drains in this order and
@@ -415,8 +582,11 @@ export function markAgentJobRunning(id: number) {
 // Update the live progress phase (+ optional determinate meta) of a running job.
 export function setAgentJobPhase(id: number, phase: string, meta?: any) {
   if (meta !== undefined) {
-    db.prepare(`UPDATE agent_jobs SET phase=?, meta=? WHERE id=? AND status='running'`)
-      .run(phase, meta != null ? JSON.stringify(meta) : null, id);
+    db.prepare(`UPDATE agent_jobs SET phase=?, meta=? WHERE id=? AND status='running'`).run(
+      phase,
+      meta != null ? JSON.stringify(meta) : null,
+      id
+    );
   } else {
     db.prepare(`UPDATE agent_jobs SET phase=? WHERE id=? AND status='running'`).run(phase, id);
   }
@@ -425,28 +595,32 @@ export function setAgentJobPhase(id: number, phase: string, meta?: any) {
 
 export function finishAgentJob(
   id: number,
-  fields: { result?: any; chosen_agent?: string | null; ref_table?: string | null; ref_id?: number | null; cache_key?: string | null }
+  fields: {
+    result?: any;
+    chosen_agent?: string | null;
+    ref_table?: string | null;
+    ref_id?: number | null;
+    cache_key?: string | null;
+  }
 ) {
   db.prepare(`UPDATE agent_jobs
                  SET status='done', phase='done', finished_at=datetime('now'),
                      result_json=?, chosen_agent=?, ref_table=?, ref_id=?, cache_key=?
-               WHERE id=?`)
-    .run(
-      fields.result !== undefined ? JSON.stringify(fields.result) : null,
-      fields.chosen_agent ?? null,
-      fields.ref_table ?? null,
-      fields.ref_id ?? null,
-      fields.cache_key ?? null,
-      id,
-    );
+               WHERE id=?`).run(
+    fields.result !== undefined ? JSON.stringify(fields.result) : null,
+    fields.chosen_agent ?? null,
+    fields.ref_table ?? null,
+    fields.ref_id ?? null,
+    fields.cache_key ?? null,
+    id
+  );
   return getAgentJob(id);
 }
 
 export function failAgentJob(id: number, error: unknown) {
   db.prepare(`UPDATE agent_jobs
                  SET status='error', phase='error', finished_at=datetime('now'), error=?
-               WHERE id=?`)
-    .run(safeTerminalError(error), id);
+               WHERE id=?`).run(safeTerminalError(error), id);
   return getAgentJob(id);
 }
 
@@ -456,7 +630,9 @@ export function failAgentJob(id: number, error: unknown) {
 export function cancelAgentJob(id: number) {
   const row = getAgentJob(id) as any;
   if (!row || !["queued", "running"].includes(row.status)) return null;
-  db.prepare(`UPDATE agent_jobs SET status='canceled', phase='canceled', finished_at=datetime('now') WHERE id=?`).run(id);
+  db.prepare(`UPDATE agent_jobs SET status='canceled', phase='canceled', finished_at=datetime('now') WHERE id=?`).run(
+    id
+  );
   return getAgentJob(id);
 }
 
@@ -492,7 +668,10 @@ export function fingerprint(parts: any): string {
     }
     return v;
   };
-  return crypto.createHash("sha1").update(JSON.stringify(canonical(parts))).digest("hex");
+  return crypto
+    .createHash("sha1")
+    .update(JSON.stringify(canonical(parts)))
+    .digest("hex");
 }
 
 export interface AiCacheHit {
@@ -501,18 +680,26 @@ export interface AiCacheHit {
   ref_table: string | null;
   ref_id: number | null;
   computed_at: string;
-  stale: boolean;        // true → still served, but a fresh compute should run in the background
+  stale: boolean; // true → still served, but a fresh compute should run in the background
 }
 
 export function getAiCache(kind: string, cacheKey: string): AiCacheHit | null {
   const row = db.prepare(`SELECT * FROM ai_cache WHERE kind = ? AND cache_key = ?`).get(kind, cacheKey) as any;
   if (!row) return null;
   let result: any = null;
-  try { result = row.result_json ? JSON.parse(row.result_json) : null; } catch { result = null; }
+  try {
+    result = row.result_json ? JSON.parse(row.result_json) : null;
+  } catch {
+    result = null;
+  }
   if (result == null) return null;
   // Stale boundary: stale_after is a UTC "now"-comparable stamp; past it the hit
   // is still served (instant) but flagged so the caller can revalidate.
-  const staleRow = db.prepare(`SELECT (stale_after IS NOT NULL AND stale_after < datetime('now')) AS stale FROM ai_cache WHERE kind=? AND cache_key=?`).get(kind, cacheKey) as any;
+  const staleRow = db
+    .prepare(
+      `SELECT (stale_after IS NOT NULL AND stale_after < datetime('now')) AS stale FROM ai_cache WHERE kind=? AND cache_key=?`
+    )
+    .get(kind, cacheKey) as any;
   return {
     result,
     chosen_agent: row.chosen_agent ?? null,
@@ -526,7 +713,13 @@ export function getAiCache(kind: string, cacheKey: string): AiCacheHit | null {
 export function saveAiCache(
   kind: string,
   cacheKey: string,
-  fields: { result: any; chosen_agent?: string | null; ref_table?: string | null; ref_id?: number | null; freshForMs?: number }
+  fields: {
+    result: any;
+    chosen_agent?: string | null;
+    ref_table?: string | null;
+    ref_id?: number | null;
+    freshForMs?: number;
+  }
 ): void {
   if (!kind || !cacheKey || fields.result == null) return;
   const freshForMs = Number.isFinite(fields.freshForMs as number) ? (fields.freshForMs as number) : 6 * 60 * 60 * 1000;
@@ -538,11 +731,18 @@ export function saveAiCache(
        ref_table=excluded.ref_table, ref_id=excluded.ref_id, result_json=excluded.result_json,
        chosen_agent=excluded.chosen_agent, computed_at=excluded.computed_at, stale_after=excluded.stale_after`
   ).run(
-    kind, cacheKey, fields.ref_table ?? null, fields.ref_id ?? null,
-    JSON.stringify(fields.result), fields.chosen_agent ?? null, staleAfter,
+    kind,
+    cacheKey,
+    fields.ref_table ?? null,
+    fields.ref_id ?? null,
+    JSON.stringify(fields.result),
+    fields.chosen_agent ?? null,
+    staleAfter
   );
   // Keep the cache bounded — old rows are never served past their staleness.
-  try { db.prepare(`DELETE FROM ai_cache WHERE computed_at < datetime('now','-30 days')`).run(); } catch {}
+  try {
+    db.prepare(`DELETE FROM ai_cache WHERE computed_at < datetime('now','-30 days')`).run();
+  } catch {}
 }
 
 // ---------- chat history (read-only browse + search over archived turns) ----------
@@ -550,7 +750,8 @@ export function saveAiCache(
 // archived_at. Group them into browsable sessions, newest first, each with a
 // one-line preview. `archived_at` stays in the payload for older clients/MCP.
 export function listArchivedSessions(limit = 50): ArchivedChatSession[] {
-  const rows = db.prepare(`
+  const rows = db
+    .prepare(`
     SELECT COALESCE(m.session_id, 'chat_' || MIN(m.id)) AS session_id,
            MAX(m.archived_at) AS archived_at,
            COUNT(*)          AS count,
@@ -564,9 +765,14 @@ export function listArchivedSessions(limit = 50): ArchivedChatSession[] {
     WHERE m.archived_at IS NOT NULL
     GROUP BY COALESCE(m.session_id, m.archived_at)
     ORDER BY archived_at DESC
-    LIMIT ?`).all(Math.min(200, Math.max(1, limit))) as any[];
+    LIMIT ?`)
+    .all(Math.min(200, Math.max(1, limit))) as any[];
   return rows.map((r) => ({
-    session_id: r.session_id, archived_at: r.archived_at, count: r.count, started_at: r.started_at, ended_at: r.ended_at,
+    session_id: r.session_id,
+    archived_at: r.archived_at,
+    count: r.count,
+    started_at: r.started_at,
+    ended_at: r.ended_at,
     preview: (r.preview ?? "").toString().replace(/\s+/g, " ").trim().slice(0, 120),
   }));
 }
@@ -575,12 +781,14 @@ export function listArchivedSessions(limit = 50): ArchivedChatSession[] {
 // the stable session_id first, with archived_at as a legacy fallback.
 export function getArchivedConversation(sessionIdOrArchivedAt: string) {
   const key = String(sessionIdOrArchivedAt ?? "");
-  const rows = db.prepare(
-    `SELECT * FROM chat_messages
+  const rows = db
+    .prepare(
+      `SELECT * FROM chat_messages
       WHERE archived_at IS NOT NULL
         AND (session_id = ? OR archived_at = ?)
       ORDER BY id ASC`
-  ).all(key, key) as any[];
+    )
+    .all(key, key) as any[];
   return rows.map(hydrateChat);
 }
 
@@ -591,17 +799,25 @@ export function searchChatMessages(q: string, limit = 40): ChatSearchHit[] {
   const query = (q ?? "").toString().trim();
   if (!query) return [];
   const like = "%" + query.replace(/[\\%_]/g, (c) => "\\" + c) + "%";
-  const rows = db.prepare(`
+  const rows = db
+    .prepare(`
     SELECT * FROM chat_messages
     WHERE content LIKE ? ESCAPE '\\'
-    ORDER BY id DESC LIMIT ?`).all(like, Math.min(200, Math.max(1, limit))) as any[];
+    ORDER BY id DESC LIMIT ?`)
+    .all(like, Math.min(200, Math.max(1, limit))) as any[];
   const lower = query.toLowerCase();
   return rows.map((r) => {
     const m = hydrateChat(r);
     const content = (m.content ?? "").toString();
     const idx = content.toLowerCase().indexOf(lower);
     let snippet = content.replace(/\s+/g, " ").trim();
-    if (idx > 60) snippet = "…" + content.slice(Math.max(0, idx - 40)).replace(/\s+/g, " ").trim();
+    if (idx > 60)
+      snippet =
+        "…" +
+        content
+          .slice(Math.max(0, idx - 40))
+          .replace(/\s+/g, " ")
+          .trim();
     return {
       id: m.id,
       role: m.role,

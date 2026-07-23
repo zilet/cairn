@@ -145,6 +145,8 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
       coach_day: +wm.coach_day,
       coach_hour: +wm.coach_hour,
       agent_routes: wm.routes,
+      chat_routing_mode: wm.chat_routing_mode,
+      chat_profile_bindings: wm.chat_profile_bindings,
       update_check_enabled: wm.update_check_enabled,
       lead_mode: wm.lead_mode,
     };

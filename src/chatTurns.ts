@@ -5,14 +5,17 @@ import { db } from "./db.js";
 import { createProgressBus, createSerialRunner } from "./jobRunner.js";
 import * as repo from "./repo.js";
 import { UPLOADS_DIR } from "./uploadPaths.js";
-import { buildChatPrompt, parseChatReply } from "./prompt.js";
-import { chatHistoryTimeLabel, localDateISO, parseDbTime } from "./repo/shared.js";
+import { buildChatPrompt, parseChatEscalationRequest, parseChatReply } from "./prompt.js";
+import { chatHistoryTimeLabel, localDateISO, nowContext, parseDbTime } from "./repo/shared.js";
 import { runWithTimeZone } from "./tz.js";
 import {
   runAgent,
   runAgentStreaming,
   agentSupportsStream,
   INTERACTIVE_TIMEOUT_MS,
+  loadAgents,
+  resolveAgentExecutionProfile,
+  type AgentDef,
   type AgentResult,
 } from "./agents.js";
 import { createChatStreamFilter, type LiveReplyEvent } from "./chatStreamFilter.js";
@@ -20,6 +23,13 @@ import type { MemoryKind } from "./repo/memory.js";
 import { normalizeChatActions, type ChatAction, type ChatActionType, type LogFoodAction } from "./chatActions.js";
 import { applyProposalWithAutonomy, revertDecision } from "./domain/brain/autonomy-service.js";
 import { diagnosticErrorName, recordAsyncFailure } from "./diagnostics.js";
+import {
+  chatMessageRequestsCoaching,
+  resolveChatProfile,
+  type ChatLane,
+  type ChatRoutingDecision,
+  type ResolvedChatProfile,
+} from "./chatRouting.js";
 
 // Background, in-process chat-turn engine — the durable counterpart to the
 // enrichment queue. A chat turn is no longer a blocking request/response: the
@@ -42,6 +52,7 @@ import { diagnosticErrorName, recordAsyncFailure } from "./diagnostics.js";
 // for live pushes.
 export type TurnEvent =
   | { type: "phase"; turn: any }
+  | { type: "routing"; routing: ChatRoutingDecision }
   | LiveReplyEvent
   | { type: "done"; turn: any; message: any }
   | { type: "error"; turn: any; message: any }
@@ -98,6 +109,72 @@ export function enqueueChatTurn(id: number): void {
   runner.enqueue(id);
 }
 
+const INSTANT_FOOD_ALLOWED_REASONS = new Set(["explicit_food_log", "photo_food_default", "explicit_fast_request"]);
+const QUESTION_LEAD_RE = /^(?:what|why|how|when|where|who|which|did|does|do|is|are|was|were|should|could|would|can)\b/i;
+
+export function isInstantFoodCaptureDecision(
+  decision: ChatRoutingDecision | null | undefined,
+  message: string | null | undefined
+): boolean {
+  if (!decision || decision.lane !== "capture") return false;
+  const reasons = decision.reason_codes;
+  // A bare photo is cheap to classify in the capture lane, but it is not consent
+  // to log food. The receipt-only bypass requires explicit food-log language.
+  if (!reasons.includes("explicit_food_log")) return false;
+  if (reasons.some((reason) => !INSTANT_FOOD_ALLOWED_REASONS.has(reason))) return false;
+  const text = String(message ?? "").trim();
+  if (chatMessageRequestsCoaching(text)) return false;
+  if (text && (text.includes("?") || QUESTION_LEAD_RE.test(text))) return false;
+  return true;
+}
+
+export function inferCaptureMeal(message: string | null | undefined, hour = nowContext().hour): string {
+  const text = String(message ?? "");
+  for (const meal of ["breakfast", "lunch", "dinner", "snack"] as const) {
+    if (new RegExp(`\\b${meal}\\b`, "i").test(text)) return meal;
+  }
+  const h = Number(hour);
+  if (h < 11) return "breakfast";
+  if (h < 15) return "lunch";
+  if (h < 18) return "snack";
+  return "dinner";
+}
+
+export function completeInstantFoodCapture(id: number, rawMessage?: string) {
+  const turn = repo.getChatTurn(id) as any;
+  if (!turn) return null;
+  if (turn.assistant_message_id) {
+    return { turn, message: repo.getChatMessage(Number(turn.assistant_message_id)), note: null };
+  }
+  if (!isInstantFoodCaptureDecision(turn.routing, turn.message)) return null;
+  const photo = turn.routing.reason_codes.includes("photo_food_default") && !!turn.image_path;
+  const exactText = String(rawMessage ?? turn.message ?? "");
+  const meal = inferCaptureMeal(turn.message);
+  const summary = (String(turn.message ?? "").trim() || "Photo meal awaiting estimate").slice(0, 200);
+  const note = repo.addChatCaptureFoodNote({
+    turn_id: id,
+    meal,
+    raw: photo ? "" : exactText,
+    parsed: { summary },
+    image_path: photo ? turn.image_path : null,
+    kind: photo ? "photo" : "text",
+  }) as any;
+  const routing = (repo.getChatTurn(id) as any)?.routing ?? turn.routing;
+  const result = { id: note.id, meal: note.meal, enrichment_status: note.enrichment_status ?? null };
+  const meta = {
+    applied: [{ type: "log_food", result }],
+    drafts: [],
+    routing,
+    instant_capture: true,
+  };
+  const reply = photo
+    ? `Logged your ${meal}. I’ll refine the photo estimate in the background.`
+    : `Logged your ${meal}. I’ll fill in the nutrition details in the background.`;
+  const finished = repo.finishInstantCaptureChatTurn(id, { reply, meta }) as any;
+  if (finished?.turn && finished?.message) emit(id, { type: "done", turn: finished.turn, message: finished.message });
+  return { ...finished, note };
+}
+
 async function processChatTurn(id: number): Promise<void> {
   const turn = repo.getChatTurn(id) as any;
   if (!turn || turn.status !== "queued") return; // canceled while queued, or already handled
@@ -109,6 +186,10 @@ async function processChatTurn(id: number): Promise<void> {
 }
 
 async function processChatTurnInner(id: number, turn: any): Promise<void> {
+  if (isInstantFoodCaptureDecision(turn.routing, turn.message)) {
+    completeInstantFoodCapture(id, turn.message ?? "");
+    return;
+  }
   repo.markChatTurnRunning(id);
   emit(id, { type: "phase", turn: repo.getChatTurn(id) });
 
@@ -125,17 +206,11 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
     content: m.content + (m.meta?.image ? " [photo attached]" : ""),
     at: chatHistoryTimeLabel(m.created_at),
   }));
-  const prompt = buildChatPrompt(
-    history,
-    turn.message || "(no text — see the attached photo)",
-    turn.image_path || undefined
-  );
-
   const controller = new AbortController();
   controllers.set(id, controller);
 
   try {
-    const { agent, raw, attempts } = await runChatCompletion(id, turn, prompt, controller.signal);
+    const { agent, raw, attempts } = await runChatCompletion(id, turn, history, controller.signal);
     const { reply: replyText, actions } = parseChatReply(raw);
     const proposedReply = replyText || "(no reply)";
 
@@ -173,10 +248,13 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
       lab_confirms?: typeof labConfirms;
       agent_attempts?: ChatAgentAttempt[];
       clinical_lineage?: ClinicalConversationLineage;
+      routing?: ChatRoutingDecision;
     } = {
       applied,
       drafts: drafts.map(proposalMeta),
     };
+    const finalRouting = repo.getChatTurnRouting(id);
+    if (finalRouting) meta.routing = finalRouting;
     // A substantial pasted lab awaits one-tap confirmation before it writes to Health.
     if (labConfirms.length) meta.lab_confirms = labConfirms;
     if (failedAttempts.length) meta.agent_attempts = attempts;
@@ -255,7 +333,7 @@ function proposalMeta(draft: unknown): { id: unknown; kind: "restructure" | "pla
 
 export function shouldCreatePhotoFoodPlaceholder(message: string | null | undefined): boolean {
   const s = (message ?? "").toString().trim();
-  if (!s) return true; // photo-only in Chat means "estimate/log this plate" by default
+  if (!s) return false; // a bare photo must be identified by vision before any food write
   if (PHOTO_FOOD_HINT_RE.test(s)) return true;
   if (PHOTO_NON_FOOD_HINT_RE.test(s)) return false;
   return false;
@@ -1089,8 +1167,10 @@ function logPhotoFood(actions: ChatAction[], turn: any): { id: number; [key: str
   if (!turn.image_path) return null;
   // Pull out any log_food the agent emitted (it saw the photo) to seed the note.
   const lf = actions.find((a): a is LogFoodAction => a.type === "log_food");
+  // Vision/classification may decide that a bare or ambiguous photo is not food.
+  // Only a structured log_food action authorizes a photo-backed food-note write.
+  if (!lf) return null;
   const message = (turn.message ?? "").toString();
-  if (!lf && !shouldCreatePhotoFoodPlaceholder(message)) return null;
   const parsedNote: Record<string, unknown> = {
     summary: (lf?.summary ?? lf?.name ?? (message.trim() || "Photo meal")).toString(),
     items: Array.isArray(lf?.items) ? lf.items : undefined,
@@ -1153,6 +1233,17 @@ export type ChatAgentAttempt = {
   model?: string | null;
   input_tokens?: number | null;
   output_tokens?: number | null;
+  lane?: ChatLane | null;
+  policy_version?: string | null;
+  reason_codes?: string[];
+  requested_model?: string | null;
+  requested_reasoning?: string | null;
+  effective_reasoning?: string | null;
+  streaming?: boolean;
+  ttft_ms?: number | null;
+  chat_turn_id?: number;
+  attempt_index?: number;
+  escalation_source?: ChatLane | null;
 };
 
 class ChatCompletionError extends Error {
@@ -1272,6 +1363,17 @@ function recordChatAttempt(attempt: ChatAgentAttempt, started: number, parsed: b
       model: attempt.model ?? null,
       input_tokens: attempt.input_tokens ?? null,
       output_tokens: attempt.output_tokens ?? null,
+      lane: attempt.lane ?? null,
+      policy_version: attempt.policy_version ?? null,
+      reason_codes: attempt.reason_codes ?? [],
+      requested_model: attempt.requested_model ?? null,
+      requested_reasoning: attempt.requested_reasoning ?? null,
+      effective_reasoning: attempt.effective_reasoning ?? null,
+      streaming: attempt.streaming ?? false,
+      ttft_ms: attempt.ttft_ms ?? null,
+      chat_turn_id: attempt.chat_turn_id ?? null,
+      attempt_index: attempt.attempt_index ?? null,
+      escalation_source: attempt.escalation_source ?? null,
     });
   } catch {
     /* telemetry never breaks the loop */
@@ -1315,111 +1417,308 @@ function chatFailureReply(e: any): {
   };
 }
 
+export function buildChatProviderOrder(
+  chosen: string | null | undefined,
+  autoOrder: string[],
+  options: {
+    preferWeb?: boolean;
+    preserveSelectedFirst?: boolean;
+    definitions?: Record<string, Pick<AgentDef, "web_access"> | undefined>;
+  } = {}
+): string[] {
+  const selected = String(chosen ?? "").trim();
+  const base = [...new Set([...(selected && selected !== "auto" ? [selected] : []), ...autoOrder.filter(Boolean)])];
+  if (!options.preferWeb) return base;
+  const web = base.filter((name) => options.definitions?.[name]?.web_access === true);
+  if (!web.length) return base;
+  if (options.preserveSelectedFirst && selected && selected !== "auto") {
+    return [...new Set([selected, ...web, ...base])];
+  }
+  return [...web, ...base.filter((name) => !web.includes(name))];
+}
+
+type RuntimeChatProfile = {
+  requested: ResolvedChatProfile | null;
+  effective: ResolvedChatProfile | null;
+  execution: ResolvedChatProfile | null;
+  unsupported: string | null;
+};
+
+export function resolveRuntimeChatProfile(
+  definition: AgentDef | undefined,
+  requested: ResolvedChatProfile | null,
+  explicitlyBound = false
+): RuntimeChatProfile {
+  if (!requested) return { requested: null, effective: null, execution: null, unsupported: null };
+  try {
+    if (!definition) throw new Error("Unknown agent");
+    const resolved = resolveAgentExecutionProfile(definition, requested);
+    const effective = {
+      ...(resolved.effective.model ? { model: resolved.effective.model } : {}),
+      reasoning: resolved.effective.reasoning ?? requested.reasoning,
+    };
+    return {
+      requested,
+      effective,
+      // Pass only capability-validated values. In particular, a legacy custom
+      // provider with no profile flags runs with its own defaults.
+      execution: Object.keys(resolved.effective).length ? effective : null,
+      unsupported: null,
+    };
+  } catch (error: any) {
+    return {
+      requested,
+      effective: null,
+      execution: null,
+      unsupported: explicitlyBound ? cleanCliLine(error?.message ?? error) || "Execution profile unsupported" : null,
+    };
+  }
+}
+
+export function chatExecutionAttemptKey(
+  lane: ChatLane | null,
+  agent: string,
+  profile: Pick<RuntimeChatProfile, "effective">
+): string {
+  return `${lane ?? "legacy"}\0${agent}\0${profile.effective?.model ?? ""}\0${profile.effective?.reasoning ?? "default"}`;
+}
+
 async function runChatCompletion(
   id: number,
   turn: any,
-  prompt: string,
+  history: { role: string; content: string; at?: string }[],
   signal: AbortSignal
 ): Promise<{ agent: string; raw: string; attempts: ChatAgentAttempt[] }> {
   // Per-task routing: a "chat → claude" pin resolves an "auto"/blank turn to that
-  // one enabled agent; an explicit turn.agent or an unrouted turn is unchanged.
+  // agent first; runtime failure still falls through to the other usable auto
+  // providers without weakening the selected lane.
   const chosen = repo.resolveAgentForTask("chat", turn.agent);
-  const order: string[] = chosen && chosen !== "auto" ? [chosen] : repo.pickAgentOrder();
-  if (!order.length) throw new Error("No agents enabled — turn one on in Settings.");
+  const definitions = loadAgents();
   const attempts: ChatAgentAttempt[] = [];
-
-  // ---- streaming attempt on the first agent (live tokens) ----
-  if (agentSupportsStream(order[0])) {
-    const name = order[0];
-    const started = Date.now();
-    const stream = createChatStreamFilter((e) => emit(id, e));
-    streamFilters.set(id, stream); // exposed to the SSE snapshot / poll fallback
-    try {
-      const res = await runAgentStreaming(name, prompt, {
-        signal,
-        timeoutMs: INTERACTIVE_TIMEOUT_MS,
-        onProgress: stream.progress,
-        onDelta: stream.push,
-      });
-      stream.finish();
-      const raw = (res.raw ?? "").toString();
-      const failure = classifyChatAgentResult(name, res);
-      if (!failure) {
-        const attempt: ChatAgentAttempt = {
-          agent: name,
-          ok: true,
-          status: "ok",
-          exit_code: res.code,
-          model: res.usage?.model ?? null,
-          input_tokens: res.usage?.input_tokens ?? null,
-          output_tokens: res.usage?.output_tokens ?? null,
-        };
-        recordChatAttempt(attempt, started, true, false);
-        attempts.push(attempt);
-        return { agent: name, raw, attempts };
-      }
-      recordChatAttempt(failure, started, false, false);
-      attempts.push(failure);
-    } catch (e: any) {
-      if (signal.aborted) throw e; // Stop — propagate to the cancel path
-      const failure = classifyChatException(name, e);
-      recordChatAttempt(failure, started, false, false);
-      attempts.push(failure);
-      // streaming transport failed — fall through to the one-shot rotation
-    }
-    // Nothing usable streamed: clear any partial bubble before the one-shot retry,
-    // then caption the retry so the reset doesn't wipe the visible progress line.
-    stream.reset();
-    stream.progress("Trying another route…");
-  }
-
-  // ---- one-shot rotation (text-based success criterion) ----
+  let decision: ChatRoutingDecision | null = turn.routing ?? null;
+  const order = buildChatProviderOrder(chosen, repo.pickAgentOrder(), {
+    preferWeb: decision?.reason_codes.includes("current_research") === true,
+    // A named provider is an explicit athlete choice. A Settings route pin is
+    // still eligible as fallback, but current research starts with an enabled
+    // web-capable provider whenever the turn itself was auto-routed.
+    preserveSelectedFirst: Boolean(turn.agent && turn.agent !== "auto"),
+    definitions,
+  });
+  if (!order.length) throw new Error("No agents enabled — turn one on in Settings.");
+  const adaptive = !!decision;
+  const bindings = adaptive ? repo.getSettings().chat_profile_bindings : {};
+  const seen = new Set<string>();
+  let attemptIndex = 0;
+  let escalationSource: ChatLane | null = null;
   let lastErr: any = null;
-  for (const name of order) {
-    if (signal.aborted) throw new Error("canceled");
-    if (attempts.some((a) => a.agent === name && a.status === "auth_required")) {
-      lastErr = new Error(`${name}: auth required`);
-      continue;
-    }
+  let lanePasses = 0;
+  const unsupportedSeen = new Set<string>();
+
+  const profileFor = (name: string): RuntimeChatProfile => {
+    if (!decision) return resolveRuntimeChatProfile(definitions[name], null);
+    const requested = resolveChatProfile(decision.lane, name, bindings);
+    const explicitlyBound = Boolean((bindings as any)?.[name]?.[decision.lane]);
+    return resolveRuntimeChatProfile(definitions[name], requested, explicitlyBound);
+  };
+  const decorate = (
+    attempt: ChatAgentAttempt,
+    profile: ReturnType<typeof profileFor>,
+    streaming: boolean,
+    ttft: number | null
+  ): ChatAgentAttempt => ({
+    ...attempt,
+    lane: decision?.lane ?? null,
+    policy_version: decision?.policy_version ?? null,
+    reason_codes: decision?.reason_codes ?? [],
+    requested_model: profile.requested?.model ?? null,
+    requested_reasoning: profile.requested?.reasoning ?? null,
+    effective_reasoning: profile.effective?.reasoning ?? null,
+    streaming,
+    ttft_ms: ttft,
+    chat_turn_id: id,
+    attempt_index: ++attemptIndex,
+    escalation_source: escalationSource,
+  });
+  const noteUnsupportedProfile = (name: string, profile: RuntimeChatProfile): void => {
+    if (!profile.unsupported) return;
+    const key = `${decision?.lane ?? "legacy"}\0${name}\0${profile.requested?.model ?? ""}\0${profile.requested?.reasoning ?? ""}`;
+    if (unsupportedSeen.has(key)) return;
+    unsupportedSeen.add(key);
     const started = Date.now();
-    try {
-      emit(id, { type: "progress", text: "Asking the coach…" });
-      let res = await runAgent(name, prompt, { signal, timeoutMs: INTERACTIVE_TIMEOUT_MS });
-      let raw = (res.raw ?? "").toString();
-      let retriedEmpty = false;
-      if (!raw.trim() && res.code === 0 && !signal.aborted) {
-        retriedEmpty = true;
-        emit(id, { type: "progress", text: "Trying the coach again…" });
-        res = await runAgent(name, prompt + EMPTY_CHAT_RETRY_SUFFIX, { signal, timeoutMs: INTERACTIVE_TIMEOUT_MS });
-        raw = (res.raw ?? "").toString();
-      }
-      const failure = classifyChatAgentResult(name, res);
-      if (!failure) {
-        const attempt: ChatAgentAttempt = {
-          agent: name,
-          ok: true,
-          status: "ok",
-          exit_code: res.code,
-          model: res.usage?.model ?? null,
-          input_tokens: res.usage?.input_tokens ?? null,
-          output_tokens: res.usage?.output_tokens ?? null,
-        };
-        recordChatAttempt(attempt, started, true, retriedEmpty);
+    const attempt = decorate(
+      {
+        agent: name,
+        ok: false,
+        status: "profile_unsupported",
+        error_class: "profile_unsupported",
+        error_message: profile.unsupported,
+      },
+      profile,
+      false,
+      null
+    );
+    recordChatAttempt(attempt, started, false, false);
+    attempts.push(attempt);
+    emit(id, { type: "progress", text: `Using ${displayAgent(name)} defaults…` });
+  };
+  const escalate = (raw: string, lane: ChatLane, stream?: ReturnType<typeof createChatStreamFilter>): boolean => {
+    const target = parseChatEscalationRequest(raw, lane);
+    if (!target || !decision) return false;
+    const updated = repo.escalateChatTurnRouting(id, target) as any;
+    decision = updated?.routing ?? decision;
+    stream?.reset();
+    if (!stream) emit(id, { type: "reset" });
+    emit(id, { type: "routing", routing: decision as ChatRoutingDecision });
+    escalationSource = lane;
+    return true;
+  };
+
+  laneLoop: while (true) {
+    if (signal.aborted) throw new Error("canceled");
+    lanePasses++;
+    if (lanePasses > 3) throw new ChatCompletionError(attempts, "Adaptive routing exceeded the bounded lane count");
+    const lane = decision?.lane ?? null;
+    const prompt = buildChatPrompt(
+      history,
+      turn.message || "(no text — see the attached photo)",
+      turn.image_path || undefined,
+      lane ? { lane } : {}
+    );
+
+    // Streaming first, exactly once for an equivalent provider/profile tuple.
+    const first = order[0];
+    const firstProfile = profileFor(first);
+    noteUnsupportedProfile(first, firstProfile);
+    const firstKey = chatExecutionAttemptKey(lane, first, firstProfile);
+    if (!seen.has(firstKey) && agentSupportsStream(first)) {
+      seen.add(firstKey);
+      const started = Date.now();
+      let ttft: number | null = null;
+      const stream = createChatStreamFilter((event) => {
+        if (event.type === "delta" && event.text && ttft == null) ttft = Date.now() - started;
+        emit(id, event);
+      });
+      streamFilters.set(id, stream);
+      try {
+        const res = await runAgentStreaming(first, prompt, {
+          signal,
+          timeoutMs: INTERACTIVE_TIMEOUT_MS,
+          ...(firstProfile.execution ?? {}),
+          onProgress: stream.progress,
+          onDelta: stream.push,
+        });
+        stream.finish();
+        const raw = String(res.raw ?? "");
+        if (lane && parseChatEscalationRequest(raw, lane)) {
+          const attempt = decorate(
+            { agent: first, ok: true, status: "escalated", exit_code: res.code, model: res.usage?.model ?? null },
+            firstProfile,
+            true,
+            ttft
+          );
+          attempt.escalation_source = lane;
+          recordChatAttempt(attempt, started, true, false);
+          attempts.push(attempt);
+          escalate(raw, lane, stream);
+          continue laneLoop;
+        }
+        const classified = classifyChatAgentResult(first, res);
+        const attempt = decorate(
+          classified ?? {
+            agent: first,
+            ok: true,
+            status: "ok",
+            exit_code: res.code,
+            model: res.usage?.model ?? null,
+            input_tokens: res.usage?.input_tokens ?? null,
+            output_tokens: res.usage?.output_tokens ?? null,
+          },
+          firstProfile,
+          true,
+          ttft
+        );
+        recordChatAttempt(attempt, started, !classified, false);
         attempts.push(attempt);
-        return { agent: name, raw, attempts };
+        if (!classified) return { agent: first, raw, attempts };
+      } catch (e: any) {
+        if (signal.aborted) throw e;
+        const attempt = decorate(classifyChatException(first, e), firstProfile, true, ttft);
+        recordChatAttempt(attempt, started, false, false);
+        attempts.push(attempt);
+        lastErr = e;
       }
-      recordChatAttempt(failure, started, false, retriedEmpty);
-      attempts.push(failure);
-      lastErr = new Error(`${name}: ${failure.error_message || failure.error_class || failure.status}`);
-    } catch (e: any) {
-      if (signal.aborted) throw e;
-      lastErr = e;
-      const failure = classifyChatException(name, e);
-      recordChatAttempt(failure, started, false, false);
-      attempts.push(failure);
+      stream.reset();
+      stream.progress("Trying another route…");
     }
+
+    for (const name of order) {
+      if (signal.aborted) throw new Error("canceled");
+      const profile = profileFor(name);
+      noteUnsupportedProfile(name, profile);
+      const key = chatExecutionAttemptKey(lane, name, profile);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const started = Date.now();
+      try {
+        emit(id, { type: "progress", text: "Asking the coach…" });
+        let res = await runAgent(name, prompt, {
+          signal,
+          timeoutMs: INTERACTIVE_TIMEOUT_MS,
+          ...(profile.execution ?? {}),
+        });
+        let raw = String(res.raw ?? "");
+        let retriedEmpty = false;
+        if (!raw.trim() && res.code === 0 && !signal.aborted) {
+          retriedEmpty = true;
+          res = await runAgent(name, prompt + EMPTY_CHAT_RETRY_SUFFIX, {
+            signal,
+            timeoutMs: INTERACTIVE_TIMEOUT_MS,
+            ...(profile.execution ?? {}),
+          });
+          raw = String(res.raw ?? "");
+        }
+        if (lane && parseChatEscalationRequest(raw, lane)) {
+          const attempt = decorate(
+            { agent: name, ok: true, status: "escalated", exit_code: res.code, model: res.usage?.model ?? null },
+            profile,
+            false,
+            null
+          );
+          attempt.escalation_source = lane;
+          recordChatAttempt(attempt, started, true, retriedEmpty);
+          attempts.push(attempt);
+          escalate(raw, lane);
+          continue laneLoop;
+        }
+        const classified = classifyChatAgentResult(name, res);
+        const attempt = decorate(
+          classified ?? {
+            agent: name,
+            ok: true,
+            status: "ok",
+            exit_code: res.code,
+            model: res.usage?.model ?? null,
+            input_tokens: res.usage?.input_tokens ?? null,
+            output_tokens: res.usage?.output_tokens ?? null,
+          },
+          profile,
+          false,
+          null
+        );
+        recordChatAttempt(attempt, started, !classified, retriedEmpty);
+        attempts.push(attempt);
+        if (!classified) return { agent: name, raw, attempts };
+        lastErr = new Error(`${name}: ${classified.error_message || classified.error_class || classified.status}`);
+      } catch (e: any) {
+        if (signal.aborted) throw e;
+        lastErr = e;
+        const attempt = decorate(classifyChatException(name, e), profile, false, null);
+        recordChatAttempt(attempt, started, false, false);
+        attempts.push(attempt);
+      }
+    }
+    throw new ChatCompletionError(attempts, lastErr?.message || "No distinct execution profile remained");
   }
-  throw new ChatCompletionError(attempts, lastErr?.message);
 }
 
 // User-requested Stop. Flips the turn state first (so the worker's catch knows
@@ -1688,6 +1987,9 @@ export function applyChatActions(
           applied.push({ type: a.type, result: result ?? { error: "not found", id: a.id } });
           break;
         }
+        case "log_weight":
+          applied.push({ type: a.type, result: repo.logWeight(a.weight_lb, stringOrUndefined(a.date), stringOrUndefined(a.note)) });
+          break;
         case "log_health": {
           // Defense in depth: normalizeChatActions already rejects the imaging kind
           // and aliases such as MRI/X-ray. Never let a future direct caller bypass

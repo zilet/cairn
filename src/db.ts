@@ -624,6 +624,11 @@ CREATE TABLE IF NOT EXISTS chat_turns (
   assistant_message_id INTEGER,             -- the chat_messages row for the assistant turn
   meta TEXT,                                -- JSON { applied, drafts }
   tz TEXT,                                  -- the device IANA zone captured at enqueue (X-Cairn-TZ); the worker re-frames "now"/day-keys in it
+  routing_json TEXT,                        -- privacy-safe {policy_version,lane,reason_codes}; never raw message/path data
+  capture_food_note_id INTEGER,             -- first-write-wins food_notes row for an instant text/photo capture
+  request_id TEXT,                          -- optional bounded client retry key; unique when present
+  idempotent_replays INTEGER NOT NULL DEFAULT 0,
+  build_id TEXT,                            -- release/build that accepted the turn; enables coherent lane telemetry
   error TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_chat_turns_status ON chat_turns(status, id);
@@ -708,6 +713,8 @@ CREATE TABLE IF NOT EXISTS settings (
   research_enabled INTEGER DEFAULT 0,         -- 1 = host-side evidence research on (default OFF; off ⇒ deterministic, no network)
   bg_ops_enabled INTEGER DEFAULT 1,           -- legacy compatibility flag; agentic surfaces always use durable jobs
   agent_routes TEXT DEFAULT '',               -- optional JSON map { task -> agent }; empty/null = no routing (Auto everywhere, today's behavior)
+  chat_routing_mode TEXT DEFAULT 'adaptive',  -- adaptive | single (legacy one-profile chat path)
+  chat_profile_bindings TEXT DEFAULT '',      -- JSON provider -> capture|coach|deep -> optional {model,reasoning}
   update_check_enabled INTEGER DEFAULT 1,     -- 1 = quiet daily check for a newer Cairn release (GitHub Releases API); pull-never-push, surfaced in Settings → Data
   lead_mode TEXT DEFAULT 'lead'                -- lead | announce_first | review_everything — one calm autonomy control
 );
@@ -1167,6 +1174,17 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   model TEXT,
   input_tokens INTEGER,
   output_tokens INTEGER,
+  lane TEXT,                            -- capture | coach | deep for adaptive chat attempts
+  policy_version TEXT,                  -- versioned chat-routing taxonomy only
+  reason_codes_json TEXT,               -- JSON array of versioned taxonomy enums; never source text
+  requested_model TEXT,                 -- sanitized per-run model binding requested by route policy
+  requested_reasoning TEXT,             -- low | medium | high | xhigh
+  effective_reasoning TEXT,             -- provider-adjusted effort (for example xhigh -> high)
+  streaming INTEGER,                    -- 1 when the attempt used the streaming adapter
+  ttft_ms INTEGER,                      -- first accepted visible reply delta, when streamed
+  chat_turn_id INTEGER,                 -- durable correlation to chat_turns.id
+  attempt_index INTEGER,                -- monotonic attempt number inside the durable turn
+  escalation_source TEXT,               -- capture | coach when this attempt followed/requested escalation
   created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_agent_runs_created ON agent_runs(created_at);
@@ -1331,6 +1349,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_activities_source_external
   WHERE source IS NOT NULL AND external_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_directives_feedback
   ON health_directives(source, marker, domain, directive_key, status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_turns_request_id
+  ON chat_turns(request_id) WHERE request_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_chat_turns_build_created
+  ON chat_turns(build_id, created_at);
 `);
 
 export function todayISO(): string {

@@ -1200,11 +1200,7 @@ export function setMealRecipe(planId: number, day: string, mealIndex: number, re
 }
 
 // ---------- food notes ----------
-export function addFoodNote(meal: string, raw: string, parsed: any, imagePath?: string) {
-  // Free-text food notes (non-empty raw) get queued for background enrichment —
-  // only when enabled, else recorded 'skipped' directly (see addActivity).
-  const fromText = !!(raw && String(raw).trim());
-  const status = fromText ? (getSettings().enrich_enabled ? "pending" : "skipped") : null;
+function insertFoodNote(meal: string, raw: string, parsed: any, imagePath: string | undefined, status: string | null) {
   // Stamp the LOCAL calendar day (device-zone aware) the meal belongs to, so an
   // evening log counts toward the right day; created_at stays the UTC instant.
   const info = db
@@ -1212,14 +1208,66 @@ export function addFoodNote(meal: string, raw: string, parsed: any, imagePath?: 
       `INSERT INTO food_notes (date, meal, raw_output, parsed_json, image_path, enrichment_status) VALUES (?, ?, ?, ?, ?, ?)`
     )
     .run(localDateISO(), meal || "meal", raw || "", parsed ? JSON.stringify(parsed) : null, imagePath ?? null, status);
-  const row = hydrate(db.prepare(`SELECT * FROM food_notes WHERE id = ?`).get(info.lastInsertRowid));
-  bumpFoodDataVersion(); // a new food entry moves the intake average → expenditure read
-  emitBrainEvent({ kind: "food_logged", domain: "nutrition", date: row.date || localDateISO(), entity_id: row.id });
-  // Lazy import to avoid a circular dependency (enrich.ts imports repo.ts).
-  if (status === "pending") {
-    import("../enrich.js").then((m) => m.enqueueEnrich("food", row.id)).catch(() => {});
-  }
+  return hydrate(db.prepare(`SELECT * FROM food_notes WHERE id = ?`).get(info.lastInsertRowid));
+}
+
+function scheduleFoodNoteEffects(row: any, enrichKind: "food" | "food_photo" | null): void {
+  afterSqliteCommit(() => {
+    bumpFoodDataVersion(); // a new food entry moves the intake average → expenditure read
+    queueBrainEvent({ kind: "food_logged", domain: "nutrition", date: row.date || localDateISO(), entity_id: row.id });
+    // Lazy import to avoid a circular dependency (enrich.ts imports repo.ts).
+    if (enrichKind) import("../enrich.js").then((m) => m.enqueueEnrich(enrichKind, row.id)).catch(() => {});
+  });
+}
+
+export function addFoodNote(meal: string, raw: string, parsed: any, imagePath?: string) {
+  // Free-text food notes (non-empty raw) get queued for background enrichment —
+  // only when enabled, else recorded 'skipped' directly (see addActivity).
+  const fromText = !!(raw && String(raw).trim());
+  const status = fromText ? (getSettings().enrich_enabled ? "pending" : "skipped") : null;
+  const row = insertFoodNote(meal, raw, parsed, imagePath, status);
+  scheduleFoodNoteEffects(row, status === "pending" ? "food" : null);
   return row;
+}
+
+// Atomic, idempotent food capture for durable chat turns. The chat-turn link and
+// food_notes insert share one savepoint, so a crash/recovery replay returns the
+// linked row instead of creating a second meal. Text uses the athlete's exact
+// utterance and the ordinary text enricher; photos use the dedicated vision job.
+export function addChatCaptureFoodNote(input: {
+  turn_id: number;
+  meal: string;
+  raw: string;
+  parsed: any;
+  image_path?: string | null;
+  kind: "text" | "photo";
+}) {
+  const turnId = Number(input.turn_id);
+  if (!Number.isSafeInteger(turnId) || turnId <= 0) throw new Error("invalid chat turn id");
+  return withSqliteSavepoint(`chat_food_capture_${turnId}`, () => {
+    const turn = db
+      .prepare(`SELECT status, capture_food_note_id FROM chat_turns WHERE id = ?`)
+      .get(turnId) as any;
+    if (!turn) throw new Error("chat turn not found");
+    if (turn.capture_food_note_id != null) {
+      const existing = getFoodNote(Number(turn.capture_food_note_id));
+      if (!existing) throw new Error("linked capture food note not found");
+      return existing;
+    }
+    if (!["queued", "running"].includes(String(turn.status))) throw new Error("chat turn is already terminal");
+
+    const enrichEnabled = getSettings().enrich_enabled;
+    const status = input.kind === "photo" ? (enrichEnabled ? "pending" : null) : enrichEnabled ? "pending" : "skipped";
+    const raw = input.kind === "photo" ? "" : String(input.raw ?? "");
+    const row = insertFoodNote(input.meal, raw, input.parsed, input.image_path ?? undefined, status);
+    const linked = db
+      .prepare(`UPDATE chat_turns SET capture_food_note_id = ?
+                  WHERE id = ? AND capture_food_note_id IS NULL AND status IN ('queued','running')`)
+      .run(row.id, turnId);
+    if (Number(linked.changes) !== 1) throw new Error("chat food capture link was not written");
+    scheduleFoodNoteEffects(row, status === "pending" ? (input.kind === "photo" ? "food_photo" : "food") : null);
+    return row;
+  });
 }
 
 export function listFoodNotes(limit = 20) {

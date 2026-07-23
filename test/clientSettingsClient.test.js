@@ -98,6 +98,21 @@ test("settings agent health and activity stay qualitative and escaped", () => {
   assert.match(activity, /Please run \/login &lt;bad&gt;/);
 });
 
+test("settings agent health keeps older telemetry compatible and renders chat lanes when present", () => {
+  const settings = loadSettingsClient();
+  const older = settings.agentHealthCard({ runs: 1, by_agent: [] });
+  assert.doesNotMatch(older, /Chat lanes/);
+
+  const health = settings.agentHealthCard({
+    runs: 3,
+    by_lane: [{ lane: "<deep>", runs: 2, p50_ms: 1200, p95_ms: 2800, ttft_p50_ms: 300, ttft_p95_ms: 700 }],
+  });
+  assert.match(health, /Chat lanes/);
+  assert.match(health, /&lt;deep&gt;/);
+  assert.match(health, /2 runs · 1\.2s p50 \/ 2\.8s p95 · TTFT 300ms \/ 700ms p95/);
+  assert.doesNotMatch(health, /\$/);
+});
+
 test("settings noticed card escapes durable learning text", () => {
   const settings = loadSettingsClient();
   assert.equal(settings.noticedCard({ learnings: [] }), "");

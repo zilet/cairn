@@ -1667,11 +1667,33 @@ export function getEnduranceGoal(today?: string):
 }
 
 // ---------- bodyweight log ----------
+const MIN_LOGGED_WEIGHT_LB = 50;
+const MAX_LOGGED_WEIGHT_LB = 700;
+
+function canonicalWeightLogDate(value: unknown): string {
+  if (value === undefined) return localDateISO();
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw new RangeError("weight date must be YYYY-MM-DD");
+  }
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
+    throw new RangeError("weight date must be a real calendar date");
+  }
+  if (value > localDateISO()) throw new RangeError("weight date cannot be in the future");
+  return value;
+}
+
+// Shared trust boundary for REST, MCP, chat, and direct callers. A rejected
+// reading does not write a row or promote an invalid date into profile.weight_lb.
 export function logWeight(weight_lb: number, date?: string, note?: string) {
-  const d = date || localDateISO();
+  const weight = Number(weight_lb);
+  if (!Number.isFinite(weight) || weight < MIN_LOGGED_WEIGHT_LB || weight > MAX_LOGGED_WEIGHT_LB) {
+    throw new RangeError(`weight_lb must be between ${MIN_LOGGED_WEIGHT_LB} and ${MAX_LOGGED_WEIGHT_LB}`);
+  }
+  const d = canonicalWeightLogDate(date);
   const info = db
     .prepare(`INSERT INTO bodyweight_log (date, weight_lb, note) VALUES (?, ?, ?)`)
-    .run(d, weight_lb, note ?? null);
+    .run(d, weight, note ?? null);
   bumpTrainingDataVersion(); // a weigh-in moves the weekly trend + expenditure reads
   // Keep the profile's current weight in sync with the most recent entry.
   const latest = db.prepare(`SELECT weight_lb FROM bodyweight_log ORDER BY date DESC, id DESC LIMIT 1`).get() as any;

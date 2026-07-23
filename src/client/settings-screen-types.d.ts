@@ -22,6 +22,8 @@ type SettingsScreenWorkingModel = {
   order: string[];
   disabled: Set<string>;
   routes: Record<string, string>;
+  chat_routing_mode: "adaptive" | "single";
+  chat_profile_bindings: Record<string, Record<string, Record<string, unknown>>>;
   enrich_enabled: boolean;
   art_enabled: boolean;
   research_enabled: boolean;
@@ -46,6 +48,8 @@ type SettingsScreenPersistBody = {
   coach_day: number;
   coach_hour: number;
   agent_routes: Record<string, string>;
+  chat_routing_mode: "adaptive" | "single";
+  chat_profile_bindings: Record<string, Record<string, Record<string, unknown>>>;
   update_check_enabled: boolean;
   lead_mode: "lead" | "announce_first" | "review_everything";
   gemini_api_key?: string;

@@ -11,7 +11,9 @@ const originalSettingsSecretKey = process.env.CAIRN_SETTINGS_SECRET_KEY;
 beforeEach(() => {
   process.env.CAIRN_SETTINGS_SECRET_KEY = "";
   // Settings is a single id=1 row; reset it so each case starts from defaults.
-  try { db.prepare("DELETE FROM settings WHERE id = 1").run(); } catch {}
+  try {
+    db.prepare("DELETE FROM settings WHERE id = 1").run();
+  } catch {}
 });
 
 after(() => {
@@ -27,6 +29,8 @@ test("getSettings lazily creates the singleton with sane defaults", () => {
   assert.equal(s.art_enabled, true);
   assert.equal(s.meal_prefs, "");
   assert.equal(s.update_check_enabled, true); // quiet update check on by default
+  assert.equal(s.chat_routing_mode, "adaptive");
+  assert.deepEqual(s.chat_profile_bindings, {});
 });
 
 test("settings expose the last valid device timezone used by background scheduling", () => {
@@ -103,6 +107,33 @@ test("agent_order / disabled_agents round-trip as arrays", () => {
   assert.deepEqual(s.disabled_agents, ["grok"]);
 });
 
+test("production Settings payload carries only normalized provider capabilities", () => {
+  // Mirror the real /settings response path: getAgentConfig constructs the agent
+  // records returned alongside getSettings, rather than a client fixture doing so.
+  const payload = { settings: repo.getSettings(), agents: repo.getAgentConfig() };
+  assert.ok(payload.settings);
+
+  const claude = payload.agents.find((agent) => agent.name === "claude");
+  const stub = payload.agents.find((agent) => agent.name === "stub");
+  assert.deepEqual(claude?.capabilities, {
+    model: true,
+    reasoning: ["low", "medium", "high", "xhigh"],
+    execution_profile_noop: false,
+  });
+  assert.deepEqual(stub?.capabilities, {
+    model: false,
+    reasoning: [],
+    execution_profile_noop: true,
+  });
+
+  for (const agent of payload.agents) {
+    assert.deepEqual(Object.keys(agent.capabilities).sort(), ["execution_profile_noop", "model", "reasoning"]);
+    assert.equal("command" in agent.capabilities, false);
+    assert.equal("args" in agent.capabilities, false);
+    assert.equal("reasoning_flag" in agent.capabilities, false);
+  }
+});
+
 test("agent_routes default to an empty map (no routing)", () => {
   assert.deepEqual(repo.getSettings().agent_routes, {});
 });
@@ -114,9 +145,9 @@ test("agent_routes round-trips known task -> known agent; drops unknowns", () =>
       chat: "claude",
       meal_plan: "stub",
       health_synthesis: "claude",
-      session_suggest: "bogus",   // unknown agent → dropped
-      frobnicate: "claude",       // unknown task → dropped
-      day_read: "",               // empty value → dropped (back to Auto)
+      session_suggest: "bogus", // unknown agent → dropped
+      frobnicate: "claude", // unknown task → dropped
+      day_read: "", // empty value → dropped (back to Auto)
     },
   });
   const r = repo.getSettings().agent_routes;
@@ -138,6 +169,55 @@ test("setSettings({agent_routes:{}}) clears all routing", () => {
   repo.setSettings({ agent_routes: { chat: "claude", meal_plan: "stub" } });
   repo.setSettings({ agent_routes: {} });
   assert.deepEqual(repo.getSettings().agent_routes, {});
+});
+
+test("adaptive chat mode round-trips while invalid values preserve the current mode", () => {
+  assert.equal(repo.setSettings({ chat_routing_mode: "single" }).chat_routing_mode, "single");
+  assert.equal(repo.setSettings({ chat_routing_mode: "unsupported" }).chat_routing_mode, "single");
+  assert.equal(repo.setSettings({ chat_routing_mode: "adaptive" }).chat_routing_mode, "adaptive");
+  db.prepare("UPDATE settings SET chat_routing_mode = NULL WHERE id = 1").run();
+  assert.equal(repo.getSettings().chat_routing_mode, "adaptive", "legacy NULL rows use the adaptive default");
+});
+
+test("chat profile bindings round-trip only bounded provider/lane/model/reasoning shape", () => {
+  const veryLongModel = `model-${"x".repeat(300)}`;
+  const saved = repo.setSettings({
+    chat_profile_bindings: {
+      claude: {
+        capture: { model: " haiku ", reasoning: "low", secret: "drop" },
+        coach: { reasoning: "medium" },
+        deep: { model: veryLongModel, reasoning: "high" },
+        invented_lane: { model: "drop" },
+      },
+      codex: {
+        capture: { model: 123, reasoning: "xhigh" },
+        coach: { model: "", reasoning: "turbo" },
+      },
+      malformed: "drop",
+    },
+  });
+  assert.deepEqual(saved.chat_profile_bindings, {
+    claude: {
+      capture: { model: "haiku", reasoning: "low" },
+      coach: { reasoning: "medium" },
+      deep: { model: veryLongModel.slice(0, 160), reasoning: "high" },
+    },
+    codex: { capture: { reasoning: "xhigh" } },
+  });
+
+  repo.setSettings({ coach_hour: 12 });
+  assert.deepEqual(
+    repo.getSettings().chat_profile_bindings,
+    saved.chat_profile_bindings,
+    "partial saves preserve bindings"
+  );
+
+  db.prepare("UPDATE settings SET chat_profile_bindings = 'not-json' WHERE id = 1").run();
+  assert.deepEqual(
+    repo.getSettings().chat_profile_bindings,
+    {},
+    "malformed legacy storage degrades to provider defaults"
+  );
 });
 
 test("settings-saved secrets stay out of API-shaped settings responses", () => {
@@ -167,9 +247,11 @@ test("CAIRN_SETTINGS_SECRET_KEY encrypts Settings-saved Garmin and Gemini secret
     gemini_api_key: "gemini-key",
   });
 
-  const raw = db.prepare(
-    "SELECT garmin_password, garmin_password_encrypted, gemini_api_key, gemini_api_key_encrypted FROM settings WHERE id = 1"
-  ).get();
+  const raw = db
+    .prepare(
+      "SELECT garmin_password, garmin_password_encrypted, gemini_api_key, gemini_api_key_encrypted FROM settings WHERE id = 1"
+    )
+    .get();
   assert.equal(raw.garmin_password, "");
   assert.equal(raw.gemini_api_key, "");
   assert.match(raw.garmin_password_encrypted, /^enc:v1:/);
@@ -184,9 +266,11 @@ test("CAIRN_SETTINGS_SECRET_KEY encrypts Settings-saved Garmin and Gemini secret
   assert.equal(repo.getSettings().gemini_api_key_source, "settings");
 
   repo.setSettings({ coach_hour: 6 });
-  const afterPartial = db.prepare(
-    "SELECT garmin_password, garmin_password_encrypted, gemini_api_key, gemini_api_key_encrypted FROM settings WHERE id = 1"
-  ).get();
+  const afterPartial = db
+    .prepare(
+      "SELECT garmin_password, garmin_password_encrypted, gemini_api_key, gemini_api_key_encrypted FROM settings WHERE id = 1"
+    )
+    .get();
   assert.equal(afterPartial.garmin_password, "");
   assert.equal(afterPartial.gemini_api_key, "");
   assert.equal(afterPartial.garmin_password_encrypted, raw.garmin_password_encrypted);
@@ -199,9 +283,11 @@ test("legacy plaintext Settings secrets seal themselves once an encryption key i
     garmin_password: "legacy-password",
     gemini_api_key: "legacy-gemini",
   });
-  let raw = db.prepare(
-    "SELECT garmin_password, garmin_password_encrypted, gemini_api_key, gemini_api_key_encrypted FROM settings WHERE id = 1"
-  ).get();
+  let raw = db
+    .prepare(
+      "SELECT garmin_password, garmin_password_encrypted, gemini_api_key, gemini_api_key_encrypted FROM settings WHERE id = 1"
+    )
+    .get();
   assert.equal(raw.garmin_password, "legacy-password");
   assert.equal(raw.gemini_api_key, "legacy-gemini");
   assert.equal(raw.garmin_password_encrypted, "");
@@ -209,9 +295,11 @@ test("legacy plaintext Settings secrets seal themselves once an encryption key i
 
   process.env.CAIRN_SETTINGS_SECRET_KEY = "seal-test-key";
   assert.equal(repo.getSettings().garmin_password_configured, true);
-  raw = db.prepare(
-    "SELECT garmin_password, garmin_password_encrypted, gemini_api_key, gemini_api_key_encrypted FROM settings WHERE id = 1"
-  ).get();
+  raw = db
+    .prepare(
+      "SELECT garmin_password, garmin_password_encrypted, gemini_api_key, gemini_api_key_encrypted FROM settings WHERE id = 1"
+    )
+    .get();
   assert.equal(raw.garmin_password, "");
   assert.equal(raw.gemini_api_key, "");
   assert.match(raw.garmin_password_encrypted, /^enc:v1:/);
@@ -232,9 +320,11 @@ test("clear flags remove encrypted Settings secrets without requiring plaintext 
     gemini_api_key: "gemini-key",
   });
   repo.setSettings({ clear_garmin_password: true, clear_gemini_api_key: true });
-  const raw = db.prepare(
-    "SELECT garmin_password, garmin_password_encrypted, gemini_api_key, gemini_api_key_encrypted FROM settings WHERE id = 1"
-  ).get();
+  const raw = db
+    .prepare(
+      "SELECT garmin_password, garmin_password_encrypted, gemini_api_key, gemini_api_key_encrypted FROM settings WHERE id = 1"
+    )
+    .get();
   assert.equal(raw.garmin_password, "");
   assert.equal(raw.garmin_password_encrypted, "");
   assert.equal(raw.gemini_api_key, "");

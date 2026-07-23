@@ -30,11 +30,14 @@ function reset() {
   }
 }
 
+// Local frame, not UTC — logWeight's trust boundary rejects "future" dates in
+// the process zone, and a UTC slice reads as tomorrow after UTC midnight.
+import { localDateISO } from "../dist/repo/shared.js";
 function isoDaysAgo(n) {
-  return new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
+  return localDateISO(new Date(Date.now() - n * 864e5));
 }
 function isoDaysAhead(n) {
-  return new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
+  return localDateISO(new Date(Date.now() + n * 864e5));
 }
 
 // A clean profile with enough fields for computeGoalCheck to run.

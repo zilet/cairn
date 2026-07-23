@@ -1,5 +1,10 @@
 import { progressLabelFromText } from "./agents.js";
-import { CHAT_ACTION_SENTINEL, CHAT_REPLY_SENTINEL } from "./prompt.js";
+import {
+  CHAT_ACTION_SENTINEL,
+  CHAT_ESCALATE_COACH_SENTINEL,
+  CHAT_ESCALATE_DEEP_SENTINEL,
+  CHAT_REPLY_SENTINEL,
+} from "./prompt.js";
 
 export type LiveReplyEvent =
   | { type: "progress"; text: string } // transient, sanitized thinking/tool status
@@ -30,7 +35,12 @@ export function createChatStreamFilter(emitLive: (e: LiveReplyEvent) => void) {
   let accumulatedReply = ""; // the reply prose streamed so far (for the SSE snapshot)
   // Always hold back a forming sentinel at the tail so a half-marker never streams
   // (and a forming reply marker isn't mistaken for a completed pre-marker line).
-  const TAIL = Math.max(CHAT_ACTION_SENTINEL.length, CHAT_REPLY_SENTINEL.length) - 1;
+  const TAIL = Math.max(
+    CHAT_ACTION_SENTINEL.length,
+    CHAT_REPLY_SENTINEL.length,
+    CHAT_ESCALATE_COACH_SENTINEL.length,
+    CHAT_ESCALATE_DEEP_SENTINEL.length
+  ) - 1;
   let lastProgress = "";
   let lastProgressAt = 0;
 
@@ -69,8 +79,14 @@ export function createChatStreamFilter(emitLive: (e: LiveReplyEvent) => void) {
   // render agree. Text only ever grows forward — no retraction, ever.
   const streamReply = (final: boolean) => {
     const cut = acc.lastIndexOf(CHAT_ACTION_SENTINEL);
+    const escalationCuts = [
+      acc.indexOf(CHAT_ESCALATE_COACH_SENTINEL, replyAt),
+      acc.indexOf(CHAT_ESCALATE_DEEP_SENTINEL, replyAt),
+    ].filter((index) => index >= replyAt);
+    const hiddenCut = escalationCuts.length ? Math.min(...escalationCuts) : -1;
     let safeEnd: number;
-    if (cut >= replyAt) safeEnd = cut;               // the real actions block
+    if (hiddenCut >= replyAt) safeEnd = hiddenCut;   // malformed post-reply escalation: never leak the token
+    else if (cut >= replyAt) safeEnd = cut;          // the real actions block
     else if (final) safeEnd = acc.length;
     else safeEnd = Math.max(emitted, acc.length - TAIL);
     if (safeEnd > emitted) {

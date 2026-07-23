@@ -2,6 +2,7 @@ import { db } from "../db.js";
 import { listAgents, agentVersion } from "../agents.js";
 import crypto from "node:crypto";
 import { recordedClientTimeZone } from "./client-tz.js";
+import { normalizeChatProfileBindings, type ChatProfileBindings } from "../chatRouting.js";
 
 // ---------- settings & agent selection ----------
 export interface Settings {
@@ -29,6 +30,8 @@ export interface Settings {
   research_enabled: boolean; // host-side evidence research (default OFF; off ⇒ deterministic, no network)
   bg_ops_enabled: boolean; // legacy compatibility flag; user-facing agentic ops always stay durable/non-blocking
   agent_routes: Record<string, string>; // optional per-task agent routing { task -> agent }; {} = no routing (Auto = today's rotation)
+  chat_routing_mode: "adaptive" | "single"; // adaptive lane policy; single preserves the legacy one-profile path
+  chat_profile_bindings: ChatProfileBindings; // provider -> capture|coach|deep -> optional model/reasoning
   update_check_enabled: boolean; // quiet daily check for a newer Cairn release (pull-never-push; off ⇒ no outbound check)
   lead_mode: "lead" | "announce_first" | "review_everything"; // how much Cairn leads within server policy
   updated_at?: string;
@@ -162,6 +165,8 @@ const SETTINGS_COLUMN_REPAIRS: [string, string][] = [
   ["research_enabled", "INTEGER DEFAULT 0"],
   ["bg_ops_enabled", "INTEGER DEFAULT 1"],
   ["agent_routes", "TEXT DEFAULT ''"],
+  ["chat_routing_mode", "TEXT DEFAULT 'adaptive'"],
+  ["chat_profile_bindings", "TEXT DEFAULT ''"],
   ["update_check_enabled", "INTEGER DEFAULT 1"],
   ["lead_mode", "TEXT DEFAULT 'lead'"],
 ];
@@ -319,6 +324,8 @@ function defaultSettings(): Settings {
     research_enabled: false, // host-side research off by default — opt-in, deterministic when off
     bg_ops_enabled: true, // retained for imported settings; durable jobs are now always on for user-facing ops
     agent_routes: {}, // no per-task routing by default — "auto" rotates as before
+    chat_routing_mode: "adaptive",
+    chat_profile_bindings: {}, // empty means every provider keeps its own model defaults
     update_check_enabled: true, // quiet daily update check on by default (one toggle disables the outbound call)
     lead_mode: "lead", // bounded background coaching is the default relationship
   };
@@ -400,6 +407,8 @@ function rowToSettings(row: any): Settings {
     bg_ops_enabled: row.bg_ops_enabled == null ? true : !!row.bg_ops_enabled,
     // NULL/'' on old rows (column added by migration v34) parses to {} — no routing.
     agent_routes: parseRoutes(row.agent_routes),
+    chat_routing_mode: row.chat_routing_mode === "single" ? "single" : "adaptive",
+    chat_profile_bindings: normalizeChatProfileBindings(row.chat_profile_bindings),
     // NULL on old rows (column added by migration v47) defaults to ON.
     update_check_enabled: row.update_check_enabled == null ? true : !!row.update_check_enabled,
     lead_mode: ["lead", "announce_first", "review_everything"].includes(String(row.lead_mode)) ? row.lead_mode : "lead",
@@ -500,6 +509,13 @@ export function setSettings(patch: any): Settings {
     bg_ops_enabled: patch.bg_ops_enabled !== undefined ? !!patch.bg_ops_enabled : cur.bg_ops_enabled,
     // Per-task routing: validated below (known task + known agent only).
     agent_routes: patch.agent_routes !== undefined ? parseRoutes(patch.agent_routes) : cur.agent_routes,
+    chat_routing_mode: ["adaptive", "single"].includes(String(patch.chat_routing_mode))
+      ? patch.chat_routing_mode
+      : cur.chat_routing_mode,
+    chat_profile_bindings:
+      patch.chat_profile_bindings !== undefined
+        ? normalizeChatProfileBindings(patch.chat_profile_bindings)
+        : cur.chat_profile_bindings,
     update_check_enabled:
       patch.update_check_enabled !== undefined ? !!patch.update_check_enabled : cur.update_check_enabled,
     lead_mode: ["lead", "announce_first", "review_everything"].includes(String(patch.lead_mode))
@@ -526,7 +542,7 @@ export function setSettings(patch: any): Settings {
     `UPDATE settings SET agent_strategy=?, agent_order=?, disabled_agents=?, rr_cursor=?,
        coach_enabled=?, coach_day=?, coach_hour=?, onboarded=?, enrich_enabled=?, proactive_enabled=?, art_enabled=?, art_enabled_at=?, meal_prefs=?,
        garmin_username=?, garmin_password=?, garmin_password_encrypted=?, gemini_api_key=?, gemini_api_key_encrypted=?,
-       research_enabled=?, bg_ops_enabled=?, agent_routes=?, update_check_enabled=?, lead_mode=?, updated_at=datetime('now') WHERE id = 1`
+       research_enabled=?, bg_ops_enabled=?, agent_routes=?, chat_routing_mode=?, chat_profile_bindings=?, update_check_enabled=?, lead_mode=?, updated_at=datetime('now') WHERE id = 1`
   ).run(
     merged.agent_strategy,
     JSON.stringify(merged.agent_order),
@@ -549,6 +565,8 @@ export function setSettings(patch: any): Settings {
     merged.research_enabled ? 1 : 0,
     merged.bg_ops_enabled ? 1 : 0,
     JSON.stringify(merged.agent_routes),
+    merged.chat_routing_mode,
+    JSON.stringify(merged.chat_profile_bindings),
     merged.update_check_enabled ? 1 : 0,
     merged.lead_mode
   );
@@ -591,7 +609,9 @@ export function getGeminiApiKey() {
 // needs — enabled by the user, the binary present, any required env var set, AND
 // the agent not KNOWN logged-out. Only `configured === false` excludes (never
 // `null` — an undetectable agent stays in the rotation). `version`/`can_login`/
-// `models_list` are read-only visibility fields (computed here, never persisted).
+// `models_list` and `capabilities` are read-only visibility fields (computed here,
+// never persisted). `listAgents()` already normalizes capabilities to the small
+// public contract, so do not expose the underlying CLI definition or argv here.
 export function getAgentConfig() {
   const s = getSettings();
   const all = listAgents() as any[];
@@ -624,6 +644,7 @@ export function getAgentConfig() {
       install_method: a.install_method ?? null,
       install_version: a.install_version ?? null,
       web_access: !!a.web_access,
+      capabilities: a.capabilities,
       usable: enabled && present && env_ok && configured !== false,
     };
   });

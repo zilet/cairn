@@ -2,10 +2,15 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { db } from "../dist/db.js";
 import { extractAgentUsage } from "../dist/agents.js";
-import { resolveBuildInfo } from "../dist/build-info.js";
+import { getBuildInfo, resolveBuildInfo } from "../dist/build-info.js";
 import { buildMcpServer, mcpMetricOperation } from "../dist/mcp.js";
 import { getAgentStats, recordAgentRun, pruneAgentRuns } from "../dist/repo/agent-telemetry.js";
-import { getRequestPerformance, isInternalMcpMetricOperation, normalizeServerMetricRoute, recordRequestMetric } from "../dist/repo/request-metrics.js";
+import {
+  getRequestPerformance,
+  isInternalMcpMetricOperation,
+  normalizeServerMetricRoute,
+  recordRequestMetric,
+} from "../dist/repo/request-metrics.js";
 import { installSmokeLifetime, smokeMaxRuntimeMs } from "../dist/smoke-lifetime.js";
 import { agentErrorClass } from "../dist/telemetry-privacy.js";
 
@@ -37,7 +42,9 @@ test("agent telemetry persists taxonomy only and never raw CLI detail", () => {
   assert.equal(row.output_tokens, null);
   assert.equal(row.model, null);
   assert.doesNotMatch(JSON.stringify(row), /private ApoB|Users|secret|raw stdout/);
-  db.prepare(`INSERT INTO agent_runs (build_id,op,agent,ok,parsed,tried_json) VALUES ('old-build','test','stub',1,1,0)`).run();
+  db.prepare(
+    `INSERT INTO agent_runs (build_id,op,agent,ok,parsed,tried_json) VALUES ('old-build','test','stub',1,1,0)`
+  ).run();
   const stats = getAgentStats();
   assert.equal(stats.build_id, row.build_id);
   assert.equal(stats.runs, 1);
@@ -46,6 +53,111 @@ test("agent telemetry persists taxonomy only and never raw CLI detail", () => {
   assert.equal(stats.recent[0].output_tokens, null);
   assert.equal(stats.by_agent[0].input_tokens, null);
   assert.equal(stats.by_agent[0].output_tokens, null);
+});
+
+test("adaptive chat telemetry is correlated, taxonomy-only, and rolls up lane latency plus TTFT", () => {
+  const buildId = getBuildInfo().build_id;
+  const turn = db
+    .prepare(
+      `INSERT INTO chat_turns (status, created_at, finished_at, routing_json, build_id)
+       VALUES ('done', datetime('now', '-1 second'), datetime('now'), ?, ?)`
+    )
+    .run(
+      JSON.stringify({ policy_version: "chat-routing-v1", lane: "capture", reason_codes: ["explicit_food_log"] }),
+      buildId
+    );
+  recordAgentRun({
+    op: "chat",
+    agent: "claude",
+    ok: true,
+    parsed: true,
+    latency_ms: 800,
+    tried_json: false,
+    lane: "capture",
+    policy_version: "chat-routing-v1",
+    reason_codes: ["explicit_food_log", "private raw message"],
+    requested_model: "claude-sonnet-4-5",
+    requested_reasoning: "low",
+    effective_reasoning: "low",
+    streaming: true,
+    ttft_ms: 120,
+    chat_turn_id: Number(turn.lastInsertRowid),
+    attempt_index: 1,
+    escalation_source: null,
+  });
+  const row = db.prepare("SELECT * FROM agent_runs WHERE op='chat' ORDER BY id DESC LIMIT 1").get();
+  assert.equal(row.lane, "capture");
+  assert.equal(row.chat_turn_id, Number(turn.lastInsertRowid));
+  assert.equal(row.ttft_ms, 120);
+  assert.deepEqual(JSON.parse(row.reason_codes_json), ["explicit_food_log"]);
+  assert.doesNotMatch(JSON.stringify(row), /private raw message/);
+  const stats = getAgentStats();
+  const lane = stats.by_lane.find((entry) => entry.lane === "capture");
+  assert.equal(lane.runs, 1);
+  assert.equal(lane.p50_ms, 1000, "lane latency is durable turn end-to-end time, not provider attempt time");
+  assert.equal(lane.p95_ms, 1000);
+  assert.equal(lane.p50_ttft_ms, 120);
+  assert.equal(stats.recent[0].chat_turn_id, Number(turn.lastInsertRowid));
+});
+
+test("adaptive lane telemetry uses durable outcomes and nearest-rank end-to-end percentiles", () => {
+  const buildId = getBuildInfo().build_id;
+  const routing = JSON.stringify({
+    policy_version: "chat-routing-v1",
+    lane: "capture",
+    reason_codes: ["explicit_food_log", "capture_correction"],
+  });
+  const quick = db
+    .prepare(
+      `INSERT INTO chat_turns
+        (status, created_at, finished_at, routing_json, capture_food_note_id, idempotent_replays, build_id)
+       VALUES ('done', '2026-07-22 00:00:00', '2026-07-22 00:00:00.100', ?, 1, 2, ?)`
+    )
+    .run(routing, buildId);
+  const slow = db
+    .prepare(
+      `INSERT INTO chat_turns
+        (status, created_at, finished_at, routing_json, build_id)
+       VALUES ('canceled', '2026-07-22 00:00:00', '2026-07-22 00:00:10', ?, ?)`
+    )
+    .run(
+      JSON.stringify({ policy_version: "chat-routing-v1", lane: "capture", reason_codes: ["explicit_food_log"] }),
+      buildId
+    );
+  db.prepare(
+    `INSERT INTO chat_turns (status, created_at, finished_at, routing_json, build_id)
+     VALUES ('done', '2026-07-22 00:00:00', '2026-07-22 00:00:20', ?, 'old-build')`
+  ).run(routing);
+  recordAgentRun({
+    op: "chat",
+    agent: "claude",
+    ok: true,
+    parsed: true,
+    latency_ms: 99,
+    tried_json: false,
+    lane: "capture",
+    policy_version: "chat-routing-v1",
+    reason_codes: ["explicit_food_log"],
+    chat_turn_id: Number(slow.lastInsertRowid),
+    escalation_source: "coach",
+  });
+  const stats = getAgentStats();
+  const lane = stats.by_lane.find((entry) => entry.lane === "capture");
+  assert.equal(lane.runs, 2, "one durable turn per user-visible turn, not per provider attempt");
+  assert.equal(stats.build_id, buildId, "lane outcomes use the same build scope as provider attempts");
+  assert.equal(lane.done, 1);
+  assert.equal(lane.canceled, 1);
+  assert.equal(lane.fail, 1);
+  assert.equal(lane.instant_captures, 1);
+  assert.equal(lane.idempotent_replays, 2);
+  assert.equal(lane.capture_corrections, 1);
+  assert.equal(lane.escalated, 1);
+  assert.equal(lane.p50_ms, 100);
+  assert.equal(lane.p95_ms, 10000, "nearest-rank p95 selects the slowest of two samples");
+  assert.equal(stats.chat_turns.runs, 2);
+  assert.equal(stats.chat_turns.idempotent_replays, 2);
+  assert.doesNotMatch(JSON.stringify(stats), /routing_json|2026-07-22 00:00/);
+  assert.equal(Number(quick.lastInsertRowid) > 0, true);
 });
 
 test("agent telemetry retention removes old attempts", () => {
@@ -76,7 +188,14 @@ test("hourly request histograms provide bounded API and MCP percentiles", () => 
   }
   recordRequestMetric({ protocol: "api", method: "GET", route: "/api/plan/:id", status: 500, duration_ms: 300 });
   recordRequestMetric({ protocol: "mcp", method: "POST", route: "ping", status: 200, duration_ms: 80 });
-  recordRequestMetric({ protocol: "api", method: "GET", route: "/api/health", status: 200, duration_ms: 1, scope: "internal" });
+  recordRequestMetric({
+    protocol: "api",
+    method: "GET",
+    route: "/api/health",
+    status: 200,
+    duration_ms: 1,
+    scope: "internal",
+  });
   const performance = getRequestPerformance(1);
   assert.equal(performance.requests, 8);
   assert.deepEqual(performance.traffic, { product: 8, internal: 1 });
@@ -118,7 +237,9 @@ test("agent usage ignores domain-shaped model fields", () => {
     output_tokens: null,
   });
   assert.deepEqual(
-    extractAgentUsage('{"type":"result","subtype":"success","usage":{"input_tokens":7,"output_tokens":3},"model":"claude-3-7-sonnet"}'),
+    extractAgentUsage(
+      '{"type":"result","subtype":"success","usage":{"input_tokens":7,"output_tokens":3},"model":"claude-3-7-sonnet"}'
+    ),
     { model: "claude-3-7-sonnet", input_tokens: 7, output_tokens: 3 }
   );
 });

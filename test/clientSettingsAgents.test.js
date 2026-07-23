@@ -69,6 +69,54 @@ test("settings agents slice renders route summary, strategy, and timezone-aware 
   assert.match(html, /value="14" selected>14:00/);
 });
 
+test("adaptive chat profiles escape provider/model values and honor declared reasoning capabilities", () => {
+  const settingsAgents = loadSettingsAgents();
+  const html = settingsAgents.agentsSliceHtml({
+    agentStrategy: "round_robin",
+    routeSummary: "Route tasks to agents",
+    routeRowsHtml: "",
+    agentHealthHtml: "",
+    agentActivityHtml: "",
+    noticedHtml: "",
+    coachDay: 1,
+    coachHour: 8,
+    timeZone: "UTC",
+    dayNames: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+    chatRoutingMode: "adaptive",
+    chatProfileBindings: { '<provider>': { capture: { model: 'tiny <model>', reasoning: "low" } } },
+    chatProfileAgents: [{ name: "<provider>", capabilities: { model: true, reasoning: ["low", "high"] } }],
+  });
+
+  assert.match(html, /Adaptive · recommended/);
+  assert.match(html, /Routine capture uses low reasoning/);
+  assert.match(html, /&lt;provider&gt;/);
+  assert.match(html, /value="tiny &lt;model&gt;"/);
+  assert.match(html, /value="low" selected/);
+  assert.match(html, /value="high"/);
+  assert.doesNotMatch(html, /value="medium"/);
+
+  const defaults = settingsAgents.agentsSliceHtml({
+    agentStrategy: "round_robin", routeSummary: "Route tasks", routeRowsHtml: "", agentHealthHtml: "", agentActivityHtml: "", noticedHtml: "",
+    coachDay: 1, coachHour: 8, timeZone: "UTC", dayNames: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+    chatRoutingMode: "adaptive", chatProfileBindings: {},
+    chatProfileAgents: [{ name: "Provider", capabilities: { model: true, reasoning: ["low", "medium", "high"] } }],
+  });
+  assert.match(defaults, /value="low" selected/);
+  assert.match(defaults, /value="medium" selected/);
+  assert.match(defaults, /value="high" selected/);
+});
+
+test("single profile copy keeps saved bindings visibly inactive", () => {
+  const settingsAgents = loadSettingsAgents();
+  const html = settingsAgents.agentsSliceHtml({
+    agentStrategy: "round_robin", routeSummary: "Route tasks", routeRowsHtml: "", agentHealthHtml: "", agentActivityHtml: "", noticedHtml: "",
+    coachDay: 1, coachHour: 8, timeZone: "UTC", dayNames: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+    chatRoutingMode: "single", chatProfileBindings: {}, chatProfileAgents: [],
+  });
+  assert.match(html, /Single profile · legacy/);
+  assert.match(html, /Saved profiles stay ready, but are inactive/);
+});
+
 test("settings agent list renders escaped cards with state, controls, details, and models", () => {
   const settingsAgents = loadSettingsAgents();
   const html = settingsAgents.agentListHtml({

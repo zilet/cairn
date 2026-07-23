@@ -100,7 +100,7 @@ class FakeRoot extends FakeElement {
     this.children = new Map();
     this.routeSelects = [];
 
-    for (const id of ["strat", "coachDay", "coachHour", "agentCliUpdateStatus", "agentCliUpdateLog"]) {
+    for (const id of ["strat", "chatRoutingMode", "coachDay", "coachHour", "agentCliUpdateStatus", "agentCliUpdateLog"]) {
       this.children.set(`#${id}`, new FakeElement(id));
     }
     this.children.set("#agentlist", new FakeAgentList("agentlist"));
@@ -158,6 +158,8 @@ function makeDeps(overrides = {}) {
     order: ["claude", "codex"],
     disabled: new Set(["codex"]),
     routes: { chat: "missing", meal_plan: "claude" },
+    chat_routing_mode: "adaptive",
+    chat_profile_bindings: { hidden: { deep: { model: "keep" } } },
     coach_day: 1,
     coach_hour: 8,
     time_zone: "America/New_York",
@@ -174,7 +176,7 @@ function makeDeps(overrides = {}) {
     root: rootEl,
     workingModel: wm,
     meta: {
-      claude: { name: "claude", enabled: true, present: true, configured: true, can_login: true, models_list: true, installable: true },
+      claude: { name: "claude", enabled: true, present: true, configured: true, usable: true, can_login: true, models_list: true, installable: true, capabilities: { model: true, reasoning: ["low", "medium", "high"] } },
       codex: { name: "codex", enabled: true, present: false, configured: null, can_login: true, models_list: false, installable: true },
     },
     routeTasks: [["chat", "Chat"], ["meal_plan", "Meal plan"]],
@@ -242,6 +244,12 @@ test("settings agents controller owns route pins and agent card actions", async 
   strat.change();
   assert.equal(deps.workingModel.agent_strategy, "priority");
 
+  const chatMode = deps.root.querySelector("#chatRoutingMode");
+  chatMode.value = "single";
+  chatMode.change();
+  assert.equal(deps.workingModel.chat_routing_mode, "single");
+  assert.deepEqual(deps.workingModel.chat_profile_bindings.hidden, { deep: { model: "keep" } });
+
   const route = deps.root.routeSelects.find((select) => select.dataset.route === "chat");
   route.value = "claude";
   route.change();
@@ -253,11 +261,11 @@ test("settings agents controller owns route pins and agent card actions", async 
   const list = deps.root.querySelector("#agentlist");
   await list.button("toggle", "codex").click();
   assert.equal(deps.workingModel.disabled.has("codex"), false);
-  assert.equal(harness.dirty, 1);
+  assert.equal(harness.dirty, 2);
 
   await list.button("up", "codex").click();
   assert.deepEqual(deps.workingModel.order, ["codex", "claude"]);
-  assert.equal(harness.dirty, 2);
+  assert.equal(harness.dirty, 3);
 
   await list.button("connect", "claude").click();
   assert.equal(harness.connected, "claude");

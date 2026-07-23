@@ -8,6 +8,7 @@ import {
   type ChatAction,
 } from "../chatActions.js";
 import * as repo from "../repo.js";
+import type { ChatLane } from "../chatRouting.js";
 import {
   CONTEXT_GUARDRAILS,
   renderActiveContext,
@@ -25,6 +26,30 @@ import {
 // CHAT_ACTION_SENTINEL / CHAT_REPLY_SENTINEL now live in shared.js (chat AND the
 // streaming job ops share them). The prompt.js barrel re-exports them via shared.js,
 // so existing `./prompt.js` imports (chatStreamFilter, tests) resolve unchanged.
+
+// Hidden, one-way escalation controls. They are valid only before the reply
+// marker and only for the next stronger lane; the stream filter never exposes
+// pre-reply output, and also strips these tokens defensively after the marker.
+export const CHAT_ESCALATE_COACH_SENTINEL = "===CAIRN_ESCALATE:coach===";
+export const CHAT_ESCALATE_DEEP_SENTINEL = "===CAIRN_ESCALATE:deep===";
+const CHAT_ESCALATION_SENTINELS = [CHAT_ESCALATE_COACH_SENTINEL, CHAT_ESCALATE_DEEP_SENTINEL] as const;
+
+export function parseChatEscalationRequest(text: string, lane: ChatLane): ChatLane | null {
+  if (lane === "deep") return null;
+  const raw = String(text ?? "");
+  const replyAt = raw.indexOf(CHAT_REPLY_SENTINEL);
+  const prefix = replyAt === -1 ? raw : raw.slice(0, replyAt);
+  const lines = new Set(prefix.split(/\r?\n/).map((line) => line.trim()));
+  if (lane === "capture" && lines.has(CHAT_ESCALATE_COACH_SENTINEL)) return "coach";
+  if (lane === "coach" && lines.has(CHAT_ESCALATE_DEEP_SENTINEL)) return "deep";
+  return null;
+}
+
+function stripChatEscalationSentinels(text: string): string {
+  let out = text;
+  for (const sentinel of CHAT_ESCALATION_SENTINELS) out = out.replaceAll(sentinel, "");
+  return out;
+}
 
 // ---- prose-first chat contract ----
 // The chat reply STREAMS, so its contract is prose-first: the model writes the human
@@ -66,6 +91,14 @@ export function parseChatReply(text: string): { reply: string; actions: ChatActi
   const rIdx = raw.lastIndexOf(CHAT_REPLY_SENTINEL);
   const hadMarker = rIdx !== -1;
   if (hadMarker) raw = raw.slice(rIdx + CHAT_REPLY_SENTINEL.length);
+  // A malformed escalation marker after the reply starts is an internal tail,
+  // exactly like the streaming gate treats it: truncate the marker and every
+  // byte after it so neither stored prose nor actions can retain hidden output.
+  const escalationCuts = CHAT_ESCALATION_SENTINELS.map((sentinel) => raw.indexOf(sentinel)).filter(
+    (index) => index >= 0
+  );
+  if (hadMarker && escalationCuts.length) raw = raw.slice(0, Math.min(...escalationCuts));
+  else raw = stripChatEscalationSentinels(raw);
   // With a marker the reply is already clean; without one, fall back to the stripper.
   const clean = (s: string) => (hadMarker ? s.trim() : stripLeadingNarration(s.trim()));
   // lastIndexOf (not indexOf): the real actions block is the LAST sentinel, so a reply
@@ -89,16 +122,101 @@ export function parseChatReply(text: string): { reply: string; actions: ChatActi
   return { reply, actions: normalizeChatActions(actions) };
 }
 
-// Conversational coach. Sees all data; may emit actions the server applies/drafts.
+export interface BuildChatPromptOptions {
+  lane?: ChatLane;
+}
+
+const CAPTURE_ACTION_TYPES = ["log_activity", "log_food", "update_food_note", "log_weight", "log_supplement"] as const;
+
+function escalationContract(lane: ChatLane): string {
+  if (lane === "deep") return "";
+  const sentinel = lane === "capture" ? CHAT_ESCALATE_COACH_SENTINEL : CHAT_ESCALATE_DEEP_SENTINEL;
+  const target = lane === "capture" ? "coach" : "deep";
+  return `\nHIDDEN ONE-WAY ESCALATION: if this needs the stronger ${target} lane, put this exact marker on its own line BEFORE ${CHAT_REPLY_SENTINEL}:\n${sentinel}\nThen STOP. Do not write a reply marker, prose, actions, or any other escalation. Never request a weaker lane.\n`;
+}
+
+function captureContext(ctx: any): Record<string, unknown> {
+  const foodMemoryPattern =
+    /\b(?:allerg|diet|food|meal|eat|breakfast|lunch|dinner|snack|fasted|veget|vegan|protein|calorie|macro|restaurant|cafe|café|supplement)\b/i;
+  const memories = (Array.isArray(ctx?.memory) ? ctx.memory : [])
+    .filter((row: any) => foodMemoryPattern.test(String(row?.content ?? "")))
+    .slice(0, 12)
+    .map((row: any) => ({ id: row.id, kind: row.kind ?? null, content: String(row.content ?? "").slice(0, 300) }));
+  const directives = (Array.isArray(ctx?.directives) ? ctx.directives : [])
+    .filter((row: any) => {
+      if (String(row?.status ?? "active") !== "active") return false;
+      const domain = String(row?.domain ?? "").toLowerCase();
+      return domain === "nutrition" || domain === "watch" || /\b(?:nutrition|food|diet|meal|supplement|allerg|watch)\b/i.test(String(row?.directive ?? ""));
+    })
+    .slice(0, 16)
+    .map((row: any) => ({
+      id: row.id ?? null,
+      domain: row.domain ?? null,
+      marker: row.marker ?? null,
+      directive: row.directive ?? null,
+      uncertain: row.uncertain === true,
+    }));
+  let hardConstraints: unknown = null;
+  try {
+    hardConstraints = repo.mealPlanConstraintSnapshot();
+  } catch {
+    hardConstraints = null;
+  }
+  const intake = ctx?.day_intake ?? {};
+  return {
+    now: ctx?.now ?? null,
+    today_food: {
+      date: intake.date ?? null,
+      totals: intake.totals ?? {},
+      entries: (Array.isArray(intake.entries) ? intake.entries : []).slice(0, 30).map((entry: any) => ({
+        id: entry.id,
+        meal: entry.meal ?? null,
+        kcal: entry.kcal ?? null,
+        protein_g: entry.protein_g ?? null,
+        carbs_g: entry.carbs_g ?? null,
+        fat_g: entry.fat_g ?? null,
+        fiber_g: entry.fiber_g ?? null,
+      })),
+    },
+    goal: {
+      mode: ctx?.goal_mode ?? ctx?.goal?.goal_mode ?? null,
+      effective_target: ctx?.goal?.effective_target ?? null,
+      recommended: ctx?.goal?.recommended ?? null,
+    },
+    hard_constraints: {
+      profile_allergies: String(ctx?.profile?.allergies ?? "").slice(0, 1_000) || null,
+      profile_dietary_restrictions: String(ctx?.profile?.dietary_restrictions ?? "").slice(0, 1_000) || null,
+      canonical: hardConstraints,
+    },
+    food_memory: memories,
+    supplements: (Array.isArray(ctx?.supplements) ? ctx.supplements : []).slice(0, 30).map((row: any) => ({
+      id: row.id ?? null,
+      name: row.name ?? null,
+      dose: row.dose ?? null,
+      frequency: row.frequency ?? null,
+    })),
+    directives,
+  };
+}
+
+// Conversational coach. Coach/deep see the full context; capture receives a
+// deliberately narrow nutrition/capture slice to reduce latency and disclosure.
 // imagePath: absolute path of a photo the user attached this turn — the agent
 // CLIs (Claude Code / Codex) can open local files, same trick as health docs.
-export function buildChatPrompt(history: { role: string; content: string; at?: string }[], message: string, imagePath?: string): string {
+export function buildChatPrompt(
+  history: { role: string; content: string; at?: string }[],
+  message: string,
+  imagePath?: string,
+  options: BuildChatPromptOptions = {}
+): string {
+  const lane = options.lane ?? "coach";
   const ctx = repo.getCoachContext();
   // Prefix each turn with its relative time (when known) so the agent sees the
   // conversation's RHYTHM — what's from this morning vs minutes ago — not a flat,
   // timeless wall of text it would mistake for one continuous moment.
-  const convo = (history || [])
-    .map((m) => `${m.at ? `[${m.at}] ` : ""}${m.role === "user" ? "User" : "Coach"}: ${m.content}`)
+  const historyRows = lane === "capture" ? (history || []).slice(-6) : history || [];
+  const convo = historyRows
+    .map((m) => `${m.at ? `[${m.at}] ` : ""}${m.role === "user" ? "User" : "Coach"}: ${String(m.content ?? "").slice(0, lane === "capture" ? 400 : 4_000)}`)
     .join("\n");
   const photoBlock = imagePath ? `
 ATTACHED PHOTO — the user attached a photo with this message, saved locally at this ABSOLUTE path:
@@ -110,9 +228,35 @@ Open and LOOK at that image file directly before answering.
 - If it is not food (gym equipment, a form-check frame, a menu, a label): just use what you see to
   answer their message; only log when they clearly want something logged.
 ` : "";
+  if (lane === "capture") {
+    return `${CAIRN_PERSONA}
+
+You are handling a fast capture turn. Confirm what the athlete asked to log or correct, and stay inside food/activity/weight/supplement capture. Food is the only supported correction target (use update_food_note with an existing id); activity, weight, and supplement history cannot be edited here. Do not analyze training history, clinical records, imaging, or restructure a plan. Never invent macro precision.
+${escalationContract(lane)}
+${renderChatActionPromptProse(CAPTURE_ACTION_TYPES)}
+Keep the reply short and human. Manual corrections to an existing food id are authoritative; use update_food_note with an id from CAPTURE DATA.
+
+OUTPUT CONTRACT — write your reply between markers so it streams cleanly:
+1. Put this exact marker on its own line immediately before user-facing prose: ${CHAT_REPLY_SENTINEL}
+2. Write only the warm confirmation or brief answer.
+3. Only when an action is needed, put ${CHAT_ACTION_SENTINEL} on its own line and then ONE {"actions":[...]} JSON object.
+
+ACTION SHAPES:
+${renderChatActionSchema(CAPTURE_ACTION_TYPES)}
+${photoBlock}
+RECENT CONVERSATION (bounded):
+${convo || "(new conversation)"}
+
+USER'S MESSAGE: ${message}
+
+CAPTURE DATA (bounded; no training or clinical history):
+${JSON.stringify(captureContext(ctx))}`;
+  }
   return `${CAIRN_PERSONA}
 
 You're chatting with the user inside their app. You can SEE all their data (DATA section) and can ACT by emitting actions.
+ROUTING LANE: ${lane}
+${escalationContract(lane)}
 ${renderNow(ctx)}
 GUARDRAILS:
 - Conservative progression. Respect every exercise constraint_note (e.g. injury limits); never contradict them.

@@ -21,6 +21,43 @@ function settingsAgentsEnabled(deps: ClientSettingsAgentsControllerDeps): Array<
     .filter((agent): agent is Record<string, unknown> & { name: string } => !!agent && !deps.workingModel.disabled.has(agent.name));
 }
 
+function settingsChatProfileAgents(deps: ClientSettingsAgentsControllerDeps): Array<Record<string, unknown> & { name: string }> {
+  return deps.workingModel.order
+    .map((name) => deps.meta[name])
+    .filter((agent): agent is Record<string, unknown> & { name: string } => {
+      const capabilities = agent && typeof agent.capabilities === "object" ? agent.capabilities as Record<string, unknown> : {};
+      return !!agent && agent.usable !== false && capabilities.execution_profile_noop !== true;
+    });
+}
+
+function settingsChatProfileValue(value: string): string {
+  return value.trim().slice(0, 160);
+}
+
+function updateSettingsChatProfile(deps: ClientSettingsAgentsControllerDeps, provider: string, lane: string, key: "model" | "reasoning", value: string): void {
+  if (!provider || !["capture", "coach", "deep"].includes(lane)) return;
+  const defaults: Record<string, string> = { capture: "low", coach: "medium", deep: "high" };
+  const bindings = deps.workingModel.chat_profile_bindings;
+  const profile = { ...(bindings[provider]?.[lane] || {}) };
+  if (key === "model") {
+    const model = settingsChatProfileValue(value);
+    if (model) profile.model = model;
+    else delete profile.model;
+  } else {
+    const capabilities = deps.meta[provider]?.capabilities as Record<string, unknown> | undefined;
+    const levels = Array.isArray(capabilities?.reasoning) ? capabilities.reasoning.filter((item): item is string => typeof item === "string") : [];
+    if (!levels.includes(value)) return;
+    if (value === defaults[lane]) delete profile.reasoning;
+    else profile.reasoning = value;
+  }
+  if (Object.keys(profile).length) {
+    bindings[provider] = { ...(bindings[provider] || {}), [lane]: profile };
+  } else if (bindings[provider]) {
+    delete bindings[provider][lane];
+    if (!Object.keys(bindings[provider]).length) delete bindings[provider];
+  }
+}
+
 function renderSettingsAgents(deps: ClientSettingsAgentsControllerDeps): void {
   const enabledAgents = settingsAgentsEnabled(deps);
   if (deps.pruneRoutes) {
@@ -41,6 +78,9 @@ function renderSettingsAgents(deps: ClientSettingsAgentsControllerDeps): void {
     coachHour: deps.workingModel.coach_hour,
     timeZone: deps.workingModel.time_zone,
     dayNames: deps.dayNames,
+    chatRoutingMode: deps.workingModel.chat_routing_mode,
+    chatProfileBindings: deps.workingModel.chat_profile_bindings,
+    chatProfileAgents: settingsChatProfileAgents(deps),
   });
 
   settingsAgentsRequired<HTMLSelectElement>(deps.root, "#strat").addEventListener("change", (event) => {
@@ -52,6 +92,19 @@ function renderSettingsAgents(deps: ClientSettingsAgentsControllerDeps): void {
   settingsAgentsRequired<HTMLSelectElement>(deps.root, "#coachHour").addEventListener("change", (event) => {
     deps.workingModel.coach_hour = +settingsAgentsSelect(event).value;
   });
+  settingsAgentsRequired<HTMLSelectElement>(deps.root, "#chatRoutingMode").addEventListener("change", (event) => {
+    deps.workingModel.chat_routing_mode = settingsAgentsSelect(event).value === "single" ? "single" : "adaptive";
+    deps.markDirty();
+    renderSettingsAgents(deps);
+  });
+  deps.root.querySelectorAll<HTMLInputElement>("[data-chat-model]").forEach((input) => input.addEventListener("change", () => {
+    updateSettingsChatProfile(deps, input.dataset.provider || "", input.dataset.lane || "", "model", input.value);
+    deps.markDirty();
+  }));
+  deps.root.querySelectorAll<HTMLSelectElement>("[data-chat-reasoning]").forEach((select) => select.addEventListener("change", () => {
+    updateSettingsChatProfile(deps, select.dataset.provider || "", select.dataset.lane || "", "reasoning", select.value);
+    deps.markDirty();
+  }));
   deps.root.querySelectorAll<HTMLSelectElement>("[data-route]").forEach((select) => select.addEventListener("change", () => {
     const task = select.dataset.route || "";
     if (select.value) deps.workingModel.routes[task] = select.value;

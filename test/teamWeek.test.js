@@ -6,7 +6,9 @@ import { insertBrainEvaluation } from "../dist/repo/brain-evaluations.js";
 
 // Read/seed everything in a single UTC basis so date-only window comparisons are
 // deterministic regardless of the machine's local zone (CURRENT_TIMESTAMP is UTC).
-const ASOF = new Date().toISOString().slice(0, 10);
+// Local frame to match isoDaysAgo — a UTC slice here collides with
+// isoDaysAgo(-1) inside the midnight-UTC window, folding "tomorrow" into today.
+const ASOF = isoDaysAgo(0);
 
 function decision(key, overrides = {}) {
   return {

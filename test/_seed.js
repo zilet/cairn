@@ -35,8 +35,12 @@ export function completeMealWeek(parsed = {}) {
 }
 
 // ---- date helpers (YYYY-MM-DD) ----
+// Local frame, NOT UTC: repo day-keys and "today" checks (localDateISO,
+// canonicalWeightLogDate) run in the process zone, so a UTC slice here makes
+// isoDaysAgo(0) read as tomorrow between UTC midnight and local midnight —
+// the midnight-UTC flake window.
 export function isoDaysAgo(n) {
-  return new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
+  return localDateISO(new Date(Date.now() - n * 864e5));
 }
 export function localDaysAgo(n) {
   return localDateISO(new Date(Date.now() - n * 864e5));

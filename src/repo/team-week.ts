@@ -35,7 +35,7 @@ import { canonicalMarker } from "./marker-canon.js";
 import { markerGroup } from "./propagation.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { getRunCompliance, weeklyAerobicLoad } from "./sessions.js";
-import { addDaysISO, localDateISO, metricLabel } from "./shared.js";
+import { addDaysISO, localDateISO, metricLabel, parseDbTime } from "./shared.js";
 import { cutQualityRead, cutQualityWeekLine } from "./cut-quality.js";
 
 // app_state stamp bounding the unseen-insight backlog drain to once per LOCAL day
@@ -138,7 +138,15 @@ function clip(value: unknown, max = 150): string {
 }
 
 function isoDay(value: unknown): string {
-  return String(value ?? "").slice(0, 10);
+  const s = String(value ?? "");
+  // A bare YYYY-MM-DD is already a local day key (effective_date, window_end) —
+  // pass it through untouched (parseDbTime would read it as UTC midnight and
+  // shift it back a day in western zones). A full timestamp is a UTC instant
+  // (SQLite datetime('now')) and must be re-keyed to the LOCAL day, or evening
+  // rows land on "tomorrow" and fall out of a today-anchored window.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const t = parseDbTime(s);
+  return t ? localDateISO(t) : s.slice(0, 10);
 }
 
 function domainLabel(domain: unknown): string {
@@ -625,9 +633,14 @@ function landedItems(windowStart: string, asOf: string): TeamWeekLanded[] {
           ORDER BY e.evaluated_at DESC, e.id DESC
           LIMIT 24`
       )
-      .all(windowStart, asOf) as any[];
+      // The SQL bound compares the raw UTC timestamp's day, which drifts ±1 from
+      // the local day near midnight — widen it a day each side, then re-filter
+      // exactly in the local frame below (isoDay re-keys UTC instants).
+      .all(addDaysISO(windowStart, -1) ?? windowStart, addDaysISO(asOf, 1) ?? asOf) as any[];
     const seen = new Set<string>();
     for (const row of rows) {
+      const when = isoDay(row?.evaluated_at);
+      if (when < windowStart || when > asOf) continue;
       const verdict = String(row?.verdict ?? "");
       if (!CONCLUSIVE_VERDICTS.has(verdict)) continue; // inconclusive/canceled is filler — drop it
       const phrase = VERDICT_WORDS[verdict];
@@ -658,11 +671,14 @@ function insightItems(windowStart: string, asOf: string, drainBacklog: boolean):
             AND substr(created_at, 1, 10) >= ? AND substr(created_at, 1, 10) <= ?
           ORDER BY id DESC LIMIT 4`
       )
-      .all(windowStart, asOf) as any[];
+      // UTC-day prefilter widened a day each side; exact local-frame filter below.
+      .all(addDaysISO(windowStart, -1) ?? windowStart, addDaysISO(asOf, 1) ?? asOf) as any[];
     for (const row of recent) {
       const text = clip(row?.text, 200);
       if (!text) continue;
-      out.push({ id: Number(row.id), text, when: isoDay(row?.created_at), backlog: false });
+      const when = isoDay(row?.created_at);
+      if (when < windowStart || when > asOf) continue;
+      out.push({ id: Number(row.id), text, when, backlog: false });
     }
   } catch {
     /* insights table absent — skip */
@@ -684,12 +700,19 @@ function insightItems(windowStart: string, asOf: string, drainBacklog: boolean):
             WHERE status = 'new'
               AND (kind IS NULL OR kind != 'weekly_read')
               AND substr(created_at, 1, 10) < ?
-            ORDER BY id ASC LIMIT 2`
+            ORDER BY id ASC LIMIT 4`
         )
-        .all(windowStart) as any[];
+        // UTC-day prefilter widened a day; exact local-frame filter below keeps
+        // the drain at ≤2 genuinely pre-window items (a filtered row is not
+        // flipped to seen, so it drains cleanly on a later pass).
+        .all(addDaysISO(windowStart, 1) ?? windowStart) as any[];
+      let drained = 0;
       for (const row of stale) {
+        if (drained >= 2) break;
         const text = clip(row?.text, 200);
         if (!text) continue;
+        if (isoDay(row?.created_at) >= windowStart) continue;
+        drained++;
         out.push({ id: Number(row.id), text, when: isoDay(row?.created_at), backlog: true });
         try {
           updateInsight(Number(row.id), { status: "seen" });

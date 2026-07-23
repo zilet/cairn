@@ -63,6 +63,11 @@ function settingsCompactCount(value: unknown): string {
   return String(Math.round(n));
 }
 
+function settingsFirstMetric(row: Record<string, unknown>, ...keys: string[]): unknown {
+  for (const key of keys) if (row[key] != null) return row[key];
+  return null;
+}
+
 function settingsAttemptStatus(row: Record<string, unknown>): { label: string; cls: string; title: string } {
   if (row.ok) return { label: "clean", cls: "actlog-clean", title: "Completed cleanly" };
   const status = String(row.status || row.error_class || "");
@@ -124,6 +129,20 @@ function agentHealthCard(stats: unknown): string {
     })
     .join("");
   const byOp = Array.isArray(statsRow.by_op) ? statsRow.by_op : [];
+  const byLane = Array.isArray(statsRow.by_lane) ? statsRow.by_lane : [];
+  const laneRows = byLane
+    .map(settingsClientRecord)
+    .filter((row) => row.lane)
+    .map((row) => {
+      const runs = Number(row.runs) || 0;
+      const latencyP50 = settingsFirstMetric(row, "latency_p50_ms", "p50_ms", "p50_latency_ms");
+      const latencyP95 = settingsFirstMetric(row, "latency_p95_ms", "p95_ms", "p95_latency_ms");
+      const ttftP50 = settingsFirstMetric(row, "ttft_p50_ms", "p50_ttft_ms");
+      const ttftP95 = settingsFirstMetric(row, "ttft_p95_ms", "p95_ttft_ms");
+      const latency = latencyP50 != null ? ` · ${settingsLatency(latencyP50)} p50${latencyP95 != null ? ` / ${settingsLatency(latencyP95)} p95` : ""}` : "";
+      const ttft = ttftP50 != null ? ` · TTFT ${settingsLatency(ttftP50)}${ttftP95 != null ? ` / ${settingsLatency(ttftP95)} p95` : ""}` : "";
+      return `<div class="agenthealth-row"><span class="agenthealth-name">${escHtml(String(row.lane))}</span><span class="agenthealth-stat">${runs} run${runs === 1 ? "" : "s"}${latency}${ttft}</span></div>`;
+    }).join("");
   const opRows = byOp
     .slice(0, 8)
     .map(settingsClientRecord)
@@ -140,6 +159,7 @@ function agentHealthCard(stats: unknown): string {
       <div class="lbl" style="margin-bottom:6px">Agent health · last 7 days</div>
       <div class="sess-line">${okLine}</div>
       ${rows ? `<div class="agenthealth-rows">${rows}</div>` : ""}
+      ${laneRows ? `<div class="agenthealth-rows" style="margin-top:8px"><div class="sess-line" style="color:var(--muted)">Chat lanes</div>${laneRows}</div>` : ""}
       ${opRows ? `<div class="agentop-rows">${opRows}</div>` : ""}
       <div class="sess-line" style="color:var(--muted);margin-top:8px">A failed run just falls through to the next enabled agent — this is the quiet pulse, not a verdict.</div>
     </div>`;

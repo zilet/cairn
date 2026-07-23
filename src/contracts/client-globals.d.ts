@@ -828,6 +828,8 @@ declare global {
     order: string[];
     disabled: Set<string>;
     routes: Record<string, string>;
+    chat_routing_mode: "adaptive" | "single";
+    chat_profile_bindings: Record<string, Record<string, Record<string, unknown>>>;
     coach_day: number;
     coach_hour: number;
     time_zone: string;
@@ -2064,6 +2066,8 @@ declare global {
       event(event: Event): Record<string, unknown> | null;
       id(value: unknown): number | null;
       loadDraft(): string;
+      clearRetry(): void;
+      loadRetry(): { requestId: string; text: string; hasImage: boolean; expiresAt: number } | null;
       phaseCaption(
         turn:
           | (Record<string, unknown> & {
@@ -2077,6 +2081,7 @@ declare global {
       record(value: unknown): Record<string, unknown>;
       rows(value: unknown): Array<Record<string, unknown> & { id: number }>;
       saveDraft(value: string): void;
+      saveRetry(value: { requestId: string; text: string; hasImage: boolean; expiresAt: number }): void;
     };
 
     CairnChatTurnStreamState: {
@@ -3246,6 +3251,9 @@ declare global {
         coachHour: number;
         timeZone: string;
         dayNames: string[];
+        chatRoutingMode: "adaptive" | "single";
+        chatProfileBindings: Record<string, Record<string, Record<string, unknown>>>;
+        chatProfileAgents: Array<Record<string, unknown> & { name: string }>;
       }): string;
       agentListHtml(options: {
         order: string[];

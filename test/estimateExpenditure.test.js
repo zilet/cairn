@@ -82,8 +82,18 @@ test("excludes future rows and clamps requested windows to 7..90 days", () => {
     localDaysAgo(-2)
   );
   seedIntake(-2, 9999);
-  seedWeight(localDaysAgo(-3), 190);
-  seedWeight(localDaysAgo(-1), 150);
+  // Simulate legacy/imported corrupt future rows. Public logWeight correctly
+  // rejects these now; the estimator must still ignore rows already in storage.
+  db.prepare("INSERT INTO bodyweight_log (date,weight_lb,note) VALUES (?,?,?)").run(
+    localDaysAgo(-3),
+    190,
+    "legacy future fixture"
+  );
+  db.prepare("INSERT INTO bodyweight_log (date,weight_lb,note) VALUES (?,?,?)").run(
+    localDaysAgo(-1),
+    150,
+    "legacy future fixture"
+  );
 
   const short = repo.estimateExpenditure(1);
   assert.equal(short.window_days, 7);

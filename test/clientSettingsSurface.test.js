@@ -44,6 +44,8 @@ test("settings surface normalizes API data into the working model", () => {
       update_check_enabled: null,
       garmin_username: "athlete@example.com",
       time_zone: "America/New_York",
+      chat_routing_mode: "single",
+      chat_profile_bindings: { hidden: { capture: { model: "keep" } }, visible: { coach: { reasoning: "medium" } } },
     },
     agents: [{ name: "claude", enabled: true }, { name: "stub", enabled: false }, { description: "missing name" }],
     research_auto_eligible: { eligible: true, reason: "web_agent_connected" },
@@ -63,6 +65,9 @@ test("settings surface normalizes API data into the working model", () => {
   assert.equal(wm.lead_mode, "lead");
   assert.equal(wm.garmin_username, "athlete@example.com");
   assert.equal(wm.time_zone, "America/New_York");
+  assert.equal(wm.chat_routing_mode, "single");
+  assert.deepEqual(JSON.parse(JSON.stringify(wm.chat_profile_bindings.hidden)), { capture: { model: "keep" } });
+  assert.equal(wm.chat_profile_bindings.visible.coach.reasoning, "medium");
   assert.equal(surface.routeEligible(data).reason, "web_agent_connected");
 });
 

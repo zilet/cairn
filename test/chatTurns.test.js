@@ -1378,6 +1378,46 @@ test("applyChatActions can correct an existing food note instead of duplicating 
   assert.equal(rows[0].parsed.protein_g, 52);
 });
 
+test("applyChatActions logs a bounded stated weigh-in and rejects malformed weight actions", () => {
+  const { applied, drafts } = applyChatActions(
+    { actions: [{ type: "log_weight", weight_lb: "178.4", date: "2026-07-22", note: "morning" }] },
+    { agent: "stub", message: "I weighed in at 178.4 lb this morning." }
+  );
+  assert.deepEqual(drafts, []);
+  assert.equal(applied.length, 1);
+  assert.equal(applied[0].type, "log_weight");
+  assert.equal(repo.listWeight(10).at(-1).weight_lb, 178.4);
+  assert.equal(repo.listWeight(10).at(-1).date, "2026-07-22");
+
+  const rejected = applyChatActions(
+    { actions: [{ type: "log_weight", weight_lb: "not-a-weight" }, { type: "log_weight", weight_lb: 0 }, { type: "log_weight", weight_lb: 701 }] },
+    { agent: "stub", message: "ignore these" }
+  );
+  assert.deepEqual(rejected.applied, []);
+  assert.equal(repo.listWeight(10).length, 1);
+});
+
+test("weight logging rejects invalid ranges and non-canonical or future dates without mutation", () => {
+  repo.setProfile({ weight_lb: 180 });
+  const beforeRows = repo.listWeight(10);
+  const beforeProfile = repo.getProfile().weight_lb;
+  for (const [weight, date] of [
+    [49.9, undefined],
+    [700.1, undefined],
+    [180, "2026-7-2"],
+    [180, "2026-02-30"],
+    [180, "9999-01-01"],
+  ]) {
+    assert.throws(() => repo.logWeight(weight, date));
+    assert.deepEqual(repo.listWeight(10), beforeRows);
+    assert.equal(repo.getProfile().weight_lb, beforeProfile);
+  }
+
+  const historical = repo.logWeight(179.5, "2020-02-29", "valid historical leap day");
+  assert.equal(historical.date, "2020-02-29");
+  assert.equal(historical.weight_lb, 179.5);
+});
+
 test("applyChatActions logs at-home body measurements immediately", () => {
   const { applied, drafts } = applyChatActions(
     {
@@ -1408,7 +1448,7 @@ test("applyChatActions drops an empty log_measurement before any repo write", ()
 });
 
 test("photo food placeholder is created only for food-intent photo turns", () => {
-  assert.equal(shouldCreatePhotoFoodPlaceholder(""), true, "photo-only keeps the plate-capture path");
+  assert.equal(shouldCreatePhotoFoodPlaceholder(""), false, "photo-only waits for a vision log_food decision");
   assert.equal(shouldCreatePhotoFoodPlaceholder("Lunch plate for today"), true);
   assert.equal(
     shouldCreatePhotoFoodPlaceholder("look at the physique check-in"),

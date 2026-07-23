@@ -20,6 +20,25 @@ function chatComposerKeyboardGeometryOpen(): boolean {
   return document.body.classList.contains("kb-geometry-open");
 }
 
+function chatComposerRequestId(): string {
+  try {
+    const id = globalThis.crypto?.randomUUID?.();
+    if (id) return id;
+  } catch {
+    /* old WebView: use the bounded URL-safe fallback below */
+  }
+  return `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
+}
+
+type ChatComposerRetry = { requestId: string; text: string; image: ChatScreenImagePayload | null; needsImage: boolean; expiresAt: number };
+
+function chatComposerRetryStore(): Pick<ChatTurnRecordsApi, "clearRetry" | "loadRetry" | "saveRetry"> | null {
+  const records = (globalThis as typeof globalThis & { CairnChatTurnRecords?: Partial<ChatTurnRecordsApi> }).CairnChatTurnRecords;
+  return records && typeof records.clearRetry === "function" && typeof records.loadRetry === "function" && typeof records.saveRetry === "function"
+    ? records as Pick<ChatTurnRecordsApi, "clearRetry" | "loadRetry" | "saveRetry">
+    : null;
+}
+
 function clearChatComposerPasteHandler(): void {
   if (!chatComposerPasteHandler) return;
   document.removeEventListener("paste", chatComposerPasteHandler);
@@ -28,6 +47,16 @@ function clearChatComposerPasteHandler(): void {
 
 function wireChatComposer(deps: ChatComposerControllerDeps): ChatComposerControllerHandle {
   let attached: ChatScreenImagePayload | null = null;
+  let sendInFlight = false;
+  const retryStore = chatComposerRetryStore();
+  const storedRetry = retryStore?.loadRetry() || null;
+  let retry: ChatComposerRetry | null = storedRetry
+    ? { requestId: storedRetry.requestId, text: storedRetry.text, image: null, needsImage: storedRetry.hasImage, expiresAt: storedRetry.expiresAt }
+    : null;
+  const persistRetry = (attempt: ChatComposerRetry | null) => {
+    if (!attempt) retryStore?.clearRetry();
+    else retryStore?.saveRetry({ requestId: attempt.requestId, text: attempt.text, hasImage: !!attempt.image || attempt.needsImage, expiresAt: attempt.expiresAt });
+  };
 
   const isChatActive = () => deps.state.tab === "chat";
   const resetChatFocusAfterNativePicker = () => CairnChatAttachment.resetFocusAfterNativePicker({
@@ -51,6 +80,11 @@ function wireChatComposer(deps: ChatComposerControllerDeps): ChatComposerControl
     if (!f) return;
     try {
       attached = await CairnChatAttachment.compressImage(f);
+      if (retry && retry.needsImage && retry.text === deps.input.value.trim()) {
+        retry.image = attached;
+        retry.needsImage = false;
+        persistRetry(retry);
+      }
       const img = CairnChatAttachment.previewImage(deps.preview.querySelector("img"));
       if (img) img.src = attached.dataUrl;
       deps.preview.hidden = false;
@@ -103,13 +137,25 @@ function wireChatComposer(deps: ChatComposerControllerDeps): ChatComposerControl
   // so a follow-up typed while the coach is thinking simply queues (its own turn,
   // drained serially server-side). The monitor streams real progress + finalizes.
   const send = async () => {
+    if (sendInFlight) return;
     const text = deps.input.value.trim();
     const img = attached;
     if (!text && !img) return;
+    if (retry && retry.text === text && retry.needsImage && !img) {
+      deps.toast("Reattach the photo to retry this message");
+      return;
+    }
+    const attempt = retry && retry.text === text && retry.image === img && !retry.needsImage
+      ? retry
+      : { requestId: chatComposerRequestId(), text, image: img, needsImage: false, expiresAt: Date.now() + 15 * 60 * 1000 };
+    // Write the idempotency key and retryable text before clearing the draft or
+    // starting the request. A navigation/reload can now resume this exact request.
+    retry = attempt;
+    persistRetry(attempt);
+    sendInFlight = true;
     deps.input.value = "";
     deps.autosizeInput(deps.input); // collapse the composer back to one line
     deps.saveDraft("");
-    clearAttachment();
     // Optimistic user bubble lands instantly (the server persists it too; a full
     // re-render later draws from server truth, so no duplicate).
     const userMsg: ChatScreenMessage = { role: "user", content: text || "(photo)", meta: img ? { image: img.dataUrl } : null };
@@ -117,15 +163,21 @@ function wireChatComposer(deps: ChatComposerControllerDeps): ChatComposerControl
     deps.rememberFuelContext(userMsg);
     void deps.loadFuel(deps.token);
     try {
-      const body: Record<string, unknown> = { message: text };
+      const body: Record<string, unknown> = { message: text, request_id: attempt.requestId };
       if (img) { body.image_base64 = img.base64; body.image_mime = img.mime; }
       const r = chatComposerRecord(await deps.api("/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }));
-      if (r.turn) { deps.spawnPendingBubble(r.turn); deps.ensureMonitor(); }
-      else deps.appendMsg({ role: "assistant", content: chatComposerString(r.error) || "(no reply)" });
+      if (!r.turn) throw new Error(chatComposerString(r.error) || "enqueue failed");
+      retry = null;
+      persistRetry(null);
+      if (attached === img) clearAttachment();
+      deps.spawnPendingBubble(r.turn);
+      deps.ensureMonitor();
     } catch {
       // Couldn't even enqueue (offline): roll the optimistic bubble back and put
       // the text back in the composer so nothing is lost -- the offline banner says why.
       userBubble?.remove();
+      retry = attempt;
+      persistRetry(attempt);
       if (!deps.input.value) {
         deps.input.value = text;
         deps.saveDraft(text);
@@ -133,6 +185,7 @@ function wireChatComposer(deps: ChatComposerControllerDeps): ChatComposerControl
       }
       deps.toast("Couldn't send — check your connection");
     } finally {
+      sendInFlight = false;
       if (matchMedia("(hover:hover)").matches) deps.input.focus();
     }
   };
@@ -181,8 +234,10 @@ function wireChatComposer(deps: ChatComposerControllerDeps): ChatComposerControl
     deps.saveDraft(deps.input.value);
   } else {
     const draft = deps.loadDraft();
-    if (draft) deps.input.value = draft;
+    if (retry?.text) deps.input.value = retry.text;
+    else if (draft) deps.input.value = draft;
   }
+  if (retry?.needsImage) deps.toast("Reattach the photo to retry this message");
   deps.autosizeInput(deps.input); // fit a restored multi-line draft
   // desktop only -- on mobile, auto-focus pops the keyboard over half the view
   if (matchMedia("(hover:hover)").matches) deps.input.focus();

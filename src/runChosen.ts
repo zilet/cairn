@@ -267,6 +267,8 @@ export async function runChosenWithCoachReads(
         extract: opts.extract,
         acceptParsed,
         mcpConfigArgs: [...COACH_READ_STRICT_MCP_ARGS],
+        model: opts.model,
+        reasoning: opts.reasoning,
       })
     );
   };
@@ -405,6 +407,9 @@ export async function runChosenStreaming(
         const res = await runStreaming(first, prompt, {
           signal: rest.signal,
           timeoutMs: rest.timeoutMs,
+          mcpConfigArgs: rest.mcpConfigArgs,
+          model: rest.model,
+          reasoning: rest.reasoning,
           onDelta: gate.push,
         });
         gate.finish();

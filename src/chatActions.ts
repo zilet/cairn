@@ -13,6 +13,7 @@ export const CHAT_ACTION_TYPES = [
   "supersede_memory",
   "log_food",
   "update_food_note",
+  "log_weight",
   "plan_update",
   "plan_restructure",
   "log_health",
@@ -118,6 +119,13 @@ export interface UpdateFoodNoteAction extends ChatActionBase {
   fiber_g?: unknown;
 }
 
+export interface LogWeightAction extends ChatActionBase {
+  type: "log_weight";
+  weight_lb: number;
+  date?: unknown;
+  note?: unknown;
+}
+
 export interface PlanUpdateAction extends ChatActionBase {
   type: "plan_update";
   summary?: unknown;
@@ -184,6 +192,7 @@ export type ChatAction =
   | SupersedeMemoryAction
   | LogFoodAction
   | UpdateFoodNoteAction
+  | LogWeightAction
   | PlanUpdateAction
   | PlanRestructureAction
   | LogHealthAction
@@ -290,6 +299,14 @@ export const CHAT_ACTION_PROMPT_SPECS = {
     shape: `{ "type": "update_food_note", "id": <existing id from DATA.day_intake.entries>,
       "meal": "breakfast|lunch|dinner|snack|meal", "summary": "<corrected dish name>",
       "kcal": <number|null>, "protein_g": <number|null>, "carbs_g": <number|null>, "fat_g": <number|null>, "fiber_g": <number|null>, "notes": <string|null> }`,
+  },
+  log_weight: {
+    type: "log_weight",
+    applyMode: "immediate",
+    shape: `{ "type": "log_weight", "weight_lb": <number in pounds>, "date": "YYYY-MM-DD|null", "note": "<optional brief note|null>" }`,
+    guidance: [
+      `log_weight records one stated weigh-in. Convert kg to pounds before emitting it. Do not emit it for a historical correction: chat currently has no safe weight-edit action.`,
+    ],
   },
   plan_update: {
     type: "plan_update",
@@ -410,23 +427,27 @@ function renderActionGuidance(types: readonly ChatActionType[]): string {
     .join("\n");
 }
 
-export function renderChatActionSchema(): string {
+export function renderChatActionSchema(types: readonly ChatActionType[] = CHAT_ACTION_TYPES): string {
   return `[
     // zero or more — ONLY when the user clearly asked to log or change something.
-    ${chatActionPromptSpecs()
+    ${types
+      .map((type) => CHAT_ACTION_PROMPT_SPECS[type] as ChatActionPromptSpec)
       .map((spec) => spec.shape)
       .join(",\n    ")}
 ]`;
 }
 
-export function renderChatActionPromptProse(): string {
-  const draftTypes = draftChatActionTypes();
+export function renderChatActionPromptProse(types: readonly ChatActionType[] = CHAT_ACTION_TYPES): string {
+  const immediateTypes = types.filter(
+    (type) => (CHAT_ACTION_PROMPT_SPECS[type] as ChatActionPromptSpec).applyMode === "immediate"
+  );
+  const draftTypes = types.filter((type) => (CHAT_ACTION_PROMPT_SPECS[type] as ChatActionPromptSpec).applyMode === "draft");
   const draftSection = draftTypes.length
     ? `\n- ${draftTypes.join(" and ")} are saved as DRAFTS for the user to review and apply — never assume they're live.\n${renderActionGuidance(draftTypes)}`
     : "";
   return `ACTIONS — only when the user clearly asks to log or change something:
-- ${immediateChatActionTypes().join(", ")} are ROUTED immediately. Safe captures apply now; coached plan changes follow the server's apply/schedule/review autonomy result.
-${renderActionGuidance(immediateChatActionTypes())}
+- ${immediateTypes.join(", ")} are ROUTED immediately. Safe captures apply now; coached plan changes follow the server's apply/schedule/review autonomy result.
+${renderActionGuidance(immediateTypes)}
 ${draftSection}
 - If they're just asking a question, write ONLY the prose reply — no actions block at all.`;
 }
@@ -500,6 +521,12 @@ export function normalizeChatAction(value: unknown): ChatAction | null {
       return { ...value, type: "log_food" };
     case "update_food_note":
       return finiteId(value.id) ? { ...value, type: "update_food_note", id: value.id } : null;
+    case "log_weight": {
+      const weightLb = Number(value.weight_lb);
+      return Number.isFinite(weightLb) && weightLb >= 50 && weightLb <= 700
+        ? { ...value, type: "log_weight", weight_lb: weightLb }
+        : null;
+    }
     case "plan_update": {
       const changes = arrayOrEmpty(value.changes);
       return changes.length ? { ...value, type: "plan_update", changes } : null;

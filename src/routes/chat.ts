@@ -2,28 +2,60 @@ import { Router } from "express";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { enqueueChatTurn, cancelTurn, onTurnEvent, getTurnPartialReply } from "../chatTurns.js";
+import {
+  cancelTurn,
+  completeInstantFoodCapture,
+  enqueueChatTurn,
+  getTurnPartialReply,
+  isInstantFoodCaptureDecision,
+  onTurnEvent,
+} from "../chatTurns.js";
 import { enqueueAgentJob } from "../agentJobs.js";
 import {
-  addChatMessage,
   archiveChat,
   clearChat,
   createAgentJob,
-  createChatTurn,
+  createChatRequest,
   getArchivedConversation,
   getChatMessage,
   getChatTurn,
+  getSettings,
   listActiveChatTurns,
   listArchivedSessions,
   listChatMessages,
+  replayChatRequest,
   searchChatMessages,
 } from "../domain/person/index.js";
+import { classifyChatRoute } from "../chatRouting.js";
 import { UPLOADS_DIR } from "../uploadPaths.js";
 import { extForMime, isAcceptedMime } from "../uploadMime.js";
 
 export const chatRouter = Router();
 
 const CHAT_IMAGE_MAX_BYTES = 4 * 1024 * 1024;
+const CHAT_REQUEST_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
+
+export function normalizeChatRequestId(value: unknown): string | null {
+  if (value == null || value === "") return null;
+  const requestId = String(value).trim();
+  if (!CHAT_REQUEST_ID_RE.test(requestId)) throw new Error("invalid request_id");
+  return requestId;
+}
+
+// A committed request must always be driven toward a terminal state, including
+// when the original HTTP response was lost after SQLite committed but before the
+// instant receipt or in-process enqueue completed. Replays use only the durable
+// row's message/routing (never the retry payload), so resuming is deterministic
+// and cannot repeat a food-note side effect.
+function resumePersistedChatTurn(turn: any) {
+  if (!turn || turn.status !== "queued") return turn;
+  if (isInstantFoodCaptureDecision(turn.routing, turn.message)) {
+    const completed = completeInstantFoodCapture(Number(turn.id), String(turn.message ?? ""));
+    if (completed?.turn) return completed.turn;
+  }
+  enqueueChatTurn(Number(turn.id));
+  return getChatTurn(Number(turn.id));
+}
 
 chatRouter.get("/", (req, res) => res.json(listChatMessages(req.query.limit ? Number(req.query.limit) : 50)));
 
@@ -34,7 +66,24 @@ chatRouter.get("/", (req, res) => res.json(listChatMessages(req.query.limit ? Nu
 // queued mid-think, or a turn interrupted by navigation/reload/restart, survives.
 chatRouter.post("/", (req, res) => {
   const b = req.body ?? {};
-  const message = (b.message ?? "").toString().trim();
+  const rawMessage = (b.message ?? "").toString();
+  const message = rawMessage.trim();
+  let requestId: string | null;
+  try {
+    requestId = normalizeChatRequestId(b.request_id);
+  } catch {
+    return res.status(400).json({ error: "request_id must be 8-128 URL-safe characters" });
+  }
+
+  // Retry lookup precedes base64 decoding and file creation. A response lost
+  // after commit therefore reuses the existing message/turn/note/upload exactly.
+  if (requestId) {
+    const replay = replayChatRequest(requestId) as any;
+    if (replay?.turn) {
+      const turn = resumePersistedChatTurn(replay.turn);
+      return res.json({ ok: true, ...replay, turn, replayed: true });
+    }
+  }
 
   // Optional attached photo (plate shot etc.): saved like a health-doc upload,
   // then the agent gets the absolute path and looks at the file itself.
@@ -62,16 +111,52 @@ chatRouter.post("/", (req, res) => {
 
   if (!message && !imagePath) return res.status(400).json({ error: "message or image required" });
 
-  const userMsg = addChatMessage("user", message || "(photo)", null, imageUrl ? { image: imageUrl } : undefined);
-  const turn = createChatTurn({
-    message,
-    image_path: imagePath,
-    image_url: imageUrl,
-    agent: b.agent ?? null,
-    user_message_id: (userMsg as any).id,
-  });
-  enqueueChatTurn((turn as any).id);
-  res.json({ ok: true, turn, user_message: userMsg });
+  const settings = getSettings();
+  const routing =
+    settings.chat_routing_mode === "adaptive" ? classifyChatRoute({ message, has_image: !!imagePath }) : null;
+  let created: any;
+  try {
+    created = createChatRequest({
+      message,
+      image_path: imagePath,
+      image_url: imageUrl,
+      agent: b.agent ?? null,
+      request_id: requestId,
+      user_content: message || "(photo)",
+      user_meta: imageUrl ? { image: imageUrl } : undefined,
+      ...(routing ? { routing } : {}),
+    });
+  } catch (error) {
+    // The unique index is the final race guard. If another request committed the
+    // same key after our initial lookup, discard only this request's new upload
+    // and return the durable winner.
+    if (requestId) {
+      const replay = replayChatRequest(requestId) as any;
+      if (replay?.turn) {
+        if (imagePath) {
+          try {
+            fs.unlinkSync(imagePath);
+          } catch {
+            /* no orphan cleanup needed */
+          }
+        }
+        const replayedTurn = resumePersistedChatTurn(replay.turn);
+        return res.json({ ok: true, ...replay, turn: replayedTurn, replayed: true });
+      }
+    }
+    if (imagePath) {
+      try {
+        fs.unlinkSync(imagePath);
+      } catch {
+        /* preserve the original error */
+      }
+    }
+    throw error;
+  }
+  const turn = created.turn;
+  const userMsg = created.user_message;
+  const progressedTurn = resumePersistedChatTurn(turn);
+  res.json({ ok: true, turn: progressedTurn, user_message: userMsg });
 });
 
 // Read-only history: browse past conversations (archived by "fresh start") and

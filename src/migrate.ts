@@ -1264,21 +1264,76 @@ export const MIGRATIONS: Migration[] = [
       addColumn(db, "dicom_series", "patient_fingerprint TEXT");
     },
   },
-  // v68-v74 are RESERVED no-ops: those version numbers were already consumed on the live
-  // primary deployment by parallel-session checkouts that deploy without merging here
-  // first (PRAGMA user_version on that DB reached 74 while this ladder ended at 67), so a
-  // new migration numbered at-or-below 74 would be silently skipped there and its schema
-  // change would never apply (fresh DBs mask the miss via CREATE TABLE IF NOT EXISTS).
-  // Keeping the slots as explicit no-ops preserves the gapless-ladder invariant and makes
-  // the next real migration number safely 76+. Before numbering a migration, check the
-  // LIVE deployment's user_version, not just this array's tail. If a parallel round later
-  // merges its schema change into this file, it should KEEP its reserved slot number and
-  // replace that placeholder's up() with the real (idempotent) change.
-  ...[68, 69, 70, 71, 72, 73, 74].map((version) => ({
-    version,
-    name: `reserved-parallel-deploy-v${version}`,
-    up: () => {},
-  })),
+  // v68-v74 were briefly reserved no-ops after a parallel-deploy version collision (a
+  // deployment's user_version reached 74 while this ladder ended at 67). The adaptive-chat
+  // round that originally consumed those versions has since merged, so the slots now carry
+  // their real (idempotent) changes again; v76 backfills them for any DB that migrated
+  // through the no-op window. Before numbering a new migration, check the LIVE
+  // deployment's user_version, not just this array's tail.
+  {
+    version: 68,
+    name: "chat-turn-routing-decision",
+    up: (db) => addColumn(db, "chat_turns", "routing_json TEXT"),
+  },
+  {
+    version: 69,
+    name: "chat-turn-capture-food-note",
+    up: (db) => addColumn(db, "chat_turns", "capture_food_note_id INTEGER"),
+  },
+  {
+    version: 70,
+    name: "settings-chat-routing-mode",
+    up: (db) => addColumn(db, "settings", "chat_routing_mode TEXT DEFAULT 'adaptive'"),
+  },
+  {
+    version: 71,
+    name: "settings-chat-profile-bindings",
+    up: (db) => addColumn(db, "settings", "chat_profile_bindings TEXT DEFAULT ''"),
+  },
+  {
+    version: 72,
+    name: "adaptive-chat-agent-telemetry",
+    up: (db) => {
+      addColumn(db, "agent_runs", "lane TEXT");
+      addColumn(db, "agent_runs", "policy_version TEXT");
+      addColumn(db, "agent_runs", "reason_codes_json TEXT");
+      addColumn(db, "agent_runs", "requested_model TEXT");
+      addColumn(db, "agent_runs", "requested_reasoning TEXT");
+      addColumn(db, "agent_runs", "effective_reasoning TEXT");
+      addColumn(db, "agent_runs", "streaming INTEGER");
+      addColumn(db, "agent_runs", "ttft_ms INTEGER");
+      addColumn(db, "agent_runs", "chat_turn_id INTEGER");
+      addColumn(db, "agent_runs", "attempt_index INTEGER");
+      addColumn(db, "agent_runs", "escalation_source TEXT");
+    },
+  },
+  {
+    version: 73,
+    name: "chat-turn-request-idempotency",
+    up: (db) => {
+      addColumn(db, "chat_turns", "request_id TEXT");
+      addColumn(db, "chat_turns", "idempotent_replays INTEGER NOT NULL DEFAULT 0");
+      try {
+        db.exec(
+          "CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_turns_request_id ON chat_turns(request_id) WHERE request_id IS NOT NULL"
+        );
+      } catch {
+        /* partial historical test/schema without chat_turns: addColumn was also a no-op */
+      }
+    },
+  },
+  {
+    version: 74,
+    name: "chat-turn-build-scope",
+    up: (db) => {
+      addColumn(db, "chat_turns", "build_id TEXT");
+      try {
+        db.exec("CREATE INDEX IF NOT EXISTS idx_chat_turns_build_created ON chat_turns(build_id, created_at)");
+      } catch {
+        /* partial historical test/schema without chat_turns: addColumn was also a no-op */
+      }
+    },
+  },
   {
     version: 75,
     name: "directive-intent-key",
@@ -1287,6 +1342,42 @@ export const MIGRATIONS: Migration[] = [
     // insert classifies + stores it, so identity is stable across the markers /
     // health_review sources.
     up: (db) => addColumn(db, "health_directives", "intent_key TEXT"),
+  },
+  {
+    version: 76,
+    name: "adaptive-chat-columns-backfill",
+    // A build shipped while v68-v74 were reserved no-ops; a DB that migrated to v75
+    // through that window has the version numbers burned but not the columns. Re-run
+    // every adaptive-chat column add idempotently (addColumn is a try/catch no-op when
+    // the column exists) so all deployments converge on the same schema.
+    up: (db) => {
+      addColumn(db, "chat_turns", "routing_json TEXT");
+      addColumn(db, "chat_turns", "capture_food_note_id INTEGER");
+      addColumn(db, "settings", "chat_routing_mode TEXT DEFAULT 'adaptive'");
+      addColumn(db, "settings", "chat_profile_bindings TEXT DEFAULT ''");
+      addColumn(db, "agent_runs", "lane TEXT");
+      addColumn(db, "agent_runs", "policy_version TEXT");
+      addColumn(db, "agent_runs", "reason_codes_json TEXT");
+      addColumn(db, "agent_runs", "requested_model TEXT");
+      addColumn(db, "agent_runs", "requested_reasoning TEXT");
+      addColumn(db, "agent_runs", "effective_reasoning TEXT");
+      addColumn(db, "agent_runs", "streaming INTEGER");
+      addColumn(db, "agent_runs", "ttft_ms INTEGER");
+      addColumn(db, "agent_runs", "chat_turn_id INTEGER");
+      addColumn(db, "agent_runs", "attempt_index INTEGER");
+      addColumn(db, "agent_runs", "escalation_source TEXT");
+      addColumn(db, "chat_turns", "request_id TEXT");
+      addColumn(db, "chat_turns", "idempotent_replays INTEGER NOT NULL DEFAULT 0");
+      addColumn(db, "chat_turns", "build_id TEXT");
+      try {
+        db.exec(
+          "CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_turns_request_id ON chat_turns(request_id) WHERE request_id IS NOT NULL"
+        );
+        db.exec("CREATE INDEX IF NOT EXISTS idx_chat_turns_build_created ON chat_turns(build_id, created_at)");
+      } catch {
+        /* index creation is best-effort on partial historical schemas */
+      }
+    },
   },
 ];
 

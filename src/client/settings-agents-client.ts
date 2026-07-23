@@ -29,6 +29,9 @@ type SettingsAgentsSliceOptions = {
   coachHour: number;
   timeZone: string;
   dayNames: string[];
+  chatRoutingMode: "adaptive" | "single";
+  chatProfileBindings: Record<string, Record<string, Record<string, unknown>>>;
+  chatProfileAgents: SettingsAgentsAgent[];
 };
 
 type SettingsAgentsListOptions = {
@@ -58,6 +61,51 @@ function settingsAgentHourOptions(selectedHour: number): string {
   ).join("");
 }
 
+const SETTINGS_CHAT_LANES = [
+  ["capture", "Capture", "low"],
+  ["coach", "Coach", "medium"],
+  ["deep", "Deep", "high"],
+] as const;
+
+function settingsChatReasoningOptions(reasoning: unknown, fallback: string, capabilities: unknown): string {
+  const allowed = settingsAgentsRecord(capabilities).reasoning;
+  const levels = Array.isArray(allowed)
+    ? allowed.filter((value): value is string => typeof value === "string" && value.length <= 24)
+    : [];
+  const selected = typeof reasoning === "string" && levels.includes(reasoning) ? reasoning : fallback;
+  return levels.map((level) => `<option value="${escAttr(level)}" ${selected === level ? "selected" : ""}>${escHtml(level)}</option>`).join("");
+}
+
+function settingsAgentsRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? value as Record<string, unknown> : {};
+}
+
+function settingsChatProfilesHtml(options: SettingsAgentsSliceOptions): string {
+  const rows = (options.chatProfileAgents || []).map((agent) => {
+    const name = agent.name;
+    const capabilities = settingsAgentsRecord(agent.capabilities);
+    const bindings = settingsAgentsRecord((options.chatProfileBindings || {})[name]);
+    const supportsModel = capabilities.model === true;
+    const supportsReasoning = Array.isArray(capabilities.reasoning) && capabilities.reasoning.length > 0;
+    const lanes = SETTINGS_CHAT_LANES.map(([lane, label, fallback]) => {
+      const profile = settingsAgentsRecord(bindings[lane]);
+      const model = typeof profile.model === "string" ? profile.model.slice(0, 160) : "";
+      const modelField = supportsModel
+        ? `<label class="field" style="margin:0"><span class="sr-only">${escHtml(name)} ${label} model</span><input data-chat-model data-provider="${escAttr(name)}" data-lane="${lane}" maxlength="160" value="${escAttr(model)}" placeholder="CLI default"></label>`
+        : `<span class="sess-line" style="color:var(--muted)">CLI default</span>`;
+      const reasoningField = supportsReasoning
+        ? `<label class="field" style="margin:0"><span class="sr-only">${escHtml(name)} ${label} reasoning</span><select data-chat-reasoning data-provider="${escAttr(name)}" data-lane="${lane}">${settingsChatReasoningOptions(profile.reasoning, fallback, capabilities)}</select></label>`
+        : `<span class="sess-line" style="color:var(--muted)">CLI default</span>`;
+      return `<div class="logrow" style="align-items:center;margin-top:6px"><span class="lbl" style="min-width:58px">${label}</span>${modelField}${reasoningField}</div>`;
+    }).join("");
+    return `<div class="sess" style="margin-top:10px"><div class="sess-line"><b>${escHtml(name)}</b></div>${lanes}</div>`;
+  }).join("");
+  return `<details class="route-card" style="margin-top:14px"><summary><h1 class="lbl" style="display:inline">Advanced model profiles</h1></summary>
+    <p class="set-group-sub" style="margin-top:8px">Optional provider pins. A blank model keeps that CLI’s default. Capture starts low, coaching balanced, and deeper work high unless you choose otherwise.</p>
+    ${rows || `<div class="sess-line" style="color:var(--muted)">Connect an agent to tune its available profiles.</div>`}
+  </details>`;
+}
+
 function settingsAgentsSliceHtml(options: SettingsAgentsSliceOptions): string {
   return `
       <section class="set-group set-group--flush">
@@ -69,6 +117,14 @@ function settingsAgentsSliceHtml(options: SettingsAgentsSliceOptions): string {
             ${settingsAgentStrategyOption(options.agentStrategy, "random", "Random · dice")}
             ${settingsAgentStrategyOption(options.agentStrategy, "priority", "Priority · top first, fall back on failure")}
           </select></div>
+
+        <div class="field" style="margin-top:14px"><label>Adaptive chat</label>
+          <select id="chatRoutingMode">
+            <option value="adaptive" ${options.chatRoutingMode === "adaptive" ? "selected" : ""}>Adaptive · recommended</option>
+            <option value="single" ${options.chatRoutingMode === "single" ? "selected" : ""}>Single profile · legacy</option>
+          </select>
+          <div class="sess-line" style="color:var(--muted);margin-top:6px">Routine capture uses low reasoning, ordinary coaching stays balanced, and deeper or safety work gets more care. Provider pins and fallback still apply.${options.chatRoutingMode === "single" ? " Saved profiles stay ready, but are inactive in Single profile mode." : ""}</div>
+        </div>
 
         <h1 class="lbl" style="margin:18px 0 8px">Agents</h1>
         <div id="agentlist"></div>
@@ -83,6 +139,8 @@ function settingsAgentsSliceHtml(options: SettingsAgentsSliceOptions): string {
           <p class="set-group-sub" style="margin-top:2px">Optional. Pin a specific agent to a task — say chat to one, meal drafts to another. Leave any task on <b>Auto</b> to use the rotation above. Only enabled agents appear.</p>
           <div id="routelist" class="route-list">${options.routeRowsHtml}</div>
         </details>
+
+        ${settingsChatProfilesHtml(options)}
 
         <h1 class="lbl" style="margin:22px 0 8px">Weekly review cadence</h1>
         <p class="set-group-sub">Cairn keeps learning from your input in the background. This is its weekly whole-picture review; bounded changes follow your autonomy setting and stay visible and reversible.</p>

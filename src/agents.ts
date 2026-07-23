@@ -23,6 +23,17 @@ function debugAgentStderr(name: string, code: number | null, stderr: string) {
   console.error(`[agent:${name}] exit ${code} stderr:\n${s.slice(0, 4000)}`);
 }
 
+export type ReasoningLevel = "low" | "medium" | "high" | "xhigh";
+
+export interface AgentCapabilities {
+  /** This CLI accepts a per-run model pin through model_flag. */
+  model?: boolean;
+  /** Provider-supported reasoning levels, ordered from least to most effort. */
+  reasoning?: ReasoningLevel[];
+  /** The offline stub intentionally ignores execution profiles for smoke tests. */
+  execution_profile_noop?: boolean;
+}
+
 export interface AgentDef {
   command: string;
   args: string[];                 // "{prompt}" is substituted with the full prompt
@@ -39,6 +50,8 @@ export interface AgentDef {
   auth_state?: string[] | null; // HOME-relative paths whose presence is a fallback "logged in" signal when there is no status_check
   models_list?: string[] | null; // argv that prints the available models (grok/agy); null ⇒ no model catalog
   model_flag?: string[] | null; // ["--model","{model}"] — expanded only at an explicit {model_args} slot
+  capabilities?: AgentCapabilities;
+  reasoning_flag?: string[] | null; // e.g. ["--effort","{reasoning}"] at {reasoning_args}
   // Optional headless token-streaming. When present, the chat path can run the CLI
   // in its NDJSON streaming mode (separate args) and render the reply live. `format`
   // selects the per-CLI event adapter (see streamDelta). Absent → one-shot only.
@@ -85,6 +98,7 @@ export function listAgents() {
     // pure config reads, surfaced so the UI can render the right affordances.
     can_login: def.login != null,
     models_list: def.models_list != null,
+    capabilities: normalizedAgentCapabilities(def),
     installable: !!def.install,
     install_method: def.install?.method ?? null,
     install_version: def.install?.method === "npm" ? def.install.version : null,
@@ -639,6 +653,81 @@ export interface RunOpts {
   mcpConfigArgs?: string[];
   /** Optional per-run model pin. Only agents with a {model_args} slot consume it. */
   model?: string;
+  /** Provider-neutral reasoning effort; unsupported xhigh maps down to high. */
+  reasoning?: ReasoningLevel;
+}
+
+const REASONING_LEVELS: readonly ReasoningLevel[] = ["low", "medium", "high", "xhigh"];
+
+export interface ResolvedAgentExecutionProfile {
+  requested: { model?: string; reasoning?: ReasoningLevel };
+  effective: { model?: string; reasoning?: ReasoningLevel };
+  adjustments: string[];
+  noop: boolean;
+}
+
+/** Pure config normalization used by runtime callers before choosing a profile. */
+export function normalizedAgentCapabilities(def: AgentDef): Required<AgentCapabilities> {
+  const declared = def.capabilities;
+  const reasoning = Array.isArray(declared?.reasoning)
+    ? declared.reasoning.filter((value): value is ReasoningLevel => REASONING_LEVELS.includes(value))
+    : [];
+  return {
+    // model_flag inference preserves compatibility with third-party agents.json files.
+    model: declared?.model === true || (!declared && Array.isArray(def.model_flag)),
+    reasoning,
+    execution_profile_noop: declared?.execution_profile_noop === true,
+  };
+}
+
+/**
+ * Pure provider-neutral profile resolution. Requested data is either represented
+ * in `effective`, reported as an explicit stub no-op, or rejected — never silently
+ * discarded. Providers that top out at high deterministically map xhigh to high.
+ */
+export function resolveAgentExecutionProfile(
+  def: AgentDef,
+  requested: Pick<RunOpts, "model" | "reasoning">
+): ResolvedAgentExecutionProfile {
+  const model = typeof requested.model === "string" ? requested.model.trim() : undefined;
+  const reasoning = requested.reasoning;
+  if (reasoning !== undefined && !REASONING_LEVELS.includes(reasoning)) {
+    throw new Error(`Unsupported reasoning level "${String(reasoning)}"`);
+  }
+  const profile: ResolvedAgentExecutionProfile = {
+    requested: { ...(model ? { model } : {}), ...(reasoning ? { reasoning } : {}) },
+    effective: {},
+    adjustments: [],
+    noop: false,
+  };
+  if (!model && !reasoning) return profile;
+
+  const capabilities = normalizedAgentCapabilities(def);
+  if (capabilities.execution_profile_noop) {
+    profile.noop = true;
+    profile.adjustments.push("execution profile intentionally ignored by offline stub");
+    return profile;
+  }
+  if (model) {
+    if (!capabilities.model || !Array.isArray(def.model_flag)) {
+      throw new Error("Agent does not support a per-run model profile");
+    }
+    profile.effective.model = model;
+  }
+  if (reasoning) {
+    if (!Array.isArray(def.reasoning_flag) || !capabilities.reasoning.length) {
+      throw new Error("Agent does not support a per-run reasoning profile");
+    }
+    if (capabilities.reasoning.includes(reasoning)) {
+      profile.effective.reasoning = reasoning;
+    } else if (reasoning === "xhigh" && capabilities.reasoning.includes("high")) {
+      profile.effective.reasoning = "high";
+      profile.adjustments.push("reasoning xhigh mapped to provider maximum high");
+    } else {
+      throw new Error(`Agent does not support reasoning level "${reasoning}"`);
+    }
+  }
+  return profile;
 }
 
 const UPLOAD_IMAGE_RE = /\.(?:jpe?g|png|webp|gif|heic|heif)$/i;
@@ -684,8 +773,9 @@ function expandAgentArgs(
   prompt: string,
   useStdin: boolean,
   mcpConfigArgs: string[] = [],
-  model?: string
+  requestedProfile: Pick<RunOpts, "model" | "reasoning"> = {}
 ): string[] {
+  const profile = resolveAgentExecutionProfile(def, requestedProfile).effective;
   const dataDir = path.resolve(agentDataDir(process.env));
   const needsFileAccess = promptReferencesDataDir(prompt);
   const images = needsFileAccess ? extractPromptImagePaths(prompt) : [];
@@ -694,6 +784,8 @@ function expandAgentArgs(
     .replaceAll("{image}", image ?? "")
     .replaceAll("{prompt}", useStdin ? "{prompt}" : prompt);
   const out: string[] = [];
+  let expandedModel = false;
+  let expandedReasoning = false;
   for (const arg of args) {
     if (arg === "{file_access_args}") {
       if (needsFileAccess) out.push(...(def.file_access_args || []).map((x) => replaceCommon(x)));
@@ -710,15 +802,26 @@ function expandAgentArgs(
       continue;
     }
     if (arg === "{model_args}") {
-      const chosen = String(model ?? "").trim();
+      expandedModel = true;
+      const chosen = profile.model;
       if (chosen && Array.isArray(def.model_flag)) {
         out.push(...def.model_flag.map((value) => replaceCommon(value).replaceAll("{model}", chosen)));
+      }
+      continue;
+    }
+    if (arg === "{reasoning_args}") {
+      expandedReasoning = true;
+      const chosen = profile.reasoning;
+      if (chosen && Array.isArray(def.reasoning_flag)) {
+        out.push(...def.reasoning_flag.map((value) => replaceCommon(value).replaceAll("{reasoning}", chosen)));
       }
       continue;
     }
     const expanded = replaceCommon(arg);
     if (expanded !== "") out.push(expanded);
   }
+  if (profile.model && !expandedModel) throw new Error("Agent argv template has no {model_args} slot");
+  if (profile.reasoning && !expandedReasoning) throw new Error("Agent argv template has no {reasoning_args} slot");
   return out;
 }
 
@@ -900,6 +1003,7 @@ export async function runAgentWithFallback(
         extract: o.extract,
         mcpConfigArgs: o.mcpConfigArgs,
         model: o.model,
+        reasoning: o.reasoning,
       });
       const parsedBeforeRepair = !!result.parsed;
       const acceptedBeforeRepair = acceptsParsed(result, o.acceptParsed);
@@ -914,6 +1018,7 @@ export async function runAgentWithFallback(
             extract: o.extract,
             mcpConfigArgs: o.mcpConfigArgs,
             model: o.model,
+            reasoning: o.reasoning,
           });
         } catch {
           /* keep the first (unparsed) result; fall through below */
@@ -984,7 +1089,8 @@ export function runAgent(name: string, prompt: string, opts: RunOpts | number = 
   const extract = typeof opts === "number" ? undefined : opts.extract;
   const mcpConfigArgs = typeof opts === "number" ? undefined : opts.mcpConfigArgs;
   const model = typeof opts === "number" ? undefined : opts.model;
-  return runAgentImpl(name, prompt, timeoutMs, signal, extract, mcpConfigArgs, model);
+  const reasoning = typeof opts === "number" ? undefined : opts.reasoning;
+  return runAgentImpl(name, prompt, timeoutMs, signal, extract, mcpConfigArgs, model, reasoning);
 }
 
 // ---------- subprocess env/workdir hardening (Trust build V1) ----------
@@ -1002,13 +1108,14 @@ function runAgentImpl(
   signal?: AbortSignal,
   extract?: (text: string) => any | null,
   mcpConfigArgs?: string[],
-  model?: string
+  model?: string,
+  reasoning?: ReasoningLevel
 ): Promise<AgentResult> {
   const def = loadAgents()[name];
   if (!def) return Promise.reject(new Error(`Unknown agent "${name}"`));
 
   const useStdin = def.input === "stdin";
-  const args = expandAgentArgs(def, def.args, prompt, useStdin, mcpConfigArgs, model);
+  const args = expandAgentArgs(def, def.args, prompt, useStdin, mcpConfigArgs, { model, reasoning });
 
   // Cap accumulated output so a runaway/verbose CLI can't balloon RSS on a small
   // host (e.g. the Pi), especially during a multi-job enrichment queue drain.
@@ -1182,7 +1289,10 @@ export function runAgentStreaming(name: string, prompt: string, opts: StreamRunO
   const onDelta = opts.onDelta;
   const format = def.stream.format;
   const useStdin = def.input === "stdin";
-  const args = expandAgentArgs(def, def.stream.args, prompt, useStdin, opts.mcpConfigArgs, opts.model);
+  const args = expandAgentArgs(def, def.stream.args, prompt, useStdin, opts.mcpConfigArgs, {
+    model: opts.model,
+    reasoning: opts.reasoning,
+  });
   const MAX_OUT = 4 * 1024 * 1024;
 
   return new Promise((resolve, reject) => {

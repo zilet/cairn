@@ -80,6 +80,19 @@ function settingsSurfaceBool(value: unknown, fallback = false): boolean {
   return value == null ? fallback : !!value;
 }
 
+function settingsSurfaceChatBindings(value: unknown): Record<string, Record<string, Record<string, unknown>>> {
+  const raw = settingsSurfaceRecord(value);
+  const bindings: Record<string, Record<string, Record<string, unknown>>> = {};
+  for (const [provider, lanesValue] of Object.entries(raw)) {
+    const lanes = settingsSurfaceRecord(lanesValue);
+    bindings[provider] = {};
+    for (const [lane, profileValue] of Object.entries(lanes)) {
+      bindings[provider][lane] = { ...settingsSurfaceRecord(profileValue) };
+    }
+  }
+  return bindings;
+}
+
 function settingsData(value: unknown): SettingsScreenData {
   const row = settingsSurfaceRecord(value);
   const agents = Array.isArray(row.agents)
@@ -106,6 +119,10 @@ function settingsWorkingModel(data: SettingsScreenData): SettingsScreenWorkingMo
     order: agents.map((agent) => agent.name),
     disabled: new Set(agents.filter((agent) => !agent.enabled).map((agent) => agent.name)),
     routes: { ...settingsSurfaceRecord(s.agent_routes) } as Record<string, string>,
+    chat_routing_mode: s.chat_routing_mode === "single" ? "single" : "adaptive",
+    // Keep provider/lane entries the current UI cannot render; saving an unrelated
+    // setting must not erase a future provider's profile preferences.
+    chat_profile_bindings: settingsSurfaceChatBindings(s.chat_profile_bindings),
     enrich_enabled: settingsSurfaceBool(s.enrich_enabled),
     art_enabled: settingsSurfaceBool(s.art_enabled, true),
     research_enabled: settingsSurfaceBool(s.research_enabled),
