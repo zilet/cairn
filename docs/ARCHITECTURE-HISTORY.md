@@ -4,6 +4,41 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-07-23 — pace-aware fuel reads + Brief cache invalidation on food/plan writes
+
+A **fuel-reactivity** round fixed the Brief's FUEL line being pace-blind: it used
+to say "protein is ~N g short of today's target" whenever ≥25 g remained, which
+reads as a nag before lunch even when intake is on track. `dayFuelState()`
+(`src/repo/fuel-state.ts`, no schema migration — pure/deterministic, `now`
+injectable for tests) grades protein against where you'd EXPECT to be at this
+point in the eating window (first-logged-meal-or-07:00 start through a 21:00
+end) rather than the raw remaining grams, returning a `behind | on_pace | met`
+bucket plus the last-logged-meal recency; a past day falls back to a full-day
+total since pace is meaningless once the day is over. `dayRead()`
+(`src/repo/day-read.ts`) stamps the bucket/so-far/target into `signals.fuel` so
+the cached row carries it, and `readToday()`
+(`src/domain/brain/day-read-use-case.ts`) treats a fuel-bucket flip between two
+present buckets (e.g. a lunch moving behind→on_pace) as a serve-time material
+truth change that heals the cached prose — a cache row from before this signal
+existed has no fuel key and is treated as no-change, so deploy never churns the
+whole cache. `debriefFacts()` (`src/prompt/day.ts`) renders the new bucket into
+plain words ("protein's running behind pace — 65 g in so far vs ~110 g you'd
+expect by now"; on-pace and met read as calm, no-nudge lines). A new
+`localHourFraction()` (`src/repo/shared.ts`) gives the pace model minute-precision
+against the device's active zone via the existing `zonedParts` machinery.
+
+Separately, food and meal-plan writes in `src/repo/nutrition.ts` now call the
+existing `invalidateDayRead()` so the cached Brief recomputes instead of going
+stale: `acceptMealPlan`/`restoreMealPlanAfterUndo` (a different plan becomes
+current), `updateMealPlanDays`/`swapMealInPlan` (the plan's content changed),
+and every food-note write path (`scheduleFoodNoteEffects`'s
+`invalidateDayReadForDate` helper, plus `deleteFoodNote`/`updateFoodNoteParsed`/
+`updateFoodNote`) — the helper busts both the entry's own local day and, when
+that isn't today, today's cache too, since a past day's intake still feeds the
+trailing-average expenditure/fuel reads that shape today's Brief.
+`setMealRecipe` deliberately does not invalidate — caching a recipe doesn't
+change what the plan prescribes. No schema migration in this round.
+
 ## 2026-07-20 — durable daily-session compositions
 
 Daily session acceptance now persists a full, immutable execution snapshot in

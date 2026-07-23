@@ -75,8 +75,8 @@ The original lunch failure mode is explicitly guarded: a food-only turn cannot t
 - Migration v60 adds evidence-governance metadata and safely backfills legacy evidence as source-only/unverified rather than pretending claim verification.
 - Fresh databases receive every new table/column directly from `src/db.ts`.
 - Export/backup includes the decision ledger and rollback records.
-- REST and MCP remain thin mirrors over shared domain/repo services. Generated indexes currently report 241 REST routes and 199 MCP tools.
-- The PWA cache is `cairn-v452`.
+- REST and MCP remain thin mirrors over shared domain/repo services. At integration time (2026-07-09) the generated indexes reported 241 REST routes and 199 MCP tools; the current counts are always `docs/API.md` / `docs/MCP-TOOLS.md`.
+- The PWA cache at integration time was `cairn-v452`; the current version is always the `CACHE` constant in `public/sw.js`.
 
 ## Verification evidence
 

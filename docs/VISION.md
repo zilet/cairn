@@ -776,6 +776,8 @@ modes (lose/maintain/gain) + a daily fuel review & edit (v41). Schema reached **
 
 ## 12. Era 2 — the calm daily driver (the active frontier)
 
+*(Items 1–6 below shipped — see the §11 progress log; kept as the design rationale of record.)*
+
 > Era 1 (§6) made Cairn *read your day*. It worked — and the product grew far past the original plan
 > (§11). Era 2 is the deliberate response to what that growth cost: it defends **calm-by-default**
 > (§2.2) and **restraint-over-features** (§2.4) as first-class engineering, turns the boldest promise
