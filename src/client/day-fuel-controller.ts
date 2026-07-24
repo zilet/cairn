@@ -14,6 +14,7 @@ type DayFuelControllerOptions = {
 (() => {
   const DAY_FUEL_ASK = "How's my eating shaping up today, and does it fit my goal?";
   const EMPTY_TOTALS = { kcal: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0 };
+  const EMPTY_KNOWN = { kcal: false, protein_g: false, carbs_g: false, fat_g: false, fiber_g: false };
   // Ids we already have a live enrichment watcher for — one per pending food note,
   // cleared when the watch resolves, so a re-render never opens a duplicate stream.
   const _fuelWatched = new Set<number>();
@@ -43,10 +44,12 @@ type DayFuelControllerOptions = {
   }
 
   function fuelMealOptions(entry: DayFuelControllerEntry): string {
-    return ["breakfast", "lunch", "dinner", "snack", "meal"].map((meal) => {
-      const selected = String(entry.meal || "").toLowerCase() === meal ? "selected" : "";
-      return `<option value="${meal}" ${selected}>${CairnDayFuel.MEAL_LABEL[meal]}</option>`;
-    }).join("");
+    return ["breakfast", "lunch", "dinner", "snack", "meal"]
+      .map((meal) => {
+        const selected = String(entry.meal || "").toLowerCase() === meal ? "selected" : "";
+        return `<option value="${meal}" ${selected}>${CairnDayFuel.MEAL_LABEL[meal]}</option>`;
+      })
+      .join("");
   }
 
   function renderDayFuel(token: number, day: DayFuelControllerDay, options: DayFuelControllerOptions = {}): void {
@@ -61,12 +64,16 @@ type DayFuelControllerOptions = {
     state._dayFuel = day;
     slot.innerHTML = CairnDayFuel.dayFuelHtml(day as unknown as Record<string, unknown>);
     runCountUps(slot);
-    slot.querySelectorAll<HTMLElement>("[data-fooditem]").forEach((row) =>
-      row.addEventListener("click", () => openFoodEdit(Number(row.dataset.fooditem), row, options))
-    );
+    slot
+      .querySelectorAll<HTMLElement>("[data-fooditem]")
+      .forEach((row) => row.addEventListener("click", () => openFoodEdit(Number(row.dataset.fooditem), row, options)));
     slot.querySelector("#dayFuelAsk")?.addEventListener("click", () => {
       if (options.onAsk) options.onAsk();
       else gotoChatWith(DAY_FUEL_ASK);
+    });
+    slot.querySelector("#dayFuelProgress")?.addEventListener("click", () => {
+      state.progressSeg = "intake";
+      activateTab("progress");
     });
   }
 
@@ -131,6 +138,7 @@ type DayFuelControllerOptions = {
           };
           const next = withFuelEntry(state._dayFuel as DayFuelControllerDay, id, patch);
           renderDayFuel(token, next, options);
+          swrInvalidate("progress:intake");
         },
       }).finally(() => {
         _fuelWatched.delete(id);
@@ -138,34 +146,41 @@ type DayFuelControllerOptions = {
     }
   }
 
-  function withFuelEntry(day: DayFuelControllerDay | null, id: number, patch: Partial<DayFuelControllerEntry> | null): DayFuelControllerDay {
-    const base = day || state._dayFuel as DayFuelControllerDay | null | undefined || {
-      date: state.logDate || "",
-      totals: { ...EMPTY_TOTALS },
-      entries: [],
-      count: 0,
-      target: null,
-      remaining: null,
-    };
+  function withFuelEntry(
+    day: DayFuelControllerDay | null,
+    id: number,
+    patch: Partial<DayFuelControllerEntry> | null
+  ): DayFuelControllerDay {
+    const base = day ||
+      (state._dayFuel as DayFuelControllerDay | null | undefined) || {
+        date: state.logDate || "",
+        totals: { ...EMPTY_TOTALS },
+        known: { ...EMPTY_KNOWN },
+        entries: [],
+        count: 0,
+        target: null,
+        remaining: null,
+      };
     const entries = Array.isArray(base.entries) ? base.entries : [];
-    const prior = entries.find((item) => item.id === id) || null;
-    const nextEntries = patch === null
-      ? entries.filter((item) => item.id !== id)
-      : entries.map((item) => item.id === id ? { ...item, ...patch } : item);
-    const delta = (key: "kcal" | "protein_g" | "carbs_g" | "fat_g" | "fiber_g") =>
-      (patch === null ? 0 : Number(patch[key] ?? prior?.[key] ?? 0)) - Number(prior?.[key] ?? 0);
-    const totals = { ...EMPTY_TOTALS, ...(base.totals || {}) };
+    const nextEntries =
+      patch === null
+        ? entries.filter((item) => item.id !== id)
+        : entries.map((item) => (item.id === id ? { ...item, ...patch } : item));
+    const totals: DayFuelControllerDay["totals"] = { ...EMPTY_TOTALS };
+    const known = { ...EMPTY_KNOWN };
     for (const key of ["kcal", "protein_g", "carbs_g", "fat_g", "fiber_g"] as const) {
-      totals[key] = Number(totals[key] || 0) + delta(key);
+      const values = nextEntries.map((entry) => fuelMacroValue(entry[key]));
+      totals[key] = Math.round(values.reduce((sum: number, value) => sum + Number(value ?? 0), 0) * 10) / 10;
+      known[key] = nextEntries.length > 0 && values.every((value) => value != null);
     }
     const remaining = base.remaining
       ? {
           ...base.remaining,
-          kcal: Number(base.remaining.kcal || 0) - delta("kcal"),
-          protein_g: Number(base.remaining.protein_g || 0) - delta("protein_g"),
+          kcal: base.target ? Number(base.target.kcal) - totals.kcal : base.remaining.kcal,
+          protein_g: base.target ? Number(base.target.protein_g) - totals.protein_g : base.remaining.protein_g,
         }
       : base.remaining;
-    return { ...base, entries: nextEntries, count: nextEntries.length, totals, remaining };
+    return { ...base, entries: nextEntries, count: nextEntries.length, totals, known, remaining };
   }
 
   function openFoodEdit(id: number, fromEl: Element, options: DayFuelControllerOptions = {}): void {
@@ -185,6 +200,7 @@ type DayFuelControllerOptions = {
           <div class="field"><label>protein (g)</label><input id="fedProtein" type="number" inputmode="numeric" value="${entry.protein_g ?? ""}"></div>
           <div class="field"><label>carbs (g)</label><input id="fedCarbs" type="number" inputmode="numeric" value="${entry.carbs_g ?? ""}"></div>
           <div class="field"><label>fat (g)</label><input id="fedFat" type="number" inputmode="numeric" value="${entry.fat_g ?? ""}"></div>
+          <div class="field"><label>fiber (g)</label><input id="fedFiber" type="number" inputmode="numeric" value="${entry.fiber_g ?? ""}"></div>
         </div>
         <div class="detail-actions">
           <button class="pillbtn pill-accent" id="fedSave">Save</button>
@@ -201,13 +217,19 @@ type DayFuelControllerOptions = {
           protein_g: fuelNumberOrNull(fuelInputValue(el, "#fedProtein")),
           carbs_g: fuelNumberOrNull(fuelInputValue(el, "#fedCarbs")),
           fat_g: fuelNumberOrNull(fuelInputValue(el, "#fedFat")),
+          fiber_g: fuelNumberOrNull(fuelInputValue(el, "#fedFiber")),
         };
         try {
           await optimisticMutation<DayFuelControllerDay>({
             key: dayFuelCacheKey(),
             apply: (current) => withFuelEntry(current, id, body),
             rollback: state._dayFuel as DayFuelControllerDay,
-            request: () => api(`/food-notes/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+            request: () =>
+              api(`/food-notes/${id}`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+              }),
             onChange: (day) => renderDayFuel(0, day, { ...options, isCurrent: () => true }),
           });
           toast("Updated");
@@ -216,26 +238,31 @@ type DayFuelControllerOptions = {
           return;
         }
         swrInvalidate("progress:energy");
+        swrInvalidate("progress:intake");
         closeDetail(true);
       });
       const del = el.querySelector("#fedDel");
-      if (del) del.addEventListener("click", () => armDelete(del, async () => {
-        try {
-          await optimisticMutation<DayFuelControllerDay>({
-            key: dayFuelCacheKey(),
-            apply: (current) => withFuelEntry(current, id, null),
-            rollback: state._dayFuel as DayFuelControllerDay,
-            request: () => api(`/food-notes/${id}`, { method: "DELETE" }),
-            onChange: (day) => renderDayFuel(0, day, { ...options, isCurrent: () => true }),
-          });
-          toast("Removed");
-        } catch {
-          toast("Couldn't remove");
-          return;
-        }
-        swrInvalidate("progress:energy");
-        closeDetail(true);
-      }));
+      if (del)
+        del.addEventListener("click", () =>
+          armDelete(del, async () => {
+            try {
+              await optimisticMutation<DayFuelControllerDay>({
+                key: dayFuelCacheKey(),
+                apply: (current) => withFuelEntry(current, id, null),
+                rollback: state._dayFuel as DayFuelControllerDay,
+                request: () => api(`/food-notes/${id}`, { method: "DELETE" }),
+                onChange: (day) => renderDayFuel(0, day, { ...options, isCurrent: () => true }),
+              });
+              toast("Removed");
+            } catch {
+              toast("Couldn't remove");
+              return;
+            }
+            swrInvalidate("progress:energy");
+            swrInvalidate("progress:intake");
+            closeDetail(true);
+          })
+        );
     });
   }
 

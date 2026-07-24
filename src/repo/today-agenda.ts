@@ -230,7 +230,7 @@ function fuelCandidate(date: string): TodayAgendaCandidate | null {
   // Logged → a calm review glance. A real target that's been overshot is slightly
   // more worth a look (still never red / never a score), so nudge it up.
   let priority = 32;
-  if (d?.remaining && d?.target && Number(d.remaining.kcal) < 0) priority = 40;
+  if (d?.known?.kcal === true && d?.remaining && d?.target && Number(d.remaining.kcal) < 0) priority = 40;
   return {
     id: "fuel",
     kind: "fuel",

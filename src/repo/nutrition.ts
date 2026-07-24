@@ -52,7 +52,7 @@ function emitBrainEvent(value: unknown): void {
   afterSqliteCommit(() => queueBrainEvent(value));
 }
 
-function hydrateNutritionTarget(row: any, referenceDate = localDateISO()): AcceptedNutritionTarget | null {
+export function hydrateNutritionTarget(row: any, referenceDate = localDateISO()): AcceptedNutritionTarget | null {
   if (!row) return null;
   const source = String(row.source ?? "");
   const explicit = ["manual", "direct", "user", "chat"].includes(source);
@@ -1393,15 +1393,23 @@ export function getDayIntake(date?: string) {
       .all(d) as any[]
   ).map(hydrate);
 
-  const totals = { kcal: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0 };
-  const num = (v: any) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const nutrientKeys = ["kcal", "protein_g", "carbs_g", "fat_g", "fiber_g"] as const;
+  // Compatibility contract: totals/remaining stay numeric, with missing values
+  // contributing zero exactly as before. The additive `known` map is the honest
+  // detail new consumers use to distinguish a complete sum from a partial one.
+  const totals: Record<(typeof nutrientKeys)[number], number> = {
+    kcal: 0,
+    protein_g: 0,
+    carbs_g: 0,
+    fat_g: 0,
+    fiber_g: 0,
+  };
+  const known = Object.fromEntries(nutrientKeys.map((key) => [key, false])) as Record<
+    (typeof nutrientKeys)[number],
+    boolean
+  >;
   const entries = rows.map((r) => {
     const p = r.parsed || {};
-    totals.kcal += num(p.kcal);
-    totals.protein_g += num(p.protein_g);
-    totals.carbs_g += num(p.carbs_g);
-    totals.fat_g += num(p.fat_g);
-    totals.fiber_g += num(p.fiber_g);
     return {
       id: r.id,
       meal: r.meal,
@@ -1417,7 +1425,13 @@ export function getDayIntake(date?: string) {
       logged_at: chatHistoryTimeLabel(r.created_at), // local "1:15 PM" so the coach can reference WHEN it was eaten
     };
   });
-  for (const k of Object.keys(totals) as (keyof typeof totals)[]) totals[k] = Math.round(totals[k]);
+  for (const key of nutrientKeys) {
+    const values = entries.map((entry) => entry[key]);
+    totals[key] = Math.round(
+      values.reduce((sum, value) => sum + (value != null && Number.isFinite(Number(value)) ? Number(value) : 0), 0)
+    );
+    known[key] = entries.length > 0 && values.every((value) => value != null && Number.isFinite(Number(value)));
+  }
 
   // Target framing: a gentle target/remaining ONLY when the profile is complete
   // enough to derive one. Incomplete profile → descriptive-only (target null).
@@ -1437,13 +1451,16 @@ export function getDayIntake(date?: string) {
         mode: String(goal.goal_mode || "maintain"),
         source: String(eff?.source ?? "formula"),
       };
-      remaining = { kcal: target.kcal - totals.kcal, protein_g: target.protein_g - totals.protein_g };
+      remaining = {
+        kcal: target.kcal - totals.kcal,
+        protein_g: target.protein_g - totals.protein_g,
+      };
     }
   } catch {
     /* profile incomplete → descriptive-only */
   }
 
-  return { date: d, totals, entries, count: entries.length, target, remaining };
+  return { date: d, totals, known, entries, count: entries.length, target, remaining };
 }
 
 // Manual correction of a logged food note (fix a macro, rename it, change the meal

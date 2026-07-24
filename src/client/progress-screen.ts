@@ -474,6 +474,73 @@ async function renderEnergy() {
   }).catch(() => { if (peek && !peek.fresh) markRefreshing(false); });
 }
 
+// ---------- Progress: recorded intake ----------
+// Meaning-first, gap-honest multi-week macro/longevity read. The endpoint owns
+// all interpretation; this route only paints the escaped client surface.
+const _intakeWatched = new Set<number>();
+async function renderIntake() {
+  headerTitle.textContent = "Intake";
+  state.progressSeg = "intake";
+  const token = ++pollToken;
+  const head = segBar("intake", PROGRESS_SEG);
+  const peek = peekCached<import("../contracts/client.js").ClientNutritionProgress>("progress:intake");
+  view.innerHTML = head + `<div id="intakeProgress">${peek ? "" : loadingState("Reading recorded intake…")}</div>`;
+  wireSeg(PROGRESS_HANDLERS);
+  const paint = (data: unknown) => {
+    if (token !== pollToken || state.progressSeg !== "intake") return;
+    const mount = view.querySelector("#intakeProgress");
+    const progress = data as import("../contracts/client.js").ClientNutritionProgress;
+    if (mount) CairnProgressIntake.render(mount, progress);
+    for (const id of progress.coverage.pending_entry_ids || []) {
+      if (_intakeWatched.has(id)) continue;
+      _intakeWatched.add(id);
+      let terminalRefreshStarted = false;
+      const refresh = () => {
+        if (terminalRefreshStarted) return;
+        terminalRefreshStarted = true;
+        swrInvalidate("progress:intake");
+        if (token !== pollToken || state.tab !== "progress" || state.progressSeg !== "intake") return;
+        api("/nutrition/progress?days=35").then((fresh) => {
+          if (token !== pollToken || state.tab !== "progress" || state.progressSeg !== "intake") return;
+          swrSet("progress:intake", fresh);
+          paint(fresh);
+        }).catch(() => {});
+      };
+      pollEnrichment("/food-notes", id, {
+        tab: "progress",
+        token,
+        onUpdate: (row) => {
+          swrInvalidate("progress:intake");
+          if (!enrichmentActive(row.enrichment_status)) refresh();
+        },
+      }).then((row) => {
+        _intakeWatched.delete(id);
+        if (row && !enrichmentActive(row.enrichment_status)) refresh();
+        else if (token === pollToken && state.tab === "progress" && state.progressSeg === "intake") {
+          setTimeout(() => paint(progress), 500);
+        }
+      });
+    }
+  };
+  if (peek) {
+    paint(peek.data);
+    if (!peek.fresh) markRefreshing(true);
+  }
+  cachedApi("/nutrition/progress?days=35", {
+    key: "progress:intake",
+    onUpgrade: (data, { changed }) => {
+      if (peek && !peek.fresh) markRefreshing(false);
+      if (changed || !peek) paint(data);
+    },
+  }).catch(() => {
+    if (peek && !peek.fresh) markRefreshing(false);
+    if (!peek && token === pollToken && state.progressSeg === "intake") {
+      const mount = view.querySelector("#intakeProgress");
+      if (mount) mount.innerHTML = CairnProgressIntake.unavailableHtml();
+    }
+  });
+}
+
 // Energy Balance DOM painting and durable nutrition check-in reconnect live in
 // /js/progress-energy-surface-client.js so Progress and Plan Food share one
 // implementation. This screen keeps only the route/SWR shell above.
@@ -488,6 +555,7 @@ async function renderProgram() {
 Object.assign(globalThis, {
   renderCalendar,
   renderEnergy,
+  renderIntake,
   renderEndurance,
   renderProgram,
   renderProgress,

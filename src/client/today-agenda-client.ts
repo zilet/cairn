@@ -110,17 +110,32 @@ function todayAgendaRailHtml(
 
 function todayFuelCardHtml(day: ClientDayIntake | null | undefined): string {
   const totals: Partial<ClientMacroTotals> = day?.totals || {};
-  const kcal = Math.round(Number(totals.kcal) || 0);
-  const protein = Math.round(Number(totals.protein_g) || 0);
+  const macro = (value: unknown): number | null => {
+    if (value == null || value === "") return null;
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? Math.round(numeric) : null;
+  };
+  const knownMacro = (key: keyof ClientMacroTotals): number | null =>
+    day?.known?.[key] === false ? null : macro(totals[key]);
+  const kcal = knownMacro("kcal");
+  const protein = knownMacro("protein_g");
+  const carbs = knownMacro("carbs_g");
+  const fat = knownMacro("fat_g");
+  const fiber = knownMacro("fiber_g");
+  const numberHtml = (value: number | null) =>
+    value == null ? `<span class="numeral">&mdash;</span>` : `<span class="numeral" data-cu="${value}">0</span>`;
+  const compact = (value: number | null, label: string) => `${value == null ? "&mdash;" : value}${label}`;
   const count = Number(day?.count) || 0;
   if (!count) return "";
   let remLine = "";
   if (day?.remaining && day.target) {
-    const left = Math.round(Number(day.remaining.kcal));
+    const left = day.known?.kcal === false ? null : macro(day.remaining.kcal);
     remLine =
-      left > 0
-        ? `<span class="fuel-rem">~${left} left</span>`
-        : `<span class="fuel-rem fuel-rem-done">fuel's in for today</span>`;
+      left == null
+        ? ""
+        : left > 0
+          ? `<span class="fuel-rem">~${left} left</span>`
+          : `<span class="fuel-rem fuel-rem-done">fuel's in for today</span>`;
   }
   const word = count === 1 ? "item" : "items";
   return `<button class="fuel-card reveal" id="fuelCard" style="--i:0" type="button" title="Review &amp; edit today's food">
@@ -128,9 +143,12 @@ function todayFuelCardHtml(day: ClientDayIntake | null | undefined): string {
       <span class="fuel-body">
         <span class="fuel-h lbl">Today's fuel · ${count} ${word}</span>
         <span class="fuel-stats">
-          <span class="numeral" data-cu="${kcal}">0</span><span class="fuel-unit">kcal</span>
+          ${numberHtml(kcal)}<span class="fuel-unit">kcal</span>
           <span class="fuel-dot" aria-hidden="true">·</span>
-          <span class="numeral" data-cu="${protein}">0</span><span class="fuel-unit">g protein</span>
+          ${numberHtml(protein)}<span class="fuel-unit">g P</span>
+          <span class="fuel-dot" aria-hidden="true">·</span><span class="fuel-unit">${compact(carbs, "g C")}</span>
+          <span class="fuel-dot" aria-hidden="true">·</span><span class="fuel-unit">${compact(fat, "g F")}</span>
+          <span class="fuel-dot" aria-hidden="true">·</span><span class="fuel-unit">${compact(fiber, "g fiber")}</span>
           ${remLine}
         </span>
       </span>

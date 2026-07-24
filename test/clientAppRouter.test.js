@@ -19,7 +19,7 @@ function plain(value) {
 const deps = {
   routeApi: { planSections: ["edit", "food", "meals", "coach"] },
   planSections: [["edit", "Training"], ["food", "Food"], ["meals", "Meals"], ["coach", "Coach"]],
-  progressSections: [["sessions", "History"], ["program", "Program"], ["energy", "Energy"]],
+  progressSections: [["sessions", "History"], ["program", "Program"], ["intake", "Intake"], ["energy", "Energy"]],
   standSections: ["records", "share", "learned", "connections", "markers", "body", "recovery", "supplements", "age"],
   meSections: [["standing", "Standing"], ["profile", "Profile"], ["health", "Health"]],
   healthSections: [["read", "Read"], ["records", "Records"], ["markers", "Markers"]],
@@ -55,6 +55,12 @@ test("app router applies canonical route state without rendering", () => {
     "progress",
   );
   assert.equal(state.progressSeg, "energy");
+
+  assert.equal(
+    router.applyRouteState({ tab: "progress", section: "intake" }, { state, ...deps }),
+    "progress",
+  );
+  assert.equal(state.progressSeg, "intake");
 
   // Stand sub-views are first-class routes.
   assert.equal(

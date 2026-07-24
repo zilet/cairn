@@ -178,15 +178,147 @@ export interface ClientNutritionTarget {
   kcal: number;
   protein_g: number;
   mode: string;
+  source?: string;
 }
 
 export interface ClientDayIntake {
   date: ISODateString;
   totals: ClientMacroTotals;
+  known: Record<keyof ClientMacroTotals, boolean>;
   entries: ClientFoodEntry[];
   count: number;
   target: ClientNutritionTarget | null;
   remaining: Pick<ClientMacroTotals, "kcal" | "protein_g"> | null;
+}
+
+export interface ClientNutritionTargetProvenance {
+  source: string;
+  effective_date: ISODateString | null;
+  freshness: "fresh" | "explicit";
+}
+
+export type ClientNutritionProgressNutrient = "kcal" | "protein_g" | "carbs_g" | "fat_g" | "fiber_g";
+
+export interface ClientNutritionProgressDay {
+  date: ISODateString;
+  logged: boolean;
+  entry_count: number;
+  pending_entries: number;
+  capture: "unlogged" | "partial" | "macro_known" | "open";
+  nutrients: Record<ClientNutritionProgressNutrient, number | null>;
+  known: Record<ClientNutritionProgressNutrient, boolean>;
+  target: {
+    kcal: number | null;
+    protein_g: number | null;
+    carbs_g: number | null;
+    fat_g: number | null;
+    source: string;
+    effective_date: ISODateString | null;
+    provenance: Record<"kcal" | "protein_g" | "carbs_g" | "fat_g", ClientNutritionTargetProvenance | null>;
+  } | null;
+}
+
+export interface ClientNutritionPatternEstimate {
+  sampled_entries: number;
+  sampled_days: number;
+  total_entries: number;
+  total_logged_days: number;
+  note: string;
+  food_quality: Record<"mostly_whole" | "mixed" | "mostly_ultra_processed" | "unknown", number>;
+  saturated_fat: Record<"low" | "moderate" | "high" | "unknown", number>;
+  added_sugar: Record<"low" | "moderate" | "high" | "unknown", number>;
+  sodium: Record<"low" | "moderate" | "high" | "unknown", number>;
+  potassium: Record<"low" | "moderate" | "high" | "unknown", number>;
+  calcium: Record<"low" | "moderate" | "high" | "unknown", number>;
+  iron: Record<"low" | "moderate" | "high" | "unknown", number>;
+  omega_3_source: { yes: number; no: number; unknown: number };
+  confidence: Record<"low" | "medium" | "high" | "unknown", number>;
+  basis: Record<"label" | "user_report" | "estimated_from_foods" | "photo" | "unknown", number>;
+  fat_grams: {
+    sampled_entries: number;
+    average_saturated_fat_g: number | null;
+    average_unsaturated_fat_g: number | null;
+  };
+}
+
+export interface ClientNutritionProgress {
+  window_days: number;
+  since: ISODateString;
+  through: ISODateString;
+  read: string;
+  next_move: string;
+  coverage: {
+    logged_days: number;
+    closed_logged_days: number;
+    unlogged_days: number;
+    macro_known_days: number;
+    partial_days: number;
+    open_day_logged: boolean;
+    pending_entries: number;
+    pending_entry_ids: number[];
+    logged_fraction: number;
+    macro_known_fraction: number;
+    observation_density: "none" | "sparse" | "moderate" | "dense";
+    confidence: "none" | "tentative" | "observed" | "strong";
+    completeness_signal: null;
+    note: string;
+  };
+  current_reference: {
+    kcal: number | null;
+    protein_g: number | null;
+    carbs_g: number | null;
+    fat_g: number | null;
+    fiber_g: number;
+    source: string;
+    effective_date: ISODateString | null;
+    provenance: Record<ClientNutritionProgressNutrient, ClientNutritionTargetProvenance | null>;
+  };
+  nutrients: Array<{
+    nutrient: ClientNutritionProgressNutrient;
+    label: string;
+    unit: "kcal" | "g";
+    average: number | null;
+    known_days: number;
+    trend: "rising" | "falling" | "steady" | "unknown";
+    change: number | null;
+    reference: number | null;
+    reference_label: string | null;
+  }>;
+  target_alignment: Record<
+    Exclude<ClientNutritionProgressNutrient, "fiber_g">,
+    {
+      comparable_days: number;
+      recorded_average: number | null;
+      target_average: number | null;
+      recorded_to_target: number | null;
+    }
+  >;
+  energy_split: {
+    known_days: number;
+    protein_pct: number;
+    carbs_pct: number;
+    fat_pct: number;
+  } | null;
+  food_quality_estimates: ClientNutritionPatternEstimate;
+  series: ClientNutritionProgressDay[];
+  health_context: Array<{
+    id: number;
+    domain: "nutrition" | "watch";
+    marker: string | null;
+    directive: string | null;
+    rationale: string | null;
+    citation: string | null;
+    uncertain: boolean;
+    trigger_date: string | null;
+    acute: boolean;
+    age_days: number | null;
+    stale: boolean;
+    transient: boolean;
+    transient_reason: string | null;
+    stale_measurement: boolean;
+    rescan_reason: string | null;
+  }>;
+  frame: string;
 }
 
 export interface ClientNextStep {

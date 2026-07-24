@@ -47,6 +47,15 @@ test("no derivable target (incomplete profile) → null, so the FUEL line is sim
   assert.equal(out, null);
 });
 
+test("an unknown logged protein amount never becomes a false zero or behind signal", () => {
+  runWithTimeZone("UTC", () => {
+    reset();
+    seedProfile();
+    meal(TODAY, "2026-07-13 07:30:00", null, { summary: "meal awaiting details" });
+    assert.equal(dayFuelState(TODAY, new Date("2026-07-13T11:51:00Z")), null);
+  });
+});
+
 test("behind: little protein in versus where the eating window says you'd be", () => {
   runWithTimeZone("UTC", () => {
     reset();

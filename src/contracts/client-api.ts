@@ -8,6 +8,7 @@ import type {
   ClientDayRead,
   ClientExpenditureEstimate,
   ClientNextStep,
+  ClientNutritionProgress,
   ClientPrescription,
   ClientSessionSuggestion,
   ClientSessionSuggestionItem,
@@ -2633,6 +2634,7 @@ export interface ClientApiResponses {
   "/api/since-last": ClientTodayAgendaCandidate | null;
   "/api/guidelines": ClientGuidelinesResponse;
   "/api/nutrition/day": ClientDayIntake;
+  "/api/nutrition/progress": ClientNutritionProgress;
   "/api/next-step": ClientNextStep | null;
   "/api/nutrition/expenditure": ClientExpenditureEstimate;
   "/api/nutrition/checkin": ClientProposalResult;

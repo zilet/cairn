@@ -140,6 +140,7 @@ function uiSegmentsDeps(): UiSegmentsDeps {
     renderCalendar: () => renderCalendar(),
     renderHistory: () => renderHistory(),
     renderProgram: () => renderProgram(),
+    renderIntake: () => renderIntake(),
     renderEnergy: () => renderEnergy(),
     renderPlanEditor: () => renderPlanEditor(),
     renderPlanEndurance: () => renderPlanEndurance(),

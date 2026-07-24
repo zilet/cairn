@@ -9,7 +9,7 @@ Health's short-lived pairing exchange is public and passes through the instance-
 when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**296 routes** across 104 groups.
+**297 routes** across 104 groups.
 
 ## `/activities`
 
@@ -497,11 +497,12 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | Method | Path | Notes |
 |---|---|---|
 | POST | `/api/nutrition/checkin` | Quiet adaptive-nutrition check-in: medium/high outcome confidence may support a bounded change; low confidence is hold-only except for a server-verified protective fuel raise from fresh hybrid/fatigue evidence. The agent proposes and the server autonomy policy either schedules it for the next food-day boundary or holds it under explicit review posture. Most weeks nothing has moved (change:false) and no proposal is created. ok:false (status 200) is the designed failure signal, mirroring the swap/recipe endpoints. |
-| GET | `/api/nutrition/day` | A calm review of ONE day's logged food (v41): the entries (each editable), the running totals, and — only when a real target exists (a loss/gain goal, or the maintenance anchor) — a gentle "remaining". ?date=YYYY-MM-DD overrides today. |
+| GET | `/api/nutrition/day` | A calm review of ONE day's logged food: entries stay nullable while legacy totals/remaining stay numeric (missing values contribute zero); additive `known` flags tell newer clients which nutrient sums are complete. A real target adds the gentle "remaining". ?date=YYYY-MM-DD overrides today. |
 | GET | `/api/nutrition/expenditure` | Best-effort chosen expenditure with explicit outcome/prior anchors. Read-only; powers the calm "Energy Balance" view. ?window= is safely clamped by the domain. |
 | POST | `/api/nutrition/fueling-feedback` | Save today's (or ?date=) one-tap fueling read. Adherence-neutral; energy/hunger are the 1-3 running-low/steady/plenty scale, coerced/clamped at the trust boundary. Returns the saved row. Body: { date?, energy, hunger?, note? }. |
 | GET | `/api/nutrition/fueling-followup` | Fueling follow-through. After a nutrition-target change applies, Today quietly offers a one-tap "how's fueling feeling?" read on days the athlete logs food, only inside the change's 7-day window. Read-only due-check + recent reads; `due:false` is the calm common answer, returned at status 200 like the other nutrition reads (never a 404). |
 | GET | `/api/nutrition/goal-pace` | Goal-pace series behind the motivational weight-progress chart: the canonical weigh-in points, the recent-trend line (with a short forward projection), and the straight line to the goal. Read-only, null-safe; ?days= clamps to 14–365. |
+| GET | `/api/nutrition/progress` | Meaning-first multi-week recorded-intake read. The domain clamps ?days= to 14–90, returns every local calendar day with honest unknowns, names record observation density (not full-day completeness), and conditions every target comparison/advice on the records reflecting most of the day. |
 
 ## `/onboard`
 

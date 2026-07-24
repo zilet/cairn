@@ -1,12 +1,7 @@
 import { Router } from "express";
 import fs from "node:fs";
 import path from "node:path";
-import {
-  draftMealPlan,
-  generateRecipe,
-  nutritionCheckin,
-  swapMealAgentic,
-} from "../coachOps.js";
+import { draftMealPlan, generateRecipe, nutritionCheckin, swapMealAgentic } from "../coachOps.js";
 import {
   acceptMealPlan,
   addFoodNote,
@@ -16,6 +11,7 @@ import {
   getDayIntake,
   getFoodNote,
   getMealPlan,
+  nutritionProgress,
   listFoodNotes,
   listMealPlans,
   setMealPlanStatus,
@@ -79,12 +75,22 @@ nutritionRouter.get("/nutrition/goal-pace", (req, res) => {
   res.json(goalPace(Number.isFinite(days as number) ? (days as number) : 90));
 });
 
-// A calm review of ONE day's logged food (v41): the entries (each editable),
-// the running totals, and — only when a real target exists (a loss/gain goal, or
-// the maintenance anchor) — a gentle "remaining". ?date=YYYY-MM-DD overrides today.
+// A calm review of ONE day's logged food: entries stay nullable while legacy
+// totals/remaining stay numeric (missing values contribute zero); additive
+// `known` flags tell newer clients which nutrient sums are complete. A real
+// target adds the gentle "remaining". ?date=YYYY-MM-DD overrides today.
 nutritionRouter.get("/nutrition/day", (req, res) => {
   const date = typeof req.query.date === "string" ? req.query.date : undefined;
   res.json(getDayIntake(date));
+});
+
+// Meaning-first multi-week recorded-intake read. The domain clamps ?days= to
+// 14–90, returns every local calendar day with honest unknowns, names record
+// observation density (not full-day completeness), and conditions every target
+// comparison/advice on the records reflecting most of the day.
+nutritionRouter.get("/nutrition/progress", (req, res) => {
+  const days = req.query.days ? Number(req.query.days) : undefined;
+  res.json(nutritionProgress(Number.isFinite(days as number) ? (days as number) : 35));
 });
 
 // Quiet adaptive-nutrition check-in: medium/high outcome confidence may support
@@ -131,9 +137,25 @@ nutritionRouter.post("/meal-plans/:id/swap", async (req, res) => {
   const id = Number(req.params.id);
   const plan = getMealPlan(id);
   if (!plan) return res.status(404).json({ error: "not found" });
-  if (backgroundOp(res, "meal_swap", { agent: b.agent ?? null, id, day: String(b.day ?? ""), meal_index: Number(b.meal_index), hint: b.hint }, b.agent)) return;
+  if (
+    backgroundOp(
+      res,
+      "meal_swap",
+      { agent: b.agent ?? null, id, day: String(b.day ?? ""), meal_index: Number(b.meal_index), hint: b.hint },
+      b.agent
+    )
+  )
+    return;
   try {
-    res.json(await swapMealAgentic(b.agent, { plan, id, day: String(b.day ?? ""), mealIndex: Number(b.meal_index), hint: b.hint }));
+    res.json(
+      await swapMealAgentic(b.agent, {
+        plan,
+        id,
+        day: String(b.day ?? ""),
+        mealIndex: Number(b.meal_index),
+        hint: b.hint,
+      })
+    );
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
@@ -150,7 +172,10 @@ nutritionRouter.post("/meal-plans/:id/recipe", async (req, res) => {
   const day = String(b.day ?? "");
   const mealIndex = Number(b.meal_index);
   const dayObj = (Array.isArray(plan.parsed?.days) ? plan.parsed.days : []).find(
-    (d: any) => String(d?.day ?? "").trim().toLowerCase() === day.trim().toLowerCase()
+    (d: any) =>
+      String(d?.day ?? "")
+        .trim()
+        .toLowerCase() === day.trim().toLowerCase()
   );
   const existing = Array.isArray(dayObj?.meals) ? dayObj.meals[mealIndex]?.recipe : undefined;
   if (existing && !b.force) return res.json({ ok: true, recipe: existing, cached: true });
@@ -177,7 +202,9 @@ nutritionRouter.put("/meal-plans/:id/days", (req, res) => {
 nutritionRouter.post("/mealplans/:id/:status", (req, res) => {
   const s = req.params.status;
   if (!["accept", "discard"].includes(s)) return res.status(400).json({ error: "bad status" });
-  res.json(s === "accept" ? acceptMealPlan(Number(req.params.id)) : setMealPlanStatus(Number(req.params.id), "discarded"));
+  res.json(
+    s === "accept" ? acceptMealPlan(Number(req.params.id)) : setMealPlanStatus(Number(req.params.id), "discarded")
+  );
 });
 
 // ---- food notes (vision happens in the Claude client; this stores the result) ----
@@ -226,9 +253,7 @@ nutritionRouter.get("/frequent-foods", (req, res) => {
 // UUID.ext shape we generate below, so no traversal / no serving arbitrary files.
 nutritionRouter.get("/chat-images/:name", (req, res) => {
   const name = String(req.params.name);
-  if (
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|png|webp|gif|heic|heif)$/i.test(name)
-  ) {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|png|webp|gif|heic|heif)$/i.test(name)) {
     return res.status(400).json({ error: "bad name" });
   }
   const p = path.join(UPLOADS_DIR, name);
@@ -238,7 +263,9 @@ nutritionRouter.get("/chat-images/:name", (req, res) => {
   res.setHeader("Content-Type", mime);
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-  fs.createReadStream(p).on("error", () => {
-    if (!res.headersSent) res.status(500).json({ error: "read failed" });
-  }).pipe(res);
+  fs.createReadStream(p)
+    .on("error", () => {
+      if (!res.headersSent) res.status(500).json({ error: "read failed" });
+    })
+    .pipe(res);
 });

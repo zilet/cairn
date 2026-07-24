@@ -142,16 +142,19 @@ test("optimisticMutation primes locally, commits server truth, and rolls back on
   assert.equal(changes.at(-1).phase, "rollback");
 });
 
-test("SWR cache keeps markers and recovery payloads memory-only", async () => {
+test("SWR cache keeps health-bearing and intake-progress payloads memory-only", async () => {
   const loaded = loadSwrCache();
 
   await loaded.context.cachedApi("/markers/priority", { key: "markers:priority" });
   await loaded.context.cachedApi("/recovery?days=14", { key: "recovery:14" });
+  await loaded.context.cachedApi("/nutrition/progress?days=35", { key: "progress:intake" });
 
   assert.deepEqual(loaded.context.peekCached("markers:priority").data, { ok: true });
   assert.deepEqual(loaded.context.peekCached("recovery:14").data, { ok: true });
+  assert.deepEqual(loaded.context.peekCached("progress:intake").data, { ok: true });
   assert.equal(loaded.storage.has("cairn.swr.v1.markers:priority"), false);
   assert.equal(loaded.storage.has("cairn.swr.v1.recovery:14"), false);
+  assert.equal(loaded.storage.has("cairn.swr.v1.progress:intake"), false);
 });
 
 test("SWR invalidation removes exact and prefix cache entries", async () => {

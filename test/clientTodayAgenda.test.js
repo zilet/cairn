@@ -43,28 +43,35 @@ test("Today agenda skips unknown client cards and caps primary cards at two", ()
       { id: "week", kind: "week", tier: "primary", priority: 7, client_card: "week-ahead" },
       { id: "generic", kind: "since-last", tier: "primary", priority: 6, title: "Since last look" },
     ],
-    more: [
-      { id: "late", kind: "lately", tier: "more", priority: 5, client_card: "lately" },
-    ],
+    more: [{ id: "late", kind: "lately", tier: "more", priority: 5, client_card: "lately" }],
   });
 
-  assert.deepEqual(Array.from(buckets.primary, (c) => c.id), ["fuel", "week"]);
-  assert.deepEqual(Array.from(buckets.more, (c) => c.id), ["generic", "late"]);
+  assert.deepEqual(
+    Array.from(buckets.primary, (c) => c.id),
+    ["fuel", "week"]
+  );
+  assert.deepEqual(
+    Array.from(buckets.more, (c) => c.id),
+    ["generic", "late"]
+  );
 });
 
 test("Today generic agenda cards escape text, actions, and attributes", () => {
   const agenda = loadTodayAgendaClient();
-  const html = agenda.genericCardHtml({
-    id: `card"1`,
-    kind: "life<event>",
-    tier: "primary",
-    priority: 1,
-    kicker: "<kicker>",
-    title: "Check <this>",
-    body: `Body "quote" & more`,
-    action: { label: "Open <now>", kind: `tab:"bad"` },
-    dismissible: true,
-  }, 0);
+  const html = agenda.genericCardHtml(
+    {
+      id: `card"1`,
+      kind: "life<event>",
+      tier: "primary",
+      priority: 1,
+      kicker: "<kicker>",
+      title: "Check <this>",
+      body: `Body "quote" & more`,
+      action: { label: "Open <now>", kind: `tab:"bad"` },
+      dismissible: true,
+    },
+    0
+  );
 
   assert.match(html, /data-agenda-card="card&quot;1"/);
   assert.match(html, /data-agenda-kind="life&lt;event&gt;"/);
@@ -78,16 +85,17 @@ test("Today generic agenda cards escape text, actions, and attributes", () => {
 test("Today rail HTML collects generic cards and uses one quiet more disclosure", () => {
   const agenda = loadTodayAgendaClient();
   const pending = [];
-  const html = agenda.railHtml({
-    primary: [
-      { id: "fuel", kind: "fuel", tier: "primary", priority: 5, client_card: "fuel" },
-      { id: "week", kind: "week", tier: "primary", priority: 4, client_card: "week-ahead" },
-      { id: "generic", kind: "since-last", tier: "primary", priority: 3, title: "New signal" },
-    ],
-    more: [
-      { id: "late", kind: "lately", tier: "more", priority: 2, client_card: "lately" },
-    ],
-  }, pending);
+  const html = agenda.railHtml(
+    {
+      primary: [
+        { id: "fuel", kind: "fuel", tier: "primary", priority: 5, client_card: "fuel" },
+        { id: "week", kind: "week", tier: "primary", priority: 4, client_card: "week-ahead" },
+        { id: "generic", kind: "since-last", tier: "primary", priority: 3, title: "New signal" },
+      ],
+      more: [{ id: "late", kind: "lately", tier: "more", priority: 2, client_card: "lately" }],
+    },
+    pending
+  );
 
   assert.match(html, /id="fuelSlot"/);
   assert.match(html, /id="weekAheadSlot"/);
@@ -110,7 +118,10 @@ test("Today rail card spacing is stack-owned and documented", () => {
 
 test("Today fuel card stays quiet when empty and links only to review/edit", () => {
   const agenda = loadTodayAgendaClient();
-  assert.equal(agenda.fuelCardHtml({ count: 0, totals: {}, entries: [], date: "2026-06-29", target: null, remaining: null }), "");
+  assert.equal(
+    agenda.fuelCardHtml({ count: 0, totals: {}, entries: [], date: "2026-06-29", target: null, remaining: null }),
+    ""
+  );
 
   const html = agenda.fuelCardHtml({
     count: 2,
@@ -125,7 +136,23 @@ test("Today fuel card stays quiet when empty and links only to review/edit", () 
   assert.match(html, /Review &amp; edit today's food/);
   assert.match(html, /Today's fuel · 2 items/);
   assert.match(html, /data-cu="1220"/);
+  assert.match(html, /data-cu="97">0<\/span><span class="fuel-unit">g P/);
+  assert.match(html, /120g C/);
+  assert.match(html, /42g F/);
+  assert.match(html, /12g fiber/);
   assert.doesNotMatch(html, /chat|log something/i);
+
+  const partial = agenda.fuelCardHtml({
+    count: 1,
+    date: "2026-06-29",
+    totals: { kcal: 500, protein_g: 0, carbs_g: 0, fat_g: 18, fiber_g: 0 },
+    known: { kcal: true, protein_g: false, carbs_g: false, fat_g: true, fiber_g: false },
+    entries: [],
+    target: null,
+    remaining: null,
+  });
+  assert.match(partial, /&mdash;/);
+  assert.doesNotMatch(partial, /0g P|0g C|0g fiber/);
 });
 
 test("client buckets respect the server's tier split (surprise-budget deferral holds)", () => {
@@ -139,8 +166,14 @@ test("client buckets respect the server's tier split (surprise-budget deferral h
       { id: "lately", kind: "lately", tier: "more", priority: 20, client_card: "lately" },
     ],
   });
-  assert.deepEqual(Array.from(buckets.primary, (c) => c.id), ["health-focus"]);
-  assert.deepEqual(Array.from(buckets.more, (c) => c.id), ["weekly-read", "lately"]);
+  assert.deepEqual(
+    Array.from(buckets.primary, (c) => c.id),
+    ["health-focus"]
+  );
+  assert.deepEqual(
+    Array.from(buckets.more, (c) => c.id),
+    ["weekly-read", "lately"]
+  );
 
   // Forward-compat backfill still works: an UNRENDERABLE inline card's slot is
   // filled from `more` so the surface never starves on version skew.
@@ -151,8 +184,14 @@ test("client buckets respect the server's tier split (surprise-budget deferral h
     ],
     more: [{ id: "lately", kind: "lately", tier: "more", priority: 5, client_card: "lately" }],
   });
-  assert.deepEqual(Array.from(skew.primary, (c) => c.id), ["fuel", "lately"]);
-  assert.deepEqual(Array.from(skew.more, (c) => c.id), []);
+  assert.deepEqual(
+    Array.from(skew.primary, (c) => c.id),
+    ["fuel", "lately"]
+  );
+  assert.deepEqual(
+    Array.from(skew.more, (c) => c.id),
+    []
+  );
 });
 
 test("the disclosure whispers when something genuinely new waits inside", () => {

@@ -43,6 +43,11 @@ class FakeElement {
       ask.parentElement = this;
       this.children.push(ask);
     }
+    if (this._innerHTML.includes('id="dayFuelProgress"')) {
+      const progress = new FakeElement("button", { id: "dayFuelProgress" });
+      progress.parentElement = this;
+      this.children.push(progress);
+    }
     for (const match of this._innerHTML.matchAll(/<input id="([^"]+)"[^>]*value="([^"]*)"/g)) {
       const input = new FakeElement("input", { id: match[1], value: decodeAttr(match[2]) });
       input.parentElement = this;
@@ -134,29 +139,40 @@ function loadController(overrides = {}) {
     api: async (path, opts) => {
       requests.push({ path, opts });
       if (overrides.api) return overrides.api(path, opts);
-      return overrides.day ?? {
-        date: "2026-06-30",
-        count: 1,
-        totals: { kcal: 400, protein_g: 35 },
-        entries: [{ id: 5, meal: "lunch", summary: "Eggs & oats", kcal: 400, protein_g: 35, carbs_g: 20, fat_g: 10 }],
-      };
+      return (
+        overrides.day ?? {
+          date: "2026-06-30",
+          count: 1,
+          totals: { kcal: 400, protein_g: 35 },
+          entries: [{ id: 5, meal: "lunch", summary: "Eggs & oats", kcal: 400, protein_g: 35, carbs_g: 20, fat_g: 10 }],
+        }
+      );
     },
     runCountUps: (el) => countUps.push(el),
-    gotoChatWith: (message) => { context.chatMessage = message; },
+    gotoChatWith: (message) => {
+      context.chatMessage = message;
+    },
+    activateTab: (tab) => {
+      context.activatedTab = tab;
+    },
     openDetailFrom: (_fromEl, build) => build(),
     mountDetail: (html) => {
       mountedDetail = new FakeElement("div");
       mountedDetail.innerHTML = html;
       return mountedDetail;
     },
-    wireDetailCommon: () => { wiredDetail += 1; },
+    wireDetailCommon: () => {
+      wiredDetail += 1;
+    },
     armDelete: (_button, onConfirm) => onConfirm(),
     swrInvalidate: (key) => invalidations.push(key),
-    closeDetail: () => { closed += 1; },
+    closeDetail: () => {
+      closed += 1;
+    },
     toast: (message) => toasts.push(message),
   };
   const swr = new Map();
-  context.peekCached = (key) => swr.has(key) ? { data: swr.get(key), fresh: true } : null;
+  context.peekCached = (key) => (swr.has(key) ? { data: swr.get(key), fresh: true } : null);
   context.swrSet = (key, data) => swr.set(key, data);
   context.cachedApi = async (path, options = {}) => {
     const data = await context.api(path);
@@ -201,7 +217,8 @@ function loadController(overrides = {}) {
   // "· estimating…" badge. Defaulted here so the watcher path is exercisable; an
   // override lets a test drive a pending entry to settlement.
   context.pollToken = overrides.pollToken ?? 0;
-  context.enrichmentActive = overrides.enrichmentActive || ((status) => status === "pending" || status === "in_progress");
+  context.enrichmentActive =
+    overrides.enrichmentActive || ((status) => status === "pending" || status === "in_progress");
   context.pollEnrichment = overrides.pollEnrichment || (async () => null);
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
@@ -215,9 +232,15 @@ function loadController(overrides = {}) {
     invalidations,
     toasts,
     countUps,
-    get mountedDetail() { return mountedDetail; },
-    get closed() { return closed; },
-    get wiredDetail() { return wiredDetail; },
+    get mountedDetail() {
+      return mountedDetail;
+    },
+    get closed() {
+      return closed;
+    },
+    get wiredDetail() {
+      return wiredDetail;
+    },
   };
 }
 
@@ -259,13 +282,19 @@ test("day fuel controller clears the estimating badge when a pending note settle
       totals: { kcal: 0, protein_g: 0 },
       target: { kcal: 2000, protein_g: 150, mode: "maintain" },
       remaining: { kcal: 2000, protein_g: 150 },
-      entries: [{ id: 12, meal: "lunch", summary: "a plate", kcal: null, protein_g: null, enrichment_status: "pending" }],
+      entries: [
+        { id: 12, meal: "lunch", summary: "a plate", kcal: null, protein_g: null, enrichment_status: "pending" },
+      ],
     },
     // Stub the watcher: immediately deliver the settled (enriched) food-note row,
     // the same nested `parsed` shape GET /food-notes/:id returns.
     pollEnrichment: async (path, id, opts) => {
       watched.push({ path, id });
-      opts.onUpdate({ id, enrichment_status: "done", parsed: { summary: "Grilled chicken plate", kcal: 620, protein_g: 52 } });
+      opts.onUpdate({
+        id,
+        enrichment_status: "done",
+        parsed: { summary: "Grilled chicken plate", kcal: 620, protein_g: 52 },
+      });
       return null;
     },
   });
@@ -293,11 +322,50 @@ test("day fuel controller wires empty-state chat action", async () => {
   await harness.context.CairnDayFuelController.loadDayFuel(4, {
     root: harness.rootEl,
     isCurrent: (token) => token === 4,
-    onAsk: () => { asked += 1; },
+    onAsk: () => {
+      asked += 1;
+    },
   });
 
   harness.slot.querySelector("#dayFuelAsk").click();
   assert.equal(asked, 1);
+});
+
+test("day fuel renderer shows all tracked totals and links quietly to Progress Intake", async () => {
+  const harness = loadController({
+    day: {
+      date: "2026-06-30",
+      count: 1,
+      totals: { kcal: 620, protein_g: 45, carbs_g: 55, fat_g: 20, fiber_g: 11 },
+      entries: [
+        { id: 7, meal: "breakfast", summary: "Eggs", kcal: 620, protein_g: 45, carbs_g: 55, fat_g: 20, fiber_g: 11 },
+      ],
+    },
+  });
+  await harness.context.CairnDayFuelController.loadDayFuel(4, { root: harness.rootEl, isCurrent: () => true });
+  assert.match(harness.slot.innerHTML, /protein g/);
+  assert.match(harness.slot.innerHTML, /carbs g/);
+  assert.match(harness.slot.innerHTML, /fat g/);
+  assert.match(harness.slot.innerHTML, /fiber g/);
+  harness.slot.querySelector("#dayFuelProgress").click();
+  assert.equal(harness.context.state.progressSeg, "intake");
+  assert.equal(harness.context.activatedTab, "progress");
+});
+
+test("day fuel renderer shows unknown totals as em dashes, never fabricated zeros", async () => {
+  const harness = loadController({
+    day: {
+      date: "2026-06-30",
+      count: 1,
+      totals: { kcal: 620, protein_g: 0, carbs_g: 0, fat_g: 20, fiber_g: 0 },
+      known: { kcal: true, protein_g: false, carbs_g: false, fat_g: true, fiber_g: false },
+      entries: [{ id: 7, meal: "breakfast", summary: "Eggs", kcal: 620, protein_g: null }],
+    },
+  });
+  await harness.context.CairnDayFuelController.loadDayFuel(4, { root: harness.rootEl, isCurrent: () => true });
+  assert.match(harness.slot.innerHTML, /unknown grams protein/);
+  assert.match(harness.slot.innerHTML, /&mdash;/);
+  assert.doesNotMatch(harness.slot.innerHTML, /data-cu="0"/);
 });
 
 test("day fuel controller does not paint a stale response", async () => {
@@ -323,7 +391,9 @@ test("day fuel controller saves corrected macros and invalidates energy", async 
   };
 
   harness.context.CairnDayFuelController.openFoodEdit(5, new FakeElement("button"), {
-    onRerender: () => { rerenders += 1; },
+    onRerender: () => {
+      rerenders += 1;
+    },
   });
   harness.mountedDetail.querySelector("#fedSummary").value = "Greek yogurt";
   harness.mountedDetail.querySelector("#fedMeal").value = "snack";
@@ -331,6 +401,7 @@ test("day fuel controller saves corrected macros and invalidates energy", async 
   harness.mountedDetail.querySelector("#fedProtein").value = "";
   harness.mountedDetail.querySelector("#fedCarbs").value = "30";
   harness.mountedDetail.querySelector("#fedFat").value = "bad";
+  harness.mountedDetail.querySelector("#fedFiber").value = "12";
 
   await harness.mountedDetail.querySelector("#fedSave").click();
 
@@ -343,9 +414,10 @@ test("day fuel controller saves corrected macros and invalidates energy", async 
     protein_g: null,
     carbs_g: 30,
     fat_g: null,
+    fiber_g: 12,
   });
   assert.deepEqual(harness.toasts, ["Updated"]);
-  assert.deepEqual(harness.invalidations, ["progress:energy"]);
+  assert.deepEqual(harness.invalidations, ["progress:energy", "progress:intake"]);
   assert.equal(harness.closed, 1);
   assert.equal(rerenders, 0);
   assert.equal(harness.context.state._dayFuel.entries[0].summary, "Greek yogurt");
@@ -363,14 +435,16 @@ test("day fuel controller deletes a note through the guarded delete path", async
   };
 
   harness.context.CairnDayFuelController.openFoodEdit(9, new FakeElement("button"), {
-    onRerender: () => { rerenders += 1; },
+    onRerender: () => {
+      rerenders += 1;
+    },
   });
   await harness.mountedDetail.querySelector("#fedDel").click();
 
   assert.equal(harness.requests[0].path, "/food-notes/9");
   assert.equal(harness.requests[0].opts.method, "DELETE");
   assert.deepEqual(harness.toasts, ["Removed"]);
-  assert.deepEqual(harness.invalidations, ["progress:energy"]);
+  assert.deepEqual(harness.invalidations, ["progress:energy", "progress:intake"]);
   assert.equal(harness.closed, 1);
   assert.equal(rerenders, 0);
   assert.equal(harness.context.state._dayFuel.count, 0);

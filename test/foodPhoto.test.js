@@ -17,6 +17,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo } from "./_seed.js";
 import { applyFoodPhoto, coerceNutritionPattern, processFoodPhotoJob, recoverPendingEnrich } from "../dist/enrich.js";
+import { buildEnrichPrompt, buildFoodPhotoPrompt, foodEnrichmentPreparationContext } from "../dist/prompt.js";
 
 // A photo-backed food note exactly as the chat worker (logPhotoFood) creates it:
 // addFoodNote(meal, raw="", parsed, imagePath). raw="" keeps the TEXT enricher off.
@@ -25,8 +26,12 @@ function seedPhotoNote(imagePath, parsed = { summary: "lunch" }) {
 }
 
 beforeEach(() => {
-  for (const t of ["food_notes", "activities", "health_documents"]) {
-    try { db.prepare(`DELETE FROM ${t}`).run(); } catch { /* table may not exist */ }
+  for (const t of ["food_notes", "activities", "health_documents", "memory"]) {
+    try {
+      db.prepare(`DELETE FROM ${t}`).run();
+    } catch {
+      /* table may not exist */
+    }
   }
   // Keep the suite OFFLINE + deterministic: disable every real agent so
   // pickHealthAgentOrder() returns [] and processFoodPhotoJob degrades to
@@ -35,14 +40,42 @@ beforeEach(() => {
   repo.setSettings({ disabled_agents: ["claude", "codex", "antigravity", "grok", "stub"] });
 });
 
+test("food enrichment emits only canonical preparation tokens, never original private memory text", () => {
+  repo.addMemory(
+    "I grill dinner with olive oil; CKD stage 3, insulin at 7pm, home address 123 Cedar Lane.",
+    "preference",
+    "test"
+  );
+  repo.addMemory("My daughter dislikes broccoli and our family schedule is busy on Tuesdays.", "constraint", "test");
+
+  assert.deepEqual(foodEnrichmentPreparationContext(), {
+    cooking_methods: ["grill"],
+    cooking_fats: ["olive oil"],
+  });
+
+  for (const prompt of [
+    buildEnrichPrompt("food", "salmon and rice"),
+    buildFoodPhotoPrompt("/private/tmp/plate.jpg", "salmon and rice"),
+  ]) {
+    assert.match(prompt, /"cooking_methods":\["grill"\]/);
+    assert.match(prompt, /"cooking_fats":\["olive oil"\]/);
+    assert.doesNotMatch(prompt, /CKD|insulin|123 Cedar|daughter|broccoli|family schedule/i);
+    assert.doesNotMatch(
+      prompt,
+      /I grill dinner with olive oil/i,
+      "the original memory text never leaves the extractor"
+    );
+  }
+});
+
 test("applyFoodPhoto coerces a string-number payload, clamps to ceilings, and merges over the note", () => {
   const note = seedPhotoNote("/abs/uploads/plate.jpg", { summary: "lunch", kcal: null });
   // A messy but plausible agent reply: string numbers, an over-ceiling kcal, junk.
   const wrote = applyFoodPhoto(note.id, {
     summary: "Grilled salmon, rice & greens",
     items: ["salmon", "white rice", "broccoli"],
-    kcal: "640",          // string → 640
-    protein_g: 48.6,      // rounds → 49
+    kcal: "640", // string → 640
+    protein_g: 48.6, // rounds → 49
     carbs_g: "not a number", // junk → dropped (asNum returns undefined)
     fat_g: 22,
     fiber_g: 9,
@@ -111,6 +144,8 @@ test("nutrition pattern keeps coarse provenance and rejects false micronutrient 
       potassium: "moderate",
       iron: "low",
       saturated_fat: "HIGH",
+      saturated_fat_g: 12.34,
+      unsaturated_fat_g: 999,
       sodium_mg: 1_843.27,
       omega_3_source: true,
       caffeine_mg: 9_999,
@@ -122,9 +157,21 @@ test("nutrition pattern keeps coarse provenance and rejects false micronutrient 
   );
   assert.equal(pattern.sodium, "high");
   assert.equal(pattern.saturated_fat, "high");
+  assert.equal(pattern.saturated_fat_g, 12.3);
+  assert.equal(pattern.unsaturated_fat_g, 300);
   assert.equal(pattern.caffeine_mg, 2_000);
   assert.equal(pattern.basis, "photo");
   assert.equal("sodium_mg" in pattern, false, "photo estimates do not preserve invented precision");
+});
+
+test("nutrition pattern drops a fat split that materially exceeds total fat", () => {
+  const pattern = coerceNutritionPattern(
+    { saturated_fat_g: 15, unsaturated_fat_g: 20, confidence: "medium", basis: "user_report" },
+    "estimated_from_foods",
+    20
+  );
+  assert.equal(pattern.saturated_fat_g, null);
+  assert.equal(pattern.unsaturated_fat_g, null);
 });
 
 test("applyFoodPhoto returns false on a wrong-shape payload and leaves the note untouched", () => {
@@ -159,7 +206,12 @@ test("applyFoodPhoto rejects refusal-only JSON instead of marking a photo estima
 
 test("applyFoodPhoto overwrites only the fields the agent returned (merge, not replace)", () => {
   // Seed with a first-pass estimate the chat agent already filled.
-  const note = seedPhotoNote("/abs/uploads/plate.jpg", { summary: "lunch", kcal: 300, protein_g: 20, notes: "felt light" });
+  const note = seedPhotoNote("/abs/uploads/plate.jpg", {
+    summary: "lunch",
+    kcal: 300,
+    protein_g: 20,
+    notes: "felt light",
+  });
   applyFoodPhoto(note.id, { kcal: 520, protein_g: 35 }); // refine kcal + protein only
   const p = repo.getFoodNote(note.id).parsed;
   assert.equal(p.kcal, 520, "refined");

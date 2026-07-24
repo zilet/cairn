@@ -71,7 +71,7 @@ function _swrPrefixStamp(key: string): number {
 // they still paint instantly WITHIN a session from _swrMem, they just don't persist
 // to localStorage across a cold start (where everything else does).
 function _swrMemOnly(key: string): boolean {
-  return /^(markers:|recovery:|health:)/.test(key || "");
+  return /^(markers:|recovery:|health:|progress:intake(?:$|:))/.test(key || "");
 }
 
 function _swrLsGet(key: string): ClientSwrEntry<unknown> | null {

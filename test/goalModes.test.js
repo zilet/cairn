@@ -88,6 +88,19 @@ test("getDayIntake sums today's food and shows 'remaining' when a target exists"
   assert.equal(d.remaining.kcal, tdee - 1400, "'remaining', not 'consumed'");
 });
 
+test("getDayIntake keeps legacy numeric totals while additive known flags expose partial nutrients", () => {
+  setProfile({ goal_mode: "maintain", weight_lb: 185 });
+  seedIntake(0, 600, { protein_g: 40, summary: "Known breakfast" });
+  seedIntake(0, 800, { summary: "Macros pending" });
+  const d = repo.getDayIntake();
+  assert.equal(d.totals.kcal, 1400);
+  assert.equal(d.known.kcal, true);
+  assert.equal(d.totals.protein_g, 40, "legacy totals treat the missing nutrient as zero");
+  assert.equal(d.known.protein_g, false);
+  assert.equal(typeof d.remaining.protein_g, "number");
+  assert.equal(d.remaining.protein_g, d.target.protein_g - 40);
+});
+
 test("getDayIntake is descriptive-only (no target) when the profile is incomplete", () => {
   resetTables("profile"); // no age/height/weight → computeGoalCheck not ok
   seedIntake(0, 500, { protein_g: 30, summary: "Snack" });

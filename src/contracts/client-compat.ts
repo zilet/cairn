@@ -6,6 +6,7 @@ import type { CardioEffort, FeedRow, getCardioForDate } from "../repo/activities
 import type { CoachingFocus } from "../repo/coaching-focus.js";
 import type { getInjuryImpacts } from "../repo/health.js";
 import type { getDayIntake } from "../repo/nutrition.js";
+import type { nutritionProgress } from "../repo/nutrition-progress.js";
 import type { NextStep } from "../repo/next-step.js";
 import type { DexaTargeting } from "../repo/dexa-targeting.js";
 import type { MuscleGroupTrajectory, TestWeekDue } from "../repo/muscle-trajectory.js";
@@ -40,6 +41,7 @@ import type {
   ClientGoalCheck,
   ClientHealthDocument,
   ClientNextStep,
+  ClientNutritionProgress,
   ClientPlanDay,
   ClientPrescription,
   ClientProfile,
@@ -78,6 +80,10 @@ type AssertAssignable<_Actual extends Expected, Expected> = true;
 export type TodayAgendaMatchesClientContract = AssertAssignable<TodayAgenda, ClientTodayAgenda>;
 export type CoachingFocusMatchesClientContract = AssertAssignable<CoachingFocus, ClientCoachingFocus>;
 export type DayIntakeMatchesClientContract = AssertAssignable<ReturnType<typeof getDayIntake>, ClientDayIntake>;
+export type NutritionProgressMatchesClientContract = AssertAssignable<
+  ReturnType<typeof nutritionProgress>,
+  ClientNutritionProgress
+>;
 export type DayReadMatchesClientContract = AssertAssignable<DayRead, ClientDayRead>;
 export type NextStepMatchesClientContract = AssertAssignable<NextStep, ClientNextStep>;
 export type ExpenditureMatchesClientContract = AssertAssignable<ExpenditureEstimate, ClientExpenditureEstimate>;

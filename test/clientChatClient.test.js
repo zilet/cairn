@@ -99,6 +99,18 @@ test("chat fuel and history HTML escape dynamic content", () => {
   assert.match(fuel, /1,240 kcal · 85g protein · ~960 left/);
   assert.doesNotMatch(fuel, /log something/i);
 
+  const pendingFuel = chat.fuelHtml({
+    count: 1,
+    date: "2026-06-29",
+    totals: { kcal: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0 },
+    known: { kcal: false, protein_g: false, carbs_g: false, fat_g: false, fiber_g: false },
+    entries: [{ enrichment_status: "pending" }],
+    target: { kcal: 2200, protein_g: 170, mode: "maintain" },
+    remaining: { kcal: 2200, protein_g: 170 },
+  });
+  assert.match(pendingFuel, /Nutrition estimate is settling/);
+  assert.doesNotMatch(pendingFuel, /0 kcal|0g protein|2,200 left/);
+
   const session = chat.historySessionRow({
     session_id: `sess"1`,
     preview: "<b>unsafe</b>",

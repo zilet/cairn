@@ -53,9 +53,10 @@ export function dayFuelState(date?: string, now: Date = new Date()): FuelState |
     const target = intake?.target;
     const targetProtein = Number(target?.protein_g);
     if (!target || !Number.isFinite(targetProtein) || targetProtein <= 0) return null;
+    if (intake?.known?.protein_g !== true || intake?.totals?.protein_g == null) return null;
 
     const target_g = Math.round(targetProtein);
-    const protein_so_far_g = Math.round(Number(intake?.totals?.protein_g) || 0);
+    const protein_so_far_g = Math.round(Number(intake.totals.protein_g));
 
     // The most recent logged entry (entries are id-ASC, so the last one is newest)
     // — its recency lets the agent say "you last ate 3 h ago" when nudging.

@@ -44,6 +44,7 @@ test("day fuel helper renders totals, remaining fuel, and editable rows", () => 
   const html = fuel.dayFuelHtml({
     count: 2,
     totals: { kcal: 844.4, protein_g: 77.6 },
+    known: { kcal: true, protein_g: true, carbs_g: false, fat_g: false, fiber_g: false },
     target: { kcal: 2200 },
     remaining: { kcal: 940.2, protein_g: 42.1 },
     entries: [
@@ -76,4 +77,20 @@ test("day fuel helper renders complete-fuel state without pressure", () => {
 
   assert.match(html, /Fuel's in for today\./);
   assert.doesNotMatch(html, /consumed/i);
+});
+
+test("day fuel helper uses known flags instead of displaying legacy zeroes for partial totals", () => {
+  const fuel = loadDayFuel();
+  const html = fuel.dayFuelHtml({
+    count: 1,
+    totals: { kcal: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0 },
+    known: { kcal: false, protein_g: false, carbs_g: false, fat_g: false, fiber_g: false },
+    target: { kcal: 2200, protein_g: 170 },
+    remaining: { kcal: 2200, protein_g: 170 },
+    entries: [{ id: 1, summary: "Photo meal", enrichment_status: "pending" }],
+  });
+
+  assert.match(html, /&mdash;/);
+  assert.doesNotMatch(html, /data-cu="0"/);
+  assert.doesNotMatch(html, /2200.*kcal left/i);
 });

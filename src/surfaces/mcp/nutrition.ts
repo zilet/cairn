@@ -9,6 +9,7 @@ import {
   getMealPlan,
   listFoodNotes,
   listMealPlans,
+  nutritionProgress,
   setMealPlanStatus,
   updateFoodNote,
   updateMealPlanDays,
@@ -72,9 +73,16 @@ export function registerNutritionTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_day_intake",
-    "A calm review of ONE day's logged food: { date, totals:{kcal,protein_g,carbs_g,fat_g,fiber_g}, entries:[{id,meal,summary,kcal,protein_g,carbs_g,fat_g,fiber_g,enrichment_status,created_at}], count, target, remaining }. target ({kcal,protein_g,mode}) and remaining are present ONLY when the profile can derive one (a loss/gain goal, or the maintenance anchor) — else null (descriptive-only). 'remaining', never 'consumed'; no score. ?date defaults to the user's local today.",
+    "A calm review of ONE day's logged food: { date, totals:{kcal,protein_g,carbs_g,fat_g,fiber_g}, known:{kcal,protein_g,carbs_g,fat_g,fiber_g}, entries:[{id,meal,summary,kcal,protein_g,carbs_g,fat_g,fiber_g,enrichment_status,created_at}], count, target, remaining }. For patch compatibility totals and remaining stay numeric and missing entry nutrients contribute zero; newer clients MUST consult known flags before presenting a total or target comparison. target ({kcal,protein_g,mode}) and remaining are present ONLY when the profile can derive one — else null. 'remaining', never 'consumed'; no score. ?date defaults to the user's local today.",
     { date: z.string().optional().describe("YYYY-MM-DD; defaults to today") },
     async ({ date }) => asText(getDayIntake(date))
+  );
+
+  server.tool(
+    "get_nutrition_progress",
+    "A calm multi-week read of recorded intake. Returns a complete chronological local-day series with unlogged days and unknown nutrients as null, explicit record observation density (never proof of full-day capture), confidence capped at observed because no independent completeness signal exists, and target comparisons/advice qualified with 'if these records reflect most of your day'. Nutrient averages/trends use only known values; historical accepted targets stay attached per day; food/fat-quality estimates are sampled, never extrapolated. Informational, not medical advice; no score, streak, or blame.",
+    { days: z.number().int().optional().describe("trailing days (default 35, safely clamped 14–90)") },
+    async ({ days }) => asText(nutritionProgress(days ?? 35))
   );
 
   server.tool("list_meal_plans", "List recent meal plans.", { limit: z.number().int().optional() }, async ({ limit }) =>

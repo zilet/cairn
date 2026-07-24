@@ -1169,17 +1169,35 @@ async function smokeProgressSegmentNavigation(cdp, base) {
     })()`);
 
     await evaluate(cdp, `(() => {
-      const btn = document.querySelector('.segbtn[data-proggroup="fuel"], .segbtn[data-seg="energy"]');
-      if (!btn) throw new Error("missing Progress Energy segment");
+      const btn = document.querySelector('.segbtn[data-proggroup="fuel"]');
+      if (!btn) throw new Error("missing Progress Fuel segment");
       btn.click();
       return true;
     })()`);
-    await waitForCondition(cdp, "Progress segment click returns to Energy", `(() => {
-      const active = document.querySelector('.segbtn.active[data-proggroup="fuel"], .segbtn.active[data-seg="energy"]');
+    await waitForCondition(cdp, "Progress Fuel click opens Intake", `(() => {
+      const activeGroup = document.querySelector('.segbtn.active[data-proggroup="fuel"]');
+      const activeLeaf = document.querySelector('.segbtn.active[data-seg="intake"]');
+      return {
+        ok: Boolean(activeGroup && activeLeaf && window.state?.progressSeg === "intake" && location.pathname === "/app/progress/intake"),
+        href: location.pathname,
+        progressSeg: window.state && window.state.progressSeg,
+        activeGroup: activeGroup ? activeGroup.textContent.trim() : "",
+        activeLeaf: activeLeaf ? activeLeaf.textContent.trim() : ""
+      };
+    })()`);
+    await evaluate(cdp, `(() => {
+      const btn = document.querySelector('.segbtn[data-seg="energy"]');
+      if (!btn) throw new Error("missing Progress Energy leaf segment");
+      btn.click();
+      return true;
+    })()`);
+    await waitForCondition(cdp, "Progress Energy leaf click opens Energy", `(() => {
+      const active = document.querySelector('.segbtn.active[data-seg="energy"]');
       return {
         ok: Boolean(active && window.state?.progressSeg === "energy" && location.pathname === "/app/progress/energy" && document.querySelector("#energyCard")),
         href: location.pathname,
         progressSeg: window.state && window.state.progressSeg,
+        active: active ? active.textContent.trim() : "",
         hasEnergyCard: Boolean(document.querySelector("#energyCard"))
       };
     })()`);

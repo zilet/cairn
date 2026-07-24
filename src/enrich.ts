@@ -1023,7 +1023,7 @@ export function applyFoodPhoto(id: number, parsed: any): boolean {
     merged.confidence = conf;
     changed = true;
   }
-  const pattern = coerceNutritionPattern(parsed.nutrition_pattern, "photo");
+  const pattern = coerceNutritionPattern(parsed.nutrition_pattern, "photo", parsed.fat_g ?? merged.fat_g);
   if (pattern) {
     merged.nutrition_pattern = pattern;
     changed = true;
@@ -1065,13 +1065,35 @@ function macroTotalsFromItems(items: any): Record<string, number> | null {
   return saw ? totals : null;
 }
 
-export function coerceNutritionPattern(value: any, fallbackBasis = "estimated_from_foods"): Record<string, any> | null {
+export function coerceNutritionPattern(
+  value: any,
+  fallbackBasis = "estimated_from_foods",
+  totalFat?: unknown
+): Record<string, any> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const out: Record<string, any> = {};
   const bands = new Set(["low", "moderate", "high", "unknown"]);
   for (const key of ["sodium", "potassium", "calcium", "iron", "saturated_fat", "added_sugar"]) {
     const band = String(value[key] ?? "").toLowerCase();
     if (bands.has(band)) out[key] = band;
+  }
+  for (const key of ["saturated_fat_g", "unsaturated_fat_g"] as const) {
+    if (value[key] === null) {
+      out[key] = null;
+      continue;
+    }
+    const n = asNum(value[key]);
+    if (n !== undefined) out[key] = Math.max(0, Math.min(300, Math.round(n * 10) / 10));
+  }
+  const totalFatG = asNum(totalFat);
+  if (
+    totalFatG !== undefined &&
+    typeof out.saturated_fat_g === "number" &&
+    typeof out.unsaturated_fat_g === "number" &&
+    out.saturated_fat_g + out.unsaturated_fat_g > totalFatG * 1.15
+  ) {
+    out.saturated_fat_g = null;
+    out.unsaturated_fat_g = null;
   }
   if (typeof value.omega_3_source === "boolean" || value.omega_3_source === null)
     out.omega_3_source = value.omega_3_source;
@@ -1637,7 +1659,7 @@ function applyStructured(job: Job, structured: any): boolean {
     merged.fiber_g = fiber;
     changed = true;
   }
-  const pattern = coerceNutritionPattern(structured.nutrition_pattern);
+  const pattern = coerceNutritionPattern(structured.nutrition_pattern, "estimated_from_foods", structured.fat_g ?? merged.fat_g);
   if (pattern) {
     merged.nutrition_pattern = pattern;
     changed = true;

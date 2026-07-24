@@ -97,6 +97,7 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/since-last",
   "/guidelines",
   "/nutrition/day",
+  "/nutrition/progress",
   "/nutrition/expenditure",
   "/nutrition/checkin",
   "/nutrition/goal-pace",

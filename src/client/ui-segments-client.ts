@@ -22,6 +22,7 @@ type UiSegmentsDeps = {
   renderCalendar(): unknown;
   renderHistory(): unknown;
   renderProgram(): unknown;
+  renderIntake(): unknown;
   renderEnergy(): unknown;
   renderPlanEditor(): unknown;
   renderPlanEndurance(): unknown;
@@ -63,6 +64,7 @@ const UI_PROGRESS_SEGMENTS: readonly UiSegmentsSegment[] = [
   ["measurements", "Measurements"],
   ["calendar", "Calendar"],
   ["program", "Program"],
+  ["intake", "Intake"],
   ["energy", "Energy"],
 ];
 
@@ -81,7 +83,7 @@ const UI_PROGRESS_GROUPS: readonly UiSegmentsSegment[] = [
 const UI_PROGRESS_GROUP_LEAVES: Record<string, readonly string[]> = {
   train: ["overview", "sessions", "trend", "volume", "endurance", "calendar"],
   performance: ["program"],
-  fuel: ["energy"],
+  fuel: ["intake", "energy"],
   body: ["weight", "measurements"],
 };
 const UI_PROGRESS_LEAF_GROUP: Record<string, string> = (() => {
@@ -260,6 +262,7 @@ function createUiSegments(deps: UiSegmentsDeps): UiSegmentsController {
     calendar: () => deps.renderCalendar(),
     sessions: () => deps.renderHistory(),
     program: () => deps.renderProgram(),
+    intake: () => deps.renderIntake(),
     energy: () => deps.renderEnergy(),
   };
 

@@ -34,6 +34,7 @@ const ENRICH_FOOD_SCHEMA = `{
       "sodium": "low|moderate|high|unknown", "potassium": "low|moderate|high|unknown",
       "calcium": "low|moderate|high|unknown", "iron": "low|moderate|high|unknown",
       "saturated_fat": "low|moderate|high|unknown", "added_sugar": "low|moderate|high|unknown",
+      "saturated_fat_g": <number|null>, "unsaturated_fat_g": <number|null>,
       "omega_3_source": <boolean|null>, "alcohol_servings": <number|null>,
       "caffeine_mg": <number|null>, "caffeine_time": <string|null>,
       "food_quality": "mostly_whole|mixed|mostly_ultra_processed|unknown",
@@ -46,12 +47,58 @@ const ENRICH_FOOD_SCHEMA = `{
   ]
 }`;
 
+const FOOD_PREPARATION_METHODS = [
+  ["air-fry", /\bair[- ]?fr(?:y|ied|ies|ying|yer)\b/i],
+  ["grill", /\bgrill(?:ed|ing|s)?\b/i],
+  ["bake", /\bbak(?:e|ed|es|ing)\b/i],
+  ["roast", /\broast(?:ed|ing|s)?\b/i],
+  ["steam", /\bsteam(?:ed|ing|s)?\b/i],
+  ["saute", /\bsaut(?:e|ed|es|ing|é|éed|és|éing)\b/i],
+  ["boil", /\bboil(?:ed|ing|s)?\b/i],
+  ["poach", /\bpoach(?:ed|ing|es)?\b/i],
+  ["braise", /\bbrais(?:e|ed|es|ing)\b/i],
+  ["slow-cook", /\bslow[- ]cook(?:ed|ing|s)?\b/i],
+] as const;
+const FOOD_PREPARATION_FATS = [
+  ["olive oil", /\b(?:extra[- ]virgin\s+)?olive oil\b|\bevoo\b/i],
+  ["avocado oil", /\bavocado oil\b/i],
+  ["butter", /\bbutter\b/i],
+  ["ghee", /\bghee\b/i],
+  ["coconut oil", /\bcoconut oil\b/i],
+  ["canola oil", /\b(?:canola|rapeseed) oil\b/i],
+  ["vegetable oil", /\bvegetable oil\b/i],
+  ["sesame oil", /\bsesame oil\b/i],
+  ["peanut oil", /\bpeanut oil\b/i],
+  ["sunflower oil", /\bsunflower oil\b/i],
+] as const;
+
+export interface FoodPreparationContext {
+  cooking_methods: string[];
+  cooking_fats: string[];
+}
+
+// Memory is scanned locally, but the prompt receives only canonical tokens from
+// these positive culinary allowlists. Original memory text never crosses the
+// prompt boundary, even when a note mixes preparation details with health,
+// medication, family, location, schedule, or other private context.
+export function foodEnrichmentPreparationContext(limit = 40): FoodPreparationContext {
+  const contents = (repo.listMemory(limit) as any[]).map((memory) => String(memory?.content || ""));
+  const cookingMethods = FOOD_PREPARATION_METHODS.filter(([, pattern]) =>
+    contents.some((content) => pattern.test(content))
+  ).map(([canonical]) => canonical);
+  const cookingFats = FOOD_PREPARATION_FATS.filter(([, pattern]) =>
+    contents.some((content) => pattern.test(content))
+  ).map(([canonical]) => canonical);
+  return { cooking_methods: cookingMethods, cooking_fats: cookingFats };
+}
+
 // Background enrichment of a free-text log into cleaner structured data, plus
 // distilling genuinely notable durable facts into memory. Light context only.
 export function buildEnrichPrompt(kind: "activity" | "food", raw: string): string {
   const profile = repo.getProfile();
   const goal = repo.computeGoalCheck();
-  const recentMemory = (repo.listMemory(40) as any[]).map((m) => m.content);
+  const recentMemory =
+    kind === "food" ? foodEnrichmentPreparationContext() : (repo.listMemory(40) as any[]).map((m) => m.content);
 
   const guardrails = `GUARDRAILS:
 - Never invent numbers. Use null for anything not stated or not reasonably inferable.
@@ -95,6 +142,10 @@ ${guardrails}
 - Use nutrition_pattern for COARSE pattern bands, not invented micronutrient milligrams. Label or explicit
   user facts may be high confidence; ordinary-food inference is low/medium. Alcohol and caffeine stay null
   unless the note actually identifies them.
+- Estimate saturated_fat_g and unsaturated_fat_g only when ingredients and preparation make a practical
+  split possible; otherwise use null. Keep the split consistent with total fat and avoid false precision.
+  Explicit cooking method/oil in the note or durable memory overrides generic assumptions (for example,
+  grilled with a drizzle of olive oil should not be treated like butter-fried food).
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 ${ENRICH_FOOD_SCHEMA}
@@ -167,7 +218,11 @@ ${ENRICH_HEALTH_SCHEMA}
 
 CONTEXT:
 profile: ${JSON.stringify(profile)}
-EXISTING MEMORY (do not repeat): ${JSON.stringify(recentMemory)}`;
+${
+  kind === "food"
+    ? `PREPARATION CONTEXT (canonical allowlisted tokens only; the user's meal note is authoritative): ${JSON.stringify(recentMemory)}`
+    : `EXISTING MEMORY (do not repeat): ${JSON.stringify(recentMemory)}`
+}`;
 }
 
 // ---- food photo → macros (vision) ----------------------------------------------
@@ -180,14 +235,19 @@ EXISTING MEMORY (do not repeat): ${JSON.stringify(recentMemory)}`;
 export function buildFoodPhotoPrompt(absPath: string, hint?: string): string {
   const profile = repo.getProfile();
   const goal = repo.computeGoalCheck();
+  const preparationContext = foodEnrichmentPreparationContext();
   return `You estimate the nutrition of a meal from a PHOTO of the plate, for a user's food log.
 The photo is a local image file saved on this machine.
 
 LOOK AT THE IMAGE FILE AT THIS ABSOLUTE PATH:
 ${absPath}
 Open and view that image directly before answering. If the runtime attached the same image bytes inline,
-use that inline image as the source of truth and do not claim you cannot access the local file.${hint ? `
-The user's note for this meal: "${hint}" — use it to disambiguate, but trust what you SEE.` : ""}
+use that inline image as the source of truth and do not claim you cannot access the local file.${
+    hint
+      ? `
+The user's note for this meal: "${hint}" — use it to disambiguate, but trust what you SEE.`
+      : ""
+  }
 
 YOUR JOB:
 - Identify the dish(es) on the plate and the visible foods/components.
@@ -206,6 +266,9 @@ GUARDRAILS:
 - A restaurant photo cannot justify precise micronutrient numbers. Use only coarse nutrition_pattern
   bands, mark basis:"photo", and keep confidence low/medium unless a readable label or explicit user
   statement supports it. Alcohol and caffeine stay null unless visible or stated.
+- Estimate saturated_fat_g and unsaturated_fat_g only when visible ingredients plus the user's note or
+  durable preparation memory support a practical split; otherwise use null. The two should remain
+  consistent with total fat. User-reported cooking method/oil overrides generic visual assumptions.
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 {
@@ -220,6 +283,7 @@ OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
     "sodium": "low|moderate|high|unknown", "potassium": "low|moderate|high|unknown",
     "calcium": "low|moderate|high|unknown", "iron": "low|moderate|high|unknown",
     "saturated_fat": "low|moderate|high|unknown", "added_sugar": "low|moderate|high|unknown",
+    "saturated_fat_g": <number|null>, "unsaturated_fat_g": <number|null>,
     "omega_3_source": <boolean|null>, "alcohol_servings": <number|null>,
     "caffeine_mg": <number|null>, "caffeine_time": <string|null>,
     "food_quality": "mostly_whole|mixed|mostly_ultra_processed|unknown",
@@ -231,7 +295,8 @@ OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 
 CONTEXT (for portion realism only — do NOT let the goal bias the estimate up or down):
 profile: ${JSON.stringify(profile)}
-goal: ${JSON.stringify(goal)}`;
+goal: ${JSON.stringify(goal)}
+PREPARATION CONTEXT (canonical allowlisted tokens only; the user's meal note is authoritative): ${JSON.stringify(preparationContext)}`;
 }
 
 // ---------- Garmin strength reconciliation (match → enrich → extrapolate) ----------
@@ -263,9 +328,14 @@ export function buildGarminStrengthPrompt(garminActivity: any): string {
   const logged = Array.isArray((session as any)?.sets) ? (session as any).sets : [];
   // What the user already logged by hand for this day — NEVER duplicate these.
   const loggedExercises = [...new Set(logged.map((s: any) => s.exercise).filter(Boolean))];
-  const exercises = (repo.listExercises() as any[]).map((e) => ({ name: e.name, mode: e.mode || "reps", muscle_group: e.muscle_group || null }));
+  const exercises = (repo.listExercises() as any[]).map((e) => ({
+    name: e.name,
+    mode: e.mode || "reps",
+    muscle_group: e.muscle_group || null,
+  }));
   const plan = (repo.getPlan() as any[]).map((d) => ({
-    day: d.name, focus: d.focus || null,
+    day: d.name,
+    focus: d.focus || null,
     exercises: (d.items || []).map((it: any) => it.exercise),
   }));
   const profile = repo.getProfile();

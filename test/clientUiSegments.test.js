@@ -7,6 +7,7 @@ import vm from "node:vm";
 import ts from "typescript";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const styles = readFileSync(join(root, "public/styles.css"), "utf8");
 
 function classList() {
   const values = new Set();
@@ -201,6 +202,7 @@ test("Progress nav groups the 8 views into 4 top groups with leaf sub-tabs", () 
   assert.equal(context.CairnUiSegments.progressGroupOf("sessions"), "train");
   assert.equal(context.CairnUiSegments.progressGroupOf("program"), "performance");
   assert.equal(context.CairnUiSegments.progressGroupOf("energy"), "fuel");
+  assert.equal(context.CairnUiSegments.progressGroupOf("intake"), "fuel");
   assert.equal(context.CairnUiSegments.progressGroupOf("weight"), "body");
 
   // A multi-leaf group (Train) renders a top group bar + a leaf sub-bar; the
@@ -213,13 +215,30 @@ test("Progress nav groups the 8 views into 4 top groups with leaf sub-tabs", () 
   assert.match(trainNav, /data-seg="sessions"/);
   assert.doesNotMatch(trainNav, /data-seg="endurance"/);
 
-  // A single-view flagship group (Fuel) is just the top bar — no sub-bar clutter.
+  // Fuel exposes Intake before Energy in its compact leaf bar.
   const fuelNav = controller.segBar("energy", PROGRESS_SEG);
+  assert.match(fuelNav, /class="segwrap prog-subwrap"/);
+  assert.match(fuelNav, />Intake</);
+  assert.match(fuelNav, />Energy</);
   assert.match(fuelNav, /data-proggroup="fuel"[^>]*aria-pressed="true"/);
-  assert.doesNotMatch(fuelNav, /prog-subwrap/);
+  assert.match(fuelNav, /data-seg="intake"/);
+  assert.match(fuelNav, /data-seg="energy"[^>]*aria-pressed="true"/);
 
   // A non-Progress seg-set is untouched (still the flat sliding bar).
   assert.equal(controller.segBar("trend", [["trend", "1RM"]]), `<seg data-active="trend" data-items="1"></seg>`);
+});
+
+test("Progress group and leaf thumbs have distinct view-transition names", () => {
+  assert.match(
+    styles,
+    /\.prog-subseg \.seg-thumb\s*\{view-transition-name:prog-subseg-thumb\}/,
+    "the simultaneously rendered Progress leaf thumb must not share seg-thumb with the group bar"
+  );
+  assert.match(
+    styles,
+    /::view-transition-group\(prog-subseg-thumb\)\{animation-duration:var\(--dur-2\);animation-timing-function:var\(--ease\)\}/,
+    "the scoped thumb retains the standard segmented transition timing"
+  );
 });
 
 test("Progress endurance leaf appears for an endurance athlete or when it's active", () => {

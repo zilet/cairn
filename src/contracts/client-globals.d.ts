@@ -1702,6 +1702,24 @@ declare global {
   declare function renderEndurance(): unknown;
   declare function renderCalendar(): unknown;
   declare function renderEnergy(): unknown;
+  declare function renderIntake(): unknown;
+  declare const CairnProgressIntake: {
+    intakeBodyHtml(
+      progress: import("./client.js").ClientNutritionProgress,
+      selected?: import("./client.js").ClientNutritionProgressNutrient
+    ): string;
+    intakeChartHtml(
+      progress: import("./client.js").ClientNutritionProgress,
+      selected: import("./client.js").ClientNutritionProgressNutrient
+    ): string;
+    intakeFoodQualityHtml(progress: import("./client.js").ClientNutritionProgress): string;
+    unavailableHtml(): string;
+    render(
+      root: Element,
+      progress: import("./client.js").ClientNutritionProgress,
+      selected?: import("./client.js").ClientNutritionProgressNutrient
+    ): void;
+  };
   declare function renderProgram(): unknown;
   declare function renderChat(): unknown;
   declare function autosizeChatInput(input: HTMLTextAreaElement | HTMLInputElement): void;

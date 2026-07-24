@@ -126,7 +126,7 @@ test("Me Profile paints the SWR-cached profile before revalidating", () => {
 
 test("Stand Records/Learned/Connections paint cached-first (memory-only health keys)", () => {
   // Health surfaces stay in the memory tier — never written to disk.
-  assert.match(swrCache, /\^\(markers:\|recovery:\|health:\)/);
+  assert.match(swrCache, /\^\(markers:\|recovery:\|health:\|progress:intake\(\?:\$\|:\)\)/);
   assert.match(standScreen, /peekCached<unknown>\("health:learned"\)/);
   assert.match(standScreen, /cachedApi\("\/learned-timeline", \{\s*\n\s*key: "health:learned"/);
   assert.match(directiveLoader, /const DIRECTIVES_CACHE_KEY = "health:directives"/);

@@ -157,10 +157,24 @@ function chatFuelHtml(day: ChatClientDayIntake | null | undefined): string {
   const count = Number(day?.count) || 0;
   if (!count) return "";
   const totals: Partial<ChatClientDayIntake["totals"]> = day?.totals || {};
+  const kcalKnown = day?.known ? day.known.kcal === true : totals.kcal != null;
+  const proteinKnown = day?.known ? day.known.protein_g === true : totals.protein_g != null;
   const kcal = Math.round(Number(totals.kcal) || 0);
   const protein = Math.round(Number(totals.protein_g) || 0);
+  const parts = [
+    kcalKnown ? `${kcal.toLocaleString()} kcal` : "",
+    proteinKnown ? `${protein.toLocaleString()}g protein` : "",
+  ].filter(Boolean);
+  const pending = (day?.entries || []).some((entry) =>
+    ["pending", "in_progress"].includes(String(entry.enrichment_status || ""))
+  );
+  const hasUnknown = !kcalKnown || !proteinKnown;
+  const estimateState = pending ? "Nutrition estimate is settling…" : "Some nutrition details are still unknown.";
+  const stats = parts.length
+    ? `${parts.join(" · ")}${hasUnknown ? ` · ${pending ? "other details estimating…" : "some details unknown"}` : ""}`
+    : estimateState;
   let remaining = "";
-  if (day?.remaining && day.target) {
+  if (day?.remaining && day.target && kcalKnown) {
     const left = Math.round(Number(day.remaining.kcal));
     remaining = left > 0 ? ` · ~${left.toLocaleString()} left` : " · fuel's in";
   }
@@ -168,7 +182,7 @@ function chatFuelHtml(day: ChatClientDayIntake | null | undefined): string {
       <span class="chatfuel-mark" aria-hidden="true">◷</span>
       <span class="chatfuel-main">
         <span class="chatfuel-label lbl">Today's fuel · ${count} item${count === 1 ? "" : "s"}</span>
-        <span class="chatfuel-stats">${kcal.toLocaleString()} kcal · ${protein.toLocaleString()}g protein${escHtml(remaining)}</span>
+        <span class="chatfuel-stats">${escHtml(stats)}${escHtml(remaining)}</span>
       </span>
       <span class="chatfuel-go" aria-hidden="true">→</span>
     </button>`;
