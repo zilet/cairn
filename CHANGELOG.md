@@ -5,6 +5,44 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [1.5.1] — 2026-07-24
+
+Progress now opens into Fuel → Intake: a calm, gap-honest 35-day read of
+Energy, Protein, Carbs, Fat, and Fiber. It keeps historical and current target
+provenance visible, excludes open days, and pairs sampled clearly estimated
+food quality and saturated-versus-unsaturated fat context with preparation,
+cooking-oil, and culinary-memory context. Today and the day-fuel view gain the
+same richer picture without making Food a primary navigation destination.
+
+### Added
+
+- **Progress Intake analysis** — a 35-day, gap-honest Energy/Protein/Carbs/Fat/
+  Fiber view with target provenance and open-day exclusion.
+- **Food-quality context** — clearly estimated, sampled quality and fat-balance
+  reads that account for preparation, cooking oils, and remembered culinary
+  context.
+- **Fuel across surfaces** — expanded Today and day-fuel detail, with matching
+  REST and MCP availability for the nutrition progress data.
+
+### Fixed
+
+- **More resilient nutrition refreshes** — privacy, error, and enrichment
+  handling stay bounded when nutrition data is incomplete or a refresh fails.
+
+### Notes
+
+- Intake and food-quality reads are estimates; older categorical history may
+  not support the same detail. No schema migration is required.
+
+## [1.5.0] — 2026-07-23
+
+Cairn's learning brain became more reactive and legible: fuel truth, lab and
+felt-signal feedback, freshness, coach reads, learned models, and daily
+composition stages moved forward together. Chat gained adaptive lane routing
+with per-run model/reasoning bindings and local-frame weekly reads; Today now
+focuses attention on meaningful actions, and timed training sets have a
+stopwatch.
+
 ### Added
 
 - **Durable daily sessions** — accepting a suggested or chosen session now creates
