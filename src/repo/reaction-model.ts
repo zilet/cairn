@@ -995,10 +995,15 @@ function outcomeStage(row: EvaluatedDecisionRow): string {
   return RECOMPOSITION_STAGES.has(stage) ? stage : "unknown";
 }
 
+// Metrics whose learning is bucketed per recomposition PHASE (so a mid-cut outcome
+// never contaminates a lean-gain default). body_measurement_direction joins the two
+// primary nutrition levers: a waist/measurement verdict is composition evidence for
+// the same phase's intake step, so it stages the same way and only reaches the
+// nutrition-step consumer when its decision recorded the phase it belongs to.
+const STAGED_NUTRITION_METRICS = ["weight_trend_lb_wk", "intake_to_weight_response", "body_measurement_direction"];
+
 function comparableKey(row: EvaluatedDecisionRow): string {
-  const phase = ["weight_trend_lb_wk", "intake_to_weight_response"].includes(row.metric_key)
-    ? `stage=${outcomeStage(row)}`
-    : "all-phases";
+  const phase = STAGED_NUTRITION_METRICS.includes(row.metric_key) ? `stage=${outcomeStage(row)}` : "all-phases";
   return [row.decision_kind, row.metric_key, row.subject_key ?? "all", row.direction, phase].join(":");
 }
 
@@ -1062,6 +1067,16 @@ function modifierFor(
   if (["weight_trend_lb_wk", "intake_to_weight_response"].includes(row.metric_key)) {
     target = "nutrition_step";
     scale = verdict === "not_aligned" ? nutritionMissScale(row) : 1;
+  } else if (row.metric_key === "body_measurement_direction") {
+    // A measured composition verdict is EVIDENCE for the same phase's intake step,
+    // never a lever of its own. It can only HOLD (an aligned trend supports the
+    // current step) or EASE toward conservative (a missed trend — the body isn't
+    // tracking as expected, so the humble move is to hold back, not push). Capped at
+    // max 1 so measurement evidence can never inflate a deficit; the primary weight
+    // lever still owns any "go bigger" case, and lean-safe floors clamp downstream.
+    target = "nutrition_step";
+    bounds = { min: 0.9, max: 1 };
+    scale = verdict === "not_aligned" ? 0.9 : 1;
   } else if (
     [
       "exercise_target_completion",
@@ -1097,7 +1112,7 @@ function modifierFor(
   return {
     key: comparableKey(row),
     target,
-    stage: ["weight_trend_lb_wk", "intake_to_weight_response"].includes(row.metric_key) ? outcomeStage(row) : null,
+    stage: STAGED_NUTRITION_METRICS.includes(row.metric_key) ? outcomeStage(row) : null,
     scale,
     bounds,
     confidence,
@@ -1164,9 +1179,7 @@ function learningForGroup(
       domain: latest.domain,
       metric_key: latest.metric_key,
       subject_key: latest.subject_key,
-      stage: ["weight_trend_lb_wk", "intake_to_weight_response"].includes(latest.metric_key)
-        ? outcomeStage(latest)
-        : null,
+      stage: STAGED_NUTRITION_METRICS.includes(latest.metric_key) ? outcomeStage(latest) : null,
       statement,
       expected: expectedText(latest),
       observed:
@@ -1196,10 +1209,21 @@ export function whatWorksForYou(): CoachWhatWorksForYou | null {
     .sort((a, b) => b.learning.last_observed.localeCompare(a.learning.last_observed))
     .slice(0, 4);
   if (!learned.length) return null;
+  // Order modifiers so the PRIMARY nutrition levers (weight trend / intake response)
+  // precede body-measurement evidence for the same target+stage: personalResponse-
+  // ModifierFor takes the first match, so measurement evidence only sets the
+  // nutrition step when the weight signal hasn't itself earned one. Stable sort keeps
+  // the last_observed ordering within each rank; only body-measurement is demoted.
+  const measurementRank = (metricKey: string): number => (metricKey === "body_measurement_direction" ? 1 : 0);
+  const modifiers = [...learned]
+    .filter((item) => item.modifier)
+    .sort((a, b) => measurementRank(a.learning.metric_key) - measurementRank(b.learning.metric_key))
+    .map((item) => item.modifier as CoachPersonalModifier)
+    .slice(0, 4);
   return {
     version: PERSONAL_RESPONSE_VERSION,
     learnings: learned.map((item) => item.learning),
-    modifiers: learned.flatMap((item) => (item.modifier ? [item.modifier] : [])).slice(0, 4),
+    modifiers,
   };
 }
 

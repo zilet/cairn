@@ -3,6 +3,7 @@ import { isAgentJobKind } from "./agentJobKinds.js";
 import * as repo from "./repo.js";
 import {
   suggestSession,
+  composeDailySession,
   draftCoachProposal,
   evolveProgram,
   draftMealPlan,
@@ -73,7 +74,13 @@ export function onJobEvent(id: number, listener: (e: JobEvent) => void): () => v
 // wire an `onDelta` hook into the op; every other kind runs prose-free (or is
 // JSON-only) and streams nothing. Exported (with the predicate) so the wiring is
 // unit-testable and stays in lockstep with the reshaped prompts in prompt.ts.
-export const STREAM_DELTA_KINDS = new Set(["health_synthesis", "session_suggest", "nutrition_checkin", "weekly_read"]);
+export const STREAM_DELTA_KINDS = new Set([
+  "health_synthesis",
+  "session_suggest",
+  "session_compose",
+  "nutrition_checkin",
+  "weekly_read",
+]);
 export function jobStreamsDeltas(kind: string): boolean {
   return STREAM_DELTA_KINDS.has(kind);
 }
@@ -355,6 +362,20 @@ async function processAgentJob(id: number): Promise<void> {
             focus: input.focus != null ? String(input.focus) : undefined,
             constraints: input.constraints != null ? String(input.constraints) : undefined,
             date: input.date != null ? String(input.date) : undefined,
+          },
+          hooks
+        );
+        chosen = result?.agent ?? null;
+        break;
+      }
+      case "session_compose": {
+        result = await composeDailySession(
+          agent,
+          {
+            date: input.date != null ? String(input.date) : undefined,
+            minutes: input.minutes != null ? Number(input.minutes) : undefined,
+            equipment: input.equipment != null ? String(input.equipment) : undefined,
+            override: input.override != null ? String(input.override) : undefined,
           },
           hooks
         );

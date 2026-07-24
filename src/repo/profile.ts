@@ -896,10 +896,15 @@ function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?:
     let markerAnchorMeta: MarkerInterventionRecording["meta"] | null = null;
     if (shape.domain === "nutrition" || shape.domain === "training") {
       try {
-        const recording = markerInterventionRecording(shape.domain, nutrition ? nutritionEffectiveDate : today);
+        const recording = markerInterventionRecording(
+          shape.domain,
+          nutrition ? nutritionEffectiveDate : today,
+          shape.kind
+        );
         if (recording) {
           markerAnchorMeta = recording.meta;
-          expectations.push(recording.expectation);
+          // A same-draw repeat rides in meta only (expectation null) — no duplicate anchor.
+          if (recording.expectation) expectations.push(recording.expectation);
         }
       } catch {
         // Marker anchoring is best-effort telemetry; a direct apply is authoritative.

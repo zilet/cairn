@@ -27,6 +27,7 @@ import {
   buildRecipePrompt,
   buildHealthReviewPrompt,
   buildSessionPrompt,
+  buildDailyCompositionPrompt,
   buildExerciseExplanationPrompt,
   buildWeekAheadPrompt,
   buildSessionVerifyPrompt,
@@ -188,10 +189,10 @@ export function agentModelsOp(name: string) {
 // A `result` carries `source`/`agent`/`tried`/`ok` from the op; any subset is fine.
 export function agentStatusFor(
   result: {
-  source?: string | null;
-  agent?: string | null;
-  ok?: boolean;
-  tried?: { agent: string; error: string }[] | null;
+    source?: string | null;
+    agent?: string | null;
+    ok?: boolean;
+    tried?: { agent: string; error: string }[] | null;
   } = {}
 ): "ok" | "unconfigured" | "all_failed" {
   let configured = true;
@@ -394,11 +395,104 @@ export async function suggestSession(
       result: out,
       chosen_agent: chosen,
       freshForMs: 3 * 60 * 60 * 1000,
-  });
+    });
   } catch {
     /* cache write never breaks the op */
   }
   return out;
+}
+
+// Stage 3 — bounded agent composition (docs/ADAPTIVE_DAILY_TRAINING_PLAN.md §5).
+// Compose ONE session strictly inside the deterministic Stage 2 decision
+// envelope. The agent proposes; the server VERIFIES: every item is clamped and
+// checked against the envelope's exclusions/caps and the safe novel-exercise
+// rules (`normalizeComposedSession`). Invalid, empty, over-excluded, timed-out,
+// or agent-absent output falls back to a usable deterministic session built from
+// the same envelope — a usable session is GUARANTEED. Preview-only: nothing is
+// persisted or applied here; the athlete accepts it later via prepare
+// (agent_suggest), which snapshots it durably. ok:false is never returned — the
+// deterministic fallback always yields ok:true.
+export async function composeDailySession(
+  agent: string | undefined,
+  opts: { date?: string; minutes?: number; equipment?: string; override?: string } = {},
+  hooks?: OpHooks
+) {
+  const { envelope } = repo.decideDailySession(opts.date, {
+    override: opts.override ?? null,
+    equipment: opts.equipment ?? null,
+    minutes: opts.minutes ?? null,
+  });
+
+  // A rest read composes deterministically — never spend an agent run to say
+  // "take it easy today".
+  if (envelope.kind === "rest") {
+    const session = repo.deterministicComposedSession(envelope);
+    return {
+      ok: true as const,
+      session,
+      envelope,
+      fallback: "rest_day",
+      validation: null,
+      agent_status: "ok" as const,
+      session_normalization: DAILY_SESSION_SUGGESTION_NORMALIZATION,
+    };
+  }
+
+  hooks?.onPhase?.("composing today's session");
+  const prompt = buildDailyCompositionPrompt(envelope);
+  let run: FallbackResult | null = null;
+  let triedFromFailure: { agent: string; error: string }[] = [];
+  try {
+    run = await runChosenStreaming(agent, prompt, {
+      op: "session_compose",
+      timeoutMs: INTERACTIVE_TIMEOUT_MS,
+      signal: hooks?.signal,
+      onDelta: hooks?.onDelta,
+      boundedReads: true,
+      acceptParsed: (s: any) => isSessionSuggestionResult(s),
+    });
+  } catch (error) {
+    // A user Stop must propagate (agentFailure re-throws on abort); any other
+    // agent failure degrades to the deterministic fallback (never fail the
+    // composition), preserving the attempted-agent list for observability.
+    triedFromFailure = agentFailure(error, hooks).tried;
+    run = null;
+  }
+
+  let session = null as ReturnType<typeof repo.deterministicComposedSession> | null;
+  let fallback: string | null = null;
+  let validation: any = null;
+  let chosen: string | null = run?.agent ?? null;
+  const tried = run?.tried ?? triedFromFailure;
+
+  if (run?.result?.parsed) {
+    const normalized = repo.normalizeComposedSession(run.result.parsed, envelope);
+    validation = normalized.validation;
+    if (normalized.session) {
+      session = normalized.session;
+    } else {
+      fallback = normalized.validation.reason ?? "unusable_agent_output";
+    }
+  } else {
+    fallback = run ? "no_parsed_output" : "agent_unavailable";
+  }
+
+  if (!session) {
+    session = repo.deterministicComposedSession(envelope);
+    chosen = chosen ?? "deterministic";
+  }
+
+  return {
+    ok: true as const,
+    session,
+    envelope,
+    fallback,
+    validation,
+    agent: chosen,
+    tried,
+    agent_status: "ok" as const,
+    session_normalization: DAILY_SESSION_SUGGESTION_NORMALIZATION,
+  };
 }
 
 // Fingerprint a session-suggest request: the normalized explicit constraints +
@@ -1495,7 +1589,7 @@ export async function onboardFromText(
               applied.context_events++;
             } catch {}
           }
-      }
+        }
       // days_per_week stays a soft signal (remembered), not an auto plan rewrite —
       // the seeded plan is already there; the athlete adjusts it when they want to.
       if (pr.days_per_week != null && Number(pr.days_per_week) > 0) {

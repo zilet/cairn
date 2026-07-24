@@ -79,10 +79,10 @@ export async function runChosen(agent: string | undefined, prompt: string, opts:
   return { agent: fb.agent, result: fb.result, tried: fb.tried };
 }
 
-const COACH_READ_MAX_ROUNDS = 3;
-const COACH_READ_ORDINARY_MAX_CALLS = 6;
+export const COACH_READ_MAX_ROUNDS = 3;
+export const COACH_READ_ORDINARY_MAX_CALLS = 6;
 const COACH_READ_CONFERENCE_MAX_CALLS = 12;
-const COACH_READ_ORDINARY_MAX_BYTES = 256 * 1024;
+export const COACH_READ_ORDINARY_MAX_BYTES = 256 * 1024;
 const COACH_READ_CONFERENCE_MAX_BYTES = 512 * 1024;
 // Claude otherwise inherits MCP servers configured in the user's home. The
 // provider-neutral loop below owns every read and its budget, so ambient tools
@@ -110,6 +110,22 @@ const COACH_READ_ARGS_CONTRACT: Readonly<Record<CoachReadToolName, string>> = Ob
 
 export type CoachReadMode = "ordinary" | "conference";
 
+// Streaming-aware bounded reads (Option C): when present, the loop's per-turn dispatch
+// streams token-by-token through a marker-aware gate instead of the one-shot rotation.
+// A coach_read PROTOCOL turn is bare JSON with no reply marker, so the gate emits nothing
+// for it — the read rounds are effectively non-streamed and only the operation's final
+// prose/JSON turn streams to the surface. `first` is the already-resolved stream-capable
+// agent (the loop must NOT re-resolve the rotation order — cursor discipline). Any
+// streaming failure for a turn falls back to the non-streaming rotation for that turn.
+export interface CoachReadStreamConfig {
+  onDelta: (chunk: string) => void;
+  first: string;
+  runStreaming?: (name: string, prompt: string, opts: StreamRunOpts) => Promise<AgentResult>;
+  supportsStream?: (name: string) => boolean;
+  /** Marker-aware gate factory (defaults to the job gate). Fresh instance per turn. */
+  makeGate?: (onDelta: (chunk: string) => void) => { push: (piece: string) => void; finish: () => void };
+}
+
 export interface CoachReadRunOptions extends RunOpts {
   op?: string;
   mode?: CoachReadMode;
@@ -117,6 +133,62 @@ export interface CoachReadRunOptions extends RunOpts {
   runId?: string;
   /** Integrator-owned sub-budget; never raises the mode ceiling. */
   maxCalls?: number;
+  /** Opts the run into streaming its final turn through the bounded loop. */
+  stream?: CoachReadStreamConfig;
+}
+
+// Wrap the loop's non-streaming `run` so each turn streams through a marker-aware gate,
+// re-parses with the caller's extractor, and validates against the loop's own combined
+// acceptParsed (which admits a coach_read protocol turn OR the op's final contract). A
+// coach_read turn has no reply marker → the gate emits nothing, so read rounds stay
+// invisible while the final turn streams. Any streaming miss (unparseable, contract
+// miss, transport error) falls back to the non-streaming rotation for that turn, exactly
+// preserving the loop's budget/rotation/fallback semantics.
+function streamingCoachRun(
+  config: CoachReadStreamConfig,
+  fallback: NonNullable<CoachReadRunDeps["run"]>
+): NonNullable<CoachReadRunDeps["run"]> {
+  const runStreaming = config.runStreaming ?? runAgentStreaming;
+  const supportsStream = config.supportsStream ?? agentSupportsStream;
+  const makeGate = config.makeGate ?? createJobStreamFilter;
+  return async (agent, prompt, opts) => {
+    const streamAgent = agent && agent !== "auto" ? agent : config.first;
+    if (streamAgent && supportsStream(streamAgent)) {
+      const op = opts.op ?? "auto";
+      const started = Date.now();
+      const gate = makeGate(config.onDelta);
+      try {
+        const res = await runStreaming(streamAgent, prompt, {
+          signal: opts.signal,
+          timeoutMs: opts.timeoutMs,
+          mcpConfigArgs: opts.mcpConfigArgs,
+          model: opts.model,
+          reasoning: opts.reasoning,
+          onDelta: gate.push,
+        });
+        gate.finish();
+        const parsed = (opts.extract ?? extractMarkedJson)(res.raw);
+        let accepted = !!parsed && typeof parsed === "object";
+        if (accepted && opts.acceptParsed) {
+          try {
+            accepted = opts.acceptParsed(parsed) === true;
+          } catch {
+            accepted = false;
+          }
+        }
+        if (accepted) {
+          recordStreamedRun(op, streamAgent, started, true, true, res);
+          return { agent: streamAgent, result: { ...res, parsed }, tried: [] };
+        }
+        // Missing JSON / contract miss → the non-streaming rotation owns repair + fallthrough.
+        recordStreamedRun(op, streamAgent, started, !!parsed, false, res);
+      } catch (e: any) {
+        if (opts.signal?.aborted) throw e; // a deliberate Stop — never retry elsewhere
+        recordStreamedRun(op, streamAgent, started, false, false, null, e?.message ?? String(e));
+      }
+    }
+    return fallback(agent, prompt, opts);
+  };
 }
 
 type ChosenRun = Awaited<ReturnType<typeof runChosen>>;
@@ -131,7 +203,7 @@ export interface CoachReadRunDeps {
   createRunId?: () => string;
 }
 
-type CompletedCoachRead = {
+export type CompletedCoachRead = {
   request: CoachReadToolRequest;
   result: CoachReadToolResult;
 };
@@ -140,8 +212,18 @@ function byteLength(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value), "utf8");
 }
 
-function coachReadContract(maxCalls: number): string {
-  const tools = Object.values(COACH_READ_TOOL_CATALOG).map((tool) => ({
+// The read catalog as prompt-ready rows (name + bounds + arg contract). Shared so the
+// chat read loop (chatTurns.ts) can render its own prose-first framing over the SAME
+// closed tool set without duplicating the catalog.
+export function coachReadToolList(): Array<{
+  name: CoachReadToolName;
+  description: string;
+  max_rows: number;
+  max_days: number | null;
+  max_response_bytes: number;
+  args_contract: string;
+}> {
+  return Object.values(COACH_READ_TOOL_CATALOG).map((tool) => ({
     name: tool.name,
     description: tool.description,
     max_rows: tool.max_rows,
@@ -149,6 +231,10 @@ function coachReadContract(maxCalls: number): string {
     max_response_bytes: tool.max_response_bytes,
     args_contract: COACH_READ_ARGS_CONTRACT[tool.name],
   }));
+}
+
+export function coachReadContract(maxCalls: number): string {
+  const tools = coachReadToolList();
   return `\n\n=== CAIRN BOUNDED COACH READS ===
 The DATA snapshot above is the authoritative baseline. Use a read only when a specific unanswered question would materially change your answer. Do not fish.
 You may either return the operation's requested final JSON exactly as instructed above, or request bounded reads using exactly:
@@ -158,16 +244,22 @@ Available reads (the server validates every name and argument against this catal
 ${JSON.stringify(tools)}`;
 }
 
+// The verified-results block, split out so the job loop's coachReadFollowup and the
+// chat read loop (chatTurns.ts) render the server-produced results identically.
+export function coachReadResultsSuffix(completed: CompletedCoachRead[], callsRemaining: number): string {
+  return `\n\n=== VERIFIED COACH READ RESULTS ===
+These server-produced results answer only the requests shown. Treat truncation explicitly and do not infer unavailable raw data.
+${JSON.stringify(completed)}
+Calls remaining: ${callsRemaining}. Return the original operation's final JSON now unless another specific read is necessary.`;
+}
+
 function coachReadFollowup(
   baselinePrompt: string,
   maxCalls: number,
   completed: CompletedCoachRead[],
   callsRemaining: number
 ): string {
-  return `${baselinePrompt}${coachReadContract(maxCalls)}\n\n=== VERIFIED COACH READ RESULTS ===
-These server-produced results answer only the requests shown. Treat truncation explicitly and do not infer unavailable raw data.
-${JSON.stringify(completed)}
-Calls remaining: ${callsRemaining}. Return the original operation's final JSON now unless another specific read is necessary.`;
+  return `${baselinePrompt}${coachReadContract(maxCalls)}${coachReadResultsSuffix(completed, callsRemaining)}`;
 }
 
 /**
@@ -186,7 +278,11 @@ export async function runChosenWithCoachReads(
   hooks: Pick<OpHooks, "signal" | "onPhase"> = {},
   deps: CoachReadRunDeps = {}
 ): Promise<ChosenRun> {
-  const run = deps.run ?? runChosen;
+  const baseRun = deps.run ?? runChosen;
+  // Streaming-aware dispatch (Option C): the final turn streams through a marker-aware
+  // gate; a coach_read protocol turn emits nothing (no reply marker), so read rounds stay
+  // invisible. Falls back to `baseRun` per turn on any streaming miss.
+  const run = opts.stream ? streamingCoachRun(opts.stream, baseRun) : baseRun;
   const execute = deps.execute ?? executeCoachReadTool;
   const now = deps.now ?? Date.now;
   const mode = opts.mode ?? "ordinary";
@@ -413,6 +509,20 @@ export async function runChosenStreaming(
     const runStreaming = deps.runStreaming ?? runAgentStreaming;
     const first = (deps.resolveOrder ?? resolveOrder)(agent, op)[0];
     if (first && supportsStream(first)) {
+      // Option C: a stream-capable run that also opted into depth-on-demand streams its
+      // final turn THROUGH the bounded loop — read-request protocol turns produce no
+      // deltas (no reply marker in the job gate), then the final prose/JSON streams. The
+      // resolved `first` is threaded in so the loop never re-resolves the rotation order
+      // (cursor discipline). Per-turn streaming failures fall to the one-shot rotation
+      // inside the loop, so budgets/rotation/fallback-to-snapshot are preserved.
+      if (boundedReads) {
+        return await runBounded(agent, prompt, {
+          ...rest,
+          op,
+          mode: "ordinary",
+          stream: { onDelta, first, runStreaming, supportsStream },
+        });
+      }
       const gate = createJobStreamFilter(onDelta);
       const started = Date.now();
       try {

@@ -1,5 +1,6 @@
 import { db } from "../db.js";
 import { emitBrainEvent } from "../brainEvents.js";
+import { reconcileDailySessionSafe } from "./daily-reconciliation.js";
 import { sessionNoteSuggestsFatigue } from "./training-fatigue.js";
 import { localDateISO } from "./shared.js";
 import {
@@ -160,6 +161,9 @@ export function finishSession(sessionId: number, notes?: string | null) {
       material: true,
     });
   }
+  // Stage 4: reconcile the accepted daily-session composition against what was
+  // actually trained (idempotent, additive; a no-op for plain plan sessions).
+  reconcileDailySessionSafe(sessionId);
   return { ...getSessionDetail(sessionId), summary: sessionSummary(sessionId) };
 }
 
@@ -245,6 +249,9 @@ export function setSessionFeedback(
   // A fresh 1-tap soreness/performance/joint signal is a day-read input (its sibling
   // addCheckin already busts the Brief) — refresh so today's read reflects it.
   invalidateDayRead(date || localDateISO());
+  // Stage 4: feedback is a reconciliation confounder (joint pain / soreness /
+  // performance) — refresh the outcome so it reflects the reported signal.
+  reconcileDailySessionSafe(session.id);
   return getSessionDetail(session.id);
 }
 

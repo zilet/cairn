@@ -889,10 +889,11 @@ function recordMealPlanStatusDecision(plan: any, transition: string): void {
     // Close the lab loop for meals: an accepted plan applied while a nutrition marker-directive
     // is active anchors a falsifiable "<marker> should move toward optimal" expectation to THIS
     // meal plan (the primary driver). Best-effort; null when there's nothing to anchor.
-    const markerRecording = accepted ? markerInterventionRecording("nutrition", localDateISO()) : null;
+    const markerRecording = accepted ? markerInterventionRecording("nutrition", localDateISO(), "meal_plan") : null;
     const expectations = [
       ...(response ? [response.expectation] : []),
-      ...(markerRecording ? [markerRecording.expectation] : []),
+      // A same-draw repeat suppresses the expectation (null) but still records meta below.
+      ...(markerRecording?.expectation ? [markerRecording.expectation] : []),
     ];
     const days = Array.isArray(plan.parsed?.days) ? plan.parsed.days : [];
     recordDecision(
@@ -937,7 +938,7 @@ function recordMealPlanStatusDecision(plan: any, transition: string): void {
         reverted_at: null,
         superseded_by: null,
         evaluator_version:
-          response?.expectation.evaluator_version ?? markerRecording?.expectation.evaluator_version ?? null,
+          response?.expectation.evaluator_version ?? markerRecording?.expectation?.evaluator_version ?? null,
       },
       expectations
     );
@@ -1311,9 +1312,7 @@ export function addChatCaptureFoodNote(input: {
   const turnId = Number(input.turn_id);
   if (!Number.isSafeInteger(turnId) || turnId <= 0) throw new Error("invalid chat turn id");
   return withSqliteSavepoint(`chat_food_capture_${turnId}`, () => {
-    const turn = db
-      .prepare(`SELECT status, capture_food_note_id FROM chat_turns WHERE id = ?`)
-      .get(turnId) as any;
+    const turn = db.prepare(`SELECT status, capture_food_note_id FROM chat_turns WHERE id = ?`).get(turnId) as any;
     if (!turn) throw new Error("chat turn not found");
     if (turn.capture_food_note_id != null) {
       const existing = getFoodNote(Number(turn.capture_food_note_id));

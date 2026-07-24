@@ -9,7 +9,7 @@ Health's short-lived pairing exchange is public and passes through the instance-
 when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**293 routes** across 103 groups.
+**296 routes** across 104 groups.
 
 ## `/activities`
 
@@ -190,6 +190,8 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/daily-session` | Read the durable composition the athlete accepted for a day. Agent suggestions remain preview-only until the explicit prepare call below writes this snapshot. |
+| GET | `/api/daily-session/decision` | The deterministic decision envelope (Stage 2) — an explainable, reproducible read of what KIND of day today is, the movement/muscle envelope, caps, and the reason codes behind them, BEFORE any agent composes. Synchronous + agent-free. The same bounded snapshot yields the same envelope + input_fingerprint. Recorded best-effort for observability; a record failure never fails the read. |
+| GET | `/api/daily-session/outcome` | Stage 4 — the post-session outcome reconciliation for a date: what was suggested vs what was actually trained (completed / substituted / skipped / reordered), progression evidence, feedback, and the adherence-neutral reason codes + confounders. Deterministic, agent-free. null (200) when the date has no reconciled daily-session composition. |
 | POST | `/api/daily-session/prepare` | Prepare (or explicitly replace) today's durable session without mutating the weekly plan. Plan sources snapshot a plan day; agent_suggest resolves a completed canonical job; athlete_override snapshots a user-authored payload. expected_active_id is assertion-only: it returns the matching active snapshot and bound session without creating/replacing anything. Different replacements stop once logging begins; exact retries remain safe. |
 
 ## `/dexa-targeting`
@@ -630,6 +632,12 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/run-zones` |  |
+
+## `/session-compose`
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/api/session-compose` | Stage 3 — bounded agent composition. Compose ONE session strictly inside the deterministic Stage 2 envelope: the agent proposes, the server verifies every item against the envelope's exclusions/caps and safe novel-exercise rules, and an absent/malformed/over-excluded output degrades to a deterministic session. Preview-only (never applied); accept it later via /daily-session/prepare with source agent_suggest + this job's id. Always returns a usable session. |
 
 ## `/session-primer`
 

@@ -100,6 +100,41 @@ CREATE INDEX IF NOT EXISTS idx_daily_session_history
   ON daily_session_compositions(date, version DESC);
 CREATE INDEX IF NOT EXISTS idx_daily_session_fingerprint
   ON daily_session_compositions(date, request_fingerprint, status);
+-- Stage 2 decision metadata (docs/ADAPTIVE_DAILY_TRAINING_PLAN.md §4/§8): the
+-- versioned, reason-coded envelope that explains why a day's session was chosen.
+-- Additive + null-safe; a brand-new table needs no user_version migration. No raw
+-- health payloads are stored here — only render-safe derived decision facts.
+CREATE TABLE IF NOT EXISTS daily_session_decisions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  date TEXT NOT NULL,
+  composition_id INTEGER REFERENCES daily_session_compositions(id) ON DELETE SET NULL,
+  policy_version TEXT NOT NULL,
+  input_fingerprint TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  envelope_json TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_daily_decision_date
+  ON daily_session_decisions(date, id DESC);
+CREATE INDEX IF NOT EXISTS idx_daily_decision_fingerprint
+  ON daily_session_decisions(date, input_fingerprint);
+-- Stage 4 outcome reconciliation (docs §6): one durable, idempotent outcome
+-- record per accepted composition — what was suggested vs what was actually
+-- trained, with confidence + reason codes. Additive; feeds progression/evolution
+-- through the existing brain-event machinery, never a direct plan mutation.
+CREATE TABLE IF NOT EXISTS daily_session_outcomes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  composition_id INTEGER NOT NULL REFERENCES daily_session_compositions(id) ON DELETE CASCADE,
+  session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  status TEXT NOT NULL,
+  facts_json TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(composition_id)
+);
+CREATE INDEX IF NOT EXISTS idx_daily_outcome_date
+  ON daily_session_outcomes(date, id DESC);
 CREATE TABLE IF NOT EXISTS logged_sets (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,

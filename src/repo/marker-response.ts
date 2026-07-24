@@ -48,9 +48,21 @@ const INTERVENTION_DECISION_KINDS = [
   "exercise_rotation",
 ] as const;
 
+type InterventionKind = (typeof INTERVENTION_DECISION_KINDS)[number];
+
 // The domain a plan/meal apply touches, mapped to the directive `domain` values. Meal &
 // nutrition-target changes are nutrition; strength/structure/rotation changes are training.
 type InterventionDomain = "nutrition" | "training";
+
+// Which domain each intervention kind belongs to — used to scope the anchor-time dedup
+// when the caller doesn't pass an exact kind.
+const KIND_DOMAIN: Record<InterventionKind, InterventionDomain> = {
+  meal_plan: "nutrition",
+  nutrition_target: "nutrition",
+  training_structure: "training",
+  training_target: "training",
+  exercise_rotation: "training",
+};
 
 export interface MarkerInterventionAnchor {
   marker: string; // canonical marker label — the expectation subject_key
@@ -64,13 +76,17 @@ export interface MarkerInterventionAnchor {
 export interface MarkerInterventionRecording {
   primary: MarkerInterventionAnchor;
   others: string[]; // the other anchored marker labels — recorded in meta, not expectations
-  expectation: ProposedExpectation;
+  // null when an OPEN (unevaluated) same-marker+kind anchor already exists with no new lab
+  // reading since — one lab draw is ONE evidence unit, so the repeat apply records the
+  // anchor in meta (deduped) WITHOUT minting a second, near-identical expectation.
+  expectation: ProposedExpectation | null;
   meta: {
     anchored_marker: string;
     anchored_markers: string[];
     trigger_side: "low" | "high";
     baseline_value: number;
     directive_source: string;
+    deduped?: boolean; // true when the expectation was suppressed as a same-draw repeat
   };
 }
 
@@ -109,6 +125,82 @@ function buildMarkerPriorityIndex(): Map<string, { rank: number; value: number |
   return out;
 }
 
+// Does a marker draw for `marker` exist in health_documents dated strictly AFTER `sinceISO`?
+// A new lab reading is what makes a repeat apply a genuinely distinct evidence draw — so its
+// presence is what LIFTS the anchor-time dedup below. Bounded + null-safe; matches names the
+// way the directive marker was canonicalized (falling back to a raw lowercased compare).
+function hasMarkerReadingAfter(marker: string, sinceISO: string): boolean {
+  const canon = (name: string): string => (canonicalDirectiveMarker(name) || name).trim().toLowerCase();
+  const wanted = canon(marker);
+  if (!wanted) return false;
+  try {
+    const rows = db
+      .prepare(
+        `SELECT parsed_json FROM health_documents
+          WHERE parsed_json IS NOT NULL
+            AND COALESCE(doc_date, substr(created_at, 1, 10)) > ?
+          ORDER BY COALESCE(doc_date, substr(created_at, 1, 10)) DESC, id DESC
+          LIMIT 50`
+      )
+      .all(sinceISO) as Array<{ parsed_json: string }>;
+    for (const row of rows) {
+      let parsed: any;
+      try {
+        parsed = JSON.parse(row.parsed_json);
+      } catch {
+        continue;
+      }
+      const markers = Array.isArray(parsed?.markers) ? parsed.markers : [];
+      for (const m of markers.slice(0, 400)) {
+        const name = String(m?.name ?? m?.marker ?? m?.key ?? "").trim();
+        if (name && canon(name) === wanted && Number.isFinite(Number(m?.value))) return true;
+      }
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+// Anchor-time dedup: is there already an OPEN (never-evaluated) marker_direction expectation
+// for THIS marker + intervention-label group, applied, with NO new lab reading since it was
+// created? If so, a fresh apply within the same draw window must NOT mint a second expectation
+// — the next lab draw is one outcome and must count once. A new reading in the meantime lifts
+// the block (that later apply is a legitimately distinct draw). Best-effort: never suppress on
+// a query error (a missing anchor is safer than a lost one).
+function openAnchorSuppresses(marker: string, kind: InterventionKind | undefined, domain: InterventionDomain): boolean {
+  // Group kinds the way the learned read does (interventionLabel): a meal-plan re-draft and a
+  // nutrition-target change are DIFFERENT interventions even though both are nutrition. When
+  // the caller passes no exact kind, fall back to every kind in the domain.
+  const groupKinds: readonly InterventionKind[] = kind
+    ? INTERVENTION_DECISION_KINDS.filter((k) => interventionLabel(k) === interventionLabel(kind))
+    : INTERVENTION_DECISION_KINDS.filter((k) => KIND_DOMAIN[k] === domain);
+  if (!groupKinds.length) return false;
+  try {
+    const placeholders = groupKinds.map(() => "?").join(",");
+    const row = db
+      .prepare(
+        `SELECT x.window_start AS window_start
+           FROM brain_expectations x
+           JOIN brain_decisions d ON d.id = x.decision_id
+          WHERE x.metric_key = 'marker_direction'
+            AND lower(x.subject_key) = lower(?)
+            AND d.kind IN (${placeholders})
+            AND d.status = 'applied'
+            AND NOT EXISTS (SELECT 1 FROM brain_evaluations e WHERE e.expectation_id = x.id)
+          ORDER BY x.id DESC
+          LIMIT 1`
+      )
+      .get(marker, ...groupKinds) as { window_start?: string } | undefined;
+    const since = row?.window_start ? String(row.window_start).slice(0, 10) : null;
+    if (!since) return false; // no open anchor -> a new expectation is legitimate
+    // An open anchor exists: only a NEW draw since it was created earns a second expectation.
+    return !hasMarkerReadingAfter(marker, since);
+  } catch {
+    return false;
+  }
+}
+
 // The falsifiable "<marker> should move toward optimal" expectation, mirroring the shape
 // the directive-anchored path (recordActiveDirectiveDecisions) already uses so both feed
 // the same evaluator identically.
@@ -137,7 +229,8 @@ function markerDirectionExpectation(anchor: MarkerInterventionAnchor, effectiveD
 // there is nothing to anchor — preserving today's behavior for an ordinary apply.
 export function markerInterventionRecording(
   domain: InterventionDomain,
-  effectiveDate: string
+  effectiveDate: string,
+  kind?: InterventionKind
 ): MarkerInterventionRecording | null {
   let directives: any[] = [];
   try {
@@ -194,16 +287,20 @@ export function markerInterventionRecording(
   anchors.sort((a, b) => a.priority_rank - b.priority_rank);
   const primary = anchors[0];
   const others = anchors.slice(1).map((a) => a.marker);
+  // One lab draw = one evidence unit: suppress the expectation when an open same-marker+kind
+  // anchor already awaits its outcome with no new reading since. The anchor still rides in meta.
+  const deduped = openAnchorSuppresses(primary.marker, kind, domain);
   return {
     primary,
     others,
-    expectation: markerDirectionExpectation(primary, effectiveDate),
+    expectation: deduped ? null : markerDirectionExpectation(primary, effectiveDate),
     meta: {
       anchored_marker: primary.marker,
       anchored_markers: anchors.map((a) => a.marker),
       trigger_side: primary.trigger_side,
       baseline_value: primary.baseline_value,
       directive_source: primary.source,
+      ...(deduped ? { deduped: true } : {}),
     },
   };
 }
@@ -229,6 +326,33 @@ interface MarkerVerdictRow {
   subject_key: string;
   verdict: "aligned" | "not_aligned";
   evaluated_at: string;
+  draw_key: string; // identity of the follow-up lab draw this verdict was measured against
+}
+
+// The follow-up marker draw a verdict was measured against — the LAST health_documents row in
+// the evaluation window (stableEvidence encodes it as the trailing id in "…:ids=<first>-<last>").
+// Same-draw duplicate expectations share that follow-up doc, so they collapse to one evidence
+// unit; genuinely distinct draws land on different docs and stay separate. Falls back to the
+// observed value, then the evaluation date, so a partial/legacy row still yields a stable key.
+function drawKeyFor(evidenceJson: string | null, actualJson: string | null, evaluatedAt: string): string {
+  try {
+    const evidence = evidenceJson ? JSON.parse(evidenceJson) : null;
+    const key = Array.isArray(evidence)
+      ? evidence.find((k) => typeof k === "string" && k.startsWith("health_documents:"))
+      : null;
+    const match = key ? /:ids=[^:]*-([^:\s]+)$/.exec(key) : null;
+    if (match?.[1] && match[1] !== "-") return `doc:${match[1]}`;
+  } catch {
+    // fall through to the value/date fallbacks
+  }
+  try {
+    const actual = actualJson ? JSON.parse(actualJson) : null;
+    const latest = Number(actual?.latest_value ?? actual?.value);
+    if (Number.isFinite(latest)) return `val:${latest}`;
+  } catch {
+    // fall through to the date fallback
+  }
+  return `at:${String(evaluatedAt).slice(0, 10)}`;
 }
 
 function interventionLabel(kind: string): string {
@@ -255,7 +379,8 @@ function markerVerdictRows(): MarkerVerdictRow[] {
     const rows = db
       .prepare(
         `SELECT d.kind AS kind, d.domain AS domain, x.subject_key AS subject_key,
-                e.verdict AS verdict, e.evaluated_at AS evaluated_at
+                e.verdict AS verdict, e.evaluated_at AS evaluated_at,
+                e.evidence_json AS evidence_json, e.actual_json AS actual_json
            FROM brain_evaluations e
            JOIN brain_expectations x ON x.id = e.expectation_id
            JOIN brain_decisions d ON d.id = x.decision_id
@@ -273,15 +398,17 @@ function markerVerdictRows(): MarkerVerdictRow[] {
       )
       .all(...INTERVENTION_DECISION_KINDS) as any[];
     return rows
-      .map(
-        (row): MarkerVerdictRow => ({
+      .map((row): MarkerVerdictRow => {
+        const evaluated_at = String(row.evaluated_at ?? "").replace(" ", "T");
+        return {
           kind: String(row.kind ?? ""),
           domain: String(row.domain ?? ""),
           subject_key: String(row.subject_key ?? "").trim(),
           verdict: row.verdict === "not_aligned" ? "not_aligned" : "aligned",
-          evaluated_at: String(row.evaluated_at ?? "").replace(" ", "T"),
-        })
-      )
+          evaluated_at,
+          draw_key: drawKeyFor(row.evidence_json ?? null, row.actual_json ?? null, evaluated_at),
+        };
+      })
       .filter((row) => row.subject_key && row.evaluated_at);
   } catch {
     return [];
@@ -304,7 +431,13 @@ export function learnedMarkerResponses(): MarkerResponsePattern[] {
   }
   const patterns: MarkerResponsePattern[] = [];
   for (const list of groups.values()) {
-    const ordered = [...list].sort((a, b) => a.evaluated_at.localeCompare(b.evaluated_at));
+    const chronological = [...list].sort((a, b) => a.evaluated_at.localeCompare(b.evaluated_at));
+    // Belt-and-suspenders for any legacy duplicates already persisted before the anchor-time
+    // dedup: N verdicts sharing ONE follow-up draw are ONE outcome, so collapse to a single
+    // unit (keep the latest) before counting evidence — a single draw can never reach 'observed'.
+    const byDraw = new Map<string, MarkerVerdictRow>();
+    for (const row of chronological) byDraw.set(row.draw_key, row); // later (chronological) wins
+    const ordered = [...byDraw.values()].sort((a, b) => a.evaluated_at.localeCompare(b.evaluated_at));
     const latest = ordered[ordered.length - 1];
     const label = interventionLabel(latest.kind);
     // Confidence: how many of the most-recent evaluations agree with the latest verdict

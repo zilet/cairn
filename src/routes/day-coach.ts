@@ -1,10 +1,16 @@
 import { Router } from "express";
 import { enqueueAgentJob } from "../agentJobs.js";
-import { suggestSession, weekAheadRead } from "../coachOps.js";
+import { composeDailySession, suggestSession, weekAheadRead } from "../coachOps.js";
 import { readToday } from "../domain/brain/index.js";
 import { createAgentJob } from "../domain/person/index.js";
 import { dailySessionErrorBody, prepareDailySessionUseCase } from "../domain/training/index.js";
-import { getActiveDailySession, sessionPrimer } from "../repo.js";
+import {
+  decideDailySession,
+  getActiveDailySession,
+  getDailySessionOutcome,
+  recordDailySessionDecision,
+  sessionPrimer,
+} from "../repo.js";
 import { localDateISO } from "../repo/shared.js";
 import { backgroundOp } from "./background-op.js";
 
@@ -84,11 +90,64 @@ dayCoachRouter.post("/session-suggest", async (req, res) => {
   }
 });
 
+// Stage 3 — bounded agent composition. Compose ONE session strictly inside the
+// deterministic Stage 2 envelope: the agent proposes, the server verifies every
+// item against the envelope's exclusions/caps and safe novel-exercise rules, and
+// an absent/malformed/over-excluded output degrades to a deterministic session.
+// Preview-only (never applied); accept it later via /daily-session/prepare with
+// source agent_suggest + this job's id. Always returns a usable session.
+dayCoachRouter.post("/session-compose", async (req, res) => {
+  const b = req.body ?? {};
+  const input = {
+    agent: b.agent ?? null,
+    minutes: b.minutes != null ? Number(b.minutes) : undefined,
+    equipment: b.equipment != null ? String(b.equipment) : undefined,
+    override: b.override != null ? String(b.override) : undefined,
+    date: b.date != null ? String(b.date) : localDateISO(),
+  };
+  if (backgroundOp(res, "session_compose", input, b.agent)) return;
+  try {
+    res.json(
+      await composeDailySession(b.agent, {
+        minutes: input.minutes,
+        equipment: input.equipment,
+        override: input.override,
+        date: input.date,
+      })
+    );
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Read the durable composition the athlete accepted for a day. Agent suggestions
 // remain preview-only until the explicit prepare call below writes this snapshot.
 dayCoachRouter.get("/daily-session", (req, res) => {
   try {
     res.json(getActiveDailySession(req.query.date != null ? String(req.query.date) : undefined));
+  } catch (error: any) {
+    res.status(400).json({ ok: false, error: error?.message ?? String(error) });
+  }
+});
+
+// The deterministic decision envelope (Stage 2) — an explainable, reproducible
+// read of what KIND of day today is, the movement/muscle envelope, caps, and the
+// reason codes behind them, BEFORE any agent composes. Synchronous + agent-free.
+// The same bounded snapshot yields the same envelope + input_fingerprint. Recorded
+// best-effort for observability; a record failure never fails the read.
+dayCoachRouter.get("/daily-session/decision", (req, res) => {
+  try {
+    const { envelope } = decideDailySession(req.query.date != null ? String(req.query.date) : undefined, {
+      override: req.query.override != null ? String(req.query.override) : null,
+      equipment: req.query.equipment != null ? String(req.query.equipment) : null,
+      minutes: req.query.minutes != null ? Number(req.query.minutes) : null,
+    });
+    try {
+      recordDailySessionDecision(envelope);
+    } catch {
+      /* observability write never blocks the read */
+    }
+    res.json(envelope);
   } catch (error: any) {
     res.status(400).json({ ok: false, error: error?.message ?? String(error) });
   }
@@ -118,6 +177,19 @@ dayCoachRouter.post("/daily-session/prepare", (req, res) => {
     );
   } catch (error: any) {
     res.status(400).json(dailySessionErrorBody(error));
+  }
+});
+
+// Stage 4 — the post-session outcome reconciliation for a date: what was
+// suggested vs what was actually trained (completed / substituted / skipped /
+// reordered), progression evidence, feedback, and the adherence-neutral reason
+// codes + confounders. Deterministic, agent-free. null (200) when the date has
+// no reconciled daily-session composition.
+dayCoachRouter.get("/daily-session/outcome", (req, res) => {
+  try {
+    res.json(getDailySessionOutcome(req.query.date != null ? String(req.query.date) : undefined));
+  } catch (error: any) {
+    res.status(400).json({ ok: false, error: error?.message ?? String(error) });
   }
 });
 

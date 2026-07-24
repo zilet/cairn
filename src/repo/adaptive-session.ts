@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { normalizePrescriptionItem, SESSION_PRESCRIPTION_LIMITS } from "../contracts/session-prescription.js";
+import { decideDailySession, recordDailySessionDecision } from "./daily-decision.js";
 import { db } from "../db.js";
 import { getAgentJob } from "./chat.js";
 import { findExercise, recentWorkingSeconds, recentWorkingWeight } from "./exercises.js";
@@ -364,8 +365,11 @@ function canonicalAgentSuggestion(jobIdRaw: unknown, date: string) {
     );
   }
   const job = getAgentJob(jobId) as any;
-  if (!job || job.kind !== "session_suggest") {
-    fail("agent_job_invalid", "agent_job_id must reference a session-suggest job");
+  // A Stage-3 bounded composition (session_compose) accepts the same way as a
+  // session_suggest — both produce a normalized `result.session` the athlete can
+  // durably accept without mutating the weekly plan.
+  if (!job || (job.kind !== "session_suggest" && job.kind !== "session_compose")) {
+    fail("agent_job_invalid", "agent_job_id must reference a session-suggest or session-compose job");
   }
   if (job.status !== "done" || job.result?.ok !== true || !job.result?.session) {
     fail("agent_job_not_ready", "agent_job_id must reference a completed, successful session suggestion");
@@ -384,7 +388,7 @@ function canonicalAgentSuggestion(jobIdRaw: unknown, date: string) {
     constraints: canonicalConstraints,
     provenance: {
       verification: "verified_agent_job",
-      operation: "session_suggest",
+      operation: job.kind,
       agent_job_id: jobId,
       agent: job.chosen_agent ?? job.result.agent ?? null,
       verified: job.result.verified ?? null,
@@ -622,6 +626,18 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
     const dailySession = hydrate(
       db.prepare(`SELECT * FROM daily_session_compositions WHERE id = ?`).get(info.lastInsertRowid)
     );
+    // Stage 2: persist the deterministic decision metadata that explains a
+    // plan-source acceptance (docs §4). Best-effort — a decision-record failure
+    // must never fail the accept. Skipped for agent/override sources whose
+    // selection the deterministic envelope did not drive.
+    if (isPlan) {
+      try {
+        const { envelope } = decideDailySession(date);
+        recordDailySessionDecision(envelope, { composition_id: Number(info.lastInsertRowid) });
+      } catch {
+        /* observability write never blocks preparation */
+      }
+    }
     return { ok: true as const, daily_session: dailySession, session_id: session.id, reused: false };
   });
 }

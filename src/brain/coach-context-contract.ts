@@ -274,6 +274,10 @@ export interface CoachContextEnvelope {
   // humble patterns, params stripped. Optional so partial context builders and
   // imported DBs never need to synthesize it.
   felt_signals?: CoachRecord | null;
+  // Learned CROSS-DOMAIN coincidences (endurance→strength interference, short-sleep→
+  // fueling). Additive + null-safe; a bounded couple of humble patterns, params
+  // stripped. Optional so partial context builders and imported DBs never synthesize it.
+  learned_models?: CoachRecord | null;
   what_works_for_you: CoachWhatWorksForYou | null;
   recent_decisions: CoachRecord[];
   trajectory: CoachRecord | null;

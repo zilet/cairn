@@ -51,7 +51,8 @@ function segmentKeys(src, name) {
   const start = src.indexOf(`const ${name}`);
   assert.ok(start >= 0, `${name} segment registry should be declared`);
   const end = src.indexOf("];", start);
-  const block = end >= 0 ? src.slice(start, end + 2) : src.split("\n").find((row) => row.includes(`const ${name}`)) || "";
+  const block =
+    end >= 0 ? src.slice(start, end + 2) : src.split("\n").find((row) => row.includes(`const ${name}`)) || "";
   return [...block.matchAll(/\["([^"]+)",\s*"[^"]+"\]/g)].map((m) => m[1]);
 }
 
@@ -59,7 +60,8 @@ function objectKeys(src, name) {
   const start = src.indexOf(`const ${name}`);
   assert.ok(start >= 0, `${name} object registry should be declared`);
   const end = src.indexOf("};", start);
-  const block = end >= 0 ? src.slice(start, end + 2) : src.split("\n").find((row) => row.includes(`const ${name}`)) || "";
+  const block =
+    end >= 0 ? src.slice(start, end + 2) : src.split("\n").find((row) => row.includes(`const ${name}`)) || "";
   return [...block.matchAll(/\b([A-Za-z0-9_]+):\s*\(\)\s*=>/g)].map((m) => m[1]);
 }
 
@@ -99,7 +101,7 @@ test("coach reuses its computed program, whole-person, and expenditure reads for
   assert.match(
     coach,
     /computeGoalCheck\(profile,\s*\{\s*expenditure:\s*expenditureView\s*\}\)/,
-    "the nutrition slice must not re-enter expenditure/signature calculation",
+    "the nutrition slice must not re-enter expenditure/signature calculation"
   );
   const journey = read("src/repo/journey.ts");
   assert.match(journey, /computeGoalCheck\(p,\s*\{\s*expenditure:\s*opts\.expenditure\s*\}\)/);
@@ -107,7 +109,7 @@ test("coach reuses its computed program, whole-person, and expenditure reads for
   assert.match(
     recomposition,
     /opts\.expenditure\s*===\s*undefined\s*\?\s*estimateExpenditure\(21\)\s*:\s*opts\.expenditure/,
-    "a precomputed null must remain an unavailable sentinel instead of triggering a duplicate estimate",
+    "a precomputed null must remain an unavailable sentinel instead of triggering a duplicate estimate"
   );
   assert.doesNotMatch(coach, /journeyRead\(today\)\s*\)/, "coach must not trigger recomposition's fallback reads");
 });
@@ -124,13 +126,13 @@ function apiHelperAliasNames(src) {
 function apiCallPathsForFile(file) {
   const src = stripLineComments(read(file));
   const callNames = ["api", "cachedApi", "enqueueJob", ...apiHelperAliasNames(src)].map(escapeRegExp).join("|");
-  const direct = [...src.matchAll(new RegExp(`\\b(?:${callNames})\\(\\s*(["'\`])([\\s\\S]*?)\\1`, "g"))]
-    .map((match) => normalizeApiCallPath(match[2]));
-  const staticPathOptions = [...src.matchAll(/\bpath:\s*(["'`])([\s\S]*?)\1/g)]
-    .map((match) => normalizeApiCallPath(match[2]));
-  return [...direct, ...staticPathOptions]
-    .filter(Boolean)
-    .map((apiPath) => ({ file, path: apiPath }));
+  const direct = [...src.matchAll(new RegExp(`\\b(?:${callNames})\\(\\s*(["'\`])([\\s\\S]*?)\\1`, "g"))].map((match) =>
+    normalizeApiCallPath(match[2])
+  );
+  const staticPathOptions = [...src.matchAll(/\bpath:\s*(["'`])([\s\S]*?)\1/g)].map((match) =>
+    normalizeApiCallPath(match[2])
+  );
+  return [...direct, ...staticPathOptions].filter(Boolean).map((apiPath) => ({ file, path: apiPath }));
 }
 
 function clientApiCallPaths() {
@@ -220,9 +222,17 @@ test("client build manifest owns generated browser outputs and cache wiring", ()
   const bundleUrls = BUNDLES.map((bundle) => `/${bundle.output.replace(/^public\//, "")}`);
   const indexScripts = [...index.matchAll(/<script src="([^"]+)" defer><\/script>/g)].map((m) => m[1]);
   const indexBundleScripts = indexScripts.filter((src) => src.startsWith("/js/"));
-  assert.deepEqual(indexBundleScripts, bundleUrls, "index.html must load every bundle in manifest order and nothing else under /js");
+  assert.deepEqual(
+    indexBundleScripts,
+    bundleUrls,
+    "index.html must load every bundle in manifest order and nothing else under /js"
+  );
   const swBundleScripts = [...sw.matchAll(/"(\/js\/[^"]+)"/g)].map((m) => m[1]);
-  assert.deepEqual(swBundleScripts, bundleUrls, "sw.js CORE_ASSETS must precache every bundle in manifest order and nothing else under /js");
+  assert.deepEqual(
+    swBundleScripts,
+    bundleUrls,
+    "sw.js CORE_ASSETS must precache every bundle in manifest order and nothing else under /js"
+  );
   for (const bundle of BUNDLES) {
     assert.ok(existsSync(path.join(root, bundle.output)), `${bundle.output} bundle must exist on disk`);
   }
@@ -399,7 +409,7 @@ test("MCP modular tool sources are discovered without duplicate names", () => {
   assert.match(parity, /src\/surfaces\/mcp\/training-status\.ts/);
   assert.match(genDocs, /src\/surfaces\/mcp\/body-metrics\.ts/);
   assert.match(parity, /src\/surfaces\/mcp\/body-metrics\.ts/);
-  assert.equal(tools.length, 228, "tool count changes only for reviewed MCP additions");
+  assert.equal(tools.length, 231, "tool count changes only for reviewed MCP additions");
   assert.equal(new Set(tools).size, tools.length, "MCP tool names must be unique across modules");
   assert.doesNotMatch(mcp, /server\.tool\(/, "src/mcp.ts should stay a registry, not a tool-definition file");
   assert.doesNotMatch(mcp, /server\.tool\("get_chat_history"/);
@@ -559,7 +569,10 @@ test("generated API docs include mounted route modules", () => {
   assert.match(dayCoachRoutes, /dayCoachRouter\.get\("\/daily-session"/);
   assert.match(dayCoachRoutes, /dayCoachRouter\.post\("\/daily-session\/prepare"/);
   assert.match(dayCoachRoutes, /dayCoachRouter\.get\("\/week-ahead"/);
-  assert.match(dayCoachRoutes, /readToday\(\{\s*date,\s*override,\s*agent:\s*agentParam,\s*reset,\s*recordOutcome:\s*true\s*\}\)/);
+  assert.match(
+    dayCoachRoutes,
+    /readToday\(\{\s*date,\s*override,\s*agent:\s*agentParam,\s*reset,\s*recordOutcome:\s*true\s*\}\)/
+  );
   assert.match(dayReadUseCase, /recordDayReadSuggestion/);
   assert.match(dayReadUseCase, /getCachedDayRead/);
   assert.match(dayCoachRoutes, /backgroundOp\(res,\s*"session_suggest"/);
@@ -780,7 +793,10 @@ test("Settings route helper exposes stale-route pruning", () => {
   assert.match(source, /type SettingsRouteTask = \[string, string\]/);
   assert.match(helper, /function\s+settingsPruneRoutes/);
   assert.doesNotMatch(helper, /\bescHtml\b|\bescAttr\b/);
-  assert.match(settingsAgentsController, /deps\.pruneRoutes\(deps\.workingModel\.routes,\s*deps\.routeTasks,\s*enabledAgents\)/);
+  assert.match(
+    settingsAgentsController,
+    /deps\.pruneRoutes\(deps\.workingModel\.routes,\s*deps\.routeTasks,\s*enabledAgents\)/
+  );
   assert.match(settingsSourcesAutomationController, /CairnSettingsSurface\.sourcesSliceHtml/);
   assert.ok(
     bootPos("/js/settings-routes.js") > -1 &&
@@ -806,7 +822,9 @@ test("app shell privacy contract avoids remote fonts and blanket inline scripts"
     "public/js/agent-login-client.js",
     "public/js/save-bar.js",
     "public/js/09-plan-chat.js",
-  ].map(read).join("\n");
+  ]
+    .map(read)
+    .join("\n");
   const scriptSources = server.match(/const scriptSources = \[([^\]]+)\]/)?.[1] || "";
 
   assert.doesNotMatch(`${index}\n${server}`, /fonts\.(?:googleapis|gstatic)\.com/);
@@ -825,7 +843,10 @@ test("view transition aborts degrade without console-level promise noise", () =>
   assert.match(uiViewTransitions, /function\s+isViewTransitionAbort/);
   assert.match(uiViewTransitions, /name\s*===\s*"AbortError"/);
   assert.match(uiViewTransitions, /name\s*===\s*"InvalidStateError"[\s\S]*\/transition\/i\.test/);
-  assert.match(uiViewTransitions, /\.catch\(\(error\)\s*=>\s*\{\s*if\s*\(!isViewTransitionAbort\(error\)\)\s*throw\s+error;\s*\}\)/);
+  assert.match(
+    uiViewTransitions,
+    /\.catch\(\(error\)\s*=>\s*\{\s*if\s*\(!isViewTransitionAbort\(error\)\)\s*throw\s+error;\s*\}\)/
+  );
   assert.match(uiViewTransitions, /\.finally\(\(\)\s*=>\s*\{\s*active\s*=\s*false;\s*\}\)/);
 });
 
@@ -838,12 +859,12 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(
     sw,
     /addAll\(CORE_ASSETS\.map\(\(u\)\s*=>\s*new Request\(u,\s*\{\s*cache:\s*"reload"\s*\}\)\)\)/,
-    "CORE_ASSETS install must bypass the HTTP cache for fresh precache bytes",
+    "CORE_ASSETS install must bypass the HTTP cache for fresh precache bytes"
   );
   assert.match(
     sw,
     /OPTIONAL_ASSETS\.map[\s\S]*new Request\(asset,\s*\{\s*cache:\s*"reload"\s*\}\)[\s\S]*catch\(\(\)\s*=>\s*null\)/,
-    "OPTIONAL_ASSETS install must also bypass the HTTP cache",
+    "OPTIONAL_ASSETS install must also bypass the HTTP cache"
   );
   // The shell ships as a handful of concatenated bundles; CORE_ASSETS must precache
   // exactly those bundles (in manifest order) and no individual module file.
@@ -891,17 +912,27 @@ test("PWA route state is wired through boot, tabs, nested screens, and date-awar
   assert.match(appRouteSync, /routeSyncFromState/);
   assert.match(appStartup, /parseRoute\(location\.href\)/);
   assert.match(appStartup, /window\.addEventListener\("popstate"/);
-  assert.match(appRouter, /history\[mode === "replace" \? "replaceState" : "pushState"\]\(\{ cairn: true \},\s*"",\s*next\)/);
+  assert.match(
+    appRouter,
+    /history\[mode === "replace" \? "replaceState" : "pushState"\]\(\{ cairn: true \},\s*"",\s*next\)/
+  );
   assert.match(appRenderDispatch, /renderTab: renderAppTab/);
   assert.match(appTabs, /function\s+switchTab\(tab,\s*opts\s*=\s*\{\}\)/);
   assert.match(appTabs, /function\s+activateTab\(name,\s*opts\s*=\s*\{\}\)/);
   assert.match(uiSegments, /\["energy",\s*"Energy"\]/, "Progress Energy must remain a routable segment");
-  assert.match(uiSegments, /energy:\s*\(\)\s*=>\s*deps\.renderEnergy\(\)/, "Progress Energy must have a segment handler");
+  assert.match(
+    uiSegments,
+    /energy:\s*\(\)\s*=>\s*deps\.renderEnergy\(\)/,
+    "Progress Energy must have a segment handler"
+  );
   assert.match(uiSegments, /deps\.syncRouteFromState\(\)/, "shared UI events should notify route sync");
   assert.match(ui, /CairnUiSegments/, "UI shell should delegate segmented navigation to the typed segments module");
   assert.match(dayFuelController, /path:\s*"\/nutrition\/day"\s*\+\s*qs/, "Plan Food must fetch the routed local day");
   assert.match(meals, /CairnDayFuelController\.loadDayFuel/, "Plan Food must use the routed day-fuel controller");
-  assert.match(healthTabs, /const next = normalizeHealthSeg\(b\.dataset\.hseg\)[\s\S]*setHealthSegActive\(next,\s*deps\)[\s\S]*deps\.syncRouteFromState\?\.\(\)/);
+  assert.match(
+    healthTabs,
+    /const next = normalizeHealthSeg\(b\.dataset\.hseg\)[\s\S]*setHealthSegActive\(next,\s*deps\)[\s\S]*deps\.syncRouteFromState\?\.\(\)/
+  );
   assert.match(health, /ME_HEALTH_SCREEN\.renderHealth\(\)/);
   assert.match(healthComposition, /CairnMeHealthTabsController\.renderHealth\(screen\.meHealthTabsDeps\(\)\)/);
   assert.match(recordsHealthDocController, /state\.pendingHealthDocId[\s\S]*scrollIntoView/);
@@ -954,20 +985,35 @@ test("PWA route literals stay aligned across parser, types, and segment registri
   assert.match(appRouter, /routeDefinitions\(\)\?\.tabs/);
   assert.match(appTabs, /window\.CairnAppRouter\?\.ROUTE_TABS/);
   assertSameMembers(objectKeys(uiSegments, "planHandlers"), plan, "Plan handlers must cover every plan route section");
-  assertSameMembers(segmentKeys(uiSegments, "UI_PROGRESS_SEGMENTS"), progress, "Progress segments must cover every progress route section");
-  assert.match(uiSegments, /routedToEndurance\s*=\s*deps\.state\.planSeg\s*===\s*"endurance"\s*\|\|\s*deps\.state\.planJump\s*===\s*"endurance"/);
+  assertSameMembers(
+    segmentKeys(uiSegments, "UI_PROGRESS_SEGMENTS"),
+    progress,
+    "Progress segments must cover every progress route section"
+  );
+  assert.match(
+    uiSegments,
+    /routedToEndurance\s*=\s*deps\.state\.planSeg\s*===\s*"endurance"\s*\|\|\s*deps\.state\.planJump\s*===\s*"endurance"/
+  );
   assert.match(uiShell, /const PROGRESS_SEG: readonly UiSegment\[\] = uiSegmentsApi\(\)\.PROGRESS_SEG/);
   // Me is the about-you home: standing/health stay parseable route sections (old
   // deep links redirect to the Stand tab) but are no longer Me seg-bar entries.
   const meBar = me.filter((section) => section !== "standing" && section !== "health");
-  assertSameMembers(segmentKeys(meHealthComposition, "ME_HEALTH_SCREEN_SEGMENTS"), meBar, "Me segments must cover every about-you Me route section");
+  assertSameMembers(
+    segmentKeys(meHealthComposition, "ME_HEALTH_SCREEN_SEGMENTS"),
+    meBar,
+    "Me segments must cover every about-you Me route section"
+  );
   assertSameMembers(objectKeys(meHealthComposition, "handlers"), me, "Me handlers must cover every Me route section");
   // Every Stand route section must be dispatched by the Stand screen.
   const standScreen = read("src/client/stand-screen.ts");
   for (const section of CLIENT_ROUTE_DEFINITIONS.sections.stand) {
     assert.match(standScreen, new RegExp(`"${section}"`), `stand-screen must handle the "${section}" route section`);
   }
-  assertSameMembers(segmentKeys(meHealthTabs, "HEALTH_SEG"), health, "Health segments must cover every Health route section");
+  assertSameMembers(
+    segmentKeys(meHealthTabs, "HEALTH_SEG"),
+    health,
+    "Health segments must cover every Health route section"
+  );
   assert.match(meHealth, /const HEALTH_SEG = ME_HEALTH_SCREEN\.HEALTH_SEG/);
   const settingsSegments = segmentKeys(settingsScreen, "SET_SEG");
   assertSameMembers(
@@ -983,7 +1029,11 @@ test("Stand uses stale-while-revalidate with a sessionStorage snapshot and prese
   assert.match(standScreen, /reqToken/, "Stand must guard background loads with a request token");
   assert.match(standScreen, /if \(token !== reqToken\) return/, "a superseded fetch must not write DATA");
   // sessionStorage snapshot → instant cold paint; quota/parse safe.
-  assert.match(standScreen, /sessionStorage\.setItem\(SNAP_KEY/, "Stand must persist a snapshot for instant cold paint");
+  assert.match(
+    standScreen,
+    /sessionStorage\.setItem\(SNAP_KEY/,
+    "Stand must persist a snapshot for instant cold paint"
+  );
   assert.match(standScreen, /sessionStorage\.getItem\(SNAP_KEY/, "Stand must hydrate from the snapshot on cold open");
   assert.match(standScreen, /function saveSnapshot/, "snapshot save must be wrapped safely");
   // Background revalidate: fetch, compare, repaint only on a real change.
@@ -995,8 +1045,16 @@ test("Stand uses stale-while-revalidate with a sessionStorage snapshot and prese
   assert.match(standScreen, /window\.scrollTo\(0, y\)/, "the background repaint must restore scroll");
   assert.match(standScreen, /if \(quietPaint\) return/, "a background repaint must suppress the view-enter animation");
   // Self-contained tool views are never repainted out from under the user.
-  assert.match(standScreen, /const SELF_CONTAINED: ReadonlySet<StandView>/, "self-contained tool views must be enumerated");
-  assert.match(standScreen, /if \(curView !== "overview" && curView !== "recovery"\) return/, "quiet repaint must skip input-bearing views");
+  assert.match(
+    standScreen,
+    /const SELF_CONTAINED: ReadonlySet<StandView>/,
+    "self-contained tool views must be enumerated"
+  );
+  assert.match(
+    standScreen,
+    /if \(curView !== "overview" && curView !== "recovery"\) return/,
+    "quiet repaint must skip input-bearing views"
+  );
 });
 
 test("Stand restores the read's depth and reuses the rich recovery renderer", () => {
@@ -1004,12 +1062,20 @@ test("Stand restores the read's depth and reuses the rich recovery renderer", ()
   // The full story expander: story paragraph, deeper priorities, recheck badges, whole-picture ask.
   assert.match(standScreen, /function fullStoryHtml/, "Stand must render the progressive-disclosure full story");
   assert.match(standScreen, /syn\.story/, "the expander must render the synthesis story paragraph");
-  assert.match(standScreen, /\(syn\?\.priorities \|\| \[\]\)\.slice\(3\)/, "the expander must show priorities beyond the visible three");
+  assert.match(
+    standScreen,
+    /\(syn\?\.priorities \|\| \[\]\)\.slice\(3\)/,
+    "the expander must show priorities beyond the visible three"
+  );
   assert.match(standScreen, /function recheckBadge/, "priorities must carry a recheck timing badge");
   assert.match(standScreen, /WHOLE_PICTURE_Q/, "the whole-picture ask deep-link must be present");
   assert.match(standScreen, /data-storytoggle/, "the full story must be collapsible");
   // Rich recovery reuses the shipped plain-language renderer, not the 4-card summary.
-  assert.match(standScreen, /CairnHealthRead\.recoveryHtml/, "recovery detail must reuse the rich health-read renderer");
+  assert.match(
+    standScreen,
+    /CairnHealthRead\.recoveryHtml/,
+    "recovery detail must reuse the rich health-read renderer"
+  );
   assert.doesNotMatch(standScreen, /card\("Body battery"/, "the old 4-card recovery summary must be gone");
 });
 
@@ -1018,7 +1084,11 @@ test("Stand's Recovery tile is freshness-gated; the detail dates itself", () => 
   // yesterday must not sit on the overview presenting itself as a "now" read.
   const standScreen = read("src/client/stand-screen.ts");
   assert.match(standScreen, /function recoveryIsFresh/, "the tile must have a freshness check on recovery.last_date");
-  assert.match(standScreen, /if \(!rec \|\| !recoveryIsFresh\(\)\) return ""/, "a stale/absent reading must drop the tile");
+  assert.match(
+    standScreen,
+    /if \(!rec \|\| !recoveryIsFresh\(\)\) return ""/,
+    "a stale/absent reading must drop the tile"
+  );
   // The detail always says when data last arrived (and flags a gone-quiet wearable).
   const healthRead = read("src/client/health-read-client.ts");
   assert.match(healthRead, /Last logged/, "the recovery detail must date its read");
@@ -1068,14 +1138,27 @@ test("PWA API calls are covered by shared client contracts or explicit waivers",
 
   assert.deepEqual(new Set(contractPatterns).size, contractPatterns.length, "contract API patterns must be unique");
   assert.deepEqual(new Set(waiverPatterns).size, waiverPatterns.length, "contract waiver patterns must be unique");
-  assert.deepEqual(new Set(broadWaiverPatterns).size, broadWaiverPatterns.length, "broad DTO waiver patterns must be unique");
+  assert.deepEqual(
+    new Set(broadWaiverPatterns).size,
+    broadWaiverPatterns.length,
+    "broad DTO waiver patterns must be unique"
+  );
   assert.ok(contractPatterns.includes("/learnings"), "/learnings should be covered by the typed memory contract");
-  assert.ok(contractPatterns.includes("/memory/:id/supersede"), "/memory/:id/supersede should be covered by the typed memory contract");
+  assert.ok(
+    contractPatterns.includes("/memory/:id/supersede"),
+    "/memory/:id/supersede should be covered by the typed memory contract"
+  );
   assert.ok(contractPatterns.includes("/volume"), "/volume should be covered for SWR Progress volume reads");
   assert.ok(contractPatterns.includes("/calendar"), "/calendar should be covered for SWR Progress calendar reads");
   assert.ok(contractPatterns.includes("/agent/run"), "/agent/run should be covered for durable proposal jobs");
-  assert.ok(contractPatterns.includes("/coach/mealplan"), "/coach/mealplan should be covered for durable meal-plan jobs");
-  assert.ok(contractPatterns.includes("/insights/generate"), "/insights/generate should be covered for durable insight jobs");
+  assert.ok(
+    contractPatterns.includes("/coach/mealplan"),
+    "/coach/mealplan should be covered for durable meal-plan jobs"
+  );
+  assert.ok(
+    contractPatterns.includes("/insights/generate"),
+    "/insights/generate should be covered for durable insight jobs"
+  );
   for (const path of [
     "/apple-health/config",
     "/apple-health/connections",
@@ -1686,7 +1769,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(rootTsconfig, /"tsBuildInfoFile": "\.tsbuildcache\/server\.tsbuildinfo"/);
   assert.match(rootTsconfig, /"exclude": \["src\/client\/\*\*\/\*\.ts"\]/);
   assert.match(clientTsconfig, /"tsBuildInfoFile": "\.tsbuildcache\/client\.tsbuildinfo"/);
-  assert.match(contracts, /export type ClientCoachingFocusDomain = "training" \| "running" \| "nutrition" \| "health" \| "recovery" \| "body"/);
+  assert.match(
+    contracts,
+    /export type ClientCoachingFocusDomain = "training" \| "running" \| "nutrition" \| "health" \| "recovery" \| "body"/
+  );
   assert.doesNotMatch(contracts, /domain: ClientCoachingFocusDomain \| string/);
   assert.match(clientTsconfig, /"allowJs": true/);
   assert.match(clientTsconfig, /"checkJs": true/);
@@ -1708,7 +1794,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /declare function relAge\(iso: string\): string/);
   assert.match(clientGlobals, /declare function mdToHtml\(source: unknown\): string/);
   assert.match(clientGlobals, /CairnMarkdown/);
-  assert.match(clientGlobals, /declare function cardioPrescription\(item: Record<string, unknown> \| null \| undefined\): string/);
+  assert.match(
+    clientGlobals,
+    /declare function cardioPrescription\(item: Record<string, unknown> \| null \| undefined\): string/
+  );
   assert.match(clientGlobals, /CairnCardioPlan/);
   assert.match(clientGlobals, /declare function cardioSyncLine/);
   assert.match(clientGlobals, /CairnCardioSync/);
@@ -1716,8 +1805,14 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /declare function paceTrendWord\(trend: unknown\): string/);
   assert.match(clientGlobals, /declare function zoneBarHtml\(zones: unknown\): string/);
   assert.match(clientGlobals, /ClientSportBests/);
-  assert.match(clientGlobals, /declare function enduranceBestRows\(group: ClientSportBests \| null \| undefined\): Array<\{ label: string; val: string; date: string; type: string \}>/);
-  assert.match(clientGlobals, /declare function enduranceSportCardHtml\(group: ClientSportBests \| null \| undefined, idx: number\): string/);
+  assert.match(
+    clientGlobals,
+    /declare function enduranceBestRows\(group: ClientSportBests \| null \| undefined\): Array<\{ label: string; val: string; date: string; type: string \}>/
+  );
+  assert.match(
+    clientGlobals,
+    /declare function enduranceSportCardHtml\(group: ClientSportBests \| null \| undefined, idx: number\): string/
+  );
   assert.match(clientGlobals, /CairnProgressEndurance/);
   assert.match(clientGlobals, /type ClientProgressEnduranceControllerDeps = \{/);
   assert.match(clientGlobals, /CairnProgressEnduranceController/);
@@ -1762,7 +1857,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /declare function mountSaveBar/);
   assert.match(clientGlobals, /type ClientSaveBar = \{ markDirty\(\): void; save\(\): Promise<void> \}/);
   assert.match(clientGlobals, /declare function segBar\(active: string, items: readonly ClientSegment\[\]\): string/);
-  assert.match(clientGlobals, /declare function renderPhoneCoachBanner\(container: Element \| null \| undefined\): void/);
+  assert.match(
+    clientGlobals,
+    /declare function renderPhoneCoachBanner\(container: Element \| null \| undefined\): void/
+  );
   assert.match(clientGlobals, /CairnPwaInstall/);
   assert.match(clientGlobals, /declare function startRest\(seconds\?: number\): void/);
   assert.match(clientGlobals, /CairnRestTimer/);
@@ -1781,7 +1879,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /declare function numOrNull\(value: unknown\): number \| null/);
   assert.match(clientGlobals, /declare function setsTonnage\(sets: unknown\): number/);
   assert.match(clientGlobals, /CairnTodaySessionStatus/);
-  assert.match(clientGlobals, /setChipHtml\(set: Record<string, unknown> \| null \| undefined, index\?: number\): string/);
+  assert.match(
+    clientGlobals,
+    /setChipHtml\(set: Record<string, unknown> \| null \| undefined, index\?: number\): string/
+  );
   assert.match(clientGlobals, /feedbackFormHtml\(session: Record<string, unknown> \| null \| undefined\): string/);
   assert.match(clientGlobals, /type ClientTodaySessionFeedbackDeps = Pick<ClientTodaySessionControllerDeps/);
   assert.match(clientGlobals, /CairnTodaySessionFeedback/);
@@ -1795,7 +1896,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /CairnTodayBriefOverrideClient/);
   assert.match(clientGlobals, /type ClientTodaySessionControllerDeps = \{/);
   assert.match(clientGlobals, /CairnTodaySessionController/);
-  assert.match(clientGlobals, /wireSessionSurface\(options: ClientTodaySessionSurfaceOptions, deps: ClientTodaySessionControllerDeps\): void/);
+  assert.match(
+    clientGlobals,
+    /wireSessionSurface\(options: ClientTodaySessionSurfaceOptions, deps: ClientTodaySessionControllerDeps\): void/
+  );
   assert.match(clientGlobals, /CairnTodayProgramAdjustments/);
   assert.match(clientGlobals, /bannerHtml\(rows: unknown\): string/);
   assert.match(clientGlobals, /planRequest\(adjustment: unknown\): string/);
@@ -1804,7 +1908,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /ClientWeekAheadDayKind/);
   assert.match(clientGlobals, /CairnTodayContext/);
   assert.match(clientGlobals, /contextBannerHtml\(events: unknown, todayISO\?: string\): string/);
-  assert.match(clientGlobals, /goalLineHtml\(stats: unknown, currentWeight: unknown, isToday: unknown, todayISO\?: string\): string/);
+  assert.match(
+    clientGlobals,
+    /goalLineHtml\(stats: unknown, currentWeight: unknown, isToday: unknown, todayISO\?: string\): string/
+  );
   assert.match(clientGlobals, /healthFocusBannerHtml\(data: unknown\): string/);
   assert.match(clientGlobals, /CairnTodayCompass/);
   assert.doesNotMatch(clientGlobals, /paceOffer\(stats: unknown/);
@@ -1813,7 +1920,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /root: ParentNode \| null \| undefined/);
   assert.match(clientGlobals, /refreshToday\(options: \{ soft: boolean \}\): unknown/);
   assert.match(clientGlobals, /CairnProgressHistory/);
-  assert.match(clientGlobals, /declare function weeklyRunPlanCard\(plan: ClientWeeklyRunPlan \| null \| undefined\): string/);
+  assert.match(
+    clientGlobals,
+    /declare function weeklyRunPlanCard\(plan: ClientWeeklyRunPlan \| null \| undefined\): string/
+  );
   assert.match(clientGlobals, /CairnProgressRunPlan/);
   assert.match(clientGlobals, /declare function volBalanceHtml\(balance: unknown\): string/);
   assert.match(clientGlobals, /CairnProgressVolume/);
@@ -1824,7 +1934,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /reconnectNutritionCheckin\(\): ClientAgentOpHandlers \| null/);
   assert.match(clientGlobals, /energyBodyHtml\(exp: unknown\): \{ heroHtml: string; cardHtml: string \}/);
   assert.match(clientGlobals, /nutritionCheckinProposalHtml\(result: unknown\): string/);
-  assert.match(clientGlobals, /declare function calMonthHtml\(ym: string, byDate: Map<string, unknown>, todayIso: string, idx: number\): string/);
+  assert.match(
+    clientGlobals,
+    /declare function calMonthHtml\(ym: string, byDate: Map<string, unknown>, todayIso: string, idx: number\): string/
+  );
   assert.match(clientGlobals, /CairnProgressCalendar/);
   assert.match(clientGlobals, /declare function loadMuscleTrajectory\(\): Promise<void>/);
   assert.match(clientGlobals, /declare function muscleTrajectoryHtml\(trajectory: unknown\): string/);
@@ -1832,27 +1945,57 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /declare function dexaTargetingHtml\(targeting: unknown\): string/);
   assert.match(clientGlobals, /CairnProgressDexaTargeting/);
   assert.match(clientGlobals, /ClientPerformanceStanding/);
-  assert.match(clientGlobals, /declare function performanceHtml\(performance: ClientPerformanceStanding \| null \| undefined, options\?: \{ suppressLever\?: boolean \}\): string/);
+  assert.match(
+    clientGlobals,
+    /declare function performanceHtml\(performance: ClientPerformanceStanding \| null \| undefined, options\?: \{ suppressLever\?: boolean \}\): string/
+  );
   assert.match(clientGlobals, /CairnProgressPerformance/);
   assert.match(clientGlobals, /declare function programAdjustmentsHtml\(rows: unknown\): string/);
   assert.match(clientGlobals, /CairnProgressProgramAdjustments/);
   assert.match(clientGlobals, /declare function testWeekBannerHtml\(testWeek: unknown\): string/);
   assert.match(clientGlobals, /CairnProgressTestWeek/);
   assert.match(clientGlobals, /ClientProgramState/);
-  assert.match(clientGlobals, /declare function liftStatusWord\(lift: ClientProgramState\["lifts"\]\[number\] \| null \| undefined\): string/);
-  assert.match(clientGlobals, /declare function liftTrendFig\(lift: ClientProgramState\["lifts"\]\[number\] \| null \| undefined\): string/);
-  assert.match(clientGlobals, /declare function liftBestFig\(lift: ClientProgramState\["lifts"\]\[number\] \| null \| undefined\): string/);
-  assert.match(clientGlobals, /declare function sortLifts\(lifts: ClientProgramState\["lifts"\] \| null \| undefined\): ClientProgramState\["lifts"\]/);
+  assert.match(
+    clientGlobals,
+    /declare function liftStatusWord\(lift: ClientProgramState\["lifts"\]\[number\] \| null \| undefined\): string/
+  );
+  assert.match(
+    clientGlobals,
+    /declare function liftTrendFig\(lift: ClientProgramState\["lifts"\]\[number\] \| null \| undefined\): string/
+  );
+  assert.match(
+    clientGlobals,
+    /declare function liftBestFig\(lift: ClientProgramState\["lifts"\]\[number\] \| null \| undefined\): string/
+  );
+  assert.match(
+    clientGlobals,
+    /declare function sortLifts\(lifts: ClientProgramState\["lifts"\] \| null \| undefined\): ClientProgramState\["lifts"\]/
+  );
   assert.match(clientGlobals, /declare function volBandWord\(band: unknown\): string/);
   assert.match(clientGlobals, /declare function volTrendGlyph\(trend: unknown\): string/);
-  assert.match(clientGlobals, /declare function liftRowHtml\(lift: ClientProgramState\["lifts"\]\[number\] \| null \| undefined, index: number\): string/);
-  assert.match(clientGlobals, /declare function volumeBlockHtml\(volume: ClientProgramState\["volume"\] \| null \| undefined, startIdx: number\): string/);
-  assert.match(clientGlobals, /declare function mesoBlockHtml\(meso: ClientProgramState\["mesocycle"\] \| null \| undefined, index: number\): string/);
-  assert.match(clientGlobals, /declare function adaptationsHtml\(adaptations: string\[\] \| null \| undefined, index: number\): string/);
+  assert.match(
+    clientGlobals,
+    /declare function liftRowHtml\(lift: ClientProgramState\["lifts"\]\[number\] \| null \| undefined, index: number\): string/
+  );
+  assert.match(
+    clientGlobals,
+    /declare function volumeBlockHtml\(volume: ClientProgramState\["volume"\] \| null \| undefined, startIdx: number\): string/
+  );
+  assert.match(
+    clientGlobals,
+    /declare function mesoBlockHtml\(meso: ClientProgramState\["mesocycle"\] \| null \| undefined, index: number\): string/
+  );
+  assert.match(
+    clientGlobals,
+    /declare function adaptationsHtml\(adaptations: string\[\] \| null \| undefined, index: number\): string/
+  );
   assert.match(clientGlobals, /CairnProgressProgramSummary/);
   assert.match(clientGlobals, /declare function phaseWord\(phase: unknown\): string/);
   assert.match(clientGlobals, /declare function blockFocusWord\(focus: unknown\): string/);
-  assert.match(clientGlobals, /declare function activeBlockHtml\(block: ClientProgramBlock \| null \| undefined\): string/);
+  assert.match(
+    clientGlobals,
+    /declare function activeBlockHtml\(block: ClientProgramBlock \| null \| undefined\): string/
+  );
   assert.match(clientGlobals, /declare function startBlockHtml\(\): string/);
   assert.match(clientGlobals, /declare function loadProgramBlock\(\): Promise<void>/);
   assert.match(clientGlobals, /declare function wireProgramBlock\(slot: Element\): void/);
@@ -1904,7 +2047,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /CairnFoodNote/);
   assert.match(clientGlobals, /noteEntryHtml\(note: Record<string, unknown>, index\?: number\): string/);
   assert.match(clientGlobals, /CairnFoodDetailController/);
-  assert.match(clientGlobals, /declare function openFoodDetail\(note: unknown, fromTile\?: Element \| null\): Promise<void>/);
+  assert.match(
+    clientGlobals,
+    /declare function openFoodDetail\(note: unknown, fromTile\?: Element \| null\): Promise<void>/
+  );
   assert.match(clientGlobals, /CairnPlanEndurance/);
   assert.match(clientGlobals, /CairnPlanEditor/);
   assert.match(clientGlobals, /progDayHtml\(/);
@@ -1915,7 +2061,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /CairnDayFuel/);
   assert.match(clientGlobals, /CairnDayFuelController/);
   assert.match(clientGlobals, /loadDayFuel\(\s*token: number,/);
-  assert.match(clientGlobals, /declare function dayFuelHtml\(day: Record<string, unknown> \| null \| undefined\): string/);
+  assert.match(
+    clientGlobals,
+    /declare function dayFuelHtml\(day: Record<string, unknown> \| null \| undefined\): string/
+  );
   assert.match(clientGlobals, /declare const MEAL_LABEL: Record<string, string>/);
   assert.match(clientGlobals, /CairnMealRows: ClientMealRowsApi/);
   assert.match(clientGlobals, /declare const mealRowHtml: Window\["mealRowHtml"\]/);
@@ -1933,9 +2082,15 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /recipeHtml\(recipe: unknown\): string/);
   assert.match(clientGlobals, /loadingHtml\(\): string/);
   assert.match(clientGlobals, /CairnMealRecipeController/);
-  assert.match(clientGlobals, /openMealSheet\(current: Record<string, unknown> & \{ id: string \| number \}, dayIndex: number, mealIndex: number\): void/);
+  assert.match(
+    clientGlobals,
+    /openMealSheet\(current: Record<string, unknown> & \{ id: string \| number \}, dayIndex: number, mealIndex: number\): void/
+  );
   assert.match(clientGlobals, /CairnProposal/);
-  assert.match(clientGlobals, /declare function applyResultMessage\(result: unknown\): \{ failed: boolean; message: string \}/);
+  assert.match(
+    clientGlobals,
+    /declare function applyResultMessage\(result: unknown\): \{ failed: boolean; message: string \}/
+  );
   assert.match(clientGlobals, /declare function verifiedBadgeHtml\(verified: unknown\): string/);
   assert.match(clientGlobals, /declare function strengthChangeHtml\(change: unknown\): string/);
   assert.match(clientGlobals, /runTargetText\(run: Record<string, unknown>\): string/);
@@ -1951,7 +2106,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /cardHtml\(session: Partial<ClientSessionSuggestion>/);
   assert.match(clientGlobals, /askForSession\(/);
   assert.match(clientGlobals, /reconnectSessionSuggest\(job: unknown/);
-  assert.match(clientGlobals, /declare function learnedTimelineHtml\(data: ClientLearnedTimeline \| null \| undefined\): string/);
+  assert.match(
+    clientGlobals,
+    /declare function learnedTimelineHtml\(data: ClientLearnedTimeline \| null \| undefined\): string/
+  );
   assert.match(clientGlobals, /CairnHealthLearned/);
   assert.match(clientGlobals, /CairnMemory/);
   assert.match(clientGlobals, /memoryRowHtml\(row: ClientMemory, index\?: number\): string/);
@@ -1973,12 +2131,21 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /CairnFamilyController/);
   assert.match(clientGlobals, /render\(deps: ClientFamilyControllerDeps\): Promise<void>/);
   assert.match(clientGlobals, /CairnMeProfileForm/);
-  assert.match(clientGlobals, /html\(\s*deps: MeProfileControllerDeps,\s*profile: MeProfileProfile,\s*goal: MeProfileGoalCheck,\s*context: MeProfileFormContext,?/);
+  assert.match(
+    clientGlobals,
+    /html\(\s*deps: MeProfileControllerDeps,\s*profile: MeProfileProfile,\s*goal: MeProfileGoalCheck,\s*context: MeProfileFormContext,?/
+  );
   assert.match(clientGlobals, /CairnMeProfileController/);
   assert.match(clientGlobals, /renderProfile\(deps: MeProfileControllerDeps\): Promise<void>/);
   assert.match(clientGlobals, /declare function coachingFocusCardHtml\(/);
-  assert.match(clientGlobals, /declare function coachingFocusCompactHtml\(focus: ClientCoachingFocus \| null \| undefined\): string/);
-  assert.match(clientGlobals, /declare function loadCoachingFocus\(slotSelector: string, root\?: ParentNode \| null\): Promise<void>/);
+  assert.match(
+    clientGlobals,
+    /declare function coachingFocusCompactHtml\(focus: ClientCoachingFocus \| null \| undefined\): string/
+  );
+  assert.match(
+    clientGlobals,
+    /declare function loadCoachingFocus\(slotSelector: string, root\?: ParentNode \| null\): Promise<void>/
+  );
   assert.match(clientGlobals, /CairnCoachingFocus/);
   assert.match(clientGlobals, /declare function settingsRouteRowsHtml/);
   assert.match(clientGlobals, /declare function switchTab\(tab: unknown/);
@@ -1986,7 +2153,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /declare function routeApi\(\): ClientRoutesApi \| null/);
   assert.match(clientGlobals, /declare function currentRouteState\(\): Partial<ClientRoute>/);
   assert.match(clientGlobals, /CairnRoutes\?: ClientRoutesApi/);
-  assert.match(clientGlobals, /declare function actEntryHtml\(activity: ClientActivity & Record<string, unknown>\): string/);
+  assert.match(
+    clientGlobals,
+    /declare function actEntryHtml\(activity: ClientActivity & Record<string, unknown>\): string/
+  );
   assert.match(clientGlobals, /CairnTodayActivity/);
   assert.match(clientGlobals, /declare function reshapeToday\(\): Promise<void>/);
   assert.match(clientGlobals, /declare function renderToday\(\): unknown/);
@@ -2000,7 +2170,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /CairnTodayPlanSelection/);
   assert.match(clientGlobals, /type ClientTodayPlanSelectionDeps = \{/);
   assert.match(clientGlobals, /CairnTodayProgressionController/);
-  assert.match(clientGlobals, /refreshAdaptedRx\(deps: Parameters<Window\["CairnTodayProgressionController"\]\["scheduleRxRefresh"\]>\[0\]\): Promise<void>/);
+  assert.match(
+    clientGlobals,
+    /refreshAdaptedRx\(deps: Parameters<Window\["CairnTodayProgressionController"\]\["scheduleRxRefresh"\]>\[0\]\): Promise<void>/
+  );
   assert.match(clientGlobals, /CairnTodayAddExerciseController/);
   assert.match(clientGlobals, /appendOffPlanCard\(name: string, mode: string \| null \| undefined/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/date-utils\.js/);
@@ -3893,34 +4066,55 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(uiComponentsSource, /function sheetChipHtml\(options: SheetChipOptions\): string/);
   assert.match(uiComponentsSource, /const CAIRN_UI = \{/);
   assert.match(detailOverlaySource, /function closeDetail\(instant\?: boolean\): void/);
-  assert.match(detailOverlaySource, /function openDetailFrom\(tile: Element \| null \| undefined, build: \(\) => unknown\): void/);
+  assert.match(
+    detailOverlaySource,
+    /function openDetailFrom\(tile: Element \| null \| undefined, build: \(\) => unknown\): void/
+  );
   assert.match(detailOverlaySource, /function mountDetail\(inner: string, photoSrc\?: string \| null\): HTMLElement/);
   assert.match(detailOverlaySource, /const CAIRN_DETAIL_OVERLAY = \{/);
   assert.match(uiMotionSource, /function collapseEl\(input: Element \| null \| undefined/);
   assert.match(uiMotionSource, /function expandEl\(input: Element \| null \| undefined\): void/);
   assert.match(uiMotionSource, /const CAIRN_UI_MOTION = \{/);
   assert.match(uiMotionSource, /CairnUiMotion: CAIRN_UI_MOTION/);
-  assert.match(exerciseDetailSource, /function exerciseDetailExplanation\(exercise: ExerciseDetailLike \| null \| undefined\): ExerciseExplanation/);
+  assert.match(
+    exerciseDetailSource,
+    /function exerciseDetailExplanation\(exercise: ExerciseDetailLike \| null \| undefined\): ExerciseExplanation/
+  );
   assert.match(exerciseDetailSource, /function exerciseDetailExplanationHtml/);
   assert.match(exerciseDetailSource, /function validExerciseDetailExplanationPayload/);
   assert.match(exerciseDetailSource, /const CAIRN_EXERCISE_DETAIL = \{/);
-  assert.match(exerciseDetailDataSource, /function exerciseDetailView\(row: ExerciseDetailDataRow, deps: ExerciseDetailDataDeps\): ExerciseDetailViewModel/);
-  assert.match(exerciseDetailExplanationSource, /function hydrateExerciseExplanation\(el: ParentNode, row: ExerciseDetailExplanationClientRow, deps: ExerciseDetailExplanationDeps\): Promise<void>/);
+  assert.match(
+    exerciseDetailDataSource,
+    /function exerciseDetailView\(row: ExerciseDetailDataRow, deps: ExerciseDetailDataDeps\): ExerciseDetailViewModel/
+  );
+  assert.match(
+    exerciseDetailExplanationSource,
+    /function hydrateExerciseExplanation\(el: ParentNode, row: ExerciseDetailExplanationClientRow, deps: ExerciseDetailExplanationDeps\): Promise<void>/
+  );
   assert.match(exerciseDetailRenderSource, /function exerciseDetailModalHtml\(/);
   assert.match(exerciseDetailActionsSource, /function wireExerciseDetailActions\(/);
   assert.match(exerciseDetailControllerSource, /type ExerciseDetailControllerDeps = \{/);
-  assert.match(exerciseDetailControllerSource, /function wireGuides\(scope: ParentNode \| null \| undefined, deps: ExerciseDetailControllerDeps\): void/);
+  assert.match(
+    exerciseDetailControllerSource,
+    /function wireGuides\(scope: ParentNode \| null \| undefined, deps: ExerciseDetailControllerDeps\): void/
+  );
   assert.match(exerciseDetailControllerSource, /async function openExerciseModal/);
   assert.match(exerciseDetailControllerSource, /CairnExerciseDetailData\.view/);
   assert.match(exerciseDetailControllerSource, /CairnExerciseDetailActions\.wireActions/);
-  assert.doesNotMatch(exerciseDetailControllerSource, /const exerciseExplainMisses|function detailRows|function detailNumber/);
+  assert.doesNotMatch(
+    exerciseDetailControllerSource,
+    /const exerciseExplainMisses|function detailRows|function detailNumber/
+  );
   assert.match(exerciseDetailControllerSource, /const CAIRN_EXERCISE_DETAIL_CONTROLLER = \{/);
   assert.match(uiShellSource, /CairnExerciseDetailController\.wireGuides/);
   assert.match(uiShellSource, /CairnExerciseDetailController\.exerciseExplanationHtml/);
   assert.doesNotMatch(uiShellSource, /async function openExerciseModal/);
   assert.doesNotMatch(uiShellSource, /function hydrateExerciseExplanation/);
   assert.match(uiActionsSource, /function showToast\(msg: unknown, opts: ToastOptions = \{\}\): void/);
-  assert.match(uiActionsSource, /function armDestructiveAction\(btn: Element \| null \| undefined, onConfirm: \(\) => unknown/);
+  assert.match(
+    uiActionsSource,
+    /function armDestructiveAction\(btn: Element \| null \| undefined, onConfirm: \(\) => unknown/
+  );
   assert.match(uiActionsSource, /const CAIRN_UI_ACTIONS = \{/);
   assert.match(uiViewTransitionsSource, /type UiViewTransitionDeps = \{/);
   assert.match(uiViewTransitionsSource, /function isViewTransitionAbort\(error: unknown\): boolean/);
@@ -3940,7 +4134,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(coreStateSource, /const appView = \(\(\) => \{/);
   assert.match(coreStateSource, /const appHeaderTitle = \(\(\) => \{/);
   assert.match(coreStateSource, /const appState: ClientAppState/);
-  assert.match(coreStateSource, /Object\.assign\(globalThis, \{ \$: query, view: appView, headerTitle: appHeaderTitle, state: appState \}\)/);
+  assert.match(
+    coreStateSource,
+    /Object\.assign\(globalThis, \{ \$: query, view: appView, headerTitle: appHeaderTitle, state: appState \}\)/
+  );
   assert.match(artControllerSource, /function artImg\(kind: string, q: unknown/);
   assert.match(artControllerSource, /async function primeArtManifest\(\): Promise<void>/);
   assert.match(artControllerSource, /Object\.defineProperty\(globalThis, "artEnabled"/);
@@ -3961,7 +4158,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(uiSegmentsSource, /const planHandlers: UiSegmentsHandlerMap = \{/);
   assert.match(uiSegmentsSource, /Object\.defineProperty\(globalThis, "primaryDiscipline"/);
   assert.match(uiShellSource, /const PROGRESS_SEG: readonly UiSegment\[\] = uiSegmentsApi\(\)\.PROGRESS_SEG/);
-  assert.match(uiShellSource, /const PROGRESS_HANDLERS: Record<string, \(\) => unknown> = uiSegments\(\)\.progressHandlers/);
+  assert.match(
+    uiShellSource,
+    /const PROGRESS_HANDLERS: Record<string, \(\) => unknown> = uiSegments\(\)\.progressHandlers/
+  );
   assert.match(uiShellSource, /function withViewTransition\(fn: \(\) => unknown\): Promise<unknown>/);
   assert.match(uiShellSource, /let pollToken: number = 0/);
   assert.match(uiShellSource, /async function pollEnrichment<T extends UiRecord = UiRecord>/);
@@ -3972,9 +4172,18 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(agentLoginAssetsSource, /function agentLoginXtermWindow\(\): AgentLoginXtermGlobals/);
   assert.match(agentLoginAssetsSource, /function loadAgentLoginXtermAssets\(\): Promise<void>/);
   assert.match(agentLoginModalSource, /function ensureAgentLoginStyles\(\): void/);
-  assert.match(agentLoginModalSource, /function closeAgentLoginModal\(overlay: AgentLoginOverlay \| null \| undefined\): void/);
-  assert.match(agentLoginModalSource, /function createAgentLoginModal\(name: string, retryLogin: AgentLoginRetry\): AgentLoginModalHandle \| null/);
-  assert.match(agentLoginSessionSource, /async function startAgentLoginSession\(name: string, modal: AgentLoginModalHandle\): Promise<void>/);
+  assert.match(
+    agentLoginModalSource,
+    /function closeAgentLoginModal\(overlay: AgentLoginOverlay \| null \| undefined\): void/
+  );
+  assert.match(
+    agentLoginModalSource,
+    /function createAgentLoginModal\(name: string, retryLogin: AgentLoginRetry\): AgentLoginModalHandle \| null/
+  );
+  assert.match(
+    agentLoginSessionSource,
+    /async function startAgentLoginSession\(name: string, modal: AgentLoginModalHandle\): Promise<void>/
+  );
   assert.match(agentLoginSessionSource, /agentLoginWsUrl\(name\)/);
   assert.match(agentLoginSource, /async function openAgentLoginModal\(agentName: unknown\): Promise<void>/);
   assert.match(agentLoginSource, /session\.start\(name, handle\)/);
@@ -3987,9 +4196,15 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(restTimerSource, /function stopRest\(\): void/);
   assert.match(restTimerSource, /Object\.assign\(globalThis, \{/);
   assert.match(restTimerSource, /CairnRestTimer/);
-  assert.match(coachingFocusSource, /type ClientCoachingFocus = import\("\.\.\/contracts\/client\.js"\)\.ClientCoachingFocus/);
+  assert.match(
+    coachingFocusSource,
+    /type ClientCoachingFocus = import\("\.\.\/contracts\/client\.js"\)\.ClientCoachingFocus/
+  );
   assert.match(coachingFocusSource, /function coachingFocusCardHtml\(/);
-  assert.match(coachingFocusSource, /async function loadCoachingFocus\(slotSelector: string, root\?: ParentNode \| null\): Promise<void>/);
+  assert.match(
+    coachingFocusSource,
+    /async function loadCoachingFocus\(slotSelector: string, root\?: ParentNode \| null\): Promise<void>/
+  );
   assert.match(coachingFocusSource, /function cfocusRoute\(go: unknown\): void/);
   assert.match(coachingFocusSource, /Object\.assign\(globalThis, \{/);
   assert.match(coachingFocusSource, /CairnCoachingFocus/);
@@ -4007,17 +4222,35 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     /type ClientTodayAgenda = import\("\.\.\/contracts\/client\.js"\)\.ClientTodayAgenda/
   );
   assert.match(todayAgendaSource, /function todayAgendaRailHtml/);
-  assert.match(todayRailLoadersSource, /async function loadFuelToday\(date: string, deps: ClientTodayRailControllerDeps\): Promise<void>/);
-  assert.match(todayRailLoadersSource, /async function loadProgramAdjustmentsBanner\(deps: ClientTodayRailControllerDeps\): Promise<void>/);
-  assert.match(todayRailLoadersSource, /async function loadRecentActivities\(deps: ClientTodayRailControllerDeps\): Promise<void>/);
+  assert.match(
+    todayRailLoadersSource,
+    /async function loadFuelToday\(date: string, deps: ClientTodayRailControllerDeps\): Promise<void>/
+  );
+  assert.match(
+    todayRailLoadersSource,
+    /async function loadProgramAdjustmentsBanner\(deps: ClientTodayRailControllerDeps\): Promise<void>/
+  );
+  assert.match(
+    todayRailLoadersSource,
+    /async function loadRecentActivities\(deps: ClientTodayRailControllerDeps\): Promise<void>/
+  );
   assert.match(todayRailLoadersSource, /CairnTodayAgenda\.fuelCardHtml/);
   assert.match(todayRailLoadersSource, /CairnTodayGarminReconciliation\.load/);
   assert.match(todayRailControllerSource, /type TodayRailDeps = \{/);
-  assert.match(todayRailControllerSource, /async function fetchTodayAgenda\(date: string, deps: TodayRailDeps\): Promise<TodayRailAgenda \| null>/);
+  assert.match(
+    todayRailControllerSource,
+    /async function fetchTodayAgenda\(date: string, deps: TodayRailDeps\): Promise<TodayRailAgenda \| null>/
+  );
   assert.match(todayRailControllerSource, /function runAgendaRail\(/);
-  assert.match(todayRailControllerSource, /function wireGenericAgendaCards\(pending: TodayRailCandidate\[\], deps: TodayRailDeps\): void/);
+  assert.match(
+    todayRailControllerSource,
+    /function wireGenericAgendaCards\(pending: TodayRailCandidate\[\], deps: TodayRailDeps\): void/
+  );
   assert.match(todayRailControllerSource, /function railLoaders\(\): Window\["CairnTodayRailLoaders"\]/);
-  assert.doesNotMatch(todayRailControllerSource, /async function loadFuelToday|async function loadRecentActivities|CairnTodayAgenda\.fuelCardHtml/);
+  assert.doesNotMatch(
+    todayRailControllerSource,
+    /async function loadFuelToday|async function loadRecentActivities|CairnTodayAgenda\.fuelCardHtml/
+  );
   assert.match(todayRailControllerSource, /CairnTodayRailController/);
   assert.match(todayPlanSelectionSource, /type TodayPlanSelectionDeps = \{/);
   assert.match(todayPlanSelectionSource, /function planDayNumberForSession/);
@@ -4030,11 +4263,20 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayTrainingSource, /const TODAY_RX_ACTION: Record<ClientProgressionAction, ClientProgressionMeta>/);
   assert.match(todayProgressionControllerSource, /type TodayProgressionDeps = \{/);
   assert.match(todayProgressionControllerSource, /function scheduleRxRefresh\(deps: TodayProgressionDeps\): void/);
-  assert.match(todayProgressionControllerSource, /async function refreshAdaptedRx\(deps: TodayProgressionDeps\): Promise<void>/);
+  assert.match(
+    todayProgressionControllerSource,
+    /async function refreshAdaptedRx\(deps: TodayProgressionDeps\): Promise<void>/
+  );
   assert.match(todayProgressionControllerSource, /CairnTodayProgressionController/);
   assert.match(todayAddExerciseControllerSource, /type TodayAddExerciseDeps = \{/);
-  assert.match(todayAddExerciseControllerSource, /async function setupAddExercise\(deps: TodayAddExerciseDeps\): Promise<void>/);
-  assert.match(todayAddExerciseControllerSource, /async function appendOffPlanCard\(name: string, mode: string \| null \| undefined, deps: TodayAddExerciseDeps\): Promise<void>/);
+  assert.match(
+    todayAddExerciseControllerSource,
+    /async function setupAddExercise\(deps: TodayAddExerciseDeps\): Promise<void>/
+  );
+  assert.match(
+    todayAddExerciseControllerSource,
+    /async function appendOffPlanCard\(name: string, mode: string \| null \| undefined, deps: TodayAddExerciseDeps\): Promise<void>/
+  );
   assert.match(todayAddExerciseControllerSource, /CairnTodayAddExerciseController/);
   assert.match(todayBriefSource, /type ClientDayRead = import\("\.\.\/contracts\/client\.js"\)\.ClientDayRead/);
   assert.match(todayBriefSource, /function todayBriefHtml\(read: TodayBriefRead \| null \| undefined/);
@@ -4052,44 +4294,68 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(proposalSource, /function applyResultMessage\(result: unknown\)/);
   assert.match(proposalSource, /function verifiedBadgeHtml\(verified: unknown\)/);
   assert.match(proposalSource, /function strengthChangeHtml\(change: unknown\)/);
-  assert.match(todaySessionSuggestSource, /type ClientSessionSuggestion = import\("\.\.\/contracts\/client\.js"\)\.ClientSessionSuggestion/);
+  assert.match(
+    todaySessionSuggestSource,
+    /type ClientSessionSuggestion = import\("\.\.\/contracts\/client\.js"\)\.ClientSessionSuggestion/
+  );
   assert.match(todaySessionSuggestSource, /function todaySuggestCardHtml\(session: SuggestedSessionLike/);
   assert.match(todaySessionSuggestSource, /function todaySuggestComposerHtml/);
   assert.match(todaySessionSuggestSource, /CairnTodaySessionSuggest/);
   assert.match(todaySessionSuggestControllerSource, /type TodaySessionSuggestDeps = \{/);
   assert.match(
     todaySessionSuggestControllerSource,
-    /function sessionSuggestOpOpts\(\s*deps: TodaySessionSuggestDeps,\s*request: Record<string, unknown> = \{},\s*\): TodaySessionSuggestRunOptions/,
+    /function sessionSuggestOpOpts\(\s*deps: TodaySessionSuggestDeps,\s*request: Record<string, unknown> = \{},\s*\): TodaySessionSuggestRunOptions/
   );
-  assert.match(todaySessionSuggestControllerSource, /function reconnectSessionSuggest\(job: unknown, deps: TodaySessionSuggestDeps\)/);
+  assert.match(
+    todaySessionSuggestControllerSource,
+    /function reconnectSessionSuggest\(job: unknown, deps: TodaySessionSuggestDeps\)/
+  );
   assert.match(
     todaySessionSuggestControllerSource,
     /const agentJobId\s*=\s*jobRow\.id\s*!=\s*null[\s\S]*?Number\.isInteger\(Number\(jobRow\.id\)\)[\s\S]*?Number\(jobRow\.id\)[\s\S]*?:\s*null/,
-    "session suggestion job IDs are normalized to positive integers before acceptance",
+    "session suggestion job IDs are normalized to positive integers before acceptance"
   );
   assert.match(
     todaySessionSuggestControllerSource,
     /agentJobId,\s*constraints,\s*provenance:\s*\{[\s\S]*?agent_job_id:\s*agentJobId/,
-    "the normalized job identity is carried into canonical suggestion provenance",
+    "the normalized job identity is carried into canonical suggestion provenance"
   );
   assert.match(todaySessionSuggestControllerSource, /CairnTodaySessionSuggestController/);
-  assert.match(todaySessionStatusSource, /type ClientTrainingSession = import\("\.\.\/contracts\/client-api\.js"\)\.ClientTrainingSession/);
+  assert.match(
+    todaySessionStatusSource,
+    /type ClientTrainingSession = import\("\.\.\/contracts\/client-api\.js"\)\.ClientTrainingSession/
+  );
   assert.match(todaySessionStatusSource, /function todaySetsTonnage\(sets: unknown\): number/);
   assert.match(todaySessionStatusSource, /function todaySessionDoneCardHtml\(\s*session: SessionLike/);
   assert.match(todaySessionStatusSource, /function todayFeedbackFormHtml\(session: SessionLike/);
   assert.match(todaySessionStatusSource, /CairnTodaySessionStatus/);
   assert.match(todaySessionFeedbackSource, /type TodaySessionFeedbackDeps = \{/);
-  assert.match(todaySessionFeedbackSource, /function renderFeedback\(slot: Element \| null \| undefined, session: Record<string, unknown>, deps: TodaySessionFeedbackDeps\): void/);
+  assert.match(
+    todaySessionFeedbackSource,
+    /function renderFeedback\(slot: Element \| null \| undefined, session: Record<string, unknown>, deps: TodaySessionFeedbackDeps\): void/
+  );
   assert.match(todaySessionFeedbackSource, /CairnTodaySessionFeedback/);
   assert.match(todaySessionSkipSource, /type TodaySessionSkipDeps = \{/);
   assert.match(todaySessionSkipSource, /function wireSkips\(deps: TodaySessionSkipDeps\): void/);
   assert.match(todaySessionSkipSource, /CairnTodaySessionSkip/);
-  assert.match(todaySessionSetModelSource, /function logPayloadFromRow\(row: HTMLElement, deps: ClientTodaySessionControllerDeps\): TodaySessionSetPayloadResult/);
-  assert.match(todaySessionSetModelSource, /function invalidateSetTruth\(deps: ClientTodaySessionControllerDeps\): void/);
-  assert.match(todaySessionSetActionsSource, /function wireLogRow\(row: Element \| null \| undefined, deps: ClientTodaySessionControllerDeps\): void/);
+  assert.match(
+    todaySessionSetModelSource,
+    /function logPayloadFromRow\(row: HTMLElement, deps: ClientTodaySessionControllerDeps\): TodaySessionSetPayloadResult/
+  );
+  assert.match(
+    todaySessionSetModelSource,
+    /function invalidateSetTruth\(deps: ClientTodaySessionControllerDeps\): void/
+  );
+  assert.match(
+    todaySessionSetActionsSource,
+    /function wireLogRow\(row: Element \| null \| undefined, deps: ClientTodaySessionControllerDeps\): void/
+  );
   assert.match(todaySessionSetActionsSource, /CairnTodaySessionSetActions/);
   assert.match(todaySessionControllerSource, /type TodaySessionDeps = ClientTodaySessionControllerDeps/);
-  assert.match(todaySessionControllerSource, /function wireSessionSurface\(options: TodaySessionSurfaceOptions, deps: TodaySessionDeps\): void/);
+  assert.match(
+    todaySessionControllerSource,
+    /function wireSessionSurface\(options: TodaySessionSurfaceOptions, deps: TodaySessionDeps\): void/
+  );
   assert.match(todaySessionControllerSource, /wireLogRow: CairnTodaySessionSetActions\.wireLogRow/);
   assert.doesNotMatch(todaySessionControllerSource, /function renderFeedbackForm/);
   assert.doesNotMatch(todaySessionControllerSource, /function skipFromCard/);
@@ -4098,32 +4364,56 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayProgramAdjustmentsSource, /function todayAdjustmentPlanRequest\(value: unknown\): string/);
   assert.match(todayProgramAdjustmentsSource, /function todayProgramAdjustmentsBannerHtml\(rows: unknown\): string/);
   assert.match(todayProgramAdjustmentsSource, /CairnTodayProgramAdjustments/);
-  assert.match(todayWeekAheadSource, /type TodayWeekAheadResponse = import\("\.\.\/contracts\/client\.js"\)\.ClientWeekAheadResponse/);
+  assert.match(
+    todayWeekAheadSource,
+    /type TodayWeekAheadResponse = import\("\.\.\/contracts\/client\.js"\)\.ClientWeekAheadResponse/
+  );
   assert.match(todayWeekAheadSource, /function todayWeekAheadCardHtml\(value: unknown\): string/);
   assert.match(todayWeekAheadSource, /CairnTodayWeekAhead/);
   assert.match(todayContextSource, /function contextBannerHtml\(events: unknown, todayISO\?: string\): string/);
-  assert.match(todayContextSource, /function goalLineHtml\(statsValue: unknown, currentWeight: unknown, isToday: unknown, todayISO\?: string\): string/);
+  assert.match(
+    todayContextSource,
+    /function goalLineHtml\(statsValue: unknown, currentWeight: unknown, isToday: unknown, todayISO\?: string\): string/
+  );
   assert.match(todayContextSource, /function healthFocusBannerHtml\(value: unknown\): string/);
   assert.match(todayContextSource, /CairnTodayContext/);
   assert.match(todayCompassSource, /type TodayCompassBuild = \{/);
   assert.match(todayCompassSource, /function paceTileHtml\(statsValue: unknown, deps: TodayCompassDeps\): string/);
   assert.doesNotMatch(todayCompassSource, /function paceOffer\(|TodayPaceOffer/);
-  assert.match(todayCompassSource, /function build\(statsValue: unknown, deps: TodayCompassDeps, options: TodayCompassOptions = \{\}\): TodayCompassBuild/);
+  assert.match(
+    todayCompassSource,
+    /function build\(statsValue: unknown, deps: TodayCompassDeps, options: TodayCompassOptions = \{\}\): TodayCompassBuild/
+  );
   assert.match(todayCompassSource, /CairnTodayCompass/);
   assert.match(todayGarminReconciliationSource, /type TodayGarminReconcileOptions = \{/);
-  assert.match(todayGarminReconciliationSource, /type ClientGarminReconcileResponse = import\("\.\.\/contracts\/client-api\.js"\)\.ClientGarminReconcileResponse/);
+  assert.match(
+    todayGarminReconciliationSource,
+    /type ClientGarminReconcileResponse = import\("\.\.\/contracts\/client-api\.js"\)\.ClientGarminReconcileResponse/
+  );
   assert.match(todayGarminReconciliationSource, /function reconcilePromptHtml\(count: number/);
-  assert.match(todayGarminReconciliationSource, /async function load\(options: TodayGarminReconcileOptions\): Promise<void>/);
+  assert.match(
+    todayGarminReconciliationSource,
+    /async function load\(options: TodayGarminReconcileOptions\): Promise<void>/
+  );
   assert.match(todayGarminReconciliationSource, /CairnTodayGarminReconciliation/);
   assert.match(todaySideLoadersSource, /type TodaySideLoaderDeps = \{/);
   assert.match(todaySideLoadersSource, /function garminSessionCard\(value: unknown\): string/);
-  assert.match(todaySideLoadersSource, /async function loadWearable\(isToday: unknown, deps: TodaySideLoaderDeps\): Promise<void>/);
+  assert.match(
+    todaySideLoadersSource,
+    /async function loadWearable\(isToday: unknown, deps: TodaySideLoaderDeps\): Promise<void>/
+  );
   assert.match(todaySideLoadersSource, /async function loadTableHint\(deps: TodaySideLoaderDeps\): Promise<void>/);
   assert.match(todaySideLoadersSource, /async function loadContextBanner\(deps: TodaySideLoaderDeps\): Promise<void>/);
-  assert.match(todaySideLoadersSource, /async function loadHealthFocusBanner\(deps: TodaySideLoaderDeps\): Promise<void>/);
+  assert.match(
+    todaySideLoadersSource,
+    /async function loadHealthFocusBanner\(deps: TodaySideLoaderDeps\): Promise<void>/
+  );
   assert.match(todaySideLoadersSource, /CairnTodaySideLoaders/);
   assert.match(todayPlanSessionModelSource, /type TodayPlanSessionModelApi = \{/);
-  assert.match(todayPlanSessionModelSource, /function groupLoggedSets\(session: TodayPlanSessionModelSession \| null \| undefined\)/);
+  assert.match(
+    todayPlanSessionModelSource,
+    /function groupLoggedSets\(session: TodayPlanSessionModelSession \| null \| undefined\)/
+  );
   assert.match(todayPlanSessionModelSource, /function matchCardioEfforts\(/);
   assert.match(todayPlanSessionModelSource, /function itemGroups\(params: \{/);
   assert.match(todayPlanSessionModelSource, /function prefillFor\(/);
@@ -4131,14 +4421,23 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayPlanSessionPreparationSource, /type TodayPlanSessionPrepDeps = \{/);
   assert.match(todayPlanSessionPreparationSource, /todayPlanSessionModel\.groupLoggedSets/);
   assert.match(todayPlanSessionPreparationSource, /todayPlanSessionModel\.matchCardioEfforts/);
-  assert.match(todayPlanSessionPreparationSource, /async function preparePlanSession\(deps: TodayPlanSessionPrepDeps\): Promise<TodayPlanSessionPrepResult>/);
+  assert.match(
+    todayPlanSessionPreparationSource,
+    /async function preparePlanSession\(deps: TodayPlanSessionPrepDeps\): Promise<TodayPlanSessionPrepResult>/
+  );
   assert.match(todayPlanSessionPreparationSource, /CairnTodayPlanSessionPreparation/);
   assert.match(todayDataLoaderSource, /type TodayDataLoadDeps = \{/);
   assert.match(todayDataLoaderSource, /async function loadInner\(/);
-  assert.match(todayDataLoaderSource, /function scheduleSoftRepaint\(result: TodayDataLoadResult, deps: TodayDataRefreshDeps\): void/);
+  assert.match(
+    todayDataLoaderSource,
+    /function scheduleSoftRepaint\(result: TodayDataLoadResult, deps: TodayDataRefreshDeps\): void/
+  );
   assert.match(todayDataLoaderSource, /CairnTodayDataLoader/);
   assert.match(todayMainShellSource, /type TodayMainShellLeadOptions = \{/);
-  assert.match(todayMainShellSource, /function leadHtml\(options: TodayMainShellLeadOptions, deps: TodayMainShellDeps\): string/);
+  assert.match(
+    todayMainShellSource,
+    /function leadHtml\(options: TodayMainShellLeadOptions, deps: TodayMainShellDeps\): string/
+  );
   assert.match(todayMainShellSource, /function weekFoldHtml\(compass: TodayMainShellCompass/);
   assert.match(todayMainShellSource, /function wrapHtml\(content: string, options: \{ railHtml: string \}\): string/);
   assert.match(todayMainShellSource, /CairnTodayMainShell/);
@@ -4149,8 +4448,14 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayPlanSurfaceSource, /function finishHtml\(/);
   assert.match(todayPlanSurfaceSource, /CairnTodayPlanSurface/);
   assert.match(todayPlanSurfaceRendererSource, /type TodayPlanSurfaceRendererOptions = \{/);
-  assert.match(todayPlanSurfaceRendererSource, /function orderedSurfaceItems\(options: TodayPlanSurfaceRendererOptions/);
-  assert.match(todayPlanSurfaceRendererSource, /function buildHtml\(options: TodayPlanSurfaceRendererOptions, deps: TodayPlanSurfaceRendererDeps\): string/);
+  assert.match(
+    todayPlanSurfaceRendererSource,
+    /function orderedSurfaceItems\(options: TodayPlanSurfaceRendererOptions/
+  );
+  assert.match(
+    todayPlanSurfaceRendererSource,
+    /function buildHtml\(options: TodayPlanSurfaceRendererOptions, deps: TodayPlanSurfaceRendererDeps\): string/
+  );
   assert.match(todayPlanSurfaceRendererSource, /CairnTodayPlanSurfaceRenderer/);
   assert.match(todayRenderStateSource, /type TodayRenderStateInput = \{/);
   assert.match(todayRenderStateSource, /function derive\(input: TodayRenderStateInput\): TodayRenderStateResult/);
@@ -4166,9 +4471,15 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayScreenSource, /todayMainShell\.wrapHtml/);
   assert.match(todayScreenSource, /todayPlanSurfaceRenderer\.buildHtml/);
   assert.match(todayScreenSource, /todayRenderState\.derive/);
-  assert.doesNotMatch(todayScreenSource, /todayPlanSurface\.sessionHeadHtml|todayPlanSurface\.daySwitchHtml|todayPlanSurface\.rxBannerHtml|todayPlanSurface\.addExerciseFormHtml/);
+  assert.doesNotMatch(
+    todayScreenSource,
+    /todayPlanSurface\.sessionHeadHtml|todayPlanSurface\.daySwitchHtml|todayPlanSurface\.rxBannerHtml|todayPlanSurface\.addExerciseFormHtml/
+  );
   assert.match(todayScreenSource, /CairnTodayPostRenderWiring\.wirePostRender/);
-  assert.doesNotMatch(todayScreenSource, /\/garmin\/daily\?limit=1|\/mealplans\?limit=6|\/context-events\?active=1|\/proposals\?limit=8|\/health\/synthesis/);
+  assert.doesNotMatch(
+    todayScreenSource,
+    /\/garmin\/daily\?limit=1|\/mealplans\?limit=6|\/context-events\?active=1|\/proposals\?limit=8|\/health\/synthesis/
+  );
   assert.doesNotMatch(todayScreenSource, /function collapseEl\(/);
   assert.doesNotMatch(todayScreenSource, /function expandEl\(/);
   assert.match(
@@ -4181,39 +4492,78 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayCompatibilityBridgesSource, /CairnTodaySessionSuggestController\.revealSessionComposer/);
   assert.match(todayCompatibilityBridgesSource, /CairnTodaySessionSuggestController\.askForSession/);
   assert.match(todayScreenRuntimeSource, /CairnTodayCompatibilityBridges/);
-  assert.doesNotMatch(todayScreenSource, /function sessionSuggestOpOpts|function wireSuggestCard|let sessionSuggestInFlight/);
+  assert.doesNotMatch(
+    todayScreenSource,
+    /function sessionSuggestOpOpts|function wireSuggestCard|let sessionSuggestInFlight/
+  );
   assert.match(todayCompatibilityBridgesSource, /CairnTodayAddExerciseController\.setupAddExercise/);
   assert.match(todayCompatibilityBridgesSource, /CairnTodayAddExerciseController\.appendOffPlanCard/);
-  assert.doesNotMatch(todayScreenSource, /const datalist = todayView\.querySelector\("#exOptions"\)|function resetAddForm|const skippedBtn = \[\.\.\.todayView\.querySelectorAll\("#skipLine \[data-unskip\]"\)/);
-  assert.match(todayScreenRuntimeSource, /type TodayScreenRuntimeApiResponse<Path extends string> = import\("\.\.\/contracts\/client\.js"\)\.ClientApiResponse<Path>/);
+  assert.doesNotMatch(
+    todayScreenSource,
+    /const datalist = todayView\.querySelector\("#exOptions"\)|function resetAddForm|const skippedBtn = \[\.\.\.todayView\.querySelectorAll\("#skipLine \[data-unskip\]"\)/
+  );
+  assert.match(
+    todayScreenRuntimeSource,
+    /type TodayScreenRuntimeApiResponse<Path extends string> = import\("\.\.\/contracts\/client\.js"\)\.ClientApiResponse<Path>/
+  );
   assert.match(todayScreenSource, /type TodayState = Omit<typeof state/);
-  assert.match(todayScreenSource, /pendingOffPlan\?: Record<string, Array<\{ name: string; mode\?: string \| null \}>>/);
+  assert.match(
+    todayScreenSource,
+    /pendingOffPlan\?: Record<string, Array<\{ name: string; mode\?: string \| null \}>>/
+  );
   assert.match(todayScreenSource, /const todayState = state as TodayState/);
   assert.match(proposalSource, /function runTargetText\(run: unknown\): string/);
-  assert.match(proposalSource, /function coachProposalCardHtml\(proposal: unknown, index: number, lastApplyClamp\?: unknown\): string/);
-  assert.match(proposalSource, /function coachProposalListHtml\(proposals: unknown, lastApplyClamp\?: unknown\): string/);
+  assert.match(
+    proposalSource,
+    /function coachProposalCardHtml\(proposal: unknown, index: number, lastApplyClamp\?: unknown\): string/
+  );
+  assert.match(
+    proposalSource,
+    /function coachProposalListHtml\(proposals: unknown, lastApplyClamp\?: unknown\): string/
+  );
   assert.match(proposalSource, /CairnProposal/);
   assert.match(progressDataSource, /function progressDataIsRecord\(value: unknown\): value is ProgressRecord/);
   assert.match(progressDataSource, /function progressDataRecord\(value: unknown\): ProgressRecord/);
-  assert.match(progressDataSource, /function progressDataRows<T extends ProgressRecord = ProgressRecord>\(value: unknown\): T\[\]/);
+  assert.match(
+    progressDataSource,
+    /function progressDataRows<T extends ProgressRecord = ProgressRecord>\(value: unknown\): T\[\]/
+  );
   assert.match(progressDataSource, /function progressDataString\(value: unknown\): string/);
   assert.match(progressDataSource, /function progressDataNumber\(value: unknown, fallback = 0\): number/);
   assert.match(progressDataSource, /CairnProgressData: CAIRN_PROGRESS_DATA/);
-  assert.doesNotMatch(progressScreenSource, /function isProgressRecord|function progressRecord|function progressRows|function progressString|function progressNumber/);
+  assert.doesNotMatch(
+    progressScreenSource,
+    /function isProgressRecord|function progressRecord|function progressRows|function progressString|function progressNumber/
+  );
   assert.match(progressScreenSource, /CairnProgressData\.rows<ProgressExercise>/);
   assert.match(progressScreenSource, /CairnProgressData\.record\(profile\)/);
   assert.match(progressEnduranceSource, /function enduranceStatusWord\(status: unknown\): string/);
-  assert.match(progressEnduranceSource, /function enduranceBlockHtml\(end: ProgramEnduranceBlock \| null \| undefined, idx: number\): string/);
+  assert.match(
+    progressEnduranceSource,
+    /function enduranceBlockHtml\(end: ProgramEnduranceBlock \| null \| undefined, idx: number\): string/
+  );
   assert.match(progressEnduranceSource, /function paceTrendWord\(trend: unknown\): string/);
   assert.match(progressEnduranceSource, /function zoneBarHtml\(zones: unknown\): string/);
-  assert.match(progressEnduranceSource, /type EnduranceSportGroup = import\("\.\.\/contracts\/client-api\.js"\)\.ClientSportBests/);
-  assert.match(progressEnduranceSource, /function enduranceBestRows\(group: EnduranceSportGroup \| null \| undefined\): EnduranceBestPoint\[\]/);
-  assert.match(progressEnduranceSource, /function enduranceSportCardHtml\(group: EnduranceSportGroup \| null \| undefined, idx: number\): string/);
+  assert.match(
+    progressEnduranceSource,
+    /type EnduranceSportGroup = import\("\.\.\/contracts\/client-api\.js"\)\.ClientSportBests/
+  );
+  assert.match(
+    progressEnduranceSource,
+    /function enduranceBestRows\(group: EnduranceSportGroup \| null \| undefined\): EnduranceBestPoint\[\]/
+  );
+  assert.match(
+    progressEnduranceSource,
+    /function enduranceSportCardHtml\(group: EnduranceSportGroup \| null \| undefined, idx: number\): string/
+  );
   assert.match(progressEnduranceSource, /Object\.assign\(globalThis, \{/);
   assert.match(progressEnduranceSource, /CairnProgressEndurance/);
   assert.match(progressComponentsSource, /function progressShortDate\(iso: unknown\): string/);
   assert.match(progressComponentsSource, /function progressHeroHtml\(title: unknown/);
-  assert.match(progressComponentsSource, /function progressEmptyStateHtml\(svg: string \| null \| undefined, line: unknown\): string/);
+  assert.match(
+    progressComponentsSource,
+    /function progressEmptyStateHtml\(svg: string \| null \| undefined, line: unknown\): string/
+  );
   assert.match(progressComponentsSource, /fmtShortDate: progressShortDate/);
   assert.match(progressComponentsSource, /progressHero: progressHeroHtml/);
   assert.match(progressComponentsSource, /emptyStateHtml: progressEmptyStateHtml/);
@@ -4240,17 +4590,35 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(progressChartSource, /Object\.assign\(globalThis, \{/);
   assert.match(progressChartSource, /CairnProgressChart/);
   assert.match(progressTrendWeightSource, /function paintProgressBody\(exercises: ProgressExercise\[\]\): void/);
-  assert.match(progressTrendWeightSource, /function paintWeightBody\(rows: ProgressWeightRow\[\], profile: ProgressRecord\): void/);
+  assert.match(
+    progressTrendWeightSource,
+    /function paintWeightBody\(rows: ProgressWeightRow\[\], profile: ProgressRecord\): void/
+  );
   assert.match(progressTrendWeightSource, /async function drawProgress\(name: string\): Promise<void>/);
   assert.match(progressTrendWeightSource, /CairnProgressTrendWeight/);
-  assert.doesNotMatch(progressScreenSource, /function\s+paintProgressBody|function\s+paintWeightBody|async function\s+drawProgress/);
+  assert.doesNotMatch(
+    progressScreenSource,
+    /function\s+paintProgressBody|function\s+paintWeightBody|async function\s+drawProgress/
+  );
   assert.match(progressScreenSource, /CairnProgressTrendWeight\.paintProgressBody/);
   assert.match(progressScreenSource, /CairnProgressTrendWeight\.paintWeightBody/);
-  assert.match(progressHistoryModelSource, /function progressHistoryRows<T extends ProgressHistoryRecord = ProgressHistoryRecord>\(value: unknown\): T\[\]/);
-  assert.match(progressHistoryModelSource, /function progressHistorySummary\(sessions: HistorySession\[\], now: Date = new Date\(\)\): ProgressHistorySummary/);
+  assert.match(
+    progressHistoryModelSource,
+    /function progressHistoryRows<T extends ProgressHistoryRecord = ProgressHistoryRecord>\(value: unknown\): T\[\]/
+  );
+  assert.match(
+    progressHistoryModelSource,
+    /function progressHistorySummary\(sessions: HistorySession\[\], now: Date = new Date\(\)\): ProgressHistorySummary/
+  );
   assert.match(progressHistoryModelSource, /CairnProgressHistoryModel/);
-  assert.match(progressHistoryRenderSource, /function progressHistorySessionCardHtml\(session: unknown, index: number\): string/);
-  assert.match(progressHistoryRenderSource, /function progressHistorySessionEditHtml\(session: HistorySession\): string/);
+  assert.match(
+    progressHistoryRenderSource,
+    /function progressHistorySessionCardHtml\(session: unknown, index: number\): string/
+  );
+  assert.match(
+    progressHistoryRenderSource,
+    /function progressHistorySessionEditHtml\(session: HistorySession\): string/
+  );
   assert.match(progressHistoryRenderSource, /CairnProgressHistoryRender/);
   assert.match(progressHistorySource, /function sessionCardHtml\(session: unknown, index: number\): string/);
   assert.match(progressHistorySource, /function numOrNull\(value: unknown\): number \| null/);
@@ -4263,18 +4631,33 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(progressHistorySource, /CairnProgressHistory/);
   assert.match(progressRunPlanSource, /function weeklyRunPlanCard\(plan: WeeklyRunPlan \| null \| undefined\): string/);
   assert.match(progressRunPlanSource, /function enduranceGoalCard\(goal: EnduranceGoal \| null \| undefined\): string/);
-  assert.match(progressRunPlanSource, /function runComplianceLine\(compliance: RunCompliance \| null \| undefined\): string/);
-  assert.match(progressRunPlanSource, /function enduranceCoachLine\(plan: WeeklyRunPlan \| null \| undefined\): string/);
+  assert.match(
+    progressRunPlanSource,
+    /function runComplianceLine\(compliance: RunCompliance \| null \| undefined\): string/
+  );
+  assert.match(
+    progressRunPlanSource,
+    /function enduranceCoachLine\(plan: WeeklyRunPlan \| null \| undefined\): string/
+  );
   assert.match(progressRunPlanSource, /Object\.assign\(globalThis, \{/);
   assert.match(progressRunPlanSource, /CairnProgressRunPlan/);
   assert.match(progressEnduranceControllerSource, /type ProgressEnduranceControllerDeps = \{/);
-  assert.match(progressEnduranceControllerSource, /async function renderProgressEndurance\(deps: ProgressEnduranceControllerDeps\): Promise<void>/);
+  assert.match(
+    progressEnduranceControllerSource,
+    /async function renderProgressEndurance\(deps: ProgressEnduranceControllerDeps\): Promise<void>/
+  );
   assert.match(progressEnduranceControllerSource, /function paintProgressEnduranceBody\(/);
   assert.match(progressEnduranceControllerSource, /deps\.api\("\/endurance-prs"\)/);
   assert.match(progressEnduranceControllerSource, /CairnProgressEnduranceController/);
   assert.match(progressRouteDepsSource, /type ProgressRouteDepsApi = \{/);
-  assert.match(progressRouteDepsSource, /function progressEnduranceRouteDeps\(renderSelf: ProgressRouteRenderSelf\): ClientProgressEnduranceControllerDeps/);
-  assert.match(progressRouteDepsSource, /function progressProgramRouteDeps\(renderSelf: ProgressRouteRenderSelf\): ClientProgressProgramControllerDeps/);
+  assert.match(
+    progressRouteDepsSource,
+    /function progressEnduranceRouteDeps\(renderSelf: ProgressRouteRenderSelf\): ClientProgressEnduranceControllerDeps/
+  );
+  assert.match(
+    progressRouteDepsSource,
+    /function progressProgramRouteDeps\(renderSelf: ProgressRouteRenderSelf\): ClientProgressProgramControllerDeps/
+  );
   assert.match(progressRouteDepsSource, /nextToken: progressRouteNextToken/);
   assert.match(progressRouteDepsSource, /segmentHtml: progressRouteSegmentHtml/);
   assert.match(progressRouteDepsSource, /CairnProgressRouteDeps: CAIRN_PROGRESS_ROUTE_DEPS/);
@@ -4284,11 +4667,20 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(progressVolumeSource, /CairnProgressVolume/);
   assert.match(progressEnergySource, /function kcalFmt\(value: unknown\): string/);
   assert.match(progressEnergySource, /function energyRead\(exp: EnergyExpenditure \| null \| undefined\): EnergyRead/);
-  assert.match(progressEnergySource, /function energyBodyHtml\(exp: EnergyExpenditure \| null \| undefined\): EnergyBodyHtml/);
+  assert.match(
+    progressEnergySource,
+    /function energyBodyHtml\(exp: EnergyExpenditure \| null \| undefined\): EnergyBodyHtml/
+  );
   assert.match(progressEnergySource, /function nutritionCheckinLoadingHtml\(\): string/);
-  assert.match(progressEnergySource, /function nutritionCheckinOkHtml\(result: NutritionCheckinResult \| null \| undefined\): string/);
+  assert.match(
+    progressEnergySource,
+    /function nutritionCheckinOkHtml\(result: NutritionCheckinResult \| null \| undefined\): string/
+  );
   assert.match(progressEnergySource, /function nutritionCheckinFailHtml\(\): string/);
-  assert.match(progressEnergySource, /function nutritionCheckinProposalHtml\(result: NutritionCheckinResult \| null \| undefined\): string/);
+  assert.match(
+    progressEnergySource,
+    /function nutritionCheckinProposalHtml\(result: NutritionCheckinResult \| null \| undefined\): string/
+  );
   assert.match(progressEnergySource, /Object\.assign\(globalThis, \{/);
   assert.match(progressEnergySource, /CairnProgressEnergy/);
   assert.match(progressEnergySurfaceSource, /function paintEnergyBody\(exp: unknown\): void/);
@@ -4296,22 +4688,40 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(progressEnergySurfaceSource, /function reconnectNutritionCheckin\(\): ClientAgentOpHandlers \| null/);
   assert.match(progressEnergySurfaceSource, /function renderCheckinProposal\(out: Element, result: unknown\): void/);
   assert.match(progressEnergySurfaceSource, /CairnProgressEnergySurface/);
-  assert.match(progressCalendarSource, /function calMonthHtml\(ym: string, byDate: Map<string, CalendarCell>, todayIso: string, idx: number\): string/);
+  assert.match(
+    progressCalendarSource,
+    /function calMonthHtml\(ym: string, byDate: Map<string, CalendarCell>, todayIso: string, idx: number\): string/
+  );
   assert.match(progressCalendarSource, /Object\.assign\(globalThis, \{/);
   assert.match(progressCalendarSource, /CairnProgressCalendar/);
   assert.match(progressMuscleTrajectorySource, /async function loadMuscleTrajectory\(\): Promise<void>/);
-  assert.match(progressMuscleTrajectorySource, /function muscleTrajectoryHtml\(trajectory: MuscleTrajectory \| null \| undefined\): string/);
+  assert.match(
+    progressMuscleTrajectorySource,
+    /function muscleTrajectoryHtml\(trajectory: MuscleTrajectory \| null \| undefined\): string/
+  );
   assert.match(progressMuscleTrajectorySource, /Object\.assign\(globalThis, \{/);
   assert.match(progressMuscleTrajectorySource, /CairnProgressMuscleTrajectory/);
   assert.match(progressDexaTargetingSource, /async function loadDexaTargeting\(slotId: string\): Promise<void>/);
-  assert.match(progressDexaTargetingSource, /function dexaTargetingHtml\(targeting: DexaTargeting \| null \| undefined\): string/);
+  assert.match(
+    progressDexaTargetingSource,
+    /function dexaTargetingHtml\(targeting: DexaTargeting \| null \| undefined\): string/
+  );
   assert.match(progressDexaTargetingSource, /Object\.assign\(globalThis, \{/);
   assert.match(progressDexaTargetingSource, /CairnProgressDexaTargeting/);
   assert.match(progressPerformanceSource, /async function loadPerformance\(\): Promise<void>/);
-  assert.match(progressPerformanceSource, /type PerformanceStanding = import\("\.\.\/contracts\/client-api\.js"\)\.ClientPerformanceStanding/);
+  assert.match(
+    progressPerformanceSource,
+    /type PerformanceStanding = import\("\.\.\/contracts\/client-api\.js"\)\.ClientPerformanceStanding/
+  );
   assert.match(progressPerformanceSource, /function pctClamp\(value: unknown\): number/);
-  assert.match(progressPerformanceSource, /function capacityRowHtml\(capacity: PerformanceCapacity, sexWord: string\): string/);
-  assert.match(progressPerformanceSource, /function performanceHtml\(performance: PerformanceStanding \| null \| undefined, options: PerformanceRenderOptions = \{\}\): string/);
+  assert.match(
+    progressPerformanceSource,
+    /function capacityRowHtml\(capacity: PerformanceCapacity, sexWord: string\): string/
+  );
+  assert.match(
+    progressPerformanceSource,
+    /function performanceHtml\(performance: PerformanceStanding \| null \| undefined, options: PerformanceRenderOptions = \{\}\): string/
+  );
   assert.match(progressPerformanceSource, /function progressFocusCardPresent\(\): boolean/);
   assert.doesNotMatch(progressPerformanceSource, /_progFocusCard/);
   assert.match(progressPerformanceSource, /Object\.assign\(globalThis, \{/);
@@ -4322,35 +4732,83 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(progressProgramAdjustmentsSource, /Object\.assign\(globalThis, \{/);
   assert.match(progressProgramAdjustmentsSource, /CairnProgressProgramAdjustments/);
   assert.match(progressTestWeekSource, /async function loadTestWeek\(\): Promise<void>/);
-  assert.match(progressTestWeekSource, /function testWeekBannerHtml\(testWeek: TestWeekRead \| null \| undefined\): string/);
+  assert.match(
+    progressTestWeekSource,
+    /function testWeekBannerHtml\(testWeek: TestWeekRead \| null \| undefined\): string/
+  );
   assert.match(progressTestWeekSource, /Object\.assign\(globalThis, \{/);
   assert.match(progressTestWeekSource, /CairnProgressTestWeek/);
-  assert.match(progressProgramSummarySource, /type ProgramStateRead = import\("\.\.\/contracts\/client-api\.js"\)\.ClientProgramState/);
-  assert.match(progressProgramSummarySource, /function liftStatusWord\(lift: ProgramLift \| null \| undefined\): string/);
+  assert.match(
+    progressProgramSummarySource,
+    /type ProgramStateRead = import\("\.\.\/contracts\/client-api\.js"\)\.ClientProgramState/
+  );
+  assert.match(
+    progressProgramSummarySource,
+    /function liftStatusWord\(lift: ProgramLift \| null \| undefined\): string/
+  );
   assert.match(progressProgramSummarySource, /function liftTrendFig\(lift: ProgramLift \| null \| undefined\): string/);
   assert.match(progressProgramSummarySource, /function liftBestFig\(lift: ProgramLift \| null \| undefined\): string/);
-  assert.match(progressProgramSummarySource, /function sortLifts\(lifts: ProgramLift\[\] \| null \| undefined\): ProgramLift\[\]/);
+  assert.match(
+    progressProgramSummarySource,
+    /function sortLifts\(lifts: ProgramLift\[\] \| null \| undefined\): ProgramLift\[\]/
+  );
   assert.match(progressProgramSummarySource, /function phaseWord\(phase: unknown\): string/);
-  assert.match(progressProgramSummarySource, /function liftRowHtml\(lift: ProgramLift \| null \| undefined, index: number\): string/);
-  assert.match(progressProgramSummarySource, /function volumeBlockHtml\(volume: ProgramVolumeRow\[\] \| null \| undefined, startIdx: number\): string/);
-  assert.match(progressProgramSummarySource, /function mesoBlockHtml\(meso: ProgramMesocycle \| null \| undefined, index: number\): string/);
-  assert.match(progressProgramSummarySource, /function adaptationsHtml\(adaptations: string\[\] \| null \| undefined, index: number\): string/);
+  assert.match(
+    progressProgramSummarySource,
+    /function liftRowHtml\(lift: ProgramLift \| null \| undefined, index: number\): string/
+  );
+  assert.match(
+    progressProgramSummarySource,
+    /function volumeBlockHtml\(volume: ProgramVolumeRow\[\] \| null \| undefined, startIdx: number\): string/
+  );
+  assert.match(
+    progressProgramSummarySource,
+    /function mesoBlockHtml\(meso: ProgramMesocycle \| null \| undefined, index: number\): string/
+  );
+  assert.match(
+    progressProgramSummarySource,
+    /function adaptationsHtml\(adaptations: string\[\] \| null \| undefined, index: number\): string/
+  );
   assert.match(progressProgramSummarySource, /Object\.assign\(globalThis, \{/);
   assert.match(progressProgramSummarySource, /CairnProgressProgramSummary/);
-  assert.match(progressProgramBlockSource, /type ClientProgramBlock = import\("\.\.\/contracts\/client-api\.js"\)\.ClientProgramBlock/);
-  assert.match(progressProgramBlockSource, /function blockFocusWord\(focus: ClientProgramBlockFocus \| unknown\): string/);
-  assert.match(progressProgramBlockSource, /function activeBlockHtml\(block: ClientProgramBlock \| null \| undefined\): string/);
+  assert.match(
+    progressProgramBlockSource,
+    /type ClientProgramBlock = import\("\.\.\/contracts\/client-api\.js"\)\.ClientProgramBlock/
+  );
+  assert.match(
+    progressProgramBlockSource,
+    /function blockFocusWord\(focus: ClientProgramBlockFocus \| unknown\): string/
+  );
+  assert.match(
+    progressProgramBlockSource,
+    /function activeBlockHtml\(block: ClientProgramBlock \| null \| undefined\): string/
+  );
   assert.match(progressProgramBlockSource, /async function loadProgramBlock\(\): Promise<void>/);
   assert.match(progressProgramBlockSource, /function wireProgramBlock\(slot: Element\): void/);
   assert.match(progressProgramBlockSource, /Object\.assign\(globalThis, \{/);
   assert.match(progressProgramBlockSource, /CairnProgressProgramBlock/);
-  assert.match(progressProgramControllerSource, /type ProgressProgramState = import\("\.\.\/contracts\/client-api\.js"\)\.ClientProgramState/);
+  assert.match(
+    progressProgramControllerSource,
+    /type ProgressProgramState = import\("\.\.\/contracts\/client-api\.js"\)\.ClientProgramState/
+  );
   assert.match(progressProgramControllerSource, /type ProgressProgramStat = readonly \[unknown, unknown\]/);
   assert.match(progressProgramControllerSource, /var _progFocusCard: string \| undefined/);
-  assert.match(progressProgramControllerSource, /async function renderProgressProgram\(deps: ClientProgressProgramControllerDeps\): Promise<unknown>/);
-  assert.match(progressProgramControllerSource, /function paintProgressProgramBody\(data: ProgressProgramState, deps: ClientProgressProgramControllerDeps\): void/);
-  assert.match(progressProgramControllerSource, /async function triggerProgramEvolve\(\n {2}btn: Element,\n {2}deps: ClientProgressProgramControllerDeps,/);
-  assert.match(progressProgramControllerSource, /async function tidyExerciseNames\(btn: Element, deps: ClientProgressProgramControllerDeps\): Promise<void>/);
+  assert.match(
+    progressProgramControllerSource,
+    /async function renderProgressProgram\(deps: ClientProgressProgramControllerDeps\): Promise<unknown>/
+  );
+  assert.match(
+    progressProgramControllerSource,
+    /function paintProgressProgramBody\(data: ProgressProgramState, deps: ClientProgressProgramControllerDeps\): void/
+  );
+  assert.match(
+    progressProgramControllerSource,
+    /async function triggerProgramEvolve\(\n {2}btn: Element,\n {2}deps: ClientProgressProgramControllerDeps,/
+  );
+  assert.match(
+    progressProgramControllerSource,
+    /async function tidyExerciseNames\(btn: Element, deps: ClientProgressProgramControllerDeps\): Promise<void>/
+  );
   assert.match(progressProgramControllerSource, /CairnProgressFocus: PROGRESS_FOCUS_STATE/);
   assert.match(progressProgramControllerSource, /CairnProgressProgramController/);
   assert.match(progressScreenSource, /function renderProgram\(\)/);
@@ -4358,34 +4816,70 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(progressScreenSource, /CairnProgressRouteDeps\.program\(\(\) => renderProgram\(\)\)/);
   assert.match(progressScreenSource, /CairnProgressProgramController\.render\(CairnProgressRouteDeps\.program/);
   assert.match(progressScreenSource, /async function renderEnergy\(\)[\s\S]*state\.progressSeg = "energy"/);
-  assert.doesNotMatch(progressScreenSource, /function renderHistory\(\)|function paintHistoryBody|function openSessionEdit/);
-  assert.doesNotMatch(progressScreenSource, /function nutritionCheckinOpOpts|function reconnectNutritionCheckin|function renderCheckinProposal|function runNutritionCheckin/);
-  assert.doesNotMatch(progressScreenSource, /function progressEnduranceDeps|function progressProgramDeps|nextToken: \(\) => \+\+pollToken|segmentHtml: \(active\) => segBar\(active, PROGRESS_SEG\)/);
-  assert.doesNotMatch(progressScreenSource, /var _progFocusCard: string \| undefined|function paintProgramBody|function triggerProgramEvolve|function tidyExerciseNames/);
+  assert.doesNotMatch(
+    progressScreenSource,
+    /function renderHistory\(\)|function paintHistoryBody|function openSessionEdit/
+  );
+  assert.doesNotMatch(
+    progressScreenSource,
+    /function nutritionCheckinOpOpts|function reconnectNutritionCheckin|function renderCheckinProposal|function runNutritionCheckin/
+  );
+  assert.doesNotMatch(
+    progressScreenSource,
+    /function progressEnduranceDeps|function progressProgramDeps|nextToken: \(\) => \+\+pollToken|segmentHtml: \(active\) => segBar\(active, PROGRESS_SEG\)/
+  );
+  assert.doesNotMatch(
+    progressScreenSource,
+    /var _progFocusCard: string \| undefined|function paintProgramBody|function triggerProgramEvolve|function tidyExerciseNames/
+  );
   assert.match(captureTypesSource, /type CaptureDirective = import\("\.\.\/contracts\/client\.js"\)\.ClientDirective/);
   assert.match(captureTypesSource, /type CaptureActivity = import\("\.\.\/contracts\/client\.js"\)\.ClientActivity/);
   assert.match(captureTypesSource, /type CaptureSpeechRecognitionCtor = new \(\) => CaptureSpeechRecognition/);
   assert.doesNotMatch(captureSource, /type CaptureDirective = import|type CaptureSpeechRecognitionCtor = new/);
-  assert.match(captureProvenanceSource, /function provenanceLineHtml\(directive: CaptureDirective \| null \| undefined, label: string\): string \| null/);
+  assert.match(
+    captureProvenanceSource,
+    /function provenanceLineHtml\(directive: CaptureDirective \| null \| undefined, label: string\): string \| null/
+  );
   assert.match(captureProvenanceSource, /async function loadTrainingProvenance\(_isToday\?: boolean\): Promise<void>/);
   assert.match(captureProvenanceSource, /const CAIRN_CAPTURE_PROVENANCE = \{/);
   assert.match(captureProvenanceSource, /CairnCaptureProvenance/);
-  assert.doesNotMatch(captureSource, /function provenanceLineHtml|function wireProvenance|function loadTrainingProvenance|function loadMealProvenance/);
+  assert.doesNotMatch(
+    captureSource,
+    /function provenanceLineHtml|function wireProvenance|function loadTrainingProvenance|function loadMealProvenance/
+  );
   assert.match(captureReadDateSource, /function captureReadWeekRangeLabel\(iso: unknown\): string/);
   assert.match(captureReadDateSource, /CairnCaptureReadDate/);
-  assert.match(captureReadCardsSource, /function captureReadRenderInsightInSlot\(target: HTMLElement, ins: CaptureInsight, deps: CaptureReadCardDeps\): void/);
-  assert.match(captureReadCardsSource, /function captureReadRenderWeeklyInSlot\(\s*target: HTMLElement,\s*ins: CaptureInsight,\s*deps: CaptureReadCardDeps,\s*team\?: CaptureTeamWeek \| null,\s*\): void/);
-  assert.match(captureReadCardsSource, /function captureReadRenderTeamWeekInSlot\(target: HTMLElement, team: CaptureTeamWeek \| null, deps: CaptureReadCardDeps\): void/);
+  assert.match(
+    captureReadCardsSource,
+    /function captureReadRenderInsightInSlot\(target: HTMLElement, ins: CaptureInsight, deps: CaptureReadCardDeps\): void/
+  );
+  assert.match(
+    captureReadCardsSource,
+    /function captureReadRenderWeeklyInSlot\(\s*target: HTMLElement,\s*ins: CaptureInsight,\s*deps: CaptureReadCardDeps,\s*team\?: CaptureTeamWeek \| null,\s*\): void/
+  );
+  assert.match(
+    captureReadCardsSource,
+    /function captureReadRenderTeamWeekInSlot\(target: HTMLElement, team: CaptureTeamWeek \| null, deps: CaptureReadCardDeps\): void/
+  );
   assert.match(captureReadCardsSource, /CairnCaptureReadCards/);
-  assert.match(captureReadJobsSource, /function createCaptureReadJobsController\(deps: CaptureReadJobsDeps\): CaptureReadJobsController/);
+  assert.match(
+    captureReadJobsSource,
+    /function createCaptureReadJobsController\(deps: CaptureReadJobsDeps\): CaptureReadJobsController/
+  );
   assert.match(captureReadJobsSource, /function reconnectInsight\(\): ClientAgentOpHandlers \| null/);
   assert.match(captureReadJobsSource, /CairnCaptureReadJobs/);
-  assert.match(captureReadsSource, /function createCaptureReadsController\(deps: CaptureReadsDeps\): CaptureReadsController/);
+  assert.match(
+    captureReadsSource,
+    /function createCaptureReadsController\(deps: CaptureReadsDeps\): CaptureReadsController/
+  );
   assert.match(captureReadsSource, /captureReadCardsApi\(\)/);
   assert.match(captureReadsSource, /captureReadJobsApi\(\)\.createController/);
   assert.match(captureReadsSource, /async function loadTodayReads\(\): Promise<void>/);
   assert.match(captureReadsSource, /CairnCaptureReads/);
-  assert.doesNotMatch(captureSource, /function renderInsightCard|function renderWeeklyCard|function maybeGenerateInsight|function maybeGenerateWeekly/);
+  assert.doesNotMatch(
+    captureSource,
+    /function renderInsightCard|function renderWeeklyCard|function maybeGenerateInsight|function maybeGenerateWeekly/
+  );
   assert.match(captureVoiceSource, /const CAPTURE_MIC_GLYPH =/);
   assert.match(captureVoiceSource, /function setupCaptureVoice\(deps: CaptureVoiceDeps\): void/);
   assert.match(captureVoiceSource, /CairnCaptureVoice/);
@@ -4412,12 +4906,27 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(settingsDataControllerSource, /CairnSettingsDataController/);
   assert.match(settingsAgentsSource, /function settingsAgentsSliceHtml/);
   assert.match(settingsAgentsSource, /function settingsAgentListHtml/);
-  assert.match(settingsAgentsControllerSource, /function renderSettingsAgents\(deps: ClientSettingsAgentsControllerDeps\): void/);
-  assert.match(settingsAgentsControllerSource, /function renderSettingsAgentList\(deps: ClientSettingsAgentsControllerDeps\): void/);
-  assert.match(settingsAgentsControllerSource, /function wireSettingsCliUpdate\(deps: ClientSettingsAgentsControllerDeps\): void/);
+  assert.match(
+    settingsAgentsControllerSource,
+    /function renderSettingsAgents\(deps: ClientSettingsAgentsControllerDeps\): void/
+  );
+  assert.match(
+    settingsAgentsControllerSource,
+    /function renderSettingsAgentList\(deps: ClientSettingsAgentsControllerDeps\): void/
+  );
+  assert.match(
+    settingsAgentsControllerSource,
+    /function wireSettingsCliUpdate\(deps: ClientSettingsAgentsControllerDeps\): void/
+  );
   assert.match(settingsAgentsControllerSource, /CairnSettingsAgentsController/);
-  assert.match(settingsSourcesAutomationControllerSource, /function renderSettingsSources\(deps: ClientSettingsSourcesAutomationControllerDeps\): Promise<void>/);
-  assert.match(settingsSourcesAutomationControllerSource, /function renderSettingsAutomation\(deps: ClientSettingsSourcesAutomationControllerDeps\): void/);
+  assert.match(
+    settingsSourcesAutomationControllerSource,
+    /function renderSettingsSources\(deps: ClientSettingsSourcesAutomationControllerDeps\): Promise<void>/
+  );
+  assert.match(
+    settingsSourcesAutomationControllerSource,
+    /function renderSettingsAutomation\(deps: ClientSettingsSourcesAutomationControllerDeps\): void/
+  );
   assert.match(settingsSourcesAutomationControllerSource, /CairnSettingsSurface\.sourcesSliceHtml/);
   assert.match(settingsSourcesAutomationControllerSource, /CairnSettingsSurface\.automationSliceHtml/);
   assert.match(settingsSourcesAutomationControllerSource, /CairnSettingsSourcesAutomationController/);
@@ -4425,17 +4934,32 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(settingsScreenSource, /async function renderSettings\(\): Promise<void>/);
   assert.match(settingsScreenSource, /function settingsAgentsDeps\(\): ClientSettingsAgentsControllerDeps/);
   assert.match(settingsScreenSource, /CairnSettingsAgentsController\.render\(settingsAgentsDeps\(\)\)/);
-  assert.match(settingsScreenSource, /function settingsSourcesAutomationDeps\(\): ClientSettingsSourcesAutomationControllerDeps/);
-  assert.match(settingsScreenSource, /CairnSettingsSourcesAutomationController\.renderSources\(settingsSourcesAutomationDeps\(\)\)/);
-  assert.match(settingsScreenSource, /CairnSettingsSourcesAutomationController\.renderAutomation\(settingsSourcesAutomationDeps\(\)\)/);
+  assert.match(
+    settingsScreenSource,
+    /function settingsSourcesAutomationDeps\(\): ClientSettingsSourcesAutomationControllerDeps/
+  );
+  assert.match(
+    settingsScreenSource,
+    /CairnSettingsSourcesAutomationController\.renderSources\(settingsSourcesAutomationDeps\(\)\)/
+  );
+  assert.match(
+    settingsScreenSource,
+    /CairnSettingsSourcesAutomationController\.renderAutomation\(settingsSourcesAutomationDeps\(\)\)/
+  );
   assert.match(settingsScreenSource, /function settingsDataDeps\(\): ClientSettingsDataControllerDeps/);
   assert.match(settingsScreenSource, /CairnSettingsDataController\.render\(settingsDataDeps\(\)\)/);
   assert.doesNotMatch(settingsScreenSource, /CairnSettingsSurface\.sourcesSliceHtml/);
   assert.doesNotMatch(settingsScreenSource, /CairnSettingsSurface\.automationSliceHtml/);
   assert.doesNotMatch(settingsScreenSource, /CairnSettingsAgents\.agentsSliceHtml/);
   assert.doesNotMatch(settingsScreenSource, /CairnSettingsAgents\.agentListHtml/);
-  assert.doesNotMatch(settingsScreenSource, /function settingsData\(|function settingsWorkingModel\(|function settingsSourcesSliceHtml\(|function settingsAutomationSliceHtml\(/);
-  assert.doesNotMatch(settingsScreenSource, /function renderSettingsSources|function renderSettingsAutomation|garminSyncBtn|ahUrlCopy|geminiApiKey/);
+  assert.doesNotMatch(
+    settingsScreenSource,
+    /function settingsData\(|function settingsWorkingModel\(|function settingsSourcesSliceHtml\(|function settingsAutomationSliceHtml\(/
+  );
+  assert.doesNotMatch(
+    settingsScreenSource,
+    /function renderSettingsSources|function renderSettingsAutomation|garminSyncBtn|ahUrlCopy|geminiApiKey/
+  );
   assert.doesNotMatch(settingsScreenSource, /function wireSettingsCliUpdate|function renderAgentList/);
   assert.doesNotMatch(settingsScreenSource, /function phoneAccessCardHtml/);
   assert.doesNotMatch(settingsScreenSource, /function wirePhoneAccessCard/);
@@ -4449,32 +4973,59 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(chatClientSource, /function chatWantsFuelSurface/);
   assert.match(chatClientSource, /function chatShellHtml\(\): string/);
   assert.match(chatClientSource, /function chatHeaderActionsHtml\(\): string/);
-  assert.match(chatClientSource, /function chatStarterChipsHtml\(starters: readonly unknown\[\] = CHAT_STARTERS\): string/);
+  assert.match(
+    chatClientSource,
+    /function chatStarterChipsHtml\(starters: readonly unknown\[\] = CHAT_STARTERS\): string/
+  );
   assert.match(chatClientSource, /function chatDividerHtml\(iso: unknown, label: unknown\): string/);
   assert.match(chatClientSource, /function chatEarlierBarHtml\(\): string/);
   assert.match(chatClientSource, /const CAIRN_CHAT_CLIENT = \{/);
   assert.match(chatStarterChipsSource, /function drawChatStarterChips\(log: Element\): void/);
-  assert.match(chatFuelContextSource, /function chatFuelWantsSurface\(messages: Partial<ChatScreenMessage>\[\] = chatFuelContextMessages\): boolean/);
-  assert.match(chatEarlierHistorySource, /function expandChatEarlierHistory\(log: HTMLElement, bar: Element, block: HTMLElement\): void/);
-  assert.match(chatAttachmentSource, /async function chatAttachmentCompressImage\(file: File\): Promise<ChatAttachmentImagePayload>/);
+  assert.match(
+    chatFuelContextSource,
+    /function chatFuelWantsSurface\(messages: Partial<ChatScreenMessage>\[\] = chatFuelContextMessages\): boolean/
+  );
+  assert.match(
+    chatEarlierHistorySource,
+    /function expandChatEarlierHistory\(log: HTMLElement, bar: Element, block: HTMLElement\): void/
+  );
+  assert.match(
+    chatAttachmentSource,
+    /async function chatAttachmentCompressImage\(file: File\): Promise<ChatAttachmentImagePayload>/
+  );
   assert.match(chatAttachmentSource, /function chatAttachmentResetFocusAfterNativePicker/);
   assert.doesNotMatch(chatAttachmentSource, /classList\.remove\("kb-(?:geometry-)?open"\)/);
   assert.match(chatAttachmentSource, /function chatAttachmentSettleAfterNativePicker/);
   assert.match(chatAttachmentSource, /nativePickerSuppressMs:\s*options\.nativePickerSuppressMs\s*\?\?\s*900/);
-  assert.match(chatAttachmentSource, /Object\.assign\(globalThis,\s*\{ CairnChatAttachment: CAIRN_CHAT_ATTACHMENT \}\)/);
+  assert.match(
+    chatAttachmentSource,
+    /Object\.assign\(globalThis,\s*\{ CairnChatAttachment: CAIRN_CHAT_ATTACHMENT \}\)/
+  );
   assert.match(chatComposerFocusSource, /function chatComposerReleaseStaleInputFocus/);
   assert.match(chatComposerFocusSource, /function chatComposerRecoverInputFocusFromTap/);
   assert.match(chatComposerFocusSource, /function chatComposerWireFocus/);
-  assert.match(chatComposerFocusSource, /Object\.assign\(globalThis,\s*\{ CairnChatComposerFocus: CAIRN_CHAT_COMPOSER_FOCUS \}\)/);
-  assert.match(chatComposerControllerSource, /function wireChatComposer\(deps: ChatComposerControllerDeps\): ChatComposerControllerHandle/);
+  assert.match(
+    chatComposerFocusSource,
+    /Object\.assign\(globalThis,\s*\{ CairnChatComposerFocus: CAIRN_CHAT_COMPOSER_FOCUS \}\)/
+  );
+  assert.match(
+    chatComposerControllerSource,
+    /function wireChatComposer\(deps: ChatComposerControllerDeps\): ChatComposerControllerHandle/
+  );
   assert.match(chatComposerControllerSource, /CairnChatAttachment\.resetFocusAfterNativePicker/);
   assert.match(chatComposerControllerSource, /CairnChatAttachment\.settleAfterNativePicker/);
   assert.match(chatComposerControllerSource, /CairnChatAttachment\.compressImage\(f\)/);
   assert.match(chatComposerControllerSource, /CairnChatAttachment\.previewImage/);
   assert.match(chatComposerControllerSource, /CairnChatComposerFocus\.wireFocus/);
-  assert.match(chatComposerControllerSource, /fileInput\.addEventListener\("change"[\s\S]*resetChatFocusAfterNativePicker\(\)/);
+  assert.match(
+    chatComposerControllerSource,
+    /fileInput\.addEventListener\("change"[\s\S]*resetChatFocusAfterNativePicker\(\)/
+  );
   assert.match(chatComposerControllerSource, /classList\.contains\("kb-geometry-open"\)/);
-  assert.match(chatComposerControllerSource, /Object\.assign\(globalThis,\s*\{ CairnChatComposerController: CAIRN_CHAT_COMPOSER_CONTROLLER \}\)/);
+  assert.match(
+    chatComposerControllerSource,
+    /Object\.assign\(globalThis,\s*\{ CairnChatComposerController: CAIRN_CHAT_COMPOSER_CONTROLLER \}\)/
+  );
   assert.match(chatMessageSource, /function appendMsg\(/);
   assert.match(chatMessageSource, /function chatMessageDayISO\(ts: unknown\): string/);
   assert.match(chatMessageSource, /function chatDivider\(iso: string\): Element/);
@@ -4482,8 +5033,14 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(chatTurnRecordsSource, /function\s+parseChatTurnEvent\(event: Event\): ChatTurnRecord \| null/);
   assert.match(chatTurnRecordsSource, /function\s+saveChatTurnDraft\(value: string\): void/);
   assert.match(chatTurnRecordsSource, /const CAIRN_CHAT_TURN_RECORDS: ChatTurnRecordsApi/);
-  assert.match(chatLayoutSource, /function\s+wireChatJump\(log: HTMLElement \| null, jump: HTMLElement \| null\): void/);
-  assert.match(chatLayoutSource, /function\s+autosizeChatInput\(el: HTMLTextAreaElement \| HTMLInputElement \| null\): void/);
+  assert.match(
+    chatLayoutSource,
+    /function\s+wireChatJump\(log: HTMLElement \| null, jump: HTMLElement \| null\): void/
+  );
+  assert.match(
+    chatLayoutSource,
+    /function\s+autosizeChatInput\(el: HTMLTextAreaElement \| HTMLInputElement \| null\): void/
+  );
   assert.match(chatLayoutSource, /function\s+measureChatTop\(\): void/);
   assert.match(chatLayoutSource, /const CAIRN_CHAT_LAYOUT: ChatLayoutApi/);
   assert.match(chatLayoutSource, /Object\.assign\(globalThis,\s*\{ CairnChatLayout: CAIRN_CHAT_LAYOUT \}\)/);
@@ -4494,62 +5051,119 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(chatTurnClientSource, /function\s+chatTeardownMonitor\(\): void/);
   assert.doesNotMatch(chatTurnClientSource, /function\s+measureChatTop\(\): void/);
   assert.match(chatTurnClientSource, /Object\.assign\(globalThis,\s*\{/);
-  assert.match(chatHistoryClientSource, /function openChatHistory\(options: \{ session\?: string \| null \} = \{\}\): void/);
+  assert.match(
+    chatHistoryClientSource,
+    /function openChatHistory\(options: \{ session\?: string \| null \} = \{\}\): void/
+  );
   assert.match(chatHistoryClientSource, /function histSessionRow/);
   assert.match(chatHistoryClientSource, /function histHitRow/);
   assert.match(chatHistoryClientSource, /Object\.assign\(globalThis,\s*\{ openChatHistory \}\)/);
   assert.match(chatScreenSource, /async function renderChat\(\): Promise<void>/);
   assert.doesNotMatch(chatScreenSource, /function appendMsg\(/);
   assert.doesNotMatch(chatScreenSource, /function chatDayISO\(ts: unknown\): string/);
-  assert.doesNotMatch(chatScreenSource, /let chatFuelContext|function drawChatChips\([\s\S]*starterChipsHtml|function expandChatEarlier\([\s\S]*maxHeight/);
+  assert.doesNotMatch(
+    chatScreenSource,
+    /let chatFuelContext|function drawChatChips\([\s\S]*starterChipsHtml|function expandChatEarlier\([\s\S]*maxHeight/
+  );
   assert.match(chatScreenSource, /CairnChatComposerController\.wire/);
   assert.doesNotMatch(chatScreenSource, /CairnChatAttachment\.resetFocusAfterNativePicker/);
   assert.doesNotMatch(chatScreenSource, /CairnChatAttachment\.settleAfterNativePicker/);
   assert.doesNotMatch(chatScreenSource, /CairnChatAttachment\.compressImage\(f\)/);
   assert.doesNotMatch(chatScreenSource, /CairnChatAttachment\.previewImage/);
   assert.doesNotMatch(chatScreenSource, /CairnChatComposerFocus\.wireFocus/);
-  assert.doesNotMatch(chatScreenSource, /fileInput\.addEventListener\("change"[\s\S]*resetChatFocusAfterNativePicker\(\)/);
+  assert.doesNotMatch(
+    chatScreenSource,
+    /fileInput\.addEventListener\("change"[\s\S]*resetChatFocusAfterNativePicker\(\)/
+  );
   assert.doesNotMatch(chatScreenSource, /classList\.contains\("kb-geometry-open"\)/);
-  assert.doesNotMatch(chatScreenSource, /function\s+chatComposerReleaseStaleInputFocus|function\s+chatComposerRecoverInputFocusFromTap/);
-  assert.match(chatScreenSource, /Plan editor orchestration lives in \/js\/plan-editor-controller\.js; Plan Endurance lives in \/js\/plan-endurance-client\.js/);
+  assert.doesNotMatch(
+    chatScreenSource,
+    /function\s+chatComposerReleaseStaleInputFocus|function\s+chatComposerRecoverInputFocusFromTap/
+  );
+  assert.match(
+    chatScreenSource,
+    /Plan editor orchestration lives in \/js\/plan-editor-controller\.js; Plan Endurance lives in \/js\/plan-endurance-client\.js/
+  );
   assert.match(planEnduranceModelSource, /const PLAN_ENDURANCE_PHASES/);
   assert.match(planEnduranceModelSource, /function planEnduranceRampHtml\(goal: PlanEnduranceGoalRow/);
   assert.match(planEnduranceModelSource, /function planEndurancePresets\(goal: PlanEnduranceGoalRow/);
-  assert.match(planEnduranceModelSource, /function planEnduranceDraftCardHtml\(proposal: PlanEnduranceProposal\): string/);
+  assert.match(
+    planEnduranceModelSource,
+    /function planEnduranceDraftCardHtml\(proposal: PlanEnduranceProposal\): string/
+  );
   assert.match(planEnduranceModelSource, /function planEnduranceRuns\(plan: unknown\): PlanEnduranceRunRow\[\]/);
   assert.match(planEnduranceModelSource, /CairnPlanEnduranceModel/);
-  assert.match(planEnduranceSource, /type EnduranceGoalRow = import\("\.\.\/contracts\/client-api\.js"\)\.ClientEnduranceGoal/);
-  assert.match(planEnduranceSource, /type EnduranceComplianceRow = import\("\.\.\/contracts\/client-api\.js"\)\.ClientRunCompliance/);
+  assert.match(
+    planEnduranceSource,
+    /type EnduranceGoalRow = import\("\.\.\/contracts\/client-api\.js"\)\.ClientEnduranceGoal/
+  );
+  assert.match(
+    planEnduranceSource,
+    /type EnduranceComplianceRow = import\("\.\.\/contracts\/client-api\.js"\)\.ClientRunCompliance/
+  );
   assert.match(planEnduranceSource, /async function renderPlanEndurance\(\): Promise<void>/);
-  assert.match(planEnduranceSource, /function paintPlanEndurance\(\s*goalValue: EnduranceGoalRow \| null,\s*compliance: EnduranceComplianceRow \| null,/);
+  assert.match(
+    planEnduranceSource,
+    /function paintPlanEndurance\(\s*goalValue: EnduranceGoalRow \| null,\s*compliance: EnduranceComplianceRow \| null,/
+  );
   assert.match(planEnduranceSource, /function enduranceProposalOpOpts\(\): ClientAgentOpHandlers/);
   assert.match(planEnduranceSource, /CairnPlanEndurance/);
   assert.match(planEditorSource, /type PlanEditorItem = \{/);
   assert.match(planEditorSource, /function dayModelFromPlan\(day: PlanEditorDay \| PlanEditorApiDay\)/);
   assert.match(planEditorSource, /function progDayHtml\(day: PlanEditorDay, dayIndex: number\): string/);
-  assert.match(planEditorSource, /function pitemHtml\(item: PlanEditorItem, dayIndex: number, itemIndex: number, lastIndex: number\): string/);
+  assert.match(
+    planEditorSource,
+    /function pitemHtml\(item: PlanEditorItem, dayIndex: number, itemIndex: number, lastIndex: number\): string/
+  );
   assert.match(planEditorSource, /CairnPlanEditor/);
-  assert.doesNotMatch(planEditorSource, /async function renderPlanEditor\(\): Promise<void>|mountSaveBar\(\{|api\("\/plan",\s*\{ method: "PUT"/);
-  assert.match(planEditorFormSource, /function syncPlanModel\(model: PlanEditorFormModelDay\[\], root: ParentNode\): void/);
-  assert.match(planEditorFormSource, /function serializePlanDays\(model: PlanEditorFormModelDay\[\]\): PlanEditorFormSaveDay\[\]/);
+  assert.doesNotMatch(
+    planEditorSource,
+    /async function renderPlanEditor\(\): Promise<void>|mountSaveBar\(\{|api\("\/plan",\s*\{ method: "PUT"/
+  );
+  assert.match(
+    planEditorFormSource,
+    /function syncPlanModel\(model: PlanEditorFormModelDay\[\], root: ParentNode\): void/
+  );
+  assert.match(
+    planEditorFormSource,
+    /function serializePlanDays\(model: PlanEditorFormModelDay\[\]\): PlanEditorFormSaveDay\[\]/
+  );
   assert.match(planEditorFormSource, /CairnPlanEditorForm/);
-  assert.doesNotMatch(planEditorFormSource, /async function renderPlanEditor\(\): Promise<void>|mountSaveBar\(\{|api\("\/plan",\s*\{ method: "PUT"/);
+  assert.doesNotMatch(
+    planEditorFormSource,
+    /async function renderPlanEditor\(\): Promise<void>|mountSaveBar\(\{|api\("\/plan",\s*\{ method: "PUT"/
+  );
   assert.match(planEditorControllerSource, /async function renderPlanEditor\(\): Promise<void>/);
   assert.match(planEditorControllerSource, /CairnPlanEditorForm/);
-  assert.doesNotMatch(planEditorControllerSource, /function serializePlanDays\(model: PlanEditorControllerModelDay\[\]\)/);
+  assert.doesNotMatch(
+    planEditorControllerSource,
+    /function serializePlanDays\(model: PlanEditorControllerModelDay\[\]\)/
+  );
   assert.match(planEditorControllerSource, /mountSaveBar\(\{/);
   assert.match(planEditorControllerSource, /api\("\/plan",\s*\{ method: "PUT"/);
   assert.match(planEditorControllerSource, /CairnPlanEditorController/);
   assert.match(dayFuelSource, /const MEAL_LABEL: Record<string, string>/);
   assert.match(dayFuelSource, /function dayFuelHtml\(day: DayFuelData \| null \| undefined\): string/);
   assert.match(dayFuelSource, /CairnDayFuel/);
-  assert.match(dayFuelControllerSource, /function loadDayFuel\(token: number, options: DayFuelControllerOptions = \{\}\): Promise<void>/);
-  assert.match(dayFuelControllerSource, /function openFoodEdit\(id: number, fromEl: Element, options: DayFuelControllerOptions = \{\}\): void/);
+  assert.match(
+    dayFuelControllerSource,
+    /function loadDayFuel\(token: number, options: DayFuelControllerOptions = \{\}\): Promise<void>/
+  );
+  assert.match(
+    dayFuelControllerSource,
+    /function openFoodEdit\(id: number, fromEl: Element, options: DayFuelControllerOptions = \{\}\): void/
+  );
   assert.match(dayFuelControllerSource, /CairnDayFuelController/);
   assert.match(mealRowSource, /function mealSlotFor\(name: unknown, index: unknown\): string/);
   assert.match(mealRowSource, /function mealsCtxFor\(plan: unknown, now\?: unknown\): MealRowPlannerContext/);
-  assert.match(mealRowSource, /function mealRowHtml\(meal: unknown, mealIndex\?: number, options\?: MealRowRenderOptions\): string/);
-  assert.match(mealRowSource, /function mealDayHtml\(day: unknown, dayIndex: number, context: MealRowDayContext\): string/);
+  assert.match(
+    mealRowSource,
+    /function mealRowHtml\(meal: unknown, mealIndex\?: number, options\?: MealRowRenderOptions\): string/
+  );
+  assert.match(
+    mealRowSource,
+    /function mealDayHtml\(day: unknown, dayIndex: number, context: MealRowDayContext\): string/
+  );
   assert.match(mealRowSource, /CairnMealRows/);
   assert.match(mealPlanSource, /const mealRows = CairnMealRows/);
   assert.match(mealPlanSource, /function currentMealPlan\(plans: unknown\): MealRecord \| null/);
@@ -4564,7 +5178,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(mealRecipeSource, /function mealRecipeHtml\(recipe: unknown\): string/);
   assert.match(mealRecipeSource, /function mealRecipeLoadingHtml\(\): string/);
   assert.match(mealRecipeSource, /CairnMealRecipe/);
-  assert.match(mealRecipeControllerSource, /function openMealSheet\(current: MealRecipeControllerPlan, dayIndex: number, mealIndex: number\): void/);
+  assert.match(
+    mealRecipeControllerSource,
+    /function openMealSheet\(current: MealRecipeControllerPlan, dayIndex: number, mealIndex: number\): void/
+  );
   assert.match(mealRecipeControllerSource, /function recipeOpOpts\(/);
   assert.match(mealRecipeControllerSource, /function reconnectRecipe\(job\?: unknown\): ClientAgentOpHandlers \| null/);
   assert.match(mealRecipeControllerSource, /CairnMealRecipeController/);
@@ -4580,21 +5197,36 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(mealSwapRowActionsSource, /CairnMealRecipeController|recipeController\.openMealSheet/);
   assert.match(mealSwapControllerSource, /CairnMealSwapController/);
   assert.match(mealSwapControllerSource, /CairnMealSwapData\.days/);
-  assert.match(mealPlannerJobsSource, /function mealPlannerJobRunCoachMealPlan\(agent: string, instruction: string\): void/);
+  assert.match(
+    mealPlannerJobsSource,
+    /function mealPlannerJobRunCoachMealPlan\(agent: string, instruction: string\): void/
+  );
   assert.match(mealPlannerJobsSource, /function mealPlannerJobReconnectMealPlan\(\): ClientAgentOpHandlers \| null/);
   assert.match(mealPlannerJobsSource, /CairnMealPlannerJobs/);
-  assert.match(mealPlannerActionsSource, /function mealPlannerActionsRenderMealPlans\(plans: unknown, sel = "#meallist"/);
+  assert.match(
+    mealPlannerActionsSource,
+    /function mealPlannerActionsRenderMealPlans\(plans: unknown, sel = "#meallist"/
+  );
   assert.match(mealPlannerActionsSource, /function mealPlannerActionsWireMealPlannerBody/);
   assert.match(mealPlannerActionsSource, /CairnMealSwapController\.wireMealRows/);
   assert.match(mealPlannerActionsSource, /CairnMealPlannerActions/);
   assert.match(mealPlannerControllerSource, /function renderMealPlans\(plans: unknown, selector = "#meallist"/);
   assert.match(mealPlannerControllerSource, /function wireMealPlannerBody\(/);
-  assert.match(mealPlannerControllerSource, /function reconnectMealPlan\(job\?: unknown\): ClientAgentOpHandlers \| null/);
+  assert.match(
+    mealPlannerControllerSource,
+    /function reconnectMealPlan\(job\?: unknown\): ClientAgentOpHandlers \| null/
+  );
   assert.match(mealPlannerControllerSource, /CairnMealPlannerJobs\.reconnectMealPlan/);
   assert.match(mealPlannerControllerSource, /CairnMealPlannerActions\.wireMealPlannerBody/);
-  assert.doesNotMatch(mealPlannerControllerSource, /function submitMealSwap|function mealSwapOpOpts|function reconnectMealSwap|function moveMealRow|function wireMealRows|CairnMealRecipeController\.openMealSheet|CairnMealSwapController\.wireMealRows/);
+  assert.doesNotMatch(
+    mealPlannerControllerSource,
+    /function submitMealSwap|function mealSwapOpOpts|function reconnectMealSwap|function moveMealRow|function wireMealRows|CairnMealRecipeController\.openMealSheet|CairnMealSwapController\.wireMealRows/
+  );
   assert.match(coachProposalControllerSource, /function runCoachProposal\(agent: string, instruction: string\): void/);
-  assert.match(coachProposalControllerSource, /async function applyProposalById\(id: string \| number \| undefined, btn\?: Element \| null\): Promise<unknown>/);
+  assert.match(
+    coachProposalControllerSource,
+    /async function applyProposalById\(id: string \| number \| undefined, btn\?: Element \| null\): Promise<unknown>/
+  );
   assert.match(coachProposalControllerSource, /function renderProposals\(proposals: unknown\): void/);
   assert.match(coachProposalControllerSource, /function reconnectProposal\(\): ClientAgentOpHandlers \| null/);
   assert.match(coachProposalControllerSource, /CairnCoachProposalController/);
@@ -4605,7 +5237,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(coachMealsScreenSource, /CairnMealPlannerController\.wireMealPlannerBody/);
   assert.match(coachMealsScreenSource, /CairnCoachProposalController\.runCoachProposal/);
   assert.match(coachMealsScreenSource, /CairnCoachProposalController\.renderProposals/);
-  assert.doesNotMatch(coachMealsScreenSource, /function openMealSheet|function recipeOpOpts|function reconnectRecipe|function reconnectMealPlan|function reconnectMealSwap|function wireMealRows|function draftWeeklyMeals|function runCoach|function coachProposalOpOpts|function renderProposals|async function applyProposalById|function reconnectProposal|lastApplyClamp/);
+  assert.doesNotMatch(
+    coachMealsScreenSource,
+    /function openMealSheet|function recipeOpOpts|function reconnectRecipe|function reconnectMealPlan|function reconnectMealSwap|function wireMealRows|function draftWeeklyMeals|function runCoach|function coachProposalOpOpts|function renderProposals|async function applyProposalById|function reconnectProposal|lastApplyClamp/
+  );
   assert.match(coachMealsScreenSource, /Object\.assign\(globalThis, \{/);
   assert.match(foodNoteSource, /type FoodNoteRow = \{/);
   assert.match(foodNoteSource, /function foodIngredients\(value: unknown\): FoodIngredientRow\[\]/);
@@ -4625,7 +5260,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(healthClientSource, /const MAX_DOC_BYTES = 15 \* 1024 \* 1024/);
   assert.match(healthClientSource, /function guessUploadMime\(file: UploadFileLike/);
   assert.match(healthClientSource, /CairnHealthEvidence\.directiveHtml/);
-  assert.doesNotMatch(healthClientSource, /function evidenceListHtml|function evidenceCountMap|function directiveHtml\(d: HealthDirectiveRow/);
+  assert.doesNotMatch(
+    healthClientSource,
+    /function evidenceListHtml|function evidenceCountMap|function directiveHtml\(d: HealthDirectiveRow/
+  );
   assert.match(healthClientSource, /function formatMarkerNumber\(value: unknown\): string/);
   assert.match(
     healthClientSource,
@@ -4643,8 +5281,14 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(healthPictureControllerSource, /type HealthPictureControllerDeps = \{/);
   assert.match(healthPictureControllerSource, /function getHealthPictureCache\(\): HealthPictureCache \| null/);
   assert.match(healthPictureControllerSource, /function paintHealthPicture\(deps: HealthPictureControllerDeps\): void/);
-  assert.match(healthPictureControllerSource, /async function runHealthReview\(deps: HealthPictureControllerDeps\): Promise<void>/);
-  assert.match(healthPictureControllerSource, /async function loadHealthPicture\(token: number, docsPromise: Promise<unknown>, deps: HealthPictureControllerDeps\): Promise<void>/);
+  assert.match(
+    healthPictureControllerSource,
+    /async function runHealthReview\(deps: HealthPictureControllerDeps\): Promise<void>/
+  );
+  assert.match(
+    healthPictureControllerSource,
+    /async function loadHealthPicture\(token: number, docsPromise: Promise<unknown>, deps: HealthPictureControllerDeps\): Promise<void>/
+  );
   assert.match(healthPictureControllerSource, /CairnHealthPictureController/);
   assert.match(healthMarkersSource, /type HealthMarkersPoint = \{/);
   assert.match(healthMarkersSource, /function markerChartSvg\(marker: HealthMarkersRow/);
@@ -4652,8 +5296,14 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(healthMarkersSource, /function hmkRowHtml\(marker: HealthMarkersRow/);
   assert.match(healthMarkersSource, /CairnHealthMarkers/);
   assert.match(healthMarkersControllerSource, /type HealthMarkersControllerGroup = \{/);
-  assert.match(healthMarkersControllerSource, /function markerGroups\(data: HealthMarkersControllerResponse, markers: HealthMarkersControllerRow\[\]\): HealthMarkersControllerGroup\[\]/);
-  assert.match(healthMarkersControllerSource, /function groupMarkers\(groups: HealthMarkersControllerGroup\[\], markers: HealthMarkersControllerRow\[\]\): Map<string, HealthMarkersControllerRow\[\]>/);
+  assert.match(
+    healthMarkersControllerSource,
+    /function markerGroups\(data: HealthMarkersControllerResponse, markers: HealthMarkersControllerRow\[\]\): HealthMarkersControllerGroup\[\]/
+  );
+  assert.match(
+    healthMarkersControllerSource,
+    /function groupMarkers\(groups: HealthMarkersControllerGroup\[\], markers: HealthMarkersControllerRow\[\]\): Map<string, HealthMarkersControllerRow\[\]>/
+  );
   assert.match(healthMarkersControllerSource, /CairnHealthClient\.orderMarkersForDisplay/);
   assert.match(healthMarkersControllerSource, /CairnHealthClient\.lipidGroupNoteHtml/);
   assert.match(healthMarkersControllerSource, /CairnHealthMarkers\.hmkRowHtml/);
@@ -4675,34 +5325,76 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(healthReadSource, /function priorityMarkersSectionHtml\(markersInput: unknown/);
   assert.match(healthReadSource, /function optimalPhrase\(marker: HealthReadMarker/);
   assert.match(healthReadSource, /CairnHealthRead/);
-  assert.match(healthReadSupplementsSource, /function load\(deps: ClientHealthReadControllerDeps, token: number\): void/);
-  assert.match(healthReadSupplementsSource, /function render\(list: unknown, deps: ClientHealthReadControllerDeps, token\?: number \| null\): void/);
-  assert.match(healthReadSupplementsSource, /async function understandFromInput\(deps: ClientHealthReadControllerDeps\): Promise<void>/);
-  assert.match(healthReadSupplementsSource, /async function remove\(id: number, deps: ClientHealthReadControllerDeps\): Promise<void>/);
+  assert.match(
+    healthReadSupplementsSource,
+    /function load\(deps: ClientHealthReadControllerDeps, token: number\): void/
+  );
+  assert.match(
+    healthReadSupplementsSource,
+    /function render\(list: unknown, deps: ClientHealthReadControllerDeps, token\?: number \| null\): void/
+  );
+  assert.match(
+    healthReadSupplementsSource,
+    /async function understandFromInput\(deps: ClientHealthReadControllerDeps\): Promise<void>/
+  );
+  assert.match(
+    healthReadSupplementsSource,
+    /async function remove\(id: number, deps: ClientHealthReadControllerDeps\): Promise<void>/
+  );
   assert.match(healthReadSupplementsSource, /CairnHealthReadSupplements/);
   assert.match(healthReadControllerSource, /function paintHealthReadTab\(deps: ClientHealthReadControllerDeps\): void/);
-  assert.match(healthReadControllerSource, /function loadRecoverySummary\(deps: ClientHealthReadControllerDeps, token: number, selector: string\): void/);
-  assert.match(healthReadControllerSource, /function loadPriorityMarkers\(deps: ClientHealthReadControllerDeps, token: number\): void/);
+  assert.match(
+    healthReadControllerSource,
+    /function loadRecoverySummary\(deps: ClientHealthReadControllerDeps, token: number, selector: string\): void/
+  );
+  assert.match(
+    healthReadControllerSource,
+    /function loadPriorityMarkers\(deps: ClientHealthReadControllerDeps, token: number\): void/
+  );
   assert.match(healthReadControllerSource, /CairnHealthReadSupplements\.load/);
   assert.match(healthReadControllerSource, /CairnHealthReadSupplements\.render/);
   assert.match(healthReadControllerSource, /CairnHealthReadSupplements\.understandFromInput/);
   assert.match(healthReadControllerSource, /CairnHealthReadSupplements\.remove/);
   assert.match(healthReadControllerSource, /CairnHealthReadController/);
-  assert.match(healthStandingPrimitivesSource, /type HealthStandingPrimitiveComparison = import\("\.\.\/contracts\/client-api\.js"\)\.ClientHealthStandingComparison/);
-  assert.match(healthStandingPrimitivesSource, /function hstandCompHtml\(comparison: HealthStandingPrimitiveComparison/);
+  assert.match(
+    healthStandingPrimitivesSource,
+    /type HealthStandingPrimitiveComparison = import\("\.\.\/contracts\/client-api\.js"\)\.ClientHealthStandingComparison/
+  );
+  assert.match(
+    healthStandingPrimitivesSource,
+    /function hstandCompHtml\(comparison: HealthStandingPrimitiveComparison/
+  );
   assert.match(healthStandingPrimitivesSource, /function hstandBpCardHtml/);
   assert.match(healthStandingPrimitivesSource, /function hstandBodyCompHtml/);
   assert.match(healthStandingPrimitivesSource, /CairnHealthStandingPrimitives/);
-  assert.match(healthStandingSource, /type HealthStandingRead = import\("\.\.\/contracts\/client-api\.js"\)\.ClientHealthStanding/);
+  assert.match(
+    healthStandingSource,
+    /type HealthStandingRead = import\("\.\.\/contracts\/client-api\.js"\)\.ClientHealthStanding/
+  );
   assert.match(healthStandingSource, /const \{\s*hstandDecade,/);
   assert.match(healthStandingSource, /function renderHealthStandingHtml\(data: HealthStandingRead/);
   assert.match(healthStandingSource, /\} = CairnHealthStandingPrimitives/);
   assert.match(healthStandingSource, /CairnHealthStanding/);
-  assert.match(healthStandingControllerSource, /type HealthStandingControllerRead = import\("\.\.\/contracts\/client-api\.js"\)\.ClientHealthStanding/);
-  assert.match(healthStandingControllerSource, /function render\(data: HealthStandingControllerRead \| null \| undefined, deps: ClientHealthStandingControllerDeps\): void/);
-  assert.match(healthStandingControllerSource, /function openBpSheet\(deps: ClientHealthStandingControllerDeps\): void/);
-  assert.match(healthStandingControllerSource, /function load\(deps: ClientHealthStandingControllerDeps, token: number, refAge\?: unknown\): void/);
-  assert.match(healthStandingControllerSource, /function paintReview\(deps: ClientHealthStandingControllerDeps\): void/);
+  assert.match(
+    healthStandingControllerSource,
+    /type HealthStandingControllerRead = import\("\.\.\/contracts\/client-api\.js"\)\.ClientHealthStanding/
+  );
+  assert.match(
+    healthStandingControllerSource,
+    /function render\(data: HealthStandingControllerRead \| null \| undefined, deps: ClientHealthStandingControllerDeps\): void/
+  );
+  assert.match(
+    healthStandingControllerSource,
+    /function openBpSheet\(deps: ClientHealthStandingControllerDeps\): void/
+  );
+  assert.match(
+    healthStandingControllerSource,
+    /function load\(deps: ClientHealthStandingControllerDeps, token: number, refAge\?: unknown\): void/
+  );
+  assert.match(
+    healthStandingControllerSource,
+    /function paintReview\(deps: ClientHealthStandingControllerDeps\): void/
+  );
   assert.match(healthStandingControllerSource, /deps\.api\(`\/health\/standing\?reference_age=/);
   assert.match(healthStandingControllerSource, /deps\.api\("\/blood-pressure"/);
   assert.match(healthStandingControllerSource, /CairnHealthStandingController/);
@@ -4712,63 +5404,147 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(healthDocsSource, /Object\.assign\(globalThis, \{/);
   assert.match(healthDocsSource, /CairnHealthDocs/);
   assert.match(healthLearnedSource, /const LEARNED_GROUPS/);
-  assert.match(healthLearnedSource, /type ClientLearnedTimeline = import\("\.\.\/contracts\/client-api\.js"\)\.ClientLearnedTimeline/);
-  assert.match(healthLearnedSource, /function learnedItemHtml\(item: Partial<ClientLearnedItem> \| null \| undefined, index: number\): string/);
-  assert.match(healthLearnedSource, /function learnedTimelineHtml\(data: ClientLearnedTimeline \| null \| undefined\): string/);
+  assert.match(
+    healthLearnedSource,
+    /type ClientLearnedTimeline = import\("\.\.\/contracts\/client-api\.js"\)\.ClientLearnedTimeline/
+  );
+  assert.match(
+    healthLearnedSource,
+    /function learnedItemHtml\(item: Partial<ClientLearnedItem> \| null \| undefined, index: number\): string/
+  );
+  assert.match(
+    healthLearnedSource,
+    /function learnedTimelineHtml\(data: ClientLearnedTimeline \| null \| undefined\): string/
+  );
   assert.match(healthLearnedSource, /CairnHealthLearned/);
   assert.match(healthRecordsSource, /type HealthRecordDocument = /);
-  assert.match(healthRecordsSource, /function recordsUploadHtml\(filePrompt = CairnHealthClient\.H_FILE_PROMPT\): string/);
+  assert.match(
+    healthRecordsSource,
+    /function recordsUploadHtml\(filePrompt = CairnHealthClient\.H_FILE_PROMPT\): string/
+  );
   assert.match(healthRecordsSource, /function recordsListHtml\(docsInput: unknown\): string/);
   assert.match(healthRecordsSource, /CairnHealthRecords/);
   assert.match(healthDocUploadControllerSource, /type HealthDocUploadDeps = \{/);
   assert.match(healthDocUploadControllerSource, /function wireHealthDocUpload\(deps: HealthDocUploadDeps\): void/);
-  assert.match(healthDocUploadControllerSource, /function refreshPictureAfterHealthDocUpload\(doc: HealthDocUploadDocument, deps: HealthDocUploadDeps\): void/);
+  assert.match(
+    healthDocUploadControllerSource,
+    /function refreshPictureAfterHealthDocUpload\(doc: HealthDocUploadDocument, deps: HealthDocUploadDeps\): void/
+  );
   assert.match(healthDocUploadControllerSource, /CairnHealthDocUploadController/);
-  assert.match(healthDocDateActionsSource, /function openHealthDocDateEditor\(row: HTMLElement, editBtn: HTMLElement\): void/);
-  assert.match(healthDocDateActionsSource, /async function saveHealthDocDate\(id: string \| number, deps: ClientHealthDocActionsControllerDeps\): Promise<void>/);
+  assert.match(
+    healthDocDateActionsSource,
+    /function openHealthDocDateEditor\(row: HTMLElement, editBtn: HTMLElement\): void/
+  );
+  assert.match(
+    healthDocDateActionsSource,
+    /async function saveHealthDocDate\(id: string \| number, deps: ClientHealthDocActionsControllerDeps\): Promise<void>/
+  );
   assert.match(healthDocDateActionsSource, /CairnHealthDocDateActions/);
-  assert.match(healthDocLifecycleActionsSource, /function pollLifecycleHealthDoc\(id: string \| number, deps: ClientHealthDocActionsControllerDeps\): void/);
-  assert.match(healthDocLifecycleActionsSource, /async function reanalyzeHealthDoc\(id: string \| number, deps: ClientHealthDocActionsControllerDeps\): Promise<void>/);
+  assert.match(
+    healthDocLifecycleActionsSource,
+    /function pollLifecycleHealthDoc\(id: string \| number, deps: ClientHealthDocActionsControllerDeps\): void/
+  );
+  assert.match(
+    healthDocLifecycleActionsSource,
+    /async function reanalyzeHealthDoc\(id: string \| number, deps: ClientHealthDocActionsControllerDeps\): Promise<void>/
+  );
   assert.match(healthDocLifecycleActionsSource, /CairnHealthDocLifecycleActions/);
   assert.match(healthDocActionsControllerSource, /type HealthDocActionsDeps = ClientHealthDocActionsControllerDeps/);
-  assert.match(healthDocActionsControllerSource, /function wireHealthDocActions\(el: HTMLElement \| null, deps: HealthDocActionsDeps\): void/);
-  assert.match(healthDocActionsControllerSource, /function hdocActionsPollDoc\(id: string \| number, deps: HealthDocActionsDeps\): void/);
+  assert.match(
+    healthDocActionsControllerSource,
+    /function wireHealthDocActions\(el: HTMLElement \| null, deps: HealthDocActionsDeps\): void/
+  );
+  assert.match(
+    healthDocActionsControllerSource,
+    /function hdocActionsPollDoc\(id: string \| number, deps: HealthDocActionsDeps\): void/
+  );
   assert.match(healthDocActionsControllerSource, /CairnHealthDocDateActions\.saveDate/);
   assert.match(healthDocActionsControllerSource, /CairnHealthDocLifecycleActions\.reanalyze/);
-  assert.doesNotMatch(healthDocActionsControllerSource, /async function saveHealthDocDate|async function reanalyzeHealthDoc|function startHealthDelete/);
+  assert.doesNotMatch(
+    healthDocActionsControllerSource,
+    /async function saveHealthDocDate|async function reanalyzeHealthDoc|function startHealthDelete/
+  );
   assert.match(healthDocActionsControllerSource, /CairnHealthDocActionsController/);
   assert.match(meRecordsHealthDocControllerSource, /type HealthRecordsControllerDeps = \{/);
-  assert.match(meRecordsHealthDocControllerSource, /function healthDocUploadDeps\(deps: HealthRecordsControllerDeps\): ClientHealthDocUploadControllerDeps/);
-  assert.match(meRecordsHealthDocControllerSource, /function healthDocActionsDeps\(deps: HealthRecordsControllerDeps\): ClientHealthDocActionsControllerDeps/);
-  assert.match(meRecordsHealthDocControllerSource, /CairnHealthDocUploadController\.wireUpload\(healthDocUploadDeps\(deps\)\)/);
-  assert.match(meRecordsHealthDocControllerSource, /CairnHealthDocActionsController\.wireDoc\(el, healthDocActionsDeps\(deps\)\)/);
-  assert.doesNotMatch(meRecordsHealthDocControllerSource, /FileReader|readAsDataURL|MAX_DOC_BYTES|MAX_DOC_TEXT|guessUploadMime/);
-  assert.match(meRecordsHealthDocControllerSource, /async function loadHealthDocs\(deps: HealthRecordsControllerDeps\): Promise<HealthDocument\[\]>/);
-  assert.match(meRecordsHealthDocControllerSource, /function renderHealthRecords\(deps: HealthRecordsControllerDeps\): Promise<HealthDocument\[\]>/);
+  assert.match(
+    meRecordsHealthDocControllerSource,
+    /function healthDocUploadDeps\(deps: HealthRecordsControllerDeps\): ClientHealthDocUploadControllerDeps/
+  );
+  assert.match(
+    meRecordsHealthDocControllerSource,
+    /function healthDocActionsDeps\(deps: HealthRecordsControllerDeps\): ClientHealthDocActionsControllerDeps/
+  );
+  assert.match(
+    meRecordsHealthDocControllerSource,
+    /CairnHealthDocUploadController\.wireUpload\(healthDocUploadDeps\(deps\)\)/
+  );
+  assert.match(
+    meRecordsHealthDocControllerSource,
+    /CairnHealthDocActionsController\.wireDoc\(el, healthDocActionsDeps\(deps\)\)/
+  );
+  assert.doesNotMatch(
+    meRecordsHealthDocControllerSource,
+    /FileReader|readAsDataURL|MAX_DOC_BYTES|MAX_DOC_TEXT|guessUploadMime/
+  );
+  assert.match(
+    meRecordsHealthDocControllerSource,
+    /async function loadHealthDocs\(deps: HealthRecordsControllerDeps\): Promise<HealthDocument\[\]>/
+  );
+  assert.match(
+    meRecordsHealthDocControllerSource,
+    /function renderHealthRecords\(deps: HealthRecordsControllerDeps\): Promise<HealthDocument\[\]>/
+  );
   assert.match(meRecordsHealthDocControllerSource, /CairnHealthRecordsController/);
   assert.match(healthShareControllerSource, /type HealthShareControllerResponse = \{/);
-  assert.match(healthShareControllerSource, /function renderHealthShare\(deps: ClientHealthShareControllerDeps\): void/);
+  assert.match(
+    healthShareControllerSource,
+    /function renderHealthShare\(deps: ClientHealthShareControllerDeps\): void/
+  );
   assert.match(healthShareControllerSource, /deps\.cachedApi\("\/markers\/priority"/);
   assert.match(healthShareControllerSource, /deps\.switchHealthSeg\("records", \{ openPicker: true \}\)/);
   assert.match(healthShareControllerSource, /deps\.api\("\/markers\/reconcile"/);
-  assert.match(healthShareControllerSource, /function openDoctorReportTab\(deps: ClientHealthShareControllerDeps\): void/);
+  assert.match(
+    healthShareControllerSource,
+    /function openDoctorReportTab\(deps: ClientHealthShareControllerDeps\): void/
+  );
   assert.match(healthShareControllerSource, /CairnHealthShareController/);
   assert.match(memorySource, /const MEM_KINDS/);
   assert.match(memorySource, /type ClientMemory = import\("\.\.\/contracts\/client-api\.js"\)\.ClientMemory/);
-  assert.match(memorySource, /function memoryKindOptionsHtml\(selected: ClientMemoryKind \| null \| undefined = ""\): string/);
+  assert.match(
+    memorySource,
+    /function memoryKindOptionsHtml\(selected: ClientMemoryKind \| null \| undefined = ""\): string/
+  );
   assert.match(memorySource, /function memoryRowHtml\(row: ClientMemory, index\?: number\): string/);
   assert.match(memorySource, /CairnMemory/);
   assert.match(meMemoryControllerSource, /type MeMemoryControllerDeps = \{/);
   assert.match(meMemoryControllerSource, /async function render\(deps: MeMemoryControllerDeps\): Promise<void>/);
   assert.match(meMemoryControllerSource, /async function load\(deps: MeMemoryControllerDeps\): Promise<void>/);
-  assert.match(meMemoryControllerSource, /function startEdit\(row: HTMLElement \| null, deps: MeMemoryControllerDeps\): void/);
+  assert.match(
+    meMemoryControllerSource,
+    /function startEdit\(row: HTMLElement \| null, deps: MeMemoryControllerDeps\): void/
+  );
   assert.match(meMemoryControllerSource, /function startDelete\(button: Element, deps: MeMemoryControllerDeps\): void/);
-  assert.match(meHealthScreenCompositionSource, /meMemoryDeps: \(\) => CairnMeHealthDependencies\.memory\(context\(\)\)/);
-  assert.match(meHealthTabsControllerSource, /const HEALTH_SEG: readonly \(readonly \[ClientHealthSection, string\]\)\[\]/);
+  assert.match(
+    meHealthScreenCompositionSource,
+    /meMemoryDeps: \(\) => CairnMeHealthDependencies\.memory\(context\(\)\)/
+  );
+  assert.match(
+    meHealthTabsControllerSource,
+    /const HEALTH_SEG: readonly \(readonly \[ClientHealthSection, string\]\)\[\]/
+  );
   assert.match(meHealthTabsControllerSource, /function normalizeHealthSeg\(seg: unknown\): ClientHealthSection/);
-  assert.match(meHealthTabsControllerSource, /async function renderHealth\(deps: ClientMeHealthTabsControllerDeps\): Promise<void>/);
-  assert.match(meHealthTabsControllerSource, /function setHealthSegActive\(seg: ClientHealthSection, deps: ClientMeHealthTabsControllerDeps\): void/);
-  assert.match(meHealthTabsControllerSource, /function switchHealthSeg\(seg: ClientHealthSection, deps: ClientMeHealthTabsControllerDeps, opts: \{ openPicker\?: boolean \} = \{\}\): void/);
+  assert.match(
+    meHealthTabsControllerSource,
+    /async function renderHealth\(deps: ClientMeHealthTabsControllerDeps\): Promise<void>/
+  );
+  assert.match(
+    meHealthTabsControllerSource,
+    /function setHealthSegActive\(seg: ClientHealthSection, deps: ClientMeHealthTabsControllerDeps\): void/
+  );
+  assert.match(
+    meHealthTabsControllerSource,
+    /function switchHealthSeg\(seg: ClientHealthSection, deps: ClientMeHealthTabsControllerDeps, opts: \{ openPicker\?: boolean \} = \{\}\): void/
+  );
   assert.match(meHealthTabsControllerSource, /function paintHealthTab\(deps: ClientMeHealthTabsControllerDeps\): void/);
   assert.match(meHealthTabsControllerSource, /CairnMeHealthTabsController/);
   assert.match(meHealthTabsController, /CairnMeHealthTabsController/);
@@ -4778,12 +5554,24 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(lifeSource, /CairnLife/);
   assert.match(lifeFormHelpersSource, /function collectLifeForm\(\): LifeControllerForm/);
   assert.match(lifeFormHelpersSource, /async function submitLifeForm\(deps: ClientLifeControllerDeps\): Promise<void>/);
-  assert.match(lifeTimelineActionsSource, /async function loadLifeTimeline\(deps: ClientLifeControllerDeps\): Promise<void>/);
-  assert.match(lifeTimelineActionsSource, /function startLifeEdit\(card: HTMLElement \| null, deps: ClientLifeControllerDeps\): void/);
-  assert.match(lifeTimelineActionsSource, /function startLifeDelete\(button: Element, deps: ClientLifeControllerDeps\): void/);
+  assert.match(
+    lifeTimelineActionsSource,
+    /async function loadLifeTimeline\(deps: ClientLifeControllerDeps\): Promise<void>/
+  );
+  assert.match(
+    lifeTimelineActionsSource,
+    /function startLifeEdit\(card: HTMLElement \| null, deps: ClientLifeControllerDeps\): void/
+  );
+  assert.match(
+    lifeTimelineActionsSource,
+    /function startLifeDelete\(button: Element, deps: ClientLifeControllerDeps\): void/
+  );
   assert.match(lifeControllerSource, /async function render\(deps: ClientLifeControllerDeps\): Promise<void>/);
   assert.match(lifeControllerSource, /lifeTimelineApi\(\)\.load\(deps\)/);
-  assert.doesNotMatch(lifeControllerSource, /async function load\(deps: ClientLifeControllerDeps\)|function startEdit\(card: HTMLElement \| null, deps: ClientLifeControllerDeps\)|function startDelete\(button: Element, deps: ClientLifeControllerDeps\)/);
+  assert.doesNotMatch(
+    lifeControllerSource,
+    /async function load\(deps: ClientLifeControllerDeps\)|function startEdit\(card: HTMLElement \| null, deps: ClientLifeControllerDeps\)|function startDelete\(button: Element, deps: ClientLifeControllerDeps\)/
+  );
   assert.match(lifeControllerSource, /CairnLifeController/);
   assert.match(familySource, /const FAMILY_COLORS/);
   assert.match(familySource, /function familyCardHtml\(row: FamilyRow, index\?: number\): string/);
@@ -4792,17 +5580,32 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(familyControllerSource, /CairnFamilyController/);
   assert.match(familyControllerSource, /async function render\(deps: FamilyControllerDeps\): Promise<void>/);
   assert.match(familyControllerSource, /async function load\(deps: FamilyControllerDeps\): Promise<void>/);
-  assert.match(familyControllerSource, /function startEdit\(card: HTMLElement \| null, deps: FamilyControllerDeps\): void/);
+  assert.match(
+    familyControllerSource,
+    /function startEdit\(card: HTMLElement \| null, deps: FamilyControllerDeps\): void/
+  );
   assert.match(familyControllerSource, /function startDelete\(btn: Element, deps: FamilyControllerDeps\): void/);
   assert.match(meProfileFormSource, /type MeProfileControllerDeps = \{/);
   assert.match(meProfileFormSource, /function profileHtml\(/);
-  assert.match(meProfileFormSource, /function profileGoalMode\(profile: MeProfileProfile, goal: MeProfileGoalCheck\): string/);
-  assert.match(meProfileFormSource, /function profileEnduranceGoal\(profile: MeProfileProfile\): MeProfileEnduranceGoalDraft/);
+  assert.match(
+    meProfileFormSource,
+    /function profileGoalMode\(profile: MeProfileProfile, goal: MeProfileGoalCheck\): string/
+  );
+  assert.match(
+    meProfileFormSource,
+    /function profileEnduranceGoal\(profile: MeProfileProfile\): MeProfileEnduranceGoalDraft/
+  );
   assert.match(meProfileFormSource, /CairnMeProfileForm/);
   assert.match(meProfileControllerSource, /function wireProfileForm\(/);
-  assert.match(meProfileControllerSource, /async function renderProfile\(deps: MeProfileControllerDeps\): Promise<void>/);
+  assert.match(
+    meProfileControllerSource,
+    /async function renderProfile\(deps: MeProfileControllerDeps\): Promise<void>/
+  );
   assert.match(meProfileControllerSource, /CairnMeProfileForm\.html/);
-  assert.doesNotMatch(meProfileControllerSource, /function profileHtml\(|function profileGoalMode|function profileEnduranceGoal/);
+  assert.doesNotMatch(
+    meProfileControllerSource,
+    /function profileHtml\(|function profileGoalMode|function profileEnduranceGoal/
+  );
   assert.match(meProfileFormClient, /CairnMeProfileForm/);
   assert.match(meProfileFormClient, /profileHtml/);
   assert.match(meProfileControllerSource, /CairnMeProfileController/);
@@ -4810,21 +5613,42 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(meProfileController, /renderProfile/);
   assert.match(meHealthScreenCompositionSource, /const ME_HEALTH_SCREEN_SEGMENTS: readonly ClientSegment\[\]/);
   assert.match(meHealthScreenSource, /async function renderMeProfile\(\)/);
-  assert.match(meHealthScreenCompositionSource, /meProfileDeps: \(\) => CairnMeHealthDependencies\.profile\(context\(\)\)/);
+  assert.match(
+    meHealthScreenCompositionSource,
+    /meProfileDeps: \(\) => CairnMeHealthDependencies\.profile\(context\(\)\)/
+  );
   assert.match(meHealthDependenciesSource, /type ClientMeHealthDependenciesContext = \{/);
-  assert.match(meHealthDependenciesSource, /function makeMeHealthDependenciesContext\(input: ClientMeHealthDependenciesContextInput\): ClientMeHealthDependenciesContext/);
+  assert.match(
+    meHealthDependenciesSource,
+    /function makeMeHealthDependenciesContext\(input: ClientMeHealthDependenciesContextInput\): ClientMeHealthDependenciesContext/
+  );
   assert.match(meHealthControllerDepsSource, /function makeMeProfileDeps\(/);
-  assert.match(meHealthControllerDepsSource, /function makeHealthReadDeps\(ctx: ClientMeHealthDependenciesContext\): ClientHealthReadControllerDeps/);
+  assert.match(
+    meHealthControllerDepsSource,
+    /function makeHealthReadDeps\(ctx: ClientMeHealthDependenciesContext\): ClientHealthReadControllerDeps/
+  );
   assert.match(meHealthDependenciesSource, /CairnMeHealthControllerDeps\.profile/);
   assert.match(meHealthDependenciesSource, /CairnMeHealthDependencies/);
   assert.match(meHealthScreenCompositionSource, /CairnMeHealthDependencies\.context\(\{/);
   assert.match(meHealthScreenCompositionSource, /CairnMeProfileController\.renderProfile\(screen\.meProfileDeps\(\)\)/);
   assert.doesNotMatch(meHealthScreenSource, /id="profFields"/);
   assert.match(meHealthScreenSource, /function renderHealthSynthesis\(data: unknown, token\?: number \| null\): void/);
-  assert.match(meHealthScreenCompositionSource, /meHealthTabsDeps: \(\) => CairnMeHealthDependencies\.tabs\(context\(\)\)/);
-  assert.match(meHealthScreenCompositionSource, /CairnMeHealthTabsController\.renderHealth\(screen\.meHealthTabsDeps\(\)\)/);
-  assert.match(meHealthScreenSource, /function switchHealthSeg\(seg: ClientHealthSection, opts: \{ openPicker\?: boolean \} = \{\}\): void/);
-  assert.match(meHealthScreenCompositionSource, /CairnMeHealthTabsController\.switchHealthSeg\(seg, screen\.meHealthTabsDeps\(\), opts\)/);
+  assert.match(
+    meHealthScreenCompositionSource,
+    /meHealthTabsDeps: \(\) => CairnMeHealthDependencies\.tabs\(context\(\)\)/
+  );
+  assert.match(
+    meHealthScreenCompositionSource,
+    /CairnMeHealthTabsController\.renderHealth\(screen\.meHealthTabsDeps\(\)\)/
+  );
+  assert.match(
+    meHealthScreenSource,
+    /function switchHealthSeg\(seg: ClientHealthSection, opts: \{ openPicker\?: boolean \} = \{\}\): void/
+  );
+  assert.match(
+    meHealthScreenCompositionSource,
+    /CairnMeHealthTabsController\.switchHealthSeg\(seg, screen\.meHealthTabsDeps\(\), opts\)/
+  );
   assert.match(meHealthScreenCompositionSource, /function healthPictureDeps\(\): ClientHealthPictureControllerDeps/);
   assert.match(meHealthScreenCompositionSource, /CairnHealthPictureController\.getHealthPictureCache/);
   assert.match(meHealthScreenCompositionSource, /CairnHealthPictureController\.setHealthPictureCache/);
@@ -4842,9 +5666,18 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(meRecordsScreenSource, /async function renderFamily\(\)/);
   assert.doesNotMatch(meRecordsScreenSource, /function wireHealthUpload\(\)/);
   assert.doesNotMatch(meRecordsScreenSource, /function loadHealthDocs\(\): Promise<HealthDocument\[\]>/);
-  assert.doesNotMatch(meRecordsScreenSource, /function openDoctorReportTab|api\("\/markers\/reconcile"|cachedApi\("\/markers\/priority"|downloadFile\(withToken\("\/api\/health-export"\)\)/);
-  assert.match(meRecordsHealthDocControllerSource, /CairnHealthDocUploadController\.wireUpload\(healthDocUploadDeps\(deps\)\)/);
-  assert.match(meRecordsHealthDocControllerSource, /async function loadHealthDocs\(deps: HealthRecordsControllerDeps\): Promise<HealthDocument\[\]>/);
+  assert.doesNotMatch(
+    meRecordsScreenSource,
+    /function openDoctorReportTab|api\("\/markers\/reconcile"|cachedApi\("\/markers\/priority"|downloadFile\(withToken\("\/api\/health-export"\)\)/
+  );
+  assert.match(
+    meRecordsHealthDocControllerSource,
+    /CairnHealthDocUploadController\.wireUpload\(healthDocUploadDeps\(deps\)\)/
+  );
+  assert.match(
+    meRecordsHealthDocControllerSource,
+    /async function loadHealthDocs\(deps: HealthRecordsControllerDeps\): Promise<HealthDocument\[\]>/
+  );
   assert.match(meRecordsScreenSource, /Object\.assign\(globalThis, \{/);
   assert.match(routeStateSource, /type CairnRoute = import\("\.\.\/contracts\/client\.js"\)\.ClientRoute/);
   assert.match(routeStateSource, /function parseRoute\(input: string \| URL\): CairnRoute/);
@@ -4853,7 +5686,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(appRouterSource, /function syncRouteFromState\(options: SyncRouteOptions\): string \| null/);
   assert.match(appRouterSource, /\.CairnAppRouter = api/);
   assert.match(appRouteSyncSource, /function routeSyncApi\(\): RouteSyncRoutesApi \| null/);
-  assert.match(appRouteSyncSource, /function routeSyncApply\(route: RouteSyncRoute \| null \| undefined\): ClientTabName/);
+  assert.match(
+    appRouteSyncSource,
+    /function routeSyncApply\(route: RouteSyncRoute \| null \| undefined\): ClientTabName/
+  );
   assert.match(appRouteSyncSource, /function routeSyncCurrent\(\): Partial<RouteSyncRoute>/);
   assert.match(appRouteSyncSource, /function routeSyncFromState\(mode: RouteSyncMode = "push"\): void/);
   assert.match(appRouteSyncSource, /Object\.assign\(globalThis, \{/);
@@ -4876,7 +5712,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   // Recovery is refocus-only — the guard never blurs the composer by heuristic;
   // vvMax is re-baselined on resume only when no text input is focused (keyboard down).
   assert.doesNotMatch(appMobileViewportSource, /\.blur\(\)/);
-  assert.match(appMobileViewportSource, /const reseedAndResync = \(\) => \{ if \(!focusedTextInput\(\)\) vvMax = vv\.height/);
+  assert.match(
+    appMobileViewportSource,
+    /const reseedAndResync = \(\) => \{ if \(!focusedTextInput\(\)\) vvMax = vv\.height/
+  );
   assert.match(appMobileViewportSource, /Math\.round\(Math\.max\(0, rawVvb\)\)/);
   assert.match(appMobileViewportSource, /document\.addEventListener\("cairn:keyboard-settle"/);
   assert.match(appMobileViewportSource, /Math\.min\(nativePickerSuppressMs, 1800\)/);
@@ -4885,7 +5724,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(appServiceWorkerSource, /navigator\.serviceWorker\.addEventListener\("controllerchange"/);
   assert.match(appServiceWorkerSource, /navigator\.serviceWorker\.register\("\/sw\.js"\)/);
   assert.match(appDisciplinePrimerSource, /function primeDiscipline\(\): void/);
-  assert.match(appDisciplinePrimerSource, /peekCached<\{ primary_discipline\?: unknown; endurance_goal_json\?: unknown \}>/);
+  assert.match(
+    appDisciplinePrimerSource,
+    /peekCached<\{ primary_discipline\?: unknown; endurance_goal_json\?: unknown \}>/
+  );
   assert.match(appDisciplinePrimerSource, /renderTab\("progress"\)/);
   assert.match(appDisciplinePrimerSource, /renderTab\("plan"\)/);
   assert.match(appOnboardingSource, /async function maybeOnboard\(\): Promise<void>/);
@@ -4905,7 +5747,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(appRouteSync, /syncRouteFromState: routeSyncFromState/);
   assert.match(appRenderDispatch, /Object\.assign\(globalThis, \{ renderTab: renderAppTab \}\)/);
   assert.match(appRenderDispatch, /window\.renderTab = renderAppTab/);
-  assert.match(appTabs, /Object\.assign\(globalThis, \{ activateTab, defaultProgressSeg, registerTabBarHandlers, switchTab \}\)/);
+  assert.match(
+    appTabs,
+    /Object\.assign\(globalThis, \{ activateTab, defaultProgressSeg, registerTabBarHandlers, switchTab \}\)/
+  );
   assert.match(appTabs, /window\.activateTab = activateTab/);
   assert.match(appTabs, /window\.switchTab = switchTab/);
   assert.doesNotMatch(boot, /const ROUTE_TABS = CairnAppRouter\.ROUTE_TABS/);
@@ -4924,7 +5769,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(appSwRecovery, /registerServiceWorkerLifecycle/);
   assert.match(appSwRecovery, /__cairnSwLifecycleStarted/);
   assert.match(coreState, /\/\/ @ts-check/);
-  assert.match(coreState, /Object\.assign\(globalThis, \{ \$: query, view: appView, headerTitle: appHeaderTitle, state: appState \}\)/);
+  assert.match(
+    coreState,
+    /Object\.assign\(globalThis, \{ \$: query, view: appView, headerTitle: appHeaderTitle, state: appState \}\)/
+  );
   assert.match(pwaInstall, /Object\.assign\(globalThis, \{/);
   assert.match(pwaInstall, /CairnPwaInstall/);
   assert.doesNotMatch(pwaInstall, /^let\s+deferredInstallPrompt/m);
@@ -4935,7 +5783,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(coachingFocusClient, /Object\.assign\(globalThis, \{/);
   assert.match(coachingFocusClient, /CairnCoachingFocus/);
   assert.match(coachingFocusClient, /document\.addEventListener\("click"/);
-  assert.doesNotMatch(ui, /function\s+coachingFocusCardHtml|function\s+loadCoachingFocus|function\s+cfocusRoute|const\s+CFOCUS_DOMAIN_LABEL/);
+  assert.doesNotMatch(
+    ui,
+    /function\s+coachingFocusCardHtml|function\s+loadCoachingFocus|function\s+cfocusRoute|const\s+CFOCUS_DOMAIN_LABEL/
+  );
   assert.match(todayActivityClient, /Object\.assign\(globalThis, \{/);
   assert.match(todayActivityClient, /CairnTodayActivity/);
   assert.doesNotMatch(todayActivityClient, /^const\s+ACT_ART_PHRASE/m);
@@ -4968,7 +5819,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(uiFeedback, /loadingState\(label\)[\s\S]*CairnUi\.loadingStateHtml\(\{ label \}\)/);
   assert.match(uiFeedback, /function\s+btnBusy/);
   assert.match(uiFeedback, /function\s+thinkingCaption/);
-  assert.doesNotMatch(ui, /let\s+toastTimer|let\s+_toastTimer|function\s+btnBusy|function\s+thinkingCaption|function\s+runCountUps|document\.startViewTransition|function\s+isViewTransitionAbort/);
+  assert.doesNotMatch(
+    ui,
+    /let\s+toastTimer|let\s+_toastTimer|function\s+btnBusy|function\s+thinkingCaption|function\s+runCountUps|document\.startViewTransition|function\s+isViewTransitionAbort/
+  );
   assert.match(detailOverlayClient, /CairnDetailOverlay: CAIRN_DETAIL_OVERLAY/);
   assert.match(detailOverlayClient, /closeDetail/);
   assert.match(detailOverlayClient, /openDetailFrom/);
@@ -4981,8 +5835,14 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(exerciseDetailClient, /explanation: exerciseDetailExplanation/);
   assert.match(exerciseDetailClient, /explanationHtml: exerciseDetailExplanationHtml/);
   assert.match(exerciseDetailClient, /validExplanationPayload: validExerciseDetailExplanationPayload/);
-  assert.doesNotMatch(exerciseDetailClient, /^function\s+exerciseExplanation|^function\s+exerciseExplanationHtml|^function\s+validExerciseExplanationPayload/m);
-  assert.match(exerciseDetailController, /Object\.assign\(globalThis, \{ CairnExerciseDetailController: CAIRN_EXERCISE_DETAIL_CONTROLLER \}\)/);
+  assert.doesNotMatch(
+    exerciseDetailClient,
+    /^function\s+exerciseExplanation|^function\s+exerciseExplanationHtml|^function\s+validExerciseExplanationPayload/m
+  );
+  assert.match(
+    exerciseDetailController,
+    /Object\.assign\(globalThis, \{ CairnExerciseDetailController: CAIRN_EXERCISE_DETAIL_CONTROLLER \}\)/
+  );
   assert.match(exerciseDetailController, /window\.CairnExerciseDetailController = CAIRN_EXERCISE_DETAIL_CONTROLLER/);
   assert.match(exerciseDetailController, /openExerciseModal/);
   assert.match(exerciseDetailController, /wireGuides/);
@@ -5018,7 +5878,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(cardioSyncClient, /cardioSyncLine/);
   assert.match(cardioSyncClient, /wireCardioSync/);
   assert.match(cardioSyncClient, /HR_ZONE_COLORS/);
-  assert.doesNotMatch(cardioSyncClient, /^function\s+garminConfigured|^function\s+cardioSyncLine|^function\s+wireCardioSync/m);
+  assert.doesNotMatch(
+    cardioSyncClient,
+    /^function\s+garminConfigured|^function\s+cardioSyncLine|^function\s+wireCardioSync/m
+  );
   assert.doesNotMatch(today, /function\s+garminConfigured|function\s+cardioSyncLine|function\s+wireCardioSync/);
   assert.doesNotMatch(today, /const\s+HR_ZONE_COLORS/);
   assert.match(today, /cardio-sync-client\.js/);
@@ -5046,12 +5909,21 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(coachProposalController, /applyProposalById,/);
   assert.match(coachProposalController, /reconnectProposal,/);
   assert.match(coachProposalController, /CairnProposal\.coachProposalListHtml\(proposals, lastApplyClamp\)/);
-  assert.match(todaySessionSuggestClient, /Object\.assign\(globalThis, \{ CairnTodaySessionSuggest: CAIRN_TODAY_SESSION_SUGGEST \}\)/);
+  assert.match(
+    todaySessionSuggestClient,
+    /Object\.assign\(globalThis, \{ CairnTodaySessionSuggest: CAIRN_TODAY_SESSION_SUGGEST \}\)/
+  );
   assert.match(todaySessionSuggestClient, /window\.CairnTodaySessionSuggest = CAIRN_TODAY_SESSION_SUGGEST/);
   assert.match(todaySessionSuggestClient, /cardHtml: todaySuggestCardHtml/);
   assert.match(todaySessionSuggestClient, /loadingHtml: todaySuggestLoadingHtml/);
-  assert.doesNotMatch(todaySessionSuggestClient, /^const\s+SESSION_VIBES|^function\s+todaySuggestCardHtml|^function\s+todaySuggestComposerHtml/m);
-  assert.match(todaySessionSuggestController, /CairnTodaySessionSuggestController: CAIRN_TODAY_SESSION_SUGGEST_CONTROLLER/);
+  assert.doesNotMatch(
+    todaySessionSuggestClient,
+    /^const\s+SESSION_VIBES|^function\s+todaySuggestCardHtml|^function\s+todaySuggestComposerHtml/m
+  );
+  assert.match(
+    todaySessionSuggestController,
+    /CairnTodaySessionSuggestController: CAIRN_TODAY_SESSION_SUGGEST_CONTROLLER/
+  );
   assert.match(todaySessionSuggestController, /askForSession/);
   assert.match(todaySessionSuggestController, /reconnectSessionSuggest/);
   assert.match(todaySessionSuggestController, /sessionSuggestOpOpts/);
@@ -5060,7 +5932,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todaySessionStatusClient, /setChipHtml: todaySetChipHtml/);
   assert.match(todaySessionStatusClient, /sessionDoneCardHtml: todaySessionDoneCardHtml/);
   assert.match(todaySessionStatusClient, /feedbackFormHtml: todayFeedbackFormHtml/);
-  assert.doesNotMatch(todaySessionStatusClient, /^function\s+setsTonnage|^function\s+setChip|^function\s+todaySessionDoneCardHtml|^function\s+todayFeedbackFormHtml|^const\s+TODAY_FEEL_FACES/m);
+  assert.doesNotMatch(
+    todaySessionStatusClient,
+    /^function\s+setsTonnage|^function\s+setChip|^function\s+todaySessionDoneCardHtml|^function\s+todayFeedbackFormHtml|^const\s+TODAY_FEEL_FACES/m
+  );
   assert.match(todaySessionFeedbackClient, /CairnTodaySessionFeedback: CAIRN_TODAY_SESSION_FEEDBACK/);
   assert.match(todaySessionFeedbackClient, /renderFeedback/);
   assert.match(todaySessionSkipClient, /CairnTodaySessionSkip: CAIRN_TODAY_SESSION_SKIP/);
@@ -5069,32 +5944,56 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todaySessionController, /wireLogRow/);
   assert.match(todaySessionController, /wireSessionSurface/);
   assert.match(todaySessionController, /renderFeedback/);
-  assert.match(todayProgramAdjustmentsClient, /Object\.assign\(globalThis, \{ CairnTodayProgramAdjustments: CAIRN_TODAY_PROGRAM_ADJUSTMENTS \}\)/);
+  assert.match(
+    todayProgramAdjustmentsClient,
+    /Object\.assign\(globalThis, \{ CairnTodayProgramAdjustments: CAIRN_TODAY_PROGRAM_ADJUSTMENTS \}\)/
+  );
   assert.match(todayProgramAdjustmentsClient, /window\.CairnTodayProgramAdjustments = CAIRN_TODAY_PROGRAM_ADJUSTMENTS/);
   assert.match(todayProgramAdjustmentsClient, /planRequest: todayAdjustmentPlanRequest/);
   assert.match(todayProgramAdjustmentsClient, /bannerHtml: todayProgramAdjustmentsBannerHtml/);
-  assert.doesNotMatch(todayProgramAdjustmentsClient, /^const\s+TODAY_ADJUST_GLYPH|^function\s+todayAdjustmentPlanRequest|^function\s+todayProgramAdjustmentsBannerHtml/m);
+  assert.doesNotMatch(
+    todayProgramAdjustmentsClient,
+    /^const\s+TODAY_ADJUST_GLYPH|^function\s+todayAdjustmentPlanRequest|^function\s+todayProgramAdjustmentsBannerHtml/m
+  );
   assert.match(todayWeekAheadClient, /Object\.assign\(globalThis, \{ CairnTodayWeekAhead: CAIRN_TODAY_WEEK_AHEAD \}\)/);
   assert.match(todayWeekAheadClient, /window\.CairnTodayWeekAhead = CAIRN_TODAY_WEEK_AHEAD/);
   assert.match(todayWeekAheadClient, /cardHtml: todayWeekAheadCardHtml/);
-  assert.doesNotMatch(todayWeekAheadClient, /^const\s+TODAY_WEEK_AHEAD_GLYPH|^function\s+todayWeekAheadCardHtml|^function\s+todayWeekAheadRowHtml/m);
+  assert.doesNotMatch(
+    todayWeekAheadClient,
+    /^const\s+TODAY_WEEK_AHEAD_GLYPH|^function\s+todayWeekAheadCardHtml|^function\s+todayWeekAheadRowHtml/m
+  );
   assert.match(todayContextClient, /Object\.assign\(globalThis, \{ CairnTodayContext: CAIRN_TODAY_CONTEXT \}\)/);
   assert.match(todayContextClient, /window\.CairnTodayContext = CAIRN_TODAY_CONTEXT/);
   assert.match(todayContextClient, /contextBannerHtml,/);
   assert.match(todayContextClient, /goalLineHtml,/);
   assert.match(todayContextClient, /healthFocusBannerHtml,/);
-  assert.doesNotMatch(todayContextClient, /^const\s+TODAY_CONTEXT_ICONS|^function\s+contextBannerHtml|^function\s+goalLineHtml|^function\s+healthFocusBannerHtml/m);
+  assert.doesNotMatch(
+    todayContextClient,
+    /^const\s+TODAY_CONTEXT_ICONS|^function\s+contextBannerHtml|^function\s+goalLineHtml|^function\s+healthFocusBannerHtml/m
+  );
   assert.match(todayCompassClient, /Object\.assign\(globalThis, \{ CairnTodayCompass: CAIRN_TODAY_COMPASS \}\)/);
   assert.match(todayCompassClient, /window\.CairnTodayCompass = CAIRN_TODAY_COMPASS/);
   assert.match(todayCompassClient, /paceTileHtml,/);
   assert.doesNotMatch(todayCompassClient, /paceOffer|ask the coach/);
   assert.match(todayCompassClient, /build,/);
   assert.doesNotMatch(todayCompassClient, /^const\s+PACE_WORDS|^function\s+paceTileHtml|^function\s+build/m);
-  assert.match(todayGarminReconciliationClient, /Object\.assign\(globalThis, \{ CairnTodayGarminReconciliation: CAIRN_TODAY_GARMIN_RECONCILIATION \}\)/);
-  assert.match(todayGarminReconciliationClient, /window\.CairnTodayGarminReconciliation = CAIRN_TODAY_GARMIN_RECONCILIATION/);
+  assert.match(
+    todayGarminReconciliationClient,
+    /Object\.assign\(globalThis, \{ CairnTodayGarminReconciliation: CAIRN_TODAY_GARMIN_RECONCILIATION \}\)/
+  );
+  assert.match(
+    todayGarminReconciliationClient,
+    /window\.CairnTodayGarminReconciliation = CAIRN_TODAY_GARMIN_RECONCILIATION/
+  );
   assert.match(todayGarminReconciliationClient, /load,/);
-  assert.doesNotMatch(todayGarminReconciliationClient, /^function\s+reconcilePromptHtml|^function\s+reconciledToast|^async function\s+load/m);
-  assert.match(todaySideLoadersClient, /Object\.assign\(globalThis, \{ CairnTodaySideLoaders: CAIRN_TODAY_SIDE_LOADERS \}\)/);
+  assert.doesNotMatch(
+    todayGarminReconciliationClient,
+    /^function\s+reconcilePromptHtml|^function\s+reconciledToast|^async function\s+load/m
+  );
+  assert.match(
+    todaySideLoadersClient,
+    /Object\.assign\(globalThis, \{ CairnTodaySideLoaders: CAIRN_TODAY_SIDE_LOADERS \}\)/
+  );
   assert.match(todaySideLoadersClient, /CairnTodaySideLoaders: CAIRN_TODAY_SIDE_LOADERS/);
   assert.match(todaySideLoadersClient, /loadWearable,/);
   assert.match(todaySideLoadersClient, /loadHealthFocusBanner,/);
@@ -5106,7 +6005,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayPlanSessionDataClient, /CairnTodayPlanSessionData: CAIRN_TODAY_PLAN_SESSION_DATA/);
   assert.match(todayPlanSessionDataClient, /loadLastSets,/);
   assert.match(todayPlanSessionDataClient, /loadPrescriptions,/);
-  assert.match(todayPlanSessionPreparationClient, /CairnTodayPlanSessionPreparation: CAIRN_TODAY_PLAN_SESSION_PREPARATION/);
+  assert.match(
+    todayPlanSessionPreparationClient,
+    /CairnTodayPlanSessionPreparation: CAIRN_TODAY_PLAN_SESSION_PREPARATION/
+  );
   assert.match(todayPlanSessionPreparationClient, /preparePlanSession,/);
   assert.match(todayPlanSessionPreparationSource, /todayPlanSessionModel\.itemGroups/);
   assert.doesNotMatch(todayPlanSessionPreparationSource, /async function loadLastSets/);
@@ -5133,13 +6035,22 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(agentLoginSessionClient, /CairnAgentLoginSession: CAIRN_AGENT_LOGIN_SESSION/);
   assert.match(agentLoginClient, /Object\.assign\(globalThis, \{ openAgentLoginModal \}\)/);
   assert.match(agentLoginClient, /Object\.assign\(window, \{ openAgentLoginModal \}\)/);
-  assert.doesNotMatch(agentLoginClient, /^function\s+xtermWindow|^function\s+loadXtermAssets|^async function\s+openAgentLoginModal/m);
+  assert.doesNotMatch(
+    agentLoginClient,
+    /^function\s+xtermWindow|^function\s+loadXtermAssets|^async function\s+openAgentLoginModal/m
+  );
   assert.doesNotMatch(ui, /openAgentLoginModal|xtermWindow|agent-login-ov/);
-  assert.doesNotMatch(meals, /function\s+statusBadge|function\s+applyResultMessage|function\s+clampNoteHtml|function\s+verifiedBadgeHtml|function\s+strengthChangeHtml|function\s+runTargetText|function\s+isOpenProposal|const\s+proposalCardHtml/);
+  assert.doesNotMatch(
+    meals,
+    /function\s+statusBadge|function\s+applyResultMessage|function\s+clampNoteHtml|function\s+verifiedBadgeHtml|function\s+strengthChangeHtml|function\s+runTargetText|function\s+isOpenProposal|const\s+proposalCardHtml/
+  );
   assert.match(meals, /CairnCoachProposalController\.runCoachProposal/);
   assert.match(meals, /CairnCoachProposalController\.renderProposals/);
   assert.match(meals, /coach-proposal-controller\.js/);
-  assert.doesNotMatch(meals, /lastApplyClamp|function\s+coachProposalOpOpts|function\s+renderProposals|async function\s+applyProposalById|function\s+reconnectProposal/);
+  assert.doesNotMatch(
+    meals,
+    /lastApplyClamp|function\s+coachProposalOpOpts|function\s+renderProposals|async function\s+applyProposalById|function\s+reconnectProposal/
+  );
   assert.doesNotMatch(ui, /function\s+cardioPrescription|function\s+cardioLabel|function\s+isCardioItem/);
   assert.match(progressDataClient, /Object\.assign\(globalThis, \{/);
   assert.match(progressDataClient, /CairnProgressData/);
@@ -5149,7 +6060,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(progressEnduranceClient, /CairnProgressEndurance/);
   assert.match(progressEnduranceControllerClient, /CairnProgressEnduranceController/);
   assert.match(progressEnduranceControllerClient, /render: renderProgressEndurance/);
-  assert.doesNotMatch(progress, /function\s+enduranceStatusWord|function\s+enduranceBlockHtml|function\s+paceTrendWord|function\s+zoneBarHtml|function\s+enduranceBestRows|function\s+enduranceSportCardHtml/);
+  assert.doesNotMatch(
+    progress,
+    /function\s+enduranceStatusWord|function\s+enduranceBlockHtml|function\s+paceTrendWord|function\s+zoneBarHtml|function\s+enduranceBestRows|function\s+enduranceSportCardHtml/
+  );
   assert.match(progress, /CairnProgressEnduranceController\.render/);
   assert.match(progress, /CairnProgressEnduranceController\.paint/);
   assert.doesNotMatch(progress, /api\("\/endurance-prs"\)|function\s+paintProgressEnduranceBody/);
@@ -5171,7 +6085,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(progressTrendWeightClient, /CairnProgressTrendWeight/);
   assert.match(progressTrendWeightClient, /paintProgressBody/);
   assert.match(progressTrendWeightClient, /paintWeightBody/);
-  assert.doesNotMatch(progress, /function\s+paintProgressBody|function\s+paintWeightBody|async function\s+drawProgress/);
+  assert.doesNotMatch(
+    progress,
+    /function\s+paintProgressBody|function\s+paintWeightBody|async function\s+drawProgress/
+  );
   assert.match(progressHistoryModelClient, /Object\.assign\(globalThis, \{/);
   assert.match(progressHistoryModelClient, /CairnProgressHistoryModel/);
   assert.match(progressHistoryModelClient, /progressHistorySummary/);
@@ -5183,8 +6100,14 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(progress, /function\s+sessionCardHtml|function\s+numOrNull/);
   assert.match(progressRunPlanClient, /Object\.assign\(globalThis, \{/);
   assert.match(progressRunPlanClient, /CairnProgressRunPlan/);
-  assert.doesNotMatch(progress, /function\s+runKindClass|function\s+weeklyRunPlanCard|function\s+enduranceGoalCard|function\s+runComplianceLine|function\s+enduranceCoachLine/);
-  assert.match(progressRouteDepsClient, /Object\.assign\(globalThis, \{ CairnProgressRouteDeps: CAIRN_PROGRESS_ROUTE_DEPS \}\)/);
+  assert.doesNotMatch(
+    progress,
+    /function\s+runKindClass|function\s+weeklyRunPlanCard|function\s+enduranceGoalCard|function\s+runComplianceLine|function\s+enduranceCoachLine/
+  );
+  assert.match(
+    progressRouteDepsClient,
+    /Object\.assign\(globalThis, \{ CairnProgressRouteDeps: CAIRN_PROGRESS_ROUTE_DEPS \}\)/
+  );
   assert.match(progressRouteDepsClient, /function progressEnduranceRouteDeps\(renderSelf\)/);
   assert.match(progressRouteDepsClient, /function progressProgramRouteDeps\(renderSelf\)/);
   assert.match(progressVolumeClient, /Object\.assign\(globalThis, \{/);
@@ -5196,38 +6119,65 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(progressEnergyClient, /nutritionCheckinLoadingHtml/);
   assert.match(progressEnergyClient, /nutritionCheckinProposalHtml/);
   assert.doesNotMatch(progressEnergyClient, /^const\s+ENERGY_CONF_WORD|^function\s+kcalFmt/m);
-  assert.match(progressEnergySurfaceClient, /Object\.assign\(globalThis,\s*\{[\s\S]*CairnProgressEnergySurface: CAIRN_PROGRESS_ENERGY_SURFACE/);
+  assert.match(
+    progressEnergySurfaceClient,
+    /Object\.assign\(globalThis,\s*\{[\s\S]*CairnProgressEnergySurface: CAIRN_PROGRESS_ENERGY_SURFACE/
+  );
   assert.match(progressEnergySurfaceClient, /paintEnergyBody,/);
   assert.match(progressEnergySurfaceClient, /reconnectNutritionCheckin,/);
-  assert.match(progressEnergySurfaceClient, /runOp\("nutrition_checkin", \{ window: 21 \}, nutritionCheckinOpOpts\(restore\)\)/);
-  assert.doesNotMatch(progress, /const\s+kcalFmt|function\s+energyRead|const\s+CONF_WORD|const\s+macroBits|prev_target_kcal|eb-checkin-ok settle-in|eb-checkin-quiet/);
+  assert.match(
+    progressEnergySurfaceClient,
+    /runOp\("nutrition_checkin", \{ window: 21 \}, nutritionCheckinOpOpts\(restore\)\)/
+  );
+  assert.doesNotMatch(
+    progress,
+    /const\s+kcalFmt|function\s+energyRead|const\s+CONF_WORD|const\s+macroBits|prev_target_kcal|eb-checkin-ok settle-in|eb-checkin-quiet/
+  );
   assert.match(progressEnergySurfaceClient, /CairnProgressEnergy\.energyBodyHtml\(exp\)/);
   assert.match(progress, /paintEnergyBody\(exp\)/);
   assert.match(meals, /paintEnergyBody\(exp\)/);
-  assert.doesNotMatch(progress, /CairnProgressEnergy\.nutritionCheckinLoadingHtml\(\)|CairnProgressEnergy\.nutritionCheckinOkHtml|CairnProgressEnergy\.nutritionCheckinFailHtml|CairnProgressEnergy\.nutritionCheckinProposalHtml/);
+  assert.doesNotMatch(
+    progress,
+    /CairnProgressEnergy\.nutritionCheckinLoadingHtml\(\)|CairnProgressEnergy\.nutritionCheckinOkHtml|CairnProgressEnergy\.nutritionCheckinFailHtml|CairnProgressEnergy\.nutritionCheckinProposalHtml/
+  );
   assert.match(progressCalendarClient, /Object\.assign\(globalThis, \{/);
   assert.match(progressCalendarClient, /CairnProgressCalendar/);
   assert.doesNotMatch(progress, /function\s+calMonthHtml/);
   assert.match(progressMuscleTrajectoryClient, /Object\.assign\(globalThis, \{/);
   assert.match(progressMuscleTrajectoryClient, /CairnProgressMuscleTrajectory/);
-  assert.doesNotMatch(progress, /function\s+loadMuscleTrajectory|function\s+muscleVerdictTone|function\s+muscleVerdictWord|function\s+muscleTrendGlyph|function\s+muscleGroupRowHtml|function\s+muscleTrajectoryHtml/);
+  assert.doesNotMatch(
+    progress,
+    /function\s+loadMuscleTrajectory|function\s+muscleVerdictTone|function\s+muscleVerdictWord|function\s+muscleTrendGlyph|function\s+muscleGroupRowHtml|function\s+muscleTrajectoryHtml/
+  );
   assert.match(progressDexaTargetingClient, /Object\.assign\(globalThis, \{/);
   assert.match(progressDexaTargetingClient, /CairnProgressDexaTargeting/);
-  assert.doesNotMatch(progress, /function\s+loadDexaTargeting|function\s+dexaTargetToneCls|function\s+dexaTargetHtml|function\s+dexaTargetingHtml/);
+  assert.doesNotMatch(
+    progress,
+    /function\s+loadDexaTargeting|function\s+dexaTargetToneCls|function\s+dexaTargetHtml|function\s+dexaTargetingHtml/
+  );
   assert.match(progressPerformanceClient, /Object\.assign\(globalThis, \{/);
   assert.match(progressPerformanceClient, /CairnProgressPerformance/);
   assert.match(progressPerformanceClient, /progressFocusCardPresent/);
   assert.doesNotMatch(progressPerformanceClient, /_progFocusCard/);
-  assert.doesNotMatch(progress, /function\s+loadPerformance|function\s+pctClamp|function\s+capacityRowHtml|function\s+performanceHtml/);
+  assert.doesNotMatch(
+    progress,
+    /function\s+loadPerformance|function\s+pctClamp|function\s+capacityRowHtml|function\s+performanceHtml/
+  );
   assert.match(progressProgramAdjustmentsClient, /Object\.assign\(globalThis, \{/);
   assert.match(progressProgramAdjustmentsClient, /CairnProgressProgramAdjustments/);
-  assert.doesNotMatch(progress, /const\s+PADJ_KIND|function\s+loadProgramAdjustments|function\s+programAdjustmentsHtml/);
+  assert.doesNotMatch(
+    progress,
+    /const\s+PADJ_KIND|function\s+loadProgramAdjustments|function\s+programAdjustmentsHtml/
+  );
   assert.match(progressTestWeekClient, /Object\.assign\(globalThis, \{/);
   assert.match(progressTestWeekClient, /CairnProgressTestWeek/);
   assert.doesNotMatch(progress, /function\s+loadTestWeek|function\s+testWeekBannerHtml/);
   assert.match(progressProgramSummaryClient, /Object\.assign\(globalThis, \{/);
   assert.match(progressProgramSummaryClient, /CairnProgressProgramSummary/);
-  assert.doesNotMatch(progress, /function\s+liftStatusWord|function\s+liftTrendFig|function\s+liftBestFig|function\s+sortLifts|function\s+volBandWord|function\s+volTrendGlyph|function\s+phaseWord|function\s+liftRowHtml|function\s+volumeBlockHtml|function\s+mesoBlockHtml|function\s+adaptationsHtml/);
+  assert.doesNotMatch(
+    progress,
+    /function\s+liftStatusWord|function\s+liftTrendFig|function\s+liftBestFig|function\s+sortLifts|function\s+volBandWord|function\s+volTrendGlyph|function\s+phaseWord|function\s+liftRowHtml|function\s+volumeBlockHtml|function\s+mesoBlockHtml|function\s+adaptationsHtml/
+  );
   assert.match(progressProgramBlockClient, /Object\.assign\(globalThis, \{/);
   assert.match(progressProgramBlockClient, /CairnProgressProgramBlock/);
   assert.match(progressProgramControllerClient, /CairnProgressProgramController/);
@@ -5235,12 +6185,24 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(progressProgramControllerClient, /paint: paintProgressProgramBody/);
   assert.match(progress, /CairnProgressRouteDeps\.endurance\(\(\) => renderEndurance\(\)\)/);
   assert.match(progress, /CairnProgressRouteDeps\.program\(\(\) => renderProgram\(\)\)/);
-  assert.doesNotMatch(progress, /function progressEnduranceDeps|function progressProgramDeps|nextToken: \(\) => \+\+pollToken/);
-  assert.doesNotMatch(progress, /function\s+blockFocusWord|function\s+activeBlockHtml|function\s+startBlockHtml|function\s+loadProgramBlock|function\s+wireProgramBlock/);
+  assert.doesNotMatch(
+    progress,
+    /function progressEnduranceDeps|function progressProgramDeps|nextToken: \(\) => \+\+pollToken/
+  );
+  assert.doesNotMatch(
+    progress,
+    /function\s+blockFocusWord|function\s+activeBlockHtml|function\s+startBlockHtml|function\s+loadProgramBlock|function\s+wireProgramBlock/
+  );
   assert.match(planEnduranceClient, /Object\.assign\(globalThis, \{ CairnPlanEndurance: CAIRN_PLAN_ENDURANCE \}\)/);
-  assert.match(planEnduranceClient, /Object\.assign\(globalThis,\s*\{[\s\S]*renderPlanEndurance[\s\S]*enduranceProposalOpOpts[\s\S]*renderEnduranceDraftResult[\s\S]*\}\)/);
+  assert.match(
+    planEnduranceClient,
+    /Object\.assign\(globalThis,\s*\{[\s\S]*renderPlanEndurance[\s\S]*enduranceProposalOpOpts[\s\S]*renderEnduranceDraftResult[\s\S]*\}\)/
+  );
   assert.match(planEnduranceClient, /window\.CairnPlanEndurance = CAIRN_PLAN_ENDURANCE/);
-  assert.doesNotMatch(planEnduranceClient, /^const\s+ENDURANCE_PHASES|^function\s+enduranceRampHtml|^function\s+endDraftCardHtml/m);
+  assert.doesNotMatch(
+    planEnduranceClient,
+    /^const\s+ENDURANCE_PHASES|^function\s+enduranceRampHtml|^function\s+endDraftCardHtml/m
+  );
   assert.match(planEditorClient, /Object\.assign\(globalThis, \{ CairnPlanEditor: CAIRN_PLAN_EDITOR \}\)/);
   assert.match(planEditorClient, /window\.CairnPlanEditor = CAIRN_PLAN_EDITOR/);
   assert.match(planEditorClient, /dayModelFromPlan/);
@@ -5251,7 +6213,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(planEditorFormClient, /serializePlanDays/);
   assert.match(planEditorFormClient, /syncPlanModel/);
   assert.doesNotMatch(planEditorFormClient, /renderPlanEditor|mountSaveBar|api\("\/plan"/);
-  assert.match(planEditorController, /Object\.assign\(globalThis,\s*\{[\s\S]*CairnPlanEditorController[\s\S]*renderPlanEditor[\s\S]*\}\)/);
+  assert.match(
+    planEditorController,
+    /Object\.assign\(globalThis,\s*\{[\s\S]*CairnPlanEditorController[\s\S]*renderPlanEditor[\s\S]*\}\)/
+  );
   assert.match(planEditorController, /window\.CairnPlanEditorController = CAIRN_PLAN_EDITOR_CONTROLLER/);
   assert.match(planEditorController, /window\.renderPlanEditor = renderPlanEditor/);
   assert.match(planEditorController, /mountSaveBar\(\{/);
@@ -5262,7 +6227,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(dayFuelClient, /MEAL_LABEL/);
   assert.match(dayFuelClient, /dayFuelHtml/);
   assert.doesNotMatch(dayFuelClient, /^const\s+MEAL_LABEL|^function\s+dayFuelHtml/m);
-  assert.match(dayFuelController, /Object\.assign\(globalThis, \{ CairnDayFuelController: CAIRN_DAY_FUEL_CONTROLLER \}\)/);
+  assert.match(
+    dayFuelController,
+    /Object\.assign\(globalThis, \{ CairnDayFuelController: CAIRN_DAY_FUEL_CONTROLLER \}\)/
+  );
   assert.match(dayFuelController, /loadDayFuel/);
   assert.match(dayFuelController, /openFoodEdit/);
   assert.match(mealRowClient, /Object\.assign\(globalThis, \{/);
@@ -5276,13 +6244,19 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(mealPlanClient, /mealPrefsHtml/);
   assert.match(mealPlanClient, /mealPlannerBodyHtml/);
   assert.match(mealPlanClient, /mealDayHtml/);
-  assert.doesNotMatch(mealPlanClient, /^function\s+mealRowHtml|^function\s+mealPlanListHtml|^function\s+mealPrefsHtml|^function\s+mealPlannerBodyHtml|^function\s+mealDayHtml/m);
+  assert.doesNotMatch(
+    mealPlanClient,
+    /^function\s+mealRowHtml|^function\s+mealPlanListHtml|^function\s+mealPrefsHtml|^function\s+mealPlannerBodyHtml|^function\s+mealDayHtml/m
+  );
   assert.match(mealRecipeClient, /Object\.assign\(globalThis, \{ CairnMealRecipe: CAIRN_MEAL_RECIPE \}\)/);
   assert.match(mealRecipeClient, /window\.CairnMealRecipe = CAIRN_MEAL_RECIPE/);
   assert.match(mealRecipeClient, /ctaHtml: mealRecipeCtaHtml/);
   assert.match(mealRecipeClient, /recipeHtml: mealRecipeHtml/);
   assert.match(mealRecipeClient, /loadingHtml: mealRecipeLoadingHtml/);
-  assert.doesNotMatch(mealRecipeClient, /^function\s+recipeCtaHtml|^function\s+recipeHtml|^function\s+recipeLoadingHtml/m);
+  assert.doesNotMatch(
+    mealRecipeClient,
+    /^function\s+recipeCtaHtml|^function\s+recipeHtml|^function\s+recipeLoadingHtml/m
+  );
   assert.match(mealRecipeController, /Object\.assign\(globalThis, \{/);
   assert.match(mealRecipeController, /CairnMealRecipeController/);
   assert.match(mealRecipeController, /closeMealSheet/);
@@ -5308,9 +6282,18 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(mealPlannerController, /Object\.assign\(globalThis, \{/);
   assert.match(mealPlannerController, /CairnMealPlannerController/);
   assert.match(mealPlannerController, /reconnectMealPlan/);
-  assert.doesNotMatch(mealPlannerController, /function reconnectMealSwap|function wireMealRows|function mealSwapOpOpts|CairnMealPlan\.mealPlanListHtml|CairnMealSwapController\.wireMealRows/);
-  assert.doesNotMatch(meals, /const\s+MEAL_LABEL|function\s+dayFuelHtml|function\s+loadDayFuel|function\s+openFoodEdit|const\s+MEAL_HINT_CHIPS|const\s+MEAL_PREFS_PLACEHOLDER|function\s+mealPrefsHtml|function\s+mealsCtxFor|function\s+mealRowHtml|function\s+mealSlotFor|function\s+mealDayHtml|const\s+mealCardHtml/);
-  assert.doesNotMatch(meals, /function\s+mealRecipeCtaHtml|function\s+mealRecipeHtml|function\s+mealRecipeLoadingHtml|function\s+openMealSheet|function\s+recipeOpOpts|function\s+reconnectRecipe|function\s+reconnectMealPlan|function\s+reconnectMealSwap|function\s+wireMealRows|recipe-ings.*ingredients\.map/s);
+  assert.doesNotMatch(
+    mealPlannerController,
+    /function reconnectMealSwap|function wireMealRows|function mealSwapOpOpts|CairnMealPlan\.mealPlanListHtml|CairnMealSwapController\.wireMealRows/
+  );
+  assert.doesNotMatch(
+    meals,
+    /const\s+MEAL_LABEL|function\s+dayFuelHtml|function\s+loadDayFuel|function\s+openFoodEdit|const\s+MEAL_HINT_CHIPS|const\s+MEAL_PREFS_PLACEHOLDER|function\s+mealPrefsHtml|function\s+mealsCtxFor|function\s+mealRowHtml|function\s+mealSlotFor|function\s+mealDayHtml|const\s+mealCardHtml/
+  );
+  assert.doesNotMatch(
+    meals,
+    /function\s+mealRecipeCtaHtml|function\s+mealRecipeHtml|function\s+mealRecipeLoadingHtml|function\s+openMealSheet|function\s+recipeOpOpts|function\s+reconnectRecipe|function\s+reconnectMealPlan|function\s+reconnectMealSwap|function\s+wireMealRows|recipe-ings.*ingredients\.map/s
+  );
   assert.match(dayFuelController, /CairnDayFuel/);
   assert.match(meals, /CairnDayFuelController\.loadDayFuel/);
   assert.match(meals, /meal-plan-client\.js/);
@@ -5323,21 +6306,33 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(foodNoteClient, /foodIngredients/);
   assert.match(foodNoteClient, /noteEntryHtml/);
   assert.doesNotMatch(foodNoteClient, /^function\s+foodIngredients|^function\s+noteEntryHtml|^function\s+parsedNote/m);
-  assert.match(foodDetailController, /Object\.assign\(globalThis, \{ CairnFoodDetailController: CAIRN_FOOD_DETAIL_CONTROLLER \}\)/);
+  assert.match(
+    foodDetailController,
+    /Object\.assign\(globalThis, \{ CairnFoodDetailController: CAIRN_FOOD_DETAIL_CONTROLLER \}\)/
+  );
   assert.match(foodDetailController, /window\.CairnFoodDetailController = CAIRN_FOOD_DETAIL_CONTROLLER/);
   assert.match(foodDetailController, /openFoodDetail/);
   assert.match(healthEvidenceClient, /Object\.assign\(globalThis, \{ CairnHealthEvidence: CAIRN_HEALTH_EVIDENCE \}\)/);
   assert.match(healthEvidenceClient, /window\.CairnHealthEvidence = CAIRN_HEALTH_EVIDENCE/);
   assert.match(healthEvidenceClient, /directiveHtml/);
-  assert.doesNotMatch(healthEvidenceClient, /^const\s+DIRECTIVE_DOMAINS|^function\s+evidenceListHtml|^function\s+directiveHtml/m);
-  assert.match(healthMarkerOrderClient, /Object\.assign\(globalThis, \{ CairnHealthMarkerOrder: CAIRN_HEALTH_MARKER_ORDER \}\)/);
+  assert.doesNotMatch(
+    healthEvidenceClient,
+    /^const\s+DIRECTIVE_DOMAINS|^function\s+evidenceListHtml|^function\s+directiveHtml/m
+  );
+  assert.match(
+    healthMarkerOrderClient,
+    /Object\.assign\(globalThis, \{ CairnHealthMarkerOrder: CAIRN_HEALTH_MARKER_ORDER \}\)/
+  );
   assert.match(healthMarkerOrderClient, /window\.CairnHealthMarkerOrder = CAIRN_HEALTH_MARKER_ORDER/);
   assert.match(healthMarkerOrderClient, /orderMarkersForDisplay/);
   assert.match(healthClient, /Object\.assign\(globalThis, \{ CairnHealthClient: CAIRN_HEALTH_CLIENT \}\)/);
   assert.match(healthClient, /window\.CairnHealthClient = CAIRN_HEALTH_CLIENT/);
   assert.match(healthClient, /CairnHealthEvidence\.directiveHtml/);
   assert.match(healthClient, /CairnHealthMarkerOrder\.orderMarkersForDisplay/);
-  assert.doesNotMatch(healthClient, /^const\s+MAX_DOC_BYTES|^const\s+H_FILE_PROMPT|^const\s+DIRECTIVE_DOMAINS|^function\s+guessUploadMime|^function\s+evidenceListHtml|^function\s+directiveHtml/m);
+  assert.doesNotMatch(
+    healthClient,
+    /^const\s+MAX_DOC_BYTES|^const\s+H_FILE_PROMPT|^const\s+DIRECTIVE_DOMAINS|^function\s+guessUploadMime|^function\s+evidenceListHtml|^function\s+directiveHtml/m
+  );
   assert.match(healthPictureClient, /Object\.assign\(globalThis, \{ CairnHealthPicture: CAIRN_HEALTH_PICTURE \}\)/);
   assert.match(healthPictureClient, /window\.CairnHealthPicture = CAIRN_HEALTH_PICTURE/);
   assert.match(healthPictureClient, /reviewBusyHtml/);
@@ -5356,12 +6351,21 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(healthMarkersController, /window\.CairnHealthMarkersController = CAIRN_HEALTH_MARKERS_CONTROLLER/);
   assert.match(healthMarkersController, /CairnHealthClient\.orderMarkersForDisplay/);
   assert.match(healthMarkersController, /CairnHealthMarkers\.wireMarkerChart/);
-  assert.match(healthDirectivesClient, /Object\.assign\(globalThis, \{ CairnHealthDirectives: CAIRN_HEALTH_DIRECTIVES \}\)/);
+  assert.match(
+    healthDirectivesClient,
+    /Object\.assign\(globalThis, \{ CairnHealthDirectives: CAIRN_HEALTH_DIRECTIVES \}\)/
+  );
   assert.match(healthDirectivesClient, /window\.CairnHealthDirectives = CAIRN_HEALTH_DIRECTIVES/);
   assert.match(healthDirectivesClient, /directivesSectionHtml/);
   assert.match(healthDirectivesClient, /directiveResearchNudgeHtml/);
-  assert.doesNotMatch(healthDirectivesClient, /^function\s+directivesSectionHtml|^function\s+directiveResearchNudgeHtml/m);
-  assert.match(healthDirectiveLoaderClient, /Object\.assign\(globalThis, \{ CairnHealthDirectiveLoader: CAIRN_HEALTH_DIRECTIVE_LOADER \}\)/);
+  assert.doesNotMatch(
+    healthDirectivesClient,
+    /^function\s+directivesSectionHtml|^function\s+directiveResearchNudgeHtml/m
+  );
+  assert.match(
+    healthDirectiveLoaderClient,
+    /Object\.assign\(globalThis, \{ CairnHealthDirectiveLoader: CAIRN_HEALTH_DIRECTIVE_LOADER \}\)/
+  );
   assert.match(healthDirectiveLoaderClient, /window\.CairnHealthDirectiveLoader = CAIRN_HEALTH_DIRECTIVE_LOADER/);
   assert.match(healthDirectiveLoaderClient, /CairnHealthDirectives\.directivesSectionHtml/);
   assert.match(healthDirectiveLoaderClient, /api\("\/directives"\)/);
@@ -5371,20 +6375,35 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(healthReadClient, /window\.CairnHealthRead = CAIRN_HEALTH_READ/);
   assert.match(healthReadClient, /recoveryHtml/);
   assert.match(healthReadClient, /priorityMarkersSectionHtml/);
-  assert.doesNotMatch(healthReadClient, /^function\s+recoveryHtml|^function\s+priorityMarkersSectionHtml|^function\s+optimalPhrase/m);
-  assert.match(healthReadSupplementsClient, /Object\.assign\(globalThis, \{ CairnHealthReadSupplements: CAIRN_HEALTH_READ_SUPPLEMENTS \}\)/);
+  assert.doesNotMatch(
+    healthReadClient,
+    /^function\s+recoveryHtml|^function\s+priorityMarkersSectionHtml|^function\s+optimalPhrase/m
+  );
+  assert.match(
+    healthReadSupplementsClient,
+    /Object\.assign\(globalThis, \{ CairnHealthReadSupplements: CAIRN_HEALTH_READ_SUPPLEMENTS \}\)/
+  );
   assert.match(healthReadSupplementsClient, /window\.CairnHealthReadSupplements = CAIRN_HEALTH_READ_SUPPLEMENTS/);
   assert.match(healthReadSupplementsClient, /api\("\/supplements\/understand"/);
   assert.match(healthReadSupplementsClient, /api\(`\/supplements\/\$\{id\}`/);
-  assert.match(healthReadController, /Object\.assign\(globalThis, \{ CairnHealthReadController: CAIRN_HEALTH_READ_CONTROLLER \}\)/);
+  assert.match(
+    healthReadController,
+    /Object\.assign\(globalThis, \{ CairnHealthReadController: CAIRN_HEALTH_READ_CONTROLLER \}\)/
+  );
   assert.match(healthReadController, /window\.CairnHealthReadController = CAIRN_HEALTH_READ_CONTROLLER/);
   assert.match(healthReadController, /CairnHealthRead\.recoveryNoDataHtml/);
   assert.match(healthReadController, /CairnHealthRead\.recoveryHtml/);
   assert.match(healthReadController, /CairnHealthRead\.priorityMarkersSectionHtml/);
   assert.match(healthReadController, /CairnHealthReadSupplements\.load/);
   assert.match(healthReadController, /CairnHealthReadSupplements\.render/);
-  assert.match(healthStandingPrimitivesClient, /Object\.assign\(globalThis, \{ CairnHealthStandingPrimitives: CAIRN_HEALTH_STANDING_PRIMITIVES \}\)/);
-  assert.match(healthStandingPrimitivesClient, /window\.CairnHealthStandingPrimitives = CAIRN_HEALTH_STANDING_PRIMITIVES/);
+  assert.match(
+    healthStandingPrimitivesClient,
+    /Object\.assign\(globalThis, \{ CairnHealthStandingPrimitives: CAIRN_HEALTH_STANDING_PRIMITIVES \}\)/
+  );
+  assert.match(
+    healthStandingPrimitivesClient,
+    /window\.CairnHealthStandingPrimitives = CAIRN_HEALTH_STANDING_PRIMITIVES/
+  );
   assert.match(healthStandingPrimitivesClient, /function hstandBpCardHtml/);
   assert.match(healthStandingPrimitivesClient, /function hstandBodyCompHtml/);
   assert.match(healthStandingClient, /Object\.assign\(globalThis, \{ CairnHealthStanding: CAIRN_HEALTH_STANDING \}\)/);
@@ -5392,8 +6411,14 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(healthStandingClient, /renderHealthStandingHtml/);
   assert.match(healthStandingClient, /CairnHealthStandingPrimitives\.hstandBpCardHtml/);
   assert.match(healthStandingClient, /CairnHealthStandingPrimitives\.hstandBodyCompHtml/);
-  assert.doesNotMatch(healthStandingClient, /^function\s+renderHealthStandingHtml|^function\s+hstandBpCardHtml|^function\s+hstandBodyCompHtml/m);
-  assert.match(healthStandingController, /Object\.assign\(globalThis, \{ CairnHealthStandingController: CAIRN_HEALTH_STANDING_CONTROLLER \}\)/);
+  assert.doesNotMatch(
+    healthStandingClient,
+    /^function\s+renderHealthStandingHtml|^function\s+hstandBpCardHtml|^function\s+hstandBodyCompHtml/m
+  );
+  assert.match(
+    healthStandingController,
+    /Object\.assign\(globalThis, \{ CairnHealthStandingController: CAIRN_HEALTH_STANDING_CONTROLLER \}\)/
+  );
   assert.match(healthStandingController, /window\.CairnHealthStandingController = CAIRN_HEALTH_STANDING_CONTROLLER/);
   assert.match(healthStandingController, /CairnHealthStanding\.renderHealthStandingHtml/);
   assert.match(healthStandingController, /CairnHealthStanding\.localDateTimeInputValue/);
@@ -5405,7 +6430,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(memoryClient, /Object\.assign\(globalThis, \{ CairnMemory: CAIRN_MEMORY \}\)/);
   assert.match(memoryClient, /window\.CairnMemory = CAIRN_MEMORY/);
   assert.doesNotMatch(memoryClient, /^const\s+MEM_KINDS|^function\s+memoryRowHtml/m);
-  assert.match(meMemoryController, /Object\.assign\(globalThis, \{ CairnMeMemoryController: CAIRN_ME_MEMORY_CONTROLLER \}\)/);
+  assert.match(
+    meMemoryController,
+    /Object\.assign\(globalThis, \{ CairnMeMemoryController: CAIRN_ME_MEMORY_CONTROLLER \}\)/
+  );
   assert.match(meMemoryController, /window\.CairnMeMemoryController = CAIRN_ME_MEMORY_CONTROLLER/);
   assert.match(meMemoryController, /render/);
   assert.match(meMemoryController, /load/);
@@ -5415,7 +6443,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(lifeFormHelpers, /Object\.assign\(globalThis, \{ CairnLifeFormHelpers: CAIRN_LIFE_FORM_HELPERS \}\)/);
   assert.match(lifeFormHelpers, /function collectLifeForm\(\)/);
   assert.match(lifeFormHelpers, /CairnLife\.lifeFieldsHtml/);
-  assert.match(lifeTimelineActions, /Object\.assign\(globalThis, \{ CairnLifeTimelineActions: CAIRN_LIFE_TIMELINE_ACTIONS \}\)/);
+  assert.match(
+    lifeTimelineActions,
+    /Object\.assign\(globalThis, \{ CairnLifeTimelineActions: CAIRN_LIFE_TIMELINE_ACTIONS \}\)/
+  );
   assert.match(lifeTimelineActions, /CairnLife\.lifeEventHtml/);
   assert.match(lifeController, /Object\.assign\(globalThis, \{ CairnLifeController: CAIRN_LIFE_CONTROLLER \}\)/);
   assert.match(lifeController, /window\.CairnLifeController = CAIRN_LIFE_CONTROLLER/);
@@ -5423,7 +6454,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(familyClient, /Object\.assign\(globalThis, \{ CairnFamily: CAIRN_FAMILY \}\)/);
   assert.match(familyClient, /window\.CairnFamily = CAIRN_FAMILY/);
   assert.doesNotMatch(familyClient, /^const\s+FAMILY_COLORS|^function\s+familyCardHtml/m);
-  assert.match(familyControllerClient, /Object\.assign\(globalThis, \{ CairnFamilyController: CAIRN_FAMILY_CONTROLLER \}\)/);
+  assert.match(
+    familyControllerClient,
+    /Object\.assign\(globalThis, \{ CairnFamilyController: CAIRN_FAMILY_CONTROLLER \}\)/
+  );
   assert.match(familyControllerClient, /CairnFamilyController: CAIRN_FAMILY_CONTROLLER/);
   assert.match(familyControllerClient, /render,/);
   assert.match(familyControllerClient, /startEdit,/);
@@ -5435,19 +6469,34 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(healthRecordsClient, /recordsTabHtml/);
   assert.match(healthRecordsClient, /recordsListHtml/);
   assert.doesNotMatch(healthRecordsClient, /^function\s+recordsUploadHtml|^function\s+recordsListHtml/m);
-  assert.match(healthDocUploadController, /Object\.assign\(globalThis, \{ CairnHealthDocUploadController: CAIRN_HEALTH_DOC_UPLOAD_CONTROLLER \}\)/);
-  assert.match(healthDocUploadController, /window\.CairnHealthDocUploadController = CAIRN_HEALTH_DOC_UPLOAD_CONTROLLER/);
+  assert.match(
+    healthDocUploadController,
+    /Object\.assign\(globalThis, \{ CairnHealthDocUploadController: CAIRN_HEALTH_DOC_UPLOAD_CONTROLLER \}\)/
+  );
+  assert.match(
+    healthDocUploadController,
+    /window\.CairnHealthDocUploadController = CAIRN_HEALTH_DOC_UPLOAD_CONTROLLER/
+  );
   assert.match(healthDocUploadController, /wireHealthDocUpload/);
   assert.match(healthDocUploadController, /refreshPictureAfterHealthDocUpload/);
-  assert.match(meRecordsHealthDocController, /Object\.assign\(globalThis, \{ CairnHealthRecordsController: CAIRN_HEALTH_RECORDS_CONTROLLER \}\)/);
+  assert.match(
+    meRecordsHealthDocController,
+    /Object\.assign\(globalThis, \{ CairnHealthRecordsController: CAIRN_HEALTH_RECORDS_CONTROLLER \}\)/
+  );
   assert.match(meRecordsHealthDocController, /window\.CairnHealthRecordsController = CAIRN_HEALTH_RECORDS_CONTROLLER/);
   assert.match(meRecordsHealthDocController, /CairnHealthDocUploadController\.wireUpload/);
   assert.match(meRecordsHealthDocController, /loadHealthDocs/);
-  assert.match(healthShareController, /Object\.assign\(globalThis, \{ CairnHealthShareController: CAIRN_HEALTH_SHARE_CONTROLLER \}\)/);
+  assert.match(
+    healthShareController,
+    /Object\.assign\(globalThis, \{ CairnHealthShareController: CAIRN_HEALTH_SHARE_CONTROLLER \}\)/
+  );
   assert.match(healthShareController, /window\.CairnHealthShareController = CAIRN_HEALTH_SHARE_CONTROLLER/);
   assert.match(healthShareController, /deps\.api\("\/markers\/reconcile"/);
   assert.match(healthShareController, /deps\.cachedApi\("\/markers\/priority"/);
-  assert.doesNotMatch(health, /const\s+HEALTH_KINDS|function\s+healthKindLabel|function\s+parsedDoc|function\s+markerFlagClass|function\s+markersTable|function\s+docCollapsible|function\s+healthDocInner|function\s+healthDocHtml/);
+  assert.doesNotMatch(
+    health,
+    /const\s+HEALTH_KINDS|function\s+healthKindLabel|function\s+parsedDoc|function\s+markerFlagClass|function\s+markersTable|function\s+docCollapsible|function\s+healthDocInner|function\s+healthDocHtml/
+  );
   assert.match(chatClient, /Object\.assign\(globalThis, \{ CairnChatClient: CAIRN_CHAT_CLIENT \}\)/);
   assert.match(chatClient, /window\.CairnChatClient = CAIRN_CHAT_CLIENT/);
   assert.match(chatClient, /shellHtml: chatShellHtml/);
@@ -5458,14 +6507,23 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(chatAttachmentClient, /Object\.assign\(globalThis, \{ CairnChatAttachment: CAIRN_CHAT_ATTACHMENT \}\)/);
   assert.match(chatAttachmentClient, /compressImage: chatAttachmentCompressImage/);
   assert.match(chatAttachmentClient, /settleAfterNativePicker: chatAttachmentSettleAfterNativePicker/);
-  assert.match(chatComposerFocusClient, /Object\.assign\(globalThis, \{ CairnChatComposerFocus: CAIRN_CHAT_COMPOSER_FOCUS \}\)/);
+  assert.match(
+    chatComposerFocusClient,
+    /Object\.assign\(globalThis, \{ CairnChatComposerFocus: CAIRN_CHAT_COMPOSER_FOCUS \}\)/
+  );
   assert.match(chatComposerFocusClient, /releaseStaleInputFocus: chatComposerReleaseStaleInputFocus/);
   assert.match(chatComposerFocusClient, /recoverInputFocusFromTap: chatComposerRecoverInputFocusFromTap/);
   assert.match(chatComposerFocusClient, /wireFocus: chatComposerWireFocus/);
-  assert.match(chatComposerController, /Object\.assign\(globalThis, \{ CairnChatComposerController: CAIRN_CHAT_COMPOSER_CONTROLLER \}\)/);
+  assert.match(
+    chatComposerController,
+    /Object\.assign\(globalThis, \{ CairnChatComposerController: CAIRN_CHAT_COMPOSER_CONTROLLER \}\)/
+  );
   assert.match(chatComposerController, /wire: wireChatComposer/);
   assert.match(chatComposerController, /clearPasteHandler: clearChatComposerPasteHandler/);
-  assert.match(chatTurnRecordsClient, /Object\.assign\(globalThis, \{ CairnChatTurnRecords: CAIRN_CHAT_TURN_RECORDS \}\)/);
+  assert.match(
+    chatTurnRecordsClient,
+    /Object\.assign\(globalThis, \{ CairnChatTurnRecords: CAIRN_CHAT_TURN_RECORDS \}\)/
+  );
   assert.match(chatTurnRecordsClient, /event: parseChatTurnEvent/);
   assert.match(chatTurnRecordsClient, /saveDraft: saveChatTurnDraft/);
   assert.match(chatLayoutClient, /Object\.assign\(globalThis, \{ CairnChatLayout: CAIRN_CHAT_LAYOUT \}\)/);
@@ -5527,12 +6585,27 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(ui, /function segBar\(active, items\)[\s\S]*uiSegments\(\)\.segBar\(active, items\)/);
   assert.match(uiSegments, /function segBar\(active, items\)[\s\S]*deps\.segmentedNavHtml\(\{ active, items \}\)/);
   assert.doesNotMatch(ui, /function loadingState/);
-  assert.match(uiSegments, /deps\.withViewTransition\(\(\) => Promise\.resolve\(handler\(\)\)\.then\(\(\) => \{[\s\S]*deps\.syncRouteFromState\(\)[\s\S]*return deps\.viewEnter\(\)/);
-  assert.match(ui, /function exerciseExplanation\(d\)[\s\S]*CairnExerciseDetailController\.exerciseExplanation\(d, exerciseDetailDeps\(\)\)/);
-  assert.match(ui, /function exerciseExplanationHtml\(d, explanation\)[\s\S]*CairnExerciseDetailController\.exerciseExplanationHtml\(d, explanation, exerciseDetailDeps\(\)\)/);
-  assert.match(ui, /function replaceExerciseExplanation\(el, d, explanation\)[\s\S]*CairnExerciseDetailController\.replaceExerciseExplanation\(el, d, explanation, exerciseDetailDeps\(\)\)/);
+  assert.match(
+    uiSegments,
+    /deps\.withViewTransition\(\(\) => Promise\.resolve\(handler\(\)\)\.then\(\(\) => \{[\s\S]*deps\.syncRouteFromState\(\)[\s\S]*return deps\.viewEnter\(\)/
+  );
+  assert.match(
+    ui,
+    /function exerciseExplanation\(d\)[\s\S]*CairnExerciseDetailController\.exerciseExplanation\(d, exerciseDetailDeps\(\)\)/
+  );
+  assert.match(
+    ui,
+    /function exerciseExplanationHtml\(d, explanation\)[\s\S]*CairnExerciseDetailController\.exerciseExplanationHtml\(d, explanation, exerciseDetailDeps\(\)\)/
+  );
+  assert.match(
+    ui,
+    /function replaceExerciseExplanation\(el, d, explanation\)[\s\S]*CairnExerciseDetailController\.replaceExerciseExplanation\(el, d, explanation, exerciseDetailDeps\(\)\)/
+  );
   assert.doesNotMatch(ui, /function validExerciseExplanationPayload/);
-  assert.doesNotMatch(ui, /function\s+closeDetail|function\s+openDetailFrom|function\s+mountDetail|function\s+wireDetailCommon|function\s+wireArtZoom/);
+  assert.doesNotMatch(
+    ui,
+    /function\s+closeDetail|function\s+openDetailFrom|function\s+mountDetail|function\s+wireDetailCommon|function\s+wireArtZoom/
+  );
   assert.doesNotMatch(ui, /Front foot far enough forward|function\s+exerciseDetailLine|const\s+line\s*=\s*\(setup/);
   assert.doesNotMatch(ui, /let\s+saveCtx|function\s+mountSaveBar|function\s+hideSaveBar/);
   assert.match(today, /CairnTodayRailController\.fetchTodayAgenda/);
@@ -5542,7 +6615,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayDependenciesSource, /CairnTodayRailController\.runFallbackRail/);
   assert.match(todayRailLoadersSource, /CairnTodayAgenda\.fuelCardHtml/);
   assert.doesNotMatch(today, /window\.CairnTodayAgenda\.fuelCardHtml/);
-  assert.doesNotMatch(today, /function\s+wireGenericAgendaCards|const\s+TODAY_RAIL_LOADERS|function\s+renderableAgendaBuckets/);
+  assert.doesNotMatch(
+    today,
+    /function\s+wireGenericAgendaCards|const\s+TODAY_RAIL_LOADERS|function\s+renderableAgendaBuckets/
+  );
   assert.match(todayScreenRuntimeSource, /CairnTodayPlanSelection\.suggestedPlanDayNumber/);
   assert.doesNotMatch(today, /function\s+planDayNumberForSession|function\s+nextPlanDayNumber/);
   assert.match(today, /coachingFocusThreadHtml\(conductor\)/);
@@ -5554,7 +6630,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayCompatibilityBridges, /CairnTodayAddExerciseController\.appendOffPlanCard/);
   assert.doesNotMatch(today, /let _rxRefreshTimer/);
   assert.doesNotMatch(today, /function refreshAdaptedRx\(\)\s*\{[\s\S]*const rxByEx/);
-  assert.doesNotMatch(today, /function resetAddForm|const datalist = todayView\.querySelector\("#exOptions"\)|const skippedBtn = \[\.\.\.todayView\.querySelectorAll/);
+  assert.doesNotMatch(
+    today,
+    /function resetAddForm|const datalist = todayView\.querySelector\("#exOptions"\)|const skippedBtn = \[\.\.\.todayView\.querySelectorAll/
+  );
   assert.match(todayBriefControllerSource, /CairnTodayBrief\.briefHtml/);
   assert.match(todayBriefControllerSource, /CairnTodayBrief\.signalsText/);
   assert.match(todayBriefOverrideSource, /function dayReadOverrideOpOpts\(/);
@@ -5565,7 +6644,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayBriefControllerSource, /CairnTodayBriefOverrideClient\.dayReadOverrideOpOpts/);
   assert.match(todayBriefControllerSource, /CairnTodayBriefOverrideClient\.reconnectDayReadOverride/);
   assert.match(todayBriefControllerSource, /CairnTodayBriefActionsClient\.wireBriefActions/);
-  assert.doesNotMatch(today, /const\s+BRIEF_KIND\s*=\s*\{|const\s+BRIEF_OVERRIDES\s*=\s*\[|function\s+briefRedirect|function\s+visibleBriefOverrides|function\s+agentOfflineNoticeHtml/);
+  assert.doesNotMatch(
+    today,
+    /const\s+BRIEF_KIND\s*=\s*\{|const\s+BRIEF_OVERRIDES\s*=\s*\[|function\s+briefRedirect|function\s+visibleBriefOverrides|function\s+agentOfflineNoticeHtml/
+  );
   assert.match(todayBriefControllerSource, /function loadBrief\(/);
   assert.match(todayBriefControllerSource, /function upgradeBriefInPlace\(/);
   assert.match(todayBriefControllerSource, /function reshapeToday\(/);
@@ -5580,23 +6662,41 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayScreenRuntimeSource, /CairnTodayBriefController\.loadBrief/);
   assert.match(todayCompatibilityBridges, /CairnTodayBriefController\.wireBrief/);
   assert.match(todayCompatibilityBridges, /CairnTodayBriefController\.reconnectDayReadOverride/);
-  assert.doesNotMatch(today, /function\s+paintBriefReshaping|function\s+dayReadOverrideOpOpts\([^)]*\)\s*\{[\s\S]*path:\s*"\/today-read\/reshape"|let\s+_agentOfflineDismissed/);
+  assert.doesNotMatch(
+    today,
+    /function\s+paintBriefReshaping|function\s+dayReadOverrideOpOpts\([^)]*\)\s*\{[\s\S]*path:\s*"\/today-read\/reshape"|let\s+_agentOfflineDismissed/
+  );
   assert.match(todayCompatibilityBridges, /CairnTodaySessionSuggestController\.reconnectSessionSuggest/);
   assert.match(todayCompatibilityBridges, /CairnTodaySessionSuggestController\.revealSessionComposer/);
   assert.match(todayCompatibilityBridges, /CairnTodaySessionSuggestController\.askForSession/);
-  assert.doesNotMatch(today, /CairnTodaySessionSuggest\.cardHtml|CairnTodaySessionSuggest\.loadingHtml|CairnTodaySessionSuggest\.failureHtml|CairnTodaySessionSuggest\.composerHtml/);
-  assert.doesNotMatch(today, /function\s+suggestItemHtml|function\s+suggestCardHtml|const\s+SESSION_VIBES|sug-card sug-loading|sug-card sug-fail|<div class="sug-composer/);
+  assert.doesNotMatch(
+    today,
+    /CairnTodaySessionSuggest\.cardHtml|CairnTodaySessionSuggest\.loadingHtml|CairnTodaySessionSuggest\.failureHtml|CairnTodaySessionSuggest\.composerHtml/
+  );
+  assert.doesNotMatch(
+    today,
+    /function\s+suggestItemHtml|function\s+suggestCardHtml|const\s+SESSION_VIBES|sug-card sug-loading|sug-card sug-fail|<div class="sug-composer/
+  );
   assert.match(todayCompatibilityBridges, /CairnTodaySessionStatus\.sessionDoneCardHtml/);
   assert.match(todayDependenciesSource, /CairnTodaySessionStatus\.skipLineHtml/);
   assert.match(today, /CairnTodaySessionController\.wireSessionSurface/);
   assert.match(todayCompatibilityBridges, /CairnTodaySessionController\.wireLogRow/);
   assert.match(todayCompatibilityBridges, /CairnTodaySessionController\.wireSkips/);
-  assert.doesNotMatch(today, /CairnTodaySessionStatus\.setChipHtml|CairnTodaySessionStatus\.feedbackOpenHtml|CairnTodaySessionStatus\.feedbackFormHtml|CairnTodaySessionStatus\.feedbackDoneHtml/);
-  assert.doesNotMatch(today, /function\s+setsTonnage|function\s+feelScale|function\s+renderFeedback|function\s+wireDeletes|function\s+bumpProgress|function\s+refreshFinishStat|function\s+removeOffPlanCard|async function\s+skipFromCard|class="sessiondone reveal"|id="feedbackOpen"|id="feedbackDismiss"|class="skipline/);
+  assert.doesNotMatch(
+    today,
+    /CairnTodaySessionStatus\.setChipHtml|CairnTodaySessionStatus\.feedbackOpenHtml|CairnTodaySessionStatus\.feedbackFormHtml|CairnTodaySessionStatus\.feedbackDoneHtml/
+  );
+  assert.doesNotMatch(
+    today,
+    /function\s+setsTonnage|function\s+feelScale|function\s+renderFeedback|function\s+wireDeletes|function\s+bumpProgress|function\s+refreshFinishStat|function\s+removeOffPlanCard|async function\s+skipFromCard|class="sessiondone reveal"|id="feedbackOpen"|id="feedbackDismiss"|class="skipline/
+  );
   assert.match(todayRailLoadersSource, /CairnTodayProgramAdjustments\.extraCount/);
   assert.match(todayRailLoadersSource, /CairnTodayProgramAdjustments\.bannerHtml/);
   assert.doesNotMatch(today, /CairnTodayProgramAdjustments\.extraCount|CairnTodayProgramAdjustments\.bannerHtml/);
-  assert.doesNotMatch(today, /const\s+ADJUST_GLYPH|function\s+adjustPlanRequest|class="adjust-card reveal"|class="adjust-sugs"|data-req="\$\{escAttr\(adjustPlanRequest/);
+  assert.doesNotMatch(
+    today,
+    /const\s+ADJUST_GLYPH|function\s+adjustPlanRequest|class="adjust-card reveal"|class="adjust-sugs"|data-req="\$\{escAttr\(adjustPlanRequest/
+  );
   assert.match(todayRailLoadersSource, /CairnTodayWeekAhead\.cardHtml/);
   assert.doesNotMatch(today, /CairnTodayWeekAhead\.cardHtml/);
   assert.doesNotMatch(today, /const\s+WEEK_AHEAD_GLYPH|class="weekahead reveal"|class="wa-row/);
@@ -5607,10 +6707,16 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(today, /const\s+PACE_WORDS|const\s+fmtPace|class="stat stat-pace pace-\$\{stats\.pace_status/);
   assert.match(todayCompatibilityBridges, /CairnTodaySideLoaders\.loadContextBanner/);
   assert.match(todayCompatibilityBridges, /CairnTodaySideLoaders\.loadHealthFocusBanner/);
-  assert.doesNotMatch(today, /const\s+CTX_ICONS|function\s+daysUntil|function\s+eventCountdown|function\s+isNearTermContext|function\s+ctxBannerLine|function\s+goalLineHtml/);
+  assert.doesNotMatch(
+    today,
+    /const\s+CTX_ICONS|function\s+daysUntil|function\s+eventCountdown|function\s+isNearTermContext|function\s+ctxBannerLine|function\s+goalLineHtml/
+  );
   assert.match(todayRailLoaders, /CairnTodayGarminReconciliation\.load/);
   assert.doesNotMatch(today, /CairnTodayGarminReconciliation\.load/);
-  assert.doesNotMatch(today, /\/garmin\/unreconciled|\/garmin\/reconcile|garmin-reconcile chip-in|function\s+reconcilePromptHtml/);
+  assert.doesNotMatch(
+    today,
+    /\/garmin\/unreconciled|\/garmin\/reconcile|garmin-reconcile chip-in|function\s+reconcilePromptHtml/
+  );
   assert.match(captureProvenance, /Object\.assign\(globalThis, \{/);
   assert.match(captureProvenance, /CairnCaptureProvenance/);
   assert.match(captureProvenance, /function loadTrainingProvenance/);
@@ -5627,12 +6733,18 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(captureVoice, /CairnCaptureVoice/);
   assert.match(captureVoice, /function setupCaptureVoice/);
   assert.doesNotMatch(capture, /function loadTrainingProvenance|function provenanceLineHtml/);
-  assert.doesNotMatch(capture, /function renderInsightCard|function renderWeeklyCard|function maybeGenerateInsight|function maybeGenerateWeekly/);
+  assert.doesNotMatch(
+    capture,
+    /function renderInsightCard|function renderWeeklyCard|function maybeGenerateInsight|function maybeGenerateWeekly/
+  );
   assert.doesNotMatch(capture, /CAPTURE_SPEECH_REC|function setupCaptureVoice/);
   assert.match(capture, /function loadTodayReads/);
   assert.match(capture, /function reconnectInsight/);
   assert.match(progressEnergySource, /CairnUi\.jobCaptionHtml\(\{ text: "reading your trend/);
-  assert.match(progressProgramControllerClient, /coachingFocusCardHtml\(focus[^)]*\{ blockLine: false, actions: true \}\)/);
+  assert.match(
+    progressProgramControllerClient,
+    /coachingFocusCardHtml\(focus[^)]*\{ blockLine: false, actions: true \}\)/
+  );
   assert.doesNotMatch(progress, /coachingFocusCardHtml/);
   assert.match(meals, /function renderCoach\(\)/);
   assert.match(meals, /function renderMeals\(\)/);
@@ -5651,10 +6763,16 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   );
   assert.match(health, /ME_HEALTH_SCREEN\.renderMeStanding/);
   assert.match(meHealthScreenComposition, /loadCoachingFocus\("#cfocusStandingSlot", input\.root\)/);
-  assert.match(meHealthScreenComposition, /healthMarkersDeps: \(\) => CairnMeHealthDependencies\.markers\(context\(\)\)/);
+  assert.match(
+    meHealthScreenComposition,
+    /healthMarkersDeps: \(\) => CairnMeHealthDependencies\.markers\(context\(\)\)/
+  );
   assert.match(meHealthScreenComposition, /CairnHealthMarkersController\.load\(screen\.healthMarkersDeps\(\), token\)/);
   assert.doesNotMatch(health, /CairnHealthClient\.orderMarkersForDisplay|CairnHealthClient\.lipidGroupNoteHtml/);
-  assert.doesNotMatch(health, /CairnHealthMarkers\.formatMarkerNumber|CairnHealthMarkers\.markerTrendWord|CairnHealthMarkers\.markerChartSvg|CairnHealthMarkers\.hmkRowHtml/);
+  assert.doesNotMatch(
+    health,
+    /CairnHealthMarkers\.formatMarkerNumber|CairnHealthMarkers\.markerTrendWord|CairnHealthMarkers\.markerChartSvg|CairnHealthMarkers\.hmkRowHtml/
+  );
   assert.match(meHealthScreenComposition, /CairnHealthPicture\.parsedReview/);
   assert.match(meHealthScreenComposition, /CairnHealthPicture\.healthHeroHtml/);
   assert.match(meHealthScreenComposition, /CairnHealthPicture\.reviewHtml/);
@@ -5664,53 +6782,107 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(meHealthScreenComposition, /function healthStandingDeps\(\)/);
   assert.match(meHealthScreenComposition, /CairnHealthStandingController\.render\(data, healthStandingDeps\(\)\)/);
   assert.match(meHealthScreenComposition, /CairnHealthStandingController\.openBpSheet\(healthStandingDeps\(\)\)/);
-  assert.match(meHealthScreenComposition, /CairnHealthStandingController\.load\(healthStandingDeps\(\), token, refAge\)/);
+  assert.match(
+    meHealthScreenComposition,
+    /CairnHealthStandingController\.load\(healthStandingDeps\(\), token, refAge\)/
+  );
   assert.match(meHealthScreenComposition, /CairnHealthStandingController\.paintReview\(healthStandingDeps\(\)\)/);
   assert.match(meHealthScreenComposition, /CairnHealthStandingController\.openRead\(healthStandingDeps\(\), opts\)/);
   assert.match(meHealthScreenComposition, /CairnHealthReadController\.paintTab\(healthReadDeps\(\)\)/);
-  assert.match(meHealthScreenComposition, /CairnHealthReadController\.loadRecoverySummary\(healthReadDeps\(\), token, sel\)/);
-  assert.match(meHealthScreenComposition, /CairnHealthReadController\.loadPriorityMarkers\(healthReadDeps\(\), token\)/);
+  assert.match(
+    meHealthScreenComposition,
+    /CairnHealthReadController\.loadRecoverySummary\(healthReadDeps\(\), token, sel\)/
+  );
+  assert.match(
+    meHealthScreenComposition,
+    /CairnHealthReadController\.loadPriorityMarkers\(healthReadDeps\(\), token\)/
+  );
   assert.match(healthReadController, /CairnHealthRead\.recoveryNoDataHtml/);
   assert.match(healthReadController, /CairnHealthRead\.recoveryHtml/);
   assert.match(healthReadController, /CairnHealthRead\.priorityMarkersSectionHtml/);
-  assert.doesNotMatch(health, /Catmull-Rom|const W = 300|tipText\.textContent = pts|const rowInner = `<span class="hdot/);
-  assert.doesNotMatch(health, /function\s+hstandDecade|function\s+hstandPct|function\s+hstandCompHtml|function\s+hstandRefSummaryHtml|function\s+hstandBodyCompHtml|function\s+hstandBpCardHtml/);
-  assert.doesNotMatch(health, /CairnHealthStanding\.renderHealthStandingHtml|CairnHealthStanding\.localDateTimeInputValue|api\("\/blood-pressure"|api\(`\/health\/standing/);
-  assert.doesNotMatch(health, /function\s+recoveryHtml|function\s+optimalPhrase|function\s+priorityMarkerHtml|hb-rline|hb-mkphrase/);
-  assert.doesNotMatch(health, /const\s+H_FILE_PROMPT|const\s+HEALTH_HERO_ART|const\s+DIRECTIVE_DOMAINS|function\s+guessUploadMime|function\s+directiveHtml/);
+  assert.doesNotMatch(
+    health,
+    /Catmull-Rom|const W = 300|tipText\.textContent = pts|const rowInner = `<span class="hdot/
+  );
+  assert.doesNotMatch(
+    health,
+    /function\s+hstandDecade|function\s+hstandPct|function\s+hstandCompHtml|function\s+hstandRefSummaryHtml|function\s+hstandBodyCompHtml|function\s+hstandBpCardHtml/
+  );
+  assert.doesNotMatch(
+    health,
+    /CairnHealthStanding\.renderHealthStandingHtml|CairnHealthStanding\.localDateTimeInputValue|api\("\/blood-pressure"|api\(`\/health\/standing/
+  );
+  assert.doesNotMatch(
+    health,
+    /function\s+recoveryHtml|function\s+optimalPhrase|function\s+priorityMarkerHtml|hb-rline|hb-mkphrase/
+  );
+  assert.doesNotMatch(
+    health,
+    /const\s+H_FILE_PROMPT|const\s+HEALTH_HERO_ART|const\s+DIRECTIVE_DOMAINS|function\s+guessUploadMime|function\s+directiveHtml/
+  );
   assert.match(healthReadController, /CairnHealthDirectiveLoader\.load\(deps\.pollToken\(\)\)/);
   assert.doesNotMatch(health, /loadDirectives\(pollToken\)/);
   assert.match(meHealthScreenComposition, /CairnMeMemoryController\.render\(screen\.meMemoryDeps\(\)\)/);
   assert.match(meHealthScreenComposition, /meMemoryDeps: \(\) => CairnMeHealthDependencies\.memory\(context\(\)\)/);
-  assert.doesNotMatch(health, /CairnMemory\.memoryKindOptionsHtml|CairnMemory\.memoryRowHtml|function\s+loadMemory|function\s+startMemEdit|function\s+startMemDelete|api\("\/memory"\)|items\.map\(\(m, i\) => \{/);
+  assert.doesNotMatch(
+    health,
+    /CairnMemory\.memoryKindOptionsHtml|CairnMemory\.memoryRowHtml|function\s+loadMemory|function\s+startMemEdit|function\s+startMemDelete|api\("\/memory"\)|items\.map\(\(m, i\) => \{/
+  );
   assert.match(meHealthControllerDeps, /CairnFoodNote\.noteEntryHtml/);
   assert.match(meHealthDependencies, /CairnMeHealthControllerDeps\.profile/);
   assert.match(meHealthDependencies, /CairnMeHealthDependencies/);
-  assert.doesNotMatch(health, /function\s+foodIngredients|function\s+ingredientLabel|function\s+foodItemsText|function\s+foodTitleFromIngredients|function\s+foodMacroText|function\s+parsedNote|function\s+noteEntryHtml/);
+  assert.doesNotMatch(
+    health,
+    /function\s+foodIngredients|function\s+ingredientLabel|function\s+foodItemsText|function\s+foodTitleFromIngredients|function\s+foodMacroText|function\s+parsedNote|function\s+noteEntryHtml/
+  );
   assert.match(healthClient, /CairnUi\.emptyStateHtml/);
   assert.match(records, /CairnHealthRecordsController\.render\(healthRecordsDeps\(\)\)/);
   assert.match(records, /function healthRecordsDeps\(\)/);
   assert.match(records, /CairnHealthShareController\.render\(healthShareDeps\(\)\)/);
   assert.match(records, /function healthShareDeps\(\)/);
   assert.doesNotMatch(records, /CairnHealthClient\.H_FILE_PROMPT|CairnHealthClient\.guessUploadMime/);
-  assert.doesNotMatch(records, /CairnHealthRecords\.recordsTabHtml|CairnHealthRecords\.recordsListHtml|CairnHealthRecords\.recordsEmptyHtml/);
+  assert.doesNotMatch(
+    records,
+    /CairnHealthRecords\.recordsTabHtml|CairnHealthRecords\.recordsListHtml|CairnHealthRecords\.recordsEmptyHtml/
+  );
   assert.doesNotMatch(records, /CairnHealthDocs\.healthDocHtml|CairnHealthDocs\.healthDocInner/);
-  assert.doesNotMatch(records, /function openDoctorReportTab|api\("\/markers\/reconcile"|cachedApi\("\/markers\/priority"|downloadFile\(withToken\("\/api\/health-export"\)\)/);
-  assert.doesNotMatch(records, /<div class="hupload"|docs\.map\(\(d, i\) => healthDocHtml|(^|[^.])healthDocHtml\(|(^|[^.])healthDocInner\(/m);
-  assert.doesNotMatch(records, /function\s+loadDirectives|function\s+deriveDirectives|api\("\/directives"\)|CairnHealthDirectives\.directivesSectionHtml/);
-  assert.doesNotMatch(records, /const\s+H_FILE_PROMPT|const\s+HEALTH_HERO_ART|const\s+DIRECTIVE_DOMAINS|function\s+guessUploadMime|function\s+directiveHtml|CairnHealthClient\.directiveHtml|CairnHealthClient\.DIRECTIVE_DOMAINS/);
+  assert.doesNotMatch(
+    records,
+    /function openDoctorReportTab|api\("\/markers\/reconcile"|cachedApi\("\/markers\/priority"|downloadFile\(withToken\("\/api\/health-export"\)\)/
+  );
+  assert.doesNotMatch(
+    records,
+    /<div class="hupload"|docs\.map\(\(d, i\) => healthDocHtml|(^|[^.])healthDocHtml\(|(^|[^.])healthDocInner\(/m
+  );
+  assert.doesNotMatch(
+    records,
+    /function\s+loadDirectives|function\s+deriveDirectives|api\("\/directives"\)|CairnHealthDirectives\.directivesSectionHtml/
+  );
+  assert.doesNotMatch(
+    records,
+    /const\s+H_FILE_PROMPT|const\s+HEALTH_HERO_ART|const\s+DIRECTIVE_DOMAINS|function\s+guessUploadMime|function\s+directiveHtml|CairnHealthClient\.directiveHtml|CairnHealthClient\.DIRECTIVE_DOMAINS/
+  );
   assert.doesNotMatch(records, /let\s+dIdx|const\s+researchNudge|hb-research-nudge[\s\S]*turn on research in Settings/);
   assert.doesNotMatch(records, /const\s+LEARNED_GROUPS|function\s+learnedItemHtml/);
   assert.match(records, /learnedTimelineHtml\(data\)/);
-  assert.doesNotMatch(records, /const\s+LIFE_KINDS|function\s+lifeEventHtml|function\s+lifeFieldsHtml|function\s+loadLifeEvents|function\s+startLifeEdit|CairnLife\.lifeEventHtml|CairnLife\.lifeFieldsHtml/);
+  assert.doesNotMatch(
+    records,
+    /const\s+LIFE_KINDS|function\s+lifeEventHtml|function\s+lifeFieldsHtml|function\s+loadLifeEvents|function\s+startLifeEdit|CairnLife\.lifeEventHtml|CairnLife\.lifeFieldsHtml/
+  );
   assert.match(records, /function lifeControllerDeps\(\)/);
   assert.match(records, /CairnLifeController\.render\(lifeControllerDeps\(\)\)/);
   assert.match(lifeFormHelpers, /CairnLife\.lifeFieldsHtml/);
   assert.match(lifeTimelineActions, /CairnLife\.lifeEventHtml/);
   assert.match(lifeFormHelpers, /api\("\/context-events"/);
   assert.match(lifeTimelineActions, /api\(`\/context-events\/\$\{id\}`/);
-  assert.doesNotMatch(lifeController, /CairnLife\.lifeEventHtml|CairnLife\.lifeFieldsHtml|api\("\/context-events"|api\(`\/context-events\/\$\{id\}`/);
-  assert.doesNotMatch(records, /const\s+FAMILY_COLORS|function\s+familyCardHtml|function\s+familySwatches|CairnFamily\.familyCardHtml|CairnFamily\.familySwatches/);
+  assert.doesNotMatch(
+    lifeController,
+    /CairnLife\.lifeEventHtml|CairnLife\.lifeFieldsHtml|api\("\/context-events"|api\(`\/context-events\/\$\{id\}`/
+  );
+  assert.doesNotMatch(
+    records,
+    /const\s+FAMILY_COLORS|function\s+familyCardHtml|function\s+familySwatches|CairnFamily\.familyCardHtml|CairnFamily\.familySwatches/
+  );
   assert.match(records, /function familyControllerDeps\(\)/);
   assert.match(records, /CairnFamilyController\.render\(familyControllerDeps\(\)\)/);
   assert.match(familyControllerSource, /CairnFamily\.familyCardHtml/);
@@ -5740,24 +6912,57 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(chatMessageClient, /function chatDivider\(iso\)/);
   assert.match(chatMessageClient, /CairnChatClient\.dividerHtml\(iso, dateLabel\(iso\)\)/);
   assert.match(chatMessageClient, /Object\.assign\(globalThis, \{/);
-  assert.doesNotMatch(chat, /function\s+compressChatImage|CHAT_UPLOAD_IMAGE_MAX_BYTES|CHAT_UPLOAD_IMAGE_EDGE_STEPS|CHAT_UPLOAD_IMAGE_QUALITY_STEPS/);
-  assert.doesNotMatch(chat, /const\s+CHAT_STARTERS|<div class="chatview"|id="hdrHistory"|id="chatJump"|class="chat-earlierbar"/);
+  assert.doesNotMatch(
+    chat,
+    /function\s+compressChatImage|CHAT_UPLOAD_IMAGE_MAX_BYTES|CHAT_UPLOAD_IMAGE_EDGE_STEPS|CHAT_UPLOAD_IMAGE_QUALITY_STEPS/
+  );
+  assert.doesNotMatch(
+    chat,
+    /const\s+CHAT_STARTERS|<div class="chatview"|id="hdrHistory"|id="chatJump"|class="chat-earlierbar"/
+  );
   assert.doesNotMatch(chat, /\bfunction\s+appendMsg\b|\bconst\s+COPY_ICON\b|\bfunction\s+copyText\b/);
   assert.doesNotMatch(chat, /CairnChatAttachment\.resetFocusAfterNativePicker|CairnChatComposerFocus\.wireFocus/);
-  assert.doesNotMatch(chat, /function\s+chatComposerReleaseStaleInputFocus|function\s+chatComposerRecoverInputFocusFromTap/);
+  assert.doesNotMatch(
+    chat,
+    /function\s+chatComposerReleaseStaleInputFocus|function\s+chatComposerRecoverInputFocusFromTap/
+  );
   assert.match(chat, /Durable chat turn helpers live in \/js\/chat-turn-client\.js/);
   assert.match(chat, /Static chat message rendering lives in \/js\/chat-message-client\.js/);
   assert.match(chat, /Chat history\/search helpers live in \/js\/chat-history-client\.js/);
   assert.doesNotMatch(chat, /\bconst\s+CHAT_DRAFT_KEY\b|\blet\s+chatStream\b|\bconst\s+chatPendingBubbles\b/);
-  assert.doesNotMatch(chat, /\bfunction\s+chatTeardownMonitor\b|\bfunction\s+chatReconnect\b|\bfunction\s+measureChatTop\b/);
-  assert.doesNotMatch(chat, /\bfunction\s+histWhen\b|\bfunction\s+histSessionRow\b|\bfunction\s+histHitRow\b|\bfunction\s+openChatHistory\b/);
+  assert.doesNotMatch(
+    chat,
+    /\bfunction\s+chatTeardownMonitor\b|\bfunction\s+chatReconnect\b|\bfunction\s+measureChatTop\b/
+  );
+  assert.doesNotMatch(
+    chat,
+    /\bfunction\s+histWhen\b|\bfunction\s+histSessionRow\b|\bfunction\s+histHitRow\b|\bfunction\s+openChatHistory\b/
+  );
   assert.match(planEnduranceClient, /CairnUi\.jobCaptionHtml\(\)/);
-  assert.match(chat, /Plan editor orchestration lives in \/js\/plan-editor-controller\.js; Plan Endurance lives in \/js\/plan-endurance-client\.js/);
-  assert.doesNotMatch(chat, /CairnPlanEndurance\.rampHtml|CairnPlanEndurance\.presets|CairnPlanEndurance\.draftCardHtml/);
-  assert.doesNotMatch(chat, /function\s+renderPlanEndurance|function\s+paintPlanEndurance|function\s+draftEnduranceRuns|function\s+enduranceProposalOpOpts|function\s+renderEnduranceDraftResult/);
-  assert.doesNotMatch(chat, /const\s+ENDURANCE_PHASES|function\s+enduranceRampHtml|function\s+endurancePresets|function\s+endDraftCardHtml/);
-  assert.doesNotMatch(chat, /CairnPlanEditor\.dayModelFromPlan|CairnPlanEditor\.calendarFooterHtml|CairnPlanEditor\.progDayHtml|CairnPlanEditor\.pdayHtml/);
-  assert.doesNotMatch(chat, /function\s+renderPlanEditor|function\s+progDayHtml|function\s+pitemHtml|function\s+pdayHtml|const\s+blankStrength|const\s+blankCardio/);
+  assert.match(
+    chat,
+    /Plan editor orchestration lives in \/js\/plan-editor-controller\.js; Plan Endurance lives in \/js\/plan-endurance-client\.js/
+  );
+  assert.doesNotMatch(
+    chat,
+    /CairnPlanEndurance\.rampHtml|CairnPlanEndurance\.presets|CairnPlanEndurance\.draftCardHtml/
+  );
+  assert.doesNotMatch(
+    chat,
+    /function\s+renderPlanEndurance|function\s+paintPlanEndurance|function\s+draftEnduranceRuns|function\s+enduranceProposalOpOpts|function\s+renderEnduranceDraftResult/
+  );
+  assert.doesNotMatch(
+    chat,
+    /const\s+ENDURANCE_PHASES|function\s+enduranceRampHtml|function\s+endurancePresets|function\s+endDraftCardHtml/
+  );
+  assert.doesNotMatch(
+    chat,
+    /CairnPlanEditor\.dayModelFromPlan|CairnPlanEditor\.calendarFooterHtml|CairnPlanEditor\.progDayHtml|CairnPlanEditor\.pdayHtml/
+  );
+  assert.doesNotMatch(
+    chat,
+    /function\s+renderPlanEditor|function\s+progDayHtml|function\s+pitemHtml|function\s+pdayHtml|const\s+blankStrength|const\s+blankCardio/
+  );
   assert.match(settingsScreen, /CairnSettingsClient\.updateCardHtml/);
   assert.match(appOnboarding, /CairnUi\.jobCaptionHtml\(\)/);
   assert.match(boot, /startAppShell\(\)/);
@@ -5831,7 +7036,7 @@ test("the recovery-week instruction prefix is one contract across client and ser
   assert.match(
     server,
     /export\s*\{[^}]*\bRECOVERY_WEEK_INSTRUCTION_PREFIX\b[^}]*\}/,
-    "profile.ts exports RECOVERY_WEEK_INSTRUCTION_PREFIX",
+    "profile.ts exports RECOVERY_WEEK_INSTRUCTION_PREFIX"
   );
   const m = ledger.match(/RECOVERY_WEEK_INSTRUCTION_PREFIX = "([^"]+)"/);
   assert.ok(m, "the recovery ledger declares the instruction prefix");

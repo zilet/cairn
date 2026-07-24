@@ -58,6 +58,7 @@ import type { CoachContext, CoachDayIntake, CoachProgramState } from "./coach-co
 // the existing coach↔intelligence import; resolved at call time, never at module init).
 import { reactionModelForCoach, whatWorksForYou } from "./reaction-model.js";
 import { feltSignalsForCoach } from "./felt-signals.js";
+import { learnedModelsForCoach } from "./learned-models.js";
 import { getTrajectory } from "./trajectory.js";
 import { wholePersonTrajectory } from "./whole-person-trajectory.js";
 import { journeyRead } from "./journey.js";
@@ -438,6 +439,7 @@ function buildPersonSlice(
   | "checkins"
   | "reaction_model"
   | "felt_signals"
+  | "learned_models"
   | "what_works_for_you"
   | "context_today"
 > {
@@ -478,6 +480,10 @@ function buildPersonSlice(
     // adherence-neutral, a suggestion never a gate — surfaces at most a couple of
     // humble lines, and nothing at all on sparse data.
     felt_signals: feltSignalsForCoach(),
+    // Learned CROSS-DOMAIN coincidences the rule layers can't close: whether bigger
+    // running weeks dent this athlete's lower-body lifting, and whether short nights
+    // run their hunger up. Calm, humble, adherence-neutral; nothing on sparse data.
+    learned_models: learnedModelsForCoach(),
     // Outcomes earned from the decision -> expectation -> evaluation ledger. Null
     // until repeated clean evidence exists, so an empty ledger preserves today's
     // coaching defaults exactly.

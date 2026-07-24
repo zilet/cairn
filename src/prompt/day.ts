@@ -242,6 +242,21 @@ export function buildDayReadPrompt(ctx?: CoachContext, opts: { override?: string
     feltBlock = "";
   }
   // ===== end FELT SIGNALS block =====
+  // ===== LEARNED CROSS-DOMAIN block (wave/learned-models — self-contained) =====
+  // What one domain's history quietly says about another, relevant to TODAY: whether
+  // bigger run weeks have dented lower-body lifting (a standing tendency), and — only
+  // when TONIGHT'S read was genuinely short — a calm short-night fueling nudge. Humble,
+  // adherence-neutral, a suggestion never a gate; "" when there's nothing to say.
+  let learnedBlock = "";
+  try {
+    const learnedLines = repo.learnedModelDayLines(feltDate, (context as any).learned_models?.patterns);
+    if (learnedLines.length) {
+      learnedBlock = `\nLEARNED CROSS-DOMAIN READS (from THEIR OWN history — coincidences to weave in a friend's voice when it fits, NEVER causal claims, a number, or a gate; usually one calm clause is plenty):\n${learnedLines.map((l) => `- ${l}`).join("\n")}\n`;
+    }
+  } catch {
+    learnedBlock = "";
+  }
+  // ===== end LEARNED CROSS-DOMAIN block =====
   const overrideBlock = opts.override?.trim()
     ? `\nUSER OVERRIDE (honor this — they're steering): "${opts.override.trim()}". Reshape the read accordingly (e.g. "rough night" → lean easy/rest; "short on time" → a compressed session; "I want to train anyway" → a train read even if the baseline leaned rest, kept appropriately light).\n`
     : "";
@@ -328,7 +343,7 @@ You MAY disagree with the baseline when the whole picture warrants it — it is 
 RECENT TRAINING (most recent first): ${sessionLine}.
 TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${doneBlock}${lastNightLine}
 ${CONTEXT_GUARDRAILS}
-${renderSignalState(context)}${renderCoachingFocus(context, { brief: true })}${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderRunZones(context)}${renderRunPlan(context)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderMuscleGroups(context)}${renderPerformance(context, { brief: true })}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${feltBlock}${overrideBlock}
+${renderSignalState(context)}${renderCoachingFocus(context, { brief: true })}${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderRunZones(context)}${renderRunPlan(context)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderMuscleGroups(context)}${renderPerformance(context, { brief: true })}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${feltBlock}${learnedBlock}${overrideBlock}
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 ${DAY_READ_SCHEMA}
 
@@ -440,6 +455,78 @@ ${wants.join("\n")}
 `
     : ""
 }${swapMenu}
+${renderStreamingContract(
+  'write ONE or two plain sentences on why this session fits them today (the same thought that goes in the JSON\'s "why")',
+  SESSION_SUGGEST_SCHEMA
+)}
+
+DATA:
+${JSON.stringify(context)}`;
+}
+
+// ---------- Stage 3: bounded agent composition (docs §5) ----------
+// Compose ONE session strictly INSIDE the deterministic Stage 2 decision
+// envelope. The server has already decided the KIND, the muscle allow/exclude
+// lists, the caps, and the candidate movements with reason codes; the agent's
+// only job is to turn that envelope into ordered, well-cued items. Everything the
+// agent returns is re-verified and clamped server-side (exclusions, load caps,
+// safe novel-exercise rules), so this prompt is guidance, not the safety layer.
+export function buildDailyCompositionPrompt(envelope: any, ctx?: CoachContext): string {
+  const context = ctx ?? repo.getCoachContext();
+  const muscles = envelope?.muscles ?? {};
+  const caps = envelope?.caps ?? {};
+  const candidates = Array.isArray(envelope?.candidates) ? envelope.candidates : [];
+  const candidateLines = candidates
+    .filter((c: any) => c?.action !== "exclude")
+    .slice(0, 16)
+    .map(
+      (c: any) =>
+        `- ${c.exercise}${c.muscle_group ? ` (${c.muscle_group})` : ""}: ${c.action}${c.note ? ` — ${c.note}` : ""}`
+    )
+    .join("\n");
+  const excludedList = Array.isArray(muscles.excluded) ? muscles.excluded : [];
+  const reducedList = Array.isArray(muscles.reduced) ? muscles.reduced : [];
+  const requiredList = Array.isArray(muscles.required) ? muscles.required : [];
+  return `${CAIRN_PERSONA}
+
+Right now you're the strength & conditioning coach composing ONE session for today.
+A deterministic policy has ALREADY decided what kind of day this is and the safe
+envelope to work inside. Your job is to compose the best session WITHIN that
+envelope — you do not override its safety bounds. This is a SUGGESTION for review;
+nothing is applied automatically.
+${renderNow(context)}
+THE ENVELOPE (decided for you — compose inside it):
+- Day kind: ${envelope?.kind ?? "train"}.
+- Focus: ${envelope?.template?.focus ?? "general"}.
+- Required muscle areas to hit: ${requiredList.length ? requiredList.join(", ") : "coach's discretion within allowed"}.
+- Allowed areas: ${(Array.isArray(muscles.allowed) ? muscles.allowed : []).join(", ") || "any not excluded"}.
+- REDUCE (recently loaded — keep light, do NOT overload): ${reducedList.length ? reducedList.join(", ") : "none"}.
+- EXCLUDED (do NOT program any loaded work here): ${excludedList.length ? excludedList.join(", ") : "none"}.
+- Caps: volume=${caps.volume ?? "normal"}, intensity=${caps.intensity ?? "normal"}${caps.duration_min ? `, about ${caps.duration_min} minutes total` : ""}.
+
+CANDIDATE MOVEMENTS (prefer these; the action is the progression the policy chose):
+${candidateLines || "- (no template candidates — compose from the allowed areas)"}
+
+HARD RULES (the server enforces these; violating them just gets your item dropped):
+- Never program loaded movement through an EXCLUDED area or an injured joint.
+- Honor the caps: an "easy"/"deload" intensity means submaximal loads; a "reduced"/"minimal"
+  volume means fewer sets and movements.
+- Assisted movements use NEGATIVE target_weight; bodyweight uses null; TIMED work
+  (plank, dead hang) uses target_seconds + mode:"timed", never load.
+- SAFE EXERCISE INTRODUCTION: prefer movements the athlete already trains or a
+  canonical same-pattern substitution. You may introduce AT MOST ONE genuinely new
+  movement, only if equipment + injuries allow it; for a new movement give conservative
+  technique volume, NO precise working load (target_weight null), and label it as
+  establishing a baseline. Never add a movement just to add variety.${
+    excludedList.length
+      ? `\n- NO NEW MOVEMENTS TODAY: because ${excludedList.join(", ")} ${excludedList.length === 1 ? "is" : "are"} excluded, novel movements are unavailable (the server cannot verify an unknown movement avoids the excluded area). Compose only from movements already in the athlete's history.`
+      : ""
+  }
+
+${ELITE_STRENGTH_GUARDRAILS}
+
+${CONTEXT_GUARDRAILS}${COACHING_STANCE}
+
 ${renderStreamingContract(
   'write ONE or two plain sentences on why this session fits them today (the same thought that goes in the JSON\'s "why")',
   SESSION_SUGGEST_SCHEMA

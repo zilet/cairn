@@ -833,6 +833,16 @@ export function startScheduler() {
         recordSchedulerFailure("felt_signals_rebuild", e);
         console.error(`[memory] felt-signals rebuild failed: ${e?.message ?? e}`);
       }
+      // 1b″. Rebuild the LEARNED CROSS-DOMAIN models (deterministic) — endurance→
+      //      strength interference + short-sleep→fueling — and cache them so
+      //      getCoachContext + the Brief read them cheaply. Pull, never push; sparse
+      //      data yields nothing. Isolated so it never sinks the nightly pass.
+      try {
+        repo.saveLearnedModels();
+      } catch (e: any) {
+        recordSchedulerFailure("learned_models_rebuild", e);
+        console.error(`[memory] learned-models rebuild failed: ${e?.message ?? e}`);
+      }
       // 1c. Write the plain-language NARRATIVE over the freshly rebuilt patterns
       //     (agentic, best-effort). A quiet/failed agent leaves the prior narrative,
       //     and an emptied model already cleared it in saveReactionModel. Pull, never push.

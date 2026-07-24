@@ -158,6 +158,7 @@ const streamedRes = (parsed) => ({ code: 0, raw: JSON.stringify(parsed), stderr:
 
 function routingHarness(overrides = {}) {
   const calls = { streamed: 0, oneShot: 0, bounded: 0 };
+  let boundedOpts = null;
   const deps = {
     resolveOrder: () => ["codex"],
     supportsStream: () => false,
@@ -169,13 +170,14 @@ function routingHarness(overrides = {}) {
       calls.oneShot++;
       return chosen({ found: false }, "codex");
     },
-    runBounded: async () => {
+    runBounded: async (_agent, _prompt, opts) => {
       calls.bounded++;
+      boundedOpts = opts;
       return chosen({ found: true, text: "bounded reply" }, "codex");
     },
     ...overrides,
   };
-  return { calls, deps };
+  return { calls, deps, boundedOpts: () => boundedOpts };
 }
 
 test("streaming router: no delta sink → bounded-read terminal, not a plain one-shot", async () => {
@@ -200,21 +202,31 @@ test("streaming router: onDelta present but first agent not stream-capable → b
   assert.equal(calls.oneShot, 0);
 });
 
-test("streaming router: onDelta + stream-capable agent still streams and never touches the bounded loop", async () => {
-  const { calls, deps } = routingHarness({ supportsStream: () => true });
+test("streaming router (Option C): onDelta + stream-capable + boundedReads → streams THROUGH the bounded loop", async () => {
+  // Under Option C the stream-capable bounded run no longer streams turn 1 at the
+  // runChosenStreaming level. It routes to the bounded loop with a stream config; the
+  // loop owns dispatch (streaming the final turn, suppressing read-request protocol turns).
+  const { calls, deps, boundedOpts } = routingHarness({ supportsStream: () => true });
   const out = await runChosenStreaming(
     "auto",
     "PROMPT",
     { op: "session_suggest", boundedReads: true, onDelta: () => {}, acceptParsed: () => true },
     deps
   );
-  assert.equal(calls.streamed, 1);
-  assert.equal(calls.bounded, 0, "requirement 1: a streaming run is byte-for-byte unchanged");
+  assert.equal(calls.bounded, 1, "the bounded loop is the single dispatch site");
+  assert.equal(calls.streamed, 0, "runChosenStreaming does not stream turn 1 itself for a bounded run");
   assert.equal(calls.oneShot, 0);
-  assert.deepEqual(out.result.parsed, { found: true, text: "streamed reply" });
+  const opts = boundedOpts();
+  assert.ok(opts.stream, "the stream config is forwarded so the loop streams the final turn");
+  assert.equal(opts.stream.first, "codex", "the already-resolved agent is threaded in (no re-resolve — cursor discipline)");
+  assert.equal(typeof opts.stream.onDelta, "function");
+  assert.equal(opts.mode, "ordinary");
+  assert.deepEqual(out.result.parsed, { found: true, text: "bounded reply" });
 });
 
-test("streaming router: a stream ATTEMPT that fails preserves the exact one-shot fallback (not bounded)", async () => {
+test("streaming router: a NON-bounded stream attempt that fails preserves the exact one-shot fallback", async () => {
+  // The legacy single-turn streaming path (no boundedReads) keeps its own one-shot
+  // fallback on a transport failure. (Bounded runs fall back INSIDE the loop instead.)
   const { calls, deps } = routingHarness({
     supportsStream: () => true,
     runStreaming: async () => {
@@ -222,16 +234,25 @@ test("streaming router: a stream ATTEMPT that fails preserves the exact one-shot
       throw new Error("transport blip");
     },
   });
+  const out = await runChosenStreaming("auto", "PROMPT", { op: "insight", onDelta: () => {} }, deps);
+  assert.equal(calls.streamed, 1);
+  assert.equal(calls.oneShot, 1, "a would-stream run that failed keeps runChosen");
+  assert.equal(calls.bounded, 0);
+  assert.equal(out.tried.length, 1, "the streamed attempt is recorded in tried");
+});
+
+test("streaming router: a NON-bounded stream that succeeds streams turn 1 directly (legacy path preserved)", async () => {
+  const { calls, deps } = routingHarness({ supportsStream: () => true });
   const out = await runChosenStreaming(
     "auto",
     "PROMPT",
-    { op: "insight", boundedReads: true, onDelta: () => {} },
+    { op: "insight", onDelta: () => {}, acceptParsed: () => true },
     deps
   );
   assert.equal(calls.streamed, 1);
-  assert.equal(calls.oneShot, 1, "a would-stream run that failed keeps runChosen — no bounded-read invitation");
   assert.equal(calls.bounded, 0);
-  assert.equal(out.tried.length, 1, "the streamed attempt is recorded in tried");
+  assert.equal(calls.oneShot, 0);
+  assert.deepEqual(out.result.parsed, { found: true, text: "streamed reply" });
 });
 
 test("streaming router: boundedReads unset → plain one-shot terminal (legacy behavior)", async () => {

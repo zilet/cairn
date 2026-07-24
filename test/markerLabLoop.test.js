@@ -164,3 +164,170 @@ test("a matured verdict builds a learned marker response surfaced as one calm li
   assert.ok(prompt.includes("LEARNED (this athlete's own lab-loop history"));
   assert.ok(prompt.includes(line));
 });
+
+// --------------------------------------------------------------------------
+// Anchor dedup — one lab draw is ONE evidence unit per marker + intervention kind.
+// --------------------------------------------------------------------------
+
+// The OPEN (unevaluated) meal-plan-anchored marker_direction expectations for a marker.
+function openMealMarkerExpectations(markerName) {
+  const wanted = markerName.toLowerCase();
+  const decisions = repo
+    .listBrainDecisions({ limit: 100 })
+    .filter((d) => d.kind === "meal_plan" && d.status === "applied");
+  const out = [];
+  for (const decision of decisions) {
+    for (const x of repo.listBrainExpectations({ decisionId: decision.id })) {
+      if (
+        x.metric_key === "marker_direction" &&
+        String(x.subject_key).toLowerCase() === wanted &&
+        !repo.latestBrainEvaluation(x.id)
+      ) {
+        out.push(x);
+      }
+    }
+  }
+  return out;
+}
+
+// Persist a backdated APPLIED meal-plan decision carrying one marker_direction expectation,
+// so read-side tests can craft distinct/duplicate follow-up draws (acceptMealPlan always
+// stamps window_start = today, which can't express a multi-month draw history in one process).
+function craftMealAnchor({ markerName, baseline, direction = "increase", windowStartDaysAgo, windowLenDays = 180 }) {
+  const expectation = {
+    metric_key: "marker_direction",
+    subject_key: markerName,
+    direction,
+    baseline: { value: baseline },
+    target: {},
+    window_start: localDaysAgo(windowStartDaysAgo),
+    window_end: localDaysAgo(windowStartDaysAgo - windowLenDays),
+    minimum_data: { marker_draws: 2 },
+    confounder_policy: "next_draw",
+    confidence: "tentative",
+    evaluator: "marker_direction",
+    evaluator_version: "intervention-marker-v1",
+  };
+  return repo.recordDecision(
+    {
+      kind: "meal_plan",
+      domain: "nutrition",
+      summary: `meal plan anchored ${windowStartDaysAgo}d ago`,
+      autonomy_tier: "ask",
+      risk_class: "low",
+      reversible: false,
+      status: "applied",
+      effective_date: localDaysAgo(windowStartDaysAgo),
+      applied_at: new Date(Date.now() - windowStartDaysAgo * 864e5).toISOString(),
+    },
+    [expectation]
+  );
+}
+
+test("repeated meal-plan applies against one standing directive within a draw window anchor ONE expectation", () => {
+  const today = localDaysAgo(0);
+  seedHealthDoc(today, [{ name: "Vitamin D", value: 18, unit: "ng/mL", flag: "low" }]);
+  repo.deriveDirectives();
+  assert.ok(repo.listActiveDirectives().some((d) => d.domain === "nutrition" && d.marker === "Vitamin D"));
+
+  // First accepted plan anchors the marker-direction expectation.
+  const plan1 = repo.createMealPlan("stub", "", completeMealWeek({ summary: "Fiber + oily fish", daily_kcal: 2100 }));
+  repo.acceptMealPlan(plan1.id);
+  assert.ok(interventionMarkerExpectation(["meal_plan"]), "the first accepted plan anchors a marker expectation");
+  assert.equal(openMealMarkerExpectations("Vitamin D").length, 1);
+
+  // A weekly re-draft against the SAME standing directive with no new lab in between must NOT
+  // mint a second, near-identical expectation — the next draw is one outcome, counted once.
+  const repeat = repo.markerInterventionRecording("nutrition", today, "meal_plan");
+  assert.ok(repeat, "the directive is still active, so a recording is still produced");
+  assert.equal(repeat.expectation, null, "the same-draw repeat suppresses a duplicate expectation");
+  assert.equal(repeat.meta.deduped, true, "the anchor still rides in meta, flagged as deduped");
+  assert.equal(repeat.meta.anchored_marker, "Vitamin D", "meta still names the marker for the audit trail");
+
+  // Accepting the second plan confirms the suppression on the real path: still ONE open anchor.
+  const plan2 = repo.createMealPlan("stub", "", completeMealWeek({ summary: "More fiber", daily_kcal: 2050 }));
+  repo.acceptMealPlan(plan2.id);
+  assert.equal(
+    openMealMarkerExpectations("Vitamin D").length,
+    1,
+    "a standing directive across weekly re-drafts yields exactly one open marker anchor"
+  );
+});
+
+test("a new lab reading between applies makes a second expectation legitimate", () => {
+  const today = localDaysAgo(0);
+  seedHealthDoc(today, [{ name: "Vitamin D", value: 18, unit: "ng/mL", flag: "low" }]);
+  repo.deriveDirectives();
+
+  const plan1 = repo.createMealPlan("stub", "", completeMealWeek({ summary: "Fiber tilt", daily_kcal: 2100 }));
+  repo.acceptMealPlan(plan1.id);
+  assert.equal(openMealMarkerExpectations("Vitamin D").length, 1);
+
+  // A genuinely NEW draw lands after the open anchor was created (still off-optimal, so the
+  // directive stays active). A later apply is now a distinct draw and earns its own anchor.
+  seedHealthDoc(localDaysAgo(-2), [{ name: "Vitamin D", value: 25, unit: "ng/mL", flag: "low" }]);
+  const recording = repo.markerInterventionRecording("nutrition", localDaysAgo(-2), "meal_plan");
+  assert.ok(recording && recording.expectation, "a new reading since the open anchor lifts the dedup");
+  assert.ok(!recording.meta.deduped, "not flagged as a dedup — this is a legitimately distinct draw");
+  assert.equal(recording.expectation.subject_key, "Vitamin D");
+});
+
+test("a different intervention KIND is a separate evidence unit, not deduped against the meal plan", () => {
+  const today = localDaysAgo(0);
+  seedHealthDoc(today, [{ name: "Vitamin D", value: 18, unit: "ng/mL", flag: "low" }]);
+  repo.deriveDirectives();
+
+  // An accepted meal plan opens a 'meal-plan tilt' anchor for Vitamin D.
+  const plan = repo.createMealPlan("stub", "", completeMealWeek({ summary: "Fiber + oily fish", daily_kcal: 2100 }));
+  repo.acceptMealPlan(plan.id);
+  assert.ok(interventionMarkerExpectation(["meal_plan"]), "the meal plan anchors a Vitamin D expectation");
+
+  // A nutrition-TARGET change is a different intervention ('nutrition change') than the meal
+  // plan, so its anchor must NOT be suppressed by the open meal-plan expectation — even with no
+  // new lab and the same marker + domain. Dedup is per marker + intervention KIND, not domain.
+  const targetChange = repo.markerInterventionRecording("nutrition", today, "nutrition_target");
+  assert.ok(targetChange && targetChange.expectation, "a distinct intervention kind gets its own anchor");
+  assert.ok(!targetChange.meta.deduped);
+});
+
+test("duplicate anchors resolving against one follow-up draw collapse to a single evidence unit", () => {
+  // Two NON-overlapping anchors (no mutual confounder) whose reads BOTH close on the same
+  // latest draw (100 days ago) — the over-count path the read-side collapse must neutralize.
+  seedHealthDoc(localDaysAgo(400), [{ name: "Vitamin D", value: 18, unit: "ng/mL", flag: "low" }]);
+  seedHealthDoc(localDaysAgo(150), [{ name: "Vitamin D", value: 30, unit: "ng/mL", flag: "low" }]);
+  seedHealthDoc(localDaysAgo(100), [{ name: "Vitamin D", value: 45, unit: "ng/mL", flag: null }]);
+  craftMealAnchor({ markerName: "Vitamin D", baseline: 18, windowStartDaysAgo: 400 }); // [400d, 220d]
+  craftMealAnchor({ markerName: "Vitamin D", baseline: 18, windowStartDaysAgo: 200 }); // [200d, 20d]
+
+  const summary = evaluateMatureExpectations(localDaysAgo(0), { limit: 200 });
+  assert.ok(summary.evaluated >= 2, "both mature expectations are evaluated");
+
+  const vitD = repo.learnedMarkerResponses().find((p) => p.marker === "Vitamin D");
+  assert.ok(vitD, "a learned response is still built");
+  assert.equal(vitD.verdict, "aligned");
+  assert.equal(vitD.evidence_n, 1, "the shared follow-up draw collapses both verdicts to one unit");
+  assert.equal(vitD.confidence, "tentative", "two verdicts from ONE real draw never reach 'observed'");
+});
+
+test("two genuinely distinct follow-up draws agreeing reach 'observed'", () => {
+  // Four dated readings; two NON-overlapping anchors each evaluated when a DIFFERENT draw was
+  // the latest (E1 as of 200 days ago, E2 now) — two real outcomes, each toward optimal.
+  seedHealthDoc(localDaysAgo(400), [{ name: "Vitamin D", value: 18, unit: "ng/mL", flag: "low" }]);
+  seedHealthDoc(localDaysAgo(250), [{ name: "Vitamin D", value: 30, unit: "ng/mL", flag: "low" }]);
+  seedHealthDoc(localDaysAgo(150), [{ name: "Vitamin D", value: 38, unit: "ng/mL", flag: "low" }]);
+  seedHealthDoc(localDaysAgo(100), [{ name: "Vitamin D", value: 45, unit: "ng/mL", flag: null }]);
+  craftMealAnchor({ markerName: "Vitamin D", baseline: 18, windowStartDaysAgo: 400, windowLenDays: 150 }); // [400d, 250d]
+  craftMealAnchor({ markerName: "Vitamin D", baseline: 30, windowStartDaysAgo: 200, windowLenDays: 150 }); // [200d, 50d]
+
+  // Phase 1: only E1 is mature (as of 200 days ago); it lands aligned against the 250d draw.
+  const first = evaluateMatureExpectations(localDaysAgo(200), { limit: 200 });
+  assert.ok(first.evaluated >= 1, "the first anchor matures and evaluates");
+  // Phase 2: E2 matures now; E1 already holds a decisive verdict, so it is not re-evaluated.
+  evaluateMatureExpectations(localDaysAgo(0), { limit: 200 });
+
+  const vitD = repo.learnedMarkerResponses().find((p) => p.marker === "Vitamin D");
+  assert.ok(vitD, "a learned response is built");
+  assert.equal(vitD.verdict, "aligned");
+  assert.equal(vitD.evidence_n, 2, "two distinct draws stay two evidence units");
+  assert.equal(vitD.confidence, "observed", "only >=2 genuinely distinct draws agreeing earns 'observed'");
+});

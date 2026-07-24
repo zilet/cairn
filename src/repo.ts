@@ -55,6 +55,9 @@ export * from "./repo/intelligence.js";
 export * from "./repo/program-state.js";
 export * from "./repo/training-playbook.js"; // plateau/adherence playbook suggestions for plan evolution
 export * from "./repo/progression.js";
+export * from "./repo/daily-decision.js"; // Stage 2: the deterministic daily-session decision envelope (policy-versioned, reason-coded)
+export * from "./repo/daily-composition.js"; // Stage 3: server-side normalizer + deterministic fallback for bounded agent composition
+export * from "./repo/daily-reconciliation.js"; // Stage 4: post-session suggested-vs-actual outcome reconciliation (idempotent, adherence-neutral)
 export * from "./repo/support-work.js"; // lagging compound → build the under-trained contributing muscle
 export * from "./repo/session-primer.js"; // the pre-session "a coach was already here" read
 export * from "./repo/strength-objectives.js"; // athlete-selected anchor-lift comeback journey
@@ -78,6 +81,7 @@ export { guidelineFor, allGuidelines, type GuidelineEntry } from "./guidelines.j
 // The "knows-me" layer (docs/VISION.md — the personal coaching team):
 export * from "./repo/reaction-model.js"; // how THIS athlete actually reacts (the personalization foundation)
 export * from "./repo/felt-signals.js"; // learns from subjective felt signals (overrides / check-ins / fueling feedback)
+export * from "./repo/learned-models.js"; // learned cross-domain coincidences (endurance→strength interference, short-sleep→fueling)
 export * from "./repo/trajectory.js"; // one periodized arc to the goals, today as the next step
 export * from "./repo/whole-person-trajectory.js"; // standing "everything better" objective, per-domain words not a score
 export * from "./repo/journey.js"; // body-composition journey phases + leanness-aware cut foundation

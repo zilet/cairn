@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**239 tools.**
+**242 tools.**
 
 | Tool | Description |
 |---|---|
@@ -25,6 +25,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `apply_run_plan` | Build this week's deterministic run mix (weeklyRunPlan) and route it through Cairn's autonomy policy. Lead mode lands the bounded update at a natural boundary with Undo; review posture keeps a draft. setWeeklyRuns preserves strength work and interval structure. Returns { ok:true, proposal, autonomy } or { ok:false, error }. |
 | `cancel_agent_job` | Stop a queued or running coaching job. Safe no-op after it is already terminal. |
 | `check_for_update` | Force an immediate check against the GitHub Releases API for a newer Cairn version, then return the fresh status. Use when you want to refresh now rather than wait for the daily background check. Never throws — a network/rate-limit failure is reported in the status `error` field. |
+| `compose_daily_session` | Queue a bounded agent composition for today: the server first decides the deterministic envelope (kind, muscle allow/exclude, caps, candidates), then the agent composes ONE session strictly inside it — every item is verified and clamped server-side, and absent/invalid output degrades to a deterministic session. Returns a job immediately; poll get_agent_job. Preview-only; accept via prepare_daily_session (source agent_suggest) with the job id. Never mutates the weekly plan. |
 | `confirm_goal_checkin` | Restart the gentle 'is this still your goal?' clock (Era 2): records that the user confirmed (or changed) their goal, so the quiet check-in stays away for ~3 months. You-drive — changes nothing else. |
 | `confirm_imaging_study` | Confirm the current extraction as reviewed by the user. Idempotent and preserves the original confirmation timestamp. |
 | `consolidate_memory` | Queue a quiet memory consolidation: merge near-duplicates, supersede contradictions, and promote recurring observations. Returns a job immediately; poll get_agent_job. Marks, never hard-deletes. |
@@ -71,6 +72,8 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_context_effect` | The active life-context effect: events the user mentioned once (a late concert, travel, illness, a hard week) that should shape today — expect worse sleep / a transient inflammation bump (don't alarm) / ease the load / disrupted fueling — each with a fade date. Plain words; empty when nothing's active. |
 | `get_daily_metrics` | Recent daily metric rows for a source (default all sources) over the last N days (default 30). |
 | `get_daily_session` | Read the active durable daily-session composition for a date, including its exact prescribed strength/cardio items and session_id. Returns null when none has been prepared. |
+| `get_daily_session_decision` | Read the deterministic daily-session decision envelope for a date — the explainable, reproducible read (train/easy/rest kind, required/allowed/reduced/excluded muscles, volume/intensity/duration caps, candidate exercises, and the reason codes) BEFORE any agent composes. Same inputs always yield the same envelope and input_fingerprint. Agent-free. |
+| `get_daily_session_outcome` | Read the post-session outcome reconciliation for a date — what was suggested vs actually trained (completed / substituted / skipped / reordered), progression evidence, feedback, and adherence-neutral reason codes + confounders (travel, pain, another activity). Deterministic, agent-free. null when the date has no reconciled daily-session composition. |
 | `get_day_intake` | A calm review of ONE day's logged food: { date, totals:{kcal,protein_g,carbs_g,fat_g,fiber_g}, entries:[{id,meal,summary,kcal,protein_g,carbs_g,fat_g,fiber_g,enrichment_status,created_at}], count, target, remaining }. target ({kcal,protein_g,mode}) and remaining are present ONLY when the profile can derive one (a loss/gain goal, or the maintenance anchor) — else null (descriptive-only). 'remaining', never 'consumed'; no score. ?date defaults to the user's local today. |
 | `get_day_read` | Queue a durable read of what KIND of day today should be — train, easy, or rest — as a calm suggestion. Returns a job immediately; poll get_agent_job for the final read. override reshapes it ('rough night' / 'short on time' / 'I want to train anyway'). |
 | `get_dexa_targeting` | DEXA-driven targeting — maps the body scan's regional read (lean asymmetry, low ALMI/FFMI, low BMD, visceral/central fat) to concrete TRAINING + one NUTRITION target, each with a plain 'path to your next scan'. T/Z-scores + ALMI are recognized reference reads (never a score); BMD/visceral stay informational (clinician-framed). {available:false} with no DEXA. |

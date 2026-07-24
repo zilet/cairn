@@ -1,6 +1,12 @@
 import { z } from "zod";
 import { dailySessionErrorBody, prepareDailySessionUseCase } from "../../domain/training/index.js";
-import { getActiveDailySession, sessionPrimer } from "../../repo.js";
+import {
+  decideDailySession,
+  getActiveDailySession,
+  getDailySessionOutcome,
+  recordDailySessionDecision,
+  sessionPrimer,
+} from "../../repo.js";
 import { localDateISO } from "../../repo/shared.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 import { queueMcpAgentJob } from "./background.js";
@@ -39,10 +45,54 @@ export function registerDayCoachTools(server: McpToolRegistrar) {
   );
 
   server.tool(
+    "compose_daily_session",
+    "Queue a bounded agent composition for today: the server first decides the deterministic envelope (kind, muscle allow/exclude, caps, candidates), then the agent composes ONE session strictly inside it — every item is verified and clamped server-side, and absent/invalid output degrades to a deterministic session. Returns a job immediately; poll get_agent_job. Preview-only; accept via prepare_daily_session (source agent_suggest) with the job id. Never mutates the weekly plan.",
+    {
+      minutes: z.number().int().optional().describe("time budget in minutes"),
+      equipment: z.string().optional().describe("equipment available, e.g. 'dumbbells only'"),
+      override: z
+        .string()
+        .optional()
+        .describe("free-text steer, e.g. 'train anyway' / 'rough night' / 'short on time'"),
+      date: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
+      agent: z.string().optional().describe("omit or 'auto' to use the configured rotation"),
+    },
+    async ({ minutes, equipment, override, date, agent }) =>
+      asText(queueMcpAgentJob("session_compose", { minutes, equipment, override, date: date ?? localDateISO() }, agent))
+  );
+
+  server.tool(
     "get_daily_session",
     "Read the active durable daily-session composition for a date, including its exact prescribed strength/cardio items and session_id. Returns null when none has been prepared.",
     { date: z.string().optional().describe("YYYY-MM-DD; defaults to today") },
     async ({ date }) => asText(getActiveDailySession(date))
+  );
+
+  server.tool(
+    "get_daily_session_decision",
+    "Read the deterministic daily-session decision envelope for a date — the explainable, reproducible read (train/easy/rest kind, required/allowed/reduced/excluded muscles, volume/intensity/duration caps, candidate exercises, and the reason codes) BEFORE any agent composes. Same inputs always yield the same envelope and input_fingerprint. Agent-free.",
+    {
+      date: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
+      override: z
+        .string()
+        .optional()
+        .describe("free-text steer, e.g. 'train anyway' / 'rough night' / 'short on time'"),
+      equipment: z.string().optional().describe("equipment available, e.g. 'dumbbells only'"),
+      minutes: z.number().int().optional().describe("time budget in minutes"),
+    },
+    async ({ date, override, equipment, minutes }) => {
+      const { envelope } = decideDailySession(date, {
+        override: override ?? null,
+        equipment: equipment ?? null,
+        minutes: minutes ?? null,
+      });
+      try {
+        recordDailySessionDecision(envelope);
+      } catch {
+        /* observability write never blocks the read */
+      }
+      return asText(envelope);
+    }
   );
 
   server.tool(
@@ -82,6 +132,13 @@ export function registerDayCoachTools(server: McpToolRegistrar) {
         return asText(dailySessionErrorBody(error));
       }
     }
+  );
+
+  server.tool(
+    "get_daily_session_outcome",
+    "Read the post-session outcome reconciliation for a date — what was suggested vs actually trained (completed / substituted / skipped / reordered), progression evidence, feedback, and adherence-neutral reason codes + confounders (travel, pain, another activity). Deterministic, agent-free. null when the date has no reconciled daily-session composition.",
+    { date: z.string().optional().describe("YYYY-MM-DD; defaults to today") },
+    async ({ date }) => asText(getDailySessionOutcome(date))
   );
 
   server.tool(

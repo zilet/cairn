@@ -5,13 +5,29 @@ import { db } from "./db.js";
 import { createProgressBus, createSerialRunner } from "./jobRunner.js";
 import * as repo from "./repo.js";
 import { UPLOADS_DIR } from "./uploadPaths.js";
-import { buildChatPrompt, parseChatEscalationRequest, parseChatReply } from "./prompt.js";
+import { buildChatPrompt, parseChatEscalationRequest, parseChatReply, CHAT_REPLY_SENTINEL } from "./prompt.js";
+import {
+  coachReadToolList,
+  COACH_READ_MAX_ROUNDS,
+  COACH_READ_ORDINARY_MAX_CALLS,
+  COACH_READ_ORDINARY_MAX_BYTES,
+  type CompletedCoachRead,
+} from "./runChosen.js";
+import { executeCoachReadTool } from "./brain/read-tool-runtime.js";
+import {
+  isCoachReadQueryTurn,
+  normalizeCoachReadQueryTurn,
+  type CoachReadQueryTurn,
+} from "./brain/query-loop-contract.js";
+import type { CoachReadToolRequest, CoachReadToolResult } from "./brain/read-tools.js";
+import type { CoachReadToolExecutionContext } from "./brain/read-tool-runtime.js";
 import { chatHistoryTimeLabel, localDateISO, nowContext, parseDbTime } from "./repo/shared.js";
 import { runWithTimeZone } from "./tz.js";
 import {
   runAgent,
   runAgentStreaming,
   agentSupportsStream,
+  extractJson,
   INTERACTIVE_TIMEOUT_MS,
   loadAgents,
   resolveAgentExecutionProfile,
@@ -1483,12 +1499,142 @@ export function chatExecutionAttemptKey(
   return `${lane ?? "legacy"}\0${agent}\0${profile.effective?.model ?? ""}\0${profile.effective?.reasoning ?? "default"}`;
 }
 
-async function runChatCompletion(
+// ---------- bounded coach reads for chat ----------
+// Depth-on-demand for the conversational loop: before writing its prose reply, the
+// chat agent may request bounded, server-owned reads. A read request is BARE JSON with
+// NO reply marker, so the chat stream gate shows nothing for it — the read rounds are
+// invisible and only the final reply streams. Budget mirrors the ordinary job loop (6
+// calls / 3 rounds / 256 KB). Framing is prose-first (the reply comes back through the
+// output contract, not a "final JSON"), so chat renders its own contract over the shared
+// closed read catalog rather than the job loop's coachReadContract.
+const CHAT_READ_MAX_CALLS = COACH_READ_ORDINARY_MAX_CALLS;
+
+export type ChatReadState = {
+  rounds: number;
+  calls: number;
+  bytes: number;
+  completed: CompletedCoachRead[];
+};
+
+export function newChatReadState(): ChatReadState {
+  return { rounds: 0, calls: 0, bytes: 0, completed: [] };
+}
+
+function chatReadContract(maxCalls: number): string {
+  return `\n\n=== OPTIONAL: LOOK SOMETHING UP FIRST ===
+The DATA above is your authoritative baseline. Use a read ONLY when a specific unanswered question about the athlete's own history would materially change your reply. Do not fish — reply directly when DATA already answers it.
+To look something up, return ONLY this JSON object this turn — no reply marker, no prose, nothing else:
+{"kind":"coach_read","requests":[{"tool":"read_training_window","args":{"end_date":null,"weeks":6}}]}
+The server runs the reads and calls you again with the verified results; THEN write your normal reply using the OUTPUT CONTRACT above (the reply marker, then prose). Otherwise, just reply now.
+At most ${maxCalls} reads across at most ${COACH_READ_MAX_ROUNDS} rounds. Never request SQL, files, exports, settings, secrets, writes, or another agent/job.
+Available reads (the server validates every name and argument against this catalog):
+${JSON.stringify(coachReadToolList())}`;
+}
+
+function chatReadResultsBlock(completed: CompletedCoachRead[], callsRemaining: number): string {
+  return `\n\n=== VERIFIED COACH READ RESULTS ===
+These server-produced results answer only the requests shown. Treat truncation explicitly; do not infer unavailable raw data.
+${JSON.stringify(completed)}
+Reads remaining: ${callsRemaining}. Now write your normal reply using the OUTPUT CONTRACT above, unless one more specific read is truly necessary.`;
+}
+
+// The suffix appended to the chat prompt for a given read state. When reads are
+// exhausted (budget spent), the contract is dropped entirely so the agent simply replies.
+export function chatReadPromptSuffix(state: ChatReadState, exhausted: boolean): string {
+  if (exhausted) return "";
+  const contract = chatReadContract(CHAT_READ_MAX_CALLS);
+  if (!state.completed.length) return contract;
+  return `${contract}${chatReadResultsBlock(state.completed, CHAT_READ_MAX_CALLS - state.calls)}`;
+}
+
+// A completed agent turn that is a bounded-read PROTOCOL turn (not the reply). A reply
+// marker anywhere means the agent chose to answer, so it is never a protocol turn even
+// if it also contains stray JSON. Otherwise a well-formed coach_read object is the request.
+// Classify a completed turn into: a valid bounded-read request, a coach_read-SHAPED
+// turn whose normalization FAILED (an unknown tool, out-of-bounds arg, or empty
+// requests), or neither. The distinction matters: a malformed coach_read turn is raw
+// protocol JSON with no reply marker — it must NOT be accepted as the coach's reply
+// (that would leak the JSON into the bubble). It mirrors the job loop's handling
+// (`runChosen.ts` snapshotOnly): drop the read contract and re-ask the same agent for
+// a plain reply, rather than persisting the protocol JSON as prose.
+export type ChatReadTurnClass =
+  | { kind: "query"; query: CoachReadQueryTurn }
+  | { kind: "malformed" }
+  | { kind: "none" };
+
+export function classifyChatReadTurn(raw: string): ChatReadTurnClass {
+  const text = String(raw ?? "");
+  if (text.includes(CHAT_REPLY_SENTINEL)) return { kind: "none" };
+  const parsed = extractJson(text);
+  if (!isCoachReadQueryTurn(parsed)) return { kind: "none" };
+  const query = normalizeCoachReadQueryTurn(parsed);
+  return query ? { kind: "query", query } : { kind: "malformed" };
+}
+
+export function detectChatReadRequest(raw: string): CoachReadQueryTurn | null {
+  const cls = classifyChatReadTurn(raw);
+  return cls.kind === "query" ? cls.query : null;
+}
+
+// Execute one validated read round into the shared state. Returns "stop" when the round
+// would exceed the round/call/byte budget (the caller then drops the contract and forces
+// a reply); "ok" when the round's reads all landed within budget. A caller AbortSignal is
+// authoritative — it throws "canceled" mid-round, never a partial retry.
+export async function runChatReadRound(
+  state: ChatReadState,
+  query: CoachReadQueryTurn,
+  ctx: {
+    runId: string;
+    signal: AbortSignal;
+    execute?: (
+      request: CoachReadToolRequest,
+      context: CoachReadToolExecutionContext
+    ) => CoachReadToolResult | Promise<CoachReadToolResult>;
+  }
+): Promise<"ok" | "stop"> {
+  if (state.rounds >= COACH_READ_MAX_ROUNDS || state.calls + query.requests.length > CHAT_READ_MAX_CALLS) return "stop";
+  const execute = ctx.execute ?? executeCoachReadTool;
+  state.rounds++;
+  for (const request of query.requests) {
+    if (ctx.signal.aborted) throw new Error("canceled");
+    const result = await execute(request, { run_id: ctx.runId, op: "chat" });
+    state.calls++;
+    const item = { request, result };
+    const itemBytes = Buffer.byteLength(JSON.stringify(item), "utf8");
+    if (state.bytes + itemBytes > COACH_READ_ORDINARY_MAX_BYTES) return "stop";
+    state.bytes += itemBytes;
+    state.completed.push(item);
+  }
+  return "ok";
+}
+
+// Injectable execution seam so the read-augmented completion loop is testable offline
+// (no CLI/network): production callers omit `deps` and get the real runners + executor.
+export interface ChatCompletionDeps {
+  runAgent?: typeof runAgent;
+  runAgentStreaming?: typeof runAgentStreaming;
+  supportsStream?: (name: string) => boolean;
+  executeCoachRead?: (
+    request: CoachReadToolRequest,
+    context: CoachReadToolExecutionContext
+  ) => CoachReadToolResult | Promise<CoachReadToolResult>;
+}
+
+export async function runChatCompletion(
   id: number,
   turn: any,
   history: { role: string; content: string; at?: string }[],
-  signal: AbortSignal
+  signal: AbortSignal,
+  deps: ChatCompletionDeps = {}
 ): Promise<{ agent: string; raw: string; attempts: ChatAgentAttempt[] }> {
+  const runAgentDep = deps.runAgent ?? runAgent;
+  const runStreamingDep = deps.runAgentStreaming ?? runAgentStreaming;
+  const supportsStream = deps.supportsStream ?? agentSupportsStream;
+  const executeCoachRead = deps.executeCoachRead ?? executeCoachReadTool;
+  const readRunId = crypto.randomUUID();
+  const readState = newChatReadState();
+  let readExhausted = false;
+  const readPhase = (text: string): void => emit(id, { type: "progress", text });
   // Per-task routing: a "chat → claude" pin resolves an "auto"/blank turn to that
   // agent first; runtime failure still falls through to the other usable auto
   // providers without weakening the selected lane.
@@ -1585,70 +1731,116 @@ async function runChatCompletion(
       lane ? { lane } : {}
     );
 
-    // Streaming first, exactly once for an equivalent provider/profile tuple.
+    // Streaming first, exactly once for an equivalent provider/profile tuple. The
+    // stream-capable primary may first request bounded reads (bare JSON, no reply marker
+    // → the gate shows nothing) across up to a few rounds, then stream the reply. Read
+    // follow-ups re-stream the SAME agent, so they are gated by `seen` only ONCE.
     const first = order[0];
     const firstProfile = profileFor(first);
     noteUnsupportedProfile(first, firstProfile);
     const firstKey = chatExecutionAttemptKey(lane, first, firstProfile);
-    if (!seen.has(firstKey) && agentSupportsStream(first)) {
+    if (!seen.has(firstKey) && supportsStream(first)) {
       seen.add(firstKey);
-      const started = Date.now();
-      let ttft: number | null = null;
-      const stream = createChatStreamFilter((event) => {
-        if (event.type === "delta" && event.text && ttft == null) ttft = Date.now() - started;
-        emit(id, event);
-      });
-      streamFilters.set(id, stream);
-      try {
-        const res = await runAgentStreaming(first, prompt, {
-          signal,
-          timeoutMs: INTERACTIVE_TIMEOUT_MS,
-          ...(firstProfile.execution ?? {}),
-          onProgress: stream.progress,
-          onDelta: stream.push,
+      // Inner loop: re-run the SAME first agent for each read follow-up, then stream the reply.
+      while (true) {
+        const streamPrompt = `${prompt}${chatReadPromptSuffix(readState, readExhausted)}`;
+        const started = Date.now();
+        let ttft: number | null = null;
+        const stream = createChatStreamFilter((event) => {
+          if (event.type === "delta" && event.text && ttft == null) ttft = Date.now() - started;
+          emit(id, event);
         });
-        stream.finish();
-        const raw = String(res.raw ?? "");
-        if (lane && parseChatEscalationRequest(raw, lane)) {
+        streamFilters.set(id, stream);
+        try {
+          const res = await runStreamingDep(first, streamPrompt, {
+            signal,
+            timeoutMs: INTERACTIVE_TIMEOUT_MS,
+            ...(firstProfile.execution ?? {}),
+            onProgress: stream.progress,
+            onDelta: stream.push,
+          });
+          stream.finish();
+          const raw = String(res.raw ?? "");
+          if (lane && parseChatEscalationRequest(raw, lane)) {
+            const attempt = decorate(
+              { agent: first, ok: true, status: "escalated", exit_code: res.code, model: res.usage?.model ?? null },
+              firstProfile,
+              true,
+              ttft
+            );
+            attempt.escalation_source = lane;
+            recordChatAttempt(attempt, started, true, false);
+            attempts.push(attempt);
+            escalate(raw, lane, stream);
+            continue laneLoop;
+          }
+          const readTurn = readExhausted ? ({ kind: "none" } as ChatReadTurnClass) : classifyChatReadTurn(raw);
+          if (readTurn.kind === "query") {
+            const attempt = decorate(
+              { agent: first, ok: true, status: "reading_data", exit_code: res.code, model: res.usage?.model ?? null },
+              firstProfile,
+              true,
+              ttft
+            );
+            recordChatAttempt(attempt, started, true, false);
+            attempts.push(attempt);
+            const outcome = await runChatReadRound(readState, readTurn.query, {
+              runId: readRunId,
+              signal,
+              execute: executeCoachRead,
+            });
+            stream.reset(); // the protocol turn streamed nothing (no reply marker) — clear the bubble
+            readPhase("Reviewing your history…");
+            if (outcome === "stop") readExhausted = true;
+            continue; // re-stream the same agent with the verified results (or, if exhausted, plain)
+          }
+          if (readTurn.kind === "malformed") {
+            // A coach_read-shaped turn that failed normalization must never be accepted
+            // as the reply (raw protocol JSON would leak into the bubble). Drop the read
+            // contract and re-stream the SAME agent once for a plain reply. Bounded:
+            // readExhausted stops the next pass from detecting a read at all.
+            const attempt = decorate(
+              { agent: first, ok: true, status: "read_malformed", exit_code: res.code, model: res.usage?.model ?? null },
+              firstProfile,
+              true,
+              ttft
+            );
+            recordChatAttempt(attempt, started, true, false);
+            attempts.push(attempt);
+            stream.reset(); // the malformed protocol JSON never earns the bubble
+            readExhausted = true;
+            readPhase("Reviewing your history…");
+            continue;
+          }
+          const classified = classifyChatAgentResult(first, res);
           const attempt = decorate(
-            { agent: first, ok: true, status: "escalated", exit_code: res.code, model: res.usage?.model ?? null },
+            classified ?? {
+              agent: first,
+              ok: true,
+              status: "ok",
+              exit_code: res.code,
+              model: res.usage?.model ?? null,
+              input_tokens: res.usage?.input_tokens ?? null,
+              output_tokens: res.usage?.output_tokens ?? null,
+            },
             firstProfile,
             true,
             ttft
           );
-          attempt.escalation_source = lane;
-          recordChatAttempt(attempt, started, true, false);
+          recordChatAttempt(attempt, started, !classified, false);
           attempts.push(attempt);
-          escalate(raw, lane, stream);
-          continue laneLoop;
+          if (!classified) return { agent: first, raw, attempts };
+        } catch (e: any) {
+          if (signal.aborted) throw e;
+          const attempt = decorate(classifyChatException(first, e), firstProfile, true, ttft);
+          recordChatAttempt(attempt, started, false, false);
+          attempts.push(attempt);
+          lastErr = e;
         }
-        const classified = classifyChatAgentResult(first, res);
-        const attempt = decorate(
-          classified ?? {
-            agent: first,
-            ok: true,
-            status: "ok",
-            exit_code: res.code,
-            model: res.usage?.model ?? null,
-            input_tokens: res.usage?.input_tokens ?? null,
-            output_tokens: res.usage?.output_tokens ?? null,
-          },
-          firstProfile,
-          true,
-          ttft
-        );
-        recordChatAttempt(attempt, started, !classified, false);
-        attempts.push(attempt);
-        if (!classified) return { agent: first, raw, attempts };
-      } catch (e: any) {
-        if (signal.aborted) throw e;
-        const attempt = decorate(classifyChatException(first, e), firstProfile, true, ttft);
-        recordChatAttempt(attempt, started, false, false);
-        attempts.push(attempt);
-        lastErr = e;
+        stream.reset();
+        stream.progress("Trying another route…");
+        break; // streaming produced no reply → fall to the rotation
       }
-      stream.reset();
-      stream.progress("Trying another route…");
     }
 
     for (const name of order) {
@@ -1658,63 +1850,105 @@ async function runChatCompletion(
       const key = chatExecutionAttemptKey(lane, name, profile);
       if (seen.has(key)) continue;
       seen.add(key);
-      const started = Date.now();
-      try {
-        emit(id, { type: "progress", text: "Asking the coach…" });
-        let res = await runAgent(name, prompt, {
-          signal,
-          timeoutMs: INTERACTIVE_TIMEOUT_MS,
-          ...(profile.execution ?? {}),
-        });
-        let raw = String(res.raw ?? "");
-        let retriedEmpty = false;
-        if (!raw.trim() && res.code === 0 && !signal.aborted) {
-          retriedEmpty = true;
-          res = await runAgent(name, prompt + EMPTY_CHAT_RETRY_SUFFIX, {
+      // A non-streaming provider can request reads too; a read follow-up re-runs the
+      // SAME agent (inner loop) without re-consulting `seen`.
+      // Inner loop: re-run the SAME agent for each read follow-up, then take its reply.
+      while (true) {
+        const runPrompt = `${prompt}${chatReadPromptSuffix(readState, readExhausted)}`;
+        const started = Date.now();
+        try {
+          emit(id, { type: "progress", text: "Asking the coach…" });
+          let res = await runAgentDep(name, runPrompt, {
             signal,
             timeoutMs: INTERACTIVE_TIMEOUT_MS,
             ...(profile.execution ?? {}),
           });
-          raw = String(res.raw ?? "");
-        }
-        if (lane && parseChatEscalationRequest(raw, lane)) {
+          let raw = String(res.raw ?? "");
+          let retriedEmpty = false;
+          if (!raw.trim() && res.code === 0 && !signal.aborted) {
+            retriedEmpty = true;
+            res = await runAgentDep(name, runPrompt + EMPTY_CHAT_RETRY_SUFFIX, {
+              signal,
+              timeoutMs: INTERACTIVE_TIMEOUT_MS,
+              ...(profile.execution ?? {}),
+            });
+            raw = String(res.raw ?? "");
+          }
+          if (lane && parseChatEscalationRequest(raw, lane)) {
+            const attempt = decorate(
+              { agent: name, ok: true, status: "escalated", exit_code: res.code, model: res.usage?.model ?? null },
+              profile,
+              false,
+              null
+            );
+            attempt.escalation_source = lane;
+            recordChatAttempt(attempt, started, true, retriedEmpty);
+            attempts.push(attempt);
+            escalate(raw, lane);
+            continue laneLoop;
+          }
+          const readTurn = readExhausted ? ({ kind: "none" } as ChatReadTurnClass) : classifyChatReadTurn(raw);
+          if (readTurn.kind === "query") {
+            const attempt = decorate(
+              { agent: name, ok: true, status: "reading_data", exit_code: res.code, model: res.usage?.model ?? null },
+              profile,
+              false,
+              null
+            );
+            recordChatAttempt(attempt, started, true, retriedEmpty);
+            attempts.push(attempt);
+            const outcome = await runChatReadRound(readState, readTurn.query, {
+              runId: readRunId,
+              signal,
+              execute: executeCoachRead,
+            });
+            readPhase("Reviewing your history…");
+            if (outcome === "stop") readExhausted = true;
+            continue; // re-run the same agent with the verified results
+          }
+          if (readTurn.kind === "malformed") {
+            // A coach_read-shaped turn that failed normalization must never be accepted
+            // as the reply. Drop the read contract and re-run the SAME agent once for a
+            // plain reply. Bounded: readExhausted stops the next pass detecting a read.
+            const attempt = decorate(
+              { agent: name, ok: true, status: "read_malformed", exit_code: res.code, model: res.usage?.model ?? null },
+              profile,
+              false,
+              null
+            );
+            recordChatAttempt(attempt, started, true, retriedEmpty);
+            attempts.push(attempt);
+            readExhausted = true;
+            readPhase("Reviewing your history…");
+            continue;
+          }
+          const classified = classifyChatAgentResult(name, res);
           const attempt = decorate(
-            { agent: name, ok: true, status: "escalated", exit_code: res.code, model: res.usage?.model ?? null },
+            classified ?? {
+              agent: name,
+              ok: true,
+              status: "ok",
+              exit_code: res.code,
+              model: res.usage?.model ?? null,
+              input_tokens: res.usage?.input_tokens ?? null,
+              output_tokens: res.usage?.output_tokens ?? null,
+            },
             profile,
             false,
             null
           );
-          attempt.escalation_source = lane;
-          recordChatAttempt(attempt, started, true, retriedEmpty);
+          recordChatAttempt(attempt, started, !classified, retriedEmpty);
           attempts.push(attempt);
-          escalate(raw, lane);
-          continue laneLoop;
+          if (!classified) return { agent: name, raw, attempts };
+          lastErr = new Error(`${name}: ${classified.error_message || classified.error_class || classified.status}`);
+        } catch (e: any) {
+          if (signal.aborted) throw e;
+          lastErr = e;
+          const attempt = decorate(classifyChatException(name, e), profile, false, null);
+          recordChatAttempt(attempt, started, false, false);
+          attempts.push(attempt);
         }
-        const classified = classifyChatAgentResult(name, res);
-        const attempt = decorate(
-          classified ?? {
-            agent: name,
-            ok: true,
-            status: "ok",
-            exit_code: res.code,
-            model: res.usage?.model ?? null,
-            input_tokens: res.usage?.input_tokens ?? null,
-            output_tokens: res.usage?.output_tokens ?? null,
-          },
-          profile,
-          false,
-          null
-        );
-        recordChatAttempt(attempt, started, !classified, retriedEmpty);
-        attempts.push(attempt);
-        if (!classified) return { agent: name, raw, attempts };
-        lastErr = new Error(`${name}: ${classified.error_message || classified.error_class || classified.status}`);
-      } catch (e: any) {
-        if (signal.aborted) throw e;
-        lastErr = e;
-        const attempt = decorate(classifyChatException(name, e), profile, false, null);
-        recordChatAttempt(attempt, started, false, false);
-        attempts.push(attempt);
+        break;
       }
     }
     throw new ChatCompletionError(attempts, lastErr?.message || "No distinct execution profile remained");

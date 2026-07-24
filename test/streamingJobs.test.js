@@ -332,8 +332,8 @@ test("emitJobDelta → onJobEvent delivers delta events; unsubscribe stops them;
   ]);
 });
 
-test("jobStreamsDeltas: only the four prose-bearing kinds stream", () => {
-  for (const k of ["health_synthesis", "session_suggest", "nutrition_checkin", "weekly_read"]) {
+test("jobStreamsDeltas: only the prose-bearing kinds stream", () => {
+  for (const k of ["health_synthesis", "session_suggest", "session_compose", "nutrition_checkin", "weekly_read"]) {
     assert.ok(jobStreamsDeltas(k), `${k} streams prose`);
   }
   for (const k of [
@@ -349,7 +349,7 @@ test("jobStreamsDeltas: only the four prose-bearing kinds stream", () => {
   ]) {
     assert.ok(!jobStreamsDeltas(k), `${k} does not stream`);
   }
-  assert.equal(STREAM_DELTA_KINDS.size, 4);
+  assert.equal(STREAM_DELTA_KINDS.size, 5);
 });
 
 // ---------------- the one-shot (non-streamed) path parses marker-aware too ----------------
@@ -391,17 +391,14 @@ test("runAgentWithFallback repairs then rotates when parsed JSON misses the oper
 });
 
 test("runAgentWithFallback exposes a structured attempt ledger when every contract fails", async () => {
-  await assert.rejects(
-    runAgentWithFallback(["stub"], "ignored", { acceptParsed: () => false }),
-    (error) => {
-      assert.ok(error instanceof AgentFallbackError);
-      assert.deepEqual(error.order, ["stub"]);
-      assert.equal(error.tried.length, 1);
-      assert.equal(error.tried[0].agent, "stub");
-      assert.match(error.tried[0].error, /outside the requested contract/);
-      return true;
-    }
-  );
+  await assert.rejects(runAgentWithFallback(["stub"], "ignored", { acceptParsed: () => false }), (error) => {
+    assert.ok(error instanceof AgentFallbackError);
+    assert.deepEqual(error.order, ["stub"]);
+    assert.equal(error.tried.length, 1);
+    assert.equal(error.tried[0].agent, "stub");
+    assert.match(error.tried[0].error, /outside the requested contract/);
+    return true;
+  });
 });
 
 test("runChosen forwards a caller extract and still parses the stub's bare JSON by default", async () => {
@@ -411,5 +408,8 @@ test("runChosen forwards a caller extract and still parses the stub's bare JSON 
   // so the stub's canned proposal parses exactly as before the wiring change.
   const dflt = await runChosen("stub", "ignored");
   assert.equal(dflt.agent, "stub");
-  assert.ok(dflt.result.parsed && Array.isArray(dflt.result.parsed.changes), "stub proposal parses via the default marker-aware extractor");
+  assert.ok(
+    dflt.result.parsed && Array.isArray(dflt.result.parsed.changes),
+    "stub proposal parses via the default marker-aware extractor"
+  );
 });
