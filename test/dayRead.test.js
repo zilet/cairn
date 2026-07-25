@@ -5,8 +5,18 @@
 // low-sleep branch without coupling to wall-clock "now".
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { db, repo, resetTables, seedTrainingDay, seedRecoveryDay, isoDaysAgo, localDaysAgo } from "./_seed.js";
 import {
+  DAY_READ_CAVEAT_CONCEPT,
+  DAY_READ_CAVEAT_VARIANTS,
+  DAY_READ_FOCUS_HEADLINE_VARIANTS,
+  DAY_READ_HEADLINE_CONCEPT,
+  DAY_READ_HEADLINE_VARIANTS,
+  DAY_READ_LEAD_CONCEPT,
+  DAY_READ_LEAD_VARIANTS,
   DAY_READ_OUTCOMES,
   DAY_READ_POLICY_REASON_VARIANTS,
   DAY_READ_REQUIRED_CONCEPT,
@@ -14,10 +24,14 @@ import {
   QUIET_STREAK_GUARDED_WHY,
   QUIET_STREAK_WHY,
   RECOVERY_WEEK_SOFTEN_WHY,
+  dayReadHeadline,
   quietOrdinal,
+  violatesReadingGrammar,
 } from "../dist/repo/day-read.js";
 import { UNPROGRAMMED_EASY_DAY, pickDayVariant } from "../dist/repo/brain/day-read-rules.js";
 import { SIGNAL_VOICE_REGISTRY, signalVoice } from "../dist/repo/signal-state.js";
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 // A reference date well clear of the recovery window so an empty recovery fetch
 // can't accidentally flip the read.
@@ -29,6 +43,15 @@ const dayBefore = (base, n) => new Date(new Date(base + "T00:00:00Z").getTime() 
 // rule's whole vocabulary, not the sentence that happened to land on this date.
 const saysOneOf = (text, code) =>
   assert.ok((DAY_READ_WHY_VARIANTS[code] ?? []).includes(text), `${code}: unexpected wording ${JSON.stringify(text)}`);
+
+// The same idea for the planned-training caveats, which are FRAGMENTS spliced into a
+// composed sentence rather than the whole `why` — so membership is a substring test.
+// Returns the phrasing that landed, so a caller can assert about what surrounds it.
+const saysOneCaveat = (text, key) => {
+  const landed = (DAY_READ_CAVEAT_VARIANTS[key] ?? []).find((variant) => text.includes(variant));
+  assert.ok(landed, `${key}: no registered phrasing found in ${JSON.stringify(text)}`);
+  return landed;
+};
 
 // The movement work-around names the injury in the athlete's own register and rotates
 // by calendar day like every other sentence (it used to splice the machine-facing
@@ -94,7 +117,55 @@ test("an active dated obligation compresses a train day without changing its pos
     est_minutes: 40,
     reason: "School pickup and evening event adds schedule pressure today.",
   });
-  assert.match(r.why, /dated commitment compresses today's training window/i);
+  assert.equal(r.signals.signal_state.dimensions.life_capacity.voice.key, "commitment_pressure");
+  saysOneCaveat(r.why, "planned_training:commitment_pressure");
+});
+
+// `schedule: "compress"` has two unrelated causes and only one of them is a calendar
+// entry. `context.expect_worse_sleep` — a late night, a stressful stretch — sets the
+// SAME directive from the SAME field, so reading the directive alone told an athlete
+// with nothing but "Brutal week at work" on record that "you've got a commitment today
+// that shortens the training window", and answered a recovery signal by cutting the
+// session from 60 minutes to 40.
+test("a stressful stretch is NOT a commitment: no calendar claim, and the clock is left alone", () => {
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  repo.addContextEvent({ kind: "life_event", title: "Brutal week at work", start_date: REF, end_date: REF });
+
+  const r = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.equal(r.kind, "train");
+  assert.equal(r.signals.signal_state.action.posture, "train");
+  // The signal state still says compress — the READ is what stopped over-reading it.
+  assert.equal(r.signals.signal_state.action.directives.schedule, "compress");
+  assert.equal(r.signals.signal_state.dimensions.life_capacity.voice.key, "schedule_pressure");
+
+  assert.equal(r.est_minutes, 60, "thin recovery is a reason to hold intensity, not to shorten the day");
+  assert.deepEqual(r.signals.schedule, {
+    directive: "compress",
+    compressed: false,
+    original_est_minutes: 60,
+    est_minutes: 60,
+    reason: "A current commitment or stressful stretch is likely to compress recovery capacity.",
+  });
+
+  saysOneCaveat(r.why, "planned_training:life_pressure");
+  // The false claim, in every phrasing the commitment set can produce.
+  for (const variant of DAY_READ_CAVEAT_VARIANTS["planned_training:commitment_pressure"]) {
+    assert.equal(r.why.includes(variant), false, `claimed a commitment that does not exist: ${JSON.stringify(r.why)}`);
+  }
+  assert.doesNotMatch(r.why, /\bcommitment\b|\bcalendar\b|\btraining window\b/i);
+});
+
+test("the two schedule-pressure caveats never claim each other's cause", () => {
+  const commitment = DAY_READ_CAVEAT_VARIANTS["planned_training:commitment_pressure"];
+  const life = DAY_READ_CAVEAT_VARIANTS["planned_training:life_pressure"];
+  // Only a real dated row may talk about the clock; only thin recovery may talk about
+  // recovery. Disjoint concepts are what keep the false claim from creeping back in.
+  for (const variant of commitment) {
+    assert.doesNotMatch(variant, /\brecovery\b|\bsleep\b/i, `a commitment caveat must not claim a recovery cause`);
+  }
+  for (const variant of life) {
+    assert.doesNotMatch(variant, /\bcommitment\b|\bcalendar\b|\bwindow\b/i, `a life caveat must not claim a calendar`);
+  }
 });
 
 test("poor recovery owns an injury-overlap day while the movement work-around survives", () => {
@@ -145,8 +216,86 @@ test("a chronically short sleeper is still OFFERED a due plan day, with the slee
   assert.equal(r.focus, "Lower body");
   assert.equal(r.signals.low_sleep, true);
   assert.equal(r.decision.rule_code, "planned_training");
-  assert.match(r.why, /sleep's been running short lately/i);
-  assert.match(r.why, /stop a rep or two shy/i);
+  // The caveat rotates by calendar day like every other athlete-facing string, so this
+  // pins the whole set rather than the phrasing that happens to land on REF.
+  saysOneCaveat(r.why, "planned_training:low_sleep");
+});
+
+// The hold lead used to speak `action.voice`, which on a ready/train day is drawn from
+// SUPPORT evidence — so a hold day led with "by your own read, you slept fine" and then
+// asked the athlete to hold, with the caveat's "until that settles" pointing at nothing.
+// `directives.training_source` names the dimension whose status produced the hold, and
+// its own voice is the brake.
+test("a hold-aggression train day leads with the BRAKE's voice, never a support voice, and rotates", () => {
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  const brake = signalVoice({ key: "generic_activity_load", subject: "51 exercise minutes and 8.4 km of movement" });
+  const support = signalVoice({ key: "sleep_feel_ok" });
+  const leads = [];
+
+  for (let back = 2; back >= 0; back--) {
+    const date = dayBefore(REF, back);
+    repo.addCheckin(date, { sleep_feel: 4 });
+    const r = repo.dayRead(date, {
+      has_data: true,
+      recovery: { exercise_min: 51, distance_km: 8.4 },
+      quality: {
+        exercise_min: { latest_date: date, source: "apple", freshness: "fresh", sample_count: 1 },
+        distance_km: { latest_date: date, source: "apple", freshness: "fresh", sample_count: 1 },
+      },
+    });
+
+    assert.equal(r.kind, "train");
+    assert.equal(r.decision.rule_code, "planned_training");
+    const action = r.signals.signal_state.action;
+    assert.equal(action.posture, "train");
+    assert.equal(action.readiness, "ready");
+    assert.equal(action.directives.training, "hold_aggression");
+    // The posture voice IS the support one — that is the whole defect, and it stays
+    // true. What changed is which voice the hold lead reaches for.
+    assert.equal(action.voice.key, "sleep_feel_ok");
+    assert.equal(action.directives.training_source, "training_load_tolerance");
+
+    const lead = brake.find((variant) => r.why.startsWith(variant));
+    assert.ok(lead, `expected the brake to lead the read, got ${JSON.stringify(r.why)}`);
+    leads.push(lead);
+    for (const variant of support) {
+      assert.equal(r.why.includes(variant), false, `a support voice spoke on a hold day: ${JSON.stringify(r.why)}`);
+    }
+    saysOneCaveat(r.why, "planned_training:hold_aggression");
+    assert.match(r.why, /\.$/, "the composed read is still one finished sentence run");
+  }
+  assert.equal(new Set(leads).size, leads.length, "consecutive days must not repeat the brake's phrasing");
+});
+
+// The caveats are fragments joined with "; and " inside ONE sentence, so a stray
+// capital or full stop in any phrasing breaks the sentence the athlete actually reads.
+// Three at once is where that shows up.
+test("three caveats at once still compose into one grammatical sentence", () => {
+  for (let i = 1; i <= 2; i++) seedTrainingDay(dayBefore(REF, i));
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  const r = repo.dayRead(REF, {
+    has_data: true,
+    recovery: { avg_sleep_min: 300, exercise_min: 51, distance_km: 8.4 },
+    delta: { rhr: 5 }, // recovery drifting the wrong way → the deload anticipation
+    quality: {
+      exercise_min: { latest_date: REF, source: "apple", freshness: "fresh", sample_count: 1 },
+      distance_km: { latest_date: REF, source: "apple", freshness: "fresh", sample_count: 1 },
+    },
+  });
+
+  assert.equal(r.kind, "train");
+  assert.equal(r.decision.rule_code, "planned_training");
+  saysOneCaveat(r.why, "planned_training:anticipate_deload");
+  saysOneCaveat(r.why, "planned_training:low_sleep");
+  saysOneCaveat(r.why, "planned_training:hold_aggression");
+  assert.equal(r.why.split("; and ").length, 3, "three caveats, joined once each");
+
+  // One finished sentence run: the only terminal stops are the brake's own lead and
+  // the full stop that closes the caveat run.
+  assert.match(r.why, /\.$/);
+  assert.doesNotMatch(r.why, /\.\.|\s;|;\s*and\s*[A-Z]|—\s*[A-Z]/, `broken sentence: ${JSON.stringify(r.why)}`);
+  const caveatRun = r.why.slice(r.why.indexOf(" — ") + 3);
+  assert.equal(caveatRun.split(".").length, 2, `the caveat run must be one sentence: ${JSON.stringify(caveatRun)}`);
 });
 
 test("a fresh short night corroborating the short rolling average can suggest REST", () => {
@@ -471,7 +620,12 @@ test("agentic day-read posture cannot become more aggressive without an athlete 
   };
   const clamped = enforceDayReadSafetyPosture(aggressive, restBaseline, false);
   assert.equal(clamped.kind, "rest");
-  assert.equal(clamped.headline, "Rest today.");
+  // The clamp writes a ROTATED headline (it used to write the literal "Rest today."
+  // every single day), so this pins the registered set, not today's roll.
+  assert.ok(
+    DAY_READ_HEADLINE_VARIANTS.rest.includes(clamped.headline),
+    `unexpected clamped headline ${JSON.stringify(clamped.headline)}`
+  );
   assert.equal(clamped.why, restBaseline.why, "clamped prose must match the deterministic posture");
   assert.equal(clamped.focus, null);
   assert.equal(clamped.est_minutes, null);
@@ -756,14 +910,7 @@ test("every server-policy reason reads as calm plain language", () => {
       const label = `${code}: ${JSON.stringify(sentence)}`;
       assert.ok(sentence.length > 10, `${label} needs a real sentence`);
       assert.match(sentence, /[.!?]$/, `${label} should read as a finished sentence`);
-      assert.doesNotMatch(
-        sentence,
-        /_|deterministic|posture|baseline|policy|fingerprint|directive|override|boundary/i,
-        `${label} reads as engineering prose`
-      );
-      assert.doesNotMatch(sentence, /\bacute warning\b|\breadiness signal\b/i, `${label} leaks device/clinical jargon`);
-      assert.doesNotMatch(sentence, /\b\d{1,3}\s*(?:\/\s*100|%|points?|score)\b/i, `${label} leaks a score`);
-      assert.doesNotMatch(sentence, /\byou must\b|\bdo not train\b|\bforbidden\b/i, `${label} reads as a gate`);
+      holdsTheConstitution(sentence, label);
     }
   }
 });
@@ -777,14 +924,7 @@ test("the recovery-week softening variants read as calm plain language, distinct
   for (const sentence of RECOVERY_WEEK_SOFTEN_WHY) {
     assert.ok(sentence.length > 10, `needs a real sentence, got ${JSON.stringify(sentence)}`);
     assert.match(sentence, /[.!?]$/, "should read as a finished sentence");
-    assert.doesNotMatch(
-      sentence,
-      /_|deterministic|posture|baseline|policy|fingerprint|directive|override|boundary/i,
-      "reads as engineering prose"
-    );
-    assert.doesNotMatch(sentence, /\bacute warning\b|\breadiness signal\b/i, "leaks device/clinical jargon");
-    assert.doesNotMatch(sentence, /\b\d{1,3}\s*(?:\/\s*100|%|points?|score)\b/i, "leaks a score");
-    assert.doesNotMatch(sentence, /\byou must\b|\bdo not train\b|\bforbidden\b/i, "reads as a gate");
+    holdsTheConstitution(sentence, "recovery-week softening");
   }
 });
 
@@ -875,6 +1015,17 @@ test("every day-read outcome carries its own plain-language reasons", () => {
   assert.equal(codes.size, outcomes.length);
 });
 
+// The constitution guards themselves. These used to be four regexes declared HERE, a
+// third definition of a grammar that also lived in the day-read prompt and — nowhere
+// at all — over the agent's own sentence. They now come from the source
+// (violatesReadingGrammar), so the deterministic vocabulary below and the agent's
+// headline/`why` in isValidDayReadAgentResult are held to ONE definition, and a rule
+// added to it is instantly enforced on both registers.
+const holdsTheConstitution = (text, label) => {
+  const violated = violatesReadingGrammar(text);
+  assert.equal(violated, null, `${label} breaks the reading grammar (${violated}): ${JSON.stringify(text)}`);
+};
+
 test("every phrasing of every rule reads as calm plain language, in both registers", () => {
   const sentences = everyAthleteFacingSentence();
   assert.ok(sentences.length >= 60, "the whole vocabulary is under test");
@@ -883,21 +1034,7 @@ test("every phrasing of every rule reads as calm plain language, in both registe
     const sentence = String(text || "").trim();
     assert.ok(sentence.length > 10, `${label} needs a real sentence, got ${JSON.stringify(sentence)}`);
     assert.match(sentence, /[.!?]$/, `${label} should read as a finished sentence`);
-    // VISION.md Amendment 2: plain language, never internals leaking as coaching.
-    assert.doesNotMatch(
-      sentence,
-      /_|deterministic|posture|baseline|policy|fingerprint|directive|override|boundary/i,
-      `${label} reads as engineering prose`
-    );
-    // Clinical/device vocabulary that actually leaked once (CHRONIC_SLEEP_WHY[0]'s
-    // "acute warning", LOW_READINESS_WHY[0]'s "readiness signal") — phrase-level so
-    // a legitimate colloquial "nothing acute" elsewhere in the same rule's own
-    // variants isn't caught by a blanket ban on the bare word.
-    assert.doesNotMatch(sentence, /\bacute warning\b|\breadiness signal\b/i, `${label} leaks device/clinical jargon`);
-    // No scores, no grades, no metric wall.
-    assert.doesNotMatch(sentence, /\b\d{1,3}\s*(?:\/\s*100|%|points?|score)\b/i, `${label} leaks a score`);
-    // A suggestion, never a gate.
-    assert.doesNotMatch(sentence, /\byou must\b|\bdo not train\b|\bforbidden\b/i, `${label} reads as a gate`);
+    holdsTheConstitution(sentence, label);
   }
 });
 
@@ -911,6 +1048,597 @@ test("every phrasing carries the meaning its rule exists to convey", () => {
   }
   for (const { key, register, text } of everyAthleteFacingSentence()) {
     assert.match(text, DAY_READ_REQUIRED_CONCEPT[key], `${key} (${register}) lost the rule's own meaning`);
+  }
+});
+
+// ---------- the planned-training caveats: fragments, held to the same line ----------
+// The planned-training rule fires on most mornings and composes its `why` from a lead
+// plus a run of lowercase fragments. The leads rotated from the start; every fragment
+// was a single hardcoded string, so a chronic short sleeper or anyone inside a recovery
+// week read the identical clause every morning — the exact repetition this layer
+// exists to remove. These hold the caveat vocabulary to the same standard as the `why`
+// vocabulary, plus the two shape rules that come from being spliced mid-sentence.
+test("every planned-training caveat is a calm lowercase fragment, several per set", () => {
+  const sets = Object.entries(DAY_READ_CAVEAT_VARIANTS);
+  assert.ok(sets.length >= 8, "the whole caveat vocabulary is under test");
+  for (const [key, variants] of sets) {
+    assert.ok(Array.isArray(variants) && variants.length >= 3, `${key} needs several phrasings`);
+    assert.equal(new Set(variants).size, variants.length, `${key} has a duplicate phrasing`);
+    for (const text of variants) {
+      const fragment = String(text || "");
+      assert.ok(fragment.length > 10, `${key} needs a real fragment, got ${JSON.stringify(fragment)}`);
+      assert.equal(fragment, fragment.trim(), `${key} carries stray whitespace into the sentence`);
+      // Spliced after "<lead> — " and joined with "; and ", so a leading capital or a
+      // terminal stop would break the one sentence they all land inside.
+      assert.match(fragment, /^[a-z]/, `${key} must start lowercase — it is spliced mid-sentence`);
+      assert.doesNotMatch(fragment, /[.!?]$/, `${key} must not end a sentence it sits inside`);
+      // The lead already ends with " — ", so a caveat carrying its own em-dash puts two
+      // in one sentence ("You're good to train — you've got a sore knee to work around —
+      // train around it…"). Use ", so" / ", since" instead. One shipped variant did this.
+      assert.doesNotMatch(fragment, /—/, `${key} must not add a second em-dash to the lead's`);
+      holdsTheConstitution(fragment, key);
+    }
+  }
+});
+
+test("every planned-training caveat carries the idea it exists to convey", () => {
+  assert.deepEqual(
+    Object.keys(DAY_READ_CAVEAT_CONCEPT).sort(),
+    Object.keys(DAY_READ_CAVEAT_VARIANTS).sort(),
+    "every caveat set declares exactly one concept, and every concept has a set"
+  );
+  for (const [key, variants] of Object.entries(DAY_READ_CAVEAT_VARIANTS)) {
+    for (const text of variants) {
+      assert.match(text, DAY_READ_CAVEAT_CONCEPT[key], `${key} lost the caveat's own meaning`);
+    }
+  }
+});
+
+// Balanced-paren scan of the argument to every `caveats.push(...)` in the rule. A
+// NINTH caveat added later as a bare literal has to fail HERE rather than slip through
+// unregistered — which is precisely how all eight of these came to be literals.
+function caveatPushArguments(src) {
+  const marker = "caveats.push(";
+  const args = [];
+  let at = src.indexOf(marker);
+  while (at !== -1) {
+    let depth = 1;
+    let i = at + marker.length;
+    for (; i < src.length && depth > 0; i++) {
+      if (src[i] === "(") depth++;
+      else if (src[i] === ")") depth--;
+    }
+    args.push(
+      src
+        .slice(at + marker.length, i - 1)
+        .replace(/\s+/g, " ")
+        .trim()
+    );
+    at = src.indexOf(marker, i);
+  }
+  return args;
+}
+
+test("every caveat the planned-training rule pushes rotates through a registered set", () => {
+  const src = fs.readFileSync(path.join(repoRoot, "src", "repo", "day-read.ts"), "utf8");
+  const pushed = caveatPushArguments(src);
+  assert.ok(pushed.length >= 8, `expected the rule's caveat pushes, found ${pushed.length}`);
+
+  // The one dynamic caveat: the adaptive plan-selection reason, composed elsewhere
+  // (plan-selection.ts selectionReason) rather than authored here.
+  const dynamic = "String(sd.selection.reason)";
+  const seen = new Set();
+  for (const arg of pushed) {
+    if (arg === dynamic) continue;
+    const keys = [...arg.matchAll(/"(planned_training:[a-z_]+)"/g)].map((match) => match[1]);
+    assert.ok(keys.length > 0, `caveats.push(${arg}) is a literal — every caveat must rotate through a variant set`);
+    for (const key of keys) {
+      assert.ok(key in DAY_READ_CAVEAT_VARIANTS, `${key} is pushed but not registered in DAY_READ_CAVEAT_VARIANTS`);
+      seen.add(key);
+    }
+    // A rotation key alongside a hardcoded fragment would pass the check above while
+    // still printing one literal. Prose is long; the short literals that legitimately
+    // appear here are fallback subjects like "an injury", not caveats.
+    for (const [, literal] of arg.matchAll(/"([^"]*)"/g)) {
+      assert.ok(
+        literal.startsWith("planned_training:") || literal.length <= 24,
+        `caveats.push(${arg}) still carries a hardcoded fragment: ${JSON.stringify(literal)}`
+      );
+    }
+  }
+  assert.deepEqual(
+    [...seen].sort(),
+    Object.keys(DAY_READ_CAVEAT_VARIANTS).sort(),
+    "every registered caveat set is actually reachable from the rule"
+  );
+});
+
+// ---------- the LEADS: the third register, previously unregistered ----------
+// A composed planned-training `why` is "<lead> — <fragment>; and <fragment>." The
+// fragments were registered; the two LEADS were not, and they fit neither existing
+// registry — they open with a capital (they open the sentence) and carry no terminal
+// punctuation (a caveat run follows). So nothing held them to the constitution and a
+// new lead phrasing could skip it entirely.
+test("every planned-training lead is a calm capitalised opener, several per set", () => {
+  const sets = Object.entries(DAY_READ_LEAD_VARIANTS);
+  assert.equal(sets.length, 2, "the caveat lead and the hold lead");
+  for (const [key, variants] of sets) {
+    assert.ok(Array.isArray(variants) && variants.length >= 3, `${key} needs several phrasings`);
+    assert.equal(new Set(variants).size, variants.length, `${key} has a duplicate phrasing`);
+    for (const text of variants) {
+      const lead = String(text || "");
+      assert.ok(lead.length > 10, `${key} needs a real opener, got ${JSON.stringify(lead)}`);
+      assert.equal(lead, lead.trim(), `${key} carries stray whitespace into the sentence`);
+      // It OPENS the sentence, so it capitalises...
+      assert.match(lead, /^[A-Z]/, `${key} must open the sentence with a capital`);
+      // ...and the " — <caveats>." run closes it, so the lead must not.
+      assert.doesNotMatch(lead, /[.!?]$/, `${key} must not close the sentence its caveats finish`);
+      // The composition already supplies the em-dash after the lead.
+      assert.doesNotMatch(lead, /—/, `${key} must not add a second em-dash`);
+      holdsTheConstitution(lead, key);
+    }
+  }
+});
+
+test("every planned-training lead carries the idea it exists to convey", () => {
+  assert.deepEqual(
+    Object.keys(DAY_READ_LEAD_CONCEPT).sort(),
+    Object.keys(DAY_READ_LEAD_VARIANTS).sort(),
+    "every lead set declares exactly one concept, and every concept has a set"
+  );
+  for (const [key, variants] of Object.entries(DAY_READ_LEAD_VARIANTS)) {
+    for (const text of variants) assert.match(text, DAY_READ_LEAD_CONCEPT[key], `${key} lost the lead's own meaning`);
+  }
+});
+
+// The same drift guard the caveat pushes get: a rotation key that reaches the athlete
+// through this rule has to be REGISTERED somewhere, so a new lead or fragment cannot
+// be introduced as a bare literal with a key nobody tests.
+test("every planned-training rotation key in the source is registered", () => {
+  const src = fs.readFileSync(path.join(repoRoot, "src", "repo", "day-read.ts"), "utf8");
+  const registered = new Set([
+    ...Object.keys(DAY_READ_CAVEAT_VARIANTS),
+    ...Object.keys(DAY_READ_LEAD_VARIANTS),
+    // The brake's own spoken sentence rotates through the signal-voice registry, which
+    // has its own guards (and its own entries in DAY_READ_WHY_VARIANTS).
+    "planned_training:hold",
+  ]);
+  const used = new Set([...src.matchAll(/"(planned_training:[a-z_]+)"/g)].map((match) => match[1]));
+  assert.ok(used.size >= 10, `expected the rule's rotation keys, found ${used.size}`);
+  for (const key of used) assert.ok(registered.has(key), `${key} rotates in the source but is registered nowhere`);
+});
+
+// A recovery week always pushes its own caveat, so the planned-training `why` chain's
+// third arm (`recoveryWeek ? RECOVERY_WEEK_TRAIN_WHY : …`) sat BELOW `caveats.length`
+// and could never be reached — while the sentence a reduced week actually printed was
+// registered nowhere. The dead arm is retired; this pins what that day really says.
+test("a recovery-week train day speaks through the registered lead and caveat", () => {
+  resetTables("proposals", "app_state");
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  const appliedOn = dayBefore(REF, 2);
+  const proposal = repo.createProposal("stub", repo.RECOVERY_WEEK_INSTRUCTION, "", {
+    summary: "Reduced recovery prescription.",
+    days: repo.getPlan(),
+  });
+  repo.setProposalStatus(proposal.id, "applied");
+  repo.setAppState("recovery_week_applied", JSON.stringify({ applied_on: appliedOn, proposal_id: proposal.id }));
+
+  const r = repo.dayRead(REF, { has_data: false, recovery: {} });
+
+  assert.equal(r.kind, "train");
+  assert.equal(r.decision.rule_code, "planned_reduced_training");
+  const lead = DAY_READ_LEAD_VARIANTS["planned_training:caveats"].find((variant) => r.why.startsWith(variant));
+  assert.ok(lead, `a registered lead must open the read, got ${JSON.stringify(r.why)}`);
+  saysOneCaveat(r.why, "planned_training:recovery_week");
+  // The retired set is gone from the vocabulary too — a registered phrasing nobody can
+  // reach is worse than no entry, because the guards then vouch for dead prose.
+  assert.equal(
+    DAY_READ_WHY_VARIANTS.planned_reduced_training,
+    undefined,
+    "the unreachable recovery-week why set must not stay registered"
+  );
+  // ...but the rule's ledger reasons still exist, and still declare their concept.
+  assert.ok(DAY_READ_OUTCOMES.planned_reduced_training.reasons.includes(r.decision.reason));
+});
+
+// ---------- the general guarantee behind the work-around probe ----------
+// A constraint in `health_constraints` is a safety_override: it changes the posture,
+// the training directive, or both. Whichever field carries it and whichever route it
+// arrives by, the athlete has to be TOLD — a day that gets quietly modified and then
+// explained as "you're recovered and due" is worse than a day that says nothing.
+//
+// The probe used to match `field === "active_injury"`, a CONTEXT-EVENT field, and every
+// other constraint fell through it: an illness lost its guidance to the quiet-streak
+// escalation, and session-reported joint pain — which flips the read to
+// `training: "modify"` — was never spoken at all. Matching on the DIMENSION is what
+// closes the class rather than the two instances; this case is what keeps a fifth field
+// from silently reopening it.
+function logJointPain(areas, on) {
+  const day = repo.getPlanDay(1);
+  const ex = repo.findExercise("Squat") ?? repo.upsertExercise({ name: "Squat", muscle_group: "quads" });
+  const session = repo.getOrCreateSession(on, day.id);
+  db.prepare(
+    `INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps, rir) VALUES (?, ?, 1, 185, 5, 2)`
+  ).run(session.id, ex.id);
+  repo.setSessionFeedback(on, { joint_pain: areas });
+}
+
+test("a health constraint that changes the day is always spoken, whatever its source", () => {
+  const scenarios = [
+    {
+      label: "context event · injury",
+      field: "active_injury",
+      names: /shoulder strain/i,
+      seed: (date) =>
+        repo.addContextEvent({
+          kind: "injury",
+          title: "Shoulder strain",
+          detail: "Overhead loading aggravates it",
+          start_date: date,
+        }),
+    },
+    {
+      label: "context event · illness",
+      field: "illness",
+      names: /head cold/i,
+      seed: (date) => repo.addContextEvent({ kind: "illness", title: "Head cold", start_date: date }),
+    },
+    {
+      // The route the context path cannot see. It reaches the read through
+      // trainingSignals.autoregulation, so `reduceItem` is null and every caveat the
+      // rule knew how to push was keyed on a context event.
+      label: "session feedback · joint pain",
+      field: "joint_pain",
+      names: /left knee/i,
+      seed: (date) => logJointPain("left knee", dayBefore(date, 3)),
+    },
+  ];
+
+  for (const { label, field, names, seed } of scenarios) {
+    resetTables("logged_sets", "sessions", "plan_items", "plan_days", "checkins", "activities", "context_events");
+    repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+    seed(REF);
+
+    const r = repo.dayRead(REF, { has_data: false, recovery: {} });
+    const state = r.signals.signal_state;
+
+    // The constraint really did change the day...
+    assert.equal(state.dimensions.health_constraints.status, "constrained", `${label}: not a constraint`);
+    assert.notEqual(state.action.directives.training, "proceed", `${label}: the day was not actually modified`);
+    // ...the probe saw it, by whichever field carries it...
+    assert.equal(r.signals.health_workaround.field, field, `${label}: the work-around probe missed it`);
+    // ...and the athlete is told what today is modified FOR.
+    assert.match(r.why, names, `${label}: the day changed silently — ${JSON.stringify(r.why)}`);
+    // The specific regression: a constrained day must never read as an unqualified
+    // green light. That is what a joint-pain train day printed.
+    for (const clear of DAY_READ_WHY_VARIANTS.planned_training) {
+      assert.equal(r.why.includes(clear), false, `${label}: a constrained day read as clear — ${clear}`);
+    }
+  }
+});
+
+// The joint-pain fragment is its own set rather than INJURY_CAVEAT reused: an injury is
+// a NAMED condition from a context event ("a sore left knee"), joint pain is a bare list
+// of areas from session feedback ("left knee"), and forcing one phrasing over both
+// produced "you've got left knee to work around" — a noun phrase missing its article.
+test("session-reported joint pain is voiced as a pain-free substitution, naming the areas", () => {
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  logJointPain("left knee", dayBefore(REF, 3));
+
+  const r = repo.dayRead(REF, { has_data: false, recovery: {} });
+
+  assert.equal(r.kind, "train", "a work-around is a caveat on the session, never a reason to withhold it");
+  assert.equal(r.decision.rule_code, "planned_training");
+  const landed = saysOneCaveat(r.why, "planned_training:joint_pain");
+  assert.match(landed, /left knee/, "the caveat must name the sore areas, not gesture at them");
+  // It composes like every other caveat: one lead, one sentence, one full stop.
+  assert.ok(
+    DAY_READ_LEAD_VARIANTS["planned_training:caveats"].some((lead) => r.why.startsWith(lead)),
+    `a registered lead must open the read, got ${JSON.stringify(r.why)}`
+  );
+  assert.match(r.why, /\.$/);
+  assert.doesNotMatch(r.why, /\.\.|\s;|;\s*and\s*[A-Z]|—\s*[A-Z]/, `broken sentence: ${JSON.stringify(r.why)}`);
+  // Several areas arrive joined, so no phrasing may carry a verb that agrees with one.
+  resetTables("logged_sets", "sessions");
+  logJointPain("left knee, right shoulder", dayBefore(REF, 2));
+  const many = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.match(many.why, /left knee, right shoulder/);
+});
+
+// ---------- the reading grammar: ONE definition, both registers ----------
+// Every phrasing the deterministic floor can say, in every register, rendered with the
+// real arguments each templated set takes. This is the proof set for the predicate:
+// it is the prose the product has shipped and reviewed, so a predicate that rejects
+// ANY of it is too strict to put in front of the agent.
+function everyRegisteredPhrasing() {
+  const rows = [];
+  const push = (source, texts) => {
+    for (const text of texts) rows.push({ source, text });
+  };
+  for (const [code, variants] of Object.entries(DAY_READ_WHY_VARIANTS)) push(`why:${code}`, variants);
+  for (const [key, variants] of Object.entries(DAY_READ_CAVEAT_VARIANTS)) push(`caveat:${key}`, variants);
+  for (const [key, variants] of Object.entries(DAY_READ_LEAD_VARIANTS)) push(`lead:${key}`, variants);
+  for (const [code, variants] of Object.entries(DAY_READ_POLICY_REASON_VARIANTS)) push(`reason:${code}`, variants);
+  for (const [kind, variants] of Object.entries(DAY_READ_HEADLINE_VARIANTS)) push(`headline:${kind}`, variants);
+  push("headline:train_focus", DAY_READ_FOCUS_HEADLINE_VARIANTS);
+  push("recovery_week_soften_why", RECOVERY_WEEK_SOFTEN_WHY);
+  for (const [key, outcome] of [...Object.entries(DAY_READ_OUTCOMES), ["unprogrammed_easy_day", UNPROGRAMMED_EASY_DAY]])
+    push(`outcome:${key}`, outcome.reasons);
+  for (const [key, entry] of Object.entries(SIGNAL_VOICE_REGISTRY)) push(`voice:${key}`, entry.variants);
+  // The templated sets, rendered across every argument they can actually take.
+  for (let n = 3; n <= 8; n++) {
+    push(
+      `quiet_streak:${n}`,
+      QUIET_STREAK_WHY.map((render) => render(quietOrdinal(n)))
+    );
+    push(
+      `quiet_streak_guarded:${n}`,
+      QUIET_STREAK_GUARDED_WHY.map((render) => render(quietOrdinal(n)))
+    );
+  }
+  push(
+    "quiet_streak:fallback",
+    [...QUIET_STREAK_WHY, ...QUIET_STREAK_GUARDED_WHY].map((render) => render(quietOrdinal(99)))
+  );
+  // And the COMPOSED planned-training sentence, which is where a lead, several
+  // fragments and a spoken brake all land inside one string.
+  for (const [key, variants] of Object.entries(DAY_READ_CAVEAT_VARIANTS)) {
+    for (const lead of DAY_READ_LEAD_VARIANTS["planned_training:caveats"]) {
+      push(`composed:${key}`, [`${lead} — ${variants.join("; and ")}.`]);
+    }
+  }
+  return rows;
+}
+
+test("the reading grammar rejects NOTHING the deterministic floor already says", () => {
+  const rows = everyRegisteredPhrasing();
+  assert.ok(rows.length >= 200, `the whole vocabulary is under test, got ${rows.length}`);
+  const rejected = rows
+    .map(({ source, text }) => ({ source, text, rule: violatesReadingGrammar(text) }))
+    .filter((row) => row.rule);
+  assert.deepEqual(rejected, [], "the predicate the agent is held to must accept every shipped phrasing");
+});
+
+test("the reading grammar also clears every sentence the live floor composes", () => {
+  // The registries are the authored vocabulary; these are the strings dayRead actually
+  // assembles from them, subject substitution and all.
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  repo.addContextEvent({
+    kind: "injury",
+    title: "Shoulder strain",
+    detail: "Overhead loading aggravates it",
+    start_date: REF,
+  });
+  const reads = [
+    repo.dayRead(REF, { has_data: false, recovery: {} }),
+    repo.dayRead(REF, { has_data: true, recovery: { avg_sleep_min: 300 } }),
+    repo.dayRead(dayBefore(REF, 1), { has_data: true, recovery: { training_readiness: 20 } }),
+  ];
+  for (const read of reads) {
+    assert.equal(violatesReadingGrammar(read.why), null, `live why broke the grammar: ${JSON.stringify(read.why)}`);
+    assert.equal(violatesReadingGrammar(read.decision.reason), null, `live reason: ${read.decision.reason}`);
+    assert.equal(violatesReadingGrammar(dayReadHeadline(read, REF)), null, "live headline");
+  }
+});
+
+// The whole point: the guard used to cover the layer that CANNOT violate the
+// constitution and was withheld from the layer that can. The agent's sentence is what
+// the athlete reads on most mornings, and it went to the Brief unchecked.
+test("the agent's prose is held to the same constitution as the floor", async () => {
+  const { isValidDayReadAgentResult } = await import("../dist/dayread.js");
+  const baseline = { kind: "train", signals: { today_load: "none", trained_today: false } };
+
+  // The exact payload that used to validate and render verbatim as the Brief's
+  // headline and `why`: a 0-100 score and a hard gate, both explicitly forbidden.
+  assert.equal(
+    isValidDayReadAgentResult(
+      {
+        kind: "rest",
+        headline: "Readiness 38/100 — rest.",
+        why: "Your recovery score is 38/100, so you must not train today. Do not lift.",
+      },
+      baseline
+    ),
+    false
+  );
+
+  // Each rule, in each of the two fields the athlete reads.
+  const violations = [
+    "Your readiness signal came in low today.",
+    "You scored 42% on recovery this morning.",
+    "You must sit today out.",
+    "Do not train today.",
+    "The deterministic baseline selected a rest posture.",
+  ];
+  for (const text of violations) {
+    assert.equal(isValidDayReadAgentResult({ kind: "rest", why: text }, baseline), false, `why: ${text}`);
+    assert.equal(
+      isValidDayReadAgentResult({ kind: "rest", headline: text, why: "Rest is the kinder call today." }, baseline),
+      false,
+      `headline: ${text}`
+    );
+  }
+
+  // ...and calm, compliant prose still passes, in both fields.
+  assert.equal(
+    isValidDayReadAgentResult(
+      {
+        kind: "rest",
+        headline: "Rest today.",
+        why: "You've stacked three real training days — let today consolidate.",
+      },
+      baseline
+    ),
+    true
+  );
+});
+
+// ---------- the headline: the most prominent string, previously a literal ----------
+test("every headline phrasing reads as a calm finished sentence, several per kind", () => {
+  const kinds = Object.keys(DAY_READ_HEADLINE_VARIANTS).sort();
+  assert.deepEqual(kinds, ["done", "easy", "rest", "train"], "every read kind owns a headline set");
+  assert.deepEqual(Object.keys(DAY_READ_HEADLINE_CONCEPT).sort(), kinds, "and declares exactly one concept");
+  for (const [kind, variants] of Object.entries(DAY_READ_HEADLINE_VARIANTS)) {
+    assert.ok(variants.length >= 3, `${kind} needs several phrasings`);
+    assert.equal(new Set(variants).size, variants.length, `${kind} has a duplicate phrasing`);
+    for (const text of variants) {
+      assert.ok(text.length > 10, `${kind} needs a real sentence, got ${JSON.stringify(text)}`);
+      assert.match(text, /^[A-Z]/, `${kind} should open as a sentence: ${JSON.stringify(text)}`);
+      assert.match(text, /[.!?]$/, `${kind} should read as a finished sentence: ${JSON.stringify(text)}`);
+      assert.match(text, DAY_READ_HEADLINE_CONCEPT[kind], `${kind} lost the kind's own meaning`);
+      holdsTheConstitution(text, `headline:${kind}`);
+    }
+  }
+  // The train-with-focus form is its own set: the focus IS the headline, so every
+  // phrasing has to still name it (and still close as a sentence).
+  assert.ok(DAY_READ_FOCUS_HEADLINE_VARIANTS.length >= 3, "the focus form needs several phrasings");
+  for (const text of DAY_READ_FOCUS_HEADLINE_VARIANTS) {
+    assert.match(text, /Lower body/, `the focus form must name the focus: ${JSON.stringify(text)}`);
+    assert.match(text, /[.!?]$/, "the focus form should read as a finished sentence");
+    holdsTheConstitution(text, "headline:train_focus");
+  }
+});
+
+test("the headline rotates day to day, stays stable per day, and keeps the focus form", () => {
+  // Stable per day: todayBriefMateriallyDiffers compares `headline` to decide whether
+  // to repaint, and the clamp paths rewrite it on EVERY call — a non-deterministic pick
+  // would repaint the Brief on every poll.
+  for (const kind of ["done", "rest", "easy", "train"]) {
+    assert.equal(dayReadHeadline({ kind }, REF), dayReadHeadline({ kind }, REF), `${kind} re-rolled within a day`);
+    const seen = [];
+    for (let back = 6; back >= 0; back--) {
+      const date = dayBefore(REF, back);
+      const headline = dayReadHeadline({ kind }, date);
+      assert.ok(DAY_READ_HEADLINE_VARIANTS[kind].includes(headline), `${kind} ${date}: ${JSON.stringify(headline)}`);
+      seen.push({ date, headline });
+    }
+    for (let i = 1; i < seen.length; i++) {
+      assert.notEqual(seen[i].headline, seen[i - 1].headline, `${kind}: ${seen[i].date} repeated ${seen[i - 1].date}`);
+    }
+    assert.ok(new Set(seen.map((s) => s.headline)).size >= 3, `${kind}: a week must not cycle through one or two`);
+  }
+  // A train day that knows its focus still leads with the focus, in every phrasing.
+  for (let back = 3; back >= 0; back--) {
+    const date = dayBefore(REF, back);
+    assert.match(dayReadHeadline({ kind: "train", focus: "Lower body" }, date), /Lower body/);
+  }
+  // The plain train form is the fallback when no focus is known, and an unknown kind
+  // degrades there too rather than to an empty headline.
+  assert.ok(DAY_READ_HEADLINE_VARIANTS.train.includes(dayReadHeadline({ kind: "train", focus: "" }, REF)));
+  assert.ok(DAY_READ_HEADLINE_VARIANTS.train.includes(dayReadHeadline({ kind: "unknown" }, REF)));
+});
+
+// Every server-policy clamp REWRITES the headline, and each can fire on consecutive
+// days — the recovery-week softening clamp most of all, which is where the literal
+// "Take it easy." sat directly above the `why` that had already been fixed for exactly
+// this reason. Rotation has to survive the clamps, not just the pure helper.
+test("the server-policy clamps write a rotating headline, never a literal", async () => {
+  const { enforceDayReadSafetyPosture, enforceRecoveryWeekCadence, enforceCompletionContract } = await import(
+    "../dist/dayread.js"
+  );
+  const agentRest = {
+    kind: "rest",
+    headline: "Rest today.",
+    focus: null,
+    why: "Broad context says keep resting.",
+    est_minutes: null,
+    source: "agent",
+    agent: "stub",
+  };
+  const clamps = [
+    {
+      label: "deterministic_safety_floor",
+      kind: "rest",
+      run: (date) =>
+        enforceDayReadSafetyPosture(
+          { kind: "train", headline: "Good to train.", why: "Go get it.", agent: "stub" },
+          { kind: "rest", focus: null, why: "Several loading days back to back.", signals: {} },
+          false,
+          date
+        ),
+    },
+    {
+      label: "recovery_week_rest_softened_to_easy_after_loading_day",
+      kind: "easy",
+      run: (date) =>
+        enforceRecoveryWeekCadence(
+          agentRest,
+          {
+            kind: "train",
+            focus: "Lower body",
+            why: "Use the reduced prescription.",
+            est_minutes: 45,
+            signals: {
+              recovery_week: { state: "applied", applied_on: dayBefore(date, 3), until: dayBefore(date, -4) },
+              recent_load: [{ date: dayBefore(date, 1), load: "moderate" }],
+            },
+          },
+          false,
+          date
+        ),
+    },
+    {
+      label: "completion_fact_preserved",
+      kind: "done",
+      run: (date) =>
+        enforceCompletionContract(
+          { kind: "easy", headline: "Take it easy.", why: "Broad context.", agent: "stub" },
+          { kind: "done", focus: null, why: "That session is in the books.", signals: {} },
+          date
+        ),
+    },
+  ];
+
+  for (const { label, kind, run } of clamps) {
+    assert.equal(run(REF).headline, run(REF).headline, `${label}: same day must not re-roll`);
+    const seen = [];
+    for (let back = 6; back >= 0; back--) {
+      const date = dayBefore(REF, back);
+      const headline = run(date).headline;
+      assert.ok(
+        DAY_READ_HEADLINE_VARIANTS[kind].includes(headline),
+        `${label} ${date}: unexpected headline ${JSON.stringify(headline)}`
+      );
+      seen.push({ date, headline });
+    }
+    for (let i = 1; i < seen.length; i++) {
+      assert.notEqual(seen[i].headline, seen[i - 1].headline, `${label}: ${seen[i].date} repeated ${seen[i - 1].date}`);
+    }
+    assert.ok(new Set(seen.map((s) => s.headline)).size >= 3, `${label}: seven days must not cycle through one or two`);
+  }
+});
+
+// The fifth athlete-facing `decision.reason` and the only one the rotation missed: it
+// is written in computeDayRead's agent branch rather than by a policyDecision() clamp,
+// so it kept its literal while every sibling moved into the map. The Brief renders it
+// on exactly the rest/easy shape `conservative` can take.
+test("the agent's conservative adjustment rotates like every other decision reason", async () => {
+  const { dayReadPolicyReason } = await import("../dist/repo/day-read.js");
+  const CODE = "agent_conservative_adjustment";
+  const variants = DAY_READ_POLICY_REASON_VARIANTS[CODE];
+  assert.ok(Array.isArray(variants) && variants.length >= 3, `${CODE} needs several phrasings`);
+
+  assert.equal(dayReadPolicyReason(CODE, REF), dayReadPolicyReason(CODE, REF), "same day must not re-roll");
+  const seen = [];
+  for (let back = 6; back >= 0; back--) {
+    const date = dayBefore(REF, back);
+    const reason = dayReadPolicyReason(CODE, date);
+    assert.ok(variants.includes(reason), `${date}: unexpected reason ${JSON.stringify(reason)}`);
+    seen.push({ date, reason });
+  }
+  for (let i = 1; i < seen.length; i++) {
+    assert.notEqual(seen[i].reason, seen[i - 1].reason, `${seen[i].date} repeated ${seen[i - 1].date}`);
+  }
+  assert.ok(new Set(seen.map((s) => s.reason)).size >= 3, "seven days must not cycle through one or two");
+  // An unregistered code stays EMPTY — the Brief renders a reason only when there is a
+  // specific one, and narrating internals is worse than saying nothing.
+  assert.equal(dayReadPolicyReason("agent_day_read", REF), "");
+
+  // ...and the agent branch reads it from the map rather than carrying its own literal.
+  const src = fs.readFileSync(path.join(repoRoot, "src", "dayread.ts"), "utf8");
+  assert.match(src, new RegExp(`reason: conservative \\? dayReadPolicyReason\\("${CODE}"`));
+  for (const variant of variants) {
+    assert.equal(src.includes(variant), false, `${CODE} is still hardcoded in dayread.ts: ${JSON.stringify(variant)}`);
   }
 });
 
@@ -1143,6 +1871,51 @@ test("a quiet stretch with an injury never prescribes what the work-around just 
   assert.notEqual(reads[3].why, reads[2].why, "the guarded escalation rotates day over day too");
 });
 
+// The guarded escalation existed precisely so a day carrying a constraint is never told
+// a walk beats resting — but it was selected off `health_workaround`, which was
+// populated for `active_injury` ALONE. An illness is an equal safety_override and the
+// very thing driving the rest posture, so a head cold got the UNGUARDED escalation: on
+// the third quiet day the Brief dropped the illness entirely and argued "a gentle walk
+// today would do more for you than another full stop".
+test("an illness keeps its guidance through the quiet-streak escalation", () => {
+  repo.addContextEvent({ kind: "illness", title: "Head cold", detail: "Chesty cough", start_date: localDaysAgo(6) });
+  const reads = liveConsecutiveDays(4, { has_data: false, recovery: {} }).map((entry) => entry.read);
+
+  for (const read of reads) {
+    assert.ok(["easy", "rest"].includes(read.kind), `still a protective read, got ${read.kind}`);
+    assert.equal(read.signals.health_workaround.field, "illness", "an illness is a work-around like any other");
+    // The illness is named on every day of the stretch, in the athlete's own register.
+    assert.ok(
+      signalVoice({ key: "illness", subject: "Head cold" }).some((variant) => read.why.includes(variant)),
+      `the illness should still be named, got ${JSON.stringify(read.why)}`
+    );
+    // ...and never twice: the protect rule already speaks this voice, so the appended
+    // work-around sentence must not restate it in a second phrasing.
+    const spoken = signalVoice({ key: "illness", subject: "Head cold" }).filter((variant) =>
+      read.why.includes(variant)
+    );
+    assert.equal(spoken.length, 1, `the illness was voiced twice: ${JSON.stringify(read.why)}`);
+  }
+
+  for (const read of reads.slice(2)) {
+    assert.ok(read.signals.continuity.quiet_streak >= 2);
+    const escalation = QUIET_STREAK_GUARDED_WHY.map((render) =>
+      render(quietOrdinal(read.signals.continuity.quiet_streak + 1))
+    );
+    assert.ok(
+      escalation.some((text) => read.why.endsWith(text)),
+      `expected a GUARDED escalation to close the read, got ${JSON.stringify(read.why)}`
+    );
+    // The unguarded set is what used to land here, and three of its four phrasings
+    // offer time on your feet to someone who should be recovering.
+    for (const render of QUIET_STREAK_WHY) {
+      const text = render(quietOrdinal(read.signals.continuity.quiet_streak + 1));
+      assert.equal(read.why.includes(text), false, `the unguarded escalation spoke over an illness`);
+    }
+  }
+  assert.notEqual(reads[3].why, reads[2].why, "the guarded escalation still rotates day over day");
+});
+
 test("an unchanged read says so plainly instead of re-deriving itself", () => {
   const [, today] = liveConsecutiveDays(2);
 
@@ -1336,4 +2109,124 @@ test("recovery telemetry that cannot move the decision leaves the fingerprint al
     signals: { ...base.signals, endurance_volume: { last_week_km: 41, volume_spike: false } },
   };
   assert.equal(repo.dayReadInputFingerprint(REF, mileageOnly), before);
+});
+
+// `directives` is selected field by field so `training_source` stays OUT of the hash.
+// It names which dimension produced the directive, which is not itself a decision, and
+// every input that can move it is hashed already — so the same hold changing hands
+// between two dimensions must not discard a warm agentic read. The directives that ARE
+// decisions still move it.
+test("the brake's identity does not churn the fingerprint, but the directives do", () => {
+  const withDirectives = (extra) => ({
+    kind: "train",
+    focus: "Lower body",
+    signals: {
+      today_load: "none",
+      signal_state: {
+        action: {
+          posture: "train",
+          reason: "The athlete slept well.",
+          confidence: "medium",
+          directives: {
+            training: "hold_aggression",
+            training_source: "recovery_capacity",
+            fueling: "normal",
+            schedule: "normal",
+            ...extra,
+          },
+        },
+      },
+    },
+  });
+  const base = repo.dayReadInputFingerprint(REF, withDirectives({}));
+
+  assert.equal(
+    repo.dayReadInputFingerprint(REF, withDirectives({ training_source: "training_load_tolerance" })),
+    base,
+    "the same hold from a different brake is the same decision"
+  );
+  assert.equal(
+    repo.dayReadInputFingerprint(REF, withDirectives({ training_source: null })),
+    base,
+    "and a row cached before the source existed must not churn on deploy"
+  );
+
+  // The decisions themselves still move it.
+  assert.notEqual(repo.dayReadInputFingerprint(REF, withDirectives({ training: "recover" })), base);
+  assert.notEqual(repo.dayReadInputFingerprint(REF, withDirectives({ fueling: "protect" })), base);
+  assert.notEqual(repo.dayReadInputFingerprint(REF, withDirectives({ schedule: "compress" })), base);
+
+  // And the narration around them still cannot.
+  const renarrated = withDirectives({});
+  renarrated.signals.signal_state.action.reason = "The athlete reports workable energy today.";
+  renarrated.signals.signal_state.action.confidence = "high";
+  assert.equal(repo.dayReadInputFingerprint(REF, renarrated), base, "narration is churn, not a decision");
+});
+
+// ---------------------------------------------------------------------------
+// The Brief must not be computed BLIND. planningSignalState takes nine optional
+// inputs; the athlete-facing path used to pass seven, and the two it dropped
+// (`trainingSignals`, `programState`) are where joint pain, the low-performance
+// flag and a due deload enter — all as safety_override CONSTRAINTS. "Optional"
+// means the thin call built a weaker state with no error and no warning, so on
+// the same day the coach prompt was told to protect, the Brief said train. These
+// reproduce the defect end to end through the REAL dayRead(date) with NO
+// unifiedState argument — exactly how computeDayRead / readToday call it.
+// ---------------------------------------------------------------------------
+
+test("the bare dayRead sees logged joint pain (it used to be blind to it)", () => {
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  seedTrainingDay(dayBefore(REF, 3));
+  repo.setSessionFeedback(dayBefore(REF, 3), { joint_pain: "left knee" });
+
+  const r = repo.dayRead(REF); // no unifiedState — the athlete-facing call
+  const state = r.signals.signal_state;
+  assert.equal(state.dimensions.health_constraints.status, "constrained");
+  assert.ok(
+    state.dimensions.health_constraints.evidence.some((e) => e.field === "joint_pain"),
+    "the joint-pain constraint has to reach the read the athlete is shown"
+  );
+  // Protective, not "proceed as planned": the thin state answered train/proceed.
+  assert.notEqual(state.action.posture, "train");
+  assert.equal(state.action.directives.training, "modify");
+  assert.equal(state.action.directives.training_source, "health_constraints");
+});
+
+test("the bare dayRead sees the low-performance flag and reads protectively", () => {
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  seedTrainingDay(dayBefore(REF, 3));
+  repo.setSessionFeedback(dayBefore(REF, 3), { performance: 2 });
+
+  const r = repo.dayRead(REF);
+  const state = r.signals.signal_state;
+  assert.equal(state.dimensions.training_load_tolerance.status, "constrained");
+  assert.ok(
+    state.dimensions.training_load_tolerance.evidence.some((e) => e.field === "felt_fatigue"),
+    "recent sessions feeling below par has to reach the read"
+  );
+  assert.equal(state.action.posture, "rest");
+  assert.equal(state.action.directives.training, "recover");
+  // And the read itself follows — the plan day is no longer simply handed over.
+  assert.equal(r.kind, "rest");
+  assert.equal(r.decision.rule_code, "acute_signal_protection");
+});
+
+test("the bare dayRead sees a due deload from the program state", () => {
+  const today = localDaysAgo(0);
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  // Nine straight loaded weeks with no reset (every third day, so no earned-rest
+  // streak and no week light enough to read as a deload) → mesocycle deload-due.
+  // Program state is keyed to the CURRENT week, so this fixture is dated off today.
+  for (let n = 3; n <= 63; n += 3) seedTrainingDay(dayBefore(today, n));
+
+  const r = repo.dayRead(today);
+  const state = r.signals.signal_state;
+  assert.equal(state.dimensions.training_load_tolerance.status, "constrained");
+  assert.ok(
+    state.dimensions.training_load_tolerance.evidence.some((e) => e.field === "mesocycle"),
+    "the anticipated reset has to reach the read"
+  );
+  assert.notEqual(state.action.posture, "train");
+  assert.equal(state.action.directives.training, "recover");
+  assert.equal(r.decision.rule_code, "acute_signal_protection");
 });

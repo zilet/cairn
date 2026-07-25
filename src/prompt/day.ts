@@ -288,9 +288,19 @@ function debriefFacts(date: string): string {
     : "";
 }
 
-export function buildDayReadPrompt(ctx?: CoachContext, opts: { override?: string; date?: string } = {}): string {
+export function buildDayReadPrompt(
+  ctx?: CoachContext,
+  opts: { override?: string; date?: string; baseline?: repo.DayRead } = {}
+): string {
   const context = ctx ?? repo.getCoachContext();
-  const baseline = repo.dayRead(opts.date, context.recovery, context.signal_state);
+  // The baseline the CALLER will clamp, persist and fingerprint — passed in so the
+  // prompt describes the exact read the server-policy layer then acts on. Computing
+  // a second one here is what opened the rich/thin seam: the agent was told
+  // `A rules-only baseline suggested: …` and shown the signals of one state while
+  // enforceDayReadSafetyPosture / enforceRecoveryWeekCadence clamped against
+  // another, and the persisted row took its `signals` and `input_fingerprint` from
+  // the second. The bare fallback stays for callers that only want the prose.
+  const baseline = opts.baseline ?? repo.dayRead(opts.date, context.recovery, context.signal_state);
   // ===== FELT SIGNALS block (wave/felt-signals — self-contained, delimited) =====
   // What the athlete's OWN subjective signals reveal, relevant to TODAY: a recurring
   // Brief-override rhythm on this weekday (pre-acknowledge, never gate), a persistent
@@ -362,6 +372,19 @@ export function buildDayReadPrompt(ctx?: CoachContext, opts: { override?: string
     ln && ln.text
       ? `\nLAST NIGHT: ${ln.text}. When it's worth a mention, name last night in plain words — one calm clause in a friend's voice ("you slept well", "a bit light on deep sleep", "HRV's a touch below your norm") — never a number wall or a score, and let how they actually feel override it.`
       : `\nSLEEP/RECOVERY: no recent sleep or HRV data has synced. Do NOT claim or imply how they slept ("you slept fine", "well-rested", etc.) — you have no sleep signal for last night. Speak only to what the data actually shows (training, recovery trend, the day ahead).`;
+  // The matching pair to the absent-data branch above, guarding the OPPOSITE
+  // overclaim: one night narrated as a run of them. The deterministic floor no
+  // longer does this, but the agent writes the prose the athlete actually reads,
+  // and nothing else in the prompt tells it that `LAST NIGHT: 4h50m sleep.` is a
+  // single data point while neighbouring lines legitimately read as trends.
+  // `low_sleep` is the multi-night flag (the <6h AVERAGE), so it — never last
+  // night's number — is what licenses a "lately" sentence. Four straight 290-min
+  // nights can still sit under a 390-min average with low_sleep false, which is
+  // exactly the case where a "stacking up" sentence contradicts the signals.
+  const oneNightLine =
+    ln && ln.text
+      ? `\nONE NIGHT IS NOT A TREND: the line above is LAST NIGHT ONLY. Do NOT present it as a pattern ("short nights have been stacking up", "you've been sleeping badly lately", "you've been running short all week") unless the SIGNALS block backs one — \`low_sleep\` is the deterministic flag for a genuinely short multi-night AVERAGE, \`avg_sleep_min\` is that average, and \`fatigue.sleep_vs_norm\` is how far last night sat from their norm. When only last night is short, name it as one night ("last night was a short one") and let today's read rest on it as a single data point.`
+      : "";
   const readiness: any = baseline.signals && (baseline.signals as any).fatigue?.readiness;
   const readinessLine =
     readiness?.current != null
@@ -406,7 +429,7 @@ ${JSON.stringify(baseline.signals)}
 A rules-only baseline suggested: kind="${baseline.kind}", focus=${JSON.stringify(baseline.focus)}.
 You MAY disagree with the baseline when the whole picture warrants it — it is a floor, not a ceiling.
 RECENT TRAINING (most recent first): ${sessionLine}.
-TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${renderRecentReads(feltDate)}${renderPeriodization(feltDate)}${doneBlock}${lastNightLine}
+TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${renderRecentReads(feltDate)}${renderPeriodization(feltDate)}${doneBlock}${lastNightLine}${oneNightLine}
 ${CONTEXT_GUARDRAILS}
 ${renderSignalState(context)}${renderCoachingFocus(context, { brief: true })}${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderRunZones(context)}${renderRunPlan(context)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderMuscleGroups(context)}${renderPerformance(context, { brief: true })}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${feltBlock}${learnedBlock}${overrideBlock}
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:

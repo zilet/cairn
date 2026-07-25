@@ -10,8 +10,17 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo, resetTables, seedTrainingDay, seedRecoveryDay } from "./_seed.js";
+import { DAY_READ_CAVEAT_VARIANTS } from "../dist/repo/day-read.js";
 
 const REF = "2026-04-15";
+// The recovery-week note is a caveat FRAGMENT spliced into the train read's sentence,
+// and it rotates by calendar day like every other athlete-facing string — so pin the
+// registered set rather than a regex that happened to fit one phrasing.
+const saysRecoveryWeekCaveat = (why) =>
+  assert.ok(
+    DAY_READ_CAVEAT_VARIANTS["planned_training:recovery_week"].some((variant) => why.includes(variant)),
+    `expected the recovery-week caveat, got ${JSON.stringify(why)}`
+  );
 const dayBefore = (base, n) => new Date(new Date(base + "T00:00:00Z").getTime() - n * 864e5).toISOString().slice(0, 10);
 
 beforeEach(() => {
@@ -38,10 +47,7 @@ function startRecoveryWeek(appliedOn) {
     days: repo.getPlan(),
   });
   repo.setProposalStatus(proposal.id, "applied");
-  repo.setAppState(
-    "recovery_week_applied",
-    JSON.stringify({ applied_on: appliedOn, proposal_id: proposal.id })
-  );
+  repo.setAppState("recovery_week_applied", JSON.stringify({ applied_on: appliedOn, proposal_id: proposal.id }));
   db.prepare(`UPDATE app_state SET updated_at = ? WHERE key = 'recovery_week_applied'`).run(`${appliedOn} 00:00:00`);
   return proposal;
 }
@@ -161,7 +167,7 @@ test("an active recovery week keeps compliant reduced sessions easy and continue
   assert.equal(read.signals.recent_load[0].load, "easy");
   assert.equal(read.signals.recent_load[0].recovery_dose[0].classification, "compliant");
   assert.equal(read.kind, "train");
-  assert.match(read.why, /recovery-week|reduced/i);
+  saysRecoveryWeekCaveat(read.why);
 });
 
 test("a recovery session that materially exceeds its dose still protects the rest of that day", () => {
@@ -281,7 +287,9 @@ test("ordinary aliased exercise variants are not collapsed without provider prov
   startRecoveryWeek(dayBefore(REF, 1));
   const day = repo.getPlanDay(1);
   const canonical = repo.findExercise("Bench Press");
-  db.prepare(`INSERT INTO exercises (name, muscle_group, mode) VALUES ('Bench Press Variation', 'chest', 'reps')`).run();
+  db.prepare(
+    `INSERT INTO exercises (name, muscle_group, mode) VALUES ('Bench Press Variation', 'chest', 'reps')`
+  ).run();
   const variation = repo.findExercise("Bench Press Variation");
   repo.setExerciseAlias("Bench Press Variation", "Bench Press", "manual");
   const session = repo.getOrCreateSession(REF, day.id);
@@ -337,7 +345,7 @@ test("live recovery acceptance: Jul 15 tempo completes the day, Jul 16 continues
   const next = repo.dayRead(continuationDate, { has_data: false, recovery: {} });
   assert.equal(next.kind, "train");
   assert.equal(next.focus, "Pull");
-  assert.match(next.why, /recovery-week|reduced/i);
+  saysRecoveryWeekCaveat(next.why);
 
   const postWindow = repo.dayRead(buildDate, { has_data: false, recovery: {} });
   assert.equal(postWindow.signals.recovery_week, null);
@@ -402,12 +410,28 @@ function seedHcActivity(date, { type = "run", duration_min = null, distance_km =
     .prepare(`INSERT INTO activities (date, type, duration_min, distance_km) VALUES (?, ?, ?, ?)`)
     .run(date, type, duration_min, distance_km);
 }
-function seedHcGarmin(activityId, date, { type = "run", aerobic_te = null, te_label = null, hr_zones_json = null, training_load = null } = {}) {
-  const src = db.prepare(`INSERT INTO garmin_sources (provider, mode, label) VALUES ('garmin','unofficial','hc-test')`).run();
+function seedHcGarmin(
+  activityId,
+  date,
+  { type = "run", aerobic_te = null, te_label = null, hr_zones_json = null, training_load = null } = {}
+) {
+  const src = db
+    .prepare(`INSERT INTO garmin_sources (provider, mode, label) VALUES ('garmin','unofficial','hc-test')`)
+    .run();
   db.prepare(
     `INSERT INTO garmin_activities (source_id, external_id, activity_id, date, type, aerobic_te, te_label, hr_zones_json, training_load)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(src.lastInsertRowid, `hc-${activityId}-${date}`, activityId, date, type, aerobic_te, te_label, hr_zones_json, training_load);
+  ).run(
+    src.lastInsertRowid,
+    `hc-${activityId}-${date}`,
+    activityId,
+    date,
+    type,
+    aerobic_te,
+    te_label,
+    hr_zones_json,
+    training_load
+  );
 }
 
 test("hardCardioDay: a ~43-min EASY hike with no wearable data is NOT hard", () => {

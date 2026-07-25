@@ -237,8 +237,8 @@ test("the machine-facing summaries are untouched and the athlete voice sits besi
 
   const summaryOf = (dimension, field) =>
     state.dimensions[dimension].evidence.find((item) => item.field === field)?.summary;
-  assert.equal(summaryOf("recovery_capacity", "sleep"), "Recent sleep is running short.");
-  assert.equal(summaryOf("recovery_capacity", "training_readiness"), "The fresh wearable readiness signal is subdued.");
+  assert.equal(summaryOf("recovery_capacity", "sleep"), "The most recent recorded night came in short.");
+  assert.equal(summaryOf("recovery_capacity", "training_readiness"), "The wearable readiness signal is subdued.");
   assert.equal(summaryOf("recovery_capacity", "hrv"), "HRV is below the athlete's recent norm.");
   assert.equal(summaryOf("recovery_capacity", "resting_hr"), "Resting heart rate is above the athlete's norm.");
   assert.equal(
@@ -265,18 +265,246 @@ test("the machine-facing summaries are untouched and the athlete voice sits besi
   }
 });
 
-test("the one already-athlete-voiced summary and its day-read rule stay a single sentence", () => {
+test("the low-energy check-in observes in the machine register and prescribes only in its voice", () => {
   const date = localDaysAgo(0);
   const state = repo.planningSignalState({ date, checkin: { energy: 1 } });
   const felt = state.dimensions.recovery_capacity.evidence.find((item) => item.field === "felt_energy");
 
   // A low-energy check-in reaches the athlete through two paths: this protect posture
-  // and day-read's felt_run_down_rest rule. This one summary was written in the
-  // athlete's voice — unlike its ~30 siblings — precisely BECAUSE it doubled as the
-  // Brief's line, and it duplicated the rule's first phrasing verbatim. It now leads
-  // the shared voice set, so the two paths cannot drift into different registers.
+  // and day-read's felt_run_down_rest rule, and BOTH speak the `felt_energy_low` voice,
+  // so they cannot drift into different registers. The summary is the other register
+  // entirely: it is the POSTURE line renderSignalState prints into every prompt and the
+  // `based_on` provenance, and it was second person AND a verdict ("You're feeling
+  // run-down today — rest is the smart call."), handing the model the conclusion where
+  // the contract promises it an observation.
   assert.equal(state.action.voice.key, "felt_energy_low");
-  assert.equal(felt.summary, repo.signalVoice(state.action.voice)[0]);
+  assert.equal(felt.summary, "The athlete reports feeling run-down today.");
+  assert.doesNotMatch(felt.summary, /\byou(?:'re| are|r)\b/i, "the machine register never speaks to the athlete");
+  assert.doesNotMatch(felt.summary, /\brest is the smart call\b/i, "the machine register observes, never prescribes");
+  assert.equal(state.action.reason, felt.summary);
+  // The athlete-facing sentence is unchanged and still carries the judgement.
+  assert.ok(repo.signalVoice(state.action.voice).includes("You're feeling run-down today — rest is the smart call."));
+});
+
+// ---------- the sentence may not outrun its evidence window ----------
+// `recovery.sleep_min` is getRecoverySummary's `current(...)` — the latest dated night,
+// never an average (`avg_sleep_min` is the separate trend, and day-read's own low_sleep
+// flag reads THAT). One 4h50m night inside a fortnight of 8h nights used to lead the
+// Brief with "Short nights have been stacking up", printed directly above the signals
+// row saying sleep was settling in about normal.
+test("a single short night speaks for that night, never for a run of them", () => {
+  const date = localDaysAgo(0);
+  const state = repo.planningSignalState({
+    date,
+    recovery: {
+      recovery: { sleep_min: 290, avg_sleep_min: (13 * 480 + 290) / 14 },
+      delta: { sleep: -13.5 },
+      quality: { sleep_min: { latest_date: date, source: "garmin", sample_count: 14, window_days: 14 } },
+    },
+  });
+
+  const recovery = state.dimensions.recovery_capacity;
+  assert.deepEqual(
+    recovery.evidence.map((item) => item.field),
+    ["sleep"],
+    "a healthy 14-day average contributes no chronic observation"
+  );
+  // Under 5h still owns the day — only the words changed.
+  assert.equal(recovery.evidence[0].direction, "constraint");
+  assert.equal(state.action.posture, "easy");
+  assert.equal(recovery.evidence[0].summary, "The most recent recorded night came in short.");
+  assert.equal(state.action.voice.key, "sleep_night_short");
+  for (const line of repo.signalVoice(state.action.voice)) {
+    assert.doesNotMatch(line, /\bnights\b/i, "a single night must not be spoken as a pattern");
+    assert.doesNotMatch(line, /\blately\b|\bstacking up\b/i);
+    assert.match(line, /\bnight\b/i);
+  }
+});
+
+test("the chronic sleep phrasings belong to an observation built from the window", () => {
+  const date = localDaysAgo(0);
+  const state = repo.planningSignalState({
+    date,
+    recovery: {
+      // A fine night on top of a fortnight averaging 5h30m.
+      recovery: { sleep_min: 430, avg_sleep_min: 330 },
+      quality: { sleep_min: { latest_date: date, source: "garmin", sample_count: 14, window_days: 14 } },
+    },
+  });
+
+  const recovery = state.dimensions.recovery_capacity;
+  const trend = recovery.evidence.find((item) => item.field === "sleep_trend");
+  assert.ok(trend, "a sub-6h average is its own observation");
+  assert.equal(trend.direction, "caution", "the window informs the day; the night still owns it");
+  assert.equal(trend.voice.key, "sleep_short");
+  assert.equal(recovery.evidence.find((item) => item.field === "sleep").voice.key, "sleep_night_ok");
+  // The two registers of the same disagreement, held rather than averaged.
+  assert.equal(recovery.conflicts.length, 1);
+  assert.match(recovery.conflicts[0], /But sleep across the recent window/);
+  assert.equal(recovery.voice.key, "sleep_short");
+  assert.equal(state.action.directives.training, "hold_aggression");
+});
+
+// day-read requires a readiness reading dated today or yesterday before it may force a
+// recommendation ("a stale current value cannot" either). This layer accepted three
+// days, and its protect rule leads off `action.posture` alone — so a three-day-old
+// reading produced an easy read the deterministic Brief had already refused to make,
+// voiced as though the watch had said it that morning.
+test("readiness decides on the same one-day window day-read gates on, and says nothing about this morning", () => {
+  const date = localDaysAgo(0);
+  const readingFrom = (back) =>
+    repo.planningSignalState({
+      date,
+      recovery: {
+        recovery: { training_readiness: 30 },
+        quality: { training_readiness: { latest_date: localDaysAgo(back), source: "garmin", sample_count: 1 } },
+      },
+    });
+
+  for (const back of [0, 1]) {
+    const state = readingFrom(back);
+    const evidence = state.dimensions.recovery_capacity.evidence[0];
+    assert.equal(evidence.freshness, "fresh", `a ${back}-day-old reading is a today-decision signal`);
+    assert.equal(state.action.posture, "easy");
+    assert.equal(state.action.voice.key, "readiness_subdued");
+  }
+
+  const stale = readingFrom(2);
+  assert.equal(stale.dimensions.recovery_capacity.evidence[0].freshness, "stale");
+  assert.equal(stale.dimensions.recovery_capacity.status, "unknown", "older readings are context, never a gate");
+  assert.deepEqual(stale.dimensions.recovery_capacity.coverage.stale_fields, ["training_readiness"]);
+  assert.equal(stale.action.posture, "train");
+
+  // Even one day old is yesterday, so neither direction may claim the morning.
+  for (const key of ["readiness_subdued", "readiness_ok"]) {
+    for (const line of repo.signalVoice({ key })) {
+      assert.doesNotMatch(line, /\bthis morning\b/i, `${key} claims a reading it may not have`);
+      assert.doesNotMatch(line, /\btoday's reading\b/i, `${key} claims a reading it may not have`);
+    }
+  }
+});
+
+test("the readiness summary does not assert a freshness it cannot know", () => {
+  const date = localDaysAgo(0);
+  const at = (value) =>
+    repo
+      .planningSignalState({
+        date,
+        recovery: {
+          recovery: { training_readiness: value },
+          quality: { training_readiness: { latest_date: date, source: "garmin", sample_count: 1 } },
+        },
+      })
+      .dimensions.recovery_capacity.evidence.find((item) => item.field === "training_readiness").summary;
+
+  // renderSignalState already prints `latest <date>` beside it, which carries the age
+  // honestly; the literal used to hardcode "fresh" for anything up to three days old.
+  assert.equal(at(30), "The wearable readiness signal is subdued.");
+  assert.equal(at(80), "The wearable readiness signal is supportive.");
+});
+
+// The conflict line splices the brake onto the support mid-sentence, and lowercased its
+// first character unconditionally — so "HRV is below the athlete's recent norm." reached
+// the coach context and the provenance trail as "hRV …". Sleep support plus an HRV
+// caution is an ordinary morning.
+test("a spliced brake keeps an acronym's and a brand's own case", () => {
+  const date = localDaysAgo(0);
+  const fresh = { latest_date: date, source: "garmin", freshness: "fresh", sample_count: 14 };
+  const acronym = repo.planningSignalState({
+    date,
+    recovery: {
+      recovery: { sleep_min: 450 },
+      delta: { hrv: -9 },
+      quality: { sleep_min: fresh, hrv_ms: fresh },
+    },
+  });
+  assert.equal(acronym.dimensions.recovery_capacity.conflicts.length, 1);
+  assert.match(acronym.dimensions.recovery_capacity.conflicts[0], /But HRV is below/);
+  assert.doesNotMatch(acronym.dimensions.recovery_capacity.conflicts[0], /\bhRV\b/);
+
+  const brand = repo.planningSignalState({
+    date,
+    recovery: {
+      recovery: { exercise_min: 51, distance_km: 8.4 },
+      quality: {
+        exercise_min: { latest_date: date, source: "apple", freshness: "fresh", sample_count: 1 },
+        distance_km: { latest_date: date, source: "apple", freshness: "fresh", sample_count: 1 },
+      },
+    },
+    programState: { mesocycle: { acute_chronic_ratio: 1 } },
+  });
+  assert.match(brand.dimensions.training_load_tolerance.conflicts[0], /But Apple daily activity/);
+
+  // An ordinary sentence opener still comes down — the line is one sentence.
+  const ordinary = repo.buildUnifiedSignalState(date, [
+    {
+      dimension: "recovery_capacity",
+      field: "a",
+      date,
+      source: "garmin",
+      direction: "support",
+      summary: "Sleep is fine.",
+    },
+    {
+      dimension: "recovery_capacity",
+      field: "b",
+      date,
+      source: "garmin",
+      direction: "caution",
+      summary: "Resting heart rate is up.",
+    },
+  ]);
+  assert.equal(ordinary.dimensions.recovery_capacity.conflicts[0], "Sleep is fine. But resting heart rate is up.");
+});
+
+// #4's sibling guard: every summary this module AUTHORS is third-person evidence. The
+// pass-through summaries (a mesocycle note, a hybrid headline, an underfueling action
+// line) are another subsystem's machine prose and are deliberately not covered here.
+test("every authored summary stays in the machine register", () => {
+  const date = localDaysAgo(0);
+  const state = repo.planningSignalState({
+    date,
+    checkin: { energy: 1, sleep_feel: 1, soreness: 5 },
+    recovery: {
+      recovery: { sleep_min: 290, avg_sleep_min: 300, training_readiness: 20, exercise_min: 51, distance_km: 8.4 },
+      delta: { hrv: -9, rhr: 6 },
+      quality: {
+        sleep_min: { latest_date: date, source: "garmin", freshness: "fresh", sample_count: 14 },
+        training_readiness: { latest_date: date, source: "garmin", freshness: "fresh", sample_count: 1 },
+        hrv_ms: { latest_date: date, source: "garmin", freshness: "fresh", sample_count: 14 },
+        resting_hr: { latest_date: date, source: "garmin", freshness: "fresh", sample_count: 14 },
+        exercise_min: { latest_date: date, source: "apple", freshness: "fresh", sample_count: 1 },
+        distance_km: { latest_date: date, source: "apple", freshness: "fresh", sample_count: 1 },
+      },
+    },
+    trainingSignals: { autoregulation: { joint_areas: ["Knees"], low_performance_flag: true } },
+    context: {
+      reduce_load: true,
+      fueling_disrupted: true,
+      expect_worse_sleep: true,
+      active: [
+        { kind: "injury", reduce_load: true, title: "Shoulder strain", reason: "an active injury is worth easing" },
+      ],
+    },
+    completedToday: true,
+  });
+
+  const summaries = Object.values(state.dimensions).flatMap((dimension) =>
+    dimension.evidence.map((item) => ({ field: item.field, summary: item.summary }))
+  );
+  assert.ok(summaries.length >= 10, "the whole authored vocabulary is under test");
+  for (const { field, summary } of summaries) {
+    assert.doesNotMatch(
+      summary,
+      /\byou(?:'re| are|r|'ve)?\b/i,
+      `${field} speaks to the athlete in the machine register`
+    );
+    assert.doesNotMatch(
+      summary,
+      /\bis the smart call\b|\btake today\b/i,
+      `${field} prescribes where it should observe`
+    );
+  }
 });
 
 test("a voice-less observation degrades to an athlete-facing floor, never to the summary", () => {

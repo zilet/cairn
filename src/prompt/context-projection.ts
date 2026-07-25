@@ -185,7 +185,8 @@ export const PROMPT_CONTEXT_SITES = {
   // a FRESH deterministic baseline and renders the last few days' reads explicitly —
   // handing it today's stored read invites parroting), recent_decisions, insights,
   // whole_person_trajectory. Sessions: the builder renders its own rhythm line over
-  // the full history, so DATA carries the recent window.
+  // the full history, so DATA carries the recent window. NOTE the same floor prose used
+  // to arrive anyway through `coaching_focus.lead.why` — see compactCoachingFocus below.
   day_read: {
     keys: [
       ...PERSON,
@@ -410,6 +411,33 @@ function compactRecovery(view: unknown): unknown {
   return rest;
 }
 
+// The conductor's day-posture lead carries the BRIEF'S OWN SENTENCE in `why` — the same
+// voice, key and date the Brief renders (src/repo/coaching-focus.ts), deliberately, so
+// one signal reads as one observation on the athlete's screen. That makes it the
+// deterministic floor's prose, which is precisely what `day_read` is dropped from every
+// site to keep out ("handing it today's stored read invites parroting") — the sentence
+// simply leaked back in through `coaching_focus`. So a day-posture item ships its title,
+// move and `based_on` (the machine-register evidence) and NOT the phrasing. Nothing
+// coaching-relevant is lost: `based_on` and `signal_state.action.reasons` carry the same
+// facts, and the sentence appears nowhere else in the payload. A NON-posture item keeps
+// its `why` — there it can carry the conductor's work-around caveat verbatim, which is a
+// safety instruction and must not be dropped. Anything without a day-posture item is
+// returned untouched.
+function compactCoachingFocus(focus: unknown): unknown {
+  if (!focus || typeof focus !== "object" || Array.isArray(focus)) return focus;
+  const row = focus as Record<string, unknown>;
+  const stripPostureProse = (item: unknown): unknown => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+    const entry = item as Record<string, unknown>;
+    if (!entry.day_posture) return entry;
+    const { why: _why, ...rest } = entry;
+    return rest;
+  };
+  const out: Record<string, unknown> = { ...row, lead: stripPostureProse(row.lead) };
+  if (Array.isArray(row.parallel)) out.parallel = row.parallel.map(stripPostureProse);
+  return out;
+}
+
 // ---------- the helper every prompt uses ----------
 
 /**
@@ -430,7 +458,9 @@ export function projectCoachContext(ctx: PartialCoachContext, site: PromptSite):
         ? compactSessions(value, spec.sessions)
         : key === "recovery" || key === "garmin"
           ? compactRecovery(value)
-          : value;
+          : key === "coaching_focus"
+            ? compactCoachingFocus(value)
+            : value;
   }
   return out as PartialCoachContext;
 }

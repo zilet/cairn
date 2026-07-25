@@ -10,7 +10,7 @@ import { normalizedExerciseKey } from "./exercise-canon.js";
 import { testWeekDue, type TestWeekDue } from "./muscle-trajectory.js";
 import { getProgramState, type LiftState, type ProgramState } from "./program-state.js";
 import { enduranceTestsDue } from "./run-progression.js";
-import { localDateISO } from "./shared.js";
+import { clipText, localDateISO } from "./shared.js";
 
 export interface StrengthMilestoneInput {
   key: string;
@@ -74,18 +74,22 @@ const ENDURANCE_POLICY: CadencePolicy = {
   surveillance_multiplier: 1.75,
   surveillance_max_days: 120,
   surveillance_checks_before_release: 1,
-  reason: "An endurance benchmark is stale or the run signal has flattened; re-test after a focused training response window.",
+  reason:
+    "An endurance benchmark is stale or the run signal has flattened; re-test after a focused training response window.",
   release_condition:
     "Endurance is progressing cleanly with no stale benchmark; it goes quiet until a plateau, block change, new goal, or athlete question brings it back.",
 };
 
 function clip(text: unknown, max = 220): string {
-  const s = String(text ?? "").trim();
-  return s.length > max ? `${s.slice(0, max - 1).trimEnd()}...` : s;
+  return clipText(text, max, { ellipsis: "..." });
 }
 
 function slug(text: string): string {
-  return normalizedExerciseKey(text || "benchmark").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "benchmark";
+  return (
+    normalizedExerciseKey(text || "benchmark")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "") || "benchmark"
+  );
 }
 
 function round5(n: number): number {
@@ -137,7 +141,7 @@ export function strengthBenchmarkMilestones(caps: StrengthMilestoneInput[] = [])
 
 export function enduranceBenchmarkMilestones(
   endurance: EnduranceMilestoneInput | null | undefined,
-  testsDue: Array<{ exercise?: string; why?: string }> = [],
+  testsDue: Array<{ exercise?: string; why?: string }> = []
 ): TrainingMilestoneCandidate[] {
   const out: TrainingMilestoneCandidate[] = [];
   const vo2 = Number(endurance?.vo2max);
@@ -188,7 +192,7 @@ export function refreshTrainingBenchmarkAttention(
     programState?: ProgramState;
     enduranceTests?: { exercise?: string; kind?: string; why?: string }[];
     testWeek?: TestWeekDue | null;
-  } = {},
+  } = {}
 ): AttentionScheduleEntry[] {
   const d = date || localDateISO();
   const ps = opts.programState ?? getProgramState(d);
@@ -204,7 +208,7 @@ export function refreshTrainingBenchmarkAttention(
           status: liftStatus(lift),
           reason: liftReason(lift, `${lift.exercise} has enough history to track benchmark cadence.`),
         },
-      }),
+      })
     );
   }
 
@@ -227,7 +231,7 @@ export function refreshTrainingBenchmarkAttention(
           ? `${tw?.due ? tw.why : "A main lift is plateaued or regressing."} Re-test the named lifts near the checkpoint, then let cadence stretch again.`
           : "No strength test week is due; clean progress releases fixed testing cadence.",
       },
-    }),
+    })
   );
 
   const enduranceTests = opts.enduranceTests ?? enduranceTestsDue(d);
@@ -246,12 +250,16 @@ export function refreshTrainingBenchmarkAttention(
         checked_at: d,
         status: enduranceStatus,
         reason: enduranceTests.length
-          ? `An endurance benchmark is due (${enduranceTests.map((t) => t.exercise).filter(Boolean).slice(0, 2).join(", ")}).`
+          ? `An endurance benchmark is due (${enduranceTests
+              .map((t) => t.exercise)
+              .filter(Boolean)
+              .slice(0, 2)
+              .join(", ")}).`
           : enduranceStatus === "clean"
             ? "Endurance is building or maintaining cleanly, so no fixed re-test cadence is needed."
             : "No current endurance benchmark signal is active.",
       },
-    }),
+    })
   );
 
   return out;
@@ -264,7 +272,7 @@ export function trainingBenchmarkRead(
     endurance?: EnduranceMilestoneInput | null;
     programState?: ProgramState;
     refreshAttention?: boolean;
-  } = {},
+  } = {}
 ): TrainingBenchmarkRead {
   const d = date || localDateISO();
   const ps = opts.programState ?? getProgramState(d);
@@ -276,11 +284,15 @@ export function trainingBenchmarkRead(
   });
   const attention = opts.refreshAttention
     ? refreshTrainingBenchmarkAttention(d, { programState: ps, enduranceTests })
-    : listAttentionSchedule({ domain: "training", limit: 100 }).concat(listAttentionSchedule({ domain: "running", limit: 25 }));
+    : listAttentionSchedule({ domain: "training", limit: 100 }).concat(
+        listAttentionSchedule({ domain: "running", limit: 25 })
+      );
   return {
     generated_for: d,
     milestones,
     attention,
-    due: listDueAttention(d, { domain: "training", limit: 20 }).concat(listDueAttention(d, { domain: "running", limit: 10 })),
+    due: listDueAttention(d, { domain: "training", limit: 20 }).concat(
+      listDueAttention(d, { domain: "running", limit: 10 })
+    ),
   };
 }

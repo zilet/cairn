@@ -1,4 +1,5 @@
 import { db, todayISO } from "../db.js";
+import { clipText } from "./shared.js";
 
 export type AttentionDomain = "training" | "running" | "nutrition" | "health" | "recovery" | "body" | "journey";
 export type AttentionTier = "active" | "confirming" | "surveillance" | "released";
@@ -97,8 +98,7 @@ const REACTIVATING_EVENTS = new Set<AttentionEvent>([
 ]);
 
 function clip(value: unknown, max = 320): string {
-  const text = String(value ?? "").trim();
-  return text.length > max ? `${text.slice(0, max - 1).trimEnd()}...` : text;
+  return clipText(value, max, { ellipsis: "..." });
 }
 
 function count(value: unknown): number {
@@ -137,7 +137,9 @@ function normalizePolicy(policy: CadencePolicy): NormalizedPolicy {
     surveillance_multiplier: Math.max(1.1, Number(policy.surveillance_multiplier) || 1.75),
     surveillance_max_days: Math.max(surveillanceInitialDays, days(policy.surveillance_max_days, 365)),
     surveillance_checks_before_release: days(policy.surveillance_checks_before_release, 2),
-    reason: clip(policy.reason) || "This signal has a live lever or recent change worth checking at the right response window.",
+    reason:
+      clip(policy.reason) ||
+      "This signal has a live lever or recent change worth checking at the right response window.",
     release_condition:
       clip(policy.release_condition) ||
       "Cleanly stable with no active intervention or goal relevance; it will resurface only on new data, a related symptom, a question, or a goal change.",
@@ -162,7 +164,11 @@ function emptyState(policy: NormalizedPolicy, event?: AttentionEvent): Attention
   };
 }
 
-function normalizeState(state: Partial<AttentionStateMeta> | null | undefined, policy: NormalizedPolicy, event?: AttentionEvent): AttentionStateMeta {
+function normalizeState(
+  state: Partial<AttentionStateMeta> | null | undefined,
+  policy: NormalizedPolicy,
+  event?: AttentionEvent
+): AttentionStateMeta {
   return {
     clean_checks: count(state?.clean_checks),
     confirming_checks: count(state?.confirming_checks),
@@ -175,14 +181,19 @@ function normalizeState(state: Partial<AttentionStateMeta> | null | undefined, p
 function reasonFor(tier: AttentionTier, policy: NormalizedPolicy, observation: AttentionObservation): string {
   if (observation.reason) return clip(observation.reason);
   if (tier === "active") {
-    if (observation.event === "symptom") return "A related symptom was reported, so this signal re-enters active follow-up.";
-    if (observation.event === "question" || observation.event === "struggle") return "The athlete brought this signal back up, so it re-enters active follow-up.";
-    if (observation.event === "goal_change" || observation.event === "phase_change") return "The goal context changed, so this signal is worth active follow-up again.";
-    if (observation.event === "anomaly" || observation.status === "anomalous") return "A new anomalous reading reactivated this signal.";
+    if (observation.event === "symptom")
+      return "A related symptom was reported, so this signal re-enters active follow-up.";
+    if (observation.event === "question" || observation.event === "struggle")
+      return "The athlete brought this signal back up, so it re-enters active follow-up.";
+    if (observation.event === "goal_change" || observation.event === "phase_change")
+      return "The goal context changed, so this signal is worth active follow-up again.";
+    if (observation.event === "anomaly" || observation.status === "anomalous")
+      return "A new anomalous reading reactivated this signal.";
     return policy.reason;
   }
   if (tier === "confirming") return "The result is clean now; confirm it holds before stretching the interval.";
-  if (tier === "surveillance") return "The clean result held, so the next check can stretch instead of staying on a fixed cadence.";
+  if (tier === "surveillance")
+    return "The clean result held, so the next check can stretch instead of staying on a fixed cadence.";
   return "This signal is stable and clean with no active lever, so it goes quiet until new data or symptoms bring it back.";
 }
 
@@ -256,7 +267,14 @@ export function advanceAttentionState(args: {
     const state = normalizeState(previous.state, policy, observation.event);
     state.clean_checks += 1;
     state.confirming_checks += 1;
-    return makeEntry({ signalKey: args.signal_key, policy, observation, tier: "confirming", state, intervalDays: policy.confirming_days });
+    return makeEntry({
+      signalKey: args.signal_key,
+      policy,
+      observation,
+      tier: "confirming",
+      state,
+      intervalDays: policy.confirming_days,
+    });
   }
 
   if (previous.tier === "confirming") {
@@ -265,7 +283,14 @@ export function advanceAttentionState(args: {
     state.confirming_checks += 1;
     state.surveillance_checks = 0;
     state.surveillance_interval_days = policy.surveillance_initial_days;
-    return makeEntry({ signalKey: args.signal_key, policy, observation, tier: "surveillance", state, intervalDays: policy.surveillance_initial_days });
+    return makeEntry({
+      signalKey: args.signal_key,
+      policy,
+      observation,
+      tier: "surveillance",
+      state,
+      intervalDays: policy.surveillance_initial_days,
+    });
   }
 
   const state = normalizeState(previous.state, policy, observation.event);
@@ -273,12 +298,22 @@ export function advanceAttentionState(args: {
   state.surveillance_checks += 1;
   state.surveillance_interval_days = Math.min(
     policy.surveillance_max_days,
-    Math.max(policy.surveillance_initial_days, Math.round(state.surveillance_interval_days * policy.surveillance_multiplier)),
+    Math.max(
+      policy.surveillance_initial_days,
+      Math.round(state.surveillance_interval_days * policy.surveillance_multiplier)
+    )
   );
   if (state.surveillance_checks >= policy.surveillance_checks_before_release) {
     return makeEntry({ signalKey: args.signal_key, policy, observation, tier: "released", state, intervalDays: null });
   }
-  return makeEntry({ signalKey: args.signal_key, policy, observation, tier: "surveillance", state, intervalDays: state.surveillance_interval_days });
+  return makeEntry({
+    signalKey: args.signal_key,
+    policy,
+    observation,
+    tier: "surveillance",
+    state,
+    intervalDays: state.surveillance_interval_days,
+  });
 }
 
 function parseState(raw: string | null, fallbackPolicy?: NormalizedPolicy): AttentionStateMeta {
@@ -314,10 +349,14 @@ function hydrate(row: AttentionRow | undefined): AttentionScheduleEntry | null {
 }
 
 export function getAttentionSchedule(signalKey: string): AttentionScheduleEntry | null {
-  return hydrate(db.prepare("SELECT * FROM attention_schedule WHERE signal_key = ?").get(signalKey) as AttentionRow | undefined);
+  return hydrate(
+    db.prepare("SELECT * FROM attention_schedule WHERE signal_key = ?").get(signalKey) as AttentionRow | undefined
+  );
 }
 
-export function listAttentionSchedule(opts: { domain?: AttentionDomain; includeReleased?: boolean; limit?: number } = {}): AttentionScheduleEntry[] {
+export function listAttentionSchedule(
+  opts: { domain?: AttentionDomain; includeReleased?: boolean; limit?: number } = {}
+): AttentionScheduleEntry[] {
   const where: string[] = [];
   const params: string[] = [];
   if (opts.domain) {
@@ -327,7 +366,9 @@ export function listAttentionSchedule(opts: { domain?: AttentionDomain; includeR
   if (!opts.includeReleased) where.push("tier != 'released'");
   const limit = Math.min(500, Math.max(1, Math.round(Number(opts.limit) || 100)));
   const rows = db
-    .prepare(`SELECT * FROM attention_schedule ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY (next_due IS NULL), next_due ASC, signal_key ASC LIMIT ?`)
+    .prepare(
+      `SELECT * FROM attention_schedule ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY (next_due IS NULL), next_due ASC, signal_key ASC LIMIT ?`
+    )
     .all(...params, limit) as unknown as AttentionRow[];
   return rows.map((row) => hydrate(row)).filter((entry): entry is AttentionScheduleEntry => entry != null);
 }
@@ -344,12 +385,17 @@ export function listAttentionBySource(
   if (!opts.includeReleased) where.push("tier != 'released'");
   const limit = Math.min(500, Math.max(1, Math.round(Number(opts.limit) || 200)));
   const rows = db
-    .prepare(`SELECT * FROM attention_schedule WHERE ${where.join(" AND ")} ORDER BY (next_due IS NULL), next_due ASC, signal_key ASC LIMIT ?`)
+    .prepare(
+      `SELECT * FROM attention_schedule WHERE ${where.join(" AND ")} ORDER BY (next_due IS NULL), next_due ASC, signal_key ASC LIMIT ?`
+    )
     .all(...params, limit) as unknown as AttentionRow[];
   return rows.map((row) => hydrate(row)).filter((entry): entry is AttentionScheduleEntry => entry != null);
 }
 
-export function listDueAttention(asOf: string = todayISO(), opts: { domain?: AttentionDomain; limit?: number } = {}): AttentionScheduleEntry[] {
+export function listDueAttention(
+  asOf: string = todayISO(),
+  opts: { domain?: AttentionDomain; limit?: number } = {}
+): AttentionScheduleEntry[] {
   const where = ["next_due IS NOT NULL", "next_due <= ?", "tier != 'released'"];
   const params: string[] = [normalizeDate(asOf)];
   if (opts.domain) {
@@ -358,7 +404,9 @@ export function listDueAttention(asOf: string = todayISO(), opts: { domain?: Att
   }
   const limit = Math.min(500, Math.max(1, Math.round(Number(opts.limit) || 100)));
   const rows = db
-    .prepare(`SELECT * FROM attention_schedule WHERE ${where.join(" AND ")} ORDER BY next_due ASC, signal_key ASC LIMIT ?`)
+    .prepare(
+      `SELECT * FROM attention_schedule WHERE ${where.join(" AND ")} ORDER BY next_due ASC, signal_key ASC LIMIT ?`
+    )
     .all(...params, limit) as unknown as AttentionRow[];
   return rows.map((row) => hydrate(row)).filter((entry): entry is AttentionScheduleEntry => entry != null);
 }
@@ -377,7 +425,7 @@ export function upsertAttentionSchedule(entry: AttentionScheduleEntry): Attentio
       release_condition = excluded.release_condition,
       source = excluded.source,
       state_json = excluded.state_json,
-      updated_at = datetime('now')`,
+      updated_at = datetime('now')`
   ).run(
     entry.signal_key,
     entry.domain,
@@ -387,7 +435,7 @@ export function upsertAttentionSchedule(entry: AttentionScheduleEntry): Attentio
     entry.reason,
     entry.release_condition,
     entry.source,
-    JSON.stringify(entry.state),
+    JSON.stringify(entry.state)
   );
   return getAttentionSchedule(entry.signal_key) ?? entry;
 }

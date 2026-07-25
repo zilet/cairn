@@ -5,7 +5,7 @@
 let chatComposerPasteHandler: ((event: ClipboardEvent) => void) | null = null;
 
 function chatComposerRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? value as Record<string, unknown> : {};
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
 function chatComposerString(value: unknown): string {
@@ -30,13 +30,34 @@ function chatComposerRequestId(): string {
   return `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
 }
 
-type ChatComposerRetry = { requestId: string; text: string; image: ChatScreenImagePayload | null; needsImage: boolean; expiresAt: number };
+type ChatComposerRetry = {
+  requestId: string;
+  text: string;
+  image: ChatScreenImagePayload | null;
+  needsImage: boolean;
+  expiresAt: number;
+};
 
 function chatComposerRetryStore(): Pick<ChatTurnRecordsApi, "clearRetry" | "loadRetry" | "saveRetry"> | null {
-  const records = (globalThis as typeof globalThis & { CairnChatTurnRecords?: Partial<ChatTurnRecordsApi> }).CairnChatTurnRecords;
-  return records && typeof records.clearRetry === "function" && typeof records.loadRetry === "function" && typeof records.saveRetry === "function"
-    ? records as Pick<ChatTurnRecordsApi, "clearRetry" | "loadRetry" | "saveRetry">
+  const records = (globalThis as typeof globalThis & { CairnChatTurnRecords?: Partial<ChatTurnRecordsApi> })
+    .CairnChatTurnRecords;
+  return records &&
+    typeof records.clearRetry === "function" &&
+    typeof records.loadRetry === "function" &&
+    typeof records.saveRetry === "function"
+    ? (records as Pick<ChatTurnRecordsApi, "clearRetry" | "loadRetry" | "saveRetry">)
     : null;
+}
+
+// Single source of truth for the retry envelope's lifetime, defined alongside
+// the storage it expires (chat-turn-records-client.ts). Falls back to the same
+// 15-minute window when that module hasn't loaded yet (e.g. an isolated test).
+function chatComposerRetryTtlMs(): number {
+  const records = (globalThis as typeof globalThis & { CairnChatTurnRecords?: Partial<ChatTurnRecordsApi> })
+    .CairnChatTurnRecords;
+  return typeof records?.retryTtlMs === "number" && Number.isFinite(records.retryTtlMs)
+    ? records.retryTtlMs
+    : 15 * 60 * 1000;
 }
 
 function clearChatComposerPasteHandler(): void {
@@ -51,24 +72,38 @@ function wireChatComposer(deps: ChatComposerControllerDeps): ChatComposerControl
   const retryStore = chatComposerRetryStore();
   const storedRetry = retryStore?.loadRetry() || null;
   let retry: ChatComposerRetry | null = storedRetry
-    ? { requestId: storedRetry.requestId, text: storedRetry.text, image: null, needsImage: storedRetry.hasImage, expiresAt: storedRetry.expiresAt }
+    ? {
+        requestId: storedRetry.requestId,
+        text: storedRetry.text,
+        image: null,
+        needsImage: storedRetry.hasImage,
+        expiresAt: storedRetry.expiresAt,
+      }
     : null;
   const persistRetry = (attempt: ChatComposerRetry | null) => {
     if (!attempt) retryStore?.clearRetry();
-    else retryStore?.saveRetry({ requestId: attempt.requestId, text: attempt.text, hasImage: !!attempt.image || attempt.needsImage, expiresAt: attempt.expiresAt });
+    else
+      retryStore?.saveRetry({
+        requestId: attempt.requestId,
+        text: attempt.text,
+        hasImage: !!attempt.image || attempt.needsImage,
+        expiresAt: attempt.expiresAt,
+      });
   };
 
   const isChatActive = () => deps.state.tab === "chat";
-  const resetChatFocusAfterNativePicker = () => CairnChatAttachment.resetFocusAfterNativePicker({
-    input: deps.input,
-    fileInput: deps.fileInput,
-    isSoftKeyboard: chatComposerIsSoftKeyboard,
-  });
-  const settleChatAfterNativePicker = () => CairnChatAttachment.settleAfterNativePicker({
-    isActive: isChatActive,
-    measure: deps.measure,
-    graceMs: 1200,
-  });
+  const resetChatFocusAfterNativePicker = () =>
+    CairnChatAttachment.resetFocusAfterNativePicker({
+      input: deps.input,
+      fileInput: deps.fileInput,
+      isSoftKeyboard: chatComposerIsSoftKeyboard,
+    });
+  const settleChatAfterNativePicker = () =>
+    CairnChatAttachment.settleAfterNativePicker({
+      isActive: isChatActive,
+      measure: deps.measure,
+      graceMs: 1200,
+    });
   const clearAttachment = () => {
     attached = null;
     deps.fileInput.value = "";
@@ -126,7 +161,10 @@ function wireChatComposer(deps: ChatComposerControllerDeps): ChatComposerControl
       const it = items[i];
       if (it && it.kind === "file" && it.type.startsWith("image/")) {
         const f = it.getAsFile();
-        if (f) { e.preventDefault(); void attachFile(f); }
+        if (f) {
+          e.preventDefault();
+          void attachFile(f);
+        }
         return;
       }
     }
@@ -145,9 +183,16 @@ function wireChatComposer(deps: ChatComposerControllerDeps): ChatComposerControl
       deps.toast("Reattach the photo to retry this message");
       return;
     }
-    const attempt = retry && retry.text === text && retry.image === img && !retry.needsImage
-      ? retry
-      : { requestId: chatComposerRequestId(), text, image: img, needsImage: false, expiresAt: Date.now() + 15 * 60 * 1000 };
+    const attempt =
+      retry && retry.text === text && retry.image === img && !retry.needsImage
+        ? retry
+        : {
+            requestId: chatComposerRequestId(),
+            text,
+            image: img,
+            needsImage: false,
+            expiresAt: Date.now() + chatComposerRetryTtlMs(),
+          };
     // Write the idempotency key and retryable text before clearing the draft or
     // starting the request. A navigation/reload can now resume this exact request.
     retry = attempt;
@@ -158,14 +203,27 @@ function wireChatComposer(deps: ChatComposerControllerDeps): ChatComposerControl
     deps.saveDraft("");
     // Optimistic user bubble lands instantly (the server persists it too; a full
     // re-render later draws from server truth, so no duplicate).
-    const userMsg: ChatScreenMessage = { role: "user", content: text || "(photo)", meta: img ? { image: img.dataUrl } : null };
+    const userMsg: ChatScreenMessage = {
+      role: "user",
+      content: text || "(photo)",
+      meta: img ? { image: img.dataUrl } : null,
+    };
     const userBubble = deps.appendMsg(userMsg);
     deps.rememberFuelContext(userMsg);
     void deps.loadFuel(deps.token);
     try {
       const body: Record<string, unknown> = { message: text, request_id: attempt.requestId };
-      if (img) { body.image_base64 = img.base64; body.image_mime = img.mime; }
-      const r = chatComposerRecord(await deps.api("/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }));
+      if (img) {
+        body.image_base64 = img.base64;
+        body.image_mime = img.mime;
+      }
+      const r = chatComposerRecord(
+        await deps.api("/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        })
+      );
       if (!r.turn) throw new Error(chatComposerString(r.error) || "enqueue failed");
       retry = null;
       persistRetry(null);
@@ -199,8 +257,12 @@ function wireChatComposer(deps: ChatComposerControllerDeps): ChatComposerControl
   // send()'s empty-input guard makes any second call a no-op, so pointer
   // devices never double-send. (The "+" is left alone -- it opens a file picker.)
   deps.sendBtn.addEventListener("pointerdown", (e) => e.preventDefault());
-  deps.sendBtn.addEventListener("pointerup", () => { void send(); });
-  deps.sendBtn.addEventListener("click", () => { void send(); });
+  deps.sendBtn.addEventListener("pointerup", () => {
+    void send();
+  });
+  deps.sendBtn.addEventListener("click", () => {
+    void send();
+  });
   // Desktop: Enter sends, Shift+Enter drops a newline. Touch keyboards keep
   // Enter as a newline (so multi-line capture -- pasting findings, describing a
   // meal -- just works) and send via the arrow button.

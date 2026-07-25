@@ -75,7 +75,10 @@ a clean `npx tsc` proves nothing about whether the build passes.
 
 **`npm run format` hardcodes `--write .`** (the whole repo, which is not biome-clean at rest). To
 format only what you touched, run `./node_modules/.bin/biome format --write <files>` directly.
-`npm run lint` is lint rules only.
+`npm run lint` is lint rules only. Note that per-file is *scoped*, not *safe*: biome reflows the
+WHOLE file, and many files here are dirty at rest, so a two-line edit can land as a 600-line diff of
+untouched code. Check `git diff --numstat <file>` after formatting; if the reflow dwarfs the edit,
+restore the file and hand-match the surrounding style.
 
 **Prompts do not get the whole coach context.** Every `DATA:` block is built by
 `promptData(ctx, "<site>")` (`src/prompt/context-projection.ts`), a declarative per-site key
@@ -84,6 +87,13 @@ see everything — but adding a key there does NOT make it reach any prompt unti
 site, and a new prompt registers a site rather than interpolating `JSON.stringify(ctx)` (which
 silently restores a ~2× payload). Never trim by slicing the serialized string; that hands the agent
 malformed JSON.
+
+**`dayRead()`'s optional args each override only their OWN input** — only `unifiedState` scopes the
+whole signal state; omit it and the state builds RICH via `dayPlanningSignalState()`, the same builder
+`getCoachContext()` uses, so the Brief and the coach prompt can no longer see different states.
+**Agent-authored `headline`/`why` are held to the deterministic vocabulary's own rules**:
+`isValidDayReadAgentResult` (`src/dayread.ts`) rejects them via `violatesReadingGrammar()`
+(`src/repo/day-read.ts`) — leaked engineering vocabulary, a score, or gate language ("you must") fails.
 
 **Agentic endpoints return `{ok:false, error, tried}` at HTTP 200** — a designed failure signal, not
 an HTTP error. And single-row `?date=` / `last-set` lookups return **`200 + null`** on absence, not

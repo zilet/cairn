@@ -4,7 +4,7 @@ import { listProposals } from "./profile.js";
 import { listBrainDecisions, listBrainExpectations } from "./brain-decisions.js";
 import { latestBrainEvaluation } from "./brain-evaluations.js";
 import { whatWorksForYou } from "./reaction-model.js";
-import { metricLabel } from "./shared.js";
+import { clipText, metricLabel } from "./shared.js";
 import { specialistVoiceLine } from "../brain/specialist-voice.js";
 import type { BrainDecision } from "../brain/decision-contract.js";
 import type { BrainEvaluation } from "../brain/evaluation-contract.js";
@@ -32,12 +32,12 @@ import type { BrainExpectation } from "../brain/expectation-contract.js";
 export type LearnedKind = "memory" | "learning" | "directive" | "applied" | "about_me" | "outcome";
 
 export interface LearnedItem {
-  when: string;          // ISO timestamp / date the understanding landed (best available)
+  when: string; // ISO timestamp / date the understanding landed (best available)
   kind: LearnedKind;
-  title: string;         // plain-language headline — NEVER a score
-  detail?: string;       // optional plain-language elaboration
-  source?: string;       // a quiet provenance hint (e.g. "memory:injury", "connected brain")
-  voice?: string;        // an attributed case-conference specialist line, when one is stored
+  title: string; // plain-language headline — NEVER a score
+  detail?: string; // optional plain-language elaboration
+  source?: string; // a quiet provenance hint (e.g. "memory:injury", "connected brain")
+  voice?: string; // an attributed case-conference specialist line, when one is stored
 }
 
 interface LearnedDirectiveSource {
@@ -94,7 +94,7 @@ function toWhen(v: unknown): string {
 
 // Trim + cap a free-text field to a calm length (never a wall of text).
 function clip(v: unknown, max = 280): string {
-  return String(v ?? "").replace(/\s+/g, " ").trim().slice(0, max);
+  return clipText(v, max, { collapseWhitespace: true, ellipsis: "" });
 }
 
 // Memories — the load-bearing, NON-superseded rows are "understood about you".
@@ -118,7 +118,9 @@ function memoryItems(): LearnedItem[] {
         source: `memory:${kind}`,
       });
     }
-  } catch { /* memory table absent on a very old DB — skip this source */ }
+  } catch {
+    /* memory table absent on a very old DB — skip this source */
+  }
   return out;
 }
 
@@ -140,7 +142,9 @@ function learningItems(): LearnedItem[] {
         source: "outcome-learning",
       });
     }
-  } catch { /* memory table absent — skip */ }
+  } catch {
+    /* memory table absent — skip */
+  }
   return out;
 }
 
@@ -172,7 +176,9 @@ function directiveItems(): LearnedItem[] {
         source: `connected brain${bits ? ` (${bits})` : ""}${handled}`,
       });
     }
-  } catch { /* health_directives absent — skip */ }
+  } catch {
+    /* health_directives absent — skip */
+  }
   return out;
 }
 
@@ -191,7 +197,8 @@ function appliedItems(): LearnedItem[] {
       let what = "Adjusted your plan";
       if (parsed.kind === "nutrition_target") what = "Tuned your nutrition target";
       else if (Array.isArray(parsed.days)) what = `Restructured your week (${parsed.days.length} days)`;
-      else if (Array.isArray(parsed.changes) && parsed.changes.length) what = `Adjusted ${parsed.changes.length} prescription${parsed.changes.length === 1 ? "" : "s"}`;
+      else if (Array.isArray(parsed.changes) && parsed.changes.length)
+        what = `Adjusted ${parsed.changes.length} prescription${parsed.changes.length === 1 ? "" : "s"}`;
       else if (Array.isArray(parsed.cardio) && parsed.cardio.length) what = "Prescribed your runs for the week";
       out.push({
         when: toWhen(p?.created_at),
@@ -201,7 +208,9 @@ function appliedItems(): LearnedItem[] {
         source: p?.agent ? `coach (${clip(p.agent, 40)})` : "coach",
       });
     }
-  } catch { /* plan_proposals absent — skip */ }
+  } catch {
+    /* plan_proposals absent — skip */
+  }
   return out;
 }
 
@@ -313,7 +322,7 @@ function byWhenDesc(a: LearnedItem, b: LearnedItem): number {
   const aw = a.when || "";
   const bw = b.when || "";
   if (aw === bw) return 0;
-  if (!aw) return 1;   // unstamped → oldest
+  if (!aw) return 1; // unstamped → oldest
   if (!bw) return -1;
   return aw < bw ? 1 : -1;
 }

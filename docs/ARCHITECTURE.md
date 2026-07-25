@@ -74,14 +74,133 @@ importing everything from `./repo.js` unchanged.
   overrun, a low check-in, or low readiness → `rest`; already-logged light work, or a running-volume
   spike while loading → `easy`; a plan day is due → `train` (carrying caveats, including a
   chronic-short-sleep one); a chronic-but-not-acute short-sleep pattern with nothing due → `easy`;
-  otherwise `easy` ("nothing programmed"). An active injury adds its own caveat to every rest/easy
-  read regardless of which rule fired, named in the athlete's own register through the same voice
-  mechanism rather than splicing a machine-facing evidence line behind a fixed lead-in. The agentic
-  sentence layers on top via `buildDayReadPrompt`.
+  otherwise `easy` ("nothing programmed"). Any fresh, non-stale evidence in the `health_constraints`
+  dimension — an active injury, but equally an illness or any other item that dimension carries —
+  adds its own caveat to every rest/easy read regardless of which rule fired, named in the athlete's
+  own register through the same voice mechanism rather than splicing a machine-facing evidence line
+  behind a fixed lead-in. The guard follows the DIMENSION rather than one field name
+  (`field === "active_injury"`) precisely so an illness is never silently dropped from a continuity
+  escalation an injury would otherwise have triggered. The agentic sentence layers on top via
+  `buildDayReadPrompt`. **Parameter contract** (documented on the signature itself): every optional
+  argument overrides exactly its OWN input and never narrows what the read may look at — `dayRead`
+  always reads the training log, plan, activities, check-ins, context events and fuel state straight
+  from the DB regardless of what a caller passes; `unifiedState` is the one parameter that scopes the
+  whole signal state, and omitting it builds the state rich (see `dayPlanningSignalState` below).
 - `getRecoverySummary(days, garminSummary?)` merges `garmin_daily_metrics` with the source-agnostic
   `daily_metrics`, preferring Garmin for sleep/HRV/RHR/body-battery. `recordDailyMetrics(source,
   date, metrics)` upserts one source's row (clamped at the trust boundary); `getDailyMetrics(source?,
   days)` reads them back.
+
+**One rich signal state, shared by the Brief and the coach.** `dayPlanningSignalState(date,
+provided?)` (`src/repo/day-read.ts`) is the ONE builder of `UnifiedSignalState` — memoized per
+`(date, request)` under the same brain-snapshot key `getCoachContext()` already uses
+(`brainSignal("signal_state:${date}", …)`) — and its nine `DayPlanningSignalInputs` are each optional:
+a caller supplies what it already holds, and every input it omits falls back to its own producer,
+probed individually behind try/catch so one thrower degrades that single input rather than the whole
+read. Three of the nine — `trainingSignals` (joint pain, the low-performance flag) and `programState`
+(an anticipated mesocycle reset), plus `expenditure` — carry `safety_override` constraints, and
+"optional" used to mean a caller that omitted them silently built a WEAKER state with no error: the
+Brief's own fallback path built its signal state from only the handful of inputs already in scope
+inside `dayRead()`, while `coach.ts` built a separate, richer one for the coach prompt by calling
+`planningSignalState` directly — so the Brief could say "train" on a day the coach context had already
+gone `posture:"rest"` with `health_constraints` and `load_tolerance` both constrained. `coach.ts`'s
+`getCoachContextFromSnapshot` now calls the same `dayPlanningSignalState` instead of a second local
+build, so within one request the Brief, the coach context, the server-policy clamps and the persisted
+`signals`/`input_fingerprint` all describe the SAME state — the rich/thin seam cannot reopen.
+`programState` is keyed to the DATE BEING READ rather than to "now" (`program_state` for today,
+`program_state:${date}` for any other date, since `getCoachContext()` only ever asks for today and
+must stay on the shared key) — reading an earlier date used to get a mesocycle measured from today,
+which could tell a day inside an applied recovery week that a reset was months overdue. Outside a
+request scope (the scheduler's warm run has none) the memo is a pass-through, so a caller that must
+agree with another instead threads the baseline explicitly: `computeDayRead` (`src/dayread.ts`)
+computes its baseline once and now passes it into `buildDayReadPrompt(ctx, {…, baseline})`, which used
+to recompute its OWN baseline from `context.signal_state` — closing the seam where the agent was shown
+one state while `enforceDayReadSafetyPosture`/`enforceRecoveryWeekCadence` clamped, persisted and
+fingerprinted a different one.
+
+**One night is not a trend.** `SIGNAL_VOICE`'s sleep entries used to speak off `recovery.sleep_min` —
+the latest DATED night, never an average — under a chronic-sounding key (`sleep_short`/`sleep_ok`), so
+a single short night produced "short nights have been stacking up" directly above the Brief's own
+signals row saying sleep was about normal. `sleep_night_short`/`sleep_night_ok`
+(`src/repo/signal-state.ts`) now speak ONLY for that one dated night (singular-`night`-guarded
+phrasing, so a variant that drifted into claiming a run of them fails its own `concept` regex); a
+separate `sleep_trend` observation, voiced through `sleep_short`, exists only when `avg_sleep_min` (the
+same multi-night average day-read's own `low_sleep` flag reads) sits under six hours, at `caution`
+rather than a day-owning severity — a short average informs the day, it never owns it the way one
+genuinely short night does. Readiness's `max_age_days` dropped from 3 to 1: the deterministic Brief
+already refuses to let a reading older than a day force a recommendation, but at 3 days a stale
+reading still reached the athlete through this layer, because the protect rule leads off
+`action.posture` alone — a three-day-old subdued reading produced an easy read voiced as though it had
+come in that morning. The word "fresh" is gone from the readiness sentences for the same reason (a
+1-day-old reading is not this morning's). Older readings are not deleted; they resolve `stale`, which
+is the same "context, never a gate" standing the prompt already gives them. The felt-energy
+observation's machine-facing `summary` was rewritten out of second person and out of giving a verdict
+— `"You're feeling run-down today — rest is the smart call."` is now `"The athlete reports feeling
+run-down today."`, matching every sibling observation's third-person register (this string feeds the
+prompt's posture line and the `based_on` provenance trail, not the athlete-facing voice, which is
+unchanged). A `joinedCase()` helper also fixed a casing bug in the conductor's joined support/brake
+sentence ("… supports the day. But …"): lowercasing the brake clause's first letter unconditionally
+turned an acronym or device name into "hRV"/"apple"; it now lowercases only when the opening word owns
+no case of its own.
+
+**Which dimension is actually speaking.** `UnifiedSignalState.action.directives.training_source`
+(`src/repo/signal-state.ts`) names the `SignalDimension` whose status produced `directives.training` —
+`recovery_capacity`, `training_load_tolerance`, `health_constraints` or `energy_fueling` can each
+independently produce `recover`/`modify`/`hold_aggression` via one ordered precedence chain
+(`planningDirectives`'s `rungs`, most-constrained first, evaluated once so the verdict and its cause
+can never drift apart); `null` only when `training` is `"proceed"`. `action.voice` speaks the day's
+overall POSTURE, and on a ready/train day that posture is drawn from SUPPORT evidence — so a
+`hold_aggression` day voiced only through `action.voice` told the athlete they slept fine and then
+asked them to hold, naming nothing they were holding for. The Brief's hold-aggression lead
+(`src/repo/day-read.ts`) now speaks `signalState.dimensions[training_source].voice` instead.
+Deliberately NOT hashed by `dayReadInputFingerprint`, which selects `signal_action.directives` FIELD
+BY FIELD (`training`/`fueling`/`schedule`) rather than spreading it whole: `training_source` picks
+which voice narrates the lead, but every input that can actually MOVE it (recent load, check-in,
+fatigue, logged-today, today's load) is already hashed elsewhere in the fingerprint, so the same
+`hold_aggression` changing hands between two dimensions is not itself a new decision — hashing the
+source too would discard a warm agentic read for pure churn.
+
+**One directive, two unrelated causes.** `directives.schedule === "compress"` fires whenever the
+`life_capacity` dimension sits at `watch`, and that can mean either a real dated commitment (the
+CLOCK is the constraint) or `context.expect_worse_sleep` — a late night or a stressful stretch, which
+squeezes RECOVERY and nothing else. Both observations write the same `field`, so the directive alone
+can't tell them apart, and two independent copies of the discriminator (the Brief's caveat + its
+60→40 `est_minutes` clamp in `day-read.ts`, and the conductor's compress card in `coaching-focus.ts`)
+had drifted into two different answers. `lifeCapacityIsCommitment(state)`
+(`src/repo/signal-state.ts`) is the one shared test now — it reads the arbitrated `life_capacity`
+dimension's own `voice.key` (`"commitment_pressure"` vs `"schedule_pressure"`), never raw evidence,
+because `dimensionState` always assigns a voice and a second path that can contradict arbitration
+would be a competing arbitration rule, not a null-safety floor. Only a real commitment earns the
+time-window caveat and the `est_minutes` clamp; the recovery-squeeze cause holds intensity for the
+full session length instead of shortening it.
+
+**The reading grammar binds the agent too.** `violatesReadingGrammar(text)`
+(`src/repo/day-read.ts`) holds a sentence to the same four rules the deterministic vocabulary has
+always been written to: no leaked engineering vocabulary (`deterministic`/`posture`/`baseline`/
+`policy`/`fingerprint`/`directive`/`override`/`boundary`/any underscore), no device/clinical jargon
+that has actually leaked into prose (`acute warning`, `readiness signal`), no numeric score/grade/
+percent, and no gate language (`you must`, `do not train`, `forbidden`). `isValidDayReadAgentResult`
+(`src/dayread.ts`) now runs the AGENT's `headline` and `why` through the same predicate before
+accepting them — the sentence the athlete reads most mornings had been held to nothing, so a
+compliant-shaped `{headline:"Readiness 38/100 — rest.", why:"…you must not train today."}` used to
+validate and render verbatim. A violation is treated the same as any other shape failure: rejected,
+so the fallback ladder can still land a compliant sentence, with the deterministic floor (which
+passes this predicate by construction) as the worst case. `test/dayRead.test.js` runs every
+registered deterministic phrasing through the predicate and asserts zero rejections, pinning the
+zero-false-positive case for the shared rule.
+
+**One `dayReadHeadline()`, not three.** The Brief's headline — the most prominent string on the card
+— was the last piece of day-read prose still an unrotated literal, implemented three times: a
+`deterministicHeadline` in `dayread.ts`, a byte-identical copy in the day-read use case, and a
+hardcoded `"Take it easy."` inside the recovery-week softening clamp. `dayReadHeadline(read, date)`
+(`src/repo/day-read.ts`) is now the one implementation, rotating `DAY_READ_HEADLINE_VARIANTS` by
+calendar day like the rest of the vocabulary — date-keyed, never random, because the client compares
+`headline` to decide whether to repaint, so a non-deterministic pick would repaint on every poll. A
+`train` read with a known focus rotates the FRAME around the focus instead
+(`TRAIN_FOCUS_HEADLINE`, e.g. "Lower body." / "Lower body today." / "Lower body is on today."), so the
+focus itself still leads. `DAY_READ_POLICY_REASON_VARIANTS` also gained `agent_conservative_adjustment`
+— the one athlete-facing server-policy reason that used to be a single hand-written literal inside
+`computeDayRead`'s agent branch instead of read from the shared map like every other clamp reason.
 
 **Rules carry their own words.** A `DayReadRule` (`src/repo/brain/day-read-rules.ts`) resolves to a
 `{outcome, read}` pair where `outcome` is a `DayReadRuleOutcome` — a stable machine `code` for the
@@ -112,6 +231,28 @@ idea each rule's words MUST carry whichever phrasing lands, so a new variant can
 the meaning the rule exists to convey — a guarantee the old single-literal tests held only by
 accident; each `SIGNAL_VOICE` entry carries its own `concept` regex beside its prose the same way.
 
+The planned-training rule's own `why` is not one phrasing either: it is assembled from a lead plus a
+run of lowercase, unpunctuated FRAGMENTS joined with `"; and "`, and the fragments used to be single
+hardcoded strings even after the leads rotated — a chronic-short-sleep stretch or a recovery week read
+the identical clause every morning. `DAY_READ_CAVEAT_VARIANTS` / `DAY_READ_CAVEAT_CONCEPT`
+(`src/repo/day-read.ts`) register a rotating set for every fragment (recovery-week dose, an injury or
+session-reported joint pain to work around, a generic "ease around", an anticipated deload, a running
+volume spike, chronic low sleep, a hold on aggression, and the two schedule-compress causes above),
+each with its OWN `pickDayVariant` rotation key so two caveats firing the same day rotate
+independently rather than moving in lockstep. `clipText(value, max, opts)` (`src/repo/shared.ts`) is
+the one truncation primitive behind what used to be seven independently reimplemented "trim to N
+chars without cutting mid-word" helpers (`attention.ts`, `coaching-focus.ts`, `forward-timeline.ts`,
+`learned-timeline.ts`, `team-week.ts`, `today-agenda.ts`, `training-milestones.ts`), each with its own
+small, silent drift in ellipsis character, whitespace handling or boundary behavior; every caller's
+`opts` reproduce its own prior exact output (`wordBoundary`/`sentenceBoundary` are opt-in — most of
+the seven did NOT actually walk back to a word boundary despite the shared intent, so the default
+preserves that pre-existing gap rather than fixing it as a drive-by; `team-week.ts` is the one caller
+that opts into `sentenceBoundary` too). `selectionReason()` (`src/repo/plan-selection.ts`) is the one
+machine→athlete caveat `day-read.ts` splices into the Brief's `why` when the adaptive plan-day picker
+overrides the athlete's usual rotation day — second-person, lowercase, unpunctuated sentence fragments
+(a lead clause, plus an optional "while …" avoid clause) rotated the same way, rather than the single
+literal fallback it used to be.
+
 The Brief is not the only reader of `SIGNAL_VOICE`. The coaching-focus **conductor** — the "Where to
 focus" card on Stand's overview, Me → Health → Standing, and Progress → Program
 (`src/repo/coaching-focus.ts`; Today suppresses only its day-posture lead there, as duplicate
@@ -122,6 +263,25 @@ same `SIGNAL_VOICE_KEYS` (`protect`/`injury`/`fueling`/`schedule`) and the same
 notes about the same morning a tab apart. `SignalDimensionState.voice` sits alongside each
 dimension's `reason` for the conductor's parallel fueling/schedule cards, which speak to one
 dimension rather than the day's whole posture.
+
+**The work-around caveat is chosen by CAUSE, never by posture.** `modify` is reached from unrelated
+causes — an active health constraint, an underfueling prescription, or the mixed-signal arbitration
+tie-break — so keying the caveat off the posture alone produced injury-shaped prose ("work around IT
+with pain-free substitutions") on fuel, HRV and sleep days, where "it" named nothing. `caveatCause(state)`
+picks the most severe of `health_constraints` / `energy_fueling` / `recovery_capacity` /
+`training_load_tolerance` / `life_capacity` (constrained beats watch, ties broken in that order) and
+`CAVEAT_INSTRUCTIONS[cause]` supplies the instruction that follows the cause's own spoken sentence —
+only the health instruction talks about substitutions; the others make sense with nothing to
+substitute around. The caveat is also budgeted rather than clipped away: it carries the safety
+instruction, so `joinCaveat()` appends it WHOLE and clips only the producer's own `why` to fit —
+the old code clipped the JOINED string to 240 chars, which silently ate the instruction off the end
+whenever the `why` ahead of it ran long. `CoachingFocus.caveat_cause` (and each `Candidate`'s own
+`caveat_cause`) publishes the cause's plain-language label (`CAVEAT_CAUSE_LABEL`) alongside the text,
+because two of the three paths that produce a caveat carry no other line it could be scraped from, and
+the prompt layer used to hardcode the label as `"(injury/soreness)"` at both call sites — announcing
+four of five causes to the model as an injury that did not exist. `src/prompt/shared.ts`'s
+`caveatLine()` reads `caveat_cause` to render `EASE AROUND (<cause>): …` and falls back to the neutral
+label only when a caller omits it.
 
 **Cross-day continuity.** Nothing in the Brief used to read *yesterday's* Brief, so taking the
 suggested rest never changed the input and the read never changed ("rest after rest after rest",
@@ -225,9 +385,11 @@ chat reset/clear, filtered out of `listChatMessages`). `sessions` has
 furthest-from-optimal. `deriveDirectives()` is the deterministic engine that propagates each
 off-optimal marker into per-domain `health_directives` via `MARKER_MAPPINGS`, idempotently clearing
 and rewriting the `'markers'` source. `applyReviewDirectives()` does the same for an agent-emitted
-review's directives under the `'health_review'` source. `directivesForCoach()` condenses the active
-set for the prompt. Plus `addDirective`/`getDirective`/`listActiveDirectives`/`listDirectives`/
-`updateDirective`/`clearDirectivesForSource`.
+review's directives under the `'health_review'` source. Both route through `reconcileDirectives()`, a
+diff-based per-`directive_key` resolve: an unchanged existing row is kept untouched, a changed one is
+updated in place, a row no longer desired is soft-resolved, and a new one is inserted — zero-churn
+instead of clear-all-then-reinsert. `directivesForCoach()` condenses the active set for the prompt.
+Plus `addDirective`/`getDirective`/`listActiveDirectives`/`listDirectives`/`updateDirective`.
 
 Quiet insights: `addInsight`/`getInsight`/`listInsights`/`updateInsight`/`listVisibleInsights`
 (new+seen only) /`recentInsightTexts`/`isDuplicateInsight` — the soft+real dedup guard so the same
@@ -338,6 +500,14 @@ cross-domain connection or `{found:false}`, deduped against `recentInsightTexts`
 `buildWeeklyReadPrompt` (a standing "how the week went + the one change" stored as a `weekly_read`
 insight).
 
+`buildDayReadPrompt` also takes an optional `baseline` (`opts.baseline`, threaded by `computeDayRead`
+— see "One rich signal state" above) and carries a paired guardrail against overclaiming last night's
+sleep: alongside the existing "no sleep data synced" guard, a ONE NIGHT IS NOT A TREND line tells the
+agent that the `LAST NIGHT:` line is a single data point and forbids narrating it as a pattern ("short
+nights have been stacking up") unless the SIGNALS block's `low_sleep` (the genuine multi-night average
+flag) backs one — because a short night can sit under a normal multi-night average, which is exactly
+the case where a "lately" sentence would contradict the signals.
+
 `renderConnectedBrain(ctx, {domains})` folds the active cross-domain `directives` (filtered to the
 relevant domain — nutrition for meals, training/watch for the coach/day-read) plus the unified
 `recovery` view into a compact plain-language block, so a flagged lab already shapes meals and
@@ -388,6 +558,20 @@ null-stripped, because `weight: null` means bodyweight and a missing key is a di
 null one. And `compactRecovery` keeps ONE copy of the per-metric quality map that
 `getRecoverySummary` emits up to four times (`quality`, nested `recovery.quality`, `coverage`,
 `provenance`), a strict superset with zero information lost.
+
+A third right-sizing is narrower and safety-motivated rather than size-motivated: `compactCoachingFocus`
+strips `why` from a conductor item whose `day_posture` is set, on every site that carries
+`coaching_focus`. A day-posture item's `why` is deliberately the Brief's OWN sentence, verbatim —
+same voice, key and date (`src/repo/coaching-focus.ts`) — so one signal reads as one observation on
+the athlete's screen. Handing that sentence to the agent as "the conductor's focus" is exactly the
+parroting `day_read` is already dropped from every site to prevent; it had simply leaked back in
+through `coaching_focus` instead. So a day-posture item keeps its `title`, `move` and `based_on` (the
+machine-register evidence) and drops only the phrasing; `src/prompt/shared.ts`'s `renderCoachingFocus`
+renders `based_on` as a `GROUNDS (evidence, not phrasing — say it in your own words): …` line in its
+place, so nothing coaching-relevant is lost — the agent still has the raw signals blob and the
+READINESS/LAST NIGHT lines to reach its own words from. A non-posture item keeps its `why` untouched,
+since there it can carry the conductor's work-around caveat verbatim — a safety instruction, not
+narration, and must not be dropped.
 
 **Adding a prompt:** add a site to `PROMPT_CONTEXT_SITES`, point its `DATA:` block at
 `promptData(ctx, "<site>")`, and extend `test/promptContextProjection.test.js`. Never go back to a

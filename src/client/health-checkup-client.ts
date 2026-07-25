@@ -143,7 +143,7 @@ type ClientCheckupOrderedLab = import("../contracts/client-api.js").ClientChecku
 
     const frame = d && typeof d.frame === "string" && d.frame ? `<p class="chk-frame">${escHtml(d.frame)}</p>` : "";
 
-    return `<div class="chk stand-root">${ledeBlock}${body}${empty}${frame}</div>`;
+    return `<div class="stand-root">${ledeBlock}${body}${empty}${frame}</div>`;
   }
 
   const CAIRN_HEALTH_CHECKUP = { checkupHtml };

@@ -9,9 +9,16 @@ const partsFmt = new Map<string, Intl.DateTimeFormat>();
 const timeFmt = new Map<string, Intl.DateTimeFormat>();
 const weekdayFmt = new Map<string, Intl.DateTimeFormat>();
 const monthDayFmt = new Map<string, Intl.DateTimeFormat>();
-function cached(cache: Map<string, Intl.DateTimeFormat>, key: string, make: () => Intl.DateTimeFormat): Intl.DateTimeFormat {
+function cached(
+  cache: Map<string, Intl.DateTimeFormat>,
+  key: string,
+  make: () => Intl.DateTimeFormat
+): Intl.DateTimeFormat {
   let f = cache.get(key);
-  if (!f) { f = make(); cache.set(key, f); }
+  if (!f) {
+    f = make();
+    cache.set(key, f);
+  }
   return f;
 }
 
@@ -23,33 +30,58 @@ function cached(cache: Map<string, Intl.DateTimeFormat>, key: string, make: () =
 // are cached above.
 function zonedParts(d: Date, zone?: string) {
   const key = zone ?? "";
-  const time = cached(timeFmt, key, () =>
-    new Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "numeric", minute: "2-digit" })).format(d);
+  const time = cached(
+    timeFmt,
+    key,
+    () => new Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "numeric", minute: "2-digit" })
+  ).format(d);
   if (!zone) {
-    const weekday = cached(weekdayFmt, "", () =>
-      new Intl.DateTimeFormat("en-US", { weekday: "long" })).format(d);
+    const weekday = cached(weekdayFmt, "", () => new Intl.DateTimeFormat("en-US", { weekday: "long" })).format(d);
     return {
-      year: d.getFullYear(), month: d.getMonth() + 1, day: d.getDate(),
-      hour: d.getHours(), minute: d.getMinutes(), weekday, time,
+      year: d.getFullYear(),
+      month: d.getMonth() + 1,
+      day: d.getDate(),
+      hour: d.getHours(),
+      minute: d.getMinutes(),
+      weekday,
+      time,
     };
   }
-  const parts = cached(partsFmt, key, () => new Intl.DateTimeFormat("en-US", {
-    timeZone: zone, hourCycle: "h23",
-    year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", weekday: "long",
-  })).formatToParts(d);
+  const parts = cached(
+    partsFmt,
+    key,
+    () =>
+      new Intl.DateTimeFormat("en-US", {
+        timeZone: zone,
+        hourCycle: "h23",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        weekday: "long",
+      })
+  ).formatToParts(d);
   const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
   return {
-    year: Number(get("year")), month: Number(get("month")), day: Number(get("day")),
-    hour: Number(get("hour")), minute: Number(get("minute")), weekday: get("weekday"), time,
+    year: Number(get("year")),
+    month: Number(get("month")),
+    day: Number(get("day")),
+    hour: Number(get("hour")),
+    minute: Number(get("minute")),
+    weekday: get("weekday"),
+    time,
   };
 }
 
 // A cached "MMM d" label (e.g. "May 1") in the given zone — the >6-days-ago branch
 // of chatHistoryTimeLabel.
 function zonedMonthDay(d: Date, zone?: string): string {
-  return cached(monthDayFmt, zone ?? "", () =>
-    new Intl.DateTimeFormat("en-US", { timeZone: zone, month: "short", day: "numeric" })).format(d);
+  return cached(
+    monthDayFmt,
+    zone ?? "",
+    () => new Intl.DateTimeFormat("en-US", { timeZone: zone, month: "short", day: "numeric" })
+  ).format(d);
 }
 
 const isoDate = (p: { year: number; month: number; day: number }) =>
@@ -88,10 +120,14 @@ function localDayNumber(d: Date, tz?: string): number {
 // about a meal that hasn't happened (at 5 PM dinner is still ahead → "evening"
 // begins at 17h, but the prompt still says it's ahead). No number wall, no score.
 export function partOfDay(hour: number): string {
-  return hour < 5 ? "the middle of the night"
-    : hour < 12 ? "morning"
-      : hour < 17 ? "afternoon"
-        : hour < 21 ? "evening"
+  return hour < 5
+    ? "the middle of the night"
+    : hour < 12
+      ? "morning"
+      : hour < 17
+        ? "afternoon"
+        : hour < 21
+          ? "evening"
           : "night";
 }
 
@@ -103,12 +139,12 @@ export function partOfDay(hour: number): string {
 export function nowContext(d: Date = new Date(), tz: string | undefined = activeTimeZone()) {
   const p = zonedParts(d, tz);
   return {
-    date: isoDate(p),               // YYYY-MM-DD, local
-    weekday: p.weekday,             // "Tuesday"
-    time: p.time,                   // "5:15 PM"
+    date: isoDate(p), // YYYY-MM-DD, local
+    weekday: p.weekday, // "Tuesday"
+    time: p.time, // "5:15 PM"
     hour: p.hour,
     part_of_day: partOfDay(p.hour),
-    tz: tz ?? null,                 // which zone framed this (null = server-local) — helps the agent + debugging
+    tz: tz ?? null, // which zone framed this (null = server-local) — helps the agent + debugging
   };
 }
 
@@ -143,7 +179,11 @@ export function parseDbTime(s: unknown): Date | null {
 // can tell this morning's turn from a 5 PM one (the history it's handed is
 // otherwise timestamp-less). Today → just the clock time; yesterday/earlier this
 // week → a day word; older → a calendar date. Local-day diffing throughout.
-export function chatHistoryTimeLabel(createdAt: unknown, now: Date = new Date(), tz: string | undefined = activeTimeZone()): string {
+export function chatHistoryTimeLabel(
+  createdAt: unknown,
+  now: Date = new Date(),
+  tz: string | undefined = activeTimeZone()
+): string {
   const d = parseDbTime(createdAt);
   if (!d) return "";
   const p = zonedParts(d, tz);
@@ -184,6 +224,56 @@ export function metricLabel(metric: unknown): string {
 // Pounds per kilogram — the single conversion constant (was duplicated in profile.ts
 // and, less precisely as 2.2046, in enrich.ts's Garmin kg→lb path).
 export const LB_PER_KG = 2.2046226218;
+
+export interface ClipTextOptions {
+  // Collapse every whitespace run (including newlines) to a single space before
+  // trimming, rather than only trimming the ends. Default false.
+  collapseWhitespace?: boolean;
+  // Appended after a truncation. "" means a silent hard cut with no marker at
+  // all (learned-timeline.ts's original behavior). Default "…".
+  ellipsis?: string;
+  // Walk back to the last word boundary (space) inside the budget instead of
+  // slicing at exactly `max` chars. Default false — most of the seven originals
+  // this consolidates did NOT actually do this despite the shared "never cut
+  // mid-word" intent behind them; see the callers in attention.ts,
+  // coaching-focus.ts, forward-timeline.ts, training-milestones.ts and
+  // today-agenda.ts, which preserve that pre-existing (mid-word-cutting) gap on
+  // purpose — this is a refactor, not a behavior fix.
+  wordBoundary?: boolean;
+  // Opt-in on top of `wordBoundary`: additionally prefer ending on a sentence
+  // boundary (". "/"! "/"? ") when one falls at least halfway into the budget,
+  // before falling back to the word boundary. Default false — team-week.ts is
+  // the one caller that wants this; it must never become every caller's default.
+  sentenceBoundary?: boolean;
+}
+
+// The one truncation primitive behind what used to be seven independently
+// reimplemented "trim to N chars without cutting mid-word" helpers (attention.ts,
+// coaching-focus.ts, forward-timeline.ts, learned-timeline.ts, team-week.ts,
+// training-milestones.ts, today-agenda.ts) — each with its own small, silent
+// drift in ellipsis character, whitespace handling, or boundary behavior. The
+// options above cover every behavior actually observed across those seven;
+// every caller keeps its own exact prior output via the matching option set.
+export function clipText(value: unknown, max: number, opts: ClipTextOptions = {}): string {
+  const { collapseWhitespace = false, ellipsis = "…", wordBoundary = false, sentenceBoundary = false } = opts;
+  const raw = String(value ?? "");
+  const s = collapseWhitespace ? raw.replace(/\s+/g, " ").trim() : raw.trim();
+  if (s.length <= max) return s;
+
+  if (!wordBoundary) {
+    if (!ellipsis) return s.slice(0, max);
+    return `${s.slice(0, max - 1).trimEnd()}${ellipsis}`;
+  }
+
+  const window = s.slice(0, max);
+  if (sentenceBoundary) {
+    const sentenceEnd = Math.max(window.lastIndexOf(". "), window.lastIndexOf("! "), window.lastIndexOf("? "));
+    if (sentenceEnd >= Math.floor(max * 0.5)) return window.slice(0, sentenceEnd + 1).trim();
+  }
+  const lastSpace = window.lastIndexOf(" ");
+  const cut = (lastSpace > 0 ? window.slice(0, lastSpace) : window).replace(/[\s,;:.!?…]+$/, "");
+  return ellipsis ? `${cut}${ellipsis}` : cut;
+}
 
 // Round a load to the nearest 2.5 lb plate — the smallest realistic gym increment.
 // Shared by the progression engine's step math and the Garmin kg→lb conversion.

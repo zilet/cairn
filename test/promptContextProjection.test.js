@@ -32,6 +32,7 @@ import {
   buildWeeklyReadPrompt,
 } from "../dist/prompt.js";
 import { projectCoachContext, PROMPT_CONTEXT_SITES } from "../dist/prompt/context-projection.js";
+import { renderCoachingFocus } from "../dist/prompt/shared.js";
 
 // The Stage-2 decision envelope buildDailyCompositionPrompt composes inside.
 const ENVELOPE = {
@@ -257,4 +258,110 @@ test("projecting a partial context never invents keys", () => {
   const projected = projectCoachContext(partial, "day_read");
   assert.deepEqual(Object.keys(projected).sort(), ["now", "recent_sessions"]);
   assert.deepEqual(projectCoachContext({}, "chat"), {});
+});
+
+// ---------- the deterministic floor's prose never comes back as the agent's focus ----
+// `day_read` is dropped from every site because "handing it today's stored read invites
+// parroting" — but the SAME sentence rode back in through the conductor. On a
+// rest/easy/done posture the conductor's `lead.why` is built from the identical voice,
+// key and date the Brief's `why` uses (deliberately: one signal must read as one
+// observation on the athlete's screen), so the prompt was labelling the floor's own
+// sentence "THIS BLOCK'S ONE FOCUS" and then asking the agent for an independent read.
+const POSTURE_PROSE = "Short nights have been stacking up — today is a good day to give some of that back.";
+const POSTURE_FOCUS = {
+  available: true,
+  headline: "Steady. This block: keep today easy.",
+  lead: {
+    domain: "recovery",
+    title: "Keep today easy",
+    why: POSTURE_PROSE,
+    move: "Keep movement genuinely easy; leave hard loading for the next ready day.",
+    based_on: ["Unified planning posture: easy", "Recent sleep is running short."],
+    day_posture: "easy",
+  },
+  parallel: [],
+  later: [],
+  connections: [],
+  retest: null,
+  caveat: null,
+};
+
+test("a day-posture lead reaches the agent as grounds, never as the Brief's own sentence", () => {
+  for (const brief of [true, false]) {
+    const rendered = renderCoachingFocus({ coaching_focus: POSTURE_FOCUS }, { brief });
+    assert.ok(!rendered.includes(POSTURE_PROSE), `${brief ? "brief" : "full"} render drops the floor's phrasing`);
+    // What the conductor points at, and the machine-register evidence it pointed on,
+    // both survive — the agent must still know the posture and be able to disagree.
+    assert.ok(rendered.includes("Keep today easy"), "the title survives");
+    assert.ok(rendered.includes("leave hard loading for the next ready day"), "so does the concrete move");
+    assert.ok(rendered.includes("Unified planning posture: easy"), "and the grounds");
+    assert.ok(rendered.includes("Recent sleep is running short."), "including every based_on entry");
+  }
+});
+
+test("a lead with no day posture keeps its why — that string can carry the work-around caveat", () => {
+  const focus = {
+    ...POSTURE_FOCUS,
+    lead: {
+      domain: "training",
+      title: "Bring up your squat",
+      why: "It has stalled for three weeks. Use pain-free substitutions.",
+    },
+    parallel: [{ domain: "nutrition", title: "Hold a lean-safe deficit", why: "Protein high, deficit modest." }],
+  };
+  for (const brief of [true, false]) {
+    const rendered = renderCoachingFocus({ coaching_focus: focus }, { brief });
+    assert.ok(
+      rendered.includes("It has stalled for three weeks. Use pain-free substitutions."),
+      "the lead's why survives"
+    );
+    assert.ok(!rendered.includes("GROUNDS"), "and no grounds line replaces it");
+  }
+  const full = renderCoachingFocus({ coaching_focus: focus }, {});
+  assert.ok(full.includes("Protein high, deficit modest."), "a parallel item keeps its why too");
+});
+
+// The caveat is selected by CAUSE — health constraints, fueling, recovery capacity,
+// accumulated load or life capacity — so the fixed "(injury/soreness)" label described
+// four of the five wrongly. The prompt layer labels it from whatever cause the conductor
+// publishes and stays neutral otherwise; it must not keep a second cause taxonomy.
+test("the caveat label never claims a cause the conductor did not name", () => {
+  const fuelCaveat =
+    "Your fuel has been running behind the work. Eat around the work first and keep today's dose modest.";
+  const withCaveat = { ...POSTURE_FOCUS, caveat: fuelCaveat };
+  for (const brief of [true, false]) {
+    const rendered = renderCoachingFocus({ coaching_focus: withCaveat }, { brief });
+    assert.ok(!rendered.includes("injury/soreness"), `${brief ? "brief" : "full"} render stops calling fuel an injury`);
+    assert.ok(rendered.includes(`EASE AROUND: ${fuelCaveat}`), "the caveat ships whole under a neutral label");
+  }
+  // When the conductor does publish a cause, the label follows it verbatim.
+  const named = renderCoachingFocus(
+    { coaching_focus: { ...withCaveat, caveat_cause: "energy_fueling" } },
+    { brief: true }
+  );
+  assert.ok(named.includes("EASE AROUND (energy fueling):"), "a published cause names the label");
+});
+
+test("every site carrying the conductor strips the posture prose from its DATA too", () => {
+  const conductorSites = Object.keys(PROMPT_CONTEXT_SITES).filter((site) =>
+    PROMPT_CONTEXT_SITES[site].keys.includes("coaching_focus")
+  );
+  assert.ok(conductorSites.length >= 6, "the conductor reaches several sites");
+  for (const site of conductorSites) {
+    const payload = JSON.stringify(projectCoachContext({ coaching_focus: POSTURE_FOCUS }, site));
+    assert.ok(!payload.includes(POSTURE_PROSE), `${site} DATA drops the floor's phrasing`);
+    const parsed = JSON.parse(payload);
+    assert.equal(parsed.coaching_focus.lead.title, "Keep today easy", `${site} keeps the title`);
+    assert.deepEqual(parsed.coaching_focus.lead.based_on, POSTURE_FOCUS.lead.based_on, `${site} keeps the grounds`);
+    assert.equal(parsed.coaching_focus.lead.day_posture, "easy", `${site} keeps the posture itself`);
+  }
+  // Only the posture item loses its prose; every other lever's `why` is untouched.
+  const stalled = {
+    ...POSTURE_FOCUS,
+    lead: { domain: "training", title: "Bring up your squat", why: "Stalled three weeks." },
+  };
+  const kept = projectCoachContext({ coaching_focus: stalled }, "day_read");
+  assert.equal(kept.coaching_focus.lead.why, "Stalled three weeks.");
+  // And the projection never mutates the caller's snapshot.
+  assert.equal(POSTURE_FOCUS.lead.why, POSTURE_PROSE, "the shared context object is left alone");
 });

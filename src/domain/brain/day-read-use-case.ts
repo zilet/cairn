@@ -4,6 +4,7 @@ import { computeDayRead, dayReadProseConsistencyIssue, localToday } from "../../
 import { ensureDayReadRefresh, scheduleDayReadRefresh } from "../../dayread-refresh.js";
 import {
   dayRead,
+  dayReadHeadline,
   dayReadPeriodizationContext,
   forwardLook,
   getCachedDayRead,
@@ -67,17 +68,10 @@ export interface ReadTodayOptions {
   recordOutcome?: boolean;
 }
 
-function dayReadHeadline(read: { kind: string; focus?: string | null }): string {
-  return read.kind === "done"
-    ? "You're done for today."
-    : read.kind === "rest"
-      ? "Rest today."
-      : read.kind === "easy"
-        ? "Take it easy."
-        : read.focus
-          ? `${read.focus}.`
-          : "Good to train.";
-}
+// (A byte-identical copy of the headline literals used to live here, a third
+// implementation alongside dayread.ts's and the recovery-week clamp's. The one
+// rotated implementation now lives beside the rest of the Brief's vocabulary in
+// repo/day-read.ts, and takes the date it is speaking for.)
 
 export function attachDayReadContext(readDate: string, read: Record<string, unknown>): DayReadResult {
   let arc: string | null = null;
@@ -214,7 +208,7 @@ export async function readToday(options: ReadTodayOptions = {}): Promise<DayRead
         if (materialTruthChanged) {
           const factual = {
             ...live,
-            headline: dayReadHeadline(live),
+            headline: dayReadHeadline(live, readDate),
             source: "deterministic",
             override: null,
           };
@@ -256,7 +250,7 @@ export async function readToday(options: ReadTodayOptions = {}): Promise<DayRead
     const fallback = dayRead(date);
     return attachDayReadContext(readDate, {
       ...fallback,
-      headline: dayReadHeadline(fallback),
+      headline: dayReadHeadline(fallback, readDate),
       source: "deterministic",
       error: e?.message ?? String(e),
     });

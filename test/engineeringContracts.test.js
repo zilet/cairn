@@ -6065,8 +6065,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     /function\s+enduranceStatusWord|function\s+enduranceBlockHtml|function\s+paceTrendWord|function\s+zoneBarHtml|function\s+enduranceBestRows|function\s+enduranceSportCardHtml/
   );
   assert.match(progress, /CairnProgressEnduranceController\.render/);
-  assert.match(progress, /CairnProgressEnduranceController\.paint/);
-  assert.doesNotMatch(progress, /api\("\/endurance-prs"\)|function\s+paintProgressEnduranceBody/);
+  assert.doesNotMatch(
+    progress,
+    /api\("\/endurance-prs"\)|function\s+paintProgressEnduranceBody|CairnProgressEnduranceController\.paint/
+  );
   assert.match(progressComponentsClient, /Object\.assign\(globalThis, \{/);
   assert.match(progressComponentsClient, /CairnProgressComponents/);
   assert.doesNotMatch(progress, /function\s+progressHero|function\s+emptyStateHtml|const\s+fmtShortDate/);

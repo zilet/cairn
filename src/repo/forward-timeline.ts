@@ -24,7 +24,7 @@ import { currentLiftCapacities } from "./performance.js";
 import { strengthBenchmarkMilestones, type StrengthMilestoneInput } from "./training-milestones.js";
 import { followupLabel, markerSlugFromSignalKey } from "./attention-labels.js";
 import { dexaRescanWindow, latestDexaDate } from "./dexa-window.js";
-import { addDaysISO, daysBetweenISO, localDateISO } from "./shared.js";
+import { addDaysISO, clipText, daysBetweenISO, localDateISO } from "./shared.js";
 
 export type ForwardTimelineKind = "goal" | "phase" | "recheck" | "retest" | "rescan" | "milestone" | "block";
 
@@ -75,8 +75,7 @@ function round1(value: number): number {
 }
 
 function clip(text: unknown, max = 200): string {
-  const s = String(text ?? "").replace(/\s+/g, " ").trim();
-  return s.length > max ? `${s.slice(0, max - 1).trimEnd()}...` : s;
+  return clipText(text, max, { collapseWhitespace: true, ellipsis: "..." });
 }
 
 // Mirror of doctor-loop's health signal slug so a `marker:<slug>` key resolves

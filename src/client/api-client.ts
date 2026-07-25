@@ -540,10 +540,8 @@ function setOffline(on: unknown): void {
     const visibleBar = bar;
     if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => visibleBar.classList.add("show"));
     else visibleBar.classList.add("show");
-    document.body.classList.add("is-offline");
   } else {
     if (bar) bar.classList.remove("show");
-    document.body.classList.remove("is-offline");
     // We just regained a live connection (a real response landed, or `online`
     // fired): drain anything the outbox is holding, in order.
     try {
@@ -615,7 +613,7 @@ type OutboxController = {
     id: string,
     claimToken: string,
     outcome: "delivered" | "attention" | "pending",
-    failureStatus?: number,
+    failureStatus?: number
   ): boolean;
   remove(id: string): boolean;
   hasDependents(id: string): boolean;
@@ -642,7 +640,7 @@ function inferredOutboxSessionDate(kind: unknown, explicit: unknown, body: unkno
   if (!OUTBOX_WORKOUT_KINDS.has(String(kind || ""))) return null;
   const direct = normalizedOutboxSessionDate(explicit);
   if (direct) return direct;
-  const record = body && typeof body === "object" ? body as Record<string, unknown> : null;
+  const record = body && typeof body === "object" ? (body as Record<string, unknown>) : null;
   return normalizedOutboxSessionDate(record?.date);
 }
 
@@ -703,7 +701,11 @@ function createOutbox(opts: {
     return candidate;
   }
   function allocateClaimToken(): string {
-    const existing = new Set(read().map((item) => item.claim_token).filter(Boolean));
+    const existing = new Set(
+      read()
+        .map((item) => item.claim_token)
+        .filter(Boolean)
+    );
     let candidate = "";
     do {
       claimSeq = (claimSeq + 1) % 1_000_000;
@@ -755,9 +757,7 @@ function createOutbox(opts: {
     const prerequisite = entry.depends_on
       ? items.find((candidate) => candidate.id === entry.depends_on && candidate.kind === "daily_session_prepare")
       : null;
-    const group = entry.group_id
-      ? items.find((candidate) => candidate.group_id === entry.group_id)
-      : null;
+    const group = entry.group_id ? items.find((candidate) => candidate.group_id === entry.group_id) : null;
     if (entry.depends_on && !prerequisite) return null;
     // Never make room by deleting a previously confirmed log. A dependency
     // group that already owns its prepare barrier may continue past the nominal
@@ -779,12 +779,10 @@ function createOutbox(opts: {
     const attentionPrepareIds = new Set(
       items
         .filter((item) => item.kind === "daily_session_prepare" && item.state === "needs_attention")
-        .map((item) => item.id),
+        .map((item) => item.id)
     );
     const attentionGroupIds = new Set(
-      items
-        .filter((item) => item.state === "needs_attention" && item.group_id)
-        .map((item) => item.group_id as string),
+      items.filter((item) => item.state === "needs_attention" && item.group_id).map((item) => item.group_id as string)
     );
     const rows: OutboxReviewEntry[] = [];
     for (const item of items) {
@@ -793,15 +791,9 @@ function createOutbox(opts: {
       // because another member of the workout group needs attention.
       if (item.state === "sending") continue;
       if (item.state === "needs_attention") rows.push({ item, role: "attention" });
-      else if (
-        item.depends_on &&
-        attentionPrepareIds.has(item.depends_on)
-      ) {
+      else if (item.depends_on && attentionPrepareIds.has(item.depends_on)) {
         rows.push({ item, role: "blocked_dependent" });
-      } else if (
-        item.group_id &&
-        attentionGroupIds.has(item.group_id)
-      ) {
+      } else if (item.group_id && attentionGroupIds.has(item.group_id)) {
         rows.push({ item, role: "blocked_dependent" });
       }
     }
@@ -815,11 +807,11 @@ function createOutbox(opts: {
     if (current.state !== "needs_attention") return false;
     const freshId = allocateId();
     if (current.kind === "daily_session_prepare") {
-      const body = current.retry_body || (
-        current.body && typeof current.body === "object"
+      const body =
+        current.retry_body ||
+        (current.body && typeof current.body === "object"
           ? { ...(current.body as Record<string, unknown>), replace: true }
-          : current.body
-      );
+          : current.body);
       const {
         state: _state,
         failure_status: _failureStatus,
@@ -860,9 +852,7 @@ function createOutbox(opts: {
   function claimNext(): OutboxClaimResult {
     const items = read();
     const attentionGroupIds = new Set(
-      items
-        .filter((item) => item.state === "needs_attention" && item.group_id)
-        .map((item) => item.group_id as string),
+      items.filter((item) => item.state === "needs_attention" && item.group_id).map((item) => item.group_id as string)
     );
     const blockedGroupIds = new Set(attentionGroupIds);
     let blockedUntil: number | undefined;
@@ -881,11 +871,8 @@ function createOutbox(opts: {
         if (item.group_id) blockedGroupIds.add(item.group_id);
         continue;
       }
-      const liveClaim = (
-        item.state === "sending" &&
-        validOutboxId(item.claim_token) &&
-        Number(item.in_flight_until) > now()
-      );
+      const liveClaim =
+        item.state === "sending" && validOutboxId(item.claim_token) && Number(item.in_flight_until) > now();
       if (liveClaim) {
         const until = Number(item.in_flight_until);
         blockedUntil = blockedUntil == null ? until : Math.min(blockedUntil, until);
@@ -896,11 +883,7 @@ function createOutbox(opts: {
       if (item.depends_on) {
         const prerequisite = items.find((candidate) => candidate.id === item.depends_on);
         if (!prerequisite || prerequisite.kind !== "daily_session_prepare") {
-          const {
-            in_flight_until: _inFlightUntil,
-            claim_token: _claimToken,
-            ...pending
-          } = item;
+          const { in_flight_until: _inFlightUntil, claim_token: _claimToken, ...pending } = item;
           items[index] = { ...pending, state: "needs_attention" };
           if (item.group_id) blockedGroupIds.add(item.group_id);
           dirty = true;
@@ -920,14 +903,15 @@ function createOutbox(opts: {
         ? { item: claimed, ...(blockedUntil != null ? { blockedUntil } : {}) }
         : { item: null, storageError: true, ...(blockedUntil != null ? { blockedUntil } : {}) };
     }
-    if (dirty && !write(items).persisted) return { item: null, storageError: true, ...(blockedUntil != null ? { blockedUntil } : {}) };
+    if (dirty && !write(items).persisted)
+      return { item: null, storageError: true, ...(blockedUntil != null ? { blockedUntil } : {}) };
     return { item: null, ...(blockedUntil != null ? { blockedUntil } : {}) };
   }
   function settle(
     id: string,
     claimToken: string,
     outcome: "delivered" | "attention" | "pending",
-    failureStatus?: number,
+    failureStatus?: number
   ): boolean {
     const items = read();
     const index = items.findIndex((item) => item.id === id);
@@ -935,11 +919,7 @@ function createOutbox(opts: {
     const item = items[index];
     if (item.state !== "sending" || !validOutboxId(claimToken) || item.claim_token !== claimToken) return false;
     if (outcome === "attention") {
-      const {
-        in_flight_until: _inFlightUntil,
-        claim_token: _claimToken,
-        ...pending
-      } = item;
+      const { in_flight_until: _inFlightUntil, claim_token: _claimToken, ...pending } = item;
       items[index] = {
         ...pending,
         state: "needs_attention",
@@ -959,18 +939,14 @@ function createOutbox(opts: {
       return write(items).persisted;
     }
     if (item.kind === "daily_session_prepare" && items.some((candidate) => candidate.depends_on === item.id)) {
-      const {
-        in_flight_until: _inFlightUntil,
-        claim_token: _claimToken,
-        ...prepared
-      } = item;
+      const { in_flight_until: _inFlightUntil, claim_token: _claimToken, ...prepared } = item;
       items[index] = { ...prepared, state: "prepared" };
     } else {
       items.splice(index, 1);
     }
     if (item.depends_on && !items.some((candidate) => candidate.depends_on === item.depends_on)) {
       const prerequisiteIndex = items.findIndex(
-        (candidate) => candidate.id === item.depends_on && candidate.state === "prepared",
+        (candidate) => candidate.id === item.depends_on && candidate.state === "prepared"
       );
       if (prerequisiteIndex >= 0) items.splice(prerequisiteIndex, 1);
     }
@@ -1008,9 +984,7 @@ function createOutbox(opts: {
     let needsAttention = 0;
     const queue = read();
     const attentionGroupIds = new Set(
-      queue
-        .filter((item) => item.state === "needs_attention" && item.group_id)
-        .map((item) => item.group_id as string),
+      queue.filter((item) => item.state === "needs_attention" && item.group_id).map((item) => item.group_id as string)
     );
     const blockedGroupIds = new Set(attentionGroupIds);
     for (const item of queue) {
@@ -1058,11 +1032,7 @@ function createOutbox(opts: {
         const current = read();
         const index = current.findIndex((row) => row.id === item.id);
         if (index >= 0) {
-          const {
-            in_flight_until: _inFlightUntil,
-            claim_token: _claimToken,
-            ...pending
-          } = current[index];
+          const { in_flight_until: _inFlightUntil, claim_token: _claimToken, ...pending } = current[index];
           current[index] = { ...pending, state: "needs_attention", failure_status: item.failure_status };
           if (!write(current).persisted) break;
         }
@@ -1083,7 +1053,10 @@ function createOutbox(opts: {
       if (item.depends_on) {
         const current = read();
         const prerequisite = current.find((candidate) => candidate.id === item.depends_on);
-        if (prerequisite?.state === "prepared" && !current.some((candidate) => candidate.depends_on === item.depends_on)) {
+        if (
+          prerequisite?.state === "prepared" &&
+          !current.some((candidate) => candidate.depends_on === item.depends_on)
+        ) {
           if (!removeDelivered(item.depends_on)) break;
         }
       }
@@ -1201,7 +1174,7 @@ async function withOutboxStorageLease<T>(work: () => Promise<T> | T): Promise<T>
     try {
       storage.setItem(
         OUTBOX_RUNTIME_LEASE_KEY,
-        JSON.stringify({ owner, expires: Date.now() + OUTBOX_RUNTIME_LEASE_MS }),
+        JSON.stringify({ owner, expires: Date.now() + OUTBOX_RUNTIME_LEASE_MS })
       );
     } catch {}
     if (typeof setTimeout === "function") renewTimer = setTimeout(renew, OUTBOX_RUNTIME_LEASE_MS / 3);
@@ -1219,12 +1192,20 @@ async function withOutboxStorageLease<T>(work: () => Promise<T> | T): Promise<T>
 }
 
 function withOutboxRuntimeLock<T>(work: () => Promise<T> | T): Promise<T> {
-  const locks = typeof navigator !== "undefined"
-    ? (navigator as Navigator & { locks?: { request?<R>(name: string, callback: () => Promise<R> | R): Promise<R> } }).locks
-    : undefined;
+  const locks =
+    typeof navigator !== "undefined"
+      ? (navigator as Navigator & { locks?: { request?<R>(name: string, callback: () => Promise<R> | R): Promise<R> } })
+          .locks
+      : undefined;
   if (typeof locks?.request === "function") return locks.request(OUTBOX_RUNTIME_LOCK, work);
-  const run = outboxRuntimeTail.then(() => withOutboxStorageLease(work), () => withOutboxStorageLease(work));
-  outboxRuntimeTail = run.then(() => undefined, () => undefined);
+  const run = outboxRuntimeTail.then(
+    () => withOutboxStorageLease(work),
+    () => withOutboxStorageLease(work)
+  );
+  outboxRuntimeTail = run.then(
+    () => undefined,
+    () => undefined
+  );
   return run;
 }
 
@@ -1253,26 +1234,37 @@ function escapeOutboxHtml(value: unknown): string {
 }
 
 function boundedOutboxText(value: unknown, max = 140): string {
-  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  const text = String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
   return text.length <= max ? text : `${text.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
 }
 
 function outboxKindLabel(kind: unknown): string {
   switch (String(kind || "").toLowerCase()) {
-    case "activity": return "Activity";
-    case "food": return "Food";
-    case "weight": return "Weight";
-    case "set": return "Training set";
-    case "finish": return "Session finish";
-    case "skip": return "Exercise skip";
-    case "restore": return "Exercise restore";
-    case "daily_session_prepare": return "Session setup";
-    default: return "Saved log";
+    case "activity":
+      return "Activity";
+    case "food":
+      return "Food";
+    case "weight":
+      return "Weight";
+    case "set":
+      return "Training set";
+    case "finish":
+      return "Session finish";
+    case "skip":
+      return "Exercise skip";
+    case "restore":
+      return "Exercise restore";
+    case "daily_session_prepare":
+      return "Session setup";
+    default:
+      return "Saved log";
   }
 }
 
 function outboxItemSummary(item: OutboxItem): string {
-  const body = item.body && typeof item.body === "object" ? item.body as Record<string, unknown> : {};
+  const body = item.body && typeof item.body === "object" ? (item.body as Record<string, unknown>) : {};
   if (item.kind === "weight" && Number.isFinite(Number(body.weight_lb))) {
     return `${Number(body.weight_lb)} lb`;
   }
@@ -1285,11 +1277,13 @@ function outboxItemSummary(item: OutboxItem): string {
   if (item.kind === "set") {
     const exercise = boundedOutboxText(body.exercise, 64);
     const duration = Number(body.duration_sec);
-    if (Number.isFinite(duration) && duration > 0) return boundedOutboxText(`${exercise || "Timed set"} · ${duration}s`);
+    if (Number.isFinite(duration) && duration > 0)
+      return boundedOutboxText(`${exercise || "Timed set"} · ${duration}s`);
     const weight = Number(body.weight);
     const reps = Number(body.reps);
     const detail = [Number.isFinite(weight) ? `${weight} lb` : "", Number.isFinite(reps) ? `${reps} reps` : ""]
-      .filter(Boolean).join(" × ");
+      .filter(Boolean)
+      .join(" × ");
     return boundedOutboxText([exercise, detail].filter(Boolean).join(" · ")) || "Saved training set";
   }
   if (item.kind === "finish") {
@@ -1328,9 +1322,10 @@ function stagedCachePair(date: string): {
   const session = peekCached<Record<string, unknown>>(`today:session:${date}`)?.data;
   const standaloneDaily = peekCached<Record<string, unknown>>(`today:daily-session:${date}`)?.data;
   if (!session || typeof session !== "object") return null;
-  const nested = session.daily_session && typeof session.daily_session === "object"
-    ? session.daily_session as Record<string, unknown>
-    : null;
+  const nested =
+    session.daily_session && typeof session.daily_session === "object"
+      ? (session.daily_session as Record<string, unknown>)
+      : null;
   const daily = nested || standaloneDaily;
   if (!daily || session._staged_offline !== true || daily._staged_offline !== true) return null;
   const sessionPair = String(session._local_prepare_id || "");
@@ -1362,7 +1357,9 @@ function closeOutboxReview(): void {
   const overlay = document.querySelector<HTMLElement>(".outbox-review-ov");
   if (!overlay) return;
   overlay.remove();
-  try { outboxReviewReturnFocus?.focus(); } catch {}
+  try {
+    outboxReviewReturnFocus?.focus();
+  } catch {}
   outboxReviewReturnFocus = null;
 }
 
@@ -1405,7 +1402,9 @@ async function discardOutboxItem(id: string): Promise<boolean> {
       activateTab?(tab: string): unknown;
     };
     if (g.state?.tab === "session" && g.state.logDate === clearedDate) {
-      try { g.activateTab?.("today"); } catch {}
+      try {
+        g.activateTab?.("today");
+      } catch {}
     }
   }
   // Removing the failed member is an explicit resolution of its workout-group
@@ -1415,9 +1414,12 @@ async function discardOutboxItem(id: string): Promise<boolean> {
 }
 
 function focusOutboxReviewControl(overlay: HTMLElement): void {
-  const control = overlay.querySelector<HTMLElement>("[data-outbox-retry]") ||
+  const control =
+    overlay.querySelector<HTMLElement>("[data-outbox-retry]") ||
     overlay.querySelector<HTMLElement>("[data-outbox-close]");
-  try { control?.focus(); } catch {}
+  try {
+    control?.focus();
+  } catch {}
 }
 
 function renderOutboxReview(options: { focusControl?: boolean } = {}): void {
@@ -1431,34 +1433,39 @@ function renderOutboxReview(options: { focusControl?: boolean } = {}): void {
     closeOutboxReview();
     return;
   }
-  const rows = review.map(({ item, role }) => {
-    const hasDependents = item.kind === "daily_session_prepare" && outbox().hasDependents(item.id);
-    const isPrepare = item.kind === "daily_session_prepare";
-    const isBlocked = role === "blocked_dependent";
-    const blockedByMember = isBlocked && !!item.group_id && outbox().list().some(
-      (candidate) => candidate.state === "needs_attention" && candidate.group_id === item.group_id,
-    );
-    const status = isBlocked
-      ? blockedByMember
-        ? "Blocked behind an earlier workout change that needs attention. You can discard this log individually."
-        : "Blocked until the saved session setup is resolved. You can discard this log individually."
-      : isPrepare && hasDependents
-        ? "Use saved session will replace a conflicting unstarted session. A session with started work stays locked."
-      : item.failure_status != null
-        ? `Cairn couldn't accept this log (${item.failure_status}).`
-        : "Cairn couldn't accept this log.";
-    return `<li class="outbox-review-item" data-outbox-id="${escapeOutboxHtml(item.id)}">
+  const rows = review
+    .map(({ item, role }) => {
+      const hasDependents = item.kind === "daily_session_prepare" && outbox().hasDependents(item.id);
+      const isPrepare = item.kind === "daily_session_prepare";
+      const isBlocked = role === "blocked_dependent";
+      const blockedByMember =
+        isBlocked &&
+        !!item.group_id &&
+        outbox()
+          .list()
+          .some((candidate) => candidate.state === "needs_attention" && candidate.group_id === item.group_id);
+      const status = isBlocked
+        ? blockedByMember
+          ? "Blocked behind an earlier workout change that needs attention. You can discard this log individually."
+          : "Blocked until the saved session setup is resolved. You can discard this log individually."
+        : isPrepare && hasDependents
+          ? "Use saved session will replace a conflicting unstarted session. A session with started work stays locked."
+          : item.failure_status != null
+            ? `Cairn couldn't accept this log (${item.failure_status}).`
+            : "Cairn couldn't accept this log.";
+      return `<li class="outbox-review-item" data-outbox-id="${escapeOutboxHtml(item.id)}">
       <div class="outbox-review-copy">
         <div class="outbox-review-meta"><strong>${escapeOutboxHtml(outboxKindLabel(item.kind))}</strong><time>${escapeOutboxHtml(outboxItemTime(item))}</time></div>
         <p>${escapeOutboxHtml(outboxItemSummary(item))}</p>
         <small>${escapeOutboxHtml(status)}</small>
       </div>
       <div class="outbox-review-actions">
-        ${isBlocked ? "" : `<button type="button" class="btn sm" data-outbox-retry>${isPrepare ? "Use saved session" : "Retry"}</button>`}
-        <button type="button" class="btn sm ghost outbox-discard" data-outbox-discard${hasDependents ? " disabled aria-disabled=\"true\"" : ""}>Discard</button>
+        ${isBlocked ? "" : `<button type="button" data-outbox-retry>${isPrepare ? "Use saved session" : "Retry"}</button>`}
+        <button type="button" class="outbox-discard" data-outbox-discard${hasDependents ? ' disabled aria-disabled="true"' : ""}>Discard</button>
       </div>
     </li>`;
-  }).join("");
+    })
+    .join("");
   sheet.innerHTML = `<div class="outbox-review-head">
       <div><p class="eyebrow">Saved on this device</p><h2 id="outboxReviewTitle">Logs that need attention</h2></div>
       <button type="button" class="outbox-review-close" data-outbox-close aria-label="Close log review">×</button>
@@ -1470,7 +1477,12 @@ function renderOutboxReview(options: { focusControl?: boolean } = {}): void {
 
 function openOutboxReview(): void {
   if (typeof document === "undefined") return;
-  if (!outbox().list().some((item) => item.state === "needs_attention")) return;
+  if (
+    !outbox()
+      .list()
+      .some((item) => item.state === "needs_attention")
+  )
+    return;
   const existing = document.querySelector<HTMLElement>(".outbox-review-ov");
   if (existing) {
     existing.querySelector<HTMLElement>("[data-outbox-close]")?.focus();
@@ -1492,7 +1504,9 @@ function openOutboxReview(): void {
     if (target.closest("[data-outbox-discard]")) {
       void discardOutboxItem(id).then((discarded) => {
         if (!discarded) {
-        try { toast("Discard each saved workout log before discarding the session setup"); } catch {}
+          try {
+            toast("Discard each saved workout log before discarding the session setup");
+          } catch {}
         }
         renderOutboxReview({ focusControl: true });
       });
@@ -1526,7 +1540,8 @@ function openOutboxReview(): void {
   });
   document.body.appendChild(overlay);
   renderOutboxReview();
-  if (typeof setTimeout === "function") setTimeout(() => overlay.querySelector<HTMLElement>("[data-outbox-close]")?.focus(), 0);
+  if (typeof setTimeout === "function")
+    setTimeout(() => overlay.querySelector<HTMLElement>("[data-outbox-close]")?.focus(), 0);
   else overlay.querySelector<HTMLElement>("[data-outbox-close]")?.focus();
 }
 
@@ -1564,12 +1579,15 @@ function renderOutboxBar(): void {
   const label = attention ? "Needs attention" : outboxFlushing ? "Syncing" : "Waiting to sync";
   const displayCount = attention ? reviewCount : pending;
   const noun = attention ? "saved item" : "log";
-  bar.innerHTML = `<span class="outbox-dot" aria-hidden="true"></span><span class="outbox-txt">${label} · ${displayCount} ${noun}${displayCount === 1 ? "" : "s"}</span>`;
+  bar.innerHTML = `<span class="outbox-dot" aria-hidden="true"></span><span>${label} · ${displayCount} ${noun}${displayCount === 1 ? "" : "s"}</span>`;
   bar.classList.toggle("outbox-actionable", attention > 0);
   if (attention > 0) {
     bar.removeAttribute("role");
     bar.removeAttribute("disabled");
-    bar.setAttribute("aria-label", `${reviewCount} saved item${reviewCount === 1 ? "" : "s"} need attention. Review saved items.`);
+    bar.setAttribute(
+      "aria-label",
+      `${reviewCount} saved item${reviewCount === 1 ? "" : "s"} need attention. Review saved items.`
+    );
   } else {
     bar.setAttribute("role", "status");
     bar.setAttribute("disabled", "");
@@ -1618,14 +1636,17 @@ function samePrepareIntent(item: OutboxItem, dailySession: Record<string, unknow
   if (
     Object.prototype.hasOwnProperty.call(expected, "constraints") &&
     !sameNormalizedPrepareValue(expected.constraints, dailySession.constraints)
-  ) return false;
+  )
+    return false;
   if (Object.prototype.hasOwnProperty.call(expected, "provenance")) {
-    const expectedProvenance = expected.provenance && typeof expected.provenance === "object"
-      ? expected.provenance as Record<string, unknown>
-      : null;
-    const actualProvenance = dailySession.provenance && typeof dailySession.provenance === "object"
-      ? dailySession.provenance as Record<string, unknown>
-      : null;
+    const expectedProvenance =
+      expected.provenance && typeof expected.provenance === "object"
+        ? (expected.provenance as Record<string, unknown>)
+        : null;
+    const actualProvenance =
+      dailySession.provenance && typeof dailySession.provenance === "object"
+        ? (dailySession.provenance as Record<string, unknown>)
+        : null;
     if (!expectedProvenance || !actualProvenance) {
       if (!sameNormalizedPrepareValue(expectedProvenance, actualProvenance)) return false;
     } else {
@@ -1646,8 +1667,21 @@ function samePrepareIntent(item: OutboxItem, dailySession: Record<string, unknow
   const actualItems = Array.isArray(dailySession.items) ? dailySession.items : [];
   if (expectedItems.length !== actualItems.length) return false;
   const fields = [
-    "position", "kind", "exercise", "sets", "rep_low", "rep_high", "target_weight", "target_seconds",
-    "warmup_sets", "mode", "note", "target_distance_km", "target_duration_min", "target_zone", "interval",
+    "position",
+    "kind",
+    "exercise",
+    "sets",
+    "rep_low",
+    "rep_high",
+    "target_weight",
+    "target_seconds",
+    "warmup_sets",
+    "mode",
+    "note",
+    "target_distance_km",
+    "target_duration_min",
+    "target_zone",
+    "interval",
     "superset_group",
   ] as const;
   return expectedItems.every((expectedItem, index) => {
@@ -1666,13 +1700,13 @@ function samePrepareIntent(item: OutboxItem, dailySession: Record<string, unknow
 function canonicalPreparedReplay(item: OutboxItem, value: unknown): PreparedReplayTruth | null {
   if (item.kind !== "daily_session_prepare" || !value || typeof value !== "object") return null;
   const response = value as Record<string, unknown>;
-  const request = item.body && typeof item.body === "object" ? item.body as Record<string, unknown> : {};
-  const session = response.session && typeof response.session === "object"
-    ? response.session as Record<string, unknown>
-    : null;
-  const dailySession = response.daily_session && typeof response.daily_session === "object"
-    ? response.daily_session as Record<string, unknown>
-    : null;
+  const request = item.body && typeof item.body === "object" ? (item.body as Record<string, unknown>) : {};
+  const session =
+    response.session && typeof response.session === "object" ? (response.session as Record<string, unknown>) : null;
+  const dailySession =
+    response.daily_session && typeof response.daily_session === "object"
+      ? (response.daily_session as Record<string, unknown>)
+      : null;
   const date = String(request.date || "");
   if (response.ok !== true || !date || !session || !dailySession) return null;
   if (String(dailySession.date || "") !== date || (session.date != null && String(session.date) !== date)) return null;
@@ -1693,7 +1727,8 @@ function replayHasSemanticFailure(item: OutboxItem, value: unknown): boolean {
     response.error != null &&
     response.error !== "" &&
     response.error !== false
-  ) return true;
+  )
+    return true;
   return (item.kind === "skip" || item.kind === "restore") && response.ok !== true;
 }
 
@@ -1791,11 +1826,7 @@ async function flushOutbox(): Promise<void> {
         if (!settled || outcome === "pending") break;
         if (outcome === "delivered") sent++;
       }
-    } while (
-      outboxFlushAgain &&
-      box.count() > 0 &&
-      (typeof navigator === "undefined" || navigator.onLine !== false)
-    );
+    } while (outboxFlushAgain && box.count() > 0 && (typeof navigator === "undefined" || navigator.onLine !== false));
   } finally {
     outboxFlushing = false;
     outboxFlushAgain = false;
@@ -1822,9 +1853,11 @@ function outboxSessionPrerequisite(date: string): {
   reason?: "attention" | "other_tab" | "phantom";
 } {
   const normalizedDate = String(date || "");
-  const sharedPrepares = outbox().list().filter((item) => {
-    return item.kind === "daily_session_prepare" && item.session_date === normalizedDate;
-  });
+  const sharedPrepares = outbox()
+    .list()
+    .filter((item) => {
+      return item.kind === "daily_session_prepare" && item.session_date === normalizedDate;
+    });
   const pair = stagedCachePair(date);
   if (!pair) {
     if (sharedPrepares.length > 0) {
@@ -1878,10 +1911,7 @@ function firstPositiveOutboxIdentity(...values: unknown[]): string | null {
   return null;
 }
 
-function outboxSessionGroupId(
-  date: string,
-  identity: { dailySessionId?: unknown; sessionId?: unknown } = {},
-): string {
+function outboxSessionGroupId(date: string, identity: { dailySessionId?: unknown; sessionId?: unknown } = {}): string {
   const normalizedDate = String(date || "").trim();
   const queued = outbox().list();
   const queuedGroup = queued.find((item) => {
@@ -1894,9 +1924,10 @@ function outboxSessionGroupId(
   let cachedDaily: Record<string, unknown> | null = null;
   if (normalizedDate && typeof peekCached === "function") {
     cachedSession = peekCached<Record<string, unknown>>(`today:session:${normalizedDate}`)?.data || null;
-    cachedDaily = cachedSession?.daily_session && typeof cachedSession.daily_session === "object"
-      ? cachedSession.daily_session as Record<string, unknown>
-      : peekCached<Record<string, unknown>>(`today:daily-session:${normalizedDate}`)?.data || null;
+    cachedDaily =
+      cachedSession?.daily_session && typeof cachedSession.daily_session === "object"
+        ? (cachedSession.daily_session as Record<string, unknown>)
+        : peekCached<Record<string, unknown>>(`today:daily-session:${normalizedDate}`)?.data || null;
   }
   const stagedPair = normalizedDate ? stagedCachePair(normalizedDate) : null;
   if (stagedPair && queued.some((item) => item.id === stagedPair.prepareId)) {
@@ -1905,11 +1936,7 @@ function outboxSessionGroupId(
   // The server session is the canonical workout identity. A daily composition's
   // own id describes the prescription snapshot, not the workout receiving sets,
   // skips, and finish, so it is only a last-resort canonical fallback.
-  const sessionId = firstPositiveOutboxIdentity(
-    identity.sessionId,
-    cachedSession?.id,
-    cachedDaily?.session_id,
-  );
+  const sessionId = firstPositiveOutboxIdentity(identity.sessionId, cachedSession?.id, cachedDaily?.session_id);
   if (sessionId) return `session:${sessionId}`;
   const dailyId = firstPositiveOutboxIdentity(identity.dailySessionId, cachedDaily?.id);
   if (dailyId) return `daily:${dailyId}`;
@@ -1934,7 +1961,7 @@ function enqueueOutboxUnlocked(
   kind: string,
   path: string,
   body: unknown,
-  options: OutboxEnqueueRuntimeOptions = {},
+  options: OutboxEnqueueRuntimeOptions = {}
 ): OutboxItem | null {
   return outbox().enqueue({
     ...(options.itemId ? { id: options.itemId } : {}),
@@ -1958,7 +1985,7 @@ async function outboxEnqueue(
   kind: string,
   path: string,
   body: unknown,
-  options: OutboxEnqueueRuntimeOptions = {},
+  options: OutboxEnqueueRuntimeOptions = {}
 ): Promise<OutboxItem | null> {
   const item = await withOutboxRuntimeLock(() => enqueueOutboxUnlocked(kind, path, body, options));
   renderOutboxBar();
@@ -1989,7 +2016,7 @@ async function runSessionMutation(
     method?: "POST" | "DELETE";
     identity?: { dailySessionId?: unknown; sessionId?: unknown };
   },
-  send: (idempotencyKey: string) => Promise<unknown>,
+  send: (idempotencyKey: string) => Promise<unknown>
 ): Promise<OutboxSessionMutationResult> {
   const plan = await withOutboxRuntimeLock((): OutboxSessionMutationPlan => {
     const date = String(input.date || "");
@@ -1999,9 +2026,7 @@ async function runSessionMutation(
     // A lease-takeover tab therefore sees the in-flight workout member and can
     // only append behind it; a lost response never creates a detached fallback.
     const mutationId = box.allocateId();
-    const blocked = (
-      prerequisite: ReturnType<typeof outboxSessionPrerequisite>,
-    ): OutboxSessionMutationResult => ({
+    const blocked = (prerequisite: ReturnType<typeof outboxSessionPrerequisite>): OutboxSessionMutationResult => ({
       status: "blocked",
       reason: prerequisite.reason || "phantom",
       prerequisiteId: prerequisite.id,
@@ -2058,15 +2083,16 @@ async function runSessionMutation(
   } catch (error) {
     if (isTransientApiFailure(error)) {
       await withOutboxRuntimeLock(() => outbox().settle(item.id, item.claim_token, "pending"));
-      const queued = outbox().list().find((candidate) => candidate.id === item.id) || item;
+      const queued =
+        outbox()
+          .list()
+          .find((candidate) => candidate.id === item.id) || item;
       renderOutboxBar();
       void flushOutbox();
       return { status: "queued", item: queued, groupId };
     }
     const failureStatus = error instanceof CairnApiError && error.status != null ? error.status : undefined;
-    await withOutboxRuntimeLock(() =>
-      outbox().settle(item.id, item.claim_token, "attention", failureStatus)
-    );
+    await withOutboxRuntimeLock(() => outbox().settle(item.id, item.claim_token, "attention", failureStatus));
     renderOutboxBar();
     return { status: "failed", error, groupId };
   }

@@ -10,7 +10,12 @@ import { runChosenWithCoachReads } from "./runChosen.js";
 import { localDateISO } from "./repo/shared.js";
 import { isValidTimeZone } from "./tz.js";
 import { pickDayVariant } from "./repo/brain/day-read-rules.js";
-import { DAY_READ_POLICY_REASON_VARIANTS, RECOVERY_WEEK_SOFTEN_WHY } from "./repo/day-read.js";
+import {
+  dayReadHeadline,
+  dayReadPolicyReason,
+  RECOVERY_WEEK_SOFTEN_WHY,
+  violatesReadingGrammar,
+} from "./repo/day-read.js";
 
 // The PWA drives every request with its LOCAL calendar date (state.logDate), so
 // the cache key — and the nightly precompute — must use the server's local date
@@ -37,18 +42,6 @@ export function warmToday(now: Date = new Date()): string {
   return warmDate(repo.recordedClientTimeZone(), now);
 }
 
-function deterministicHeadline(r: { kind: string; focus?: string | null }): string {
-  return r.kind === "done"
-    ? "You're done for today."
-    : r.kind === "rest"
-      ? "Rest today."
-      : r.kind === "easy"
-        ? "Take it easy."
-        : r.focus
-          ? `${r.focus}.`
-          : "Good to train.";
-}
-
 function decisionAt(): string {
   return new Date().toISOString();
 }
@@ -63,9 +56,11 @@ function policyDecision(
   // Rotated the same way as every athlete-facing `why` (see DAY_READ_WHY_VARIANTS):
   // the Brief renders this reason whenever it's non-empty, and every server-policy
   // clamp that reaches this helper can fire on consecutive days, so an unrotated
-  // literal here repeats exactly like an unrotated `why` did.
-  const variants = DAY_READ_POLICY_REASON_VARIANTS[ruleCode];
-  const reason = variants?.length ? pickDayVariant(variants, date, ruleCode) : "";
+  // literal here repeats exactly like an unrotated `why` did. The lookup itself is
+  // shared with computeDayRead's agent branch (dayReadPolicyReason) — that branch had
+  // its own hand-written literal, which is how the fifth reason came to be the one the
+  // rotation missed.
+  const reason = dayReadPolicyReason(ruleCode, date);
   return {
     rule_code: ruleCode,
     basis: "server_policy",
@@ -161,7 +156,7 @@ export function enforceCompletionContract(out: any, baseline: any, date?: string
     const decision = policyDecision(baseline, "completion_fact_not_logged", resolvedDate);
     return {
       ...baseline,
-      headline: deterministicHeadline(baseline),
+      headline: dayReadHeadline(baseline, resolvedDate),
       source: "deterministic",
       agent: out.agent,
       tried: out.tried,
@@ -175,7 +170,7 @@ export function enforceCompletionContract(out: any, baseline: any, date?: string
     // recommendation. Older agents that still emit easy/train for the debrief
     // fall all the way back to the deterministic acknowledgement.
     if (out.kind !== "done") {
-      out.headline = deterministicHeadline(baseline);
+      out.headline = dayReadHeadline(baseline, resolvedDate);
       out.why = baseline.why;
       out.source = "deterministic";
       out.decision = policyDecision(baseline, "completion_fact_preserved", resolvedDate);
@@ -199,10 +194,11 @@ export function enforceDayReadSafetyPosture(out: any, baseline: any, hasOverride
   const baselineRank = rank[String(baseline?.kind ?? "")];
   const outRank = rank[String(out?.kind ?? "")];
   if (baselineRank == null || outRank == null || outRank <= baselineRank) return out;
-  const decision = policyDecision(baseline, "deterministic_safety_floor", date || localToday());
+  const resolvedDate = date || localToday();
+  const decision = policyDecision(baseline, "deterministic_safety_floor", resolvedDate);
   return {
     ...baseline,
-    headline: deterministicHeadline(baseline),
+    headline: dayReadHeadline(baseline, resolvedDate),
     source: "deterministic",
     agent: out.agent,
     tried: out.tried,
@@ -251,7 +247,7 @@ export function enforceRecoveryWeekCadence(out: any, baseline: any, hasOverride 
     );
     return {
       ...baseline,
-      headline: deterministicHeadline(baseline),
+      headline: dayReadHeadline(baseline, resolvedDate),
       source: "deterministic",
       agent: out.agent,
       tried: out.tried,
@@ -269,7 +265,12 @@ export function enforceRecoveryWeekCadence(out: any, baseline: any, hasOverride 
     return {
       ...baseline,
       kind: "easy",
-      headline: "Take it easy.",
+      // The headline rotates for the same reason the `why` below it does, and it is the
+      // MORE visible of the two — it was the only literal left on this branch after the
+      // `why` was fixed, one line above the comment explaining why a literal here is the
+      // worst place for one. dayReadHeadline is passed the CLAMPED kind, not the
+      // baseline's, so the sentence matches the day it now describes.
+      headline: dayReadHeadline({ kind: "easy", focus: null }, resolvedDate),
       focus: null,
       // Rotated the same way as every other rule (see DAY_READ_WHY_VARIANTS): this
       // clamp fires inside an APPLIED recovery week, so an unrotated literal here was
@@ -305,6 +306,17 @@ export function isValidDayReadAgentResult(
     (value.est_minutes == null || Number.isFinite(Number(value.est_minutes)))
   );
   if (!validShape) return false;
+  // The reading grammar (VISION.md Amendment 2) applies to the layer that can actually
+  // break it. The deterministic vocabulary has been held to these four rules for a
+  // while; the AGENT's sentence — the one the athlete reads on most mornings — was
+  // held to nothing, so `{headline:"Readiness 38/100 — rest.", why:"…you must not
+  // train today."}` validated and rendered verbatim as the Brief's headline and `why`.
+  // The prompt already forbids both, twice, so a violation is model non-compliance:
+  // rejecting here is exactly right, because acceptParsed retries and the fallback
+  // ladder can still land a compliant sentence (and the deterministic floor, which
+  // passes this predicate by construction, is the worst case).
+  if (violatesReadingGrammar(value.headline)) return false;
+  if (violatesReadingGrammar(value.why)) return false;
   if (dayReadProseConsistencyIssue(value, baseline?.signals)) return false;
   // Whether meaningful training is already DONE is a server-owned fact, not a
   // nuance the prose layer may reinterpret. Reject a mismatch before fallback
@@ -329,7 +341,12 @@ export async function computeDayRead(opts: { date?: string; override?: string; a
   const resolvedDate = date || localToday();
   let out: any;
   try {
-    const prompt = buildDayReadPrompt(undefined, { override, date });
+    // Thread the SAME baseline the clamps, the persisted `signals` and the
+    // `input_fingerprint` below are taken from, so the agent is never shown one
+    // state while the server acts on another. (Inside a request the shared
+    // signal-state memo already lines them up; the scheduler's warm runs outside
+    // any request scope, where only explicit threading can.)
+    const prompt = buildDayReadPrompt(undefined, { override, date, baseline });
     // Interactive (the Brief is on the morning-open path) → the short leash, which
     // the bounded-read loop treats as the TOTAL deadline across all query rounds, so
     // the timeout envelope is unchanged. An agent that just answers makes exactly one
@@ -353,7 +370,7 @@ export async function computeDayRead(opts: { date?: string; override?: string; a
         headline:
           typeof p.headline === "string" && p.headline.trim()
             ? p.headline.trim()
-            : deterministicHeadline({ kind: p.kind, focus: p.focus ?? null }),
+            : dayReadHeadline({ kind: p.kind, focus: p.focus ?? null }, resolvedDate),
         why: String(p.why).trim(),
         focus: p.focus == null ? null : String(p.focus).trim() || null,
         est_minutes: Number.isFinite(Number(p.est_minutes)) ? Number(p.est_minutes) : baseline.est_minutes,
@@ -369,7 +386,13 @@ export async function computeDayRead(opts: { date?: string; override?: string; a
           // does not already say. The ordinary case leaves the reason EMPTY rather
           // than narrating Cairn's internals at the athlete (the Brief renders a
           // reason only when there is a specific one).
-          reason: conservative ? "Your coach eased today back from the planned session." : "",
+          //
+          // It rotates through the SAME registered vocabulary as every server-policy
+          // clamp, via the same lookup. This was the one athlete-facing reason the
+          // rotation missed — a single literal, and `conservative` is true only on
+          // rest/easy days, which is exactly the shape the Brief renders — precisely
+          // because it was hand-written here instead of read from the map.
+          reason: conservative ? dayReadPolicyReason("agent_conservative_adjustment", resolvedDate) : "",
           evidence: Array.isArray(baseline.decision?.evidence) ? baseline.decision.evidence.slice(0, 5) : [],
           computed_at: computedAt,
         },
@@ -378,12 +401,18 @@ export async function computeDayRead(opts: { date?: string; override?: string; a
       };
     } else {
       // Agent unreachable / wrong shape → the deterministic floor (still a real read).
-      out = { ...baseline, headline: deterministicHeadline(baseline), source: "deterministic", agent: chosen, tried };
+      out = {
+        ...baseline,
+        headline: dayReadHeadline(baseline, resolvedDate),
+        source: "deterministic",
+        agent: chosen,
+        tried,
+      };
     }
   } catch (e: any) {
     out = {
       ...baseline,
-      headline: deterministicHeadline(baseline),
+      headline: dayReadHeadline(baseline, resolvedDate),
       source: "deterministic",
       error: e?.message,
       agent_issue: agentIssueFor(e),

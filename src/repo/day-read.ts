@@ -8,7 +8,7 @@
 import { createHash } from "node:crypto";
 import { db } from "../db.js";
 import { scheduleDayReadRefresh } from "../dayread-refresh.js";
-import { invalidateBrainSnapshot } from "../brain/snapshot.js";
+import { brainSignal, invalidateBrainSnapshot } from "../brain/snapshot.js";
 import {
   pickDayVariant,
   resolveDayReadRule,
@@ -17,10 +17,12 @@ import {
   type DayReadRuleOutcome,
 } from "./brain/day-read-rules.js";
 import { insertBrainDecision, transitionBrainDecision } from "./brain-decisions.js";
-import { getCheckinByDate, getRecoverySummary, latestSleep } from "./coach.js";
+import { getCheckinByDate, getRecoverySummary, latestSleep, trainingSignals } from "./coach.js";
 import { activeContextEffect } from "./context-effect.js";
 import { activitySportWhere, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
+import { estimateExpenditure } from "./expenditure.js";
 import { listContextEvents } from "./health.js";
+import { getRecentSessions } from "./sessions.js";
 import { getActiveBlock } from "./program-blocks.js";
 import { activeRecoveryWeekLedger, RECOVERY_WEEK_ACTIVE_DAYS } from "./recovery-week-ledger.js";
 import {
@@ -35,6 +37,7 @@ import { getProgramState } from "./program-state.js";
 import { programBalance } from "./progression.js";
 import { daysBetweenISO, localDateISO } from "./shared.js";
 import {
+  lifeCapacityIsCommitment,
   planningSignalState,
   signalVoice,
   spokenSignalVoice,
@@ -80,6 +83,52 @@ export interface DayReadDecision {
   reason: string;
   evidence: DayReadDecisionEvidence[];
   computed_at: string;
+}
+
+// ---------- the reading grammar, in ONE place ----------
+// VISION.md Amendment 2, as a predicate rather than a habit: plain language, no
+// device/clinical jargon, no score, and a suggestion rather than a gate.
+//
+// This used to exist in three unconnected forms — the prompt's prose instructions
+// (src/prompt/day.ts), the guards in test/dayRead.test.js over the deterministic
+// vocabulary, and NOTHING AT ALL over the agent's sentence. So the constitution was
+// enforced on the layer that cannot violate it and withheld from the layer that can,
+// and the agent's headline + `why` — what the athlete reads on most mornings — went
+// to the Brief unchecked. `{headline:"Readiness 38/100 — rest.", why:"…you must not
+// train today."}` validated and rendered verbatim.
+//
+// One definition now, held by BOTH registers: the vocabulary tests run the whole
+// deterministic set through it, and isValidDayReadAgentResult runs the agent's
+// headline and `why` through it. Deliberately the SAME four rules the deterministic
+// vocabulary already passes and no more — a stricter grammar here would start
+// rejecting good prose, and every registered phrasing is the proof set (the
+// zero-false-positive case in test/dayRead.test.js is what pins that).
+export const DAY_READ_GRAMMAR_RULES: ReadonlyArray<{ rule: string; pattern: RegExp }> = [
+  // Internals leaking as coaching.
+  {
+    rule: "engineering_prose",
+    pattern: /_|deterministic|posture|baseline|policy|fingerprint|directive|override|boundary/i,
+  },
+  // Clinical/device vocabulary that actually leaked once. Phrase-level, so a
+  // colloquial "nothing acute" in a legitimate phrasing is not caught.
+  { rule: "device_jargon", pattern: /\bacute warning\b|\breadiness signal\b/i },
+  // No scores, no grades, no metric wall. The word boundary sits INSIDE each branch:
+  // a single trailing `\b` after the group never fired for the "%" branch (a percent
+  // sign followed by a space is two non-word characters, so there is no boundary
+  // between them), which let "you scored 42% on recovery" through the one rule whose
+  // whole job is to catch it.
+  { rule: "score", pattern: /\b\d{1,3}\s*(?:\/\s*100\b|%|points?\b|scores?\b)/i },
+  // A suggestion, never a gate.
+  { rule: "gate", pattern: /\byou must\b|\bdo not train\b|\bforbidden\b/i },
+];
+
+// The name of the first rule `text` breaks, or null when it holds the line. Empty
+// text is vacuously fine — absence is the caller's contract to enforce, not this one's.
+export function violatesReadingGrammar(text: unknown): string | null {
+  const sentence = String(text ?? "");
+  if (!sentence.trim()) return null;
+  for (const { rule, pattern } of DAY_READ_GRAMMAR_RULES) if (pattern.test(sentence)) return rule;
+  return null;
 }
 
 // Every rule outcome the deterministic floor can report: the STABLE code that
@@ -262,11 +311,182 @@ const TRAIN_CAVEAT_LEAD: readonly string[] = [
   "You're clear to train",
   "The session's on",
 ];
-const RECOVERY_WEEK_TRAIN_WHY: ReadonlyArray<(focus: string) => string> = [
-  (focus) => `${focus} keeps the recovery-week rhythm — use the reduced prescription and leave the reps crisp.`,
-  (focus) => `${focus}, at this week's reduced dose — crisp reps, well shy of failure.`,
-  (focus) => `${focus} today, kept light on purpose. This week is about rhythm, not load.`,
+// The hold branch's own connective. It sits where TRAIN_CAVEAT_LEAD sits on the
+// sibling branch — after the brake's spoken sentence, before the caveat run — and
+// fires on exactly the same stable inputs, so it rotates on the same terms rather
+// than printing one literal every morning a dimension sits at watch.
+const TRAIN_HOLD_LEAD: readonly string[] = [
+  "Keep today's work conservative",
+  "Keep the session on the conservative side",
+  "Worth keeping today measured",
+  "Keep today's effort in check",
 ];
+
+// The two LEADS above, registered. They rotated from the start but belonged to
+// neither existing registry, so nothing held them to the constitution and a new
+// phrasing could skip it entirely: they are not a whole `why` (they carry no
+// terminal punctuation — a caveat run follows) and not a caveat fragment (they open
+// with a capital, because they open the sentence). Their own registry, keyed by the
+// same pickDayVariant rotation key the rule passes, with the shape rules that follow
+// from sitting at the FRONT of a composed sentence. Guards in test/dayRead.test.js.
+export const DAY_READ_LEAD_VARIANTS: Readonly<Record<string, readonly string[]>> = {
+  "planned_training:caveats": TRAIN_CAVEAT_LEAD,
+  "planned_training:hold_lead": TRAIN_HOLD_LEAD,
+};
+
+// The one idea each lead must carry, exactly as DAY_READ_CAVEAT_CONCEPT does for the
+// fragments: the green-light lead has to still read as a green light, and the hold
+// lead has to still ask for restraint.
+export const DAY_READ_LEAD_CONCEPT: Readonly<Record<string, RegExp>> = {
+  "planned_training:caveats": /\b(?:train|session|green light)\b/i,
+  "planned_training:hold_lead": /\b(?:conservative|measured|in check)\b/i,
+};
+
+// (A `RECOVERY_WEEK_TRAIN_WHY` set used to sit here as the third arm of the planned-
+// training `why` chain — `holdAggression ? … : caveats.length ? … : recoveryWeek ? … :
+// TRAIN_CLEAR_WHY`. It was DEAD: a recovery week always pushes RECOVERY_WEEK_CAVEAT, so
+// `caveats.length >= 1` whenever `recoveryWeek` is true and the arm could never be
+// reached. Hoisting the check above the caveat arm was the other way to revive it, but
+// that arm is the only one that can carry the day's OTHER caveats — an injury to work
+// around, a short-sleep stretch, a hold on aggression — so reviving it would have
+// traded live safety guidance for a phrasing nobody had ever read. It is retired
+// instead: a recovery-week train day speaks through the registered lead
+// (`planned_training:caveats`) plus the registered `planned_training:recovery_week`
+// caveat, which is what it has always actually printed.)
+
+// ---------- the planned-training caveats (the fragments after the dash) ----------
+// The planned-training rule is the one that fires on most mornings, and its `why` is
+// assembled rather than picked: a lead, then a run of lowercase FRAGMENTS joined with
+// "; and ", then a full stop. The leads rotated from the start; the fragments did not
+// — each was a single hardcoded string, so an athlete in a chronic-short-sleep stretch
+// or a recovery week read the identical clause every single morning, which is exactly
+// the failure this whole layer exists to remove.
+//
+// Every set below is therefore a variant set on the same terms as the `why` sets
+// above, with two extra shape rules that come from being spliced mid-sentence:
+// each phrasing starts LOWERCASE and carries NO terminal punctuation, so any
+// combination of them still reads as one grammatical sentence. Each set also gets
+// its OWN pickDayVariant rotation key, so two caveats firing on the same day rotate
+// independently instead of moving in lockstep. DAY_READ_CAVEAT_VARIANTS /
+// DAY_READ_CAVEAT_CONCEPT below register them for the constitution tests.
+const RECOVERY_WEEK_CAVEAT: readonly string[] = [
+  "this is the reduced recovery-week dose, so keep every set crisp and well shy of failure",
+  "the recovery week has this dialled down on purpose, so keep the reps crisp and nowhere near failure",
+  "you're inside a reduced week, so treat the prescription as a ceiling and leave a couple of reps in reserve",
+  "this is the lighter recovery-week dose, so it should still feel easy on the way out",
+];
+// Templated on the injury title, following the same renderer-array pattern as
+// RECOVERY_WEEK_TRAIN_WHY / QUIET_STREAK_WHY. The subject arrives already lowercased.
+const INJURY_CAVEAT: ReadonlyArray<(subject: string) => string> = [
+  (subject) => `you've got ${subject} to work around, so skip anything that aggravates it`,
+  (subject) => `${subject} is still there to work around, so steer clear of anything that aggravates it`,
+  (subject) => `keep ${subject} in mind and work around it, since nothing today is worth aggravating it for`,
+  (subject) => `there's ${subject} to work around today, so drop any movement that makes it speak up`,
+];
+// Session-reported joint pain, templated on the sore areas exactly as INJURY_CAVEAT is
+// templated on the injury title. It needs its own set because it reaches the read by a
+// different route and reads differently: an injury is a NAMED condition from a context
+// event ("a sore left knee"), joint pain is a bare list of areas from session feedback
+// ("left knee"), and the ask is a pain-free SUBSTITUTION rather than avoiding a known
+// aggravator. Every phrasing avoids a verb agreeing with the subject, because the areas
+// arrive joined ("left knee, right shoulder") and a singular verb reads wrong on one of
+// the two.
+const JOINT_PAIN_CAVEAT: ReadonlyArray<(subject: string) => string> = [
+  (subject) => `keep today pain-free around your ${subject} and swap out anything that aggravates it`,
+  (subject) => `there's recent soreness around your ${subject} to work around, so skip anything that provokes it`,
+  (subject) => `work around your ${subject} today and stop short of anything that nags`,
+  (subject) => `pick movements that keep your ${subject} comfortable rather than pushing through the soreness`,
+];
+const EASE_AROUND_CAVEAT: readonly string[] = [
+  "there's something to ease around right now, so keep the load conservative",
+  "something needs easing around at the moment, so keep the load on the conservative side",
+  "you've got something to ease around today, so hold the load where it stays comfortable",
+  "there's something worth easing around, so keep today's load modest",
+];
+const ANTICIPATE_DELOAD_CAVEAT: readonly string[] = [
+  "recovery's drifting below your norm, so a couple more hard days and you'll likely want a reset",
+  "your recovery's been sliding a little, so another hard day or two and a reset will probably be worth taking",
+  "recovery's running under where it usually sits, and a reset is probably only a few hard days away",
+  "recovery's been trending a touch low, so a lighter week may be closer than it looks",
+];
+const VOLUME_SPIKE_CAVEAT: readonly string[] = [
+  "your running's ramped this week, so keep today's miles easy and don't pile on hard intensity",
+  "the running's climbed this week, so keep today's miles gentle rather than stacking more intensity on top",
+  "you've put more running in than usual this week, so today's miles are better kept easy",
+  "there's been a jump in running this week, so let today's miles stay comfortable and save the intensity",
+];
+const LOW_SLEEP_CAVEAT: readonly string[] = [
+  "sleep's been running short lately, so keep the session controlled and stop a rep or two shy",
+  "your sleep's been on the short side, so keep the session controlled and leave a couple of reps in the tank",
+  "the nights have been short for a while now, so keep today measured and stop shy of failure",
+  "sleep hasn't been generous recently, so hold the session steady and finish a rep or two early",
+];
+// The pronoun in the first phrasing ("until that settles") points at the sentence
+// before it — the brake's own spoken voice, named by action.directives.training_source.
+// The middle two name the thing outright, so a short lead still leaves a caveat that
+// stands on its own.
+const HOLD_AGGRESSION_CAVEAT: readonly string[] = [
+  "hold off on adding load or volume until that settles",
+  "leave the load and the volume where they are for now rather than reaching for more",
+  "today isn't the day to add load or volume, so keep both where they were last time",
+  "hold the load and the volume steady until that eases off",
+];
+// `directives.schedule === "compress"` has TWO unrelated causes and only one of them
+// is about the clock, so it gets TWO caveats (see the split in the rule below). This
+// one speaks only for a real dated commitment, where the claim is true and the 60→40
+// clamp is earned.
+const COMMITMENT_PRESSURE_CAVEAT: readonly string[] = [
+  "a current dated commitment compresses today's training window, so keep the session focused",
+  "something on today's calendar squeezes the training window, so keep the session focused",
+  "you've got a commitment today that shortens the training window, so keep it tight",
+  "today's schedule leaves a narrower window than usual, so plan for a compact session",
+];
+// ...and this one for the other cause: `context.expect_worse_sleep`, a late night or a
+// stressful stretch. There is no commitment and nothing about the clock is squeezed —
+// what is thinner is RECOVERY. So it asks for less intensity at full length, never a
+// shorter day. Naming a commitment here was a false claim about the athlete's calendar.
+const LIFE_PRESSURE_CAVEAT: readonly string[] = [
+  "there's enough going on right now to thin out your recovery, so keep the intensity honest rather than the day short",
+  "a stretch like this usually costs you sleep, so hold the intensity where it is and take the session as it comes",
+  "what's on at the moment tends to eat into your recovery, so keep today's hardest sets a notch easier",
+  "this stretch is thinner on recovery than usual, so ease the intensity rather than the length",
+];
+
+// The caveat vocabulary, keyed by its own pickDayVariant rotation key (templated sets
+// rendered with a sample subject, exactly as DAY_READ_WHY_VARIANTS does). Separate from
+// DAY_READ_WHY_VARIANTS because these are FRAGMENTS: they start lowercase and end
+// without punctuation, so the sentence-shape guards on the `why` vocabulary would
+// (correctly) reject them. Their own guards live beside those, in test/dayRead.test.js.
+export const DAY_READ_CAVEAT_VARIANTS: Readonly<Record<string, readonly string[]>> = {
+  "planned_training:recovery_week": RECOVERY_WEEK_CAVEAT,
+  "planned_training:injury": INJURY_CAVEAT.map((render) => render("a sore left knee")),
+  "planned_training:ease_around": EASE_AROUND_CAVEAT,
+  "planned_training:anticipate_deload": ANTICIPATE_DELOAD_CAVEAT,
+  "planned_training:volume_spike": VOLUME_SPIKE_CAVEAT,
+  "planned_training:low_sleep": LOW_SLEEP_CAVEAT,
+  "planned_training:hold_aggression": HOLD_AGGRESSION_CAVEAT,
+  "planned_training:commitment_pressure": COMMITMENT_PRESSURE_CAVEAT,
+  "planned_training:life_pressure": LIFE_PRESSURE_CAVEAT,
+  "planned_training:joint_pain": JOINT_PAIN_CAVEAT.map((render) => render("left knee")),
+};
+
+// The one idea each caveat must carry whichever phrasing lands — the same drift guard
+// DAY_READ_REQUIRED_CONCEPT applies to the `why` vocabulary.
+export const DAY_READ_CAVEAT_CONCEPT: Readonly<Record<string, RegExp>> = {
+  "planned_training:recovery_week": /\b(?:recovery week|recovery-week|reduced|lighter)\b/i,
+  "planned_training:injury": /\bwork(?:ing)? around\b/i,
+  "planned_training:ease_around": /\beas(?:e|ing) around\b/i,
+  "planned_training:anticipate_deload": /\brecovery(?:'s)?\b/i,
+  "planned_training:volume_spike": /\b(?:running|miles)\b/i,
+  "planned_training:low_sleep": /\b(?:sleep|nights?)\b/i,
+  "planned_training:hold_aggression": /\b(?:load|volume)\b/i,
+  // The commitment caveat must stay about the CLOCK, and the life-pressure one about
+  // RECOVERY. Keeping the two concepts disjoint is what stops the false-commitment
+  // claim from creeping back in under a new phrasing.
+  "planned_training:commitment_pressure": /\b(?:window|commitment|calendar)\b/i,
+  "planned_training:life_pressure": /\b(?:recovery|sleep|thinner|stretch)\b/i,
+  "planned_training:joint_pain": /\b(?:work(?:ing)? around|pain-free|comfortable)\b/i,
+};
 
 // The rest→easy softening clamp in enforceRecoveryWeekCadence (src/dayread.ts) is a
 // server-policy override, not one of the rules above — but it fires inside an APPLIED
@@ -322,6 +542,20 @@ const RECOVERY_WEEK_SOFTEN_REASON: readonly string[] = [
   "The suggested rest eased to a lighter day instead, in line with how this reduced week already handles load.",
 ];
 
+// The agent's own conservative adjustment is the fifth athlete-facing `decision.reason`
+// and the only one the rotation missed. It is written in computeDayRead rather than by
+// a policyDecision() clamp — `basis` there is "agent", not "server_policy" — but it is
+// rendered by exactly the same Brief line (todayBriefDecisiveReason, on rest/easy days,
+// which is the only shape `conservative` can take), and it fires every day an agent
+// steps a planned session down. So it lives in the same map and rotates on the same
+// terms; only the reason LOOKUP is shared with policyDecision, never the basis.
+const AGENT_CONSERVATIVE_ADJUSTMENT_REASON: readonly string[] = [
+  "Your coach eased today back from the planned session.",
+  "Today came back a notch from what the plan had down.",
+  "Your coach dialled today down from the session that was scheduled.",
+  "The planned session got softened a little for today.",
+];
+
 // Keyed by rule_code (the SAME string dayread.ts passes as both the ledger code and
 // the pickDayVariant key), mirroring DAY_READ_WHY_VARIANTS so the two vocabularies —
 // the day's `why` and the server policy's `reason` — are tested the same way.
@@ -331,7 +565,76 @@ export const DAY_READ_POLICY_REASON_VARIANTS: Readonly<Record<string, readonly s
   deterministic_safety_floor: DETERMINISTIC_SAFETY_FLOOR_REASON,
   recovery_week_reduced_train_after_non_loading_day: RECOVERY_WEEK_REDUCED_TRAIN_REASON,
   recovery_week_rest_softened_to_easy_after_loading_day: RECOVERY_WEEK_SOFTEN_REASON,
+  agent_conservative_adjustment: AGENT_CONSERVATIVE_ADJUSTMENT_REASON,
 };
+
+// The ONE lookup for a rendered `decision.reason`. Every writer of that field goes
+// through here so the map cannot acquire a second, differently-rotated reader (it
+// already had one: the agent branch in computeDayRead hand-wrote its literal).
+// An unregistered code yields "" — the Brief renders a reason only when there is a
+// specific one, and narrating Cairn's internals is worse than saying nothing.
+export function dayReadPolicyReason(ruleCode: string, date: string): string {
+  const variants = DAY_READ_POLICY_REASON_VARIANTS[ruleCode];
+  return variants?.length ? pickDayVariant(variants, date, ruleCode) : "";
+}
+
+// ---------- the Brief's headline ----------
+// The most prominent string on the whole Brief (`<h2 class="brief-headline">`), and
+// the last one still printed as an unrotated literal — one fixed sentence per kind,
+// implemented THREE times (a `deterministicHeadline` in dayread.ts, a byte-identical
+// `dayReadHeadline` in the day-read use case, and a hardcoded "Take it easy." inside
+// the recovery-week softening clamp, directly above the `why` that was fixed for
+// exactly this reason). Everything beneath it rotated this round; it did not. On this
+// athlete's real history roughly half of mornings open on `rest`, so "Rest today." was
+// the sentence they read verbatim, indefinitely.
+//
+// One implementation now, rotated by calendar day like the rest of the vocabulary.
+// DATE-KEYED, never random: todayBriefMateriallyDiffers compares `headline` to decide
+// whether to repaint, and the clamp paths rewrite it on every call, so a
+// non-deterministic pick would repaint the Brief on every poll.
+export const DAY_READ_HEADLINE_VARIANTS: Readonly<Record<string, readonly string[]>> = {
+  done: ["You're done for today.", "Today's work is in.", "That's today's training done.", "Today's already covered."],
+  rest: ["Rest today.", "Today's a rest day.", "Today is for resting.", "A rest day today."],
+  easy: ["Take it easy.", "Keep today easy.", "An easy day today.", "Easy does it today."],
+  train: ["Good to train.", "Good day to train.", "You're clear to train.", "Today's a training day."],
+};
+
+// A train day that knows its focus makes the FOCUS the headline ("Lower body."), so
+// the rotation moves the frame around it instead of replacing it — the plain form
+// stays first, and every phrasing still names the focus.
+const TRAIN_FOCUS_HEADLINE: ReadonlyArray<(focus: string) => string> = [
+  (focus) => `${focus}.`,
+  (focus) => `${focus} today.`,
+  (focus) => `${focus} is on today.`,
+];
+
+// The one headline a read gets on a given day. Every writer of the field goes through
+// here (dayread.ts's clamps and agent fallback, and the use case's factual replace).
+export function dayReadHeadline(read: { kind?: unknown; focus?: unknown }, date: string): string {
+  const kind = String(read?.kind ?? "");
+  const focus = typeof read?.focus === "string" ? read.focus.trim() : "";
+  if (kind === "train" && focus) {
+    return pickDayVariant(TRAIN_FOCUS_HEADLINE, date, "headline:train_focus")(focus);
+  }
+  const variants = DAY_READ_HEADLINE_VARIANTS[kind] ?? DAY_READ_HEADLINE_VARIANTS.train;
+  return pickDayVariant(variants, date, `headline:${kind || "train"}`);
+}
+
+// The idea each headline must carry whichever phrasing lands, exactly as
+// DAY_READ_REQUIRED_CONCEPT does for the `why` vocabulary. (The focus form declares
+// none: its required content is the focus itself, which the guard asserts directly.)
+export const DAY_READ_HEADLINE_CONCEPT: Readonly<Record<string, RegExp>> = {
+  done: /\b(?:done|in|covered)\b/i,
+  rest: /\brest(?:ing)?\b/i,
+  easy: /\beasy\b/i,
+  train: /\btrain(?:ing)?\b/i,
+};
+
+// The focus form, rendered with a sample focus — registered so the shape and
+// constitution guards cover it alongside the fixed sets.
+export const DAY_READ_FOCUS_HEADLINE_VARIANTS: readonly string[] = TRAIN_FOCUS_HEADLINE.map((render) =>
+  render("Lower body")
+);
 
 // `applyContinuityVoice` asks for the ordinal of TODAY (`quiet_streak + 1`), and
 // `dayReadContinuity` walks `recentDayReads(date, 7)` — so the streak reaches 7 and
@@ -419,7 +722,11 @@ export const DAY_READ_WHY_VARIANTS: Readonly<Record<string, readonly string[]>> 
   chronic_sleep_watch: CHRONIC_SLEEP_WHY,
   unprogrammed_easy_day: UNPROGRAMMED_WHY,
   planned_training: TRAIN_CLEAR_WHY,
-  planned_reduced_training: RECOVERY_WEEK_TRAIN_WHY.map((render) => render("Lower body")),
+  // `planned_reduced_training` has no `why` set of its own on purpose: a recovery-week
+  // train day composes its sentence from the registered lead + the registered
+  // `planned_training:recovery_week` caveat (see the retired RECOVERY_WEEK_TRAIN_WHY
+  // note above), so its words are covered by DAY_READ_LEAD_VARIANTS and
+  // DAY_READ_CAVEAT_VARIANTS. Its ledger `reasons` still live on the outcome.
   quiet_streak: QUIET_STREAK_WHY.map((render) => render("third")),
   quiet_streak_guarded: QUIET_STREAK_GUARDED_WHY.map((render) => render("third")),
   // The floor this rule falls back to when the winning evidence carries no voice.
@@ -562,8 +869,9 @@ function applyContinuityVoice(
     (Array.isArray(signals?.logged_today?.activities) && signals.logged_today.activities.length > 0);
   if (movedToday) return read;
   if (continuity.quiet_streak >= 2) {
-    // A movement work-around (an active injury) is safety guidance that lives only in
-    // the `why` — keep it and let the escalation follow, rather than replacing it. And
+    // A movement work-around (any fresh health constraint — an injury, an illness, a
+    // painful joint) is safety guidance that lives only in the `why` — keep it and let
+    // the escalation follow, rather than replacing it. And
     // the escalation that follows it must not undo it: the general set offers the
     // smallest thing worth doing as time on your feet, which is precisely what the
     // caveat just warned against. The guarded set says the same thing without naming
@@ -783,10 +1091,27 @@ export function dayReadInputFingerprint(
     // `confidence` restate the same posture in different words as evidence lines
     // come and go (an HRV field arriving mid-day rewrites the sentence and lifts
     // confidence without changing what to do), which is churn, not a new decision.
+    //
+    // `directives` is therefore selected FIELD BY FIELD rather than spread whole, so
+    // that `directives.training_source` stays out. The source names WHICH dimension
+    // produced the directive — it selects the athlete-facing lead, but it is not
+    // itself a decision, and the inputs that MOVE it (recent_load, checkin, fatigue,
+    // logged_today, today_load) are already hashed above. So a genuine change of
+    // brake already moves this hash through its own cause; hashing the source on top
+    // adds no signal and discards a warm agentic read on the one case it uniquely
+    // catches — the same `hold_aggression` changing hands between two dimensions,
+    // which is not a new decision. A new directive field must be added here
+    // deliberately; that is the point of listing them.
     signal_action: signals.signal_state?.action
       ? {
           posture: signals.signal_state.action.posture ?? null,
-          directives: signals.signal_state.action.directives ?? null,
+          directives: signals.signal_state.action.directives
+            ? {
+                training: signals.signal_state.action.directives.training ?? null,
+                fueling: signals.signal_state.action.directives.fueling ?? null,
+                schedule: signals.signal_state.action.directives.schedule ?? null,
+              }
+            : null,
         }
       : null,
     underfueling: signals.underfueling
@@ -831,9 +1156,118 @@ function finalizeDeterministicRead(
   };
 }
 
+// ---------- the ONE planning signal state ----------
+// `planningSignalState` takes nine OPTIONAL inputs, and three of them carry
+// safety_override CONSTRAINTS the athlete-facing read must never be blind to:
+// joint pain and the low-performance flag arrive through `trainingSignals`, an
+// anticipated reset through `programState.mesocycle`. "Optional" means a caller
+// that omits them silently builds a WEAKER state — no error, no warning — which
+// is exactly how the Brief came to say "train" on a day getCoachContext was told
+// to protect (thin: posture=train/proceed; rich: posture=rest/recover, with
+// health_constraints and load_tolerance both constrained).
+//
+// So there is exactly ONE builder, it is always rich, and it is memoized per
+// (date, request) under the same brain-snapshot key getCoachContext already used.
+// Within one request the Brief's deterministic baseline, the prompt's baseline,
+// the server-policy clamps, the persisted `signals`/`input_fingerprint` and the
+// coach context therefore describe the SAME state — the rich/thin seam cannot
+// reopen. Outside a request scope (the scheduler's warm) `brainSignal` is a
+// pass-through, so callers that must agree thread the baseline explicitly
+// instead; see computeDayRead → buildDayReadPrompt.
+//
+// Every producer is probed INDIVIDUALLY behind try/catch: dayRead() is on the
+// morning-open path and must ALWAYS return, so a thrower degrades that one input
+// rather than failing the whole read. A caller may pass a value it already holds
+// (all of these are expensive); the memo makes the first caller in a request
+// authoritative, and every caller derives them from the same producers for the
+// same date, so which one lands first does not change the decision.
+export interface DayPlanningSignalInputs {
+  recovery?: any;
+  checkin?: any;
+  trainingSignals?: any;
+  programState?: any;
+  expenditure?: any;
+  underfueling?: any;
+  context?: any;
+  contextEvents?: any[];
+  completedToday?: boolean;
+}
+
+function signalInput<T>(compute: () => T, fallback: T): T {
+  try {
+    return compute();
+  } catch {
+    return fallback;
+  }
+}
+
+export function dayPlanningSignalState(date: string, provided: DayPlanningSignalInputs = {}): UnifiedSignalState {
+  return brainSignal(`signal_state:${date}`, () => {
+    // Recovery is NOT memoized under getCoachContext's `recovery:14` key: that key
+    // holds a summary built over an explicitly-passed Garmin window, and silently
+    // seeding it from here would let a differently-scoped fetch win the race.
+    const recovery = provided.recovery ?? signalInput(() => getRecoverySummary(14), null);
+    // The three keys below ARE getCoachContext's, and deliberately so — these are
+    // the expensive producers, and sharing the memo is what keeps one Brief request
+    // from building them twice no matter which consumer asks first.
+    const trainingSignalsView =
+      provided.trainingSignals ??
+      signalInput(
+        () =>
+          brainSignal("training_signals", () =>
+            trainingSignals(brainSignal("recent_sessions:20", () => getRecentSessions(20) as any[]))
+          ),
+        null
+      );
+    // Keyed to the date being READ, not to "now". getCoachContext only ever asks
+    // for today, so today keeps its bare `program_state` key and stays shared; a
+    // read of an earlier date gets that date's mesocycle instead of one measured
+    // from today (which would tell a day inside an applied recovery week that a
+    // reset was months overdue). getProgramState defaults to today for `undefined`,
+    // so passing the date through is equivalent for the common case.
+    const programState =
+      provided.programState ??
+      signalInput(
+        () =>
+          brainSignal(date === localDateISO() ? "program_state" : `program_state:${date}`, () =>
+            getProgramState(date, recovery)
+          ),
+        null
+      );
+    const expenditure =
+      provided.expenditure ?? signalInput(() => brainSignal("expenditure:21", () => estimateExpenditure(21)), null);
+    return planningSignalState({
+      date,
+      recovery,
+      checkin: provided.checkin ?? signalInput(() => getCheckinByDate(date), null),
+      trainingSignals: trainingSignalsView,
+      programState,
+      expenditure,
+      underfueling: provided.underfueling ?? signalInput(() => currentUnderfuelingRead(date), null),
+      context: provided.context ?? signalInput(() => activeContextEffect(date), null),
+      contextEvents: provided.contextEvents ?? signalInput(() => listContextEvents({ activeOnly: true }) as any[], []),
+      completedToday: provided.completedToday ?? false,
+    });
+  });
+}
+
 // Deterministic baseline (T1 layers the agentic sentence + buildDayReadPrompt on
 // top). Rules: rest if >=3 consecutive training days OR recovery clearly low;
 // else train the suggested plan day; else easy. Never throws on missing data.
+//
+// PARAMETER CONTRACT: every optional argument overrides exactly its OWN input and
+// nothing else. Supplying one never suppresses the others, and never narrows what
+// the read may look at — `dayRead` reads the training log, plan, activities,
+// check-ins, context events and fuel state straight from the DB regardless of what
+// any caller passes. So `dayRead(d, {has_data:false, recovery:{}})` says "this
+// athlete has no wearable recovery signal", NOT "read nothing else"; their logged
+// sessions are still real history the read is supposed to see. `recovery` exists
+// only to spare a caller that already holds the 14-day summary a redundant fetch.
+// `unifiedState` is the ONE parameter that scopes the whole signal state — pass it
+// to take full control; omit it and the state is built rich (see
+// dayPlanningSignalState). Anything else would be exactly the failure mode this
+// function was just fixed for: an optional argument silently changing what the
+// athlete-facing read is allowed to know.
 export function dayRead(
   date?: string,
   recovery?: any,
@@ -1165,10 +1599,13 @@ export function dayRead(
   } catch {
     /* fuel state is additive context only — never block the read */
   }
+  // The fallback builds the SAME rich state getCoachContext does — see
+  // dayPlanningSignalState. It used to pass only the handful of inputs already in
+  // scope here, which left the athlete-facing read blind to joint pain, the
+  // low-performance flag and a due deload while the coach prompt saw all three.
   const signalState =
     unifiedState ??
-    planningSignalState({
-      date: d,
+    dayPlanningSignalState(d, {
       recovery: rec,
       checkin,
       context: ctx,
@@ -1185,12 +1622,25 @@ export function dayRead(
   // and `applyContinuityVoice`, which branches on this signal, then SUBSTITUTED its
   // escalation for the read: an injured athlete on their third quiet day was told
   // ten easy minutes on their feet was plenty, with no guardrail at all.
-  const activeInjury =
-    signalState.dimensions.health_constraints.evidence.find(
-      (item) => item.field === "active_injury" && item.freshness !== "stale"
-    ) ?? null;
-  if (activeInjury) {
-    (signals as any).health_workaround = { field: "active_injury", reason: activeInjury.summary };
+  //
+  // The probe is on the DIMENSION, not one field name. It used to match
+  // `field === "active_injury"` alone, so an illness or any other health constraint —
+  // an equal safety_override, and the very thing driving the rest posture — never set
+  // this signal at all: the guarded continuity escalation below was withheld, and on
+  // the third quiet day of a head cold the Brief REPLACED the illness guidance with
+  // "a gentle walk today would do more for you than another full stop". Every
+  // constraint in this dimension is by definition something to work around, so the
+  // guard follows the dimension and the next field added there is covered on arrival.
+  // The item's own `field`/`voice` still ride along, so the sentence names the right
+  // thing; an injury keeps precedence when several are live because it is the most
+  // specific movement work-around.
+  const freshHealthConstraints = signalState.dimensions.health_constraints.evidence.filter(
+    (item) => item.direction === "constraint" && item.freshness !== "stale"
+  );
+  const healthWorkaround =
+    freshHealthConstraints.find((item) => item.field === "active_injury") ?? freshHealthConstraints[0] ?? null;
+  if (healthWorkaround) {
+    (signals as any).health_workaround = { field: healthWorkaround.field, reason: healthWorkaround.summary };
   }
   // Hybrid runner+lifter sequencing (one additive signal entry). Purely informational —
   // it NEVER changes the kind decision or adds an interruption; the agentic layer voices
@@ -1372,29 +1822,50 @@ export function dayRead(
         // Still a green-light to train (a suggestion, never a gate), but voice the soft
         // caveats so it's coach-level, not a blunt "go": fatigue quietly building toward
         // a reset, and/or running ramped this week (keep today's miles easy).
+        // Each caveat is a rotating variant set, never a literal (see the sets above):
+        // this rule fires on most mornings, so a fixed fragment reads as a stuck app.
         const caveats: string[] = [];
-        if (recoveryWeek)
-          caveats.push("this is the reduced recovery-week dose, so keep every set crisp and well shy of failure");
+        if (recoveryWeek) caveats.push(pickDayVariant(RECOVERY_WEEK_CAVEAT, d, "planned_training:recovery_week"));
         if (reduceItem)
           caveats.push(
             reduceItem.kind === "injury"
-              ? `you've got ${String(reduceItem.title || "an injury").toLowerCase()} to work around — train around it and skip anything that aggravates it`
-              : "there's something to ease around right now, so keep the load conservative"
+              ? pickDayVariant(
+                  INJURY_CAVEAT,
+                  d,
+                  "planned_training:injury"
+                )(String(reduceItem.title || "an injury").toLowerCase())
+              : pickDayVariant(EASE_AROUND_CAVEAT, d, "planned_training:ease_around")
           );
+        // A health constraint the CONTEXT path cannot see. `reduceItem` is derived from
+        // context EVENTS, so an injury, an illness or a dated constraint is already
+        // voiced just above — but joint pain arrives from session feedback
+        // (trainingSignals.autoregulation), and once the read learned to see it, it
+        // reached this rule having ALREADY changed the day (directives.training ==
+        // "modify", health_constraints constrained) with nothing to say about it. The
+        // athlete was handed a modified session under "Recovery looks fine and the
+        // session is due. Good day for it." — silent would have been bad; contradicting
+        // itself is worse. Keyed on the DIMENSION like the work-around probe, so the
+        // next constraint that arrives by a non-context route is covered on arrival;
+        // the evidence's own voice supplies the subject, and anything that carries
+        // none falls back to the generic ease-around fragment rather than inventing one.
+        if (!reduceItem && healthWorkaround) {
+          const sore = String(healthWorkaround.voice?.subject ?? "").trim();
+          caveats.push(
+            sore
+              ? pickDayVariant(JOINT_PAIN_CAVEAT, d, "planned_training:joint_pain")(sore)
+              : pickDayVariant(EASE_AROUND_CAVEAT, d, "planned_training:ease_around")
+          );
+        }
         if (sd.selection?.adapted && sd.selection?.reason) caveats.push(String(sd.selection.reason));
         if (anticipateDeload)
-          caveats.push(
-            "recovery's drifting below your norm, so a couple more hard days and you'll likely want a reset"
-          );
-        if (volumeSpike)
-          caveats.push("your running's ramped this week, so keep today's miles easy and don't pile on hard intensity");
+          caveats.push(pickDayVariant(ANTICIPATE_DELOAD_CAVEAT, d, "planned_training:anticipate_deload"));
+        if (volumeSpike) caveats.push(pickDayVariant(VOLUME_SPIKE_CAVEAT, d, "planned_training:volume_spike"));
         // A CHRONICALLY short sleeper is a caveat on the session, not a reason to
         // withhold it. This used to be its own rule ABOVE this one, so anyone whose
         // rolling average sat under six hours was never offered a due plan day at all
         // — permanent rest traded for permanent easy. The watch still gets voiced (and
         // the rule survives below, for a day with nothing programmed to soften).
-        if (lowSleep)
-          caveats.push("sleep's been running short lately, so keep the session controlled and stop a rep or two shy");
+        if (lowSleep) caveats.push(pickDayVariant(LOW_SLEEP_CAVEAT, d, "planned_training:low_sleep"));
         const holdAggression = signalState.action.directives.training === "hold_aggression";
         // Same rule as the protect read above: the athlete hears the athlete voice,
         // never the machine-facing summary. This is the second (and only other) path by
@@ -1402,13 +1873,40 @@ export function dayRead(
         // rather than sitting mid-sentence after the dash, because these are whole
         // sentences (several of them carry their own dash) and the caveat list is a
         // run of lowercase fragments.
-        const holdLead = holdAggression ? spokenSignalVoice(signalState.action.voice, d, "planned_training:hold") : "";
-        if (holdAggression) caveats.push("hold off on adding load or volume until that settles");
-        const compressSchedule =
+        //
+        // It leads with the BRAKE's voice, not the day's posture voice. `action.voice`
+        // speaks the posture, and a hold day is still readiness:"ready" / posture:"train"
+        // — whose evidence is the SUPPORT items — so voicing the hold through it printed
+        // "you slept fine" and then asked the athlete to hold, with "until that settles"
+        // pointing at nothing. `directives.training_source` names the dimension whose
+        // status actually produced the hold, and on a watch dimension its `voice` is the
+        // caution item's: the brake, in the athlete's register, with the pronoun in the
+        // caveat finally resolving to it.
+        const holdVoice = signalState.action.directives.training_source
+          ? signalState.dimensions[signalState.action.directives.training_source].voice
+          : signalState.action.voice;
+        const holdLead = holdAggression ? spokenSignalVoice(holdVoice, d, "planned_training:hold") : "";
+        if (holdAggression) caveats.push(pickDayVariant(HOLD_AGGRESSION_CAVEAT, d, "planned_training:hold_aggression"));
+        // `schedule: "compress"` has TWO unrelated causes and only one is about the
+        // clock. life_capacity reaches `watch` either from a real dated commitment
+        // (voice `commitment_pressure`) or from `context.expect_worse_sleep` — a late
+        // night or a stressful stretch (voice `schedule_pressure`), which is not a
+        // commitment at all. Both write the same `field`, so the winning evidence's
+        // VOICE is the only discriminator — shared with the conductor's compress card
+        // as lifeCapacityIsCommitment, because two copies of it drifted apart once
+        // already. Reading them as one printed "you've got a
+        // commitment today that shortens the training window" over a life_event titled
+        // "Brutal week at work" — a false claim about the athlete's calendar — and
+        // answered a RECOVERY signal by shortening the clock. Split: a commitment
+        // compresses the window; a thin stretch asks for less intensity at full length.
+        // Anything unrecognized falls to the life-pressure branch, which claims less
+        // and clamps nothing.
+        const schedulePressure =
           signalState.action.posture === "train" && signalState.action.directives.schedule === "compress";
-        if (compressSchedule) {
-          const scheduleReason = signalState.dimensions.life_capacity.reason;
-          caveats.push("a current dated commitment compresses today's training window, so keep the session focused");
+        const commitmentPressure = schedulePressure && lifeCapacityIsCommitment(signalState);
+        const scheduleReason = signalState.dimensions.life_capacity.reason;
+        if (commitmentPressure) {
+          caveats.push(pickDayVariant(COMMITMENT_PRESSURE_CAVEAT, d, "planned_training:commitment_pressure"));
           (signals as any).schedule = {
             directive: "compress",
             compressed: true,
@@ -1416,17 +1914,32 @@ export function dayRead(
             est_minutes: 40,
             reason: scheduleReason,
           };
+        } else if (schedulePressure) {
+          caveats.push(pickDayVariant(LIFE_PRESSURE_CAVEAT, d, "planned_training:life_pressure"));
+          // Recovery pressure is a reason to hold intensity, not to shorten the day —
+          // so the clock is left alone. The directive is still recorded so the machine
+          // surface stays honest about what the signal state said AND what the read
+          // chose to do with it.
+          (signals as any).schedule = {
+            directive: "compress",
+            compressed: false,
+            original_est_minutes: 60,
+            est_minutes: 60,
+            reason: scheduleReason,
+          };
         }
+        // A recovery week ALWAYS pushes its own caveat above, so the caveat arm is the
+        // one a reduced week takes — there is no separate recovery-week arm (the one
+        // that used to sit between these two was unreachable for exactly that reason;
+        // see the retired RECOVERY_WEEK_TRAIN_WHY note at the top of this file).
         const why = holdAggression
-          ? `${holdLead} Keep today's work conservative — ${caveats.join("; and ")}.`
+          ? `${holdLead} ${pickDayVariant(TRAIN_HOLD_LEAD, d, "planned_training:hold_lead")} — ${caveats.join("; and ")}.`
           : caveats.length
             ? `${pickDayVariant(TRAIN_CAVEAT_LEAD, d, "planned_training:caveats")} — ${caveats.join("; and ")}.`
-            : recoveryWeek
-              ? pickDayVariant(RECOVERY_WEEK_TRAIN_WHY, d, "planned_reduced_training")(sd.focus || "Training")
-              : pickDayVariant(TRAIN_CLEAR_WHY, d, "planned_training");
+            : pickDayVariant(TRAIN_CLEAR_WHY, d, "planned_training");
         return {
           outcome: recoveryWeek ? DAY_READ_OUTCOMES.planned_reduced_training : DAY_READ_OUTCOMES.planned_training,
-          read: { kind: "train", focus: sd.focus, why, est_minutes: compressSchedule ? 40 : 60, signals },
+          read: { kind: "train", focus: sd.focus, why, est_minutes: commitmentPressure ? 40 : 60, signals },
         };
       },
     },
@@ -1459,15 +1972,32 @@ export function dayRead(
     est_minutes: 20,
     signals,
   };
-  // The movement work-around closes EVERY protective read, whichever rule produced it
+  // The health work-around closes EVERY protective read, whichever rule produced it
   // — a short night, stacked load, a light walk already logged, or the bare floor. It
-  // used to be spoken by one rule only, so the athlete's injury guidance disappeared
+  // used to be spoken by one rule only, so the athlete's constraint guidance disappeared
   // the moment a different rule won the posture. A train day is excluded on purpose:
   // that read voices the same constraint in its own caveat list ("train around it and
   // skip anything that aggravates it"), and a `done` day is a fact about work already
   // finished, not a suggestion to work around.
+  //
+  // …unless the winning rule ALREADY spoke that same voice. Widening the probe from
+  // `active_injury` to every health constraint made that reachable: an illness both
+  // drives the protect posture AND is the winning evidence behind it, so the rule's
+  // own `why` IS the illness voice — and appending a second phrasing of it printed the
+  // same idea twice in one read. Membership is checked across the whole voice, not the
+  // one sentence today rolled, because the two paths rotate on different keys.
+  const workaroundVoice = healthWorkaround?.voice ?? {
+    key:
+      healthWorkaround?.field === "illness"
+        ? ("illness" as const)
+        : healthWorkaround?.field === "active_injury"
+          ? ("active_injury" as const)
+          : ("health_constraint" as const),
+  };
+  const workaroundAlreadySpoken =
+    !!healthWorkaround && signalVoice(workaroundVoice).some((variant) => resolvedRead.why.includes(variant));
   const base =
-    activeInjury && QUIET_KINDS.has(resolvedRead.kind)
+    healthWorkaround && QUIET_KINDS.has(resolvedRead.kind) && !workaroundAlreadySpoken
       ? {
           ...resolvedRead,
           // Named in the athlete's own register and rotated by day like everything
@@ -1477,9 +2007,7 @@ export function dayRead(
           // ("…around the active injury: Achilles tendinopathy: an active injury is
           // worth easing or working around."). endStopped stays: everything the
           // continuity voice adds lands AFTER this, so the sentence must close.
-          why: `${resolvedRead.why} ${endStopped(
-            spokenSignalVoice(activeInjury.voice ?? { key: "active_injury" }, d, SIGNAL_VOICE_KEYS.injury)
-          )}`,
+          why: `${resolvedRead.why} ${endStopped(spokenSignalVoice(workaroundVoice, d, SIGNAL_VOICE_KEYS.injury))}`,
         }
       : resolvedRead;
   // Cross-day memory: yesterday reached this same conclusion by this same route,
@@ -1868,6 +2396,16 @@ export function invalidateDayRead(date?: string): void {
   // acts when `d` covers today AND an agent is usable (see src/dayread-refresh.ts).
   afterSqliteCommit(() => {
     invalidateBrainSnapshot("day_read");
+    // The unified signal state is now memoized per (date, request), and a day-read
+    // invalidation means the training log just moved underneath it. Drop it and the
+    // training-log-derived producers it reads, so a recompute LATER IN THE SAME
+    // request sees the write rather than the pre-write snapshot. The two heaviest
+    // producers (recovery:14, expenditure:21) are deliberately left warm — neither
+    // a 14-day recovery window nor a 21-day TDEE moves on one logged set.
+    invalidateBrainSnapshot("signal_state");
+    invalidateBrainSnapshot("recent_sessions");
+    invalidateBrainSnapshot("training_signals");
+    invalidateBrainSnapshot("program_state");
     try {
       scheduleDayReadRefresh(d);
     } catch {}

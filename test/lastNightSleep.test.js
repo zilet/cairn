@@ -29,15 +29,15 @@ test("summarizes the most recent night from daily_metrics (Apple/Oura/Whoop)", (
 
 test("prefers Garmin architecture (deep/REM) and flags HRV vs the athlete's own norm", () => {
   // garmin_daily_metrics rows need a source_id (FK → garmin_sources).
-  const src = db
-    .prepare(`INSERT OR IGNORE INTO garmin_sources (provider, label) VALUES ('garmin', 'test')`)
-    .run();
+  const src = db.prepare(`INSERT OR IGNORE INTO garmin_sources (provider, label) VALUES ('garmin', 'test')`).run();
   const sid = Number(
     src.lastInsertRowid || db.prepare(`SELECT id FROM garmin_sources WHERE provider='garmin' AND label='test'`).get().id
   );
   // 30-day baseline HRV ~ 65 from prior nights.
   for (let i = 5; i <= 20; i++) {
-    db.prepare(`INSERT INTO garmin_daily_metrics (source_id, date, sleep_min, hrv_ms, resting_hr) VALUES (?, ?, 440, 65, 50)`).run(sid, isoDaysAgo(i));
+    db.prepare(
+      `INSERT INTO garmin_daily_metrics (source_id, date, sleep_min, hrv_ms, resting_hr) VALUES (?, ?, 440, 65, 50)`
+    ).run(sid, isoDaysAgo(i));
   }
   // Last night: HRV well below the norm, with architecture present.
   db.prepare(
@@ -61,4 +61,35 @@ test("dayRead signals carry last_night and the Brief prompt names it in plain wo
   const p = prompt.buildDayReadPrompt();
   assert.match(p, /LAST NIGHT:/);
   assert.match(p, /7h30m sleep/);
+});
+
+// The prompt guards BOTH sleep overclaims, and they are a matched pair: inventing
+// sleep the athlete never synced, and narrating ONE night as a run of them. The
+// second is the case where the deterministic trend flag and a "lately" sentence
+// disagree — four short nights can still sit under a >6h average with low_sleep
+// false — so the guardrail names the three fields that actually license a trend.
+test("a single short night is fenced off from being narrated as a pattern", () => {
+  // Four 290-min nights on top of ten normal ones: the average stays over 6h.
+  for (let n = 1; n <= 4; n++) repo.recordDailyMetrics("apple", isoDaysAgo(n), { sleep_min: 290, hrv_ms: 52 });
+  for (let n = 5; n <= 14; n++) repo.recordDailyMetrics("apple", isoDaysAgo(n), { sleep_min: 430, hrv_ms: 60 });
+
+  const r = repo.dayRead();
+  // The exact contradiction the guardrail exists for, and the three field paths
+  // it names — pinned here so a signals-shape change cannot silently orphan them.
+  assert.equal(r.signals.low_sleep, false, "the multi-night flag is NOT set");
+  assert.ok(r.signals.avg_sleep_min > 360, "because the average is still over 6h");
+  assert.equal(r.signals.last_night.total_min, 290, "while last night really was short");
+  assert.equal(typeof r.signals.fatigue.sleep_vs_norm, "number");
+
+  const p = prompt.buildDayReadPrompt();
+  assert.match(p, /ONE NIGHT IS NOT A TREND/);
+  assert.match(p, /`low_sleep`/);
+  assert.match(p, /`avg_sleep_min`/);
+  assert.match(p, /`fatigue\.sleep_vs_norm`/);
+});
+
+test("the one-night guardrail is absent when there is no night to overclaim about", () => {
+  const p = prompt.buildDayReadPrompt();
+  assert.match(p, /no recent sleep or HRV data has synced/, "the absent-data branch speaks instead");
+  assert.ok(!/ONE NIGHT IS NOT A TREND/.test(p), "and its pair stays silent — there is no night to misread");
 });

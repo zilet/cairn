@@ -12,7 +12,7 @@ function classList() {
   return {
     add: (name) => classes.add(name),
     remove: (name) => classes.delete(name),
-    toggle: (name, on) => on ? classes.add(name) : classes.delete(name),
+    toggle: (name, on) => (on ? classes.add(name) : classes.delete(name)),
     contains: (name) => classes.has(name),
   };
 }
@@ -131,7 +131,16 @@ function loadApiClient({ withTimers = false, sharedStorage = null, locks = null 
   // !== "undefined") { ... setTimeout(() => flushOutbox(), 0) }` block) — drop
   // it so `timers` only reflects what the test itself triggers via api().
   if (withTimers) timers.length = 0;
-  return { context, storage, calls, body, listeners, timers, getOfflineBar: () => offlineBar, getOutboxBar: () => outboxBar };
+  return {
+    context,
+    storage,
+    calls,
+    body,
+    listeners,
+    timers,
+    getOfflineBar: () => offlineBar,
+    getOutboxBar: () => outboxBar,
+  };
 }
 
 test("api client appends auth tokens to direct resource URLs", () => {
@@ -164,12 +173,10 @@ test("api client surfaces and clears the offline hairline", async () => {
   };
 
   await assert.rejects(loaded.context.api("/health"), /Could not reach Cairn/);
-  assert.equal(loaded.body.classList.contains("is-offline"), true);
   assert.equal(loaded.getOfflineBar().classList.contains("show"), true);
 
   loaded.context.fetch = async () => ({ status: 200, json: async () => ({ ok: true }) });
   await loaded.context.api("/health");
-  assert.equal(loaded.body.classList.contains("is-offline"), false);
   assert.equal(loaded.getOfflineBar().classList.contains("show"), false);
 });
 
@@ -354,7 +361,7 @@ test("api() timing out aborts the fetch and reads exactly like a network drop (o
 
   await assert.rejects(pending, /timed out/i);
   assert.equal(
-    loaded.body.classList.contains("is-offline"),
+    loaded.getOfflineBar().classList.contains("show"),
     true,
     "a timeout surfaces the calm offline hairline, same as any other network drop"
   );
@@ -393,7 +400,7 @@ test("api() classifies reachable HTTP failures without marking Cairn offline", a
     assert.equal(error.requestId, "req-503");
     return true;
   });
-  assert.equal(loaded.body.classList.contains("is-offline"), false);
+  assert.equal(!!loaded.getOfflineBar()?.classList.contains("show"), false);
 });
 
 test("api() can opt into a bounded non-2xx readiness body", async () => {
@@ -434,7 +441,7 @@ test("api() classifies invalid successful JSON and does not cache it", async () 
   });
   await assert.rejects(loaded.context.api("/settings"));
   assert.equal(calls, 2, "an invalid response never enters the successful GET cache");
-  assert.equal(loaded.body.classList.contains("is-offline"), false);
+  assert.equal(!!loaded.getOfflineBar()?.classList.contains("show"), false);
 });
 
 test("api() preserves designed HTTP-200 ok:false outcomes", async () => {
@@ -445,7 +452,7 @@ test("api() preserves designed HTTP-200 ok:false outcomes", async () => {
     json: async () => ({ ok: false, error: "try another agent" }),
   });
   assert.deepEqual(await loaded.context.api("/session-suggest"), { ok: false, error: "try another agent" });
-  assert.equal(loaded.body.classList.contains("is-offline"), false);
+  assert.equal(!!loaded.getOfflineBar()?.classList.contains("show"), false);
 });
 
 test("api() reports bounded failure metadata without query or payload content", async () => {
@@ -491,7 +498,7 @@ test("runtime outbox replays restore mutations with DELETE and a stable idempote
     "restore",
     "/sessions/skip",
     { date: "2026-06-30", exercise: "Squat" },
-    { method: "DELETE" },
+    { method: "DELETE" }
   );
 
   await loaded.context.flushOutbox();
@@ -512,26 +519,43 @@ test("canonical workout mutations share the server session group and retry in FI
     }
     return null;
   };
-  const first = await loaded.context.runSessionMutation({
-    date,
-    kind: "set",
-    path: "/sets",
-    body: { date, exercise: "Bench", n: 1 },
-  }, async () => { throw new Error("offline"); });
+  const first = await loaded.context.runSessionMutation(
+    {
+      date,
+      kind: "set",
+      path: "/sets",
+      body: { date, exercise: "Bench", n: 1 },
+    },
+    async () => {
+      throw new Error("offline");
+    }
+  );
   let bypassed = 0;
-  const second = await loaded.context.runSessionMutation({
-    date,
-    kind: "set",
-    path: "/sets",
-    body: { date, exercise: "Bench", n: 2 },
-  }, async () => { bypassed++; return { id: 2 }; });
-  const finish = await loaded.context.runSessionMutation({
-    date,
-    kind: "finish",
-    path: "/sessions/44/finish",
-    body: { notes: "done" },
-    identity: { sessionId: 44 },
-  }, async () => { bypassed++; return { id: 44 }; });
+  const second = await loaded.context.runSessionMutation(
+    {
+      date,
+      kind: "set",
+      path: "/sets",
+      body: { date, exercise: "Bench", n: 2 },
+    },
+    async () => {
+      bypassed++;
+      return { id: 2 };
+    }
+  );
+  const finish = await loaded.context.runSessionMutation(
+    {
+      date,
+      kind: "finish",
+      path: "/sessions/44/finish",
+      body: { notes: "done" },
+      identity: { sessionId: 44 },
+    },
+    async () => {
+      bypassed++;
+      return { id: 44 };
+    }
+  );
   await loaded.context.outboxEnqueue("weight", "/bodyweight", { weight_lb: 180 });
 
   assert.equal(first.status, "queued");
@@ -539,8 +563,14 @@ test("canonical workout mutations share the server session group and retry in FI
   assert.equal(finish.status, "queued");
   assert.equal(bypassed, 0, "later same-group calls never bypass the durable queue");
   assert.deepEqual(
-    JSON.parse(JSON.stringify(loaded.context.CairnOutbox.list().slice(0, 3).map((item) => item.group_id))),
-    ["session:44", "session:44", "session:44"],
+    JSON.parse(
+      JSON.stringify(
+        loaded.context.CairnOutbox.list()
+          .slice(0, 3)
+          .map((item) => item.group_id)
+      )
+    ),
+    ["session:44", "session:44", "session:44"]
   );
 
   let firstSetAttempts = 0;
@@ -556,34 +586,36 @@ test("canonical workout mutations share the server session group and retry in FI
 
   await loaded.context.flushOutbox();
 
-  assert.deepEqual(loaded.calls.map((call) => call.url), ["/api/sets", "/api/bodyweight"]);
+  assert.deepEqual(
+    loaded.calls.map((call) => call.url),
+    ["/api/sets", "/api/bodyweight"]
+  );
   assert.deepEqual(
     JSON.parse(JSON.stringify(loaded.context.CairnOutbox.reviewItems().map(({ item, role }) => [item.kind, role]))),
-    [["set", "attention"], ["set", "blocked_dependent"], ["finish", "blocked_dependent"]],
+    [
+      ["set", "attention"],
+      ["set", "blocked_dependent"],
+      ["finish", "blocked_dependent"],
+    ]
   );
 
   await loaded.context.CairnOutbox.retry(first.item.id);
 
-  assert.deepEqual(loaded.calls.map((call) => call.url), [
-    "/api/sets",
-    "/api/bodyweight",
-    "/api/sets",
-    "/api/sets",
-    "/api/sessions/44/finish",
-  ]);
+  assert.deepEqual(
+    loaded.calls.map((call) => call.url),
+    ["/api/sets", "/api/bodyweight", "/api/sets", "/api/sets", "/api/sessions/44/finish"]
+  );
   assert.equal(loaded.context.CairnOutbox.count(), 0);
 });
 
 test("session and daily-composition caches resolve the same canonical workout group across tabs", () => {
   const date = "2026-06-30";
   const sessionTab = loadApiClient();
-  sessionTab.context.peekCached = (key) => key === `today:session:${date}`
-    ? { data: { id: 44, date }, fresh: false }
-    : null;
+  sessionTab.context.peekCached = (key) =>
+    key === `today:session:${date}` ? { data: { id: 44, date }, fresh: false } : null;
   const compositionTab = loadApiClient();
-  compositionTab.context.peekCached = (key) => key === `today:daily-session:${date}`
-    ? { data: { id: 81, session_id: 44, date }, fresh: true }
-    : null;
+  compositionTab.context.peekCached = (key) =>
+    key === `today:daily-session:${date}` ? { data: { id: 81, session_id: 44, date }, fresh: true } : null;
 
   assert.equal(sessionTab.context.outboxSessionGroupId(date), "session:44");
   assert.equal(compositionTab.context.outboxSessionGroupId(date), "session:44");
@@ -600,20 +632,28 @@ test("every central workout fallback persists its date and canonical group outsi
     { kind: "finish", path: "/sessions/44/finish", body: { notes: "done" } },
   ];
   for (const mutation of mutations) {
-    await loaded.context.runSessionMutation({
-      date,
-      ...mutation,
-      identity: { sessionId: 44 },
-    }, async () => { throw new Error("offline"); });
+    await loaded.context.runSessionMutation(
+      {
+        date,
+        ...mutation,
+        identity: { sessionId: 44 },
+      },
+      async () => {
+        throw new Error("offline");
+      }
+    );
   }
 
   const stored = loaded.context.CairnOutbox.list();
-  assert.deepEqual(
-    JSON.parse(JSON.stringify(stored.map((item) => item.kind))),
-    ["set", "skip", "restore", "finish"],
+  assert.deepEqual(JSON.parse(JSON.stringify(stored.map((item) => item.kind))), ["set", "skip", "restore", "finish"]);
+  assert.equal(
+    stored.every((item) => item.session_date === date),
+    true
   );
-  assert.equal(stored.every((item) => item.session_date === date), true);
-  assert.equal(stored.every((item) => item.group_id === "session:44"), true);
+  assert.equal(
+    stored.every((item) => item.group_id === "session:44"),
+    true
+  );
   assert.equal(stored.find((item) => item.kind === "restore").method, "DELETE");
 });
 
@@ -625,7 +665,7 @@ test("a staged cache pair uses its local prepare identity until reconciliation",
     "daily_session_prepare",
     "/daily-session/prepare",
     { date, source: "adaptive_plan", replace: false },
-    { prepareIntent: { date, source: "adaptive_plan", items: [] } },
+    { prepareIntent: { date, source: "adaptive_plan", items: [] } }
   );
   const daily = {
     date,
@@ -639,15 +679,21 @@ test("a staged cache pair uses its local prepare identity until reconciliation",
     _staged_offline: true,
     _local_prepare_id: prepare.id,
   };
-  loaded.context.peekCached = (key) => key === `today:session:${date}` ? { data: session, fresh: true } : null;
+  loaded.context.peekCached = (key) => (key === `today:session:${date}` ? { data: session, fresh: true } : null);
   let directCalls = 0;
 
-  const set = await loaded.context.runSessionMutation({
-    date,
-    kind: "set",
-    path: "/sets",
-    body: { date, exercise: "Bench", reps: 5 },
-  }, async () => { directCalls++; return { id: 1 }; });
+  const set = await loaded.context.runSessionMutation(
+    {
+      date,
+      kind: "set",
+      path: "/sets",
+      body: { date, exercise: "Bench", reps: 5 },
+    },
+    async () => {
+      directCalls++;
+      return { id: 1 };
+    }
+  );
 
   assert.equal(set.status, "queued");
   assert.equal(set.groupId, `prepare:${prepare.id}`);
@@ -673,17 +719,20 @@ test("a response lost after finish commit replays the exact key and emits one re
   };
   let directKey = "";
 
-  const result = await loaded.context.runSessionMutation({
-    date,
-    kind: "finish",
-    path: "/sessions/44/finish",
-    body: { notes: "response was lost" },
-    identity: { sessionId: 44 },
-  }, async (idempotencyKey) => {
-    directKey = idempotencyKey;
-    finishHandler(idempotencyKey);
-    throw new Error("response lost after commit");
-  });
+  const result = await loaded.context.runSessionMutation(
+    {
+      date,
+      kind: "finish",
+      path: "/sessions/44/finish",
+      body: { notes: "response was lost" },
+      identity: { sessionId: 44 },
+    },
+    async (idempotencyKey) => {
+      directKey = idempotencyKey;
+      finishHandler(idempotencyKey);
+      throw new Error("response lost after commit");
+    }
+  );
 
   assert.equal(result.status, "queued");
   assert.equal(result.item.id, directKey, "fallback preserves the pre-send mutation identity");
@@ -709,16 +758,24 @@ test("a response lost after finish commit replays the exact key and emits one re
 
 test("write-ahead persistence failure prevents the direct workout request", async () => {
   const loaded = loadApiClient();
-  loaded.context.localStorage.setItem = () => { throw new Error("quota exceeded"); };
+  loaded.context.localStorage.setItem = () => {
+    throw new Error("quota exceeded");
+  };
   let directCalls = 0;
 
-  const result = await loaded.context.runSessionMutation({
-    date: "2026-06-30",
-    kind: "set",
-    path: "/sets",
-    body: { date: "2026-06-30", exercise: "Bench", reps: 5 },
-    identity: { sessionId: 44 },
-  }, async () => { directCalls++; return { id: 1 }; });
+  const result = await loaded.context.runSessionMutation(
+    {
+      date: "2026-06-30",
+      kind: "set",
+      path: "/sets",
+      body: { date: "2026-06-30", exercise: "Bench", reps: 5 },
+      identity: { sessionId: 44 },
+    },
+    async () => {
+      directCalls++;
+      return { id: 1 };
+    }
+  );
 
   assert.equal(result.status, "storage_error");
   assert.equal(directCalls, 0, "nothing reaches the server before the WAL is durable");
@@ -730,16 +787,19 @@ test("a normal direct success observes its WAL and removes only that exact item"
   const date = "2026-06-30";
   let observed = null;
 
-  const result = await loaded.context.runSessionMutation({
-    date,
-    kind: "set",
-    path: "/sets",
-    body: { date, exercise: "Bench", reps: 5 },
-    identity: { sessionId: 44 },
-  }, async (idempotencyKey) => {
-    observed = loaded.context.CairnOutbox.list().find((item) => item.id === idempotencyKey);
-    return { id: 101, session_id: 44, date, exercise: "Bench", reps: 5 };
-  });
+  const result = await loaded.context.runSessionMutation(
+    {
+      date,
+      kind: "set",
+      path: "/sets",
+      body: { date, exercise: "Bench", reps: 5 },
+      identity: { sessionId: 44 },
+    },
+    async (idempotencyKey) => {
+      observed = loaded.context.CairnOutbox.list().find((item) => item.id === idempotencyKey);
+      return { id: 101, session_id: 44, date, exercise: "Bench", reps: 5 };
+    }
+  );
 
   assert.equal(result.status, "sent");
   assert.equal(observed.id.length > 0, true, "the complete row exists before the send callback runs");
@@ -754,19 +814,22 @@ test("direct semantic rejection stays durable and reviewable without mutating th
   const loaded = loadApiClient();
   const date = "2026-06-30";
 
-  const result = await loaded.context.runSessionMutation({
-    date,
-    kind: "skip",
-    path: "/sessions/skip",
-    body: { date, exercise: "Squat" },
-    identity: { sessionId: 44 },
-  }, async () => ({ ok: false, error: "finish the active set first" }));
+  const result = await loaded.context.runSessionMutation(
+    {
+      date,
+      kind: "skip",
+      path: "/sessions/skip",
+      body: { date, exercise: "Squat" },
+      identity: { sessionId: 44 },
+    },
+    async () => ({ ok: false, error: "finish the active set first" })
+  );
 
   assert.equal(result.status, "sent", "the caller still receives and renders the precise response error");
   assert.equal(result.value.ok, false);
   assert.deepEqual(
     JSON.parse(JSON.stringify(loaded.context.CairnOutbox.reviewItems().map(({ item, role }) => [item.kind, role]))),
-    [["skip", "attention"]],
+    [["skip", "attention"]]
   );
   assert.equal(loaded.context.CairnOutbox.list()[0].claim_token, undefined);
 });
@@ -780,17 +843,21 @@ test("direct permanent failure marks the write-ahead row for attention", async (
     json: async () => ({ error: "conflict" }),
   });
 
-  const result = await loaded.context.runSessionMutation({
-    date,
-    kind: "finish",
-    path: "/sessions/44/finish",
-    body: { notes: "done" },
-    identity: { sessionId: 44 },
-  }, (idempotencyKey) => loaded.context.api("/sessions/44/finish", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Idempotency-Key": idempotencyKey },
-    body: JSON.stringify({ notes: "done" }),
-  }));
+  const result = await loaded.context.runSessionMutation(
+    {
+      date,
+      kind: "finish",
+      path: "/sessions/44/finish",
+      body: { notes: "done" },
+      identity: { sessionId: 44 },
+    },
+    (idempotencyKey) =>
+      loaded.context.api("/sessions/44/finish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Idempotency-Key": idempotencyKey },
+        body: JSON.stringify({ notes: "done" }),
+      })
+  );
 
   assert.equal(result.status, "failed");
   const attention = loaded.context.CairnOutbox.list()[0];
@@ -804,15 +871,19 @@ test("a failed finish blocks a later set resolved from the same canonical sessio
   const loaded = loadApiClient();
   const date = "2026-06-30";
   loaded.context.navigator.onLine = false;
-  loaded.context.peekCached = (key) => key === `today:daily-session:${date}`
-    ? { data: { id: 81, session_id: 44, date }, fresh: true }
-    : null;
-  const finish = await loaded.context.runSessionMutation({
-    date,
-    kind: "finish",
-    path: "/sessions/44/finish",
-    body: { notes: "done" },
-  }, async () => { throw new Error("offline"); });
+  loaded.context.peekCached = (key) =>
+    key === `today:daily-session:${date}` ? { data: { id: 81, session_id: 44, date }, fresh: true } : null;
+  const finish = await loaded.context.runSessionMutation(
+    {
+      date,
+      kind: "finish",
+      path: "/sessions/44/finish",
+      body: { notes: "done" },
+    },
+    async () => {
+      throw new Error("offline");
+    }
+  );
   loaded.context.fetch = async (url, init) => {
     loaded.calls.push({ url, init });
     return { status: 400, headers: { get: () => null }, json: async () => ({ error: "not ready" }) };
@@ -821,13 +892,19 @@ test("a failed finish blocks a later set resolved from the same canonical sessio
   await loaded.context.flushOutbox();
 
   let directSets = 0;
-  const set = await loaded.context.runSessionMutation({
-    date,
-    kind: "set",
-    path: "/sets",
-    body: { date, exercise: "Bench", reps: 5 },
-    identity: { sessionId: 44 },
-  }, async () => { directSets++; return { id: 1 }; });
+  const set = await loaded.context.runSessionMutation(
+    {
+      date,
+      kind: "set",
+      path: "/sets",
+      body: { date, exercise: "Bench", reps: 5 },
+      identity: { sessionId: 44 },
+    },
+    async () => {
+      directSets++;
+      return { id: 1 };
+    }
+  );
 
   assert.equal(finish.groupId, "session:44");
   assert.equal(set.status, "queued");
@@ -835,7 +912,10 @@ test("a failed finish blocks a later set resolved from the same canonical sessio
   assert.equal(directSets, 0);
   assert.deepEqual(
     JSON.parse(JSON.stringify(loaded.context.CairnOutbox.reviewItems().map(({ item, role }) => [item.kind, role]))),
-    [["finish", "attention"], ["set", "blocked_dependent"]],
+    [
+      ["finish", "attention"],
+      ["set", "blocked_dependent"],
+    ]
   );
 });
 
@@ -843,49 +923,49 @@ test("a staged date-fallback group remains stable after canonical identity arriv
   const loaded = loadApiClient();
   const date = "2026-06-30";
   loaded.context.navigator.onLine = false;
-  const staged = await loaded.context.runSessionMutation({
-    date,
-    kind: "set",
-    path: "/sets",
-    body: { date, exercise: "Bench", n: 1 },
-  }, async () => { throw new Error("offline"); });
-  loaded.context.peekCached = (key) => key === `today:session:${date}`
-    ? { data: { id: 44, date, daily_session: { id: 81, date } }, fresh: true }
-    : null;
+  const staged = await loaded.context.runSessionMutation(
+    {
+      date,
+      kind: "set",
+      path: "/sets",
+      body: { date, exercise: "Bench", n: 1 },
+    },
+    async () => {
+      throw new Error("offline");
+    }
+  );
+  loaded.context.peekCached = (key) =>
+    key === `today:session:${date}` ? { data: { id: 44, date, daily_session: { id: 81, date } }, fresh: true } : null;
   let directCalls = 0;
-  const canonical = await loaded.context.runSessionMutation({
-    date,
-    kind: "finish",
-    path: "/sessions/44/finish",
-    body: { notes: "done" },
-    identity: { sessionId: 44 },
-  }, async () => { directCalls++; return { id: 44 }; });
+  const canonical = await loaded.context.runSessionMutation(
+    {
+      date,
+      kind: "finish",
+      path: "/sessions/44/finish",
+      body: { notes: "done" },
+      identity: { sessionId: 44 },
+    },
+    async () => {
+      directCalls++;
+      return { id: 44 };
+    }
+  );
 
   assert.equal(staged.groupId, "date:2026-06-30");
   assert.equal(canonical.status, "queued");
   assert.equal(canonical.groupId, staged.groupId);
   assert.equal(directCalls, 0);
-  assert.deepEqual(
-    JSON.parse(JSON.stringify(loaded.context.CairnOutbox.list().map((item) => item.group_id))),
-    ["date:2026-06-30", "date:2026-06-30"],
-  );
+  assert.deepEqual(JSON.parse(JSON.stringify(loaded.context.CairnOutbox.list().map((item) => item.group_id))), [
+    "date:2026-06-30",
+    "date:2026-06-30",
+  ]);
 });
 
 test("a 200 skip rejection remains reviewable and blocks its workout group only", async () => {
   const loaded = loadApiClient();
   const groupId = "daily:81";
-  await loaded.context.outboxEnqueue(
-    "skip",
-    "/sessions/skip",
-    { date: "2026-06-30", exercise: "Squat" },
-    { groupId },
-  );
-  await loaded.context.outboxEnqueue(
-    "finish",
-    "/sessions/44/finish",
-    { notes: "done" },
-    { groupId },
-  );
+  await loaded.context.outboxEnqueue("skip", "/sessions/skip", { date: "2026-06-30", exercise: "Squat" }, { groupId });
+  await loaded.context.outboxEnqueue("finish", "/sessions/44/finish", { notes: "done" }, { groupId });
   await loaded.context.outboxEnqueue("weight", "/bodyweight", { weight_lb: 180 });
   loaded.context.fetch = async (url, init) => {
     loaded.calls.push({ url, init });
@@ -897,10 +977,16 @@ test("a 200 skip rejection remains reviewable and blocks its workout group only"
 
   await loaded.context.flushOutbox();
 
-  assert.deepEqual(loaded.calls.map((call) => call.url), ["/api/sessions/skip", "/api/bodyweight"]);
+  assert.deepEqual(
+    loaded.calls.map((call) => call.url),
+    ["/api/sessions/skip", "/api/bodyweight"]
+  );
   assert.deepEqual(
     JSON.parse(JSON.stringify(loaded.context.CairnOutbox.reviewItems().map(({ item, role }) => [item.kind, role]))),
-    [["skip", "attention"], ["finish", "blocked_dependent"]],
+    [
+      ["skip", "attention"],
+      ["finish", "blocked_dependent"],
+    ]
   );
   assert.equal(loaded.context.CairnOutbox.list()[0].body.exercise, "Squat");
 });
@@ -912,7 +998,7 @@ test("retrying a semantic skip rejection uses a fresh key and preserves its work
     "skip",
     "/sessions/skip",
     { date, exercise: "Squat" },
-    { groupId: "session:44", sessionDate: date },
+    { groupId: "session:44", sessionDate: date }
   );
   let corrected = false;
   let retriedSnapshot = null;
@@ -922,9 +1008,10 @@ test("retrying a semantic skip rejection uses a fresh key and preserves its work
     return {
       status: 200,
       headers: { get: () => null },
-      json: async () => corrected
-        ? { ok: true, session_id: 44, date, exercise: "Squat", skips: ["Squat"] }
-        : { ok: false, error: "finish the active set first" },
+      json: async () =>
+        corrected
+          ? { ok: true, session_id: 44, date, exercise: "Squat", skips: ["Squat"] }
+          : { ok: false, error: "finish the active set first" },
     };
   };
 
@@ -952,7 +1039,10 @@ test("Web Locks serialize concurrent cross-tab enqueues so both durable items su
   const locks = {
     request(_name, callback) {
       const run = tail.then(callback, callback);
-      tail = run.then(() => undefined, () => undefined);
+      tail = run.then(
+        () => undefined,
+        () => undefined
+      );
       return run;
     },
   };
@@ -967,7 +1057,10 @@ test("Web Locks serialize concurrent cross-tab enqueues so both durable items su
   assert.ok(activity);
   assert.ok(weight);
   const stored = JSON.parse(sharedStorage.get("cairn.outbox.v1"));
-  assert.deepEqual(stored.map((item) => item.kind), ["activity", "weight"]);
+  assert.deepEqual(
+    stored.map((item) => item.kind),
+    ["activity", "weight"]
+  );
 });
 
 test("write-ahead ordering survives no-Web-Locks lease expiry during an in-flight set", async () => {
@@ -976,9 +1069,10 @@ test("write-ahead ordering survives no-Web-Locks lease expiry during an in-fligh
   const second = loadApiClient({ sharedStorage });
   const date = "2026-06-30";
   for (const loaded of [first, second]) {
-    loaded.context.peekCached = (key) => key === `today:session:${date}`
-      ? { data: { id: 44, date, daily_session: { id: 81, session_id: 44, date } }, fresh: true }
-      : null;
+    loaded.context.peekCached = (key) =>
+      key === `today:session:${date}`
+        ? { data: { id: 44, date, daily_session: { id: 81, session_id: 44, date } }, fresh: true }
+        : null;
   }
 
   const responses = new Map();
@@ -987,7 +1081,9 @@ test("write-ahead ordering survives no-Web-Locks lease expiry during an in-fligh
   let takeoverClaimToken = "";
   let releaseFirstResponse;
   let firstStartedResolve;
-  const firstStarted = new Promise((resolve) => { firstStartedResolve = resolve; });
+  const firstStarted = new Promise((resolve) => {
+    firstStartedResolve = resolve;
+  });
   const response = (body) => ({ status: 200, headers: { get: () => null }, json: async () => body });
   const serverFetch = (url, init) => {
     const key = init.headers["X-Idempotency-Key"];
@@ -1004,7 +1100,9 @@ test("write-ahead ordering survives no-Web-Locks lease expiry during an in-fligh
       const body = { id: 101, session_id: 44, date, exercise: "Bench", reps: 5 };
       responses.set(key, body);
       firstStartedResolve();
-      return new Promise((resolve) => { releaseFirstResponse = () => resolve(response(body)); });
+      return new Promise((resolve) => {
+        releaseFirstResponse = () => resolve(response(body));
+      });
     }
     if (url === "/api/sessions/44/finish") {
       applications.push("finish");
@@ -1017,20 +1115,28 @@ test("write-ahead ordering survives no-Web-Locks lease expiry during an in-fligh
   first.context.fetch = serverFetch;
   second.context.fetch = serverFetch;
 
-  const setMutation = first.context.runSessionMutation({
-    date,
-    kind: "set",
-    path: "/sets",
-    body: { date, exercise: "Bench", reps: 5 },
-    identity: { sessionId: 44 },
-  }, (idempotencyKey) => first.context.api("/sets", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Idempotency-Key": idempotencyKey },
-    body: JSON.stringify({ date, exercise: "Bench", reps: 5 }),
-  }));
+  const setMutation = first.context.runSessionMutation(
+    {
+      date,
+      kind: "set",
+      path: "/sets",
+      body: { date, exercise: "Bench", reps: 5 },
+      identity: { sessionId: 44 },
+    },
+    (idempotencyKey) =>
+      first.context.api("/sets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Idempotency-Key": idempotencyKey },
+        body: JSON.stringify({ date, exercise: "Bench", reps: 5 }),
+      })
+  );
   await firstStarted;
   const wal = JSON.parse(sharedStorage.get("cairn.outbox.v1"));
-  assert.deepEqual(wal.map((item) => item.kind), ["set"], "tab A publishes its set before waiting on the response");
+  assert.deepEqual(
+    wal.map((item) => item.kind),
+    ["set"],
+    "tab A publishes its set before waiting on the response"
+  );
   assert.equal(wal[0].state, "sending");
   const firstClaimToken = wal[0].claim_token;
   assert.equal(typeof firstClaimToken, "string");
@@ -1043,25 +1149,34 @@ test("write-ahead ordering survives no-Web-Locks lease expiry during an in-fligh
   wal[0].in_flight_until = Date.now() - 1;
   sharedStorage.set("cairn.outbox.v1", JSON.stringify(wal));
   let finishDirectCalls = 0;
-  const finishMutation = await second.context.runSessionMutation({
-    date,
-    kind: "finish",
-    path: "/sessions/44/finish",
-    body: { notes: "done" },
-    identity: { sessionId: 44 },
-  }, async () => { finishDirectCalls++; return { id: 44, date }; });
+  const finishMutation = await second.context.runSessionMutation(
+    {
+      date,
+      kind: "finish",
+      path: "/sessions/44/finish",
+      body: { notes: "done" },
+      identity: { sessionId: 44 },
+    },
+    async () => {
+      finishDirectCalls++;
+      return { id: 44, date };
+    }
+  );
 
   assert.equal(finishMutation.status, "queued");
   assert.equal(finishDirectCalls, 0, "tab B cannot overtake tab A with a direct finish");
   assert.deepEqual(
     JSON.parse(sharedStorage.get("cairn.outbox.v1")).map((item) => item.kind),
     ["set", "finish"],
-    "lease takeover appends without overwriting the first tab's WAL",
+    "lease takeover appends without overwriting the first tab's WAL"
   );
   await second.context.flushOutbox();
   assert.deepEqual(applications, ["set", "finish"]);
   assert.notEqual(takeoverClaimToken, firstClaimToken, "expired takeover sends under a fresh claim generation");
-  assert.deepEqual(requestKeys.slice(0, 2), [["/api/sets", setKey], ["/api/sets", setKey]]);
+  assert.deepEqual(requestKeys.slice(0, 2), [
+    ["/api/sets", setKey],
+    ["/api/sets", setKey],
+  ]);
   assert.equal(JSON.parse(sharedStorage.get("cairn.outbox.v1")).length, 0);
 
   releaseFirstResponse();
@@ -1077,7 +1192,10 @@ test("the shared mutation lock observes a concurrently staged prepare and never 
   const locks = {
     request(_name, callback) {
       const run = tail.then(callback, callback);
-      tail = run.then(() => undefined, () => undefined);
+      tail = run.then(
+        () => undefined,
+        () => undefined
+      );
       return run;
     },
   };
@@ -1090,14 +1208,30 @@ test("the shared mutation lock observes a concurrently staged prepare and never 
     "daily_session_prepare",
     "/daily-session/prepare",
     { date, source: "adaptive_plan", replace: false },
-    { prepareIntent: { date, source: "adaptive_plan", plan_day_id: 22, title: "Upper", focus: "Push", est_minutes: null, items: [] } },
+    {
+      prepareIntent: {
+        date,
+        source: "adaptive_plan",
+        plan_day_id: 22,
+        title: "Upper",
+        focus: "Push",
+        est_minutes: null,
+        items: [],
+      },
+    }
   );
-  const mutationPromise = logging.context.runSessionMutation({
-    date,
-    kind: "set",
-    path: "/sets",
-    body: { date, exercise: "Bench", reps: 5 },
-  }, async () => { directCalls++; return { id: 1 }; });
+  const mutationPromise = logging.context.runSessionMutation(
+    {
+      date,
+      kind: "set",
+      path: "/sets",
+      body: { date, exercise: "Bench", reps: 5 },
+    },
+    async () => {
+      directCalls++;
+      return { id: 1 };
+    }
+  );
   const [prepare, mutation] = await Promise.all([preparePromise, mutationPromise]);
 
   assert.ok(prepare);
@@ -1105,9 +1239,15 @@ test("the shared mutation lock observes a concurrently staged prepare and never 
   assert.equal(mutation.reason, "other_tab");
   assert.equal(directCalls, 0);
   const stored = JSON.parse(sharedStorage.get("cairn.outbox.v1"));
-  assert.deepEqual(stored.map((item) => item.kind), ["daily_session_prepare"]);
+  assert.deepEqual(
+    stored.map((item) => item.kind),
+    ["daily_session_prepare"]
+  );
   assert.equal(stored[0].session_date, date);
-  assert.equal(stored.some((item) => item.kind === "set" && !item.depends_on), false);
+  assert.equal(
+    stored.some((item) => item.kind === "set" && !item.depends_on),
+    false
+  );
 });
 
 test("another tab sees every shared prepare state as a refresh barrier without a matching staged pair", async () => {
@@ -1116,7 +1256,10 @@ test("another tab sees every shared prepare state as a refresh barrier without a
   const locks = {
     request(_name, callback) {
       const run = tail.then(callback, callback);
-      tail = run.then(() => undefined, () => undefined);
+      tail = run.then(
+        () => undefined,
+        () => undefined
+      );
       return run;
     },
   };
@@ -1125,15 +1268,24 @@ test("another tab sees every shared prepare state as a refresh barrier without a
   const date = "2026-06-30";
   // A warm canonical-looking SWR entry is not permission to bypass a prepare
   // written by another context; only a cache pair carrying its exact local ID is.
-  second.context.peekCached = (key) => key === `today:session:${date}`
-    ? { data: { id: 44, date, sets: [] }, fresh: true }
-    : null;
+  second.context.peekCached = (key) =>
+    key === `today:session:${date}` ? { data: { id: 44, date, sets: [] }, fresh: true } : null;
 
   const prepare = await first.context.outboxEnqueue(
     "daily_session_prepare",
     "/daily-session/prepare",
     { date, source: "adaptive_plan", replace: false },
-    { prepareIntent: { date, source: "adaptive_plan", plan_day_id: 22, title: "Upper", focus: "Push", est_minutes: null, items: [] } },
+    {
+      prepareIntent: {
+        date,
+        source: "adaptive_plan",
+        plan_day_id: 22,
+        title: "Upper",
+        focus: "Push",
+        est_minutes: null,
+        items: [],
+      },
+    }
   );
   for (const state of [undefined, "prepared", "needs_attention"]) {
     const stored = JSON.parse(sharedStorage.get("cairn.outbox.v1"));
@@ -1143,7 +1295,7 @@ test("another tab sees every shared prepare state as a refresh barrier without a
     assert.deepEqual(
       JSON.parse(JSON.stringify(second.context.outboxSessionPrerequisite(date))),
       { status: "blocked", id: prepare.id, reason: "other_tab" },
-      `shared ${state || "pending"} prepare remains a cross-tab barrier`,
+      `shared ${state || "pending"} prepare remains a cross-tab barrier`
     );
   }
 });
@@ -1157,7 +1309,10 @@ test("fallback outbox lease takes over an expired owner and releases it after th
 
   assert.ok(item);
   assert.equal(sharedStorage.has("cairn.outbox.v1.lock"), false);
-  assert.deepEqual(JSON.parse(sharedStorage.get("cairn.outbox.v1")).map((row) => row.kind), ["weight"]);
+  assert.deepEqual(
+    JSON.parse(sharedStorage.get("cairn.outbox.v1")).map((row) => row.kind),
+    ["weight"]
+  );
 });
 
 test("runtime outbox retry immediately replays and discard removes only the chosen log", async () => {
@@ -1183,7 +1338,11 @@ test("runtime outbox retry immediately replays and discard removes only the chos
 
   assert.equal(await loaded.context.CairnOutbox.discard(kept.id), true);
   assert.equal(loaded.context.CairnOutbox.count(), 0);
-  assert.equal(loaded.getOutboxBar().classList.contains("show"), false, "an empty disabled bar returns to its hidden state");
+  assert.equal(
+    loaded.getOutboxBar().classList.contains("show"),
+    false,
+    "an empty disabled bar returns to its hidden state"
+  );
   assert.equal(loaded.getOutboxBar().classList.contains("outbox-actionable"), false);
   assert.equal(loaded.getOutboxBar().getAttribute("disabled"), "");
   assert.equal(loaded.getOutboxBar().getAttribute("role"), "status");
@@ -1197,26 +1356,27 @@ test("runtime discard of a failed workout member immediately releases later sibl
     "daily_session_prepare",
     "/daily-session/prepare",
     { date, source: "athlete_override", replace: true, session: { name: "Saved", items: [] } },
-    { prepareIntent: { date, source: "athlete_override", plan_day_id: null, title: "Saved", focus: null, why: null, est_minutes: null, items: [] } },
+    {
+      prepareIntent: {
+        date,
+        source: "athlete_override",
+        plan_day_id: null,
+        title: "Saved",
+        focus: null,
+        why: null,
+        est_minutes: null,
+        items: [],
+      },
+    }
   );
   const failed = await loaded.context.outboxEnqueue(
     "set",
     "/sets",
     { date, exercise: "Bench", reps: 5 },
-    { dependsOn: prepare.id },
+    { dependsOn: prepare.id }
   );
-  await loaded.context.outboxEnqueue(
-    "skip",
-    "/sessions/skip",
-    { date, exercise: "Squat" },
-    { dependsOn: prepare.id },
-  );
-  await loaded.context.outboxEnqueue(
-    "finish",
-    "/sessions/44/finish",
-    { notes: "done" },
-    { dependsOn: prepare.id },
-  );
+  await loaded.context.outboxEnqueue("skip", "/sessions/skip", { date, exercise: "Squat" }, { dependsOn: prepare.id });
+  await loaded.context.outboxEnqueue("finish", "/sessions/44/finish", { notes: "done" }, { dependsOn: prepare.id });
   const stored = JSON.parse(loaded.storage.get("cairn.outbox.v1"));
   stored[0].state = "prepared";
   stored[1].state = "needs_attention";
@@ -1225,10 +1385,10 @@ test("runtime discard of a failed workout member immediately releases later sibl
 
   assert.equal(await loaded.context.CairnOutbox.discard(failed.id), true);
 
-  assert.deepEqual(loaded.calls.map((call) => call.url), [
-    "/api/sessions/skip",
-    "/api/sessions/44/finish",
-  ]);
+  assert.deepEqual(
+    loaded.calls.map((call) => call.url),
+    ["/api/sessions/skip", "/api/sessions/44/finish"]
+  );
   assert.equal(loaded.context.CairnOutbox.count(), 0);
 });
 

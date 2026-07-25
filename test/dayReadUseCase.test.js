@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readToday, recordDayReadSuggestion } from "../dist/domain/brain/day-read-use-case.js";
 import { configureDayReadRefresh } from "../dist/dayread-refresh.js";
+import { buildDayReadPrompt } from "../dist/prompt.js";
+import { runWithBrainSnapshot } from "../dist/brain/snapshot.js";
+import { DAY_READ_HEADLINE_VARIANTS } from "../dist/repo/day-read.js";
 import { db, localDaysAgo, repo, resetTables } from "./_seed.js";
 
 const countDayReads = (date) =>
@@ -240,7 +243,13 @@ test("a live completed run overrides stale cached prospective copy immediately",
   const read = await readToday({ date, recordOutcome: true });
 
   assert.equal(read.kind, "done");
-  assert.equal(read.headline, "You're done for today.");
+  // The headline rotates by calendar day like the rest of the Brief's vocabulary (it
+  // was the last unrotated literal, and the most prominent string on the card), so this
+  // pins the whole registered set rather than the phrasing that lands today.
+  assert.ok(
+    DAY_READ_HEADLINE_VARIANTS.done.includes(read.headline),
+    `unexpected done headline ${JSON.stringify(read.headline)}`
+  );
   assert.equal(read.focus, null);
   assert.equal(read.est_minutes, null);
   assert.equal(read.cached, undefined);
@@ -671,4 +680,55 @@ test("recovery data that DOES move the decision still retires the cached read", 
   assert.equal(armed, 1, "and arm the background re-warm");
   const after = await readToday({ date });
   assert.equal(after.kind, "rest");
+});
+
+// ---------------------------------------------------------------------------
+// The rich/thin seam. buildDayReadPrompt used to compute its OWN baseline from
+// the coach context's signal state, while computeDayRead clamped, persisted and
+// fingerprinted a DIFFERENT baseline it had computed itself — so on a divergent
+// day the agent was shown one state and the server acted on another. Two things
+// close it, and both are pinned here: the caller threads its baseline in
+// (the only thing that works on the scheduler's warm, which runs outside any
+// request scope), and inside a request there is ONE memoized signal state per
+// date, so every consumer that recomputes still lands on the same one.
+// ---------------------------------------------------------------------------
+
+test("the prompt's baseline is the caller's baseline, not a second one", () => {
+  resetTables("day_reads", "plan_days", "plan_items", "sessions", "logged_sets", "daily_metrics", "profile");
+  const date = localDaysAgo(0);
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  repo.recordDailyMetrics("apple", localDaysAgo(1), { sleep_min: 440 });
+
+  const live = repo.dayRead(date);
+  assert.equal(live.kind, "train");
+
+  // A baseline that deliberately disagrees with anything the prompt could derive
+  // on its own. If the prompt still re-derives, this string can never appear.
+  const threaded = { ...live, kind: "rest", focus: null };
+  const prompt = buildDayReadPrompt(undefined, { date, baseline: threaded });
+  assert.match(prompt, /A rules-only baseline suggested: kind="rest"/);
+  assert.ok(
+    !/A rules-only baseline suggested: kind="train"/.test(prompt),
+    "the prompt must not describe a baseline the server will never clamp or persist"
+  );
+});
+
+test("one signal state per date per request — the Brief and the coach share it", () => {
+  resetTables("day_reads", "plan_days", "plan_items", "sessions", "logged_sets", "daily_metrics", "profile");
+  const date = localDaysAgo(0);
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  repo.recordDailyMetrics("apple", localDaysAgo(1), { sleep_min: 440 });
+
+  runWithBrainSnapshot(() => {
+    const first = repo.dayRead(date);
+    const context = repo.getCoachContext();
+    const second = repo.dayRead(date);
+    assert.equal(
+      first.signals.signal_state,
+      context.signal_state,
+      "the athlete-facing read and the coach context must be the same object, not two builds"
+    );
+    assert.equal(second.signals.signal_state, first.signals.signal_state);
+    assert.equal(second.input_fingerprint, first.input_fingerprint);
+  });
 });

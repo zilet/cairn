@@ -70,6 +70,10 @@ function richInput() {
 // from. A fixture with only `reason` would let the conductor silently go back to
 // printing observer prose ("The athlete reports high soreness today.") at the athlete.
 const STATE_DATE = "2026-03-15";
+// `dims` merges per-dimension overrides ({ recovery_capacity: { status, voice } }) onto
+// the defaults. A dimension's `status` is what the conductor reads to decide WHICH cause
+// produced a modify day, so a fixture that omits it is a fixture that cannot tell the
+// injury path from the fuel path — exactly the confusion the caveat used to ship.
 function unifiedState({
   posture = "train",
   readiness = "ready",
@@ -80,7 +84,18 @@ function unifiedState({
   voice = "unvoiced_clear",
   injury = false,
   date = STATE_DATE,
+  dims = {},
 } = {}) {
+  const dimension = (name, base) => ({
+    dimension: name,
+    status: "steady",
+    confidence: "medium",
+    evidence: [],
+    conflicts: [],
+    voice: { key: "unvoiced_clear" },
+    ...base,
+    ...(dims[name] ?? {}),
+  });
   return {
     date,
     action: {
@@ -92,18 +107,23 @@ function unifiedState({
       directives: { training, fueling, schedule },
     },
     dimensions: {
-      energy_fueling: {
+      recovery_capacity: dimension("recovery_capacity"),
+      training_load_tolerance: dimension("training_load_tolerance"),
+      energy_fueling: dimension("energy_fueling", {
+        status: fueling === "protect" ? "constrained" : "steady",
         reason: fueling === "protect" ? "Recent work raises fueling needs." : "Fueling is steady.",
         voice: { key: fueling === "protect" ? "fuel_protect" : "unvoiced_clear" },
-      },
-      life_capacity: {
+      }),
+      life_capacity: dimension("life_capacity", {
+        status: schedule === "compress" ? "watch" : "steady",
         reason: schedule === "compress" ? "School pickup compresses today's window." : "Schedule is open.",
         voice:
           schedule === "compress"
             ? { key: "commitment_pressure", subject: "School pickup" }
             : { key: "unvoiced_clear" },
-      },
-      health_constraints: {
+      }),
+      health_constraints: dimension("health_constraints", {
+        status: injury ? "constrained" : "steady",
         evidence: injury
           ? [
               {
@@ -114,7 +134,24 @@ function unifiedState({
               },
             ]
           : [],
-      },
+      }),
+    },
+  };
+}
+
+// A stalled-shoulder training lead, on its own — the smallest input that reliably
+// produces one training-family candidate for the caveat to land on.
+function stalledShoulders() {
+  return {
+    groupsTrajectory: {
+      groups: [
+        {
+          verdict: "stalling",
+          label: "Shoulders",
+          lead_lift: "Overhead Press",
+          vary_options: [{ name: "Landmine Press" }],
+        },
+      ],
     },
   };
 }
@@ -290,40 +327,180 @@ test("a sparse no-plan athlete keeps the injury caveat without a training candid
 
 test("canonical modify posture forces an explicit work-around on a training lead", () => {
   const out = coachingFocus({
-    groupsTrajectory: {
-      groups: [
-        {
-          verdict: "stalling",
-          label: "Shoulders",
-          lead_lift: "Overhead Press",
-          vary_options: [{ name: "Landmine Press" }],
-        },
-      ],
-    },
+    ...stalledShoulders(),
     signalState: unifiedState({
       posture: "modify",
       readiness: "caution",
       training: "modify",
       reason: "An active shoulder injury calls for a work-around.",
+      dims: { health_constraints: { status: "constrained", voice: { key: "health_constraint" } } },
     }),
   });
   assert.equal(out.lead.domain, "training");
-  assert.match(out.caveat, /modify today's work|pain-free substitutions/i);
-  assert.match(out.lead.why, /active shoulder injury|pain-free substitutions/i);
+  assert.match(out.caveat, /pain-free|comfortable|conservative/i);
+  assert.ok(out.lead.why.includes(out.caveat), "the whole caveat rides on the lead the athlete reads");
+});
+
+// ---- the work-around caveat is chosen by CAUSE, and never truncated -----------
+
+test("the injury work-around survives intact on a lead whose why is already at its cap", () => {
+  // A build-phase race lead: the producer's own `why` alone fills the 240-char budget,
+  // so clipping the JOINED string ate the substitution instruction off the end — on the
+  // one string on the card that must not be lossy. `focus.caveat` keeps the intact copy
+  // but no client renders it; `lead.why` is what the athlete actually sees.
+  const out = coachingFocus({
+    enduranceGoal: { is_race: true, phase: "build", weeks_to_race: 8 },
+    runPlan: {
+      available: true,
+      quality_focus: "tempo",
+      why: "You are in the build phase, so this week the quality session drives fitness while the long run builds durability and the easy runs protect recovery across the whole block.",
+    },
+    signalState: unifiedState({
+      posture: "modify",
+      readiness: "caution",
+      training: "modify",
+      injury: true,
+    }),
+  });
+  assert.equal(out.lead.domain, "running");
+  assert.ok(out.lead.why.length > 240, "the budget is spent on the caveat, not stolen from it");
+  assert.ok(out.lead.why.includes(out.caveat), "the caveat is appended whole, never clipped");
+  assert.match(out.lead.why, /pain-free substitutions and keep the load conservative\.$/);
+  assert.doesNotMatch(out.caveat, /…$/, "the caveat itself never ends in an ellipsis");
+  // The producer's prose still leads the line — budgeted, not erased.
+  assert.match(out.lead.why, /^You are in the build phase/);
+});
+
+test("a modify posture with no injury gets a cause-shaped caveat, never injury prose", () => {
+  // `modify` is reached from unrelated causes. Keying the caveat off the POSTURE
+  // appended "Work around it today with pain-free substitutions" to fuel, HRV and sleep
+  // days — where "it" had no antecedent and there was nothing to substitute around.
+  const cases = [
+    {
+      label: "recovery capacity",
+      training: "hold_aggression",
+      dims: { recovery_capacity: { status: "watch", voice: { key: "hrv_below" } } },
+      expectVoice: "hrv_below",
+      expectProvenance: /Unified training directive: hold_aggression \(from recovery capacity\)/,
+    },
+    {
+      label: "fueling",
+      training: "hold_aggression",
+      dims: { energy_fueling: { status: "constrained", voice: { key: "fuel_protect" } } },
+      expectVoice: "fuel_protect",
+      expectProvenance: /Unified training directive: hold_aggression \(from fueling\)/,
+      expectInstruction: /fuel|eat/i,
+    },
+    {
+      label: "accumulated load",
+      training: "recover",
+      dims: { training_load_tolerance: { status: "constrained", voice: { key: "acute_load_high" } } },
+      expectVoice: "acute_load_high",
+      expectProvenance: /Unified training directive: recover \(from training load\)/,
+    },
+    {
+      label: "life capacity",
+      training: "proceed",
+      dims: { life_capacity: { status: "watch", voice: { key: "schedule_pressure" } } },
+      expectVoice: "schedule_pressure",
+      expectProvenance: /Unified training directive: proceed \(from life capacity\)/,
+    },
+  ];
+  for (const testCase of cases) {
+    const out = coachingFocus({
+      ...stalledShoulders(),
+      signalState: unifiedState({
+        posture: "modify",
+        readiness: "caution",
+        training: testCase.training,
+        reason: "Mixed signals put today at modify.",
+        dims: testCase.dims,
+      }),
+    });
+    assert.equal(out.lead.domain, "training", `${testCase.label}: the training lever is kept`);
+    // The caveat opens in the CAUSE's own athlete voice — not the posture's, and never
+    // the machine-facing summary.
+    assert.ok(
+      out.caveat.startsWith(spokenSignalVoice({ key: testCase.expectVoice }, STATE_DATE, "coaching_focus:caveat")),
+      `${testCase.label}: the caveat speaks the dimension that actually drove the day`
+    );
+    // The dangling pronoun and the substitution instruction belong to the health cause
+    // alone — there is nothing to work around on a fuel or HRV day.
+    assert.doesNotMatch(out.caveat, /\bwork around it\b/i, `${testCase.label}: no dangling "it"`);
+    assert.doesNotMatch(out.caveat, /pain-free/i, `${testCase.label}: nothing to substitute around`);
+    assert.doesNotMatch(out.caveat, /\bthe athlete\b/i, `${testCase.label}: athlete register only`);
+    if (testCase.expectInstruction) assert.match(out.caveat, testCase.expectInstruction);
+    // Provenance states the REAL directive value and its source, not the posture under a
+    // "directive" label.
+    assert.ok(
+      out.lead.based_on.some((line) => testCase.expectProvenance.test(line)),
+      `${testCase.label}: based_on is truthful — got ${JSON.stringify(out.lead.based_on)}`
+    );
+    assert.equal(
+      out.lead.based_on.some((line) => /Unified training directive: modify/.test(line)),
+      false,
+      `${testCase.label}: never asserts a directive the state does not carry`
+    );
+  }
+});
+
+test("a health-constrained modify still gets the pain-free substitution instruction", () => {
+  const out = coachingFocus({
+    ...stalledShoulders(),
+    signalState: unifiedState({
+      posture: "modify",
+      readiness: "caution",
+      training: "modify",
+      dims: {
+        health_constraints: { status: "constrained", voice: { key: "health_constraint" } },
+        recovery_capacity: { status: "watch", voice: { key: "hrv_below" } },
+      },
+    }),
+  });
+  // Health outranks a simultaneous recovery watch — the same precedence the signal
+  // layer's own directive chain uses.
+  assert.match(out.caveat, /pain-free|comfortable|conservative/i);
+  assert.ok(out.lead.based_on.some((line) => /\(from health constraints\)/.test(line)));
+});
+
+test("the cause-shaped caveats and life-pressure cards are variant sets, not literals", () => {
+  const distinct = (values) => new Set(values.filter(Boolean)).size;
+  const dates = ["2026-03-15", "2026-03-16", "2026-03-17", "2026-03-18", "2026-03-19", "2026-03-20"];
+  const caveats = dates.map(
+    (date) =>
+      coachingFocus({
+        ...stalledShoulders(),
+        signalState: unifiedState({
+          posture: "modify",
+          readiness: "caution",
+          training: "hold_aggression",
+          date,
+          dims: { recovery_capacity: { status: "watch", voice: { key: "hrv_below" } } },
+        }),
+      }).caveat
+  );
+  assert.ok(distinct(caveats) >= 3, `the recovery caveat rotates (got ${distinct(caveats)} phrasings)`);
+
+  const cards = dates.map((date) => {
+    const out = coachingFocus({
+      signalState: unifiedState({
+        schedule: "compress",
+        date,
+        dims: { life_capacity: { status: "watch", voice: { key: "schedule_pressure" } } },
+      }),
+    });
+    return [out.lead, ...out.parallel].find((item) => item?.domain === "training");
+  });
+  assert.ok(
+    distinct(cards.map((card) => card?.title)) >= 3,
+    "the recovery-pressure card's title rotates rather than printing one literal for weeks"
+  );
+  assert.ok(distinct(cards.map((card) => card?.move)) >= 3, "so does its move");
 });
 
 test("schedule compression constrains timing without becoming recovery", () => {
   const out = coachingFocus({
-    groupsTrajectory: {
-      groups: [
-        {
-          verdict: "stalling",
-          label: "Shoulders",
-          lead_lift: "Overhead Press",
-          vary_options: [{ name: "Push Press" }],
-        },
-      ],
-    },
+    ...stalledShoulders(),
     signalState: unifiedState({ schedule: "compress", reason: "A dated family commitment compresses today." }),
   });
   assert.equal(out.lead.domain, "training");
@@ -332,6 +509,52 @@ test("schedule compression constrains timing without becoming recovery", () => {
     [out.lead, ...out.parallel].some((item) => item.domain === "recovery"),
     false
   );
+});
+
+test("the two life-capacity causes produce different, self-consistent compression cards", () => {
+  // `compress` says life capacity is at watch; it does NOT say why. A dated commitment
+  // squeezes the CLOCK. A stressful stretch / expected bad night squeezes RECOVERY — and
+  // the card used to print the recovery voice above a move insisting "this is a timing
+  // constraint, not a recovery verdict", contradicting the sentence above it.
+  // Sparse on purpose: with a training lead of its own the compression card shares that
+  // domain and is out-ranked into `later`, which carries no prose to assert on.
+  const cardFor = (lifeVoice) => {
+    const out = coachingFocus({
+      signalState: unifiedState({
+        schedule: "compress",
+        dims: { life_capacity: { status: "watch", voice: lifeVoice } },
+      }),
+    });
+    return [out.lead, ...out.parallel].find((item) => item?.domain === "training");
+  };
+
+  const commitmentCard = cardFor({ key: "commitment_pressure", subject: "School pickup" });
+  assert.ok(commitmentCard, "a dated commitment keeps the time-window card");
+  assert.match(commitmentCard.title, /available window/i);
+  assert.match(commitmentCard.why, /School pickup/, "and names the commitment");
+  assert.match(commitmentCard.move, /timing constraint, not a recovery verdict/);
+
+  const pressureCard = cardFor({ key: "schedule_pressure" });
+  assert.ok(pressureCard, "a stressful stretch still surfaces its own card");
+  assert.match(pressureCard.why, /squeeze your recovery|eat into your recovery|cost you sleep/i);
+  // The card no longer denies the very thing its own `why` just said.
+  assert.doesNotMatch(pressureCard.move, /timing constraint, not a recovery verdict/);
+  assert.doesNotMatch(pressureCard.title, /available window/i);
+  assert.match(pressureCard.move, /recovery|intensity|conversational|lighter|easier/i);
+
+  // The line appended to whatever OTHER training lever wins follows the same cause.
+  const leadMoveFor = (lifeVoice) =>
+    coachingFocus({
+      ...stalledShoulders(),
+      signalState: unifiedState({
+        schedule: "compress",
+        dims: { life_capacity: { status: "watch", voice: lifeVoice } },
+      }),
+    }).lead.move ?? "";
+  assert.match(leadMoveFor({ key: "commitment_pressure", subject: "School pickup" }), /compressed window/i);
+  const stretchLeadMove = leadMoveFor({ key: "schedule_pressure" });
+  assert.doesNotMatch(stretchLeadMove, /compressed window/i);
+  assert.match(stretchLeadMove, /modest|lighter end|honest rather than hard/i);
 });
 
 test("fuel protection surfaces through nutrition without forcing rest", () => {

@@ -35,7 +35,7 @@ import { canonicalMarker } from "./marker-canon.js";
 import { markerGroup } from "./propagation.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { getRunCompliance, weeklyAerobicLoad } from "./sessions.js";
-import { addDaysISO, localDateISO, metricLabel, parseDbTime } from "./shared.js";
+import { addDaysISO, clipText, localDateISO, metricLabel, parseDbTime } from "./shared.js";
 import { cutQualityRead, cutQualityWeekLine } from "./cut-quality.js";
 
 // app_state stamp bounding the unseen-insight backlog drain to once per LOCAL day
@@ -125,16 +125,7 @@ const CONCLUSIVE_VERDICTS = new Set(["aligned", "not_aligned"]);
 // ellipsis); otherwise cut at the last word boundary and append an ellipsis. Never
 // returns a bare fragment like "Soluble fiber is held hig".
 function clip(value: unknown, max = 150): string {
-  const s = String(value ?? "")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (s.length <= max) return s;
-  const window = s.slice(0, max);
-  const sentenceEnd = Math.max(window.lastIndexOf(". "), window.lastIndexOf("! "), window.lastIndexOf("? "));
-  if (sentenceEnd >= Math.floor(max * 0.5)) return window.slice(0, sentenceEnd + 1).trim();
-  const lastSpace = window.lastIndexOf(" ");
-  const cut = (lastSpace > 0 ? window.slice(0, lastSpace) : window).replace(/[\s,;:.!?…]+$/, "");
-  return `${cut}…`;
+  return clipText(value, max, { collapseWhitespace: true, ellipsis: "…", wordBoundary: true, sentenceBoundary: true });
 }
 
 function isoDay(value: unknown): string {

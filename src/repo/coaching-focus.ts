@@ -22,9 +22,18 @@
 // {available:false} on a thin athlete.
 // ============================================================================
 
+import { pickDayVariant } from "./brain/day-read-rules.js";
 import { movementKey } from "./exercise-canon.js";
 import { type FocusCandidate, type FocusDomain, focusScore } from "./focus-candidate.js";
-import { spokenSignalVoice, SIGNAL_VOICE_KEYS, type SignalPosture, type UnifiedSignalState } from "./signal-state.js";
+import { clipText } from "./shared.js";
+import {
+  lifeCapacityIsCommitment,
+  spokenSignalVoice,
+  SIGNAL_VOICE_KEYS,
+  type SignalDimension,
+  type SignalPosture,
+  type UnifiedSignalState,
+} from "./signal-state.js";
 
 // Re-exported so existing importers keep resolving `FocusDomain` from the conductor.
 export type { FocusCandidate, FocusDomain } from "./focus-candidate.js";
@@ -76,6 +85,13 @@ export interface CoachingFocus {
   // joint / reduce-load window, the conductor either demotes it or annotates it. Plain
   // words, never a gate — "work the leg plateau AROUND your knee, pain-free only".
   caveat: string | null;
+  // WHICH dimension produced `caveat`, as its display label. Carried alongside the
+  // text because the cause is otherwise module-private: the prompt layer labelled
+  // every caveat "EASE AROUND (injury/soreness)" while the conductor selects it by
+  // cause, announcing four of five causes to the model as an injury that did not
+  // exist. Scraping it back out of `based_on` would misattribute, since two of the
+  // three paths that produce `caveat` carry no such line. Null when `caveat` is.
+  caveat_cause: string | null;
   // Temporal placement inside the active program block, plain words — "Week 3 of
   // 5 — building volume." Descriptive calendar truth, never a score or a gate.
   // Null when no block is active.
@@ -345,6 +361,9 @@ interface Candidate {
   // Set when this (training) lever loads a flagged/injured/sore area — the conductor
   // prefers a non-conflicting lead and, if it keeps this one, surfaces the caveat.
   caveat?: string;
+  // The display label of the dimension that produced `caveat`, carried with it so
+  // coachingFocus() can publish the cause without re-deriving it.
+  caveat_cause?: string;
 }
 
 function num(v: unknown): number | null {
@@ -357,8 +376,7 @@ function lc(s: unknown): string {
     .toLowerCase();
 }
 function clip(s: unknown, n: number): string {
-  const t = String(s ?? "").trim();
-  return t.length > n ? `${t.slice(0, n - 1).trimEnd()}…` : t;
+  return clipText(s, n, { ellipsis: "…" });
 }
 function inputArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : [];
@@ -1198,6 +1216,134 @@ function blockPlacementLine(b: ProgramBlockSummaryInput | null | undefined): str
 }
 
 // ---- canonical daily-state adapters ----------------------------------------
+// Athlete-facing prose here is a VARIANT SET, never one literal: a stable input fires
+// the same branch every morning, so a single sentence would print verbatim for weeks
+// (the day-read rule, CLAUDE.md). Every set below rotates through pickDayVariant on the
+// signal state's own date, keyed so two sets that can co-render never land in step.
+
+// A life-capacity squeeze whose cause is a dated COMMITMENT (school pickup, a fixed
+// appointment) — the clock is the constraint, not recovery room. Same rotation
+// discipline as its schedule_pressure sibling below: a stable commitment fires this
+// branch every time schedule compresses, so a single literal would print verbatim.
+const COMMITMENT_PRESSURE_TITLES = [
+  "Keep today's work inside the available window",
+  "Fit today's session inside the available window",
+  "Work within today's available window",
+] as const;
+const COMMITMENT_PRESSURE_MOVES = [
+  "Prioritize the main work and defer optional volume; this is a timing constraint, not a recovery verdict.",
+  "Lead with the main work and let the optional volume go; this is a timing constraint, not a recovery verdict.",
+  "Get the main work in first and drop the extras; this is a timing constraint, not a recovery verdict.",
+] as const;
+
+// A life-capacity squeeze whose cause is RECOVERY, not the calendar — a stressful
+// stretch or an expected bad night. Holds intensity; says nothing about a time window.
+const LIFE_PRESSURE_TITLES = [
+  "Keep today's ask modest through this stretch",
+  "Hold today's intensity while things are busy",
+  "Take the lighter version of today's work",
+] as const;
+const LIFE_PRESSURE_MOVES = [
+  "Hold the intensity where it is and let the optional volume go — the squeeze here is recovery, not the clock.",
+  "Take the shorter, easier version and finish with something left; a busy stretch costs recovery before it costs minutes.",
+  "Keep the effort conversational and drop the extras rather than racing through the full session.",
+] as const;
+// The same read, appended to whatever OTHER training lever wins the day.
+const LIFE_PRESSURE_TIMING = [
+  "Today, keep the ask modest: hold the intensity and let the optional volume go.",
+  "Today, take the lighter end of it — hold intensity where it is and drop the extras.",
+  "Today, keep the effort honest rather than hard, and leave the optional volume out.",
+] as const;
+
+// ---- the work-around caveat: chosen by CAUSE, never by posture ---------------
+// `modify` is reached from unrelated causes — an active health constraint, an
+// underfueling prescription, and the mixed-signal arbitration tie-break — so keying the
+// caveat off the posture produced injury-shaped prose ("work around IT with pain-free
+// substitutions") on fuel, HRV and sleep days, where "it" named nothing at all. These
+// dimension statuses are what actionState/planningDirectives themselves arbitrate on, so
+// reading them back names the dimension that really drove the day.
+const CAVEAT_CAUSE_ORDER: readonly SignalDimension[] = [
+  "health_constraints",
+  "energy_fueling",
+  "recovery_capacity",
+  "training_load_tolerance",
+  "life_capacity",
+];
+const CAVEAT_STATUS_SEVERITY: Record<string, number> = { constrained: 2, watch: 1 };
+// The instruction that follows the cause's own spoken sentence. Plain words, a
+// suggestion never a gate, and each one has to make sense with NOTHING to substitute
+// around — only the health cause may talk about substitutions.
+const CAVEAT_INSTRUCTIONS: Record<SignalDimension, readonly [string, ...string[]]> = {
+  health_constraints: [
+    "Use pain-free substitutions and keep the load conservative.",
+    "Swap anything that provokes it for a pain-free version and keep the load light.",
+    "Pick movements that stay comfortable and leave the heavy loading for another day.",
+  ],
+  energy_fueling: [
+    "Eat around the work first and keep today's dose modest until fuel catches up.",
+    "Get the fuel in before you add load, and keep today's session on the shorter side.",
+    "Fuel the work properly and hold the volume where it is rather than adding to it.",
+  ],
+  recovery_capacity: [
+    "Keep the load conservative today and leave the hard sets for a fresher day.",
+    "Hold the loading where it is rather than climbing, and finish with something left.",
+    "Take the conservative end of the range today and let recovery catch up.",
+  ],
+  training_load_tolerance: [
+    "Keep today's dose conservative and let the work you've already stacked up absorb.",
+    "Hold the volume where it is rather than adding to what's already accumulated.",
+    "Take the lighter end of today's work and give the recent load room to settle.",
+  ],
+  life_capacity: [
+    "Keep today's ask modest and take the shorter version of the session.",
+    "Trim the session to what genuinely fits and leave the optional volume out.",
+    "Keep the ask small today rather than forcing the full session in.",
+  ],
+};
+// Plain provenance label per cause — `based_on` is the machine/provenance register.
+const CAVEAT_CAUSE_LABEL: Record<SignalDimension, string> = {
+  health_constraints: "health constraints",
+  energy_fueling: "fueling",
+  recovery_capacity: "recovery capacity",
+  training_load_tolerance: "training load",
+  life_capacity: "life capacity",
+};
+// The caveat's own rotation key. Deliberately NOT one of SIGNAL_VOICE_KEYS: the fuel
+// and schedule cards can co-render with a caveat drawn from the same dimension, and a
+// shared key would print the identical sentence twice on one screen.
+const CAVEAT_VOICE_KEY = "coaching_focus:caveat";
+
+// The dimension that actually produced a modify / work-around day: most severe status
+// first, ties broken in the same precedence order actionState walks. Falls back to
+// recovery capacity (a conservative-load caveat) when nothing is flagged at all.
+function caveatCause(state: UnifiedSignalState | null | undefined): SignalDimension {
+  let cause: SignalDimension = "recovery_capacity";
+  let severity = 0;
+  for (const dimension of CAVEAT_CAUSE_ORDER) {
+    const rank = CAVEAT_STATUS_SEVERITY[lc(state?.dimensions?.[dimension]?.status)] ?? 0;
+    if (rank > severity) {
+      severity = rank;
+      cause = dimension;
+    }
+  }
+  return cause;
+}
+
+// The caveat is the one string on the card that must not be lossy — it carries the
+// safety instruction. So the producer's `why` is budgeted around it and the caveat is
+// appended WHOLE. Clipping the joined string instead ate the instruction off the end
+// every time, because every lead-eligible producer already clips its own `why` to
+// 200–240 and `item.why` (not `focus.caveat`, which no client renders) is what shows.
+const CAVEAT_MAX = 220;
+const WHY_WITH_CAVEAT_MAX = 240;
+const WHY_MIN_WITH_CAVEAT = 90;
+function joinCaveat(why: unknown, caveat: string): string {
+  const head = String(why ?? "").trim();
+  if (!caveat) return head;
+  if (!head) return caveat;
+  return `${clip(head, Math.max(WHY_MIN_WITH_CAVEAT, WHY_WITH_CAVEAT_MAX - caveat.length - 1))} ${caveat}`;
+}
+
 // UnifiedSignalState has already resolved source collisions, freshness and the
 // safety posture. The conductor does not rescore those facts. It translates them
 // into its existing candidate/constraint vocabulary, then uses the same shared
@@ -1269,15 +1415,27 @@ function signalStateCandidates(input: CoachingFocusInput): Candidate[] {
     action.posture !== "easy" &&
     action.posture !== "done"
   ) {
+    // `compress` says life capacity is at watch — it does NOT say WHY, and the two
+    // causes want opposite cards. A dated commitment squeezes the CLOCK (fit the work
+    // in the window). A stressful stretch / expected worse sleep squeezes RECOVERY,
+    // and the calendar framing then contradicted the very sentence above it: the
+    // schedule_pressure voice says "there's enough going on to squeeze your recovery"
+    // while the move insisted "this is a timing constraint, not a recovery verdict".
+    const commitment = lifeCapacityIsCommitment(state);
+    const date = String(state?.date ?? "");
     out.push({
       key: "signal-schedule-compress",
       leverage: 3.5,
       slot: "parallel",
       item: {
         domain: "training",
-        title: "Keep today's work inside the available window",
+        title: commitment
+          ? pickDayVariant(COMMITMENT_PRESSURE_TITLES, date, "cfocus:commitment_pressure:title")
+          : pickDayVariant(LIFE_PRESSURE_TITLES, date, "cfocus:life_pressure:title"),
         why: clip(spoken(state.dimensions?.life_capacity?.voice, SIGNAL_VOICE_KEYS.schedule), 220),
-        move: "Prioritize the main work and defer optional volume; this is a timing constraint, not a recovery verdict.",
+        move: commitment
+          ? pickDayVariant(COMMITMENT_PRESSURE_MOVES, date, "cfocus:commitment_pressure:move")
+          : pickDayVariant(LIFE_PRESSURE_MOVES, date, "cfocus:life_pressure:move"),
         based_on: evidence("Unified schedule directive: compress"),
       },
     });
@@ -1323,27 +1481,42 @@ function applySignalStateConstraints(candidates: Candidate[], input: CoachingFoc
   }
 
   // Modify does not masquerade as rest. It keeps a useful training lever, but the
-  // work-around must be explicit wherever that lever lands.
+  // work-around must be explicit wherever that lever lands — and it must describe the
+  // thing that actually constrained the day, in words that work with no injury present.
   const injuryCaveat = activeInjuryWorkaround(input);
   if (action.posture === "modify" || injuryCaveat) {
-    const caveat =
+    const date = String(state?.date ?? "");
+    const cause = caveatCause(state);
+    const caveat = clip(
       injuryCaveat ||
-      `${spokenSignalVoice(action.voice, String(state?.date ?? ""), SIGNAL_VOICE_KEYS.protect)} Work around it today with pain-free substitutions and conservative load.`;
+        `${spokenSignalVoice(state?.dimensions?.[cause]?.voice ?? action.voice, date, CAVEAT_VOICE_KEY)} ${pickDayVariant(CAVEAT_INSTRUCTIONS[cause], date, `${CAVEAT_VOICE_KEY}:${cause}`)}`,
+      CAVEAT_MAX
+    );
+    // The truthful provenance line: the directive's REAL value plus the dimension it
+    // came from. The old line asserted "modify" whatever `directives.training` said —
+    // printing the posture under a "directive" label on every hold_aggression day.
+    const directive = String(action.directives?.training ?? action.posture);
     for (const candidate of candidates) {
       if (!trainingFamily(candidate)) continue;
-      candidate.caveat = clip(caveat, 220);
-      candidate.item.why = clip(`${candidate.item.why} ${candidate.caveat}`, 240);
+      candidate.caveat = caveat;
+      // Travels with the text: the cause is otherwise module-private, and the two
+      // downstream paths that re-wrap this caveat carry no line to scrape it from.
+      candidate.caveat_cause = CAVEAT_CAUSE_LABEL[cause];
+      candidate.item.why = joinCaveat(candidate.item.why, caveat);
       candidate.item.based_on = cleanEvidence([
         ...(candidate.item.based_on ?? []),
-        "Unified training directive: modify",
+        `Unified training directive: ${directive} (from ${CAVEAT_CAUSE_LABEL[cause]})`,
       ]);
     }
   }
 
-  // Compression constrains time, not readiness. Preserve whichever training/run
-  // lever wins and make its concrete move fit the shorter window.
+  // Compression constrains time OR recovery room — never both, and the two read
+  // oppositely (see lifeCapacityIsCommitment). Preserve whichever training/run lever
+  // wins and make its concrete move fit whichever squeeze is actually on.
   if (action.directives?.schedule === "compress" && !protectsDay) {
-    const timing = "Today, keep it inside the compressed window: main work first, optional volume deferred.";
+    const timing = lifeCapacityIsCommitment(state)
+      ? "Today, keep it inside the compressed window: main work first, optional volume deferred."
+      : pickDayVariant(LIFE_PRESSURE_TIMING, String(state?.date ?? ""), "cfocus:life_pressure:constraint");
     for (const candidate of candidates) {
       if (!trainingFamily(candidate) || candidate.key === "signal-schedule-compress") continue;
       candidate.item.move = clip([candidate.item.move, timing].filter(Boolean).join(" "), 240);
@@ -1475,6 +1648,13 @@ export function coachingFocus(input: CoachingFocusInput = {}): CoachingFocus {
     retest,
     horizon_weeks,
     caveat: caveat ? clip(caveat, 220) : null,
+    // Whichever of the three paths above produced `caveat` names its own cause. The
+    // last one IS the injury work-around by construction, so it labels itself rather
+    // than reporting no cause at all.
+    caveat_cause: caveat
+      ? (lead?.caveat ? lead.caveat_cause : conflictedLever?.caveat_cause) ??
+        CAVEAT_CAUSE_LABEL.health_constraints
+      : null,
     block_line: blockPlacementLine(input.programBlock),
   };
 }

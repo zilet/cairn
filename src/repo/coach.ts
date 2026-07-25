@@ -10,7 +10,13 @@ import {
   newestHealthDocDate,
 } from "./health.js";
 import { imagingForCoach } from "./imaging.js";
-import { dayRead, getCachedDayRead, invalidateDayRead, invalidateDayReadIfDecisionChanged } from "./intelligence.js";
+import {
+  dayPlanningSignalState,
+  dayRead,
+  getCachedDayRead,
+  invalidateDayRead,
+  invalidateDayReadIfDecisionChanged,
+} from "./intelligence.js";
 import { blockForCoach, getActiveBlock } from "./program-blocks.js";
 import { getProgramState, type ProgramState } from "./program-state.js";
 import { getStrengthJourney } from "./strength-objectives.js";
@@ -82,7 +88,7 @@ import {
 import { getSettings } from "./settings.js";
 import { latestBrainEvaluation } from "./brain-evaluations.js";
 import { estimateExpenditure } from "./expenditure.js";
-import { planningSignalState, type UnifiedSignalState } from "./signal-state.js";
+import type { UnifiedSignalState } from "./signal-state.js";
 import { dayLoad } from "./training-read.js";
 import { currentUnderfuelingRead } from "./underfueling-snapshot.js";
 import { cutQualityRead } from "./cut-quality.js";
@@ -1004,20 +1010,24 @@ function getCoachContextFromSnapshot(): CoachContext {
       recoveryWeekActive: !!activeRecoveryWeek(today),
     })
   );
-  const signalStateView = brainSignal(`signal_state:${today}`, () =>
-    planningSignalState({
-      date: today,
-      recovery,
-      checkin: getCheckinByDate(today),
-      trainingSignals: trainingSignalsView,
-      programState: fullProgramState,
-      expenditure: expenditureView,
-      underfueling: underfuelingView,
-      context: contextTodayView,
-      contextEvents: contextEventsView,
-      completedToday: todayLoadView === "hard" || todayLoadView === "moderate",
-    })
-  );
+  // ONE unified signal state per (date, request) — the shared builder, not a
+  // second local call. dayRead()'s own fallback goes through the same function
+  // under the same brain-snapshot key, so the coach context and the athlete-facing
+  // Brief can no longer be computed from differently-shaped inputs (they were: the
+  // Brief's copy omitted trainingSignals + programState and so never saw joint
+  // pain, the low-performance flag or a due deload). The views already computed
+  // above are threaded in so nothing recomputes.
+  const signalStateView = dayPlanningSignalState(today, {
+    recovery,
+    checkin: getCheckinByDate(today),
+    trainingSignals: trainingSignalsView,
+    programState: fullProgramState,
+    expenditure: expenditureView,
+    underfueling: underfuelingView,
+    context: contextTodayView,
+    contextEvents: contextEventsView,
+    completedToday: todayLoadView === "hard" || todayLoadView === "moderate",
+  });
   // The prose cache is an accelerator, not a second brain. Reattach today's
   // canonical state even when the sentence came from an earlier warm so every
   // prompt and deterministic planner sees one posture.
@@ -1814,18 +1824,6 @@ export function updateDirective(id: number, fields: DirectiveInput) {
     }
   }
   return updated;
-}
-
-// Clear a whole source's directives before re-deriving them, so a fresh
-// deriveDirectives() pass never accumulates stale rows. Soft-resolves rather
-// than deletes, keeping a history. Sources coexist: clearing 'markers' leaves
-// 'health_review' directives untouched and vice-versa.
-export function clearDirectivesForSource(source: string) {
-  return {
-    cleared: db
-      .prepare(`UPDATE health_directives SET status = 'resolved' WHERE source = ? AND status = 'active'`)
-      .run(source).changes,
-  };
 }
 
 // Whether an existing active row already carries the desired content, so a re-derive can

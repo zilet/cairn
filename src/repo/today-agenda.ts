@@ -44,7 +44,7 @@ import { estimateExpenditure } from "./expenditure.js";
 import { computeGoalCheck } from "./profile.js";
 import { cutQualityRead, type CutQualityActive } from "./cut-quality.js";
 import { fuelingFollowThroughDue } from "./fueling.js";
-import { addDaysISO, localDateISO } from "./shared.js";
+import { addDaysISO, clipText, localDateISO } from "./shared.js";
 import { getCachedDayRead } from "./intelligence.js";
 import { listVisibleInsights, listActiveDirectives } from "./coach.js";
 import { programAdjustments, programBalance, recentMuscleLoad } from "./progression.js";
@@ -467,10 +467,7 @@ const FAST_LOSS_AGENDA_SEEN_KEY = "today_agenda_seen:fast-loss-attention";
 const FAST_LOSS_ACK_COOLDOWN_DAYS = 14;
 
 function clipAgenda(value: unknown, max = 230): string {
-  const text = String(value ?? "")
-    .replace(/\s+/g, " ")
-    .trim();
-  return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
+  return clipText(value, max, { collapseWhitespace: true, ellipsis: "…" });
 }
 
 function healthAgendaRevision(focus: any, directives: any[]): string {
@@ -592,7 +589,9 @@ function fastLossAgendaRevision(goal: any, expenditure: any, cut: CutQualityActi
     verdict: cut.verdict,
     anchors: cut.strength.anchors
       .map((anchor) => ({
-        name: String(anchor?.name || "").trim().toLowerCase(),
+        name: String(anchor?.name || "")
+          .trim()
+          .toLowerCase(),
         status: anchor?.status ?? null,
       }))
       .sort((a, b) => a.name.localeCompare(b.name)),

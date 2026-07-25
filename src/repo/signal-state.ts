@@ -16,6 +16,7 @@ export type SignalDirection = "support" | "neutral" | "caution" | "constraint";
 export type SignalConfidence = "none" | "low" | "medium" | "high";
 export type SignalFreshness = "fresh" | "recent" | "stale";
 export type SignalPosture = "train" | "modify" | "easy" | "rest" | "done";
+export type PlanningTrainingDirective = "proceed" | "hold_aggression" | "modify" | "recover";
 
 export interface SignalObservation {
   dimension: SignalDimension;
@@ -84,7 +85,15 @@ export interface UnifiedSignalState {
     source_dimensions: SignalDimension[];
     confidence: SignalConfidence;
     directives: {
-      training: "proceed" | "hold_aggression" | "modify" | "recover";
+      training: PlanningTrainingDirective;
+      // WHICH dimension's status produced `training`. `action.voice` speaks the
+      // POSTURE, and on a ready/train day that posture is drawn from SUPPORT
+      // evidence — so a `hold_aggression` day voiced through it tells the athlete
+      // they slept fine and then asks them to hold, naming nothing they are holding
+      // for. This names the dimension whose status produced the directive, so an
+      // athlete-facing surface can lead with that dimension's own `voice` instead.
+      // `null` only when `training` is "proceed".
+      training_source: SignalDimension | null;
       fueling: "normal" | "settling" | "protect";
       schedule: "normal" | "compress" | "reschedule";
     };
@@ -126,36 +135,57 @@ export interface SignalVoiceEntry {
 
 export const SIGNAL_VOICE = {
   // Recovery capacity — wearable and felt.
-  sleep_short: {
-    concept: /\b(?:sleep|night|nights)\b/i,
+  //
+  // ONE night and a MULTI-NIGHT trend are different evidence and get different words.
+  // `recovery.sleep_min` is the latest dated night, not an average (getRecoverySummary
+  // keeps `avg_sleep_min` separate, and day-read's own `low_sleep` flag reads THAT), so
+  // a chronic sentence spoken off it asserted a pattern from a single reading — and the
+  // Brief printed "Short nights have been stacking up" directly above its own signals
+  // row saying sleep was about normal. The `*_night` pair speaks for the one night; the
+  // chronic pair below speaks only for an observation built from the window.
+  sleep_night_short: {
+    // Singular `night` — a `\b`-bounded "night" cannot match "nights", so a phrasing
+    // that drifted into claiming a run of them fails this key's own guard.
+    concept: /\bnight\b/i,
     variants: [
-      "Your sleep has been coming up short, so today is better spent recovering than pushing.",
+      "Your most recent night came up short, so today is worth easing into.",
+      "The last night on record was a short one — today is a good place to give some of that back.",
+      "You've got one short night behind you, which is reason enough to keep today gentle.",
+    ],
+  },
+  sleep_night_ok: {
+    concept: /\bnight\b/i,
+    variants: [
+      "Your most recent night looks fine.",
+      "The last night on record went well enough.",
+      "Nothing about your latest night argues with the planned day.",
+    ],
+  },
+  // Chronic: only ever spoken for the windowed `sleep_trend` observation.
+  sleep_short: {
+    concept: /\b(?:sleep|nights)\b/i,
+    variants: [
+      "Your sleep has been coming up short across the past couple of weeks, so today is better spent recovering than pushing.",
       "Short nights have been stacking up — today is a good day to give some of that back.",
       "You haven't been getting much sleep lately, and that is worth protecting today.",
     ],
   },
-  sleep_ok: {
-    concept: /\bsleep\b/i,
-    variants: [
-      "Your sleep is holding up well right now.",
-      "Sleep has been treating you fine lately.",
-      "Nothing in your recent sleep is arguing with the planned day.",
-    ],
-  },
+  // Readiness rides a ≤1-day window (see the observation below), so these speak about
+  // the latest reading rather than "this morning": one day old is still yesterday.
   readiness_subdued: {
     concept: /\b(?:readiness|reading|watch)\b/i,
     variants: [
-      "This morning's readiness reading came in subdued, so today is worth easing into.",
-      "Your watch read this morning as low, which is worth respecting rather than pushing through.",
-      "Today's reading is on the quiet side, and a gentler day fits it.",
+      "Your latest readiness reading came in subdued, so today is worth easing into.",
+      "The last thing your watch sent read low, which is worth respecting rather than pushing through.",
+      "Your most recent reading is on the quiet side, and a gentler day fits it.",
     ],
   },
   readiness_ok: {
     concept: /\b(?:readiness|reading|watch)\b/i,
     variants: [
-      "This morning's readiness reading looks supportive.",
-      "Your watch reads fine this morning.",
-      "Today's reading sits in a good place.",
+      "Your latest readiness reading looks supportive.",
+      "The last thing your watch sent reads fine.",
+      "Your most recent reading sits in a good place.",
     ],
   },
   hrv_below: {
@@ -361,9 +391,13 @@ export const SIGNAL_VOICE = {
   joint_pain: {
     concept: /\b(?:pain-free|around|comfortable)\b/i,
     sample: "sore joints",
+    // The subject is `joint_areas.join(", ")`, so its NUMBER is unknown here — one area
+    // or several. Every phrasing must therefore agree with neither: no verb inflected on
+    // the subject, no pronoun referring back to it. "Your {} need working around" read
+    // "Your left knee need working around" on the common single-area day.
     variants: [
-      "Keep today pain-free around your {} and swap anything that provokes them.",
-      "Your {} need working around today, so choose movements that stay comfortable.",
+      "Keep today pain-free around your {} and swap out any movement that provokes pain.",
+      "Worth working around your {} today, so choose movements that stay comfortable.",
       "Stay off anything that bothers your {} today and pick a pain-free substitute.",
     ],
   },
@@ -507,6 +541,29 @@ export function spokenSignalVoice(
   return pickDayVariant(signalVoice(ref), date, key);
 }
 
+// `directives.schedule === "compress"` has TWO unrelated causes, and only one of them
+// is about the clock: a real dated commitment (voice `commitment_pressure`), or
+// `context.expect_worse_sleep` — a late night or a stressful stretch, which squeezes
+// RECOVERY and nothing else (voice `schedule_pressure`). Both observations write the
+// same `field`, so the directive alone cannot tell them apart, and reading it alone
+// told an athlete with only "Brutal week at work" on record that a commitment was
+// shortening their training window.
+//
+// Two surfaces need the distinction — the Brief's caveat and its 60→40 clamp
+// (day-read) and the conductor's compress card (coaching-focus) — and each had grown
+// its own copy. It lives here because it is a question about the signal state, and
+// because two copies of a discriminator drift into two different answers.
+//
+// The arbitrated dimension voice IS the answer, and deliberately the only one consulted.
+// One of the two former copies also scanned raw `evidence` when that key came back empty
+// — but dimensionState always assigns a voice, so the branch was unreachable from the
+// builder, and a second path that can contradict arbitration is a competing arbitration
+// rule rather than a null-safety floor. An absent key means no life-capacity evidence
+// won, which is not a commitment.
+export function lifeCapacityIsCommitment(state: UnifiedSignalState | null | undefined): boolean {
+  return String(state?.dimensions?.life_capacity?.voice?.key ?? "").trim() === "commitment_pressure";
+}
+
 const DIMENSIONS: SignalDimension[] = [
   "recovery_capacity",
   "training_load_tolerance",
@@ -515,6 +572,18 @@ const DIMENSIONS: SignalDimension[] = [
   "life_capacity",
 ];
 const DIRECTION_RANK: Record<SignalDirection, number> = { neutral: 0, support: 1, caution: 2, constraint: 3 };
+
+// A brake summary joined onto a support summary ("… supports the day. But …") sits
+// mid-sentence, so its sentence-initial capital comes down — but only when that capital
+// is one. An acronym ("HRV is below the athlete's recent norm.") or a device name
+// ("Apple daily activity shows …") owns its case, and lowercasing it unconditionally
+// put "hRV" and "apple" into the coach context and the provenance trail. Same posture as
+// the injury-vs-illness titles further down: decide from what the string IS, never blind.
+const PROPER_OPENER = /^(?:Apple|Garmin|Oura|Whoop|Cairn)\b/;
+function joinedCase(summary: string): string {
+  if (/^[A-Z]{2,}/.test(summary) || PROPER_OPENER.test(summary)) return summary;
+  return `${summary.charAt(0).toLowerCase()}${summary.slice(1)}`;
+}
 
 function ageDays(reference: string, date: string | null): number | null {
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
@@ -601,8 +670,7 @@ function dimensionState(dimension: SignalDimension, evidence: ResolvedSignalEvid
     const support = active.find((item) => item.direction === "support");
     const brake =
       active.find((item) => item.direction === "constraint") ?? active.find((item) => item.direction === "caution");
-    if (support && brake)
-      conflicts.push(`${support.summary} But ${brake.summary.charAt(0).toLowerCase()}${brake.summary.slice(1)}`);
+    if (support && brake) conflicts.push(`${support.summary} But ${joinedCase(brake.summary)}`);
   }
   const activeFields = [...new Set(active.map((item) => item.field))];
   const staleFields = [...new Set(all.filter((item) => item.freshness === "stale").map((item) => item.field))];
@@ -695,16 +763,29 @@ function planningDirectives(dimensions: Record<SignalDimension, SignalDimensionS
   const health = dimensions.health_constraints.status;
   const energy = dimensions.energy_fueling.status;
   const life = dimensions.life_capacity.status;
-  const training: "proceed" | "hold_aggression" | "modify" | "recover" =
-    recovery === "constrained" || trainingLoad === "constrained"
-      ? "recover"
-      : health === "constrained"
-        ? "modify"
-        : recovery === "watch" || trainingLoad === "watch" || health === "watch" || energy === "constrained"
-          ? "hold_aggression"
-          : "proceed";
+  // ONE ordered precedence chain, evaluated once: each rung carries both the verdict
+  // and the dimension whose status produced it, so the directive and its cause can
+  // never drift apart the way two parallel condition chains would. The rungs are the
+  // original chain flattened — every `||` inside a tier became its own rung in the
+  // order it was written, which cannot change the verdict because a tier's alternatives
+  // all resolve to the same one.
+  const rungs: ReadonlyArray<{
+    fires: boolean;
+    training: Exclude<PlanningTrainingDirective, "proceed">;
+    source: SignalDimension;
+  }> = [
+    { fires: recovery === "constrained", training: "recover", source: "recovery_capacity" },
+    { fires: trainingLoad === "constrained", training: "recover", source: "training_load_tolerance" },
+    { fires: health === "constrained", training: "modify", source: "health_constraints" },
+    { fires: recovery === "watch", training: "hold_aggression", source: "recovery_capacity" },
+    { fires: trainingLoad === "watch", training: "hold_aggression", source: "training_load_tolerance" },
+    { fires: health === "watch", training: "hold_aggression", source: "health_constraints" },
+    { fires: energy === "constrained", training: "hold_aggression", source: "energy_fueling" },
+  ];
+  const decided = rungs.find((rung) => rung.fires) ?? null;
   return {
-    training,
+    training: decided?.training ?? ("proceed" as const),
+    training_source: decided?.source ?? null,
     fueling:
       energy === "constrained"
         ? ("protect" as const)
@@ -851,7 +932,8 @@ export function planningSignalState(input: {
     qualityField: string,
     direction: SignalDirection,
     summary: string,
-    voice: SignalVoiceKey
+    voice: SignalVoiceKey,
+    maxAgeDays = 3
   ) => {
     const q = quality[qualityField] ?? {};
     observations.push(
@@ -862,19 +944,44 @@ export function planningSignalState(input: {
           expected: q.expected_days ?? null,
           window_days: q.window_days ?? null,
         },
-        max_age_days: 3,
+        max_age_days: maxAgeDays,
       })
     );
   };
   const current = input.recovery?.recovery ?? {};
+  // ONE night. `recovery.sleep_min` is the latest dated reading (getRecoverySummary's
+  // `current(...)`), never an average — so the direction bands stay as they were (under
+  // 5h owns the day, under 6h is a caution) while the words claim only that night.
   if (current.sleep_min != null)
     addRecovery(
       "sleep",
       "sleep_min",
       Number(current.sleep_min) < 300 ? "constraint" : Number(current.sleep_min) < 360 ? "caution" : "support",
-      Number(current.sleep_min) < 360 ? "Recent sleep is running short." : "Recent sleep supports the planned day.",
-      Number(current.sleep_min) < 360 ? "sleep_short" : "sleep_ok"
+      Number(current.sleep_min) < 360
+        ? "The most recent recorded night came in short."
+        : "The most recent recorded night supports the planned day.",
+      Number(current.sleep_min) < 360 ? "sleep_night_short" : "sleep_night_ok"
     );
+  // The multi-night trend, which is the only evidence a chronic sentence may be spoken
+  // for. Same <6h line day-read's own `low_sleep` flag uses, off the same `avg_sleep_min`,
+  // so the Brief's headline and its signals row cannot contradict each other. Caution
+  // only: a short average informs the day, it never owns it — the night above does that.
+  const avgSleepMin = Number(current.avg_sleep_min);
+  if (Number.isFinite(avgSleepMin) && avgSleepMin > 0 && avgSleepMin < 360)
+    addRecovery(
+      "sleep_trend",
+      "sleep_min",
+      "caution",
+      "Sleep across the recent window is averaging under six hours.",
+      "sleep_short"
+    );
+  // Readiness rides a ONE-day window, matching day-read's own gate ("a stale current
+  // value cannot" force a recommendation, src/repo/day-read.ts). At the former 3 days a
+  // reading the deterministic Brief refused to act on still reached the athlete through
+  // this layer: the protect rule leads off `action.posture` alone, so a three-day-old
+  // subdued reading produced an easy read voiced as though it had come in that morning.
+  // Older readings are not deleted — they resolve `stale`, which is exactly the "context,
+  // never a gate" standing the prompt already tells the agent to give them.
   if (current.training_readiness != null)
     addRecovery(
       "training_readiness",
@@ -885,9 +992,10 @@ export function planningSignalState(input: {
           ? "caution"
           : "support",
       Number(current.training_readiness) < 50
-        ? "The fresh wearable readiness signal is subdued."
-        : "The fresh wearable readiness signal is supportive.",
-      Number(current.training_readiness) < 50 ? "readiness_subdued" : "readiness_ok"
+        ? "The wearable readiness signal is subdued."
+        : "The wearable readiness signal is supportive.",
+      Number(current.training_readiness) < 50 ? "readiness_subdued" : "readiness_ok",
+      1
     );
   if (input.recovery?.delta?.hrv != null)
     addRecovery(
@@ -983,8 +1091,12 @@ export function planningSignalState(input: {
         date,
         "user_checkin",
         Number(checkin.energy) <= 2 ? "constraint" : Number(checkin.energy) >= 4 ? "support" : "neutral",
+        // Third-person evidence, like every sibling: this string is the POSTURE line in
+        // the prompt and the `based_on` provenance, and it was handing the model a
+        // verdict ("rest is the smart call") where the contract promises an observation.
+        // The athlete-facing sentence is the `felt_energy_low` voice and is unchanged.
         Number(checkin.energy) <= 2
-          ? "You're feeling run-down today — rest is the smart call."
+          ? "The athlete reports feeling run-down today."
           : "The athlete reports workable energy today.",
         {
           voice: { key: Number(checkin.energy) <= 2 ? "felt_energy_low" : "felt_energy_ok" },
@@ -1244,6 +1356,14 @@ export function planningSignalState(input: {
         { voice: { key: "illness", subject: illnessTitle }, safety_override: true, max_age_days: 0 }
       )
     );
+  // A FLOOR, not a live path. `activeContextEffect` derives `reduce_load` as
+  // `active.some((a) => a.reduce_load)` over items whose own `reduce_load` is a required
+  // boolean, so whenever this flag is true at least one item lands in `activeInjuries`
+  // (kind injury) or `activeIllnesses` (everything else that reduces load) above — both
+  // live callers pass that snapshot, so this never fires for them. It stays because the
+  // `context` input is untyped: a caller that supplies the coarse flag without an
+  // itemized `active` list must still put a load-reducing health constraint into the
+  // health dimension rather than silently drop it.
   if (context?.reduce_load && !activeInjuries.length && !activeIllnesses.length)
     observations.push(
       observation(

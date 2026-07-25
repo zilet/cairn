@@ -685,6 +685,46 @@ export const COACHING_STANCE = `COACH LIKE ONE PERSON, NOT A DASHBOARD:
 - CONNECT the domains in plain words (a lab shapes food AND training; recovery shapes today's intensity; aerobic work is fitness AND longevity).
 - Speak in ONE warm, direct voice — no metric walls, no checklists, no scores.`;
 
+// A conductor item whose `day_posture` is set is THE DETERMINISTIC FLOOR SPEAKING, and
+// its `why` is the exact sentence the Brief prints — same voice, same key, same date, on
+// purpose, so one signal reads as one observation on the athlete's screen
+// (src/repo/coaching-focus.ts). Handing that sentence to the agent as "the one focus" is
+// the parroting the prompt-context projection already guards against by dropping
+// `day_read` from every DATA block; it just leaked back in through the conductor. So a
+// day-posture item shows WHAT the conductor points at (title, move) and the GROUNDS it
+// pointed on — `based_on`, the machine register — and never the phrasing. The agent
+// still has the signals blob (avg_sleep_min, low_sleep, fatigue.sleep_vs_norm,
+// last_night) and the READINESS / LAST NIGHT lines, so it must reach its own words. The
+// client does the same on Today: a `day_posture` lead renders no conductor thread at all
+// (src/client/coaching-focus-client.ts).
+function focusWhy(item: any): string {
+  if (item?.day_posture) return "";
+  return item?.why ? ` — ${item.why}` : "";
+}
+
+function focusGrounds(item: any): string {
+  if (!item?.day_posture) return "";
+  const grounds = (Array.isArray(item.based_on) ? item.based_on : []).map((g: any) => String(g ?? "").trim()).filter(Boolean);
+  return grounds.length ? `GROUNDS (evidence, not phrasing — say it in your own words): ${grounds.join("; ")}` : "";
+}
+
+// The caveat's label. It used to read "(injury/soreness)" at both call sites, but the
+// conductor selects the caveat by CAUSE — health constraints, fueling, recovery capacity,
+// accumulated training load or life capacity — so four of the five causes were announced
+// to the model as an injury that did not exist ("EASE AROUND (injury/soreness): your fuel
+// has been running behind…"). The label is derived from whatever cause the conductor
+// publishes on its own output and is otherwise NEUTRAL: the caveat text always ends in
+// its own concrete instruction, and the prompt layer must NOT keep a second copy of that
+// cause taxonomy. `caveat_cause` is the conductor's own label, published beside the
+// caveat text precisely so this layer never has to re-derive it — the cause is otherwise
+// module-private, and two of the three paths that produce a caveat carry no provenance
+// line to read it from. Falls back to the neutral label if a caller omits it.
+function caveatLine(cf: any): string {
+  if (!cf?.caveat) return "";
+  const cause = String(cf.caveat_cause ?? "").trim().replace(/_/g, " ");
+  return `EASE AROUND${cause ? ` (${cause})` : ""}: ${cf.caveat}`;
+}
+
 // renderCoachingFocus — the conductor block. Rendered FIRST in every plan prompt, above
 // all the domain reads, so the agent leads with ONE sequenced focus (lead + parallel +
 // later + connections + the batched retest) instead of a flood of co-equal blocks. The
@@ -694,18 +734,26 @@ export function renderCoachingFocus(ctx: PartialCoachContext, opts: { brief?: bo
   const cf = ctx?.coaching_focus as any;
   if (!cf || !cf.available || !cf.lead) return "";
   const lead = cf.lead;
+  const caveat = caveatLine(cf);
   if (opts.brief) {
-    return `THIS BLOCK'S ONE FOCUS: ${lead.title} — ${lead.why}${lead.move ? ` (${lead.move})` : ""}${cf.caveat ? `\nEASE AROUND (injury/soreness): ${cf.caveat}` : ""}\n`;
+    const grounds = focusGrounds(lead);
+    return `THIS BLOCK'S ONE FOCUS: ${lead.title}${focusWhy(lead)}${lead.move ? ` (${lead.move})` : ""}${grounds ? `\n${grounds}` : ""}${caveat ? `\n${caveat}` : ""}\n`;
   }
   const lines: string[] = [];
   lines.push("THIS BLOCK — THE FOCUS (the conductor; LEAD with this — everything below it is evidence, not a checklist):");
-  lines.push(`  ▸ LEAD: ${lead.title} — ${lead.why}${lead.move ? ` ${lead.move}` : ""}`);
-  for (const p of cf.parallel || []) lines.push(`  ▸ ALONGSIDE (${p.domain}, handled via a different lever): ${p.title} — ${p.why}${p.move ? ` ${p.move}` : ""}`);
+  lines.push(`  ▸ LEAD: ${lead.title}${focusWhy(lead)}${lead.move ? ` ${lead.move}` : ""}`);
+  const leadGrounds = focusGrounds(lead);
+  if (leadGrounds) lines.push(`  ▸ ${leadGrounds}`);
+  for (const p of cf.parallel || []) {
+    lines.push(`  ▸ ALONGSIDE (${p.domain}, handled via a different lever): ${p.title}${focusWhy(p)}${p.move ? ` ${p.move}` : ""}`);
+    const parallelGrounds = focusGrounds(p);
+    if (parallelGrounds) lines.push(`  ▸ ${parallelGrounds}`);
+  }
   if ((cf.later || []).length) lines.push(`  ▸ LATER (say it's deferred — do NOT act on it yet): ${cf.later.map((l: any) => l.title).join("; ")}`);
   for (const c of cf.connections || []) lines.push(`  ▸ CONNECT: ${c}`);
-  // The life/soreness caveat: a training lever that loads an injured/sore area is
+  // The work-around caveat: a training lever that runs into a flagged constraint is
   // worked AROUND, never pushed through — plain words, a suggestion not a gate.
-  if (cf.caveat) lines.push(`  ▸ EASE AROUND (injury/soreness): ${cf.caveat}`);
+  if (caveat) lines.push(`  ▸ ${caveat}`);
   if (cf.retest) lines.push(`  ▸ NEXT CHECK-IN${cf.retest.in_weeks === 0 ? " (due now)" : ""}: re-test ${cf.retest.focus.join(", ")} — ${cf.retest.why}`);
   return `${lines.join("\n")}\n\n`;
 }

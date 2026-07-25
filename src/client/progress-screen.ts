@@ -14,7 +14,8 @@ async function renderProgress() {
     peek: peek as never,
     token,
     tab: "progress",
-    render: (exercises: unknown) => CairnProgressTrendWeight.paintProgressBody(CairnProgressData.rows<ProgressExercise>(exercises)),
+    render: (exercises: unknown) =>
+      CairnProgressTrendWeight.paintProgressBody(CairnProgressData.rows<ProgressExercise>(exercises)),
   });
 }
 
@@ -36,21 +37,42 @@ async function renderWeight() {
   let goalPace: unknown = null;
   const paint = (rows: unknown, profile: unknown) => {
     if (token !== pollToken || state.tab !== "progress") return;
-    CairnProgressTrendWeight.paintWeightBody(CairnProgressData.rows<ProgressWeightRow>(rows), CairnProgressData.record(profile));
+    CairnProgressTrendWeight.paintWeightBody(
+      CairnProgressData.rows<ProgressWeightRow>(rows),
+      CairnProgressData.record(profile)
+    );
     mountGoalPaceChart(token, goalPace);
   };
   // Profile rides along (peeked + revalidated under its shared key); the weight
   // rows are the SWR-keyed surface that actually changes here.
   let profile = peekProfile ? peekProfile.data : null;
-  cachedApi("/profile", { key: "profile", onUpgrade: (data) => { profile = data; } }).catch(() => {});
+  cachedApi("/profile", {
+    key: "profile",
+    onUpgrade: (data) => {
+      profile = data;
+    },
+  }).catch(() => {});
   // Best-effort goal-pace overlay; a missing endpoint leaves the Weight view
   // exactly as it was (it never throws into the render path).
-  api("/nutrition/goal-pace?days=90").then((gp) => { goalPace = gp; mountGoalPaceChart(token, goalPace); }).catch(() => {});
-  if (peekRows) { paint(peekRows.data, profile); if (!peekRows.fresh) markRefreshing(true); }
+  api("/nutrition/goal-pace?days=90")
+    .then((gp) => {
+      goalPace = gp;
+      mountGoalPaceChart(token, goalPace);
+    })
+    .catch(() => {});
+  if (peekRows) {
+    paint(peekRows.data, profile);
+    if (!peekRows.fresh) markRefreshing(true);
+  }
   cachedApi("/bodyweight?limit=90", {
     key: "progress:weight",
-    onUpgrade: (rows, { changed }) => { if (peekRows && !peekRows.fresh) markRefreshing(false); if (changed || !peekRows) skelSwap(() => paint(rows, profile)); },
-  }).catch(() => { if (peekRows && !peekRows.fresh) markRefreshing(false); });
+    onUpgrade: (rows, { changed }) => {
+      if (peekRows && !peekRows.fresh) markRefreshing(false);
+      if (changed || !peekRows) skelSwap(() => paint(rows, profile));
+    },
+  }).catch(() => {
+    if (peekRows && !peekRows.fresh) markRefreshing(false);
+  });
 }
 
 // ---------- Progress: goal-pace chart (Weight view) ----------
@@ -138,11 +160,15 @@ function goalPaceChartHtml(gp: unknown): string {
   // the x-axis naturally extends past the last weigh-in toward the target).
   const ts = [...pts.map((p) => p.t), ...trendLine.map((p) => p.t), ...neededLine.map((p) => p.t)];
   const vs = [...pts.map((p) => p.v), ...trendLine.map((p) => p.v), ...neededLine.map((p) => p.v)];
-  if (hasGoal) { ts.push(goalT); vs.push(goalW); }
+  if (hasGoal) {
+    ts.push(goalT);
+    vs.push(goalW);
+  }
   const xMin = Math.min(...ts);
   let xMax = Math.max(...ts);
   if (xMax === xMin) xMax = xMin + 1;
-  let yMin = Math.min(...vs), yMax = Math.max(...vs);
+  let yMin = Math.min(...vs),
+    yMax = Math.max(...vs);
   // Never dramatize a 2-lb wiggle: floor the visible weight span to ≥8 lb (or 5%
   // of current bodyweight, whichever is larger), then pad.
   const ref = pts[pts.length - 1].v;
@@ -156,7 +182,12 @@ function goalPaceChartHtml(gp: unknown): string {
   yMin -= padY;
   yMax += padY;
 
-  const W = 328, H = 168, L = 14, R = 16, T = 16, B = 26;
+  const W = 328,
+    H = 168,
+    L = 14,
+    R = 16,
+    T = 16,
+    B = 26;
   const px = (t: number) => L + ((t - xMin) / (xMax - xMin)) * (W - L - R);
   const py = (v: number) => T + (1 - (v - yMin) / (yMax - yMin)) * (H - T - B);
 
@@ -164,23 +195,32 @@ function goalPaceChartHtml(gp: unknown): string {
   const step = gpaceNiceStep((yMax - yMin) / 2.4);
   const ticks: number[] = [];
   for (let tk = Math.ceil(yMin / step) * step; tk <= yMax + 1e-6 && ticks.length < 4; tk += step) ticks.push(tk);
-  const grid = ticks.map((tk) =>
-    `<line class="gpace-grid" x1="${L}" y1="${py(tk).toFixed(1)}" x2="${W - R}" y2="${py(tk).toFixed(1)}" stroke="#e7dfd2" stroke-width="1"/>` +
-    `<text class="gpace-ylbl" x="${L}" y="${(py(tk) - 3).toFixed(1)}" fill="#9a907d" font-size="9">${escHtml(gpaceLb(tk))}</text>`
-  ).join("");
+  const grid = ticks
+    .map(
+      (tk) =>
+        `<line class="gpace-grid" x1="${L}" y1="${py(tk).toFixed(1)}" x2="${W - R}" y2="${py(tk).toFixed(1)}" stroke="#e7dfd2" stroke-width="1"/>` +
+        `<text class="gpace-ylbl" x="${L}" y="${(py(tk) - 3).toFixed(1)}" fill="#9a907d" font-size="9">${escHtml(gpaceLb(tk))}</text>`
+    )
+    .join("");
 
   // The weigh-in series: a soft dotted line + quiet dots that recede so the trend pops.
   const seriesPts = pts.map((p) => `${px(p.t).toFixed(1)},${py(p.v).toFixed(1)}`).join(" ");
-  const seriesLine = pts.length > 1
-    ? `<polyline class="gpace-series" points="${seriesPts}" fill="none" stroke="#c0b6a0" stroke-width="1.5" stroke-dasharray="1.5 3.5" stroke-linecap="round"/>`
-    : "";
-  const seriesDots = pts.map((p) => `<circle class="gpace-dot" cx="${px(p.t).toFixed(1)}" cy="${py(p.v).toFixed(1)}" r="2" fill="#a1937c"/>`).join("");
+  const seriesLine =
+    pts.length > 1
+      ? `<polyline class="gpace-series" points="${seriesPts}" fill="none" stroke="#c0b6a0" stroke-width="1.5" stroke-dasharray="1.5 3.5" stroke-linecap="round"/>`
+      : "";
+  const seriesDots = pts
+    .map(
+      (p) => `<circle class="gpace-dot" cx="${px(p.t).toFixed(1)}" cy="${py(p.v).toFixed(1)}" r="2" fill="#a1937c"/>`
+    )
+    .join("");
 
   // The trend line — terracotta, solid, a touch heavier (the honest current trajectory).
   let trendSvg = "";
   if (trendLine.length === 2) {
     const [a, b] = trendLine;
-    trendSvg = `<line class="gpace-trend" x1="${px(a.t).toFixed(1)}" y1="${py(a.v).toFixed(1)}" x2="${px(b.t).toFixed(1)}" y2="${py(b.v).toFixed(1)}" stroke="#b4552d" stroke-width="2.6" stroke-linecap="round"/>` +
+    trendSvg =
+      `<line class="gpace-trend" x1="${px(a.t).toFixed(1)}" y1="${py(a.v).toFixed(1)}" x2="${px(b.t).toFixed(1)}" y2="${py(b.v).toFixed(1)}" stroke="#b4552d" stroke-width="2.6" stroke-linecap="round"/>` +
       `<circle class="gpace-trend-dot" cx="${px(b.t).toFixed(1)}" cy="${py(b.v).toFixed(1)}" r="3.4" fill="#b4552d"/>`;
   }
 
@@ -195,11 +235,13 @@ function goalPaceChartHtml(gp: unknown): string {
   // read inward so it never overflows the right edge.
   let goalSvg = "";
   if (hasGoal) {
-    const gx = px(goalT), gy = py(goalW);
+    const gx = px(goalT),
+      gy = py(goalW);
     const rightish = gx > W * 0.6;
     const lx = rightish ? gx - 9 : gx + 9;
     const label = `${gpaceLb(goalW)} lb · ${gpaceMonthDay(goalT)}`;
-    goalSvg = `<circle class="gpace-goal-ring" cx="${gx.toFixed(1)}" cy="${gy.toFixed(1)}" r="5" fill="#fffdf8" stroke="#6e7f5c" stroke-width="2"/>` +
+    goalSvg =
+      `<circle class="gpace-goal-ring" cx="${gx.toFixed(1)}" cy="${gy.toFixed(1)}" r="5" fill="#fffdf8" stroke="#6e7f5c" stroke-width="2"/>` +
       `<circle class="gpace-goal-dot" cx="${gx.toFixed(1)}" cy="${gy.toFixed(1)}" r="1.8" fill="#6e7f5c"/>` +
       `<text class="gpace-goal-lbl" x="${lx.toFixed(1)}" y="${(gy + 3).toFixed(1)}" text-anchor="${rightish ? "end" : "start"}" fill="#5f6e4f" font-size="9.5" font-weight="600">${escHtml(label)}</text>`;
   }
@@ -208,7 +250,9 @@ function goalPaceChartHtml(gp: unknown): string {
   // already carries the date), so only add a right axis date when there's no goal.
   const axis =
     `<text class="gpace-xlbl" x="${L}" y="${H - 7}" text-anchor="start" fill="#9a907d" font-size="9">${escHtml(gpaceMonthDay(pts[0].t))}</text>` +
-    (hasGoal ? "" : `<text class="gpace-xlbl" x="${W - R}" y="${H - 7}" text-anchor="end" fill="#9a907d" font-size="9">${escHtml(gpaceMonthDay(pts[pts.length - 1].t))}</text>`);
+    (hasGoal
+      ? ""
+      : `<text class="gpace-xlbl" x="${W - R}" y="${H - 7}" text-anchor="end" fill="#9a907d" font-size="9">${escHtml(gpaceMonthDay(pts[pts.length - 1].t))}</text>`);
 
   // The one-line read beneath — only with a goal (per spec, no goal → no read line).
   const trendRate = gpaceNum(trend.lb_wk);
@@ -239,13 +283,21 @@ function goalPaceChartHtml(gp: unknown): string {
   const readHtml = read ? `<div class="${readCls}">${escHtml(read)}</div>` : "";
   const aria = read || (hasGoal ? "Your weight trend against goal pace." : "Your weight trend.");
 
-  return `<div class="gpace reveal" style="${stagger(1)}">` +
+  return (
+    `<div class="gpace reveal" style="${stagger(1)}">` +
     `<div class="gpace-head lbl">Goal pace</div>` +
     `<svg class="gpace-chart" viewBox="0 0 ${W} ${H}" data-yspan="${(yMax - yMin).toFixed(1)}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${escAttr(aria)}">` +
-      grid + seriesLine + seriesDots + neededSvg + trendSvg + goalSvg + axis +
+    grid +
+    seriesLine +
+    seriesDots +
+    neededSvg +
+    trendSvg +
+    goalSvg +
+    axis +
     `</svg>` +
     readHtml +
-    `</div>`;
+    `</div>`
+  );
 }
 
 // Inject (or refresh) the goal-pace card into the current Weight body. The body
@@ -260,7 +312,10 @@ function mountGoalPaceChart(token: number, gp: unknown): void {
   if (prior) prior.remove();
   const canvas = view.querySelector<HTMLCanvasElement>("#chart");
   const html = goalPaceChartHtml(gp);
-  if (!html) { if (canvas) canvas.hidden = false; return; }
+  if (!html) {
+    if (canvas) canvas.hidden = false;
+    return;
+  }
   const parent = canvas?.parentNode;
   if (!canvas || !parent) return;
   const mount = document.createElement("div");
@@ -302,12 +357,18 @@ async function renderVolume() {
 }
 
 function paintVolumeBody(data: ProgressRecord) {
-  const groups = CairnProgressData.rows<ProgressVolumeGroup>(data.by_muscle).slice()
+  const groups = CairnProgressData.rows<ProgressVolumeGroup>(data.by_muscle)
+    .slice()
     .sort((a, b) => CairnProgressData.number(b.sets) - CairnProgressData.number(a.sets));
   const head = segBar("volume", PROGRESS_SEG);
   if (!groups.length) {
-    view.innerHTML = head + progressHero("Volume", []) +
-      emptyStateHtml(art("exercise", "barbell row"), `Nothing logged in the last ${CairnProgressData.number(data.days, 30)} days.`);
+    view.innerHTML =
+      head +
+      progressHero("Volume", []) +
+      emptyStateHtml(
+        art("exercise", "barbell row"),
+        `Nothing logged in the last ${CairnProgressData.number(data.days, 30)} days.`
+      );
     wireSeg(PROGRESS_HANDLERS);
     return;
   }
@@ -318,17 +379,24 @@ function paintVolumeBody(data: ProgressRecord) {
     ["lb moved · 30d", data.total_tonnage || 0, { k: true }],
     ["top muscle", groups[0].muscle_group, { text: true }],
   ]);
-  const rows = groups.map((g, i) => `
+  const rows = groups
+    .map(
+      (g, i) => `
     <div class="volrow reveal" style="${stagger(i + 2)}">
       <div class="volrow-top">
         <span class="volrow-name">${escHtml(g.muscle_group)}</span>
         <span class="volrow-meta"><b>${CairnProgressData.number(g.sets)}</b> set${CairnProgressData.number(g.sets) === 1 ? "" : "s"} · ${CairnProgressData.number(g.tonnage).toLocaleString()} lb</span>
       </div>
       <div class="volbar"><div class="volbar-fill barfill" style="width:${Math.max(3, Math.round((CairnProgressData.number(g.sets) / maxSets) * 100))}%"></div></div>
-    </div>`).join("");
-  view.innerHTML = head + hero +
+    </div>`
+    )
+    .join("");
+  view.innerHTML =
+    head +
+    hero +
     `<div id="volBalanceSlot" class="vol-balance-slot reveal" style="${stagger(1)}"></div>` +
-    `<div class="vol-kicker lbl reveal" style="${stagger(2)}">Last ${CairnProgressData.number(data.days, 30)} days · ranked by sets</div>` + rows;
+    `<div class="vol-kicker lbl reveal" style="${stagger(2)}">Last ${CairnProgressData.number(data.days, 30)} days · ranked by sets</div>` +
+    rows;
   wireSeg(PROGRESS_HANDLERS);
   runCountUps(view);
   // The balance read settles in above the bars (best-effort, async) — the engine
@@ -348,36 +416,23 @@ async function loadVolumeBalance() {
   const slot = view.querySelector("#volBalanceSlot");
   if (!slot) return;
   let bal = null;
-  try { bal = await api("/program/balance"); } catch { bal = null; }
+  try {
+    bal = await api("/program/balance");
+  } catch {
+    bal = null;
+  }
   if (state.tab !== "progress" || state.progressSeg !== "volume" || !slot.isConnected) return;
   const html = volBalanceHtml(bal);
-  if (!html) { slot.innerHTML = ""; return; }
+  if (!html) {
+    slot.innerHTML = "";
+    return;
+  }
   slot.innerHTML = html;
 }
 
 // ---------- Progress: Endurance (runner/cyclist-first read) ----------
 async function renderEndurance() {
   await CairnProgressEnduranceController.render(CairnProgressRouteDeps.endurance(() => renderEndurance()));
-}
-
-function _paintEnduranceBody(
-  end: unknown,
-  prs: import("../contracts/client-api.js").ClientEndurancePRs | null,
-  goal: import("../contracts/client-api.js").ClientEnduranceGoal | null,
-  compliance: import("../contracts/client-api.js").ClientRunCompliance | null,
-  settings: unknown,
-  runPlan: import("../contracts/client-api.js").ClientWeeklyRunPlan | null,
-) {
-  CairnProgressEnduranceController.paint(
-    end,
-    prs,
-    goal,
-    compliance,
-    settings,
-    runPlan,
-    null,
-    CairnProgressRouteDeps.endurance(() => renderEndurance()),
-  );
 }
 
 // SWR over /calendar?days=84 (key progress:calendar): the Calendar seg paints its
@@ -402,8 +457,8 @@ function paintCalendarBody(data: ProgressRecord) {
   const cells = CairnProgressData.rows<ProgressCalendarCell>(data.cells);
   const head = segBar("calendar", PROGRESS_SEG);
   if (!cells.length) {
-    view.innerHTML = head + progressHero("Calendar", []) +
-      emptyStateHtml(art("activity", "run"), "No activity logged yet.");
+    view.innerHTML =
+      head + progressHero("Calendar", []) + emptyStateHtml(art("activity", "run"), "No activity logged yet.");
     wireSeg(PROGRESS_HANDLERS);
     return;
   }
@@ -458,7 +513,9 @@ async function renderEnergy() {
   const peek = peekCached("progress:energy");
   // Verbal read leads (Amendment 2); the numeric hero is demoted below it. Always
   // paint the shell; only the #energyCard slot shows a loading state on cold.
-  view.innerHTML = head + `<div id="energyCard">${peek ? "" : loadingState("Reading your trend…")}</div>
+  view.innerHTML =
+    head +
+    `<div id="energyCard">${peek ? "" : loadingState("Reading your trend…")}</div>
     <div id="energyHero"></div>
     <div id="checkinResult" class="checkin-result"></div>`;
   wireSeg(PROGRESS_HANDLERS);
@@ -467,11 +524,19 @@ async function renderEnergy() {
     if (token !== pollToken || !view.querySelector("#energyCard")) return;
     paintEnergyBody(exp);
   };
-  if (peek) { paint(peek.data); if (!peek.fresh) markRefreshing(true); }
+  if (peek) {
+    paint(peek.data);
+    if (!peek.fresh) markRefreshing(true);
+  }
   cachedApi("/nutrition/expenditure?window=21", {
     key: "progress:energy",
-    onUpgrade: (exp, { changed }) => { if (peek && !peek.fresh) markRefreshing(false); if (changed || !peek) paint(exp); },
-  }).catch(() => { if (peek && !peek.fresh) markRefreshing(false); });
+    onUpgrade: (exp, { changed }) => {
+      if (peek && !peek.fresh) markRefreshing(false);
+      if (changed || !peek) paint(exp);
+    },
+  }).catch(() => {
+    if (peek && !peek.fresh) markRefreshing(false);
+  });
 }
 
 // ---------- Progress: recorded intake ----------
@@ -500,11 +565,13 @@ async function renderIntake() {
         terminalRefreshStarted = true;
         swrInvalidate("progress:intake");
         if (token !== pollToken || state.tab !== "progress" || state.progressSeg !== "intake") return;
-        api("/nutrition/progress?days=35").then((fresh) => {
-          if (token !== pollToken || state.tab !== "progress" || state.progressSeg !== "intake") return;
-          swrSet("progress:intake", fresh);
-          paint(fresh);
-        }).catch(() => {});
+        api("/nutrition/progress?days=35")
+          .then((fresh) => {
+            if (token !== pollToken || state.tab !== "progress" || state.progressSeg !== "intake") return;
+            swrSet("progress:intake", fresh);
+            paint(fresh);
+          })
+          .catch(() => {});
       };
       pollEnrichment("/food-notes", id, {
         tab: "progress",
