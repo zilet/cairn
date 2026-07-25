@@ -177,7 +177,8 @@ test("a recovery session that materially exceeds its dose still protects the res
   assert.equal(dose.classification, "overdose");
   assert.equal(read.signals.today_load === "moderate" || read.signals.today_load === "hard", true);
   assert.equal(read.kind, "done");
-  assert.match(read.why, /rest of the day is for recovery/i);
+  // The wording rotates per calendar day now (see dayRead.test.js); pin the RULE.
+  assert.equal(read.decision.rule_code, "logged_loading_work_today");
 });
 
 test("a true recovery-dose overdose protects the following day before continuation resumes", () => {
@@ -191,7 +192,7 @@ test("a true recovery-dose overdose protects the following day before continuati
   const read = repo.dayRead(REF, { has_data: false, recovery: {} });
   assert.equal(read.signals.recent_load[0].recovery_dose[0].classification, "overdose");
   assert.equal(read.kind, "rest");
-  assert.match(read.why, /yesterday.*exceeded|absorb it/i);
+  assert.equal(read.decision.rule_code, "recovery_dose_overrun");
 });
 
 test("the first post-recovery day keeps historical compliant sessions easy and resumes building", () => {

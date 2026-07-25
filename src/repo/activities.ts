@@ -1,7 +1,7 @@
 import { db, todayISO } from "../db.js";
 import { emitBrainEvent } from "../brainEvents.js";
 import { emitEnrichTransition } from "../enrichBus.js";
-import { invalidateDayRead } from "./intelligence.js";
+import { invalidateDayRead, invalidateDayReadIfDecisionChanged } from "./intelligence.js";
 import { getOrCreateSession, getSessionDetail, setsForSession } from "./sessions.js";
 import { getSettings } from "./settings.js";
 import { bumpTrainingDataVersion } from "./training-cache.js";
@@ -1022,7 +1022,10 @@ export function upsertGarminDailyMetric(
      ON CONFLICT(source_id, date) DO UPDATE SET ${updates}, updated_at = datetime('now')`
   ).run(...values);
   bumpTrainingDataVersion(); // fresh recovery (HRV/RHR) shifts the program-state deload read
-  invalidateDayRead(); // a Garmin sync brings fresh recovery → today's Brief recomputes
+  // A Garmin sync brings fresh recovery, but a sync is mostly re-writing numbers that
+  // drift a point or two — and it runs several times a day, per synced date. Only
+  // retire today's Brief when the decision genuinely moved (see the helper's note).
+  invalidateDayReadIfDecisionChanged();
   const row = hydrateJson(
     db.prepare(`SELECT * FROM garmin_daily_metrics WHERE source_id = ? AND date = ?`).get(source.id, input.date)
   );
@@ -1317,7 +1320,11 @@ export function updateSessionGarminNarrative(
     ].slice(-32);
   }
   db.prepare(`UPDATE sessions SET garmin_json = ? WHERE id = ?`).run(JSON.stringify(blob), sessionId);
-  invalidateDayRead();
+  // The narrative is prose ABOUT a session, not training the day-read grades: dayLoad
+  // reads logged_sets and garmin_activities, never sessions.garmin_json. The set-logging
+  // half of the same enrichment job already invalidates when it changes the day, and a
+  // re-sync re-writes an identical blob — which used to nuke the Brief every time.
+  invalidateDayReadIfDecisionChanged();
   return getSessionDetail(sessionId);
 }
 

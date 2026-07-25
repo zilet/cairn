@@ -42,16 +42,19 @@ function loadTodayBrief() {
 
 test("Today Brief renders calm launch and steer controls safely", () => {
   const brief = loadTodayBrief();
-  const html = brief.briefHtml({
-    kind: "train",
-    headline: "Push <today>",
-    focus: "Upper <body>",
-    why: "recovered & ready",
-    est_minutes: 45,
-    forward: "Next: legs <tomorrow>",
-    arc: "Hidden when forward exists",
-    signals: {},
-  }, { isToday: true, showPlan: false });
+  const html = brief.briefHtml(
+    {
+      kind: "train",
+      headline: "Push <today>",
+      focus: "Upper <body>",
+      why: "recovered & ready",
+      est_minutes: 45,
+      forward: "Next: legs <tomorrow>",
+      arc: "Hidden when forward exists",
+      signals: {},
+    },
+    { isToday: true, showPlan: false }
+  );
 
   assert.match(html, /brief brief-train reveal/);
   assert.match(html, /TRAIN DAY · 45 min/);
@@ -67,13 +70,16 @@ test("Today Brief renders calm launch and steer controls safely", () => {
 
 test("Today Brief suppresses irrelevant steer chips and exposes reset when steered", () => {
   const brief = loadTodayBrief();
-  const html = brief.briefHtml({
-    kind: "easy",
-    headline: "Light day",
-    why: "",
-    est_minutes: 25,
-    signals: {},
-  }, { isToday: true, activeOverride: "rough night" });
+  const html = brief.briefHtml(
+    {
+      kind: "easy",
+      headline: "Light day",
+      why: "",
+      est_minutes: 25,
+      signals: {},
+    },
+    { isToday: true, activeOverride: "rough night" }
+  );
 
   assert.doesNotMatch(html, /data-override="rough night"/);
   assert.doesNotMatch(html, /data-override="short on time"/);
@@ -102,33 +108,154 @@ test("Today Brief shows the forward plan link on train AND done reads (not rest)
   assert.doesNotMatch(done, /Start session/);
 });
 
+test("Today Brief renders separate recovery and calendar-block clocks with escaped content", () => {
+  const brief = loadTodayBrief();
+  const html = brief.briefHtml(
+    {
+      kind: "easy",
+      headline: "Easy today",
+      why: "Keep the dose light.",
+      computed_at: "2026-03-15T12:30:00.000Z",
+      decision: {
+        rule_code: "recovery_week_rest_softened_to_easy_after_loading_day",
+        basis: "server_policy",
+        baseline_kind: "train",
+        reason: "Yesterday <loaded> the system.",
+        evidence: [],
+        computed_at: "2026-03-15T12:30:00.000Z",
+      },
+      forward: "Next: Push",
+      arc: "Week 3 of 6 — opaque legacy arc",
+      periodization_context: {
+        recovery_overlay: {
+          applied_on: "2026-03-13",
+          until: "2026-03-20",
+          day_index: 3,
+          total_days: 7,
+          proposal_id: 41,
+          label: "reduced volume",
+        },
+        program_block: {
+          goal: "Build <squat> & base",
+          focus: "strength",
+          stored_phase: "accumulation",
+          effective_phase: "deload",
+          week_index: 3,
+          total_weeks: 6,
+          started_at: "2026-03-01T08:00:00.000Z",
+          counter_basis: "calendar_program_block",
+        },
+      },
+      signals: {},
+    },
+    { isToday: true }
+  );
+
+  assert.match(html, /Recovery week · Day 3 of 7 · reduced volume/);
+  assert.match(html, /Build &lt;squat&gt; &amp; base · Week 3 of 6/);
+  assert.doesNotMatch(html, /Next: Push/, "an easy-day Brief does not add an unrelated forward line");
+  assert.doesNotMatch(html, /opaque legacy arc|Build <squat>|Yesterday <loaded>/);
+  assert.match(html, /Yesterday &lt;loaded&gt; the system/);
+  assert.doesNotMatch(
+    html,
+    /recovery_week_rest_softened_to_easy_after_loading_day/,
+    "machine rule codes stay in structured data"
+  );
+  assert.match(html, /Updated /);
+});
+
+test("easy/rest freshness copy shows a useful reason once without leaking machine codes", () => {
+  const brief = loadTodayBrief();
+  const base = {
+    kind: "rest",
+    headline: "Rest today",
+    why: "Several hard days have stacked.",
+    computed_at: "2026-03-15T12:30:00.000Z",
+    decision: {
+      rule_code: "accumulated_load_rest",
+      basis: "deterministic",
+      baseline_kind: "rest",
+      reason: "Several hard days have stacked.",
+      evidence: [],
+      computed_at: "2026-03-15T12:30:00.000Z",
+    },
+    signals: {},
+  };
+
+  const duplicate = brief.briefHtml(base);
+  assert.equal(duplicate.match(/Several hard days have stacked/g)?.length, 1);
+  assert.doesNotMatch(duplicate, /accumulated_load_rest/);
+
+  const useful = brief.briefHtml({
+    ...base,
+    decision: {
+      ...base.decision,
+      reason: "Yesterday exceeded the reduced recovery dose.",
+      rule_code: "recovery_dose_overrun",
+    },
+  });
+  assert.match(useful, /Yesterday exceeded the reduced recovery dose/);
+  assert.doesNotMatch(useful, /recovery_dose_overrun/);
+});
+
+test("default train Brief keeps freshness subtle without repeating a decision reason", () => {
+  const brief = loadTodayBrief();
+  const html = brief.briefHtml({
+    kind: "train",
+    headline: "Good to train",
+    why: "You're recovered and due.",
+    computed_at: "2026-03-15T12:30:00.000Z",
+    decision: {
+      rule_code: "planned_training",
+      basis: "deterministic",
+      baseline_kind: "train",
+      reason: "A programmed session is due.",
+      evidence: [],
+      computed_at: "2026-03-15T12:30:00.000Z",
+    },
+    signals: {},
+  });
+
+  assert.match(html, /Updated /);
+  assert.doesNotMatch(html, /planned_training|A programmed session is due/);
+});
+
 test("Today Brief handles done, provisional, and offline states", () => {
   const brief = loadTodayBrief();
   // The finished-session "Log more" card already covers entry — no action needed.
-  const done = brief.briefHtml({
-    kind: "done",
-    headline: "Training logged",
-    why: "Top set in",
-    est_minutes: null,
-    signals: {},
-  }, { isToday: true, showDone: true });
+  const done = brief.briefHtml(
+    {
+      kind: "done",
+      headline: "Training logged",
+      why: "Top set in",
+      est_minutes: null,
+      signals: {},
+    },
+    { isToday: true, showDone: true }
+  );
   const provisional = brief.briefHtml(brief.provisionalRead(), { isToday: true, reducedMotion: false });
-  const offline = brief.briefHtml({
-    kind: "train",
-    headline: "Today",
-    why: "",
-    est_minutes: null,
-    signals: {},
-    agent_status: "all_failed",
-  }, { isToday: true });
-  const dismissed = brief.briefHtml({
-    kind: "train",
-    headline: "Today",
-    why: "",
-    est_minutes: null,
-    signals: {},
-    agent_status: "all_failed",
-  }, { isToday: true, offlineDismissed: true });
+  const offline = brief.briefHtml(
+    {
+      kind: "train",
+      headline: "Today",
+      why: "",
+      est_minutes: null,
+      signals: {},
+      agent_status: "all_failed",
+    },
+    { isToday: true }
+  );
+  const dismissed = brief.briefHtml(
+    {
+      kind: "train",
+      headline: "Today",
+      why: "",
+      est_minutes: null,
+      signals: {},
+      agent_status: "all_failed",
+    },
+    { isToday: true, offlineDismissed: true }
+  );
 
   assert.match(done, /TRAINED TODAY/);
   assert.doesNotMatch(done, /data-redirect=|data-override=/);
@@ -138,24 +265,30 @@ test("Today Brief handles done, provisional, and offline states", () => {
   assert.match(offline, /reliable baseline/);
   assert.doesNotMatch(dismissed, /couldn't complete this read/);
 
-  const invalid = brief.briefHtml({
-    kind: "train",
-    headline: "Today",
-    why: "",
-    est_minutes: null,
-    signals: {},
-    agent_status: "all_failed",
-    agent_issue: "invalid_response",
-  }, { isToday: true });
-  const unreachable = brief.briefHtml({
-    kind: "train",
-    headline: "Today",
-    why: "",
-    est_minutes: null,
-    signals: {},
-    agent_status: "all_failed",
-    agent_issue: "unreachable",
-  }, { isToday: true });
+  const invalid = brief.briefHtml(
+    {
+      kind: "train",
+      headline: "Today",
+      why: "",
+      est_minutes: null,
+      signals: {},
+      agent_status: "all_failed",
+      agent_issue: "invalid_response",
+    },
+    { isToday: true }
+  );
+  const unreachable = brief.briefHtml(
+    {
+      kind: "train",
+      headline: "Today",
+      why: "",
+      est_minutes: null,
+      signals: {},
+      agent_status: "all_failed",
+      agent_issue: "unreachable",
+    },
+    { isToday: true }
+  );
   assert.match(invalid, /didn't return a usable read/);
   assert.match(unreachable, /Couldn't reach a coaching agent/);
 });
@@ -192,18 +325,27 @@ test("Today Brief offers one quiet entry on a done read with nothing below to st
 test("Today Brief train/easy/rest actions are unaffected by the done-state entry fix", () => {
   const brief = loadTodayBrief();
 
-  const train = brief.briefHtml({ kind: "train", headline: "Push day", why: "", signals: {} }, { isToday: true, showPlan: false, showDone: false });
+  const train = brief.briefHtml(
+    { kind: "train", headline: "Push day", why: "", signals: {} },
+    { isToday: true, showPlan: false, showDone: false }
+  );
   assert.match(train, /data-redirect="start-session"/);
   assert.match(train, /brief-redirect-primary/);
   assert.match(train, /Start session/);
   assert.doesNotMatch(train, /Log training/);
 
-  const easy = brief.briefHtml({ kind: "easy", headline: "Easy day", why: "", signals: {} }, { isToday: true, showPlan: false });
+  const easy = brief.briefHtml(
+    { kind: "easy", headline: "Easy day", why: "", signals: {} },
+    { isToday: true, showPlan: false }
+  );
   assert.match(easy, /data-redirect="reveal-plan"/);
   assert.match(easy, /Train anyway/);
   assert.match(easy, /data-redirect="ask-session"/);
 
-  const rest = brief.briefHtml({ kind: "rest", headline: "Rest day", why: "", signals: {} }, { isToday: true, showPlan: false });
+  const rest = brief.briefHtml(
+    { kind: "rest", headline: "Rest day", why: "", signals: {} },
+    { isToday: true, showPlan: false }
+  );
   assert.match(rest, /data-redirect="reveal-plan"/);
   assert.match(rest, /data-redirect="ask-session"/);
 });
@@ -211,7 +353,10 @@ test("Today Brief train/easy/rest actions are unaffected by the done-state entry
 test("Today Brief stops the thinking shimmer once a fetch has terminally failed", () => {
   const brief = loadTodayBrief();
   const stillLoading = brief.briefHtml(brief.provisionalRead(), { isToday: true, reducedMotion: false });
-  const failed = brief.briefHtml({ ...brief.provisionalRead(), _failed: true }, { isToday: true, reducedMotion: false });
+  const failed = brief.briefHtml(
+    { ...brief.provisionalRead(), _failed: true },
+    { isToday: true, reducedMotion: false }
+  );
 
   assert.match(stillLoading, /is-thinking/);
   assert.match(stillLoading, /aria-busy="true"/);
@@ -320,13 +465,19 @@ test("signalsRows surfaces the thin-data gap as one calm quiet line with the nex
   const withCheckin = brief.signalsRows({
     signals: { consecutive_training_days: 3, checkin: { energy: 3 } },
   });
-  assert.equal(withCheckin.find((r) => r.label === "Recovery signals"), undefined);
+  assert.equal(
+    withCheckin.find((r) => r.label === "Recovery signals"),
+    undefined
+  );
 
   // Recovery data present — not thin — so no gap row either.
   const withRecovery = brief.signalsRows({
     signals: { consecutive_training_days: 3, has_recovery_data: true },
   });
-  assert.equal(withRecovery.find((r) => r.label === "Recovery signals"), undefined);
+  assert.equal(
+    withRecovery.find((r) => r.label === "Recovery signals"),
+    undefined
+  );
 
   // A provisional/empty read yields no rows — the caller falls back to prose.
   assert.deepEqual(plain(brief.signalsRows({ signals: {} })), []);
@@ -335,7 +486,14 @@ test("signalsRows surfaces the thin-data gap as one calm quiet line with the nex
 
 test("Today Brief materiallyDiffers compares only the visible fields", () => {
   const brief = loadTodayBrief();
-  const base = { kind: "train", headline: "Upper day", why: "recovered and due", focus: "push", est_minutes: 45, signals: {} };
+  const base = {
+    kind: "train",
+    headline: "Upper day",
+    why: "recovered and due",
+    focus: "push",
+    est_minutes: 45,
+    signals: {},
+  };
 
   // Identical visible content — even with different non-visible fields — is NOT a diff.
   assert.equal(brief.materiallyDiffers(base, { ...base, source: "agent", agent: "claude", signals: { x: 1 } }), false);
@@ -353,4 +511,158 @@ test("Today Brief materiallyDiffers compares only the visible fields", () => {
   // A missing operand is treated as a difference.
   assert.equal(brief.materiallyDiffers(null, base), true);
   assert.equal(brief.materiallyDiffers(base, null), true);
+});
+
+test("Today Brief materiallyDiffers tracks rendered periodization and freshness only", () => {
+  const brief = loadTodayBrief();
+  const base = {
+    kind: "easy",
+    headline: "Easy day",
+    why: "Keep the dose light.",
+    focus: null,
+    est_minutes: 20,
+    computed_at: "2026-03-15T12:30:00.000Z",
+    decision: {
+      rule_code: "recovery_week_rest_softened_to_easy_after_loading_day",
+      basis: "server_policy",
+      baseline_kind: "train",
+      reason: "Yesterday carried a real load.",
+      evidence: [],
+      computed_at: "2026-03-15T12:30:00.000Z",
+    },
+    periodization_context: {
+      recovery_overlay: {
+        applied_on: "2026-03-13",
+        until: "2026-03-20",
+        day_index: 3,
+        total_days: 7,
+        proposal_id: 41,
+        label: "reduced volume",
+      },
+      program_block: {
+        goal: "Build squat + base",
+        focus: "strength",
+        stored_phase: "accumulation",
+        effective_phase: "deload",
+        week_index: 3,
+        total_weeks: 6,
+        started_at: "2026-03-01T08:00:00.000Z",
+        counter_basis: "calendar_program_block",
+      },
+    },
+    signals: {},
+  };
+
+  assert.equal(
+    brief.materiallyDiffers(base, {
+      ...base,
+      source: "agent",
+      agent: "claude",
+      signals: { private: "changed" },
+      decision: { ...base.decision, rule_code: "another_private_rule" },
+    }),
+    false,
+    "identical visible output ignores private provenance and a rule-code-only change"
+  );
+  assert.equal(
+    brief.materiallyDiffers(base, {
+      ...base,
+      periodization_context: {
+        ...base.periodization_context,
+        recovery_overlay: { ...base.periodization_context.recovery_overlay, day_index: 4 },
+      },
+    }),
+    true,
+    "the visible recovery day increment repaints"
+  );
+  assert.equal(
+    brief.materiallyDiffers(base, {
+      ...base,
+      periodization_context: {
+        ...base.periodization_context,
+        program_block: { ...base.periodization_context.program_block, week_index: 4 },
+      },
+    }),
+    true,
+    "the visible block week repaints"
+  );
+  assert.equal(
+    brief.materiallyDiffers(base, {
+      ...base,
+      periodization_context: {
+        ...base.periodization_context,
+        program_block: { ...base.periodization_context.program_block, goal: "Build deadlift + base" },
+      },
+    }),
+    true,
+    "the visible block goal repaints"
+  );
+  assert.equal(
+    brief.materiallyDiffers(base, {
+      ...base,
+      decision: { ...base.decision, reason: "The longer run needs a lighter follow-up." },
+    }),
+    true,
+    "the visible easy-day reason repaints"
+  );
+  assert.equal(
+    brief.materiallyDiffers(base, {
+      ...base,
+      computed_at: "2026-03-15T13:30:00.000Z",
+    }),
+    false,
+    "a clock tick alone is not worth rewriting the whole Brief"
+  );
+  assert.equal(
+    brief.materiallyDiffers(base, { ...base, computed_at: undefined, decision: undefined }),
+    true,
+    "losing the freshness line entirely IS visible"
+  );
+});
+
+test("a Brief with no specific reason renders the freshness line and nothing else", () => {
+  const brief = loadTodayBrief();
+  // Belt and braces for the server contract: when there is no athlete-facing
+  // reason, the Brief must show NOTHING rather than engineering prose about
+  // boundaries, postures or policies.
+  const html = brief.briefHtml({
+    kind: "rest",
+    headline: "Rest today",
+    why: "Let yesterday consolidate.",
+    computed_at: "2026-03-15T12:30:00.000Z",
+    decision: {
+      rule_code: "cached_read_write",
+      basis: "deterministic",
+      baseline_kind: "rest",
+      reason: "",
+      evidence: [],
+      computed_at: "2026-03-15T12:30:00.000Z",
+    },
+    signals: {},
+  });
+
+  assert.match(html, /Updated /);
+  assert.doesNotMatch(html, /cached_read_write|boundary|deterministic|posture/i);
+  assert.equal(html.match(/brief-updated">Updated [^<]*<\/div>/)?.length, 1, "the freshness line carries no reason");
+  assert.equal(brief.decisiveReason({ kind: "rest", decision: { reason: "" } }, "rest"), "");
+  assert.equal(brief.decisiveReason({ kind: "rest" }, "rest"), "", "a decision-less read has no reason to show");
+});
+
+test("a past date's freshness line names the day, not a bare clock time", () => {
+  const brief = loadTodayBrief();
+  const read = {
+    kind: "rest",
+    headline: "Rest today",
+    why: "Let yesterday consolidate.",
+    computed_at: "2026-03-14T10:12:00.000Z",
+    signals: {},
+  };
+
+  // "Updated 6:12 AM" while browsing back to last Tuesday reads as this morning.
+  const past = brief.briefHtml(read, { isToday: false });
+  assert.doesNotMatch(past, /Updated \d{1,2}:\d{2}/);
+  assert.match(past, /Updated Mar 1[34]/);
+
+  const today = brief.briefHtml(read, { isToday: true });
+  assert.match(today, /Updated \d{1,2}:\d{2}/);
 });

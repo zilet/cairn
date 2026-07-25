@@ -212,6 +212,94 @@ test("the shared under-fueling read protects actual daily planning at the propor
   assert.equal(persistent.action.directives.training, "recover");
 });
 
+// ---------- two registers, one arbitration ----------
+// `summary` is the MACHINE contract: renderSignalState prints it into every coach
+// prompt, the conductor quotes it as evidence, and the provenance trail is written in
+// it — so it stays third-person observer prose, exactly as it was. What changed is
+// that it is no longer ALSO what the athlete reads: day-read's protect rule used to
+// assign action.reason to the Brief's headline. This case pins both sides of that.
+test("the machine-facing summaries are untouched and the athlete voice sits beside them", () => {
+  const date = localDaysAgo(0);
+  const state = repo.planningSignalState({
+    date,
+    checkin: { energy: 3, sleep_feel: 1, soreness: 5 },
+    recovery: {
+      recovery: { sleep_min: 280, training_readiness: 20 },
+      delta: { hrv: -9, rhr: 6 },
+      quality: {
+        sleep_min: { latest_date: date, source: "garmin", freshness: "fresh", sample_count: 1 },
+        training_readiness: { latest_date: date, source: "garmin", freshness: "fresh", sample_count: 1 },
+        hrv_ms: { latest_date: date, source: "garmin", freshness: "fresh", sample_count: 1 },
+        resting_hr: { latest_date: date, source: "garmin", freshness: "fresh", sample_count: 1 },
+      },
+    },
+  });
+
+  const summaryOf = (dimension, field) =>
+    state.dimensions[dimension].evidence.find((item) => item.field === field)?.summary;
+  assert.equal(summaryOf("recovery_capacity", "sleep"), "Recent sleep is running short.");
+  assert.equal(summaryOf("recovery_capacity", "training_readiness"), "The fresh wearable readiness signal is subdued.");
+  assert.equal(summaryOf("recovery_capacity", "hrv"), "HRV is below the athlete's recent norm.");
+  assert.equal(summaryOf("recovery_capacity", "resting_hr"), "Resting heart rate is above the athlete's norm.");
+  assert.equal(
+    summaryOf("recovery_capacity", "sleep_feel"),
+    "The athlete feels poorly recovered despite any wearable reading."
+  );
+  assert.equal(summaryOf("recovery_capacity", "felt_energy"), "The athlete reports workable energy today.");
+  assert.equal(summaryOf("training_load_tolerance", "felt_soreness"), "The athlete reports high soreness today.");
+
+  // The two prose fields renderSignalState actually prints are still the summary.
+  const felt = state.dimensions.recovery_capacity.evidence.find((item) => item.field === "sleep_feel");
+  assert.equal(state.action.reason, felt.summary);
+  assert.equal(state.dimensions.recovery_capacity.reason, felt.summary);
+  assert.ok(state.action.reasons.includes(felt.summary));
+
+  // The athlete voice is a separate vocabulary: several phrasings, second person, and
+  // never the summary itself.
+  assert.equal(state.action.voice.key, "sleep_feel_low");
+  const spoken = repo.signalVoice(state.action.voice);
+  assert.ok(spoken.length >= 3, "a stable input must not print one literal forever");
+  for (const line of spoken) {
+    assert.doesNotMatch(line, /\bthe athlete\b/i);
+    assert.notEqual(line, felt.summary);
+  }
+});
+
+test("the one already-athlete-voiced summary and its day-read rule stay a single sentence", () => {
+  const date = localDaysAgo(0);
+  const state = repo.planningSignalState({ date, checkin: { energy: 1 } });
+  const felt = state.dimensions.recovery_capacity.evidence.find((item) => item.field === "felt_energy");
+
+  // A low-energy check-in reaches the athlete through two paths: this protect posture
+  // and day-read's felt_run_down_rest rule. This one summary was written in the
+  // athlete's voice — unlike its ~30 siblings — precisely BECAUSE it doubled as the
+  // Brief's line, and it duplicated the rule's first phrasing verbatim. It now leads
+  // the shared voice set, so the two paths cannot drift into different registers.
+  assert.equal(state.action.voice.key, "felt_energy_low");
+  assert.equal(felt.summary, repo.signalVoice(state.action.voice)[0]);
+});
+
+test("a voice-less observation degrades to an athlete-facing floor, never to the summary", () => {
+  const date = localDaysAgo(0);
+  const state = repo.buildUnifiedSignalState(date, [
+    {
+      dimension: "recovery_capacity",
+      field: "felt_fatigue",
+      date,
+      source: "user_checkin",
+      direction: "constraint",
+      summary: "The athlete reports being exhausted today.",
+      safety_override: true,
+      max_age_days: 0,
+    },
+  ]);
+
+  assert.equal(state.action.posture, "rest");
+  assert.equal(state.action.reason, "The athlete reports being exhausted today.");
+  assert.equal(state.action.voice.key, "unvoiced_protect");
+  for (const line of repo.signalVoice(state.action.voice)) assert.doesNotMatch(line, /\bthe athlete\b/i);
+});
+
 test("Apple-only daily activity contributes one conservative generic load observation", () => {
   const date = localDaysAgo(0);
   const state = repo.planningSignalState({

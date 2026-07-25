@@ -677,6 +677,10 @@ function brief() {
     signals: { consecutive_training_days: 0, has_recovery_data: true },
     source: "agent",
     agent: "claude",
+    // Hand-authored prose over illustrative signals: no live recompute can ever
+    // reproduce this fingerprint, so without the pin the first open would replace
+    // it with the deterministic floor and the demo would show generic copy.
+    curated: true,
   });
 }
 

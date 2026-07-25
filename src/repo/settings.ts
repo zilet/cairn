@@ -1,8 +1,23 @@
 import { db } from "../db.js";
-import { listAgents, agentVersion } from "../agents.js";
+import {
+  listAgents,
+  agentVersion,
+  interactiveTimeoutFor,
+  loadAgents,
+  resolveAgentProfileForClass,
+  type AbstractExecutionProfile,
+  type AgentProfileResolver,
+  type AgentDef,
+  type ReasoningLevel,
+} from "../agents.js";
 import crypto from "node:crypto";
 import { recordedClientTimeZone } from "./client-tz.js";
-import { normalizeChatProfileBindings, type ChatProfileBindings } from "../chatRouting.js";
+import {
+  normalizeChatProfileBindings,
+  normalizeProfileBindings,
+  type ChatProfileBindings,
+  type ProfileBindings,
+} from "../chatRouting.js";
 
 // ---------- settings & agent selection ----------
 export interface Settings {
@@ -32,6 +47,7 @@ export interface Settings {
   agent_routes: Record<string, string>; // optional per-task agent routing { task -> agent }; {} = no routing (Auto = today's rotation)
   chat_routing_mode: "adaptive" | "single"; // adaptive lane policy; single preserves the legacy one-profile path
   chat_profile_bindings: ChatProfileBindings; // provider -> capture|coach|deep -> optional model/reasoning
+  agent_profile_bindings: AgentProfileBindings; // provider -> task -> optional model/reasoning override of TASK_EXECUTION_PROFILES
   update_check_enabled: boolean; // quiet daily check for a newer Cairn release (pull-never-push; off ⇒ no outbound check)
   lead_mode: "lead" | "announce_first" | "review_everything"; // how much Cairn leads within server policy
   updated_at?: string;
@@ -140,6 +156,118 @@ export function taskForOp(op: string): string {
   return op;
 }
 
+// THE op→execution-profile table: how much model, and how much thinking, each class
+// of coaching work is worth. Keyed by the SAME task class as TASK_POLICY (which picks
+// WHICH agent runs) — this picks HOW that agent runs, so the two policies read
+// side by side and share taskForOp as their one classifier.
+//
+// Why this exists: with nothing pinned, effort is inherited from whatever the CLI's
+// home settings happen to say, so the same op ran at a different depth on a dev box
+// than on the deployed host. Every class below is decided HERE, server-side.
+//
+// Model classes are provider-neutral (see agents.json `model_classes`): "fast" is the
+// everyday read, "deep" the one worth paying for. A provider that declares no mapping
+// (codex/antigravity/grok) keeps its own configured model and only takes the effort.
+// Reasoning tops out at xhigh by default; "max" exists for a user override.
+//
+// `chat` is deliberately ABSENT: the adaptive chat router already assigns a
+// per-message lane profile (src/chatRouting.ts). An op with no entry here inherits
+// nothing and behaves exactly as it did before this table existed.
+export const TASK_EXECUTION_PROFILES: Record<string, AbstractExecutionProfile> = {
+  // Daily reads — high-frequency, prose over an already-deterministic core.
+  // day_read is the app's front door and runs under the shortest leash, so it stays
+  // at the cheapest setting that still writes a good sentence.
+  day_read: { model_class: "fast", reasoning: "low" },
+  insight: { model_class: "fast", reasoning: "medium" },
+  weekly_read: { model_class: "fast", reasoning: "medium" },
+  nutrition_checkin: { model_class: "fast", reasoning: "medium" },
+  week_ahead: { model_class: "fast", reasoning: "medium" },
+  reaction_narrative: { model_class: "fast", reasoning: "medium" },
+  exercise_explanation: { model_class: "fast", reasoning: "low" },
+  chat_distill: { model_class: "fast", reasoning: "low" },
+  // Background structuring — high volume, tight contracts, nothing to reason about.
+  enrich: { model_class: "fast", reasoning: "low" },
+  research: { model_class: "fast", reasoning: "medium" },
+  // Composition — a real plan the athlete will follow; worth the deeper model.
+  session_suggest: { model_class: "deep", reasoning: "medium" },
+  session_compose: { model_class: "deep", reasoning: "medium" },
+  meal_plan: { model_class: "deep", reasoning: "medium" },
+  meal_swap: { model_class: "deep", reasoning: "medium" },
+  recipe: { model_class: "deep", reasoning: "medium" },
+  onboard: { model_class: "deep", reasoning: "medium" },
+  exercise_reconcile: { model_class: "deep", reasoning: "medium" },
+  // Self-critique passes. runVerify checks a draft against the athlete's HARD
+  // constraints (injury, time budget, equipment, encoding; lean-safety for a meal
+  // plan), and it fails OPEN — a verify that dies just ships the unchecked draft.
+  // So a cheap or truncated verify degrades silently into no safety check at all,
+  // which is why these are pinned rather than left to inherit the CLI's defaults.
+  // Effort matches the composition op each one guards rather than exceeding it:
+  // both run inline inside a user-facing request, and a verify with a longer leash
+  // than the draft it checks would make the slow path the checking, not the work.
+  session_verify: { model_class: "deep", reasoning: "medium" },
+  meal_plan_verify: { model_class: "deep", reasoning: "medium" },
+  // Clinical-adjacent reading — a curated or plausible-but-wrong result is costly.
+  health: { model_class: "deep", reasoning: "high" },
+  health_review: { model_class: "deep", reasoning: "high" },
+  health_synthesis: { model_class: "deep", reasoning: "high" },
+  // Structural change and multi-specialist review — the most consequential work.
+  proposal: { model_class: "deep", reasoning: "xhigh" },
+  coach_draft: { model_class: "deep", reasoning: "xhigh" },
+  brain_review: { model_class: "deep", reasoning: "xhigh" },
+};
+
+// The closed key set for a user override (same shape as chat_profile_bindings).
+export const PROFILE_TASKS: readonly string[] = Object.freeze(Object.keys(TASK_EXECUTION_PROFILES));
+
+export type AgentProfileBindings = ProfileBindings<string>;
+
+export function normalizeAgentProfileBindings(value: unknown): AgentProfileBindings {
+  return normalizeProfileBindings(value, PROFILE_TASKS);
+}
+
+/**
+ * Resolve ONE task's execution profile for ONE agent: the declarative class above,
+ * then any `agent_profile_bindings[agent][task]` override, then clamped to what that
+ * CLI actually declares (a provider with no model mapping gets no --model at all, and
+ * an effort above its ceiling maps down). Pure given `cfg`, so it unit-tests offline.
+ */
+export function resolveTaskExecutionProfile(
+  task: string,
+  agent: string,
+  cfg?: {
+    defs?: Record<string, AgentDef>;
+    bindings?: unknown;
+    profiles?: Record<string, AbstractExecutionProfile>;
+  }
+): { model?: string; reasoning?: ReasoningLevel } {
+  const want = (cfg?.profiles ?? TASK_EXECUTION_PROFILES)[task];
+  const bindings = normalizeAgentProfileBindings(
+    cfg?.bindings !== undefined ? cfg.bindings : getSettings().agent_profile_bindings
+  );
+  const bound = bindings[agent]?.[task];
+  if (!want && !bound) return {};
+  return resolveAgentProfileForClass((cfg?.defs ?? loadAgents())[agent], { ...want, ...(bound ?? {}) });
+}
+
+/** The per-agent resolver runChosen/enrich/scheduler hand to the agent layer. */
+export function executionProfileForTask(task: string): AgentProfileResolver {
+  return (agent: string) => resolveTaskExecutionProfile(task, agent);
+}
+
+export function executionProfileForOp(op: string): AgentProfileResolver {
+  return executionProfileForTask(taskForOp(op));
+}
+
+/**
+ * The interactive leash for an op, scaled by the effort THIS table asked for. A 90s
+ * cap on a low-effort op is right; on a high-effort one it silently kills the run
+ * mid-think and the rotation reads it as a failed agent. Based on the declarative
+ * class (not a per-provider override), so it is stable and side-effect free.
+ */
+export function interactiveTimeoutForOp(op: string): number {
+  return interactiveTimeoutFor(TASK_EXECUTION_PROFILES[taskForOp(op)]?.reasoning);
+}
+
 const SETTINGS_COLUMN_REPAIRS: [string, string][] = [
   ["agent_strategy", "TEXT DEFAULT 'round_robin'"],
   ["agent_order", "TEXT"],
@@ -167,6 +295,7 @@ const SETTINGS_COLUMN_REPAIRS: [string, string][] = [
   ["agent_routes", "TEXT DEFAULT ''"],
   ["chat_routing_mode", "TEXT DEFAULT 'adaptive'"],
   ["chat_profile_bindings", "TEXT DEFAULT ''"],
+  ["agent_profile_bindings", "TEXT DEFAULT ''"],
   ["update_check_enabled", "INTEGER DEFAULT 1"],
   ["lead_mode", "TEXT DEFAULT 'lead'"],
 ];
@@ -326,6 +455,7 @@ function defaultSettings(): Settings {
     agent_routes: {}, // no per-task routing by default — "auto" rotates as before
     chat_routing_mode: "adaptive",
     chat_profile_bindings: {}, // empty means every provider keeps its own model defaults
+    agent_profile_bindings: {}, // empty means every op uses the TASK_EXECUTION_PROFILES default
     update_check_enabled: true, // quiet daily update check on by default (one toggle disables the outbound call)
     lead_mode: "lead", // bounded background coaching is the default relationship
   };
@@ -409,6 +539,7 @@ function rowToSettings(row: any): Settings {
     agent_routes: parseRoutes(row.agent_routes),
     chat_routing_mode: row.chat_routing_mode === "single" ? "single" : "adaptive",
     chat_profile_bindings: normalizeChatProfileBindings(row.chat_profile_bindings),
+    agent_profile_bindings: normalizeAgentProfileBindings(row.agent_profile_bindings),
     // NULL on old rows (column added by migration v47) defaults to ON.
     update_check_enabled: row.update_check_enabled == null ? true : !!row.update_check_enabled,
     lead_mode: ["lead", "announce_first", "review_everything"].includes(String(row.lead_mode)) ? row.lead_mode : "lead",
@@ -516,6 +647,10 @@ export function setSettings(patch: any): Settings {
       patch.chat_profile_bindings !== undefined
         ? normalizeChatProfileBindings(patch.chat_profile_bindings)
         : cur.chat_profile_bindings,
+    agent_profile_bindings:
+      patch.agent_profile_bindings !== undefined
+        ? normalizeAgentProfileBindings(patch.agent_profile_bindings)
+        : cur.agent_profile_bindings,
     update_check_enabled:
       patch.update_check_enabled !== undefined ? !!patch.update_check_enabled : cur.update_check_enabled,
     lead_mode: ["lead", "announce_first", "review_everything"].includes(String(patch.lead_mode))
@@ -542,7 +677,7 @@ export function setSettings(patch: any): Settings {
     `UPDATE settings SET agent_strategy=?, agent_order=?, disabled_agents=?, rr_cursor=?,
        coach_enabled=?, coach_day=?, coach_hour=?, onboarded=?, enrich_enabled=?, proactive_enabled=?, art_enabled=?, art_enabled_at=?, meal_prefs=?,
        garmin_username=?, garmin_password=?, garmin_password_encrypted=?, gemini_api_key=?, gemini_api_key_encrypted=?,
-       research_enabled=?, bg_ops_enabled=?, agent_routes=?, chat_routing_mode=?, chat_profile_bindings=?, update_check_enabled=?, lead_mode=?, updated_at=datetime('now') WHERE id = 1`
+       research_enabled=?, bg_ops_enabled=?, agent_routes=?, chat_routing_mode=?, chat_profile_bindings=?, agent_profile_bindings=?, update_check_enabled=?, lead_mode=?, updated_at=datetime('now') WHERE id = 1`
   ).run(
     merged.agent_strategy,
     JSON.stringify(merged.agent_order),
@@ -567,6 +702,7 @@ export function setSettings(patch: any): Settings {
     JSON.stringify(merged.agent_routes),
     merged.chat_routing_mode,
     JSON.stringify(merged.chat_profile_bindings),
+    JSON.stringify(merged.agent_profile_bindings),
     merged.update_check_enabled ? 1 : 0,
     merged.lead_mode
   );

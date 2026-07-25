@@ -19,6 +19,7 @@ import type {
   ClientPrescription,
   ClientTodayAgenda,
   ClientTodayAgendaCandidate,
+  ClientTodayAttention,
   ClientLearnedItem,
   ClientLearnedKind,
   ClientLearnedTimeline,
@@ -3642,6 +3643,7 @@ declare global {
         deps: ClientTodayRailControllerDeps
       ): void;
       runFallbackRail(isToday: boolean, deps: ClientTodayRailControllerDeps): void;
+      promoteAttentionLead(root: ParentNode, attention: ClientTodayAttention | null | undefined): void;
       loadFuelToday(date: string, deps: ClientTodayRailControllerDeps): Promise<void>;
       loadWeekAhead(deps: ClientTodayRailControllerDeps): Promise<void>;
       loadProgramAdjustmentsBanner(deps: ClientTodayRailControllerDeps): Promise<void>;
@@ -4196,6 +4198,8 @@ declare global {
         estMinutes?: unknown;
         activeOverride?: unknown;
       }): Array<{ intent: string; label: string }>;
+      attentionPrimary(read: Partial<ClientDayRead> | null | undefined): string;
+      yieldsLead(read: Partial<ClientDayRead> | null | undefined): boolean;
       agentOffline(status: unknown): boolean;
       agentOfflineNoticeHtml(status: unknown, dismissed?: boolean): string;
       briefHtml(

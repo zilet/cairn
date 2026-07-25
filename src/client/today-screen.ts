@@ -515,6 +515,11 @@ async function renderToday(opts: any = {}) {
     railEl.outerHTML = agenda
       ? CairnTodayRailController.railHtml(agenda, agendaGeneric)
       : CairnTodayRailController.fallbackRailHtml(isToday);
+    // The LEAD arbitration (read.attention, server-owned): move whichever surface
+    // earned today's position of prominence out of the rail and into the main
+    // column BEFORE the loaders run, so each loader still finds its slot by id
+    // wherever it now lives. A payload without the decision changes nothing.
+    CairnTodayRailController.promoteAttentionLead(todayView, read?.attention);
     if (agenda) CairnTodayRailController.runAgendaRail(agenda, agendaGeneric, todayRailDeps());
     else CairnTodayRailController.runFallbackRail(isToday, todayRailDeps());
   }

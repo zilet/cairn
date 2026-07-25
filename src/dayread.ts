@@ -6,10 +6,11 @@
 // agent-running orchestration lives in one place (api and mcp were near-duplicates).
 import * as repo from "./repo.js";
 import { buildDayReadPrompt } from "./prompt.js";
-import { INTERACTIVE_TIMEOUT_MS } from "./agents.js";
 import { runChosenWithCoachReads } from "./runChosen.js";
 import { localDateISO } from "./repo/shared.js";
 import { isValidTimeZone } from "./tz.js";
+import { pickDayVariant } from "./repo/brain/day-read-rules.js";
+import { DAY_READ_POLICY_REASON_VARIANTS, RECOVERY_WEEK_SOFTEN_WHY } from "./repo/day-read.js";
 
 // The PWA drives every request with its LOCAL calendar date (state.logDate), so
 // the cache key — and the nightly precompute — must use the server's local date
@@ -48,6 +49,33 @@ function deterministicHeadline(r: { kind: string; focus?: string | null }): stri
           : "Good to train.";
 }
 
+function decisionAt(): string {
+  return new Date().toISOString();
+}
+
+function policyDecision(
+  baseline: any,
+  ruleCode: string,
+  date: string,
+  evidence: Array<{ label: string; value: string; date?: string }> = []
+) {
+  const computedAt = decisionAt();
+  // Rotated the same way as every athlete-facing `why` (see DAY_READ_WHY_VARIANTS):
+  // the Brief renders this reason whenever it's non-empty, and every server-policy
+  // clamp that reaches this helper can fire on consecutive days, so an unrotated
+  // literal here repeats exactly like an unrotated `why` did.
+  const variants = DAY_READ_POLICY_REASON_VARIANTS[ruleCode];
+  const reason = variants?.length ? pickDayVariant(variants, date, ruleCode) : "";
+  return {
+    rule_code: ruleCode,
+    basis: "server_policy",
+    baseline_kind: baseline?.kind ?? "easy",
+    reason,
+    evidence: evidence.slice(0, 5),
+    computed_at: computedAt,
+  };
+}
+
 export interface DayReadProseConsistencyIssue {
   code: "completed_load_understated";
   classified_load: "moderate" | "hard";
@@ -68,7 +96,7 @@ const NEGATED_EASY = /\b(?:not|never|wasn't|weren't|isn't|no)\s+(?:an?\s+)?(?:ea
 // near the easy descriptor (or an "easy run complete" construction).
 export function dayReadProseConsistencyIssue(
   read: { kind?: unknown; headline?: unknown; why?: unknown },
-  signals: Record<string, any> | null | undefined,
+  signals: Record<string, any> | null | undefined
 ): DayReadProseConsistencyIssue | null {
   const classifiedLoad = String(signals?.today_load ?? "").toLowerCase();
   if (classifiedLoad !== "moderate" && classifiedLoad !== "hard") return null;
@@ -77,7 +105,10 @@ export function dayReadProseConsistencyIssue(
   const prose = [read?.headline, read?.why]
     .filter((value): value is string => typeof value === "string" && !!value.trim())
     .join("\n");
-  const sentences = prose.split(/(?:\r?\n|(?<=[.!?])\s+)/).map((sentence) => sentence.trim()).filter(Boolean);
+  const sentences = prose
+    .split(/(?:\r?\n|(?<=[.!?])\s+)/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
   for (const sentence of sentences) {
     if (NEGATED_EASY.test(sentence)) continue;
 
@@ -104,7 +135,7 @@ export function dayReadProseConsistencyIssue(
     // than a generic "easy run" match so suggested future easy work remains valid.
     if (
       /\b(?:easy|light|gentle|recovery(?:-paced)?)\s+(?:run|ride|session|workout|lift|training|activity|effort)\b.{0,30}\b(?:complete|completed|done|finished|logged|in the books)\b/i.test(
-        sentence,
+        sentence
       ) &&
       !FUTURE_OR_RECOVERY_CUE.test(sentence)
     ) {
@@ -124,14 +155,18 @@ export function dayReadProseConsistencyIssue(
 // not done (a midnight precompute reading yesterday's session as today's would
 // otherwise lock the fresh day into a no-CTA "You're done" until the next
 // invalidation). Pure so the contract is directly unit-testable.
-export function enforceCompletionContract(out: any, baseline: any): any {
+export function enforceCompletionContract(out: any, baseline: any, date?: string): any {
+  const resolvedDate = date || localToday();
   if (out.kind === "done" && baseline.kind !== "done") {
+    const decision = policyDecision(baseline, "completion_fact_not_logged", resolvedDate);
     return {
       ...baseline,
       headline: deterministicHeadline(baseline),
       source: "deterministic",
       agent: out.agent,
       tried: out.tried,
+      decision,
+      computed_at: decision.computed_at,
     };
   }
   if (baseline.kind === "done") {
@@ -142,6 +177,9 @@ export function enforceCompletionContract(out: any, baseline: any): any {
     if (out.kind !== "done") {
       out.headline = deterministicHeadline(baseline);
       out.why = baseline.why;
+      out.source = "deterministic";
+      out.decision = policyDecision(baseline, "completion_fact_preserved", resolvedDate);
+      out.computed_at = out.decision.computed_at;
     }
     out.kind = "done";
     out.focus = null;
@@ -155,24 +193,106 @@ export function enforceCompletionContract(out: any, baseline: any): any {
 // recommendation ladder: moving left is always allowed; moving right is clamped
 // to the server-owned baseline with matching deterministic wording. Completion is
 // deliberately handled separately below because it is a fact, not a posture.
-export function enforceDayReadSafetyPosture(out: any, baseline: any, hasOverride = false): any {
+export function enforceDayReadSafetyPosture(out: any, baseline: any, hasOverride = false, date?: string): any {
   if (hasOverride || baseline?.kind === "done" || out?.kind === "done") return out;
   const rank: Record<string, number> = { rest: 0, easy: 1, train: 2 };
   const baselineRank = rank[String(baseline?.kind ?? "")];
   const outRank = rank[String(out?.kind ?? "")];
   if (baselineRank == null || outRank == null || outRank <= baselineRank) return out;
+  const decision = policyDecision(baseline, "deterministic_safety_floor", date || localToday());
   return {
     ...baseline,
     headline: deterministicHeadline(baseline),
     source: "deterministic",
     agent: out.agent,
     tried: out.tried,
+    decision,
+    computed_at: decision.computed_at,
   };
+}
+
+// A recovery week is already the deterministic answer to accumulated load: seven
+// days of reduced volume, not seven consecutive days of rest. The prose layer may
+// make the day easier immediately after a real loading day, but cannot keep
+// stacking non-loading days from broad context alone. Acute deterministic
+// baselines remain untouched because this policy applies only to baseline=train.
+export function enforceRecoveryWeekCadence(out: any, baseline: any, hasOverride = false, date?: string): any {
+  if (
+    hasOverride ||
+    baseline?.kind !== "train" ||
+    baseline?.signals?.recovery_week?.state !== "applied" ||
+    (out?.kind !== "easy" && out?.kind !== "rest")
+  ) {
+    return out;
+  }
+  const yesterday = Array.isArray(baseline.signals.recent_load) ? baseline.signals.recent_load[0] : null;
+  const loadedYesterday = yesterday?.load === "moderate" || yesterday?.load === "hard";
+  const evidence = [
+    {
+      label: "Yesterday's load",
+      value: String(yesterday?.load ?? "none"),
+      ...(typeof yesterday?.date === "string" ? { date: yesterday.date } : {}),
+    },
+    {
+      label: "Recovery overlay",
+      value: "reduced volume",
+      ...(typeof baseline.signals.recovery_week.applied_on === "string"
+        ? { date: baseline.signals.recovery_week.applied_on }
+        : {}),
+    },
+  ];
+  const resolvedDate = date || localToday();
+  if (!loadedYesterday) {
+    const decision = policyDecision(
+      baseline,
+      "recovery_week_reduced_train_after_non_loading_day",
+      resolvedDate,
+      evidence
+    );
+    return {
+      ...baseline,
+      headline: deterministicHeadline(baseline),
+      source: "deterministic",
+      agent: out.agent,
+      tried: out.tried,
+      decision,
+      computed_at: decision.computed_at,
+    };
+  }
+  if (out.kind === "rest") {
+    const decision = policyDecision(
+      baseline,
+      "recovery_week_rest_softened_to_easy_after_loading_day",
+      resolvedDate,
+      evidence
+    );
+    return {
+      ...baseline,
+      kind: "easy",
+      headline: "Take it easy.",
+      focus: null,
+      // Rotated the same way as every other rule (see DAY_READ_WHY_VARIANTS): this
+      // clamp fires inside an APPLIED recovery week, so an unrotated literal here was
+      // the branch most likely to repeat verbatim for up to seven days straight.
+      why: pickDayVariant(
+        RECOVERY_WEEK_SOFTEN_WHY,
+        resolvedDate,
+        "recovery_week_rest_softened_to_easy_after_loading_day"
+      ),
+      est_minutes: 20,
+      source: "deterministic",
+      agent: out.agent,
+      tried: out.tried,
+      decision,
+      computed_at: decision.computed_at,
+    };
+  }
+  return out;
 }
 
 export function isValidDayReadAgentResult(
   value: any,
-  baseline?: { kind?: unknown; signals?: Record<string, any> },
+  baseline?: { kind?: unknown; signals?: Record<string, any> }
 ): boolean {
   const validShape = !!(
     value &&
@@ -206,6 +326,7 @@ function agentIssueFor(error: unknown): "invalid_response" | "unreachable" {
 export async function computeDayRead(opts: { date?: string; override?: string; agent?: string } = {}): Promise<any> {
   const { date, override, agent } = opts;
   const baseline = repo.dayRead(date);
+  const resolvedDate = date || localToday();
   let out: any;
   try {
     const prompt = buildDayReadPrompt(undefined, { override, date });
@@ -220,11 +341,13 @@ export async function computeDayRead(opts: { date?: string; override?: string; a
     } = await runChosenWithCoachReads(agent, prompt, {
       op: "day_read",
       mode: "ordinary",
-      timeoutMs: INTERACTIVE_TIMEOUT_MS,
+      timeoutMs: repo.interactiveTimeoutForOp("day_read"),
       acceptParsed: (parsed) => isValidDayReadAgentResult(parsed, baseline),
     });
     const p = result.parsed;
     if (isValidDayReadAgentResult(p, baseline)) {
+      const computedAt = decisionAt();
+      const conservative = baseline.kind === "train" && (p.kind === "easy" || p.kind === "rest");
       out = {
         kind: p.kind,
         headline:
@@ -238,6 +361,20 @@ export async function computeDayRead(opts: { date?: string; override?: string; a
         source: "agent",
         agent: chosen,
         tried,
+        decision: {
+          rule_code: conservative ? "agent_conservative_adjustment" : "agent_day_read",
+          basis: "agent",
+          baseline_kind: baseline.kind,
+          // Only the conservative adjustment adds something the read's own `why`
+          // does not already say. The ordinary case leaves the reason EMPTY rather
+          // than narrating Cairn's internals at the athlete (the Brief renders a
+          // reason only when there is a specific one).
+          reason: conservative ? "Your coach eased today back from the planned session." : "",
+          evidence: Array.isArray(baseline.decision?.evidence) ? baseline.decision.evidence.slice(0, 5) : [],
+          computed_at: computedAt,
+        },
+        input_fingerprint: baseline.input_fingerprint,
+        computed_at: computedAt,
       };
     } else {
       // Agent unreachable / wrong shape → the deterministic floor (still a real read).
@@ -252,8 +389,9 @@ export async function computeDayRead(opts: { date?: string; override?: string; a
       agent_issue: agentIssueFor(e),
     };
   }
-  out = enforceDayReadSafetyPosture(out, baseline, !!override?.trim());
-  out = enforceCompletionContract(out, baseline);
+  out = enforceDayReadSafetyPosture(out, baseline, !!override?.trim(), resolvedDate);
+  out = enforceRecoveryWeekCadence(out, baseline, !!override?.trim(), resolvedDate);
+  out = enforceCompletionContract(out, baseline, resolvedDate);
   // The day-ahead `forward` line is NOT persisted here — it's attached fresh on every
   // /today-read response (it must reflect the current plan/balance, not a snapshot).
   // Record the athlete's steer on the read and ALWAYS persist it (the no-clobber
@@ -261,7 +399,7 @@ export async function computeDayRead(opts: { date?: string; override?: string; a
   // Persisting the steer is what makes it survive a reload and reach the coach context.
   out.override = override && override.trim() ? override.trim() : null;
   try {
-    repo.saveDayRead(date || localToday(), out);
+    repo.saveDayRead(resolvedDate, out);
   } catch {}
   return out;
 }

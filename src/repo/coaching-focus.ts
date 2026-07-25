@@ -24,7 +24,7 @@
 
 import { movementKey } from "./exercise-canon.js";
 import { type FocusCandidate, type FocusDomain, focusScore } from "./focus-candidate.js";
-import type { SignalPosture, UnifiedSignalState } from "./signal-state.js";
+import { spokenSignalVoice, SIGNAL_VOICE_KEYS, type SignalPosture, type UnifiedSignalState } from "./signal-state.js";
 
 // Re-exported so existing importers keep resolving `FocusDomain` from the conductor.
 export type { FocusCandidate, FocusDomain } from "./focus-candidate.js";
@@ -1212,6 +1212,14 @@ function signalStateCandidates(input: CoachingFocusInput): Candidate[] {
     .filter(Boolean);
   const evidence = (fallback: string) =>
     cleanEvidence([`Unified planning posture: ${action.posture}`, ...reasons]) ?? [fallback];
+  // `reason` and `reasons` are the MACHINE register — evidence summaries written about
+  // the athlete in the third person, kept verbatim in `based_on` where the model and the
+  // provenance trail read them. Every string below that a PERSON reads speaks the voice
+  // instead, rotated on the state's own date, and on the same key the Brief uses — the
+  // conductor's lead and the Brief are one tap apart, so one signal must read as one
+  // observation rather than two differently-worded notes about the same morning.
+  const spoken = (voice: Parameters<typeof spokenSignalVoice>[0], key?: string) =>
+    spokenSignalVoice(voice, String(state?.date ?? ""), key);
 
   if (action.posture === "rest" || action.posture === "easy" || action.posture === "done") {
     const posture = action.posture;
@@ -1227,7 +1235,7 @@ function signalStateCandidates(input: CoachingFocusInput): Candidate[] {
             : posture === "easy"
               ? "Keep today easy"
               : "Today's work is complete",
-        why: clip(action.reason || "The unified daily read says recovery owns the next move.", 220),
+        why: clip(spoken(action.voice, SIGNAL_VOICE_KEYS.protect), 220),
         move:
           posture === "rest"
             ? "Keep today restorative and let the work absorb."
@@ -1248,11 +1256,7 @@ function signalStateCandidates(input: CoachingFocusInput): Candidate[] {
       item: {
         domain: "nutrition",
         title: "Protect fuel around today's work",
-        why: clip(
-          state.dimensions?.energy_fueling?.reason ||
-            "Current training and energy signals call for protecting calories, carbohydrate and protein.",
-          220
-        ),
+        why: clip(spoken(state.dimensions?.energy_fueling?.voice, SIGNAL_VOICE_KEYS.fueling), 220),
         move: "Hold or raise fuel around the work; do not deepen the deficit today.",
         based_on: evidence("Unified fueling directive: protect"),
       },
@@ -1272,10 +1276,7 @@ function signalStateCandidates(input: CoachingFocusInput): Candidate[] {
       item: {
         domain: "training",
         title: "Keep today's work inside the available window",
-        why: clip(
-          state.dimensions?.life_capacity?.reason || "A current dated commitment compresses today's training window.",
-          220
-        ),
+        why: clip(spoken(state.dimensions?.life_capacity?.voice, SIGNAL_VOICE_KEYS.schedule), 220),
         move: "Prioritize the main work and defer optional volume; this is a timing constraint, not a recovery verdict.",
         based_on: evidence("Unified schedule directive: compress"),
       },
@@ -1289,11 +1290,19 @@ function activeInjuryWorkaround(input: CoachingFocusInput): string | null {
     (item) => item.field === "active_injury" && item.freshness !== "stale"
   );
   if (!injury) return null;
-  const reason = clip(injury.summary || "An active injury calls for a work-around.", 140);
-  return clip(
-    `Any movement today must work around the active injury — use pain-free substitutions and conservative load only. ${reason}`,
-    220
+  // The SAME sentence the Brief splices onto a protective read (same voice, same key,
+  // same date), followed by the substitution instruction this caveat exists to carry.
+  // It used to lead with a fixed literal and then append the evidence summary, so the
+  // athlete got the injury named twice — once in their register, once in the classifier's
+  // ("…work around the active injury. Achilles tendinopathy: an active injury is worth
+  // easing or working around.") — and the lead-in read as a gate ("must"), not a
+  // suggestion.
+  const named = spokenSignalVoice(
+    injury.voice ?? { key: "active_injury" },
+    String(input.signalState?.date ?? ""),
+    SIGNAL_VOICE_KEYS.injury
   );
+  return clip(`${named} Use pain-free substitutions and keep the load conservative.`, 220);
 }
 
 function applySignalStateConstraints(candidates: Candidate[], input: CoachingFocusInput): Candidate[] {
@@ -1317,10 +1326,9 @@ function applySignalStateConstraints(candidates: Candidate[], input: CoachingFoc
   // work-around must be explicit wherever that lever lands.
   const injuryCaveat = activeInjuryWorkaround(input);
   if (action.posture === "modify" || injuryCaveat) {
-    const reason = clip(action.reason || "The current health constraint calls for a work-around.", 140);
     const caveat =
       injuryCaveat ||
-      `Modify today's work around the active constraint — use pain-free substitutions and conservative load only. ${reason}`;
+      `${spokenSignalVoice(action.voice, String(state?.date ?? ""), SIGNAL_VOICE_KEYS.protect)} Work around it today with pain-free substitutions and conservative load.`;
     for (const candidate of candidates) {
       if (!trainingFamily(candidate)) continue;
       candidate.caveat = clip(caveat, 220);

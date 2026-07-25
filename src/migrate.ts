@@ -1379,6 +1379,14 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 77,
+    name: "settings-agent-profile-bindings",
+    // Optional per-provider, per-task override of TASK_EXECUTION_PROFILES
+    // (repo/settings.ts) — same JSON shape as chat_profile_bindings. Empty/NULL
+    // means every op uses the declarative default.
+    up: (db) => addColumn(db, "settings", "agent_profile_bindings TEXT DEFAULT ''"),
+  },
 ];
 
 export function runMigrations(db: DatabaseSync) {

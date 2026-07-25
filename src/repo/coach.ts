@@ -10,7 +10,7 @@ import {
   newestHealthDocDate,
 } from "./health.js";
 import { imagingForCoach } from "./imaging.js";
-import { dayRead, getCachedDayRead, invalidateDayRead } from "./intelligence.js";
+import { dayRead, getCachedDayRead, invalidateDayRead, invalidateDayReadIfDecisionChanged } from "./intelligence.js";
 import { blockForCoach, getActiveBlock } from "./program-blocks.js";
 import { getProgramState, type ProgramState } from "./program-state.js";
 import { getStrengthJourney } from "./strength-objectives.js";
@@ -1790,6 +1790,11 @@ export function updateDirective(id: number, fields: DirectiveInput) {
     const twins = cascadeDirectiveStatus(updated, nextStatus);
     if (twins > 0) {
       try {
+        // Deliberately the UNCONDITIONAL invalidation, not the fingerprint-aware one:
+        // directives are not part of the deterministic decision (the fingerprint could
+        // never move), yet the Brief's PROSE is written against the active training and
+        // watch directives. A directive the athlete just cleared must stop being voiced,
+        // and this is a rare, explicit athlete action — not telemetry churn.
         invalidateDayRead();
       } catch {
         /* cache bust is best-effort */
@@ -2336,7 +2341,11 @@ export function recordDailyMetrics(source: string, date: string, metrics: DailyM
     jsonOrNull(metrics.raw)
   );
   bumpTrainingDataVersion(); // fresh recovery (in-place upsert) shifts program-state's deload read
-  invalidateDayRead(); // fresh recovery data feeds today's Brief — recompute on next open
+  // Fresh recovery data CAN change today's Brief — but a six-hourly sync where sleep,
+  // HRV and resting HR each drift a few points crosses none of the thresholds the read
+  // branches on. Retire the cached read only when the decision actually moved, so
+  // ordinary telemetry stops costing the athlete their coach's sentence.
+  invalidateDayReadIfDecisionChanged();
   const row = hydrateJson(db.prepare(`SELECT * FROM daily_metrics WHERE source = ? AND date = ?`).get(src, metricDate));
   emitBrainEvent({
     kind: "recovery_metrics_changed",

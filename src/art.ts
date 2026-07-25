@@ -8,10 +8,10 @@ import {
 } from "./repo.js";
 
 // Generated artwork service: photoreal/stylized PNGs for foods, exercises, and
-// activities via Google's gemini-2.5-flash-image ("nano banana"), cached on
+// activities via Google's gemini-3.1-flash-image ("nano banana 2"), cached on
 // disk under data/art/. Entirely optional — without a Gemini key (Settings,
-// GEMINI_API_KEY, or GOOGLE_AI_KEY) or with
-// settings.art_enabled off) every miss is a quiet 204 and nothing runs.
+// GEMINI_API_KEY, or GOOGLE_AI_KEY), or with settings.art_enabled off, every
+// miss is a quiet 204 and nothing runs.
 //
 // This is a DIRECT REST call (global fetch), NOT an agents.json CLI run, and a
 // strictly serial in-process queue with in-flight dedup, mirroring enrich.ts:
@@ -29,8 +29,11 @@ const SEED_ART_DIR = path.join(__dirname, "..", "seed-art");
 // Model names are env-overridable so a rename doesn't need a code change. The
 // text model runs the cheap "would this render the same image?" check before
 // any image generation (see resolveConcept below).
-const GEMINI_IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || "gemini-3.1-flash-image";
-const GEMINI_TEXT_MODEL = process.env.GEMINI_TEXT_MODEL || "gemini-3.1-flash";
+// Exported (read-only) so a regression test can pin these defaults without a
+// live network call — see test/artModelDefaults.test.js.
+export const GEMINI_IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || "gemini-3.1-flash-image";
+// gemini-3.6-flash: the current stable Gemini Flash-tier model.
+export const GEMINI_TEXT_MODEL = process.env.GEMINI_TEXT_MODEL || "gemini-3.6-flash";
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_IMAGE_MODEL}:generateContent`;
 const GEMINI_TEXT_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_TEXT_MODEL}:generateContent`;
 const GENERATE_TIMEOUT_MS = 60_000;
@@ -309,6 +312,16 @@ async function resolveConcept(job: Job): Promise<{ key: string; text: string; re
       return { key, text: canonical, reused: false };
     }
   } catch (e: any) {
+    // Record the failure in the existing spend ledger (same "fail" action the
+    // image path already uses) so a persistent misconfiguration — e.g. an
+    // invalid GEMINI_TEXT_MODEL — shows up as a standing count in
+    // GET /api/art/stats / get_art_stats instead of degrading silently
+    // forever. `model` is GEMINI_TEXT_MODEL here vs GEMINI_IMAGE_MODEL on an
+    // image-generate failure, so the two are distinguishable in the raw
+    // art_usage rows even though both roll into the same "failed" total.
+    // Falls through to generating under the query's own key exactly as
+    // before — no retry, no throw, degradation unchanged.
+    recordArtUsage({ kind: job.kind, query: norm, action: "fail", model: GEMINI_TEXT_MODEL });
     console.warn(`[art] canonicalize failed for ${job.kind} "${job.text}": ${e?.message ?? e}`);
   }
   return { key: job.key, text: job.text, reused: false };

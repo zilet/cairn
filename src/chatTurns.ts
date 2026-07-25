@@ -28,7 +28,7 @@ import {
   runAgentStreaming,
   agentSupportsStream,
   extractJson,
-  INTERACTIVE_TIMEOUT_MS,
+  interactiveTimeoutFor,
   loadAgents,
   resolveAgentExecutionProfile,
   type AgentDef,
@@ -1491,6 +1491,23 @@ export function resolveRuntimeChatProfile(
   }
 }
 
+// The leash for one chat attempt, scaled by how much thinking this turn asked for.
+// A deep-lane turn runs at high effort, which a flat 90s cap can kill mid-think —
+// the run then reads as a failed agent and the rotation hands a deep question to
+// someone else mid-thought, which is the same silent fallthrough the job ops had.
+// Waiting is the better failure mode here: chat STREAMS (the athlete watches tokens
+// land, so a long turn is visibly working), every pending bubble carries a Stop, the
+// turn is durable in SQLite across a reload, and a genuinely dead CLI fails at spawn
+// rather than at the 90s mark. Chat's lane profile stays authoritative for
+// model/effort — that is why this reads the resolved profile rather than the task
+// table, where `chat` deliberately has no entry; only the timeout follows it.
+// Falls back to the REQUESTED effort when `execution` is null (a provider that takes
+// no profile flags, or a binding it rejected): we could not pin the effort, but the
+// question was still a deep one, so the leash tracks the ambition of the turn.
+export function chatTurnTimeoutMs(profile: Pick<RuntimeChatProfile, "execution" | "requested">): number {
+  return interactiveTimeoutFor(profile.execution?.reasoning ?? profile.requested?.reasoning);
+}
+
 export function chatExecutionAttemptKey(
   lane: ChatLane | null,
   agent: string,
@@ -1754,7 +1771,7 @@ export async function runChatCompletion(
         try {
           const res = await runStreamingDep(first, streamPrompt, {
             signal,
-            timeoutMs: INTERACTIVE_TIMEOUT_MS,
+            timeoutMs: chatTurnTimeoutMs(firstProfile),
             ...(firstProfile.execution ?? {}),
             onProgress: stream.progress,
             onDelta: stream.push,
@@ -1860,7 +1877,7 @@ export async function runChatCompletion(
           emit(id, { type: "progress", text: "Asking the coach…" });
           let res = await runAgentDep(name, runPrompt, {
             signal,
-            timeoutMs: INTERACTIVE_TIMEOUT_MS,
+            timeoutMs: chatTurnTimeoutMs(profile),
             ...(profile.execution ?? {}),
           });
           let raw = String(res.raw ?? "");
@@ -1869,7 +1886,7 @@ export async function runChatCompletion(
             retriedEmpty = true;
             res = await runAgentDep(name, runPrompt + EMPTY_CHAT_RETRY_SUFFIX, {
               signal,
-              timeoutMs: INTERACTIVE_TIMEOUT_MS,
+              timeoutMs: chatTurnTimeoutMs(profile),
               ...(profile.execution ?? {}),
             });
             raw = String(res.raw ?? "");

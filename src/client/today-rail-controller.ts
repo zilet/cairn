@@ -24,6 +24,8 @@ type TodayRailLoaderKey =
   | "garmin-reconcile"
   | "lately";
 
+type TodayRailAttention = import("../contracts/client.js").ClientTodayAttention;
+
 type TodayRailDeps = {
   root: ParentNode;
   state: TodayRailState;
@@ -114,6 +116,54 @@ type TodayRailDeps = {
     railLoaders().loadGarminReconcile(deps);
     railLoaders().loadWeekAhead(deps);
     railLoaders().loadProgramAdjustmentsBanner(deps);
+  }
+
+  // ---- the lead arbitration, applied to the rendered surface --------------
+  // The server decides ONE surface earns today's position of prominence (see
+  // src/domain/brain/today-attention.ts). Here that decision is honored by MOVING
+  // the winning card's slot out of the side rail and into the main column, right
+  // under the coach's voice — the same element, the same id, the same loader.
+  // Nothing is duplicated, nothing is removed, and every other card stays exactly
+  // where the agenda put it.
+  const ATTENTION_LEAD_SELECTOR: Record<string, string> = {
+    insight: "#insightSlot",
+    weekly: "#weeklySlot",
+    fuel: "#fuelSlot",
+    // The feedback capture is bound to the finished-session card — the moment it
+    // belongs to. It is MARKED as the lead there, never relocated.
+    feedback: "#feedbackSlot",
+  };
+
+  // `closest` is absent under the vm test harness (mirrors today-session-feedback-client).
+  function inCollapsedMore(el: Element): boolean {
+    return typeof (el as Element & { closest?: (s: string) => Element | null }).closest === "function"
+      ? !!el.closest("#todayMore")
+      : false;
+  }
+
+  function promoteAttentionLead(root: ParentNode, attention: TodayRailAttention | null | undefined): void {
+    const primary = attention && typeof attention === "object" ? String(attention.primary || "") : "";
+    if (!primary || primary === "brief") return;
+    const selector = ATTENTION_LEAD_SELECTOR[primary];
+    if (!selector) return; // a surface this build can't draw — leave Today untouched
+    const slot = root.querySelector(selector);
+    if (!slot) return;
+    // Deferred behind the quiet "more" disclosure means the SURPRISE BUDGET held it
+    // back for today (repo/today-agenda.ts). Hoisting it inline would introduce the
+    // very newcomer the budget deferred — pull, never push. Leave it waiting.
+    if (inCollapsedMore(slot)) return;
+    slot.setAttribute("data-attention", "lead");
+    const lead = root.querySelector("#attentionLead");
+    if (!lead || primary === "feedback") return;
+    lead.appendChild(slot);
+    // The agenda rail may now hold nothing but its masthead, and a header over no
+    // cards is litter — so drop the MAST, never the aside. Removing the aside would
+    // take every remaining slot with it (the FALLBACK rail's cards carry no
+    // `card-stack-item` class at all), and nothing here may make a surface
+    // unreachable. The fallback rail has no mast, so it is left untouched.
+    const rail = root.querySelector(".today-rail");
+    const remaining = rail?.querySelector(".card-stack-item, .today-more, .agenda-card");
+    if (rail && !remaining) rail.querySelector(".rail-mast")?.remove();
   }
 
   function wireGenericAgendaCards(pending: TodayRailCandidate[], deps: TodayRailDeps): void {
@@ -247,6 +297,7 @@ type TodayRailDeps = {
     fallbackRailHtml,
     runAgendaRail,
     runFallbackRail,
+    promoteAttentionLead,
     loadFuelToday: (date: string, deps: TodayRailDeps) => railLoaders().loadFuelToday(date, deps),
     loadWeekAhead: (deps: TodayRailDeps) => railLoaders().loadWeekAhead(deps),
     loadProgramAdjustmentsBanner: (deps: TodayRailDeps) => railLoaders().loadProgramAdjustmentsBanner(deps),

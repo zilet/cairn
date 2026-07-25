@@ -2,6 +2,7 @@
 // cross-domain insight, and the standing weekly read.
 import * as repo from "../repo.js";
 import type { CoachContext } from "../repo/coach-context.js";
+import { promptData } from "./context-projection.js";
 import { localDateISO } from "../repo/shared.js";
 import {
   activeInjuryAreas,
@@ -93,6 +94,70 @@ function trainingRhythmLine(allSessions: any[], date?: string): string {
   if (jointFlags.length) bits.push(`flagged joints recently: ${jointFlags.join(", ")}`);
   if (sore) bits.push(`reported sore after ${sore} of the last 3`);
   return bits.join("; ") + ".";
+}
+
+// ---------- cross-day memory ----------
+// What the Brief actually SAID on the last few days, plus where today sits in the
+// program. Without this the agent has no idea it has been repeating itself: a
+// chronic short sleeper or a multi-week injury holds every input steady, so the same
+// read is re-derived and re-worded identically, forever ("rest after rest after
+// rest"). With it, the agent can say something new, acknowledge the continuity
+// honestly, or admit plainly that nothing has moved. "" when there's no history.
+function renderRecentReads(date: string): string {
+  let prior: Array<{ date: string; kind: string; headline: string | null; why: string | null }> = [];
+  try {
+    prior = repo.recentDayReads(date, 3);
+  } catch {
+    return "";
+  }
+  if (!prior.length) return "";
+  const lines = prior.map((r) => {
+    const said = [r.headline, r.why]
+      .filter((part): part is string => typeof part === "string" && !!part.trim())
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 220);
+    return `- ${r.date} (${r.kind || "?"}): ${said || "(no text)"}`;
+  });
+  return `
+WHAT YOU ALREADY TOLD THEM (the last few days' Briefs, most recent first):
+${lines.join("\n")}
+Do NOT reword yesterday and present it as today's read. If the picture genuinely has not
+moved, SAY that plainly in your own words ("nothing's really moved since yesterday") and
+keep it short — honesty reads better than a fresh-sounding sentence about the same facts.
+If you are suggesting a third or fourth quiet day in a row, do not re-argue the case for
+rest: acknowledge the stretch and offer the smallest thing worth doing, as an option.
+`;
+}
+
+// Where today sits in the program, so a deload day 3 of 7 is not proposed as though
+// rest were a new idea. "" when no block and no overlay are running.
+function renderPeriodization(date: string): string {
+  let context: ReturnType<typeof repo.dayReadPeriodizationContext>;
+  try {
+    context = repo.dayReadPeriodizationContext(date);
+  } catch {
+    return "";
+  }
+  const bits: string[] = [];
+  const block = context.program_block;
+  if (block) {
+    bits.push(
+      `program block "${block.goal}" (${block.focus}) — week ${block.week_index} of ${block.total_weeks}, ${block.effective_phase} phase`
+    );
+  }
+  const overlay = context.recovery_overlay;
+  if (overlay) {
+    bits.push(
+      `a reduced-volume recovery week is running: day ${overlay.day_index} of ${overlay.total_days} (through ${overlay.until})`
+    );
+  }
+  if (!bits.length) return "";
+  return `
+WHERE TODAY SITS: ${bits.join("; ")}. This is planned, not news — speak to it as an arc
+they are already inside ("day three of the lighter week"), never as a fresh discovery.
+`;
 }
 
 // A QUIET standing-health line for the Brief: the elite-coach synthesis headline +
@@ -341,14 +406,14 @@ ${JSON.stringify(baseline.signals)}
 A rules-only baseline suggested: kind="${baseline.kind}", focus=${JSON.stringify(baseline.focus)}.
 You MAY disagree with the baseline when the whole picture warrants it — it is a floor, not a ceiling.
 RECENT TRAINING (most recent first): ${sessionLine}.
-TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${doneBlock}${lastNightLine}
+TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${renderRecentReads(feltDate)}${renderPeriodization(feltDate)}${doneBlock}${lastNightLine}
 ${CONTEXT_GUARDRAILS}
 ${renderSignalState(context)}${renderCoachingFocus(context, { brief: true })}${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderRunZones(context)}${renderRunPlan(context)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderMuscleGroups(context)}${renderPerformance(context, { brief: true })}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${feltBlock}${learnedBlock}${overrideBlock}
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 ${DAY_READ_SCHEMA}
 
 DATA:
-${JSON.stringify(context)}`;
+${promptData(context, "day_read")}`;
 }
 
 // ---------- on-demand session ("build me a session for today" — Phase 1D) ----------
@@ -461,7 +526,7 @@ ${renderStreamingContract(
 )}
 
 DATA:
-${JSON.stringify(context)}`;
+${promptData(context, "session")}`;
 }
 
 // ---------- Stage 3: bounded agent composition (docs §5) ----------
@@ -533,7 +598,7 @@ ${renderStreamingContract(
 )}
 
 DATA:
-${JSON.stringify(context)}`;
+${promptData(context, "daily_composition")}`;
 }
 
 // ---------- quiet cross-domain insight (Phase 6A — pull, never push) ----------
@@ -589,7 +654,7 @@ When there is exactly one genuine connection:
 ${INSIGHT_SCHEMA}
 
 DATA:
-${JSON.stringify(context)}`;
+${promptData(context, "insight")}`;
 }
 
 // ---------- standing weekly read (Phase 6B — a read that waits, not a nag) ----------
@@ -657,5 +722,5 @@ ${renderStreamingContract(
 )}
 
 DATA:
-${JSON.stringify(context)}`;
+${promptData(context, "weekly_read")}`;
 }

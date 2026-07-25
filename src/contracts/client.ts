@@ -35,6 +35,34 @@ export interface ClientRoutesApi {
   settingsSections: readonly ClientSettingsSection[];
 }
 
+// The Today LEAD arbitration (server-owned, additive, optional). One decision
+// says which single surface earns the position of prominence today and gives a
+// coarse ordering for the rest, so Today stops competing with itself when the
+// Brief is repeating yesterday. SEMANTIC LABELS ONLY — the server's internal
+// ranking never crosses the wire, exactly like marker `impact_score`. Absent
+// (older server, cached payload) → the client renders as it always has.
+// These MIRROR the server types in src/domain/brain/today-attention.ts rather
+// than importing them: this module is the client-facing contract and by design
+// imports nothing outside src/contracts/ (src/client/** cannot reach server code).
+export type ClientTodayAttentionSurface = "brief" | "feedback" | "insight" | "weekly" | "fuel";
+// Emphasis bands, not list positions: `lead` is the position of prominence,
+// `supporting` sits beside it, `quiet` is present and reachable but recedes.
+export type ClientTodayAttentionTier = "lead" | "supporting" | "quiet";
+// Whether the Brief still has something new to say today.
+export type ClientTodayAttentionBriefState = "new_read" | "repeat_of_yesterday" | "settled_quiet";
+
+export interface ClientTodayAttentionItem {
+  surface: ClientTodayAttentionSurface;
+  tier: ClientTodayAttentionTier;
+}
+
+export interface ClientTodayAttention {
+  primary: ClientTodayAttentionSurface;
+  brief_state: ClientTodayAttentionBriefState;
+  // Most-deserving first; `items[0].surface` is always `primary`.
+  items: ClientTodayAttentionItem[];
+}
+
 export interface ClientDayRead {
   kind: "train" | "easy" | "rest" | "done";
   focus: string | null;
@@ -48,6 +76,41 @@ export interface ClientDayRead {
   arc?: string | null;
   agent_status?: unknown;
   agent_issue?: "invalid_response" | "unreachable";
+  decision?: {
+    rule_code: string;
+    basis: "deterministic" | "agent" | "server_policy";
+    baseline_kind: "train" | "easy" | "rest" | "done";
+    reason: string;
+    evidence: Array<{ label: string; value: string; date?: ISODateString }>;
+    computed_at: string;
+  };
+  input_fingerprint?: string;
+  computed_at?: string;
+  // A hand-authored read (the demo seed's Brief) pinned against recompute.
+  curated?: boolean;
+  // Which Today surface leads today. Optional: absent on any non-live date and
+  // whenever the arbitration can't be made.
+  attention?: ClientTodayAttention;
+  periodization_context?: {
+    program_block: {
+      goal: string;
+      focus: string;
+      stored_phase: string;
+      effective_phase: string;
+      week_index: number;
+      total_weeks: number;
+      started_at: string;
+      counter_basis: "calendar_program_block";
+    } | null;
+    recovery_overlay: {
+      applied_on: ISODateString;
+      until: ISODateString;
+      day_index: number;
+      total_days: 7;
+      proposal_id: number;
+      label: "reduced volume";
+    } | null;
+  };
 }
 
 export interface ClientTodayAgendaAction {

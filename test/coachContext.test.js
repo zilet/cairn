@@ -80,10 +80,7 @@ test("coach context carries one recovery phase instead of stale accumulation pro
     days: [],
   });
   repo.setProposalStatus(proposal.id, "applied");
-  repo.setAppState(
-    "recovery_week_applied",
-    JSON.stringify({ applied_on: localDaysAgo(1), proposal_id: proposal.id })
-  );
+  repo.setAppState("recovery_week_applied", JSON.stringify({ applied_on: localDaysAgo(1), proposal_id: proposal.id }));
   repo.createBlock({ goal: "Build strength", focus: "strength", phase: "accumulation", week_index: 2, total_weeks: 6 });
 
   const ctx = repo.getCoachContext();
@@ -287,13 +284,39 @@ test("coach context keeps poor recovery above injury while preserving the conduc
   assert.equal(ctx.signal_state.action.posture, "easy");
   assert.equal(ctx.signal_state.action.directives.training, "recover");
   assert.equal(ctx.day_read.kind, "easy");
-  assert.match(ctx.day_read.why, /active injury/i);
+  // The Brief names the injury in the athlete's own register; the conductor caveat
+  // below still quotes the machine-facing evidence line.
+  assert.match(ctx.day_read.why, /shoulder strain/i);
+  assert.doesNotMatch(ctx.day_read.why, /\bthe athlete\b/i);
   assert.equal(ctx.coaching_focus.lead?.domain, "recovery");
   assert.equal(ctx.coaching_focus.lead?.day_posture, "easy");
   assert.match(ctx.coaching_focus.caveat, /active injury|pain-free substitutions/i);
   assert.equal(
     ctx.coaching_focus.parallel.some((item) => item.domain === "training" || item.domain === "running"),
     false
+  );
+});
+
+test("the Brief and the conductor say ONE sentence about one signal", () => {
+  // The two surfaces are a tab apart (Today's Brief; the conductor on Stand,
+  // Me → Health and Progress → Program), both fed by the same evidence. They used to
+  // speak different registers about it — the Brief in the athlete's words and the
+  // conductor in the observer's ("The athlete feels poorly recovered…"). Same voice,
+  // same rotation key, same date ⇒ one signal reads as one observation.
+  const today = localDaysAgo(0);
+  repo.addCheckin(today, { sleep_feel: 1, energy: 3, mood: 3 });
+
+  const ctx = repo.getCoachContext();
+  assert.equal(ctx.day_read.kind, "rest");
+  assert.equal(ctx.coaching_focus.lead?.day_posture, "rest");
+  assert.equal(ctx.coaching_focus.lead.why, ctx.day_read.why);
+  assert.doesNotMatch(ctx.coaching_focus.lead.why, /\bthe athlete\b/i);
+  // …and the machine register underneath both of them is untouched: the prompt block
+  // and the conductor's own evidence trail still carry the observer's line.
+  assert.equal(ctx.signal_state.action.reason, "The athlete feels poorly recovered despite any wearable reading.");
+  assert.ok(
+    ctx.coaching_focus.lead.based_on.some((line) => /the athlete feels poorly recovered/i.test(line)),
+    "the evidence trail keeps the machine-facing summary"
   );
 });
 
@@ -356,4 +379,41 @@ test("day-read prompt leads with conductor context before domain evidence", () =
   assert.ok(conductorAt > -1, "conductor line is present");
   assert.ok(programAt > conductorAt, "program evidence follows the conductor");
   assert.ok(fuelAt > conductorAt, "fuel evidence follows the conductor");
+});
+
+// ---------- cross-day memory reaches the agent ----------
+// Nothing used to tell the agent what it had already said, so a stable input got a
+// verbatim-identical Brief forever. The prompt now carries the last few days' reads
+// and where today sits in the program (day 3 of 7 of a deload is not news).
+test("the day-read prompt carries what it already told them, and where today sits", () => {
+  reset();
+  const yesterday = localDaysAgo(1);
+  const twoDaysAgo = localDaysAgo(2);
+  repo.saveDayRead(twoDaysAgo, {
+    kind: "rest",
+    headline: "Rest today.",
+    why: "You've trained hard several days running — let it consolidate.",
+  });
+  repo.saveDayRead(yesterday, {
+    kind: "rest",
+    headline: "Rest today.",
+    why: "Sleep is still short — another quiet day suits you.",
+  });
+  repo.createBlock({ goal: "Build the squat", focus: "strength", total_weeks: 6, week_index: 2 });
+
+  const prompt = buildDayReadPrompt(undefined, { date: localDaysAgo(0) });
+
+  assert.match(prompt, /WHAT YOU ALREADY TOLD THEM/);
+  assert.ok(prompt.includes(yesterday), "yesterday's read is named by date");
+  assert.ok(prompt.includes(twoDaysAgo));
+  assert.ok(prompt.includes("Sleep is still short — another quiet day suits you."));
+  assert.match(prompt, /nothing's really moved since yesterday/i, "and is told to say so plainly");
+  assert.match(prompt, /WHERE TODAY SITS: program block "Build the squat" \(strength\) — week 2 of 6/);
+});
+
+test("the day-read prompt says nothing about prior reads when there are none", () => {
+  reset();
+  const prompt = buildDayReadPrompt(undefined, { date: localDaysAgo(0) });
+  assert.doesNotMatch(prompt, /WHAT YOU ALREADY TOLD THEM/);
+  assert.doesNotMatch(prompt, /WHERE TODAY SITS/);
 });

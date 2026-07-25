@@ -2,6 +2,7 @@
 // program-evolution proposal. Both emit PLAN_SCHEMA; the server-owned autonomy
 // policy decides whether each result lands, announces, or waits for review.
 import * as repo from "../repo.js";
+import { promptData } from "./context-projection.js";
 import {
   activeInjuryAreas,
   buildEliteGuardrails,
@@ -148,7 +149,7 @@ OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 ${PLAN_SCHEMA}
 
 DATA:
-${JSON.stringify(ctx)}`;
+${promptData(ctx, "coach")}`;
 }
 
 // ---- adaptive program evolution (propose how the PLAN itself should evolve) ----
@@ -299,7 +300,7 @@ OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 ${PLAN_SCHEMA}
 
 DATA:
-${JSON.stringify(ctx)}`;
+${promptData(ctx, "program_evolution")}`;
 }
 
 // ---------- the personal-response NARRATIVE (the warm layer over the model) ----------

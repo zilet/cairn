@@ -23,7 +23,16 @@ function debugAgentStderr(name: string, code: number | null, stderr: string) {
   console.error(`[agent:${name}] exit ${code} stderr:\n${s.slice(0, 4000)}`);
 }
 
-export type ReasoningLevel = "low" | "medium" | "high" | "xhigh";
+export type ReasoningLevel = "low" | "medium" | "high" | "xhigh" | "max";
+
+// Cairn's provider-NEUTRAL model classes. An operation asks for a class ("this is
+// cheap structuring" vs "this is the hard read"); each agents.json entry maps the
+// classes IT supports onto its own CLI model name via `model_classes`. Nothing in
+// src/ names a concrete model, and an agent that declares no mapping simply runs on
+// its own configured default — which is why an Anthropic alias never reaches a
+// non-Anthropic CLI.
+export const MODEL_CLASSES = ["fast", "deep"] as const;
+export type ModelClass = (typeof MODEL_CLASSES)[number];
 
 export interface AgentCapabilities {
   /** This CLI accepts a per-run model pin through model_flag. */
@@ -32,6 +41,17 @@ export interface AgentCapabilities {
   reasoning?: ReasoningLevel[];
   /** The offline stub intentionally ignores execution profiles for smoke tests. */
   execution_profile_noop?: boolean;
+}
+
+/**
+ * A provider-neutral execution request: what KIND of model and how much effort.
+ * Resolved against one agent's declared capabilities by resolveAgentProfileForClass.
+ */
+export interface AbstractExecutionProfile {
+  model_class?: ModelClass;
+  reasoning?: ReasoningLevel;
+  /** A raw provider model name (user override) — wins over model_class when set. */
+  model?: string;
 }
 
 export interface AgentDef {
@@ -50,6 +70,10 @@ export interface AgentDef {
   auth_state?: string[] | null; // HOME-relative paths whose presence is a fallback "logged in" signal when there is no status_check
   models_list?: string[] | null; // argv that prints the available models (grok/agy); null ⇒ no model catalog
   model_flag?: string[] | null; // ["--model","{model}"] — expanded only at an explicit {model_args} slot
+  // This provider's own name for each Cairn model class, e.g. {"fast":"sonnet","deep":"opus"}.
+  // Pin an ALIAS, never a dated id, so a new generation ships without a code change.
+  // Omit the map (or a class) to let the CLI use whatever model it is configured with.
+  model_classes?: Partial<Record<ModelClass, string>>;
   capabilities?: AgentCapabilities;
   reasoning_flag?: string[] | null; // e.g. ["--effort","{reasoning}"] at {reasoning_args}
   // Optional headless token-streaming. When present, the chat path can run the CLI
@@ -653,11 +677,20 @@ export interface RunOpts {
   mcpConfigArgs?: string[];
   /** Optional per-run model pin. Only agents with a {model_args} slot consume it. */
   model?: string;
-  /** Provider-neutral reasoning effort; unsupported xhigh maps down to high. */
+  /** Provider-neutral reasoning effort; a level above the provider's max maps down. */
   reasoning?: ReasoningLevel;
+  // Lazily resolves this run's execution profile FOR THE AGENT ACTUALLY CHOSEN, so a
+  // rotation can hand each provider its own model name. Consulted per field: an
+  // explicit `model`/`reasoning` above always wins, and a resolver that returns
+  // nothing leaves the CLI on its own defaults. Threaded as a callback because the
+  // policy lives in repo/settings.ts, which imports THIS module (a direct import
+  // here would be a cycle).
+  profile?: AgentProfileResolver;
 }
 
-const REASONING_LEVELS: readonly ReasoningLevel[] = ["low", "medium", "high", "xhigh"];
+export type AgentProfileResolver = (agent: string) => { model?: string; reasoning?: ReasoningLevel } | null | undefined;
+
+const REASONING_LEVELS: readonly ReasoningLevel[] = ["low", "medium", "high", "xhigh", "max"];
 
 export interface ResolvedAgentExecutionProfile {
   requested: { model?: string; reasoning?: ReasoningLevel };
@@ -718,16 +751,80 @@ export function resolveAgentExecutionProfile(
     if (!Array.isArray(def.reasoning_flag) || !capabilities.reasoning.length) {
       throw new Error("Agent does not support a per-run reasoning profile");
     }
-    if (capabilities.reasoning.includes(reasoning)) {
-      profile.effective.reasoning = reasoning;
-    } else if (reasoning === "xhigh" && capabilities.reasoning.includes("high")) {
-      profile.effective.reasoning = "high";
-      profile.adjustments.push("reasoning xhigh mapped to provider maximum high");
-    } else {
-      throw new Error(`Agent does not support reasoning level "${reasoning}"`);
+    const supported = highestSupportedReasoning(capabilities.reasoning, reasoning);
+    if (!supported) throw new Error(`Agent does not support reasoning level "${reasoning}"`);
+    profile.effective.reasoning = supported;
+    if (supported !== reasoning) {
+      profile.adjustments.push(`reasoning ${reasoning} mapped to provider maximum ${supported}`);
     }
   }
   return profile;
+}
+
+/**
+ * The highest level this provider declares that is no stronger than `requested`
+ * (levels are ordered least→most effort in REASONING_LEVELS). This is what makes
+ * a request degrade instead of failing: asking a three-level CLI for xhigh/max
+ * lands on its own ceiling. null only when the provider declares nothing at or
+ * below the request, which callers treat as "this agent can't take a profile".
+ */
+function highestSupportedReasoning(
+  supported: readonly ReasoningLevel[],
+  requested: ReasoningLevel
+): ReasoningLevel | null {
+  const ceiling = REASONING_LEVELS.indexOf(requested);
+  let best: ReasoningLevel | null = null;
+  let bestRank = -1;
+  for (const level of supported) {
+    const rank = REASONING_LEVELS.indexOf(level);
+    if (rank < 0 || rank > ceiling || rank <= bestRank) continue;
+    best = level;
+    bestRank = rank;
+  }
+  return best;
+}
+
+/**
+ * Pure: turn Cairn's provider-neutral request into the concrete `{model, reasoning}`
+ * THIS agent can actually take. Never throws and never invents a value — an agent
+ * with no mapping for the class, no model flag, or no reasoning support simply gets
+ * that field omitted and runs on its own default. The offline stub always resolves
+ * to nothing (it ignores execution profiles by contract).
+ */
+export function resolveAgentProfileForClass(
+  def: AgentDef | undefined,
+  want: AbstractExecutionProfile | undefined
+): { model?: string; reasoning?: ReasoningLevel } {
+  if (!def || !want) return {};
+  const capabilities = normalizedAgentCapabilities(def);
+  if (capabilities.execution_profile_noop) return {};
+  const out: { model?: string; reasoning?: ReasoningLevel } = {};
+  if (capabilities.model && Array.isArray(def.model_flag)) {
+    const model = String(want.model ?? (want.model_class ? def.model_classes?.[want.model_class] : "") ?? "").trim();
+    if (model) out.model = model;
+  }
+  if (want.reasoning && Array.isArray(def.reasoning_flag) && capabilities.reasoning.length) {
+    const reasoning = highestSupportedReasoning(capabilities.reasoning, want.reasoning);
+    if (reasoning) out.reasoning = reasoning;
+  }
+  return out;
+}
+
+// Fold a caller-supplied profile resolver into this run's opts. An explicit
+// model/reasoning always wins per field; a throwing or absent resolver is simply
+// no profile (a policy lookup must never break a coaching run).
+function withResolvedProfile(
+  name: string,
+  opts: Pick<RunOpts, "model" | "reasoning" | "profile">
+): { model?: string; reasoning?: ReasoningLevel } {
+  if (!opts.profile || (opts.model && opts.reasoning)) return { model: opts.model, reasoning: opts.reasoning };
+  let resolved: { model?: string; reasoning?: ReasoningLevel } | null | undefined;
+  try {
+    resolved = opts.profile(name);
+  } catch {
+    resolved = undefined;
+  }
+  return { model: opts.model ?? resolved?.model, reasoning: opts.reasoning ?? resolved?.reasoning };
 }
 
 const UPLOAD_IMAGE_RE = /\.(?:jpe?g|png|webp|gif|heic|heif)$/i;
@@ -829,7 +926,30 @@ function expandAgentArgs(
 // the request path never hangs on a wedged CLI; background callers (scheduler,
 // review, enrichment) keep the long default. Exported so call sites name them.
 export const DEFAULT_TIMEOUT_MS = 300_000;
+// The FLOOR of the interactive ladder below, not a leash to pass directly: every
+// interactive call site now derives its timeout from the effort the op asked for
+// (repo/settings.ts `interactiveTimeoutForOp`, chatTurns.ts `chatTurnTimeoutMs`),
+// because a flat 90s cap kills a high-effort run mid-think and the rotation reads
+// that as a failed agent. Reach for `interactiveTimeoutFor` instead.
 export const INTERACTIVE_TIMEOUT_MS = 90_000;
+
+// A 90s leash is right for a deliberately cheap op, but it silently truncates a
+// deliberately expensive one: the run is killed mid-think and the rotation falls
+// through to the next agent as if it had failed. So the leash scales with the
+// effort the op actually asked for — same short cap at low effort, real headroom
+// where we chose to buy thinking. Never exceeds DEFAULT_TIMEOUT_MS.
+const INTERACTIVE_TIMEOUT_BY_REASONING: Record<ReasoningLevel, number> = {
+  low: INTERACTIVE_TIMEOUT_MS,
+  medium: 150_000,
+  high: 240_000,
+  xhigh: DEFAULT_TIMEOUT_MS,
+  max: DEFAULT_TIMEOUT_MS,
+};
+
+export function interactiveTimeoutFor(reasoning?: ReasoningLevel | null): number {
+  if (!reasoning) return INTERACTIVE_TIMEOUT_MS;
+  return INTERACTIVE_TIMEOUT_BY_REASONING[reasoning] ?? INTERACTIVE_TIMEOUT_MS;
+}
 
 // ---------- circuit breaker ----------
 // A self-contained, in-memory, decaying failure map. An agent that just failed
@@ -1004,6 +1124,7 @@ export async function runAgentWithFallback(
         mcpConfigArgs: o.mcpConfigArgs,
         model: o.model,
         reasoning: o.reasoning,
+        profile: o.profile,
       });
       const parsedBeforeRepair = !!result.parsed;
       const acceptedBeforeRepair = acceptsParsed(result, o.acceptParsed);
@@ -1019,6 +1140,7 @@ export async function runAgentWithFallback(
             mcpConfigArgs: o.mcpConfigArgs,
             model: o.model,
             reasoning: o.reasoning,
+            profile: o.profile,
           });
         } catch {
           /* keep the first (unparsed) result; fall through below */
@@ -1088,8 +1210,10 @@ export function runAgent(name: string, prompt: string, opts: RunOpts | number = 
   const signal = typeof opts === "number" ? undefined : opts.signal;
   const extract = typeof opts === "number" ? undefined : opts.extract;
   const mcpConfigArgs = typeof opts === "number" ? undefined : opts.mcpConfigArgs;
-  const model = typeof opts === "number" ? undefined : opts.model;
-  const reasoning = typeof opts === "number" ? undefined : opts.reasoning;
+  // ONE chokepoint: every path that spawns a CLI (direct runAgent, the rotation in
+  // runAgentWithFallback, the streaming sibling below) resolves the op's profile
+  // here, against the agent actually chosen.
+  const { model, reasoning } = typeof opts === "number" ? {} : withResolvedProfile(name, opts);
   return runAgentImpl(name, prompt, timeoutMs, signal, extract, mcpConfigArgs, model, reasoning);
 }
 
@@ -1289,10 +1413,14 @@ export function runAgentStreaming(name: string, prompt: string, opts: StreamRunO
   const onDelta = opts.onDelta;
   const format = def.stream.format;
   const useStdin = def.input === "stdin";
-  const args = expandAgentArgs(def, def.stream.args, prompt, useStdin, opts.mcpConfigArgs, {
-    model: opts.model,
-    reasoning: opts.reasoning,
-  });
+  const args = expandAgentArgs(
+    def,
+    def.stream.args,
+    prompt,
+    useStdin,
+    opts.mcpConfigArgs,
+    withResolvedProfile(name, opts)
+  );
   const MAX_OUT = 4 * 1024 * 1024;
 
   return new Promise((resolve, reject) => {

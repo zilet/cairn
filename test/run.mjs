@@ -66,6 +66,11 @@ function envFor(dir) {
     GOOGLE_AI_KEY: "",
     GARMIN_USERNAME: "",
     GARMIN_PASSWORD: "",
+    // Model ids are env-overridable, and artModelDefaults asserts the compiled-in
+    // DEFAULTS. Without this, a developer who exports either variable fails the
+    // suite on a config difference rather than a regression.
+    GEMINI_TEXT_MODEL: "",
+    GEMINI_IMAGE_MODEL: "",
   };
 }
 

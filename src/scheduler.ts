@@ -312,6 +312,9 @@ export function startScheduler() {
         // applies here too, even though this legacy tick bypasses runChosen.
         const { agent, result } = await runAgentWithFallback(repo.pickAgentOrderForTask("proposal"), prompt, {
           op: "coach_draft",
+          // …and the same server-owned execution profile (deep model, xhigh effort):
+          // a structural plan change is the most consequential thing Cairn drafts.
+          profile: repo.executionProfileForOp("coach_draft"),
           acceptParsed: acceptsWeeklyCoachProposal,
         });
         const proposal = repo.createProposal(agent, "auto: weekly review", result.raw, result.parsed);

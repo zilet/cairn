@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { coachingFocus } from "../dist/repo/coaching-focus.js";
+import { SIGNAL_VOICE_KEYS, spokenSignalVoice } from "../dist/repo/signal-state.js";
 
 // A rich, multi-domain athlete: a stalled shoulder lift, an act-now lipid finding,
 // a build-phase run plan, a DEXA leg-lean flag, stale retests. An elite coach leads
@@ -63,6 +64,12 @@ function richInput() {
   };
 }
 
+// A synthetic UnifiedSignalState. It carries BOTH registers exactly as the real one
+// does: `reason`/`summary` are the machine-facing evidence lines the prompts and the
+// provenance trail read, and `voice` is the athlete-facing key the conductor speaks
+// from. A fixture with only `reason` would let the conductor silently go back to
+// printing observer prose ("The athlete reports high soreness today.") at the athlete.
+const STATE_DATE = "2026-03-15";
 function unifiedState({
   posture = "train",
   readiness = "ready",
@@ -70,20 +77,31 @@ function unifiedState({
   fueling = "normal",
   schedule = "normal",
   reason = "The current signals leave room for the planned day.",
+  voice = "unvoiced_clear",
   injury = false,
+  date = STATE_DATE,
 } = {}) {
   return {
+    date,
     action: {
       posture,
       readiness,
       reason,
       reasons: [reason],
+      voice: { key: voice },
       directives: { training, fueling, schedule },
     },
     dimensions: {
-      energy_fueling: { reason: fueling === "protect" ? "Recent work raises fueling needs." : "Fueling is steady." },
+      energy_fueling: {
+        reason: fueling === "protect" ? "Recent work raises fueling needs." : "Fueling is steady.",
+        voice: { key: fueling === "protect" ? "fuel_protect" : "unvoiced_clear" },
+      },
       life_capacity: {
         reason: schedule === "compress" ? "School pickup compresses today's window." : "Schedule is open.",
+        voice:
+          schedule === "compress"
+            ? { key: "commitment_pressure", subject: "School pickup" }
+            : { key: "unvoiced_clear" },
       },
       health_constraints: {
         evidence: injury
@@ -92,6 +110,7 @@ function unifiedState({
                 field: "active_injury",
                 freshness: "fresh",
                 summary: "Shoulder strain: an active shoulder injury is worth easing or working around.",
+                voice: { key: "active_injury", subject: "shoulder strain" },
               },
             ]
           : [],
@@ -99,6 +118,12 @@ function unifiedState({
     },
   };
 }
+
+// What the conductor may say for a voice on the fixture's day — the same rotation the
+// Brief uses, so a case pins the vocabulary rather than the phrasing that happened to
+// land on this date.
+const spokenOn = (voiceKey, subject, key = SIGNAL_VOICE_KEYS.protect) =>
+  spokenSignalVoice({ key: voiceKey, subject }, STATE_DATE, key);
 
 test("coachingFocus leads with the single highest-leverage lever and sequences the rest", () => {
   const out = coachingFocus(richInput());
@@ -166,13 +191,18 @@ test("canonical rest/easy postures own the conductor and gate aggressive trainin
         training: "recover",
         reason:
           posture === "rest"
-            ? "A rough night says recovery owns today."
-            : "One low recovery signal supports an easier day.",
+            ? "The athlete feels poorly recovered despite any wearable reading."
+            : "The fresh wearable readiness signal is subdued.",
+        voice: posture === "rest" ? "sleep_feel_low" : "readiness_subdued",
       }),
     });
     assert.equal(out.lead.domain, "recovery");
     assert.equal(out.lead.day_posture, posture);
-    assert.match(out.lead.why, posture === "rest" ? /rough night/i : /easier day/i);
+    // The lead speaks the voice of the evidence that drove the posture — never the
+    // machine-facing summary that rides alongside it in `based_on`.
+    assert.equal(out.lead.why, spokenOn(posture === "rest" ? "sleep_feel_low" : "readiness_subdued"));
+    assert.doesNotMatch(out.lead.why, /\bthe athlete\b/i);
+    assert.ok(out.lead.based_on.some((line) => /athlete feels poorly recovered|wearable readiness/i.test(line)));
     assert.equal(
       out.parallel.some((item) => item.domain === "training" || item.domain === "running"),
       false,
@@ -183,6 +213,28 @@ test("canonical rest/easy postures own the conductor and gate aggressive trainin
       "the block lever is deferred rather than erased"
     );
   }
+});
+
+test("the fueling and schedule cards speak the dimension's own voice, not its evidence line", () => {
+  // These two read a single DIMENSION rather than the day's posture, so they used to
+  // print `dimensions[x].reason` — the strongest observation's machine-facing summary,
+  // which for fueling is whichever line the underfueling engine composed.
+  const fuel = coachingFocus({
+    ...richInput(),
+    signalState: unifiedState({ fueling: "protect", training: "hold_aggression" }),
+  });
+  const fuelCard = [fuel.lead, ...fuel.parallel].find((item) => /protect fuel/i.test(item?.title ?? ""));
+  assert.ok(fuelCard, "the fuel-protect card is present");
+  assert.equal(fuelCard.why, spokenOn("fuel_protect", undefined, SIGNAL_VOICE_KEYS.fueling));
+  assert.doesNotMatch(fuelCard.why, /Recent work raises fueling needs/);
+
+  // Sparse on purpose: with a rich athlete the compression card is out-ranked into
+  // `later`, which carries no prose to assert on.
+  const sched = coachingFocus({ signalState: unifiedState({ schedule: "compress" }) });
+  const schedCard = [sched.lead, ...sched.parallel].find((item) => /available window/i.test(item?.title ?? ""));
+  assert.ok(schedCard, "the compressed-window card is present");
+  assert.equal(schedCard.why, spokenOn("commitment_pressure", "School pickup", SIGNAL_VOICE_KEYS.schedule));
+  assert.match(schedCard.why, /School pickup/);
 });
 
 test("combined poor recovery and injury keeps recovery lead plus an explicit movement caveat", () => {
@@ -226,8 +278,14 @@ test("a sparse no-plan athlete keeps the injury caveat without a training candid
     out.later.some((item) => item.domain === "training" || item.domain === "running"),
     false
   );
+  // The injury is named in the athlete's register — the SAME sentence the Brief
+  // splices onto a protective read — and the substitution instruction still follows it.
+  assert.ok(out.caveat.startsWith(spokenOn("active_injury", "shoulder strain", SIGNAL_VOICE_KEYS.injury)));
   assert.match(out.caveat, /shoulder strain/i);
   assert.match(out.caveat, /pain-free substitutions/i);
+  // The classifier line stays in the evidence register, never doubled into the prose.
+  assert.doesNotMatch(out.caveat, /is worth easing or working around/i);
+  assert.doesNotMatch(out.caveat, /\bmust\b/i);
 });
 
 test("canonical modify posture forces an explicit work-around on a training lead", () => {

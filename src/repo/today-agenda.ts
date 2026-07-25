@@ -21,6 +21,17 @@
 // Pure, deterministic, null-safe. Every producer read is wrapped in its own
 // try/catch so one failing source never breaks the agenda — graceful: no data →
 // just the hero.
+//
+// DELIBERATELY SEPARATE from `src/domain/brain/today-attention.ts`, which is the
+// other ranking on this screen. They answer different questions over different
+// surfaces: this one budgets the RAIL (which side cards render vs collapse behind
+// "more", with a surprise budget over ~20 candidate producers); that one arbitrates
+// the MAIN column's LEAD (which single surface — Brief, feedback, insight, weekly,
+// fuel — earns the position of prominence) and can only reorder emphasis, never
+// hide anything. Note the assumption above that "the Brief is ALWAYS the hero" is
+// this module's rail contract; relaxing it for the main column is precisely why
+// today-attention.ts exists. Merging them would couple a reducing budget to a
+// non-reducing emphasis call. Keep them apart.
 // ============================================================================
 
 import { createHash } from "node:crypto";

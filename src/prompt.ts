@@ -3,6 +3,7 @@
 // re-exported here so those imports keep working unchanged. Pure structural
 // relocation — see the individual modules for the prompt builders.
 export * from "./prompt/shared.js";
+export * from "./prompt/context-projection.js";
 export * from "./prompt/coach.js";
 export * from "./prompt/chat.js";
 export * from "./prompt/enrich.js";

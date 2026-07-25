@@ -9,6 +9,7 @@ import {
 } from "../chatActions.js";
 import * as repo from "../repo.js";
 import type { ChatLane } from "../chatRouting.js";
+import { promptData } from "./context-projection.js";
 import {
   CONTEXT_GUARDRAILS,
   renderActiveContext,
@@ -337,7 +338,7 @@ ${convo || "(new conversation)"}
 USER'S MESSAGE: ${message}
 
 DATA:
-${JSON.stringify(ctx)}`;
+${promptData(ctx, "chat")}`;
 }
 
 const DISTILL_SCHEMA = `{

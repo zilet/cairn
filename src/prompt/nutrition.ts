@@ -3,6 +3,7 @@
 import { todayISO } from "../db.js";
 import * as repo from "../repo.js";
 import type { CoachContext } from "../repo/coach-context.js";
+import { promptData } from "./context-projection.js";
 import {
   canonicalHardDietKeys,
   hardDietFreeRemainder,
@@ -585,7 +586,7 @@ OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 ${MEAL_SCHEMA}
 
 DATA:
-${JSON.stringify(planningCtx)}`;
+${promptData(planningCtx, "meal_plan")}`;
 }
 
 // ---------- T3: adaptive nutrition check-in (MacroFactor-style retarget) ----------

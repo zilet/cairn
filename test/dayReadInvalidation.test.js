@@ -24,6 +24,36 @@ function bustsCache(mutate) {
   assert.equal(repo.getCachedDayRead(TODAY()), null, "the cached Brief was busted");
 }
 
+// The other half of the contract (the fingerprint-aware invalidations): cache a
+// read that MATCHES the live decision — the way a real warm agentic read does —
+// and assert a write that cannot move that decision leaves it alone. Returns the
+// preserved row so the caller can check it is still the athlete's coach speaking.
+function warmAgenticRead() {
+  const baseline = repo.dayRead(TODAY());
+  repo.saveDayRead(TODAY(), {
+    ...baseline,
+    headline: "Warm read.",
+    why: "A sentence the athlete's coach actually wrote.",
+    source: "agent",
+    agent: "claude",
+    override: null,
+  });
+  const cached = repo.getCachedDayRead(TODAY());
+  assert.equal(cached?.source, "agent", "precondition: a warm agentic read is cached");
+  assert.equal(typeof cached.input_fingerprint, "string");
+  return cached;
+}
+
+function preservesCache(mutate) {
+  const before = warmAgenticRead();
+  mutate();
+  const after = repo.getCachedDayRead(TODAY());
+  assert.ok(after, "a write that cannot change the decision must not retire the Brief");
+  assert.equal(after.source, "agent");
+  assert.equal(after.why, before.why);
+  return after;
+}
+
 test("addContextEvent busts today's Brief", () => {
   bustsCache(() => repo.addContextEvent({ kind: "injury", title: "Tweaked knee" }));
 });
@@ -103,6 +133,47 @@ test("a rolled-back multi-change proposal preserves the persisted Brief", () => 
   assert.equal(result.ok, false);
   assert.equal(repo.getPlanDay(1).items.find((item) => item.exercise === "Bench Press").target_weight, 135);
   assert.equal(repo.getCachedDayRead(TODAY()).headline, "Stored push read");
+});
+
+// ---------- the other half: a write that CANNOT change the decision ----------
+// These four call sites deleted the cached row unconditionally, so ordinary
+// telemetry (a six-hourly watch sync, a re-sync writing identical numbers) cost the
+// athlete their coach's sentence before the narrowed decision fingerprint was ever
+// consulted. They are fingerprint-aware now; a genuine change must still bust.
+test("a Garmin daily-metrics sync that moves nothing preserves the warm Brief", () => {
+  preservesCache(() => repo.upsertGarminDailyMetric({ date: TODAY(), sleep_min: 448, resting_hr: 52, hrv: 61 }));
+  // A second, byte-identical re-sync is equally harmless.
+  preservesCache(() => repo.upsertGarminDailyMetric({ date: TODAY(), sleep_min: 448, resting_hr: 52, hrv: 61 }));
+});
+
+test("a Garmin sync carrying a genuinely short night still busts the Brief", () => {
+  warmAgenticRead();
+  repo.upsertGarminDailyMetric({ date: localDaysAgo(1), sleep_min: 300 });
+  assert.equal(repo.getCachedDayRead(TODAY()), null, "a decision-moving sync must still retire the read");
+});
+
+test("merging a Garmin session narrative preserves the warm Brief", () => {
+  // The narrative is prose ABOUT a session; dayLoad grades logged sets and Garmin
+  // activities, never sessions.garmin_json. Re-syncing rewrote an identical blob and
+  // nuked the Brief every time.
+  repo.logSetByName({ date: TODAY(), exercise: "Back Squat", weight: 185, reps: 5, rir: 2, day_number: null });
+  const session = repo.getSessionByDate(TODAY());
+  preservesCache(() =>
+    repo.updateSessionGarminNarrative(session.id, { summary: "Solid session — HR settled fast.", agent: "claude" })
+  );
+});
+
+test("a curated read survives a fingerprint-aware invalidation entirely", () => {
+  // The demo seed's hand-authored Brief is pinned on purpose: its illustrative
+  // signals can never match a live recompute, so it must not be swept up here.
+  repo.saveDayRead(TODAY(), {
+    kind: "train",
+    headline: "Hand-authored.",
+    why: "A deliberately curated read.",
+    curated: true,
+  });
+  repo.upsertGarminDailyMetric({ date: TODAY(), sleep_min: 401 });
+  assert.equal(repo.getCachedDayRead(TODAY())?.headline, "Hand-authored.");
 });
 
 test("saving changed reads keeps immutable history while one current observation supersedes the rest", () => {

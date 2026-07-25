@@ -72,7 +72,8 @@ test("endurance athlete: 3 consecutive cardio days earns REST (cardio counts as 
   assert.equal(r.signals.discipline, "endurance");
   assert.equal(r.signals.consecutive_training_days, 3);
   assert.equal(r.kind, "rest");
-  assert.match(r.why, /several days running/i);
+  // The wording rotates per calendar day (see dayRead.test.js) — the RULE is the pin.
+  assert.equal(r.decision.rule_code, "accumulated_load_rest");
 });
 
 test("endurance athlete: a single short walk doesn't read as a hard training day", () => {

@@ -10,13 +10,11 @@ const countDayReads = (date) =>
 test("readToday serves cached canonical Brief with context and records it once", async () => {
   resetTables("day_reads", "suggestions", "plan_days", "plan_items", "sessions", "logged_sets");
   const date = localDaysAgo(0);
+  configureDayReadRefresh({ today: () => date, setTimer: () => 0, clearTimer: () => {} });
+  const baseline = repo.dayRead(date);
   repo.saveDayRead(date, {
-    kind: "train",
-    headline: "Train today.",
-    why: "You're recovered and due.",
-    focus: "Lower body",
-    est_minutes: 60,
-    signals: { readiness: "steady" },
+    ...baseline,
+    headline: baseline.kind === "train" ? "Train today." : "Easy today.",
     source: "deterministic",
     override: null,
   });
@@ -25,12 +23,147 @@ test("readToday serves cached canonical Brief with context and records it once",
   const second = await readToday({ date, recordOutcome: true });
 
   assert.equal(first.cached, true);
-  assert.equal(first.kind, "train");
+  assert.equal(first.kind, baseline.kind);
   assert.equal(first.forward, null);
   assert.ok(first.arc === null || typeof first.arc === "string");
   assert.equal(typeof first.agent_status, "string");
-  assert.deepEqual(second.signals, { readiness: "steady" });
+  assert.equal(typeof first.input_fingerprint, "string");
+  assert.equal(typeof first.decision?.rule_code, "string");
+  assert.ok(first.periodization_context);
+  assert.deepEqual(second.signals, baseline.signals);
   assert.equal(countDayReads(date), 1);
+});
+
+test("a legacy cached row self-heals once against the complete decision fingerprint", async () => {
+  resetTables("day_reads", "suggestions", "plan_days", "plan_items", "sessions", "logged_sets", "program_blocks");
+  const date = localDaysAgo(0);
+  configureDayReadRefresh({ today: () => date, setTimer: () => 0, clearTimer: () => {} });
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  db.prepare(
+    `INSERT INTO day_reads
+      (date, kind, headline, why, focus, est_minutes, signals, source, override, computed_at)
+     VALUES (?, 'rest', 'Rest today.', 'Legacy broad-context copy.', NULL, NULL, '{}', 'agent', NULL, datetime('now'))`
+  ).run(date);
+
+  const healed = await readToday({ date });
+  const stable = await readToday({ date });
+
+  assert.equal(healed.kind, "train");
+  assert.equal(healed.cached, undefined);
+  assert.equal(healed.decision.basis, "deterministic");
+  assert.match(healed.input_fingerprint, /^[a-f0-9]{24}$/);
+  assert.equal(stable.cached, true, "the healed metadata prevents endless same-date churn");
+  assert.equal(stable.input_fingerprint, healed.input_fingerprint);
+});
+
+test("material truth replaces a stale persisted athlete steer once, then remains stable", async () => {
+  resetTables(
+    "day_reads",
+    "suggestions",
+    "checkins",
+    "plan_days",
+    "plan_items",
+    "sessions",
+    "logged_sets",
+    "program_blocks"
+  );
+  const date = localDaysAgo(0);
+  configureDayReadRefresh({ today: () => date, setTimer: () => 0, clearTimer: () => {} });
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  const baseline = repo.dayRead(date);
+  repo.saveDayRead(date, {
+    ...baseline,
+    kind: "easy",
+    headline: "Take it easy.",
+    why: "You asked for an easier day.",
+    focus: null,
+    est_minutes: 20,
+    source: "agent",
+    override: "give me an easy day",
+  });
+  const steered = repo.getCachedDayRead(date);
+  assert.equal(steered.override, "give me an easy day");
+
+  // Bypass the normal write-side invalidator to exercise readToday's factual
+  // compare-and-replace path, matching a late/racing provider write.
+  db.prepare(
+    `INSERT INTO checkins (date, mood, energy, sleep_feel, soreness, note)
+     VALUES (?, 2, 1, 2, 4, 'run down')`
+  ).run(date);
+
+  const healed = await readToday({ date });
+  const persistedAfterHeal = repo.getCachedDayRead(date);
+  const stable = await readToday({ date });
+
+  assert.equal(healed.kind, "rest");
+  assert.equal(healed.cached, undefined);
+  assert.equal(persistedAfterHeal.override, null, "only the now-stale steer is cleared");
+  assert.notEqual(healed.input_fingerprint, steered.input_fingerprint);
+  assert.equal(stable.cached, true, "the reconciled row does not refresh on every read");
+  assert.equal(stable.input_fingerprint, healed.input_fingerprint);
+  assert.equal(stable.computed_at, healed.computed_at, "a stable second read does not churn computed_at");
+});
+
+test("Today context keeps the calendar block and recovery overlay as separate clocks", async () => {
+  resetTables(
+    "day_reads",
+    "suggestions",
+    "plan_days",
+    "plan_items",
+    "sessions",
+    "logged_sets",
+    "program_blocks",
+    "plan_proposals",
+    "app_state"
+  );
+  const date = localDaysAgo(0);
+  const appliedOn = localDaysAgo(2);
+  const block = repo.createBlock({
+    goal: "Build squat + aerobic durability",
+    focus: "strength",
+    phase: "accumulation",
+    week_index: 3,
+    total_weeks: 6,
+    started_at: `${localDaysAgo(14)}T08:00:00.000Z`,
+  });
+  const proposal = repo.createProposal("stub", repo.RECOVERY_WEEK_INSTRUCTION, "", {
+    summary: "Reduced recovery prescription.",
+    days: [],
+  });
+  repo.setProposalStatus(proposal.id, "applied");
+  repo.setAppState("recovery_week_applied", JSON.stringify({ applied_on: appliedOn, proposal_id: proposal.id }));
+  configureDayReadRefresh({ today: () => date, setTimer: () => 0, clearTimer: () => {} });
+  const baseline = repo.dayRead(date);
+  repo.saveDayRead(date, {
+    ...baseline,
+    headline: baseline.focus ? `${baseline.focus}.` : "Today.",
+    source: "deterministic",
+    override: null,
+  });
+
+  const read = await readToday({ date });
+  const context = read.periodization_context;
+
+  assert.deepEqual(context.program_block, {
+    goal: block.goal,
+    focus: "strength",
+    stored_phase: "accumulation",
+    effective_phase: "deload",
+    week_index: 3,
+    total_weeks: 6,
+    started_at: block.started_at,
+    counter_basis: "calendar_program_block",
+  });
+  assert.deepEqual(context.recovery_overlay, {
+    applied_on: appliedOn,
+    until: repo.activeRecoveryWeek(date).until,
+    day_index: 3,
+    total_days: 7,
+    proposal_id: proposal.id,
+    label: "reduced volume",
+  });
+  assert.equal("parsed" in context.recovery_overlay, false, "raw proposal JSON never crosses the read boundary");
+  assert.equal(typeof read.arc === "string" || read.arc === null, true, "the old arc remains additive compatibility");
 });
 
 test("a cached deterministic Brief arms one self-healing re-warm without extending it on every read", async () => {
@@ -45,13 +178,11 @@ test("a cached deterministic Brief arms one self-healing re-warm without extendi
     },
     clearTimer: () => {},
   });
+  const baseline = repo.dayRead(date);
   repo.saveDayRead(date, {
-    kind: "rest",
-    headline: "Rest today.",
-    why: "The safe recovery floor.",
-    focus: null,
-    est_minutes: null,
-    signals: {},
+    ...baseline,
+    headline: baseline.kind === "train" ? "Train today." : "Cairn's safe baseline.",
+    why: baseline.why,
     source: "deterministic",
     override: null,
   });
@@ -113,7 +244,7 @@ test("a live completed run overrides stale cached prospective copy immediately",
   assert.equal(read.focus, null);
   assert.equal(read.est_minutes, null);
   assert.equal(read.cached, undefined);
-  assert.match(read.why, /already got a solid run/i);
+  assert.match(read.why, /\brun\b/i);
 });
 
 test("a materially harder live run replaces stale done copy that still calls it easy", async () => {
@@ -153,7 +284,7 @@ test("a materially harder live run replaces stale done copy that still calls it 
   assert.equal(read.signals.today_load, "moderate");
   assert.equal(read.source, "deterministic");
   assert.equal(read.cached, undefined);
-  assert.match(read.why, /already got a solid run/i);
+  assert.match(read.why, /\brun\b/i);
   assert.doesNotMatch(read.why, /easy rhythm/i);
   assert.equal(repo.getCachedDayRead(date)?.signals?.today_load, "moderate");
 });
@@ -174,17 +305,11 @@ test("future easy-work advice survives the completed-load consistency guard", as
   db.prepare(
     `INSERT INTO activities (date, type, duration_min, distance_km, source) VALUES (?, 'run', 30, 5, 'garmin')`
   ).run(date);
+  const baseline = repo.dayRead(date);
   repo.saveDayRead(date, {
-    kind: "done",
+    ...baseline,
     headline: "Tempo work complete.",
     why: "That run was a solid moderate effort. Keep tomorrow's run easy so it can settle.",
-    focus: null,
-    est_minutes: null,
-    signals: {
-      logged_today: { sets: 0, activities: [{ type: "run" }] },
-      trained_today: true,
-      today_load: "moderate",
-    },
     source: "agent",
     override: null,
   });
@@ -287,7 +412,14 @@ test("a lunch that meets the protein target heals a cached 'behind' fuel read", 
     clearTimer: () => {},
   });
   // A complete-enough profile so a protein target derives (maintain → ~162 g).
-  repo.setProfile({ age: 40, height_cm: 178, weight_lb: 180, sex: "male", activity_factor: 1.5, goal_mode: "maintain" });
+  repo.setProfile({
+    age: 40,
+    height_cm: 178,
+    weight_lb: 180,
+    sex: "male",
+    activity_factor: 1.5,
+    goal_mode: "maintain",
+  });
   // This morning's cached read said protein was light. Nothing else has moved.
   repo.saveDayRead(date, {
     kind: "train",
@@ -295,7 +427,10 @@ test("a lunch that meets the protein target heals a cached 'behind' fuel read", 
     why: "You're recovered and due.",
     focus: "Lower body",
     est_minutes: 60,
-    signals: { fuel: { bucket: "behind", protein_so_far_g: 20, target_g: 162 }, logged_today: { sets: 0, activities: [] } },
+    signals: {
+      fuel: { bucket: "behind", protein_so_far_g: 20, target_g: 162 },
+      logged_today: { sets: 0, activities: [] },
+    },
     source: "agent",
     override: null,
   });
@@ -329,26 +464,40 @@ test("a pre-deploy cached read with no fuel signal is never churned by the fuel 
   );
   const date = localDaysAgo(0);
   configureDayReadRefresh({ today: () => date, setTimer: () => 0, clearTimer: () => {} });
-  repo.setProfile({ age: 40, height_cm: 178, weight_lb: 180, sex: "male", activity_factor: 1.5, goal_mode: "maintain" });
+  repo.setProfile({
+    age: 40,
+    height_cm: 178,
+    weight_lb: 180,
+    sex: "male",
+    activity_factor: 1.5,
+    goal_mode: "maintain",
+  });
   // A row cached before this feature existed: signals carry NO fuel key.
+  const liveShape = repo.dayRead(date);
+  const { fuel: _liveFuel, ...signalsWithoutFuel } = liveShape.signals;
   repo.saveDayRead(date, {
-    kind: "train",
-    headline: "Train today.",
-    why: "You're recovered and due.",
-    focus: "Lower body",
-    est_minutes: 60,
-    signals: { logged_today: { sets: 0, activities: [] } },
+    ...liveShape,
+    headline: liveShape.kind === "train" ? "Train today." : "Easy today.",
+    why: "The visible cached read predates fuel context.",
+    signals: signalsWithoutFuel,
     source: "agent",
     override: null,
+    input_fingerprint: undefined,
   });
+  const saved = repo.getCachedDayRead(date);
   db.prepare(
     `INSERT INTO food_notes (date, meal, raw_output, parsed_json, enrichment_status) VALUES (?, 'lunch', '', ?, 'done')`
   ).run(date, JSON.stringify({ summary: "chicken & rice", protein_g: 170, kcal: 700 }));
 
-  const read = await readToday({ date });
+  const first = await readToday({ date });
+  const second = await readToday({ date });
 
-  assert.equal(read.cached, true, "a missing cached fuel signal must read as no-change, not a flip");
-  assert.equal(read.source, "agent");
+  assert.equal(first.cached, true, "a missing cached fuel signal must read as no-change, not a flip");
+  assert.equal(first.source, "agent");
+  assert.equal(first.input_fingerprint, saved.input_fingerprint);
+  assert.equal(second.cached, true, "the compatibility read remains stable on the next open");
+  assert.equal(second.input_fingerprint, saved.input_fingerprint);
+  assert.equal(second.computed_at, saved.computed_at, "live fuel does not churn the legacy row's timestamp");
 });
 
 test("a done read still carries the day-ahead forward line (the so-what after the work)", async () => {
@@ -364,7 +513,9 @@ test("a done read still carries the day-ahead forward line (the so-what after th
   );
   const date = localDaysAgo(0);
   repo.setProfile({ primary_discipline: "hybrid" });
-  repo.savePlanDay(1, "Push", "Chest", [{ exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 8, target_weight: 185 }]);
+  repo.savePlanDay(1, "Push", "Chest", [
+    { exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 8, target_weight: 185 },
+  ]);
   repo.savePlanDay(2, "Pull", "Back", [{ exercise: "Row", sets: 3, rep_low: 8, rep_high: 12, target_weight: 135 }]);
   db.prepare(
     `INSERT INTO activities (date, type, duration_min, distance_km, source) VALUES (?, 'run', 30, 5, 'garmin')`
@@ -375,4 +526,149 @@ test("a done read still carries the day-ahead forward line (the so-what after th
   assert.equal(read.kind, "done");
   assert.equal(read.focus, null, "done never carries a same-day prescription");
   assert.match(String(read.forward || ""), /Next: /, "the forward line names tomorrow's lean");
+});
+
+test("a curated Brief survives the first open instead of being overwritten by the floor", async () => {
+  resetTables("day_reads", "suggestions", "plan_days", "plan_items", "sessions", "logged_sets", "profile");
+  const date = localDaysAgo(0);
+  configureDayReadRefresh({ today: () => date, setTimer: () => 0, clearTimer: () => {} });
+  // A real plan exists, so the live deterministic read is a plain "train" floor.
+  repo.savePlanDay(1, "Pull", "Pull — back, rear delts, biceps", [
+    { exercise: "Row", sets: 3, rep_low: 8, rep_high: 12, target_weight: 135 },
+  ]);
+  // The demo seed's hand-authored Brief: warm prose over ILLUSTRATIVE signals, so
+  // no live recompute can ever reproduce its fingerprint.
+  const curated = {
+    kind: "train",
+    headline: "A strong, controlled Pull day.",
+    why: "You slept just under 7 hours and your HRV's back in range — recovered and due.",
+    focus: "Pull — back, rear delts, biceps",
+    est_minutes: 55,
+    signals: { consecutive_training_days: 0, has_recovery_data: true },
+    source: "agent",
+    agent: "claude",
+    curated: true,
+  };
+  assert.equal(repo.saveDayRead(date, curated), true);
+
+  const first = await readToday({ date });
+  const second = await readToday({ date });
+
+  for (const read of [first, second]) {
+    assert.equal(read.cached, true, "a curated read is served as written");
+    assert.equal(read.source, "agent");
+    assert.equal(read.headline, curated.headline);
+    assert.equal(read.why, curated.why);
+    assert.equal(read.est_minutes, 55);
+  }
+  assert.equal(repo.getCachedDayRead(date).headline, curated.headline, "and it is still curated in the cache");
+
+  // A canonical recompute cannot quietly clobber it either...
+  assert.equal(repo.saveDayRead(date, { ...repo.dayRead(date), source: "deterministic", override: null }), false);
+  assert.equal(repo.getCachedDayRead(date).headline, curated.headline);
+  // ...but the explicit retire path still works.
+  repo.invalidateDayRead(date);
+  assert.equal(repo.getCachedDayRead(date), null);
+});
+
+test("a recovery-metrics-only sync does not churn a warm agentic read", async () => {
+  resetTables(
+    "day_reads",
+    "suggestions",
+    "plan_days",
+    "plan_items",
+    "sessions",
+    "logged_sets",
+    "daily_metrics",
+    "profile"
+  );
+  const date = localDaysAgo(0);
+  let armed = 0;
+  configureDayReadRefresh({
+    today: () => date,
+    setTimer: () => {
+      armed += 1;
+      return 0;
+    },
+    clearTimer: () => {},
+  });
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  // Last night already synced: a perfectly ordinary 7h20m night.
+  repo.recordDailyMetrics("apple", localDaysAgo(1), { sleep_min: 440, hrv: 62, resting_hr: 52 });
+
+  const baseline = repo.dayRead(date);
+  repo.saveDayRead(date, {
+    ...baseline,
+    headline: "Lower body.",
+    why: "You're recovered and due — bar speed honest, stop a rep shy.",
+    source: "agent",
+    agent: "claude",
+    override: null,
+  });
+  const warm = await readToday({ date });
+  assert.equal(warm.cached, true);
+  assert.equal(warm.source, "agent");
+  armed = 0; // ignore the arming that plan/metric seeding above already did
+
+  // The 6-hourly watch sync lands: sleep, HRV and resting HR all move a little.
+  // Nothing crosses a threshold the day-read branches on. Through the REAL write
+  // path — recordDailyMetrics used to DELETE the cached row outright, so the warm
+  // agentic read was gone long before the serve-time fingerprint comparison could
+  // protect it. Both halves have to hold for the athlete to keep their sentence.
+  repo.recordDailyMetrics("apple", localDaysAgo(1), { sleep_min: 452, hrv_ms: 58, resting_hr: 54 });
+
+  assert.ok(repo.getCachedDayRead(date), "the write itself must not retire the read");
+
+  const after = await readToday({ date });
+
+  assert.equal(after.cached, true, "telemetry noise must not retire a warm agentic read");
+  assert.equal(after.source, "agent");
+  assert.equal(after.why, warm.why);
+  assert.equal(after.input_fingerprint, warm.input_fingerprint);
+  assert.equal(armed, 0, "and nothing needed re-warming");
+  assert.equal(repo.getCachedDayRead(date).source, "agent");
+});
+
+test("recovery data that DOES move the decision still retires the cached read", async () => {
+  resetTables(
+    "day_reads",
+    "suggestions",
+    "plan_days",
+    "plan_items",
+    "sessions",
+    "logged_sets",
+    "daily_metrics",
+    "profile"
+  );
+  const date = localDaysAgo(0);
+  let armed = 0;
+  configureDayReadRefresh({
+    today: () => date,
+    setTimer: () => {
+      armed += 1;
+      return 0;
+    },
+    clearTimer: () => {},
+  });
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  repo.recordDailyMetrics("apple", localDaysAgo(1), { sleep_min: 440 });
+  const baseline = repo.dayRead(date);
+  assert.equal(baseline.kind, "train");
+  repo.saveDayRead(date, {
+    ...baseline,
+    headline: "Lower body.",
+    why: "You're recovered and due.",
+    source: "agent",
+    agent: "claude",
+    override: null,
+  });
+  armed = 0;
+
+  // Last night comes in at five hours — a predicate the rules genuinely branch on.
+  repo.recordDailyMetrics("apple", localDaysAgo(1), { sleep_min: 300 });
+
+  assert.equal(repo.getCachedDayRead(date), null, "a real change must still bust the Brief");
+  assert.equal(armed, 1, "and arm the background re-warm");
+  const after = await readToday({ date });
+  assert.equal(after.kind, "rest");
 });

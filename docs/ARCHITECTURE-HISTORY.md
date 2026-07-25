@@ -4,6 +4,154 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-07-25 — day-read accountability + prose variety, per-op execution profiles, prompt context projection, Today lead arbitration
+
+A four-strand round. **(1) The day read grew a ledger, a voice, and a softer
+answer to chronic short sleep.** A chronically short sleeper used to be told to
+rest outright: the old `earned-rest` rule folded a <6h rolling sleep average into
+the same trigger as a recovery-dose overrun or three stacked loading days, with
+no way to distinguish "acute and corroborated" from "chronic but nothing new
+today." Now a fresh short night only forces rest when a short rolling average
+corroborates it (`acute_sleep_corroborated`); the chronic-only pattern was pulled
+out of `earned-rest` entirely and instead rides as a caveat on a due plan day, or
+— when nothing's programmed — surfaces its own `chronic_sleep_watch` **easy**
+read (never rest), demoted below `suggested-plan-day`. A chronically short
+sleeper is now offered their due session, with a caveat, instead of a rest read
+they didn't ask for. Underneath that behavior change, a `DayReadRule` now
+resolves to `{outcome, read}` where the outcome carries both a stable machine
+`code` and the athlete-facing `reasons` (`src/repo/brain/day-read-rules.ts`);
+before this round a rule was just `{name, resolve}`, and `resolve()` built and
+returned the whole `DayRead` itself with one hardcoded `why` literal baked into
+its body — `name` was documentation only (never read at resolution time), so no
+rule had any identity that survived past resolution and there was nothing an
+accountability ledger could key on. Reads now persist a `decision` block
+(`rule_code`, `basis`, `baseline_kind`, `reason`, bounded `evidence`,
+`computed_at`), and the server-policy clamps in
+`src/dayread.ts` (`enforceCompletionContract`, `enforceDayReadSafetyPosture`, plus
+the new `enforceRecoveryWeekCadence`, which stops a recovery week from stacking
+consecutive rest days) each write one through a shared `policyDecision()` helper.
+Because a stable input fires a stable rule, every athlete-facing string became a
+SET of phrasings rotated by `pickDayVariant(variants, date, key)` — deterministic
+and offline, same day ⇒ same text, consecutive days always differ — across three
+vocabularies (`DAY_READ_OUTCOMES` reasons, `DAY_READ_WHY_VARIANTS`,
+`DAY_READ_POLICY_REASON_VARIANTS`), with `DAY_READ_REQUIRED_CONCEPT` pinning the
+one idea each rule's words must carry so a new variant can't drift from its
+meaning. `recentDayReads()` + `dayReadContinuity()` give the Brief cross-day
+memory (`quiet_streak`, yesterday's kind/rule/why, `repeat_of_yesterday`), which
+both the deterministic floor (varying words, escalating a long quiet stretch to
+"the smallest thing worth doing") and the agentic layer now read. Cache
+invalidation became fingerprint-aware: `dayReadInputFingerprint()` hashes only the
+PREDICATES the rules branch on (short sleep, low readiness, anticipated deload,
+volume spike) plus whole athlete-entered context, so a mid-day watch sync no
+longer discards a warm agentic read and burns a `brain_decisions` row for a
+decision that never changed; an overridden cached row is replaced through the
+compare-and-swap `replaceStaleDayReadOverride()`. A `curated` read (the demo
+seed's hand-authored Brief) is now served as written instead of being overwritten
+by the deterministic floor on first open.
+
+The day read's dominant rest/easy path also stopped talking about the athlete in
+the third person. The protect posture (`acute_signal_protection`) used to hand
+`action.reason` — `evidence[0].summary`, third-person evidence prose written for
+coaches and machines ("The athlete feels poorly recovered despite any wearable
+reading.") — straight to the Brief's headline `why`, the loudest line on the
+screen, printed verbatim every morning a stable check-in fired the same branch.
+`SignalObservation` (`src/repo/signal-state.ts`) now carries an optional `voice`
+alongside `summary` — a small `{key, subject?}` reference, not sentences, so
+`UnifiedSignalState` stays cheap enough to keep riding in every prompt payload —
+and the new `SIGNAL_VOICE` registry holds 38 keys / 114 second-person phrasings,
+each with its own `concept` regex beside the prose (the same no-parallel-map
+contract as `DayReadRuleOutcome`). `action.voice` is always set, the
+athlete-facing counterpart of `action.reason` drawn from the same winning
+evidence, and degrades by posture — never to `summary` — when that evidence
+carries no voice of its own.
+
+The same third-person defect lived a tab away, too — not beside the Brief on
+Today (which already suppresses the conductor's day-posture lead there as
+duplicate narration once the Brief has printed it), but on the "Where to focus"
+conductor card: Stand's overview (`coachingFocusCompactHtml`), Me → Health →
+Standing (`#cfocusStandingSlot`), and Progress → Program
+(`coachingFocusCardHtml`) were all rendering `lead.why` from the same
+`action.reason`/evidence `summary` the Brief used to. `spokenSignalVoice(ref,
+date, key)` (`src/repo/signal-state.ts`) is now the single rotation contract
+both surfaces call — the Brief's protect rule and the conductor's daily-posture
+lead, fueling caveat and schedule caveat (`src/repo/coaching-focus.ts`) — keyed
+by the shared `SIGNAL_VOICE_KEYS` (`protect`/`injury`/`fueling`/`schedule`) and
+rotated on `UnifiedSignalState.date`, deliberately not a second `today` threaded
+through `CoachingFocusInput`, so the same signal reads as the same sentence
+wherever it surfaces rather than two differently-worded notes about one morning.
+`SignalDimensionState.voice` now sits beside each dimension's `reason`, for the
+conductor's parallel fueling/schedule cards, which speak to one dimension rather
+than the day's whole posture. The shared active-injury caveat that closes every
+protective read got the same treatment, and stopped naming the injury twice: it
+used to splice `summary` behind a fixed lead-in ("…around the active injury:
+Achilles tendinopathy: an active injury is worth easing or working around."),
+with a "must" that read as a gate rather than a suggestion; it now speaks the
+injury's own name once, in register, through `SIGNAL_VOICE` — an injury
+lowercases into the sentence ("your shoulder strain"), while an illness or a
+dated commitment keeps its own case, since lowercasing those produced a bare
+noun phrase missing its article ("you're working through head cold"). `summary`,
+`action.reason`, `action.reasons`, every dimension `reason`, and the conductor's
+`based_on` provenance trail are all unchanged — `renderSignalState`, the coach
+context and the model still see exactly what they saw before.
+
+**(2) Per-op model/effort profiles (migration v77).** `TASK_EXECUTION_PROFILES`
+(`src/repo/settings.ts`) is the sibling of `TASK_POLICY`, keyed by the same
+`taskForOp` class: `TASK_POLICY` picks WHICH agent runs an op, this picks HOW.
+Before it, effort was inherited from whatever the CLI's home settings said, so an
+op ran at a different depth on a dev box than on the deployed host. Profiles are
+provider-neutral (`MODEL_CLASSES` = `fast` | `deep`) and map to a CLI model ALIAS
+via the new `model_classes` field in `agents.json`, so nothing in `src/` names a
+concrete model and an Anthropic alias can never reach a non-Anthropic CLI; a
+provider declaring no mapping keeps its own model and takes only the effort.
+`resolveAgentProfileForClass()` clamps a request to what the CLI declares and
+never throws (`highestSupportedReasoning` degrades `xhigh`/`max` to a provider's
+ceiling rather than failing; `ReasoningLevel` gained `max`). Resolution happens
+once at spawn time via the new `RunOpts.profile` resolver callback — threaded as a
+callback because the policy module imports `agents.ts` — folded in at the single
+`runAgent` chokepoint every spawn path shares, so it resolves against the agent
+ACTUALLY chosen and `runChosen` call sites need no wiring. The new
+`agent_profile_bindings` settings column (v77, same JSON shape as
+`chat_profile_bindings`, both now normalized by one generic
+`normalizeProfileBindings` in `src/chatRouting.ts`) is the optional per-provider,
+per-task override. The interactive timeout now scales with the requested effort
+(`interactiveTimeoutFor`: low 90s → medium 150s → high 240s → xhigh/max 300s),
+reached via `interactiveTimeoutForOp` for job ops and `chatTurnTimeoutMs` for
+chat — a flat 90s cap had been killing high-effort runs mid-think, which the
+rotation then read as a failed agent. Chat stays deliberately absent from the
+table: its adaptive lane router remains authoritative for model/effort, and only
+the timeout follows the resolved profile.
+
+**(3) Per-prompt-site context projection.** Every plan-shaping prompt used to end
+with `JSON.stringify(getCoachContext())` — the whole ~63-key snapshot at every
+site, ~196 KB per call on a demo seed. The new `src/prompt/context-projection.ts`
+is one seam: a declarative per-site key allowlist over cohesive domain bundles,
+applied by `promptData(ctx, site)`, covering all 13 prompt sites (DATA −43%).
+`getCoachContext()` is untouched, so every non-prompt consumer (MCP tools, routes,
+`agentJobs`, the read-tool loop) still gets everything and the builders keep
+reading the full ctx for their own `render*` prose blocks. A key earns its place
+under a three-part rule (the prompt's text names it / a `render*` helper at that
+site reads it / the builder's code reads it off the DATA), with "when in doubt,
+KEEP". Two within-key right-sizings ride along: `recent_sessions` capped per site
+with each set PROJECTED to the fields prompts read (never null-stripped — `weight:
+null` means bodyweight), and `compactRecovery` keeping one copy of the per-metric
+quality map `getRecoverySummary` emits four ways.
+
+**(4) Today lead arbitration.** `src/domain/brain/today-attention.ts` decides
+which single surface earns the main column's position of prominence
+(`brief` | `feedback` | `insight` | `weekly` | `fuel`) with an emphasis tier for
+the rest, running inside `attachDayReadContext` so REST, MCP and `agentJobs`
+agree. `briefState()` lets the Brief yield only on a quiet day with nothing logged
+whose own prose already admits it repeats yesterday; absence of a continuity block
+degrades to today's behavior. It is deliberately NOT merged with
+`repo/today-agenda.ts`: that budgets the RAIL and exists to reduce, this
+reorders main-column emphasis and never hides anything. The internal rank never
+crosses the wire — the client gets semantic labels only, as with marker
+`impact_score`. Also in this round: the Gemini text-model default was corrected to
+the real `gemini-3.6-flash` (a non-existent `gemini-3.1-flash` had been silently
+killing every semantic-cache canonicalize call), pinned by
+`test/artModelDefaults.test.js`, with `enrich.ts`'s food-photo fallback now
+importing that constant rather than re-deriving the chain.
+
 ## 2026-07-23 — pace-aware fuel reads + Brief cache invalidation on food/plan writes
 
 A **fuel-reactivity** round fixed the Brief's FUEL line being pace-blind: it used

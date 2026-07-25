@@ -57,6 +57,15 @@ export function resolveOrder(agent: string | undefined, op: string): string[] {
   return defaultOrderForOp(op);
 }
 
+// The op's server-owned execution profile (which model class, how much thinking —
+// repo.TASK_EXECUTION_PROFILES), resolved per agent at spawn time so each provider in
+// a rotation gets its OWN model name. Callers may pass their own resolver; an explicit
+// model/reasoning on the opts still wins per field. Without this, effort was inherited
+// from whatever the CLI's home settings said, so dev and prod ran at different depths.
+function profileForRun(opts: { profile?: RunOpts["profile"] }, op: string): RunOpts["profile"] {
+  return opts.profile ?? repo.executionProfileForOp(op);
+}
+
 export async function runChosen(agent: string | undefined, prompt: string, opts: RunOpts & { op?: string } = {}) {
   const op = opts.op ?? "auto";
   // Per-task routing: when the caller left it "auto"/blank for a known task and the
@@ -75,7 +84,11 @@ export async function runChosen(agent: string | undefined, prompt: string, opts:
   // extractMarkedJson slices past the markers first and degrades to EXACTLY extractJson
   // on marker-less text, so this is behavior-identical for every unmarked op contract
   // while making the reshaped ops parse on the one-shot path too (not just streamed).
-  const fb = await runAgentWithFallback(order, prompt, { ...opts, extract: opts.extract ?? extractMarkedJson });
+  const fb = await runAgentWithFallback(order, prompt, {
+    ...opts,
+    profile: profileForRun(opts, op),
+    extract: opts.extract ?? extractMarkedJson,
+  });
   return { agent: fb.agent, result: fb.result, tried: fb.tried };
 }
 
@@ -164,6 +177,7 @@ function streamingCoachRun(
           mcpConfigArgs: opts.mcpConfigArgs,
           model: opts.model,
           reasoning: opts.reasoning,
+          profile: profileForRun(opts, op),
           onDelta: gate.push,
         });
         gate.finish();
@@ -365,6 +379,7 @@ export async function runChosenWithCoachReads(
         mcpConfigArgs: [...COACH_READ_STRICT_MCP_ARGS],
         model: opts.model,
         reasoning: opts.reasoning,
+        profile: opts.profile,
       })
     );
   };
@@ -532,6 +547,7 @@ export async function runChosenStreaming(
           mcpConfigArgs: rest.mcpConfigArgs,
           model: rest.model,
           reasoning: rest.reasoning,
+          profile: profileForRun(rest, op),
           onDelta: gate.push,
         });
         gate.finish();

@@ -750,6 +750,7 @@ CREATE TABLE IF NOT EXISTS settings (
   agent_routes TEXT DEFAULT '',               -- optional JSON map { task -> agent }; empty/null = no routing (Auto everywhere, today's behavior)
   chat_routing_mode TEXT DEFAULT 'adaptive',  -- adaptive | single (legacy one-profile chat path)
   chat_profile_bindings TEXT DEFAULT '',      -- JSON provider -> capture|coach|deep -> optional {model,reasoning}
+  agent_profile_bindings TEXT DEFAULT '',     -- JSON provider -> task -> optional {model,reasoning}; overrides TASK_EXECUTION_PROFILES (repo/settings.ts)
   update_check_enabled INTEGER DEFAULT 1,     -- 1 = quiet daily check for a newer Cairn release (GitHub Releases API); pull-never-push, surfaced in Settings → Data
   lead_mode TEXT DEFAULT 'lead'                -- lead | announce_first | review_everything — one calm autonomy control
 );

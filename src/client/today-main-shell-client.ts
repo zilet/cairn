@@ -40,6 +40,7 @@ type TodayMainShellApi = {
     <div id="ctxBanner"><div id="ctxEvents"></div><div id="ctxHealth"></div></div>
     ${options.briefHtml}
     ${options.conductorHtml ? `<div class="cfocus-slot cfocus-thread-slot" id="cfocusSlot">${options.conductorHtml}</div>` : `<div class="cfocus-slot" id="cfocusSlot"></div>`}
+    <div id="attentionLead" class="attention-lead card-stack"></div>
     <div id="sugSlot" class="sug-slot"></div>
     ${captureRowHtml(options.currentWeight)}`;
   }

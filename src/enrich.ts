@@ -8,7 +8,7 @@ import * as repo from "./repo.js";
 import { extractJson, runAgentWithFallback } from "./agents.js";
 import { buildEnrichPrompt, buildExerciseEnrichPrompt, buildFoodPhotoPrompt, buildHealthIngestPrompt, buildHealthReviewPrompt, buildGarminStrengthPrompt, buildImagingStudyPrompt } from "./prompt.js";
 import { explainExercise, reconcileMarkers, synthesizeHealth } from "./coachOps.js";
-import { warmExerciseArt } from "./art.js";
+import { GEMINI_TEXT_MODEL, warmExerciseArt } from "./art.js";
 import { LB_PER_KG, round2_5 } from "./repo/shared.js";
 import { diagnosticErrorName, recordAsyncFailure } from "./diagnostics.js";
 import { safeUploadPath } from "./uploadPaths.js";
@@ -114,7 +114,15 @@ const ENRICH_TIMEOUT_MS = 120_000;
 // Health ingestion can mean reading a multi-MB PDF or a whole CCDA export folder
 // and splitting years of results into panels — give it the fuller agent budget.
 const HEALTH_INGEST_TIMEOUT_MS = 300_000;
-const GEMINI_FOOD_PHOTO_MODEL = process.env.GEMINI_FOOD_PHOTO_MODEL || process.env.GEMINI_TEXT_MODEL || "gemini-2.5-flash";
+// This is the one VISION call outside art.ts, so it falls back to art.ts's
+// GEMINI_TEXT_MODEL rather than re-deriving the same env-var-or-literal chain
+// (that constant already resolves process.env.GEMINI_TEXT_MODEL || the default,
+// so the back-compat env override still works and the two Gemini text call sites
+// can no longer drift to different ids). The default model's own capability table
+// (ai.google.dev/gemini-api/docs/models/gemini-3.6-flash) explicitly lists Image
+// among its supported inputs, so it's confirmed fit for this call, not just
+// assumed. GEMINI_FOOD_PHOTO_MODEL overrides just this call.
+const GEMINI_FOOD_PHOTO_MODEL = process.env.GEMINI_FOOD_PHOTO_MODEL || GEMINI_TEXT_MODEL;
 const GEMINI_FOOD_PHOTO_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_FOOD_PHOTO_MODEL}:generateContent`;
 const FOOD_PHOTO_TIMEOUT_MS = 45_000;
 
@@ -349,7 +357,8 @@ async function processJob(job: Job): Promise<void> {
   // (Claude-first) instead of the load-spreading round-robin. Other kinds rotate.
   // pickAgentOrderForTask resolves an `agent_routes.health`/`.enrich` pin first (if
   // usable), then falls to that task class's policy.
-  const order = repo.pickAgentOrderForTask(job.kind === "health" ? "health" : "enrich");
+  const task = job.kind === "health" ? "health" : "enrich";
+  const order = repo.pickAgentOrderForTask(task);
   if (!order.length) {
     if (job.kind === "health") {
       const backfill = repo.backfillCcdaHealthDocument(job.id);
@@ -459,7 +468,10 @@ async function processJob(job: Job): Promise<void> {
 
   let parsed: any = null;
   try {
-    const fb = await runAgentWithFallback(order, prompt, timeoutMs);
+    // Effort/model are server policy (repo.TASK_EXECUTION_PROFILES), not whatever the
+    // CLI's home settings happen to say: ingestion is a deep/high transcription read,
+    // ordinary enrichment is cheap structuring.
+    const fb = await runAgentWithFallback(order, prompt, { timeoutMs, profile: repo.executionProfileForTask(task) });
     parsed = fb.result?.parsed ?? null;
   } catch {
     parsed = null;
@@ -534,7 +546,7 @@ async function processJob(job: Job): Promise<void> {
         const fb2 = await runAgentWithFallback(
           repo.pickAgentOrderForTask("health"),
           buildHealthIngestPrompt(healthSource.fp, false, healthSource.kind, { emphasizeCompleteness: true, missed: { got, expected } }),
-          HEALTH_INGEST_TIMEOUT_MS,
+          { timeoutMs: HEALTH_INGEST_TIMEOUT_MS, profile: repo.executionProfileForTask("health") },
         );
         const parsed2 = fb2.result?.parsed ?? null;
         const got2 = parsed2 && typeof parsed2 === "object" ? countIngestMarkers(parsed2) : 0;
@@ -658,7 +670,10 @@ async function processReviewJob(): Promise<void> {
   let raw: string | undefined;
   let parsed: any = null;
   try {
-    const fb = await runAgentWithFallback(order, prompt, ENRICH_TIMEOUT_MS);
+    const fb = await runAgentWithFallback(order, prompt, {
+      timeoutMs: ENRICH_TIMEOUT_MS,
+      profile: repo.executionProfileForTask("health_review"),
+    });
     agent = fb.agent ?? null;
     raw = fb.result?.raw;
     parsed = fb.result?.parsed ?? null;
@@ -737,7 +752,10 @@ export async function processGarminStrengthJob(garminActivityId: number): Promis
   let parsed: any = null;
   let agent: string | null = null;
   try {
-    const fb = await runAgentWithFallback(order, buildGarminStrengthPrompt(ga), ENRICH_TIMEOUT_MS);
+    const fb = await runAgentWithFallback(order, buildGarminStrengthPrompt(ga), {
+      timeoutMs: ENRICH_TIMEOUT_MS,
+      profile: repo.executionProfileForTask("enrich"),
+    });
     agent = fb.agent ?? null;
     parsed = fb.result?.parsed ?? null;
   } catch {
@@ -809,7 +827,10 @@ export async function processExerciseJob(id: number): Promise<void> {
     repo.setExerciseEnrichStatus(id, "in_progress");
     let parsed: any = null;
     try {
-      const fb = await runAgentWithFallback(order, buildExerciseEnrichPrompt(repo.getExerciseDetail(ex.name)), ENRICH_TIMEOUT_MS);
+      const fb = await runAgentWithFallback(order, buildExerciseEnrichPrompt(repo.getExerciseDetail(ex.name)), {
+        timeoutMs: ENRICH_TIMEOUT_MS,
+        profile: repo.executionProfileForTask("enrich"),
+      });
       parsed = fb.result?.parsed ?? null;
     } catch {
       parsed = null;
@@ -911,7 +932,10 @@ export async function processFoodPhotoJob(id: number): Promise<void> {
 
   if (!wrote && order.length) {
     try {
-      const fb = await runAgentWithFallback(order, buildFoodPhotoPrompt(fp, hint || undefined), ENRICH_TIMEOUT_MS);
+      const fb = await runAgentWithFallback(order, buildFoodPhotoPrompt(fp, hint || undefined), {
+        timeoutMs: ENRICH_TIMEOUT_MS,
+        profile: repo.executionProfileForTask("health"),
+      });
       parsed = fb.result?.parsed ?? null;
       wrote = !!parsed && applyFoodPhoto(id, parsed);
     } catch {

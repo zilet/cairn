@@ -10,14 +10,7 @@
 import * as repo from "./repo.js";
 import { addDaysISO, localDateISO } from "./repo/shared.js";
 import { sessionNoteSuggestsFatigue, sessionNoteSuggestsRapidFade } from "./repo/training-fatigue.js";
-import {
-  AgentFallbackError,
-  INTERACTIVE_TIMEOUT_MS,
-  agentInfo,
-  listAgentModels,
-  loadAgents,
-  type FallbackResult,
-} from "./agents.js";
+import { AgentFallbackError, agentInfo, listAgentModels, loadAgents, type FallbackResult } from "./agents.js";
 import { runChosen, runChosenStreaming, runChosenWithCoachReads } from "./runChosen.js";
 import {
   buildCoachPrompt,
@@ -258,7 +251,7 @@ async function runVerify<T>(
   try {
     const { result } = await runChosen(agent, buildPrompt(draft), {
       op,
-      timeoutMs: INTERACTIVE_TIMEOUT_MS,
+      timeoutMs: repo.interactiveTimeoutForOp(op),
       signal: hooks?.signal,
       acceptParsed: (parsed) => isVerifyResult(parsed, validate),
     });
@@ -331,7 +324,7 @@ export async function suggestSession(
   try {
     run = await runChosenStreaming(agent, prompt, {
       op: "session_suggest",
-      timeoutMs: INTERACTIVE_TIMEOUT_MS,
+      timeoutMs: repo.interactiveTimeoutForOp("session_suggest"),
       signal: hooks?.signal,
       onDelta: hooks?.onDelta,
       boundedReads: true,
@@ -445,7 +438,7 @@ export async function composeDailySession(
   try {
     run = await runChosenStreaming(agent, prompt, {
       op: "session_compose",
-      timeoutMs: INTERACTIVE_TIMEOUT_MS,
+      timeoutMs: repo.interactiveTimeoutForOp("session_compose"),
       signal: hooks?.signal,
       onDelta: hooks?.onDelta,
       boundedReads: true,
@@ -765,7 +758,7 @@ export async function explainExercise(agent: string | undefined, name: string, h
   try {
     run = await runChosen(agent, prompt, {
       op: EXERCISE_EXPLANATION_KIND,
-      timeoutMs: INTERACTIVE_TIMEOUT_MS,
+      timeoutMs: repo.interactiveTimeoutForOp(EXERCISE_EXPLANATION_KIND),
       signal: hooks?.signal,
       acceptParsed: isExerciseExplanationResult,
     });
@@ -908,7 +901,7 @@ export async function weekAheadRead(agent: string | undefined, hooks?: OpHooks) 
     const prompt = buildWeekAheadPrompt();
     const { agent: chosen, result } = await runChosen(agent, prompt, {
       op: WEEK_AHEAD_KIND,
-      timeoutMs: INTERACTIVE_TIMEOUT_MS,
+      timeoutMs: repo.interactiveTimeoutForOp(WEEK_AHEAD_KIND),
       signal: hooks?.signal,
       acceptParsed: isWeekAheadResult,
     });
@@ -1531,7 +1524,7 @@ export async function onboardFromText(
     hooks?.onPhase?.("getting to know you");
     const { result } = await runChosen(agent, buildOnboardPrompt(raw), {
       op: "onboard",
-      timeoutMs: INTERACTIVE_TIMEOUT_MS,
+      timeoutMs: repo.interactiveTimeoutForOp("onboard"),
       signal: hooks?.signal,
     });
     const p: any = result.parsed;

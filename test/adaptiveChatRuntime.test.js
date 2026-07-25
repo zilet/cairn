@@ -4,13 +4,15 @@ import { db, repo, resetTables } from "./_seed.js";
 import {
   buildChatProviderOrder,
   chatExecutionAttemptKey,
+  chatTurnTimeoutMs,
   completeInstantFoodCapture,
   inferCaptureMeal,
   isInstantFoodCaptureDecision,
   resolveRuntimeChatProfile,
   shouldCreatePhotoFoodPlaceholder,
 } from "../dist/chatTurns.js";
-import { classifyChatRoute } from "../dist/chatRouting.js";
+import { loadAgents } from "../dist/agents.js";
+import { classifyChatRoute, resolveChatProfile } from "../dist/chatRouting.js";
 import {
   buildChatPrompt,
   CHAT_ESCALATE_COACH_SENTINEL,
@@ -172,6 +174,41 @@ test("current research starts with an enabled web-capable provider while explici
     ["local", "backup"],
     "no web-capable provider leaves the existing safe fallthrough order intact"
   );
+});
+
+test("a chat attempt's leash follows the lane's effort, so a deep turn is not killed mid-think", () => {
+  const agents = loadAgents();
+  // The whole chain, lane -> profile -> leash. A deep-lane turn runs at high effort;
+  // under the old flat 90s cap it was killed mid-think and the rotation handed the
+  // question to another agent. capture stays exactly where it was.
+  const leashFor = (lane) =>
+    chatTurnTimeoutMs(resolveRuntimeChatProfile(agents.claude, resolveChatProfile(lane, "claude", {}), false));
+  assert.equal(leashFor("capture"), 90_000);
+  assert.equal(leashFor("coach"), 150_000);
+  assert.equal(leashFor("deep"), 240_000);
+
+  // A provider that tops out below the request degrades, and the leash follows the
+  // DEGRADED effort — not the one we asked for.
+  const grok = resolveRuntimeChatProfile(agents.grok, { reasoning: "xhigh" }, false);
+  assert.equal(grok.execution?.reasoning, "high");
+  assert.equal(chatTurnTimeoutMs(grok), 240_000);
+
+  // A provider that takes no profile flags gets no effort argument, but the QUESTION
+  // was still a deep one — fall back to the requested effort rather than the short cap.
+  const custom = resolveRuntimeChatProfile({ command: "custom-cli", args: ["{prompt}"] }, { reasoning: "high" }, false);
+  assert.equal(custom.execution, null);
+  assert.equal(chatTurnTimeoutMs(custom), 240_000);
+  // A rejected binding keeps `requested` too, so an explicitly-bound deep turn still waits.
+  const rejected = resolveRuntimeChatProfile(
+    { command: "custom-cli", args: ["{prompt}"] },
+    { model: "m", reasoning: "high" },
+    true
+  );
+  assert.equal(rejected.execution, null);
+  assert.match(rejected.unsupported, /does not support/i);
+  assert.equal(chatTurnTimeoutMs(rejected), 240_000);
+  // Nothing known at all (legacy/no profile) keeps today's leash.
+  assert.equal(chatTurnTimeoutMs({ execution: null, requested: null }), 90_000);
 });
 
 test("legacy custom providers run with provider defaults when adaptive defaults are unsupported", () => {

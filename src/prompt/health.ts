@@ -5,6 +5,7 @@ import { HEALTH_DOCUMENT_KIND_SCHEMA } from "../healthDocumentKinds.js";
 import * as repo from "../repo.js";
 import { renderEvidencePack } from "../evidencePack.js";
 import type { CoachContext } from "../repo/coach-context.js";
+import { promptData } from "./context-projection.js";
 import {
   COACHING_STANCE,
   CONTEXT_GUARDRAILS,
@@ -368,7 +369,7 @@ MARKER HISTORY (aggregated across all uploaded health documents; flagged markers
 ${JSON.stringify(markers)}
 
 DATA:
-${JSON.stringify(ctx)}`;
+${promptData(ctx, "health_review")}`;
 }
 
 // ---------- host-side research / grounding (Stream 4) ----------
@@ -589,7 +590,7 @@ ${renderStreamingContract(
 )}
 
 DATA:
-${JSON.stringify(context)}`;
+${promptData(context, "health_synthesis")}`;
 }
 
 // ---------- the week ahead (forward look) ----------
@@ -644,5 +645,5 @@ OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdow
 ${WEEK_AHEAD_SCHEMA}
 
 DATA:
-${JSON.stringify(context)}`;
+${promptData(context, "week_ahead")}`;
 }

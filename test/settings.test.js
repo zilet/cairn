@@ -117,7 +117,7 @@ test("production Settings payload carries only normalized provider capabilities"
   const stub = payload.agents.find((agent) => agent.name === "stub");
   assert.deepEqual(claude?.capabilities, {
     model: true,
-    reasoning: ["low", "medium", "high", "xhigh"],
+    reasoning: ["low", "medium", "high", "xhigh", "max"],
     execution_profile_noop: false,
   });
   assert.deepEqual(stub?.capabilities, {

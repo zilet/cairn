@@ -40,7 +40,18 @@ export interface ChatRoutingInput {
   capture_confirmation?: boolean;
 }
 
-export const CHAT_REASONING_LEVELS = ["low", "medium", "high", "xhigh"] as const;
+// Mirrors ReasoningLevel in agents.ts (kept a standalone literal so this policy
+// module stays free of the CLI-adapter layer). A provider that tops out lower
+// degrades in resolveAgentProfileForClass.
+//
+// "max" is verified against both pinned CLIs, but the two reject it differently.
+// Claude's --effort validates at spawn. Codex's model_reasoning_effort does NOT:
+// the config enum is broader than any single model accepts, an unsupported value
+// parses fine, and the rejection ("Reasoning effort `X` is not supported for model
+// `Y`") arrives at REQUEST time — which runAgentWithFallback reads as a dead agent
+// rather than a bad flag. So on codex "max" is gated by whichever model that CLI
+// resolves, not by this list. See the codex model_note in agents.json.
+export const CHAT_REASONING_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
 export type ChatReasoningLevel = (typeof CHAT_REASONING_LEVELS)[number];
 
 export interface ChatProfileBinding {
@@ -48,8 +59,10 @@ export interface ChatProfileBinding {
   reasoning?: ChatReasoningLevel;
 }
 
-export type ChatProviderProfileBindings = Partial<Record<ChatLane, ChatProfileBinding>>;
-export type ChatProfileBindings = Record<string, ChatProviderProfileBindings>;
+export type ProviderProfileBindings<K extends string> = Partial<Record<K, ChatProfileBinding>>;
+export type ProfileBindings<K extends string> = Record<string, ProviderProfileBindings<K>>;
+export type ChatProviderProfileBindings = ProviderProfileBindings<ChatLane>;
+export type ChatProfileBindings = ProfileBindings<ChatLane>;
 
 export interface ResolvedChatProfile {
   model?: string;
@@ -276,8 +289,13 @@ export function normalizeChatRoutingDecision(value: unknown): ChatRoutingDecisio
   };
 }
 
-/** Normalize only the provider/lane/profile shape; provider capabilities stay adapter-owned. */
-export function normalizeChatProfileBindings(value: unknown): ChatProfileBindings {
+/**
+ * Normalize a provider -> KEY -> {model, reasoning} override map. Only the shape is
+ * validated here; provider capabilities stay adapter-owned (agents.ts clamps what a
+ * given CLI can actually take). `keys` is the closed set of second-level names, so
+ * the same normalizer serves the chat lanes and the op/task profile overrides.
+ */
+export function normalizeProfileBindings<K extends string>(value: unknown, keys: readonly K[]): ProfileBindings<K> {
   let raw: unknown = value;
   if (typeof raw === "string") {
     try {
@@ -287,13 +305,13 @@ export function normalizeChatProfileBindings(value: unknown): ChatProfileBinding
     }
   }
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
-  const out: ChatProfileBindings = {};
-  for (const [providerRaw, lanesRaw] of Object.entries(raw as Record<string, unknown>)) {
+  const out: ProfileBindings<K> = {};
+  for (const [providerRaw, keysRaw] of Object.entries(raw as Record<string, unknown>)) {
     const provider = providerRaw.trim().slice(0, 80);
-    if (!provider || !lanesRaw || typeof lanesRaw !== "object" || Array.isArray(lanesRaw)) continue;
-    const lanes: ChatProviderProfileBindings = {};
-    for (const lane of CHAT_LANES) {
-      const profileRaw = (lanesRaw as Record<string, unknown>)[lane];
+    if (!provider || !keysRaw || typeof keysRaw !== "object" || Array.isArray(keysRaw)) continue;
+    const bound: ProviderProfileBindings<K> = {};
+    for (const key of keys) {
+      const profileRaw = (keysRaw as Record<string, unknown>)[key];
       if (!profileRaw || typeof profileRaw !== "object" || Array.isArray(profileRaw)) continue;
       const profile: ChatProfileBinding = {};
       if (typeof (profileRaw as Record<string, unknown>).model === "string") {
@@ -302,13 +320,16 @@ export function normalizeChatProfileBindings(value: unknown): ChatProfileBinding
       }
       const reasoning = String((profileRaw as Record<string, unknown>).reasoning ?? "").trim();
       if (REASONING_SET.has(reasoning)) profile.reasoning = reasoning as ChatReasoningLevel;
-      if (profile.model || profile.reasoning) lanes[lane] = profile;
+      if (profile.model || profile.reasoning) bound[key] = profile;
     }
-    if (Object.keys(lanes).length > 0) out[provider] = lanes;
+    if (Object.keys(bound).length > 0) out[provider] = bound;
   }
   return out;
 }
 
+export function normalizeChatProfileBindings(value: unknown): ChatProfileBindings {
+  return normalizeProfileBindings(value, CHAT_LANES);
+}
 /** Resolve requested model/reasoning independently of any provider CLI syntax. */
 export function resolveChatProfile(
   lane: ChatLane,

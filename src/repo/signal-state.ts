@@ -4,6 +4,7 @@
 // together: sleep, training load, fueling, health constraints, and life pressure
 // retain their own provenance/conflicts and only meet at one bounded INTERNAL
 // arbitration index that emits plain-language posture/reasons (never a score).
+import { pickDayVariant } from "./brain/day-read-rules.js";
 
 export type SignalDimension =
   | "recovery_capacity"
@@ -22,7 +23,15 @@ export interface SignalObservation {
   date: string | null;
   source: string;
   direction: SignalDirection;
+  // MACHINE-facing evidence prose, written about the athlete in the third person.
+  // renderSignalState, the coach context and evidence provenance all read this. It
+  // is NOT what the athlete reads — see `voice` and SIGNAL_VOICE below.
   summary: string;
+  // WHICH athlete-facing phrasing this observation speaks, if it ever reaches a
+  // surface the athlete reads. A key (plus an optional subject to substitute), not
+  // the sentences themselves, so the state stays small enough to keep riding in
+  // every prompt payload.
+  voice?: SignalVoiceRef;
   confidence?: Exclude<SignalConfidence, "none">;
   coverage?: { samples: number; expected?: number | null; window_days?: number | null };
   value?: unknown;
@@ -54,6 +63,11 @@ export interface SignalDimensionState {
   evidence: ResolvedSignalEvidence[];
   conflicts: string[];
   reason: string;
+  // The athlete-facing voice of the same evidence `reason` speaks for, on the same
+  // terms as `action.voice`: a surface that shows one DIMENSION rather than the day's
+  // posture (the conductor's fueling and schedule cards) has words of its own instead
+  // of falling back to the machine-facing summary.
+  voice: SignalVoiceRef;
 }
 
 export interface UnifiedSignalState {
@@ -64,6 +78,9 @@ export interface UnifiedSignalState {
     posture: SignalPosture;
     reason: string;
     reasons: string[];
+    // The athlete-facing voice of the SAME evidence `reason` speaks for — the one
+    // thing a surface the athlete reads (the Brief's `why`) may use. Always set.
+    voice: SignalVoiceRef;
     source_dimensions: SignalDimension[];
     confidence: SignalConfidence;
     directives: {
@@ -74,6 +91,420 @@ export interface UnifiedSignalState {
   };
   provenance: string[];
   conflicts: string[];
+}
+
+// ---------- the athlete voice (a second vocabulary, never a rewrite of `summary`) ----------
+// Every observation's `summary` is written for machines and coaches: it states the
+// evidence, in the third person, ABOUT the athlete ("The athlete reports high soreness
+// today."). renderSignalState, the coach context and the provenance trail all read
+// those strings, so they stay exactly as they are.
+//
+// One path made them athlete-facing anyway: day-read's protect rule assigns
+// `action.reason` to the Brief's `why` — the most prominent line on the screen — so an
+// observer's note about the athlete was printed TO the athlete, in one fixed literal
+// per signal, every morning a stable input fired the same branch (VISION.md Amendment
+// 2: a read leads with a plain-language sentence, in the athlete's own register).
+//
+// So the athlete voice is a SEPARATE vocabulary sitting alongside `summary`. Each entry
+// carries several phrasings of the same judgement — pickDayVariant rotates them by
+// calendar day, exactly like the day-read rules (see brain/day-read-rules.ts) — plus the
+// one idea those phrasings must carry, right beside the prose, so a new variant cannot
+// drift away from the signal it speaks for.
+//
+// `{}` is replaced with the observation's `voice.subject` (an injury title, the sore
+// joints, an event name), so a specific line can name the real thing WITHOUT splicing in
+// another subsystem's sentence: the composed summaries (a mesocycle note, a hybrid
+// headline, an underfueling action line, a context classifier's reason) stay
+// machine-facing, and the athlete always hears an authored sentence in one register.
+// `sample` is both the substitution when no subject is supplied and what the static
+// registry renders for the constitution tests.
+export interface SignalVoiceEntry {
+  concept: RegExp;
+  sample?: string;
+  variants: readonly [string, ...string[]];
+}
+
+export const SIGNAL_VOICE = {
+  // Recovery capacity — wearable and felt.
+  sleep_short: {
+    concept: /\b(?:sleep|night|nights)\b/i,
+    variants: [
+      "Your sleep has been coming up short, so today is better spent recovering than pushing.",
+      "Short nights have been stacking up — today is a good day to give some of that back.",
+      "You haven't been getting much sleep lately, and that is worth protecting today.",
+    ],
+  },
+  sleep_ok: {
+    concept: /\bsleep\b/i,
+    variants: [
+      "Your sleep is holding up well right now.",
+      "Sleep has been treating you fine lately.",
+      "Nothing in your recent sleep is arguing with the planned day.",
+    ],
+  },
+  readiness_subdued: {
+    concept: /\b(?:readiness|reading|watch)\b/i,
+    variants: [
+      "This morning's readiness reading came in subdued, so today is worth easing into.",
+      "Your watch read this morning as low, which is worth respecting rather than pushing through.",
+      "Today's reading is on the quiet side, and a gentler day fits it.",
+    ],
+  },
+  readiness_ok: {
+    concept: /\b(?:readiness|reading|watch)\b/i,
+    variants: [
+      "This morning's readiness reading looks supportive.",
+      "Your watch reads fine this morning.",
+      "Today's reading sits in a good place.",
+    ],
+  },
+  hrv_below: {
+    concept: /\bvariability\b/i,
+    variants: [
+      "Your heart-rate variability is running below your own norm, which usually means fatigue is still there.",
+      "Your variability has dipped under where it usually sits for you — worth easing rather than pushing.",
+      "Heart-rate variability is under your own norm right now, so today deserves a lighter touch.",
+    ],
+  },
+  hrv_steady: {
+    concept: /\bvariability\b/i,
+    variants: [
+      "Your heart-rate variability is steady against your own norm.",
+      "Variability is sitting where it usually does for you.",
+      "There is nothing unusual in your heart-rate variability today.",
+    ],
+  },
+  resting_hr_up: {
+    concept: /\bheart rate\b/i,
+    variants: [
+      "Your resting heart rate is running above your own norm, which often means recovery is not finished.",
+      "Resting heart rate is up on your usual, which is a fair reason to take today gently.",
+      "Your resting heart rate is sitting higher than it normally does for you.",
+    ],
+  },
+  resting_hr_steady: {
+    concept: /\bheart rate\b/i,
+    variants: [
+      "Your resting heart rate is steady against your own norm.",
+      "Resting heart rate is sitting where it usually does for you.",
+      "There is nothing unusual in your resting heart rate today.",
+    ],
+  },
+  felt_energy_low: {
+    // Shared verbatim with the day-read felt_run_down_rest rule (RUN_DOWN_WHY), which
+    // fires on the SAME check-in. Two sentences for one trigger is how the athlete
+    // ends up reading two different voices depending on which rule wins the morning.
+    concept: /\b(?:run-down|low)\b/i,
+    variants: [
+      "You're feeling run-down today — rest is the smart call.",
+      "You said you're low today, and that's the signal that counts — rest.",
+      "Feeling run-down is reason enough. Take today.",
+    ],
+  },
+  felt_energy_ok: {
+    concept: /\benergy\b/i,
+    variants: [
+      "You checked in with workable energy today.",
+      "Your own read on your energy today is fine.",
+      "Energy feels workable to you today, by your own account.",
+    ],
+  },
+  sleep_feel_low: {
+    concept: /\b(?:rested|recovered|slept)\b/i,
+    variants: [
+      "You don't feel recovered this morning, whatever the watch says — and that's the read that counts.",
+      "You woke up feeling poorly rested, which outranks any device reading.",
+      "By your own read you're not rested today, so today is for recovering.",
+    ],
+  },
+  sleep_feel_ok: {
+    concept: /\b(?:rested|slept)\b/i,
+    variants: [
+      "You woke up feeling reasonably rested.",
+      "By your own read, you slept fine.",
+      "You're feeling rested enough today.",
+    ],
+  },
+  // Training load and tolerance.
+  soreness_high: {
+    concept: /\bsore(?:ness)?\b/i,
+    variants: [
+      "You're carrying a lot of soreness today, so let it settle before loading again.",
+      "You checked in sore today, which is worth easing around.",
+      "Soreness is high for you today — give it room to come down.",
+    ],
+  },
+  soreness_ok: {
+    concept: /\bsore(?:ness)?\b/i,
+    variants: [
+      "You're not carrying much soreness today.",
+      "Soreness isn't an issue for you today.",
+      "Nothing sore is holding you back today.",
+    ],
+  },
+  session_soreness: {
+    concept: /\bsore(?:ness)?\b/i,
+    variants: [
+      "Your recent session feedback shows soreness building.",
+      "You've been logging more soreness after sessions lately.",
+      "Soreness has been showing up in your recent session notes.",
+    ],
+  },
+  low_performance: {
+    concept: /\b(?:session|sessions|work|loading)\b/i,
+    variants: [
+      "Your recent sessions have felt below your usual, so easing the loading makes sense.",
+      "The last few sessions haven't felt like your normal, which is worth easing for.",
+      "Recent work has felt heavier than it should, so back the loading off a little.",
+    ],
+  },
+  generic_activity_load: {
+    concept: /\b(?:already|moved|movement)\b/i,
+    sample: "some real movement",
+    variants: [
+      "You've already got {} on the board today.",
+      "Your watch already shows {} today, so you've moved.",
+      "There's {} recorded today already, which counts even without a session attached.",
+    ],
+  },
+  deload_due: {
+    concept: /\b(?:load|training|work)\b/i,
+    variants: [
+      "The training you've stacked up says a recovery stretch is due.",
+      "You've accumulated enough work that a lighter stretch is the next right move.",
+      "The load you've built says it's time to let it absorb.",
+    ],
+  },
+  acute_load_high: {
+    concept: /\b(?:load|training)\b/i,
+    variants: [
+      "You're training above the base you've built lately.",
+      "Your recent training load is running ahead of your usual, so let it catch up.",
+      "You've picked the load up quickly, and it's worth giving it a chance to settle.",
+    ],
+  },
+  acute_load_ok: {
+    concept: /\bload\b/i,
+    variants: [
+      "Your training load is sitting inside what you've built for.",
+      "The load you're carrying is within your usual range.",
+      "Nothing about your recent load is out of the ordinary.",
+    ],
+  },
+  hybrid_interference: {
+    concept: /\b(?:endurance|running)\b/i,
+    variants: [
+      "Your recent endurance work changes how today's strength session should land.",
+      "The running in your legs shapes what the next lifting session can be.",
+      "Recent endurance work is still in your legs, so keep the strength work sensible today.",
+    ],
+  },
+  // Energy and fueling.
+  hybrid_fuel: {
+    concept: /\b(?:fuel|fueling|eat)\b/i,
+    variants: [
+      "Your recent endurance work raises what you need to eat around training.",
+      "The running you've been doing asks for more fuel around the work.",
+      "Endurance work is adding up, so fueling matters more than usual right now.",
+    ],
+  },
+  expenditure: {
+    concept: /\b(?:energy|intake)\b/i,
+    variants: [
+      "Your energy balance is still settling into a clear picture.",
+      "There isn't a settled read on your energy balance yet.",
+      "Your intake and your weight trend haven't converged on a clear answer yet.",
+    ],
+  },
+  fuel_protect: {
+    concept: /\b(?:fuel|enough)\b/i,
+    variants: [
+      "Your fuel needs looking after before anything else today.",
+      "Fuel is the thing to protect right now, ahead of adding work.",
+      "Getting enough in matters more than training hard today.",
+    ],
+  },
+  fuel_watch: {
+    concept: /\b(?:fuel|fueling|eating)\b/i,
+    variants: [
+      "Your fueling has been running light lately.",
+      "Fuel has been on the thin side recently.",
+      "You've been eating a little under what the training asks for.",
+    ],
+  },
+  fuel_strain_persistent: {
+    concept: /\b(?:strain|fuel|fueling)\b/i,
+    variants: [
+      "Fuel, performance and recovery all still read strained, so the next training dose should come down.",
+      "The strain hasn't lifted since the fuel change settled, which means asking less of today, not more.",
+      "Your fueling correction has settled and the strain is still there, so ease the next dose.",
+    ],
+  },
+  fuel_strain_hold: {
+    concept: /\b(?:fuel|fueling|progression|loading)\b/i,
+    variants: [
+      "Fuel and performance agree enough to hold off on pushing progression for now.",
+      "Hold the progression where it is while your fueling catches up.",
+      "Keep loading steady rather than climbing until the fueling settles.",
+    ],
+  },
+  // Health constraints.
+  active_injury: {
+    concept: /\b(?:pain-free|around|comfortable)\b/i,
+    sample: "injury",
+    variants: [
+      "Keep whatever you do today pain-free around your {}.",
+      "Work around your {} today and stop short of anything that aggravates it.",
+      "Your {} still needs working around, so keep every movement comfortable today.",
+    ],
+  },
+  joint_pain: {
+    concept: /\b(?:pain-free|around|comfortable)\b/i,
+    sample: "sore joints",
+    variants: [
+      "Keep today pain-free around your {} and swap anything that provokes them.",
+      "Your {} need working around today, so choose movements that stay comfortable.",
+      "Stay off anything that bothers your {} today and pick a pain-free substitute.",
+    ],
+  },
+  illness: {
+    // An illness arrives as a titled event ("Head cold"), i.e. a LABEL, not a noun
+    // phrase that takes an article — so every phrasing has to read correctly with the
+    // title dropped in bare, and with the generic sample too.
+    concept: /\b(?:recover|recovering|recovery|gentle)\b/i,
+    sample: "something",
+    variants: [
+      "{} is reason enough to keep today gentle.",
+      "With {} in the picture, today is for recovering rather than training.",
+      "Recovery comes first while {} is going on.",
+    ],
+  },
+  health_constraint: {
+    concept: /\b(?:ease|easing|around|health)\b/i,
+    variants: [
+      "There's something health-related worth easing around right now.",
+      "Something needs working around today, so keep the load conservative.",
+      "There's something to ease around today rather than load through.",
+    ],
+  },
+  fueling_disrupted: {
+    concept: /\b(?:fueling|eating)\b/i,
+    variants: [
+      "Travel or illness is likely to scramble your normal fueling right now.",
+      "Your normal eating rhythm is disrupted at the moment.",
+      "Fueling is harder than usual to keep normal while this is going on.",
+    ],
+  },
+  // Life capacity.
+  schedule_pressure: {
+    concept: /\b(?:recovery|sleep|rest)\b/i,
+    variants: [
+      "What's on right now is likely to eat into your recovery.",
+      "A busy or stressful stretch tends to cost you sleep, so keep today's ask modest.",
+      "There's enough going on right now to squeeze your recovery.",
+    ],
+  },
+  commitment_pressure: {
+    concept: /\b(?:schedule|room|time)\b/i,
+    sample: "a commitment",
+    variants: [
+      "Today's schedule has {} in it, which leaves less room than usual.",
+      "You've got {} today, so time is the tighter constraint.",
+      "With {} on today, the schedule is what's squeezed.",
+    ],
+  },
+  // Already covered.
+  completed_today: {
+    concept: /\b(?:done|already|in)\b/i,
+    variants: [
+      "Today's planned work is already done.",
+      "You've already covered today's work.",
+      "What was planned for today is already in.",
+    ],
+  },
+  // The floors, for evidence that carries no voice of its own (a caller assembling
+  // raw observations) and for a posture reached with no evidence at all.
+  unvoiced_protect: {
+    concept: /\b(?:protect|recovery)\b/i,
+    variants: [
+      "Today reads like a day to protect your recovery rather than push.",
+      "What's showing up today asks for recovery more than effort.",
+      "The kinder read on today is to protect your recovery.",
+    ],
+  },
+  unvoiced_open: {
+    concept: /\b(?:feel|signal|signals)\b/i,
+    variants: [
+      "There isn't enough fresh signal to call today either way, so go by how you feel.",
+      "Nothing fresh has come in to call today either way — trust how you feel.",
+      "Today's signals are thin, so let how you feel decide.",
+    ],
+  },
+  unvoiced_clear: {
+    concept: /\bsignals?\b/i,
+    variants: [
+      "Nothing in today's signals argues against the plan.",
+      "There's room in today's signals for the day you had planned.",
+      "Today's signals leave the planned day alone.",
+    ],
+  },
+} as const satisfies Record<string, SignalVoiceEntry>;
+
+export type SignalVoiceKey = keyof typeof SIGNAL_VOICE;
+export interface SignalVoiceRef {
+  key: SignalVoiceKey;
+  subject?: string;
+}
+
+// The athlete-facing phrasings for one voice, subject substituted. Never empty: an
+// unknown or missing key degrades to the protect floor rather than to silence (or,
+// worse, to a machine-facing `summary`).
+export function signalVoice(ref?: SignalVoiceRef | null): readonly [string, ...string[]] {
+  const entry: SignalVoiceEntry = (ref && SIGNAL_VOICE[ref.key]) || SIGNAL_VOICE.unvoiced_protect;
+  const subject = String(ref?.subject ?? "").trim() || entry.sample || "";
+  return entry.variants.map((variant) => variant.replace(/\{\}/g, subject)) as [string, ...string[]];
+}
+
+// The whole athlete vocabulary this layer can speak, rendered (templated entries use
+// their sample subject). Exported so day-read can register it in DAY_READ_WHY_VARIANTS
+// / DAY_READ_REQUIRED_CONCEPT — the constitution guards live over there, beside the
+// rest of the Brief's words, and this path used to escape them entirely.
+export const SIGNAL_VOICE_REGISTRY: Readonly<Record<string, { concept: RegExp; variants: readonly string[] }>> =
+  Object.fromEntries(
+    Object.keys(SIGNAL_VOICE).map((key) => [
+      key,
+      {
+        concept: SIGNAL_VOICE[key as SignalVoiceKey].concept,
+        variants: signalVoice({ key: key as SignalVoiceKey }),
+      },
+    ])
+  );
+
+// The rotation keys the athlete-facing surfaces share. TWO surfaces speak this
+// layer's words — the Brief's `why` (day-read) and the conductor's lead/caveat
+// (coaching-focus) — and they are reached from different tabs on the same day. Same
+// key + same date + same voice ⇒ the same sentence, so one signal reads as ONE
+// observation rather than two loosely-related notes about the athlete's morning.
+// The protect key is deliberately the day-read rule code that owns that read, so the
+// registered vocabulary and the rotation stay keyed alike.
+export const SIGNAL_VOICE_KEYS = {
+  protect: "acute_signal_protection",
+  injury: "active_injury",
+  // Their own keys: these ride as PARALLEL cards that can co-render with a lead
+  // drawn from the same evidence, and a coincidental collision should read as a
+  // second phrasing, never as the same sentence printed twice on one screen.
+  fueling: "signal_state:fueling",
+  schedule: "signal_state:schedule",
+} as const;
+
+// The one sentence a voice says on a given day. Every athlete-facing consumer of
+// this layer goes through here, so the rotation contract lives in one place.
+export function spokenSignalVoice(
+  ref: SignalVoiceRef | null | undefined,
+  date: string,
+  key: string = SIGNAL_VOICE_KEYS.protect
+): string {
+  return pickDayVariant(signalVoice(ref), date, key);
 }
 
 const DIMENSIONS: SignalDimension[] = [
@@ -213,6 +644,9 @@ function dimensionState(dimension: SignalDimension, evidence: ResolvedSignalEvid
     reason:
       strongest?.summary ??
       (all.length ? "Only stale evidence is available, so this stays open." : "No current evidence in this dimension."),
+    voice: strongest?.voice ?? {
+      key: status === "constrained" || status === "watch" ? "unvoiced_protect" : "unvoiced_clear",
+    },
   };
 }
 
@@ -310,7 +744,8 @@ function actionState(dimensions: Record<SignalDimension, SignalDimensionState>) 
   if (healthConstraints.length)
     return { readiness: "caution" as const, posture: "modify" as const, evidence: healthConstraints };
   const fuelPrescription = active.find(
-    (item) => item.dimension === "energy_fueling" && item.field === "underfueling_control" && item.direction === "constraint"
+    (item) =>
+      item.dimension === "energy_fueling" && item.field === "underfueling_control" && item.direction === "constraint"
   );
   if (fuelPrescription)
     return { readiness: "caution" as const, posture: "modify" as const, evidence: [fuelPrescription] };
@@ -343,6 +778,18 @@ export function buildUnifiedSignalState(date: string, observations: SignalObserv
     (action.readiness === "unknown"
       ? "There is not enough fresh signal to call recovery either way; use how you feel and keep the default flexible."
       : "The current signals leave room for the planned day.");
+  // The athlete-facing voice of the SAME evidence `reason` speaks for. When that
+  // evidence carries no voice of its own — a caller assembling raw observations, or a
+  // posture reached with no active evidence at all — it falls back to a floor written
+  // for the athlete, never to the machine-facing summary above.
+  const voice: SignalVoiceRef = action.evidence[0]?.voice ?? {
+    key:
+      action.readiness === "unknown"
+        ? "unvoiced_open"
+        : action.posture === "rest" || action.posture === "easy" || action.posture === "modify"
+          ? "unvoiced_protect"
+          : "unvoiced_clear",
+  };
   const sourceDimensions = [...new Set(action.evidence.map((item) => item.dimension))];
   const actionConfidence: SignalConfidence =
     sourceDimensions.length === 0
@@ -360,6 +807,7 @@ export function buildUnifiedSignalState(date: string, observations: SignalObserv
       posture: action.posture,
       reason,
       reasons,
+      voice,
       source_dimensions: sourceDimensions,
       confidence: actionConfidence,
       directives,
@@ -398,10 +846,17 @@ export function planningSignalState(input: {
   const date = input.date;
   const observations: SignalObservation[] = [];
   const quality = input.recovery?.quality ?? input.recovery?.recovery?.quality ?? {};
-  const addRecovery = (field: string, qualityField: string, direction: SignalDirection, summary: string) => {
+  const addRecovery = (
+    field: string,
+    qualityField: string,
+    direction: SignalDirection,
+    summary: string,
+    voice: SignalVoiceKey
+  ) => {
     const q = quality[qualityField] ?? {};
     observations.push(
       observation("recovery_capacity", field, q.latest_date ?? null, q.source ?? "recovery", direction, summary, {
+        voice: { key: voice },
         coverage: {
           samples: Number(q.sample_count) || 1,
           expected: q.expected_days ?? null,
@@ -417,7 +872,8 @@ export function planningSignalState(input: {
       "sleep",
       "sleep_min",
       Number(current.sleep_min) < 300 ? "constraint" : Number(current.sleep_min) < 360 ? "caution" : "support",
-      Number(current.sleep_min) < 360 ? "Recent sleep is running short." : "Recent sleep supports the planned day."
+      Number(current.sleep_min) < 360 ? "Recent sleep is running short." : "Recent sleep supports the planned day.",
+      Number(current.sleep_min) < 360 ? "sleep_short" : "sleep_ok"
     );
   if (current.training_readiness != null)
     addRecovery(
@@ -430,7 +886,8 @@ export function planningSignalState(input: {
           : "support",
       Number(current.training_readiness) < 50
         ? "The fresh wearable readiness signal is subdued."
-        : "The fresh wearable readiness signal is supportive."
+        : "The fresh wearable readiness signal is supportive.",
+      Number(current.training_readiness) < 50 ? "readiness_subdued" : "readiness_ok"
     );
   if (input.recovery?.delta?.hrv != null)
     addRecovery(
@@ -439,7 +896,8 @@ export function planningSignalState(input: {
       Number(input.recovery.delta.hrv) < -5 ? "caution" : "support",
       Number(input.recovery.delta.hrv) < -5
         ? "HRV is below the athlete's recent norm."
-        : "HRV is steady against the athlete's norm."
+        : "HRV is steady against the athlete's norm.",
+      Number(input.recovery.delta.hrv) < -5 ? "hrv_below" : "hrv_steady"
     );
   if (input.recovery?.delta?.rhr != null)
     addRecovery(
@@ -448,7 +906,8 @@ export function planningSignalState(input: {
       Number(input.recovery.delta.rhr) > 3 ? "caution" : "support",
       Number(input.recovery.delta.rhr) > 3
         ? "Resting heart rate is above the athlete's norm."
-        : "Resting heart rate is steady against the athlete's norm."
+        : "Resting heart rate is steady against the athlete's norm.",
+      Number(input.recovery.delta.rhr) > 3 ? "resting_hr_up" : "resting_hr_steady"
     );
 
   // Apple daily activity is not a sport-specific workout record, but meaningful
@@ -501,6 +960,9 @@ export function planningSignalState(input: {
         "caution",
         `Apple daily activity shows ${details.join(" and ")}; treat it as generic recent load without assuming a sport.`,
         {
+          // The athlete hears the movement itself, never the sport we deliberately
+          // refuse to infer from it.
+          voice: { key: "generic_activity_load", subject: details.join(" and ") },
           coverage: {
             samples: Number(genericActivity.quality.sample_count) || 1,
             expected: genericActivity.quality.expected_days ?? null,
@@ -524,7 +986,11 @@ export function planningSignalState(input: {
         Number(checkin.energy) <= 2
           ? "You're feeling run-down today — rest is the smart call."
           : "The athlete reports workable energy today.",
-        { safety_override: Number(checkin.energy) <= 2, max_age_days: 0 }
+        {
+          voice: { key: Number(checkin.energy) <= 2 ? "felt_energy_low" : "felt_energy_ok" },
+          safety_override: Number(checkin.energy) <= 2,
+          max_age_days: 0,
+        }
       )
     );
   if (checkin?.sleep_feel != null)
@@ -538,7 +1004,11 @@ export function planningSignalState(input: {
         Number(checkin.sleep_feel) <= 2
           ? "The athlete feels poorly recovered despite any wearable reading."
           : "The athlete feels reasonably rested.",
-        { safety_override: Number(checkin.sleep_feel) <= 2, max_age_days: 0 }
+        {
+          voice: { key: Number(checkin.sleep_feel) <= 2 ? "sleep_feel_low" : "sleep_feel_ok" },
+          safety_override: Number(checkin.sleep_feel) <= 2,
+          max_age_days: 0,
+        }
       )
     );
   if (checkin?.soreness != null)
@@ -552,7 +1022,11 @@ export function planningSignalState(input: {
         Number(checkin.soreness) >= 4
           ? "The athlete reports high soreness today."
           : "The athlete reports no high soreness today.",
-        { safety_override: Number(checkin.soreness) >= 4, max_age_days: 0 }
+        {
+          voice: { key: Number(checkin.soreness) >= 4 ? "soreness_high" : "soreness_ok" },
+          safety_override: Number(checkin.soreness) >= 4,
+          max_age_days: 0,
+        }
       )
     );
 
@@ -566,7 +1040,11 @@ export function planningSignalState(input: {
         "manual_session",
         "constraint",
         `Recent user-reported joint pain calls for pain-free substitutions around ${autoreg.joint_areas.join(", ")}.`,
-        { safety_override: true, max_age_days: 7 }
+        {
+          voice: { key: "joint_pain", subject: String(autoreg.joint_areas.join(", ")).toLowerCase() },
+          safety_override: true,
+          max_age_days: 7,
+        }
       )
     );
   if (autoreg?.low_performance_flag)
@@ -578,7 +1056,7 @@ export function planningSignalState(input: {
         "manual_session",
         "constraint",
         "Recent sessions felt below usual performance, so loading should ease.",
-        { safety_override: true, max_age_days: 7 }
+        { voice: { key: "low_performance" }, safety_override: true, max_age_days: 7 }
       )
     );
   else if (autoreg?.soreness_flag)
@@ -590,7 +1068,7 @@ export function planningSignalState(input: {
         "manual_session",
         "caution",
         "Recent session feedback shows elevated soreness.",
-        { safety_override: true, max_age_days: 7 }
+        { voice: { key: "session_soreness" }, safety_override: true, max_age_days: 7 }
       )
     );
 
@@ -604,7 +1082,9 @@ export function planningSignalState(input: {
         "cairn_program_state",
         "constraint",
         meso.note || "Accumulated training load says recovery is due.",
-        { max_age_days: 1 }
+        // The program state's own note is a planning line, not athlete prose; the
+        // athlete hears an authored sentence rather than a spliced foreign one.
+        { voice: { key: "deload_due" }, max_age_days: 1 }
       )
     );
   else if (meso?.acute_chronic_ratio != null)
@@ -618,7 +1098,10 @@ export function planningSignalState(input: {
         Number(meso.acute_chronic_ratio) > 1.5
           ? "Acute training load is running above the established base."
           : "Training load is within the established tolerance band.",
-        { max_age_days: 1 }
+        {
+          voice: { key: Number(meso.acute_chronic_ratio) > 1.5 ? "acute_load_high" : "acute_load_ok" },
+          max_age_days: 1,
+        }
       )
     );
   if (input.programState?.hybrid?.status === "fuel-protect")
@@ -630,7 +1113,7 @@ export function planningSignalState(input: {
         "cairn_hybrid_state",
         "constraint",
         input.programState.hybrid.headline || "Recent endurance work raises fueling needs around the planned training.",
-        { max_age_days: 2 }
+        { voice: { key: "hybrid_fuel" }, max_age_days: 2 }
       )
     );
   else if (input.programState?.hybrid?.status && input.programState.hybrid.status !== "clear")
@@ -643,7 +1126,7 @@ export function planningSignalState(input: {
         "caution",
         input.programState.hybrid.headline ||
           "Recent endurance work changes how the next strength session should land.",
-        { max_age_days: 2 }
+        { voice: { key: "hybrid_interference" }, max_age_days: 2 }
       )
     );
 
@@ -662,6 +1145,7 @@ export function planningSignalState(input: {
             : "neutral",
         exp.quality?.explanation || exp.basis || "Energy balance is still settling.",
         {
+          voice: { key: "expenditure" },
           coverage: {
             samples: Number(exp.points) || 1,
             expected: exp.window_days ?? null,
@@ -685,6 +1169,7 @@ export function planningSignalState(input: {
         protective ? "constraint" : "caution",
         String(underfueling.action?.line || underfueling.rationale || "Fuel availability is being protected."),
         {
+          voice: { key: protective ? "fuel_protect" : "fuel_watch" },
           coverage: { samples: Number(underfueling.agreeing_channels?.length) || 1, window_days: 14 },
           max_age_days: 1,
         }
@@ -704,7 +1189,7 @@ export function planningSignalState(input: {
           persistent
             ? "Independent fuel, performance, and recovery channels still show strain after the correction settled, so the next training dose should reduce."
             : "Fuel and outcome signals agree enough to hold progression aggression while the next correction settles.",
-          { max_age_days: 1 }
+          { voice: { key: persistent ? "fuel_strain_persistent" : "fuel_strain_hold" }, max_age_days: 1 }
         )
       );
     }
@@ -721,6 +1206,20 @@ export function planningSignalState(input: {
   const injurySummary = activeInjuries[0]
     ? [activeInjuries[0]?.title, activeInjuries[0]?.reason].filter(Boolean).join(": ")
     : "";
+  // The athlete hears the injury by NAME, in an authored sentence. The summary above
+  // joins that name to context-effect's generic classifier line ("Achilles
+  // tendinopathy: an active injury is worth easing or working around"), which is
+  // useful provenance for a model and redundant prose for a person.
+  //
+  // An injury reads as a CONDITION the sentence owns ("your shoulder strain"), so it is
+  // lowercased exactly as the train-day caveat already does. An illness or a dated
+  // commitment reads as a LABEL ("Head cold", "School pickup") and keeps its own case —
+  // lowercasing those produced "you're working through head cold", a bare noun phrase
+  // missing its article.
+  const injuryTitle = String(activeInjuries[0]?.title ?? "")
+    .trim()
+    .toLowerCase();
+  const illnessTitle = String(activeIllnesses[0]?.title ?? "").trim();
   if (context?.reduce_load && activeInjuries.length)
     observations.push(
       observation(
@@ -730,7 +1229,7 @@ export function planningSignalState(input: {
         "user_context",
         "constraint",
         injurySummary || "An active injury calls for easing or working around load.",
-        { safety_override: true, max_age_days: 0 }
+        { voice: { key: "active_injury", subject: injuryTitle }, safety_override: true, max_age_days: 0 }
       )
     );
   if (context?.reduce_load && activeIllnesses.length)
@@ -742,7 +1241,7 @@ export function planningSignalState(input: {
         "user_context",
         "constraint",
         activeIllnesses[0]?.reason || "An active illness calls for protecting recovery.",
-        { safety_override: true, max_age_days: 0 }
+        { voice: { key: "illness", subject: illnessTitle }, safety_override: true, max_age_days: 0 }
       )
     );
   if (context?.reduce_load && !activeInjuries.length && !activeIllnesses.length)
@@ -754,7 +1253,7 @@ export function planningSignalState(input: {
         "user_context",
         "constraint",
         "An active health constraint calls for easing or working around load.",
-        { safety_override: true, max_age_days: 0 }
+        { voice: { key: "health_constraint" }, safety_override: true, max_age_days: 0 }
       )
     );
   if (context?.fueling_disrupted)
@@ -766,7 +1265,7 @@ export function planningSignalState(input: {
         "user_context",
         "caution",
         "Current travel or illness may disrupt normal fueling.",
-        { max_age_days: 0 }
+        { voice: { key: "fueling_disrupted" }, max_age_days: 0 }
       )
     );
   if (context?.expect_worse_sleep)
@@ -778,7 +1277,7 @@ export function planningSignalState(input: {
         "user_context",
         "caution",
         "A current commitment or stressful stretch is likely to compress recovery capacity.",
-        { max_age_days: 0 }
+        { voice: { key: "schedule_pressure" }, max_age_days: 0 }
       )
     );
   const activePressure = (Array.isArray(input.contextEvents) ? input.contextEvents : []).filter(
@@ -797,7 +1296,11 @@ export function planningSignalState(input: {
         "user_context",
         "caution",
         `${activePressure[0].title || "A current commitment"} adds schedule pressure today.`,
-        { max_age_days: 0, observation_id: `life:${activePressure[0].id ?? activePressure[0].title}` }
+        {
+          voice: { key: "commitment_pressure", subject: String(activePressure[0].title ?? "").trim() },
+          max_age_days: 0,
+          observation_id: `life:${activePressure[0].id ?? activePressure[0].title}`,
+        }
       )
     );
   if (input.completedToday)
@@ -809,7 +1312,7 @@ export function planningSignalState(input: {
         "cairn_training_log",
         "support",
         "Today's planned work is already complete.",
-        { max_age_days: 0 }
+        { voice: { key: "completed_today" }, max_age_days: 0 }
       )
     );
 

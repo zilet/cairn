@@ -100,6 +100,25 @@ type TodayBriefHtmlOptions = {
     });
   }
 
+  // Which surface the server's lead arbitration handed the position of prominence
+  // to (`ClientTodayAttention`). "" when the payload carries no decision — an older
+  // server, a cached response, or a non-live date — in which case the Brief keeps
+  // the lead exactly as it always has.
+  function todayBriefAttentionPrimary(read: TodayBriefRead | null | undefined): string {
+    const attention = read?.attention;
+    if (!attention || typeof attention !== "object") return "";
+    const primary = String(attention.primary || "");
+    return primary || "";
+  }
+
+  // The Brief yields the lead only when the server says another surface earns it.
+  // It never disappears and loses nothing — it stays first on the page, carrying
+  // every control it had; `brief-quiet` is purely the emphasis hook.
+  function todayBriefYieldsLead(read: TodayBriefRead | null | undefined): boolean {
+    const primary = todayBriefAttentionPrimary(read);
+    return !!primary && primary !== "brief";
+  }
+
   function todayBriefAgentOffline(status: unknown): boolean {
     return status === "unconfigured" || status === "all_failed";
   }
@@ -121,6 +140,65 @@ type TodayBriefHtmlOptions = {
     </div>`;
   }
 
+  function todayBriefPeriodizationHtml(read: TodayBriefRead | null | undefined): string {
+    const context = read?.periodization_context;
+    if (!context || typeof context !== "object") return "";
+    const recovery = context.recovery_overlay;
+    const block = context.program_block;
+    const rows: string[] = [];
+    if (recovery && typeof recovery === "object") {
+      const day = Math.max(1, Math.min(7, Math.round(Number(recovery.day_index) || 1)));
+      rows.push(
+        `<button class="brief-clock-row" data-redirect="view-program" title="See the reduced recovery plan"><span class="brief-clock-mark" aria-hidden="true">↘</span><span>${escHtml(`Recovery week · Day ${day} of 7 · reduced volume`)}</span></button>`
+      );
+    }
+    if (block && typeof block === "object") {
+      const week = Math.max(1, Math.round(Number(block.week_index) || 1));
+      const total = Math.max(week, Math.round(Number(block.total_weeks) || week));
+      const goal = String(block.goal || "Training block")
+        .trim()
+        .slice(0, 200);
+      rows.push(
+        `<button class="brief-clock-row" data-redirect="view-program" title="Calendar program-block counter"><span class="brief-clock-mark" aria-hidden="true">◷</span><span>${escHtml(`${goal} · Week ${week} of ${total}`)}</span></button>`
+      );
+    }
+    return rows.length ? `<div class="brief-clocks" aria-label="Program timing">${rows.join("")}</div>` : "";
+  }
+
+  // The specific, athlete-facing sentence behind a rest/easy read — rendered only
+  // when it says something the `why` above it doesn't already say. A read with no
+  // specific reason renders NOTHING: engineering prose about policies and
+  // boundaries must never reach the athlete as if it were coaching.
+  function todayBriefDecisiveReason(read: TodayBriefRead | null | undefined, kind: string): string {
+    const decision = read?.decision;
+    if (kind !== "rest" && kind !== "easy") return "";
+    if (!decision || typeof decision !== "object") return "";
+    const reason = String(decision.reason || "")
+      .trim()
+      .slice(0, 160);
+    const normalized = (value: unknown): string =>
+      String(value ?? "")
+        .toLocaleLowerCase()
+        .replace(/\s+/g, " ")
+        .replace(/[.!?]+$/g, "")
+        .trim();
+    return reason && normalized(reason) !== normalized(read?.why) ? reason : "";
+  }
+
+  function todayBriefUpdatedHtml(read: TodayBriefRead | null | undefined, kind: string, isToday = true): string {
+    const raw = read?.computed_at || read?.decision?.computed_at;
+    const stamp = raw ? new Date(String(raw)) : null;
+    if (!stamp || !Number.isFinite(stamp.getTime())) return "";
+    // A bare clock time only means "today" on today. Browsing back to an earlier
+    // date, "Updated 6:12 AM" reads as this morning when it is a stamp from another
+    // day entirely — so a past date says which day.
+    const when = isToday
+      ? stamp.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+      : stamp.toLocaleDateString([], { month: "short", day: "numeric" });
+    const decisive = todayBriefDecisiveReason(read, kind);
+    return `<div class="brief-updated">${escHtml(`Updated ${when}`)}${decisive ? ` <span aria-hidden="true">·</span> ${escHtml(decisive)}` : ""}</div>`;
+  }
+
   function todayBriefHtml(read: TodayBriefRead | null | undefined, options: TodayBriefHtmlOptions = {}): string {
     const kind = todayBriefKind(read);
     const meta = todayBriefMeta(read);
@@ -133,7 +211,9 @@ type TodayBriefHtmlOptions = {
     // The forward line rides on train days AND done days — after the work is in,
     // "Next: …" is the so-what that replaces the retired Start-session controls.
     const forward = read?.forward && (kind === "train" || kind === "done") ? escHtml(read.forward) : "";
-    const arc = read?.arc && !forward ? escHtml(read.arc) : "";
+    const periodization = todayBriefPeriodizationHtml(read);
+    const arc = read?.arc && !forward && !periodization ? escHtml(read.arc) : "";
+    const updated = todayBriefUpdatedHtml(read, kind, options.isToday !== false);
 
     const actions: string[] = [];
     if (kind === "train") {
@@ -182,14 +262,22 @@ type TodayBriefHtmlOptions = {
     const offline = provisional
       ? ""
       : todayBriefAgentOfflineNoticeHtml(read?.agent_status, read?.agent_issue, options.offlineDismissed);
-    return `<section class="brief brief-${kind}${morph}${enter}${thinking}" style="--i:0" aria-live="polite"${busy}>
+    // The lead arbitration's only mark on the Brief: a de-emphasis hook and the
+    // band it landed in. Appended LAST so every existing class-list assertion (and
+    // every existing rule) is untouched, and omitted entirely when no decision came.
+    const yields = todayBriefYieldsLead(read);
+    const quiet = yields ? " brief-quiet" : "";
+    const band = todayBriefAttentionPrimary(read) ? ` data-attention="${yields ? "supporting" : "lead"}"` : "";
+    return `<section class="brief brief-${kind}${morph}${enter}${thinking}${quiet}" style="--i:0" aria-live="polite"${busy}${band}>
       ${offline}
       <div class="brief-kicker lbl"><span class="brief-glyph" aria-hidden="true">${meta.glyph}</span> ${escHtml(meta.kicker ? meta.kicker.toUpperCase() : `${meta.word.toUpperCase()} DAY`)}${est ? ` · ${escHtml(est)}` : ""}</div>
       <h2 class="brief-headline">${headline}</h2>
       ${focus && kind === "train" ? `<div class="brief-focus">${focus}</div>` : ""}
       ${why ? `<p class="brief-why">${why}</p>` : ""}
       ${forward ? `<button class="brief-forward" data-redirect="view-week" title="See your week"><span class="brief-forward-arrow" aria-hidden="true">↗</span><span class="brief-forward-txt">${forward}</span></button>` : ""}
+      ${periodization}
       ${arc ? `<button class="brief-forward brief-arc" data-redirect="view-program" title="See your plan's arc"><span class="brief-forward-arrow" aria-hidden="true">◷</span><span class="brief-forward-txt">${arc}</span></button>` : ""}
+      ${updated}
       <div id="briefProvenance" class="prov-slot"></div>
       ${actions.length ? `<div class="brief-launch">${actions.join("")}</div>` : ""}
       ${steer}
@@ -198,9 +286,9 @@ type TodayBriefHtmlOptions = {
   }
 
   // Does the freshly-fetched read differ from what's already painted in a way the
-  // athlete would SEE? Compares only the visible fields (kind/headline/why/focus/
-  // est_minutes) so an identical read reconciled behind a cached paint touches no
-  // DOM and never animates a "swap" of unchanged content. Pure + trivially tested.
+  // athlete would SEE? Structured provenance only participates through the
+  // rendered clock/freshness helpers, so private signals and machine rule codes
+  // never repaint an otherwise-identical Brief.
   function todayBriefMateriallyDiffers(
     a: TodayBriefRead | null | undefined,
     b: TodayBriefRead | null | undefined
@@ -216,6 +304,19 @@ type TodayBriefHtmlOptions = {
       return value == null || !Number.isFinite(n) ? null : Math.round(n);
     };
     if (mins(a.est_minutes) !== mins(b.est_minutes)) return true;
+    if (todayBriefPeriodizationHtml(a) !== todayBriefPeriodizationHtml(b)) return true;
+    // The freshness line's REASON is content and repaints; its clock is not. A
+    // bare timestamp tick was rewriting the whole Brief (replaceWith + settle
+    // animation) for a minute that changed nothing the athlete is reading —
+    // exactly the churn this predicate exists to prevent. The stamp catches up on
+    // the next real repaint.
+    if (todayBriefDecisiveReason(a, todayBriefKind(a)) !== todayBriefDecisiveReason(b, todayBriefKind(b))) return true;
+    // Yielding (or reclaiming) the lead changes the Brief's rendered weight, so it
+    // is a material difference. The primary SURFACE alone is compared — the rest of
+    // the decision is ordering the Brief itself never draws.
+    if (todayBriefYieldsLead(a) !== todayBriefYieldsLead(b)) return true;
+    const hasStamp = (read: TodayBriefRead): boolean => !!(read.computed_at || read.decision?.computed_at);
+    if (hasStamp(a) !== hasStamp(b)) return true;
     return false;
   }
 
@@ -322,12 +423,17 @@ type TodayBriefHtmlOptions = {
     provisionalRead: todayBriefProvisionalRead,
     redirectHtml: todayBriefRedirect,
     visibleOverrides: todayBriefVisibleOverrides,
+    attentionPrimary: todayBriefAttentionPrimary,
+    yieldsLead: todayBriefYieldsLead,
     agentOffline: todayBriefAgentOffline,
     agentOfflineNoticeHtml: todayBriefAgentOfflineNoticeHtml,
     briefHtml: todayBriefHtml,
     materiallyDiffers: todayBriefMateriallyDiffers,
     signalsText: todayBriefSignalsText,
     signalsRows: todayBriefSignalsRows,
+    periodizationHtml: todayBriefPeriodizationHtml,
+    updatedHtml: todayBriefUpdatedHtml,
+    decisiveReason: todayBriefDecisiveReason,
   };
 
   Object.assign(globalThis, { CairnTodayBrief: CAIRN_TODAY_BRIEF });

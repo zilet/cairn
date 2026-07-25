@@ -12,13 +12,14 @@
     "auth_state": [".claude.json", ".claude"],
     "models_list": null,
     "model_flag": ["--model", "{model}"],
-    "capabilities": { "model": true, "reasoning": ["low", "medium", "high", "xhigh"] },
+    "model_classes": { "fast": "sonnet", "deep": "opus" },
+    "capabilities": { "model": true, "reasoning": ["low", "medium", "high", "xhigh", "max"] },
     "reasoning_flag": ["--effort", "{reasoning}"],
     "file_access_args": ["--add-dir", "{data_dir}"],
     "install": {
       "method": "npm",
       "package": "@anthropic-ai/claude-code",
-      "version": "2.1.207"
+      "version": "2.1.220"
     },
     "stream": {
       "format": "claude",
@@ -36,14 +37,15 @@
     "auth_state": [".codex/auth.json"],
     "models_list": null,
     "model_flag": ["--model", "{model}"],
-    "capabilities": { "model": true, "reasoning": ["low", "medium", "high", "xhigh"] },
+    "capabilities": { "model": true, "reasoning": ["low", "medium", "high", "xhigh", "max"] },
     "reasoning_flag": ["-c", "model_reasoning_effort={reasoning}"],
     "file_access_args": ["--cd", "{data_dir}", "--add-dir", "{data_dir}"],
     "image_args": ["--image", "{image}"],
+    "model_note": "No model_classes: Cairn's fast/deep classes are named per provider and this CLI's model names are not aliases we can pin without dating them, so codex runs on its own configured model and Cairn only sets effort. Consequence: 'max' is verified in the 0.145.0 config enum but is declared per-model in the CLI's own catalog (gpt-5.6-* accept it; gpt-5.5 and older top out at xhigh). Since no model is pinned here, a codex that resolves an older model rejects 'max' at request time, not config-parse time, and Cairn sees a dead agent. Nothing in TASK_EXECUTION_PROFILES requests 'max', so this is reachable only via a user profile binding.",
     "install": {
       "method": "npm",
       "package": "@openai/codex",
-      "version": "0.144.1",
+      "version": "0.145.0",
       "args": ["--include=optional"]
     }
   },

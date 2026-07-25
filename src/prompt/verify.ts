@@ -1,6 +1,7 @@
 // Self-critique verify prompts: the bounded second-pass safety checkers for a
 // drafted meal plan and a suggested session.
 import * as repo from "../repo.js";
+import { promptData } from "./context-projection.js";
 import { CAIRN_PERSONA } from "./shared.js";
 
 // ---------- self-critique verify pass (Trust build V1) ----------
@@ -80,7 +81,7 @@ THE SUGGESTED SESSION TO CHECK:
 ${JSON.stringify(draft)}
 
 DATA (for the injury/constraint/equipment context):
-${JSON.stringify(ctx)}
+${promptData(ctx, "session_verify")}
 
 ${VERIFY_RESULT_NOTE}`;
 }
