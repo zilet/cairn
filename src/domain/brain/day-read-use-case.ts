@@ -120,9 +120,19 @@ export function attachDayReadContext(readDate: string, read: Record<string, unkn
 export function recordDayReadSuggestion(date: string, read: Record<string, unknown>, override?: string | null): void {
   try {
     if (!override) {
+      // json_extract, not a payload_json LIKE '%"override":null%' substring match —
+      // the latter is brittle (any key-order or whitespace change in the serialized
+      // payload silently disables the dedupe and the duplicate rows come straight
+      // back; see migration 78, which backfill-deduped the historical fallout).
+      // payload_json IS NOT NULL keeps the null-safety of the old LIKE, under which
+      // a NULL payload_json (LIKE against NULL is NULL, never TRUE) never counted
+      // as an existing canonical row.
       const existing = db
         .prepare(
-          `SELECT 1 FROM suggestions WHERE kind = 'day_read' AND date = ? AND payload_json LIKE '%"override":null%' LIMIT 1`
+          `SELECT 1 FROM suggestions
+            WHERE kind = 'day_read' AND date = ? AND payload_json IS NOT NULL
+              AND json_extract(payload_json, '$.override') IS NULL
+            LIMIT 1`
         )
         .get(date);
       if (existing) return;

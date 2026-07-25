@@ -91,6 +91,24 @@ test("override_rhythm stays silent when steers are the minority of that weekday"
   assert.equal(p, undefined, "steers are the minority of the last 6 occurrences");
 });
 
+// Regression: before recordDayReadSuggestion()'s dedupe guard existed, a re-opened
+// Brief could record several canonical (override:null) rows for the same date as
+// the read evolved (rest -> the athlete trains -> train -> done). overrideRhythm
+// already collapses `rows` to one entry per date in its own byDate map before any
+// weekday counting happens, so this legacy duplication must NOT be mistaken for
+// repeated steering — none of these rows carry an override, so the date never
+// counts as steered no matter how many times it was re-recorded.
+test("override_rhythm is not fooled by legacy duplicate canonical rows from Brief re-opens", () => {
+  for (const n of [7, 14, 21]) {
+    const d = daysBefore(REF, n);
+    seedDayRead(d, { override: null, kind: "rest" });
+    seedDayRead(d, { override: null, kind: "train" });
+    seedDayRead(d, { override: null, kind: "done" });
+  }
+  const p = buildFeltSignals(REF).patterns.find((x) => x.kind === "override_rhythm");
+  assert.equal(p, undefined, "no genuine steer occurred — duplicate re-open rows must not read as repeated steering");
+});
+
 // ---------------------------------------------------------------------------
 // checkin_signal
 // ---------------------------------------------------------------------------

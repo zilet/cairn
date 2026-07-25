@@ -1387,6 +1387,44 @@ export const MIGRATIONS: Migration[] = [
     // means every op uses the declarative default.
     up: (db) => addColumn(db, "settings", "agent_profile_bindings TEXT DEFAULT ''"),
   },
+  {
+    version: 78,
+    name: "day-read-suggestions-dedupe",
+    up: (db) => {
+      // Before the dedupe guard in recordDayReadSuggestion() (day-read-use-case.ts)
+      // existed, every Brief open re-recorded the day's CANONICAL (override:null)
+      // day_read suggestion — and a read legitimately evolves during the day
+      // (morning rest -> the athlete trains -> train -> done), so a date's re-opens
+      // piled up as one row each while looking exactly like a single morning
+      // suggestion. Any per-date read of this ledger (GROUP BY, a naive COUNT)
+      // silently weights that date many times over. Collapse each date's canonical
+      // rows to the earliest (MIN id) — the morning read, recorded before any
+      // training could have been logged, which is the truthful record of what was
+      // actually suggested. Steered rows (override IS NOT NULL) are deliberately
+      // non-idempotent — the athlete can genuinely steer more than once in a day —
+      // so they are entirely excluded from this dedup, and every other suggestion
+      // kind is untouched. Idempotent: after the first pass only the earliest
+      // canonical row remains per date, so it is always the MIN(id) survivor and a
+      // second pass deletes nothing further.
+      try {
+        db.exec(`
+          DELETE FROM suggestions
+           WHERE kind = 'day_read'
+             AND date IS NOT NULL
+             AND json_extract(payload_json, '$.override') IS NULL
+             AND id NOT IN (
+               SELECT MIN(id) FROM suggestions
+                WHERE kind = 'day_read'
+                  AND date IS NOT NULL
+                  AND json_extract(payload_json, '$.override') IS NULL
+                GROUP BY date
+             )
+        `);
+      } catch {
+        /* suggestions table absent/empty on a fresh DB — nothing to dedupe */
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: DatabaseSync) {

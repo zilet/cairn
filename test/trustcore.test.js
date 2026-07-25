@@ -7,6 +7,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { completeMealWeek, db, repo, resetTables, seedHealthDoc, marker } from "./_seed.js";
 import { automaticOrphanIntent } from "../dist/repo/proposal-intent.js";
+import { recordDayReadSuggestion } from "../dist/domain/brain/day-read-use-case.js";
 
 beforeEach(() => {
   resetTables("plan_items", "plan_days", "memory", "evidence_cache", "health_documents", "health_directives");
@@ -300,35 +301,51 @@ test("safetyGate does NOT confuse the creatinine marker for creatine supplementa
 // the cache HIT (the canonical read is precomputed nightly + served cached every
 // morning, so otherwise reconcileOutcomes would have almost no day_read rows). It
 // dedupes the CANONICAL read per (kind, date) — repeated opens don't pile up — while
-// an OVERRIDE read (a transient steer with its own payload) always records. These
-// guard the dedup CONTRACT the handler's recordDayReadSuggestion helper relies on.
-const CANONICAL_DAY_READ_EXISTS =
-  `SELECT 1 FROM suggestions WHERE kind='day_read' AND date=? AND payload_json LIKE '%"override":null%' LIMIT 1`;
+// an OVERRIDE read (a transient steer with its own payload) always records. This
+// calls the REAL recordDayReadSuggestion() guard (day-read-use-case.ts) rather than
+// reimplementing its dedupe query inline — a hand-rolled copy of that SQL would keep
+// passing even if the production guard broke or was reverted, which is exactly the
+// failure mode migration 78 / the LIKE -> json_extract hardening had to fix (a prior
+// version of this test did carry its own copy of the query and would never have
+// caught that fragility). See test/dayReadUseCase.test.js for the guard's own
+// key-order / whitespace-payload regression coverage.
 const countDayReads = (date) =>
   db.prepare(`SELECT COUNT(*) AS n FROM suggestions WHERE kind='day_read' AND date=?`).get(date).n;
 
-test("canonical day_read suggestion is detectable + deduped per (kind, date); override is distinct", () => {
+test("canonical day_read suggestion is deduped per date via the REAL guard; override is distinct", () => {
   resetTables("suggestions");
   const date = "2026-06-22";
-  assert.equal(!!db.prepare(CANONICAL_DAY_READ_EXISTS).get(date), false, "nothing recorded yet");
+  assert.equal(countDayReads(date), 0, "nothing recorded yet");
 
-  // First canonical open records.
-  repo.recordSuggestion("day_read", date, { kind: "train", focus: "legs", est_minutes: 60, override: null });
-  assert.equal(!!db.prepare(CANONICAL_DAY_READ_EXISTS).get(date), true, "canonical row is detectable");
+  // First canonical open records a row whose payload really is canonical.
+  recordDayReadSuggestion(date, { kind: "train", focus: "legs", est_minutes: 60 }, null);
   assert.equal(countDayReads(date), 1);
+  const row = db.prepare(`SELECT payload_json FROM suggestions WHERE kind='day_read' AND date=?`).get(date);
+  assert.equal(JSON.parse(row.payload_json).override, null, "the recorded row really is canonical");
 
-  // A repeat canonical open is deduped (the handler's guard short-circuits) — count
-  // stays 1 because the existence check found the prior canonical row.
-  if (!db.prepare(CANONICAL_DAY_READ_EXISTS).get(date)) {
-    repo.recordSuggestion("day_read", date, { kind: "train", focus: "legs", est_minutes: 60, override: null });
-  }
+  // A repeat canonical open is deduped by the production guard itself, not by any
+  // reimplementation of its check.
+  recordDayReadSuggestion(date, { kind: "train", focus: "legs", est_minutes: 60 }, null);
   assert.equal(countDayReads(date), 1, "repeated canonical open does NOT duplicate the row");
 
-  // An OVERRIDE read is a distinct payload and always records (its row never matches
-  // the canonical existence check, so it can't be mistaken for the canonical one).
-  repo.recordSuggestion("day_read", date, { kind: "easy", focus: null, est_minutes: 30, override: "rough night" });
-  assert.equal(!!db.prepare(CANONICAL_DAY_READ_EXISTS).get(date), true, "override row didn't satisfy the canonical check");
+  // The guard also recognizes a canonical row it did NOT itself insert (e.g. a row
+  // seeded directly as fixture data, standing in for a legacy row or one written by
+  // a differently-ordered caller) — proving its OWN detection logic, not the shape
+  // of rows it happens to have written itself.
+  resetTables("suggestions");
+  db.prepare(`INSERT INTO suggestions (kind, date, payload_json) VALUES ('day_read', ?, ?)`).run(
+    date,
+    JSON.stringify({ override: null, kind: "rest", focus: null, est_minutes: null })
+  );
+  recordDayReadSuggestion(date, { kind: "train", focus: "legs", est_minutes: 60 }, null);
+  assert.equal(countDayReads(date), 1, "an externally-seeded canonical row is still recognized — no duplicate");
+
+  // An OVERRIDE read is a distinct, non-idempotent payload and always records — never
+  // mistaken for the canonical row, and never deduped against another override.
+  recordDayReadSuggestion(date, { kind: "easy", focus: null, est_minutes: 30 }, "rough night");
   assert.equal(countDayReads(date), 2, "override recorded as its own row");
+  recordDayReadSuggestion(date, { kind: "rest", focus: null, est_minutes: null }, "still off");
+  assert.equal(countDayReads(date), 3, "a second, distinct override also records");
 });
 
 // ---------- marker forecasting (predictive, plain-language, no score) ----------

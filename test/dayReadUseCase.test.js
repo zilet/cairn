@@ -211,6 +211,42 @@ test("recordDayReadSuggestion dedupes canonical reads but keeps override reads d
   assert.equal(countDayReads(date), 3);
 });
 
+test("recordDayReadSuggestion's dedup guard recognizes a canonical row even with a different JSON key order", () => {
+  // The guard now checks json_extract(payload_json, '$.override') IS NULL instead
+  // of a payload_json LIKE '%"override":null%' substring match, precisely so a
+  // differently-serialized (but semantically identical) canonical payload still
+  // dedupes — a legacy row, or one written by a future caller that assembles the
+  // payload object with a different key order, must not silently defeat the guard.
+  resetTables("suggestions");
+  const date = localDaysAgo(0);
+  db.prepare(`INSERT INTO suggestions (kind, date, payload_json) VALUES ('day_read', ?, ?)`).run(
+    date,
+    JSON.stringify({ override: null, est_minutes: 60, kind: "train", focus: "Lower body" })
+  );
+  assert.equal(countDayReads(date), 1);
+  recordDayReadSuggestion(date, { kind: "train", focus: "Lower body", est_minutes: 60 }, null);
+  assert.equal(countDayReads(date), 1, "reordered keys still dedupe — no duplicate row inserted");
+});
+
+test("recordDayReadSuggestion's dedup guard survives a pretty-printed (whitespace-formatted) canonical payload", () => {
+  // The old payload_json LIKE '%"override":null%' substring guard was silently
+  // defeated by ANY whitespace change in the serialized payload — a pretty-printed
+  // JSON.stringify(x, null, 2) never contains the literal substring '"override":null'
+  // with no space after the colon, so the old guard would have re-inserted a
+  // duplicate canonical row here. json_extract(payload_json, '$.override') has no
+  // such fragility. This is the sharpest evidence for the swap; pin it as a
+  // permanent regression rather than leaving it as a one-off proof.
+  resetTables("suggestions");
+  const date = localDaysAgo(0);
+  db.prepare(`INSERT INTO suggestions (kind, date, payload_json) VALUES ('day_read', ?, ?)`).run(
+    date,
+    JSON.stringify({ kind: "train", focus: "Lower body", est_minutes: 60, override: null }, null, 2)
+  );
+  assert.equal(countDayReads(date), 1);
+  recordDayReadSuggestion(date, { kind: "train", focus: "Lower body", est_minutes: 60 }, null);
+  assert.equal(countDayReads(date), 1, "a pretty-printed canonical payload still dedupes — no duplicate row inserted");
+});
+
 test("a live completed run overrides stale cached prospective copy immediately", async () => {
   resetTables(
     "day_reads",

@@ -291,6 +291,47 @@ export function listSuggestions(limit = 50) {
   return (db.prepare(`SELECT * FROM suggestions ORDER BY id DESC LIMIT ?`).all(limit) as any[]).map(hydrateSuggestion);
 }
 
+// HAZARD: the day_read ledger is one row per RECORDING, not one row per date.
+// Before the dedupe guard in recordDayReadSuggestion() (day-read-use-case.ts)
+// existed, every Brief open re-recorded the day's canonical (override:null)
+// suggestion, and a read legitimately evolves during the day (morning rest -> the
+// athlete trains -> train -> done) — so a re-opened date accumulated one row per
+// open while looking exactly like a single morning suggestion. Migration 78
+// backfill-deduped the historical fallout and the live guard now keeps future
+// canonical rows to one per date, but any caller that queries `suggestions`
+// directly is one GROUP BY / COUNT away from re-introducing the same trap (a
+// future regression of the guard, or simply forgetting it exists) and silently
+// over-weighting a re-opened date. Read the day_read ledger through THIS helper
+// instead of the raw table whenever the analysis wants one observation per date:
+// it always collapses to the earliest (MIN id) CANONICAL row per date — the
+// morning read, recorded before the day's outcome could influence it. Steered
+// rows (override IS NOT NULL) are deliberately excluded: each steer is a distinct,
+// non-idempotent athlete action, not a re-open, and every date can carry more than
+// one (see recordDayReadSuggestion's contract) — a caller that also needs steer
+// history should query `suggestions` directly rather than collapse it away here.
+export function dayReadSuggestionsByDate(opts: { since?: string; until?: string } = {}) {
+  const conds = [`kind = 'day_read'`, `date IS NOT NULL`, `json_extract(payload_json, '$.override') IS NULL`];
+  const params: string[] = [];
+  if (opts.since) {
+    conds.push(`date >= ?`);
+    params.push(opts.since);
+  }
+  if (opts.until) {
+    conds.push(`date <= ?`);
+    params.push(opts.until);
+  }
+  const where = conds.join(" AND ");
+  const rows = db
+    .prepare(
+      `SELECT s.* FROM suggestions s
+        JOIN (SELECT date, MIN(id) AS min_id FROM suggestions WHERE ${where} GROUP BY date) f
+          ON f.date = s.date AND f.min_id = s.id
+       ORDER BY s.date ASC`
+    )
+    .all(...params) as any[];
+  return rows.map(hydrateSuggestion);
+}
+
 // Durable learnings drawn from reconciliation are stored as memory rows of kind
 // 'learning' (source 'outcome-learning'); surfaced to the coach via getCoachContext.
 export function recentLearnings(limit = 6): RecentLearning[] {

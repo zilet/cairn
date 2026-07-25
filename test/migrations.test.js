@@ -399,6 +399,73 @@ test("dist/db.js BOOTS a pre-v73 chat_turns table before request/build indexes a
   rmSync(dir, { recursive: true, force: true });
 });
 
+// Before the dedupe guard in recordDayReadSuggestion() existed, every Brief open
+// re-recorded the day's canonical (override:null) day_read suggestion, so a date
+// whose read evolved during the day (rest -> the athlete trains -> train -> done)
+// accumulated one row per re-open. v78 collapses each date's canonical rows to
+// the earliest (the morning read), leaves every steered (override IS NOT NULL)
+// row untouched (steers are deliberately non-idempotent), and leaves every other
+// suggestion kind untouched.
+test("v78 dedupes legacy day_read suggestion rows, keeping the earliest canonical row per date and every steered row", () => {
+  const d = new DatabaseSync(":memory:");
+  d.exec(`CREATE TABLE suggestions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    date TEXT,
+    payload_json TEXT,
+    outcome_json TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    reconciled_at TEXT
+  );`);
+  const ins = d.prepare(`INSERT INTO suggestions (kind, date, payload_json) VALUES (?, ?, ?)`);
+  // Three re-opens of the same canonical day_read on one date (the pre-guard bug):
+  // rest (morning) -> train (the athlete trained) -> done (session finished).
+  ins.run("day_read", "2026-06-17", JSON.stringify({ kind: "rest", focus: null, est_minutes: null, override: null }));
+  ins.run("day_read", "2026-06-17", JSON.stringify({ kind: "train", focus: "Legs", est_minutes: 60, override: null }));
+  ins.run("day_read", "2026-06-17", JSON.stringify({ kind: "done", focus: null, est_minutes: null, override: null }));
+  // A single-open date needs no dedup.
+  ins.run("day_read", "2026-06-18", JSON.stringify({ kind: "easy", focus: null, est_minutes: 25, override: null }));
+  // Two genuine steers on the same date — both must survive untouched.
+  ins.run(
+    "day_read",
+    "2026-07-07",
+    JSON.stringify({ kind: "easy", focus: null, est_minutes: 25, override: "rough night" })
+  );
+  ins.run("day_read", "2026-07-07", JSON.stringify({ kind: "rest", focus: null, est_minutes: null, override: "sore" }));
+  // A different suggestion kind sharing the duplicated date must be untouched.
+  ins.run("session_suggest", "2026-06-17", JSON.stringify({ est_minutes: 45 }));
+
+  d.exec("PRAGMA user_version = 77;");
+  const result = runMigrations(d);
+  assert.equal(result.applied, 1);
+  assert.equal(Number(d.prepare("PRAGMA user_version").get().user_version), MAX_VERSION);
+
+  const dayReadRows = d.prepare(`SELECT date, payload_json FROM suggestions WHERE kind = 'day_read' ORDER BY id`).all();
+  const forDate = (date) => dayReadRows.filter((r) => r.date === date);
+  assert.equal(forDate("2026-06-17").length, 1, "the three re-opens collapse to one row");
+  assert.equal(
+    JSON.parse(forDate("2026-06-17")[0].payload_json).kind,
+    "rest",
+    "the earliest (morning) read survives, not a later evolution"
+  );
+  assert.equal(forDate("2026-06-18").length, 1, "a single-open date is untouched");
+  assert.equal(forDate("2026-07-07").length, 2, "both steered rows survive untouched");
+  assert.equal(
+    d.prepare(`SELECT COUNT(*) AS n FROM suggestions WHERE kind = 'session_suggest'`).get().n,
+    1,
+    "other suggestion kinds are untouched"
+  );
+
+  // Idempotent: replaying the migration's up() directly (bypassing the version
+  // guard) must not delete anything further.
+  const before = d.prepare(`SELECT COUNT(*) AS n FROM suggestions`).get().n;
+  const v78 = MIGRATIONS.find((m) => m.version === 78);
+  v78.up(d);
+  const after = d.prepare(`SELECT COUNT(*) AS n FROM suggestions`).get().n;
+  assert.equal(after, before, "re-running the migration's up() is a no-op");
+  d.close();
+});
+
 test("migration versions are gapless 1..N, unique, and strictly ascending", () => {
   const versions = MIGRATIONS.map((m) => m.version);
   const sorted = [...versions].sort((a, b) => a - b);

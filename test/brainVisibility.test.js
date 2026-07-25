@@ -140,6 +140,49 @@ test("repeated outcome learnings reinforce one curatable pattern instead of date
   assert.ok(Number(rows[0].confidence) > 1, "repeated evidence reinforces confidence instead of appending rows");
 });
 
+// ---------- day_read ledger collapse (the re-open trap) ----------
+// Before recordDayReadSuggestion()'s dedupe guard existed, a re-opened Brief could
+// record several canonical rows for one date. dayReadSuggestionsByDate() is the
+// hardened repo-layer read that always collapses to one (earliest) canonical row
+// per date, so a future caller can't accidentally re-introduce that weighting bug.
+test("dayReadSuggestionsByDate collapses legacy re-open duplicates to the earliest canonical row per date", () => {
+  resetTables("suggestions");
+  // Three re-opens of the same date (the pre-guard bug): rest -> train -> done.
+  repo.recordSuggestion("day_read", "2026-06-17", { kind: "rest", override: null });
+  repo.recordSuggestion("day_read", "2026-06-17", { kind: "train", override: null });
+  repo.recordSuggestion("day_read", "2026-06-17", { kind: "done", override: null });
+  // A single-open date needs no collapsing.
+  repo.recordSuggestion("day_read", "2026-06-18", { kind: "easy", override: null });
+
+  const rows = repo.dayReadSuggestionsByDate();
+  assert.equal(rows.length, 2, "one row per date, not one per recording");
+  const first = rows.find((r) => r.date === "2026-06-17");
+  assert.equal(first.payload.kind, "rest", "the earliest (morning) recording survives, not a later evolution");
+});
+
+test("dayReadSuggestionsByDate excludes steered rows and other suggestion kinds", () => {
+  resetTables("suggestions");
+  repo.recordSuggestion("day_read", "2026-07-07", { kind: "easy", override: "rough night" });
+  repo.recordSuggestion("day_read", "2026-07-07", { kind: "rest", override: "sore" });
+  repo.recordSuggestion("session_suggest", "2026-07-07", { est_minutes: 45 });
+
+  const rows = repo.dayReadSuggestionsByDate();
+  assert.equal(rows.length, 0, "a date with only steers/other kinds contributes no canonical row");
+});
+
+test("dayReadSuggestionsByDate honors the since/until window", () => {
+  resetTables("suggestions");
+  repo.recordSuggestion("day_read", "2026-06-01", { kind: "train", override: null });
+  repo.recordSuggestion("day_read", "2026-06-15", { kind: "rest", override: null });
+  repo.recordSuggestion("day_read", "2026-07-01", { kind: "easy", override: null });
+
+  const rows = repo.dayReadSuggestionsByDate({ since: "2026-06-10", until: "2026-06-30" });
+  assert.deepEqual(
+    rows.map((r) => r.date),
+    ["2026-06-15"]
+  );
+});
+
 test("recentLearnings uses updated_at so reinforced older lessons reach the coach", () => {
   resetTables("memory");
   db.prepare(`INSERT INTO memory (kind, content, source, confidence, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`)
