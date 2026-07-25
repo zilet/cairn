@@ -13,6 +13,7 @@
 // ============================================================================
 import { movementKey, type MuscleGroup } from "./exercise-canon.js";
 import { getProgramState, type LiftState, type MuscleVolumeState } from "./program-state.js";
+import { joinList } from "./shared.js";
 
 // ---- the support map --------------------------------------------------------
 // A curated compound-movement → contributing-muscle map. `pattern` is matched as a
@@ -93,10 +94,7 @@ const PLURAL_GROUP = new Set<string>([
 ]);
 
 function joinGroups(groups: string[]): string {
-  const uniq = [...new Set(groups)];
-  if (uniq.length <= 1) return uniq[0] ?? "";
-  if (uniq.length === 2) return `${uniq[0]} and ${uniq[1]}`;
-  return `${uniq.slice(0, -1).join(", ")}, and ${uniq[uniq.length - 1]}`;
+  return joinList([...new Set(groups)]);
 }
 function pluralList(groups: string[]): boolean {
   return groups.length > 1 || groups.some((g) => PLURAL_GROUP.has(g));

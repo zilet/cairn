@@ -37,13 +37,6 @@ function captureTitleCase(value: string): string {
     .join(" ");
 }
 
-function captureWeekWinsJoin(parts: string[]): string {
-  if (parts.length === 0) return "";
-  if (parts.length === 1) return parts[0];
-  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
-  return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
-}
-
 // Factual, adherence-neutral wins in priority order: PRs, then volume filled,
 // then goal pace. Each category collapses into one quiet line; a missing or
 // empty category is simply skipped (never an empty-state placeholder).
@@ -64,7 +57,7 @@ function captureWeekWinsItems(
     // The win leads as a plain sentence — "New best(s) on …" — with the lift names
     // as its content, rather than a count-first stat.
     const lead = prNames.length === 1 ? "New best on" : "New bests on";
-    const names = extra > 0 ? `${shown.join(", ")}, and ${extra} more` : captureWeekWinsJoin(shown);
+    const names = extra > 0 ? `${shown.join(", ")}, and ${extra} more` : joinList(shown);
     items.push(`${lead} ${names}`);
   }
 
@@ -75,7 +68,7 @@ function captureWeekWinsItems(
     .map((name) => escapeHtml(captureTitleCase(name)));
   if (muscleNames.length) {
     const verb = muscleNames.length > 1 ? "their" : "its";
-    items.push(`${captureWeekWinsJoin(muscleNames)} hit ${verb} productive volume`);
+    items.push(`${joinList(muscleNames)} hit ${verb} productive volume`);
   }
 
   const pace = payload.pace;

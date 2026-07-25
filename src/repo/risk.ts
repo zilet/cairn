@@ -2,6 +2,7 @@ import { getMarkerHistory } from "./health.js";
 import { estimatePreventRisk, type PreventInputs } from "./prevent.js";
 import { matchOptimalZone } from "./propagation-data.js";
 import { currentBodyFatEstimate, getProfile } from "./profile.js";
+import { joinList } from "./shared.js";
 
 type PreventAssumption = { input: string; assumed: string; reason: string };
 
@@ -116,12 +117,6 @@ const CATEGORY_ARTICLE: Record<RiskCategory, string> = {
   intermediate: "an intermediate",
   high: "a high",
 };
-
-function joinList(items: string[]): string {
-  if (items.length <= 1) return items[0] ?? "";
-  if (items.length === 2) return `${items[0]} and ${items[1]}`;
-  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
-}
 
 function nIn100Phrase(fraction: number): string {
   const n = Math.round(fraction * 100);

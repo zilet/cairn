@@ -7,7 +7,7 @@ import {
   deleteSet,
   dismissAnchorObjectiveSuggestion,
   suggestAnchorObjective,
-  finishSession,
+  finishSessionWithHeadline,
   getActivity,
   getCardioForDate,
   getEnduranceGoal,
@@ -78,7 +78,11 @@ trainingLogRouter.post("/sessions/:id/finish", (req, res) => {
     // where an explicit "" is a real "clear this note" — so it is left untouched.
     const raw = (req.body ?? {}).notes;
     const notes = raw == null || !String(raw).trim() ? null : String(raw).trim();
-    res.json(finishSession(Number(req.params.id), notes));
+    // finishSessionWithHeadline attaches the same rotated "done" headline the
+    // next /today-read fetch will compute, so the client's optimistic Today
+    // paint (today-session-controller.ts) never flickers between an invented
+    // sentence and the real one once the network catches up.
+    res.json(finishSessionWithHeadline(Number(req.params.id), notes));
   } catch (e: any) {
     res.status(400).json({ error: e.message });
   }

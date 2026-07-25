@@ -117,7 +117,17 @@ export const DAY_READ_GRAMMAR_RULES: ReadonlyArray<{ rule: string; pattern: RegE
   // sign followed by a space is two non-word characters, so there is no boundary
   // between them), which let "you scored 42% on recovery" through the one rule whose
   // whole job is to catch it.
-  { rule: "score", pattern: /\b\d{1,3}\s*(?:\/\s*100\b|%|points?\b|scores?\b)/i },
+  //
+  // The "%" branch alone used to fire on ANY digit+percent, so a genuinely factual
+  // percentage of a real, named quantity — "you're at 80% of your protein target" —
+  // read as a violation right alongside an actual grade — "Readiness 38%.",
+  // "you scored 42% on recovery". The two are told apart by what follows the
+  // number: "N% of <thing>" names the real quantity it is a fraction of (a
+  // measured intake/adherence/dose against a target), so a negative lookahead
+  // excuses ONLY that shape. A bare or dangling percentage — nothing after it, or
+  // anything other than "of" — still reads as a grade and stays caught, same as
+  // "/100", "N points" and "N score(s)" always have.
+  { rule: "score", pattern: /\b\d{1,3}\s*(?:\/\s*100\b|%(?!\s+of\b)|points?\b|scores?\b)/i },
   // A suggestion, never a gate.
   { rule: "gate", pattern: /\byou must\b|\bdo not train\b|\bforbidden\b/i },
 ];

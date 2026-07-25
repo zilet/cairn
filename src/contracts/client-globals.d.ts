@@ -1250,6 +1250,7 @@ declare global {
   declare function sparklineSvg(vals: unknown, w?: number, h?: number): string;
   declare function fmtSpeedKmh(kmh: unknown): string;
   declare function prDistLabel(km: unknown): string;
+  declare function joinList(items: string[]): string;
   declare function authToken(): string;
   declare function withToken(url: string): string;
   declare function downloadFile(href: string): void;

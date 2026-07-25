@@ -14,6 +14,7 @@ import {
   CONTEXT_GUARDRAILS,
   disciplineOf,
   renderBodyComp,
+  renderCoachingFocus,
   renderConnectedBrain,
   renderDexaTargeting,
   renderDiscipline,
@@ -579,7 +580,7 @@ ${CONTEXT_GUARDRAILS}
 - HEALTH MARKERS specifically: make the ACT-NOW nutrition priorities in the PRIORITIZED HEALTH FOCUS
   the backbone of the plan (e.g. a lipid-lowering pattern, iron-rich foods for low ferritin) — let them
   shape the default meals, not just a footnote; flag the marker-driven emphasis in notes. Not medical advice.
-${renderSignalState(ctx)}${renderDiscipline(ctx, "nutrition")}${renderEnduranceGoal(ctx, "nutrition")}${freqBlock}${strategyBlock}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderTrajectory(ctx)}${renderFoodMemory(planningMemory)}${renderDexaTargeting(ctx, "nutrition")}${renderBodyComp(ctx)}${renderHouseholdDiet(ctx)}
+${renderSignalState(ctx)}${renderCoachingFocus(ctx, { brief: true })}${renderDiscipline(ctx, "nutrition")}${renderEnduranceGoal(ctx, "nutrition")}${freqBlock}${strategyBlock}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderTrajectory(ctx)}${renderFoodMemory(planningMemory)}${renderDexaTargeting(ctx, "nutrition")}${renderBodyComp(ctx)}${renderHouseholdDiet(ctx)}
 TASK: ${userInstruction?.trim() || defaultTask}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:

@@ -10,7 +10,7 @@ import { pickDayVariant } from "./brain/day-read-rules.js";
 import { canonicalGroup, classifyMuscleGroup, type MuscleGroup } from "./exercise-canon.js";
 import { type RecentLoad, recentMuscleLoad } from "./hybrid-load.js";
 import { programBalance } from "./progression.js";
-import { daysBetweenISO, localDateISO } from "./shared.js";
+import { daysBetweenISO, joinList, localDateISO } from "./shared.js";
 
 export interface PlanDayCandidate {
   id: number;
@@ -53,11 +53,6 @@ interface PlanSelectionScore {
   repeated: string[];
   over: string[];
   reasons: string[];
-}
-
-function joinGroups(groups: string[]): string {
-  if (groups.length <= 1) return groups[0] ?? "";
-  return `${groups.slice(0, -1).join(", ")} and ${groups[groups.length - 1]}`;
 }
 
 export function planDayFocus(day: Pick<PlanDayCandidate, "name" | "focus" | "day_number">): string {
@@ -235,10 +230,10 @@ function scorePlanDay(params: {
   if (day.groups.length >= 3 && freshDue.length >= 2) score += 0.5; // full-body day that covers several fresh gaps
 
   const reasons: string[] = [];
-  if (freshDue.length) reasons.push(`${joinGroups(freshDue)} due`);
-  if (recovering.length) reasons.push(`${joinGroups(recovering)} recovering`);
-  if (repeated.length) reasons.push(`${joinGroups(repeated)} just trained`);
-  if (overGroups.length) reasons.push(`${joinGroups(overGroups)} running high`);
+  if (freshDue.length) reasons.push(`${joinList(freshDue)} due`);
+  if (recovering.length) reasons.push(`${joinList(recovering)} recovering`);
+  if (repeated.length) reasons.push(`${joinList(repeated)} just trained`);
+  if (overGroups.length) reasons.push(`${joinList(overGroups)} running high`);
   if (!reasons.length && day.day_number === rotation.day_number) reasons.push("normal rotation");
 
   return {
@@ -326,23 +321,23 @@ function selectionLeadClause(selected: PlanSelectionScore, date: string): string
   if (selected.fresh_due.length) {
     return fillGroups(
       pickDayVariant(SELECTION_LEAD_FRESH_DUE, date, "plan-selection:lead:fresh_due"),
-      joinGroups(selected.fresh_due)
+      joinList(selected.fresh_due)
     );
   }
   if (selected.recovering.length) {
     return fillGroups(
       pickDayVariant(SELECTION_LEAD_RECOVERING, date, "plan-selection:lead:recovering"),
-      joinGroups(selected.recovering)
+      joinList(selected.recovering)
     );
   }
   if (selected.repeated.length) {
     return fillGroups(
       pickDayVariant(SELECTION_LEAD_REPEATED, date, "plan-selection:lead:repeated"),
-      joinGroups(selected.repeated)
+      joinList(selected.repeated)
     );
   }
   if (selected.over.length) {
-    return fillGroups(pickDayVariant(SELECTION_LEAD_OVER, date, "plan-selection:lead:over"), joinGroups(selected.over));
+    return fillGroups(pickDayVariant(SELECTION_LEAD_OVER, date, "plan-selection:lead:over"), joinList(selected.over));
   }
   return pickDayVariant(SELECTION_LEAD_FALLBACK, date, "plan-selection:lead:fallback");
 }
@@ -356,21 +351,21 @@ function selectionAvoidClause(rotation: PlanSelectionScore, date: string): strin
     return fillDayAndGroups(
       pickDayVariant(SELECTION_AVOID_RECOVERING, date, "plan-selection:avoid:recovering"),
       day,
-      joinGroups(rotation.recovering)
+      joinList(rotation.recovering)
     );
   }
   if (rotation.repeated.length) {
     return fillDayAndGroups(
       pickDayVariant(SELECTION_AVOID_REPEATED, date, "plan-selection:avoid:repeated"),
       day,
-      joinGroups(rotation.repeated)
+      joinList(rotation.repeated)
     );
   }
   if (rotation.over.length) {
     return fillDayAndGroups(
       pickDayVariant(SELECTION_AVOID_OVER, date, "plan-selection:avoid:over"),
       day,
-      joinGroups(rotation.over)
+      joinList(rotation.over)
     );
   }
   return "";

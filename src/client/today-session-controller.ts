@@ -54,14 +54,21 @@ type TodaySessionSurfaceOptions = ClientTodaySessionSurfaceOptions;
     notesEl.addEventListener("input", () => saveSessionNotesDraft(date, notesEl.value));
   }
 
-  function finishedBrief(date: string, summary: Record<string, unknown>): Record<string, unknown> {
+  // headline comes from the finish response (POST /sessions/:id/finish attaches
+  // the same `dayReadHeadline({kind:"done"}, date)` the follow-up /today-read
+  // fetch will compute — see training-log.ts), so this optimistic paint and the
+  // reconciled read say the SAME rotated sentence rather than flickering between
+  // a hardcoded literal and the real one. The literal fallback only covers an
+  // older server response missing the field (mid-rolling-deploy); it is one of
+  // DAY_READ_HEADLINE_VARIANTS.done, not a bespoke phrase.
+  function finishedBrief(date: string, summary: Record<string, unknown>, headline?: unknown): Record<string, unknown> {
     const setCount = Number(summary.sets || 0);
     return {
       date,
       override: "",
       read: {
         kind: "done",
-        headline: "You're done for today.",
+        headline: typeof headline === "string" && headline.trim() ? headline.trim() : "Today's work is in.",
         why: setCount > 0
           ? `${setCount} set${setCount === 1 ? "" : "s"} logged. Your workout analysis is ready below.`
           : "Your workout is complete. The analysis is ready below.",
@@ -235,7 +242,7 @@ type TodaySessionSurfaceOptions = ClientTodaySessionSurfaceOptions;
         const summary = CairnTodaySessionSetModel.responseRecord(result.summary);
         if (!CairnTodaySessionSetModel.cacheSessionTruth(deps, actionDate, result)) return;
         deps.state.planReveal = null;
-        deps.state.brief = finishedBrief(actionDate, summary);
+        deps.state.brief = finishedBrief(actionDate, summary, result.headline);
         deps.invalidate("stats");
         deps.invalidate("history:sessions");
         deps.stopRest();

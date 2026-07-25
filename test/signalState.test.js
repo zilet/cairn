@@ -528,6 +528,45 @@ test("a voice-less observation degrades to an athlete-facing floor, never to the
   for (const line of repo.signalVoice(state.action.voice)) assert.doesNotMatch(line, /\bthe athlete\b/i);
 });
 
+// The joint_pain voice's subject used to be a bare `.join(", ")`, so multiple
+// areas read as "your left knee, right shoulder" — a person would say "your left
+// knee and right shoulder". joinList (src/repo/shared.ts) fixes this for 2 items
+// (plain "and", no comma) and 3+ (Oxford comma before "and").
+test("joint_pain voice joins a single area plainly", () => {
+  const date = localDaysAgo(0);
+  const state = repo.planningSignalState({
+    date,
+    trainingSignals: { autoregulation: { joint_areas: ["Left knee"] } },
+  });
+  const evidence = state.dimensions.health_constraints.evidence.find((e) => e.field === "joint_pain");
+  assert.ok(evidence, "joint_pain observation present");
+  assert.equal(evidence.voice.subject, "left knee");
+  const [variant] = repo.signalVoice(evidence.voice);
+  assert.match(variant, /\bleft knee\b/);
+});
+
+test("joint_pain voice joins two areas with 'and', no comma", () => {
+  const date = localDaysAgo(0);
+  const state = repo.planningSignalState({
+    date,
+    trainingSignals: { autoregulation: { joint_areas: ["Left knee", "Right shoulder"] } },
+  });
+  const evidence = state.dimensions.health_constraints.evidence.find((e) => e.field === "joint_pain");
+  assert.equal(evidence.voice.subject, "left knee and right shoulder");
+});
+
+test("joint_pain voice joins 3+ areas with an Oxford comma", () => {
+  const date = localDaysAgo(0);
+  const state = repo.planningSignalState({
+    date,
+    trainingSignals: { autoregulation: { joint_areas: ["Left knee", "Right shoulder", "Lower back"] } },
+  });
+  const evidence = state.dimensions.health_constraints.evidence.find((e) => e.field === "joint_pain");
+  assert.equal(evidence.voice.subject, "left knee, right shoulder, and lower back");
+  const [variant] = repo.signalVoice(evidence.voice);
+  assert.match(variant, /left knee, right shoulder, and lower back/);
+});
+
 test("Apple-only daily activity contributes one conservative generic load observation", () => {
   const date = localDaysAgo(0);
   const state = repo.planningSignalState({

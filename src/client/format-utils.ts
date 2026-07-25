@@ -76,6 +76,15 @@ function prDistLabel(km: unknown): string {
   return `${fmtKm(v)} km`;
 }
 
+// Join a list into natural, Oxford-comma prose: "a" / "a and b" / "a, b, and c".
+// Client-side mirror of src/repo/shared.ts's joinList (the client shares one
+// global scope, not modules, with the server — see CLAUDE.md).
+function joinList(items: string[]): string {
+  if (items.length <= 1) return items[0] ?? "";
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+}
+
 Object.assign(globalThis, {
   foodNum,
   formatFoodNum,
@@ -86,4 +95,5 @@ Object.assign(globalThis, {
   fmtKm,
   fmtSpeedKmh,
   prDistLabel,
+  joinList,
 });

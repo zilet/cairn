@@ -1,7 +1,7 @@
 import { db } from "../db.js";
 import { effectiveGoalMode, getEnduranceGoal, getPrimaryDiscipline, getProfile } from "./profile.js";
 import { getActiveBlock } from "./program-blocks.js";
-import { addDaysISO, localDateISO } from "./shared.js";
+import { addDaysISO, joinList, localDateISO } from "./shared.js";
 import { getMarkerHistory } from "./health.js";
 import { matchOptimalZone, optimalDistance } from "./propagation.js";
 import { recoverySessionDose } from "./training-read.js";
@@ -346,9 +346,9 @@ export function wholePersonTrajectory(opts: { end?: string; days?: number } = {}
     .filter((domain) => domain.verdict === "better")
     .map((domain) => domain.domain.replaceAll("_", " "));
   const line = unexplainedWorse.length
-    ? `${better.length ? `${better.join(", ")} improved; ` : ""}${unexplainedWorse.map((domain) => domain.replaceAll("_", " ")).join(", ")} moved the wrong way, so the plan needs a revision.`
+    ? `${better.length ? `${joinList(better)} improved; ` : ""}${joinList(unexplainedWorse.map((domain) => domain.replaceAll("_", " ")))} moved the wrong way, so the plan needs a revision.`
     : better.length
-      ? `${better.join(", ")} improved; the rest is holding or still too early to call.`
+      ? `${joinList(better)} improved; the rest is holding or still too early to call.`
       : "The whole-person picture is holding or still too early to call; no unexplained regression is visible.";
   return {
     window: { start, end, days },

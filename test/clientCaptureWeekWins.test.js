@@ -73,6 +73,15 @@ function loadCaptureReads({ renderWeeklyInSlot, renderInsightInSlot } = {}) {
     window: null,
   };
   context.window = context;
+  // Normally supplied by format-utils.js (loaded earlier in public/index.html's
+  // script order) as a real global — this harness runs capture-reads-client.js
+  // alone in a fresh VM context, so it needs the same stub every other cross-module
+  // global here gets.
+  context.joinList = (items) => {
+    if (items.length <= 1) return items[0] ?? "";
+    if (items.length === 2) return `${items[0]} and ${items[1]}`;
+    return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+  };
   context.CairnCaptureReadDate = { weekRangeLabel: () => "" };
   context.CairnCaptureReadCards = {
     renderWeeklyInSlot: renderWeeklyInSlot || (() => {}),

@@ -1,7 +1,7 @@
 import { listCheckins } from "./coach.js";
 import { listContextEvents } from "./health.js";
 import { type OptimalZone, markerSide, matchOptimalZone, prioritizeMarkers } from "./propagation.js";
-import { localDateISO } from "./shared.js";
+import { joinList, localDateISO } from "./shared.js";
 
 // ============================================================================
 // SYMPTOM → MARKER REASONING — the connective tissue between what the athlete
@@ -256,11 +256,7 @@ function describeOff(m: SymptomLinkMarker): string {
 
 function buildNote(symptom: string, markers: SymptomLinkMarker[]): string {
   const phrases = markers.slice(0, 3).map(describeOff);
-  const joined =
-    phrases.length === 1 ? phrases[0]
-    : phrases.length === 2 ? `${phrases[0]} and ${phrases[1]}`
-    : `${phrases.slice(0, -1).join(", ")}, and ${phrases[phrases.length - 1]}`;
-  return `Your note about ${symptom} around the same time as your ${joined} is worth mentioning to your clinician.`;
+  return `Your note about ${symptom} around the same time as your ${joinList(phrases)} is worth mentioning to your clinician.`;
 }
 
 // The headline: deterministic symptom → off-marker links. Reads recent symptom text

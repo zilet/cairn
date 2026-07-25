@@ -125,7 +125,9 @@ test("interpretation reads the whole picture for a young athlete: low 10-year, b
   assert.match(text, /low 10-year risk/);
   // The honesty guard: the long game (30-year) and the elevated enhancers are named.
   assert.match(text, /30-year outlook/);
-  assert.match(text, /ApoB, Lp\(a\) and hs-CRP/);
+  // Oxford comma before "and" on 3+ items (joinList, src/repo/shared.ts) — "ApoB,
+  // Lp(a) and hs-CRP" used to read ambiguously, as if "Lp(a) and hs-CRP" were one item.
+  assert.match(text, /ApoB, Lp\(a\), and hs-CRP/);
   assert.match(text, /where the lever is/);
   assert.match(text, /acting now/);
 });

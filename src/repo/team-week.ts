@@ -35,7 +35,7 @@ import { canonicalMarker } from "./marker-canon.js";
 import { markerGroup } from "./propagation.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { getRunCompliance, weeklyAerobicLoad } from "./sessions.js";
-import { addDaysISO, clipText, localDateISO, metricLabel, parseDbTime } from "./shared.js";
+import { addDaysISO, clipText, joinList, localDateISO, metricLabel, parseDbTime } from "./shared.js";
 import { cutQualityRead, cutQualityWeekLine } from "./cut-quality.js";
 
 // app_state stamp bounding the unseen-insight backlog drain to once per LOCAL day
@@ -770,8 +770,7 @@ function composeLead(read: Omit<TeamWeekRead, "lead">): string {
   if (read.landed.length && !changes && !read.watching.length)
     parts.push(`checked how ${plural(read.landed.length, "call", "calls")} landed`);
   if (!parts.length) return "";
-  const joined = parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
-  return capitalize(`this week your team ${joined}.`);
+  return capitalize(`this week your team ${joinList(parts)}.`);
 }
 
 /**

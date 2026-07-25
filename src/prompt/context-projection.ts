@@ -229,9 +229,11 @@ export const PROMPT_CONTEXT_SITES = {
   // hybrid fuel, fueling), the connected brain's NUTRITION directives + prioritized
   // health focus, the training split (plan) and endurance fueling. `coaching_focus`
   // rides along beyond the strict rule — it is the one-focus spine the meals should
-  // serve. DROPPED: garmin, day_read, recent_decisions, insights,
-  // whole_person_trajectory, and the strength-programming read layer meals never
-  // touch (balance/adjustments/recent_load/strength_journey/groups_trajectory/test_week).
+  // serve (buildMealPlanPrompt renders it via renderCoachingFocus(ctx, {brief:true}),
+  // e.g. a caveat easing around an injury, or a fueling emphasis). DROPPED: garmin,
+  // day_read, recent_decisions, insights, whole_person_trajectory, and the
+  // strength-programming read layer meals never touch (balance/adjustments/
+  // recent_load/strength_journey/groups_trajectory/test_week).
   meal_plan: {
     keys: [
       ...PERSON,

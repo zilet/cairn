@@ -7,6 +7,8 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo } from "./_seed.js";
+import { finishSessionWithHeadline } from "../dist/domain/training/finish-session-use-case.js";
+import { dayReadHeadline } from "../dist/repo/day-read.js";
 
 const DATE = "2030-01-15";
 
@@ -61,6 +63,31 @@ test("finishSession on a never-noted session stores null, not an empty string", 
   repo.finishSession(s.id, ""); // an empty note must not persist as ""
   const after = repo.getSessionByDate(DATE);
   assert.equal(after.notes, null, "an empty finish leaves notes null, never \"\"");
+});
+
+// The POST /sessions/:id/finish route (src/routes/training-log.ts) uses this
+// instead of a bare finishSession() so the client's optimistic "done" Today
+// paint (today-session-controller.ts) can show the SAME rotated headline the
+// follow-up /today-read fetch will compute, rather than a hardcoded literal —
+// see CLAUDE.md's "prose is a variant set, never a single literal" rule.
+test("finishSessionWithHeadline attaches the same rotated headline dayReadHeadline computes for that date", () => {
+  repo.logSetByName({ exercise: "Headline Squat", weight: 100, reps: 5, date: DATE });
+  const s = repo.getSessionByDate(DATE);
+  const result = finishSessionWithHeadline(s.id, "good work");
+  assert.equal(result.date, DATE);
+  assert.equal(result.headline, dayReadHeadline({ kind: "done" }, DATE));
+  assert.ok(result.headline.length > 0);
+  // Still does everything finishSession did — this is additive, not a replacement.
+  assert.ok(result.finished_at, "finished_at is set after finish");
+  assert.equal(result.notes, "good work");
+});
+
+test("finishSessionWithHeadline's headline is stable for the same date (no flicker on repeat calls)", () => {
+  repo.logSetByName({ exercise: "Headline Row", weight: 90, reps: 8, date: DATE });
+  const s = repo.getSessionByDate(DATE);
+  const first = finishSessionWithHeadline(s.id, "one");
+  const second = finishSessionWithHeadline(s.id, "two");
+  assert.equal(first.headline, second.headline, "same date → same headline, every call");
 });
 
 test("updateSet edits only the provided fields, returns the row with exercise name", () => {

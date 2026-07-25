@@ -1473,6 +1473,42 @@ test("the agent's prose is held to the same constitution as the floor", async ()
   );
 });
 
+// The "score" rule's "%" branch used to fire on ANY digit+percent, so a factual
+// percentage of a real, named quantity ("you're at 80% of your protein target")
+// broke the grammar right alongside an actual grade ("Readiness 38%."). The fix
+// excuses only "N% of <thing>" — a fraction of a stated quantity — and keeps
+// catching a bare or dangling percentage, "/100", "N points", and "N score(s)".
+// Both directions are pinned here so a future edit cannot silently widen or
+// narrow the carve-out without a test noticing.
+test("the score rule still rejects every grade-like construction", () => {
+  const mustReject = [
+    "Readiness 38/100 — rest.",
+    "Your recovery score is 38/100, so ease off today.",
+    "You scored 42% on recovery this morning.",
+    "Recovery is at 65% today.",
+    "42% readiness this morning.",
+    "You earned 85 points today.",
+    "A 42 score this morning, so take it easy.",
+    "That's an 85/100 morning.",
+  ];
+  for (const text of mustReject) {
+    assert.equal(violatesReadingGrammar(text), "score", `should reject as score-like: ${JSON.stringify(text)}`);
+  }
+});
+
+test("the score rule passes a factual percentage of a real, named quantity", () => {
+  const mustPass = [
+    "You're at 80% of your protein target.",
+    "You hit 92% of your goal calories yesterday.",
+    "That's 60% of planned volume banked this week.",
+    "Fiber lands around 75% of the daily target most days.",
+    "You're already at 100% of your protein target for today.",
+  ];
+  for (const text of mustPass) {
+    assert.equal(violatesReadingGrammar(text), null, `should pass as a real quantity: ${JSON.stringify(text)}`);
+  }
+});
+
 // ---------- the headline: the most prominent string, previously a literal ----------
 test("every headline phrasing reads as a calm finished sentence, several per kind", () => {
   const kinds = Object.keys(DAY_READ_HEADLINE_VARIANTS).sort();

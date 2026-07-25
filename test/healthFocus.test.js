@@ -89,4 +89,15 @@ test("plan-shaping prompts LEAD with the prioritized focus (not a flat directive
   assert.match(meal, /PRIORITIZED HEALTH FOCUS/, "the meal plan leads with prioritized health priorities");
   assert.match(meal, /\[ACT NOW\]/, "act-now items are tiered up front");
   assert.match(coach, /PRIORITIZED HEALTH FOCUS/, "the coach prompt leads with them too");
+
+  // The conductor's one-focus spine (coaching_focus) was in meal_plan's allowlisted
+  // DATA keys but no meal prompt builder ever RENDERED it — pure payload with no
+  // effect on output. buildMealPlanPrompt now calls renderCoachingFocus(ctx,
+  // {brief:true}) alongside the other domain prompts, so when the conductor leads
+  // with this same act-now lipid finding, the meal prompt names it as THE focus,
+  // not just a directive line buried in PRIORITIZED HEALTH FOCUS.
+  const cf = repo.getCoachContext().coaching_focus;
+  assert.ok(cf?.available && cf.lead, "this seed produces a real conductor lead (sanity, not the fix under test)");
+  assert.match(meal, /THIS BLOCK'S ONE FOCUS:/, "the meal prompt renders the conductor's brief lead");
+  assert.match(meal, /Move your lipids/i, "and names the SAME lead the conductor chose");
 });

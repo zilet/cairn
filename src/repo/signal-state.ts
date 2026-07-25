@@ -5,6 +5,7 @@
 // retain their own provenance/conflicts and only meet at one bounded INTERNAL
 // arbitration index that emits plain-language posture/reasons (never a score).
 import { pickDayVariant } from "./brain/day-read-rules.js";
+import { joinList } from "./shared.js";
 
 export type SignalDimension =
   | "recovery_capacity"
@@ -391,7 +392,7 @@ export const SIGNAL_VOICE = {
   joint_pain: {
     concept: /\b(?:pain-free|around|comfortable)\b/i,
     sample: "sore joints",
-    // The subject is `joint_areas.join(", ")`, so its NUMBER is unknown here — one area
+    // The subject is `joinList(joint_areas)`, so its NUMBER is unknown here — one area
     // or several. Every phrasing must therefore agree with neither: no verb inflected on
     // the subject, no pronoun referring back to it. "Your {} need working around" read
     // "Your left knee need working around" on the common single-area day.
@@ -1153,7 +1154,10 @@ export function planningSignalState(input: {
         "constraint",
         `Recent user-reported joint pain calls for pain-free substitutions around ${autoreg.joint_areas.join(", ")}.`,
         {
-          voice: { key: "joint_pain", subject: String(autoreg.joint_areas.join(", ")).toLowerCase() },
+          voice: {
+            key: "joint_pain",
+            subject: joinList(autoreg.joint_areas.map((a: unknown) => String(a).toLowerCase())),
+          },
           safety_override: true,
           max_age_days: 7,
         }

@@ -280,3 +280,16 @@ export function clipText(value: unknown, max: number, opts: ClipTextOptions = {}
 export function round2_5(n: number): number {
   return Math.round(n / 2.5) * 2.5;
 }
+
+// Join a list into natural, Oxford-comma prose: "a" / "a and b" / "a, b, and c".
+// Consolidates several independently reimplemented list-joiners (risk.ts,
+// plan-selection.ts, team-week.ts, symptom-links.ts, support-work.ts) that had
+// silently drifted apart — most dropped the Oxford comma on 3+ items ("a, b and
+// c"), which reads ambiguously once any item itself contains "and". This is for
+// prose a PERSON reads; a plain machine-register list (SQL columns, log lines,
+// prompt DATA) should keep using a bare `.join(", ")`.
+export function joinList(items: readonly string[]): string {
+  if (items.length <= 1) return items[0] ?? "";
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+}
