@@ -44,6 +44,10 @@ import { applyMealPlanWithAutonomy, applyProposalWithAutonomy } from "./domain/b
 import { personalizedNutritionStep } from "./domain/brain/underfueling-service.js";
 import {
   DAILY_SESSION_SUGGESTION_NORMALIZATION,
+  MEAL_PLAN_STRUCTURE_SCHEMA,
+  MEAL_SWAP_SCHEMA,
+  PLAN_PROPOSAL_SCHEMA,
+  WEEK_AHEAD_SCHEMA,
   hasPlanProposalActions,
   isExerciseExplanationResult,
   isHealthReviewResult,
@@ -541,6 +545,10 @@ export async function draftCoachProposal(agent: string | undefined, instruction:
       op: "proposal",
       signal: hooks?.signal,
       acceptParsed: isPlanProposalResult,
+      // The SAME artifact isPlanProposalResult checks. On a CLI that can enforce it, a
+      // prose-wrapped or malformed proposal becomes structurally impossible; on one
+      // that can't, it is ignored and the prose contract still applies.
+      schema: PLAN_PROPOSAL_SCHEMA,
     });
   } catch (error) {
     const failure = agentFailure(error, hooks);
@@ -605,6 +613,7 @@ export async function evolveProgram(
       op: "evolve_program",
       signal: hooks?.signal,
       acceptParsed: isPlanProposalResult,
+      schema: PLAN_PROPOSAL_SCHEMA,
     });
   } catch (error) {
     const failure = agentFailure(error, hooks);
@@ -904,6 +913,7 @@ export async function weekAheadRead(agent: string | undefined, hooks?: OpHooks) 
       timeoutMs: repo.interactiveTimeoutForOp(WEEK_AHEAD_KIND),
       signal: hooks?.signal,
       acceptParsed: isWeekAheadResult,
+      schema: WEEK_AHEAD_SCHEMA,
     });
     const sane = sanitizeWeekAhead(result.parsed);
     if (sane) {
@@ -960,6 +970,10 @@ export async function draftMealPlan(
       op: "meal_plan",
       signal: hooks?.signal,
       acceptParsed: planSane,
+      // Structure only. Nutritional ADEQUACY stays a server-side judgement
+      // (validateMealPlanDraftForPersistence) — a schema must never look like it
+      // authorized a plan the safety gate would reject.
+      schema: MEAL_PLAN_STRUCTURE_SCHEMA,
     });
   } catch (error) {
     const failure = agentFailure(error, hooks);
@@ -1202,6 +1216,7 @@ export async function swapMealAgentic(
       op: "meal_swap",
       signal: hooks?.signal,
       acceptParsed: isMealSwapResult,
+      schema: MEAL_SWAP_SCHEMA,
     });
   } catch (error) {
     return { ok: false as const, error: "agent returned no usable meal", ...agentFailure(error, hooks) };

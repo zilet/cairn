@@ -1,7 +1,7 @@
 {
   "claude": {
     "command": "claude",
-    "args": ["{file_access_args}", "{mcp_config_args}", "{model_args}", "{reasoning_args}", "-p", "{prompt}"],
+    "args": ["{file_access_args}", "{mcp_config_args}", "{model_args}", "{reasoning_args}", "{schema_args}", "-p", "{prompt}"],
     "input": "arg",
     "description": "Claude Code (Anthropic Pro/Max). Auth: ~/.claude.",
     "env_required": [],
@@ -16,6 +16,11 @@
     "capabilities": { "model": true, "reasoning": ["low", "medium", "high", "xhigh", "max"] },
     "reasoning_flag": ["--effort", "{reasoning}"],
     "file_access_args": ["--add-dir", "{data_dir}"],
+    "structured_output": {
+      "flag": ["--json-schema", "{schema}"],
+      "arg": "inline",
+      "note": "claude 2.1.220 --help: '--json-schema <schema>  JSON Schema for structured output validation.' Verified live: stdout is the bare payload with no envelope, so extractJson is unchanged. A top-level anyOf is REJECTED (API 400: input_schema.type required) — schemas must be a single top-level object."
+    },
     "install": {
       "method": "npm",
       "package": "@anthropic-ai/claude-code",
@@ -28,7 +33,7 @@
   },
   "codex": {
     "command": "codex",
-    "args": ["exec", "{model_args}", "{reasoning_args}", "--sandbox", "read-only", "--skip-git-repo-check", "{file_access_args}", "{prompt}", "{image_args}"],
+    "args": ["exec", "{model_args}", "{reasoning_args}", "--sandbox", "read-only", "--skip-git-repo-check", "{file_access_args}", "{schema_args}", "{prompt}", "{image_args}"],
     "input": "arg",
     "description": "OpenAI Codex (Sign in with ChatGPT). Auth: ~/.codex.",
     "env_required": [],
@@ -41,6 +46,11 @@
     "reasoning_flag": ["-c", "model_reasoning_effort={reasoning}"],
     "file_access_args": ["--cd", "{data_dir}", "--add-dir", "{data_dir}"],
     "image_args": ["--image", "{image}"],
+    "structured_output": {
+      "flag": ["--output-schema", "{schema_file}"],
+      "arg": "file",
+      "note": "codex 0.145.0 `exec --help`: '--output-schema <FILE>  Path to a JSON Schema file describing the model's final response shape'. It takes a PATH, not inline JSON, so runAgentImpl writes a 0600 temp file per run and unlinks it on close. Verified live under --sandbox read-only: the final agent message is the bare payload (the banner it precedes carries no braces, so extractJson still anchors correctly). Only valid on the `exec` subcommand."
+    },
     "model_note": "No model_classes: Cairn's fast/deep classes are named per provider and this CLI's model names are not aliases we can pin without dating them, so codex runs on its own configured model and Cairn only sets effort. Consequence: 'max' is verified in the 0.145.0 config enum but is declared per-model in the CLI's own catalog (gpt-5.6-* accept it; gpt-5.5 and older top out at xhigh). Since no model is pinned here, a codex that resolves an older model rejects 'max' at request time, not config-parse time, and Cairn sees a dead agent. Nothing in TASK_EXECUTION_PROFILES requests 'max', so this is reachable only via a user profile binding.",
     "install": {
       "method": "npm",
@@ -63,6 +73,7 @@
     "capabilities": { "model": true, "reasoning": ["low", "medium", "high"] },
     "reasoning_flag": ["--effort", "{reasoning}"],
     "file_access_args": ["--add-dir", "{data_dir}"],
+    "structured_output_note": "No structured_output: `agy --help` (1.1.7) lists no JSON-schema / structured-output / output-format flag at all. Runs on this backend keep the prose JSON contract + extractJson scraping, which is why a schema must never be a hard requirement of an op.",
     "install": {
       "method": "script",
       "url": "https://antigravity.google/cli/install.sh",
@@ -72,7 +83,7 @@
   },
   "grok": {
     "command": "grok",
-    "args": ["{file_access_args}", "{model_args}", "{reasoning_args}", "-p", "{prompt}"],
+    "args": ["{file_access_args}", "{model_args}", "{reasoning_args}", "{schema_args}", "-p", "{prompt}"],
     "input": "arg",
     "description": "xAI Grok Build (SuperGrok/X Premium+). Headless may need XAI_API_KEY.",
     "env_required": [],
@@ -84,6 +95,12 @@
     "capabilities": { "model": true, "reasoning": ["low", "medium", "high"] },
     "reasoning_flag": ["--reasoning-effort", "{reasoning}"],
     "file_access_args": ["--cwd", "{data_dir}"],
+    "structured_output": {
+      "flag": ["--json-schema", "{schema}"],
+      "arg": "inline",
+      "envelope": { "structured_key": "structuredOutput", "text_key": "text" },
+      "note": "grok 0.2.112 --help: '--json-schema <SCHEMA>  JSON Schema for structured output. When set, the model is constrained to produce JSON matching this schema. Implies --output-format json.' That implied switch is why `envelope` exists: verified live, stdout becomes {text, thought, usage, …, structuredOutput} — the first `{` is the ENVELOPE, so without unwrapping, extractJson would hand the op a telemetry object (and `thought` would drag raw reasoning into it). Deliberately absent from `stream.args`: --json-schema would override --output-format streaming-json."
+    },
     "install": {
       "method": "script",
       "url": "https://x.ai/cli/install.sh",

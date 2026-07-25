@@ -1,14 +1,22 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import { agentCliPath, agentDataDir, buildAgentSpawnOptions, promptReferencesDataDir } from "./agentExecution.js";
+import type { JsonSchema } from "./json-schema.js";
 import { telemetryModelName } from "./telemetry-privacy.js";
 export { AGENT_ENV_DENYLIST, agentCliPath, agentExecutionCwd, buildAgentSpawnOptions, promptReferencesDataDir, sanitizeAgentEnv } from "./agentExecution.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const CONFIG_PATH = process.env.AGENTS_CONFIG || path.join(__dirname, "..", "agents.json");
+// Resolved per call, not captured at import: the manifest path is an override knob,
+// and binding it to module-load order makes it depend on which module imported this
+// one first (a test that points AGENTS_CONFIG at a fixture would silently get the
+// bundled manifest). Production sets it before boot either way.
+function configPath(): string {
+  return process.env.AGENTS_CONFIG || path.join(__dirname, "..", "agents.json");
+}
 
 // Opt-in stderr surfacing. By default a failed/unparseable agent run is quiet —
 // the loop just falls through to the next agent — which hides the actual cause
@@ -44,6 +52,29 @@ export interface AgentCapabilities {
 }
 
 /**
+ * Declarative enforced-structured-output support. Cairn's JSON contract is otherwise
+ * only REQUESTED in prose and RECOVERED by scraping stdout (extractJson); a CLI that
+ * declares this can be made to emit conforming JSON by construction instead.
+ *
+ * Purely config: which providers have it, under which flag, and in which argument
+ * form all live in agents.json, so gaining or losing the feature is a config edit.
+ * A provider that declares nothing silently keeps the prose-contract path.
+ */
+export interface AgentStructuredOutput {
+  /** Flag template expanded at the {schema_args} slot; carries {schema} or {schema_file}. */
+  flag: string[];
+  /** "inline" substitutes the serialized schema; "file" writes a temp file and substitutes its path. */
+  arg: "inline" | "file";
+  /**
+   * Set when enabling the flag also changes the CLI's stdout into a JSON ENVELOPE
+   * around the payload (grok's --json-schema implies --output-format json). Without
+   * this, the first `{` on stdout is the envelope, and the operation would receive a
+   * telemetry object instead of its contract.
+   */
+  envelope?: { structured_key: string; text_key?: string };
+}
+
+/**
  * A provider-neutral execution request: what KIND of model and how much effort.
  * Resolved against one agent's declared capabilities by resolveAgentProfileForClass.
  */
@@ -75,6 +106,10 @@ export interface AgentDef {
   // Omit the map (or a class) to let the CLI use whatever model it is configured with.
   model_classes?: Partial<Record<ModelClass, string>>;
   capabilities?: AgentCapabilities;
+  // Enforced structured output, expanded only at an explicit {schema_args} slot and
+  // only when the caller supplied RunOpts.schema. Absent ⇒ this CLI can't enforce a
+  // schema, and the run degrades to the prose contract + extractJson.
+  structured_output?: AgentStructuredOutput | null;
   reasoning_flag?: string[] | null; // e.g. ["--effort","{reasoning}"] at {reasoning_args}
   // Optional headless token-streaming. When present, the chat path can run the CLI
   // in its NDJSON streaming mode (separate args) and render the reply live. `format`
@@ -98,7 +133,7 @@ export interface AgentDef {
 
 export function loadAgents(): Record<string, AgentDef> {
   try {
-    return JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
+    return JSON.parse(fs.readFileSync(configPath(), "utf8"));
   } catch {
     return {};
   }
@@ -686,9 +721,53 @@ export interface RunOpts {
   // policy lives in repo/settings.ts, which imports THIS module (a direct import
   // here would be a cycle).
   profile?: AgentProfileResolver;
+  // The operation's JSON contract as a JSON Schema. Handed to any agent that DECLARES
+  // structured_output so its output conforms by construction; silently ignored by one
+  // that doesn't, which keeps the rotation's mixed-capability fallback working. Supply
+  // the same object the op's acceptance predicate checks (src/agent-contracts.ts) —
+  // never a second hand-written description of the shape.
+  schema?: JsonSchema;
 }
 
 export type AgentProfileResolver = (agent: string) => { model?: string; reasoning?: ReasoningLevel } | null | undefined;
+
+/** Whether this agent can have a JSON contract ENFORCED rather than merely requested. */
+export function agentSupportsStructuredOutput(name: string, def?: AgentDef): boolean {
+  return !!resolveStructuredOutput(def ?? loadAgents()[name]);
+}
+
+/**
+ * The usable structured-output declaration for an agent, or null. Deliberately strict:
+ * a half-written declaration degrades to the prose contract instead of producing an
+ * argv with an unsubstituted placeholder in it.
+ */
+function resolveStructuredOutput(def: AgentDef | undefined): AgentStructuredOutput | null {
+  const declared = def?.structured_output;
+  if (!declared || !Array.isArray(declared.flag) || !declared.flag.length) return null;
+  if (declared.arg !== "inline" && declared.arg !== "file") return null;
+  return declared;
+}
+
+/**
+ * Unwrap a CLI that answers with an envelope AROUND the schema-conforming payload.
+ * Prefers the declared structured field, then re-parses the declared text field (which
+ * carries the same payload as a string). Returns null rather than the envelope itself:
+ * handing the operation a telemetry object would read as a contract miss with no
+ * repair, whereas null is the ordinary "no valid JSON" signal the ladder already
+ * recovers from.
+ */
+function unwrapStructuredEnvelope(parsed: unknown, envelope: NonNullable<AgentStructuredOutput["envelope"]>): any | null {
+  if (!parsed || typeof parsed !== "object") return null;
+  const direct = (parsed as Record<string, unknown>)[envelope.structured_key];
+  if (direct && typeof direct === "object") return direct;
+  const textKey = envelope.text_key;
+  const text = textKey ? (parsed as Record<string, unknown>)[textKey] : undefined;
+  if (typeof text === "string") {
+    const inner = extractJson(text);
+    if (inner && typeof inner === "object") return inner;
+  }
+  return null;
+}
 
 const REASONING_LEVELS: readonly ReasoningLevel[] = ["low", "medium", "high", "xhigh", "max"];
 
@@ -870,7 +949,8 @@ function expandAgentArgs(
   prompt: string,
   useStdin: boolean,
   mcpConfigArgs: string[] = [],
-  requestedProfile: Pick<RunOpts, "model" | "reasoning"> = {}
+  requestedProfile: Pick<RunOpts, "model" | "reasoning"> = {},
+  structuredArgs: string[] = []
 ): string[] {
   const profile = resolveAgentExecutionProfile(def, requestedProfile).effective;
   const dataDir = path.resolve(agentDataDir(process.env));
@@ -896,6 +976,10 @@ function expandAgentArgs(
     }
     if (arg === "{mcp_config_args}") {
       out.push(...mcpConfigArgs.filter((value) => typeof value === "string" && value.length > 0));
+      continue;
+    }
+    if (arg === "{schema_args}") {
+      out.push(...structuredArgs);
       continue;
     }
     if (arg === "{model_args}") {
@@ -1125,6 +1209,10 @@ export async function runAgentWithFallback(
         model: o.model,
         reasoning: o.reasoning,
         profile: o.profile,
+        // Kept on for the repair retry too: an agent that can enforce the contract is
+        // exactly the one that should not be asked to re-derive it from prose. Agents
+        // later in the rotation that can't enforce it simply ignore it.
+        schema: o.schema,
       });
       const parsedBeforeRepair = !!result.parsed;
       const acceptedBeforeRepair = acceptsParsed(result, o.acceptParsed);
@@ -1141,6 +1229,7 @@ export async function runAgentWithFallback(
             model: o.model,
             reasoning: o.reasoning,
             profile: o.profile,
+            schema: o.schema,
           });
         } catch {
           /* keep the first (unparsed) result; fall through below */
@@ -1214,7 +1303,8 @@ export function runAgent(name: string, prompt: string, opts: RunOpts | number = 
   // runAgentWithFallback, the streaming sibling below) resolves the op's profile
   // here, against the agent actually chosen.
   const { model, reasoning } = typeof opts === "number" ? {} : withResolvedProfile(name, opts);
-  return runAgentImpl(name, prompt, timeoutMs, signal, extract, mcpConfigArgs, model, reasoning);
+  const schema = typeof opts === "number" ? undefined : opts.schema;
+  return runAgentImpl(name, prompt, timeoutMs, signal, extract, mcpConfigArgs, model, reasoning, schema);
 }
 
 // ---------- subprocess env/workdir hardening (Trust build V1) ----------
@@ -1233,21 +1323,74 @@ function runAgentImpl(
   extract?: (text: string) => any | null,
   mcpConfigArgs?: string[],
   model?: string,
-  reasoning?: ReasoningLevel
+  reasoning?: ReasoningLevel,
+  schema?: JsonSchema
 ): Promise<AgentResult> {
   const def = loadAgents()[name];
   if (!def) return Promise.reject(new Error(`Unknown agent "${name}"`));
 
   const useStdin = def.input === "stdin";
-  const args = expandAgentArgs(def, def.args, prompt, useStdin, mcpConfigArgs, { model, reasoning });
+  // Enforced structured output, when BOTH the caller supplied a schema and this agent
+  // declares how to take one. Everything below is best-effort by design: an agent with
+  // no declaration, an argv template with no {schema_args} slot, or a filesystem error
+  // all fall back to the prose contract + extractJson, because the rotation tries
+  // agents of differing capability in order and no op may depend on enforcement.
+  const structured = schema ? resolveStructuredOutput(def) : null;
+  // Only treat the schema as ACTIVE when the flag can actually reach the CLI. This
+  // guards the envelope unwrap below: enabling the flag is what makes a provider wrap
+  // its payload, so unwrapping a run whose flag was never placed would discard a
+  // perfectly good plain response.
+  const structuredActive = !!structured && Array.isArray(def.args) && def.args.includes("{schema_args}");
+  let schemaDir: string | null = null;
+  let structuredArgs: string[] = [];
+  let envelope: NonNullable<AgentStructuredOutput["envelope"]> | null = null;
+  if (structured && structuredActive) {
+    try {
+      let substitution: string;
+      if (structured.arg === "file") {
+        // codex takes a PATH, not inline JSON. A private per-run directory keeps the
+        // schema off a predictable path and makes cleanup a single recursive remove.
+        schemaDir = fs.mkdtempSync(path.join(os.tmpdir(), "cairn-schema-"));
+        substitution = path.join(schemaDir, "schema.json");
+        fs.writeFileSync(substitution, JSON.stringify(schema), { mode: 0o600 });
+      } else {
+        substitution = JSON.stringify(schema);
+      }
+      structuredArgs = structured.flag.map((value) =>
+        value.replaceAll("{schema}", substitution).replaceAll("{schema_file}", substitution)
+      );
+      envelope = structured.envelope ?? null;
+    } catch {
+      structuredArgs = [];
+      envelope = null;
+    }
+  }
+  const args = expandAgentArgs(def, def.args, prompt, useStdin, mcpConfigArgs, { model, reasoning }, structuredArgs);
+  // A provider whose schema flag rewrites stdout into an envelope needs unwrapping
+  // BEFORE the operation's contract check; every other provider keeps the caller's
+  // extractor byte-for-byte.
+  const baseExtract = extract ?? extractJson;
+  const activeEnvelope = envelope;
+  const parseOut = activeEnvelope
+    ? (text: string) => unwrapStructuredEnvelope(baseExtract(text), activeEnvelope)
+    : baseExtract;
 
   // Cap accumulated output so a runaway/verbose CLI can't balloon RSS on a small
   // host (e.g. the Pi), especially during a multi-job enrichment queue drain.
   const MAX_OUT = 4 * 1024 * 1024; // 4 MB — far beyond any real JSON proposal.
 
+  // Idempotent: the schema file outlives neither a clean close, a timeout kill, an
+  // abort, nor a failed launch.
+  const removeSchemaDir = () => {
+    if (!schemaDir) return;
+    const target = schemaDir;
+    schemaDir = null;
+    try { fs.rmSync(target, { recursive: true, force: true }); } catch { /* best effort */ }
+  };
+
   return new Promise((resolve, reject) => {
     // Already-aborted before launch (Stop landed while queued): don't spawn.
-    if (signal?.aborted) { reject(new Error(`agent "${name}" canceled`)); return; }
+    if (signal?.aborted) { removeSchemaDir(); reject(new Error(`agent "${name}" canceled`)); return; }
     const child = spawn(def.command, args, buildAgentSpawnOptions({
       kind: "agent",
       prompt,
@@ -1272,7 +1415,11 @@ function runAgentImpl(
       reject(new Error(`agent "${name}" canceled`));
     };
     if (signal) signal.addEventListener("abort", onAbort, { once: true });
-    const cleanup = () => { clearTimeout(timer); if (signal) signal.removeEventListener("abort", onAbort); };
+    const cleanup = () => {
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener("abort", onAbort);
+      removeSchemaDir();
+    };
 
     child.stdout.on("data", (d) => { if (out.length < MAX_OUT) out += outDecoder.write(d); });
     child.stderr.on("data", (d) => { if (err.length < MAX_OUT) err += errDecoder.write(d); });
@@ -1284,7 +1431,7 @@ function runAgentImpl(
       cleanup();
       if (out.length < MAX_OUT) out += outDecoder.end();
       if (err.length < MAX_OUT) err += errDecoder.end();
-      const parsed = (extract ?? extractJson)(out);
+      const parsed = parseOut(out);
       const usage = extractAgentUsage(`${out}\n${err}`);
       // Surface stderr (under DEBUG) when the run looks unhealthy: a non-zero exit,
       // or a clean exit that nonetheless produced no parseable JSON. This is what
@@ -1413,6 +1560,10 @@ export function runAgentStreaming(name: string, prompt: string, opts: StreamRunO
   const onDelta = opts.onDelta;
   const format = def.stream.format;
   const useStdin = def.input === "stdin";
+  // No structuredArgs, deliberately: `stream.args` declares no {schema_args} slot for
+  // any provider. A streamed op is prose-first (reply marker, then optional actions),
+  // which a JSON schema would destroy — and grok's --json-schema would override its own
+  // --output-format streaming-json. RunOpts.schema is therefore inert while streaming.
   const args = expandAgentArgs(
     def,
     def.stream.args,

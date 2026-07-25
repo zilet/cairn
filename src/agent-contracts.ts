@@ -5,7 +5,25 @@
 // not persist or apply anything. Session suggestions are the deliberate
 // exception to boolean-only validation: they normalize at acceptance so the
 // actionable preview is already identical to the later durable snapshot.
+//
+// STRUCTURE IS DECLARED ONCE. The `*_SCHEMA` constants below are ordinary JSON
+// Schema, and they are used for two things at once: `runChosen(..., { schema })`
+// hands one to a CLI that can ENFORCE it (agents.json `structured_output`), and the
+// matching predicate below runs the SAME object through matchesJsonSchema as its
+// structural conjunct. So the enforced schema and the accepted shape are the same
+// artifact by construction — there is no second description to drift.
+//
+// Two rules keep that safe:
+//   1. Every object node declares `additionalProperties: true`. Constrained decoding
+//      SILENTLY DROPS any field a schema does not mention (verified live against
+//      claude 2.1.220 and grok 0.2.112), and these payloads carry far more fields
+//      than acceptance checks — `reason`, `notes`, `superset_group`, `interval`, the
+//      whole cardio field set. A closed schema would quietly amputate them.
+//   2. A schema constrains STRUCTURE only. Anything JSON Schema cannot state — "at
+//      least one of changes/cardio/days", non-blank after trimming, cross-field
+//      agreement — stays in the predicate as a residual check after the schema.
 
+import { type JsonSchema, matchesJsonSchema } from "./json-schema.js";
 import { assessMealPlanAdequacy } from "./repo/nutrition-safety.js";
 import {
   DAILY_SESSION_SUGGESTION_NORMALIZATION,
@@ -36,9 +54,102 @@ export function isSessionSuggestionResult(value: unknown): boolean {
   return normalizeSessionSuggestionResult(value) != null;
 }
 
+// The propose/apply payload (src/prompt/coach.ts PLAN_SCHEMA is its prose twin).
+// Numeric slots stay open to null where null is MEANINGFUL — target_weight null is
+// bodyweight and a negative target_weight is an assisted movement, so neither slot
+// carries a `minimum`.
+const PLAN_CHANGE_SCHEMA: JsonSchema = {
+  type: "object",
+  additionalProperties: true,
+  required: ["day_number"],
+  properties: {
+    day_number: { type: "integer", minimum: 1 },
+    exercise: { type: "string" },
+    swap: {
+      type: "object",
+      additionalProperties: true,
+      required: ["from", "to"],
+      properties: { from: { type: "string" }, to: { type: "string" } },
+    },
+    remove: { type: "boolean" },
+    sets: { type: ["integer", "null"], minimum: 0 },
+    rep_low: { type: ["integer", "null"], minimum: 0 },
+    rep_high: { type: ["integer", "null"], minimum: 0 },
+    target_weight: { type: ["number", "null"] },
+    target_seconds: { type: ["number", "null"], minimum: 0 },
+    mode: { type: ["string", "null"] },
+    reason: { type: "string" },
+    note: { type: ["string", "null"] },
+  },
+};
+
+const PLAN_CARDIO_SCHEMA: JsonSchema = {
+  type: "object",
+  additionalProperties: true,
+  required: ["day_number", "label"],
+  properties: {
+    day_number: { type: "integer", minimum: 1 },
+    label: { type: "string", minLength: 1 },
+    target_distance_km: { type: ["number", "null"], minimum: 0 },
+    target_duration_min: { type: ["number", "null"], minimum: 0 },
+    target_zone: { type: ["string", "null"] },
+    reason: { type: "string" },
+    note: { type: ["string", "null"] },
+  },
+};
+
+export const PLAN_PROPOSAL_SCHEMA: JsonSchema = {
+  type: "object",
+  additionalProperties: true,
+  required: ["summary"],
+  properties: {
+    summary: { type: "string", minLength: 1 },
+    notes: { type: ["string", "null"] },
+    changes: { type: "array", items: PLAN_CHANGE_SCHEMA },
+    cardio: { type: "array", items: PLAN_CARDIO_SCHEMA },
+    days: {
+      type: "array",
+      minItems: 1,
+      items: {
+        type: "object",
+        additionalProperties: true,
+        required: ["day_number", "name", "items"],
+        properties: {
+          day_number: { type: "integer", minimum: 1 },
+          name: { type: "string", minLength: 1 },
+          focus: { type: ["string", "null"] },
+          items: {
+            type: "array",
+            minItems: 1,
+            items: {
+              type: "object",
+              additionalProperties: true,
+              properties: {
+                kind: { type: "string" },
+                exercise: { type: "string" },
+                sets: { type: ["integer", "null"], minimum: 0 },
+                rep_low: { type: ["integer", "null"], minimum: 0 },
+                rep_high: { type: ["integer", "null"], minimum: 0 },
+                target_weight: { type: ["number", "null"] },
+                target_seconds: { type: ["number", "null"], minimum: 0 },
+                superset_group: { type: ["integer", "null"] },
+                note: { type: ["string", "null"] },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+};
+
 export function isPlanProposalResult(value: unknown): boolean {
+  if (!matchesJsonSchema(PLAN_PROPOSAL_SCHEMA, value)) return false;
   const p = object(value);
   if (!p || !text(p.summary)) return false;
+  // "At least one action array" and "a change names an exercise OR a swap" are
+  // disjunctions JSON Schema cannot state without a top-level union — which the
+  // enforcing CLIs reject (claude requires a top-level object `type`). They stay here.
   const hasChanges = Array.isArray(p.changes);
   const hasCardio = Array.isArray(p.cardio);
   const hasDays = Array.isArray(p.days);
@@ -46,18 +157,12 @@ export function isPlanProposalResult(value: unknown): boolean {
 
   const changesOk = !hasChanges || p.changes.every((raw: unknown) => {
     const change = object(raw);
-    if (!change || !Number.isInteger(Number(change.day_number))) return false;
+    if (!change) return false;
     const swap = object(change.swap);
     return text(change.exercise) || !!(swap && text(swap.from) && text(swap.to));
   });
-  const cardioOk = !hasCardio || p.cardio.every((raw: unknown) => {
-    const item = object(raw);
-    return !!item && Number.isInteger(Number(item.day_number)) && text(item.label);
-  });
-  const daysOk = !hasDays || (p.days.length > 0 && p.days.every((raw: unknown) => {
-    const day = object(raw);
-    return !!day && Number.isInteger(Number(day.day_number)) && text(day.name) && Array.isArray(day.items) && day.items.length > 0;
-  }));
+  const cardioOk = !hasCardio || p.cardio.every((raw: unknown) => !!object(raw) && text(object(raw)?.label));
+  const daysOk = !hasDays || p.days.every((raw: unknown) => text(object(raw)?.name));
   return changesOk && cardioOk && daysOk;
 }
 
@@ -72,43 +177,81 @@ export function isExerciseExplanationResult(value: unknown): boolean {
   return !!p && text(p.setup) && text(p.move) && text(p.feel);
 }
 
-const WEEK_KINDS = new Set(["lift", "run", "mixed", "rest"]);
+export const WEEK_AHEAD_SCHEMA: JsonSchema = {
+  type: "object",
+  additionalProperties: true,
+  required: ["summary", "days"],
+  properties: {
+    summary: { type: "string", minLength: 1 },
+    days: {
+      type: "array",
+      minItems: 3,
+      maxItems: 7,
+      items: {
+        type: "object",
+        additionalProperties: true,
+        required: ["kind", "label"],
+        properties: {
+          kind: { type: "string", enum: ["lift", "run", "mixed", "rest"] },
+          label: { type: "string", minLength: 1 },
+        },
+      },
+    },
+  },
+};
 
 export function isWeekAheadResult(value: unknown): boolean {
+  if (!matchesJsonSchema(WEEK_AHEAD_SCHEMA, value)) return false;
   const p = object(value);
-  if (!p || !Array.isArray(p.days) || p.days.length < 3 || p.days.length > 7 || !text(p.summary)) return false;
-  return p.days.every((raw: unknown) => {
-    const day = object(raw);
-    return !!day && WEEK_KINDS.has(String(day.kind)) && text(day.label);
-  });
+  if (!p || !text(p.summary)) return false;
+  return p.days.every((raw: unknown) => text(object(raw)?.label));
 }
 
+// A meal is the payload's leaf shape, shared by the weekly plan and the one-off swap.
+const MEAL_SCHEMA: JsonSchema = {
+  type: "object",
+  additionalProperties: true,
+  required: ["name", "kcal", "protein_g", "fiber_g"],
+  properties: {
+    name: { type: "string", minLength: 1 },
+    kcal: { type: "number", exclusiveMinimum: 0 },
+    protein_g: { type: "number", minimum: 0 },
+    fiber_g: { type: "number", minimum: 0 },
+  },
+};
+
+export const MEAL_PLAN_STRUCTURE_SCHEMA: JsonSchema = {
+  type: "object",
+  additionalProperties: true,
+  required: ["daily_kcal", "daily_protein_g", "daily_fiber_g", "days"],
+  properties: {
+    daily_kcal: { type: "number", exclusiveMinimum: 0 },
+    daily_protein_g: { type: "number", exclusiveMinimum: 0 },
+    daily_fiber_g: { type: "number", exclusiveMinimum: 0 },
+    days: {
+      type: "array",
+      minItems: 5,
+      maxItems: 7,
+      items: {
+        type: "object",
+        additionalProperties: true,
+        required: ["day", "meals"],
+        properties: {
+          day: { type: "string", minLength: 1 },
+          meals: { type: "array", minItems: 1, items: MEAL_SCHEMA },
+        },
+      },
+    },
+  },
+};
+
 export function isMealPlanStructureResult(value: unknown): boolean {
+  if (!matchesJsonSchema(MEAL_PLAN_STRUCTURE_SCHEMA, value)) return false;
   const p = object(value);
-  if (
-    !p ||
-    !positive(p.daily_kcal) ||
-    !positive(p.daily_protein_g) ||
-    !positive(p.daily_fiber_g) ||
-    !Array.isArray(p.days)
-  )
-    return false;
-  if (p.days.length < 5 || p.days.length > 7) return false;
+  if (!p) return false;
   return p.days.every((rawDay: unknown) => {
     const day = object(rawDay);
-    if (!day || !text(day.day) || !Array.isArray(day.meals) || !day.meals.length) return false;
-    return day.meals.every((rawMeal: unknown) => {
-      const meal = object(rawMeal);
-      return (
-        !!meal &&
-        text(meal.name) &&
-        positive(meal.kcal) &&
-        finite(meal.protein_g) &&
-        Number(meal.protein_g) >= 0 &&
-        finite(meal.fiber_g) &&
-        Number(meal.fiber_g) >= 0
-      );
-    });
+    return !!day && text(day.day) && day.meals.every((rawMeal: unknown) => text(object(rawMeal)?.name));
   });
 }
 
@@ -124,17 +267,11 @@ export function isNutritionCheckinResult(value: unknown): boolean {
   return !!nutrition && positive(nutrition.target_kcal) && positive(nutrition.protein_g);
 }
 
+// A swap replaces ONE meal, so it is exactly the leaf shape above.
+export const MEAL_SWAP_SCHEMA: JsonSchema = MEAL_SCHEMA;
+
 export function isMealSwapResult(value: unknown): boolean {
-  const p = object(value);
-  return (
-    !!p &&
-    text(p.name) &&
-    positive(p.kcal) &&
-    finite(p.protein_g) &&
-    Number(p.protein_g) >= 0 &&
-    finite(p.fiber_g) &&
-    Number(p.fiber_g) >= 0
-  );
+  return matchesJsonSchema(MEAL_SWAP_SCHEMA, value) && text(object(value)?.name);
 }
 
 export function isRecipeResult(value: unknown): boolean {
