@@ -84,6 +84,22 @@ export function seedWeight(date, lb) {
 // addFoodNote always stamps created_at = now AND (when raw text + enrich on) tries
 // to enqueue a background agent job. We bypass both by inserting directly with a
 // chosen created_at and empty raw_output, so intake seeding stays fully offline.
+//
+// This one CANNOT follow seedTrainingDay onto the production path, and the reason is
+// structural rather than a preference: `insertFoodNote` (the single insert behind every
+// food-note writer) hardcodes `localDateISO()` for `date` and lets `created_at` default
+// to now. No repo function can create a food note for a PAST day, so a fixture whose
+// entire purpose is N distinct historical intake days has no faithful path to take.
+// src/demoSeed.ts inserts food notes raw for exactly the same reason.
+//
+// So the caveat stands here. addFoodNote fires bumpFoodDataVersion() (backstopped —
+// ignore it), a `food_logged` brain event, and invalidateDayReadForDate(), which busts
+// the cached Brief for the note's own day AND today whenever they differ. A test
+// pinning any of those must drive the repo path on a day it can afford to have stamped
+// today — see food-invalidates-day-read.test.js, which uses a raw insert only to place
+// the fixture row and then asserts against real repo.updateFoodNote / deleteFoodNote
+// calls. That split — raw for setup, production path for the behavior under test — is
+// the pattern to copy.
 export function seedIntake(daysAgo, kcal, extra = {}) {
   const parsed = { kcal, ...extra };
   return db
@@ -100,27 +116,46 @@ export function seedIntake(daysAgo, kcal, extra = {}) {
 // intensity-aware day-read (training-read.dayLoad) grades it 'moderate'/'hard'
 // and it counts toward the earned-rest streak. (A single light set would now,
 // correctly, grade 'easy' and NOT stack — see seedRecoveryDay.)
+//
+// This drives repo.logSetByName — the PRODUCTION path — so every side effect of a
+// real logging write fires: invalidateDayRead(date) (busts the cached Brief for that
+// date, drops the brain snapshots, schedules the re-warm, and re-opens an already-
+// judged day_read_adherence expectation), the `set_logged` brain event,
+// completeStrengthObjectiveFromLoggedSet() (a real WRITE to strength_objectives, not
+// just a signal), and bumpTrainingDataVersion().
+//
+// It used to insert logged_sets directly, and that silent divergence from production
+// was a live trap: a test could assert on behavior that only a real write produces,
+// pass on the fixture artifact, and certify nothing. Making the faithful path the
+// DEFAULT removes the hazard for everyone who never reads this comment — which was
+// the whole problem with documenting it instead.
+//
+// If you need INERT rows — a cached day read coexisting with newer logged work, or a
+// second session row for one date that getOrCreateSession would never create — do the
+// raw insert INLINE in your own test, the way dayReadUseCase.test.js and
+// adaptiveDailySession.test.js do for activities and sessions. Rawness belongs at the
+// call site that depends on it, where it is visible, not hidden in a shared fixture.
 export function seedTrainingDay(date) {
-  const ex = repo.upsertExercise({ name: "Test Squat", muscle_group: "legs" });
-  const sess = repo.getOrCreateSession(date, null);
+  // Upsert first so the exercise keeps its muscle group: logSetByName's
+  // findOrCreateExercise would default it, and volume-by-group reads care.
+  repo.upsertExercise({ name: "Test Squat", muscle_group: "legs" });
   for (let n = 1; n <= 4; n++) {
-    db.prepare(
-      `INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps, rir)
-       VALUES (?, ?, ?, 185, 5, 2)`
-    ).run(sess.id, ex.id, n);
+    repo.logSetByName({ date, exercise: "Test Squat", weight: 185, reps: 5, rir: 2 });
   }
-  return sess;
+  return repo.getOrCreateSession(date, null);
 }
 
 // A light recovery/mobility day: bodyweight + a timed hold at high RIR — grades
 // 'easy', so it should BREAK an earned-rest streak rather than extend it.
+//
+// Production path, for the same reasons as seedTrainingDay above. (These sets carry
+// no load, so est_1rm is null and the strength-objective write correctly stays out.)
 export function seedRecoveryDay(date) {
-  const ex = repo.upsertExercise({ name: "Dead Bug", muscle_group: "core" });
-  const plank = repo.upsertExercise({ name: "Side Plank", muscle_group: "core", mode: "timed" });
-  const sess = repo.getOrCreateSession(date, null);
-  db.prepare(`INSERT INTO logged_sets (session_id, exercise_id, set_number, reps, rir) VALUES (?, ?, 1, 10, 9)`).run(sess.id, ex.id);
-  db.prepare(`INSERT INTO logged_sets (session_id, exercise_id, set_number, duration_sec) VALUES (?, ?, 1, 30)`).run(sess.id, plank.id);
-  return sess;
+  repo.upsertExercise({ name: "Dead Bug", muscle_group: "core" });
+  repo.upsertExercise({ name: "Side Plank", muscle_group: "core", mode: "timed" });
+  repo.logSetByName({ date, exercise: "Dead Bug", reps: 10, rir: 9 });
+  repo.logSetByName({ date, exercise: "Side Plank", duration_sec: 30, exercise_mode: "timed" });
+  return repo.getOrCreateSession(date, null);
 }
 
 // ---- recovery: source-agnostic daily metrics (drives dayRead low-sleep branch) ----
