@@ -19,6 +19,10 @@ export const BRAIN_METRIC_KEYS = [
   "session_performance_feedback",
   "joint_pain_or_soreness",
   "plan_day_adherence",
+  // Whether the MORNING READ was followed. The only same-day metric in the set:
+  // every other expectation here waits one to four weeks, which is exactly why
+  // this one matters — it is the loop's daily heartbeat, not a person-score.
+  "day_read_adherence",
   "run_volume_adherence",
   "vo2max_trend",
   "recovery_hrv_delta",
@@ -64,6 +68,7 @@ export const EXPECTATION_EVALUATORS = [
   "session_feedback",
   "symptom_load",
   "plan_adherence",
+  "day_read_adherence",
   "run_volume_adherence",
   "vo2max_trend",
   "recovery_delta",
@@ -81,6 +86,7 @@ export const EXPECTATION_EVALUATORS_BY_METRIC: Readonly<Record<BrainMetricKey, r
     session_performance_feedback: ["session_feedback"],
     joint_pain_or_soreness: ["symptom_load"],
     plan_day_adherence: ["plan_adherence"],
+    day_read_adherence: ["day_read_adherence"],
     run_volume_adherence: ["run_volume_adherence"],
     vo2max_trend: ["vo2max_trend"],
     recovery_hrv_delta: ["recovery_delta"],
@@ -89,6 +95,27 @@ export const EXPECTATION_EVALUATORS_BY_METRIC: Readonly<Record<BrainMetricKey, r
     marker_direction: ["marker_direction"],
     body_measurement_direction: ["body_measurement_direction"],
   });
+
+// Metrics whose EVIDENCE is closed the moment their window ends, so a second look
+// can only ever produce the answer the first one did.
+//
+// The nightly pass deliberately re-probes matured expectations that came back
+// inconclusive, because most windows here are one to four weeks long and evidence
+// genuinely does arrive late: a lab draw lands, a wearable backfills a week of
+// sleep, an intake day finally gets logged. Re-asking those every night earns its
+// keep. A SAME-DAY metric is the opposite — its window is one closed calendar day,
+// and re-asking whether that day was a rest day is work that can only repeat
+// itself. Left alone, one row per day accumulates forever and competes with
+// genuinely new maturations for the bounded nightly candidate budget.
+//
+// So these are terminal ONCE EVALUATED (see candidateExpectationIds). Add a metric
+// here only when its window closes over evidence that cannot change — never merely
+// because it is cheap to re-evaluate.
+export const TERMINAL_ONCE_EVALUATED_METRICS = ["day_read_adherence"] as const satisfies readonly BrainMetricKey[];
+
+export function isTerminalOnceEvaluated(metricKey: string): boolean {
+  return (TERMINAL_ONCE_EVALUATED_METRICS as readonly string[]).includes(metricKey);
+}
 
 export interface ProposedExpectation {
   metric_key: BrainMetricKey;

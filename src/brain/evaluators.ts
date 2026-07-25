@@ -2,7 +2,13 @@ import { db } from "../db.js";
 import type { BrainDecision } from "./decision-contract.js";
 import type { BrainEvaluation, BrainEvaluationVerdict } from "./evaluation-contract.js";
 import { BRAIN_METRIC_KEYS, type BrainExpectation, type BrainMetricKey } from "./expectation-contract.js";
-import type { JsonObject } from "./contract-utils.js";
+import { isoDate, type JsonObject } from "./contract-utils.js";
+import {
+  READ_ADHERENCE_MEASURES,
+  dayTrainingTruth,
+  isPredictiveDayReadKind,
+  readAdherenceOutcome,
+} from "../repo/brain/read-adherence.js";
 import { completedIntakeRange } from "../repo/intake-window.js";
 import { canonicalEnduranceSport } from "../repo/endurance-sports.js";
 import { lsqSlopePerDay } from "../repo/health.js";
@@ -384,6 +390,85 @@ function planAdherenceObservation(context: EvaluatorContext): MetricObservation 
   };
 }
 
+// Was the MORNING READ followed? The one same-day metric in the registry, and the
+// only one that can mature overnight.
+//
+// The observed day is the expectation's `subject_key` (the read's own date), NOT
+// the window span: the window deliberately ends a day later so the expectation
+// cannot conclude while the day is still open, and observing that whole span
+// would count tomorrow's training against today's read.
+//
+// Deliberate asymmetries:
+//   • Absence IS evidence here. A followed rest day has no rows at all, so the
+//     closed-day summary line below is the evidence key — without it the contract
+//     would force every honest "they rested" to inconclusive.
+//   • An `easy` read against work that could not be graded stays INCONCLUSIVE.
+//     Presence without a grade cannot answer "did it stay easy?", and guessing
+//     against the athlete is exactly what this metric must never do.
+//   • Adherence is a COUNT of followed/diverged days, never a rate and never a
+//     grade. It informs; it changes no threshold.
+function dayReadAdherenceObservation(context: EvaluatorContext): MetricObservation {
+  const { expectation } = context;
+  const readDate = isoDate(expectation.subject_key) ?? expectation.window_start;
+  const readKind = String(expectation.baseline?.read_kind ?? "");
+  if (!isPredictiveDayReadKind(readKind)) {
+    return {
+      actual: null,
+      evidence_keys: [],
+      counts: { closed_days: 0, data_points: 0 },
+      issues: ["The stored read kind does not make a prediction that can be checked."],
+    };
+  }
+  // The day must be CLOSED before its log can be read as a decision about it.
+  const closed = context.as_of > readDate;
+  if (!closed) {
+    return {
+      actual: null,
+      evidence_keys: [],
+      counts: { closed_days: 0, data_points: 0 },
+      issues: ["The day had not closed yet, so what was logged on it is still incomplete."],
+    };
+  }
+  const truth = dayTrainingTruth(readDate);
+  const outcome = readAdherenceOutcome(readKind, truth);
+  const diverged = outcome === "diverged" ? 1 : 0;
+  const actual: JsonObject = {
+    // `value` serves the `at_least` train comparison; `occurrences` serves the
+    // `avoid` rest/easy one (compareExpectation reads occurrences first there).
+    value: readKind === "train" ? (truth.trained ? 1 : 0) : diverged,
+    occurrences: diverged,
+    read_kind: readKind,
+    // The exact test applied, in plain words, stored ON the verdict so a followed
+    // `train` day can never be read back later as a hard one.
+    measures: READ_ADHERENCE_MEASURES[readKind],
+    followed: outcome === "followed",
+    trained: truth.trained,
+    load: truth.load,
+    logged_sets: truth.sets,
+    logged_activities: truth.activities,
+    real_activities: truth.real_activities,
+    read_date: readDate,
+  };
+  return {
+    actual,
+    // One deterministic, reproducible line about the closed day — true whether or
+    // not anything was logged, which is what lets a followed rest day conclude.
+    evidence_keys: [
+      `day_read_adherence:${readDate}:read=${readKind}:sets=${truth.sets}:activities=${truth.real_activities}/${truth.activities}:load=${truth.load}`,
+    ],
+    counts: {
+      closed_days: 1,
+      data_points: 1,
+      sessions: truth.sets > 0 ? 1 : 0,
+      exposures: truth.trained ? 1 : 0,
+    },
+    issues:
+      outcome === "unclear"
+        ? ["Work was logged that could not be graded, so whether the day stayed easy can't be read."]
+        : [],
+  };
+}
+
 // Prescribed vs actually-run weekly km over the plan window. The expected window
 // distance is stored on the expectation target at apply time; the actual is summed
 // from RUN activities in the window (a ride/hike can never satisfy a run
@@ -712,6 +797,7 @@ export const EVALUATOR_REGISTRY: Readonly<Record<BrainMetricKey, MetricEvaluator
   session_performance_feedback: entry("session_performance_feedback", "session_feedback", performanceObservation),
   joint_pain_or_soreness: entry("joint_pain_or_soreness", "symptom_load", symptomObservation),
   plan_day_adherence: entry("plan_day_adherence", "plan_adherence", planAdherenceObservation),
+  day_read_adherence: entry("day_read_adherence", "day_read_adherence", dayReadAdherenceObservation),
   run_volume_adherence: entry("run_volume_adherence", "run_volume_adherence", runVolumeAdherenceObservation),
   vo2max_trend: entry("vo2max_trend", "vo2max_trend", vo2maxTrendObservation),
   recovery_hrv_delta: entry("recovery_hrv_delta", "recovery_delta", recoveryObservation),

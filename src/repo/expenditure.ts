@@ -184,18 +184,28 @@ registerTrainingCacheClear(() => {
   expenditureCache = null;
 });
 
-export function estimateExpenditure(windowDays = 21, opts: { syncMeasuredRmr?: boolean } = {}): ExpenditureEstimate {
+// `asOf` is the day the estimate is anchored to — "today" as far as this read is
+// concerned. It exists for callers reading a FIXED HISTORICAL date (the day-read
+// signal builders): the window is always "the N completed days before today", so
+// an unanchored call hands a read of last Tuesday an estimate built from the days
+// AFTER it. Omitted (the default and every pre-existing caller) it is the local
+// today and behavior is unchanged.
+export function estimateExpenditure(
+  windowDays = 21,
+  opts: { syncMeasuredRmr?: boolean; asOf?: string } = {}
+): ExpenditureEstimate {
   const normalizedWindow = normalizeWindowDays(windowDays);
   const syncMeasuredRmr = opts.syncMeasuredRmr !== false;
-  const key = `${normalizedWindow}|${syncMeasuredRmr ? "sync-rmr" : "read-rmr"}|${localDateISO()}|${trainingBackstopSignature()}|${foodBackstopSignature()}`;
+  const asOf = typeof opts.asOf === "string" && opts.asOf.trim() ? opts.asOf.trim() : localDateISO();
+  const key = `${normalizedWindow}|${syncMeasuredRmr ? "sync-rmr" : "read-rmr"}|${asOf}|${trainingBackstopSignature()}|${foodBackstopSignature()}`;
   if (expenditureCache && expenditureCache.key === key) return structuredClone(expenditureCache.value);
-  const value = computeExpenditure(normalizedWindow, { syncMeasuredRmr });
+  const value = computeExpenditure(normalizedWindow, { syncMeasuredRmr, asOf });
   expenditureCache = { key, value };
   return structuredClone(value);
 }
 
-function computeExpenditure(windowDays = 21, opts: { syncMeasuredRmr: boolean }): ExpenditureEstimate {
-  const today = localDateISO();
+function computeExpenditure(windowDays = 21, opts: { syncMeasuredRmr: boolean; asOf?: string }): ExpenditureEstimate {
+  const today = opts.asOf ?? localDateISO();
   // Today's food, movement and scale picture is incomplete until the local day
   // closes. It can inform the live diary, but never maintenance estimation.
   const completedThrough = addDaysISO(today, -1) ?? today;

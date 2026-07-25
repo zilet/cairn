@@ -1,7 +1,11 @@
 import { db } from "../../db.js";
 import type { BrainDecision } from "../../brain/decision-contract.js";
 import type { BrainEvaluation } from "../../brain/evaluation-contract.js";
-import type { BrainExpectation } from "../../brain/expectation-contract.js";
+import {
+  TERMINAL_ONCE_EVALUATED_METRICS,
+  isTerminalOnceEvaluated,
+  type BrainExpectation,
+} from "../../brain/expectation-contract.js";
 import {
   EVALUATOR_REGISTRY,
   MATURITY_EVALUATOR_VERSION,
@@ -9,7 +13,11 @@ import {
   observeExpectation,
 } from "../../brain/evaluators.js";
 import { isoDate } from "../../brain/contract-utils.js";
-import { getBrainDecision, getBrainExpectation } from "../../repo/brain-decisions.js";
+import {
+  getBrainDecision,
+  getBrainExpectation,
+  setBrainExpectationStatus,
+} from "../../repo/brain-decisions.js";
 import { insertBrainEvaluation, latestBrainEvaluation } from "../../repo/brain-evaluations.js";
 
 const TERMINAL_DECISION_STATUSES = new Set(["rejected", "reverted", "superseded", "canceled"]);
@@ -161,6 +169,22 @@ export function evaluateExpectation(
 }
 
 function candidateExpectationIds(asOf: string, limit: number): number[] {
+  const terminalKeys = TERMINAL_ONCE_EVALUATED_METRICS as readonly string[];
+  // Emptying the list must degrade to "nothing is terminal", not to `NOT IN ()`,
+  // which is a SQL syntax error that would take the whole nightly pass down.
+  //
+  // A same-day expectation is skipped once it has ACTUALLY been evaluated and sits
+  // in a closed status. Both halves matter: `latest.id IS NULL` keeps a never-yet-
+  // evaluated row due even when it is already `canceled` (a superseded read still
+  // earns its canceled verdict), and the status test is what lets
+  // reopenDayReadAdherence put a row back to `pending` and have it re-judged after
+  // work is logged retroactively — without reopening the door to the unbounded
+  // nightly re-probing this clause exists to stop.
+  const terminalClause = terminalKeys.length
+    ? `AND (expectation.metric_key NOT IN (${terminalKeys.map(() => "?").join(", ")})
+             OR latest.id IS NULL
+             OR expectation.status IN ('pending', 'mature'))`
+    : "";
   const rows = db
     .prepare(
       `SELECT expectation.id
@@ -176,13 +200,22 @@ function candidateExpectationIds(asOf: string, limit: number): number[] {
           expectation.status IN ('pending', 'mature', 'canceled')
           OR (expectation.status = 'evaluated' AND latest.verdict = 'inconclusive')
         )
+        -- A metric whose evidence CLOSED with its window has already given its final
+        -- answer, whatever that answer was: an inconclusive same-day read stays
+        -- inconclusive and a canceled one stays canceled, because the day it asks
+        -- about is over. Without this they re-entered the candidate set every night
+        -- forever — and a day-read expectation is written once a DAY, so that backlog
+        -- grows linearly and eats the bounded budget below that genuinely new
+        -- maturations need. Long-window metrics are deliberately untouched: they are
+        -- precisely the ones late evidence still reaches.
+        ${terminalClause}
       -- Never let a backlog of old inconclusive rechecks starve a newly matured
       -- expectation. Fresh pending/mature/canceled work is exhausted first;
       -- inconclusive late-data probes use the remaining bounded capacity.
       ORDER BY CASE WHEN expectation.status = 'evaluated' THEN 1 ELSE 0 END,
                expectation.window_end, expectation.id LIMIT ?`
     )
-    .all(asOf, limit) as Array<{ id: number }>;
+    .all(asOf, ...terminalKeys, limit) as Array<{ id: number }>;
   return rows.map((row) => Number(row.id)).filter((id) => Number.isInteger(id) && id > 0);
 }
 
@@ -224,6 +257,15 @@ export function evaluateMatureExpectations(
       }
       const previous = latestBrainEvaluation(id);
       if (sameEvaluation(previous, next)) {
+        // A RE-OPENED same-day expectation that came back with the identical answer
+        // has finished again. Close it here rather than leaving it `pending`, or a
+        // re-open that turned out to change nothing would become exactly the
+        // standing nightly re-probe terminality exists to prevent. Belt and braces:
+        // reopenDayReadAdherence already only fires when the day's facts moved.
+        if (isTerminalOnceEvaluated(expectation.metric_key)) {
+          const closed = previous?.verdict === "canceled" ? "canceled" : "evaluated";
+          if (expectation.status !== closed) setBrainExpectationStatus(id, closed);
+        }
         summary.skipped_unchanged++;
         continue;
       }

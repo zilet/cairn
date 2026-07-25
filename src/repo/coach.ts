@@ -55,6 +55,7 @@ import {
 import { symptomMarkerLinks } from "./symptom-links.js";
 import { classifyDirectiveIntent } from "./propagation-data.js";
 import { getAppState, setAppState } from "./app-state.js";
+import { readAdherenceModel } from "./brain/read-adherence.js";
 import { getProgress, getRecentSessions, getRunCompliance } from "./sessions.js";
 import { localDateISO, nowContext } from "./shared.js";
 import { bumpTrainingDataVersion, currentTrainingDataVersion, registerTrainingCacheClear } from "./training-cache.js";
@@ -218,12 +219,22 @@ export interface AutoregSignal {
   joint_areas: string[];
   note: string; // one rolled-up plain sentence
 }
-export function trainingSignals(recent?: any[]): {
+// `asOf` is the calendar date these signals are being read FOR. It changes two
+// things, and only for a FIXED HISTORICAL date (today and the omitted default stay
+// byte-for-byte as before): the sessions fetched are bounded to that day, and the
+// "days since" staleness read measures from it. Unbounded, a read of last Tuesday
+// was derived from the twenty newest sessions relative to NOW — work that had not
+// happened yet — and called every lift stale by today's calendar.
+export function trainingSignals(
+  recent?: any[],
+  asOf?: string
+): {
   progression: ProgressionSignal[];
   autoregulation: AutoregSignal | null;
 } {
-  const sessions = (recent ?? getRecentSessions(20)) as any[];
-  const now = Date.now();
+  const historical = !!asOf && asOf !== localDateISO();
+  const sessions = (recent ?? getRecentSessions(20, historical ? { through: asOf } : {})) as any[];
+  const now = historical ? Date.parse(`${asOf}T00:00:00Z`) : Date.now();
   const daysAgo = (d: string): number | null => {
     const t = Date.parse(String(d) + "T00:00:00Z");
     return Number.isFinite(t) ? Math.round((now - t) / 864e5) : null;
@@ -289,7 +300,10 @@ export function trainingSignals(recent?: any[]): {
           repHigh != null
             ? `${ready ? "hit" : "last"} ${topReps}/${repHigh} reps${rirTxt}${stale ? " (a while ago)" : ""}`
             : `last ${topReps} reps${rirTxt}`;
-        const pts = ((getProgress(name) as any).points || []) as any[];
+        // Bounded to the day being read for the same reason the sessions above are:
+        // the trend is the last two points, so an unbounded history hands a read of
+        // last Tuesday a direction derived from sets logged after it.
+        const pts = ((getProgress(name, historical ? { through: asOf } : {}) as any).points || []) as any[];
         if (pts.length >= 2) {
           const a = pts[pts.length - 2].best1rm,
             b = pts[pts.length - 1].best1rm;
@@ -762,6 +776,7 @@ function buildBrainSlice(
   | "day_read"
   | "insights"
   | "next_step"
+  | "read_adherence"
   | "recent_decisions"
   | "whole_person_trajectory"
 > {
@@ -796,6 +811,16 @@ function buildBrainSlice(
     })),
     // The single highest-leverage next action across all domains (or null on a quiet day).
     next_step: nextBestStep(),
+    // How often each read is actually followed (counts, never a rate or a grade —
+    // see CoachContextEnvelope.read_adherence). Memoized per context build; it walks
+    // a rolling window of closed days, so it must not be recomputed per consumer.
+    read_adherence: brainSignal("read_adherence", () => {
+      try {
+        return readAdherenceModel() as unknown as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+    }),
     recent_decisions: listBrainDecisions({ limit: 12 }).map((decision) => {
       const latestVerdict = listBrainExpectations({ decisionId: decision.id!, limit: 12 })
         .map((expectation) => latestBrainEvaluation(expectation.id!))

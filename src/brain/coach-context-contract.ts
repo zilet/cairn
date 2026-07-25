@@ -279,6 +279,16 @@ export interface CoachContextEnvelope {
   // stripped. Optional so partial context builders and imported DBs never synthesize it.
   learned_models?: CoachRecord | null;
   what_works_for_you: CoachWhatWorksForYou | null;
+  // How often each kind of morning read is actually FOLLOWED, over a rolling window
+  // of closed days. COUNTS ONLY — never a rate, never a grade, and never rendered to
+  // the athlete: VISION.md bans graded numbers about the person, and adherence is the
+  // most tempting thing in this system to turn into one. Deliberately NOT wired into
+  // any promptData site either, so no prompt can quote it back; it exists so the
+  // disagreement between what the Brief suggests and what the athlete does becomes
+  // MEASURABLE (operator diagnostics, MCP/REST readers, the bounded coach-read loop)
+  // before anyone retunes a rest/easy/train threshold off a hunch. Additive +
+  // optional, so partial context builders and imported DBs never synthesize it.
+  read_adherence?: CoachRecord | null;
   recent_decisions: CoachRecord[];
   trajectory: CoachRecord | null;
   whole_person_trajectory: CoachRecord | null;

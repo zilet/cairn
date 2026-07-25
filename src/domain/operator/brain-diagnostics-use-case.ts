@@ -2,6 +2,8 @@ import { db } from "../../db.js";
 import { listBrainDecisions, listBrainExpectations } from "../../repo/brain-decisions.js";
 import { latestBrainEvaluation, listBrainToolCalls } from "../../repo/brain-evaluations.js";
 import { normalizeStrictCaseConferenceDecision } from "../../brain/case-conference-contract.js";
+import { readAdherenceModel } from "../../repo/brain/read-adherence.js";
+import { localDateISO } from "../../repo/shared.js";
 
 const METRIC_WINDOW_DAYS = 90;
 const MATERIAL_KINDS = new Set([
@@ -37,6 +39,94 @@ function parsed(value: unknown): any {
   } catch {
     return null;
   }
+}
+
+// THE INSTRUMENT FOR THE LEARNING LOOP ITSELF.
+//
+// The aggregate block below is deliberately windowed to 90 days of DECISIONS,
+// which is the wrong lens for asking "is the loop alive at all?" — an expectation
+// written today with a four-week window is simply absent from every count until it
+// matures, so a ledger that had produced 65 pending rows, three evaluations and
+// ZERO conclusive verdicts in its entire history looked healthy. This block is
+// unwindowed and answers that question directly: what is pending, what has matured
+// and is sitting UNEVALUATED (the actual failure mode — a scheduler that stopped,
+// an evaluator that throws), what has been evaluated, with what verdict mix, and
+// how overdue the oldest unresolved one is.
+function expectationHealth() {
+  const today = localDateISO();
+  const rows = db
+    .prepare(
+      `SELECT e.id, e.decision_id, e.metric_key, e.status, e.window_end, d.kind AS decision_kind, d.status AS decision_status
+         FROM brain_expectations e JOIN brain_decisions d ON d.id = e.decision_id
+        ORDER BY e.window_end, e.id`
+    )
+    .all() as any[];
+  const latest = db
+    .prepare(
+      `SELECT v.expectation_id, v.verdict, v.evaluated_at
+         FROM brain_evaluations v
+         JOIN (SELECT expectation_id, MAX(id) AS id FROM brain_evaluations GROUP BY expectation_id) newest
+           ON newest.id = v.id`
+    )
+    .all() as any[];
+  const verdictByExpectation = new Map(latest.map((row) => [Number(row.expectation_id), row]));
+
+  const matured = rows.filter((row) => String(row.window_end) <= today && String(row.status) !== "canceled");
+  const maturedUnevaluated = matured.filter((row) => !verdictByExpectation.has(Number(row.id)));
+  const evaluated = rows.filter((row) => verdictByExpectation.has(Number(row.id)));
+  const verdicts = countBy(
+    evaluated.map((row) => verdictByExpectation.get(Number(row.id))),
+    "verdict"
+  );
+  const conclusive = (verdicts.aligned ?? 0) + (verdicts.not_aligned ?? 0);
+  // Rows already OVERDUE and still unresolved, oldest window first — the single
+  // number that would have shown, without a SQL session, that nothing was maturing.
+  const overdue = maturedUnevaluated[0] ?? null;
+  const daysOverdue = overdue
+    ? Math.max(0, Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${overdue.window_end}T00:00:00Z`)) / 864e5))
+    : null;
+
+  const metricKeys = [...new Set(rows.map((row) => String(row.metric_key)))].sort();
+  return {
+    as_of: today,
+    total: rows.length,
+    by_status: countBy(rows, "status"),
+    pending: rows.filter((row) => String(row.window_end) > today && String(row.status) !== "canceled").length,
+    matured: matured.length,
+    matured_unevaluated: maturedUnevaluated.length,
+    evaluated: evaluated.length,
+    latest_verdicts: verdicts,
+    // A loop that has never reached a decisive verdict has never taught anything,
+    // however many rows it holds. This is the headline health check.
+    conclusive_verdicts: conclusive,
+    never_conclusive: conclusive === 0,
+    oldest_overdue: overdue
+      ? {
+          expectation_id: Number(overdue.id),
+          decision_id: Number(overdue.decision_id),
+          decision_kind: String(overdue.decision_kind),
+          metric_key: String(overdue.metric_key),
+          window_end: String(overdue.window_end),
+          days_overdue: daysOverdue,
+        }
+      : null,
+    by_metric: metricKeys.map((metricKey) => {
+      const forMetric = rows.filter((row) => String(row.metric_key) === metricKey);
+      const forMetricEvaluated = forMetric.filter((row) => verdictByExpectation.has(Number(row.id)));
+      const metricVerdicts = countBy(
+        forMetricEvaluated.map((row) => verdictByExpectation.get(Number(row.id))),
+        "verdict"
+      );
+      return {
+        metric_key: metricKey,
+        total: forMetric.length,
+        matured: forMetric.filter((row) => String(row.window_end) <= today && String(row.status) !== "canceled").length,
+        evaluated: forMetricEvaluated.length,
+        conclusive: (metricVerdicts.aligned ?? 0) + (metricVerdicts.not_aligned ?? 0),
+        latest_verdicts: metricVerdicts,
+      };
+    }),
+  };
 }
 
 function brainAggregateMetrics() {
@@ -206,6 +296,13 @@ function brainAggregateMetrics() {
       latest_verdicts: countBy(latestVerdicts, "verdict"),
       by_evaluator_version: countBy(expectations, "evaluator_version"),
     },
+    // Unwindowed health of the learning loop — see expectationHealth().
+    expectation_health: expectationHealth(),
+    // How often each kind of morning read is actually followed. COUNTS, never a
+    // rate and never a grade: it exists so the gap between what the Brief suggests
+    // and what the athlete does is measurable before any threshold is retuned.
+    // Operator diagnostics only — never an athlete-facing surface.
+    read_adherence: readAdherenceModel(),
     autonomy: {
       active_or_resolved: autonomous.length,
       resolved: autonomousResolved.length,

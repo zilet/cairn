@@ -16,7 +16,7 @@ import {
   type DayReadRule,
   type DayReadRuleOutcome,
 } from "./brain/day-read-rules.js";
-import { insertBrainDecision, transitionBrainDecision } from "./brain-decisions.js";
+import { recordDayReadDecision, reopenDayReadAdherence } from "./brain/read-adherence.js";
 import { getCheckinByDate, getRecoverySummary, latestSleep, trainingSignals } from "./coach.js";
 import { activeContextEffect } from "./context-effect.js";
 import { activitySportWhere, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
@@ -1217,15 +1217,25 @@ export function dayPlanningSignalState(date: string, provided: DayPlanningSignal
     // holds a summary built over an explicitly-passed Garmin window, and silently
     // seeding it from here would let a differently-scoped fetch win the race.
     const recovery = provided.recovery ?? signalInput(() => getRecoverySummary(14), null);
-    // The three keys below ARE getCoachContext's, and deliberately so — these are
-    // the expensive producers, and sharing the memo is what keeps one Brief request
-    // from building them twice no matter which consumer asks first.
+    // Today keeps the BARE memo keys below — they ARE getCoachContext's, and sharing
+    // them is what keeps one Brief request from building these expensive producers
+    // twice no matter which consumer asks first. A read of an EARLIER date gets its
+    // own keys and its own date-bounded inputs, because "the twenty newest sessions"
+    // and "the last 21 completed days" are both measured from NOW: unscoped, a read
+    // of last Tuesday was derived from work logged after it, and called every lift
+    // stale by today's calendar. Same class of bug as the program-state one below.
+    const isLiveDate = date === localDateISO();
     const trainingSignalsView =
       provided.trainingSignals ??
       signalInput(
         () =>
-          brainSignal("training_signals", () =>
-            trainingSignals(brainSignal("recent_sessions:20", () => getRecentSessions(20) as any[]))
+          brainSignal(isLiveDate ? "training_signals" : `training_signals:${date}`, () =>
+            trainingSignals(
+              brainSignal(isLiveDate ? "recent_sessions:20" : `recent_sessions:20:${date}`, () =>
+                getRecentSessions(20, isLiveDate ? {} : { through: date })
+              ) as any[],
+              date
+            )
           ),
         null
       );
@@ -1238,14 +1248,18 @@ export function dayPlanningSignalState(date: string, provided: DayPlanningSignal
     const programState =
       provided.programState ??
       signalInput(
-        () =>
-          brainSignal(date === localDateISO() ? "program_state" : `program_state:${date}`, () =>
-            getProgramState(date, recovery)
-          ),
+        () => brainSignal(isLiveDate ? "program_state" : `program_state:${date}`, () => getProgramState(date, recovery)),
         null
       );
     const expenditure =
-      provided.expenditure ?? signalInput(() => brainSignal("expenditure:21", () => estimateExpenditure(21)), null);
+      provided.expenditure ??
+      signalInput(
+        () =>
+          brainSignal(isLiveDate ? "expenditure:21" : `expenditure:21:${date}`, () =>
+            estimateExpenditure(21, isLiveDate ? {} : { asOf: date })
+          ),
+        null
+      );
     return planningSignalState({
       date,
       recovery,
@@ -2279,71 +2293,17 @@ function writeDayRead(date: string, read: any, expectedStaleOverride?: CachedOve
   try {
     db.prepare(`DELETE FROM day_reads WHERE date < date('now','-21 days')`).run();
   } catch {}
-  // Persist the recommendation as a bounded, outcome-addressable decision. This
-  // runs after the canonical cache write and is intentionally fail-soft: an audit
-  // outage must never make the Brief unavailable.
+  // Persist the recommendation as a bounded, outcome-addressable decision carrying
+  // a falsifiable read-adherence expectation. This runs after the canonical cache
+  // write and is intentionally fail-soft: an audit outage must never make the Brief
+  // unavailable.
+  //
+  // The identity used to be the whole `signals` blob, which moves all day, so one
+  // date produced ~19 immutable rows and 18 supersedes. It is now the read's own
+  // decision fingerprint (see recordDayReadDecision), so an unchanged morning is
+  // idempotent and only a genuine change records.
   try {
-    const decisionInput = {
-      effective_date: date,
-      kind: "day_read",
-      domain: "cross_domain",
-      summary: String(read.headline || `${String(read.kind)} day`).slice(0, 300),
-      rationale: read.why ?? null,
-      source: read.source ?? "deterministic",
-      source_ref_type: "day_read",
-      source_ref_key: date,
-      status: "observed",
-      autonomy_tier: "observe",
-      risk_class: "low",
-      reversible: false,
-      input_fingerprint: null,
-      context: { signals: read.signals ?? {}, override },
-      action: {
-        kind: read.kind,
-        focus: read.focus ?? null,
-        est_minutes: read.est_minutes ?? null,
-        why: read.why ?? null,
-      },
-      specialist: null,
-      applied_at: null,
-      reverted_at: null,
-      superseded_by: null,
-      evaluator_version: null,
-    } as const;
-    // The cache has one mutable row per date; the accountability ledger does not.
-    // Preserve each materially different observation as a new immutable entry,
-    // then supersede every prior current observation for the same date. A byte-for-
-    // byte repeat is idempotent, while its older legacy siblings are still closed.
-    const existing = db
-      .prepare(
-        `SELECT id, summary, rationale, source, context_json, action_json
-           FROM brain_decisions
-          WHERE kind = 'day_read' AND source_ref_type = 'day_read'
-            AND source_ref_key = ? AND status = 'observed'
-          ORDER BY id DESC`
-      )
-      .all(date) as any[];
-    const material = {
-      summary: decisionInput.summary,
-      rationale: decisionInput.rationale,
-      source: decisionInput.source,
-      context_json: JSON.stringify(decisionInput.context),
-      action_json: JSON.stringify(decisionInput.action),
-    };
-    const newest = existing[0] ?? null;
-    const sameMaterial =
-      !!newest &&
-      String(newest.summary ?? "") === material.summary &&
-      (newest.rationale ?? null) === material.rationale &&
-      (newest.source ?? null) === material.source &&
-      (newest.context_json ?? null) === material.context_json &&
-      (newest.action_json ?? null) === material.action_json;
-    const current = sameMaterial ? newest : insertBrainDecision(decisionInput);
-    if (current?.id) {
-      for (const prior of sameMaterial ? existing.slice(1) : existing) {
-        transitionBrainDecision(Number(prior.id), "superseded", { supersededBy: Number(current.id) });
-      }
-    }
+    recordDayReadDecision(date, read, { inputFingerprint, override });
   } catch {
     // The day-read cache is authoritative; learning/audit recording is best effort.
   }
@@ -2419,6 +2379,18 @@ export function invalidateDayRead(date?: string): void {
     try {
       scheduleDayReadRefresh(d);
     } catch {}
+    // Work that lands for a day ALREADY judged re-opens that judgement. Every
+    // training write for a date reaches this function with that date, which is why
+    // the hook lives here rather than at seven call sites where the eighth would
+    // silently be missed. Only a PAST day can have been judged (an expectation for
+    // `d` matures on d+1), so today — the overwhelmingly common case — skips the
+    // lookup entirely, and reopenDayReadAdherence itself no-ops unless the day's
+    // logged facts actually moved.
+    try {
+      if (d < localDateISO()) reopenDayReadAdherence(d);
+    } catch {
+      /* re-judging is best effort; it must never fail a write */
+    }
   });
 }
 

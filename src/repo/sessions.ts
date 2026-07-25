@@ -56,12 +56,19 @@ function hydrateSession(s: any) {
   return { ...rest, garmin };
 }
 
-export function getRecentSessions(limit = 10) {
+// `through` bounds the read to sessions logged ON OR BEFORE a calendar date. It
+// exists for the signal builders, which may be reading a FIXED HISTORICAL date:
+// unbounded, the twenty newest sessions are relative to now, so a read of last
+// Tuesday was derived from work logged after it. Omitted (the default and every
+// pre-existing caller) the behavior is unchanged.
+export function getRecentSessions(limit = 10, opts: { through?: string } = {}) {
+  const through = typeof opts.through === "string" && opts.through.trim() ? opts.through.trim() : null;
   const sessions = db
     .prepare(`SELECT s.*, pd.name AS day_name FROM sessions s
               LEFT JOIN plan_days pd ON pd.id = s.plan_day_id
+              ${through ? "WHERE s.date <= ?" : ""}
               ORDER BY s.date DESC, s.id DESC LIMIT ?`)
-    .all(limit) as any[];
+    .all(...(through ? [through] : []), limit) as any[];
   // `title` is the content-true display name (see deriveSessionTitle); `day_name`
   // stays the raw plan-day label so existing consumers are untouched.
   return sessions.map((s) => ({
@@ -1673,9 +1680,17 @@ export function snapshotDbTo(filePath: string): string {
   return filePath;
 }
 
-export function getProgress(exerciseName: string) {
+// `through` bounds the history to sets logged ON OR BEFORE a calendar date. It
+// exists for the signal builders reading a FIXED HISTORICAL date: the est-1RM trend
+// is read off the last two points, so unbounded, a read of last Tuesday was told
+// which way a lift was moving using sessions logged AFTER it. Omitted — the default
+// and every "what is true now" caller (the REST route, the MCP tool, program-state,
+// muscle-trajectory, the exercise detail view) — the history stays unbounded, which
+// is what an all-time est-1RM and PR detection require.
+export function getProgress(exerciseName: string, opts: { through?: string } = {}) {
   const ex = findExercise(exerciseName);
   if (!ex) return { exercise: exerciseName, found: false, points: [] };
+  const through = typeof opts.through === "string" && opts.through.trim() ? opts.through.trim() : null;
 
   // For assisted lifts (negative weight = assist), we need the athlete's bodyweight
   // to compute effective load = bodyweight - assist. Fetch it once.
@@ -1687,14 +1702,17 @@ export function getProgress(exerciseName: string) {
   // The cost is contained by CALLERS, not here: getProgramState (the N+1 that hits this
   // per distinct exercise) is memoized on the training-data version, so a page render
   // pays this scan once per lift per data change, not on every read. Left unbounded.
+  // `through` is the ONE exception, and it is a horizon, not a window: everything ever
+  // logged up to that day, so the all-time max as of that day is still exact.
   const rows = db
     .prepare(
       `SELECT s.date AS date, ls.weight AS weight, ls.reps AS reps, ls.rir AS rir
        FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
        WHERE ls.exercise_id = ? AND ls.weight IS NOT NULL AND ls.reps IS NOT NULL
+       ${through ? "AND s.date <= ?" : ""}
        ORDER BY s.date`
     )
-    .all(ex.id) as any[];
+    .all(...(through ? [ex.id, through] : [ex.id])) as any[];
 
   // Per-date: track the best set by its effective 1RM (or by reps for assisted
   // sets where bodyweight is unknown). NEVER emit a negative best1rm.
