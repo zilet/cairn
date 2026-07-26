@@ -253,30 +253,39 @@ function sessionCountsTowardLiftTrajectory(sessionId: number): boolean {
   return eligible;
 }
 
-function comparableLiftDates(name: string): Set<string> {
+// `through` is the day being read. liftStates() already scopes which lifts EXIST
+// as of that date, but every grade underneath it was computed from the full
+// history — so a read of an earlier date graded the lift, its trend and its
+// push/hold/deload status from sets logged AFTER it. Same bug class as the
+// programState/trainingSignals date-scoping, one layer down.
+function comparableLiftDates(name: string, through: string): Set<string> {
   const rows = db
     .prepare(
       `SELECT DISTINCT s.id AS session_id, s.date AS date
        FROM logged_sets ls
        JOIN sessions s ON s.id = ls.session_id
        JOIN exercises e ON e.id = ls.exercise_id
-      WHERE e.name = ? COLLATE NOCASE
+      WHERE e.name = ? COLLATE NOCASE AND s.date <= ?
       ORDER BY s.date, s.id`
     )
-    .all(name) as any[];
+    .all(name, through) as any[];
   return new Set(
     rows.filter((row) => sessionCountsTowardLiftTrajectory(Number(row.session_id))).map((row) => String(row.date))
   );
 }
 
-function gradeRepsLift(name: string, mg: string | null): GradedLift | null {
-  const prog = getProgress(name) as any;
+function gradeRepsLift(name: string, mg: string | null, through: string): GradedLift | null {
+  // Bounded to the day being read — an unbounded history hands a historical read
+  // an est-1RM (and therefore a trend and a push/hold verdict) off sets that had
+  // not been logged yet. getProgress's `through` is a horizon, not a window, so
+  // the all-time best AS OF that day is still exact.
+  const prog = getProgress(name, { through }) as any;
   // getProgress can now emit points with best1rm === null (a bodyweight/weight-0
   // set, or an assisted lift logged before bodyweight was known). Those carry no
   // 1RM trajectory, so drop them before grading — Math.round(null)/null-as-y would
   // otherwise read as 0 / NaN. A lift left with too few real points falls to the
   // "new" baseline path below, exactly like a lift that's only just been logged.
-  const comparableDates = comparableLiftDates(name);
+  const comparableDates = comparableLiftDates(name, through);
   const points: any[] = (Array.isArray(prog.points) ? prog.points : []).filter(
     (p: any) => p.best1rm != null && comparableDates.has(String(p.date))
   );
@@ -392,17 +401,19 @@ function gradeRepsLift(name: string, mg: string | null): GradedLift | null {
   };
 }
 
-function gradeTimedLift(name: string, mg: string | null): GradedLift | null {
+// `through` for the same reason as the reps path below — the timed grade was
+// equally unbounded, so a historical read could hold up a hold logged after it.
+function gradeTimedLift(name: string, mg: string | null, through: string): GradedLift | null {
   const ex = db.prepare(`SELECT id FROM exercises WHERE name = ? COLLATE NOCASE`).get(name) as any;
   if (!ex) return null;
   const rows = db
     .prepare(
       `SELECT s.id AS session_id, s.date AS date, MAX(ls.duration_sec) AS best FROM logged_sets ls
      JOIN sessions s ON s.id = ls.session_id
-     WHERE ls.exercise_id = ? AND ls.duration_sec IS NOT NULL
+     WHERE ls.exercise_id = ? AND ls.duration_sec IS NOT NULL AND s.date <= ?
      GROUP BY s.id, s.date ORDER BY s.date, s.id`
     )
-    .all(ex.id) as any[];
+    .all(ex.id, through) as any[];
   const comparableRows = rows.filter((row) => sessionCountsTowardLiftTrajectory(Number(row.session_id)));
   const byDate = new Map<string, number>();
   for (const row of comparableRows) {
@@ -481,7 +492,7 @@ function liftStates(date: string): LiftState[] {
   for (const e of exs) {
     const name = String(e.name);
     if (isJunkExerciseName(name)) continue; // non-destructive: the row stays in the DB, the read skips it
-    const graded = String(e.mode) === "timed" ? gradeTimedLift(name, e.mg) : gradeRepsLift(name, e.mg);
+    const graded = String(e.mode) === "timed" ? gradeTimedLift(name, e.mg, date) : gradeRepsLift(name, e.mg, date);
     if (!graded) continue;
     const family_key = movementKey(name) || normalizeExerciseName(name);
     out.push({

@@ -122,11 +122,15 @@ other than today, fetches sessions and progression bounded through it rather tha
 twenty overall; `getRecentSessions(limit, {through})` and `getProgress(exerciseName, {through})`
 (`src/repo/sessions.ts`) add the same optional horizon, and `estimateExpenditure(windowDays,
 {asOf})` (`src/repo/expenditure.ts`) anchors its rolling window there instead of the local today.
-Every existing caller — the REST route, the MCP tool, program-state, muscle-trajectory — omits the
-option and is unaffected; only a caller reading a FIXED HISTORICAL date (the day-read signal
-builders) supplies it, closing the same "measured from now" seam `programState` closed above:
-unbounded, a read of an earlier date derived its progression trend and training signals from sets
-logged after that date.
+`getProgramState` supplies it too, and that one was NOT free: `liftStates(date)` already scoped which
+lifts exist as of the day being read, but every grade underneath it — `getProgress` inside
+`gradeRepsLift`, the `comparableLiftDates` session set, and the `gradeTimedLift` hold query — ran
+unbounded, so a historical read's est-1RM, trend and push/hold/deload verdict came off sets logged
+after the day it describes (sets of 200 and 205 before a read date, then 320×5 four days later, and
+the read graded 373). All three now take the read date. The remaining callers — the REST route, the
+MCP tool, `profile.ts`'s exercise detail, and muscle-trajectory (which filters in JS) — are genuine
+"what is true now" reads, omit the option and are unaffected. This closes the same "measured from
+now" seam `programState`'s own date parameter closed above, one layer down.
 
 **One night is not a trend.** `SIGNAL_VOICE`'s sleep entries used to speak off `recovery.sleep_min` —
 the latest DATED night, never an average — under a chronic-sounding key (`sleep_short`/`sleep_ok`), so

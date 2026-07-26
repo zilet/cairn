@@ -1406,23 +1406,47 @@ export const MIGRATIONS: Migration[] = [
       // kind is untouched. Idempotent: after the first pass only the earliest
       // canonical row remains per date, so it is always the MIN(id) survivor and a
       // second pass deletes nothing further.
-      try {
-        db.exec(`
-          DELETE FROM suggestions
-           WHERE kind = 'day_read'
-             AND date IS NOT NULL
-             AND json_extract(payload_json, '$.override') IS NULL
-             AND id NOT IN (
-               SELECT MIN(id) FROM suggestions
-                WHERE kind = 'day_read'
-                  AND date IS NOT NULL
-                  AND json_extract(payload_json, '$.override') IS NULL
-                GROUP BY date
-             )
-        `);
-      } catch {
-        /* suggestions table absent/empty on a fresh DB — nothing to dedupe */
-      }
+      //
+      // json_extract() THROWS (and aborts the whole statement) on malformed JSON,
+      // and — per review — the query planner is not guaranteed to evaluate the
+      // kind/date predicates before it reaches a bad row, even though it does for
+      // this exact shape today. `payload_json IS NOT NULL AND json_valid(payload_json)`
+      // guards every json_extract() call below (both in the DELETE and its
+      // subquery) so a malformed or NULL payload can never blow up the migration —
+      // that row is simply excluded from the canonical pool: never deleted (we
+      // can't prove what it is), and never eligible to be picked as the MIN(id)
+      // survivor either (a NULL/malformed row winning that slot would delete every
+      // REAL read for its date out from under it — the sharper of the two bugs).
+      //
+      // No try/catch around the DELETE: a genuine failure must not be swallowed
+      // into a silent "applied, did nothing". runMigrations wraps every up() in
+      // BEGIN/ROLLBACK-on-throw and only stamps PRAGMA user_version after up()
+      // returns cleanly, so letting an unexpected error propagate is what makes a
+      // real failure loud instead of a phantom success. The one deliberately
+      // absorbed case is the table not existing yet at all (an old/partial schema,
+      // or a minimal test fixture) — checked explicitly via sqlite_master, not by
+      // catching whatever the DELETE happens to throw.
+      const hasSuggestionsTable = db
+        .prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'suggestions'`)
+        .get();
+      if (!hasSuggestionsTable) return;
+      db.exec(`
+        DELETE FROM suggestions
+         WHERE kind = 'day_read'
+           AND date IS NOT NULL
+           AND payload_json IS NOT NULL
+           AND json_valid(payload_json)
+           AND json_extract(payload_json, '$.override') IS NULL
+           AND id NOT IN (
+             SELECT MIN(id) FROM suggestions
+              WHERE kind = 'day_read'
+                AND date IS NOT NULL
+                AND payload_json IS NOT NULL
+                AND json_valid(payload_json)
+                AND json_extract(payload_json, '$.override') IS NULL
+              GROUP BY date
+           )
+      `);
     },
   },
 ];

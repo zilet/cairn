@@ -139,6 +139,45 @@ function verdictFor(date) {
   return { summary, expectation, evaluation };
 }
 
+// The defect this pins was FATAL on the real deployment, not theoretical. With
+// confounder_policy 'standard', contextEventConfounders treats an open-ended row
+// (end_date NULL) as overlapping every window forever, and any confounder forces
+// `inconclusive` — which this metric, being terminal once evaluated, never
+// revisits. The live DB carries exactly one open-ended `injury` row, so every
+// adherence verdict would have been inconclusive for good and the loop would have
+// been born dead, with expectation_health.never_conclusive reporting a cause an
+// operator would misdiagnose as a stopped scheduler.
+test("an ongoing open-ended injury does not stop a day from being judged", () => {
+  reset();
+  const date = localDaysAgo(2);
+  repo.addContextEvent({
+    kind: "injury",
+    title: "Right hand joint pain",
+    detail: "ongoing",
+    start_date: null,
+    end_date: null,
+  });
+  const open = db.prepare(`SELECT start_date, end_date FROM context_events LIMIT 1`).get();
+  assert.equal(open.end_date, null, "precondition: the event is genuinely open-ended");
+
+  repo.saveDayRead(date, read("rest"));
+  const { evaluation } = verdictFor(date);
+
+  assert.equal(evaluation.verdict, "aligned", "a factual 'was training logged' question is not confounded by an injury");
+  assert.deepEqual(evaluation.confounders, []);
+});
+
+test("an ongoing injury still lets a diverged day read as diverged", () => {
+  reset();
+  const date = localDaysAgo(2);
+  repo.addContextEvent({ kind: "injury", title: "Right hand joint pain", start_date: null, end_date: null });
+  repo.saveDayRead(date, read("rest"));
+  seedTrainingDay(date);
+
+  const { evaluation } = verdictFor(date);
+  assert.equal(evaluation.verdict, "not_aligned");
+});
+
 test("a rest read the athlete followed matures overnight and reads as aligned", () => {
   reset();
   const date = localDaysAgo(2);

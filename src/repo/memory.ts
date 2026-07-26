@@ -310,7 +310,18 @@ export function listSuggestions(limit = 50) {
 // one (see recordDayReadSuggestion's contract) — a caller that also needs steer
 // history should query `suggestions` directly rather than collapse it away here.
 export function dayReadSuggestionsByDate(opts: { since?: string; until?: string } = {}) {
-  const conds = [`kind = 'day_read'`, `date IS NOT NULL`, `json_extract(payload_json, '$.override') IS NULL`];
+  // payload_json IS NOT NULL AND json_valid(payload_json) guards json_extract()
+  // below: without it, a NULL payload_json row reads as canonical (json_extract of
+  // NULL is NULL, same as an explicit override:null) and a malformed one throws
+  // and aborts the whole query. Both are excluded from the candidate pool instead —
+  // never returned as if they were the canonical row for their date.
+  const conds = [
+    `kind = 'day_read'`,
+    `date IS NOT NULL`,
+    `payload_json IS NOT NULL`,
+    `json_valid(payload_json)`,
+    `json_extract(payload_json, '$.override') IS NULL`,
+  ];
   const params: string[] = [];
   if (opts.since) {
     conds.push(`date >= ?`);

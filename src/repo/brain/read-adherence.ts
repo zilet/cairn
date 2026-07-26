@@ -197,7 +197,26 @@ export function dayReadAdherenceExpectation(date: string, read: DayReadForLedger
     // One CLOSED day is the whole evidence requirement; without it the verdict is
     // honestly inconclusive rather than a guess off a day still in progress.
     minimum_data: { closed_days: 1 },
-    confounder_policy: "standard",
+    // THE ONE METRIC THAT MUST OPT OUT OF CONTEXT CONFOUNDERS.
+    //
+    // Every other expectation here asks a CAUSAL question over weeks — did the
+    // deficit move the weight, did the protocol move the marker — and for those a
+    // trip or an illness genuinely muddies the answer, which is why the default is
+    // `standard` and must stay that way. This one asks a FACTUAL question about a
+    // single finished day: was training logged? Nothing about a life event makes
+    // that fact less true, and the injury is arguably the very thing worth
+    // measuring, not a reason to discard the measurement.
+    //
+    // `standard` here was not merely imprecise, it was FATAL. contextEventConfounders
+    // treats an open-ended row (end_date NULL) as overlapping every window forever,
+    // and any confounder forces `inconclusive` — which, because this metric is
+    // terminal once evaluated, is never revisited. The live deployment carries one
+    // open-ended `injury` row, so every adherence verdict would have come back
+    // inconclusive for good, and expectation_health.never_conclusive would have read
+    // true: the instrument built to detect a dead loop reporting a cause an operator
+    // would misread as a stopped scheduler. Note the regex also matches `supplement`
+    // and `medicat`, so an ongoing supplement regimen would have done the same.
+    confounder_policy: "none",
     confidence: "tentative",
     evaluator: DAY_READ_ADHERENCE_METRIC,
     evaluator_version: DAY_READ_ADHERENCE_EVALUATOR_VERSION,

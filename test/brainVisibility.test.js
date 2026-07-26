@@ -183,6 +183,36 @@ test("dayReadSuggestionsByDate honors the since/until window", () => {
   );
 });
 
+// Defects caught in review: json_extract() throws on malformed JSON (aborting the
+// whole query), and json_extract(NULL, '$.override') reads as NULL — the same as
+// an explicit override:null — so a NULL payload_json row was indistinguishable
+// from canonical. Both are now excluded from the candidate pool by
+// `payload_json IS NOT NULL AND json_valid(payload_json)`.
+test("dayReadSuggestionsByDate never throws on a malformed payload_json row and never returns it", () => {
+  resetTables("suggestions");
+  db.prepare(`INSERT INTO suggestions (kind, date, payload_json) VALUES ('day_read', ?, ?)`).run(
+    "2026-06-17",
+    "{truncated"
+  );
+  repo.recordSuggestion("day_read", "2026-06-17", { kind: "rest", override: null });
+
+  const rows = repo.dayReadSuggestionsByDate();
+  assert.equal(rows.length, 1, "the malformed row is excluded, not counted or returned");
+  assert.equal(rows[0].payload.kind, "rest", "the real canonical row is still readable");
+});
+
+test("dayReadSuggestionsByDate never treats a NULL payload_json row as canonical", () => {
+  resetTables("suggestions");
+  // Inserted first, so it has the smallest id — the shape that would win an
+  // unguarded MIN(id)/first-row selection.
+  db.prepare(`INSERT INTO suggestions (kind, date, payload_json) VALUES ('day_read', ?, NULL)`).run("2026-06-17");
+  repo.recordSuggestion("day_read", "2026-06-17", { kind: "rest", override: null });
+
+  const rows = repo.dayReadSuggestionsByDate();
+  assert.equal(rows.length, 1, "the NULL-payload row is excluded, not counted or returned");
+  assert.equal(rows[0].payload.kind, "rest", "the real canonical row is the one returned");
+});
+
 test("recentLearnings uses updated_at so reinforced older lessons reach the coach", () => {
   resetTables("memory");
   db.prepare(`INSERT INTO memory (kind, content, source, confidence, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`)

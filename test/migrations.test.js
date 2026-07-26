@@ -466,6 +466,97 @@ test("v78 dedupes legacy day_read suggestion rows, keeping the earliest canonica
   d.close();
 });
 
+// Defect caught in review: json_extract() THROWS on malformed JSON and aborts the
+// WHOLE statement — one bad payload_json row anywhere in `suggestions` used to make
+// v78's DELETE fail outright, and the migration's own try/catch swallowed that
+// failure silently while runMigrations would still stamp PRAGMA user_version = 78
+// on the way out, reporting success for a dedup pass that never actually ran.
+// json_valid(payload_json) now guards every json_extract() call, so a malformed
+// row is excluded from consideration — left untouched, never picked as a MIN(id)
+// survivor — instead of blowing up the migration.
+test("v78 tolerates a malformed payload_json row instead of aborting the whole dedup", () => {
+  const d = new DatabaseSync(":memory:");
+  d.exec(`CREATE TABLE suggestions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    date TEXT,
+    payload_json TEXT,
+    outcome_json TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    reconciled_at TEXT
+  );`);
+  const ins = d.prepare(`INSERT INTO suggestions (kind, date, payload_json) VALUES (?, ?, ?)`);
+  // A malformed row sharing the SAME date as real duplicates — must not poison
+  // that date's dedup, and must not abort the whole statement.
+  ins.run("day_read", "2026-06-17", "{truncated");
+  ins.run("day_read", "2026-06-17", JSON.stringify({ kind: "rest", override: null }));
+  ins.run("day_read", "2026-06-17", JSON.stringify({ kind: "train", override: null }));
+  // A clean duplicate on a DIFFERENT date — proves the fix does real dedup work,
+  // not just avoids crashing.
+  ins.run("day_read", "2026-06-20", JSON.stringify({ kind: "easy", override: null }));
+  ins.run("day_read", "2026-06-20", JSON.stringify({ kind: "rest", override: null }));
+
+  d.exec("PRAGMA user_version = 77;");
+  assert.doesNotThrow(() => runMigrations(d), "a malformed payload must not abort the migration");
+  assert.equal(
+    Number(d.prepare("PRAGMA user_version").get().user_version),
+    MAX_VERSION,
+    "the migration still completes and genuinely advances the version"
+  );
+
+  const rows = d.prepare(`SELECT id, date, payload_json FROM suggestions WHERE kind = 'day_read' ORDER BY id`).all();
+  const forDate17 = rows.filter((r) => r.date === "2026-06-17");
+  assert.equal(forDate17.length, 2, "the malformed row survives untouched; the real duplicate is still collapsed");
+  assert.ok(
+    forDate17.some((r) => r.payload_json === "{truncated"),
+    "the malformed row itself is never deleted"
+  );
+  const realSurvivor17 = forDate17.find((r) => r.payload_json !== "{truncated");
+  assert.equal(JSON.parse(realSurvivor17.payload_json).kind, "rest", "the earliest REAL canonical row survives");
+
+  const forDate20 = rows.filter((r) => r.date === "2026-06-20");
+  assert.equal(forDate20.length, 1, "a clean date elsewhere in the table is still deduped correctly");
+  assert.equal(JSON.parse(forDate20[0].payload_json).kind, "easy", "the earliest survives");
+  d.close();
+});
+
+// Defect caught in review: json_extract(NULL, '$.override') evaluates to NULL —
+// the same result as an explicit override:null — so a NULL payload_json row read
+// as canonical too, and being the smallest id, could win the MIN(id) survivor
+// slot and get KEPT while every REAL canonical read for that date was deleted out
+// from under it. payload_json IS NOT NULL now excludes a NULL row from the
+// candidate pool entirely: never deleted (nothing proves it's a duplicate), and
+// never eligible to be the survivor either.
+test("v78 never lets a NULL payload_json row win the MIN(id) survivor slot and delete real reads", () => {
+  const d = new DatabaseSync(":memory:");
+  d.exec(`CREATE TABLE suggestions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    date TEXT,
+    payload_json TEXT,
+    outcome_json TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    reconciled_at TEXT
+  );`);
+  const ins = d.prepare(`INSERT INTO suggestions (kind, date, payload_json) VALUES (?, ?, ?)`);
+  // The NULL row is inserted FIRST so it has the smallest id — the exact shape
+  // that would have won an unguarded MIN(id).
+  ins.run("day_read", "2026-06-17", null);
+  ins.run("day_read", "2026-06-17", JSON.stringify({ kind: "rest", override: null }));
+  ins.run("day_read", "2026-06-17", JSON.stringify({ kind: "train", override: null }));
+
+  d.exec("PRAGMA user_version = 77;");
+  runMigrations(d);
+
+  const rows = d
+    .prepare(`SELECT id, payload_json FROM suggestions WHERE kind = 'day_read' AND date = '2026-06-17' ORDER BY id`)
+    .all();
+  assert.equal(rows.length, 2, "the NULL row survives untouched alongside the earliest REAL canonical row");
+  assert.equal(rows[0].payload_json, null, "the NULL-payload row is left alone, not treated as the canonical survivor");
+  assert.equal(JSON.parse(rows[1].payload_json).kind, "rest", "the earliest REAL read is the one that survives");
+  d.close();
+});
+
 test("migration versions are gapless 1..N, unique, and strictly ascending", () => {
   const versions = MIGRATIONS.map((m) => m.version);
   const sorted = [...versions].sort((a, b) => a - b);

@@ -113,8 +113,15 @@ process.env.AGENTS_CONFIG = fixturePath;
 
 const { agentSupportsStructuredOutput, runAgent, runAgentWithFallback } = await import("../dist/agents.js");
 const { matchesJsonSchema } = await import("../dist/json-schema.js");
-const { MEAL_PLAN_STRUCTURE_SCHEMA, MEAL_SWAP_SCHEMA, PLAN_PROPOSAL_SCHEMA, WEEK_AHEAD_SCHEMA, isPlanProposalResult } =
-  await import("../dist/agent-contracts.js");
+const {
+  MEAL_PLAN_STRUCTURE_SCHEMA,
+  MEAL_SWAP_SCHEMA,
+  PLAN_PROPOSAL_SCHEMA,
+  WEEK_AHEAD_SCHEMA,
+  isMealPlanStructureResult,
+  isMealSwapResult,
+  isPlanProposalResult,
+} = await import("../dist/agent-contracts.js");
 
 const SCHEMA = { type: "object", additionalProperties: true, properties: { ok: { type: "boolean" } } };
 
@@ -196,11 +203,39 @@ test("every shipped schema is a single top-level object", () => {
   }
 });
 
-test("every object node stays open so constrained decoding cannot strip a consumed field", () => {
-  // Verified live against claude 2.1.220 and grok 0.2.112: a field the schema does not
-  // mention is silently dropped from the model's output. These payloads carry far more
-  // than the acceptance check reads (reason, notes, superset_group, the cardio set), so
-  // a closed node would amputate them.
+test("every field the prose contract solicits is NAMED in the schema", () => {
+  // An open node PERMITS an unnamed field; it does not make the model emit one.
+  // Measured live (claude 2.1.220, open days[].items[]): target_distance_km and
+  // target_duration_min survived, but target_zone and muscle_group were DROPPED and
+  // folded into `note` as "target_zone: Z2, conversational pace". So openness is not
+  // the mitigation — naming is. These lists mirror the prose twins in
+  // src/prompt/coach.ts, src/prompt/health.ts and src/prompt/nutrition.ts.
+  const props = (schema) => Object.keys(schema.properties ?? {});
+  const daysItems = PLAN_PROPOSAL_SCHEMA.properties.days.items.properties.items.items;
+  for (const field of ["target_distance_km", "target_duration_min", "target_zone", "muscle_group", "superset_group"]) {
+    assert.ok(props(daysItems).includes(field), `days[].items[] must name ${field}`);
+  }
+  const change = PLAN_PROPOSAL_SCHEMA.properties.changes.items;
+  for (const field of ["target_distance_km", "target_duration_min", "target_zone", "kind", "label"]) {
+    assert.ok(props(change).includes(field), `changes[] must name ${field} (a kind:"cardio" change takes them)`);
+  }
+  const cardio = PLAN_PROPOSAL_SCHEMA.properties.cardio.items;
+  for (const field of ["exercise", "day_name", "focus", "interval"]) {
+    assert.ok(props(cardio).includes(field), `cardio[] must name ${field}`);
+  }
+  const meal = MEAL_PLAN_STRUCTURE_SCHEMA.properties.days.items.properties.meals.items;
+  for (const field of ["items", "carbs_g", "fat_g"]) {
+    assert.ok(props(meal).includes(field), `a meal must name ${field}`);
+  }
+  for (const field of ["summary", "shopping", "practicality", "nutrition_pattern", "notes"]) {
+    assert.ok(props(MEAL_PLAN_STRUCTURE_SCHEMA).includes(field), `the meal plan must name ${field}`);
+  }
+  for (const field of ["day", "note"]) {
+    assert.ok(props(WEEK_AHEAD_SCHEMA.properties.days.items).includes(field), `a week-ahead day must name ${field}`);
+  }
+});
+
+test("every object node stays open, as a floor under the naming above", () => {
   const openEverywhere = (schema, trail) => {
     if (!schema || typeof schema !== "object") return;
     if (schema.type === "object" || schema.properties) {
@@ -248,4 +283,56 @@ test("a schema-shaped payload that misses the operation's semantics is still rej
   // ...and structure alone can fail while the old shape-only reading would have passed.
   assert.equal(isPlanProposalResult({ summary: "x", changes: [{ day_number: 1, exercise: "Squat" }] }), true);
   assert.equal(isPlanProposalResult({ summary: "   ", changes: [{ day_number: 1, exercise: "Squat" }] }), false);
+});
+
+test("the strict reading is what the CLI gets: a numeric slot means a number", () => {
+  // Enforcement side. Nothing relaxes here — constrained decoding emits a real number,
+  // and the invariant tests above hand the CLI exactly these schemas.
+  assert.equal(matchesJsonSchema({ type: "integer" }, "1"), false);
+  assert.equal(matchesJsonSchema({ type: "number", exclusiveMinimum: 0 }, "520"), false);
+  assert.equal(matchesJsonSchema(PLAN_PROPOSAL_SCHEMA, { summary: "x", changes: [{ day_number: "1" }] }), false);
+});
+
+test("the coercing reading accepts the numeric strings a non-enforcing provider emits", () => {
+  // Acceptance side. antigravity declares no structured output and the stub has none,
+  // so their answers are free-form JSON where "1" for an integer is ordinary — and the
+  // applier has always coerced via Number(). Rejecting these burned the repair retry
+  // and could end a rotation at {ok:false}.
+  const coerce = { coerce: true };
+  assert.equal(matchesJsonSchema({ type: "integer" }, "1", coerce), true);
+  assert.equal(matchesJsonSchema({ type: "integer" }, "1.5", coerce), false, "still not a whole number");
+  assert.equal(matchesJsonSchema({ type: "number", exclusiveMinimum: 0 }, "520", coerce), true);
+  // the coerced value is judged against the range, not waved past it
+  assert.equal(matchesJsonSchema({ type: "number", exclusiveMinimum: 0 }, "0", coerce), false);
+  assert.equal(matchesJsonSchema({ type: "integer", minimum: 1 }, "0", coerce), false);
+  assert.equal(matchesJsonSchema({ type: "number" }, "not a number", coerce), false);
+  // a slot that already takes a string is never reinterpreted as a number
+  assert.equal(matchesJsonSchema({ type: ["string", "number"] }, "12", coerce), true);
+  assert.equal(matchesJsonSchema({ type: "string", minLength: 2 }, "12", coerce), true);
+  // narrower than bare Number(): these are coercion coincidences, not contract values
+  for (const junk of [null, true, [], ""]) {
+    assert.equal(matchesJsonSchema({ type: "integer" }, junk, coerce), false, `${JSON.stringify(junk)} is not a number`);
+  }
+  // ...but a slot that MEANS null still takes null
+  assert.equal(matchesJsonSchema({ type: ["number", "null"] }, null, coerce), true);
+});
+
+test("the acceptance predicates accept numeric strings end to end", () => {
+  // The regression this restores, at the predicate level rather than the evaluator's.
+  assert.equal(isPlanProposalResult({ summary: "x", changes: [{ day_number: "1", exercise: "Back Squat" }] }), true);
+  assert.equal(isMealSwapResult({ name: "Bowl", kcal: "520", protein_g: "40", fiber_g: "9" }), true);
+  const day = (n) => ({ day: `Day ${n}`, meals: [{ name: "Meal", kcal: "800", protein_g: "60", fiber_g: "10" }] });
+  assert.equal(
+    isMealPlanStructureResult({
+      daily_kcal: "2400",
+      daily_protein_g: "180",
+      daily_fiber_g: "30",
+      days: [day(1), day(2), day(3), day(4), day(5)],
+    }),
+    true
+  );
+  // Coercion widens the numeric slots only — every other guard still bites.
+  assert.equal(isMealSwapResult({ name: "Bowl", kcal: "0", protein_g: "40", fiber_g: "9" }), false);
+  assert.equal(isMealSwapResult({ name: "   ", kcal: "520", protein_g: "40", fiber_g: "9" }), false);
+  assert.equal(isPlanProposalResult({ summary: "x", changes: [{ day_number: "nope", exercise: "Squat" }] }), false);
 });

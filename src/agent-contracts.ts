@@ -58,6 +58,43 @@ export function isSessionSuggestionResult(value: unknown): boolean {
 // Numeric slots stay open to null where null is MEANINGFUL — target_weight null is
 // bodyweight and a negative target_weight is an assisted movement, so neither slot
 // carries a `minimum`.
+//
+// EVERY FIELD THE PROSE TWIN SOLICITS IS NAMED HERE, and that is a hard requirement,
+// not tidiness. `additionalProperties: true` only PERMITS an unnamed field; it does not
+// make the model emit one. Measured live against claude 2.1.220 with an open node: on a
+// cardio item the model kept target_distance_km and target_duration_min but DROPPED
+// target_zone, and dropped muscle_group on a strength item — folding both into `note`
+// as "target_zone: Z2, conversational pace". Constrained decoding steers toward the
+// named slots, so an unnamed-but-consumed field is silent data loss in an APPLIED plan,
+// not a rejected payload. When you add a field to the prose contract, add it here.
+const RUN_INTERVAL_SCHEMA: JsonSchema = {
+  type: "array",
+  items: {
+    type: "object",
+    additionalProperties: true,
+    properties: {
+      reps: { type: ["integer", "null"], minimum: 0 },
+      on: { type: ["string", "null"] },
+      off: { type: ["string", "null"] },
+      zone: { type: ["string", "null"] },
+    },
+  },
+};
+
+// The cardio prescription field set, shared by a `cardio[]` entry and a `changes[]`
+// entry carrying kind:"cardio" (which profile.ts routes through the SAME
+// toRunPrescription mapper, so it must offer the same slots).
+const RUN_PRESCRIPTION_PROPERTIES: Record<string, JsonSchema> = {
+  label: { type: "string" },
+  exercise: { type: "string" },
+  target_distance_km: { type: ["number", "null"], minimum: 0 },
+  target_duration_min: { type: ["number", "null"], minimum: 0 },
+  target_zone: { type: ["string", "null"] },
+  day_name: { type: ["string", "null"] },
+  focus: { type: ["string", "null"] },
+  interval: RUN_INTERVAL_SCHEMA,
+};
+
 const PLAN_CHANGE_SCHEMA: JsonSchema = {
   type: "object",
   additionalProperties: true,
@@ -80,6 +117,9 @@ const PLAN_CHANGE_SCHEMA: JsonSchema = {
     mode: { type: ["string", "null"] },
     reason: { type: "string" },
     note: { type: ["string", "null"] },
+    // kind:"cardio" reroutes this entry to the run prescription mapper.
+    kind: { type: "string" },
+    ...RUN_PRESCRIPTION_PROPERTIES,
   },
 };
 
@@ -89,12 +129,10 @@ const PLAN_CARDIO_SCHEMA: JsonSchema = {
   required: ["day_number", "label"],
   properties: {
     day_number: { type: "integer", minimum: 1 },
-    label: { type: "string", minLength: 1 },
-    target_distance_km: { type: ["number", "null"], minimum: 0 },
-    target_duration_min: { type: ["number", "null"], minimum: 0 },
-    target_zone: { type: ["string", "null"] },
     reason: { type: "string" },
     note: { type: ["string", "null"] },
+    ...RUN_PRESCRIPTION_PROPERTIES,
+    label: { type: "string", minLength: 1 },
   },
 };
 
@@ -105,6 +143,7 @@ export const PLAN_PROPOSAL_SCHEMA: JsonSchema = {
   properties: {
     summary: { type: "string", minLength: 1 },
     notes: { type: ["string", "null"] },
+    rationale: { type: ["string", "null"] },
     changes: { type: "array", items: PLAN_CHANGE_SCHEMA },
     cardio: { type: "array", items: PLAN_CARDIO_SCHEMA },
     days: {
@@ -134,6 +173,13 @@ export const PLAN_PROPOSAL_SCHEMA: JsonSchema = {
                 target_seconds: { type: ["number", "null"], minimum: 0 },
                 superset_group: { type: ["integer", "null"] },
                 note: { type: ["string", "null"] },
+                warmup_sets: { type: ["integer", "null"], minimum: 0 },
+                mode: { type: ["string", "null"] },
+                // Read only by plan-quality's canonicalGroup — measured DROPPED when unnamed.
+                muscle_group: { type: ["string", "null"] },
+                interval_json: { type: ["string", "null"] },
+                // A days item may be strength OR kind:"cardio", which takes these.
+                ...RUN_PRESCRIPTION_PROPERTIES,
               },
             },
           },
@@ -144,7 +190,7 @@ export const PLAN_PROPOSAL_SCHEMA: JsonSchema = {
 };
 
 export function isPlanProposalResult(value: unknown): boolean {
-  if (!matchesJsonSchema(PLAN_PROPOSAL_SCHEMA, value)) return false;
+  if (!matchesJsonSchema(PLAN_PROPOSAL_SCHEMA, value, { coerce: true })) return false;
   const p = object(value);
   if (!p || !text(p.summary)) return false;
   // "At least one action array" and "a change names an exercise OR a swap" are
@@ -194,6 +240,9 @@ export const WEEK_AHEAD_SCHEMA: JsonSchema = {
         properties: {
           kind: { type: "string", enum: ["lift", "run", "mixed", "rest"] },
           label: { type: "string", minLength: 1 },
+          // Solicited by the prose twin (prompt/health.ts WEEK_AHEAD_SCHEMA).
+          day: { type: ["string", "null"] },
+          note: { type: ["string", "null"] },
         },
       },
     },
@@ -201,30 +250,42 @@ export const WEEK_AHEAD_SCHEMA: JsonSchema = {
 };
 
 export function isWeekAheadResult(value: unknown): boolean {
-  if (!matchesJsonSchema(WEEK_AHEAD_SCHEMA, value)) return false;
+  if (!matchesJsonSchema(WEEK_AHEAD_SCHEMA, value, { coerce: true })) return false;
   const p = object(value);
   if (!p || !text(p.summary)) return false;
   return p.days.every((raw: unknown) => text(object(raw)?.label));
 }
 
 // A meal is the payload's leaf shape, shared by the weekly plan and the one-off swap.
+// `items`/`carbs_g`/`fat_g` are named because the prose twins solicit them
+// (prompt/nutrition.ts MEAL_SCHEMA and SWAP_SCHEMA) — see the note above
+// PLAN_CHANGE_SCHEMA for why an open node is not enough to keep them.
 const MEAL_SCHEMA: JsonSchema = {
   type: "object",
   additionalProperties: true,
   required: ["name", "kcal", "protein_g", "fiber_g"],
   properties: {
     name: { type: "string", minLength: 1 },
+    items: { type: ["string", "null"] },
     kcal: { type: "number", exclusiveMinimum: 0 },
     protein_g: { type: "number", minimum: 0 },
+    carbs_g: { type: ["number", "null"], minimum: 0 },
+    fat_g: { type: ["number", "null"], minimum: 0 },
     fiber_g: { type: "number", minimum: 0 },
   },
 };
+
+// No enum: nothing in Cairn validates the confidence word, the prose twin already
+// states the vocabulary, and a nullable enum is the kind of construct an enforcing
+// backend is most likely to reject.
+const CONFIDENCE_SCHEMA: JsonSchema = { type: ["string", "null"] };
 
 export const MEAL_PLAN_STRUCTURE_SCHEMA: JsonSchema = {
   type: "object",
   additionalProperties: true,
   required: ["daily_kcal", "daily_protein_g", "daily_fiber_g", "days"],
   properties: {
+    summary: { type: ["string", "null"] },
     daily_kcal: { type: "number", exclusiveMinimum: 0 },
     daily_protein_g: { type: "number", exclusiveMinimum: 0 },
     daily_fiber_g: { type: "number", exclusiveMinimum: 0 },
@@ -238,15 +299,42 @@ export const MEAL_PLAN_STRUCTURE_SCHEMA: JsonSchema = {
         required: ["day", "meals"],
         properties: {
           day: { type: "string", minLength: 1 },
+          note: { type: ["string", "null"] },
           meals: { type: "array", minItems: 1, items: MEAL_SCHEMA },
         },
       },
     },
+    shopping: { type: "array", items: { type: "string" } },
+    practicality: {
+      type: "object",
+      additionalProperties: true,
+      properties: {
+        prep_pattern: { type: ["string", "null"] },
+        budget_availability: { type: ["string", "null"] },
+        household_fit: { type: ["string", "null"] },
+        repeatable_staples: { type: "array", items: { type: "string" } },
+        confidence: CONFIDENCE_SCHEMA,
+      },
+    },
+    nutrition_pattern: {
+      type: "object",
+      additionalProperties: true,
+      properties: {
+        fiber: { type: ["string", "null"] },
+        omega_3_sources: { type: ["string", "null"] },
+        iron_context: { type: ["string", "null"] },
+        calcium_potassium: { type: ["string", "null"] },
+        saturated_fat_added_sugar: { type: ["string", "null"] },
+        basis: { type: ["string", "null"] },
+        confidence: CONFIDENCE_SCHEMA,
+      },
+    },
+    notes: { type: ["string", "null"] },
   },
 };
 
 export function isMealPlanStructureResult(value: unknown): boolean {
-  if (!matchesJsonSchema(MEAL_PLAN_STRUCTURE_SCHEMA, value)) return false;
+  if (!matchesJsonSchema(MEAL_PLAN_STRUCTURE_SCHEMA, value, { coerce: true })) return false;
   const p = object(value);
   if (!p) return false;
   return p.days.every((rawDay: unknown) => {
@@ -271,7 +359,7 @@ export function isNutritionCheckinResult(value: unknown): boolean {
 export const MEAL_SWAP_SCHEMA: JsonSchema = MEAL_SCHEMA;
 
 export function isMealSwapResult(value: unknown): boolean {
-  return matchesJsonSchema(MEAL_SWAP_SCHEMA, value) && text(object(value)?.name);
+  return matchesJsonSchema(MEAL_SWAP_SCHEMA, value, { coerce: true }) && text(object(value)?.name);
 }
 
 export function isRecipeResult(value: unknown): boolean {

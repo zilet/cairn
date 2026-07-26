@@ -564,3 +564,38 @@ test("familyLabelFromKey leaves a normal key untouched", () => {
 test("familyLabelFromKey handles a leading 's' token without crashing", () => {
   assert.equal(familyLabelFromKey("s carry"), "S Carry");
 });
+
+// liftStates(date) scopes which lifts EXIST as of the day being read, but every
+// grade underneath it was computed from the FULL history — getProgress unbounded,
+// comparableLiftDates unbounded, gradeTimedLift unbounded. So a historical read's
+// est-1RM, trend and push/hold/deload verdict came from work that had not happened
+// yet on the day it claims to describe.
+test("a historical program state cannot grade a lift from sets logged after it", () => {
+  const readDate = "2026-03-15";
+  repo.logSetByName({ exercise: "Back Squat", weight: 200, reps: 5, rir: 2, date: "2026-03-08" });
+  repo.logSetByName({ exercise: "Back Squat", weight: 205, reps: 5, rir: 2, date: "2026-03-12" });
+  // A big jump logged FOUR DAYS AFTER the day being read.
+  repo.logSetByName({ exercise: "Back Squat", weight: 320, reps: 5, rir: 2, date: "2026-03-19" });
+
+  const asOfRead = repo.getProgramState(readDate);
+  const lift = asOfRead.lifts.find((l) => /back squat/i.test(String(l.exercise)));
+  assert.ok(lift, "the lift is present as of the read date");
+  // Epley on 205x5 is ~239; on 320x5 it is ~373. The later set must be invisible.
+  assert.ok(lift.est_1rm < 300, `graded ${lift.est_1rm} — a set logged after the read date leaked in`);
+
+  // The live read still sees everything.
+  const asOfLater = repo.getProgramState("2026-03-20");
+  const laterLift = asOfLater.lifts.find((l) => /back squat/i.test(String(l.exercise)));
+  assert.ok(laterLift.est_1rm > 300, "the later read still sees the whole history");
+});
+
+test("a historical timed-lift grade is bounded to the day being read too", () => {
+  const readDate = "2026-03-15";
+  repo.logSetByName({ exercise: "Side Plank", duration_sec: 30, exercise_mode: "timed", date: "2026-03-08" });
+  repo.logSetByName({ exercise: "Side Plank", duration_sec: 40, exercise_mode: "timed", date: "2026-03-12" });
+  repo.logSetByName({ exercise: "Side Plank", duration_sec: 200, exercise_mode: "timed", date: "2026-03-19" });
+
+  const lift = repo.getProgramState(readDate).lifts.find((l) => /side plank/i.test(String(l.exercise)));
+  assert.ok(lift, "the timed lift is present as of the read date");
+  assert.ok(lift.best_seconds < 200, `held ${lift.best_seconds}s — a hold logged after the read date leaked in`);
+});
