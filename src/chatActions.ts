@@ -1,3 +1,9 @@
+import {
+  FOOD_INGREDIENT_SCHEMA,
+  FOOD_NUTRITION_PATTERN_SCHEMA,
+  FOOD_PROVENANCE_SCHEMA,
+  FOOD_CAPTURE_GUARDRAILS,
+} from "./foodCapture.js";
 import { HEALTH_DOCUMENT_KINDS, normalizeHealthDocumentKind, type HealthDocumentKind } from "./healthDocumentKinds.js";
 
 type ChatActionRecord = Record<string, unknown>;
@@ -102,6 +108,13 @@ export interface LogFoodAction extends ChatActionBase {
   carbs_g?: unknown;
   fat_g?: unknown;
   fiber_g?: unknown;
+  // The coarse bands that let intake be correlated against a blood panel, and the
+  // provenance that keeps a stated weight distinguishable from a guess. Both are
+  // coerced by src/foodCapture.ts on the way to storage — the same coercion the two
+  // enrichment paths already run — so an off-contract value never reaches the blob.
+  nutrition_pattern?: unknown;
+  confidence?: unknown;
+  basis?: unknown;
   notes?: unknown;
   // WHEN it was eaten, resolved by the model out of the sentence ("I had a late
   // dinner last night") against the local clock it already receives via
@@ -298,11 +311,15 @@ export const CHAT_ACTION_PROMPT_SPECS = {
     applyMode: "immediate",
     shape: `{ "type": "log_food", "meal": "breakfast|lunch|dinner|snack", "summary": "<clean dish name>",
       "items": ["<component>"], "ingredients": [
-        { "item": "<ingredient>", "amount": "<qty>", "kcal": <number|null>, "protein_g": <number|null>, "carbs_g": <number|null>, "fat_g": <number|null> } ],
+        ${FOOD_INGREDIENT_SCHEMA} ],
       "kcal": <number>, "protein_g": <number>, "carbs_g": <number>, "fat_g": <number>, "fiber_g": <number|null>, "notes": <string|null>,
+      "nutrition_pattern": ${FOOD_NUTRITION_PATTERN_SCHEMA},
+      ${FOOD_PROVENANCE_SCHEMA},
       "date": "YYYY-MM-DD|omit", "eaten_at": "HH:MM (24h, local)|omit" }`,
     guidance: [
       `log_food records a meal estimate (food note) — use it when the user reports something they ate or attaches a plate photo. Estimate macros from ordinary serving sizes; null when too unsure.`,
+      ...FOOD_CAPTURE_GUARDRAILS,
+      `nutrition_pattern is what lets intake be read against their bloodwork later (sodium, potassium, calcium, iron, saturated fat, added sugar, omega-3, alcohol, caffeine). Fill it for every meal you log, in coarse bands — "unknown" is a fine, honest answer for a band you cannot call.`,
       `BEFORE emitting log_food, check DATA.day_intake.entries. If the same meal is already logged today, reference it instead of logging a duplicate. If the user is correcting that row, emit update_food_note with the existing id.`,
       `WHEN they ate it: people log out of order — "last night", "yesterday at 8", "this morning", "a couple hours ago", "lunch yesterday". Resolve those against DATA.now (which carries today's local date, weekday, time and hour) and emit "date" and "eaten_at" yourself. "last night" = yesterday's date at a late-evening hour; "this morning" = today, early; a bare clock time means today unless the sentence points at another day. Omit "date" for a meal eaten today.`,
       `NEVER ask what time it was. If they didn't say, omit "eaten_at" entirely — an entry with no time is completely normal and completely fine. Approximating from what they DID say ("a late dinner" → about 21:00) is right; interrogating them for a number is not. Never invent a date you have no basis for.`,

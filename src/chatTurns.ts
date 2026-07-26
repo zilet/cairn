@@ -37,6 +37,7 @@ import {
 import { createChatStreamFilter, type LiveReplyEvent } from "./chatStreamFilter.js";
 import type { MemoryKind } from "./repo/memory.js";
 import { normalizeChatActions, type ChatAction, type ChatActionType, type LogFoodAction } from "./chatActions.js";
+import { normalizeFoodCaptureParsed } from "./foodCapture.js";
 import { applyProposalWithAutonomy, revertDecision } from "./domain/brain/autonomy-service.js";
 import { diagnosticErrorName, recordAsyncFailure } from "./diagnostics.js";
 import {
@@ -1234,16 +1235,13 @@ function logPhotoFood(actions: ChatAction[], turn: any): { id: number; [key: str
   // Only a structured log_food action authorizes a photo-backed food-note write.
   if (!lf) return null;
   const message = (turn.message ?? "").toString();
-  const parsedNote: Record<string, unknown> = {
+  // Same shared coercion as the text lane, with the basis that is actually true
+  // here: this estimate came from LOOKING AT A PICTURE. The vision enrichment
+  // refines it in place afterwards and re-stamps the same provenance.
+  const parsedNote: Record<string, unknown> = normalizeFoodCaptureParsed(lf, {
     summary: (lf?.summary ?? lf?.name ?? (message.trim() || "Photo meal")).toString(),
-    items: Array.isArray(lf?.items) ? lf.items : undefined,
-    kcal: lf?.kcal ?? null,
-    protein_g: lf?.protein_g ?? null,
-    carbs_g: lf?.carbs_g ?? null,
-    fat_g: lf?.fat_g ?? null,
-    fiber_g: lf?.fiber_g ?? null,
-    notes: lf?.notes ?? null,
-  };
+    fallbackBasis: "photo",
+  });
   // raw="" so addFoodNote does NOT queue the TEXT enricher (that would overwrite the
   // vision estimate). We enqueue the dedicated food_photo job explicitly below.
   // A photo of last night's plate is still last night's meal, so the agent's resolved
@@ -2260,17 +2258,22 @@ export function applyChatActions(
           // The chat agent already produced the structured estimate (it saw the
           // photo), so store it directly with raw="" — a non-empty raw would queue
           // text-only background enrichment that overwrites this parse.
-          const parsedNote = {
+          //
+          // Through the SHARED food-capture coercion (src/foodCapture.ts), the same
+          // one the two enrichment paths run: bands and provenance are enum-checked,
+          // macros are clamped instead of stored as whatever the model typed, and an
+          // absent meal total is built up from the ingredient rows. Chat is ~two
+          // thirds of all logging, so this is where nutrition_pattern actually
+          // reaches the bloodwork-correlation machinery.
+          //
+          // The basis FALLBACK is the honest default for this lane: the athlete's
+          // sentence rarely states a weight, so an unlabeled estimate is
+          // estimated_from_foods, never user_report. The model overrides it when
+          // they did state one.
+          const parsedNote = normalizeFoodCaptureParsed(a, {
             summary: (a.summary ?? a.name ?? message ?? "meal").toString(),
-            items: Array.isArray(a.items) ? a.items : undefined,
-            ingredients: Array.isArray(a.ingredients) ? a.ingredients : undefined,
-            kcal: a.kcal ?? null,
-            protein_g: a.protein_g ?? null,
-            carbs_g: a.carbs_g ?? null,
-            fat_g: a.fat_g ?? null,
-            fiber_g: a.fiber_g ?? null,
-            notes: a.notes ?? null,
-          };
+            fallbackBasis: "estimated_from_foods",
+          });
           applied.push({
             type: a.type,
             // `lenient` throughout this lane: the model resolved when the meal

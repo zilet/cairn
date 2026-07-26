@@ -6,6 +6,14 @@ import { db } from "./db.js";
 import { inferHealthDocumentKind, normalizeHealthDocumentKind } from "./healthDocumentKinds.js";
 import * as repo from "./repo.js";
 import { extractJson, runAgentWithFallback } from "./agents.js";
+import {
+  clampFoodMacro,
+  coerceFoodIngredients,
+  coerceFoodItems,
+  coerceFoodProvenance,
+  coerceNutritionPattern,
+  foodMacroTotalsFrom,
+} from "./foodCapture.js";
 import { buildEnrichPrompt, buildExerciseEnrichPrompt, buildFoodPhotoPrompt, buildHealthIngestPrompt, buildHealthReviewPrompt, buildGarminStrengthPrompt, buildImagingStudyPrompt } from "./prompt.js";
 import { explainExercise, reconcileMarkers, synthesizeHealth } from "./coachOps.js";
 import { GEMINI_TEXT_MODEL, warmExerciseArt } from "./art.js";
@@ -19,6 +27,15 @@ import { safeUploadPath } from "./uploadPaths.js";
 // the same way agentJobs.ts owns onJobEvent. The SSE stream routes subscribe with it.
 export { onEnrichEvent, isEnrichTerminal, isEnrichActive } from "./enrichBus.js";
 export type { EnrichEvent, EnrichResourceKind } from "./enrichBus.js";
+// The food-capture coercions now live in ./foodCapture.ts (one contract, three
+// surfaces). Re-exported here because they are part of this engine's surface —
+// every caller and test that reached for them through the enricher still can.
+export {
+  coerceFoodIngredients,
+  coerceFoodProvenance,
+  coerceNutritionPattern,
+  normalizeFoodCaptureParsed,
+} from "./foodCapture.js";
 
 const execFileP = promisify(execFile);
 
@@ -1015,22 +1032,33 @@ export function applyFoodPhoto(id: number, parsed: any): boolean {
   const merged: Record<string, any> = { ...cur };
   let changed = false;
   let usableMacro = false;
-  const inferredTotals = macroTotalsFromItems(parsed.items) ?? macroTotalsFromItems(parsed.ingredients);
+  // Prefer the STRUCTURED rows when the vision read gave them: `ingredients` carries
+  // the amount as a field, `items` carries it inside display prose.
+  const inferredTotals = foodMacroTotalsFrom(parsed.ingredients) ?? foodMacroTotalsFrom(parsed.items);
 
   const summary = asStr(parsed.summary);
   if (summary !== undefined) { merged.summary = summary; changed = true; }
   if (Array.isArray(parsed.items)) {
-    const items = parsed.items.map(photoItemLabel).filter((x: any) => !!x).slice(0, 50);
+    const items = coerceFoodItems(parsed.items) ?? [];
     if (items.length) {
       merged.items = items;
       changed = true;
     }
   }
-  const kcal = asNum(parsed.kcal ?? inferredTotals?.kcal); if (kcal !== undefined) { merged.kcal = clampMacro(kcal, 5000); changed = true; usableMacro = true; }
-  const protein = asNum(parsed.protein_g ?? inferredTotals?.protein_g); if (protein !== undefined) { merged.protein_g = clampMacro(protein, 500); changed = true; usableMacro = true; }
-  const carbs = asNum(parsed.carbs_g ?? inferredTotals?.carbs_g); if (carbs !== undefined) { merged.carbs_g = clampMacro(carbs, 1000); changed = true; usableMacro = true; }
-  const fat = asNum(parsed.fat_g ?? inferredTotals?.fat_g); if (fat !== undefined) { merged.fat_g = clampMacro(fat, 500); changed = true; usableMacro = true; }
-  const fiber = asNum(parsed.fiber_g ?? inferredTotals?.fiber_g); if (fiber !== undefined) { merged.fiber_g = clampMacro(fiber, 200); changed = true; usableMacro = true; }
+  // The photo path is where the portion is INFERRED, so this is exactly where
+  // structure is worth the most: rows with their own amounts and macros, rather
+  // than quantities embedded in a display string nothing can reason over. It is
+  // only safe because provenance travels with them (stamped below).
+  const ingredients = coerceFoodIngredients(parsed.ingredients);
+  if (ingredients?.length) {
+    merged.ingredients = ingredients;
+    changed = true;
+  }
+  const kcal = asNum(parsed.kcal ?? inferredTotals?.kcal); if (kcal !== undefined) { merged.kcal = clampFoodMacro("kcal", kcal); changed = true; usableMacro = true; }
+  const protein = asNum(parsed.protein_g ?? inferredTotals?.protein_g); if (protein !== undefined) { merged.protein_g = clampFoodMacro("protein_g", protein); changed = true; usableMacro = true; }
+  const carbs = asNum(parsed.carbs_g ?? inferredTotals?.carbs_g); if (carbs !== undefined) { merged.carbs_g = clampFoodMacro("carbs_g", carbs); changed = true; usableMacro = true; }
+  const fat = asNum(parsed.fat_g ?? inferredTotals?.fat_g); if (fat !== undefined) { merged.fat_g = clampFoodMacro("fat_g", fat); changed = true; usableMacro = true; }
+  const fiber = asNum(parsed.fiber_g ?? inferredTotals?.fiber_g); if (fiber !== undefined) { merged.fiber_g = clampFoodMacro("fiber_g", fiber); changed = true; usableMacro = true; }
   const notes = asStr(parsed.notes);
   if (notes !== undefined) {
     merged.notes = notes;
@@ -1040,13 +1068,6 @@ export function applyFoodPhoto(id: number, parsed: any): boolean {
     changed = true;
   }
 
-  // A coarse confidence band (low|medium|high) the surface can show as an honest
-  // "rough estimate" hint — never a score, never a percentage. Anything else → drop.
-  const conf = String(parsed.confidence ?? "").toLowerCase();
-  if (["low", "medium", "high"].includes(conf)) {
-    merged.confidence = conf;
-    changed = true;
-  }
   const pattern = coerceNutritionPattern(parsed.nutrition_pattern, "photo", parsed.fat_g ?? merged.fat_g);
   if (pattern) {
     merged.nutrition_pattern = pattern;
@@ -1055,98 +1076,25 @@ export function applyFoodPhoto(id: number, parsed: any): boolean {
   // The estimate came from the plate photo — mark provenance so the surface can say
   // "estimated from your photo" rather than implying a precise hand-entered log.
   if (!usableMacro) return false;
-  if (changed) { merged.from_photo = true; }
+  if (changed) {
+    merged.from_photo = true;
+    // Coarse band + how it was obtained, on EVERY stored estimate. A missing or
+    // scored ("92%") confidence lands on the honest floor instead of being dropped:
+    // an absent band is precisely the ambiguity this field exists to remove, and a
+    // per-ingredient breakdown read off a picture must never end up looking like a
+    // weighed log. Never a percentage, never a score.
+    const provenance = coerceFoodProvenance(parsed, "photo");
+    merged.confidence = provenance.confidence;
+    merged.basis = provenance.basis;
+  }
 
   if (changed) repo.updateFoodNoteParsed(id, merged);
   return changed;
 }
 
-function photoItemLabel(x: any): string | null {
-  if (x === null || x === undefined) return null;
-  if (typeof x === "object") {
-    const item = asStr(x.item ?? x.name ?? x.summary ?? x.food);
-    const amount = asStr(x.amount ?? x.qty ?? x.quantity ?? x.portion);
-    if (!item) return null;
-    return amount ? `${item} (${amount})`.slice(0, 200) : item.slice(0, 200);
-  }
-  const s = String(x).trim();
-  return s ? s.slice(0, 200) : null;
-}
-
-function macroTotalsFromItems(items: any): Record<string, number> | null {
-  if (!Array.isArray(items)) return null;
-  const totals: Record<string, number> = {};
-  let saw = false;
-  for (const item of items) {
-    if (!item || typeof item !== "object") continue;
-    for (const key of ["kcal", "protein_g", "carbs_g", "fat_g", "fiber_g"] as const) {
-      const n = asNum(item[key]);
-      if (n === undefined) continue;
-      totals[key] = (totals[key] ?? 0) + n;
-      saw = true;
-    }
-  }
-  return saw ? totals : null;
-}
-
-export function coerceNutritionPattern(
-  value: any,
-  fallbackBasis = "estimated_from_foods",
-  totalFat?: unknown
-): Record<string, any> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const out: Record<string, any> = {};
-  const bands = new Set(["low", "moderate", "high", "unknown"]);
-  for (const key of ["sodium", "potassium", "calcium", "iron", "saturated_fat", "added_sugar"]) {
-    const band = String(value[key] ?? "").toLowerCase();
-    if (bands.has(band)) out[key] = band;
-  }
-  for (const key of ["saturated_fat_g", "unsaturated_fat_g"] as const) {
-    if (value[key] === null) {
-      out[key] = null;
-      continue;
-    }
-    const n = asNum(value[key]);
-    if (n !== undefined) out[key] = Math.max(0, Math.min(300, Math.round(n * 10) / 10));
-  }
-  const totalFatG = asNum(totalFat);
-  if (
-    totalFatG !== undefined &&
-    typeof out.saturated_fat_g === "number" &&
-    typeof out.unsaturated_fat_g === "number" &&
-    out.saturated_fat_g + out.unsaturated_fat_g > totalFatG * 1.15
-  ) {
-    out.saturated_fat_g = null;
-    out.unsaturated_fat_g = null;
-  }
-  if (typeof value.omega_3_source === "boolean" || value.omega_3_source === null)
-    out.omega_3_source = value.omega_3_source;
-  for (const [key, max] of [
-    ["alcohol_servings", 20],
-    ["caffeine_mg", 2_000],
-  ] as const) {
-    const n = asNum(value[key]);
-    if (n !== undefined) out[key] = Math.max(0, Math.min(max, Math.round(n * 10) / 10));
-  }
-  const caffeineTime = asStr(value.caffeine_time);
-  if (caffeineTime !== undefined) out.caffeine_time = caffeineTime.slice(0, 80);
-  const quality = String(value.food_quality ?? "").toLowerCase();
-  if (["mostly_whole", "mixed", "mostly_ultra_processed", "unknown"].includes(quality)) out.food_quality = quality;
-  const confidence = String(value.confidence ?? "").toLowerCase();
-  out.confidence = ["low", "medium", "high"].includes(confidence) ? confidence : "low";
-  const basis = String(value.basis ?? fallbackBasis).toLowerCase();
-  out.basis = ["label", "user_report", "estimated_from_foods", "photo"].includes(basis) ? basis : fallbackBasis;
-  return Object.keys(out).length > 2 ? out : null;
-}
-
 function isImageAccessFailureNote(v: any): boolean {
   const s = String(v ?? "").toLowerCase();
   return !!s && /(unable|cannot|can't|could not|failed|blocked).{0,80}(image|photo|file|viewer|sandbox|access|open)/i.test(s);
-}
-
-// Clamp a macro value to a non-negative integer under a sane ceiling.
-function clampMacro(n: number, max: number): number {
-  return Math.min(max, Math.max(0, Math.round(n)));
 }
 
 function jobRawText(job: Job): string {
@@ -1629,58 +1577,51 @@ function applyStructured(job: Job, structured: any): boolean {
     return false;
   }
 
-  // food: merge the agent's coerced estimate over the existing parsed_json blob.
+  // food: merge the agent's coerced estimate over the existing parsed_json blob,
+  // through the SHARED food-capture coercion (src/foodCapture.ts) so this path, the
+  // photo path and chat's log_food agree on one shape.
   const cur = (repo.getFoodNote(job.id) as any)?.parsed ?? {};
   const merged: Record<string, any> = { ...cur };
   let changed = false;
+  // Meal totals are BUILT UP from the ingredient rows when the agent gave no
+  // top-level number — which is how fiber stops being a top-down guess. A stated
+  // total always wins over the sum.
+  const inferredTotals = foodMacroTotalsFrom(structured.ingredients) ?? foodMacroTotalsFrom(structured.items);
   const summary = asStr(structured.summary);
   if (summary !== undefined) { merged.summary = summary; changed = true; }
-  if (Array.isArray(structured.items)) {
-    merged.items = structured.items.map((x: any) => String(x).slice(0, 200)).slice(0, 50);
+  const items = coerceFoodItems(structured.items);
+  if (items) {
+    merged.items = items;
     changed = true;
   }
-  if (Array.isArray(structured.ingredients)) {
-    merged.ingredients = structured.ingredients
-      .filter((x: any) => x && typeof x === "object")
-      .slice(0, 50)
-      .map((x: any) => {
-        const item = asStr(x.item ?? x.name);
-        if (!item) return null;
-        const out: Record<string, any> = { item };
-        const amount = asStr(x.amount ?? x.qty ?? x.quantity);
-        if (amount !== undefined) out.amount = amount;
-        for (const key of ["kcal", "protein_g", "carbs_g", "fat_g"] as const) {
-          const n = asNum(x[key]);
-          if (n !== undefined) out[key] = n;
-        }
-        return out;
-      })
-      .filter(Boolean);
+  const ingredients = coerceFoodIngredients(structured.ingredients);
+  if (ingredients) {
+    merged.ingredients = ingredients;
     changed = true;
   }
-  const kcal = asNum(structured.kcal);
+  const kcal = asNum(structured.kcal ?? inferredTotals?.kcal);
   if (kcal !== undefined) {
-    merged.kcal = kcal;
+    merged.kcal = clampFoodMacro("kcal", kcal);
     changed = true;
   }
-  const protein = asNum(structured.protein_g);
+  const protein = asNum(structured.protein_g ?? inferredTotals?.protein_g);
   if (protein !== undefined) {
-    merged.protein_g = protein;
+    merged.protein_g = clampFoodMacro("protein_g", protein);
     changed = true;
   }
-  const carbs = asNum(structured.carbs_g);
+  const carbs = asNum(structured.carbs_g ?? inferredTotals?.carbs_g);
   if (carbs !== undefined) {
-    merged.carbs_g = carbs;
+    merged.carbs_g = clampFoodMacro("carbs_g", carbs);
     changed = true;
   }
-  const fat = asNum(structured.fat_g);
+  const fat = asNum(structured.fat_g ?? inferredTotals?.fat_g);
   if (fat !== undefined) {
-    merged.fat_g = fat;
+    merged.fat_g = clampFoodMacro("fat_g", fat);
     changed = true;
   }
-  const fiber = asNum(structured.fiber_g);
+  const fiber = asNum(structured.fiber_g ?? inferredTotals?.fiber_g);
   if (fiber !== undefined) {
-    merged.fiber_g = fiber;
+    merged.fiber_g = clampFoodMacro("fiber_g", fiber);
     changed = true;
   }
   const pattern = coerceNutritionPattern(structured.nutrition_pattern, "estimated_from_foods", structured.fat_g ?? merged.fat_g);
@@ -1692,6 +1633,15 @@ function applyStructured(job: Job, structured: any): boolean {
   if (fnotes !== undefined) {
     merged.notes = fnotes;
     changed = true;
+  }
+  // How the numbers were obtained, on every stored estimate. A free-text note that
+  // stated a real quantity ("205 g chicken") is a user_report the agent may mark
+  // high-confidence; everything it filled in from ordinary servings defaults to
+  // estimated_from_foods at the honest floor.
+  if (changed) {
+    const provenance = coerceFoodProvenance(structured, "estimated_from_foods");
+    merged.confidence = provenance.confidence;
+    merged.basis = provenance.basis;
   }
   if (changed) repo.updateFoodNoteParsed(job.id, merged);
   return changed;

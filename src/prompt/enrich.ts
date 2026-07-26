@@ -1,6 +1,12 @@
 // Background-enrichment prompts: free-text activity/food enrichment, the
 // health-document analyzer, the food-photo vision estimate, and the Garmin
 // strength reconciliation narrative.
+import {
+  FOOD_INGREDIENT_SCHEMA,
+  FOOD_NUTRITION_PATTERN_SCHEMA,
+  FOOD_PROVENANCE_SCHEMA,
+  foodCaptureGuardrailLines,
+} from "../foodCapture.js";
 import { HEALTH_DOCUMENT_KIND_SCHEMA } from "../healthDocumentKinds.js";
 import * as repo from "../repo.js";
 
@@ -23,24 +29,16 @@ const ENRICH_FOOD_SCHEMA = `{
     "summary": "<clean meal name or short description>",
     "items": [<string>],
     "ingredients": [
-      { "item": "<ingredient>", "amount": "<quantity from note or estimate>", "kcal": <number|null>, "protein_g": <number|null>, "carbs_g": <number|null>, "fat_g": <number|null> }
+      ${FOOD_INGREDIENT_SCHEMA}
     ],
     "kcal": <number|null>,
     "protein_g": <number|null>,
     "carbs_g": <number|null>,
     "fat_g": <number|null>,
     "fiber_g": <number|null>,
-    "nutrition_pattern": {
-      "sodium": "low|moderate|high|unknown", "potassium": "low|moderate|high|unknown",
-      "calcium": "low|moderate|high|unknown", "iron": "low|moderate|high|unknown",
-      "saturated_fat": "low|moderate|high|unknown", "added_sugar": "low|moderate|high|unknown",
-      "saturated_fat_g": <number|null>, "unsaturated_fat_g": <number|null>,
-      "omega_3_source": <boolean|null>, "alcohol_servings": <number|null>,
-      "caffeine_mg": <number|null>, "caffeine_time": <string|null>,
-      "food_quality": "mostly_whole|mixed|mostly_ultra_processed|unknown",
-      "confidence": "low|medium|high", "basis": "label|user_report|estimated_from_foods"
-    },
-    "notes": <string|null>
+    "nutrition_pattern": ${FOOD_NUTRITION_PATTERN_SCHEMA},
+    "notes": <string|null>,
+    ${FOOD_PROVENANCE_SCHEMA}
   },
   "memory": [
     { "content": "<short durable fact>", "kind": "observation|preference|injury|milestone" }
@@ -136,12 +134,9 @@ nutrition tracker, and extract any durable fact worth remembering.
 
 ${guardrails}
 - Correct obvious typos in ingredient names, but preserve the user's meaning.
-- Expand the note into ingredient-level rows with quantities when stated or reasonably inferable.
-- Nutrition estimates are rough. Fill totals and per-ingredient macros when you can reasonably estimate
-  them from ordinary serving sizes; use null for values that are too uncertain.
-- Use nutrition_pattern for COARSE pattern bands, not invented micronutrient milligrams. Label or explicit
-  user facts may be high confidence; ordinary-food inference is low/medium. Alcohol and caffeine stay null
-  unless the note actually identifies them.
+${foodCaptureGuardrailLines()}
+- A note that states an exact quantity ("205 g chicken", "two scoops") is a user_report you may treat as
+  high confidence. Anything you filled in from ordinary serving sizes is estimated_from_foods, and rough.
 - Estimate saturated_fat_g and unsaturated_fat_g only when ingredients and preparation make a practical
   split possible; otherwise use null. Keep the split consistent with total fat and avoid false precision.
   Explicit cooking method/oil in the note or durable memory overrides generic assumptions (for example,
@@ -230,8 +225,11 @@ ${
 // can open local files, so we hand the agent the ABSOLUTE image path (same trick as
 // the health-doc ingest) and ask it to LOOK at the plate and estimate its foods +
 // macros. Output is FLAT top-level macros (NOT the {structured} wrapper the text
-// enricher uses) — enrich.ts applyFoodPhoto reads it directly. Rough is fine;
-// honest > precise. Constitution: never moralize the food, never a score.
+// enricher uses) — enrich.ts applyFoodPhoto reads it directly. The ingredient rows,
+// pattern bands and provenance come from the one shared contract in
+// src/foodCapture.ts: this is the path where the portion is INFERRED, so structure
+// matters most here and honest provenance is what keeps it from reading as measured.
+// Rough is fine; honest > precise. Constitution: never moralize the food, never a score.
 export function buildFoodPhotoPrompt(absPath: string, hint?: string): string {
   const profile = repo.getProfile();
   const goal = repo.computeGoalCheck();
@@ -252,6 +250,7 @@ The user's note for this meal: "${hint}" — use it to disambiguate, but trust w
 YOUR JOB:
 - Identify the dish(es) on the plate and the visible foods/components.
 - Estimate portion sizes from ordinary servings and what the plate/utensils imply about scale.
+- Break the plate into ingredient ROWS with their own amounts and macros.
 - Estimate TOTAL macros for the whole plate: calories, protein, carbs, fat, fiber.
 
 GUARDRAILS:
@@ -263,9 +262,14 @@ GUARDRAILS:
   use null for any single macro you truly can't estimate rather than guessing wildly.
 - "confidence" is a COARSE band, not a number: "high" (clear, familiar plate), "medium" (reasonable
   guess), "low" (hard to read — portions unclear, packaging only, dim photo).
+${foodCaptureGuardrailLines()}
+- A portion you read off a PICTURE is basis:"photo", never "user_report" — the athlete stating a
+  quantity in their note, or a readable package label, is what earns those. Splitting the plate into
+  rows makes the estimate more USEFUL, not more certain: keep confidence honest for what a photo can
+  actually support.
 - A restaurant photo cannot justify precise micronutrient numbers. Use only coarse nutrition_pattern
-  bands, mark basis:"photo", and keep confidence low/medium unless a readable label or explicit user
-  statement supports it. Alcohol and caffeine stay null unless visible or stated.
+  bands, and keep confidence low/medium unless a readable label or explicit user statement supports it.
+  Alcohol and caffeine stay null unless visible or stated.
 - Estimate saturated_fat_g and unsaturated_fat_g only when visible ingredients plus the user's note or
   durable preparation memory support a practical split; otherwise use null. The two should remain
   consistent with total fat. User-reported cooking method/oil overrides generic visual assumptions.
@@ -274,23 +278,17 @@ OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 {
   "summary": "<clean dish name / short description of the plate>",
   "items": ["<visible item + estimated quantity, e.g. 'scrambled eggs (~2 eggs)' >"],
+  "ingredients": [
+    ${FOOD_INGREDIENT_SCHEMA}
+  ],
   "kcal": <number|null>,
   "protein_g": <number|null>,
   "carbs_g": <number|null>,
   "fat_g": <number|null>,
   "fiber_g": <number|null>,
-  "nutrition_pattern": {
-    "sodium": "low|moderate|high|unknown", "potassium": "low|moderate|high|unknown",
-    "calcium": "low|moderate|high|unknown", "iron": "low|moderate|high|unknown",
-    "saturated_fat": "low|moderate|high|unknown", "added_sugar": "low|moderate|high|unknown",
-    "saturated_fat_g": <number|null>, "unsaturated_fat_g": <number|null>,
-    "omega_3_source": <boolean|null>, "alcohol_servings": <number|null>,
-    "caffeine_mg": <number|null>, "caffeine_time": <string|null>,
-    "food_quality": "mostly_whole|mixed|mostly_ultra_processed|unknown",
-    "confidence": "low|medium|high", "basis": "photo|user_report"
-  },
+  "nutrition_pattern": ${FOOD_NUTRITION_PATTERN_SCHEMA},
   "notes": <string|null>,
-  "confidence": "low|medium|high"
+  ${FOOD_PROVENANCE_SCHEMA}
 }
 
 CONTEXT (for portion realism only — do NOT let the goal bias the estimate up or down):

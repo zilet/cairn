@@ -129,12 +129,16 @@ test("applyFoodPhoto clamps an absurd payload to sane non-negative ceilings", ()
   assert.equal(p.fiber_g, 200, "fiber clamped");
 });
 
-test("applyFoodPhoto drops an invalid confidence value (no false precision, no score)", () => {
+test("applyFoodPhoto refuses a scored confidence and falls back to the honest floor (no score)", () => {
   const note = seedPhotoNote("/abs/uploads/plate.jpg");
   applyFoodPhoto(note.id, { kcal: 500, confidence: "92%" });
   const p = repo.getFoodNote(note.id).parsed;
   assert.equal(p.kcal, 500);
-  assert.ok(!("confidence" in p) || p.confidence === undefined, "a non low/medium/high confidence is not written");
+  assert.equal(p.confidence, "low", "a non low/medium/high confidence never survives as written");
+  assert.doesNotMatch(String(p.confidence), /\d/, "a confidence is a coarse band, never a number or a percentage");
+  // Provenance is not optional: an entry with NO band is exactly the ambiguity the
+  // field exists to remove, so a junk value lands on the floor rather than vanishing.
+  assert.equal(p.basis, "photo", "the entry still records how the estimate was actually obtained");
 });
 
 test("nutrition pattern keeps coarse provenance and rejects false micronutrient precision", () => {
