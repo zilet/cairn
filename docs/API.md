@@ -275,10 +275,10 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/food-notes` |  |
-| POST | `/api/food-notes` |  |
+| POST | `/api/food-notes` | Optional `date` (YYYY-MM-DD local day) backdates the entry — "I remembered last night's dinner" — and optional `eaten_at` ("HH:MM", 24-hour local) states when it was eaten. Both omitted keeps the old behavior exactly: today, no time. A date in the future or a malformed time is a 400 with the reason, never a silent fallback to today (which would file the meal on the wrong day). |
 | DELETE | `/api/food-notes/:id` |  |
 | GET | `/api/food-notes/:id` | Single food note row, hydrated (poll fallback for watching enrichment_status). |
-| PUT | `/api/food-notes/:id` | Manual correction of a logged food note (fix a macro, rename it, change the meal slot, "I changed my mind"). Stamps enrichment terminal so it isn't re-clobbered. 404 on unknown id. |
+| PUT | `/api/food-notes/:id` | Manual correction of a logged food note (fix a macro, rename it, change the meal slot, move it to the day it was actually eaten, "I changed my mind"). Stamps enrichment terminal so it isn't re-clobbered. 404 on unknown id.  `date` moves the entry to another local day and `eaten_at` corrects the stated time (send it blank to unstate a time). Omitting either leaves it alone, so correcting a macro never restamps the clock. Same strict validation as the POST. |
 | GET | `/api/food-notes/:id/stream` | Live enrichment status for one food note (Server-Sent Events) — the SSE-first path the PWA uses instead of polling; snapshot then transitions, close on terminal. EventSource can't set headers, so the PWA reaches this with ?token=. |
 
 ## `/frequent-foods`
