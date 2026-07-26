@@ -21,6 +21,7 @@ type FoodDetailNoteRow = FoodDetailControllerRecord & {
   raw_text?: string;
   raw_output?: string;
   created_at?: string;
+  eaten_at?: string | null;
 };
 type FoodDetailFoodNoteApi = {
   foodIngredients(parsed: unknown): FoodDetailIngredientRow[];
@@ -78,7 +79,11 @@ type FoodDetailControllerDeps = {
     const maxMacroKcal = Math.max(1, ...macros.map((macro) => macroKcal(macro as [string, unknown])));
     const ingredients = deps.foodNote.foodIngredients(parsed);
     const items = ingredients.length ? ingredients.map((ingredient) => deps.foodNote.ingredientLabel(ingredient)).join(", ") : deps.foodNote.foodItemsText(parsed);
-    const time = foodDetailString(row.created_at).slice(11, 16);
+    // When they said they ate it beats when the row happened to be written — those
+    // are the same moment for a meal logged as it happens and hours apart for one
+    // remembered later. Both are "HH:MM", so the sheet keeps a single clock register.
+    // Neither present simply means this line says nothing; there is no empty slot.
+    const time = foodDetailString(row.eaten_at) || foodDetailString(row.created_at).slice(11, 16);
 
     if (kcal && !deps.state._goal) {
       try {

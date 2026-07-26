@@ -172,6 +172,7 @@ function captureContext(ctx: any): Record<string, unknown> {
       entries: (Array.isArray(intake.entries) ? intake.entries : []).slice(0, 30).map((entry: any) => ({
         id: entry.id,
         meal: entry.meal ?? null,
+        eaten_at: entry.eaten_at ?? null, // so a correction to WHEN can target the right row
         kcal: entry.kcal ?? null,
         protein_g: entry.protein_g ?? null,
         carbs_g: entry.carbs_g ?? null,

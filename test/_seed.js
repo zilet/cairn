@@ -80,29 +80,39 @@ export function seedWeight(date, lb) {
   return repo.logWeight(lb, date);
 }
 
-// ---- food intake (controlled created_at so we can build N distinct intake days) ----
-// addFoodNote CAN backdate now — pass { date } (and optionally { eaten_at }), which is
-// what a real "I forgot to log Tuesday's dinner" write does. What it still cannot do is
-// choose created_at, which stays the instant of the WRITE by design; a fixture that
-// wants N historical days each with a plausible created_at has to place those rows
-// itself. It also fires side effects a fixture rarely wants: bumpFoodDataVersion()
-// (backstopped, ignorable), a `food_logged` brain event, invalidateDayReadForDate()
-// (busts the note's own day AND today whenever they differ), and — on non-empty raw
-// text with enrichment on — a background agent job. Inserting directly with an explicit
-// created_at and empty raw_output keeps intake seeding silent and fully offline.
+// ---- food intake (N distinct historical intake days) ----
+// This USED to insert raw, and the caveat that lived here explained why it had no
+// choice: insertFoodNote hardcoded localDateISO() for `date`, so no repo function
+// could create a food note for a past day. That is no longer true — addFoodNote
+// takes an optional `{ date, eaten_at }`, precisely so a meal can be recorded for
+// the day it was actually eaten. The structural reason is gone, so the fixture now
+// drives the PRODUCTION path like its siblings (seedTrainingDay, seedWeight) and
+// every side effect of a real food write fires: bumpFoodDataVersion(), the
+// `food_logged` brain event, and invalidateDayReadForDate() (which busts the cached
+// Brief for the note's own day AND today whenever they differ).
 //
-// So: raw insert for SETUP, the production path for the behavior UNDER TEST — see
-// food-invalidates-day-read.test.js, which places its fixture row raw and then asserts
-// against real repo.addFoodNote / updateFoodNote / deleteFoodNote calls. That split is
-// the pattern to copy.
-export function seedIntake(daysAgo, kcal, extra = {}) {
+// raw="" keeps this fully offline: addFoodNote only queues the background text
+// enricher for a NON-EMPTY raw, so no agent job is ever enqueued from here.
+//
+// What addFoodNote still CANNOT do is choose `created_at`, which stays the instant
+// of the WRITE by design — so these rows are backdated in `date` while carrying a
+// created_at of now. Nothing reads created_at for day-keying (every consumer keys on
+// COALESCE(date, substr(created_at,1,10)), and `date` is always stamped), so the
+// intake day series is identical either way. But a fixture that genuinely needs N
+// historical days each with a plausible WRITE time has to place those rows itself.
+// `frequentFoods()` is the one reader that cares about the clock, by hour; pass
+// `eatenAt` when a fixture cares which hour a meal lands in.
+//
+// If you need a genuinely INERT or IMPOSSIBLE row — a future-dated corrupt row that
+// the production path now correctly refuses to create — do the raw insert INLINE in
+// your own test, where the rawness is visible and belongs. See
+// estimateExpenditure.test.js's future-row fixture and food-invalidates-day-read.test.js.
+export function seedIntake(daysAgo, kcal, extra = {}, { eatenAt } = {}) {
   const parsed = { kcal, ...extra };
-  return db
-    .prepare(
-      `INSERT INTO food_notes (date, meal, raw_output, parsed_json, enrichment_status, created_at)
-       VALUES (?, 'meal', '', ?, NULL, ?)`
-    )
-    .run(localDaysAgo(daysAgo), JSON.stringify(parsed), tsDaysAgo(daysAgo));
+  return repo.addFoodNote("meal", "", parsed, undefined, {
+    date: localDaysAgo(daysAgo),
+    ...(eatenAt ? { eaten_at: eatenAt } : {}),
+  });
 }
 
 // ---- sessions + logged sets (drives dayRead's consecutive-training count) ----

@@ -2439,18 +2439,25 @@ export function frequentFoods(hour?: number): FrequentFood[] {
   // The hour set wraps midnight naturally.
   const bandHours: number[] = [];
   for (let dh = -2; dh <= 2; dh++) bandHours.push((((targetHour + dh) % 24) + 24) % 24);
+  // Match on WHEN IT WAS EATEN wherever that is recorded, falling back to the write
+  // time for every row that has none. Since a note can be backdated ("a late dinner
+  // last night", logged this morning), created_at alone would file that dinner under
+  // breakfast and quietly poison the time-of-day frequents. eaten_at is a LOCAL
+  // "HH:MM" so its hour is directly comparable to targetHour, which is also local.
   const rows = db
     .prepare(
-      `SELECT created_at, COALESCE(date, substr(created_at, 1, 10)) AS log_date, meal, parsed_json FROM food_notes
-     WHERE CAST(substr(created_at, 12, 2) AS INTEGER) IN (${bandHours.map(() => "?").join(",")})
+      `SELECT created_at, eaten_at, COALESCE(date, substr(created_at, 1, 10)) AS log_date, meal, parsed_json FROM food_notes
+     WHERE CAST(COALESCE(substr(eaten_at, 1, 2), substr(created_at, 12, 2)) AS INTEGER) IN (${bandHours.map(() => "?").join(",")})
      ORDER BY id DESC LIMIT 400`
     )
     .all(...bandHours) as any[];
   const agg = new Map<string, { count: number; last_at: string; days: Set<string> }>();
   for (const r of rows) {
-    // created_at is stored UTC ("YYYY-MM-DD HH:MM:SS"); read the hour and accept
-    // a ±2h window (wrapping midnight) around the target.
-    const hh = Number(String(r.created_at ?? "").slice(11, 13));
+    // eaten_at is local "HH:MM"; created_at is stored UTC ("YYYY-MM-DD HH:MM:SS").
+    // Read whichever this row has and accept a ±2h window (wrapping midnight).
+    const hh = r.eaten_at
+      ? Number(String(r.eaten_at).slice(0, 2))
+      : Number(String(r.created_at ?? "").slice(11, 13));
     if (!Number.isFinite(hh)) continue;
     const diff = Math.min(Math.abs(hh - targetHour), 24 - Math.abs(hh - targetHour));
     if (diff > 2) continue;

@@ -50,6 +50,7 @@ export interface CoachDayIntakeEntry {
   fat_g: number | null;
   fiber_g: number | null;
   nutrition_pattern?: CoachRecord | null;
+  eaten_at: string | null; // local "HH:MM" the athlete said they ate it; null whenever nobody remembered, which is ordinary
   logged_at: string | null;
   enrichment_status: string | null;
 }

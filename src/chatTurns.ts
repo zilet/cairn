@@ -128,6 +128,41 @@ export function enqueueChatTurn(id: number): void {
 const INSTANT_FOOD_ALLOWED_REASONS = new Set(["explicit_food_log", "photo_food_default", "explicit_fast_request"]);
 const QUESTION_LEAD_RE = /^(?:what|why|how|when|where|who|which|did|does|do|is|are|was|were|should|could|would|can)\b/i;
 
+// Does this message place the meal in TIME at all? Deliberately a coarse "is there
+// a when here", NOT a parser — the actual resolution of "last night" into a date and
+// an hour is the agent's job, over DATA.now, one layer down. All this decides is
+// which lane gets the sentence.
+//
+// It has to exist because the instant-capture lane runs with NO agent: it is a
+// receipt path that stamps the note with today and no time. That is exactly right
+// for "just had a protein shake" and exactly wrong for "I had a late dinner last
+// night around 9", which the bypass would have silently filed under today. So any
+// temporal reference disqualifies the bypass and the turn goes to the full lane,
+// where the model reads the whole sentence and resolves the day and the hour.
+// Erring toward the full lane is cheap (one ordinary chat turn); erring the other
+// way writes the wrong day into the athlete's log.
+const MENTIONS_WHEN_RE = new RegExp(
+  [
+    // named days and relative days
+    String.raw`\b(?:yesterday|last\s+night|tonight|this\s+morning|this\s+afternoon|this\s+evening|earlier|later)\b`,
+    String.raw`\b(?:last|past|previous)\s+(?:night|evening|monday|tuesday|wednesday|thursday|friday|saturday|sunday|week)\b`,
+    String.raw`\b(?:on\s+)?(?:mon|tues?|wed(?:nes)?|thur?s?|fri|sat(?:ur)?|sun)(?:day)?\b`,
+    // elapsed time ("a couple hours ago", "20 min ago")
+    String.raw`\b(?:\d+|a|an|a\s+couple(?:\s+of)?|a\s+few|several)\s+(?:min(?:ute)?s?|hours?|hrs?|days?)\s+ago\b`,
+    // explicit clock times ("at 8", "around 9pm", "8:30")
+    String.raw`\b(?:at|around|about|near|by|before|after|since)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm|o'?clock)?\b`,
+    String.raw`\b\d{1,2}:\d{2}\s*(?:am|pm)?\b`,
+    String.raw`\b\d{1,2}\s*(?:am|pm)\b`,
+    // an explicit calendar date
+    String.raw`\b\d{4}-\d{2}-\d{2}\b`,
+  ].join("|"),
+  "i"
+);
+
+export function mentionsWhen(message: string | null | undefined): boolean {
+  return MENTIONS_WHEN_RE.test(String(message ?? ""));
+}
+
 export function isInstantFoodCaptureDecision(
   decision: ChatRoutingDecision | null | undefined,
   message: string | null | undefined
@@ -141,6 +176,8 @@ export function isInstantFoodCaptureDecision(
   const text = String(message ?? "").trim();
   if (chatMessageRequestsCoaching(text)) return false;
   if (text && (text.includes("?") || QUESTION_LEAD_RE.test(text))) return false;
+  // A meal placed in time is a remembering, not a receipt — let the agent read it.
+  if (mentionsWhen(text)) return false;
   return true;
 }
 
@@ -327,6 +364,16 @@ function stringOrUndefined(value: unknown): string | undefined {
 
 function stringOrNull(value: unknown): string | null {
   return typeof value === "string" ? value : null;
+}
+
+// Three-state passthrough for a field where "say nothing" and "say it is nothing"
+// are different instructions: undefined leaves a stored value alone, an explicit
+// null unstates it, and a string sets it. stringOrUndefined would flatten the
+// middle case into the first and silently drop the correction.
+function stringOrNullOrUndefined(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  return typeof value === "string" ? value : undefined;
 }
 
 function memoryKind(value: unknown): MemoryKind | undefined {
@@ -1199,10 +1246,17 @@ function logPhotoFood(actions: ChatAction[], turn: any): { id: number; [key: str
   };
   // raw="" so addFoodNote does NOT queue the TEXT enricher (that would overwrite the
   // vision estimate). We enqueue the dedicated food_photo job explicitly below.
+  // A photo of last night's plate is still last night's meal, so the agent's resolved
+  // date/time rides along exactly as it does on the text path — and `lenient` for the
+  // same reason: a misread clock must never cost the athlete the plate they captured.
   const meal = (lf?.meal ?? "meal").toString();
   let note: { id: number; [key: string]: unknown } | null = null;
   try {
-    const created = repo.addFoodNote(meal, "", parsedNote, turn.image_path);
+    const created = repo.addFoodNote(meal, "", parsedNote, turn.image_path, {
+      date: stringOrUndefined(lf?.date),
+      eaten_at: stringOrUndefined(lf?.eaten_at),
+      lenient: true,
+    });
     const row = recordOrNull(created);
     note = row && typeof row.id === "number" ? (row as { id: number; [key: string]: unknown }) : null;
   } catch (e: unknown) {
@@ -2222,6 +2276,8 @@ export function applyChatActions(
             // `lenient` throughout this lane: the model resolved when the meal
             // happened out of the sentence, so a date it guessed wrong degrades to
             // today and the food is still logged. Never lose a meal over a clock.
+            // The meal SLOT is left to addFoodNote, which names an unstated label
+            // from the stated time — one implementation, so REST and MCP get it too.
             result: repo.addFoodNote(String(a.meal || "meal"), "", parsedNote, ctx.imagePath ?? undefined, {
               date: stringOrUndefined(a.date),
               eaten_at: stringOrUndefined(a.eaten_at),
@@ -2244,7 +2300,11 @@ export function applyChatActions(
             // Undefined leaves the stored day/time alone — "that was last night"
             // moves it; correcting only a macro must not restamp the clock.
             date: stringOrUndefined(a.date),
-            eaten_at: stringOrUndefined(a.eaten_at),
+            // An explicit null has to survive as null: updateFoodNote reads it as
+            // "unstate the time" ("I don't actually recall when"), and collapsing it
+            // to undefined here would quietly make that correction unreachable from
+            // chat even though the repo supports it and the action contract offers it.
+            eaten_at: stringOrNullOrUndefined(a.eaten_at),
             lenient: true,
           });
           applied.push({ type: a.type, result: result ?? { error: "not found", id: a.id } });

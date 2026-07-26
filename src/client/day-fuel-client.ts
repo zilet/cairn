@@ -5,6 +5,8 @@ type DayFuelEntry = {
   id?: unknown;
   summary?: unknown;
   meal?: unknown;
+  eaten_at?: unknown;
+  logged_at?: unknown;
   kcal?: unknown;
   protein_g?: unknown;
   carbs_g?: unknown;
@@ -43,6 +45,26 @@ type DayFuelData = {
   function mealLabelHtml(meal: unknown): string {
     const key = String(meal || "").toLowerCase();
     return MEAL_LABEL[key] || (meal ? escHtml(meal) : "");
+  }
+
+  // "Dinner · 9:00 PM" when the time is known, plain "Dinner" when it isn't, and
+  // nothing at all when neither is. A missing time leaves no trace — no dash, no
+  // blank slot, no "add a time" — because not remembering when you ate is normal
+  // and this line is a memory, never a prompt to complete something. Most entries
+  // will never carry a time, so that is the case this has to look right in first.
+  //
+  // `eaten_at` GATES and `logged_at` RENDERS, deliberately. logged_at falls back to
+  // the WRITE time when nothing was stated, so showing it unconditionally would put
+  // "8:40 AM" under a dinner that was remembered the next morning — the exact
+  // confusion this feature exists to remove. eaten_at is the only honest signal that
+  // a time was actually stated; whenever it is set, logged_at is that same time,
+  // already localized by the one formatter on the server.
+  function mealMetaHtml(entry: DayFuelEntry): string {
+    const meal = mealLabelHtml(entry.meal);
+    const when = entry.eaten_at ? String(entry.logged_at || "").trim() : "";
+    if (!meal && !when) return "";
+    const text = meal && when ? `${meal} &middot; ${escHtml(when)}` : meal || escHtml(when);
+    return `<span class="dayfuel-meal lbl">${text}</span>`;
   }
 
   function macroValue(value: unknown): number | null {
@@ -99,13 +121,13 @@ type DayFuelData = {
         const summary = entry.summary == null ? "" : String(entry.summary);
         const k = macroValue(entry.kcal);
         const p = macroValue(entry.protein_g);
-        const ml = mealLabelHtml(entry.meal);
+        const meta = mealMetaHtml(entry);
         const pending = entry.enrichment_status === "pending" || entry.enrichment_status === "in_progress";
         return `<button class="dayfuel-row" data-fooditem="${escAttr(id)}" type="button">
           <span class="dayfuel-art">${art("food", summary)}</span>
           <span class="dayfuel-main">
             <span class="dayfuel-name">${escHtml(summary)}${pending ? ` <span class="dayfuel-pending">&middot; estimating&hellip;</span>` : ""}</span>
-            ${ml ? `<span class="dayfuel-meal lbl">${ml}</span>` : ""}
+            ${meta}
           </span>
           <span class="dayfuel-macros">${k != null ? `<span class="numeral">${k}</span> kcal` : "&mdash;"}${p != null ? ` &middot; ${p}g P` : ""}</span>
           <span class="dayfuel-edit" aria-hidden="true">&#9998;</span>

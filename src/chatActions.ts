@@ -105,8 +105,9 @@ export interface LogFoodAction extends ChatActionBase {
   notes?: unknown;
   // WHEN it was eaten, resolved by the model out of the sentence ("I had a late
   // dinner last night") against the local clock it already receives via
-  // nowContext(). Independently optional; the repo validates them and, on this
-  // lane, degrades a bad guess to today rather than losing the meal.
+  // nowContext(). Never asked for, and both routinely absent. Independently
+  // optional; the repo validates them and, on this lane, degrades a bad guess to
+  // today rather than losing the meal.
   date?: unknown;
   eaten_at?: unknown;
 }
@@ -124,7 +125,8 @@ export interface UpdateFoodNoteAction extends ChatActionBase {
   fat_g?: unknown;
   fiber_g?: unknown;
   // Move a logged entry to the day/time it actually happened. Omitting either
-  // leaves it as stored, so a macro fix never restamps the clock.
+  // leaves it as stored, so a macro fix never restamps the clock; an explicit null
+  // on eaten_at unstates a time that turned out to be wrong.
   date?: unknown;
   eaten_at?: unknown;
 }
@@ -297,10 +299,13 @@ export const CHAT_ACTION_PROMPT_SPECS = {
     shape: `{ "type": "log_food", "meal": "breakfast|lunch|dinner|snack", "summary": "<clean dish name>",
       "items": ["<component>"], "ingredients": [
         { "item": "<ingredient>", "amount": "<qty>", "kcal": <number|null>, "protein_g": <number|null>, "carbs_g": <number|null>, "fat_g": <number|null> } ],
-      "kcal": <number>, "protein_g": <number>, "carbs_g": <number>, "fat_g": <number>, "fiber_g": <number|null>, "notes": <string|null> }`,
+      "kcal": <number>, "protein_g": <number>, "carbs_g": <number>, "fat_g": <number>, "fiber_g": <number|null>, "notes": <string|null>,
+      "date": "YYYY-MM-DD|omit", "eaten_at": "HH:MM (24h, local)|omit" }`,
     guidance: [
       `log_food records a meal estimate (food note) — use it when the user reports something they ate or attaches a plate photo. Estimate macros from ordinary serving sizes; null when too unsure.`,
       `BEFORE emitting log_food, check DATA.day_intake.entries. If the same meal is already logged today, reference it instead of logging a duplicate. If the user is correcting that row, emit update_food_note with the existing id.`,
+      `WHEN they ate it: people log out of order — "last night", "yesterday at 8", "this morning", "a couple hours ago", "lunch yesterday". Resolve those against DATA.now (which carries today's local date, weekday, time and hour) and emit "date" and "eaten_at" yourself. "last night" = yesterday's date at a late-evening hour; "this morning" = today, early; a bare clock time means today unless the sentence points at another day. Omit "date" for a meal eaten today.`,
+      `NEVER ask what time it was. If they didn't say, omit "eaten_at" entirely — an entry with no time is completely normal and completely fine. Approximating from what they DID say ("a late dinner" → about 21:00) is right; interrogating them for a number is not. Never invent a date you have no basis for.`,
     ],
   },
   update_food_note: {
@@ -308,7 +313,11 @@ export const CHAT_ACTION_PROMPT_SPECS = {
     applyMode: "immediate",
     shape: `{ "type": "update_food_note", "id": <existing id from DATA.day_intake.entries>,
       "meal": "breakfast|lunch|dinner|snack|meal", "summary": "<corrected dish name>",
-      "kcal": <number|null>, "protein_g": <number|null>, "carbs_g": <number|null>, "fat_g": <number|null>, "fiber_g": <number|null>, "notes": <string|null> }`,
+      "kcal": <number|null>, "protein_g": <number|null>, "carbs_g": <number|null>, "fat_g": <number|null>, "fiber_g": <number|null>, "notes": <string|null>,
+      "date": "YYYY-MM-DD|omit", "eaten_at": "HH:MM (24h, local)|null|omit" }`,
+    guidance: [
+      `update_food_note also corrects WHEN something was eaten: "that was actually yesterday" moves the entry to that day, and "that was more like 9" fixes the time. Send "eaten_at": null to clear a time that turned out to be wrong. Omit both fields when only the food itself is being corrected.`,
+    ],
   },
   log_weight: {
     type: "log_weight",

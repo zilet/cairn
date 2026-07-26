@@ -4,7 +4,7 @@
 // trip/illness window suppresses confidence rather than re-targeting on noise.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { db, repo, resetTables, seedIntake, seedWeight, localDaysAgo } from "./_seed.js";
+import { db, repo, resetTables, seedIntake, seedWeight, localDaysAgo, tsDaysAgo } from "./_seed.js";
 
 beforeEach(() => {
   resetTables(
@@ -81,7 +81,15 @@ test("excludes future rows and clamps requested windows to 7..90 days", () => {
   db.prepare("INSERT INTO garmin_daily_metrics (source_id,date,total_calories) VALUES (1,?,9999)").run(
     localDaysAgo(-2)
   );
-  seedIntake(-2, 9999);
+  // A FUTURE-dated food note, inserted raw on purpose. seedIntake now drives
+  // addFoodNote, which clamps a future date to today — correctly, since a meal
+  // cannot be eaten tomorrow — so the production path can no longer produce the
+  // corrupt row this case exists to test. Rawness stays here, at the call site that
+  // depends on it, rather than being hidden back inside the shared fixture.
+  db.prepare(
+    `INSERT INTO food_notes (date, meal, raw_output, parsed_json, enrichment_status, created_at)
+       VALUES (?, 'meal', '', ?, NULL, ?)`
+  ).run(localDaysAgo(-2), JSON.stringify({ kcal: 9999 }), tsDaysAgo(-2));
   // Simulate legacy/imported corrupt future rows. Public logWeight correctly
   // rejects these now; the estimator must still ignore rows already in storage.
   db.prepare("INSERT INTO bodyweight_log (date,weight_lb,note) VALUES (?,?,?)").run(

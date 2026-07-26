@@ -179,6 +179,7 @@ function dayIntakeForCoach(date = localDateISO()): CoachDayIntake {
     fat_g: e.fat_g ?? null,
     fiber_g: e.fiber_g ?? null,
     nutrition_pattern: e.nutrition_pattern && typeof e.nutrition_pattern === "object" ? e.nutrition_pattern : null,
+    eaten_at: e.eaten_at ?? null,
     logged_at: e.logged_at ?? null,
     enrichment_status: e.enrichment_status ?? null,
   }));

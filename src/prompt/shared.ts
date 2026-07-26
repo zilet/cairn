@@ -660,7 +660,12 @@ export function renderTodayFuel(ctx: any): string {
       : e?.enrichment_status === "error"
         ? " · estimate uncertain"
         : "";
-    lines.push(`  - id ${e.id}: ${e.meal || "meal"} — ${String(e.summary || "Food").trim()}${entryBits.length ? ` (${entryBits.join(" · ")})` : ""}${e.logged_at ? ` at ${e.logged_at}` : ""}${status}`);
+    // "eaten at" and "logged at" are different facts, and the difference matters: a
+    // dinner remembered the next morning was EATEN at 9 PM and LOGGED at 8:40 AM. Say
+    // which one this is, so the coach never reads a capture time as a meal time. An
+    // entry with neither says nothing at all rather than guessing.
+    const whenBit = e?.eaten_at ? ` eaten at ${e.eaten_at}` : e?.logged_at ? ` logged at ${e.logged_at}` : "";
+    lines.push(`  - id ${e.id}: ${e.meal || "meal"} — ${String(e.summary || "Food").trim()}${entryBits.length ? ` (${entryBits.join(" · ")})` : ""}${whenBit}${status}`);
   }
   if (entries.length > 6) lines.push(`  - plus ${entries.length - 6} more item${entries.length - 6 === 1 ? "" : "s"} in DATA.day_intake.entries.`);
   lines.push("FOOD USE: reference this when answering about today, fuel, recovery, or training readiness. In chat, if the user corrects one of these rows, use update_food_note with the existing id; if they mention the same meal again, do not log a duplicate. Treat this as a single-day snapshot, not a weekly retarget signal by itself.");
