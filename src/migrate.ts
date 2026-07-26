@@ -1449,6 +1449,16 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 79,
+    name: "food-notes-eaten-at",
+    // The LOCAL wall-clock time ("HH:MM", 24-hour) a meal was eaten, when the
+    // athlete stated one. Purely additive and nullable: `date` still owns the
+    // local calendar day and `created_at` still owns the UTC instant of the
+    // write, so every existing row keeps reading exactly as it did with
+    // eaten_at NULL — no time is, and stays, first-class.
+    up: (db) => addColumn(db, "food_notes", "eaten_at TEXT"),
+  },
 ];
 
 export function runMigrations(db: DatabaseSync) {

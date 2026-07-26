@@ -103,6 +103,12 @@ export interface LogFoodAction extends ChatActionBase {
   fat_g?: unknown;
   fiber_g?: unknown;
   notes?: unknown;
+  // WHEN it was eaten, resolved by the model out of the sentence ("I had a late
+  // dinner last night") against the local clock it already receives via
+  // nowContext(). Independently optional; the repo validates them and, on this
+  // lane, degrades a bad guess to today rather than losing the meal.
+  date?: unknown;
+  eaten_at?: unknown;
 }
 
 export interface UpdateFoodNoteAction extends ChatActionBase {
@@ -117,6 +123,10 @@ export interface UpdateFoodNoteAction extends ChatActionBase {
   carbs_g?: unknown;
   fat_g?: unknown;
   fiber_g?: unknown;
+  // Move a logged entry to the day/time it actually happened. Omitting either
+  // leaves it as stored, so a macro fix never restamps the clock.
+  date?: unknown;
+  eaten_at?: unknown;
 }
 
 export interface LogWeightAction extends ChatActionBase {

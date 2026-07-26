@@ -131,6 +131,78 @@ export function partOfDay(hour: number): string {
           : "night";
 }
 
+// Normalize a LOCAL wall-clock time to "HH:MM" (24-hour), or null when the input
+// isn't one. Tolerates a single-digit hour ("8:05") and a trailing ":SS", and
+// deliberately rejects 12-hour forms ("8:00 PM") rather than guessing which half
+// of the day was meant. Pure string work on purpose: a wall-clock time carries no
+// zone, so there is no instant here to convert and nothing for a timezone to move.
+export function normalizeWallClock(value: unknown): string | null {
+  if (value == null) return null;
+  const m = /^(\d{1,2}):([0-5]\d)(?::[0-5]\d)?$/.exec(String(value).trim());
+  if (!m) return null;
+  const hour = Number(m[1]);
+  if (hour > 23) return null;
+  return `${String(hour).padStart(2, "0")}:${m[2]}`;
+}
+
+// A "HH:MM" wall clock said the way a person says it ("9:00 PM"), matching what
+// chatHistoryTimeLabel renders for an instant so that both clocks read identically
+// in one list. Formats through the SAME Intl machinery, pinned to UTC over a
+// synthetic instant carrying the wall-clock digits — a pure formatting trick, NOT a
+// zone conversion: a wall clock has no zone to convert FROM, and pinning the
+// formatter to UTC keeps the digits exactly as stated while still getting en-US's
+// own shape (12:15 AM for midnight, 12:00 PM for noon — never 0). Empty string when
+// the input isn't a wall clock, so an absent time renders as nothing at all rather
+// than a dash or a placeholder, and a caller can simply fall past it.
+export function clockLabel(hhmm: unknown): string {
+  const t = normalizeWallClock(hhmm);
+  if (!t) return "";
+  const at = new Date(Date.UTC(2000, 0, 1, Number(t.slice(0, 2)), Number(t.slice(3, 5))));
+  return cached(
+    timeFmt,
+    "UTC",
+    () => new Intl.DateTimeFormat("en-US", { timeZone: "UTC", hour: "numeric", minute: "2-digit" })
+  ).format(at);
+}
+
+// Meal-label windows in LOCAL wall-clock hours — the ONE source of truth for both
+// directions of the time <-> label inference below. Deliberately nested inside
+// partOfDay's buckets so an inferred label can never contradict the coarse words
+// the coach speaks: dinner opens at 17h, exactly where partOfDay flips to
+// "evening", and breakfast/lunch stay on the morning/afternoon side of it. The
+// gaps between the windows are deliberate and are the point: 15:30 and 22:30 are
+// snacks, not a stretched lunch or a very late dinner.
+//
+// These are DEFAULTS for a label nobody stated. They are not a rule about when a
+// person ought to eat, and nothing grades a meal against them.
+const MEAL_WINDOWS = [
+  { label: "breakfast", startHour: 5, endHour: 11, approx: "08:00" },
+  { label: "lunch", startHour: 11, endHour: 15, approx: "12:30" },
+  { label: "dinner", startHour: 17, endHour: 22, approx: "19:00" },
+] as const;
+
+// The default meal label for a local "HH:MM" — breakfast/lunch/dinner inside their
+// windows, "snack" anywhere else, null when the time is unreadable. A label the
+// person actually stated always wins over this (see addFoodNote).
+export function mealLabelForTime(hhmm: unknown): string | null {
+  const t = normalizeWallClock(hhmm);
+  if (!t) return null;
+  const hour = Number(t.slice(0, 2));
+  for (const w of MEAL_WINDOWS) if (hour >= w.startHour && hour < w.endHour) return w.label;
+  return "snack";
+}
+
+// The inverse: a representative local "HH:MM" for a stated meal label, for placing
+// a meal on a day when someone said "breakfast" but not when. Null for "snack" and
+// anything unrecognized — a snack has no representative hour, and inventing one
+// would dress a guess up as something the athlete said.
+export function approxTimeForMealLabel(label: unknown): string | null {
+  const key = String(label ?? "")
+    .trim()
+    .toLowerCase();
+  return MEAL_WINDOWS.find((w) => w.label === key)?.approx ?? null;
+}
+
 // The current LOCAL clock, folded into getCoachContext().now so every coaching
 // prompt knows what time of day it is. Without this the agent is temporally
 // blind — it would, e.g., ask "how'd dinner land last night?" at 5 PM because the

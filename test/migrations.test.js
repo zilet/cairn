@@ -437,7 +437,9 @@ test("v78 dedupes legacy day_read suggestion rows, keeping the earliest canonica
 
   d.exec("PRAGMA user_version = 77;");
   const result = runMigrations(d);
-  assert.equal(result.applied, 1);
+  // Relative to MAX_VERSION (the idiom used above), so appending a migration
+  // doesn't fail a test that is really about what v78 does to these rows.
+  assert.equal(result.applied, MAX_VERSION - 77);
   assert.equal(Number(d.prepare("PRAGMA user_version").get().user_version), MAX_VERSION);
 
   const dayReadRows = d.prepare(`SELECT date, payload_json FROM suggestions WHERE kind = 'day_read' ORDER BY id`).all();
@@ -579,6 +581,37 @@ test("every migration carries a name and an up() function", () => {
   }
 });
 
+// The two-step schema rule in reverse: a FRESH DB already has eaten_at from db.ts's
+// CREATE TABLE, so v79's ALTER hits an existing column and must absorb that quietly
+// rather than throwing the whole boot's migration ladder into a rollback.
+test("v79 adds food_notes.eaten_at, and no-ops when db.ts already created it", () => {
+  const withColumn = new DatabaseSync(":memory:");
+  withColumn.exec(`CREATE TABLE food_notes (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, eaten_at TEXT)`);
+  withColumn.exec("PRAGMA user_version = 78;");
+  assert.doesNotThrow(() => runMigrations(withColumn), "an already-present column must not abort the ladder");
+  assert.equal(Number(withColumn.prepare("PRAGMA user_version").get().user_version), MAX_VERSION);
+  withColumn.close();
+
+  const withoutColumn = new DatabaseSync(":memory:");
+  withoutColumn.exec(`CREATE TABLE food_notes (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT)`);
+  withoutColumn.exec(`INSERT INTO food_notes (date) VALUES ('2026-07-01')`);
+  withoutColumn.exec("PRAGMA user_version = 78;");
+  runMigrations(withoutColumn);
+  const cols = new Set(
+    withoutColumn
+      .prepare("PRAGMA table_info(food_notes)")
+      .all()
+      .map((c) => c.name)
+  );
+  assert.ok(cols.has("eaten_at"), "the column is added to an existing table");
+  assert.equal(
+    withoutColumn.prepare(`SELECT eaten_at FROM food_notes`).get().eaten_at,
+    null,
+    "every pre-existing row reads as an unstated time, not midnight"
+  );
+  withoutColumn.close();
+});
+
 test("re-running migrations on an up-to-date DB is a no-op (idempotent boot)", async () => {
   const { runMigrations } = await import("../dist/migrate.js");
   const before = Number(db.prepare("PRAGMA user_version").get().user_version);
@@ -621,4 +654,5 @@ test("the migrated schema has the columns later code depends on", () => {
   assert.ok(cols("chat_turns").has("request_id"), "v73 chat_turns.request_id");
   assert.ok(cols("chat_turns").has("idempotent_replays"), "v73 chat_turns.idempotent_replays");
   assert.ok(cols("chat_turns").has("build_id"), "v74 chat_turns.build_id");
+  assert.ok(cols("food_notes").has("eaten_at"), "v79 food_notes.eaten_at");
 });

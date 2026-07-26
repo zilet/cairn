@@ -541,12 +541,13 @@ CREATE INDEX IF NOT EXISTS idx_nutrition_targets_eff ON nutrition_targets(effect
 CREATE TABLE IF NOT EXISTS food_notes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   created_at TEXT DEFAULT (datetime('now')),
-  date TEXT,                          -- LOCAL calendar day the meal belongs to (stamped at insert, device-zone aware); created_at stays the UTC instant
+  date TEXT,                          -- LOCAL calendar day the meal belongs to (device-zone aware; may be BACKDATED by the caller); created_at stays the UTC instant of the WRITE
   meal TEXT,
   raw_output TEXT,
   parsed_json TEXT,
   image_path TEXT,
-  enrichment_status TEXT              -- pending | done | skipped | failed (NULL = n/a)
+  enrichment_status TEXT,             -- pending | done | skipped | failed (NULL = n/a)
+  eaten_at TEXT                       -- LOCAL wall-clock "HH:MM" (24h) the meal was eaten, when stated (NULL = unstated). Pairs with the date column; deliberately NOT a UTC instant, so the two can never disagree about which frame they are in
 );
 
 -- Bodyweight log over time (separate from profile's single current weight).

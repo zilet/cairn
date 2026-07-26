@@ -159,14 +159,41 @@ export function registerNutritionTools(server: McpToolRegistrar) {
 
   server.tool(
     "log_food_note",
-    "Record a meal estimate (e.g. after looking at a plate photo): meal type, description, optional macros.",
+    "Record a meal estimate (e.g. after looking at a plate photo): meal type, description, optional macros. Optionally backdate it with `date` and say when it was eaten with `eaten_at`.",
     {
       meal: z.string(),
       raw: z.string().optional(),
       parsed: z.any().optional(),
       image_path: z.string().optional(),
+      date: z
+        .string()
+        .optional()
+        .describe(
+          "YYYY-MM-DD local day the meal belongs to; defaults to today. Past days up to a year back are fine; a future day is ignored (the entry still records, on today)."
+        ),
+      eaten_at: z
+        .string()
+        .optional()
+        .describe(
+          "Local 24-hour wall-clock time it was eaten, 'HH:MM'. Omit when unknown — an unstated time is normal and nothing needs one. When omitted, a stated meal label sets the slot; when given, it names the meal (breakfast/lunch/dinner/snack) unless a label was stated."
+        ),
     },
-    async (f) => asText(addFoodNote(f.meal, f.raw ?? "", f.parsed ?? null, f.image_path))
+    // Lenient: a model resolved this "when" from a sentence, so a date it got wrong
+    // degrades to today and the meal is still recorded. Losing a food entry over a
+    // guessed timestamp is by far the worse failure.
+    async (f) => {
+      try {
+        return asText(
+          addFoodNote(f.meal, f.raw ?? "", f.parsed ?? null, f.image_path, {
+            date: f.date,
+            eaten_at: f.eaten_at,
+            lenient: true,
+          })
+        );
+      } catch (error: any) {
+        return asText({ error: error?.message || "could not log food note" });
+      }
+    }
   );
 
   server.tool(
@@ -178,7 +205,7 @@ export function registerNutritionTools(server: McpToolRegistrar) {
 
   server.tool(
     "update_food_note",
-    "Correct a logged food note (fix a macro, rename it, change the meal slot, 'I changed my mind'). Pass the id + any subset of { meal, summary, kcal, protein_g, carbs_g, fat_g, fiber_g, notes, items }. Coerced/clamped; marks the note's enrichment terminal so a background enricher can't later overwrite the correction. Returns the updated row, or an error when the id is unknown.",
+    "Correct a logged food note (fix a macro, rename it, change the meal slot, move it to the day it was actually eaten, 'I changed my mind'). Pass the id + any subset of { meal, summary, kcal, protein_g, carbs_g, fat_g, fiber_g, notes, items, date, eaten_at }. Coerced/clamped; marks the note's enrichment terminal so a background enricher can't later overwrite the correction. Returns the updated row, or an error when the id is unknown.",
     {
       id: z.number().int(),
       meal: z.string().optional(),
@@ -190,8 +217,23 @@ export function registerNutritionTools(server: McpToolRegistrar) {
       fiber_g: z.number().optional(),
       notes: z.string().optional(),
       items: z.array(z.string()).optional(),
+      date: z
+        .string()
+        .optional()
+        .describe(
+          "Move the entry to this YYYY-MM-DD local day — 'that was last night, not this morning'. Omit to leave the day alone. A future day is ignored."
+        ),
+      eaten_at: z
+        .string()
+        .optional()
+        .describe(
+          "Correct the local 24-hour time it was eaten, 'HH:MM'. Omit to leave it alone; send an empty string to unstate a time that was wrong. Correcting the time never renames the meal."
+        ),
     },
-    async ({ id, ...fields }) => asText(updateFoodNote(id, fields) ?? { error: "not found", id })
+    // Lenient for the same reason as log_food_note: a bad guess must not cost the
+    // correction. Note this never re-infers the meal label from a corrected time —
+    // the row already carries a label someone chose.
+    async ({ id, ...fields }) => asText(updateFoodNote(id, { ...fields, lenient: true }) ?? { error: "not found", id })
   );
 
   server.tool("delete_food_note", "Delete a logged food note by id.", { id: z.number().int() }, async ({ id }) =>

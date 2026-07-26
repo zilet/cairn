@@ -234,7 +234,15 @@ export interface ClientFoodEntry {
   fiber_g: number | null;
   enrichment_status: string | null;
   created_at: string;
+  // The clock to SHOW, already localized ("7:30 PM"): the stated eating time when
+  // there is one, else the write-time label. Render it as-is and never derive a
+  // display time from created_at, which for a backdated entry is when the meal was
+  // remembered rather than when it was eaten.
   logged_at: string;
+  // The raw local "HH:MM" (24-hour) the athlete said they ate, or null when they
+  // never said. Null is the ordinary case — show nothing, never midnight. It is
+  // also how you tell which of the two clocks `logged_at` is showing.
+  eaten_at: string | null;
 }
 
 export interface ClientNutritionTarget {

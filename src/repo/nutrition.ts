@@ -23,7 +23,15 @@ import {
 } from "./nutrition-safety.js";
 import { getSettings } from "./settings.js";
 import { canonicalHardDietKeys, mealPlanHardDietKeys, stampInstructionHardDiets } from "./dietary-constraints.js";
-import { localDateISO, chatHistoryTimeLabel } from "./shared.js";
+import {
+  localDateISO,
+  chatHistoryTimeLabel,
+  daysBetweenISO,
+  normalizeWallClock,
+  clockLabel,
+  mealLabelForTime,
+  approxTimeForMealLabel,
+} from "./shared.js";
 import { afterSqliteCommit, withSqliteSavepoint } from "./sqlite-savepoint.js";
 import { bumpFoodDataVersion } from "./training-cache.js";
 
@@ -1254,14 +1262,146 @@ export function setMealRecipe(planId: number, day: string, mealIndex: number, re
 }
 
 // ---------- food notes ----------
-function insertFoodNote(meal: string, raw: string, parsed: any, imagePath: string | undefined, status: string | null) {
+
+// How far back a food note may be backdated. Backdating is the whole point ("I
+// remembered what I ate last night"), so the bound only has to rule out a
+// mistyped year: a year covers any realistic catch-up or import, and is far past
+// the horizon of every read that consumes intake (the trailing averages behind
+// the fuel and expenditure model look back weeks, not years).
+const MAX_FOOD_BACKDATE_DAYS = 365;
+
+// The placeholders the CODE supplies when nobody actually named a meal — this
+// module's own `meal || "meal"` default and `String(a.meal || "meal")` in the chat
+// action lane. Treating them as UNSTATED is what lets a time fill in a label
+// without ever overwriting one a person chose.
+const GENERIC_MEAL_LABELS = new Set(["", "meal", "food"]);
+
+// When a meal happened, as the athlete stated it. Both optional: today with no
+// time is the ordinary case and must stay free of ceremony.
+export interface FoodNoteWhen {
+  // LOCAL calendar day the meal belongs to (YYYY-MM-DD). Defaults to today.
+  date?: string;
+  // LOCAL wall-clock time it was eaten ("HH:MM", 24-hour). No default — absence
+  // is a first-class answer and nothing downstream requires one.
+  eaten_at?: string;
+  // Policy, not data: what to do with a value this layer cannot honestly store.
+  // DEFAULT drops it back to today / no time and warns, because most callers are
+  // model-driven — "when" is resolved out of a whole sentence, and a guessed
+  // timestamp must never cost the athlete the food entry itself. Pass false to
+  // REJECT instead (RangeError); the REST routes do, since a person typing a date
+  // into a form deserves to be told rather than quietly filed on the wrong day.
+  lenient?: boolean;
+}
+
+// Why a stated date cannot be stored, or null when it can. Split out so the strict
+// and lenient paths apply the exact same rules and differ only in what they DO
+// about a failure — those two must never drift into disagreeing about what's valid.
+const FOOD_NOTE_TIME_PROBLEM = "food note eaten_at must be a 24-hour local time (HH:MM)";
+function foodNoteDateProblem(value: string, today: string): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return "food note date must be YYYY-MM-DD";
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
+    return "food note date must be a real calendar date";
+  }
+  // You cannot have eaten tomorrow. Compared against the LOCAL day (device zone
+  // via localDateISO), never a bare UTC date, so a late-evening log abroad is not
+  // mistaken for the future.
+  if (value > today) return "food note date cannot be in the future";
+  const age = daysBetweenISO(today, value);
+  if (age != null && age > MAX_FOOD_BACKDATE_DAYS) {
+    return `food note date cannot be more than ${MAX_FOOD_BACKDATE_DAYS} days ago`;
+  }
+  return null;
+}
+
+// Trust boundary for the "when" of a food note, shared by REST, MCP and chat.
+function canonicalFoodNoteWhen(opts: FoodNoteWhen | undefined): {
+  date: string;
+  eaten_at: string | null;
+} {
+  // One read of the local day for the whole resolution, so a call that straddles
+  // midnight can't validate against one day and stamp against the next.
+  const today = localDateISO();
+  const lenient = opts?.lenient !== false;
+  // Lenient records the problem and leaves the caller on the default it would have
+  // used before any of this existed; strict throws.
+  const refuse = (problem: string): void => {
+    if (!lenient) throw new RangeError(problem);
+    console.warn(`[food] ignoring a stated time — ${problem}`);
+  };
+
+  let date = today;
+  const rawDate = opts?.date;
+  if (rawDate !== undefined && rawDate !== null && rawDate !== "") {
+    const value = String(rawDate).trim();
+    const problem = foodNoteDateProblem(value, today);
+    if (problem) refuse(problem);
+    else date = value;
+  }
+
+  let eaten_at: string | null = null;
+  const rawTime = opts?.eaten_at;
+  if (rawTime !== undefined && rawTime !== null && rawTime !== "") {
+    const normalized = normalizeWallClock(rawTime);
+    if (!normalized) refuse(FOOD_NOTE_TIME_PROBLEM);
+    else eaten_at = normalized;
+  }
+  return { date, eaten_at };
+}
+
+// Resolve the meal label and the stored time together, so the two can never
+// disagree. A label the athlete (or an agent speaking for them) actually stated
+// ALWAYS wins — the windows in shared.ts only fill a blank.
+//
+// ONE direction of inference happens here, and only one: a stated time can name an
+// unnamed meal. That is honest because a label is a CATEGORY, not a measurement —
+// 21:00 genuinely is dinner. The inverse is deliberately NOT done: a stated label
+// must never be turned into a stored clock time, because `eaten_at` is rendered
+// straight to the athlete, so a derived "12:30" from the word "lunch" would appear
+// on screen as a minute they never said and would be indistinguishable — to the UI,
+// to the coach, to the brain correlating intake against bloodwork — from one they
+// did. A meal whose time is genuinely unknown keeps eaten_at NULL. getDayIntake
+// still places it sensibly in the day by using the label's representative hour as a
+// read-time SORT key, which is never stored and never shown.
+function resolveFoodNoteWhen(
+  meal: string,
+  opts: FoodNoteWhen | undefined
+): { meal: string; date: string; eaten_at: string | null } {
+  const { date, eaten_at: statedTime } = canonicalFoodNoteWhen(opts);
+  const statedLabel = String(meal ?? "").trim();
+  const hasStatedLabel = !GENERIC_MEAL_LABELS.has(statedLabel.toLowerCase());
+
+  const label = hasStatedLabel ? statedLabel : ((statedTime ? mealLabelForTime(statedTime) : null) ?? "meal");
+  return { meal: label, date, eaten_at: statedTime };
+}
+
+function insertFoodNote(
+  meal: string,
+  raw: string,
+  parsed: any,
+  imagePath: string | undefined,
+  status: string | null,
+  opts?: FoodNoteWhen
+) {
   // Stamp the LOCAL calendar day (device-zone aware) the meal belongs to, so an
-  // evening log counts toward the right day; created_at stays the UTC instant.
+  // evening log counts toward the right day and a backdated one lands on the day
+  // it was eaten. created_at stays the UTC instant of the WRITE — for a backdated
+  // note that is emphatically not when the meal happened, which is what `date` and
+  // `eaten_at` are for.
+  const when = resolveFoodNoteWhen(meal, opts);
   const info = db
     .prepare(
-      `INSERT INTO food_notes (date, meal, raw_output, parsed_json, image_path, enrichment_status) VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO food_notes (date, eaten_at, meal, raw_output, parsed_json, image_path, enrichment_status) VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(localDateISO(), meal || "meal", raw || "", parsed ? JSON.stringify(parsed) : null, imagePath ?? null, status);
+    .run(
+      when.date,
+      when.eaten_at,
+      when.meal,
+      raw || "",
+      parsed ? JSON.stringify(parsed) : null,
+      imagePath ?? null,
+      status
+    );
   return hydrate(db.prepare(`SELECT * FROM food_notes WHERE id = ?`).get(info.lastInsertRowid));
 }
 
@@ -1287,12 +1427,15 @@ function scheduleFoodNoteEffects(row: any, enrichKind: "food" | "food_photo" | n
   });
 }
 
-export function addFoodNote(meal: string, raw: string, parsed: any, imagePath?: string) {
+// `opts` is a trailing options object so every existing positional caller keeps
+// working untouched: omit it and this behaves exactly as it always did (today, no
+// time). Throws RangeError on a date/time it can't honestly store.
+export function addFoodNote(meal: string, raw: string, parsed: any, imagePath?: string, opts?: FoodNoteWhen) {
   // Free-text food notes (non-empty raw) get queued for background enrichment —
   // only when enabled, else recorded 'skipped' directly (see addActivity).
   const fromText = !!(raw && String(raw).trim());
   const status = fromText ? (getSettings().enrich_enabled ? "pending" : "skipped") : null;
-  const row = insertFoodNote(meal, raw, parsed, imagePath, status);
+  const row = insertFoodNote(meal, raw, parsed, imagePath, status, opts);
   scheduleFoodNoteEffects(row, status === "pending" ? "food" : null);
   return row;
 }
@@ -1308,9 +1451,18 @@ export function addChatCaptureFoodNote(input: {
   parsed: any;
   image_path?: string | null;
   kind: "text" | "photo";
+  // "I forgot to log last night's dinner" said in chat — same trust boundary and
+  // same defaults as addFoodNote; omitted means today with no stated time.
+  date?: string;
+  eaten_at?: string;
 }) {
   const turnId = Number(input.turn_id);
   if (!Number.isSafeInteger(turnId) || turnId <= 0) throw new Error("invalid chat turn id");
+  // Always lenient: this lane exists only for values a MODEL resolved out of a
+  // sentence. A date it guessed badly degrades to today and the meal is still
+  // captured — losing the food because the timestamp was wrong would be a far
+  // worse failure than filing it on the day it was mentioned.
+  const when: FoodNoteWhen = { date: input.date, eaten_at: input.eaten_at, lenient: true };
   return withSqliteSavepoint(`chat_food_capture_${turnId}`, () => {
     const turn = db.prepare(`SELECT status, capture_food_note_id FROM chat_turns WHERE id = ?`).get(turnId) as any;
     if (!turn) throw new Error("chat turn not found");
@@ -1324,7 +1476,7 @@ export function addChatCaptureFoodNote(input: {
     const enrichEnabled = getSettings().enrich_enabled;
     const status = input.kind === "photo" ? (enrichEnabled ? "pending" : null) : enrichEnabled ? "pending" : "skipped";
     const raw = input.kind === "photo" ? "" : String(input.raw ?? "");
-    const row = insertFoodNote(input.meal, raw, input.parsed, input.image_path ?? undefined, status);
+    const row = insertFoodNote(input.meal, raw, input.parsed, input.image_path ?? undefined, status, when);
     const linked = db
       .prepare(`UPDATE chat_turns SET capture_food_note_id = ?
                   WHERE id = ? AND capture_food_note_id IS NULL AND status IN ('queued','running')`)
@@ -1422,9 +1574,51 @@ export function getDayIntake(date?: string) {
       nutrition_pattern: p.nutrition_pattern ?? null,
       enrichment_status: r.enrichment_status ?? null,
       created_at: r.created_at,
-      logged_at: chatHistoryTimeLabel(r.created_at), // local "1:15 PM" so the coach can reference WHEN it was eaten
+      // The clock a PERSON sees, local "1:15 PM". Prefers the stated eating time:
+      // for a backdated entry created_at is when the meal was REMEMBERED, so
+      // showing this morning's capture time against last night's dinner would be
+      // flatly wrong. With no stated time this is exactly what it always was — the
+      // write-time label — so an unstated time changes nothing.
+      logged_at: clockLabel(r.eaten_at) || chatHistoryTimeLabel(r.created_at),
+      // The raw local "HH:MM" the athlete said they ate, when they said one. Null
+      // is the common case and means exactly that: unstated, not midnight. It is
+      // also how a reader tells which clock `logged_at` is showing.
+      eaten_at: r.eaten_at ?? null,
     };
   });
+
+  // Read the day in the order things were EATEN, not the order they were typed.
+  // The moment notes can be backdated, insertion order stops describing a day at
+  // all: last night's dinner, remembered over this morning's coffee, would sort
+  // after today's breakfast, and the day would read back as the sequence in which
+  // the athlete happened to remember things.
+  //
+  // Three tiers, ALL computed here at read time and none of them ever written back
+  // to the row or shown:
+  //   1. the stated `eaten_at` — the only tier that is a recorded fact;
+  //   2. the meal label's representative hour, for a named meal with no time —
+  //      good enough to place "breakfast" before "dinner", never good enough to
+  //      store or display as a time the athlete gave;
+  //   3. the last placeable entry's position, so a run of unplaceable rows ("meal",
+  //      "snack", a custom label) simply stays where it was logged instead of being
+  //      swept to one end. A day where nothing is placeable keeps its exact
+  //      previous order.
+  // Row id is the final tiebreak, so ties resolve to insertion order and the whole
+  // ordering is deterministic — no clock is read here.
+  const minuteOfDay = (hhmm: unknown): number | null => {
+    const t = normalizeWallClock(hhmm);
+    return t ? Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5)) : null;
+  };
+  const placement = new Map<number, number>();
+  let carried = -1; // below every real minute, so leading unplaceable rows stay first
+  for (const entry of entries) {
+    // `entries` is still in id order here, which is what makes the carry meaningful.
+    const placed = minuteOfDay(entry.eaten_at) ?? minuteOfDay(approxTimeForMealLabel(entry.meal));
+    if (placed != null) carried = placed;
+    placement.set(entry.id, placed ?? carried);
+  }
+  entries.sort((a, b) => (placement.get(a.id) ?? -1) - (placement.get(b.id) ?? -1) || a.id - b.id);
+
   for (const key of nutrientKeys) {
     const values = entries.map((entry) => entry[key]);
     totals[key] = Math.round(
@@ -1507,6 +1701,45 @@ export function updateFoodNote(id: number, fields: any) {
   if (f.meal !== undefined && f.meal !== null && String(f.meal).trim()) {
     db.prepare(`UPDATE food_notes SET meal = ? WHERE id = ?`).run(String(f.meal).trim().slice(0, 40), id);
   }
+
+  // Correcting WHEN it happened — "that was last night's dinner, not this
+  // morning's". Each field moves ONLY when the caller actually sent it, so fixing a
+  // macro never restamps the clock, and an untouched year-old row is never
+  // re-validated against the backdate bound just because someone edited its kcal.
+  // A stated time never re-infers the meal label either: the row already carries a
+  // label, and silently relabeling it here would overwrite what someone chose.
+  const previousDate = String(row.date || localDateISO());
+  const previousTime: string | null = row.eaten_at ?? null;
+  const lenient = f.lenient !== false; // see FoodNoteWhen.lenient — REST opts out
+  const today = localDateISO();
+  let nextDate = previousDate;
+  let nextTime = previousTime;
+  if (f.date !== undefined) {
+    // A blank/null date is "no change", not "unstate": every entry belongs to some
+    // day, so there is nothing to fall back to.
+    const value = f.date == null ? "" : String(f.date).trim();
+    if (value) {
+      const problem = foodNoteDateProblem(value, today);
+      if (!problem) nextDate = value;
+      else if (!lenient) throw new RangeError(problem);
+      else console.warn(`[food] note#${id}: keeping ${previousDate} — ${problem}`);
+    }
+  }
+  if (f.eaten_at !== undefined) {
+    const value = f.eaten_at == null ? "" : String(f.eaten_at).trim();
+    // An explicit blank UNSTATES the time — "I don't actually recall when".
+    if (!value) nextTime = null;
+    else {
+      const normalized = normalizeWallClock(value);
+      if (normalized) nextTime = normalized;
+      else if (!lenient) throw new RangeError(FOOD_NOTE_TIME_PROBLEM);
+      else console.warn(`[food] note#${id}: keeping the stored time — ${FOOD_NOTE_TIME_PROBLEM}`);
+    }
+  }
+  if (nextDate !== previousDate || nextTime !== previousTime) {
+    db.prepare(`UPDATE food_notes SET date = ?, eaten_at = ? WHERE id = ?`).run(nextDate, nextTime, id);
+  }
+
   bumpFoodDataVersion(); // an in-place kcal correction the SQL backstop can't see
   const updated = getFoodNote(id);
   // A manual edit stamps enrichment_status 'done' OUTSIDE the queue/setter, so emit
@@ -1515,6 +1748,14 @@ export function updateFoodNote(id: number, fields: any) {
   const d = updated.date || localDateISO();
   emitBrainEvent({ kind: "food_corrected", domain: "nutrition", date: d, entity_id: id });
   invalidateDayReadForDate(d);
+  // A day MOVE changes two days, not one: the day it landed on gained the intake
+  // and the day it left no longer has it. invalidateDayReadForDate only knows about
+  // an entry's CURRENT day (plus today), so the vacated day would otherwise keep
+  // serving a Brief built on food that has since moved elsewhere.
+  if (previousDate !== d) {
+    emitBrainEvent({ kind: "food_corrected", domain: "nutrition", date: previousDate, entity_id: id });
+    invalidateDayReadForDate(previousDate);
+  }
   return updated;
 }
 

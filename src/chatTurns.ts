@@ -2219,7 +2219,14 @@ export function applyChatActions(
           };
           applied.push({
             type: a.type,
-            result: repo.addFoodNote(String(a.meal || "meal"), "", parsedNote, ctx.imagePath ?? undefined),
+            // `lenient` throughout this lane: the model resolved when the meal
+            // happened out of the sentence, so a date it guessed wrong degrades to
+            // today and the food is still logged. Never lose a meal over a clock.
+            result: repo.addFoodNote(String(a.meal || "meal"), "", parsedNote, ctx.imagePath ?? undefined, {
+              date: stringOrUndefined(a.date),
+              eaten_at: stringOrUndefined(a.eaten_at),
+              lenient: true,
+            }),
           });
           break;
         }
@@ -2234,6 +2241,11 @@ export function applyChatActions(
             carbs_g: a.carbs_g,
             fat_g: a.fat_g,
             fiber_g: a.fiber_g,
+            // Undefined leaves the stored day/time alone — "that was last night"
+            // moves it; correcting only a macro must not restamp the clock.
+            date: stringOrUndefined(a.date),
+            eaten_at: stringOrUndefined(a.eaten_at),
+            lenient: true,
           });
           applied.push({ type: a.type, result: result ?? { error: "not found", id: a.id } });
           break;

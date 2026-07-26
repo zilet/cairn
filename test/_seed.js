@@ -81,24 +81,19 @@ export function seedWeight(date, lb) {
 }
 
 // ---- food intake (controlled created_at so we can build N distinct intake days) ----
-// addFoodNote always stamps created_at = now AND (when raw text + enrich on) tries
-// to enqueue a background agent job. We bypass both by inserting directly with a
-// chosen created_at and empty raw_output, so intake seeding stays fully offline.
+// addFoodNote CAN backdate now — pass { date } (and optionally { eaten_at }), which is
+// what a real "I forgot to log Tuesday's dinner" write does. What it still cannot do is
+// choose created_at, which stays the instant of the WRITE by design; a fixture that
+// wants N historical days each with a plausible created_at has to place those rows
+// itself. It also fires side effects a fixture rarely wants: bumpFoodDataVersion()
+// (backstopped, ignorable), a `food_logged` brain event, invalidateDayReadForDate()
+// (busts the note's own day AND today whenever they differ), and — on non-empty raw
+// text with enrichment on — a background agent job. Inserting directly with an explicit
+// created_at and empty raw_output keeps intake seeding silent and fully offline.
 //
-// This one CANNOT follow seedTrainingDay onto the production path, and the reason is
-// structural rather than a preference: `insertFoodNote` (the single insert behind every
-// food-note writer) hardcodes `localDateISO()` for `date` and lets `created_at` default
-// to now. No repo function can create a food note for a PAST day, so a fixture whose
-// entire purpose is N distinct historical intake days has no faithful path to take.
-// src/demoSeed.ts inserts food notes raw for exactly the same reason.
-//
-// So the caveat stands here. addFoodNote fires bumpFoodDataVersion() (backstopped —
-// ignore it), a `food_logged` brain event, and invalidateDayReadForDate(), which busts
-// the cached Brief for the note's own day AND today whenever they differ. A test
-// pinning any of those must drive the repo path on a day it can afford to have stamped
-// today — see food-invalidates-day-read.test.js, which uses a raw insert only to place
-// the fixture row and then asserts against real repo.updateFoodNote / deleteFoodNote
-// calls. That split — raw for setup, production path for the behavior under test — is
+// So: raw insert for SETUP, the production path for the behavior UNDER TEST — see
+// food-invalidates-day-read.test.js, which places its fixture row raw and then asserts
+// against real repo.addFoodNote / updateFoodNote / deleteFoodNote calls. That split is
 // the pattern to copy.
 export function seedIntake(daysAgo, kcal, extra = {}) {
   const parsed = { kcal, ...extra };

@@ -224,18 +224,44 @@ nutritionRouter.get("/food-notes/:id", (req, res) => {
 // terminal. EventSource can't set headers, so the PWA reaches this with ?token=.
 nutritionRouter.get("/food-notes/:id/stream", streamEnrichRow("food", getFoodNote));
 
+// Optional `date` (YYYY-MM-DD local day) backdates the entry — "I remembered last
+// night's dinner" — and optional `eaten_at` ("HH:MM", 24-hour local) states when it
+// was eaten. Both omitted keeps the old behavior exactly: today, no time. A date in
+// the future or a malformed time is a 400 with the reason, never a silent fallback
+// to today (which would file the meal on the wrong day).
 nutritionRouter.post("/food-notes", (req, res) => {
   const b = req.body ?? {};
-  res.json(addFoodNote(b.meal, b.raw ?? b.text ?? "", b.parsed ?? null, b.image_path));
+  try {
+    res.json(
+      addFoodNote(b.meal, b.raw ?? b.text ?? "", b.parsed ?? null, b.image_path, {
+        date: b.date,
+        eaten_at: b.eaten_at,
+        // Strict, and NOT negotiable from the request body: this is the surface a
+        // person fills in by hand, so a bad date is worth telling them about. The
+        // model-driven lanes (MCP, chat) opt into degrading instead.
+        lenient: false,
+      })
+    );
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || "could not log food note" });
+  }
 });
 
 // Manual correction of a logged food note (fix a macro, rename it, change the meal
-// slot, "I changed my mind"). Stamps enrichment terminal so it isn't re-clobbered.
-// 404 on unknown id.
+// slot, move it to the day it was actually eaten, "I changed my mind"). Stamps
+// enrichment terminal so it isn't re-clobbered. 404 on unknown id.
+//
+// `date` moves the entry to another local day and `eaten_at` corrects the stated
+// time (send it blank to unstate a time). Omitting either leaves it alone, so
+// correcting a macro never restamps the clock. Same strict validation as the POST.
 nutritionRouter.put("/food-notes/:id", (req, res) => {
-  const updated = updateFoodNote(Number(req.params.id), req.body ?? {});
-  if (!updated) return res.status(404).json({ error: "not found" });
-  res.json(updated);
+  try {
+    const updated = updateFoodNote(Number(req.params.id), { ...(req.body ?? {}), lenient: false });
+    if (!updated) return res.status(404).json({ error: "not found" });
+    res.json(updated);
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || "could not update food note" });
+  }
 });
 
 nutritionRouter.delete("/food-notes/:id", (req, res) => res.json(deleteFoodNote(Number(req.params.id))));

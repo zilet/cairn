@@ -1814,6 +1814,12 @@ export interface ClientFoodNote {
   fiber_g?: number | null;
   enrichment_status?: string | null;
   created_at?: string;
+  // LOCAL calendar day the meal belongs to (YYYY-MM-DD). May be earlier than the
+  // day the row was written, when the entry was backdated.
+  date?: string | null;
+  // LOCAL wall-clock "HH:MM" (24-hour) the athlete said they ate. Null/absent
+  // means unstated — the ordinary case. Never render an absent time as midnight.
+  eaten_at?: string | null;
   [key: string]: unknown;
 }
 

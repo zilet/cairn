@@ -23,8 +23,10 @@ function bustsCache(date, mutate) {
   assert.equal(repo.getCachedDayRead(date), null, `the cached Brief for ${date} was busted`);
 }
 
-// Insert a food_notes row directly for a chosen date (bypasses addFoodNote,
-// which always stamps today — see _seed.js seedIntake for the same reasoning).
+// Insert a food_notes row directly for a chosen date. addFoodNote CAN backdate now
+// (pass { date }), but a raw insert keeps the fixture free of the write's own side
+// effects — which is exactly what matters when those side effects are the thing
+// under test below.
 function seedFoodNoteOn(date, parsed = { kcal: 500, protein_g: 40 }) {
   const info = db
     .prepare(
@@ -44,6 +46,20 @@ test("addFoodNote leaves other days' cached reads untouched", () => {
   assert.ok(repo.getCachedDayRead(YESTERDAY()), "a past day's cached read is unaffected by a fresh log");
 });
 
+// A BACKDATED log is a past-day intake change, so it takes the same two-call path
+// the corrections above do: its own day's Brief is now wrong, and today's trailing
+// -average fuel/expenditure read moved underneath it too.
+test("a backdated addFoodNote busts both the meal's own day and today's Brief", () => {
+  bustsCache(TODAY(), () =>
+    bustsCache(YESTERDAY(), () =>
+      repo.addFoodNote("dinner", "", { summary: "Steak", kcal: 700, protein_g: 55 }, undefined, {
+        date: YESTERDAY(),
+        eaten_at: "19:30",
+      })
+    )
+  );
+});
+
 // Mirrors fueling.ts's two-call pattern: invalidateDayRead(d) busts the note's
 // own day, and — because a past intake correction feeds the trailing-average
 // expenditure math that shapes TODAY's read too — a second invalidateDayRead()
@@ -58,6 +74,31 @@ test("updateFoodNoteParsed (enrichment overwrite) busts both the note's own day 
 test("updateFoodNote (manual correction) busts both the note's own day and today's", () => {
   const note = seedFoodNoteOn(YESTERDAY());
   bustsCache(TODAY(), () => bustsCache(YESTERDAY(), () => repo.updateFoodNote(note.id, { kcal: 600 })));
+});
+
+// A day MOVE is the third case, and the one invalidateDayReadForDate cannot see on
+// its own: it only knows an entry's CURRENT day (plus today). Miss the day the
+// entry LEFT and that day keeps serving a Brief built on intake that has since
+// moved somewhere else.
+test("moving an entry to another day busts the day it left, the day it landed on, and today", () => {
+  const twoDaysAgo = localDaysAgo(2);
+  const note = seedFoodNoteOn(twoDaysAgo);
+  seedRead(twoDaysAgo);
+  seedRead(YESTERDAY());
+  seedRead(TODAY());
+
+  repo.updateFoodNote(note.id, { date: YESTERDAY() });
+
+  assert.equal(repo.getCachedDayRead(twoDaysAgo), null, "the VACATED day is busted");
+  assert.equal(repo.getCachedDayRead(YESTERDAY()), null, "the day it landed on is busted");
+  assert.equal(repo.getCachedDayRead(TODAY()), null, "and today, whose trailing averages both days feed");
+});
+
+test("a correction that does not move the day leaves an unrelated day's read alone", () => {
+  const note = seedFoodNoteOn(YESTERDAY());
+  seedRead(localDaysAgo(3));
+  repo.updateFoodNote(note.id, { kcal: 600 });
+  assert.ok(repo.getCachedDayRead(localDaysAgo(3)), "an unrelated day is never touched");
 });
 
 test("deleteFoodNote busts both the note's own day and today's", () => {
