@@ -7,12 +7,15 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [1.6.0] — 2026-07-25
 
-Two connected rounds land here. The day read grew more self-consistent and more honest about what
+Three connected rounds land here. The day read grew more self-consistent and more honest about what
 it actually knows — the Brief and the full coaching picture can no longer disagree, a single short
 night no longer reads as a stacking trend, and a chronically short sleeper is offered their due
 session instead of being told outright to rest. The coaching brain also gained a way to check
 whether its own advice was followed, a few small honesty passes landed in athlete-facing text, and
-responses from a connected coaching assistant are now more reliably shaped.
+responses from a connected coaching assistant are now more reliably shaped. Food logging also got
+more honest about time and richer under the hood: a meal now remembers when you actually ate it,
+not just when you typed it, and chat, a written note, and a photo all capture a meal the same
+complete way.
 
 ### Added
 
@@ -27,6 +30,15 @@ responses from a connected coaching assistant are now more reliably shaped.
   changes, program evolution, the week-ahead preview, and meal plans/swaps are now structurally
   enforced to match the expected shape, so a malformed or narrated-around response can no longer
   slip through unnoticed.
+- **Log a meal for when you actually ate it** — mention "a late dinner last night" or "lunch
+  yesterday" in chat and it's recorded against the day and time you meant, not the moment you typed
+  it. An unstated time is left exactly that — unstated, never guessed at or shown as midnight — and
+  you can move an entry to the right day or fix its time afterward the same way you'd fix a macro.
+- **Meals captured more consistently everywhere** — chat, a written note, and a plate photo now
+  read a meal the same way: broken into its parts with a quantity for each, plus a coarse read on
+  things like sodium, added sugar, and food quality that can later be weighed against your labs.
+  Every estimate now records how it was obtained, so a stated amount and a rough guess are never
+  presented as the same kind of number.
 
 ### Fixed
 
@@ -55,9 +67,9 @@ responses from a connected coaching assistant are now more reliably shaped.
 
 ### Notes
 
-- This round includes schema migration **78**, which deduplicates historical day-read ledger rows
-  and hardens the guard that prevents the duplication from recurring; down-migrations remain
-  unsupported.
+- This round includes schema migrations **78** and **79**. Migration 78 deduplicates historical
+  day-read ledger rows and hardens the guard that prevents the duplication from recurring. Migration
+  79 adds an optional, additive "eaten at" time to logged meals. Down-migrations remain unsupported.
 
 ## [1.5.1] — 2026-07-24
 

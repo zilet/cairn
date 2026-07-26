@@ -222,6 +222,15 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   are informational, not medical advice; `uncertain`/uncited ones are a softer nudge. The user flips
   `active|resolved|dismissed`.
 
+- **Food capture has ONE contract and ONE direction of time inference.** `src/foodCapture.ts` owns
+  the meal-estimate shape (ingredient rows with the quantity as a *field*, `nutrition_pattern` bands,
+  `confidence`/`basis` provenance) for chat, note enrichment and the photo read alike — extend it
+  there, never re-declare the JSON in a fourth prompt; three drifting copies are what left the chat
+  path emitting no `nutrition_pattern` at all. A stated time may infer an unstated meal label
+  (21:00 → dinner); the reverse must never happen. `eaten_at` is rendered to the athlete, so a time
+  synthesized from a label would be indistinguishable from one they actually said — the label's hour
+  orders a day at read time only, and is never stored.
+
 ## Product constraints (enforced in prompts AND UI)
 
 - The Brief and every read is a **suggestion, never a gate or verdict** — the athlete drives.

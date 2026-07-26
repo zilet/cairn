@@ -991,6 +991,144 @@ same "no curation" instruction and points big pastes at the Health tab's paste b
 
 ---
 
+## Food capture (`src/foodCapture.ts`, `src/repo/nutrition.ts`)
+
+### One contract, three surfaces
+
+Three surfaces ask an agent to describe a meal: free-text enrichment (`src/prompt/enrich.ts`), the
+chat `log_food` action (`src/chatActions.ts`), and the plate-photo vision read
+(`src/prompt/enrich.ts`'s `buildFoodPhotoPrompt`). They used to each declare their own JSON shape
+and drift apart — chat never asked for `nutrition_pattern` at all, the photo path (where the
+portion is INFERRED and structure matters most) never asked for ingredient rows, none asked for
+ingredient-level fiber, and only the photo path carried any provenance. `src/foodCapture.ts`
+declares the shape ONCE and is the one artifact all three consume, so a fourth drifting copy can't
+quietly appear:
+
+- **Prompt fragments** — `FOOD_INGREDIENT_SCHEMA`, `FOOD_NUTRITION_PATTERN_SCHEMA`,
+  `FOOD_PROVENANCE_SCHEMA`, `FOOD_CAPTURE_GUARDRAILS` — interpolated verbatim into all three
+  prompts (`CHAT_ACTION_PROMPT_SPECS.log_food`, `ENRICH_FOOD_SCHEMA`, `buildFoodPhotoPrompt`).
+- **Coercion**, run by every path that stores a returned payload: `coerceFoodIngredients`/
+  `coerceFoodItems` (an ingredient's quantity is a FIELD in `amount`, never prose folded into the
+  item name — the whole reason the old photo `items: ["scrambled eggs (~2 eggs)"]` couldn't be
+  reasoned over), `foodMacroTotalsFrom` (builds a meal's macro totals up from its ingredient rows
+  when the agent gave no top-level number, so fiber stops being a top-down guess — a stated total
+  always wins over the sum), `coerceFoodProvenance`, `coerceNutritionPattern`, and
+  `clampFoodMacro`/`FOOD_MACRO_CEILINGS` (one meal cannot honestly exceed 5000 kcal / 500 g protein
+  / 1000 g carbs / 500 g fat / 200 g fiber, clamped identically everywhere).
+- `normalizeFoodCaptureParsed(input, {summary, fallbackBasis})` builds the stored blob for a path
+  that writes an agent's estimate DIRECTLY — chat's `log_food`, and the photo seed a
+  vision-capable chat agent already produced. The two background enrichers in `src/enrich.ts`
+  (`applyFoodPhoto`, `applyStructured`) instead MERGE a returned payload over an EXISTING
+  `parsed_json` blob, so they apply the same coercion functions field-by-field rather than calling
+  `normalizeFoodCaptureParsed`. `enrich.ts` re-exports the shared coercions for its own callers and
+  tests instead of keeping local copies.
+
+**Provenance rides at both entry and ingredient-row level**, and the rule that makes the extra
+depth safe is that an estimate must never become indistinguishable from a measurement. Every stored
+entry carries `confidence` (`FOOD_CONFIDENCE_BANDS`: low/medium/high — a coarse band, never a
+percentage) and `basis` (`FOOD_BASIS_VALUES`: `label` / `user_report` / `estimated_from_foods` /
+`photo` — the same vocabulary the stored `nutrition_pattern` block already used internally, now
+shared). Every capture path supplies its own honest `fallbackBasis` describing how IT actually
+obtains numbers — chat's unlabeled estimate defaults to `estimated_from_foods`, never
+`user_report`, unless the athlete actually stated a quantity; the photo path defaults to `photo`.
+An ingredient row only carries its own `basis` when it genuinely differs from the meal's (a weighed
+chicken breast next to an eyeballed scoop of rice); otherwise it's left unset and inherits the
+meal-level provenance implicitly.
+
+**Capture depth is deliberately greater than display depth.** The ingredient-level rows and the
+`nutrition_pattern` coarse bands (sodium, potassium, calcium, iron, saturated fat, added sugar,
+food quality, omega-3, alcohol, caffeine) exist to feed the brain and to let intake be correlated
+against a blood panel later (sodium↔BP, saturated fat↔LDL, added sugar↔HbA1c, iron↔ferritin,
+omega-3↔inflammation) — NOT to be rendered at the athlete. A surface shows a meal name, macros, and
+optionally a time; nothing in `foodCapture.ts` decides what gets displayed, and a future change
+should not "finish the job" by surfacing the rest of it. Chat is the majority of all logging
+volume, so this module is also the first place `nutrition_pattern` reaches most meals — previously
+only the enrichers populated it.
+
+### Eaten-at vs. logged-at: a derived time is never stored
+
+`food_notes` carries three time-shaped columns that each own a different fact and must never be
+conflated: `created_at` is the UTC instant of the WRITE; `date` is the LOCAL calendar day the meal
+belongs to (may be backdated); `eaten_at` (migration 79, nullable `TEXT`) is the LOCAL wall-clock
+`"HH:MM"` (24-hour) the athlete stated, when they stated one. `eaten_at` is deliberately a bare
+wall-clock string, not a UTC instant — there is no zone to convert, only digits to store and read
+back exactly as given.
+
+`resolveFoodNoteWhen`/`canonicalFoodNoteWhen` (`src/repo/nutrition.ts`) are the one trust boundary
+REST, MCP, and chat all pass a `FoodNoteWhen` (`{date?, eaten_at?, lenient?}`) through:
+
+- `date` is rejected if it's not a real calendar date, is in the future (compared against the
+  LOCAL day, i.e. `localDateISO()`, never a bare UTC date), or is more than `MAX_FOOD_BACKDATE_DAYS`
+  (365) in the past — generous on purpose, since backdating is the entire point ("I remembered what
+  I ate last night") and the only real risk worth catching is a mistyped year.
+- `eaten_at` is validated by `normalizeWallClock` (`src/repo/shared.ts`), which accepts only a
+  24-hour wall clock (`"8:05"`, `"20:30"`, tolerant of a trailing `:SS`) and deliberately rejects a
+  12-hour form (`"8:00 PM"`) rather than guess which half of the day was meant.
+- `lenient` (default `true`) decides what happens to a value that fails: lenient drops it (with a
+  `console.warn`) and the row still saves on today/no-time; `lenient:false` throws `RangeError`
+  instead. The REST routes (`POST`/`PUT /api/food-notes`) pass `lenient:false` — a person typing a
+  date into a form deserves a 400 with the reason. MCP's `log_food_note`/`update_food_note` and every
+  chat-driven write pass `lenient:true` — those values were resolved by a MODEL out of a sentence,
+  and losing the whole meal over a mis-resolved guess would be a far worse failure than filing it on
+  the wrong day.
+
+`addFoodNote`/`addChatCaptureFoodNote` take the optional `date`/`eaten_at` behind a trailing options
+object, so every pre-existing positional call site is unaffected. `updateFoodNote` can MOVE an entry
+between days: `date`/`eaten_at` are each applied only when the caller actually sent them (`undefined`
+leaves the stored value alone, so correcting a macro never restamps the clock), and an explicit blank
+`eaten_at` unstates a time that turned out to be wrong. Because a day move changes two days, not one,
+`updateFoodNote` invalidates and emits `food_corrected` for BOTH the day the entry left and the day
+it landed on — `invalidateDayReadForDate`'s single-date signature only ever sees the entry's current
+day.
+
+**Only one direction of inference is allowed.** A stated TIME may name an unstated meal LABEL:
+`resolveFoodNoteWhen` calls `mealLabelForTime` (`src/repo/shared.ts`) when the caller (or an agent
+speaking for them) gave no real meal label — the code-supplied placeholders `""`/`"meal"`/`"food"`
+count as unstated (`GENERIC_MEAL_LABELS`), so a time can fill a blank label without ever overwriting
+one a person chose. The `MEAL_WINDOWS` table (breakfast 5–11h, lunch 11–15h, dinner 17–22h,
+`"snack"` outside those) is nested inside `partOfDay`'s own hour buckets on purpose, so an inferred
+label can never contradict the coarse words the coach already speaks elsewhere. The REVERSE never
+happens: a stated label is never turned into a stored clock time. That direction is unsafe because
+`eaten_at` is rendered straight to the athlete, and a derived "12:30" from the word "lunch" would be
+indistinguishable — on screen, in the coach prompt, to the brain correlating intake against
+bloodwork — from a minute the athlete actually said. A meal whose time is genuinely unknown keeps
+`eaten_at` NULL, permanently.
+
+**The label's approximate hour is used only to ORDER a day, never persisted or shown.**
+`getDayIntake` reads a day back in the order things were EATEN, not the order they were typed —
+insertion order breaks the moment notes can be backdated, since a dinner remembered over this
+morning's coffee would otherwise sort after today's breakfast. The sort key is computed fresh at
+read time, in three tiers, and never written back to a row: (1) the stated `eaten_at` — the only
+tier that is a recorded fact; (2) `approxTimeForMealLabel`'s representative hour for a named meal
+with no stated time — good enough to place "breakfast" before "dinner", never good enough to store
+or display as something the athlete said; (3) the last placeable entry's carried-forward position,
+so a run of unplaceable rows (a bare `"meal"`/`"snack"`/custom label) stays where it was logged
+instead of being swept to one end. Row id is the final tiebreak. `frequentFoods()` (used for
+one-tap re-logging near a time of day) bands on the same `eaten_at` hour when present, falling back
+to the write hour — otherwise a late dinner logged the next morning would poison the breakfast-time
+frequents.
+
+The rendered `logged_at` (`getDayIntake`, `src/repo/nutrition.ts`) prefers the stated time,
+formatted through `clockLabel` (matches `chatHistoryTimeLabel`'s own "1:15 PM" register so both
+clocks read identically in one list), over the write-time label — for a backdated entry `created_at`
+is when the meal was REMEMBERED, not when it happened. The raw `eaten_at` rides alongside it so a
+reader can tell which of the two clocks `logged_at` is actually showing; the coach prompt
+(`renderTodayFuel`, `src/prompt/shared.ts`) says "eaten at" or "logged at" explicitly for the same
+reason, rather than one unlabeled `at` a model could misread as the meal time.
+
+**The instant-capture bypass is gated at routing, not just prompted around.**
+`completeInstantFoodCapture` is a zero-agent receipt path ("just had a protein shake" → save
+immediately, no CLI round-trip) that can only ever stamp today with no time — exactly wrong for "I
+had a late dinner last night around 9". `mentionsWhen()`/`MENTIONS_WHEN_RE` (`src/chatTurns.ts`) is
+a deliberately coarse "does this sentence place the meal in time at all" regex (named/relative days,
+elapsed time, clock times, calendar dates) that disqualifies the bypass the instant it matches,
+sending the turn to the full agent lane instead, where the model resolves the sentence against the
+local clock it already receives via `DATA.now` ("last night" → yesterday, late evening; "this
+morning" → today, early). Erring toward the full lane is cheap (one ordinary chat turn); erring the
+other way writes the wrong day into the athlete's log.
+
+---
+
 ## PWA surfaces (`public/`, source in `src/client/**`)
 
 Dependency-free vanilla JS. The tabbed client talks only to `/api/*` and lives in `public/js/*.js` —
