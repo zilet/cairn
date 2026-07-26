@@ -5,6 +5,60 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-07-25
+
+Two connected rounds land here. The day read grew more self-consistent and more honest about what
+it actually knows — the Brief and the full coaching picture can no longer disagree, a single short
+night no longer reads as a stacking trend, and a chronically short sleeper is offered their due
+session instead of being told outright to rest. The coaching brain also gained a way to check
+whether its own advice was followed, a few small honesty passes landed in athlete-facing text, and
+responses from a connected coaching assistant are now more reliably shaped.
+
+### Added
+
+- **Today picks one true lead** — the main column now arbitrates a single lead among the Brief,
+  feedback, an insight, the weekly read, or fuel instead of stacking competing cards; a quiet day
+  with nothing new lets another surface take the position.
+- **The coaching brain checks itself** — each morning's read now carries a plain, checkable
+  prediction (did you rest when it suggested rest, train when it suggested training), settled the
+  very next day. This is internal instrumentation that grounds future tuning in what actually
+  happened — never a score, and nothing about it is shown to you directly.
+- **More reliable coaching responses** — when the connected coaching assistant supports it, plan
+  changes, program evolution, the week-ahead preview, and meal plans/swaps are now structurally
+  enforced to match the expected shape, so a malformed or narrated-around response can no longer
+  slip through unnoticed.
+
+### Fixed
+
+- **The Brief and the coach can't quietly disagree anymore** — a gap where the Brief's own read
+  could build a thinner picture than the full coaching context let the Brief say "train" on a day
+  the fuller picture had already called for rest.
+- **One night isn't a trend** — a single short night no longer reads as "stacking up," and a
+  several-day-old readiness reading no longer forces a recommendation as if it just came in this
+  morning.
+- **Chronic short sleep gets an easier read** — instead of being told outright to rest, a
+  persistently short sleeper is now offered their due session with a caveat, and only a fresh short
+  night backed by a genuinely short rolling average forces rest.
+- **Lists read the way a person says them** — "your left knee, right shoulder, and lower back"
+  instead of a run-on comma splice, across joint-pain notes, plan-selection reasoning, and other
+  athlete-facing text.
+- **A real closing line when you finish a session** — varied phrasing consistent with the rest of
+  the Brief's voice, instead of one fixed client-side message.
+- **The meal-plan assistant sees your coaching focus** — it was already being handed the day's
+  coaching focus but wasn't rendering it into the prompt.
+- **Factual percentages are no longer flagged as scores** — "you're at 80% of your protein target"
+  now reads through; a bare or invented percentage still doesn't.
+- **The day-read history no longer double-counts a revisited day** — a day whose read legitimately
+  evolved (rest in the morning, trained anyway) had been recorded as several duplicate rows, skewing
+  any date-by-date look at that history.
+- Corrected an invalid default AI model name that was silently breaking image-similarity matching.
+
+### Notes
+
+- This round includes schema migration **78**, which deduplicates historical day-read ledger rows
+  and hardens the guard that prevents the duplication from recurring; down-migrations remain
+  unsupported.
+
 ## [1.5.1] — 2026-07-24
 
 Progress now opens into Fuel → Intake: a calm, gap-honest 35-day read of

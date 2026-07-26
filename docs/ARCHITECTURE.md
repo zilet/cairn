@@ -116,7 +116,17 @@ agree with another instead threads the baseline explicitly: `computeDayRead` (`s
 computes its baseline once and now passes it into `buildDayReadPrompt(ctx, {…, baseline})`, which used
 to recompute its OWN baseline from `context.signal_state` — closing the seam where the agent was shown
 one state while `enforceDayReadSafetyPosture`/`enforceRecoveryWeekCadence` clamped, persisted and
-fingerprinted a different one.
+fingerprinted a different one. The same date-scoping now reaches the producers underneath, too:
+`trainingSignals(recent?, asOf?)` (`src/repo/coach.ts`) takes the date being read and, for any date
+other than today, fetches sessions and progression bounded through it rather than off the newest
+twenty overall; `getRecentSessions(limit, {through})` and `getProgress(exerciseName, {through})`
+(`src/repo/sessions.ts`) add the same optional horizon, and `estimateExpenditure(windowDays,
+{asOf})` (`src/repo/expenditure.ts`) anchors its rolling window there instead of the local today.
+Every existing caller — the REST route, the MCP tool, program-state, muscle-trajectory — omits the
+option and is unaffected; only a caller reading a FIXED HISTORICAL date (the day-read signal
+builders) supplies it, closing the same "measured from now" seam `programState` closed above:
+unbounded, a read of an earlier date derived its progression trend and training signals from sets
+logged after that date.
 
 **One night is not a trend.** `SIGNAL_VOICE`'s sleep entries used to speak off `recovery.sleep_min` —
 the latest DATED night, never an average — under a chronic-sounding key (`sleep_short`/`sleep_ok`), so
@@ -330,6 +340,64 @@ so it could never move) while the Brief's prose is written against the active di
 clearing a directive is a rare, explicit athlete action, not telemetry churn, so the unconditional
 delete is correct there and switching it to the fingerprint-aware form would just leave a stale
 directive voiced in the Brief.
+
+**The read predicts something now, so it can be wrong.** `src/repo/brain/read-adherence.ts`
+attaches a falsifiable expectation to every morning read that actually makes one —
+`train`/`easy`/`rest`, never `done`, which acknowledges work that already happened and predicts
+nothing. `dayReadAdherenceExpectation(date, read)` writes a `day_read_adherence` expectation (the
+metric key registered in `BRAIN_METRIC_KEYS`/`EXPECTATION_EVALUATORS_BY_METRIC`,
+`src/brain/expectation-contract.ts`) with a SAME-DAY window — `window_start`/`window_end` are the
+read's own date and the next day — unlike every other expectation in the ledger, which waits one to
+four weeks; that short loop is the point, since the morning read is the highest-frequency judgement
+the brain makes. `dayTrainingTruth(date)` grades a calendar day's log the SAME way `dayRead()`
+itself does (discipline-aware `dayLoad` plus the hard-cardio bump), never by peeking at the cached
+`day_reads` row, which holds mutable END-of-day state and would silently answer a different
+question. `readAdherenceOutcome(kind, truth)` is the one shared test — `rest` followed means
+nothing was logged, `train` followed means anything was, `easy` followed means nothing graded above
+easy — and work that can't be graded stays `unclear` rather than guessing either way; adherence is
+a COUNT of followed/diverged days, never a rate or a grade, and VISION.md's no-score rule applies to
+it exactly as it does to anything else read by a person.
+
+`writeDayRead()`'s ledger write is now `recordDayReadDecision()` (same module), whose identity is
+the read's own decision fingerprint — kind, focus, override, and the existing
+`dayReadInputFingerprint` — instead of the whole mutable `signals` blob the old inline write
+compared, which moved all day and produced roughly 19 immutable rows per calendar day, 18 of them
+immediately superseded. A read that flips away and back within a day (train → rest → train) walks a
+bounded chain of fingerprint hops (`MAX_FINGERPRINT_HOPS = 20`) the same way `recordDecision` walks
+a lifecycle chain, so its own earlier same-day row — already superseded, immutable history rather
+than a claim on the new observation — never blocks the write.
+
+**Judged, then reopened.** A same-day expectation is TERMINAL once evaluated —
+`TERMINAL_ONCE_EVALUATED_METRICS` (`src/brain/expectation-contract.ts`) and
+`evaluation-service.ts`'s `candidateExpectationIds()` drop an already-evaluated-or-canceled row for
+a terminal metric out of the nightly candidate pool, because its window closed over a calendar day
+that cannot un-happen and re-asking it forever would only crowd out genuinely new maturations under
+the bounded nightly budget. But training data genuinely arrives late — a Garmin activity syncs after
+the fact, strength reconciliation attaches work to a day well after it closed — and a missed
+re-judgement is not a symmetric error: it can only ever turn a real `diverged` into a stale
+`followed`, never the reverse, which would let the loop quietly overstate how often its own reads
+are followed on the one metric built to measure that honestly. `reopenDayReadAdherence(date)`,
+called from `invalidateDayRead()` for any date in the past, re-opens (sets back to `pending`) a
+judged `day_read_adherence` row only when `dayTrainingTruth`'s stored facts (sets/activities/load)
+have actually moved since the verdict was reached; `evaluateMatureExpectations`
+(`evaluation-service.ts`) then closes it again the instant a re-probe produces the unchanged answer,
+so a reopen can never become a standing nightly re-probe on its own.
+
+**Made observable.** `getBrainDiagnostics()` (`src/domain/operator/brain-diagnostics-use-case.ts`)
+gained two blocks. `expectation_health` is deliberately UNWINDOWED, unlike the existing 90-day
+aggregate metrics block: a fresh expectation is invisible to that windowed block until it matures,
+so a ledger holding dozens of pending rows and zero conclusive verdicts in its entire history still
+read as healthy there — this block answers "is the loop alive at all" directly (pending /
+matured-but-unevaluated / evaluated / verdict mix / the oldest overdue row and how many days overdue
+it is / whether a conclusive verdict has EVER been produced). `read_adherence` is
+`readAdherenceModel(asOf?, windowDays=42)` (`src/repo/brain/read-adherence.ts`): a rolling window's
+per-kind follow/diverge/unclear counts plus the last 14 days, reading the morning read from the
+EARLIEST `brain_decisions` row per date — never `day_reads` (mutable end-of-day state) or
+`suggestions` (pre-dedupe duplicate rows; see `dayReadSuggestionsByDate()` in `src/repo/memory.ts`).
+The same model rides in `getCoachContext()` as the optional `CoachContextEnvelope.read_adherence`,
+memoized per build (`buildBrainSlice`, `src/repo/coach.ts`) — and deliberately absent from every
+`promptData` site in `context-projection.ts`, so no prompt can quote it back to the athlete or the
+model.
 
 ### Person, memory, chat
 
@@ -696,6 +764,69 @@ wipe any pre-marker narration the moment the reply marker lands. A conservative
 carrying BOTH a step verb AND a filesystem/db token, so genuine coaching prose ("Let me explain your
 zones", "I'll bump your squat") is never touched. Backward-compatible with a marker-less reply and
 the legacy `{reply, actions}` JSON alike (`test/streaming.test.js`).
+
+---
+
+## Enforced structured output (`agents.json` + `src/agents.ts` + `src/json-schema.ts`)
+
+The agent JSON contract was, until this, only ever REQUESTED in prose and RECOVERED by
+`extractJson` scraping stdout for the first `{` — a model that narrated before answering, or
+emitted a stray brace, broke it. Three of the four configured CLIs can instead ENFORCE the
+contract, making a malformed or prose-wrapped payload structurally impossible.
+
+**Declared, not hardcoded.** Each `agents.json` entry may carry a `structured_output` block: `flag`
+(an argv template carrying `{schema}` or `{schema_file}`), `arg` (`"inline"` substitutes the
+serialized schema; `"file"` writes it to a temp file and substitutes the path — codex's
+`--output-schema` takes a path, not inline JSON), and an optional `envelope`
+(`{structured_key, text_key}`) for a CLI whose flag also rewraps stdout into a wrapper object
+(grok's `--json-schema` implies `--output-format json`, so without unwrapping, the first `{` on
+stdout is telemetry, not the payload, and its `thought` field would leak raw reasoning into the
+operation). The flag itself is expanded only at an explicit `{schema_args}` slot in `args` — the
+same convention as `{model_args}`/`{reasoning_args}` — so `antigravity`, which declares no
+`structured_output` (verified against its own `--help`; no such flag exists), keeps the plain prose
+path untouched.
+
+**Resolved once, at spawn time.** `runAgentImpl` (`src/agents.ts`) only activates a schema when
+BOTH the caller passed `RunOpts.schema` and the chosen agent declares a usable `structured_output`
+AND its `args` template actually contains `{schema_args}` — any of the three missing degrades
+silently to the prose contract, because the rotation tries agents of mixed capability in order and
+no operation may depend on enforcement succeeding. For `arg:"file"`, a private per-run directory
+(`fs.mkdtempSync`) holds a `0600` schema file, removed on every exit path (`removeSchemaDir`,
+called from `cleanup`, an abort, and a pre-launch cancel) — never a predictable path. An active
+`envelope` runs `unwrapStructuredEnvelope()` on the parsed stdout BEFORE the operation's own
+extractor/acceptance check sees it, preferring the declared structured field and falling back to
+re-parsing the declared text field; a failed unwrap returns `null` — the ordinary no-JSON signal the
+retry ladder already recovers from — rather than handing an operation a raw telemetry object.
+`runAgentWithFallback`'s repair retry keeps the same schema: an agent that can enforce the contract
+is exactly the one that should not be asked to re-derive it from prose on a second try.
+
+**One artifact, not two.** The schema for each strict operation is a small JSON Schema constant
+declared beside its acceptance predicate in `src/agent-contracts.ts` (`PLAN_PROPOSAL_SCHEMA`,
+`WEEK_AHEAD_SCHEMA`, `MEAL_PLAN_STRUCTURE_SCHEMA`, `MEAL_SWAP_SCHEMA`), and `src/json-schema.ts`'s
+`matchesJsonSchema()` — a deliberately small evaluator covering only the keyword subset these
+contracts use (`type`, `enum`, `const`, string length, numeric bounds, array `items`/length, object
+`required`/`properties`/`additionalProperties: false`; an unrecognized keyword is ignored, never a
+failure) — runs that SAME object as the structural conjunct of the predicate. The predicate still
+carries whatever JSON Schema cannot state (a disjunction like "at least one of changes/cardio/days",
+non-blank-after-trim, cross-field agreement) as a residual check after the schema passes. Every
+object node declares `additionalProperties: true`: verified live against claude and grok, a CLOSED
+schema's constrained decoding silently DROPS any field the schema doesn't mention, and these
+payloads carry far more fields than acceptance checks (`reason`, `note`, `superset_group`, cardio
+fields, …) — a closed schema would quietly amputate them.
+
+**Where it applies, and where it deliberately doesn't.** `coachOps.ts` passes a `schema` to
+`runChosen`/`runAgentWithFallback` for the five operations with one strict, non-union shape:
+proposal, `evolve_program`, `week_ahead`, `meal_plan` (structure only — nutritional adequacy stays
+the server-side `validateMealPlanDraftForPersistence` gate; a schema must never look like it
+authorized a plan the safety gate would reject), and `meal_swap`. Three call sites deliberately
+never receive one: chat (`src/chatTurns.ts`) is prose-first around the `===CAIRN_REPLY===` marker
+and a schema would destroy it; the streaming path (`runAgentStreaming`) declares no `{schema_args}`
+slot in any `stream.args`, since grok's `--json-schema` would override its own `--output-format
+streaming-json`; and `runChosenWithCoachReads` (`src/runChosen.ts`) deliberately does NOT forward
+the op's schema, because a turn there may legitimately be either the op's final contract or a
+`coach_read` query request, and the enforcing CLIs cannot express that union (claude rejects a
+top-level `anyOf` — the API requires a single top-level object `type`) — pinning the final contract
+would make a read request structurally impossible and silently kill depth-on-demand.
 
 ---
 

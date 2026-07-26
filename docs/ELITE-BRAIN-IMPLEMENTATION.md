@@ -33,6 +33,47 @@ The original lunch failure mode is explicitly guarded: a food-only turn cannot t
 - The nightly scheduler evaluates mature expectations, preserves inconclusive history when late data arrives, then rebuilds the personal-response model.
 - `what_works_for_you` is a typed, bounded coach-context block with evidence counts, recency, contradiction handling, and safety clamping.
 - The whole-person trajectory reports each domain as `better | holding | worse | unknown`, names phase trade-offs, and forces revision on unexplained regression. For strength/hybrid profiles, strength and muscle development stay the optimization goal in every body-composition phase; avoiding strength or lean-mass loss is a universal floor, not the aspiration. Established lifts are compared against themselves so one regression cannot hide inside gains elsewhere.
+- `day_read_adherence` (`src/repo/brain/read-adherence.ts`, added 2026-07-25) is the ledger's one
+  same-day expectation — see below.
+
+### The day-read adherence loop (added 2026-07-25)
+
+Every other expectation in the ledger waits one to four weeks for its evidence to mature — long
+enough for a lab draw, a training block, or a body-composition trend to actually resolve. The
+morning day read is different: it is the single highest-frequency judgement the brain makes (294 of
+354 rows in one live ledger snapshot were `day_read` decisions), and until this addition none of
+them carried anything falsifiable, so the loop's most common decision could never be checked and
+could never teach anything.
+
+`day_read_adherence` attaches a same-day expectation to every read that actually predicts something
+— `rest` (no training is logged that day), `train` (some is), `easy` (nothing above an easy day is)
+— deliberately excluding `done`, which acknowledges work that already happened and predicts
+nothing. The window opens on the read's own date and closes the next morning: short enough that the
+loop produces a conclusive verdict on a genuine daily cadence instead of waiting weeks, which is
+precisely why this metric is worth having even though its window is unusually short for this
+ledger.
+
+Whether a read was FOLLOWED is a plain-words test, not a score: a `train` read is followed the
+moment ANY training is logged that day, with no bar for how hard, long, or close to the suggested
+session it was — inventing that bar would be exactly the graded judgement about the person
+`docs/VISION.md` forbids. Work logged on an `easy` day that cannot be graded (no load
+classification) stays `unclear` rather than being guessed either way. The counts this produces
+(`readAdherenceModel()`) are followed/diverged/unclear tallies per read kind, never a rate and never
+a percentage score, surfaced only in operator diagnostics and an optional coach-context key that no
+prompt renders — the tuning decision the counts inform (should the Brief actually rest a
+chronically-underslept athlete this often?) belongs to the athlete, not to a threshold this loop
+moves on its own.
+
+Same-day verdicts are TERMINAL once evaluated — re-asking whether a specific, already-closed
+calendar day was a rest day is work that can only repeat its own answer, and left unbounded it
+would compete with genuinely new long-window maturations for the nightly evaluation pass's fixed
+budget. The one deliberate exception is a re-open: training data legitimately arrives late (a
+Garmin sync after the fact, a strength reconciliation that attaches work to a day well after it
+closed), and a missed re-judgement is not a symmetric error — it can only ever turn a genuine
+divergence into a stale "followed" verdict, never the reverse. A learning loop whose only failure
+mode flatters itself is worse than a loop that never learned at all, so a day's judged verdict is
+reopened whenever its logged facts actually move, and closes again the moment a re-probe reaches
+the same answer.
 
 ### Signals, autonomy, and background work
 

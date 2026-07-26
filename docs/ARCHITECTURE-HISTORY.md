@@ -4,6 +4,104 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-07-25 — the day read learns to be wrong, structured-output enforcement, ledger repair + prose polish
+
+A five-commit round closing two different kinds of accountability gap, plus a handful of
+independent prose fixes.
+
+**(1) The morning read finally predicts something.** The brain writes a decision every time it
+reads the day — 294 of the 354 rows in the live ledger — and not one of them carried an
+expectation, so the loop's single most frequent judgement could never be checked and could never
+teach anything, while the sharpest feedback available sat unused: over 41 mornings the read said
+rest on 21 and the athlete trained anyway on 11 of them. `src/repo/brain/read-adherence.ts`
+attaches a falsifiable `day_read_adherence` expectation to every `train`/`easy`/`rest` read (never
+`done`, which acknowledges work that already happened and predicts nothing) with a SAME-DAY window
+that matures the next morning — unlike every other expectation in the ledger, which waits one to
+four weeks, which is exactly why this one is worth having. `dayTrainingTruth(date)` grades a
+calendar day's log the same way `dayRead()` itself does (discipline-aware `dayLoad` plus the
+hard-cardio bump); `readAdherenceOutcome()` is the one shared followed/diverged/unclear test (a
+`train` read is followed the moment ANY training is logged, no bar for how hard or close to the
+suggestion — inventing one would be a graded judgement about the person). `writeDayRead()`'s
+ledger write moved into `recordDayReadDecision()`, whose identity is the read's own decision
+fingerprint (kind/focus/override plus the existing `dayReadInputFingerprint`) rather than the
+whole mutable `signals` blob the old inline write compared — which moved all day and produced ~19
+immutable rows per calendar day, 18 of them immediately superseded. Because training data
+genuinely arrives late (a Garmin activity syncs after the fact, strength reconciliation attaches
+work to a day well after it closed) and a missed re-judgement can only ever turn a real divergence
+into a stale "followed" — never the reverse — `reopenDayReadAdherence()` (wired into
+`invalidateDayRead()` for any past date) re-opens a judged same-day verdict only when the day's
+logged facts actually moved; `TERMINAL_ONCE_EVALUATED_METRICS` +
+`isTerminalOnceEvaluated()` (`src/brain/expectation-contract.ts`) keep every OTHER
+already-evaluated same-day row out of the nightly candidate pool so it can't grow one row a day
+forever, and `evaluateMatureExpectations` closes a reopened row again the instant a re-probe lands
+the same answer. `readAdherenceModel()` surfaces the rolling counts (never a rate, never a score)
+in operator diagnostics and an optional coach-context key wired into no prompt site;
+`getBrainDiagnostics()` also gained an unwindowed `expectation_health` block (pending /
+matured-but-unevaluated / evaluated / verdict mix / oldest overdue / ever-conclusive), because the
+existing 90-day aggregate is blind to a ledger that has produced dozens of pending rows and zero
+conclusive verdicts in its entire history. `getProgress()`, `getRecentSessions()`,
+`estimateExpenditure()` and `trainingSignals()` each gained an optional historical horizon
+(`through`/`asOf`) so a read of an earlier date can no longer observe sessions or trend logged
+after the day it's reading — the same defect that once told a day inside a recovery week its reset
+was months overdue, now closed for the producers underneath it too. Riding along: `test/_seed.js`'s
+`seedTrainingDay`/`seedRecoveryDay` now drive `repo.logSetByName` instead of inserting
+`logged_sets` directly, so a test asserting on `invalidateDayRead`, the `set_logged` brain event, or
+`completeStrengthObjectiveFromLoggedSet` exercises the real write path instead of a fixture
+artifact.
+
+**(2) The suggestions ledger stops lying about how many times a day was read.** Before
+`recordDayReadSuggestion()`'s dedupe guard existed, every Brief open re-recorded the day's
+canonical suggestion, so a read that legitimately evolved across a day (morning rest → the athlete
+trains → train → done) piled up one row per re-open while looking exactly like a single morning
+suggestion — on live data June averaged 6.6 rows per date against July's 1.1, and seven dates
+recorded all three readings at once. Migration 78 backfill-dedupes the history to the earliest
+canonical row per date (steered rows are untouched — the athlete can genuinely steer twice in a
+day), verified idempotent and byte-identical on the morning distribution before/after. The live
+guard hardens from a `payload_json LIKE '%"override":null%'` substring match — silently defeated by
+any whitespace change in the serialized payload — to `json_extract(payload_json,'$.override') IS
+NULL`, now pinned by a regression test against a pretty-printed payload.
+`repo.dayReadSuggestionsByDate()` is the one-row-per-date reader so future analysis cannot
+reintroduce the same trap.
+
+**(3) Four rough edges in athlete-facing prose.** `joinList()` (Oxford comma) replaces raw
+`.join(", ")` everywhere a list reaches a person — the joint-pain voice read "your left knee, right
+shoulder"; plan-selection (which feeds the Brief's `why` directly) had independently drifted the
+same way. The finish-session response now carries a real, server-rotated headline instead of the
+client hardcoding "You're done for today" (a client-side variant set was rejected: `pickDayVariant`
+is a pure function of date and key, so a client reimplementation could diverge from the server's
+and flicker between paints). The meal-plan prompt now renders the coaching focus it was already
+being handed — every other prompt builder rendered it; `nutrition.ts` alone paid for the projected
+key and did nothing with it. The no-score grammar rule no longer rejects a factual percentage of a
+real quantity: "you're at 80% of your protein target" passes; "Readiness 38%" and "you scored 42%"
+still fail.
+
+**(4) Declarative structured-output enforcement.** The agent JSON contract was requested in prose
+and recovered by `extractJson` scraping stdout for the first `{` — a model that narrated before
+answering broke it by luck, not by guarantee. Three of the four CLIs can enforce it instead.
+`agents.json` gains a `structured_output` block per provider (flag template, `arg:
+"inline"|"file"`, optional `envelope`) expanded only at an explicit `{schema_args}` slot,
+mirroring `{model_args}`/`{reasoning_args}` — verified against each CLI's own `--help`: claude
+takes inline JSON, codex takes a file path (so `runAgentImpl` writes a `0600` temp file per run,
+removed on every exit path), grok's flag implies `--output-format json` so its payload arrives
+wrapped in a telemetry envelope that must be unwrapped before `extractJson` ever sees it (its
+`thought` field would otherwise leak raw reasoning into the operation), and antigravity has no such
+flag and keeps the prose path. Degradation is mandatory: a missing declaration, an argv template
+without the slot, or a filesystem error all fall back to the prose contract, so
+`runAgentWithFallback` keeps working across agents of mixed capability. The schema for each strict
+operation is declared ONCE, in `src/agent-contracts.ts` beside its acceptance predicate
+(`PLAN_PROPOSAL_SCHEMA`/`WEEK_AHEAD_SCHEMA`/`MEAL_PLAN_STRUCTURE_SCHEMA`/`MEAL_SWAP_SCHEMA`), and
+the new `src/json-schema.ts` — a deliberately small evaluator covering only the keyword subset
+these contracts use — runs that same object as the predicate's structural conjunct, so the
+enforced schema and the accepted shape cannot drift apart. Every object node declares
+`additionalProperties: true`: constrained decoding silently drops any field a schema omits
+(verified live against claude and grok), and these payloads carry far more than acceptance checks
+read. Applied only where the contract is one strict, non-union shape — proposal, `evolve_program`,
+`week_ahead`, `meal_plan`, `meal_swap` — and deliberately not chat (prose-first, a schema would
+destroy it), not the streaming path (no `{schema_args}` slot in any `stream.args`), and not the
+bounded coach-read loop (`runChosenWithCoachReads` never forwards a schema, because a turn there
+may legitimately be either the op's contract or a `coach_read` query, and the enforcing CLIs reject
+a top-level `anyOf`).
+
 ## 2026-07-25 — day-read self-consistency: one signal state, cause-labeled caveats, a shared reading grammar
 
 A two-strand round on top of the same day's earlier one, closing gaps its own new machinery exposed.
