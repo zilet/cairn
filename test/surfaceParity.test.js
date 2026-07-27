@@ -130,6 +130,7 @@ const ALIAS = {
   weight: "bodyweight",     // log_weight / list_weight ↔ /bodyweight
   marknextstep: "next-step", // mark_next_step ↔ POST /next-step/done|snooze (verb 'mark' + a {done|snooze} action)
   measurement: "body-metrics", // log_body_measurement / get_body_measurements ↔ /body-metrics
+  symptom: "training-symptoms", // report_training_symptom ↔ /training-symptoms
 };
 
 test("every MCP tool maps to a REST resource (MCP ⊆ REST — surfaces stay in sync)", () => {

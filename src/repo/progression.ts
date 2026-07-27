@@ -37,6 +37,8 @@ import {
 } from "./exercise-variations.js";
 import { findExercise, recentWorkingWeight } from "./exercises.js";
 import { loadPhrase, recentMuscleLoad, type RecentLoad } from "./hybrid-load.js";
+import { painAreaLoadsExercise, painAreaLoadsGroup } from "./pain-relevance.js";
+export { painAreaLoadsExercise } from "./pain-relevance.js";
 import { addExerciseToPlanDay, getPlan, pressSlotKey } from "./plan.js";
 import type { CoachPersonalModifier, CoachWhatWorksForYou } from "../brain/coach-context-contract.js";
 import { applyPersonalResponseModifier, whatWorksForYou } from "./reaction-model.js";
@@ -63,6 +65,7 @@ import { testWeekDue, type TestWeekDue } from "./muscle-trajectory.js";
 import { trainingPlaybook, type TrainingPlaybookRead } from "./training-playbook.js";
 import { currentUnderfuelingRead } from "./underfueling-snapshot.js";
 import type { UnderfuelingRead } from "./underfueling.js";
+import { recentMovementResponse, type RecentMovementResponseVerdict } from "./training-response.js";
 
 export { loadPhrase, recentMuscleLoad, type RecentLoad } from "./hybrid-load.js";
 
@@ -115,6 +118,7 @@ export interface Prescription {
   plan_item_id?: number; // set by planDayProgression for the apply path
   day_number?: number; // set by planDayProgression — the day the lift sits on (for the swap apply path)
   autoregulated?: boolean; // recovery signals braked this step (overload→hold / hold→deload) — informational
+  movement_response?: RecentMovementResponseVerdict; // repeated comparable dose evidence that supported or braked the step
   rep_step?: boolean; // double-progression REP advance (load held, reps climb in-range) — no plan change
 }
 
@@ -166,56 +170,6 @@ export function recentAutoregulation(days = AUTOREG_WINDOW_DAYS, date = localDat
   return out;
 }
 
-// A named joint (free-text like "left knee") → the canonical groups whose loaded
-// work stresses that joint, so we can tell whether THIS lift loads the sore joint.
-const JOINT_GROUP_MAP: Array<{ re: RegExp; groups: MuscleGroup[] }> = [
-  { re: /knee/, groups: ["quads", "hamstrings", "calves"] },
-  { re: /shoulder|delt|rotator|\bac\b/, groups: ["chest", "shoulders", "rear delts"] },
-  { re: /elbow|cubital|forearm|\bwrist/, groups: ["biceps", "triceps", "forearms", "back"] },
-  { re: /lower ?back|lumbar|\bback\b|spine|\bsi\b|sacro/, groups: ["back", "hamstrings", "quads"] },
-  { re: /\bhip\b|groin|glute/, groups: ["glutes", "hamstrings", "quads"] },
-  { re: /ankle|achilles|\bcalf\b|\bfoot\b|shin|tib/, groups: ["calves", "quads"] },
-];
-
-// Some pain areas load a movement through a joint even when that joint is not the
-// exercise's primary muscle group (an elbow can matter to a chest press, for
-// example). Keep that movement-level knowledge beside the progression engine's
-// muscle map so every consumer uses the same conservative relevance test.
-const JOINT_MOVEMENT_MAP: Array<{ re: RegExp; movements: RegExp }> = [
-  { re: /knee/, movements: /\b(squat|lunge|leg press|leg extension|step[ -]?up|calf)\b/ },
-  { re: /shoulder|delt|rotator|\bac\b/, movements: /\b(press|bench|push[ -]?up|dip|fly|lateral raise|row|pull[ -]?(?:up|down))\b/ },
-  { re: /elbow|cubital|forearm|\bwrist/, movements: /\b(press|bench|pushdown|extension|curl|row|pull[ -]?(?:up|down)|chin[ -]?up|dip)\b/ },
-  { re: /chest|pec|sternum|\brib\b/, movements: /\b(press|bench|push[ -]?up|dip|fly)\b/ },
-  { re: /lower ?back|lumbar|\bback\b|spine|\bsi\b|sacro/, movements: /\b(deadlift|hinge|squat|row|good morning|back extension)\b/ },
-  { re: /\bhip\b|groin|glute/, movements: /\b(squat|lunge|deadlift|hinge|hip thrust|step[ -]?up)\b/ },
-  { re: /ankle|achilles|\bcalf\b|\bfoot\b|shin|tib/, movements: /\b(calf|squat|lunge|step[ -]?up|run|jump)\b/ },
-];
-
-function jointLoadsGroup(jointText: string, group: MuscleGroup | null): boolean {
-  if (!group) return false;
-  const s = String(jointText || "").toLowerCase();
-  if (!s) return false;
-  for (const m of JOINT_GROUP_MAP) if (m.re.test(s) && m.groups.includes(group)) return true;
-  return false;
-}
-
-/**
- * Whether free-text pain feedback is relevant to one exercise. This is a
- * loading-relevance check, not a diagnosis: unmapped text returns false rather
- * than making every lift look injured.
- */
-export function painAreaLoadsExercise(
-  jointText: string | null | undefined,
-  exercise: { name?: string | null; muscle_group?: string | null },
-): boolean {
-  const text = String(jointText ?? "").trim().toLowerCase();
-  if (!text) return false;
-  const group = resolveGroup(exercise.muscle_group ?? "", exercise.name ?? "");
-  if (jointLoadsGroup(text, group)) return true;
-  const name = String(exercise.name ?? "").toLowerCase();
-  return JOINT_MOVEMENT_MAP.some((entry) => entry.re.test(text) && entry.movements.test(name));
-}
-
 // Decide the ONE-step autoregulation brake for a lift, given its computed action,
 // its canonical group, the recent feedback, and the acute-load map. Returns the new
 // action + a plain reason, or null when nothing brakes. Never steps more than once
@@ -230,7 +184,7 @@ function autoregBrake(
 ): BrakeResult {
   if (!autoreg && !recentLoad) return null;
   const heavyAcute = group && recentLoad ? recentLoad.get(group)?.heavy === true : false;
-  const jointHit = group && autoreg?.joint_pain ? jointLoadsGroup(autoreg.joint_pain, group) : false;
+  const jointHit = group && autoreg?.joint_pain ? painAreaLoadsGroup(autoreg.joint_pain, group) : false;
   const soreHigh = autoreg?.soreness != null && autoreg.soreness >= 4;
   const perfLow = autoreg?.performance != null && autoreg.performance <= 2;
   const highStrain = soreHigh || perfLow || heavyAcute;
@@ -1131,6 +1085,28 @@ function repsPrescription(
       why = `Your plan was behind what you're lifting — re-grounding it to your real working weight (${lbl}); earn a clean extra rep before adding.`;
   }
 
+  // Repeated comparable movement-dose outcomes are the first recovery brake.
+  // They can support an already-earned step, but never manufacture an extra one.
+  // Repeated under-prescription moves at most one rung toward safety before the
+  // existing acute autoregulation gate runs.
+  const response = recentMovementResponse(name, {
+    intent_key: `strength:reps:${repLow ?? "open"}-${repHigh ?? repLow ?? "open"}`,
+  });
+  if (response.verdict === "earned_hold") {
+    if (action === "overload") {
+      action = "hold";
+      nextWeight = baseWeight;
+      repStep = false;
+      why = "The last two comparable exposures came in under this dose — hold it here and let the movement catch up.";
+    } else if (action === "hold" && last) {
+      action = "deload";
+      nextWeight = baseWeight != null && baseWeight > 0 ? round5(baseWeight * (1 - DELOAD_FRAC)) : baseWeight;
+      why = "The last two comparable exposures both came in under this held dose — ease one bounded step and rebuild.";
+    }
+    varyTo = undefined;
+    varyOptions = undefined;
+  }
+
   // AUTOREGULATION GATE — one step toward safety on high soreness / low performance /
   // a just-smoked group / a named sore joint. Recovery INFORMS, never overrides
   // progressive overload by more than a step. Applied last so it wins over the earned
@@ -1181,6 +1157,7 @@ function repsPrescription(
     vary_to: varyTo,
     vary_options: varyOptions,
     autoregulated: autoregulated || undefined,
+    movement_response: response.verdict,
     rep_step: repStep || undefined,
   };
 }
@@ -1233,6 +1210,19 @@ function timedPrescription(
     why = "Hold this duration until it feels easy, then extend it.";
   }
 
+  const response = recentMovementResponse(name, { intent_key: "strength:timed" });
+  if (response.verdict === "earned_hold") {
+    if (action === "overload") {
+      action = "hold";
+      nextSeconds = baseSeconds;
+      why = "The last two comparable holds came in under this duration — keep it here until the full dose is owned.";
+    } else if (action === "hold" && last) {
+      action = "deload";
+      nextSeconds = baseSeconds != null ? Math.max(10, Math.round(baseSeconds * (1 - DELOAD_FRAC))) : baseSeconds;
+      why = "The last two comparable holds both came in under this duration — ease one bounded step and rebuild.";
+    }
+  }
+
   // AUTOREGULATION GATE (timed): a sore joint this hold loads, high soreness, or a
   // just-smoked group holds/eases the duration rather than extending. Timed work
   // eases in SECONDS, never load. Applied last so it wins over the earned extension.
@@ -1255,6 +1245,7 @@ function timedPrescription(
     exercise: ex_name(name),
     mode: "timed",
     autoregulated: autoregulated || undefined,
+    movement_response: response.verdict,
     action,
     suggested,
     current: cur,

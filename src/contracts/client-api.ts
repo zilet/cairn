@@ -586,6 +586,7 @@ export interface ClientExerciseExplanation {
 
 export interface ClientLoggedSet {
   id: number;
+  exercise_id?: number;
   exercise: string;
   weight?: number | null;
   reps?: number | null;
@@ -594,6 +595,33 @@ export interface ClientLoggedSet {
   est_1rm?: number | null;
   created_at?: string;
   [key: string]: unknown;
+}
+
+export interface ClientMovementToleranceReadiness {
+  movement_key: string;
+  movement_name: string;
+  pain_free_exposures: number;
+  trial_ready: boolean;
+  last_observed_on: ISODateString | string;
+}
+
+export interface ClientTrainingSymptom {
+  id: number;
+  source_session_id: number | null;
+  source_kind: string;
+  area_text: string;
+  status: "active" | "resolved";
+  onset_on: ISODateString | string;
+  last_reported_on: ISODateString | string;
+  resolved_on: ISODateString | string | null;
+  recurrence_count: number;
+  legacy_unconfirmed: boolean;
+  freshness: "acute_movement_brake" | "hold_easy_recheck" | "stale_needs_recheck";
+  scope: "movement_only";
+  relevant_pain_free_exposures: number;
+  trial_ready: boolean;
+  trial_ready_scope: "movement";
+  movement_readiness: ClientMovementToleranceReadiness[];
 }
 
 export interface ClientTrainingSession {
@@ -636,6 +664,14 @@ export interface ClientDailySessionComposition {
   items: ClientDailySessionItem[];
   constraints: unknown;
   provenance: unknown;
+  /** The normalized daily-decision context that authored this accepted composition, when available. */
+  decision?: {
+    policy_version: string;
+    input_fingerprint: string;
+    kind: "train" | "easy" | "rest";
+    baseline_kind: "train" | "easy" | "rest";
+    train_anyway: boolean;
+  } | null;
   created_at: string;
   superseded_at: string | null;
 }
@@ -650,6 +686,8 @@ export interface ClientDailySessionPrepareRequest {
   session?: ClientSessionSuggestion;
   constraints?: unknown;
   provenance?: unknown;
+  /** Explicit athlete choice to train despite the baseline read; recovery and pain caps still apply. */
+  train_anyway?: boolean;
   replace?: boolean;
 }
 
@@ -1376,6 +1414,10 @@ export interface ClientSessionPrimer {
   watch: ClientSessionPrimerWatch[];
   fresh: ClientSessionPrimerFresh[];
   approach: string | null;
+  decision_fingerprint: string | null;
+  decision_policy_version: string | null;
+  decision_kind: "train" | "easy" | "rest" | null;
+  provenance_label: "Adapted for today" | "Training by choice" | null;
 }
 
 export interface ClientStrengthJourneySetResponse {
@@ -2686,6 +2728,7 @@ export interface ClientApiResponses {
   "/api/recovery": ClientRecoverySummary;
   "/api/recovery/baseline": ClientRecoveryBaselineRead;
   "/api/symptom-links": { links: ClientSymptomMarkerLink[] };
+  "/api/training-symptoms": ClientTrainingSymptom[] | ClientTrainingSymptom;
   "/api/evidence": ClientEvidenceRow[];
   "/api/evidence/summary": ClientEvidenceSummary;
   "/api/insights": ClientInsight[];
@@ -2730,6 +2773,12 @@ type ClientApiResponseForCleanPath<Path extends string> = `/api${Path}` extends 
               ? ClientExerciseDetail
               : Path extends `/sessions/${string}/finish`
                 ? ClientTrainingSession
+                : Path extends `/training-symptoms/${string}/resolve`
+                  ? ClientTrainingSymptom
+                  : Path extends `/training-symptoms/${string}/recur`
+                    ? ClientTrainingSymptom
+                    : Path extends `/training-symptoms/${string}/tolerance`
+                      ? ClientTrainingSymptom
                 : Path extends `/sessions/${string}/reopen`
                   ? ClientTrainingSession
                   : Path extends `/sessions/${string}/notes`

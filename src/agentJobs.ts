@@ -376,6 +376,7 @@ async function processAgentJob(id: number): Promise<void> {
             minutes: input.minutes != null ? Number(input.minutes) : undefined,
             equipment: input.equipment != null ? String(input.equipment) : undefined,
             override: input.override != null ? String(input.override) : undefined,
+            train_anyway: input.train_anyway === true,
           },
           hooks
         );

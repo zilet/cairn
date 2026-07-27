@@ -5,6 +5,7 @@
 export * from "./repo/exercises.js";
 export * from "./repo/exercise-canon.js";
 export * from "./repo/plan.js";
+export * from "./repo/proposal-truth.js"; // temporal provenance + compare-and-set evidence for enduring plan changes
 export * from "./repo/training-read.js";
 export * from "./repo/sessions.js";
 export * from "./repo/adaptive-session.js";
@@ -58,7 +59,10 @@ export * from "./repo/training-playbook.js"; // plateau/adherence playbook sugge
 export * from "./repo/progression.js";
 export * from "./repo/daily-decision.js"; // Stage 2: the deterministic daily-session decision envelope (policy-versioned, reason-coded)
 export * from "./repo/daily-composition.js"; // Stage 3: server-side normalizer + deterministic fallback for bounded agent composition
+export * from "./repo/equipment-capability.js"; // bounded per-session equipment parsing + exercise compatibility
 export * from "./repo/daily-reconciliation.js"; // Stage 4: post-session suggested-vs-actual outcome reconciliation (idempotent, adherence-neutral)
+export * from "./repo/recovery-cycles.js"; // temporary calendar-bounded recovery overlays; never mutate the base plan
+export * from "./repo/training-symptoms.js"; // explicit movement-scoped symptom/tolerance lifecycle
 export * from "./repo/support-work.js"; // lagging compound → build the under-trained contributing muscle
 export * from "./repo/session-primer.js"; // the pre-session "a coach was already here" read
 export * from "./repo/strength-objectives.js"; // athlete-selected anchor-lift comeback journey

@@ -1,6 +1,12 @@
 import crypto from "node:crypto";
 import { normalizePrescriptionItem, SESSION_PRESCRIPTION_LIMITS } from "../contracts/session-prescription.js";
-import { decideDailySession, recordDailySessionDecision } from "./daily-decision.js";
+import { deterministicComposedSession, normalizeComposedSession } from "./daily-composition.js";
+import {
+  decideDailySession,
+  isTrainIntentOverride,
+  recordDailySessionDecision,
+  type DailyDecisionEnvelope,
+} from "./daily-decision.js";
 import { db } from "../db.js";
 import { getAgentJob } from "./chat.js";
 import { findExercise, recentWorkingSeconds, recentWorkingWeight } from "./exercises.js";
@@ -24,6 +30,7 @@ export interface PrepareDailySessionInput {
   session?: unknown;
   constraints?: unknown;
   provenance?: unknown;
+  train_anyway?: boolean;
   replace?: boolean;
 }
 
@@ -87,6 +94,134 @@ function normalizeOptionalJson(value: unknown): string | null {
   const json = JSON.stringify(normalizeJsonValue(value));
   if (json.length > 12_000) throw new Error("constraints/provenance is too large");
   return json;
+}
+
+function normalizedRecord(value: unknown): Record<string, unknown> {
+  const normalized = normalizeJsonValue(value);
+  return normalized && typeof normalized === "object" && !Array.isArray(normalized)
+    ? (normalized as Record<string, unknown>)
+    : Object.create(null);
+}
+
+function dailyDecisionContext(envelope: DailyDecisionEnvelope) {
+  const request = (envelope as DailyDecisionEnvelope & { request?: DailyDecisionEnvelope["request"] }).request;
+  return {
+    policy_version: envelope.policy_version,
+    input_fingerprint: envelope.input_fingerprint,
+    kind: envelope.kind,
+    baseline_kind: envelope.baseline_kind ?? envelope.kind,
+    train_anyway: request?.train_anyway === true,
+    template: envelope.template,
+    caps: envelope.caps,
+    recovery_cycle: envelope.recovery_cycle,
+    hard_constraints: envelope.hard_constraints,
+    rationale: envelope.rationale,
+  };
+}
+
+function decisionOpts(input: PrepareDailySessionInput) {
+  const constraints = normalizedRecord(input.constraints);
+  const legacyOverride =
+    typeof constraints.day_read_override === "string" ? String(constraints.day_read_override) : null;
+  return {
+    override: legacyOverride,
+    train_anyway: input.train_anyway === true || isTrainIntentOverride(legacyOverride),
+    equipment: typeof constraints.equipment === "string" ? String(constraints.equipment) : null,
+    minutes: finite(constraints.minutes),
+    goal: typeof constraints.goal === "string" ? String(constraints.goal) : null,
+  };
+}
+
+function agentDecisionOpts(jobInput: Record<string, unknown>) {
+  const explicitOverride =
+    typeof jobInput.override === "string"
+      ? jobInput.override
+      : typeof jobInput.constraints === "string" && /\btrain anyway\b/i.test(jobInput.constraints)
+        ? jobInput.constraints
+        : null;
+  return {
+    override: explicitOverride,
+    train_anyway: jobInput.train_anyway === true || isTrainIntentOverride(explicitOverride),
+    equipment: typeof jobInput.equipment === "string" ? jobInput.equipment : null,
+    minutes: finite(jobInput.minutes),
+    goal: typeof jobInput.goal === "string" ? jobInput.goal : null,
+  };
+}
+
+function decisionBoundMetadata(
+  input: PrepareDailySessionInput,
+  envelope: DailyDecisionEnvelope,
+  source: DailySessionSource
+) {
+  const trainAnyway =
+    (envelope as DailyDecisionEnvelope & { request?: DailyDecisionEnvelope["request"] }).request?.train_anyway === true;
+  const choice =
+    trainAnyway || (source === "manual_plan" && (envelope.baseline_kind ?? envelope.kind) !== "train")
+      ? "training_by_choice"
+      : "adapted_for_today";
+  return {
+    constraints: {
+      ...normalizedRecord(input.constraints),
+      train_anyway: trainAnyway,
+      daily_decision: dailyDecisionContext(envelope),
+    },
+    provenance: {
+      ...normalizedRecord(input.provenance),
+      label: choice === "training_by_choice" ? "Training by choice" : "Adapted for today",
+      choice,
+      daily_decision: dailyDecisionContext(envelope),
+    },
+  };
+}
+
+function withoutServerDecisionFields(
+  value: unknown,
+  keys: string[]
+): Record<string, unknown> {
+  const out = { ...normalizedRecord(value) };
+  for (const key of keys) delete out[key];
+  return out;
+}
+
+function exactPlanRetry(existing: any, input: PrepareDailySessionInput, source: DailySessionSource): boolean {
+  if (!existing || String(existing.source) !== source || !PLAN_SOURCES.has(source)) return false;
+  if (source === "manual_plan" && input.day_number != null) {
+    const day = getPlanDay(Number(input.day_number));
+    if (!day || Number(day.id) !== Number(existing.plan_day_id)) return false;
+  }
+  const constraints = parseJson(existing.constraints_json);
+  const provenance = parseJson(existing.provenance_json);
+  const existingTrainAnyway =
+    constraints && typeof constraints === "object" && !Array.isArray(constraints)
+      ? (constraints as Record<string, unknown>).train_anyway === true
+      : false;
+  if (existingTrainAnyway !== decisionOpts(input).train_anyway) return false;
+  return (
+    stableJson(withoutServerDecisionFields(constraints, ["train_anyway", "daily_decision"])) ===
+      stableJson(normalizedRecord(input.constraints)) &&
+    stableJson(withoutServerDecisionFields(provenance, ["label", "choice", "daily_decision"])) ===
+      stableJson(normalizedRecord(input.provenance))
+  );
+}
+
+function exactAgentJobRetry(existing: any, input: PrepareDailySessionInput, source: DailySessionSource): boolean {
+  if (!existing || source !== "agent_suggest" || String(existing.source) !== source) return false;
+  const provenance = parseJson(existing.provenance_json);
+  const existingJobId =
+    provenance && typeof provenance === "object" && !Array.isArray(provenance)
+      ? Number((provenance as Record<string, unknown>).agent_job_id)
+      : Number.NaN;
+  return Number.isInteger(existingJobId) && existingJobId === Number(input.agent_job_id);
+}
+
+function envelopePlanDayId(envelope: DailyDecisionEnvelope): number | null {
+  const direct = Number(
+    (envelope.template as DailyDecisionEnvelope["template"] & { plan_day_id?: number | null }).plan_day_id
+  );
+  if (Number.isInteger(direct) && direct > 0) return direct;
+  if (envelope.template.day_number == null) return null;
+  const day = getPlanDay(envelope.template.day_number);
+  return day?.id != null ? Number(day.id) : null;
 }
 
 function parseJson(value: unknown): unknown {
@@ -356,6 +491,34 @@ function planSnapshot(date: string, dayNumber?: number | null) {
   };
 }
 
+function adaptiveSnapshotFromDecision(envelope: DailyDecisionEnvelope) {
+  if (envelope.kind !== "rest" && envelope.template.intent !== "template") {
+    // Preserve the existing adaptive-plan contract: without a weekly template,
+    // callers use athlete_override for an open session. Rest is the one useful
+    // exception because its recovery composition is intentionally plan-free.
+    throw new Error("session items are required");
+  }
+  const session = deterministicComposedSession(envelope);
+  return {
+    // A true rest decision intentionally severs the weekly-template link: the
+    // accepted prescription is the deterministic recovery composition, not a
+    // relabeled full lifting day. Train-anyway returns kind=train and keeps it.
+    plan_day_id: envelope.kind === "rest" ? null : envelopePlanDayId(envelope),
+    payload: normalizeSessionPayload(
+      {
+        title: session.name,
+        focus: session.focus,
+        why: session.why,
+        est_minutes: session.est_minutes,
+        items: session.items,
+      },
+      false,
+      false,
+      envelope.kind === "rest"
+    ),
+  };
+}
+
 function canonicalAgentSuggestion(jobIdRaw: unknown, date: string) {
   const jobId = Number(jobIdRaw);
   if (!Number.isInteger(jobId) || jobId <= 0) {
@@ -383,9 +546,18 @@ function canonicalAgentSuggestion(jobIdRaw: unknown, date: string) {
     if (job.input?.[key] != null && job.input[key] !== "") canonicalConstraints[key] = job.input[key];
   }
   return {
+    kind: job.kind as "session_suggest" | "session_compose",
     session: job.result.session,
     normalized: job.result.session_normalization === DAILY_SESSION_SUGGESTION_NORMALIZATION,
+    envelope:
+      job.kind === "session_compose" &&
+      job.result.envelope &&
+      typeof job.result.envelope === "object" &&
+      typeof job.result.envelope.input_fingerprint === "string"
+        ? (job.result.envelope as DailyDecisionEnvelope)
+        : null,
     constraints: canonicalConstraints,
+    decision_opts: agentDecisionOpts((job.input ?? {}) as Record<string, unknown>),
     provenance: {
       verification: "verified_agent_job",
       operation: job.kind,
@@ -488,11 +660,16 @@ function activeCompositionRow(date: string): any {
 function hydrate(row: any) {
   if (!row) return null;
   const { items_json, constraints_json, provenance_json, request_fingerprint: _requestFingerprint, ...rest } = row;
+  const provenance = parseJson(provenance_json);
   return {
     ...rest,
     items: parseJson(items_json) ?? [],
     constraints: parseJson(constraints_json),
-    provenance: parseJson(provenance_json),
+    provenance,
+    decision:
+      provenance && typeof provenance === "object" && !Array.isArray(provenance)
+        ? ((provenance as Record<string, unknown>).daily_decision ?? null)
+        : null,
   };
 }
 
@@ -532,27 +709,113 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
   }
   const source = sourceOf(input.source);
   const existingRow = activeCompositionRow(date);
-  if (existingRow && !input.replace) {
+  const canRefreshAdaptive =
+    !!existingRow && source === "adaptive_plan" && exactPlanRetry(existingRow, input, source);
+  if (existingRow && !input.replace && !canRefreshAdaptive) {
+    return { ok: true as const, daily_session: hydrate(existingRow), session_id: existingRow.session_id, reused: true };
+  }
+  if (existingRow && input.replace && source === "manual_plan" && exactPlanRetry(existingRow, input, source)) {
     return { ok: true as const, daily_session: hydrate(existingRow), session_id: existingRow.session_id, reused: true };
   }
 
-  const isPlan = PLAN_SOURCES.has(source);
   const canonicalAgent = source === "agent_suggest" ? canonicalAgentSuggestion(input.agent_job_id, date) : null;
-  const prepared = isPlan
-    ? planSnapshot(date, input.day_number)
-    : {
-        plan_day_id: null,
-        payload: normalizeSessionPayload(
-          canonicalAgent?.session ?? input.session,
-          source === "agent_suggest",
-          source === "agent_suggest",
-          source === "athlete_override",
-          source === "athlete_override",
-          canonicalAgent?.normalized === true
-        ),
-      };
-  const constraintsJson = normalizeOptionalJson(canonicalAgent?.constraints ?? input.constraints);
-  const provenanceJson = normalizeOptionalJson(canonicalAgent?.provenance ?? input.provenance);
+  // Decide before snapshotting. Adaptive preparation is authored from this one
+  // envelope, not from an independent weekly-plan read. Manual plan pulls remain
+  // athlete-owned snapshots but still carry the same visible safety context.
+  let decision =
+    source === "adaptive_plan" || source === "manual_plan"
+      ? decideDailySession(date, decisionOpts(input))
+      : canonicalAgent
+        ? decideDailySession(date, canonicalAgent.decision_opts)
+        : null;
+  // Choosing a weekly plan day is explicit training intent. On a baseline rest
+  // read, persist that consent as train_anyway and author the snapshot inside the
+  // same conservative caps as every other train-intent override.
+  if (
+    source === "manual_plan" &&
+    decision &&
+    decision.envelope.baseline_kind === "rest" &&
+    decision.envelope.request.train_anyway !== true
+  ) {
+    decision = decideDailySession(date, { ...decisionOpts(input), train_anyway: true });
+  }
+  const manualPlan = source === "manual_plan" ? planSnapshot(date, input.day_number) : null;
+  const boundedManual =
+    manualPlan && decision
+      ? normalizeComposedSession(
+          {
+            name: manualPlan.payload.title,
+            focus: manualPlan.payload.focus,
+            why: manualPlan.payload.why,
+            est_minutes: manualPlan.payload.est_minutes,
+            items: manualPlan.payload.items,
+          },
+          decision.envelope
+        ).session ??
+        deterministicComposedSession({
+          ...decision.envelope,
+          template: {
+            ...decision.envelope.template,
+            day_number:
+              input.day_number != null ? Number(input.day_number) : decision.envelope.template.day_number,
+            plan_day_id: manualPlan.plan_day_id,
+            intent: "template",
+          },
+        })
+      : null;
+  const boundedAgent =
+    canonicalAgent && decision
+      ? normalizeComposedSession(canonicalAgent.session, decision.envelope).session ??
+        deterministicComposedSession(decision.envelope)
+      : null;
+  const prepared =
+    source === "adaptive_plan" && decision
+      ? adaptiveSnapshotFromDecision(decision.envelope)
+      : source === "manual_plan"
+        ? {
+            plan_day_id: manualPlan!.plan_day_id,
+            payload: normalizeSessionPayload(
+              boundedManual ?? {
+                name: manualPlan!.payload.title,
+                focus: manualPlan!.payload.focus,
+                why: manualPlan!.payload.why,
+                est_minutes: manualPlan!.payload.est_minutes,
+                items: manualPlan!.payload.items,
+              },
+              false
+            ),
+          }
+        : {
+            plan_day_id:
+              canonicalAgent?.kind === "session_compose" &&
+              decision?.envelope &&
+              decision.envelope.kind !== "rest"
+                ? envelopePlanDayId(decision.envelope)
+                : null,
+            payload: normalizeSessionPayload(
+              boundedAgent ?? input.session,
+              source === "agent_suggest",
+              source === "agent_suggest",
+              source === "athlete_override" || decision?.envelope.kind === "rest",
+              source === "athlete_override",
+              canonicalAgent != null
+            ),
+          };
+  const bound = decision ? decisionBoundMetadata(input, decision.envelope, source) : null;
+  const constraintsJson = normalizeOptionalJson(
+    bound
+      ? { ...bound.constraints, ...normalizedRecord(canonicalAgent?.constraints) }
+      : canonicalAgent?.constraints ?? input.constraints
+  );
+  const provenanceJson = normalizeOptionalJson(
+    bound
+      ? {
+          ...bound.provenance,
+          ...(canonicalAgent?.provenance ?? {}),
+          daily_decision: dailyDecisionContext(decision!.envelope),
+        }
+      : canonicalAgent?.provenance ?? input.provenance
+  );
   const fingerprint = requestFingerprint({
     date,
     source,
@@ -571,10 +834,22 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
       return { ok: true as const, daily_session: hydrate(current), session_id: current.session_id, reused: true };
     }
     if (current && !input.replace) {
-      return { ok: true as const, daily_session: hydrate(current), session_id: current.session_id, reused: true };
+      const currentCanRefresh =
+        source === "adaptive_plan" && exactPlanRetry(current, input, source);
+      if (!currentCanRefresh) {
+        return { ok: true as const, daily_session: hydrate(current), session_id: current.session_id, reused: true };
+      }
     }
     const sameDateSessions = sessionRowsForDate(date);
     const lockItems = current ? parseJson(current.items_json) : prepared.payload.items;
+    if (
+      current &&
+      (exactPlanRetry(current, input, source) || exactAgentJobRetry(current, input, source)) &&
+      (sameDateSessions.some((session) => meaningfulSessionReasons(session).length > 0) ||
+        matchingCardioEvidence(date, lockItems))
+    ) {
+      return { ok: true as const, daily_session: hydrate(current), session_id: current.session_id, reused: true };
+    }
     assertSessionsUnstarted(date, sameDateSessions, lockItems);
     let session: any;
     if (current) {
@@ -626,14 +901,11 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
     const dailySession = hydrate(
       db.prepare(`SELECT * FROM daily_session_compositions WHERE id = ?`).get(info.lastInsertRowid)
     );
-    // Stage 2: persist the deterministic decision metadata that explains a
-    // plan-source acceptance (docs §4). Best-effort — a decision-record failure
-    // must never fail the accept. Skipped for agent/override sources whose
-    // selection the deterministic envelope did not drive.
-    if (isPlan) {
+    // Persist the exact envelope that authored this composition. Best-effort:
+    // observability must never make a usable session fail.
+    if (decision) {
       try {
-        const { envelope } = decideDailySession(date);
-        recordDailySessionDecision(envelope, { composition_id: Number(info.lastInsertRowid) });
+        recordDailySessionDecision(decision.envelope, { composition_id: Number(info.lastInsertRowid) });
       } catch {
         /* observability write never blocks preparation */
       }

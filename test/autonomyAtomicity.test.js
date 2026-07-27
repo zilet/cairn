@@ -271,7 +271,7 @@ test("an autonomous apply rolls back when its required learning expectation cann
   }
 });
 
-test("a recovery restructure cannot land without its strict ownership stamp", () => {
+test("a recovery cycle cannot land without its authoritative scheduling row", () => {
   seedBench();
   repo.setSettings({ lead_mode: "lead" });
   const proposal = repo.createProposal("stub", repo.RECOVERY_WEEK_INSTRUCTION, "", {
@@ -286,19 +286,23 @@ test("a recovery restructure cannot land without its strict ownership stamp", ()
     ],
   });
   const announced = applyProposalWithAutonomy(proposal.id, { requested_tier: "announce" });
-  db.exec(`CREATE TRIGGER fail_recovery_owner BEFORE INSERT ON app_state
-    WHEN NEW.key = 'recovery_week_applied'
-    BEGIN SELECT RAISE(ABORT, 'recovery owner unavailable'); END`);
+  db.exec(`CREATE TRIGGER fail_recovery_cycle BEFORE INSERT ON recovery_cycles
+    BEGIN SELECT RAISE(ABORT, 'recovery cycle unavailable'); END`);
   try {
     const due = applyDueAnnouncedDecisions(announced.effective_date);
     assert.deepEqual(due.applied, []);
     assert.deepEqual(due.failed, [announced.decision.id]);
     assert.equal(repo.getPlanDay(1).items[0].sets, 3);
     assert.equal(repo.getProposal(proposal.id).status, "draft");
+    assert.equal(repo.listRecoveryCycles().length, 0);
     assert.equal(repo.getAppState("recovery_week_applied"), null);
-    assert.equal(repo.getBrainDecision(announced.decision.id).status, "review");
+    const parked = repo.getBrainDecision(announced.decision.id);
+    assert.equal(parked.status, "review");
+    assert.equal(parked.reversible, false);
+    assert.match(String(parked.context?.apply_error ?? ""), /recovery cycle unavailable/i);
+    assert.equal(repo.getBrainRollback(announced.decision.id), null);
   } finally {
-    db.exec("DROP TRIGGER IF EXISTS fail_recovery_owner");
+    db.exec("DROP TRIGGER IF EXISTS fail_recovery_cycle");
   }
 });
 

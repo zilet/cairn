@@ -1,12 +1,14 @@
 // Injuries heal over time (Wave B / B1). A minor injury gets a short expected
-// recovery window; past that window, with the affected area TRAINED since, it's
-// LIKELY-RESOLVED — it stops gating the day-read/conductor as a hard constraint,
-// without ever hard-deleting the record. An explicit resolve closes it outright.
+// recovery window; past that window, later training is context but not explicit
+// pain-free evidence. The event stays active for a calm recheck until the athlete
+// resolves it. An explicit resolve closes it outright.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { repo, resetTables, seedTrainingDay, localDaysAgo } from "./_seed.js";
 
-beforeEach(() => resetTables("context_events", "sessions", "logged_sets", "exercises", "day_reads"));
+beforeEach(() =>
+  resetTables("context_events", "sessions", "logged_sets", "plan_items", "plan_days", "exercises", "day_reads")
+);
 
 test("addContextEvent defaults a short healing window for a minor injury", () => {
   const ev = repo.addContextEvent({ kind: "injury", title: "Foot sole cuts", meta: { severity: "mild" } });
@@ -24,7 +26,7 @@ test("defaultInjuryWindow maps severity to a window", () => {
   assert.equal(repo.defaultInjuryWindow(null), 7);
 });
 
-test("an injury past its window with resumed training no longer hard-gates", () => {
+test("an injury past its window with resumed training stays active until explicitly resolved", () => {
   // A knee injury 15 days ago, mild → a 5-day window that closed 10 days ago.
   const ev = repo.addContextEvent({
     kind: "injury",
@@ -39,18 +41,32 @@ test("an injury past its window with resumed training no longer hard-gates", () 
   const healing = repo.contextEventHealing(ev);
   assert.equal(healing.past_window, true, "past its expected recovery window");
   assert.equal(healing.trained_since, true, "the injured area was trained after the window");
-  assert.equal(healing.likely_resolved, true, "→ likely resolved (a soft note, not a gate)");
+  assert.equal(healing.likely_resolved, false, "a bare training log is not pain-free evidence");
+  assert.equal(healing.needs_recheck, true);
+  assert.equal(healing.constraint_level, "soft_recheck");
 
-  // The active-context effect no longer eases load for it, and it's not surfaced as a
-  // hard injury impact — but the RECORD still exists (never hard-deleted).
+  repo.savePlanDay(1, "Full body", null, [
+    { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 5, target_weight: 185 },
+    { exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 5, target_weight: 135 },
+  ]);
+
+  // The event remains calm and movement-aware, but no longer reduces the whole
+  // program indefinitely.
   const eff = repo.activeContextEffect();
-  assert.equal(eff.reduce_load, false, "a likely-resolved injury stops easing load");
+  assert.equal(eff.reduce_load, false, "stale history is a soft recheck, not a whole-program reduction");
+  assert.equal(eff.resolve_candidates[0].constraint_level, "soft_recheck");
   const impacts = repo.getInjuryImpacts();
-  assert.equal(impacts.count, 0, "a likely-resolved injury generates no hard exercise gates");
+  assert.equal(impacts.count, 0, "soft rechecks do not count as hard protective impacts");
+  assert.equal(impacts.recheck_count, 1);
+  assert.equal(impacts.injuries[0].constraint_level, "soft_recheck");
+  assert.deepEqual(impacts.injuries[0].affected.map((item) => item.exercise), ["Back Squat"]);
+  const hydrated = repo.getContextEvent(ev.id);
+  assert.equal(hydrated.needs_recheck, true);
+  assert.equal(hydrated.constraint_level, "soft_recheck");
   assert.ok(repo.getContextEvent(ev.id), "the record is not hard-deleted");
 });
 
-test("a past-window injury with NO resumed training still gates + asks to confirm", () => {
+test("a past-window injury with NO resumed training stays a soft recheck and asks to confirm", () => {
   const ev = repo.addContextEvent({
     kind: "injury",
     title: "Knee pain",
@@ -64,7 +80,7 @@ test("a past-window injury with NO resumed training still gates + asks to confir
   assert.equal(healing.likely_resolved, false, "no resumed training → not auto-decayed");
 
   const eff = repo.activeContextEffect();
-  assert.equal(eff.reduce_load, true, "still eases load until confirmed");
+  assert.equal(eff.reduce_load, false, "absence of training does not extend a whole-program reduction");
   assert.equal(eff.resolve_candidates.length, 1, "surfaced for a gentle 'still bothering you?'");
   assert.equal(eff.resolve_candidates[0].id, ev.id);
 });
@@ -76,6 +92,7 @@ test("an explicit resolve closes an injury without deleting it", () => {
     start_date: localDaysAgo(1), // fresh, still well within its window
     meta: { area: "ankle", severity: "moderate" },
   });
+  assert.equal(repo.contextEventHealing(ev).constraint_level, "protective");
   assert.equal(repo.activeContextEffect().reduce_load, true, "an active fresh injury eases load");
 
   const resolved = repo.resolveContextEvent(ev.id);

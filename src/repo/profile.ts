@@ -42,7 +42,20 @@ import {
   stampRecoveryWeekApplied,
   stampRecoveryWeekAppliedStrict,
 } from "./recovery-week-ledger.js";
+import {
+  activateRecoveryCycle,
+  cancelRecoveryCycleForProposal,
+  recoveryCycleAt,
+  recoveryCycleCooldown,
+  scheduleRecoveryCycle,
+} from "./recovery-cycles.js";
 import { afterSqliteCommit, withSqliteSavepoint } from "./sqlite-savepoint.js";
+import {
+  normalizeStoredProposalPayload,
+  prepareProposalPayload,
+  proposalEvidenceSnapshot,
+  verifyProposalEvidenceFreshness,
+} from "./proposal-truth.js";
 
 // Keep these public through profile/repo without duplicating the ledger's source
 // of truth. The explicit local export is also legible to source-contract checks.
@@ -71,9 +84,10 @@ export function getExerciseDetail(name: string) {
 
 // ---------- proposals ----------
 export function createProposal(agent: string, instruction: string, raw: string, parsed: any) {
+  const storedParsed = parsed ? prepareProposalPayload(parsed) : null;
   const info = db
     .prepare(`INSERT INTO plan_proposals (agent, instruction, raw_output, parsed_json) VALUES (?, ?, ?, ?)`)
-    .run(agent, instruction || "", raw || "", parsed ? JSON.stringify(parsed) : null);
+    .run(agent, instruction || "", raw || "", storedParsed ? JSON.stringify(storedParsed) : null);
   // Proposal state feeds the conductor (a pending recovery draft flips its button
   // into a review link) — invalidate the version-keyed memos on every write.
   afterSqliteCommit(bumpTrainingDataVersion);
@@ -160,6 +174,7 @@ function hydrateProposal(row: any) {
   } catch {
     parsed = null;
   }
+  parsed = normalizeStoredProposalPayload(parsed, row.created_at);
   const autonomy = db
     .prepare(
       `SELECT id, status, autonomy_tier, effective_date, summary, context_json
@@ -330,8 +345,9 @@ export const RECOVERY_WEEK_INSTRUCTION =
 
 // Whether the lead-mode coach should draft the recovery week ITSELF right now: the
 // conductor is asking for one (a recovery lead that is neither running nor already
-// drafted) and the athlete has chosen the lead posture. Pure — the scheduler owns
-// the ≤1×/day cadence stamp. This is what keeps the conductor's "your coach sets
+// drafted), the athlete has chosen the lead posture, and no open/cooldown cycle
+// already owns the recovery window. The scheduler owns the ≤1×/day cadence stamp.
+// This is what keeps the conductor's "your coach sets
 // this up automatically" copy honest: the same read that makes the promise is the
 // read that triggers the draft.
 export function shouldAutoDraftRecoveryWeek(opts: {
@@ -340,12 +356,13 @@ export function shouldAutoDraftRecoveryWeek(opts: {
   recovery_active?: unknown;
   status: unknown;
 }): boolean {
-  return (
+  const requested =
     String(opts.lead_mode) === "lead" &&
     String(opts.focus_lead_domain) === "recovery" &&
     opts.recovery_active !== true &&
-    opts.status == null
-  );
+    opts.status == null;
+  if (!requested) return false;
+  return recoveryCycleCooldown(localDateISO()).allowed;
 }
 
 export function pendingRecoveryDraft(): { id: number } | null {
@@ -383,7 +400,14 @@ export function supersedeRecoveryWeekDrafts(exceptId?: number) {
 export type RecoveryWeekStatus =
   | { state: "drafted"; proposal_id: number; summary: string | null }
   | { state: "upcoming"; proposal_id: number; decision_id: number; effective_date: string; summary: string | null }
-  | { state: "applied"; applied_on: string; until: string; summary: string | null }
+  | {
+      state: "applied";
+      applied_on: string;
+      until: string;
+      summary: string | null;
+      cycle_id?: number | null;
+      effective_status?: "active" | "recheck";
+    }
   | null;
 
 export type ActiveRecoveryWeek = Extract<RecoveryWeekStatus, { state: "applied" }>;
@@ -393,6 +417,21 @@ export type ActiveRecoveryWeek = Extract<RecoveryWeekStatus, { state: "applied" 
 // optional date keeps historical reads and deterministic tests independent of the
 // wall clock; the interval is [applied_on, until), matching the seven plan dates.
 export function activeRecoveryWeek(date = localDateISO()): ActiveRecoveryWeek | null {
+  const cycle = recoveryCycleAt(date);
+  if (
+    cycle &&
+    !cycle.legacy &&
+    (cycle.effective_status === "active" || cycle.effective_status === "recheck")
+  ) {
+    return {
+      state: "applied",
+      applied_on: cycle.effective_on,
+      until: cycle.exit_on,
+      summary: cycle.reason,
+      cycle_id: cycle.id,
+      effective_status: cycle.effective_status,
+    };
+  }
   const ledger = activeRecoveryWeekLedger(date);
   if (!ledger) return null;
   return {
@@ -455,6 +494,7 @@ function stampRecoveryWeekIfApplies(p: any, strict = false): void {
 export function revertRecoveryWeekIfOwned(proposalId: number, opts: { strict?: boolean } = {}): boolean {
   const p = getProposal(Number(proposalId));
   if (!p || !String(p.instruction ?? "").startsWith(RECOVERY_WEEK_INSTRUCTION_PREFIX)) return false;
+  cancelRecoveryCycleForProposal(Number(proposalId), localDateISO());
   if (opts.strict) clearRecoveryWeekStampIfOwnedStrict(Number(proposalId));
   else clearRecoveryWeekStampIfOwned(Number(proposalId));
   if (p.status === "applied") setProposalStatus(Number(proposalId), "reverted");
@@ -678,7 +718,8 @@ function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?:
   try {
     const today = localDateISO();
     const nutrition = p.parsed?.kind === "nutrition_target";
-    const restructure = Array.isArray(p.parsed?.days);
+    const recoveryCycle = result?.recovery_cycle ?? null;
+    const restructure = Array.isArray(p.parsed?.days) && !recoveryCycle;
     const affected = [
       ...(Array.isArray(result?.applied) ? result.applied : []),
       ...(Array.isArray(result?.added) ? result.added : []),
@@ -916,6 +957,7 @@ function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?:
         ? [`nutrition_target:${accepted?.id ?? p.id}`, `expenditure:${nutritionExpectationBasis ?? "thin"}`]
         : exercises.map((exercise) => `exercise:${exercise}:plan-and-history`).slice(0, 12)),
     ];
+    const proposalEvidence = proposalEvidenceSnapshot(p.parsed);
     const baseAction = nutrition
       ? {
           target_kcal: result?.nutrition?.target_kcal ?? null,
@@ -924,6 +966,17 @@ function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?:
           fat_g: result?.nutrition?.fat_g ?? null,
           plan_proposal_id: p.id,
         }
+      : recoveryCycle
+        ? {
+            plan_proposal_id: p.id,
+            recovery_cycle_id: recoveryCycle.id,
+            effective_status: recoveryCycle.effective_status,
+            effective_on: recoveryCycle.effective_on,
+            recheck_on: recoveryCycle.recheck_on,
+            exit_on: recoveryCycle.exit_on,
+            overlay: recoveryCycle.overlay,
+            base_plan_mutated: false,
+          }
       : restructure
         ? {
             plan_proposal_id: p.id,
@@ -932,6 +985,14 @@ function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?:
               day_number: day?.day_number ?? null,
               name: day?.name ?? null,
               focus: day?.focus ?? null,
+              reasons: (Array.isArray(day?.items) ? day.items : [])
+                .filter((item: any) => item?.reason)
+                .slice(0, 12)
+                .map((item: any) => ({
+                  exercise: item?.exercise ?? item?.label ?? null,
+                  reason: item.reason,
+                  reason_provenance: item?.reason_provenance ?? null,
+                })),
             })),
           }
         : {
@@ -944,6 +1005,8 @@ function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?:
               rep_low: item?.rep_low ?? null,
               rep_high: item?.rep_high ?? null,
               target_seconds: item?.target_seconds ?? null,
+              reason: item?.reason ?? null,
+              reason_provenance: item?.reason_provenance ?? null,
             })),
             // Rotations keep their from/to shape (changes[] flattens it away) so the
             // ledger can answer "was lift X recently rotated out" without string-parsing.
@@ -956,10 +1019,33 @@ function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?:
                 to: String(item.swap.to),
               })),
             runs: Array.isArray(result?.runs) ? result.runs.slice(0, 14) : [],
+            run_reasons: [
+              ...(Array.isArray(p.parsed?.cardio) ? p.parsed.cardio : []),
+              ...(Array.isArray(p.parsed?.changes)
+                ? p.parsed.changes.filter((item: any) => String(item?.kind ?? "").toLowerCase() === "cardio")
+                : []),
+            ]
+              .filter((item: any) => item?.reason)
+              .slice(0, 14)
+              .map((item: any) => ({
+                day_number: item?.day_number ?? null,
+                label: item?.label ?? item?.exercise ?? null,
+                reason: item.reason,
+                reason_provenance: item?.reason_provenance ?? null,
+              })),
+            proposal_evidence: proposalEvidence,
           };
-    const action = result?.legacy_migration ? { ...baseAction, legacy_migration: result.legacy_migration } : baseAction;
+    const action = {
+      ...baseAction,
+      proposal_evidence: proposalEvidence,
+      rationale_provenance: p.parsed?.rationale_provenance ?? null,
+      ...(result?.legacy_migration ? { legacy_migration: result.legacy_migration } : {}),
+    };
     const decisionInput = {
-      effective_date: nutrition && accepted?.effective_date ? accepted.effective_date : today,
+      effective_date:
+        nutrition && accepted?.effective_date
+          ? accepted.effective_date
+          : recoveryCycle?.effective_on ?? today,
       kind: shape.kind,
       domain: shape.domain,
       summary: shape.summary,
@@ -978,6 +1064,21 @@ function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?:
         instruction: p.instruction || null,
         evidence_keys: evidenceKeys,
         evidence_observed_at: new Date().toISOString(),
+        proposal_as_of_date: p.parsed?.as_of_date ?? proposalEvidence?.as_of_date ?? null,
+        proposal_evidence: proposalEvidence as any,
+        proposal_freshness: (result?.proposal_freshness ?? null) as any,
+        ...(recoveryCycle
+          ? {
+              recovery_cycle: {
+                id: recoveryCycle.id,
+                effective_status: recoveryCycle.effective_status,
+                effective_on: recoveryCycle.effective_on,
+                recheck_on: recoveryCycle.recheck_on,
+                exit_on: recoveryCycle.exit_on,
+              },
+              base_plan_mutated: false,
+            }
+          : {}),
         ...(result?.legacy_migration ? { legacy_migration: result.legacy_migration } : {}),
         ...(nutrition
           ? {
@@ -1057,6 +1158,7 @@ export interface ProposalApplyOptions {
   decisionId?: number;
   normalizedApplyPayload?: NormalizedProposalApplyPayload;
   requireDecisionLedger?: boolean;
+  freshnessCheckedAt?: string;
 }
 
 function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
@@ -1064,6 +1166,14 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
   if (!p) throw new Error(`No proposal ${id}`);
   const parsed = opts.normalizedApplyPayload?.parsed ?? p.parsed;
   if (!parsed) throw new Error("Proposal has no parsed payload");
+  // Manual/explicit apply remains authoritative, but it does not pretend an old
+  // proposal had compare-and-set evidence. Autonomous callers gate on this same
+  // read before reaching apply; direct callers receive the honest status in the
+  // receipt and decision ledger.
+  const proposalFreshness =
+    parsed?.kind === "nutrition_target"
+      ? null
+      : verifyProposalEvidenceFreshness(parsed, opts.freshnessCheckedAt ?? localDateISO());
   if (p.status === "applied") {
     // Re-running an applied proposal would duplicate its side effects (a second
     // nutrition_targets row, a re-run replacePlan over newer edits).
@@ -1116,6 +1226,46 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
     recordAppliedProposalDecision(p, result, opts.decisionId, opts.requireDecisionLedger === true);
     return result;
   }
+  const recoveryProposal =
+    (Array.isArray(parsed.days) || Array.isArray(parsed.changes)) &&
+    String(p.instruction ?? "").startsWith(RECOVERY_WEEK_INSTRUCTION_PREFIX);
+  if (recoveryProposal) {
+    const quality = Array.isArray(parsed.days) ? validateTrainingPlan(parsed.days) : null;
+    if (quality && !quality.ok)
+      throw new Error(`Plan quality check failed: ${quality.errors.map((entry) => entry.message).join(" ")}`);
+    const decision = opts.decisionId != null ? getBrainDecision(Number(opts.decisionId)) : null;
+    const effectiveOn = String(
+      decision?.effective_date ?? opts.freshnessCheckedAt ?? localDateISO()
+    ).slice(0, 10);
+    const cycle = scheduleRecoveryCycle({
+      effective_on: effectiveOn,
+      overlay: {
+        source_proposal_id: Number(p.id),
+        source_decision_id: decision?.id == null ? null : Number(decision.id),
+      },
+      reason: proposalSummary(p) ?? "An earned recovery week",
+    });
+    const appliedCycle =
+      (opts.freshnessCheckedAt ?? localDateISO()) >= effectiveOn
+        ? activateRecoveryCycle(Number(cycle.id), effectiveOn)
+        : cycle;
+    cancelAnnouncementsForProposal(id, opts.decisionId, opts.requireDecisionLedger === true);
+    setProposalStatus(id, "applied");
+    if (opts.orphanSiblingCleanup) supersedeMatchingOrphanDrafts(id, opts.orphanSiblingCleanup);
+    const result = {
+      ok: true,
+      id,
+      restructured: false,
+      recovery_overlay: true,
+      recovery_cycle: appliedCycle,
+      days: Array.isArray(parsed.days) ? parsed.days.length : getPlan().length,
+      quality,
+      proposal_freshness: proposalFreshness,
+      ...(opts.normalizedApplyPayload ? { legacy_migration: opts.normalizedApplyPayload.migration } : {}),
+    };
+    recordAppliedProposalDecision(p, result, opts.decisionId, opts.requireDecisionLedger === true);
+    return result;
+  }
   // Restructure proposal: full plan replacement (changed frequency / split).
   if (Array.isArray(parsed.days)) {
     const quality = validateTrainingPlan(parsed.days);
@@ -1132,6 +1282,7 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
       restructured: true,
       days: parsed.days.length,
       quality,
+      proposal_freshness: proposalFreshness,
       ...(opts.normalizedApplyPayload ? { legacy_migration: opts.normalizedApplyPayload.migration } : {}),
     };
     recordAppliedProposalDecision(p, result, opts.decisionId, opts.requireDecisionLedger === true);
@@ -1286,6 +1437,7 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
     ...(cardioRuns.length ? { prior_run_km: priorRunKm } : {}),
     ...(clamped.length ? { clamped } : {}),
     quality,
+    proposal_freshness: proposalFreshness,
     ...(opts.normalizedApplyPayload ? { legacy_migration: opts.normalizedApplyPayload.migration } : {}),
   };
   recordAppliedProposalDecision(p, result, opts.decisionId, opts.requireDecisionLedger === true);

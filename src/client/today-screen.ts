@@ -551,7 +551,20 @@ type OpenSessionOptions = {
   constraints?: Record<string, unknown>;
   trigger?: HTMLElement | null;
   provenance?: Record<string, unknown>;
+  trainAnyway?: boolean;
 };
+
+function dailySessionProvenanceLabel(
+  dailySession: import("../contracts/client-api.js").ClientDailySessionComposition | null | undefined,
+): string | null {
+  const provenance =
+    dailySession?.provenance && typeof dailySession.provenance === "object"
+      ? (dailySession.provenance as Record<string, unknown>)
+      : null;
+  if (provenance?.choice === "training_by_choice") return "Training by choice";
+  if (provenance?.choice === "adapted_for_today") return "Adapted for today";
+  return null;
+}
 
 const todaySessionSuggestController = CairnTodaySessionSuggestController as typeof CairnTodaySessionSuggestController & {
   meaningfulLegacySession(cachedSession: unknown, explicitReplacement: boolean): boolean;
@@ -837,6 +850,7 @@ async function openSession(date?: string | null, options: OpenSessionOptions = {
     date: targetDate,
     source,
   };
+  if (options.trainAnyway === true) body.train_anyway = true;
   if (source === "agent_suggest") {
     const agentJobId = Number(options.agentJobId);
     if (!Number.isInteger(agentJobId) || agentJobId <= 0) {
@@ -1006,13 +1020,14 @@ function sessionLaunchCardHtml(opts: {
         ? "Anchor day · hold or ease; the relevant safety signal leads."
         : `Anchor day · ${escHtml(objective?.exercise)}${Number(opts.strengthJourney?.gap_lb) > 0 ? ` · ${Number(opts.strengthJourney?.gap_lb).toFixed(1)} lb estimated 1RM gap` : ""}`
     : "";
-  const source = opts.dailySession
+  const decisionLabel = dailySessionProvenanceLabel(opts.dailySession);
+  const source = decisionLabel || (opts.dailySession
     ? opts.dailySession.source === "adaptive_plan" || opts.dailySession.source === "manual_plan"
       ? `From plan${opts.day?.name ? ` · ${String(opts.day.name)}` : ""}`
       : "Built for today"
     : opts.isToday
       ? "TODAY'S SESSION"
-      : "SESSION";
+      : "SESSION");
   return `<button class="sess-launch reveal" style="--i:2" type="button" id="sessLaunch">
       <div class="sess-launch-body">
         <div class="sess-launch-kicker lbl">${escHtml(source)}</div>
@@ -1170,11 +1185,11 @@ async function renderSession(opts: any = {}): Promise<void> {
   const dayName =
     dailySession?.title || (day && day.name ? String(day.name) : prep.isRunDay ? "Today's run" : "Session");
   const dayFocus = dailySession?.focus || (day && day.focus ? String(day.focus) : "");
-  const sourceLabel = dailySession
+  const sourceLabel = dailySessionProvenanceLabel(dailySession) || (dailySession
     ? dailySession.source === "adaptive_plan" || dailySession.source === "manual_plan"
       ? `From plan${day && day.name ? ` · ${String(day.name)}` : ""}`
       : "Built for today"
-    : null;
+    : null);
   const kicker =
     sourceLabel ||
     (isToday

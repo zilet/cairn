@@ -7,6 +7,11 @@ import { localDateISO } from "./shared.js";
 import { bumpTrainingDataVersion } from "./training-cache.js";
 import { PlanQualityError, pressSlotKey, qualityIssueKey, validateTrainingPlan } from "./plan-quality.js";
 import { afterSqliteCommit, withSqliteSavepoint } from "./sqlite-savepoint.js";
+import {
+  type ReasonProvenance,
+  normalizeHistoricalReason,
+  validReasonProvenance,
+} from "./proposal-truth.js";
 
 export { PlanQualityError, pressSlotKey, validateTrainingPlan } from "./plan-quality.js";
 
@@ -34,17 +39,26 @@ function hydratePlanItem(row: any) {
   return { ...rest, kind, interval };
 }
 
-type AccountablePlanChange = { decision_id: number; summary: string; rationale: string | null; reversible: boolean };
+type AccountablePlanChange = {
+  decision_id: number;
+  summary: string;
+  rationale: string | null;
+  reason_provenance: ReasonProvenance | null;
+  reversible: boolean;
+};
 
 function accountablePlanChanges(): Map<string, AccountablePlanChange> {
   const map = new Map<string, AccountablePlanChange>();
   try {
     const rows = db
       .prepare(
-        `SELECT id, summary, rationale, reversible, action_json
-         FROM brain_decisions
-        WHERE status = 'applied' AND domain = 'training' AND autonomy_tier IN ('quiet_apply','announce')
-        ORDER BY id DESC LIMIT 100`
+        `SELECT d.id, d.created_at, d.effective_date, d.summary, d.rationale, d.reversible,
+                d.action_json, d.context_json, p.created_at AS proposal_created_at
+         FROM brain_decisions d
+         LEFT JOIN plan_proposals p
+           ON d.source_ref_type = 'plan_proposal' AND d.source_ref_key = CAST(p.id AS TEXT)
+        WHERE d.status = 'applied' AND d.domain = 'training' AND d.autonomy_tier IN ('quiet_apply','announce')
+        ORDER BY d.id DESC LIMIT 100`
       )
       .all() as any[];
     for (const row of rows) {
@@ -54,6 +68,12 @@ function accountablePlanChanges(): Map<string, AccountablePlanChange> {
       } catch {
         action = null;
       }
+      let context: any = null;
+      try {
+        context = row.context_json ? JSON.parse(row.context_json) : null;
+      } catch {
+        context = null;
+      }
       for (const change of Array.isArray(action?.changes) ? action.changes : []) {
         const day = Number(change?.day_number);
         const exercise = String(change?.exercise ?? "")
@@ -61,11 +81,30 @@ function accountablePlanChanges(): Map<string, AccountablePlanChange> {
           .toLowerCase();
         if (!Number.isFinite(day) || !exercise) continue;
         const key = `${day}|${exercise}`;
+        const reasonProvenance = validReasonProvenance(change?.reason_provenance)
+          ? change.reason_provenance
+          : null;
+        const fallbackAsOf = String(
+          reasonProvenance?.as_of_date ??
+            context?.proposal_as_of_date ??
+            row.proposal_created_at ??
+            row.effective_date ??
+            row.created_at ??
+            localDateISO()
+        ).slice(0, 10);
         if (!map.has(key))
           map.set(key, {
             decision_id: Number(row.id),
-            summary: String(row.summary ?? "Cairn adjusted this exercise."),
-            rationale: row.rationale == null ? null : String(row.rationale),
+            summary: normalizeHistoricalReason(
+              String(row.summary ?? "Cairn adjusted this exercise."),
+              null,
+              fallbackAsOf
+            ),
+            rationale:
+              change?.reason != null || row.rationale != null
+                ? normalizeHistoricalReason(change?.reason ?? row.rationale, reasonProvenance, fallbackAsOf)
+                : null,
+            reason_provenance: reasonProvenance,
             reversible: !!row.reversible,
           });
       }
@@ -93,6 +132,7 @@ function decorateAccountablePlan(days: any[]): any[] {
             brain_decision_id: change.decision_id,
             brain_change_summary: change.summary,
             brain_change_reason: change.rationale,
+            brain_change_reason_provenance: change.reason_provenance,
             brain_change_reversible: change.reversible,
           }
         : item;
@@ -618,6 +658,7 @@ export interface PlanChange {
   rep_low?: number | null;
   rep_high?: number | null;
   reason?: string | null;
+  reason_provenance?: ReasonProvenance | null;
   note?: string | null;
   mode?: string | null;
   // A first-class SWAP: rotate one exercise out for another IN PLACE on a day
@@ -768,7 +809,7 @@ export function applyPlanChange(
   // SWAP: replace one movement in place (the rotate/vary intent). Handled before the
   // name-match path because a swap change carries {from,to}, not a single `exercise`.
   if (c.swap && (c.swap.from || c.swap.to)) {
-    const result = applyPlanSwap(day.id, dayNumber, c, c.reason ?? c.note ?? null, opts);
+    const result = applyPlanSwap(day.id, dayNumber, c, opts);
     if (result.updated && opts.defer_cache_bump !== true) afterSqliteCommit(bumpTrainingDataVersion);
     if (result.updated && opts.defer_day_read_invalidation !== true) invalidateDayRead();
     return result;
@@ -874,7 +915,14 @@ export function applyPlanChange(
           .run(...vals).changes
       );
     }
-    updated += addCoachAdjustmentNote(day.id, match.ex_name, c.note ?? c.reason);
+    // `note` is the stable prescription fact; `reason` is proposal narrative and
+    // belongs in the decision ledger. Keeping them separate prevents a weekly
+    // template (and any daily snapshot copied from it) from freezing an old story.
+    const adjustmentReason = normalizeHistoricalReason(
+      c.note,
+      validReasonProvenance(c.reason_provenance) ? c.reason_provenance : null
+    );
+    updated += addCoachAdjustmentNote(day.id, match.ex_name, adjustmentReason);
     if (!updated) throw new Error(`No supported prescription fields supplied for "${match.ex_name}"`);
     const stored = db
       .prepare(
@@ -936,8 +984,10 @@ export function applyPlanChange(
   const pos = (
     db.prepare(`SELECT COALESCE(MAX(position), -1) + 1 AS p FROM plan_items WHERE plan_day_id = ?`).get(day.id) as any
   ).p;
-  const noteSrc = c.note ?? c.reason;
-  const note = noteSrc != null && String(noteSrc).trim() ? String(noteSrc).trim().slice(0, 500) : null;
+  const stableNote = normalizeHistoricalReason(
+    c.note,
+    validReasonProvenance(c.reason_provenance) ? c.reason_provenance : null
+  );
   const safeLoad = opts.clamp
     ? canonicalizeAgentPrescriptionLoad(ex, "add", {
         ...(tw !== undefined ? { target_weight: tw } : {}),
@@ -946,6 +996,14 @@ export function applyPlanChange(
     : { target_weight: tw, target_seconds: ts, adjustments: [] as ClampAdjustment[] };
   const targetWeight = Object.hasOwn(safeLoad, "target_weight") ? safeLoad.target_weight : null;
   const targetSeconds = Object.hasOwn(safeLoad, "target_seconds") ? safeLoad.target_seconds : null;
+  const hasStoredPrescription = targetWeight != null || targetSeconds != null;
+  const reasonCarriesBaseline =
+    /(?:start|begin)\s+(?:very\s+)?light/i.test(String(c.reason ?? "")) &&
+    /log\b[^.]{0,60}\b(?:actual|working)/i.test(String(c.reason ?? ""));
+  const note = (
+    stableNote ||
+    (!hasStoredPrescription || reasonCarriesBaseline ? "NEW — start light, log your actual working value." : "")
+  ).slice(0, 500) || null;
   const addClamps = [...volumeClamps, ...safeLoad.adjustments];
   insertPlanItem({
     plan_day_id: day.id,
@@ -987,7 +1045,6 @@ function applyPlanSwap(
   dayId: number,
   dayNumber: number,
   change: PlanChange,
-  reason: string | null,
   opts: { clamp?: boolean } = {}
 ): {
   action: "swapped";
@@ -1072,11 +1129,12 @@ function applyPlanSwap(
     clamps.push(...safeLoad.adjustments);
   }
   const hasStoredPrescription = targetWeight != null || targetSeconds != null;
-  const note =
-    `Rotated in for ${match.ex_name}${reason ? ` — ${reason}` : ""}${hasStoredPrescription ? "." : " — start light, log your actual working value."}`.slice(
-      0,
-      500
-    );
+  // The rationale remains in the proposal/decision ledger. The reusable plan
+  // keeps only the stable rotation fact and, when needed, exactly one baseline cue
+  // even when the incoming reason already contained the same instruction.
+  const note = `Rotated in for ${match.ex_name}${
+    hasStoredPrescription ? "." : " — start light, log your actual working value."
+  }`.slice(0, 500);
   const sets = boundedSets.value;
   const repLow = boundedRepLow.value;
   const repHigh = boundedRepHigh.value;

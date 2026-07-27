@@ -2,6 +2,7 @@
 // program-evolution proposal. Both emit PLAN_SCHEMA; the server-owned autonomy
 // policy decides whether each result lands, announces, or waits for review.
 import * as repo from "../repo.js";
+import { localDateISO } from "../repo/shared.js";
 import { promptData } from "./context-projection.js";
 import {
   activeInjuryAreas,
@@ -30,17 +31,20 @@ import {
 } from "./shared.js";
 
 const PLAN_SCHEMA = `{
+  "as_of_date": "<YYYY-MM-DD date this proposal was reasoned from>",
   "summary": "one or two sentences on the overall adjustment",
   "changes": [
-    { "day_number": <1-7>, "exercise": "<exact exercise name>", "target_weight": <number|null>, "sets": <number>, "rep_low": <number>, "rep_high": <number>, "reason": "<why>" },
-    { "day_number": <1-7>, "exercise": "<exact exercise name>", "target_seconds": <number>, "sets": <number>, "reason": "<why — ONLY for mode:'timed' exercises; omit reps/load>" },
-    { "day_number": <1-7>, "exercise": "<exact current exercise>", "remove": true, "reason": "<why remove it; NEVER use sets:0>" },
-    { "day_number": <1-7>, "swap": { "from": "<exact current exercise>", "to": "<new same-pattern movement>" }, "sets": <number|null>, "rep_low": <number|null>, "rep_high": <number|null>, "target_weight": <number|null>, "reason": "<why rotate it in>" }
+    { "day_number": <1-7>, "exercise": "<exact exercise name>", "target_weight": <number|null>, "sets": <number>, "rep_low": <number>, "rep_high": <number>, "reason": "<why>", "reason_provenance": { "reason_code": "<stable code>", "evidence_date": "<YYYY-MM-DD>", "as_of_date": "<YYYY-MM-DD>", "source_ref_type": "<session|activity|plan|null>", "source_ref_key": "<source ID/date|null>" } },
+    { "day_number": <1-7>, "exercise": "<exact exercise name>", "target_seconds": <number>, "sets": <number>, "reason": "<why — ONLY for mode:'timed' exercises; omit reps/load>", "reason_provenance": { "reason_code": "<stable code>", "evidence_date": "<YYYY-MM-DD>", "as_of_date": "<YYYY-MM-DD>", "source_ref_type": "<session|plan|null>", "source_ref_key": "<source ID/date|null>" } },
+    { "day_number": <1-7>, "exercise": "<exact current exercise>", "remove": true, "reason": "<why remove it; NEVER use sets:0>", "reason_provenance": { "reason_code": "<stable code>", "evidence_date": "<YYYY-MM-DD>", "as_of_date": "<YYYY-MM-DD>", "source_ref_type": "<session|plan|null>", "source_ref_key": "<source ID/date|null>" } },
+    { "day_number": <1-7>, "swap": { "from": "<exact current exercise>", "to": "<new same-pattern movement>" }, "sets": <number|null>, "rep_low": <number|null>, "rep_high": <number|null>, "target_weight": <number|null>, "reason": "<why rotate it in>", "reason_provenance": { "reason_code": "<stable code>", "evidence_date": "<YYYY-MM-DD>", "as_of_date": "<YYYY-MM-DD>", "source_ref_type": "<session|plan|null>", "source_ref_key": "<source ID/date|null>" } }
   ],
   "cardio": [
     { "day_number": <1-7>, "label": "<e.g. Easy run / Long run / Tempo / Intervals>",
       "target_distance_km": <number|null>, "target_duration_min": <number|null>,
-      "target_zone": "<Z2|easy|tempo|threshold|intervals|long|null>", "reason": "<why this run, this week>", "note": "<optional pacing/structure>" }
+      "target_zone": "<Z2|easy|tempo|threshold|intervals|long|null>", "reason": "<why this run, this week>",
+      "reason_provenance": { "reason_code": "<stable code>", "evidence_date": "<YYYY-MM-DD>", "as_of_date": "<YYYY-MM-DD>", "source_ref_type": "<activity|plan|null>", "source_ref_key": "<source ID/date|null>" },
+      "note": "<optional timeless pacing/structure>" }
   ],
   "notes": "<optional coaching notes, may be empty>"
 }
@@ -55,6 +59,12 @@ const PLAN_SCHEMA = `{
 //              "superset_group" integer in a "days" restructure (optional; omit for
 //              standalone). Pair antagonists or a compound + an unrelated accessory to
 //              save time; never superset two heavy compounds.
+// "reason_provenance" → REQUIRED whenever a reason cites historical evidence
+//              (including "yesterday", "last session", "recent training", or an
+//              explicit date). evidence_date is the date of that evidence;
+//              as_of_date is the date this proposal was generated. Prefer absolute
+//              dates or timeless wording in reason itself — never write "yesterday"
+//              into enduring plan copy. Use a source reference/ID when DATA supplies one.
 // "cardio"   → prescribe THIS WEEK's runs (one entry per planned run). Applied
 //              surgically: each attaches to its day_number, REPLACING that day's
 //              cardio while leaving its strength work intact; a day_number with no
@@ -144,6 +154,7 @@ ${renderSignalState(ctx)}${renderCoachingFocus(ctx)}${COACHING_STANCE}
 
 ${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderRunZones(ctx)}${renderRunPlan(ctx)}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderStrengthJourney(ctx)}${renderProgramState(ctx)}${renderMuscleGroups(ctx)}${renderPerformance(ctx)}${renderDexaTargeting(ctx, "training")}${renderBodyComp(ctx)}${renderBlock(ctx)}${renderReactionModel(ctx)}${renderTrajectory(ctx)}
 TASK: ${userInstruction?.trim() || "Review recent training and propose conservative target adjustments for next week."}
+PROPOSAL AS-OF DATE: ${localDateISO()}. Use this exact date for as_of_date and for every reason_provenance.as_of_date.
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 ${PLAN_SCHEMA}
@@ -295,6 +306,7 @@ ${renderSignalState(ctx)}${renderCoachingFocus(ctx)}${COACHING_STANCE}
 
 ${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderRunZones(ctx)}${renderRunPlan(ctx)}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderStrengthJourney(ctx)}${renderProgramState(ctx)}${renderMuscleGroups(ctx)}${renderPerformance(ctx)}${renderDexaTargeting(ctx, "training")}${renderBodyComp(ctx)}${renderBlock(ctx)}${renderReactionModel(ctx)}${renderTrajectory(ctx)}
 TASK: ${userInstruction?.trim() || "Evolve the program: progress what's working, break what's stalled, keep it fresh, and periodize sensibly. Explain each change in plain words."}
+PROPOSAL AS-OF DATE: ${localDateISO()}. Use this exact date for as_of_date and for every reason_provenance.as_of_date.
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 ${PLAN_SCHEMA}

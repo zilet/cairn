@@ -9,7 +9,7 @@ Health's short-lived pairing exchange is public and passes through the instance-
 when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**297 routes** across 104 groups.
+**302 routes** across 105 groups.
 
 ## `/activities`
 
@@ -779,6 +779,16 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/training-load` | This week's training load vs the athlete's own trailing typical (weekly set count over the prior 8 weeks) — a plain-language band, "running hot" only when genuinely above typical. `{ band: null }` until there's enough history. Drives the quiet load-band row in the Train overview header. |
+
+## `/training-symptoms`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/training-symptoms` | The athlete-owned movement-symptom lifecycle. Reads are calm evidence only: trial readiness remains movement-specific and never resolves the symptom. |
+| POST | `/api/training-symptoms` | Record one athlete-reported area. Same-source/date retries return the existing active record. |
+| POST | `/api/training-symptoms/:id/recur` | Explicitly reopen a record, optionally resetting evidence only for one exact movement. |
+| POST | `/api/training-symptoms/:id/resolve` | Explicitly close one record; tolerance observations never call this path on their own. |
+| POST | `/api/training-symptoms/:id/tolerance` | Record one movement-specific pain-free or pain-present observation. |
 
 ## `/trajectory`
 

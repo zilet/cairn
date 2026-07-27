@@ -8,7 +8,7 @@
 //   (1b) lead + a progression waiting on an active session → lands at the boundary pass
 //   (2)  review_everything → nothing auto-applies (the draft parks exactly as before)
 //   (3)  lead + a structural days-restructure → ANNOUNCES first, never quiet-applies
-//   (4)  lead + the recovery-week reshape → the stamp still fires when autonomy applies it
+//   (4)  lead + the recovery-week proposal → a bounded cycle overlay lands without replacing the plan
 // evolveProgram itself needs a CLI agent, so its structural/evolution wiring is proven
 // at the layer it delegates to (applyProposalWithAutonomy) — the same call it now makes.
 import { test } from "node:test";
@@ -145,7 +145,7 @@ test("lead mode: a structural days-restructure announces first, never quiet-appl
   assert.equal(repo.getPlan().length, 2, "the boundary pass applied the restructure");
 });
 
-test("lead mode: the recovery-week stamp fires when the autonomy layer applies the reshape", () => {
+test("lead mode: a recovery proposal lands as a reversible overlay without replacing the plan", () => {
   repo.savePlanDay(1, "Full", "Full", [
     { exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185 },
   ]);
@@ -180,16 +180,18 @@ test("lead mode: the recovery-week stamp fires when the autonomy layer applies t
   const due = applyDueAnnouncedDecisions(out.effective_date);
   assert.deepEqual(due.applied, [out.decision.id]);
   assert.equal(repo.getProposal(proposal.id).status, "applied");
-  // The reshape landed via repo.applyProposal → stampRecoveryWeekIfApplies fired, so the
-  // Plan banner reads the running recovery week (due → drafted → applied → done).
-  assert.equal(repo.recoveryWeekStatus().state, "applied", "the recovery-week stamp fired on the autonomy apply");
-  assert.equal(repo.blockForCoach()?.phase, "deload", "the active recovery ledger overrides the coaching phase");
+  assert.equal(
+    repo.recoveryWeekStatus(out.effective_date).state,
+    "applied",
+    "the cycle is active at the server-owned boundary"
+  );
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 185, "the base weekly plan remains unchanged");
 
   const undone = revertDecision(out.decision.id, "continue the prior build");
   assert.equal(undone.ok, true);
-  assert.equal(repo.getPlanDay(1).items[0].target_weight, 185, "Undo restores the prior plan");
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 185, "Undo does not rewrite the base plan");
   assert.equal(repo.getProposal(proposal.id).status, "reverted", "the recovery proposal is no longer authoritative");
-  assert.equal(repo.recoveryWeekStatus(), null, "Undo clears the owned recovery window");
+  assert.equal(repo.recoveryWeekStatus(out.effective_date), null, "Undo cancels the owned recovery cycle");
   assert.equal(repo.blockForCoach()?.phase, "accumulation", "the prior program phase resumes");
 });
 
@@ -389,8 +391,57 @@ test("the boundary re-checks the budget: the oldest due change lands, the second
   assert.deepEqual(due.failed, [b.decision.id], "the second is held, not silently applied");
   const parked = repo.getBrainDecision(b.decision.id);
   assert.equal(parked.status, "review", "parked for review per the existing pattern");
-  assert.match(String(parked.context.apply_error ?? ""), /surprise budget/i);
+  assert.equal(
+    parked.context.apply_error,
+    "weekly surprise budget already used; review this change before applying"
+  );
+  const siblingFreshness = repo.verifyProposalEvidenceSnapshot(parked.context.proposal_evidence, asOf);
+  assert.equal(siblingFreshness.status, "changed", "the first sibling's landing did change the second snapshot");
+  assert.deepEqual(siblingFreshness.changed_components, ["plan"]);
   assert.equal(repo.getPlanDay(1).items[0].target_weight, 190, "only the first change reached the plan");
+  assert.equal(repo.getProposal(second.id).status, "draft", "the parked sibling remains reviewable");
+});
+
+test("pre-pass budget use never hides a stale due proposal's freshness reason", () => {
+  seedEarnedOverload();
+  repo.upsertExercise({ name: "Plank", muscle_group: "core", mode: "timed" });
+  const plank = repo.getOrCreateSession(localDateISO(), null);
+  dbInsertSet(plank.id, repo.findExercise("Plank").id, { set_number: 1, duration_sec: 60 });
+  repo.setSettings({ lead_mode: "lead" });
+
+  const dueProposal = repo.createProposal("stub", "due before an explicit edit", "", {
+    summary: "Scheduled bench change",
+    changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 190 }],
+  });
+  const scheduled = applyProposalWithAutonomy(dueProposal.id, { requested_tier: "quiet_apply" });
+  assert.equal(scheduled.pending, true);
+
+  // This lands outside applyDueAnnouncedDecisions. It both consumes the weekly
+  // training budget and changes the scheduled proposal's authoritative plan input.
+  const explicitProposal = repo.createProposal("stub", "athlete explicitly changed bench", "", {
+    summary: "Explicit bench change",
+    changes: [{ day_number: 1, exercise: "Barbell Bench Press", target_weight: 192.5 }],
+  });
+  const explicit = applyProposalWithAutonomy(explicitProposal.id, {
+    requested_tier: "quiet_apply",
+    explicit_user_request: true,
+  });
+  assert.equal(explicit.ok, true);
+  assert.equal(explicit.tier, "quiet_apply");
+  assert.equal(explicit.applied.length, 1);
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 192.5);
+
+  const due = applyDueAnnouncedDecisions(scheduled.effective_date);
+  assert.deepEqual(due.applied, []);
+  assert.deepEqual(due.failed, [scheduled.decision.id]);
+  const parked = repo.getBrainDecision(scheduled.decision.id);
+  assert.equal(parked.status, "review");
+  assert.equal(parked.context.review_reason_code, "stale_snapshot");
+  assert.deepEqual(parked.context.proposal_freshness.changed_components, ["plan"]);
+  assert.deepEqual(parked.context.review_reasons, ["plan evidence changed before the apply boundary"]);
+  assert.equal(parked.context.apply_error, undefined, "the pre-pass budget reason must not hide freshness");
+  assert.equal(repo.getProposal(dueProposal.id).status, "draft");
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 192.5, "the stale due proposal never mutates the plan");
 });
 
 test("the canonical recovery-week draft is stamped domain 'recovery' at write time", () => {

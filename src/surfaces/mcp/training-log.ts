@@ -17,6 +17,11 @@ import {
   listActivities,
   logSetByName,
   recentTraining,
+  recordMovementTolerance,
+  recurTrainingSymptom,
+  reportTrainingSymptom,
+  resolveTrainingSymptom,
+  listTrainingSymptoms,
   resolveImplicitPlanDay,
   reopenSession,
   sessionHighlights,
@@ -250,5 +255,70 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
     },
     async ({ date, soreness, performance, joint_pain }) =>
       asText(setSessionFeedback(date, { soreness, performance, joint_pain }))
+  );
+
+  server.tool(
+    "list_training_symptoms",
+    "List the athlete's active movement-scoped symptom records and their movement-specific tolerance evidence. Optionally include resolved records. Trial-ready means two distinct pain-free observations for that movement only; it does not resolve the symptom.",
+    {
+      on: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
+      include_resolved: z.boolean().optional(),
+    },
+    async ({ on, include_resolved }) => asText(listTrainingSymptoms({ on, include_resolved }))
+  );
+
+  server.tool(
+    "report_training_symptom",
+    "Record an athlete-explicit area that hurt or ached during training. This is a factual movement-symptom log, not a diagnosis.",
+    {
+      area_text: z.string().trim().min(1).max(300),
+      onset_on: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
+      source_session_id: z.number().int().positive().nullable().optional(),
+      source_kind: z.string().trim().min(1).max(80).optional(),
+    },
+    async (input) => asText(reportTrainingSymptom(input))
+  );
+
+  server.tool(
+    "resolve_training_symptom",
+    "Mark one symptom record resolved only when the athlete explicitly says to close it. This records their lifecycle choice and does not change any clinical status.",
+    {
+      id: z.number().int().positive(),
+      on: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
+    },
+    async ({ id, on }) => asText(resolveTrainingSymptom(id, on) ?? { error: "symptom not found", id })
+  );
+
+  server.tool(
+    "recur_training_symptom",
+    "Reopen one symptom record when the athlete explicitly reports it returned. An optional exact movement/exercise identity scopes the reset; omitting it resets tolerance evidence for every movement linked to that symptom.",
+    {
+      id: z.number().int().positive(),
+      on: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
+      area_text: z.string().trim().min(1).max(300).optional(),
+      movement: z.string().trim().min(1).max(120).optional(),
+      exercise_id: z.number().int().positive().nullable().optional(),
+    },
+    async ({ id, ...input }) => asText(recurTrainingSymptom(id, input) ?? { error: "symptom not found", id })
+  );
+
+  server.tool(
+    "record_movement_tolerance",
+    "Record the athlete's pain-free or pain-present observation for one exact movement and symptom. Two distinct pain-free observations can make only that movement ready for a careful recheck under existing policy; this never resolves the symptom.",
+    {
+      symptom_event_id: z.number().int().positive(),
+      movement: z.string().trim().min(1).max(120),
+      exercise_id: z.number().int().positive().nullable().optional(),
+      observed_on: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
+      session_id: z.number().int().positive().nullable().optional(),
+      pain_free: z.boolean(),
+    },
+    async (input) =>
+      asText(
+        recordMovementTolerance(input) ?? {
+          error: "symptom not found",
+          id: input.symptom_event_id,
+        }
+      )
   );
 }

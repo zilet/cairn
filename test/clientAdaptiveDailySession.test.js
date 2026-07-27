@@ -19,7 +19,7 @@ test("primary training entries converge on one durable prepare path", () => {
   assert.match(today, /source: "adaptive_plan"[\s\S]*entry: "today_launch"/);
   assert.match(
     brief,
-    /source: "adaptive_plan"[\s\S]*entry: action === "reveal-plan" \? "train_anyway" : "brief_start"/
+    /source: "adaptive_plan"[\s\S]*trainAnyway: action === "reveal-plan"[\s\S]*replace: action === "reveal-plan"[\s\S]*entry: action === "reveal-plan" \? "train_anyway" : "brief_start"/
   );
   assert.match(overview, /source: "adaptive_plan"[\s\S]*entry: "train_overview"/);
   assert.match(plan, /source: "manual_plan"[\s\S]*dayNumber: state\.day[\s\S]*replace: true/);
@@ -41,15 +41,19 @@ test("primary training entries converge on one durable prepare path", () => {
   assert.match(today, /stagedPrepareResponse[\s\S]*enterSession\(targetDate, staged\)/);
   assert.match(today, /meaningfulLegacySession\(cachedSession, explicitReplacement\)/);
   assert.match(today, /body\.agent_job_id = agentJobId/);
+  assert.match(today, /if \(options\.trainAnyway === true\) body\.train_anyway = true/);
   assert.match(today, /response\?\.error \|\| "This session could not be prepared\."/);
   assert.doesNotMatch(today, /samePlanDay|\/daily-session\?date=/, "explicit plan starts are expressed to the server");
   assert.match(plan, /source: "athlete_override"[\s\S]*replace: true[\s\S]*entry: "empty_plan"/);
   assert.match(suggestion, /source: "agent_suggest"[\s\S]*replace: true/);
   assert.doesNotMatch(plan, /\/plan[^\n]*method: "POST"[\s\S]*data-trainday/);
+  assert.match(suggestion, /input\.request\.train_anyway === true\) return null/);
 });
 
 test("prepared Session exposes durable source, rationale, and accessible stable entry", () => {
   assert.match(today, /"Built for today"/);
+  assert.match(today, /"Adapted for today"/);
+  assert.match(today, /"Training by choice"/);
   assert.match(today, /`From plan\$\{day && day\.name/);
   assert.match(today, /dailySession\?\.why/);
   assert.match(today, /dailySession\?\.est_minutes/);

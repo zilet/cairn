@@ -15,6 +15,9 @@ type TodaySessionFeedbackDeps = {
   sessionStatus: TodaySessionFeedbackStatusApi;
 };
 
+type ClientTrainingSymptom = import("../contracts/client-api.js").ClientTrainingSymptom;
+type SymptomLifecycleLoggedSet = import("../contracts/client-api.js").ClientLoggedSet;
+
 (() => {
   function responseRecord(value: unknown): Record<string, unknown> {
     return value && typeof value === "object" ? value as Record<string, unknown> : {};
@@ -29,6 +32,7 @@ type TodaySessionFeedbackDeps = {
     }
     slot.innerHTML = html;
     slot.querySelector("#feedbackEdit")?.addEventListener("click", () => renderFeedbackForm(slot, session, deps));
+    void renderSymptomLifecycle(slot, session, deps);
   }
 
   // Whether this feedback slot lives inside a finished-session DONE card. There the
@@ -56,6 +60,7 @@ type TodaySessionFeedbackDeps = {
     }
     slot.innerHTML = deps.sessionStatus.feedbackOpenHtml();
     slot.querySelector("#feedbackOpen")?.addEventListener("click", () => renderFeedbackForm(slot, session, deps));
+    void renderSymptomLifecycle(slot, session, deps);
   }
 
   // The calm settled line once both scales are in — a persistent confirmation that
@@ -64,11 +69,199 @@ type TodaySessionFeedbackDeps = {
   function renderFeedbackNoted(slot: Element): void {
     slot.innerHTML = `<div class="checkin-done feedback-done chip-in">
       <span class="checkin-done-mark" aria-hidden="true">✓</span> Noted — it'll shape next week.
+    </div><div data-symptom-lifecycle></div>`;
+  }
+
+  function sessionMovementOptions(session: Record<string, unknown>): Array<{ id: number | null; name: string }> {
+    const seen = new Set<string>();
+    const options: Array<{ id: number | null; name: string }> = [];
+    for (const raw of Array.isArray(session.sets) ? session.sets : []) {
+      const set = raw && typeof raw === "object" ? raw as Partial<SymptomLifecycleLoggedSet> : {};
+      const name = String(set.exercise ?? "").trim();
+      if (!name || seen.has(name.toLowerCase())) continue;
+      seen.add(name.toLowerCase());
+      const id = Number(set.exercise_id);
+      options.push({ id: Number.isInteger(id) && id > 0 ? id : null, name });
+    }
+    return options;
+  }
+
+  function movementInputHtml(symptomId: number, session: Record<string, unknown>): string {
+    const options = sessionMovementOptions(session);
+    if (!options.length) {
+      return `<input class="feedback-joint" data-symptom-movement="${escAttr(symptomId)}" type="text"
+        autocomplete="off" placeholder="movement, e.g. Back Squat">`;
+    }
+    return `<select class="feedback-joint" data-symptom-movement="${escAttr(symptomId)}">
+      <option value="">choose movement</option>
+      ${options.map((option) =>
+        `<option value="${escAttr(option.name)}"${option.id == null ? "" : ` data-exercise-id="${escAttr(option.id)}"`}>${escHtml(option.name)}</option>`
+      ).join("")}
+    </select>`;
+  }
+
+  function movementEvidenceHtml(symptom: ClientTrainingSymptom): string {
+    const rows = Array.isArray(symptom.movement_readiness) ? symptom.movement_readiness : [];
+    if (!rows.length) return "";
+    return rows.map((movement) => {
+      const count = Math.max(0, Number(movement.pain_free_exposures) || 0);
+      const note = movement.trial_ready
+        ? "Two pain-free checks recorded — evidence for a careful movement recheck; the symptom stays open."
+        : `${count} pain-free ${count === 1 ? "check" : "checks"} recorded.`;
+      return `<div class="sess-line"><strong>${escHtml(movement.movement_name)}</strong> · ${escHtml(note)}</div>`;
+    }).join("");
+  }
+
+  function symptomRowHtml(symptom: ClientTrainingSymptom, session: Record<string, unknown>): string {
+    const active = symptom.status === "active";
+    return `<div class="well-accent-sm" data-symptom-row="${escAttr(symptom.id)}">
+      <div><strong>${escHtml(symptom.area_text)}</strong> <span class="sess-line">· ${active ? "active" : "resolved"}</span></div>
+      ${movementEvidenceHtml(symptom)}
+      <div class="feedback-joint-wrap">
+        ${movementInputHtml(symptom.id, session)}
+        ${active
+          ? `<button class="linkbtn linkbtn-plain linkbtn-sm" type="button" data-tolerance="free" data-symptom-id="${escAttr(symptom.id)}">pain-free check</button>
+             <button class="linkbtn linkbtn-quiet linkbtn-sm" type="button" data-tolerance="present" data-symptom-id="${escAttr(symptom.id)}">pain present</button>
+             <button class="linkbtn linkbtn-quiet linkbtn-sm" type="button" data-symptom-resolve="${escAttr(symptom.id)}">mark resolved</button>`
+          : `<button class="linkbtn linkbtn-plain linkbtn-sm" type="button" data-symptom-recur="${escAttr(symptom.id)}">it returned</button>`}
+      </div>
     </div>`;
+  }
+
+  function responseSymptoms(value: unknown): ClientTrainingSymptom[] {
+    return Array.isArray(value)
+      ? value.filter((entry): entry is ClientTrainingSymptom => !!entry && typeof entry === "object")
+      : [];
+  }
+
+  async function reportSymptomArea(
+    areaText: string,
+    session: Record<string, unknown>,
+    date: string,
+    deps: TodaySessionFeedbackDeps
+  ): Promise<ClientTrainingSymptom | null> {
+    const sourceSessionId = Number(session.id);
+    const result = responseRecord(await deps.api("/training-symptoms", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        area_text: areaText,
+        onset_on: date,
+        source_session_id: Number.isInteger(sourceSessionId) && sourceSessionId > 0 ? sourceSessionId : null,
+        source_kind: "session_feedback",
+      }),
+    }));
+    if (result.error) throw new Error(String(result.error));
+    return result as unknown as ClientTrainingSymptom;
+  }
+
+  async function renderSymptomLifecycle(
+    slot: Element,
+    session: Record<string, unknown>,
+    deps: TodaySessionFeedbackDeps
+  ): Promise<void> {
+    const host = slot.querySelector<HTMLElement>("[data-symptom-lifecycle]");
+    if (!host) return;
+    let symptoms: ClientTrainingSymptom[];
+    try {
+      const viewedDate = encodeURIComponent(String(session.date || deps.state.logDate));
+      symptoms = responseSymptoms(await deps.api(`/training-symptoms?on=${viewedDate}&include_resolved=1`));
+    } catch {
+      host.innerHTML = `<div class="sess-line">Movement notes couldn't load right now.</div>`;
+      return;
+    }
+    if (!host.isConnected && typeof (host as HTMLElement & { isConnected?: boolean }).isConnected === "boolean") return;
+    host.innerHTML = `<div class="feedback-prompt lbl">movement notes</div>
+      ${symptoms.map((symptom) => symptomRowHtml(symptom, session)).join("")}
+      <div class="feedback-joint-wrap">
+        <input class="feedback-joint" data-new-symptom type="text" autocomplete="off" placeholder="report another area">
+        <button class="linkbtn linkbtn-plain linkbtn-sm" type="button" data-report-symptom>report</button>
+      </div>`;
+
+    const reload = () => renderSymptomLifecycle(slot, session, deps);
+    host.querySelector("[data-report-symptom]")?.addEventListener("click", async () => {
+      const input = host.querySelector<HTMLInputElement>("[data-new-symptom]");
+      const area = input?.value.trim() ?? "";
+      if (!area) {
+        deps.toast("Name the area first.");
+        return;
+      }
+      try {
+        await reportSymptomArea(area, session, String(session.date || deps.state.logDate), deps);
+        deps.toast("Symptom noted");
+        await reload();
+      } catch {
+        deps.toast("Couldn't save that symptom — try again.");
+      }
+    });
+    host.querySelectorAll<HTMLElement>("[data-symptom-resolve]").forEach((button) =>
+      button.addEventListener("click", async () => {
+        try {
+          await deps.api(`/training-symptoms/${button.dataset.symptomResolve}/resolve`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ on: String(session.date || deps.state.logDate) }),
+          });
+          deps.toast("Marked resolved");
+          await reload();
+        } catch {
+          deps.toast("Couldn't update that symptom — try again.");
+        }
+      }));
+    host.querySelectorAll<HTMLElement>("[data-symptom-recur]").forEach((button) =>
+      button.addEventListener("click", async () => {
+        const id = String(button.dataset.symptomRecur ?? "");
+        const movement = host.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-symptom-movement="${id}"]`);
+        const option = movement instanceof HTMLSelectElement ? movement.selectedOptions[0] : null;
+        try {
+          await deps.api(`/training-symptoms/${id}/recur`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              on: String(session.date || deps.state.logDate),
+              movement: movement?.value.trim() || undefined,
+              exercise_id: option?.dataset.exerciseId ? Number(option.dataset.exerciseId) : undefined,
+            }),
+          });
+          deps.toast("Recurrence noted");
+          await reload();
+        } catch {
+          deps.toast("Couldn't update that symptom — try again.");
+        }
+      }));
+    host.querySelectorAll<HTMLElement>("[data-tolerance]").forEach((button) =>
+      button.addEventListener("click", async () => {
+        const id = String(button.dataset.symptomId ?? "");
+        const movement = host.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-symptom-movement="${id}"]`);
+        const name = movement?.value.trim() ?? "";
+        if (!name) {
+          deps.toast("Choose the movement first.");
+          return;
+        }
+        const option = movement instanceof HTMLSelectElement ? movement.selectedOptions[0] : null;
+        try {
+          await deps.api(`/training-symptoms/${id}/tolerance`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              movement: name,
+              exercise_id: option?.dataset.exerciseId ? Number(option.dataset.exerciseId) : undefined,
+              observed_on: String(session.date || deps.state.logDate),
+              session_id: Number(session.id) || undefined,
+              pain_free: button.dataset.tolerance === "free",
+            }),
+          });
+          deps.toast("Movement check noted");
+          await reload();
+        } catch {
+          deps.toast("Couldn't save that movement check — try again.");
+        }
+      }));
   }
 
   function renderFeedbackForm(slot: Element, session: Record<string, unknown>, deps: TodaySessionFeedbackDeps): void {
     slot.innerHTML = deps.sessionStatus.feedbackFormHtml(session);
+    void renderSymptomLifecycle(slot, session, deps);
     const date = String(session.date || deps.state.logDate);
     const picked: Record<string, number | undefined> = {};
     // A save is confirmed only when the server accepts it (no {error}, no network
@@ -89,6 +282,14 @@ type TodaySessionFeedbackDeps = {
         const row = responseRecord(saved);
         if (row.error) return false;
         Object.assign(session, row);
+        if (jointVal) {
+          try {
+            await reportSymptomArea(jointVal, session, date, deps);
+            void renderSymptomLifecycle(slot, session, deps);
+          } catch {
+            deps.toast("Feedback saved; the symptom note couldn't update.");
+          }
+        }
         return true;
       } catch {
         return false;
@@ -119,6 +320,7 @@ type TodaySessionFeedbackDeps = {
           // any, was already carried on this same save). The finish moment stays two
           // taps, never a lingering form.
           if (picked.soreness != null && picked.performance != null) renderFeedbackNoted(slot);
+          if (picked.soreness != null && picked.performance != null) void renderSymptomLifecycle(slot, session, deps);
           return;
         }
         // Roll back the optimistic fill to exactly what was showing before the tap.

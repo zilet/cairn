@@ -1,7 +1,13 @@
-import { DAILY_SESSION_SUGGESTION_NORMALIZATION, normalizeSessionSuggestionResult } from "./adaptive-session.js";
+import { normalizeSessionSuggestionResult } from "./adaptive-session.js";
 import type { DailyDecisionEnvelope } from "./daily-decision.js";
-import { findExercise } from "./exercises.js";
+import {
+  equipmentCompatibility,
+  inferExerciseEquipment,
+  parseEquipmentCapability,
+} from "./equipment-capability.js";
+import { findExercise, recentWorkingSeconds, recentWorkingWeight } from "./exercises.js";
 import { getPlanDay } from "./plan.js";
+import { adaptBasePlanDayForRecovery } from "./recovery-cycles.js";
 
 // Stage 3 — bounded agent composition (docs/ADAPTIVE_DAILY_TRAINING_PLAN.md §5).
 // The agent composes INSIDE the deterministic Stage 2 envelope; it never
@@ -38,6 +44,173 @@ function volumeCap(envelope: DailyDecisionEnvelope): number {
   }
 }
 
+function workingSetCap(envelope: DailyDecisionEnvelope): number {
+  switch (envelope.caps.volume) {
+    case "minimal":
+      return 6;
+    case "reduced":
+      return 12;
+    default:
+      return 24;
+  }
+}
+
+function perItemSetCap(envelope: DailyDecisionEnvelope): number {
+  switch (envelope.caps.volume) {
+    case "minimal":
+      return 2;
+    case "reduced":
+      return 3;
+    default:
+      return 6;
+  }
+}
+
+function scaledTarget(value: unknown, factor: number): number | null {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n === 0) return value == null ? null : Number(value);
+  // Negative weight means assistance. Multiplying it toward zero would make
+  // the movement harder, so retain the known safe anchor instead.
+  if (n < 0) return n;
+  return Math.round(n * factor * 100) / 100;
+}
+
+function adaptationNote(note: unknown, text: string): string {
+  const existing = String(note ?? "").trim();
+  if (!existing) return text;
+  if (existing.toLowerCase().includes(text.toLowerCase())) return existing.slice(0, 500);
+  return `${text}. ${existing}`.slice(0, 500);
+}
+
+function finite(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function holdAnchor(exercise: string, envelope: DailyDecisionEnvelope) {
+  const planDay = envelope.template.day_number == null ? null : (getPlanDay(envelope.template.day_number) as any);
+  const planned = (Array.isArray(planDay?.items) ? planDay.items : []).find(
+    (item: any) => String(item?.exercise ?? "").toLowerCase() === exercise.toLowerCase()
+  );
+  const mode = findExercise(exercise)?.mode === "timed" || planned?.mode === "timed" ? "timed" : "reps";
+  if (mode === "timed") {
+    return {
+      mode,
+      target_seconds: recentWorkingSeconds(exercise) ?? finite(planned?.target_seconds),
+      target_weight: null,
+    };
+  }
+  return {
+    mode,
+    target_seconds: null,
+    target_weight: recentWorkingWeight(exercise) ?? finite(planned?.target_weight),
+  };
+}
+
+function clampHeldTarget(item: any, envelope: DailyDecisionEnvelope): boolean {
+  const anchor = holdAnchor(String(item.exercise ?? ""), envelope);
+  let changed = false;
+  if (anchor.mode === "timed") {
+    if (item.target_weight != null) {
+      item.target_weight = null;
+      changed = true;
+    }
+    const requested = finite(item.target_seconds);
+    if (anchor.target_seconds != null && requested != null && requested > anchor.target_seconds) {
+      item.target_seconds = anchor.target_seconds;
+      changed = true;
+    }
+    return changed;
+  }
+
+  const requested = finite(item.target_weight);
+  const baseline = anchor.target_weight;
+  if (baseline == null) {
+    if (item.target_weight != null) {
+      item.target_weight = null;
+      changed = true;
+    }
+    return changed;
+  }
+  // Positive weight is external load, so larger is harder. Negative weight is
+  // assistance, so closer to zero is harder. A hold may move easier in either
+  // regime, but it may never cross the authoritative working/planned anchor.
+  if (requested == null || requested > baseline) {
+    item.target_weight = baseline;
+    changed = true;
+  }
+  return changed;
+}
+
+const HARD_CARDIO_LANGUAGE =
+  /\b(?:all[- ]?out|anaerobic|fast|hard|hill repeats?|intervals?|race pace|sprints?|tempo|threshold|vo2(?:\s*max)?|z(?:one\s*)?[3-5])\b/i;
+
+function easyCardioName(exercise: unknown): string {
+  const text = String(exercise ?? "").toLowerCase();
+  if (/\b(?:run|running|jog|jogging)\b/.test(text)) return "Easy run";
+  if (/\b(?:ride|riding|bike|biking|cycle|cycling)\b/.test(text)) return "Easy ride";
+  if (/\b(?:row|rowing|erg)\b/.test(text)) return "Easy row";
+  if (/\b(?:swim|swimming)\b/.test(text)) return "Easy swim";
+  if (/\b(?:hike|hiking)\b/.test(text)) return "Easy hike";
+  if (/\b(?:walk|walking)\b/.test(text)) return "Easy walk";
+  return "Easy cardio";
+}
+
+function safeEasySessionText(value: string | null, fallback: string): string {
+  return value && !HARD_CARDIO_LANGUAGE.test(value) ? value : fallback;
+}
+
+function clampCardioItem(item: any, envelope: DailyDecisionEnvelope, forceEasy: boolean): boolean {
+  let changed = false;
+  const durationCap = envelope.caps.duration_min;
+  const requestedDuration = finite(item.target_duration_min);
+  const requestedDistance = finite(item.target_distance_km);
+
+  if (durationCap != null) {
+    if (requestedDuration == null || requestedDuration > durationCap) {
+      item.target_duration_min = durationCap;
+      changed = true;
+    }
+    if (requestedDistance != null && requestedDuration != null && requestedDuration > durationCap) {
+      const scaledDistance = Math.round(requestedDistance * (durationCap / requestedDuration) * 100) / 100;
+      if (scaledDistance !== requestedDistance) {
+        item.target_distance_km = scaledDistance;
+        changed = true;
+      }
+    }
+  }
+
+  if (forceEasy) {
+    const easyName = easyCardioName(item.exercise);
+    if (item.exercise !== easyName) {
+      item.exercise = easyName;
+      changed = true;
+    }
+    if (item.target_zone !== "easy") {
+      item.target_zone = "easy";
+      changed = true;
+    }
+    if (item.interval != null) {
+      item.interval = null;
+      changed = true;
+    }
+    // A distance target can silently preserve the hard pace after duration is
+    // shortened. The envelope has no pace anchor, so a restrictive day remains
+    // time-based and conversational instead of inventing a "safe" distance.
+    if (item.target_distance_km != null) {
+      item.target_distance_km = null;
+      changed = true;
+    }
+    const note = "Easy conversational effort; no intervals today";
+    if (item.note !== note) {
+      item.note = note;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 function baselineNote(note: string | null): string {
   const base = "NEW — establishing a baseline; keep it light and log the actual load";
   const trimmed = (note ?? "").trim();
@@ -66,12 +239,51 @@ export function normalizeComposedSession(
       validation: { ok: false, reason: "unparseable", rejected, novel_introduced: 0, capped: false },
     };
   }
+  if (envelope.kind === "rest" && envelope.request.train_anyway !== true) {
+    for (const item of base.items) {
+      rejected.push({ exercise: String(item.exercise), reason: "rest_requires_train_anyway" });
+    }
+    return {
+      session: null,
+      validation: {
+        ok: false,
+        reason: "rest_requires_train_anyway",
+        rejected,
+        novel_introduced: 0,
+        capped: false,
+      },
+    };
+  }
   const excluded = new Set(envelope.muscles.excluded.map((g) => g.toLowerCase()));
+  const candidates = new Map(envelope.candidates.map((candidate) => [candidate.exercise.toLowerCase(), candidate]));
+  const equipmentCapability = parseEquipmentCapability(envelope.request.equipment);
   let novelCount = 0;
   const kept: any[] = [];
   for (const item of base.items) {
+    const candidate = candidates.get(String(item.exercise ?? "").toLowerCase());
+    if (envelope.kind === "rest" && item.kind !== "cardio" && envelope.request.train_anyway !== true) {
+      rejected.push({ exercise: String(item.exercise), reason: "rest_requires_train_anyway" });
+      continue;
+    }
+    if (candidate?.action === "exclude") {
+      rejected.push({ exercise: String(item.exercise), reason: "excluded_candidate" });
+      continue;
+    }
     const isCardio = item.kind === "cardio";
     const stored = isCardio ? null : findExercise(String(item.exercise ?? ""));
+    if (!isCardio && equipmentCapability.recognized && equipmentCapability.restricted) {
+      const compatibility = equipmentCompatibility(
+        equipmentCapability,
+        inferExerciseEquipment(item.exercise, stored?.equipment)
+      );
+      if (compatibility !== "compatible") {
+        rejected.push({
+          exercise: String(item.exercise),
+          reason: compatibility === "incompatible" ? "equipment_incompatible" : "equipment_unverified",
+        });
+        continue;
+      }
+    }
     const group = stored?.muscle_group ? String(stored.muscle_group).toLowerCase() : null;
     if (group && excluded.has(group)) {
       rejected.push({ exercise: String(item.exercise), reason: "excluded_group" });
@@ -106,19 +318,76 @@ export function normalizeComposedSession(
     };
   }
   const cap = volumeCap(envelope);
-  const capped = kept.slice(0, cap);
+  const itemSetCap = perItemSetCap(envelope);
+  let remainingSets = workingSetCap(envelope);
+  let changed = kept.length > cap;
+  const forceEasyCardio =
+    envelope.request.train_anyway === true ||
+    envelope.caps.intensity === "easy" ||
+    envelope.caps.intensity === "deload";
+  let hasEasyCardio = false;
+  const capped: any[] = [];
+  for (const item of kept.slice(0, cap)) {
+    const next = { ...item };
+    const candidate = candidates.get(String(next.exercise ?? "").toLowerCase());
+    if (next.kind === "cardio") {
+      if (clampCardioItem(next, envelope, forceEasyCardio)) changed = true;
+      if (forceEasyCardio) hasEasyCardio = true;
+      capped.push(next);
+      continue;
+    }
+    const requestedSets = Math.max(1, Number(next.sets) || 1);
+    const boundedSets = Math.min(requestedSets, itemSetCap, remainingSets);
+    if (boundedSets < 1) {
+      changed = true;
+      continue;
+    }
+    if (boundedSets !== requestedSets) changed = true;
+    next.sets = boundedSets;
+    remainingSets -= boundedSets;
+
+    let intensityFactor = 1;
+    if (envelope.caps.intensity === "easy") intensityFactor = 0.8;
+    else if (envelope.caps.intensity === "deload") intensityFactor = 0.9;
+    if (candidate?.action === "deload") intensityFactor = Math.min(intensityFactor, 0.9);
+    const hold = candidate?.action === "hold" || envelope.caps.intensity === "hold";
+    if (hold && clampHeldTarget(next, envelope)) changed = true;
+    if (intensityFactor < 1) {
+      if (next.mode === "timed" && next.target_seconds != null) {
+        const seconds = Math.max(1, Math.round(Number(next.target_seconds) * intensityFactor));
+        if (seconds !== next.target_seconds) changed = true;
+        next.target_seconds = seconds;
+      } else if (next.target_weight != null) {
+        const weight = scaledTarget(next.target_weight, intensityFactor);
+        if (weight !== next.target_weight) changed = true;
+        next.target_weight = weight;
+      }
+      next.note = adaptationNote(next.note, "Eased for today");
+    } else if (hold) {
+      next.note = adaptationNote(next.note, "Holding the current target today");
+    }
+    capped.push(next);
+  }
   let est = base.est_minutes;
   if (envelope.caps.duration_min != null && (est == null || est > envelope.caps.duration_min)) {
     est = envelope.caps.duration_min;
+    changed = true;
   }
+  const fallbackWhy = envelope.rationale[0]?.text ?? "Keep today's work light and conversational.";
   return {
-    session: { name: base.name, focus: base.focus, why: base.why, est_minutes: est, items: capped },
+    session: {
+      name: hasEasyCardio ? safeEasySessionText(base.name, "Easy session") : base.name,
+      focus: hasEasyCardio ? safeEasySessionText(base.focus, "Easy movement") : base.focus,
+      why: hasEasyCardio ? safeEasySessionText(base.why, fallbackWhy) : base.why,
+      est_minutes: est,
+      items: capped,
+    },
     validation: {
       ok: true,
       reason: null,
       rejected,
       novel_introduced: novelCount,
-      capped: capped.length < kept.length,
+      capped: changed,
     },
   };
 }
@@ -131,6 +400,7 @@ function planItemToRaw(it: any): Record<string, unknown> {
       target_distance_km: it.target_distance_km ?? null,
       target_duration_min: it.target_duration_min ?? null,
       target_zone: it.target_zone ?? null,
+      interval: it.interval ?? it.interval_json ?? null,
       note: it.note ?? null,
     };
   }
@@ -155,21 +425,83 @@ function planItemToRaw(it: any): Record<string, unknown> {
 // through `normalizeComposedSession` and shares the agent path's exact shape.
 export function deterministicSessionRawFromEnvelope(envelope: DailyDecisionEnvelope): Record<string, unknown> {
   const excluded = new Set(envelope.muscles.excluded.map((g) => g.toLowerCase()));
+  const equipmentCapability = parseEquipmentCapability(envelope.request.equipment);
   const items: Array<Record<string, unknown>> = [];
   if (envelope.template.day_number != null && envelope.kind !== "rest") {
-    const day = getPlanDay(envelope.template.day_number) as any;
+    const baseDay = getPlanDay(envelope.template.day_number) as any;
+    const day =
+      baseDay &&
+      envelope.recovery_cycle &&
+      (envelope.recovery_cycle.effective_status === "active" ||
+        envelope.recovery_cycle.effective_status === "recheck")
+        ? adaptBasePlanDayForRecovery(baseDay, {
+            working_set_fraction: envelope.recovery_cycle.working_set_fraction,
+          })
+        : baseDay;
+    const candidates = new Map(envelope.candidates.map((candidate) => [candidate.exercise.toLowerCase(), candidate]));
+    const substitutions = new Map(
+      envelope.candidates
+        .filter((candidate) => candidate.substitution_for)
+        .map((candidate) => [String(candidate.substitution_for).toLowerCase(), candidate])
+    );
     for (const it of Array.isArray(day?.items) ? day.items : []) {
       const group = String(it?.muscle_group ?? "").toLowerCase();
       if (group && excluded.has(group)) continue;
-      items.push(planItemToRaw(it));
+      const direct = candidates.get(String(it?.exercise ?? "").toLowerCase());
+      if (direct?.action === "exclude") continue;
+      if (equipmentCapability.recognized && equipmentCapability.restricted) {
+        const stored = findExercise(String(it?.exercise ?? ""));
+        if (
+          equipmentCompatibility(
+            equipmentCapability,
+            inferExerciseEquipment(it?.exercise, stored?.equipment)
+          ) !== "compatible"
+        )
+          continue;
+      }
+      const substitution = substitutions.get(String(it?.exercise ?? "").toLowerCase());
+      if (substitution) {
+        const stored = findExercise(substitution.exercise);
+        if (
+          equipmentCapability.recognized &&
+          equipmentCapability.restricted &&
+          equipmentCompatibility(
+            equipmentCapability,
+            inferExerciseEquipment(substitution.exercise, stored?.equipment)
+          ) !== "compatible"
+        )
+          continue;
+        const raw = planItemToRaw({
+          ...it,
+          exercise: substitution.exercise,
+          mode: stored?.mode ?? it?.mode,
+        });
+        // A substitution never inherits the replaced movement's target. Reuse a
+        // real working anchor only when this exact exercise has one; otherwise
+        // establish the baseline without fabricated load/seconds.
+        if (stored?.mode === "timed") {
+          raw.target_weight = null;
+          raw.target_seconds = recentWorkingSeconds(substitution.exercise);
+        } else {
+          raw.target_weight = recentWorkingWeight(substitution.exercise);
+          raw.target_seconds = null;
+        }
+        if (raw.target_weight == null && raw.target_seconds == null) {
+          raw.note = baselineNote(substitution.note);
+        }
+        items.push(raw);
+      } else {
+        items.push(planItemToRaw(it));
+      }
     }
   }
-  if (!items.length) {
-    // Custom/rest intent, or every template item was excluded: a calm, safe,
-    // low-load default that always survives normalization.
+  if (!items.length && !(envelope.kind === "rest" && envelope.request.train_anyway !== true)) {
+    // Custom intent, or every template item was excluded: a calm, safe, low-load
+    // default that always survives normalization. A true rest decision stays
+    // itemless; only the explicit train-anyway decision may produce a workout.
     items.push({
       kind: "cardio",
-      exercise: envelope.kind === "rest" ? "Easy walk" : "Easy movement",
+      exercise: "Easy movement",
       target_duration_min: Math.min(envelope.caps.duration_min ?? 25, 25),
       target_zone: "easy",
       note: "Deterministic fallback — keep it light",
@@ -184,7 +516,7 @@ export function deterministicSessionRawFromEnvelope(envelope: DailyDecisionEnvel
         : "Today's session";
   return {
     name,
-    focus: envelope.template.focus,
+    focus: envelope.kind === "rest" ? "Recovery" : envelope.template.focus,
     why,
     est_minutes: envelope.caps.duration_min,
     items,
@@ -192,6 +524,15 @@ export function deterministicSessionRawFromEnvelope(envelope: DailyDecisionEnvel
 }
 
 export function deterministicComposedSession(envelope: DailyDecisionEnvelope): ComposedSession {
+  if (envelope.kind === "rest" && envelope.request.train_anyway !== true) {
+    return {
+      name: "Rest day",
+      focus: "Recovery",
+      why: envelope.rationale[0]?.text ?? "Today is for recovery.",
+      est_minutes: null,
+      items: [],
+    };
+  }
   const raw = deterministicSessionRawFromEnvelope(envelope);
   const { session } = normalizeComposedSession(raw, envelope);
   // The raw payload is built from safe template/plan items, so it always
@@ -207,4 +548,8 @@ export function deterministicComposedSession(envelope: DailyDecisionEnvelope): C
   );
 }
 
-export const DAILY_COMPOSITION_NORMALIZATION = DAILY_SESSION_SUGGESTION_NORMALIZATION;
+// Keep the wire marker a literal here: adaptive-session imports this module to
+// build envelope-backed plan snapshots, so eagerly reading its exported constant
+// would create an ESM initialization cycle. The normalizer function is only
+// invoked after both modules finish evaluating.
+export const DAILY_COMPOSITION_NORMALIZATION = "daily_session_v1";

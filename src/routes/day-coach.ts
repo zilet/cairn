@@ -103,6 +103,7 @@ dayCoachRouter.post("/session-compose", async (req, res) => {
     minutes: b.minutes != null ? Number(b.minutes) : undefined,
     equipment: b.equipment != null ? String(b.equipment) : undefined,
     override: b.override != null ? String(b.override) : undefined,
+    train_anyway: b.train_anyway === true,
     date: b.date != null ? String(b.date) : localDateISO(),
   };
   if (backgroundOp(res, "session_compose", input, b.agent)) return;
@@ -112,6 +113,7 @@ dayCoachRouter.post("/session-compose", async (req, res) => {
         minutes: input.minutes,
         equipment: input.equipment,
         override: input.override,
+        train_anyway: input.train_anyway,
         date: input.date,
       })
     );
@@ -139,6 +141,7 @@ dayCoachRouter.get("/daily-session/decision", (req, res) => {
   try {
     const { envelope } = decideDailySession(req.query.date != null ? String(req.query.date) : undefined, {
       override: req.query.override != null ? String(req.query.override) : null,
+      train_anyway: req.query.train_anyway === "1" || req.query.train_anyway === "true",
       equipment: req.query.equipment != null ? String(req.query.equipment) : null,
       minutes: req.query.minutes != null ? Number(req.query.minutes) : null,
     });
@@ -172,6 +175,7 @@ dayCoachRouter.post("/daily-session/prepare", (req, res) => {
         session: body.session,
         constraints: body.constraints,
         provenance: body.provenance,
+        train_anyway: body.train_anyway === true,
         replace: body.replace === true,
       })
     );

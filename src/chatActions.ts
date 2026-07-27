@@ -27,6 +27,7 @@ export const CHAT_ACTION_TYPES = [
   "resolve_context_event",
   "log_supplement",
   "log_measurement",
+  "report_training_symptom",
   "revert_decision",
 ] as const;
 
@@ -200,6 +201,12 @@ export interface LogMeasurementAction extends ChatActionBase {
   [key: string]: unknown;
 }
 
+export interface ReportTrainingSymptomAction extends ChatActionBase {
+  type: "report_training_symptom";
+  area_text: string;
+  onset_on?: unknown;
+}
+
 export interface RevertDecisionAction extends ChatActionBase {
   type: "revert_decision";
   id: number | string;
@@ -225,6 +232,7 @@ export type ChatAction =
   | ResolveContextEventAction
   | LogSupplementAction
   | LogMeasurementAction
+  | ReportTrainingSymptomAction
   | RevertDecisionAction;
 
 const CHAT_ACTION_TYPE_SET = new Set<string>(CHAT_ACTION_TYPES);
@@ -430,6 +438,14 @@ export const CHAT_ACTION_PROMPT_SPECS = {
       `log_measurement records at-home body measurements (tape/circumference) so the body picture — waist trend, BMI, waist-to-height, Navy body-fat estimate — stays current. Include only the sites they actually gave; the user can just say "waist 34, chest 42, arms 15" and it logs. Values default to inches; if the user speaks centimeters, pass their numbers as given with "unit": "cm" — the server converts, storage stays inches. "upper_arm_in" is the arm/bicep; only send "height_in" if they tell you their height (it updates the profile so BMI/body-fat light up; it follows "unit" too). Leave date null unless they name one.`,
     ],
   },
+  report_training_symptom: {
+    type: "report_training_symptom",
+    applyMode: "immediate",
+    shape: `{ "type": "report_training_symptom", "area_text": "left knee", "onset_on": "YYYY-MM-DD|omit" }`,
+    guidance: [
+      `Use report_training_symptom ONLY when the athlete explicitly asks Cairn to log, record, note, or track a training pain/ache area. A question, general discussion, or coach inference MUST NOT create a symptom record. This records what they said; never diagnose it or mark it resolved.`,
+    ],
+  },
   revert_decision: {
     type: "revert_decision",
     applyMode: "immediate",
@@ -588,6 +604,10 @@ export function normalizeChatAction(value: unknown): ChatAction | null {
       // an empty measurement is a no-op the apply path would just record as ok:false.
       return MEASUREMENT_ACTION_FIELDS.some((k) => value[k] != null && value[k] !== "")
         ? { ...value, type: "log_measurement" }
+        : null;
+    case "report_training_symptom":
+      return nonBlank(value.area_text) && value.area_text.trim().length <= 300
+        ? { ...value, type: "report_training_symptom", area_text: value.area_text.trim() }
         : null;
     case "revert_decision":
       return finiteId(value.id) ? { ...value, type: "revert_decision", id: value.id } : null;

@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**243 tools.**
+**248 tools.**
 
 | Tool | Description |
 |---|---|
@@ -184,6 +184,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `list_proposals` | List recent plan-update proposals and their status (draft/applied/discarded). |
 | `list_suggestions` | List recorded suggestions (Brief / session-suggest / nutrition check-in) and their reconciled outcomes — the outcome-learning audit trail. |
 | `list_supplements` | List the user's understood supplement regimen (canonical name, approximate dose, cadence, the markers/domains each touches). Not a daily log. all=true includes stopped ones. |
+| `list_training_symptoms` | List the athlete's active movement-scoped symptom records and their movement-specific tolerance evidence. Optionally include resolved records. Trial-ready means two distinct pain-free observations for that movement only; it does not resolve the symptom. |
 | `list_unreconciled_garmin_strength` | List synced Garmin strength activities not yet linked to a Cairn session (session_id null) over a recent window — the watch logged a lift Cairn doesn't know about. Empty when Garmin isn't configured. Follow with reconcile_garmin_strength to merge them in. |
 | `list_weight` | List bodyweight history (chronological). |
 | `log_activity` | Log a cardio/other session. Pass free text (e.g. 'ran 50 min @5:30/km') and/or structured fields. |
@@ -206,10 +207,14 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `reconcile_outcomes` | Compare past suggestions to what actually happened (logged sets, weight trend, autoregulation) and write durable learning memories. Deterministic, no agent. Returns the counts. |
 | `record_daily_metrics` | Upsert one source's daily wearable metrics for a real, non-future YYYY-MM-DD (idempotent on source+date) — the Apple Health via Shortcuts path. `source` defaults to 'apple' and is capped at 64 characters. Partial re-posts preserve previously recorded fields. Supports steps, sleep/recovery, calories, distance, exercise/stand time, SpO2 and VO2max; `raw` keeps the source payload verbatim. |
 | `record_imaging_analysis` | Store a source-grounded imaging extraction already produced by a file-capable client. Image-AI observations stay unconfirmed and cannot create follow-up recommendations. |
+| `record_movement_tolerance` | Record the athlete's pain-free or pain-present observation for one exact movement and symptom. Two distinct pain-free observations can make only that movement ready for a careful recheck under existing policy; this never resolves the symptom. |
+| `recur_training_symptom` | Reopen one symptom record when the athlete explicitly reports it returned. An optional exact movement/exercise identity scopes the reset; omitting it resets tolerance evidence for every movement linked to that symptom. |
 | `reopen_session` | Reopen a finished session to keep logging (clears its finished stamp). |
+| `report_training_symptom` | Record an athlete-explicit area that hurt or ached during training. This is a factual movement-symptom log, not a diagnosis. |
 | `research` | Queue one cited health/longevity evidence pass and cache its verified claims. Returns a job immediately; poll get_agent_job. Gated by research_enabled; off means no network. Informational, not medical advice. |
 | `reset_chat` | Start a fresh coaching conversation: distill durable facts (preferences, constraints, decisions) from the live chat into memory via one agent call, then archive every current message. Never deletes — archived turns stay in the DB and exports. Archiving never blocks on the agent; on agent failure the chat is still reset with distilled=0. |
 | `resolve_context_event` | Close a life-timeline event as healed/over (e.g. an injury the user confirms is no longer bothering them) WITHOUT deleting it — it stays on the timeline and in exports but stops gating the day-read/coach as a hard constraint. Use this instead of delete when a niggle/injury has passed. `date` defaults to today. |
+| `resolve_training_symptom` | Mark one symptom record resolved only when the athlete explicitly says to close it. This records their lifecycle choice and does not change any clinical status. |
 | `revert_brain_decision` | Undo one reversible autonomous coaching decision using its server-owned rollback snapshot. The user's word wins; returns a calm error when the decision is not reversible. |
 | `run_health_review` | Queue a durable whole-picture health review over the user's context and marker history. Returns a job immediately; poll get_agent_job. Informational, not medical advice. |
 | `save_plan_day` | Create or replace one training day and its full exercise list (manual plan edit). Unknown exercises are created. |

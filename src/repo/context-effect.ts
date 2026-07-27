@@ -58,6 +58,7 @@ export interface ResolveCandidate {
   title: string;
   since: string | null;
   likely_resolved: boolean; // already decayed (area trained since) vs merely past-window
+  constraint_level: "soft_recheck";
 }
 
 export interface ContextEffect {
@@ -109,12 +110,11 @@ function classifyEvent(ev: any): ActiveContextItem | null {
   // the title names no recognized injury word (e.g. "Foot sole cuts from beach shells").
   const isInjuryKind = ev?.kind === "injury";
 
-  // A resolved (confirmed-healed) or LIKELY-RESOLVED (past its window, area trained
-  // since) injury no longer eases load — it's downgraded to a soft note, not a hard
-  // gate. The flags ride on the hydrated row (annotateHealing); a raw passed-in event
-  // has neither, so offline classification is unchanged.
-  const injuryHealed = !!(ev?.resolved || ev?.likely_resolved);
-  if ((isInjuryKind || INJURY_RE.test(text)) && !injuryHealed) {
+  // A past-window unresolved injury remains visible as a movement-specific soft
+  // recheck, but does not keep the whole program under a reduce-load flag.
+  const injuryProtective =
+    !ev?.resolved && !ev?.likely_resolved && ev?.constraint_level !== "soft_recheck" && !ev?.needs_recheck;
+  if ((isInjuryKind || INJURY_RE.test(text)) && injuryProtective) {
     reduce_load = true;
     reasons.push("an active injury is worth easing or working around");
   }
@@ -196,7 +196,7 @@ export function activeContextEffect(date?: string, events?: any[]): ContextEffec
   if (Array.isArray(events)) {
     rows = events;
   } else {
-    try { rows = listContextEvents({ activeOnly: true }) as any[]; } catch { rows = []; }
+    try { rows = listContextEvents({ activeOnly: true, on: d }) as any[]; } catch { rows = []; }
   }
 
   const active: ActiveContextItem[] = [];
@@ -213,6 +213,7 @@ export function activeContextEffect(date?: string, events?: any[]): ContextEffec
         title: String(ev.title ?? "").trim() || "an injury",
         since: ev.start_date ?? null,
         likely_resolved: !!ev.likely_resolved,
+        constraint_level: "soft_recheck",
       });
     }
     const item = classifyEvent(ev);

@@ -30,3 +30,4 @@ export * from "../../repo/sessions.js";
 export { trainingLoadBand, trainingLoadBaselineRead } from "../../repo/baseline-bands.js";
 export * from "../../repo/training-playbook.js";
 export * from "../../repo/training-read.js";
+export * from "../../repo/training-symptoms.js";

@@ -132,6 +132,12 @@ function recoveryDecisionForStatus(status: ReturnType<typeof recoveryWeekStatus>
     return decisionIsOwned(decision) ? decision : null;
   }
   if (status?.state === "applied") {
+    if (status.cycle_id != null) {
+      const cycleDecision = listBrainDecisions({ status: "applied", domain: "recovery", limit: 100 }).find(
+        (decision) => Number((decision.action as any)?.recovery_cycle_id) === Number(status.cycle_id)
+      );
+      if (cycleDecision) return cycleDecision;
+    }
     const ledger = activeRecoveryWeekLedger(today);
     if (!ledger) return null;
     return (

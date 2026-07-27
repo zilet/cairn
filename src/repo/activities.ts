@@ -1,12 +1,13 @@
 import { db, todayISO } from "../db.js";
 import { emitBrainEvent } from "../brainEvents.js";
 import { emitEnrichTransition } from "../enrichBus.js";
+import { reconcileDailySessionsForDateSafe } from "./daily-reconciliation.js";
 import { invalidateDayRead, invalidateDayReadIfDecisionChanged } from "./intelligence.js";
 import { getOrCreateSession, getSessionDetail, setsForSession } from "./sessions.js";
 import { getSettings } from "./settings.js";
 import { bumpTrainingDataVersion } from "./training-cache.js";
 import { deriveSessionTitle } from "./training-read.js";
-import { localDateISO, chatHistoryTimeLabel } from "./shared.js";
+import { addDaysISO, localDateISO, chatHistoryTimeLabel } from "./shared.js";
 
 // ---------- activities ----------
 export function parseActivity(text: string) {
@@ -183,6 +184,7 @@ export function addActivity(input: any) {
       reason: source ? `${source} activity recorded` : "activity recorded",
     });
   }
+  reconcileDailySessionsForDateSafe(date);
   return row;
 }
 
@@ -483,6 +485,7 @@ export function getCardioForDate(date: string): CardioEffort[] {
 
 // Update only the structured fields the enricher provides; leave the rest intact.
 export function updateActivityFields(id: number, fields: Record<string, any>) {
+  const previous = getActivity(id);
   const allowed = ["type", "duration_min", "distance_km", "pace", "rpe", "notes"];
   const sets: string[] = [];
   const vals: any[] = [];
@@ -498,7 +501,21 @@ export function updateActivityFields(id: number, fields: Record<string, any>) {
   bumpTrainingDataVersion(); // enrichment can change distance/duration → weekly/endurance reads
   const row = getActivity(id);
   if (row?.date) invalidateDayRead(String(row.date));
+  if (previous?.date) reconcileDailySessionsForDateSafe(String(previous.date));
+  if (row?.date && String(row.date) !== String(previous?.date ?? "")) {
+    reconcileDailySessionsForDateSafe(String(row.date));
+  }
   return row;
+}
+
+export function deleteActivity(id: number) {
+  const row = getActivity(id);
+  if (!row) return false;
+  db.prepare(`DELETE FROM activities WHERE id = ?`).run(id);
+  bumpTrainingDataVersion();
+  invalidateDayRead(String(row.date));
+  reconcileDailySessionsForDateSafe(String(row.date));
+  return true;
 }
 
 export function setActivityEnrichStatus(id: number, status: string) {
@@ -917,6 +934,10 @@ export function upsertGarminActivity(input: GarminActivityInput, sourceId?: numb
     // A date correction changes both days' facts.
     if (prev?.date && String(prev.date) !== date) invalidateDayRead(String(prev.date));
   }
+  reconcileDailySessionsForDateSafe(date);
+  if (prev?.date && String(prev.date) !== date) {
+    reconcileDailySessionsForDateSafe(String(prev.date));
+  }
   emitBrainEvent({
     kind: "activity_synced",
     domain: "training",
@@ -1068,6 +1089,28 @@ export function listGarminActivities(limit = 30) {
 
 export function getGarminActivity(id: number) {
   return hydrateGarminActivity(db.prepare(`SELECT * FROM garmin_activities WHERE id = ?`).get(id));
+}
+
+export function deleteGarminActivity(id: number) {
+  const row = db.prepare(`SELECT * FROM garmin_activities WHERE id = ?`).get(id) as any;
+  if (!row) return false;
+  const date = String(row.date || todayISO());
+  db.exec("SAVEPOINT delete_garmin_activity");
+  try {
+    db.prepare(`DELETE FROM garmin_activities WHERE id = ?`).run(id);
+    if (row.activity_id != null) {
+      db.prepare(`DELETE FROM activities WHERE id = ? AND source = 'garmin'`).run(Number(row.activity_id));
+    }
+    db.exec("RELEASE SAVEPOINT delete_garmin_activity");
+  } catch (error) {
+    db.exec("ROLLBACK TO SAVEPOINT delete_garmin_activity");
+    db.exec("RELEASE SAVEPOINT delete_garmin_activity");
+    throw error;
+  }
+  bumpTrainingDataVersion();
+  invalidateDayRead(date);
+  reconcileDailySessionsForDateSafe(date);
+  return true;
 }
 
 // Strength-style Garmin activities for a single date or a recent window (used by
@@ -1276,6 +1319,7 @@ export function reconcileGarminStrength(garminActivityId: number) {
     exercise_sets = null;
   }
   bumpTrainingDataVersion(); // links a session + deletes the stale generic activity row
+  reconcileDailySessionsForDateSafe(date);
   // is_primary reflects whether THIS reconciled row is the day's primary (longest).
   const isPrimary = primary.external_id === (row.external_id ?? null);
   return {
@@ -1334,10 +1378,10 @@ export function listGarminDailyMetrics(limit = 30) {
   );
 }
 
-export function getGarminCoachSummary(days = 14) {
+export function getGarminCoachSummary(days = 14, asOfDate = localDateISO()) {
   const windowDays = Math.max(1, Math.min(366, Math.trunc(Number(days) || 14)));
-  const today = localDateISO();
-  const since = localDateISO(new Date(Date.now() - Math.max(0, windowDays - 1) * 864e5));
+  const today = String(asOfDate || localDateISO()).slice(0, 10);
+  const since = addDaysISO(today, -Math.max(0, windowDays - 1)) ?? today;
   const source = listGarminSources()[0] ?? null;
   const activities = db
     .prepare(

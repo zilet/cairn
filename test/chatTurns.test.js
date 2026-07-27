@@ -149,7 +149,7 @@ test("listChatMessagesBefore excludes the current message and anything after it"
   );
 });
 
-test("applyChatActions applies a signal-backed plan_update quietly and preserves its rationale on the plan item", () => {
+test("applyChatActions applies a signal-backed plan_update quietly and keeps dated rationale in provenance", () => {
   repo.savePlanDay(1, "Lower", "legs", [{ exercise: "Squat", sets: 3, rep_low: 8, rep_high: 10, target_weight: 190 }]);
   const parsed = {
     reply: "logged + drafted",
@@ -180,7 +180,20 @@ test("applyChatActions applies a signal-backed plan_update quietly and preserves
   assert.equal(prop.status, "applied");
   const squat = repo.getPlanDay(1).items.find((item) => item.exercise === "Squat");
   assert.equal(squat.target_weight, 200);
-  assert.match(squat.note, /Three crisp sessions/);
+  assert.equal(squat.note, null, "unproven relative prose is never frozen into a timeless plan note");
+  assert.match(squat.brain_change_reason, /Three crisp sessions/);
+  assert.equal(squat.brain_change_reason_provenance.reason_code, "training_evidence");
+  assert.match(squat.brain_change_reason_provenance.evidence_date, /^\d{4}-\d{2}-\d{2}$/);
+  assert.equal(
+    squat.brain_change_reason_provenance.evidence_date,
+    squat.brain_change_reason_provenance.as_of_date
+  );
+  const decision = repo.getBrainDecision(applied[1].result.decision.id);
+  assert.match(decision.rationale, /Three crisp sessions/);
+  assert.deepEqual(
+    decision.action.changes[0].reason_provenance,
+    squat.brain_change_reason_provenance
+  );
   assert.ok(
     repo.listMemory(10).some((m) => /evening training/.test(m.content)),
     "memory landed in the store"

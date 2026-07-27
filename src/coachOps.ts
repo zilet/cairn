@@ -411,11 +411,12 @@ export async function suggestSession(
 // deterministic fallback always yields ok:true.
 export async function composeDailySession(
   agent: string | undefined,
-  opts: { date?: string; minutes?: number; equipment?: string; override?: string } = {},
+  opts: { date?: string; minutes?: number; equipment?: string; override?: string; train_anyway?: boolean } = {},
   hooks?: OpHooks
 ) {
   const { envelope } = repo.decideDailySession(opts.date, {
     override: opts.override ?? null,
+    train_anyway: opts.train_anyway === true,
     equipment: opts.equipment ?? null,
     minutes: opts.minutes ?? null,
   });

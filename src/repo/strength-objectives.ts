@@ -12,10 +12,10 @@ import { injuryAffectsExercise, listContextEvents } from "./health.js";
 import {
   availableEquipment,
   nextPrescription,
-  painAreaLoadsExercise,
   recentAutoregulation,
   type Prescription,
 } from "./progression.js";
+import { painAreaLoadsExercise } from "./pain-relevance.js";
 import { getProgramState, type LiftState, type ProgramState } from "./program-state.js";
 import { localDateISO } from "./shared.js";
 

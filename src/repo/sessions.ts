@@ -181,6 +181,7 @@ export function reopenSession(sessionId: number) {
   const s = db.prepare(`SELECT id FROM sessions WHERE id = ?`).get(sessionId) as any;
   if (!s) return null;
   db.prepare(`UPDATE sessions SET finished_at = NULL WHERE id = ?`).run(sessionId);
+  reconcileDailySessionSafe(sessionId);
   return getSessionDetail(sessionId);
 }
 
@@ -317,6 +318,7 @@ export function skipExercise(exercise: string, date?: string) {
       entity_id: session.id,
       subject_key: name,
     });
+    reconcileDailySessionSafe(session.id);
   }
   return { ok: true as const, date: d, exercise: name, session_id: session.id, skips: skipsForSession(session.id) };
 }
@@ -336,6 +338,7 @@ export function unskipExercise(exercise: string, date?: string) {
     };
   }
   const removed = db.prepare(`DELETE FROM session_skips WHERE session_id = ? AND exercise = ?`).run(s.id, name).changes;
+  if (removed) reconcileDailySessionSafe(s.id);
   return {
     ok: true as const,
     date: d,
@@ -434,6 +437,8 @@ function insertSetByName(input: LogSetInput, emitEffects: boolean) {
     pr = est_1rm > prevBest;
     if (emitEffects) completeStrengthObjectiveFromLoggedSet({ exercise: ex.name, est_1rm, date });
   }
+
+  if (emitEffects) reconcileDailySessionSafe(session.id);
 
   return {
     id: info.lastInsertRowid,
@@ -560,13 +565,18 @@ export function importGarminActivitySets(input: {
       entity_id: sessionId,
       subject_key: firstExercise,
     });
+    reconcileDailySessionSafe(sessionId);
   }
   return result;
 }
 
 export function deleteSet(id: number) {
+  const existing = db.prepare(`SELECT session_id FROM logged_sets WHERE id = ?`).get(id) as any;
   const deleted = db.prepare(`DELETE FROM logged_sets WHERE id = ?`).run(id).changes;
-  if (deleted) bumpTrainingDataVersion();
+  if (deleted) {
+    bumpTrainingDataVersion();
+    if (existing?.session_id != null) reconcileDailySessionSafe(Number(existing.session_id));
+  }
   return { deleted };
 }
 
@@ -587,7 +597,7 @@ export function updateSet(
 ) {
   const cur = db
     .prepare(
-      `SELECT ls.id, e.name AS exercise, s.date AS date
+      `SELECT ls.id, ls.session_id, e.name AS exercise, s.date AS date
        FROM logged_sets ls
        JOIN exercises e ON e.id=ls.exercise_id
        JOIN sessions s ON s.id=ls.session_id
@@ -636,6 +646,7 @@ export function updateSet(
       throw error;
     }
     bumpTrainingDataVersion(); // an in-place set correction the SQL backstop can't see
+    reconcileDailySessionSafe(Number(cur.session_id));
   }
   return db
     .prepare(

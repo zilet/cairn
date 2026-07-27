@@ -1879,25 +1879,36 @@ export function addContextEvent(input: ContextEventInput) {
   return row;
 }
 
-export function listContextEvents(opts: { activeOnly?: boolean } = {}) {
+export function listContextEvents(opts: { activeOnly?: boolean; on?: string } = {}) {
   let rows: any[];
   if (opts.activeOnly) {
     // Active/upcoming = not archived, not explicitly resolved, AND (no end_date OR
     // end_date >= today). A confirmed-healed injury drops out of the active set.
-    const today = localDateISO();
-    rows = db
-      .prepare(
-        `SELECT * FROM context_events
-         WHERE archived = 0 AND (resolved_at IS NULL OR resolved_at > ?) AND (end_date IS NULL OR end_date >= ?)
-         ORDER BY (start_date IS NULL), start_date, id`
-      )
-      .all(today, today) as any[];
+    const today = /^\d{4}-\d{2}-\d{2}$/.test(String(opts.on ?? "")) ? String(opts.on) : localDateISO();
+    rows = opts.on
+      ? (db
+          .prepare(
+            `SELECT * FROM context_events
+             WHERE archived = 0
+               AND (start_date IS NULL OR start_date <= ?)
+               AND (resolved_at IS NULL OR resolved_at > ?)
+               AND (end_date IS NULL OR end_date >= ?)
+             ORDER BY (start_date IS NULL), start_date, id`
+          )
+          .all(today, today, today) as any[])
+      : (db
+          .prepare(
+            `SELECT * FROM context_events
+             WHERE archived = 0 AND (resolved_at IS NULL OR resolved_at > ?) AND (end_date IS NULL OR end_date >= ?)
+             ORDER BY (start_date IS NULL), start_date, id`
+          )
+          .all(today, today) as any[]);
   } else {
     rows = db
       .prepare(`SELECT * FROM context_events ORDER BY (start_date IS NULL), start_date DESC, id DESC`)
       .all() as any[];
   }
-  return rows.map((r) => annotateHealing(hydrateContextEvent(r)));
+  return rows.map((r) => annotateHealing(hydrateContextEvent(r), opts.on));
 }
 
 export function getContextEvent(id: number) {
@@ -2158,18 +2169,16 @@ export function deleteContextEvent(id: number) {
 }
 
 // ---- injury healing (temporal decay) ----------------------------------------
-// An injury heals over time. Rather than gating training forever on a one-mention
-// niggle, compute a deterministic healing read: past its expected window, with the
-// affected area TRAINED since, and not explicitly resolved → LIKELY-RESOLVED (a soft
-// note, no longer a hard constraint), without ever hard-deleting the record. Pure vs
-// DB is split: `past_window` is computed from the event's own fields (testable
-// offline); `trained_since` reads the log. Re-mention resets the clock naturally —
-// the athlete (or the chat resolve hook) updates start_date / the window.
+// An expected window is a recheck boundary, not evidence that an injury healed.
+// Logged training after that boundary remains useful context, but a bare set carries
+// no explicit pain-free signal and must never silently close the constraint.
 export interface ContextEventHealing {
   resolved: boolean; // explicitly closed (resolved_at on/before today)
   past_window: boolean; // an injury past start_date + expected_recovery_days
   trained_since: boolean; // the injured area was trained after the window ended
-  likely_resolved: boolean; // past_window && trained_since && !resolved → soft, not a gate
+  likely_resolved: boolean; // retained for compatibility; never inferred from a bare training log
+  needs_recheck: boolean; // past the window and still open
+  constraint_level: "none" | "protective" | "soft_recheck" | "resolved";
   window_end: string | null; // YYYY-MM-DD the expected window closes, or null
 }
 
@@ -2183,14 +2192,14 @@ function addDaysISOLocal(iso: string, days: number): string | null {
 // injury maps to known body-areas we require a matching movement to have been logged;
 // when it maps to nothing recognizable (e.g. "foot sole cuts"), ANY logged training
 // after the window is taken as "training resumed" (they're clearly moving through it).
-function trainedAffectedAreaSince(ev: any, sinceDate: string): boolean {
+function trainedAffectedAreaSince(ev: any, sinceDate: string, throughDate: string): boolean {
   const sessions = db
     .prepare(
       `SELECT DISTINCT s.id FROM sessions s
        JOIN logged_sets ls ON ls.session_id = s.id
-       WHERE s.date > ?`
+       WHERE s.date > ? AND s.date <= ?`
     )
-    .all(sinceDate) as any[];
+    .all(sinceDate, throughDate) as any[];
   if (!sessions.length) return false;
   const areas = injuryAreas(ev);
   if (!areas.length) return true; // unmappable area → any training after the window counts
@@ -2199,9 +2208,9 @@ function trainedAffectedAreaSince(ev: any, sinceDate: string): boolean {
       `SELECT DISTINCT e.name AS name, e.muscle_group AS muscle_group FROM logged_sets ls
        JOIN sessions s ON s.id = ls.session_id
        JOIN exercises e ON e.id = ls.exercise_id
-       WHERE s.date > ?`
+       WHERE s.date > ? AND s.date <= ?`
     )
-    .all(sinceDate) as any[];
+    .all(sinceDate, throughDate) as any[];
   return rows.some((ex) => injuryAffectsExercise(ev, ex, areas));
 }
 
@@ -2212,17 +2221,27 @@ export function contextEventHealing(ev: any, today = localDateISO()): ContextEve
   const erd = Number(ev?.expected_recovery_days);
   const window_end = isInjury && start && Number.isFinite(erd) ? addDaysISOLocal(start, erd) : null;
   const past_window = !!window_end && today > window_end;
-  const trained_since = isInjury && past_window && !resolved ? trainedAffectedAreaSince(ev, window_end!) : false;
-  const likely_resolved = isInjury && !resolved && past_window && trained_since;
-  return { resolved, past_window, trained_since, likely_resolved, window_end };
+  const trained_since =
+    isInjury && past_window && !resolved ? trainedAffectedAreaSince(ev, window_end!, today) : false;
+  const likely_resolved = false;
+  const needs_recheck = isInjury && !resolved && past_window;
+  const constraint_level = !isInjury ? "none" : resolved ? "resolved" : needs_recheck ? "soft_recheck" : "protective";
+  return { resolved, past_window, trained_since, likely_resolved, needs_recheck, constraint_level, window_end };
 }
 
 // Attach the healing read to a hydrated context event (additive, null-safe). Non-injury
 // events get resolved/likely_resolved=false and stay untouched.
-function annotateHealing(ev: any) {
+function annotateHealing(ev: any, on?: string) {
   if (!ev || typeof ev !== "object") return ev;
-  const h = contextEventHealing(ev);
-  return { ...ev, resolved: h.resolved, past_window: h.past_window, likely_resolved: h.likely_resolved };
+  const h = contextEventHealing(ev, on);
+  return {
+    ...ev,
+    resolved: h.resolved,
+    past_window: h.past_window,
+    likely_resolved: h.likely_resolved,
+    needs_recheck: h.needs_recheck,
+    constraint_level: h.constraint_level,
+  };
 }
 
 // ============================================================================
@@ -2422,13 +2441,33 @@ function suggestSwapsFor(
 // Shape: { injuries: [{ id, title, area, severity, since, areas:[label],
 //   affected:[{ exercise, muscle_group, mode, constraint_note, days:[{day_number,
 //   day_name}], swaps:[{name,muscle_group,mode,why}] }] }], count }
-export function getInjuryImpacts() {
-  // A likely-resolved injury (past its window with the area trained since) no longer
-  // gates exercises as a hard constraint — it's downgraded to a soft note elsewhere.
-  const injuries = (listContextEvents({ activeOnly: true }) as any[]).filter(
-    (e) => e.kind === "injury" && !e.likely_resolved
-  );
-  if (!injuries.length) return { injuries: [], count: 0 };
+export interface InjuryImpactsRead {
+  injuries: Array<{
+    id: number;
+    title: string;
+    area: string | null;
+    severity: string | null;
+    since: string | null;
+    needs_recheck: boolean;
+    constraint_level: "protective" | "soft_recheck";
+    areas: string[];
+    affected: Array<{
+      exercise: string;
+      muscle_group: string | null;
+      mode: "timed" | "reps";
+      constraint_note: string | null;
+      days: Array<{ day_number: number; day_name: string }>;
+      swaps: Array<{ name: string; muscle_group: string | null; mode: "reps" | "timed"; why: string }>;
+    }>;
+  }>;
+  count: number;
+  protective_count?: number;
+  recheck_count?: number;
+}
+
+export function getInjuryImpacts(on?: string): InjuryImpactsRead {
+  const injuries = (listContextEvents({ activeOnly: true, on }) as any[]).filter((e) => e.kind === "injury");
+  if (!injuries.length) return { injuries: [], count: 0, protective_count: 0, recheck_count: 0 };
 
   const allExercises = listExercises() as any[];
   const plan = getPlan() as any[]; // [{ day_number, name, items:[{exercise, muscle_group, mode, constraint_note, ...}] }]
@@ -2454,7 +2493,7 @@ export function getInjuryImpacts() {
     }
   }
 
-  const out = injuries.map((inj) => {
+  const out: InjuryImpactsRead["injuries"] = injuries.map((inj) => {
     const areas = injuryAreas(inj);
     let meta: any = inj.meta;
     if (meta == null && inj.meta_json) {
@@ -2487,16 +2526,25 @@ export function getInjuryImpacts() {
       }))
       .sort((a, b) => String(a.exercise).localeCompare(String(b.exercise)));
     return {
-      id: inj.id,
-      title: inj.title || "Injury",
-      area: meta.area || (areas[0] ? areas[0].label : null),
-      severity: meta.severity || null,
-      since: inj.start_date || null,
+      id: Number(inj.id),
+      title: String(inj.title || "Injury"),
+      area: meta.area ? String(meta.area) : areas[0] ? areas[0].label : null,
+      severity: meta.severity ? String(meta.severity) : null,
+      since: inj.start_date ? String(inj.start_date) : null,
+      needs_recheck: !!inj.needs_recheck,
+      constraint_level: (inj.constraint_level === "soft_recheck" ? "soft_recheck" : "protective") as
+        | "protective"
+        | "soft_recheck",
       areas: areas.map((a) => a.label),
       affected,
     };
   });
 
-  const count = out.reduce((n, i) => n + i.affected.length, 0);
-  return { injuries: out, count };
+  const protective_count = out
+    .filter((injury) => injury.constraint_level === "protective")
+    .reduce((n, injury) => n + injury.affected.length, 0);
+  const recheck_count = out
+    .filter((injury) => injury.constraint_level === "soft_recheck")
+    .reduce((n, injury) => n + injury.affected.length, 0);
+  return { injuries: out, count: protective_count, protective_count, recheck_count };
 }

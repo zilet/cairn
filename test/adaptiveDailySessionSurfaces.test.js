@@ -219,3 +219,68 @@ test("registered MCP daily-session tools use the shared prepare behavior for suc
     await server.close();
   }
 });
+
+test("REST and MCP mirror the explicit Train-anyway decision and accepted fingerprint", async () => {
+  repo.savePlanDay(1, "Surface strength", "Full body", [
+    { exercise: "Surface Squat", sets: 4, rep_low: 5, rep_high: 8, target_weight: 135 },
+  ]);
+
+  const restDate = "2032-03-12";
+  repo.addCheckin(restDate, { sleep_feel: 1, energy: 3, mood: 3 });
+  const restDecision = await routerRequest("GET", "/daily-session/decision", { query: { date: restDate } });
+  assert.equal(restDecision.body.kind, "rest");
+
+  const restPrepared = await routerRequest("POST", "/daily-session/prepare", {
+    body: { date: restDate, source: "adaptive_plan" },
+  });
+  assert.equal(restPrepared.body.daily_session.decision.kind, "rest");
+  assert.ok(restPrepared.body.daily_session.items.every((item) => item.kind === "cardio"));
+
+  const trainDate = "2032-03-13";
+  repo.addCheckin(trainDate, { sleep_feel: 1, energy: 3, mood: 3 });
+  const restBaseline = await routerRequest("GET", "/daily-session/decision", { query: { date: trainDate } });
+  assert.equal(restBaseline.body.kind, "rest");
+  const restFingerprint = restBaseline.body.input_fingerprint;
+  const trainDecision = await routerRequest("GET", "/daily-session/decision", {
+    query: { date: trainDate, train_anyway: "true" },
+  });
+  assert.equal(trainDecision.body.kind, "train");
+  assert.equal(trainDecision.body.baseline_kind, "rest");
+  assert.equal(trainDecision.body.request.train_anyway, true);
+  assert.notEqual(trainDecision.body.input_fingerprint, restFingerprint);
+
+  const trainPrepared = await routerRequest("POST", "/daily-session/prepare", {
+    body: { date: trainDate, source: "adaptive_plan", train_anyway: true },
+  });
+  assert.equal(
+    trainPrepared.body.daily_session.decision.input_fingerprint,
+    trainDecision.body.input_fingerprint
+  );
+
+  const mcpDate = "2032-03-14";
+  repo.addCheckin(mcpDate, { sleep_feel: 1, energy: 3, mood: 3 });
+  const { client, server } = await mcpHarness();
+  try {
+    const mcpDecision = toolJson(
+      await client.callTool({
+        name: "get_daily_session_decision",
+        arguments: { date: mcpDate, train_anyway: true },
+      })
+    );
+    const mcpPrepared = toolJson(
+      await client.callTool({
+        name: "prepare_daily_session",
+        arguments: { date: mcpDate, source: "adaptive_plan", train_anyway: true },
+      })
+    );
+    assert.equal(mcpDecision.kind, "train");
+    assert.equal(mcpDecision.baseline_kind, "rest");
+    assert.equal(
+      mcpPrepared.daily_session.decision.input_fingerprint,
+      mcpDecision.input_fingerprint
+    );
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});

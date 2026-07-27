@@ -44,7 +44,7 @@ The daily decision is a suggestion, not a gate. The athlete can choose another p
 
 ### Implemented boundary
 
-Stage 1 introduces `daily_session_compositions` and carries one accepted composition through REST, MCP, the PWA, and the training-log session. It deliberately does **not** invent a new training-decision engine. For plan-backed choices it snapshots `selectedPlanDayForDate()`, which already uses adaptive plan-day selection. For an agent suggestion it persists the returned composition exactly after normalization.
+Stage 1 introduces `daily_session_compositions` and carries one accepted composition through REST, MCP, the PWA, and the training-log session. Adaptive preparation now runs the Stage 2 decision **before** snapshotting and builds the accepted prescription from that exact envelope. Manual plan pulls remain athlete-owned snapshots; agent compositions persist only after server normalization.
 
 ### Persistence invariants
 
@@ -53,7 +53,7 @@ Stage 1 introduces `daily_session_compositions` and carries one accepted composi
 3. At most one composition is active for a date. Prior versions remain as superseded history.
 4. Repeating the same normalized prepare request returns the existing active composition and reports it as reused, including an exact `replace:true` retry after logging has begun.
 5. A genuinely different replacement is explicit. It is refused after meaningful session state exists, including logged sets, skips, finish state, feedback, notes, or confidently matching synced activity.
-6. Plan-backed sources retain their `plan_day_id`; custom/agent sources clear a stale plan link so they cannot masquerade as a weekly template.
+6. Plan-backed training compositions retain their `plan_day_id`. A no-override rest decision intentionally accepts an unlinked recovery composition. A bounded agent composition retains the envelope's plan link when it was composed from that template.
 7. The accepted composition can bind to the existing training `session_id`, and session reads hydrate the associated `daily_session`.
 8. Accepting or replacing a daily composition never mutates the weekly plan.
 9. Existing sessions and older clients remain valid: `daily_session` may be null, and plan-day behavior continues to work.
@@ -75,7 +75,7 @@ Because this is a brand-new table, current repository convention creates it idem
 ### Current surfaces
 
 - `GET /api/daily-session?date=YYYY-MM-DD` returns the active composition or null.
-- `POST /api/daily-session/prepare` accepts `date`, `day_number`, `source`, optional athlete-authored `session`, `constraints`, `provenance`, `replace`, and an authoritative top-level `agent_job_id`. `agent_suggest` requires a completed, matching-date session-suggest job and reloads its canonical result server-side; inline custom payloads use `athlete_override`. It returns `{ok, daily_session, session, reused}`.
+- `POST /api/daily-session/prepare` accepts `date`, `day_number`, `source`, optional athlete-authored `session`, `constraints`, `provenance`, `replace`, the explicit `train_anyway` athlete override, and an authoritative top-level `agent_job_id`. `agent_suggest` requires a completed, matching-date session-suggest job and reloads its canonical result server-side; inline custom payloads use `athlete_override`. It returns `{ok, daily_session, session, reused}`.
 - MCP `get_daily_session` mirrors the read.
 - MCP `prepare_daily_session` mirrors preparation and replacement.
 - Training-session responses include the nullable `daily_session` association.
@@ -84,7 +84,7 @@ The PWA now:
 
 - shows **Use this session** on a completed suggestion instead of silently activating it;
 - prepares a canonical snapshot before entering the isolated Session screen;
-- renders custom work as **Built for today** and plan-backed work as **From plan · _name_**;
+- renders decision-backed work as **Adapted for today** or **Training by choice**, with the stored rationale;
 - preserves generated order and full prescriptions;
 - restores the accepted session after navigation or reload;
 - uses explicit replacement when the athlete selects a different manual plan day;
@@ -145,6 +145,16 @@ The output should be data, not prose:
 
 The same bounded input must produce the same envelope. If optional sources are absent, the policy must degrade to the existing adaptive plan selector rather than fail or fabricate certainty. Stage 2 preparation persists both the resulting snapshot and enough decision metadata to explain why it was chosen without storing private raw health payloads in logs.
 
+### Authoritative acceptance (implemented)
+
+`adaptive_plan` preparation has one authority chain: normalized request → `daily_decision_v2` envelope → bounded composition → accepted session. The envelope carries both `baseline_kind` and the resulting `kind`, the selected plan identity, explicit `train_anyway`, caps, exclusions, candidates, and its fingerprint. That exact normalized decision context is embedded in `constraints_json` and `provenance_json`, returned as `daily_session.decision`, and linked to the matching `daily_session_decisions` row.
+
+- A rest baseline with no override accepts a deterministic easy-recovery composition, never a full lifting template.
+- Explicit **Train anyway** changes the envelope to `kind:"train"` while retaining `baseline_kind:"rest"` and enforcing reduced volume, held/easy intensity, injury exclusions, and a short duration cap.
+- A manual plan pull remains the athlete's requested template. Cairn does not relabel the policy read; it carries the same safety context and presents it as **Training by choice** when the baseline did not call for training.
+- The boolean override is part of normalized request identity. The legacy exact phrase `train anyway` is still recognized so old cached or queued clients remain replayable.
+- Cached active-ID assertions remain read-only and shape-compatible. The PWA does not locally stage a raw weekly plan as a train-anyway prescription while offline because it cannot reproduce current server safety bounds.
+
 ## 5. Stage 3 — bounded agent composition and safe exercise introduction
 
 The agent's job is to compose inside the deterministic envelope, not to redefine safety or autonomy policy.
@@ -154,6 +164,7 @@ The agent's job is to compose inside the deterministic envelope, not to redefine
 - The server provides a compact allowlist, exclusions, caps, candidate substitutions, recent prescriptions, and the target session shape.
 - The agent returns schema-valid ordered items plus brief athlete-facing rationale.
 - A server normalizer verifies every item, clamps values, rejects excluded movements, and recalculates duration/volume bounds.
+- Plan-backed fallback applies candidate exclusions/substitutions/holds/deloads, per-item set/load/seconds caps, a total working-set cap, and the overall duration cap. Unknown or thin-history movements never receive a fabricated load.
 - Invalid, empty, timed-out, or unavailable agent output falls back to the deterministic Stage 2 snapshot.
 - The accepted normalized result is persisted as a new daily-session composition; raw agent text is never the execution source of truth.
 
@@ -186,6 +197,18 @@ After a session, reconcile:
 
 Store derived outcome facts with confidence and reason codes. Do not interpret a skipped or reduced session as poor adherence when travel, time, recovery, pain, or another activity explains it.
 
+The additive outcome ledger now stores `schema_version: 2`, stable composition-item/movement/intent
+identity, the complete prescribed and achieved set dose, and a challenge verdict that considers
+sets together with load, reps, or duration. Set add/update/delete, skip/restore, reopen, finish, and
+feedback writes plus same-date manual/Garmin activity insert/update/delete refresh the same outcome
+best-effort. Active movement-relevant symptom-ledger evidence participates even when the session's
+legacy joint-pain text is empty. `recentMovementResponse()` is intentionally
+bounded: it needs at least two comparable completed moderate/high-confidence outcomes for the same
+movement and intent, and returns only `insufficient`, `contradictory`, `earned_absorbed`, or
+`earned_hold`. Only the two most recent comparable exposures decide, so old conflicts cannot
+outvote a newer repeated response indefinitely. Recovery overlays, athlete overrides, partial work, travel/illness, relevant
+symptoms, and endurance-loaded days remain legible facts but are not causal progression evidence.
+
 ### Learning horizons
 
 - **Strength:** update exercise baselines, progression holds/advances, volume tolerance, and substitution preference from repeated evidence.
@@ -194,6 +217,14 @@ Store derived outcome facts with confidence and reason codes. Do not interpret a
 - **Life constraints:** learn recurring time/equipment/family patterns as planning context, never as a compliance score.
 
 Repeated, high-confidence patterns may propose a weekly-template evolution. Structural plan changes continue through the existing proposal/autonomy path and never occur as an unledgered side effect of one daily session. Reversals and athlete overrides are evidence about preference and fit, not mistakes to punish.
+
+Weekly evolution also has a temporal-truth boundary. Historical rationale uses structured
+reason/evidence/as-of/source provenance and is rendered against the date it was generated, never as
+timeless “yesterday” copy. Proposal creation fingerprints the weekly template plus relevant training
+evidence; quiet or announced apply compares that snapshot again and holds changed or unverified
+inputs for review. The weekly template keeps stable prescription facts, while the decision ledger
+keeps dated narrative and Undo. Therefore a daily immutable composition copied from the template
+cannot accidentally preserve a relative story whose meaning changes with the calendar.
 
 ## 7. Non-goals, safety, autonomy, and undo
 
@@ -230,7 +261,7 @@ Stage 1 provides the safe primitive of explicit replacement before logging and r
 | 1 — implemented locally | `daily_session_compositions`; required session link, nullable plan link; normalized items, constraints, provenance; version/status history | `getActiveDailySession`, `prepareDailySession`; REST and MCP read/prepare; hydrated session DTO | Older sessions return `daily_session: null`; older clients continue using plan-day sessions |
 | 2 — deterministic decision | Add versioned decision metadata such as `policy_version`, `input_fingerprint`, reason codes, and bounded signal timestamps, either in a dedicated JSON field/table or migrated columns | New deterministic `buildDailySessionDecision()`; prepare consumes it by default; optional bounded diagnostic read for UI/explainability | Missing signals fall back to current adaptive plan selection; adding columns requires a numbered migration |
 | 3 — agent composition | Persist normalized candidate provenance, validation result, fallback reason, and safe-introduction metadata | `composeDailySession(envelope)` in shared orchestration; REST/MCP remain thin wrappers around prepare | Agent absence or malformed output never blocks a usable deterministic session |
-| 4 — outcome learning | Composition-to-outcome reconciliation, modification reason codes, repeated-pattern evidence, and plan-evolution links | Reconcile on finish/feedback; feed bounded evidence to progression and program evolution | Existing logs remain authoritative; learning records are additive and null-safe |
+| 4 — outcome learning | `daily_session_outcomes` schema-v2 JSON with stable identity, complete prescribed/achieved dose, context exclusions, and bounded repeated-response evidence | Reconcile after every outcome-changing session mutation; progression consumption remains a separate integration step | Existing/legacy JSON remains readable; recovery/override/partial/confounded outcomes never drive structural deload |
 | Undo/observability | Composition lineage, brain-decision linkage, aggregate counters | Explicit revert endpoint/tool only after server policy is defined | Revert creates history; it never deletes logged work |
 
 Public DTOs should expose the accepted prescription and concise explanation, not internal medical records or an unbounded raw coaching context. REST and MCP must continue to call the same domain use cases.

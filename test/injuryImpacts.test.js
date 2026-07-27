@@ -5,7 +5,7 @@
 // getInjuryImpacts (the full read). Suggestions only — it never mutates the plan.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { repo, resetTables } from "./_seed.js";
+import { localDaysAgo, repo, resetTables } from "./_seed.js";
 
 // A small training plan covering several body areas. We create the exercises
 // with their muscle_group first (savePlanDay's findOrCreateExercise won't update
@@ -80,7 +80,12 @@ test("getInjuryImpacts: no injuries → empty, count 0", () => {
 
 test("getInjuryImpacts: an active knee injury surfaces the leg movements + safe swaps", () => {
   seedPlanWithGroups(STD_ITEMS);
-  repo.addContextEvent({ kind: "injury", title: "Right knee", start_date: "2025-01-01", meta: { area: "knee", severity: "moderate" } });
+  repo.addContextEvent({
+    kind: "injury",
+    title: "Right knee",
+    start_date: localDaysAgo(0),
+    meta: { area: "knee", severity: "moderate" },
+  });
 
   const res = repo.getInjuryImpacts();
   assert.equal(res.injuries.length, 1);

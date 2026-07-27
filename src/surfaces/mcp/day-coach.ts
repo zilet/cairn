@@ -54,11 +54,21 @@ export function registerDayCoachTools(server: McpToolRegistrar) {
         .string()
         .optional()
         .describe("free-text steer, e.g. 'train anyway' / 'rough night' / 'short on time'"),
+      train_anyway: z
+        .boolean()
+        .optional()
+        .describe("explicit athlete choice to train despite a rest/easy baseline; conservative safety caps still apply"),
       date: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
       agent: z.string().optional().describe("omit or 'auto' to use the configured rotation"),
     },
-    async ({ minutes, equipment, override, date, agent }) =>
-      asText(queueMcpAgentJob("session_compose", { minutes, equipment, override, date: date ?? localDateISO() }, agent))
+    async ({ minutes, equipment, override, train_anyway, date, agent }) =>
+      asText(
+        queueMcpAgentJob(
+          "session_compose",
+          { minutes, equipment, override, train_anyway, date: date ?? localDateISO() },
+          agent
+        )
+      )
   );
 
   server.tool(
@@ -77,12 +87,14 @@ export function registerDayCoachTools(server: McpToolRegistrar) {
         .string()
         .optional()
         .describe("free-text steer, e.g. 'train anyway' / 'rough night' / 'short on time'"),
+      train_anyway: z.boolean().optional().describe("explicit athlete choice to train with conservative safety caps"),
       equipment: z.string().optional().describe("equipment available, e.g. 'dumbbells only'"),
       minutes: z.number().int().optional().describe("time budget in minutes"),
     },
-    async ({ date, override, equipment, minutes }) => {
+    async ({ date, override, train_anyway, equipment, minutes }) => {
       const { envelope } = decideDailySession(date, {
         override: override ?? null,
+        train_anyway: train_anyway === true,
         equipment: equipment ?? null,
         minutes: minutes ?? null,
       });
@@ -123,6 +135,10 @@ export function registerDayCoachTools(server: McpToolRegistrar) {
         .unknown()
         .optional()
         .describe("optional bounded JSON provenance for athlete_override; agent_suggest provenance is server-derived"),
+      train_anyway: z
+        .boolean()
+        .optional()
+        .describe("explicit athlete override; adaptive_plan becomes a conservatively capped train composition"),
       replace: z.boolean().optional().describe("supersede the active composition before logging starts"),
     },
     async (input) => {

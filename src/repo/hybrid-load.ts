@@ -4,7 +4,7 @@
 import { db } from "../db.js";
 import { addDaysISO, daysBetweenISO, localDateISO } from "./shared.js";
 import { canonicalGroup, classifyMuscleGroup, isMobility, type MuscleGroup } from "./exercise-canon.js";
-import { HEAVY_SETS, type EnduranceModality, matchEnduranceModality } from "./heavy-load.js";
+import { CARDIO_GRADE, HEAVY_SETS, type EnduranceModality, matchEnduranceModality } from "./heavy-load.js";
 
 export interface RecentLoad {
   group: MuscleGroup;
@@ -31,6 +31,15 @@ export interface EnduranceImpact {
   regions: MuscleGroup[];
   detail: string;
   why: string;
+}
+
+export function isLoadRelevantEnduranceImpact(impact: EnduranceImpact): boolean {
+  if (impact.load === "moderate" || impact.load === "heavy") return true;
+  if (impact.label === "hike") return false;
+  return (
+    (impact.duration_min != null && impact.duration_min >= CARDIO_GRADE.moderateMin) ||
+    (impact.distance_km != null && impact.distance_km >= CARDIO_GRADE.moderateKm)
+  );
 }
 
 function durPhrase(min: number | null, km: number | null): string {

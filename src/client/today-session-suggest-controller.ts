@@ -132,6 +132,11 @@ type TodaySnapshotRecovery = {
   // impersonating server identity.
   function stagedPrepareResponse(input: TodayOfflineStageInput): Record<string, unknown> | null {
     const source = String(input.request.source || "");
+    // A train-anyway composition is authored by the server's current decision
+    // envelope (including recovery/pain caps). A raw cached weekly plan cannot
+    // safely impersonate it offline, so do not mount a contradictory local
+    // prescription. Older queued/cached request shapes remain replayable.
+    if (source === "adaptive_plan" && input.request.train_anyway === true) return null;
     const planSource = source === "adaptive_plan" || source === "manual_plan";
     let planDay: Record<string, unknown> | null = null;
     let payload: Record<string, unknown> | null = null;

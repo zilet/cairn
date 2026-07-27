@@ -39,6 +39,20 @@ importing everything from `./repo.js` unchanged.
   3 days span); `pace_status` is `'on'|'behind'|'fast'|null` where `'fast'` = losing >~1%
   bodyweight/wk; `week_sets` counts ALL sets incl. timed, tonnage still excludes them.
 
+**One daily training authority.** `prepareDailySession()` (`src/repo/adaptive-session.ts`) decides an
+adaptive request before it snapshots anything. `decideDailySession()` produces the versioned
+`daily_decision_v2` envelope; `deterministicComposedSession()` then applies that envelope's exact
+template, injury/exercise exclusions, candidate substitutions/holds/deloads, per-item and total
+volume bounds, intensity/load/seconds bounds, and duration cap. The accepted
+`daily_session_compositions` row embeds the same normalized decision context and fingerprint in both
+constraints and provenance, while `daily_session_decisions.composition_id` points back to it. A rest
+envelope accepts an unlinked easy-recovery composition. Explicit `train_anyway:true` is a
+first-class athlete override: the envelope keeps `baseline_kind:"rest"` for explainability, becomes
+`kind:"train"`, retains the plan link, and applies conservative bounds. Manual plan pulls remain
+athlete-owned and keep the safety context visible as **Training by choice** rather than rewriting
+what policy suggested. REST and MCP pass the same boolean, and older requests without it (or with the
+legacy exact phrase) remain valid.
+
 ### Body, nutrition, capture
 
 - Bodyweight log (`logWeight`/`listWeight`, syncs `profile.weight_lb`); the TDEE + lean-safe goal
@@ -900,6 +914,21 @@ slot is already running, and shares the weekly proposal's single-slot dedup
 `program_evolution_trigger_sig`/`_last_draft_date`) so it never piles up. `evolveProgram(agent,
 instruction, hooks, { task })` focuses the agent on the trigger reasons WITHOUT changing the stored
 dedup key.
+
+**Temporal truth at apply.** Training proposals store structured provenance for historical reasons
+(reason code, evidence date, proposal as-of date, and a source reference when available) plus a
+server-owned fingerprint of the active plan and the training evidence observed through that date.
+Relative wording is normalized when the proposal is stored: a July 17 proposal citing “yesterday”
+continues to say “July 16, 2026” when applied or read later. Legacy rows are normalized on hydration
+against their creation/as-of date.
+
+Quiet/announced changes compare that fingerprint again before scheduling and at the natural apply
+boundary. A plan edit or newly logged training evidence holds the draft for review; age is only a
+secondary ceiling. Legacy drafts without a fingerprint remain explicitly/manual-applicable with an
+honest `unverified` receipt, but are never adopted autonomously. Weekly plan notes retain reusable
+prescription facts (including one baseline cue for an uncalibrated exercise); historical narrative
+and provenance live in the proposal and decision ledger, where plan reads can render the original
+rationale and Undo without freezing it into daily snapshots.
 
 The scheduler also drives the whole-person trajectory's monthly / phase-boundary /
 unexplained-regression revision conferences.

@@ -31,7 +31,7 @@ function waitForJob(id) {
   });
 }
 
-test("cached and completed session suggestions normalize once and prepare without preview drift", async () => {
+test("cached suggestions normalize for preview and are revalidated against the current envelope on prepare", async () => {
   const date = "2032-03-07";
   repo.savePlanDay(1, "Normalization anchors", "Contract fixtures", [
     { exercise: "Contract Squat", sets: 3, rep_low: 5, rep_high: 8, target_weight: 200 },
@@ -116,9 +116,8 @@ test("cached and completed session suggestions normalize once and prepare withou
   assert.deepEqual(done.result.session, cached.session, "canonical result_json stores the normalized preview");
   assert.equal(done.result.session_normalization, "daily_session_v1");
 
-  // A post-preview training datum changes the current safety baseline. The
-  // server-owned normalization marker prevents a second clamp from silently
-  // rewriting the already-reviewed canonical session at prepare time.
+  // A post-preview training datum changes the current safety baseline. Durable
+  // acceptance re-runs the current envelope rather than trusting the old preview.
   repo.logSetByName({
     date: "2032-03-01",
     exercise: "Contract Squat",
@@ -131,10 +130,11 @@ test("cached and completed session suggestions normalize once and prepare withou
   assert.equal(prepared.daily_session.title, done.result.session.name);
   assert.equal(prepared.daily_session.focus, done.result.session.focus);
   assert.equal(prepared.daily_session.why, done.result.session.why);
-  assert.equal(prepared.daily_session.est_minutes, done.result.session.est_minutes);
-  assert.deepEqual(
-    prepared.daily_session.items,
-    done.result.session.items,
-    "prepare revalidation is idempotent and does not rewrite the actionable preview"
+  assert.equal(prepared.daily_session.est_minutes, 45);
+  assert.notDeepEqual(prepared.daily_session.items, done.result.session.items);
+  assert.ok(prepared.daily_session.items.every((item) => item.sets == null || item.sets <= 6));
+  assert.ok(
+    prepared.daily_session.items.reduce((sum, item) => sum + Number(item.sets ?? 0), 0) <= 24
   );
+  assert.match(prepared.daily_session.decision.input_fingerprint, /^[a-f0-9]{64}$/);
 });

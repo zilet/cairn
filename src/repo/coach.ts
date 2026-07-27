@@ -57,7 +57,7 @@ import { classifyDirectiveIntent } from "./propagation-data.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { readAdherenceModel } from "./brain/read-adherence.js";
 import { getProgress, getRecentSessions, getRunCompliance } from "./sessions.js";
-import { localDateISO, nowContext } from "./shared.js";
+import { addDaysISO, localDateISO, nowContext } from "./shared.js";
 import { bumpTrainingDataVersion, currentTrainingDataVersion, registerTrainingCacheClear } from "./training-cache.js";
 import { currentMarkerDataVersion } from "./marker-cache.js";
 import type { CoachContext, CoachDayIntake, CoachProgramState } from "./coach-context.js";
@@ -2413,10 +2413,26 @@ export function readinessBand(value: unknown): "low" | "steady" | "primed" | nul
   return "steady";
 }
 
-export function getRecoverySummary(days = 14, garminSummary?: any) {
+export function getRecoverySummary(days = 14, garminSummary?: any, asOfDate = localDateISO()) {
   const windowDays = recoveryWindowDays(days, 14);
-  const today = localDateISO();
-  const garmin = garminSummary ?? getGarminCoachSummary(windowDays);
+  const requestedAsOf = String(asOfDate || localDateISO());
+  const parsedAsOf = /^\d{4}-\d{2}-\d{2}$/.test(requestedAsOf)
+    ? new Date(`${requestedAsOf}T00:00:00Z`)
+    : null;
+  if (
+    !parsedAsOf ||
+    Number.isNaN(parsedAsOf.getTime()) ||
+    parsedAsOf.toISOString().slice(0, 10) !== requestedAsOf
+  ) {
+    throw new Error("as-of date must be a real YYYY-MM-DD");
+  }
+  const today = requestedAsOf;
+  // A caller-supplied aggregate cannot be safely rewound. Preserve the existing
+  // current-date injection path, but rebuild Garmin's summary for historical reads.
+  const garmin =
+    today === localDateISO() && garminSummary != null
+      ? garminSummary
+      : getGarminCoachSummary(windowDays, today);
   const fields = [
     "steps",
     "sleep_min",
@@ -2457,7 +2473,7 @@ export function getRecoverySummary(days = 14, garminSummary?: any) {
   type Signal = (typeof fields)[number];
   type ResolvedRow = { date: string; values: Partial<Record<Signal, any>>; sources: Partial<Record<Signal, string>> };
   const resolveRows = (winDays: number): ResolvedRow[] => {
-    const since = localDateISO(new Date(Date.now() - Math.max(0, winDays - 1) * 864e5));
+    const since = addDaysISO(today, -Math.max(0, winDays - 1)) ?? today;
     const generic = db
       .prepare(`SELECT * FROM daily_metrics WHERE date >= ? AND date <= ? ORDER BY date DESC, updated_at DESC, id DESC`)
       .all(since, today) as Record<string, any>[];
@@ -2510,7 +2526,9 @@ export function getRecoverySummary(days = 14, garminSummary?: any) {
     if (
       activityVo2?.source === "garmin_activity" &&
       activityVo2.latest_value != null &&
-      /^\d{4}-\d{2}-\d{2}$/.test(String(activityVo2.latest_date ?? ""))
+      /^\d{4}-\d{2}-\d{2}$/.test(String(activityVo2.latest_date ?? "")) &&
+      String(activityVo2.latest_date) <= today &&
+      String(activityVo2.latest_date) >= (addDaysISO(today, -Math.max(0, windowDays - 1)) ?? today)
     ) {
       rows.push({
         date: String(activityVo2.latest_date),
@@ -2643,7 +2661,7 @@ export function getRecoverySummary(days = 14, garminSummary?: any) {
   );
   return {
     days: windowDays,
-    since: localDateISO(new Date(Date.now() - Math.max(0, windowDays - 1) * 864e5)),
+    since: addDaysISO(today, -Math.max(0, windowDays - 1)) ?? today,
     sources,
     has_data,
     recovery,
@@ -2653,8 +2671,11 @@ export function getRecoverySummary(days = 14, garminSummary?: any) {
     recent,
     baseline,
     delta,
-    activities: garmin?.activities ?? [],
-    hard_sessions: garmin?.hard_sessions ?? [],
+    activities: (garmin?.activities ?? []).filter((activity: any) => {
+      const date = String(activity?.date ?? activity?.last_date ?? "");
+      return !date || date <= today;
+    }),
+    hard_sessions: (garmin?.hard_sessions ?? []).filter((session: any) => String(session?.date ?? "") <= today),
   };
 }
 

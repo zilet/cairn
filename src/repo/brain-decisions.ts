@@ -337,7 +337,7 @@ export function moveBrainExpectations(fromDecisionId: number, toDecisionId: numb
 
 export function saveBrainRollback(
   decisionId: number,
-  kind: "training_plan" | "nutrition_target" | "meal_plan",
+  kind: "training_plan" | "nutrition_target" | "meal_plan" | "recovery_cycle",
   payload: unknown
 ): boolean {
   if (!getBrainDecision(decisionId)) return false;
@@ -352,9 +352,10 @@ export function saveBrainRollback(
 
 export function getBrainRollback(
   decisionId: number
-): { kind: "training_plan" | "nutrition_target" | "meal_plan"; payload: any } | null {
+): { kind: "training_plan" | "nutrition_target" | "meal_plan" | "recovery_cycle"; payload: any } | null {
   const row = db.prepare(`SELECT kind, payload_json FROM brain_rollbacks WHERE decision_id = ?`).get(decisionId) as any;
-  if (!row || !["training_plan", "nutrition_target", "meal_plan"].includes(String(row.kind))) return null;
+  if (!row || !["training_plan", "nutrition_target", "meal_plan", "recovery_cycle"].includes(String(row.kind)))
+    return null;
   try {
     return { kind: row.kind, payload: JSON.parse(row.payload_json) };
   } catch {

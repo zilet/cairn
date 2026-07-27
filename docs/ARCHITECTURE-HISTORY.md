@@ -4,6 +4,36 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-07-27 — bounded recovery overlays, movement-scoped symptoms, outcome learning v2
+
+Three additive ledgers establish the non-destructive recovery/learning substrate without changing
+`user_version`: `recovery_cycles` owns scheduled → active → recheck → exit-review calendar windows
+and immutable overlay JSON; `training_symptom_events` keeps pain explicitly open/resolved with
+legacy session feedback normalized as unconfirmed; and `movement_tolerance_observations` records
+only stated relevant pain-free/pain-present exposures. A recovery adapter copies a selected plan
+day into an easy roughly half-volume prescription while leaving `plan_items` untouched, calendar
+exit prevents inactivity from extending a cycle, every working load is eased even on a one-set day,
+the overlay accepts only a small normalized scalar allowlist, cooldown prevents repeats, legacy date-only/v1
+recovery stamps remain readable, and blind program-block week advancement pauses only during the
+active/recheck window. Two relevant pain-free exposures make a movement `trial_ready`, never
+resolved; an explicit recurrence starts a new evidence epoch and clears the named movement (or all
+movements when unknown) without deleting history, while unrelated movement and null feedback do nothing. Injury expected-window expiry plus a
+bare later workout now asks for a movement-specific soft recheck rather than silently inferring
+resolution or extending a whole-program reduce-load flag; fresh/recurred injuries remain
+protective.
+
+`daily_session_outcomes.facts_json` is now additive schema v2: stable composition-item, movement,
+and intent identity; complete prescribed/achieved set dose; whole-challenge verdict; and explicit
+recovery/override/travel/illness/symptom/endurance/partial context. Every set/skip/reopen/finish/
+feedback mutation and same-date manual/Garmin activity insert, update, or delete refreshes it
+best-effort. Active movement-relevant symptom-ledger evidence is included even when legacy
+`sessions.joint_pain` text is absent. The bounded `recentMovementResponse()` read requires
+two comparable completed moderate/high-confidence outcomes for the same movement/intent and emits
+only insufficient/contradictory/earned-absorbed/earned-hold; only the two newest comparable
+exposures decide, while older matches remain counted for inspection. Recovery doses and confounded work stay
+visible but cannot become evidence for another structural deload. Progression and daily-composition
+consumption remain explicit later integration hooks.
+
 ## 2026-07-25 — meals remember when they were eaten, one food-capture contract
 
 A three-commit round on the food-capture path: the log finally distinguishes when a meal happened

@@ -135,6 +135,74 @@ CREATE TABLE IF NOT EXISTS daily_session_outcomes (
 );
 CREATE INDEX IF NOT EXISTS idx_daily_outcome_date
   ON daily_session_outcomes(date, id DESC);
+-- Temporary recovery is an overlay on a selected base prescription, never a
+-- rewrite of plan_items. The calendar owns its natural end even when no workout
+-- is logged, so inactivity cannot silently extend a recovery cycle.
+CREATE TABLE IF NOT EXISTS recovery_cycles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  status TEXT NOT NULL CHECK (status IN ('scheduled','active','recheck','exit_review','completed','canceled')),
+  effective_on TEXT NOT NULL,
+  recheck_on TEXT NOT NULL,
+  exit_on TEXT NOT NULL,
+  overlay_json TEXT NOT NULL,
+  reason TEXT,
+  legacy_flag INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  completed_at TEXT,
+  canceled_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_recovery_cycles_window
+  ON recovery_cycles(effective_on, exit_on, id DESC);
+CREATE INDEX IF NOT EXISTS idx_recovery_cycles_status
+  ON recovery_cycles(status, id DESC);
+-- Pain feedback remains movement-scoped and explicitly open until the athlete
+-- resolves it. Legacy session joint_pain rows are normalized as unconfirmed
+-- events rather than treated as whole-body recovery verdicts.
+CREATE TABLE IF NOT EXISTS training_symptom_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
+  source_kind TEXT NOT NULL,
+  area_text TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','resolved')),
+  onset_on TEXT NOT NULL,
+  last_reported_on TEXT NOT NULL,
+  resolved_on TEXT,
+  recurrence_count INTEGER NOT NULL DEFAULT 0,
+  evidence_epoch INTEGER NOT NULL DEFAULT 1,
+  legacy_unconfirmed INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_training_symptom_legacy_source
+  ON training_symptom_events(source_session_id, source_kind)
+  WHERE source_session_id IS NOT NULL AND source_kind = 'legacy_session_feedback';
+CREATE INDEX IF NOT EXISTS idx_training_symptom_active
+  ON training_symptom_events(status, last_reported_on DESC, id DESC);
+CREATE TABLE IF NOT EXISTS movement_tolerance_observations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  symptom_event_id INTEGER NOT NULL REFERENCES training_symptom_events(id) ON DELETE CASCADE,
+  session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
+  exercise_id INTEGER REFERENCES exercises(id) ON DELETE SET NULL,
+  movement_key TEXT NOT NULL,
+  movement_name TEXT NOT NULL,
+  observed_on TEXT NOT NULL,
+  outcome TEXT NOT NULL CHECK (outcome IN ('pain_free','pain_present')),
+  relevant INTEGER NOT NULL,
+  evidence_epoch INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_movement_tolerance_unique_exposure
+  ON movement_tolerance_observations(
+    symptom_event_id, session_id, movement_key, observed_on, outcome, evidence_epoch
+  );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_movement_tolerance_null_session_exposure
+  ON movement_tolerance_observations(
+    symptom_event_id, movement_key, observed_on, outcome, evidence_epoch
+  )
+  WHERE session_id IS NULL;
+CREATE INDEX IF NOT EXISTS idx_movement_tolerance_symptom
+  ON movement_tolerance_observations(symptom_event_id, relevant, outcome, observed_on DESC);
 CREATE TABLE IF NOT EXISTS logged_sets (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,

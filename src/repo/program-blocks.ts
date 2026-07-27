@@ -13,6 +13,7 @@
 
 import { db } from "../db.js";
 import { activeRecoveryWeek, getEnduranceGoal } from "./profile.js";
+import { recoveryCycleAt } from "./recovery-cycles.js";
 import { recordTestWeek } from "./muscle-trajectory.js";
 import { bumpTrainingDataVersion } from "./training-cache.js";
 
@@ -307,6 +308,13 @@ export function advanceBlockWeek(id?: number): ProgramBlock | null {
 
   if (!block) return null;
   if (block.status !== "active") return block; // nothing to advance
+  const recovery = recoveryCycleAt();
+  if (recovery && (recovery.effective_status === "active" || recovery.effective_status === "recheck")) {
+    // The structural block stays put while a temporary overlay is active. No
+    // training log is required to end the overlay; its calendar exit remains
+    // authoritative, so this pause cannot become an inactivity feedback loop.
+    return block;
+  }
 
   const next_week = block.week_index + 1;
   const auto_phase = derivePhase(next_week, block.total_weeks, block.focus);

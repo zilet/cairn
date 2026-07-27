@@ -27,6 +27,7 @@ import {
   validateMealPlanForPersistence,
 } from "../../repo/nutrition.js";
 import { getPlan, replacePlan } from "../../repo/plan.js";
+import { cancelRecoveryCycle, getRecoveryCycle } from "../../repo/recovery-cycles.js";
 import {
   applyProposal,
   getProposal,
@@ -46,6 +47,13 @@ import { setAppStateStrict } from "../../repo/app-state.js";
 import { addDaysISO, localDateISO, parseDbTime } from "../../repo/shared.js";
 import { getSessionByDate } from "../../repo/sessions.js";
 import { withSqliteSavepoint } from "../../repo/sqlite-savepoint.js";
+import {
+  captureProposalEvidence,
+  proposalEvidenceSnapshot,
+  type ProposalFreshness,
+  verifyProposalEvidenceSnapshot,
+  verifyProposalEvidenceFreshness,
+} from "../../repo/proposal-truth.js";
 
 // Ruling A: the two deterministic progression builders — buildProgressionProposal
 // (createProposal agent "auto-progression", src/repo/progression.ts) and
@@ -66,13 +74,19 @@ type ProposalShape = {
 function proposalShape(proposal: any): ProposalShape {
   if (proposal?.parsed?.kind === "nutrition_target")
     return { kind: "nutrition_target", domain: "nutrition", risk: "low" };
+  const recoveryWeek = String(proposal?.instruction ?? "").startsWith(RECOVERY_WEEK_INSTRUCTION_PREFIX);
+  if (
+    recoveryWeek &&
+    (Array.isArray(proposal?.parsed?.days) || Array.isArray(proposal?.parsed?.changes))
+  ) {
+    return { kind: "training_structure", domain: "recovery", risk: "moderate" };
+  }
   if (Array.isArray(proposal?.parsed?.days)) {
     // The canonical recovery-week draft is stamped domain 'recovery' at WRITE time —
     // the conductor's "a lighter recovery week lands <weekday>" claim keys off this
     // structural marker, never off substring-matching the agent's free-text summary
     // (an unrelated restructure whose prose says "lighter" must not qualify).
-    const recoveryWeek = String(proposal?.instruction ?? "").startsWith(RECOVERY_WEEK_INSTRUCTION_PREFIX);
-    return { kind: "training_structure", domain: recoveryWeek ? "recovery" : "training", risk: "moderate" };
+    return { kind: "training_structure", domain: "training", risk: "moderate" };
   }
   // A changes[] payload carrying a swap is an exercise rotation, not a bare target
   // tweak — classify it as such for the ledger. It stays low-risk/quiet_apply and
@@ -80,6 +94,26 @@ function proposalShape(proposal: any): ProposalShape {
   if (Array.isArray(proposal?.parsed?.changes) && proposal.parsed.changes.some((change: any) => change?.swap))
     return { kind: "exercise_rotation", domain: "training", risk: "low" };
   return { kind: "training_target", domain: "training", risk: "low" };
+}
+
+function proposalReasonProvenance(proposal: any): any[] {
+  const parsed = proposal?.parsed ?? {};
+  const owners = [
+    ...(Array.isArray(parsed.changes) ? parsed.changes : []),
+    ...(Array.isArray(parsed.cardio) ? parsed.cardio : []),
+    ...(Array.isArray(parsed.days)
+      ? parsed.days.flatMap((day: any) => (Array.isArray(day?.items) ? day.items : []))
+      : []),
+  ];
+  return owners
+    .filter((owner: any) => owner?.reason)
+    .slice(0, 24)
+    .map((owner: any) => ({
+      day_number: owner?.day_number ?? null,
+      subject: owner?.exercise ?? owner?.label ?? owner?.swap?.to ?? null,
+      reason: owner.reason,
+      reason_provenance: owner?.reason_provenance ?? null,
+    }));
 }
 
 type ProposalReviewReasonCode =
@@ -104,6 +138,7 @@ function holdProposalForReview(
     clinical_provenance?: Record<string, unknown> | null;
     coordination_key?: string | null;
     coordinated_update?: boolean;
+    freshness?: ProposalFreshness | null;
   }
 ): any {
   const reasons = input.reasons.map((reason) => String(reason).trim().slice(0, 300)).filter(Boolean);
@@ -133,8 +168,14 @@ function holdProposalForReview(
       coordinated_update: input.coordinated_update === true,
       evidence_keys: [`plan_proposal:${proposal.id}`, `current_plan:${shape.domain}`],
       evidence_observed_at: new Date().toISOString(),
+      proposal_evidence: proposalEvidenceSnapshot(proposal.parsed),
+      proposal_freshness: input.freshness ?? null,
     },
-    action: { proposal_id: proposal.id, review_reason_code: input.code },
+    action: {
+      proposal_id: proposal.id,
+      review_reason_code: input.code,
+      reason_provenance: proposalReasonProvenance(proposal),
+    },
     specialist: null,
     applied_at: null,
     reverted_at: null,
@@ -328,6 +369,7 @@ function mergeTrainingRollback(before: any[], after: any[], current: any[], swap
 }
 
 function rollbackSnapshot(shape: ProposalShape): any {
+  if (shape.domain === "recovery") return { kind: "recovery_cycle" };
   return shape.domain !== "nutrition"
     ? { kind: "training_plan", plan: trainingPlanSnapshot() }
     : { kind: "nutrition_target", previous: getActiveNutritionTarget() };
@@ -335,6 +377,18 @@ function rollbackSnapshot(shape: ProposalShape): any {
 
 function trainingRollbackPayload(before: any[]): any {
   return { version: 2, before, after: trainingPlanSnapshot() };
+}
+
+function proposalRollbackPayload(rollback: any, result: any): any {
+  if (rollback.kind === "training_plan") return trainingRollbackPayload(rollback.plan);
+  if (rollback.kind === "recovery_cycle") {
+    return {
+      version: 1,
+      cycle_id: Number(result?.recovery_cycle?.id),
+      proposal_id: Number(result?.id),
+    };
+  }
+  return rollback.previous;
 }
 
 function quietApplyMustWait(shape: ProposalShape): boolean {
@@ -604,6 +658,45 @@ export function applyProposalWithAutonomy(
     serverClinicalProvenance(input.clinical_provenance) ??
     serverClinicalProvenance(proposal.parsed?.clinical_provenance);
   const clinical = input.clinical === true || clinicalProvenance !== null;
+  const proposalFreshness =
+    shape.domain === "training" || shape.domain === "recovery"
+      ? verifyProposalEvidenceFreshness(proposal.parsed, localDateISO())
+      : null;
+  const storedProposalEvidence = proposalEvidenceSnapshot(proposal.parsed);
+  const scheduledProposalEvidence =
+    storedProposalEvidence ??
+    (proposalFreshness?.status === "unverified" &&
+    input.explicit_user_request &&
+    (shape.domain === "training" || shape.domain === "recovery")
+      ? captureProposalEvidence(localDateISO())
+      : null);
+  // Compare-and-set is the primary autonomous freshness gate. A proposal whose
+  // source plan or training evidence moved is preserved for review; it is never
+  // silently regenerated or applied. Legacy drafts have no fingerprint and may
+  // still be applied by an explicit current-turn request, but autonomous ownership
+  // cannot claim their inputs are current.
+  if (
+    proposalFreshness &&
+    !input.explicit_user_request &&
+    (proposalFreshness.status === "changed" || proposalFreshness.status === "unverified")
+  ) {
+    const changed = proposalFreshness.changed_components.join(" and ");
+    return holdProposalForReview(proposal, shape, {
+      code: "stale_snapshot",
+      reasons: [
+        proposalFreshness.status === "changed"
+          ? `${changed || "plan or training"} evidence changed after this proposal was created; review it against the current picture`
+          : "this older proposal has no compare-and-set evidence snapshot; review it against the current picture",
+        ...(clinical ? ["clinical decisions remain clinician-directed"] : []),
+      ],
+      tier: clinical ? "clinician" : undefined,
+      clinical,
+      clinical_provenance: clinicalProvenance,
+      coordination_key: input.coordination_key,
+      coordinated_update: input.coordinated_update,
+      freshness: proposalFreshness,
+    });
+  }
   const createdAt = Date.parse(String(proposal.created_at ?? ""));
   const ageDays = Number.isFinite(createdAt) ? Math.max(0, (Date.now() - createdAt) / 86_400_000) : Infinity;
   const freshnessDays = shape.kind === "training_structure" ? 14 : 7;
@@ -619,6 +712,7 @@ export function applyProposalWithAutonomy(
       clinical_provenance: clinicalProvenance,
       coordination_key: input.coordination_key,
       coordinated_update: input.coordinated_update,
+      freshness: proposalFreshness,
     });
   }
   // The magnitude gate must not trust an agent-declared delta (the payload rarely
@@ -728,8 +822,14 @@ export function applyProposalWithAutonomy(
         normalized_apply_payload: input.normalized_apply_payload ?? null,
         evidence_keys: [`plan_proposal:${proposal.id}`, `current_plan:${shape.domain}`],
         evidence_observed_at: new Date().toISOString(),
+        proposal_evidence: scheduledProposalEvidence,
+        proposal_freshness: proposalFreshness,
       },
-      action: { proposal_id: proposal.id },
+      action: {
+        proposal_id: proposal.id,
+        evidence_fingerprint: scheduledProposalEvidence?.fingerprint ?? null,
+        reason_provenance: proposalReasonProvenance(proposal),
+      },
       specialist: null,
       applied_at: null,
       reverted_at: null,
@@ -774,8 +874,14 @@ export function applyProposalWithAutonomy(
         normalized_apply_payload: input.normalized_apply_payload ?? null,
         evidence_keys: [`plan_proposal:${proposal.id}`, `current_plan:${shape.domain}`],
         evidence_observed_at: new Date().toISOString(),
+        proposal_evidence: scheduledProposalEvidence,
+        proposal_freshness: proposalFreshness,
       },
-      action: { proposal_id: proposal.id },
+      action: {
+        proposal_id: proposal.id,
+        evidence_fingerprint: scheduledProposalEvidence?.fingerprint ?? null,
+        reason_provenance: proposalReasonProvenance(proposal),
+      },
       specialist: null,
       applied_at: null,
       reverted_at: null,
@@ -808,7 +914,7 @@ export function applyProposalWithAutonomy(
         !saveBrainRollback(
           decision.id,
           rollback.kind,
-          rollback.kind === "training_plan" ? trainingRollbackPayload(rollback.plan) : rollback.previous
+          proposalRollbackPayload(rollback, result)
         )
       ) {
         throw new Error("the autonomous rollback snapshot was not stored");
@@ -1073,6 +1179,11 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): { applied: nu
     .sort((a, b) => Number(a.id) - Number(b.id));
   const applied: number[] = [];
   const failed: number[] = [];
+  // A sibling that lands earlier in THIS pass changes the plan and therefore makes
+  // later siblings look CAS-stale. Track only those pass-local budget consumers so
+  // their policy reason can win that expected collision. A budget spent before this
+  // call never enters this set, leaving genuine pre-existing staleness authoritative.
+  const budgetLandedInPass = new Set<string>();
   // A decision that cannot apply must reach a terminal/reviewable status here.
   // Leaving it announced/pending would re-select it on every future pass, and a
   // throwing payload would otherwise wedge the boundary applier for every
@@ -1159,26 +1270,65 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): { applied: nu
         continue;
       }
       const shape = proposalShape(proposal);
-      // Re-check the surprise budget at the boundary against what has LANDED this week:
-      // the world may have moved since the decision was recorded — an earlier decision in
-      // this same pass, or a mid-week quiet apply, already used this domain's budget.
-      // Counting 'applied' only (not other pending/announced siblings) keeps two due
-      // decisions from mutually blocking each other: the oldest lands, becomes 'applied',
-      // and then blocks the rest. Nutrition budgets per kind here too, so a landed meal
-      // refresh cannot block a bounded target nudge at its boundary (and vice versa).
       const boundaryBudgetKind = shape.domain === "nutrition" ? shape.kind : undefined;
+      const boundaryBudgetKey = `${shape.domain}:${boundaryBudgetKind ?? "*"}`;
       const coordinated = (announced.context as any)?.coordinated_update === true;
-      // Ruling A: a routine deterministic progression is exempt from the surprise budget
-      // at the boundary too. recordDecision stored source = proposal.agent, so the routine
-      // literals identify it here as at decision time.
       const routineChange = ROUTINE_CHANGE_SOURCES.has(String(announced.source ?? ""));
-      if (
+      const budgetBlocks = () =>
         !routineChange &&
-        !surpriseBudgetAllows(materialChangesThisWeek(shape.domain, ["applied"], boundaryBudgetKind), coordinated)
-      ) {
+        !surpriseBudgetAllows(materialChangesThisWeek(shape.domain, ["applied"], boundaryBudgetKind), coordinated);
+      // Only a budget consumer that landed earlier in THIS pass gets to precede
+      // freshness: its own expected plan mutation caused the sibling's CAS delta.
+      if (budgetLandedInPass.has(boundaryBudgetKey) && budgetBlocks()) {
         parkForReview(announced, "weekly surprise budget already used; review this change before applying");
         continue;
       }
+      const decisionEvidence =
+        announced.context?.proposal_evidence &&
+        typeof announced.context.proposal_evidence === "object" &&
+        !Array.isArray(announced.context.proposal_evidence) &&
+        announced.context.proposal_evidence.version === 1
+          ? announced.context.proposal_evidence
+          : null;
+      const boundaryFreshness =
+        shape.domain === "training" || shape.domain === "recovery"
+          ? decisionEvidence
+            ? verifyProposalEvidenceSnapshot(decisionEvidence as any, asOf)
+            : verifyProposalEvidenceFreshness(proposal.parsed, asOf)
+          : null;
+      if (
+        boundaryFreshness &&
+        (boundaryFreshness.status === "changed" || boundaryFreshness.status === "unverified")
+      ) {
+        const changed = boundaryFreshness.changed_components.join(" and ");
+        patchBrainDecision(announced.id!, {
+          status: "review",
+          autonomy_tier: "ask",
+          reversible: false,
+          context: {
+            ...(announced.context ?? {}),
+            review_required: true,
+            review_reason_code: "stale_snapshot",
+            review_reasons: [
+              boundaryFreshness.status === "changed"
+                ? `${changed || "plan or training"} evidence changed before the apply boundary`
+                : "the proposal has no compare-and-set evidence snapshot",
+            ],
+            proposal_freshness: boundaryFreshness as any,
+          },
+        });
+        failed.push(announced.id!);
+        continue;
+      }
+      // With no pass-local collision, freshness has had first refusal. Now apply the
+      // ordinary weekly budget, including changes that landed before this pass began.
+      if (budgetBlocks()) {
+        parkForReview(announced, "weekly surprise budget already used; review this change before applying");
+        continue;
+      }
+      // Age is a secondary ceiling after the evidence compare-and-set above. A
+      // young proposal can still be stale when the plan changed; an unchanged
+      // snapshot can still age out and require a fresh review.
       const createdAt = Date.parse(String(proposal.created_at ?? ""));
       const freshnessDays = shape.kind === "training_structure" ? 14 : 7;
       const ageDays = Number.isFinite(createdAt) ? Math.max(0, (Date.now() - createdAt) / 86_400_000) : Infinity;
@@ -1199,6 +1349,9 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): { applied: nu
       }
       const orphanCleanup = (announced.context as any)?.orphan_sibling_cleanup;
       const rollback = rollbackSnapshot(shape);
+      const materialChangesBeforeApply = routineChange
+        ? 0
+        : materialChangesThisWeek(shape.domain, ["applied"], boundaryBudgetKind);
       withSqliteSavepoint(`due_proposal_${announced.id}`, () => {
         const result = applyProposal(proposalId, {
           // Only the orphan-repair path carries a semantic intent + grace cutoff.
@@ -1227,6 +1380,7 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): { applied: nu
               : undefined,
           decisionId: announced.id!,
           requireDecisionLedger: true,
+          freshnessCheckedAt: asOf,
         }) as any;
         if (!result?.ok) throw new Error(String(result?.error ?? "the change could not be applied"));
         const updated = getBrainDecision(announced.id!);
@@ -1235,7 +1389,7 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): { applied: nu
           !saveBrainRollback(
             announced.id!,
             rollback.kind,
-            rollback.kind === "training_plan" ? trainingRollbackPayload(rollback.plan) : rollback.previous
+            proposalRollbackPayload(rollback, result)
           )
         ) {
           throw new Error("the autonomous rollback snapshot was not stored");
@@ -1252,6 +1406,13 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): { applied: nu
         }
       });
       applied.push(announced.id!);
+      if (
+        !routineChange &&
+        materialChangesBeforeApply < 1 &&
+        materialChangesThisWeek(shape.domain, ["applied"], boundaryBudgetKind) >= 1
+      ) {
+        budgetLandedInPass.add(boundaryBudgetKey);
+      }
     } catch (error: any) {
       parkForReview(announced, String(error?.message ?? error ?? "unexpected apply error"));
     }
@@ -1341,10 +1502,24 @@ export function revertDecision(id: number, reason = "user veto"): { ok: boolean;
         if (appliedId > 0 && Number(current?.id) === appliedId) {
           restoreMealPlanAfterUndo(appliedId, previousId > 0 ? previousId : null);
         }
+      } else if (rollback?.kind === "recovery_cycle" && rollback.payload?.version === 1) {
+        const cycleId = Number(rollback.payload.cycle_id);
+        const proposalId = Number(rollback.payload.proposal_id);
+        const cycle = getRecoveryCycle(cycleId, localDateISO());
+        const action = decision.action as any;
+        const ownsCycle =
+          cycleId > 0 &&
+          proposalId > 0 &&
+          Number(action?.recovery_cycle_id) === cycleId &&
+          Number(action?.plan_proposal_id) === proposalId &&
+          Number(cycle?.overlay?.source_proposal_id) === proposalId &&
+          Number(cycle?.overlay?.source_decision_id) === id;
+        if (!ownsCycle) throw new Error("recovery-cycle rollback ownership no longer matches");
+        cancelRecoveryCycle(cycleId, localDateISO());
       } else {
         throw new Error("rollback snapshot unavailable");
       }
-      if (rollback.kind === "training_plan") {
+      if (rollback.kind === "training_plan" || rollback.kind === "recovery_cycle") {
         const proposalId = Number((decision.action as any)?.plan_proposal_id ?? (decision.action as any)?.proposal_id);
         if (proposalId > 0) revertRecoveryWeekIfOwned(proposalId, { strict: true });
       }

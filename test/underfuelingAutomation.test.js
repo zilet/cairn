@@ -279,12 +279,14 @@ test("persistent strain links a reversible recovery week and fuel step, applies 
   const due = applyDueAnnouncedDecisions("2099-01-01");
   assert.equal(due.applied.length, 2);
   assert.equal(repo.getActiveNutritionTarget().target_kcal, 2450, "fuel moves no more than 250 kcal toward maintenance");
-  assert.equal(repo.getPlanDay(1).items[0].sets, 2, "working-set volume is halved");
-  assert.equal(repo.getPlanDay(1).items[0].target_weight, 166.5, "load is reduced and rounded conservatively");
-  assert.equal(repo.getPlanDay(2).items[0].target_zone, "Z1-Z2", "endurance frequency remains but intensity eases");
+  assert.deepEqual(planShape(repo.getPlan()), priorPlan, "the stable weekly plan remains unchanged");
+  const recoveryCycle = repo.recoveryCycleAt(first.recovery.effective_date);
+  assert.equal(recoveryCycle.effective_status, "active");
+  assert.equal(recoveryCycle.overlay.source_decision_id, first.recovery.decision.id);
 
   assert.equal(revertDecision(first.recovery.decision.id, "resume the prior build").ok, true);
-  assert.deepEqual(planShape(repo.getPlan()), priorPlan, "recovery Undo restores the prior plan");
+  assert.deepEqual(planShape(repo.getPlan()), priorPlan, "recovery Undo never rewrites the prior plan");
+  assert.equal(repo.getRecoveryCycle(recoveryCycle.id, first.recovery.effective_date).effective_status, "canceled");
   assert.equal(revertDecision(first.nutrition.decision.id, "restore the prior target").ok, true);
   assert.equal(repo.getActiveNutritionTarget().target_kcal, 2200, "fuel Undo restores the prior target");
 });

@@ -12,6 +12,8 @@ beforeEach(() => {
     "session_skips",
     "sessions",
     "day_reads",
+    "context_events",
+    "checkins",
     "plan_items",
     "plan_days"
   );
@@ -136,12 +138,15 @@ test("accepted agent session reloads with the same session id and complete presc
         rep_low: 10,
         rep_high: 12,
         target_weight: null,
-        note: null,
+        note: "NEW — establishing a baseline; keep it light and log the actual load",
       },
     ]
   );
   assert.equal(reloaded.plan_day_id, null);
-  assert.deepEqual(direct.constraints, { focus: "chest + deadlift", minutes: 30 });
+  assert.equal(direct.constraints.focus, "chest + deadlift");
+  assert.equal(direct.constraints.minutes, 30);
+  assert.equal(direct.constraints.train_anyway, false);
+  assert.match(direct.constraints.daily_decision.input_fingerprint, /^[a-f0-9]{64}$/);
   assert.equal(direct.provenance.verification, "verified_agent_job");
   assert.equal(direct.provenance.agent, "codex");
   assert.deepEqual(repo.getPlan(), planBefore, "custom preparation never mutates the weekly template");
@@ -194,6 +199,69 @@ test("adaptive prepare snapshots the selected plan day, keeps cardio fields, and
   const replaceRetry = prepare({ date: DATE, source: "adaptive_plan", replace: true });
   assert.equal(replaceRetry.reused, true);
   assert.equal(replaceRetry.daily_session.id, first.daily_session.id);
+});
+
+test("an unstarted adaptive retry recomputes current plan evidence before reusing", () => {
+  seedPlan();
+  const first = prepare({ date: DATE, source: "adaptive_plan" });
+  const firstBench = first.daily_session.items.find((item) => item.exercise === "Barbell Bench Press");
+  assert.equal(firstBench.target_weight, 185);
+
+  repo.savePlanDay(1, "Push + hinge", "Chest and posterior chain", [
+    { exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 175 },
+    { exercise: "Barbell Deadlift", sets: 2, rep_low: 3, rep_high: 5, target_weight: 295 },
+  ]);
+  const refreshed = prepare({ date: DATE, source: "adaptive_plan" });
+  assert.equal(refreshed.reused, false);
+  assert.equal(refreshed.daily_session.version, 2);
+  assert.notEqual(
+    refreshed.daily_session.decision.input_fingerprint,
+    first.daily_session.decision.input_fingerprint
+  );
+  assert.equal(
+    refreshed.daily_session.items.find((item) => item.exercise === "Barbell Bench Press").target_weight,
+    175
+  );
+});
+
+test("an unstarted adaptive retry refreshes when a new injury changes the envelope", () => {
+  seedPlan();
+  const first = prepare({ date: DATE, source: "adaptive_plan" });
+  assert.ok(first.daily_session.items.some((item) => item.exercise === "Barbell Bench Press"));
+  repo.addContextEvent({
+    kind: "injury",
+    title: "Left shoulder",
+    start_date: DATE,
+    meta: { area: "shoulder", severity: "moderate" },
+  });
+
+  const refreshed = prepare({ date: DATE, source: "adaptive_plan" });
+  assert.equal(refreshed.reused, false);
+  assert.equal(refreshed.daily_session.version, 2);
+  assert.ok(!refreshed.daily_session.items.some((item) => item.exercise === "Barbell Bench Press"));
+  assert.ok(refreshed.daily_session.decision.hard_constraints.some((item) => item.code === "injury_exclusion"));
+});
+
+test("the same adaptive identity remains locked after meaningful work starts", () => {
+  seedPlan();
+  const first = prepare({ date: DATE, source: "adaptive_plan" });
+  repo.logSetByName({
+    date: DATE,
+    exercise: "Barbell Bench Press",
+    weight: 185,
+    reps: 6,
+    day_number: 1,
+  });
+  repo.savePlanDay(1, "Push + hinge", "Changed after work began", [
+    { exercise: "Barbell Bench Press", sets: 2, rep_low: 8, rep_high: 10, target_weight: 165 },
+  ]);
+  const retry = prepare({ date: DATE, source: "adaptive_plan", replace: true });
+  assert.equal(retry.reused, true);
+  assert.equal(retry.daily_session.id, first.daily_session.id);
+  assert.equal(
+    retry.daily_session.items.find((item) => item.exercise === "Barbell Bench Press").target_weight,
+    185
+  );
 });
 
 test("explicit day override snapshots that day and links its existing session", () => {
@@ -358,6 +426,66 @@ test("canonical agent-job retry is idempotent after logging starts", () => {
   assert.equal(retry.reused, true);
   assert.equal(retry.daily_session.id, first.daily_session.id);
   assert.equal(retry.session.id, first.session.id);
+});
+
+test("legacy session suggestions are revalidated against the current rest envelope at acceptance", () => {
+  seedPlan();
+  repo.addCheckin(DATE, { sleep_feel: 1, energy: 3, mood: 3 });
+  assert.equal(repo.decideDailySession(DATE).envelope.kind, "rest");
+  const job = completedSuggestionJob({
+    name: "Unbounded strength",
+    why: "Old suggestion from before recovery changed.",
+    est_minutes: 60,
+    items: [
+      {
+        exercise: "Barbell Bench Press",
+        sets: 6,
+        rep_low: 3,
+        rep_high: 5,
+        target_weight: 185,
+      },
+    ],
+  });
+
+  const accepted = prepare({
+    date: DATE,
+    source: "agent_suggest",
+    agent_job_id: job.id,
+  });
+  assert.equal(accepted.daily_session.decision.kind, "rest");
+  assert.equal(accepted.daily_session.decision.train_anyway, false);
+  assert.deepEqual(accepted.daily_session.items, []);
+  assert.equal(accepted.daily_session.plan_day_id, null);
+});
+
+test("legacy train-intent agent input persists train_anyway and conservative rest-day caps", () => {
+  seedPlan();
+  repo.addCheckin(DATE, { sleep_feel: 1, energy: 3, mood: 3 });
+  const job = completedSuggestionJob(suggestedSession(), { override: "push" });
+  const accepted = prepare({
+    date: DATE,
+    source: "agent_suggest",
+    agent_job_id: job.id,
+  });
+  assert.equal(accepted.daily_session.decision.baseline_kind, "rest");
+  assert.equal(accepted.daily_session.decision.kind, "train");
+  assert.equal(accepted.daily_session.decision.train_anyway, true);
+  assert.equal(accepted.daily_session.decision.caps.volume, "reduced");
+  assert.equal(accepted.daily_session.decision.caps.intensity, "deload");
+  assert.ok(accepted.daily_session.items.every((item) => item.sets == null || item.sets <= 3));
+});
+
+test("negated legacy override cannot become train_anyway during adaptive preparation", () => {
+  seedPlan();
+  repo.addCheckin(DATE, { sleep_feel: 1, energy: 3, mood: 3 });
+  const accepted = prepare({
+    date: DATE,
+    source: "adaptive_plan",
+    constraints: { day_read_override: "don't train" },
+  });
+  assert.equal(accepted.daily_session.decision.baseline_kind, "rest");
+  assert.equal(accepted.daily_session.decision.kind, "rest");
+  assert.equal(accepted.daily_session.decision.train_anyway, false);
 });
 
 test("distinct canonical agent jobs create distinct versions even with identical prescriptions", () => {

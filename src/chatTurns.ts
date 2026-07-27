@@ -762,6 +762,24 @@ export function hasExplicitPlanEditIntent(message: string | null | undefined): b
   return verb.test(text) && object.test(text);
 }
 
+// A symptom record is a bounded factual capture, but still durable health-adjacent
+// state. The model may only write it when the athlete independently asks Cairn to
+// record it; merely mentioning pain or asking a question is not mutation authority.
+export function hasExplicitSymptomReportIntent(message: string | null | undefined): boolean {
+  const text = String(message ?? "")
+    .replace(/[‘’]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return false;
+  const write = /\b(?:log|record|note|track|save|add|report)\b/i;
+  const symptom = /\b(?:pain|painful|ache|aching|aches|hurt|hurts|sore|soreness|discomfort|niggle)\b/i;
+  const resolvedOrNegated =
+    /\b(?:resolved|pain[- ]free|no longer (?:hurts?|aching|aches|sore|painful)|not (?:in pain|hurting|aching|sore|painful)|(?:does(?:n't|nt| not)|did(?:n't|nt| not)) (?:hurt|ache)|(?:is(?:n't|nt| not)|was(?:n't|nt| not)) (?:hurting|aching|sore|painful)|(?:pain|ache|aching|soreness|discomfort|niggle) (?:(?:is|has|feels?) (?:gone|resolved|cleared)|(?:went|has gone) away)|no (?:pain|ache|aching|soreness|discomfort|niggle))\b/i;
+  const negatedWrite =
+    /\b(?:do not|don't|dont|never|stop|avoid)\b[\s\S]{0,32}\b(?:log|record|note|track|save|add|report)\b/i;
+  return write.test(text) && symptom.test(text) && !resolvedOrNegated.test(text) && !negatedWrite.test(text);
+}
+
 function decisionReferences(text: string): number[] {
   return [...text.matchAll(/\bdecision\s*(?:#\s*|id\s*)?(\d+)\b/gi)]
     .map((match) => Number(match[1]))
@@ -2410,6 +2428,17 @@ export function applyChatActions(
           // At-home body measurements ("waist 34, chest 42, arms 15") apply immediately —
           // a safe capture like log_food; returns the row + fresh indicators.
           applied.push({ type: a.type, result: repo.applyMeasurementAction(a) });
+          break;
+        case "report_training_symptom":
+          if (!hasExplicitSymptomReportIntent(message)) break;
+          applied.push({
+            type: a.type,
+            result: repo.reportTrainingSymptom({
+              area_text: a.area_text,
+              onset_on: stringOrUndefined(a.onset_on),
+              source_kind: "chat_explicit",
+            }),
+          });
           break;
         case "plan_update":
           // Text-only food turns still cannot trigger plan edits. An attached

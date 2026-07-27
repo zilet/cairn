@@ -29,11 +29,11 @@ import { planDayFocus, planDayCandidates, selectAdaptivePlanDay } from "./plan-s
 import { getProposal } from "./profile.js";
 import {
   movementTenureWeeks,
-  painAreaLoadsExercise,
   planDayProgression,
   recentAutoregulation,
   type Prescription,
 } from "./progression.js";
+import { painAreaLoadsExercise } from "./pain-relevance.js";
 import { directivesForCoach } from "./propagation.js";
 import { localDateISO } from "./shared.js";
 
@@ -65,6 +65,10 @@ export interface SessionPrimer {
   watch: SessionPrimerWatch[];
   fresh: SessionPrimerFresh[];
   approach: string | null;
+  decision_fingerprint: string | null;
+  decision_policy_version: string | null;
+  decision_kind: "train" | "easy" | "rest" | null;
+  provenance_label: "Adapted for today" | "Training by choice" | null;
 }
 
 const MAX_CHANGED = 4;
@@ -352,6 +356,42 @@ export function sessionPrimer(
   opts: { dayNumber?: number | null } = {}
 ): SessionPrimer | null {
   const d = String(date || localDateISO()).slice(0, 10);
+  const accepted = (() => {
+    try {
+      const row = db
+        .prepare(
+          `SELECT dsc.plan_day_id, dsc.focus, dsc.why, dsc.items_json, dsc.provenance_json,
+                  pd.day_number
+             FROM daily_session_compositions dsc
+             LEFT JOIN plan_days pd ON pd.id = dsc.plan_day_id
+            WHERE dsc.date = ? AND dsc.status = 'active'
+            ORDER BY dsc.version DESC LIMIT 1`
+        )
+        .get(d) as any;
+      if (!row) return null;
+      const provenance = (() => {
+        try {
+          return row.provenance_json ? JSON.parse(row.provenance_json) : null;
+        } catch {
+          return null;
+        }
+      })();
+      const items = (() => {
+        try {
+          return row.items_json ? JSON.parse(row.items_json) : [];
+        } catch {
+          return [];
+        }
+      })();
+      return { ...row, provenance, items };
+    } catch {
+      return null;
+    }
+  })();
+  const acceptedDecision =
+    accepted?.provenance?.daily_decision && typeof accepted.provenance.daily_decision === "object"
+      ? accepted.provenance.daily_decision
+      : null;
 
   // 1) Resolve the plan day being opened.
   let dayNumber: number | null = null;
@@ -360,6 +400,9 @@ export function sessionPrimer(
     dayNumber = Number(opts.dayNumber);
     focus = focusForDay(dayNumber);
     if (focus == null) return null; // an explicit day that isn't on the plan → nothing to prime
+  } else if (accepted) {
+    dayNumber = Number.isFinite(Number(accepted.day_number)) ? Number(accepted.day_number) : null;
+    focus = accepted.focus == null ? null : String(accepted.focus);
   } else {
     const sel = (() => {
       try {
@@ -390,20 +433,28 @@ export function sessionPrimer(
         return null;
       }
     })();
-  const why_today = String(read?.why || "").replace(/\s+/g, " ").trim();
+  const why_today = String(accepted?.why || read?.why || "").replace(/\s+/g, " ").trim();
 
   // 3) The three quiet sections + the approach line.
   const prescriptions = (() => {
+    if (dayNumber == null) return [] as Prescription[];
     try {
       return planDayProgression(dayNumber);
     } catch {
       return [] as Prescription[];
     }
   })();
-  const movements = strengthMovementsForDay(dayNumber);
+  const movements =
+    dayNumber != null
+      ? strengthMovementsForDay(dayNumber)
+      : (Array.isArray(accepted?.items) ? accepted.items : [])
+          .filter((item: any) => item?.kind !== "cardio")
+          .map((item: any) => String(item?.exercise ?? "").trim())
+          .filter(Boolean);
   // Earned/recovery target deltas from the prescriptions, plus applied exercise
   // rotations the coach landed since the athlete last trained — both are "what changed".
-  const rotations = appliedRotationsForDay(dayNumber, movements, lastComparableSessionDate(d));
+  const rotations =
+    dayNumber != null ? appliedRotationsForDay(dayNumber, movements, lastComparableSessionDate(d)) : [];
   const changed = [...changedFromPrescriptions(prescriptions), ...rotations.map((r) => r.change)].slice(0, MAX_CHANGED);
   const watch = buildWatch(movements, read);
   // A movement the coach deliberately swapped in reads as a rotation in changed[], so it
@@ -416,9 +467,36 @@ export function sessionPrimer(
 
   // Silence beats filler: with no changes, no watch items and nothing fresh, the
   // primer would only echo the Brief — so there's genuinely nothing to say.
-  if (!changed.length && !watch.length && !fresh.length) return null;
+  const decisionFingerprint =
+    typeof acceptedDecision?.input_fingerprint === "string" ? acceptedDecision.input_fingerprint : null;
+  if (!changed.length && !watch.length && !fresh.length && !decisionFingerprint) return null;
 
-  const approach = buildApproach(changed, fresh, read);
+  const approach =
+    acceptedDecision?.train_anyway === true
+      ? "You chose to train; keep the conservative bounds and let how it feels lead."
+      : buildApproach(changed, fresh, read);
 
-  return { date: d, day_number: dayNumber, focus, why_today, changed, watch, fresh, approach };
+  return {
+    date: d,
+    day_number: dayNumber,
+    focus,
+    why_today,
+    changed,
+    watch,
+    fresh,
+    approach,
+    decision_fingerprint: decisionFingerprint,
+    decision_policy_version:
+      typeof acceptedDecision?.policy_version === "string" ? acceptedDecision.policy_version : null,
+    decision_kind:
+      acceptedDecision?.kind === "train" || acceptedDecision?.kind === "easy" || acceptedDecision?.kind === "rest"
+        ? acceptedDecision.kind
+        : null,
+    provenance_label:
+      accepted?.provenance?.choice === "training_by_choice"
+        ? "Training by choice"
+        : accepted?.provenance?.choice === "adapted_for_today"
+          ? "Adapted for today"
+          : null,
+  };
 }

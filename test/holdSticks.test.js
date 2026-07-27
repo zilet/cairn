@@ -241,9 +241,9 @@ test("a user hold counts as a veto for re-proposal without affecting demotion", 
   assert.equal(repo.hasRecentDecisionVeto("training_target", 5), true, "a user hold is a recent veto");
 
   // A routine builder rebuilds a same-kind twin: the veto makes adoption ANNOUNCE, not quiet-apply.
+  repo.setSettings({ lead_mode: "lead" });
   const twin = benchDraft("auto: rebuilt bench read", 201);
   backdateHours(twin.id, 3);
-  repo.setSettings({ lead_mode: "lead" });
   const sweep = adoptOrphanedDrafts();
   assert.equal(sweep.adopted, 1, "the rebuilt twin is adopted");
   const twinDecision = repo

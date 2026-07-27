@@ -42,6 +42,8 @@ type TodayBriefActionsDayRead = import("../contracts/client.js").ClientDayRead &
       void openSession(undefined, {
         source: "adaptive_plan",
         trigger,
+        trainAnyway: action === "reveal-plan",
+        replace: action === "reveal-plan",
         provenance: { entry: action === "reveal-plan" ? "train_anyway" : "brief_start" },
       });
       return;

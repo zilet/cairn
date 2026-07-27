@@ -134,7 +134,9 @@ test("applying a proposal ADDS a movement that isn't on the day yet (not a silen
   assert.equal(row.target_weight, null, "no exact-exercise history means the agent does not invent a starting load");
   assert.equal(r.added[0].target_weight, null, "the apply receipt reflects the stored bounded prescription");
   assert.ok(r.clamped.some((entry) => entry.exercise === "ZSingleArmRow" && entry.applied === null));
-  assert.match(row.note || "", /back volume/i, "carries the coach's reason as the note");
+  assert.doesNotMatch(row.note || "", /back volume/i, "historical rationale stays out of the reusable plan note");
+  const decision = repo.listBrainDecisions({ limit: 10 }).find((item) => item.source_ref_key === String(p.id));
+  assert.match(decision?.rationale || "", /back volume/i, "the decision ledger preserves the coach rationale");
   assert.equal(repo.getProposal(p.id).status, "applied", "marked applied because it really applied");
 });
 

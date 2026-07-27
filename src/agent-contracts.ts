@@ -25,6 +25,7 @@
 
 import { type JsonSchema, matchesJsonSchema } from "./json-schema.js";
 import { assessMealPlanAdequacy } from "./repo/nutrition-safety.js";
+import { reasonHasHistoricalReference, validReasonProvenance } from "./repo/proposal-truth.js";
 import {
   DAILY_SESSION_SUGGESTION_NORMALIZATION,
   normalizeSessionSuggestionResult,
@@ -95,6 +96,19 @@ const RUN_PRESCRIPTION_PROPERTIES: Record<string, JsonSchema> = {
   interval: RUN_INTERVAL_SCHEMA,
 };
 
+const REASON_PROVENANCE_SCHEMA: JsonSchema = {
+  type: "object",
+  additionalProperties: true,
+  required: ["reason_code", "evidence_date", "as_of_date"],
+  properties: {
+    reason_code: { type: "string", minLength: 1 },
+    evidence_date: { type: "string", minLength: 10 },
+    as_of_date: { type: "string", minLength: 10 },
+    source_ref_type: { type: ["string", "null"] },
+    source_ref_key: { type: ["string", "null"] },
+  },
+};
+
 const PLAN_CHANGE_SCHEMA: JsonSchema = {
   type: "object",
   additionalProperties: true,
@@ -116,6 +130,7 @@ const PLAN_CHANGE_SCHEMA: JsonSchema = {
     target_seconds: { type: ["number", "null"], minimum: 0 },
     mode: { type: ["string", "null"] },
     reason: { type: "string" },
+    reason_provenance: REASON_PROVENANCE_SCHEMA,
     note: { type: ["string", "null"] },
     // kind:"cardio" reroutes this entry to the run prescription mapper.
     kind: { type: "string" },
@@ -130,6 +145,7 @@ const PLAN_CARDIO_SCHEMA: JsonSchema = {
   properties: {
     day_number: { type: "integer", minimum: 1 },
     reason: { type: "string" },
+    reason_provenance: REASON_PROVENANCE_SCHEMA,
     note: { type: ["string", "null"] },
     ...RUN_PRESCRIPTION_PROPERTIES,
     label: { type: "string", minLength: 1 },
@@ -144,6 +160,8 @@ export const PLAN_PROPOSAL_SCHEMA: JsonSchema = {
     summary: { type: "string", minLength: 1 },
     notes: { type: ["string", "null"] },
     rationale: { type: ["string", "null"] },
+    rationale_provenance: REASON_PROVENANCE_SCHEMA,
+    as_of_date: { type: ["string", "null"] },
     changes: { type: "array", items: PLAN_CHANGE_SCHEMA },
     cardio: { type: "array", items: PLAN_CARDIO_SCHEMA },
     days: {
@@ -173,6 +191,8 @@ export const PLAN_PROPOSAL_SCHEMA: JsonSchema = {
                 target_seconds: { type: ["number", "null"], minimum: 0 },
                 superset_group: { type: ["integer", "null"] },
                 note: { type: ["string", "null"] },
+                reason: { type: ["string", "null"] },
+                reason_provenance: REASON_PROVENANCE_SCHEMA,
                 warmup_sets: { type: ["integer", "null"], minimum: 0 },
                 mode: { type: ["string", "null"] },
                 // Read only by plan-quality's canonicalGroup — measured DROPPED when unnamed.
@@ -205,11 +225,40 @@ export function isPlanProposalResult(value: unknown): boolean {
     const change = object(raw);
     if (!change) return false;
     const swap = object(change.swap);
-    return text(change.exercise) || !!(swap && text(swap.from) && text(swap.to));
+    const reasonOk =
+      !reasonHasHistoricalReference(change.reason) || validReasonProvenance(change.reason_provenance);
+    return reasonOk && (text(change.exercise) || !!(swap && text(swap.from) && text(swap.to)));
   });
-  const cardioOk = !hasCardio || p.cardio.every((raw: unknown) => !!object(raw) && text(object(raw)?.label));
-  const daysOk = !hasDays || p.days.every((raw: unknown) => text(object(raw)?.name));
-  return changesOk && cardioOk && daysOk;
+  const cardioOk =
+    !hasCardio ||
+    p.cardio.every((raw: unknown) => {
+      const cardio = object(raw);
+      return (
+        !!cardio &&
+        text(cardio.label) &&
+        (!reasonHasHistoricalReference(cardio.reason) || validReasonProvenance(cardio.reason_provenance))
+      );
+    });
+  const daysOk =
+    !hasDays ||
+    p.days.every((raw: unknown) => {
+      const day = object(raw);
+      return (
+        text(day?.name) &&
+        (!Array.isArray(day?.items) ||
+          day.items.every((item: unknown) => {
+            const planItem = object(item);
+            return (
+              !!planItem &&
+              (!reasonHasHistoricalReference(planItem.reason) ||
+                validReasonProvenance(planItem.reason_provenance))
+            );
+          }))
+      );
+    });
+  const rationaleOk =
+    !reasonHasHistoricalReference(p.rationale) || validReasonProvenance(p.rationale_provenance);
+  return changesOk && cardioOk && daysOk && rationaleOk;
 }
 
 export function hasPlanProposalActions(value: unknown): boolean {

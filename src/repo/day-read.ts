@@ -1269,7 +1269,9 @@ export function dayPlanningSignalState(date: string, provided: DayPlanningSignal
       expenditure,
       underfueling: provided.underfueling ?? signalInput(() => currentUnderfuelingRead(date), null),
       context: provided.context ?? signalInput(() => activeContextEffect(date), null),
-      contextEvents: provided.contextEvents ?? signalInput(() => listContextEvents({ activeOnly: true }) as any[], []),
+      contextEvents:
+        provided.contextEvents ??
+        signalInput(() => listContextEvents({ activeOnly: true, on: date }) as any[], []),
       completedToday: provided.completedToday ?? false,
     });
   });
@@ -1495,13 +1497,7 @@ export function dayRead(
   // usually train around it). Null-safe; absent context changes nothing.
   const contextEvents = (() => {
     try {
-      return (listContextEvents() as any[]).filter(
-        (event) =>
-          !event?.archived &&
-          !event?.resolved &&
-          (!event?.start_date || event.start_date <= d) &&
-          (!event?.end_date || event.end_date >= d)
-      );
+      return listContextEvents({ activeOnly: true, on: d }) as any[];
     } catch {
       return [];
     }

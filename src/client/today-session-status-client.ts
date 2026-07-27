@@ -404,7 +404,7 @@ type DoneRuntimeGlobals = typeof globalThis & {
     return `<button class="checkin-open" id="feedbackOpen" type="button">
       <span class="checkin-open-dot" aria-hidden="true"></span>
       how did that feel?
-    </button>`;
+    </button><div data-symptom-lifecycle></div>`;
   }
 
   function todayFeedbackScaleHtml(kind: FeelKind, label: string): string {
@@ -431,7 +431,7 @@ type DoneRuntimeGlobals = typeof globalThis & {
           placeholder="any joint or area? (e.g. left knee)" value="${escAttr(joint)}"${hasJoint ? "" : " hidden"}>
       </div>
       <button class="checkin-dismiss" id="feedbackDismiss" type="button" aria-label="Not now">✕</button>
-    </div>`;
+    </div><div data-symptom-lifecycle></div>`;
   }
 
   function todayFeedbackDoneHtml(session: SessionLike): string {
@@ -444,7 +444,7 @@ type DoneRuntimeGlobals = typeof globalThis & {
     return `<div class="checkin-done feedback-done chip-in">
       <span class="checkin-done-mark" aria-hidden="true">✓</span> ${parts.join(" · ")}
       <button class="linkbtn linkbtn-plain linkbtn-sm feedback-edit" id="feedbackEdit" type="button">edit</button>
-    </div>`;
+    </div><div data-symptom-lifecycle></div>`;
   }
 
   function todaySkipNameHtml(name: unknown): string {

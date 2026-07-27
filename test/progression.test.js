@@ -374,9 +374,19 @@ test("MCP apply_progression mirrors REST proposal shape and supersedes stale sam
       rep_high: 8,
       reason: first.proposal.parsed.changes[0].reason,
       target_weight: 190,
+      reason_provenance: first.proposal.parsed.changes[0].reason_provenance,
     },
   ]);
   assert.ok(first.proposal.parsed.changes[0].reason, "change carries a plain-words reason");
+  const reasonProvenance = first.proposal.parsed.changes[0].reason_provenance;
+  assert.deepEqual(reasonProvenance, {
+    reason_code: "training_evidence",
+    evidence_date: isoDaysAgo(5),
+    as_of_date: new Date().toISOString().slice(0, 10),
+    source_ref_type: "training_evidence_snapshot",
+    source_ref_key: reasonProvenance.source_ref_key,
+  });
+  assert.match(reasonProvenance.source_ref_key, /^[a-f0-9]{64}$/);
   assert.ok(!first.proposal.parsed.changes.some((c) => c.exercise === "Overhead Press"), "hold prescriptions stay out of apply proposals");
 
   const second = await callProgramTool("apply_progression", { day: 1 });

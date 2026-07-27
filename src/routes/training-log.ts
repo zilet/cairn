@@ -25,6 +25,11 @@ import {
   listActivities,
   logSetByName,
   recentTraining,
+  recordMovementTolerance,
+  recurTrainingSymptom,
+  reportTrainingSymptom,
+  resolveTrainingSymptom,
+  listTrainingSymptoms,
   resolveImplicitPlanDay,
   reopenSession,
   sessionHighlights,
@@ -39,6 +44,110 @@ import {
 } from "../domain/training/index.js";
 
 export const trainingLogRouter = Router();
+
+function positiveId(value: unknown, field: string): number {
+  const id = Number(value);
+  if (!Number.isInteger(id) || id <= 0) throw new Error(`${field} must be a positive integer`);
+  return id;
+}
+
+function boundedText(value: unknown, field: string, max: number, required = false): string | undefined {
+  if (value == null) {
+    if (required) throw new Error(`${field} required`);
+    return undefined;
+  }
+  const text = String(value).trim();
+  if (required && !text) throw new Error(`${field} required`);
+  if (text.length > max) throw new Error(`${field} must be ${max} characters or fewer`);
+  return text || undefined;
+}
+
+// The athlete-owned movement-symptom lifecycle. Reads are calm evidence only:
+// trial readiness remains movement-specific and never resolves the symptom.
+trainingLogRouter.get("/training-symptoms", (req, res) => {
+  try {
+    res.json(
+      listTrainingSymptoms({
+        on: req.query.on ? String(req.query.on) : undefined,
+        include_resolved: req.query.include_resolved === "1" || req.query.include_resolved === "true",
+      })
+    );
+  } catch (error: any) {
+    res.status(400).json({ error: error?.message ?? String(error) });
+  }
+});
+
+// Record one athlete-reported area. Same-source/date retries return the existing active record.
+trainingLogRouter.post("/training-symptoms", (req, res) => {
+  try {
+    const body = req.body ?? {};
+    const sourceSessionId =
+      body.source_session_id == null ? null : positiveId(body.source_session_id, "source_session_id");
+    res.json(
+      reportTrainingSymptom({
+        area_text: boundedText(body.area_text, "area_text", 300, true)!,
+        onset_on: body.onset_on == null ? undefined : String(body.onset_on),
+        source_session_id: sourceSessionId,
+        source_kind: boundedText(body.source_kind, "source_kind", 80),
+      })
+    );
+  } catch (error: any) {
+    res.status(400).json({ error: error?.message ?? String(error) });
+  }
+});
+
+// Explicitly close one record; tolerance observations never call this path on their own.
+trainingLogRouter.post("/training-symptoms/:id/resolve", (req, res) => {
+  try {
+    const symptom = resolveTrainingSymptom(
+      positiveId(req.params.id, "id"),
+      req.body?.on == null ? undefined : String(req.body.on)
+    );
+    if (!symptom) return res.status(404).json({ error: "symptom not found" });
+    res.json(symptom);
+  } catch (error: any) {
+    res.status(400).json({ error: error?.message ?? String(error) });
+  }
+});
+
+// Explicitly reopen a record, optionally resetting evidence only for one exact movement.
+trainingLogRouter.post("/training-symptoms/:id/recur", (req, res) => {
+  try {
+    const body = req.body ?? {};
+    const symptom = recurTrainingSymptom(positiveId(req.params.id, "id"), {
+      on: body.on == null ? undefined : String(body.on),
+      area_text: boundedText(body.area_text, "area_text", 300),
+      movement: boundedText(body.movement, "movement", 120),
+      exercise_id: body.exercise_id == null ? null : positiveId(body.exercise_id, "exercise_id"),
+    });
+    if (!symptom) return res.status(404).json({ error: "symptom not found" });
+    res.json(symptom);
+  } catch (error: any) {
+    res.status(400).json({ error: error?.message ?? String(error) });
+  }
+});
+
+// Record one movement-specific pain-free or pain-present observation.
+trainingLogRouter.post("/training-symptoms/:id/tolerance", (req, res) => {
+  try {
+    const body = req.body ?? {};
+    if (typeof body.pain_free !== "boolean") {
+      return res.status(400).json({ error: "pain_free must be true or false" });
+    }
+    const symptom = recordMovementTolerance({
+      symptom_event_id: positiveId(req.params.id, "id"),
+      movement: boundedText(body.movement, "movement", 120, true)!,
+      exercise_id: body.exercise_id == null ? null : positiveId(body.exercise_id, "exercise_id"),
+      observed_on: body.observed_on == null ? undefined : String(body.observed_on),
+      session_id: body.session_id == null ? null : positiveId(body.session_id, "session_id"),
+      pain_free: body.pain_free,
+    });
+    if (!symptom) return res.status(404).json({ error: "symptom not found" });
+    res.json(symptom);
+  } catch (error: any) {
+    res.status(400).json({ error: error?.message ?? String(error) });
+  }
+});
 
 trainingLogRouter.get("/sessions", (req, res) => {
   // ?date= is a soft lookup: "no session for that date yet" is a normal, expected

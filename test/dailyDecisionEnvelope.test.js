@@ -7,7 +7,7 @@ import { buildDailySessionDecision, dailyDecisionFingerprint } from "../dist/rep
 function snapshot(overrides = {}) {
   return {
     date: "2031-05-01",
-    request: { override: null, equipment: null, minutes: null, goal: null },
+    request: { override: null, train_anyway: false, equipment: null, minutes: null, goal: null },
     plan: {
       day_number: 1,
       focus: "Lower body",
@@ -37,8 +37,14 @@ function snapshot(overrides = {}) {
       { exercise: "Romanian Deadlift", muscle_group: null, action: "hold", why: "Reps not consolidated" },
     ],
     plan_items: [
-      { exercise: "Back Squat", muscle_group: "quads", mode: "reps", kind: "strength" },
-      { exercise: "Romanian Deadlift", muscle_group: "hamstrings", mode: "reps", kind: "strength" },
+      { exercise: "Back Squat", muscle_group: "quads", equipment: "barbell", mode: "reps", kind: "strength" },
+      {
+        exercise: "Romanian Deadlift",
+        muscle_group: "hamstrings",
+        equipment: "barbell",
+        mode: "reps",
+        kind: "strength",
+      },
     ],
     ...overrides,
   };
@@ -53,21 +59,21 @@ test("same snapshot yields identical fingerprint and envelope content", () => {
   assert.equal(a.input_fingerprint, b.input_fingerprint);
   assert.equal(a.input_fingerprint, dailyDecisionFingerprint(snap));
   assert.deepEqual(a, b);
-  assert.equal(a.policy_version, "daily_decision_v1");
+  assert.equal(a.policy_version, "daily_decision_v3");
 });
 
 test("fingerprint is stable across object key insertion order", () => {
   const base = snapshot();
   const reordered = snapshot();
   // Rebuild the request object with keys in a different order.
-  reordered.request = { minutes: null, goal: null, override: null, equipment: null };
+  reordered.request = { minutes: null, goal: null, override: null, train_anyway: false, equipment: null };
   assert.equal(dailyDecisionFingerprint(base), dailyDecisionFingerprint(reordered));
 });
 
 test("fingerprint changes when a load-bearing input changes", () => {
   const a = dailyDecisionFingerprint(snapshot());
   const b = dailyDecisionFingerprint(
-    snapshot({ request: { override: "train anyway", equipment: null, minutes: null, goal: null } })
+    snapshot({ request: { override: "train anyway", train_anyway: true, equipment: null, minutes: null, goal: null } })
   );
   assert.notEqual(a, b);
 });
@@ -104,6 +110,54 @@ test("injury excludes the injured group and drops the loaded candidate", () => {
   assert.ok(env.precedence.includes("injury_exclusion"));
 });
 
+test("an exact injured exercise is excluded even when no muscle area was classified", () => {
+  const env = buildDailySessionDecision(
+    snapshot({
+      constraints: {
+        injuries: [{ title: "Movement-specific restriction", areas: [], exercises: ["Back Squat"] }],
+        illness: false,
+        travel: false,
+      },
+    }),
+    { now: NOW }
+  );
+  const squat = env.candidates.find((c) => c.exercise === "Back Squat");
+  assert.equal(squat.action, "exclude");
+  assert.equal(squat.reason_code, "injury_exclusion");
+});
+
+test("soft-recheck injuries remain movement-specific holds and never become hard exclusions", () => {
+  const env = buildDailySessionDecision(
+    snapshot({
+      constraints: {
+        injuries: [
+          {
+            title: "Knee recheck",
+            constraint_level: "soft_recheck",
+            areas: ["knee"],
+            exercises: ["Back Squat"],
+          },
+        ],
+        illness: false,
+        travel: false,
+      },
+    }),
+    { now: NOW }
+  );
+  assert.deepEqual(env.muscles.excluded, []);
+  assert.ok(!env.hard_constraints.some((item) => item.code === "injury_exclusion"));
+  assert.ok(env.soft_preferences.some((item) => item.code === "injury_recheck"));
+  assert.equal(env.candidates.find((item) => item.exercise === "Back Squat").action, "hold");
+  assert.notEqual(
+    env.candidates.find((item) => item.exercise === "Romanian Deadlift").reason_code,
+    "injury_recheck"
+  );
+  assert.equal(
+    env.candidates.find((item) => item.exercise === "Back Squat").reason_code,
+    "injury_recheck"
+  );
+});
+
 test("recent heavy lower-body endurance reduces conflicting leg volume", () => {
   const env = buildDailySessionDecision(
     snapshot({
@@ -126,7 +180,7 @@ test("low recovery + high soreness softens volume and holds intensity", () => {
     snapshot({
       day_read: { ...snapshot().day_read, kind: "easy" },
       recovery: { has_data: true, readiness: "low", hrv_drift: "down", rhr_drift: "up", sleep_drift: "down" },
-      feedback: { soreness: 4, performance: 2, joint_pain: null },
+      feedback: { soreness: 4, performance: 2, joint_pain: null, low_performance_count: 1 },
     }),
     { now: NOW }
   );
@@ -134,17 +188,78 @@ test("low recovery + high soreness softens volume and holds intensity", () => {
   assert.equal(env.caps.volume, "reduced");
   assert.equal(env.caps.intensity, "easy");
   assert.ok(env.precedence.includes("high_soreness"));
-  assert.ok(env.precedence.includes("repeated_underperformance"));
+  assert.ok(env.precedence.includes("recent_underperformance"));
+  assert.ok(!env.precedence.includes("repeated_underperformance"));
 });
 
-test("deload mesocycle phase forces deload intensity", () => {
+test("deload-due is rationale only; only an active deload/recovery phase forces deload intensity", () => {
   const env = buildDailySessionDecision(
     snapshot({ program: { ...snapshot().program, mesocycle_phase: "deload-due" } }),
     { now: NOW }
   );
+  assert.equal(env.caps.intensity, "normal");
+  const dueSquat = env.candidates.find((c) => c.exercise === "Back Squat");
+  assert.equal(dueSquat.action, "overload");
+
+  const active = buildDailySessionDecision(
+    snapshot({ program: { ...snapshot().program, mesocycle_phase: "deload" } }),
+    { now: NOW }
+  );
+  assert.equal(active.caps.intensity, "deload");
+  const recovery = buildDailySessionDecision(
+    snapshot({ program: { ...snapshot().program, mesocycle_phase: "recovery" } }),
+    { now: NOW }
+  );
+  assert.equal(recovery.caps.intensity, "deload");
+  const squat = active.candidates.find((c) => c.exercise === "Back Squat");
+  assert.equal(squat.action, "deload");
+});
+
+test("two distinct low-performance observations enable repeated-underperformance deload", () => {
+  const env = buildDailySessionDecision(
+    snapshot({
+      feedback: { soreness: null, performance: 2, joint_pain: null, low_performance_count: 2 },
+    }),
+    { now: NOW }
+  );
   assert.equal(env.caps.intensity, "deload");
+  assert.ok(env.precedence.includes("repeated_underperformance"));
   const squat = env.candidates.find((c) => c.exercise === "Back Squat");
   assert.equal(squat.action, "deload");
+});
+
+test("one low-performance observation produces only a hold and is never called repeated", () => {
+  const env = buildDailySessionDecision(
+    snapshot({
+      feedback: { soreness: null, performance: 2, joint_pain: null, low_performance_count: 1 },
+    }),
+    { now: NOW }
+  );
+  assert.equal(env.caps.intensity, "hold");
+  assert.ok(env.precedence.includes("recent_underperformance"));
+  assert.ok(!env.precedence.includes("repeated_underperformance"));
+  assert.equal(env.candidates.find((c) => c.exercise === "Back Squat").action, "hold");
+});
+
+test("a concrete progression variation becomes an executable substitution candidate", () => {
+  const env = buildDailySessionDecision(
+    snapshot({
+      progression: [
+        {
+          exercise: "Back Squat",
+          muscle_group: null,
+          action: "vary",
+          why: "Rotate the pattern",
+          vary_to: "Front Squat",
+        },
+      ],
+    }),
+    { now: NOW }
+  );
+  const candidate = env.candidates.find((c) => c.substitution_for === "Back Squat");
+  assert.equal(candidate.exercise, "Front Squat");
+  assert.equal(candidate.action, "vary");
+  assert.equal(candidate.reason_code, "progression_vary");
 });
 
 test("joint pain reduces the joint's groups as a soft nudge", () => {
@@ -160,27 +275,56 @@ test("athlete override 'train anyway' wins the kind but stays conservative", () 
   const env = buildDailySessionDecision(
     snapshot({
       day_read: { ...snapshot().day_read, kind: "rest" },
-      request: { override: "train anyway", equipment: null, minutes: null, goal: null },
+      request: { override: null, train_anyway: true, equipment: null, minutes: null, goal: null },
     }),
     { now: NOW }
   );
   assert.equal(env.kind, "train");
+  assert.equal(env.baseline_kind, "rest");
+  assert.equal(env.request.train_anyway, true);
+  assert.equal(env.caps.volume, "reduced");
+  assert.equal(env.caps.intensity, "deload");
+  assert.ok(env.caps.duration_min <= 40);
   assert.ok(env.precedence.includes("athlete_override"));
+  assert.match(env.rationale[0].text, /Training by choice/);
+});
+
+test("every recognized train-intent override on a rest read persists train_anyway and conservative caps", () => {
+  for (const override of ["train", "lift", "push", "full session", "I still want to train anyway"]) {
+    const env = buildDailySessionDecision(
+      snapshot({
+        day_read: { ...snapshot().day_read, kind: "rest" },
+        request: { override, train_anyway: false, equipment: null, minutes: null, goal: null },
+      }),
+      { now: NOW }
+    );
+    assert.equal(env.kind, "train", override);
+    assert.equal(env.request.train_anyway, true, override);
+    assert.equal(env.caps.volume, "reduced", override);
+    assert.equal(env.caps.intensity, "deload", override);
+    assert.ok(env.caps.duration_min <= 40, override);
+  }
 });
 
 test("athlete override 'rest today' wins the kind", () => {
   const env = buildDailySessionDecision(
-    snapshot({ request: { override: "I want to rest today", equipment: null, minutes: null, goal: null } }),
+    snapshot({
+      request: { override: "I want to rest today", train_anyway: false, equipment: null, minutes: null, goal: null },
+    }),
     { now: NOW }
   );
   assert.equal(env.kind, "rest");
   assert.equal(env.caps.volume, "minimal");
   assert.equal(env.candidates.length, 0);
+  assert.equal(env.template.intent, "custom");
+  assert.equal(env.template.day_number, null);
 });
 
 test("short-on-time override caps duration without forcing an easy day", () => {
   const env = buildDailySessionDecision(
-    snapshot({ request: { override: "short on time", equipment: null, minutes: 30, goal: null } }),
+    snapshot({
+      request: { override: "short on time", train_anyway: false, equipment: null, minutes: 30, goal: null },
+    }),
     { now: NOW }
   );
   assert.equal(env.kind, "train");
