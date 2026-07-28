@@ -69,6 +69,19 @@ test("injuryAffectsExercise: matches on the title/detail text when meta.area is 
   assert.equal(repo.injuryAffectsExercise(inj, { name: "Bulgarian Split Squat", muscle_group: "legs" }), true);
 });
 
+test("injuryAffectsExercise: cubital and ulnar wording resolve to the elbow movement area", () => {
+  for (const title of ["Cubital tunnel irritation", "Ulnar nerve flare"]) {
+    assert.equal(
+      repo.injuryAffectsExercise(
+        { kind: "injury", title, detail: "" },
+        { name: "Landmine Press", muscle_group: "shoulders" }
+      ),
+      true,
+      title
+    );
+  }
+});
+
 // ---- the full read: getInjuryImpacts ----
 
 test("getInjuryImpacts: no injuries → empty, count 0", () => {

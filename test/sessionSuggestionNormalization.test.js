@@ -1,29 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { enqueueAgentJob, onJobEvent } from "../dist/agentJobs.js";
-import { suggestSession } from "../dist/coachOps.js";
+import { sessionSuggestCacheKey, suggestSession } from "../dist/coachOps.js";
 import { repo } from "./_seed.js";
 
 function cacheKey(opts) {
-  const read = repo.dayRead(opts.date);
-  const profile = repo.getProfile();
-  return repo.fingerprint({
-    minutes: opts.minutes ?? null,
-    equipment: (opts.equipment ?? "").trim().toLowerCase(),
-    focus: (opts.focus ?? "").trim().toLowerCase(),
-    constraints: (opts.constraints ?? "").trim().toLowerCase(),
-    date: opts.date,
-    dayContext: `${read.kind}|${read.focus ?? ""}`,
-    profileContext: profile
-      ? {
-          updated_at: profile.updated_at ?? null,
-          primary_discipline: profile.primary_discipline ?? null,
-          endurance_sport: profile.endurance_sport ?? null,
-          endurance_goal_json: profile.endurance_goal_json ?? null,
-          training_intent_json: profile.training_intent_json ?? null,
-        }
-      : null,
-  });
+  return sessionSuggestCacheKey(opts);
 }
 
 function waitForJob(id) {

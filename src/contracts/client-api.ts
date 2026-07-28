@@ -944,6 +944,51 @@ export interface ClientWeeklyRunPlan {
   why: string;
 }
 
+export type ClientFlexibleRunKind = "easy" | "quality" | "long";
+export type ClientFlexibleRunStatus = "open" | "completed";
+
+export interface ClientRunCompletionEvidence {
+  activity_id: number;
+  date: ISODateString | string;
+  duration_min: number | null;
+  distance_km: number | null;
+  intensity: "easy" | "quality";
+  signals: string[];
+}
+
+export interface ClientFlexibleRunIntent {
+  id: string;
+  kind: ClientFlexibleRunKind;
+  label: string;
+  status: ClientFlexibleRunStatus;
+  provisional_day_number: number;
+  provisional_date: ISODateString | string;
+  window_start: ISODateString | string;
+  window_end: ISODateString | string;
+  suggested_date: ISODateString | string | null;
+  target_distance_km: number | null;
+  target_duration_min: number | null;
+  target_zone: string | null;
+  completion: ClientRunCompletionEvidence | null;
+  rationale: string;
+}
+
+export interface ClientFlexibleTrainingAgenda {
+  available: boolean;
+  week_start: ISODateString | string;
+  week_end: ISODateString | string;
+  as_of: ISODateString | string;
+  intents: ClientFlexibleRunIntent[];
+  next: {
+    intent_id: string;
+    kind: ClientFlexibleRunKind;
+    suggested_date: ISODateString | string;
+    guidance: string;
+  } | null;
+  today_guidance: "open" | "easy_only" | "not_first_choice" | "complete";
+  why: string;
+}
+
 export type ClientGroupVerdict = "advancing" | "stalling" | "building" | "maintaining";
 export type ClientMuscleVolumeBand = "low" | "productive" | "high";
 export type ClientMuscleTrend = "rising" | "falling" | "stable" | null;
@@ -2797,6 +2842,7 @@ export interface ClientApiResponses {
   "/api/program-state": ClientProgramState;
   "/api/performance": ClientPerformanceStanding;
   "/api/run-plan": ClientWeeklyRunPlan;
+  "/api/training-agenda": ClientFlexibleTrainingAgenda;
   "/api/run-zones": ClientRunZones;
   "/api/muscle-trajectory": ClientMuscleGroupTrajectory;
   "/api/test-week": ClientTestWeekDue;

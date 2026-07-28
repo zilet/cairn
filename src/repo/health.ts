@@ -2321,7 +2321,7 @@ const BODY_AREAS: BodyArea[] = [
   {
     key: "elbow",
     label: "elbow",
-    injury: ["elbow", "tricep tendon", "tennis elbow", "golfer", "forearm"],
+    injury: ["elbow", "cubital", "ulnar nerve", "tricep tendon", "tennis elbow", "golfer", "forearm"],
     load: ["tricep", "bicep", "curl", "pushdown", "press", "pull-up", "chin-up", "row", "extension"],
   },
   {

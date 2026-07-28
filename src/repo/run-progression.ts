@@ -42,6 +42,7 @@ import { applyPersonalResponseModifier, personalResponseModifierFor } from "./re
 import { getRunCompliance, type RunCompliance } from "./sessions.js";
 import { localDateISO } from "./shared.js";
 import { lowerBodyPlanDayNumbers } from "./training-read.js";
+import { getTrainingIntent, type ResolvedTrainingIntent } from "./training-intent.js";
 import type { CoachPersonalModifier } from "../brain/coach-context-contract.js";
 
 // ---------------------------------------------------------------------------
@@ -60,6 +61,29 @@ function round1(n: number): number {
 }
 function cap1(s: string): string {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+function recentRunDose(dateISO: string): { average_km: number | null; longest_km: number | null } {
+  const since = isoDaysAgo(dateISO, 27);
+  const sport = activitySportWhere("a", RUN_SPORT_PATTERNS);
+  try {
+    const row = db
+      .prepare(
+        `SELECT AVG(a.distance_km) AS average_km, MAX(a.distance_km) AS longest_km
+           FROM activities a
+          WHERE a.date >= ? AND a.date <= ?
+            AND a.distance_km > 0
+            AND (${sport.sql})`
+      )
+      .get(since, dateISO, ...sport.params) as any;
+    const average = Number(row?.average_km);
+    const longest = Number(row?.longest_km);
+    return {
+      average_km: Number.isFinite(average) && average > 0 ? average : null,
+      longest_km: Number.isFinite(longest) && longest > 0 ? longest : null,
+    };
+  } catch {
+    return { average_km: null, longest_km: null };
+  }
 }
 // A deterministic week ordinal (no app_state side-effects on a read): epoch weeks
 // since the Unix Monday. Used for the ~every-4th down week + quality rotation, so a
@@ -467,12 +491,14 @@ export function weeklyRunPlan(
     zones?: RunZones;
     directives?: any[];
     responseModifier?: CoachPersonalModifier | null;
+    trainingIntent?: ResolvedTrainingIntent;
   }
 ): WeeklyRunPlan {
   const d = date || localDateISO();
   const week_start = mondayOf(d);
 
   const profile = getProfile();
+  const trainingIntent = opts?.trainingIntent ?? getTrainingIntent(profile);
   const goal = opts?.goal ?? getEnduranceGoal(d);
   const recovery =
     opts?.recovery ??
@@ -632,7 +658,7 @@ export function weeklyRunPlan(
     );
   }
 
-  const weeklyKm = Math.max(6, round1(anchorKm * factor));
+  let weeklyKm = Math.max(6, round1(anchorKm * factor));
 
   // --- run-day count ---
   let runDays =
@@ -644,6 +670,25 @@ export function weeklyRunPlan(
           ? 4
           : 3;
   if (recoveryDown && runDays > 3) runDays -= 1; // one fewer run when run-down
+  // A supporting race is deliberately minimum-effective-dose: it may add a
+  // temporary easy + quality + long shape, but it cannot silently turn a
+  // strength/muscle-first athlete into a high-frequency runner. The time target
+  // itself never earns extra sessions. Recovery/deload/health-constrained weeks
+  // fall to two intentions rather than creating catch-up work.
+  const supportingConstrained =
+    trainingIntent.endurance_role === "supporting" && (recoveryDown || recoveryWeek || !!firmHold || !!softHold);
+  if (trainingIntent.endurance_role === "supporting") {
+    const normalSupportingDays = Math.min(runDays, 3);
+    runDays = Math.min(runDays, supportingConstrained ? 2 : 3);
+    if (supportingConstrained && normalSupportingDays > runDays) {
+      weeklyKm = Math.max(6, round1(weeklyKm * (runDays / normalSupportingDays)));
+    }
+    rationale.push(
+      supportingConstrained
+        ? "Running is supporting the higher durable priorities, so this constrained week stays at two useful runs with volume reduced too — nothing gets concentrated into catch-up mileage."
+        : "Running is supporting the higher durable priorities, so the race build stays at a minimum-effective three runs."
+    );
+  }
 
   // --- quality session: include unless we're protecting recovery / tapering hard / very thin base ---
   const baseTooThin = weeklyKm < 12;
@@ -672,16 +717,28 @@ export function weeklyRunPlan(
   // --- distance distribution ---
   const easyCount = Math.max(1, runDays - 1 - (qualityType ? 1 : 0));
   // Long run ~32–38% of weekly volume, but never a >10% jump on the recent longest.
-  const prevLong = runState?.longest_km_4wk ?? 0;
+  const recentDose = supportingConstrained ? recentRunDose(d) : null;
+  const stateLongest = Number(runState?.longest_km_4wk);
+  const recentLongest = Number(recentDose?.longest_km);
+  const prevLong =
+    Number.isFinite(stateLongest) && stateLongest > 0
+      ? stateLongest
+      : Number.isFinite(recentLongest) && recentLongest > 0
+        ? recentLongest
+        : 0;
   let longKm = round1(weeklyKm * (taper ? 0.3 : 0.35));
   if (prevLong > 0) longKm = round1(Math.min(longKm, prevLong * 1.1));
   longKm = Math.max(longKm, round1(weeklyKm * 0.25));
+  if (supportingConstrained && prevLong > 0) longKm = round1(Math.min(longKm, prevLong * 1.1));
   if (taper) longKm = round1(Math.min(longKm, Math.max(6, prevLong * 0.6)));
 
   const q = qualityType ? qualitySpec(qualityType, phase, zones, round1(weeklyKm * 0.18)) : null;
   const qualityKm = q?.distance ?? 0;
   const easyTotal = Math.max(easyCount * 3, round1(weeklyKm - longKm - qualityKm));
-  const easyEach = round1(easyTotal / easyCount);
+  let easyEach = round1(easyTotal / easyCount);
+  if (supportingConstrained && recentDose?.average_km != null) {
+    easyEach = round1(Math.min(easyEach, Math.max(3, recentDose.average_km * 1.1)));
+  }
 
   // --- slot assignment (day_number 1–7): quality mid-week, long late, easy spread —
   //     never two hard days back-to-back (defaults: quality on 2, long on 6). ---
@@ -785,7 +842,10 @@ export function weeklyRunPlan(
     : softHold
       ? ", going easy on hard running while a health flag settles"
       : "";
-  const why = `~${Math.round(weeklyKm)} km this week (${phaseWord}): ${mix_summary}${q ? `, with ${q.label.toLowerCase()} as the quality work` : ", all easy aerobic"}${holdClause}.`;
+  const prescribedKm = round1(
+    runs.reduce((sum, run) => sum + (run.target_distance_km != null ? Number(run.target_distance_km) : 0), 0)
+  );
+  const why = `~${Math.round(prescribedKm || weeklyKm)} km this week (${phaseWord}): ${mix_summary}${q ? `, with ${q.label.toLowerCase()} as the quality work` : ", all easy aerobic"}${holdClause}.`;
 
   return { available: true, week_start, runs, rationale, quality_focus, mix_summary, why };
 }

@@ -44,6 +44,7 @@ import {
 } from "./endurance-sports.js";
 import { recentEnduranceImpacts, type EnduranceImpact } from "./hybrid-load.js";
 import { sessionNoteSuggestsFatigue, sessionNoteSuggestsRapidFade } from "./training-fatigue.js";
+import { getTrainingIntent } from "./training-intent.js";
 
 // ---- ACWR low-base guards ---------------------------------------------------
 // An acute-vs-chronic ratio is only meaningful once there's a real CHRONIC base
@@ -1116,7 +1117,7 @@ function hybridFuelRead(
   return { risk: "low", why: "Keep the deficit lean-safe and protein anchored; today's endurance load is light." };
 }
 
-function hybridState(date: string, endurance: EnduranceState | null, discipline: string): HybridState | null {
+function hybridState(date: string, endurance: EnduranceState | null, enduranceConfigured: boolean): HybridState | null {
   const impacts = recentEnduranceImpacts(3, date);
   const materialImpacts = impacts.filter((impact) => impact.load !== "light");
   const lead = materialImpacts[0] ?? impacts[0] ?? null;
@@ -1124,7 +1125,7 @@ function hybridState(date: string, endurance: EnduranceState | null, discipline:
   const conflict = nextStrengthConflict(date, affectedGroups, materialImpacts);
   const profile = getProfile();
   const fuel = hybridFuelRead(profile, lead, endurance);
-  const shouldShow = discipline === "hybrid" || discipline === "endurance" || !!lead || fuel?.risk !== "low";
+  const shouldShow = enduranceConfigured || !!lead || fuel?.risk !== "low";
   if (!shouldShow) return null;
 
   let status: HybridStatus = "clear";
@@ -1191,13 +1192,14 @@ export function getProgramState(date?: string, recovery?: any): ProgramState {
 function computeProgramState(date?: string, recovery?: any): ProgramState {
   const d = date || localDateISO();
   const discipline = getPrimaryDiscipline();
+  const enduranceConfigured = getTrainingIntent().endurance_role !== "none";
   const lifts = liftStates(d);
   const volume = muscleVolume(d);
   const recoveryWeek = activeRecoveryWeek(d);
   const completedRecoveryWeek = recoveryWeek ? null : completedRecoveryWeekLedger(d);
   const meso = mesocycle(d, recovery, recoveryWeek, completedRecoveryWeek);
-  const endurance = discipline === "endurance" || discipline === "hybrid" ? enduranceState(d) : null;
-  const hybrid = hybridState(d, endurance, discipline);
+  const endurance = enduranceConfigured ? enduranceState(d) : null;
+  const hybrid = hybridState(d, endurance, enduranceConfigured);
 
   // The "what to evolve next" list — plain language, deduped, most actionable first.
   const adaptations: string[] = [];

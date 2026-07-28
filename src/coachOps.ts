@@ -9,6 +9,7 @@
 
 import * as repo from "./repo.js";
 import { addDaysISO, localDateISO } from "./repo/shared.js";
+import { trainingBackstopSignature } from "./repo/training-cache.js";
 import { sessionNoteSuggestsFatigue, sessionNoteSuggestsRapidFade } from "./repo/training-fatigue.js";
 import { AgentFallbackError, agentInfo, listAgentModels, loadAgents, type FallbackResult } from "./agents.js";
 import { runChosen, runChosenStreaming, runChosenWithCoachReads } from "./runChosen.js";
@@ -498,7 +499,77 @@ export async function composeDailySession(
 // profile's identity/goal generation. A goal hierarchy or race can change within
 // the same day; serving the pre-change session after that write would make the
 // coach look oblivious precisely when the athlete clarified what should lead.
-function sessionSuggestCacheKey(opts: {
+// Compact, privacy-preserving cache identity for the material training reality
+// shared by same-day session suggestions and the week-ahead read. The aggregate
+// backstop covers logged sets/sessions, activities, recovery metrics, plan and
+// context writes. Explicit projections cover the same-day state that aggregate
+// count/max signals do not fully describe (ordered intent/goals, active symptoms
+// and injuries, check-ins, and the accepted composition/outcome). Only the hash
+// is persisted in an ai_cache key; none of this athlete context is stored there.
+export function coachingCacheFreshnessFingerprint(date = localDateISO()): string {
+  let profile: any = null;
+  let symptoms: any[] = [];
+  let injuries: any[] = [];
+  let checkins: any[] = [];
+  let composition: any = null;
+  let outcome: any = null;
+  try {
+    const p = repo.getProfile();
+    profile = p
+      ? {
+          primary_discipline: p.primary_discipline ?? null,
+          endurance_sport: p.endurance_sport ?? null,
+          endurance_goal_json: p.endurance_goal_json ?? null,
+          training_intent_json: p.training_intent_json ?? null,
+          goal_weight_lb: p.goal_weight_lb ?? null,
+          goal_bodyfat_pct: p.goal_bodyfat_pct ?? null,
+          goal_date: p.goal_date ?? null,
+          goal_mode: p.goal_mode ?? null,
+        }
+      : null;
+  } catch {
+    /* a blank profile keeps the cache available on first boot */
+  }
+  try {
+    symptoms = repo.listTrainingSymptoms({ on: date, include_resolved: false, seed_legacy: false });
+  } catch {
+    /* symptom storage may be absent during an interrupted migration */
+  }
+  try {
+    injuries = (repo.listContextEvents({ activeOnly: true, on: date }) as any[]).filter(
+      (event) => event?.kind === "injury"
+    );
+  } catch {
+    /* context storage may be absent during an interrupted migration */
+  }
+  try {
+    checkins = repo.listCheckins(7) as any[];
+  } catch {
+    /* a fresh install has no subjective recovery history */
+  }
+  try {
+    composition = repo.getActiveDailySession(date);
+  } catch {
+    /* no accepted daily composition */
+  }
+  try {
+    outcome = repo.getDailySessionOutcome(date);
+  } catch {
+    /* no reconciled daily outcome */
+  }
+  return repo.fingerprint({
+    date,
+    training: trainingBackstopSignature(),
+    profile,
+    symptoms,
+    injuries,
+    checkins,
+    composition,
+    outcome,
+  });
+}
+
+export function sessionSuggestCacheKey(opts: {
   minutes?: number;
   equipment?: string;
   focus?: string;
@@ -536,6 +607,7 @@ function sessionSuggestCacheKey(opts: {
     date,
     dayContext,
     profileContext,
+    trainingReality: coachingCacheFreshnessFingerprint(date),
   });
 }
 
@@ -904,13 +976,7 @@ export async function weekAheadRead(agent: string | undefined, hooks?: OpHooks) 
     source: "deterministic" as const,
     cached: false as const,
   };
-  const profile: any = repo.getProfile();
-  const cacheKey = repo.fingerprint({
-    op: WEEK_AHEAD_KIND,
-    date: new Date().toISOString().slice(0, 10),
-    plan: floor.days.map((d) => `${d.kind}:${d.label}`),
-    goal: { gw: profile?.goal_weight_lb ?? null, gd: profile?.goal_date ?? null },
-  });
+  const cacheKey = weekAheadCacheKey(floor);
   const cached = repo.getAiCache(WEEK_AHEAD_KIND, cacheKey);
   const cachedSane = sanitizeWeekAhead(cached?.result);
   if (cached && cachedSane && !cached.stale) {
@@ -964,6 +1030,20 @@ export async function weekAheadRead(agent: string | undefined, hooks?: OpHooks) 
       agent: cached?.chosen_agent ?? null,
     };
   return floorResult;
+}
+
+export function weekAheadCacheKey(
+  floor: ReturnType<typeof repo.weekAheadPlan>,
+  date = localDateISO()
+): string {
+  const profile: any = repo.getProfile();
+  return repo.fingerprint({
+    op: WEEK_AHEAD_KIND,
+    date,
+    plan: floor.days.map((d) => `${d.kind}:${d.label}`),
+    goal: { gw: profile?.goal_weight_lb ?? null, gd: profile?.goal_date ?? null },
+    trainingReality: coachingCacheFreshnessFingerprint(date),
+  });
 }
 
 // Draft a goal-aware weekly meal plan, then run a bounded self-critique verify

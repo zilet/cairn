@@ -74,6 +74,7 @@ export * from "./repo/exercise-variations.js";
 export * from "./repo/performance.js"; // training-intelligence: capacity benchmark + imbalance + the lever
 export * from "./repo/training-milestones.js"; // benchmark ladder + adaptive training attention cadence
 export * from "./repo/run-progression.js"; // the deterministic RUNNING program engine (zones / weekly mix / variety / tests)
+export * from "./repo/flexible-training-agenda.js"; // rolling run intentions: actual logs, not fixed weekdays, control completion + next window
 export * from "./repo/dexa-targeting.js"; // DEXA regional read → training + nutrition targets
 export * from "./repo/muscle-trajectory.js"; // per-muscle-group advance/stall + strength test-week cadence
 export * from "./repo/coaching-focus.js"; // THE CONDUCTOR — one sequenced whole-athlete focus across all domains

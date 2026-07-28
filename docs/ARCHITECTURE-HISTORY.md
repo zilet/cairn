@@ -4,6 +4,28 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-07-28 — terrain-aware hybrid scheduling and movable run intentions
+
+No schema change. The endurance ontology now preserves the legacy run/ride/swim/row/walk families
+while distinguishing trail/XC MTB, downhill/lift-served MTB, road, gravel, generic cycling, alpine
+skiing, Nordic skiing, touring, and generic skiing. Capability evidence is mode-specific: a road
+ride or lift-served downhill day cannot prove a two-hour trail-MTB capability, while a generic
+cycling goal may still use any cycling subtype. Terrain-aware hybrid load accounts for climbing,
+technical descending, eccentric demand, trunk/back/grip work, and the different aerobic character
+of each skiing mode without inventing a subtype from the word "skiing."
+
+`flexibleTrainingAgenda()` turns the deterministic run plan into weekly intentions reconciled with
+reality. Actual runs close one compatible easy/quality/long intention regardless of exact weekday;
+quality requires intensity evidence, cross-training affects load without completing a run, and
+actual lower-body or hard-cardio work moves key-run guidance toward a cleaner opening. Supporting
+endurance is capped at three runs in a normal week and two with proportionally lower, exposure-capped
+volume in a constrained week; a stretch race time cannot add volume. Remaining openings are allocated
+once across the agenda, so key runs cannot stack onto one day; work that no longer has a clean opening
+stays undated and creates no catch-up debt. Coach context and prompts receive this rolling read, treat
+plan days as provisional anchors, and never call moved work missed or prescribe catch-up volume. REST/MCP/PWA
+surface the same agenda, and coaching caches now fingerprint the material training, goal, symptom,
+context, recovery, and daily-decision state so same-day changes cannot leave old guidance in place.
+
 ## 2026-07-28 — ordered training identity and sport-specific capability
 
 Migration **v80** adds nullable `profile.training_intent_json`: ordered durable priorities

@@ -99,7 +99,7 @@ test("capacity reads building, rebuilding, and no-data calmly without changing t
   const noData = repo.getEnduranceCapacity(repo.getTrainingIntent(), { asOf: "2026-07-28" });
   assert.equal(noData.status, "no_data");
 
-  db.prepare(`INSERT INTO activities (date, type, duration_min) VALUES ('2026-07-15', 'ride', 55)`).run();
+  db.prepare(`INSERT INTO activities (date, type, duration_min) VALUES ('2026-07-15', 'mountain_biking', 55)`).run();
   const building = repo.getEnduranceCapacity(repo.getTrainingIntent(), { asOf: "2026-07-28" });
   assert.equal(building.status, "building");
   assert.match(building.next_step, /easy outing|minutes/i);

@@ -1,5 +1,9 @@
 import { db } from "../db.js";
-import { canonicalEnduranceSport } from "./endurance-sports.js";
+import {
+  classifyEnduranceActivity,
+  classifyEnduranceSport,
+  type EnduranceSportClassification,
+} from "./endurance-sports.js";
 import { addDaysISO, localDateISO } from "./shared.js";
 import { getTrainingIntent, type ResolvedTrainingIntent } from "./training-intent.js";
 
@@ -10,22 +14,65 @@ export interface EnduranceCapacityRead {
   sport: string;
   target_duration_min: number;
   as_of_date: string;
-  evidence: { date: string; duration_min: number } | null;
+  evidence: {
+    date: string;
+    duration_min: number;
+    ascent_m?: number;
+    elevation_loss_m?: number;
+  } | null;
+  evidence_specificity: "mode" | "family" | "insufficient" | null;
   summary: string;
   next_step: string;
 }
 
 function sportLabel(sport: string): string {
-  return canonicalEnduranceSport(sport).label.toLowerCase();
+  return classifyEnduranceSport(sport).label.toLowerCase();
 }
 
-function matchingSport(activity: any, targetKey: string): boolean {
-  const fromType = canonicalEnduranceSport(activity?.type);
-  // A structured activity type is authoritative. Raw prose is only a fallback:
-  // a ride note such as "legs tired after yesterday's run" must not turn the
-  // ride into running merely because canonical token precedence sees "run".
-  if (["run", "ride", "swim", "row", "walk"].includes(fromType.key)) return fromType.key === targetKey;
-  return canonicalEnduranceSport(activity?.raw_text).key === targetKey;
+function activitySport(activity: any): EnduranceSportClassification {
+  return classifyEnduranceActivity(
+    activity?.type,
+    [activity?.raw_text, activity?.notes, activity?.garmin_type, activity?.garmin_name]
+      .filter(Boolean)
+      .join(" "),
+  );
+}
+
+function matchingTarget(
+  activity: any,
+  target: EnduranceSportClassification,
+): { family: boolean; exact: boolean; classification: EnduranceSportClassification } {
+  const classification = activitySport(activity);
+  const family = classification.family === target.family;
+  return {
+    family,
+    exact: family && (target.specificity === "family" || classification.mode === target.mode),
+    classification,
+  };
+}
+
+function evidenceFrom(row: any): EnduranceCapacityRead["evidence"] {
+  if (!row) return null;
+  const evidence: NonNullable<EnduranceCapacityRead["evidence"]> = {
+    date: String(row.date),
+    duration_min: Math.round(Number(row.duration_min)),
+  };
+  const ascent = Number(row.ascent_m);
+  const descent = Number(row.elevation_loss_m);
+  if (Number.isFinite(ascent) && ascent > 0) evidence.ascent_m = Math.round(ascent);
+  if (Number.isFinite(descent) && descent > 0) evidence.elevation_loss_m = Math.round(descent);
+  return evidence;
+}
+
+function terrainEvidencePhrase(row: any): string {
+  const ascent = Number(row?.ascent_m);
+  const descent = Number(row?.elevation_loss_m);
+  const hasAscent = Number.isFinite(ascent) && ascent > 0;
+  const hasDescent = Number.isFinite(descent) && descent > 0;
+  if (hasAscent && hasDescent) return " Logged climbing and descending support the terrain-specific read.";
+  if (hasAscent) return " Logged climbing supports the terrain-specific read.";
+  if (hasDescent) return " Logged descending supports the terrain-specific read.";
+  return "";
 }
 
 function conservativeNext(target: number, best: number | null): number {
@@ -48,17 +95,24 @@ export function getEnduranceCapacity(
   const historyDays = Math.max(recentDays, Math.min(730, Math.trunc(Number(opts.historyDays) || 180)));
   const historyStart = addDaysISO(asOf, -(historyDays - 1)) ?? asOf;
   const recentStart = addDaysISO(asOf, -(recentDays - 1)) ?? asOf;
-  const targetKey = canonicalEnduranceSport(target.sport).key;
-  const rows = (
+  const targetSport = classifyEnduranceSport(target.sport);
+  const allRows = (
     db
       .prepare(
-        `SELECT date, type, raw_text, duration_min
-           FROM activities
-          WHERE date BETWEEN ? AND ? AND duration_min > 0
-          ORDER BY date DESC, id DESC`
+        `SELECT a.date AS date, a.type AS type, a.raw_text AS raw_text, a.notes AS notes,
+                COALESCE(a.duration_min, ga.moving_min, ga.duration_min) AS duration_min,
+                ga.type AS garmin_type, ga.name AS garmin_name,
+                ga.ascent_m AS ascent_m, ga.elevation_loss_m AS elevation_loss_m
+           FROM activities a
+           LEFT JOIN garmin_activities ga ON ga.activity_id = a.id
+          WHERE a.date BETWEEN ? AND ?
+            AND COALESCE(a.duration_min, ga.moving_min, ga.duration_min) > 0
+          ORDER BY a.date DESC, a.id DESC`
       )
       .all(historyStart, asOf) as any[]
-  ).filter((row) => matchingSport(row, targetKey));
+  ).map((row) => ({ ...row, sport_match: matchingTarget(row, targetSport) }));
+  const familyRows = allRows.filter((row) => row.sport_match.family);
+  const rows = familyRows.filter((row) => row.sport_match.exact);
   const recent = rows.filter((row) => String(row.date) >= recentStart);
   const longestRecent = recent.reduce<any | null>(
     (best, row) => (!best || Number(row.duration_min) > Number(best.duration_min) ? row : best),
@@ -70,6 +124,7 @@ export function getEnduranceCapacity(
   );
   const durationTarget = target.target_duration_min;
   const label = sportLabel(target.sport);
+  const evidenceSpecificity = targetSport.specificity === "mode" ? "mode" : "family";
   const readyThreshold = durationTarget * 0.9;
   if (longestRecent && Number(longestRecent.duration_min) >= readyThreshold) {
     return {
@@ -77,8 +132,9 @@ export function getEnduranceCapacity(
       sport: target.sport,
       target_duration_min: durationTarget,
       as_of_date: asOf,
-      evidence: { date: String(longestRecent.date), duration_min: Math.round(Number(longestRecent.duration_min)) },
-      summary: `A recent ${label} outing reached the duration this capability asks for.`,
+      evidence: evidenceFrom(longestRecent),
+      evidence_specificity: evidenceSpecificity,
+      summary: `A recent ${label} outing reached the duration this capability asks for.${terrainEvidencePhrase(longestRecent)}`,
       next_step: `Keep an outing around ${durationTarget} minutes in the rhythm when it fits; no automatic plan change is needed.`,
     };
   }
@@ -90,8 +146,9 @@ export function getEnduranceCapacity(
       sport: target.sport,
       target_duration_min: durationTarget,
       as_of_date: asOf,
-      evidence: { date: String(longestRecent.date), duration_min: best },
-      summary: `Recent ${label} work is building toward the ${durationTarget}-minute capability.`,
+      evidence: evidenceFrom(longestRecent),
+      evidence_specificity: evidenceSpecificity,
+      summary: `Recent ${label} work is building toward the ${durationTarget}-minute capability.${terrainEvidencePhrase(longestRecent)}`,
       next_step: `When recovery and life allow, make the next longer easy outing about ${next} minutes.`,
     };
   }
@@ -103,19 +160,24 @@ export function getEnduranceCapacity(
       sport: target.sport,
       target_duration_min: durationTarget,
       as_of_date: asOf,
-      evidence: { date: String(longestHistory.date), duration_min: best },
-      summary: `The ${label} capability has older evidence, but no recent outing to call it current.`,
+      evidence: evidenceFrom(longestHistory),
+      evidence_specificity: evidenceSpecificity,
+      summary: `The ${label} capability has older evidence, but no recent outing to call it current.${terrainEvidencePhrase(longestHistory)}`,
       next_step: `Re-enter calmly with an easy outing around ${next} minutes, then build from how it lands.`,
     };
   }
   const first = conservativeNext(durationTarget, null);
+  const hasLowerSpecificityFamilyEvidence = familyRows.length > 0;
   return {
     status: "no_data",
     sport: target.sport,
     target_duration_min: durationTarget,
     as_of_date: asOf,
     evidence: null,
-    summary: `There is not yet a logged ${label} outing to read this capability from.`,
+    evidence_specificity: hasLowerSpecificityFamilyEvidence ? "insufficient" : null,
+    summary: hasLowerSpecificityFamilyEvidence
+      ? `There are logged outings in the same sport family, but none identifies ${label} specifically enough to claim this capability.`
+      : `There is not yet a logged ${label} outing to read this capability from.`,
     next_step: `An easy ${first}-minute outing would establish a starting point; adjust from the real response.`,
   };
 }

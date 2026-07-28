@@ -3,6 +3,7 @@
 
 type EnduranceGoalRow = import("../contracts/client-api.js").ClientEnduranceGoal;
 type EnduranceComplianceRow = import("../contracts/client-api.js").ClientRunCompliance;
+type EnduranceAgenda = import("../contracts/client-api.js").ClientFlexibleTrainingAgenda;
 
 type EnduranceProposal = {
   id?: unknown;
@@ -26,23 +27,26 @@ async function renderPlanEndurance(): Promise<void> {
   const token = ++pollToken;
   let goal: EnduranceGoalRow | null = null;
   let compliance: EnduranceComplianceRow | null = null;
+  let agenda: EnduranceAgenda | null = null;
   let plan: unknown = [];
   let settings: Record<string, unknown> | null = null;
   try {
-    [goal, compliance, plan, settings] = await Promise.all([
+    [goal, compliance, agenda, plan, settings] = await Promise.all([
       api("/endurance-goal").catch(() => null),
       api("/run-compliance").catch(() => null),
+      api(`/training-agenda?date=${encodeURIComponent(localISO())}`).catch(() => null),
       api("/plan").catch(() => []),
       api("/settings").then((response) => (enduranceModel().record(response).settings as Record<string, unknown> | null) || null).catch(() => null),
     ]);
   } catch { /* paint with whatever resolved */ }
   if (token !== pollToken || !view.querySelector("#endPlanBody")) return;
-  paintPlanEndurance(goal, compliance, plan, settings);
+  paintPlanEndurance(goal, compliance, agenda, plan, settings);
 }
 
 function paintPlanEndurance(
   goalValue: EnduranceGoalRow | null,
   compliance: EnduranceComplianceRow | null,
+  agenda: EnduranceAgenda | null,
   plan: unknown,
   settings: Record<string, unknown> | null,
 ): void {
@@ -72,15 +76,23 @@ function paintPlanEndurance(
   else if (totalMin > 0) volumeText += ` · ${Math.round(totalMin)} min planned`;
   if (totalKm > 0 && goal && goal.weekly_km) volumeText += ` · target ~${goal.weekly_km} km/wk`;
   const volumeLine = runs.length ? `<div class="end-runs-total numeral">${escHtml(volumeText)}</div>` : "";
-  const runRows = runs.map(({ it, day_number }, index) => `
+  const agendaIntents = agenda && Array.isArray(agenda.intents) ? agenda.intents : [];
+  const runRows = runs.map(({ it, day_number }, index) => {
+    const intent = agendaIntents.find((entry) => Number(entry.provisional_day_number) === Number(day_number));
+    const anchor = intent?.provisional_date
+      ? `Suggested anchor · ${humanDate(String(intent.provisional_date))} · movable`
+      : `Suggested anchor · plan slot ${day_number} · movable`;
+    return `
       <div class="end-run-row reveal" style="${stagger(index + 2)}">
         <span class="run-pin" aria-hidden="true">▸</span>
         <div class="end-run-main">
           <span class="end-run-name">${escHtml(cardioLabel(it))}</span>
-          <span class="end-run-day lbl">Day ${escHtml(day_number)}</span>
+          <span class="end-run-day lbl">${escHtml(anchor)}</span>
         </div>
         <span class="end-run-pres numeral">${escHtml(cardioPrescription(it) || "—")}</span>
-      </div>`).join("");
+      </div>`;
+  }).join("");
+  const agendaHtml = trainingAgendaCard(agenda);
   const complianceHtml = typeof runComplianceLine === "function" ? runComplianceLine(compliance) : "";
   const syncHtml = typeof cardioSyncLine === "function" ? cardioSyncLine(settings, {}) : "";
   const runsSection = runs.length
@@ -92,7 +104,7 @@ function paintPlanEndurance(
        </div>${complianceHtml}${syncHtml}`
     : `<div class="end-runs-empty reveal" style="${stagger(2)}">
          <div class="lbl">This week's runs</div>
-         <p>No runs in your plan yet. Ask the coach below to build your week — each run lands on its day and keeps your lifts intact.</p>
+         <p>No runs in your plan yet. Ask the coach below to shape movable weekly intentions around your lifting and the work you actually log.</p>
        </div>${complianceHtml}${syncHtml}`;
 
   const presets = enduranceModel().presets(goal);
@@ -101,7 +113,7 @@ function paintPlanEndurance(
       <div class="end-shape-h"><span class="lbl">Shape your running</span></div>
       <p class="end-shape-sub">Tell the coach what you want — it drafts run prescriptions you review and apply. Your lifting plan is never touched.</p>
       <div class="end-chips">${chips}</div>
-      <textarea id="endInstr" class="form-textarea" rows="2" placeholder="e.g. ease my long run, my knee's cranky — or add a tempo on Thursday"></textarea>
+      <textarea id="endInstr" class="form-textarea" rows="2" placeholder="e.g. ease my long run, my knee's cranky — or find a tempo opening later this week"></textarea>
       <button id="endDraftBtn" class="logbtn" style="width:100%;height:44px;letter-spacing:.05em">ASK THE COACH</button>
       <div id="endDraftStatus" class="end-shape-status"></div>
       <div id="endDraft"></div>
@@ -110,7 +122,15 @@ function paintPlanEndurance(
   const leadHtml = goal
     ? `<p class="end-lead">Your running plan — the build, this week's runs, and a quick way to shape them.</p>`
     : "";
-  body.innerHTML = `<div id="endUpcomingSlot"></div>` + goalHtml + leadHtml + rampHtml + standingNote + runsSection + composer;
+  body.innerHTML =
+    `<div id="endUpcomingSlot"></div>` +
+    goalHtml +
+    leadHtml +
+    rampHtml +
+    standingNote +
+    agendaHtml +
+    runsSection +
+    composer;
 
   // The same calm forward look the Plan edit segment shows — a reshaped/lighter
   // week announces itself here too (running changes are ledgered under the

@@ -26,8 +26,12 @@ export interface EnduranceImpact {
   aerobic_te: number | null;
   anaerobic_te: number | null;
   training_load: number | null;
+  ascent_m: number | null;
+  elevation_loss_m: number | null;
   intensity: "easy" | "moderate" | "hard";
   load: "light" | "moderate" | "heavy";
+  load_character: EnduranceModality["loadCharacter"];
+  aerobic_volume: "full" | "mixed" | "limited";
   regions: MuscleGroup[];
   detail: string;
   why: string;
@@ -36,6 +40,7 @@ export interface EnduranceImpact {
 export function isLoadRelevantEnduranceImpact(impact: EnduranceImpact): boolean {
   if (impact.load === "moderate" || impact.load === "heavy") return true;
   if (impact.label === "hike") return false;
+  if (impact.aerobic_volume === "limited") return false;
   return (
     (impact.duration_min != null && impact.duration_min >= CARDIO_GRADE.moderateMin) ||
     (impact.distance_km != null && impact.distance_km >= CARDIO_GRADE.moderateKm)
@@ -75,6 +80,8 @@ function classifyImpactLoad(
   trainingLoad: number | null,
   label: string | null,
   zones45: number,
+  ascent: number | null,
+  descent: number | null,
 ): Pick<EnduranceImpact, "intensity" | "load" | "why"> {
   const hardLabel = /TEMPO|THRESHOLD|VO2MAX|ANAEROBIC|LACTATE/i.test(String(label ?? ""));
   const hard =
@@ -92,10 +99,45 @@ function classifyImpactLoad(
   const intensity: EnduranceImpact["intensity"] = hard ? "hard" : moderate ? "moderate" : "easy";
   const load: EnduranceImpact["load"] = hard || long ? "heavy" : moderate ? "moderate" : "light";
   const whyParts: string[] = [];
-  if (long) whyParts.push("long enough to fatigue the prime movers");
+  if (long && region.loadCharacter === "technical-eccentric") {
+    whyParts.push("long enough for sustained braking, handling and trunk demand");
+  } else if (long && region.loadCharacter === "eccentric") {
+    whyParts.push("long enough for sustained turning, braking and leg-control demand");
+  } else if (long) {
+    whyParts.push("long enough to fatigue the prime movers");
+  }
   if (hard) whyParts.push("hard enough to count as quality stress");
-  if (!whyParts.length && moderate) whyParts.push("moderate aerobic load");
-  if (!whyParts.length) whyParts.push("easy aerobic work");
+  if (!whyParts.length && moderate) {
+    whyParts.push(
+      region.loadCharacter === "technical-eccentric" || region.loadCharacter === "eccentric"
+        ? "moderate technical and eccentric load"
+        : "moderate aerobic load",
+    );
+  }
+  if (!whyParts.length) {
+    whyParts.push(
+      region.loadCharacter === "technical-eccentric" || region.loadCharacter === "eccentric"
+        ? "short technical and eccentric exposure"
+        : "easy aerobic work",
+    );
+  }
+  if (region.mode === "ride-trail-mtb") {
+    if ((ascent ?? 0) > 0 && (descent ?? 0) > 0) {
+      whyParts.push("climbing loads the legs while technical descending also asks for trunk, back and grip control");
+    } else if ((ascent ?? 0) > 0) {
+      whyParts.push("logged climbing adds leg and aerobic demand alongside trail handling");
+    } else {
+      whyParts.push("trail riding combines pedaling with trunk, back and grip demand");
+    }
+  } else if (region.mode === "ride-downhill-mtb") {
+    whyParts.push("lift-served or downhill time is technical load, not equivalent aerobic cycling volume");
+  } else if (region.mode === "ski-alpine") {
+    whyParts.push("alpine turns and braking add eccentric leg and core demand");
+  } else if (region.mode === "ski-nordic") {
+    whyParts.push("Nordic skiing carries aerobic full-body demand");
+  } else if (region.mode === "ski-touring") {
+    whyParts.push("touring climbs load the legs and core, with additional control on the descent");
+  }
   return { intensity, load, why: whyParts.join(" and ") };
 }
 
@@ -109,7 +151,9 @@ export function recentEnduranceImpacts(days = 3, date = localDateISO()): Enduran
               a.duration_min AS duration_min, a.distance_km AS distance_km,
               ga.te_label AS te_label, ga.aerobic_te AS ate, ga.anaerobic_te AS anate,
               ga.training_load AS training_load,
-              ga.hr_zones_json AS hr_zones_json
+              ga.hr_zones_json AS hr_zones_json,
+              ga.type AS garmin_type, ga.name AS garmin_name,
+              ga.ascent_m AS ascent_m, ga.elevation_loss_m AS elevation_loss_m
          FROM activities a
          LEFT JOIN garmin_activities ga ON ga.activity_id = a.id
         WHERE a.date >= ? AND a.date <= ?
@@ -117,16 +161,38 @@ export function recentEnduranceImpacts(days = 3, date = localDateISO()): Enduran
     ).all(since, today) as any[];
     return acts
       .map((a): EnduranceImpact | null => {
-        const region = matchEnduranceModality(`${a.type || ""} ${a.raw_text || ""} ${a.notes || ""}`);
+        const region = matchEnduranceModality(
+          String(a.type || ""),
+          `${a.raw_text || ""} ${a.notes || ""} ${a.garmin_type || ""} ${a.garmin_name || ""}`,
+        );
         if (!region) return null;
         const dur = a.duration_min != null ? Number(a.duration_min) : null;
         const km = a.distance_km != null ? Number(a.distance_km) : null;
         const ate = a.ate != null ? Number(a.ate) : null;
         const anate = a.anate != null ? Number(a.anate) : null;
         const trainingLoad = a.training_load != null ? Number(a.training_load) : null;
+        const ascent = a.ascent_m != null ? Number(a.ascent_m) : null;
+        const descent = a.elevation_loss_m != null ? Number(a.elevation_loss_m) : null;
         const z45 = z45Seconds(a.hr_zones_json);
-        const load = classifyImpactLoad(region, dur, km, ate, anate, trainingLoad, a.te_label ?? null, z45);
+        const load = classifyImpactLoad(
+          region,
+          dur,
+          km,
+          ate,
+          anate,
+          trainingLoad,
+          a.te_label ?? null,
+          z45,
+          Number.isFinite(ascent) ? ascent : null,
+          Number.isFinite(descent) ? descent : null,
+        );
         const detail = durPhrase(dur, km);
+        const aerobicVolume =
+          region.loadCharacter === "technical-eccentric" || region.loadCharacter === "eccentric"
+            ? "limited"
+            : region.loadCharacter === "mixed-terrain"
+              ? "mixed"
+              : "full";
         return {
           date: String(a.date),
           days_ago: dAgo(String(a.date)),
@@ -137,8 +203,12 @@ export function recentEnduranceImpacts(days = 3, date = localDateISO()): Enduran
           aerobic_te: Number.isFinite(ate) ? ate : null,
           anaerobic_te: Number.isFinite(anate) ? anate : null,
           training_load: Number.isFinite(trainingLoad) ? trainingLoad : null,
+          ascent_m: Number.isFinite(ascent) ? ascent : null,
+          elevation_loss_m: Number.isFinite(descent) ? descent : null,
           intensity: load.intensity,
           load: load.load,
+          load_character: region.loadCharacter,
+          aerobic_volume: aerobicVolume,
           regions: region.regions,
           detail,
           why: load.why,

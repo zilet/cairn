@@ -47,6 +47,14 @@ use the token support provided by the client).
   rides"** → `set_training_intent`. Keep the durable ordered priorities, endurance role, and
   sport-specific duration capability here. A temporary dated race belongs in `set_endurance_goal`;
   do not let the event silently replace the durable hierarchy. Read back with `get_training_intent`.
+- **"Fells ride / trail MTB / downhill MTB / skiing in winter"** → preserve the terrain or modality
+  in the `log_activity` text and in durable memory/intent when it describes identity. Trail/XC MTB
+  includes climbs and descents and is not downhill-only; lift-served downhill, road, gravel, alpine
+  skiing, Nordic skiing, touring, and unspecified skiing have different load meaning. Never invent a
+  skiing subtype the athlete did not state.
+- **"My run moved / what running still fits this week?"** → `get_training_agenda`. Treat run-plan
+  days as suggested anchors: actual compatible runs close one weekly intention even on another day,
+  completed work is not prescribed twice, and missed timing never creates catch-up volume.
 - **"Update my plan / progress my targets for next week"** → `draft_plan_update` with `agent: "auto"`
   (uses the user's configured rotation), then route the result through `apply_proposal_with_autonomy`.
   In Lead mode, bounded reversible changes land now or at the next natural boundary; structural changes

@@ -38,6 +38,7 @@ import {
   weeklyRunPlan,
 } from "../domain/training/index.js";
 import { backgroundOp } from "./background-op.js";
+import { flexibleTrainingAgenda } from "../repo.js";
 
 export const programRouter = Router();
 
@@ -260,6 +261,11 @@ programRouter.get("/performance", (req, res) =>
 // Both degrade to {available:false} for a non-runner / no zones.
 programRouter.get("/run-plan", (req, res) =>
   res.json(weeklyRunPlan(req.query.date ? String(req.query.date) : undefined))
+);
+// Rolling weekly run intentions: actual compatible logs close intentions and
+// suggested openings move around real strength/endurance load. Read-only.
+programRouter.get("/training-agenda", (req, res) =>
+  res.json(flexibleTrainingAgenda(req.query.date ? String(req.query.date) : undefined))
 );
 programRouter.get("/run-zones", (_req, res) => res.json(runZones()));
 // Per-canonical-muscle-group advance/stall trajectory + the cadenced strength

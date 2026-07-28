@@ -71,3 +71,12 @@ test("plan endurance draft card escapes runs and preserves apply controls", () =
   assert.match(html, /data-egdiscard="12&quot; onclick=&quot;bad"/);
   assert.doesNotMatch(html, /<coach>|<steady>|<run>|data-egapply="12" onclick|data-egdiscard="12" onclick/);
 });
+
+test("plan endurance orchestration uses the rolling agenda and movable anchor language", () => {
+  const source = readFileSync(join(root, "src/client/plan-endurance-client.ts"), "utf8");
+  assert.match(source, /api\(`\/training-agenda\?date=/);
+  assert.match(source, /trainingAgendaCard\(agenda\)/);
+  assert.match(source, /Suggested anchor/);
+  assert.match(source, /movable weekly intentions/);
+  assert.doesNotMatch(source, /each run lands on its day|>Day \$\{|tempo on Thursday/);
+});

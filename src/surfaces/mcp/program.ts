@@ -37,6 +37,7 @@ import {
   weeklyRunPlan,
 } from "../../domain/training/index.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
+import { flexibleTrainingAgenda } from "../../repo.js";
 
 export function registerProgramTools(server: McpToolRegistrar) {
   server.tool(
@@ -256,6 +257,13 @@ export function registerProgramTools(server: McpToolRegistrar) {
     "The RUNNING brain — this week's deterministic, periodized run mix (N easy Z2 + 1 long Z2 + 1 rotated quality session: tempo/threshold/VO2/hills), each with a bpm-bearing zone, distance/duration, and (for interval sessions) the interval structure. Conservative ~10%/wk build, down weeks, recovery-aware, race-week taper. The endurance counterpart to get_performance and the FLOOR the coach refines. {available:false} for a non-runner.",
     { date: z.string().optional() },
     async ({ date }) => asText(weeklyRunPlan(date))
+  );
+
+  server.tool(
+    "get_training_agenda",
+    "The deterministic rolling agenda for this week's easy, quality, and long run intentions. Actual compatible logs close intentions regardless of weekday; open intentions carry a flexible window and current suggested opening around real lifting/riding/running load. Read-only, suggestion-not-a-gate, and no catch-up volume is owed.",
+    { date: z.string().optional() },
+    async ({ date }) => asText(flexibleTrainingAgenda(date))
   );
 
   server.tool(

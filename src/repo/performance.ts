@@ -34,6 +34,7 @@ import { localDateISO } from "./shared.js";
 import { enduranceTestsDue } from "./run-progression.js";
 import { dexaTargeting, type DexaTargeting } from "./dexa-targeting.js";
 import { benchmarkMilestoneCandidates, type TrainingMilestoneCandidate } from "./training-milestones.js";
+import { getTrainingIntent } from "./training-intent.js";
 import {
   bandForPercentile,
   compareCurve,
@@ -623,8 +624,7 @@ function enduranceCapacity(
   sex: Sex,
   age: number | null
 ): EnduranceCapacity | null {
-  const disc = programState.discipline;
-  if (disc !== "endurance" && disc !== "hybrid") return null;
+  if (getTrainingIntent().endurance_role === "none") return null;
   const vo2raw = Number(recovery?.vo2max);
   const vo2 = Number.isFinite(vo2raw) && vo2raw >= 10 && vo2raw <= 100 ? vo2raw : null;
   const end = programState.endurance;

@@ -40,6 +40,7 @@ function loadProgressEnduranceController() {
     enduranceGoalCard: () => "",
     runComplianceLine: () => "",
     weeklyRunPlanCard: () => "",
+    trainingAgendaCard: (agenda) => agenda?.available ? "agenda:open" : "",
     enduranceCoachLine: () => "",
     cardioSyncLine: undefined,
     wireCardioSync: undefined,
@@ -52,6 +53,7 @@ function loadProgressEnduranceController() {
     enduranceBestRows: () => [],
     enduranceSportCardHtml: () => "",
     hybridLoadCardHtml: () => "",
+    localISO: () => "2026-06-30",
   };
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/progress-endurance-controller.js"), "utf8"), context);
@@ -71,6 +73,7 @@ function controllerDeps(overrides = {}) {
       if (path === "/stats") return { endurance: null };
       if (path === "/endurance-prs") return { sports: [], longest_km: null, longest_min: null, best_pace: [] };
       if (path === "/settings") return { settings: {} };
+      if (path.startsWith("/training-agenda")) return { available: true, intents: [] };
       if (path === "/program-state") return { hybrid: null };
       return null;
     },
@@ -107,8 +110,18 @@ test("progress endurance controller fans out reads and paints the empty enduranc
   assert.equal(deps.headerTitle.textContent, "Endurance");
   assert.equal(deps.state.progressSeg, "endurance");
   assert.equal(deps.wired, 1);
-  assert.deepEqual(apiCalls, ["/stats", "/endurance-prs", "/endurance-goal", "/run-compliance", "/settings", "/run-plan", "/program-state"]);
+  assert.deepEqual(apiCalls, [
+    "/stats",
+    "/endurance-prs",
+    "/endurance-goal",
+    "/run-compliance",
+    "/settings",
+    "/run-plan",
+    "/training-agenda?date=2026-06-30",
+    "/program-state",
+  ]);
   assert.match(view.querySelector("#endBody").innerHTML, /hero:Endurance:0/);
+  assert.match(view.querySelector("#endBody").innerHTML, /agenda:open/);
   assert.match(view.querySelector("#endBody").innerHTML, /No runs or rides logged yet/);
 });
 

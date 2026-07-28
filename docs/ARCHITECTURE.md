@@ -53,6 +53,31 @@ athlete-owned and keep the safety context visible as **Training by choice** rath
 what policy suggested. REST and MCP pass the same boolean, and older requests without it (or with the
 legacy exact phrase) remain valid.
 
+**Durable training identity, temporary events, and the rolling agenda.**
+`training-intent.ts` owns the athlete's ordered durable priorities, explicit endurance role, and
+optional sport-duration capability. `endurance_goal_json` remains the separate dated-race or standing
+objective; a temporary race may shape the week without silently becoming the athlete's durable
+identity. `weeklyRunPlan()` creates a conservative weekly running dose, while
+`flexibleTrainingAgenda()` reconciles that dose with actual run logs and the lower-body/cardio work
+that really occurred. Its day numbers are provisional anchors: a compatible early or late run closes
+one intention, a completed intention is never prescribed twice, hard lower-body/cardio work moves a
+key run toward a cleaner opening, cross-training contributes load but cannot falsely complete a run,
+and unfinished work disappears at the week boundary instead of becoming catch-up volume. Supporting
+endurance is capped at three useful runs in a normal week and two when recovery, a recovery cycle, or
+an active health hold argues for less; the weekly volume falls with that frequency reduction and each
+remaining run stays capped by recent exposure instead of absorbing the missing session. A stretch
+time target alone never increases dose.
+
+`endurance-sports.ts` separates legacy sport families from terrain/modal subtypes. Trail/XC MTB,
+downhill/lift-served MTB, road, gravel, alpine skiing, Nordic skiing, touring, and generic skiing
+remain distinct evidence and load modes. Structured activity type is authoritative for the family;
+provider text may refine a generic ride/ski within that family. Bare MTB means trail/XC, while
+downhill requires explicit gravity or lift-served evidence. A structured ride described as a Fells
+ride also resolves to trail/XC, while Fells hiking/running keeps its own structured family. Generic
+skiing stays generic until the athlete or activity identifies a subtype. The coach may use stored
+place/season facts to suggest practical options, but current weather requires a fresh source and
+weather never gates training.
+
 ### Body, nutrition, capture
 
 - Bodyweight log (`logWeight`/`listWeight`, syncs `profile.weight_lb`); the TDEE + lean-safe goal

@@ -51,7 +51,7 @@ const CLIENT_API_ROUTE_FAMILIES = new Set([
   "program-state", "progress", "proposals", "reaction-model", "ready", "recent-training", "recovery", "research",
   "reset", "run-compliance", "run-plan", "run-zones", "search", "session-suggest", "sessions", "sets", "settings",
   "since-last", "stats", "suggestions", "supplements", "symptom-links", "telemetry", "test-week", "today",
-  "today-agenda", "today-read", "trajectory", "turns", "update-check", "update-status", "version", "volume",
+  "today-agenda", "today-read", "training-agenda", "trajectory", "turns", "update-check", "update-status", "version", "volume",
   "week-ahead", "whole-person-trajectory",
 ]);
 

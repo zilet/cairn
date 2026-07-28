@@ -131,6 +131,7 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/program-state",
   "/performance",
   "/run-plan",
+  "/training-agenda",
   "/run-zones",
   "/muscle-trajectory",
   "/test-week",

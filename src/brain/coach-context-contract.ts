@@ -266,6 +266,7 @@ export interface CoachContextEnvelope {
   program_adjustments: CoachAdjustment[];
   run_zones: CoachRecord | null;
   run_plan: CoachRecord | null;
+  flexible_training_agenda: CoachRecord | null;
   run_variety: CoachRecord | null;
   endurance_tests: CoachRecord[];
   groups_trajectory: CoachRecord | null;

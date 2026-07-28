@@ -4,6 +4,8 @@
 type WeeklyRunPlan = import("../contracts/client-api.js").ClientWeeklyRunPlan;
 type EnduranceGoal = import("../contracts/client-api.js").ClientEnduranceGoal;
 type RunCompliance = import("../contracts/client-api.js").ClientRunCompliance;
+type FlexibleTrainingAgenda = import("../contracts/client-api.js").ClientFlexibleTrainingAgenda;
+type FlexibleRunIntent = import("../contracts/client-api.js").ClientFlexibleRunIntent;
 
 function runKindClass(kind: unknown): string {
   if (kind === "quality") return "wrun-quality";
@@ -50,6 +52,83 @@ function weeklyRunPlanCard(plan: WeeklyRunPlan | null | undefined): string {
       ${plan.quality_focus ? `<div class="wrun-focus"><span class="lbl">Quality focus</span> ${escHtml(plan.quality_focus)}</div>` : ""}
       <div class="wrun-rows">${runs}</div>
       ${whyBits.length ? `<div class="wrun-why"><span class="lbl">Why this week looks like this</span>${whyBits.map((why) => `<p>${escHtml(why)}</p>`).join("")}</div>` : ""}
+    </div>`;
+}
+
+function trainingAgendaDate(date: unknown): string {
+  return humanDate(String(date || ""));
+}
+
+function trainingAgendaDose(intent: FlexibleRunIntent): string {
+  const parts: string[] = [];
+  if (intent.target_distance_km != null && Number(intent.target_distance_km) > 0) {
+    parts.push(`${fmtKm(intent.target_distance_km)} km`);
+  } else if (intent.target_duration_min != null && Number(intent.target_duration_min) > 0) {
+    parts.push(`${Math.round(Number(intent.target_duration_min))} min`);
+  }
+  if (intent.target_zone) parts.push(String(intent.target_zone));
+  return parts.join(" · ");
+}
+
+function trainingAgendaCard(agenda: FlexibleTrainingAgenda | null | undefined): string {
+  if (!agenda || agenda.available === false || !Array.isArray(agenda.intents) || !agenda.intents.length) return "";
+  const rows = agenda.intents.map((intent) => {
+    const kind = runKindClass(intent.kind);
+    const label = intent.label || `${runKindLabel(intent.kind)} run`;
+    const dose = trainingAgendaDose(intent);
+    let state: string;
+    let evidence = "";
+    if (intent.status === "completed" && intent.completion) {
+      const completion = intent.completion;
+      const bits: string[] = [];
+      if (completion.distance_km != null && Number(completion.distance_km) > 0) {
+        bits.push(`${fmtKm(completion.distance_km)} km`);
+      }
+      if (completion.duration_min != null && Number(completion.duration_min) > 0) {
+        bits.push(`${Math.round(Number(completion.duration_min))} min`);
+      }
+      bits.push(completion.intensity === "quality" ? "quality effort matched" : "easy effort matched");
+      state = `Completed ${trainingAgendaDate(completion.date)}`;
+      evidence = bits.join(" · ");
+    } else {
+      const suggested = intent.suggested_date
+        ? `Suggested opening ${trainingAgendaDate(intent.suggested_date)}`
+        : "Open for a compatible opening";
+      const window =
+        `Flexible window ${trainingAgendaDate(intent.window_start)}–${trainingAgendaDate(intent.window_end)}`;
+      state = `${suggested} · ${window}`;
+      evidence = dose;
+    }
+    const exactDate = intent.status === "completed" && intent.completion
+      ? absDate(String(intent.completion.date || ""))
+      : intent.suggested_date
+        ? absDate(String(intent.suggested_date))
+        : "";
+    return `<div class="wrun-row ${kind}">
+        <div class="wrun-row-head">
+          <span class="wrun-kind">${escHtml(intent.status === "completed" ? `Done · ${runKindLabel(intent.kind)}` : `Open · ${runKindLabel(intent.kind)}`)}</span>
+          <span class="wrun-label">${escHtml(label)}</span>
+        </div>
+        <div class="wrun-pres"${exactDate ? ` title="${escAttr(exactDate)}"` : ""}>${escHtml(state)}</div>
+        ${evidence ? `<div class="wrun-note">${escHtml(evidence)}</div>` : ""}
+      </div>`;
+  }).join("");
+  const hasOpen = agenda.intents.some((intent) => intent.status === "open");
+  const next = agenda.next
+    ? `Next suggested opening: ${runKindLabel(agenda.next.kind)} · ${trainingAgendaDate(agenda.next.suggested_date)}`
+    : hasOpen
+      ? "No clean opening remains this week"
+      : "The week's run intentions are covered";
+  return `<div class="wrun-card reveal" style="${stagger(0)}" data-training-agenda>
+      <div class="wrun-head">
+        <span class="lbl">Movable running week</span>
+        <span class="wrun-mix">${escHtml(next)}</span>
+      </div>
+      <p class="wrun-note">${escHtml(agenda.why || "Run intentions move with the work you actually do.")}</p>
+      <div class="wrun-rows">${rows}</div>
+      <div class="wrun-why">
+        <p>Suggested openings can move with your actual lifting, riding, and running. Nothing unfinished is owed as catch-up.</p>
+      </div>
     </div>`;
 }
 
@@ -120,6 +199,7 @@ const CAIRN_PROGRESS_RUN_PLAN = {
   runKindClass,
   runKindLabel,
   weeklyRunPlanCard,
+  trainingAgendaCard,
   enduranceGoalCard,
   runComplianceLine,
   enduranceCoachLine,
@@ -130,6 +210,7 @@ Object.assign(globalThis, {
   runKindClass,
   runKindLabel,
   weeklyRunPlanCard,
+  trainingAgendaCard,
   enduranceGoalCard,
   runComplianceLine,
   enduranceCoachLine,
@@ -141,6 +222,7 @@ if (typeof window !== "undefined") {
     runKindClass,
     runKindLabel,
     weeklyRunPlanCard,
+    trainingAgendaCard,
     enduranceGoalCard,
     runComplianceLine,
     enduranceCoachLine,

@@ -82,6 +82,7 @@ const ENDURANCE = [
   "run_compliance",
   "run_zones",
   "run_plan",
+  "flexible_training_agenda",
   "run_variety",
   "endurance_tests",
 ] as const;

@@ -33,8 +33,9 @@ import {
   setBrainExpectationStatus,
   transitionBrainDecision,
 } from "../brain-decisions.js";
-import { activeRecoveryWeek, getPrimaryDiscipline } from "../profile.js";
+import { activeRecoveryWeek } from "../profile.js";
 import { addDaysISO, localDateISO } from "../shared.js";
+import { getTrainingIntent } from "../training-intent.js";
 import { dayLoad, hardCardioDay, recentCardioLoadMedian, type TrainingLoad } from "../training-read.js";
 
 export const DAY_READ_ADHERENCE_METRIC = "day_read_adherence";
@@ -80,8 +81,16 @@ export interface DayTrainingTruthOptions {
   cardioLoadMedian?: number | null;
 }
 
+function configuredEnduranceCountsAsTraining(): boolean {
+  try {
+    return getTrainingIntent().endurance_role !== "none";
+  } catch {
+    return false;
+  }
+}
+
 export function dayTrainingTruth(date: string, opts: DayTrainingTruthOptions = {}): DayTrainingTruth {
-  const countsCardio = opts.countsCardio ?? ((d) => d === "endurance" || d === "hybrid")(getPrimaryDiscipline());
+  const countsCardio = opts.countsCardio ?? configuredEnduranceCountsAsTraining();
   const recoveryWeekActive = !!activeRecoveryWeek(date);
   const setRow = db
     .prepare(
@@ -499,14 +508,7 @@ export function readAdherenceModel(asOf: string = localDateISO(), windowDays = 4
   // Discipline and the cardio-load median are properties of the athlete NOW, not
   // of each day, so they are resolved once instead of per day (42 days × a 42-day
   // median query is what made a naive version too heavy for the coach context).
-  const discipline = (() => {
-    try {
-      return getPrimaryDiscipline();
-    } catch {
-      return "strength" as const;
-    }
-  })();
-  const countsCardio = discipline === "endurance" || discipline === "hybrid";
+  const countsCardio = configuredEnduranceCountsAsTraining();
   const cardioLoadMedian = countsCardio
     ? null
     : (() => {

@@ -31,6 +31,7 @@ import type {
   ClientBloodPressureReading,
   ClientCardiovascularRisk,
   ClientEnduranceGoal,
+  ClientFlexibleTrainingAgenda,
   ClientHealthStanding,
   ClientHealthStandingBloodPressure,
   ClientHealthStandingBodyComp,
@@ -1530,6 +1531,7 @@ declare global {
   declare function sessionCardHtml(session: unknown, index: number): string;
   declare function numOrNull(value: unknown): number | null;
   declare function weeklyRunPlanCard(plan: ClientWeeklyRunPlan | null | undefined): string;
+  declare function trainingAgendaCard(agenda: ClientFlexibleTrainingAgenda | null | undefined): string;
   declare function enduranceGoalCard(goal: ClientEnduranceGoal | null | undefined): string;
   declare function runComplianceLine(compliance: ClientRunCompliance | null | undefined): string;
   declare function enduranceCoachLine(plan: ClientWeeklyRunPlan | null | undefined): string;
@@ -1674,6 +1676,7 @@ declare global {
   declare function paintPlanEndurance(
     goalValue: ClientEnduranceGoal | null,
     compliance: ClientRunCompliance | null,
+    agenda: ClientFlexibleTrainingAgenda | null,
     plan: unknown,
     settings: Record<string, unknown> | null
   ): void;
@@ -3425,6 +3428,7 @@ declare global {
       runKindClass(kind: unknown): string;
       runKindLabel(kind: unknown): string;
       weeklyRunPlanCard(plan: ClientWeeklyRunPlan | null | undefined): string;
+      trainingAgendaCard(agenda: ClientFlexibleTrainingAgenda | null | undefined): string;
       enduranceGoalCard(goal: ClientEnduranceGoal | null | undefined): string;
       runComplianceLine(compliance: ClientRunCompliance | null | undefined): string;
       enduranceCoachLine(plan: ClientWeeklyRunPlan | null | undefined): string;
@@ -3603,6 +3607,7 @@ declare global {
         compliance: ClientRunCompliance | null,
         settings: unknown,
         runPlan: ClientWeeklyRunPlan | null,
+        agenda: ClientFlexibleTrainingAgenda | null,
         programState: ClientProgramState | null,
         deps: ClientProgressEnduranceControllerDeps
       ): void;

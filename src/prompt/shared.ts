@@ -162,7 +162,27 @@ export function renderDiscipline(ctx: any, focus: "training" | "nutrition" | "da
   const ageLine = age != null && Number.isFinite(age)
     ? `AGE CONTEXT: age ${Math.round(age)} informs the long view, but is never an automatic brake and never implies fragility. Progress from actual recovery, performance, soreness, joint/tendon feedback and history; preserve muscle and aerobic capacity.`
     : `AGE CONTEXT: do not assume fragility. Progress from actual recovery, performance, soreness, joint/tendon feedback and history; preserve muscle and aerobic capacity.`;
-  const head = `\n${durable}\n${roleLine}${capabilityLine ? `\n${capabilityLine}` : ""}\n${ageLine}`;
+  const athleteContext = [
+    sport,
+    capability?.sport,
+    capability?.context,
+    ...(Array.isArray(ctx?.memory) ? ctx.memory.map((row: any) => row?.content) : []),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  const sportContext = /\b(?:mountain bik(?:e|ing)|mtb|trail rid(?:e|ing)|ski|skiing|nordic|backcountry)\b/.test(
+    athleteContext
+  )
+    ? `\nSPORT CONTEXT: preserve the athlete's stated subtype and terrain. Trail or cross-country MTB means mixed climbing and descending, never downhill-only. Honor stated seasonal sport switches without rewriting the durable priority order; off-season work is minimum-effective maintenance, not identity loss. If a skiing subtype is not stated, keep it generic — do not assume alpine, Nordic or touring.`
+    : "";
+  const placeContext =
+    /\b(?:location|live(?:s|d)? in|weather|season|seasonal|winter|springtime|summer|autumn|fall season)\b/.test(
+      athleteContext
+    )
+    ? `\nPLACE & WEATHER: location and season facts in memory may inform practical options and known seasonal changes. Never invent current weather without a fresh weather source, and never treat weather as a gate.`
+    : "";
+  const head = `\n${durable}\n${roleLine}${capabilityLine ? `\n${capabilityLine}` : ""}\n${ageLine}${sportContext}${placeContext}`;
   if (focus === "nutrition") {
     if (role === "none") {
       return `${head}
@@ -990,12 +1010,42 @@ export function renderRunPlan(ctx: PartialCoachContext): string {
       if (Array.isArray(r.interval) && r.interval.length) {
         ivl = ` — ${r.interval.map((iv: any) => `${iv.reps} × ${iv.on}${iv.zone ? ` @ ${iv.zone}` : ""}, ${iv.off} recovery`).join("; ")}`;
       }
-      lines.push(`  - Day ${r.day_number}: ${r.label || "Run"}${dist ? ` ${dist}` : ""}${zone}${ivl}.`);
+      lines.push(`  - Provisional day ${r.day_number}: ${r.label || "Run"}${dist ? ` ${dist}` : ""}${zone}${ivl}.`);
     }
     if (Array.isArray(rp.rationale) && rp.rationale.length) {
       lines.push(`  Why this week: ${rp.rationale.join(" ")}`);
     }
+    lines.push(
+      "  Plan day numbers are provisional anchors, not fixed-day obligations. Actual logs and the rolling read control completion and the next opening; never call an off-day run missed, never repeat a completed intention, and never add catch-up volume."
+    );
     lines.push("  Keep lifting supportive so it doesn't compromise the key runs. Apply via the run-plan apply path (a draft, never auto-applied).");
+  }
+  const agenda = ctx?.flexible_training_agenda as any;
+  if (agenda?.available && Array.isArray(agenda.intents)) {
+    lines.push(`ROLLING RUN AGENDA (actual logs control; dates remain suggestions): ${agenda.why || "Fit the remaining intentions into the cleanest openings."}`);
+    for (const intent of agenda.intents) {
+      const target =
+        intent.target_distance_km != null
+          ? `${intent.target_distance_km} km`
+          : intent.target_duration_min != null
+            ? `${intent.target_duration_min} min`
+            : "";
+      if (intent.status === "completed") {
+        const evidence = intent.completion;
+        const dose = evidence?.distance_km != null
+          ? `${evidence.distance_km} km`
+          : evidence?.duration_min != null
+            ? `${evidence.duration_min} min`
+            : "logged run";
+        lines.push(`  - ${intent.kind}: COMPLETED on ${evidence?.date || "a logged date"} (${dose}); do not recommend it again.`);
+      } else {
+        const window = intent.window_start && intent.window_end ? `${intent.window_start} to ${intent.window_end}` : "this week";
+        lines.push(
+          `  - ${intent.kind}: OPEN${target ? ` · ${target}` : ""}; flexible window ${window}${intent.suggested_date ? `, current best opening ${intent.suggested_date}` : ""}.`
+        );
+      }
+    }
+    if (agenda.next?.guidance) lines.push(`  Next: ${agenda.next.guidance}`);
   }
   // Mono-stimulus running → a gentle variety nudge (only fires with enough history).
   if (variety?.note) {

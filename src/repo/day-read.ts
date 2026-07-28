@@ -36,6 +36,7 @@ import { activeRecoveryWeek, getPrimaryDiscipline } from "./profile.js";
 import { getProgramState } from "./program-state.js";
 import { programBalance } from "./progression.js";
 import { daysBetweenISO, localDateISO } from "./shared.js";
+import { getTrainingIntent } from "./training-intent.js";
 import {
   lifeCapacityIsCommitment,
   planningSignalState,
@@ -1316,7 +1317,11 @@ export function dayRead(
   // keeps suggesting fresh sessions on top of hard mileage. Default 'strength'
   // keeps the existing behavior byte-for-byte.
   const discipline = getPrimaryDiscipline();
-  const countsCardio = discipline === "endurance" || discipline === "hybrid";
+  // Explicit ordered intent is authoritative. Legacy profiles still resolve to
+  // their former discipline behavior through getTrainingIntent()'s derived
+  // fallback, while a strength-labelled athlete with supporting endurance no
+  // longer has their real rides/runs disappear from the recovery rhythm.
+  const countsCardio = getTrainingIntent().endurance_role !== "none";
 
   // Lifting-session days (a logged set) — still used for "did they train today".
   const sessionDates = new Set(

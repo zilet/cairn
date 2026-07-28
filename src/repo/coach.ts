@@ -22,6 +22,7 @@ import { getProgramState, type ProgramState } from "./program-state.js";
 import { getStrengthJourney } from "./strength-objectives.js";
 import { performanceStanding } from "./performance.js";
 import { enduranceTestsDue, runVarietyRead, runZones, weeklyRunPlan } from "./run-progression.js";
+import { flexibleTrainingAgenda } from "./flexible-training-agenda.js";
 import { dexaTargeting } from "./dexa-targeting.js";
 import { muscleGroupTrajectory, planExerciseNames, testWeekDue } from "./muscle-trajectory.js";
 import { coachingFocus } from "./coaching-focus.js";
@@ -423,6 +424,7 @@ interface CoachContextSignals {
   strengthJourneyView: any;
   runZonesView: any;
   runPlanView: any;
+  flexibleTrainingAgendaView: any;
   dexaTargetingView: any;
   testWeekView: any;
   healthFocusView: any;
@@ -698,10 +700,18 @@ function buildRunningSlice(
   | "run_compliance"
   | "run_zones"
   | "run_plan"
+  | "flexible_training_agenda"
   | "run_variety"
   | "endurance_tests"
 > {
-  const { enduranceCapacityView, runZonesView, runPlanView, runVarietyView, enduranceTestsView } = signals;
+  const {
+    enduranceCapacityView,
+    runZonesView,
+    runPlanView,
+    flexibleTrainingAgendaView,
+    runVarietyView,
+    enduranceTestsView,
+  } = signals;
   return {
     // The endurance OBJECTIVE (v37) — race (dated, periodized + taper) or standing
     // (no date, maintain readiness), with race timing/phase pre-computed. Null when
@@ -724,6 +734,10 @@ function buildRunningSlice(
     // block/zones already computed so nothing recomputes. {available:false} for a
     // pure strength athlete with no running.
     run_plan: runPlanView,
+    // A rolling reconciliation of the provisional run slots against what was
+    // actually logged. Calendar anchors remain compatible with the stored plan,
+    // but completion and the next clean opening follow reality.
+    flexible_training_agenda: flexibleTrainingAgendaView,
     // Mono-stimulus running flag (all-easy / one-distance-on-repeat) → the missing
     // stimulus. null when there's not enough running to read variety honestly.
     run_variety: runVarietyView,
@@ -922,7 +936,15 @@ function getCoachContextFromSnapshot(): CoachContext {
         recovery,
         block: activeBlock,
         zones: runZonesView ?? undefined,
+        trainingIntent: trainingIntentView,
       });
+    } catch {
+      return null;
+    }
+  });
+  const flexibleTrainingAgendaView = brainSignal(`flexible_training_agenda:${today}`, () => {
+    try {
+      return flexibleTrainingAgenda(today, { runPlan: runPlanView });
     } catch {
       return null;
     }
@@ -1053,7 +1075,7 @@ function getCoachContextFromSnapshot(): CoachContext {
   });
   const todayLoadView = brainSignal(`today_load:${today}`, () =>
     dayLoad(today, {
-      countsCardio: profile?.primary_discipline === "endurance" || profile?.primary_discipline === "hybrid",
+      countsCardio: trainingIntentView.endurance_role !== "none",
       recoveryWeekActive: !!activeRecoveryWeek(today),
     })
   );
@@ -1244,6 +1266,7 @@ function getCoachContextFromSnapshot(): CoachContext {
     strengthJourneyView,
     runZonesView,
     runPlanView,
+    flexibleTrainingAgendaView,
     dexaTargetingView,
     testWeekView,
     healthFocusView,
