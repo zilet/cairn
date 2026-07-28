@@ -104,11 +104,105 @@ test("a completed intention is consumed once and cannot be recommended again", (
   assert.notEqual(agenda.next?.intent_id, easy.id);
 });
 
+test("a live-shaped threshold run today reserves today and moves the remaining easy intention to tomorrow", () => {
+  const activity = repo.addActivity({
+    type: "run",
+    date: TUESDAY,
+    duration_min: 46.9,
+    distance_km: 7,
+  });
+  addQualityEvidence(activity, { label: "LACTATE_THRESHOLD", aerobicTe: 3.5 });
+  const agenda = repo.flexibleTrainingAgenda(TUESDAY, {
+    // No quality intention remains in this supporting shape, so this sufficiently
+    // long threshold effort closes the compatible long intention exactly once.
+    runPlan: plan([run(1, "easy", 6), run(6, "long", 8)]),
+  });
+  const completed = agenda.intents.find((intent) => intent.status === "completed");
+  const easy = agenda.intents.find((intent) => intent.kind === "easy");
+  assert.equal(completed.kind, "long");
+  assert.equal(completed.completion.activity_id, activity.id);
+  assert.equal(completed.completion.date, TUESDAY);
+  assert.equal(easy.status, "open");
+  assert.equal(easy.suggested_date, WEDNESDAY, "today's real run reserves today from a second run suggestion");
+  assert.equal(agenda.today_guidance, "not_first_choice");
+  assert.equal(agenda.next.intent_id, easy.id);
+  assert.equal(agenda.next.suggested_date, WEDNESDAY);
+  assert.match(agenda.next.guidance, /logged cardio already fills today's opening/i);
+  assert.doesNotMatch(agenda.next.guidance, /key run/i);
+});
+
+test("a matched easy-effort completion date cannot be reused for another run intention", () => {
+  const activity = repo.addActivity({
+    type: "run",
+    date: TUESDAY,
+    duration_min: 50,
+    distance_km: 8,
+  });
+  const agenda = repo.flexibleTrainingAgenda(TUESDAY, {
+    runPlan: plan([run(1, "easy", 6), run(6, "long", 8)]),
+  });
+  const long = agenda.intents.find((intent) => intent.kind === "long");
+  const easy = agenda.intents.find((intent) => intent.kind === "easy");
+  assert.equal(long.status, "completed");
+  assert.equal(long.completion.intensity, "easy", "the completion itself carries no hard-effort grade");
+  assert.equal(easy.suggested_date, WEDNESDAY);
+  assert.notEqual(agenda.next.suggested_date, TUESDAY);
+});
+
+test("a short unmatched run still reserves its actual date from another run suggestion", () => {
+  repo.addActivity({
+    type: "run",
+    date: TUESDAY,
+    duration_min: 8,
+    distance_km: 1,
+  });
+  const agenda = repo.flexibleTrainingAgenda(TUESDAY, {
+    runPlan: plan([run(2, "easy", 6)]),
+  });
+  assert.equal(agenda.intents[0].status, "open", "the short run does not complete the intended dose");
+  assert.equal(agenda.intents[0].suggested_date, WEDNESDAY);
+  assert.equal(agenda.today_guidance, "not_first_choice");
+});
+
+test("a completed key run preserves separation before another key run", () => {
+  repo.addActivity({
+    type: "run",
+    date: TUESDAY,
+    duration_min: 10,
+    distance_km: 1.5,
+  });
+  const agenda = repo.flexibleTrainingAgenda(TUESDAY, {
+    runPlan: plan([run(2, "long", 2), run(2, "quality", 7)]),
+  });
+  const quality = agenda.intents.find((intent) => intent.kind === "quality");
+  const long = agenda.intents.find((intent) => intent.kind === "long");
+  assert.equal(long.status, "completed");
+  assert.equal(long.completion.intensity, "easy");
+  assert.equal(quality.status, "open");
+  assert.equal(quality.suggested_date, "2026-04-23", "the next key run keeps a clear intervening day");
+});
+
 test("cross-training informs load but cannot complete half-marathon running", () => {
   repo.addActivity({ type: "mountain_biking", date: MONDAY, duration_min: 120, distance_km: 30 });
   const agenda = repo.flexibleTrainingAgenda(TUESDAY, { runPlan: plan([run(2, "easy", 6)]) });
   assert.equal(agenda.intents[0].status, "open");
   assert.equal(agenda.intents[0].completion, null);
+});
+
+test("light cross-training can share an easy-run day without blocking the week", () => {
+  repo.addActivity({ type: "ride", date: TUESDAY, duration_min: 10, distance_km: 2 });
+  const agenda = repo.flexibleTrainingAgenda(TUESDAY, { runPlan: plan([run(2, "easy", 6)]) });
+  assert.equal(agenda.intents[0].status, "open");
+  assert.equal(agenda.intents[0].suggested_date, TUESDAY);
+  assert.equal(agenda.today_guidance, "open");
+});
+
+test("moderate cross-training reserves today from another run suggestion", () => {
+  repo.addActivity({ type: "ride", date: TUESDAY, duration_min: 30, distance_km: 5 });
+  const agenda = repo.flexibleTrainingAgenda(TUESDAY, { runPlan: plan([run(2, "easy", 6)]) });
+  assert.equal(agenda.intents[0].status, "open");
+  assert.equal(agenda.intents[0].suggested_date, WEDNESDAY);
+  assert.equal(agenda.today_guidance, "not_first_choice");
 });
 
 test("an actually shifted lower-body lift moves a key run away from the new conflict", () => {
@@ -131,6 +225,25 @@ test("an actually shifted lower-body lift moves a key run away from the new conf
   assert.equal(quality.suggested_date, "2026-04-23", "today and the following day stay clear of the shifted lift");
   assert.equal(agenda.today_guidance, "not_first_choice");
   assert.match(quality.rationale, /moves the quality run around actual lower-body/i);
+});
+
+test("a lower-body-only date remains available for optional easy running", () => {
+  for (let set_number = 1; set_number <= 3; set_number++) {
+    repo.logSetByName({
+      exercise: "Back Squat",
+      date: TUESDAY,
+      set_number,
+      weight: 200,
+      reps: 5,
+      rir: 2,
+    });
+  }
+  db.prepare(`UPDATE exercises SET muscle_group = 'quads' WHERE name = 'Back Squat'`).run();
+  const agenda = repo.flexibleTrainingAgenda(TUESDAY, {
+    runPlan: plan([run(2, "easy", 6)]),
+  });
+  assert.equal(agenda.intents[0].suggested_date, TUESDAY);
+  assert.equal(agenda.today_guidance, "easy_only");
 });
 
 test("supporting endurance stays at three runs and falls to two when recovery is constrained", () => {

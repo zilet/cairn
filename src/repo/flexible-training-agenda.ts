@@ -358,8 +358,18 @@ export function flexibleTrainingAgenda(
   // the only clean key-run opening. Dates are unique, and quality/long intentions
   // need at least one day between them. If the remaining week cannot provide that,
   // the later intent stays undated rather than piling onto the same/adjacent day.
-  const usedDates = new Set<string>();
-  const keyDates: string[] = [];
+  // Any actual run consumes that date even when its dose is too small to close a
+  // weekly intention. Moderate/hard cross-training also consumes the date; light
+  // cross-training may still share an easy-run day rather than becoming a blanket
+  // veto for active commuters or recovery walks.
+  const actualOccupiedDates = new Set<string>([...cardioDates, ...observations.map((item) => item.date)]);
+  for (const intent of intents) {
+    if (intent.completion?.date) actualOccupiedDates.add(intent.completion.date);
+  }
+  const usedDates = new Set<string>(actualOccupiedDates);
+  const keyDates = intents
+    .filter((intent) => intent.status === "completed" && intent.kind !== "easy" && intent.completion?.date)
+    .map((intent) => intent.completion!.date);
   const openIndexes = plan.runs
     .map((run, index) => ({ run, index, intent: intents[index] }))
     .filter((row) => row.intent.status === "open")
@@ -409,20 +419,25 @@ export function flexibleTrainingAgenda(
     null;
   const allComplete = intents.every((intent) => intent.status === "completed");
   const keyOpen = intents.some((intent) => intent.status === "open" && intent.kind !== "easy");
+  const todayAlreadyOccupied = actualOccupiedDates.has(asOf);
   const todayGuidance: FlexibleTrainingAgenda["today_guidance"] = allComplete
     ? "complete"
-    : todayBlocked && easyToday
-      ? "easy_only"
-      : todayBlocked && keyOpen
-        ? "not_first_choice"
-        : "open";
+    : todayAlreadyOccupied
+      ? "not_first_choice"
+      : todayBlocked && easyToday
+        ? "easy_only"
+        : todayBlocked && keyOpen
+          ? "not_first_choice"
+          : "open";
   const next = nextIntent?.suggested_date
     ? {
         intent_id: nextIntent.id,
         kind: nextIntent.kind,
         suggested_date: nextIntent.suggested_date,
         guidance:
-          todayGuidance === "easy_only"
+          todayAlreadyOccupied
+            ? "Today's logged cardio already fills today's opening; keep the remaining weekly intention for a later day."
+            : todayGuidance === "easy_only"
             ? "Easy running is the cleaner option around the lower-body/cardio load; keep the key run for a fresher opening."
             : todayGuidance === "not_first_choice"
               ? "Today is not the first choice for a key run; the weekly intention stays open without catch-up volume."
