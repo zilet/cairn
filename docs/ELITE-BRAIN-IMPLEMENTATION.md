@@ -36,6 +36,26 @@ The original lunch failure mode is explicitly guarded: a food-only turn cannot t
 - `day_read_adherence` (`src/repo/brain/read-adherence.ts`, added 2026-07-25) is the ledger's one
   same-day expectation — see below.
 
+### Durable training intent and temporary events (added 2026-07-28)
+
+`profile.training_intent_json` is the athlete-owned ordering of `longevity`, `muscle`, `leanness`,
+`strength`, and `endurance`. Its `endurance_role` says whether endurance is absent, supporting,
+co-primary, or primary. This replaces the old implicit assumption that every `hybrid` athlete wants
+strength and endurance to be co-equal. Existing profiles remain compatible through a derived view
+until the athlete explicitly saves an ordering.
+
+An optional sport-specific duration target captures a real-world capability such as being ready for
+a 120-minute mountain-bike ride. `getEnduranceCapacity()` reads only matching logged activities and
+describes that capability as ready, building, rebuilding, or not yet observed; it never mutates a
+plan. A dated `endurance_goal_json` race remains a separate temporary overlay. Its phase can shape
+run preparation, but a supporting event cannot silently outrank higher durable muscle, longevity,
+or body-composition goals.
+
+Age is context for the long view, never an automatic brake or a proxy for fragility. The prompts
+pair it with actual recovery, performance, soreness, joint/tendon feedback, training history, and
+life context before changing dose. The same generic contract supports athletes with no endurance,
+supporting endurance, co-primary hybrid goals, or endurance-first goals.
+
 ### The day-read adherence loop (added 2026-07-25)
 
 Every other expectation in the ledger waits one to four weeks for its evidence to mature — long

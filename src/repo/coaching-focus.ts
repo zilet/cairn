@@ -109,6 +109,20 @@ interface EnduranceGoalInput {
   weeks_to_race?: unknown;
 }
 
+interface TrainingIntentInput {
+  priorities?: unknown;
+  endurance_role?: unknown;
+  source?: unknown;
+}
+
+interface EnduranceCapacityInput {
+  status?: unknown;
+  sport?: unknown;
+  target_duration_min?: unknown;
+  summary?: unknown;
+  next_step?: unknown;
+}
+
 interface ProgramMesocycleInput {
   phase?: unknown;
   note?: unknown;
@@ -267,6 +281,8 @@ interface ContextTodayInput {
 
 export interface CoachingFocusInput {
   discipline?: CoachingDisciplineInput | null;
+  trainingIntent?: TrainingIntentInput | null;
+  enduranceCapacity?: EnduranceCapacityInput | null;
   enduranceGoal?: EnduranceGoalInput | null;
   goalMode?: string;
   programState?: ProgramStateInput | null;
@@ -390,6 +406,33 @@ function candScore(c: Candidate): number {
 }
 function byScore(a: Candidate, b: Candidate): number {
   return candScore(b) - candScore(a);
+}
+
+function enduranceRole(inp: CoachingFocusInput): "none" | "supporting" | "co_primary" | "primary" {
+  const explicit = lc(inp.trainingIntent?.endurance_role);
+  if (explicit === "supporting" || explicit === "co_primary" || explicit === "primary") return explicit;
+  return "none";
+}
+
+function activeRace(inp: CoachingFocusInput): boolean {
+  const phase = lc(inp.enduranceGoal?.phase);
+  return !!inp.enduranceGoal?.is_race && phase !== "past";
+}
+
+// A deliberately small internal tie-break from the athlete's ordered durable
+// intent. It can bias the conductor, never create a candidate or leak a rank.
+function applyIntentBias(candidate: Candidate, inp: CoachingFocusInput): Candidate {
+  const priorities = inputArray<unknown>(inp.trainingIntent?.priorities).map(lc);
+  const matches = (priority: string): boolean => {
+    if (priority === "muscle" || priority === "strength") return candidate.item.domain === "training";
+    if (priority === "leanness") return candidate.item.domain === "body" || candidate.item.domain === "nutrition";
+    if (priority === "endurance") return candidate.item.domain === "running";
+    if (priority === "longevity") return candidate.item.domain === "health" || candidate.item.domain === "recovery";
+    return false;
+  };
+  const at = priorities.findIndex(matches);
+  if (at < 0) return candidate;
+  return { ...candidate, leverage: candidate.leverage + Math.max(0.04, 0.2 - at * 0.04) };
 }
 function cleanEvidence(lines: unknown): string[] | undefined {
   const out = inputArray<unknown>(lines)
@@ -770,13 +813,17 @@ function runningCandidate(inp: CoachingFocusInput): Candidate | null {
   const goal = inp.enduranceGoal;
   const end = inp.performance?.endurance;
   const phase = lc(goal?.phase);
+  const role = enduranceRole(inp);
+  const raceActive = activeRace(inp);
   // A dated race in build/sharpen is time-bound — high leverage, lead-eligible.
   // (getEnduranceGoal discriminates on `is_race`/`mode`, never a `kind` field.)
   if (goal?.is_race && (phase === "build" || phase === "sharpen")) {
+    const legacyRaceLead = role === "none" && lc(inp.trainingIntent?.source) !== "explicit";
+    const leadEligible = role === "primary" || role === "co_primary" || legacyRaceLead;
     return {
       key: "running-race",
-      leverage: 4.0,
-      slot: "lead",
+      leverage: leadEligible ? 4.0 : role === "supporting" ? 3.2 : 3.0,
+      slot: leadEligible ? "lead" : "parallel",
       item: {
         domain: "running",
         title: phase === "sharpen" ? "Sharpen for your race" : "Build toward your race",
@@ -795,10 +842,11 @@ function runningCandidate(inp: CoachingFocusInput): Candidate | null {
   }
   // A low aerobic base is the single biggest endurance + longevity lever.
   if (lc(end?.tone) === "watch") {
+    if (role === "none") return null;
     return {
       key: "running-aerobic",
       leverage: 3.6,
-      slot: "lead",
+      slot: role === "primary" || role === "co_primary" ? "lead" : "parallel",
       item: {
         domain: "running",
         title: "Lift your aerobic base",
@@ -814,7 +862,7 @@ function runningCandidate(inp: CoachingFocusInput): Candidate | null {
     };
   }
   // Otherwise the week's quality run rides alongside whatever leads (a parallel item).
-  if (inp.runPlan?.available && inp.runPlan?.quality_focus) {
+  if ((role !== "none" || raceActive) && inp.runPlan?.available && inp.runPlan?.quality_focus) {
     return {
       key: "running-quality",
       leverage: 2.4,
@@ -831,6 +879,40 @@ function runningCandidate(inp: CoachingFocusInput): Candidate | null {
     };
   }
   return null;
+}
+
+function capacityCandidate(inp: CoachingFocusInput): Candidate | null {
+  const capacity = inp.enduranceCapacity;
+  const role = enduranceRole(inp);
+  const status = lc(capacity?.status);
+  if (role === "none" || !["building", "rebuilding", "no_data"].includes(status)) return null;
+  const sport = String(capacity?.sport ?? "endurance").trim();
+  const target = num(capacity?.target_duration_min);
+  const title =
+    status === "rebuilding"
+      ? `Rebuild your ${sport} capacity`
+      : status === "no_data"
+        ? `Establish your ${sport} capacity`
+        : `Build your ${sport} capacity`;
+  return {
+    key: "endurance-capacity",
+    leverage: role === "primary" ? 3.7 : role === "co_primary" ? 3.5 : 2.3,
+    slot: role === "primary" || role === "co_primary" ? "lead" : "parallel",
+    item: {
+      domain: "running",
+      title,
+      why: clip(
+        capacity?.summary ||
+          (target ? `The durable target is an outing around ${Math.round(target)} minutes.` : "The durable capability needs a calm next exposure."),
+        220
+      ),
+      move: capacity?.next_step ? clip(capacity.next_step, 240) : undefined,
+      based_on: [
+        `Endurance role: ${role.replace("_", " ")}`,
+        target ? `Durable capability: ${Math.round(target)} minutes of ${sport}` : "Durable endurance capability",
+      ],
+    },
+  };
 }
 
 function healthCandidate(inp: CoachingFocusInput): Candidate | null {
@@ -1037,7 +1119,7 @@ function benchmarkCandidate(inp: CoachingFocusInput): Candidate | null {
 function laterCandidates(inp: CoachingFocusInput): Candidate[] {
   const out: Candidate[] = [];
   // Mono-stimulus running → add variety, but only once the lead/parallel is set.
-  if (inp.runVariety?.note) {
+  if ((enduranceRole(inp) !== "none" || activeRace(inp)) && inp.runVariety?.note) {
     out.push({
       key: "later-run-variety",
       leverage: 1.6,
@@ -1553,6 +1635,7 @@ export function coachingFocus(input: CoachingFocusInput = {}): CoachingFocus {
       trainingCandidate(input),
       rotationHandledCandidate(input),
       runningCandidate(input),
+      capacityCandidate(input),
       healthCandidate(input),
       dexaCandidate(input),
       bodyCandidate(input),
@@ -1561,7 +1644,9 @@ export function coachingFocus(input: CoachingFocusInput = {}): CoachingFocus {
       journeyCandidate(input),
       benchmarkCandidate(input),
       ...laterCandidates(input),
-    ].filter((c): c is Candidate => c != null),
+    ]
+      .filter((c): c is Candidate => c != null)
+      .map((candidate) => applyIntentBias(candidate, input)),
     input
   );
 

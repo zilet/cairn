@@ -373,6 +373,7 @@ export interface ClientArtStatsResponse {
 export interface ClientProfile {
   id?: number;
   name?: string | null;
+  age?: number | null;
   sex?: string | null;
   birthdate?: string | null;
   height_in?: number | null;
@@ -384,7 +385,9 @@ export interface ClientProfile {
   start_date?: string | null;
   goal_bodyfat_pct?: number | null;
   primary_discipline?: "strength" | "endurance" | "hybrid" | string | null;
+  endurance_sport?: string | null;
   endurance_goal?: ClientEnduranceGoal | null;
+  training_intent_json?: string | null;
   about_me?: string | null;
   family_prefs?: string | null;
   smoking?: number | null;
@@ -1231,6 +1234,35 @@ export interface ClientEnduranceGoal {
   days_to_race?: number | null;
   weeks_to_race?: number | null;
   phase?: "base" | "build" | "sharpen" | "taper" | "past" | null;
+}
+
+export type ClientTrainingPriority = "longevity" | "muscle" | "leanness" | "strength" | "endurance";
+export type ClientEnduranceRole = "none" | "supporting" | "co_primary" | "primary";
+
+export interface ClientTrainingIntent {
+  priorities: ClientTrainingPriority[];
+  endurance_role: ClientEnduranceRole;
+  endurance_capacity?: {
+    sport: string;
+    target_duration_min: number;
+    context?: string | null;
+  } | null;
+  source: "explicit" | "derived";
+}
+
+export interface ClientEnduranceCapacityRead {
+  status: "ready" | "building" | "rebuilding" | "no_data";
+  sport: string;
+  target_duration_min: number;
+  as_of_date: string;
+  evidence: { date: string; duration_min: number } | null;
+  summary: string;
+  next_step: string;
+}
+
+export interface ClientTrainingIntentResponse {
+  intent: ClientTrainingIntent;
+  endurance_capacity: ClientEnduranceCapacityRead | null;
 }
 
 export type ClientProgramLiftStatus = "progressing" | "plateaued" | "regressing" | "maintaining" | "new";
@@ -2690,6 +2722,7 @@ export interface ClientApiResponses {
   "/api/apple-health/pairings": ClientAppleHealthPairingResponse;
   "/api/profile": ClientProfile;
   "/api/goal": ClientGoalCheck;
+  "/api/training-intent": ClientTrainingIntentResponse;
   "/api/bodyweight": ClientWeightRow[];
   "/api/body-metrics": ClientBodyMetricsSummary;
   "/api/body-metrics/trends": ClientBodyMetricTrends;

@@ -1459,6 +1459,15 @@ export const MIGRATIONS: Migration[] = [
     // eaten_at NULL — no time is, and stays, first-class.
     up: (db) => addColumn(db, "food_notes", "eaten_at TEXT"),
   },
+  {
+    version: 80,
+    name: "profile-training-intent",
+    up: (db) => {
+      // Nullable by design: existing athletes derive the old discipline/goal-mode
+      // behavior until they explicitly save an ordered durable intent.
+      addColumn(db, "profile", "training_intent_json TEXT");
+    },
+  },
 ];
 
 export function runMigrations(db: DatabaseSync) {

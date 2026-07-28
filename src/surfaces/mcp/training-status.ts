@@ -40,14 +40,14 @@ export function registerTrainingStatusTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_endurance_goal",
-    "The user's endurance OBJECTIVE (v37), computed. mode 'race' carries a dated event with weeks/days-to-race + a periodization phase hint (base/build/sharpen/taper); mode 'standing' is an ongoing readiness target with no date. null when unset. Orthogonal to primary_discipline. Set it via set_profile { endurance_goal: {…} }.",
+    "The user's temporary endurance objective. mode 'race' carries a dated event with weeks/days-to-race + a periodization phase hint (base/build/sharpen/taper); mode 'standing' is an ongoing readiness target with no date. null when unset. Keep durable priority and capability identity in get_training_intent; set this through set_endurance_goal.",
     {},
     async () => asText(getEnduranceGoal())
   );
 
   server.tool(
     "set_endurance_goal",
-    "Set or clear the user's endurance OBJECTIVE (running goal). mode 'race' → a dated event the coach periodizes a ramp + taper toward (needs date YYYY-MM-DD; optional event, distance_km, target like 'sub-1:45'). mode 'standing' → an ongoing readiness target with NO date (e.g. label '10k-ready', distance_km 10). Pass null to clear. Orthogonal to primary_discipline (a strength-first athlete can hold a standing running goal).",
+    "Set or clear a temporary endurance objective. mode 'race' → a dated event the coach periodizes a ramp + taper toward (needs a real YYYY-MM-DD; optional event, distance_km, target like 'sub-1:45'). mode 'standing' → an ongoing readiness target with NO date. Keep durable priority and capability identity in set_training_intent.",
     {
       mode: z.enum(["race", "standing"]).nullable().optional().describe("'race' | 'standing'; omit/null with no other fields to clear"),
       event: z.string().optional(),

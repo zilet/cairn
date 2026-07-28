@@ -89,6 +89,7 @@ class FakeElement {
     if (selector === "[data-disc]") return Object.hasOwn(this.dataset, "disc");
     if (selector === "[data-sex]") return Object.hasOwn(this.dataset, "sex");
     if (selector === "[data-egmode]") return Object.hasOwn(this.dataset, "egmode");
+    if (selector === "[data-endurance-role]") return Object.hasOwn(this.dataset, "enduranceRole");
     if (selector === "[data-goalmode]") return Object.hasOwn(this.dataset, "goalmode");
     if (selector === "[data-actlevel]") return Object.hasOwn(this.dataset, "actlevel");
     if (selector === "[data-unit]") return Object.hasOwn(this.dataset, "unit");
@@ -129,12 +130,17 @@ class FakeElement {
     for (const match of this._innerHTML.matchAll(/<input\s+[^>]*id="([^"]+)"[^>]*value="([^"]*)"[^>]*>/g)) {
       ensure(match[1], "input").value = decodeAttr(match[2]);
     }
+    for (const match of this._innerHTML.matchAll(/<select\s+[^>]*id="([^"]+)"[^>]*>([\s\S]*?)<\/select>/g)) {
+      const selected = match[2].match(/<option value="([^"]*)" selected>/)?.[1] || "";
+      ensure(match[1], "select").value = decodeAttr(selected);
+    }
     const about = this._innerHTML.match(/<textarea\s+[^>]*id="about_me"[^>]*>([\s\S]*?)<\/textarea>/);
     if (about) ensure("about_me", "textarea").value = decodeAttr(about[1]);
 
     this.attachButtons("sexSeg", "sex", ["female", "male"]);
     this.attachButtons("discSeg", "disc", ["strength", "endurance", "hybrid"]);
     this.attachButtons("endGoalMode", "egmode", ["none", "race", "standing"]);
+    this.attachButtons("enduranceRoleSeg", "endurance-role", ["none", "supporting", "co_primary", "primary"]);
     this.attachButtons("goalModeSeg", "goalmode", ["lose", "maintain", "gain"]);
     this.attachButtons("activityLevelSeg", "actlevel", ["1.3", "1.45", "1.55", "1.7", "1.8"]);
     this.attachButtons("profUnitToggle", "unit", ["in", "cm"]);
@@ -146,9 +152,10 @@ class FakeElement {
     for (const value of values) {
       const pattern = new RegExp(`<button[^>]*class="([^"]*)"[^>]*data-${datasetKey}="${value}"`, "i");
       const match = this._innerHTML.match(pattern);
+      const datasetProperty = datasetKey.replace(/-([a-z])/g, (_, char) => char.toUpperCase());
       const button = new FakeElement("button", {
         className: match?.[1] || "segbtn",
-        dataset: { [datasetKey]: value },
+        dataset: { [datasetProperty]: value },
       });
       container.appendChild(button);
     }
@@ -203,6 +210,7 @@ function profileHarness(overrides = {}) {
     goal_mode: "maintain",
     primary_discipline: "hybrid",
     endurance_sport: "running",
+    training_intent_json: JSON.stringify({ priorities: ["longevity", "strength", "endurance"], endurance_role: "supporting", endurance_capacity: { sport: "mountain biking", target_duration_min: 180, context: "technical trails in the Fells" } }),
     endurance_goal_json: JSON.stringify({ mode: "standing", label: "10k-ready", distance_km: 10, weekly_km: 30 }),
     about_me: "Fast mornings <work>",
   };
@@ -306,6 +314,9 @@ test("Me Profile controller renders profile state and wires segmented controls",
   assert.equal(harness.rootEl.querySelector("#goalMaintainNote").style.display, "none");
   assert.equal(harness.dirty, 3);
 
+  harness.rootEl.querySelectorAll("[data-endurance-role]").find((button) => button.dataset.enduranceRole === "none").click();
+  assert.equal(harness.rootEl.querySelector("#enduranceCapacityFields").style.display, "none");
+
   harness.rootEl.querySelector("#profToToday").click();
   harness.rootEl.querySelector("#profToProgress").click();
   assert.deepEqual(harness.activatedTabs, ["today", "progress"]);
@@ -325,6 +336,14 @@ test("Me Profile controller saves the typed payload and invalidates dependent su
   harness.rootEl.querySelector("#goal_date").value = "2026-12-01";
   harness.rootEl.querySelector("#activity_factor").value = "1.6";
   harness.rootEl.querySelector("#endurance_sport").value = "running";
+  harness.rootEl.querySelector("#training_priority_0").value = "longevity";
+  harness.rootEl.querySelector("#training_priority_1").value = "muscle";
+  harness.rootEl.querySelector("#training_priority_2").value = "endurance";
+  harness.rootEl.querySelector("#training_priority_3").value = "muscle";
+  harness.rootEl.querySelector("#training_priority_4").value = "strength";
+  harness.rootEl.querySelector("#endurance_capacity_sport").value = "mountain biking";
+  harness.rootEl.querySelector("#endurance_capacity_duration").value = "180";
+  harness.rootEl.querySelector("#endurance_capacity_context").value = "technical trails in the Fells";
   harness.rootEl.querySelector("#eg_label").value = "10k-ready";
   harness.rootEl.querySelector("#eg_distance").value = "10";
   harness.rootEl.querySelector("#eg_weekly_km").value = "35";
@@ -332,6 +351,7 @@ test("Me Profile controller saves the typed payload and invalidates dependent su
   harness.rootEl.querySelector("#allergies").value = "nuts";
   harness.rootEl.querySelector("#dietary_restrictions").value = "pescatarian";
   harness.rootEl.querySelectorAll("[data-disc]").find((button) => button.dataset.disc === "hybrid").click();
+  harness.rootEl.querySelectorAll("[data-endurance-role]").find((button) => button.dataset.enduranceRole === "co_primary").click();
   harness.rootEl.querySelectorAll("[data-egmode]").find((button) => button.dataset.egmode === "standing").click();
   harness.rootEl.querySelectorAll("[data-goalmode]").find((button) => button.dataset.goalmode === "gain").click();
   harness.rootEl.querySelectorAll("[data-sex]").find((button) => button.dataset.sex === "female").click();
@@ -355,6 +375,11 @@ test("Me Profile controller saves the typed payload and invalidates dependent su
     goal_mode: "gain",
     primary_discipline: "hybrid",
     endurance_sport: "running",
+    training_intent: {
+      priorities: ["longevity", "muscle", "endurance", "strength"],
+      endurance_role: "co_primary",
+      endurance_capacity: { sport: "mountain biking", target_duration_min: 180, context: "technical trails in the Fells" },
+    },
     endurance_goal: { mode: "standing", label: "10k-ready", distance_km: 10, weekly_km: 35 },
     about_me: "Train around family",
     allergies: "nuts",
@@ -364,6 +389,41 @@ test("Me Profile controller saves the typed payload and invalidates dependent su
   assert.equal(harness.goalFlags.at(-1), true);
   assert.equal(harness.toasts.at(-1), "Your running plan now lives in Plan → Endurance");
   assert.equal(harness.renderCount, 1);
+});
+
+test("Me Profile keeps a no-endurance hierarchy free of capability targets", async () => {
+  const harness = profileHarness({
+    profile: {
+      primary_discipline: "strength",
+      training_intent_json: JSON.stringify({ priorities: ["strength", "longevity"], endurance_role: "none" }),
+      endurance_goal_json: null,
+    },
+  });
+
+  await harness.context.CairnMeProfileController.renderProfile(harness.deps);
+  assert.match(harness.rootEl.innerHTML, /id="enduranceCapacityFields" style="margin-bottom:9px;display:none"/);
+  assert.equal(await harness.deps.saveOptions.onSave(), true);
+  assert.deepEqual(harness.saved.training_intent, {
+    priorities: ["strength", "longevity"],
+    endurance_role: "none",
+  });
+});
+
+test("an unrelated legacy Profile save does not freeze the old derived hierarchy", async () => {
+  const harness = profileHarness({
+    profile: {
+      primary_discipline: "strength",
+      goal_mode: "maintain",
+      training_intent_json: null,
+      endurance_goal_json: null,
+    },
+  });
+
+  await harness.context.CairnMeProfileController.renderProfile(harness.deps);
+  harness.rootEl.querySelectorAll("[data-disc]").find((button) => button.dataset.disc === "endurance").click();
+  assert.equal(await harness.deps.saveOptions.onSave(), true);
+  assert.equal(harness.saved.primary_discipline, "endurance");
+  assert.equal(Object.hasOwn(harness.saved, "training_intent"), false);
 });
 
 test("Me Profile activity-level pills map a human label to the stored activity_factor number", async () => {

@@ -697,6 +697,7 @@ const GOAL_IDENTITY_FIELDS = new Set([
   "primary_discipline",
   "endurance_sport",
   "endurance_goal",
+  "training_intent",
 ]);
 
 // Identity-level goals must come from an explicit athlete statement, never from
@@ -705,14 +706,14 @@ export function hasExplicitGoalIntent(message: string | null | undefined): boole
   const text = String(message ?? "").trim();
   if (!text) return false;
   if (
-    /\b(?:what|which)\b.{0,30}\b(?:goal|target)\b|\b(?:should|could|would)\s+i\b.{0,30}\b(?:goal|target|weigh|train|run|race)\b/i.test(
+    /\b(?:what|which)\b.{0,30}\b(?:goals?|targets?|priorities)\b|\b(?:should|could|would)\s+i\b.{0,30}\b(?:goals?|targets?|weigh|train|run|race)\b/i.test(
       text
     )
   )
     return false;
   return (
-    /\bmy\s+(?:new\s+)?goal\s+(?:is|will be)\b/i.test(text) ||
-    /\b(?:set|change|update)\s+(?:my\s+)?(?:goal|target|discipline)\b/i.test(text) ||
+    /\bmy\s+(?:new\s+)?(?:goal|goals|priorities)\s+(?:is|are|will be)\b/i.test(text) ||
+    /\b(?:set|change|update)\s+(?:my\s+)?(?:goals?|targets?|priorities|discipline)\b/i.test(text) ||
     /\bi\s+(?:want|plan|aim|intend|am going)\s+to\b.{0,80}\b(?:weigh|lose|gain|maintain|run|race|train|lift|cycle|ride|swim|complete|finish)\b/i.test(
       text
     ) ||
@@ -2208,6 +2209,14 @@ export function applyChatActions(
             for (const field of GOAL_IDENTITY_FIELDS) delete patch[field];
           }
           if (Object.keys(patch).length) applied.push({ type: a.type, result: repo.setProfile(patch) });
+          break;
+        }
+        case "set_training_intent": {
+          if (!explicitGoalIntent) break;
+          const { type, ...trainingIntent } = a;
+          const normalizedIntent = repo.normalizeTrainingIntent(trainingIntent);
+          if (!normalizedIntent) break;
+          applied.push({ type: a.type, result: repo.setProfile({ training_intent: normalizedIntent }) });
           break;
         }
         case "set_endurance_goal": {

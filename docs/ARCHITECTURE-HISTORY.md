@@ -4,6 +4,25 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-07-28 — ordered training identity and sport-specific capability
+
+Migration **v80** adds nullable `profile.training_intent_json`: ordered durable priorities
+(`longevity | muscle | leanness | strength | endurance`), an explicit endurance role
+(`none | supporting | co_primary | primary`), and an optional sport-specific duration capability.
+Null retains the legacy-derived discipline/goal-mode behavior, so upgrades are backward-compatible.
+The coach context, prompt projection, conductor, and whole-person trajectory now follow this
+athlete-owned order instead of assuming every `hybrid` profile means co-equal goals. Age informs
+the long view but never becomes an automatic brake; actual recovery, performance, soreness,
+joint/tendon feedback, training history, and life context determine dose.
+
+`getEnduranceCapacity()` reads matching logged activities to describe a capability as ready,
+building, rebuilding, or not yet observed without changing the plan. Dated races stay in the
+existing `endurance_goal_json` as temporary overlays and now appear on the forward timeline; a
+supporting race can shape a run build but cannot silently demote higher durable goals. Profile,
+REST, MCP, and Chat share the same normalized contract. Invalid calendar dates are rejected
+without clearing a valid event already on file, and session-suggestion caching includes profile
+goal identity so a same-day change cannot serve the old plan.
+
 ## 2026-07-27 — bounded recovery overlays, movement-scoped symptoms, outcome learning v2
 
 Three additive ledgers establish the non-destructive recovery/learning substrate without changing

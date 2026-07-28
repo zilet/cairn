@@ -1284,6 +1284,12 @@ test("food-only turns cannot restructure training or mutate goal identity", () =
     {
       actions: [
         { type: "set_profile", weight_lb: 179, goal_weight_lb: 150, primary_discipline: "endurance" },
+        {
+          type: "set_training_intent",
+          priorities: ["endurance", "longevity"],
+          endurance_role: "primary",
+          endurance_capacity: { sport: "running", target_duration_min: 120 },
+        },
         { type: "set_endurance_goal", mode: "race", event: "Surprise Marathon", date: "2026-11-01" },
         {
           type: "plan_restructure",
@@ -1299,6 +1305,7 @@ test("food-only turns cannot restructure training or mutate goal identity", () =
   assert.equal(repo.getProfile().weight_lb, 179);
   assert.equal(repo.getProfile().goal_weight_lb, 170);
   assert.notEqual(repo.getProfile().primary_discipline, "endurance");
+  assert.equal(repo.getProfile().training_intent_json, null);
   assert.equal(repo.getEnduranceGoal(), null);
   assert.deepEqual(drafts, []);
 });
@@ -1309,6 +1316,11 @@ test("goal identity changes require an explicit athlete statement", () => {
     {
       actions: [
         { type: "set_profile", goal_weight_lb: 160 },
+        {
+          type: "set_training_intent",
+          priorities: ["endurance", "longevity"],
+          endurance_role: "primary",
+        },
         { type: "set_endurance_goal", mode: "standing", label: "10k-ready" },
       ],
     },
@@ -1316,6 +1328,7 @@ test("goal identity changes require an explicit athlete statement", () => {
   );
   assert.deepEqual(inferred.applied, []);
   assert.equal(repo.getProfile().goal_weight_lb, 170);
+  assert.equal(repo.getProfile().training_intent_json, null);
   assert.equal(repo.getEnduranceGoal(), null);
 
   const explicit = applyChatActions(
@@ -1337,6 +1350,38 @@ test("goal identity changes require an explicit athlete statement", () => {
   );
   assert.equal(race.applied.length, 1);
   assert.equal(repo.getEnduranceGoal().event, "Cambridge Half");
+
+  const hierarchy = applyChatActions(
+    {
+      actions: [
+        {
+          type: "set_training_intent",
+          priorities: ["longevity", "muscle", "leanness", "endurance"],
+          endurance_role: "supporting",
+          endurance_capacity: {
+            sport: "mountain biking",
+            target_duration_min: 120,
+            context: "technical trails in the Fells",
+          },
+        },
+      ],
+    },
+    {
+      agent: "stub",
+      message:
+        "My goals are longevity, building muscle and staying lean; endurance supports 2-hour mountain-bike rides.",
+    }
+  );
+  assert.equal(hierarchy.applied.length, 1);
+  assert.deepEqual(JSON.parse(repo.getProfile().training_intent_json), {
+    priorities: ["longevity", "muscle", "leanness", "endurance"],
+    endurance_role: "supporting",
+    endurance_capacity: {
+      sport: "mountain biking",
+      target_duration_min: 120,
+      context: "technical trails in the Fells",
+    },
+  });
 });
 
 test("applyChatActions ignores unknown action types without throwing", () => {

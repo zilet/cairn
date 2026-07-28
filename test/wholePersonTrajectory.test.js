@@ -33,6 +33,24 @@ test("a hybrid cut optimizes strength development with retention as a universal 
   assert.equal(read.domains.find((domain) => domain.domain === "strength").parked, false);
 });
 
+test("explicit ordered intent owns phase.optimizes while strength and lean-mass floors remain", () => {
+  db.prepare(
+    `INSERT INTO profile (id, goal_mode, weight_lb, primary_discipline, training_intent_json)
+     VALUES (1, 'lose', 180, 'hybrid', ?)`
+  ).run(
+    JSON.stringify({
+      priorities: ["longevity", "muscle", "leanness", "endurance"],
+      endurance_role: "supporting",
+      endurance_capacity: { sport: "MTB", target_duration_min: 120, context: null },
+    })
+  );
+  const read = wholePersonTrajectory({ end: "2026-06-25", days: 56 });
+  assert.deepEqual(read.phase.optimizes, ["longevity", "muscle development", "body composition", "endurance"]);
+  assert.ok(read.phase.floors.includes("no avoidable strength regression"));
+  assert.ok(read.phase.floors.includes("no avoidable lean-mass loss"));
+  assert.ok(read.phase.protects.includes("strength"));
+});
+
 test("one established regressing lift stays visible even while another lift advances", () => {
   db.prepare(`INSERT INTO profile (id, goal_mode, weight_lb, primary_discipline) VALUES (1, 'lose', 180, 'hybrid')`).run();
   const bench = Number(db.prepare(`INSERT INTO exercises (name, muscle_group) VALUES ('Bench Press', 'chest')`).run().lastInsertRowid);

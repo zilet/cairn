@@ -8,6 +8,7 @@ type MeProfileProfile = import("../contracts/client-api.js").ClientProfile & {
   height_in?: number | string | null;
   endurance_goal_json?: string | null;
   endurance_sport?: string | null;
+  training_intent_json?: string | null;
   allergies?: string | null;
   dietary_restrictions?: string | null;
 };
@@ -29,6 +30,12 @@ type MeProfileEnduranceGoalDraft = {
   label?: string | null;
   distance_km?: number | string | null;
   weekly_km?: number | string | null;
+};
+type MeProfileTrainingPriority = "longevity" | "muscle" | "leanness" | "strength" | "endurance";
+type MeProfileTrainingIntentDraft = {
+  priorities: MeProfileTrainingPriority[];
+  endurance_role: "none" | "supporting" | "co_primary" | "primary";
+  endurance_capacity?: { sport: string; target_duration_min: number; context?: string | null };
 };
 type MeProfileSaveBar = {
   markDirty(): void;
@@ -72,6 +79,7 @@ type MeProfileFormContext = {
   enduranceMode: string;
   goalMode: string;
   unit: "in" | "cm";
+  trainingIntent: MeProfileTrainingIntentDraft;
 };
 
 (() => {
@@ -157,6 +165,49 @@ type MeProfileFormContext = {
     }
   }
 
+  const TRAINING_PRIORITIES: readonly MeProfileTrainingPriority[] = ["longevity", "muscle", "leanness", "strength", "endurance"];
+
+  function profileTrainingIntent(profile: MeProfileProfile, goalMode: string): MeProfileTrainingIntentDraft {
+    try {
+      const parsed = profile.training_intent_json ? profileRecord(JSON.parse(profile.training_intent_json)) : {};
+      const priorities = Array.isArray(parsed.priorities)
+        ? parsed.priorities.filter((priority): priority is MeProfileTrainingPriority => typeof priority === "string" && TRAINING_PRIORITIES.includes(priority as MeProfileTrainingPriority))
+        : [];
+      const role = parsed.endurance_role;
+      if (priorities.length && (role === "none" || role === "supporting" || role === "co_primary" || role === "primary")) {
+        const capacity = profileRecord(parsed.endurance_capacity);
+        const duration = Number(capacity.target_duration_min);
+        return {
+          priorities,
+          endurance_role: role,
+          ...(typeof capacity.sport === "string" && Number.isFinite(duration) && duration > 0
+            ? { endurance_capacity: { sport: capacity.sport, target_duration_min: duration, context: typeof capacity.context === "string" ? capacity.context : null } }
+            : {}),
+        };
+      }
+    } catch {
+      // A malformed legacy value should never prevent Profile from opening.
+    }
+    const bodyPriority: MeProfileTrainingPriority = goalMode === "lose" ? "leanness" : goalMode === "gain" ? "muscle" : "strength";
+    const discipline = profile.primary_discipline;
+    const priorities: MeProfileTrainingPriority[] = discipline === "endurance"
+      ? ["endurance", "longevity", bodyPriority]
+      : discipline === "hybrid"
+        ? ["strength", "endurance", "longevity", bodyPriority]
+        : ["strength", "longevity", bodyPriority];
+    return {
+      priorities: [...new Set(priorities)],
+      endurance_role: discipline === "endurance" ? "primary" : discipline === "hybrid" ? "co_primary" : "none",
+    };
+  }
+
+  function trainingPriorityOptions(current: MeProfileTrainingPriority | undefined): string {
+    const labels: Record<MeProfileTrainingPriority, string> = {
+      longevity: "Longevity", muscle: "Build muscle", leanness: "Stay lean", strength: "Strength", endurance: "Endurance",
+    };
+    return `<option value="">—</option>${TRAINING_PRIORITIES.map((priority) => `<option value="${priority}"${priority === current ? " selected" : ""}>${labels[priority]}</option>`).join("")}`;
+  }
+
   function activeGoalTargetDisplay(goalMode: string): string {
     return goalMode === "maintain" ? "display:none" : "";
   }
@@ -224,7 +275,7 @@ type MeProfileFormContext = {
     goal: MeProfileGoalCheck,
     context: MeProfileFormContext,
   ): string {
-    const { discipline, enduranceGoal, enduranceMode, goalMode, unit } = context;
+    const { discipline, enduranceGoal, enduranceMode, goalMode, unit, trainingIntent } = context;
     const reqWarn = goal?.requested?.aggressive
       ? `<div class="ex-flag" style="margin-top:0"><b>Goal too aggressive for lean mass.</b> ${goal.message}</div>`
       : `<div class="sess-line">${goal?.message || ""}</div>`;
@@ -313,6 +364,27 @@ type MeProfileFormContext = {
         <input id="endurance_sport" type="text" placeholder="e.g. running, cycling, triathlon, rowing" maxlength="120"
           value="${deps.escapeAttr(profile.endurance_sport || "")}" class="form-input">
       </div>
+      <div class="field" style="margin-bottom:9px">
+        <label>What matters most</label>
+        <p class="aboutme-hint">Put your goals in order. When training goals compete, this is the hierarchy Cairn follows.</p>
+        ${[0, 1, 2, 3, 4].map((index) => `<div class="field" style="margin:6px 0 0"><label for="training_priority_${index}">${index === 0 ? "First priority" : `Then ${index + 1}`}</label><select id="training_priority_${index}" class="form-input"${index === 0 ? " required" : ""}>${trainingPriorityOptions(trainingIntent.priorities[index])}</select></div>`).join("")}
+      </div>
+      <div class="field" style="margin-bottom:9px">
+        <label>Endurance’s role</label>
+        <p class="aboutme-hint">This decides what wins when training goals compete.</p>
+        <div class="seg" id="enduranceRoleSeg" role="group" aria-label="Endurance role">
+          ${[["none", "None"], ["supporting", "Supports"], ["co_primary", "Co-primary"], ["primary", "Primary"]].map(([value, label]) => `<button type="button" class="segbtn${trainingIntent.endurance_role === value ? " active" : ""}" data-endurance-role="${value}">${label}</button>`).join("")}
+        </div>
+      </div>
+      <div id="enduranceCapacityFields" style="margin-bottom:9px${trainingIntent.endurance_role === "none" ? ";display:none" : ""}">
+        <p class="aboutme-hint">A durable capability, not a temporary race. Keep the dated running goal below for an event you are building toward.</p>
+        <div class="field" style="margin:9px 0 0"><label for="endurance_capacity_sport">Sport or activity</label>
+          <input id="endurance_capacity_sport" type="text" maxlength="120" placeholder="e.g. mountain biking" value="${deps.escapeAttr(trainingIntent.endurance_capacity?.sport || profile.endurance_sport || "")}" class="form-input"></div>
+        <div class="field" style="margin:9px 0 0"><label for="endurance_capacity_duration">Target duration (minutes)</label>
+          <input id="endurance_capacity_duration" type="number" min="1" step="1" value="${deps.escapeAttr(trainingIntent.endurance_capacity?.target_duration_min ?? "")}" class="form-input"></div>
+        <div class="field" style="margin:9px 0 0"><label for="endurance_capacity_context">Context <span class="ob-opt">— optional</span></label>
+          <input id="endurance_capacity_context" type="text" maxlength="240" placeholder="e.g. technical trails in the Fells" value="${deps.escapeAttr(trainingIntent.endurance_capacity?.context || "")}" class="form-input"></div>
+      </div>
       <div class="field" id="endGoalField" style="margin-bottom:0">
         <label>Running goal <span class="ob-opt">— optional</span></label>
         <p class="aboutme-hint">A race the coach builds you toward, or an ongoing "stay ready" target. Either way it prescribes your runs each week alongside lifting — separate from the sport above.</p>
@@ -377,6 +449,7 @@ type MeProfileFormContext = {
     record: profileRecord,
     goalMode: profileGoalMode,
     enduranceGoal: profileEnduranceGoal,
+    trainingIntent: profileTrainingIntent,
     html: profileHtml,
     unitPref: profUnitPref,
     setUnitPref: profSetUnitPref,

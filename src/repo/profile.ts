@@ -50,6 +50,7 @@ import {
   scheduleRecoveryCycle,
 } from "./recovery-cycles.js";
 import { afterSqliteCommit, withSqliteSavepoint } from "./sqlite-savepoint.js";
+import { serializeTrainingIntent } from "./training-intent.js";
 import {
   normalizeStoredProposalPayload,
   prepareProposalPayload,
@@ -1578,9 +1579,23 @@ export function setProfile(p: any) {
           : String(p.endurance_sport).trim().slice(0, 60) || null
         : (cur.endurance_sport ?? null),
     // The endurance OBJECTIVE (v37). undefined leaves intact, null clears, else it's
-    // normalized (race | standing) and re-serialized; an unusable shape clears it.
+    // normalized (race | standing) and re-serialized; an unusable non-null shape
+    // preserves the current goal rather than erasing it.
     endurance_goal_json:
-      p.endurance_goal !== undefined ? serializeEnduranceGoal(p.endurance_goal) : (cur.endurance_goal_json ?? null),
+      p.endurance_goal !== undefined
+        ? p.endurance_goal == null
+          ? null
+          : (serializeEnduranceGoal(p.endurance_goal) ?? cur.endurance_goal_json ?? null)
+        : (cur.endurance_goal_json ?? null),
+    // Ordered durable athlete intent (v80). An explicit null clears back to the
+    // backward-compatible derived view; malformed non-null input is
+    // non-destructive so a bad client cannot erase an explicit hierarchy.
+    training_intent_json:
+      p.training_intent !== undefined
+        ? p.training_intent == null
+          ? null
+          : (serializeTrainingIntent(p.training_intent) ?? cur.training_intent_json ?? null)
+        : (cur.training_intent_json ?? null),
     // AHA PREVENT capture flags (v57). Same nullable contract as the other
     // optional fields: undefined leaves intact, null/'' clears back to "not
     // captured", a boolean/0/1 sets it. Removes risk.ts's provisional assumption
@@ -1590,8 +1605,8 @@ export function setProfile(p: any) {
     statin: p.statin !== undefined ? coerceFlag(p.statin) : (cur.statin ?? null),
   };
   db.prepare(
-    `INSERT INTO profile (id, name, sex, age, height_cm, height_in, weight_lb, start_weight_lb, start_date, goal_weight_lb, goal_bodyfat_pct, goal_date, goal_mode, activity_factor, notes, about_me, allergies, dietary_restrictions, primary_discipline, endurance_sport, endurance_goal_json, smoking, bp_treated, statin, updated_at)
-     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    `INSERT INTO profile (id, name, sex, age, height_cm, height_in, weight_lb, start_weight_lb, start_date, goal_weight_lb, goal_bodyfat_pct, goal_date, goal_mode, activity_factor, notes, about_me, allergies, dietary_restrictions, primary_discipline, endurance_sport, endurance_goal_json, training_intent_json, smoking, bp_treated, statin, updated_at)
+     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
      ON CONFLICT(id) DO UPDATE SET
        name=excluded.name,
        sex=excluded.sex, age=excluded.age, height_cm=excluded.height_cm, height_in=excluded.height_in, weight_lb=excluded.weight_lb,
@@ -1600,7 +1615,7 @@ export function setProfile(p: any) {
        activity_factor=excluded.activity_factor, notes=excluded.notes, about_me=excluded.about_me,
        allergies=excluded.allergies, dietary_restrictions=excluded.dietary_restrictions,
        primary_discipline=excluded.primary_discipline, endurance_sport=excluded.endurance_sport,
-       endurance_goal_json=excluded.endurance_goal_json,
+       endurance_goal_json=excluded.endurance_goal_json, training_intent_json=excluded.training_intent_json,
        smoking=excluded.smoking, bp_treated=excluded.bp_treated, statin=excluded.statin, updated_at=datetime('now')`
   ).run(
     merged.name,
@@ -1623,6 +1638,7 @@ export function setProfile(p: any) {
     merged.primary_discipline,
     merged.endurance_sport,
     merged.endurance_goal_json,
+    merged.training_intent_json,
     merged.smoking,
     merged.bp_treated,
     merged.statin
@@ -1640,6 +1656,7 @@ export function setProfile(p: any) {
     "goal_date",
     "goal_mode",
     "endurance_goal_json",
+    "training_intent_json",
     "start_weight_lb",
     "start_date",
   ]);
@@ -1763,6 +1780,15 @@ function capStr(v: any, max: number): string | null {
   const s = String(v).trim().slice(0, max);
   return s || null;
 }
+function realISODate(value: unknown): string | null {
+  const raw = String(value ?? "");
+  if (!ISO_DATE.test(raw)) return null;
+  const [year, month, day] = raw.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+    ? raw
+    : null;
+}
 export function normalizeEnduranceGoal(input: any): EnduranceGoal | null {
   let g: any = input;
   if (typeof g === "string") {
@@ -1780,7 +1806,7 @@ export function normalizeEnduranceGoal(input: any): EnduranceGoal | null {
   const weekly_km = clampPos(g.weekly_km, 400);
   const weekly_sessions = clampPos(g.weekly_sessions, 14);
   if (mode === "race") {
-    const date = ISO_DATE.test(String(g.date || "")) ? String(g.date) : null;
+    const date = realISODate(g.date);
     if (!date) return null; // a race without a date can't be periodized — reject
     return {
       mode: "race",

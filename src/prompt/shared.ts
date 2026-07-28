@@ -117,8 +117,8 @@ function enduranceSportOf(ctx: any): string | null {
 }
 
 // `focus` tailors the line to the consuming prompt: 'training' for the coach/session,
-// 'nutrition' for meals, 'day' for the Brief. Returns "" for a strength user in
-// the training/day case (no behavior change) so the existing prompts read identically.
+// 'nutrition' for meals, 'day' for the Brief. The ordered intent is always stated
+// so every plan-shaped prompt resolves competing goals the same way.
 // The current local clock, stated plainly so the agent anchors every
 // time-relative word ("today", "tonight", "this morning", "last night") to
 // reality instead of the stale conversation thread. ctx.now is set by
@@ -133,40 +133,67 @@ export function renderDiscipline(ctx: any, focus: "training" | "nutrition" | "da
   const disc = disciplineOf(ctx);
   const sport = enduranceSportOf(ctx);
   const sportTxt = sport ? ` (${sport})` : "";
-  if (disc === "strength") {
-    // Meals still want one explicit line so an endurance-leaning user isn't
-    // assumed; for training/day a strength user is the default — say nothing.
-    if (focus === "nutrition") return `\nPRIMARY DISCIPLINE: strength-first — fuel for lifting + recovery; a lean-safe deficit is appropriate when fat loss is the goal.\n`;
-    return "";
-  }
-  const lead = disc === "endurance"
-    ? `PRIMARY DISCIPLINE: ENDURANCE-first${sportTxt}. Endurance progression is the PRIMARY driver, not a brake — lifting is SUPPORTIVE (strength maintenance, durability, injury-proofing), not the center.`
-    : `PRIMARY DISCIPLINE: HYBRID${sportTxt}. Balance endurance and strength as co-equal goals — progress BOTH, and let recovery/scheduling arbitrate when they compete.`;
+  const intent = ctx?.training_intent;
+  const priorities = Array.isArray(intent?.priorities)
+    ? intent.priorities.map((priority: unknown) => String(priority).trim().toLowerCase()).filter(Boolean).slice(0, 5)
+    : [];
+  const role = String(
+    intent?.endurance_role ?? (disc === "endurance" ? "primary" : disc === "hybrid" ? "co_primary" : "none")
+  ).toLowerCase();
+  const capability = intent?.endurance_capacity;
+  const capacityRead = ctx?.endurance_capacity;
+  const durable = priorities.length
+    ? `DURABLE ATHLETE INTENT (ordered, first matters most): ${priorities.join(" → ")}.`
+    : `DURABLE ATHLETE INTENT: use the legacy ${disc} discipline until the athlete states an ordered hierarchy.`;
+  const roleLine =
+    role === "primary"
+      ? `ENDURANCE ROLE: PRIMARY${sportTxt}. Endurance progression is lead-eligible; lifting protects strength, muscle and durability.`
+      : role === "co_primary"
+        ? `ENDURANCE ROLE: CO-PRIMARY${sportTxt}. Strength/muscle and endurance may both lead; arbitrate by the ordered intent plus actual recovery and performance.`
+        : role === "supporting"
+          ? `ENDURANCE ROLE: SUPPORTING${sportTxt}. Aerobic work is a parallel lever for capacity/longevity and must not silently displace higher durable strength or muscle goals.`
+          : `ENDURANCE ROLE: NONE. Do not invent endurance work. A separately stated active race may be acknowledged, but it does not rewrite durable identity.`;
+  const capabilityLine =
+    capability?.sport && Number(capability?.target_duration_min) > 0
+      ? `CAPABILITY TARGET: stay able to do ${Math.round(Number(capability.target_duration_min))} minutes of ${String(capability.sport)}${capability.context ? ` (${String(capability.context)})` : ""}. ${capacityRead?.summary ? `Current read: ${String(capacityRead.summary)}` : "Treat this as a durable capability, not a race countdown."}`
+      : "";
+  const rawAge = ctx?.profile?.age;
+  const age = rawAge == null || rawAge === "" ? null : Number(rawAge);
+  const ageLine = age != null && Number.isFinite(age)
+    ? `AGE CONTEXT: age ${Math.round(age)} informs the long view, but is never an automatic brake and never implies fragility. Progress from actual recovery, performance, soreness, joint/tendon feedback and history; preserve muscle and aerobic capacity.`
+    : `AGE CONTEXT: do not assume fragility. Progress from actual recovery, performance, soreness, joint/tendon feedback and history; preserve muscle and aerobic capacity.`;
+  const head = `\n${durable}\n${roleLine}${capabilityLine ? `\n${capabilityLine}` : ""}\n${ageLine}`;
   if (focus === "nutrition") {
-    return `\n${lead}
+    if (role === "none") {
+      return `${head}
+NUTRITION FRAMING: serve the ordered durable goals. Protect protein and lean mass; use a lean-safe deficit only when leanness/fat loss is actually part of the goal.\n`;
+    }
+    return `${head}
 ENDURANCE FUELING (binding for this user):
-- PROTECT CARBOHYDRATE for fueling — carbs power endurance work; do NOT slash them to chase a deficit.
-- Do NOT force a calorie deficit unless fat loss is an explicit goal. For an endurance user eating to
-  TRAIN and PERFORM, anchor to maintenance (or a small surplus on the biggest weeks), not a cut.
+- When endurance is supporting/co-primary/primary, PROTECT CARBOHYDRATE around the work; do not slash it to chase a deficit.
+- Do NOT force a calorie deficit unless fat loss is explicit in goal_mode/body context; a "leanness"
+  priority can mean staying lean at maintenance. When fat loss is explicit, keep the deficit lean-safe
+  and periodize fuel around the work; endurance's supporting role must not silently erase a higher
+  body-composition priority. For endurance-first athletes without a fat-loss goal, anchor to
+  maintenance (or a small surplus on the biggest weeks), not a cut.
 - PERIODIZE carbs around the week: more carbs on/around LONG and QUALITY (tempo/interval) sessions,
   lighter on easy/rest days. Time a real pre-/during-/post-long-session carb intake.
 - Keep protein adequate for recovery; fat fills the rest. Fuel the work, don't starve it.\n`;
   }
   if (focus === "day") {
-    return `\n${lead}
-Read the day in endurance terms when it fits: a session can be EASY/recovery, a LONG run/ride, a
+    return `${head}
+When endurance has a role, read the day in endurance terms when it fits: a session can be EASY/recovery, a LONG run/ride, a
 TEMPO/threshold day, INTERVALS, or genuine REST — not only lift/easy/rest. Protect easy days as easy
 and hard days as hard (polarized), and guard earned recovery after long or quality efforts.\n`;
   }
   // training
-  return `\n${lead}
-- Make endurance progression FIRST-CLASS: build the aerobic base, periodize easy vs quality work
+  return `${head}
+- Make endurance progression FIRST-CLASS only when its explicit role is co-primary/primary; when supporting, keep it a parallel capability lever; when none, stay silent unless an active race was explicitly stated.
+- Where endurance has a role, build the aerobic base and periodize easy vs quality work
   (long / tempo / threshold / intervals), and progress volume and quality CONSERVATIVELY (the ~10%/week
   rule of thumb for mileage; don't stack hard days).
-- Lifting is the SUPPORT here — keep it brief and durability-focused (it should not compromise the key
-  endurance sessions). Hold or trim lifting volume on big endurance weeks.
-- Read runs/rides as the MAIN training stress, not just "cardio-load context": fatigue, soreness and
-  readiness flow largely from the endurance work.\n`;
+- Let the ordered durable priorities decide which modality gets protected when they compete; never infer co-equality from the legacy word "hybrid" alone.
+- Treat logged runs/rides as real training stress, scaled to endurance's stated role.\n`;
 }
 
 // The endurance OBJECTIVE (v37), rendered for a prompt. Orthogonal to discipline:
@@ -178,22 +205,31 @@ and hard days as hard (polarized), and guard earned recovery after long or quali
 export function renderEnduranceGoal(ctx: any, focus: "training" | "nutrition" | "day"): string {
   const g = ctx?.endurance_goal;
   if (!g || !g.mode) return "";
+  const enduranceRole = String(ctx?.training_intent?.endurance_role ?? "").toLowerCase();
+  const enduranceLeads = enduranceRole === "primary" || enduranceRole === "co_primary";
+  const supportingEvent = enduranceRole === "supporting" || enduranceRole === "none";
   const dist = g.distance_km ? `${g.distance_km} km` : null;
   if (g.mode === "race") {
+    if (g.phase === "past") {
+      return `\nTEMPORARY ENDURANCE EVENT — COMPLETED/PAST: ${g.event || "the race"}${g.date ? ` (${g.date})` : ""}. Keep it as historical context only. It does not overwrite the ordered durable athlete intent, create a new endurance priority, or trigger a build/taper now.\n`;
+    }
     const when = g.weeks_to_race != null
       ? (g.weeks_to_race <= 0 ? "this week" : `~${g.weeks_to_race} week${g.weeks_to_race === 1 ? "" : "s"} out`)
       : "upcoming";
-    const head = `ENDURANCE GOAL — RACE: ${g.event || "a race"}${dist ? ` (${dist})` : ""}${g.target ? `, target ${g.target}` : ""}, ${when}${g.date ? ` (${g.date})` : ""}. Phase hint: ${g.phase || "build"}.`;
+    const head = `TEMPORARY ENDURANCE EVENT — RACE: ${g.event || "a race"}${dist ? ` (${dist})` : ""}${g.target ? `, target ${g.target}` : ""}, ${when}${g.date ? ` (${g.date})` : ""}. Phase hint: ${g.phase || "build"}. This event stays separate from — and must not silently overwrite — the ordered durable athlete intent.`;
     if (focus === "nutrition") {
       return `\n${head}\n- Fuel the build: periodize carbs to the week's long/quality runs; don't cut into fueling. In race week, top up carbs and ease off any deficit.\n`;
     }
     if (focus === "day") {
-      return `\n${head}\n- Read today's run against this phase (base→build→sharpen→taper). In the taper (final ~2 weeks) protect freshness — shorter & sharper, more rest — and guard the long run's recovery.\n`;
+      return `\n${head}\n- Read today's run against this phase (base→build→sharpen→taper). In the taper (final ~2 weeks) protect freshness — shorter & sharper, more rest — and guard the long run's recovery.${supportingEvent ? " Keep the event as a parallel commitment; it does not automatically outrank the athlete's higher durable priorities." : ""}\n`;
     }
     return `\n${head}
 - PERIODIZE toward the date: build the aerobic base, add quality (tempo/threshold/intervals) through the build, sharpen near the race, then TAPER the final ~2 weeks (cut volume, keep some intensity, arrive fresh).
 - Progress run volume CONSERVATIVELY (~10%/week; a down week every ~4th). Honor the phase hint above unless the user's actual base says to hold.
-- Prescribe THIS WEEK's runs concretely (easy / long / quality, each with a zone + a distance or duration) — this is the headline output for a runner, alongside any lifting tweaks. Keep lifting supportive so it doesn't compromise the key runs.\n`;
+- Prescribe THIS WEEK's runs concretely (easy / long / quality, each with a zone + a distance or duration).
+${enduranceLeads
+  ? "- Endurance is lead-eligible for this athlete: protect the key runs and fit lifting around them without abandoning muscle, strength, or durability."
+  : "- Endurance is supporting or event-only for this athlete: use the minimum effective run dose for the event and fit it around higher durable priorities. Do not automatically make running the headline or demote lifting."}\n`;
   }
   // standing
   const head = `ENDURANCE GOAL — STANDING: stay ${g.label || (dist ? `${dist}-ready` : "race-ready")}.${g.weekly_km ? ` Aim ~${g.weekly_km} km/wk.` : ""}`;

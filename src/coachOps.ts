@@ -494,8 +494,10 @@ export async function composeDailySession(
 }
 
 // Fingerprint a session-suggest request: the normalized explicit constraints +
-// a coarse day-context stamp (the calendar date + the suggested plan day) so a
-// new day or a re-plan busts the cache while an identical same-day repeat hits it.
+// a coarse day-context stamp (the calendar date + the suggested plan day) plus the
+// profile's identity/goal generation. A goal hierarchy or race can change within
+// the same day; serving the pre-change session after that write would make the
+// coach look oblivious precisely when the athlete clarified what should lead.
 function sessionSuggestCacheKey(opts: {
   minutes?: number;
   equipment?: string;
@@ -511,6 +513,21 @@ function sessionSuggestCacheKey(opts: {
   } catch {
     /* a missing read just yields a coarser key */
   }
+  let profileContext: Record<string, unknown> | null = null;
+  try {
+    const profile = repo.getProfile();
+    profileContext = profile
+      ? {
+          updated_at: profile.updated_at ?? null,
+          primary_discipline: profile.primary_discipline ?? null,
+          endurance_sport: profile.endurance_sport ?? null,
+          endurance_goal_json: profile.endurance_goal_json ?? null,
+          training_intent_json: profile.training_intent_json ?? null,
+        }
+      : null;
+  } catch {
+    /* a missing profile keeps the cache usable on a fresh install */
+  }
   return repo.fingerprint({
     minutes: opts.minutes ?? null,
     equipment: (opts.equipment ?? "").trim().toLowerCase(),
@@ -518,6 +535,7 @@ function sessionSuggestCacheKey(opts: {
     constraints: (opts.constraints ?? "").trim().toLowerCase(),
     date,
     dayContext,
+    profileContext,
   });
 }
 

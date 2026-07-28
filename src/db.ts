@@ -289,6 +289,7 @@ CREATE TABLE IF NOT EXISTS profile (
   primary_discipline TEXT DEFAULT 'strength', -- strength | endurance | hybrid — shapes coach framing + day-read + stats (v35)
   endurance_sport TEXT,                  -- optional free text: running | cycling | triathlon | rowing | … (v35)
   endurance_goal_json TEXT,              -- the endurance OBJECTIVE (race | standing), orthogonal to discipline (v37)
+  training_intent_json TEXT,             -- ordered durable goals + endurance role/capability; NULL derives from legacy discipline + goal mode (v80)
   smoking INTEGER,                       -- 0/1, NULL = not captured (v57). Feeds AHA PREVENT; NULL assumes the lower-risk value and marks the read provisional
   bp_treated INTEGER,                    -- 0/1, NULL = not captured (v57). On antihypertensive medication — feeds AHA PREVENT the same way
   statin INTEGER,                        -- 0/1, NULL = not captured (v57). On a statin — feeds AHA PREVENT the same way

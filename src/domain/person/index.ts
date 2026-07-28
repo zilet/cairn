@@ -9,4 +9,6 @@ export * from "../../repo/profile.js";
 export { addSupplement, deleteSupplement, listSupplements, understandSupplements, updateSupplement } from "../../repo/propagation.js";
 export * from "../../repo/reaction-model.js";
 export * from "../../repo/settings.js";
+export * from "../../repo/training-intent.js";
 export * from "../../repo/trajectory.js";
+export * from "../../repo/endurance-capacity.js";

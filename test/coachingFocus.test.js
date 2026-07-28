@@ -204,6 +204,72 @@ test("coachingFocus leads with the single highest-leverage lever and sequences t
   assert.ok(!/leverage|priority/i.test(json), "internal ordering (leverage) never surfaced");
 });
 
+test("supporting endurance keeps a build-phase race parallel to a durable muscle lead", () => {
+  const out = coachingFocus({
+    ...richInput(),
+    trainingIntent: {
+      priorities: ["longevity", "muscle", "leanness", "endurance"],
+      endurance_role: "supporting",
+      source: "explicit",
+    },
+    enduranceGoal: { is_race: true, phase: "build", weeks_to_race: 8 },
+  });
+  assert.equal(out.lead.domain, "training");
+  assert.ok(out.parallel.some((item) => item.domain === "running" && /race/i.test(item.title)));
+});
+
+test("endurance-primary intent keeps an active race lead-eligible", () => {
+  const out = coachingFocus({
+    trainingIntent: { priorities: ["endurance", "longevity", "strength"], endurance_role: "primary", source: "explicit" },
+    enduranceGoal: { is_race: true, phase: "build", weeks_to_race: 8 },
+    runPlan: { available: true, quality_focus: "tempo", why: "Build the race-specific base." },
+  });
+  assert.equal(out.lead.domain, "running");
+  assert.match(out.lead.title, /race/i);
+});
+
+test("explicit no-endurance intent stays silent without an active race", () => {
+  const out = coachingFocus({
+    trainingIntent: { priorities: ["longevity", "muscle", "strength"], endurance_role: "none", source: "explicit" },
+    performance: { endurance: { tone: "watch" } },
+    runPlan: { available: true, quality_focus: "tempo", why: "Generic run plan." },
+    runVariety: { note: "Runs look similar." },
+    enduranceCapacity: {
+      status: "building",
+      sport: "ride",
+      target_duration_min: 120,
+      summary: "Building.",
+      next_step: "Ride longer.",
+    },
+  });
+  assert.equal(out.lead?.domain === "running", false);
+  assert.equal(out.parallel.some((item) => item.domain === "running"), false);
+  assert.equal(out.later.some((item) => item.domain === "running"), false);
+});
+
+test("supporting capacity gets attention in parallel while primary capacity may lead", () => {
+  const capacity = {
+    status: "building",
+    sport: "MTB",
+    target_duration_min: 120,
+    summary: "Recent riding is building toward the target.",
+    next_step: "Try an easy 70-minute outing.",
+  };
+  const supporting = coachingFocus({
+    trainingIntent: { priorities: ["muscle", "endurance"], endurance_role: "supporting", source: "explicit" },
+    enduranceCapacity: capacity,
+    performance: { lever: { headline: "Bring up your press", why: "It is the current strength lever." } },
+  });
+  assert.ok(supporting.parallel.some((item) => item.domain === "running"));
+
+  const primary = coachingFocus({
+    trainingIntent: { priorities: ["endurance", "longevity"], endurance_role: "primary", source: "explicit" },
+    enduranceCapacity: capacity,
+  });
+  assert.equal(primary.lead.domain, "running");
+  assert.match(primary.lead.title, /capacity/i);
+});
+
 test("coachingFocus leads with recovery when a deload is due (won't push into fatigue)", () => {
   const out = coachingFocus({
     programState: { mesocycle: { phase: "deload-due", note: "Time for a lighter week." } },

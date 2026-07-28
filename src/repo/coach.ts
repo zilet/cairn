@@ -93,6 +93,8 @@ import type { UnifiedSignalState } from "./signal-state.js";
 import { dayLoad } from "./training-read.js";
 import { currentUnderfuelingRead } from "./underfueling-snapshot.js";
 import { cutQualityRead } from "./cut-quality.js";
+import { getTrainingIntent } from "./training-intent.js";
+import { getEnduranceCapacity } from "./endurance-capacity.js";
 
 // ---------- coach context (shared by prompts) ----------
 // Compact view of a health doc for coaching: kind, date, summary, key markers
@@ -409,6 +411,8 @@ function nextPlanDayNumber(read: any): number | null {
 interface CoachContextSignals {
   today: string;
   profile: any;
+  trainingIntentView: any;
+  enduranceCapacityView: any;
   garmin: any;
   recovery: any;
   recentSessions: any[];
@@ -453,6 +457,7 @@ function buildPersonSlice(
   | "now"
   | "profile"
   | "discipline"
+  | "training_intent"
   | "memory"
   | "learnings"
   | "context_events"
@@ -464,7 +469,7 @@ function buildPersonSlice(
   | "what_works_for_you"
   | "context_today"
 > {
-  const { profile, contextEventsView, contextTodayView } = signals;
+  const { profile, trainingIntentView, contextEventsView, contextTodayView } = signals;
   return {
     // The current LOCAL clock (date + weekday + time + part-of-day). Folded in so
     // EVERY plan-shaping prompt knows the time of day — without it the agent is
@@ -479,6 +484,9 @@ function buildPersonSlice(
       primary: (profile?.primary_discipline as string) || "strength",
       endurance_sport: profile?.endurance_sport ?? null,
     },
+    // Ordered durable goals supersede the old assumption that "hybrid" means every
+    // modality is co-equal. Legacy profiles receive a derived compatible view.
+    training_intent: trainingIntentView,
     // Ranked retrieval (Stream 2): always the load-bearing person-model
     // (constraints/injuries/preferences/decisions) + recent observations, with
     // superseded rows hidden. Replaces the raw recency dump and stamps
@@ -685,15 +693,24 @@ function buildRunningSlice(
   signals: CoachContextSignals
 ): Pick<
   CoachContext,
-  "endurance_goal" | "run_compliance" | "run_zones" | "run_plan" | "run_variety" | "endurance_tests"
+  | "endurance_goal"
+  | "endurance_capacity"
+  | "run_compliance"
+  | "run_zones"
+  | "run_plan"
+  | "run_variety"
+  | "endurance_tests"
 > {
-  const { runZonesView, runPlanView, runVarietyView, enduranceTestsView } = signals;
+  const { enduranceCapacityView, runZonesView, runPlanView, runVarietyView, enduranceTestsView } = signals;
   return {
     // The endurance OBJECTIVE (v37) — race (dated, periodized + taper) or standing
     // (no date, maintain readiness), with race timing/phase pre-computed. Null when
     // unset. Orthogonal to discipline: a strength-first athlete can hold a standing
     // running goal ("running on the side"). The coach prescribes runs accordingly.
     endurance_goal: getEnduranceGoal(),
+    // Standing duration capability read from matching logged outings. Observational
+    // only: it never mutates the plan and is null when endurance has no role/target.
+    endurance_capacity: enduranceCapacityView,
     // Runner loop (closing): prescribed plan cardio vs this week's logged efforts,
     // in plain words ("32 of 40 km this week") — so the coach can speak to run
     // adherence the way week_done/week_planned covers lifting. Never a 0-100 score.
@@ -863,6 +880,10 @@ function getCoachContextFromSnapshot(): CoachContext {
   const recovery = brainSignal("recovery:14", () => getRecoverySummary(14, garmin));
   const recentSessions = brainSignal("recent_sessions:20", () => getRecentSessions(20));
   const profile = brainSignal("profile", () => getProfile() as any);
+  const trainingIntentView = brainSignal("training_intent", () => getTrainingIntent(profile));
+  const enduranceCapacityView = brainSignal(`endurance_capacity:${today}`, () =>
+    getEnduranceCapacity(trainingIntentView, { asOf: today })
+  );
   // Compute the volume balance + acute load ONCE and thread them into
   // programAdjustments — which would otherwise recompute both from scratch.
   const programBal = brainSignal(`program_balance:2:${today}`, () => programBalance(2, today));
@@ -1099,6 +1120,8 @@ function getCoachContextFromSnapshot(): CoachContext {
           endurance_sport: profile?.endurance_sport ?? null,
         },
         enduranceGoal: getEnduranceGoal(),
+        trainingIntent: trainingIntentView,
+        enduranceCapacity: enduranceCapacityView,
         goalMode: effectiveGoalMode(profile),
         programState: fullProgramState,
         recovery,
@@ -1209,6 +1232,8 @@ function getCoachContextFromSnapshot(): CoachContext {
   const signals: CoachContextSignals = {
     today,
     profile,
+    trainingIntentView,
+    enduranceCapacityView,
     garmin,
     recovery,
     recentSessions,

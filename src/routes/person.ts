@@ -9,10 +9,13 @@ import {
   addCheckin,
   computeGoalCheck,
   getCheckinByDate,
+  getEnduranceCapacity,
   getProfile,
+  getTrainingIntent,
   listCheckins,
   listWeight,
   logWeight,
+  normalizeTrainingIntent,
   reactivateGoalCheckin,
   setProfile,
 } from "../domain/person/index.js";
@@ -26,7 +29,13 @@ personRouter.put("/profile", (req, res) => {
   // A real goal change re-seeds the gentle goal-check cadence at the active tier
   // (a fresh goal gets a fresh ~3-month clock, not the old goal's stretched one),
   // so it does not resurface immediately after the user just set it.
-  if ("goal_mode" in body || "goal_weight_lb" in body || "goal_date" in body) {
+  if (
+    "goal_mode" in body ||
+    "goal_weight_lb" in body ||
+    "goal_date" in body ||
+    "endurance_goal" in body ||
+    "training_intent" in body
+  ) {
     try {
       reactivateGoalCheckin();
     } catch {
@@ -36,6 +45,31 @@ personRouter.put("/profile", (req, res) => {
   res.json(setProfile(body));
 });
 personRouter.get("/goal", (_req, res) => res.json(computeGoalCheck()));
+personRouter.get("/training-intent", (_req, res) => {
+  const intent = getTrainingIntent();
+  res.json({ intent, endurance_capacity: getEnduranceCapacity(intent) });
+});
+personRouter.put("/training-intent", (req, res) => {
+  const body = req.body;
+  const value =
+    body && typeof body === "object" && Object.hasOwn(body, "training_intent")
+      ? body.training_intent
+      : body;
+  if (value !== null && !normalizeTrainingIntent(value)) {
+    return res.status(400).json({
+      error:
+        "training_intent requires ordered priorities, an endurance_role, and an optional valid endurance_capacity",
+    });
+  }
+  try {
+    reactivateGoalCheckin();
+  } catch {
+    /* best-effort */
+  }
+  const profile = setProfile({ training_intent: value });
+  const intent = getTrainingIntent(profile);
+  res.json({ intent, endurance_capacity: getEnduranceCapacity(intent) });
+});
 
 // ---- bodyweight log ----
 personRouter.get("/bodyweight", (req, res) =>

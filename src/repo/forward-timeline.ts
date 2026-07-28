@@ -10,7 +10,7 @@
 // Constitution: this is a calm plan, never a countdown or a verdict. No score,
 // no percent-complete, no urgency geometry. An entry NEVER fabricates a date it
 // does not have — a projection is a WINDOW, a standards milestone is undated.
-import { effectiveGoalMode, getProfile } from "./profile.js";
+import { effectiveGoalMode, getProfile, normalizeEnduranceGoal } from "./profile.js";
 import { getActiveBlock } from "./program-blocks.js";
 import { getProgramState, type ProgramState } from "./program-state.js";
 import { activeJourneyPhase } from "./journey.js";
@@ -235,6 +235,29 @@ export function forwardTimeline(today = localDateISO(), opts: ForwardTimelineOpt
         label: `Goal: ${round1(goalWeight)} lb`,
         detail: "The target date you set for yourself.",
         basis: "your declared goal date",
+      });
+    }
+  }
+
+  // A dated endurance event is a temporary calendar overlay, not the athlete's
+  // durable training identity. Keeping it on the road ahead makes the event
+  // visible without letting it silently redefine what all training is for.
+  const enduranceGoal = normalizeEnduranceGoal(profile.endurance_goal_json);
+  if (enduranceGoal?.mode === "race" && enduranceGoal.date) {
+    const delta = daysBetweenISO(enduranceGoal.date, today);
+    if (delta != null && delta >= -OVERDUE_GRACE_DAYS) {
+      const distance =
+        enduranceGoal.distance_km != null ? `${round1(enduranceGoal.distance_km)} km` : null;
+      const target = enduranceGoal.target ? clip(enduranceGoal.target, 60) : null;
+      dated.push({
+        id: "goal:endurance-race",
+        kind: "goal",
+        when: { date: enduranceGoal.date },
+        label: enduranceGoal.event ? clip(enduranceGoal.event, 80) : "Endurance event",
+        detail:
+          [distance, target].filter(Boolean).join(" · ") ||
+          "A temporary event goal within your longer-term training direction.",
+        basis: "your declared event date",
       });
     }
   }

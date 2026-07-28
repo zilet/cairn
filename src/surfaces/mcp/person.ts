@@ -12,7 +12,9 @@ import {
   confirmGoalCheckin,
   dismissGoalCheckin,
   getCheckinByDate,
+  getEnduranceCapacity,
   getProfile,
+  getTrainingIntent,
   listCheckins,
   listWeight,
   logWeight,
@@ -27,7 +29,7 @@ export function registerPersonTools(server: McpToolRegistrar) {
 
   server.tool(
     "set_profile",
-    "Update profile fields (any subset). name is the user's name (optional; stamped on the doctor-ready clinical report — pass '' to clear). Weight in lb, height in cm. about_me is free-text the coach uses to personalize (training history, work pattern, food likes/dislikes, what 'better' means to you); pass '' to clear. allergies are a HARD safety exclusion for meal planning; dietary_restrictions (vegetarian, no pork, …) are respected strongly. Pass '' to clear either. primary_discipline ('strength'|'endurance'|'hybrid', default 'strength') shapes coaching framing, the day-read, and weekly stats; endurance_sport is optional free text ('running'/'cycling'/'triathlon'), '' clears it.",
+    "Update profile fields (any subset). name is the user's name (optional; stamped on the doctor-ready clinical report — pass '' to clear). Weight in lb, height in cm. about_me is free-text the coach uses to personalize (training history, work pattern, food likes/dislikes, what 'better' means to you); pass '' to clear. allergies are a HARD safety exclusion for meal planning; dietary_restrictions (vegetarian, no pork, …) are respected strongly. Pass '' to clear either. primary_discipline ('strength'|'endurance'|'hybrid', default 'strength') remains a broad compatibility label; training_intent is the athlete-owned ordered priorities, explicit endurance role, and optional durable capability. endurance_sport is optional free text, '' clears it.",
     {
       name: z.string().optional(),
       sex: z.string().optional(),
@@ -43,6 +45,27 @@ export function registerPersonTools(server: McpToolRegistrar) {
       dietary_restrictions: z.string().optional(),
       primary_discipline: z.enum(["strength", "endurance", "hybrid"]).optional(),
       endurance_sport: z.string().optional(),
+      training_intent: z
+        .object({
+          priorities: z
+            .array(z.enum(["longevity", "muscle", "leanness", "strength", "endurance"]))
+            .min(1)
+            .max(5),
+          endurance_role: z.enum(["none", "supporting", "co_primary", "primary"]),
+          endurance_capacity: z
+            .object({
+              sport: z.string().min(1).max(60),
+              target_duration_min: z.number().positive().max(1440),
+              context: z.string().max(240).nullable().optional(),
+            })
+            .nullable()
+            .optional(),
+        })
+        .nullable()
+        .optional()
+        .describe(
+          "ordered durable goals and endurance role; separate from a temporary dated endurance event"
+        ),
       goal_mode: z
         .enum(["lose", "maintain", "gain"])
         .optional()
@@ -51,6 +74,53 @@ export function registerPersonTools(server: McpToolRegistrar) {
         ),
     },
     async (p) => asText(setProfile(p))
+  );
+
+  server.tool(
+    "get_training_intent",
+    "Read the athlete's ordered durable training priorities, endurance role, and optional sport-specific duration capability. Also returns a deterministic capability read from logged activity. This is identity; a dated race is a temporary overlay.",
+    {},
+    async () => {
+      const intent = getTrainingIntent();
+      return asText({ intent, endurance_capacity: getEnduranceCapacity(intent) });
+    }
+  );
+
+  server.tool(
+    "set_training_intent",
+    "Set or clear the athlete's durable training direction. Priorities are ordered. endurance_role is none, supporting, co_primary, or primary. Use endurance_capacity for a real-world ability such as a 120-minute MTB ride; keep temporary races in set_endurance_goal. Age informs dose and recovery but must not silently reorder athlete-owned priorities.",
+    {
+      priorities: z
+        .array(z.enum(["longevity", "muscle", "leanness", "strength", "endurance"]))
+        .min(1)
+        .max(5)
+        .optional(),
+      endurance_role: z.enum(["none", "supporting", "co_primary", "primary"]).optional(),
+      endurance_capacity: z
+        .object({
+          sport: z.string().min(1).max(60),
+          target_duration_min: z.number().positive().max(1440),
+          context: z.string().max(240).nullable().optional(),
+        })
+        .nullable()
+        .optional(),
+      clear: z.boolean().optional().describe("true clears explicit intent and restores legacy-derived behavior"),
+    },
+    async ({ clear, priorities, endurance_role, endurance_capacity }) => {
+      if (clear) {
+        const profile = setProfile({ training_intent: null });
+        const intent = getTrainingIntent(profile);
+        return asText({ intent, endurance_capacity: getEnduranceCapacity(intent) });
+      }
+      if (!priorities?.length || !endurance_role) {
+        return asText({ ok: false, error: "priorities and endurance_role are required unless clear is true" });
+      }
+      const profile = setProfile({
+        training_intent: { priorities, endurance_role, endurance_capacity },
+      });
+      const intent = getTrainingIntent(profile);
+      return asText({ intent, endurance_capacity: getEnduranceCapacity(intent) });
+    }
   );
 
   server.tool("get_goal_check", "Compute TDEE and a lean-safe feasibility check for the current goal.", {}, async () =>

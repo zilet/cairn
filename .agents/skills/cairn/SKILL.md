@@ -43,6 +43,10 @@ use the token support provided by the client).
   `get_progress` for the lifts they ask about (Epley est-1RM trend). Summarize honestly; if the goal
   is flagged aggressive, say so and quote the lean-safe recommendation.
 - **"I'm down to 176 / push my goal date / change my weight"** → `set_profile` (any subset).
+- **"My priorities are … / endurance supports my main goal / I want to stay ready for 2-hour MTB
+  rides"** → `set_training_intent`. Keep the durable ordered priorities, endurance role, and
+  sport-specific duration capability here. A temporary dated race belongs in `set_endurance_goal`;
+  do not let the event silently replace the durable hierarchy. Read back with `get_training_intent`.
 - **"Update my plan / progress my targets for next week"** → `draft_plan_update` with `agent: "auto"`
   (uses the user's configured rotation), then route the result through `apply_proposal_with_autonomy`.
   In Lead mode, bounded reversible changes land now or at the next natural boundary; structural changes

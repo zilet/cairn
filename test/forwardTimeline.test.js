@@ -29,6 +29,13 @@ function seedFullPicture() {
     goal_mode: "lose",
     goal_weight_lb: 180,
     goal_date: ahead(60),
+    endurance_goal: {
+      mode: "race",
+      event: "Cambridge Half Marathon",
+      date: ahead(90),
+      distance_km: 21.1,
+      target: "Finish feeling strong",
+    },
   });
   // An active cut phase so recomposition reads a real cut projection.
   repo.createJourneyPhase({
@@ -97,6 +104,10 @@ test("dates are drawn from real data, never fabricated", () => {
 
   const goal = timeline.find((e) => e.kind === "goal");
   assert.equal(goal.when.date, ahead(60), "goal entry uses the declared goal date");
+  const race = timeline.find((e) => e.id === "goal:endurance-race");
+  assert.equal(race.when.date, ahead(90), "race entry uses the declared event date");
+  assert.equal(race.label, "Cambridge Half Marathon");
+  assert.match(race.detail, /21\.1 km.*Finish feeling strong/);
 
   const block = timeline.find((e) => e.kind === "block");
   assert.equal(block.when.date, addDaysISO(back(7), 42), "block boundary is started_at + total_weeks");

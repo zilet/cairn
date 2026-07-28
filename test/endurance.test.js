@@ -417,11 +417,12 @@ test("a standing goal has no date/phase — maintain, not ramp", () => {
   assert.ok(!("phase" in g) || g.phase == null, "standing goals carry no periodization phase");
 });
 
-test("an unusable endurance goal clears it; a race without a date is rejected", () => {
-  repo.setProfile({ endurance_goal: { mode: "race", event: "No Date 5k" } }); // no date
-  assert.equal(repo.getEnduranceGoal("2026-09-06"), null, "a dateless race is rejected (can't periodize)");
+test("an invalid incoming race is non-destructive and explicit null clears", () => {
   repo.setProfile({ endurance_goal: { mode: "standing", distance_km: 10 } });
-  assert.ok(repo.getEnduranceGoal(), "standing goal set");
+  repo.setProfile({ endurance_goal: { mode: "race", event: "No Date 5k" } });
+  assert.equal(repo.getEnduranceGoal("2026-09-06").mode, "standing", "a dateless race preserves the current goal");
+  repo.setProfile({ endurance_goal: { mode: "race", event: "Impossible", date: "2026-02-30" } });
+  assert.equal(repo.getEnduranceGoal("2026-09-06").mode, "standing", "an impossible calendar date is rejected");
   repo.setProfile({ endurance_goal: null });
   assert.equal(repo.getEnduranceGoal(), null, "null clears the goal");
 });

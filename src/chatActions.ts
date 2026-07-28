@@ -12,6 +12,7 @@ export const CHAT_ACTION_TYPES = [
   "log_activity",
   "log_set",
   "set_profile",
+  "set_training_intent",
   "set_endurance_goal",
   "set_strength_objective",
   "add_memory",
@@ -63,6 +64,13 @@ export interface LogSetAction extends ChatActionBase {
 export interface SetProfileAction extends ChatActionBase {
   type: "set_profile";
   [key: string]: unknown;
+}
+
+export interface SetTrainingIntentAction extends ChatActionBase {
+  type: "set_training_intent";
+  priorities: unknown[];
+  endurance_role: "none" | "supporting" | "co_primary" | "primary";
+  endurance_capacity?: unknown;
 }
 
 export interface SetEnduranceGoalAction extends ChatActionBase {
@@ -217,6 +225,7 @@ export type ChatAction =
   | LogActivityAction
   | LogSetAction
   | SetProfileAction
+  | SetTrainingIntentAction
   | SetEnduranceGoalAction
   | SetStrengthObjectiveAction
   | AddMemoryAction
@@ -275,6 +284,26 @@ export const CHAT_ACTION_PROMPT_SPECS = {
     type: "set_profile",
     applyMode: "immediate",
     shape: `{ "type": "set_profile", "weight_lb": 176 }`,
+  },
+  set_training_intent: {
+    type: "set_training_intent",
+    applyMode: "immediate",
+    shape: `// The athlete's DURABLE, ordered training identity. Use this only when the
+    // athlete explicitly states what should win when goals compete. A dated race stays
+    // separate in set_endurance_goal — it is a temporary overlay, not a replacement
+    // for this identity.
+    { "type": "set_training_intent",
+      "priorities": ["longevity"|"muscle"|"leanness"|"strength"|"endurance", "..."],
+      "endurance_role": "none"|"supporting"|"co_primary"|"primary",
+      "endurance_capacity": {
+        "sport": "<e.g. mountain biking>",
+        "target_duration_min": <number>,
+        "context": "<e.g. technical trails in the Fells|null>"
+      } }`,
+    guidance: [
+      `Preserve the athlete's stated order exactly and dedupe repeated priorities. endurance_role says whether endurance is absent, supports higher goals, shares the lead, or leads. Omit endurance_capacity unless the athlete names a durable sport-specific capability.`,
+      `Age, recovery, soreness, joint/tendon feedback and injury history constrain dose and scheduling; they never silently rewrite the athlete's goal order.`,
+    ],
   },
   set_endurance_goal: {
     type: "set_endurance_goal",
@@ -552,6 +581,16 @@ export function normalizeChatAction(value: unknown): ChatAction | null {
       return nonBlank(value.exercise) ? { ...value, type: "log_set", exercise: value.exercise } : null;
     case "set_profile":
       return { ...value, type: "set_profile" };
+    case "set_training_intent":
+      return Array.isArray(value.priorities) &&
+        ["none", "supporting", "co_primary", "primary"].includes(String(value.endurance_role))
+        ? {
+            ...value,
+            type: "set_training_intent",
+            priorities: value.priorities,
+            endurance_role: value.endurance_role as SetTrainingIntentAction["endurance_role"],
+          }
+        : null;
     case "set_endurance_goal":
       return { ...value, type: "set_endurance_goal" };
     case "set_strength_objective":

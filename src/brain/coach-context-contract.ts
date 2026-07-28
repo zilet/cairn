@@ -1,6 +1,8 @@
 import type { CoachingFocus } from "../repo/coaching-focus.js";
 import type { MemoryKind, MemoryRow, RecentLearning } from "../repo/memory.js";
 import type { UnifiedSignalState } from "../repo/signal-state.js";
+import type { EnduranceCapacityRead } from "../repo/endurance-capacity.js";
+import type { ResolvedTrainingIntent } from "../repo/training-intent.js";
 
 export type CoachRecord = Record<string, any>;
 export type CoachGoalMode = "lose" | "maintain" | "gain";
@@ -212,6 +214,8 @@ export interface CoachContextEnvelope {
   now: CoachNowContext;
   profile: CoachRecord | null;
   discipline: CoachDiscipline;
+  training_intent: ResolvedTrainingIntent;
+  endurance_capacity: EnduranceCapacityRead | null;
   endurance_goal: CoachEnduranceGoal | null;
   goal: CoachGoalCheck | null;
   goal_mode: CoachGoalMode;
@@ -304,6 +308,8 @@ export const COACH_CONTEXT_REQUIRED_KEYS = [
   "now",
   "profile",
   "discipline",
+  "training_intent",
+  "endurance_capacity",
   "goal_mode",
   "day_intake",
   "memory",
@@ -368,6 +374,8 @@ export function isCoachContextEnvelope(value: unknown): value is CoachContextEnv
   return (
     isCoachRecord(value.now) &&
     isCoachRecord(value.discipline) &&
+    isCoachRecord(value.training_intent) &&
+    (value.endurance_capacity == null || isCoachRecord(value.endurance_capacity)) &&
     typeof value.goal_mode === "string" &&
     isCoachRecord(value.day_intake) &&
     Array.isArray((value.day_intake as CoachRecord).entries) &&

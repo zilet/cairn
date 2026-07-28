@@ -5,6 +5,7 @@ import { addDaysISO, joinList, localDateISO } from "./shared.js";
 import { getMarkerHistory } from "./health.js";
 import { matchOptimalZone, optimalDistance } from "./propagation.js";
 import { recoverySessionDose } from "./training-read.js";
+import { getTrainingIntent, type TrainingPriority } from "./training-intent.js";
 
 export type WholePersonVerdict = "better" | "holding" | "worse" | "unknown";
 export type WholePersonDomain =
@@ -311,26 +312,41 @@ export function wholePersonTrajectory(opts: { end?: string; days?: number } = {}
       return null;
     }
   })() as any;
-  const mode = effectiveGoalMode(getProfile());
+  const profile = getProfile();
+  const mode = effectiveGoalMode(profile);
   const discipline = getPrimaryDiscipline();
+  const intent = getTrainingIntent(profile);
   const parks: WholePersonDomain[] = [];
   const protects: WholePersonDomain[] = ["strength"];
   const floors = ["no avoidable strength regression", "no avoidable lean-mass loss"];
   const optimizes: string[] = [];
-  if (discipline === "strength" || discipline === "hybrid") {
-    optimizes.push("strength and muscle development");
+  if (intent.source === "explicit") {
+    const label: Record<TrainingPriority, string> = {
+      longevity: "longevity",
+      muscle: "muscle development",
+      leanness: "body composition",
+      strength: "strength",
+      endurance: "endurance",
+    };
+    optimizes.push(...intent.priorities.map((priority) => label[priority]));
+  } else {
+    // Exact legacy behavior for profiles that have not yet stated an ordered
+    // hierarchy; the explicit path above is authoritative once present.
+    if (discipline === "strength" || discipline === "hybrid") {
+      optimizes.push("strength and muscle development");
+    }
+    if (race?.is_race) {
+      optimizes.push("endurance");
+    }
+    if (mode === "lose") {
+      optimizes.push("body composition");
+    }
+    if (mode === "gain") {
+      if (!optimizes.includes("strength and muscle development")) optimizes.push("strength and muscle development");
+      optimizes.push("lean mass development");
+    }
+    if (block?.phase) optimizes.push(String(block.phase));
   }
-  if (race?.is_race) {
-    optimizes.push("endurance");
-  }
-  if (mode === "lose") {
-    optimizes.push("body composition");
-  }
-  if (mode === "gain") {
-    if (!optimizes.includes("strength and muscle development")) optimizes.push("strength and muscle development");
-    optimizes.push("lean mass development");
-  }
-  if (block?.phase) optimizes.push(String(block.phase));
   const parked = (domain: WholePersonDomain) => parks.includes(domain);
   const domains = [
     strengthRead(start, end, parked("strength")),

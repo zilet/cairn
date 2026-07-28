@@ -50,7 +50,7 @@ const SITES = [
   {
     site: "coach",
     build: () => buildCoachPrompt(),
-    kept: ["plan", "recent_sessions", "program_state", "recovery", "directives", "garmin"],
+    kept: ["training_intent", "endurance_capacity", "plan", "recent_sessions", "program_state", "recovery", "directives", "garmin"],
     dropped: ["day_read", "recent_decisions", "insights", "whole_person_trajectory"],
   },
   {
@@ -62,7 +62,7 @@ const SITES = [
   {
     site: "day_read",
     build: () => buildDayReadPrompt(),
-    kept: ["recovery", "signal_state", "coaching_focus", "recent_sessions", "day_intake", "health_focus"],
+    kept: ["training_intent", "endurance_capacity", "recovery", "signal_state", "coaching_focus", "recent_sessions", "day_intake", "health_focus"],
     // day_read recomputes a FRESH deterministic baseline and renders the last few
     // days' reads itself — handing it the STORED read invites parroting.
     dropped: ["day_read", "garmin", "recent_decisions", "insights"],
@@ -70,7 +70,7 @@ const SITES = [
   {
     site: "session",
     build: () => buildSessionPrompt(undefined, { minutes: 45 }),
-    kept: ["plan", "recent_sessions", "program_state", "recovery", "context_events"],
+    kept: ["training_intent", "endurance_capacity", "plan", "recent_sessions", "program_state", "recovery", "context_events"],
     dropped: ["signal_state", "garmin", "day_read", "recent_decisions"],
   },
   {
@@ -123,7 +123,7 @@ const SITES = [
     // directives and the training split all have to survive.
     site: "meal_plan",
     build: () => buildMealPlanPrompt(),
-    kept: ["profile", "family", "memory", "directives", "health_focus", "plan", "goal", "meal_plan", "recovery"],
+    kept: ["training_intent", "endurance_capacity", "profile", "family", "memory", "directives", "health_focus", "plan", "goal", "meal_plan", "recovery"],
     dropped: ["garmin", "day_read", "recent_decisions", "insights", "program_balance", "groups_trajectory"],
   },
   {
@@ -244,13 +244,33 @@ test("getCoachContext stays complete for every non-prompt consumer", () => {
   const ctx = repo.getCoachContext();
   // The projection happens at the prompt boundary — MCP tools, routes and agentJobs
   // must still see the keys individual prompts drop.
-  for (const key of ["garmin", "day_read", "recent_decisions", "insights", "signal_state", "whole_person_trajectory"]) {
+  for (const key of ["training_intent", "endurance_capacity", "garmin", "day_read", "recent_decisions", "insights", "signal_state", "whole_person_trajectory"]) {
     assert.ok(Object.hasOwn(ctx, key), `the shared snapshot keeps ${key}`);
   }
   assert.ok(
     ctx.recent_sessions[0].sets.every((set) => Object.hasOwn(set, "created_at")),
     "and full set rows"
   );
+});
+
+test("training, day, and nutrition prompts honor ordered intent without treating age as fragility", () => {
+  seedDemo();
+  repo.setProfile({
+    age: 46,
+    primary_discipline: "hybrid",
+    training_intent: {
+      priorities: ["longevity", "muscle", "leanness", "endurance"],
+      endurance_role: "supporting",
+      endurance_capacity: { sport: "MTB", target_duration_min: 120, context: "trail-ready" },
+    },
+  });
+  for (const prompt of [buildCoachPrompt(), buildDayReadPrompt(), buildMealPlanPrompt()]) {
+    assert.match(prompt, /longevity → muscle → leanness → endurance/);
+    assert.match(prompt, /ENDURANCE ROLE: SUPPORTING/);
+    assert.match(prompt, /120 minutes of MTB/);
+    assert.match(prompt, /never an automatic brake/i);
+    assert.match(prompt, /must not silently overwrite|stays separate|durable athlete intent/i);
+  }
 });
 
 test("projecting a partial context never invents keys", () => {

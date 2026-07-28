@@ -17,13 +17,15 @@
     deps: MeProfileControllerDeps,
     enduranceGoal: MeProfileEnduranceGoalDraft,
     initial: {
-      discipline: string; enduranceMode: string; goalMode: string; unit: "in" | "cm"; sex: string;
+      discipline: string; enduranceMode: string; goalMode: string; unit: "in" | "cm"; sex: string; trainingIntent: MeProfileTrainingIntentDraft; trainingIntentExplicit: boolean;
     },
   ): void {
     let pickedDisc = String(initial.discipline || "strength");
     let pickedEgMode = String(initial.enduranceMode || "none");
     let pickedGoalMode = String(initial.goalMode || "maintain");
     let pickedSex = initial.sex === "female" ? "female" : "male";
+    let pickedEnduranceRole = initial.trainingIntent.endurance_role;
+    let trainingIntentDirty = false;
     // The active display unit (in ⇒ imperial, cm ⇒ metric). The toggle converts
     // the body inputs in place; storage always writes imperial (height_in / lb).
     let activeUnit: "in" | "cm" = initial.unit === "cm" ? "cm" : "in";
@@ -50,6 +52,33 @@
         return { mode: "standing", label: deps.inputValue("#eg_label").trim() || null, distance_km: dist, weekly_km: wk };
       }
       return null;
+    };
+
+    const trainingIntentPayload = (): MeProfileTrainingIntentDraft | undefined => {
+      // A legacy profile's hierarchy is a derived VIEW until the athlete edits
+      // these controls. Omitting it on unrelated saves lets a discipline/body-goal
+      // change derive afresh instead of freezing the old derivation as identity.
+      if (!initial.trainingIntentExplicit && !trainingIntentDirty) return undefined;
+      const allowed = new Set<MeProfileTrainingPriority>(["longevity", "muscle", "leanness", "strength", "endurance"]);
+      const priorities: MeProfileTrainingPriority[] = [];
+      for (let index = 0; index < 5; index += 1) {
+        const value = deps.inputValue(`#training_priority_${index}`) as MeProfileTrainingPriority;
+        if (allowed.has(value) && !priorities.includes(value)) priorities.push(value);
+      }
+      // The first rendered option always seeds this, but preserve a safe payload
+      // if a browser's required-field handling is bypassed.
+      if (!priorities.length) priorities.push("longevity");
+      if (pickedEnduranceRole === "none") return { priorities, endurance_role: "none" };
+      const sport = deps.inputValue("#endurance_capacity_sport").trim();
+      const targetDuration = deps.numberValue("#endurance_capacity_duration");
+      const context = deps.inputValue("#endurance_capacity_context").trim();
+      return {
+        priorities,
+        endurance_role: pickedEnduranceRole,
+        ...(sport && targetDuration != null && targetDuration > 0
+          ? { endurance_capacity: { sport, target_duration_min: targetDuration, context: context || null } }
+          : {}),
+      };
     };
 
     // Read the height inputs (structure differs per unit) back to total inches.
@@ -97,6 +126,7 @@
         goal_mode: pickedGoalMode,
         primary_discipline: pickedDisc,
         endurance_sport: pickedDisc === "strength" ? "" : deps.inputValue("#endurance_sport").trim(),
+        training_intent: trainingIntentPayload(),
         endurance_goal: enduranceGoalPayload(),
         about_me: deps.textAreaValue("#about_me").trim(),
         allergies: deps.inputValue("#allergies").trim(),
@@ -140,6 +170,35 @@
         profileBar.markDirty();
       })
     );
+
+    deps.select<HTMLElement>("#enduranceRoleSeg")?.querySelectorAll<HTMLElement>("[data-endurance-role]").forEach((button) =>
+      button.addEventListener("click", () => {
+        const role = button.dataset.enduranceRole;
+        if (role === "none" || role === "supporting" || role === "co_primary" || role === "primary") pickedEnduranceRole = role;
+        trainingIntentDirty = true;
+        setActiveButton(deps.select("#enduranceRoleSeg"), ".segbtn", button);
+        const capacity = deps.select<HTMLElement>("#enduranceCapacityFields");
+        if (capacity) capacity.style.display = pickedEnduranceRole === "none" ? "none" : "";
+        profileBar.markDirty();
+      })
+    );
+
+    for (let index = 0; index < 5; index += 1) {
+      deps.select<HTMLElement>(`#training_priority_${index}`)?.addEventListener("change", () => {
+        trainingIntentDirty = true;
+        profileBar.markDirty();
+      });
+    }
+    for (const selector of [
+      "#endurance_capacity_sport",
+      "#endurance_capacity_duration",
+      "#endurance_capacity_context",
+    ]) {
+      deps.select<HTMLElement>(selector)?.addEventListener("input", () => {
+        trainingIntentDirty = true;
+        profileBar.markDirty();
+      });
+    }
 
     deps.select<HTMLElement>("#endGoalMode")?.querySelectorAll<HTMLElement>("[data-egmode]").forEach((button) =>
       button.addEventListener("click", () => {
@@ -269,11 +328,25 @@
     const goalMode = CairnMeProfileForm.goalMode(profile, goal);
     const discipline = deps.primaryDiscipline();
     const unit = CairnMeProfileForm.unitPref();
+    // The client globals declaration intentionally describes only the public
+    // cross-script surface; retain the narrow form helper here for TS while the
+    // browser receives it from the same global script bundle.
+    const trainingIntent = (CairnMeProfileForm as typeof CairnMeProfileForm & {
+      trainingIntent(profile: MeProfileProfile, goalMode: string): MeProfileTrainingIntentDraft;
+    }).trainingIntent(profile, goalMode);
 
     const draw = () => {
-      deps.root.innerHTML = CairnMeProfileForm.html(deps, profile, goal, { discipline, enduranceGoal, enduranceMode, goalMode, unit });
+      deps.root.innerHTML = CairnMeProfileForm.html(deps, profile, goal, { discipline, enduranceGoal, enduranceMode, goalMode, unit, trainingIntent });
       deps.wireSeg(deps.handlers);
-      wireProfileForm(deps, enduranceGoal, { discipline, enduranceMode, goalMode, unit, sex: String(profile.sex || "") });
+      wireProfileForm(deps, enduranceGoal, {
+        discipline,
+        enduranceMode,
+        goalMode,
+        unit,
+        sex: String(profile.sex || ""),
+        trainingIntent,
+        trainingIntentExplicit: !!profile.training_intent_json,
+      });
     };
     if (opts.animate) await deps.skeletonSwap(draw);
     else draw();

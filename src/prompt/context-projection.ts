@@ -42,6 +42,7 @@ const PERSON = [
   "now",
   "profile",
   "discipline",
+  "training_intent",
   "goal",
   "goal_mode",
   "memory",
@@ -76,6 +77,7 @@ const TRAINING_FULL = [
 // The endurance counterpart. Small (and empty for a pure strength user), so it
 // rides along wherever runs could plausibly shape the answer.
 const ENDURANCE = [
+  "endurance_capacity",
   "endurance_goal",
   "run_compliance",
   "run_zones",
