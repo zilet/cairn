@@ -135,6 +135,7 @@ test("every current durable outbox mutation route is tracked", () => {
     ["DELETE", "/sessions/skip"],
     ["POST", "/sessions/42/finish"],
     ["POST", "/daily-session/prepare"],
+    ["POST", "/training-symptoms/observation"],
     ["POST", "/activities"],
     ["POST", "/bodyweight"],
     ["POST", "/food-notes"],

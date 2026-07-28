@@ -82,6 +82,54 @@ function adaptationNote(note: unknown, text: string): string {
   return `${text}. ${existing}`.slice(0, 500);
 }
 
+function trustedCandidateMetadata(candidate: DailyDecisionEnvelope["candidates"][number] | undefined) {
+  if (!candidate) return {};
+  return {
+    brain_decision_id: candidate.brain_decision_id ?? null,
+    brain_change_summary: candidate.brain_change_summary ?? null,
+    brain_change_reason: candidate.brain_change_reason ?? null,
+    brain_change_reason_provenance: candidate.brain_change_reason_provenance ?? null,
+    brain_change_reversible: candidate.brain_change_reversible ?? null,
+  };
+}
+
+function applyAuthorizedTarget(item: any, candidate: DailyDecisionEnvelope["candidates"][number] | undefined): boolean {
+  const target = candidate?.authorized_target;
+  if (!target) return false;
+  let changed = false;
+  const assign = (key: string, value: number | null) => {
+    if (item[key] !== value) {
+      item[key] = value;
+      changed = true;
+    }
+  };
+  // The progression target owns challenge (rep range, load, or duration), while
+  // the accepted daily composition owns volume. Keeping those responsibilities
+  // separate lets recovery-cycle fractions and legitimate one-day set changes
+  // survive without giving the agent freedom to invent a heavier target.
+  assign("rep_low", target.mode === "timed" ? null : target.rep_low);
+  assign("rep_high", target.mode === "timed" ? null : target.rep_high);
+  assign("target_weight", target.mode === "timed" ? null : target.target_weight);
+  assign("target_seconds", target.mode === "timed" ? target.target_seconds : null);
+  if (item.mode !== target.mode) {
+    item.mode = target.mode;
+    changed = true;
+  }
+  return changed;
+}
+
+function applyRecoveryCycleTarget(item: any, envelope: DailyDecisionEnvelope): boolean {
+  const cycle = envelope.recovery_cycle;
+  if (!cycle || (cycle.effective_status !== "active" && cycle.effective_status !== "recheck")) return false;
+  const adapted = adaptBasePlanDayForRecovery(
+    { items: [item] },
+    { working_set_fraction: cycle.working_set_fraction }
+  ).items[0];
+  if (!adapted) return false;
+  Object.assign(item, adapted);
+  return true;
+}
+
 function finite(value: unknown): number | null {
   if (value == null || value === "") return null;
   const n = Number(value);
@@ -331,25 +379,37 @@ export function normalizeComposedSession(
     const next = { ...item };
     const candidate = candidates.get(String(next.exercise ?? "").toLowerCase());
     if (next.kind === "cardio") {
+      if (applyRecoveryCycleTarget(next, envelope)) changed = true;
       if (clampCardioItem(next, envelope, forceEasyCardio)) changed = true;
+      Object.assign(next, trustedCandidateMetadata(candidate));
       if (forceEasyCardio) hasEasyCardio = true;
       capped.push(next);
       continue;
     }
     const requestedSets = Math.max(1, Number(next.sets) || 1);
-    const boundedSets = Math.min(requestedSets, itemSetCap, remainingSets);
+    if (applyAuthorizedTarget(next, candidate)) changed = true;
+    if (applyRecoveryCycleTarget(next, envelope)) changed = true;
+    Object.assign(next, trustedCandidateMetadata(candidate));
+    const authorizedSets = Math.max(1, Number(next.sets) || requestedSets);
+    const boundedSets = Math.min(authorizedSets, itemSetCap, remainingSets);
     if (boundedSets < 1) {
       changed = true;
       continue;
     }
-    if (boundedSets !== requestedSets) changed = true;
+    if (boundedSets !== requestedSets || boundedSets !== authorizedSets) changed = true;
     next.sets = boundedSets;
     remainingSets -= boundedSets;
 
     let intensityFactor = 1;
     if (envelope.caps.intensity === "easy") intensityFactor = 0.8;
     else if (envelope.caps.intensity === "deload") intensityFactor = 0.9;
-    if (candidate?.action === "deload") intensityFactor = Math.min(intensityFactor, 0.9);
+    // An authoritative progression deload target is already reduced by the
+    // progression engine. Apply the legacy 10% fallback only when no exact
+    // target crossed the decision boundary; independent day-level safety caps
+    // (easy/recovery) may still reduce the exact target further.
+    if (candidate?.action === "deload" && !candidate.authorized_target) {
+      intensityFactor = Math.min(intensityFactor, 0.9);
+    }
     const hold = candidate?.action === "hold" || envelope.caps.intensity === "hold";
     if (hold && clampHeldTarget(next, envelope)) changed = true;
     if (intensityFactor < 1) {
@@ -402,6 +462,11 @@ function planItemToRaw(it: any): Record<string, unknown> {
       target_zone: it.target_zone ?? null,
       interval: it.interval ?? it.interval_json ?? null,
       note: it.note ?? null,
+      brain_decision_id: it.brain_decision_id ?? null,
+      brain_change_summary: it.brain_change_summary ?? null,
+      brain_change_reason: it.brain_change_reason ?? null,
+      brain_change_reason_provenance: it.brain_change_reason_provenance ?? null,
+      brain_change_reversible: it.brain_change_reversible ?? null,
     };
   }
   return {
@@ -414,6 +479,11 @@ function planItemToRaw(it: any): Record<string, unknown> {
     mode: it.mode ?? "reps",
     warmup_sets: it.warmup_sets ?? null,
     note: it.note ?? null,
+    brain_decision_id: it.brain_decision_id ?? null,
+    brain_change_summary: it.brain_change_summary ?? null,
+    brain_change_reason: it.brain_change_reason ?? null,
+    brain_change_reason_provenance: it.brain_change_reason_provenance ?? null,
+    brain_change_reversible: it.brain_change_reversible ?? null,
   };
 }
 
@@ -429,15 +499,10 @@ export function deterministicSessionRawFromEnvelope(envelope: DailyDecisionEnvel
   const items: Array<Record<string, unknown>> = [];
   if (envelope.template.day_number != null && envelope.kind !== "rest") {
     const baseDay = getPlanDay(envelope.template.day_number) as any;
-    const day =
-      baseDay &&
-      envelope.recovery_cycle &&
-      (envelope.recovery_cycle.effective_status === "active" ||
-        envelope.recovery_cycle.effective_status === "recheck")
-        ? adaptBasePlanDayForRecovery(baseDay, {
-            working_set_fraction: envelope.recovery_cycle.working_set_fraction,
-          })
-        : baseDay;
+    // Recovery adaptation is centralized in normalizeComposedSession after the
+    // progression target is applied, so it has the final safety precedence for
+    // both deterministic and agent-authored compositions.
+    const day = baseDay;
     const candidates = new Map(envelope.candidates.map((candidate) => [candidate.exercise.toLowerCase(), candidate]));
     const substitutions = new Map(
       envelope.candidates
@@ -491,7 +556,10 @@ export function deterministicSessionRawFromEnvelope(envelope: DailyDecisionEnvel
         }
         items.push(raw);
       } else {
-        items.push(planItemToRaw(it));
+        const raw = planItemToRaw(it);
+        applyAuthorizedTarget(raw, direct);
+        Object.assign(raw, trustedCandidateMetadata(direct));
+        items.push(raw);
       }
     }
   }

@@ -61,6 +61,7 @@ export * from "./repo/daily-decision.js"; // Stage 2: the deterministic daily-se
 export * from "./repo/daily-composition.js"; // Stage 3: server-side normalizer + deterministic fallback for bounded agent composition
 export * from "./repo/equipment-capability.js"; // bounded per-session equipment parsing + exercise compatibility
 export * from "./repo/daily-reconciliation.js"; // Stage 4: post-session suggested-vs-actual outcome reconciliation (idempotent, adherence-neutral)
+export * from "./repo/daily-outcome-read.js"; // bounded athlete-facing learning read over completed reconciled sessions
 export * from "./repo/recovery-cycles.js"; // temporary calendar-bounded recovery overlays; never mutate the base plan
 export * from "./repo/training-symptoms.js"; // explicit movement-scoped symptom/tolerance lifecycle
 export * from "./repo/support-work.js"; // lagging compound → build the under-trained contributing muscle

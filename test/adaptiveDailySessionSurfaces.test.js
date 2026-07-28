@@ -220,6 +220,48 @@ test("registered MCP daily-session tools use the shared prepare behavior for suc
   }
 });
 
+test("REST and MCP expose the same additive athlete-facing completed outcome read", async () => {
+  const date = "2032-03-06";
+  const created = await routerRequest("POST", "/daily-session/prepare", {
+    body: { date, source: "athlete_override", session: session("Outcome session") },
+  });
+  repo.logSetByName({ date, exercise: "Surface Squat", weight: 135, reps: 5, rir: 2, day_number: null });
+  repo.logSetByName({ date, exercise: "Surface Squat", weight: 135, reps: 5, rir: 2, day_number: null });
+  repo.logSetByName({ date, exercise: "Surface Squat", weight: 135, reps: 5, rir: 2, day_number: null });
+  repo.finishSession(created.body.session.id, null);
+
+  const rest = await routerRequest("GET", "/daily-session/outcome", {
+    query: { session_id: String(created.body.session.id) },
+  });
+  assert.equal(rest.status, 200);
+  assert.equal(rest.body.session_id, created.body.session.id);
+  assert.equal(typeof rest.body.athlete_read.learning, "string");
+  assert.equal(rest.body.athlete_read.next_exposure, null);
+  assert.ok(rest.body.facts, "existing reconciliation facts remain available");
+
+  for (const session_id of ["abc", "0"]) {
+    const invalid = await routerRequest("GET", "/daily-session/outcome", {
+      query: { session_id, date },
+    });
+    assert.equal(invalid.status, 400, session_id);
+    assert.match(invalid.body.error, /session_id must be a positive integer/);
+  }
+
+  const { client, server } = await mcpHarness();
+  try {
+    const mcp = toolJson(
+      await client.callTool({
+        name: "get_daily_session_outcome",
+        arguments: { session_id: created.body.session.id },
+      })
+    );
+    assert.deepEqual(mcp, rest.body);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
 test("REST and MCP mirror the explicit Train-anyway decision and accepted fingerprint", async () => {
   repo.savePlanDay(1, "Surface strength", "Full body", [
     { exercise: "Surface Squat", sets: 4, rep_low: 5, rep_high: 8, target_weight: 135 },
@@ -278,6 +320,97 @@ test("REST and MCP mirror the explicit Train-anyway decision and accepted finger
     assert.equal(
       mcpPrepared.daily_session.decision.input_fingerprint,
       mcpDecision.input_fingerprint
+    );
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test("REST and MCP share the read-only preview and stale compare-and-set truth", async () => {
+  const date = "2032-03-18";
+  repo.savePlanDay(1, "Surface strength", "Full body", [
+    { exercise: "Surface Squat", sets: 4, rep_low: 5, rep_high: 8, target_weight: 135 },
+  ]);
+  const before = {
+    decisions: db.prepare(`SELECT COUNT(*) AS n FROM daily_session_decisions`).get().n,
+    compositions: db.prepare(`SELECT COUNT(*) AS n FROM daily_session_compositions`).get().n,
+    sessions: db.prepare(`SELECT COUNT(*) AS n FROM sessions`).get().n,
+  };
+  const restPreview = await routerRequest("GET", "/daily-session/preview", {
+    query: { date, override: "short on time" },
+  });
+  assert.equal(restPreview.status, 200);
+
+  const { client, server } = await mcpHarness();
+  try {
+    const mcpPreview = toolJson(
+      await client.callTool({
+        name: "preview_daily_session",
+        arguments: { date, override: "short on time" },
+      })
+    );
+    assert.deepEqual(mcpPreview, restPreview.body);
+    assert.deepEqual(
+      {
+        decisions: db.prepare(`SELECT COUNT(*) AS n FROM daily_session_decisions`).get().n,
+        compositions: db.prepare(`SELECT COUNT(*) AS n FROM daily_session_compositions`).get().n,
+        sessions: db.prepare(`SELECT COUNT(*) AS n FROM sessions`).get().n,
+      },
+      before,
+      "neither preview surface writes"
+    );
+
+    repo.savePlanDay(1, "Changed surface strength", "Updated full body", [
+      { exercise: "Surface Squat", sets: 2, rep_low: 8, rep_high: 10, target_weight: 115 },
+    ]);
+    const staleRest = await routerRequest("POST", "/daily-session/prepare", {
+      body: {
+        date,
+        source: "adaptive_plan",
+        constraints: { day_read_override: "short on time" },
+        expected_input_fingerprint: restPreview.body.input_fingerprint,
+      },
+    });
+    assert.equal(staleRest.status, 409);
+    assert.equal(staleRest.body.code, "daily_session_preview_stale");
+    assert.notEqual(staleRest.body.preview.input_fingerprint, restPreview.body.input_fingerprint);
+
+    const staleMcp = toolJson(
+      await client.callTool({
+        name: "prepare_daily_session",
+        arguments: {
+          date,
+          source: "adaptive_plan",
+          constraints: { day_read_override: "short on time" },
+          expected_input_fingerprint: restPreview.body.input_fingerprint,
+        },
+      })
+    );
+    assert.equal(staleMcp.code, "daily_session_preview_stale");
+    assert.deepEqual(staleMcp.preview, staleRest.body.preview);
+    assert.deepEqual(
+      {
+        decisions: db.prepare(`SELECT COUNT(*) AS n FROM daily_session_decisions`).get().n,
+        compositions: db.prepare(`SELECT COUNT(*) AS n FROM daily_session_compositions`).get().n,
+        sessions: db.prepare(`SELECT COUNT(*) AS n FROM sessions`).get().n,
+      },
+      before,
+      "stale REST and MCP compare-and-set calls write nothing"
+    );
+
+    const accepted = await routerRequest("POST", "/daily-session/prepare", {
+      body: {
+        date,
+        source: "adaptive_plan",
+        constraints: { day_read_override: "short on time" },
+        expected_input_fingerprint: staleRest.body.preview.input_fingerprint,
+      },
+    });
+    assert.equal(accepted.status, 200);
+    assert.equal(
+      accepted.body.daily_session.decision.input_fingerprint,
+      staleRest.body.preview.input_fingerprint
     );
   } finally {
     await client.close();

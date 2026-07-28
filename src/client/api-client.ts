@@ -625,7 +625,14 @@ const OUTBOX_KEY = "cairn.outbox.v1";
 const OUTBOX_MAX = 250;
 const OUTBOX_SEND_CLAIM_MS = 30_000;
 const OUTBOX_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/;
-const OUTBOX_WORKOUT_KINDS = new Set(["daily_session_prepare", "set", "finish", "skip", "restore"]);
+const OUTBOX_WORKOUT_KINDS = new Set([
+  "daily_session_prepare",
+  "set",
+  "finish",
+  "skip",
+  "restore",
+  "symptom_observation",
+]);
 
 function validOutboxId(value: unknown): value is string {
   return typeof value === "string" && OUTBOX_ID_RE.test(value);
@@ -1256,6 +1263,8 @@ function outboxKindLabel(kind: unknown): string {
       return "Exercise skip";
     case "restore":
       return "Exercise restore";
+    case "symptom_observation":
+      return "Movement check";
     case "daily_session_prepare":
       return "Session setup";
     default:
@@ -1297,6 +1306,12 @@ function outboxItemSummary(item: OutboxItem): string {
   if (item.kind === "skip" || item.kind === "restore") {
     const exercise = boundedOutboxText(body.exercise, 80);
     return `${item.kind === "restore" ? "Restore" : "Skip"}${exercise ? ` · ${exercise}` : " exercise"}`;
+  }
+  if (item.kind === "symptom_observation") {
+    const movement = boundedOutboxText(body.movement, 80);
+    const area = boundedOutboxText(body.area_text, 80);
+    const outcome = body.outcome === "pain_free" ? "Pain-free today" : "Pain present";
+    return boundedOutboxText([outcome, movement, area].filter(Boolean).join(" · ")) || "Saved movement check";
   }
   return "Saved log";
 }
@@ -1719,7 +1734,8 @@ function canonicalPreparedReplay(item: OutboxItem, value: unknown): PreparedRepl
 }
 
 function replayHasSemanticFailure(item: OutboxItem, value: unknown): boolean {
-  if (!value || typeof value !== "object") return item.kind === "skip" || item.kind === "restore";
+  if (!value || typeof value !== "object")
+    return item.kind === "skip" || item.kind === "restore" || item.kind === "symptom_observation";
   const response = value as Record<string, unknown>;
   if (response.ok === false) return true;
   if (
@@ -1729,7 +1745,29 @@ function replayHasSemanticFailure(item: OutboxItem, value: unknown): boolean {
     response.error !== false
   )
     return true;
-  return (item.kind === "skip" || item.kind === "restore") && response.ok !== true;
+  return (
+    item.kind === "skip" ||
+    item.kind === "restore" ||
+    item.kind === "symptom_observation"
+  ) && response.ok !== true;
+}
+
+function queuedAdaptivePreviewDrift(item: OutboxItem, error: unknown): boolean {
+  if (
+    item.kind !== "daily_session_prepare" ||
+    !(error instanceof CairnApiError) ||
+    error.status !== 409 ||
+    !item.body ||
+    typeof item.body !== "object"
+  ) {
+    return false;
+  }
+  const body = item.body as Record<string, unknown>;
+  return (
+    body.source === "adaptive_plan" &&
+    typeof body.expected_input_fingerprint === "string" &&
+    /^[a-f0-9]{64}$/.test(body.expected_input_fingerprint)
+  );
 }
 
 function freshenAfterSync(prepared: PreparedReplayTruth[] = []): void {
@@ -1813,7 +1851,13 @@ async function flushOutbox(): Promise<void> {
             if (item.session_date) mutatedPreparedDates.add(item.session_date);
           }
         } catch (error) {
-          if (isTransientApiFailure(error)) outcome = "pending";
+          // A queued adaptive candidate is a compare-and-set request, never a
+          // retry-until-it-wins write. Fingerprint drift becomes an explicit
+          // attention barrier so dependent sets/finish cannot overtake it.
+          if (queuedAdaptivePreviewDrift(item, error)) {
+            outcome = "attention";
+            failureStatus = 409;
+          } else if (isTransientApiFailure(error)) outcome = "pending";
           else {
             outcome = "attention";
             if (error instanceof CairnApiError && error.status != null) failureStatus = error.status;

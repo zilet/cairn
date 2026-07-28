@@ -1,9 +1,13 @@
 import { z } from "zod";
-import { dailySessionErrorBody, prepareDailySessionUseCase } from "../../domain/training/index.js";
 import {
+  dailySessionErrorBody,
+  prepareDailySessionUseCase,
+  previewAdaptiveDailySessionUseCase,
+} from "../../domain/training/index.js";
+import {
+  dailyOutcomeRead,
   decideDailySession,
   getActiveDailySession,
-  getDailySessionOutcome,
   recordDailySessionDecision,
   sessionPrimer,
 } from "../../repo.js";
@@ -79,6 +83,24 @@ export function registerDayCoachTools(server: McpToolRegistrar) {
   );
 
   server.tool(
+    "preview_daily_session",
+    "Preview the exact read-only adaptive session candidate Cairn would persist for this date and intent. Returns calm athlete-facing constraints and rationale plus an input fingerprint for compare-and-set prepare. Never records a decision or creates a workout session.",
+    {
+      date: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
+      override: z.string().optional().describe("exact day steer used for this preview"),
+      train_anyway: z.boolean().optional().describe("explicit athlete choice to train within current safety caps"),
+    },
+    async ({ date, override, train_anyway }) =>
+      asText(
+        previewAdaptiveDailySessionUseCase({
+          date,
+          constraints: override ? { day_read_override: override } : {},
+          train_anyway: train_anyway === true,
+        })
+      )
+  );
+
+  server.tool(
     "get_daily_session_decision",
     "Read the deterministic daily-session decision envelope for a date — the explainable, reproducible read (train/easy/rest kind, required/allowed/reduced/excluded muscles, volume/intensity/duration caps, candidate exercises, and the reason codes) BEFORE any agent composes. Same inputs always yield the same envelope and input_fingerprint. Agent-free.",
     {
@@ -118,6 +140,11 @@ export function registerDayCoachTools(server: McpToolRegistrar) {
         .positive()
         .optional()
         .describe("assertion-only active composition id; needs no source/session and never writes"),
+      expected_input_fingerprint: z
+        .string()
+        .regex(/^[a-f0-9]{64}$/)
+        .optional()
+        .describe("adaptive preview fingerprint; stale candidates return a fresh preview without writing"),
       day_number: z.number().int().optional().describe("explicit plan day; omit for the adaptive selection"),
       agent_job_id: z
         .number()
@@ -152,9 +179,12 @@ export function registerDayCoachTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_daily_session_outcome",
-    "Read the post-session outcome reconciliation for a date — what was suggested vs actually trained (completed / substituted / skipped / reordered), progression evidence, feedback, and adherence-neutral reason codes + confounders (travel, pain, another activity). Deterministic, agent-free. null when the date has no reconciled daily-session composition.",
-    { date: z.string().optional().describe("YYYY-MM-DD; defaults to today") },
-    async ({ date }) => asText(getDailySessionOutcome(date))
+    "Read the daily-session outcome reconciliation for a date or session — what was suggested vs actually trained, progression evidence, feedback, and adherence-neutral context. A calm athlete-facing learning is added only after completion. Deterministic, agent-free; null when no reconciled daily session exists.",
+    {
+      date: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
+      session_id: z.number().int().positive().optional().describe("exact completed session; takes precedence over date"),
+    },
+    async ({ date, session_id }) => asText(dailyOutcomeRead({ date, session_id }))
   );
 
   server.tool(

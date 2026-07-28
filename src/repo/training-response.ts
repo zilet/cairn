@@ -34,9 +34,16 @@ export function recentMovementResponse(
   const rows = db
     .prepare(
       `SELECT facts_json FROM daily_session_outcomes
-       WHERE status = 'completed' ORDER BY date DESC, id DESC LIMIT ?`
+       WHERE status = 'completed'
+         AND EXISTS (
+           SELECT 1
+           FROM json_each(daily_session_outcomes.facts_json, '$.dose_evidence') AS dose
+           WHERE json_extract(dose.value, '$.movement_key') = ?
+             AND (? IS NULL OR json_extract(dose.value, '$.intent_key') = ?)
+         )
+       ORDER BY date DESC, id DESC LIMIT ?`
     )
-    .all(limit) as any[];
+    .all(requestedKey, intent, intent, limit) as any[];
   const verdicts: ChallengeVerdict[] = [];
   let considered = 0;
   let matchedIntent: string | null = intent;

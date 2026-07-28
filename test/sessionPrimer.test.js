@@ -19,6 +19,9 @@ function reset() {
     "logged_sets", "plan_items", "plan_days", "sessions", "exercises",
     "bodyweight_log", "activities", "garmin_activities", "health_directives",
     "daily_metrics", "garmin_daily_metrics", "memory", "day_reads",
+    "movement_tolerance_observations", "training_symptom_events",
+    "daily_session_compositions", "daily_session_decisions", "daily_session_outcomes",
+    "brain_decisions", "plan_proposals", "recovery_cycles",
   ]) {
     try { db.prepare(`DELETE FROM ${t}`).run(); } catch { /* table may not exist */ }
   }
@@ -83,6 +86,7 @@ test("directive + soreness present: both surface in watch[], tied to a movement 
   planDay(1, "Lower", [{ exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 5, target_weight: 225 }]);
   logSet("Back Squat", localDaysAgo(6), { weight: 225, reps: 5, rir: 2 });
   repo.addDirective({ domain: "training", directive: "Ease off heavy spinal loading for a couple of weeks." });
+  repo.addDirective({ domain: "watch", directive: "Recheck a general lab marker next quarter." });
   repo.setSessionFeedback(localDaysAgo(0), { soreness: 4, performance: null, joint_pain: "left knee" });
 
   const primer = sessionPrimer(undefined, { dayNumber: 1 });
@@ -90,6 +94,107 @@ test("directive + soreness present: both surface in watch[], tied to a movement 
   const watchText = primer.watch.map((w) => w.text).join(" | ").toLowerCase();
   assert.match(watchText, /spinal loading/, "the active training directive is in watch");
   assert.match(watchText, /knee/, "the recent joint echo is tied to the knee-loading squat");
+  assert.doesNotMatch(watchText, /general lab marker/, "an unrelated general watch directive stays out");
+  assert.match(primer.watch[0].text, /knee/, "the session-relevant current symptom is prioritized");
+});
+
+test("a stale legacy elbow note is explicitly old and needs a recheck, never presented as current evidence", () => {
+  makeExercise("Biceps Curl", "biceps");
+  planDay(1, "Arms", [{ exercise: "Biceps Curl", sets: 3, rep_low: 8, rep_high: 12, target_weight: 30 }]);
+  repo.setSessionFeedback(localDaysAgo(10), {
+    soreness: null,
+    performance: null,
+    joint_pain: "left elbow",
+  });
+
+  const primer = sessionPrimer(undefined, { dayNumber: 1 });
+  assert.ok(primer, "the old active legacy event creates a bounded recheck");
+  const elbow = primer.watch.find((item) => /elbow/i.test(item.text));
+  assert.ok(elbow, "the relevant elbow note stays visible");
+  assert.match(elbow.text, /older|old/i);
+  assert.match(elbow.text, /needs a recheck/i);
+  assert.match(elbow.text, /isn't a current finding/i);
+  assert.doesNotMatch(elbow.text, /\b(?:cleared|clearance|diagnos(?:e|is))\b/i);
+});
+
+test("an accepted train-anyway session exposes its authoritative label and plain-language bounds", () => {
+  makeExercise("Back Squat", "quads");
+  planDay(1, "Lower", [{ exercise: "Back Squat", sets: 4, rep_low: 5, rep_high: 5, target_weight: 225 }]);
+  seedSleep(localDaysAgo(0), 290);
+  seedSleep(localDaysAgo(1), 300);
+  seedSleep(localDaysAgo(2), 295);
+
+  const prepared = repo.prepareDailySession({
+    date: localDaysAgo(0),
+    source: "adaptive_plan",
+    train_anyway: true,
+  });
+  assert.equal(prepared.daily_session.provenance.label, "Training by choice");
+
+  const primer = sessionPrimer(localDaysAgo(0));
+  assert.ok(primer, "the accepted decision keeps the primer present");
+  assert.equal(primer.provenance_label, "Training by choice");
+  assert.equal(primer.decision_kind_label, "Training session");
+  assert.ok(primer.decision_bounds.includes("Lower volume"));
+  assert.ok(primer.decision_bounds.includes("Lighter loads"));
+  assert.ok(primer.decision_bounds.some((item) => /^Up to \d+ minutes$/.test(item)));
+});
+
+test("an accepted snapshot, not the mutable plan, owns primer movements and symptom watches", () => {
+  makeExercise("Back Squat", "quads");
+  makeExercise("Bench Press", "chest");
+  planDay(1, "Full body", [
+    { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 5, target_weight: 225 },
+    { exercise: "Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185 },
+  ]);
+  repo.reportTrainingSymptom({ area_text: "left knee", onset_on: localDaysAgo(0) });
+  const accepted = repo.prepareDailySession({
+    date: localDaysAgo(0),
+    source: "adaptive_plan",
+    train_anyway: true,
+  }).daily_session;
+  assert.ok(!accepted.items.some((item) => item.exercise === "Back Squat"), "the accepted session excludes the squat");
+
+  const primer = sessionPrimer(localDaysAgo(0), { dayNumber: 1 });
+  assert.ok(primer);
+  const athleteText = JSON.stringify({
+    changed: primer.changed,
+    watch: primer.watch,
+    fresh: primer.fresh,
+  });
+  assert.doesNotMatch(athleteText, /Back Squat/i);
+  assert.doesNotMatch(athleteText, /left knee/i, "an excluded movement does not leak a stale watch into Session");
+});
+
+test("the primer uses sanitized immutable why text after relative language ages", () => {
+  makeExercise("Legacy Press", "chest");
+  const session = repo.getOrCreateSession("2026-07-20", null);
+  db.prepare(
+    `INSERT INTO daily_session_compositions
+      (version, session_id, date, source, status, title, why, items_json, provenance_json, request_fingerprint)
+     VALUES (1, ?, '2026-07-20', 'athlete_override', 'active', 'Legacy',
+             'Yesterday earned this session.', ?, ?, 'primer-legacy-relative')`
+  ).run(
+    session.id,
+    JSON.stringify([{ exercise: "Legacy Press", sets: 2, rep_low: 8, rep_high: 10 }]),
+    JSON.stringify({
+      daily_decision: {
+        input_fingerprint: "legacy-primer-fingerprint",
+        policy_version: "daily_decision_v4",
+        kind: "train",
+        caps: { volume: "normal", intensity: "normal", duration_min: 45 },
+      },
+    })
+  );
+  const primer = sessionPrimer("2026-07-20", { dayNumber: 1 });
+  assert.ok(primer);
+  assert.doesNotMatch(primer.why_today, /yesterday/i);
+  assert.match(primer.why_today, /prior session/i);
+  assert.match(
+    db.prepare(`SELECT why FROM daily_session_compositions WHERE date = '2026-07-20'`).get().why,
+    /Yesterday/,
+    "the immutable stored row remains untouched"
+  );
 });
 
 test("recovery-low day: a low-recovery note lands in watch[] and softens the approach", () => {
@@ -108,9 +213,11 @@ test("recovery-low day: a low-recovery note lands in watch[] and softens the app
 test("fresh day: a movement new this week surfaces in fresh[] against an established base", () => {
   makeExercise("Back Squat", "quads");
   makeExercise("Bulgarian Split Squat", "quads");
+  makeExercise("Step Up", "quads");
   planDay(1, "Lower", [
     { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 5, target_weight: 225 },
     { exercise: "Bulgarian Split Squat", sets: 3, rep_low: 8, rep_high: 12 },
+    { exercise: "Step Up", sets: 2, rep_low: 8, rep_high: 12 },
   ]);
   // An established base: Back Squat logged across many weeks (6 distinct session-days).
   for (const d of [35, 30, 25, 20, 15, 10]) logSet("Back Squat", localDaysAgo(d), { weight: 225, reps: 5, rir: 2 });
@@ -122,6 +229,16 @@ test("fresh day: a movement new this week surfaces in fresh[] against an establi
   assert.ok(primer.fresh.some((f) => /bulgarian/i.test(f.exercise)), "the new movement is flagged fresh");
   assert.ok(!primer.fresh.some((f) => /back squat/i.test(f.exercise)), "the established movement is not fresh");
   assert.ok(primer.fresh.every((f) => f.why && f.why.length > 0), "every fresh row carries a rationale");
+  assert.equal(
+    primer.fresh.find((f) => /bulgarian/i.test(f.exercise)).label,
+    "New this week",
+    "a genuinely new exposure is labeled new this week"
+  );
+  assert.equal(
+    primer.fresh.find((f) => /step up/i.test(f.exercise)).label,
+    "Fresh on your plan",
+    "a never-logged plan movement is not mislabeled new this week"
+  );
 });
 
 test("an applied rotation reads as 'Swapped in X for Y' in changed[] and suppresses its fresh[] duplicate", () => {

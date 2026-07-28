@@ -120,6 +120,17 @@ export interface Prescription {
   autoregulated?: boolean; // recovery signals braked this step (overload→hold / hold→deload) — informational
   movement_response?: RecentMovementResponseVerdict; // repeated comparable dose evidence that supported or braked the step
   rep_step?: boolean; // double-progression REP advance (load held, reps climb in-range) — no plan change
+  dose_eligibility?: {
+    linked_outcome: boolean;
+    eligible: boolean;
+    reason:
+      | "legacy_unlinked"
+      | "unfinished"
+      | "non_comparable"
+      | "partial"
+      | "under_prescribed"
+      | "full_comparable";
+  };
 }
 
 // ---- autoregulation + acute-recovery gate -----------------------------------
@@ -559,27 +570,29 @@ function latestTopSet(
   rir: number | null;
   duration_sec: number | null;
   date: string;
+  session_id: number;
 } | null {
   const ex = findExercise(name);
   if (!ex) return null;
   // Most recent session that logged this lift; within it, the top set by est-1RM
   // (reps) or by duration (timed). RIR comes off that top set when present.
-  const latestDate = (
+  const latestSession = (
     db
       .prepare(
-        `SELECT MAX(s.date) AS d FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
-      WHERE ls.exercise_id = ? AND (ls.reps IS NOT NULL OR ls.duration_sec IS NOT NULL)`
+        `SELECT s.id, s.date FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+         WHERE ls.exercise_id = ? AND (ls.reps IS NOT NULL OR ls.duration_sec IS NOT NULL)
+         ORDER BY s.date DESC, s.id DESC LIMIT 1`
       )
       .get(ex.id) as any
-  )?.d;
-  if (!latestDate) return null;
+  );
+  if (!latestSession?.date || latestSession?.id == null) return null;
   const sets = db
     .prepare(
       `SELECT ls.weight AS weight, ls.reps AS reps, ls.rir AS rir, ls.duration_sec AS duration_sec
-       FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
-      WHERE ls.exercise_id = ? AND s.date = ?`
+       FROM logged_sets ls
+      WHERE ls.exercise_id = ? AND ls.session_id = ?`
     )
-    .all(ex.id, latestDate) as any[];
+    .all(ex.id, latestSession.id) as any[];
   if (!sets.length) return null;
   // Top set: max (weight×(1+reps/30)) for reps; max duration for timed.
   let top = sets[0];
@@ -597,7 +610,8 @@ function latestTopSet(
     reps: top.reps ?? null,
     rir: top.rir != null ? Number(top.rir) : null,
     duration_sec: top.duration_sec ?? null,
-    date: latestDate,
+    date: String(latestSession.date),
+    session_id: Number(latestSession.id),
   };
 }
 
@@ -608,22 +622,23 @@ function latestTopSet(
 function latestWorkingSets(name: string): { weight: number | null; reps: number | null; rir: number | null }[] {
   const ex = findExercise(name);
   if (!ex) return [];
-  const latestDate = (
+  const latestSession = (
     db
       .prepare(
-        `SELECT MAX(s.date) AS d FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
-      WHERE ls.exercise_id = ? AND ls.reps IS NOT NULL`
+        `SELECT s.id, s.date FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+         WHERE ls.exercise_id = ? AND ls.reps IS NOT NULL
+         ORDER BY s.date DESC, s.id DESC LIMIT 1`
       )
       .get(ex.id) as any
-  )?.d;
-  if (!latestDate) return [];
+  );
+  if (!latestSession?.date || latestSession?.id == null) return [];
   const rows = db
     .prepare(
       `SELECT ls.weight AS weight, ls.reps AS reps, ls.rir AS rir
-       FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
-      WHERE ls.exercise_id = ? AND s.date = ? AND ls.reps IS NOT NULL`
+       FROM logged_sets ls
+      WHERE ls.exercise_id = ? AND ls.session_id = ? AND ls.reps IS NOT NULL`
     )
-    .all(ex.id, latestDate) as any[];
+    .all(ex.id, latestSession.id) as any[];
   if (!rows.length) return [];
   // The working weight is the hardest (largest signed) loaded weight in the session;
   // sets at it are the working sets. If nothing carries a weight, it's a bodyweight
@@ -638,6 +653,63 @@ function latestWorkingSets(name: string): { weight: number | null; reps: number 
     reps: r.reps != null ? Number(r.reps) : null,
     rir: r.rir != null ? Number(r.rir) : null,
   }));
+}
+
+function linkedDoseEligibility(
+  sessionId: number | null | undefined,
+  movement: string
+): NonNullable<Prescription["dose_eligibility"]> {
+  if (sessionId == null) return { linked_outcome: false, eligible: true, reason: "legacy_unlinked" };
+  const row = db
+    .prepare(
+      `SELECT o.status, o.facts_json, s.finished_at
+         FROM daily_session_outcomes o
+         JOIN sessions s ON s.id = o.session_id
+        WHERE o.session_id = ? ORDER BY o.id DESC LIMIT 1`
+    )
+    .get(Number(sessionId)) as any;
+  if (!row) return { linked_outcome: false, eligible: true, reason: "legacy_unlinked" };
+  if (row.status !== "completed" || !row.finished_at) {
+    return { linked_outcome: true, eligible: false, reason: "unfinished" };
+  }
+  let facts: any = null;
+  try {
+    facts = JSON.parse(row.facts_json);
+  } catch {
+    return { linked_outcome: true, eligible: false, reason: "non_comparable" };
+  }
+  if (facts?.dose_context?.partial === true) {
+    return { linked_outcome: true, eligible: false, reason: "partial" };
+  }
+  if (facts?.dose_context?.comparable !== true) {
+    return {
+      linked_outcome: true,
+      eligible: false,
+      reason: "non_comparable",
+    };
+  }
+  const stored = findExercise(movement);
+  const identity =
+    stored?.id != null ? `exercise:${Number(stored.id)}` : `movement:${normalizedExerciseKey(movement)}`;
+  const dose = Array.isArray(facts?.dose_evidence)
+    ? facts.dose_evidence.find(
+        (entry: any) =>
+          entry?.movement_key === identity ||
+          String(entry?.exercise ?? "").toLowerCase() === String(movement).toLowerCase()
+      )
+    : null;
+  const prescribedSets = Number(dose?.prescribed?.sets);
+  const achievedSets = Number(dose?.achieved?.sets);
+  if (
+    !dose ||
+    (Number.isFinite(prescribedSets) && prescribedSets > 0 && (!Number.isFinite(achievedSets) || achievedSets < prescribedSets))
+  ) {
+    return { linked_outcome: true, eligible: false, reason: "partial" };
+  }
+  if (dose.challenge_verdict !== "met" && dose.challenge_verdict !== "exceeded") {
+    return { linked_outcome: true, eligible: false, reason: "under_prescribed" };
+  }
+  return { linked_outcome: true, eligible: true, reason: "full_comparable" };
 }
 
 // Pull the per-lift program-state read (status/trend/stall) for ONE exercise —
@@ -955,6 +1027,7 @@ function repsPrescription(
   // old single-top-set read.
   const hasRange = repLow != null && repHigh != null;
   const workingSets = latestWorkingSets(name);
+  const doseEligibility = linkedDoseEligibility(last?.session_id, name);
   const topReps = last?.reps != null ? Number(last.reps) : null;
   const setsAtTop = hasRange
     ? workingSets.filter((s) => s.reps != null && (s.reps as number) >= (repHigh as number)).length
@@ -963,7 +1036,7 @@ function repsPrescription(
   const roomInRange = hasRange && topReps != null && topReps < (repHigh as number);
   // "Strong" = the work earned progression: last top set at RIR ≥ 2, OR the program-state
   // trend reads progressing. RIR ≤ 1 means it was a grind — hold.
-  const strong = (lastRir != null && lastRir >= 2) || status === "progressing";
+  const strong = ((lastRir != null && lastRir >= 2) || status === "progressing") && doseEligibility.eligible;
   // The LOAD step is earned only when EVERY working set capped the range (double
   // progression). With no rep range, fall back to a strong top set (RIR 2+ / progressing).
   const earned = hasRange ? allSetsAtTop && strong : strong;
@@ -1068,7 +1141,16 @@ function repsPrescription(
   } else {
     action = "hold";
     nextWeight = baseWeight;
-    if (!last) why = "Hold here for now — a couple of logged sessions and the next step reads clearly.";
+    if (last && !doseEligibility.eligible)
+      why =
+        doseEligibility.reason === "unfinished"
+          ? "This linked session is still unfinished — hold the current target until the full dose is complete."
+          : doseEligibility.reason === "partial"
+            ? "Only part of the linked dose was completed — hold the current target until the full prescription is owned."
+            : doseEligibility.reason === "under_prescribed"
+              ? "The full linked challenge was not yet completed — hold the current target until every prescribed set is owned."
+            : "The latest linked dose is not comparable progression evidence — hold the current target and reassess after a clean exposure.";
+    else if (!last) why = "Hold here for now — a couple of logged sessions and the next step reads clearly.";
     else if (hasRange && topReps != null && topReps >= (repHigh as number) && !allSetsAtTop)
       why = `Your top set hit ${repHigh} but not every set did — hold the load and level all your sets at the top before adding.`;
     else why = "Not quite earned yet — hold and finish the rep range cleanly at RIR 2+ before adding.";
@@ -1088,7 +1170,8 @@ function repsPrescription(
   // Repeated comparable movement-dose outcomes are the first recovery brake.
   // They can support an already-earned step, but never manufacture an extra one.
   // Repeated under-prescription moves at most one rung toward safety before the
-  // existing acute autoregulation gate runs.
+  // existing acute autoregulation gate runs. A latest linked ineligible dose has
+  // already taken that rung, so the history response must not compound it.
   const response = recentMovementResponse(name, {
     intent_key: `strength:reps:${repLow ?? "open"}-${repHigh ?? repLow ?? "open"}`,
   });
@@ -1098,7 +1181,7 @@ function repsPrescription(
       nextWeight = baseWeight;
       repStep = false;
       why = "The last two comparable exposures came in under this dose — hold it here and let the movement catch up.";
-    } else if (action === "hold" && last) {
+    } else if (action === "hold" && last && doseEligibility.eligible) {
       action = "deload";
       nextWeight = baseWeight != null && baseWeight > 0 ? round5(baseWeight * (1 - DELOAD_FRAC)) : baseWeight;
       why = "The last two comparable exposures both came in under this held dose — ease one bounded step and rebuild.";
@@ -1159,6 +1242,7 @@ function repsPrescription(
     autoregulated: autoregulated || undefined,
     movement_response: response.verdict,
     rep_step: repStep || undefined,
+    dose_eligibility: doseEligibility,
   };
 }
 
@@ -1185,6 +1269,7 @@ function timedPrescription(
   const target = baseSeconds ?? 0;
   const held = last?.duration_sec != null ? Math.round(Number(last.duration_sec)) : null;
   const solid = held != null && target > 0 && held >= target;
+  const doseEligibility = linkedDoseEligibility(last?.session_id, name);
 
   if (loadConstrained) {
     action = "hold";
@@ -1198,7 +1283,7 @@ function timedPrescription(
     action = "hold";
     nextSeconds = baseSeconds;
     why = "Nothing logged yet — start at the planned hold and log your actual time.";
-  } else if (solid || status === "progressing") {
+  } else if ((solid || status === "progressing") && doseEligibility.eligible) {
     action = "overload";
     const base = baseSeconds ?? held ?? 0;
     const step = timedStep(base, brakeCtx?.personalModifier);
@@ -1207,7 +1292,16 @@ function timedPrescription(
   } else {
     action = "hold";
     nextSeconds = baseSeconds ?? held;
-    why = "Hold this duration until it feels easy, then extend it.";
+    why =
+      last && !doseEligibility.eligible
+        ? doseEligibility.reason === "unfinished"
+          ? "This linked session is still unfinished — hold the duration until the full dose is complete."
+          : doseEligibility.reason === "partial"
+            ? "Only part of the linked timed dose was completed — hold the duration until the full prescription is owned."
+            : doseEligibility.reason === "under_prescribed"
+              ? "The full linked timed challenge was not yet completed — hold until every prescribed interval is owned."
+            : "The latest linked timed dose is not comparable progression evidence — hold and reassess after a clean exposure."
+        : "Hold this duration until it feels easy, then extend it.";
   }
 
   const response = recentMovementResponse(name, { intent_key: "strength:timed" });
@@ -1216,7 +1310,7 @@ function timedPrescription(
       action = "hold";
       nextSeconds = baseSeconds;
       why = "The last two comparable holds came in under this duration — keep it here until the full dose is owned.";
-    } else if (action === "hold" && last) {
+    } else if (action === "hold" && last && doseEligibility.eligible) {
       action = "deload";
       nextSeconds = baseSeconds != null ? Math.max(10, Math.round(baseSeconds * (1 - DELOAD_FRAC))) : baseSeconds;
       why = "The last two comparable holds both came in under this duration — ease one bounded step and rebuild.";
@@ -1251,6 +1345,7 @@ function timedPrescription(
     current: cur,
     delta_text,
     why,
+    dose_eligibility: doseEligibility,
   };
 }
 

@@ -35,7 +35,7 @@ import { listTrainingSymptoms } from "./training-symptoms.js";
 // reason-coded rationale on top of that kind. See the wave report for this
 // intentional deviation from the doc's "re-derive precedence 3" wording.
 
-export const DAILY_DECISION_POLICY_VERSION = "daily_decision_v3";
+export const DAILY_DECISION_POLICY_VERSION = "daily_decision_v4";
 
 export const DAILY_DECISION_REASONS = [
   "injury_exclusion",
@@ -139,6 +139,9 @@ export interface DailyDecisionSnapshot {
     action: string;
     why: string;
     vary_to: string | null;
+    current_target?: DailyDecisionTarget | null;
+    suggested_target?: DailyDecisionTarget | null;
+    evidence?: DailyDecisionProgressionEvidence | null;
   }>;
   plan_items: Array<{
     exercise: string;
@@ -154,7 +157,35 @@ export interface DailyDecisionSnapshot {
     target_distance_km?: number | null;
     target_duration_min?: number | null;
     target_zone?: string | null;
+    brain_decision_id?: number | null;
+    brain_change_summary?: string | null;
+    brain_change_reason?: string | null;
+    brain_change_reason_provenance?: Record<string, unknown> | null;
+    brain_change_reversible?: boolean | null;
   }>;
+}
+
+export interface DailyDecisionTarget {
+  mode: "reps" | "timed";
+  sets: number | null;
+  rep_low: number | null;
+  rep_high: number | null;
+  target_weight: number | null;
+  target_seconds: number | null;
+}
+
+export interface DailyDecisionProgressionEvidence {
+  delta_text: string | null;
+  why: string | null;
+  reground: boolean;
+  autoregulated: boolean;
+  movement_response: string | null;
+  rep_step: boolean;
+  dose_eligibility: {
+    linked_outcome: boolean;
+    eligible: boolean;
+    reason: string;
+  } | null;
 }
 
 export interface DailyDecisionCandidate {
@@ -164,6 +195,14 @@ export interface DailyDecisionCandidate {
   reason_code: DailyDecisionReason | null;
   substitution_for: string | null;
   note: string | null;
+  current_target?: DailyDecisionTarget | null;
+  authorized_target?: DailyDecisionTarget | null;
+  progression_evidence?: DailyDecisionProgressionEvidence | null;
+  brain_decision_id?: number | null;
+  brain_change_summary?: string | null;
+  brain_change_reason?: string | null;
+  brain_change_reason_provenance?: Record<string, unknown> | null;
+  brain_change_reversible?: boolean | null;
 }
 
 export interface DailyDecisionEnvelope {
@@ -212,6 +251,31 @@ function text(value: unknown, max = 200): string | null {
   if (value == null) return null;
   const s = String(value).replace(/\s+/g, " ").trim();
   return s ? s.slice(0, max) : null;
+}
+
+function boundedRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const out: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>).slice(0, 16)) {
+    if (!key || key.length > 80) continue;
+    if (entry == null || typeof entry === "boolean" || typeof entry === "number") out[key] = entry;
+    else if (typeof entry === "string") out[key] = text(entry, 240);
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+function prescriptionTarget(value: any, mode: unknown): DailyDecisionTarget | null {
+  if (!value || typeof value !== "object") return null;
+  const timed = mode === "timed";
+  const target: DailyDecisionTarget = {
+    mode: timed ? "timed" : "reps",
+    sets: finite(value.sets),
+    rep_low: timed ? null : finite(value.rep_low),
+    rep_high: timed ? null : finite(value.rep_high),
+    target_weight: timed ? null : finite(value.weight),
+    target_seconds: timed ? finite(value.seconds) : null,
+  };
+  return target;
 }
 
 function dedupe(values: Array<string | null | undefined>): string[] {
@@ -361,7 +425,7 @@ export function gatherDailyDecisionSnapshot(
   const contextEvents = safe(() => listContextEvents({ activeOnly: true, on: d }), []) as any[];
   const symptomEvents = (
     safe(() => listTrainingSymptoms({ on: d, seed_legacy: false }), []) as any[]
-  ).filter((event) => event.source_kind !== "legacy_session_feedback");
+  ).filter((event) => event.legacy_unconfirmed !== true);
 
   const autoreg = safe(() => recentAutoregulation(undefined, d), {
     soreness: null,
@@ -512,6 +576,24 @@ export function gatherDailyDecisionSnapshot(
         action: text(p?.action, 20) ?? "hold",
         why: text(p?.why, 240) ?? "",
         vary_to: text(p?.vary_to ?? p?.vary_options?.[0]?.name, 120),
+        current_target: prescriptionTarget(p?.current, p?.mode),
+        suggested_target: prescriptionTarget(p?.suggested, p?.mode),
+        evidence: {
+          delta_text: text(p?.delta_text, 80),
+          why: text(p?.why, 240),
+          reground: p?.reground === true,
+          autoregulated: p?.autoregulated === true,
+          movement_response: text(p?.movement_response, 40),
+          rep_step: p?.rep_step === true,
+          dose_eligibility:
+            p?.dose_eligibility && typeof p.dose_eligibility === "object"
+              ? {
+                  linked_outcome: p.dose_eligibility.linked_outcome === true,
+                  eligible: p.dose_eligibility.eligible === true,
+                  reason: text(p.dose_eligibility.reason, 80) ?? "unknown",
+                }
+              : null,
+        },
       }))
       .filter((p) => p.exercise)
       .slice(0, 24),
@@ -530,6 +612,12 @@ export function gatherDailyDecisionSnapshot(
         target_distance_km: finite(it?.target_distance_km),
         target_duration_min: finite(it?.target_duration_min),
         target_zone: text(it?.target_zone, 40),
+        brain_decision_id: finite(it?.brain_decision_id),
+        brain_change_summary: text(it?.brain_change_summary, 500),
+        brain_change_reason: text(it?.brain_change_reason, 600),
+        brain_change_reason_provenance: boundedRecord(it?.brain_change_reason_provenance),
+        brain_change_reversible:
+          it?.brain_change_reversible == null ? null : it.brain_change_reversible === true,
       }))
       .filter((it: any) => it.exercise)
       .slice(0, 24),
@@ -780,9 +868,26 @@ export function buildDailySessionDecision(
   const allowed = dedupe([...required, ...due]).filter((g) => !excluded.includes(g) && !reduced.includes(g));
 
   // ---- Precedence 6: progression only where recent performance supports it ----
-  const progByExercise = new Map<string, { action: string; why: string; vary_to: string | null }>();
+  const progByExercise = new Map<
+    string,
+    {
+      action: string;
+      why: string;
+      vary_to: string | null;
+      current_target: DailyDecisionTarget | null;
+      suggested_target: DailyDecisionTarget | null;
+      evidence: DailyDecisionProgressionEvidence | null;
+    }
+  >();
   for (const p of snapshot.progression) {
-    progByExercise.set(p.exercise.toLowerCase(), { action: p.action, why: p.why, vary_to: p.vary_to ?? null });
+    progByExercise.set(p.exercise.toLowerCase(), {
+      action: p.action,
+      why: p.why,
+      vary_to: p.vary_to ?? null,
+      current_target: p.current_target ?? null,
+      suggested_target: p.suggested_target ?? null,
+      evidence: p.evidence ?? null,
+    });
   }
 
   // ---- Precedence 7: time / life fit ----
@@ -851,6 +956,9 @@ export function buildDailySessionDecision(
               : "joint_pain_reduce",
           substitution_for: null,
           note: "Swap for a pattern that spares the flagged area",
+          current_target: null,
+          authorized_target: null,
+          progression_evidence: null,
         });
         continue;
       }
@@ -887,6 +995,21 @@ export function buildDailySessionDecision(
         reason_code: reason,
         substitution_for: substitution ? it.exercise : null,
         note: prog?.why ?? null,
+        current_target: prog?.current_target ?? null,
+        authorized_target:
+          !substitution && prog
+            ? action === prog.action
+              ? prog.suggested_target
+              : action === "hold"
+                ? prog.current_target
+                : null
+            : null,
+        progression_evidence: prog?.evidence ?? null,
+        brain_decision_id: it.brain_decision_id ?? null,
+        brain_change_summary: it.brain_change_summary ?? null,
+        brain_change_reason: it.brain_change_reason ?? null,
+        brain_change_reason_provenance: it.brain_change_reason_provenance ?? null,
+        brain_change_reversible: it.brain_change_reversible ?? null,
       });
       if (recheckExercises.has(it.exercise.toLowerCase())) {
         candidates[candidates.length - 1]!.note = "Recheck the affected movement before loading";

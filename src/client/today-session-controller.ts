@@ -320,6 +320,7 @@ type TodaySessionSurfaceOptions = ClientTodaySessionSurfaceOptions;
     CairnTodaySessionSetModel.rememberFullSessionId(deps, surfaceDate, session);
     CairnTodaySessionSetActions.wireDeletes(deps);
     CairnTodaySessionSkip.wireSkips(deps);
+    CairnTodaySessionFeedback.wireMovementChecks(session, deps);
     wireFinishControls(session, deps, surfaceDate, surfaceTab);
     wireSessionNotesDraft(deps, surfaceDate);
     const lastSets = options.lastSets || {};

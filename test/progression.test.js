@@ -24,12 +24,64 @@ import {
   recentMuscleLoad,
 } from "../dist/repo/progression.js";
 import { registerProgramTools } from "../dist/surfaces/mcp/program.js";
+import { localDateISO } from "../dist/repo/shared.js";
 
 // ---- local seeding (kept in-file so we don't touch the shared _seed.js) ----
 function reset() {
-  for (const t of ["logged_sets", "plan_items", "plan_days", "sessions", "exercises", "bodyweight_log", "program_blocks", "activities", "garmin_activities", "plan_proposals", "food_notes", "fueling_feedback", "nutrition_targets"]) {
+  for (const t of ["daily_session_outcomes", "daily_session_compositions", "logged_sets", "plan_items", "plan_days", "sessions", "exercises", "bodyweight_log", "program_blocks", "activities", "garmin_activities", "plan_proposals", "food_notes", "fueling_feedback", "nutrition_targets"]) {
     try { db.prepare(`DELETE FROM ${t}`).run(); } catch { /* table may not exist */ }
   }
+}
+
+function linkLatestDoseOutcome(name, date, {
+  status = "completed",
+  comparable = true,
+  prescribedSets = 3,
+  achievedSets = 3,
+  challengeVerdict = achievedSets >= prescribedSets ? "met" : "under_prescribed",
+} = {}) {
+  const exercise = repo.findExercise(name);
+  const session = repo.getSessionByDate(date);
+  assert.ok(session, `session exists for ${name}`);
+  if (status === "completed") {
+    db.prepare(`UPDATE sessions SET finished_at = datetime('now') WHERE id = ?`).run(session.id);
+  }
+  const planDay = repo.getPlan().find((day) => day.items.some((item) => item.exercise === name));
+  const item = planDay.items.find((entry) => entry.exercise === name);
+  const composition = db.prepare(
+    `INSERT INTO daily_session_compositions
+      (version, session_id, date, source, status, plan_day_id, title, items_json, request_fingerprint)
+     VALUES (1, ?, ?, 'adaptive_plan', 'active', ?, 'Dose fixture', ?, ?)`
+  ).run(
+    session.id,
+    date,
+    planDay.id,
+    JSON.stringify([{ exercise: name, sets: prescribedSets, rep_low: item.rep_low, rep_high: item.rep_high, target_weight: item.target_weight }]),
+    `dose-${exercise.id}-${date}`
+  );
+  const partial = achievedSets < prescribedSets;
+  const facts = {
+    schema_version: 2,
+    confidence: status === "completed" ? "high" : "moderate",
+    dose_context: {
+      partial,
+      comparable,
+      non_comparable_reasons: comparable ? [] : [partial ? "partial" : "test_context"],
+    },
+    dose_evidence: [{
+      movement_key: `exercise:${exercise.id}`,
+      intent_key: `strength:reps:${item.rep_low}-${item.rep_high}`,
+      exercise: name,
+      prescribed: { sets: prescribedSets },
+      achieved: { sets: achievedSets },
+      challenge_verdict: challengeVerdict,
+    }],
+  };
+  db.prepare(
+    `INSERT INTO daily_session_outcomes
+      (composition_id, session_id, date, status, facts_json)
+     VALUES (?, ?, ?, ?, ?)`
+  ).run(composition.lastInsertRowid, session.id, date, status, JSON.stringify(facts));
 }
 
 function makeExercise(name, { muscle_group = null, mode = "reps", constraint_note = null } = {}) {
@@ -54,7 +106,7 @@ function logSet(name, date, { weight = null, reps = null, rir = null, duration_s
 }
 
 function isoDaysAgo(n) {
-  return new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
+  return localDateISO(new Date(Date.now() - n * 864e5));
 }
 
 async function callProgramTool(name, args = {}) {
@@ -299,6 +351,54 @@ test("assisted lifts reduce the assist toward bodyweight (never a positive flip)
   assert.match(p.delta_text, /assist/);
 });
 
+test("only a finished full comparable linked dose can earn the next overload", () => {
+  const cases = [
+    { name: "Partial Press", day: 1, ago: 8, status: "completed", comparable: false, achievedSets: 1, expected: "partial" },
+    { name: "Open Press", day: 2, ago: 7, status: "in_progress", comparable: true, achievedSets: 3, expected: "unfinished" },
+    { name: "Confounded Press", day: 3, ago: 6, status: "completed", comparable: false, achievedSets: 3, expected: "non_comparable" },
+    { name: "Complete Press", day: 4, ago: 5, status: "completed", comparable: true, achievedSets: 3, expected: "full_comparable" },
+    {
+      name: "Under Press",
+      day: 5,
+      ago: 4,
+      status: "completed",
+      comparable: true,
+      achievedSets: 3,
+      challengeVerdict: "under_prescribed",
+      expected: "under_prescribed",
+    },
+  ];
+  for (const fixture of cases) {
+    makeExercise(fixture.name, { muscle_group: "chest" });
+    planWith(fixture.day, {
+      exercise: fixture.name,
+      sets: 3,
+      rep_low: 5,
+      rep_high: 5,
+      target_weight: 100,
+      focus: fixture.name,
+    });
+    const date = isoDaysAgo(fixture.ago);
+    for (let setNum = 1; setNum <= fixture.achievedSets; setNum++) {
+      logSet(fixture.name, date, { weight: 100, reps: 5, rir: 2, setNum });
+    }
+    linkLatestDoseOutcome(fixture.name, date, fixture);
+  }
+
+  for (const fixture of cases) {
+    const prescription = nextPrescription(fixture.name);
+    assert.equal(prescription.dose_eligibility.reason, fixture.expected, fixture.name);
+    if (fixture.expected === "full_comparable") {
+      assert.equal(prescription.action, "overload", fixture.name);
+      assert.equal(prescription.suggested.weight, 105, fixture.name);
+    } else {
+      assert.equal(prescription.action, "hold", fixture.name);
+      assert.equal(prescription.suggested.weight, 100, fixture.name);
+      assert.match(prescription.why, /linked|part|comparable|full dose/i, fixture.name);
+    }
+  }
+});
+
 test("planDayProgression covers every strength item and skips cardio", () => {
   makeExercise("Bench Press", { muscle_group: "chest" });
   makeExercise("Incline Press", { muscle_group: "chest" });
@@ -382,7 +482,7 @@ test("MCP apply_progression mirrors REST proposal shape and supersedes stale sam
   assert.deepEqual(reasonProvenance, {
     reason_code: "training_evidence",
     evidence_date: isoDaysAgo(5),
-    as_of_date: new Date().toISOString().slice(0, 10),
+    as_of_date: isoDaysAgo(0),
     source_ref_type: "training_evidence_snapshot",
     source_ref_key: reasonProvenance.source_ref_key,
   });

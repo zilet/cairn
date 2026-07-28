@@ -86,7 +86,26 @@ test("Today exercise card helper preserves selectors, escaping, and timed mode",
   assert.match(html, /elbow &lt;quiet&gt;/);
   assert.match(html, /earned &lt;move&gt;/);
   assert.match(html, /data-logged/);
+  assert.match(html, /data-movement-check/);
+  assert.match(html, /data-movement="Press &lt;heavy&gt;"/);
+  assert.match(html, />Movement check</);
   assert.doesNotMatch(html, /Press <heavy>|keep ribs <down>|elbow <quiet>|earned <move>/);
+});
+
+test("Today exercise card exposes Movement check only for prescribed/session strength cards", () => {
+  const cards = loadTodayCards();
+  const base = { exercise: "Row & <pull>", sets: 3, rep_low: 8, rep_high: 10 };
+
+  const planned = cards.exerciseCardHtml({ ...base, fromPlan: true }, [], {}, null, null, {});
+  const session = cards.exerciseCardHtml({ ...base, fromSession: true }, [], {}, null, null, {});
+  const offPlan = cards.exerciseCardHtml({ ...base, fromPlan: false, fromSession: false }, [], {}, null, null, {});
+  const cardio = cards.cardioPlanCardHtml({ label: "Easy row" }, null, null, "");
+
+  assert.match(planned, /data-movement-check/);
+  assert.match(session, /data-movement-check/);
+  assert.match(planned, /data-movement="Row &amp; &lt;pull&gt;"/);
+  assert.doesNotMatch(offPlan, /data-movement-check|Movement check/);
+  assert.doesNotMatch(cardio, /data-movement-check|Movement check/);
 });
 
 test("Today exercise card stopwatch control is timed-only", () => {

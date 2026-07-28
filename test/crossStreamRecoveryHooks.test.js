@@ -157,7 +157,7 @@ test("open cycles and cooldown suppress duplicate recovery drafts and applies", 
   );
 });
 
-function acceptDose(date, { setsLogged, rir, weight = 225 }) {
+function acceptDose(date, { setsLogged, rir, targetOffset = 0 }) {
   const items = [{ exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 5, target_weight: 225 }];
   const session = { name: "Squat", focus: "Strength", why: "Comparable dose.", items };
   const job = repo.createAgentJob({ kind: "session_compose", input: { date } });
@@ -170,8 +170,9 @@ function acceptDose(date, { setsLogged, rir, weight = 225 }) {
     source: "agent_suggest",
     agent_job_id: job.id,
   });
+  const workingWeight = (accepted.daily_session.items[0]?.target_weight ?? 225) + targetOffset;
   for (let i = 0; i < setsLogged; i++) {
-    repo.logSetByName({ date, exercise: "Back Squat", weight, reps: 5, rir, day_number: null });
+    repo.logSetByName({ date, exercise: "Back Squat", weight: workingWeight, reps: 5, rir, day_number: null });
   }
   repo.finishSession(accepted.session_id, null);
 }
@@ -181,12 +182,17 @@ test("recent comparable movement response brakes but never compounds progression
     { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 5, target_weight: 225 },
   ]);
   const today = localDateISO();
-  acceptDose(addDaysISO(today, -3), { setsLogged: 3, rir: 3, weight: 220 });
-  acceptDose(addDaysISO(today, -1), { setsLogged: 3, rir: 3, weight: 220 });
+  acceptDose(addDaysISO(today, -3), { setsLogged: 3, rir: 3, targetOffset: -5 });
+  acceptDose(addDaysISO(today, -1), { setsLogged: 3, rir: 3, targetOffset: -5 });
 
   const held = repo.nextPrescription("Back Squat", undefined, { autoreg: null, recentLoad: null });
   assert.equal(held.movement_response, "earned_hold");
-  assert.equal(held.action, "hold", "repeated under-dose evidence brakes an otherwise earned overload one step");
+  assert.equal(held.dose_eligibility.reason, "under_prescribed");
+  assert.equal(
+    held.action,
+    "hold",
+    "the latest authoritative under-dose and recent response brake an otherwise earned overload exactly one step"
+  );
   assert.equal(held.suggested.weight, 225);
 
   resetTables(
@@ -203,5 +209,5 @@ test("recent comparable movement response brakes but never compounds progression
   const absorbed = repo.nextPrescription("Back Squat", undefined, { autoreg: null, recentLoad: null });
   assert.equal(absorbed.movement_response, "earned_absorbed");
   assert.equal(absorbed.action, "overload");
-  assert.equal(absorbed.suggested.weight, 230, "absorbed evidence supports the normal single step only");
+  assert.equal(absorbed.suggested.weight, 235, "absorbed evidence supports the normal single step only");
 });

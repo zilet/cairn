@@ -58,8 +58,17 @@ const FULL_PRIMER = {
     { text: "Ease off heavy spinal loading.", soft: false },
     { text: "Left knee was grumbling recently.", soft: true },
   ],
-  fresh: [{ exercise: "Bulgarian Split Squat", why: "New this week — log your real working weight." }],
+  fresh: [
+    {
+      exercise: "Bulgarian Split Squat",
+      label: "New this week",
+      why: "New this week — log your real working weight.",
+    },
+  ],
   approach: "You've earned a step up — warm up properly, then chase the target.",
+  provenance_label: "Training by choice",
+  decision_kind_label: "Training session",
+  decision_bounds: ["Lower volume", "Lighter loads", "Up to 40 minutes"],
 };
 
 test("cardHtml renders the lead sentence, the three sections and the approach", () => {
@@ -69,6 +78,9 @@ test("cardHtml renders the lead sentence, the three sections and the approach", 
   assert.match(html, /What changed/);
   assert.match(html, /Keep an eye on/);
   assert.match(html, /Fresh today/);
+  assert.match(html, /Training by choice/, "the authoritative provenance label renders in the always-visible head");
+  assert.match(html, /Training session/);
+  assert.match(html, /Lower volume · Lighter loads · Up to 40 minutes/);
   assert.match(html, /Back Squat/);
   assert.match(html, /Bulgarian Split Squat/);
   assert.match(html, /earned a step up/, "the approach line renders");
@@ -100,8 +112,11 @@ test("cardHtml escapes every server-supplied string", () => {
     why_today: xss,
     changed: [{ exercise: xss, kind: "target", text: xss }],
     watch: [{ text: xss }],
-    fresh: [{ exercise: xss, why: xss }],
+    fresh: [{ exercise: xss, label: xss, why: xss }],
     approach: xss,
+    provenance_label: xss,
+    decision_kind_label: xss,
+    decision_bounds: [xss],
   });
   assert.doesNotMatch(html, /<script>/, "no raw script tag survives");
   assert.match(html, /&lt;script&gt;/, "the payload is HTML-escaped");
@@ -113,15 +128,16 @@ test("cardHtml returns '' for a null or empty primer (silence beats filler)", ()
   assert.equal(primer.cardHtml({ why_today: "", changed: [], watch: [], fresh: [], approach: "" }), "");
 });
 
-test("freshChipHtml renders an escaped, titled chip carrying its rationale", () => {
+test("freshChipHtml renders distinct escaped labels and carries its rationale", () => {
   const primer = loadPrimer();
-  const chip = primer.freshChipHtml('why "this" <b>');
+  const chip = primer.freshChipHtml('why "this" <b>', "Fresh on your <plan>");
   assert.match(chip, /sess-fresh-chip/);
-  assert.match(chip, /new this week/);
+  assert.match(chip, /Fresh on your &lt;plan&gt;/);
   assert.match(chip, /data-fresh-why="why &quot;this&quot; &lt;b&gt;"/, "the rationale is attribute-escaped");
   assert.match(chip, /title="/, "a native tooltip carries the rationale");
   // No rationale → still a chip, but no title.
-  const bare = primer.freshChipHtml("");
+  const bare = primer.freshChipHtml("", "New this week");
   assert.match(bare, /sess-fresh-chip/);
+  assert.match(bare, /New this week/);
   assert.doesNotMatch(bare, /title="/);
 });

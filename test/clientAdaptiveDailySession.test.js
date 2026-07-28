@@ -42,6 +42,19 @@ test("primary training entries converge on one durable prepare path", () => {
   assert.match(today, /meaningfulLegacySession\(cachedSession, explicitReplacement\)/);
   assert.match(today, /body\.agent_job_id = agentJobId/);
   assert.match(today, /if \(options\.trainAnyway === true\) body\.train_anyway = true/);
+  assert.match(today, /preview: sessionPreview/);
+  assert.match(today, /adaptivePreview = reviewed/);
+  assert.match(today, /never silently authorize a[\s\S]*session/);
+  assert.match(today, /body\.expected_input_fingerprint = adaptivePreview\.input_fingerprint/);
+  assert.match(today, /response\.code === "daily_session_preview_stale"/);
+  assert.match(today, /response\.code === "daily_session_active_changed"/);
+  assert.match(today, /adaptiveSessionPreviewDelta\(adaptivePreview, fresh\)/);
+  assert.match(
+    today,
+    /re-wires Start with the fresh preview fingerprint[\s\S]*await renderToday\(\{ soft: true \}\)/,
+    "stale recovery must replace the captured token rather than patching only visible text",
+  );
+  assert.match(today, /return false;[\s\S]*response\?\.ok !== true/, "stale preview never enters Session");
   assert.match(today, /response\?\.error \|\| "This session could not be prepared\."/);
   assert.doesNotMatch(today, /samePlanDay|\/daily-session\?date=/, "explicit plan starts are expressed to the server");
   assert.match(plan, /source: "athlete_override"[\s\S]*replace: true[\s\S]*entry: "empty_plan"/);
@@ -61,6 +74,15 @@ test("prepared Session exposes durable source, rationale, and accessible stable 
   assert.match(today, /focus\(\{ preventScroll: true \}\)/);
   assert.match(today, /role="status" aria-live="polite"/);
   assert.match(today, /id = "sessionPrepareLive"|status\.id = "sessionPrepareLive"/);
+  assert.match(today, /preview\?\.title/);
+  assert.match(today, /preview\?\.primary_rationale/);
+  assert.match(today, /preview\.constraints\.slice\(0, 2\)/);
+  assert.equal(
+    (today.match(/wireExerciseDecisionUndo\(todayView,/g) || []).length,
+    2,
+    "Today and focused Session both wire accountable exercise rollback",
+  );
+  assert.match(today, /wireExerciseDecisionUndo\(todayView, \(\) => renderSession\(\{ soft: true \}\)\)/);
 });
 
 test("one-day custom prescriptions render as prescribed without becoming weekly-plan work", () => {

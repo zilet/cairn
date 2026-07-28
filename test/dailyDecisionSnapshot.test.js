@@ -16,6 +16,7 @@ const DATE = "2031-06-10";
 
 beforeEach(() => {
   resetTables(
+    "brain_decisions",
     "daily_session_decisions",
     "daily_session_compositions",
     "logged_sets",
@@ -110,6 +111,28 @@ test("explicit active symptom evidence constrains only movement-relevant candida
   assert.ok(env.hard_constraints.some((constraint) => constraint.code === "injury_exclusion"));
 });
 
+test("an explicitly re-reported legacy symptom participates in movement protection", () => {
+  repo.savePlanDay(1, "Mixed", "Lower and upper", [
+    { exercise: "Back Squat", sets: 4, rep_low: 5, rep_high: 7, target_weight: 225 },
+    { exercise: "Bench Press", sets: 4, rep_low: 5, rep_high: 7, target_weight: 155 },
+  ]);
+  const session = repo.getOrCreateSession(DATE, null);
+  db.prepare(`UPDATE sessions SET joint_pain = 'left knee' WHERE id = ?`).run(session.id);
+  repo.seedLegacyTrainingSymptoms();
+  const legacy = repo.listTrainingSymptoms({ on: DATE, seed_legacy: false })[0];
+  assert.equal(legacy.legacy_unconfirmed, true);
+  db.prepare(`UPDATE sessions SET joint_pain = NULL WHERE id = ?`).run(session.id);
+  const rereported = repo.recurTrainingSymptom(legacy.id, { on: DATE, movement: "Back Squat" });
+  assert.equal(rereported.source_kind, "legacy_session_feedback");
+  assert.equal(rereported.legacy_unconfirmed, false);
+
+  const snap = gatherDailyDecisionSnapshot(DATE);
+  assert.ok(snap.constraints.injuries.some((injury) => injury.exercises.includes("back squat")));
+  const env = buildDailySessionDecision(snap, { now: "2031-06-10T09:00:00.000Z" });
+  assert.equal(env.candidates.find((candidate) => candidate.exercise === "Back Squat").action, "exclude");
+  assert.notEqual(env.candidates.find((candidate) => candidate.exercise === "Bench Press").action, "exclude");
+});
+
 test("daily context and injury reads are deterministic as of the requested date", () => {
   seedPlan();
   const upper = repo.getPlanDay(2);
@@ -196,6 +219,83 @@ test("preparing a plan-source daily session records its decision metadata", () =
     .prepare(`SELECT composition_id FROM daily_session_decisions WHERE date = ? ORDER BY id DESC LIMIT 1`)
     .get(DATE);
   assert.equal(row.composition_id, prepared.daily_session.id);
+});
+
+test("trusted plan-ledger rationale survives into a newly accepted daily snapshot", () => {
+  seedPlan();
+  const upper = repo.getPlanDay(2);
+  db.prepare(`DELETE FROM plan_items WHERE plan_day_id = ?`).run(upper.id);
+  db.prepare(`DELETE FROM plan_days WHERE id = ?`).run(upper.id);
+  const decision = db.prepare(
+    `INSERT INTO brain_decisions
+      (effective_date, kind, domain, summary, rationale, status, autonomy_tier, risk_class,
+       reversible, action_json)
+     VALUES (?, 'training_target', 'training', ?, ?, 'applied', 'quiet_apply', 'low', 1, ?)`
+  ).run(
+    DATE,
+    "A measured squat step.",
+    "Three crisp full-dose sessions earned this target.",
+    JSON.stringify({
+      changes: [{
+        day_number: 1,
+        exercise: "Back Squat",
+        reason: "Three crisp full-dose sessions earned this target.",
+        reason_provenance: {
+          reason_code: "training_evidence",
+          evidence_date: "2031-06-09",
+          as_of_date: DATE,
+          source_ref_type: "training_evidence_snapshot",
+          source_ref_key: "squat",
+        },
+      }],
+    })
+  );
+
+  const snap = gatherDailyDecisionSnapshot(DATE);
+  const sourceItem = snap.plan_items.find((item) => item.exercise === "Back Squat");
+  assert.equal(sourceItem.brain_decision_id, Number(decision.lastInsertRowid));
+  assert.match(sourceItem.brain_change_reason, /Three crisp full-dose sessions/);
+
+  const accepted = repo.prepareDailySession({ date: DATE, source: "adaptive_plan" }).daily_session;
+  const acceptedItem = accepted.items.find((item) => item.exercise === "Back Squat");
+  assert.equal(acceptedItem.brain_decision_id, Number(decision.lastInsertRowid));
+  assert.match(acceptedItem.brain_change_summary, /measured squat step/i);
+  assert.match(acceptedItem.brain_change_reason, /Three crisp full-dose sessions/);
+  assert.equal(acceptedItem.brain_change_reason_provenance.reason_code, "training_evidence");
+  assert.equal(acceptedItem.brain_change_reversible, true);
+
+  db.prepare(`UPDATE brain_decisions SET status = 'reverted', reverted_at = datetime('now') WHERE id = ?`).run(
+    Number(decision.lastInsertRowid)
+  );
+  const afterUndo = repo.getActiveDailySession(DATE).items.find((item) => item.exercise === "Back Squat");
+  assert.equal(afterUndo.brain_decision_id, null, "a reverted decision no longer renders an active Undo control");
+  assert.equal(afterUndo.brain_change_summary, null);
+  assert.equal(afterUndo.brain_change_reversible, null);
+});
+
+test("legacy accepted snapshot presentation removes relative yesterday language without mutating storage", () => {
+  const session = repo.getOrCreateSession("2026-07-20", null);
+  const rawNote =
+    "Yesterday's clean sets earned this. NEW — start light, log your actual working value. Start light and log your actual working value.";
+  db.prepare(
+    `INSERT INTO daily_session_compositions
+      (version, session_id, date, source, status, title, why, items_json, request_fingerprint)
+     VALUES (1, ?, '2026-07-20', 'athlete_override', 'active', 'Legacy snapshot',
+             'Yesterday earned a measured step.', ?, 'legacy-july-snapshot')`
+  ).run(
+    session.id,
+    JSON.stringify([{ exercise: "Legacy Press", sets: 3, rep_low: 6, rep_high: 8, note: rawNote }])
+  );
+
+  const presented = repo.getActiveDailySession("2026-07-20");
+  assert.doesNotMatch(`${presented.why} ${presented.items[0].note}`, /yesterday/i);
+  assert.match(presented.why, /prior session/i);
+  assert.equal((presented.items[0].note.match(/start light/gi) ?? []).length, 1);
+  const stored = db
+    .prepare(`SELECT why, items_json FROM daily_session_compositions WHERE date = '2026-07-20'`)
+    .get();
+  assert.match(stored.why, /Yesterday/);
+  assert.match(stored.items_json, /Yesterday/);
 });
 
 test("a rest decision accepts the deterministic recovery composition, never the lifting template", () => {

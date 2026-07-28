@@ -24,6 +24,7 @@ export type DailySessionSource = (typeof DAILY_SESSION_SOURCES)[number];
 export interface PrepareDailySessionInput {
   date?: string;
   expected_active_id?: number | null;
+  expected_input_fingerprint?: string | null;
   day_number?: number | null;
   source?: DailySessionSource | string;
   agent_job_id?: number | null;
@@ -34,18 +35,33 @@ export interface PrepareDailySessionInput {
   replace?: boolean;
 }
 
+export interface AdaptiveDailySessionPreview {
+  date: string;
+  source: "adaptive_plan";
+  kind: DailyDecisionEnvelope["kind"];
+  policy_version: string;
+  input_fingerprint: string;
+  title: string | null;
+  focus: string | null;
+  item_count: number;
+  est_minutes: number | null;
+  constraints: string[];
+  primary_rationale: string;
+}
+
 export class DailySessionError extends Error {
   constructor(
     public readonly code: string,
-    message: string
+    message: string,
+    public readonly preview?: AdaptiveDailySessionPreview
   ) {
     super(message);
     this.name = "DailySessionError";
   }
 }
 
-function fail(code: string, message: string): never {
-  throw new DailySessionError(code, message);
+function fail(code: string, message: string, preview?: AdaptiveDailySessionPreview): never {
+  throw new DailySessionError(code, message, preview);
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -68,6 +84,53 @@ function boundedNumber(value: unknown, min: number, max: number, integer = false
   if (n == null) return null;
   const bounded = Math.max(min, Math.min(max, n));
   return integer ? Math.round(bounded) : Math.round(bounded * 100) / 100;
+}
+
+function durableSnapshotText(value: unknown, max: number): string | null {
+  const bounded = boundedText(value, max);
+  if (!bounded) return null;
+  return bounded
+    .replace(/\byesterday's\b/gi, "a prior session's")
+    .replace(/\byesterday\b/gi, "a prior session")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, max);
+}
+
+function dedupeStartLight(value: unknown): string | null {
+  const bounded = durableSnapshotText(value, 500);
+  if (!bounded) return null;
+  if ((bounded.match(/\bstart light\b/gi) ?? []).length <= 1) return bounded;
+  const clauses = bounded
+    .split(/(?<=[.;])\s+/)
+    .map((clause) => clause.trim())
+    .filter(Boolean);
+  let sawStartLight = false;
+  const kept = clauses.filter((clause) => {
+    const baseline = /\bstart light\b/i.test(clause);
+    if (!baseline) return true;
+    if (sawStartLight) return false;
+    sawStartLight = true;
+    return true;
+  });
+  return kept.join(" ").slice(0, 500) || null;
+}
+
+function trustedItemMetadata(
+  item: Record<string, unknown>,
+  trusted: boolean
+): Record<string, unknown> {
+  if (!trusted) return {};
+  const provenance = normalizeJsonValue(item.brain_change_reason_provenance);
+  return {
+    brain_decision_id: boundedNumber(item.brain_decision_id, 1, Number.MAX_SAFE_INTEGER, true),
+    brain_change_summary: durableSnapshotText(item.brain_change_summary, 500),
+    brain_change_reason: durableSnapshotText(item.brain_change_reason, 600),
+    brain_change_reason_provenance:
+      provenance && typeof provenance === "object" && !Array.isArray(provenance) ? provenance : null,
+    brain_change_reversible:
+      item.brain_change_reversible == null ? null : item.brain_change_reversible === true,
+  };
 }
 
 function normalizeJsonValue(value: unknown, depth = 0): unknown {
@@ -355,6 +418,13 @@ function normalizeItem(
     strictShape: agentSource,
   });
   const { exercise, kind } = core;
+  // Only server-derived plan items or an already verified agent normalization may
+  // carry accountability metadata. Athlete-authored payloads must never be able
+  // to forge an Undo control for an unrelated brain decision.
+  const trustedMetadata = trustedItemMetadata(
+    item,
+    !athleteSource && (!agentSource || trustedAgentNormalized)
+  );
   if (kind === "cardio") {
     return {
       position,
@@ -373,6 +443,7 @@ function normalizeItem(
       target_zone: boundedText(item.target_zone, 80),
       interval: normalizeInterval(item.interval ?? item.interval_json),
       superset_group: null,
+      ...trustedMetadata,
     };
   }
 
@@ -405,12 +476,13 @@ function normalizeItem(
     target_seconds: targetSeconds,
     warmup_sets: boundedNumber(item.warmup_sets, 0, 10, true),
     mode,
-    note: boundedText(item.note, 500),
+    note: dedupeStartLight(item.note),
     target_distance_km: null,
     target_duration_min: null,
     target_zone: null,
     interval: null,
     superset_group: boundedNumber(item.superset_group, 1, 50, true),
+    ...trustedMetadata,
   };
 }
 
@@ -517,6 +589,81 @@ function adaptiveSnapshotFromDecision(envelope: DailyDecisionEnvelope) {
       envelope.kind === "rest"
     ),
   };
+}
+
+type AdaptiveDailySessionCandidate = {
+  date: string;
+  source: "adaptive_plan";
+  decision: { envelope: DailyDecisionEnvelope };
+  prepared: ReturnType<typeof adaptiveSnapshotFromDecision>;
+  constraints_json: string | null;
+  provenance_json: string | null;
+  request_fingerprint: string;
+  preview: AdaptiveDailySessionPreview;
+};
+
+function athleteFacingPreviewConstraints(envelope: DailyDecisionEnvelope): string[] {
+  const values = [...envelope.hard_constraints, ...envelope.soft_preferences]
+    .map((entry) => boundedText(entry.detail, 180))
+    .filter((entry): entry is string => entry != null);
+  return Array.from(new Set(values)).slice(0, 8);
+}
+
+// One read-only adaptive candidate seam shared by preview and prepare. Nothing
+// in this builder records a decision, opens a workout session, or writes a
+// composition; the returned object is the exact candidate prepare persists.
+export function buildAdaptiveDailySessionCandidate(
+  input: Pick<PrepareDailySessionInput, "date" | "constraints" | "provenance" | "train_anyway"> = {}
+): AdaptiveDailySessionCandidate {
+  const date = validateDate(input.date);
+  const source = "adaptive_plan" as const;
+  const decision = decideDailySession(date, decisionOpts(input));
+  const prepared = adaptiveSnapshotFromDecision(decision.envelope);
+  const bound = decisionBoundMetadata(input, decision.envelope, source);
+  const constraintsJson = normalizeOptionalJson(bound.constraints);
+  const provenanceJson = normalizeOptionalJson({
+    ...bound.provenance,
+    daily_decision: dailyDecisionContext(decision.envelope),
+  });
+  const requestFingerprintValue = requestFingerprint({
+    date,
+    source,
+    plan_day_id: prepared.plan_day_id,
+    payload: prepared.payload,
+    constraints_json: constraintsJson,
+    canonical_agent_job_id: null,
+  });
+  return {
+    date,
+    source,
+    decision,
+    prepared,
+    constraints_json: constraintsJson,
+    provenance_json: provenanceJson,
+    request_fingerprint: requestFingerprintValue,
+    preview: {
+      date,
+      source,
+      kind: decision.envelope.kind,
+      policy_version: decision.envelope.policy_version,
+      input_fingerprint: decision.envelope.input_fingerprint,
+      title: prepared.payload.title,
+      focus: prepared.payload.focus,
+      item_count: prepared.payload.items.length,
+      est_minutes: prepared.payload.est_minutes,
+      constraints: athleteFacingPreviewConstraints(decision.envelope),
+      primary_rationale:
+        boundedText(decision.envelope.rationale[0]?.text, 300) ??
+        boundedText(prepared.payload.why, 300) ??
+        "Built from today's training and recovery picture.",
+    },
+  };
+}
+
+export function previewAdaptiveDailySession(
+  input: Pick<PrepareDailySessionInput, "date" | "constraints" | "provenance" | "train_anyway"> = {}
+): AdaptiveDailySessionPreview {
+  return buildAdaptiveDailySessionCandidate(input).preview;
 }
 
 function canonicalAgentSuggestion(jobIdRaw: unknown, date: string) {
@@ -661,9 +808,62 @@ function hydrate(row: any) {
   if (!row) return null;
   const { items_json, constraints_json, provenance_json, request_fingerprint: _requestFingerprint, ...rest } = row;
   const provenance = parseJson(provenance_json);
+  const rawItems = parseJson(items_json);
+  const decisionIds = Array.isArray(rawItems)
+    ? Array.from(
+        new Set(
+          rawItems
+            .map((item: any) => boundedNumber(item?.brain_decision_id, 1, Number.MAX_SAFE_INTEGER, true))
+            .filter((id: number | null): id is number => id != null)
+        )
+      )
+    : [];
+  const appliedDecisionIds = new Set<number>(
+    decisionIds.length
+      ? (
+          db
+            .prepare(
+              `SELECT id FROM brain_decisions
+                WHERE status = 'applied' AND id IN (${decisionIds.map(() => "?").join(",")})`
+            )
+            .all(...decisionIds) as Array<{ id: number }>
+        ).map((decision) => Number(decision.id))
+      : []
+  );
+  const items = Array.isArray(rawItems)
+    ? rawItems.map((item) =>
+        item && typeof item === "object" && !Array.isArray(item)
+          ? (() => {
+              const record = item as Record<string, unknown>;
+              const decisionId = boundedNumber(record.brain_decision_id, 1, Number.MAX_SAFE_INTEGER, true);
+              const decisionStillApplied = decisionId == null || appliedDecisionIds.has(decisionId);
+              return {
+                ...record,
+                note: dedupeStartLight(record.note),
+                brain_decision_id: decisionStillApplied ? decisionId : null,
+                brain_change_summary: decisionStillApplied
+                  ? durableSnapshotText(record.brain_change_summary, 500)
+                  : null,
+                brain_change_reason: decisionStillApplied
+                  ? durableSnapshotText(record.brain_change_reason, 600)
+                  : null,
+                brain_change_reason_provenance: decisionStillApplied
+                  ? record.brain_change_reason_provenance ?? null
+                  : null,
+                brain_change_reversible: decisionStillApplied
+                  ? record.brain_change_reversible == null
+                    ? null
+                    : record.brain_change_reversible === true
+                  : null,
+              };
+            })()
+          : item
+      )
+    : [];
   return {
     ...rest,
-    items: parseJson(items_json) ?? [],
+    why: durableSnapshotText(rest.why, 600),
+    items,
     constraints: parseJson(constraints_json),
     provenance,
     decision:
@@ -708,9 +908,32 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
     return { ok: true as const, daily_session: hydrate(active), session_id: active.session_id, reused: true };
   }
   const source = sourceOf(input.source);
+  const adaptiveCandidate = source === "adaptive_plan" ? buildAdaptiveDailySessionCandidate(input) : null;
+  if (input.expected_input_fingerprint != null) {
+    const expected = String(input.expected_input_fingerprint).trim();
+    if (!adaptiveCandidate || !/^[a-f0-9]{64}$/.test(expected)) {
+      fail(
+        "daily_session_preview_invalid",
+        "expected_input_fingerprint requires a valid adaptive-session preview"
+      );
+    }
+    if (adaptiveCandidate.preview.input_fingerprint !== expected) {
+      fail(
+        "daily_session_preview_stale",
+        "Today’s session changed with your latest training picture. Review the updated preview before starting.",
+        adaptiveCandidate.preview
+      );
+    }
+  }
   const existingRow = activeCompositionRow(date);
   const canRefreshAdaptive =
     !!existingRow && source === "adaptive_plan" && exactPlanRetry(existingRow, input, source);
+  if (existingRow && input.expected_input_fingerprint != null && !canRefreshAdaptive) {
+    fail(
+      "daily_session_active_changed",
+      "Another accepted session now owns this date. Review that session before continuing."
+    );
+  }
   if (existingRow && !input.replace && !canRefreshAdaptive) {
     return { ok: true as const, daily_session: hydrate(existingRow), session_id: existingRow.session_id, reused: true };
   }
@@ -723,8 +946,10 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
   // envelope, not from an independent weekly-plan read. Manual plan pulls remain
   // athlete-owned snapshots but still carry the same visible safety context.
   let decision =
-    source === "adaptive_plan" || source === "manual_plan"
-      ? decideDailySession(date, decisionOpts(input))
+    source === "adaptive_plan"
+      ? adaptiveCandidate!.decision
+      : source === "manual_plan"
+        ? decideDailySession(date, decisionOpts(input))
       : canonicalAgent
         ? decideDailySession(date, canonicalAgent.decision_opts)
         : null;
@@ -770,7 +995,7 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
       : null;
   const prepared =
     source === "adaptive_plan" && decision
-      ? adaptiveSnapshotFromDecision(decision.envelope)
+      ? adaptiveCandidate!.prepared
       : source === "manual_plan"
         ? {
             plan_day_id: manualPlan!.plan_day_id,
@@ -802,28 +1027,34 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
             ),
           };
   const bound = decision ? decisionBoundMetadata(input, decision.envelope, source) : null;
-  const constraintsJson = normalizeOptionalJson(
-    bound
-      ? { ...bound.constraints, ...normalizedRecord(canonicalAgent?.constraints) }
-      : canonicalAgent?.constraints ?? input.constraints
-  );
-  const provenanceJson = normalizeOptionalJson(
-    bound
-      ? {
-          ...bound.provenance,
-          ...(canonicalAgent?.provenance ?? {}),
-          daily_decision: dailyDecisionContext(decision!.envelope),
-        }
-      : canonicalAgent?.provenance ?? input.provenance
-  );
-  const fingerprint = requestFingerprint({
-    date,
-    source,
-    plan_day_id: prepared.plan_day_id,
-    payload: prepared.payload,
-    constraints_json: constraintsJson,
-    canonical_agent_job_id: canonicalAgent ? Number(canonicalAgent.provenance.agent_job_id) : null,
-  });
+  const constraintsJson =
+    adaptiveCandidate?.constraints_json ??
+    normalizeOptionalJson(
+      bound
+        ? { ...bound.constraints, ...normalizedRecord(canonicalAgent?.constraints) }
+        : canonicalAgent?.constraints ?? input.constraints
+    );
+  const provenanceJson =
+    adaptiveCandidate?.provenance_json ??
+    normalizeOptionalJson(
+      bound
+        ? {
+            ...bound.provenance,
+            ...(canonicalAgent?.provenance ?? {}),
+            daily_decision: dailyDecisionContext(decision!.envelope),
+          }
+        : canonicalAgent?.provenance ?? input.provenance
+    );
+  const fingerprint =
+    adaptiveCandidate?.request_fingerprint ??
+    requestFingerprint({
+      date,
+      source,
+      plan_day_id: prepared.plan_day_id,
+      payload: prepared.payload,
+      constraints_json: constraintsJson,
+      canonical_agent_job_id: canonicalAgent ? Number(canonicalAgent.provenance.agent_job_id) : null,
+    });
   if (existingRow?.request_fingerprint === fingerprint) {
     return { ok: true as const, daily_session: hydrate(existingRow), session_id: existingRow.session_id, reused: true };
   }

@@ -17,6 +17,7 @@ import {
   listActivities,
   logSetByName,
   recentTraining,
+  recordExerciseSymptomObservation,
   recordMovementTolerance,
   recurTrainingSymptom,
   reportTrainingSymptom,
@@ -263,8 +264,25 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
     {
       on: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
       include_resolved: z.boolean().optional(),
+      movement: z.string().trim().min(1).max(120).optional(),
+      exercise_id: z.number().int().positive().optional(),
     },
-    async ({ on, include_resolved }) => asText(listTrainingSymptoms({ on, include_resolved }))
+    async ({ on, include_resolved, movement, exercise_id }) =>
+      asText(listTrainingSymptoms({ on, include_resolved, movement, exercise_id }))
+  );
+
+  server.tool(
+    "record_exercise_symptom_observation",
+    "Record one exercise-card pain-present or pain-free answer against an existing session and canonical exercise. Pain-free requires an explicit active relevant symptom. This records movement tolerance only and never resolves, clears, diagnoses, or implies clearance.",
+    {
+      date: z.string().describe("YYYY-MM-DD"),
+      movement: z.string().trim().min(1).max(120),
+      session_id: z.number().int().positive().optional(),
+      symptom_event_id: z.number().int().positive().optional(),
+      area_text: z.string().trim().min(1).max(300).optional(),
+      outcome: z.enum(["pain_present", "pain_free"]),
+    },
+    async (input) => asText(recordExerciseSymptomObservation(input))
   );
 
   server.tool(

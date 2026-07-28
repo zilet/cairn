@@ -22,6 +22,7 @@
 // like today-agenda.ts.
 // ============================================================================
 import { db } from "../db.js";
+import { getActiveDailySession } from "./adaptive-session.js";
 import { getCachedDayRead } from "./day-read.js";
 import { dayRead } from "./day-read.js";
 import { listBrainDecisions } from "./brain-decisions.js";
@@ -33,9 +34,9 @@ import {
   recentAutoregulation,
   type Prescription,
 } from "./progression.js";
-import { painAreaLoadsExercise } from "./pain-relevance.js";
 import { directivesForCoach } from "./propagation.js";
 import { localDateISO } from "./shared.js";
+import { activeRelevantTrainingSymptoms, type TrainingSymptomLifecycle } from "./training-symptoms.js";
 
 // ---- the public contract (mirrored in src/contracts/client-api.ts) ----------
 export type SessionPrimerChangeKind = "target" | "recovery_cap" | "rotation";
@@ -53,6 +54,7 @@ export interface SessionPrimerWatch {
 
 export interface SessionPrimerFresh {
   exercise: string;
+  label: "New this week" | "Fresh on your plan";
   why: string; // one-line rationale ("new this week — log your real working weight")
 }
 
@@ -68,6 +70,8 @@ export interface SessionPrimer {
   decision_fingerprint: string | null;
   decision_policy_version: string | null;
   decision_kind: "train" | "easy" | "rest" | null;
+  decision_kind_label: "Training session" | "Easy session" | "Rest-day movement" | null;
+  decision_bounds: string[];
   provenance_label: "Adapted for today" | "Training by choice" | null;
 }
 
@@ -156,6 +160,38 @@ function changedFromPrescriptions(prescriptions: Prescription[]): SessionPrimerC
   return out;
 }
 
+function changedFromAcceptedItems(items: unknown): SessionPrimerChange[] {
+  if (!Array.isArray(items)) return [];
+  const out: SessionPrimerChange[] = [];
+  for (const raw of items) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw) || (raw as any).kind === "cardio") continue;
+    const item = raw as Record<string, unknown>;
+    const exercise = String(item.exercise ?? "").replace(/\s+/g, " ").trim();
+    if (!exercise) continue;
+    const summary = String(item.brain_change_summary ?? "").replace(/\s+/g, " ").trim();
+    const reason = String(item.brain_change_reason ?? "").replace(/\s+/g, " ").trim();
+    const note = String(item.note ?? "").replace(/\s+/g, " ").trim();
+    if (item.brain_decision_id != null && (summary || reason)) {
+      const joined = [summary, reason].filter(Boolean).join(" — ").slice(0, 160);
+      const kind: SessionPrimerChangeKind =
+        /\b(?:swap|rotat)\w*\b/i.test(joined)
+          ? "rotation"
+          : /\b(?:eas|recover|deload|lighter|hold)\w*\b/i.test(joined)
+            ? "recovery_cap"
+            : "target";
+      out.push({ exercise, kind, text: joined });
+    } else if (/\b(?:recovery overlay|eased for today|holding the current target today)\b/i.test(note)) {
+      out.push({
+        exercise,
+        kind: "recovery_cap",
+        text: `${exercise} — eased inside today's accepted recovery bounds`,
+      });
+    }
+    if (out.length >= MAX_CHANGED) break;
+  }
+  return out;
+}
+
 // The last logged session-day strictly before `before` — the "since you last trained"
 // anchor for what counts as newly changed. Null when there's no prior session.
 function lastComparableSessionDate(before: string): string | null {
@@ -230,10 +266,31 @@ function appliedRotationsForDay(
   return out;
 }
 
-// watch[] — the calm heads-ups: active training/watch directives (an uncertain one
-// is a softer nudge), a recent joint/soreness echo tied to a movement on the day,
-// and a low-recovery note. All bounded + deduped; empty when there's nothing.
-function buildWatch(movements: string[], read: any): SessionPrimerWatch[] {
+function symptomPriority(event: TrainingSymptomLifecycle): number {
+  const freshness =
+    event.freshness === "acute_movement_brake" ? 0 : event.freshness === "hold_easy_recheck" ? 1 : 2;
+  return freshness + (event.legacy_unconfirmed ? 1 : 0);
+}
+
+function symptomWatchText(event: TrainingSymptomLifecycle, movement: string): string {
+  const area = String(event.area_text || "that area").replace(/\s+/g, " ").trim();
+  if (event.legacy_unconfirmed) {
+    return `An older ${area} note still needs a recheck — use ${movement} as a careful tolerance check; it isn't a current finding.`;
+  }
+  if (event.freshness === "stale_needs_recheck") {
+    return `${area} was reported earlier and still needs a recheck — use ${movement} as a careful tolerance check; it isn't current evidence.`;
+  }
+  if (event.freshness === "hold_easy_recheck") {
+    return `${area} is due for a gentle recheck — keep ${movement} easy and let today's response guide the next step.`;
+  }
+  return `${area} was reported recently — use ${movement} as a careful tolerance check and keep the effort easy if it speaks up.`;
+}
+
+// watch[] — the calm heads-ups: session-relevant active symptom/tolerance
+// rechecks first, then true training directives, recent soreness, and low recovery.
+// Generic `watch` directives belong to the broader health read and never spill into
+// a focused session. All bounded + deduped; empty when there's nothing.
+function buildWatch(movements: string[], read: any, date: string): SessionPrimerWatch[] {
   const out: SessionPrimerWatch[] = [];
   const seen = new Set<string>();
   const push = (text: string, soft?: boolean) => {
@@ -245,12 +302,38 @@ function buildWatch(movements: string[], read: any): SessionPrimerWatch[] {
     out.push(soft ? { text: t, soft: true } : { text: t });
   };
 
-  // 1) Active training / watch directives (informational, not medical advice).
+  // 1) Active symptoms relevant to a movement in THIS session. The lifecycle is
+  // authoritative: stale/legacy notes are explicitly framed as old evidence that
+  // needs a recheck, never as a current fact or clearance. Keep at most two so a
+  // true training directive can still be heard within the three-row budget.
+  try {
+    const relevant = new Map<number, { event: TrainingSymptomLifecycle; movement: string }>();
+    for (const movement of movements) {
+      for (const event of activeRelevantTrainingSymptoms(date, { name: movement })) {
+        if (!relevant.has(event.id)) relevant.set(event.id, { event, movement });
+      }
+    }
+    const symptoms = [...relevant.values()].sort(
+      (a, b) =>
+        symptomPriority(a.event) - symptomPriority(b.event) ||
+        b.event.last_reported_on.localeCompare(a.event.last_reported_on) ||
+        a.event.id - b.event.id
+    );
+    for (const { event, movement } of symptoms.slice(0, 2)) {
+      push(symptomWatchText(event, movement), true);
+    }
+  } catch {
+    /* symptom lifecycle unavailable → skip */
+  }
+
+  // 2) Active TRAINING directives only (informational, not medical advice).
+  // `domain:watch` includes general lab/body-composition reminders and is not
+  // specific enough for the focused Session surface.
   try {
     const directives = directivesForCoach() as any[];
     for (const d of directives) {
       const domain = String(d?.domain || "").toLowerCase();
-      if (domain !== "training" && domain !== "watch") continue;
+      if (domain !== "training") continue;
       const text = String(d?.directive || "").trim();
       if (!text) continue;
       push(text, !!d?.uncertain || !d?.citation);
@@ -260,17 +343,12 @@ function buildWatch(movements: string[], read: any): SessionPrimerWatch[] {
     /* directives unavailable → skip */
   }
 
-  // 2) A recent joint / soreness echo, tied to a movement this session actually
-  //    loads (so "left knee grumbled" only shows on a day with knee-loading work).
+  // 3) A recent high-soreness echo. Named joint symptoms already flow through the
+  // lifecycle above, including their movement relevance and evidence age.
   if (out.length < MAX_WATCH) {
     try {
       const autoreg = recentAutoregulation();
-      const joint = autoreg.joint_pain ? String(autoreg.joint_pain).trim() : "";
-      if (joint) {
-        const hit = movements.find((m) => painAreaLoadsExercise(joint, { name: m }));
-        if (hit) push(`${joint} was grumbling recently — keep ${hit} honest and stop if it barks.`, true);
-      }
-      if (out.length < MAX_WATCH && autoreg.soreness != null && Number(autoreg.soreness) >= 4) {
+      if (autoreg.soreness != null && Number(autoreg.soreness) >= 4) {
         push("You flagged real soreness recently — treat the first sets as a check-in and build from there.", true);
       }
     } catch {
@@ -278,7 +356,7 @@ function buildWatch(movements: string[], read: any): SessionPrimerWatch[] {
     }
   }
 
-  // 3) A low-recovery note when the unified read is clearly low (or a recovery week).
+  // 4) A low-recovery note when the unified read is clearly low (or a recovery week).
   if (out.length < MAX_WATCH) {
     const signals = read?.signals ?? {};
     const recoveryWeek = !!signals?.recovery_week;
@@ -310,11 +388,13 @@ function buildFresh(movements: string[], date: string): SessionPrimerFresh[] {
     if (tenure === 0) {
       out.push({
         exercise: name,
+        label: "New this week",
         why: `New this week — you've only just started logging ${name}; start conservative and let the target calibrate.`,
       });
     } else if (tenure == null) {
       out.push({
         exercise: name,
+        label: "Fresh on your plan",
         why: `Fresh on your plan — no history for ${name} yet, so log your real working weight and the coach will build from there.`,
       });
     }
@@ -347,6 +427,40 @@ function buildApproach(
   return "Solid session ahead — log honestly and the plan follows your lead.";
 }
 
+function decisionKindLabel(
+  decision: any
+): SessionPrimer["decision_kind_label"] {
+  if (decision?.kind === "train") return "Training session";
+  if (decision?.kind === "easy") return "Easy session";
+  if (decision?.kind === "rest") return "Rest-day movement";
+  return null;
+}
+
+// Server-owned athlete language for the accepted decision envelope. The client
+// renders these strings verbatim and never interprets internal cap/reason codes.
+function decisionBounds(decision: any): string[] {
+  const out: string[] = [];
+  const volume = decision?.caps?.volume;
+  const intensity = decision?.caps?.intensity;
+  const duration = Number(decision?.caps?.duration_min);
+  if (volume === "minimal") out.push("Minimum dose");
+  else if (volume === "reduced") out.push("Lower volume");
+  if (intensity === "easy") out.push("Easy effort");
+  else if (intensity === "deload") out.push("Lighter loads");
+  else if (intensity === "hold") out.push("Hold the load steady");
+  if (Number.isFinite(duration) && duration > 0) out.push(`Up to ${Math.round(duration)} minutes`);
+  return out.slice(0, 3);
+}
+
+function provenanceLabel(provenance: any): SessionPrimer["provenance_label"] {
+  if (provenance?.label === "Training by choice" || provenance?.label === "Adapted for today") {
+    return provenance.label;
+  }
+  if (provenance?.choice === "training_by_choice") return "Training by choice";
+  if (provenance?.choice === "adapted_for_today") return "Adapted for today";
+  return null;
+}
+
 // The pre-session primer for `date` (defaults to today). `opts.dayNumber` pins an
 // explicit plan day (the client's manual day pick); otherwise the adaptive pick is
 // used, matching the Brief. Returns null when there's no plan day to prime, or when
@@ -358,32 +472,7 @@ export function sessionPrimer(
   const d = String(date || localDateISO()).slice(0, 10);
   const accepted = (() => {
     try {
-      const row = db
-        .prepare(
-          `SELECT dsc.plan_day_id, dsc.focus, dsc.why, dsc.items_json, dsc.provenance_json,
-                  pd.day_number
-             FROM daily_session_compositions dsc
-             LEFT JOIN plan_days pd ON pd.id = dsc.plan_day_id
-            WHERE dsc.date = ? AND dsc.status = 'active'
-            ORDER BY dsc.version DESC LIMIT 1`
-        )
-        .get(d) as any;
-      if (!row) return null;
-      const provenance = (() => {
-        try {
-          return row.provenance_json ? JSON.parse(row.provenance_json) : null;
-        } catch {
-          return null;
-        }
-      })();
-      const items = (() => {
-        try {
-          return row.items_json ? JSON.parse(row.items_json) : [];
-        } catch {
-          return [];
-        }
-      })();
-      return { ...row, provenance, items };
+      return getActiveDailySession(d) as any;
     } catch {
       return null;
     }
@@ -396,13 +485,16 @@ export function sessionPrimer(
   // 1) Resolve the plan day being opened.
   let dayNumber: number | null = null;
   let focus: string | null = null;
-  if (opts.dayNumber != null && Number.isFinite(Number(opts.dayNumber))) {
+  if (accepted) {
+    const planDay = accepted.plan_day_id
+      ? (db.prepare(`SELECT day_number FROM plan_days WHERE id = ?`).get(Number(accepted.plan_day_id)) as any)
+      : null;
+    dayNumber = Number.isFinite(Number(planDay?.day_number)) ? Number(planDay.day_number) : null;
+    focus = accepted.focus == null ? null : String(accepted.focus);
+  } else if (opts.dayNumber != null && Number.isFinite(Number(opts.dayNumber))) {
     dayNumber = Number(opts.dayNumber);
     focus = focusForDay(dayNumber);
     if (focus == null) return null; // an explicit day that isn't on the plan → nothing to prime
-  } else if (accepted) {
-    dayNumber = Number.isFinite(Number(accepted.day_number)) ? Number(accepted.day_number) : null;
-    focus = accepted.focus == null ? null : String(accepted.focus);
   } else {
     const sel = (() => {
       try {
@@ -437,7 +529,7 @@ export function sessionPrimer(
 
   // 3) The three quiet sections + the approach line.
   const prescriptions = (() => {
-    if (dayNumber == null) return [] as Prescription[];
+    if (accepted || dayNumber == null) return [] as Prescription[];
     try {
       return planDayProgression(dayNumber);
     } catch {
@@ -445,18 +537,25 @@ export function sessionPrimer(
     }
   })();
   const movements =
-    dayNumber != null
-      ? strengthMovementsForDay(dayNumber)
-      : (Array.isArray(accepted?.items) ? accepted.items : [])
+    accepted
+      ? (Array.isArray(accepted.items) ? accepted.items : [])
           .filter((item: any) => item?.kind !== "cardio")
           .map((item: any) => String(item?.exercise ?? "").trim())
-          .filter(Boolean);
+          .filter(Boolean)
+      : dayNumber != null
+      ? strengthMovementsForDay(dayNumber)
+      : [];
   // Earned/recovery target deltas from the prescriptions, plus applied exercise
   // rotations the coach landed since the athlete last trained — both are "what changed".
   const rotations =
-    dayNumber != null ? appliedRotationsForDay(dayNumber, movements, lastComparableSessionDate(d)) : [];
-  const changed = [...changedFromPrescriptions(prescriptions), ...rotations.map((r) => r.change)].slice(0, MAX_CHANGED);
-  const watch = buildWatch(movements, read);
+    !accepted && dayNumber != null
+      ? appliedRotationsForDay(dayNumber, movements, lastComparableSessionDate(d))
+      : [];
+  const changed = [
+    ...(accepted ? changedFromAcceptedItems(accepted.items) : changedFromPrescriptions(prescriptions)),
+    ...rotations.map((r) => r.change),
+  ].slice(0, MAX_CHANGED);
+  const watch = buildWatch(movements, read, d);
   // A movement the coach deliberately swapped in reads as a rotation in changed[], so it
   // must not ALSO surface as a mysteriously-"fresh" row (only suppress the ones actually
   // shown after the changed[] cap).
@@ -492,11 +591,8 @@ export function sessionPrimer(
       acceptedDecision?.kind === "train" || acceptedDecision?.kind === "easy" || acceptedDecision?.kind === "rest"
         ? acceptedDecision.kind
         : null,
-    provenance_label:
-      accepted?.provenance?.choice === "training_by_choice"
-        ? "Training by choice"
-        : accepted?.provenance?.choice === "adapted_for_today"
-          ? "Adapted for today"
-          : null,
+    decision_kind_label: decisionKindLabel(acceptedDecision),
+    decision_bounds: decisionBounds(acceptedDecision),
+    provenance_label: provenanceLabel(accepted?.provenance),
   };
 }

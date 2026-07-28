@@ -9,7 +9,7 @@ Health's short-lived pairing exchange is public and passes through the instance-
 when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**302 routes** across 105 groups.
+**304 routes** across 105 groups.
 
 ## `/activities`
 
@@ -193,6 +193,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | GET | `/api/daily-session/decision` | The deterministic decision envelope (Stage 2) — an explainable, reproducible read of what KIND of day today is, the movement/muscle envelope, caps, and the reason codes behind them, BEFORE any agent composes. Synchronous + agent-free. The same bounded snapshot yields the same envelope + input_fingerprint. Recorded best-effort for observability; a record failure never fails the read. |
 | GET | `/api/daily-session/outcome` | Stage 4 — the post-session outcome reconciliation for a date: what was suggested vs what was actually trained (completed / substituted / skipped / reordered), progression evidence, feedback, and the adherence-neutral reason codes + confounders. Deterministic, agent-free. null (200) when the date has no reconciled daily-session composition. |
 | POST | `/api/daily-session/prepare` | Prepare (or explicitly replace) today's durable session without mutating the weekly plan. Plan sources snapshot a plan day; agent_suggest resolves a completed canonical job; athlete_override snapshots a user-authored payload. expected_active_id is assertion-only: it returns the matching active snapshot and bound session without creating/replacing anything. Different replacements stop once logging begins; exact retries remain safe. |
+| GET | `/api/daily-session/preview` | Read-only, authoritative candidate shown immediately before Start. This is built by the same adaptive seam prepare persists and never records a decision or creates a workout session. |
 
 ## `/dexa-targeting`
 
@@ -789,6 +790,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | POST | `/api/training-symptoms/:id/recur` | Explicitly reopen a record, optionally resetting evidence only for one exact movement. |
 | POST | `/api/training-symptoms/:id/resolve` | Explicitly close one record; tolerance observations never call this path on their own. |
 | POST | `/api/training-symptoms/:id/tolerance` | Record one movement-specific pain-free or pain-present observation. |
+| POST | `/api/training-symptoms/observation` | One exercise-card answer becomes one canonical, session-bound movement observation. The use case owns lifecycle relevance and atomicity. |
 
 ## `/trajectory`
 

@@ -95,7 +95,7 @@ function freshness(lastReportedOn: string, on: string): SymptomFreshness {
   return "stale_needs_recheck";
 }
 
-function reconcileAffectedOutcomeDates(from: string): void {
+export function reconcileTrainingSymptomOutcomeDates(from: string): void {
   const rows = db
     .prepare(
       `SELECT DISTINCT date FROM daily_session_outcomes
@@ -126,6 +126,13 @@ function latestEpisodeRow(id: number, on?: string): any | null {
 
 function latestEpisodeAt(id: number, on: string): TrainingSymptomLifecycle | null {
   return hydrate(latestEpisodeRow(id, on), on);
+}
+
+export function latestTrainingSymptomEpisode(
+  id: number,
+  on = localDateISO()
+): TrainingSymptomLifecycle | null {
+  return latestEpisodeAt(Number(id), validDate(on));
 }
 
 function hydrate(row: any, on = localDateISO()): TrainingSymptomLifecycle | null {
@@ -276,7 +283,7 @@ export function reportTrainingSymptom(input: {
       onset
     );
   const event = getTrainingSymptom(Number(result.lastInsertRowid), onset)!;
-  reconcileAffectedOutcomeDates(onset);
+  reconcileTrainingSymptomOutcomeDates(onset);
   return event;
 }
 
@@ -285,10 +292,24 @@ export function getTrainingSymptom(id: number, on = localDateISO()): TrainingSym
 }
 
 export function listTrainingSymptoms(
-  opts: { on?: string; include_resolved?: boolean; seed_legacy?: boolean } = {}
+  opts: {
+    on?: string;
+    include_resolved?: boolean;
+    seed_legacy?: boolean;
+    movement?: string;
+    exercise_id?: number | null;
+  } = {}
 ): TrainingSymptomLifecycle[] {
   if (opts.seed_legacy !== false) seedLegacyTrainingSymptoms();
   const on = validDate(opts.on);
+  if (opts.movement != null || opts.exercise_id != null) {
+    const identity = resolveMovementIdentity(opts.movement, opts.exercise_id);
+    if (identity.exercise_id == null) throw new Error("movement must identify an existing exercise");
+    return activeRelevantTrainingSymptoms(on, {
+      name: identity.movement_name,
+      muscle_group: identity.muscle_group,
+    });
+  }
   const rows = db
     .prepare(
       `SELECT * FROM training_symptom_events
@@ -342,13 +363,19 @@ export function resolveTrainingSymptom(id: number, on = localDateISO()): Trainin
      WHERE id = ?`
   ).run(resolvedOn, Number(id));
   const event = getTrainingSymptom(id, resolvedOn);
-  reconcileAffectedOutcomeDates(resolvedOn);
+  reconcileTrainingSymptomOutcomeDates(resolvedOn);
   return event;
 }
 
 export function recurTrainingSymptom(
   id: number,
-  input: { on?: string; area_text?: string; movement?: string | null; exercise_id?: number | null } = {}
+  input: {
+    on?: string;
+    area_text?: string;
+    movement?: string | null;
+    exercise_id?: number | null;
+    session_id?: number | null;
+  } = {}
 ): TrainingSymptomLifecycle | null {
   const on = validDate(input.on);
   const existingRow = latestEpisodeRow(id);
@@ -401,7 +428,7 @@ export function recurTrainingSymptom(
       if (priorRetry) {
         db.exec("RELEASE recur_training_symptom");
         const retried = hydrate(priorRetry, on);
-        reconcileAffectedOutcomeDates(on);
+        reconcileTrainingSymptomOutcomeDates(on);
         return retried;
       }
       const inserted = db
@@ -437,11 +464,11 @@ export function recurTrainingSymptom(
       `INSERT INTO movement_tolerance_observations
         (symptom_event_id, session_id, exercise_id, movement_key, movement_name,
          observed_on, outcome, relevant, evidence_epoch)
-       VALUES (?, NULL, ?, ?, ?, ?, 'pain_present', 1, ?)`
-    ).run(eventId, exerciseId, key, movementName, on, nextEpoch);
+       VALUES (?, ?, ?, ?, ?, ?, 'pain_present', 1, ?)`
+    ).run(eventId, input.session_id == null ? null : Number(input.session_id), exerciseId, key, movementName, on, nextEpoch);
     db.exec("RELEASE recur_training_symptom");
     const recurred = getTrainingSymptom(eventId, on);
-    reconcileAffectedOutcomeDates(on);
+    reconcileTrainingSymptomOutcomeDates(on);
     return recurred;
   } catch (error) {
     try {
@@ -474,6 +501,7 @@ export function recordMovementTolerance(input: MovementToleranceInput): Training
           on: observedOn,
           movement: identity.movement_name,
           exercise_id: identity.exercise_id,
+          session_id: input.session_id,
         })
       : event;
   }
@@ -532,6 +560,6 @@ export function recordMovementTolerance(input: MovementToleranceInput): Training
        WHERE id = ?`
     ).run(observedOn, evidenceEpoch, event.id);
   }
-  if (inserted) reconcileAffectedOutcomeDates(observedOn);
+  if (inserted) reconcileTrainingSymptomOutcomeDates(observedOn);
   return getTrainingSymptom(event.id, observedOn);
 }

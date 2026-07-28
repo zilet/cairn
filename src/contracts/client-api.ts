@@ -597,6 +597,13 @@ export interface ClientLoggedSet {
   [key: string]: unknown;
 }
 
+export interface ClientExerciseVariation {
+  name: string;
+  pattern: string;
+  equipment: string;
+  why: string;
+}
+
 export interface ClientMovementToleranceReadiness {
   movement_key: string;
   movement_name: string;
@@ -622,6 +629,21 @@ export interface ClientTrainingSymptom {
   trial_ready: boolean;
   trial_ready_scope: "movement";
   movement_readiness: ClientMovementToleranceReadiness[];
+}
+
+export type ClientExerciseSymptomObservationOutcome = "pain_present" | "pain_free";
+
+export interface ClientExerciseSymptomObservationResponse {
+  ok: true;
+  date: ISODateString | string;
+  session_id: number;
+  exercise: {
+    id: number;
+    name: string;
+    muscle_group: string | null;
+  };
+  outcome: ClientExerciseSymptomObservationOutcome;
+  symptom: ClientTrainingSymptom;
 }
 
 export interface ClientTrainingSession {
@@ -680,6 +702,8 @@ export interface ClientDailySessionPrepareRequest {
   date: ISODateString | string;
   /** Assertion-only cached composition check; when present, no source/session payload is required and no write occurs. */
   expected_active_id?: number;
+  /** Compare-and-set token from the exact adaptive preview shown before Start. */
+  expected_input_fingerprint?: string;
   source?: "adaptive_plan" | "agent_suggest" | "manual_plan" | "athlete_override";
   day_number?: number;
   agent_job_id?: number;
@@ -691,6 +715,34 @@ export interface ClientDailySessionPrepareRequest {
   replace?: boolean;
 }
 
+export interface ClientDailySessionPreview {
+  date: ISODateString | string;
+  source: "adaptive_plan";
+  kind: "train" | "easy" | "rest";
+  policy_version: string;
+  input_fingerprint: string;
+  title: string | null;
+  focus: string | null;
+  item_count: number;
+  est_minutes: number | null;
+  constraints: string[];
+  primary_rationale: string;
+}
+
+export interface ClientDailySessionAthleteRead {
+  learning: string;
+  next_exposure: string | null;
+}
+
+export interface ClientDailySessionOutcomeRead {
+  composition_id: number;
+  session_id: number;
+  date: ISODateString | string;
+  status: "not_started" | "in_progress" | "completed";
+  facts: unknown;
+  athlete_read: ClientDailySessionAthleteRead | null;
+}
+
 export type ClientDailySessionPrepareResponse =
   | {
       ok: true;
@@ -698,7 +750,7 @@ export type ClientDailySessionPrepareResponse =
       session: ClientTrainingSession;
       reused: boolean;
     }
-  | { ok: false; code: string; error: string };
+  | { ok: false; code: string; error: string; preview?: ClientDailySessionPreview };
 
 export interface ClientActivity {
   id: number;
@@ -1403,6 +1455,7 @@ export interface ClientSessionPrimerWatch {
 }
 export interface ClientSessionPrimerFresh {
   exercise: string;
+  label: "New this week" | "Fresh on your plan";
   why: string;
 }
 export interface ClientSessionPrimer {
@@ -1417,6 +1470,8 @@ export interface ClientSessionPrimer {
   decision_fingerprint: string | null;
   decision_policy_version: string | null;
   decision_kind: "train" | "easy" | "rest" | null;
+  decision_kind_label: "Training session" | "Easy session" | "Rest-day movement" | null;
+  decision_bounds: string[];
   provenance_label: "Adapted for today" | "Training by choice" | null;
 }
 
@@ -2671,7 +2726,9 @@ export interface ClientApiResponses {
   "/api/today-read/reshape": ClientDayRead | { ok: true; job: ClientAgentJob };
   "/api/session-suggest": ClientSessionSuggestResponse;
   "/api/daily-session": ClientDailySessionComposition | null;
+  "/api/daily-session/preview": ClientDailySessionPreview;
   "/api/daily-session/prepare": ClientDailySessionPrepareResponse;
+  "/api/daily-session/outcome": ClientDailySessionOutcomeRead | null;
   "/api/session-primer": ClientSessionPrimer | null;
   "/api/week-ahead": ClientWeekAheadResponse;
   "/api/today-agenda": ClientTodayAgenda;
@@ -2699,6 +2756,7 @@ export interface ClientApiResponses {
   "/api/program/progression/apply": ClientProposalResult;
   "/api/program/swap": ClientProposalResult;
   "/api/program/swap/apply": ClientProposalResult;
+  "/api/program/variations": ClientExerciseVariation[];
   "/api/program/balance": ClientProgramBalance;
   "/api/program/adjustments": ClientProgramAdjustment[];
   "/api/program/blocks": ClientProgramBlock[] | ClientProgramBlock;
@@ -2729,6 +2787,7 @@ export interface ClientApiResponses {
   "/api/recovery/baseline": ClientRecoveryBaselineRead;
   "/api/symptom-links": { links: ClientSymptomMarkerLink[] };
   "/api/training-symptoms": ClientTrainingSymptom[] | ClientTrainingSymptom;
+  "/api/training-symptoms/observation": ClientExerciseSymptomObservationResponse;
   "/api/evidence": ClientEvidenceRow[];
   "/api/evidence/summary": ClientEvidenceSummary;
   "/api/insights": ClientInsight[];

@@ -14,7 +14,7 @@
 
 type PrimerChange = { exercise?: unknown; kind?: unknown; text?: unknown };
 type PrimerWatch = { text?: unknown; soft?: unknown };
-type PrimerFresh = { exercise?: unknown; why?: unknown };
+type PrimerFresh = { exercise?: unknown; label?: unknown; why?: unknown };
 type SessionPrimerData = {
   why_today?: unknown;
   focus?: unknown;
@@ -22,6 +22,9 @@ type SessionPrimerData = {
   watch?: PrimerWatch[] | null;
   fresh?: PrimerFresh[] | null;
   approach?: unknown;
+  decision_kind_label?: unknown;
+  decision_bounds?: unknown[] | null;
+  provenance_label?: unknown;
 } | null | undefined;
 
 type PrimerRuntimeGlobals = typeof globalThis & {
@@ -82,9 +85,27 @@ type PrimerHydrateOpts = {
     const watch = Array.isArray(primer.watch) ? primer.watch : [];
     const fresh = Array.isArray(primer.fresh) ? primer.fresh : [];
     const approach = str(primer.approach);
-    if (!why && !changed.length && !watch.length && !fresh.length && !approach) return "";
+    const provenanceLabel = str(primer.provenance_label);
+    const kindLabel = str(primer.decision_kind_label);
+    const bounds = Array.isArray(primer.decision_bounds) ? primer.decision_bounds.map(str).filter(Boolean) : [];
+    if (
+      !why &&
+      !changed.length &&
+      !watch.length &&
+      !fresh.length &&
+      !approach &&
+      !provenanceLabel &&
+      !kindLabel &&
+      !bounds.length
+    )
+      return "";
 
     const sections = [
+      sectionHtml(
+        "Today's shape",
+        kindLabel || bounds.length ? [contribRow(kindLabel, bounds.join(" · "), "quiet", e)] : [],
+        e
+      ),
       sectionHtml(
         "What changed",
         changed.map((c) => contribRow(str(c?.exercise), str(c?.text), c?.kind === "target" ? "ok" : "quiet", e)),
@@ -97,18 +118,21 @@ type PrimerHydrateOpts = {
       ),
       sectionHtml(
         "Fresh today",
-        fresh.map((f) => contribRow(str(f?.exercise), str(f?.why), "quiet", e)),
+        fresh.map((f) => contribRow(str(f?.label), `${str(f?.exercise)} — ${str(f?.why)}`, "quiet", e)),
         e
       ),
     ].join("");
 
     const collapsed = !!opts.collapsed;
     const kicker = `<span class="lbl sess-primer-kicker">Before you start</span>`;
+    const provenanceHtml = provenanceLabel
+      ? `<span class="lbl sess-primer-provenance">${e.html(provenanceLabel)}</span>`
+      : "";
     const whyHtml = why ? `<span class="sess-primer-why">${e.html(why)}</span>` : "";
     const approachHtml = approach ? `<div class="sess-primer-approach">${e.html(approach)}</div>` : "";
     return `<div class="sess-primer reveal${collapsed ? " collapsed" : ""}" id="sessPrimer" data-primer>
       <button class="sess-primer-head" type="button" data-primer-toggle aria-expanded="${collapsed ? "false" : "true"}">
-        <span class="sess-primer-head-text">${kicker}${whyHtml}</span>
+        <span class="sess-primer-head-text">${kicker}${provenanceHtml}${whyHtml}</span>
         <span class="sess-primer-chev" aria-hidden="true">▾</span>
       </button>
       <div class="sess-primer-body">${sections}${approachHtml}</div>
@@ -117,12 +141,13 @@ type PrimerHydrateOpts = {
 
   // The small "new this week" chip for a rotated/new movement row. Carries its
   // one-line rationale in a native title AND data attr (revealed inline on tap).
-  function sessionFreshChipHtml(why: unknown): string {
+  function sessionFreshChipHtml(why: unknown, label: unknown = "Fresh today"): string {
     const e = esc();
     if (!e) return "";
     const reason = str(why);
+    const text = str(label) || "Fresh today";
     const titleAttr = reason ? ` title="${e.attr(reason)}"` : "";
-    return `<button type="button" class="sess-fresh-chip" data-fresh-why="${e.attr(reason)}"${titleAttr}>new this week</button>`;
+    return `<button type="button" class="sess-fresh-chip" data-fresh-why="${e.attr(reason)}"${titleAttr}>${e.html(text)}</button>`;
   }
 
   // Toggle the collapsed strip ⇄ full card. Idempotent (guards on a wired flag).
@@ -142,20 +167,21 @@ type PrimerHydrateOpts = {
   // (the exercise name); a movement not on screen is skipped. Idempotent.
   function applyFreshChips(root: PrimerHydrateOpts["root"], fresh: PrimerFresh[]): void {
     if (!root || !Array.isArray(fresh) || !fresh.length) return;
-    const byName = new Map<string, string>();
+    const byName = new Map<string, { why: string; label: string }>();
     for (const f of fresh) {
       const name = str(f?.exercise).toLowerCase();
-      if (name) byName.set(name, str(f?.why));
+      if (name) byName.set(name, { why: str(f?.why), label: str(f?.label) || "Fresh today" });
     }
     if (!byName.size) return;
     const cards = Array.from(root.querySelectorAll(".ex[data-card]"));
     for (const card of cards) {
       const name = str(card.getAttribute("data-card")).toLowerCase();
-      const why = byName.get(name);
-      if (why == null) continue;
+      const freshInfo = byName.get(name);
+      if (freshInfo == null) continue;
+      const { why, label } = freshInfo;
       const top = card.querySelector(".ex-top");
       if (!top || top.querySelector(".sess-fresh-chip")) continue;
-      const chipHtml = sessionFreshChipHtml(why);
+      const chipHtml = sessionFreshChipHtml(why, label);
       if (!chipHtml) continue;
       top.insertAdjacentHTML("beforeend", chipHtml);
       const chip = top.querySelector(".sess-fresh-chip");

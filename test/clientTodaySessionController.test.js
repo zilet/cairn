@@ -15,12 +15,32 @@ function decodeAttr(value) {
     .replace(/&gt;/g, ">");
 }
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function escapeAttr(value) {
+  return escapeHtml(value).replaceAll('"', "&quot;");
+}
+
 function plain(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
 async function flushAsync() {
   for (let i = 0; i < 10; i++) await Promise.resolve();
+}
+
+function memoryStorage() {
+  const values = new Map();
+  return {
+    getItem: (key) => values.has(key) ? values.get(key) : null,
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: (key) => values.delete(key),
+  };
 }
 
 // Local-date (not UTC) days-ago ISO string, matching date-utils.js's localISO() convention —
@@ -71,6 +91,7 @@ class FakeElement {
     this.value = attrs.value || "";
     this.textContent = attrs.textContent || "";
     this.hidden = false;
+    this.open = false;
     this.disabled = false;
     this.children = [];
     this.parentElement = null;
@@ -79,6 +100,7 @@ class FakeElement {
     this.classList = new FakeClassList(this);
     this._innerHTML = "";
     this.focusCount = 0;
+    this.scrollCount = 0;
     this.removed = false;
   }
 
@@ -107,6 +129,37 @@ class FakeElement {
     }
     if (this._innerHTML.includes('id="feedbackEdit"')) {
       this.appendChild(new FakeElement("button", { id: "feedbackEdit" }));
+    }
+    if (this._innerHTML.includes("data-movement-area")) {
+      this.appendChild(new FakeElement("input", { dataset: { movementArea: "" } }));
+    }
+    for (const match of this._innerHTML.matchAll(/<button[^>]*data-movement-outcome="([^"]+)"[^>]*>/g)) {
+      const tag = match[0];
+      this.appendChild(new FakeElement("button", {
+        dataset: {
+          movementOutcome: match[1],
+          ...(tag.match(/data-symptom-id="([^"]+)"/)?.[1]
+            ? { symptomId: tag.match(/data-symptom-id="([^"]+)"/)[1] }
+            : {}),
+          ...(tag.match(/data-symptom-area="([^"]+)"/)?.[1]
+            ? { symptomArea: decodeAttr(tag.match(/data-symptom-area="([^"]+)"/)[1]) }
+            : {}),
+        },
+      }));
+    }
+    for (const key of ["movement-ease", "movement-stop", "movement-skip", "movement-alternatives"]) {
+      if (this._innerHTML.includes(`data-${key}`)) {
+        const dataKey = key.replace(/-([a-z])/g, (_, char) => char.toUpperCase());
+        this.appendChild(new FakeElement("button", { dataset: { [dataKey]: "" } }));
+      }
+    }
+    if (this._innerHTML.includes("data-movement-show")) {
+      this.appendChild(new FakeElement("button", { dataset: { movementShow: "" } }));
+    }
+    for (const match of this._innerHTML.matchAll(/<button[^>]*data-movement-alternative="([^"]+)"[^>]*>/g)) {
+      this.appendChild(new FakeElement("button", {
+        dataset: { movementAlternative: decodeAttr(match[1]) },
+      }));
     }
   }
 
@@ -168,6 +221,10 @@ class FakeElement {
     this.focusCount += 1;
   }
 
+  scrollIntoView() {
+    this.scrollCount += 1;
+  }
+
   hasAttribute(name) {
     if (!name.startsWith("data-")) return false;
     const key = name.slice(5).replace(/-([a-z])/g, (_, char) => char.toUpperCase());
@@ -191,6 +248,9 @@ class FakeElement {
       Object.hasOwn(this.parentElement?.dataset || {}, "logged") &&
       Boolean(this.parentElement?.parentElement?.classList.contains("ex"));
     if (selector === ".feel-dot[data-feel=\"soreness\"]") return this.classList.contains("feel-dot") && this.dataset.feel === "soreness";
+    if (selector === ".in-w, .in-dur, .in-r") {
+      return this.classList.contains("in-w") || this.classList.contains("in-dur") || this.classList.contains("in-r");
+    }
     if (selector.startsWith(".")) return this.classList.contains(selector.slice(1));
     if (selector === ".ex") return this.classList.contains("ex");
     if (selector === ".ex-skip") return this.classList.contains("ex-skip");
@@ -204,6 +264,11 @@ class FakeElement {
     if (selector === "[data-finishstat]") return Object.hasOwn(this.dataset, "finishstat");
     if (selector === "[data-del]") return Object.hasOwn(this.dataset, "del");
     if (selector === "[data-unskip]") return Object.hasOwn(this.dataset, "unskip");
+    const dataOnly = selector.match(/^\[data-([a-z0-9-]+)\]$/i);
+    if (dataOnly) {
+      const key = dataOnly[1].replace(/-([a-z])/g, (_, char) => char.toUpperCase());
+      return Object.hasOwn(this.dataset, key);
+    }
     return false;
   }
 
@@ -277,6 +342,8 @@ function loadController({ apiImpl, contextOverrides } = {}) {
     JSON,
     decodeURIComponent,
     encodeURIComponent,
+    escHtml: escapeHtml,
+    escAttr: escapeAttr,
     window: null,
     globalThis: null,
     navigator: {},
@@ -395,6 +462,7 @@ function loadController({ apiImpl, contextOverrides } = {}) {
 
   return {
     controller: context.CairnTodaySessionController,
+    feedback: context.CairnTodaySessionFeedback,
     setModel: context.CairnTodaySessionSetModel,
     rootEl,
     deps,
@@ -444,6 +512,390 @@ function addTimedLoggingCard(rootEl, duration = "90") {
   rootEl.appendChild(new FakeElement("div", { dataset: { finishstat: "" } }));
   return { card, row, durationEl, timer, button, logged };
 }
+
+function addMovementCheckCard(rootEl, { movement = "Bench Press", withSet = false } = {}) {
+  const card = rootEl.appendChild(new FakeElement("article", {
+    className: "ex",
+    dataset: { card: movement },
+  }));
+  const logged = card.appendChild(new FakeElement("div", { dataset: { logged: "" } }));
+  if (withSet) logged.appendChild(new FakeElement("span", { className: "chip", textContent: "135 × 5" }));
+  const details = card.appendChild(new FakeElement("details", {
+    dataset: { movementCheck: "", movement },
+  }));
+  const body = details.appendChild(new FakeElement("div", {
+    dataset: { movementCheckBody: "" },
+  }));
+  const row = card.appendChild(new FakeElement("div", {
+    className: "logrow",
+    dataset: { ex: encodeURIComponent(movement), day: "1", mode: "reps" },
+  }));
+  const dose = row.appendChild(new FakeElement("input", { className: "in-w", value: "135" }));
+  row.appendChild(new FakeElement("input", { className: "in-r", value: "5" }));
+  row.appendChild(new FakeElement("input", { className: "in-rir", value: "2" }));
+  row.appendChild(new FakeElement("button", { className: "logbtn" }));
+  const skip = card.appendChild(new FakeElement("button", {
+    className: "ex-skip",
+    dataset: { skip: encodeURIComponent(movement) },
+  }));
+  return { card, logged, details, body, dose, skip };
+}
+
+test("Movement check renders relevant/no-symptom choices with escaped area-specific ids", () => {
+  const harness = loadController();
+  const relevant = harness.feedback.movementCheckLoadedHtml([
+    { id: 17, area_text: "knee <inside>", status: "active", movement_readiness: [] },
+    { id: 22, area_text: "old issue", status: "resolved", movement_readiness: [] },
+  ]);
+  const none = harness.feedback.movementCheckLoadedHtml([]);
+
+  assert.match(relevant, /data-symptom-id="17"/);
+  assert.match(relevant, /knee &lt;inside&gt;/);
+  assert.match(relevant, />Pain-free today</);
+  assert.match(relevant, />Pain present</);
+  assert.doesNotMatch(relevant, /old issue|data-symptom-id="22"/);
+  assert.match(none, />Something hurts</);
+  assert.match(none, /data-movement-area/);
+  assert.doesNotMatch(none, /Pain-free today|data-symptom-id/);
+});
+
+test("Movement check sends the exact symptom id and honors a pain-present response over a pain-free tap", async () => {
+  const symptom = {
+    id: 17,
+    area_text: "front of right knee",
+    status: "active",
+    movement_readiness: [],
+  };
+  const harness = loadController({
+    apiImpl: async (path, opts) => {
+      if (path.startsWith("/training-symptoms?")) return [symptom];
+      if (path === "/training-symptoms/observation") {
+        const request = JSON.parse(opts.body);
+        return {
+          ok: true,
+          date: request.date,
+          session_id: 44,
+          exercise: { id: 3, name: request.movement, muscle_group: "chest" },
+          outcome: "pain_present",
+          symptom,
+        };
+      }
+      return { ok: true };
+    },
+  });
+  harness.deps.state.sessionIdsByDate = { "2026-06-30": "44" };
+  const { details, body } = addMovementCheckCard(harness.rootEl);
+
+  harness.controller.wireSessionSurface({
+    session: { id: 44, date: "2026-06-30" },
+    hasLoggedSets: false,
+  }, harness.deps);
+  details.open = true;
+  details.dispatch("toggle");
+  await flushAsync();
+  body.querySelectorAll("[data-movement-outcome]")
+    .find((button) => button.dataset.movementOutcome === "pain_free")
+    .click();
+  await flushAsync();
+
+  const observation = harness.requests.find((request) => request.path === "/training-symptoms/observation");
+  assert.deepEqual(JSON.parse(observation.opts.body), {
+    date: "2026-06-30",
+    movement: "Bench Press",
+    session_id: 44,
+    symptom_event_id: 17,
+    outcome: "pain_free",
+  });
+  assert.equal(observation.opts.headers["X-Idempotency-Key"], "test-mutation-1");
+  assert.match(body.innerHTML, /Pain present noted/);
+  assert.match(body.innerHTML, /Ease this/);
+  assert.match(body.innerHTML, /Use another movement/);
+});
+
+test("Movement check ignores a stale date response and queues named pain without claiming clearance", async () => {
+  let resolveSymptoms;
+  const pendingSymptoms = new Promise((resolve) => { resolveSymptoms = resolve; });
+  const stale = loadController({
+    apiImpl: async (path) => path.startsWith("/training-symptoms?") ? pendingSymptoms : { ok: true },
+  });
+  const staleCard = addMovementCheckCard(stale.rootEl);
+  stale.controller.wireSessionSurface({ session: { id: 44 }, hasLoggedSets: false }, stale.deps);
+  staleCard.details.open = true;
+  staleCard.details.dispatch("toggle");
+  stale.deps.state.logDate = "2026-07-01";
+  resolveSymptoms([]);
+  await flushAsync();
+  assert.match(staleCard.body.innerHTML, /Loading movement notes/);
+  assert.doesNotMatch(staleCard.body.innerHTML, /Something hurts/);
+
+  const queued = loadController({
+    apiImpl: async (path) => {
+      if (path.startsWith("/training-symptoms?")) return [];
+      throw new Error("offline");
+    },
+    contextOverrides: { CairnApiCache: { isTransientApiFailure: () => true } },
+  });
+  const queuedCard = addMovementCheckCard(queued.rootEl);
+  queued.controller.wireSessionSurface({ session: { _staged_offline: true }, hasLoggedSets: false }, queued.deps);
+  queuedCard.details.open = true;
+  queuedCard.details.dispatch("toggle");
+  await flushAsync();
+  const area = queuedCard.body.querySelector("[data-movement-area]");
+  area.value = "inside left elbow";
+  queuedCard.body.querySelector("[data-movement-outcome]").click();
+  await flushAsync();
+
+  assert.deepEqual(plain(queued.outbox), [{
+    kind: "symptom_observation",
+    path: "/training-symptoms/observation",
+    body: {
+      date: "2026-06-30",
+      movement: "Bench Press",
+      area_text: "inside left elbow",
+      outcome: "pain_present",
+    },
+    group_id: "date:2026-06-30",
+  }]);
+  assert.match(queuedCard.body.innerHTML, /will sync when you're back online/);
+  assert.doesNotMatch(queuedCard.body.innerHTML, /clearance|cleared/i);
+});
+
+test("Movement check ease invents no dose and Stop here preserves logged work in the card", async () => {
+  const symptom = { id: 18, area_text: "right shoulder", status: "active", movement_readiness: [] };
+  const harness = loadController({
+    apiImpl: async (path, opts) => {
+      if (path.startsWith("/training-symptoms?")) return [symptom];
+      if (path === "/training-symptoms/observation") {
+        const request = JSON.parse(opts.body);
+        return {
+          ok: true,
+          date: request.date,
+          session_id: 44,
+          exercise: { id: 3, name: request.movement, muscle_group: "chest" },
+          outcome: "pain_present",
+          symptom,
+        };
+      }
+      return { ok: true };
+    },
+  });
+  const { card, logged, details, body, dose } = addMovementCheckCard(harness.rootEl, { withSet: true });
+  harness.controller.wireSessionSurface({ session: { id: 44 }, hasLoggedSets: true }, harness.deps);
+  details.open = true;
+  details.dispatch("toggle");
+  await flushAsync();
+  body.querySelectorAll("[data-movement-outcome]")
+    .find((button) => button.dataset.movementOutcome === "pain_present")
+    .click();
+  await flushAsync();
+
+  body.querySelector("[data-movement-ease]").click();
+  assert.equal(dose.value, "135", "Ease this never edits or invents a load");
+  assert.equal(dose.focusCount, 1);
+  details.open = true;
+  body.querySelector("[data-movement-stop]").click();
+  assert.equal(card.hidden, true);
+  assert.equal(logged.children.length, 1, "Stop here preserves the logged set DOM");
+  assert.equal(card.removed, false);
+});
+
+test("Stop here persists only the exact canonical workout movement and can be restored without another request", async () => {
+  const storage = memoryStorage();
+  const symptom = { id: 18, area_text: "right shoulder", status: "active", movement_readiness: [] };
+  const apiImpl = async (path, opts) => {
+    if (path.startsWith("/training-symptoms?")) return [symptom];
+    if (path === "/training-symptoms/observation") {
+      const request = JSON.parse(opts.body);
+      return {
+        ok: true,
+        date: request.date,
+        session_id: Number(request.session_id),
+        exercise: { id: 3, name: request.movement, muscle_group: "chest" },
+        outcome: "pain_present",
+        symptom,
+      };
+    }
+    return { ok: true };
+  };
+  const first = loadController({ apiImpl, contextOverrides: { localStorage: storage } });
+  const firstCard = addMovementCheckCard(first.rootEl, { withSet: true });
+  first.controller.wireSessionSurface({ session: { id: 44 }, hasLoggedSets: true }, first.deps);
+  firstCard.details.open = true;
+  firstCard.details.dispatch("toggle");
+  await flushAsync();
+  firstCard.body.querySelectorAll("[data-movement-outcome]")
+    .find((button) => button.dataset.movementOutcome === "pain_present")
+    .click();
+  await flushAsync();
+
+  const requestCount = first.requests.length;
+  firstCard.body.querySelector("[data-movement-stop]").click();
+  assert.equal(first.requests.length, requestCount, "Stop here adds no network write");
+  assert.equal(firstCard.card.hidden, true);
+  const saved = storage.getItem("cairn.movement-stop.v1");
+  assert.deepEqual(
+    JSON.parse(saved).map(({ date, session_key, movement_key }) => ({ date, session_key, movement_key })),
+    [{ date: "2026-06-30", session_key: "session:44", movement_key: "bench press" }],
+  );
+  assert.doesNotMatch(saved, /shoulder|pain/i, "the marker stores identity only, never symptom prose");
+
+  const reload = loadController({ apiImpl, contextOverrides: { localStorage: storage } });
+  const reloadCard = addMovementCheckCard(reload.rootEl, { withSet: true });
+  reload.controller.wireSessionSurface({ session: { id: 44 }, hasLoggedSets: true }, reload.deps);
+  assert.equal(reloadCard.card.hidden, true);
+  const placeholder = reload.rootEl.querySelector("[data-movement-stop-placeholder]");
+  assert.ok(placeholder);
+  assert.equal(reload.requests.length, 0, "suppression is local and does not fetch");
+
+  const anotherDate = loadController({ apiImpl, contextOverrides: { localStorage: storage } });
+  anotherDate.deps.state.logDate = "2026-07-01";
+  const anotherDateCard = addMovementCheckCard(anotherDate.rootEl, { withSet: true });
+  anotherDate.controller.wireSessionSurface({ session: { id: 44 }, hasLoggedSets: true }, anotherDate.deps);
+  assert.equal(anotherDateCard.card.hidden, false, "a marker never leaks to another date");
+
+  const anotherSession = loadController({ apiImpl, contextOverrides: { localStorage: storage } });
+  const anotherSessionCard = addMovementCheckCard(anotherSession.rootEl, { withSet: true });
+  anotherSession.controller.wireSessionSurface({ session: { id: 45 }, hasLoggedSets: true }, anotherSession.deps);
+  assert.equal(anotherSessionCard.card.hidden, false, "a marker never leaks to another canonical session");
+
+  placeholder.querySelector("[data-movement-show]").click();
+  assert.equal(reloadCard.card.hidden, false);
+  assert.equal(placeholder.removed, true);
+  assert.equal(reload.requests.length, 0, "restore is also local");
+
+  const restoredReload = loadController({ apiImpl, contextOverrides: { localStorage: storage } });
+  const restoredCard = addMovementCheckCard(restoredReload.rootEl, { withSet: true });
+  restoredReload.controller.wireSessionSurface({ session: { id: 44 }, hasLoggedSets: true }, restoredReload.deps);
+  assert.equal(restoredCard.card.hidden, false);
+});
+
+test("an abandoned staged Stop marker never hides or gets cleared by an unrelated canonical session", async () => {
+  const storage = memoryStorage();
+  const apiImpl = async (path) => {
+    if (path.startsWith("/training-symptoms?")) return [];
+    throw new Error("offline");
+  };
+  const contextOverrides = {
+    localStorage: storage,
+    CairnApiCache: { isTransientApiFailure: () => true },
+  };
+  const stagedSession = {
+    _staged_offline: true,
+    _local_prepare_id: "prepared-workout-1",
+  };
+  const first = loadController({ apiImpl, contextOverrides });
+  const firstCard = addMovementCheckCard(first.rootEl, { withSet: true });
+  first.controller.wireSessionSurface({ session: stagedSession, hasLoggedSets: true }, first.deps);
+  firstCard.details.open = true;
+  firstCard.details.dispatch("toggle");
+  await flushAsync();
+  firstCard.body.querySelector("[data-movement-area]").value = "inside left elbow";
+  firstCard.body.querySelector("[data-movement-outcome]").click();
+  await flushAsync();
+  const requestCount = first.requests.length;
+  firstCard.body.querySelector("[data-movement-stop]").click();
+  assert.equal(first.requests.length, requestCount);
+
+  const stagedReload = loadController({ apiImpl, contextOverrides });
+  const stagedReloadCard = addMovementCheckCard(stagedReload.rootEl, { withSet: true });
+  stagedReload.controller.wireSessionSurface({ session: stagedSession, hasLoggedSets: true }, stagedReload.deps);
+  assert.equal(stagedReloadCard.card.hidden, true);
+
+  const otherStaged = loadController({ apiImpl, contextOverrides });
+  const otherStagedCard = addMovementCheckCard(otherStaged.rootEl, { withSet: true });
+  otherStaged.controller.wireSessionSurface({
+    session: { _staged_offline: true, _local_prepare_id: "prepared-workout-2" },
+    hasLoggedSets: true,
+  }, otherStaged.deps);
+  assert.equal(otherStagedCard.card.hidden, false);
+
+  const authoritative = loadController({ apiImpl, contextOverrides });
+  const authoritativeCard = addMovementCheckCard(authoritative.rootEl, { withSet: true });
+  authoritative.controller.wireSessionSurface({ session: { id: 55 }, hasLoggedSets: true }, authoritative.deps);
+  assert.equal(authoritativeCard.card.hidden, false, "date and movement alone never establish staged lineage");
+  assert.doesNotMatch(storage.getItem("cairn.movement-stop.v1"), /"session_key":"session:55"/);
+  assert.match(storage.getItem("cairn.movement-stop.v1"), /prepared-workout-1/);
+
+  authoritativeCard.details.open = true;
+  authoritativeCard.details.dispatch("toggle");
+  await flushAsync();
+  authoritativeCard.body.querySelector("[data-movement-area]").value = "inside left elbow";
+  authoritativeCard.body.querySelector("[data-movement-outcome]").click();
+  await flushAsync();
+  authoritativeCard.body.querySelector("[data-movement-stop]").click();
+  assert.match(storage.getItem("cairn.movement-stop.v1"), /"session_key":"session:55"/);
+  assert.match(storage.getItem("cairn.movement-stop.v1"), /prepared-workout-1/);
+
+  const canonicalReload = loadController({ apiImpl, contextOverrides });
+  const canonicalReloadCard = addMovementCheckCard(canonicalReload.rootEl, { withSet: true });
+  canonicalReload.controller.wireSessionSurface({ session: { id: 55 }, hasLoggedSets: true }, canonicalReload.deps);
+  assert.equal(canonicalReloadCard.card.hidden, true);
+  canonicalReload.rootEl.querySelector("[data-movement-show]").click();
+  assert.equal(canonicalReloadCard.card.hidden, false);
+  assert.doesNotMatch(storage.getItem("cairn.movement-stop.v1"), /"session_key":"session:55"/);
+  assert.match(
+    storage.getItem("cairn.movement-stop.v1"),
+    /prepared-workout-1/,
+    "canonical restore removes only its exact marker",
+  );
+
+  const abandonedStagedReload = loadController({ apiImpl, contextOverrides });
+  const abandonedStagedCard = addMovementCheckCard(abandonedStagedReload.rootEl, { withSet: true });
+  abandonedStagedReload.controller.wireSessionSurface({
+    session: stagedSession,
+    hasLoggedSets: true,
+  }, abandonedStagedReload.deps);
+  assert.equal(abandonedStagedCard.card.hidden, true, "staged A remains available only under staged A identity");
+});
+
+test("Stop here degrades to the current DOM when local storage is unavailable", async () => {
+  const failingStorage = {
+    getItem: () => { throw new Error("storage unavailable"); },
+    setItem: () => { throw new Error("storage unavailable"); },
+  };
+  const symptom = { id: 18, area_text: "right shoulder", status: "active", movement_readiness: [] };
+  const apiImpl = async (path, opts) => {
+    if (path.startsWith("/training-symptoms?")) return [symptom];
+    if (path === "/training-symptoms/observation") {
+      const request = JSON.parse(opts.body);
+      return {
+        ok: true,
+        date: request.date,
+        session_id: 44,
+        exercise: { id: 3, name: request.movement, muscle_group: "chest" },
+        outcome: "pain_present",
+        symptom,
+      };
+    }
+    return { ok: true };
+  };
+  const first = loadController({ apiImpl, contextOverrides: { localStorage: failingStorage } });
+  const firstCard = addMovementCheckCard(first.rootEl, { withSet: true });
+  first.controller.wireSessionSurface({ session: { id: 44 }, hasLoggedSets: true }, first.deps);
+  firstCard.details.open = true;
+  firstCard.details.dispatch("toggle");
+  await flushAsync();
+  firstCard.body.querySelectorAll("[data-movement-outcome]")
+    .find((button) => button.dataset.movementOutcome === "pain_present")
+    .click();
+  await flushAsync();
+  firstCard.body.querySelector("[data-movement-stop]").click();
+  assert.equal(firstCard.card.hidden, true);
+
+  const reload = loadController({ apiImpl, contextOverrides: { localStorage: failingStorage } });
+  const reloadCard = addMovementCheckCard(reload.rootEl, { withSet: true });
+  assert.doesNotThrow(() =>
+    reload.controller.wireSessionSurface({ session: { id: 44 }, hasLoggedSets: true }, reload.deps));
+  assert.equal(reloadCard.card.hidden, false, "storage failure never blocks the session UI");
+});
+
+test("Movement check alternatives use the bounded same-pattern read and never mutate the future plan", () => {
+  const source = readFileSync(join(root, "src/client/today-session-feedback-client.ts"), "utf8");
+  assert.match(source, /\/program\/variations\?exercise=.*mode=alternatives/);
+  assert.match(source, /#addExGo/);
+  assert.match(source, /\.ex-skip/);
+  assert.doesNotMatch(source, /\/program\/swap\/apply/);
+});
 
 test("timed logging stopwatch starts from zero, uses an absolute clock, resumes, pauses for log, and cleans detached rows", async () => {
   let now = 100_000;

@@ -37,6 +37,15 @@ type DoneHighlights =
     }
   | null
   | undefined;
+type DoneOutcomeRead =
+  | {
+      athlete_read?: {
+        learning?: unknown;
+        next_exposure?: unknown;
+      } | null;
+    }
+  | null
+  | undefined;
 // Runtime app globals this surface reaches for lazily (all absent under the vm test
 // harness, so every access is guarded). Tap-through and the highlights fetch degrade
 // to a calm no-op when they're missing.
@@ -269,6 +278,21 @@ type DoneRuntimeGlobals = typeof globalThis & {
     </div>`;
   }
 
+  // The outcome read is server-authored prose over persisted reconciliation facts.
+  // This client deliberately does no progression inference; it only escapes and
+  // places the words returned by the dedicated endpoint.
+  function doneOutcomeReadHtml(read: DoneOutcomeRead, idAttr: string): string {
+    const athleteRead = read?.athlete_read;
+    const learning = typeof athleteRead?.learning === "string" ? athleteRead.learning.trim() : "";
+    if (!learning) return "";
+    const next = typeof athleteRead?.next_exposure === "string" ? athleteRead.next_exposure.trim() : "";
+    return `<div class="done-outcome" id="doneOutcome-${idAttr}" aria-label="Session learning">
+      <div class="lbl">LEARNING</div>
+      <div class="done-outcome-learning">${escHtml(learning)}</div>
+      ${next ? `<div class="done-outcome-next">${escHtml(next)}</div>` : ""}
+    </div>`;
+  }
+
   // The highlights-dependent chip spans: PR chip first (terracotta), tonnage LAST (it
   // keeps trend value but is no longer the headline). Re-rendered in place on upgrade.
   function doneChipSpans(durationMin: unknown, sets: LoggedSetLike[], highlights: DoneHighlights): string {
@@ -309,6 +333,7 @@ type DoneRuntimeGlobals = typeof globalThis & {
       ? `<div class="done-journey">${escHtml(journeyMove.exercise)} estimated 1RM moved +${Number(journeyMove.capacity_delta_lb).toFixed(1)} lb${Number(journeyMove.gap_closed_lb) > 0 ? ` · ${Number(journeyMove.gap_closed_lb).toFixed(1)} lb of the gap closed` : ""}.</div>`
       : "";
     if (!highlights) scheduleDoneCardHydration(row.duration_min, sets, sid, seq);
+    scheduleDoneOutcomeHydration(sid, seq);
     return `<div class="sessiondone reveal" style="--i:2" id="doneCard-${idAttr}" data-done-seq="${seq}">
       <div class="done-mark" aria-hidden="true">✓</div>
       <div class="done-kicker lbl">${options.isToday ? "Today · complete" : "Complete"}</div>
@@ -316,6 +341,7 @@ type DoneRuntimeGlobals = typeof globalThis & {
       <div class="done-chips" id="doneChips-${idAttr}">${doneChipSpans(row.duration_min, sets, highlights)}</div>
       <div id="feedbackSlot" class="feedback-slot done-feedback"></div>
       ${journeyMoveHtml}
+      <div id="doneOutcomeSlot-${idAttr}"></div>
       ${doneAnalysisHtml(sets, highlights, idAttr)}
       ${row.notes ? `<div class="done-notes">“${escHtml(row.notes)}”</div>` : ""}
       <div class="done-actions">
@@ -394,6 +420,44 @@ type DoneRuntimeGlobals = typeof globalThis & {
     if (analysis) analysis.outerHTML = doneAnalysisHtml(sets, highlights, escAttr(sid));
   }
 
+  // Outcome learning is intentionally independent of highlights: a delayed or
+  // failed motivational fetch must never suppress the deterministic post-session
+  // read (and vice versa). The same render nonce prevents a late response from
+  // writing into a card a newer render replaced.
+  function scheduleDoneOutcomeHydration(sid: string, seq: number): void {
+    const g = globalThis as DoneRuntimeGlobals;
+    if (!sid || !g.document || typeof g.api !== "function") return;
+    const kick = () => { void hydrateDoneOutcome(sid, seq, 0); };
+    if (typeof g.requestAnimationFrame === "function") g.requestAnimationFrame(kick);
+    else if (typeof g.setTimeout === "function") g.setTimeout(kick, 0);
+  }
+
+  async function hydrateDoneOutcome(sid: string, seq: number, attempt: number): Promise<void> {
+    const g = globalThis as DoneRuntimeGlobals;
+    const doc = g.document;
+    const fetchApi = g.api;
+    if (!doc || typeof fetchApi !== "function") return;
+    const card = doc.getElementById(`doneCard-${sid}`);
+    if (!card) {
+      if (attempt < 2 && typeof g.setTimeout === "function") {
+        g.setTimeout(() => { void hydrateDoneOutcome(sid, seq, attempt + 1); }, 60);
+      }
+      return;
+    }
+    if (card.getAttribute("data-done-seq") !== String(seq)) return;
+    let read: DoneOutcomeRead = null;
+    try {
+      read = (await fetchApi(`/daily-session/outcome?session_id=${encodeURIComponent(sid)}`)) as DoneOutcomeRead;
+    } catch {
+      return;
+    }
+    const live = doc.getElementById(`doneCard-${sid}`);
+    if (!live || !live.isConnected || live.getAttribute("data-done-seq") !== String(seq)) return;
+    const slot = doc.getElementById(`doneOutcomeSlot-${sid}`);
+    const html = doneOutcomeReadHtml(read, escAttr(sid));
+    if (slot && html) slot.innerHTML = html;
+  }
+
   function todaySessionHasFeedback(session: SessionLike): boolean {
     const row = session && typeof session === "object" ? session : {};
     return row.soreness != null || row.performance != null ||
@@ -467,6 +531,8 @@ type DoneRuntimeGlobals = typeof globalThis & {
     setChipHtml: todaySetChipHtml,
     setsTonnage: todaySetsTonnage,
     sessionDoneCardHtml: todaySessionDoneCardHtml,
+    outcomeReadHtml: doneOutcomeReadHtml,
+    hydrateOutcome: hydrateDoneOutcome,
     hasFeedback: todaySessionHasFeedback,
     feedbackOpenHtml: todayFeedbackOpenHtml,
     feedbackScaleHtml: todayFeedbackScaleHtml,

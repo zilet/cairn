@@ -44,7 +44,14 @@ const inFlight = new Map<string, InFlight>();
 function trackedOutboxRoute(method: string, path: string): boolean {
   if (
     method === "POST" &&
-    ["/sets", "/activities", "/bodyweight", "/food-notes", "/daily-session/prepare"].includes(path)
+    [
+      "/sets",
+      "/activities",
+      "/bodyweight",
+      "/food-notes",
+      "/daily-session/prepare",
+      "/training-symptoms/observation",
+    ].includes(path)
   ) {
     return true;
   }

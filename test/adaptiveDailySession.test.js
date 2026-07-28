@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { beforeEach, test } from "node:test";
-import { prepareDailySessionUseCase } from "../dist/domain/training/adaptive-session-use-case.js";
+import {
+  prepareDailySessionUseCase,
+  previewAdaptiveDailySessionUseCase,
+} from "../dist/domain/training/adaptive-session-use-case.js";
 import { db, repo, resetTables } from "./_seed.js";
 
 const DATE = "2031-04-14";
@@ -8,6 +11,7 @@ const DATE = "2031-04-14";
 beforeEach(() => {
   resetTables(
     "daily_session_compositions",
+    "daily_session_decisions",
     "logged_sets",
     "session_skips",
     "sessions",
@@ -35,6 +39,15 @@ function seedPlan() {
   repo.savePlanDay(2, "Pull", "Back and arms", [
     { exercise: "Lat Pulldown", sets: 3, rep_low: 8, rep_high: 12, target_weight: 120 },
   ]);
+}
+
+function adaptiveWriteCounts() {
+  return Object.fromEntries(
+    ["daily_session_decisions", "daily_session_compositions", "sessions"].map((table) => [
+      table,
+      Number(db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n),
+    ])
+  );
 }
 
 function suggestedSession(name = "Chest + deadlift") {
@@ -201,6 +214,115 @@ test("adaptive prepare snapshots the selected plan day, keeps cardio fields, and
   assert.equal(replaceRetry.daily_session.id, first.daily_session.id);
 });
 
+test("adaptive preview is read-only and prepare persists that exact accepted candidate", () => {
+  seedPlan();
+  const otherDay = repo.getPlanDay(2);
+  db.prepare(`DELETE FROM plan_items WHERE plan_day_id = ?`).run(otherDay.id);
+  db.prepare(`DELETE FROM plan_days WHERE id = ?`).run(otherDay.id);
+  const before = adaptiveWriteCounts();
+
+  const preview = previewAdaptiveDailySessionUseCase({
+    date: DATE,
+    constraints: { day_read_override: "short on time" },
+  });
+
+  assert.deepEqual(adaptiveWriteCounts(), before, "preview creates no decision, composition, or workout rows");
+  assert.deepEqual(Object.keys(preview).sort(), [
+    "constraints",
+    "date",
+    "est_minutes",
+    "focus",
+    "input_fingerprint",
+    "item_count",
+    "kind",
+    "policy_version",
+    "primary_rationale",
+    "source",
+    "title",
+  ]);
+  assert.match(preview.input_fingerprint, /^[a-f0-9]{64}$/);
+  assert.ok(preview.primary_rationale);
+  assert.ok(preview.constraints.every((value) => typeof value === "string"));
+
+  const accepted = prepareDailySessionUseCase({
+    date: DATE,
+    source: "adaptive_plan",
+    constraints: { day_read_override: "short on time" },
+    expected_input_fingerprint: preview.input_fingerprint,
+  });
+  assert.equal(accepted.daily_session.title, preview.title);
+  assert.equal(accepted.daily_session.focus, preview.focus);
+  assert.equal(accepted.daily_session.items.length, preview.item_count);
+  assert.equal(accepted.daily_session.est_minutes, preview.est_minutes);
+  assert.equal(accepted.daily_session.decision.input_fingerprint, preview.input_fingerprint);
+});
+
+test("stale adaptive preview returns fresh truth without writes and succeeds after explicit retry", () => {
+  seedPlan();
+  const otherDay = repo.getPlanDay(2);
+  db.prepare(`DELETE FROM plan_items WHERE plan_day_id = ?`).run(otherDay.id);
+  db.prepare(`DELETE FROM plan_days WHERE id = ?`).run(otherDay.id);
+  const original = previewAdaptiveDailySessionUseCase({ date: DATE });
+
+  repo.savePlanDay(1, "Changed push", "Updated intent", [
+    { exercise: "Barbell Bench Press", sets: 2, rep_low: 8, rep_high: 10, target_weight: 165 },
+  ]);
+  const beforeReject = adaptiveWriteCounts();
+  let stale;
+  try {
+    prepareDailySessionUseCase({
+      date: DATE,
+      source: "adaptive_plan",
+      expected_input_fingerprint: original.input_fingerprint,
+    });
+    assert.fail("stale preview must not prepare");
+  } catch (error) {
+    stale = error;
+  }
+  assert.equal(stale.code, "daily_session_preview_stale");
+  assert.notEqual(stale.preview.input_fingerprint, original.input_fingerprint);
+  assert.deepEqual(adaptiveWriteCounts(), beforeReject, "stale compare-and-set performs no writes");
+
+  const accepted = prepareDailySessionUseCase({
+    date: DATE,
+    source: "adaptive_plan",
+    expected_input_fingerprint: stale.preview.input_fingerprint,
+  });
+  assert.equal(accepted.ok, true);
+  assert.equal(accepted.daily_session.decision.input_fingerprint, stale.preview.input_fingerprint);
+  assert.equal(accepted.daily_session.title, stale.preview.title);
+});
+
+test("a reviewed preview never opens an unrelated composition accepted in another tab", () => {
+  seedPlan();
+  const preview = previewAdaptiveDailySessionUseCase({ date: DATE });
+  const other = prepare({
+    date: DATE,
+    source: "athlete_override",
+    session: {
+      name: "Other accepted session",
+      why: "Chosen elsewhere.",
+      items: [{ exercise: "Lat Pulldown", sets: 2, rep_low: 8, rep_high: 10 }],
+    },
+  });
+  const beforeReject = adaptiveWriteCounts();
+
+  let changed;
+  try {
+    prepareDailySessionUseCase({
+      date: DATE,
+      source: "adaptive_plan",
+      expected_input_fingerprint: preview.input_fingerprint,
+    });
+    assert.fail("the reviewed adaptive preview must not resolve to another active composition");
+  } catch (error) {
+    changed = error;
+  }
+  assert.equal(changed.code, "daily_session_active_changed");
+  assert.deepEqual(adaptiveWriteCounts(), beforeReject, "the cross-tab conflict performs no writes");
+  assert.equal(repo.getActiveDailySession(DATE).id, other.daily_session.id);
+});
+
 test("an unstarted adaptive retry recomputes current plan evidence before reusing", () => {
   seedPlan();
   const first = prepare({ date: DATE, source: "adaptive_plan" });
@@ -311,6 +433,36 @@ test("expected_active_id only returns the matching composition and never mutates
     .all(DATE)
     .map((row) => ({ ...row }));
   assert.deepEqual(after, before);
+});
+
+test("athlete-authored sessions cannot forge accountable brain-decision metadata", () => {
+  const prepared = prepare({
+    date: DATE,
+    source: "athlete_override",
+    session: {
+      name: "Custom",
+      why: "Athlete-authored session.",
+      items: [
+        {
+          exercise: "Bench Press",
+          sets: 3,
+          rep_low: 6,
+          rep_high: 8,
+          brain_decision_id: 42,
+          brain_change_summary: "Forged coaching change",
+          brain_change_reason: "Pretend this came from Cairn.",
+          brain_change_reason_provenance: { source: "forged" },
+          brain_change_reversible: true,
+        },
+      ],
+    },
+  });
+  const item = prepared.daily_session.items[0];
+  assert.equal(item.brain_decision_id, null);
+  assert.equal(item.brain_change_summary, null);
+  assert.equal(item.brain_change_reason, null);
+  assert.equal(item.brain_change_reason_provenance, null);
+  assert.equal(item.brain_change_reversible, null);
 });
 
 test("replacement supersedes history before logging and refuses after logging starts", () => {

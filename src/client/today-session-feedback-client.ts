@@ -17,6 +17,15 @@ type TodaySessionFeedbackDeps = {
 
 type ClientTrainingSymptom = import("../contracts/client-api.js").ClientTrainingSymptom;
 type SymptomLifecycleLoggedSet = import("../contracts/client-api.js").ClientLoggedSet;
+type MovementCheckObservationResponse =
+  import("../contracts/client-api.js").ClientExerciseSymptomObservationResponse;
+type MovementCheckVariation = import("../contracts/client-api.js").ClientExerciseVariation;
+type MovementStopMarker = {
+  date: string;
+  session_key: string;
+  movement_key: string;
+  ts: number;
+};
 
 (() => {
   function responseRecord(value: unknown): Record<string, unknown> {
@@ -259,6 +268,463 @@ type SymptomLifecycleLoggedSet = import("../contracts/client-api.js").ClientLogg
       }));
   }
 
+  function movementCheckSymptoms(value: unknown): ClientTrainingSymptom[] {
+    return responseSymptoms(value).filter((symptom) => symptom.status === "active");
+  }
+
+  function movementCheckChoicesHtml(hasSets: boolean): string {
+    return `<div class="pill-group" data-movement-current-choices>
+      <button class="linkbtn linkbtn-plain linkbtn-sm" type="button" data-movement-ease>Ease this</button>
+      ${hasSets
+        ? `<button class="linkbtn linkbtn-quiet linkbtn-sm" type="button" data-movement-stop>Stop here</button>`
+        : `<button class="linkbtn linkbtn-quiet linkbtn-sm" type="button" data-movement-alternatives>Use another movement</button>
+           <button class="linkbtn linkbtn-quiet linkbtn-sm" type="button" data-movement-skip>Skip today</button>`}
+    </div>`;
+  }
+
+  function movementCheckLoadedHtml(symptoms: ClientTrainingSymptom[]): string {
+    symptoms = symptoms.filter((symptom) => symptom.status === "active");
+    if (!symptoms.length) {
+      return `<div class="sess-line">If something hurts, name the exact area so this check stays specific.</div>
+        <div class="feedback-joint-wrap">
+          <input class="feedback-joint" data-movement-area type="text" autocomplete="off"
+            placeholder="exact area, e.g. front of right knee">
+          <div class="pill-group">
+            <button class="linkbtn linkbtn-plain linkbtn-sm" type="button"
+              data-movement-outcome="pain_present">Something hurts</button>
+          </div>
+        </div>`;
+    }
+    return symptoms.map((symptom) => `<div data-movement-symptom="${escAttr(symptom.id)}">
+        <div class="sess-line"><strong>${escHtml(symptom.area_text)}</strong></div>
+        <div class="pill-group">
+          <button class="linkbtn linkbtn-plain linkbtn-sm" type="button"
+            data-movement-outcome="pain_free" data-symptom-id="${escAttr(symptom.id)}"
+            data-symptom-area="${escAttr(symptom.area_text)}">Pain-free today</button>
+          <button class="linkbtn linkbtn-quiet linkbtn-sm" type="button"
+            data-movement-outcome="pain_present" data-symptom-id="${escAttr(symptom.id)}"
+            data-symptom-area="${escAttr(symptom.area_text)}">Pain present</button>
+        </div>
+      </div>`).join("");
+  }
+
+  function movementCheckPainPresentHtml(area: string, queued: boolean, hasSets: boolean): string {
+    const saved = queued ? "Pain present saved — it will sync when you're back online." : "Pain present noted.";
+    return `<div class="sess-line"><strong>${escHtml(area || "Pain present")}</strong> · ${escHtml(saved)}
+      Choose what fits this session; this does not change your weekly plan.</div>
+      ${movementCheckChoicesHtml(hasSets)}`;
+  }
+
+  function movementCheckPainFreeHtml(area: string, queued: boolean): string {
+    const saved = queued
+      ? "Pain-free check saved — it will sync when you're back online."
+      : "Pain-free today recorded.";
+    return `<div class="sess-line"><strong>${escHtml(area)}</strong> · ${escHtml(saved)}
+      The symptom stays open; one pain-free check does not change its status.</div>`;
+  }
+
+  function movementCheckSessionId(
+    session: Record<string, unknown>,
+    deps: ClientTodaySessionControllerDeps,
+    date: string,
+  ): number | null {
+    if (session._staged_offline === true) return null;
+    const id = Number(deps.state.sessionIdsByDate?.[date] ?? session.id);
+    return Number.isInteger(id) && id > 0 ? id : null;
+  }
+
+  const MOVEMENT_STOP_STORAGE_KEY = "cairn.movement-stop.v1";
+  const MOVEMENT_STOP_MAX = 32;
+  const MOVEMENT_STOP_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+  function movementStopKey(movement: string): string {
+    return movement.trim().toLowerCase().replace(/\s+/g, " ");
+  }
+
+  function validMovementStopSessionKey(value: unknown): value is string {
+    return (
+      typeof value === "string" &&
+      value.length <= 180 &&
+      /^(?:session|daily|prepare):[A-Za-z0-9._:-]+$/.test(value)
+    );
+  }
+
+  function movementStopMarkers(): MovementStopMarker[] {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(MOVEMENT_STOP_STORAGE_KEY) || "[]");
+      if (!Array.isArray(parsed)) return [];
+      const cutoff = Date.now() - MOVEMENT_STOP_MAX_AGE_MS;
+      return parsed
+        .filter((marker): marker is MovementStopMarker =>
+          !!marker &&
+          typeof marker === "object" &&
+          /^\d{4}-\d{2}-\d{2}$/.test(String(marker.date || "")) &&
+          validMovementStopSessionKey(marker.session_key) &&
+          typeof marker.movement_key === "string" &&
+          marker.movement_key.length > 0 &&
+          marker.movement_key.length <= 160 &&
+          Number.isFinite(Number(marker.ts)) &&
+          Number(marker.ts) >= cutoff &&
+          Number(marker.ts) <= Date.now() + 60_000)
+        .sort((left, right) => Number(right.ts) - Number(left.ts))
+        .slice(0, MOVEMENT_STOP_MAX);
+    } catch {
+      return [];
+    }
+  }
+
+  function writeMovementStopMarkers(markers: MovementStopMarker[]): boolean {
+    try {
+      const bounded = markers
+        .sort((left, right) => Number(right.ts) - Number(left.ts))
+        .slice(0, MOVEMENT_STOP_MAX);
+      const serialized = JSON.stringify(bounded);
+      localStorage.setItem(MOVEMENT_STOP_STORAGE_KEY, serialized);
+      return localStorage.getItem(MOVEMENT_STOP_STORAGE_KEY) === serialized;
+    } catch {
+      return false;
+    }
+  }
+
+  function movementStopSessionKey(
+    session: Record<string, unknown>,
+    deps: ClientTodaySessionControllerDeps,
+    date: string,
+    preferred?: unknown,
+  ): string | null {
+    if (validMovementStopSessionKey(preferred)) return preferred;
+    const localPrepareId = String(session._local_prepare_id || "").trim();
+    if (session._staged_offline === true && localPrepareId) return `prepare:${localPrepareId}`;
+    const sessionId = movementCheckSessionId(session, deps, date);
+    const dailySession =
+      session.daily_session && typeof session.daily_session === "object"
+        ? session.daily_session as Record<string, unknown>
+        : null;
+    const dailyId = Number(dailySession?.id);
+    const runtime = globalThis as {
+      outboxSessionGroupId?: (
+        value: string,
+        identity?: { sessionId?: unknown; dailySessionId?: unknown },
+      ) => string;
+    };
+    const group = runtime.outboxSessionGroupId?.(date, {
+      sessionId,
+      dailySessionId: Number.isInteger(dailyId) && dailyId > 0 ? dailyId : undefined,
+    });
+    if (validMovementStopSessionKey(group)) return group;
+    if (sessionId != null) return `session:${sessionId}`;
+    if (Number.isInteger(dailyId) && dailyId > 0) return `daily:${dailyId}`;
+    return localPrepareId ? `prepare:${localPrepareId}` : null;
+  }
+
+  function saveMovementStop(date: string, sessionKey: string | null, movement: string): boolean {
+    if (!validMovementStopSessionKey(sessionKey)) return false;
+    const movementKey = movementStopKey(movement);
+    if (!movementKey || movementKey.length > 160) return false;
+    const markers = movementStopMarkers().filter((marker) =>
+      !(marker.date === date && marker.session_key === sessionKey && marker.movement_key === movementKey));
+    markers.unshift({ date, session_key: sessionKey, movement_key: movementKey, ts: Date.now() });
+    return writeMovementStopMarkers(markers);
+  }
+
+  function clearMovementStop(date: string, sessionKey: string | null, movement: string): boolean {
+    if (!validMovementStopSessionKey(sessionKey)) return false;
+    const movementKey = movementStopKey(movement);
+    const markers = movementStopMarkers();
+    const next = markers.filter((marker) =>
+      !(marker.date === date && marker.session_key === sessionKey && marker.movement_key === movementKey));
+    return next.length !== markers.length && writeMovementStopMarkers(next);
+  }
+
+  function hasMovementStop(
+    date: string,
+    sessionKey: string | null,
+    movement: string,
+  ): boolean {
+    if (!validMovementStopSessionKey(sessionKey)) return false;
+    const movementKey = movementStopKey(movement);
+    return movementStopMarkers().some((marker) =>
+      marker.date === date && marker.session_key === sessionKey && marker.movement_key === movementKey);
+  }
+
+  function movementStopPlaceholder(
+    card: HTMLElement,
+    movement: string,
+    date: string,
+    sessionKey: string | null,
+    deps: ClientTodaySessionControllerDeps,
+  ): HTMLElement | null {
+    const sibling = card.nextElementSibling as HTMLElement | null;
+    if (
+      sibling?.dataset.movementStopPlaceholder === "1" &&
+      sibling.dataset.movementStopKey === movementStopKey(movement)
+    ) {
+      return sibling;
+    }
+    const placeholder = document.createElement("div");
+    placeholder.className = "skipline";
+    placeholder.dataset.movementStopPlaceholder = "1";
+    placeholder.dataset.movementStopKey = movementStopKey(movement);
+    placeholder.innerHTML = `<span class="sess-line"><strong>${escHtml(movement)}</strong> stopped here.</span>
+      <button class="linkbtn linkbtn-quiet linkbtn-sm" type="button" data-movement-show>Show movement</button>`;
+    card.parentElement?.insertBefore(placeholder, card.nextElementSibling);
+    placeholder.querySelector<HTMLElement>("[data-movement-show]")?.addEventListener("click", () => {
+      const restored = clearMovementStop(date, sessionKey, movement);
+      card.hidden = false;
+      deps.expandEl(card);
+      placeholder.remove();
+      deps.toast(restored ? `${movement} is visible again.` : `${movement} is visible for now.`);
+    });
+    return placeholder;
+  }
+
+  function suppressMovementCard(
+    card: HTMLElement,
+    movement: string,
+    date: string,
+    sessionKey: string | null,
+    deps: ClientTodaySessionControllerDeps,
+    animate: boolean,
+  ): void {
+    const hide = () => {
+      card.hidden = true;
+      movementStopPlaceholder(card, movement, date, sessionKey, deps);
+    };
+    if (animate) deps.collapseEl(card, hide);
+    else hide();
+  }
+
+  function movementCheckStillCurrent(
+    details: HTMLDetailsElement,
+    card: HTMLElement,
+    deps: ClientTodaySessionControllerDeps,
+    date: string,
+    tab: string | undefined,
+    token?: string,
+  ): boolean {
+    if (deps.state.logDate !== date || deps.state.tab !== tab) return false;
+    if (details.isConnected === false || card.isConnected === false) return false;
+    return token == null || details.dataset.movementRequest === token;
+  }
+
+  function wireMovementChoiceActions(
+    body: HTMLElement,
+    details: HTMLDetailsElement,
+    card: HTMLElement,
+    movement: string,
+    deps: ClientTodaySessionControllerDeps,
+    date: string,
+    tab: string | undefined,
+    sessionKey: string | null,
+  ): void {
+    body.querySelector<HTMLElement>("[data-movement-ease]")?.addEventListener("click", () => {
+      if (!movementCheckStillCurrent(details, card, deps, date, tab)) return;
+      details.open = false;
+      const dose = card.querySelector<HTMLInputElement>(".in-w, .in-dur, .in-r");
+      dose?.scrollIntoView({ behavior: "smooth", block: "center" });
+      dose?.focus();
+      deps.toast("Choose the lower load or shorter dose that fits today.");
+    });
+    body.querySelector<HTMLElement>("[data-movement-stop]")?.addEventListener("click", () => {
+      if (!movementCheckStillCurrent(details, card, deps, date, tab)) return;
+      card.dataset.stoppedHere = "1";
+      saveMovementStop(date, sessionKey, movement);
+      suppressMovementCard(card, movement, date, sessionKey, deps, true);
+      deps.toast("Stopped here — your logged work stays in this session.");
+    });
+    body.querySelector<HTMLElement>("[data-movement-skip]")?.addEventListener("click", () => {
+      if (!movementCheckStillCurrent(details, card, deps, date, tab)) return;
+      card.querySelector<HTMLElement>(".ex-skip")?.click();
+    });
+    body.querySelector<HTMLElement>("[data-movement-alternatives]")?.addEventListener("click", async () => {
+      if (!movementCheckStillCurrent(details, card, deps, date, tab)) return;
+      const token = `${Date.now()}:${Math.random()}`;
+      details.dataset.movementRequest = token;
+      body.innerHTML = `<div class="sess-line">Finding same-pattern options…</div>`;
+      let variations: MovementCheckVariation[];
+      try {
+        const value = await deps.api(
+          `/program/variations?exercise=${encodeURIComponent(movement)}&mode=alternatives`,
+        );
+        variations = Array.isArray(value)
+          ? value.filter((row): row is MovementCheckVariation =>
+              !!row && typeof row === "object" && typeof (row as MovementCheckVariation).name === "string")
+          : [];
+      } catch {
+        if (movementCheckStillCurrent(details, card, deps, date, tab, token)) {
+          body.innerHTML = `<div class="sess-line">Movement options couldn't load right now.</div>`;
+        }
+        return;
+      }
+      if (!movementCheckStillCurrent(details, card, deps, date, tab, token)) return;
+      body.innerHTML = variations.length
+        ? `<div class="sess-line">Same-pattern ideas only — choose one you already know feels tolerable.</div>
+           <div class="pill-group">
+             ${variations.map((variation) =>
+               `<button class="linkbtn linkbtn-quiet linkbtn-sm" type="button"
+                 data-movement-alternative="${escAttr(variation.name)}">${escHtml(variation.name)}</button>`
+             ).join("")}
+           </div>`
+        : `<div class="sess-line">No same-pattern options are available here. Ease this movement or skip it today.</div>`;
+      body.querySelectorAll<HTMLElement>("[data-movement-alternative]").forEach((button) =>
+        button.addEventListener("click", () => {
+          if (!movementCheckStillCurrent(details, card, deps, date, tab, token)) return;
+          const alternative = String(button.dataset.movementAlternative || "").trim();
+          const addButton = deps.root.querySelector<HTMLElement>("#addExBtn");
+          const input = deps.root.querySelector<HTMLInputElement>("#addExInput");
+          const add = deps.root.querySelector<HTMLElement>("#addExGo");
+          const skip = card.querySelector<HTMLElement>(".ex-skip");
+          if (!alternative || !addButton || !input || !add || !skip) {
+            deps.toast("Use + Add exercise for that option, then skip this movement.");
+            return;
+          }
+          if (!addButton.hidden) addButton.click();
+          input.value = alternative;
+          add.click();
+          skip.click();
+          deps.toast(`${alternative} is staged for this session — log a set to make it part of today's work.`);
+        }));
+    });
+  }
+
+  function wireMovementObservationActions(
+    body: HTMLElement,
+    details: HTMLDetailsElement,
+    card: HTMLElement,
+    movement: string,
+    session: Record<string, unknown>,
+    deps: ClientTodaySessionControllerDeps,
+    date: string,
+    tab: string | undefined,
+  ): void {
+    body.querySelectorAll<HTMLElement>("[data-movement-outcome]").forEach((button) =>
+      button.addEventListener("click", async () => {
+        if (!movementCheckStillCurrent(details, card, deps, date, tab)) return;
+        const outcome = button.dataset.movementOutcome === "pain_free" ? "pain_free" : "pain_present";
+        const symptomId = Number(button.dataset.symptomId);
+        const areaInput = body.querySelector<HTMLInputElement>("[data-movement-area]");
+        const area = areaInput?.value.trim() || "";
+        const symptomArea = String(button.dataset.symptomArea || "").trim();
+        if (outcome === "pain_present" && !Number.isInteger(symptomId) && !area) {
+          deps.toast("Name the exact area first.");
+          areaInput?.focus();
+          return;
+        }
+        const sessionId = movementCheckSessionId(session, deps, date);
+        const requestBody = {
+          date,
+          movement,
+          ...(sessionId ? { session_id: sessionId } : {}),
+          ...(Number.isInteger(symptomId) && symptomId > 0 ? { symptom_event_id: symptomId } : {}),
+          ...(area ? { area_text: area } : {}),
+          outcome,
+        };
+        const mutation = await runSessionMutation({
+          date,
+          kind: "symptom_observation",
+          path: "/training-symptoms/observation",
+          body: requestBody,
+          identity: { sessionId },
+        }, (idempotencyKey) => deps.api("/training-symptoms/observation", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Idempotency-Key": idempotencyKey },
+          body: JSON.stringify(requestBody),
+        }));
+        if (!movementCheckStillCurrent(details, card, deps, date, tab)) return;
+        const hasSets = card.querySelectorAll("[data-logged] .chip").length > 0;
+        if (mutation.status === "queued") {
+          body.innerHTML = outcome === "pain_present"
+            ? movementCheckPainPresentHtml(symptomArea || area || "Pain present", true, hasSets)
+            : movementCheckPainFreeHtml(symptomArea || "Pain-free check", true);
+          if (outcome === "pain_present") {
+            wireMovementChoiceActions(
+              body,
+              details,
+              card,
+              movement,
+              deps,
+              date,
+              tab,
+              movementStopSessionKey(session, deps, date, mutation.groupId),
+            );
+          }
+          return;
+        }
+        if (mutation.status !== "sent") {
+          const message = mutation.status === "blocked"
+            ? "An earlier saved change in this workout needs attention before this movement check."
+            : mutation.status === "storage_error"
+              ? "This movement check couldn't be saved on this device."
+              : "This movement check couldn't be saved — try again.";
+          body.innerHTML = `<div class="sess-line">${escHtml(message)}</div>`;
+          return;
+        }
+        const result = responseRecord(mutation.value) as unknown as MovementCheckObservationResponse;
+        if (
+          result.ok !== true ||
+          String(result.date) !== date ||
+          (sessionId != null && Number(result.session_id) !== sessionId) ||
+          String(result.exercise?.name || "").toLowerCase() !== movement.toLowerCase()
+        ) return;
+        const resultArea = String(result.symptom?.area_text || area || "Pain present");
+        if (result.outcome === "pain_present") {
+          body.innerHTML = movementCheckPainPresentHtml(resultArea, false, hasSets);
+          wireMovementChoiceActions(
+            body,
+            details,
+            card,
+            movement,
+            deps,
+            date,
+            tab,
+            movementStopSessionKey(session, deps, date, mutation.groupId),
+          );
+        } else {
+          body.innerHTML = movementCheckPainFreeHtml(resultArea, false);
+        }
+      }));
+  }
+
+  function wireMovementChecks(
+    session: Record<string, unknown>,
+    deps: ClientTodaySessionControllerDeps,
+  ): void {
+    const date = deps.state.logDate;
+    const tab = deps.state.tab;
+    const sessionKey = movementStopSessionKey(session, deps, date);
+    deps.root.querySelectorAll<HTMLDetailsElement>("[data-movement-check]").forEach((details) => {
+      if (details.dataset.wired) return;
+      details.dataset.wired = "1";
+      const card = details.closest<HTMLElement>(".ex");
+      const body = details.querySelector<HTMLElement>("[data-movement-check-body]");
+      const movement = String(details.dataset.movement || "").trim();
+      if (!card || !body || !movement) return;
+      if (hasMovementStop(date, sessionKey, movement)) {
+        suppressMovementCard(card, movement, date, sessionKey, deps, false);
+      }
+      details.addEventListener("toggle", async () => {
+        if (!details.open || !movementCheckStillCurrent(details, card, deps, date, tab)) return;
+        const token = `${Date.now()}:${Math.random()}`;
+        details.dataset.movementRequest = token;
+        body.innerHTML = `<div class="sess-line">Loading movement notes…</div>`;
+        let symptoms: ClientTrainingSymptom[];
+        try {
+          symptoms = movementCheckSymptoms(await deps.api(
+            `/training-symptoms?on=${encodeURIComponent(date)}&movement=${encodeURIComponent(movement)}`,
+          ));
+        } catch {
+          if (movementCheckStillCurrent(details, card, deps, date, tab, token)) {
+            body.innerHTML = `<div class="sess-line">Movement notes couldn't load right now.</div>`;
+          }
+          return;
+        }
+        if (!movementCheckStillCurrent(details, card, deps, date, tab, token) || !details.open) return;
+        body.innerHTML = movementCheckLoadedHtml(symptoms);
+        wireMovementObservationActions(body, details, card, movement, session, deps, date, tab);
+      });
+    });
+  }
+
   function renderFeedbackForm(slot: Element, session: Record<string, unknown>, deps: TodaySessionFeedbackDeps): void {
     slot.innerHTML = deps.sessionStatus.feedbackFormHtml(session);
     void renderSymptomLifecycle(slot, session, deps);
@@ -348,7 +814,9 @@ type SymptomLifecycleLoggedSet = import("../contracts/client-api.js").ClientLogg
   }
 
   const CAIRN_TODAY_SESSION_FEEDBACK = {
+    movementCheckLoadedHtml,
     renderFeedback,
+    wireMovementChecks,
   };
 
   Object.assign(globalThis, { CairnTodaySessionFeedback: CAIRN_TODAY_SESSION_FEEDBACK });

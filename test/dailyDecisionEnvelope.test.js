@@ -59,7 +59,7 @@ test("same snapshot yields identical fingerprint and envelope content", () => {
   assert.equal(a.input_fingerprint, b.input_fingerprint);
   assert.equal(a.input_fingerprint, dailyDecisionFingerprint(snap));
   assert.deepEqual(a, b);
-  assert.equal(a.policy_version, "daily_decision_v3");
+  assert.equal(a.policy_version, "daily_decision_v4");
 });
 
 test("fingerprint is stable across object key insertion order", () => {
@@ -79,7 +79,36 @@ test("fingerprint changes when a load-bearing input changes", () => {
 });
 
 test("healthy training day carries the plan with progression reason codes", () => {
-  const env = buildDailySessionDecision(snapshot(), { now: NOW });
+  const snap = snapshot();
+  snap.progression[0] = {
+    ...snap.progression[0],
+    current_target: {
+      mode: "reps",
+      sets: 3,
+      rep_low: 5,
+      rep_high: 7,
+      target_weight: 225,
+      target_seconds: null,
+    },
+    suggested_target: {
+      mode: "reps",
+      sets: 3,
+      rep_low: 5,
+      rep_high: 7,
+      target_weight: 230,
+      target_seconds: null,
+    },
+    evidence: {
+      delta_text: "+5 lb",
+      why: "Two clean sessions",
+      reground: false,
+      autoregulated: false,
+      movement_response: "insufficient",
+      rep_step: false,
+      dose_eligibility: { linked_outcome: true, eligible: true, reason: "full_comparable" },
+    },
+  };
+  const env = buildDailySessionDecision(snap, { now: NOW });
   assert.equal(env.kind, "train");
   assert.equal(env.template.intent, "template");
   assert.equal(env.caps.volume, "normal");
@@ -87,6 +116,10 @@ test("healthy training day carries the plan with progression reason codes", () =
   const squat = env.candidates.find((c) => c.exercise === "Back Squat");
   assert.equal(squat.action, "overload");
   assert.equal(squat.reason_code, "progression_overload");
+  assert.equal(squat.current_target.target_weight, 225);
+  assert.equal(squat.authorized_target.target_weight, 230);
+  assert.equal(squat.progression_evidence.delta_text, "+5 lb");
+  assert.equal(squat.progression_evidence.dose_eligibility.reason, "full_comparable");
   assert.ok(env.muscles.required.includes("quads"));
 });
 

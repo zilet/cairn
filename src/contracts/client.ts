@@ -107,7 +107,8 @@ export interface ClientDayRead {
       until: ISODateString;
       day_index: number;
       total_days: 7;
-      proposal_id: number;
+      proposal_id: number | null;
+      cycle_id?: number;
       label: "reduced volume";
     } | null;
   };

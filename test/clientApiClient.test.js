@@ -629,6 +629,11 @@ test("every central workout fallback persists its date and canonical group outsi
     { kind: "set", path: "/sets", body: { exercise: "Bench", reps: 5 } },
     { kind: "skip", path: "/sessions/skip", body: { exercise: "Squat" } },
     { kind: "restore", path: "/sessions/skip", method: "DELETE", body: { exercise: "Squat" } },
+    {
+      kind: "symptom_observation",
+      path: "/training-symptoms/observation",
+      body: { date, movement: "Bench", symptom_event_id: 9, outcome: "pain_present" },
+    },
     { kind: "finish", path: "/sessions/44/finish", body: { notes: "done" } },
   ];
   for (const mutation of mutations) {
@@ -645,7 +650,13 @@ test("every central workout fallback persists its date and canonical group outsi
   }
 
   const stored = loaded.context.CairnOutbox.list();
-  assert.deepEqual(JSON.parse(JSON.stringify(stored.map((item) => item.kind))), ["set", "skip", "restore", "finish"]);
+  assert.deepEqual(JSON.parse(JSON.stringify(stored.map((item) => item.kind))), [
+    "set",
+    "skip",
+    "restore",
+    "symptom_observation",
+    "finish",
+  ]);
   assert.equal(
     stored.every((item) => item.session_date === date),
     true
@@ -832,6 +843,58 @@ test("direct semantic rejection stays durable and reviewable without mutating th
     [["skip", "attention"]]
   );
   assert.equal(loaded.context.CairnOutbox.list()[0].claim_token, undefined);
+});
+
+test("movement-check semantic rejection blocks later same-workout siblings but not another date", async () => {
+  const loaded = loadApiClient();
+  const date = "2026-06-30";
+  const rejected = await loaded.context.runSessionMutation(
+    {
+      date,
+      kind: "symptom_observation",
+      path: "/training-symptoms/observation",
+      body: { date, movement: "Bench", symptom_event_id: 9, outcome: "pain_free" },
+      identity: { sessionId: 44 },
+    },
+    async () => ({ ok: false, error: "symptom no longer active" })
+  );
+  let sameWorkoutSends = 0;
+  const sameWorkout = await loaded.context.runSessionMutation(
+    {
+      date,
+      kind: "set",
+      path: "/sets",
+      body: { date, exercise: "Bench", reps: 5 },
+      identity: { sessionId: 44 },
+    },
+    async () => {
+      sameWorkoutSends++;
+      return { id: 1 };
+    }
+  );
+  const otherDate = await loaded.context.runSessionMutation(
+    {
+      date: "2026-07-01",
+      kind: "set",
+      path: "/sets",
+      body: { date: "2026-07-01", exercise: "Row", reps: 8 },
+      identity: { sessionId: 45 },
+    },
+    async () => ({ id: 2 })
+  );
+
+  assert.equal(rejected.status, "sent");
+  assert.equal(sameWorkout.status, "queued");
+  assert.equal(sameWorkoutSends, 0);
+  assert.equal(otherDate.status, "sent");
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(loaded.context.CairnOutbox.reviewItems().map(({ item, role }) => [item.kind, role]))),
+    [
+      ["symptom_observation", "attention"],
+      ["set", "blocked_dependent"],
+    ]
+  );
+  assert.match(loaded.context.CairnOutbox.itemSummary(loaded.context.CairnOutbox.list()[0]), /Pain-free today · Bench/);
 });
 
 test("direct permanent failure marks the write-ahead row for attention", async () => {

@@ -75,9 +75,16 @@ Because this is a brand-new table, current repository convention creates it idem
 ### Current surfaces
 
 - `GET /api/daily-session?date=YYYY-MM-DD` returns the active composition or null.
-- `POST /api/daily-session/prepare` accepts `date`, `day_number`, `source`, optional athlete-authored `session`, `constraints`, `provenance`, `replace`, the explicit `train_anyway` athlete override, and an authoritative top-level `agent_job_id`. `agent_suggest` requires a completed, matching-date session-suggest job and reloads its canonical result server-side; inline custom payloads use `athlete_override`. It returns `{ok, daily_session, session, reused}`.
+- `GET /api/daily-session/preview?date=…&override=…&train_anyway=…` is a read-only view of the exact adaptive candidate shown before Start. It returns the calm public summary plus `input_fingerprint`, and never records a decision or creates a workout row.
+- `POST /api/daily-session/prepare` accepts `date`, `day_number`, `source`, optional athlete-authored `session`, `constraints`, `provenance`, `replace`, the explicit `train_anyway` athlete override, an authoritative top-level `agent_job_id`, and `expected_input_fingerprint` for adaptive compare-and-set acceptance. A stale fingerprint returns a fresh preview without writing. `agent_suggest` requires a completed, matching-date session-suggest job and reloads its canonical result server-side; inline custom payloads use `athlete_override`. It returns `{ok, daily_session, session, reused}`.
 - MCP `get_daily_session` mirrors the read.
+- MCP `preview_daily_session` mirrors the read-only adaptive preview.
 - MCP `prepare_daily_session` mirrors preparation and replacement.
+- `POST /api/training-symptoms/observation` and MCP
+  `record_exercise_symptom_observation` share one atomic session-bound command for pain-present and
+  pain-free movement evidence. The command validates the canonical movement exposure, keeps
+  pain-present precedence for contradictory same-exposure taps, and participates in durable
+  idempotent replay.
 - Training-session responses include the nullable `daily_session` association.
 
 The PWA now:
@@ -85,6 +92,13 @@ The PWA now:
 - shows **Use this session** on a completed suggestion instead of silently activating it;
 - prepares a canonical snapshot before entering the isolated Session screen;
 - renders decision-backed work as **Adapted for today** or **Training by choice**, with the stored rationale;
+- renders the authoritative adaptive preview on Today, accepts only its exact fingerprint, and keeps stale/offline queued setup behind a visible attention barrier;
+- places a quiet **Movement check** in prescribed strength cards on Today and Session, with
+  movement-specific pain-present/pain-free recording and bounded current-session choices to ease,
+  use a known-tolerable same-pattern option, stop, or skip without changing the weekly plan; a
+  stopped card uses a bounded date/session/movement-only local marker so it stays stopped across a
+  rerender without storing symptom text, while the server observation and logged sets remain the
+  outcome truth;
 - preserves generated order and full prescriptions;
 - restores the accepted session after navigation or reload;
 - uses explicit replacement when the athlete selects a different manual plan day;
@@ -202,12 +216,36 @@ identity, the complete prescribed and achieved set dose, and a challenge verdict
 sets together with load, reps, or duration. Set add/update/delete, skip/restore, reopen, finish, and
 feedback writes plus same-date manual/Garmin activity insert/update/delete refresh the same outcome
 best-effort. Active movement-relevant symptom-ledger evidence participates even when the session's
-legacy joint-pain text is empty. `recentMovementResponse()` is intentionally
-bounded: it needs at least two comparable completed moderate/high-confidence outcomes for the same
-movement and intent, and returns only `insufficient`, `contradictory`, `earned_absorbed`, or
-`earned_hold`. Only the two most recent comparable exposures decide, so old conflicts cannot
-outvote a newer repeated response indefinitely. Recovery overlays, athlete overrides, partial work, travel/illness, relevant
-symptoms, and endurance-loaded days remain legible facts but are not causal progression evidence.
+legacy joint-pain text is empty. `recentMovementResponse()` first selects matching movement and
+prescription-intent outcomes and only then applies its bounded evidence window; unrelated recent
+workouts therefore cannot hide sparse comparable history. It needs at least two comparable
+completed moderate/high-confidence outcomes and returns only `insufficient`, `contradictory`,
+`earned_absorbed`, or `earned_hold`. Only the two most recent comparable exposures decide, so old
+conflicts cannot outvote a newer repeated response indefinitely. Recovery overlays, athlete
+overrides, partial work, travel/illness, relevant symptoms, and endurance-loaded days remain legible
+facts but are not causal progression evidence.
+
+Accepted cardio items add one-to-one `endurance_evidence` with stable prescription identity, the
+prescribed sport/label/duration/distance/zone/interval, and the achieved activity
+sport/name/duration/distance/pace/heart-rate/zones/source. Matching is same-date and canonical-sport
+bounded, one actual effort can satisfy at most one item, generic cardio remains low confidence, and
+missing zones remain unknown. The factual completion verdict distinguishes simple dose completion,
+observed non-interval quality, quality contradicted by available zones, quality that cannot be
+verified, dose shortfall, and no match. Aggregate time in a zone never proves interval
+count/order/recovery completion. A matched cardio-only session can complete operationally without a
+strength Finish tap, but only simple dose completion or directly observed non-interval quality can
+read as completed-as-suggested; mixed strength/cardio retains strength finish semantics. Planned
+cardio is not its own `other_activity` confounder, while a mixed session remains non-comparable for
+strength progression. This factual endurance evidence does not progress duration, distance, zone,
+or intervals.
+
+`GET /api/daily-session/outcome` and MCP `get_daily_session_outcome` preserve that complete
+machine-readable reconciliation while adding one deterministic `athlete_read`. The completion card
+renders only its server-authored learning sentence and, when the current progression engine confirms
+two clean comparable same-intent exposures, at most one earned next-exposure sentence. Older,
+partial, recovery, symptom-relevant, travel, illness, endurance-loaded, or athlete-overridden
+outcomes never promise progression. A missing or failed read leaves the existing completion card
+unchanged.
 
 ### Learning horizons
 
@@ -282,6 +320,9 @@ Public DTOs should expose the accepted prescription and concise explanation, not
 | 3 | Agent proposes excluded or excessive work | Server rejects/clamps it and uses deterministic fallback if needed | Normalizer and orchestration tests |
 | 3 | Agent proposes a novel exercise | Conservative baseline rules, canonical identity, and provenance are enforced | Safe-introduction tests |
 | 4 | Athlete modifies or skips work for a known constraint | Outcome records the fact without an adherence judgment | Reconciliation test |
+| 4 | Pain-present or pain-free is recorded beside a prescribed movement | Exact session/date/movement evidence survives retry; pain-free does not clear or medically validate the symptom | Domain, REST/MCP parity, outbox, and card/controller tests |
+| 4 | Two comparable movement exposures sit behind unrelated newer workouts | Matching movement/intent history is found before the bounded window is applied | Sparse-history reconciliation test |
+| 4 | Accepted cardio has one same-date matching effort | Exact prescribed/achieved facts reconcile once; cardio-only completion needs no strength Finish tap and promises no progression | Reconciliation and athlete-read tests |
 | 4 | Repeated evidence supports structural change | A ledgered proposal is created; weekly plan is not silently mutated | Program-evolution/autonomy test |
 | All | Existing plan-backed session, JSON export, and SQLite restore | Behavior remains valid with nullable additive fields; JSON export carries history, while SQLite is the restore artifact | Regression, migration, export, and restore checks |
 

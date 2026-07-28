@@ -99,6 +99,65 @@ test("Today session done card preserves calm completion selectors and escaping",
   assert.doesNotMatch(html, /data-done-ex/);
 });
 
+test("Today outcome helper renders only escaped server-authored learning strings", () => {
+  const status = loadTodaySessionStatus();
+  const html = status.outcomeReadHtml({
+    athlete_read: {
+      learning: "Clean <work>",
+      next_exposure: "Next: Squat <A> +5 <lb>",
+    },
+  }, "7<bad>");
+  assert.match(html, /Clean &lt;work&gt;/);
+  assert.match(html, /Next: Squat &lt;A&gt; \+5 &lt;lb&gt;/);
+  assert.doesNotMatch(html, /Clean <work>|Squat <A>|\+5 <lb>/);
+  assert.equal(status.outcomeReadHtml(null, "7"), "");
+});
+
+test("Today outcome hydration is an independent failure-safe and rejects stale cards", async () => {
+  const slot = { innerHTML: "" };
+  const card = {
+    isConnected: true,
+    sequence: "4",
+    getAttribute(name) {
+      return name === "data-done-seq" ? this.sequence : null;
+    },
+  };
+  const document = {
+    getElementById(id) {
+      if (id === "doneCard-7") return card;
+      if (id === "doneOutcomeSlot-7") return slot;
+      return null;
+    },
+  };
+  const status = loadTodaySessionStatus({
+    document,
+    api: async () => ({
+      athlete_read: {
+        learning: "Clean <work>",
+        next_exposure: "Next <step>",
+      },
+    }),
+  });
+  await status.hydrateOutcome("7", 4, 0);
+  assert.match(slot.innerHTML, /Clean &lt;work&gt;/);
+  assert.match(slot.innerHTML, /Next &lt;step&gt;/);
+
+  slot.innerHTML = "unchanged";
+  card.sequence = "5";
+  await status.hydrateOutcome("7", 4, 0);
+  assert.equal(slot.innerHTML, "unchanged", "a stale response cannot touch a newer done card");
+
+  const failed = loadTodaySessionStatus({
+    document,
+    api: async () => {
+      throw new Error("offline");
+    },
+  });
+  card.sequence = "6";
+  await failed.hydrateOutcome("7", 6, 0);
+  assert.equal(slot.innerHTML, "unchanged", "outcome failure leaves the existing completion UI intact");
+});
+
 test("finished anchor session shows bounded capacity movement only when provided", () => {
   const status = loadTodaySessionStatus();
   const moved = status.sessionDoneCardHtml({

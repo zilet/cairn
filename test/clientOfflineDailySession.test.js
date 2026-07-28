@@ -438,6 +438,54 @@ test("canonical replay drift is marked for attention before dependent logs can a
   assert.equal(runtime.context.CairnOutbox.count(), 2);
 });
 
+test("queued adaptive fingerprint drift becomes attention and keeps dependent writes behind the barrier", async () => {
+  const date = "2026-06-30";
+  const fingerprint = "a".repeat(64);
+  const runtime = loadOutboxRuntime({
+    responses: [{
+      status: 409,
+      body: {
+        ok: false,
+        code: "daily_session_preview_stale",
+        error: "Today’s session changed.",
+        preview: { date, source: "adaptive_plan", input_fingerprint: "b".repeat(64) },
+      },
+    }],
+  });
+  const prepare = await runtime.context.outboxEnqueue(
+    "daily_session_prepare",
+    "/daily-session/prepare",
+    { date, source: "adaptive_plan", expected_input_fingerprint: fingerprint, replace: false },
+    {
+      prepareIntent: {
+        date,
+        source: "adaptive_plan",
+        plan_day_id: 22,
+        title: "Upper",
+        focus: "Push",
+        est_minutes: 40,
+        items: [{ position: 0, exercise: "Bench", sets: 3, rep_low: 5, rep_high: 8 }],
+      },
+    },
+  );
+  await runtime.context.outboxEnqueue(
+    "set",
+    "/sets",
+    { date, exercise: "Bench", reps: 5 },
+    { dependsOn: prepare.id },
+  );
+
+  await runtime.context.flushOutbox();
+  await runtime.context.flushOutbox();
+
+  assert.deepEqual(runtime.requests.map((request) => request.url), ["/api/daily-session/prepare"]);
+  const queued = runtime.context.CairnOutbox.list();
+  assert.equal(queued[0].state, "needs_attention");
+  assert.equal(queued[0].failure_status, 409);
+  assert.equal(queued[1].depends_on, queued[0].id);
+  assert.equal(queued[1].state, undefined);
+});
+
 test("weekly-plan drift retries with the immutable saved composition and then releases its dependent log", async () => {
   const date = "2026-06-30";
   const { accepted, request, recovery } = savedPlanRecovery(date);

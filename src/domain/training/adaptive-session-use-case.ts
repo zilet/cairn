@@ -1,4 +1,9 @@
-import { DailySessionError, prepareDailySession, type PrepareDailySessionInput } from "../../repo/adaptive-session.js";
+import {
+  DailySessionError,
+  prepareDailySession,
+  previewAdaptiveDailySession,
+  type PrepareDailySessionInput,
+} from "../../repo/adaptive-session.js";
 import { getSessionDetail } from "../../repo/sessions.js";
 
 export function prepareDailySessionUseCase(input: PrepareDailySessionInput = {}) {
@@ -9,11 +14,18 @@ export function prepareDailySessionUseCase(input: PrepareDailySessionInput = {})
   return { ...result, session };
 }
 
+export function previewAdaptiveDailySessionUseCase(
+  input: Pick<PrepareDailySessionInput, "date" | "constraints" | "provenance" | "train_anyway"> = {}
+) {
+  return previewAdaptiveDailySession(input);
+}
+
 export function dailySessionErrorBody(error: unknown) {
-  const value = error as { code?: unknown; message?: unknown };
+  const value = error as { code?: unknown; message?: unknown; preview?: unknown };
   return {
     ok: false as const,
     code: typeof value?.code === "string" ? value.code : "daily_session_invalid",
     error: typeof value?.message === "string" ? value.message : String(error),
+    ...(value?.preview ? { preview: value.preview } : {}),
   };
 }

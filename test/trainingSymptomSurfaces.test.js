@@ -11,8 +11,19 @@ import { trainingLogRouter } from "../dist/routes/training-log.js";
 import { db, repo, resetTables } from "./_seed.js";
 
 beforeEach(() => {
-  resetTables("movement_tolerance_observations", "training_symptom_events", "logged_sets", "sessions", "exercises");
+  resetTables(
+    "movement_tolerance_observations",
+    "training_symptom_events",
+    "daily_session_compositions",
+    "logged_sets",
+    "session_skips",
+    "sessions",
+    "plan_items",
+    "plan_days",
+    "exercises"
+  );
   repo.findOrCreateExercise("Back Squat", "quads");
+  repo.findOrCreateExercise("Bench Press", "chest");
 });
 
 function routerRequest(method, url, { body = undefined, query = {} } = {}) {
@@ -144,6 +155,399 @@ test("REST rejects impossible dates and lifecycle writes that precede their epis
   assert.match(impossibleList.body.error, /real YYYY-MM-DD/);
 });
 
+test("exercise-card observation binds canonical movement to the requested session date with no partial writes", async () => {
+  const logged = repo.logSetByName({
+    exercise: "Back Squat",
+    weight: 100,
+    reps: 5,
+    date: "2035-05-01",
+  });
+  const mismatch = await routerRequest("POST", "/training-symptoms/observation", {
+    body: {
+      date: "2035-05-02",
+      session_id: logged.session_id,
+      movement: "back squat",
+      area_text: "left knee",
+      outcome: "pain_present",
+    },
+  });
+  assert.equal(mismatch.status, 400);
+  assert.match(mismatch.body.error, /session_id must match date/);
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM training_symptom_events`).get().n, 0);
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM movement_tolerance_observations`).get().n, 0);
+
+  const unrelated = await routerRequest("POST", "/training-symptoms/observation", {
+    body: {
+      date: "2035-05-01",
+      session_id: logged.session_id,
+      movement: "Bench Press",
+      area_text: "left shoulder",
+      outcome: "pain_present",
+    },
+  });
+  assert.equal(unrelated.status, 400);
+  assert.match(unrelated.body.error, /not part of this session exposure/);
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM training_symptom_events`).get().n, 0);
+
+  const created = await routerRequest("POST", "/training-symptoms/observation", {
+    body: {
+      date: "2035-05-01",
+      session_id: logged.session_id,
+      movement: "back squat",
+      area_text: "left knee",
+      outcome: "pain_present",
+    },
+  });
+  assert.equal(created.status, 200);
+  assert.deepEqual(created.body.exercise, {
+    id: repo.findExercise("Back Squat").id,
+    name: "Back Squat",
+    muscle_group: "quads",
+  });
+  assert.equal(created.body.symptom.source_session_id, logged.session_id);
+  assert.equal(created.body.outcome, "pain_present");
+
+  const retry = await routerRequest("POST", "/training-symptoms/observation", {
+    body: {
+      date: "2035-05-01",
+      session_id: logged.session_id,
+      movement: "Back Squat",
+      area_text: "left knee",
+      outcome: "pain_present",
+    },
+  });
+  assert.equal(retry.body.symptom.id, created.body.symptom.id);
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM training_symptom_events`).get().n, 1);
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM movement_tolerance_observations`).get().n, 1);
+});
+
+test("new pain-present observation rolls back its symptom when the movement write fails", async () => {
+  const logged = repo.logSetByName({
+    exercise: "Back Squat",
+    weight: 105,
+    reps: 5,
+    date: "2035-05-03",
+  });
+  db.exec(`
+    CREATE TEMP TRIGGER fail_exercise_card_observation
+    BEFORE INSERT ON movement_tolerance_observations
+    BEGIN
+      SELECT RAISE(ABORT, 'forced observation failure');
+    END
+  `);
+  try {
+    const failed = await routerRequest("POST", "/training-symptoms/observation", {
+      body: {
+        date: "2035-05-03",
+        session_id: logged.session_id,
+        movement: "Back Squat",
+        area_text: "left knee",
+        outcome: "pain_present",
+      },
+    });
+    assert.equal(failed.status, 400);
+    assert.match(failed.body.error, /forced observation failure/);
+    assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM training_symptom_events`).get().n, 0);
+    assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM movement_tolerance_observations`).get().n, 0);
+  } finally {
+    db.exec(`DROP TRIGGER fail_exercise_card_observation`);
+  }
+});
+
+test("explicit-symptom pain-present rolls back the whole epoch mutation when the event update fails", async () => {
+  const date = "2035-05-12";
+  const logged = repo.logSetByName({
+    exercise: "Back Squat",
+    weight: 105,
+    reps: 5,
+    date,
+  });
+  const symptom = repo.reportTrainingSymptom({
+    area_text: "left knee",
+    onset_on: date,
+    source_session_id: logged.session_id,
+    source_kind: "surface_test",
+  });
+  db.exec(`
+    CREATE TEMP TRIGGER fail_explicit_symptom_update
+    BEFORE UPDATE ON training_symptom_events
+    WHEN OLD.id = ${symptom.id}
+    BEGIN
+      SELECT RAISE(ABORT, 'forced symptom update failure');
+    END
+  `);
+  try {
+    const failed = await routerRequest("POST", "/training-symptoms/observation", {
+      body: {
+        date,
+        session_id: logged.session_id,
+        movement: "Back Squat",
+        symptom_event_id: symptom.id,
+        outcome: "pain_present",
+      },
+    });
+    assert.equal(failed.status, 400);
+    assert.match(failed.body.error, /forced symptom update failure/);
+    assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM movement_tolerance_observations`).get().n, 0);
+    assert.deepEqual(
+      {
+        ...db
+          .prepare(
+            `SELECT last_reported_on, recurrence_count, evidence_epoch
+             FROM training_symptom_events WHERE id = ?`
+          )
+          .get(symptom.id),
+      },
+      {
+        last_reported_on: date,
+        recurrence_count: 0,
+        evidence_epoch: 1,
+      }
+    );
+  } finally {
+    db.exec(`DROP TRIGGER fail_explicit_symptom_update`);
+  }
+});
+
+test("pain-free needs an explicit active relevant symptom and never clears it", async () => {
+  const logged = repo.logSetByName({
+    exercise: "Back Squat",
+    weight: 110,
+    reps: 5,
+    date: "2035-05-04",
+  });
+  const missing = await routerRequest("POST", "/training-symptoms/observation", {
+    body: {
+      date: "2035-05-04",
+      session_id: logged.session_id,
+      movement: "Back Squat",
+      outcome: "pain_free",
+    },
+  });
+  assert.equal(missing.status, 400);
+  assert.match(missing.body.error, /explicit symptom_event_id/);
+
+  const irrelevant = repo.reportTrainingSymptom({
+    area_text: "left shoulder",
+    onset_on: "2035-05-04",
+    source_session_id: logged.session_id,
+    source_kind: "surface_test",
+  });
+  const rejected = await routerRequest("POST", "/training-symptoms/observation", {
+    body: {
+      date: "2035-05-04",
+      session_id: logged.session_id,
+      movement: "Back Squat",
+      symptom_event_id: irrelevant.id,
+      outcome: "pain_free",
+    },
+  });
+  assert.equal(rejected.status, 400);
+  assert.match(rejected.body.error, /not relevant/);
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM movement_tolerance_observations`).get().n, 0);
+
+  const relevant = repo.reportTrainingSymptom({
+    area_text: "left knee",
+    onset_on: "2035-05-04",
+    source_session_id: logged.session_id,
+    source_kind: "surface_test",
+  });
+  const recorded = await routerRequest("POST", "/training-symptoms/observation", {
+    body: {
+      date: "2035-05-04",
+      session_id: logged.session_id,
+      movement: "Back Squat",
+      symptom_event_id: relevant.id,
+      outcome: "pain_free",
+    },
+  });
+  assert.equal(recorded.status, 200);
+  assert.equal(recorded.body.symptom.status, "active");
+  assert.equal(recorded.body.symptom.resolved_on, null);
+});
+
+test("pain-present wins a contradictory same-exposure order and exact retry stays stable", async () => {
+  const logged = repo.logSetByName({
+    exercise: "Back Squat",
+    weight: 115,
+    reps: 5,
+    date: "2035-05-05",
+  });
+  const symptom = repo.reportTrainingSymptom({
+    area_text: "left knee",
+    onset_on: "2035-05-05",
+    source_session_id: logged.session_id,
+    source_kind: "surface_test",
+  });
+  const base = {
+    date: "2035-05-05",
+    session_id: logged.session_id,
+    movement: "Back Squat",
+    symptom_event_id: symptom.id,
+  };
+  const free = await routerRequest("POST", "/training-symptoms/observation", {
+    body: { ...base, outcome: "pain_free" },
+  });
+  assert.equal(free.body.outcome, "pain_free");
+
+  const present = await routerRequest("POST", "/training-symptoms/observation", {
+    body: { ...base, outcome: "pain_present" },
+  });
+  assert.equal(present.body.outcome, "pain_present");
+  assert.equal(present.body.symptom.relevant_pain_free_exposures, 0);
+  const observations = db.prepare(`SELECT COUNT(*) AS n FROM movement_tolerance_observations`).get().n;
+  const retry = await routerRequest("POST", "/training-symptoms/observation", {
+    body: { ...base, outcome: "pain_present" },
+  });
+  assert.equal(retry.body.symptom.id, present.body.symptom.id);
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM movement_tolerance_observations`).get().n, observations);
+
+  const contradictoryRetry = await routerRequest("POST", "/training-symptoms/observation", {
+    body: { ...base, outcome: "pain_free" },
+  });
+  assert.equal(contradictoryRetry.body.outcome, "pain_present");
+  assert.equal(contradictoryRetry.body.symptom.relevant_pain_free_exposures, 0);
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM movement_tolerance_observations`).get().n, observations);
+});
+
+test("movement-filtered symptom GET returns only active relevant episodes", async () => {
+  const session = repo.getOrCreateSession("2035-05-06");
+  const activeKnee = repo.reportTrainingSymptom({
+    area_text: "left knee",
+    onset_on: "2035-05-06",
+    source_session_id: session.id,
+    source_kind: "knee_active",
+  });
+  repo.reportTrainingSymptom({
+    area_text: "left shoulder",
+    onset_on: "2035-05-06",
+    source_session_id: session.id,
+    source_kind: "shoulder_active",
+  });
+  const resolvedKnee = repo.reportTrainingSymptom({
+    area_text: "right knee",
+    onset_on: "2035-05-06",
+    source_session_id: session.id,
+    source_kind: "knee_resolved",
+  });
+  repo.resolveTrainingSymptom(resolvedKnee.id, "2035-05-06");
+
+  const filtered = await routerRequest("GET", "/training-symptoms", {
+    query: { on: "2035-05-06", movement: "back squat", include_resolved: "1" },
+  });
+  assert.equal(filtered.status, 200);
+  assert.deepEqual(filtered.body.map((row) => row.id), [activeKnee.id]);
+});
+
+test("session exposure accepts an accepted composition, linked plan, logged set, or current skip", async () => {
+  const exercise = repo.findExercise("Back Squat");
+  const dates = ["2035-05-07", "2035-05-08", "2035-05-09", "2035-05-10"];
+  const compositionSession = repo.getOrCreateSession(dates[0]);
+  db.prepare(
+    `INSERT INTO daily_session_compositions
+      (version, session_id, date, source, status, title, items_json, request_fingerprint)
+     VALUES (1, ?, ?, 'manual_plan', 'active', 'Test', ?, ?)`
+  ).run(compositionSession.id, dates[0], JSON.stringify([{ exercise: "Back Squat" }]), "symptom-composition");
+
+  const day = db.prepare(`INSERT INTO plan_days (day_number, name) VALUES (91, 'Test')`).run();
+  db.prepare(
+    `INSERT INTO plan_items (plan_day_id, position, exercise_id, sets) VALUES (?, 0, ?, 1)`
+  ).run(day.lastInsertRowid, exercise.id);
+  const linkedSession = db
+    .prepare(`INSERT INTO sessions (date, plan_day_id) VALUES (?, ?)`)
+    .run(dates[1], day.lastInsertRowid);
+
+  const logged = repo.logSetByName({ exercise: "Back Squat", weight: 95, reps: 5, date: dates[2] });
+  const skippedSession = repo.getOrCreateSession(dates[3]);
+  db.prepare(`INSERT INTO session_skips (session_id, exercise) VALUES (?, ?)`).run(
+    skippedSession.id,
+    "Back Squat"
+  );
+
+  const sessionIds = [
+    compositionSession.id,
+    Number(linkedSession.lastInsertRowid),
+    logged.session_id,
+    skippedSession.id,
+  ];
+  for (let index = 0; index < dates.length; index++) {
+    const result = await routerRequest("POST", "/training-symptoms/observation", {
+      body: {
+        date: dates[index],
+        session_id: sessionIds[index],
+        movement: "Back Squat",
+        area_text: `left knee ${index}`,
+        outcome: "pain_present",
+      },
+    });
+    assert.equal(result.status, 200, `${dates[index]} should accept its exposure source`);
+  }
+});
+
+test("an active accepted composition excludes source-plan movements and malformed items fail closed", async () => {
+  const squat = repo.findExercise("Back Squat");
+  const day = db.prepare(`INSERT INTO plan_days (day_number, name) VALUES (92, 'Exclusive source')`).run();
+  db.prepare(
+    `INSERT INTO plan_items (plan_day_id, position, exercise_id, sets) VALUES (?, 0, ?, 1)`
+  ).run(day.lastInsertRowid, squat.id);
+
+  const excludedDate = "2035-05-13";
+  const excludedSession = db
+    .prepare(`INSERT INTO sessions (date, plan_day_id) VALUES (?, ?)`)
+    .run(excludedDate, day.lastInsertRowid);
+  db.prepare(
+    `INSERT INTO daily_session_compositions
+      (version, session_id, date, source, status, plan_day_id, title, items_json, request_fingerprint)
+     VALUES (1, ?, ?, 'manual_plan', 'active', ?, 'Exclusive', ?, ?)`
+  ).run(
+    excludedSession.lastInsertRowid,
+    excludedDate,
+    day.lastInsertRowid,
+    JSON.stringify([{ exercise: "Bench Press" }]),
+    "exclusive-composition"
+  );
+  const excluded = await routerRequest("POST", "/training-symptoms/observation", {
+    body: {
+      date: excludedDate,
+      session_id: Number(excludedSession.lastInsertRowid),
+      movement: "Back Squat",
+      area_text: "left knee",
+      outcome: "pain_present",
+    },
+  });
+  assert.equal(excluded.status, 400);
+  assert.match(excluded.body.error, /not part of this session exposure/);
+
+  const malformedDate = "2035-05-14";
+  const malformedSession = db
+    .prepare(`INSERT INTO sessions (date, plan_day_id) VALUES (?, ?)`)
+    .run(malformedDate, day.lastInsertRowid);
+  db.prepare(
+    `INSERT INTO daily_session_compositions
+      (version, session_id, date, source, status, plan_day_id, title, items_json, request_fingerprint)
+     VALUES (1, ?, ?, 'manual_plan', 'active', ?, 'Malformed', ?, ?)`
+  ).run(
+    malformedSession.lastInsertRowid,
+    malformedDate,
+    day.lastInsertRowid,
+    "{not-json",
+    "malformed-composition"
+  );
+  const malformed = await routerRequest("POST", "/training-symptoms/observation", {
+    body: {
+      date: malformedDate,
+      session_id: Number(malformedSession.lastInsertRowid),
+      movement: "Back Squat",
+      area_text: "left knee",
+      outcome: "pain_present",
+    },
+  });
+  assert.equal(malformed.status, 400);
+  assert.match(malformed.body.error, /not part of this session exposure/);
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM training_symptom_events`).get().n, 0);
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM movement_tolerance_observations`).get().n, 0);
+});
+
 test("MCP mirrors the shared symptom lifecycle and keeps trial readiness as evidence only", async () => {
   const exercise = repo.findExercise("Back Squat");
   const { client, server } = await mcpHarness();
@@ -188,6 +592,36 @@ test("MCP mirrors the shared symptom lifecycle and keeps trial readiness as evid
       })
     );
     assert.equal(recurred.status, "active");
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test("MCP exposes the same canonical exercise-card observation use case", async () => {
+  const logged = repo.logSetByName({
+    exercise: "Back Squat",
+    weight: 120,
+    reps: 5,
+    date: "2035-05-11",
+  });
+  const { client, server } = await mcpHarness();
+  try {
+    const result = toolJson(
+      await client.callTool({
+        name: "record_exercise_symptom_observation",
+        arguments: {
+          date: "2035-05-11",
+          session_id: logged.session_id,
+          movement: "back squat",
+          area_text: "left knee",
+          outcome: "pain_present",
+        },
+      })
+    );
+    assert.equal(result.ok, true);
+    assert.equal(result.exercise.name, "Back Squat");
+    assert.equal(result.session_id, logged.session_id);
   } finally {
     await client.close();
     await server.close();

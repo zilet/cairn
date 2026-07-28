@@ -921,7 +921,8 @@ export interface DayReadPeriodizationContext {
     until: string;
     day_index: number;
     total_days: 7;
-    proposal_id: number;
+    proposal_id: number | null;
+    cycle_id?: number;
     label: "reduced volume";
   } | null;
 }
@@ -929,7 +930,11 @@ export interface DayReadPeriodizationContext {
 export function dayReadPeriodizationContext(date: string): DayReadPeriodizationContext {
   try {
     const block = getActiveBlock();
-    const recovery = activeRecoveryWeekLedger(date);
+    // The same new-record-first, legacy-fallback authority used by dayRead() and
+    // the daily-session decision. The legacy ledger is consulted only to retain
+    // its proposal identifier in the compatibility payload.
+    const recovery = activeRecoveryWeek(date);
+    const legacy = recovery && recovery.cycle_id == null ? activeRecoveryWeekLedger(date) : null;
     const dayOffset = recovery ? daysBetweenISO(date, recovery.applied_on) : null;
     return {
       program_block: block
@@ -951,7 +956,8 @@ export function dayReadPeriodizationContext(date: string): DayReadPeriodizationC
               until: recovery.until,
               day_index: Math.min(RECOVERY_WEEK_ACTIVE_DAYS, Math.max(1, dayOffset + 1)),
               total_days: RECOVERY_WEEK_ACTIVE_DAYS,
-              proposal_id: recovery.proposal_id,
+              proposal_id: legacy?.proposal_id ?? null,
+              ...(recovery.cycle_id != null ? { cycle_id: recovery.cycle_id } : {}),
               label: "reduced volume",
             }
           : null,

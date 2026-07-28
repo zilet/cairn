@@ -4114,16 +4114,21 @@ declare global {
     };
 
     CairnTodaySessionFeedback: {
+      movementCheckLoadedHtml(symptoms: ClientTrainingSymptom[]): string;
       renderFeedback(
         slot: Element | null | undefined,
         session: Record<string, unknown>,
         deps: ClientTodaySessionFeedbackDeps
       ): void;
+      wireMovementChecks(
+        session: Record<string, unknown>,
+        deps: ClientTodaySessionControllerDeps
+      ): void;
     };
 
     CairnSessionPrimer: {
       cardHtml(primer: unknown, opts?: { collapsed?: boolean }): string;
-      freshChipHtml(why: unknown): string;
+      freshChipHtml(why: unknown, label?: unknown): string;
       hydrate(opts: {
         root?: unknown;
         date?: string | null;
@@ -4400,6 +4405,16 @@ declare global {
         day: { name?: unknown } | null | undefined,
         options?: { isToday?: boolean }
       ): string;
+      outcomeReadHtml(
+        read:
+          | {
+              athlete_read?: { learning?: unknown; next_exposure?: unknown } | null;
+            }
+          | null
+          | undefined,
+        idAttr: string
+      ): string;
+      hydrateOutcome(sessionId: string, renderSequence: number, attempt?: number): Promise<void>;
       hasFeedback(session: Record<string, unknown> | null | undefined): boolean;
       feedbackOpenHtml(): string;
       feedbackScaleHtml(kind: "soreness" | "performance", label: string): string;

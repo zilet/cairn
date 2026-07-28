@@ -95,6 +95,12 @@ function exerciseCardHtml(
         lastSetLineText: (ls) => CairnTodaySessionSetModel.lastSetLineText(ls, { fmtDur }),
       })
     : "";
+  const movementCheck = !offPlan
+    ? `<details class="ex-movement-check" data-movement-check data-movement="${escAttr(exercise)}">
+        <summary class="linkbtn linkbtn-quiet linkbtn-sm">Movement check</summary>
+        <div class="well-accent-sm" data-movement-check-body></div>
+      </details>`
+    : "";
   return `<div class="ex${complete ? " ex-complete" : ""}${reveal != null ? " reveal" : ""}" data-card="${escAttr(exercise)}" data-mode="${timed ? "timed" : "reps"}"${reveal != null ? ` style="${stagger(reveal)}"` : ""}>
       <div class="ex-top">
         ${tile}
@@ -109,6 +115,7 @@ function exerciseCardHtml(
       ${!complete ? CairnTodayTraining.exRxLineHtml(rx) : ""}
       <div class="logged" data-logged>${loggedSets.map(todayCardsSetChip).join("")}</div>
       ${lastSetLine}
+      ${movementCheck}
       ${logrow}
     </div>`;
 }

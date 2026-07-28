@@ -177,6 +177,34 @@ function todayLoadSurfaceSnapshot(date: string): string | null {
   }
 }
 
+function wireExerciseDecisionUndo(root: ParentNode, repaint: () => Promise<unknown> | unknown): void {
+  // Autonomous changes explain themselves at the affected exercise and can be
+  // put back immediately. The server owns the exact rollback snapshot; the UI
+  // only sends the durable decision id that arrived with the plan item.
+  (Array.from(root.querySelectorAll("[data-decision-undo]")) as HTMLElement[]).forEach((button) => {
+    button.addEventListener("click", async () => {
+      const id = Number(button.dataset.decisionUndo);
+      if (!Number.isFinite(id) || button.dataset.busy === "1") return;
+      button.dataset.busy = "1";
+      button.setAttribute("aria-busy", "true");
+      try {
+        const result: any = await api(`/brain/decisions/${id}/revert`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reason: "one-tap undo from the affected exercise" }),
+        });
+        if (!result?.ok) throw new Error(result?.error || "This change can no longer be undone.");
+        toast("Put back the previous plan");
+        await repaint();
+      } catch (error: any) {
+        toast(error?.message || "Could not undo that change");
+        button.dataset.busy = "";
+        button.removeAttribute("aria-busy");
+      }
+    });
+  });
+}
+
 async function renderToday(opts: any = {}) {
   const enteredDate = todayState.logDate;
   // A soft (background stale-while-revalidate) repaint must feel silent: keep the
@@ -206,9 +234,11 @@ async function renderToday(opts: any = {}) {
   // down for what `loadBrief`'s fast mode does.)
   const briefOverride =
     todayState.brief && todayState.brief.date === todayState.logDate ? todayState.brief.override : "";
-  const [prep, read] = await Promise.all([
+  const previewTrainAnyway = /\btrain anyway\b/i.test(String(briefOverride || ""));
+  const [prep, read, sessionPreview] = await Promise.all([
     todayPlanSessionPreparation.preparePlanSession(todayDeps().planSession(session, isToday)),
     loadBrief(todayState.logDate, briefOverride, { fast: true }),
+    loadAdaptiveSessionPreview(todayState.logDate, String(briefOverride || ""), previewTrainAnyway).catch(() => null),
   ]);
   const {
     day,
@@ -343,6 +373,7 @@ async function renderToday(opts: any = {}) {
       ? sessionLaunchCardHtml({
           day,
           dailySession: prep.dailySession,
+          preview: sessionPreview,
           exDone,
           exTotal,
           isToday,
@@ -423,6 +454,7 @@ async function renderToday(opts: any = {}) {
       source: "adaptive_plan",
       trigger: event.currentTarget as HTMLElement,
       provenance: { entry: "today_launch" },
+      preview: sessionPreview,
     });
   });
 
@@ -452,31 +484,7 @@ async function renderToday(opts: any = {}) {
     })
   );
 
-  // Autonomous changes explain themselves at the affected exercise and can be
-  // put back immediately. The server owns the exact rollback snapshot; the UI
-  // only sends the durable decision id that arrived with the plan item.
-  (Array.from(todayView.querySelectorAll("[data-decision-undo]")) as HTMLElement[]).forEach((button) => {
-    button.addEventListener("click", async () => {
-      const id = Number(button.dataset.decisionUndo);
-      if (!Number.isFinite(id) || button.dataset.busy === "1") return;
-      button.dataset.busy = "1";
-      button.setAttribute("aria-busy", "true");
-      try {
-        const result: any = await api(`/brain/decisions/${id}/revert`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ reason: "one-tap undo from the affected exercise" }),
-        });
-        if (!result?.ok) throw new Error(result?.error || "This change can no longer be undone.");
-        toast("Put back the previous plan");
-        await renderToday({ soft: true });
-      } catch (error: any) {
-        toast(error?.message || "Could not undo that change");
-        button.dataset.busy = "";
-        button.removeAttribute("aria-busy");
-      }
-    });
-  });
+  wireExerciseDecisionUndo(todayView, () => renderToday({ soft: true }));
 
   wireGuides(view);
 
@@ -552,6 +560,8 @@ type OpenSessionOptions = {
   trigger?: HTMLElement | null;
   provenance?: Record<string, unknown>;
   trainAnyway?: boolean;
+  /** The exact authoritative candidate the athlete just reviewed on Today. */
+  preview?: DailySessionPreview | null;
 };
 
 function dailySessionProvenanceLabel(
@@ -564,6 +574,51 @@ function dailySessionProvenanceLabel(
   if (provenance?.choice === "training_by_choice") return "Training by choice";
   if (provenance?.choice === "adapted_for_today") return "Adapted for today";
   return null;
+}
+
+type DailySessionPreview = import("../contracts/client-api.js").ClientDailySessionPreview;
+
+function adaptiveSessionPreviewPath(date: string, override: string, trainAnyway: boolean): string {
+  const params = new URLSearchParams({ date });
+  if (override) params.set("override", override);
+  if (trainAnyway) params.set("train_anyway", "true");
+  return `/daily-session/preview?${params.toString()}`;
+}
+
+async function loadAdaptiveSessionPreview(
+  date: string,
+  override: string,
+  trainAnyway: boolean,
+): Promise<DailySessionPreview | null> {
+  const value = await todayApi(adaptiveSessionPreviewPath(date, override, trainAnyway));
+  if (
+    !value ||
+    typeof value !== "object" ||
+    String((value as DailySessionPreview).date || "") !== date ||
+    String((value as DailySessionPreview).source || "") !== "adaptive_plan" ||
+    !/^[a-f0-9]{64}$/.test(String((value as DailySessionPreview).input_fingerprint || ""))
+  ) {
+    return null;
+  }
+  return value as DailySessionPreview;
+}
+
+function adaptiveSessionPreviewDelta(
+  previous: DailySessionPreview | null,
+  fresh: DailySessionPreview,
+): string {
+  if (!previous) return "Today’s session has updated. Review the refreshed card, then start when it feels right.";
+  const changes: string[] = [];
+  if (previous.title !== fresh.title || previous.focus !== fresh.focus) changes.push("the session focus");
+  if (previous.item_count !== fresh.item_count) {
+    changes.push(`${fresh.item_count} movement${fresh.item_count === 1 ? "" : "s"}`);
+  }
+  if (previous.est_minutes !== fresh.est_minutes && fresh.est_minutes != null) {
+    changes.push(`about ${fresh.est_minutes} minutes`);
+  }
+  if (JSON.stringify(previous.constraints) !== JSON.stringify(fresh.constraints)) changes.push("today’s guardrails");
+  const detail = changes.length ? ` — ${changes.slice(0, 2).join(" and ")}` : "";
+  return `Today’s session has updated${detail}. Review it, then start when it feels right.`;
 }
 
 const todaySessionSuggestController = CairnTodaySessionSuggestController as typeof CairnTodaySessionSuggestController & {
@@ -846,10 +901,35 @@ async function openSession(date?: string | null, options: OpenSessionOptions = {
         : null;
   const override =
     todayState.brief && todayState.brief.date === targetDate ? String(todayState.brief.override || "").trim() : "";
+  let adaptivePreview: DailySessionPreview | null = null;
+  if (source === "adaptive_plan") {
+    const reviewed = options.preview;
+    if (
+      reviewed &&
+      reviewed.date === targetDate &&
+      reviewed.source === "adaptive_plan" &&
+      /^[a-f0-9]{64}$/.test(reviewed.input_fingerprint)
+    ) {
+      // Bind Start to the exact candidate rendered on the card. The server will
+      // compare this token against a fresh candidate; never silently authorize a
+      // newer session the athlete has not seen.
+      adaptivePreview = reviewed;
+    } else if (reviewed === undefined) {
+      try {
+        // Entry points without a visible preview (for example the Brief's direct
+        // Start action) may fetch one immediately before prepare.
+        adaptivePreview = await loadAdaptiveSessionPreview(targetDate, override, options.trainAnyway === true);
+      } catch {
+        // Preview is additive. If the read itself is offline, preserve the
+        // existing durable local staging path and reconcile when connectivity returns.
+      }
+    }
+  }
   const body: import("../contracts/client-api.js").ClientDailySessionPrepareRequest = {
     date: targetDate,
     source,
   };
+  if (adaptivePreview) body.expected_input_fingerprint = adaptivePreview.input_fingerprint;
   if (options.trainAnyway === true) body.train_anyway = true;
   if (source === "agent_suggest") {
     const agentJobId = Number(options.agentJobId);
@@ -956,6 +1036,33 @@ async function openSession(date?: string | null, options: OpenSessionOptions = {
     return false;
   }
   const response = result.value as Record<string, unknown>;
+  if (
+    response?.ok === false &&
+    response.code === "daily_session_preview_stale" &&
+    response.preview &&
+    typeof response.preview === "object"
+  ) {
+    const fresh = response.preview as DailySessionPreview;
+    const message = adaptiveSessionPreviewDelta(adaptivePreview, fresh);
+    sessionPrepareBusy(trigger, false, message);
+    announceSessionPrepare(message);
+    toast(message);
+    // Repaint from server truth instead of patching individual text nodes. This
+    // replaces every displayed field (including constraints) and, crucially,
+    // re-wires Start with the fresh preview fingerprint so the next click cannot
+    // loop on the stale token captured by the old listener.
+    await renderToday({ soft: true });
+    return false;
+  }
+  if (response?.ok === false && response.code === "daily_session_active_changed") {
+    const message =
+      "Another accepted session now owns today. Review the refreshed card before continuing.";
+    sessionPrepareBusy(trigger, false, message);
+    announceSessionPrepare(message);
+    toast(message);
+    await renderToday({ soft: true });
+    return false;
+  }
   if (response?.ok !== true || !response.daily_session || !response.session) {
     const message = String(response?.error || "This session could not be prepared.");
     sessionPrepareBusy(trigger, false, message);
@@ -981,6 +1088,7 @@ function rerenderTraining(opts?: Record<string, unknown>): Promise<unknown> | un
 function sessionLaunchCardHtml(opts: {
   day: { name?: unknown; focus?: unknown; items?: Array<{ exercise?: unknown }> | null } | null | undefined;
   dailySession?: import("../contracts/client-api.js").ClientDailySessionComposition | null;
+  preview?: DailySessionPreview | null;
   exDone: number;
   exTotal: number;
   isToday: boolean;
@@ -991,16 +1099,22 @@ function sessionLaunchCardHtml(opts: {
 }): string {
   const name =
     opts.dailySession?.title ||
+    opts.preview?.title ||
     (opts.day && opts.day.name ? String(opts.day.name) : opts.isRunDay ? "Today's run" : "Today's session");
-  const focus = opts.dailySession?.focus || (opts.day && opts.day.focus ? String(opts.day.focus) : "");
+  const focus = opts.dailySession?.focus || opts.preview?.focus || (opts.day && opts.day.focus ? String(opts.day.focus) : "");
   const started = opts.exDone > 0 || opts.hasLoggedSets;
-  const sub = opts.exTotal
+  const previewCount = !started && !opts.dailySession ? opts.preview?.item_count : null;
+  const sub = previewCount != null
+    ? `${previewCount} movement${previewCount === 1 ? "" : "s"}`
+    : opts.exTotal
     ? started
       ? `${opts.exDone} of ${opts.exTotal} logged`
       : `${opts.exTotal} lift${opts.exTotal === 1 ? "" : "s"}`
     : "";
   const estimate =
-    opts.dailySession?.est_minutes ?? (opts.read && opts.read.est_minutes ? Number(opts.read.est_minutes) : null);
+    opts.dailySession?.est_minutes ??
+    opts.preview?.est_minutes ??
+    (opts.read && opts.read.est_minutes ? Number(opts.read.est_minutes) : null);
   const est = estimate ? `~${Number(estimate)} min` : "";
   const meta = [sub, est].filter(Boolean).join("  ·  ");
   const cta = started ? "Continue" : "Start";
@@ -1033,7 +1147,8 @@ function sessionLaunchCardHtml(opts: {
         <div class="sess-launch-kicker lbl">${escHtml(source)}</div>
         <div class="sess-launch-title">${escHtml(name)}${focus ? `<span class="sess-launch-focus"> · ${escHtml(focus)}</span>` : ""}</div>
         ${meta ? `<div class="sess-launch-meta">${escHtml(meta)}</div>` : ""}
-        ${opts.dailySession?.why ? `<div class="sess-launch-why">${escHtml(opts.dailySession.why)}</div>` : ""}
+        ${opts.dailySession?.why || opts.preview?.primary_rationale ? `<div class="sess-launch-why">${escHtml(opts.dailySession?.why || opts.preview?.primary_rationale || "")}</div>` : ""}
+        ${!opts.dailySession && opts.preview?.constraints?.length ? `<div class="sess-launch-why">${escHtml(opts.preview.constraints.slice(0, 2).join(" · "))}</div>` : ""}
         <span class="sess-launch-status" role="status" aria-live="polite"></span>
         ${journeyLine ? `<div class="sess-launch-journey">${journeyLine}</div>` : ""}
       </div>
@@ -1221,6 +1336,7 @@ async function renderSession(opts: any = {}): Promise<void> {
     { session, hasLoggedSets, lastSets: prep.lastSets },
     todaySessionDeps()
   );
+  wireExerciseDecisionUndo(todayView, () => renderSession({ soft: true }));
   setupAddExercise();
   wireGuides(view);
   wireSessionDestination();

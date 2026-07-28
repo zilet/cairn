@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readToday, recordDayReadSuggestion } from "../dist/domain/brain/day-read-use-case.js";
-import { configureDayReadRefresh } from "../dist/dayread-refresh.js";
+import { configureDayReadRefresh, resetDayReadRefresh } from "../dist/dayread-refresh.js";
 import { buildDayReadPrompt } from "../dist/prompt.js";
 import { runWithBrainSnapshot } from "../dist/brain/snapshot.js";
 import { DAY_READ_HEADLINE_VARIANTS } from "../dist/repo/day-read.js";
@@ -167,6 +167,73 @@ test("Today context keeps the calendar block and recovery overlay as separate cl
   });
   assert.equal("parsed" in context.recovery_overlay, false, "raw proposal JSON never crosses the read boundary");
   assert.equal(typeof read.arc === "string" || read.arc === null, true, "the old arc remains additive compatibility");
+});
+
+test("a recovery_cycles-only row drives both Today context and the reduced Session prescription", async (t) => {
+  resetTables(
+    "day_reads",
+    "suggestions",
+    "plan_days",
+    "plan_items",
+    "sessions",
+    "logged_sets",
+    "exercises",
+    "program_blocks",
+    "plan_proposals",
+    "app_state",
+    "daily_session_compositions",
+    "recovery_cycles",
+    "daily_metrics",
+    "garmin_daily_metrics",
+    "checkins",
+    "activities",
+    "garmin_activities",
+    "context_events"
+  );
+  t.after(() => {
+    resetDayReadRefresh();
+    resetTables("day_reads", "daily_session_compositions", "recovery_cycles", "app_state");
+  });
+  const date = localDaysAgo(0);
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads" });
+  repo.savePlanDay(1, "Lower", "Lower body", [
+    { exercise: "Back Squat", sets: 4, rep_low: 5, rep_high: 5, target_weight: 200 },
+  ]);
+  const cycle = repo.scheduleRecoveryCycle({
+    effective_on: localDaysAgo(1),
+    recheck_on: localDaysAgo(-5),
+    exit_on: localDaysAgo(-6),
+    overlay: { working_set_fraction: 0.5 },
+    reason: "A planned lighter week.",
+  });
+  repo.activateRecoveryCycle(cycle.id, date);
+  assert.equal(
+    db.prepare(`SELECT value FROM app_state WHERE key = 'recovery_week_applied'`).get(),
+    undefined,
+    "the fixture has no legacy recovery-week stamp"
+  );
+
+  configureDayReadRefresh({ today: () => date, setTimer: () => 0, clearTimer: () => {} });
+  const baseline = repo.dayRead(date);
+  repo.saveDayRead(date, {
+    ...baseline,
+    headline: baseline.focus ? `${baseline.focus}.` : "Today.",
+    source: "deterministic",
+    override: null,
+  });
+  const read = await readToday({ date });
+  assert.equal(read.signals.recovery_week.cycle_id, cycle.id, "Today reads the canonical recovery cycle");
+  assert.equal(read.periodization_context.recovery_overlay.cycle_id, cycle.id);
+  assert.equal(read.periodization_context.recovery_overlay.proposal_id, null);
+  assert.match(read.why, /lighter|recovery|reduced/i, "the Brief voices the planned reduced shape");
+
+  const prepared = repo.prepareDailySession({ date, source: "adaptive_plan", train_anyway: true });
+  assert.equal(prepared.daily_session.decision.recovery_cycle.id, cycle.id);
+  assert.equal(prepared.daily_session.items[0].sets, 2, "the Session applies the same cycle's set fraction");
+  assert.ok(
+    prepared.daily_session.items[0].target_weight < 200,
+    "the same cycle eases the prescribed load without coupling the test to the exact conservative clamp"
+  );
 });
 
 test("a cached deterministic Brief arms one self-healing re-warm without extending it on every read", async () => {

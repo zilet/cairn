@@ -351,6 +351,177 @@ test("hold candidates clamp positive, assisted, bodyweight, and timed targets to
   assert.equal(validation.capped, true);
 });
 
+test("authoritative overload targets survive deterministic fallback and clamp agent output exactly", () => {
+  repo.savePlanDay(1, "Authority", "Server-owned next targets", [
+    { exercise: "Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 100 },
+    { exercise: "Assisted Pull-Up", sets: 3, rep_low: 6, rep_high: 8, target_weight: -30 },
+    { exercise: "Push-Up", sets: 3, rep_low: 8, rep_high: 12, target_weight: null },
+    { exercise: "Front Plank", sets: 3, target_seconds: 60, mode: "timed" },
+  ]);
+  const targets = new Map([
+    ["Bench Press", { mode: "reps", sets: 3, rep_low: 6, rep_high: 8, target_weight: 105, target_seconds: null }],
+    ["Assisted Pull-Up", { mode: "reps", sets: 3, rep_low: 6, rep_high: 8, target_weight: -25, target_seconds: null }],
+    ["Push-Up", { mode: "reps", sets: 3, rep_low: 8, rep_high: 12, target_weight: null, target_seconds: null }],
+    ["Front Plank", { mode: "timed", sets: 3, rep_low: null, rep_high: null, target_weight: null, target_seconds: 66 }],
+  ]);
+  const candidates = [...targets].map(([exercise, authorized_target]) => ({
+    exercise,
+    muscle_group: null,
+    action: "overload",
+    reason_code: "progression_overload",
+    substitution_for: null,
+    note: "Earned",
+    authorized_target,
+  }));
+  const authorityEnvelope = envelope({
+    template: { day_number: 1, plan_day_id: repo.getPlanDay(1).id, focus: "Authority", intent: "template" },
+    candidates,
+  });
+
+  const deterministic = deterministicComposedSession(authorityEnvelope);
+  const deterministicByExercise = new Map(deterministic.items.map((item) => [item.exercise, item]));
+  for (const [exercise, target] of targets) {
+    assert.equal(deterministicByExercise.get(exercise).target_weight, target.target_weight, exercise);
+    assert.equal(deterministicByExercise.get(exercise).target_seconds, target.target_seconds, exercise);
+  }
+
+  const { session, validation } = normalizeComposedSession(
+    agentSession([
+      { exercise: "Bench Press", sets: 5, rep_low: 3, rep_high: 4, target_weight: 180 },
+      { exercise: "Assisted Pull-Up", sets: 5, rep_low: 3, rep_high: 4, target_weight: -5 },
+      { exercise: "Push-Up", sets: 5, rep_low: 3, rep_high: 4, target_weight: 45 },
+      { exercise: "Front Plank", sets: 5, target_seconds: 180, mode: "timed" },
+    ]),
+    authorityEnvelope
+  );
+  assert.equal(validation.ok, true);
+  const agentByExercise = new Map(session.items.map((item) => [item.exercise, item]));
+  for (const [exercise, target] of targets) {
+    assert.equal(
+      agentByExercise.get(exercise).sets,
+      5,
+      `${exercise} keeps the accepted daily volume while challenge stays server-owned`
+    );
+    assert.equal(agentByExercise.get(exercise).target_weight, target.target_weight, exercise);
+    assert.equal(agentByExercise.get(exercise).target_seconds, target.target_seconds, exercise);
+  }
+});
+
+test("authoritative deload targets are not reduced twice and cardio keeps accountable metadata", () => {
+  repo.savePlanDay(1, "Deload authority", "Exact reduced targets", [
+    { exercise: "Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 100 },
+    { exercise: "Front Plank", sets: 3, target_seconds: 60, mode: "timed" },
+  ]);
+  const decisionMeta = {
+    brain_decision_id: 77,
+    brain_change_summary: "Easy ride was adjusted.",
+    brain_change_reason: "Recovery context.",
+    brain_change_reversible: true,
+  };
+  const decision = envelope({
+    template: { day_number: 1, plan_day_id: repo.getPlanDay(1).id, focus: "Deload authority", intent: "template" },
+    candidates: [
+      {
+        exercise: "Bench Press",
+        muscle_group: null,
+        action: "deload",
+        reason_code: "progression_deload",
+        substitution_for: null,
+        note: null,
+        authorized_target: {
+          mode: "reps",
+          sets: 3,
+          rep_low: 6,
+          rep_high: 8,
+          target_weight: 90,
+          target_seconds: null,
+        },
+      },
+      {
+        exercise: "Front Plank",
+        muscle_group: null,
+        action: "deload",
+        reason_code: "progression_deload",
+        substitution_for: null,
+        note: null,
+        authorized_target: {
+          mode: "timed",
+          sets: 3,
+          rep_low: null,
+          rep_high: null,
+          target_weight: null,
+          target_seconds: 54,
+        },
+      },
+      {
+        exercise: "Easy ride",
+        muscle_group: null,
+        action: "hold",
+        reason_code: "progression_hold",
+        substitution_for: null,
+        note: null,
+        ...decisionMeta,
+      },
+    ],
+  });
+  const { session } = normalizeComposedSession(
+    {
+      name: "Exact deload",
+      why: "Use the server-owned reduced targets.",
+      items: [
+        { exercise: "Bench Press", sets: 3, rep_low: 3, rep_high: 4, target_weight: 140 },
+        { exercise: "Front Plank", sets: 3, target_seconds: 120, mode: "timed" },
+        { kind: "cardio", exercise: "Easy ride", target_duration_min: 20, target_zone: "easy" },
+      ],
+    },
+    decision
+  );
+  const byExercise = new Map(session.items.map((item) => [item.exercise, item]));
+  assert.equal(byExercise.get("Bench Press").target_weight, 90);
+  assert.equal(byExercise.get("Front Plank").target_seconds, 54);
+  assert.equal(byExercise.get("Easy ride").brain_decision_id, 77);
+  assert.equal(byExercise.get("Easy ride").brain_change_reversible, true);
+});
+
+test("an authorized null target remains null instead of fabricating a thin-history load", () => {
+  repo.savePlanDay(1, "Baseline", "No load anchor", [
+    { exercise: "New Row", sets: 3, rep_low: 8, rep_high: 10, target_weight: null },
+  ]);
+  const candidate = {
+    exercise: "New Row",
+    muscle_group: null,
+    action: "hold",
+    reason_code: "progression_hold",
+    substitution_for: null,
+    note: "Establish the baseline",
+    authorized_target: {
+      mode: "reps",
+      sets: 3,
+      rep_low: 8,
+      rep_high: 10,
+      target_weight: null,
+      target_seconds: null,
+    },
+  };
+  const bounded = normalizeComposedSession(
+    agentSession([{ exercise: "New Row", sets: 3, rep_low: 8, rep_high: 10, target_weight: 80 }]),
+    envelope({
+      template: { day_number: 1, plan_day_id: repo.getPlanDay(1).id, focus: "Baseline", intent: "template" },
+      candidates: [candidate],
+    })
+  ).session;
+  assert.equal(bounded.items[0].target_weight, null);
+  assert.equal(
+    deterministicComposedSession(
+      envelope({
+        template: { day_number: 1, plan_day_id: repo.getPlanDay(1).id, focus: "Baseline", intent: "template" },
+        candidates: [candidate],
+      })
+    ).items[0].target_weight,
+    null
+  );
+});
+
 test("real knee injury impacts feed the daily envelope through affected.exercise and canonical area mapping", () => {
   const date = localDateISO();
   repo.upsertExercise({ name: "Back Squat", muscle_group: "legs", mode: "reps" });

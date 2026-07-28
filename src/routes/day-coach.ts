@@ -3,11 +3,15 @@ import { enqueueAgentJob } from "../agentJobs.js";
 import { composeDailySession, suggestSession, weekAheadRead } from "../coachOps.js";
 import { readToday } from "../domain/brain/index.js";
 import { createAgentJob } from "../domain/person/index.js";
-import { dailySessionErrorBody, prepareDailySessionUseCase } from "../domain/training/index.js";
 import {
+  dailySessionErrorBody,
+  prepareDailySessionUseCase,
+  previewAdaptiveDailySessionUseCase,
+} from "../domain/training/index.js";
+import {
+  dailyOutcomeRead,
   decideDailySession,
   getActiveDailySession,
-  getDailySessionOutcome,
   recordDailySessionDecision,
   sessionPrimer,
 } from "../repo.js";
@@ -132,6 +136,24 @@ dayCoachRouter.get("/daily-session", (req, res) => {
   }
 });
 
+// Read-only, authoritative candidate shown immediately before Start. This is
+// built by the same adaptive seam prepare persists and never records a decision
+// or creates a workout session.
+dayCoachRouter.get("/daily-session/preview", (req, res) => {
+  try {
+    const override = req.query.override != null ? String(req.query.override) : null;
+    res.json(
+      previewAdaptiveDailySessionUseCase({
+        date: req.query.date != null ? String(req.query.date) : undefined,
+        constraints: override ? { day_read_override: override } : {},
+        train_anyway: req.query.train_anyway === "1" || req.query.train_anyway === "true",
+      })
+    );
+  } catch (error: any) {
+    res.status(400).json(dailySessionErrorBody(error));
+  }
+});
+
 // The deterministic decision envelope (Stage 2) — an explainable, reproducible
 // read of what KIND of day today is, the movement/muscle envelope, caps, and the
 // reason codes behind them, BEFORE any agent composes. Synchronous + agent-free.
@@ -169,6 +191,7 @@ dayCoachRouter.post("/daily-session/prepare", (req, res) => {
       prepareDailySessionUseCase({
         date: body.date,
         expected_active_id: body.expected_active_id,
+        expected_input_fingerprint: body.expected_input_fingerprint,
         day_number: body.day_number,
         source: body.source,
         agent_job_id: body.agent_job_id,
@@ -180,7 +203,9 @@ dayCoachRouter.post("/daily-session/prepare", (req, res) => {
       })
     );
   } catch (error: any) {
-    res.status(400).json(dailySessionErrorBody(error));
+    const status =
+      error?.code === "daily_session_preview_stale" || error?.code === "daily_session_active_changed" ? 409 : 400;
+    res.status(status).json(dailySessionErrorBody(error));
   }
 });
 
@@ -191,7 +216,17 @@ dayCoachRouter.post("/daily-session/prepare", (req, res) => {
 // no reconciled daily-session composition.
 dayCoachRouter.get("/daily-session/outcome", (req, res) => {
   try {
-    res.json(getDailySessionOutcome(req.query.date != null ? String(req.query.date) : undefined));
+    const rawSessionId = req.query.session_id;
+    const sessionId = rawSessionId == null ? null : Number(rawSessionId);
+    if (rawSessionId != null && (!Number.isInteger(sessionId) || Number(sessionId) <= 0)) {
+      throw new Error("session_id must be a positive integer");
+    }
+    res.json(
+      dailyOutcomeRead({
+        session_id: sessionId,
+        date: req.query.date != null ? String(req.query.date) : undefined,
+      })
+    );
   } catch (error: any) {
     res.status(400).json({ ok: false, error: error?.message ?? String(error) });
   }

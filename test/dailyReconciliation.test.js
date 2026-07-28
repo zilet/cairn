@@ -57,6 +57,11 @@ function acceptComposition(items, date = DATE) {
   return repo.prepareDailySession({ date, source: "agent_suggest", agent_job_id: job.id });
 }
 
+function acceptPlanComposition(items, date = DATE) {
+  repo.savePlanDay(1, "Outcome fixture", "Accepted work", items);
+  return repo.prepareDailySession({ date, source: "manual_plan", day_number: 1 });
+}
+
 test("a session with no daily-session composition reconciles to null", () => {
   repo.logSetByName({ date: DATE, exercise: "Back Squat", weight: 225, reps: 5, day_number: null });
   const session = repo.getSessionByDate(DATE);
@@ -186,6 +191,248 @@ test("an unstarted accepted session records a not_started, low-confidence outcom
   assert.equal(outcome.status, "not_started");
   assert.ok(outcome.facts.reason_codes.includes("not_started"));
   assert.equal(outcome.facts.confidence, "low");
+});
+
+test("matching planned cardio becomes a completed outcome with exact endurance evidence", () => {
+  const prepared = acceptPlanComposition([
+    {
+      kind: "cardio",
+      exercise: "Quality run",
+      target_duration_min: 40,
+      target_distance_km: 7,
+      target_zone: "Z4",
+      interval: [{ reps: 4, on: "1 km", off: "2 min", zone: "Z4" }],
+    },
+  ]);
+  repo.upsertGarminActivity({
+    external_id: "planned-quality-run",
+    date: DATE,
+    type: "run",
+    name: "Morning intervals",
+    duration_min: 42,
+    distance_km: 7.2,
+    pace: "5:50/km",
+    avg_hr: 158,
+    hr_zones: [
+      { zone: 2, secs: 600 },
+      { zone: 4, secs: 1_200 },
+    ],
+  });
+
+  const outcome = getDailySessionOutcome(DATE);
+  assert.equal(outcome.status, "completed", "cardio-only work does not need the strength finish button");
+  assert.equal(
+    outcome.facts.reason_codes.includes("completed_as_suggested"),
+    false,
+    "aggregate zones cannot prove prescribed interval structure"
+  );
+  assert.equal(outcome.facts.confounders.includes("other_activity"), false, "planned cardio is not its own confounder");
+  assert.equal(outcome.facts.dose_context.endurance, false);
+  assert.equal(outcome.facts.dose_context.comparable, false);
+  assert.ok(outcome.facts.dose_context.non_comparable_reasons.includes("endurance_quality_unverified"));
+  assert.equal(outcome.facts.endurance_evidence.length, 1);
+  const evidence = outcome.facts.endurance_evidence[0];
+  assert.equal(evidence.composition_item_key, `composition:${prepared.daily_session.id}:item:0`);
+  assert.equal(evidence.intent_key, "endurance:run:quality run");
+  assert.deepEqual(evidence.prescribed, {
+    sport: "run",
+    label: "Quality run",
+    duration_min: 40,
+    distance_km: 7,
+    target_zone: "Z4",
+    interval_text: '[{"off":"2 min","on":"1 km","reps":4,"zone":"Z4"}]',
+  });
+  assert.deepEqual(evidence.achieved, {
+    sport: "run",
+    type: "run",
+    name: "Morning intervals",
+    duration_min: 42,
+    distance_km: 7.2,
+    pace: "5:50/km",
+    avg_hr: 158,
+    observed_zone_summary: [
+      { zone: "Z2", seconds: 600 },
+      { zone: "Z4", seconds: 1_200 },
+    ],
+    source: "garmin",
+  });
+  assert.equal(evidence.match_confidence, "high");
+  assert.deepEqual(evidence.match_provenance, ["same_date", "canonical_sport:run", "activity_source:garmin"]);
+  assert.equal(evidence.zone_verdict, "observed");
+  assert.equal(evidence.completion_verdict, "quality_unverified");
+});
+
+test("a matched cardio duration or distance shortfall is factual partial evidence", () => {
+  acceptPlanComposition([
+    {
+      kind: "cardio",
+      exercise: "Long ride",
+      target_duration_min: 90,
+      target_distance_km: 35,
+      target_zone: "Z2",
+    },
+  ]);
+  repo.addActivity({ date: DATE, type: "ride", duration_min: 55, distance_km: 22 });
+
+  const outcome = getDailySessionOutcome(DATE);
+  const evidence = outcome.facts.endurance_evidence[0];
+  assert.equal(outcome.status, "completed");
+  assert.equal(evidence.completion_verdict, "dose_shortfall");
+  assert.equal(evidence.zone_verdict, "unknown", "a prescribed zone is not compared without observed zones");
+  assert.equal(evidence.achieved.observed_zone_summary, null);
+  assert.equal(outcome.facts.dose_context.partial, true);
+  assert.equal(outcome.facts.dose_context.comparable, false);
+  assert.equal(outcome.facts.reason_codes.includes("partial_session"), true);
+  assert.equal("adherence" in outcome.facts, false);
+});
+
+test("same-duration easy zones contradict a prescribed Z4 interval without blocking cardio completion", () => {
+  acceptPlanComposition([
+    {
+      kind: "cardio",
+      exercise: "Run intervals",
+      target_duration_min: 40,
+      target_zone: "Z4",
+      interval: [{ reps: 5, on: "3 min", off: "2 min", zone: "Z4" }],
+    },
+  ]);
+  repo.upsertGarminActivity({
+    external_id: "easy-instead-of-quality",
+    date: DATE,
+    type: "run",
+    name: "Easy run",
+    duration_min: 40,
+    distance_km: 6,
+    hr_zones: [{ zone: 2, secs: 2_400 }],
+  });
+
+  const outcome = getDailySessionOutcome(DATE);
+  const evidence = outcome.facts.endurance_evidence[0];
+  assert.equal(outcome.status, "completed", "the actual effort still happened");
+  assert.equal(evidence.zone_verdict, "not_observed");
+  assert.equal(evidence.completion_verdict, "quality_not_observed");
+  assert.equal(outcome.facts.reason_codes.includes("completed_as_suggested"), false);
+  assert.ok(outcome.facts.reason_codes.includes("endurance_quality_not_observed"));
+  assert.ok(outcome.facts.dose_context.non_comparable_reasons.includes("endurance_quality_not_observed"));
+});
+
+test("a prescribed zone with no observed zones remains quality-unverified", () => {
+  acceptPlanComposition([
+    { kind: "cardio", exercise: "Tempo run", target_duration_min: 35, target_zone: "Z3" },
+  ]);
+  repo.addActivity({ date: DATE, type: "run", duration_min: 35, distance_km: 6 });
+
+  const outcome = getDailySessionOutcome(DATE);
+  const evidence = outcome.facts.endurance_evidence[0];
+  assert.equal(outcome.status, "completed");
+  assert.equal(evidence.zone_verdict, "unknown");
+  assert.equal(evidence.completion_verdict, "quality_unverified");
+  assert.equal(outcome.facts.reason_codes.includes("completed_as_suggested"), false);
+  assert.ok(outcome.facts.reason_codes.includes("endurance_quality_unverified"));
+});
+
+test("simple dose-only cardio can complete as suggested without invented quality evidence", () => {
+  acceptPlanComposition([
+    { kind: "cardio", exercise: "Easy run", target_duration_min: 30, target_distance_km: 5 },
+  ]);
+  repo.addActivity({ date: DATE, type: "run", duration_min: 31, distance_km: 5.1 });
+
+  const outcome = getDailySessionOutcome(DATE);
+  const evidence = outcome.facts.endurance_evidence[0];
+  assert.equal(outcome.status, "completed");
+  assert.equal(evidence.zone_verdict, "unknown");
+  assert.equal(evidence.completion_verdict, "met_or_exceeded");
+  assert.equal(outcome.facts.reason_codes.includes("completed_as_suggested"), true);
+  assert.equal(outcome.facts.dose_context.comparable, true);
+});
+
+test("a non-interval target zone is observed only when it dominates the recorded effort", () => {
+  acceptPlanComposition([
+    { kind: "cardio", exercise: "Threshold run", target_duration_min: 30, target_zone: "Z4" },
+  ]);
+  repo.upsertGarminActivity({
+    external_id: "observed-threshold",
+    date: DATE,
+    type: "run",
+    name: "Threshold run",
+    duration_min: 30,
+    distance_km: 5,
+    hr_zones: [
+      { zone: 2, secs: 300 },
+      { zone: 4, secs: 1_500 },
+    ],
+  });
+
+  const outcome = getDailySessionOutcome(DATE);
+  assert.equal(outcome.facts.endurance_evidence[0].completion_verdict, "quality_observed");
+  assert.ok(outcome.facts.reason_codes.includes("completed_as_suggested"));
+  assert.ok(outcome.facts.reason_codes.includes("endurance_quality_observed"));
+  assert.equal(outcome.facts.dose_context.comparable, true);
+});
+
+test("wrong-modality and unmatched cardio do not falsely complete", () => {
+  acceptPlanComposition([
+    { kind: "cardio", exercise: "Easy run", target_duration_min: 30, target_zone: "Z2" },
+  ]);
+  repo.addActivity({ date: DATE, type: "ride", duration_min: 30, distance_km: 10 });
+
+  const outcome = getDailySessionOutcome(DATE);
+  assert.equal(outcome.status, "not_started");
+  assert.equal(outcome.facts.endurance_evidence[0].completion_verdict, "unmatched");
+  assert.equal(outcome.facts.endurance_evidence[0].achieved, null);
+  assert.equal(outcome.facts.confidence, "low");
+  assert.equal(outcome.facts.confounders.includes("other_activity"), true);
+});
+
+test("one actual endurance effort can satisfy at most one accepted cardio item", () => {
+  acceptPlanComposition([
+    { kind: "cardio", exercise: "Easy run", target_duration_min: 30, target_zone: "Z2" },
+    { kind: "cardio", exercise: "Long run", target_duration_min: 60, target_zone: "Z2" },
+  ]);
+  repo.addActivity({ date: DATE, type: "run", duration_min: 58, distance_km: 9 });
+
+  const outcome = getDailySessionOutcome(DATE);
+  assert.equal(
+    outcome.facts.endurance_evidence.filter((entry) => entry.completion_verdict === "unmatched").length,
+    1,
+    "one of the two accepted items remains unmatched"
+  );
+  assert.equal(outcome.facts.endurance_evidence.filter((entry) => entry.achieved != null).length, 1);
+});
+
+test("generic planned cardio matches conservatively at lower confidence", () => {
+  acceptPlanComposition([
+    { kind: "cardio", exercise: "Easy cardio", target_duration_min: 25 },
+  ]);
+  repo.addActivity({ date: DATE, type: "row", duration_min: 25 });
+
+  const evidence = getDailySessionOutcome(DATE).facts.endurance_evidence[0];
+  assert.equal(evidence.prescribed.sport, null);
+  assert.equal(evidence.achieved.sport, "row");
+  assert.equal(evidence.match_confidence, "low");
+  assert.ok(evidence.match_provenance.includes("generic_cardio"));
+});
+
+test("mixed strength and cardio keeps finish semantics and carries planned endurance as context", () => {
+  const prepared = acceptPlanComposition([
+    { exercise: "Back Squat", sets: 1, rep_low: 5, rep_high: 5, target_weight: 225 },
+    { kind: "cardio", exercise: "Easy run", target_duration_min: 30, target_zone: "Z2" },
+  ]);
+  repo.addActivity({ date: DATE, type: "run", duration_min: 30, distance_km: 5 });
+  let outcome = getDailySessionOutcome(DATE);
+  assert.equal(outcome.status, "in_progress", "matched cardio cannot finish the mixed strength session");
+
+  repo.logSetByName({ date: DATE, exercise: "Back Squat", weight: 225, reps: 5, day_number: null });
+  outcome = getDailySessionOutcome(DATE);
+  assert.equal(outcome.status, "in_progress");
+  repo.finishSession(prepared.session_id, null);
+  outcome = getDailySessionOutcome(DATE);
+  assert.equal(outcome.status, "completed");
+  assert.equal(outcome.facts.endurance_evidence[0].completion_verdict, "quality_unverified");
+  assert.equal(outcome.facts.confounders.includes("other_activity"), false);
+  assert.equal(outcome.facts.dose_context.endurance, true, "planned endurance still bounds strength learning");
+  assert.equal(outcome.facts.dose_context.comparable, false);
+  assert.ok(outcome.facts.dose_context.non_comparable_reasons.includes("loaded_endurance"));
 });
 
 test("session feedback flows into the reconciliation as a confounder", () => {
@@ -386,4 +633,72 @@ test("two newer clean outcomes supersede an older conflicting hold in the bounde
   assert.equal(response.verdict, "earned_absorbed");
   assert.equal(response.comparable_outcomes, 2, "only the two newest comparable exposures decide");
   assert.equal(response.considered_outcomes, 3, "older conflicting history remains inspectable");
+});
+
+function insertCompletedDoseOutcome({ date, movementKey, intentKey, challengeVerdict }) {
+  const sessionId = Number(db.prepare(`INSERT INTO sessions (date, kind) VALUES (?, 'strength')`).run(date).lastInsertRowid);
+  const compositionId = Number(
+    db
+      .prepare(
+        `INSERT INTO daily_session_compositions
+          (version, session_id, date, source, status, title, items_json, request_fingerprint)
+         VALUES (1, ?, ?, 'manual_plan', 'active', 'Response fixture', '[]', ?)`
+      )
+      .run(sessionId, date, `response-fixture-${date}`).lastInsertRowid
+  );
+  const facts = {
+    schema_version: 2,
+    confidence: "high",
+    dose_context: { comparable: true },
+    dose_evidence: [{ movement_key: movementKey, intent_key: intentKey, challenge_verdict: challengeVerdict }],
+  };
+  db.prepare(
+    `INSERT INTO daily_session_outcomes
+      (composition_id, session_id, date, status, facts_json)
+     VALUES (?, ?, ?, 'completed', ?)`
+  ).run(compositionId, sessionId, date, JSON.stringify(facts));
+}
+
+test("movement response finds sparse matching exposures beyond unrelated recent outcomes", () => {
+  seedPlan();
+  const squatKey = `exercise:${repo.findExercise("Back Squat").id}`;
+  const intentKey = "strength:reps:5-5";
+  insertCompletedDoseOutcome({ date: "2031-07-01", movementKey: squatKey, intentKey, challengeVerdict: "met" });
+  insertCompletedDoseOutcome({ date: "2031-07-02", movementKey: squatKey, intentKey, challengeVerdict: "met" });
+  for (let day = 3; day <= 11; day++) {
+    insertCompletedDoseOutcome({
+      date: `2031-07-${String(day).padStart(2, "0")}`,
+      movementKey: `movement:unrelated-${day}`,
+      intentKey,
+      challengeVerdict: "met",
+    });
+  }
+
+  const response = recentMovementResponse("Back Squat", { intent_key: intentKey });
+  assert.equal(response.verdict, "earned_absorbed");
+  assert.equal(response.comparable_outcomes, 2);
+  assert.equal(response.considered_outcomes, 2);
+});
+
+test("newer matching contradictory outcomes supersede older positive movement evidence", () => {
+  seedPlan();
+  const squatKey = `exercise:${repo.findExercise("Back Squat").id}`;
+  const intentKey = "strength:reps:5-5";
+  insertCompletedDoseOutcome({ date: "2031-07-01", movementKey: squatKey, intentKey, challengeVerdict: "met" });
+  insertCompletedDoseOutcome({ date: "2031-07-02", movementKey: squatKey, intentKey, challengeVerdict: "met" });
+  for (let day = 3; day <= 11; day++) {
+    insertCompletedDoseOutcome({
+      date: `2031-07-${String(day).padStart(2, "0")}`,
+      movementKey: `movement:unrelated-${day}`,
+      intentKey,
+      challengeVerdict: "met",
+    });
+  }
+  insertCompletedDoseOutcome({ date: "2031-07-12", movementKey: squatKey, intentKey, challengeVerdict: "under_prescribed" });
+  insertCompletedDoseOutcome({ date: "2031-07-13", movementKey: squatKey, intentKey, challengeVerdict: "under_prescribed" });
+
+  const response = recentMovementResponse("Back Squat", { intent_key: intentKey });
+  assert.equal(response.verdict, "earned_hold");
+  assert.equal(response.comparable_outcomes, 2, "only the two newest matching exposures decide");
+  assert.equal(response.considered_outcomes, 4, "older matching evidence remains inspectable");
 });

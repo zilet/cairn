@@ -25,6 +25,7 @@ import {
   listActivities,
   logSetByName,
   recentTraining,
+  recordExerciseSymptomObservation,
   recordMovementTolerance,
   recurTrainingSymptom,
   reportTrainingSymptom,
@@ -70,6 +71,29 @@ trainingLogRouter.get("/training-symptoms", (req, res) => {
       listTrainingSymptoms({
         on: req.query.on ? String(req.query.on) : undefined,
         include_resolved: req.query.include_resolved === "1" || req.query.include_resolved === "true",
+        movement: req.query.movement == null ? undefined : String(req.query.movement),
+        exercise_id: req.query.exercise_id == null ? undefined : positiveId(req.query.exercise_id, "exercise_id"),
+      })
+    );
+  } catch (error: any) {
+    res.status(400).json({ error: error?.message ?? String(error) });
+  }
+});
+
+// One exercise-card answer becomes one canonical, session-bound movement
+// observation. The use case owns lifecycle relevance and atomicity.
+trainingLogRouter.post("/training-symptoms/observation", (req, res) => {
+  try {
+    const body = req.body ?? {};
+    res.json(
+      recordExerciseSymptomObservation({
+        date: String(body.date ?? ""),
+        movement: boundedText(body.movement, "movement", 120, true)!,
+        session_id: body.session_id == null ? null : positiveId(body.session_id, "session_id"),
+        symptom_event_id:
+          body.symptom_event_id == null ? null : positiveId(body.symptom_event_id, "symptom_event_id"),
+        area_text: boundedText(body.area_text, "area_text", 300),
+        outcome: body.outcome,
       })
     );
   } catch (error: any) {
