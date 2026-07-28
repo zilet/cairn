@@ -926,7 +926,7 @@ test("timed logging stopwatch starts from zero, uses an absolute clock, resumes,
       return { ok: true };
     },
   });
-  const { card, row, durationEl, timer, button } = addTimedLoggingCard(harness.rootEl);
+  const { row, durationEl, timer, button } = addTimedLoggingCard(harness.rootEl);
   harness.deps.parseDur = (value) => Number(String(value).replace(/s$/, "")) || null;
   harness.controller.wireLogRow(row, harness.deps);
 

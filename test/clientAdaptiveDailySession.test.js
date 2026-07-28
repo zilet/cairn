@@ -12,7 +12,6 @@ const overview = readFileSync(join(root, "src/client/progress-overview-client.ts
 const plan = readFileSync(join(root, "src/client/plan-editor-controller.ts"), "utf8");
 const cards = readFileSync(join(root, "src/client/today-cards-client.ts"), "utf8");
 const suggestion = readFileSync(join(root, "src/client/today-session-suggest-controller.ts"), "utf8");
-const postRender = readFileSync(join(root, "src/client/today-post-render-wiring.ts"), "utf8");
 
 test("primary training entries converge on one durable prepare path", () => {
   assert.match(today, /todayApi\("\/daily-session\/prepare"/);

@@ -83,7 +83,7 @@ Docker defaults to `TZ=America/New_York`. The PWA reports its current IANA timez
 the last valid zone for weekly reviews, nightly maintenance, Brief precompute, and boundary application.
 Set `TZ` in `.env` as a sensible fallback for a new install before any device has connected. If weekly
 background work must run before the first PWA request, that fallback frames the configured day and hour.
-For Belgrade, use `TZ=Europe/Belgrade`.
+For example, use `TZ=Europe/London`.
 
 ---
 

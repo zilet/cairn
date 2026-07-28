@@ -261,7 +261,7 @@ export function registerProgramTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_training_agenda",
-    "The deterministic rolling agenda for this week's easy, quality, and long run intentions. Actual compatible logs close intentions regardless of weekday; open intentions carry a flexible window and current suggested opening around real lifting/riding/running load. Read-only, suggestion-not-a-gate, and no catch-up volume is owed.",
+    "The deterministic rolling agenda for this week's easy, quality, and long run intentions. Actual compatible logs close intentions regardless of weekday. Any completed run occupies its actual date; moderate/hard cross-training also reserves its date, while light cross-training may still share a clean easy-run opening. Remaining intentions move around real lifting/riding/running load. Read-only, suggestion-not-a-gate, and no catch-up volume is owed.",
     { date: z.string().optional() },
     async ({ date }) => asText(flexibleTrainingAgenda(date))
   );

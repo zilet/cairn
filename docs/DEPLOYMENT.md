@@ -47,7 +47,7 @@ Set a fallback timezone in `.env` for first boot. After the PWA connects, Cairn 
 the device's IANA timezone and uses it for weekly reviews and nightly background work:
 
 ```env
-TZ=Europe/Belgrade
+TZ=Europe/London
 ```
 
 ---

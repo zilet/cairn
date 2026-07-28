@@ -36,6 +36,7 @@ type TodayMainShellApi = {
   }
 
   function leadHtml(options: TodayMainShellLeadOptions, deps: TodayMainShellDeps): string {
+    void deps;
     return `${options.isToday ? "" : `<button id="backToday" class="ghostbtn back-today">← Back to today</button>`}
     <div id="ctxBanner"><div id="ctxEvents"></div><div id="ctxHealth"></div></div>
     ${options.briefHtml}

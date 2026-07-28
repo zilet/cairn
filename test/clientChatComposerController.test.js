@@ -100,7 +100,7 @@ test("composer recreation restores session-scoped retry text and idempotency key
     vm.runInNewContext(readFileSync(join(process.cwd(), "public/js/chat-composer-controller.js"), "utf8"), context);
     return context;
   };
-  const makeDeps = (context, input, api) => ({
+  const makeDeps = (_context, input, api) => ({
     token: 1, state: { tab: "chat", chatPrefill: null }, input,
     fileInput: { value: "", files: null, addEventListener() {}, click() {} },
     preview: { hidden: true, querySelector() { return null; } },

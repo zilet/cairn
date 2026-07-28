@@ -149,14 +149,17 @@ a feature conflict, the principle wins.
     background; you say the messy human sentence and it does the rest. If capture ever feels like work,
     that's a bug.
 
-13. **It meets you in your sport.** Cairn adapts to your *primary discipline* — strength, endurance
-    (running, riding, rowing…), or a hybrid of both — and it is neither a lifting app with cardio bolted
-    on nor a running app that ignores the gym. It speaks the language of whatever you actually train: for
-    a runner it thinks in easy / long / tempo / interval days, weekly mileage, pace, and time-in-zone; for
-    a lifter, in sets, load, and the slow climb of a working weight; for a hybrid, both at once, balanced
-    against recovery. The day's suggestion, the plan, progress, fueling, and the connected brain all
-    reshape around the sport you're in — because the same calm pointing only earns trust when it's
-    pointing in *your* terms. (Endurance is a modality to *program*, not merely a volume to cap.)
+13. **It meets you in your sport and your hierarchy.** Cairn follows the athlete's ordered durable
+    priorities and explicit endurance role — absent, supporting, co-primary, or primary. A broad
+    strength/endurance/hybrid discipline is only the compatibility fallback; a hybrid label never
+    silently makes two goals co-equal. Cairn is neither a lifting app with cardio bolted on nor a
+    running app that ignores the gym. It speaks the language of whatever you actually train: for a
+    runner it thinks in easy / long / tempo / interval days, weekly mileage, pace, and time-in-zone;
+    for a lifter, in sets, load, and the slow climb of a working weight; for a mixed athlete, both in
+    the relationship they chose, balanced against recovery. The day's suggestion, plan, progress,
+    fueling, and connected brain reshape around that direction — because calm pointing earns trust
+    only when it points in *your* terms. (Endurance is a modality to *program*, not merely a volume
+    to cap.)
 
 14. **Always the next move — just in time, and it gets you ready.** The elite coach is *always working
     in the background*: it observes, monitors, and treats **everything you do as a signal** — every log,
@@ -183,24 +186,26 @@ a feature conflict, the principle wins.
 
 ## 3. Where Cairn stands today (honest assessment)
 
-> **Updated 2026-06-23.** The original assessment below ("the quiet-intelligence layer hasn't been
-> built") is now *historical* — it described the pre-build state. The six-phase plan in §6 shipped
-> end-to-end and the product has grown well past it (§11, §12). What follows is the current read.
+> **Updated 2026-07-28.** The original assessment below ("the quiet-intelligence layer hasn't been
+> built") is now *historical* — it described the pre-build state. The six-phase plan in §6 and the
+> Era 2 program in §12 shipped end-to-end; the design record is retained to explain why.
 
 **Era 1 is done.** The quiet-intelligence layer is built: Today opens to a day-reading Brief, the
 connected brain propagates findings across domains, capture is effortless (voice + frequents + Apple
-Health + Garmin), nutrition adapts adherence-neutrally, and the buddy meets you in your sport
-(strength / endurance / hybrid). The constitution held the whole way — **no scores, zero push, fully
+Health + Garmin), nutrition adapts adherence-neutrally, and the buddy follows an athlete-owned
+ordered training direction rather than treating mixed goals as automatically equal. The constitution
+held the whole way — **no scores, zero push, fully
 pull-based, and in that propose-first era nothing auto-applied** (Amendment 1 later matured this into
 lead-mode: visible, reversible, announced-when-structural). Cairn is no longer "a logging app that
 doesn't read your day"; it reads the day and points.
 
-**The new gap is subtler: staying calm as it got smarter.** Era 1's question was *"does it read my
-day?"* (yes). Era 2's question is *"does it stay a calm daily driver now that it knows so much?"* The
-surface has legitimately grown — Today's rail can stack several cards, Progress has many sub-views — and
-while every card degrades to nothing when empty and nothing nags, **no single arbiter decides the
-*total*.** Calm-by-default (§2.2) and restraint-over-features (§2.4) are now the principles under the
-most pressure. Era 2 (§12) is about defending them deliberately. *The historical strengths and
+**The Era 2 gap was subtler: staying calm as it got smarter.** Era 1's question was *"does it read my
+day?"* (yes). Era 2's question was *"does it stay a calm daily driver now that it knows so much?"*
+At the point Era 2 began, the surface had legitimately grown — Today's rail could stack several
+cards and Progress had many sub-views — and, while every card degraded to nothing when empty and
+nothing nagged, **no single arbiter decided the total.** Calm-by-default (§2.2) and
+restraint-over-features (§2.4) were the principles under the most pressure. Era 2 (§12) closed that
+gap with a salience arbiter and a completed calm-driver program. *The historical strengths and
 core-gap notes below are kept for the record.*
 
 ### Genuine strengths (do not rebuild these)
@@ -414,8 +419,8 @@ REST/MCP shapes) so independent agent teams can run them. Every phase honors §8
 a **restraint note** — what we deliberately *don't* surface.
 
 > **✅ All six phases below shipped (2026-06-13; §11).** They are kept here as the executed plan of
-> record. The one deferred track is **5A — Photo → macros** (infrastructure ready, agent call not yet
-> wired); it is picked up as Era-2 item 3 in §12. Era 2 (§12) is the active frontier.
+> record. The one originally deferred track, **5A — Photo → macros**, later shipped as Era-2 item 3.
+> Era 2 (§12) is also complete and retained as design rationale.
 
 ---
 
@@ -761,7 +766,7 @@ rotation, version/model visibility) and its quality hardening; **calm nutrition*
 modes (lose/maintain/gain) + a daily fuel review & edit (v41). Schema reached **v41**; `sw.js`
 **cairn-v126**. Throughout, the constitution held: no scores, no push, pull-only, nothing auto-applies.
 
-### Era 2 — the calm daily driver (active; §12)
+### Era 2 — the calm daily driver (complete; §12)
 
 - [x] Item 1 — Today salience arbiter (`src/repo/today-agenda.ts` + agenda-driven `03-today.js`; the fuel card now surfaces only when there's food to evaluate — no capture nudge)
 - [x] Item 2 — cited-evidence reachable: offline `src/guidelines.ts` pack + `directiveCitationTag` + `researchAutoEligible` Settings auto-suggest (research stays opt-in)
@@ -774,7 +779,7 @@ modes (lose/maintain/gain) + a daily fuel review & edit (v41). Schema reached **
 
 ---
 
-## 12. Era 2 — the calm daily driver (the active frontier)
+## 12. Era 2 — the calm daily driver (completed design record)
 
 *(Items 1–6 below shipped — see the §11 progress log; kept as the design rationale of record.)*
 

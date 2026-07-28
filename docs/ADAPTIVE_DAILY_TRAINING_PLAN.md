@@ -1,6 +1,12 @@
 # Adaptive Daily Training Execution Plan
 
-**Status (2026-07-20):** Stage 1 is implemented in the local tree and is review-ready. It fixes daily-session persistence and identity, and snapshots the plan selection that is already adaptive. It has not yet been proven in a deployed self-hosted instance. Stages 2–4 below are planned work; the automatic bespoke-composition engine described there has not shipped.
+**Status (2026-07-28):** Stages 1–3 are implemented and deployed on the primary self-hosted
+instance: durable accepted-session identity, the deterministic decision envelope, and bounded
+server-validated agent composition. Stage 4's factual outcome ledger, movement-response retrieval,
+and endurance reconciliation are also shipped; automatic structural program evolution remains
+behind Cairn's existing proposal/autonomy boundary rather than applying from one session. Local
+verification and the primary deployment prove build identity, auth, migration, and database
+integrity; the destructive/adversarial scenarios below remain a separate hands-on acceptance plan.
 
 This plan follows Cairn's constitution: the product suggests the next useful move, never turns a weekly plan into a compliance gate, avoids readiness scores, honors athlete overrides, and keeps health information informational rather than diagnostic.
 
@@ -116,11 +122,14 @@ The integrated tests cover:
 - PWA acceptance, canonical caching, reload restoration, labels, item order, and replacement behavior;
 - compatibility with the existing Today session controller and performance UI.
 
-The final local gates pass: `npm run verify`, `npm run release:check`, built-smoke assertions, and browser coverage of the relevant acceptance flows. Deployment and post-deploy proof remain intentionally outstanding.
+The integrated local gates pass: `npm run verify`, `npm run release:check`, built-smoke assertions,
+and browser coverage of the relevant acceptance flows. The primary deployment has separately
+verified the exact build identity, auth boundary, schema migration, and database integrity.
 
 ## 4. Stage 2 — deterministic daily decision envelope
 
-Stage 2 should make the default selection explainable and reproducible before an agent is involved. Implement it as a pure or near-pure domain decision that consumes a bounded snapshot and returns a versioned decision envelope.
+Stage 2 makes the default selection explainable and reproducible before an agent is involved. It is
+a deterministic domain decision over a bounded snapshot and returns a versioned decision envelope.
 
 ### Required inputs
 
@@ -296,10 +305,10 @@ Stage 1 provides the safe primitive of explicit replacement before logging and r
 
 | Stage | Data | API/domain surface | Compatibility rule |
 |---|---|---|---|
-| 1 — implemented locally | `daily_session_compositions`; required session link, nullable plan link; normalized items, constraints, provenance; version/status history | `getActiveDailySession`, `prepareDailySession`; REST and MCP read/prepare; hydrated session DTO | Older sessions return `daily_session: null`; older clients continue using plan-day sessions |
-| 2 — deterministic decision | Add versioned decision metadata such as `policy_version`, `input_fingerprint`, reason codes, and bounded signal timestamps, either in a dedicated JSON field/table or migrated columns | New deterministic `buildDailySessionDecision()`; prepare consumes it by default; optional bounded diagnostic read for UI/explainability | Missing signals fall back to current adaptive plan selection; adding columns requires a numbered migration |
-| 3 — agent composition | Persist normalized candidate provenance, validation result, fallback reason, and safe-introduction metadata | `composeDailySession(envelope)` in shared orchestration; REST/MCP remain thin wrappers around prepare | Agent absence or malformed output never blocks a usable deterministic session |
-| 4 — outcome learning | `daily_session_outcomes` schema-v2 JSON with stable identity, complete prescribed/achieved dose, context exclusions, and bounded repeated-response evidence | Reconcile after every outcome-changing session mutation; progression consumption remains a separate integration step | Existing/legacy JSON remains readable; recovery/override/partial/confounded outcomes never drive structural deload |
+| 1 — shipped | `daily_session_compositions`; required session link, nullable plan link; normalized items, constraints, provenance; version/status history | `getActiveDailySession`, `prepareDailySession`; REST and MCP read/prepare; hydrated session DTO | Older sessions return `daily_session: null`; older clients continue using plan-day sessions |
+| 2 — shipped | Versioned decision metadata with `policy_version`, `input_fingerprint`, reason codes, and bounded signal timestamps | Deterministic `buildDailySessionDecision()`; prepare consumes it by default; bounded diagnostics support UI/explainability | Missing signals fall back safely; additive columns follow numbered migration rules |
+| 3 — shipped | Normalized candidate provenance, validation result, fallback reason, and safe-introduction metadata | `composeDailySession(envelope)` in shared orchestration; REST/MCP remain thin wrappers around prepare | Agent absence or malformed output never blocks a usable deterministic session |
+| 4 — factual loop shipped | `daily_session_outcomes` schema-v2 JSON with stable identity, complete prescribed/achieved dose, context exclusions, and bounded repeated-response evidence | Reconcile after every outcome-changing session mutation; structural progression remains a separate proposal/autonomy step | Existing/legacy JSON remains readable; recovery/override/partial/confounded outcomes never drive structural deload |
 | Undo/observability | Composition lineage, brain-decision linkage, aggregate counters | Explicit revert endpoint/tool only after server policy is defined | Revert creates history; it never deletes logged work |
 
 Public DTOs should expose the accepted prescription and concise explanation, not internal medical records or an unbounded raw coaching context. REST and MCP must continue to call the same domain use cases.
@@ -326,39 +335,41 @@ Public DTOs should expose the accepted prescription and concise explanation, not
 | 4 | Repeated evidence supports structural change | A ledgered proposal is created; weekly plan is not silently mutated | Program-evolution/autonomy test |
 | All | Existing plan-backed session, JSON export, and SQLite restore | Behavior remains valid with nullable additive fields; JSON export carries history, while SQLite is the restore artifact | Regression, migration, export, and restore checks |
 
-## 10. Implementation sequence
+## 10. Implemented stages and remaining extensions
 
-Keep each stage independently reviewable, with shared domain behavior covered before its REST, MCP, and PWA wrappers are expanded. Run focused deterministic tests during implementation, then integrated verification before a release candidate.
+Stages 1–3 and Stage 4's factual learning loop are shipped. The sequence below is retained as the
+maintenance boundary for future extensions: keep shared domain behavior covered before REST, MCP,
+and PWA wrappers expand, and keep structural program evolution behind the proposal/autonomy ledger.
 
-### Stage 1 closeout
+### Stage 1 — durable identity (shipped)
 
 - Verify persistence, identity, replacement locking, legacy behavior, and REST/MCP parity.
 - Run the normal release checks before deploying; use a rendered smoke only when the user-visible acceptance flow needs proof.
 
-### Stage 2 — deterministic decision envelope
+### Stage 2 — deterministic decision envelope (shipped)
 
-1. Add the decision module and fixture-heavy deterministic tests.
-2. Once its output schema is accepted, expose it through shared DTOs and thin REST/MCP wrappers.
-3. Render the accepted decision kind and concise reason facts without scores.
-4. Review precedence, null-safety, health boundaries, and deterministic replay before integrated verification.
+1. Keep the decision module and fixture-heavy deterministic tests authoritative.
+2. Evolve its schema through shared DTOs and thin REST/MCP wrappers.
+3. Preserve the accepted decision kind and concise reason facts without scores.
+4. Re-review precedence, null-safety, health boundaries, and deterministic replay after extensions.
 
-### Stage 3 — bounded agent composition
+### Stage 3 — bounded agent composition (shipped)
 
-1. Add prompt/schema, server normalization, fallback behavior, and safe-introduction policy in shared domain/orchestration code.
-2. Cover adversarial normalization and agent-unavailable fallback cases.
-3. Add candidate, accepted, and fallback presentation with explicit athlete choice.
-4. Review safety, trust boundaries, identity, and plan non-mutation before integrated verification.
+1. Keep prompt/schema, server normalization, fallback behavior, and safe-introduction policy in shared domain/orchestration code.
+2. Preserve adversarial normalization and agent-unavailable fallback coverage.
+3. Keep candidate, accepted, and fallback presentation explicit about athlete choice.
+4. Re-review safety, trust boundaries, identity, and plan non-mutation after extensions.
 
-### Stage 4 — outcome learning and evolution
+### Stage 4 — factual loop shipped; structural expansion remains bounded
 
-1. Add reconciliation data, finish/feedback integration, confidence rules, and strength/endurance/life-context learning.
-2. Connect repeated evidence to existing brain decisions and weekly-plan proposals, including undo semantics.
-3. Add athlete-facing explanation/history and operational documentation.
-4. Review false-causality risks, reversibility, privacy, and accidental structural mutation; verify migration, export, restore, and release behavior.
+1. Maintain reconciliation data, finish/feedback integration, confidence rules, and strength/endurance/life-context learning.
+2. Route any deeper repeated-evidence action through existing brain decisions and weekly-plan proposals, including Undo semantics.
+3. Extend athlete-facing explanation/history and operational documentation only when it improves a decision.
+4. Re-review false-causality risks, reversibility, privacy, and accidental structural mutation; verify migration, export, restore, and release behavior.
 
 ## 11. Rollout, back compatibility, and observability
 
-### Deployment sequence
+### Repeatable deployment and rollback sequence
 
 1. Capture a current database backup and JSON export using the documented backup procedure.
 2. Run local integrated gates and build the exact artifact to deploy.
@@ -378,7 +389,8 @@ Run this against a fresh test date after deployment; do not alter existing athle
 5. Log the first set and verify it attaches to the same training `session_id`; for a custom suggestion, `plan_day_id` remains null.
 6. Attempt replacement after logging and verify the server refuses without changing the active composition or logged set.
 7. Separately accept a plan-backed selection and verify its template link and **From plan** label survive reload.
-8. Verify relevant activity context remains available to coaching; do not claim Stage 2 adaptation until its deterministic envelope is deployed and tested.
+8. Verify relevant activity context remains available to coaching and the accepted session preserves
+   the same deterministic envelope across reload and restart.
 
 ### Observability
 
@@ -395,4 +407,9 @@ Operational logs must not include exercise rationale containing private health c
 
 ## Definition of done
 
-Adaptive daily training is complete only when Cairn can deterministically choose a safe next-session envelope, optionally compose within it, persist the athlete's accepted session without identity loss, learn cautiously from the outcome, and propose structural evolution through the existing autonomy ledger—with reload, restart, legacy, rollback, and deployed-instance proof. Stage 1 establishes the durable substrate; it is not a claim that this full loop already exists.
+Adaptive daily training is complete only when Cairn can deterministically choose a safe
+next-session envelope, optionally compose within it, persist the athlete's accepted session without
+identity loss, learn cautiously from the outcome, and propose structural evolution through the
+existing autonomy ledger—with reload, restart, legacy, rollback, and deployed-instance proof.
+Stages 1–4 now provide that bounded loop; the remaining work is deeper hands-on acceptance and
+cautious expansion of structural learning, not a return to transient session identity.

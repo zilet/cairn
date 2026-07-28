@@ -22,9 +22,12 @@ your whole picture and *suggests* what kind of day today should be (a suggestion
 propagates flagged lab findings across every domain they touch, runs adaptive nutrition toward your
 actual goal — **losing, holding, or building** — learns who you are and grounds every coaching call
 in it, captures effortlessly (a plate photo, time-of-day frequents, voice, or Apple Health), and
-surfaces quiet cross-domain insights one at a time. It coaches whatever you train — **lifting,
-running, or a hybrid of both** — periodizing a conservative ramp + taper toward a dated **race** or
-holding a no-date **standing** readiness goal, and adapting next week to the miles you actually ran.
+surfaces quiet cross-domain insights one at a time. It follows your athlete-owned ordered training
+priorities — strength, muscle, endurance, leanness, and longevity in whatever hierarchy fits you —
+instead of assuming every mixed athlete wants equal lifting and endurance. It can periodize a
+conservative ramp + taper toward a dated **race** or hold a no-date **standing** readiness goal;
+current-week run intentions move around completed lifting and endurance work without creating
+catch-up debt.
 Its strength plan **evolves** as you progress (earned overloads, deloads where you've stalled), and
 the whole app runs on your **device's local clock**, so an evening log lands on the right day at home
 *and* while traveling. The product north-star lives in [`docs/VISION.md`](docs/VISION.md). One Node
@@ -109,7 +112,7 @@ docker run -d --name cairn -p 127.0.0.1:8787:8787 \
 
 Open **http://localhost:8787** — you land on the Brief immediately. The three named volumes keep your
 data (`cairn-data`), logins (`cairn-home`), and selected tools (`cairn-tools`) across updates; to update, `docker pull
-ghcr.io/zilet/cairn:latest` and re-run the command. Add `-e TZ=Europe/Belgrade` for your timezone.
+ghcr.io/zilet/cairn:latest` and re-run the command. Add `-e TZ=Europe/London` for your timezone.
 Only widen the bind to your LAN (for example `-p 8787:8787`) on a private network and with
 `CAIRN_AUTH_TOKEN` set.
 Prefer a compose file (env vars, loopback-safe defaults)?
@@ -286,19 +289,23 @@ checklist.
 
 ## What Cairn tracks
 
-- **Your primary discipline:** Cairn adapts to how you train — strength/lifting,
-  running/endurance, or a hybrid of both — so the Brief, the plan, and the coaching read speak to
-  what you're actually working toward. On top of the discipline sits an optional **endurance goal**:
+- **Your training direction:** ordered durable priorities and an explicit endurance role tell Cairn
+  what leads, what supports, and what is absent. The older strength/endurance/hybrid discipline
+  remains a compatibility fallback, not proof that mixed goals are co-equal. On top of that durable
+  direction sits an optional **endurance goal**:
   a dated **race** (Cairn periodizes a conservative ramp and taper toward it) or a no-date
   **standing** readiness target ("stay 10k-ready" — maintain, don't peak).
-- **Lifting** (precise): the 5-day plan with per-exercise targets, logged sets, est-1RM trends.
+- **Lifting** (precise): the weekly strength plan with per-exercise targets, logged sets, and
+  est-1RM trends.
   This is the part that gets actively optimized.
 - **Running & endurance:** the coach shapes the week's runs (easy / tempo / intervals / long,
-  each with distance, duration, and target zone) through the same autonomy policy; a synced Garmin run then
-  reconciles against what was prescribed, so Today shows "N of M km this week" in plain words and
-  next week adapts **conservatively** to the miles you actually ran (fell short → hold, never make up
-  missed volume). Weekly mileage, time-in-zone, pace trend, and endurance PRs live in Progress →
-  Endurance; VO2max, resting HR, and HRV join the connected brain as optimal-zone markers.
+  each with distance, duration, and target zone) through the same autonomy policy. Run-day anchors
+  are provisional: compatible work closes the intention on the day it happened, and remaining work
+  moves around real lifting/riding/running load without prescribing the same day twice or making up
+  missed volume. A synced Garmin run reconciles against what was prescribed, and next week adapts
+  **conservatively** to the miles actually completed. Weekly mileage, time-in-zone, pace trend, and
+  endurance PRs live in Progress → Endurance; VO2max, resting HR, and HRV join the connected brain
+  as optimal-zone markers.
 - **Profile & goal**: a neutral example profile ships seeded — replace it with your own in the Me
   tab (or first-run onboarding). Pick a **goal mode** — **lose / maintain / gain** — and the math
   follows it: maintaining anchors to your real TDEE (no forced deficit), building is a conservative
@@ -430,10 +437,10 @@ posture if you want every material change held for approval. (First boot seeds t
 Keep your injury constraints current in the Plan editor so every automatic read sees them. The PWA
 reports the browser/device IANA timezone and Cairn remembers the last valid zone for scheduled work,
 updating it when the device timezone changes. Docker's `TZ` value is only the fallback before a
-device has connected; for a new Belgrade install, for example:
+device has connected; for example:
 
 ```env
-TZ=Europe/Belgrade
+TZ=Europe/London
 ```
 
 ## Connect MCP to Claude Code

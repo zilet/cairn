@@ -32,7 +32,13 @@ The original lunch failure mode is explicitly guarded: a food-only turn cannot t
 - `brain_rollbacks` stores exact server-only before/after reversal snapshots without widening the public decision contract. Training Undo uses a three-way, field-scoped restore, so later manual edits or newer decisions are never erased by an older rollback.
 - The nightly scheduler evaluates mature expectations, preserves inconclusive history when late data arrives, then rebuilds the personal-response model.
 - `what_works_for_you` is a typed, bounded coach-context block with evidence counts, recency, contradiction handling, and safety clamping.
-- The whole-person trajectory reports each domain as `better | holding | worse | unknown`, names phase trade-offs, and forces revision on unexplained regression. For strength/hybrid profiles, strength and muscle development stay the optimization goal in every body-composition phase; avoiding strength or lean-mass loss is a universal floor, not the aspiration. Established lifts are compared against themselves so one regression cannot hide inside gains elsewhere.
+- The whole-person trajectory reports each domain as `better | holding | worse | unknown`, names
+  phase trade-offs, and forces revision on unexplained regression. Explicit ordered
+  `training_intent` is authoritative: strength and muscle development lead only when the athlete
+  places them there, while a legacy strength/hybrid discipline is a compatibility fallback rather
+  than proof that strength and endurance are co-equal. Avoiding unnecessary strength or lean-mass
+  loss remains a universal floor. Established lifts are compared against themselves so one
+  regression cannot hide inside gains elsewhere.
 - `day_read_adherence` (`src/repo/brain/read-adherence.ts`, added 2026-07-25) is the ledger's one
   same-day expectation — see below.
 

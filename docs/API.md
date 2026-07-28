@@ -536,8 +536,8 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/profile` |  |
-| PUT | `/api/profile` |  |
+| GET | `/api/profile` | Read the athlete profile, including optional manual home_location. An active dated trip may override effective coaching location without rewriting home. |
+| PUT | `/api/profile` | Partially update the athlete profile. Omitted fields stay unchanged; explicit null/empty clears nullable fields such as home_location. |
 | POST | `/api/profile/grow-about-me` | Grow profile.about_me from typed memory + family + check-ins (augments, never overwrites blindly). changed:false is the calm, common answer. |
 
 ## `/program`
@@ -779,14 +779,14 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/training-agenda` | Rolling weekly run intentions: actual compatible logs close intentions and suggested openings move around real strength/endurance load. Read-only. |
+| GET | `/api/training-agenda` | Rolling weekly run intentions: actual compatible logs close intentions and suggested openings move around real strength/endurance load. Any completed run occupies its actual date; moderate/hard cross-training also reserves its date, while light cross-training may still share a clean easy-run opening. Read-only; unfinished work creates no catch-up debt. |
 
 ## `/training-intent`
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/training-intent` |  |
-| PUT | `/api/training-intent` |  |
+| GET | `/api/training-intent` | Read the athlete-owned ordered priorities, endurance role, and optional sport-specific duration capability plus its evidence-based current status. |
+| PUT | `/api/training-intent` | Set or clear ordered training intent. A dated race remains a separate endurance goal and cannot silently replace this durable hierarchy. |
 
 ## `/training-load`
 

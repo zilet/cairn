@@ -99,7 +99,7 @@ Cairn's background scheduler follows the last valid IANA timezone reported by th
 different first-boot fallback should create a `.env` next to `docker-compose.yml`, for example:
 
 ```env
-TZ=Europe/Belgrade
+TZ=Europe/London
 ```
 
 ## Persistent State

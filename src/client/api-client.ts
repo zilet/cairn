@@ -1649,11 +1649,11 @@ function samePrepareIntent(item: OutboxItem, dailySession: Record<string, unknow
   const planSource = expected.source === "adaptive_plan" || expected.source === "manual_plan";
   if (!planSource && (expected.why ?? null) !== (dailySession.why ?? null)) return false;
   if (
-    Object.prototype.hasOwnProperty.call(expected, "constraints") &&
+    Object.hasOwn(expected, "constraints") &&
     !sameNormalizedPrepareValue(expected.constraints, dailySession.constraints)
   )
     return false;
-  if (Object.prototype.hasOwnProperty.call(expected, "provenance")) {
+  if (Object.hasOwn(expected, "provenance")) {
     const expectedProvenance =
       expected.provenance && typeof expected.provenance === "object"
         ? (expected.provenance as Record<string, unknown>)
@@ -1673,7 +1673,7 @@ function samePrepareIntent(item: OutboxItem, dailySession: Record<string, unknow
       // Compare every provenance promise the client persisted, but tolerate
       // server-owned enrichment fields added to the canonical record.
       for (const key of Object.keys(expectedProvenance)) {
-        if (!Object.prototype.hasOwnProperty.call(actualProvenance, key)) return false;
+        if (!Object.hasOwn(actualProvenance, key)) return false;
         if (!sameNormalizedPrepareValue(expectedProvenance[key], actualProvenance[key])) return false;
       }
     }
@@ -1739,7 +1739,7 @@ function replayHasSemanticFailure(item: OutboxItem, value: unknown): boolean {
   const response = value as Record<string, unknown>;
   if (response.ok === false) return true;
   if (
-    Object.prototype.hasOwnProperty.call(response, "error") &&
+    Object.hasOwn(response, "error") &&
     response.error != null &&
     response.error !== "" &&
     response.error !== false

@@ -132,7 +132,7 @@ test("a live-shaped threshold run today reserves today and moves the remaining e
 });
 
 test("a matched easy-effort completion date cannot be reused for another run intention", () => {
-  const activity = repo.addActivity({
+  repo.addActivity({
     type: "run",
     date: TUESDAY,
     duration_min: 50,

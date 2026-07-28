@@ -60,9 +60,12 @@ objective; a temporary race may shape the week without silently becoming the ath
 identity. `weeklyRunPlan()` creates a conservative weekly running dose, while
 `flexibleTrainingAgenda()` reconciles that dose with actual run logs and the lower-body/cardio work
 that really occurred. Its day numbers are provisional anchors: a compatible early or late run closes
-one intention, a completed intention is never prescribed twice, hard lower-body/cardio work moves a
-key run toward a cleaner opening, cross-training contributes load but cannot falsely complete a run,
-and unfinished work disappears at the week boundary instead of becoming catch-up volume. Supporting
+one intention, a completed intention is never prescribed twice, and every completed run reserves its
+actual date from the remaining run intentions even when it does not match one. Moderate/hard
+cross-training also reserves its date; light cross-training may still share a clean easy-run opening.
+Hard lower-body/cardio work moves a key run toward a cleaner opening, cross-training contributes load
+but cannot falsely complete a run, and unfinished work disappears at the week boundary instead of
+becoming catch-up volume. Supporting
 endurance is capped at three useful runs in a normal week and two when recovery, a recovery cycle, or
 an active health hold argues for less; the weekly volume falls with that frequency reduction and each
 remaining run stays capped by recent exposure instead of absorbing the missing session. A stretch

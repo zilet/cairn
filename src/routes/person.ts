@@ -23,7 +23,11 @@ import {
 export const personRouter = Router();
 
 // ---- profile & goal ----
+// Read the athlete profile, including optional manual home_location. An active
+// dated trip may override effective coaching location without rewriting home.
 personRouter.get("/profile", (_req, res) => res.json(getProfile()));
+// Partially update the athlete profile. Omitted fields stay unchanged; explicit
+// null/empty clears nullable fields such as home_location.
 personRouter.put("/profile", (req, res) => {
   const body = req.body ?? {};
   // A real goal change re-seeds the gentle goal-check cadence at the active tier
@@ -45,10 +49,14 @@ personRouter.put("/profile", (req, res) => {
   res.json(setProfile(body));
 });
 personRouter.get("/goal", (_req, res) => res.json(computeGoalCheck()));
+// Read the athlete-owned ordered priorities, endurance role, and optional
+// sport-specific duration capability plus its evidence-based current status.
 personRouter.get("/training-intent", (_req, res) => {
   const intent = getTrainingIntent();
   res.json({ intent, endurance_capacity: getEnduranceCapacity(intent) });
 });
+// Set or clear ordered training intent. A dated race remains a separate
+// endurance goal and cannot silently replace this durable hierarchy.
 personRouter.put("/training-intent", (req, res) => {
   const body = req.body;
   const value =

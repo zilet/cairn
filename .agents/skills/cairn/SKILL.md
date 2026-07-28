@@ -24,10 +24,12 @@ use the token support provided by the client).
 
 ## Intent → tool mapping
 
-- **"What's my workout today / show my plan"** → `get_plan` (or `get_plan_day` for one day). Render
-  the day's exercises with sets × rep range @ target, and surface any `constraint_note` (injury
-  rules) prominently.
-- **"Log my ride / run / swim / hike"** (e.g. *"did 2h in the fells, felt strong"*) → `log_activity`
+- **"What's my workout today / what should I train?"** → read `get_daily_session` first; when
+  nothing has been accepted, use `preview_daily_session` for the exact evidence-aware candidate
+  Cairn would persist. This is read-only: call `prepare_daily_session` only when the athlete
+  explicitly starts or accepts it. **"Show my weekly plan/template"** → `get_plan` (or
+  `get_plan_day` for one template day).
+- **"Log my ride / run / swim / hike"** (e.g. *"did 2h on rolling trails, felt strong"*) → `log_activity`
   with the raw text in `text`. Cairn parses type/duration/distance/pace instantly, then (if enrichment
   is enabled) a background agent refines the entry and may distill a notable durable fact into memory.
   Read it back.
@@ -42,14 +44,14 @@ use the token support provided by the client).
 - **"How am I tracking / am I on pace"** → `get_goal_check` (TDEE + lean-safe feasibility) and
   `get_progress` for the lifts they ask about (Epley est-1RM trend). Summarize honestly; if the goal
   is flagged aggressive, say so and quote the lean-safe recommendation.
-- **"I'm down to 176 / push my goal date / change my weight / I live in Cambridge"** →
+- **"I'm down to 176 / push my goal date / change my weight / I live in Denver"** →
   `set_profile` (any subset). Store the usual base as `home_location`; never request browser
   geolocation or treat it as a daily current-location picker.
 - **"My priorities are … / endurance supports my main goal / I want to stay ready for 2-hour MTB
   rides"** → `set_training_intent`. Keep the durable ordered priorities, endurance role, and
   sport-specific duration capability here. A temporary dated race belongs in `set_endurance_goal`;
   do not let the event silently replace the durable hierarchy. Read back with `get_training_intent`.
-- **"Fells ride / trail MTB / downhill MTB / skiing in winter"** → preserve the terrain or modality
+- **"Trail-system ride / trail MTB / downhill MTB / skiing in winter"** → preserve the terrain or modality
   in the `log_activity` text and in durable memory/intent when it describes identity. Trail/XC MTB
   includes climbs and descents and is not downhill-only; lift-served downhill, road, gravel, alpine
   skiing, Nordic skiing, touring, and unspecified skiing have different load meaning. Never invent a

@@ -312,7 +312,7 @@ type MeProfileFormContext = {
         <input id="name" type="text" placeholder="e.g. Alex Rivera" maxlength="120" value="${deps.escapeAttr(profile.name || "")}" class="form-input"></div>
       <div class="field" style="margin-bottom:9px"><label for="home_location">Home location <span class="ob-opt">— optional</span></label>
         <p class="aboutme-hint">Your usual home base gives the coach local and seasonal context. An active trip can temporarily override it for coaching without changing what you save here.</p>
-        <input id="home_location" type="text" placeholder="e.g. Cambridge, MA" maxlength="160"
+        <input id="home_location" type="text" placeholder="e.g. Denver, CO" maxlength="160"
           value="${deps.escapeAttr(profile.home_location || "")}" class="form-input"></div>
       <div class="field aboutme" style="margin-bottom:0">
         <label for="about_me">About you</label>
@@ -387,7 +387,7 @@ type MeProfileFormContext = {
         <div class="field" style="margin:9px 0 0"><label for="endurance_capacity_duration">Target duration (minutes)</label>
           <input id="endurance_capacity_duration" type="number" min="1" step="1" value="${deps.escapeAttr(trainingIntent.endurance_capacity?.target_duration_min ?? "")}" class="form-input"></div>
         <div class="field" style="margin:9px 0 0"><label for="endurance_capacity_context">Context <span class="ob-opt">— optional</span></label>
-          <input id="endurance_capacity_context" type="text" maxlength="240" placeholder="e.g. technical trails in the Fells" value="${deps.escapeAttr(trainingIntent.endurance_capacity?.context || "")}" class="form-input"></div>
+          <input id="endurance_capacity_context" type="text" maxlength="240" placeholder="e.g. rolling technical trails" value="${deps.escapeAttr(trainingIntent.endurance_capacity?.context || "")}" class="form-input"></div>
       </div>
       <div class="field" id="endGoalField" style="margin-bottom:0">
         <label>Running goal <span class="ob-opt">— optional</span></label>
@@ -399,7 +399,7 @@ type MeProfileFormContext = {
         </div>
         <div id="egRace" class="eg-sub" style="${enduranceMode === "race" ? "" : "display:none"}">
           <div class="field" style="margin:9px 0 0"><label for="eg_event">Race</label>
-            <input id="eg_event" type="text" maxlength="120" placeholder="e.g. Cambridge Half" value="${deps.escapeAttr(enduranceGoal.event || "")}" class="form-input"></div>
+            <input id="eg_event" type="text" maxlength="120" placeholder="e.g. Spring Half Marathon" value="${deps.escapeAttr(enduranceGoal.event || "")}" class="form-input"></div>
           <div class="field" style="margin:9px 0 0"><label for="eg_date">Race date</label>
             <input id="eg_date" type="date" value="${deps.escapeAttr(enduranceGoal.date || "")}" class="form-input"></div>
           <div class="field" style="margin:9px 0 0"><label for="eg_target">Target <span class="ob-opt">— optional</span></label>

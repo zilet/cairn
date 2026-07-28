@@ -1,12 +1,13 @@
 # Elite Coaching Quality Plan
 
-**Status (2026-07-28):** Waves 0–4 are implemented locally. Independent review accepted the
-integrated change set and the complete deterministic verification gate passed across 423 test files.
-The authoritative pre-Start preview, compare-and-set acceptance, session-bound movement
-observations, in-card bounded choices, deterministic strength/endurance outcome read, and sparse
-movement-response retrieval are present in the current review-ready tree. The Raspberry Pi is still
-running an older build, so live behavior remains evidence of the prior failure mode until a
-separately authorized deploy and post-deploy audit.
+**Status (2026-07-28):** Waves 0–4 are implemented, independently reviewed, and covered by the
+complete deterministic verification gate. The authoritative pre-Start preview, compare-and-set
+acceptance, session-bound movement observations, in-card bounded choices, deterministic
+strength/endurance outcome read, sparse movement-response retrieval, and hybrid look-ahead are in
+the deployed primary build. Primary-Pi deployment has separately proven build identity, the auth
+boundary, schema migration, and database integrity. The hands-on scenarios in §4 remain a
+deliberately separate acceptance checklist; deployment health is not presented as proof that every
+interactive failure mode has been replayed live.
 
 This plan applies Cairn's constitution to the coaching loop: keep a stable program, make bounded
 day-level adjustments from current evidence, record what actually happened, and change future
@@ -18,12 +19,12 @@ gate.
 
 | Priority | Improvement | Why it matters | Current disposition |
 |---|---|---|---|
-| P0 | Authoritative preview and acceptance | The athlete must start the exact session they reviewed, even across stale tabs or changing recovery inputs. | Implemented locally; Pi validation pending |
-| P0 | Session-bound movement observations | Pain-free or pain-present feedback must attach to the exact date, session, symptom episode, and canonical movement without being lost offline. | Implemented locally; Pi validation pending |
-| P0 | In-card bounded choices | The useful coaching moment is beside the exercise: ease the athlete-chosen dose, use a known-tolerable same-pattern option, stop, or skip today without mutating the weekly plan. | Implemented locally; Pi validation pending |
-| P1 | Movement-specific evidence retrieval | Unrelated recent workouts must not hide the two newest comparable outcomes for a movement and prescription intent. | Implemented locally |
-| P1 | Explainable endurance outcomes | Accepted cardio prescriptions should reconcile against actual duration, distance, intensity, and completion before any progression is considered. | Factual reconciliation implemented locally; automatic progression intentionally absent |
-| P1 | Hybrid week sequencing | A hard lower-body day and a long or quality endurance session should be coordinated prospectively, not only corrected after the conflict. | Next program |
+| P0 | Authoritative preview and acceptance | The athlete must start the exact session they reviewed, even across stale tabs or changing recovery inputs. | Shipped with deterministic coverage; hands-on stale-tab replay remains in §4 |
+| P0 | Session-bound movement observations | Pain-free or pain-present feedback must attach to the exact date, session, symptom episode, and canonical movement without being lost offline. | Shipped with deterministic coverage; hands-on offline replay remains in §4 |
+| P0 | In-card bounded choices | The useful coaching moment is beside the exercise: ease the athlete-chosen dose, use a known-tolerable same-pattern option, stop, or skip today without mutating the weekly plan. | Shipped with deterministic coverage; hands-on card-flow replay remains in §4 |
+| P1 | Movement-specific evidence retrieval | Unrelated recent workouts must not hide the two newest comparable outcomes for a movement and prescription intent. | Shipped with deterministic coverage |
+| P1 | Explainable endurance outcomes | Accepted cardio prescriptions should reconcile against actual duration, distance, intensity, and completion before any progression is considered. | Factual reconciliation shipped; automatic progression intentionally absent |
+| P1 | Hybrid week sequencing | A hard lower-body day and a long or quality endurance session should be coordinated prospectively, not only corrected after the conflict. | Shipped through terrain-aware flexible training intentions |
 | P1 | Same-day chronology | A hard effort before lifting, after lifting, and a time-unknown import are not equivalent causal evidence. | Requires trustworthy timestamps |
 | P2 | Durable tolerable-substitution contract | User- or clinician-authored avoid/known-tolerable movement constraints should remain explicit, dated, and reversible. | Requires product decision; no medical inference |
 
@@ -108,12 +109,6 @@ slice records facts and confounders only. A later program may decide whether rep
 evidence is sufficient to propose mileage, intensity, or interval changes; structural changes must
 continue through the existing proposal, decision ledger, compare-and-set, and Undo boundary.
 
-### Hybrid look-ahead
-
-Coordinate planned long or quality endurance work with lower-body strength before the week collides.
-Easy endurance should not unnecessarily displace strength, and the athlete can still choose the
-adjacent sessions with the trade-off stated plainly.
-
 ### Dated movement constraints
 
 Add an explicit athlete/clinician-authored record for movements or positions to avoid, known
@@ -122,7 +117,7 @@ stale; it must never silently clear itself or grow into anatomy-specific medical
 
 ## 4. Live acceptance checklist
 
-After deployment is explicitly requested:
+For a future hands-on acceptance round:
 
 1. Confirm the Pi build identity matches the reviewed local revision.
 2. Preview a normal session, change a relevant input, and prove stale Start returns fresh no-write

@@ -298,7 +298,7 @@ export const CHAT_ACTION_PROMPT_SPECS = {
       "endurance_capacity": {
         "sport": "<e.g. mountain biking>",
         "target_duration_min": <number>,
-        "context": "<e.g. technical trails in the Fells|null>"
+        "context": "<e.g. rolling technical trails|null>"
       } }`,
     guidance: [
       `Preserve the athlete's stated order exactly and dedupe repeated priorities. endurance_role says whether endurance is absent, supports higher goals, shares the lead, or leads. Omit endurance_capacity unless the athlete names a durable sport-specific capability.`,
@@ -311,7 +311,7 @@ export const CHAT_ACTION_PROMPT_SPECS = {
     shape: `// The endurance OBJECTIVE (running goal), orthogonal to the lifting plan. Use mode
     // "race" for a dated event (the coach periodizes a ramp + taper), or "standing" for
     // an ongoing readiness target with NO date (e.g. "stay 10k-ready"). Set this when the
-    // user states a running goal ("I want to run the Cambridge Half on Nov 1", "keep me
+    // user states a running goal ("I want to run the Spring Half on Nov 1", "keep me
     // able to run a 10k anytime"). Distinct from primary_discipline (set via set_profile).
     { "type": "set_endurance_goal", "mode": "race",
       "event": "<race name — race mode>", "date": "YYYY-MM-DD — race mode",

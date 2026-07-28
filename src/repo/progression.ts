@@ -37,7 +37,7 @@ import {
 } from "./exercise-variations.js";
 import { findExercise, recentWorkingWeight } from "./exercises.js";
 import { loadPhrase, recentMuscleLoad, type RecentLoad } from "./hybrid-load.js";
-import { painAreaLoadsExercise, painAreaLoadsGroup } from "./pain-relevance.js";
+import { painAreaLoadsGroup } from "./pain-relevance.js";
 export { painAreaLoadsExercise } from "./pain-relevance.js";
 import { addExerciseToPlanDay, getPlan, pressSlotKey } from "./plan.js";
 import type { CoachPersonalModifier, CoachWhatWorksForYou } from "../brain/coach-context-contract.js";

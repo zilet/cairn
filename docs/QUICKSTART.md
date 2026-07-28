@@ -30,7 +30,7 @@ This binds Cairn to this computer only. Widen to your LAN, for example
   `cairn-tools` holds optional provider binaries. To update: pull, remove the container, and re-run
   the command — all three volumes persist.
 - **Timezone:** Cairn learns the browser/device IANA timezone and remembers it for scheduled work.
-  Add `-e TZ=Europe/Belgrade` only as a fallback for a new install before any device connects.
+  Add `-e TZ=Europe/London` only as a fallback for a new install before any device connects.
 - **First paint is real with no agent.** The Brief, set logging, the plan editor, charts, and marker
   views all work immediately. The next step only adds the *conversational* layer.
 

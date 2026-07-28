@@ -263,7 +263,10 @@ programRouter.get("/run-plan", (req, res) =>
   res.json(weeklyRunPlan(req.query.date ? String(req.query.date) : undefined))
 );
 // Rolling weekly run intentions: actual compatible logs close intentions and
-// suggested openings move around real strength/endurance load. Read-only.
+// suggested openings move around real strength/endurance load. Any completed
+// run occupies its actual date; moderate/hard cross-training also reserves its
+// date, while light cross-training may still share a clean easy-run opening.
+// Read-only; unfinished work creates no catch-up debt.
 programRouter.get("/training-agenda", (req, res) =>
   res.json(flexibleTrainingAgenda(req.query.date ? String(req.query.date) : undefined))
 );
