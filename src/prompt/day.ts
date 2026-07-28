@@ -30,6 +30,7 @@ import {
   renderTrainingSignals,
   renderTrajectory,
   renderStreamingContract,
+  dateScopedPromptContext,
   CAIRN_PERSONA,
 } from "./shared.js";
 
@@ -292,7 +293,7 @@ export function buildDayReadPrompt(
   ctx?: CoachContext,
   opts: { override?: string; date?: string; baseline?: repo.DayRead } = {}
 ): string {
-  const context = ctx ?? repo.getCoachContext();
+  const context = dateScopedPromptContext(ctx ?? repo.getCoachContext(), opts.date);
   // The baseline the CALLER will clamp, persist and fingerprint — passed in so the
   // prompt describes the exact read the server-policy layer then acts on. Computing
   // a second one here is what opened the rich/thin seam: the agent was told
@@ -465,14 +466,15 @@ export function buildSessionPrompt(
   ctx?: CoachContext,
   opts: { minutes?: number; equipment?: string; focus?: string; constraints?: string; date?: string } = {}
 ): string {
-  const context = ctx ?? repo.getCoachContext();
+  const context = dateScopedPromptContext(ctx ?? repo.getCoachContext(), opts.date);
   const read = repo.dayRead(opts.date, context.recovery, context.signal_state);
   // Runner+lifter sequencing (hybrid interference/synergy) — deterministic, quiet when
   // there's nothing to sequence. Anchored to the same date the day-read used.
   const dateISO = opts.date || (context as any).now?.date || localDateISO();
   const hybrid = (() => {
     try {
-      return repo.hybridDayContext(dateISO);
+      // Same flexible-agenda override as dayRead so KEY RUN TOMORROW matches the Brief.
+      return repo.withFlexibleRunLookahead(repo.hybridDayContext(dateISO), dateISO);
     } catch {
       return null;
     }
@@ -560,7 +562,7 @@ ${promptData(context, "session")}`;
 // agent returns is re-verified and clamped server-side (exclusions, load caps,
 // safe novel-exercise rules), so this prompt is guidance, not the safety layer.
 export function buildDailyCompositionPrompt(envelope: any, ctx?: CoachContext): string {
-  const context = ctx ?? repo.getCoachContext();
+  const context = dateScopedPromptContext(ctx ?? repo.getCoachContext(), envelope?.date);
   const muscles = envelope?.muscles ?? {};
   const caps = envelope?.caps ?? {};
   const candidates = Array.isArray(envelope?.candidates) ? envelope.candidates : [];

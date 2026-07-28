@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { test } from "node:test";
 import { buildDailySessionDecision, dailyDecisionFingerprint } from "../dist/repo/daily-decision.js";
 
@@ -52,6 +53,16 @@ function snapshot(overrides = {}) {
 
 const NOW = "2031-05-01T12:00:00.000Z";
 
+function stableJson(value) {
+  if (value === undefined) return "null";
+  if (value == null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  return `{${Object.keys(value)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`)
+    .join(",")}}`;
+}
+
 test("same snapshot yields identical fingerprint and envelope content", () => {
   const snap = snapshot();
   const a = buildDailySessionDecision(snap, { now: NOW });
@@ -59,7 +70,7 @@ test("same snapshot yields identical fingerprint and envelope content", () => {
   assert.equal(a.input_fingerprint, b.input_fingerprint);
   assert.equal(a.input_fingerprint, dailyDecisionFingerprint(snap));
   assert.deepEqual(a, b);
-  assert.equal(a.policy_version, "daily_decision_v4");
+  assert.equal(a.policy_version, "daily_decision_v5");
 });
 
 test("fingerprint is stable across object key insertion order", () => {
@@ -76,6 +87,14 @@ test("fingerprint changes when a load-bearing input changes", () => {
     snapshot({ request: { override: "train anyway", train_anyway: true, equipment: null, minutes: null, goal: null } })
   );
   assert.notEqual(a, b);
+});
+
+test("v5 policy identity cannot collide with the legacy snapshot-only v4 fingerprint", () => {
+  const snap = snapshot();
+  const legacyV4 = createHash("sha256").update(stableJson(snap)).digest("hex");
+  const current = dailyDecisionFingerprint(snap);
+  assert.notEqual(current, legacyV4);
+  assert.equal(buildDailySessionDecision(snap, { now: NOW }).policy_version, "daily_decision_v5");
 });
 
 test("healthy training day carries the plan with progression reason codes", () => {
@@ -302,6 +321,31 @@ test("joint pain reduces the joint's groups as a soft nudge", () => {
   );
   assert.ok(env.muscles.excluded.includes("quads"));
   assert.ok(env.soft_preferences.some((s) => s.code === "joint_pain_reduce"));
+});
+
+test("joint pain routes a note-backed cardio label through movement relevance", () => {
+  const env = buildDailySessionDecision(
+    snapshot({
+      feedback: { soreness: null, performance: null, joint_pain: "left knee" },
+      plan_items: [
+        ...snapshot().plan_items,
+        {
+          exercise: "Easy run",
+          muscle_group: null,
+          equipment: null,
+          mode: "reps",
+          kind: "cardio",
+          target_duration_min: 30,
+          target_zone: "easy",
+        },
+      ],
+    }),
+    { now: NOW }
+  );
+  const run = env.candidates.find((candidate) => candidate.exercise === "Easy run");
+  assert.equal(run.action, "exclude");
+  assert.equal(run.reason_code, "joint_pain_reduce");
+  assert.equal(env.reported_joint_pain, "left knee");
 });
 
 test("athlete override 'train anyway' wins the kind but stays conservative", () => {

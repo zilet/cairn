@@ -3370,6 +3370,44 @@ body.swr-busy::after{
 /* accent action → .linkbtn.linkbtn-plain.linkbtn-sm; delta = spacing only */
 .feedback-edit{font-family:var(--font-ui);padding:2px 4px;margin-left:4px}
 
+/* Pain & injury — the session-close lifecycle stays compact and editorial. */
+.symptom-lifecycle{margin-top:14px;text-align:left;color:var(--ink-2)}
+.symptom-lifecycle-head{display:flex;align-items:start;justify-content:space-between;gap:14px}
+.symptom-lifecycle-head .feedback-prompt{color:var(--ink);margin:0}
+.symptom-lifecycle-head p,.symptom-lifecycle-error p{margin:3px 0 0;color:var(--muted);font-size:.78rem;line-height:1.4}
+.symptom-lifecycle-head .linkbtn{flex:0 0 auto;min-height:30px;padding:5px 1px}
+.symptom-active-list{display:grid;gap:9px;margin-top:10px}
+.symptom-active-row{padding:11px 0 11px 11px;min-width:0}
+.symptom-row-heading{display:flex;align-items:start;justify-content:space-between;gap:10px}
+.symptom-area{min-width:0;color:var(--ink);font-family:var(--font-ui);font-size:.84rem;font-weight:650;line-height:1.4;overflow-wrap:anywhere}
+.symptom-watching{flex:0 0 auto;color:var(--gold-deep);background:rgba(201,168,106,.16);border-radius:999px;
+  padding:3px 7px;font-family:var(--font-ui);font-size:.61rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+.symptom-active-row .sess-line{margin-top:5px;font-size:.74rem;line-height:1.4}
+.symptom-movement-control{margin-top:10px}
+.symptom-movement-field{display:grid;gap:4px;color:var(--muted);font-family:var(--font-ui);font-size:.69rem;font-weight:700;letter-spacing:.03em;text-transform:uppercase}
+.symptom-movement-field .feedback-joint{font-size:16px;letter-spacing:normal;text-transform:none}
+.symptom-select-wrap{position:relative;display:block}
+.symptom-select-wrap::after{content:"⌄";position:absolute;right:11px;top:50%;pointer-events:none;color:var(--muted);font-size:.9rem;transform:translateY(-50%)}
+.symptom-select-wrap select{appearance:none;padding-right:30px}
+.symptom-row-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px}
+.symptom-row-actions .pillbtn{min-height:38px}
+.symptom-row-actions .linkbtn{min-height:30px;padding:5px 1px}
+.symptom-report-composer{margin-top:10px;padding:11px 12px 12px;background:var(--paper);border:1px solid var(--line);border-radius:var(--radius-sm)}
+.symptom-report-composer>label{display:block;margin-bottom:5px;color:var(--muted);font-family:var(--font-ui);font-size:.72rem;font-weight:650}
+.symptom-report-composer .feedback-joint{font-size:16px}
+.symptom-history{margin-top:12px;border-top:1px solid var(--line);padding-top:9px}
+.symptom-history>summary{display:flex;align-items:center;gap:7px;cursor:pointer;color:var(--muted);font-family:var(--font-ui);font-size:.76rem;font-weight:650;list-style:none}
+.symptom-history>summary::-webkit-details-marker{display:none}
+.symptom-history>summary::before{content:"▸";font-size:.65rem;transition:transform var(--dur-1) var(--ease)}
+.symptom-history[open]>summary::before{transform:rotate(90deg)}
+.symptom-history>summary span{color:var(--faint);font-size:.7rem}
+.symptom-history-list{display:grid;gap:7px;margin-top:9px}
+.symptom-history-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:8px 12px;padding:8px 0;border-top:1px solid var(--line)}
+.symptom-history-row:first-child{border-top:0}
+.symptom-history-row .linkbtn{flex:0 0 auto;min-height:30px;padding:5px 1px}
+.symptom-recur-composer{grid-column:1/-1;padding:10px 11px 11px;background:var(--paper);border:1px solid var(--line);border-radius:var(--radius-sm)}
+.symptom-recur-composer p{margin:0 0 8px;color:var(--muted);font-size:.75rem;line-height:1.4}
+
 /* Energy Balance (Progress) — a calm editorial read, never a dashboard. */
 .eb-ctx{color:var(--muted);margin-top:11px}
 .eb-card{

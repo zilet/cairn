@@ -6,6 +6,8 @@ import { addDaysISO, localDateISO } from "../dist/repo/shared.js";
 import { db, repo, resetTables } from "./_seed.js";
 
 const DATE = "2031-07-01";
+const DESCRIPTIVE_TEMPO_NOTE =
+  "Continuous tempo at Z3. Hold a controlled effort throughout and finish with relaxed strides.";
 
 beforeEach(() => {
   resetTables(
@@ -542,6 +544,146 @@ test("real knee injury impacts feed the daily envelope through affected.exercise
   const { envelope: decision } = repo.decideDailySession(date);
   assert.ok(decision.muscles.excluded.includes("quads"));
   assert.equal(decision.candidates.find((item) => item.exercise === "Back Squat")?.action, "exclude");
+});
+
+for (const area of ["knee", "ankle", "hip"]) {
+  test(`protective ${area} constraints flow through cardio gather, decision, and composition`, () => {
+    repo.upsertExercise({ name: "Bench Press", muscle_group: "chest", mode: "reps" });
+    repo.savePlanDay(1, "Hybrid", "Run plus upper", [
+      {
+        exercise: "Tempo run",
+        kind: "cardio",
+        note: DESCRIPTIVE_TEMPO_NOTE,
+        target_duration_min: 40,
+        target_zone: "Z3",
+      },
+      { exercise: "Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 135 },
+    ]);
+    repo.addContextEvent({
+      kind: "injury",
+      title: `Protective ${area}`,
+      start_date: DATE,
+      meta: { area, severity: "moderate" },
+    });
+
+    const snapshot = repo.gatherDailyDecisionSnapshot(DATE);
+    const cardio = snapshot.plan_items.find((item) => item.kind === "cardio");
+    assert.equal(cardio.exercise, "Tempo run", "descriptive prose derives a movement-bearing run identity");
+    assert.equal(repo.getPlanDay(1).items[0].note, DESCRIPTIVE_TEMPO_NOTE, "athlete-facing detail remains stored");
+    const decision = repo.buildDailySessionDecision(snapshot, { now: "2031-07-01T12:00:00.000Z" });
+    assert.ok(decision.protective_exclusions.some((item) => item.areas.includes(area)));
+    assert.equal(
+      decision.candidates.find((item) => item.exercise === "Tempo run")?.action,
+      "exclude",
+      "the pure decision routes the derived run identity through pain relevance"
+    );
+
+    const session = deterministicComposedSession(decision);
+    assert.deepEqual(session.items.map((item) => item.exercise), ["Bench Press"]);
+  });
+}
+
+test("descriptive tempo survives save, gather, decision, and composition under unrelated shoulder protection", () => {
+  repo.savePlanDay(1, "Run", "Endurance", [
+    {
+      exercise: "Tempo run",
+      kind: "cardio",
+      note: DESCRIPTIVE_TEMPO_NOTE,
+      target_duration_min: 40,
+      target_zone: "Z3",
+    },
+  ]);
+  repo.addContextEvent({
+    kind: "injury",
+    title: "Protective shoulder",
+    start_date: DATE,
+    meta: { area: "shoulder", severity: "moderate" },
+  });
+
+  const snapshot = repo.gatherDailyDecisionSnapshot(DATE);
+  const cardio = snapshot.plan_items.find((item) => item.kind === "cardio");
+  assert.equal(cardio.exercise, "Tempo run");
+  const decision = repo.buildDailySessionDecision(snapshot, { now: "2031-07-01T12:00:00.000Z" });
+  assert.notEqual(decision.candidates.find((item) => item.exercise === "Tempo run")?.action, "exclude");
+  const session = deterministicComposedSession(decision);
+  assert.equal(session.items[0].exercise, "Tempo run");
+  assert.equal(session.items[0].note, DESCRIPTIVE_TEMPO_NOTE);
+});
+
+test("descriptive tempo is excluded through save, gather, decision, and composition for recent left-knee pain", () => {
+  repo.savePlanDay(1, "Hybrid", "Run plus upper", [
+    {
+      exercise: "Tempo run",
+      kind: "cardio",
+      note: DESCRIPTIVE_TEMPO_NOTE,
+      target_duration_min: 40,
+      target_zone: "Z3",
+    },
+    { exercise: "Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 135 },
+  ]);
+  db.prepare(`INSERT INTO sessions (date, joint_pain, kind) VALUES (?, 'left knee', 'strength')`).run(
+    addDaysISO(DATE, -1)
+  );
+
+  const snapshot = repo.gatherDailyDecisionSnapshot(DATE);
+  assert.equal(snapshot.feedback.joint_pain, "left knee");
+  assert.equal(snapshot.plan_items.find((item) => item.kind === "cardio").exercise, "Tempo run");
+  const decision = repo.buildDailySessionDecision(snapshot, { now: "2031-07-01T12:00:00.000Z" });
+  assert.equal(decision.candidates.find((item) => item.exercise === "Tempo run")?.action, "exclude");
+  assert.deepEqual(deterministicComposedSession(decision).items.map((item) => item.exercise), ["Bench Press"]);
+});
+
+test("agent-authored descriptive tempo is canonicalized before candidate and protective-area checks", () => {
+  const raw = agentSession([
+    {
+      kind: "cardio",
+      exercise: DESCRIPTIVE_TEMPO_NOTE,
+      target_duration_min: 40,
+      target_zone: "Z3",
+      note: DESCRIPTIVE_TEMPO_NOTE,
+    },
+  ]);
+  const shoulder = envelope({
+    hard_constraints: [{ code: "injury_exclusion", detail: "Working around shoulder irritation" }],
+    protective_exclusions: [{ areas: ["shoulder"], exercises: [] }],
+    muscles: { required: [], allowed: [], reduced: [], excluded: ["shoulders"] },
+    candidates: [
+      {
+        exercise: "Tempo run",
+        muscle_group: null,
+        action: "carry",
+        reason_code: null,
+        substitution_for: null,
+        note: null,
+      },
+    ],
+  });
+  const safe = normalizeComposedSession(raw, shoulder);
+  assert.equal(safe.session.items[0].exercise, "Tempo run");
+  assert.equal(safe.session.items[0].note, DESCRIPTIVE_TEMPO_NOTE);
+
+  const knee = normalizeComposedSession(raw, {
+    ...shoulder,
+    protective_exclusions: [{ areas: ["knee"], exercises: [] }],
+    muscles: { required: [], allowed: [], reduced: [], excluded: ["quads"] },
+  });
+  assert.equal(knee.session, null);
+  assert.ok(
+    knee.validation.rejected.some(
+      (item) => item.exercise === "Tempo run" && item.reason === "cardio_uncertified_under_exclusions"
+    )
+  );
+});
+
+test("legacy hard-exclusion envelopes fail closed for cardio without structured provenance", () => {
+  const { session, validation } = normalizeComposedSession(
+    agentSession([{ kind: "cardio", exercise: "Easy run", target_duration_min: 25, target_zone: "easy" }]),
+    envelope({
+      hard_constraints: [{ code: "injury_exclusion", detail: "Working around an active injury" }],
+    })
+  );
+  assert.equal(session, null);
+  assert.ok(validation.rejected.some((item) => item.reason === "cardio_uncertified_under_exclusions"));
 });
 
 test("the database-backed low-performance seam requires two distinct normal sessions before repeated labeling", () => {

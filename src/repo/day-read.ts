@@ -21,6 +21,7 @@ import { getCheckinByDate, getRecoverySummary, latestSleep, trainingSignals } fr
 import { activeContextEffect } from "./context-effect.js";
 import { activitySportWhere, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
 import { estimateExpenditure } from "./expenditure.js";
+import { flexibleTrainingAgenda } from "./flexible-training-agenda.js";
 import { listContextEvents } from "./health.js";
 import { getRecentSessions } from "./sessions.js";
 import { getActiveBlock } from "./program-blocks.js";
@@ -55,6 +56,7 @@ import {
   recentCardioLoadMedian,
   recoverySessionDose,
 } from "./training-read.js";
+import { withFlexibleRunLookahead } from "./hybrid-run-lookahead.js";
 import { dayFuelState } from "./fuel-state.js";
 import { currentUnderfuelingRead } from "./underfueling-snapshot.js";
 import type { UnderfuelingRead } from "./underfueling.js";
@@ -1040,23 +1042,96 @@ export interface DayReadFingerprintContext {
     total_weeks: unknown;
     started_at: unknown;
   } | null;
+  flexible_training_agenda?: {
+    available: boolean;
+    intents: Array<{
+      kind: "easy" | "quality" | "long" | null;
+      status: "open" | "completed" | null;
+      suggested_date: string | null;
+      window_start: string | null;
+      window_end: string | null;
+      target_distance_km: number | null;
+      target_duration_min: number | null;
+      target_zone: string | null;
+      completion: {
+        date: string | null;
+        duration_min: number | null;
+        distance_km: number | null;
+        intensity: "easy" | "quality" | null;
+      } | null;
+    }>;
+  } | null;
+}
+
+function fingerprintNumber(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function compactFlexibleAgendaFingerprint(value: unknown): NonNullable<
+  DayReadFingerprintContext["flexible_training_agenda"]
+> | null {
+  if (!value || typeof value !== "object") return null;
+  const agenda = value as Record<string, any>;
+  const available = agenda.available === true;
+  const intents = (Array.isArray(agenda.intents) ? agenda.intents : [])
+    .map((intent: any) => {
+      const kind =
+        intent?.kind === "easy" || intent?.kind === "quality" || intent?.kind === "long" ? intent.kind : null;
+      const status = intent?.status === "open" || intent?.status === "completed" ? intent.status : null;
+      const completion =
+        status === "completed" && intent?.completion && typeof intent.completion === "object"
+          ? {
+              date: typeof intent.completion.date === "string" ? intent.completion.date : null,
+              duration_min: fingerprintNumber(intent.completion.duration_min),
+              distance_km: fingerprintNumber(intent.completion.distance_km),
+              intensity:
+                intent.completion.intensity === "easy" || intent.completion.intensity === "quality"
+                  ? intent.completion.intensity
+                  : null,
+            }
+          : null;
+      return {
+        kind,
+        status,
+        suggested_date: typeof intent?.suggested_date === "string" ? intent.suggested_date : null,
+        window_start: typeof intent?.window_start === "string" ? intent.window_start : null,
+        window_end: typeof intent?.window_end === "string" ? intent.window_end : null,
+        target_distance_km: fingerprintNumber(intent?.target_distance_km),
+        target_duration_min: fingerprintNumber(intent?.target_duration_min),
+        target_zone: typeof intent?.target_zone === "string" ? intent.target_zone.trim() || null : null,
+        completion,
+      };
+    })
+    .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  return { available, intents };
 }
 
 // dayRead()'s contract is that it never throws on missing data, and this runs
-// inside it — a program_blocks read that fails must degrade to "no block", not
-// take the Brief down. writeDayRead already guarded the identical call.
-function currentDayReadFingerprintContext(): DayReadFingerprintContext {
+// inside it — either contextual read may fail independently without taking the
+// Brief down. Only compact agenda facts rendered into the prompt participate;
+// rationale/why/guidance narration never enters this identity.
+function currentDayReadFingerprintContext(date: string): DayReadFingerprintContext {
+  let programBlock: DayReadFingerprintContext["program_block"] = null;
   try {
-    const programBlock = db
+    programBlock =
+      (db
       .prepare(
         `SELECT goal, focus, phase, week_index, total_weeks, started_at
            FROM program_blocks WHERE status = 'active' ORDER BY id DESC LIMIT 1`
       )
-      .get() as any;
-    return { program_block: programBlock ?? null };
+        .get() as DayReadFingerprintContext["program_block"]) ?? null;
   } catch {
-    return { program_block: null };
+    programBlock = null;
   }
+  let flexibleAgenda: DayReadFingerprintContext["flexible_training_agenda"] = null;
+  try {
+    flexibleAgenda = compactFlexibleAgendaFingerprint(flexibleTrainingAgenda(date));
+  } catch {
+    flexibleAgenda = null;
+  }
+  return { program_block: programBlock, flexible_training_agenda: flexibleAgenda };
 }
 
 // The fingerprint answers exactly one question: could the DECISION have changed?
@@ -1076,7 +1151,7 @@ function currentDayReadFingerprintContext(): DayReadFingerprintContext {
 export function dayReadInputFingerprint(
   date: string,
   read: Pick<DayRead, "kind" | "focus" | "signals">,
-  context: DayReadFingerprintContext = { program_block: null }
+  context: DayReadFingerprintContext = { program_block: null, flexible_training_agenda: null }
 ): string {
   const signals = read.signals ?? {};
   const shortNight = (minutes: unknown): boolean => {
@@ -1088,6 +1163,7 @@ export function dayReadInputFingerprint(
     baseline_kind: read.kind,
     focus: read.focus ?? null,
     program_block: context.program_block,
+    flexible_training_agenda: compactFlexibleAgendaFingerprint(context.flexible_training_agenda),
     recovery_week: signals.recovery_week ?? null,
     recent_load: signals.recent_load ?? null,
     today_load: signals.today_load ?? null,
@@ -1137,6 +1213,17 @@ export function dayReadInputFingerprint(
           action: signals.underfueling.action ?? null,
         }
       : null,
+    // Hybrid sequencing can change the athlete-facing agent sentence even when
+    // the day posture stays the same. Keep only the three boolean decisions:
+    // moved/completed flexible-agenda intentions then reconcile a stale warm
+    // read without hashing the agenda's narration or raw plan.
+    hybrid: signals.hybrid
+      ? {
+          cardio_today: !!signals.hybrid.cardio_today,
+          hard_cardio_yesterday: !!signals.hybrid.hard_cardio_yesterday,
+          protect_run_next: !!signals.hybrid.protect_run_next,
+        }
+      : null,
     plan_selection: signals.plan_selection ?? null,
   };
   return createHash("sha256")
@@ -1168,7 +1255,7 @@ function finalizeDeterministicRead(
     input_fingerprint: dayReadInputFingerprint(
       date,
       read as Pick<DayRead, "kind" | "focus" | "signals">,
-      currentDayReadFingerprintContext()
+      currentDayReadFingerprintContext(date)
     ),
   };
 }
@@ -1678,7 +1765,9 @@ export function dayRead(
   // it warmly when it fits. Omitted entirely when nothing sequences, so existing reads are
   // byte-for-byte unchanged. Null-safe: any failure leaves it off.
   try {
-    const hc = hybridDayContext(d);
+    // Template projection first; flexible agenda overrides planned_run_next so protect_run_next
+    // tracks movable key runs (quality/long) instead of fixed day_number weekdays.
+    const hc = withFlexibleRunLookahead(hybridDayContext(d), d);
     const tomorrow = new Date(new Date(`${d}T00:00:00Z`).getTime() + 864e5).toISOString().slice(0, 10);
     const protectRunNext = !!(
       hc.planned_run_next &&
@@ -2248,7 +2337,7 @@ function writeDayRead(date: string, read: any, expectedStaleOverride?: CachedOve
   let inputFingerprint = typeof read.input_fingerprint === "string" ? read.input_fingerprint : null;
   if (!inputFingerprint) {
     try {
-      inputFingerprint = dayReadInputFingerprint(date, read, currentDayReadFingerprintContext());
+      inputFingerprint = dayReadInputFingerprint(date, read, currentDayReadFingerprintContext(date));
     } catch {
       inputFingerprint = null;
     }

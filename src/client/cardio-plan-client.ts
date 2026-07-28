@@ -86,10 +86,12 @@ function cardioSport(item: CardioPlanItem | null | undefined): string {
   const row = cardioRecord(item);
   const text =
     `${row.exercise || ""} ${row.note || ""} ${cardioIntervalNote(row.interval) || row.interval_note || ""}`.toLowerCase();
-  if (/ride|bike|cycl|spin/.test(text)) return "ride";
-  if (/swim/.test(text)) return "swim";
-  if (/\brow|erg\b/.test(text)) return "row";
-  if (/hike|hiking/.test(text)) return "hike";
+  // Keep these token-bounded cues aligned with the server's safety identity:
+  // ordinary running prose such as "relaxed strides" must not become a ride.
+  if (/\b(?:ride|riding|bike|biking|cycle|cycling|spin|spinning)\b/.test(text)) return "ride";
+  if (/\b(?:swim|swimming)\b/.test(text)) return "swim";
+  if (/\b(?:row|rowing|erg)\b/.test(text)) return "row";
+  if (/\b(?:hike|hiking)\b/.test(text)) return "hike";
   return "run";
 }
 

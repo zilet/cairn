@@ -70,7 +70,7 @@ function validNumber(value: unknown): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-function parseZoneSeconds(raw: unknown, minZone: number): number {
+function parseZoneSeconds(raw: unknown, minZone: number, maxZone = Number.POSITIVE_INFINITY): number {
   if (!raw) return 0;
   try {
     const zones = typeof raw === "string" ? JSON.parse(raw) : raw;
@@ -78,11 +78,19 @@ function parseZoneSeconds(raw: unknown, minZone: number): number {
     return zones.reduce((sum, zone) => {
       const number = Number(zone?.zone);
       const seconds = Number(zone?.secs ?? zone?.seconds ?? 0);
-      return sum + (number >= minZone && Number.isFinite(seconds) && seconds > 0 ? seconds : 0);
+      return sum + (number >= minZone && number <= maxZone && Number.isFinite(seconds) && seconds > 0 ? seconds : 0);
     }, 0);
   } catch {
     return 0;
   }
+}
+
+function sustainedZ3Evidence(zoneSeconds: number, durationMin: number | null): boolean {
+  if (zoneSeconds < 20 * 60) return false;
+  // With a recorded activity duration, Z3 must occupy at least half the run.
+  // Without one, require a stronger absolute 30-minute signal rather than
+  // treating an unbounded zone fragment as a tempo session.
+  return durationMin != null ? zoneSeconds >= durationMin * 60 * 0.5 : zoneSeconds >= 30 * 60;
 }
 
 function runObservations(start: string, through: string): RunObservation[] {
@@ -109,19 +117,24 @@ function runObservations(start: string, through: string): RunObservation[] {
         .trim()
         .toUpperCase();
       const z4Seconds = parseZoneSeconds(row.hr_zones_json, 4);
+      const z3Seconds = parseZoneSeconds(row.hr_zones_json, 3, 3);
+      const durationMin = validNumber(row.duration_min);
+      const sustainedZ3 = sustainedZ3Evidence(z3Seconds, durationMin);
       const quality =
         te >= 3 ||
         /\b(?:TEMPO|THRESHOLD|VO2(?:MAX)?|ANAEROBIC|SPRINT|INTERVAL|LACTATE_THRESHOLD)\b/.test(label) ||
-        z4Seconds >= 240;
+        z4Seconds >= 240 ||
+        sustainedZ3;
       const signals: string[] = [];
       if (label) signals.push(`watch effort: ${label.toLowerCase().replaceAll("_", " ")}`);
       if (te >= 3) signals.push("training effect supports a quality effort");
       if (z4Seconds >= 240) signals.push(`${Math.round(z4Seconds / 60)} min in Z4+`);
+      if (sustainedZ3) signals.push(`${Math.round(z3Seconds / 60)} min sustained in Z3`);
       if (!signals.length) signals.push("no hard-effort signal; treated as easy running");
       return {
         id: Number(row.id),
         date: String(row.date),
-        duration_min: validNumber(row.duration_min),
+        duration_min: durationMin,
         distance_km: validNumber(row.distance_km),
         quality,
         signals,
@@ -152,6 +165,19 @@ function longDoseMet(observation: RunObservation, prescription: RunPlanPrescript
   return targetDoseMet(observation, prescription, 0.75);
 }
 
+// Clearly long-biased dose: ≥0.9 of the long target, or duration ≥ max(75 min, long target duration).
+// Used only to gate quality-flagged observations against open long intentions (see matchCompletions).
+function longShapedDose(observation: RunObservation, prescription: RunPlanPrescription): boolean {
+  const targetKm = validNumber(prescription.target_distance_km);
+  const targetMin = validNumber(prescription.target_duration_min);
+  if (targetKm != null && observation.distance_km != null && observation.distance_km >= targetKm * 0.9) return true;
+  if (targetMin != null && observation.duration_min != null) {
+    if (observation.duration_min >= targetMin * 0.9) return true;
+    if (observation.duration_min >= Math.max(75, targetMin)) return true;
+  }
+  return false;
+}
+
 function easyDoseMet(observation: RunObservation, prescription: RunPlanPrescription): boolean {
   return !observation.quality && targetDoseMet(observation, prescription, 0.5);
 }
@@ -167,6 +193,23 @@ function completionEvidence(observation: RunObservation): RunCompletionEvidence 
   };
 }
 
+function openQualityRemains(prescriptions: RunPlanPrescription[], remaining: Set<number>): boolean {
+  return prescriptions.some((run, index) => remaining.has(index) && run.kind_label === "quality");
+}
+
+function matchingLongIndex(
+  observation: RunObservation,
+  prescriptions: RunPlanPrescription[],
+  remaining: Set<number>
+): number {
+  return prescriptions.findIndex((run, index) => {
+    if (!remaining.has(index) || run.kind_label !== "long" || !longDoseMet(observation, run)) return false;
+    if (!observation.quality) return true;
+    if (!openQualityRemains(prescriptions, remaining)) return true;
+    return longShapedDose(observation, run);
+  });
+}
+
 function matchCompletions(
   prescriptions: RunPlanPrescription[],
   observations: RunObservation[]
@@ -175,17 +218,21 @@ function matchCompletions(
   const remaining = new Set(prescriptions.map((_, index) => index));
 
   for (const observation of observations) {
+    // Arbitrate quality-vs-long before consuming either slot. A quality-bearing
+    // observation can also be a clearly long-shaped outing; in that dual-match
+    // case it closes the long intention rather than producing duplicate long work.
     const quality = prescriptions.findIndex(
       (run, index) => remaining.has(index) && run.kind_label === "quality" && qualityDoseMet(observation, run)
     );
-    if (quality >= 0) {
+    // Quality must not steal long: a quality-flagged observation closes long only when
+    // longDoseMet AND either (a) no open quality slot remains, or (b) the dose is clearly
+    // long-shaped (longShapedDose). Prefer leaving long open over mis-closing.
+    const long = matchingLongIndex(observation, prescriptions, remaining);
+    if (quality >= 0 && !(observation.quality && long >= 0 && longShapedDose(observation, prescriptions[long]))) {
       completed.set(quality, completionEvidence(observation));
       remaining.delete(quality);
       continue;
     }
-    const long = prescriptions.findIndex(
-      (run, index) => remaining.has(index) && run.kind_label === "long" && longDoseMet(observation, run)
-    );
     if (long >= 0) {
       completed.set(long, completionEvidence(observation));
       remaining.delete(long);

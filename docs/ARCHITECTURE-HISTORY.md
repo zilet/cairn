@@ -4,6 +4,23 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-07-28 — pain-aware daily authority and calm lifecycle feedback
+
+No schema change. The versioned daily-session decision now fingerprints its policy identity, ordered
+training priorities, and the rolling run agenda's next genuinely open key-run window. Flexible-agenda
+completion and deliberate undating are authoritative over a fixed template, quality detection
+recognizes the generated plan's real labels/zones, and a quality-bearing long effort closes the
+long-shaped intention before it can leave duplicate long work open. Day-read cache identity includes
+that movable lookahead truth, and dated prompts resolve effective home/travel location for the date
+being coached.
+
+Pain protection applies to cardio labels as well as stored strength exercises and the composition
+normalizer fails closed when active exclusions cannot certify an unknown cardio item. The finished
+session replaces its dense movement-note form with the compact Atelier **Pain & injury** lifecycle:
+active notes lead, pain-free and pain-present share equal neutral actions, reporting and exact-movement
+recurrence stay collapsed until requested, and resolved history remains one quiet disclosure. No
+score, diagnosis, plan mutation, or fabricated movement evidence is introduced.
+
 ## 2026-07-28 — durable home location with temporary travel overrides
 
 Migration **v81** adds nullable `profile.home_location` as the athlete's durable, manually entered
@@ -17,7 +34,7 @@ block into coach context and every person-aware prompt. A home-location change i
 coaching identity, and the date-keyed read naturally changes at trip boundaries. The block explicitly
 marks weather unavailable and location as context-only; this round adds no weather provider,
 geolocation request, score, or gate. REST inherits the profile field, MCP `set_profile` documents it,
-and the PWA explains the optional trip override (`sw.js` **`cairn-v532`**).
+and the PWA explains the optional trip override (see `public/sw.js` `CACHE` for the live precache stamp).
 
 ## 2026-07-28 — terrain-aware hybrid scheduling and movable run intentions
 

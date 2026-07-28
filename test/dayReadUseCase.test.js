@@ -59,6 +59,49 @@ test("a legacy cached row self-heals once against the complete decision fingerpr
   assert.equal(stable.input_fingerprint, healed.input_fingerprint);
 });
 
+test("hybrid lookahead changes reconcile stale agent prose on the next read", async () => {
+  resetTables(
+    "day_reads",
+    "suggestions",
+    "plan_days",
+    "plan_items",
+    "sessions",
+    "logged_sets",
+    "activities",
+    "profile"
+  );
+  const date = localDaysAgo(0);
+  configureDayReadRefresh({ today: () => date, setTimer: () => 0, clearTimer: () => {} });
+  repo.setProfile({ primary_discipline: "hybrid", endurance_sport: "" });
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  const baseline = repo.dayRead(date);
+  repo.saveDayRead(date, {
+    ...baseline,
+    why: "Keep the legs light because tomorrow's key run is still open.",
+    signals: {
+      ...baseline.signals,
+      hybrid: {
+        cardio_today: false,
+        hard_cardio_yesterday: false,
+        protect_run_next: true,
+      },
+    },
+    source: "agent",
+    input_fingerprint: undefined,
+  });
+  const stale = repo.getCachedDayRead(date);
+  assert.equal(stale.signals.hybrid.protect_run_next, true);
+
+  const healed = await readToday({ date });
+  const stable = await readToday({ date });
+  assert.equal(healed.source, "deterministic");
+  assert.notEqual(healed.input_fingerprint, stale.input_fingerprint);
+  assert.equal(healed.signals.hybrid?.protect_run_next ?? false, false);
+  assert.doesNotMatch(healed.why, /tomorrow's key run is still open/i);
+  assert.equal(stable.cached, true);
+  assert.equal(stable.input_fingerprint, healed.input_fingerprint);
+});
+
 test("material truth replaces a stale persisted athlete steer once, then remains stable", async () => {
   resetTables(
     "day_reads",

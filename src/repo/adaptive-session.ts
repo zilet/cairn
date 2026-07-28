@@ -168,6 +168,7 @@ function normalizedRecord(value: unknown): Record<string, unknown> {
 
 function dailyDecisionContext(envelope: DailyDecisionEnvelope) {
   const request = (envelope as DailyDecisionEnvelope & { request?: DailyDecisionEnvelope["request"] }).request;
+  const intent = envelope.training_intent;
   return {
     policy_version: envelope.policy_version,
     input_fingerprint: envelope.input_fingerprint,
@@ -179,6 +180,15 @@ function dailyDecisionContext(envelope: DailyDecisionEnvelope) {
     recovery_cycle: envelope.recovery_cycle,
     hard_constraints: envelope.hard_constraints,
     rationale: envelope.rationale,
+    // Compact soft-bias provenance only — ordered priorities + role + source,
+    // no scores or free-text capacity.
+    training_intent: intent
+      ? {
+          priorities: Array.isArray(intent.priorities) ? intent.priorities.slice(0, 5) : [],
+          endurance_role: intent.endurance_role,
+          source: intent.source,
+        }
+      : null,
   };
 }
 

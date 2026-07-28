@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { db } from "../db.js";
 import { getCheckinByDate, getRecoverySummary } from "./coach.js";
+import { cardioPlanIdentity } from "./cardio-plan-identity.js";
 import { dayRead } from "./day-read.js";
 import {
   equipmentCompatibility,
@@ -8,6 +9,7 @@ import {
   parseEquipmentCapability,
 } from "./equipment-capability.js";
 import { findExercise } from "./exercises.js";
+import { flexibleTrainingAgenda } from "./flexible-training-agenda.js";
 import { getInjuryImpacts, listContextEvents } from "./health.js";
 import { recentEnduranceImpacts, recentMuscleLoad } from "./hybrid-load.js";
 import { getPlanDay } from "./plan.js";
@@ -17,6 +19,11 @@ import { muscleGroupsForPainArea, painAreaLoadsExercise } from "./pain-relevance
 import { planDayProgression, recentAutoregulation } from "./progression.js";
 import { adaptBasePlanDayForRecovery, recoveryCycleAt } from "./recovery-cycles.js";
 import { addDaysISO, localDateISO } from "./shared.js";
+import {
+  getTrainingIntent,
+  type EnduranceRole,
+  type TrainingPriority,
+} from "./training-intent.js";
 import { listTrainingSymptoms } from "./training-symptoms.js";
 
 // The deterministic daily-decision envelope (Stage 2 of the adaptive daily
@@ -34,8 +41,12 @@ import { listTrainingSymptoms } from "./training-symptoms.js";
 // sync with the Brief. Stage 2 layers the movement/muscle/caps ENVELOPE and the
 // reason-coded rationale on top of that kind. See the wave report for this
 // intentional deviation from the doc's "re-derive precedence 3" wording.
+//
+// Soft training-intent bias (v5): ordered priorities and endurance_role shape
+// soft preferences and rationale only — never gates, scores, or KIND. Athlete
+// override / train_anyway / dayRead kind still win.
 
-export const DAILY_DECISION_POLICY_VERSION = "daily_decision_v4";
+export const DAILY_DECISION_POLICY_VERSION = "daily_decision_v5";
 
 export const DAILY_DECISION_REASONS = [
   "injury_exclusion",
@@ -61,6 +72,7 @@ export const DAILY_DECISION_REASONS = [
   "time_constrained",
   "athlete_override",
   "template_rotation",
+  "training_intent",
 ] as const;
 
 export type DailyDecisionReason = (typeof DAILY_DECISION_REASONS)[number];
@@ -163,6 +175,21 @@ export interface DailyDecisionSnapshot {
     brain_change_reason_provenance?: Record<string, unknown> | null;
     brain_change_reversible?: boolean | null;
   }>;
+  // Compact, fingerprint-stable view of durable training direction. Role +
+  // ordered priorities only — no free-text scores or capacity prose. Live
+  // gather always stamps this; pure unit fixtures may omit it (no soft bias).
+  training_intent?: {
+    endurance_role: EnduranceRole;
+    priorities: TrainingPriority[];
+    source: "explicit" | "derived";
+  };
+  // The soonest actually open, dated key-run intention from the flexible
+  // agenda. Completed and undated intentions deliberately collapse to null.
+  open_key_run?: {
+    intent_id: string;
+    kind: "quality" | "long";
+    suggested_date: string;
+  } | null;
 }
 
 export interface DailyDecisionTarget {
@@ -237,6 +264,17 @@ export interface DailyDecisionEnvelope {
   soft_preferences: Array<{ code: DailyDecisionReason; detail: string }>;
   rationale: Array<{ code: DailyDecisionReason; text: string }>;
   precedence: DailyDecisionReason[];
+  // Compact provenance for the soft intent bias (role + source; no scores).
+  // Optional so historical envelope_json rows remain readable.
+  training_intent?: DailyDecisionSnapshot["training_intent"];
+  // Structured safety provenance lets Stage 3 certify cardio against the
+  // actual protective areas instead of guessing from prose or muscle groups.
+  // Optional so historical envelope_json remains readable; an old envelope
+  // with injury_exclusion but no structure is treated as uncertifiable.
+  protective_exclusions?: Array<{ areas: string[]; exercises: string[] }>;
+  // Recent athlete-reported pain is softer than an active injury, but known
+  // relevant cardio still must not slip past the movement-level reduction.
+  reported_joint_pain?: string | null;
 }
 
 const KNEE_GROUPS = ["quads", "hamstrings", "calves", "glutes"];
@@ -304,7 +342,10 @@ function stableJson(value: unknown): string {
 }
 
 export function dailyDecisionFingerprint(snapshot: DailyDecisionSnapshot): string {
-  return crypto.createHash("sha256").update(stableJson(snapshot)).digest("hex");
+  return crypto
+    .createHash("sha256")
+    .update(stableJson({ policy_version: DAILY_DECISION_POLICY_VERSION, snapshot }))
+    .digest("hex");
 }
 
 function driftOf(value: unknown): "down" | "flat" | "up" | null {
@@ -442,6 +483,14 @@ export function gatherDailyDecisionSnapshot(
   const progression =
     selected?.day_number != null ? (safe(() => planDayProgression(selected.day_number), []) as any[]) : [];
 
+  // One intent read for the whole snapshot — fingerprint-stable role + priorities.
+  const resolvedIntent = safe(() => getTrainingIntent(), {
+    priorities: ["strength", "muscle", "longevity"] as TrainingPriority[],
+    endurance_role: "none" as EnduranceRole,
+    endurance_capacity: null,
+    source: "derived" as const,
+  });
+
   const override = text(opts.override, 200);
   const contextInjuries = (Array.isArray(injuryImpacts?.injuries) ? injuryImpacts.injuries : []).map((inj: any) => ({
     title: text(inj?.title ?? inj?.text, 120) ?? "injury",
@@ -454,11 +503,11 @@ export function gatherDailyDecisionSnapshot(
     const affected = (Array.isArray(planDay?.items) ? planDay.items : [])
       .filter((item: any) =>
         painAreaLoadsExercise(area, {
-          name: item?.exercise,
+          name: planItemLabel(item),
           muscle_group: item?.muscle_group,
         })
       )
-      .map((item: any) => item?.exercise);
+      .map((item: any) => planItemLabel(item));
     return {
       title: `Reported ${area}`.slice(0, 120),
       constraint_level:
@@ -467,6 +516,22 @@ export function gatherDailyDecisionSnapshot(
       exercises: dedupe(affected).slice(0, 12),
     };
   });
+  const agenda = safe(() => flexibleTrainingAgenda(d), null);
+  const openKeyRun =
+    agenda?.available === true && Array.isArray(agenda.intents)
+      ? agenda.intents
+          .filter(
+            (intent: any) =>
+              intent?.status === "open" &&
+              (intent?.kind === "quality" || intent?.kind === "long") &&
+              /^\d{4}-\d{2}-\d{2}$/.test(String(intent?.suggested_date ?? ""))
+          )
+          .sort(
+            (a: any, b: any) =>
+              String(a.suggested_date).localeCompare(String(b.suggested_date)) ||
+              String(a.intent_id ?? a.id ?? "").localeCompare(String(b.intent_id ?? b.id ?? ""))
+          )[0] ?? null
+      : null;
   return {
     date: d,
     request: {
@@ -598,29 +663,48 @@ export function gatherDailyDecisionSnapshot(
       .filter((p) => p.exercise)
       .slice(0, 24),
     plan_items: (Array.isArray(planDay?.items) ? planDay.items : [])
-      .map((it: any) => ({
-        exercise: text(it?.exercise, 120) ?? "",
-        muscle_group: text(it?.muscle_group, 40),
-        equipment: text(findExercise(String(it?.exercise ?? ""))?.equipment, 40),
-        mode: text(it?.mode, 20) ?? "reps",
-        kind: text(it?.kind, 20) ?? "strength",
-        sets: finite(it?.sets),
-        rep_low: finite(it?.rep_low),
-        rep_high: finite(it?.rep_high),
-        target_weight: finite(it?.target_weight),
-        target_seconds: finite(it?.target_seconds),
-        target_distance_km: finite(it?.target_distance_km),
-        target_duration_min: finite(it?.target_duration_min),
-        target_zone: text(it?.target_zone, 40),
-        brain_decision_id: finite(it?.brain_decision_id),
-        brain_change_summary: text(it?.brain_change_summary, 500),
-        brain_change_reason: text(it?.brain_change_reason, 600),
-        brain_change_reason_provenance: boundedRecord(it?.brain_change_reason_provenance),
-        brain_change_reversible:
-          it?.brain_change_reversible == null ? null : it.brain_change_reversible === true,
-      }))
+      .map((it: any) => {
+        const isCardio = String(it?.kind ?? "").toLowerCase() === "cardio";
+        // Cardio plan rows store the athlete-facing label in `note` (no exercise_id).
+        const exercise = planItemLabel(it);
+        return {
+          exercise,
+          muscle_group: text(it?.muscle_group, 40),
+          equipment: isCardio ? null : text(findExercise(String(it?.exercise ?? ""))?.equipment, 40),
+          mode: text(it?.mode, 20) ?? "reps",
+          kind: isCardio ? "cardio" : (text(it?.kind, 20) ?? "strength"),
+          sets: finite(it?.sets),
+          rep_low: finite(it?.rep_low),
+          rep_high: finite(it?.rep_high),
+          target_weight: finite(it?.target_weight),
+          target_seconds: finite(it?.target_seconds),
+          target_distance_km: finite(it?.target_distance_km),
+          target_duration_min: finite(it?.target_duration_min),
+          target_zone: text(it?.target_zone, 40),
+          brain_decision_id: finite(it?.brain_decision_id),
+          brain_change_summary: text(it?.brain_change_summary, 500),
+          brain_change_reason: text(it?.brain_change_reason, 600),
+          brain_change_reason_provenance: boundedRecord(it?.brain_change_reason_provenance),
+          brain_change_reversible:
+            it?.brain_change_reversible == null ? null : it.brain_change_reversible === true,
+        };
+      })
       .filter((it: any) => it.exercise)
       .slice(0, 24),
+    training_intent: {
+      endurance_role: resolvedIntent.endurance_role,
+      priorities: Array.isArray(resolvedIntent.priorities)
+        ? (resolvedIntent.priorities.slice(0, 5) as TrainingPriority[])
+        : (["strength", "muscle", "longevity"] as TrainingPriority[]),
+      source: resolvedIntent.source === "explicit" ? "explicit" : "derived",
+    },
+    open_key_run: openKeyRun
+      ? {
+          intent_id: text(openKeyRun.id, 160) ?? `${d}:${openKeyRun.kind}`,
+          kind: openKeyRun.kind as "quality" | "long",
+          suggested_date: String(openKeyRun.suggested_date),
+        }
+      : null,
   };
 }
 
@@ -658,6 +742,57 @@ function safe<T>(fn: () => T, fallback: T): T {
   }
 }
 
+const CARDIO_LOAD_GROUPS: Array<{ re: RegExp; groups: string[] }> = [
+  {
+    re: /\b(?:run|running|jog|jogging|sprint|treadmill|trail run)\b/i,
+    groups: ["quads", "hamstrings", "glutes", "calves"],
+  },
+  {
+    re: /\b(?:ride|riding|bike|biking|cycle|cycling|spin)\b/i,
+    groups: ["quads", "hamstrings", "glutes", "calves"],
+  },
+  { re: /\b(?:walk|walking|hike|hiking|ruck|rucking)\b/i, groups: ["quads", "hamstrings", "glutes", "calves"] },
+  { re: /\b(?:elliptical|stair|stepper)\b/i, groups: ["quads", "hamstrings", "glutes", "calves"] },
+  { re: /\b(?:row|rowing|erg)\b/i, groups: ["back", "hamstrings", "glutes"] },
+  { re: /\b(?:swim|swimming)\b/i, groups: ["shoulders", "back", "chest"] },
+];
+
+// `true` means the named cardio mode loads a protected area, `false` means its
+// canonical load groups certify it clear, and `null` means the label or area is
+// too vague to certify. Stage 2 and Stage 3 share this exact conservative seam.
+export function cardioPainRelevance(
+  exercise: string | null | undefined,
+  painAreas: Array<string | null | undefined>
+): boolean | null {
+  const label = String(exercise ?? "").trim();
+  const areas = painAreas.map((area) => String(area ?? "").trim()).filter(Boolean);
+  if (!label || !areas.length) return null;
+  const load = CARDIO_LOAD_GROUPS.find((entry) => entry.re.test(label));
+  if (!load) return null;
+  for (const area of areas) {
+    // An unclassified protective area makes certification impossible. Known
+    // upper-body areas can still certify lower-body cardio safe (and vice versa).
+    if (!muscleGroupsForPainArea(area).length) return null;
+    if (
+      load.groups.some((group) =>
+        painAreaLoadsExercise(area, {
+          name: label,
+          muscle_group: group,
+        })
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function planItemLabel(item: any): string {
+  const isCardio = String(item?.kind ?? "").toLowerCase() === "cardio";
+  if (isCardio) return text(cardioPlanIdentity(item).movement_label, 120) ?? "Run";
+  return text(item?.exercise, 120) ?? "";
+}
+
 // Groups an active/joint-pain injury excludes from loaded work today. Injury
 // `areas` are body areas; joint pain maps through the shared JOINT_GROUP_MAP so
 // "left knee" reduces quads/hams/calves the same way every other consumer sees.
@@ -690,6 +825,45 @@ const PROGRESSION_REASON: Record<string, DailyDecisionReason> = {
   introduce: "progression_introduce",
 };
 
+const LOWER_BODY_GROUPS = new Set(["quads", "hamstrings", "glutes", "calves"]);
+
+type CompactTrainingIntent = {
+  endurance_role: EnduranceRole;
+  priorities: TrainingPriority[];
+  source: "explicit" | "derived";
+};
+
+function compactTrainingIntent(
+  value: DailyDecisionSnapshot["training_intent"] | null | undefined
+): CompactTrainingIntent {
+  // Absent field (pure unit fixtures): no soft intent bias. Live gather always
+  // stamps a full view via getTrainingIntent().
+  if (!value || typeof value !== "object") {
+    return { endurance_role: "none", priorities: [], source: "derived" };
+  }
+  const role = String(value.endurance_role ?? "none").toLowerCase() as EnduranceRole;
+  const endurance_role: EnduranceRole =
+    role === "supporting" || role === "co_primary" || role === "primary" || role === "none" ? role : "none";
+  const priorities: TrainingPriority[] = [];
+  for (const raw of Array.isArray(value.priorities) ? value.priorities : []) {
+    const p = String(raw ?? "")
+      .trim()
+      .toLowerCase() as TrainingPriority;
+    if (
+      (p === "longevity" || p === "muscle" || p === "leanness" || p === "strength" || p === "endurance") &&
+      !priorities.includes(p)
+    ) {
+      priorities.push(p);
+    }
+    if (priorities.length >= 5) break;
+  }
+  return {
+    endurance_role,
+    priorities,
+    source: value.source === "explicit" ? "explicit" : "derived",
+  };
+}
+
 // The pure decision. A bounded snapshot in, a versioned reason-coded envelope
 // out. Deterministic apart from `generated_at` (which is excluded from the
 // fingerprint), so the same snapshot always produces the same fingerprint AND
@@ -709,6 +883,12 @@ export function buildDailySessionDecision(
 
   // ---- Precedence 2: injury / joint pain / equipment (hard exclusions) ----
   const { groups: injuryGroups, jointGroups } = excludedGroups(snapshot);
+  const protectiveExclusions = snapshot.constraints.injuries
+    .filter((injury) => (injury.constraint_level ?? "protective") === "protective")
+    .map((injury) => ({
+      areas: dedupe(injury.areas).slice(0, 12),
+      exercises: dedupe(injury.exercises).slice(0, 12),
+    }));
   for (const inj of snapshot.constraints.injuries) {
     if ((inj.constraint_level ?? "protective") === "protective") {
       hard.push({ code: "injury_exclusion", detail: `Working around ${inj.title}` });
@@ -813,20 +993,115 @@ export function buildDailySessionDecision(
     }
   }
 
+  // ---- Soft training-intent view (never overrides hard recovery / injury / rest) ----
+  const trainingIntent = compactTrainingIntent(snapshot.training_intent);
+  const priorities = trainingIntent.priorities;
+  const earlyPriorities = priorities.slice(0, 2);
+  const strengthHighPriority =
+    earlyPriorities.includes("muscle") ||
+    earlyPriorities.includes("strength") ||
+    priorities[0] === "muscle" ||
+    priorities[0] === "strength";
+  const longevityLeads = priorities[0] === "longevity";
+  const enduranceLeads =
+    trainingIntent.endurance_role === "primary" || trainingIntent.endurance_role === "co_primary";
+  const enduranceSupporting = trainingIntent.endurance_role === "supporting";
+  const enduranceNone = trainingIntent.endurance_role === "none";
+  const openKeyRun =
+    snapshot.open_key_run &&
+    (snapshot.open_key_run.kind === "quality" || snapshot.open_key_run.kind === "long") &&
+    /^\d{4}-\d{2}-\d{2}$/.test(snapshot.open_key_run.suggested_date)
+      ? snapshot.open_key_run
+      : null;
+  const tomorrow = addDaysISO(snapshot.date, 1);
+  const hasRelevantOpenKeyRun =
+    openKeyRun != null &&
+    (openKeyRun.suggested_date === snapshot.date ||
+      (tomorrow != null && openKeyRun.suggested_date === tomorrow));
+  const hardLowerOnPlan = snapshot.plan_items.some(
+    (it) =>
+      String(it.kind ?? "").toLowerCase() !== "cardio" &&
+      !!it.muscle_group &&
+      LOWER_BODY_GROUPS.has(String(it.muscle_group).toLowerCase())
+  );
+
   // ---- Precedence 4: recent endurance load vs conflicting lower-body work ----
-  const lowerGroups = new Set(["quads", "hamstrings", "glutes", "calves"]);
+  // Physiological soft reduction always applies when recent heavy cardio loaded
+  // the legs. Role only changes narrative and whether an open quality-run
+  // opening soft-protects legs (primary/co_primary) vs yielding to strength
+  // (supporting). Role "none" never invents co-primary quality-run obligations.
   const enduranceReduced: string[] = [];
   const heavyEndurance = snapshot.endurance.filter((e) => e.load === "heavy" || e.intensity === "hard");
   for (const e of heavyEndurance) {
     for (const region of e.regions) {
-      if (lowerGroups.has(region.toLowerCase())) enduranceReduced.push(region.toLowerCase());
+      if (LOWER_BODY_GROUPS.has(region.toLowerCase())) enduranceReduced.push(region.toLowerCase());
     }
   }
+  // Soft key-run protect: primary/co_primary with an open quality cardio opening
+  // and hard lower on the same template — prefer protecting the key-run slot.
+  let keyRunProtect = false;
+  if (enduranceLeads && hasRelevantOpenKeyRun && hardLowerOnPlan && kind !== "rest") {
+    keyRunProtect = true;
+    for (const it of snapshot.plan_items) {
+      const group = it.muscle_group ? String(it.muscle_group).toLowerCase() : "";
+      if (String(it.kind ?? "").toLowerCase() !== "cardio" && group && LOWER_BODY_GROUPS.has(group)) {
+        enduranceReduced.push(group);
+      }
+    }
+  }
+  // Intent athlete-facing lines are buffered so primary_rationale (rationale[0])
+  // stays the template / kind read — soft bias must not steal the headline.
+  const intentRationale: Array<{ code: DailyDecisionReason; text: string }> = [];
+
   if (enduranceReduced.length) {
     fire(precedence, "endurance_lower_conflict");
+    let detail = `Recent ${heavyEndurance[0]?.type ?? "endurance"} already loaded the legs`;
+    if (keyRunProtect) {
+      detail =
+        openKeyRun?.suggested_date === snapshot.date
+          ? "Keeping today's key-run opening clear — lower-body loading stays light"
+          : "Keeping the next key-run opening clear — lower-body loading stays light today";
+    } else if (enduranceSupporting) {
+      detail = "Recent cardio already loaded the legs — strength recovery comes first";
+    } else if (enduranceNone) {
+      detail = "Recent cardio already loaded the legs";
+    }
+    soft.push({ code: "endurance_lower_conflict", detail });
+    if (keyRunProtect) {
+      intentRationale.push({
+        code: "endurance_lower_conflict",
+        text:
+          openKeyRun?.suggested_date === snapshot.date
+            ? "A key endurance session has today's opening — legs stay lighter so it can land well."
+            : "A key endurance session has the next opening — legs stay lighter today so it can land well.",
+      });
+    } else if (enduranceSupporting && heavyEndurance.length) {
+      intentRationale.push({
+        code: "endurance_lower_conflict",
+        text: "Supporting cardio already worked the legs — today's strength work stays a little kinder there.",
+      });
+    }
+  }
+
+  // Supporting endurance + open key work on a hard-lower template: the run is
+  // optional context, not a plan failure. Name quality and long work accurately.
+  if (enduranceSupporting && hasRelevantOpenKeyRun && hardLowerOnPlan && kind === "train") {
+    const supportingKeyDetail =
+      openKeyRun?.kind === "long"
+        ? "Supporting cardio context — the long run is optional after strength"
+        : "Supporting cardio context — quality is optional after strength";
+    const supportingKeyRationale =
+      openKeyRun?.kind === "long"
+        ? "Cardio supports the higher goals today — the long run stays optional so the strength session can land cleanly."
+        : "Cardio supports the higher goals today — any quality work stays optional so the strength session can land cleanly.";
+    fire(precedence, "training_intent");
     soft.push({
-      code: "endurance_lower_conflict",
-      detail: `Recent ${heavyEndurance[0]?.type ?? "endurance"} already loaded the legs`,
+      code: "training_intent",
+      detail: supportingKeyDetail,
+    });
+    intentRationale.push({
+      code: "training_intent",
+      text: supportingKeyRationale,
     });
   }
 
@@ -842,7 +1117,38 @@ export function buildDailySessionDecision(
   const due = dedupe([...snapshot.plan.due, ...snapshot.program.volume_low_groups]);
   if (due.length) {
     fire(precedence, "muscle_due");
-    soft.push({ code: "muscle_due", detail: `Due for work: ${due.join(", ")}` });
+    soft.push({
+      code: "muscle_due",
+      detail: strengthHighPriority
+        ? `Due for strength/muscle work: ${due.join(", ")}`
+        : `Due for work: ${due.join(", ")}`,
+    });
+  }
+  // Strength/muscle high priorities: when recovery already allows train, bias
+  // soft rationale toward due groups / template strength exposure (no invented work).
+  // Soft narrative fires when due groups exist, or when intent is explicit so a
+  // derived strength label does not narrate on every quiet template day.
+  if (strengthHighPriority && kind === "train") {
+    if (due.length) {
+      fire(precedence, "training_intent");
+      intentRationale.push({
+        code: "muscle_due",
+        text: "Strength and muscle sit high on your list — the due work fits that direction today.",
+      });
+    } else if (
+      trainingIntent.source === "explicit" &&
+      snapshot.plan_items.some((it) => String(it.kind ?? "").toLowerCase() !== "cardio")
+    ) {
+      fire(precedence, "training_intent");
+      soft.push({
+        code: "training_intent",
+        detail: "Strength/muscle priority — template strength exposure preferred",
+      });
+      intentRationale.push({
+        code: "training_intent",
+        text: "Strength and muscle sit high on your list — today's session keeps that exposure in view.",
+      });
+    }
   }
 
   // ---- Muscle envelope ----
@@ -914,13 +1220,35 @@ export function buildDailySessionDecision(
   // ---- Caps ----
   const deloadPhase =
     snapshot.program.mesocycle_phase === "deload" || snapshot.program.mesocycle_phase === "recovery";
+  // Longevity-leading soft ease under double-day pressure — never forces rest
+  // when dayRead already says train; only prefers reduced volume / hold intensity.
+  const doubleDayPressure =
+    kind === "train" &&
+    ((heavyEndurance.length > 0 && hardLowerOnPlan) ||
+      keyRunProtect ||
+      (enduranceReduced.length > 0 && hardLowerOnPlan) ||
+      (hasRelevantOpenKeyRun && hardLowerOnPlan) ||
+      consecutive >= 2);
+  const longevityEase = longevityLeads && doubleDayPressure && kind === "train";
+  if (longevityEase) {
+    fire(precedence, "training_intent");
+    soft.push({
+      code: "training_intent",
+      detail: "Longevity-leading intent — prefer a calmer double-day dose",
+    });
+    intentRationale.push({
+      code: "training_intent",
+      text: "Longevity leads your priorities — today's work stays a little easier rather than stacking hard on hard.",
+    });
+  }
   const softenVolume =
     kind === "easy" ||
     (trainAnyway && baseKind === "rest") ||
     snapshot.recovery.readiness === "low" ||
     highSoreness ||
     consecutive >= 3 ||
-    snapshot.day_read.recovery_week;
+    snapshot.day_read.recovery_week ||
+    longevityEase;
   const volume: DailyDecisionEnvelope["caps"]["volume"] =
     kind === "rest" ? "minimal" : softenVolume ? "reduced" : "normal";
   const intensity: DailyDecisionEnvelope["caps"]["intensity"] =
@@ -928,7 +1256,7 @@ export function buildDailySessionDecision(
       ? "easy"
       : deloadPhase || repeatedUnder || (trainAnyway && baseKind === "rest")
         ? "deload"
-        : snapshot.recovery.readiness === "low" || highSoreness || lowPerformance
+        : snapshot.recovery.readiness === "low" || highSoreness || lowPerformance || longevityEase
           ? "hold"
           : "normal";
   let duration = requestMinutes ?? snapshot.day_read.est_minutes ?? null;
@@ -945,13 +1273,31 @@ export function buildDailySessionDecision(
   if (intent === "template" && kind !== "rest") {
     for (const it of snapshot.plan_items) {
       const group = it.muscle_group ? it.muscle_group.toLowerCase() : null;
-      if (injuredExercises.has(it.exercise.toLowerCase()) || (group && excluded.includes(group))) {
+      const isCardio = String(it.kind ?? "").toLowerCase() === "cardio";
+      const cardioProtectiveRelevance = isCardio
+        ? cardioPainRelevance(
+            it.exercise,
+            protectiveExclusions.flatMap((exclusion) => exclusion.areas)
+          )
+        : false;
+      const cardioJointPainRelevance =
+        isCardio && snapshot.feedback?.joint_pain
+          ? cardioPainRelevance(it.exercise, [snapshot.feedback.joint_pain])
+          : false;
+      if (
+        injuredExercises.has(it.exercise.toLowerCase()) ||
+        (group && excluded.includes(group)) ||
+        (isCardio && protectiveExclusions.length > 0 && cardioProtectiveRelevance !== false) ||
+        cardioJointPainRelevance === true
+      ) {
         candidates.push({
           exercise: it.exercise,
           muscle_group: it.muscle_group,
           action: "exclude",
           reason_code:
-            injuredExercises.has(it.exercise.toLowerCase()) || (group != null && injuryGroups.includes(group))
+            injuredExercises.has(it.exercise.toLowerCase()) ||
+            (group != null && injuryGroups.includes(group)) ||
+            (isCardio && protectiveExclusions.length > 0 && cardioProtectiveRelevance !== false)
               ? "injury_exclusion"
               : "joint_pain_reduce",
           substitution_for: null,
@@ -1050,6 +1396,8 @@ export function buildDailySessionDecision(
           ? "Today reads as an easy day — keep it light and short."
           : `Today reads as a training day${snapshot.plan.focus ? ` · ${snapshot.plan.focus}` : ""}.`,
   });
+  // Soft intent lines trail the kind/template headline so primary_rationale stays calm.
+  for (const line of intentRationale) rationale.push(line);
 
   return {
     policy_version: DAILY_DECISION_POLICY_VERSION,
@@ -1073,6 +1421,9 @@ export function buildDailySessionDecision(
     soft_preferences: soft,
     rationale,
     precedence,
+    training_intent: trainingIntent,
+    protective_exclusions: protectiveExclusions,
+    reported_joint_pain: snapshot.feedback?.joint_pain ?? null,
   };
 }
 
@@ -1131,8 +1482,13 @@ export function recordDailySessionDecision(
 export function getLatestDailySessionDecision(date?: string): DailyDecisionEnvelope | null {
   const d = String(date || localDateISO()).slice(0, 10);
   const row = db
-    .prepare(`SELECT envelope_json FROM daily_session_decisions WHERE date = ? ORDER BY id DESC LIMIT 1`)
-    .get(d) as any;
+    .prepare(
+      `SELECT envelope_json
+         FROM daily_session_decisions
+        WHERE date = ? AND policy_version = ?
+        ORDER BY id DESC LIMIT 1`
+    )
+    .get(d, DAILY_DECISION_POLICY_VERSION) as any;
   if (!row?.envelope_json) return null;
   try {
     return JSON.parse(row.envelope_json) as DailyDecisionEnvelope;

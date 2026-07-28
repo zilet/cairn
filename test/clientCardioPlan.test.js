@@ -49,6 +49,19 @@ test("planned cardio helpers separate short labels from coach prose", () => {
   assert.equal(cardio.cardioArtPhrase({ note: "" }), "run");
 });
 
+test("running strides do not collide with the ride sport token", () => {
+  const cardio = loadCardioPlan();
+  const tempo = {
+    kind: "cardio",
+    exercise: "Tempo run",
+    note: "Continuous tempo at Z3; finish with relaxed strides.",
+    target_zone: "Z3",
+  };
+
+  assert.equal(cardio.cardioSport(tempo), "run");
+  assert.equal(cardio.cardioLabel(tempo), "Tempo run");
+});
+
 test("exercise-only generated cardio preserves its label, art phrase, and modality", () => {
   const cardio = loadCardioPlan();
 

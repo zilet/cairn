@@ -140,6 +140,15 @@ New/changed components (CSS must implement, the client JS must emit):
   check, `.done-kicker` (`.lbl`), `.done-title` (display serif), `.done-chips` (cream pills:
   sets/tonnage/duration), optional `.done-notes` (italic), the `#feedbackSlot` ("how did
   that feel?"), and `.done-actions` (Log more / In your history →). No score, ever.
+- Session-close **Pain & injury** `.symptom-lifecycle`: a compact, left-aligned editorial lifecycle
+  under `#feedbackSlot`, never a form wall. `.symptom-lifecycle-head` leads with the `.lbl` and one
+  quiet report action; `.symptom-active-list` contains `.symptom-active-row.well-accent-sm` notes
+  with a small `.symptom-watching` state and equal `.pillbtn.pill-sm` pain-free/pain-present actions.
+  Optional movement context lives in `.symptom-movement-control`; new-report and recurrence inputs
+  stay collapsed in `.symptom-report-composer` / `.symptom-recur-composer` until asked for. Resolved
+  notes live behind native `.symptom-history` disclosure and use `.symptom-history-row`. Reuse the
+  shared `linkbtn`, `pillbtn`, and well primitives; do not reintroduce stacked bare inputs or center
+  clinical copy.
 - History session card `.sess.hist` is tappable (`.hist-tap`, `role="button"`) → opens the
   edit overlay; a quiet `.hist-edit` caps cue sits by the weekday. Edit overlay reuses the
   `.detail` scaffold with `.ed-sets` / `.ed-exgroup` / `.edset` (inline number inputs +

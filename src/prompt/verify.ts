@@ -2,7 +2,7 @@
 // drafted meal plan and a suggested session.
 import * as repo from "../repo.js";
 import { promptData } from "./context-projection.js";
-import { CAIRN_PERSONA } from "./shared.js";
+import { CAIRN_PERSONA, dateScopedPromptContext } from "./shared.js";
 
 // ---------- self-critique verify pass (Trust build V1) ----------
 // A bounded SECOND agent turn that checks a just-drafted high-stakes generative
@@ -55,7 +55,7 @@ ${VERIFY_RESULT_NOTE}`;
 
 // Verify a just-suggested single session against the user's HARD constraints.
 export function buildSessionVerifyPrompt(draft: any, opts: { minutes?: number; equipment?: string; focus?: string; constraints?: string; date?: string } = {}): string {
-  const ctx = repo.getCoachContext();
+  const ctx = dateScopedPromptContext(repo.getCoachContext(), opts.date);
   const limits: string[] = [];
   if (opts.minutes) limits.push(`- TIME BUDGET: the whole session must fit in about ${Math.round(opts.minutes)} minutes (est_minutes must be ≤ this; drop accessories before compounds).`);
   if (opts.equipment) limits.push(`- EQUIPMENT: only movements possible with: ${opts.equipment.trim()}.`);

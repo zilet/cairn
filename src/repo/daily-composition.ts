@@ -1,5 +1,6 @@
 import { normalizeSessionSuggestionResult } from "./adaptive-session.js";
-import type { DailyDecisionEnvelope } from "./daily-decision.js";
+import { cardioPlanIdentity } from "./cardio-plan-identity.js";
+import { cardioPainRelevance, type DailyDecisionEnvelope } from "./daily-decision.js";
 import {
   equipmentCompatibility,
   inferExerciseEquipment,
@@ -303,22 +304,62 @@ export function normalizeComposedSession(
     };
   }
   const excluded = new Set(envelope.muscles.excluded.map((g) => g.toLowerCase()));
+  const hasProtectiveExclusion = envelope.hard_constraints.some((entry) => entry.code === "injury_exclusion");
+  const protectiveExclusions = Array.isArray(envelope.protective_exclusions)
+    ? envelope.protective_exclusions
+    : null;
   const candidates = new Map(envelope.candidates.map((candidate) => [candidate.exercise.toLowerCase(), candidate]));
   const equipmentCapability = parseEquipmentCapability(envelope.request.equipment);
   let novelCount = 0;
   const kept: any[] = [];
   for (const item of base.items) {
-    const candidate = candidates.get(String(item.exercise ?? "").toLowerCase());
+    const isCardio = item.kind === "cardio";
+    const exercise = isCardio
+      ? cardioPlanIdentity(item).movement_label
+      : String(item.exercise ?? "");
+    if (isCardio) item.exercise = exercise;
+    const candidate = candidates.get(exercise.toLowerCase());
     if (envelope.kind === "rest" && item.kind !== "cardio" && envelope.request.train_anyway !== true) {
-      rejected.push({ exercise: String(item.exercise), reason: "rest_requires_train_anyway" });
+      rejected.push({ exercise, reason: "rest_requires_train_anyway" });
       continue;
     }
     if (candidate?.action === "exclude") {
-      rejected.push({ exercise: String(item.exercise), reason: "excluded_candidate" });
+      rejected.push({ exercise, reason: "excluded_candidate" });
       continue;
     }
-    const isCardio = item.kind === "cardio";
-    const stored = isCardio ? null : findExercise(String(item.exercise ?? ""));
+    if (
+      isCardio &&
+      envelope.reported_joint_pain &&
+      cardioPainRelevance(exercise, [envelope.reported_joint_pain]) === true
+    ) {
+      rejected.push({ exercise, reason: "cardio_pain_relevant" });
+      continue;
+    }
+    if (isCardio && hasProtectiveExclusion) {
+      // Historical envelopes did not retain structured areas. Under a live hard
+      // exclusion, absence of that evidence is uncertifiable rather than safe.
+      if (protectiveExclusions == null) {
+        rejected.push({ exercise, reason: "cardio_uncertified_under_exclusions" });
+        continue;
+      }
+      const exactExcluded = protectiveExclusions.some((exclusion) =>
+        exclusion.exercises.some(
+          (excludedExercise) => excludedExercise.trim().toLowerCase() === exercise.trim().toLowerCase()
+        )
+      );
+      const painRelevance = cardioPainRelevance(
+        exercise,
+        protectiveExclusions.flatMap((exclusion) => exclusion.areas)
+      );
+      if (exactExcluded || painRelevance !== false) {
+        rejected.push({
+          exercise,
+          reason: exactExcluded ? "excluded_candidate" : "cardio_uncertified_under_exclusions",
+        });
+        continue;
+      }
+    }
+    const stored = isCardio ? null : findExercise(exercise);
     if (!isCardio && equipmentCapability.recognized && equipmentCapability.restricted) {
       const compatibility = equipmentCompatibility(
         equipmentCapability,
@@ -326,7 +367,7 @@ export function normalizeComposedSession(
       );
       if (compatibility !== "compatible") {
         rejected.push({
-          exercise: String(item.exercise),
+          exercise,
           reason: compatibility === "incompatible" ? "equipment_incompatible" : "equipment_unverified",
         });
         continue;
@@ -334,7 +375,7 @@ export function normalizeComposedSession(
     }
     const group = stored?.muscle_group ? String(stored.muscle_group).toLowerCase() : null;
     if (group && excluded.has(group)) {
-      rejected.push({ exercise: String(item.exercise), reason: "excluded_group" });
+      rejected.push({ exercise, reason: "excluded_group" });
       continue;
     }
     const novel = !isCardio && !stored;
@@ -345,11 +386,11 @@ export function normalizeComposedSession(
       // cannot certify an unknown movement avoids the excluded area — and keep the rest
       // of the composition (the agent is told to compose from the canon in this case).
       if (excluded.size) {
-        rejected.push({ exercise: String(item.exercise), reason: "novel_blocked_by_exclusions" });
+        rejected.push({ exercise, reason: "novel_blocked_by_exclusions" });
         continue;
       }
       if (novelCount >= 1) {
-        rejected.push({ exercise: String(item.exercise), reason: "extra_novel_movement" });
+        rejected.push({ exercise, reason: "extra_novel_movement" });
         continue;
       }
       novelCount++;
@@ -454,9 +495,10 @@ export function normalizeComposedSession(
 
 function planItemToRaw(it: any): Record<string, unknown> {
   if (it?.kind === "cardio") {
+    const identity = cardioPlanIdentity(it);
     return {
       kind: "cardio",
-      exercise: it.exercise,
+      exercise: identity.movement_label,
       target_distance_km: it.target_distance_km ?? null,
       target_duration_min: it.target_duration_min ?? null,
       target_zone: it.target_zone ?? null,
@@ -512,7 +554,9 @@ export function deterministicSessionRawFromEnvelope(envelope: DailyDecisionEnvel
     for (const it of Array.isArray(day?.items) ? day.items : []) {
       const group = String(it?.muscle_group ?? "").toLowerCase();
       if (group && excluded.has(group)) continue;
-      const direct = candidates.get(String(it?.exercise ?? "").toLowerCase());
+      const itemExercise =
+        it?.kind === "cardio" ? cardioPlanIdentity(it).movement_label : String(it?.exercise ?? "");
+      const direct = candidates.get(itemExercise.toLowerCase());
       if (direct?.action === "exclude") continue;
       if (equipmentCapability.recognized && equipmentCapability.restricted) {
         const stored = findExercise(String(it?.exercise ?? ""));

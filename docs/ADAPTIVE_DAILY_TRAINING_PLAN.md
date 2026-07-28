@@ -170,12 +170,21 @@ The same bounded input must produce the same envelope. If optional sources are a
 
 ### Authoritative acceptance (implemented)
 
-`adaptive_plan` preparation has one authority chain: normalized request → `daily_decision_v2` envelope → bounded composition → accepted session. The envelope carries both `baseline_kind` and the resulting `kind`, the selected plan identity, explicit `train_anyway`, caps, exclusions, candidates, and its fingerprint. That exact normalized decision context is embedded in `constraints_json` and `provenance_json`, returned as `daily_session.decision`, and linked to the matching `daily_session_decisions` row.
+`adaptive_plan` preparation has one authority chain: normalized request → current versioned
+daily-decision envelope → bounded composition → accepted session. The envelope carries both
+`baseline_kind` and the resulting `kind`, the selected plan identity, explicit `train_anyway`, caps,
+exclusions, candidates, compact ordered training intent, the rolling agenda's genuinely open key-run
+window, and a fingerprint whose identity includes the policy version. The normalized decision context
+is embedded in `constraints_json` and `provenance_json`, returned as `daily_session.decision`, and
+linked to the matching `daily_session_decisions` row.
 
 - A rest baseline with no override accepts a deterministic easy-recovery composition, never a full lifting template.
 - Explicit **Train anyway** changes the envelope to `kind:"train"` while retaining `baseline_kind:"rest"` and enforcing reduced volume, held/easy intensity, injury exclusions, and a short duration cap.
 - A manual plan pull remains the athlete's requested template. Cairn does not relabel the policy read; it carries the same safety context and presents it as **Training by choice** when the baseline did not call for training.
 - The boolean override is part of normalized request identity. The legacy exact phrase `train anyway` is still recognized so old cached or queued clients remain replayable.
+- Ordered priorities and endurance role may break ties or soften conflicting strength/endurance work;
+  they never override hard protection, recovery limits, or the athlete's explicit choice. A key run is
+  protected only when the actual-log-aware rolling agenda still has a dated opening for it.
 - Cached active-ID assertions remain read-only and shape-compatible. The PWA does not locally stage a raw weekly plan as a train-anyway prescription while offline because it cannot reproduce current server safety bounds.
 
 ## 5. Stage 3 — bounded agent composition and safe exercise introduction

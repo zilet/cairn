@@ -41,7 +41,7 @@ importing everything from `./repo.js` unchanged.
 
 **One daily training authority.** `prepareDailySession()` (`src/repo/adaptive-session.ts`) decides an
 adaptive request before it snapshots anything. `decideDailySession()` produces the versioned
-`daily_decision_v2` envelope; `deterministicComposedSession()` then applies that envelope's exact
+daily-decision envelope; `deterministicComposedSession()` then applies that envelope's exact
 template, injury/exercise exclusions, candidate substitutions/holds/deloads, per-item and total
 volume bounds, intensity/load/seconds bounds, and duration cap. The accepted
 `daily_session_compositions` row embeds the same normalized decision context and fingerprint in both
@@ -52,6 +52,12 @@ first-class athlete override: the envelope keeps `baseline_kind:"rest"` for expl
 athlete-owned and keep the safety context visible as **Training by choice** rather than rewriting
 what policy suggested. REST and MCP pass the same boolean, and older requests without it (or with the
 legacy exact phrase) remain valid.
+
+The envelope also carries a compact, fingerprinted view of the athlete's ordered training intent and
+the rolling run agenda's next genuinely open key-run window. Those facts can shape soft preference
+and rationale, but never outrank pain/injury protection, recovery bounds, or an athlete override.
+Policy version participates in decision identity, so a cached preview or persisted decision from an
+older policy cannot be silently reused after an upgrade.
 
 **Durable training identity, temporary events, and the rolling agenda.**
 `training-intent.ts` owns the athlete's ordered durable priorities, explicit endurance role, and

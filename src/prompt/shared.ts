@@ -5,7 +5,19 @@
 // COACHING_STANCE) through the src/prompt.ts barrel. Behavior-preserving split.
 import * as repo from "../repo.js";
 import { extractJson } from "../agents.js";
-import type { PartialCoachContext } from "../repo/coach-context.js";
+import type { CoachContext, PartialCoachContext } from "../repo/coach-context.js";
+
+// getCoachContext deliberately describes the host's current local day. Dated
+// prompts are historical/forward planning surfaces, so patch only their compact
+// location view rather than changing that global contract.
+export function dateScopedPromptContext(context: CoachContext, date?: string): CoachContext {
+  if (!date) return context;
+  try {
+    return { ...context, location: repo.getLocationContext({ on: date }) };
+  } catch {
+    return context;
+  }
+}
 
 // ---- prose-first reply contract (shared by chat AND the streaming job ops) ----
 // The reply STREAMS, so the contract is prose-first: the model writes a marker, the
@@ -176,12 +188,39 @@ export function renderDiscipline(ctx: any, focus: "training" | "nutrition" | "da
   )
     ? `\nSPORT CONTEXT: preserve the athlete's stated subtype and terrain. Trail or cross-country MTB means mixed climbing and descending, never downhill-only. Honor stated seasonal sport switches without rewriting the durable priority order; off-season work is minimum-effective maintenance, not identity loss. If a skiing subtype is not stated, keep it generic — do not assume alpine, Nordic or touring.`
     : "";
-  const placeContext =
-    /\b(?:location|live(?:s|d)? in|weather|season|seasonal|winter|springtime|summer|autumn|fall season)\b/.test(
-      athleteContext
-    )
-    ? `\nPLACE & WEATHER: location and season facts in memory may inform practical options and known seasonal changes. Never invent current weather without a fresh weather source, and never treat weather as a gate.`
-    : "";
+  // Structured location (home_location / active trip) must always surface a PLACE
+  // line when effective is set — even with empty memory. Keyword hits on memory may
+  // still add seasonal color, but are never required for the base place line.
+  const placeContext = (() => {
+    const loc = ctx?.location;
+    const effective =
+      typeof loc?.effective === "string" ? loc.effective.trim() : "";
+    const memoryPlace =
+      /\b(?:location|live(?:s|d)? in|weather|season|seasonal|winter|springtime|summer|autumn|fall season)\b/.test(
+        athleteContext
+      );
+    if (effective) {
+      const source = String(loc?.source ?? "unknown");
+      let sourceBit = "";
+      if (source === "home") {
+        sourceBit = " (home base)";
+      } else if (source === "trip") {
+        const title =
+          typeof loc?.trip_title === "string"
+            ? loc.trip_title.trim().replace(/\s+/g, " ").slice(0, 160)
+            : "";
+        sourceBit = title ? ` (active trip: ${title})` : " (active trip)";
+      }
+      const seasonal = memoryPlace
+        ? " Season facts in memory may also inform practical options and known seasonal changes."
+        : "";
+      return `\nPLACE & WEATHER: effective place is ${effective}${sourceBit}. planning_role is context_only — practical context, never a constraint or training gate. Weather is unavailable; do not invent weather without a fresh weather source.${seasonal}`;
+    }
+    if (memoryPlace) {
+      return `\nPLACE & WEATHER: location and season facts in memory may inform practical options and known seasonal changes. Never invent current weather without a fresh weather source, and never treat weather or location as a gate.`;
+    }
+    return "";
+  })();
   const head = `\n${durable}\n${roleLine}${capabilityLine ? `\n${capabilityLine}` : ""}\n${ageLine}${sportContext}${placeContext}`;
   if (focus === "nutrition") {
     if (role === "none") {
@@ -1062,7 +1101,9 @@ export function renderRunPlan(ctx: PartialCoachContext): string {
 // renderHybridSequencing: the runner+lifter interference/synergy note for the on-demand
 // session builder. A concurrent runner+lifter loads the SAME legs from two directions, so
 // today's session is SEQUENCED against yesterday's cardio, tomorrow's key run, and any run
-// already in today (repo.hybridDayContext supplies the deterministic reads). Suggestion
+// already in today. Callers should pass a HybridDayContext already run through
+// withFlexibleRunLookahead so KEY RUN TOMORROW agrees with the Brief (template-only
+// hybridDayContext is the fallback when the agenda is unavailable). Suggestion
 // words, never a gate; no scores. "" when nothing fires (the quiet-by-default pattern).
 // `today` anchors the "tomorrow" check so a key run several days out doesn't fire it.
 const HYBRID_SPORT_NOUN: Record<string, string> = { run: "run", ride: "ride", swim: "swim", row: "row", walk: "hike" };

@@ -65,6 +65,23 @@ function addQualityEvidence(activity, { label = "TEMPO", aerobicTe = 3.2 } = {})
   ).run(source.lastInsertRowid, `agenda-run-${activity.id}`, activity.id, activity.date, label, aerobicTe);
 }
 
+function addZoneEvidence(activity, zones) {
+  const source = db
+    .prepare(`INSERT INTO garmin_sources (provider, label) VALUES ('garmin', ?)`)
+    .run(`agenda-zones-${activity.id}`);
+  db.prepare(
+    `INSERT INTO garmin_activities
+       (source_id, external_id, activity_id, date, type, hr_zones_json)
+     VALUES (?, ?, ?, ?, 'running', ?)`
+  ).run(
+    source.lastInsertRowid,
+    `agenda-zone-run-${activity.id}`,
+    activity.id,
+    activity.date,
+    JSON.stringify(zones)
+  );
+}
+
 beforeEach(resetAll);
 
 test("an early or late easy run closes one compatible weekly intention without an exact-day penalty", () => {
@@ -93,6 +110,33 @@ test("quality completion requires positive intensity evidence", () => {
   assert.equal(withEvidence.intents[0].completion.intensity, "quality");
 });
 
+test("thirty sustained Z3 minutes in a forty-minute run close quality without a label or training effect", () => {
+  const activity = repo.addActivity({ type: "run", date: MONDAY, duration_min: 40, distance_km: 7 });
+  addZoneEvidence(activity, [
+    { zone: 2, secs: 10 * 60 },
+    { zone: 3, secs: 30 * 60 },
+  ]);
+
+  const agenda = repo.flexibleTrainingAgenda(TUESDAY, { runPlan: plan([run(2, "quality", 7)]) });
+  assert.equal(agenda.intents[0].status, "completed");
+  assert.equal(agenda.intents[0].completion.intensity, "quality");
+  assert.ok(agenda.intents[0].completion.signals.includes("30 min sustained in Z3"));
+});
+
+test("brief Z3 drift remains easy evidence and cannot close quality", () => {
+  const activity = repo.addActivity({ type: "run", date: MONDAY, duration_min: 40, distance_km: 7 });
+  addZoneEvidence(activity, [
+    { zone: 2, secs: 35 * 60 },
+    { zone: 3, secs: 5 * 60 },
+  ]);
+
+  const qualityAgenda = repo.flexibleTrainingAgenda(TUESDAY, { runPlan: plan([run(2, "quality", 7)]) });
+  assert.equal(qualityAgenda.intents[0].status, "open");
+  const easyAgenda = repo.flexibleTrainingAgenda(TUESDAY, { runPlan: plan([run(2, "easy", 7)]) });
+  assert.equal(easyAgenda.intents[0].status, "completed");
+  assert.equal(easyAgenda.intents[0].completion.intensity, "easy");
+});
+
 test("a completed intention is consumed once and cannot be recommended again", () => {
   repo.addActivity({ type: "run", date: MONDAY, duration_min: 35, distance_km: 6 });
   const agenda = repo.flexibleTrainingAgenda(TUESDAY, {
@@ -114,7 +158,8 @@ test("a live-shaped threshold run today reserves today and moves the remaining e
   addQualityEvidence(activity, { label: "LACTATE_THRESHOLD", aerobicTe: 3.5 });
   const agenda = repo.flexibleTrainingAgenda(TUESDAY, {
     // No quality intention remains in this supporting shape, so this sufficiently
-    // long threshold effort closes the compatible long intention exactly once.
+    // long threshold effort closes the compatible long intention exactly once
+    // (quality-flagged may close long only when no open quality slot remains).
     runPlan: plan([run(1, "easy", 6), run(6, "long", 8)]),
   });
   const completed = agenda.intents.find((intent) => intent.status === "completed");
@@ -129,6 +174,66 @@ test("a live-shaped threshold run today reserves today and moves the remaining e
   assert.equal(agenda.next.suggested_date, WEDNESDAY);
   assert.match(agenda.next.guidance, /logged cardio already fills today's opening/i);
   assert.doesNotMatch(agenda.next.guidance, /key run/i);
+});
+
+test("a quality-flagged threshold run closes quality, not long, when both are open", () => {
+  const activity = repo.addActivity({
+    type: "run",
+    date: TUESDAY,
+    duration_min: 40,
+    distance_km: 7,
+  });
+  addQualityEvidence(activity, { label: "LACTATE_THRESHOLD", aerobicTe: 3.5 });
+  const agenda = repo.flexibleTrainingAgenda(TUESDAY, {
+    runPlan: plan([run(2, "quality", 7), run(6, "long", 12)]),
+  });
+  const quality = agenda.intents.find((intent) => intent.kind === "quality");
+  const long = agenda.intents.find((intent) => intent.kind === "long");
+  assert.equal(quality.status, "completed", "quality dose + intensity evidence claims the quality slot");
+  assert.equal(quality.completion.activity_id, activity.id);
+  assert.equal(quality.completion.intensity, "quality");
+  assert.equal(long.status, "open", "quality must not steal the long intention");
+});
+
+test("an 18 km quality-bearing run closes the long intention before quality", () => {
+  const activity = repo.addActivity({
+    type: "run",
+    date: TUESDAY,
+    duration_min: 108,
+    distance_km: 18,
+  });
+  addQualityEvidence(activity, { label: "TEMPO", aerobicTe: 3.8 });
+  const agenda = repo.flexibleTrainingAgenda(TUESDAY, {
+    runPlan: plan([run(2, "quality", 8), run(6, "long", 18)]),
+  });
+  const quality = agenda.intents.find((intent) => intent.kind === "quality");
+  const long = agenda.intents.find((intent) => intent.kind === "long");
+  assert.equal(long.status, "completed", "the clearly long-shaped outing consumes long work");
+  assert.equal(long.completion.activity_id, activity.id);
+  assert.equal(quality.status, "open", "the same outing is not spent on the shorter quality slot");
+});
+
+test("a quality-flagged dose that only hits long fraction does not close long while quality is open", () => {
+  // Quality target is high enough that 6 km fails qualityDoseMet (needs ≥0.5 → 7 km),
+  // but still meets longDoseMet against an 8 km long (0.75 → 6 km). Prefer leaving long open.
+  const activity = repo.addActivity({
+    type: "run",
+    date: TUESDAY,
+    duration_min: 38,
+    distance_km: 6,
+  });
+  addQualityEvidence(activity, { label: "TEMPO", aerobicTe: 3.2 });
+  const agenda = repo.flexibleTrainingAgenda(TUESDAY, {
+    runPlan: plan([run(2, "quality", 14), run(6, "long", 8)]),
+  });
+  const quality = agenda.intents.find((intent) => intent.kind === "quality");
+  const long = agenda.intents.find((intent) => intent.kind === "long");
+  assert.equal(quality.status, "open", "under-dosed for the quality target");
+  assert.equal(long.status, "open", "quality-flagged short of long-shaped must not mis-close long");
+  assert.equal(
+    agenda.intents.every((intent) => intent.completion == null || intent.completion.activity_id !== activity.id),
+    true
+  );
 });
 
 test("a matched easy-effort completion date cannot be reused for another run intention", () => {
@@ -438,7 +543,7 @@ test("sport context preserves terrain and seasonal identity without inventing we
   assert.match(rendered, /off-season work is minimum-effective maintenance, not identity loss/i);
   assert.match(rendered, /do not assume alpine, Nordic or touring/i);
   assert.match(rendered, /never invent current weather without a fresh weather source/i);
-  assert.match(rendered, /never treat weather as a gate/i);
+  assert.match(rendered, /never treat weather(?: or location)? as a gate/i);
 
   const unrelated = renderDiscipline(
     {

@@ -98,15 +98,17 @@ type MovementStopMarker = {
   function movementInputHtml(symptomId: number, session: Record<string, unknown>): string {
     const options = sessionMovementOptions(session);
     if (!options.length) {
-      return `<input class="feedback-joint" data-symptom-movement="${escAttr(symptomId)}" type="text"
-        autocomplete="off" placeholder="movement, e.g. Back Squat">`;
+      return `<label class="symptom-movement-field">Movement
+        <input class="feedback-joint" data-symptom-movement="${escAttr(symptomId)}" type="text"
+          autocomplete="off" placeholder="e.g. Back Squat"></label>`;
     }
-    return `<select class="feedback-joint" data-symptom-movement="${escAttr(symptomId)}">
-      <option value="">choose movement</option>
-      ${options.map((option) =>
-        `<option value="${escAttr(option.name)}"${option.id == null ? "" : ` data-exercise-id="${escAttr(option.id)}"`}>${escHtml(option.name)}</option>`
-      ).join("")}
-    </select>`;
+    return `<label class="symptom-movement-field">Movement
+      <span class="symptom-select-wrap"><select class="feedback-joint" data-symptom-movement="${escAttr(symptomId)}" aria-label="Movement for this pain note">
+        <option value="">Choose movement</option>
+        ${options.map((option) =>
+          `<option value="${escAttr(option.name)}"${option.id == null ? "" : ` data-exercise-id="${escAttr(option.id)}"`}>${escHtml(option.name)}</option>`
+        ).join("")}
+      </select></span></label>`;
   }
 
   function movementEvidenceHtml(symptom: ClientTrainingSymptom): string {
@@ -123,18 +125,31 @@ type MovementStopMarker = {
 
   function symptomRowHtml(symptom: ClientTrainingSymptom, session: Record<string, unknown>): string {
     const active = symptom.status === "active";
-    return `<div class="well-accent-sm" data-symptom-row="${escAttr(symptom.id)}">
-      <div><strong>${escHtml(symptom.area_text)}</strong> <span class="sess-line">· ${active ? "active" : "resolved"}</span></div>
+    if (!active) {
+      return `<div class="symptom-history-row" data-symptom-row="${escAttr(symptom.id)}">
+        <span class="symptom-area">${escHtml(symptom.area_text)}</span>
+        <button class="linkbtn linkbtn-plain linkbtn-sm" type="button" data-symptom-recur-toggle="${escAttr(symptom.id)}"
+          aria-expanded="false" aria-controls="symptom-recur-${escAttr(symptom.id)}">It returned</button>
+        <div class="symptom-recur-composer" id="symptom-recur-${escAttr(symptom.id)}" hidden>
+          <p>Add the movement if one brought it back. Otherwise leave it blank.</p>
+          ${movementInputHtml(symptom.id, session)}
+          <div class="symptom-row-actions">
+            <button class="pillbtn pill-sm" type="button" data-symptom-recur="${escAttr(symptom.id)}">Save return</button>
+            <button class="linkbtn linkbtn-quiet linkbtn-sm" type="button" data-symptom-recur-cancel="${escAttr(symptom.id)}">Cancel</button>
+          </div>
+        </div>
+      </div>`;
+    }
+    return `<article class="symptom-active-row well-accent-sm" data-symptom-row="${escAttr(symptom.id)}">
+      <div class="symptom-row-heading"><span class="symptom-area">${escHtml(symptom.area_text)}</span><span class="symptom-watching">Watching</span></div>
       ${movementEvidenceHtml(symptom)}
-      <div class="feedback-joint-wrap">
-        ${movementInputHtml(symptom.id, session)}
-        ${active
-          ? `<button class="linkbtn linkbtn-plain linkbtn-sm" type="button" data-tolerance="free" data-symptom-id="${escAttr(symptom.id)}">pain-free check</button>
-             <button class="linkbtn linkbtn-quiet linkbtn-sm" type="button" data-tolerance="present" data-symptom-id="${escAttr(symptom.id)}">pain present</button>
-             <button class="linkbtn linkbtn-quiet linkbtn-sm" type="button" data-symptom-resolve="${escAttr(symptom.id)}">mark resolved</button>`
-          : `<button class="linkbtn linkbtn-plain linkbtn-sm" type="button" data-symptom-recur="${escAttr(symptom.id)}">it returned</button>`}
+      <div class="symptom-movement-control">${movementInputHtml(symptom.id, session)}</div>
+      <div class="symptom-row-actions" aria-label="Actions for ${escAttr(symptom.area_text)}">
+        <button class="pillbtn pill-sm" type="button" data-tolerance="free" data-symptom-id="${escAttr(symptom.id)}">Pain-free check</button>
+        <button class="pillbtn pill-sm" type="button" data-tolerance="present" data-symptom-id="${escAttr(symptom.id)}">Pain present</button>
+        <button class="linkbtn linkbtn-quiet linkbtn-sm" type="button" data-symptom-resolve="${escAttr(symptom.id)}">Mark resolved</button>
       </div>
-    </div>`;
+    </article>`;
   }
 
   function responseSymptoms(value: unknown): ClientTrainingSymptom[] {
@@ -176,18 +191,44 @@ type MovementStopMarker = {
       const viewedDate = encodeURIComponent(String(session.date || deps.state.logDate));
       symptoms = responseSymptoms(await deps.api(`/training-symptoms?on=${viewedDate}&include_resolved=1`));
     } catch {
-      host.innerHTML = `<div class="sess-line">Movement notes couldn't load right now.</div>`;
+      host.innerHTML = `<section class="symptom-lifecycle symptom-lifecycle-error" aria-label="Pain and injury"><div class="feedback-prompt lbl">Pain &amp; injury</div><p>Notes couldn't load right now.</p></section>`;
       return;
     }
     if (!host.isConnected && typeof (host as HTMLElement & { isConnected?: boolean }).isConnected === "boolean") return;
-    host.innerHTML = `<div class="feedback-prompt lbl">movement notes</div>
-      ${symptoms.map((symptom) => symptomRowHtml(symptom, session)).join("")}
-      <div class="feedback-joint-wrap">
-        <input class="feedback-joint" data-new-symptom type="text" autocomplete="off" placeholder="report another area">
-        <button class="linkbtn linkbtn-plain linkbtn-sm" type="button" data-report-symptom>report</button>
-      </div>`;
+    const activeSymptoms = symptoms.filter((symptom) => symptom.status === "active");
+    const resolvedSymptoms = symptoms.filter((symptom) => symptom.status !== "active");
+    const activeSummary = activeSymptoms.length
+      ? `${activeSymptoms.length} active ${activeSymptoms.length === 1 ? "note" : "notes"}`
+      : "Nothing active in Cairn.";
+    host.innerHTML = `<section class="symptom-lifecycle" aria-label="Pain and injury">
+      <div class="symptom-lifecycle-head">
+        <div><div class="feedback-prompt lbl">Pain &amp; injury</div><p>${activeSummary}</p></div>
+        <button class="linkbtn linkbtn-plain linkbtn-sm" type="button" data-report-symptom-toggle aria-expanded="false" aria-controls="symptom-report-composer">Report pain</button>
+      </div>
+      <div class="symptom-report-composer" id="symptom-report-composer" hidden>
+        <label for="new-symptom-area">Where are you feeling it?</label>
+        <input class="feedback-joint" id="new-symptom-area" data-new-symptom type="text" autocomplete="off" placeholder="Precise area, e.g. outside of left knee">
+        <div class="symptom-row-actions"><button class="pillbtn pill-sm pill-accent" type="button" data-report-symptom>Save</button><button class="linkbtn linkbtn-quiet linkbtn-sm" type="button" data-report-symptom-cancel>Cancel</button></div>
+      </div>
+      ${activeSymptoms.length ? `<div class="symptom-active-list">${activeSymptoms.map((symptom) => symptomRowHtml(symptom, session)).join("")}</div>` : ""}
+      ${resolvedSymptoms.length ? `<details class="symptom-history"><summary>Resolved history <span>${resolvedSymptoms.length}</span></summary><div class="symptom-history-list">${resolvedSymptoms.map((symptom) => symptomRowHtml(symptom, session)).join("")}</div></details>` : ""}
+    </section>`;
 
     const reload = () => renderSymptomLifecycle(slot, session, deps);
+    const composer = host.querySelector<HTMLElement>("[data-report-symptom-toggle]");
+    const composerPanel = host.querySelector<HTMLElement>("#symptom-report-composer");
+    composer?.addEventListener("click", () => {
+      if (!composerPanel) return;
+      composerPanel.hidden = false;
+      composer.setAttribute("aria-expanded", "true");
+      composerPanel.querySelector<HTMLInputElement>("[data-new-symptom]")?.focus();
+    });
+    host.querySelector("[data-report-symptom-cancel]")?.addEventListener("click", () => {
+      if (!composerPanel) return;
+      composerPanel.hidden = true;
+      composer?.setAttribute("aria-expanded", "false");
+      composer?.focus();
+    });
     host.querySelector("[data-report-symptom]")?.addEventListener("click", async () => {
       const input = host.querySelector<HTMLInputElement>("[data-new-symptom]");
       const area = input?.value.trim() ?? "";
@@ -216,6 +257,25 @@ type MovementStopMarker = {
         } catch {
           deps.toast("Couldn't update that symptom — try again.");
         }
+      }));
+    host.querySelectorAll<HTMLElement>("[data-symptom-recur-toggle]").forEach((button) =>
+      button.addEventListener("click", () => {
+        const id = String(button.dataset.symptomRecurToggle ?? "");
+        const panel = host.querySelector<HTMLElement>(`#symptom-recur-${id}`);
+        if (!panel) return;
+        panel.hidden = false;
+        button.setAttribute("aria-expanded", "true");
+        panel.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-symptom-movement="${id}"]`)?.focus();
+      }));
+    host.querySelectorAll<HTMLElement>("[data-symptom-recur-cancel]").forEach((button) =>
+      button.addEventListener("click", () => {
+        const id = String(button.dataset.symptomRecurCancel ?? "");
+        const panel = host.querySelector<HTMLElement>(`#symptom-recur-${id}`);
+        const toggle = host.querySelector<HTMLElement>(`[data-symptom-recur-toggle="${id}"]`);
+        if (!panel) return;
+        panel.hidden = true;
+        toggle?.setAttribute("aria-expanded", "false");
+        toggle?.focus();
       }));
     host.querySelectorAll<HTMLElement>("[data-symptom-recur]").forEach((button) =>
       button.addEventListener("click", async () => {

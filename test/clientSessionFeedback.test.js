@@ -112,6 +112,8 @@ test("feedback form: a session already carrying a joint note opens with the fiel
 
 function loadFeedback() {
   const ctx = loadStatus();
+  // Runtime code uses this to recover the selected option's exercise id.
+  ctx.HTMLSelectElement = FakeSelect;
   // Same context object → the feedback IIFE sees CairnTodaySessionStatus.
   vm.runInNewContext(readFileSync(join(root, "public/js/today-session-feedback-client.js"), "utf8"), ctx);
   return ctx;
@@ -193,6 +195,8 @@ class FakeEl {
       this.append(new FakeEl("button", { id: "feedbackDismiss" }));
     }
     if (this._html.includes('id="feedbackEdit"')) this.append(new FakeEl("button", { id: "feedbackEdit" }));
+    if (this._html.includes("data-symptom-lifecycle")) this.append(new FakeEl("div", { dataset: { symptomLifecycle: "" } }));
+    if (this._html.includes("symptom-lifecycle")) this.parseSymptomLifecycle(this._html);
   }
 
   get innerHTML() {
@@ -225,8 +229,70 @@ class FakeEl {
     this.focusCount += 1;
   }
 
+  setAttribute(name, value) {
+    if (name === "aria-expanded") this.ariaExpanded = String(value);
+  }
+
+  parseSymptomLifecycle(html) {
+    // The controller's lifecycle markup is intentionally parsed from the real
+    // rendered string: these are not source-shape assertions.  The small fake
+    // only models controls the interaction handlers can reach.
+    const add = (tag, attrs) => this.append(tag === "select" ? new FakeSelect(tag, attrs) : new FakeEl(tag, attrs));
+    if (html.includes('id="symptom-report-composer"')) add("div", { id: "symptom-report-composer", hidden: true });
+    for (const match of html.matchAll(/id="(symptom-recur-[^"]+)" hidden/g)) add("div", { id: match[1], hidden: true });
+    const buttons = /<button\b([^>]*)>/g;
+    for (const match of html.matchAll(buttons)) {
+      const text = match[1];
+      const dataset = {};
+      for (const attr of text.matchAll(/\s(data-[\w-]+)(?:="([^"]*)")?/g)) {
+        const key = attr[1].slice(5).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+        dataset[key] = decodeAttr(attr[2] || "");
+      }
+      add("button", { id: /\sid="([^"]*)"/.exec(text)?.[1], dataset });
+    }
+    for (const match of html.matchAll(/<input\b([^>]*)>/g)) {
+      const text = match[1];
+      const dataset = {};
+      for (const attr of text.matchAll(/\s(data-[\w-]+)(?:="([^"]*)")?/g)) {
+        const key = attr[1].slice(5).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+        dataset[key] = decodeAttr(attr[2] || "");
+      }
+      add("input", { id: /\sid="([^"]*)"/.exec(text)?.[1], dataset, hidden: /\bhidden\b/.test(text) });
+    }
+    for (const match of html.matchAll(/<select\b([^>]*)>([\s\S]*?)<\/select>/g)) {
+      const text = match[1];
+      const dataset = {};
+      for (const attr of text.matchAll(/\s(data-[\w-]+)(?:="([^"]*)")?/g)) {
+        const key = attr[1].slice(5).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+        dataset[key] = decodeAttr(attr[2] || "");
+      }
+      const select = add("select", { dataset });
+      for (const option of match[2].matchAll(/<option\b([^>]*)>([\s\S]*?)<\/option>/g)) {
+        select.append(new FakeEl("option", {
+          value: decodeAttr(/\svalue="([^"]*)"/.exec(option[1])?.[1] || ""),
+          dataset: { exerciseId: decodeAttr(/\sdata-exercise-id="([^"]*)"/.exec(option[1])?.[1] || "") },
+        }));
+      }
+    }
+    const reportPanel = this.querySelector("#symptom-report-composer");
+    const reportInput = this.querySelector("[data-new-symptom]");
+    if (reportPanel && reportInput) reportPanel.append(reportInput);
+    for (const panel of this.querySelectorAll('[id^="symptom-recur-"]')) {
+      const id = panel.id.slice("symptom-recur-".length);
+      const input = this.querySelector(`[data-symptom-movement="${id}"]`);
+      if (input) panel.append(input);
+    }
+  }
+
   matches(selector) {
     if (selector.startsWith("#")) return this.id === selector.slice(1);
+    const idPrefix = /^\[id\^="([^"]+)"\]$/.exec(selector);
+    if (idPrefix) return this.id.startsWith(idPrefix[1]);
+    const data = /^\[data-([\w-]+)(?:="([^"]*)")?\]$/.exec(selector);
+    if (data) {
+      const key = data[1].replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+      return Object.hasOwn(this.dataset, key) && (data[2] == null || this.dataset[key] === data[2]);
+    }
     const feel = /^\.feel-dot\[data-feel="([^"]+)"\]$/.exec(selector);
     if (feel) return this.classList.contains("feel-dot") && this.dataset.feel === feel[1];
     if (selector.startsWith(".")) return this.classList.contains(selector.slice(1));
@@ -259,6 +325,12 @@ class FakeEl {
   }
 }
 
+class FakeSelect extends FakeEl {
+  get selectedOptions() {
+    return this.children.filter((child) => child.tag === "option" && child.value === this.value);
+  }
+}
+
 // A #feedbackSlot inside a .sessiondone card so renderFeedback takes the done-card
 // path (renders the OPEN form directly, the finish moment).
 function makeDoneSlot() {
@@ -288,6 +360,110 @@ async function flush() {
   for (let i = 0; i < 3; i++) await Promise.resolve();
 }
 
+function symptom(id, status, area = "outside of left knee") {
+  return { id, status, area_text: area, movement_readiness: [] };
+}
+
+function makeLifecycleDeps(ctx, symptoms, { failPath } = {}) {
+  const requests = [];
+  const toasts = [];
+  return {
+    requests,
+    toasts,
+    deps: {
+      state: { logDate: "2026-07-16" },
+      api: (path, opts) => {
+        requests.push({ path, opts });
+        if (path.includes("training-symptoms?") ) return Promise.resolve(symptoms);
+        if (failPath && path.includes(failPath)) return Promise.reject(new Error("offline"));
+        return Promise.resolve({});
+      },
+      toast: (message) => toasts.push(message),
+      sessionStatus: ctx.CairnTodaySessionStatus,
+    },
+  };
+}
+
+function lifecycleHost(slot) {
+  const host = slot.querySelector("[data-symptom-lifecycle]");
+  assert.ok(host, "feedback should mount the pain-and-injury lifecycle host");
+  return host;
+}
+
+test("pain history: 'It returned' opens, focuses movement context, and cancel restores the compact row", async () => {
+  const ctx = loadFeedback();
+  const slot = makeDoneSlot();
+  const { deps } = makeLifecycleDeps(ctx, [symptom(7, "resolved")]);
+  ctx.CairnTodaySessionFeedback.renderFeedback(slot, {
+    date: "2026-07-16", soreness: 2, sets: [{ exercise: "Back Squat", exercise_id: 41 }],
+  }, deps);
+  await flush();
+
+  const host = lifecycleHost(slot);
+  const toggle = host.querySelector('[data-symptom-recur-toggle="7"]');
+  const panel = host.querySelector("#symptom-recur-7");
+  const movement = host.querySelector('[data-symptom-movement="7"]');
+  assert.equal(panel.hidden, true);
+  await Promise.all(toggle.click());
+  assert.equal(panel.hidden, false);
+  assert.equal(toggle.ariaExpanded, "true");
+  assert.equal(movement.focusCount, 1);
+
+  await Promise.all(host.querySelector('[data-symptom-recur-cancel="7"]').click());
+  assert.equal(panel.hidden, true);
+  assert.equal(toggle.ariaExpanded, "false");
+  assert.equal(toggle.focusCount, 1);
+});
+
+test("pain recurrence posts selected movement context, preserves the viewed date, and resolve reloads", async () => {
+  const ctx = loadFeedback();
+  const slot = makeDoneSlot();
+  const { deps, requests, toasts } = makeLifecycleDeps(ctx, [
+    symptom(7, "resolved"), symptom(9, "active", "front of right knee"),
+  ]);
+  const session = {
+    date: "2026-06-03", soreness: 2,
+    sets: [{ exercise: "Back Squat", exercise_id: 41 }],
+  };
+  ctx.CairnTodaySessionFeedback.renderFeedback(slot, session, deps);
+  await flush();
+  let host = lifecycleHost(slot);
+  await Promise.all(host.querySelector('[data-symptom-recur-toggle="7"]').click());
+  const movement = host.querySelector('[data-symptom-movement="7"]');
+  movement.value = "Back Squat";
+  await Promise.all(host.querySelector('[data-symptom-recur="7"]').click());
+  await flush();
+  const recur = requests.find((request) => request.path === "/training-symptoms/7/recur");
+  assert.deepEqual(JSON.parse(recur.opts.body), { on: "2026-06-03", movement: "Back Squat", exercise_id: 41 });
+  assert.ok(toasts.includes("Recurrence noted"));
+
+  host = lifecycleHost(slot);
+  await Promise.all(host.querySelector('[data-symptom-resolve="9"]').click());
+  await flush();
+  const resolve = requests.find((request) => request.path === "/training-symptoms/9/resolve");
+  assert.deepEqual(JSON.parse(resolve.opts.body), { on: "2026-06-03" });
+  assert.ok(toasts.includes("Marked resolved"));
+  assert.ok(requests.some((request) => request.path === "/training-symptoms?on=2026-06-03&include_resolved=1"));
+});
+
+test("pain recurrence: a failed save leaves the composer open and explains recovery", async () => {
+  const ctx = loadFeedback();
+  const slot = makeDoneSlot();
+  const { deps, toasts, requests } = makeLifecycleDeps(ctx, [symptom(7, "resolved")], { failPath: "/7/recur" });
+  ctx.CairnTodaySessionFeedback.renderFeedback(slot, {
+    date: "2026-07-16", soreness: 2, sets: [{ exercise: "Back Squat", exercise_id: 41 }],
+  }, deps);
+  await flush();
+  const host = lifecycleHost(slot);
+  await Promise.all(host.querySelector('[data-symptom-recur-toggle="7"]').click());
+  const panel = host.querySelector("#symptom-recur-7");
+  await Promise.all(host.querySelector('[data-symptom-recur="7"]').click());
+  await flush();
+  assert.equal(panel.hidden, false, "a rejected request must not collapse the athlete's context");
+  assert.deepEqual(toasts, ["Couldn't update that symptom — try again."]);
+  assert.equal(requests.filter((request) => request.path === "/training-symptoms/7/recur").length, 1);
+});
+
 test("renderFeedback: answering BOTH scales collapses to the settled 'Noted' line", async () => {
   const ctx = loadFeedback();
   const slot = makeDoneSlot();
@@ -304,7 +480,8 @@ test("renderFeedback: answering BOTH scales collapses to the settled 'Noted' lin
   assert.match(slot.innerHTML, /Noted — it'll shape next week\./);
   assert.doesNotMatch(slot.innerHTML, /feedback-form/);
   // The collapse rode a real save carrying both scales.
-  assert.deepEqual(JSON.parse(requests.at(-1).opts.body), { soreness: 2, performance: 3, joint_pain: null });
+  const feedbackSave = requests.filter((request) => request.path === "/sessions/2026-07-16/feedback").at(-1);
+  assert.deepEqual(JSON.parse(feedbackSave.opts.body), { soreness: 2, performance: 3, joint_pain: null });
 });
 
 test("renderFeedback: answering only ONE scale keeps the form open (no premature collapse)", async () => {

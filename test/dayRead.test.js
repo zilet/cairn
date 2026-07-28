@@ -2147,6 +2147,129 @@ test("recovery telemetry that cannot move the decision leaves the fingerprint al
   assert.equal(repo.dayReadInputFingerprint(REF, mileageOnly), before);
 });
 
+test("hybrid lookahead truth participates in the cache identity without hashing narration", () => {
+  const base = {
+    kind: "train",
+    focus: "Lower body",
+    signals: {
+      today_load: "none",
+      hybrid: {
+        cardio_today: false,
+        hard_cardio_yesterday: false,
+        protect_run_next: true,
+        guidance: "A movable quality run is next.",
+      },
+    },
+  };
+  const before = repo.dayReadInputFingerprint(REF, base);
+  const renarrated = {
+    ...base,
+    signals: {
+      ...base.signals,
+      hybrid: { ...base.signals.hybrid, guidance: "Different prose, same opening." },
+    },
+  };
+  const movedOrCompleted = {
+    ...base,
+    signals: {
+      ...base.signals,
+      hybrid: { ...base.signals.hybrid, protect_run_next: false },
+    },
+  };
+  assert.equal(repo.dayReadInputFingerprint(REF, renarrated), before);
+  assert.notEqual(repo.dayReadInputFingerprint(REF, movedOrCompleted), before);
+});
+
+test("flexible agenda cache identity tracks rendered work facts but ignores narration", () => {
+  const read = {
+    kind: "train",
+    focus: "Lower body",
+    signals: { today_load: "none" },
+  };
+  const intent = {
+    kind: "quality",
+    status: "open",
+    suggested_date: dayBefore(REF, -1),
+    window_start: REF,
+    window_end: dayBefore(REF, -6),
+    target_distance_km: 7,
+    target_duration_min: null,
+    target_zone: "Z3",
+    completion: null,
+    label: "Tempo run",
+    rationale: "Original rationale.",
+  };
+  const context = (entry, narration = {}) => ({
+    program_block: null,
+    flexible_training_agenda: {
+      available: true,
+      intents: [entry],
+      why: narration.why ?? "Original why.",
+      next: { guidance: narration.guidance ?? "Original guidance." },
+    },
+  });
+  const base = repo.dayReadInputFingerprint(REF, read, context(intent));
+
+  assert.equal(
+    repo.dayReadInputFingerprint(
+      REF,
+      read,
+      context(
+        { ...intent, label: "Different label", rationale: "Different rationale." },
+        { why: "Different why.", guidance: "Different guidance." }
+      )
+    ),
+    base,
+    "why/rationale/guidance copy cannot churn a warm read"
+  );
+  assert.notEqual(
+    repo.dayReadInputFingerprint(REF, read, context({ ...intent, kind: "long" })),
+    base,
+    "quality becoming tomorrow's long run is material"
+  );
+  assert.notEqual(
+    repo.dayReadInputFingerprint(REF, read, context({ ...intent, target_distance_km: 10 })),
+    base,
+    "an open target-dose change is material"
+  );
+  const completed = {
+    ...intent,
+    status: "completed",
+    suggested_date: null,
+    completion: {
+      activity_id: 77,
+      date: REF,
+      duration_min: 40,
+      distance_km: 7,
+      intensity: "quality",
+      signals: ["watch prose"],
+    },
+  };
+  const completedFingerprint = repo.dayReadInputFingerprint(REF, read, context(completed));
+  assert.notEqual(completedFingerprint, base, "completion changes the agenda truth");
+  assert.notEqual(
+    repo.dayReadInputFingerprint(
+      REF,
+      read,
+      context({ ...completed, completion: { ...completed.completion, distance_km: 8 } })
+    ),
+    completedFingerprint,
+    "completion dose evidence is material"
+  );
+  assert.equal(
+    repo.dayReadInputFingerprint(
+      REF,
+      read,
+      context({
+        ...completed,
+        completion: { ...completed.completion, activity_id: 99, signals: ["different narration"] },
+      })
+    ),
+    completedFingerprint,
+    "private identity and evidence narration stay out"
+  );
+});
+
 // `directives` is selected field by field so `training_source` stays OUT of the hash.
 // It names which dimension produced the directive, which is not itself a decision, and
 // every input that can move it is hashed already — so the same hold changing hands

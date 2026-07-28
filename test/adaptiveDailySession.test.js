@@ -255,6 +255,15 @@ test("adaptive preview is read-only and prepare persists that exact accepted can
   assert.equal(accepted.daily_session.items.length, preview.item_count);
   assert.equal(accepted.daily_session.est_minutes, preview.est_minutes);
   assert.equal(accepted.daily_session.decision.input_fingerprint, preview.input_fingerprint);
+  assert.deepEqual(
+    accepted.daily_session.decision.training_intent.priorities,
+    repo.getTrainingIntent().priorities.slice(0, 5),
+    "accepted-session provenance retains the compact ordered training priorities"
+  );
+  assert.deepEqual(
+    accepted.daily_session.provenance.daily_decision.training_intent,
+    accepted.daily_session.decision.training_intent
+  );
 });
 
 test("stale adaptive preview returns fresh truth without writes and succeeds after explicit retry", () => {
@@ -291,6 +300,62 @@ test("stale adaptive preview returns fresh truth without writes and succeeds aft
   assert.equal(accepted.ok, true);
   assert.equal(accepted.daily_session.decision.input_fingerprint, stale.preview.input_fingerprint);
   assert.equal(accepted.daily_session.title, stale.preview.title);
+});
+
+test("an unstarted persisted v4 adaptive composition is refreshed under v5 instead of reused", () => {
+  seedPlan();
+  const sessionId = Number(db.prepare(`INSERT INTO sessions (date) VALUES (?)`).run(DATE).lastInsertRowid);
+  const legacyFingerprint = "4".repeat(64);
+  const legacy = db.prepare(
+    `INSERT INTO daily_session_compositions
+       (version, session_id, date, source, status, plan_day_id, title, items_json,
+        constraints_json, provenance_json, request_fingerprint)
+     VALUES (1, ?, ?, 'adaptive_plan', 'active', ?, 'Legacy v4', '[]', '{}', ?, ?)`
+  ).run(
+    sessionId,
+    DATE,
+    repo.getPlanDay(1).id,
+    JSON.stringify({
+      label: "Adapted for today",
+      choice: "adapted_for_today",
+      daily_decision: {
+        policy_version: "daily_decision_v4",
+        input_fingerprint: legacyFingerprint,
+      },
+    }),
+    "a".repeat(64)
+  );
+
+  const refreshed = prepare({ date: DATE, source: "adaptive_plan" });
+  assert.equal(refreshed.reused, false);
+  assert.notEqual(refreshed.daily_session.id, Number(legacy.lastInsertRowid));
+  assert.equal(refreshed.daily_session.decision.policy_version, "daily_decision_v5");
+  assert.notEqual(refreshed.daily_session.decision.input_fingerprint, legacyFingerprint);
+  assert.equal(
+    db.prepare(`SELECT status FROM daily_session_compositions WHERE id = ?`).get(legacy.lastInsertRowid).status,
+    "superseded"
+  );
+});
+
+test("latest decision lookup ignores historical policy rows until v5 exists", () => {
+  const legacyEnvelope = {
+    policy_version: "daily_decision_v4",
+    input_fingerprint: "4".repeat(64),
+    date: DATE,
+    kind: "train",
+  };
+  db.prepare(
+    `INSERT INTO daily_session_decisions
+       (date, policy_version, input_fingerprint, kind, envelope_json)
+     VALUES (?, 'daily_decision_v4', ?, 'train', ?)`
+  ).run(DATE, legacyEnvelope.input_fingerprint, JSON.stringify(legacyEnvelope));
+  assert.equal(repo.getLatestDailySessionDecision(DATE), null);
+
+  seedPlan();
+  const current = repo.decideDailySession(DATE).envelope;
+  repo.recordDailySessionDecision(current);
+  assert.equal(repo.getLatestDailySessionDecision(DATE).policy_version, "daily_decision_v5");
+  assert.equal(repo.getLatestDailySessionDecision(DATE).input_fingerprint, current.input_fingerprint);
 });
 
 test("a reviewed preview never opens an unrelated composition accepted in another tab", () => {
