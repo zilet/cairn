@@ -508,6 +508,7 @@ export async function composeDailySession(
 // is persisted in an ai_cache key; none of this athlete context is stored there.
 export function coachingCacheFreshnessFingerprint(date = localDateISO()): string {
   let profile: any = null;
+  let location: any = null;
   let symptoms: any[] = [];
   let injuries: any[] = [];
   let checkins: any[] = [];
@@ -529,6 +530,21 @@ export function coachingCacheFreshnessFingerprint(date = localDateISO()): string
       : null;
   } catch {
     /* a blank profile keeps the cache available on first boot */
+  }
+  try {
+    const effective = repo.getLocationContext({ on: date });
+    // Feed only the normalized planning identity into the one-way fingerprint.
+    // Raw location text never reaches ai_cache: callers persist only the final
+    // hash returned below. trip_title is deliberately excluded because editing
+    // prose without changing where the athlete is should not stale a session.
+    location = {
+      home: effective.home,
+      effective: effective.effective,
+      source: effective.source,
+      trip_id: effective.trip_id,
+    };
+  } catch {
+    /* an interrupted migration may not have location storage yet */
   }
   try {
     symptoms = repo.listTrainingSymptoms({ on: date, include_resolved: false, seed_legacy: false });
@@ -561,6 +577,7 @@ export function coachingCacheFreshnessFingerprint(date = localDateISO()): string
     date,
     training: trainingBackstopSignature(),
     profile,
+    location,
     symptoms,
     injuries,
     checkins,

@@ -41,6 +41,7 @@ export type PromptContextKey = keyof CoachContextEnvelope;
 const PERSON = [
   "now",
   "profile",
+  "location",
   "discipline",
   "training_intent",
   "goal",

@@ -267,6 +267,7 @@ CREATE TABLE IF NOT EXISTS plan_proposals (
 CREATE TABLE IF NOT EXISTS profile (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   name TEXT,                             -- the athlete's name (stamped on the doctor report; optional)
+  home_location TEXT,                    -- durable home base; active trip meta.location temporarily overrides effective location (v81)
   sex TEXT DEFAULT 'male',
   age INTEGER,
   height_cm REAL,

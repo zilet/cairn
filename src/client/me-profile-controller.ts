@@ -129,6 +129,7 @@
         training_intent: trainingIntentPayload(),
         endurance_goal: enduranceGoalPayload(),
         about_me: deps.textAreaValue("#about_me").trim(),
+        home_location: deps.inputValue("#home_location").trim() || null,
         allergies: deps.inputValue("#allergies").trim(),
         dietary_restrictions: deps.inputValue("#dietary_restrictions").trim(),
       };

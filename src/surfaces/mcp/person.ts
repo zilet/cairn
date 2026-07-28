@@ -29,9 +29,16 @@ export function registerPersonTools(server: McpToolRegistrar) {
 
   server.tool(
     "set_profile",
-    "Update profile fields (any subset). name is the user's name (optional; stamped on the doctor-ready clinical report — pass '' to clear). Weight in lb, height in cm. about_me is free-text the coach uses to personalize (training history, work pattern, food likes/dislikes, what 'better' means to you); pass '' to clear. allergies are a HARD safety exclusion for meal planning; dietary_restrictions (vegetarian, no pork, …) are respected strongly. Pass '' to clear either. primary_discipline ('strength'|'endurance'|'hybrid', default 'strength') remains a broad compatibility label; training_intent is the athlete-owned ordered priorities, explicit endurance role, and optional durable capability. endurance_sport is optional free text, '' clears it.",
+    "Update profile fields (any subset). name is the user's name (optional; stamped on the doctor-ready clinical report — pass '' to clear). home_location is the durable home base used as planning context; pass '' to clear. A dated trip's context-event meta.location overrides the effective location only while that trip is active and never overwrites home. Weight in lb, height in cm. about_me is free-text the coach uses to personalize (training history, work pattern, food likes/dislikes, what 'better' means to you); pass '' to clear. allergies are a HARD safety exclusion for meal planning; dietary_restrictions (vegetarian, no pork, …) are respected strongly. Pass '' to clear either. primary_discipline ('strength'|'endurance'|'hybrid', default 'strength') remains a broad compatibility label; training_intent is the athlete-owned ordered priorities, explicit endurance role, and optional durable capability. endurance_sport is optional free text, '' clears it.",
     {
       name: z.string().optional(),
+      home_location: z
+        .string()
+        .max(160)
+        .optional()
+        .describe(
+          "durable home base; '' clears. Temporary travel belongs in a dated trip context event with meta.location"
+        ),
       sex: z.string().optional(),
       age: z.number().optional(),
       height_cm: z.number().optional(),

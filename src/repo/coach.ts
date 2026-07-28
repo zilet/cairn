@@ -71,6 +71,7 @@ import { getTrajectory } from "./trajectory.js";
 import { wholePersonTrajectory } from "./whole-person-trajectory.js";
 import { journeyRead } from "./journey.js";
 import { activeContextEffect } from "./context-effect.js";
+import { getLocationContext } from "./location-context.js";
 import { nextBestStep } from "./next-step.js";
 // Read-only reads folded into the conductor as external FocusCandidate producers (K3).
 import { cardiovascularRiskRead } from "./risk.js";
@@ -412,6 +413,7 @@ function nextPlanDayNumber(read: any): number | null {
 interface CoachContextSignals {
   today: string;
   profile: any;
+  locationView: any;
   trainingIntentView: any;
   enduranceCapacityView: any;
   garmin: any;
@@ -458,6 +460,7 @@ function buildPersonSlice(
   CoachContext,
   | "now"
   | "profile"
+  | "location"
   | "discipline"
   | "training_intent"
   | "memory"
@@ -471,7 +474,7 @@ function buildPersonSlice(
   | "what_works_for_you"
   | "context_today"
 > {
-  const { profile, trainingIntentView, contextEventsView, contextTodayView } = signals;
+  const { profile, locationView, trainingIntentView, contextEventsView, contextTodayView } = signals;
   return {
     // The current LOCAL clock (date + weekday + time + part-of-day). Folded in so
     // EVERY plan-shaping prompt knows the time of day — without it the agent is
@@ -479,6 +482,10 @@ function buildPersonSlice(
     // chat/day-read prompts also surface it as an explicit "RIGHT NOW" line.
     now: nowContext(),
     profile,
+    // Compact, deterministic planning context only: home is the durable base;
+    // an active dated trip may temporarily override effective. No weather is
+    // fetched or inferred, and location never gates the athlete's choices.
+    location: locationView,
     // Top-level discipline echo (v35) so every plan-shaping prompt can branch its
     // framing without digging into profile. Defaults to 'strength' (today's
     // behavior); endurance/hybrid make endurance progression a first-class driver.
@@ -894,6 +901,7 @@ function getCoachContextFromSnapshot(): CoachContext {
   const recovery = brainSignal("recovery:14", () => getRecoverySummary(14, garmin));
   const recentSessions = brainSignal("recent_sessions:20", () => getRecentSessions(20));
   const profile = brainSignal("profile", () => getProfile() as any);
+  const locationView = brainSignal(`location:${today}`, () => getLocationContext({ on: today, profile }));
   const trainingIntentView = brainSignal("training_intent", () => getTrainingIntent(profile));
   const enduranceCapacityView = brainSignal(`endurance_capacity:${today}`, () =>
     getEnduranceCapacity(trainingIntentView, { asOf: today })
@@ -1254,6 +1262,7 @@ function getCoachContextFromSnapshot(): CoachContext {
   const signals: CoachContextSignals = {
     today,
     profile,
+    locationView,
     trainingIntentView,
     enduranceCapacityView,
     garmin,

@@ -6,6 +6,7 @@ export { addContextEvent, deleteContextEvent, getInjuryImpacts, listContextEvent
 export * from "../../repo/memory.js";
 export * from "../../repo/next-step.js";
 export * from "../../repo/profile.js";
+export * from "../../repo/location-context.js";
 export { addSupplement, deleteSupplement, listSupplements, understandSupplements, updateSupplement } from "../../repo/propagation.js";
 export * from "../../repo/reaction-model.js";
 export * from "../../repo/settings.js";

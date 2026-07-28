@@ -78,6 +78,16 @@ skiing stays generic until the athlete or activity identifies a subtype. The coa
 place/season facts to suggest practical options, but current weather requires a fresh source and
 weather never gates training.
 
+`location-context.ts` keeps place identity calm and deterministic. `profile.home_location` is the
+optional durable home base; there is no daily location picker or browser-geolocation request. On a
+date inside an unarchived, unresolved trip, that event's optional `meta.location` becomes the
+effective coaching location without overwriting home. Upcoming and past trips remain visible in
+`context_events` but do not pretend the athlete is already/still there. Coach context exposes the
+compact `{home,effective,source,trip_id,trip_title}` read to person-aware prompts alongside explicit
+`weather_available:false` and `planning_role:"context_only"` guardrails. This layer does not fetch
+weather: a future fresh-weather source may shape practical options, but location and weather remain
+suggestions, never gates.
+
 ### Body, nutrition, capture
 
 - Bodyweight log (`logWeight`/`listWeight`, syncs `profile.weight_lb`); the TDEE + lean-safe goal

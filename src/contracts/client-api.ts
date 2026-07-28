@@ -389,6 +389,7 @@ export interface ClientProfile {
   endurance_goal?: ClientEnduranceGoal | null;
   training_intent_json?: string | null;
   about_me?: string | null;
+  home_location?: string | null;
   family_prefs?: string | null;
   smoking?: number | null;
   bp_treated?: number | null;

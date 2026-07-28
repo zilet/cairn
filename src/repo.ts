@@ -10,6 +10,7 @@ export * from "./repo/training-read.js";
 export * from "./repo/sessions.js";
 export * from "./repo/adaptive-session.js";
 export * from "./repo/profile.js";
+export * from "./repo/location-context.js";
 export * from "./repo/training-intent.js";
 export * from "./repo/endurance-capacity.js";
 export * from "./repo/activities.js";

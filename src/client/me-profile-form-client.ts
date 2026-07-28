@@ -310,6 +310,10 @@ type MeProfileFormContext = {
       <div class="field" style="margin-bottom:9px"><label for="name">Name <span class="ob-opt">— optional</span></label>
         <p class="aboutme-hint">Stamped on the doctor report you export from Stand → Share with your doctor. Leave empty to fill it in on paper instead.</p>
         <input id="name" type="text" placeholder="e.g. Alex Rivera" maxlength="120" value="${deps.escapeAttr(profile.name || "")}" class="form-input"></div>
+      <div class="field" style="margin-bottom:9px"><label for="home_location">Home location <span class="ob-opt">— optional</span></label>
+        <p class="aboutme-hint">Your usual home base gives the coach local and seasonal context. An active trip can temporarily override it for coaching without changing what you save here.</p>
+        <input id="home_location" type="text" placeholder="e.g. Cambridge, MA" maxlength="160"
+          value="${deps.escapeAttr(profile.home_location || "")}" class="form-input"></div>
       <div class="field aboutme" style="margin-bottom:0">
         <label for="about_me">About you</label>
         <p class="aboutme-hint">What "better" means to you, a little of your history, the foods you love and avoid, how work and life run. Optional — the coach reads it to make the pointing yours.</p>

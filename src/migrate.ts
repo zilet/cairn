@@ -1468,6 +1468,15 @@ export const MIGRATIONS: Migration[] = [
       addColumn(db, "profile", "training_intent_json TEXT");
     },
   },
+  {
+    version: 81,
+    name: "profile-home-location",
+    up: (db) => {
+      // Durable home base only. Temporary travel remains a dated context_event
+      // with meta.location and never overwrites this profile identity.
+      addColumn(db, "profile", "home_location TEXT");
+    },
+  },
 ];
 
 export function runMigrations(db: DatabaseSync) {

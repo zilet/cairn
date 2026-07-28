@@ -213,6 +213,7 @@ function profileHarness(overrides = {}) {
     training_intent_json: JSON.stringify({ priorities: ["longevity", "strength", "endurance"], endurance_role: "supporting", endurance_capacity: { sport: "mountain biking", target_duration_min: 180, context: "technical trails in the Fells" } }),
     endurance_goal_json: JSON.stringify({ mode: "standing", label: "10k-ready", distance_km: 10, weekly_km: 30 }),
     about_me: "Fast mornings <work>",
+    home_location: 'Cambridge <MA> "home"',
   };
   const goal = overrides.goal || {
     tdee: 2800,
@@ -299,6 +300,10 @@ test("Me Profile controller renders profile state and wires segmented controls",
   assert.equal(harness.goalFlags.at(-1), true);
   assert.equal(harness.wireCount, 1);
   assert.match(harness.rootEl.innerHTML, /Alex &lt;R&gt;/);
+  assert.match(harness.rootEl.innerHTML, /Home location/);
+  assert.match(harness.rootEl.innerHTML, /Cambridge &lt;MA&gt; &quot;home&quot;/);
+  assert.match(harness.rootEl.innerHTML, /An active trip can temporarily override it for coaching/);
+  assert.equal(harness.rootEl.querySelector("#home_location").value, 'Cambridge <MA> "home"');
   assert.match(harness.rootEl.innerHTML, /Goal check/);
 
   harness.rootEl.querySelectorAll("[data-disc]").find((button) => button.dataset.disc === "strength").click();
@@ -348,6 +353,7 @@ test("Me Profile controller saves the typed payload and invalidates dependent su
   harness.rootEl.querySelector("#eg_distance").value = "10";
   harness.rootEl.querySelector("#eg_weekly_km").value = "35";
   harness.rootEl.querySelector("#about_me").value = "Train around family";
+  harness.rootEl.querySelector("#home_location").value = "Cambridge, MA";
   harness.rootEl.querySelector("#allergies").value = "nuts";
   harness.rootEl.querySelector("#dietary_restrictions").value = "pescatarian";
   harness.rootEl.querySelectorAll("[data-disc]").find((button) => button.dataset.disc === "hybrid").click();
@@ -382,6 +388,7 @@ test("Me Profile controller saves the typed payload and invalidates dependent su
     },
     endurance_goal: { mode: "standing", label: "10k-ready", distance_km: 10, weekly_km: 35 },
     about_me: "Train around family",
+    home_location: "Cambridge, MA",
     allergies: "nuts",
     dietary_restrictions: "pescatarian",
   });
@@ -389,6 +396,35 @@ test("Me Profile controller saves the typed payload and invalidates dependent su
   assert.equal(harness.goalFlags.at(-1), true);
   assert.equal(harness.toasts.at(-1), "Your running plan now lives in Plan → Endurance");
   assert.equal(harness.renderCount, 1);
+});
+
+test("Me Profile clears home location explicitly when the optional field is emptied", async () => {
+  const harness = profileHarness({
+    profile: {
+      primary_discipline: "strength",
+      endurance_goal_json: null,
+      home_location: "Somerville, MA",
+    },
+  });
+
+  await harness.context.CairnMeProfileController.renderProfile(harness.deps);
+  assert.equal(harness.rootEl.querySelector("#home_location").value, "Somerville, MA");
+  harness.rootEl.querySelector("#home_location").value = "   ";
+
+  assert.equal(await harness.deps.saveOptions.onSave(), true);
+  assert.equal(harness.saved.home_location, null);
+});
+
+test("home location semantics remain manual and keep trip location optional", () => {
+  const profileForm = readFileSync(join(root, "src/client/me-profile-form-client.ts"), "utf8");
+  const profileController = readFileSync(join(root, "src/client/me-profile-controller.ts"), "utf8");
+  const lifeForm = readFileSync(join(root, "src/client/life-form-helpers.ts"), "utf8");
+  const lifeClient = readFileSync(join(root, "src/client/life-client.ts"), "utf8");
+
+  assert.doesNotMatch(`${profileForm}\n${profileController}`, /geolocation|getCurrentPosition|watchPosition/);
+  assert.match(lifeForm, /if \(loc\) meta\.location = loc/);
+  assert.match(lifeClient, /text\("lLocation", "Location", "e\.g\. Lisbon"\)/);
+  assert.doesNotMatch(lifeClient.match(/text\("lLocation"[^\n]+/)?.[0] || "", /required/);
 });
 
 test("Me Profile keeps a no-endurance hierarchy free of capability targets", async () => {

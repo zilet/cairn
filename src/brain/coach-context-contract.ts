@@ -3,6 +3,7 @@ import type { MemoryKind, MemoryRow, RecentLearning } from "../repo/memory.js";
 import type { UnifiedSignalState } from "../repo/signal-state.js";
 import type { EnduranceCapacityRead } from "../repo/endurance-capacity.js";
 import type { ResolvedTrainingIntent } from "../repo/training-intent.js";
+import type { EffectiveLocationContext } from "../repo/location-context.js";
 
 export type CoachRecord = Record<string, any>;
 export type CoachGoalMode = "lose" | "maintain" | "gain";
@@ -213,6 +214,7 @@ export interface CoachWhatWorksForYou {
 export interface CoachContextEnvelope {
   now: CoachNowContext;
   profile: CoachRecord | null;
+  location: EffectiveLocationContext;
   discipline: CoachDiscipline;
   training_intent: ResolvedTrainingIntent;
   endurance_capacity: EnduranceCapacityRead | null;
@@ -308,6 +310,7 @@ export type PartialCoachContext = Partial<CoachContextEnvelope>;
 export const COACH_CONTEXT_REQUIRED_KEYS = [
   "now",
   "profile",
+  "location",
   "discipline",
   "training_intent",
   "endurance_capacity",
@@ -374,6 +377,7 @@ export function isCoachContextEnvelope(value: unknown): value is CoachContextEnv
   }
   return (
     isCoachRecord(value.now) &&
+    isCoachRecord(value.location) &&
     isCoachRecord(value.discipline) &&
     isCoachRecord(value.training_intent) &&
     (value.endurance_capacity == null || isCoachRecord(value.endurance_capacity)) &&

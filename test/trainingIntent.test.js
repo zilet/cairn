@@ -121,8 +121,8 @@ test("coach context carries the resolved intent and capacity read", () => {
   assert.ok(Object.hasOwn(ctx, "endurance_capacity"));
 });
 
-test("fresh schema and migration expose the training intent column at v80", () => {
+test("fresh schema keeps the training intent column through the v81 profile migration", () => {
   const columns = db.prepare(`PRAGMA table_info(profile)`).all().map((row) => row.name);
   assert.ok(columns.includes("training_intent_json"));
-  assert.equal(db.prepare(`PRAGMA user_version`).get().user_version, 80);
+  assert.equal(db.prepare(`PRAGMA user_version`).get().user_version, 81);
 });

@@ -51,6 +51,7 @@ import {
 } from "./recovery-cycles.js";
 import { afterSqliteCommit, withSqliteSavepoint } from "./sqlite-savepoint.js";
 import { serializeTrainingIntent } from "./training-intent.js";
+import { normalizeLocationText } from "./location-context.js";
 import {
   normalizeStoredProposalPayload,
   prepareProposalPayload,
@@ -1522,6 +1523,10 @@ export function setProfile(p: any) {
     // explicit '' clears it, undefined leaves the existing value intact, capped.
     name:
       p.name !== undefined ? (p.name == null ? null : String(p.name).trim().slice(0, 120) || null) : (cur.name ?? null),
+    // Durable home base (v81). Empty/null clears, undefined leaves intact.
+    // Temporary travel is a dated context_event and never overwrites this field.
+    home_location:
+      p.home_location !== undefined ? normalizeLocationText(p.home_location) : (cur.home_location ?? null),
     // A genuinely blank profile must remain unknown until the athlete supplies
     // sex; silently defaulting to male can select the wrong health ranges.
     sex: p.sex !== undefined ? p.sex : (cur.sex ?? null),
@@ -1605,10 +1610,11 @@ export function setProfile(p: any) {
     statin: p.statin !== undefined ? coerceFlag(p.statin) : (cur.statin ?? null),
   };
   db.prepare(
-    `INSERT INTO profile (id, name, sex, age, height_cm, height_in, weight_lb, start_weight_lb, start_date, goal_weight_lb, goal_bodyfat_pct, goal_date, goal_mode, activity_factor, notes, about_me, allergies, dietary_restrictions, primary_discipline, endurance_sport, endurance_goal_json, training_intent_json, smoking, bp_treated, statin, updated_at)
-     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    `INSERT INTO profile (id, name, home_location, sex, age, height_cm, height_in, weight_lb, start_weight_lb, start_date, goal_weight_lb, goal_bodyfat_pct, goal_date, goal_mode, activity_factor, notes, about_me, allergies, dietary_restrictions, primary_discipline, endurance_sport, endurance_goal_json, training_intent_json, smoking, bp_treated, statin, updated_at)
+     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
      ON CONFLICT(id) DO UPDATE SET
        name=excluded.name,
+       home_location=excluded.home_location,
        sex=excluded.sex, age=excluded.age, height_cm=excluded.height_cm, height_in=excluded.height_in, weight_lb=excluded.weight_lb,
        start_weight_lb=excluded.start_weight_lb, start_date=excluded.start_date,
        goal_weight_lb=excluded.goal_weight_lb, goal_bodyfat_pct=excluded.goal_bodyfat_pct, goal_date=excluded.goal_date, goal_mode=excluded.goal_mode,
@@ -1619,6 +1625,7 @@ export function setProfile(p: any) {
        smoking=excluded.smoking, bp_treated=excluded.bp_treated, statin=excluded.statin, updated_at=datetime('now')`
   ).run(
     merged.name,
+    merged.home_location,
     merged.sex,
     merged.age,
     merged.height_cm,
@@ -1661,6 +1668,7 @@ export function setProfile(p: any) {
     "start_date",
   ]);
   const profileChanges = changed([
+    "home_location",
     "sex",
     "age",
     "height_cm",
@@ -1674,6 +1682,7 @@ export function setProfile(p: any) {
     "bp_treated",
     "statin",
   ]);
+  if (profileChanges.includes("home_location")) invalidateDayRead();
   if (goalChanges.length)
     emitBrainEvent({
       kind: "goal_changed",
@@ -1690,9 +1699,13 @@ export function setProfile(p: any) {
       date: localDateISO(),
       subject_key: "profile:identity",
       reason: `changed: ${profileChanges.join(", ")}`,
-      // User-declared allergies and hard dietary identities both change what a
-      // current meal plan may safely remain authoritative for.
-      material: profileChanges.includes("allergies") || profileChanges.includes("dietary_restrictions"),
+      // User-declared allergies and hard dietary identities change what a meal
+      // plan may safely remain authoritative for. Home changes the default
+      // planning context and therefore the decision identity as well.
+      material:
+        profileChanges.includes("allergies") ||
+        profileChanges.includes("dietary_restrictions") ||
+        profileChanges.includes("home_location"),
     });
   return getProfile();
 }

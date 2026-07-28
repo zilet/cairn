@@ -4,6 +4,21 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-07-28 — durable home location with temporary travel overrides
+
+Migration **v81** adds nullable `profile.home_location` as the athlete's durable, manually entered
+home base. The Profile UI can set or clear it without browser geolocation or a daily current-place
+picker. Travel remains a dated `context_event`: only an active, unarchived, unresolved trip with an
+optional `meta.location` temporarily becomes the effective coaching location, while upcoming/past
+trips stay on the timeline and never overwrite home.
+
+`location-context.ts` owns the deterministic read and projects a compact home/effective/source/trip
+block into coach context and every person-aware prompt. A home-location change invalidates current
+coaching identity, and the date-keyed read naturally changes at trip boundaries. The block explicitly
+marks weather unavailable and location as context-only; this round adds no weather provider,
+geolocation request, score, or gate. REST inherits the profile field, MCP `set_profile` documents it,
+and the PWA explains the optional trip override (`sw.js` **`cairn-v532`**).
+
 ## 2026-07-28 — terrain-aware hybrid scheduling and movable run intentions
 
 No schema change. The endurance ontology now preserves the legacy run/ride/swim/row/walk families
