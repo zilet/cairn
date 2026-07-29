@@ -624,6 +624,28 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
 .ex-flag{margin-top:9px;background:var(--warn-bg);border:none;border-left:3px solid var(--warn);
   border-radius:8px;padding:8px 11px;font-size:.78rem;color:var(--warn)}
 
+/* Movement check — the in-card pain flow, rendered only where an active symptom
+   actually loads this movement. A ▸ that rotates open (the .hist-fold grammar) so
+   it reads as a quiet disclosure, not a native browser triangle beside a link. */
+.ex-movement-check{margin-top:9px}
+.ex-movement-check>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;
+  gap:6px;padding:4px 2px}
+.ex-movement-check>summary::-webkit-details-marker{display:none}
+.ex-movement-check>summary::before{content:"▸";font-size:.7rem;color:var(--muted);
+  text-decoration:none;transition:transform .15s ease}
+.ex-movement-check[open]>summary::before{transform:rotate(90deg)}
+.ex-movement-check [data-movement-check-body]{margin-top:8px;padding:10px 12px;
+  background:var(--card-2)}
+.ex-movement-check [data-movement-check-body]:empty{display:none}
+.ex-movement-check [data-movement-check-body]>.sess-line:first-child{margin-top:0}
+/* the free-text area and the button under it are two separate controls */
+.ex-movement-check .feedback-joint-wrap{gap:9px}
+.ex-movement-check [data-movement-symptom]+[data-movement-symptom]{margin-top:10px}
+@media (prefers-reduced-motion: reduce){ .ex-movement-check>summary::before{transition:none} }
+
+/* One easing stated once for the whole session, instead of on every card. */
+.session-eased{margin:0 0 12px;color:var(--muted)}
+
 /* set progress + completion */
 .ex-meta{display:flex;align-items:center;gap:9px;margin-top:5px}
 .ex-prog{font-family:var(--font-display);font-variation-settings:"opsz" 60;font-weight:600;
@@ -3382,6 +3404,8 @@ body.swr-busy::after{
 .symptom-area{min-width:0;color:var(--ink);font-family:var(--font-ui);font-size:.84rem;font-weight:650;line-height:1.4;overflow-wrap:anywhere}
 .symptom-watching{flex:0 0 auto;color:var(--gold-deep);background:rgba(201,168,106,.16);border-radius:999px;
   padding:3px 7px;font-family:var(--font-ui);font-size:.61rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+/* An imported note is not a current finding — it reads quieter than "Watching". */
+.symptom-unconfirmed{color:var(--muted);background:rgba(120,120,120,.12)}
 .symptom-active-row .sess-line{margin-top:5px;font-size:.74rem;line-height:1.4}
 .symptom-movement-control{margin-top:10px}
 .symptom-movement-field{display:grid;gap:4px;color:var(--muted);font-family:var(--font-ui);font-size:.69rem;font-weight:700;letter-spacing:.03em;text-transform:uppercase}
@@ -3403,6 +3427,8 @@ body.swr-busy::after{
 .symptom-history>summary span{color:var(--faint);font-size:.7rem}
 .symptom-history-list{display:grid;gap:7px;margin-top:9px}
 .symptom-history-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:8px 12px;padding:8px 0;border-top:1px solid var(--line)}
+.symptom-history-main{display:grid;gap:2px;min-width:0}
+.symptom-resolved-on{color:var(--faint);font-family:var(--font-ui);font-size:.7rem;line-height:1.35}
 .symptom-history-row:first-child{border-top:0}
 .symptom-history-row .linkbtn{flex:0 0 auto;min-height:30px;padding:5px 1px}
 .symptom-recur-composer{grid-column:1/-1;padding:10px 11px 11px;background:var(--paper);border:1px solid var(--line);border-radius:var(--radius-sm)}
@@ -5377,6 +5403,10 @@ button.prow-name:hover{color:var(--accent)}
 .ex-rx-up .ex-rx-delta{color:var(--sage)}
 .ex-rx-down .ex-rx-delta{color:var(--accent)}
 .ex-rx-why{margin-top:4px;font-size:.82rem;line-height:1.45;color:var(--ink-2)}
+/* Supporting mode: the card header already carries today's dose, so this well is
+   explanation only — it keeps the verdict word and the why, never a second number. */
+.ex-rx-supporting{background:transparent;padding:6px 0 6px 11px}
+.ex-rx-supporting .ex-rx-why{margin-top:2px}
 /* "rotate one in" — the same-pattern swap menu on a 'switch it up' prescription */
 .ex-rx-vary-menu{margin-top:8px}
 .ex-rx-vary-lbl{display:block;color:var(--stone-taupe);margin-bottom:5px;letter-spacing:.06em}

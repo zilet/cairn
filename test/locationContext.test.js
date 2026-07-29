@@ -4,9 +4,17 @@ import { db, repo, resetTables } from "./_seed.js";
 import { localDateISO } from "../dist/repo/shared.js";
 import { projectCoachContext, PROMPT_CONTEXT_SITES } from "../dist/prompt/context-projection.js";
 import { renderDiscipline } from "../dist/prompt/shared.js";
-import { buildDayReadPrompt, buildDailyCompositionPrompt, buildSessionPrompt, buildSessionVerifyPrompt } from "../dist/prompt.js";
+import {
+  buildDayReadPrompt,
+  buildDailyCompositionPrompt,
+  buildSessionPrompt,
+  buildSessionVerifyPrompt,
+} from "../dist/prompt.js";
 import { registerPersonTools } from "../dist/surfaces/mcp/person.js";
 import { flushBrainEventsForTest } from "../dist/brainEvents.js";
+import { MIGRATIONS } from "../dist/migrate.js";
+
+const MAX_VERSION = MIGRATIONS.reduce((m, x) => Math.max(m, x.version), 0);
 
 function dayOffset(days) {
   return localDateISO(new Date(Date.now() + days * 864e5));
@@ -158,7 +166,10 @@ test("fresh schema and v81 migration expose home_location", () => {
     .all()
     .map((row) => row.name);
   assert.ok(columns.includes("home_location"));
-  assert.equal(db.prepare(`PRAGMA user_version`).get().user_version, 81);
+  // Computed dynamically (not hardcoded — CLAUDE.md) so a later migration never
+  // breaks this test; what matters is that a fresh DB reaches the CURRENT top of
+  // the ladder, not any specific historical version number.
+  assert.equal(db.prepare(`PRAGMA user_version`).get().user_version, MAX_VERSION);
 });
 
 test("renderDiscipline emits PLACE from structured location without memory keywords", () => {

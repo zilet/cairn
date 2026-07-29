@@ -2,6 +2,7 @@ import { db } from "../db.js";
 import { painAreaLoadsExercise } from "./pain-relevance.js";
 import { requestDailyOutcomeReconciliation } from "./reconciliation-hooks.js";
 import { daysBetweenISO, localDateISO } from "./shared.js";
+import { extractSymptomAreaLabel, normalizeSymptomArea, symptomAreaKey } from "./symptom-area.js";
 
 export type SymptomFreshness = "acute_movement_brake" | "hold_easy_recheck" | "stale_needs_recheck";
 
@@ -31,6 +32,9 @@ export interface TrainingSymptomLifecycle {
   trial_ready: boolean;
   trial_ready_scope: "movement";
   movement_readiness: MovementToleranceReadiness[];
+  // Only the batched relevance read fills this: which of the REQUESTED movement
+  // names this symptom plausibly loads. Absent on every other read.
+  relevant_movements?: string[];
 }
 
 export interface MovementToleranceInput {
@@ -86,6 +90,20 @@ function resolveMovementIdentity(
     exercise_id: exercise?.id == null ? null : Number(exercise.id),
     muscle_group: exercise?.muscle_group == null ? null : String(exercise.muscle_group),
   };
+}
+
+/**
+ * Which symptoms may hold a training outcome OUT of the comparable set.
+ *
+ * Only a current, athlete-confirmed report brakes. A `stale_needs_recheck` one
+ * stays visible context — the primer already frames it as needing a recheck —
+ * but stops gating comparability, and a legacy import never gates because nobody
+ * has confirmed it yet. Staleness ends the GATING only: a symptom is never
+ * auto-resolved, because closing one is the athlete's call.
+ */
+export function symptomGatesComparability(event: TrainingSymptomLifecycle): boolean {
+  if (event.legacy_unconfirmed) return false;
+  return event.freshness === "acute_movement_brake" || event.freshness === "hold_easy_recheck";
 }
 
 function freshness(lastReportedOn: string, on: string): SymptomFreshness {
@@ -220,6 +238,16 @@ function hydrate(row: any, on = localDateISO()): TrainingSymptomLifecycle | null
   };
 }
 
+// The area label a legacy session note becomes. Free-text session feedback was
+// never bounded, so one row can hold a whole agent-written coach paragraph. We
+// EXTRACT the area it names rather than importing the prose verbatim; when it
+// names no area we recognize, the trimmed text is kept as the athlete's own
+// record but cannot drive movement relevance (pain-relevance rejects it), so an
+// unmapped note stays visible history instead of shadowing every lift.
+function legacyAreaLabel(jointPain: unknown): string {
+  return extractSymptomAreaLabel(jointPain) ?? normalizeSymptomArea(jointPain);
+}
+
 // Import old free-text session feedback once. A legacy null is absence of
 // evidence, and imported rows remain explicitly unconfirmed until the athlete
 // resolves or re-reports them.
@@ -237,10 +265,40 @@ export function seedLegacyTrainingSymptoms(): number {
       (source_session_id, source_kind, area_text, status, onset_on, last_reported_on, legacy_unconfirmed)
      VALUES (?, 'legacy_session_feedback', ?, 'active', ?, ?, 1)`
   );
+  // Self-healing: rows imported before the label contract still hold prose. Repair
+  // only rows that are still untouched legacy imports — once the athlete confirms
+  // or re-reports one, the text is theirs and we leave it alone.
+  const repair = db.prepare(
+    `UPDATE training_symptom_events SET area_text = ?, updated_at = datetime('now')
+     WHERE source_session_id = ? AND source_kind = 'legacy_session_feedback'
+       AND legacy_unconfirmed = 1 AND area_text != ?`
+  );
+  // A session note the athlete ALSO reported explicitly is one symptom, not two.
+  // Without this the feedback form doubles every save: it writes sessions.joint_pain
+  // and reports the area, then the next list call imports the same note again.
+  const explicit = db
+    .prepare(
+      `SELECT area_text, onset_on FROM training_symptom_events
+       WHERE source_kind != 'legacy_session_feedback'`
+    )
+    .all() as any[];
+  const explicitKeys = explicit.map((row) => ({
+    key: symptomAreaKey(row.area_text),
+    onset_on: String(row.onset_on),
+  }));
   for (const row of rows) {
-    inserted += Number(
-      statement.run(Number(row.id), String(row.joint_pain).trim().slice(0, 300), row.date, row.date).changes
-    );
+    const area = legacyAreaLabel(row.joint_pain);
+    if (!area) continue;
+    const date = String(row.date);
+    // Repair BEFORE the dedupe below, not after the insert. An already-imported
+    // paragraph must heal even when the dedupe skips the insert — otherwise the
+    // athlete reporting that same area explicitly is exactly what starves the row
+    // that needed repair most, and the prose stays forever. Idempotent: a no-op
+    // when the row is absent or already holds the label.
+    repair.run(area, Number(row.id), area);
+    const key = symptomAreaKey(area);
+    if (explicitKeys.some((entry) => entry.key === key && entry.onset_on <= date)) continue;
+    inserted += Number(statement.run(Number(row.id), area, date, date).changes);
   }
   return inserted;
 }
@@ -251,24 +309,54 @@ export function reportTrainingSymptom(input: {
   source_session_id?: number | null;
   source_kind?: string;
 }): TrainingSymptomLifecycle {
-  const area = String(input.area_text ?? "")
-    .trim()
-    .slice(0, 300);
+  const area = normalizeSymptomArea(input.area_text);
   if (!area) throw new Error("area_text required");
   const onset = validDate(input.onset_on);
   const sourceSessionId = input.source_session_id == null ? null : Number(input.source_session_id);
   const sourceKind = String(input.source_kind ?? "explicit").slice(0, 80);
-  // A repeated surface/MCP delivery of the same explicit report is a retry, not
-  // a second symptom. A later reappearance has the dedicated recurrence path.
-  const existing = db
+  // One area is ONE open record, whichever surface named it. Matching the normalized
+  // label across source_kinds is what keeps an edit ("left knee" -> "outside of left
+  // knee") from opening a second row and orphaning the first — and lets an explicit
+  // report adopt the legacy import of the same place instead of shadowing it. A
+  // repeated delivery of the same report is a retry, not a second symptom; a
+  // reappearance AFTER resolution still goes through the dedicated recurrence path.
+  const key = symptomAreaKey(area);
+  const active = db
     .prepare(
       `SELECT * FROM training_symptom_events
-       WHERE status = 'active' AND onset_on = ? AND area_text = ? COLLATE NOCASE
-         AND source_kind = ? AND source_session_id IS ?
-       ORDER BY id DESC LIMIT 1`
+       WHERE onset_on <= ? AND (resolved_on IS NULL OR resolved_on > ?)
+       ORDER BY last_reported_on DESC, id DESC`
     )
-    .get(onset, area, sourceKind, sourceSessionId);
-  if (existing) return hydrate(existing, onset)!;
+    .all(onset, onset) as any[];
+  const existing = active.find((row) => symptomAreaKey(row.area_text) === key);
+  if (existing) {
+    const lastReportedOn = String(existing.last_reported_on);
+    // Saying it again on a later day IS current evidence, so recency moves. Tolerance
+    // evidence does not: only the explicit recurrence path resets an epoch.
+    const reportedOn = onset > lastReportedOn ? onset : lastReportedOn;
+    // The stored label stays the athlete's. Adopting matches on a normalized KEY,
+    // deliberately coarser than the words, so a differently-worded report of the same
+    // place must not silently overwrite what they first wrote — and a near-miss key
+    // collision must not relabel their row to a place they never named.
+    //
+    // The ONE exception is an unconfirmed legacy import: that text is machine-
+    // extracted prose, not their words, and adopting it is the exact moment it stops
+    // being repairable (the seeder's repair is scoped to legacy_unconfirmed = 1). So
+    // it takes their real label here, or the import's prose would outlive every path
+    // that could have fixed it.
+    const adoptLabel = Number(existing.legacy_unconfirmed) === 1;
+    if (reportedOn === lastReportedOn && !adoptLabel) {
+      return hydrate(existing, onset)!;
+    }
+    db.prepare(
+      `UPDATE training_symptom_events
+       SET area_text = ?, last_reported_on = ?, legacy_unconfirmed = 0, updated_at = datetime('now')
+       WHERE id = ?`
+    ).run(adoptLabel ? area : String(existing.area_text), reportedOn, Number(existing.id));
+    const updated = getTrainingSymptom(Number(existing.id), onset)!;
+    reconcileTrainingSymptomOutcomeDates(reportedOn);
+    return updated;
+  }
   const result = db
     .prepare(
       `INSERT INTO training_symptom_events
@@ -298,17 +386,23 @@ export function listTrainingSymptoms(
     seed_legacy?: boolean;
     movement?: string;
     exercise_id?: number | null;
+    movements?: Array<string | null | undefined>;
   } = {}
 ): TrainingSymptomLifecycle[] {
   if (opts.seed_legacy !== false) seedLegacyTrainingSymptoms();
   const on = validDate(opts.on);
+  // Already seeded (or deliberately not) above — the delegates must not repeat it.
+  if (opts.movements != null) {
+    return trainingSymptomsForMovements(on, opts.movements, { seed_legacy: false });
+  }
   if (opts.movement != null || opts.exercise_id != null) {
     const identity = resolveMovementIdentity(opts.movement, opts.exercise_id);
     if (identity.exercise_id == null) throw new Error("movement must identify an existing exercise");
-    return activeRelevantTrainingSymptoms(on, {
-      name: identity.movement_name,
-      muscle_group: identity.muscle_group,
-    });
+    return activeRelevantTrainingSymptoms(
+      on,
+      { name: identity.movement_name, muscle_group: identity.muscle_group },
+      { seed_legacy: false }
+    );
   }
   const rows = db
     .prepare(
@@ -325,12 +419,59 @@ export function movementToleranceReadiness(symptomEventId: number, on = localDat
   return getTrainingSymptom(symptomEventId, on)?.movement_readiness ?? [];
 }
 
-export function activeRelevantTrainingSymptoms(
+// Which of a whole session's movements a currently active symptom plausibly
+// loads — one read for one session render, so no surface has to ask per card and
+// none of them carries a client-side copy of the pain→movement map. An imported
+// `legacy_unconfirmed` row is absence of evidence, so it never claims a movement
+// (the same exclusion `dailyDecisionSnapshot` applies).
+export function trainingSymptomsForMovements(
   on: string,
-  exercise: { name?: string | null; muscle_group?: string | null }
+  movements: Array<string | null | undefined>,
+  opts: { seed_legacy?: boolean } = {}
 ): TrainingSymptomLifecycle[] {
   const readOn = validDate(on);
-  seedLegacyTrainingSymptoms();
+  if (opts.seed_legacy !== false) seedLegacyTrainingSymptoms();
+  const wanted: Array<{ name: string; muscle_group: string | null }> = [];
+  const seen = new Set<string>();
+  for (const raw of movements) {
+    const name = String(raw ?? "")
+      .trim()
+      .slice(0, 120);
+    if (!name || seen.has(name.toLowerCase())) continue;
+    seen.add(name.toLowerCase());
+    // A name with no exercises row still crosses the movement half of the map;
+    // only the muscle-group half needs the row, so a miss is normal, not an error.
+    const row = db.prepare(`SELECT muscle_group FROM exercises WHERE name = ? COLLATE NOCASE`).get(name) as any;
+    wanted.push({ name, muscle_group: row?.muscle_group == null ? null : String(row.muscle_group) });
+  }
+  if (!wanted.length) return [];
+  const rows = db
+    .prepare(
+      `SELECT * FROM training_symptom_events
+       WHERE onset_on <= ? AND (resolved_on IS NULL OR resolved_on > ?)
+         AND legacy_unconfirmed = 0
+       ORDER BY last_reported_on DESC, id DESC`
+    )
+    .all(readOn, readOn) as any[];
+  const events: TrainingSymptomLifecycle[] = [];
+  for (const row of rows) {
+    const relevant = wanted
+      .filter((movement) => painAreaLoadsExercise(String(row.area_text), movement))
+      .map((movement) => movement.name);
+    if (!relevant.length) continue;
+    const event = hydrate(row, readOn);
+    if (event) events.push({ ...event, relevant_movements: relevant });
+  }
+  return events;
+}
+
+export function activeRelevantTrainingSymptoms(
+  on: string,
+  exercise: { name?: string | null; muscle_group?: string | null },
+  opts: { seed_legacy?: boolean } = {}
+): TrainingSymptomLifecycle[] {
+  const readOn = validDate(on);
+  if (opts.seed_legacy !== false) seedLegacyTrainingSymptoms();
   const rows = db
     .prepare(
       `SELECT * FROM training_symptom_events
@@ -367,6 +508,25 @@ export function resolveTrainingSymptom(id: number, on = localDateISO()): Trainin
   return event;
 }
 
+/**
+ * Close the open record for a named AREA. Chat's counterpart to the id-addressed
+ * resolve the surfaces and MCP use: in conversation the athlete says "my knee's
+ * fine now", not a row id, so the area label is the identity. Returns null when
+ * no open record matches — never guesses at a neighbouring area.
+ */
+export function resolveTrainingSymptomByArea(
+  areaText: string,
+  on = localDateISO()
+): TrainingSymptomLifecycle | null {
+  const resolvedOn = validDate(on);
+  const key = symptomAreaKey(areaText);
+  if (!key) return null;
+  const match = listTrainingSymptoms({ on: resolvedOn })
+    .filter((event) => symptomAreaKey(event.area_text) === key)
+    .sort((a, b) => b.last_reported_on.localeCompare(a.last_reported_on) || b.id - a.id)[0];
+  return match ? resolveTrainingSymptom(match.id, resolvedOn) : null;
+}
+
 export function recurTrainingSymptom(
   id: number,
   input: {
@@ -391,8 +551,7 @@ export function recurTrainingSymptom(
     throw new Error("recurrence date cannot be before the latest symptom report");
   }
   const existing = hydrate(existingRow, on)!;
-  const area =
-    input.area_text == null ? existing.area_text : String(input.area_text).trim().slice(0, 300) || existing.area_text;
+  const area = input.area_text == null ? existing.area_text : normalizeSymptomArea(input.area_text) || existing.area_text;
   const movement = String(input.movement ?? "").trim().slice(0, 120);
   let movementName = "*";
   let key = "*";

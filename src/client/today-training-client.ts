@@ -139,10 +139,25 @@ if (typeof document !== "undefined" && typeof document.addEventListener === "fun
   });
 }
 
-function exRxLineHtml(rx: ClientPrescriptionLike): string {
+// `supporting` is set by the card when its header ALREADY prints today's dose.
+// One authoritative number per card: the standing verdict then keeps its word and
+// its why but drops its own load/sets/reps arithmetic, so the athlete is never
+// asked to reconcile two prescriptions for the same lift.
+function exRxLineHtml(rx: ClientPrescriptionLike, options: { supporting?: boolean } = {}): string {
   if (!rx) return "";
   const action = rx.action && Object.hasOwn(TODAY_RX_ACTION, rx.action) ? rx.action : "hold";
   const meta = TODAY_RX_ACTION[action];
+  const why = rx.why ? `<div class="ex-rx-why">${escHtml(rx.why)}</div>` : "";
+  const varyMenu = rx.action === "vary" || rx.action === "introduce" ? exRxVaryMenuHtml(rx) : "";
+  if (options.supporting) {
+    // With nothing left to explain, a bare verdict word beside the number is noise.
+    if (!why && !varyMenu) return "";
+    return `<div class="ex-rx ex-rx-supporting ${meta.cls}">
+      <div class="ex-rx-line"><span class="ex-rx-tag lbl">${escHtml(meta.word)}</span></div>
+      ${why}
+      ${varyMenu}
+    </div>`;
+  }
   const delta = rx.delta_text ? escHtml(rx.delta_text) : "";
   const target = escHtml(rxTargetText(rx));
   return `<div class="ex-rx ${meta.cls}">
@@ -151,8 +166,8 @@ function exRxLineHtml(rx: ClientPrescriptionLike): string {
         <span class="ex-rx-target numeral">${target}</span>
         ${delta ? `<span class="ex-rx-delta">${delta}</span>` : ""}
       </div>
-      ${rx.why ? `<div class="ex-rx-why">${escHtml(rx.why)}</div>` : ""}
-      ${rx.action === "vary" || rx.action === "introduce" ? exRxVaryMenuHtml(rx) : ""}
+      ${why}
+      ${varyMenu}
     </div>`;
 }
 

@@ -465,6 +465,45 @@ test("active movement-relevant symptom evidence makes the outcome non-comparable
   assert.ok(outcome.facts.dose_context.non_comparable_reasons.includes("relevant_symptom"));
 });
 
+// A symptom that has gone quiet is context, not a brake. Before this, the ladder
+// ended at stale_needs_recheck FOREVER, so one old note held every later outcome
+// out of the comparable set and no verdict could ever be reached again.
+test("a symptom that has gone stale stops gating comparability but stays visible", () => {
+  seedPlan();
+  const symptom = repo.reportTrainingSymptom({ area_text: "left knee", onset_on: "2031-07-01" });
+
+  const prepared = acceptComposition([
+    { exercise: "Back Squat", sets: 1, rep_low: 5, rep_high: 5, target_weight: 225 },
+  ]);
+  repo.logSetByName({ date: DATE, exercise: "Back Squat", weight: 225, reps: 5, day_number: null });
+  repo.finishSession(prepared.session_id, null);
+
+  const outcome = getDailySessionOutcome(DATE);
+  const squat = outcome.facts.dose_evidence.find((dose) => dose.exercise === "Back Squat");
+  assert.equal(repo.getTrainingSymptom(symptom.id, DATE).freshness, "stale_needs_recheck");
+  assert.equal(repo.getTrainingSymptom(symptom.id, DATE).status, "active", "it is never auto-resolved");
+  assert.deepEqual(squat.symptom_event_ids, [symptom.id], "still attached as context");
+  assert.equal(squat.relevant_symptom, false, "but no longer a brake");
+  assert.ok(!outcome.facts.dose_context.non_comparable_reasons.includes("relevant_symptom"));
+});
+
+test("an unconfirmed legacy import never makes an outcome non-comparable", () => {
+  seedPlan();
+  const prepared = acceptComposition([
+    { exercise: "Back Squat", sets: 1, rep_low: 5, rep_high: 5, target_weight: 225 },
+  ]);
+  db.prepare(`UPDATE sessions SET joint_pain = NULL WHERE date = ?`).run(DATE);
+  db.prepare(`INSERT INTO sessions (date, joint_pain) VALUES ('2031-08-04', 'left knee')`).run();
+  repo.seedLegacyTrainingSymptoms();
+  repo.logSetByName({ date: DATE, exercise: "Back Squat", weight: 225, reps: 5, day_number: null });
+  repo.finishSession(prepared.session_id, null);
+
+  const outcome = getDailySessionOutcome(DATE);
+  const squat = outcome.facts.dose_evidence.find((dose) => dose.exercise === "Back Squat");
+  assert.equal(squat.symptom_event_ids.length, 1, "the imported note is still visible context");
+  assert.equal(squat.relevant_symptom, false, "nobody has confirmed it, so it cannot brake");
+});
+
 test("late same-date symptom lifecycle mutations refresh finished outcome history idempotently", () => {
   seedPlan();
   const prepared = acceptComposition([

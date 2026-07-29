@@ -612,6 +612,103 @@ test("v79 adds food_notes.eaten_at, and no-ops when db.ts already created it", (
   withoutColumn.close();
 });
 
+// v82 repairs three fossil plan_items.note patterns from retired code
+// generations (found live via direct DB inspection, never inferred from code):
+// (a) a doubled rotation clause, (b) a note clamped mid-word at exactly the old
+// 500-char column budget, (c) a stacked frozen progression-hold coach-note layer
+// that outlived the moment it described — plus the same machine-register bug one
+// layer up in daily_session_compositions.why. Every guard is precise pattern
+// matching: an untouched/unrecognized row must survive byte-for-byte.
+test("v82 repairs fossil plan_items.note and daily_session_compositions.why prose, idempotently", () => {
+  const d = new DatabaseSync(":memory:");
+  d.exec(`CREATE TABLE plan_items (id INTEGER PRIMARY KEY AUTOINCREMENT, note TEXT)`);
+  d.exec(`CREATE TABLE daily_session_compositions (id INTEGER PRIMARY KEY AUTOINCREMENT, why TEXT)`);
+
+  // (a) Gen-1's doubled rotation clause — the exercise name and the "start
+  // light" instruction each appear twice.
+  const doubled =
+    "Rotated in for Incline DB Press — Rotate a same-pattern variation in for Incline DB Press. — start light, log your actual working weight.";
+
+  // (b) clamped mid-word at exactly the old 500-char budget. Built so there is
+  // exactly one sentence terminator, at a known offset, and the fixture is
+  // guaranteed to land mid-word at char 500 (a pure letter run, no punctuation).
+  const sentence = "This is a stable prescription note about bar path and bracing cues for this lift.";
+  const tailWord = "b".repeat(500 - sentence.length - 1);
+  const clamped = `${sentence} ${tailWord}`;
+
+  // (c) the stacked frozen progression-hold coach-note layer, both with and
+  // without a base note beneath it.
+  const frozenLayer =
+    "Coach note: Strength has been slipping — back the load off about 10% and let it rebuild on a clean run.";
+  const withBase = `Compound movement, controlled tempo.\n${frozenLayer}`;
+  const frozenOnly = frozenLayer;
+
+  const untouchedNote = "Keep elbows tucked and control the descent.";
+
+  const insNote = d.prepare(`INSERT INTO plan_items (note) VALUES (?)`);
+  insNote.run(doubled);
+  insNote.run(clamped);
+  insNote.run(withBase);
+  insNote.run(frozenOnly);
+  insNote.run(untouchedNote);
+  insNote.run(null); // NULL notes must never be touched or throw
+
+  const insWhy = d.prepare(`INSERT INTO daily_session_compositions (why) VALUES (?)`);
+  insWhy.run("Explicit plan-day override: Day 3.");
+  insWhy.run("Adaptive plan selection for 2026-06-17.");
+  const untouchedWhy = "Matches today's constraints.";
+  insWhy.run(untouchedWhy);
+  insWhy.run(null);
+
+  d.exec("PRAGMA user_version = 81;");
+  const result = runMigrations(d);
+  assert.equal(result.applied, MAX_VERSION - 81);
+  assert.equal(Number(d.prepare("PRAGMA user_version").get().user_version), MAX_VERSION);
+
+  const notes = d
+    .prepare(`SELECT id, note FROM plan_items ORDER BY id`)
+    .all()
+    .map((r) => r.note);
+  assert.equal(
+    notes[0],
+    "Rotated in for Incline DB Press — start light, log your actual working value.",
+    "(a) the doubled rotation clause collapses to the current single-clause phrasing"
+  );
+  assert.equal(notes[1], sentence, "(b) the mid-word clamp trims back to the last complete sentence");
+  assert.equal(
+    notes[2],
+    "Compound movement, controlled tempo.",
+    "(c) the frozen coach-note layer is stripped, the base note survives"
+  );
+  assert.equal(notes[3], null, "(c) a note that WAS only the frozen layer has nothing left beneath it");
+  assert.equal(notes[4], untouchedNote, "an unrecognized note is left byte-for-byte identical");
+  assert.equal(notes[5], null, "a NULL note is never touched");
+
+  const whys = d
+    .prepare(`SELECT id, why FROM daily_session_compositions ORDER BY id`)
+    .all()
+    .map((r) => r.why);
+  assert.equal(whys[0], "Your call today.");
+  assert.equal(whys[1], "Today's regular spot in the rotation.");
+  assert.equal(whys[2], untouchedWhy, "an unrecognized why is left byte-for-byte identical");
+  assert.equal(whys[3], null);
+
+  // Idempotent: replaying v82's up() a second time (bypassing the version
+  // guard) must not change anything further.
+  const before = {
+    notes: d.prepare(`SELECT id, note FROM plan_items ORDER BY id`).all(),
+    whys: d.prepare(`SELECT id, why FROM daily_session_compositions ORDER BY id`).all(),
+  };
+  const v82 = MIGRATIONS.find((m) => m.version === 82);
+  v82.up(d);
+  const after = {
+    notes: d.prepare(`SELECT id, note FROM plan_items ORDER BY id`).all(),
+    whys: d.prepare(`SELECT id, why FROM daily_session_compositions ORDER BY id`).all(),
+  };
+  assert.deepEqual(after, before, "re-running v82's up() a second time is a no-op");
+  d.close();
+});
+
 test("re-running migrations on an up-to-date DB is a no-op (idempotent boot)", async () => {
   const { runMigrations } = await import("../dist/migrate.js");
   const before = Number(db.prepare("PRAGMA user_version").get().user_version);

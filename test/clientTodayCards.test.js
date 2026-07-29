@@ -71,7 +71,7 @@ test("Today exercise card helper preserves selectors, escaping, and timed mode",
     { weight: 95, reps: 5, rir: 2 },
     2,
     { action: "overload", suggested: { sets: 3, rep_low: 5, rep_high: 8, weight: 100 }, why: "earned <move>" },
-    { day: 4, exModes: { "Press <heavy>": "timed" } }
+    { day: 4, exModes: { "Press <heavy>": "timed" }, symptomMovements: ["Press <heavy>"] }
   );
 
   assert.match(html, /class="ex reveal"/);
@@ -92,20 +92,195 @@ test("Today exercise card helper preserves selectors, escaping, and timed mode",
   assert.doesNotMatch(html, /Press <heavy>|keep ribs <down>|elbow <quiet>|earned <move>/);
 });
 
-test("Today exercise card exposes Movement check only for prescribed/session strength cards", () => {
+// The gate is server truth handed down as one per-render relevance list — there is
+// no client copy of the pain→movement map, and no standing affordance on a card
+// nothing hurts on.
+test("Today exercise card exposes Movement check only where an active symptom loads that movement", () => {
   const cards = loadTodayCards();
   const base = { exercise: "Row & <pull>", sets: 3, rep_low: 8, rep_high: 10 };
+  const relevant = { symptomMovements: ["Row & <pull>"] };
 
-  const planned = cards.exerciseCardHtml({ ...base, fromPlan: true }, [], {}, null, null, {});
-  const session = cards.exerciseCardHtml({ ...base, fromSession: true }, [], {}, null, null, {});
-  const offPlan = cards.exerciseCardHtml({ ...base, fromPlan: false, fromSession: false }, [], {}, null, null, {});
+  const planned = cards.exerciseCardHtml({ ...base, fromPlan: true }, [], {}, null, null, relevant);
+  const session = cards.exerciseCardHtml({ ...base, fromSession: true }, [], {}, null, null, relevant);
+  const noSymptom = cards.exerciseCardHtml({ ...base, fromPlan: true }, [], {}, null, null, {});
+  const otherMovement = cards.exerciseCardHtml(
+    { ...base, fromPlan: true },
+    [],
+    {},
+    null,
+    null,
+    { symptomMovements: ["Back Squat"] }
+  );
+  const offPlan = cards.exerciseCardHtml(
+    { ...base, fromPlan: false, fromSession: false },
+    [],
+    {},
+    null,
+    null,
+    relevant
+  );
   const cardio = cards.cardioPlanCardHtml({ label: "Easy row" }, null, null, "");
 
   assert.match(planned, /data-movement-check/);
   assert.match(session, /data-movement-check/);
   assert.match(planned, /data-movement="Row &amp; &lt;pull&gt;"/);
+  assert.doesNotMatch(noSymptom, /data-movement-check|Movement check/);
+  assert.doesNotMatch(otherMovement, /data-movement-check|Movement check/);
   assert.doesNotMatch(offPlan, /data-movement-check|Movement check/);
   assert.doesNotMatch(cardio, /data-movement-check|Movement check/);
+
+  // Name matching is case/whitespace tolerant, never a substring guess.
+  const cased = cards.exerciseCardHtml({ ...base, fromPlan: true }, [], {}, null, null, {
+    symptomMovements: ["  row & <pull>  "],
+  });
+  assert.match(cased, /data-movement-check/);
+});
+
+test("Today exercise card leads with one authoritative dose", () => {
+  const cards = loadTodayCards();
+  const item = { fromPlan: true, exercise: "Back Squat", sets: 2, rep_low: 8, rep_high: 10 };
+  const rx = {
+    action: "deload",
+    suggested: { sets: 2, rep_low: 8, rep_high: 10, weight: 70 },
+    delta_text: "−5 lb",
+    why: "you flagged knee pain",
+  };
+
+  // A composition target (already eased for this session) IS the number; the
+  // standing verdict beside it explains, and prescribes nothing of its own.
+  const eased = cards.exerciseCardHtml({ ...item, target_weight: 58.5 }, [], {}, null, rx, {});
+  assert.match(eased, /data-dose="headline"/);
+  assert.match(eased, /class="ex-target numeral">58\.5 lb/);
+  assert.match(eased, /ex-rx-supporting/);
+  assert.match(eased, /you flagged knee pain/);
+  assert.doesNotMatch(eased, /ex-rx-target|ex-rx-delta/);
+  assert.doesNotMatch(eased, /70 lb|−5 lb/);
+
+  // No composition target → the rx suggestion is the number.
+  const ungrounded = cards.exerciseCardHtml(item, [], {}, null, rx, {});
+  assert.doesNotMatch(ungrounded, /data-dose="headline"/);
+  assert.match(ungrounded, /ex-rx-target numeral">70 lb/);
+  assert.match(ungrounded, /−5 lb/);
+  assert.doesNotMatch(ungrounded, /ex-rx-supporting/);
+
+  // Nothing left to explain beside the headline number → say nothing at all.
+  const bare = cards.exerciseCardHtml(
+    { ...item, target_weight: 58.5 },
+    [],
+    {},
+    null,
+    { action: "hold", suggested: { sets: 2, rep_low: 8, rep_high: 10, weight: 58.5 } },
+    {}
+  );
+  assert.doesNotMatch(bare, /ex-rx/);
+
+  // A timed card's prescribed dose is its own headline too.
+  const timed = cards.exerciseCardHtml(
+    { ...item, mode: "timed", target_seconds: 45 },
+    [],
+    {},
+    null,
+    { mode: "timed", action: "overload", suggested: { sets: 2, seconds: 60 }, why: "steady holds" },
+    {}
+  );
+  assert.match(timed, /data-dose="headline"/);
+  assert.match(timed, /ex-rx-supporting/);
+  assert.doesNotMatch(timed, /ex-rx-target/);
+});
+
+// A stored target the athlete has already outgrown is stale, not authoritative:
+// leading with it would put the one load nobody uses at the top of the card.
+test("Today exercise card lets a re-grounding verdict lead instead of a stale target", () => {
+  const cards = loadTodayCards();
+  const reground = cards.exerciseCardHtml(
+    { fromPlan: true, exercise: "Back Squat", sets: 2, rep_low: 8, rep_high: 10, target_weight: 27 },
+    [],
+    { weight: 50, reps: 8 },
+    null,
+    {
+      action: "hold",
+      reground: true,
+      suggested: { sets: 2, rep_low: 8, rep_high: 10, weight: 50 },
+      current: { sets: 2, rep_low: 8, rep_high: 10, weight: 50 },
+      why: "caught up to what you're lifting",
+    },
+    {},
+    { weight: 50, reps: 8 }
+  );
+
+  // The grounded number leads, and the stale one is nowhere on the card.
+  assert.match(reground, /ex-rx-target numeral">50 lb/);
+  assert.doesNotMatch(reground, /ex-target/);
+  assert.doesNotMatch(reground, /27/);
+  assert.doesNotMatch(reground, /data-dose="headline"/);
+  assert.doesNotMatch(reground, /ex-rx-supporting/);
+  // Still ONE dose: sets × reps stay in the header, the load lives only in the rx line.
+  assert.match(reground, /class="ex-sets">2 × 8–10<\/span>/);
+  assert.match(reground, /class="in-w"[^>]*value="50"/);
+
+  // Without the reground flag the same stored target still leads, unchanged.
+  const ordinary = cards.exerciseCardHtml(
+    { fromPlan: true, exercise: "Back Squat", sets: 2, rep_low: 8, rep_high: 10, target_weight: 27 },
+    [],
+    { weight: 27, reps: 8 },
+    null,
+    { action: "hold", suggested: { sets: 2, rep_low: 8, rep_high: 10, weight: 27 }, why: "steady" },
+    {}
+  );
+  assert.match(ordinary, /class="ex-target numeral">27 lb/);
+  assert.match(ordinary, /data-dose="headline"/);
+});
+
+test("Today exercise card drops a fossilized start-light note once a real number exists", () => {
+  const cards = loadTodayCards();
+  const item = {
+    fromPlan: true,
+    exercise: "Incline Press",
+    sets: 3,
+    rep_low: 8,
+    rep_high: 10,
+    note: "New to this rotation. Start light, log your actual working weight.",
+  };
+
+  const grounded = cards.exerciseCardHtml({ ...item, target_weight: 95 }, [], {}, null, null, {});
+  assert.match(grounded, /New to this rotation\./);
+  assert.doesNotMatch(grounded, /Start light/);
+
+  const fromLastSet = cards.exerciseCardHtml(item, [], {}, null, null, {}, { weight: 90, reps: 8 });
+  assert.doesNotMatch(fromLastSet, /Start light/);
+
+  const fromRx = cards.exerciseCardHtml(
+    item,
+    [],
+    {},
+    null,
+    { action: "introduce", suggested: { weight: 85, sets: 3, rep_low: 8 } },
+    {}
+  );
+  assert.doesNotMatch(fromRx, /Start light/);
+
+  // With no number anywhere the instruction is still true — keep it.
+  const ungrounded = cards.exerciseCardHtml(item, [], {}, null, null, {});
+  assert.match(ungrounded, /Start light, log your actual working weight\./);
+
+  // The cue usually hangs off a fact worth keeping — cut the clause, not the
+  // sentence, so the rotation provenance survives.
+  const rotated = {
+    ...item,
+    note: "Rotated in for Bench Press — start light, log your actual working value.",
+  };
+  const rotatedGrounded = cards.exerciseCardHtml(rotated, [], {}, null, null, {}, { weight: 90, reps: 8 });
+  assert.match(rotatedGrounded, /Rotated in for Bench Press/);
+  assert.doesNotMatch(rotatedGrounded, /start light|log your actual working value/i);
+
+  // A hyphenated movement name is not a clause break.
+  const hyphenated = cards.exerciseCardHtml(
+    { ...item, note: "Swapped to Push-up — start light for now." },
+    [], {}, null, null, {},
+    { weight: 90, reps: 8 }
+  );
+  assert.match(hyphenated, /Swapped to Push-up\./);
+  assert.doesNotMatch(hyphenated, /start light/i);
 });
 
 test("Today exercise card stopwatch control is timed-only", () => {

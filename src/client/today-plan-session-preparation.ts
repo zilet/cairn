@@ -83,6 +83,7 @@ type TodayPlanSessionPrepResult = {
   pendingOffPlan: TodayPlanSessionPrepPendingOffPlan[];
   lastSets: Record<string, Record<string, unknown> | null>;
   rxByEx: Record<string, TodayPlanSessionPrepPrescription | null | undefined>;
+  symptomMovements: string[];
   strengthJourney: TodayPlanSessionPrepStrengthJourney | null;
   rxFor(name: unknown): TodayPlanSessionPrepPrescription | null;
   prefillFor(item: TodayPlanSessionPrepPlanItem): TodayPlanSessionPrepPrefill;
@@ -138,10 +139,12 @@ type TodayPlanSessionPrepModelApi = {
   prefillFor(
     item: TodayPlanSessionPrepPlanItem,
     loggedByEx: Record<string, TodayPlanSessionPrepLoggedSet[]>,
-    lastSets: Record<string, Record<string, unknown> | null>
+    lastSets: Record<string, Record<string, unknown> | null>,
+    rx?: TodayPlanSessionPrepPrescription | null
   ): TodayPlanSessionPrepPrefill;
 };
 type TodayPlanSessionPrepDataApi = {
+  loadSymptomMovements(names: string[], deps: TodayPlanSessionPrepDeps): Promise<string[]>;
   loadLastSets(
     names: string[],
     loggedByEx: Record<string, TodayPlanSessionPrepLoggedSet[]>,
@@ -244,19 +247,21 @@ type TodayPlanSessionPrepDataApi = {
     });
     const pendingOffPlan = todayPlanSessionModel.prunePendingOffPlan(deps.state, early.planNames, loggedByEx);
 
-    const [{ allCardio, cardioEfforts, todaySettings }, lastSets, rxByEx, strengthJourney] = await Promise.all([
-      todayPlanSessionData.loadCardioContext(items, deps.isToday, deps),
-      todayPlanSessionData.loadLastSets(
-        [...early.planEx, ...pendingOffPlan.map((item) => item.name)],
-        loggedByEx,
+    const [{ allCardio, cardioEfforts, todaySettings }, lastSets, rxByEx, symptomMovements, strengthJourney] =
+      await Promise.all([
+        todayPlanSessionData.loadCardioContext(items, deps.isToday, deps),
+        todayPlanSessionData.loadLastSets(
+          [...early.planEx, ...pendingOffPlan.map((item) => item.name)],
+          loggedByEx,
+          deps
+        ),
+        todayPlanSessionData.loadPrescriptions(dailySession && !planSource ? null : deps.state.day, early.planEx, deps),
+        todayPlanSessionData.loadSymptomMovements(early.planEx, deps),
         deps
-      ),
-      todayPlanSessionData.loadPrescriptions(dailySession && !planSource ? null : deps.state.day, early.planEx, deps),
-      deps
-        .api("/strength-journey")
-        .then((value) => (value && typeof value === "object" ? (value as TodayPlanSessionPrepStrengthJourney) : null))
-        .catch(() => null),
-    ]);
+          .api("/strength-journey")
+          .then((value) => (value && typeof value === "object" ? (value as TodayPlanSessionPrepStrengthJourney) : null))
+          .catch(() => null),
+      ]);
 
     const matchedCardio = todayPlanSessionModel.matchCardioEfforts(allCardio, cardioEfforts, deps.cardioEffortMatches);
     const { planNames, activeItems, skippedItems, cardioItems, strengthItems, planEx, offPlanEx } =
@@ -270,7 +275,7 @@ type TodayPlanSessionPrepDataApi = {
       });
     const rxFor = (name: unknown) => (name ? rxByEx[String(name).toLowerCase()] || null : null);
     const prefillFor = (item: TodayPlanSessionPrepPlanItem): TodayPlanSessionPrepPrefill =>
-      todayPlanSessionModel.prefillFor(item, loggedByEx, lastSets);
+      todayPlanSessionModel.prefillFor(item, loggedByEx, lastSets, rxFor(item.exercise));
     const exDone = strengthItems.filter((item) => (loggedByEx[String(item.exercise)] || []).length).length;
     const exTotal = strengthItems.length;
     const hasSyncedCardioToday = cardioEfforts.length > 0;
@@ -296,6 +301,7 @@ type TodayPlanSessionPrepDataApi = {
       pendingOffPlan,
       lastSets,
       rxByEx,
+      symptomMovements,
       strengthJourney,
       rxFor,
       prefillFor,

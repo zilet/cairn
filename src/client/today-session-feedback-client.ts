@@ -54,8 +54,21 @@ type MovementStopMarker = {
       : false;
   }
 
-  function renderFeedback(slot: Element | null | undefined, session: Record<string, unknown>, deps: TodaySessionFeedbackDeps): void {
+  function renderFeedback(
+    slot: Element | null | undefined,
+    session: Record<string, unknown>,
+    deps: TodaySessionFeedbackDeps,
+    options?: { hasLoggedSets?: boolean }
+  ): void {
     if (!slot) return;
+    // No sets logged yet (a rest day, or before the first one) means there is no
+    // session to rate — but the Pain & injury panel is the only place a note can be
+    // closed, so it renders on its own rather than the whole slot staying empty.
+    if (options && options.hasLoggedSets === false && !deps.sessionStatus.hasFeedback(session)) {
+      slot.innerHTML = `<div data-symptom-lifecycle></div>`;
+      void renderSymptomLifecycle(slot, session, deps);
+      return;
+    }
     if (deps.sessionStatus.hasFeedback(session)) {
       renderFeedbackDone(slot, session, deps);
       return;
@@ -117,7 +130,7 @@ type MovementStopMarker = {
     return rows.map((movement) => {
       const count = Math.max(0, Number(movement.pain_free_exposures) || 0);
       const note = movement.trial_ready
-        ? "Two pain-free checks recorded — evidence for a careful movement recheck; the symptom stays open."
+        ? "Two pain-free checks recorded — evidence for a careful movement recheck; the note stays open."
         : `${count} pain-free ${count === 1 ? "check" : "checks"} recorded.`;
       return `<div class="sess-line"><strong>${escHtml(movement.movement_name)}</strong> · ${escHtml(note)}</div>`;
     }).join("");
@@ -126,8 +139,12 @@ type MovementStopMarker = {
   function symptomRowHtml(symptom: ClientTrainingSymptom, session: Record<string, unknown>): string {
     const active = symptom.status === "active";
     if (!active) {
+      const closed = symptom.resolved_on ? String(symptom.resolved_on).slice(0, 10) : "";
       return `<div class="symptom-history-row" data-symptom-row="${escAttr(symptom.id)}">
-        <span class="symptom-area">${escHtml(symptom.area_text)}</span>
+        <div class="symptom-history-main">
+          <span class="symptom-area">${escHtml(symptom.area_text)}</span>
+          ${closed ? `<span class="symptom-resolved-on">closed ${escHtml(humanDate(closed))}</span>` : ""}
+        </div>
         <button class="linkbtn linkbtn-plain linkbtn-sm" type="button" data-symptom-recur-toggle="${escAttr(symptom.id)}"
           aria-expanded="false" aria-controls="symptom-recur-${escAttr(symptom.id)}">It returned</button>
         <div class="symptom-recur-composer" id="symptom-recur-${escAttr(symptom.id)}" hidden>
@@ -140,8 +157,18 @@ type MovementStopMarker = {
         </div>
       </div>`;
     }
+    // An imported note is NOT a current finding — nobody has confirmed it since the
+    // session it came from. Framing it as an ordinary "Watching" row states more
+    // than the evidence does (the session primer already says this in words).
+    const stateLabel = symptom.legacy_unconfirmed
+      ? `<span class="symptom-watching symptom-unconfirmed">Older note · unconfirmed</span>`
+      : `<span class="symptom-watching">Watching</span>`;
+    const stateNote = symptom.legacy_unconfirmed
+      ? `<div class="sess-line">Imported from an older session note. Mark it resolved if it's long gone, or record how it feels now.</div>`
+      : "";
     return `<article class="symptom-active-row well-accent-sm" data-symptom-row="${escAttr(symptom.id)}">
-      <div class="symptom-row-heading"><span class="symptom-area">${escHtml(symptom.area_text)}</span><span class="symptom-watching">Watching</span></div>
+      <div class="symptom-row-heading"><span class="symptom-area">${escHtml(symptom.area_text)}</span>${stateLabel}</div>
+      ${stateNote}
       ${movementEvidenceHtml(symptom)}
       <div class="symptom-movement-control">${movementInputHtml(symptom.id, session)}</div>
       <div class="symptom-row-actions" aria-label="Actions for ${escAttr(symptom.area_text)}">
@@ -199,7 +226,7 @@ type MovementStopMarker = {
     const resolvedSymptoms = symptoms.filter((symptom) => symptom.status !== "active");
     const activeSummary = activeSymptoms.length
       ? `${activeSymptoms.length} active ${activeSymptoms.length === 1 ? "note" : "notes"}`
-      : "Nothing active in Cairn.";
+      : "No active notes.";
     host.innerHTML = `<section class="symptom-lifecycle" aria-label="Pain and injury">
       <div class="symptom-lifecycle-head">
         <div><div class="feedback-prompt lbl">Pain &amp; injury</div><p>${activeSummary}</p></div>
@@ -238,10 +265,10 @@ type MovementStopMarker = {
       }
       try {
         await reportSymptomArea(area, session, String(session.date || deps.state.logDate), deps);
-        deps.toast("Symptom noted");
+        deps.toast("Pain note saved");
         await reload();
       } catch {
-        deps.toast("Couldn't save that symptom — try again.");
+        deps.toast("Couldn't save that note — try again.");
       }
     });
     host.querySelectorAll<HTMLElement>("[data-symptom-resolve]").forEach((button) =>
@@ -255,7 +282,7 @@ type MovementStopMarker = {
           deps.toast("Marked resolved");
           await reload();
         } catch {
-          deps.toast("Couldn't update that symptom — try again.");
+          deps.toast("Couldn't update that note — try again.");
         }
       }));
     host.querySelectorAll<HTMLElement>("[data-symptom-recur-toggle]").forEach((button) =>
@@ -295,7 +322,7 @@ type MovementStopMarker = {
           deps.toast("Recurrence noted");
           await reload();
         } catch {
-          deps.toast("Couldn't update that symptom — try again.");
+          deps.toast("Couldn't update that note — try again.");
         }
       }));
     host.querySelectorAll<HTMLElement>("[data-tolerance]").forEach((button) =>
@@ -328,8 +355,13 @@ type MovementStopMarker = {
       }));
   }
 
+  // An imported `legacy_unconfirmed` row is absence of evidence, not a live
+  // symptom — it must never speak on a card. Same exclusion the daily decision
+  // snapshot applies, so both surfaces agree on what "active" means here.
   function movementCheckSymptoms(value: unknown): ClientTrainingSymptom[] {
-    return responseSymptoms(value).filter((symptom) => symptom.status === "active");
+    return responseSymptoms(value).filter(
+      (symptom) => symptom.status === "active" && symptom.legacy_unconfirmed !== true
+    );
   }
 
   function movementCheckChoicesHtml(hasSets: boolean): string {
@@ -343,7 +375,9 @@ type MovementStopMarker = {
   }
 
   function movementCheckLoadedHtml(symptoms: ClientTrainingSymptom[]): string {
-    symptoms = symptoms.filter((symptom) => symptom.status === "active");
+    symptoms = symptoms.filter(
+      (symptom) => symptom.status === "active" && symptom.legacy_unconfirmed !== true
+    );
     if (!symptoms.length) {
       return `<div class="sess-line">If something hurts, name the exact area so this check stays specific.</div>
         <div class="feedback-joint-wrap">
@@ -769,8 +803,10 @@ type MovementStopMarker = {
         body.innerHTML = `<div class="sess-line">Loading movement notes…</div>`;
         let symptoms: ClientTrainingSymptom[];
         try {
+          // seed_legacy=0: opening a disclosure is a read, and a read must not
+          // trigger the one-time legacy import as a side effect.
           symptoms = movementCheckSymptoms(await deps.api(
-            `/training-symptoms?on=${encodeURIComponent(date)}&movement=${encodeURIComponent(movement)}`,
+            `/training-symptoms?on=${encodeURIComponent(date)}&movement=${encodeURIComponent(movement)}&seed_legacy=0`,
           ));
         } catch {
           if (movementCheckStillCurrent(details, card, deps, date, tab, token)) {
@@ -813,7 +849,7 @@ type MovementStopMarker = {
             await reportSymptomArea(jointVal, session, date, deps);
             void renderSymptomLifecycle(slot, session, deps);
           } catch {
-            deps.toast("Feedback saved; the symptom note couldn't update.");
+            deps.toast("Feedback saved; the pain note couldn't update.");
           }
         }
         return true;

@@ -4,6 +4,10 @@
 type TodayExerciseCardOptions = {
   day?: unknown;
   exModes?: Record<string, unknown> | null | undefined;
+  // Movement names an active, athlete-confirmed symptom actually loads today —
+  // server truth from ONE /training-symptoms?movements= read per session render.
+  // The card carries no copy of the pain→movement map and never guesses.
+  symptomMovements?: Iterable<unknown> | null | undefined;
 };
 
 type TodayExerciseItem = Record<string, unknown>;
@@ -37,6 +41,48 @@ function todayCardsSetChip(set: unknown, index?: number): string {
   return CairnTodaySessionStatus.setChipHtml(set as Record<string, unknown>, index);
 }
 
+function todayCardsSymptomRelevant(movements: Iterable<unknown> | null | undefined, exercise: string): boolean {
+  const want = exercise.trim().toLowerCase();
+  if (!movements || !want) return false;
+  for (const name of movements) {
+    if (todayString(name).trim().toLowerCase() === want) return true;
+  }
+  return false;
+}
+
+const TODAY_START_LIGHT_CUE = /\bstart\s+(?:light|easy|conservative)/i;
+// Spaced dashes only, so a hyphenated movement ("Push-up") is never a clause break.
+const TODAY_NOTE_CLAUSE_SPLIT = /\s+[—–-]\s+/;
+
+// A stored "start light, find your working weight" instruction was true the day it
+// was written and is a contradiction once the card prints a real number. Drop it
+// rather than print both; the rows themselves are repaired separately and render
+// must never depend on that having happened. The cue usually hangs off a fact worth
+// keeping ("Rotated in for Bench Press — start light, …"), so cut at the clause, not
+// the sentence: only what carries the cue goes.
+function todayCardsCleanNote(note: unknown, hasDose: boolean): string {
+  const text = todayString(note).trim();
+  if (!text || !hasDose) return text;
+  const kept: string[] = [];
+  for (const sentence of text.match(/[^.;!?]+[.;!?]*/g) || [text]) {
+    if (!TODAY_START_LIGHT_CUE.test(sentence)) {
+      kept.push(sentence.trim());
+      continue;
+    }
+    const lead = sentence
+      .split(TODAY_NOTE_CLAUSE_SPLIT)
+      .filter((clause) => clause.trim() && !TODAY_START_LIGHT_CUE.test(clause))
+      .join(" — ")
+      .trim();
+    // A surviving lead lost its terminator with the clause that carried it.
+    if (lead) kept.push(/[.;!?]$/.test(lead) ? lead : `${lead}.`);
+  }
+  return kept
+    .join(" ")
+    .replace(/^[\s,;·—–-]+/, "")
+    .trim();
+}
+
 function exerciseCardHtml(
   item: TodayExerciseItem,
   loggedSets: TodayLoggedSet[],
@@ -56,9 +102,17 @@ function exerciseCardHtml(
   const targetText = timed
     ? `${item.sets ?? "?"} × ${item.target_seconds != null ? fmtDur(item.target_seconds) : "time"}`
     : `${item.sets} × ${range}`;
+  // `reground` says the STORED target sits behind what the athlete is already
+  // lifting (server: progression.ts `planBehind`), so that number is stale rather
+  // than authoritative — printing it would lead the card with the one load nobody
+  // uses. Step it aside and let the rx line carry the grounded number instead;
+  // still exactly one dose, just the true one. Loaded work only: the server emits
+  // `reground` on the reps branch alone.
+  const regrounding = rx?.reground === true;
+  const showTargetLoad = !timed && item.target_weight != null && !regrounding;
   const target = offPlan
     ? `<span class="ex-sets ex-offplan">off-plan</span>`
-    : `<span class="ex-sets">${targetText}${!timed && item.target_weight != null ? ` @ <span class="ex-target numeral">${fmtWeight(item.target_weight)}</span>` : ""}</span>`;
+    : `<span class="ex-sets">${targetText}${showTargetLoad ? ` @ <span class="ex-target numeral">${fmtWeight(item.target_weight)}</span>` : ""}</span>`;
   const done = loggedSets.length;
   const goal = offPlan ? 0 : Number(item.sets) || 0;
   const complete = !!goal && done >= goal;
@@ -95,13 +149,34 @@ function exerciseCardHtml(
         lastSetLineText: (ls) => CairnTodaySessionSetModel.lastSetLineText(ls, { fmtDur }),
       })
     : "";
-  const movementCheck = !offPlan
-    ? `<details class="ex-movement-check" data-movement-check data-movement="${escAttr(exercise)}">
+  // The per-card pain flow is not a standing affordance: it appears only where an
+  // active symptom actually loads THIS movement. With none, the card stays clean —
+  // reporting pain lives in the session feedback form and the Pain & injury panel.
+  const movementCheck =
+    !offPlan && todayCardsSymptomRelevant(options.symptomMovements, exercise)
+      ? `<details class="ex-movement-check" data-movement-check data-movement="${escAttr(exercise)}">
         <summary class="linkbtn linkbtn-quiet linkbtn-sm">Movement check</summary>
         <div class="well-accent-sm" data-movement-check-body></div>
       </details>`
-    : "";
-  return `<div class="ex${complete ? " ex-complete" : ""}${reveal != null ? " reveal" : ""}" data-card="${escAttr(exercise)}" data-mode="${timed ? "timed" : "reps"}"${reveal != null ? ` style="${stagger(reveal)}"` : ""}>
+      : "";
+  // ONE authoritative dose per card. When the header already carries today's load
+  // (or timed dose) — the composition target, already eased for this session — the
+  // standing progression verdict becomes explanation only. It follows the header
+  // exactly, so a re-grounding verdict (no header load, see above) keeps its full
+  // line and leads with the grounded number. Anything the server grounded (that
+  // header, the rx suggestion, or a real last set) also retires a fossilized
+  // "start light" note.
+  const headlineDose = !offPlan && (timed ? item.target_seconds != null : showTargetLoad);
+  const rxSuggested = todayRecord(todayRecord(rx).suggested);
+  const lastSetRecord = todayRecord(lastSet);
+  const groundedDose =
+    headlineDose ||
+    todayFinite(rxSuggested.weight) != null ||
+    todayFinite(rxSuggested.seconds) != null ||
+    todayFinite(lastSetRecord.weight) != null ||
+    todayFinite(lastSetRecord.duration_sec) != null;
+  const note = todayCardsCleanNote(item.note, groundedDose);
+  return `<div class="ex${complete ? " ex-complete" : ""}${reveal != null ? " reveal" : ""}" data-card="${escAttr(exercise)}" data-mode="${timed ? "timed" : "reps"}"${headlineDose ? ` data-dose="headline"` : ""}${reveal != null ? ` style="${stagger(reveal)}"` : ""}>
       <div class="ex-top">
         ${tile}
         <button class="ex-name" data-guide="${encodeURIComponent(exercise)}">${escHtml(exercise)} <span class="guide-i">ⓘ</span></button>
@@ -109,10 +184,10 @@ function exerciseCardHtml(
         ${skipButton}${removeButton}
       </div>
       <div class="ex-meta">${progress}</div>
-      ${item.brain_decision_id ? `<div class="ex-flag"><b>${escHtml(item.brain_change_summary || "Cairn adjusted this exercise.")}</b>${item.brain_change_reason || item.note ? ` ${escHtml(item.brain_change_reason || item.note)}` : ""}${item.brain_change_reversible ? ` <button class="linkbtn-quiet" type="button" data-decision-undo="${escAttr(item.brain_decision_id)}">Undo</button>` : ""}</div>` : item.note ? `<div class="ex-note">${escHtml(item.note)}</div>` : ""}
+      ${item.brain_decision_id ? `<div class="ex-flag"><b>${escHtml(item.brain_change_summary || "Cairn adjusted this exercise.")}</b>${item.brain_change_reason || note ? ` ${escHtml(item.brain_change_reason || note)}` : ""}${item.brain_change_reversible ? ` <button class="linkbtn-quiet" type="button" data-decision-undo="${escAttr(item.brain_decision_id)}">Undo</button>` : ""}</div>` : note ? `<div class="ex-note">${escHtml(note)}</div>` : ""}
       ${item.constraint_note ? `<div class="ex-flag">${escHtml(item.constraint_note)}</div>` : ""}
       ${item.journey_line ? `<div class="ex-journey" data-journey-role="${escAttr(item.journey_role || "support")}">${escHtml(item.journey_line)}</div>` : ""}
-      ${!complete ? CairnTodayTraining.exRxLineHtml(rx) : ""}
+      ${!complete ? CairnTodayTraining.exRxLineHtml(rx, { supporting: headlineDose }) : ""}
       <div class="logged" data-logged>${loggedSets.map(todayCardsSetChip).join("")}</div>
       ${lastSetLine}
       ${movementCheck}

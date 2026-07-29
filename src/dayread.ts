@@ -433,11 +433,49 @@ export async function computeDayRead(opts: { date?: string; override?: string; a
   return out;
 }
 
+// ---------- one canonical recompute per date at a time ----------
+// computeDayRead spawns a coaching CLI, so two of them for the same date is two
+// agent calls for one answer. Nothing stopped that: a cold cache (the state every
+// invalidation leaves behind) meant every concurrent open took the miss path and
+// started its own, and the background re-warm armed by that same invalidation
+// started a further one alongside them. All of them then wrote the same row.
+//
+// This is the single lane they share. In-process is enough — Cairn is one Node
+// process — and the key carries the agent because naming a specific backend asks a
+// different question than "whichever is up". Overrides deliberately do NOT come
+// through here: an athlete steer ("rough night") is a different read, is never
+// cached, and must not be answered with someone else's canonical one.
+const canonicalDayReadRuns = new Map<string, Promise<any>>();
+
+export function computeCanonicalDayRead(opts: { date?: string; agent?: string; force?: boolean } = {}): Promise<any> {
+  const key = `${opts.date || localToday()}|${opts.agent ?? ""}`;
+  // `force` is the explicit athlete-driven refresh: it starts its own run rather
+  // than joining one that may already be mid-flight, but it still PUBLISHES that run
+  // so anything arriving behind it joins instead of adding a third.
+  if (!opts.force) {
+    const existing = canonicalDayReadRuns.get(key);
+    if (existing) return existing;
+  }
+  const run = computeDayRead({ date: opts.date, agent: opts.agent }).finally(() => {
+    if (canonicalDayReadRuns.get(key) === run) canonicalDayReadRuns.delete(key);
+  });
+  canonicalDayReadRuns.set(key, run);
+  return run;
+}
+
+// Test seam: the map self-clears when a run settles, so this only matters for a
+// test that leaves one unsettled. Wired into test/_isolate's per-test DB wipe.
+export function resetDayReadComputeCoalescing(): void {
+  canonicalDayReadRuns.clear();
+}
+
 // Nightly / boot warm: compute & cache today's canonical read so the first open
 // never waits on an agent. Never throws — a failed compute still caches the
 // deterministic floor (instant), and the next material change re-derives it.
+// Shares the canonical lane, so a warm that fires while an open is already
+// computing the same date costs nothing extra.
 export async function precomputeDayRead(date?: string): Promise<void> {
   try {
-    await computeDayRead({ date: date || localToday() });
+    await computeCanonicalDayRead({ date: date || localToday() });
   } catch {}
 }

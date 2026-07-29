@@ -1,6 +1,11 @@
 import { agentStatusFor } from "../../coachOps.js";
 import { db } from "../../db.js";
-import { computeDayRead, dayReadProseConsistencyIssue, localToday } from "../../dayread.js";
+import {
+  computeCanonicalDayRead,
+  computeDayRead,
+  dayReadProseConsistencyIssue,
+  localToday,
+} from "../../dayread.js";
 import { ensureDayReadRefresh, scheduleDayReadRefresh } from "../../dayread-refresh.js";
 import {
   dayRead,
@@ -155,7 +160,10 @@ export async function readToday(options: ReadTodayOptions = {}): Promise<DayRead
   try {
     if (reset) {
       invalidateDayRead(readDate);
-      const read = await computeDayRead({ date, agent });
+      // force: this is the athlete asking for a new read, so it must not be answered
+      // with a run that started before their invalidation — but it still joins the
+      // canonical lane, so opens arriving behind it share this one agent call.
+      const read = await computeCanonicalDayRead({ date, agent, force: true });
       if (recordOutcome) recordDayReadSuggestion(readDate, read, null);
       return attachDayReadContext(readDate, { ...read, agent_status: agentStatusFor(read) });
     }
@@ -253,7 +261,13 @@ export async function readToday(options: ReadTodayOptions = {}): Promise<DayRead
       }
     }
 
-    const read = await computeDayRead({ date, override, agent });
+    // The cache-miss path. Every invalidation leaves the cache cold, so a burst of
+    // opens against one cleared row used to spawn one agent run EACH (plus the
+    // background re-warm's). The canonical read now has one lane per date; a steered
+    // read is transient and never cached, so it keeps its own run.
+    const read = override
+      ? await computeDayRead({ date, override, agent })
+      : await computeCanonicalDayRead({ date, agent });
     if (recordOutcome) recordDayReadSuggestion(readDate, read, override ?? null);
     return attachDayReadContext(readDate, { ...read, agent_status: agentStatusFor(read) });
   } catch (e: any) {

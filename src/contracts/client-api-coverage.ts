@@ -180,6 +180,7 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/health-docs/:id/dicom/instances/:instanceId/file",
   "/context-events",
   "/context-events/:id",
+  "/context-events/:id/resolve",
   "/injury-impacts",
   "/family",
   "/family/:id",

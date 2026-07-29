@@ -65,14 +65,24 @@ function boundedText(value: unknown, field: string, max: number, required = fals
 
 // The athlete-owned movement-symptom lifecycle. Reads are calm evidence only:
 // trial readiness remains movement-specific and never resolves the symptom.
+// Repeat `movements=` to ask one question for a whole session ("which of these
+// does an active symptom load?"); each returned row carries `relevant_movements`.
+// `seed_legacy=0` keeps a pure render read from triggering the legacy import.
 trainingLogRouter.get("/training-symptoms", (req, res) => {
   try {
+    const requested = req.query.movements;
+    const movements =
+      requested == null
+        ? undefined
+        : (Array.isArray(requested) ? requested : [requested]).map(String).slice(0, 64);
     res.json(
       listTrainingSymptoms({
         on: req.query.on ? String(req.query.on) : undefined,
         include_resolved: req.query.include_resolved === "1" || req.query.include_resolved === "true",
         movement: req.query.movement == null ? undefined : String(req.query.movement),
         exercise_id: req.query.exercise_id == null ? undefined : positiveId(req.query.exercise_id, "exercise_id"),
+        movements,
+        seed_legacy: !(req.query.seed_legacy === "0" || req.query.seed_legacy === "false"),
       })
     );
   } catch (error: any) {

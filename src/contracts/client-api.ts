@@ -633,6 +633,9 @@ export interface ClientTrainingSymptom {
   trial_ready: boolean;
   trial_ready_scope: "movement";
   movement_readiness: ClientMovementToleranceReadiness[];
+  // Only the batched `?movements=` relevance read fills this: which of the
+  // requested movement names this symptom plausibly loads.
+  relevant_movements?: string[];
 }
 
 export type ClientExerciseSymptomObservationOutcome = "pain_present" | "pain_free";
@@ -2399,6 +2402,8 @@ export interface ClientContextEvent {
   detail?: string | null;
   start_date?: ISODateString | null;
   end_date?: ISODateString | null;
+  /** YYYY-MM-DD the athlete explicitly closed it (healed / over); null = still open. */
+  resolved_at?: ISODateString | null;
   archived?: boolean | number;
   meta?: unknown;
   [key: string]: unknown;

@@ -2,6 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { db } from "../dist/db.js";
 import * as repo from "../dist/repo.js";
+import { MIGRATIONS } from "../dist/migrate.js";
+
+const MAX_VERSION = MIGRATIONS.reduce((m, x) => Math.max(m, x.version), 0);
 
 const MILOS_INTENT = {
   priorities: ["longevity", "muscle", "leanness", "endurance", "muscle", "unknown"],
@@ -122,7 +125,13 @@ test("coach context carries the resolved intent and capacity read", () => {
 });
 
 test("fresh schema keeps the training intent column through the v81 profile migration", () => {
-  const columns = db.prepare(`PRAGMA table_info(profile)`).all().map((row) => row.name);
+  const columns = db
+    .prepare(`PRAGMA table_info(profile)`)
+    .all()
+    .map((row) => row.name);
   assert.ok(columns.includes("training_intent_json"));
-  assert.equal(db.prepare(`PRAGMA user_version`).get().user_version, 81);
+  // Computed dynamically (not hardcoded — CLAUDE.md) so a later migration never
+  // breaks this test; what matters is that a fresh DB reaches the CURRENT top of
+  // the ladder, not any specific historical version number.
+  assert.equal(db.prepare(`PRAGMA user_version`).get().user_version, MAX_VERSION);
 });

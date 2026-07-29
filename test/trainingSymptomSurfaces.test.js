@@ -5,7 +5,11 @@ import { beforeEach, test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { normalizeChatAction } from "../dist/chatActions.js";
-import { applyChatActions, hasExplicitSymptomReportIntent } from "../dist/chatTurns.js";
+import {
+  applyChatActions,
+  hasExplicitSymptomReportIntent,
+  hasExplicitSymptomResolveIntent,
+} from "../dist/chatTurns.js";
 import { buildMcpServer } from "../dist/mcp.js";
 import { trainingLogRouter } from "../dist/routes/training-log.js";
 import { db, repo, resetTables } from "./_seed.js";
@@ -645,10 +649,12 @@ test("chat only records a symptom behind explicit athlete write intent", () => {
   ]) {
     assert.equal(hasExplicitSymptomReportIntent(message), false, message);
   }
-  assert.equal(
-    normalizeChatAction({ type: "report_training_symptom", area_text: "x".repeat(301) }),
-    null
-  );
+  // Chat's input bound matches the MCP symptom tools (120); the repo still
+  // normalizes to a 60-char label. Chat must not be the loose surface.
+  assert.equal(normalizeChatAction({ type: "report_training_symptom", area_text: "x".repeat(121) }), null);
+  assert.equal(normalizeChatAction({ type: "resolve_training_symptom", area_text: "x".repeat(121) }), null);
+  assert.ok(normalizeChatAction({ type: "report_training_symptom", area_text: "x".repeat(120) }));
+  assert.ok(normalizeChatAction({ type: "resolve_training_symptom", area_text: "x".repeat(120) }));
 
   const inferred = applyChatActions(
     { actions: [{ type: "report_training_symptom", area_text: "left knee", onset_on: "2035-03-01" }] },
@@ -699,13 +705,20 @@ test("client lifecycle keeps athlete text escaped and uses evidence/recheck lang
   assert.match(feedback, /data-symptom-resolve/);
   assert.match(feedback, /data-symptom-recur/);
   assert.match(feedback, /Pain &amp; injury/);
-  assert.match(feedback, /Nothing active in Cairn\./);
+  assert.match(feedback, /No active notes\./);
+  // An imported note is framed as unconfirmed history, not as an ordinary watch.
+  assert.match(feedback, /symptom-watching symptom-unconfirmed">Older note · unconfirmed/);
+  assert.match(feedback, /Imported from an older session note/);
+  // Resolved history says WHEN it closed.
+  assert.match(feedback, /symptom-resolved-on">closed \$\{escHtml\(humanDate\(closed\)\)\}/);
+  // The panel is reachable with no logged sets (rest day / before the first set).
+  assert.match(feedback, /options\.hasLoggedSets === false/);
   assert.match(feedback, /symptom-watching">Watching/);
   assert.match(feedback, /<details class="symptom-history">/);
   assert.match(feedback, /data-report-symptom-toggle aria-expanded="false"/);
   assert.match(feedback, /data-report-symptom-cancel/);
   assert.match(feedback, /id="symptom-report-composer" hidden/);
-  const resolvedRow = /if \(!active\) \{([\s\S]*?)\n    \}\n    return `<article class="symptom-active-row/.exec(feedback)?.[1] ?? "";
+  const resolvedRow = /if \(!active\) \{([\s\S]*?)\n    \}\n[\s\S]*?return `<article class="symptom-active-row/.exec(feedback)?.[1] ?? "";
   assert.match(resolvedRow, /data-symptom-recur-toggle/);
   assert.match(resolvedRow, /data-symptom-recur/);
   assert.match(resolvedRow, /class="symptom-recur-composer"[\s\S]*hidden/);
@@ -720,4 +733,98 @@ test("client lifecycle keeps athlete text escaped and uses evidence/recheck lang
   assert.match(feedback, /\/training-symptoms\?on=\$\{viewedDate\}&include_resolved=1/);
   assert.match(status, /data-symptom-lifecycle/);
   assert.doesNotMatch(feedback, /\b(?:cleared|clearance|diagnos(?:e|is))\b/i);
+});
+
+// One relevance question for a whole session render, so no surface needs a client
+// copy of the pain→movement map and no card asks on its own.
+test("REST answers movement relevance for a whole session in one read, without writing", async () => {
+  repo.findOrCreateExercise("Reverse Lunge", "quads");
+  const knee = repo.reportTrainingSymptom({ area_text: "outside of left knee", onset_on: "2035-05-01" });
+  const shoulder = repo.reportTrainingSymptom({ area_text: "right shoulder", onset_on: "2035-05-01" });
+  const healed = repo.reportTrainingSymptom({ area_text: "left ankle", onset_on: "2035-05-01" });
+  repo.resolveTrainingSymptom(healed.id, "2035-05-02");
+  // An imported legacy row is absence of evidence and must never claim a movement.
+  db.prepare(
+    `INSERT INTO training_symptom_events
+      (source_kind, area_text, status, onset_on, last_reported_on, legacy_unconfirmed)
+     VALUES ('legacy_session_feedback', 'left knee', 'active', '2035-05-01', '2035-05-01', 1)`
+  ).run();
+
+  const batch = await routerRequest("GET", "/training-symptoms", {
+    query: { on: "2035-05-03", seed_legacy: "0", movements: ["Back Squat", "Bench Press", "Reverse Lunge"] },
+  });
+  assert.equal(batch.status, 200);
+  assert.deepEqual(
+    batch.body.map((event) => [event.id, event.relevant_movements]).sort((a, b) => a[0] - b[0]),
+    [
+      [knee.id, ["Back Squat", "Reverse Lunge"]],
+      [shoulder.id, ["Bench Press"]],
+    ]
+  );
+  assert.equal(
+    batch.body.every((event) => event.legacy_unconfirmed === false),
+    true
+  );
+
+  // A name with no exercises row is answered, not rejected (the single-movement
+  // lookup deliberately still insists on a real exercise).
+  const unknown = await routerRequest("GET", "/training-symptoms", {
+    query: { on: "2035-05-03", movements: ["Nonexistent Movement"] },
+  });
+  assert.equal(unknown.status, 200);
+  assert.deepEqual(unknown.body, []);
+  const strict = await routerRequest("GET", "/training-symptoms", {
+    query: { on: "2035-05-03", movement: "Nonexistent Movement" },
+  });
+  assert.equal(strict.status, 400);
+
+  // A render read must not trigger the one-time legacy import as a side effect.
+  db.prepare(`INSERT INTO sessions (date, joint_pain) VALUES ('2035-05-01', 'sore left elbow')`).run();
+  const before = db.prepare(`SELECT COUNT(*) AS n FROM training_symptom_events`).get().n;
+  await routerRequest("GET", "/training-symptoms", {
+    query: { on: "2035-05-03", seed_legacy: "0", movements: ["Back Squat"] },
+  });
+  await routerRequest("GET", "/training-symptoms", {
+    query: { on: "2035-05-03", seed_legacy: "0", movement: "Back Squat" },
+  });
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM training_symptom_events`).get().n, before);
+  await routerRequest("GET", "/training-symptoms", { query: { on: "2035-05-03" } });
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM training_symptom_events`).get().n, before + 1);
+});
+
+// Chat parity: it could OPEN a pain note but never close one, so the only way out
+// of the loop was to leave the conversation and open the app.
+test("chat closes a pain note only when the athlete says so, and only the area they named", () => {
+  assert.equal(hasExplicitSymptomResolveIntent("My knee feels alright lately."), false);
+  assert.equal(hasExplicitSymptomResolveIntent("Is my knee note resolved?"), false);
+  assert.equal(hasExplicitSymptomResolveIntent("Don't close the knee note yet."), false);
+  assert.equal(hasExplicitSymptomResolveIntent("Close the knee note, it's fine now."), true);
+  assert.equal(hasExplicitSymptomResolveIntent("My left knee is healed, mark it resolved."), true);
+  assert.equal(hasExplicitSymptomResolveIntent("The shoulder pain is gone."), true);
+
+  repo.reportTrainingSymptom({ area_text: "left knee", onset_on: "2035-04-01" });
+  repo.reportTrainingSymptom({ area_text: "right shoulder", onset_on: "2035-04-01" });
+
+  const inferred = applyChatActions(
+    { actions: [{ type: "resolve_training_symptom", area_text: "left knee", on: "2035-04-05" }] },
+    { agent: "stub", message: "Squats felt great today." }
+  );
+  assert.deepEqual(inferred.applied, [], "a good session is not permission to close a note");
+  assert.equal(repo.listTrainingSymptoms({ on: "2035-04-05" }).length, 2);
+
+  const explicit = applyChatActions(
+    { actions: [{ type: "resolve_training_symptom", area_text: "left knee", on: "2035-04-05" }] },
+    { agent: "stub", message: "My left knee is healed — mark it resolved." }
+  );
+  assert.equal(explicit.applied[0].type, "resolve_training_symptom");
+  assert.equal(explicit.applied[0].result.status, "resolved");
+  const open = repo.listTrainingSymptoms({ on: "2035-04-05" });
+  assert.equal(open.length, 1, "the area they did not name stays open");
+  assert.match(open[0].area_text, /shoulder/i);
+
+  const missing = applyChatActions(
+    { actions: [{ type: "resolve_training_symptom", area_text: "left elbow", on: "2035-04-06" }] },
+    { agent: "stub", message: "My left elbow is healed — close that note." }
+  );
+  assert.match(String(missing.applied[0].result.error), /no open pain note/);
 });

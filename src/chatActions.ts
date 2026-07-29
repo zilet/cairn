@@ -8,6 +8,11 @@ import { HEALTH_DOCUMENT_KINDS, normalizeHealthDocumentKind, type HealthDocument
 
 type ChatActionRecord = Record<string, unknown>;
 
+// The same input bound the MCP symptom tools declare. The repo normalizes an area
+// to a 60-char label regardless; this is the "that is prose, not a place" line, and
+// it has to match across surfaces or chat becomes the loose one.
+const SYMPTOM_AREA_INPUT_MAX = 120;
+
 export const CHAT_ACTION_TYPES = [
   "log_activity",
   "log_set",
@@ -29,6 +34,7 @@ export const CHAT_ACTION_TYPES = [
   "log_supplement",
   "log_measurement",
   "report_training_symptom",
+  "resolve_training_symptom",
   "revert_decision",
 ] as const;
 
@@ -215,6 +221,12 @@ export interface ReportTrainingSymptomAction extends ChatActionBase {
   onset_on?: unknown;
 }
 
+export interface ResolveTrainingSymptomAction extends ChatActionBase {
+  type: "resolve_training_symptom";
+  area_text: string;
+  on?: unknown;
+}
+
 export interface RevertDecisionAction extends ChatActionBase {
   type: "revert_decision";
   id: number | string;
@@ -242,6 +254,7 @@ export type ChatAction =
   | LogSupplementAction
   | LogMeasurementAction
   | ReportTrainingSymptomAction
+  | ResolveTrainingSymptomAction
   | RevertDecisionAction;
 
 const CHAT_ACTION_TYPE_SET = new Set<string>(CHAT_ACTION_TYPES);
@@ -475,6 +488,14 @@ export const CHAT_ACTION_PROMPT_SPECS = {
       `Use report_training_symptom ONLY when the athlete explicitly asks Cairn to log, record, note, or track a training pain/ache area. A question, general discussion, or coach inference MUST NOT create a symptom record. This records what they said; never diagnose it or mark it resolved.`,
     ],
   },
+  resolve_training_symptom: {
+    type: "resolve_training_symptom",
+    applyMode: "immediate",
+    shape: `{ "type": "resolve_training_symptom", "area_text": "left knee", "on": "YYYY-MM-DD|omit" }`,
+    guidance: [
+      `Use resolve_training_symptom ONLY when the athlete tells you an open pain note is done — "my knee's fine now, close that", "the shoulder's healed". Name the AREA they named; the server closes the open record for that place and does nothing when none matches. Closing is their call: never infer it from a good session, a missing complaint, or your own read, and never diagnose. If they say it came back instead, that is not this action.`,
+    ],
+  },
   revert_decision: {
     type: "revert_decision",
     applyMode: "immediate",
@@ -645,8 +666,12 @@ export function normalizeChatAction(value: unknown): ChatAction | null {
         ? { ...value, type: "log_measurement" }
         : null;
     case "report_training_symptom":
-      return nonBlank(value.area_text) && value.area_text.trim().length <= 300
+      return nonBlank(value.area_text) && value.area_text.trim().length <= SYMPTOM_AREA_INPUT_MAX
         ? { ...value, type: "report_training_symptom", area_text: value.area_text.trim() }
+        : null;
+    case "resolve_training_symptom":
+      return nonBlank(value.area_text) && value.area_text.trim().length <= SYMPTOM_AREA_INPUT_MAX
+        ? { ...value, type: "resolve_training_symptom", area_text: value.area_text.trim() }
         : null;
     case "revert_decision":
       return finiteId(value.id) ? { ...value, type: "revert_decision", id: value.id } : null;

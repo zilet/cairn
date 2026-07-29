@@ -23,6 +23,9 @@ import {
   programAdjustments,
   recentMuscleLoad,
 } from "../dist/repo/progression.js";
+import { progressionVoicePhrases } from "../dist/repo/progression-voice.js";
+import { violatesReadingGrammar } from "../dist/repo/day-read.js";
+import { currentUnderfuelingRead } from "../dist/repo/underfueling-snapshot.js";
 import { registerProgramTools } from "../dist/surfaces/mcp/program.js";
 import { localDateISO } from "../dist/repo/shared.js";
 
@@ -299,6 +302,48 @@ test("progression GROUNDS in logged reality — a stale plan target never strand
   assert.ok((p.suggested.weight ?? 0) >= 50, "the next step builds from ~50, never crawls up from 27");
 });
 
+// A NULL plan target used to be excluded from the "behind reality" read entirely
+// (`planWeight != null`), so the whole re-grounding path was unreachable for
+// exactly the lifts that need it most: a movement rotated in with no target, then
+// loaded for real, stayed NULL forever while the catch-up prose sat dead.
+test("a plan slot with NO target and real logged history re-grounds onto reality", () => {
+  makeExercise("Incline Bench Press", { muscle_group: "chest" });
+  planWith(1, { exercise: "Incline Bench Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: null, focus: "Push" });
+  // Real work at 95, but grinding (RIR 1) — so it is a HOLD, and the hold still
+  // has to catch the plan up to the number the athlete is actually handling.
+  for (const d of [8, 2])
+    for (let s = 1; s <= 3; s++) logSet("Incline Bench Press", isoDaysAgo(d), { weight: 95, reps: 9, rir: 1, setNum: s });
+
+  const p = nextPrescription("Incline Bench Press");
+  assert.equal(p.action, "hold");
+  assert.equal(p.reground, true, "an empty plan target with real history reads as behind");
+  assert.equal(p.suggested.weight, 95, "the suggestion is the real working weight");
+  assert.match(p.why, /95 lb/, "the why reports the real number");
+  assert.doesNotMatch(p.why, /plan was behind/i, "an empty slot is a different fact from a lighter one");
+
+  // …and the catch-up actually LANDS: a re-grounding hold is a real change, so it
+  // flows through the ordinary propose→apply path instead of dying as prose.
+  const prop = buildProgressionProposal(1);
+  assert.equal(prop.ok, true, "the re-grounding hold is proposed, not dropped as 'no change'");
+  const change = prop.proposal.parsed.changes.find((c) => c.exercise === "Incline Bench Press");
+  assert.ok(change, "the re-ground lands as a target change");
+  assert.equal(change.target_weight, 95);
+  assert.equal(repo.applyProposal(prop.proposal.id).ok, true);
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 95, "the plan target caught up");
+});
+
+test("a plan target that already matches reality proposes nothing", () => {
+  makeExercise("Incline Bench Press", { muscle_group: "chest" });
+  planWith(1, { exercise: "Incline Bench Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 95, focus: "Push" });
+  for (const d of [8, 2])
+    for (let s = 1; s <= 3; s++) logSet("Incline Bench Press", isoDaysAgo(d), { weight: 95, reps: 9, rir: 1, setNum: s });
+
+  const p = nextPrescription("Incline Bench Press");
+  assert.equal(p.action, "hold");
+  assert.ok(!p.reground, "plan and reality already agree");
+  assert.equal(buildProgressionProposal(1).ok, false, "an ordinary hold is still no change");
+});
+
 test("timed lifts progress in SECONDS, never load", () => {
   makeExercise("Dead Hang", { muscle_group: "forearms", mode: "timed" });
   planWith(1, { exercise: "Dead Hang", sets: 3, target_seconds: 45, focus: "Grip" });
@@ -444,6 +489,56 @@ test("multi-channel execution strain holds an earned progression in the actual n
   assert.equal(prescription.suggested.weight, 185);
   assert.equal(prescription.autoregulated, true);
   assert.match(prescription.why, /fuel|meal pattern|complete/i);
+
+  // …but in the TRAINING register. The nutrition read's own sentence is written for
+  // the nutrition surfaces; concatenating it here is what put "A recent fuel
+  // correction is still inside its seven-day settling window, so no second calorie
+  // move is made." on a bench-press card.
+  const read = currentUnderfuelingRead(localDateISO());
+  assert.ok(read.action.line.length > 0, "the fuel read still carries its own line for its own surfaces");
+  assert.ok(!prescription.why.includes(read.action.line), "the nutrition sentence never reaches a lift card");
+  assert.doesNotMatch(
+    prescription.why,
+    /calorie|kcal|carb-forward|settling window|maintenance|fuel step|recovery package/i,
+    "no calorie mechanics in a strength why"
+  );
+});
+
+// Every verdict branch used to set ONE hard literal, so two lifts sitting in the
+// same state printed the identical sentence on one screen. Distinctness here is a
+// property of the exercise keys (the day shifts every phrasing by the same step),
+// so this is deterministic rather than date-dependent.
+test("two lifts in the same state on one day do not print the same sentence", () => {
+  const names = ["Barbell Bench Press", "Overhead Press", "Barbell Row", "Back Squat", "Lateral Raise"];
+  for (const name of names) makeExercise(name, { muscle_group: "chest" });
+  repo.savePlanDay(1, "Full", "Full", names.map((exercise) => ({ exercise, sets: 3, rep_low: 8, rep_high: 10, target_weight: 100 })));
+
+  // Nothing logged for any of them → every lift lands in the same branch.
+  const whys = planDayProgression(1).map((p) => p.why);
+  assert.equal(whys.length, names.length);
+  assert.ok(new Set(whys).size > 1, `the same verdict reads differently per lift, got ${JSON.stringify(whys)}`);
+});
+
+test("one lift's sentence is stable within a day and rotates across days", () => {
+  makeExercise("Barbell Bench Press", { muscle_group: "chest" });
+  planWith(1, { exercise: "Barbell Bench Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 100, focus: "Push" });
+
+  const today = nextPrescription("Barbell Bench Press", undefined, { date: "2026-07-29" }).why;
+  const again = nextPrescription("Barbell Bench Press", undefined, { date: "2026-07-29" }).why;
+  const tomorrow = nextPrescription("Barbell Bench Press", undefined, { date: "2026-07-30" }).why;
+  assert.equal(today, again, "a card must not change its words on a re-render");
+  assert.notEqual(today, tomorrow, "consecutive days always differ");
+});
+
+test("the whole progression vocabulary holds the reading grammar", () => {
+  const phrases = progressionVoicePhrases();
+  assert.ok(phrases.length >= 100, "the vocabulary is enumerable");
+  for (const phrase of phrases) {
+    assert.equal(violatesReadingGrammar(phrase), null, `reading grammar: ${phrase}`);
+    // A lift card speaks about training. Calorie mechanics belong to the nutrition
+    // surfaces that already carry them.
+    assert.doesNotMatch(phrase, /calorie|kcal|carb-forward|settling window|recovery package/i, phrase);
+  }
 });
 
 test("MCP apply_progression mirrors REST proposal shape and supersedes stale same-day drafts", async () => {

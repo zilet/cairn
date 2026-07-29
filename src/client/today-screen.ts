@@ -270,6 +270,9 @@ async function renderToday(opts: any = {}) {
   } // keep the emphasis globals warm for Progress/Today/Plan
   // exercise → mode map ('reps'|'timed'), used by exCard + the add-exercise flow
   todayState.exModes = Object.fromEntries((exercises || []).map((e: any) => [e.name, e.mode || "reps"]));
+  // Movement names an active symptom actually loads today (server-resolved once in
+  // preparePlanSession) — the only thing that earns a per-card Movement check.
+  todayState.symptomMovements = prep.symptomMovements;
   const curW = stats.weight_lb ?? (profile && profile.weight_lb != null ? profile.weight_lb : null);
   // Compass strip: adherence to this week's plan + weight-trend pace vs the goal.
   // It is trajectory only and stays inside the collapsed "This week" fold.
@@ -1247,6 +1250,7 @@ async function renderSession(opts: any = {}): Promise<void> {
     setEnduranceGoalSet(!!profile.endurance_goal_json);
   }
   todayState.exModes = Object.fromEntries(exercises.map((e: any) => [e.name, e.mode || "reps"]));
+  todayState.symptomMovements = prep.symptomMovements;
 
   const day = prep.day;
   const dailySession = prep.dailySession as import("../contracts/client-api.js").ClientDailySessionComposition | null;

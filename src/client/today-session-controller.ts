@@ -329,7 +329,13 @@ type TodaySessionSurfaceOptions = ClientTodaySessionSurfaceOptions;
       const exercise = decodeURIComponent(row.dataset.ex || "");
       CairnTodaySessionSetModel.wireLastSetLine(row, lastSets[exercise] ?? null, deps);
     });
-    if (options.hasLoggedSets) CairnTodaySessionFeedback.renderFeedback(deps.root.querySelector("#feedbackSlot"), session, deps);
+    // The Pain & injury panel is the ONLY surface that can close a note, so gating
+    // the whole feedback slot on logged sets made it unreachable exactly when it is
+    // wanted — on a rest day, or before the first set. With no sets there is no
+    // session to rate, so the panel renders alone and the feel scales stay away.
+    CairnTodaySessionFeedback.renderFeedback(deps.root.querySelector("#feedbackSlot"), session, deps, {
+      hasLoggedSets: !!options.hasLoggedSets,
+    });
   }
 
   const CAIRN_TODAY_SESSION_CONTROLLER = {

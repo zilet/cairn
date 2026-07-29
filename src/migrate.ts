@@ -15,6 +15,92 @@ function addColumn(db: DatabaseSync, table: string, colDef: string) {
   }
 }
 
+function hasTable(db: DatabaseSync, name: string): boolean {
+  return !!db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(name);
+}
+
+// ---- v82 data repair: fossilized plan_items.note / daily_session_compositions.why
+// prose from three retired code generations (found live via direct DB inspection,
+// never inferred from code — see the round's audit notes). Every branch matches a
+// PRECISE, previously-verified shape and is a no-op on a note it doesn't recognize
+// — nothing here blanks a note it can't confidently identify. Safe to run twice:
+// each guard tests the CURRENT shape of the text before touching it, so a row
+// already repaired (by an earlier pass of this same migration, or in the ordinary
+// course by the now-fixed addCoachAdjustmentNote in repo/plan.ts) simply fails
+// every guard on the second pass.
+
+// (a) Gen-1's doubled rotation clause: the exercise name and the "start light"
+// instruction each appear twice, one full clause nested inside the other. `\1`
+// is a literal backreference to whatever the first capture matched, so this is
+// safe even though exercise names are free text.
+const GEN1_DOUBLED_ROTATION_NOTE =
+  /^Rotated in for (.+?) — Rotate a same-pattern variation in for \1\. — start light, log your actual working weight\.$/;
+
+// (c) A stacked, frozen "moment" narrative (an old progression-hold layer) that
+// outlived the moment it described — it never gets superseded because nothing
+// re-triggers that exact branch, so it just sits there indefinitely.
+const FROZEN_PROGRESSION_COACH_NOTE =
+  "Coach note: Strength has been slipping — back the load off about 10% and let it rebuild on a clean run.";
+
+// (b) A note clamped mid-word at exactly the old 500-char column budget (the bug
+// fixed in addCoachAdjustmentNote). Trim back to the last complete sentence.
+function trimToLastSentence(text: string): string {
+  const lastPunct = Math.max(text.lastIndexOf("."), text.lastIndexOf("!"), text.lastIndexOf("?"));
+  if (lastPunct <= 0) return text; // no sentence boundary to trim back to — leave it alone
+  return text.slice(0, lastPunct + 1);
+}
+
+function repairPlanItemNote(note: string): string | null {
+  if (note === FROZEN_PROGRESSION_COACH_NOTE) return null; // no base note beneath it
+  const frozenLayer = `\n${FROZEN_PROGRESSION_COACH_NOTE}`;
+  if (note.endsWith(frozenLayer)) return note.slice(0, -frozenLayer.length);
+
+  const doubled = note.match(GEN1_DOUBLED_ROTATION_NOTE);
+  if (doubled) return `Rotated in for ${doubled[1]} — start light, log your actual working value.`;
+
+  if (note.length === 500 && !/[.!?]$/.test(note)) {
+    const trimmed = trimToLastSentence(note);
+    if (trimmed !== note) return trimmed;
+  }
+
+  return note;
+}
+
+function repairPlanItemNotes(db: DatabaseSync) {
+  if (!hasTable(db, "plan_items")) return;
+  const rows = db.prepare(`SELECT id, note FROM plan_items WHERE note IS NOT NULL`).all() as Array<{
+    id: number;
+    note: string;
+  }>;
+  const update = db.prepare(`UPDATE plan_items SET note = ? WHERE id = ?`);
+  for (const row of rows) {
+    const repaired = repairPlanItemNote(row.note);
+    if (repaired !== row.note) update.run(repaired, row.id);
+  }
+}
+
+// Same machine-register bug, one layer up: the session header's `why`. These two
+// exact literals are what planSnapshot() (repo/adaptive-session.ts) used to write
+// before this round — kept here as plain strings (not imported) so this migration
+// never depends on a live repo module's current wording. The replacements are
+// index 0 of that file's SESSION_WHY_OVERRIDE / SESSION_WHY_ROTATION variant sets;
+// keep these three in sync if that wording changes again.
+const LEGACY_OVERRIDE_WHY = /^Explicit plan-day override: Day \d+\.$/;
+const LEGACY_ADAPTIVE_WHY = /^Adaptive plan selection for \d{4}-\d{2}-\d{2}\.$/;
+
+function repairSessionCompositionWhy(db: DatabaseSync) {
+  if (!hasTable(db, "daily_session_compositions")) return;
+  const rows = db.prepare(`SELECT id, why FROM daily_session_compositions WHERE why IS NOT NULL`).all() as Array<{
+    id: number;
+    why: string;
+  }>;
+  const update = db.prepare(`UPDATE daily_session_compositions SET why = ? WHERE id = ?`);
+  for (const row of rows) {
+    if (LEGACY_OVERRIDE_WHY.test(row.why)) update.run("Your call today.", row.id);
+    else if (LEGACY_ADAPTIVE_WHY.test(row.why)) update.run("Today's regular spot in the rotation.", row.id);
+  }
+}
+
 export const MIGRATIONS: Migration[] = [
   { version: 1, name: "exercise-cues", up: (db) => addColumn(db, "exercises", "cues TEXT") },
   { version: 2, name: "plan-item-warmups", up: (db) => addColumn(db, "plan_items", "warmup_sets INTEGER") },
@@ -1475,6 +1561,17 @@ export const MIGRATIONS: Migration[] = [
       // Durable home base only. Temporary travel remains a dated context_event
       // with meta.location and never overwrites this profile identity.
       addColumn(db, "profile", "home_location TEXT");
+    },
+  },
+  {
+    version: 82,
+    name: "plan-item-note-prose-repair",
+    // Pure data repair — no schema change. See the repair functions above for
+    // exactly what each of the three fossil patterns looked like and why each
+    // guard is precise rather than a blanket clamp/strip.
+    up: (db) => {
+      repairPlanItemNotes(db);
+      repairSessionCompositionWhy(db);
     },
   },
 ];

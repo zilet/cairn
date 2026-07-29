@@ -696,6 +696,9 @@ test("a new-exercise baseline cue is persisted exactly once", () => {
 test("athlete-facing decision rationale and Undo identifiers remain escaped", () => {
   const source = readFileSync(new URL("../src/client/today-cards-client.ts", import.meta.url), "utf8");
   assert.match(source, /escHtml\(item\.brain_change_summary/);
-  assert.match(source, /escHtml\(item\.brain_change_reason \|\| item\.note\)/);
+  // `note` is item.note after the card retires a fossilized "start light" clause;
+  // the fallback itself and its escaping are unchanged.
+  assert.match(source, /const note = todayCardsCleanNote\(item\.note,/);
+  assert.match(source, /escHtml\(item\.brain_change_reason \|\| note\)/);
   assert.match(source, /escAttr\(item\.brain_decision_id\)/);
 });

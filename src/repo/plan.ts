@@ -1,7 +1,9 @@
 import { db } from "../db.js";
 import { emitBrainEvent } from "../brainEvents.js";
+import { pickDayVariant } from "./brain/day-read-rules.js";
 import { constraintLimitsLoad, movementKey, normalizeExerciseName, normalizedExerciseKey } from "./exercise-canon.js";
 import { findExercise, findOrCreateExercise, recentWorkingSeconds, recentWorkingWeight } from "./exercises.js";
+import { relatedLiftStart } from "./related-lift.js";
 import { invalidateDayRead } from "./intelligence.js";
 import { localDateISO } from "./shared.js";
 import { bumpTrainingDataVersion } from "./training-cache.js";
@@ -615,14 +617,56 @@ function insertPlanItem(row: {
     );
 }
 
+const COACH_NOTE_PREFIX = "Coach note: ";
+const PLAN_ITEM_NOTE_LIMIT = 500;
+
+// Cut `text` down to `maxLen` without ever landing mid-word: prefer the last
+// complete sentence (a `.`/`!`/`?` followed by whitespace or the string's end),
+// and fall back to the last whole word when there is no sentence break in the
+// budget at all.
+function truncateAtSentenceBoundary(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text;
+  const slice = text.slice(0, maxLen);
+  const sentence = slice.match(/^[\s\S]*[.!?](?=\s|$)/);
+  if (sentence && sentence[0].trim()) return sentence[0].trimEnd();
+  const lastSpace = slice.lastIndexOf(" ");
+  return (lastSpace > 0 ? slice.slice(0, lastSpace) : slice).trimEnd();
+}
+
+// A stored note is at most two layers: the item's own base note (manual, or
+// none) and the most recent "Coach note: ..." layer. Strip the coach layer
+// (and anything after it — old stacked layers from before this fix) to get
+// back the stable base the next adjustment should be appended to.
+function stripCoachNoteLayer(note: string): string {
+  const marker = note.indexOf(`\n${COACH_NOTE_PREFIX}`);
+  if (marker >= 0) return note.slice(0, marker).trim();
+  if (note.startsWith(COACH_NOTE_PREFIX)) return "";
+  return note.trim();
+}
+
+function currentCoachNoteLayer(note: string): string | null {
+  const marker = note.indexOf(`\n${COACH_NOTE_PREFIX}`);
+  if (marker >= 0) return note.slice(marker + 1);
+  if (note.startsWith(COACH_NOTE_PREFIX)) return note;
+  return null;
+}
+
 // Preserve the coach's "why" at the exact exercise it changed. A plan item can
 // already carry a useful manual note, so a background adjustment appends a compact
 // rationale instead of overwriting it. Re-applying the same reason is idempotent.
+// A NEW coach note REPLACES the previous coach-note layer rather than stacking on
+// top of it — the note field is a stable prescription fact, not a log, so only the
+// current rationale needs to survive. That also keeps the field bounded: without
+// it, every adjustment call grew the note by another layer forever, and the final
+// join eventually pushed the total past the 500-char column budget, silently
+// truncating whatever was left mid-word (never the newest note's own fault).
 function addCoachAdjustmentNote(planDayId: number, exerciseName: string, reason: unknown): number {
-  const clean = String(reason ?? "")
-    .trim()
-    .replace(/\s+/g, " ")
-    .slice(0, 420);
+  const clean = truncateAtSentenceBoundary(
+    String(reason ?? "")
+      .trim()
+      .replace(/\s+/g, " "),
+    420
+  );
   if (!clean) return 0;
   const row = db
     .prepare(
@@ -631,10 +675,13 @@ function addCoachAdjustmentNote(planDayId: number, exerciseName: string, reason:
     )
     .get(planDayId, exerciseName) as any;
   if (!row) return 0;
-  const adjustment = `Coach note: ${clean}`;
+  const adjustment = `${COACH_NOTE_PREFIX}${clean}`;
   const existing = String(row.note ?? "").trim();
-  if (existing.includes(adjustment)) return 0;
-  const note = [existing, adjustment].filter(Boolean).join("\n").slice(0, 500);
+  if (currentCoachNoteLayer(existing) === adjustment) return 0;
+  const base = stripCoachNoteLayer(existing);
+  const budget = PLAN_ITEM_NOTE_LIMIT - (base ? 1 : 0) - adjustment.length;
+  const boundedBase = base && budget > 0 ? truncateAtSentenceBoundary(base, budget) : "";
+  const note = [boundedBase, adjustment].filter(Boolean).join("\n");
   return Number(db.prepare(`UPDATE plan_items SET note = ? WHERE id = ?`).run(note || null, row.id).changes);
 }
 
@@ -1034,13 +1081,120 @@ export function applyPlanChange(
   };
 }
 
+// ---- what a movement ENTERING the plan starts at, and how that is said -------
+// GROUNDING IS SERVER CODE, NOT MODEL JUDGEMENT. Every way a movement enters the
+// plan — the agent's swap proposal, the deterministic vary/introduce swap built in
+// progression.ts, and the append-instead-of-dead-end path when nothing on the plan
+// trains it — lands on one of the two writers below, and only the agent path ever
+// carried a target. So a lift with 95 lb × 10 × 3 in its logs one day earlier
+// arrived with a NULL target and "start light" under it. The tiers run for all of
+// them:
+//   1. an incoming target that was supplied and survived the clamp,
+//   2. the incoming movement's OWN recent working history (never the outgoing
+//      lift's load — that never transfers),
+//   3. a conservative starting idea from a RELATED lift the athlete does train
+//      (see related-lift.ts), phrased as an idea rather than a settled number,
+//   4. the baseline-establishing "start light, log your actual working value."
+// A load-limiting constraint note stops at tier 4 by design: the note is the
+// authority and the athlete logs a tolerated value first.
+type SwapGrounding =
+  | { kind: "direct"; label: string }
+  | { kind: "related"; label: string; source: string }
+  | null;
+
+const GROUNDED_START_NOTES: readonly [(lead: string, load: string) => string, ...((lead: string, load: string) => string)[]] = [
+  (lead, load) => `${lead} — picking up from your last working ${load}.`,
+  (lead, load) => `${lead} — starting at ${load}, where you left this one.`,
+  (lead, load) => `${lead} — your own logs put this at ${load}, so that's the start.`,
+];
+
+const RELATED_START_NOTES: readonly [
+  (lead: string, source: string, load: string) => string,
+  ...((lead: string, source: string, load: string) => string)[],
+] = [
+  (lead, source, load) =>
+    `${lead} — nothing logged on this one yet; your ${source} suggests starting around ${load}. Log what you actually lift.`,
+  (lead, source, load) =>
+    `${lead} — no history here yet, but ${source} puts a sensible start near ${load}. Log the real number.`,
+  (lead, source, load) =>
+    `${lead} — untested so far; going off your ${source}, somewhere around ${load} is a fair start. Log what it really is.`,
+];
+
+function swapLoadLabel(weight: number): string {
+  return weight < 0 ? `${Math.abs(weight)} lb assist` : `${weight} lb`;
+}
+
+// Tiers 2 and 3 for ANY movement entering the plan. Its own logged reality first,
+// then a conservative idea off a related lift; a load-limiting note skips both.
+// Timed work reads seconds and is never anchored to a sibling movement (a hold
+// belongs to its exact grip — see recentWorkingSeconds).
+function groundIncomingMovement(ex: {
+  name: string;
+  mode?: string | null;
+  constraint_note?: string | null;
+}): { target_weight: number | null; target_seconds: number | null; grounding: SwapGrounding } {
+  const none = { target_weight: null, target_seconds: null, grounding: null };
+  if (constraintLimitsLoad(ex.constraint_note)) return none;
+  if (ex.mode === "timed") {
+    const ownSeconds = recentWorkingSeconds(ex.name);
+    if (ownSeconds == null) return none;
+    const seconds = Math.round(ownSeconds);
+    return { target_weight: null, target_seconds: seconds, grounding: { kind: "direct", label: `${seconds}s` } };
+  }
+  const ownWeight = recentWorkingWeight(ex.name);
+  if (ownWeight != null)
+    return {
+      target_weight: ownWeight,
+      target_seconds: null,
+      grounding: { kind: "direct", label: swapLoadLabel(ownWeight) },
+    };
+  // TIER 3 IS ADVISORY AND IS NEVER STORED. The related-lift number is a starting
+  // idea, and a stored idea stops being one: progression grounds every future step
+  // at `Math.max(planWeight, recentWorkingWeight)`, so an estimate written into
+  // plan_items.target_weight becomes a floor the athlete cannot log their way below
+  // — 185 × 0.80 = 145 on someone who really inclines 135 would survive every
+  // subsequent session, keep planBehind false, and even deload off the guess. So the
+  // target stays NULL (exactly the pre-grounding behavior, which fell through to
+  // real logged weight) and only the GROUNDING travels, to carry the idea in the
+  // note. The number itself reaches the athlete through the live prescription
+  // instead — see the no-history branch of repsPrescription — where the first
+  // logged set replaces it outright.
+  const related = relatedLiftStart(ex.name);
+  if (related)
+    return {
+      target_weight: null,
+      target_seconds: null,
+      grounding: { kind: "related", label: swapLoadLabel(related.weight), source: related.source_exercise },
+    };
+  return none;
+}
+
+// `lead` is the stable fact about HOW the movement got here ("Rotated in for Bench
+// Press", "Added as a fresh variation for Hack Squat"); this adds exactly one
+// starting cue in the register the grounding earned. The rationale for the change
+// itself stays in the proposal and decision ledger — the reusable plan note never
+// repeats it.
+function movementStartNote(
+  lead: string,
+  exercise: string,
+  grounding: SwapGrounding,
+  hasStoredPrescription: boolean
+): string {
+  const date = localDateISO();
+  const key = (code: string) => `${code}:${normalizedExerciseKey(exercise)}`;
+  if (grounding?.kind === "direct")
+    return pickDayVariant(GROUNDED_START_NOTES, date, key("movement_grounded"))(lead, grounding.label);
+  if (grounding?.kind === "related")
+    return pickDayVariant(RELATED_START_NOTES, date, key("movement_related"))(lead, grounding.source, grounding.label);
+  return `${lead}${hasStoredPrescription ? "." : " — start light, log your actual working value."}`;
+}
+
 // Replace one exercise IN PLACE on a day (the swap/rotate intent). Finds the plan
 // item for `from` (exact name, then a normalized-key drift match), points it at the
-// resolved `to` exercise, keeps the slot (position/sets/reps/superset), and starts the
-// new movement from its own exact history when available; load never transfers from
-// the outgoing variation. Without that anchor it resets to "start light, log actual".
-// Throws when `from` isn't on the day (so applyProposal reports it honestly) or `to`
-// is missing.
+// resolved `to` exercise, keeps the slot (position/sets/reps/superset), and grounds
+// the new movement through the tiers above; load never transfers from the outgoing
+// variation. Throws when `from` isn't on the day (so applyProposal reports it
+// honestly) or `to` is missing.
 function applyPlanSwap(
   dayId: number,
   dayNumber: number,
@@ -1110,9 +1264,11 @@ function applyPlanSwap(
   let targetSeconds =
     change.target_seconds != null && Number.isFinite(Number(change.target_seconds))
       ? Number(change.target_seconds)
-      : timed && !opts.clamp
-        ? (match.target_seconds ?? null)
-        : null;
+      : null;
+  // The slot's existing duration is the LAST resort for a timed rotation — the
+  // incoming hold's own logged times (below) describe it better than the outgoing
+  // movement's prescription does.
+  const inheritedSeconds = timed && !opts.clamp ? (match.target_seconds ?? null) : null;
   const boundedSets = boundPrescriptionInt("sets", toEx.name, change.sets, 1, 20);
   const boundedRepLow = boundPrescriptionInt("rep_low", toEx.name, change.rep_low, 1, 100);
   const boundedRepHigh = boundPrescriptionInt("rep_high", toEx.name, change.rep_high, 1, 100);
@@ -1128,13 +1284,24 @@ function applyPlanSwap(
     if (targetSeconds != null) targetSeconds = safeLoad.target_seconds ?? null;
     clamps.push(...safeLoad.adjustments);
   }
+  const suppliedPrescription = targetWeight != null || targetSeconds != null;
+  // Tiers 2 and 3, and they run on EVERY swap — a proposal that happened to carry
+  // no number is not evidence the athlete has never done this movement.
+  let grounding: SwapGrounding = null;
+  if (!suppliedPrescription) {
+    const grounded = groundIncomingMovement(toEx);
+    grounding = grounded.grounding;
+    if (grounded.target_weight != null) targetWeight = grounded.target_weight;
+    if (grounded.target_seconds != null) targetSeconds = grounded.target_seconds;
+  }
+  if (timed && targetSeconds == null) targetSeconds = inheritedSeconds;
   const hasStoredPrescription = targetWeight != null || targetSeconds != null;
-  // The rationale remains in the proposal/decision ledger. The reusable plan
-  // keeps only the stable rotation fact and, when needed, exactly one baseline cue
-  // even when the incoming reason already contained the same instruction.
-  const note = `Rotated in for ${match.ex_name}${
-    hasStoredPrescription ? "." : " — start light, log your actual working value."
-  }`.slice(0, 500);
+  const note = movementStartNote(
+    `Rotated in for ${match.ex_name}`,
+    toEx.name,
+    grounding,
+    hasStoredPrescription
+  ).slice(0, 500);
   const sets = boundedSets.value;
   const repLow = boundedRepLow.value;
   const repHigh = boundedRepHigh.value;
@@ -1169,12 +1336,15 @@ function applyPlanSwap(
 // Append one exercise to an existing plan day — the graceful landing for a rotate-in
 // whose `from` isn't represented anywhere on the plan (nothing to swap out, but the
 // athlete asked for the movement, so it lands on the day that already trains that
-// area instead of dead-ending). Conservative slot defaults (3×8-12 / 30s hold,
-// no target load — start light, log actual). Null when the day doesn't exist.
+// area instead of dead-ending). Conservative slot defaults (3×8-12 / 30s hold), and
+// the SAME grounding tiers a swap gets: arriving by the append path rather than the
+// swap path is not evidence the athlete has never done this movement. `lead` is the
+// stable fact about how it got here; movementStartNote adds the starting cue the
+// grounding earned. Null when the day doesn't exist.
 export function addExerciseToPlanDay(
   dayNumber: number,
   name: string,
-  note?: string | null
+  lead?: string | null
 ): { day: number; exercise: string } | null {
   const day = db.prepare(`SELECT id FROM plan_days WHERE day_number = ?`).get(Number(dayNumber)) as any;
   if (!day) return null;
@@ -1191,19 +1361,32 @@ export function addExerciseToPlanDay(
     db.prepare(`SELECT COALESCE(MAX(position), 0) + 1 AS p FROM plan_items WHERE plan_day_id = ?`).get(day.id) as any
   ).p;
   const timed = ex.mode === "timed";
-  db.prepare(
-    `INSERT INTO plan_items (plan_day_id, position, exercise_id, sets, rep_low, rep_high, target_weight, note, target_seconds)
-     VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)`
-  ).run(
-    day.id,
-    pos,
-    ex.id,
-    3,
-    timed ? null : 8,
-    timed ? null : 12,
-    note ? String(note).slice(0, 500) : null,
-    timed ? 30 : null
-  );
+  const grounded = groundIncomingMovement(ex);
+  const targetWeight = timed ? null : grounded.target_weight;
+  // A timed slot always lands with a duration — its own logged hold when there is
+  // one, otherwise the conservative default. Either way something IS prescribed, so
+  // the note must not tell the athlete to start light and log their own value while
+  // a 30s hold sits right beside it.
+  const targetSeconds = timed ? (grounded.target_seconds ?? 30) : null;
+  const note = lead
+    ? movementStartNote(
+        String(lead),
+        ex.name,
+        grounded.grounding,
+        targetWeight != null || targetSeconds != null
+      ).slice(0, 500)
+    : null;
+  insertPlanItem({
+    plan_day_id: day.id,
+    position: pos,
+    exercise_id: ex.id,
+    sets: 3,
+    rep_low: timed ? null : 8,
+    rep_high: timed ? null : 12,
+    target_weight: targetWeight,
+    note,
+    target_seconds: targetSeconds,
+  });
   afterSqliteCommit(bumpTrainingDataVersion);
   invalidateDayRead();
   return { day: Number(dayNumber), exercise: ex.name };

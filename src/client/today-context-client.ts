@@ -6,6 +6,7 @@ type TodayContextEvent = {
   title?: unknown;
   start_date?: unknown;
   end_date?: unknown;
+  resolved_at?: unknown;
   archived?: unknown;
   meta_json?: unknown;
 };
@@ -30,6 +31,16 @@ type TodayHealthFocusBanner = {
 (() => {
   const TODAY_CONTEXT_ICONS: Record<string, string> = { trip: "✈", injury: "🤕", life_event: "◆", family_event: "◆" };
   const TODAY_CONTEXT_NEAR_DAYS = 21;
+
+  // An open injury banners every morning it is open, so one literal prints verbatim
+  // for weeks. Rotated by calendar day; add a phrasing here, never a literal above.
+  const INJURY_BANNER_NUDGES: readonly string[] = [
+    "go easy",
+    "keep it comfortable",
+    "nothing forced today",
+    "stay well within range",
+    "let it set the pace",
+  ];
 
   function todayContextRecord(value: unknown): Record<string, unknown> {
     return value && typeof value === "object" ? value as Record<string, unknown> : {};
@@ -65,9 +76,17 @@ type TodayHealthFocusBanner = {
     return `in ${Math.round(n / 7)} weeks`;
   }
 
+  function contextResolved(ev: Record<string, unknown>, todayISO?: string): boolean {
+    const resolved = typeof ev.resolved_at === "string" ? ev.resolved_at.slice(0, 10) : "";
+    return !!resolved && resolved <= todayContextDateISO(todayISO);
+  }
+
   function isNearTermContext(value: unknown, todayISO?: string): boolean {
     const ev = todayContextRecord(value);
     if (ev.archived) return false;
+    // An injury has no natural end date, so it used to banner every single day
+    // until the athlete DELETED it. Closing it is the way out — honor that here.
+    if (contextResolved(ev, todayISO)) return false;
     if (ev.kind === "injury") return true;
     const today = todayContextDateISO(todayISO);
     const start = typeof ev.start_date === "string" ? ev.start_date : "";
@@ -86,7 +105,8 @@ type TodayHealthFocusBanner = {
     if (kind === "injury") {
       const area = meta.area;
       const areaText = area && !String(title).toLowerCase().includes(String(area).toLowerCase()) ? ` (${escHtml(area)})` : "";
-      return `${icon} ${escHtml(title)}${areaText} — go easy`;
+      const nudge = pickDayVariant(INJURY_BANNER_NUDGES, todayContextDateISO(todayISO), `injury-banner:${title}`);
+      return `${icon} ${escHtml(title)}${areaText} — ${escHtml(nudge)}`;
     }
     const today = todayContextDateISO(todayISO);
     let when = "";

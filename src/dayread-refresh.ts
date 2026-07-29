@@ -10,7 +10,9 @@
 //   - never throws, never blocks or slows the synchronous write path (setTimeout,
 //     unref'd so the timer can never hold the process open on its own)
 //   - COALESCED: a burst of signals (e.g. a 20-set logging session) collapses to
-//     ONE recompute — a new signal during the window resets/extends the debounce
+//     ONE recompute — a new signal during the window resets/extends the debounce,
+//     and a signal that lands while a recompute is ALREADY RUNNING arms exactly one
+//     follow-up when that run finishes rather than stacking a second run behind it
 //   - only when the invalidated date COVERS TODAY (device zone) — a past/future
 //     invalidation never warms the live open
 //   - NO usable agent -> do NOTHING (never re-cache a deterministic floor; the next
@@ -71,6 +73,13 @@ const DEFAULT_HOOKS: DayReadRefreshHooks = {
 let hooks: DayReadRefreshHooks = { ...DEFAULT_HOOKS };
 let pending: TimerHandle | null = null;
 let inFlight: Promise<void> | null = null;
+// A signal that landed while a recompute was already running. The debounce window
+// only coalesces signals that arrive BEFORE the timer fires; once the agent run is
+// under way, re-arming stacked a second run behind one that had just read the same
+// state — so the athlete paid twice for one change. The signal is remembered here
+// instead and arms exactly ONE follow-up when the run lands, which is what keeps
+// this a coalescer and not a time cooldown: nothing is ever suppressed outright.
+let armAfterFlight = false;
 
 // Called from repo.invalidateDayRead the instant TODAY's cached read is cleared.
 // Synchronous + best-effort: it only (re)arms a debounce timer and returns — the
@@ -80,6 +89,12 @@ export function scheduleDayReadRefresh(invalidatedDate?: string): void {
     const today = hooks.today();
     const target = invalidatedDate || today;
     if (target !== today) return; // only the live "today" open benefits from a warm recompute
+    // Match ensureDayReadRefresh: never arm on top of a running recompute. Deferred,
+    // not dropped — see armAfterFlight.
+    if (inFlight != null) {
+      armAfterFlight = true;
+      return;
+    }
     if (pending != null) hooks.clearTimer(pending); // coalesce: extend the window on a new signal
     pending = hooks.setTimer(fire, hooks.debounceMs);
   } catch {
@@ -104,6 +119,9 @@ export function ensureDayReadRefresh(readDate?: string): void {
 
 function fire(): void {
   pending = null;
+  // The run about to start reads the current state, so anything that arrived while
+  // the debounce was open is already covered by it.
+  armAfterFlight = false;
   inFlight = runRefresh();
 }
 
@@ -115,6 +133,15 @@ async function runRefresh(): Promise<void> {
     // A failed background warm is a calm no-op; the next fetch re-derives.
   } finally {
     inFlight = null;
+    // Clear the in-flight state BEFORE re-arming, so a change that landed mid-run
+    // still gets its own recompute. There is deliberately no time cooldown here: with
+    // the decision-relevant fingerprint and the guarded invalidations upstream, a
+    // signal reaching this module is rare and means something, and a blanket cooldown
+    // would drop exactly the changes worth recomputing for.
+    if (armAfterFlight) {
+      armAfterFlight = false;
+      scheduleDayReadRefresh();
+    }
   }
 }
 
@@ -143,5 +170,6 @@ export function resetDayReadRefresh(): void {
     pending = null;
   }
   inFlight = null;
+  armAfterFlight = false;
   hooks = { ...DEFAULT_HOOKS };
 }

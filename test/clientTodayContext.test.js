@@ -26,6 +26,10 @@ function loadTodayContext() {
     localISO: () => "2026-07-01",
   };
   context.window = context;
+  // The injury banner nudge rotates through date-utils' pickDayVariant; load it as
+  // the browser does, then pin the day so the rotation is deterministic here.
+  vm.runInNewContext(readFileSync(join(root, "public/js/date-utils.js"), "utf8"), context);
+  context.localISO = () => "2026-07-01";
   vm.runInNewContext(readFileSync(join(root, "public/js/today-context-client.js"), "utf8"), context);
   return context.CairnTodayContext;
 }
@@ -48,9 +52,34 @@ test("Today context helper filters near-term events and escapes banner lines", (
 
   const html = todayContext.contextBannerHtml(events, "2026-07-01");
   assert.match(html, /Travel to NYC &lt;work&gt; · in 7 days/);
-  assert.match(html, /Knee \(left &lt;knee&gt;\) — go easy/);
+  // The nudge after the injury title rotates by day (an open injury banners every
+  // morning, so a fixed sentence would print for weeks) — assert the shape, and
+  // that consecutive days really differ.
+  assert.match(html, /Knee \(left &lt;knee&gt;\) — [a-z][^<]+/);
   assert.match(html, /Camp · now/);
   assert.doesNotMatch(html, /Race|Archived|<work>|<knee>/);
+
+  const nudge = (day) => /Knee \(left &lt;knee&gt;\) — ([^<]+)/.exec(
+    todayContext.contextBannerHtml([events[2]], day)
+  )?.[1];
+  assert.ok(nudge("2026-07-01"));
+  assert.notEqual(nudge("2026-07-01"), nudge("2026-07-02"));
+  assert.equal(nudge("2026-07-01"), nudge("2026-07-01"));
+});
+
+test("a resolved injury stops bannering on Today", () => {
+  const todayContext = loadTodayContext();
+  const healed = { kind: "injury", title: "Knee", resolved_at: "2026-06-20" };
+  const open = { kind: "injury", title: "Shoulder" };
+
+  assert.equal(todayContext.isNearTermContext(healed, "2026-07-01"), false);
+  assert.equal(todayContext.isNearTermContext(open, "2026-07-01"), true);
+  // Resolved TOMORROW is not resolved yet — it still speaks today.
+  assert.equal(
+    todayContext.isNearTermContext({ ...healed, resolved_at: "2026-07-02" }, "2026-07-01"),
+    true
+  );
+  assert.doesNotMatch(todayContext.contextBannerHtml([healed], "2026-07-01"), /Knee/);
 });
 
 test("Today goal line stays calm and mode-aware", () => {

@@ -798,7 +798,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/training-symptoms` | The athlete-owned movement-symptom lifecycle. Reads are calm evidence only: trial readiness remains movement-specific and never resolves the symptom. |
+| GET | `/api/training-symptoms` | The athlete-owned movement-symptom lifecycle. Reads are calm evidence only: trial readiness remains movement-specific and never resolves the symptom. Repeat `movements=` to ask one question for a whole session ("which of these does an active symptom load?"); each returned row carries `relevant_movements`. `seed_legacy=0` keeps a pure render read from triggering the legacy import. |
 | POST | `/api/training-symptoms` | Record one athlete-reported area. Same-source/date retries return the existing active record. |
 | POST | `/api/training-symptoms/:id/recur` | Explicitly reopen a record, optionally resetting evidence only for one exact movement. |
 | POST | `/api/training-symptoms/:id/resolve` | Explicitly close one record; tolerance observations never call this path on their own. |

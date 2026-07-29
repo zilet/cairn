@@ -88,6 +88,28 @@ function latestReviewDate(p: unknown): string | null {
   return hits && hits.length ? hits.sort()[hits.length - 1] : null;
 }
 
+// The browser mirror of pickDayVariant in src/repo/brain/day-read-rules.ts, for the
+// athlete-facing lines the CLIENT composes. A stable input renders the same rule
+// every morning, so one literal prints verbatim for weeks and reads as a broken app.
+// Same day + same key ⇒ the same text; consecutive days always differ (the index
+// advances by exactly one per day). Deterministic — never Math.random(), never "now".
+function variantKeyOffset(key: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < key.length; i++) {
+    hash ^= key.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return Math.abs(hash % 9973);
+}
+
+function pickDayVariant<T>(variants: readonly T[], date?: string, key = ""): T {
+  if (variants.length <= 1) return variants[0];
+  const ms = Date.parse(`${String(date || localISO()).slice(0, 10)}T00:00:00Z`);
+  const dayIndex = Number.isFinite(ms) ? Math.floor(ms / 864e5) : 0;
+  const span = variants.length;
+  return variants[(((dayIndex + variantKeyOffset(key)) % span) + span) % span];
+}
+
 Object.assign(globalThis, {
   localISO,
   dateLabel,
@@ -97,4 +119,5 @@ Object.assign(globalThis, {
   absDate,
   humanizeReviewText,
   latestReviewDate,
+  pickDayVariant,
 });

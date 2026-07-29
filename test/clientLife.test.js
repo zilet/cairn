@@ -19,6 +19,11 @@ function loadLifeClient() {
     stagger: (index) => `--i:${index}`,
   };
   context.window = context;
+  // date-utils owns the real pickDayVariant the life card rotates its impact line
+  // through; load it first (as the browser does), then pin the day so the rotation
+  // is deterministic here.
+  vm.runInNewContext(readFileSync(join(root, "public/js/date-utils.js"), "utf8"), context);
+  context.localISO = () => "2026-06-30";
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/life-client.js"), "utf8"), context);
   return context.CairnLife;

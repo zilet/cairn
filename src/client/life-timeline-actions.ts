@@ -10,6 +10,7 @@ type LifeTimelineActionsApi = {
   rewireCard(card: HTMLElement, deps: ClientLifeControllerDeps): void;
   startDelete(button: Element, deps: ClientLifeControllerDeps): void;
   startEdit(card: HTMLElement | null, deps: ClientLifeControllerDeps): void;
+  startResolve(button: Element, deps: ClientLifeControllerDeps): void;
 };
 
 // SWR cache keys, mirroring Family/Memory. Events persist; the derived injury
@@ -60,6 +61,9 @@ function renderLifeTimeline(deps: ClientLifeControllerDeps, events: LifeControll
   );
   wrap.querySelectorAll<HTMLElement>("[data-ldel]").forEach((button) =>
     button.addEventListener("click", () => startLifeDelete(button, deps))
+  );
+  wrap.querySelectorAll<HTMLElement>("[data-lresolve]").forEach((button) =>
+    button.addEventListener("click", () => startLifeResolve(button, deps))
   );
 }
 
@@ -192,6 +196,38 @@ function rewireLifeCard(card: HTMLElement, deps: ClientLifeControllerDeps): void
   if (edit) edit.addEventListener("click", () => startLifeEdit(card, deps));
   const del = card.querySelector("[data-ldel]");
   if (del) del.addEventListener("click", () => startLifeDelete(del, deps));
+  const resolve = card.querySelector("[data-lresolve]");
+  if (resolve) resolve.addEventListener("click", () => startLifeResolve(resolve, deps));
+}
+
+// Closing an injury/event is the ordinary way out, so it is a one-tap primary
+// action and NOT armed like delete: it keeps the record (and the export), it just
+// stops the plan working around something that is over. Delete stays for mistakes.
+function startLifeResolve(button: Element, deps: ClientLifeControllerDeps): void {
+  const row = button.closest(".life-ev");
+  if (!(row instanceof HTMLElement)) return;
+  const id = row.dataset.life;
+  if (!id) return;
+  const helpers = lifeFormHelpers();
+  const today = localISO();
+  optimisticMutation<LifeControllerContextEvent[]>({
+    key: LIFE_CACHE_KEY,
+    apply: (current) => helpers.rows<LifeControllerContextEvent>(current).map((item) =>
+      String(item.id) === id ? { ...item, resolved_at: today } : item),
+    rollback: cachedLifeEvents(),
+    request: () => deps.api(`/context-events/${id}/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ date: today }),
+    }),
+    commit: (current, response) => {
+      const resolved = helpers.record(response) as LifeControllerContextEvent;
+      return resolved.id ? current.map((item) => (String(item.id) === id ? resolved : item)) : current;
+    },
+    onChange: () => repaintCachedLife(deps),
+  })
+    .then(() => { deps.toast("Marked resolved"); })
+    .catch(() => deps.toast("Couldn't close that — try again."));
 }
 
 // Two-tap armed × — the one destructive-confirm pattern (see armDelete in 02-ui.js).
@@ -221,6 +257,7 @@ const CAIRN_LIFE_TIMELINE_ACTIONS: LifeTimelineActionsApi = {
   rewireCard: rewireLifeCard,
   startDelete: startLifeDelete,
   startEdit: startLifeEdit,
+  startResolve: startLifeResolve,
 };
 
 Object.assign(globalThis, { CairnLifeTimelineActions: CAIRN_LIFE_TIMELINE_ACTIONS });

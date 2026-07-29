@@ -171,7 +171,12 @@ export function addActivity(input: any) {
     import("../enrich.js").then((m) => m.enqueueEnrich("activity", row.id)).catch(() => {});
   }
   bumpTrainingDataVersion(); // cardio feeds weekly-stats + program-state endurance reads
-  invalidateDayRead(date); // a logged activity (run/walk/class) is movement — today's Brief should reflect it
+  // A logged activity (run/walk/class) is movement — today's Brief should reflect it.
+  // A genuinely new effort always moves the decision fingerprint (it appears in the
+  // day's effort list, and often in the day's grade), so the guarded form retires the
+  // read exactly as the unconditional one did — while a re-recorded duplicate of an
+  // effort already on the board no longer costs an agent run.
+  invalidateDayReadIfDecisionChanged(date);
   // Garmin's richer row is committed immediately after this helper returns; its
   // authoritative upsert emits once there so initial syncs and re-syncs match.
   if (source !== "garmin") {
@@ -930,9 +935,12 @@ export function upsertGarminActivity(input: GarminActivityInput, sourceId?: numb
     Number(prev.duration_min ?? -1) !== Number(row?.duration_min ?? -1) ||
     Number(prev.distance_km ?? -1) !== Number(row?.distance_km ?? -1);
   if (material) {
-    invalidateDayRead(date);
-    // A date correction changes both days' facts.
-    if (prev?.date && String(prev.date) !== date) invalidateDayRead(String(prev.date));
+    // `material` above compares RAW columns, so a re-sync that nudges a duration by a
+    // minute or a distance by 10 m still reads as material. The fingerprint bands both,
+    // so the guard is what actually decides — and a moved date still retires BOTH days,
+    // because the effort leaving the old day shrinks its effort list.
+    invalidateDayReadIfDecisionChanged(date);
+    if (prev?.date && String(prev.date) !== date) invalidateDayReadIfDecisionChanged(String(prev.date));
   }
   reconcileDailySessionsForDateSafe(date);
   if (prev?.date && String(prev.date) !== date) {
@@ -1310,7 +1318,11 @@ export function reconcileGarminStrength(garminActivityId: number) {
     agent: existing ? (existing.agent ?? null) : null,
   };
   db.prepare(`UPDATE sessions SET garmin_json = ? WHERE id = ?`).run(JSON.stringify(blob), session.id);
-  invalidateDayRead(date);
+  // The merge writes physiology onto sessions.garmin_json, which the day-read grades
+  // never look at (dayLoad reads logged_sets and garmin_activities). A re-sync rewrites
+  // a near-identical blob, so the guarded form keeps this idempotent — the sibling
+  // patch path below (patchSessionGarmin) has been guarded for exactly this reason.
+  invalidateDayReadIfDecisionChanged(date);
 
   let exercise_sets: any = null;
   try {

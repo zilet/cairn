@@ -111,9 +111,12 @@ test("a stale legacy elbow note is explicitly old and needs a recheck, never pre
   assert.ok(primer, "the old active legacy event creates a bounded recheck");
   const elbow = primer.watch.find((item) => /elbow/i.test(item.text));
   assert.ok(elbow, "the relevant elbow note stays visible");
-  assert.match(elbow.text, /older|old/i);
-  assert.match(elbow.text, /needs a recheck/i);
-  assert.match(elbow.text, /isn't a current finding/i);
+  // The wording rotates by day (a fixed sentence printed for weeks reads as a stuck
+  // app), so assert the INVARIANTS every variant must carry rather than one literal:
+  // the note is old, it is unconfirmed, and the movement is a check, not a verdict.
+  assert.match(elbow.text, /\bolder\b|\bold\b/i);
+  assert.match(elbow.text, /unconfirmed/i);
+  assert.match(elbow.text, /\bcheck\b/i);
   assert.doesNotMatch(elbow.text, /\b(?:cleared|clearance|diagnos(?:e|is))\b/i);
 });
 

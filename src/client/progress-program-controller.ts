@@ -38,6 +38,15 @@ function strengthSuggestionCardHtml(suggestion: ProgressAnchorSuggestion): strin
   </section>`;
 }
 
+// The fallback when the server sent no reason. It renders every day the anchor is
+// being protected, so it rotates rather than printing one sentence for weeks.
+const PROTECTING_FALLBACKS: readonly string[] = [
+  "Relevant pain, injury, or a load constraint takes priority today.",
+  "Something open — pain, an injury, or a load constraint — comes first before this climbs again.",
+  "Holding here while a pain, injury, or load constraint is still in the picture.",
+  "The anchor waits while a current pain, injury, or load constraint leads.",
+];
+
 function strengthJourneyCardHtml(value: unknown): string {
   const journey = value && typeof value === "object" ? (value as Partial<ProgressStrengthJourney>) : null;
   const objective = journey?.objective;
@@ -71,7 +80,7 @@ function strengthJourneyCardHtml(value: unknown): string {
   const checkpoint = completed
     ? `<div class="sjourney-next"><span class="lbl">Checkpoint</span><strong>Target rebuilt${objective.achieved_date ? ` · ${escHtml(objective.achieved_date)}` : ""}</strong><span>Keep it steady and consolidate this milestone before choosing another goal.</span></div>`
     : journey.phase === "protecting"
-      ? `<div class="sjourney-next"><span class="lbl">Checkpoint</span><strong>Hold or ease the anchor</strong><span>${escHtml(journey.projection_withheld_reason || "Relevant pain, injury, or a load constraint takes priority today.")}</span></div>`
+      ? `<div class="sjourney-next"><span class="lbl">Checkpoint</span><strong>Hold or ease the anchor</strong><span>${escHtml(journey.projection_withheld_reason || pickDayVariant(PROTECTING_FALLBACKS, localISO(), "sjourney-protecting"))}</span></div>`
       : journey.next_prescription
         ? `<div class="sjourney-next"><span class="lbl">Checkpoint</span><strong>${escHtml(journey.next_prescription.delta_text)}</strong><span>${escHtml(journey.next_prescription.why)}</span></div>`
         : `<div class="sjourney-next"><span class="lbl">Checkpoint</span><strong>Establish the next clean anchor exposure</strong><span>${escHtml(journey.projection_withheld_reason || "Log another exact-lift exposure before Cairn projects the path.")}</span></div>`;

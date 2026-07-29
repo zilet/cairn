@@ -1053,6 +1053,13 @@ export interface DayReadFingerprintContext {
       target_distance_km: number | null;
       target_duration_min: number | null;
       target_zone: string | null;
+      // A completed intent's duration/distance are the SAME provider telemetry
+      // `logged_today` carries, so they are stored BANDED here (see
+      // fingerprintDurationBucket / fingerprintDistanceBucket) rather than raw —
+      // otherwise a re-sync nudging 8.02 → 8.03 km moved the hash through the
+      // agenda after it had been banded out of `logged_today`. Banding is
+      // idempotent, which matters: this shape is compacted twice (once into the
+      // context, once inside dayReadInputFingerprint).
       completion: {
         date: string | null;
         duration_min: number | null;
@@ -1067,6 +1074,74 @@ function fingerprintNumber(value: unknown): number | null {
   if (value == null || value === "") return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
+}
+
+// Effort telemetry, BANDED. A provider re-sync rewrites the same effort with a
+// slightly different number many times a day (8.02 → 8.03 km, 44 → 45 min), and a
+// raw hash turned each rewrite into "the decision moved" — discarding a warm
+// agentic read for an effort the athlete already did. Nothing branches on the
+// exact number; only on roughly how big the effort was. So it is hashed in bands:
+// ~5-minute buckets and ~0.5 km buckets. A genuinely different effort still lands
+// in a different band; the same one re-synced does not.
+function fingerprintDurationBucket(value: unknown): number | null {
+  const minutes = fingerprintNumber(value);
+  return minutes == null ? null : Math.round(minutes / 5) * 5;
+}
+
+function fingerprintDistanceBucket(value: unknown): number | null {
+  const km = fingerprintNumber(value);
+  return km == null ? null : Math.round(km * 2) / 2;
+}
+
+// `logged_today` is `{ sets: <count>, activities: [{type, duration_min, distance_km}] }`,
+// and it is rewritten by EVERY logged set and every watch re-sync. The raw set
+// count was the single biggest churn source in this hash: on a `done` day — whose
+// decision enforceCompletionContract has already made terminal — set 12 → 13 → 14
+// moved the fingerprint and cost the athlete a fresh agent run per set.
+//
+// That granularity is not a decision. The volume those sets represent already
+// reaches this hash GRADED, as `today_load` (dayLoad ranks the day none/easy/
+// moderate/hard, so a session crossing into real load still moves it) and as
+// `trained_today`. What only `logged_today` can add is WHETHER any set exists at
+// all and WHICH efforts are on the board — so the evening run appearing still
+// retires the morning read, while another set of the lift already in progress does
+// not. The activity list is sorted (its source query orders by id, which is not a
+// decision) but never deduplicated: a second effort of the same shape is a second
+// effort.
+function compactLoggedTodayFingerprint(value: unknown): {
+  any_sets: boolean;
+  activities: Array<{ type: string | null; duration_bucket: number | null; distance_bucket: number | null }>;
+} | null {
+  if (!value || typeof value !== "object") return null;
+  const logged = value as Record<string, any>;
+  const activities = (Array.isArray(logged.activities) ? logged.activities : [])
+    .map((activity: any) => ({
+      type: typeof activity?.type === "string" ? activity.type.trim() || null : null,
+      duration_bucket: fingerprintDurationBucket(activity?.duration_min),
+      distance_bucket: fingerprintDistanceBucket(activity?.distance_km),
+    }))
+    .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  return { any_sets: (fingerprintNumber(logged.sets) ?? 0) > 0, activities };
+}
+
+// `recent_load` is the last five days' graded load, each day optionally carrying
+// the FULL recovery-dose read for every session on it — per-set ids, weights, reps,
+// RIR, a float volume ratio and a prose reason. Exactly two things in there can move
+// TODAY's decision: each day's grade (the consecutive-loading-days rule) and whether
+// YESTERDAY's recovery session was an overdose (the recovery_dose_overrun rule).
+// Hashing the rest meant a late correction to one set three days ago, or a re-derived
+// ratio, retired today's read.
+function compactRecentLoadFingerprint(
+  value: unknown
+): Array<{ date: string | null; load: string | null; dose_overrun: boolean }> | null {
+  if (!Array.isArray(value)) return null;
+  return value.map((day: any) => ({
+    date: typeof day?.date === "string" ? day.date : null,
+    load: typeof day?.load === "string" ? day.load : null,
+    dose_overrun: (Array.isArray(day?.recovery_dose) ? day.recovery_dose : []).some(
+      (dose: any) => dose?.classification === "overdose"
+    ),
+  }));
 }
 
 function compactFlexibleAgendaFingerprint(value: unknown): NonNullable<
@@ -1084,8 +1159,8 @@ function compactFlexibleAgendaFingerprint(value: unknown): NonNullable<
         status === "completed" && intent?.completion && typeof intent.completion === "object"
           ? {
               date: typeof intent.completion.date === "string" ? intent.completion.date : null,
-              duration_min: fingerprintNumber(intent.completion.duration_min),
-              distance_km: fingerprintNumber(intent.completion.distance_km),
+              duration_min: fingerprintDurationBucket(intent.completion.duration_min),
+              distance_km: fingerprintDistanceBucket(intent.completion.distance_km),
               intensity:
                 intent.completion.intensity === "easy" || intent.completion.intensity === "quality"
                   ? intent.completion.intensity
@@ -1145,6 +1220,20 @@ function currentDayReadFingerprintContext(date: string): DayReadFingerprintConte
 // deload, a volume spike); athlete-entered context (check-ins, life events, plan
 // selection) is kept whole because it only moves when the athlete acts.
 //
+// The same reduction applies to the TRAINING LOG, and for the same reason. The log
+// moves far more often than the watch does: one evening produced ten-plus day_read
+// recomputes between 20:30 and 23:45 — one agent call every two or three minutes,
+// on a day whose read was already terminal ("done") — because `logged_today` was
+// hashed whole and its raw set COUNT moved on every single logged set. What a
+// logged set can genuinely change about today's decision already arrives here in
+// banded form: `today_load` is the day's grade (none/easy/moderate/hard) and
+// `trained_today` is the fact. So `logged_today` keeps only "is there any set" plus
+// the day's efforts by type and banded size, and `recent_load` keeps only each
+// day's grade plus yesterday's overdose flag (see the compact* helpers above).
+// The documented intent is preserved exactly: a NEW activity — the evening run
+// appearing — still moves this hash; another set of the lift already underway, and
+// a watch re-sync rewriting the same effort, do not.
+//
 // Pure over the supplied read and explicit block context. Fuel deliberately stays
 // out: it has its own both-present serve-time comparator, which preserves cached
 // rows written before the visible fuel signal existed.
@@ -1165,10 +1254,13 @@ export function dayReadInputFingerprint(
     program_block: context.program_block,
     flexible_training_agenda: compactFlexibleAgendaFingerprint(context.flexible_training_agenda),
     recovery_week: signals.recovery_week ?? null,
-    recent_load: signals.recent_load ?? null,
+    recent_load: compactRecentLoadFingerprint(signals.recent_load),
+    // Today's load GRADE — already the banded form of today's volume, and what the
+    // rules branch on directly. A session crossing from easy into moderate/hard
+    // moves it; the sets inside one grade do not. Kept whole.
     today_load: signals.today_load ?? null,
     trained_today: signals.trained_today ?? null,
-    logged_today: signals.logged_today ?? null,
+    logged_today: compactLoggedTodayFingerprint(signals.logged_today),
     // The chronic-sleep watch branches on the <6h average, not the average itself.
     low_sleep: !!signals.low_sleep,
     // Likewise the acute branch: a fresh night is short, or it isn't.
@@ -2418,6 +2510,35 @@ export function replaceStaleDayReadOverride(date: string, read: any, expected: C
   return writeDayRead(date, read, expected);
 }
 
+// Work that lands for a day ALREADY judged re-opens that judgement. This is the one
+// part of an invalidation that must NOT be economised away, because it answers a
+// different question from the read cache. The cache asks "could today's suggestion
+// have changed"; adherence asks "was the suggestion I already made followed", and it
+// asks it against the RAW logged counts (`adherenceFactsChanged` in
+// brain/read-adherence.ts compares logged_sets / logged_activities / real_activities
+// / load). The decision fingerprint deliberately drops exactly that granularity — a
+// set added to a past day moves no grade and no fact — so a late correction on a
+// judged day leaves the fingerprint perfectly still. Gate the re-open behind the
+// fingerprint and that correction is never re-judged, and the resulting error is
+// asymmetric: a missed re-judgement always turns a `diverged` into a stale
+// `aligned`, never the reverse, so the loop quietly flatters itself on the one metric
+// built to measure it honestly.
+//
+// Cheap by construction. Only a PAST day can have been judged (an expectation for `d`
+// matures on d+1), so today — the overwhelmingly common case — costs one string
+// compare and no query at all; and reopenDayReadAdherence itself no-ops unless the
+// day's logged facts actually moved. Best-effort: re-judging must never fail a write.
+//
+// Callers run this AFTER COMMIT, so a rolled-back savepoint can never re-open a
+// judgement against a write that did not land.
+function reopenJudgedDay(d: string): void {
+  try {
+    if (d < localDateISO()) reopenDayReadAdherence(d);
+  } catch {
+    /* re-judging is best effort; it must never fail a write */
+  }
+}
+
 // The same invalidation, but only when the write could actually have changed what
 // today should be. `invalidateDayRead` DELETES the row unconditionally, so a
 // six-hourly watch sync (or a re-sync writing byte-identical numbers) destroyed the
@@ -2426,8 +2547,18 @@ export function replaceStaleDayReadOverride(date: string, read: any, expected: C
 // existed. Recomputing the deterministic floor and comparing fingerprints costs one
 // synchronous read; losing the coach's sentence costs the athlete the Brief.
 //
+// It is now also what the TRAINING LOG writes go through — logging a set, importing
+// Garmin sets, recording an activity, a Garmin upsert or strength reconcile. Those
+// fire far more often than a watch sync (once per set), and under the unconditional
+// path each one deleted the cached read and armed another agent run, which is how a
+// single evening spent ten-plus day_read recomputes on an already-terminal day.
+//
 // Returns true when the cached read was actually retired. A cold cache still takes
-// the normal path, so the fresh-wake background re-warm keeps its trigger.
+// the normal path — no live read is computed at all — so the fresh-wake background
+// re-warm keeps its trigger and a burst against a cold cache stays cheap.
+//
+// The one thing it does NOT economise is re-judging a day that has already been
+// judged — see reopenJudgedDay, which runs on every exit path.
 export function invalidateDayReadIfDecisionChanged(date?: string): boolean {
   const d = date || localDateISO();
   let cached: any = null;
@@ -2437,17 +2568,43 @@ export function invalidateDayReadIfDecisionChanged(date?: string): boolean {
     cached = null;
   }
   // A curated read is pinned on purpose — only an explicit invalidateDayRead retires it.
-  if (cached?.curated) return false;
+  if (cached?.curated) {
+    afterSqliteCommit(() => reopenJudgedDay(d));
+    return false;
+  }
   if (cached && typeof cached.input_fingerprint === "string" && cached.input_fingerprint) {
+    // The comparison is only as good as the state it reads, and the unified signal
+    // state plus its training-log producers are memoized per (date, request). A
+    // caller that already touched them earlier in the SAME request — which is every
+    // set-logging request that reconciles or reads before it writes — would compare
+    // the PRE-write snapshot, find the fingerprint unmoved, and pin a Brief that is
+    // now wrong. Drop exactly the keys invalidateDayRead drops after commit; the
+    // 14-day recovery window and the 21-day TDEE stay warm because neither moves on
+    // one training write. Outside a request scope this is a no-op.
+    //
+    // `day_read` belongs in this set even though the cached row is about to SURVIVE:
+    // coach.ts memoizes the read with the request's signal state embedded in its
+    // `signals`, so dropping signal_state without it would leave the coach context
+    // holding a fresh signal_state beside a day_read carrying the stale one. Rebuild
+    // is cheap on this path precisely because the row is still there.
+    invalidateBrainSnapshot("day_read");
+    invalidateBrainSnapshot("signal_state");
+    invalidateBrainSnapshot("recent_sessions");
+    invalidateBrainSnapshot("training_signals");
+    invalidateBrainSnapshot("program_state");
     let live: DayRead | null = null;
     try {
       live = dayRead(d);
     } catch {
       live = null;
     }
-    if (live?.input_fingerprint && live.input_fingerprint === cached.input_fingerprint) return false;
+    if (live?.input_fingerprint && live.input_fingerprint === cached.input_fingerprint) {
+      // The cached READ survives — but the day's JUDGEMENT is still re-opened.
+      afterSqliteCommit(() => reopenJudgedDay(d));
+      return false;
+    }
   }
-  invalidateDayRead(d);
+  invalidateDayRead(d); // re-opens the judgement itself, on its own commit hook
   return true;
 }
 
@@ -2476,17 +2633,12 @@ export function invalidateDayRead(date?: string): void {
       scheduleDayReadRefresh(d);
     } catch {}
     // Work that lands for a day ALREADY judged re-opens that judgement. Every
-    // training write for a date reaches this function with that date, which is why
-    // the hook lives here rather than at seven call sites where the eighth would
-    // silently be missed. Only a PAST day can have been judged (an expectation for
-    // `d` matures on d+1), so today — the overwhelmingly common case — skips the
-    // lookup entirely, and reopenDayReadAdherence itself no-ops unless the day's
-    // logged facts actually moved.
-    try {
-      if (d < localDateISO()) reopenDayReadAdherence(d);
-    } catch {
-      /* re-judging is best effort; it must never fail a write */
-    }
+    // training write for a date reaches EITHER this function or its guarded sibling
+    // with that date, and BOTH re-open — which is why the hook lives on the two
+    // invalidation functions rather than at the eight call sites where the ninth
+    // would silently be missed. See reopenJudgedDay for why the guarded path cannot
+    // skip it.
+    reopenJudgedDay(d);
   });
 }
 

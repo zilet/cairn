@@ -2,6 +2,7 @@ import { db } from "../../db.js";
 import { painAreaLoadsExercise } from "../../repo/pain-relevance.js";
 import { getAuthoritativeSessionRow } from "../../repo/session-core.js";
 import { afterSqliteCommit, withSqliteSavepoint } from "../../repo/sqlite-savepoint.js";
+import { normalizeSymptomArea } from "../../repo/symptom-area.js";
 import {
   latestTrainingSymptomEpisode,
   reconcileTrainingSymptomOutcomeDates,
@@ -190,9 +191,8 @@ function priorPainPresent(
 }
 
 function areaText(value: unknown): string {
-  const area = String(value ?? "").trim();
+  const area = normalizeSymptomArea(value);
   if (!area) throw new Error("area_text required when symptom_event_id is absent");
-  if (area.length > 300) throw new Error("area_text must be 300 characters or fewer");
   return area;
 }
 

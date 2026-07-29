@@ -8,6 +8,7 @@ import {
   type DailyDecisionEnvelope,
 } from "./daily-decision.js";
 import { db } from "../db.js";
+import { pickDayVariant } from "./brain/day-read-rules.js";
 import { getAgentJob } from "./chat.js";
 import { findExercise, recentWorkingSeconds, recentWorkingWeight } from "./exercises.js";
 import { getPlanDay } from "./plan.js";
@@ -15,6 +16,28 @@ import { selectedPlanDayForDate } from "./plan-selection.js";
 import { getOrCreateSessionRow } from "./session-core.js";
 import { localDateISO } from "./shared.js";
 import { withSqliteSavepoint } from "./sqlite-savepoint.js";
+
+// planSnapshot's session-header "why", athlete-voice and rotating (VISION.md:
+// suggestion voice, never engineering vocabulary). Index 0 of each set is also
+// the fixed replacement migration v82 uses to repair historical
+// daily_session_compositions.why rows still holding the old machine literals
+// ("Explicit plan-day override: Day N." / "Adaptive plan selection for
+// {date}.") — keep that migration's literals in sync with these if the wording
+// here ever changes.
+const SESSION_WHY_OVERRIDE = [
+  "Your call today.",
+  "You picked this one yourself.",
+  "Switched by you, not the usual order.",
+] as const;
+// The calm default when the plan simply held its normal rotation slot with
+// nothing materially different to explain — selectAdaptivePlanDay() (in
+// plan-selection.ts) returns a null `reason` in exactly that case, which used
+// to fall through to a bare "Adaptive plan selection for {date}." literal.
+const SESSION_WHY_ROTATION = [
+  "Today's regular spot in the rotation.",
+  "Right on track with your usual order.",
+  "Following the plan the way it normally runs.",
+] as const;
 
 export const DAILY_SESSION_SOURCES = ["adaptive_plan", "agent_suggest", "manual_plan", "athlete_override"] as const;
 export const DAILY_SESSION_SUGGESTION_NORMALIZATION = "daily_session_v1";
@@ -564,8 +587,9 @@ function planSnapshot(date: string, dayNumber?: number | null) {
         focus: day.focus,
         why:
           dayNumber != null
-            ? `Explicit plan-day override: Day ${requested}.`
-            : boundedText(selected?.selection?.reason, 600) || `Adaptive plan selection for ${date}.`,
+            ? pickDayVariant(SESSION_WHY_OVERRIDE, date, "adaptive-session:why:override")
+            : boundedText(selected?.selection?.reason, 600) ||
+              pickDayVariant(SESSION_WHY_ROTATION, date, "adaptive-session:why:rotation"),
         items: day.items,
       },
       false

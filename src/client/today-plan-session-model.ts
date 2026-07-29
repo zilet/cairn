@@ -26,6 +26,7 @@ type TodayPlanSessionModelSession = import("../contracts/client.js").ClientTrain
   sets?: TodayPlanSessionModelLoggedSet[] | null;
 };
 type TodayPlanSessionModelCardioEffort = import("../contracts/client.js").ClientCardioEffort;
+type TodayPlanSessionModelPrescription = Partial<import("../contracts/client.js").ClientPrescription>;
 type TodayPlanSessionModelPendingOffPlan = { name: string; mode?: string | null };
 type TodayPlanSessionModelPrefill = { weight: unknown; reps: unknown; rir: unknown; duration_sec?: unknown };
 type TodayPlanSessionModelState = {
@@ -69,6 +70,7 @@ type TodayPlanSessionModelApi = {
     item: TodayPlanSessionModelPlanItem,
     loggedByEx: Record<string, TodayPlanSessionModelLoggedSet[]>,
     lastSets: Record<string, Record<string, unknown> | null>,
+    rx?: TodayPlanSessionModelPrescription | null,
   ): TodayPlanSessionModelPrefill;
 };
 
@@ -149,10 +151,15 @@ type TodayPlanSessionModelApi = {
     return kept;
   }
 
+  function finiteOrNull(value: unknown): number | null {
+    return value == null || !Number.isFinite(Number(value)) ? null : Number(value);
+  }
+
   function prefillFor(
     item: TodayPlanSessionModelPlanItem,
     loggedByEx: Record<string, TodayPlanSessionModelLoggedSet[]>,
     lastSets: Record<string, Record<string, unknown> | null>,
+    rx?: TodayPlanSessionModelPrescription | null,
   ): TodayPlanSessionModelPrefill {
     const exercise = String(item.exercise || "");
     const logged = loggedByEx[exercise] || [];
@@ -162,7 +169,17 @@ type TodayPlanSessionModelApi = {
     }
     const last = lastSets[exercise];
     if (last) return { weight: last.weight, reps: last.reps, rir: last.rir, duration_sec: last.duration_sec ?? null };
-    return { weight: item.target_weight ?? null, reps: item.rep_low ?? null, rir: null, duration_sec: item.target_seconds ?? null };
+    // Last resort: a rotated-in lift can arrive with target_weight NULL and no
+    // history under its own name. The server's own grounded suggestion is then the
+    // only honest number to start from — never invent one, and never overwrite a
+    // deliberate NULL weight (bodyweight) with anything the server didn't produce.
+    const suggested = rx && typeof rx.suggested === "object" && rx.suggested ? rx.suggested : null;
+    return {
+      weight: item.target_weight ?? finiteOrNull(suggested?.weight),
+      reps: item.rep_low ?? finiteOrNull(suggested?.rep_low),
+      rir: null,
+      duration_sec: item.target_seconds ?? finiteOrNull(suggested?.seconds),
+    };
   }
 
   const CAIRN_TODAY_PLAN_SESSION_MODEL: TodayPlanSessionModelApi = {

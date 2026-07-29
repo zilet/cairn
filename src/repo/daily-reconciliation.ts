@@ -9,7 +9,7 @@ import { registerDailyOutcomeReconcileHook } from "./reconciliation-hooks.js";
 import { recoveryCycleAt } from "./recovery-cycles.js";
 import { localDateISO } from "./shared.js";
 import type { ChallengeVerdict } from "./training-response.js";
-import { activeRelevantTrainingSymptoms } from "./training-symptoms.js";
+import { activeRelevantTrainingSymptoms, symptomGatesComparability } from "./training-symptoms.js";
 
 export {
   recentMovementResponse,
@@ -634,9 +634,14 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
       prescribed,
       achieved: achievedDose,
       challenge_verdict: challengeVerdict(prescribed, achievedDose),
+      // Only a CURRENT, confirmed symptom brakes comparability. A stale one and an
+      // unconfirmed legacy import stay attached as context (symptom_event_ids keeps
+      // them visible to the primer and the coach) but stop holding outcomes out of
+      // the comparable set forever — which is what made every verdict permanently
+      // inconclusive. Staleness ends the gating; only the athlete resolves a symptom.
       relevant_symptom:
         (!!session.joint_pain && painAreaLoadsExercise(String(session.joint_pain), exercise)) ||
-        symptomEvents.length > 0,
+        symptomEvents.some(symptomGatesComparability),
       symptom_event_ids: symptomEvents.map((event) => event.id),
     };
   });

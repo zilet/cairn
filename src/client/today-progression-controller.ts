@@ -12,7 +12,7 @@ type TodayProgressionDeps = {
   root: ParentNode;
   cachedApi(path: string, options?: { key?: string; freshFor?: number }): Promise<unknown>;
   invalidate(keyOrPrefix: string): void;
-  exRxLineHtml(rx: unknown): string;
+  exRxLineHtml(rx: unknown, options?: { supporting?: boolean }): string;
   moveCount(rxByEx: Record<string, unknown>): number;
   loadProgramAdjustmentsBanner(): unknown;
 };
@@ -63,7 +63,9 @@ type TodayProgressionDeps = {
       const rx = name ? rxByEx[name] || null : null;
       const complete = card.classList.contains("ex-complete");
       const existing = card.querySelector(".ex-rx");
-      const html = complete ? "" : deps.exRxLineHtml(rx);
+      // The card stamped whether its header already carries today's dose; a live
+      // refresh must not quietly reintroduce the second number the paint removed.
+      const html = complete ? "" : deps.exRxLineHtml(rx, { supporting: card.dataset.dose === "headline" });
       if (existing) {
         if (!html) {
           existing.remove();

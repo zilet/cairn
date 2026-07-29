@@ -58,6 +58,8 @@ import { classifyDirectiveIntent } from "./propagation-data.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { readAdherenceModel } from "./brain/read-adherence.js";
 import { getProgress, getRecentSessions, getRunCompliance } from "./sessions.js";
+import { symptomAreaKey } from "./symptom-area.js";
+import { listTrainingSymptoms } from "./training-symptoms.js";
 import { addDaysISO, localDateISO, nowContext } from "./shared.js";
 import { bumpTrainingDataVersion, currentTrainingDataVersion, registerTrainingCacheClear } from "./training-cache.js";
 import { currentMarkerDataVersion } from "./marker-cache.js";
@@ -333,7 +335,39 @@ export function trainingSignals(
   const recent4 = sessions.slice(0, 4);
   const soreDays = recent4.filter((s) => s.soreness != null && Number(s.soreness) >= 4);
   const lowPerfDays = recent4.filter((s) => s.performance != null && Number(s.performance) <= 2);
-  const joints = [...new Set(recent4.map((s) => String(s.joint_pain || "").trim()).filter(Boolean))];
+  // An area the athlete has explicitly CLOSED must stop speaking. The raw session
+  // notes log what was said, not what is still true, so a joint area whose symptom
+  // record is resolved — with no open record left for the same place — drops out.
+  // Otherwise "Mark resolved" leaves the Brief warning about it every morning.
+  const symptomReadOn = asOf ?? localDateISO();
+  let openAreas = new Set<string>();
+  let closedAreas = new Set<string>();
+  try {
+    // seed_legacy:false — this runs inside the signal-state build on the per-set
+    // logging hot path, where the guard documents a pure read; the legacy import
+    // and its repair pass have plenty of slower-path triggers (panel, primer,
+    // reconciliation, unparameterized REST reads).
+    const lifecycle = listTrainingSymptoms({ on: symptomReadOn, include_resolved: true, seed_legacy: false });
+    openAreas = new Set(
+      lifecycle.filter((event) => event.status === "active").map((event) => symptomAreaKey(event.area_text))
+    );
+    closedAreas = new Set(
+      lifecycle.filter((event) => event.status !== "active").map((event) => symptomAreaKey(event.area_text))
+    );
+  } catch {
+    /* the rollup is a plain read — lifecycle trouble must never break it */
+  }
+  const joints = [
+    ...new Set(
+      recent4
+        .map((s) => String(s.joint_pain || "").trim())
+        .filter(Boolean)
+        .filter((area) => {
+          const key = symptomAreaKey(area);
+          return !key || openAreas.has(key) || !closedAreas.has(key);
+        })
+    ),
+  ];
   let autoregulation: AutoregSignal | null = null;
   if (soreDays.length || lowPerfDays.length || joints.length) {
     const parts: string[] = [];

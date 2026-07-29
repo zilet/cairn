@@ -112,6 +112,7 @@ function loadController() {
   const timeouts = [];
   const invalidations = [];
   const requests = [];
+  const rxCalls = [];
   let adjustmentLoads = 0;
   const context = {
     Object,
@@ -137,7 +138,10 @@ function loadController() {
   vm.runInNewContext(readFileSync(join(root, "public/js/today-progression-controller.js"), "utf8"), context);
 
   const rootEl = new FakeElement("section");
-  const squat = rootEl.appendChild(new FakeElement("article", { className: "ex", dataset: { card: "Squat" } }));
+  // Squat's header already carries today's dose; Bench's does not.
+  const squat = rootEl.appendChild(
+    new FakeElement("article", { className: "ex", dataset: { card: "Squat", dose: "headline" } })
+  );
   const squatLogged = squat.appendChild(new FakeElement("div", { dataset: { logged: "" } }));
   const bench = rootEl.appendChild(new FakeElement("article", { className: "ex ex-complete", dataset: { card: "Bench" } }));
   const benchRx = bench.appendChild(new FakeElement("div", { className: "ex-rx", textContent: "old rx" }));
@@ -154,7 +158,10 @@ function loadController() {
       ];
     },
     invalidate: (key) => invalidations.push(key),
-    exRxLineHtml: (rx) => rx ? `<div class="ex-rx">rx ${rx.exercise}</div>` : "",
+    exRxLineHtml: (rx, options) => {
+      rxCalls.push({ exercise: rx?.exercise ?? null, supporting: !!options?.supporting });
+      return rx ? `<div class="ex-rx">rx ${rx.exercise}</div>` : "";
+    },
     moveCount: () => 1,
     loadProgramAdjustmentsBanner: () => { adjustmentLoads += 1; },
   };
@@ -162,6 +169,7 @@ function loadController() {
     controller: context.CairnTodayProgressionController,
     deps,
     requests,
+    rxCalls,
     invalidations,
     timeouts,
     squat,
@@ -186,6 +194,9 @@ test("Today progression controller refreshes card prescription lines in place", 
   assert.equal(harness.benchRx.removed, true);
   assert.equal(harness.bannerHeading.textContent, "One lift has a new target from what you logged");
   assert.equal(harness.adjustmentLoads, 1);
+  // A live refresh must not reintroduce the second number the paint removed: the
+  // card stamped whether its header already carries today's dose.
+  assert.deepEqual(plain(harness.rxCalls), [{ exercise: "Squat", supporting: true }]);
 });
 
 test("Today progression controller schedules refresh and invalidates scoped cache", () => {

@@ -170,3 +170,39 @@ test("Today cardio helpers classify efforts and build log phrases", () => {
   assert.equal(today.cardioLogPhrase({ exercise: "Trail hike", target_duration_min: 90 }), "hiked 90 min");
   assert.equal(today.cardioLogPhrase({ exercise: "Recovery walk", target_duration_min: 30 }), "walked 30 min");
 });
+
+// Supporting mode is what keeps a card to ONE authoritative number: the header
+// already carries today's dose, so the verdict explains it and prescribes nothing.
+test("Today training prescription line drops its own number in supporting mode", () => {
+  const today = loadTodayTraining();
+  const rx = {
+    action: "deload",
+    delta_text: "−5 lb",
+    why: "your knee flared on Tuesday",
+    suggested: { sets: 2, rep_low: 8, rep_high: 10, weight: 70 },
+  };
+
+  const supporting = today.exRxLineHtml(rx, { supporting: true });
+  assert.match(supporting, /ex-rx-supporting/);
+  assert.match(supporting, /ease off/);
+  assert.match(supporting, /your knee flared on Tuesday/);
+  assert.doesNotMatch(supporting, /ex-rx-target|ex-rx-delta|70 lb|−5 lb/);
+
+  // Nothing left to explain → a lone verdict word beside the number is noise.
+  assert.equal(today.exRxLineHtml({ action: "hold", suggested: { sets: 3, weight: 100 } }, { supporting: true }), "");
+
+  // A rotation offer is still an action, not a competing prescription — keep it.
+  const vary = today.exRxLineHtml(
+    { action: "vary", suggested: { sets: 3, weight: 50 }, exercise: "Bench", day_number: 2, vary_options: [{ name: "DB press" }] },
+    { supporting: true }
+  );
+  assert.match(vary, /ex-rx-supporting/);
+  assert.match(vary, /DB press/);
+  assert.doesNotMatch(vary, /ex-rx-target/);
+
+  // Default (no options) is unchanged: the suggestion IS the number.
+  const full = today.exRxLineHtml(rx);
+  assert.match(full, /ex-rx-target/);
+  assert.match(full, /70 lb/);
+  assert.doesNotMatch(full, /ex-rx-supporting/);
+});

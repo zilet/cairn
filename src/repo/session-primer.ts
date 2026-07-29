@@ -26,6 +26,7 @@ import { getActiveDailySession } from "./adaptive-session.js";
 import { getCachedDayRead } from "./day-read.js";
 import { dayRead } from "./day-read.js";
 import { listBrainDecisions } from "./brain-decisions.js";
+import { pickDayVariant } from "./brain/day-read-rules.js";
 import { planDayFocus, planDayCandidates, selectAdaptivePlanDay } from "./plan-selection.js";
 import { getProposal } from "./profile.js";
 import {
@@ -272,18 +273,55 @@ function symptomPriority(event: TrainingSymptomLifecycle): number {
   return freshness + (event.legacy_unconfirmed ? 1 : 0);
 }
 
-function symptomWatchText(event: TrainingSymptomLifecycle, movement: string): string {
+// One stable input fires the same branch every morning, so a single literal here
+// prints verbatim for weeks and reads as a broken app rather than a calm coach.
+// Each branch is a SET; pickDayVariant rotates it by calendar day (same day ⇒ same
+// words, consecutive days always differ). Add a phrasing to a set, never a literal.
+type SymptomWatchVariants = readonly [string, ...string[]];
+
+// Every variant must carry the SAME two facts, because a rotation that drops one
+// would quietly promote an unconfirmed import to a current finding: it is OLD, and
+// it is UNCONFIRMED. sessionPrimer.test.js asserts both across the set.
+const LEGACY_SYMPTOM_WATCH: SymptomWatchVariants = [
+  "An older {area} note is still on file, unconfirmed — treat {movement} as a careful check; it isn't a current finding.",
+  "{area} came in from an older session note and is still unconfirmed — let {movement} be the careful check rather than a verdict.",
+  "There's an unconfirmed older {area} note here — use {movement} to check where it actually stands today.",
+  "{area} is carried over from an older note and is still unconfirmed — {movement} is the gentle way to check it.",
+];
+
+const STALE_SYMPTOM_WATCH: SymptomWatchVariants = [
+  "{area} was reported a while back and hasn't been checked since — use {movement} as a careful check; it isn't current evidence.",
+  "Nothing recent on {area}, just the earlier report — {movement} is a good place to see how it feels now.",
+  "{area} has gone quiet since it was reported — treat {movement} as the recheck, not as a limit.",
+  "The {area} note is old enough that only today can say — keep {movement} careful and let it answer.",
+];
+
+const EASING_SYMPTOM_WATCH: SymptomWatchVariants = [
+  "{area} is due for a gentle recheck — keep {movement} easy and let today's response guide the next step.",
+  "{area} is worth a quiet look today — stay easy on {movement} and go by what it tells you.",
+  "Ease into {movement} and see how {area} responds; there's no rush to push it.",
+  "{area} is still recent enough to respect — keep {movement} comfortable and let it set the next step.",
+];
+
+const ACUTE_SYMPTOM_WATCH: SymptomWatchVariants = [
+  "{area} was reported recently — use {movement} as a careful check and keep the effort easy if it speaks up.",
+  "{area} is fresh, so keep {movement} well within comfort and stop if it answers back.",
+  "Go gently on {movement} today — {area} spoke up recently and deserves an easy answer.",
+  "{area} is recent enough to lead — let {movement} stay easy and back off the moment it complains.",
+];
+
+function symptomWatchText(event: TrainingSymptomLifecycle, movement: string, date: string): string {
   const area = String(event.area_text || "that area").replace(/\s+/g, " ").trim();
-  if (event.legacy_unconfirmed) {
-    return `An older ${area} note still needs a recheck — use ${movement} as a careful tolerance check; it isn't a current finding.`;
-  }
-  if (event.freshness === "stale_needs_recheck") {
-    return `${area} was reported earlier and still needs a recheck — use ${movement} as a careful tolerance check; it isn't current evidence.`;
-  }
-  if (event.freshness === "hold_easy_recheck") {
-    return `${area} is due for a gentle recheck — keep ${movement} easy and let today's response guide the next step.`;
-  }
-  return `${area} was reported recently — use ${movement} as a careful tolerance check and keep the effort easy if it speaks up.`;
+  const variants = event.legacy_unconfirmed
+    ? LEGACY_SYMPTOM_WATCH
+    : event.freshness === "stale_needs_recheck"
+      ? STALE_SYMPTOM_WATCH
+      : event.freshness === "hold_easy_recheck"
+        ? EASING_SYMPTOM_WATCH
+        : ACUTE_SYMPTOM_WATCH;
+  return pickDayVariant(variants, date, `symptom-watch:${event.id}`)
+    .replaceAll("{area}", area)
+    .replaceAll("{movement}", movement);
 }
 
 // watch[] — the calm heads-ups: session-relevant active symptom/tolerance
@@ -320,7 +358,7 @@ function buildWatch(movements: string[], read: any, date: string): SessionPrimer
         a.event.id - b.event.id
     );
     for (const { event, movement } of symptoms.slice(0, 2)) {
-      push(symptomWatchText(event, movement), true);
+      push(symptomWatchText(event, movement, date), true);
     }
   } catch {
     /* symptom lifecycle unavailable → skip */

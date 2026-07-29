@@ -1,4 +1,5 @@
 import { canonicalGroup, resolveGroup, type MuscleGroup } from "./exercise-canon.js";
+import { isRecognizedSymptomArea, SYMPTOM_AREA_MAX } from "./symptom-area.js";
 
 // Free-text pain area → canonical groups and movement names that plausibly load
 // it. This is a conservative relevance check, not a diagnosis: unmapped text
@@ -31,10 +32,20 @@ const JOINT_MOVEMENT_MAP: Array<{ re: RegExp; movements: RegExp }> = [
   { re: /ankle|achilles|\bcalf\b|\bfoot\b|shin|tib/, movements: /\b(calf|squat|lunge|step[ -]?up|run|jump)\b/ },
 ];
 
+// The gate that makes this file's promise true. These maps run SUBSTRING regexes,
+// so anything longer than a label matches half of them at once: a coach paragraph
+// containing "back", "press" and "row" would load nearly every lift and mark every
+// outcome non-comparable forever. Relevance therefore requires a real area label —
+// short, and naming a place Cairn recognizes. Anything else matches nothing.
+function areaCanDriveRelevance(text: string): boolean {
+  if (!text || text.length > SYMPTOM_AREA_MAX) return false;
+  return isRecognizedSymptomArea(text) || canonicalGroup(text) != null;
+}
+
 export function painAreaLoadsGroup(painText: string, group: MuscleGroup | null): boolean {
   if (!group) return false;
-  const text = String(painText || "").toLowerCase();
-  if (!text) return false;
+  const text = String(painText || "").trim().toLowerCase();
+  if (!areaCanDriveRelevance(text)) return false;
   return JOINT_GROUP_MAP.some((entry) => entry.re.test(text) && entry.groups.includes(group));
 }
 
@@ -42,7 +53,7 @@ export function painAreaLoadsGroup(painText: string, group: MuscleGroup | null):
 // labels and free-text session feedback must cross the same conservative map.
 export function muscleGroupsForPainArea(value: string | null | undefined): MuscleGroup[] {
   const text = String(value ?? "").trim().toLowerCase();
-  if (!text) return [];
+  if (!areaCanDriveRelevance(text)) return [];
   const direct = canonicalGroup(text);
   const groups = direct ? [direct] : [];
   for (const entry of JOINT_GROUP_MAP) {
@@ -56,7 +67,7 @@ export function painAreaLoadsExercise(
   exercise: { name?: string | null; muscle_group?: string | null }
 ): boolean {
   const text = String(painText ?? "").trim().toLowerCase();
-  if (!text) return false;
+  if (!areaCanDriveRelevance(text)) return false;
   const group = resolveGroup(exercise.muscle_group ?? "", exercise.name ?? "");
   if (painAreaLoadsGroup(text, group)) return true;
   const name = String(exercise.name ?? "").toLowerCase();

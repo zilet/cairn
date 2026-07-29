@@ -15,12 +15,13 @@ import { MUSCLE_LANDMARKS } from "./exercise-canon.js";
 import { effectiveVolumeByGroup, type VolumeSet } from "./exercise-variations.js";
 import { findExercise, findOrCreateExercise, listExercises } from "./exercises.js";
 import { listContextEvents, listHealthReviews } from "./health.js";
-import { invalidateDayRead } from "./intelligence.js";
+import { invalidateDayRead, invalidateDayReadIfDecisionChanged } from "./intelligence.js";
 import { listMemory, listSuggestions } from "./memory.js";
 import { listFoodNotes, listMealPlans } from "./nutrition.js";
 import { getPlan } from "./plan.js";
 import { effectiveGoalMode, getProfile, leanGainRate, listWeight } from "./profile.js";
 import { getSettings } from "./settings.js";
+import { normalizeSymptomArea } from "./symptom-area.js";
 import {
   bumpTrainingDataVersion,
   currentTrainingDataVersion,
@@ -194,6 +195,11 @@ export function updateSessionNotes(sessionId: number, notes: string | null) {
   const clean = notes != null ? String(notes).trim().slice(0, 1000) || null : null;
   db.prepare(`UPDATE sessions SET notes = ? WHERE id = ?`).run(clean, sessionId);
   bumpTrainingDataVersion();
+  // Deliberately UNCONDITIONAL while the set-logging paths around it are guarded. A
+  // note is athlete-authored prose — it is not in the decision fingerprint and must
+  // not be (prose is exactly what that hash exists to exclude), so the guarded form
+  // would read "nothing moved" and silently swallow a corrected fatigue report. It
+  // is also a rare, deliberate action, not the per-set churn this economy is about.
   invalidateDayRead(s.date || localDateISO());
   if (sessionNoteSuggestsFatigue(clean)) {
     emitBrainEvent({
@@ -234,8 +240,12 @@ export function setSessionFeedback(
     vals.push(fields.performance == null ? null : clamp15(fields.performance));
   }
   if (fields.joint_pain !== undefined) {
+    // joint_pain is the same concept as a symptom area_text (the legacy importer
+    // turns one into the other), so it obeys the same short-label contract. An
+    // agent that answers with a coach paragraph here used to poison every
+    // downstream relevance check; the normalizer keeps it a place, not prose.
     sets.push("joint_pain = ?");
-    vals.push(fields.joint_pain == null ? null : String(fields.joint_pain).trim().slice(0, 300) || null);
+    vals.push(fields.joint_pain == null ? null : normalizeSymptomArea(fields.joint_pain) || null);
   }
   if (sets.length) {
     vals.push(session.id);
@@ -256,6 +266,11 @@ export function setSessionFeedback(
   }
   // A fresh 1-tap soreness/performance/joint signal is a day-read input (its sibling
   // addCheckin already busts the Brief) — refresh so today's read reflects it.
+  // Deliberately UNCONDITIONAL: joint pain and a low performance flag reach the
+  // fingerprint only INDIRECTLY, through whatever posture/directives the signal
+  // state derives from them, and "the Brief was blind to logged joint pain" is a bug
+  // this codebase has already shipped once. A one-tap feedback write is rare, so the
+  // guard would buy nothing and risk re-opening that. Same for the athlete's steer.
   invalidateDayRead(date || localDateISO());
   // Stage 4: feedback is a reconciliation confounder (joint pain / soreness /
   // performance) — refresh the outcome so it reflects the reported signal.
@@ -403,7 +418,11 @@ function insertSetByName(input: LogSetInput, emitEffects: boolean) {
 
   if (emitEffects) {
     bumpTrainingDataVersion(); // a new logged set moves lifts/volume/weekly reads
-    invalidateDayRead(date); // logging a set flips "trained today" → refresh the Brief
+    // The FIRST set of the day flips "trained today" and later ones can push the
+    // day's grade up, both of which move the decision fingerprint and refresh the
+    // Brief. The twelfth set of a session already read as done moves neither, and
+    // used to buy a fresh ~90s agent run anyway — hence the guarded form.
+    invalidateDayReadIfDecisionChanged(date);
     emitBrainEvent({
       kind: "set_logged",
       domain: "training",
@@ -557,7 +576,9 @@ export function importGarminActivitySets(input: {
 
   if (result.imported > 0) {
     bumpTrainingDataVersion();
-    invalidateDayRead(date);
+    // Same shape as hand-logging, and re-syncs must stay idempotent: an import that
+    // re-derives the same session must not retire the day's read a second time.
+    invalidateDayReadIfDecisionChanged(date);
     emitBrainEvent({
       kind: "set_logged",
       domain: "training",
@@ -571,10 +592,25 @@ export function importGarminActivitySets(input: {
 }
 
 export function deleteSet(id: number) {
-  const existing = db.prepare(`SELECT session_id FROM logged_sets WHERE id = ?`).get(id) as any;
+  // LEFT JOIN: the date is what the day-read cache is keyed by, but an orphaned set
+  // must still reach reconcileDailySessionSafe exactly as it did before.
+  const existing = db
+    .prepare(
+      `SELECT ls.session_id AS session_id, s.date AS date
+         FROM logged_sets ls LEFT JOIN sessions s ON s.id = ls.session_id
+        WHERE ls.id = ?`
+    )
+    .get(id) as any;
   const deleted = db.prepare(`DELETE FROM logged_sets WHERE id = ?`).run(id).changes;
   if (deleted) {
     bumpTrainingDataVersion();
+    // Removing a set is a training-log write like any other, and it was the one that
+    // never reached the Brief at all: deleting the LAST set of the day flips
+    // trained_today and the day's grade back, so a `done` read stayed cached on a day
+    // with no work left in it until something unrelated invalidated. Guarded like its
+    // siblings, so removing one of many sets — which moves neither the fact nor the
+    // grade — still costs nothing.
+    if (existing?.date) invalidateDayReadIfDecisionChanged(String(existing.date));
     if (existing?.session_id != null) reconcileDailySessionSafe(Number(existing.session_id));
   }
   return { deleted };

@@ -583,7 +583,7 @@ declare global {
     sessionDoneCard(session: unknown, day: unknown, options: { isToday: boolean }): string;
     setsTonnage(sets: unknown): number;
     rxMoveCount(rxByEx: Record<string, unknown>): number;
-    exRxLineHtml(rx: unknown): string;
+    exRxLineHtml(rx: unknown, options?: { supporting?: boolean }): string;
     loadTrainingProvenance(isToday?: boolean): unknown;
     revealPlanThen(after: () => unknown, opts?: { blank?: boolean }): unknown;
     revealSessionComposer(): unknown;
@@ -699,7 +699,7 @@ declare global {
     deps(): ClientTodayDependenciesContext;
     planSurfaceRendererDeps(): ReturnType<ClientTodayDependenciesContext["planSurfaceRenderer"]>;
     mainShellDeps(): ReturnType<ClientTodayDependenciesContext["mainShell"]>;
-    exRxLineHtml(rx: Partial<ClientPrescription> | null | undefined): string;
+    exRxLineHtml(rx: Partial<ClientPrescription> | null | undefined, options?: { supporting?: boolean }): string;
     rxMoveCount(rxByEx: Record<string, Partial<ClientPrescription> | null | undefined>): number;
     applyDayProgression(button: Element | null | undefined, day: number | null | undefined): Promise<void>;
     exerciseCard(item: any, logged: any[], prefill: Record<string, unknown>, index: any, rx: any): string;
@@ -739,7 +739,7 @@ declare global {
       renderToday(): Promise<unknown> | unknown;
       micGlyph(): string;
       bridge(): ClientTodayCompatibilityBridgesContext;
-      exRxLineHtml(rx: Partial<ClientPrescription> | null | undefined): string;
+      exRxLineHtml(rx: Partial<ClientPrescription> | null | undefined, options?: { supporting?: boolean }): string;
       rxMoveCount(rxByEx: Record<string, Partial<ClientPrescription> | null | undefined>): number;
       applyDayProgression(button: Element | null | undefined, day: number | null | undefined): Promise<void>;
       exerciseCard(item: any, logged: any[], prefill: Record<string, unknown>, index: any, rx: any): string;
@@ -1258,6 +1258,7 @@ declare global {
   declare function deviceTimeZone(): string;
   declare function localISO(date?: Date): string;
   declare function dateLabel(iso: string): string;
+  declare function pickDayVariant<T>(variants: readonly T[], date?: string, key?: string): T;
   declare function api<Path extends string>(
     p: Path,
     opts?: RequestInit & { headers?: Record<string, string>; acceptErrorBody?: boolean }
@@ -3030,6 +3031,7 @@ declare global {
       fmtDateRange(start: unknown, end: unknown): string;
       daysUntil(iso: unknown, todayIso?: string): number | null;
       eventActive(event: Record<string, unknown> | null | undefined, todayIso?: string): boolean;
+      eventResolved(event: Record<string, unknown> | null | undefined, todayIso?: string): boolean;
       lifeFieldsHtml(kind: unknown): string;
       lifeImpactsHtml(impact: Record<string, unknown> | null | undefined): string;
       lifeEventInner(event: Record<string, unknown>, impact?: Record<string, unknown> | null): string;
@@ -3055,6 +3057,7 @@ declare global {
       rewireCard(card: HTMLElement, deps: ClientLifeControllerDeps): void;
       startDelete(button: Element, deps: ClientLifeControllerDeps): void;
       startEdit(card: HTMLElement | null, deps: ClientLifeControllerDeps): void;
+      startResolve(button: Element, deps: ClientLifeControllerDeps): void;
     };
 
     CairnLifeController: {
@@ -3734,11 +3737,16 @@ declare global {
       prefillFor(
         item: Record<string, unknown>,
         loggedByEx: Record<string, Array<Record<string, unknown>>>,
-        lastSets: Record<string, Record<string, unknown> | null>
+        lastSets: Record<string, Record<string, unknown> | null>,
+        rx?: Partial<ClientPrescription> | null
       ): Record<string, unknown>;
     };
 
     CairnTodayPlanSessionData: {
+      loadSymptomMovements(
+        names: string[],
+        deps: { state: { logDate: string }; api(path: string): Promise<unknown> }
+      ): Promise<string[]>;
       loadLastSets(
         names: string[],
         loggedByEx: Record<string, Array<Record<string, unknown> & { exercise?: string; set_number?: number | null }>>,
@@ -4058,7 +4066,7 @@ declare global {
       RX_ACTION: Record<string, { word: string; cls: string }>;
       rxTargetText(rx: Partial<ClientPrescription> | null | undefined): string;
       exRxVaryMenuHtml(rx: Partial<ClientPrescription> | null | undefined): string;
-      exRxLineHtml(rx: Partial<ClientPrescription> | null | undefined): string;
+      exRxLineHtml(rx: Partial<ClientPrescription> | null | undefined, options?: { supporting?: boolean }): string;
       rxMoveCount(
         rxByExercise: Record<string, Partial<ClientPrescription> | null | undefined> | null | undefined
       ): number;
@@ -4073,7 +4081,7 @@ declare global {
         root: ParentNode;
         cachedApi(path: string, options?: { key?: string; freshFor?: number }): Promise<unknown>;
         invalidate(keyOrPrefix: string): void;
-        exRxLineHtml(rx: unknown): string;
+        exRxLineHtml(rx: unknown, options?: { supporting?: boolean }): string;
         moveCount(rxByEx: Record<string, unknown>): number;
         loadProgramAdjustmentsBanner(): unknown;
       }): void;
@@ -4123,7 +4131,8 @@ declare global {
       renderFeedback(
         slot: Element | null | undefined,
         session: Record<string, unknown>,
-        deps: ClientTodaySessionFeedbackDeps
+        deps: ClientTodaySessionFeedbackDeps,
+        options?: { hasLoggedSets?: boolean }
       ): void;
       wireMovementChecks(
         session: Record<string, unknown>,
@@ -4155,7 +4164,8 @@ declare global {
       renderFeedback(
         slot: Element | null | undefined,
         session: Record<string, unknown>,
-        deps: ClientTodaySessionControllerDeps
+        deps: ClientTodaySessionControllerDeps,
+        options?: { hasLoggedSets?: boolean }
       ): void;
       wireDeletes(deps: ClientTodaySessionControllerDeps): void;
       wireLogRow(row: Element | null | undefined, deps: ClientTodaySessionControllerDeps): void;
@@ -4171,7 +4181,11 @@ declare global {
         prefill: Record<string, unknown>,
         revealIdx: unknown,
         rx: Partial<ClientPrescription> | null | undefined,
-        options?: { day?: unknown; exModes?: Record<string, unknown> | null },
+        options?: {
+          day?: unknown;
+          exModes?: Record<string, unknown> | null;
+          symptomMovements?: Iterable<unknown> | null;
+        },
         lastSet?: unknown
       ): string;
       cardioPlanCardHtml(

@@ -80,6 +80,35 @@ type TodayPlanSurfaceRendererApi = {
 };
 
 (() => {
+  // Stored item notes fossilize: a session eased as a whole leaves every single
+  // card repeating the same sentence. Say it once above the cards and let each
+  // card keep only what is its own. Render-side only — the rows are repaired
+  // separately and this must not wait for that.
+  const EASED_PREFIX = /^eased for today[\s.,:;·—–-]*/i;
+  const SESSION_EASED_LINES = [
+    "Eased for today — every movement sits a notch lighter.",
+    "The whole session is eased today; each lift is set a notch lighter.",
+    "Everything below is eased for today.",
+    "Lighter across the board today — that's deliberate.",
+  ];
+
+  // Deterministic per date (the pickDayVariant rotation, client side) so the line
+  // is stable all day and does not read as the same sentence every morning.
+  function sessionEasedLine(logDate: string): string {
+    const ms = Date.parse(`${String(logDate ?? "").slice(0, 10)}T00:00:00Z`);
+    const dayIndex = Number.isFinite(ms) ? Math.floor(ms / 864e5) : 0;
+    const span = SESSION_EASED_LINES.length;
+    return SESSION_EASED_LINES[((dayIndex % span) + span) % span];
+  }
+
+  function easedNote(item: TodayPlanSurfaceRendererItem): boolean {
+    return EASED_PREFIX.test(String(item.note ?? "").trim());
+  }
+
+  function withoutEasedPrefix(note: unknown): string {
+    return String(note ?? "").trim().replace(EASED_PREFIX, "").trim();
+  }
+
   function sameJourneyExercise(left: unknown, right: unknown): boolean {
     return String(left || "").trim().toLowerCase() === String(right || "").trim().toLowerCase();
   }
@@ -161,9 +190,18 @@ type TodayPlanSurfaceRendererApi = {
     const garmin = options.session && typeof options.session === "object" ? options.session.garmin : null;
     if (options.hasGarmin) html += deps.garminSessionCard(garmin);
 
+    const surfaceItems = orderedSurfaceItems(options, deps);
+    const easedItems = surfaceItems.filter((item) => !deps.isCardioItem(item));
+    // One card saying it is eased is its own fact; every card saying it is the
+    // session's fact, and belongs above them once.
+    const easedSession = easedItems.length > 1 && easedItems.every(easedNote);
+    if (easedSession) {
+      html += `<div class="session-eased sess-line">${surfaceDeps.escapeHtml(sessionEasedLine(options.logDate))}</div>`;
+    }
+
     let cardIdx = 0;
     let syncLineUsed = false;
-    for (const item of orderedSurfaceItems(options, deps)) {
+    for (const item of surfaceItems) {
       if (deps.isCardioItem(item)) {
         const matched = options.matchedCardio.get(item) || null;
         const line = (!matched && !syncLineUsed) ? options.syncedLine : "";
@@ -172,9 +210,11 @@ type TodayPlanSurfaceRendererApi = {
         continue;
       }
       const exerciseName = String(item.exercise || "");
+      const carded = journeyItem(item, options.day, options.strengthJourney);
       html += deps.exCard(
         {
-          ...journeyItem(item, options.day, options.strengthJourney),
+          ...carded,
+          ...(easedSession ? { note: withoutEasedPrefix(carded.note) } : {}),
           fromPlan: item.fromPlan !== false,
           fromSession: item.fromSession === true,
         },

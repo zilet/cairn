@@ -17,6 +17,7 @@ import { beforeEach } from "node:test";
 import { db } from "../dist/db.js";
 import { resetMarkerHistoryCache } from "../dist/repo/health.js";
 import { resetDayReadRefresh } from "../dist/dayread-refresh.js";
+import { resetDayReadComputeCoalescing } from "../dist/dayread.js";
 import { resetBrainEventsForTest } from "../dist/brainEvents.js";
 import { resetTrainingDataCache } from "../dist/repo/training-cache.js";
 
@@ -49,6 +50,9 @@ beforeEach(() => {
   // it (and restore default hooks) so it can never leak into — or spawn a CLI during —
   // a later test.
   resetDayReadRefresh();
+  // And the canonical-recompute lane: an unsettled run left by one test must never
+  // be joined by the next one, whose DB has just been wiped out from under it.
+  resetDayReadComputeCoalescing();
   resetBrainEventsForTest();
   // Same hazard for the training memos (getProgramState / getWeeklyStats /
   // estimateExpenditure): reset their counters to 0 and drop every registered memo so a

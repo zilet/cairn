@@ -781,6 +781,27 @@ export function hasExplicitSymptomReportIntent(message: string | null | undefine
   return write.test(text) && symptom.test(text) && !resolvedOrNegated.test(text) && !negatedWrite.test(text);
 }
 
+// Closing a pain note is the athlete's call, not the coach's read. The model may
+// only close one when they say so in this turn — a good session, a week of silence,
+// or a question about how it's going is never authority to close the record.
+export function hasExplicitSymptomResolveIntent(message: string | null | undefined): boolean {
+  const text = String(message ?? "")
+    .replace(/[‘’]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return false;
+  if (/\?\s*$/.test(text)) return false;
+  const subject =
+    /\b(?:pain|painful|ache|aching|aches|hurt|hurts|hurting|sore|soreness|discomfort|niggle|symptom|injury|knee|knees|shoulder|shoulders|elbow|elbows|wrist|hip|hips|groin|glute|back|lumbar|ankle|ankles|achilles|calf|calves|shin|foot|feet|forearm|note)\b/i;
+  const closeCommand =
+    /\b(?:close|resolve|clear)\b|\bmark(?:\s+(?:it|that|them))?\s+(?:as\s+)?(?:resolved|healed|better|fine|done)\b/i;
+  const healed =
+    /\b(?:healed|all better|resolved|pain[- ]free|no longer (?:hurts?|hurting|aching|sore|painful|bothering)|(?:is|has|are) (?:gone|cleared)|cleared up|went away|no (?:more )?(?:pain|ache|aching|soreness|discomfort|niggle))\b/i;
+  const negated = /\b(?:do not|don't|dont|never|not|stop)\b[\s\S]{0,24}\b(?:close|resolve|clear|mark)\b/i;
+  if (negated.test(text)) return false;
+  return subject.test(text) && (closeCommand.test(text) || healed.test(text));
+}
+
 function decisionReferences(text: string): number[] {
   return [...text.matchAll(/\bdecision\s*(?:#\s*|id\s*)?(\d+)\b/gi)]
     .map((match) => Number(match[1]))
@@ -2447,6 +2468,18 @@ export function applyChatActions(
               onset_on: stringOrUndefined(a.onset_on),
               source_kind: "chat_explicit",
             }),
+          });
+          break;
+        case "resolve_training_symptom":
+          // Parity with the surfaces and MCP: chat could open a pain note but never
+          // close one, so the only way out of the loop was to open the app.
+          if (!hasExplicitSymptomResolveIntent(message)) break;
+          applied.push({
+            type: a.type,
+            result: repo.resolveTrainingSymptomByArea(a.area_text, stringOrUndefined(a.on)) ?? {
+              error: "no open pain note matches that area",
+              area_text: a.area_text,
+            },
           });
           break;
         case "plan_update":

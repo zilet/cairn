@@ -310,14 +310,18 @@ test("Today feedback markup owns scale, done state, and empty state", () => {
   const form = status.feedbackFormHtml({ joint_pain: "left <knee>" });
   assert.match(form, /data-feel="soreness"/);
   assert.match(form, /data-feel="performance"/);
-  assert.match(form, /aria-label="soreness 1"/);
+  // The scales are taps on a face, so they read back as words. A "3/5" here would
+  // be a numeric grade on how the athlete felt — the one thing Cairn never shows.
+  assert.match(form, /aria-label="soreness: fresh"/);
+  assert.doesNotMatch(form, /aria-label="soreness \d"/);
   assert.match(form, /value="left &lt;knee&gt;"/);
   assert.match(form, /id="feedbackDismiss"/);
   assert.doesNotMatch(form, /left <knee>/);
 
   const done = status.feedbackDoneHtml({ soreness: 2, performance: 5, joint_pain: "right <hip>" });
-  assert.match(done, /soreness 2\/5/);
-  assert.match(done, /performance 5\/5/);
+  assert.match(done, /barely sore/);
+  assert.match(done, /felt well above expected/);
+  assert.doesNotMatch(done, /\d\s*\/\s*5/, "no numeric score reaches the athlete");
   assert.match(done, /right &lt;hip&gt;/);
   assert.match(done, /id="feedbackEdit"/);
   assert.equal(status.feedbackDoneHtml({}), "");

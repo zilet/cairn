@@ -36,7 +36,12 @@ import {
   type VolumeSet,
 } from "./exercise-variations.js";
 import { findExercise, recentWorkingWeight } from "./exercises.js";
+import { relatedLiftStart } from "./related-lift.js";
 import { loadPhrase, recentMuscleLoad, type RecentLoad } from "./hybrid-load.js";
+// Every athlete-facing sentence this engine says lives in ONE vocabulary module as
+// a SET of phrasings, rotated per day and per exercise — never a literal here. See
+// the contract at the top of progression-voice.ts.
+import * as voice from "./progression-voice.js";
 import { painAreaLoadsGroup } from "./pain-relevance.js";
 export { painAreaLoadsExercise } from "./pain-relevance.js";
 import { addExerciseToPlanDay, getPlan, pressSlotKey } from "./plan.js";
@@ -113,6 +118,12 @@ export interface Prescription {
   delta_text: string; // plain words: "+5 lb", "hold 50", "−10%", "+5s"
   why: string;
   reground?: boolean; // the plan target was behind logged reality — applying re-grounds it
+  // The suggested load is a conservative idea taken from a RELATED lift, not this
+  // movement's own history — true only while nothing has been logged for it. It is
+  // deliberately never written to plan_items (see related-lift.ts): the first
+  // logged set replaces it, and a stored guess would outlive the sessions that
+  // contradict it.
+  starting_idea?: boolean;
   vary_to?: string; // a concrete same-pattern variation to rotate in (action "vary")
   vary_options?: { name: string; why: string }[]; // a MENU of same-pattern swaps (action "vary"); vary_to is the lead
   plan_item_id?: number; // set by planDayProgression for the apply path
@@ -191,7 +202,9 @@ function autoregBrake(
   group: MuscleGroup | null,
   hasHistory: boolean,
   autoreg: AutoregSignals | null,
-  recentLoad: Map<MuscleGroup, RecentLoad> | null
+  recentLoad: Map<MuscleGroup, RecentLoad> | null,
+  name: string,
+  date: string
 ): BrakeResult {
   if (!autoreg && !recentLoad) return null;
   const heavyAcute = group && recentLoad ? recentLoad.get(group)?.heavy === true : false;
@@ -203,16 +216,10 @@ function autoregBrake(
   // A named sore joint is the strongest brake — one step toward safety.
   if (jointHit) {
     if (action === "overload") {
-      return {
-        action: "hold",
-        why: `Your last check-in flagged a sore joint this lift loads — holding the load today rather than adding; earn a clean, pain-free session first.`,
-      };
+      return { action: "hold", why: voice.liftVoice(voice.JOINT_BRAKE_HOLD, date, "joint_brake_hold", name) };
     }
     if (action === "hold" && hasHistory) {
-      return {
-        action: "deload",
-        why: `A sore joint this lift loads is still flagged — easing the load a touch so it can settle before you build again.`,
-      };
+      return { action: "deload", why: voice.liftVoice(voice.JOINT_BRAKE_DELOAD, date, "joint_brake_deload", name) };
     }
     return null;
   }
@@ -225,7 +232,7 @@ function autoregBrake(
         : "recent sessions felt flat";
     return {
       action: "hold",
-      why: `Holding the load today — ${reason}, so this isn't the session to push. Recovery informs the plan; it's a brake, not a penalty.`,
+      why: voice.liftVoice(voice.STRAIN_BRAKE_HOLD, date, "strain_brake_hold", name)(reason),
     };
   }
   return null;
@@ -495,11 +502,11 @@ export function applySwapSmart(
       if (hostDay == null) return { ok: false, error: `couldn't find ${f} — or a day that trains it — on your plan` };
       let added: ReturnType<typeof addExerciseToPlanDay>;
       try {
-        added = addExerciseToPlanDay(
-          hostDay,
-          t,
-          `Added as a fresh variation for ${f} — start light, log your actual working weight.`,
-        );
+        // The LEAD clause only — addExerciseToPlanDay grounds the movement and adds
+        // the starting cue that grounding earned. A lift with real logged history
+        // must not be told to start light just because it arrived by this path
+        // rather than by a swap.
+        added = addExerciseToPlanDay(hostDay, t, `Added as a fresh variation for ${f}`);
       } catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) };
       }
@@ -905,6 +912,7 @@ export interface PrescriptionOpts {
   excludeNames?: string[] | null; // movements already in the week — don't re-suggest their exercise/slot
   personalModifier?: CoachPersonalModifier | null; // learned step size; never overrides constraints/recovery
   preferences?: ParsedPreference[] | null; // learned like/dislike memories; gently re-ranks variety, never constraints
+  date?: string | null; // the day whose phrasing rotation applies (defaults to today)
 }
 
 export function nextPrescription(
@@ -950,6 +958,7 @@ export function nextPrescription(
     excludeNames,
     personalModifier,
     preferences,
+    date: String(opts?.date || localDateISO()).slice(0, 10),
   };
   if (mode === "timed")
     return timedPrescription(exerciseName, group, loadConstrained, plan, cur, last, state, brakeCtx);
@@ -965,6 +974,7 @@ interface PrescCtx {
   excludeNames: string[];
   personalModifier: CoachPersonalModifier | null;
   preferences: ParsedPreference[];
+  date: string; // keys the per-day phrasing rotation (with the exercise as the offset)
 }
 
 function repsPrescription(
@@ -977,6 +987,10 @@ function repsPrescription(
   state: LiftState | null,
   brakeCtx?: PrescCtx
 ): Prescription {
+  // Every verdict below picks its sentence from a SET of phrasings keyed on the day
+  // and this lift, so two lifts in the same state never print the same line.
+  const date = brakeCtx?.date ?? localDateISO();
+  const say = <T>(set: readonly T[], code: string): T => voice.liftVoice(set, date, code, name);
   // Ground in REALITY. The load to progress FROM is the HARDER of the plan target and
   // the athlete's actual recent working weight — so a stale plan target (e.g. 27 lb)
   // can't strand a lift the athlete is genuinely driving (45–50 lb every week). Falls
@@ -999,7 +1013,16 @@ function repsPrescription(
   // The plan target is BEHIND what they're actually lifting → the prescription also
   // RE-GROUNDS the plan: the displayed "current" reflects reality, and applying lands
   // the plan target on what they truly handle ("gradually adjust the plan from logs").
-  const planBehind = planWeight != null && recentWorking != null && recentWorking > planWeight + 0.1;
+  //
+  // A NULL plan target with real logged history counts as behind. It used to be
+  // excluded (`planWeight != null`), which meant the whole re-grounding path was
+  // unreachable for exactly the lifts that need it most — a movement rotated in with
+  // no target, then loaded for real, stayed at NULL forever with the catch-up prose
+  // dead code. The bodyweight encoding is safe here: recentWorkingWeight ignores
+  // null/zero loads, so a genuinely bodyweight lift never reads as behind.
+  const planUnset = plan != null && planWeight == null && recentWorking != null;
+  const planBehind =
+    planUnset || (planWeight != null && recentWorking != null && recentWorking > planWeight + 0.1);
 
   const repLow = plan?.rep_low ?? cur?.rep_low ?? undefined;
   const repHigh = plan?.rep_high ?? cur?.rep_high ?? undefined;
@@ -1013,9 +1036,18 @@ function repsPrescription(
   let varyTo: string | undefined;
   let varyOptions: { name: string; why: string }[] | undefined;
   let repStep = false; // a DOUBLE-PROGRESSION rep advance (load held, reps climb in-range)
+  let startingIdea = false; // the suggestion is a related-lift idea, not this lift's own history
   // Equipment-ranked, compound-biased, plan-deduped same-pattern candidates —
   // computed ONCE and reused by the vary + introduce branches (and the introduce guard).
   const varyCandidates = rankedVaryOptions(name, brakeCtx);
+  // A movement with nothing logged of its own and no number on the plan is exactly
+  // the case a rotate-in creates. Rather than showing an empty target and "start
+  // light", offer a conservative starting idea from a related lift the athlete does
+  // train — HERE, in the live prescription, and never in plan_items (a stored guess
+  // would become the floor every future step is measured from; see related-lift.ts).
+  // A load-limiting note is the authority and skips this entirely, and one logged
+  // set retires it for good.
+  const relatedStart = !last && baseWeight == null && !loadConstrained ? relatedLiftStart(name) : null;
 
   const status = state?.status ?? "new";
   const lastRir = last?.rir ?? null;
@@ -1044,12 +1076,11 @@ function repsPrescription(
   if (loadConstrained) {
     action = "hold";
     nextWeight = baseWeight;
-    why =
-      "This lift has a load-limiting note — hold the weight where you're working and earn clean reps and range first.";
+    why = say(voice.CONSTRAINED_HOLD, "constrained_hold");
   } else if (status === "regressing") {
     action = "deload";
     nextWeight = baseWeight != null && baseWeight > 0 ? round5(baseWeight * (1 - DELOAD_FRAC)) : baseWeight;
-    why = "Strength has been slipping — back the load off about 10% and let it rebuild on a clean run.";
+    why = say(voice.REGRESSING_DELOAD, "regressing_deload");
   } else if (status === "plateaued") {
     // Grinding (RIR ≤ 1) → deload; flat ≥ ~3 wk → vary; else hold/technique.
     const grinding = lastRir != null && lastRir <= 1;
@@ -1057,7 +1088,7 @@ function repsPrescription(
     if (grinding) {
       action = "deload";
       nextWeight = baseWeight != null && baseWeight > 0 ? round5(baseWeight * (1 - DELOAD_FRAC)) : baseWeight;
-      why = "Stuck and grinding (RIR 0–1 with the load flat) — a light deload, then a fresh run, usually breaks it.";
+      why = say(voice.PLATEAU_GRIND_DELOAD, "plateau_grind_deload");
     } else if (flatLong) {
       action = "vary";
       nextWeight = baseWeight;
@@ -1070,17 +1101,26 @@ function repsPrescription(
       varyOptions = varyCandidates;
       varyTo = varyOptions[0]?.name;
       why = varyTo
-        ? `Flat about ${state?.weeks_static} weeks — rotate to ${varyTo} (same movement pattern) to unstick it; keep the rest of the day.`
-        : `Flat about ${state?.weeks_static} weeks — rotating to a close variation (same pattern) tends to unstick it.`;
+        ? say(voice.PLATEAU_VARY_TO, "plateau_vary_to")(state?.weeks_static ?? 0, varyTo)
+        : say(voice.PLATEAU_VARY_OPEN, "plateau_vary_open")(state?.weeks_static ?? 0);
     } else {
       action = "hold";
       nextWeight = baseWeight;
-      why = "Flat lately — hold the load and chase a clean extra rep before adding weight.";
+      why = say(voice.PLATEAU_HOLD, "plateau_hold");
     }
   } else if (!last && plan) {
     action = "hold";
-    nextWeight = baseWeight;
-    why = "Nothing logged yet — start where the plan sits and log your actual sets.";
+    if (relatedStart) {
+      nextWeight = relatedStart.weight;
+      startingIdea = true;
+      why = say(voice.RELATED_START_IDEA, "related_start_idea")(
+        relatedStart.source_exercise,
+        `${relatedStart.weight} lb`
+      );
+    } else {
+      nextWeight = baseWeight;
+      why = say(voice.NO_HISTORY_PLANNED_HOLD, "no_history_planned_hold");
+    }
   } else if (
     !loadConstrained &&
     state?.status === "maintaining" &&
@@ -1096,7 +1136,11 @@ function repsPrescription(
     nextWeight = baseWeight;
     varyOptions = varyCandidates;
     varyTo = varyOptions[0]?.name;
-    why = `You've run ${name} steady for ~${brakeCtx?.tenureWeeks} weeks — introduce ${varyTo} (same pattern, room to load heavier) to freshen the stimulus before it goes stale.`;
+    why = say(voice.INTRODUCE_VARIATION, "introduce_variation")(
+      ex_name(name),
+      brakeCtx?.tenureWeeks ?? 0,
+      varyTo ?? "a close variation"
+    );
   } else if (hasRange && strong && roomInRange && !allSetsAtTop) {
     // DOUBLE PROGRESSION — the REP stage. The work was strong but not every set has
     // capped the range yet: advance reps within the range, hold the load. This is NO
@@ -1104,7 +1148,7 @@ function repsPrescription(
     action = "overload";
     repStep = true;
     nextWeight = baseWeight;
-    why = `Reps are climbing at RIR 2+ but not every set has hit ${repHigh} yet — chase a rep toward the top of the range across all your sets before any load. Cap every set, then the weight goes up.`;
+    why = say(voice.REP_STAGE_OVERLOAD, "rep_stage_overload")(repHigh as number);
   } else if (earned) {
     // DOUBLE PROGRESSION — the LOAD stage. Every working set capped the range at RIR 2+
     // (or no range + a strong top set) → the small earned step up, then reset to the bottom.
@@ -1112,7 +1156,7 @@ function repsPrescription(
     if (baseWeight == null) {
       // Bodyweight reps lift — no load to add; progression is reps/sets.
       nextWeight = null;
-      why = "You've capped the range on a bodyweight movement — add a rep or a set; there's no load to add.";
+      why = say(voice.BODYWEIGHT_OVERLOAD, "bodyweight_overload");
     } else if (baseWeight < 0) {
       // Assisted — reduce the assist toward bodyweight (a smaller absolute value).
       const ceil = stepCeiling(group);
@@ -1130,13 +1174,13 @@ function repsPrescription(
       nextWeight = reduced >= 0 ? null : reduced; // crossed to bodyweight → null
       why =
         nextWeight == null
-          ? "You're nearly off the assist — try the next session at bodyweight."
-          : "You capped the range — peel a little assist off; you're getting stronger.";
+          ? say(voice.ASSIST_TO_BODYWEIGHT, "assist_to_bodyweight")
+          : say(voice.ASSIST_PEEL, "assist_peel");
     } else {
       nextWeight = clampedOverload(baseWeight, group, brakeCtx?.personalModifier);
       why = hasRange
-        ? `Every set hit ${repHigh} at RIR 2+ — take the earned step up, then reset to ${repLow} reps and build the range back up.`
-        : "You hit the top of the range at RIR 2+ — the small earned step up is yours.";
+        ? say(voice.EARNED_RANGE_OVERLOAD, "earned_range_overload")(repHigh as number, repLow as number)
+        : say(voice.EARNED_OPEN_OVERLOAD, "earned_open_overload");
     }
   } else {
     action = "hold";
@@ -1144,16 +1188,16 @@ function repsPrescription(
     if (last && !doseEligibility.eligible)
       why =
         doseEligibility.reason === "unfinished"
-          ? "This linked session is still unfinished — hold the current target until the full dose is complete."
+          ? say(voice.DOSE_UNFINISHED_HOLD, "dose_unfinished_hold")
           : doseEligibility.reason === "partial"
-            ? "Only part of the linked dose was completed — hold the current target until the full prescription is owned."
+            ? say(voice.DOSE_PARTIAL_HOLD, "dose_partial_hold")
             : doseEligibility.reason === "under_prescribed"
-              ? "The full linked challenge was not yet completed — hold the current target until every prescribed set is owned."
-            : "The latest linked dose is not comparable progression evidence — hold the current target and reassess after a clean exposure.";
-    else if (!last) why = "Hold here for now — a couple of logged sessions and the next step reads clearly.";
+              ? say(voice.DOSE_UNDER_HOLD, "dose_under_hold")
+              : say(voice.DOSE_NON_COMPARABLE_HOLD, "dose_non_comparable_hold");
+    else if (!last) why = say(voice.NO_HISTORY_HOLD, "no_history_hold");
     else if (hasRange && topReps != null && topReps >= (repHigh as number) && !allSetsAtTop)
-      why = `Your top set hit ${repHigh} but not every set did — hold the load and level all your sets at the top before adding.`;
-    else why = "Not quite earned yet — hold and finish the rep range cleanly at RIR 2+ before adding.";
+      why = say(voice.TOP_SET_ONLY_HOLD, "top_set_only_hold")(repHigh as number);
+    else why = say(voice.NOT_EARNED_HOLD, "not_earned_hold");
   }
 
   // Catch-up framing: when the plan target was BEHIND the real working weight, say so
@@ -1161,10 +1205,16 @@ function repsPrescription(
   // plan onto reality (the suggested weight = baseWeight, so applying lands it there).
   if (planBehind && baseWeight != null) {
     const lbl = baseWeight < 0 ? `${Math.abs(baseWeight)} lb assist` : `${baseWeight} lb`;
+    // "The plan said a lighter number" and "the plan said nothing at all" are
+    // different facts, and the athlete can tell them apart on the card.
     if (action === "overload" && !repStep)
-      why = `Your plan was behind what you're actually lifting — stepping up from your real working weight (${lbl}).`;
+      why = planUnset
+        ? say(voice.PLAN_UNSET_OVERLOAD, "plan_unset_overload")(lbl)
+        : say(voice.PLAN_BEHIND_OVERLOAD, "plan_behind_overload")(lbl);
     else if (action === "hold" && !loadConstrained)
-      why = `Your plan was behind what you're lifting — re-grounding it to your real working weight (${lbl}); earn a clean extra rep before adding.`;
+      why = planUnset
+        ? say(voice.PLAN_UNSET_HOLD, "plan_unset_hold")(lbl)
+        : say(voice.PLAN_BEHIND_HOLD, "plan_behind_hold")(lbl);
   }
 
   // Repeated comparable movement-dose outcomes are the first recovery brake.
@@ -1180,11 +1230,11 @@ function repsPrescription(
       action = "hold";
       nextWeight = baseWeight;
       repStep = false;
-      why = "The last two comparable exposures came in under this dose — hold it here and let the movement catch up.";
+      why = say(voice.MOVEMENT_RESPONSE_HOLD, "movement_response_hold");
     } else if (action === "hold" && last && doseEligibility.eligible) {
       action = "deload";
       nextWeight = baseWeight != null && baseWeight > 0 ? round5(baseWeight * (1 - DELOAD_FRAC)) : baseWeight;
-      why = "The last two comparable exposures both came in under this held dose — ease one bounded step and rebuild.";
+      why = say(voice.MOVEMENT_RESPONSE_DELOAD, "movement_response_deload");
     }
     varyTo = undefined;
     varyOptions = undefined;
@@ -1196,7 +1246,7 @@ function repsPrescription(
   // step (an earned overload the morning after a sore knee becomes a hold/deload).
   let autoregulated = false;
   const brake = brakeCtx
-    ? autoregBrake(action, brakeCtx.canonGroup, !!last, brakeCtx.autoreg, brakeCtx.recentLoad)
+    ? autoregBrake(action, brakeCtx.canonGroup, !!last, brakeCtx.autoreg, brakeCtx.recentLoad, name, date)
     : null;
   if (brake) {
     autoregulated = true;
@@ -1237,6 +1287,9 @@ function repsPrescription(
     delta_text,
     why,
     reground: planBehind || undefined,
+    // Only claim the starting idea while the suggestion IS still that number — a
+    // brake that resets the load back to the plan has taken the idea away with it.
+    starting_idea: (startingIdea && nextWeight != null) || undefined,
     vary_to: varyTo,
     vary_options: varyOptions,
     autoregulated: autoregulated || undefined,
@@ -1256,6 +1309,8 @@ function timedPrescription(
   state: LiftState | null,
   brakeCtx?: PrescCtx
 ): Prescription {
+  const date = brakeCtx?.date ?? localDateISO();
+  const say = <T>(set: readonly T[], code: string): T => voice.liftVoice(set, date, code, name);
   const baseSeconds: number | null =
     plan?.seconds != null ? plan.seconds : last?.duration_sec != null ? Math.round(Number(last.duration_sec)) : null;
   const sets = plan?.sets || 1;
@@ -1274,34 +1329,34 @@ function timedPrescription(
   if (loadConstrained) {
     action = "hold";
     nextSeconds = baseSeconds;
-    why = "This hold has a load-limiting note — keep it where it is, don't extend.";
+    why = say(voice.TIMED_CONSTRAINED_HOLD, "timed_constrained_hold");
   } else if (status === "regressing") {
     action = "deload";
     nextSeconds = baseSeconds != null ? Math.max(10, Math.round(baseSeconds * (1 - DELOAD_FRAC))) : baseSeconds;
-    why = "Holds have been getting shorter — reset to a duration you own and rebuild.";
+    why = say(voice.TIMED_REGRESSING_DELOAD, "timed_regressing_deload");
   } else if (!last && plan) {
     action = "hold";
     nextSeconds = baseSeconds;
-    why = "Nothing logged yet — start at the planned hold and log your actual time.";
+    why = say(voice.TIMED_NO_HISTORY_PLANNED_HOLD, "timed_no_history_planned_hold");
   } else if ((solid || status === "progressing") && doseEligibility.eligible) {
     action = "overload";
     const base = baseSeconds ?? held ?? 0;
     const step = timedStep(base, brakeCtx?.personalModifier);
     nextSeconds = base + step;
-    why = `The hold's solid — add ${step}s (a proportional step for a ${base}s hold). Progress timed work in time, never load.`;
+    why = say(voice.TIMED_OVERLOAD, "timed_overload")(step, base);
   } else {
     action = "hold";
     nextSeconds = baseSeconds ?? held;
     why =
       last && !doseEligibility.eligible
         ? doseEligibility.reason === "unfinished"
-          ? "This linked session is still unfinished — hold the duration until the full dose is complete."
+          ? say(voice.TIMED_DOSE_UNFINISHED_HOLD, "timed_dose_unfinished_hold")
           : doseEligibility.reason === "partial"
-            ? "Only part of the linked timed dose was completed — hold the duration until the full prescription is owned."
+            ? say(voice.TIMED_DOSE_PARTIAL_HOLD, "timed_dose_partial_hold")
             : doseEligibility.reason === "under_prescribed"
-              ? "The full linked timed challenge was not yet completed — hold until every prescribed interval is owned."
-            : "The latest linked timed dose is not comparable progression evidence — hold and reassess after a clean exposure."
-        : "Hold this duration until it feels easy, then extend it.";
+              ? say(voice.TIMED_DOSE_UNDER_HOLD, "timed_dose_under_hold")
+              : say(voice.TIMED_DOSE_NON_COMPARABLE_HOLD, "timed_dose_non_comparable_hold")
+        : say(voice.TIMED_DEFAULT_HOLD, "timed_default_hold");
   }
 
   const response = recentMovementResponse(name, { intent_key: "strength:timed" });
@@ -1309,11 +1364,11 @@ function timedPrescription(
     if (action === "overload") {
       action = "hold";
       nextSeconds = baseSeconds;
-      why = "The last two comparable holds came in under this duration — keep it here until the full dose is owned.";
+      why = say(voice.TIMED_RESPONSE_HOLD, "timed_response_hold");
     } else if (action === "hold" && last && doseEligibility.eligible) {
       action = "deload";
       nextSeconds = baseSeconds != null ? Math.max(10, Math.round(baseSeconds * (1 - DELOAD_FRAC))) : baseSeconds;
-      why = "The last two comparable holds both came in under this duration — ease one bounded step and rebuild.";
+      why = say(voice.TIMED_RESPONSE_DELOAD, "timed_response_deload");
     }
   }
 
@@ -1322,7 +1377,7 @@ function timedPrescription(
   // eases in SECONDS, never load. Applied last so it wins over the earned extension.
   let autoregulated = false;
   const brake = brakeCtx
-    ? autoregBrake(action, brakeCtx.canonGroup, !!last, brakeCtx.autoreg, brakeCtx.recentLoad)
+    ? autoregBrake(action, brakeCtx.canonGroup, !!last, brakeCtx.autoreg, brakeCtx.recentLoad, name, date)
     : null;
   if (brake) {
     autoregulated = true;
@@ -1397,7 +1452,8 @@ export function planDayProgression(dayNumber: number, opts: { forNextSession?: b
   );
   const personalResponse = whatWorksForYou();
   const preferences = learnedPreferences();
-  const fuelProtection = currentUnderfuelingRead(localDateISO());
+  const today = localDateISO();
+  const fuelProtection = currentUnderfuelingRead(today);
   const out: Prescription[] = [];
   for (const it of items) {
     if (it.kind === "cardio" || !it.name) continue; // skip cardio + label-only rows
@@ -1410,16 +1466,26 @@ export function planDayProgression(dayNumber: number, opts: { forNextSession?: b
       excludeNames,
       personalModifier,
       preferences,
+      date: today,
     });
     if (p) {
-      const protectedPrescription = applyFuelProtection(p, fuelProtection);
+      const protectedPrescription = applyFuelProtection(p, fuelProtection, today);
       out.push({ ...protectedPrescription, plan_item_id: it.plan_item_id, day_number: dayNumber });
     }
   }
   return out;
 }
 
-function applyFuelProtection(prescription: Prescription, read: UnderfuelingRead): Prescription {
+// The fuel read's TRAINING consequence, said in the TRAINING register.
+//
+// This used to concatenate `read.action.line` — a nutrition-domain sentence built
+// for the nutrition surfaces — straight into a lift card's `why`, which is how "A
+// recent fuel correction is still inside its seven-day settling window, so no
+// second calorie move is made." ended up printed under a bench press. The
+// consequence (hold this step / take a lighter dose) belongs on the lift; the
+// calorie mechanics behind it belong to the surfaces that already carry them.
+function applyFuelProtection(prescription: Prescription, read: UnderfuelingRead, date: string): Prescription {
+  const say = <T>(set: readonly T[], code: string): T => voice.liftVoice(set, date, code, prescription.exercise);
   if (read.action.training === "proceed") return prescription;
   if (read.action.training === "hold_aggression") {
     if (!["overload", "vary", "introduce"].includes(prescription.action)) {
@@ -1427,7 +1493,7 @@ function applyFuelProtection(prescription: Prescription, read: UnderfuelingRead)
         ? {
             ...prescription,
             autoregulated: true,
-            why: `${prescription.why} ${read.action.line}`,
+            why: `${prescription.why} ${say(voice.FUEL_HOLD_CLAUSE, "fuel_hold_clause")}`,
           }
         : prescription;
     }
@@ -1442,15 +1508,18 @@ function applyFuelProtection(prescription: Prescription, read: UnderfuelingRead)
       vary_to: undefined,
       vary_options: undefined,
       rep_step: undefined,
+      // The suggestion is the plan's own number again, so it is no longer the
+      // related-lift idea this prescription came in carrying.
+      starting_idea: undefined,
       autoregulated: true,
-      why: `${read.action.line} Hold this progression step while the independent fuel and outcome signals settle.`,
+      why: say(voice.FUEL_HOLD_STEP, "fuel_hold_step"),
     };
   }
   if (prescription.action === "deload")
     return {
       ...prescription,
       autoregulated: true,
-      why: `${prescription.why} ${read.action.line}`,
+      why: `${prescription.why} ${say(voice.FUEL_DELOAD_CLAUSE, "fuel_deload_clause")}`,
     };
   const base = prescription.current ?? prescription.suggested;
   const reduced: PrescriptionTarget = {
@@ -1469,9 +1538,33 @@ function applyFuelProtection(prescription: Prescription, read: UnderfuelingRead)
     vary_to: undefined,
     vary_options: undefined,
     rep_step: undefined,
+    starting_idea: undefined,
     autoregulated: true,
-    why: `${read.action.line} The next exposure uses a reversible recovery dose instead of another progression step.`,
+    why: say(voice.FUEL_RECOVERY_DOSE, "fuel_recovery_dose"),
   };
+}
+
+// The stored strength targets on a day, keyed by lowercased exercise name. A
+// present key with a null value is a slot with NO target — which is different from
+// a slot that isn't on the day at all, and the re-grounding check needs to tell
+// those apart.
+function planTargetsForDay(day: number): Map<string, number | null> {
+  const out = new Map<string, number | null>();
+  try {
+    const rows = db
+      .prepare(
+        `SELECT e.name AS name, pi.target_weight AS target_weight
+           FROM plan_items pi
+           JOIN plan_days pd ON pd.id = pi.plan_day_id
+           JOIN exercises e ON e.id = pi.exercise_id
+          WHERE pd.day_number = ? AND (pi.kind IS NULL OR pi.kind != 'cardio')`
+      )
+      .all(Number(day)) as any[];
+    for (const row of rows) out.set(String(row?.name ?? "").toLowerCase(), row?.target_weight ?? null);
+  } catch {
+    /* no plan day → nothing to compare against */
+  }
+  return out;
 }
 
 // Turn a day's per-lift prescriptions into a DRAFT plan proposal (the one-tap
@@ -1489,9 +1582,24 @@ export function buildProgressionProposal(
 ): { ok: false; error: string } | { ok: true; proposal: any } {
   if (!Number.isFinite(day)) return { ok: false, error: "day required" };
   const prescriptions = planDayProgression(day, opts);
+  const planTargets = planTargetsForDay(day);
   const changes: Record<string, any>[] = [];
   for (const p of prescriptions) {
-    if (p.action === "hold") continue; // a hold is no change
+    // A hold is by definition no change — EXCEPT when it re-grounds a plan target
+    // that sits below (or has nothing on it at all) what the athlete demonstrably
+    // lifts. Without this the plan never caught up: the prescription said "50 lb"
+    // on the card while plan_items kept its stale 27 (or its NULL) forever, so the
+    // catch-up existed only in prose. It rides the SAME propose→apply path as every
+    // other target nudge — bounded, reversible, ledgered, landing at a natural
+    // boundary through applyProposalWithAutonomy — never a silent direct write.
+    const planned = planTargets.get(p.exercise.toLowerCase());
+    const regroundOnly =
+      p.action === "hold" &&
+      p.reground === true &&
+      p.mode === "reps" &&
+      p.suggested?.weight != null &&
+      (planned == null || Math.abs(Number(p.suggested.weight) - Number(planned)) > 0.1);
+    if (p.action === "hold" && !regroundOnly) continue;
     if (p.rep_step) continue; // a double-progression rep advance is no plan change — the range already covers it
     // A vary/introduce → a first-class swap (rotate the lift out for the lead option).
     if (p.action === "vary" || p.action === "introduce") {

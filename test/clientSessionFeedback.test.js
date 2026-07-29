@@ -460,7 +460,7 @@ test("pain recurrence: a failed save leaves the composer open and explains recov
   await Promise.all(host.querySelector('[data-symptom-recur="7"]').click());
   await flush();
   assert.equal(panel.hidden, false, "a rejected request must not collapse the athlete's context");
-  assert.deepEqual(toasts, ["Couldn't update that symptom — try again."]);
+  assert.deepEqual(toasts, ["Couldn't update that note — try again."]);
   assert.equal(requests.filter((request) => request.path === "/training-symptoms/7/recur").length, 1);
 });
 

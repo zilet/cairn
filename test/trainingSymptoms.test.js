@@ -1,6 +1,8 @@
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
-import { db, repo, resetTables } from "./_seed.js";
+import { db, isoDaysAgo, repo, resetTables } from "./_seed.js";
+// pain-relevance is not barrelled through repo.js — import the module directly.
+import { muscleGroupsForPainArea, painAreaLoadsExercise } from "../dist/repo/pain-relevance.js";
 
 beforeEach(() => {
   resetTables("movement_tolerance_observations", "training_symptom_events", "logged_sets", "sessions", "exercises");
@@ -387,4 +389,289 @@ test("resolved gaps remain historically inactive after recurrence and late reads
     2,
     "retry does not create another episode"
   );
+});
+
+// ---- area labels: the contract that keeps relevance honest ------------------
+// A symptom's area_text is a LABEL (where it hurts), never prose. The historical
+// incident this guards: one agent-written coach paragraph landed in a symptom row,
+// pain-relevance matched "back"/"press"/"row" inside it, and every logged movement
+// became "relevant" — which made every training outcome permanently non-comparable.
+
+test("an area label is normalized to one short clause at every write path", () => {
+  const paragraph =
+    "Left knee felt tight through the warm-up today. I backed off the squats and " +
+    "worked around it with a press and a row, so keep the volume conservative for now.";
+
+  const reported = repo.reportTrainingSymptom({ area_text: paragraph, onset_on: "2034-03-01" });
+  assert.ok(reported.area_text.length <= 60, "a paragraph is trimmed to a label");
+  assert.equal(reported.area_text, "Left knee felt tight through the warm-up today");
+
+  // A different area, so this exercises the normalizer rather than adoption.
+  const spaced = repo.reportTrainingSymptom({
+    area_text: "  outside   of\n the LEFT elbow  ",
+    onset_on: "2034-03-02",
+    source_kind: "surface_test",
+  });
+  assert.equal(spaced.area_text, "outside of the LEFT elbow", "whitespace collapses, wording is kept");
+
+  repo.setSessionFeedback("2034-03-03", { joint_pain: paragraph });
+  const stored = db.prepare(`SELECT joint_pain FROM sessions WHERE date = '2034-03-03'`).get().joint_pain;
+  assert.ok(stored.length <= 60, "session joint_pain obeys the same label contract");
+});
+
+test("an over-long or unmapped area cannot make every lift look symptomatic", () => {
+  const squat = repo.findExercise("Back Squat");
+  const paragraph =
+    "Keep the back neutral on every press and row today, and treat the squat as a " +
+    "gentle check rather than a hard session while things settle down.";
+
+  assert.equal(
+    painAreaLoadsExercise(paragraph, { name: squat.name, muscle_group: squat.muscle_group }),
+    false,
+    "prose long enough to match several maps at once drives NO relevance"
+  );
+  assert.equal(
+    painAreaLoadsExercise("just feeling a bit flat", { name: squat.name, muscle_group: "quads" }),
+    false,
+    "text naming no area Cairn recognizes matches nothing"
+  );
+  assert.equal(
+    painAreaLoadsExercise("left knee", { name: squat.name, muscle_group: "quads" }),
+    true,
+    "a real short label still works"
+  );
+  assert.deepEqual(muscleGroupsForPainArea(paragraph), []);
+});
+
+test("legacy session prose imports as an extracted area label, not the paragraph", () => {
+  db.prepare(
+    `INSERT INTO sessions (date, joint_pain) VALUES ('2034-04-01', ?)`
+  ).run("Right shoulder was grumpy on the top set. Nothing sharp, just achy afterwards.");
+  db.prepare(`INSERT INTO sessions (date, joint_pain) VALUES ('2034-04-02', 'felt generally flat')`).run();
+
+  assert.equal(repo.seedLegacyTrainingSymptoms(), 2);
+  const events = repo.listTrainingSymptoms({ on: "2034-04-05" });
+  const shoulder = events.find((event) => /shoulder/i.test(event.area_text));
+  assert.equal(shoulder.area_text, "right shoulder", "the joint vocabulary extracts the area");
+  assert.equal(shoulder.legacy_unconfirmed, true);
+
+  const unmapped = events.find((event) => /flat/i.test(event.area_text));
+  assert.ok(unmapped, "an unrecognized note is still kept as the athlete's record");
+  assert.equal(
+    painAreaLoadsExercise(unmapped.area_text, { name: "Back Squat", muscle_group: "quads" }),
+    false,
+    "but it cannot drive relevance"
+  );
+});
+
+test("a legacy row imported before the label contract is repaired in place", () => {
+  const paragraph = "Left knee tightness — ease the squats, keep the press and row light, and recheck in a week.";
+  db.prepare(`INSERT INTO sessions (date, joint_pain) VALUES ('2034-04-10', ?)`).run(paragraph);
+  db.prepare(
+    `INSERT INTO training_symptom_events
+       (source_session_id, source_kind, area_text, status, onset_on, last_reported_on, legacy_unconfirmed)
+     SELECT id, 'legacy_session_feedback', ?, 'active', date, date, 1 FROM sessions WHERE date = '2034-04-10'`
+  ).run(paragraph);
+
+  repo.seedLegacyTrainingSymptoms();
+  const repaired = repo.listTrainingSymptoms({ on: "2034-04-11" })[0];
+  assert.equal(repaired.area_text, "left knee");
+});
+
+test("the same area reported again updates one record instead of doubling it", () => {
+  const session = repo.getOrCreateSession("2034-05-01");
+  const first = repo.reportTrainingSymptom({
+    area_text: "left knee",
+    onset_on: "2034-05-01",
+    source_session_id: session.id,
+    source_kind: "session_feedback",
+  });
+  // A different surface, a different day, an edited wording — still one place.
+  const edited = repo.reportTrainingSymptom({
+    area_text: "outside of left knee",
+    onset_on: "2034-05-03",
+    source_kind: "chat_explicit",
+  });
+  assert.equal(edited.id, first.id, "an edit updates in place across source kinds");
+  assert.equal(
+    edited.area_text,
+    "left knee",
+    "adopting matches on a key coarser than the words, so the athlete's own label is never overwritten"
+  );
+  assert.equal(edited.last_reported_on, "2034-05-03", "saying it again is current evidence");
+  assert.equal(edited.evidence_epoch, first.evidence_epoch, "a re-report never wipes tolerance evidence");
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM training_symptom_events`).get().n, 1);
+});
+
+test("an explicit report adopts the legacy import of the same place", () => {
+  repo.setSessionFeedback("2034-05-10", { joint_pain: "left knee" });
+  repo.listTrainingSymptoms({ on: "2034-05-10" }); // triggers the legacy import
+  const legacy = repo.listTrainingSymptoms({ on: "2034-05-10" })[0];
+  assert.equal(legacy.legacy_unconfirmed, true);
+
+  const confirmed = repo.reportTrainingSymptom({ area_text: "Left Knee", onset_on: "2034-05-11" });
+  assert.equal(confirmed.id, legacy.id);
+  assert.equal(confirmed.legacy_unconfirmed, false, "the athlete confirming it clears the unconfirmed flag");
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM training_symptom_events`).get().n, 1);
+});
+
+test("only a current, confirmed symptom may gate comparability", () => {
+  const acute = repo.reportTrainingSymptom({ area_text: "left knee", onset_on: "2034-06-01" });
+  assert.equal(repo.symptomGatesComparability(repo.getTrainingSymptom(acute.id, "2034-06-02")), true);
+  assert.equal(repo.symptomGatesComparability(repo.getTrainingSymptom(acute.id, "2034-06-06")), true);
+
+  const stale = repo.getTrainingSymptom(acute.id, "2034-06-20");
+  assert.equal(stale.freshness, "stale_needs_recheck");
+  assert.equal(stale.status, "active", "staleness NEVER auto-resolves a symptom — the athlete owns closure");
+  assert.equal(repo.symptomGatesComparability(stale), false, "but it stops holding outcomes non-comparable");
+
+  db.prepare(`INSERT INTO sessions (date, joint_pain) VALUES ('2034-06-02', 'right shoulder')`).run();
+  repo.seedLegacyTrainingSymptoms();
+  const imported = repo
+    .listTrainingSymptoms({ on: "2034-06-03" })
+    .find((event) => event.legacy_unconfirmed);
+  assert.equal(imported.freshness, "acute_movement_brake");
+  assert.equal(repo.symptomGatesComparability(imported), false, "an unconfirmed import never gates");
+});
+
+test("chat can close the open record for an area it names", () => {
+  const knee = repo.reportTrainingSymptom({ area_text: "left knee", onset_on: "2034-07-01" });
+  repo.reportTrainingSymptom({ area_text: "right shoulder", onset_on: "2034-07-01" });
+
+  assert.equal(repo.resolveTrainingSymptomByArea("something vague", "2034-07-05"), null);
+  const closed = repo.resolveTrainingSymptomByArea("my left knee", "2034-07-05");
+  assert.equal(closed.id, knee.id);
+  assert.equal(closed.status, "resolved");
+  assert.equal(closed.resolved_on, "2034-07-05");
+  assert.equal(
+    repo.listTrainingSymptoms({ on: "2034-07-05" }).length,
+    1,
+    "the other area stays open — closing is scoped to what they named"
+  );
+  assert.equal(repo.resolveTrainingSymptomByArea("left knee", "2034-07-06"), null, "already closed");
+});
+
+// The Brief read raw last-4-sessions joint_pain text, so "Mark resolved" changed
+// nothing: the same area kept warning every morning until the row was deleted.
+test("the coach's joint rollup goes quiet once the athlete closes that area", () => {
+  const { trainingSignals } = repo;
+  db.prepare(`INSERT INTO sessions (date, joint_pain) VALUES (?, 'left knee')`).run(isoDaysAgo(2));
+  db.prepare(`INSERT INTO sessions (date, joint_pain) VALUES (?, 'right shoulder')`).run(isoDaysAgo(1));
+
+  const before = trainingSignals();
+  assert.deepEqual(before.autoregulation.joint_areas.sort(), ["left knee", "right shoulder"]);
+
+  const knee = repo
+    .listTrainingSymptoms({})
+    .find((event) => /knee/i.test(event.area_text));
+  repo.resolveTrainingSymptom(knee.id);
+
+  const after = trainingSignals();
+  assert.deepEqual(
+    after.autoregulation.joint_areas,
+    ["right shoulder"],
+    "the closed area drops out; the still-open one keeps speaking"
+  );
+});
+
+// ---- review findings: repair starvation, lossy identity, lost relevance -----
+
+// Two ways a legacy paragraph used to be starved of repair. Both matter: the live
+// poisoned row is a paragraph an agent wrote into sessions.joint_pain, and it only
+// ever heals through one of these paths.
+
+// (1) The seeder ran repair only when the INSERT was a no-op, and the explicit-report
+// dedupe `continue`d before reaching it — so the row most in need of repair was the
+// one row that could never get it.
+test("a legacy paragraph is repaired even when the dedupe skips its insert", () => {
+  const paragraph = "Left knee tightness — ease the squats, keep the press and row light, and recheck in a week.";
+  // The athlete reported the knee explicitly BEFORE this session's note existed, so
+  // the later import is deduped away — but the row is already in the table.
+  repo.reportTrainingSymptom({ area_text: "left knee", onset_on: "2034-08-01", source_kind: "chat_explicit" });
+  db.prepare(`INSERT INTO sessions (date, joint_pain) VALUES ('2034-08-05', ?)`).run(paragraph);
+  db.prepare(
+    `INSERT INTO training_symptom_events
+       (source_session_id, source_kind, area_text, status, onset_on, last_reported_on, legacy_unconfirmed)
+     SELECT id, 'legacy_session_feedback', ?, 'active', date, date, 1 FROM sessions WHERE date = '2034-08-05'`
+  ).run(paragraph);
+
+  repo.seedLegacyTrainingSymptoms();
+
+  const legacy = db
+    .prepare(`SELECT area_text, legacy_unconfirmed FROM training_symptom_events WHERE source_kind = 'legacy_session_feedback'`)
+    .get();
+  assert.equal(legacy.area_text, "left knee", "repair runs before the dedupe skip, not after the insert");
+  assert.equal(legacy.legacy_unconfirmed, 1, "repairing the text does not confirm it on the athlete's behalf");
+  assert.equal(
+    painAreaLoadsExercise(legacy.area_text, { name: "Back Squat", muscle_group: "quads" }),
+    true,
+    "and the healed row can drive relevance again"
+  );
+});
+
+// (2) When an explicit report ADOPTS an unconfirmed import it clears the flag the
+// seeder's repair is scoped to — so that adoption has to carry the athlete's real
+// label, or the prose outlives every path that could have fixed it.
+test("adopting an unconfirmed import takes the athlete's label instead of keeping the prose", () => {
+  const paragraph = "Right shoulder was grumpy on the top set. Nothing sharp, just achy afterwards.";
+  db.prepare(`INSERT INTO sessions (date, joint_pain) VALUES ('2034-08-10', ?)`).run(paragraph);
+  db.prepare(
+    `INSERT INTO training_symptom_events
+       (source_session_id, source_kind, area_text, status, onset_on, last_reported_on, legacy_unconfirmed)
+     SELECT id, 'legacy_session_feedback', ?, 'active', date, date, 1 FROM sessions WHERE date = '2034-08-10'`
+  ).run(paragraph);
+
+  const confirmed = repo.reportTrainingSymptom({ area_text: "right shoulder", onset_on: "2034-08-11" });
+
+  assert.equal(confirmed.area_text, "right shoulder");
+  assert.equal(confirmed.legacy_unconfirmed, false);
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM training_symptom_events`).get().n, 1, "adopted, not doubled");
+});
+
+test("upper, mid and lower back are distinct places that never adopt one another", () => {
+  const upper = repo.reportTrainingSymptom({ area_text: "upper back", onset_on: "2034-09-01" });
+  const mid = repo.reportTrainingSymptom({ area_text: "mid back", onset_on: "2034-09-01" });
+  const lower = repo.reportTrainingSymptom({ area_text: "lower back", onset_on: "2034-09-01" });
+
+  assert.equal(new Set([upper.id, mid.id, lower.id]).size, 3, "three places, three records");
+  assert.equal(upper.area_text, "upper back");
+  assert.equal(mid.area_text, "mid back");
+  // Each still loads the same movements the bare "back" did — only identity split.
+  for (const area of ["upper back", "mid back", "lower back"]) {
+    assert.equal(
+      painAreaLoadsExercise(area, { name: "Back Squat", muscle_group: "quads" }),
+      true,
+      `${area} keeps its relevance`
+    );
+  }
+});
+
+// The reviewer diffed 46 labels x 7 exercises; these two were the only mappings the
+// relevance gate silently dropped, because pain-relevance matches \bac\b and \bsi\b
+// but the vocabulary did not recognize either as an area.
+test("AC joint and SI keep the relevance pain-relevance maps for them", () => {
+  assert.equal(
+    painAreaLoadsExercise("AC joint", { name: "Bench Press", muscle_group: "chest" }),
+    true,
+    "AC joint loads pressing"
+  );
+  assert.equal(
+    painAreaLoadsExercise("left ac joint", { name: "Bench Press", muscle_group: "chest" }),
+    true
+  );
+  assert.equal(
+    painAreaLoadsExercise("SI", { name: "Back Squat", muscle_group: "quads" }),
+    true,
+    "SI loads squat/hinge"
+  );
+  assert.equal(
+    painAreaLoadsExercise("sacroiliac", { name: "Back Squat", muscle_group: "quads" }),
+    true
+  );
+
+  // And they carry a real identity, so two SI reports are one record.
+  const first = repo.reportTrainingSymptom({ area_text: "SI joint", onset_on: "2034-10-01" });
+  const again = repo.reportTrainingSymptom({ area_text: "sacroiliac", onset_on: "2034-10-02" });
+  assert.equal(again.id, first.id);
+  assert.equal(again.area_text, "SI joint", "the first wording stands");
 });

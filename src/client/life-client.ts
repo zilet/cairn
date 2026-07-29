@@ -11,6 +11,7 @@ type LifeEventRow = {
   detail?: unknown;
   start_date?: unknown;
   end_date?: unknown;
+  resolved_at?: unknown;
   archived?: unknown;
   meta_json?: unknown;
 };
@@ -70,8 +71,16 @@ function daysUntil(iso: unknown, todayIso = localISO()): number | null {
   return Math.round((date.getTime() - today.getTime()) / 86400000);
 }
 
+function eventResolved(event: LifeEventRow | null | undefined, todayIso = localISO()): boolean {
+  const resolved = event?.resolved_at ? String(event.resolved_at).slice(0, 10) : "";
+  return !!resolved && resolved <= todayIso;
+}
+
 function eventActive(event: LifeEventRow | null | undefined, todayIso = localISO()): boolean {
   if (!event || event.archived) return false;
+  // An injury the athlete marked resolved is over regardless of its dates — an
+  // open-ended one would otherwise stay "active" and keep easing the plan forever.
+  if (eventResolved(event, todayIso)) return false;
   const end = event.end_date ? String(event.end_date) : "";
   const start = event.start_date ? String(event.start_date) : "";
   if (end) return end >= todayIso;
@@ -110,6 +119,16 @@ function lifeFieldsHtml(kind: unknown): string {
     text("lDetail", "Detail (optional)");
 }
 
+// This line sits under an open injury every single day it is open, so a single
+// literal reads as a stuck app. Rotated by calendar day; add a phrasing, not a
+// literal. ({n} = affected count, {moves} = move/moves.)
+const LIFE_IMPACT_LEADS: readonly string[] = [
+  "Touches {n} planned {moves} — ease off or swap, your call.",
+  "{n} planned {moves} run through this area — ease off or swap, whichever suits.",
+  "This crosses {n} planned {moves}; go lighter or swap them, your call.",
+  "{n} planned {moves} on the week load this — easing off or swapping both work.",
+];
+
 function lifeImpactsHtml(impact: LifeImpact | null | undefined): string {
   const affected = Array.isArray(impact?.affected) ? impact.affected as LifeImpactAffected[] : [];
   if (!affected.length) return "";
@@ -132,8 +151,11 @@ function lifeImpactsHtml(impact: LifeImpact | null | undefined): string {
         ${swaps}
       </div>`;
   }).join("");
+  const lead = pickDayVariant(LIFE_IMPACT_LEADS, localISO(), `life-impact:${affected.length}`)
+    .replaceAll("{n}", String(affected.length))
+    .replaceAll("{moves}", affected.length === 1 ? "move" : "moves");
   return `<div class="linj">
-      <div class="linj-lead">Touches ${affected.length} planned move${affected.length === 1 ? "" : "s"} — ease off or swap, your call.</div>
+      <div class="linj-lead">${escHtml(lead)}</div>
       ${rows}
     </div>`;
 }
@@ -146,8 +168,10 @@ function lifeEventInner(event: LifeEventRow, impact?: LifeImpact | null): string
   const icon = LIFE_ICONS[kind] || "◆";
   const range = fmtDateRange(start, end);
   const delta = daysUntil(start);
+  const resolved = eventResolved(event);
   let when = "";
-  if (!event.archived && delta != null) {
+  if (resolved) when = "resolved";
+  else if (!event.archived && delta != null) {
     if (delta > 0) when = `in ${delta} day${delta === 1 ? "" : "s"}`;
     else if (delta === 0) when = "today";
     else if (kind !== "injury" && (!end || end < localISO())) when = "past";
@@ -166,8 +190,10 @@ function lifeEventInner(event: LifeEventRow, impact?: LifeImpact | null): string
     ${range ? `<div class="sess-line" style="color:var(--muted)">${range}</div>` : ""}
     ${metaLine ? `<div class="sess-line" style="color:var(--muted);font-size:.78rem">${metaLine}</div>` : ""}
     ${event.detail ? `<div class="sess-line">${escHtml(event.detail)}</div>` : ""}
+    ${resolved ? `<div class="sess-line" style="color:var(--muted);font-size:.78rem">Closed ${escHtml(String(event.resolved_at).slice(0, 10))}</div>` : ""}
     ${lifeImpactsHtml(impact)}
     <div class="hdoc-ctl">
+      ${resolved || event.archived ? "" : `<button class="linkbtn linkbtn-plain linkbtn-sm" data-lresolve="${escAttr(event.id)}" type="button">${escHtml(kind === "injury" ? "Mark resolved" : "Mark done")}</button>`}
       <button class="iconbtn" data-ledit="${escAttr(event.id)}" title="edit">✎</button>
       <button class="iconbtn life-del" data-ldel="${escAttr(event.id)}" title="delete">×</button>
     </div>`;
@@ -189,6 +215,7 @@ const CAIRN_LIFE = {
   fmtDateRange,
   daysUntil,
   eventActive,
+  eventResolved,
   lifeFieldsHtml,
   lifeImpactsHtml,
   lifeEventInner,

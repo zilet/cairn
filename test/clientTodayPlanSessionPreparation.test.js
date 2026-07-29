@@ -86,6 +86,108 @@ test("Today plan/session model groups sets, matches cardio once, prunes pending 
   });
 });
 
+// A rotated-in lift arrives with target_weight NULL and no history under its own
+// name. The server's grounded suggestion is the only honest fallback — and a
+// deliberate NULL (bodyweight) must survive when the server has no number either.
+test("Today prefill falls back to the server's grounded suggestion, never to an invented number", () => {
+  const context = loadPreparation();
+  const model = context.CairnTodayPlanSessionModel;
+  const rotated = { exercise: "Incline DB Press", rep_low: null, target_weight: null };
+
+  assert.deepEqual(
+    plain(model.prefillFor(rotated, {}, {}, { suggested: { weight: 55, rep_low: 8, sets: 3 } })),
+    { weight: 55, reps: 8, rir: null, duration_sec: null }
+  );
+  assert.deepEqual(plain(model.prefillFor(rotated, {}, {}, { suggested: {} })), {
+    weight: null,
+    reps: null,
+    rir: null,
+    duration_sec: null,
+  });
+  assert.deepEqual(plain(model.prefillFor(rotated, {}, {}, null)), {
+    weight: null,
+    reps: null,
+    rir: null,
+    duration_sec: null,
+  });
+  // A real target on the item always outranks the suggestion.
+  assert.equal(
+    model.prefillFor({ ...rotated, target_weight: 60 }, {}, {}, { suggested: { weight: 55 } }).weight,
+    60
+  );
+  // Timed movements ground in seconds the same way.
+  assert.equal(
+    model.prefillFor({ exercise: "Plank", target_seconds: null }, {}, {}, { suggested: { seconds: 45 } })
+      .duration_sec,
+    45
+  );
+  // Today's own logged set still wins over everything.
+  assert.equal(
+    model.prefillFor(
+      rotated,
+      { "Incline DB Press": [{ exercise: "Incline DB Press", weight: 70, reps: 6, rir: 1 }] },
+      {},
+      { suggested: { weight: 55 } }
+    ).weight,
+    70
+  );
+});
+
+test("Today symptom-relevance load asks once per session and collects only server-named movements", async () => {
+  const context = loadPreparation();
+  const data = context.CairnTodayPlanSessionData;
+  const requests = [];
+  const movements = await data.loadSymptomMovements(["Back Squat", "Bench", "back squat", "  "], {
+    state: { logDate: "2026-07-29" },
+    api: async (path) => {
+      requests.push(path);
+      return [
+        { id: 1, status: "active", area_text: "outside of left knee", relevant_movements: ["Back Squat"] },
+        { id: 2, status: "active", area_text: "left knee", relevant_movements: ["Back Squat"] },
+      ];
+    },
+    cachedApi: async () => null,
+    peekCached: () => null,
+    isCardioItem: () => false,
+  });
+
+  assert.deepEqual(requests, [
+    "/training-symptoms?on=2026-07-29&seed_legacy=0&movements=Back%20Squat&movements=Bench",
+  ]);
+  assert.deepEqual(plain(movements), ["Back Squat"]);
+
+  // No movements to ask about → no request at all.
+  let asked = false;
+  assert.deepEqual(
+    plain(await data.loadSymptomMovements([], {
+      state: { logDate: "2026-07-29" },
+      api: async () => {
+        asked = true;
+        return [];
+      },
+      cachedApi: async () => null,
+      peekCached: () => null,
+      isCardioItem: () => false,
+    })),
+    []
+  );
+  assert.equal(asked, false);
+
+  // A failed read leaves every card clean rather than guessing relevance.
+  assert.deepEqual(
+    plain(await data.loadSymptomMovements(["Bench"], {
+      state: { logDate: "2026-07-29" },
+      api: async () => {
+        throw new Error("offline");
+      },
+      cachedApi: async () => null,
+      peekCached: () => null,
+      isCardioItem: () => false,
+    })),
+    []
+  );
+});
+
 test("Today plan/session data helper loads cached last sets and refreshes stale data", async () => {
   const context = loadPreparation();
   const requests = [];
@@ -172,7 +274,14 @@ test("Today plan/session preparation assembles cardio, pending off-plan, prescri
   assert.equal(result.rxFor("Bench").action, "overload");
   assert.equal(result.hasSyncedCardioToday, true);
   assert.equal(result.expectingRun, false);
-  assert.deepEqual(apiRequests, ["/cardio?date=2026-06-30", "/settings", "/strength-journey"]);
+  // One relevance question for the whole session, on a read that must not write.
+  assert.deepEqual(apiRequests, [
+    "/cardio?date=2026-06-30",
+    "/settings",
+    "/training-symptoms?on=2026-06-30&seed_legacy=0&movements=Bench",
+    "/strength-journey",
+  ]);
+  assert.deepEqual(plain(result.symptomMovements), []);
   assert.equal(
     cachedRequests.some((request) => request.path === "/program/progression?day=1"),
     true

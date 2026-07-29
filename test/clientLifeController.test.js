@@ -88,6 +88,7 @@ class FakeElement {
     if (selector.startsWith(".")) return this.classList.contains(selector.slice(1));
     if (selector === "[data-ledit]") return Object.hasOwn(this.dataset, "ledit");
     if (selector === "[data-ldel]") return Object.hasOwn(this.dataset, "ldel");
+    if (selector === "[data-lresolve]") return Object.hasOwn(this.dataset, "lresolve");
     return false;
   }
 
@@ -111,7 +112,13 @@ class FakeElement {
     if (html.includes("life-ev") && html.includes("data-life")) {
       for (const match of html.matchAll(/data-life="([^"]+)"/g)) {
         const row = new FakeElement("div", { className: "sess life-ev", dataset: { life: match[1] } });
-        row._innerHTML = `<button data-ledit="${match[1]}"></button><button data-ldel="${match[1]}"></button>`;
+        // Resolve renders only on OPEN events, so mirror the real markup instead of
+        // always synthesizing the button — that is exactly what the test asserts.
+        const resolvable = html.includes(`data-lresolve="${match[1]}"`);
+        row._innerHTML =
+          (resolvable ? `<button data-lresolve="${match[1]}"></button>` : "") +
+          `<button data-ledit="${match[1]}"></button><button data-ldel="${match[1]}"></button>`;
+        if (resolvable) row.appendChild(new FakeElement("button", { dataset: { lresolve: match[1] } }));
         row.appendChild(new FakeElement("button", { dataset: { ledit: match[1] } }));
         row.appendChild(new FakeElement("button", { dataset: { ldel: match[1] } }));
         this.appendChild(row);
@@ -324,4 +331,62 @@ test("life controller wires inline edit and delete actions", async () => {
   const del = h.requests.find((request) => request.path === "/context-events/7" && request.opts?.method === "DELETE");
   assert.ok(del);
   assert.equal(h.toasts.at(-1), "Removed");
+});
+
+// The Resolve dead-end: POST /api/context-events/:id/resolve existed and NO client
+// called it, so an open-ended injury could only be silenced by deleting the record.
+test("life controller resolves an injury in place and stops it reading as active", async () => {
+  const h = harness({
+    events: [
+      {
+        id: 12,
+        kind: "injury",
+        title: "Knee",
+        start_date: "2026-06-01",
+        end_date: null,
+        meta_json: JSON.stringify({ area: "left knee" }),
+      },
+    ],
+    api: async (path, opts) => {
+      if (path === "/context-events" && !opts) {
+        return [{ id: 12, kind: "injury", title: "Knee", start_date: "2026-06-01", end_date: null }];
+      }
+      if (path === "/injury-impacts") return { injuries: [] };
+      if (path === "/context-events/12/resolve") {
+        return { id: 12, kind: "injury", title: "Knee", start_date: "2026-06-01", resolved_at: "2026-06-30" };
+      }
+      return {};
+    },
+  });
+
+  await h.context.CairnLifeController.render(h.deps);
+  // The warm cached paint lands first and the revalidated paint one hop later;
+  // flush the queue so the assertion sees the final markup, not the cached one.
+  await new Promise((r) => setTimeout(r));
+
+  const resolve = h.document.querySelector("[data-lresolve]");
+  assert.ok(resolve, "an open injury offers Resolve, not only delete");
+  resolve.click();
+  await new Promise((r) => setTimeout(r));
+
+  const post = h.requests.find(
+    (request) => request.path === "/context-events/12/resolve" && request.opts?.method === "POST"
+  );
+  assert.ok(post, "Resolve calls the endpoint that already existed");
+  assert.equal(h.toasts.at(-1), "Marked resolved");
+  assert.equal(
+    h.context.CairnLife.eventActive({ id: 12, kind: "injury", resolved_at: "2026-06-30" }, "2026-06-30"),
+    false,
+    "a resolved injury is no longer active even with no end date"
+  );
+  assert.equal(
+    h.context.CairnLife.eventActive({ id: 12, kind: "injury", resolved_at: "2026-07-05" }, "2026-06-30"),
+    true,
+    "resolved in the future is still open today"
+  );
+  assert.doesNotMatch(
+    h.context.CairnLife.lifeEventInner({ id: 12, kind: "injury", title: "Knee", resolved_at: "2026-06-30" }),
+    /data-lresolve/,
+    "a closed event offers no second Resolve"
+  );
 });

@@ -472,8 +472,10 @@ type DoneRuntimeGlobals = typeof globalThis & {
   }
 
   function todayFeedbackScaleHtml(kind: FeelKind, label: string): string {
+    // Screen-reader users get the same words the done line shows, not "soreness 3".
+    const words = kind === "soreness" ? SORENESS_WORDS : PERFORMANCE_WORDS;
     const dots = TODAY_FEEL_FACES.map((glyph, index) =>
-      `<button class="feel-dot" data-feel="${escAttr(kind)}" data-val="${index + 1}" aria-label="${escAttr(`${label} ${index + 1}`)}">${glyph}</button>`
+      `<button class="feel-dot" data-feel="${escAttr(kind)}" data-val="${index + 1}" aria-label="${escAttr(words[index] ? `${label}: ${words[index]}` : label)}">${glyph}</button>`
     ).join("");
     return `<div class="feel-row"><span class="feel-lbl lbl">${escHtml(label)}</span><div class="feel-dots">${dots}</div></div>`;
   }
@@ -481,8 +483,10 @@ type DoneRuntimeGlobals = typeof globalThis & {
   function todayFeedbackFormHtml(session: SessionLike): string {
     const row = session && typeof session === "object" ? session : {};
     // The two feel scales lead; the joint free-text starts collapsed behind a small
-    // "anything ache?" affordance so the moment reads as two calm taps, not a form.
-    // A session already carrying a joint note opens with the field shown (editing).
+    // "add a pain note" affordance so the moment reads as two calm taps, not a form.
+    // A session already carrying a pain note opens with the field shown (editing).
+    // The wording is the Pain & injury family's, so this and the panel below it read
+    // as one thing rather than two features that happen to sit together.
     const joint = String(row.joint_pain || "");
     const hasJoint = joint.trim() !== "";
     return `<div class="checkin-form feedback-form chip-in">
@@ -490,19 +494,38 @@ type DoneRuntimeGlobals = typeof globalThis & {
       ${todayFeedbackScaleHtml("soreness", "soreness")}
       ${todayFeedbackScaleHtml("performance", "performance")}
       <div class="feedback-joint-wrap">
-        <button class="feedback-joint-toggle" id="feedbackJointToggle" type="button"${hasJoint ? " hidden" : ""}>anything ache?</button>
+        <button class="feedback-joint-toggle" id="feedbackJointToggle" type="button"${hasJoint ? " hidden" : ""}>add a pain note</button>
         <input id="feedbackJoint" class="feedback-joint" type="text" autocomplete="off"
-          placeholder="any joint or area? (e.g. left knee)" value="${escAttr(joint)}"${hasJoint ? "" : " hidden"}>
+          placeholder="where? (e.g. left knee)" value="${escAttr(joint)}"${hasJoint ? "" : " hidden"}>
       </div>
       <button class="checkin-dismiss" id="feedbackDismiss" type="button" aria-label="Not now">✕</button>
     </div><div data-symptom-lifecycle></div>`;
   }
 
+  // The scales are captured as taps on a face, so they read back as WORDS. Printing
+  // "soreness 3/5" turns an optional feeling into a score the athlete can be graded
+  // against — the one thing Cairn never does (docs/VISION.md: no numeric scores).
+  const SORENESS_WORDS = ["fresh", "barely sore", "a bit sore", "sore", "very sore"];
+  const PERFORMANCE_WORDS = [
+    "well under par",
+    "under par",
+    "about as expected",
+    "better than expected",
+    "well above expected",
+  ];
+
+  function feelWord(value: unknown, words: string[]): string {
+    const n = Math.round(Number(value));
+    return Number.isFinite(n) && n >= 1 && n <= words.length ? words[n - 1] : "";
+  }
+
   function todayFeedbackDoneHtml(session: SessionLike): string {
     const row = session && typeof session === "object" ? session : {};
     const parts = [];
-    if (row.soreness != null) parts.push(`soreness ${Number(row.soreness)}/5`);
-    if (row.performance != null) parts.push(`performance ${Number(row.performance)}/5`);
+    const soreness = feelWord(row.soreness, SORENESS_WORDS);
+    const performance = feelWord(row.performance, PERFORMANCE_WORDS);
+    if (soreness) parts.push(escHtml(soreness));
+    if (performance) parts.push(escHtml(`felt ${performance}`));
     if (row.joint_pain && String(row.joint_pain).trim()) parts.push(escHtml(String(row.joint_pain).trim()));
     if (!parts.length) return "";
     return `<div class="checkin-done feedback-done chip-in">

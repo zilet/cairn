@@ -31,6 +31,7 @@ type TodayPlanSessionCardioContext = {
   todaySettings: unknown;
 };
 type TodayPlanSessionDataApi = {
+  loadSymptomMovements(names: string[], deps: TodayPlanSessionDataDeps): Promise<string[]>;
   loadLastSets(
     names: string[],
     loggedByEx: Record<string, TodayPlanSessionDataLoggedSet[]>,
@@ -51,6 +52,41 @@ type TodayPlanSessionDataApi = {
 (() => {
   function recordValue(value: unknown): Record<string, unknown> {
     return value && typeof value === "object" ? value as Record<string, unknown> : {};
+  }
+
+  // ONE relevance question for the whole session: which of today's movements does
+  // an active, athlete-confirmed symptom actually load? Relevance is server truth
+  // (painAreaLoadsExercise) — the client never carries a copy of that map — and
+  // `seed_legacy=0` keeps this pure render read from writing. Uncached on purpose:
+  // recording pain mid-session has to change the next paint.
+  async function loadSymptomMovements(names: string[], deps: TodayPlanSessionDataDeps): Promise<string[]> {
+    const wanted: string[] = [];
+    const seen = new Set<string>();
+    for (const raw of names) {
+      const name = String(raw ?? "").trim();
+      if (!name || seen.has(name.toLowerCase())) continue;
+      seen.add(name.toLowerCase());
+      wanted.push(name);
+    }
+    if (!wanted.length) return [];
+    const query = wanted.map((name) => `movements=${encodeURIComponent(name)}`).join("&");
+    let rows: unknown;
+    try {
+      rows = await deps.api(
+        `/training-symptoms?on=${encodeURIComponent(deps.state.logDate)}&seed_legacy=0&${query}`,
+      );
+    } catch {
+      return [];
+    }
+    const relevant = new Set<string>();
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const names = recordValue(row).relevant_movements;
+      for (const name of Array.isArray(names) ? names : []) {
+        const text = String(name ?? "").trim();
+        if (text) relevant.add(text);
+      }
+    }
+    return [...relevant];
   }
 
   async function loadLastSets(
@@ -120,6 +156,7 @@ type TodayPlanSessionDataApi = {
   }
 
   const CAIRN_TODAY_PLAN_SESSION_DATA: TodayPlanSessionDataApi = {
+    loadSymptomMovements,
     loadLastSets,
     loadPrescriptions,
     loadCardioContext,

@@ -69,7 +69,7 @@ type TodayScreenRuntimeContext = {
   loadTableHint(): Promise<void>;
   loadContextBanner(): Promise<void>;
   loadHealthFocusBanner(): Promise<void>;
-  exRxLineHtml(rx: TodayScreenRuntimePrescription | null | undefined): string;
+  exRxLineHtml(rx: TodayScreenRuntimePrescription | null | undefined, options?: { supporting?: boolean }): string;
   rxMoveCount(rxByEx: TodayScreenRuntimePrescriptionByExercise): number;
   applyDayProgression(button: Element | null | undefined, day: number | null | undefined): Promise<void>;
   exerciseCard(
@@ -180,8 +180,8 @@ function createTodayScreenRuntime(input: TodayScreenRuntimeInput): TodayScreenRu
     return bridge().reconnectDayReadOverride(job);
   }
 
-  function exRxLineHtml(rx: TodayScreenRuntimePrescription | null | undefined) {
-    return CairnTodayTraining.exRxLineHtml(rx);
+  function exRxLineHtml(rx: TodayScreenRuntimePrescription | null | undefined, options?: { supporting?: boolean }) {
+    return CairnTodayTraining.exRxLineHtml(rx, options);
   }
 
   function rxMoveCount(rxByEx: TodayScreenRuntimePrescriptionByExercise) {
@@ -234,6 +234,9 @@ function createTodayScreenRuntime(input: TodayScreenRuntimeInput): TodayScreenRu
     return CairnTodayCards.exerciseCardHtml(item, logged, prefill, revealIdx, rx, {
       day: input.state.day,
       exModes: input.state.exModes,
+      // Same channel as exModes: a per-render map the session preparation resolved
+      // once (see today-plan-session-data-client.ts loadSymptomMovements).
+      symptomMovements: Array.isArray(input.state.symptomMovements) ? input.state.symptomMovements : [],
     }, lastSet);
   }
 

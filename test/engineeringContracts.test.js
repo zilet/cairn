@@ -4332,7 +4332,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todaySessionFeedbackSource, /type TodaySessionFeedbackDeps = \{/);
   assert.match(
     todaySessionFeedbackSource,
-    /function renderFeedback\(slot: Element \| null \| undefined, session: Record<string, unknown>, deps: TodaySessionFeedbackDeps\): void/
+    /function renderFeedback\(\s*slot: Element \| null \| undefined,\s*session: Record<string, unknown>,\s*deps: TodaySessionFeedbackDeps,\s*options\?: \{ hasLoggedSets\?: boolean \}\s*\): void/
   );
   assert.match(todaySessionFeedbackSource, /CairnTodaySessionFeedback/);
   assert.match(todaySessionSkipSource, /type TodaySessionSkipDeps = \{/);

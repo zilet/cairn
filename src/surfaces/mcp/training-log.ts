@@ -247,12 +247,18 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
 
   server.tool(
     "set_session_feedback",
-    "Record optional per-session autoregulation feedback for a date (creates that date's session if needed): soreness 1-5, performance 1-5 (how the session felt vs expected), and a free-text joint_pain area (e.g. 'left knee'). The coach reads these to pull volume/load back when sore or under-performing and to de-load/swap movements that load a painful joint. Omit any field to leave it unchanged.",
+    "Record optional per-session autoregulation feedback for a date (creates that date's session if needed): soreness 1-5, performance 1-5 (how the session felt vs expected), and a short joint_pain AREA LABEL saying where it hurt (e.g. 'left knee'). joint_pain is a place, never a sentence or a coaching note — anything longer is trimmed to its first short clause. The coach reads these to pull volume/load back when sore or under-performing and to de-load/swap movements that load a painful joint. Omit any field to leave it unchanged.",
     {
       date: z.string().describe("YYYY-MM-DD"),
       soreness: z.number().int().min(1).max(5).nullable().optional(),
       performance: z.number().int().min(1).max(5).nullable().optional(),
-      joint_pain: z.string().nullable().optional(),
+      joint_pain: z
+        .string()
+        .trim()
+        .max(120)
+        .nullable()
+        .optional()
+        .describe("Short area label, e.g. 'left knee'. A place, not a sentence."),
     },
     async ({ date, soreness, performance, joint_pain }) =>
       asText(setSessionFeedback(date, { soreness, performance, joint_pain }))
@@ -279,7 +285,7 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
       movement: z.string().trim().min(1).max(120),
       session_id: z.number().int().positive().optional(),
       symptom_event_id: z.number().int().positive().optional(),
-      area_text: z.string().trim().min(1).max(300).optional(),
+      area_text: z.string().trim().min(1).max(120).optional().describe("Short area label, e.g. 'left knee'. A place, not a sentence."),
       outcome: z.enum(["pain_present", "pain_free"]),
     },
     async (input) => asText(recordExerciseSymptomObservation(input))
@@ -289,7 +295,12 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
     "report_training_symptom",
     "Record an athlete-explicit area that hurt or ached during training. This is a factual movement-symptom log, not a diagnosis.",
     {
-      area_text: z.string().trim().min(1).max(300),
+      area_text: z
+        .string()
+        .trim()
+        .min(1)
+        .max(120)
+        .describe("Short area label, e.g. 'left knee'. A place, not a sentence."),
       onset_on: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
       source_session_id: z.number().int().positive().nullable().optional(),
       source_kind: z.string().trim().min(1).max(80).optional(),
@@ -313,7 +324,7 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
     {
       id: z.number().int().positive(),
       on: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
-      area_text: z.string().trim().min(1).max(300).optional(),
+      area_text: z.string().trim().min(1).max(120).optional().describe("Short area label, e.g. 'left knee'. A place, not a sentence."),
       movement: z.string().trim().min(1).max(120).optional(),
       exercise_id: z.number().int().positive().nullable().optional(),
     },

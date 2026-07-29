@@ -83,6 +83,30 @@ type TodaySnapshotRecovery = {
 (() => {
   let sessionSuggestInFlight = false;
 
+  // Athlete-voice, rotating replacement for the offline staged "why" — mirrors
+  // SESSION_WHY_OVERRIDE in src/repo/adaptive-session.ts (this file compiles
+  // standalone into the browser bundle and cannot import a server repo
+  // module, so the algorithm below duplicates pickDayVariant's hash/day-index
+  // logic instead of sharing it). Same date + key -> same phrasing.
+  const SESSION_WHY_OVERRIDE: readonly string[] = [
+    "Your call today.",
+    "You picked this one yourself.",
+    "Switched by you, not the usual order.",
+  ];
+  function pickOfflineDayVariant(variants: readonly string[], date: string, key: string): string {
+    if (variants.length <= 1) return variants[0];
+    let hash = 2166136261;
+    for (let i = 0; i < key.length; i++) {
+      hash ^= key.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    const offset = Math.abs(hash % 9973);
+    const ms = Date.parse(`${String(date).slice(0, 10)}T00:00:00Z`);
+    const dayIndex = Number.isFinite(ms) ? Math.floor(ms / 864e5) : 0;
+    const span = variants.length;
+    return variants[(((dayIndex + offset) % span) + span) % span];
+  }
+
   // One serial lane per date makes the server observe preparation intents in the
   // same order the athlete expressed them. The generation flag lets callers
   // suppress the result of an older request once a newer intent is queued.
@@ -149,7 +173,7 @@ type TodaySnapshotRecovery = {
         focus: planDay.focus ?? null,
         why:
           source === "manual_plan"
-            ? `Explicit plan-day override: Day ${requested}.`
+            ? pickOfflineDayVariant(SESSION_WHY_OVERRIDE, input.date, "adaptive-session:why:override")
             : "Saved on this device; Cairn will confirm the plan when connected.",
         est_minutes: null,
         items: recordArray(planDay.items),
