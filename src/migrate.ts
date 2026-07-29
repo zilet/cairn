@@ -101,6 +101,46 @@ function repairSessionCompositionWhy(db: DatabaseSync) {
   }
 }
 
+// ---- v83: what v82's live run left behind. v82 applied ONE transform per row
+// and returned — so on a 500-clamped note the mid-word trim ran first, and
+// trimming back to the last full sentence EXPOSED a frozen "slipping" layer as
+// the new terminal text that was never re-checked. It also only stripped that
+// layer in terminal position (a stack with the layer FIRST survived), and its
+// gen-1 rotation pattern demanded the "working weight" suffix while a hybrid
+// generation wrote "working value". All three shapes were found live after v82
+// ran. v83 composes its transforms instead of returning after the first match,
+// filters the frozen layer LINE-WISE so position in the stack is irrelevant,
+// and accepts either gen-1 suffix. Idempotent for the same reason as v82: every
+// guard tests the current text.
+const GEN1_DOUBLED_ROTATION_NOTE_ANY_SUFFIX =
+  /^Rotated in for (.+?) — Rotate a same-pattern variation in for \1\. — start light, log your actual working (?:weight|value)\.\s*$/;
+
+function repairPlanItemNoteV83(note: string): string | null {
+  // (1) Drop the frozen progression layer wherever it sits in the stack.
+  const lines = note.split("\n").filter((line) => line.trim() !== FROZEN_PROGRESSION_COACH_NOTE);
+  let repaired = lines.join("\n").trim();
+  if (!repaired) return null;
+
+  // (2) Gen-1 doubled rotation clause, either generation's closing word.
+  const doubled = repaired.match(GEN1_DOUBLED_ROTATION_NOTE_ANY_SUFFIX);
+  if (doubled) repaired = `Rotated in for ${doubled[1]} — start light, log your actual working value.`;
+
+  return repaired;
+}
+
+function repairPlanItemNotesV83(db: DatabaseSync) {
+  if (!hasTable(db, "plan_items")) return;
+  const rows = db.prepare(`SELECT id, note FROM plan_items WHERE note IS NOT NULL`).all() as Array<{
+    id: number;
+    note: string;
+  }>;
+  const update = db.prepare(`UPDATE plan_items SET note = ? WHERE id = ?`);
+  for (const row of rows) {
+    const repaired = repairPlanItemNoteV83(row.note);
+    if (repaired !== row.note) update.run(repaired, row.id);
+  }
+}
+
 export const MIGRATIONS: Migration[] = [
   { version: 1, name: "exercise-cues", up: (db) => addColumn(db, "exercises", "cues TEXT") },
   { version: 2, name: "plan-item-warmups", up: (db) => addColumn(db, "plan_items", "warmup_sets INTEGER") },
@@ -1573,6 +1613,13 @@ export const MIGRATIONS: Migration[] = [
       repairPlanItemNotes(db);
       repairSessionCompositionWhy(db);
     },
+  },
+  {
+    version: 83,
+    name: "plan-item-note-prose-repair-2",
+    // The three shapes v82's single-transform pass left behind on the live
+    // instance — see repairPlanItemNoteV83 above.
+    up: (db) => repairPlanItemNotesV83(db),
   },
 ];
 

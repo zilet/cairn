@@ -709,6 +709,79 @@ test("v82 repairs fossil plan_items.note and daily_session_compositions.why pros
   d.close();
 });
 
+// v83 repairs what v82's single-transform-per-row pass left behind on the live
+// instance: (1) the frozen "slipping" layer in LEADING/mid-stack position (v82
+// only stripped it terminally), (2) a 500-clamped note whose sentence-trim
+// EXPOSED a frozen terminal layer that was never re-checked (v82 returned after
+// the first transform), and (3) a hybrid gen-1 doubled rotation clause ending
+// "working value" where v82's pattern demanded "working weight".
+test("v83 repairs the fossil shapes v82's one-transform pass exposed or missed", () => {
+  const d = new DatabaseSync(":memory:");
+  d.exec(`CREATE TABLE plan_items (id INTEGER PRIMARY KEY AUTOINCREMENT, note TEXT)`);
+  d.exec(`CREATE TABLE daily_session_compositions (id INTEGER PRIMARY KEY AUTOINCREMENT, why TEXT)`);
+
+  const frozenLayer =
+    "Coach note: Strength has been slipping — back the load off about 10% and let it rebuild on a clean run.";
+
+  // (1) frozen layer FIRST, a real coach layer stacked after it (live row 212).
+  const keptLayer =
+    "Coach note: One crisp exposure preserves the squat pattern without turning the lighter day into another leg session.";
+  const frozenLeading = `${frozenLayer}\n${keptLayer}`;
+
+  // (2) the composed shape: base coach layer + frozen terminal layer + a
+  // mid-word tail that pads the note to exactly 500 chars (live row 228's
+  // pre-v82 state). The full ladder must apply v82's trim AND v83's filter.
+  const baseLayer =
+    "Coach note: Recovery week — squats stay light and technical, a deliberate reset from your real working 185.";
+  const padLen = 500 - baseLayer.length - 1 - frozenLayer.length - 1;
+  const clampedThenExposed = `${baseLayer}\n${frozenLayer}\n${"c".repeat(padLen)}`;
+  assert.equal(clampedThenExposed.length, 500, "fixture must sit exactly at the old clamp budget");
+
+  // (3) hybrid gen-1 doubled clause with the "value" suffix (live row 216).
+  const doubledValue =
+    "Rotated in for Hammer Curl — Rotate a same-pattern variation in for Hammer Curl. — start light, log your actual working value.";
+
+  const untouchedNote = "Keep elbows tucked and control the descent.";
+
+  const insNote = d.prepare(`INSERT INTO plan_items (note) VALUES (?)`);
+  insNote.run(frozenLeading);
+  insNote.run(clampedThenExposed);
+  insNote.run(doubledValue);
+  insNote.run(frozenLayer); // frozen-only, any position: nothing left beneath
+  insNote.run(untouchedNote);
+  insNote.run(null);
+
+  d.exec("PRAGMA user_version = 81;");
+  runMigrations(d);
+
+  const notes = d
+    .prepare(`SELECT id, note FROM plan_items ORDER BY id`)
+    .all()
+    .map((r) => r.note);
+  assert.equal(notes[0], keptLayer, "(1) a leading frozen layer is dropped, the layer after it survives");
+  assert.equal(
+    notes[1],
+    baseLayer,
+    "(2) v82's clamp-trim exposes the frozen terminal layer and v83 then removes it"
+  );
+  assert.equal(
+    notes[2],
+    "Rotated in for Hammer Curl — start light, log your actual working value.",
+    "(3) the hybrid 'working value' doubled clause collapses"
+  );
+  assert.equal(notes[3], null, "a note that was only the frozen layer has nothing left");
+  assert.equal(notes[4], untouchedNote, "an unrecognized note is left byte-for-byte identical");
+  assert.equal(notes[5], null, "a NULL note is never touched");
+
+  // Idempotent: replaying v83's up() must not change anything further.
+  const before = d.prepare(`SELECT id, note FROM plan_items ORDER BY id`).all();
+  const v83 = MIGRATIONS.find((m) => m.version === 83);
+  v83.up(d);
+  const after = d.prepare(`SELECT id, note FROM plan_items ORDER BY id`).all();
+  assert.deepEqual(after, before, "re-running v83's up() a second time is a no-op");
+  d.close();
+});
+
 test("re-running migrations on an up-to-date DB is a no-op (idempotent boot)", async () => {
   const { runMigrations } = await import("../dist/migrate.js");
   const before = Number(db.prepare("PRAGMA user_version").get().user_version);
