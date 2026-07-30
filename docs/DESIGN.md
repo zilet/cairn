@@ -196,7 +196,7 @@ New/changed components (CSS must implement, the client JS must emit):
     effect (“Restore previous bench target”), remain available at the affected detail surface after
     the toast expires, and use the same press/motion/reduced-motion tokens as existing actions.
 - Chat `.bubble.user` = ink on `--ink` (cream text); `.bubble.assistant` = card.
-- Health **Standing** (Me→Health, the hero read): `.hstand*` — the momentum-led capacity read
+- Health **Standing** (Stand, the hero read): `.hstand*` — the momentum-led capacity read
   (three-age strip, `.hstand-bc-*` live body-composition, `.hstand-lever` terracotta well = the one
   health lever, momentum chips, percentile comparisons). Blood-pressure **capture** lives in a sheet
   (`.bpsheet*`), never inline in the read. Connected-brain rail: `.hb-section` cards (directives,
@@ -210,10 +210,10 @@ New/changed components (CSS must implement, the client JS must emit):
   never show vascular age standing alone. `.hrisk-stats` leads with total-CVD 10/30-yr (`.hrisk-stat-primary`)
   alongside ASCVD and heart-failure; `.hrisk-levers` is an optional compact "what moves it" chip strip;
   `.hrisk-provisional`/`.hrisk-badge`/`.hrisk-assumptions` surface a still-assumed input with a calm
-  `.hrisk-sharpen` nudge into Me → Profile. `.hrisk-missing` is the calm insufficient-inputs state
+  `.hrisk-sharpen` nudge into the profile (Settings → You). `.hrisk-missing` is the calm insufficient-inputs state
   (never an error tone). A clinical risk % and a vascular age are real numbers, not a banned 0–100
   wellness score; `.hrisk-frame` always closes with the informational-not-medical-advice line.
-- **Performance** read (Progress→Program, the athletic counterpart to Standing): `.pperf*` — the
+- **Performance** read (Train → Program, the athletic counterpart to Standing): `.pperf*` — the
   "where you stand" capacity benchmark. `.pperf-hero` (sage left-spine, headline + sub + `.pperf-chip`
   momentum chips); `.pperf-caps` of `.pcap` rows (movement label + `.pcap-level` chip + a `.pcap-bar`
   with a `.pcap-mark` percentile dot + the plain "Nth pct for your 40s" sub); `.pperf-lever` terracotta
@@ -502,7 +502,7 @@ the fold beside its hidden inline input/save row, so one-tap weight capture is a
 reachable; saving updates both visible weight controls. Typed and microphone capture live
 in Chat rather than as separate Today controls. Stat numerals count up via `data-cu`.
 
-## Marker trends (Me → Health → Markers)
+## Marker trends (Stand → Markers)
 
 Lab markers read as a grouped catalog, fed by `GET /api/markers/priority` (the superset that
 carries optimal bands + group + trend on top of the flat marker shape). Each marker carries
@@ -541,7 +541,7 @@ position-vs-optimal and direction only.
 - The Health → Read view's "what matters now" list (`.hb-mk`) keeps the compact generic `sparklineSvg()`;
   the richer `.hchart` is the detailed Markers-tab view. The two are intentionally distinct surfaces.
 
-## Health sharing (Me → Health → Share)
+## Health sharing (Stand → Share)
 
 Share is the utility shelf for moving data out of Cairn or cleaning the imported corpus. Keep it
 separate from Markers so the detailed lab-history catalog stays scan-led.
@@ -557,7 +557,7 @@ separate from Markers so the detailed lab-history catalog stays scan-led.
 - Keep data-maintenance actions here too, currently "Align lab names" (`POST /api/markers/reconcile`).
   It affects how future marker trends group, but it is not part of reading today's health picture.
 
-## Chat tab
+## Coach tab (chat)
 
 A crafted chat surface, not a form. Layout + behavior contract:
 

@@ -284,7 +284,7 @@ Once Cairn is running (on your laptop, a Pi, or a VM):
    generate a token.
 3. Tap an override chip ("rough night", "give me an easy day") if you want to steer the Brief.
 4. Log something (a set or bodyweight) so the charts start filling in with your data.
-5. **Me → Profile** — replace the demo profile with your real weight, goal, etc.
+5. **Settings → You → Profile** — replace the demo profile with your real weight, goal, etc.
 
 **Phone / home screen app:** Tailscale **Serve** + "Add to Home Screen" is the supported path —
 tailnet-only, a real offline-capable PWA, nothing on the public internet. The Brief and logging
