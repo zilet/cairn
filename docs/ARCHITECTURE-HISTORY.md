@@ -4,6 +4,63 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-07-30 — sensor timestamps, muscle time, ledger ownership, and a chat review that resolves
+
+Six commits, migration **v87** (`expectation-overlap-arbitration`, no schema change), sw v537.
+
+`src/repo/sensor-freshness.ts` is now the one place that answers how old a wearable datum may be
+before it stops speaking for today (`SENSOR_MAX_AGE_DAYS`: sleep 2, `training_readiness` 1,
+HRV/resting-HR/`training_load` 3, `fitness_marker` 14). Past its bound a reading behaves exactly as
+absent, never a soft caution or a discounted vote — an unbounded "give me the newest row" lookup
+used to happily hand back a fortnight-old night as though it were last night's. Wearable markers get
+the lab path's own no-forecast-off-two-dots honesty layer plus this recency bound; recovery bands,
+acute training load, the coach prompt's point-in-time readings, and `day-read`/`signal-state`'s own
+hand-rolled age checks (sleep moved 3→2 days) all resolve through the same table now.
+
+The muscle model traded a fatigue boolean with a midnight cliff (`sets >= 4` inside a fixed 2-day
+window) for a per-group decaying residual: `residual = Σ dose × 0.5^(hours_since/half_life)`,
+strength dose reusing the shared effective-volume read and endurance dose scaling past each
+modality's own heavy bar. `acuteGate()`/`acuteGates()` (`src/repo/hybrid-load.ts`) is the one
+acute-recovery question every consumer now asks instead of four different hand-rolled versions of
+it — `autoregBrake`, plan-selection, the daily-decision envelope, `today-agenda`'s balance rows, and
+(newly) `forwardLook`/`weekAheadPlan`, which is how the Brief stops saying "quads & calves due" the
+morning after the long run that flattened them. Soreness/performance autoregulation now scopes to
+the muscle groups a session actually trained rather than braking the whole body for three days, and
+fails closed when the scope can't be resolved; the daily envelope's REDUCED areas are clamped
+server-side instead of only asked for in the prompt.
+
+Five silent read-path defects in the personal-response model got the same fix in one pass: the
+500-row outcome window read oldest-first instead of newest, so a busy ledger froze on ancient
+verdicts forever; the progression ladder resolved a lift's step through the athlete-facing
+`learnings` prose (capped at four) instead of the underlying `modifiers`, so a modifier fell off the
+cap and a null-subject nutrition learning could shadow the training default; a modifier earned once
+applied at full strength forever, and now ages — full to 180 days, linear fade to 365, gone after;
+`domainIsDemoted`'s reversal-safeguard predicate moved from counting in JS over the last 100
+decisions to SQL, since the busy domain the guard exists for was exactly the one that made the JS
+scan miss; and a declared 0.85 floor `training_progression_step` could never reach was deleted.
+
+Nutrition got three grounding fixes: a low-confidence food-capture entry is now excluded from the
+nutrient band tallies (they render verbatim as counts, so they stay whole numbers) and from
+`foodRecovery`'s exposed/clean evidence outright — an uncertain guess is not evidence either way; `mealPlanFreshness()` gained a pure calendar-age branch (`MEAL_PLAN_CALENDAR_STALE_DAYS`
+= 21) so a stable athlete's plan goes stale by the calendar even with no newer upstream signal to
+compare against; and an active saturated-fat/added-sugar lab directive (ApoB, LDL-C, Non-HDL-C,
+cholesterol, triglycerides, HbA1c) now lands a non-blocking `validation_warnings` entry when the
+plan's own pattern reads `watch` on that band — sodium directives deliberately warn on nothing,
+since the plan schema carries no sodium field by anti-hallucination design.
+
+The expectation ledger's "two changes racing over one metric silence each other into
+`inconclusive`" bug (documented above, migration v87) is one of these six commits, not a separate
+round — `retireSupersededExpectations` (`src/repo/brain/expectation-arbitration.ts`) is a single
+symmetric (loser, winner) SQL predicate that IS the write path when scoped to one row and IS
+migration 87's whole-table repair when it isn't.
+
+Last, the chat capture chip's promised nutrition review finally resolves inside the original
+message: `stampCaptureFood()` (`src/repo/chat.ts`) derives the ingredient rows an estimate was built
+from (capped at 6, with the true count) plus a provenance line, off the food note's current parsed
+blob at READ time — nothing is written back onto the message, so a re-enrichment revises the review
+in place instead of appending a second one, and a client that was closed when the estimate landed
+sees it on the next ordinary history read.
+
 ## 2026-07-30 — the completion round: every declared lever now pulls
 
 Four commits closing out the elite-brain arc below: every target the personal-response model and the

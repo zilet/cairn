@@ -186,6 +186,10 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   null), plans prescribe `target_seconds`, progression is in seconds — never load. Proposal
   `changes[]` may carry `target_seconds` instead of `target_weight`.
 - Est-1RM is Epley on the best set per day.
+- **Sensor age and acute muscle fatigue each have exactly one source of truth**: `src/repo/sensor-freshness.ts`
+  (a stale wearable reading behaves as absent, never as current) and `hybrid-load.ts`'s `acuteGate()`
+  (the one "is this muscle recovering" question — call it, never re-derive a window). Details in
+  `docs/ARCHITECTURE.md`.
 - **Sessions are keyed by date** — `getOrCreateSession` reuses today's session, so logged sets
   accumulate into one session per day.
 - **Garmin strength is a session, not an activity.** `upsertGarminActivity` deliberately skips the

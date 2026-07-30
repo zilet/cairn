@@ -59,6 +59,44 @@ and rationale, but never outrank pain/injury protection, recovery bounds, or an 
 Policy version participates in decision identity, so a cached preview or persisted decision from an
 older policy cannot be silently reused after an upgrade.
 
+**The muscle model reads a decaying dose, not a boolean with a cliff.** Fatigue used to be `sets >=
+4` inside a fixed 2-day window — a muscle equally smoked by 4 sets or by 30, going from smoked to
+fresh at an arbitrary midnight. `src/repo/hybrid-load.ts`'s `muscleResidual()` replaces it with
+`residual(group) = Σ_days dose(day) × 0.5^(hours_since / half_life(group))`: strength dose reuses
+the shared effective-volume read (`effectiveVolumeByGroup` — warmups excluded, RIR-weighted,
+indirect credit at half) rather than re-counting rows, and endurance dose reuses the modality
+regions and finally scales past each modality's own heavy bar (`heavy_ratio`, capped at 2.5×) so a
+110-minute run stops reading as the same event as a 55-minute one. Half-life is per group
+(`MUSCLE_RECOVERY_HALF_LIFE_H` in `exercise-canon.ts`, 24h rear delts to 66h hamstrings, 42h
+default), so a hamstring day still reads loaded Wednesday while rear delts do not. `SATURATED_RESIDUAL`
+(0.75) is calibrated to reproduce the old `sets >= HEAVY_SETS` bar at the boundary, so nothing
+shifts underfoot same-day even as yesterday's rear-delt work correctly stops gating and Monday's
+hamstrings correctly still do. The residual itself is internal — a float that never reaches an
+athlete surface, same standing as any other internal score.
+
+`acuteGate(group, date, residuals?)` / `acuteGates(date)` (same file) is the ONE acute-recovery
+question every consumer now asks, replacing four different hand-rolled versions of it (`rl?.heavy`
+alone, `heavy && days_ago <= 2`, `heavy && days_ago <= 1`, a bare `heavy` inside the progression
+brake) that used to let the same muscle read `recovering` to the plan-day picker and `fresh` to the
+session envelope on the same morning. `autoregBrake` (`progression.ts`), `plan-selection.ts`, the
+daily-decision envelope (`daily-decision.ts`), `today-agenda.ts`'s `programAdjustments`, and
+`coach.ts`'s memoized `acute_gates:${date}` all read it now; `forwardLook`/`weekAheadPlan`
+(`day-read.ts`) — two surfaces the athlete actually READS, which never asked the acute question at
+all before this — filter their `due` list through `suppressSaturatedDue()`, which is how the Brief
+stops being able to say "quads & calves due" the morning after the long run that flattened them. A
+new consumer must call the gate, never re-derive its own window.
+
+Endurance credit rides in `programBalance`'s own `endurance_sessions`/`endurance_supported` fields,
+never folded into a group's set count — the landmarks (`MUSCLE_LANDMARKS`) are resistance-calibrated,
+so mixing cardio volume into them would silently shift what "productive" means. `feedbackReaches()`
+(`progression.ts`) scopes soreness/performance autoregulation feedback to the muscle groups that
+session actually trained (`groupsTrainedOn`) instead of braking the whole body for three days off
+one sore-leg day, and FAILS CLOSED — an unresolved scope (no logged sets that day, an unclassifiable
+lift) falls back to the old whole-body brake rather than quietly losing effect. `daily-composition.ts`'s
+envelope `muscles.reduced` areas are now CLAMPED server-side (a hard 2-set cap, a 0.9 intensity
+factor) instead of merely asked for in the prompt, and `plan-selection.ts`'s adaptive day pick
+prefers a fresher day and says why, in the athlete's own words.
+
 **Durable training identity, temporary events, and the rolling agenda.**
 `training-intent.ts` owns the athlete's ordered durable priorities, explicit endurance role, and
 optional sport-duration capability. `endurance_goal_json` remains the separate dated-race or standing
@@ -157,6 +195,33 @@ suggestions, never gates.
   90–120 off its own quietest desk minute otherwise, poisoning the 7d-vs-30d delta into a false
   caution. Every non-negative picker (`pickNonNegNum`/`asNonNegNum`) also guards `min_hr`/`max_hr`,
   rejecting Garmin's `-1`/`-2` "no data" sentinels rather than averaging them in as real lows.
+
+**Stale sensor data behaves as absent, never as current.** `src/repo/sensor-freshness.ts` is the
+one place that answers how old a wearable datum may be before it stops speaking for today —
+`SENSOR_MAX_AGE_DAYS` (sleep 2, `training_readiness` 1, HRV/resting-HR/`training_load` 3,
+`fitness_marker` 14), each bound matched to the physiological rate that signal actually moves at.
+Past its bound a reading behaves EXACTLY as absent — never a soft caution, never an old vote
+counted at a discount — because absence is already neutral everywhere in this codebase (absent
+signals never force anything), and ageing a datum out has to land it in that same neutral place
+rather than invent a new demoted status. `sensorIsCurrent(signal, readingDate, asOf)` is the one
+predicate every gated site now calls; `sensorAgeDays` returns null for a missing/unparseable date,
+and a future-dated reading (a clock problem, not fresh evidence) reads as not current rather than
+being clamped to zero. The bounded-window aggregates elsewhere (`getRecoverySummary`'s 14 days, an
+evaluator's expectation window, `baseline-bands`' 28) were already self-gating — a quiet watch
+empties their window and the read goes inconclusive on its own. The dangerous shape was the other
+one: an unbounded "give me the newest row" lookup, which happily returned a fortnight-old night as
+though it were last night. Wearable markers (VO2max, resting HR, HRV, read as trending series in
+the connected brain) get the honesty layer the lab path already had — no forecast off fewer than 3
+points — PLUS this recency bound, which labs don't need: a series whose newest dot is past 14 days
+reports no direction and earns no `prioritizeMarkers` trajectory boost; `stale`/`age_days` ride the
+DTO so a surface COULD say when a marker was last actually measured, though nothing renders them
+yet. Recovery bands drop their present-tense dot rather than draw it from a stale reading while the
+28-day baseline behind them stays whole; acute training load is gated for the first time; and the
+coach prompt stops printing a stale point-in-time reading beside today's labelled averages (the
+`avg_*` figures are untouched — those are windows, not points). `day-read.ts`'s two hand-rolled age
+checks and `signal-state.ts`'s inherited default now resolve through this one table — the sleep
+bound moved 3→2 days to match the bound the Brief itself has always used, closing a seam where the
+signal state was voicing a night the Brief had already dropped.
 
 **One rich signal state, shared by the Brief and the coach.** `dayPlanningSignalState(date,
 provided?)` (`src/repo/day-read.ts`) is the ONE builder of `UnifiedSignalState` — memoized per
@@ -1137,10 +1202,14 @@ window per metric + subject, so the survivor reaches a real verdict. Superseded 
 excluded from the confounder query and from the "matured but unevaluated" diagnostics, and are never
 evaluated. Two windows on ONE decision are untouched — they never confounded each other — and only
 `applied`/`announced` decisions take part, so an advisory `review` prediction neither retires a real
-change nor is retired by one. The rule lives once in
-`src/repo/brain/expectation-arbitration.ts` (`retireSupersededExpectations`, which takes the DB handle
-rather than the singleton so a migration can call it); migration 87 applies the identical pass to the
-rows written before it existed. The `vo2max_trend` write-side guard above still runs first and is
+change nor is retired by one. The rule lives once, as a single symmetric (loser, winner) SQL
+predicate in `src/repo/brain/expectation-arbitration.ts` (`retireSupersededExpectations`, which takes
+the DB handle rather than the singleton so a migration can call it): scoped to one freshly-written
+row it IS the write path (both halves — the new row losing to a newer window it arrived behind, and
+retiring the older ones it overtook — fall out of the same query), and left unscoped it is migration
+87's whole-table repair of the rows written before the rule existed. One pass is provably enough
+(retiring a row can never create a new loser, and two survivors can never overlap each other), which
+is what makes the migration idempotent. The `vo2max_trend` write-side guard above still runs first and is
 deliberately wider, so it keeps suppressing a duplicate aerobic window before this is ever reached.
 
 `src/domain/brain/expectation-followup.ts` turns a genuine `not_aligned`
@@ -1193,6 +1262,22 @@ only take a verdict away, never hand one out**: `mealPlanAdherence()`
 (`src/repo/nutrition.ts`) confounds the intake→weight evaluator into `inconclusive` on a
 clearly-diverged or unreadable logging window — a followed window adds nothing and simply lets the
 existing comparison run, so adherence can never itself supply a decisive verdict.
+
+**A modifier ages against today, and resolves from the modifier record, never the capped prose
+list.** Two read-path defects meant the model could know something and the consumer still couldn't
+see it. `progression.ts`'s ladder used to resolve a lift's learned step through `learnings` — the
+athlete-facing prose list, itself capped at four for calm — so a modifier sitting safely in
+`modifiers` went unread the instant its sentence fell off that cap, and the first null-subject
+learning of ANY metric (usually nutrition) could shadow the training default outright. It resolves
+against `modifiers` directly now: this lift's own per-target slot first, a whole-athlete
+per-subject slot next, and never another lift's. And a modifier earned once used to apply at full
+strength forever; it now ages against TODAY — full strength through 180 days, fading LINEARLY
+toward the universal (unmodified) default through 365, with confidence stepped down a band across
+that fade — and past a year it keeps its sentence (the athlete can still see what was learned) but
+loses the right to move a number. The reaction model's own outcome window was compounding this
+silently: 500 rows ordered ASCENDING meant a ledger that outgrew 500 conclusive verdicts froze on
+the OLDEST 500 forever; it now reads the newest 500 and reverses them back into ascending order for
+every reader written against that assumption.
 
 Write chokepoints across training/nutrition/health/recovery/body/profile/goal emit `emitBrainEvent()`
 (`src/brainEvents.ts` — debounced, coalesced, cooldown-deduped) which routes material signals into
@@ -1321,6 +1406,51 @@ optionally a time; nothing in `foodCapture.ts` decides what gets displayed, and 
 should not "finish the job" by surfacing the rest of it. Chat is the majority of all logging
 volume, so this module is also the first place `nutrition_pattern` reaches most meals — previously
 only the enrichers populated it.
+
+**Confidence weighs the record, not just labels it.** `confidence`/`basis` were recorded on every
+entry and read by nothing — a vague chat guess counted the same as a photo read everywhere
+downstream. `nutrition-progress.ts`'s nutrient band tallies now EXCLUDE a `low`-confidence entry
+entirely (medium/high/unknown stay at full weight, so an absent confidence is never penalized as if
+it were a stated low one — and every tally stays a whole number, because those counts render
+verbatim on the Intake surface), and `foodRecovery`'s exposed/clean evidence excludes low-confidence
+entries the same way — an uncertain guess is not evidence either way. The provenance histograms
+themselves are untouched and still count every entry once, so the raw confidence/basis mix a reader
+would want to see stays honest.
+
+**A stable plan goes stale by the calendar too.** `mealPlanFreshness()` (`src/repo/nutrition.ts`)
+used to notice only newer UPSTREAM data (a fresher nutrition directive, a later `source_ts`) — a
+stable athlete generating no new signal for months kept a canonical plan forever, with nothing to
+compare it against. A pure calendar-age branch now reads a plan stale past
+`MEAL_PLAN_CALENDAR_STALE_DAYS` (21 — a full three-week cycle past the weekly cadence a plan is
+drafted for) off `week_of` (fallback `created_at`), with a calm age reason ("drafted N days ago")
+that is explicit this is a calendar fact, never an adherence judgment. Freshness stays a READ —
+nothing regenerates on its own.
+
+An active lab directive and the meal plan used to meet only in prose, never in code.
+`mealPlanDirectiveWarnings()` cross-checks a plan's own `nutrition_pattern.saturated_fat_added_sugar`
+band: when it reads `watch` AND an active directive names one of the markers whose canonical
+mapping points at saturated fat/added sugar (ApoB, LDL-C, Non-HDL-C, total cholesterol,
+triglycerides, HbA1c — `nutritionRelevantDirectives()`, shared with the check-in's own directive
+context so both read the same active set), a non-blocking warning lands in `validation_warnings`
+beside the existing fiber/dietary-safety ones — informational, never a gate, and it cannot say
+WHICH of the two is driving the reading, since they share one combined band. Sodium directives
+deliberately produce no warning at all: the plan schema carries no sodium field by design (an
+existing anti-hallucination guardrail against inventing precise sodium numbers with no label/source
+to ground them), so there is nothing on the plan side to cross-check — honest silence, not a gap.
+
+**The chat bubble's own review is derived at read time, never written back.** Logging food in chat
+acks immediately with a placeholder chip ("I'll fill in the nutrition details in the background")
+while enrichment runs; the athlete had no way to see what the eventual estimate was actually built
+FROM. `stampCaptureFood()` (`src/repo/chat.ts`) now derives a review — the ingredient rows the
+estimate was built from (capped at `CAPTURE_REVIEW_MAX_ROWS`, 6, carrying the TRUE count so the chip
+can say "and N more" instead of growing a wall inside a bubble) plus a muted provenance line — off
+the food note's CURRENT `parsed_json` blob at read time, exactly like the macros the chip already
+showed. Nothing is written onto the message itself, so a re-enrichment REVISES the review in place
+instead of appending a second one, a replayed completion is a no-op, and a client that was closed
+when the estimate landed sees it on the next ordinary history read — no follow-up message, no
+notification. `confidence`/`basis` pass through only when they're values `src/foodCapture.ts`
+actually defines (`FOOD_CONFIDENCE_BANDS`/`FOOD_BASIS_VALUES`), so an estimate can never be made to
+claim a basis nobody declared.
 
 ### Eaten-at vs. logged-at: a derived time is never stored
 
