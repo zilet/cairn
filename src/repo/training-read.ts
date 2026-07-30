@@ -19,7 +19,7 @@ import {
   normalizeExerciseName,
   normalizedExerciseKey,
 } from "./exercise-canon.js";
-import { CARDIO_GRADE } from "./heavy-load.js";
+import { CARDIO_GRADE, HARD_EFFORT } from "./heavy-load.js";
 import { activeRecoveryWeekLedger } from "./recovery-week-ledger.js";
 import { addDaysISO, localDateISO } from "./shared.js";
 
@@ -568,10 +568,13 @@ export function isLoadingDay(date: string, opts: { countsCardio: boolean }): boo
 // An easy stroll (short + low-intensity) clears none of these, so it never counts.
 // Null-safe → false when there is no cardio that day. Reads activities ⨝ garmin_activities
 // (strength is modeled as a session, never an activities row — same source dayLoad reads).
-const HARD_CARDIO_MIN = 40; // minutes: the duration bar for a genuine endurance session (run/ride/swim/row); walk/hike use CARDIO_GRADE.walkHikeModerateMin
-const HARD_CARDIO_Z4_SEC = 240; // ≥ 4 min at threshold+ (Z4/Z5) is real intensity
-const HARD_CARDIO_LOAD_MULT = 1.5; // training_load ≥ 1.5× the recent cardio median reads hard
-const HARD_CARDIO_LABEL = /\b(?:vo2(?:[\s_-]*max)?|maximal|anaerobic|sprint|interval|threshold|tempo|lactate)\b/;
+// Every one of these knobs now lives in heavy-load.HARD_EFFORT, which the
+// per-muscle reader consumes too — they were duplicated literals that had already
+// drifted apart. Aliased here so the reading of hardCardioDay below stays plain.
+const HARD_CARDIO_MIN = HARD_EFFORT.sustainedMin; // minutes for a genuine endurance session (run/ride/swim/row); walk/hike use CARDIO_GRADE.walkHikeModerateMin
+const HARD_CARDIO_Z4_SEC = HARD_EFFORT.z4Seconds; // ≥ 4 min at threshold+ (Z4/Z5) is real intensity
+const HARD_CARDIO_LOAD_MULT = HARD_EFFORT.loadMedianMultiple; // training_load ≥ 1.5× the recent cardio median reads hard
+const HARD_CARDIO_LABEL = HARD_EFFORT.label;
 
 // The median Garmin training_load across the athlete's recent CARDIO efforts (the
 // activities ⨝ garmin join excludes strength, which has no activities row). null when
@@ -616,7 +619,7 @@ export function hardCardioDay(date: string, loadMedian?: number | null): boolean
     // (a-c) intensity qualifies ANY activity type (a hard hike is still hard).
     const te = Math.max(Number(r.aerobic_te) || 0, Number(r.anaerobic_te) || 0);
     const label = String(r.te_label || "").toLowerCase();
-    if (te >= 4 || HARD_CARDIO_LABEL.test(label)) return true;
+    if (te >= HARD_EFFORT.dayGradeTe || HARD_CARDIO_LABEL.test(label)) return true;
     let z4 = 0;
     try {
       const z = r.zones ? JSON.parse(r.zones) : null;

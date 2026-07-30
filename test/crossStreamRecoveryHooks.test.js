@@ -185,7 +185,7 @@ test("recent comparable movement response brakes but never compounds progression
   acceptDose(addDaysISO(today, -3), { setsLogged: 3, rir: 3, targetOffset: -5 });
   acceptDose(addDaysISO(today, -1), { setsLogged: 3, rir: 3, targetOffset: -5 });
 
-  const held = repo.nextPrescription("Back Squat", undefined, { autoreg: null, recentLoad: null });
+  const held = repo.nextPrescription("Back Squat", undefined, { autoreg: null, acute: null });
   assert.equal(held.movement_response, "earned_hold");
   assert.equal(held.dose_eligibility.reason, "under_prescribed");
   assert.equal(
@@ -206,7 +206,7 @@ test("recent comparable movement response brakes but never compounds progression
   );
   acceptDose(addDaysISO(today, -3), { setsLogged: 3, rir: 3 });
   acceptDose(addDaysISO(today, -1), { setsLogged: 3, rir: 3 });
-  const absorbed = repo.nextPrescription("Back Squat", undefined, { autoreg: null, recentLoad: null });
+  const absorbed = repo.nextPrescription("Back Squat", undefined, { autoreg: null, acute: null });
   assert.equal(absorbed.movement_response, "earned_absorbed");
   assert.equal(absorbed.action, "overload");
   assert.equal(absorbed.suggested.weight, 235, "absorbed evidence supports the normal single step only");

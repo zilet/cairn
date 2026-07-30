@@ -857,3 +857,110 @@ test("an envelope-backed composition is revalidated against the current decision
     prepared.daily_session.id
   );
 });
+
+// ── `reduced` is enforced, not merely requested ──────────────────────────────
+// The verifier enforced `excluded` and nothing else; `reduced` reached the agent
+// as a line in the prompt and was never checked, so an agent that ignored it was
+// never corrected — a hole in the law that safety logic is deterministic and
+// agents only phrase it. It CLAMPS rather than rejects: reduced means less, not
+// none, and the envelope still allows the area.
+
+const reducedEnvelope = (groups, extra = {}) =>
+  envelope({ muscles: { required: [], allowed: [], reduced: groups, excluded: [] }, ...extra });
+
+// A plan-day anchor, so the composed target survives normalization and the
+// intensity clamp is observable as a number rather than as a null.
+function anchorPlan(items) {
+  repo.savePlanDay(1, "Lower", "Lower", items);
+  return repo.getPlan().find((d) => d.day_number === 1);
+}
+
+test("a reduced area keeps its movement but comes down in sets and target", () => {
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+  anchorPlan([{ exercise: "Back Squat", sets: 5, rep_low: 5, rep_high: 7, target_weight: 200 }]);
+  const { session, validation } = normalizeComposedSession(
+    agentSession([{ exercise: "Back Squat", sets: 5, rep_low: 5, rep_high: 7, target_weight: 200 }]),
+    reducedEnvelope(["quads"])
+  );
+  assert.ok(session);
+  const squat = session.items.find((i) => i.exercise === "Back Squat");
+  assert.ok(squat, "the movement is kept — reduced is not exclusion");
+  assert.equal(squat.sets, 2, "sets are clamped to the reduced per-item cap");
+  assert.equal(squat.target_weight, 180, "and the target is eased by the reduced factor");
+  assert.equal(validation.capped, true, "the clamp is reported");
+  assert.equal(validation.rejected.length, 0, "nothing is thrown away");
+  assert.match(squat.note, /carrying recent work/i, "and it is said in plain words");
+});
+
+test("an untouched area in the same session keeps the volume it was composed with", () => {
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+  repo.upsertExercise({ name: "Bench Press", muscle_group: "chest", mode: "reps" });
+  anchorPlan([
+    { exercise: "Back Squat", sets: 5, rep_low: 5, rep_high: 7, target_weight: 200 },
+    { exercise: "Bench Press", sets: 4, rep_low: 6, rep_high: 8, target_weight: 155 },
+  ]);
+  const { session } = normalizeComposedSession(
+    agentSession([
+      { exercise: "Back Squat", sets: 5, rep_low: 5, rep_high: 7, target_weight: 200 },
+      { exercise: "Bench Press", sets: 4, rep_low: 6, rep_high: 8, target_weight: 155 },
+    ]),
+    reducedEnvelope(["quads"])
+  );
+  const bench = session.items.find((i) => i.exercise === "Bench Press");
+  assert.equal(bench.sets, 4, "the fresh area keeps its volume");
+  assert.equal(bench.target_weight, 155, "and its target, untouched");
+  assert.equal(bench.note ?? null, null, "and says nothing about being eased");
+});
+
+test("a reduced TIMED movement is eased in seconds, never given a load", () => {
+  repo.upsertExercise({ name: "Plank", muscle_group: "core", mode: "timed" });
+  anchorPlan([{ exercise: "Plank", sets: 4, mode: "timed", target_seconds: 120 }]);
+  const { session } = normalizeComposedSession(
+    agentSession([{ exercise: "Plank", sets: 4, mode: "timed", target_seconds: 120 }]),
+    reducedEnvelope(["core"])
+  );
+  const plank = session.items.find((i) => i.exercise === "Plank");
+  assert.ok(plank);
+  assert.equal(plank.sets, 2);
+  assert.equal(plank.target_seconds, 108, "seconds come down by the reduced factor");
+  assert.equal(plank.target_weight ?? null, null, "a timed movement is never given load");
+});
+
+test("the reduced clamp composes with a deeper day-level easing rather than loosening it", () => {
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+  anchorPlan([{ exercise: "Back Squat", sets: 5, rep_low: 5, rep_high: 7, target_weight: 200 }]);
+  const { session } = normalizeComposedSession(
+    agentSession([{ exercise: "Back Squat", sets: 5, rep_low: 5, rep_high: 7, target_weight: 200 }]),
+    reducedEnvelope(["quads"], { caps: { volume: "normal", intensity: "easy", duration_min: 60 } })
+  );
+  const squat = session.items.find((i) => i.exercise === "Back Squat");
+  // "easy" is the deeper cut; the reduced factor must never pull it back up.
+  assert.equal(squat.target_weight, 160, "the deeper easing still governs");
+});
+
+test("the deterministic fallback honors reduced too — it is not an agent-only rule", () => {
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+  anchorPlan([{ exercise: "Back Squat", sets: 5, rep_low: 5, rep_high: 7, target_weight: 200 }]);
+  const session = deterministicComposedSession(
+    reducedEnvelope(["quads"], {
+      template: { day_number: 1, plan_day_id: null, focus: "Lower", intent: "template" },
+    })
+  );
+  const squat = session.items.find((i) => i.exercise === "Back Squat");
+  assert.ok(squat, "the deterministic session still programs the movement");
+  assert.equal(squat.sets, 2, "and clamps it the same way");
+  assert.equal(squat.target_weight, 180);
+});
+
+test("a reduced group that is ALSO excluded is still dropped — exclusion wins", () => {
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+  repo.upsertExercise({ name: "Bench Press", muscle_group: "chest", mode: "reps" });
+  const { validation } = normalizeComposedSession(
+    agentSession([
+      { exercise: "Back Squat", sets: 4, rep_low: 5, rep_high: 7, target_weight: 225 },
+      { exercise: "Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 155 },
+    ]),
+    envelope({ muscles: { required: [], allowed: [], reduced: ["quads"], excluded: ["quads"] } })
+  );
+  assert.ok(validation.rejected.some((r) => r.exercise === "Back Squat" && r.reason === "excluded_group"));
+});

@@ -11,7 +11,7 @@ import {
 import { findExercise } from "./exercises.js";
 import { flexibleTrainingAgenda } from "./flexible-training-agenda.js";
 import { getInjuryImpacts, listContextEvents } from "./health.js";
-import { recentEnduranceImpacts, recentMuscleLoad } from "./hybrid-load.js";
+import { type AcuteGateReading, acuteGates, recentEnduranceImpacts } from "./hybrid-load.js";
 import { getPlanDay } from "./plan.js";
 import { selectAdaptivePlanDay, selectedPlanDayForDate } from "./plan-selection.js";
 import { getProgramState } from "./program-state.js";
@@ -123,7 +123,12 @@ export interface DailyDecisionSnapshot {
     exit_on: string;
     working_set_fraction: number;
   } | null;
-  muscle_load: Array<{ group: string; days_ago: number; heavy: boolean; source: string }>;
+  // The acute-recovery gate per group, read once from the temporal muscle model
+  // (hybrid-load.acuteGates) so the decision is a pure function of the snapshot.
+  // `saturated` IS the gate — it already accounts for how long ago the work was
+  // done and how fast that group forgets, so no consumer re-applies a days_ago
+  // cliff on top of it.
+  muscle_load: Array<{ group: string; days_ago: number; saturated: boolean; source: string }>;
   endurance: Array<{ type: string; days_ago: number; intensity: string; load: string; regions: string[] }>;
   checkin: { soreness: number | null; energy: number | null; sleep_feel: number | null } | null;
   feedback: {
@@ -484,10 +489,16 @@ export function gatherDailyDecisionSnapshot(
     performance: null,
     joint_pain: null,
     date: null,
+    soreness_groups: [],
+    performance_groups: [],
   });
   const checkinRow = safe(() => getCheckinByDate(d), null) as any;
 
-  const muscleLoad = safe(() => recentMuscleLoad(2, d), new Map()) as Map<string, any>;
+  // The gate reads the decaying residual over its own lookback, NOT a 2-day
+  // window: a big hamstring day three mornings back is still a gate, and
+  // yesterday's rear-delt work is not. Clipping to 2 days here would have hidden
+  // the first case from the envelope entirely.
+  const muscleLoad = safe(() => acuteGates(d), new Map()) as Map<string, AcuteGateReading>;
   const endurance = safe(() => recentEnduranceImpacts(3, d), []) as any[];
 
   const programState = safe(() => getProgramState(d, recoverySummary), null) as any;
@@ -604,7 +615,7 @@ export function gatherDailyDecisionSnapshot(
       .map((rl: any) => ({
         group: String(rl?.group ?? "").toLowerCase(),
         days_ago: finite(rl?.days_ago) ?? 0,
-        heavy: rl?.heavy === true,
+        saturated: rl?.saturated === true,
         source: text(rl?.source, 20) ?? "strength",
       }))
       .filter((rl) => rl.group)
@@ -1161,8 +1172,12 @@ export function buildDailySessionDecision(
   }
 
   // ---- Precedence 5: balance due vs saturated muscle exposures ----
+  // No days_ago cliff here: `saturated` is already the time-aware gate, and the
+  // old `<= 1` re-imposed a flat one-day window on top of it — which is how a
+  // group could read recovering to the plan-day picker (2 days) and fresh here
+  // (1 day) on the very same morning.
   const saturated = dedupe([
-    ...snapshot.muscle_load.filter((m) => m.heavy && m.days_ago <= 1).map((m) => m.group),
+    ...snapshot.muscle_load.filter((m) => m.saturated).map((m) => m.group),
     ...snapshot.program.volume_high_groups,
   ]);
   if (saturated.length) {

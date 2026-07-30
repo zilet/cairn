@@ -105,20 +105,20 @@ async function runJob(id) {
 test("learned training response changes the real next target but never overrides an injury constraint", () => {
   seedEarnedBench();
   assert.equal(
-    nextPrescription("Barbell Bench Press", undefined, { autoreg: null, recentLoad: null }).suggested.weight,
+    nextPrescription("Barbell Bench Press", undefined, { autoreg: null, acute: null }).suggested.weight,
     190
   );
 
   learnedMiss("training_target", "training", "exercise_target_completion", "Barbell Bench Press", "1");
   learnedMiss("training_target", "training", "exercise_target_completion", "Barbell Bench Press", "2");
-  const personalized = nextPrescription("Barbell Bench Press", undefined, { autoreg: null, recentLoad: null });
+  const personalized = nextPrescription("Barbell Bench Press", undefined, { autoreg: null, acute: null });
   assert.equal(personalized.suggested.weight, 187.5, "the learned conservative step reaches the actual prescription");
   assert.ok(personalized.suggested.weight - 185 <= 5, "the universal compound ceiling still wins");
 
   repo.updateExercise(repo.findExercise("Barbell Bench Press").id, {
     constraint_note: "chest wall pain — hold load until pain-free",
   });
-  const constrained = nextPrescription("Barbell Bench Press", undefined, { autoreg: null, recentLoad: null });
+  const constrained = nextPrescription("Barbell Bench Press", undefined, { autoreg: null, acute: null });
   assert.equal(constrained.action, "hold");
   assert.equal(constrained.suggested.weight, 185);
 });

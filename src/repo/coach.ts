@@ -26,6 +26,7 @@ import { flexibleTrainingAgenda } from "./flexible-training-agenda.js";
 import { dexaTargeting } from "./dexa-targeting.js";
 import { muscleGroupTrajectory, planExerciseNames, testWeekDue } from "./muscle-trajectory.js";
 import { coachingFocus } from "./coaching-focus.js";
+import { acuteGates } from "./hybrid-load.js";
 import { planDayProgression, programAdjustments, programBalance, recentMuscleLoad } from "./progression.js";
 import { jaccard, memNorm, memoryForCoach, recentLearnings } from "./memory.js";
 import { capStr, getDayIntake, mealPlanForCoach } from "./nutrition.js";
@@ -1028,6 +1029,11 @@ function getCoachContextFromSnapshot(): CoachContext {
   // programAdjustments — which would otherwise recompute both from scratch.
   const programBal = brainSignal(`program_balance:2:${today}`, () => programBalance(2, today));
   const recentLoad = brainSignal(`recent_load:2:${today}`, () => recentMuscleLoad(2, today));
+  // The acute gate, read once. `recentLoad` above stays the DESCRIPTIVE recency
+  // list the coach context renders ("what you trained lately"); this is the
+  // DECISION input, and it looks back over the residual's own window rather than
+  // a flat two days.
+  const acuteLoad = brainSignal(`acute_gates:${today}`, () => acuteGates(today));
   // Compute the deterministic program-state ONCE and share it: the bounded coach
   // view AND the performance/capacity read both read from the same snapshot (and
   // the same recovery), so a single context build never computes program-state twice.
@@ -1111,7 +1117,7 @@ function getCoachContextFromSnapshot(): CoachContext {
     performanceStanding(today, { programState: fullProgramState, recovery, balance: programBal })
   );
   const programAdjustmentsView = brainSignal(`program_adjustments:${today}`, () =>
-    programAdjustments(programBal, recentLoad, {
+    programAdjustments(programBal, acuteLoad, {
       runPlan: runPlanView,
       dexa: dexaTargetingView,
       testWeek: testWeekView,

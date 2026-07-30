@@ -7,8 +7,8 @@
 // day-read.ts) consume selectAdaptivePlanDay + the helpers re-exported here.
 import { db } from "../db.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
-import { canonicalGroup, classifyMuscleGroup, type MuscleGroup } from "./exercise-canon.js";
-import { type RecentLoad, recentMuscleLoad } from "./hybrid-load.js";
+import { canonicalGroup, classifyMuscleGroup, type MuscleGroup, plainGroupWords } from "./exercise-canon.js";
+import { type AcuteGateReading, acuteGates, SATURATED_RESIDUAL } from "./hybrid-load.js";
 import { programBalance } from "./progression.js";
 import { daysBetweenISO, joinList, localDateISO } from "./shared.js";
 
@@ -193,10 +193,10 @@ function scorePlanDay(params: {
   due: Set<string>;
   over: Set<string>;
   broadLow: boolean;
-  recentLoad: Map<MuscleGroup, RecentLoad>;
+  acute: Map<MuscleGroup, AcuteGateReading>;
   last: SessionAnchor | null;
 }): PlanSelectionScore {
-  const { day, rotation, rotationIndex, candidates, due, over, broadLow, recentLoad, last } = params;
+  const { day, rotation, rotationIndex, candidates, due, over, broadLow, acute, last } = params;
   const dayIndex = candidates.findIndex((d) => d.day_number === day.day_number);
   const distance =
     dayIndex >= 0 && rotationIndex >= 0 ? (dayIndex - rotationIndex + candidates.length) % candidates.length : 0;
@@ -204,10 +204,10 @@ function scorePlanDay(params: {
   const lastAge = last?.days_ago;
   const dueGroups = day.groups.filter((g) => due.has(g));
   const overGroups = day.groups.filter((g) => over.has(g));
-  const recovering = day.groups.filter((g) => {
-    const rl = recentLoad.get(g);
-    return !!rl?.heavy && rl.days_ago <= 2;
-  });
+  // The shared acute gate — no days_ago cliff on top of it. `saturated` already
+  // knows how long ago the work landed AND how fast this group forgets, so quads
+  // after Sunday's long run still read recovering while rear delts do not.
+  const recovering = day.groups.filter((g) => acute.get(g)?.saturated === true);
   const freshDue = dueGroups.filter((g) => !recovering.includes(g));
   const repeated = lastAge != null && lastAge <= 3 ? day.groups.filter((g) => lastGroups.has(g)) : [];
 
@@ -218,13 +218,15 @@ function scorePlanDay(params: {
   if (freshDue.length >= 2) score += 0.75;
   score -= overGroups.length * 2;
   for (const group of recovering) {
-    const rl = recentLoad.get(group);
-    score -= rl && rl.days_ago <= 1 ? 5 : 3;
+    // Graded by how DEEP the residual still is rather than by the calendar: a
+    // group carrying half again a session's worth is a harder no than one that
+    // has just crossed the line. (Internal magnitude — nothing here is rendered.)
+    const gate = acute.get(group);
+    score -= gate && gate.residual >= SATURATED_RESIDUAL * 1.5 ? 5 : 3;
   }
   for (const group of repeated) {
-    const rl = recentLoad.get(group);
-    // A recent heavy load already carries the stronger recovering penalty.
-    if (rl?.heavy && rl.days_ago <= 2) continue;
+    // A saturated group already carries the stronger recovering penalty.
+    if (acute.get(group)?.saturated) continue;
     score -= lastAge != null && lastAge <= 1 ? 2.5 : 1.5;
   }
   if (day.groups.length >= 3 && freshDue.length >= 2) score += 0.5; // full-body day that covers several fresh gaps
@@ -258,6 +260,19 @@ function scorePlanDay(params: {
 // set, rotated with pickDayVariant on the SAME day the rest of the Brief rotates
 // on — a stable plan-selection state fires the same shape every morning, so one
 // literal per shape would read as a stuck app within a week (CLAUDE.md).
+// The FATIGUE-AWARE pick: today's programmed day is still carrying real work and
+// the day we chose instead is not. Given its own set (and checked first) because
+// it is the most specific true thing that can be said — the generic fresh-due
+// lead would answer "more due", which is not the reason. Phrased without a verb
+// that has to agree with the group ("your chest are…"), so any mix of names
+// reads correctly.
+const SELECTION_LEAD_FRESHER = [
+  "today steps around {groups}, still carrying recent work",
+  "you're giving {groups} another day and training what's fresher instead",
+  "this shape leaves {groups} alone while the work settles",
+  "you're picking up fresher work and letting {groups} recover",
+  "today leans away from {groups} and toward what's ready",
+] as const;
 const SELECTION_LEAD_FRESH_DUE = [
   "you're leaning into {groups} today — more due and fresher than usual",
   "you're catching {groups} at the better time, more due and still fresh",
@@ -288,6 +303,7 @@ const SELECTION_AVOID_RECOVERING = [
   "your usual {day} day would overlap {groups}, still recovering",
   "your regular {day} day would lean back into {groups}, not yet recovered",
   "sticking with {day} would touch {groups}, still on the mend",
+  "your usual {day} day would ask more of {groups} too soon",
 ] as const;
 const SELECTION_AVOID_REPEATED = [
   "your usual {day} day repeats {groups} from your last session",
@@ -306,6 +322,14 @@ function lc(s: unknown): string {
     .toLowerCase();
 }
 
+// Canonical keys are the MACHINE register — `recovering`/`fresh_due` keep them so
+// the signals stay analysable. Anything a person reads goes through the friendly
+// mapping instead, capped at two names: a calm sentence names what matters, not
+// an inventory.
+function groupWords(groups: string[]): string {
+  return plainGroupWords(groups, 2) ?? joinList(groups);
+}
+
 function fillGroups(template: string, groups: string): string {
   return template.replace(/\{groups\}/g, groups);
 }
@@ -317,27 +341,33 @@ function fillDayAndGroups(template: string, day: string, groups: string): string
 // The lead clause: why the SELECTED day itself is the better pick, in the same
 // priority order the original literal fallback (fresh-due > recovering > repeated
 // > over > "fits better") checked — but authored, second person, and rotating.
-function selectionLeadClause(selected: PlanSelectionScore, date: string): string {
+function selectionLeadClause(selected: PlanSelectionScore, rotation: PlanSelectionScore, date: string): string {
+  if (!selected.recovering.length && rotation.recovering.length) {
+    return fillGroups(
+      pickDayVariant(SELECTION_LEAD_FRESHER, date, "plan-selection:lead:fresher"),
+      groupWords(rotation.recovering)
+    );
+  }
   if (selected.fresh_due.length) {
     return fillGroups(
       pickDayVariant(SELECTION_LEAD_FRESH_DUE, date, "plan-selection:lead:fresh_due"),
-      joinList(selected.fresh_due)
+      groupWords(selected.fresh_due)
     );
   }
   if (selected.recovering.length) {
     return fillGroups(
       pickDayVariant(SELECTION_LEAD_RECOVERING, date, "plan-selection:lead:recovering"),
-      joinList(selected.recovering)
+      groupWords(selected.recovering)
     );
   }
   if (selected.repeated.length) {
     return fillGroups(
       pickDayVariant(SELECTION_LEAD_REPEATED, date, "plan-selection:lead:repeated"),
-      joinList(selected.repeated)
+      groupWords(selected.repeated)
     );
   }
   if (selected.over.length) {
-    return fillGroups(pickDayVariant(SELECTION_LEAD_OVER, date, "plan-selection:lead:over"), joinList(selected.over));
+    return fillGroups(pickDayVariant(SELECTION_LEAD_OVER, date, "plan-selection:lead:over"), groupWords(selected.over));
   }
   return pickDayVariant(SELECTION_LEAD_FALLBACK, date, "plan-selection:lead:fallback");
 }
@@ -351,21 +381,21 @@ function selectionAvoidClause(rotation: PlanSelectionScore, date: string): strin
     return fillDayAndGroups(
       pickDayVariant(SELECTION_AVOID_RECOVERING, date, "plan-selection:avoid:recovering"),
       day,
-      joinList(rotation.recovering)
+      groupWords(rotation.recovering)
     );
   }
   if (rotation.repeated.length) {
     return fillDayAndGroups(
       pickDayVariant(SELECTION_AVOID_REPEATED, date, "plan-selection:avoid:repeated"),
       day,
-      joinList(rotation.repeated)
+      groupWords(rotation.repeated)
     );
   }
   if (rotation.over.length) {
     return fillDayAndGroups(
       pickDayVariant(SELECTION_AVOID_OVER, date, "plan-selection:avoid:over"),
       day,
-      joinList(rotation.over)
+      groupWords(rotation.over)
     );
   }
   return "";
@@ -373,7 +403,7 @@ function selectionAvoidClause(rotation: PlanSelectionScore, date: string): strin
 
 function selectionReason(selected: PlanSelectionScore, rotation: PlanSelectionScore, date: string): string | null {
   if (selected.day_number === rotation.day_number) return null;
-  const lead = selectionLeadClause(selected, date);
+  const lead = selectionLeadClause(selected, rotation, date);
   const avoid = selectionAvoidClause(rotation, date);
   return avoid ? `${lead}, while ${avoid}` : lead;
 }
@@ -395,11 +425,11 @@ export function selectAdaptivePlanDay(
   } catch {
     balance = null;
   }
-  let load: Map<MuscleGroup, RecentLoad>;
+  let acute: Map<MuscleGroup, AcuteGateReading>;
   try {
-    load = recentMuscleLoad(3, date);
+    acute = acuteGates(date);
   } catch {
-    load = new Map();
+    acute = new Map();
   }
 
   const due = new Set<string>(Array.isArray(balance?.due) ? balance.due : []);
@@ -414,7 +444,7 @@ export function selectAdaptivePlanDay(
       due,
       over,
       broadLow: !!balance?.broad_low,
-      recentLoad: load,
+      acute,
       last: anchors[0] ?? null,
     })
   );
@@ -449,11 +479,11 @@ export function selectAdaptivePlanDay(
         : null,
       due: [...due].slice(0, 8),
       over: [...over].slice(0, 8),
-      recent_load: [...load.values()]
+      recent_load: [...acute.values()]
         .map((r) => ({
           group: r.group,
           days_ago: r.days_ago,
-          heavy: r.heavy,
+          saturated: r.saturated,
           source: r.source,
           activity: r.activity,
         }))

@@ -47,7 +47,8 @@ import { fuelingFollowThroughDue } from "./fueling.js";
 import { addDaysISO, clipText, localDateISO } from "./shared.js";
 import { getCachedDayRead } from "./intelligence.js";
 import { listVisibleInsights, listActiveDirectives } from "./coach.js";
-import { programAdjustments, programBalance, recentMuscleLoad } from "./progression.js";
+import { acuteGates } from "./hybrid-load.js";
+import { programAdjustments, programBalance } from "./progression.js";
 import { getRunCompliance, getWeeklyStats } from "./sessions.js";
 import { listUnreconciledGarminStrength } from "./activities.js";
 import { healthFocus } from "./propagation.js";
@@ -716,11 +717,13 @@ function adjustmentsCandidate(date: string, weeklyStats?: any): TodayAgendaCandi
   // (mirrors weekAheadCandidate) — calm by default; no plan → silent.
   const stats: any = weeklyStats ?? getWeeklyStats(date);
   if ((Number(stats?.week_planned) || 0) <= 0) return null;
-  const rows = programAdjustments(programBalance(2, date), recentMuscleLoad(2, date));
+  const rows = programAdjustments(programBalance(2, date), acuteGates(date));
   if (!Array.isArray(rows) || !rows.length) return null;
-  // A deload or a true gap (not a recovering / already-programmed group) lifts the
-  // urgency a little above a routine progression digest.
-  const pressing = rows.some((a) => a && (a.kind === "deload" || (a.kind === "gap" && !a.recovering)));
+  // A deload or a missing-pattern gap lifts the urgency a little above a routine
+  // progression digest. (This used to also test `!a.recovering` on the gap, which
+  // could never be false: `recovering` is only ever set on a kind:'balance' row.
+  // Removed rather than left as a guard that reads like it protects something.)
+  const pressing = rows.some((a) => a && (a.kind === "deload" || a.kind === "gap"));
   return {
     id: "program-adjustments",
     kind: "plan",

@@ -1,5 +1,6 @@
 import { normalizeSessionSuggestionResult } from "./adaptive-session.js";
 import { cardioPlanIdentity } from "./cardio-plan-identity.js";
+import { canonicalGroup } from "./exercise-canon.js";
 import { cardioPainRelevance, type DailyDecisionEnvelope } from "./daily-decision.js";
 import {
   equipmentCompatibility,
@@ -55,6 +56,21 @@ function workingSetCap(envelope: DailyDecisionEnvelope): number {
       return 24;
   }
 }
+
+// The REDUCED areas are a safety decision the server already made — a group that
+// is still carrying recent work, or one running above its productive volume.
+// Until now `reduced` reached the session as a LINE IN THE PROMPT ("keep light,
+// do NOT overload") and NOTHING else, so an agent that ignored it was never
+// corrected. That breaks the law the rest of this module exists to enforce:
+// safety logic is deterministic, agents only phrase it.
+//
+// It CLAMPS rather than rejects, because "reduced" means less, not none. The
+// envelope deliberately still ALLOWS these areas; dropping their items would
+// silently delete work the plan calls for and hand the athlete a thinner session
+// than anyone decided on. So sets come down and the target is eased, and both
+// compose with (never override) any deeper day-level easing already in force.
+const REDUCED_ITEM_SET_CAP = 2;
+const REDUCED_INTENSITY_FACTOR = 0.9;
 
 function perItemSetCap(envelope: DailyDecisionEnvelope): number {
   switch (envelope.caps.volume) {
@@ -304,6 +320,14 @@ export function normalizeComposedSession(
     };
   }
   const excluded = new Set(envelope.muscles.excluded.map((g) => g.toLowerCase()));
+  const reducedGroups = new Set(
+    (Array.isArray(envelope.muscles.reduced) ? envelope.muscles.reduced : []).map(
+      (g) => canonicalGroup(g) ?? String(g).toLowerCase()
+    )
+  );
+  // Resolved on the way past, while the stored exercise (and so its group) is in
+  // hand — the clamping pass below works on item names alone.
+  const reducedExercises = new Set<string>();
   const hasProtectiveExclusion = envelope.hard_constraints.some((entry) => entry.code === "injury_exclusion");
   const protectiveExclusions = Array.isArray(envelope.protective_exclusions)
     ? envelope.protective_exclusions
@@ -378,6 +402,7 @@ export function normalizeComposedSession(
       rejected.push({ exercise, reason: "excluded_group" });
       continue;
     }
+    if (group && reducedGroups.has(canonicalGroup(group) ?? group)) reducedExercises.add(exercise.toLowerCase());
     const novel = !isCardio && !stored;
     if (novel) {
       // A novel movement is not in the canon, so it carries no muscle_group and the
@@ -431,8 +456,10 @@ export function normalizeComposedSession(
     if (applyAuthorizedTarget(next, candidate)) changed = true;
     if (applyRecoveryCycleTarget(next, envelope)) changed = true;
     Object.assign(next, trustedCandidateMetadata(candidate));
+    const isReduced = reducedExercises.has(String(next.exercise ?? "").toLowerCase());
     const authorizedSets = Math.max(1, Number(next.sets) || requestedSets);
-    const boundedSets = Math.min(authorizedSets, itemSetCap, remainingSets);
+    const setCapForItem = isReduced ? Math.min(itemSetCap, REDUCED_ITEM_SET_CAP) : itemSetCap;
+    const boundedSets = Math.min(authorizedSets, setCapForItem, remainingSets);
     if (boundedSets < 1) {
       changed = true;
       continue;
@@ -451,6 +478,8 @@ export function normalizeComposedSession(
     if (candidate?.action === "deload" && !candidate.authorized_target) {
       intensityFactor = Math.min(intensityFactor, 0.9);
     }
+    // A reduced area never gets a heavier target than the day already allows.
+    if (isReduced) intensityFactor = Math.min(intensityFactor, REDUCED_INTENSITY_FACTOR);
     const hold = candidate?.action === "hold" || envelope.caps.intensity === "hold";
     if (hold && clampHeldTarget(next, envelope)) changed = true;
     if (intensityFactor < 1) {
@@ -463,7 +492,10 @@ export function normalizeComposedSession(
         if (weight !== next.target_weight) changed = true;
         next.target_weight = weight;
       }
-      next.note = adaptationNote(next.note, "Eased for today");
+      next.note = adaptationNote(
+        next.note,
+        isReduced ? "Kept light — this area is still carrying recent work" : "Eased for today"
+      );
     } else if (hold) {
       next.note = adaptationNote(next.note, "Holding the current target today");
     }

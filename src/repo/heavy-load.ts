@@ -162,6 +162,37 @@ export function matchEnduranceModality(structuredType: string, supportingText = 
   return null;
 }
 
+// ---- what makes ONE endurance effort "hard" (the single source of truth) ----
+// These knobs used to live as anonymous literals in three files: the per-muscle
+// reader (hybrid-load.classifyImpactLoad), the day grade (training-read
+// .hardCardioDay), and the coarse day bands below. They drifted — the per-muscle
+// reader's label test was missing "sprint", "interval" and "maximal" and had no
+// word boundaries, so a logged VO2 interval session did not read as hard there
+// while it did in the day grade. One definition now, consumed by both.
+//
+// The two TE bars are deliberately different, and are named together so the
+// difference is visible rather than being two magic numbers in two files:
+// `aerobicTe`/`anaerobicTe` answer "did this load these MUSCLES hard", read per
+// axis; `dayGradeTe` answers the coarser "was this a hard DAY" for the
+// earned-rest count and is taken as one bar across the higher of the two axes.
+export const HARD_EFFORT = {
+  /** Seconds at threshold and above (Z4/Z5) that make an effort genuinely hard. */
+  z4Seconds: 240,
+  /** A session label that names a hard workout outright. */
+  label: /\b(?:vo2(?:[\s_-]*max)?|maximal|anaerobic|sprint|interval|threshold|tempo|lactate)\b/i,
+  /** Absolute Garmin training_load floor, for when there is no personal baseline. */
+  trainingLoadFloor: 80,
+  /** …and the multiple of the athlete's OWN recent cardio median when there is one. */
+  loadMedianMultiple: 1.5,
+  /** Minutes that make a genuine endurance session (run/ride/swim/row) a loading day. */
+  sustainedMin: 40,
+  /** Per-axis training-effect bars for the per-muscle read. */
+  aerobicTe: 3,
+  anaerobicTe: 2,
+  /** The coarser single bar the day grade takes across both axes. */
+  dayGradeTe: 4,
+} as const;
+
 // Generic cardio day-grade thresholds (training-read.cardioEffort): coarser than the
 // per-modality table above — they grade ONE effort easy/moderate/hard for the day's
 // earned-rest read, not per-muscle loading. Kept distinct from the modality table on

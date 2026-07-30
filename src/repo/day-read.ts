@@ -31,6 +31,8 @@ import { activitySportWhere, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
 import { estimateExpenditure } from "./expenditure.js";
 import { flexibleTrainingAgenda } from "./flexible-training-agenda.js";
 import { listContextEvents } from "./health.js";
+import { plainGroupWords } from "./exercise-canon.js";
+import { suppressSaturatedDue } from "./hybrid-load.js";
 import { sensorIsCurrent } from "./sensor-freshness.js";
 import { getRecentSessions } from "./sessions.js";
 import { getActiveBlock } from "./program-blocks.js";
@@ -2508,13 +2510,17 @@ export function forwardLook(date?: string): ForwardLook {
   let due: string[] = [];
   try {
     const bal: any = programBalance(2, d);
-    due = Array.isArray(bal?.due) ? bal.due.slice(0, 2) : [];
+    // A saturated group is NOT something to put in front of the athlete as "due"
+    // — the Brief must never say "quads & calves due" the morning after the long
+    // run that flattened them. This surface never asked the acute question at
+    // all; it does now, through the same gate every other consumer reads.
+    due = suppressSaturatedDue(Array.isArray(bal?.due) ? bal.due : [], d).slice(0, 2);
   } catch {
     /* no balance → no due groups */
   }
   const parts: string[] = [];
   if (next_focus) parts.push(`Next: ${next_focus}`);
-  if (due.length) parts.push(`${due.join(" & ")} due this week`);
+  if (due.length) parts.push(`${plainGroupWords(due, 2) ?? due.join(" & ")} due this week`);
   return { next_focus, due, text: parts.length ? parts.join(" · ") : null };
 }
 
@@ -2529,7 +2535,8 @@ export interface WeekAheadDay {
   label: string; // e.g. "Lower body" / "Easy 5k" / "Rest"
   note?: string | null;
 }
-export function weekAheadPlan(): { days: WeekAheadDay[]; summary: string } {
+export function weekAheadPlan(date = localDateISO()): { days: WeekAheadDay[]; summary: string } {
+  const d = String(date).slice(0, 10);
   const planDays = db.prepare(`SELECT id, day_number, name, focus FROM plan_days ORDER BY day_number`).all() as any[];
   if (!planDays.length) return { days: [], summary: "" };
   // Per-day modality from plan_items so the floor REFLECTS a runner's prescribed
@@ -2568,10 +2575,13 @@ export function weekAheadPlan(): { days: WeekAheadDay[]; summary: string } {
   try {
     const st = getProgramState();
     if (st?.mesocycle?.phase === "deload-due") notes.push("a deload week is about due — pencil in one lighter day");
-    const bal = programBalance();
-    if (Array.isArray(bal?.due) && bal.due.length)
+    // Same acute gate as the forward-look: the week ahead never opens by naming a
+    // group that is still carrying yesterday's work as something to go add.
+    const bal = programBalance(2, d);
+    const dueFresh = suppressSaturatedDue(Array.isArray(bal?.due) ? bal.due : [], d).slice(0, 3);
+    if (dueFresh.length)
       notes.push(
-        `${bal.due.slice(0, 3).join(", ")} ${bal.due.length === 1 ? "is" : "are"} due — work ${bal.due.length === 1 ? "it" : "them"} in`
+        `${plainGroupWords(dueFresh, 3) ?? dueFresh.join(", ")} ${dueFresh.length === 1 ? "is" : "are"} due — work ${dueFresh.length === 1 ? "it" : "them"} in`
       );
     const deload = (Array.isArray(st?.lifts) ? st.lifts : [])
       .filter((l: any) => l.suggested_action === "deload")

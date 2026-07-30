@@ -649,7 +649,7 @@ THE ENVELOPE (decided for you — compose inside it):
 - Focus: ${envelope?.template?.focus ?? "general"}.
 - Required muscle areas to hit: ${requiredList.length ? requiredList.join(", ") : "coach's discretion within allowed"}.
 - Allowed areas: ${(Array.isArray(muscles.allowed) ? muscles.allowed : []).join(", ") || "any not excluded"}.
-- REDUCE (recently loaded — keep light, do NOT overload): ${reducedList.length ? reducedList.join(", ") : "none"}.
+- REDUCE (recently loaded — keep light, do NOT overload): ${reducedList.length ? reducedList.join(", ") : "none"}. The server clamps these areas down (fewer sets, an easier target) whatever you write, so compose them light on purpose rather than having it done to you.
 - EXCLUDED (do NOT program any loaded work here): ${excludedList.length ? excludedList.join(", ") : "none"}.
 - Caps: volume=${caps.volume ?? "normal"}, intensity=${caps.intensity ?? "normal"}${caps.duration_min ? `, about ${caps.duration_min} minutes total` : ""}.
 

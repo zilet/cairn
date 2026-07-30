@@ -62,6 +62,106 @@ export const MUSCLE_LANDMARKS: Record<string, { low: number; high: number } | nu
   mobility: null,
 };
 
+// ---- per-group recovery half-lives (the muscle model's TIME axis) -----------
+// How long a dose of work on a group stays materially present, expressed as the
+// hours in which HALF of it has dissipated. Fatigue is not a boolean with a cliff
+// — a group is loaded by an amount that fades — and it does not fade at one rate
+// for every group. Consumed by repo/hybrid-load.muscleResidual; MOBILITY is
+// non-loading (null), exactly as it is non-counting in MUSCLE_LANDMARKS.
+//
+// RATIONALE (why these numbers, in bands rather than false precision):
+//  - LARGE, ECCENTRICALLY-LOADED groups sit at ~48–72 h. They carry the most
+//    contractile tissue per session, take the most eccentric damage, and are the
+//    ones whose soreness is still obvious two days out: quads/glutes (squat and
+//    lunge braking), hamstrings (the slowest of all — hinge and sprint eccentrics
+//    are the classic multi-day DOMS), `back` (lats AND spinal erectors fold here,
+//    and erectors are loaded axially by nearly every compound), chest.
+//  - MID groups (~36–48 h): shoulders and triceps see high weekly frequency as
+//    secondary movers on every press, so they are given a middling constant;
+//    core and calves recover briskly but are hit by nearly everything.
+//  - SMALL ISOLATION groups sit at ~24–36 h: biceps, rear delts, forearms. Little
+//    tissue, short lever, mostly single-joint work — genuinely fresh the next day,
+//    which is the single biggest correction over the old flat 2-day cliff.
+// These are coaching constants, not measurements. They set how fast an INTERNAL
+// residual falls; no number here is ever shown to the athlete.
+export const MUSCLE_RECOVERY_HALF_LIFE_H: Record<string, number | null> = {
+  hamstrings: 66,
+  quads: 60,
+  glutes: 60,
+  back: 60,
+  chest: 54,
+  shoulders: 42,
+  triceps: 36,
+  calves: 36,
+  core: 36,
+  forearms: 30,
+  biceps: 30,
+  "rear delts": 24,
+  mobility: null,
+};
+
+// The default for a group with no entry — the mid-band constant, so an unknown
+// group behaves like an ordinary one rather than never decaying.
+export const DEFAULT_RECOVERY_HALF_LIFE_H = 42;
+
+export function recoveryHalfLifeHours(group: string | null | undefined): number | null {
+  const g = canonicalGroup(group ?? null);
+  if (!g) return null;
+  const configured = MUSCLE_RECOVERY_HALF_LIFE_H[g];
+  if (configured === null) return null; // explicitly non-loading (mobility)
+  return configured ?? DEFAULT_RECOVERY_HALF_LIFE_H;
+}
+
+// ---- friendly muscle words (the athlete-facing name of a canonical group) ----
+// Canonical keys are an ANALYSIS taxonomy — "rear delts" and "forearms" are gym
+// shorthand, not how a calm sentence names a body part. Every surface a person
+// reads goes through here; the canonical key stays the machine register. Groups
+// whose canonical key already reads naturally map to themselves, so this is a
+// complete mapping rather than a partial override with a silent fallback.
+const FRIENDLY_GROUP_WORDS: Record<MuscleGroup, string> = {
+  chest: "chest",
+  shoulders: "shoulders",
+  "rear delts": "rear shoulders",
+  triceps: "triceps",
+  back: "back",
+  biceps: "biceps",
+  forearms: "grip and forearms",
+  quads: "quads",
+  hamstrings: "hamstrings",
+  glutes: "glutes",
+  calves: "calves",
+  core: "core",
+  mobility: "mobility",
+};
+
+// One canonical group in athlete-facing words. Unknown/free-form input is folded
+// through canonicalGroup first; anything that still will not resolve comes back
+// as trimmed lowercase text rather than an underscore key or a raw column value.
+export function friendlyGroupWords(group: string | null | undefined): string {
+  const canonical = canonicalGroup(group ?? null);
+  if (canonical) return FRIENDLY_GROUP_WORDS[canonical];
+  return String(group ?? "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+// A short list of groups as one plain phrase ("quads and hamstrings"). Caps at
+// two by default — a calm sentence names what matters, not an inventory.
+export function plainGroupWords(groups: Array<string | null | undefined>, max = 2): string | null {
+  const words: string[] = [];
+  for (const g of groups) {
+    const word = friendlyGroupWords(g);
+    if (!word || words.includes(word)) continue;
+    words.push(word);
+    if (words.length >= Math.max(1, max)) break;
+  }
+  if (!words.length) return null;
+  if (words.length === 1) return words[0];
+  return `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
+}
+
 export function isMobility(group: string | null | undefined): boolean {
   return canonicalGroup(group ?? null) === "mobility";
 }

@@ -3,14 +3,30 @@
 // day after a long/hard run" style coaching. Plain words only, no scores.
 import { db } from "../db.js";
 import { addDaysISO, daysBetweenISO, localDateISO } from "./shared.js";
-import { canonicalGroup, classifyMuscleGroup, isMobility, type MuscleGroup } from "./exercise-canon.js";
-import { CARDIO_GRADE, HEAVY_SETS, type EnduranceModality, matchEnduranceModality } from "./heavy-load.js";
+import {
+  canonicalGroup,
+  classifyMuscleGroup,
+  isMobility,
+  type MuscleGroup,
+  recoveryHalfLifeHours,
+} from "./exercise-canon.js";
+import { effectiveVolumeByGroup, type VolumeSet } from "./exercise-variations.js";
+import {
+  CARDIO_GRADE,
+  HARD_EFFORT,
+  HEAVY_SETS,
+  type EnduranceModality,
+  matchEnduranceModality,
+} from "./heavy-load.js";
 
 export interface RecentLoad {
   group: MuscleGroup;
   last_date: string;
   days_ago: number;
   heavy: boolean;
+  // The INTERNAL decaying residual this group's `heavy` was derived from (see
+  // muscleResidual). Never rendered — an athlete surface reads bands and words.
+  residual: number;
   source: "strength" | "endurance" | "both";
   activity: string | null;
   detail: string;
@@ -35,6 +51,13 @@ export interface EnduranceImpact {
   regions: MuscleGroup[];
   detail: string;
   why: string;
+  // How far past this modality's own heavy bar the effort went — 1.0 means it
+  // landed right on the bar, 2.4 means a 3 h ride against a 75-min bar. The old
+  // boolean model had nowhere to put this, so a 75-minute ride and a 3-hour ride
+  // were the same event; muscleResidual scales the dose by it so a genuinely huge
+  // day still reads loaded once a fast-recovering group has had a night. Never
+  // rendered — a magnitude is machinery, not something an athlete is shown.
+  heavy_ratio: number;
 }
 
 export function isLoadRelevantEnduranceImpact(impact: EnduranceImpact): boolean {
@@ -83,13 +106,16 @@ function classifyImpactLoad(
   ascent: number | null,
   descent: number | null,
 ): Pick<EnduranceImpact, "intensity" | "load" | "why"> {
-  const hardLabel = /TEMPO|THRESHOLD|VO2MAX|ANAEROBIC|LACTATE/i.test(String(label ?? ""));
+  // One shared definition of a hard effort (heavy-load.HARD_EFFORT) — this test
+  // used to carry its own weaker label pattern, so a logged sprint or interval
+  // session read as hard to the day grade and merely moderate here.
+  const hardLabel = HARD_EFFORT.label.test(String(label ?? ""));
   const hard =
     hardLabel ||
-    (trainingLoad != null && trainingLoad >= 80) ||
-    (anate != null && anate >= 2) ||
-    (ate != null && ate >= 3) ||
-    zones45 >= 240;
+    (trainingLoad != null && trainingLoad >= HARD_EFFORT.trainingLoadFloor) ||
+    (anate != null && anate >= HARD_EFFORT.anaerobicTe) ||
+    (ate != null && ate >= HARD_EFFORT.aerobicTe) ||
+    zones45 >= HARD_EFFORT.z4Seconds;
   const long = (dur != null && dur >= region.heavyMin) || (km != null && km >= region.heavyKm);
   const moderate =
     hard ||
@@ -212,6 +238,11 @@ export function recentEnduranceImpacts(days = 3, date = localDateISO()): Enduran
           regions: region.regions,
           detail,
           why: load.why,
+          heavy_ratio: Math.max(
+            1,
+            dur != null && region.heavyMin > 0 ? dur / region.heavyMin : 0,
+            km != null && region.heavyKm > 0 ? km / region.heavyKm : 0
+          ),
         };
       })
       .filter((x): x is EnduranceImpact => !!x)
@@ -224,15 +255,291 @@ export function recentEnduranceImpacts(days = 3, date = localDateISO()): Enduran
   }
 }
 
+// ---- the temporal muscle model: a per-group decaying residual ---------------
+// Fatigue used to be a BOOLEAN with a cliff — `sets >= 4` inside a 2-day window —
+// so a muscle was equally smoked by 4 sets and by 30, and went from smoked to
+// fresh at midnight on an arbitrary day. Every decision downstream inherited that
+// flatness. The residual replaces it with a DOSE that decays:
+//
+//   residual(group) = Σ_days  dose(day) × 0.5 ^ (hours_since / half_life(group))
+//
+// * DOSE is measured in "one heavy session" units, so it is comparable across
+//   groups and modalities. For strength that is effective working sets (shared
+//   effectiveVolumeByGroup — warmups excluded, RIR-weighted, indirect credit at
+//   half) over HEAVY_SETS. Raw rows are NEVER re-counted here.
+// * HALF-LIFE is per group (exercise-canon.MUSCLE_RECOVERY_HALF_LIFE_H), so a
+//   hamstring day still reads loaded on Wednesday while rear delts do not.
+// * The residual is INTERNAL. It is a float, and the no-scores law means it never
+//   reaches an athlete surface — consumers read the BANDS (fresh / loaded /
+//   saturated) and speak in plain muscle words.
+export const RESIDUAL_LOOKBACK_DAYS = 7; // ~3 half-lives of the slowest group; older work contributes <0.1
+
+// Band thresholds on the residual, in heavy-session units.
+//
+// SATURATED (0.75) is calibrated to REPRODUCE the old `sets >= HEAVY_SETS` bar at
+// the boundary. The old rule counted RAW logged rows, warmups included; effective
+// volume excludes the ramp-up, so a typical "4 logged sets" day is ~3 effective
+// working sets = 0.75 of a heavy dose. Same-day work therefore crosses at the same
+// place it always did, while yesterday's work now crosses it only for the slower
+// groups — which is the correction this model exists to make.
+export const SATURATED_RESIDUAL = 0.75;
+export const LOADED_RESIDUAL = 0.35; // still carrying real work; not a reason to hold load
+
+// An endurance effort's dose on each of the prime movers the modality loads.
+// ENDURANCE_MODALITIES lists conservative prime movers only, so the dose is
+// credited evenly across them rather than invented per-region. A "light" effort
+// only counts when it clears isLoadRelevantEnduranceImpact — a casual walk is not
+// a dose on anything.
+const ENDURANCE_DOSE: Record<EnduranceImpact["load"], number> = { heavy: 1, moderate: 0.6, light: 0.25 };
+
+// A heavy effort scales past one session-equivalent by how far it went past the
+// modality's own heavy bar, capped so a single enormous day cannot dominate the
+// whole week's picture. Sub-heavy efforts do not scale — they sit below the bar by
+// definition, and inflating them would re-introduce the flatness this replaces.
+const MAX_ENDURANCE_MAGNITUDE = 2.5;
+
+export function enduranceDose(impact: EnduranceImpact): number {
+  const base = ENDURANCE_DOSE[impact.load];
+  if (!(base > 0)) return 0;
+  if (impact.load === "light" && !isLoadRelevantEnduranceImpact(impact)) return 0;
+  if (impact.load !== "heavy") return base;
+  const ratio = Number.isFinite(impact.heavy_ratio) ? Math.max(1, impact.heavy_ratio) : 1;
+  return base * Math.min(ratio, MAX_ENDURANCE_MAGNITUDE);
+}
+
+export type AcuteBand = "fresh" | "loaded" | "saturated";
+
+export interface MuscleResidual {
+  group: MuscleGroup;
+  residual: number; // INTERNAL — never rendered
+  band: AcuteBand;
+  strength: number; // residual contributed by logged sets
+  endurance: number; // residual contributed by endurance regions
+  half_life_h: number;
+  last_date: string | null;
+  days_ago: number | null;
+  source: "strength" | "endurance" | "both" | "none";
+  activity: string | null;
+  detail: string;
+}
+
+export function residualBand(residual: number): AcuteBand {
+  if (residual >= SATURATED_RESIDUAL) return "saturated";
+  if (residual >= LOADED_RESIDUAL) return "loaded";
+  return "fresh";
+}
+
+// Decay one dose laid down `daysAgo` days back. Logged sets carry a date, not a
+// clock time, so a day is 24 h and today's work has not decayed at all.
+function decayFactor(daysAgo: number, halfLifeH: number): number {
+  const hours = Math.max(0, daysAgo) * 24;
+  return 0.5 ** (hours / Math.max(1, halfLifeH));
+}
+
+// The decaying residual per canonical group. Pure-ish (reads logged sets +
+// activities); null-safe — any read problem yields an empty map, never a throw.
+export function muscleResidual(
+  days = RESIDUAL_LOOKBACK_DAYS,
+  date = localDateISO()
+): Map<MuscleGroup, MuscleResidual> {
+  const today = String(date).slice(0, 10);
+  const lookback = Math.max(1, days);
+  const since = addDaysISO(today, -(lookback - 1)) ?? today;
+  const dAgo = (iso: string): number => Math.max(0, daysBetweenISO(today, String(iso).slice(0, 10)) ?? 0);
+
+  const acc = new Map<
+    MuscleGroup,
+    { strength: number; endurance: number; last: string | null; activity: string | null; detail: string }
+  >();
+  const touch = (g: MuscleGroup, when: string) => {
+    const cur = acc.get(g) ?? { strength: 0, endurance: 0, last: null, activity: null, detail: "" };
+    if (!cur.last || when > cur.last) cur.last = when;
+    acc.set(g, cur);
+    return cur;
+  };
+
+  // ---- strength: effective working volume per DAY, then decayed -------------
+  try {
+    const rows = db
+      .prepare(
+        `SELECT e.muscle_group AS muscle_group, e.name AS exercise, s.date AS date,
+                ls.weight AS weight, ls.reps AS reps, ls.rir AS rir
+           FROM logged_sets ls JOIN exercises e ON e.id = ls.exercise_id
+           JOIN sessions s ON s.id = ls.session_id
+          WHERE s.date >= ? AND s.date <= ?`
+      )
+      .all(since, today) as any[];
+    const byDate = new Map<string, VolumeSet[]>();
+    for (const r of rows) {
+      const d = String(r.date).slice(0, 10);
+      const bucket = byDate.get(d);
+      if (bucket) bucket.push(r as VolumeSet);
+      else byDate.set(d, [r as VolumeSet]);
+    }
+    for (const [day, sets] of byDate) {
+      const factorDays = dAgo(day);
+      // ONE effective-volume truth, per day so each day's dose decays on its own.
+      for (const [group, volume] of effectiveVolumeByGroup(sets)) {
+        if (isMobility(group)) continue;
+        const halfLife = recoveryHalfLifeHours(group);
+        if (halfLife == null) continue;
+        const dose = volume.sets / HEAVY_SETS;
+        if (!(dose > 0)) continue;
+        const cur = touch(group, day);
+        cur.strength += dose * decayFactor(factorDays, halfLife);
+      }
+    }
+  } catch {
+    // Missing/older tables: stay quiet, exactly as recentMuscleLoad always has.
+  }
+
+  // ---- endurance: regional contributions, same decay ------------------------
+  for (const impact of recentEnduranceImpacts(lookback, today)) {
+    const dose = enduranceDose(impact);
+    if (!(dose > 0)) continue;
+    for (const group of impact.regions) {
+      if (isMobility(group)) continue;
+      const halfLife = recoveryHalfLifeHours(group);
+      if (halfLife == null) continue;
+      const cur = touch(group, impact.date);
+      cur.endurance += dose * decayFactor(impact.days_ago, halfLife);
+      // Name the most recent endurance effort, so a consumer can say what did it.
+      if (!cur.activity || impact.date >= (cur.last ?? impact.date)) {
+        cur.activity = impact.label;
+        cur.detail = impact.detail;
+      }
+    }
+  }
+
+  const out = new Map<MuscleGroup, MuscleResidual>();
+  for (const [group, v] of acc) {
+    const residual = v.strength + v.endurance;
+    const source: MuscleResidual["source"] =
+      v.strength > 0 && v.endurance > 0 ? "both" : v.strength > 0 ? "strength" : v.endurance > 0 ? "endurance" : "none";
+    out.set(group, {
+      group,
+      residual,
+      band: residualBand(residual),
+      strength: v.strength,
+      endurance: v.endurance,
+      half_life_h: recoveryHalfLifeHours(group) ?? 0,
+      last_date: v.last,
+      days_ago: v.last ? dAgo(v.last) : null,
+      source,
+      activity: v.activity,
+      detail: v.detail,
+    });
+  }
+  return out;
+}
+
+// ---- acuteGate: the ONE acute-recovery question every consumer asks ---------
+// Four call sites used to ask it four different ways — `rl?.heavy` alone, `heavy
+// && days_ago <= 2`, `heavy && days_ago <= 1`, and a bare `heavy` inside the
+// progression brake — so the same muscle could be "recovering" to the plan-day
+// picker and "fresh" to the balance card on the same morning. They all read this
+// now, and two surfaces that never asked at all (forwardLook, weekAheadPlan) ask
+// it too.
+export interface AcuteGateReading {
+  group: MuscleGroup;
+  band: AcuteBand;
+  residual: number; // INTERNAL — never rendered
+  // The shared gate: this group carries close to a full session's worth of
+  // undissipated work. Do not add load to it, and do not call it "due" today.
+  saturated: boolean;
+  last_date: string | null;
+  days_ago: number | null;
+  source: MuscleResidual["source"];
+  activity: string | null;
+  detail: string;
+}
+
+const FRESH_GATE: Omit<AcuteGateReading, "group"> = {
+  band: "fresh",
+  residual: 0,
+  saturated: false,
+  last_date: null,
+  days_ago: null,
+  source: "none",
+  activity: null,
+  detail: "",
+};
+
+// Read the gate for one group. Pass a residual map computed once when gating a
+// whole list — the map is a couple of queries, and callers in a loop should not
+// repeat them.
+export function acuteGate(
+  group: MuscleGroup | string,
+  date = localDateISO(),
+  residuals?: Map<MuscleGroup, MuscleResidual>
+): AcuteGateReading {
+  const canonical = canonicalGroup(group) ?? null;
+  if (!canonical) return { group: group as MuscleGroup, ...FRESH_GATE };
+  const map = residuals ?? muscleResidual(RESIDUAL_LOOKBACK_DAYS, date);
+  const r = map.get(canonical);
+  if (!r) return { group: canonical, ...FRESH_GATE };
+  return {
+    group: canonical,
+    band: r.band,
+    residual: r.residual,
+    saturated: r.band === "saturated",
+    last_date: r.last_date,
+    days_ago: r.days_ago,
+    source: r.source,
+    activity: r.activity,
+    detail: r.detail,
+  };
+}
+
+// Gates for every group carrying any residual, for callers that filter a list.
+export function acuteGates(date = localDateISO()): Map<MuscleGroup, AcuteGateReading> {
+  const residuals = muscleResidual(RESIDUAL_LOOKBACK_DAYS, date);
+  const out = new Map<MuscleGroup, AcuteGateReading>();
+  for (const group of residuals.keys()) out.set(group, acuteGate(group, date, residuals));
+  return out;
+}
+
+// Drop the groups a "due" list should not be naming today, because they are still
+// carrying the work that made them tired. Volume balance answers "has this group
+// had enough work lately" over two WEEKS; the gate answers "can it take work
+// today". Both can be true at once — a group can be genuinely under-trained AND
+// flattened by yesterday's long run — and telling the athlete to go train it in
+// that state is the connected read failing. Fail-soft: a read problem leaves the
+// list exactly as it was rather than silently emptying the surface.
+export function suppressSaturatedDue(due: string[], date = localDateISO()): string[] {
+  if (!Array.isArray(due) || !due.length) return [];
+  try {
+    const gates = acuteGates(date);
+    const kept = due.filter((g) => {
+      const canonical = canonicalGroup(g);
+      return !(canonical && gates.get(canonical)?.saturated);
+    });
+    return kept;
+  } catch {
+    return due;
+  }
+}
+
+// Which groups were touched in the last `days`, and what shape that work was in.
+// The WINDOW here still scopes what gets REPORTED (last_date / days_ago / source /
+// activity are recency facts about the near past), but `heavy` is no longer a raw
+// set count inside that window — it is the saturated band of the decaying residual,
+// which looks back further and forgets at each group's own rate. So a group can be
+// listed as trained yesterday and still read fresh, which the old cliff could not
+// express.
 export function recentMuscleLoad(days = 2, date = localDateISO()): Map<MuscleGroup, RecentLoad> {
   const out = new Map<MuscleGroup, RecentLoad>();
   const today = String(date).slice(0, 10);
   const since = addDaysISO(today, -(Math.max(1, days) - 1)) ?? today;
   const dAgo = (iso: string): number => Math.max(0, daysBetweenISO(today, String(iso).slice(0, 10)) ?? 0);
-  const bump = (g: MuscleGroup, when: string, heavy: boolean, src: "strength" | "endurance", activity: string | null, detail: string) => {
+  const residuals = muscleResidual(RESIDUAL_LOOKBACK_DAYS, today);
+  const bump = (g: MuscleGroup, when: string, src: "strength" | "endurance", activity: string | null, detail: string) => {
+    const r = residuals.get(g);
+    const heavy = r?.band === "saturated";
+    const residual = r?.residual ?? 0;
     const prev = out.get(g);
     if (!prev) {
-      out.set(g, { group: g, last_date: when, days_ago: dAgo(when), heavy, source: src, activity, detail });
+      out.set(g, { group: g, last_date: when, days_ago: dAgo(when), heavy, residual, source: src, activity, detail });
       return;
     }
     const newer = when > prev.last_date;
@@ -240,7 +547,8 @@ export function recentMuscleLoad(days = 2, date = localDateISO()): Map<MuscleGro
       group: g,
       last_date: newer ? when : prev.last_date,
       days_ago: Math.min(prev.days_ago, dAgo(when)),
-      heavy: prev.heavy || heavy,
+      heavy,
+      residual,
       source: prev.source === src ? src : "both",
       activity: src === "endurance" ? activity : prev.activity,
       detail: src === "endurance" && detail ? detail : prev.detail,
@@ -254,31 +562,32 @@ export function recentMuscleLoad(days = 2, date = localDateISO()): Map<MuscleGro
          JOIN sessions s ON s.id = ls.session_id
         WHERE s.date >= ? AND s.date <= ?`
     ).all(since, today) as any[];
-    const tally = new Map<MuscleGroup, { sets: number; last: string }>();
+    const tally = new Map<MuscleGroup, { last: string }>();
     for (const r of sets) {
       const group = canonicalGroup(r.mg) ?? classifyMuscleGroup(r.name);
       if (!group || isMobility(group)) continue;
-      const cur = tally.get(group) ?? { sets: 0, last: String(r.date) };
-      cur.sets += 1;
+      const cur = tally.get(group) ?? { last: String(r.date) };
       if (String(r.date) > cur.last) cur.last = String(r.date);
       tally.set(group, cur);
     }
-    for (const [group, v] of tally) bump(group, v.last, v.sets >= HEAVY_SETS, "strength", null, "");
+    for (const [group, v] of tally) bump(group, v.last, "strength", null, "");
   } catch {
     // Missing/older tables: stay quiet.
   }
 
   for (const impact of recentEnduranceImpacts(days, today)) {
     for (const group of impact.regions) {
-      bump(group, impact.date, impact.load === "heavy", "endurance", impact.label, impact.detail);
+      bump(group, impact.date, "endurance", impact.label, impact.detail);
     }
   }
 
   return out;
 }
 
-export function loadPhrase(rl: RecentLoad): string {
-  const when = whenWord(rl.days_ago);
+// What loaded this group, in plain words. Reads either shape — the recency record
+// or the acute gate — since both carry the same four facts a sentence needs.
+export function loadPhrase(rl: RecentLoad | AcuteGateReading): string {
+  const when = rl.days_ago == null ? "recently" : whenWord(rl.days_ago);
   if (rl.activity) return `your ${rl.detail ? `${rl.detail} ` : ""}${rl.activity} ${when}`;
   return `the hard ${rl.group} work you did ${when}`;
 }

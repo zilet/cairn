@@ -11,6 +11,7 @@
 // dayread.ts/repo/day-read.ts/repo/coach.ts/repo/signal-state.ts, which other
 // tracks are editing in parallel worktrees.
 import type { CoachPersonalModifier } from "../brain/coach-context-contract.js";
+import { plainGroupWords } from "./exercise-canon.js";
 import { recentMuscleLoad } from "./hybrid-load.js";
 import { listTrainingSymptoms } from "./training-symptoms.js";
 import { personalResponseModifierFor } from "./reaction-model.js";
@@ -85,9 +86,12 @@ export function recoveryMenuGrammarPool(): string[] {
   ];
 }
 
-// The most-loaded recent muscle groups, in plain words ("hips and hamstrings"),
-// or null when nothing recent qualifies. Fail-soft: a read query problem never
-// blocks the Brief.
+// The most-loaded recent muscle groups, in plain words ("grip and forearms"), or
+// null when nothing recent qualifies. The comment always promised plain words;
+// it emitted raw canonical keys, so this recovery line could read "rear delts" at
+// the athlete — gym shorthand from an ANALYSIS taxonomy, not how a calm sentence
+// names a body part. plainGroupWords is that mapping. Fail-soft: a read query
+// problem never blocks the Brief.
 function plainMuscleWords(date: string): string | null {
   try {
     const load = recentMuscleLoad(3, date);
@@ -97,10 +101,8 @@ function plainMuscleWords(date: string): string | null {
         if (a.heavy !== b.heavy) return a.heavy ? -1 : 1;
         return a.days_ago - b.days_ago;
       })
-      .slice(0, 2)
       .map((g) => g.group);
-    if (!groups.length) return null;
-    return groups.length === 1 ? groups[0] : `${groups[0]} and ${groups[1]}`;
+    return plainGroupWords(groups, 2);
   } catch {
     return null;
   }

@@ -19,11 +19,13 @@ import {
   canonicalGroup,
   classifyConstraint,
   classifyMuscleGroup,
+  isMobility,
   movementKey,
   type MuscleGroup,
   MUSCLE_LANDMARKS,
   normalizeExerciseName,
   normalizedExerciseKey,
+  plainGroupWords,
   resolveGroup,
 } from "./exercise-canon.js";
 import {
@@ -37,7 +39,15 @@ import {
 } from "./exercise-variations.js";
 import { findExercise, recentWorkingWeight } from "./exercises.js";
 import { relatedLiftStart } from "./related-lift.js";
-import { loadPhrase, recentMuscleLoad, type RecentLoad } from "./hybrid-load.js";
+import {
+  type AcuteGateReading,
+  acuteGates,
+  enduranceDose,
+  loadPhrase,
+  recentEnduranceImpacts,
+  recentMuscleLoad,
+  type RecentLoad,
+} from "./hybrid-load.js";
 // Every athlete-facing sentence this engine says lives in ONE vocabulary module as
 // a SET of phrasings, rotated per day and per exercise — never a literal here. See
 // the contract at the top of progression-voice.ts.
@@ -158,6 +168,35 @@ export interface AutoregSignals {
   performance: number | null; // most recent 1-5
   joint_pain: string | null; // most recent free-text ("left knee")
   date: string | null;
+  // The canonical groups the session that REPORTED each signal actually trained.
+  // Soreness and performance are read independently (the freshest non-null of
+  // each), so they can come from different days and carry different scopes.
+  // An EMPTY list means unresolved — and unresolved FAILS CLOSED to the old
+  // whole-body brake, never to no brake at all.
+  soreness_groups: MuscleGroup[];
+  performance_groups: MuscleGroup[];
+}
+
+// Which canonical groups a session on this date loaded. Reuses the ONE effective
+// -volume truth, so a bench day scopes to chest AND the triceps/shoulders it
+// loaded indirectly rather than to a primary-group label alone. Null-safe: any
+// read problem returns empty, which the brake reads as "unresolved".
+function groupsTrainedOn(date: string | null): MuscleGroup[] {
+  if (!date) return [];
+  try {
+    const rows = db
+      .prepare(
+        `SELECT e.muscle_group AS muscle_group, e.name AS exercise, s.date AS date,
+                ls.weight AS weight, ls.reps AS reps, ls.rir AS rir
+           FROM logged_sets ls JOIN exercises e ON e.id = ls.exercise_id
+           JOIN sessions s ON s.id = ls.session_id
+          WHERE s.date = ?`
+      )
+      .all(String(date).slice(0, 10)) as any[];
+    return [...effectiveVolumeByGroup(rows as VolumeSet[]).keys()].filter((g) => !isMobility(g));
+  } catch {
+    return [];
+  }
 }
 
 const AUTOREG_WINDOW_DAYS = 3; // feedback older than this is stale — don't brake on it
@@ -167,7 +206,16 @@ const AUTOREG_WINDOW_DAYS = 3; // feedback older than this is stale — don't br
 export function recentAutoregulation(days = AUTOREG_WINDOW_DAYS, date = localDateISO()): AutoregSignals {
   const today = String(date || localDateISO()).slice(0, 10);
   const since = addDaysISO(today, -(Math.max(1, days) - 1)) ?? today;
-  const out: AutoregSignals = { soreness: null, performance: null, joint_pain: null, date: null };
+  const out: AutoregSignals = {
+    soreness: null,
+    performance: null,
+    joint_pain: null,
+    date: null,
+    soreness_groups: [],
+    performance_groups: [],
+  };
+  let sorenessDate: string | null = null;
+  let performanceDate: string | null = null;
   try {
     const rows = db
       .prepare(
@@ -176,8 +224,14 @@ export function recentAutoregulation(days = AUTOREG_WINDOW_DAYS, date = localDat
       )
       .all(since, today) as any[];
     for (const r of rows) {
-      if (out.soreness == null && r.soreness != null) out.soreness = Number(r.soreness);
-      if (out.performance == null && r.performance != null) out.performance = Number(r.performance);
+      if (out.soreness == null && r.soreness != null) {
+        out.soreness = Number(r.soreness);
+        sorenessDate = String(r.date);
+      }
+      if (out.performance == null && r.performance != null) {
+        out.performance = Number(r.performance);
+        performanceDate = String(r.date);
+      }
       if (out.joint_pain == null && r.joint_pain != null && String(r.joint_pain).trim())
         out.joint_pain = String(r.joint_pain).trim();
       if (
@@ -189,7 +243,25 @@ export function recentAutoregulation(days = AUTOREG_WINDOW_DAYS, date = localDat
   } catch {
     /* sessions columns absent → no signal */
   }
+  if (out.soreness != null) out.soreness_groups = groupsTrainedOn(sorenessDate);
+  if (out.performance != null) out.performance_groups = groupsTrainedOn(performanceDate);
   return out;
+}
+
+// Does this feedback reach this lift? Soreness and a flat performance report
+// belong to the muscles that session actually trained — a sore leg day used to
+// hold the bench press too, for three days, because the brake never asked which
+// muscles the feedback was ABOUT. (jointHit and the acute gate were already
+// group-scoped; these two were the outliers.)
+//
+// FAILS CLOSED, deliberately. When the scope cannot be resolved — no logged sets
+// on the feedback day, an unclassifiable lift, a read problem — the old
+// whole-body brake stands. A safety brake may lose precision; it may never
+// quietly lose effect.
+function feedbackReaches(groups: MuscleGroup[] | undefined, group: MuscleGroup | null): boolean {
+  if (!groups || !groups.length) return true; // unresolved → brake everything, as before
+  if (!group) return true; // an unclassifiable lift cannot be ruled out
+  return groups.includes(group);
 }
 
 // Decide the ONE-step autoregulation brake for a lift, given its computed action,
@@ -202,15 +274,17 @@ function autoregBrake(
   group: MuscleGroup | null,
   hasHistory: boolean,
   autoreg: AutoregSignals | null,
-  recentLoad: Map<MuscleGroup, RecentLoad> | null,
+  acute: Map<MuscleGroup, AcuteGateReading> | null,
   name: string,
   date: string
 ): BrakeResult {
-  if (!autoreg && !recentLoad) return null;
-  const heavyAcute = group && recentLoad ? recentLoad.get(group)?.heavy === true : false;
+  if (!autoreg && !acute) return null;
+  const heavyAcute = group && acute ? acute.get(group)?.saturated === true : false;
   const jointHit = group && autoreg?.joint_pain ? painAreaLoadsGroup(autoreg.joint_pain, group) : false;
-  const soreHigh = autoreg?.soreness != null && autoreg.soreness >= 4;
-  const perfLow = autoreg?.performance != null && autoreg.performance <= 2;
+  const soreHigh =
+    autoreg?.soreness != null && autoreg.soreness >= 4 && feedbackReaches(autoreg.soreness_groups, group);
+  const perfLow =
+    autoreg?.performance != null && autoreg.performance <= 2 && feedbackReaches(autoreg.performance_groups, group);
   const highStrain = soreHigh || perfLow || heavyAcute;
 
   // A named sore joint is the strongest brake — one step toward safety.
@@ -927,7 +1001,7 @@ function rankedVaryOptions(name: string, ctx?: PrescCtx): { name: string; why: s
 // program-state per lift).
 export interface PrescriptionOpts {
   autoreg?: AutoregSignals | null; // latest 1-tap session feedback (soreness/perf/joint)
-  recentLoad?: Map<MuscleGroup, RecentLoad> | null; // acute per-group load (a just-smoked group)
+  acute?: Map<MuscleGroup, AcuteGateReading> | null; // the shared acute-recovery gate per group
   availableEquipment?: Equipment[] | null; // rank variation candidates by what the athlete can load
   excludeNames?: string[] | null; // movements already in the week — don't re-suggest their exercise/slot
   personalModifier?: CoachPersonalModifier | null; // learned step size; never overrides constraints/recovery
@@ -947,7 +1021,7 @@ export function nextPrescription(
   // Today's per-lift read is braked too; planDayProgression threads a shared read in.
   const canonGroup: MuscleGroup | null = canonicalGroup(group) ?? classifyMuscleGroup(exerciseName);
   const autoreg = opts && "autoreg" in opts ? (opts.autoreg ?? null) : recentAutoregulation();
-  const recentLoad = opts && "recentLoad" in opts ? (opts.recentLoad ?? null) : recentMuscleLoad(2);
+  const acute = opts && "acute" in opts ? (opts.acute ?? null) : acuteGates();
   const equip = opts && "availableEquipment" in opts ? (opts.availableEquipment ?? []) : availableEquipment();
   const excludeNames = (opts?.excludeNames ?? []).filter(Boolean);
   const personalModifier =
@@ -972,7 +1046,7 @@ export function nextPrescription(
   const brakeCtx: PrescCtx = {
     canonGroup,
     autoreg,
-    recentLoad,
+    acute,
     tenureWeeks,
     availableEquipment: equip,
     excludeNames,
@@ -988,7 +1062,7 @@ export function nextPrescription(
 interface PrescCtx {
   canonGroup: MuscleGroup | null;
   autoreg: AutoregSignals | null;
-  recentLoad: Map<MuscleGroup, RecentLoad> | null;
+  acute: Map<MuscleGroup, AcuteGateReading> | null;
   tenureWeeks: number | null;
   availableEquipment: Equipment[];
   excludeNames: string[];
@@ -1266,7 +1340,7 @@ function repsPrescription(
   // step (an earned overload the morning after a sore knee becomes a hold/deload).
   let autoregulated = false;
   const brake = brakeCtx
-    ? autoregBrake(action, brakeCtx.canonGroup, !!last, brakeCtx.autoreg, brakeCtx.recentLoad, name, date)
+    ? autoregBrake(action, brakeCtx.canonGroup, !!last, brakeCtx.autoreg, brakeCtx.acute, name, date)
     : null;
   if (brake) {
     autoregulated = true;
@@ -1397,7 +1471,7 @@ function timedPrescription(
   // eases in SECONDS, never load. Applied last so it wins over the earned extension.
   let autoregulated = false;
   const brake = brakeCtx
-    ? autoregBrake(action, brakeCtx.canonGroup, !!last, brakeCtx.autoreg, brakeCtx.recentLoad, name, date)
+    ? autoregBrake(action, brakeCtx.canonGroup, !!last, brakeCtx.autoreg, brakeCtx.acute, name, date)
     : null;
   if (brake) {
     autoregulated = true;
@@ -1463,7 +1537,7 @@ export function planDayProgression(dayNumber: number, opts: { forNextSession?: b
   // set today. Do not let the just-completed session masquerade as poor readiness;
   // constraints still apply here, and readiness is re-checked when that day starts.
   const autoreg = opts.forNextSession ? null : recentAutoregulation();
-  const recentLoad = opts.forNextSession ? null : recentMuscleLoad(2);
+  const acute = opts.forNextSession ? null : acuteGates();
   const equip = availableEquipment();
   const plannedMovements = getPlan().flatMap((planDay: any) =>
     (Array.isArray(planDay?.items) ? planDay.items : [])
@@ -1481,7 +1555,7 @@ export function planDayProgression(dayNumber: number, opts: { forNextSession?: b
     const personalModifier = trainingModifierFor(String(it.name), personalResponse);
     const p = nextPrescription(it.name, states, {
       autoreg,
-      recentLoad,
+      acute,
       availableEquipment: equip,
       excludeNames,
       personalModifier,
@@ -1729,6 +1803,17 @@ export interface GroupBalance {
   band: "low" | "productive" | "high";
   last_trained: string | null; // ISO date of the most recent set in that group
   status: "due" | "ok" | "high";
+  // Endurance sessions per week that loaded this region, in heavy-session
+  // equivalents. Held SEPARATE from `sets` on purpose (see enduranceByRegion):
+  // MUSCLE_LANDMARKS are resistance-calibrated, so folding a run into a set count
+  // would make a runner's quads read "productive" on lifting volume they never
+  // did. It only ever answers a different question — is this region already
+  // carrying real work?
+  endurance_sessions: number;
+  // True when that endurance load is substantial enough that calling this group
+  // "due" would be dishonest. The group is still LOW on resistance volume; it is
+  // simply not idle.
+  endurance_supported: boolean;
 }
 export interface ProgramBalance {
   groups: GroupBalance[];
@@ -1742,13 +1827,48 @@ export interface ProgramBalance {
   broad_low: boolean;
 }
 
+// How much ENDURANCE work each region carried over the window, in heavy-session
+// equivalents per week. Deliberately a SEPARATE number from the working-set
+// tally rather than added into it: MUSCLE_LANDMARKS are calibrated against
+// resistance volume, so crediting a long run as "sets" would tell a runner their
+// quads are at productive lifting volume they never did. This answers the other
+// question — is the region actually idle, or is it just not being LIFTED?
+//
+// THE RULE (see programBalance): a region carrying at least
+// ENDURANCE_SUPPORTED_PER_WEEK heavy-session equivalents is never called "due".
+// Its band stays honest (resistance volume really is low), but a 40-mile week
+// leaves legs loaded, not neglected, and telling that athlete to go add squat
+// volume because their quads look untrained is the connected read failing.
+const ENDURANCE_SUPPORTED_PER_WEEK = 1.5;
+
+function enduranceByRegion(weeks: number, date: string): Map<string, number> {
+  const out = new Map<string, number>();
+  try {
+    const days = Math.max(1, Math.round(weeks * 7));
+    for (const impact of recentEnduranceImpacts(days, date)) {
+      const dose = enduranceDose(impact);
+      if (!(dose > 0)) continue;
+      for (const region of impact.regions) {
+        if (isMobility(region)) continue;
+        out.set(region, (out.get(region) ?? 0) + dose / weeks);
+      }
+    }
+  } catch {
+    /* no activities → the balance read is simply strength-only, as it always was */
+  }
+  return out;
+}
+
 // Working-set volume per CANONICAL group over the window (default 2 wk), banded
 // against MUSCLE_LANDMARKS. Mobility is EXCLUDED from set-count math (it never
 // inflates the working-set picture). `due` = a group under its low landmark OR
-// not trained in 7 days; `over` = above its high landmark. Plain words only.
+// not trained in 7 days — UNLESS endurance is already loading that region (see
+// enduranceByRegion); `over` = above its high landmark. Plain words only.
 export function programBalance(weeks = 2, date = localDateISO()): ProgramBalance {
   const today = String(date || localDateISO()).slice(0, 10);
   const since = addDaysISO(today, -(weeks * 7 - 1)) ?? today;
+  const endurance = enduranceByRegion(weeks, today);
+  const enduranceWeekly = (group: string): number => Math.round((endurance.get(group) ?? 0) * 10) / 10;
 
   const rows = db
     .prepare(
@@ -1777,8 +1897,20 @@ export function programBalance(weeks = 2, date = localDateISO()): ProgramBalance
     if (lm) band = weeklySets < lm.low ? "low" : weeklySets > lm.high ? "high" : "productive";
     const since7 = daysAgo(v.last_date);
     const stale = since7 != null && since7 > 7;
-    const status: GroupBalance["status"] = band === "low" || stale ? "due" : band === "high" ? "high" : "ok";
-    groups.push({ group, sets: weeklySets, band, last_trained: v.last_date, status });
+    const enduranceSessions = enduranceWeekly(group);
+    const supported = enduranceSessions >= ENDURANCE_SUPPORTED_PER_WEEK;
+    const wouldBeDue = band === "low" || stale;
+    const status: GroupBalance["status"] =
+      wouldBeDue && !supported ? "due" : band === "high" ? "high" : "ok";
+    groups.push({
+      group,
+      sets: weeklySets,
+      band,
+      last_trained: v.last_date,
+      status,
+      endurance_sessions: enduranceSessions,
+      endurance_supported: supported && wouldBeDue,
+    });
   }
   // Surface groups that are PROGRAMMED but not trained at all in the window too.
   // Otherwise the brain can show "Pull" because the template says so while the
@@ -1806,12 +1938,18 @@ export function programBalance(weeks = 2, date = localDateISO()): ProgramBalance
     }
     for (const group of plannedGroups) {
       if (presentGroups.has(group)) continue;
+      // The same rule applies to a group with ZERO logged sets: a runner's calves
+      // are programmed, untrained, and anything but idle.
+      const enduranceSessions = enduranceWeekly(group);
+      const supported = enduranceSessions >= ENDURANCE_SUPPORTED_PER_WEEK;
       groups.push({
         group,
         sets: 0,
         band: "low",
         last_trained: lastByGroup.get(group) ?? null,
-        status: "due",
+        status: supported ? "ok" : "due",
+        endurance_sessions: enduranceSessions,
+        endurance_supported: supported,
       });
       presentGroups.add(group);
     }
@@ -1850,11 +1988,19 @@ function buildBalanceSummary(groups: GroupBalance[], due: string[], over: string
       : "";
     return `Strength volume is light across most groups right now — expected if running is the priority, not a problem.${overPart}${lead}`;
   }
+  // Regions the endurance work is already carrying. Named so they do not simply
+  // VANISH from the picture — "light on lifting, but not idle" is the honest read,
+  // and it is the difference between a calm note and an unexplained silence.
+  const carried = groups.filter((g) => g.endurance_supported).map((g) => g.group);
+  const carriedPart = carried.length
+    ? ` ${plainGroupWords(carried, 2)} ${carried.length > 1 ? "are" : "is"} light on lifting but already carrying your endurance work.`
+    : "";
   const parts: string[] = [];
   if (over.length) parts.push(`${over.join(", ")} running high`);
   if (due.length) parts.push(`${due.join(", ")} due`);
-  if (!parts.length) return "Volume looks well balanced across the groups you're training.";
-  return `${parts.join("; ")}.`;
+  if (!parts.length)
+    return `Volume looks well balanced across the groups you're training.${carriedPart}`;
+  return `${parts.join("; ")}.${carriedPart}`;
 }
 
 // ---- the "what changed & why" digest ----------------------------------------
@@ -1884,7 +2030,7 @@ export interface ProgramAdjustment {
 // surface — pull, never push.
 export function programAdjustments(
   balArg?: ProgramBalance,
-  recentArg?: Map<MuscleGroup, RecentLoad>,
+  acuteArg?: Map<MuscleGroup, AcuteGateReading>,
   opts?: { runPlan?: WeeklyRunPlan | null; dexa?: DexaTargeting | null; testWeek?: TestWeekDue | null }
 ): ProgramAdjustment[] {
   const out: ProgramAdjustment[] = [];
@@ -1949,20 +2095,22 @@ export function programAdjustments(
   // Reuse the balance + acute-load reads getCoachContext already computed (the hot
   // path), falling back to a fresh compute when called standalone.
   const bal = balArg ?? programBalance();
-  const recent = recentArg ?? recentMuscleLoad(2);
+  const acute = acuteArg ?? acuteGates();
   // Plan-aware reframe: a due group that's ALREADY programmed doesn't need a NEW
   // movement — the gap is logged volume (you scheduled it; train it). So we never
   // tell you to "add a back movement" when your plan already has rows, lat pulldowns
   // and pull-ups. ONE plan query feeds both the per-group moves and the GAPS below.
   const plannedMoves = plannedMovesByGroup();
   const planned = new Set(plannedMoves.keys());
-  const recovering: Array<{ group: string; rl: RecentLoad }> = [];
+  const recovering: Array<{ group: string; gate: AcuteGateReading }> = [];
   for (const g of bal.due.slice(0, 4)) {
     const gb = bal.groups.find((x) => x.group === g);
     const reason = gb && gb.band === "low" ? "under its productive volume range lately" : "not trained in over a week";
-    const rl = recent.get(g as MuscleGroup);
-    if (rl?.heavy) {
-      recovering.push({ group: g, rl });
+    // The shared acute gate: a group still carrying a session's worth of
+    // undissipated work is never put up as the next move, however "due" it looks.
+    const gate = acute.get(g as MuscleGroup);
+    if (gate?.saturated) {
+      recovering.push({ group: g, gate });
       continue;
     }
     if (planned.has(g)) {
@@ -1993,7 +2141,7 @@ export function programAdjustments(
   // 8-item cap. Fresh, actionable work still leads above it.
   if (recovering.length) {
     const groups = recovering.map((r) => r.group);
-    const lead = (recovering.find((r) => r.rl.activity) ?? recovering[0]).rl;
+    const lead = (recovering.find((r) => r.gate.activity) ?? recovering[0]).gate;
     const many = groups.length > 1;
     const subj = many ? "They're" : `${cap(groups[0])} is`;
     const it = many ? "them" : "it";
