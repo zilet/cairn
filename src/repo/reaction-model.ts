@@ -889,9 +889,15 @@ const PERSONAL_MODIFIER_TARGETS: Record<CoachPersonalModifierTarget, true> = {
 };
 
 // One slot per declared target is the FLOOR this cap may never fall below. The spare
-// slots are headroom for the staged nutrition variants a single target can legitimately
-// carry, so backfilling those can never cost another target its slot.
-const MAX_PERSONAL_MODIFIERS = Object.keys(PERSONAL_MODIFIER_TARGETS).length + 3;
+// slots are headroom for the two kinds of variant a single target can legitimately
+// carry, so backfilling either can never cost another target its slot — and each kind
+// gets its OWN headroom, because a shared pool is just the starvation bug again one
+// level down: a busy lifter's per-exercise readings would quietly eat the room the
+// staged nutrition variants need.
+const MAX_STAGE_VARIANTS = 3;
+const MAX_SUBJECT_VARIANTS = 4;
+const MAX_PERSONAL_MODIFIERS =
+  Object.keys(PERSONAL_MODIFIER_TARGETS).length + MAX_STAGE_VARIANTS + MAX_SUBJECT_VARIANTS;
 
 interface EvaluatedDecisionRow {
   decision_id: number;
@@ -959,11 +965,22 @@ function evaluatedDecisionRows(): EvaluatedDecisionRow[] {
            ORDER BY e2.id DESC LIMIT 1
         )
           AND e.verdict IN ('aligned','not_aligned')
-        ORDER BY e.evaluated_at, e.id
+        ORDER BY e.evaluated_at DESC, e.id DESC
         LIMIT 500`
       )
       .all() as any[];
+    // NEWEST 500, then reversed back into ascending order.
+    //
+    // The LIMIT has to bite at the OLD end. Ordered ascending, the same 500-row cap
+    // froze the model on the oldest 500 conclusive evaluations the moment the ledger
+    // grew past that: every outcome recorded afterwards fell off the end, and the
+    // "personal defaults" the athlete was being coached with were an unchanging prefix
+    // of their ancient history — a model that stops learning without ever saying so.
+    // Descending picks the rows that still speak for today; the reverse restores the
+    // ascending order every reader below is written against (run detection, the
+    // preceding-verdict lookback, the day-read window).
     return rows
+      .reverse()
       .map(
         (row): EvaluatedDecisionRow => ({
           decision_id: Number(row.decision_id),
@@ -1191,7 +1208,11 @@ function modifierFor(
     ].includes(row.metric_key)
   ) {
     target = "training_progression_step";
-    bounds = { min: 0.85, max: 1.1 };
+    // DECLARED == REACHABLE, the same rule RUN_VOLUME_BOUNDS states above. The branch
+    // below can produce exactly three scales — 0.9 on a miss, 1 by default, 1.1 on an
+    // earned acceleration — so a declared floor of 0.85 was a depth of caution the
+    // model had no way to reach.
+    bounds = { min: 0.9, max: 1.1 };
     // Ease on a miss; hold by default; and — the branch this family alone gets —
     // ACCELERATE to the declared ceiling when a run of aligned verdicts has stood up
     // with nothing missed against it, no symptom on record, and the metric is one that
@@ -1252,22 +1273,75 @@ function modifierFor(
   }
   if (!target) return null; // clinical/marker learnings stay informational
   scale = boundedScale(scale, bounds.min, bounds.max);
-  const direction = scale > 1 ? "a slightly larger" : scale < 1 ? "a slightly more conservative" : "the standard";
   return {
     key: comparableKey(row),
     target,
     stage: STAGED_NUTRITION_METRICS.includes(row.metric_key) ? outcomeStage(row) : null,
+    subject_key: row.subject_key,
     scale,
     bounds,
     confidence,
     evidence_n: evidenceN,
-    rationale: `${direction} ${target.replace(/_/g, " ")} is the earned default; re-evaluate after the next clean outcome.`,
+    rationale: modifierRationale(scale, target),
     never_overrides: [...PERSONAL_RESPONSE_GUARDRAILS],
   };
 }
 
+function modifierRationale(scale: number, target: CoachPersonalModifierTarget, aged = false): string {
+  const direction = scale > 1 ? "a slightly larger" : scale < 1 ? "a slightly more conservative" : "the standard";
+  const earned = `${direction} ${target.replace(/_/g, " ")} is the earned default`;
+  return aged
+    ? `${earned}, softened because the outcome behind it is months old; re-evaluate after the next clean outcome.`
+    : `${earned}; re-evaluate after the next clean outcome.`;
+}
+
+// ---- a learned default has a shelf life -----------------------------------
+// The 365-day horizon inside learningForGroup is relative to the GROUP's own newest
+// row, which answers "were these outcomes comparable to each other?" — a real
+// question, and not the one that matters here. Two outcomes three years ago are
+// perfectly comparable to each other and say nothing about the athlete this morning,
+// yet the modifier they earned was applied at full scale and full confidence forever.
+//
+// So the lever ages against TODAY, deterministically:
+//   • up to 180 days   — full strength, this is a current learning;
+//   • 180 to 365 days  — the scale fades LINEARLY toward 1.0 (the universal default)
+//                        and the confidence drops one band, so a stale learning
+//                        loosens its grip gradually rather than falling off a cliff;
+//   • past 365 days    — no modifier at all. The learning keeps its sentence in the
+//                        prose (which is stamped with its date, so the athlete can see
+//                        how old it is); what it loses is the right to move a number.
+// The whatWorksForYou memo keys on today's date, so the fade recomputes each morning.
+const MODIFIER_FULL_STRENGTH_DAYS = 180;
+const MODIFIER_EXPIRY_DAYS = 365;
+
+const CONFIDENCE_ONE_BAND_DOWN: Record<CoachPersonalResponseConfidence, CoachPersonalResponseConfidence> = {
+  strong: "observed",
+  observed: "tentative",
+  tentative: "tentative",
+};
+
+function agedModifier(
+  modifier: CoachPersonalModifier | null,
+  lastObserved: string,
+  today: string
+): CoachPersonalModifier | null {
+  if (!modifier) return null;
+  const age = dayGap(today, lastObserved);
+  if (age > MODIFIER_EXPIRY_DAYS) return null;
+  if (age <= MODIFIER_FULL_STRENGTH_DAYS) return modifier;
+  const remaining = (MODIFIER_EXPIRY_DAYS - age) / (MODIFIER_EXPIRY_DAYS - MODIFIER_FULL_STRENGTH_DAYS);
+  const faded = Math.round((1 + (modifier.scale - 1) * remaining) * 1000) / 1000;
+  return {
+    ...modifier,
+    scale: boundedScale(faded, modifier.bounds.min, modifier.bounds.max),
+    confidence: CONFIDENCE_ONE_BAND_DOWN[modifier.confidence],
+    rationale: modifierRationale(faded, modifier.target, true),
+  };
+}
+
 function learningForGroup(
-  allRows: EvaluatedDecisionRow[]
+  allRows: EvaluatedDecisionRow[],
+  today: string
 ): { learning: CoachOutcomeLearning; modifier: CoachPersonalModifier | null } | null {
   // Evidence counts decisions, not expectations. A single decision may carry two
   // windows for the same metric; treating those as two independent trials would
@@ -1323,17 +1397,23 @@ function learningForGroup(
   const runStartRow = rows[runStart];
   const runStartIndex = eligible.indexOf(runStartRow);
   const precedingVerdict = runStartIndex > 0 ? eligible[runStartIndex - 1].verdict : null;
-  const modifier = activeVerdict
+  const earnedModifier = activeVerdict
     ? modifierFor(latest, activeVerdict, confidence, latestRun.length, {
         missed_n: missedN,
         preceding_verdict: precedingVerdict,
       })
     : null;
+  const modifier = agedModifier(earnedModifier, latest.evaluated_at, today);
   const change = modifier
     ? modifier.rationale
-    : unresolvedContradiction
-      ? "Keep the universal default while collecting another comparable outcome."
-      : "Keep this learning informational; it cannot set a clinical or safety policy.";
+    : earnedModifier
+      ? // It earned a default once and has simply gone quiet since. Said plainly, because
+        // this sentence is rendered to the athlete in the Learned timeline next to the
+        // date it was last seen.
+        "It has been long enough since this last showed up that the standard default stands again until it repeats."
+      : unresolvedContradiction
+        ? "Keep the universal default while collecting another comparable outcome."
+        : "Keep this learning informational; it cannot set a clinical or safety policy.";
   return {
     learning: {
       key: comparableKey(latest),
@@ -1370,9 +1450,9 @@ function learningForGroup(
 // the question worth asking of them ("what happens on the mornings this reads rest?").
 //
 // PROSE ONLY, and that is a hard rule, not a simplification. `restOverrideSoftening`
-// (src/repo/brain/rest-override-softening.ts, consumed by dayRead) ALREADY acts on
-// these exact rows — it is what turns a repeatedly-overruled rest read into an easy
-// day. A modifier derived here would read the same evidence a second time and move a
+// (src/repo/brain/read-adherence.ts, consumed by dayRead) ALREADY acts on these exact
+// rows — it is what turns a repeatedly-overruled rest read into an easy day. A
+// modifier derived here would read the same evidence a second time and move a
 // second lever with it, which is double-counting one pattern as two. These learnings
 // therefore never reach `modifiers`, and `modifierFor` is never called for them.
 const READ_ADHERENCE_MIN_OUTCOMES = 4;
@@ -1495,12 +1575,12 @@ export function whatWorksForYou(): CoachWhatWorksForYou | null {
     // not become shared mutable state across reads.
     return whatWorksCache.value ? structuredClone(whatWorksCache.value) : null;
   }
-  const value = computeWhatWorksForYou();
+  const value = computeWhatWorksForYou(today);
   whatWorksCache = { key, value };
   return value ? structuredClone(value) : null;
 }
 
-function computeWhatWorksForYou(): CoachWhatWorksForYou | null {
+function computeWhatWorksForYou(today = localDateISO()): CoachWhatWorksForYou | null {
   const allRows = evaluatedDecisionRows();
   const groups = new Map<string, EvaluatedDecisionRow[]>();
   for (const row of allRows) {
@@ -1511,7 +1591,9 @@ function computeWhatWorksForYou(): CoachWhatWorksForYou | null {
   // calm; the modifier map is NOT selected from that cap — see the slot logic further
   // down for why deriving it from the top four silently switched targets off.
   const ranked = [...groups.values()]
-    .map(learningForGroup)
+    // Wrapped rather than passed by reference: Array.map hands the callback the INDEX
+    // as its second argument, which is not the date this one wants.
+    .map((rows) => learningForGroup(rows, today))
     .filter((item): item is NonNullable<typeof item> => item != null)
     .sort((a, b) => b.learning.last_observed.localeCompare(a.learning.last_observed));
   const learned = ranked.slice(0, 4);
@@ -1542,29 +1624,48 @@ function computeWhatWorksForYou(): CoachWhatWorksForYou | null {
   // anything had been dropped, and the consumer reading that target simply saw no
   // personal default. A busy ledger could switch off a whole lever.
   //
-  // So the pass below is two-phase. Phase one gives each distinct target its most
+  // So the pass below is three-phase. Phase one gives each distinct target its most
   // recent modifier, which is the guarantee: no target can be displaced by another
-  // target's fresher learning. Phase two backfills the additional target+STAGE variants
-  // a single target may legitimately carry (personalResponseModifierFor matches on
-  // stage as well, so a mid-cut and a lean-gain nutrition step are different answers,
-  // not duplicates). Ordering within each phase is unchanged, so the first match for a
-  // bare target lookup is the same modifier it has always been.
+  // target's fresher learning. Phases two and three backfill the variants a single
+  // target may legitimately carry, because `personalResponseModifierFor` and
+  // `trainingModifierFor` match on more than the bare target:
+  //
+  //   • STAGE — a mid-cut and a lean-gain nutrition step are different answers, not
+  //     duplicates of one;
+  //   • SUBJECT — a per-exercise training learning is about THAT lift. Collapsing every
+  //     exercise into one training slot meant the newest lift's learned response was
+  //     the only one that survived, and the progression ladder then either handed it to
+  //     every other lift or found nothing at all for them.
+  //
+  // Ordering within each phase is unchanged, so the first match for a bare target
+  // lookup is the same modifier it has always been.
   const claimedTargets = new Set<CoachPersonalModifierTarget>();
   const claimedSlots = new Set<string>();
   const perTarget: CoachPersonalModifier[] = [];
   const stageVariants: CoachPersonalModifier[] = [];
+  const subjectVariants: CoachPersonalModifier[] = [];
   for (const item of carriers) {
     const modifier = item.modifier as CoachPersonalModifier;
-    const slot = `${modifier.target}|${modifier.stage ?? ""}`;
-    if (claimedSlots.has(slot)) continue; // an older reading of the same target+stage
+    const slot = `${modifier.target}|${modifier.stage ?? ""}|${modifier.subject_key?.toLowerCase() ?? ""}`;
+    if (claimedSlots.has(slot)) continue; // an older reading of the same target+stage+subject
     claimedSlots.add(slot);
-    if (claimedTargets.has(modifier.target)) stageVariants.push(modifier);
-    else {
+    if (!claimedTargets.has(modifier.target)) {
       claimedTargets.add(modifier.target);
       perTarget.push(modifier);
-    }
+    } else if (modifier.stage) stageVariants.push(modifier);
+    else subjectVariants.push(modifier);
   }
-  const modifiers = [...perTarget, ...stageVariants].slice(0, MAX_PERSONAL_MODIFIERS);
+  // Whole-athlete readings first among the subject backfill. A lift-level learning is
+  // the newest thing in a busy lifter's ledger, so recency alone would drop the ONE
+  // reading that answers for every other lift — the fallback every exercise without a
+  // learning of its own depends on. Stable within each rank, so recency still decides
+  // between two readings of the same kind.
+  const globalFirst = [...subjectVariants].sort((a, b) => (a.subject_key ? 1 : 0) - (b.subject_key ? 1 : 0));
+  const modifiers = [
+    ...perTarget,
+    ...stageVariants.slice(0, MAX_STAGE_VARIANTS),
+    ...globalFirst.slice(0, MAX_SUBJECT_VARIANTS),
+  ].slice(0, MAX_PERSONAL_MODIFIERS);
   return {
     version: PERSONAL_RESPONSE_VERSION,
     learnings: [...learned.map((item) => item.learning), ...readPatterns],

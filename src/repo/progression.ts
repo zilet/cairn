@@ -319,19 +319,31 @@ function stepCeiling(group: string | null): number {
   return g && ISOLATION_GROUPS.has(g) ? STEP_CEIL_ISOLATION : STEP_CEIL_COMPOUND;
 }
 
-function trainingModifierFor(
+// The learned load step for one lift, read straight off `modifiers` — the map the
+// personal-response model builds FOR consumers — and never off `learnings`.
+//
+// `learnings` is the athlete-facing PROSE list, capped at the four most recent for
+// calm. Resolving through it meant a modifier that was safely present in `modifiers`
+// became unreachable the moment its own sentence fell off that cap: the model had
+// learned this lift's response, stored it, and the ladder read nothing. Worse, the
+// fallback took the first null-subject learning of ANY metric — so a fresh nutrition
+// learning claimed the "global" slot and its key matched no training modifier, which
+// silently shadowed a live training one.
+//
+// Preference order, and it matters which way round: THIS lift's own learning first,
+// then a whole-athlete one (session feedback and joint pain are recorded with no
+// subject and genuinely speak for every lift). Another exercise's learning is never
+// borrowed — the squat's earned response is not the bench press's.
+export function trainingModifierFor(
   exerciseName: string,
   response: CoachWhatWorksForYou | null = whatWorksForYou()
 ): CoachPersonalModifier | null {
   if (!response) return null;
-  const matchingLearning = response.learnings.find(
-    (learning) => learning.subject_key?.toLowerCase() === exerciseName.toLowerCase()
-  );
-  const globalLearning = response.learnings.find((learning) => learning.subject_key == null);
-  const key = matchingLearning?.key ?? globalLearning?.key ?? null;
-  if (!key) return null;
+  const name = exerciseName.trim().toLowerCase();
+  const candidates = response.modifiers.filter((modifier) => modifier.target === "training_progression_step");
   return (
-    response.modifiers.find((modifier) => modifier.target === "training_progression_step" && modifier.key === key) ??
+    candidates.find((modifier) => modifier.subject_key?.trim().toLowerCase() === name) ??
+    candidates.find((modifier) => modifier.subject_key == null) ??
     null
   );
 }

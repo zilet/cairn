@@ -412,17 +412,27 @@ function decisionForAppliedProposal(proposalId: number, result: any) {
   );
 }
 
-function domainIsDemoted(domain: BrainDomain): boolean {
-  const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
-  const recent = listBrainDecisions({ domain, limit: 100 }).filter(
-    (decision) =>
-      (decision.autonomy_tier === "quiet_apply" || decision.autonomy_tier === "announce") &&
-      String(decision.created_at ?? "") >= cutoff
-  );
-  return domainShouldDemote(
-    recent.filter((decision) => decision.status === "reverted").length,
-    recent.filter((decision) => ["applied", "reverted"].includes(decision.status)).length
-  );
+// Has this domain earned a demotion — enough of its recent led changes reverted that
+// it should stop leading and start asking?
+//
+// COUNTED IN SQL, the way materialChangesThisWeek does, and that is the whole point.
+// This used to pull the last 100 decisions in the domain and filter tier and date in
+// JS: every ask-tier row, every rejected one, every row older than the window still
+// consumed one of the 100 slots. A busy domain — the exact domain a reversal
+// safeguard exists for — filled the fetch with rows that all failed the filter, and
+// the guard read an empty set and quietly stopped firing. A safeguard that switches
+// itself off under load is worse than none, because nothing says it did.
+export function domainIsDemoted(domain: BrainDomain): boolean {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n, SUM(CASE WHEN status = 'reverted' THEN 1 ELSE 0 END) AS reverted
+         FROM brain_decisions
+        WHERE domain = ? AND autonomy_tier IN ('quiet_apply','announce')
+          AND status IN ('applied','reverted')
+          AND date(created_at) >= date('now','-90 days')`
+    )
+    .get(domain) as any;
+  return domainShouldDemote(Number(row?.reverted ?? 0), Number(row?.n ?? 0));
 }
 
 // Material changes in this domain this week, by status set. The default counts every

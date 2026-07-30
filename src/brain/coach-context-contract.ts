@@ -193,6 +193,12 @@ export interface CoachPersonalModifier {
   key: string;
   target: CoachPersonalModifierTarget;
   stage: string | null;
+  // WHAT the modifier was learned about, when the target carries per-item readings:
+  // the exercise name for a lift-level training learning, null for a whole-athlete
+  // one. Carried as a field rather than left parsed out of `key`, because the consumer
+  // has to be able to ask "is this MY lift's earned default, or everyone's?" — handing
+  // the squat's learned response to a bench press is worse than handing it nothing.
+  subject_key: string | null;
   scale: number;
   bounds: { min: number; max: number };
   confidence: CoachPersonalResponseConfidence;
