@@ -120,6 +120,10 @@ trainingLogRouter.post("/training-symptoms", (req, res) => {
     res.json(
       reportTrainingSymptom({
         area_text: boundedText(body.area_text, "area_text", 300, true)!,
+        // The athlete's whole sentence, kept verbatim. area_text remains the SHORT
+        // grouping label; without this the remainder was clipped and lost.
+        report_text: boundedText(body.report_text, "report_text", 4000),
+        scope: body.scope === "systemic" ? "systemic" : undefined,
         onset_on: body.onset_on == null ? undefined : String(body.onset_on),
         source_session_id: sourceSessionId,
         source_kind: boundedText(body.source_kind, "source_kind", 80),

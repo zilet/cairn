@@ -71,7 +71,7 @@ test("Today exercise card helper preserves selectors, escaping, and timed mode",
     { weight: 95, reps: 5, rir: 2 },
     2,
     { action: "overload", suggested: { sets: 3, rep_low: 5, rep_high: 8, weight: 100 }, why: "earned <move>" },
-    { day: 4, exModes: { "Press <heavy>": "timed" }, symptomMovements: ["Press <heavy>"] }
+    { day: 4, exModes: { "Press <heavy>": "timed" } }
   );
 
   assert.match(html, /class="ex reveal"/);
@@ -86,54 +86,24 @@ test("Today exercise card helper preserves selectors, escaping, and timed mode",
   assert.match(html, /elbow &lt;quiet&gt;/);
   assert.match(html, /earned &lt;move&gt;/);
   assert.match(html, /data-logged/);
-  assert.match(html, /data-movement-check/);
-  assert.match(html, /data-movement="Press &lt;heavy&gt;"/);
-  assert.match(html, />Movement check</);
   assert.doesNotMatch(html, /Press <heavy>|keep ribs <down>|elbow <quiet>|earned <move>/);
 });
 
-// The gate is server truth handed down as one per-render relevance list — there is
-// no client copy of the pain→movement map, and no standing affordance on a card
-// nothing hurts on.
-test("Today exercise card exposes Movement check only where an active symptom loads that movement", () => {
+// A card asks the athlete to train. It carries NO pain widget at all any more —
+// pain is reported in words, in the session note or in chat, and the extraction
+// lane reads it. Nothing on a card should ever ask them to fill in a form mid-set.
+test("Today exercise card carries no per-movement pain widget", () => {
   const cards = loadTodayCards();
   const base = { exercise: "Row & <pull>", sets: 3, rep_low: 8, rep_high: 10 };
-  const relevant = { symptomMovements: ["Row & <pull>"] };
-
-  const planned = cards.exerciseCardHtml({ ...base, fromPlan: true }, [], {}, null, null, relevant);
-  const session = cards.exerciseCardHtml({ ...base, fromSession: true }, [], {}, null, null, relevant);
-  const noSymptom = cards.exerciseCardHtml({ ...base, fromPlan: true }, [], {}, null, null, {});
-  const otherMovement = cards.exerciseCardHtml(
-    { ...base, fromPlan: true },
-    [],
-    {},
-    null,
-    null,
-    { symptomMovements: ["Back Squat"] }
-  );
-  const offPlan = cards.exerciseCardHtml(
-    { ...base, fromPlan: false, fromSession: false },
-    [],
-    {},
-    null,
-    null,
-    relevant
-  );
-  const cardio = cards.cardioPlanCardHtml({ label: "Easy row" }, null, null, "");
-
-  assert.match(planned, /data-movement-check/);
-  assert.match(session, /data-movement-check/);
-  assert.match(planned, /data-movement="Row &amp; &lt;pull&gt;"/);
-  assert.doesNotMatch(noSymptom, /data-movement-check|Movement check/);
-  assert.doesNotMatch(otherMovement, /data-movement-check|Movement check/);
-  assert.doesNotMatch(offPlan, /data-movement-check|Movement check/);
-  assert.doesNotMatch(cardio, /data-movement-check|Movement check/);
-
-  // Name matching is case/whitespace tolerant, never a substring guess.
-  const cased = cards.exerciseCardHtml({ ...base, fromPlan: true }, [], {}, null, null, {
-    symptomMovements: ["  row & <pull>  "],
-  });
-  assert.match(cased, /data-movement-check/);
+  const rendered = [
+    cards.exerciseCardHtml({ ...base, fromPlan: true }, [], {}, null, null, {}),
+    cards.exerciseCardHtml({ ...base, fromSession: true }, [], {}, null, null, {}),
+    cards.exerciseCardHtml({ ...base, fromPlan: false, fromSession: false }, [], {}, null, null, {}),
+    cards.cardioPlanCardHtml({ label: "Easy row" }, null, null, ""),
+  ];
+  for (const html of rendered) {
+    assert.doesNotMatch(html, /data-movement-check|Movement check|data-tolerance|pain/i);
+  }
 });
 
 test("Today exercise card leads with one authoritative dose", () => {

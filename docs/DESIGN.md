@@ -141,14 +141,17 @@ New/changed components (CSS must implement, the client JS must emit):
   sets/tonnage/duration), optional `.done-notes` (italic), the `#feedbackSlot` ("how did
   that feel?"), and `.done-actions` (Log more / In your history →). No score, ever.
 - Session-close **Pain & injury** `.symptom-lifecycle`: a compact, left-aligned editorial lifecycle
-  under `#feedbackSlot`, never a form wall. `.symptom-lifecycle-head` leads with the `.lbl` and one
-  quiet report action; `.symptom-active-list` contains `.symptom-active-row.well-accent-sm` notes
-  with a small `.symptom-watching` state and equal `.pillbtn.pill-sm` pain-free/pain-present actions.
-  Optional movement context lives in `.symptom-movement-control`; new-report and recurrence inputs
-  stay collapsed in `.symptom-report-composer` / `.symptom-recur-composer` until asked for. Resolved
-  notes live behind native `.symptom-history` disclosure and use `.symptom-history-row`. Reuse the
-  shared `linkbtn`, `pillbtn`, and well primitives; do not reintroduce stacked bare inputs or center
-  clinical copy.
+  under `#feedbackSlot` — a DISPLAY surface with exactly one action on it. Pain is reported the way a
+  person reports it (a session note, the feedback line, chat) and derived from those words, so there
+  is no composer, no movement picker and no pain-free/pain-present pair here; the empty state says
+  so ("Mention pain in your session notes or chat — Cairn picks it up."). `.symptom-lifecycle-head`
+  leads with the `.lbl`; `.symptom-active-list` holds `.symptom-active-row.well-accent-sm` notes,
+  each a `.symptom-row-heading` pairing the athlete's own words (`.symptom-area`) with a small
+  `.symptom-watching` state — `.symptom-unconfirmed` mutes it for an unconfirmed legacy import.
+  `.symptom-row-actions` carries the single `linkbtn` that closes a note. Resolved notes live behind
+  native `.symptom-history` disclosure and use `.symptom-history-row` / `.symptom-resolved-on`.
+  Reuse the shared `linkbtn`, `pillbtn` and well primitives; do not reintroduce stacked bare inputs,
+  a mini pain form, or centered clinical copy.
 - History session card `.sess.hist` is tappable (`.hist-tap`, `role="button"`) → opens the
   edit overlay; a quiet `.hist-edit` caps cue sits by the weekday. Edit overlay reuses the
   `.detail` scaffold with `.ed-sets` / `.ed-exgroup` / `.edset` (inline number inputs +

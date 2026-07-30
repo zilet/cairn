@@ -820,7 +820,6 @@ declare global {
     toast(message: string): void;
     authToken?: () => string;
     locationOrigin?: string;
-    clipboard?: Pick<Clipboard, "writeText"> | null;
     setTimeout?: typeof setTimeout;
     openUrl?: (url: string) => void;
   };
@@ -3236,6 +3235,7 @@ declare global {
         error?: string | null;
         config?: Record<string, unknown> | null;
         connections?: Array<Record<string, unknown>>;
+        dates?: { relTime?: (value: string) => string; absDate?: (value: string) => string };
       }): string;
       automationSliceHtml(options: {
         workingModel: Pick<
@@ -3266,7 +3266,6 @@ declare global {
     };
 
     CairnSettingsSourcesAutomationController: {
-      appleHealthShortcutRecipe(origin: string): string;
       appleHealthRunLink(shortcutName: string, origin: string, pairingCode: string): string;
       renderSources(deps: ClientSettingsSourcesAutomationControllerDeps): Promise<void>;
       renderAutomation(deps: ClientSettingsSourcesAutomationControllerDeps): void;
@@ -3744,10 +3743,6 @@ declare global {
     };
 
     CairnTodayPlanSessionData: {
-      loadSymptomMovements(
-        names: string[],
-        deps: { state: { logDate: string }; api(path: string): Promise<unknown> }
-      ): Promise<string[]>;
       loadLastSets(
         names: string[],
         loggedByEx: Record<string, Array<Record<string, unknown> & { exercise?: string; set_number?: number | null }>>,
@@ -4128,16 +4123,11 @@ declare global {
     };
 
     CairnTodaySessionFeedback: {
-      movementCheckLoadedHtml(symptoms: ClientTrainingSymptom[]): string;
       renderFeedback(
         slot: Element | null | undefined,
         session: Record<string, unknown>,
         deps: ClientTodaySessionFeedbackDeps,
         options?: { hasLoggedSets?: boolean }
-      ): void;
-      wireMovementChecks(
-        session: Record<string, unknown>,
-        deps: ClientTodaySessionControllerDeps
       ): void;
     };
 
@@ -4185,7 +4175,6 @@ declare global {
         options?: {
           day?: unknown;
           exModes?: Record<string, unknown> | null;
-          symptomMovements?: Iterable<unknown> | null;
         },
         lastSet?: unknown
       ): string;

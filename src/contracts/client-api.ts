@@ -612,6 +612,14 @@ export interface ClientMovementToleranceReadiness {
   movement_key: string;
   movement_name: string;
   pain_free_exposures: number;
+  /** How many of those the athlete actually spoke for (the rest were inferred). */
+  stated_pain_free_exposures: number;
+  /**
+   * Every pain-free exposure came from training the movement quietly. Real evidence,
+   * but not a confirmation — surfaces must word it as "tolerated in training … no
+   * word from you yet", never as a clearance.
+   */
+  inferred_only: boolean;
   trial_ready: boolean;
   last_observed_on: ISODateString | string;
 }
@@ -620,15 +628,24 @@ export interface ClientTrainingSymptom {
   id: number;
   source_session_id: number | null;
   source_kind: string;
+  /** The SHORT derived grouping label. */
   area_text: string;
+  /** The athlete's own latest words, verbatim. Null for rows predating capture. */
+  report_text: string | null;
   status: "active" | "resolved";
   onset_on: ISODateString | string;
   last_reported_on: ISODateString | string;
   resolved_on: ISODateString | string | null;
   recurrence_count: number;
   legacy_unconfirmed: boolean;
+  /** How live the watch is — refreshed by their words OR by quiet training. */
   freshness: "acute_movement_brake" | "hold_easy_recheck" | "stale_needs_recheck";
-  scope: "movement_only";
+  /** The last day the athlete themselves said something about it. */
+  last_stated_on: ISODateString | string;
+  /** How current their own account is. Silence never makes this fresher. */
+  stated_freshness: "acute_movement_brake" | "hold_easy_recheck" | "stale_needs_recheck";
+  /** 'systemic' names no place and never gates a movement. */
+  scope: "area" | "systemic";
   relevant_pain_free_exposures: number;
   trial_ready: boolean;
   trial_ready_scope: "movement";
@@ -2304,18 +2321,26 @@ export interface ClientRecoverySummary {
 // plain-language `phrase` and the [0,1] band geometry the client hands straight to
 // `baselineBandHtml`; the raw numbers ride along for depth but never surface on
 // the band row. `hot` (terracotta) marks a lever, never punishment.
+//
+// `position`/`current` are null when the newest reading is too old to speak for
+// today: the band still draws, WITHOUT a dot (a stale reading is never placed as
+// if it were current). The provenance trio then lets the client say how old the
+// picture is — all three are optional so an older cached client just ignores them.
 export interface ClientRecoveryBaselineDimension {
   key: "hrv" | "rhr" | "sleep";
   label: string;
   phrase: string;
   hot: boolean;
-  position: number;
+  position: number | null;
   range_start: number;
   range_end: number;
-  current: number;
+  current: number | null;
   p25: number;
   p75: number;
   n: number;
+  readings?: number;
+  span_days?: number | null;
+  last_reading_date?: string | null;
 }
 
 export interface ClientRecoveryBaselineRead {

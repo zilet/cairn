@@ -4,6 +4,7 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo, isoDaysAgo } from "./_seed.js";
+import { SENSOR_MAX_AGE_DAYS } from "../dist/repo/sensor-freshness.js";
 import * as prompt from "../dist/prompt.js";
 
 beforeEach(() => {
@@ -12,13 +13,13 @@ beforeEach(() => {
 });
 
 test("latestSleep is null when there is no sleep data anywhere", () => {
-  assert.equal(repo.latestSleep(), null);
+  assert.equal(repo.latestSleep(SENSOR_MAX_AGE_DAYS.sleep), null);
 });
 
 test("summarizes the most recent night from daily_metrics (Apple/Oura/Whoop)", () => {
   repo.recordDailyMetrics("apple", isoDaysAgo(2), { sleep_min: 430, hrv_ms: 60, resting_hr: 52 });
   repo.recordDailyMetrics("apple", isoDaysAgo(1), { sleep_min: 432, hrv_ms: 61 });
-  const ls = repo.latestSleep();
+  const ls = repo.latestSleep(SENSOR_MAX_AGE_DAYS.sleep);
   assert.ok(ls);
   assert.equal(ls.date, isoDaysAgo(1), "the most recent night");
   assert.equal(ls.source, "apple");
@@ -44,7 +45,7 @@ test("prefers Garmin architecture (deep/REM) and flags HRV vs the athlete's own 
     `INSERT INTO garmin_daily_metrics (source_id, date, sleep_min, hrv_ms, resting_hr, deep_sleep_min, rem_sleep_min, light_sleep_min)
      VALUES (?, ?, 400, 48, 54, 80, 95, 210)`
   ).run(sid, isoDaysAgo(1));
-  const ls = repo.latestSleep();
+  const ls = repo.latestSleep(SENSOR_MAX_AGE_DAYS.sleep);
   assert.equal(ls.source, "garmin");
   assert.equal(ls.deep_min, 80);
   assert.match(ls.text, /1h20m deep/);

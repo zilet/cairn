@@ -33,7 +33,7 @@ import { flexibleTrainingAgenda } from "./flexible-training-agenda.js";
 import { listContextEvents } from "./health.js";
 import { plainGroupWords } from "./exercise-canon.js";
 import { suppressSaturatedDue } from "./hybrid-load.js";
-import { sensorIsCurrent } from "./sensor-freshness.js";
+import { SENSOR_MAX_AGE_DAYS, sensorIsCurrent } from "./sensor-freshness.js";
 import { getRecentSessions } from "./sessions.js";
 import { getActiveBlock } from "./program-blocks.js";
 import { activeRecoveryWeekLedger, RECOVERY_WEEK_ACTIVE_DAYS } from "./recovery-week-ledger.js";
@@ -58,6 +58,13 @@ import {
   SIGNAL_VOICE_REGISTRY,
   type UnifiedSignalState,
 } from "./signal-state.js";
+import {
+  dominantSensorCadence,
+  isWorkingEpisodicPattern,
+  wearAbsenceRowState,
+  wearAbsenceView,
+  wearAbsenceWhy,
+} from "./wear-pattern-voice.js";
 import { afterSqliteCommit } from "./sqlite-savepoint.js";
 import {
   type TrainingLoad,
@@ -1761,9 +1768,10 @@ export function dayRead(
   // what made it assert "you slept fine" off month-old data. Treat an old night as
   // ABSENT so the read never claims how they slept from data it doesn't have.
   // The bound itself now lives in SENSOR_MAX_AGE_DAYS, so the signal state cannot
-  // keep voicing a night this read has already dropped.
-  const lsRaw = latestSleep();
-  const lastNight = lsRaw?.date && !sensorIsCurrent("sleep", lsRaw.date, d) ? null : lsRaw;
+  // keep voicing a night this read has already dropped — and the CHECK now lives
+  // inside latestSleep(), which takes the bound as a required argument, so a future
+  // second caller cannot forget it the way an outside gate invited.
+  const lastNight = latestSleep(SENSOR_MAX_AGE_DAYS.sleep, d);
   const avgSleepMin = rec?.recovery?.avg_sleep_min ?? null;
   const lowSleep = avgSleepMin != null && avgSleepMin > 0 && avgSleepMin < 360; // <6h average
   const freshShortSleep =
@@ -1859,6 +1867,14 @@ export function dayRead(
   })();
   const reduceItem = ctx?.active?.find((a) => a.reduce_load) ?? null;
 
+  // HOW the athlete wears the sensor, and therefore what today's silence means.
+  // Derived from the cadence Track C hangs off each recovery quality entry, so no
+  // extra query and no second opinion about the same series. Null when the
+  // recovery snapshot predates that field (a caller passing a hand-built
+  // `recovery`), which leaves every downstream surface exactly where it is today.
+  const recoveryCadence = dominantSensorCadence(rec?.quality ?? rec?.recovery?.quality ?? {});
+  const recoveryAbsence = recoveryCadence ? wearAbsenceView(recoveryCadence, d) : null;
+
   const signals = {
     // Active context the brain is accounting for (injury/illness/travel), or null.
     context: ctx?.any
@@ -1887,6 +1903,30 @@ export function dayRead(
       ? { energy: checkin.energy, sleep_feel: checkin.sleep_feel, soreness: checkin.soreness, mood: checkin.mood }
       : null,
     has_recovery_data: !!rec?.has_data,
+    // The wear pattern behind that boolean, plus the ONE athlete-facing line each
+    // surface says when today carries no reading. The WORDS are computed here
+    // rather than in the PWA on purpose: they are a rotating variant set drawn
+    // from the same vocabulary the rest of the read speaks (wear-pattern-voice.ts),
+    // and a second copy in the client is precisely how "none synced yet" survived
+    // in front of an athlete whose watch was working exactly as they use it.
+    // Null when the recovery snapshot carries no cadence — every consumer falls
+    // back to what it says today.
+    recovery_cadence: recoveryAbsence
+      ? {
+          pattern: recoveryAbsence.pattern,
+          shape: recoveryAbsence.shape,
+          readings: recoveryAbsence.readings,
+          window_days: recoveryAbsence.window_days,
+          last_reading_date: recoveryAbsence.last_reading_date,
+          last_reading_age_days: recoveryAbsence.age_days,
+          median_gap_days: recoveryAbsence.median_gap_days,
+          // A real, current habit rather than two readings left over from last
+          // spring — the predicate a surface uses before deciding to stay quiet.
+          working_episodic: isWorkingEpisodicPattern(recoveryAbsence),
+          absence_state: wearAbsenceRowState(recoveryAbsence, d),
+          absence_why: wearAbsenceWhy(recoveryAbsence, d),
+        }
+      : null,
     // Last night's single-night sleep architecture + HRV (plain numbers + a calm
     // one-line `text`), so the Brief can speak to LAST NIGHT, not just the window.
     // null when the most recent night is too old to be "last night" (see above).

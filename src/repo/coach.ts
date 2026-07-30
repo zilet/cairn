@@ -56,6 +56,8 @@ import {
 } from "./propagation.js";
 import { symptomMarkerLinks } from "./symptom-links.js";
 import { classifyDirectiveIntent } from "./propagation-data.js";
+import { CADENCE_WINDOW_DAYS, classifyWearPattern, type WearPattern } from "./sensor-cadence.js";
+import { sensorAgeDays } from "./sensor-freshness.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { readAdherenceModel } from "./brain/read-adherence.js";
 import { getProgress, getRecentSessions, getRunCompliance } from "./sessions.js";
@@ -2764,6 +2766,83 @@ export function getRecoverySummary(days = 14, garminSummary?: any, asOfDate = lo
     const age = Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${date}T00:00:00Z`)) / 864e5);
     return age <= 1 ? "fresh" : age <= 3 ? "recent" : "stale";
   };
+  // ---- coverage: how much of each series there actually IS -------------------
+  // The recent-vs-baseline `delta` at the bottom of this function is the single
+  // choke point every "below your norm" read in the codebase flows through — the
+  // signal state's hrv_below/resting_hr_up, day-read's recoveryDrift, the run
+  // plan's hrvDown/rhrUp/sleepDown, the coach prompt's vs-norm block. Until now
+  // it was a median of "whatever happens to be in the window" with NO minimum n,
+  // so an athlete who wears the watch episodically — every run, the odd baseline
+  // night — could have a two-night "week" compared against a four-night "month"
+  // and get a confident trend out of it.
+  //
+  // The floors below are per FIELD, not per row: a week with three HRV nights and
+  // one resting-HR night must be able to speak about HRV and stay quiet about
+  // resting HR. Below the floor the delta is null, which every consumer already
+  // treats as absence — and absence is neutral (VISION.md), so a thin series can
+  // never push toward rest. `recent`/`baseline` keep reporting their medians:
+  // the readings themselves are real, it is only the COMPARISON that is withheld.
+  const DELTA_RECENT_DAYS = 7;
+  const DELTA_BASELINE_DAYS = 30;
+  // Three readings is the smallest set a median can resist one bad night in; five
+  // is the matching floor for the longer window it is measured against.
+  const DELTA_MIN_RECENT_N = 3;
+  const DELTA_MIN_BASELINE_N = 5;
+  // The metric each delta key compares. (Nothing else in the summary is deltaed.)
+  const DELTA_FIELDS: Record<"sleep" | "hrv" | "rhr", Signal> = {
+    sleep: "sleep_min",
+    hrv: "hrv_ms",
+    rhr: "resting_hr",
+  };
+  // ONE bounded 90-day pass feeds both the wear-pattern classification and the
+  // 7/30-day delta windows. resolveRows is a pure date-window filter over the same
+  // two tables, so slicing its 90-day result by date is identical to re-querying
+  // the shorter windows — and two queries cheaper than the pair this replaces.
+  const cadenceRows = resolveRows(CADENCE_WINDOW_DAYS);
+  const withinDays = (list: ResolvedRow[], winDays: number): ResolvedRow[] => {
+    const since = addDaysISO(today, -Math.max(0, winDays - 1)) ?? today;
+    return list.filter((row) => row.date >= since);
+  };
+  const datesOf = (field: Signal, list: ResolvedRow[]): string[] =>
+    list.filter((row) => row.values[field] != null).map((row) => row.date);
+  const countOf = (field: Signal, list: ResolvedRow[]): number =>
+    list.filter((row) => row.values[field] != null && Number.isFinite(Number(row.values[field]))).length;
+  const recentRows = withinDays(cadenceRows, DELTA_RECENT_DAYS);
+  const baselineRows = withinDays(cadenceRows, DELTA_BASELINE_DAYS);
+
+  // Days in the recent window that carry real training — a session with at least
+  // one logged set, or a logged activity. An EMPTY session row (the app opening a
+  // day) is deliberately not training: it would make every day a training day.
+  const recentSince = addDaysISO(today, -Math.max(0, DELTA_RECENT_DAYS - 1)) ?? today;
+  const trainingDays = new Set(
+    (
+      db
+        .prepare(
+          `SELECT DISTINCT s.date AS date FROM sessions s
+            WHERE s.date >= ? AND s.date <= ?
+              AND EXISTS (SELECT 1 FROM logged_sets ls WHERE ls.session_id = s.id)
+           UNION
+           SELECT DISTINCT a.date AS date FROM activities a WHERE a.date >= ? AND a.date <= ?`
+        )
+        .all(recentSince, today, recentSince, today) as { date: string }[]
+    ).map((row) => String(row.date))
+  );
+  // A cluster needs at least two dots — one reading on one training day is a
+  // coincidence, not a sampling bias.
+  const TRAINING_BIAS_MIN_READINGS = 2;
+  const TRAINING_BIAS_RATIO = 0.7;
+  // Does this field's recent series sit mostly on days the athlete trained? For an
+  // episodic wearer that is the normal shape (the watch goes on for the run), and
+  // it means the "norm" is built from post-exertion mornings. ANNOTATION ONLY —
+  // nothing downstream may branch on it; it exists so the prompt can say so.
+  const trainingDayBiased = (field: Signal, pattern: WearPattern): boolean => {
+    if (pattern === "continuous" || pattern === "none") return false;
+    const dates = datesOf(field, recentRows);
+    if (dates.length < TRAINING_BIAS_MIN_READINGS) return false;
+    const onTraining = dates.filter((date) => trainingDays.has(date)).length;
+    return onTraining / dates.length >= TRAINING_BIAS_RATIO;
+  };
+
   const quality: Record<string, any> = {};
   for (const field of fields) {
     const latest = rows.find((row) => row.values[field] != null);
@@ -2778,6 +2857,28 @@ export function getRecoverySummary(days = 14, garminSummary?: any, asOfDate = lo
       window_days: windowDays,
       freshness: freshness(latest?.date ?? null),
     };
+  }
+  // The three delta fields carry their coverage story on the same `quality` entry
+  // consumers already read (it is the one map that survives the prompt-boundary
+  // projection, so the agent sees exactly what the deterministic layer saw).
+  const deltaReady: Record<"sleep" | "hrv" | "rhr", boolean> = { sleep: false, hrv: false, rhr: false };
+  for (const [key, field] of Object.entries(DELTA_FIELDS) as ["sleep" | "hrv" | "rhr", Signal][]) {
+    const recentN = countOf(field, recentRows);
+    const baselineN = countOf(field, baselineRows);
+    const ready = recentN >= DELTA_MIN_RECENT_N && baselineN >= DELTA_MIN_BASELINE_N;
+    deltaReady[key] = ready;
+    const cadence = classifyWearPattern(datesOf(field, cadenceRows), today, CADENCE_WINDOW_DAYS);
+    Object.assign(quality[field], {
+      recent_n: recentN,
+      baseline_n: baselineN,
+      recent_days: DELTA_RECENT_DAYS,
+      baseline_days: DELTA_BASELINE_DAYS,
+      delta_ready: ready,
+      cadence,
+      // Sleep is not annotated: a night is measured while asleep, not while
+      // training, so "the reading landed on a training day" says nothing about it.
+      ...(field === "sleep_min" ? {} : { training_day_biased: trainingDayBiased(field, cadence.pattern) }),
+    });
   }
   const current = (field: Signal) => quality[field].latest_value;
   const recovery: Record<string, any> = {
@@ -2836,17 +2937,22 @@ export function getRecoverySummary(days = 14, garminSummary?: any, asOfDate = lo
     last_date: rows.find((row) => Object.keys(row.values).length)?.date ?? null,
     quality,
   };
-  const avgWindow = (winDays: number) => {
-    const list = resolveRows(winDays);
-    return { sleep: median("sleep_min", list), hrv: median("hrv_ms", list), rhr: median("resting_hr", list) };
-  };
-  const recent = avgWindow(7);
-  const baseline = avgWindow(30);
+  const medians = (list: ResolvedRow[]) => ({
+    sleep: median("sleep_min", list),
+    hrv: median("hrv_ms", list),
+    rhr: median("resting_hr", list),
+  });
+  const recent = medians(recentRows);
+  const baseline = medians(baselineRows);
   const diff = (a: number | null, b: number | null) => (a != null && b != null ? round1(a - b) : null);
+  // The floor lands HERE and nowhere else: a delta that has not earned its
+  // coverage is null, and every consumer downstream already reads null as "no
+  // such signal". The medians above stay reported — they are honest numbers, and
+  // withholding them would hide the readings rather than the trend claim.
   const delta = {
-    sleep: diff(recent.sleep, baseline.sleep),
-    hrv: diff(recent.hrv, baseline.hrv),
-    rhr: diff(recent.rhr, baseline.rhr),
+    sleep: deltaReady.sleep ? diff(recent.sleep, baseline.sleep) : null,
+    hrv: deltaReady.hrv ? diff(recent.hrv, baseline.hrv) : null,
+    rhr: deltaReady.rhr ? diff(recent.rhr, baseline.rhr) : null,
   };
   const sources = [...new Set(Object.values(quality).flatMap((entry: any) => entry.sources ?? []))] as string[];
   const surfaced = Object.entries(recovery).filter(([key]) => key !== "last_date" && key !== "quality");
@@ -2899,7 +3005,24 @@ export function getRecoverySummary(days = 14, garminSummary?: any, asOfDate = lo
 // (Apple Health / Oura / Whoop) is the fallback (total + HRV). HRV is compared to
 // the athlete's own 30-day norm for a "steady / below your norm" read — never a
 // score. Null-safe: no sleep data anywhere → null.
-export function latestSleep(): {
+//
+// `maxAgeDays` is REQUIRED, and deliberately so. This query is the dangerous
+// shape sensor-freshness.ts names by hand — "give me the most recent row" with no
+// lower bound — and its output is present-tense prose ("7h12m sleep, HRV steady")
+// that reads as LAST NIGHT at any age. For a long time exactly one caller gated
+// it, from the outside; a second caller would have inherited a month-old night
+// silently. The age law now lives INSIDE the function: past the bound this
+// returns null, which is the same neutral absence a watch left in a drawer
+// already produces. Pass SENSOR_MAX_AGE_DAYS.sleep unless you have a considered
+// reason not to.
+//
+// `asOf` is the day being read (default today). Nights AFTER it are not visible:
+// a historical read must not be handed a future night, and a future-dated row is
+// a clock problem rather than evidence.
+export function latestSleep(
+  maxAgeDays: number,
+  asOf: string = localDateISO()
+): {
   date: string;
   source: string;
   total_min: number | null;
@@ -2914,6 +3037,7 @@ export function latestSleep(): {
   hrv_vs_baseline: number | null;
   text: string;
 } | null {
+  const readAsOf = /^\d{4}-\d{2}-\d{2}$/.test(String(asOf ?? "")) ? String(asOf) : localDateISO();
   const g = db
     .prepare(
       `SELECT date, sleep_min, sleep_score, resting_hr, hrv_ms, hrv_status,
@@ -2922,7 +3046,7 @@ export function latestSleep(): {
       WHERE sleep_min IS NOT NULL AND sleep_min > 0 AND date <= ?
       ORDER BY date DESC LIMIT 1`
     )
-    .get(localDateISO()) as any;
+    .get(readAsOf) as any;
   const o = db
     .prepare(
       `SELECT date, source, sleep_min, sleep_score, resting_hr, hrv_ms
@@ -2930,7 +3054,7 @@ export function latestSleep(): {
       WHERE sleep_min IS NOT NULL AND sleep_min > 0 AND date <= ?
       ORDER BY date DESC LIMIT 1`
     )
-    .get(localDateISO()) as any;
+    .get(readAsOf) as any;
 
   // Most recent night wins; Garmin breaks a tie (richer architecture).
   let row: any = null,
@@ -2951,6 +3075,10 @@ export function latestSleep(): {
     source = o.source || "apple";
   }
   if (!row) return null;
+  // The age law, inside. A night older than the bound is not last night, so it
+  // does not get to speak at all (stale behaves as absent, never as current).
+  const age = sensorAgeDays(row.date, readAsOf);
+  if (age == null || age < 0 || !(age <= Number(maxAgeDays))) return null;
 
   // 30-day HRV baseline (same source family) up to — not including — last night.
   // For the non-Garmin family, resolve HRV per date/per field (newest source row
@@ -2960,13 +3088,13 @@ export function latestSleep(): {
     source === "garmin"
       ? db
           .prepare(
-            `SELECT ROUND(AVG(hrv_ms),1) AS h FROM garmin_daily_metrics
+            `SELECT ROUND(AVG(hrv_ms),1) AS h, COUNT(hrv_ms) AS n FROM garmin_daily_metrics
       WHERE date >= ? AND date < ? AND hrv_ms IS NOT NULL`
           )
           .get(since30, row.date)
       : db
           .prepare(
-            `SELECT ROUND(AVG(dm.hrv_ms),1) AS h FROM daily_metrics dm
+            `SELECT ROUND(AVG(dm.hrv_ms),1) AS h, COUNT(dm.hrv_ms) AS n FROM daily_metrics dm
          WHERE dm.date >= ? AND dm.date < ? AND dm.hrv_ms IS NOT NULL
            AND NOT EXISTS (
              SELECT 1 FROM daily_metrics newer
@@ -2975,7 +3103,14 @@ export function latestSleep(): {
            )`
           )
           .get(since30, row.date);
-  const baselineHrv = hb?.h ?? null;
+  // "Your norm" is a COVERAGE claim as much as a value one. This average used to
+  // be taken over whatever happened to exist — for an episodic wearer that can be
+  // ONE prior night, and a single night is not a norm. Below the floor there is no
+  // baseline, so `hrv_vs_baseline` is null and the text below simply prints the
+  // reading with no "below/above your norm" (and no "steady" either — claiming
+  // steadiness against one night is the same overclaim wearing a calmer word).
+  const HRV_NORM_MIN_NIGHTS = 5;
+  const baselineHrv = Number(hb?.n ?? 0) >= HRV_NORM_MIN_NIGHTS ? (hb?.h ?? null) : null;
   const hrvDelta = row.hrv_ms != null && baselineHrv != null ? Math.round((row.hrv_ms - baselineHrv) * 10) / 10 : null;
 
   const hm = (m: number) => {

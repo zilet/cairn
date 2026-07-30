@@ -53,6 +53,9 @@ export * from "./repo/coach-context.js";
 export * from "./repo/coach.js";
 export * from "./repo/baseline-bands.js"; // personal-baseline recovery + training-load reads
 export * from "./repo/sensor-freshness.js"; // how old a wearable reading may be before it behaves as absent
+export * from "./repo/sensor-cadence.js"; // how MUCH of a wearable series there is before it may describe a trend
+export * from "./repo/wear-pattern-voice.js"; // how absence is SAID: episodic cadence vs a lapsed series vs no wearable
+export * from "./repo/sensor-recheck.js"; // when the recovery picture has aged enough that one night would sharpen it
 export * from "./repo/propagation.js";
 export * from "./repo/marker-response.js"; // the lab loop: anchor an applied plan/meal change to its marker + learn which change coincided with which direction
 export * from "./repo/symptom-links.js"; // deterministic symptom → off-marker reasoning
@@ -68,6 +71,8 @@ export * from "./repo/daily-reconciliation.js"; // Stage 4: post-session suggest
 export * from "./repo/daily-outcome-read.js"; // bounded athlete-facing learning read over completed reconciled sessions
 export * from "./repo/recovery-cycles.js"; // temporary calendar-bounded recovery overlays; never mutate the base plan
 export * from "./repo/training-symptoms.js"; // explicit movement-scoped symptom/tolerance lifecycle
+export * from "./repo/symptom-reports.js"; // the athlete's verbatim pain words — the record structure is derived FROM
+export { registerSymptomExtractionHook } from "./repo/symptom-extraction-hooks.js";
 export * from "./repo/support-work.js"; // lagging compound → build the under-trained contributing muscle
 export * from "./repo/session-primer.js"; // the pre-session "a coach was already here" read
 export * from "./repo/strength-objectives.js"; // athlete-selected anchor-lift comeback journey

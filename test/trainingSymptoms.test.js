@@ -20,7 +20,7 @@ test("legacy joint pain seeds as unconfirmed while null feedback is no evidence"
   assert.equal(events.length, 1);
   assert.equal(events[0].legacy_unconfirmed, true);
   assert.equal(events[0].freshness, "acute_movement_brake");
-  assert.equal(events[0].scope, "movement_only");
+  assert.equal(events[0].scope, "area", "a legacy import names a place, so it stays area-scoped");
 });
 
 test("same-source report retries are idempotent and an explicit exercise id preserves movement identity", () => {
@@ -190,7 +190,7 @@ test("a relevant pain-present observation is recurrence evidence, never whole-bo
   });
   assert.equal(observed.recurrence_count, 1);
   assert.equal(observed.last_reported_on, "2034-04-07");
-  assert.equal(observed.scope, "movement_only");
+  assert.equal(observed.scope, "area");
   assert.equal(observed.trial_ready, false);
   assert.equal(observed.movement_readiness[0].pain_free_exposures, 0, "recurrence resets only this movement");
 });

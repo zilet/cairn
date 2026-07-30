@@ -63,6 +63,10 @@ import { listAttentionReviewHeldProposals, listProposals, listReviewHeldProposal
 // TodayAgendaCandidate or null.
 import { sinceLastLookedCandidate } from "./since-last.js";
 import { goalCheckinCandidate } from "./goal-checkin.js";
+// The episodic-wearer's one calm offer: a night with the watch on would sharpen
+// the recovery read. Rides the shared attention schedule for its cooldown, so it
+// is made at most a handful of times and then goes quiet on its own.
+import { reconcileSensorRecheckAttention, sensorRecheckCandidate } from "./sensor-recheck.js";
 import { listBrainDecisions } from "./brain-decisions.js";
 import { specialistVoiceLine } from "../brain/specialist-voice.js";
 import { getAppState, setAppState } from "./app-state.js";
@@ -883,6 +887,11 @@ export function todayAgenda(date?: string, opts: { markIntroduced?: boolean } = 
   add(safe(() => sinceLastLookedCandidate(d)));
   add(safe(() => goalCheckinCandidate()));
   add(safe(() => standingMomentumCandidate(d)));
+  // A PURE read here — never spends the offer. Its own priority (14) means the
+  // sort below decides whether it actually lands inline or behind "more", and
+  // that isn't known until every candidate is ranked; see the reconcile call
+  // after placement, which is the only place this offer may be spent.
+  add(safe(() => sensorRecheckCandidate(d)));
 
   // Stable sort by priority desc. Array.prototype.sort is stable in modern V8, but
   // tie-break on insertion order explicitly so the budget split is deterministic.
@@ -909,6 +918,21 @@ export function todayAgenda(date?: string, opts: { markIntroduced?: boolean } = 
   const inline = ordered.filter((c) => !heldOut.has(c.id));
   const primary = inline.slice(0, TODAY_PRIMARY_MAX).map((c) => ({ ...c, tier: "primary" as const }));
   const primaryIds = new Set(primary.map((c) => c.id));
+
+  // The sensor-recheck offer may ONLY be spent now that placement is actually
+  // known: a card the priority sort buried behind "more" was never seen, and
+  // burning one of its ~4 offers on a card nobody saw would burn the ladder out
+  // silently. Mirrors the surprise budget's own live-day / human-pass gate above;
+  // `reconcileSensorRecheckAttention` also clears a resolved episode regardless of
+  // placement (that's cleanup, not spending, so it isn't gated on `surfaced`).
+  if (d === localDateISO() && opts.markIntroduced !== false) {
+    try {
+      reconcileSensorRecheckAttention(d, primaryIds.has("sensor-recheck"));
+    } catch {
+      /* presentation-only; a failed write just re-offers (or re-cleans) next time */
+    }
+  }
+
   // Stamp genuinely-new attention items that ended up behind the disclosure
   // (deferred by the budget, or simply outranked) so the client can whisper
   // "· one new" on the collapsed summary — the waiting item stays pull-only.

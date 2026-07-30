@@ -360,8 +360,8 @@ async function flush() {
   for (let i = 0; i < 3; i++) await Promise.resolve();
 }
 
-function symptom(id, status, area = "outside of left knee") {
-  return { id, status, area_text: area, movement_readiness: [] };
+function symptom(id, status, area = "outside of left knee", extra = {}) {
+  return { id, status, area_text: area, report_text: null, scope: "area", movement_readiness: [], ...extra };
 }
 
 function makeLifecycleDeps(ctx, symptoms, { failPath } = {}) {
@@ -390,78 +390,79 @@ function lifecycleHost(slot) {
   return host;
 }
 
-test("pain history: 'It returned' opens, focuses movement context, and cancel restores the compact row", async () => {
+// The panel is a READ of what the athlete said, not a form asking them to say it
+// again in Cairn's vocabulary. Their sentence renders whole and escaped, the quiet
+// evidence line refuses to pass silence off as confirmation, and the only control
+// is the one genuine decision: closing the note.
+test("pain lifecycle renders the athlete's verbatim words and no capture widgets", async () => {
   const ctx = loadFeedback();
   const slot = makeDoneSlot();
-  const { deps } = makeLifecycleDeps(ctx, [symptom(7, "resolved")]);
-  ctx.CairnTodaySessionFeedback.renderFeedback(slot, {
-    date: "2026-07-16", soreness: 2, sets: [{ exercise: "Back Squat", exercise_id: 41 }],
-  }, deps);
-  await flush();
-
-  const host = lifecycleHost(slot);
-  const toggle = host.querySelector('[data-symptom-recur-toggle="7"]');
-  const panel = host.querySelector("#symptom-recur-7");
-  const movement = host.querySelector('[data-symptom-movement="7"]');
-  assert.equal(panel.hidden, true);
-  await Promise.all(toggle.click());
-  assert.equal(panel.hidden, false);
-  assert.equal(toggle.ariaExpanded, "true");
-  assert.equal(movement.focusCount, 1);
-
-  await Promise.all(host.querySelector('[data-symptom-recur-cancel="7"]').click());
-  assert.equal(panel.hidden, true);
-  assert.equal(toggle.ariaExpanded, "false");
-  assert.equal(toggle.focusCount, 1);
-});
-
-test("pain recurrence posts selected movement context, preserves the viewed date, and resolve reloads", async () => {
-  const ctx = loadFeedback();
-  const slot = makeDoneSlot();
-  const { deps, requests, toasts } = makeLifecycleDeps(ctx, [
-    symptom(7, "resolved"), symptom(9, "active", "front of right knee"),
+  const spoken = 'Slight unpleasent feeling in my right hand joint (probably from <gripping> the bar too hard)';
+  const { deps } = makeLifecycleDeps(ctx, [
+    symptom(7, "active", "right hand joint", {
+      report_text: spoken,
+      movement_readiness: [
+        {
+          movement_key: "exercise:41",
+          movement_name: "Back Squat",
+          pain_free_exposures: 2,
+          stated_pain_free_exposures: 0,
+          inferred_only: true,
+          trial_ready: true,
+          last_observed_on: "2026-07-16",
+        },
+      ],
+    }),
   ]);
-  const session = {
-    date: "2026-06-03", soreness: 2,
-    sets: [{ exercise: "Back Squat", exercise_id: 41 }],
-  };
-  ctx.CairnTodaySessionFeedback.renderFeedback(slot, session, deps);
-  await flush();
-  let host = lifecycleHost(slot);
-  await Promise.all(host.querySelector('[data-symptom-recur-toggle="7"]').click());
-  const movement = host.querySelector('[data-symptom-movement="7"]');
-  movement.value = "Back Squat";
-  await Promise.all(host.querySelector('[data-symptom-recur="7"]').click());
-  await flush();
-  const recur = requests.find((request) => request.path === "/training-symptoms/7/recur");
-  assert.deepEqual(JSON.parse(recur.opts.body), { on: "2026-06-03", movement: "Back Squat", exercise_id: 41 });
-  assert.ok(toasts.includes("Recurrence noted"));
-
-  host = lifecycleHost(slot);
-  await Promise.all(host.querySelector('[data-symptom-resolve="9"]').click());
-  await flush();
-  const resolve = requests.find((request) => request.path === "/training-symptoms/9/resolve");
-  assert.deepEqual(JSON.parse(resolve.opts.body), { on: "2026-06-03" });
-  assert.ok(toasts.includes("Marked resolved"));
-  assert.ok(requests.some((request) => request.path === "/training-symptoms?on=2026-06-03&include_resolved=1"));
-});
-
-test("pain recurrence: a failed save leaves the composer open and explains recovery", async () => {
-  const ctx = loadFeedback();
-  const slot = makeDoneSlot();
-  const { deps, toasts, requests } = makeLifecycleDeps(ctx, [symptom(7, "resolved")], { failPath: "/7/recur" });
   ctx.CairnTodaySessionFeedback.renderFeedback(slot, {
     date: "2026-07-16", soreness: 2, sets: [{ exercise: "Back Squat", exercise_id: 41 }],
   }, deps);
   await flush();
   const host = lifecycleHost(slot);
-  await Promise.all(host.querySelector('[data-symptom-recur-toggle="7"]').click());
-  const panel = host.querySelector("#symptom-recur-7");
-  await Promise.all(host.querySelector('[data-symptom-recur="7"]').click());
+  const html = host.innerHTML;
+
+  // Whole sentence, escaped — nothing clipped at the label boundary.
+  assert.match(html, /Slight unpleasent feeling in my right hand joint \(probably from &lt;gripping&gt; the bar too hard\)/);
+  assert.doesNotMatch(html, /<gripping>/);
+  // Inferred-only evidence says so out loud.
+  assert.match(html, /Tolerated in training twice — no word from you yet\./);
+  // The one lifecycle tap survives; every mini-UI is gone.
+  assert.ok(host.querySelector('[data-symptom-resolve="7"]'), "Mark resolved stays");
+  assert.equal(host.querySelector("select"), null, "no movement dropdown");
+  assert.equal(host.querySelector("[data-tolerance]"), null, "no pain-free / pain-present pair");
+  assert.equal(host.querySelector("[data-report-symptom]"), null, "no report composer");
+  assert.equal(host.querySelector("[data-symptom-recur]"), null, "no recurrence form");
+  assert.match(html, /Mention pain in your session notes or chat/);
+});
+
+test("pain lifecycle: Mark resolved posts the viewed date and reloads the panel", async () => {
+  const ctx = loadFeedback();
+  const slot = makeDoneSlot();
+  const { deps, toasts, requests } = makeLifecycleDeps(ctx, [symptom(7, "active")]);
+  ctx.CairnTodaySessionFeedback.renderFeedback(slot, { date: "2026-07-16", soreness: 2 }, deps);
   await flush();
-  assert.equal(panel.hidden, false, "a rejected request must not collapse the athlete's context");
+  const host = lifecycleHost(slot);
+  await Promise.all(host.querySelector('[data-symptom-resolve="7"]').click());
+  await flush();
+  const resolve = requests.filter((request) => request.path === "/training-symptoms/7/resolve");
+  assert.equal(resolve.length, 1);
+  assert.deepEqual(JSON.parse(resolve[0].opts.body), { on: "2026-07-16" });
+  assert.deepEqual(toasts, ["Marked resolved"]);
+  // A reload read follows the write, so the row leaves the active list.
+  assert.ok(requests.filter((request) => request.path.includes("training-symptoms?")).length >= 2);
+});
+
+test("pain lifecycle: a failed resolve says so and leaves the note standing", async () => {
+  const ctx = loadFeedback();
+  const slot = makeDoneSlot();
+  const { deps, toasts } = makeLifecycleDeps(ctx, [symptom(7, "active")], { failPath: "/7/resolve" });
+  ctx.CairnTodaySessionFeedback.renderFeedback(slot, { date: "2026-07-16", soreness: 2 }, deps);
+  await flush();
+  const host = lifecycleHost(slot);
+  await Promise.all(host.querySelector('[data-symptom-resolve="7"]').click());
+  await flush();
   assert.deepEqual(toasts, ["Couldn't update that note — try again."]);
-  assert.equal(requests.filter((request) => request.path === "/training-symptoms/7/recur").length, 1);
+  assert.ok(lifecycleHost(slot).querySelector('[data-symptom-resolve="7"]'), "the watch stays visible");
 });
 
 test("renderFeedback: answering BOTH scales collapses to the settled 'Noted' line", async () => {

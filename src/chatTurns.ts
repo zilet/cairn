@@ -2465,6 +2465,11 @@ export function applyChatActions(
             type: a.type,
             result: repo.reportTrainingSymptom({
               area_text: a.area_text,
+              // The athlete's MESSAGE is the record; area_text is the label the
+              // model pulled out of it. Storing only the label is what used to lose
+              // everything after the first clause.
+              report_text: message,
+              report_source_kind: "chat",
               onset_on: stringOrUndefined(a.onset_on),
               source_kind: "chat_explicit",
             }),

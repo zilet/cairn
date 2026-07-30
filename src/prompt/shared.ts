@@ -548,6 +548,19 @@ export function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | 
     const trainingStatus = current("training_load", "training_status", rec.training_status);
     const vo2max = current("fitness_marker", "vo2max", rec.vo2max);
     const fitnessAge = current("fitness_marker", "fitness_age", rec.fitness_age);
+    // An average with no n behind it reads as a settled fact. "avg sleep ~430 min"
+    // off two nights and off fourteen are the same eleven characters, and the
+    // agent has no way to tell them apart — so the three figures a recovery call
+    // actually turns on carry their sample count. Follows the honest precedent in
+    // the Brief's READINESS line ("from 4/14 days"). Machine register: this is a
+    // DATA block, and the count must never reach athlete-facing prose.
+    const nOf = (field: string): string => {
+      const q = quality?.[field];
+      const samples = Number(q?.sample_count);
+      const window = Number(q?.window_days ?? q?.expected_days);
+      if (!Number.isFinite(samples) || samples <= 0) return "";
+      return Number.isFinite(window) && window > 0 ? ` [${samples} readings/${Math.round(window)}d]` : ` [${samples} readings]`;
+    };
     const bits: string[] = [];
     if (rec.avg_sleep_min != null) {
       let sleep = `avg sleep ~${Math.round(rec.avg_sleep_min)} min`;
@@ -558,10 +571,10 @@ export function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | 
         ].filter(Boolean).join(", ");
         if (stages) sleep += ` (${stages})`;
       }
-      bits.push(sleep);
+      bits.push(sleep + nOf("sleep_min"));
     }
-    if (rec.avg_resting_hr != null) bits.push(`resting HR ~${rec.avg_resting_hr}`);
-    if (rec.avg_hrv_ms != null) bits.push(`HRV ~${rec.avg_hrv_ms} ms${hrvStatus ? ` (${String(hrvStatus).toLowerCase()})` : ""}`);
+    if (rec.avg_resting_hr != null) bits.push(`resting HR ~${rec.avg_resting_hr}${nOf("resting_hr")}`);
+    if (rec.avg_hrv_ms != null) bits.push(`HRV ~${rec.avg_hrv_ms} ms${hrvStatus ? ` (${String(hrvStatus).toLowerCase()})` : ""}${nOf("hrv_ms")}`);
     if (rec.avg_stress != null) bits.push(`stress ~${rec.avg_stress}`);
     if (rec.avg_body_battery != null) bits.push(`body battery ~${rec.avg_body_battery}`);
     if (rec.avg_respiration != null) bits.push(`respiration ~${rec.avg_respiration}/min`);
@@ -585,19 +598,62 @@ export function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | 
     if (bits.length) lines.push(`RECOVERY (last ${ctx.recovery.days}d, ${(ctx.recovery.sources || []).join("+") || "no source"}): ${bits.join(", ")} — read the WHOLE picture; bias toward recovery when sleep/HRV/readiness are low or resting HR/stress are elevated vs their norm.`);
     // Acute-vs-chronic baseline: the last 7 days against the 30-day norm, so the
     // agent compares the user to THEIR OWN baseline (not a population number).
+    // A delta only EXISTS once its two windows cleared their coverage floors in
+    // getRecoverySummary (3 recent / 5 baseline readings) — below that it is null
+    // and the field is simply not compared here. That is why this block prints
+    // per-field and never as an all-or-nothing set: an athlete can have enough
+    // HRV nights to compare and not enough resting-HR ones, and saying so is more
+    // honest than either inventing the second or dropping the first.
     const dl = ctx?.recovery?.delta;
     const rc = ctx?.recovery?.recent;
     const bl = ctx?.recovery?.baseline;
+    const nVs = (field: string): string => {
+      const q = quality?.[field];
+      const recentN = Number(q?.recent_n);
+      const baselineN = Number(q?.baseline_n);
+      return Number.isFinite(recentN) && Number.isFinite(baselineN) ? `, ${recentN} vs ${baselineN} readings` : "";
+    };
     if (dl && rc && bl) {
       const cmp: string[] = [];
       if (rc.sleep != null && bl.sleep != null && dl.sleep != null)
-        cmp.push(`sleep ${Math.round(rc.sleep)} min vs ~${Math.round(bl.sleep)} norm (${dl.sleep >= 0 ? "+" : ""}${Math.round(dl.sleep)})`);
+        cmp.push(`sleep ${Math.round(rc.sleep)} min vs ~${Math.round(bl.sleep)} norm (${dl.sleep >= 0 ? "+" : ""}${Math.round(dl.sleep)}${nVs("sleep_min")})`);
       if (rc.hrv != null && bl.hrv != null && dl.hrv != null)
-        cmp.push(`HRV ${rc.hrv} vs ~${bl.hrv} norm (${dl.hrv >= 0 ? "+" : ""}${dl.hrv})`);
+        cmp.push(`HRV ${rc.hrv} vs ~${bl.hrv} norm (${dl.hrv >= 0 ? "+" : ""}${dl.hrv}${nVs("hrv_ms")})`);
       if (rc.rhr != null && bl.rhr != null && dl.rhr != null)
-        cmp.push(`resting HR ${rc.rhr} vs ~${bl.rhr} norm (${dl.rhr >= 0 ? "+" : ""}${dl.rhr})`);
+        cmp.push(`resting HR ${rc.rhr} vs ~${bl.rhr} norm (${dl.rhr >= 0 ? "+" : ""}${dl.rhr}${nVs("resting_hr")})`);
       if (cmp.length) lines.push(`RECOVERY vs THEIR NORM (last 7d against 30d baseline): ${cmp.join("; ")} — lower sleep/HRV or a raised resting HR vs their own norm means lean toward recovery; this is the comparison that matters, not absolute numbers.`);
     }
+    // How the athlete actually WEARS the sensor. An episodic wearer — the watch
+    // goes on for the run and the odd baseline night — has a real series and a
+    // real norm, but it is a scatter of spot checks rather than a daily record,
+    // and a metric measured every ten days cannot carry "this week vs last".
+    // Naming the cadence is the honest alternative to silently trusting it.
+    // Absence of a line here is not a claim either way.
+    const CADENCE_FIELDS: [string, string][] = [
+      ["sleep_min", "sleep"],
+      ["hrv_ms", "HRV"],
+      ["resting_hr", "resting HR"],
+    ];
+    const episodic = CADENCE_FIELDS.map(([field, label]) => {
+      const cadence = quality?.[field]?.cadence;
+      const pattern = String(cadence?.pattern ?? "");
+      if (pattern !== "spot_check" && pattern !== "intermittent") return null;
+      const gap = Number(cadence?.median_gap_days);
+      const rhythm = Number.isFinite(gap) && gap > 0 ? `, typically every ${gap} days` : "";
+      const last = cadence?.last_reading_date ? `, last on ${cadence.last_reading_date}` : "";
+      return `${label} on ${cadence?.readings ?? 0} of the last ${cadence?.window_days ?? 90} days${rhythm}${last}`;
+    }).filter(Boolean) as string[];
+    if (episodic.length)
+      lines.push(`WEARABLE CADENCE (this athlete measures episodically, not daily — ${episodic.join("; ")}): treat these as spot checks. Each reading is real for its own day; a run of them is not automatically a trend, and a quiet stretch is a watch off the wrist, not a signal.`);
+    // When the readings cluster on days they trained, the "norm" is built from
+    // post-exertion mornings — so a raised resting HR or a dipped HRV against it
+    // is partly the sampling, not the athlete. ANNOTATION ONLY: nothing upstream
+    // branches on this, and it must not become a reason to hold anyone back.
+    const biased = CADENCE_FIELDS.filter(([field]) => quality?.[field]?.training_day_biased === true).map(
+      ([, label]) => label
+    );
+    if (biased.length)
+      lines.push(`SAMPLING NOTE: recent ${biased.join(" and ")} readings cluster on days with logged training; norm comparisons may run hot. Weigh them as softer evidence, and do NOT let this alone move the day toward rest.`);
     if (body.length) lines.push(`BODY COMPOSITION (latest): ${body.join(", ")}.`);
   }
   // Supplements the user already takes — relevant across domains (whey ↔ protein

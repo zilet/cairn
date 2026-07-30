@@ -133,60 +133,9 @@ test("Today prefill falls back to the server's grounded suggestion, never to an 
   );
 });
 
-test("Today symptom-relevance load asks once per session and collects only server-named movements", async () => {
-  const context = loadPreparation();
-  const data = context.CairnTodayPlanSessionData;
-  const requests = [];
-  const movements = await data.loadSymptomMovements(["Back Squat", "Bench", "back squat", "  "], {
-    state: { logDate: "2026-07-29" },
-    api: async (path) => {
-      requests.push(path);
-      return [
-        { id: 1, status: "active", area_text: "outside of left knee", relevant_movements: ["Back Squat"] },
-        { id: 2, status: "active", area_text: "left knee", relevant_movements: ["Back Squat"] },
-      ];
-    },
-    cachedApi: async () => null,
-    peekCached: () => null,
-    isCardioItem: () => false,
-  });
-
-  assert.deepEqual(requests, [
-    "/training-symptoms?on=2026-07-29&seed_legacy=0&movements=Back%20Squat&movements=Bench",
-  ]);
-  assert.deepEqual(plain(movements), ["Back Squat"]);
-
-  // No movements to ask about → no request at all.
-  let asked = false;
-  assert.deepEqual(
-    plain(await data.loadSymptomMovements([], {
-      state: { logDate: "2026-07-29" },
-      api: async () => {
-        asked = true;
-        return [];
-      },
-      cachedApi: async () => null,
-      peekCached: () => null,
-      isCardioItem: () => false,
-    })),
-    []
-  );
-  assert.equal(asked, false);
-
-  // A failed read leaves every card clean rather than guessing relevance.
-  assert.deepEqual(
-    plain(await data.loadSymptomMovements(["Bench"], {
-      state: { logDate: "2026-07-29" },
-      api: async () => {
-        throw new Error("offline");
-      },
-      cachedApi: async () => null,
-      peekCached: () => null,
-      isCardioItem: () => false,
-    })),
-    []
-  );
-});
+// The per-session symptom-relevance read is gone with the per-card movement check
+// it fed. Nothing on a card gates on pain any more, so the session render asks one
+// fewer question of the server.
 
 test("Today plan/session data helper loads cached last sets and refreshes stale data", async () => {
   const context = loadPreparation();
@@ -274,14 +223,11 @@ test("Today plan/session preparation assembles cardio, pending off-plan, prescri
   assert.equal(result.rxFor("Bench").action, "overload");
   assert.equal(result.hasSyncedCardioToday, true);
   assert.equal(result.expectingRun, false);
-  // One relevance question for the whole session, on a read that must not write.
   assert.deepEqual(apiRequests, [
     "/cardio?date=2026-06-30",
     "/settings",
-    "/training-symptoms?on=2026-06-30&seed_legacy=0&movements=Bench",
     "/strength-journey",
   ]);
-  assert.deepEqual(plain(result.symptomMovements), []);
   assert.equal(
     cachedRequests.some((request) => request.path === "/program/progression?day=1"),
     true

@@ -4,6 +4,82 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-07-30 — pain is reported in words, not filled into widgets
+
+Migration **v88** (`symptom-scope-and-inferred-evidence`) plus one new table. Service worker
+`cairn-v539`. The round removed every pain mini-UI from the app and replaced it with a capture lane:
+the athlete says it however they'd say it, and an agentic pass derives the structure.
+
+**The three failures it closes**, all confirmed against live data:
+
+1. **Words were lost.** A free-text report was squeezed through `normalizeSymptomArea` into
+   `training_symptom_events.area_text`, a 60-character *label* column — the live database held
+   `"Slight unpleasent feeling in my right hand joint (probably"`, clipped mid-word, the rest gone.
+   New table **`symptom_reports`** (`CREATE TABLE IF NOT EXISTS`, so no migration entry) stores every
+   pain-ish input VERBATIM and synchronously, before anything is derived: `text`, `source_kind`
+   (`session_note` | `session_feedback` | `chat` | `api`), `reported_on`, a nullable event/session
+   link, and `extraction_json`/`extraction_status` (`pending`|`done`|`skipped`|`failed`).
+   `area_text` remains the short grouping label it always was — pain-relevance runs substring
+   regexes over it, so a paragraph there loads every lift.
+2. **Whole-body reports had nowhere to go.** `training_symptom_events.scope`
+   (`'area'`|`'systemic'`, default `'area'`) makes "everything feels off, not one movement" a
+   first-class watch. A systemic event never drives movement relevance — `activeRelevantTrainingSymptoms`
+   and `trainingSymptomsForMovements` exclude it by SCOPE rather than leaving it to fail the area
+   vocabulary — but it appears in the session primer's watch list (its own variant set) and in the
+   coachOps fingerprint, and any training day refreshes it.
+3. **Freshness was a manual keep-alive pedal.** Only button presses moved `last_reported_on`, so a
+   watch the athlete trained around daily went stale in a week. `finishSession` now runs
+   `inferTrainingSymptomExposures()`: for each active area watch, every movement worked that day
+   that it plausibly loads, with nothing reported painful on it, becomes a quiet tolerated exposure
+   — `outcome 'pain_free'`, new column `movement_tolerance_observations.evidence = 'inferred'`.
+   Idempotent through the existing unique exposure indexes, so a re-finish or a Garmin re-sync adds
+   nothing.
+
+**Silence is never dressed up as confirmation.** An inferred exposure moves recency and nothing
+else: no recurrence bump, no clearing of `legacy_unconfirmed`. `hydrate()` carries
+`stated_pain_free_exposures` and `inferred_only` so surfaces say "tolerated in training twice — no
+word from you yet" rather than implying an all-clear, and a later stated observation UPGRADES the
+inferred row in place instead of being swallowed by the duplicate guard. The lifecycle also gained
+`last_stated_on`/`stated_freshness` — how current the athlete's own ACCOUNT is, which `freshness`
+no longer tracks now that quiet training refreshes it. `symptomGatesComparability`,
+`dailyDecisionSnapshot`'s protective-vs-soft_recheck level and the primer's recheck wording all read
+`stated_freshness`; without that split, one open note plus a training habit would hold every outcome
+out of the comparable set forever — the "no verdict can ever be reached" failure an earlier round
+already dug out of live data. With no inferred evidence on file the two are identical, so every
+pre-existing record behaves exactly as before.
+
+**The extraction lane.** `src/symptomCapture.ts` is the ONE contract (the role `src/foodCapture.ts`
+plays for meals): one JSON shape, one prompt builder, one validator, never re-declared elsewhere.
+Output is `{found, reports:[{quote, area_label, scope, change, movements:[{name, outcome}]}]}`.
+The model never picks an id — it echoes an area LABEL and the deterministic side matches it through
+`symptomAreaKey`; it never invents a movement — it may only name movements from the list it was
+given, and `matchSymptomMovement` re-matches every one; and `quote` must actually appear in the
+athlete's text, which is what keeps coaching prose, a score or a verdict out of a field the surface
+renders as their words. Validation is strict (a violation fails the whole payload) because failure is
+free: `extraction_status` goes `failed`, the words stay stored and displayed. Results apply through
+the EXISTING repo functions only — `reportTrainingSymptom`, `recurTrainingSymptom`,
+`resolveTrainingSymptomByArea`, `recordMovementTolerance` — so every idempotency guard, epoch rule
+and proposal-truth snapshot keeps working. A new `symptom` kind on the enrichment queue
+(`src/enrich.ts`, `processSymptomJob`/`applySymptomExtraction`, `pickAgentOrderForTask("enrich")` +
+`executionProfileForTask("enrich")`) runs it; the repo registers its enqueue through
+`src/repo/symptom-extraction-hooks.ts` rather than importing the engine. Enqueue points: session
+finish notes, `updateSessionNotes`, the feedback `joint_pain` line, an explicit REST/MCP report and
+the chat action — each behind `symptomTextMentionsBody()`, a cheap keyword prefilter so "felt strong,
+good session" never costs an agent call.
+
+**The UI is display-only.** Gone from `src/client/today-session-feedback-client.ts`: the "Report
+pain" composer, the "Choose movement" dropdown, the Pain-free/Pain-present pair, the "It returned"
+recurrence form, and — from `today-cards-client.ts` — the per-exercise Movement check, its
+stop-marker machinery and the per-session `loadSymptomMovements` relevance read. What remains is the
+PAIN & INJURY header with its active count, each watch rendered in the athlete's OWN verbatim words
+(escaped; falling back to `area_text` for legacy rows), the Watching / "Older note · unconfirmed"
+badges, the honest evidence line, one-tap **Mark resolved**, the resolved-history disclosure, and a
+quiet hint: *"Mention pain in your session notes or chat — Cairn picks it up."* The server endpoints
+and MCP tools all stay — they are the agent/API surface; what was removed is asking a HUMAN to fill
+them in. `report_training_symptom` (REST + MCP) gained `report_text` and `scope`.
+
+---
+
 ## 2026-07-30 — the presentation round: docs hold living references only
 
 Six commits, no migration, no service-worker change — nothing under `public/` moved. Beyond the

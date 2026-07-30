@@ -480,7 +480,12 @@ test("a symptom that has gone stale stops gating comparability but stays visible
 
   const outcome = getDailySessionOutcome(DATE);
   const squat = outcome.facts.dose_evidence.find((dose) => dose.exercise === "Back Squat");
-  assert.equal(repo.getTrainingSymptom(symptom.id, DATE).freshness, "stale_needs_recheck");
+  // The watch itself is LIVE — they squatted today, and quiet training is what keeps
+  // a note from dying of neglect now. What has gone quiet is their own account, and
+  // that is what decides whether it holds an outcome out of the comparable set.
+  assert.equal(repo.getTrainingSymptom(symptom.id, DATE).freshness, "acute_movement_brake");
+  assert.equal(repo.getTrainingSymptom(symptom.id, DATE).stated_freshness, "stale_needs_recheck");
+  assert.equal(repo.getTrainingSymptom(symptom.id, DATE).last_stated_on, "2031-07-01");
   assert.equal(repo.getTrainingSymptom(symptom.id, DATE).status, "active", "it is never auto-resolved");
   assert.deepEqual(squat.symptom_event_ids, [symptom.id], "still attached as context");
   assert.equal(squat.relevant_symptom, false, "but no longer a brake");

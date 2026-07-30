@@ -6,6 +6,15 @@
 // arbitration index that emits plain-language posture/reasons (never a score).
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { SENSOR_MAX_AGE_DAYS } from "./sensor-freshness.js";
+import type { SensorCadence } from "./sensor-cadence.js";
+import {
+  dominantSensorCadence,
+  wearAbsenceEvidence,
+  wearAbsenceView,
+  WEAR_ABSENCE_SAMPLE_AGE,
+  WEAR_ABSENCE_SENTENCES,
+  type WearAbsenceView,
+} from "./wear-pattern-voice.js";
 import { joinList } from "./shared.js";
 
 export type SignalDimension =
@@ -539,6 +548,33 @@ export const SIGNAL_VOICE = {
       "Today's signals leave the planned day alone.",
     ],
   },
+  // The SHAPE of the silence, when the wearable's own cadence explains it.
+  //
+  // `unvoiced_open` above says the honest thing about an empty morning ("not
+  // enough fresh signal, go by feel") but says it identically whether the watch
+  // has been on the wrist every night for a year and stopped, or is worn for runs
+  // and the occasional night and simply wasn't worn last night. Those are
+  // different facts, and only one of them is worth mentioning. The words live in
+  // wear-pattern-voice.ts, beside the same sets the Brief's contributor row and
+  // the next step speak from, so absence has ONE vocabulary rather than one per
+  // surface — which is exactly how "no wearable data synced yet" ended up on the
+  // screen of an athlete whose watch was working perfectly.
+  //
+  // `{}` is the plain-words age of the last reading ("about 3 weeks ago").
+  wear_absence_episodic: {
+    concept: /\bwatch\b/i,
+    sample: WEAR_ABSENCE_SAMPLE_AGE,
+    variants: WEAR_ABSENCE_SENTENCES.episodic,
+  },
+  wear_absence_lapsed: {
+    concept: /\b(?:watch|reading)\b/i,
+    sample: WEAR_ABSENCE_SAMPLE_AGE,
+    variants: WEAR_ABSENCE_SENTENCES.lapsed,
+  },
+  wear_absence_unworn: {
+    concept: /\b(?:wearable|watch)\b/i,
+    variants: WEAR_ABSENCE_SENTENCES.unworn,
+  },
   // NOTE: there is deliberately no voice for the BACKED day here. The one athlete-facing
   // surface that speaks on a backed morning is the Brief's `why`, and it already owns a
   // dedicated, grammar-registered set for exactly that state (TRAIN_PUSH_WHY in
@@ -718,7 +754,30 @@ function bearingEvidence<T extends { context_only?: boolean }>(items: T[]): T[] 
   return items.filter((item) => !item.context_only);
 }
 
-function dimensionState(dimension: SignalDimension, evidence: ResolvedSignalEvidence[]): SignalDimensionState {
+// The voice key for a shape of wearable silence. Kept beside the shapes it maps so
+// a new shape is a compile error here rather than a silent fall-through to a
+// sentence written about a different situation.
+const WEAR_ABSENCE_VOICE_KEY: Record<WearAbsenceView["shape"], SignalVoiceKey> = {
+  episodic: "wear_absence_episodic",
+  lapsed: "wear_absence_lapsed",
+  unworn: "wear_absence_unworn",
+};
+
+function wearAbsenceVoiceRef(absence: WearAbsenceView | null): SignalVoiceRef {
+  const key = WEAR_ABSENCE_VOICE_KEY[absence?.shape ?? "unworn"];
+  const subject = absence?.age_phrase ?? undefined;
+  return subject ? { key, subject } : { key };
+}
+
+function dimensionState(
+  dimension: SignalDimension,
+  evidence: ResolvedSignalEvidence[],
+  // The wear cadence behind `recovery_capacity`, when the caller knows it. Every
+  // other dimension ignores it: a life-capacity gap is not a sensor gap, and the
+  // one thing worse than a bare "no current evidence" is a confident sentence
+  // about a watch that has nothing to do with the missing datum.
+  sensorAbsence: WearAbsenceView | null = null
+): SignalDimensionState {
   const all = evidence.filter((item) => item.dimension === dimension);
   // `all` still feeds coverage, provenance and `evidence` — a context-only observation
   // is meant to be visible. Everything below that produces a JUDGEMENT (status,
@@ -784,14 +843,33 @@ function dimensionState(dimension: SignalDimension, evidence: ResolvedSignalEvid
     })),
     evidence: all,
     conflicts,
+    // MACHINE REGISTER (see the note at the top of the athlete-voice section): this
+    // is evidence prose for renderSignalState, the coach context and the provenance
+    // trail. The cadence clause is here because "No current evidence in this
+    // dimension." is the least useful true sentence available — the agent reading it
+    // cannot tell a watch that broke on Tuesday from one that is worn twice a month,
+    // and it filled that gap with the assumption the deterministic layer had never
+    // stated. Dated, counted, patterned: same claim, something to reason from.
     reason:
       strongest?.summary ??
-      (bearing.length
-        ? "Only stale evidence is available, so this stays open."
-        : "No current evidence in this dimension."),
-    voice: strongest?.voice ?? {
-      key: status === "constrained" || status === "watch" ? "unvoiced_protect" : "unvoiced_clear",
-    },
+      (dimension === "recovery_capacity" && sensorAbsence
+        ? bearing.length
+          ? `Only stale evidence is available, so this stays open. ${wearAbsenceEvidence(sensorAbsence)}`
+          : wearAbsenceEvidence(sensorAbsence)
+        : bearing.length
+          ? "Only stale evidence is available, so this stays open."
+          : "No current evidence in this dimension."),
+    voice:
+      strongest?.voice ??
+      // An evidence-free recovery dimension speaks the shape of its own silence
+      // instead of the generic clear/protect floor. Only when nothing at all is
+      // bearing: the moment one reading or one check-in lands, that evidence has
+      // its own words and they are the truer ones.
+      (dimension === "recovery_capacity" && sensorAbsence && !bearing.length
+        ? wearAbsenceVoiceRef(sensorAbsence)
+        : {
+            key: status === "constrained" || status === "watch" ? "unvoiced_protect" : "unvoiced_clear",
+          }),
   };
 }
 
@@ -959,10 +1037,25 @@ function supportState(
   };
 }
 
-export function buildUnifiedSignalState(date: string, observations: SignalObservation[]): UnifiedSignalState {
+export interface UnifiedSignalStateOptions {
+  // How the athlete actually wears the sensor behind the recovery observations —
+  // `classifyWearPattern`'s output, or the `cadence` object getRecoverySummary
+  // hangs off its quality entries. OPTIONAL on purpose: a caller assembling raw
+  // observations knows nothing about wear habits, and must keep getting exactly
+  // the state it gets today. Supplying it changes only how ABSENCE is worded; it
+  // never reaches a status, a confidence, a directive or a posture.
+  sensorCadence?: Partial<SensorCadence> | null;
+}
+
+export function buildUnifiedSignalState(
+  date: string,
+  observations: SignalObservation[],
+  options: UnifiedSignalStateOptions = {}
+): UnifiedSignalState {
   const resolved = resolveSignalObservations(date, observations);
+  const sensorAbsence = options.sensorCadence ? wearAbsenceView(options.sensorCadence, date) : null;
   const dimensions = Object.fromEntries(
-    DIMENSIONS.map((dimension) => [dimension, dimensionState(dimension, resolved)])
+    DIMENSIONS.map((dimension) => [dimension, dimensionState(dimension, resolved, sensorAbsence)])
   ) as Record<SignalDimension, SignalDimensionState>;
   const action = actionState(dimensions);
   const directives = planningDirectives(dimensions);
@@ -973,20 +1066,34 @@ export function buildUnifiedSignalState(date: string, observations: SignalObserv
   const reason =
     reasons[0] ??
     (action.readiness === "unknown"
-      ? "There is not enough fresh signal to call recovery either way; use how you feel and keep the default flexible."
+      ? // Machine register, and the cadence clause is APPENDED rather than
+        // substituted: the first sentence is the ruling (thin signal, stay
+        // flexible) and every consumer that matches on it keeps matching. What
+        // follows is the evidence for WHY it is thin, which the agent previously
+        // had to guess at.
+        `There is not enough fresh signal to call recovery either way; use how you feel and keep the default flexible.${
+          sensorAbsence ? ` ${wearAbsenceEvidence(sensorAbsence)}` : ""
+        }`
       : "The current signals leave room for the planned day.");
   // The athlete-facing voice of the SAME evidence `reason` speaks for. When that
   // evidence carries no voice of its own — a caller assembling raw observations, or a
   // posture reached with no active evidence at all — it falls back to a floor written
   // for the athlete, never to the machine-facing summary above.
-  const voice: SignalVoiceRef = action.evidence[0]?.voice ?? {
-    key:
-      action.readiness === "unknown"
-        ? "unvoiced_open"
-        : action.posture === "rest" || action.posture === "easy" || action.posture === "modify"
-          ? "unvoiced_protect"
-          : "unvoiced_clear",
-  };
+  const voice: SignalVoiceRef =
+    action.evidence[0]?.voice ??
+    // An evidence-free morning where the wear cadence is KNOWN says which kind of
+    // quiet this is. Without a cadence it stays on `unvoiced_open`, which is the
+    // honest thing to say when we cannot tell.
+    (action.readiness === "unknown" && sensorAbsence
+      ? wearAbsenceVoiceRef(sensorAbsence)
+      : {
+          key:
+            action.readiness === "unknown"
+              ? "unvoiced_open"
+              : action.posture === "rest" || action.posture === "easy" || action.posture === "modify"
+                ? "unvoiced_protect"
+                : "unvoiced_clear",
+        });
   const sourceDimensions = [...new Set(action.evidence.map((item) => item.dimension))];
   const actionConfidence: SignalConfidence =
     sourceDimensions.length === 0
@@ -1618,5 +1725,10 @@ export function planningSignalState(input: {
       )
     );
 
-  return buildUnifiedSignalState(date, observations);
+  // The wear cadence rides in from the same `quality` map every recovery
+  // observation above was built from (Track C hangs a `cadence` on each delta
+  // field). It decides nothing — it only lets an absent dimension say WHICH kind
+  // of quiet it is. A recovery snapshot from before that field existed simply
+  // yields null, and the state is byte-identical to today's.
+  return buildUnifiedSignalState(date, observations, { sensorCadence: dominantSensorCadence(quality) });
 }

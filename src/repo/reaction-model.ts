@@ -30,6 +30,11 @@ import { addDaysISO, localDateISO, metricLabel } from "./shared.js";
 // pattern coach↔intelligence↔propagation already rely on): the acute-marker classifier
 // (with its chronic-cluster guard) and the prior-week training-load helpers.
 import { isAcuteMarker } from "./propagation.js";
+// Pure, DB-free, clock-free — the shared wear-cadence classifier and the one
+// vocabulary for what a sensor's silence means. Both sit below this module.
+import { CADENCE_WINDOW_DAYS, classifyWearPattern, type SensorCadence } from "./sensor-cadence.js";
+import { sensorAgeDays } from "./sensor-freshness.js";
+import { wearAbsenceView } from "./wear-pattern-voice.js";
 import { weeklyTonnage, weeklyKm } from "./program-state.js";
 // The metric key only — read-adherence sits below this module in the graph (db,
 // brain-decisions, profile, shared, training-intent, training-read), so nothing
@@ -117,10 +122,42 @@ function latestRecoveryDate(): { date: string | null; age_days: number | null } 
     const cands = [g?.d, o?.d].filter((x) => x && String(x).trim()) as string[];
     if (!cands.length) return { date: null, age_days: null };
     const latest = cands.sort().slice(-1)[0];
-    const age = Math.round((Date.now() - Date.parse(latest + "T00:00:00Z")) / 864e5);
-    return { date: latest, age_days: Number.isFinite(age) ? Math.max(0, age) : null };
+    // DAY-KEYED, via the one age helper. This used to be `Date.now()` against the
+    // reading's UTC midnight, which is an instant measured against a day key: past
+    // midday in a western zone it rounded a 20-day-old night up to 21, so the gap
+    // this pattern reports drifted a day away from every other age in the brain
+    // (and away from the cadence clause now sitting in the same sentence).
+    const age = sensorAgeDays(latest, localDateISO());
+    return { date: latest, age_days: age == null ? null : Math.max(0, age) };
   } catch {
     return { date: null, age_days: null };
+  }
+}
+
+// How the athlete actually wears the sensor, from the same two tables the gap
+// above is measured against. Deliberately re-queried here rather than taken from
+// getRecoverySummary: this module sits BELOW coach.ts in the graph (see the cycle
+// note at the top) and classifyWearPattern is pure, so the dates are the only
+// thing that has to travel.
+function recoveryWearCadence(today: string): SensorCadence {
+  try {
+    const since = addDaysISO(today, -(CADENCE_WINDOW_DAYS - 1)) ?? today;
+    const rows = db
+      .prepare(
+        `SELECT date FROM garmin_daily_metrics
+          WHERE date >= ? AND date <= ? AND ((sleep_min IS NOT NULL AND sleep_min > 0) OR hrv_ms IS NOT NULL)
+         UNION
+         SELECT date FROM daily_metrics
+          WHERE date >= ? AND date <= ? AND ((sleep_min IS NOT NULL AND sleep_min > 0) OR hrv_ms IS NOT NULL)`
+      )
+      .all(since, today, since, today) as { date: string }[];
+    return classifyWearPattern(
+      rows.map((row) => String(row.date)),
+      today,
+      CADENCE_WINDOW_DAYS
+    );
+  } catch {
+    return classifyWearPattern([], today, CADENCE_WINDOW_DAYS);
   }
 }
 
@@ -552,6 +589,14 @@ function volumeSoreness(): ReactionPattern | null {
 // ---------------------------------------------------------------------------
 // 6) data_gap — FIRST-CLASS: when synced sleep/HRV is stale or absent, say so,
 //    so the coach never fabricates a recovery read it can't actually see.
+//
+//    WHY it is dark matters as much as that it is. This pattern used to report
+//    one cause — the signal "has gone quiet" — for two unrelated situations: a
+//    daily wearer whose series stopped, and an athlete who wears the watch for
+//    runs and the odd baseline night, for whom a five-day gap is not a gap at
+//    all. The agent read the same sentence in both cases and reasoned about a
+//    sync problem that did not exist. The cadence now travels with the gap, so
+//    an occasional series is attributed to SAMPLING rather than to a fault.
 // ---------------------------------------------------------------------------
 function dataGap(): ReactionPattern | null {
   const { date, age_days } = latestRecoveryDate();
@@ -569,15 +614,36 @@ function dataGap(): ReactionPattern | null {
     };
   }
   if (age_days > 2) {
+    const today = localDateISO();
+    const cadence = recoveryWearCadence(today);
+    const view = wearAbsenceView(cadence, today);
+    // `episodic` is the spot-check / intermittent wearer. Same fact, different
+    // cause — and the cause is what the agent was getting wrong.
+    const statement =
+      view.shape === "episodic"
+        ? `Sleep/HRV readings are occasional by pattern rather than nightly (${view.readings} in the last ${view.window_days} days${
+            view.median_gap_days != null && view.median_gap_days > 0
+              ? `, roughly ${view.median_gap_days} days apart`
+              : ""
+          }); the last one is about ${age_days} days old, so today's read can't lean on a current one. This is the sampling cadence, not a broken sync.`
+        : `Your last synced sleep/HRV is about ${age_days} days old — recovery signal has gone quiet, so today's read can't lean on it.`;
     return {
       id: "data_gap",
       kind: "data_gap",
-      statement: `Your last synced sleep/HRV is about ${age_days} days old — recovery signal has gone quiet, so today's read can't lean on it.`,
+      statement,
       confidence: "observed",
       evidence_n: 0,
       domains: ["recovery"],
       last_observed: date,
-      params: { age_days },
+      // INTERNAL only, like every `params` blob here: the coverage numbers the
+      // statement above already says in words, so an ordering consumer does not
+      // have to parse prose.
+      params: {
+        age_days,
+        readings: view.readings,
+        window_days: view.window_days,
+        ...(view.median_gap_days != null ? { median_gap_days: view.median_gap_days } : {}),
+      },
     };
   }
   return null; // fresh data → nothing to flag

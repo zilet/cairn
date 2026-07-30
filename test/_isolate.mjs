@@ -27,6 +27,18 @@ const tables = db
   .all()
   .map((row) => row.name);
 const wipes = tables.map((name) => db.prepare(`DELETE FROM ${name}`));
+// AUTOINCREMENT tables keep their high-water mark in sqlite_sequence, and a
+// `DELETE FROM <t>` on an AUTOINCREMENT table does NOT touch it — that persistence
+// is the whole point of AUTOINCREMENT (ids never get reused within a live DB). But
+// this harness gives one worker's tests a SHARED DB, so without resetting it here a
+// test that asserts on an id's literal value (e.g. a variant-set key keyed by
+// `decision.id`) silently depends on how many rows earlier files in the same shard
+// inserted before this test ever ran — passes standalone, fails or flips inside the
+// shard depending on file order. `sqlite_sequence` only exists once at least one
+// AUTOINCREMENT table has been created; guard so a schema with none doesn't throw.
+const hasSqliteSequence = !!db
+  .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sqlite_sequence'")
+  .get();
 
 beforeEach(() => {
   // Single transaction with deferred FK checks: intermediate deletes may briefly
@@ -37,6 +49,11 @@ beforeEach(() => {
   db.exec("PRAGMA defer_foreign_keys = ON");
   try {
     for (const wipe of wipes) wipe.run();
+    // Reset every AUTOINCREMENT counter back to zero right after the wipe, in the
+    // same transaction, so id-dependent assertions are independent of shard order
+    // and shard count — same guarantee the table wipe above already gives every
+    // other kind of state.
+    if (hasSqliteSequence) db.exec("DELETE FROM sqlite_sequence");
     db.exec("COMMIT");
   } catch (err) {
     db.exec("ROLLBACK");

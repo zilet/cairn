@@ -1837,6 +1837,32 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 88,
+    name: "symptom-scope-and-inferred-evidence",
+    // Two columns, one round. `symptom_reports` is a brand-new table so it needs no
+    // entry here (db.ts's CREATE TABLE IF NOT EXISTS covers fresh and existing DBs
+    // alike); these two ALTERs are the half that a CREATE can never reach.
+    //
+    // scope: every row written before today meant 'area' — a named place that may
+    // load a lift — so the default is not a guess, it is what those rows already say.
+    // 'systemic' is the new thing an athlete could not previously express at all.
+    //
+    // evidence: every observation on record came from an athlete tapping a button, so
+    // 'stated' is likewise the honest backfill. 'inferred' is reserved for the quiet
+    // tolerated exposures the session-finish pass now records, and the distinction is
+    // load-bearing — silence is not confirmation, and the surfaces must be able to say
+    // so. Each ALTER guards itself, so a fresh DB (where db.ts already created both
+    // columns) and a second pass are both clean no-ops.
+    up: (db) => {
+      addColumn(db, "training_symptom_events", "scope TEXT NOT NULL DEFAULT 'area' CHECK (scope IN ('area','systemic'))");
+      addColumn(
+        db,
+        "movement_tolerance_observations",
+        "evidence TEXT NOT NULL DEFAULT 'stated' CHECK (evidence IN ('stated','inferred'))"
+      );
+    },
+  },
 ];
 
 export function runMigrations(db: DatabaseSync) {

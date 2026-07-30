@@ -98,7 +98,11 @@ healthMetricsRouter.get("/recovery", (req, res) =>
 );
 
 // Personal-baseline recovery bands: today's HRV / resting HR / sleep vs the
-// athlete's own last-28-day range, each a plain-language phrase (no score). A
-// dimension without enough history is simply absent; `{ dimensions: [] }` when
-// there's nothing to say. Drives the quiet band rows under the Today wearable card.
+// athlete's own range — their newest 28 readings from within the last 180 days,
+// so an episodic wearer has one too — each a plain-language phrase (no score). A
+// dimension without enough readings is simply absent; `{ dimensions: [] }` when
+// there's nothing to say. When the newest reading is too old to speak for today,
+// `position`/`current` are null: the band still renders, dotless, with its
+// provenance (`readings`, `span_days`, `last_reading_date`) so the client can date
+// it honestly. Drives the quiet band rows under the Today wearable card.
 healthMetricsRouter.get("/recovery/baseline", (_req, res) => res.json(getRecoveryBaselineRead()));

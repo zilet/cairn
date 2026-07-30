@@ -3,13 +3,37 @@ import { painAreaLoadsExercise } from "./pain-relevance.js";
 import { requestDailyOutcomeReconciliation } from "./reconciliation-hooks.js";
 import { daysBetweenISO, localDateISO } from "./shared.js";
 import { extractSymptomAreaLabel, normalizeSymptomArea, symptomAreaKey } from "./symptom-area.js";
+import {
+  hasSymptomReportsOn,
+  latestSymptomReportDateForEvent,
+  latestSymptomReportForEvent,
+  recordSymptomReport,
+} from "./symptom-reports.js";
 
 export type SymptomFreshness = "acute_movement_brake" | "hold_easy_recheck" | "stale_needs_recheck";
+
+/**
+ * What an event is ABOUT. 'area' names a place and may drive movement relevance;
+ * 'systemic' ("everything feels off, not one movement") names none and therefore
+ * must never load a lift — it is a visible watch and a freshness anchor only.
+ */
+export type SymptomScope = "area" | "systemic";
+
+/** How a tolerance observation was obtained. See db.ts's column comment. */
+export type ToleranceEvidence = "stated" | "inferred";
 
 export interface MovementToleranceReadiness {
   movement_key: string;
   movement_name: string;
   pain_free_exposures: number;
+  /** How many of those exposures the athlete actually spoke for. */
+  stated_pain_free_exposures: number;
+  /**
+   * Every pain-free exposure on record for this movement came from training it
+   * quietly — real evidence, but nobody has confirmed it. Surfaces MUST say so
+   * rather than letting silence read as a clearance.
+   */
+  inferred_only: boolean;
   trial_ready: boolean;
   last_observed_on: string;
 }
@@ -18,7 +42,13 @@ export interface TrainingSymptomLifecycle {
   id: number;
   source_session_id: number | null;
   source_kind: string;
+  /** The SHORT derived display label. The athlete's words live in `report_text`. */
   area_text: string;
+  /**
+   * The athlete's own latest words for this watch, verbatim — null for a legacy row
+   * written before words were kept, where `area_text` is all there is.
+   */
+  report_text: string | null;
   status: "active" | "resolved";
   onset_on: string;
   last_reported_on: string;
@@ -26,8 +56,27 @@ export interface TrainingSymptomLifecycle {
   recurrence_count: number;
   evidence_epoch: number;
   legacy_unconfirmed: boolean;
+  /**
+   * How live the watch is. Refreshed by ANY evidence — the athlete saying something,
+   * or simply training the movement — so a watch they train around daily no longer
+   * decays to "stale" for want of a button press.
+   */
   freshness: SymptomFreshness;
-  scope: "movement_only";
+  /**
+   * The last day the ATHLETE actually said something about this. Equal to
+   * `last_reported_on` unless quiet training has since refreshed the watch.
+   */
+  last_stated_on: string;
+  /**
+   * How current their own ACCOUNT is — the ladder that means "does this need a
+   * recheck". Silence is not a statement, so training through a watch cannot make
+   * this fresher. Everything that speaks about acuity, or holds a training outcome
+   * out of the comparable set, must read THIS rather than `freshness`; otherwise one
+   * open note plus a training habit makes every verdict inconclusive forever, which
+   * is a bug this codebase has already shipped once.
+   */
+  stated_freshness: SymptomFreshness;
+  scope: SymptomScope;
   relevant_pain_free_exposures: number;
   trial_ready: boolean;
   trial_ready_scope: "movement";
@@ -44,6 +93,8 @@ export interface MovementToleranceInput {
   observed_on?: string;
   session_id?: number | null;
   pain_free: boolean | null;
+  /** Defaults to 'stated'. Only the session-finish pass writes 'inferred'. */
+  evidence?: ToleranceEvidence;
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -55,6 +106,10 @@ function validDate(value: unknown, fallback = localDateISO()): string {
     throw new Error("date must be a real YYYY-MM-DD");
   }
   return date;
+}
+
+export function eventScope(value: unknown): SymptomScope {
+  return String(value ?? "area") === "systemic" ? "systemic" : "area";
 }
 
 function movementKey(name: string, exerciseId: number | null): string {
@@ -103,7 +158,13 @@ function resolveMovementIdentity(
  */
 export function symptomGatesComparability(event: TrainingSymptomLifecycle): boolean {
   if (event.legacy_unconfirmed) return false;
-  return event.freshness === "acute_movement_brake" || event.freshness === "hold_easy_recheck";
+  // STATED freshness, deliberately. A watch stays live off quiet training now, and
+  // if that also counted as a current confirmation then an athlete who trains around
+  // an open note would hold every outcome out of the comparable set indefinitely —
+  // the exact "no verdict can ever be reached" failure a previous round dug out of
+  // live data. Training it and saying nothing is, if anything, evidence the outcome
+  // IS comparable.
+  return event.stated_freshness === "acute_movement_brake" || event.stated_freshness === "hold_easy_recheck";
 }
 
 function freshness(lastReportedOn: string, on: string): SymptomFreshness {
@@ -153,6 +214,36 @@ export function latestTrainingSymptomEpisode(
   return latestEpisodeAt(Number(id), validDate(on));
 }
 
+/**
+ * The last day the ATHLETE said something about this watch: their own words, or an
+ * observation they stated. Onset counts — opening the record was them speaking.
+ *
+ * With no inferred evidence on file this is exactly `last_reported_on`, so every
+ * record written before the quiet-exposure lane behaves byte-identically to before.
+ * Only once silence has moved `last_reported_on` do the two diverge, which is the
+ * one case where conflating them would be a lie.
+ */
+function lastStatedOn(eventId: number, onsetOn: string, lastReportedOn: string, readOn: string): string {
+  const inferred = db
+    .prepare(
+      `SELECT 1 FROM movement_tolerance_observations
+       WHERE symptom_event_id = ? AND evidence = 'inferred' AND observed_on <= ? LIMIT 1`
+    )
+    .get(eventId, readOn);
+  if (!inferred) return lastReportedOn;
+  const spoken = latestSymptomReportDateForEvent(eventId, readOn);
+  const observed = db
+    .prepare(
+      `SELECT MAX(observed_on) AS latest FROM movement_tolerance_observations
+       WHERE symptom_event_id = ? AND evidence = 'stated' AND observed_on <= ?`
+    )
+    .get(eventId, readOn) as any;
+  return [onsetOn, spoken ?? "", observed?.latest == null ? "" : String(observed.latest)]
+    .filter(Boolean)
+    .sort()
+    .pop()!;
+}
+
 function hydrate(row: any, on = localDateISO()): TrainingSymptomLifecycle | null {
   if (!row) return null;
   const readOn = validDate(on);
@@ -160,7 +251,7 @@ function hydrate(row: any, on = localDateISO()): TrainingSymptomLifecycle | null
   const activeOn = String(row.onset_on) <= readOn && (resolvedOn == null || resolvedOn > readOn);
   const observations = db
     .prepare(
-      `SELECT movement_key, movement_name, session_id, observed_on, outcome, evidence_epoch, id
+      `SELECT movement_key, movement_name, session_id, observed_on, outcome, evidence, evidence_epoch, id
        FROM movement_tolerance_observations
        WHERE symptom_event_id = ? AND relevant = 1 AND evidence_epoch = ? AND observed_on <= ?
        ORDER BY observed_on, id`
@@ -173,6 +264,7 @@ function hydrate(row: any, on = localDateISO()): TrainingSymptomLifecycle | null
       movement_name: string;
       seen: Set<string>;
       pain_free_exposures: number;
+      stated_pain_free_exposures: number;
       last_observed_on: string;
     }
   >();
@@ -182,6 +274,7 @@ function hydrate(row: any, on = localDateISO()): TrainingSymptomLifecycle | null
       for (const group of groups.values()) {
         group.seen.clear();
         group.pain_free_exposures = 0;
+        group.stated_pain_free_exposures = 0;
         group.last_observed_on = String(observation.observed_on);
       }
       continue;
@@ -191,6 +284,7 @@ function hydrate(row: any, on = localDateISO()): TrainingSymptomLifecycle | null
       movement_name: String(observation.movement_name),
       seen: new Set<string>(),
       pain_free_exposures: 0,
+      stated_pain_free_exposures: 0,
       last_observed_on: String(observation.observed_on),
     };
     group.last_observed_on = String(observation.observed_on);
@@ -199,12 +293,14 @@ function hydrate(row: any, on = localDateISO()): TrainingSymptomLifecycle | null
       // movements retain their own independent exposure history.
       group.seen.clear();
       group.pain_free_exposures = 0;
+      group.stated_pain_free_exposures = 0;
     } else {
       const exposure =
         observation.session_id == null ? `date:${observation.observed_on}` : `session:${observation.session_id}`;
       if (!group.seen.has(exposure)) {
         group.seen.add(exposure);
         group.pain_free_exposures++;
+        if (String(observation.evidence ?? "stated") !== "inferred") group.stated_pain_free_exposures++;
       }
     }
     groups.set(key, group);
@@ -213,15 +309,23 @@ function hydrate(row: any, on = localDateISO()): TrainingSymptomLifecycle | null
     movement_key: group.movement_key,
     movement_name: group.movement_name,
     pain_free_exposures: group.pain_free_exposures,
+    stated_pain_free_exposures: group.stated_pain_free_exposures,
+    // Trial readiness still turns on two clean exposures — training the movement
+    // without incident IS evidence. What changes is that the surface can no longer
+    // describe an unspoken week as if the athlete had confirmed it.
+    inferred_only: group.pain_free_exposures > 0 && group.stated_pain_free_exposures === 0,
     trial_ready: group.pain_free_exposures >= 2,
     last_observed_on: group.last_observed_on,
   }));
   const painFree = movementReadiness.reduce((sum, movement) => sum + movement.pain_free_exposures, 0);
+  const lastReportedOn = String(row.last_reported_on);
+  const statedOn = lastStatedOn(Number(row.id), String(row.onset_on), lastReportedOn, readOn);
   return {
     id: Number(row.id),
     source_session_id: row.source_session_id == null ? null : Number(row.source_session_id),
     source_kind: String(row.source_kind),
     area_text: String(row.area_text),
+    report_text: latestSymptomReportForEvent(Number(row.id))?.text ?? null,
     status: activeOn ? "active" : "resolved",
     onset_on: String(row.onset_on),
     last_reported_on: String(row.last_reported_on),
@@ -229,8 +333,10 @@ function hydrate(row: any, on = localDateISO()): TrainingSymptomLifecycle | null
     recurrence_count: Number(row.recurrence_count ?? 0),
     evidence_epoch: Number(row.evidence_epoch ?? 1),
     legacy_unconfirmed: Number(row.legacy_unconfirmed) === 1,
-    freshness: freshness(String(row.last_reported_on), readOn),
-    scope: "movement_only",
+    freshness: freshness(lastReportedOn, readOn),
+    last_stated_on: statedOn,
+    stated_freshness: freshness(statedOn, readOn),
+    scope: eventScope(row.scope),
     relevant_pain_free_exposures: painFree,
     trial_ready: activeOn && movementReadiness.some((movement) => movement.trial_ready),
     trial_ready_scope: "movement",
@@ -308,18 +414,55 @@ export function reportTrainingSymptom(input: {
   onset_on?: string;
   source_session_id?: number | null;
   source_kind?: string;
+  /**
+   * The athlete's FULL words, when the caller has them separately from the label.
+   * Defaults to `area_text` — which is exactly the case this whole round exists for:
+   * every surface used to hand a sentence to a field that stores a label.
+   */
+  report_text?: string | null;
+  scope?: SymptomScope;
+  /** Where the verbatim record came from; drives the extraction lane's provenance. */
+  report_source_kind?: "session_note" | "session_feedback" | "chat" | "api";
+  /** Set false when the caller is the extraction lane applying its OWN result. */
+  record_report?: boolean;
 }): TrainingSymptomLifecycle {
   const area = normalizeSymptomArea(input.area_text);
   if (!area) throw new Error("area_text required");
   const onset = validDate(input.onset_on);
   const sourceSessionId = input.source_session_id == null ? null : Number(input.source_session_id);
   const sourceKind = String(input.source_kind ?? "explicit").slice(0, 80);
+  const scope = eventScope(input.scope);
+  // The words FIRST, before anything is derived from them. `area_text` keeps the
+  // short-label contract (pain-relevance runs substring regexes over it, so a
+  // paragraph there loads every lift); the sentence it was cut from is kept whole.
+  const verbatim = input.report_text == null ? input.area_text : input.report_text;
+  const writeReport = (eventId: number | null): void => {
+    if (input.record_report === false) return;
+    recordSymptomReport({
+      text: verbatim,
+      source_kind: input.report_source_kind ?? "api",
+      reported_on: onset,
+      session_id: sourceSessionId,
+      symptom_event_id: eventId,
+    });
+  };
   // One area is ONE open record, whichever surface named it. Matching the normalized
   // label across source_kinds is what keeps an edit ("left knee" -> "outside of left
   // knee") from opening a second row and orphaning the first — and lets an explicit
   // report adopt the legacy import of the same place instead of shadowing it. A
   // repeated delivery of the same report is a retry, not a second symptom; a
   // reappearance AFTER resolution still goes through the dedicated recurrence path.
+  //
+  // Scope is part of the identity: "everything feels off" and "left knee" are two
+  // different watches even if a key ever collided, because one may load a lift and
+  // the other must never.
+  //
+  // For a SYSTEMIC report the scope is the WHOLE identity. It names no place, so the
+  // only thing left to match on is the athlete's phrasing — and "everything feels
+  // off" and "whole body's wrecked" are the same report worded twice. Keying those
+  // apart opened a fresh watch per synonym, none of which could ever be deduped or
+  // aged out. At most one systemic watch is open at a time; a new one records against
+  // it and relabels it to their newest words.
   const key = symptomAreaKey(area);
   const active = db
     .prepare(
@@ -328,8 +471,12 @@ export function reportTrainingSymptom(input: {
        ORDER BY last_reported_on DESC, id DESC`
     )
     .all(onset, onset) as any[];
-  const existing = active.find((row) => symptomAreaKey(row.area_text) === key);
+  const existing = active.find(
+    (row) =>
+      eventScope(row.scope) === scope && (scope === "systemic" || symptomAreaKey(row.area_text) === key)
+  );
   if (existing) {
+    writeReport(Number(existing.id));
     const lastReportedOn = String(existing.last_reported_on);
     // Saying it again on a later day IS current evidence, so recency moves. Tolerance
     // evidence does not: only the explicit recurrence path resets an epoch.
@@ -344,7 +491,11 @@ export function reportTrainingSymptom(input: {
     // being repairable (the seeder's repair is scoped to legacy_unconfirmed = 1). So
     // it takes their real label here, or the import's prose would outlive every path
     // that could have fixed it.
-    const adoptLabel = Number(existing.legacy_unconfirmed) === 1;
+    //
+    // A systemic watch relabels too, for the opposite reason: its label IS the
+    // phrasing, there is no place underneath it to preserve, and the newest words are
+    // the ones the athlete would recognize.
+    const adoptLabel = Number(existing.legacy_unconfirmed) === 1 || scope === "systemic";
     if (reportedOn === lastReportedOn && !adoptLabel) {
       return hydrate(existing, onset)!;
     }
@@ -360,16 +511,18 @@ export function reportTrainingSymptom(input: {
   const result = db
     .prepare(
       `INSERT INTO training_symptom_events
-        (source_session_id, source_kind, area_text, status, onset_on, last_reported_on, legacy_unconfirmed)
-       VALUES (?, ?, ?, 'active', ?, ?, 0)`
+        (source_session_id, source_kind, area_text, status, scope, onset_on, last_reported_on, legacy_unconfirmed)
+       VALUES (?, ?, ?, 'active', ?, ?, ?, 0)`
     )
     .run(
       sourceSessionId,
       sourceKind,
       area,
+      scope,
       onset,
       onset
     );
+  writeReport(Number(result.lastInsertRowid));
   const event = getTrainingSymptom(Number(result.lastInsertRowid), onset)!;
   reconcileTrainingSymptomOutcomeDates(onset);
   return event;
@@ -449,7 +602,7 @@ export function trainingSymptomsForMovements(
     .prepare(
       `SELECT * FROM training_symptom_events
        WHERE onset_on <= ? AND (resolved_on IS NULL OR resolved_on > ?)
-         AND legacy_unconfirmed = 0
+         AND legacy_unconfirmed = 0 AND scope = 'area'
        ORDER BY last_reported_on DESC, id DESC`
     )
     .all(readOn, readOn) as any[];
@@ -465,6 +618,9 @@ export function trainingSymptomsForMovements(
   return events;
 }
 
+// A SYSTEMIC event names no place, so it can never answer "does this load my knee".
+// It is excluded here by scope rather than left to fail the area vocabulary: the
+// exclusion is the contract, not a side effect of the words happening not to match.
 export function activeRelevantTrainingSymptoms(
   on: string,
   exercise: { name?: string | null; muscle_group?: string | null },
@@ -475,12 +631,37 @@ export function activeRelevantTrainingSymptoms(
   const rows = db
     .prepare(
       `SELECT * FROM training_symptom_events
-       WHERE onset_on <= ? AND (resolved_on IS NULL OR resolved_on > ?)
+       WHERE onset_on <= ? AND (resolved_on IS NULL OR resolved_on > ?) AND scope = 'area'
        ORDER BY last_reported_on DESC, id DESC`
     )
     .all(readOn, readOn) as any[];
   return rows
     .filter((row) => painAreaLoadsExercise(String(row.area_text), exercise))
+    .map((row) => hydrate(row, readOn))
+    .filter((event): event is TrainingSymptomLifecycle => event != null);
+}
+
+/**
+ * Active whole-body watches on a date. They drive no movement decision — the
+ * session primer and the coach context surface them so "everything feels off" is
+ * SEEN rather than silently dropped for naming no joint.
+ */
+export function activeSystemicTrainingSymptoms(
+  on: string,
+  opts: { seed_legacy?: boolean } = {}
+): TrainingSymptomLifecycle[] {
+  const readOn = validDate(on);
+  if (opts.seed_legacy !== false) seedLegacyTrainingSymptoms();
+  return (
+    db
+      .prepare(
+        `SELECT * FROM training_symptom_events
+         WHERE onset_on <= ? AND (resolved_on IS NULL OR resolved_on > ?)
+           AND scope = 'systemic' AND legacy_unconfirmed = 0
+         ORDER BY last_reported_on DESC, id DESC`
+      )
+      .all(readOn, readOn) as any[]
+  )
     .map((row) => hydrate(row, readOn))
     .filter((event): event is TrainingSymptomLifecycle => event != null);
 }
@@ -603,9 +784,9 @@ export function recurTrainingSymptom(
         db.prepare(
           `INSERT OR IGNORE INTO movement_tolerance_observations
             (symptom_event_id, session_id, exercise_id, movement_key, movement_name,
-             observed_on, outcome, relevant, evidence_epoch)
+             observed_on, outcome, evidence, relevant, evidence_epoch)
            SELECT ?, session_id, exercise_id, movement_key, movement_name,
-                  observed_on, outcome, relevant, ?
+                  observed_on, outcome, evidence, relevant, ?
              FROM movement_tolerance_observations
             WHERE symptom_event_id = ? AND evidence_epoch = ? AND movement_key != ?`
         ).run(eventId, nextEpoch, existing.id, existing.evidence_epoch, key);
@@ -665,28 +846,48 @@ export function recordMovementTolerance(input: MovementToleranceInput): Training
       : event;
   }
   const key = movementKey(identity.movement_name, identity.exercise_id);
+  const evidence: ToleranceEvidence = input.evidence === "inferred" ? "inferred" : "stated";
+  // Scoped to the CURRENT epoch, like the unique index the insert below relies on.
+  // Without it the upgrade could land on a superseded row — leaving the epoch that
+  // actually counts still marked 'inferred' — and a genuinely new exposure could be
+  // mistaken for one already on record.
   const prior = db
     .prepare(
-      `SELECT 1 FROM movement_tolerance_observations
+      `SELECT id, evidence FROM movement_tolerance_observations
        WHERE symptom_event_id = ? AND session_id IS ? AND movement_key = ?
-         AND observed_on = ? AND outcome = ? LIMIT 1`
+         AND observed_on = ? AND outcome = ? AND evidence_epoch = ? LIMIT 1`
     )
     .get(
       event.id,
       input.session_id == null ? null : Number(input.session_id),
       key,
       observedOn,
-      input.pain_free ? "pain_free" : "pain_present"
-    );
-  if (prior) return event;
+      input.pain_free ? "pain_free" : "pain_present",
+      event.evidence_epoch
+    ) as any;
+  if (prior) {
+    // The exposure is already on record. If it was INFERRED from silence and the
+    // athlete has now actually said it, upgrade in place — otherwise the quiet pass
+    // would permanently swallow the confirmation it was standing in for.
+    if (evidence === "stated" && String(prior.evidence ?? "stated") === "inferred") {
+      db.prepare(`UPDATE movement_tolerance_observations SET evidence = 'stated' WHERE id = ?`).run(
+        Number(prior.id)
+      );
+      return getTrainingSymptom(event.id, observedOn);
+    }
+    return event;
+  }
   const evidenceEpoch = !input.pain_free && relevant ? event.evidence_epoch + 1 : event.evidence_epoch;
   if (!input.pain_free && relevant) {
     db.prepare(
+      // `evidence` must be carried, not defaulted. Omitting it let the column DEFAULT
+      // ('stated') rewrite every inferred exposure as something the athlete said, so
+      // one epoch bump laundered a week of silence into a confirmed clearance.
       `INSERT OR IGNORE INTO movement_tolerance_observations
         (symptom_event_id, session_id, exercise_id, movement_key, movement_name,
-         observed_on, outcome, relevant, evidence_epoch)
+         observed_on, outcome, evidence, relevant, evidence_epoch)
        SELECT symptom_event_id, session_id, exercise_id, movement_key, movement_name,
-              observed_on, outcome, relevant, ?
+              observed_on, outcome, evidence, relevant, ?
          FROM movement_tolerance_observations
         WHERE symptom_event_id = ? AND evidence_epoch = ? AND movement_key != ?`
     ).run(evidenceEpoch, event.id, event.evidence_epoch, key);
@@ -696,8 +897,8 @@ export function recordMovementTolerance(input: MovementToleranceInput): Training
       .prepare(
         `INSERT OR IGNORE INTO movement_tolerance_observations
       (symptom_event_id, session_id, exercise_id, movement_key, movement_name,
-       observed_on, outcome, relevant, evidence_epoch)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       observed_on, outcome, evidence, relevant, evidence_epoch)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         event.id,
@@ -707,6 +908,7 @@ export function recordMovementTolerance(input: MovementToleranceInput): Training
         identity.movement_name,
         observedOn,
         input.pain_free ? "pain_free" : "pain_present",
+        evidence,
         relevant ? 1 : 0,
         evidenceEpoch
       ).changes
@@ -718,7 +920,131 @@ export function recordMovementTolerance(input: MovementToleranceInput): Training
            evidence_epoch = ?, legacy_unconfirmed = 0, updated_at = datetime('now')
        WHERE id = ?`
     ).run(observedOn, evidenceEpoch, event.id);
+  } else if (inserted && evidence === "inferred" && relevant) {
+    // THE POINT OF THE INFERRED LANE. Freshness used to decay on button presses
+    // alone, so a watch the athlete trained around every day died of "staleness" in
+    // a week. Training the movement without incident is current evidence, so it
+    // moves recency — and NOTHING else. No recurrence bump (nothing recurred), and
+    // legacy_unconfirmed is untouched, because silence is not a confirmation.
+    db.prepare(
+      `UPDATE training_symptom_events
+       SET last_reported_on = ?, updated_at = datetime('now')
+       WHERE id = ? AND last_reported_on < ?`
+    ).run(observedOn, event.id, observedOn);
   }
   if (inserted) reconcileTrainingSymptomOutcomeDates(observedOn);
   return getTrainingSymptom(event.id, observedOn);
+}
+
+export interface InferredExposureResult {
+  /** Quiet tolerated exposures recorded on this pass. */
+  observations: number;
+}
+
+/**
+ * Tolerance read off training reality, at session finish.
+ *
+ * The old model asked the athlete to press a button to keep a watch alive, so a
+ * watch they trained around daily went "stale" in seven days of silence while the
+ * evidence was sitting right there in their logged sets. This pass reads that
+ * evidence: for every ACTIVE area watch, every movement worked today that the watch
+ * plausibly loads, with nothing reported as painful on it, becomes a quiet tolerated
+ * exposure — outcome pain_free, evidence 'inferred'.
+ *
+ * What it deliberately does NOT do: claim the athlete said anything. An inferred
+ * exposure moves recency and nothing else, and `inferred_only` travels with it so
+ * every surface can keep saying "tolerated in training — no word from you yet".
+ *
+ * And it reads silence ONLY on a day that was actually silent. A day the athlete said
+ * something about their body is vetoed whole, deterministically, off the stored words
+ * — never off the structure extraction may or may not derive from them later. The
+ * older veto asked `movement_tolerance_observations` for a `pain_present` row, which
+ * exists only once an agentic extraction has succeeded, so with enrichment off, no
+ * agent available, or a rejected payload, "left knee hurt badly on every squat today"
+ * still produced a quiet pain-free exposure for Back Squat on the very same day.
+ *
+ * Idempotent by construction: the unique exposure indexes make a re-finish, a Garmin
+ * re-sync and a manual re-run all no-ops.
+ */
+export function inferTrainingSymptomExposures(sessionId: number, on?: string): InferredExposureResult {
+  const out: InferredExposureResult = { observations: 0 };
+  const session = db.prepare(`SELECT id, date FROM sessions WHERE id = ?`).get(Number(sessionId)) as any;
+  if (!session) return out;
+  const date = validDate(on ?? session.date);
+  // They spoke today. Whatever they said, this day cannot also be read as silence.
+  // Conservative on purpose: a positive body note ("knee felt great") suppresses the
+  // inference too, and that costs nothing — extraction will produce the STATED
+  // pain-free observation, which is strictly better evidence than an inferred one.
+  if (hasSymptomReportsOn(date)) return out;
+  // A working set is one that actually happened: reps put on the bar, or seconds
+  // held. A row with neither is a placeholder, not an exposure.
+  const movements = db
+    .prepare(
+      `SELECT DISTINCT e.id AS id, e.name AS name, e.muscle_group AS muscle_group
+         FROM logged_sets ls JOIN exercises e ON e.id = ls.exercise_id
+        WHERE ls.session_id = ?
+          AND (COALESCE(ls.reps, 0) > 0 OR COALESCE(ls.duration_sec, 0) > 0)
+        ORDER BY e.id`
+    )
+    .all(Number(session.id)) as any[];
+  if (!movements.length) return out;
+
+  const events = db
+    .prepare(
+      `SELECT * FROM training_symptom_events
+       WHERE onset_on <= ? AND (resolved_on IS NULL OR resolved_on > ?)
+       ORDER BY id`
+    )
+    .all(date, date) as any[];
+  if (!events.length) return out;
+
+  // "Something hurt on this movement today" is a veto, wherever it was said — the
+  // day is not a clean exposure for it, for ANY watch.
+  const painful = new Set(
+    (
+      db
+        .prepare(
+          `SELECT DISTINCT movement_key FROM movement_tolerance_observations
+           WHERE observed_on = ? AND outcome = 'pain_present'`
+        )
+        .all(date) as any[]
+    ).map((row) => String(row.movement_key))
+  );
+
+  for (const row of events) {
+    // A systemic watch names no place, so no per-movement row could be honest — and
+    // nothing else here is honest for it either. Refreshing its recency off every
+    // session finish is what kept one open ("everything feels off") permanently
+    // current: it never aged, so it never became stale enough to resolve. Its recency
+    // moves when the athlete SAYS something, like every area watch's does.
+    if (eventScope(row.scope) === "systemic") continue;
+    const candidates = movements.filter(
+      (movement) =>
+        !painful.has(`exercise:${Number(movement.id)}`) &&
+        painAreaLoadsExercise(String(row.area_text), {
+          name: movement.name == null ? null : String(movement.name),
+          muscle_group: movement.muscle_group == null ? null : String(movement.muscle_group),
+        })
+    );
+    if (!candidates.length) continue;
+    // Hydrated once per WATCH, not once per (watch × movement) on each side of every
+    // write: a full hydrate costs a report query plus up to three freshness queries,
+    // and the exposure delta is the same number either way.
+    const before = getTrainingSymptom(Number(row.id), date);
+    for (const movement of candidates) {
+      recordMovementTolerance({
+        symptom_event_id: Number(row.id),
+        movement: String(movement.name),
+        exercise_id: Number(movement.id),
+        observed_on: date,
+        session_id: Number(session.id),
+        pain_free: true,
+        evidence: "inferred",
+      });
+    }
+    const after = getTrainingSymptom(Number(row.id), date);
+    if (!before || !after) continue;
+    out.observations += Math.max(0, after.relevant_pain_free_exposures - before.relevant_pain_free_exposures);
+  }
+  return out;
 }

@@ -532,8 +532,12 @@ export function gatherDailyDecisionSnapshot(
       .map((item: any) => planItemLabel(item));
     return {
       title: `Reported ${area}`.slice(0, 120),
+      // Acuity is a claim about the athlete's own account, so it reads STATED
+      // freshness. A watch kept live by quiet training stays visible as a
+      // soft recheck rather than hardening into a protective constraint that
+      // nobody has restated in weeks.
       constraint_level:
-        event.freshness === "acute_movement_brake" ? ("protective" as const) : ("soft_recheck" as const),
+        event.stated_freshness === "acute_movement_brake" ? ("protective" as const) : ("soft_recheck" as const),
       areas: [area.toLowerCase()],
       exercises: dedupe(affected).slice(0, 12),
     };

@@ -207,7 +207,7 @@ rather than invent a new demoted status. `sensorIsCurrent(signal, readingDate, a
 predicate every gated site now calls; `sensorAgeDays` returns null for a missing/unparseable date,
 and a future-dated reading (a clock problem, not fresh evidence) reads as not current rather than
 being clamped to zero. The bounded-window aggregates elsewhere (`getRecoverySummary`'s 14 days, an
-evaluator's expectation window, `baseline-bands`' 28) were already self-gating — a quiet watch
+evaluator's expectation window) were already self-gating — a quiet watch
 empties their window and the read goes inconclusive on its own. The dangerous shape was the other
 one: an unbounded "give me the newest row" lookup, which happily returned a fortnight-old night as
 though it were last night. Wearable markers (VO2max, resting HR, HRV, read as trending series in
@@ -216,12 +216,53 @@ points — PLUS this recency bound, which labs don't need: a series whose newest
 reports no direction and earns no `prioritizeMarkers` trajectory boost; `stale`/`age_days` ride the
 DTO so a surface COULD say when a marker was last actually measured, though nothing renders them
 yet. Recovery bands drop their present-tense dot rather than draw it from a stale reading while the
-28-day baseline behind them stays whole; acute training load is gated for the first time; and the
+baseline behind them stays whole — and, being sample-anchored (next paragraph), they are the one
+aggregate here that is deliberately NOT self-gating, so this bound is the only thing standing between
+a four-month-old reading and today's dot; acute training load is gated for the first time; and the
 coach prompt stops printing a stale point-in-time reading beside today's labelled averages (the
 `avg_*` figures are untouched — those are windows, not points). `day-read.ts`'s two hand-rolled age
 checks and `signal-state.ts`'s inherited default now resolve through this one table — the sleep
 bound moved 3→2 days to match the bound the Brief itself has always used, closing a seam where the
 signal state was voicing a night the Brief had already dropped.
+
+**Personal-baseline recovery bands are SAMPLE-anchored, and the band outlives its dot.**
+`src/repo/baseline-bands.ts` reads today's HRV / resting HR / sleep against the athlete's own range
+(`GET /api/recovery/baseline` → the quiet band rows under the Today wearable card). A dimension's
+sample is its newest `RECOVERY_BASELINE_MAX_POINTS` (28) readings taken no further back than
+`RECOVERY_BASELINE_LOOKBACK_DAYS` (180), selected PER FIELD, with the floor still
+`RECOVERY_BASELINE_MIN_POINTS` (10) readings. That is the episodic-wearer fix: a calendar-anchored
+28-day window asked for 10 readings inside 28 days, so somebody who wears the watch for runs and the
+odd baseline night had a real personal range and was shown nothing. A daily wearer is unaffected by
+construction — their newest 28 readings ARE the last 28 days, so the quantiles and track geometry are
+identical to what the calendar window produced. The band and its DOT then have separate lifetimes:
+the dot is a present-tense claim and still answers to `sensorIsCurrent` (stale ⇒ `current`/`position`
+null, never repositioned from the last known value), while the band is durable history and renders
+anyway — dotless, phrased as the range itself ("your usual range") rather than a position in it,
+never `hot` (no dot, no lever), and carrying `readings` / `span_days` / `last_reading_date` so the
+client can annotate it with a calm relative age ("last reading 3 weeks ago"). Discarding a real
+personal range because last night's dot is missing was throwing the durable thing away to protect the
+ephemeral one. `TRAINING_LOAD_MIN_WEEKS` and the training-load band are untouched — that one counts
+logged sets, which do not go stale.
+
+**Absence has a SHAPE, and one vocabulary for saying it.** `src/repo/sensor-cadence.ts` classifies
+how the athlete actually wears the sensor over 90 days (`classifyWearPattern` →
+`continuous | intermittent | spot_check | none`, plus reading count, coverage ratio, last reading date
+and median gap); `getRecoverySummary` hangs that `cadence` object on each delta field's `quality`
+entry. `src/repo/wear-pattern-voice.ts` owns what the product then SAYS, collapsing the pattern into
+three shapes — `episodic` (readings exist, spaced out), `lapsed` (a daily series that stopped),
+`unworn` (nothing on record) — and holding the words for each: variant SETS rotated by
+`pickDayVariant`, in two registers (full sentences for the signal state's voice and the next step's
+`why`; lowercase fragments for the Brief's contributor row), plus `wearAbsenceEvidence` as the
+third-person machine clause. Four sites consume it: the reaction model's `data_gap` (an episodic gap
+is attributed to sampling, not to a malfunction), `next-step`'s `recover:data-gap` (a
+`working_episodic` pattern produces NO step — there is nothing to do, and asking would be push),
+day-read's `signals.recovery_cadence` (which carries the already-rotated athlete lines so the PWA
+never re-invents them), and `signal-state`'s absent-recovery `reason`/`voice`. Two rules bind all of
+it: a cadence may be described but a history may never be invented (`unworn` never gets a date), and
+none of the wording is an ask — the old "connecting a wearable would…" told an athlete whose watch
+works exactly as they use it to change a habit, which is push, not pull. `buildUnifiedSignalState`'s
+cadence argument is OPTIONAL and touches nothing but wording: no status, confidence, directive or
+posture reads it, and absence stays neutral.
 
 **One rich signal state, shared by the Brief and the coach.** `dayPlanningSignalState(date,
 provided?)` (`src/repo/day-read.ts`) is the ONE builder of `UnifiedSignalState` — memoized per
@@ -1314,7 +1355,8 @@ to (a) refine the entry's structured fields and (b) distill genuinely-notable du
 file path** (`buildHealthEnrichPrompt`) — the CLIs can open local files — to extract markers + a
 summary + memory.
 
-- **Kinds**: `'activity' | 'food' | 'health'` (plus `'garmin_strength'`). **Status machine** on
+- **Kinds**: `'activity' | 'food' | 'health'` (plus `'garmin_strength'`, `'exercise'`, `'food_photo'`
+  and `'symptom'` — see "Symptom capture" below). **Status machine** on
   `activities`/`food_notes`/`health_documents` `.enrichment_status`: `pending` → `in_progress` (set
   *before* the agent `await`, so a crash leaves a recoverable marker) → `done`/`failed`/`skipped` (or
   `null` = not applicable). `recoverPendingEnrich()` (called from `server.ts` at boot) re-enqueues
@@ -1353,6 +1395,82 @@ A modern panel like Function Health lists 100+ markers; a weaker model used to c
 
 The per-panel cap is `repo.MAX_MARKERS_PER_PANEL` (250). The chat `log_health` action carries the
 same "no curation" instruction and points big pastes at the Health tab's paste box.
+
+---
+
+## Symptom capture (`src/symptomCapture.ts`, `src/repo/symptom-reports.ts`, `src/repo/training-symptoms.ts`)
+
+**The athlete's words are the record; structure is derived from them, never asked for.** There is no
+pain composer, no movement picker and no pain-free/pain-present pair anywhere in the UI. Pain gets
+reported the way a person reports it — in a session note, in the feedback line, in chat — and an
+agentic pass turns that into the lifecycle rows the training loop reads.
+
+**Four storage facts that trip people up.**
+
+- `training_symptom_events.area_text` is a SHORT DISPLAY LABEL, not the report. `pain-relevance.ts`
+  runs substring regexes over it, so a paragraph there loads nearly every lift and marks every
+  outcome non-comparable — which is why `normalizeSymptomArea` exists and why it must stay. The
+  athlete's actual sentence lives in **`symptom_reports.text`**, verbatim and uncut, written
+  synchronously by `recordSymptomReport()` BEFORE anything is derived. `hydrate()` hands it back as
+  `report_text`; every surface renders that and falls back to `area_text` only for legacy rows.
+- **`scope`** (`'area'` | `'systemic'`) is part of an event's identity. A systemic watch
+  ("everything feels off") names no place, so `activeRelevantTrainingSymptoms` and
+  `trainingSymptomsForMovements` exclude it BY SCOPE — never rely on the area vocabulary failing to
+  match. It still appears in the session primer's watch list and the coachOps fingerprint. For a
+  systemic report scope is the WHOLE identity: an area watch is deduped on `symptomAreaKey`, but
+  "everything feels off" and "whole body's wrecked" are one report worded twice, so **at most one
+  systemic watch is open at a time** and a new one relabels it to their newest words.
+- **One report can belong to several watches.** A sentence naming two places opens two events, and
+  `symptom_reports.symptom_event_id` holds only the first. `symptom_report_events` is the full
+  many-to-many; `attachSymptomReportEvent` writes a link row per event (leaving an attribution
+  already made alone), and both `latestSymptomReportForEvent` and `latestSymptomReportDateForEvent`
+  read the column and the table together. Add a read here and it must span both, or the second watch
+  renders wordless and its `stated_freshness` decays as though the athlete never spoke.
+- **`movement_tolerance_observations.evidence`** separates `'stated'` from `'inferred'`. Silence is
+  not a confirmation, so `inferred_only` travels with every readiness row and the surfaces must word
+  it as *"tolerated in training twice — no word from you yet"*. The column DEFAULTS to `'stated'`, so
+  every `INSERT … SELECT` that carries observations into a new `evidence_epoch` must name `evidence`
+  in BOTH column lists — omitting it silently rewrites a week of silence as a confirmed clearance.
+
+**Freshness has two ladders, and picking the wrong one is a shipped bug.** `finishSession` runs
+`inferTrainingSymptomExposures()`, which records a quiet `pain_free`/`inferred` exposure for each
+movement worked that day that an active AREA watch plausibly loads (idempotent via the unique
+exposure indexes). A systemic watch takes nothing from it — it names no place, so no session can say
+anything about it, and refreshing one on every finish is what kept "everything feels off" permanently
+current and therefore impossible to age out.
+
+**Inference only reads a day that was actually silent.** Two vetoes, and the deterministic one is
+load-bearing: a movement with a `pain_present` row that day is skipped, AND a day carrying ANY
+`symptom_reports` row is skipped whole (`hasSymptomReportsOn`), with `finishSession` skipping the
+pass outright when the note it just stored mentioned the body. The `pain_present` rows exist only
+after an agentic extraction succeeds, so on their own they left "left knee hurt badly on every squat
+today" producing a quiet pain-free exposure for Back Squat on that very day whenever enrichment was
+off, no agent was available or the payload was rejected. A positive body note is suppressed too —
+correct conservatism, since extraction will produce the *stated* pain-free observation instead.
+
+A quiet exposure refreshes
+`last_reported_on`, so `freshness` now means *"is this watch live"* — a watch the athlete trains
+around no longer dies of neglect. It does NOT mean *"how current is their account"*: that is
+**`stated_freshness`** (from `last_stated_on`), and `symptomGatesComparability`,
+`dailyDecisionSnapshot`'s protective-vs-`soft_recheck` level and the primer's recheck wording all
+read it. Conflating them makes one open note plus a training habit hold every training outcome out
+of the comparable set forever. With no inferred evidence on file the two ladders are identical.
+
+**The extraction contract lives in exactly one place**, the same way food capture does:
+`src/symptomCapture.ts` owns the JSON shape, the prompt builder, the cheap `symptomTextMentionsBody()`
+prefilter and the validator. Output is
+`{found, reports:[{quote, area_label, scope, change, movements:[{name, outcome}]}]}`. The model
+**never picks an id** (it echoes an area label; the deterministic side matches through
+`symptomAreaKey`) and **never invents a movement** (it may only name movements from the list it was
+handed; `matchSymptomMovement` re-matches each one). `quote` must appear in the athlete's own text,
+which is what keeps model prose, a score or gate language out of a field rendered as their words.
+Validation is strict — any violation fails the whole payload — because failing is free: the report
+goes `extraction_status = 'failed'` and the words stay stored and on screen. Results apply through
+the EXISTING repo writers only (`reportTrainingSymptom`, `recurTrainingSymptom`,
+`resolveTrainingSymptomByArea`, `recordMovementTolerance`), never raw SQL, so idempotency guards,
+epoch semantics and the proposal-truth snapshot are unchanged. Execution is the `symptom` enrichment
+kind (`processSymptomJob` / `applySymptomExtraction`); the repo reaches the queue through
+`src/repo/symptom-extraction-hooks.ts` rather than importing the engine.
 
 ---
 

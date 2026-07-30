@@ -4,10 +4,6 @@
 type TodayExerciseCardOptions = {
   day?: unknown;
   exModes?: Record<string, unknown> | null | undefined;
-  // Movement names an active, athlete-confirmed symptom actually loads today —
-  // server truth from ONE /training-symptoms?movements= read per session render.
-  // The card carries no copy of the pain→movement map and never guesses.
-  symptomMovements?: Iterable<unknown> | null | undefined;
 };
 
 type TodayExerciseItem = Record<string, unknown>;
@@ -39,15 +35,6 @@ function todayCardsExTimed(
 
 function todayCardsSetChip(set: unknown, index?: number): string {
   return CairnTodaySessionStatus.setChipHtml(set as Record<string, unknown>, index);
-}
-
-function todayCardsSymptomRelevant(movements: Iterable<unknown> | null | undefined, exercise: string): boolean {
-  const want = exercise.trim().toLowerCase();
-  if (!movements || !want) return false;
-  for (const name of movements) {
-    if (todayString(name).trim().toLowerCase() === want) return true;
-  }
-  return false;
 }
 
 const TODAY_START_LIGHT_CUE = /\bstart\s+(?:light|easy|conservative)/i;
@@ -149,16 +136,9 @@ function exerciseCardHtml(
         lastSetLineText: (ls) => CairnTodaySessionSetModel.lastSetLineText(ls, { fmtDur }),
       })
     : "";
-  // The per-card pain flow is not a standing affordance: it appears only where an
-  // active symptom actually loads THIS movement. With none, the card stays clean —
-  // reporting pain lives in the session feedback form and the Pain & injury panel.
-  const movementCheck =
-    !offPlan && todayCardsSymptomRelevant(options.symptomMovements, exercise)
-      ? `<details class="ex-movement-check" data-movement-check data-movement="${escAttr(exercise)}">
-        <summary class="linkbtn linkbtn-quiet linkbtn-sm">Movement check</summary>
-        <div class="well-accent-sm" data-movement-check-body></div>
-      </details>`
-      : "";
+  // There is deliberately NO per-card pain widget. An exercise card asks the athlete
+  // to train, not to fill in a symptom form between sets; anything they want to say
+  // about how it felt goes in the session note, and the extraction lane reads it.
   // ONE authoritative dose per card. When the header already carries today's load
   // (or timed dose) — the composition target, already eased for this session — the
   // standing progression verdict becomes explanation only. It follows the header
@@ -190,7 +170,6 @@ function exerciseCardHtml(
       ${!complete ? CairnTodayTraining.exRxLineHtml(rx, { supporting: headlineDose }) : ""}
       <div class="logged" data-logged>${loggedSets.map(todayCardsSetChip).join("")}</div>
       ${lastSetLine}
-      ${movementCheck}
       ${logrow}
     </div>`;
 }

@@ -37,7 +37,11 @@ import {
 } from "./progression.js";
 import { directivesForCoach } from "./propagation.js";
 import { localDateISO } from "./shared.js";
-import { activeRelevantTrainingSymptoms, type TrainingSymptomLifecycle } from "./training-symptoms.js";
+import {
+  activeRelevantTrainingSymptoms,
+  activeSystemicTrainingSymptoms,
+  type TrainingSymptomLifecycle,
+} from "./training-symptoms.js";
 
 // ---- the public contract (mirrored in src/contracts/client-api.ts) ----------
 export type SessionPrimerChangeKind = "target" | "recovery_cap" | "rotation";
@@ -268,8 +272,10 @@ function appliedRotationsForDay(
 }
 
 function symptomPriority(event: TrainingSymptomLifecycle): number {
+  // STATED freshness: the wording below is about how current the athlete's own
+  // account is ("hasn't been checked since"), and quiet training is not an account.
   const freshness =
-    event.freshness === "acute_movement_brake" ? 0 : event.freshness === "hold_easy_recheck" ? 1 : 2;
+    event.stated_freshness === "acute_movement_brake" ? 0 : event.stated_freshness === "hold_easy_recheck" ? 1 : 2;
   return freshness + (event.legacy_unconfirmed ? 1 : 0);
 }
 
@@ -310,13 +316,27 @@ const ACUTE_SYMPTOM_WATCH: SymptomWatchVariants = [
   "{area} is recent enough to lead — let {movement} stay easy and back off the moment it complains.",
 ];
 
+// A whole-body report names no place, so no movement variant can carry it. It gets
+// its own set: seen and said out loud, and pointedly WITHOUT a limit attached —
+// "everything feels off" is information, not a gate (docs/VISION.md).
+const SYSTEMIC_SYMPTOM_WATCH: SymptomWatchVariants = [
+  "You said it's the whole body rather than one spot — let the first sets tell you what today actually has.",
+  "That whole-body note is still open — nothing here is off the table, just worth easing into.",
+  "You flagged everything feeling off, not one place — treat the openers as the read and go from there.",
+  "The general note you left is still standing — let today answer it rather than deciding up front.",
+];
+
+function systemicWatchText(event: TrainingSymptomLifecycle, date: string): string {
+  return pickDayVariant(SYSTEMIC_SYMPTOM_WATCH, date, `symptom-watch:${event.id}`);
+}
+
 function symptomWatchText(event: TrainingSymptomLifecycle, movement: string, date: string): string {
   const area = String(event.area_text || "that area").replace(/\s+/g, " ").trim();
   const variants = event.legacy_unconfirmed
     ? LEGACY_SYMPTOM_WATCH
-    : event.freshness === "stale_needs_recheck"
+    : event.stated_freshness === "stale_needs_recheck"
       ? STALE_SYMPTOM_WATCH
-      : event.freshness === "hold_easy_recheck"
+      : event.stated_freshness === "hold_easy_recheck"
         ? EASING_SYMPTOM_WATCH
         : ACUTE_SYMPTOM_WATCH;
   return pickDayVariant(variants, date, `symptom-watch:${event.id}`)
@@ -359,6 +379,12 @@ function buildWatch(movements: string[], read: any, date: string): SessionPrimer
     );
     for (const { event, movement } of symptoms.slice(0, 2)) {
       push(symptomWatchText(event, movement, date), true);
+    }
+    // A systemic watch drives no movement, so it can never arrive through the
+    // relevance loop above — and before it had a scope of its own it had nowhere to
+    // be said at all. One line, after the specific ones.
+    for (const event of activeSystemicTrainingSymptoms(date, { seed_legacy: false }).slice(0, 1)) {
+      push(systemicWatchText(event, date), true);
     }
   } catch {
     /* symptom lifecycle unavailable → skip */

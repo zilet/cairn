@@ -244,14 +244,38 @@ function produceRecover(read: ReturnType<typeof dayRead>): Candidate | null {
       fresh: true,
     };
   }
-  // No recovery data at all — a calm, low-leverage nudge (NEVER a gate).
+  // No recovery data in the window. This used to be one step with one sentence —
+  // "connecting a wearable would let the daily read account for how recovered you
+  // actually are" — shown to everyone it fired for, including an athlete whose
+  // watch is connected, working, and worn exactly the way they mean to wear it.
+  // For them the step was three wrong things at once: a claim that nothing was
+  // connected, a fault where there wasn't one, and an ask to change a habit, which
+  // is push (VISION.md: pull, never push). So the cadence decides now.
   if (sig.has_recovery_data === false) {
+    const cadence =
+      sig.recovery_cadence && typeof sig.recovery_cadence === "object"
+        ? (sig.recovery_cadence as Record<string, unknown>)
+        : null;
+    // A WORKING episodic pattern is not a next step. There is nothing to do, and
+    // the honest move is to let a real step from another domain have the slot —
+    // the Brief's own signals row still names the cadence, calmly, where it
+    // belongs. (`working_episodic` already requires readings on record and a last
+    // one inside the window, so two stray nights from last spring do not qualify.)
+    if (cadence?.working_episodic === true) return null;
+    const why =
+      typeof cadence?.absence_why === "string" && cadence.absence_why.trim()
+        ? cadence.absence_why.trim()
+        : "No recent sleep or HRV synced — the daily read is going on how you feel until something comes in.";
+    const lastSeen =
+      typeof cadence?.last_reading_date === "string" && cadence.last_reading_date
+        ? `Last wearable reading was ${cadence.last_reading_date}`
+        : "No recent sleep or HRV data is synced";
     return {
       domain: "recover",
       step_key: "recover:data-gap",
       title: "Recovery's flying a bit blind",
-      why: "No recent sleep or HRV synced — connecting a wearable would let the daily read account for how recovered you actually are.",
-      based_on: ["No recent sleep or HRV data is synced"],
+      why,
+      based_on: [lastSeen],
       action: { kind: "open_recovery", label: "Review recovery data" },
       leverage: 0,
       actionable: false,

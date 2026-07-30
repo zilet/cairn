@@ -441,10 +441,23 @@ type TodayBriefHtmlOptions = {
     // a check-in has fed today's read, name the gap and the one small move that
     // sharpens it — a fact about the situation, never a verdict. Only qualifies a
     // read that actually has something to say (never a bare provisional shell).
+    //
+    // "none synced yet" was true for exactly one kind of athlete. For a wearer who
+    // puts the watch on for runs and the occasional night it read as a fault report
+    // about a working setup. The server sends the line for the cadence it actually
+    // measured (`recovery_cadence.absence_state`, a date-rotated variant from
+    // wear-pattern-voice.ts) precisely so the phrasing is not re-invented here; the
+    // literal below survives only as the floor for a payload that carries no
+    // cadence at all.
     if (rows.length && !signals.has_recovery_data && !signals.checkin) {
+      const cadence =
+        signals.recovery_cadence && typeof signals.recovery_cadence === "object"
+          ? (signals.recovery_cadence as Record<string, unknown>)
+          : null;
+      const spoken = typeof cadence?.absence_state === "string" ? cadence.absence_state.trim() : "";
       rows.push({
         label: "Recovery signals",
-        state: "none synced yet — a morning check-in sharpens the read",
+        state: spoken || "none synced yet — a morning check-in sharpens the read",
         tone: "quiet",
       });
     }

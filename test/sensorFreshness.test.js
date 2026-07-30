@@ -12,6 +12,13 @@
 // in this codebase — a watch left in a drawer never reads as caution, never forces a
 // rest day. So the test for each gate is not "the stale datum is flagged", it is "the
 // read is byte-identical to the read with no datum at all".
+//
+// One refinement, and only one: the sentence governs CLAIMS ABOUT TODAY, not the
+// existence of history. The recovery baseline band is a durable personal range
+// built from past readings — the band is not a claim about today, the DOT on it is.
+// So a stale series still draws its band (dated honestly) while its dot is dropped
+// exactly as absence would drop it: no position, no tone, nothing in the present
+// tense. See the baseline-band block below, and src/repo/baseline-bands.ts.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo, resetTables, localDaysAgo } from "./_seed.js";
@@ -172,21 +179,29 @@ function seedStaleHrvSeries() {
   for (let d = 27; d >= 18; d--) garminDay(d, { hrv_ms: 48 + (d % 6) });
 }
 
-test("an 18-day-old HRV reading gives the SAME band read as no HRV at all", () => {
+test("an 18-day-old HRV reading gives the SAME dot as no HRV at all — none", () => {
   seedStaleHrvSeries();
-  const withStale = repo.getRecoveryBaselineRead();
-  resetTables("garmin_daily_metrics", "garmin_sources", "daily_metrics");
-  const withNothing = repo.getRecoveryBaselineRead();
-  assert.deepEqual(withStale, withNothing, "stale behaves as absent, not as a caution");
-  assert.equal(withStale.dimensions.length, 0, "no dot to speak in the present tense with");
+  const hrv = repo.getRecoveryBaselineRead().dimensions.find((dim) => dim.key === "hrv");
+  assert.ok(hrv, "the personal range survives: it is history, not a claim about today");
+  assert.equal(hrv.current, null, "the stale reading is never resurrected as a current value");
+  assert.equal(hrv.position, null, "so there is nothing to place on the track");
+  assert.equal(hrv.hot, false, "and a band with no dot can never be a lever");
+  assert.doesNotMatch(hrv.phrase, /above|below|than usual/, "nothing is spoken in the present tense");
+  assert.equal(hrv.last_reading_date, localDaysAgo(18), "the band dates itself honestly instead");
 });
 
-test("the same series with a current dot DOES render a band", () => {
+test("no HRV at all renders no band — absence is still absence", () => {
+  assert.deepEqual(repo.getRecoveryBaselineRead().dimensions, []);
+});
+
+test("the same series with a current dot DOES place one", () => {
   seedStaleHrvSeries();
   garminDay(0, { hrv_ms: 52 });
   const hrv = repo.getRecoveryBaselineRead().dimensions.find((dim) => dim.key === "hrv");
-  assert.ok(hrv, "a current reading brings the dimension back");
-  assert.ok(hrv.n >= 10, "and the whole 28-day baseline behind it was intact all along");
+  assert.ok(hrv, "a current reading brings the dot back");
+  assert.equal(hrv.current, 52);
+  assert.equal(typeof hrv.position, "number", "and only now is a position claimed");
+  assert.ok(hrv.n >= 10, "the whole baseline behind it was intact all along");
 });
 
 // ---- decision site: the unified signal state ---------------------------------

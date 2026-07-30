@@ -282,7 +282,7 @@ function trainingFacts(
     .all(windowStart, throughDate) as any[];
   const symptomEvents = db
     .prepare(
-      `SELECT id, source_session_id, source_kind, area_text, status, onset_on,
+      `SELECT id, source_session_id, source_kind, area_text, status, scope, onset_on,
               last_reported_on, resolved_on, recurrence_count, evidence_epoch,
               legacy_unconfirmed
          FROM training_symptom_events
@@ -293,7 +293,7 @@ function trainingFacts(
   const movementTolerance = db
     .prepare(
       `SELECT symptom_event_id, session_id, exercise_id, movement_key, movement_name,
-              observed_on, outcome, relevant, evidence_epoch
+              observed_on, outcome, evidence, relevant, evidence_epoch
          FROM movement_tolerance_observations
         WHERE observed_on >= ? AND observed_on <= ?
         ORDER BY observed_on DESC, id DESC LIMIT 512`
@@ -345,6 +345,9 @@ function trainingFacts(
         source_kind: String(event.source_kind).slice(0, 80),
         area_text: String(event.area_text).slice(0, 300),
         status: event.status,
+        // A systemic watch is in the snapshot but must never be read as loading a
+        // movement; carrying the scope is what lets a reader tell them apart.
+        scope: event.scope === "systemic" ? "systemic" : "area",
         onset_on: event.onset_on,
         last_reported_on: event.last_reported_on,
         resolved_on: event.resolved_on,
@@ -360,6 +363,9 @@ function trainingFacts(
         movement_name: String(observation.movement_name).slice(0, 120),
         observed_on: observation.observed_on,
         outcome: observation.outcome,
+        // 'inferred' = read off a logged set, not spoken. The snapshot has to keep
+        // the two apart or a reader would treat silence as a confirmation.
+        evidence: observation.evidence === "inferred" ? "inferred" : "stated",
         relevant: Number(observation.relevant) === 1,
         evidence_epoch: Number(observation.evidence_epoch ?? 1),
       })),

@@ -60,10 +60,53 @@ type TodaySideLoaderDeps = {
   }
 
   // Today: personal-baseline recovery bands under the wearable strip — today's
-  // HRV / resting HR / sleep read against the athlete's OWN last-28-day range in
-  // plain words (no score). Independent of the Garmin cell strip below: it draws
-  // from the unified recovery view, so it surfaces even when only Apple/Oura data
-  // is present. Absent/thin → the slot stays empty (the client degrades silently).
+  // HRV / resting HR / sleep read against the athlete's OWN range in plain words
+  // (no score). Independent of the Garmin cell strip below: it draws from the
+  // unified recovery view, so it surfaces even when only Apple/Oura data is
+  // present. Absent/thin → the slot stays empty (the client degrades silently).
+  //
+  // A dimension whose newest reading is too old to speak for today arrives with
+  // `position: null` — the band draws WITHOUT a dot (never a stale value placed as
+  // though it were current) and picks up a quiet "last reading N ago" note so the
+  // range is dated honestly. Information, not a nudge to go put the watch on.
+  //
+  // A dot present is NOT the same claim as "the range is fresh": the sample-
+  // anchored band (src/repo/baseline-bands.ts) can span months for an episodic
+  // wearer sitting behind a single recent reading — the newest 28 readings within
+  // 180 days, not the newest 28 DAYS. Past this many days of span the range is
+  // disclosed even WITH a dot, so a months-wide range never quietly passes as a
+  // tight recent one. A daily wearer's span sits well under this, so their row
+  // stays exactly as it read before.
+  const BAND_SPAN_DISCLOSURE_DAYS = 45;
+
+  // A short, calm, fixed qualifier — a UI row fragment (like the phrase/label sets
+  // in baseline-bands.ts), not the day read's rotating prose, so one fixed
+  // template is the right shape here rather than a variant set.
+  function spanQualifier(spanDays: number): string {
+    if (spanDays >= 60) {
+      const months = Math.max(1, Math.round(spanDays / 30));
+      return `range from readings over the last ~${months} month${months === 1 ? "" : "s"}`;
+    }
+    const weeks = Math.max(1, Math.round(spanDays / 7));
+    return `range from readings over the last ~${weeks} week${weeks === 1 ? "" : "s"}`;
+  }
+
+  function recoveryBandPhrase(d: Record<string, unknown>, hasDot: boolean): string {
+    const phrase = d.phrase == null ? "" : String(d.phrase);
+    const last = typeof d.last_reading_date === "string" ? d.last_reading_date : "";
+    const span = typeof d.span_days === "number" && Number.isFinite(d.span_days) ? d.span_days : null;
+    if (!hasDot) {
+      if (!last) return phrase;
+      const age = relAge(last);
+      return age ? (phrase ? `${phrase} · last reading ${age}` : `last reading ${age}`) : phrase;
+    }
+    if (span != null && span > BAND_SPAN_DISCLOSURE_DAYS) {
+      const qualifier = spanQualifier(span);
+      return phrase ? `${phrase} · ${qualifier}` : qualifier;
+    }
+    return phrase;
+  }
+
   async function loadRecoveryBands(deps: TodaySideLoaderDeps): Promise<void> {
     const slot = deps.root.querySelector<HTMLElement>("#wearBands");
     if (!slot) return;
@@ -75,14 +118,17 @@ type TodaySideLoaderDeps = {
       : [];
     if (!dims.length) { slot.innerHTML = ""; return; }
     const rows = dims
-      .map((d) => CairnUiReads.baselineBandHtml({
-        label: d.label,
-        position: d.position,
-        rangeStart: d.range_start,
-        rangeEnd: d.range_end,
-        phrase: d.phrase,
-        hot: d.hot === true,
-      }))
+      .map((d) => {
+        const hasDot = typeof d.position === "number" && Number.isFinite(d.position);
+        return CairnUiReads.baselineBandHtml({
+          label: d.label,
+          position: hasDot ? d.position : null,
+          rangeStart: d.range_start,
+          rangeEnd: d.range_end,
+          phrase: recoveryBandPhrase(d, hasDot),
+          hot: hasDot && d.hot === true,
+        });
+      })
       .filter(Boolean)
       .join("");
     // Layout-only inline styles (band visuals come from the §04d .read-band

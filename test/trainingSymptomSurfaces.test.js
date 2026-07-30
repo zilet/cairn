@@ -694,44 +694,52 @@ test("chat only records a symptom behind explicit athlete write intent", () => {
   );
 });
 
-test("client lifecycle keeps athlete text escaped and uses evidence/recheck language", () => {
+test("client lifecycle renders the athlete's own words, escaped, and offers no mini-UI", () => {
   const root = join(import.meta.dirname, "..");
   const feedback = readFileSync(join(root, "src/client/today-session-feedback-client.ts"), "utf8");
   const status = readFileSync(join(root, "src/client/today-session-status-client.ts"), "utf8");
-  assert.match(feedback, /escHtml\(symptom\.area_text\)/);
+  const cards = readFileSync(join(root, "src/client/today-cards-client.ts"), "utf8");
+  // The verbatim report is athlete input going into innerHTML. Non-negotiable.
+  assert.match(feedback, /escHtml\(words\)/);
+  assert.match(feedback, /escAttr\(words\)/);
   assert.match(feedback, /escHtml\(movement\.movement_name\)/);
-  assert.match(feedback, /escAttr\(option\.name\)/);
-  assert.match(feedback, /evidence for a careful movement recheck/);
+  // Their words lead; the derived label is only the fallback for a legacy row.
+  assert.match(feedback, /String\(symptom\.report_text \?\? ""\)\.trim\(\)/);
+  assert.match(feedback, /spoken \|\| String\(symptom\.area_text \?\? ""\)\.trim\(\)/);
+  // Silence is never dressed up as a confirmation.
+  assert.match(feedback, /movement\.inferred_only/);
+  assert.match(feedback, /Tolerated in training \$\{movementCount\(count\)\} — no word from you yet\./);
+  // Display + one lifecycle tap. That is the whole interaction surface.
   assert.match(feedback, /data-symptom-resolve/);
-  assert.match(feedback, /data-symptom-recur/);
   assert.match(feedback, /Pain &amp; injury/);
   assert.match(feedback, /No active notes\./);
-  // An imported note is framed as unconfirmed history, not as an ordinary watch.
+  assert.match(feedback, /Mention pain in your session notes or chat — Cairn picks it up\./);
   assert.match(feedback, /symptom-watching symptom-unconfirmed">Older note · unconfirmed/);
   assert.match(feedback, /Imported from an older session note/);
-  // Resolved history says WHEN it closed.
   assert.match(feedback, /symptom-resolved-on">closed \$\{escHtml\(humanDate\(closed\)\)\}/);
-  // The panel is reachable with no logged sets (rest day / before the first set).
   assert.match(feedback, /options\.hasLoggedSets === false/);
   assert.match(feedback, /symptom-watching">Watching/);
   assert.match(feedback, /<details class="symptom-history">/);
-  assert.match(feedback, /data-report-symptom-toggle aria-expanded="false"/);
-  assert.match(feedback, /data-report-symptom-cancel/);
-  assert.match(feedback, /id="symptom-report-composer" hidden/);
-  const resolvedRow = /if \(!active\) \{([\s\S]*?)\n    \}\n[\s\S]*?return `<article class="symptom-active-row/.exec(feedback)?.[1] ?? "";
-  assert.match(resolvedRow, /data-symptom-recur-toggle/);
-  assert.match(resolvedRow, /data-symptom-recur/);
-  assert.match(resolvedRow, /class="symptom-recur-composer"[\s\S]*hidden/);
-  assert.match(resolvedRow, /movementInputHtml\(symptom\.id, session\)/);
-  assert.match(feedback, /data-symptom-movement/);
-  assert.match(feedback, /movement: movement\?\.value\.trim\(\) \|\| undefined/);
-  assert.match(feedback, /exercise_id: option\?\.dataset\.exerciseId/);
-  assert.match(feedback, /class="pillbtn pill-sm" type="button" data-tolerance="free"/);
-  assert.match(feedback, /class="pillbtn pill-sm" type="button" data-tolerance="present"/);
-  assert.match(feedback, /data-tolerance="free"/);
-  assert.match(feedback, /exercise_id/);
+  assert.match(feedback, /A whole-body note — it isn't tied to any one movement\./);
   assert.match(feedback, /\/training-symptoms\?on=\$\{viewedDate\}&include_resolved=1/);
   assert.match(status, /data-symptom-lifecycle/);
+  // EVERY mini-UI is gone: the composer, the movement picker, the pain-free /
+  // pain-present pair, the recurrence form, and the per-card movement check.
+  for (const dead of [
+    /data-report-symptom/,
+    /symptom-report-composer/,
+    /data-symptom-movement/,
+    /data-tolerance=/,
+    /data-symptom-recur/,
+    /Choose movement/,
+    /movementInputHtml/,
+    /Pain-free check/,
+    /Pain present/,
+  ]) {
+    assert.doesNotMatch(feedback, dead, `${dead} should be gone from the feedback client`);
+  }
+  assert.doesNotMatch(cards, /data-movement-check/);
+  assert.doesNotMatch(cards, /symptomMovements/);
   assert.doesNotMatch(feedback, /\b(?:cleared|clearance|diagnos(?:e|is))\b/i);
 });
 

@@ -293,7 +293,7 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
 
   server.tool(
     "report_training_symptom",
-    "Record an athlete-explicit area that hurt or ached during training. This is a factual movement-symptom log, not a diagnosis.",
+    "Record an athlete-explicit area that hurt or ached during training. This is a factual movement-symptom log, not a diagnosis. Pass their FULL sentence as report_text — it is stored verbatim as the record, while area_text stays the short place label the surfaces group by. Use scope 'systemic' when the report is about the whole body rather than one place; a systemic record never gates a movement.",
     {
       area_text: z
         .string()
@@ -301,6 +301,14 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
         .min(1)
         .max(120)
         .describe("Short area label, e.g. 'left knee'. A place, not a sentence."),
+      report_text: z
+        .string()
+        .trim()
+        .min(1)
+        .max(4000)
+        .optional()
+        .describe("The athlete's own words, verbatim. Defaults to area_text."),
+      scope: z.enum(["area", "systemic"]).optional(),
       onset_on: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
       source_session_id: z.number().int().positive().nullable().optional(),
       source_kind: z.string().trim().min(1).max(80).optional(),

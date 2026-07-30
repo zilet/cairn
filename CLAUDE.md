@@ -226,6 +226,15 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   are informational, not medical advice; `uncertain`/uncited ones are a softer nudge. The user flips
   `active|resolved|dismissed`.
 
+- **Pain is REPORTED IN WORDS; the mini-UIs are gone on purpose.** `training_symptom_events.area_text`
+  is a short display LABEL (pain-relevance runs substring regexes over it, so a paragraph there loads
+  every lift) — the athlete's actual sentence lives verbatim in **`symptom_reports.text`**, written
+  synchronously before anything is derived. Structure comes from ONE contract, `src/symptomCapture.ts`
+  (mirrors `foodCapture.ts`), applied only through the existing lifecycle writers. `scope='systemic'`
+  never drives movement relevance; `evidence='inferred'` (a quiet exposure read off a logged set at
+  session finish) refreshes `freshness` but never `stated_freshness` — read `stated_freshness` for
+  anything about acuity or outcome comparability. Details in `docs/ARCHITECTURE.md`.
+
 - **Food capture has ONE contract and ONE direction of time inference.** `src/foodCapture.ts` owns
   the meal-estimate shape (ingredient rows with the quantity as a *field*, `nutrition_pattern` bands,
   `confidence`/`basis` provenance) for chat, note enrichment and the photo read alike — extend it

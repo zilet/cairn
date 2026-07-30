@@ -25,6 +25,7 @@
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { movementKey } from "./exercise-canon.js";
 import { type FocusCandidate, type FocusDomain, focusScore } from "./focus-candidate.js";
+import { hasDecisionGradeCoverage } from "./sensor-cadence.js";
 import { clipText } from "./shared.js";
 import {
   lifeCapacityIsCommitment,
@@ -490,12 +491,11 @@ function recoverySignalIsDecisionGrade(recovery: RecoveryInput | null | undefine
     quality?.expected_days ?? quality?.window_days ?? coverage?.expected_days ?? coverage?.window_days
   );
   if (!/^\d{4}-\d{2}-\d{2}$/.test(latestDate) || !["fresh", "recent"].includes(freshness)) return false;
-  if (samples == null || samples < 0) return false;
-  // Half of the available window, capped at a week, with a three-night floor.
-  // When the caller omits its expected window, five nights is the conservative
-  // minimum for treating a recent-vs-baseline delta as a coaching lead.
-  const requiredSamples = expected != null && expected > 0 ? Math.max(3, Math.ceil(Math.min(expected, 14) / 2)) : 5;
-  return samples >= requiredSamples;
+  // The coverage half of the test — half of the available window, capped at a
+  // week, with a three-night floor, and a flat five when the window is unknown —
+  // now lives in sensor-cadence.ts, where the Brief and the prompt can hold a
+  // thin series to the same bar instead of each inventing one.
+  return hasDecisionGradeCoverage(samples, expected);
 }
 
 function varyOptionName(option: unknown): string | null {
@@ -1262,8 +1262,16 @@ function buildRetest(inp: CoachingFocusInput): CoachingRetest | null {
   // A "that change hasn't landed" follow-up shares the attention schedule but is
   // not something to re-test, and it must not be what makes the checkpoint read
   // as due. It has its own calm line elsewhere.
+  // The sensor baseline-recheck offer (repo/sensor-recheck.ts) rides the same
+  // schedule but is NOT a test to book: it is an optional "one night would sharpen
+  // this" that already has its own quiet card, and `attentionLabel` would render
+  // its key as the words "Sensor Recheck" — machinery, at the athlete. It is
+  // written with a forward due date and so should never reach here; excluding it
+  // by key makes that a stated rule rather than a coincidence of another module.
   const dueAttention = inputArray<DueAttentionInput>(inp.dueAttention).filter(
-    (e) => !String(e?.signal_key ?? "").includes(":change-check:")
+    (e) =>
+      !String(e?.signal_key ?? "").includes(":change-check:") &&
+      !String(e?.signal_key ?? "").startsWith("recovery:sensor-recheck")
   );
   if (dueAttention.length) {
     dueNow = true; // something is already due

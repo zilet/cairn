@@ -625,6 +625,11 @@ const OUTBOX_KEY = "cairn.outbox.v1";
 const OUTBOX_MAX = 250;
 const OUTBOX_SEND_CLAIM_MS = 30_000;
 const OUTBOX_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/;
+// `symptom_observation` has no PRODUCER any more — the per-card movement check that
+// queued it is gone, and pain is reported in words now. It stays recognized here on
+// purpose: an installed PWA can be carrying one in localStorage across this upgrade,
+// and an athlete's saved-offline answer must still drain and be labelled correctly
+// rather than degrade to a nameless "Saved log".
 const OUTBOX_WORKOUT_KINDS = new Set([
   "daily_session_prepare",
   "set",

@@ -234,9 +234,6 @@ function createTodayScreenRuntime(input: TodayScreenRuntimeInput): TodayScreenRu
     return CairnTodayCards.exerciseCardHtml(item, logged, prefill, revealIdx, rx, {
       day: input.state.day,
       exModes: input.state.exModes,
-      // Same channel as exModes: a per-render map the session preparation resolved
-      // once (see today-plan-session-data-client.ts loadSymptomMovements).
-      symptomMovements: Array.isArray(input.state.symptomMovements) ? input.state.symptomMovements : [],
     }, lastSet);
   }
 

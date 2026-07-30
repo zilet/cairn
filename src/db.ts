@@ -156,15 +156,22 @@ CREATE INDEX IF NOT EXISTS idx_recovery_cycles_window
   ON recovery_cycles(effective_on, exit_on, id DESC);
 CREATE INDEX IF NOT EXISTS idx_recovery_cycles_status
   ON recovery_cycles(status, id DESC);
--- Pain feedback remains movement-scoped and explicitly open until the athlete
--- resolves it. Legacy session joint_pain rows are normalized as unconfirmed
--- events rather than treated as whole-body recovery verdicts.
+-- Pain feedback stays explicitly open until the athlete resolves it. Legacy
+-- session joint_pain rows are normalized as unconfirmed events rather than
+-- treated as whole-body recovery verdicts.
+--
+-- The scope column separates the two things an athlete actually says. An 'area' event names
+-- a place and may drive movement relevance; a 'systemic' one ("everything feels
+-- off") names no place, so it must NEVER load a lift — it stays a visible watch and
+-- a freshness anchor only. Existing rows default to 'area', which is what every row
+-- written before this column meant.
 CREATE TABLE IF NOT EXISTS training_symptom_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   source_session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
   source_kind TEXT NOT NULL,
   area_text TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','resolved')),
+  scope TEXT NOT NULL DEFAULT 'area' CHECK (scope IN ('area','systemic')),
   onset_on TEXT NOT NULL,
   last_reported_on TEXT NOT NULL,
   resolved_on TEXT,
@@ -174,6 +181,49 @@ CREATE TABLE IF NOT EXISTS training_symptom_events (
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+-- The athlete's own words, stored VERBATIM and synchronously, before anything is
+-- derived from them. training_symptom_events.area_text is a SHORT display label
+-- (see src/repo/symptom-area.ts) — it always was, and squeezing a paragraph through
+-- it is what once left the live DB holding "…right hand joint (probably" with the
+-- rest of the sentence gone forever. This table is the record; the label, the
+-- movements and the scope are derived FROM it by the agentic extraction lane, and a
+-- failed extraction costs nothing because the words are already here.
+CREATE TABLE IF NOT EXISTS symptom_reports (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  symptom_event_id INTEGER REFERENCES training_symptom_events(id) ON DELETE SET NULL,
+  session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
+  text TEXT NOT NULL,
+  source_kind TEXT NOT NULL,
+  reported_on TEXT NOT NULL,
+  extraction_json TEXT,
+  extraction_status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (extraction_status IN ('pending','done','skipped','failed')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_symptom_reports_event
+  ON symptom_reports(symptom_event_id, reported_on DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_symptom_reports_status
+  ON symptom_reports(extraction_status, id);
+CREATE INDEX IF NOT EXISTS idx_symptom_reports_session
+  ON symptom_reports(session_id, id DESC);
+-- One verbatim capture per (source, day, exact words): re-finishing a session or
+-- replaying an offline note must not stack duplicate copies of the same sentence.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_symptom_reports_dedupe
+  ON symptom_reports(source_kind, reported_on, text, IFNULL(session_id, -1));
+-- One sentence can be about two places ("left knee and right wrist both grumbled"),
+-- and extraction opens a watch for each. symptom_reports.symptom_event_id holds only
+-- the FIRST of them, so the second watch used to render with no words at all and its
+-- stated freshness decayed as though the athlete had never spoken. This table is the
+-- full many-to-many; the column stays the primary attribution for everything written
+-- before it existed, and both are read together.
+CREATE TABLE IF NOT EXISTS symptom_report_events (
+  symptom_report_id INTEGER NOT NULL REFERENCES symptom_reports(id) ON DELETE CASCADE,
+  symptom_event_id INTEGER NOT NULL REFERENCES training_symptom_events(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (symptom_report_id, symptom_event_id)
+);
+CREATE INDEX IF NOT EXISTS idx_symptom_report_events_event
+  ON symptom_report_events(symptom_event_id, symptom_report_id DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_training_symptom_legacy_source
   ON training_symptom_events(source_session_id, source_kind)
   WHERE source_session_id IS NOT NULL AND source_kind = 'legacy_session_feedback';
@@ -188,6 +238,10 @@ CREATE TABLE IF NOT EXISTS movement_tolerance_observations (
   movement_name TEXT NOT NULL,
   observed_on TEXT NOT NULL,
   outcome TEXT NOT NULL CHECK (outcome IN ('pain_free','pain_present')),
+  -- 'stated' = the athlete said it. 'inferred' = they trained the movement and said
+  -- nothing, which is real evidence of tolerance but NOT a confirmation, and the two
+  -- must never read the same on a surface (see hydrate()'s inferred_only).
+  evidence TEXT NOT NULL DEFAULT 'stated' CHECK (evidence IN ('stated','inferred')),
   relevant INTEGER NOT NULL,
   evidence_epoch INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))

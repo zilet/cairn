@@ -445,6 +445,17 @@ export function upsertAttentionSchedule(entry: AttentionScheduleEntry): Attentio
   return getAttentionSchedule(entry.signal_key) ?? entry;
 }
 
+// Drop a schedule row outright. NOT the same thing as releasing it: `released` is
+// the machine's own converged end state and remembers that this signal has already
+// run its course, which is exactly what a caller wants for a marker. A caller whose
+// signal comes in discrete EPISODES (the sensor recheck: the picture ages, the offer
+// is made, a reading lands and the episode is simply over) needs the row gone, so
+// that a later episode opens a fresh ladder instead of inheriting an exhausted one.
+// Idempotent; a missing key is a no-op.
+export function deleteAttentionSchedule(signalKey: string): void {
+  db.prepare("DELETE FROM attention_schedule WHERE signal_key = ?").run(String(signalKey));
+}
+
 export function applyAttentionObservation(args: {
   signal_key: string;
   policy: CadencePolicy;

@@ -83,7 +83,6 @@ type TodayPlanSessionPrepResult = {
   pendingOffPlan: TodayPlanSessionPrepPendingOffPlan[];
   lastSets: Record<string, Record<string, unknown> | null>;
   rxByEx: Record<string, TodayPlanSessionPrepPrescription | null | undefined>;
-  symptomMovements: string[];
   strengthJourney: TodayPlanSessionPrepStrengthJourney | null;
   rxFor(name: unknown): TodayPlanSessionPrepPrescription | null;
   prefillFor(item: TodayPlanSessionPrepPlanItem): TodayPlanSessionPrepPrefill;
@@ -144,7 +143,6 @@ type TodayPlanSessionPrepModelApi = {
   ): TodayPlanSessionPrepPrefill;
 };
 type TodayPlanSessionPrepDataApi = {
-  loadSymptomMovements(names: string[], deps: TodayPlanSessionPrepDeps): Promise<string[]>;
   loadLastSets(
     names: string[],
     loggedByEx: Record<string, TodayPlanSessionPrepLoggedSet[]>,
@@ -247,7 +245,7 @@ type TodayPlanSessionPrepDataApi = {
     });
     const pendingOffPlan = todayPlanSessionModel.prunePendingOffPlan(deps.state, early.planNames, loggedByEx);
 
-    const [{ allCardio, cardioEfforts, todaySettings }, lastSets, rxByEx, symptomMovements, strengthJourney] =
+    const [{ allCardio, cardioEfforts, todaySettings }, lastSets, rxByEx, strengthJourney] =
       await Promise.all([
         todayPlanSessionData.loadCardioContext(items, deps.isToday, deps),
         todayPlanSessionData.loadLastSets(
@@ -256,7 +254,6 @@ type TodayPlanSessionPrepDataApi = {
           deps
         ),
         todayPlanSessionData.loadPrescriptions(dailySession && !planSource ? null : deps.state.day, early.planEx, deps),
-        todayPlanSessionData.loadSymptomMovements(early.planEx, deps),
         deps
           .api("/strength-journey")
           .then((value) => (value && typeof value === "object" ? (value as TodayPlanSessionPrepStrengthJourney) : null))
@@ -301,7 +298,6 @@ type TodayPlanSessionPrepDataApi = {
       pendingOffPlan,
       lastSets,
       rxByEx,
-      symptomMovements,
       strengthJourney,
       rxFor,
       prefillFor,

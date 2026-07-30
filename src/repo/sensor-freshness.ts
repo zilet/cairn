@@ -16,11 +16,14 @@
 // vote at a discount. It simply stops being evidence.
 //
 // The bounded-window aggregates elsewhere in the repo (getRecoverySummary's 14
-// days, the evaluators' expectation windows, baseline-bands' 28) are already
-// self-gating: when the watch goes quiet their window empties and the read goes
-// inconclusive on its own. The dangerous shape is the OTHER one — "give me the
-// most recent row" with no lower bound, which happily hands back a month-old
-// night as though it were last night. Those sites gate through here.
+// days, the evaluators' expectation windows) are already self-gating: when the
+// watch goes quiet their window empties and the read goes inconclusive on its
+// own. The dangerous shape is the OTHER one — "give me the most recent row" with
+// no lower bound, which happily hands back a month-old night as though it were
+// last night. Those sites gate through here. So does baseline-bands, which is
+// deliberately NOT self-gating: its sample reaches back 180 days so an episodic
+// wearer still has a personal range, and the age bound is the only thing keeping
+// the newest reading in that reach from being drawn as today's dot.
 //
 // Ages live here rather than at each call site so the Brief, the coach prompt and
 // the health surfaces cannot quietly disagree about when a night stopped counting

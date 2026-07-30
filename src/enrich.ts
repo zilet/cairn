@@ -14,6 +14,14 @@ import {
   coerceNutritionPattern,
   foodMacroTotalsFrom,
 } from "./foodCapture.js";
+import {
+  buildSymptomCapturePrompt,
+  coerceSymptomCapture,
+  symptomTextMentionsBody,
+  type SymptomCaptureContext,
+  type SymptomCaptureReport,
+} from "./symptomCapture.js";
+import { symptomAreaKey } from "./repo/symptom-area.js";
 import { buildEnrichPrompt, buildExerciseEnrichPrompt, buildFoodPhotoPrompt, buildHealthIngestPrompt, buildHealthReviewPrompt, buildGarminStrengthPrompt, buildImagingStudyPrompt } from "./prompt.js";
 import { explainExercise, reconcileMarkers, synthesizeHealth } from "./coachOps.js";
 import { GEMINI_TEXT_MODEL, warmExerciseArt } from "./art.js";
@@ -62,7 +70,14 @@ const execFileP = promisify(execFile);
 // (ai_cache), and pregenerates muscle/equipment-aware art. id is the exercises row id;
 // it shares exercises' enrichment_status machine. Enqueued only on a genuine create
 // from the user-facing route — never for seed/plan-import.
-type Kind = "activity" | "food" | "food_photo" | "health" | "review" | "garmin_strength" | "exercise";
+// 'symptom' is one verbatim pain report the athlete wrote (session note, feedback
+// line, chat, API). The words are ALREADY stored synchronously in symptom_reports;
+// this job derives the structure from them — which watch, which way it moved, which
+// movements they named — through src/symptomCapture.ts's one contract and then
+// applies it exclusively via the existing lifecycle repo functions. id is the
+// symptom_reports row id; it carries its own extraction_status machine. A failure
+// costs nothing: the words stay stored and rendered.
+type Kind = "activity" | "food" | "food_photo" | "health" | "review" | "garmin_strength" | "exercise" | "symptom";
 interface Job {
   kind: Kind;
   id: number;
@@ -284,6 +299,19 @@ export function enqueueEnrich(kind: Kind, id: number): void {
   if (!draining) void drain();
 }
 
+// The repo stores the athlete's words and must not import this engine (the barrel
+// would close a cycle), so the engine registers itself. Until it does — a migration
+// CLI, a storage-only test — a verbatim report is still written; it simply waits.
+repo.registerSymptomExtractionHook((reportId) => enqueueEnrich("symptom", reportId));
+
+/**
+ * Whether this free text is worth an agent call at all. Re-exported from the one
+ * capture contract so every enqueue site asks the same question — "great session,
+ * felt strong" must never cost an invocation, and a body report must never be
+ * dropped for lack of a keyword list at one call site.
+ */
+export { symptomTextMentionsBody };
+
 async function drain(): Promise<void> {
   if (draining) return;
   draining = true;
@@ -310,6 +338,13 @@ async function drain(): Promise<void> {
 
 function markStatus(job: Job, status: string): void {
   if (job.kind === "review" || job.kind === "garmin_strength") return; // no row status of their own
+  // symptom_reports.extraction_status is a narrower machine than the enrichment
+  // rows' (no 'in_progress' — a report is never half-extracted, it either yielded a
+  // structure or it did not), so it is set only through its own dedicated path.
+  if (job.kind === "symptom") {
+    repo.setSymptomReportExtraction(job.id, status === "done" ? "done" : status === "skipped" ? "skipped" : "failed");
+    return;
+  }
   if (job.kind === "activity") repo.setActivityEnrichStatus(job.id, status);
   // food_photo shares the food_notes row + its status column with food.
   else if (job.kind === "food" || job.kind === "food_photo") repo.setFoodNoteEnrichStatus(job.id, status);
@@ -350,6 +385,7 @@ async function processJob(job: Job): Promise<void> {
   if (job.kind === "garmin_strength") return processGarminStrengthJob(job.id);
   if (job.kind === "food_photo") return processFoodPhotoJob(job.id);
   if (job.kind === "exercise") return processExerciseJob(job.id);
+  if (job.kind === "symptom") return processSymptomJob(job.id);
 
   // Check enablement BEFORE picking an agent: pickAgentOrder() advances the
   // round-robin cursor as a side effect, so calling it for a job we then skip
@@ -879,6 +915,218 @@ export async function processExerciseJob(id: number): Promise<void> {
   // even a soft agent miss leaves a usable exercise — the guide hydrates lazily and
   // art was attempted); 'skipped' only when there was no agent at all.
   repo.setExerciseEnrichStatus(id, order.length ? "done" : "skipped");
+}
+
+// ---- verbatim pain report → structure ------------------------------------------
+// The ONLY writer of structure from an athlete's pain words. Everything it applies
+// goes through the existing lifecycle repo functions (reportTrainingSymptom,
+// recurTrainingSymptom, resolveTrainingSymptomByArea, recordMovementTolerance) — no
+// raw SQL — so every idempotency guard, epoch rule and proposal-truth snapshot keeps
+// working exactly as it did when a button was the caller.
+
+// Movements the report could plausibly be about: what they trained that day first,
+// then what they have trained lately. The model may only name from this list, and
+// coerceSymptomCapture re-matches every name against it.
+function symptomCaptureMovements(sessionId: number | null, on: string): { session: string[]; recent: string[] } {
+  const session: string[] = [];
+  const recent: string[] = [];
+  try {
+    if (sessionId != null) {
+      const detail = repo.getSessionDetail(sessionId) as any;
+      for (const set of Array.isArray(detail?.sets) ? detail.sets : []) {
+        const name = String(set?.exercise ?? "").trim();
+        if (name && !session.includes(name)) session.push(name);
+      }
+    }
+  } catch {
+    /* a report can arrive with no session attached — that is normal */
+  }
+  try {
+    for (const row of repo.getRecentSessions(10, { through: on }) as any[]) {
+      for (const set of Array.isArray(row?.sets) ? row.sets : []) {
+        const name = String(set?.exercise ?? "").trim();
+        if (name && !session.includes(name) && !recent.includes(name)) recent.push(name);
+      }
+    }
+  } catch {
+    /* no recent training history → the model simply names nothing */
+  }
+  return { session, recent };
+}
+
+function symptomAreaMatch(label: string, on: string): any | null {
+  const key = symptomAreaKey(label);
+  if (!key) return null;
+  const events = repo.listTrainingSymptoms({ on, include_resolved: true, seed_legacy: false });
+  return (
+    events
+      .filter((event: any) => event.scope !== "systemic" && symptomAreaKey(event.area_text) === key)
+      .sort((a: any, b: any) => String(b.last_reported_on).localeCompare(String(a.last_reported_on)) || b.id - a.id)[0] ??
+    null
+  );
+}
+
+/**
+ * Apply one validated extraction. Exported so the offline test can drive the whole
+ * deterministic half without an agent — the same discipline applyFoodPhoto follows,
+ * and the reason a stub that cannot speak this contract is still enough to prove the
+ * lane's degradation paths.
+ *
+ * Idempotent: a second pass over the same result re-reports the same day (which
+ * reportTrainingSymptom treats as a retry) and re-offers the same exposures (which
+ * the unique exposure indexes ignore).
+ */
+export function applySymptomExtraction(
+  reportId: number,
+  result: { found: boolean; reports: SymptomCaptureReport[] }
+): { events: number; observations: number } {
+  const out = { events: 0, observations: 0 };
+  const report = repo.getSymptomReport(reportId);
+  if (!report || !result.found) return out;
+  const on = report.reported_on;
+
+  for (const entry of result.reports) {
+    let event: any = null;
+    if (entry.scope === "systemic") {
+      // No place named, so the label is the athlete's own phrase, clamped by the
+      // same short-label normalizer every other write crosses. It can never load a
+      // lift — scope 'systemic' is checked before relevance ever runs.
+      event = repo.reportTrainingSymptom({
+        area_text: entry.quote,
+        report_text: entry.quote,
+        onset_on: on,
+        source_session_id: report.session_id,
+        source_kind: "symptom_extraction",
+        scope: "systemic",
+        record_report: false,
+      });
+    } else if (entry.change === "resolved") {
+      // Closing a watch is still the athlete's call — this only carries out a
+      // closure they stated in their own words.
+      event = entry.area_label ? repo.resolveTrainingSymptomByArea(entry.area_label, on) : null;
+    } else {
+      const matched = entry.area_label ? symptomAreaMatch(entry.area_label, on) : null;
+      if (matched && matched.status === "resolved" && (entry.change === "new" || entry.change === "worse")) {
+        // It came back. The dedicated recurrence path owns the epoch reset; a plain
+        // re-report would open a second, orphaned record for the same place.
+        event = repo.recurTrainingSymptom(matched.id, { on, area_text: entry.area_label ?? undefined });
+      } else {
+        event = repo.reportTrainingSymptom({
+          area_text: entry.area_label!,
+          report_text: entry.quote,
+          onset_on: on,
+          source_session_id: report.session_id,
+          source_kind: "symptom_extraction",
+          record_report: false,
+        });
+      }
+    }
+    if (!event) continue;
+    out.events++;
+    // EVERY watch this sentence produced points back at it, not just the first. A note
+    // naming two places opens two watches, and the second used to render with no words
+    // and age as though the athlete had never spoken about it.
+    repo.attachSymptomReportEvent(reportId, Number(event.id));
+    for (const movement of entry.movements) {
+      try {
+        const before = toleranceSnapshot(repo.getTrainingSymptom(Number(event.id), on));
+        repo.recordMovementTolerance({
+          symptom_event_id: Number(event.id),
+          movement: movement.name,
+          observed_on: on,
+          session_id: report.session_id,
+          pain_free: movement.outcome === "pain_free",
+          evidence: "stated",
+        });
+        // Comparing the two hydrated OBJECTS was always true — they are freshly built
+        // every call — so a re-applied extraction counted a write per movement it had
+        // already recorded. Compare what a write would actually move.
+        if (toleranceSnapshot(repo.getTrainingSymptom(Number(event.id), on)) !== before) out.observations++;
+      } catch {
+        /* one unmappable movement must not lose the rest of the report */
+      }
+    }
+  }
+  return out;
+}
+
+// Everything a tolerance write can move: the exposure counts per movement, plus the
+// epoch and recurrence a pain_present write bumps. Equal snapshots mean nothing was
+// written — the exposure was already on record.
+function toleranceSnapshot(event: any): string {
+  if (!event) return "";
+  return JSON.stringify([event.evidence_epoch, event.recurrence_count, event.movement_readiness]);
+}
+
+/**
+ * Derive structure from one verbatim pain report. Degrades cleanly at every step —
+ * enrichment off, no agent, an unparseable reply, a payload that fails validation —
+ * and in every one of those cases the athlete's words stand untouched and on screen.
+ * Exported so the offline test can drive those refusals directly.
+ */
+export async function processSymptomJob(id: number): Promise<void> {
+  const report = repo.getSymptomReport(id);
+  if (!report) return; // deleted while queued
+  // Extraction runs ONCE per report. A re-enqueue (crash recovery, a manual retry of
+  // a sibling job) must not re-ask an agent about words it already read.
+  if (report.extraction_status !== "pending") return;
+
+  const settings = repo.getSettings();
+  if (!settings.enrich_enabled) {
+    repo.setSymptomReportExtraction(id, "skipped");
+    return;
+  }
+  const order = repo.pickAgentOrderForTask("enrich");
+  if (!order.length) {
+    repo.setSymptomReportExtraction(id, "skipped");
+    return;
+  }
+
+  const movements = symptomCaptureMovements(report.session_id, report.reported_on);
+  const ctx: SymptomCaptureContext = {
+    text: report.text,
+    reported_on: report.reported_on,
+    active_events: repo
+      .listTrainingSymptoms({ on: report.reported_on, include_resolved: false, seed_legacy: false })
+      .map((event: any) => ({
+        id: Number(event.id),
+        area_label: String(event.area_text),
+        scope: event.scope === "systemic" ? ("systemic" as const) : ("area" as const),
+      })),
+    session_movements: movements.session,
+    recent_movements: movements.recent,
+  };
+
+  let parsed: any = null;
+  try {
+    const fb = await runAgentWithFallback(order, buildSymptomCapturePrompt(ctx), {
+      timeoutMs: ENRICH_TIMEOUT_MS,
+      profile: repo.executionProfileForTask("enrich"),
+    });
+    parsed = fb.result?.parsed ?? null;
+  } catch {
+    parsed = null;
+  }
+  if (!parsed || typeof parsed !== "object") {
+    console.warn(`[enrich] symptom#${id}: no usable JSON — the athlete's words stand as written.`);
+    markFailed({ kind: "symptom", id });
+    return;
+  }
+
+  const validation = coerceSymptomCapture(parsed, ctx);
+  if (!validation.ok) {
+    console.warn(`[enrich] symptom#${id}: extraction rejected (${validation.reason}) — words kept, nothing derived.`);
+    markFailed({ kind: "symptom", id });
+    return;
+  }
+  try {
+    applySymptomExtraction(id, validation.result);
+  } catch (e: any) {
+    console.warn(`[enrich] symptom#${id}: applying the extraction failed (${e?.message ?? e}).`);
+    markFailed({ kind: "symptom", id });
+    return;
+  }
+  repo.setSymptomReportExtraction(id, "done", validation.result);
 }
 
 // ---- food photo → macros (vision) ----------------------------------------------
@@ -1650,7 +1898,13 @@ function applyStructured(job: Job, structured: any): boolean {
 // Crash recovery: re-enqueue every row left 'pending' (queued, never started) or
 // 'in_progress' (started but interrupted by a restart). Called once at startup
 // from server.ts. A re-run ends in 'done' or 'failed', so jobs don't loop.
-export function recoverPendingEnrich(): { activities: number; food: number; health: number; exercises: number } {
+export function recoverPendingEnrich(): {
+  activities: number;
+  food: number;
+  health: number;
+  exercises: number;
+  symptoms: number;
+} {
   const acts = db
     .prepare(`SELECT id FROM activities WHERE enrichment_status IN ('pending','in_progress')`)
     .all() as any[];
@@ -1666,12 +1920,22 @@ export function recoverPendingEnrich(): { activities: number; food: number; heal
   const exercises = db
     .prepare(`SELECT id FROM exercises WHERE enrichment_status IN ('pending','in_progress')`)
     .all() as any[];
+  // A verbatim pain report whose extraction never ran. The words survived the crash
+  // (they were written synchronously); only the structuring is owed.
+  const symptoms = repo.listPendingSymptomReports();
   for (const a of acts) enqueueEnrich("activity", a.id);
   for (const f of foods) enqueueEnrich(f.image_path ? "food_photo" : "food", f.id);
   for (const h of health) enqueueEnrich("health", h.id);
   for (const x of exercises) enqueueEnrich("exercise", x.id);
-  if (acts.length || foods.length || health.length || exercises.length) {
-    console.log(`[enrich] recovered ${acts.length} activity + ${foods.length} food + ${health.length} health + ${exercises.length} exercise pending job(s).`);
+  for (const s of symptoms) enqueueEnrich("symptom", s.id);
+  if (acts.length || foods.length || health.length || exercises.length || symptoms.length) {
+    console.log(`[enrich] recovered ${acts.length} activity + ${foods.length} food + ${health.length} health + ${exercises.length} exercise + ${symptoms.length} symptom pending job(s).`);
   }
-  return { activities: acts.length, food: foods.length, health: health.length, exercises: exercises.length };
+  return {
+    activities: acts.length,
+    food: foods.length,
+    health: health.length,
+    exercises: exercises.length,
+    symptoms: symptoms.length,
+  };
 }

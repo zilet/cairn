@@ -22,6 +22,9 @@ import { getPlan } from "./plan.js";
 import { effectiveGoalMode, getProfile, leanGainRate, listWeight } from "./profile.js";
 import { getSettings } from "./settings.js";
 import { normalizeSymptomArea } from "./symptom-area.js";
+import { recordSymptomReport } from "./symptom-reports.js";
+import { inferTrainingSymptomExposures } from "./training-symptoms.js";
+import { symptomTextMentionsBody } from "../symptomCapture.js";
 import {
   bumpTrainingDataVersion,
   currentTrainingDataVersion,
@@ -169,10 +172,48 @@ export function finishSession(sessionId: number, notes?: string | null) {
       material: true,
     });
   }
+  const spokeAboutBody = captureSessionNoteSymptomReport(sessionId, s.date, cleanNotes ?? s.notes);
+  // Tolerance read off what they actually trained, not off a button they remembered
+  // to press. Idempotent, so a re-finish or a Garmin re-sync adds nothing.
+  //
+  // Skipped outright when this very note said something about their body. Reading
+  // silence off a session they wrote "left knee hurt badly on every squat today" on
+  // would record the opposite of what they said — and the deterministic layer already
+  // knows, one line above, without waiting on an extraction that may never run.
+  if (!spokeAboutBody) {
+    try {
+      inferTrainingSymptomExposures(sessionId, s.date);
+    } catch {
+      /* inferred evidence is additive — it must never fail a finish */
+    }
+  }
   // Stage 4: reconcile the accepted daily-session composition against what was
   // actually trained (idempotent, additive; a no-op for plain plan sessions).
   reconcileDailySessionSafe(sessionId);
   return { ...getSessionDetail(sessionId), summary: sessionSummary(sessionId) };
+}
+
+// A session note is where an athlete most naturally says "wrist was grumpy on
+// presses". Keep those words VERBATIM (the extraction lane derives structure from
+// them later); skip the note entirely when it says nothing about the body, so
+// "felt strong, good session" never costs an agent call.
+//
+// Returns whether the note was about the body at all — the one thing the finish path
+// can know deterministically, before any structure has been derived from the words.
+function captureSessionNoteSymptomReport(sessionId: number, date: unknown, notes: unknown): boolean {
+  const text = notes == null ? "" : String(notes).trim();
+  if (!text || !symptomTextMentionsBody(text)) return false;
+  try {
+    recordSymptomReport({
+      text,
+      source_kind: "session_note",
+      reported_on: String(date ?? localDateISO()),
+      session_id: sessionId,
+    });
+  } catch {
+    /* capturing the words is additive — never fail the session write over it */
+  }
+  return true;
 }
 
 // Reopen a finished session to keep logging (clears finished_at). Idempotent — a
@@ -212,6 +253,7 @@ export function updateSessionNotes(sessionId: number, notes: string | null) {
       material: true,
     });
   }
+  captureSessionNoteSymptomReport(sessionId, s.date, clean);
   return getSessionDetail(sessionId);
 }
 
@@ -244,8 +286,25 @@ export function setSessionFeedback(
     // turns one into the other), so it obeys the same short-label contract. An
     // agent that answers with a coach paragraph here used to poison every
     // downstream relevance check; the normalizer keeps it a place, not prose.
+    //
+    // The normalizer is why the athlete's FULL sentence has to be captured first,
+    // one line below: everything after the first clause is about to be dropped from
+    // this column, and it used to be dropped from existence.
     sets.push("joint_pain = ?");
     vals.push(fields.joint_pain == null ? null : normalizeSymptomArea(fields.joint_pain) || null);
+    const spoken = fields.joint_pain == null ? "" : String(fields.joint_pain).trim();
+    if (spoken) {
+      try {
+        recordSymptomReport({
+          text: spoken,
+          source_kind: "session_feedback",
+          reported_on: date || localDateISO(),
+          session_id: session.id,
+        });
+      } catch {
+        /* additive capture — never fail the feedback write over it */
+      }
+    }
   }
   if (sets.length) {
     vals.push(session.id);

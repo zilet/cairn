@@ -73,7 +73,7 @@ html{-webkit-text-size-adjust:100%}
 body{
   background:var(--paper); color:var(--ink);
   font-family:var(--font-ui); line-height:1.55; font-size:16px;
-  padding-bottom:calc(84px + var(--vvb,0px)); min-height:100dvh;
+  padding-bottom:calc(92px + max(env(safe-area-inset-bottom),6px) + var(--vvb,0px)); min-height:100dvh;
 }
 /* paper grain — fixed noise wash over everything, barely-there */
 body::before{
@@ -624,25 +624,6 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
 .ex-flag{margin-top:9px;background:var(--warn-bg);border:none;border-left:3px solid var(--warn);
   border-radius:8px;padding:8px 11px;font-size:.78rem;color:var(--warn)}
 
-/* Movement check — the in-card pain flow, rendered only where an active symptom
-   actually loads this movement. A ▸ that rotates open (the .hist-fold grammar) so
-   it reads as a quiet disclosure, not a native browser triangle beside a link. */
-.ex-movement-check{margin-top:9px}
-.ex-movement-check>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;
-  gap:6px;padding:4px 2px}
-.ex-movement-check>summary::-webkit-details-marker{display:none}
-.ex-movement-check>summary::before{content:"▸";font-size:.7rem;color:var(--muted);
-  text-decoration:none;transition:transform .15s ease}
-.ex-movement-check[open]>summary::before{transform:rotate(90deg)}
-.ex-movement-check [data-movement-check-body]{margin-top:8px;padding:10px 12px;
-  background:var(--card-2)}
-.ex-movement-check [data-movement-check-body]:empty{display:none}
-.ex-movement-check [data-movement-check-body]>.sess-line:first-child{margin-top:0}
-/* the free-text area and the button under it are two separate controls */
-.ex-movement-check .feedback-joint-wrap{gap:9px}
-.ex-movement-check [data-movement-symptom]+[data-movement-symptom]{margin-top:10px}
-@media (prefers-reduced-motion: reduce){ .ex-movement-check>summary::before{transition:none} }
-
 /* One easing stated once for the whole session, instead of on every card. */
 .session-eased{margin:0 0 12px;color:var(--muted)}
 
@@ -851,7 +832,7 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
 
 /* while the rest bar is up, give the page enough bottom clearance that the
    content above it (FINISH row, chatbar) can always scroll clear of the bar */
-body.resting{padding-bottom:calc(144px + var(--vvb,0px))}
+body.resting{padding-bottom:calc(152px + max(env(safe-area-inset-bottom),6px) + var(--vvb,0px))}
 
 /* -------------------------------------------------------------------
    10 · Segmented sub-nav
@@ -3431,18 +3412,9 @@ body.swr-busy::after{
 /* An imported note is not a current finding — it reads quieter than "Watching". */
 .symptom-unconfirmed{color:var(--muted);background:rgba(120,120,120,.12)}
 .symptom-active-row .sess-line{margin-top:5px;font-size:.74rem;line-height:1.4}
-.symptom-movement-control{margin-top:10px}
-.symptom-movement-field{display:grid;gap:4px;color:var(--muted);font-family:var(--font-ui);font-size:.69rem;font-weight:700;letter-spacing:.03em;text-transform:uppercase}
-.symptom-movement-field .feedback-joint{font-size:16px;letter-spacing:normal;text-transform:none}
-.symptom-select-wrap{position:relative;display:block}
-.symptom-select-wrap::after{content:"⌄";position:absolute;right:11px;top:50%;pointer-events:none;color:var(--muted);font-size:.9rem;transform:translateY(-50%)}
-.symptom-select-wrap select{appearance:none;padding-right:30px}
 .symptom-row-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px}
 .symptom-row-actions .pillbtn{min-height:38px}
 .symptom-row-actions .linkbtn{min-height:30px;padding:5px 1px}
-.symptom-report-composer{margin-top:10px;padding:11px 12px 12px;background:var(--paper);border:1px solid var(--line);border-radius:var(--radius-sm)}
-.symptom-report-composer>label{display:block;margin-bottom:5px;color:var(--muted);font-family:var(--font-ui);font-size:.72rem;font-weight:650}
-.symptom-report-composer .feedback-joint{font-size:16px}
 .symptom-history{margin-top:12px;border-top:1px solid var(--line);padding-top:9px}
 .symptom-history>summary{display:flex;align-items:center;gap:7px;cursor:pointer;color:var(--muted);font-family:var(--font-ui);font-size:.76rem;font-weight:650;list-style:none}
 .symptom-history>summary::-webkit-details-marker{display:none}
@@ -3455,8 +3427,6 @@ body.swr-busy::after{
 .symptom-resolved-on{color:var(--faint);font-family:var(--font-ui);font-size:.7rem;line-height:1.35}
 .symptom-history-row:first-child{border-top:0}
 .symptom-history-row .linkbtn{flex:0 0 auto;min-height:30px;padding:5px 1px}
-.symptom-recur-composer{grid-column:1/-1;padding:10px 11px 11px;background:var(--paper);border:1px solid var(--line);border-radius:var(--radius-sm)}
-.symptom-recur-composer p{margin:0 0 8px;color:var(--muted);font-size:.75rem;line-height:1.4}
 
 /* Energy Balance (Progress) — a calm editorial read, never a dashboard. */
 .eb-ctx{color:var(--muted);margin-top:11px}
@@ -3574,32 +3544,7 @@ body.swr-busy::after{
   border-radius:999px;background:var(--card-2);padding:5px 9px;color:var(--ink-2);
   font-size:.76rem;font-weight:600;
 }
-.ah-url{display:flex;align-items:center;gap:8px}
-.ah-url code{
-  flex:1;min-width:0;overflow-x:auto;white-space:nowrap;background:var(--card-2);
-  border:1px solid var(--line);border-radius:var(--radius-sm);padding:9px 11px;
-  font-size:.8rem;color:var(--ink);
-}
-.ah-copy{flex:none;margin-top:0}
 .ah-builder-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
-.ah-open{display:inline-flex;align-items:center;text-decoration:none}
-.ah-secret-note{max-width:68ch}
-.ah-steps{margin-top:10px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--card-2);padding:9px 11px}
-.ah-steps summary{cursor:pointer;color:var(--ink-2);font-size:.8rem;font-weight:600}
-.ah-steps ol{margin:9px 0 2px;padding-left:20px;color:var(--ink-2);font-size:.79rem;line-height:1.5}
-.ah-steps li+li{margin-top:4px}
-
-/* Example request body — a wrapping code block so a long JSON sample stays
-   INSIDE its card instead of clipping at the edge (the URL box still scrolls). */
-.ah-example{margin-top:12px;background:var(--card-2);border:1px solid var(--line);border-radius:var(--radius-sm);padding:10px 12px}
-.ah-example-lbl{
-  display:block;font-family:var(--font-ui);text-transform:uppercase;letter-spacing:.18em;
-  font-size:.6rem;font-weight:600;color:var(--muted);margin-bottom:5px;
-}
-.ah-example code{
-  display:block;font-size:.78rem;color:var(--ink);line-height:1.5;
-  white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;
-}
 
 /* -------------------------------------------------------------------
    Settings — meaningful groups
