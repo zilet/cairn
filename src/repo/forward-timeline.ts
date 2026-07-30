@@ -15,7 +15,7 @@ import { getActiveBlock } from "./program-blocks.js";
 import { getProgramState, type ProgramState } from "./program-state.js";
 import { activeJourneyPhase } from "./journey.js";
 import { recompositionRead, type RecompositionRead } from "./recomposition.js";
-import { listAttentionSchedule, type AttentionScheduleEntry } from "./attention.js";
+import { EXPECTATION_FOLLOWUP_SOURCE, listAttentionSchedule, type AttentionScheduleEntry } from "./attention.js";
 import { getMarkerHistory } from "./health.js";
 import { matchOptimalZone } from "./propagation-data.js";
 import { canonicalMarker } from "./marker-canon.js";
@@ -377,6 +377,10 @@ export function forwardTimeline(today = localDateISO(), opts: ForwardTimelineOpt
     ...listAttentionSchedule({ domain: "training", limit: 40 }),
     ...listAttentionSchedule({ domain: "running", limit: 15 }),
   ]
+    // A "that change hasn't landed" follow-up rides the same schedule but is not a
+    // scheduled re-test — it has no benchmark to redo and no date to plan around.
+    // It speaks through the coach's watch list instead of this dated horizon.
+    .filter((entry) => entry.source !== EXPECTATION_FOLLOWUP_SOURCE)
     .filter((entry) => inHorizon(entry.next_due, today))
     .sort((a, b) => String(a.next_due).localeCompare(String(b.next_due)));
   const seenRetest = new Set<string>();

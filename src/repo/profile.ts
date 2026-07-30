@@ -11,6 +11,13 @@ import {
   supersedeReviewDecisionsForProposal,
   transitionBrainDecision,
 } from "./brain-decisions.js";
+import {
+  buildHrvGuardExpectation,
+  buildLiftProgressionExpectations,
+  buildTrainingFeedbackExpectations,
+  liftProgressionSubjects,
+  rebaseDeferredExpectations,
+} from "./brain/change-expectations.js";
 import { findExercise } from "./exercises.js";
 import { estimateExpenditure, type ExpenditureEstimate } from "./expenditure.js";
 import { lsqSlopePerDay } from "./health.js";
@@ -810,6 +817,15 @@ function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?:
             evaluator: "recovery_delta",
             evaluator_version: "run-recovery-guard-v1",
           });
+          // The same guard read through overnight HRV — but only for an athlete
+          // whose watch has actually been producing it. A wearable is optional
+          // here, so its absence writes nothing rather than an expectation that
+          // could never mature.
+          const hrvGuard = buildHrvGuardExpectation(today, runWindowDays, {
+            prior_weekly_km: Math.round(priorWeeklyKm * 10) / 10,
+            new_weekly_km: newWeeklyKm,
+          });
+          if (hrvGuard) expectations.push(hrvGuard);
         }
       }
     }
@@ -926,6 +942,48 @@ function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?:
         evaluator: "plan_adherence",
         evaluator_version: "plan-adherence-v1",
       });
+    }
+    // "Did this change actually help the athlete?" — the checks the whole ledger
+    // exists for. A training change predicts that how sessions FEEL does not
+    // slide and that joint pain does not become more frequent than it already
+    // was; a load step on a named lift predicts that the lift's own est-1RM
+    // holds. Each is written only when the athlete is ALREADY logging the
+    // evidence that could falsify it (src/repo/brain/change-expectations.ts), so
+    // a quiet logger collects no predictions rather than a drawer of permanently
+    // inconclusive ones. Placed AFTER the adherence fallback above so it keeps
+    // owning the "nothing else to say" case exactly as before.
+    if (!nutrition) {
+      try {
+        expectations.push(...buildTrainingFeedbackExpectations(today));
+        expectations.push(...buildLiftProgressionExpectations(liftProgressionSubjects(exercises, today), today));
+      } catch {
+        // Learning telemetry is never allowed to sink an authoritative apply.
+      }
+    }
+    // A conference recommendation that was HELD parked its predictions on the
+    // held decision rather than asserting them about a change that had not
+    // happened. It has happened now, so they thaw onto THIS decision with their
+    // windows re-based to today.
+    //
+    // Deliberately status-agnostic. This apply has ALREADY retired the park
+    // record (every terminal proposal transition supersedes its outstanding
+    // review holds), so filtering on 'review' would look right and find nothing.
+    // The proposal id plus a parked payload is the identity that matters.
+    try {
+      const parkRows = db
+        .prepare(
+          `SELECT action_json FROM brain_decisions
+            WHERE source_ref_type = 'plan_proposal' AND source_ref_key = ?
+              AND json_extract(action_json, '$.deferred_expectations') IS NOT NULL
+            ORDER BY id LIMIT 10`
+        )
+        .all(String(p.id)) as Array<{ action_json: string | null }>;
+      for (const row of parkRows) {
+        const parked = JSON.parse(String(row.action_json ?? "{}"))?.deferred_expectations;
+        expectations.push(...rebaseDeferredExpectations(parked, today));
+      }
+    } catch {
+      // Same rule: a malformed parked payload must never block the apply.
     }
     const sourceRefType = nutrition && accepted?.id ? "nutrition_target" : "plan_proposal";
     const sourceRefKey = String(nutrition && accepted?.id ? accepted.id : p.id);

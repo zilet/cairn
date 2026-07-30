@@ -5,3 +5,4 @@ export {
   evaluateMatureExpectations,
   type EvaluationRunSummary,
 } from "./domain/brain/evaluation-service.js";
+export { releaseStaleExpectationFollowups, surfaceExpectationMisses } from "./domain/brain/expectation-followup.js";

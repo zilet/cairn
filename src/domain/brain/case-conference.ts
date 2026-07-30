@@ -23,6 +23,7 @@ import {
 import { getCoachContext } from "../../repo/coach.js";
 import { getSettings } from "../../repo/settings.js";
 import { patchBrainDecision, recordDecision } from "../../repo/brain-decisions.js";
+import { MAX_DEFERRED_EXPECTATIONS } from "../../repo/brain/change-expectations.js";
 import { createProposal } from "../../repo/profile.js";
 import { runChosen, runChosenWithCoachReads } from "../../runChosen.js";
 import { applyProposalWithAutonomy } from "./autonomy-service.js";
@@ -622,6 +623,16 @@ export async function runCaseConference(
     const autonomy = applyProposalWithAutonomy(proposal.id, { requested_tier: policy.tier });
     const execution = executionSummary(autonomy);
     assertActive();
+    // Predictions ride the CHANGE, not the record of it. Autonomy either landed
+    // or scheduled this revision — in which case its expectations are live and
+    // will mature against work that actually happened — or it clamped the tier and
+    // held the proposal for review, in which case nothing has happened at all.
+    // Judging an unapplied revision on schedule would write a verdict about a
+    // counterfactual, so a held revision parks its predictions on its own record
+    // instead; recordAppliedProposalDecision thaws them, with re-based windows,
+    // if and when the proposal is finally applied.
+    const revisionHeld = autonomy?.decision?.status === "review" || autonomy?.decision?.status === "observed";
+    const parkedExpectations = revisionHeld ? decision.expectations.slice(0, MAX_DEFERRED_EXPECTATIONS) : [];
     const autonomyDecision = autonomy?.decision?.id
       ? patchBrainDecision(Number(autonomy.decision.id), {
           source: "case_conference",
@@ -633,6 +644,7 @@ export async function runCaseConference(
             resolved_conflicts: decision.resolved_conflicts,
             deferred: decision.deferred,
             user_explanation: decision.user_explanation,
+            ...(parkedExpectations.length ? { deferred_expectations: parkedExpectations } : {}),
           },
           specialist: sharedSpecialist,
           evaluator_version: decision.expectations.length ? "case-conference-v2" : autonomy.decision.evaluator_version,
@@ -640,7 +652,7 @@ export async function runCaseConference(
       : null;
     if (autonomyDecision) {
       assertActive();
-      recordDecision(autonomyDecision, decision.expectations);
+      recordDecision(autonomyDecision, revisionHeld ? [] : decision.expectations);
       decision.autonomy_tier = autonomyDecision.autonomy_tier;
       return {
         ok: autonomy?.ok === true,
@@ -663,6 +675,13 @@ export async function runCaseConference(
     // A held/rejected executable recommendation stays a review record linked to
     // its real proposal. It is never marked announced without a boundary-appliable
     // proposal decision, which prevents inert announcements.
+    //
+    // Its predictions are PARKED on the record rather than attached as live
+    // expectations. They describe the effect of a plan revision that has not
+    // happened, and evaluateExpectation would judge a non-terminal `review`
+    // decision on schedule — writing a verdict about a counterfactual. Held
+    // here, they survive the hold intact and are thawed with re-based windows by
+    // recordAppliedProposalDecision if and when this proposal is finally applied.
     const heldTier = policy.tier === "observe" ? "observe" : policy.tier === "clinician" ? "clinician" : "ask";
     decision.autonomy_tier = heldTier;
     assertActive();
@@ -680,7 +699,12 @@ export async function runCaseConference(
       risk_class: decision.risk_class,
       reversible: false,
       input_fingerprint: null,
-      context: { ...sharedContext, proposal_held: true, policy_reasons: execution.reasons },
+      context: {
+        ...sharedContext,
+        proposal_held: true,
+        policy_reasons: execution.reasons,
+        deferred_expectation_count: Math.min(decision.expectations.length, MAX_DEFERRED_EXPECTATIONS),
+      },
       action: {
         proposal_id: proposal.id,
         conference_revision_type: decision.revision.type,
@@ -688,6 +712,7 @@ export async function runCaseConference(
         resolved_conflicts: decision.resolved_conflicts,
         deferred: decision.deferred,
         user_explanation: decision.user_explanation,
+        deferred_expectations: decision.expectations.slice(0, MAX_DEFERRED_EXPECTATIONS),
       },
       specialist: sharedSpecialist,
       applied_at: null,
@@ -714,6 +739,14 @@ export async function runCaseConference(
   // Advice-only output cannot be executed at a natural boundary, so an agent's
   // quiet_apply/announce request is safely held for review instead of creating a
   // zombie announced decision.
+  //
+  // Its predictions DO stay live, unlike the held-revision path above. There is
+  // no unapplied change here whose effect they would misattribute: advice is a
+  // read of where the picture is heading, and "where it heads" is exactly what
+  // the window measures. That makes an advisory conference checkable — the miss
+  // is real information about the read, not about a change that never landed.
+  // Any real change that lands on the same metric mid-window is picked up as an
+  // overlapping-decision confounder, so attribution stays honest.
   const advisoryTier = policy.tier === "observe" ? "observe" : policy.tier === "clinician" ? "clinician" : "ask";
   decision.autonomy_tier = advisoryTier;
   assertActive();
@@ -732,7 +765,7 @@ export async function runCaseConference(
       risk_class: decision.risk_class,
       reversible: decision.reversible,
       input_fingerprint: null,
-      context: { ...sharedContext, advisory_only: true },
+      context: { ...sharedContext, advisory_only: true, observational_expectations: true },
       action: {
         parallel_actions: decision.parallel_actions,
         resolved_conflicts: decision.resolved_conflicts,
@@ -745,7 +778,7 @@ export async function runCaseConference(
       superseded_by: null,
       evaluator_version: null,
     },
-    []
+    decision.expectations
   );
   return {
     ok: true,

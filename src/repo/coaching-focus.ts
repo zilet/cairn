@@ -1259,7 +1259,12 @@ function buildRetest(inp: CoachingFocusInput): CoachingRetest | null {
   // K5: the due labs / DEXA / lift re-checks that the adaptive attention engine
   // surfaces batch into this SAME checkpoint, so it's one calm draw + re-test window
   // rather than four separate nag feeds ("worth one visit: ferritin, lipids, squat").
-  const dueAttention = inputArray<DueAttentionInput>(inp.dueAttention);
+  // A "that change hasn't landed" follow-up shares the attention schedule but is
+  // not something to re-test, and it must not be what makes the checkpoint read
+  // as due. It has its own calm line elsewhere.
+  const dueAttention = inputArray<DueAttentionInput>(inp.dueAttention).filter(
+    (e) => !String(e?.signal_key ?? "").includes(":change-check:")
+  );
   if (dueAttention.length) {
     dueNow = true; // something is already due
     for (const e of dueAttention) {

@@ -4,7 +4,11 @@ import { buildCoachPrompt } from "./prompt.js";
 import { draftMealPlan, evolveProgram, generateInsight, nutritionCheckin, synthesizeHealth } from "./coachOps.js";
 import { precomputeDayRead, localToday, warmToday } from "./dayread.js";
 import { checkForUpdate } from "./updateCheck.js";
-import { evaluateMatureExpectations } from "./brainEvaluator.js";
+import {
+  evaluateMatureExpectations,
+  releaseStaleExpectationFollowups,
+  surfaceExpectationMisses,
+} from "./brainEvaluator.js";
 import {
   adoptOrphanedDrafts,
   applyDueAnnouncedDecisions,
@@ -812,6 +816,15 @@ export function startScheduler() {
         const evaluated = evaluateMatureExpectations(stamp, { limit: 200 });
         if (evaluated.evaluated > 0) {
           console.log(`[brain] evaluated ${evaluated.evaluated}/${evaluated.scanned} matured expectation(s).`);
+        }
+        // A change that missed its prediction used to stay applied forever with
+        // nobody told. File ONE quiet in-app note per such change on the
+        // attention schedule, and retire the notes that have had their say.
+        // Nothing is reverted and nothing is pushed — it waits to be read.
+        const noted = surfaceExpectationMisses(evaluated.evaluations, stamp);
+        const quieted = releaseStaleExpectationFollowups(stamp);
+        if (noted.length || quieted) {
+          console.log(`[brain] change follow-ups: ${noted.length} noted, ${quieted} released.`);
         }
       } catch (e: any) {
         recordSchedulerFailure("maturity_evaluation", e);

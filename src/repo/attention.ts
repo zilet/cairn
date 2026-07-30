@@ -86,6 +86,11 @@ interface NormalizedPolicy {
   release_condition: string;
 }
 
+// The `source` filed by the nightly "that change missed its prediction" note
+// (src/domain/brain/expectation-followup.ts). It lives here, beside the schedule
+// itself, so read surfaces can recognize the row without a repo -> domain import.
+export const EXPECTATION_FOLLOWUP_SOURCE = "expectation-followup";
+
 const REACTIVATING_EVENTS = new Set<AttentionEvent>([
   "symptom",
   "question",
