@@ -102,8 +102,11 @@ export const MECHANICS_ENCODING = `- Assisted movements use NEGATIVE weight (tar
 // which is exactly the drift this collapses. `path` is how THIS prompt addresses the
 // goal object — chat points at `DATA.goal` because its guardrails address the DATA
 // block by name, the nutrition prompts use the bare `goal` their other rules use.
-export function renderGoalTargetFallback(path = "goal"): string {
-  return `TARGETS: for EVERY kcal or protein target reference, use ${path}.effective_target first (the accepted/coordinated target when one exists), falling back to ${path}.recommended only when effective_target is absent.`;
+export function renderGoalTargetFallback(path = "goal", opts: { label?: boolean } = {}): string {
+  const rule = `or EVERY kcal or protein target reference, use ${path}.effective_target first (the accepted/coordinated target when one exists), falling back to ${path}.recommended only when effective_target is absent.`;
+  // label:false yields a standalone sentence for mid-bullet use; the default
+  // keeps the TARGETS: heading the block-style call sites rely on.
+  return opts.label === false ? `F${rule}` : `TARGETS: f${rule}`;
 }
 
 // The marker-transcription rules the health-document INGEST and the single-document

@@ -133,6 +133,18 @@ export function memoryMaintenanceDue(now: Date): boolean {
   return dailySlotDue(now, MEMORY_MAINT_STATE_KEY);
 }
 
+// A database that has never run a scheduler owes no catch-up: without this, a
+// fresh install (or a reset) booted after the memory hour would run the whole
+// nightly learning pass — agentic consolidation included — within a minute of
+// first paint. Acknowledging today makes the first pass wait for the next
+// memory hour, as it always did. An upgraded database has scheduler history,
+// so a genuinely missed hour still catches up.
+export function seedMemorySlotOnFreshInstall(now = new Date()) {
+  if (repo.getAppState(MEMORY_MAINT_STATE_KEY)) return;
+  if (repo.hasSchedulerHistory()) return;
+  repo.setAppState(MEMORY_MAINT_STATE_KEY, localToday(now));
+}
+
 export function acceptsWeeklyCoachProposal(parsed: unknown): boolean {
   return isPlanProposalResult(parsed);
 }
@@ -177,6 +189,7 @@ export function startScheduler() {
   const heartbeatTick = () => repo.setAppState("scheduler_heartbeat", new Date().toISOString());
   // Synchronous first stamp makes readiness meaningful immediately after start.
   heartbeatTick();
+  seedMemorySlotOnFreshInstall();
   // Wire agent-run telemetry: agents.ts can't import repo.ts (circular), so it
   // emits through a registered sink. recordAgentRun is itself failure-safe.
   setAgentRunSink((r) => repo.recordAgentRun(r));

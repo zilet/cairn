@@ -134,7 +134,7 @@ one up.
 | Set-by-set logging, history, PRs, est-1RM | Coach **chat** |
 | The plan editor (add/remove/reorder days) | Agent-shaped training and meal adaptations |
 | Bodyweight chart, goal feasibility check | Health-review **narrative** |
-| Marker extraction view & optimal-zone trends | Quiet cross-domain **insights** / weekly read |
+| Optimal-zone marker trends & the marker catalog | Lab-document **marker extraction** (upload → structured markers) & quiet **insights** / weekly read |
 | Recovery view, deterministic TDEE / expenditure | Recipe generation, single-meal swaps |
 | Activities, food notes, memory, family, life context | Background enrichment of free-text logs |
 | Endurance stats, run compliance, race countdown, PRs | Agent-refined weekly run prescriptions |

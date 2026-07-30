@@ -81,7 +81,7 @@ conversational and generative layer, and the app stays useful while you set one 
 | Logging, history, PRs, est-1RM | Coach **chat** |
 | The plan editor | Agent-shaped training and meal adaptations |
 | Bodyweight chart, goal feasibility | Health-review **narrative** |
-| Marker extraction & optimal-zone trends | Quiet **insights** / weekly read |
+| Optimal-zone marker trends | Lab-document **marker extraction**, quiet **insights** / weekly read |
 | Recovery view, deterministic TDEE | Recipe generation, single-meal swaps |
 
 A **coaching agent** means one of the supported CLIs — **Claude Code**, **Codex**,

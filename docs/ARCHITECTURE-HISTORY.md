@@ -6,7 +6,31 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ## 2026-07-30 — the presentation round: docs hold living references only
 
-Two commits, no migration, no service-worker change — nothing under `public/` moved.
+Six commits, no migration, no service-worker change — nothing under `public/` moved. Beyond the
+documentation work below, the round carried three runtime changes:
+
+- **The nightly learning pass became durable** (`src/scheduler.ts`). It was the last daily job gated
+  on the process being awake at exactly the memory hour, with its last-run date in a process-local
+  variable — a restart across 3am silently dropped a whole day of suggestion reconciliation,
+  expectation evaluation, miss follow-ups, step-back drafting and model rebuilds. `memoryMaintenanceDue()`
+  is now an hour floor over the same durable `dailySlotDue` slot every other daily job uses
+  (`app_state` key `memory_maint_last_date`), so a missed hour catches up on the next tick past it.
+  `seedMemorySlotOnFreshInstall()` acknowledges the current day on a database with no scheduler
+  history at all, so a brand-new install booted after 3am waits for the next memory hour instead of
+  running the whole pass — agentic consolidation included — a minute after first paint.
+- **Antigravity gained enforced structured output** (`agents.json`). `agy` 1.1.8 added
+  `--json-schema` + `--output-format`; both flags now ride the `{schema_args}` slot, with the model
+  JSON unwrapped from the CLI's telemetry envelope (`structured_output` key — the same trap grok
+  has). Verified live end-to-end through `runAgent`. Full flag notes: `docs/ARCHITECTURE.md`.
+- **The prompt layer got one home per repeated contract** (`src/prompt/`): `renderJsonContract()`
+  replaces ~22 hand-written output-contract preambles (the strictest drifted variant won),
+  `MECHANICS_ENCODING` + `renderGoalTargetFallback()` centralize the assisted-weight/timed-seconds/
+  target-fallback rules, the health ingest and enrich prompts share one transcription rule block,
+  and the meal-plan prompt no longer re-serializes six subtrees its `DATA:` projection already
+  carries (the check-in, which has no `DATA:` block, keeps the full payload). Lane-scoping the chat
+  action catalog was evaluated and deliberately rejected: real coach-lane phrasings ("undo that",
+  "my knee's been bugging me") route to coach, and no server backstop or escalation signal exists
+  to catch the capability loss.
 
 `docs/` now holds only documents that describe how Cairn currently works. Four executed one-round
 build plans and agent-process notes are deleted: `ADAPTIVE_DAILY_TRAINING_PLAN.md` (the four-stage
@@ -20,7 +44,7 @@ model-selection rules — both lines now stand on their own. Five source comment
 `db.ts`, `daily-composition.ts`, `daily-decision.ts` and `daily-reconciliation.ts` cited section
 numbers inside the deleted training plan (`§4`, `§5`, `§6`, `§8`); they name their stage instead.
 
-`README.md` went from 508 lines to 253. It had grown two Docker sections whose `docker run` block
+`README.md` went from 508 lines to 261. It had grown two Docker sections whose `docker run` block
 was byte-identical, a 230-word identity paragraph above the fold, an API count (`211 routes across
 84 groups`) that had drifted from the generated index's 307, and the MCP server — half of what makes
 Cairn interesting to anyone building with agents — buried at line 446. The rebuilt page leads with

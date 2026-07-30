@@ -113,6 +113,13 @@ function ensureSchedulerOperation(operation: string, slotStamp: string): Schedul
   return getSchedulerOperation(op, slot)!;
 }
 
+// A database with no scheduler_operations rows has never run a scheduler at
+// all — the signal startScheduler uses to tell a fresh install (owes no
+// catch-up) from an upgraded one (a missed slot should catch up).
+export function hasSchedulerHistory(): boolean {
+  return db.prepare(`SELECT 1 FROM scheduler_operations LIMIT 1`).get() !== undefined;
+}
+
 function isoMs(value: string | null): number | null {
   const ms = value ? Date.parse(value) : Number.NaN;
   return Number.isFinite(ms) ? ms : null;

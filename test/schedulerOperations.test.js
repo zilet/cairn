@@ -7,6 +7,7 @@ import {
   dailyWindowOperationDue,
   MEMORY_MAINT_STATE_KEY,
   memoryMaintenanceDue,
+  seedMemorySlotOnFreshInstall,
 } from "../dist/scheduler.js";
 import { localDateISO } from "../dist/repo/shared.js";
 import { brainRevisionSlotStamp } from "../dist/scheduler.js";
@@ -162,6 +163,24 @@ test("a restart through the memory hour still runs the nightly learning pass tha
   repo.setAppState(MEMORY_MAINT_STATE_KEY, slot);
   assert.equal(memoryMaintenanceDue(new Date(`${slot}T07:13:00`)), false);
   assert.equal(memoryMaintenanceDue(new Date(`${slot}T23:59:00`)), false);
+});
+
+test("a fresh install booted after the memory hour waits for the next one; an upgrade does not", async () => {
+  const slot = localDateISO();
+  // Fresh database: no scheduler history at all. The boot-time seed acknowledges
+  // today, so the first nightly pass waits for the next memory hour instead of
+  // firing — agentic consolidation included — a minute after first paint.
+  seedMemorySlotOnFreshInstall(new Date(`${slot}T09:00:00`));
+  assert.equal(repo.getAppState(MEMORY_MAINT_STATE_KEY), slot);
+  assert.equal(memoryMaintenanceDue(new Date(`${slot}T09:01:00`)), false);
+
+  // Upgrade case: a database WITH scheduler history but no memory stamp (the key
+  // is new) must NOT be seeded — the durable catch-up is the whole point.
+  repo.setAppState(MEMORY_MAINT_STATE_KEY, "");
+  await repo.runSchedulerOperation("some_other_daily_job", slot, async () => ({ outcome: "succeeded" }));
+  seedMemorySlotOnFreshInstall(new Date(`${slot}T09:00:00`));
+  assert.notEqual(repo.getAppState(MEMORY_MAINT_STATE_KEY), slot, "an upgraded DB must keep its catch-up");
+  assert.equal(memoryMaintenanceDue(new Date(`${slot}T09:01:00`)), true);
 });
 
 test("legacy weekly coach rotates parseable wrong-shape JSON through its semantic contract", async () => {

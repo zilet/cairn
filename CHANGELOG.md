@@ -5,6 +5,190 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [1.7.0] — 2026-07-30
+
+Several connected rounds land here, and they share one direction: the coaching brain got harder to
+fool and easier to trust. It can now tell a day you have genuinely earned from a day it simply knows
+nothing about — so a morning read can offer room to reach instead of only asking you to hold back —
+and it checks its own advice afterwards, quietly walking a change back when what it predicted did
+not happen. Underneath that, the signals it reads got more honest: a wearable number that stopped
+syncing now behaves as absent rather than as this morning's truth, muscle recovery fades over hours
+instead of flipping at midnight, and a rest suggestion you have repeatedly trained through without
+harm softens instead of repeating itself. Training also gained your own ordering of what it is all
+for, endurance that knows the difference between a road ride and a trail climb, and a pain note you
+can actually close. Food estimates now say how sure they are, and a meal logged in chat fills in with
+the review it promised.
+
+### Added
+
+- **Your priorities, in your order** — you can now say what training is actually for, ranked
+  (longevity, muscle, leanness, strength, endurance), what role endurance plays alongside it, and a
+  duration you want to be capable of. The coaching picture follows that order instead of assuming a
+  mixed profile means every goal weighs the same. Left unset, nothing about your existing setup
+  changes. Cairn also reads your logged work to describe a capability as ready, building, rebuilding,
+  or not yet observed — a description, never a change to your plan.
+- **Endurance that knows the terrain** — trail and lift-served mountain biking, road, gravel, alpine
+  and Nordic skiing, touring and the rest are now distinct rather than one "cycling" or "skiing"
+  bucket. A road ride no longer counts as evidence you are ready for a two-hour trail day, and load
+  accounting reflects climbing, technical descending, and the trunk and grip demand each mode
+  actually asks for.
+- **A running week that moves with your life** — the run plan is now a set of weekly intentions
+  reconciled with what you did: an actual run closes the matching easy, quality, or long intention
+  whichever day you ran it, key runs are spread rather than stacked onto one opening, and work that
+  no longer has a clean opening simply stays undated. Nothing is called missed, and nothing turns
+  into catch-up mileage.
+- **Rest days come with somewhere to put the energy** — a rest or easy Brief now offers two or three
+  low-key options (an easy spin, a walk, mobility, core) drawn from what you have actually been
+  loading and steered clear of anything currently sore, so a quiet day does not read as a void. Still
+  a suggestion; still nothing you owe anyone.
+- **Pain and injury you can actually close** — the finished-session note became a lifecycle. Report
+  it, get asked about only the movements it genuinely touches, and resolve it in one tap from the
+  Life card, the panel (now reachable on a rest day too) or chat — and resolving it truly quiets the
+  Brief, the banner and the timeline instead of leaving an echo behind. A recurrence starts a fresh
+  chapter without erasing the history. Soreness and performance read as words now, never numbers.
+- **A day you have earned reads like one** — when your own logged evidence backs it (recent sessions
+  coming back strong, nothing fresh pulling the other way), the morning read offers room to reach
+  inside the session rather than a flat "train". A watch alone can never grant this, and it never
+  makes the session longer — it is permission to push, not extra volume.
+- **A week you have earned can build a little faster** — a run of aligned outcomes with nothing
+  missed and no training symptom on record now earns a slightly larger next step on a lift, and a
+  slightly bigger running week, each inside a declared ceiling. Safety floors never move, one good
+  week straight after a bad one cannot whipsaw you upward, and mileage is held to the stricter
+  standard because tendon and bone adapt on a slower clock than a good fortnight can prove.
+- **The brain checks its own advice — and walks it back when it was wrong** — a change to your
+  training now predicts something checkable and only when you are already logging what could
+  disprove it: that sessions do not start feeling worse, that joint pain does not get more frequent
+  than it already was, that a lift holds its strength, that a bigger running week does not cost your
+  overnight recovery. If one of those genuinely misses, the change is drafted back to where it was
+  through the same review and one-tap-undo path as anything else. A missed workout never triggers
+  this — that is your call, and undoing your plan over it would be punishment.
+- **Home base, and travel that stays temporary** — set your home location once, by hand. A dated trip
+  becomes the coaching location while it is active and reverts on its own afterwards, while upcoming
+  and past trips stay on the timeline without ever overwriting home. No weather provider, no browser
+  location request, no daily "where are you" prompt — context only.
+- **A logged meal fills in with its own review** — chat's "I'll fill in the nutrition details"
+  finally resolves visibly, inside the same message: the ingredients the estimate was built from,
+  each with its own amount, and a plain line saying how the numbers were obtained. No follow-up
+  message, no notification, and a later revision updates the review in place rather than adding a
+  second one.
+
+### Changed
+
+- **A reading that stopped syncing stops speaking** — every wearable number now carries how old it is
+  allowed to be before it can speak for today (a night's sleep two days, readiness one, heart-rate
+  variability and resting heart rate and load three, fitness markers a fortnight). Past that it
+  behaves exactly as absent — never a stale vote at a discount. A wearable trend whose newest point
+  is weeks old likewise reports no direction and no projection, and says when it was actually last
+  measured.
+- **Muscle recovery fades instead of flipping at midnight** — recently trained muscle used to be a
+  yes/no with a hard cliff, so four sets and thirty sets were the same thing and both went from
+  smoked to fresh overnight. It is now a dose that decays at each muscle group's own rate; a
+  110-minute run is no longer the same event as a 55-minute one; and a running week finally counts as
+  work in the weekly balance read. Everything that asks "is this still recovering" now asks one
+  question, which is why the Brief no longer says quads and calves are due the morning after the long
+  run that flattened them.
+- **Soreness brakes only what you trained** — a rough session used to slow your whole body for three
+  days. It now scopes to the muscle groups that session actually worked, and stays conservative when
+  it cannot tell which those were.
+- **Rest stops repeating itself when you keep training through it** — if several recent rest mornings
+  were trained through with nothing in your feedback suggesting it cost you, the next one softens a
+  notch to easy rather than repeating a suggestion you have already answered. Anything clinical is an
+  absolute floor and is never softened, and a rest morning you honor resets the pattern.
+- **Estimates say how sure they are** — a vague guess no longer counts the same as a photo read: a
+  low-confidence food entry stays visible but is excluded from the food-quality tallies and from lab
+  correlation evidence, because an uncertain estimate is not evidence either way. A meal plan more
+  than three weeks past its week now reads as aged even when nothing upstream changed, and an active
+  lab finding on saturated fat or added sugar now lands a plain, non-blocking note on a plan that
+  reads "watch" on that band.
+- **The mood you log is part of the picture** — a check-in's mood has been recorded since the very
+  first check-in and read by nothing. It now appears in the evidence behind a read as context,
+  deliberately without steering the read itself: a passing low mood should not be able to turn an
+  otherwise evidence-free morning into a conclusion about your recovery.
+- **Rotating a movement in starts from a real number** — a swapped or added movement is now grounded
+  server-side: your supplied target if you gave one, then that lift's own logged history, then a
+  conservative starting idea from a related lift (advisory only, never saved, and retired by your
+  first logged set), then the baseline cue. A plan target that had fallen behind your actual lifting
+  catches up through the ordinary progression path.
+- **Training cards say one thing once** — a session's easing is stated once instead of three times in
+  competing voices, the fuel guard keeps its training consequence without printing calorie mechanics
+  onto a lift card, and progression phrasing rotates by day and by movement so the same sentence does
+  not greet you for a fortnight.
+- **A quieter morning** — logging a burst of sets on a day whose read is already settled no longer
+  sets off a chain of coaching recomputes, while a late correction still re-opens the day for an
+  honest re-read.
+- **More reliable coaching responses on one more assistant** — structured-output enforcement now
+  covers an additional connected coaching CLI, so plan changes, meal plans and swaps come back in the
+  expected shape rather than narrated around.
+- **The repo reads like the project it is** — the README is roughly half its former length with one
+  quickstart instead of two, live counts instead of a year-old drifted number, and the MCP server
+  promoted from a footnote to its own section. Executed one-round build plans are out of `docs/` (git
+  history keeps them), the vision document's plan of record caught up with what actually shipped and
+  records two honest reversals, and the design and quickstart docs name tabs that exist.
+- **Dependencies current** — a high-severity path-traversal advisory in the HTTP-server dependency
+  chain is cleared, along with a URI host-confusion issue; the audit now reports zero known
+  vulnerabilities.
+
+### Fixed
+
+- **A watch worn only in the daytime reported a resting heart rate that was not one** — readings in
+  the 94–118 range taken off a daytime low, which then fed a daily false "resting heart rate
+  elevated" caution. That value is now accepted only when the watch genuinely witnessed rest, "no
+  data" sentinel values are rejected at the door, and the affected history is repaired.
+- **A rough session could prolong its own verdict** — the low-performance signal read your last few
+  sessions, so a rest suggestion made sessions rarer and the evidence that would clear the flag took
+  longer to arrive. It now reads a plain seven-day window, a later good session clears an earlier
+  flag, an opened-and-abandoned session counts as nothing, and each flag dates to the session that
+  caused it rather than to "now".
+- **The brain's self-checking almost never reached a conclusion** — two changes whose questions
+  overlapped cancelled each other out, and with several questions opening a week the ledger had
+  reached exactly two conclusions in its entire life against 82 left hanging. The most recent change
+  now owns the measure, so the question that is actually live gets a real answer.
+- **The learned adjustments could freeze on old evidence** — the model read the oldest verdicts
+  rather than the newest once the history grew, a learned step for one lift could be shadowed by an
+  unrelated note, a safeguard against repeatedly reversed decisions quietly stopped firing on the
+  busiest area (exactly the one it exists for), and an adjustment earned once applied at full
+  strength forever. Learned adjustments now fade with age and stop moving numbers after a year.
+- **A meal correction in chat reached nothing** — "add half the Brussels sprouts from the appetizer
+  list" minutes after logging lunch was answered as though it had been recorded, while nothing
+  changed and no estimate was made. Menu wording now counts as food, a follow-up amendment lands on
+  the meal you just logged instead of creating a duplicate, the assistant is barred from claiming it
+  logged something when it did not, and the fuel strip no longer disagrees with the reply beside it.
+- **A restart no longer costs a day of learning** — the nightly pass was the last job still gated on
+  the server being awake at exactly 3am, with its last-run date held only in memory. A deploy through
+  that hour silently threw away the whole day's reconciliation, evaluation and model rebuilds; it now
+  catches up like every other daily job.
+- **Escaped punctuation in a morning headline** — a read that stored an ampersand as its escape code
+  ("Push session `&amp;` run complete") printed the code itself. Prose is decoded on the way in now,
+  refused if it still arrives escaped, and the stored history is repaired.
+- **Plan notes that had fossilized** — coaching adjustment notes layered on top of each other until
+  old fragments were stranded mid-sentence, and one internal-sounding line ("Explicit plan-day
+  override: Day 2.") reached the athlete. Notes keep one replaceable layer, truncate at a sentence
+  boundary, and the existing damage is repaired.
+- **A completed long effort closes the long run** — a quality-bearing long session now closes the
+  matching intention instead of leaving duplicate long work open, and a completed cardio date is
+  reserved rather than offered again.
+- **Movement checks only appear when they mean something** — the check now renders only for a
+  movement with a genuinely relevant, live pain note, and an imported legacy note can no longer
+  masquerade as a live prompt.
+- **A calorie target is no longer eased for a plan you did not eat** — when the weight did not move
+  as expected, the target was the only explanation available, so it got adjusted even on a week the
+  plan was never followed. How closely the plan was actually eaten is read first now, and an unclear
+  week ends the question honestly rather than convicting a target that was fine.
+- **A check-in is no longer judged against the trend it was made to change** — the weight slope
+  behind a nutrition check-in now starts at the check-in, waits for enough weigh-ins to say anything,
+  and stays quiet until then.
+
+### Notes
+
+- This round includes schema migrations **80** through **87**. Two add optional profile fields
+  (ordered training priorities, home location); the rest change no schema and repair or compact data:
+  fossilized plan notes, implausible historical watch readings and "no data" sentinels, escaped
+  day-read prose, a large pile of historical resolved-directive rows, and overlapping prediction
+  windows. All are idempotent. Down-migrations remain unsupported — back up before deploying.
+- PWA cache `cairn-v538`.
+- Learned adjustments, predictions and their verdicts remain internal instrumentation: they ground
+  future tuning in what actually happened, and none of it is ever shown to you as a score.
+
 ## [1.6.0] — 2026-07-25
 
 Three connected rounds land here. The day read grew more self-consistent and more honest about what

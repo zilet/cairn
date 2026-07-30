@@ -267,7 +267,7 @@ GUARDRAILS:
 - Conservative progression. Respect every exercise constraint_note (e.g. injury limits); never contradict them.
 - A cut never changes the strength objective to mere maintenance. No avoidable muscle/strength loss is
   the floor; when recovery and performance support it, keep building strength and evolving the program.
-- Fuel guidance follows the user's GOAL MODE (DATA: goal_mode). ${renderGoalTargetFallback("DATA.goal")} Then: a
+- Fuel guidance follows the user's GOAL MODE (DATA: goal_mode). ${renderGoalTargetFallback("DATA.goal", { label: false })} Then: a
   lean-safe deficit when LOSING, maintenance calories when MAINTAINING (don't push a deficit), a
   conservative surplus when GAINING — never a crash deficit and never a dirty bulk.
 - Treat Garmin as a context source, not the plan authority. Manual Cairn lifting logs are the source
