@@ -65,3 +65,67 @@ test("listMemory returns newest-first and respects the limit", () => {
   assert.equal(rows.length, 2);
   assert.equal(rows[0].content, "third", "newest first");
 });
+
+// ---- the floor under the nightly librarian --------------------------------
+// The consolidation prompt is TOLD that a goal or constraint the user stated
+// themselves is theirs until they say otherwise. An instruction is not an
+// enforcement: one hallucinated id on an unattended nightly pass would quietly
+// retire the athlete's own words in favour of something Cairn merely inferred.
+
+test("the librarian cannot supersede a goal the user stated themselves", async () => {
+  const { applyMemoryConsolidation } = await import("../dist/coachOps.js");
+  const goal = repo.addMemory("Get to 170 lb by the spring", "goal", "user");
+  const constraint = repo.addMemory("No overhead pressing until the shoulder settles", "constraint", "user");
+  const inferred = repo.addMemory("Tends to skip breakfast on travel days", "observation", "enrichment");
+
+  const applied = applyMemoryConsolidation({
+    supersedes: [
+      { id: goal.id, replacement: "Weight goal looks abandoned", reason: "no progress lately" },
+      { id: constraint.id, reason: "looks old" },
+      { id: inferred.id, replacement: "Eats breakfast on travel days now", reason: "a later note says otherwise" },
+    ],
+  });
+
+  assert.equal(repo.getMemory(goal.id).superseded_by, null, "the athlete's own goal survives");
+  assert.equal(repo.getMemory(constraint.id).superseded_by, null, "so does their own constraint");
+  assert.ok(repo.getMemory(inferred.id).superseded_by, "an INFERRED fact is still the librarian's to tidy");
+  assert.equal(applied.superseded, 1, "the refusal is a quiet skip — the rest of the pass still applies");
+});
+
+test("a merge that would fold a user goal into an inferred row is refused too", async () => {
+  const { applyMemoryConsolidation } = await import("../dist/coachOps.js");
+  const inferred = repo.addMemory("Seems to be aiming for a leaner spring", "observation", "enrichment");
+  const goal = repo.addMemory("Get to 170 lb by the spring", "goal", "user");
+
+  // A supersede wearing a merge's clothes: the surviving row is the inferred one.
+  const applied = applyMemoryConsolidation({
+    merges: [{ ids: [inferred.id, goal.id], content: "Aiming to lean out by spring", kind: "goal" }],
+  });
+  assert.equal(repo.getMemory(goal.id).superseded_by, null);
+  assert.equal(applied.merged, 0);
+});
+
+test("a user correcting their own goal still lands", async () => {
+  const { applyMemoryConsolidation } = await import("../dist/coachOps.js");
+  const older = repo.addMemory("Get to 175 lb by the spring", "goal", "user");
+  // Deliberately far enough apart in wording that addMemory's near-duplicate fold
+  // leaves two rows — the merge under test has to have two ids to work with.
+  const newer = repo.addMemory("Compete at 170 lb in April", "goal", "user");
+  assert.notEqual(newer.id, older.id);
+
+  const applied = applyMemoryConsolidation({
+    merges: [{ ids: [newer.id, older.id], content: "Compete at 170 lb in April", kind: "goal" }],
+  });
+  assert.equal(applied.merged, 1, "user-stated to user-stated is the athlete's own correction, not a takeover");
+  assert.equal(repo.getMemory(older.id).superseded_by, newer.id);
+});
+
+test("promotions are untouched by the floor — nothing is retired by promoting it", async () => {
+  const { applyMemoryConsolidation } = await import("../dist/coachOps.js");
+  const observation = repo.addMemory("Skips breakfast most mornings", "observation", "enrichment");
+  const applied = applyMemoryConsolidation({
+    promotions: [{ id: observation.id, kind: "preference", content: "Prefers fasted mornings" }],
+  });
+  assert.equal(applied.promoted, 1);
+  assert.equal(repo.getMemory(observation.id).kind, "preference");
+});

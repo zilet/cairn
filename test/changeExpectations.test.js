@@ -118,7 +118,41 @@ test("pain already being reported is not held against the change that follows it
   const { rows } = expectationsForProposal(proposal.id);
   const pain = rows.find((row) => row.metric_key === "joint_pain_or_soreness");
   assert.ok(pain);
-  assert.equal(JSON.parse(pain.target_json).max, 2, "the bar is the pain level that already existed");
+  // The bar is the pain level that already existed, expressed over the window it is
+  // CHECKED over: two sore sessions in the 28-day lookback is one across a 14-day
+  // window. Comparing the raw counts handed the guard twice the room it was written to
+  // allow — a real doubling of joint complaints came back "aligned".
+  assert.equal(JSON.parse(pain.target_json).max, 1, "the baseline count is rescaled to the window's length");
+  const spanDays = Math.round(
+    (Date.parse(`${pain.window_end}T00:00:00Z`) - Date.parse(`${pain.window_start}T00:00:00Z`)) / 864e5
+  );
+  assert.equal(spanDays, 14, "…and that window is the one the target is expressed in");
+});
+
+test("the pain guard keeps its floor: one occurrence in the lookback still permits one", () => {
+  benchWithHistory();
+  rateSession(isoDaysAgo(20), { performance: 3, soreness: 3, joint_pain: "left shoulder" });
+  rateSession(isoDaysAgo(12), { performance: 3, soreness: 2 });
+  const proposal = applyBenchStep();
+  const { rows } = expectationsForProposal(proposal.id);
+  const pain = rows.find((row) => row.metric_key === "joint_pain_or_soreness");
+  assert.ok(pain);
+  // Rounding is deliberately generous. Pain that was ALREADY being reported is not this
+  // change's fault, and rescaling must never convert an existing complaint into a
+  // guard the change is convicted by on its first sore day.
+  assert.equal(JSON.parse(pain.target_json).max, 1, "an existing complaint is still tolerated once");
+});
+
+test("a frequent pain history scales down proportionally, not to zero", () => {
+  benchWithHistory();
+  for (const back of [26, 22, 18, 14]) {
+    rateSession(isoDaysAgo(back), { performance: 3, soreness: 3, joint_pain: "left shoulder" });
+  }
+  const proposal = applyBenchStep();
+  const { rows } = expectationsForProposal(proposal.id);
+  const pain = rows.find((row) => row.metric_key === "joint_pain_or_soreness");
+  assert.ok(pain);
+  assert.equal(JSON.parse(pain.target_json).max, 2, "four sore sessions a month is two a fortnight");
 });
 
 test("an athlete who logs no feedback collects no feedback predictions", () => {
@@ -289,6 +323,32 @@ test("an est-1RM that regresses past the floor reads as not aligned, not as nois
   );
   const verdict = evaluateExpectation(lift.expectation, lift.decision, "2026-01-25");
   assert.equal(verdict.verdict, "not_aligned", JSON.stringify(verdict.confounders));
+});
+
+test("a planned deload as the last exposure is not a regression — the window's BEST answers the claim", () => {
+  // The claim this expectation makes is "the step should HOLD": did the lift's estimate
+  // stay at or above where it stood. Reading the LAST exposure made an easy final
+  // session look like a miss, which both eased the progression step and filed a "that
+  // change hasn't landed" note about a change that had in fact worked.
+  const exercise = repo.upsertExercise({ name: "Front Squat", muscle_group: "legs" });
+  for (const [date, weight] of [
+    ["2026-01-03", 215],
+    ["2026-01-08", 210],
+    ["2026-01-13", 150], // the deload
+  ]) {
+    const session = repo.getOrCreateSession(date, null);
+    dbInsertSet(session.id, exercise.id, { weight, reps: 5 });
+  }
+  const lift = storedExpectation(
+    buildLiftProgressionExpectations(
+      [{ exercise: "Front Squat", exercise_id: exercise.id, baseline_est_1rm: 250 }],
+      "2026-01-01"
+    )[0]
+  );
+  const verdict = evaluateExpectation(lift.expectation, lift.decision, "2026-01-25");
+  assert.equal(verdict.verdict, "aligned", JSON.stringify(verdict));
+  assert.ok(verdict.actual.best_est_1rm > verdict.actual.last_est_1rm, "both are reported; the best is what is judged");
+  assert.equal(verdict.actual.value, verdict.actual.best_est_1rm);
 });
 
 // ---- deferred conference predictions ----------------------------------------

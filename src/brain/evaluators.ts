@@ -303,15 +303,24 @@ function exerciseEst1rmObservation(context: EvaluatorContext): MetricObservation
   const points = [...bestByDate.entries()].map(([date, value]) => ({ date, value }));
   const first = points[0]?.value ?? null;
   const last = points.at(-1)?.value ?? null;
-  const delta = first != null && last != null ? rounded(last - first) : null;
+  // The claim being checked is "this load step should HOLD" — did the lift's estimate
+  // stay at or above where it stood when the step was made. That is a question about
+  // the window's best exposure, not about its last one. Reading `points.at(-1)` made a
+  // planned deload landing as the final session of the window look like a regression:
+  // an easy last day flipped the verdict to not_aligned, which both eased the
+  // progression step and filed a "that change hasn't landed" note about a change that
+  // had in fact worked. `last_est_1rm` is kept beside it as provenance.
+  const best = points.length ? Math.max(...points.map((point) => point.value)) : null;
+  const delta = first != null && best != null ? rounded(best - first) : null;
   return {
     actual:
       delta == null
         ? null
         : {
-            value: rounded(last!),
+            value: rounded(best!),
             delta,
             first_est_1rm: rounded(first!),
+            best_est_1rm: rounded(best!),
             last_est_1rm: rounded(last!),
             exposures: points.length,
           },
@@ -688,6 +697,11 @@ function recoveryObservation(context: EvaluatorContext): MetricObservation {
   const lastAverage = last.length ? last.reduce((sum, value) => sum + value, 0) / last.length : null;
   const delta =
     firstAverage != null && lastAverage != null && values.length >= 2 ? rounded(lastAverage - firstAverage) : null;
+  // `baseline_average` is the FIRST HALF OF THIS WINDOW, not the expectation's own
+  // pre-change baseline — this evaluator is a within-window drift read and never opens
+  // `expectation.baseline`. The writers that size their tolerance off a trailing
+  // average (buildHrvGuardExpectation) say so in their own docs; the name here is kept
+  // because it is the shape stored on every historical evaluation row.
   return {
     actual:
       delta == null

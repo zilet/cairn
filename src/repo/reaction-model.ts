@@ -25,7 +25,7 @@ import { activitySportWhere, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
 import { normalizedExerciseKey, canonicalGroup, isMobility } from "./exercise-canon.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { addMemory } from "./memory.js";
-import { metricLabel } from "./shared.js";
+import { addDaysISO, localDateISO, metricLabel } from "./shared.js";
 // Single sources of truth (function-level cycle, resolved at call time — the same
 // pattern coach↔intelligence↔propagation already rely on): the acute-marker classifier
 // (with its chronic-cluster guard) and the prior-week training-load helpers.
@@ -1072,17 +1072,53 @@ function nutritionMissScale(row: EvaluatedDecisionRow): number {
 // thing a larger step must never do is stack onto something that already hurts.
 const ACCELERATION_MIN_RUN = 2;
 
-// Any symptom row still standing. Read straight off the table rather than through
-// listTrainingSymptoms for the reason stated at the top of this module (it must not
-// import upward), and deliberately on the RAW stored status: an event whose lifecycle
-// only resolves as of some later date still counts as live here, which errs toward
-// holding the standard step rather than granting a larger one.
-function trainingSymptomOnRecord(): boolean {
+// …and WHICH members of the training family may earn it. The other two —
+// session_performance_feedback and joint_pain_or_soreness — are safety FLOORS, not
+// headroom. Their aligned bar is deliberately easy on purpose: "sessions did not rate
+// materially worse than they already did" and "joint pain did not become more frequent
+// than it already was". Clearing a floor twice says nothing broke; it is not evidence
+// that there is room for more, and "the joints didn't get worse, twice" must never buy
+// a bigger step. Only the two metrics that measure actual HEADROOM — targets being
+// completed, and the lift's own estimate holding or climbing — can push. Both feedback
+// guards keep their full ease-on-a-miss power, which is the asymmetry that matters.
+const ACCELERATING_TRAINING_METRICS: ReadonlySet<string> = new Set([
+  "exercise_target_completion",
+  "exercise_est_1rm_trend",
+]);
+
+// How far back a raw session-level joint-pain note still speaks for today.
+const RECENT_JOINT_PAIN_DAYS = 14;
+
+// Any symptom still standing, read on BOTH the places a symptom is recorded.
+//
+// Read straight off the tables rather than through listTrainingSymptoms for the reason
+// stated at the top of this module (it must not import upward), and deliberately on the
+// RAW stored status: an event whose lifecycle only resolves as of some later date still
+// counts as live here, which errs toward holding the standard step rather than granting
+// a larger one.
+//
+// The lifecycle table alone was not enough. `sessions.joint_pain` is where the athlete
+// actually writes "left knee felt off" when finishing a session, and only some of those
+// notes ever become a `training_symptom_events` row — so a fresh, hand-written joint
+// complaint could sit in the log while the model handed out a bigger step on top of it.
+// Both reads fail CLOSED: an unreadable table is not evidence of health.
+function trainingSymptomOnRecord(asOf = localDateISO()): boolean {
   try {
-    return !!db.prepare(`SELECT 1 FROM training_symptom_events WHERE status = 'active' LIMIT 1`).get();
+    if (db.prepare(`SELECT 1 FROM training_symptom_events WHERE status = 'active' LIMIT 1`).get()) return true;
   } catch {
     // No lifecycle table (an imported or partial DB) is not evidence of health, so
     // the conservative reading is "something might be live" — no acceleration.
+    return true;
+  }
+  try {
+    const since = addDaysISO(asOf, -RECENT_JOINT_PAIN_DAYS) ?? asOf;
+    return !!db
+      .prepare(
+        `SELECT 1 FROM sessions
+          WHERE date BETWEEN ? AND ? AND joint_pain IS NOT NULL AND trim(joint_pain) <> '' LIMIT 1`
+      )
+      .get(since, asOf);
+  } catch {
     return true;
   }
 }
@@ -1122,13 +1158,15 @@ function modifierFor(
     bounds = { min: 0.85, max: 1.1 };
     // Ease on a miss; hold by default; and — the branch this family alone gets —
     // ACCELERATE to the declared ceiling when a run of aligned verdicts has stood up
-    // with nothing missed against it and no symptom on record. Capped by `bounds`
-    // through boundedScale below, so the ceiling is the declared 1.1 and not a
+    // with nothing missed against it, no symptom on record, and the metric is one that
+    // can measure headroom at all (see ACCELERATING_TRAINING_METRICS). Capped by
+    // `bounds` through boundedScale below, so the ceiling is the declared 1.1 and not a
     // number this branch invents.
     scale =
       verdict === "not_aligned"
         ? 0.9
         : verdict === "aligned" &&
+            ACCELERATING_TRAINING_METRICS.has(row.metric_key) &&
             evidenceN >= ACCELERATION_MIN_RUN &&
             window.missed_n === 0 &&
             !trainingSymptomOnRecord()
@@ -1301,9 +1339,14 @@ function dayReadAdherenceLearnings(rows: EvaluatedDecisionRow[]): CoachOutcomeLe
     if (majority * 3 < window.length * 2) continue;
     const followsIt = followed >= diverged;
     const label = READ_KIND_LABEL[kind];
+    // Second person, because these two sentences are the ONE place in this module whose
+    // output is rendered verbatim to the athlete (learned-timeline's Learned entries).
+    // Everything else here is the machine register the model and the provenance trail
+    // read; "they usually take it" printed on a screen the athlete is reading is the
+    // same voice bug the signal state's `summary` already had.
     const statement = followsIt
-      ? `When the morning ${label}, they usually take it — ${followed} of the last ${window.length}.`
-      : `When the morning ${label}, they usually train anyway — ${diverged} of the last ${window.length}.`;
+      ? `When the morning ${label}, you usually take it — ${followed} of the last ${window.length}.`
+      : `When the morning ${label}, you usually train anyway — ${diverged} of the last ${window.length}.`;
     out.push({
       key: `day_read:${DAY_READ_ADHERENCE_METRIC}:${kind}`,
       domain: "cross_domain",
@@ -1313,9 +1356,10 @@ function dayReadAdherenceLearnings(rows: EvaluatedDecisionRow[]): CoachOutcomeLe
       statement,
       expected: `the ${kind} read to be followed`,
       observed: `${followed} followed, ${diverged} diverged`,
-      // What this learning is FOR, said plainly: it shapes how a read is worded and
-      // how much weight to put behind it, and it moves no number by itself.
-      change: "Let it shape how firmly the next read is put, never what the read is allowed to say.",
+      // What this learning is FOR, said plainly and TO the athlete — it lands right
+      // after the statement above in the Learned timeline. It shapes how a read is
+      // worded and how much weight sits behind it, and it moves no number by itself.
+      change: "It shapes how confidently the morning read is offered — never what it's allowed to say.",
       confidence: window.length >= 10 ? "observed" : "tentative",
       evidence_n: window.length,
       aligned_n: followed,

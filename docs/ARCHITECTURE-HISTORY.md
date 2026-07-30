@@ -4,6 +4,76 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-07-30 — the brain learns to push and to check its own changes
+
+Three tracks land beside the wearable-truth round below: a day that has actually earned it can now
+register as such, applied training changes get their promises checked, and outcome lessons stop
+mistaking a stale trend for their own effect.
+
+`src/repo/signal-state.ts` gains a `backed` support tier riding beside the existing five-value
+posture enum (untouched, including its safety ranking): `supportState()` earns it only from evidence
+in the athlete's OWN lane — `SUPPORT_EARNED_FIELDS` (`session_quality`/`felt_energy`/`sleep_feel`) —
+never from a wearable alone, so an absent or junk watch can neither grant nor deny the tier, and
+never when anything fresh is pulling the other way. `coach.ts`'s new `SessionQualitySignal` is the
+positive half of the autoregulation rollup: the freshest rated session came back strong with no
+soreness/joint report since, where before the rollup could only ever say something was wrong or say
+nothing at all. `dayRead()`'s `planned_training` rule reads a backed, uncaveated day into
+`signals.push_bias`, and `dayReadHeadline()` picks a push-flavored headline/frame off it rather than a
+fifth `kind` — `est_minutes` stays untouched, since a backed day is room to reach within the session,
+not a reason to make it longer.
+
+The personal-response model gets the same direction. `reaction-model.ts`'s `training_progression_step`
+family is the one metric allowed to ACCELERATE its own next step, to a declared ceiling, on a run of
+≥2 aligned verdicts with zero misses anywhere in the comparable window and no training symptom on
+record; `clampedOverload` (`src/repo/progression.ts`) now honors a modifier above 1 instead of
+discarding it. `run_volume_adherence` stays deliberately hold-or-ease — bone and tendon adapt on a
+slower clock than an aligned-verdict window can see, so "absorbing the load" is not evidence a bigger
+weekly jump is safe, and that ruling from the endurance round is now written down as code rather than
+convention.
+
+Eight of the fifteen falsifiable metrics had a registered evaluator and no writer, so the judgement
+never ran. `src/repo/brain/change-expectations.ts` writes four predictions against an applied training
+change, each only when the athlete is already logging the evidence that could falsify it:
+`buildTrainingFeedbackExpectations` (session ratings shouldn't slide, joint pain shouldn't get more
+frequent than it already was), `buildLiftProgressionExpectations` (a named lift's est-1RM should hold
+within 3%), and `buildHrvGuardExpectation` (a run-volume step shouldn't cost more than a tenth of the
+athlete's own overnight HRV — written only for a watch actually producing it). Case-conference
+predictions now survive all three paths: a landed or scheduled revision asserts them, a held one parks
+them on its own record instead of judging a change that never happened, and
+`recordAppliedProposalDecision` (`src/repo/profile.ts`) thaws a parked set with re-based windows the
+moment the proposal is finally applied; advice-only conferences keep their predictions live
+throughout, since an advisory read is checkable against where the picture actually heads.
+`src/domain/brain/expectation-followup.ts` turns a genuine `not_aligned` verdict on a change-effect
+metric into one quiet in-app note per DECISION (never per-prediction), which releases itself after
+three weeks or the moment the change behind it is no longer in force — nothing reverted, nothing
+pushed.
+
+Meal-plan adherence existed nowhere, so a missed weight expectation had exactly one explanation
+available — the calorie target — and eased it even when the athlete had simply not eaten the plan.
+`mealPlanAdherence()` (`src/repo/nutrition.ts`) classifies logged days against the plan's daily bands
+(`followed`/`diverged`/`too_thin`) and confounds the intake→weight evaluator into `inconclusive` on a
+clearly-diverged or unreadable window — a followed window adds nothing and simply lets the existing
+comparison run; adherence can only take a verdict away, never hand one out.
+
+The nutrition check-in lesson used to score a check-in against a trailing 21-day slope that predated
+it almost entirely. `postInterventionWeightTrend` (`src/repo/goal-pace.ts`) fits its slope only over
+weigh-ins on/after the intervention date, requires 3 weigh-ins across 7 days before it will speak, and
+otherwise defers idempotently — silent, never an error — closing honestly at a 28-day deadline.
+`session_suggest` outcomes gain a parallel minutes-drift lesson: three reconciled days drifting the
+same way inside a trailing 45-day window produce a calm "size up/down" learning, and a flip in
+direction retires its opposite (`writeLearning`, `src/repo/memory.ts`) rather than leaving both live.
+Memory's `last_referenced_at` was stamped and never read: `memoryForCoach()` now breaks confidence ties
+on it, and the consolidation librarian sees recorded/updated/surfaced dates plus who said each fact,
+under an explicit rule that age alone never supersedes and a goal the athlete stated themselves is
+theirs until they say otherwise.
+
+Migration **v85** (`day-read-entity-decode`, no schema change) repairs day-read `headline`/`why`/
+`focus` prose already stored HTML-escaped (`Push session &amp; run complete`), which the PWA then
+escaped a second time on render. `decodeDayReadAgentProse`/`decodeCommonEntities` (`src/dayread.ts`)
+decode agent prose on the way in, in one pass with `&amp;` decoded last, and
+`isValidDayReadAgentResult` now rejects prose that still carries an entity after that pass rather than
+silently double-decoding it.
+
 ## 2026-07-30 — grounded wearable truth and an adaptive rest read
 
 Four tracks, one round. Migration **v84** (`garmin-wear-quality-repair`, no schema change) repairs

@@ -947,6 +947,36 @@ function adherenceConfidence(readable: number, calendarDays: number): MealPlanAd
   return "high";
 }
 
+// The plan a past window has to be judged against is the one that was LIVE THEN, not
+// whatever is live now. A re-draft after the window closed would otherwise become the
+// yardstick for days the athlete ate against a different target — which reads as a
+// divergence they never made, and (through mealPlanAdherenceIssues) confounds the
+// intake evaluation that window exists to answer. Newest landed plan created on or
+// before the window's last day wins; with no plan that old, the current one is the only
+// answer available and is used exactly as before.
+function mealPlanInForceAt(windowEnd: string): any | null {
+  let rows: any[] = [];
+  try {
+    rows = db
+      .prepare(
+        `SELECT * FROM meal_plans
+          WHERE status IN ('accepted', 'applied', 'kept') AND date(created_at) <= date(?)
+          ORDER BY id DESC LIMIT 50`
+      )
+      .all(windowEnd) as any[];
+  } catch {
+    rows = [];
+  }
+  for (const row of rows) {
+    const plan = hydrate(row);
+    const adequacy = assessMealPlanAdequacy(plan?.parsed);
+    // Same gate currentMealPlan applies: an unchecked or mismatched artifact is never
+    // the plan anything is measured against.
+    if (adequacy.ok && adequacy.checked) return plan;
+  }
+  return null;
+}
+
 export function mealPlanAdherence(windowStart: string, windowEnd: string): MealPlanAdherenceResult {
   const empty = (summary: string, planId: number | null = null): MealPlanAdherenceResult => ({
     plan_id: planId,
@@ -971,7 +1001,7 @@ export function mealPlanAdherence(windowStart: string, windowEnd: string): MealP
   }
   let plan: any = null;
   try {
-    plan = currentMealPlan();
+    plan = mealPlanInForceAt(windowEnd) ?? currentMealPlan();
   } catch {
     plan = null;
   }
@@ -979,7 +1009,12 @@ export function mealPlanAdherence(windowStart: string, windowEnd: string): MealP
   const targetProtein = Number(plan?.parsed?.daily_protein_g);
   if (!plan || !Number.isFinite(targetKcal) || targetKcal <= 0) {
     // No live plan means there is nothing to have followed — an absence, not a miss.
-    return empty("No live meal plan with a daily calorie target covered this window.", plan?.id ?? null);
+    // `plan_id` stays NULL even when a plan row exists but carries no headline
+    // daily_kcal: the id is how callers ask "was there a target to diverge from?", and
+    // a legacy plan without one has no answerable target. Handing back its id made
+    // every intake window it touched permanently confounded (evaluators.ts bails only
+    // on a null plan_id), which silently froze the nutrition_step modifier.
+    return empty("No live meal plan with a daily calorie target covered this window.");
   }
 
   let intake: ReturnType<typeof completedIntakeRange>;

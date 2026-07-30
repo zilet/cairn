@@ -972,15 +972,35 @@ function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?:
     try {
       const parkRows = db
         .prepare(
-          `SELECT action_json FROM brain_decisions
+          `SELECT id, action_json FROM brain_decisions
             WHERE source_ref_type = 'plan_proposal' AND source_ref_key = ?
               AND json_extract(action_json, '$.deferred_expectations') IS NOT NULL
             ORDER BY id LIMIT 10`
         )
-        .all(String(p.id)) as Array<{ action_json: string | null }>;
+        .all(String(p.id)) as Array<{ id: number; action_json: string | null }>;
+      // Cold storage is consumed EXACTLY ONCE. Two things enforce that, because either
+      // alone leaves a hole: the payload is cleared off each park row as it is thawed
+      // (so a proposal that was held, released, held again and re-applied cannot thaw
+      // the same predictions a second time), and the thawed set is deduped by
+      // metric+subject (so two park rows for one proposal produce one prediction per
+      // thing predicted, not two windows racing to judge the same change).
+      const seen = new Set<string>();
       for (const row of parkRows) {
         const parked = JSON.parse(String(row.action_json ?? "{}"))?.deferred_expectations;
-        expectations.push(...rebaseDeferredExpectations(parked, today));
+        for (const thawed of rebaseDeferredExpectations(parked, today)) {
+          const key = `${thawed.metric_key}::${thawed.subject_key ?? ""}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          expectations.push(thawed);
+        }
+        try {
+          db.prepare(
+            `UPDATE brain_decisions SET action_json = json_remove(action_json, '$.deferred_expectations') WHERE id = ?`
+          ).run(row.id);
+        } catch {
+          // Clearing the payload is bookkeeping; the dedupe above already stops a
+          // double-thaw within this apply, and a failed clear must not sink it.
+        }
       }
     } catch {
       // Same rule: a malformed parked payload must never block the apply.

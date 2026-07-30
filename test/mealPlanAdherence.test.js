@@ -120,6 +120,66 @@ test("confidence degrades with thin logging instead of blaming it", () => {
   assert.doesNotMatch(read.summary, BLAME_WORDS);
 });
 
+// Land a plan and pin exactly when it landed, so "which plan was live during the
+// window" is a real question rather than an artifact of insertion order.
+function landPlan(createdAt, overrides = {}) {
+  const plan = livePlan(overrides);
+  db.prepare(`UPDATE meal_plans SET status = 'accepted', created_at = ? WHERE id = ?`).run(createdAt, plan.id);
+  return plan;
+}
+
+test("a window is judged against the plan that was live THEN, not a later re-draft", () => {
+  // What the athlete was actually eating against, then a fresh plan drafted after the
+  // window closed with a very different target.
+  const during = landPlan("2026-01-02 09:00:00", { daily_kcal: PLAN_KCAL, daily_protein_g: PLAN_PROTEIN });
+  const after = landPlan("2026-02-01 09:00:00", { daily_kcal: 3_000, daily_protein_g: 210 });
+  for (let day = 3; day <= 12; day++) {
+    logDay(`2026-01-${String(day).padStart(2, "0")}`, PLAN_KCAL, PLAN_PROTEIN);
+  }
+
+  const read = repo.mealPlanAdherence("2026-01-03", "2026-01-12");
+  assert.equal(read.plan_id, during.id, "the newest plan is not automatically the right yardstick");
+  assert.notEqual(read.plan_id, after.id);
+  assert.equal(read.daily_kcal, PLAN_KCAL);
+  assert.equal(read.followed_days, 10, "days eaten against the live plan read as followed");
+  assert.equal(read.clearly_diverged, false, "a re-draft must not retroactively invent a divergence");
+});
+
+test("with no plan old enough to have covered the window, the current one is still the answer", () => {
+  landPlan("2026-06-01 09:00:00");
+  logDay("2026-01-05", PLAN_KCAL, PLAN_PROTEIN);
+
+  const read = repo.mealPlanAdherence("2026-01-03", "2026-01-12");
+  assert.ok(read.plan_id, "the fallback keeps a plan-less window from being invented");
+  assert.equal(read.daily_kcal, PLAN_KCAL);
+});
+
+test("a plan carrying no headline calorie target confounds nothing — there was no target to diverge from", () => {
+  // The legacy shape: a stored plan with days but no daily_kcal/daily_protein_g. It can
+  // never be a yardstick, so it must not be reported as one either — evaluators.ts
+  // treats a non-null plan_id as "a plan was live here", and handing one back for a
+  // plan with no readable target confounded every intake window it touched.
+  db.prepare(
+    `INSERT INTO meal_plans (week_of, agent, raw_output, parsed_json, status, created_at)
+     VALUES ('2026-01-01', 'legacy', '', ?, 'accepted', '2026-01-01 09:00:00')`
+  ).run(JSON.stringify({ summary: "Legacy plan", days: [{ day: "Mon", meals: [{ name: "Meal", kcal: 700 }] }] }));
+
+  const read = repo.mealPlanAdherence("2026-01-03", "2026-01-12");
+  assert.equal(read.plan_id, null, "no readable target means no plan for adherence purposes");
+  assert.equal(read.confidence, "none");
+  assert.equal(read.clearly_diverged, false);
+
+  // …and the evaluator therefore reads the window exactly as it would with no plan.
+  seedWindow({ dayCount: 10, kcal: 3_600, minIntakeDays: 10 });
+  const result = evaluateMatureExpectations(AS_OF);
+  assert.equal(result.evaluations[0].verdict, "not_aligned");
+  assert.equal(
+    result.evaluations[0].confounders.some((item) => DIVERGED_CONFOUNDER.test(item) || UNREADABLE_CONFOUNDER.test(item)),
+    false,
+    "a plan with no target must not permanently confound the intake evaluation"
+  );
+});
+
 // ── the evaluator verdict path ───────────────────────────────────────────────
 
 const AS_OF = "2026-01-16";

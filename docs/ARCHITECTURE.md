@@ -514,10 +514,44 @@ would invite a session that day is already over for and would be grounded in tod
 than that day's anyway. A suggestion, never a gate: nothing on the menu is presented as required, and
 resting stays a fine answer beside every option.
 
+**A day the evidence backs can push, not just hold.** `supportState()` (`src/repo/signal-state.ts`)
+earns a `backed` support tier riding beside the existing five-value posture enum — untouched,
+including its safety ranking — from evidence in the athlete's OWN lane only:
+`SUPPORT_EARNED_FIELDS` (`session_quality`/`felt_energy`/`sleep_feel`). A wearable reading can
+corroborate a backed day like any other support item but can never earn one alone, which is what
+keeps the tier wearable-neutral — an absent or junk watch leaves the day exactly where a present one
+would. It requires all three: arbitration already landed on a plain ready/train day, nothing fresh is
+pulling the other way (no caution or constraint anywhere), and at least one fresh item from that set
+says training is going well. `coach.ts`'s new `SessionQualitySignal` is the positive half of the
+autoregulation rollup that feeds it — the freshest rated session came back strong with no
+soreness/joint report since, where the rollup used to have no way to distinguish that from no
+evidence at all. `dayRead()`'s `planned_training` rule reads a backed, uncaveated day into
+`signals.push_bias`, which `dayReadHeadline()` reads to pick a push-flavored headline/frame rather
+than invent a fifth `kind`; `est_minutes` stays untouched, since a backed day is room to reach WITHIN
+the session, not a reason to make it longer. The safety clamp is unaffected either way:
+`enforceDayReadSafetyPosture` only ever clamps a read DOWN, so push logic has to live in this
+deterministic rule ahead of that clamp to have any effect at all.
+
 ### Person, memory, chat
 
 - Memory CRUD (`addMemory`/`listMemory`/`updateMemory`/`deleteMemory` — `addMemory` dedupes exact
   repeats).
+- **Memory ages, but age alone never supersedes.** `memoryForCoach()` breaks confidence ties on
+  `COALESCE(last_referenced_at, updated_at, created_at)` — a column stamped on every surface since
+  earlier but never actually read until now — so among equally-confident rows the one LIVE most
+  recently wins; confidence itself stays primary, so a fact the athlete has restated outranks a fresher
+  but lower-confidence one. The consolidation librarian prompt (`src/prompt/chat.ts`) now sees the same
+  recorded/updated/surfaced dates plus who said each fact, under an explicit rule that age is a
+  tiebreak, never a verdict, and a goal the athlete stated themselves is theirs until they say
+  otherwise.
+- **Outcome lessons earn their own evidence.** The nutrition check-in lesson used to score a check-in
+  against a trailing 21-day slope that predated the intervention almost entirely.
+  `postInterventionWeightTrend()` (`src/repo/goal-pace.ts`) fits its slope only over weigh-ins on/after
+  the check-in date, requires 3 weigh-ins across 7 days before it will speak, and otherwise defers
+  idempotently — silent, never an error — closing honestly at a 28-day deadline. The `session_suggest`
+  minutes-drift lesson (`src/repo/memory.ts`) needs 3 reconciled days drifting the same way inside a
+  trailing 45-day window before it speaks, and a flip in direction retires its opposite
+  (`writeLearning`) rather than leaving both live.
 - Chat (`addChatMessage`/`listChatMessages`/`archiveChat`/`clearChat`/`saveDistilledMemories`):
   `listChatMessages` returns only the live conversation (`archived_at IS NULL`); `archiveChat` stamps
   every live row instead of deleting (clear/reset never hard-delete; archived turns stay in the DB
@@ -1042,6 +1076,33 @@ Material coaching decisions live in a durable ledger — `brain_decisions`/`brai
 evaluators (`src/brain/evaluators.ts` via `src/brainEvaluator.ts`; verdicts
 `aligned|not_aligned|inconclusive|canceled`; zero-evidence comparisons stay inconclusive by contract)
 that feed the bounded personal-response model (`what_works_for_you`, `src/repo/reaction-model.ts`).
+
+**A prediction is written only when the evidence that could falsify it is already logged.**
+`src/repo/brain/change-expectations.ts` is the writer side of the evaluators above: an applied
+training change gets `buildTrainingFeedbackExpectations` (session ratings shouldn't slide, joint pain
+shouldn't get more frequent than it already was), `buildLiftProgressionExpectations` (a named lift's
+est-1RM should hold within 3%), and `buildHrvGuardExpectation` (a run-volume step shouldn't cost more
+than a tenth of the athlete's own overnight HRV — written only for a watch actually producing it).
+Each reads a pre-change baseline and skips silently when the athlete isn't already logging the signal
+that would falsify it, so a quiet logger collects no predictions rather than a drawer of permanently
+inconclusive rows. Case-conference predictions survive all three decision paths: a landed or scheduled
+revision asserts them; a HELD one parks them on its own decision record instead (`case-conference.ts`)
+— judging an unapplied change on schedule would write a verdict about a counterfactual —
+and `recordAppliedProposalDecision()` (`src/repo/profile.ts`) thaws a parked set with re-based windows
+the moment the proposal is finally applied; an advice-only conference keeps its predictions live
+throughout, since an advisory read is checkable against where the picture actually heads regardless of
+whether any change lands. `src/domain/brain/expectation-followup.ts` turns a genuine `not_aligned`
+verdict on a change-effect metric into ONE quiet in-app note per DECISION (never per-prediction),
+released after three weeks or the moment the change behind it is no longer in force — nothing
+reverted, nothing pushed. `training_progression_step` is the one metric family allowed to ACCELERATE:
+`reaction-model.ts`'s `modifierFor` steps to its declared ceiling only on a run of ≥2 aligned verdicts,
+zero misses anywhere in the comparable window, and no training symptom on record (`clampedOverload`,
+`src/repo/progression.ts`, now honors a modifier above 1 instead of discarding it); `run_volume_step`
+stays deliberately hold-or-ease, since bone and tendon adapt on a slower clock than an aligned-verdict
+window can see. **Adherence can only take a verdict away, never hand one out**: `mealPlanAdherence()`
+(`src/repo/nutrition.ts`) confounds the intake→weight evaluator into `inconclusive` on a
+clearly-diverged or unreadable logging window — a followed window adds nothing and simply lets the
+existing comparison run, so adherence can never itself supply a decisive verdict.
 
 Write chokepoints across training/nutrition/health/recovery/body/profile/goal emit `emitBrainEvent()`
 (`src/brainEvents.ts` — debounced, coalesced, cooldown-deduped) which routes material signals into

@@ -22,6 +22,27 @@ import { addDaysISO } from "../shared.js";
 // was already sore or already flat is not held against the athlete.
 
 const LOOKBACK_DAYS = 28;
+// How long the "did this change land badly on the person" predictions run for. Named
+// because the joint-pain target has to be expressed in the SAME units as the window it
+// is checked over — see painTargetForWindow below.
+const FEEDBACK_WINDOW_DAYS = 14;
+
+/**
+ * The baseline pain-session COUNT, rescaled from the lookback to the evaluation
+ * window. The counts are raw occurrences, not rates, so comparing a 28-day baseline
+ * against a 14-day window handed the guard twice the room it was written to allow: an
+ * athlete with four sore sessions a month could report four in a fortnight — a real
+ * doubling — and still come back `aligned`.
+ *
+ * Rounding is deliberately generous (`Math.round`, so a single baseline occurrence
+ * still permits one). That preserves the floor the guard exists for: pain that was
+ * ALREADY being reported is not this change's fault, and a change must never be
+ * convicted for the athlete's pre-existing picture.
+ */
+function painTargetForWindow(painSessions: number, windowDays = FEEDBACK_WINDOW_DAYS): number {
+  const scaled = Math.max(0, painSessions) * (windowDays / LOOKBACK_DAYS);
+  return Math.max(0, Math.round(scaled));
+}
 
 function rounded(value: number, digits = 2): number {
   const factor = 10 ** digits;
@@ -91,7 +112,7 @@ export function buildTrainingFeedbackExpectations(
   asOf: string,
   baseline = sessionFeedbackBaseline(asOf)
 ): ProposedExpectation[] {
-  const windowEnd = addDaysISO(asOf, 14) ?? asOf;
+  const windowEnd = addDaysISO(asOf, FEEDBACK_WINDOW_DAYS) ?? asOf;
   const out: ProposedExpectation[] = [];
   if (baseline.rated_sessions >= 2 && baseline.average_rating != null) {
     out.push({
@@ -126,8 +147,10 @@ export function buildTrainingFeedbackExpectations(
         lookback_days: LOOKBACK_DAYS,
       },
       // Pain that was ALREADY being reported is not this change's fault. The
-      // falsifiable claim is that it does not become more frequent.
-      target: { max: baseline.pain_sessions },
+      // falsifiable claim is that it does not become more FREQUENT — which means the
+      // baseline count has to be expressed over this window's length, not the
+      // lookback's.
+      target: { max: painTargetForWindow(baseline.pain_sessions) },
       window_start: asOf,
       window_end: windowEnd,
       minimum_data: { feedback_entries: 2 },
@@ -234,9 +257,11 @@ export interface HrvBaseline {
 
 /**
  * The athlete's own overnight HRV level before a change. Merged the same way the
- * evaluator merges it — a source-agnostic `daily_metrics` row per date, with any
- * non-null Garmin value winning — so the baseline and the outcome are read off
- * the same picture.
+ * evaluator merges its nights — a source-agnostic `daily_metrics` row per date, with
+ * any non-null Garmin value winning — so the two read the same picture.
+ *
+ * Read ONLY to size the guard's tolerance (see buildHrvGuardExpectation). It is not a
+ * comparison baseline: nothing downstream measures the window against this number.
  *
  * A wearable is OPTIONAL in this app. No nights means no baseline, which means
  * no expectation: absence of a watch must be neutral, never a miss.
@@ -266,8 +291,21 @@ export function hrvBaseline(asOf: string, lookbackDays = LOOKBACK_DAYS): HrvBase
 /**
  * The HRV half of the endurance-load recovery guard, written beside the existing
  * resting-HR one when — and only when — the athlete's watch has actually been
- * producing overnight HRV. The claim is bounded and personal: stepping weekly
- * volume up should not cost more than a tenth of the athlete's own HRV level.
+ * producing overnight HRV.
+ *
+ * WHAT IS ACTUALLY CHECKED: the `recovery_delta` evaluator compares the FIRST half of
+ * this window's nights against the SECOND half of the same window, and asks whether
+ * that within-window drift stayed at or above `target.value`. It never reads the
+ * 28-day baseline below — nothing here is measured against the athlete's prior level.
+ * So the falsifiable claim is "stepping weekly volume up should not send HRV drifting
+ * downward across the weeks that follow", not "HRV should stay near where it was".
+ *
+ * The baseline is used for ONE thing, and it is a heuristic: SIZING that tolerance. A
+ * tenth of the athlete's own average is a personal way to say "a meaningful drop for
+ * this person" rather than a fixed millisecond figure that means different things at
+ * 40 ms and 120 ms — with an absolute 2 ms floor so a very low HRV cannot produce a
+ * tolerance too tight to be real. Change the sizing here freely; changing what is
+ * compared means changing the evaluator.
  */
 export function buildHrvGuardExpectation(
   asOf: string,

@@ -16,6 +16,7 @@ import { getBrainDecision, listBrainExpectations, transitionBrainDecision } from
 import { recordDecision } from "../dist/domain/brain/decision-service.js";
 import { insertBrainEvaluation } from "../dist/repo/brain-evaluations.js";
 import { getAttentionSchedule, listAttentionBySource } from "../dist/repo/attention.js";
+import { teamWeekRead } from "../dist/repo/team-week.js";
 import {
   releaseStaleExpectationFollowups,
   surfaceExpectationMisses,
@@ -160,6 +161,54 @@ test("a parked prediction thaws onto the decision that finally applies the propo
   assert.notEqual(thawed.window_start, "2026-01-01");
 });
 
+test("parked predictions are consumed exactly once, however many park rows exist", async () => {
+  seedPlan();
+  repo.setSettings({ lead_mode: "lead" });
+  const result = await conference(
+    "Should bench load move despite shoulder pain?",
+    { revision: benchStep },
+    { context: { injury: "shoulder pain" } }
+  );
+  const parked = getBrainDecision(result.recorded_decision_id).action.deferred_expectations;
+  assert.ok(Array.isArray(parked) && parked.length === 1);
+
+  // A SECOND park row carrying the same predictions for the same proposal — the shape a
+  // hold, release and re-hold cycle leaves behind. Thawing it too would give one change
+  // two windows racing to judge it.
+  db.prepare(
+    `INSERT INTO brain_decisions
+       (effective_date, kind, domain, summary, rationale, source, source_ref_type, source_ref_key,
+        status, autonomy_tier, risk_class, reversible, input_fingerprint, context_json, action_json,
+        evaluator_version)
+     VALUES ('2026-01-01', 'case_conference', 'training', 'A second hold on the same proposal.',
+             'Held again before it landed.', 'test', 'plan_proposal', ?, 'review', 'ask', 'low', 1,
+             NULL, '{}', ?, 'case-conference-v1')`
+  ).run(String(result.proposal_id), JSON.stringify({ deferred_expectations: parked }));
+
+  assert.equal(repo.applyProposal(result.proposal_id).ok, true);
+  const appliedDecision = db
+    .prepare(
+      `SELECT id FROM brain_decisions
+       WHERE source_ref_type = 'plan_proposal' AND source_ref_key = ? AND status = 'applied'
+       ORDER BY id DESC LIMIT 1`
+    )
+    .get(String(result.proposal_id));
+  const thawed = listBrainExpectations({ decisionId: appliedDecision.id }).filter(
+    (e) => e.evaluator_version === "case-conference-v1"
+  );
+  assert.equal(thawed.length, 1, "two park rows for one proposal thaw ONE set of predictions");
+
+  // …and cold storage is empty afterwards, so a later apply has nothing left to thaw.
+  const remaining = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM brain_decisions
+        WHERE source_ref_type = 'plan_proposal' AND source_ref_key = ?
+          AND json_extract(action_json, '$.deferred_expectations') IS NOT NULL`
+    )
+    .get(String(result.proposal_id));
+  assert.equal(remaining.n, 0, "the payload is cleared as it is consumed");
+});
+
 test("an advisory conference keeps its predictions as observational ones", async () => {
   seedPlan();
   repo.setSettings({ lead_mode: "lead" });
@@ -233,7 +282,11 @@ test("a missed prediction files exactly one calm note, and re-running files none
   assert.equal(entry.signal_key, `training:change-check:d${recorded.decision.id}`);
   assert.equal(entry.domain, "training");
   assert.equal(entry.tier, "active");
-  assert.equal(entry.next_due, "2026-01-16", "it is visible the day it is written, not a quarter later");
+  // Dated to the END of its standing window, because team-week's `watching` shows an
+  // entry whose next_due falls between today and three weeks out: due TODAY meant
+  // readable for exactly one day, and the signal-key dedupe then silenced the change
+  // forever.
+  assert.equal(entry.next_due, "2026-02-06", "it stands for its whole window, not a single day");
   assert.match(entry.reason, /Bench moves up one small step/);
   assert.match(entry.reason, /hasn't|expected/i);
   // Calm register: a suggestion to look, never a gate, a grade, or a command.
@@ -296,6 +349,21 @@ test("a standing note goes quiet on its own, and the moment its change is undone
 
   // The released row is still the dedupe record, so the same change never speaks twice.
   assert.equal(surfaceExpectationMisses([missVerdict(recorded.expectations[0].id)], "2026-02-01").length, 0);
+});
+
+test("the note is readable for its whole standing period, then falls out of the window", () => {
+  const recorded = appliedTrainingExpectation();
+  surfaceExpectationMisses([missVerdict(recorded.expectations[0].id)], "2026-01-16");
+  const mentionsTheChange = (asOf) =>
+    teamWeekRead({ asOf }).watching.some((item) => /bench moves up one small step/i.test(item.text));
+
+  // The bug: `next_due: asOf` cleared team-week's `asOf <= due <= asOf + 21` window
+  // the very next morning, and the dedupe meant it could never be written again.
+  assert.equal(mentionsTheChange("2026-01-17"), true, "day two — the day the old behaviour went silent");
+  assert.equal(mentionsTheChange("2026-02-05"), true, "still standing near the end of its window");
+  // Past the window the row is out of `watching` on both counts: its due date has
+  // passed AND releaseStaleExpectationFollowups has retired it by then.
+  assert.equal(mentionsTheChange("2026-02-08"), false, "and it does not become a permanent resident");
 });
 
 test("a note that nobody acted on goes quiet after its standing window", () => {

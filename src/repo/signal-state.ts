@@ -36,8 +36,10 @@ export interface SignalSupport {
   // MACHINE-facing evidence prose, on the same terms as every `summary` in this
   // module. Never rendered to the athlete.
   summary: string;
-  // The athlete-facing voice of the same evidence, on the same terms as `action.voice`.
-  voice: SignalVoiceRef;
+  // Deliberately no athlete-facing `voice` here, unlike `action.voice`: the words for a
+  // backed morning live with the surface that says them (TRAIN_PUSH_WHY in day-read.ts),
+  // and a second set here would be a second vocabulary for one state. See the note at
+  // the end of SIGNAL_VOICE.
   // Which observations earned it, so a surface (and the provenance trail) can say
   // what the day is backed BY rather than just that it is.
   fields: string[];
@@ -524,18 +526,12 @@ export const SIGNAL_VOICE = {
       "Today's signals leave the planned day alone.",
     ],
   },
-  // The day the evidence is actively GOOD rather than merely quiet. `unvoiced_clear`
-  // above is the absence of an argument against the plan; this is the presence of an
-  // argument for reaching a little further, and the two must not sound alike.
-  well_backed: {
-    concept: /\b(?:carrying|handling|absorbing|well)\b/i,
-    variants: [
-      "Everything you've logged lately says you're carrying this well.",
-      "What you've put in recently says you're handling the current load.",
-      "Your own recent evidence says you're absorbing this work well.",
-      "By everything you've logged, this block is landing well for you.",
-    ],
-  },
+  // NOTE: there is deliberately no voice for the BACKED day here. The one athlete-facing
+  // surface that speaks on a backed morning is the Brief's `why`, and it already owns a
+  // dedicated, grammar-registered set for exactly that state (TRAIN_PUSH_WHY in
+  // day-read.ts). A second vocabulary for one state is how two surfaces end up saying
+  // slightly different things about the same morning — which is the drift this whole
+  // layer exists to prevent. `SignalSupport` therefore carries evidence, not words.
 } as const satisfies Record<string, SignalVoiceEntry>;
 
 export type SignalVoiceKey = keyof typeof SIGNAL_VOICE;
@@ -928,7 +924,6 @@ function supportState(
     level: "backed",
     summary:
       "Recent logged evidence is positively supportive and nothing fresh is pulling the other way, so the day carries room to reach.",
-    voice: { key: "well_backed" },
     fields: [...new Set(support.map((item) => item.field))],
   };
 }

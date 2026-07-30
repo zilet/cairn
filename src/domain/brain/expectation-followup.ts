@@ -109,9 +109,16 @@ export function surfaceExpectationMisses(
           signal_key: signalKey,
           domain,
           tier: "active",
-          // Due the day it is written: the whole point is that this stopped being
-          // invisible. Its own release below is what keeps that bounded.
-          next_due: asOf,
+          // Due at the END of its standing window, not the day it is written. The one
+          // athlete-facing reader (team-week's `watching`) shows an entry whose
+          // `next_due` falls between today and three weeks out, so a due date of `asOf`
+          // was readable for exactly one day — and the signal-key dedupe then silenced
+          // that change forever. Dated forward, the note stands for the whole window and
+          // expires exactly when releaseStaleExpectationFollowups retires it below.
+          // The trade: a forward due date keeps it out of listDueAttention's due-NOW
+          // coach feed for the same 21 days, which costs nothing — the conductor already
+          // filters these follow-ups out of that feed, and the athlete is the audience.
+          next_due: addDaysISO(asOf, FOLLOWUP_STANDING_DAYS) ?? asOf,
           last_checked: asOf,
           reason: summary ? `${summary} — ${variant}.` : `${variant.charAt(0).toUpperCase()}${variant.slice(1)}.`,
           release_condition: RELEASE_CONDITION,

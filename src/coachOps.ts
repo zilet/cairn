@@ -1747,6 +1747,80 @@ export async function runResearch(
 
 // ---------- self-updating memory ops (Stream 2) ----------
 
+/**
+ * Apply one librarian plan to the live memory store, through the repo functions
+ * (which MARK, never hard-delete). Exported so the protection floor below is
+ * testable without an agent in the loop; `consolidateMemory` is the only caller in
+ * production.
+ */
+export function applyMemoryConsolidation(plan: any): { merged: number; superseded: number; promoted: number } {
+  const p: any = plan;
+  const rows = repo.listMemory(200, { includeSuperseded: true }) as any[];
+  const idSet = new Set(rows.map((m: any) => Number(m.id)));
+  const byId = new Map<number, any>(rows.map((m: any) => [Number(m.id), m]));
+  let merged = 0,
+    superseded = 0,
+    promoted = 0;
+
+  // The floor under the librarian. The consolidation prompt is TOLD not to supersede a
+  // goal or constraint the user stated themselves, but an instruction is not an
+  // enforcement: one hallucinated id and a nightly unattended pass would quietly retire
+  // the athlete's own words in favour of something Cairn merely inferred. So the server
+  // refuses it. Deliberately narrow — only a USER-stated goal/constraint is protected,
+  // and only from being replaced by something that is not also user-stated (a user
+  // correcting their own goal still lands). A refusal is a quiet skip, never an error:
+  // the rest of the pass is good work and must still apply.
+  const PROTECTED_KINDS = new Set(["goal", "constraint"]);
+  const userStated = (row: any): boolean => String(row?.source ?? "").toLowerCase() === "user";
+  const isProtected = (id: number): boolean => {
+    const row = byId.get(Number(id));
+    return !!row && userStated(row) && PROTECTED_KINDS.has(String(row.kind ?? "").toLowerCase());
+  };
+
+  // MERGES: fold every other id into the first, with one combined sentence.
+  for (const m of Array.isArray(p.merges) ? p.merges : []) {
+    const ids = (Array.isArray(m?.ids) ? m.ids : []).map(Number).filter((n: number) => idSet.has(n));
+    if (ids.length < 2 || !m?.content) continue;
+    const [keep, ...rest] = ids;
+    try {
+      repo.updateMemory(keep, { content: String(m.content), kind: m.kind });
+      for (const dup of rest) {
+        // Folding a user-stated goal into a row the user did not state is a supersede
+        // wearing a merge's clothes — the surviving row is the other one.
+        if (isProtected(dup) && !userStated(byId.get(Number(keep)))) continue;
+        repo.supersedeMemory(dup, { replacementId: keep, reason: "merged duplicate" });
+        merged++;
+      }
+    } catch {
+      /* skip a bad row, keep going */
+    }
+  }
+  // SUPERSEDES: a later fact contradicts an older one.
+  for (const s of Array.isArray(p.supersedes) ? p.supersedes : []) {
+    const id = Number(s?.id);
+    if (!idSet.has(id)) continue;
+    // A supersede writes its replacement through addMemory, which sources it
+    // "supersede" — never "user". So a protected row can never be retired down this
+    // path, which is exactly the intent: the athlete changes their own goal by saying
+    // so, not by a consolidation pass deciding they have.
+    if (isProtected(id)) continue;
+    try {
+      repo.supersedeMemory(id, { content: s?.replacement, reason: s?.reason || "superseded" });
+      superseded++;
+    } catch {}
+  }
+  // PROMOTIONS: a recurring observation has become a stable trait.
+  for (const pr of Array.isArray(p.promotions) ? p.promotions : []) {
+    const id = Number(pr?.id);
+    if (!idSet.has(id) || !pr?.kind) continue;
+    try {
+      repo.updateMemory(id, { content: pr?.content, kind: String(pr.kind) });
+      promoted++;
+    } catch {}
+  }
+  return { merged, superseded, promoted };
+}
+
 // Quiet memory consolidation: ask an agent to propose merges / supersessions /
 // promotions over the live store, then apply them through the repo functions
 // (which MARK, never hard-delete). Calm by default — an empty result is a clean
@@ -1763,46 +1837,7 @@ export async function consolidateMemory(agent: string | undefined) {
   const p: any = result.parsed;
   if (!p || typeof p !== "object")
     return { ok: false as const, error: "agent returned no usable plan", agent: chosen, tried };
-
-  const idSet = new Set((repo.listMemory(200, { includeSuperseded: true }) as any[]).map((m: any) => Number(m.id)));
-  let merged = 0,
-    superseded = 0,
-    promoted = 0;
-
-  // MERGES: fold every other id into the first, with one combined sentence.
-  for (const m of Array.isArray(p.merges) ? p.merges : []) {
-    const ids = (Array.isArray(m?.ids) ? m.ids : []).map(Number).filter((n: number) => idSet.has(n));
-    if (ids.length < 2 || !m?.content) continue;
-    const [keep, ...rest] = ids;
-    try {
-      repo.updateMemory(keep, { content: String(m.content), kind: m.kind });
-      for (const dup of rest) {
-        repo.supersedeMemory(dup, { replacementId: keep, reason: "merged duplicate" });
-        merged++;
-      }
-    } catch {
-      /* skip a bad row, keep going */
-    }
-  }
-  // SUPERSEDES: a later fact contradicts an older one.
-  for (const s of Array.isArray(p.supersedes) ? p.supersedes : []) {
-    const id = Number(s?.id);
-    if (!idSet.has(id)) continue;
-    try {
-      repo.supersedeMemory(id, { content: s?.replacement, reason: s?.reason || "superseded" });
-      superseded++;
-    } catch {}
-  }
-  // PROMOTIONS: a recurring observation has become a stable trait.
-  for (const pr of Array.isArray(p.promotions) ? p.promotions : []) {
-    const id = Number(pr?.id);
-    if (!idSet.has(id) || !pr?.kind) continue;
-    try {
-      repo.updateMemory(id, { content: pr?.content, kind: String(pr.kind) });
-      promoted++;
-    } catch {}
-  }
-  return { ok: true as const, merged, superseded, promoted, agent: chosen, tried };
+  return { ok: true as const, ...applyMemoryConsolidation(p), agent: chosen, tried };
 }
 
 // Grow profile.about_me into a coherent person-model from typed memory + family +

@@ -378,6 +378,20 @@ export function buildDayReadPrompt(
     learnedBlock = "";
   }
   // ===== end LEARNED CROSS-DOMAIN block =====
+  // The positive half of the signal state, named for the agent. `signal_state.action`
+  // ships in DATA either way, but nothing in this prompt told the model what
+  // `support: "backed"` MEANS, so the licensed-to-reach day and the ordinary train day
+  // read identically on the agent path — the deterministic floor's push arm was the
+  // only thing that ever noticed. One sentence, on the same terms as every other
+  // learned block here: permission, never instruction, and still inside the grammar.
+  let backedBlock = "";
+  try {
+    if ((context as any)?.signal_state?.action?.support?.level === "backed") {
+      backedBlock = `\nTODAY IS BACKED (DATA.signal_state.action.support): their own recent logs say they are carrying this work well and nothing fresh is pulling the other way. You MAY shape the read as an invitation to reach a little further within the session — never longer, never a target, never a demand — or leave it as an ordinary good day if the whole picture reads better that way. Same rules as everything else: a suggestion in a friend's voice, no score, no gate.\n`;
+    }
+  } catch {
+    backedBlock = "";
+  }
   const overrideBlock = opts.override?.trim()
     ? `\nUSER OVERRIDE (honor this — they're steering): "${opts.override.trim()}". Reshape the read accordingly (e.g. "rough night" → lean easy/rest; "short on time" → a compressed session; "I want to train anyway" → a train read even if the baseline leaned rest, kept appropriately light).\n`
     : "";
@@ -477,7 +491,7 @@ You MAY disagree with the baseline when the whole picture warrants it — it is 
 RECENT TRAINING (most recent first): ${sessionLine}.
 TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${renderRecentReads(feltDate)}${renderReadOutcomes(context, baseline)}${renderPeriodization(feltDate)}${doneBlock}${lastNightLine}${oneNightLine}
 ${CONTEXT_GUARDRAILS}
-${renderSignalState(context)}${renderCoachingFocus(context, { brief: true })}${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderRunZones(context)}${renderRunPlan(context)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderMuscleGroups(context)}${renderPerformance(context, { brief: true })}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${feltBlock}${learnedBlock}${overrideBlock}
+${renderSignalState(context)}${renderCoachingFocus(context, { brief: true })}${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderRunZones(context)}${renderRunPlan(context)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderMuscleGroups(context)}${renderPerformance(context, { brief: true })}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${feltBlock}${learnedBlock}${backedBlock}${overrideBlock}
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 ${DAY_READ_SCHEMA}
 

@@ -85,11 +85,11 @@ test("strongly-rated sessions alone earn the backed tier, with no wearable anywh
   );
   // The machine register, exactly like every sibling `summary` in that module.
   assert.doesNotMatch(state.action.support.summary, /\byou(?:'re| are|r|'ve)?\b/i);
-  // And an athlete-facing voice that is NOT the summary.
-  assert.equal(state.action.support.voice.key, "well_backed");
-  for (const line of SIGNAL_VOICE_REGISTRY.well_backed.variants) {
-    assert.doesNotMatch(line, /\bthe athlete\b/i);
-  }
+  // …and deliberately NO athlete-facing voice of its own. The words for a backed
+  // morning live with the surface that says them (TRAIN_PUSH_WHY, grammar-checked
+  // below); a second vocabulary here would be two sets of words for one state.
+  assert.equal(state.action.support.voice, undefined);
+  assert.equal(SIGNAL_VOICE_REGISTRY.well_backed, undefined, "the dead voice is gone, not merely unused");
 });
 
 test("an evidence-less day stays neutral rather than backed", () => {
@@ -222,7 +222,6 @@ test("every new push phrasing holds the reading grammar and carries the reach", 
     ["why:planned_training_push", DAY_READ_WHY_VARIANTS.planned_training_push],
     ["headline:train_push", DAY_READ_PUSH_HEADLINE_VARIANTS],
     ["headline:train_focus_push", DAY_READ_PUSH_FOCUS_HEADLINE_VARIANTS],
-    ["voice:well_backed", SIGNAL_VOICE_REGISTRY.well_backed.variants],
     ["voice:session_strong", SIGNAL_VOICE_REGISTRY.session_strong.variants],
   ];
   for (const [label, variants] of sets) {
@@ -251,6 +250,24 @@ test("the backed tier reaches the day-read prompt's DATA", async () => {
   const { promptData } = await import("../dist/prompt/context-projection.js");
   const payload = JSON.parse(promptData(repo.getCoachContext(), "day_read"));
   assert.equal(payload.signal_state.action.support.level, "backed");
+});
+
+test("…and the prompt tells the agent what a backed day licenses, on a backed day only", async () => {
+  // The DATA blob alone was not enough: nothing in the prompt said what
+  // `support: "backed"` MEANS, so on the agent path a licensed day and an ordinary
+  // train day read identically and only the deterministic floor ever noticed.
+  const { buildDayReadPrompt } = await import("../dist/prompt.js");
+
+  seedPlan();
+  const plain = buildDayReadPrompt(repo.getCoachContext(), { date: REF });
+  assert.doesNotMatch(plain, /TODAY IS BACKED/, "an ordinary train day gets no invitation to reach");
+
+  seedPlan();
+  logRatedSession(4, { performance: 5 });
+  logRatedSession(2, { performance: 5 });
+  const backed = buildDayReadPrompt(repo.getCoachContext(), { date: REF });
+  assert.match(backed, /TODAY IS BACKED/);
+  assert.match(backed, /\bMAY\b/, "permission, never instruction — the read may still be an ordinary good day");
 });
 
 // ---------- the softening allowlist, both truths ----------
@@ -295,7 +312,15 @@ test("...and are still reachable through a scoped state, which is why they stay 
 
 const PROGRESSION_EVALUATOR = "push-ladder-test-v1";
 
-function progressionOutcome(key, verdict, at) {
+// The evaluator each metric is contractually paired with (expectation-contract.ts).
+const METRIC_EVALUATOR = {
+  exercise_target_completion: "exercise_completion",
+  exercise_est_1rm_trend: "exercise_est_1rm",
+  session_performance_feedback: "session_feedback",
+  joint_pain_or_soreness: "symptom_load",
+};
+
+function progressionOutcome(key, verdict, at, metricKey = "exercise_target_completion") {
   const recorded = recordDecision(
     {
       effective_date: "2026-01-01",
@@ -321,7 +346,7 @@ function progressionOutcome(key, verdict, at) {
     },
     [
       {
-        metric_key: "exercise_target_completion",
+        metric_key: metricKey,
         subject_key: null,
         direction: "at_least",
         baseline: { value: 0.8 },
@@ -331,7 +356,7 @@ function progressionOutcome(key, verdict, at) {
         minimum_data: { sessions: 4 },
         confounder_policy: "standard",
         confidence: "tentative",
-        evaluator: "exercise_completion",
+        evaluator: METRIC_EVALUATOR[metricKey],
         evaluator_version: PROGRESSION_EVALUATOR,
       },
     ]
@@ -380,6 +405,68 @@ test("any missed verdict in the window blocks acceleration", () => {
   const modifier = trainingModifier();
   assert.ok(modifier, "the aligned run is still the active verdict");
   assert.equal(modifier.scale, 1, "a miss anywhere in the comparable window holds the standard step");
+});
+
+test("a safety floor cannot earn acceleration, however cleanly it is cleared", () => {
+  // session_performance_feedback and joint_pain_or_soreness are non-regression guards:
+  // their aligned bar is deliberately easy ("sessions didn't rate worse", "pain didn't
+  // get more frequent"). Clearing a floor twice says nothing broke — never that there
+  // is headroom — so neither may buy a bigger step. They keep their full ease-on-a-miss
+  // power, which is the asymmetry that matters.
+  for (const metric of ["session_performance_feedback", "joint_pain_or_soreness"]) {
+    resetTables("brain_evaluations", "brain_expectations", "brain_decisions", "training_symptom_events", "sessions");
+    progressionOutcome("1", "aligned", "10", metric);
+    progressionOutcome("2", "aligned", "20", metric);
+
+    const modifier = trainingModifier();
+    assert.ok(modifier, `${metric} still produces a training modifier`);
+    assert.equal(modifier.scale, 1, `${metric} is a floor, not headroom — it must only ease or hold`);
+  }
+
+  // The same clean run on a metric that DOES measure headroom still accelerates, so the
+  // block above is the metric's doing and not an accident of the fixture.
+  resetTables("brain_evaluations", "brain_expectations", "brain_decisions", "training_symptom_events", "sessions");
+  progressionOutcome("1", "aligned", "10", "exercise_est_1rm_trend");
+  progressionOutcome("2", "aligned", "20", "exercise_est_1rm_trend");
+  assert.ok(trainingModifier().scale > 1);
+});
+
+test("a missed safety-floor verdict still eases the step", () => {
+  resetTables("brain_evaluations", "brain_expectations", "brain_decisions", "training_symptom_events", "sessions");
+  progressionOutcome("1", "not_aligned", "10", "joint_pain_or_soreness");
+  progressionOutcome("2", "not_aligned", "20", "joint_pain_or_soreness");
+  assert.ok(trainingModifier().scale < 1, "restricting acceleration must not blunt the brake");
+});
+
+test("a fresh joint-pain note on a session blocks acceleration even with no lifecycle event", () => {
+  // The gap this closes: `sessions.joint_pain` is where the athlete actually writes
+  // "left knee felt off" when finishing a session, and only some of those notes ever
+  // become a training_symptom_events row.
+  resetTables("brain_evaluations", "brain_expectations", "brain_decisions", "training_symptom_events", "sessions");
+  seedPlan();
+  const day = repo.getPlanDay(1);
+  repo.getOrCreateSession(localDaysAgo(3), day.id);
+  repo.setSessionFeedback(localDaysAgo(3), { joint_pain: "left knee felt off on the last set" });
+  progressionOutcome("1", "aligned", "10");
+  progressionOutcome("2", "aligned", "20");
+
+  assert.equal(
+    trainingModifier().scale,
+    1,
+    "a hand-written joint complaint counts, whether or not the lifecycle picked it up"
+  );
+});
+
+test("a joint-pain note that has aged out no longer blocks acceleration", () => {
+  resetTables("brain_evaluations", "brain_expectations", "brain_decisions", "training_symptom_events", "sessions");
+  seedPlan();
+  const day = repo.getPlanDay(1);
+  repo.getOrCreateSession(localDaysAgo(40), day.id);
+  repo.setSessionFeedback(localDaysAgo(40), { joint_pain: "elbow was cranky" });
+  progressionOutcome("1", "aligned", "10");
+  progressionOutcome("2", "aligned", "20");
+
+  assert.ok(trainingModifier().scale > 1, "a note from six weeks ago is history, not a live symptom");
 });
 
 test("an active training symptom blocks acceleration", () => {
@@ -542,6 +629,25 @@ test("observed day-read verdicts become prose, and never a modifier", () => {
   );
   // …and the prose is athlete-readable, since the learned timeline renders it.
   assert.equal(violatesReadingGrammar(pattern.statement), null, pattern.statement);
+});
+
+test("the day-read learnings speak TO the athlete, because the Learned timeline prints them", () => {
+  resetTables("brain_evaluations", "brain_expectations", "brain_decisions", "training_symptom_events", "memory");
+  for (let day = 1; day <= 6; day++) adherenceOutcome(day, "rest", day <= 5 ? "not_aligned" : "aligned");
+
+  const pattern = whatWorksForYou().learnings.find((l) => l.metric_key === "day_read_adherence");
+  assert.match(pattern.statement, /\byou\b/i, "second person — this sentence is read by the person it is about");
+  assert.doesNotMatch(pattern.statement, /\bthey\b/i, "third-person evidence prose is the MACHINE register");
+  assert.doesNotMatch(pattern.change, /\bthe read is put\b/i, "the change line is plain language too");
+  assert.equal(violatesReadingGrammar(pattern.change), null, pattern.change);
+
+  // The render site, verbatim: statement + change land in one `detail` string.
+  const entry = repo
+    .learnedTimeline({ limit: 40 })
+    .items.find((item) => item.source?.startsWith("personal response") && /morning reads rest/i.test(item.detail));
+  assert.ok(entry, "the pattern reaches the Learned timeline");
+  assert.doesNotMatch(entry.detail, /\bthey\b/i);
+  assert.equal(violatesReadingGrammar(entry.detail), null, entry.detail);
 });
 
 test("a thin or evenly-split day-read history says nothing", () => {
