@@ -1006,7 +1006,8 @@ the legacy `{reply, actions}` JSON alike (`test/streaming.test.js`).
 The agent JSON contract was, until this, only ever REQUESTED in prose and RECOVERED by
 `extractJson` scraping stdout for the first `{` — a model that narrated before answering, or
 emitted a stray brace, broke it. Three of the four configured CLIs can instead ENFORCE the
-contract, making a malformed or prose-wrapped payload structurally impossible.
+contract (all four, since `agy` 1.1.8), making a malformed or prose-wrapped payload structurally
+impossible.
 
 **Declared, not hardcoded.** Each `agents.json` entry may carry a `structured_output` block: `flag`
 (an argv template carrying `{schema}` or `{schema_file}`), `arg` (`"inline"` substitutes the
@@ -1015,10 +1016,12 @@ serialized schema; `"file"` writes it to a temp file and substitutes the path �
 (`{structured_key, text_key}`) for a CLI whose flag also rewraps stdout into a wrapper object
 (grok's `--json-schema` implies `--output-format json`, so without unwrapping, the first `{` on
 stdout is telemetry, not the payload, and its `thought` field would leak raw reasoning into the
-operation). The flag itself is expanded only at an explicit `{schema_args}` slot in `args` — the
-same convention as `{model_args}`/`{reasoning_args}` — so `antigravity`, which declares no
-`structured_output` (verified against its own `--help`; no such flag exists), keeps the plain prose
-path untouched.
+operation). `antigravity` envelopes the same way but does NOT imply the format — `agy` 1.1.8
+rejects `--json-schema` unless `--output-format` is `json`/`stream-json`, so both flags ride its
+single `flag` template, and its envelope keys are `structured_output`/`response`. The flag itself
+is expanded only at an explicit `{schema_args}` slot in `args` — the same convention as
+`{model_args}`/`{reasoning_args}` — so a provider that declares no `structured_output`, and any run
+that passes no `RunOpts.schema`, keeps the plain prose path untouched.
 
 **Resolved once, at spawn time.** `runAgentImpl` (`src/agents.ts`) only activates a schema when
 BOTH the caller passed `RunOpts.schema` and the chosen agent declares a usable `structured_output`

@@ -1,6 +1,6 @@
 // Program-facing prompts: the exercise how-to explanation, the exercise-name
 // reconciliation, and the free-text onboarding extraction.
-import { CAIRN_PERSONA } from "./shared.js";
+import { CAIRN_PERSONA, renderJsonContract } from "./shared.js";
 
 const EXERCISE_EXPLANATION_SCHEMA = `{
   "setup": "<how to get into position, max 140 chars>",
@@ -30,8 +30,9 @@ Turn it into a calm, structured starting picture so the app is ready for them. D
 this is a one-shot setup. Fill ONLY what they actually said or clearly implied; leave everything else
 null/empty (Cairn learns the rest naturally over time). Approximate supplements sensibly (creatine →
 ~5 g/day; "some D" → Vitamin D3; whey → counts toward protein). Capture injuries as context_events. No
-medical advice. Respond with ONE JSON object, no prose, no fences:
-${ONBOARD_SCHEMA}
+medical advice.
+
+${renderJsonContract(ONBOARD_SCHEMA)}
 
 USER'S INTRO:
 """${String(text ?? "").slice(0, 4000)}"""`;
@@ -64,15 +65,13 @@ export function buildExerciseExplanationPrompt(detail: any): string {
   return `You write compact exercise detail text inside a strength training app.
 
 Rules:
-- Return only one JSON object, no prose and no markdown fences.
 - Four short fields: setup, move, feel, avoid. Each field must be useful and <= 140 characters.
 - Use plain coaching language for an intermediate lifter. No anatomy lecture.
 - Respect constraint_note and existing cues. Never tell the user to push through pain.
 - If mode is "timed", describe position and hold quality. If mode is "reps", describe repeatable reps.
 - Informational only; do not diagnose or make clinical claims.
 
-OUTPUT CONTRACT:
-${EXERCISE_EXPLANATION_SCHEMA}
+${renderJsonContract(EXERCISE_EXPLANATION_SCHEMA)}
 
 EXERCISE DETAIL:
 ${JSON.stringify(ex)}`;
@@ -103,15 +102,13 @@ export function buildExerciseEnrichPrompt(detail: any): string {
 Classify this single movement so the app can file it cleanly. Do NOT invent or substitute a different exercise.
 
 RULES:
-- Return only one JSON object, no prose and no markdown fences.
 - "canonical": the cleanest real Title-Case name of THIS SAME movement — fix casing, typos, and junk words, but keep the implement and angle. If the name is already clean, return it unchanged. NEVER change it into a different movement.
 - "muscle_group": the primary muscle group it trains, from the allowed list, or null if genuinely unclear.
 - "mode": "timed" for a held position measured in seconds (plank, dead hang, wall sit, a stretch); "reps" for anything counted in reps.
 - "equipment": a short phrase naming the main implement, or null if unclear.
 - Plain words, no scores. Informational only; never diagnose or make clinical claims.
 
-OUTPUT CONTRACT:
-${EXERCISE_ENRICH_SCHEMA}
+${renderJsonContract(EXERCISE_ENRICH_SCHEMA)}
 
 EXERCISE:
 ${JSON.stringify(ex)}`;
@@ -197,10 +194,11 @@ become one. This ACTUALLY moves logged history, so the bar is HIGHER than tidyin
 This ONLY tidies names, tags muscle groups, and folds duplicate ROWS of the same lift — it NEVER changes
 the user's logged numbers (weights, reps, dates). Plain words, no scores.
 
-OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdown fences. ALWAYS include
-BOTH keys (use [] when empty):
-{"groups": [{"members": ["<verbatim name>", ...], "canonical": "<clean Title-Case name>", "group": "<one group above or null>", "mode": "reps|timed"}],
- "merges": [{"from": "<verbatim name>", "into": "<verbatim name>", "why": "<short reason>", "confidence": "high|medium|low"}]}
+${renderJsonContract(
+    `{"groups": [{"members": ["<verbatim name>", ...], "canonical": "<clean Title-Case name>", "group": "<one group above or null>", "mode": "reps|timed"}],
+ "merges": [{"from": "<verbatim name>", "into": "<verbatim name>", "why": "<short reason>", "confidence": "high|medium|low"}]}`,
+    { note: "ALWAYS include BOTH keys (use [] when empty)." }
+  )}
 
 EXERCISE NAMES (${items.length}):
 ${list}`;

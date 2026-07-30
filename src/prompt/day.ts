@@ -30,6 +30,8 @@ import {
   renderTrainingSignals,
   renderTrajectory,
   renderStreamingContract,
+  renderJsonContract,
+  MECHANICS_ENCODING,
   dateScopedPromptContext,
   CAIRN_PERSONA,
 } from "./shared.js";
@@ -492,8 +494,7 @@ RECENT TRAINING (most recent first): ${sessionLine}.
 TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${renderRecentReads(feltDate)}${renderReadOutcomes(context, baseline)}${renderPeriodization(feltDate)}${doneBlock}${lastNightLine}${oneNightLine}
 ${CONTEXT_GUARDRAILS}
 ${renderSignalState(context)}${renderCoachingFocus(context, { brief: true })}${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderRunZones(context)}${renderRunPlan(context)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderMuscleGroups(context)}${renderPerformance(context, { brief: true })}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${feltBlock}${learnedBlock}${backedBlock}${overrideBlock}
-OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
-${DAY_READ_SCHEMA}
+${renderJsonContract(DAY_READ_SCHEMA)}
 
 DATA:
 ${promptData(context, "day_read")}`;
@@ -584,8 +585,7 @@ ${renderNow(context)}
 GUARDRAILS:
 - Conservative loading; respect every exercise constraint_note (e.g. injury limits)
   and any active injury in context_events — never program loaded movement through an injured area.
-- Assisted movements use NEGATIVE target_weight; bodyweight uses null. TIMED work (plank, dead hang)
-  uses target_seconds + mode:"timed", never load.
+${MECHANICS_ENCODING}
 - Carry over sensible working weights from the plan / recent logs where they fit. Thin data → start
   light with a "NEW — start light, log actual" note.
 - Honor the day read: if today reads as rest/easy (kind="${read.kind}"), keep this session light and
@@ -660,8 +660,7 @@ HARD RULES (the server enforces these; violating them just gets your item droppe
 - Never program loaded movement through an EXCLUDED area or an injured joint.
 - Honor the caps: an "easy"/"deload" intensity means submaximal loads; a "reduced"/"minimal"
   volume means fewer sets and movements.
-- Assisted movements use NEGATIVE target_weight; bodyweight uses null; TIMED work
-  (plank, dead hang) uses target_seconds + mode:"timed", never load.
+${MECHANICS_ENCODING}
 - SAFE EXERCISE INTRODUCTION: prefer movements the athlete already trains or a
   canonical same-pattern substitution. You may introduce AT MOST ONE genuinely new
   movement, only if equipment + injuries allow it; for a new movement give conservative
@@ -739,10 +738,10 @@ THE CONSTITUTION (binding):
 - It is a suggestion, never pressure. Rest and a quiet week are healthy, not problems to solve.
 ${recentBlock}${likedBlock}
 ${renderTodayFuel(context)}
-OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdown fences.
-When there's nothing real to say: {"found": false}
-When there is exactly one genuine connection:
-${INSIGHT_SCHEMA}
+${renderJsonContract(INSIGHT_SCHEMA, {
+    lead: `When there's nothing real to say: {"found": false}
+When there is exactly one genuine connection:`,
+  })}
 
 DATA:
 ${promptData(context, "insight")}`;

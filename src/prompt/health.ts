@@ -23,6 +23,9 @@ import {
   renderRunPlan,
   renderRunZones,
   renderStreamingContract,
+  renderJsonContract,
+  MARKER_UNITS_RULE,
+  MYCHART_VITALS_RULE,
   CAIRN_PERSONA,
 } from "./shared.js";
 
@@ -113,9 +116,7 @@ TRANSCRIBE EVERY MARKER — THIS IS THE MOST IMPORTANT RULE:
   toxins. If it has a name and a value, it is a marker — include it.
 - A non-numeric result is still a marker: "Negative", "None Seen", "Clear", "Yellow", "O",
   "Rh(d) Positive", "Younger -7.4 Years" etc. — store the text in "value".
-- Do not skip MyChart vitals/basic measurements: blood pressure, pulse/heart rate, weight, BMI,
-  height, SpO2, temperature. If BP is printed as 124/78, emit two markers: Systolic BP 124 mmHg
-  and Diastolic BP 78 mmHg.
+${MYCHART_VITALS_RULE}
 - Set "marker_count" to how many results that date's source actually lists, and make markers[]
   contain exactly that many entries. If markers[] is shorter than marker_count, you dropped some
   — go back and add the rest before answering. Completeness is judged on this.
@@ -165,8 +166,7 @@ OTHER GUARDRAILS:
   bound null ("< 130" → ref_low null, ref_high 130; "> 40" → ref_low 40, ref_high null; ">= 60" → 60).
   Both null when the source prints no range for that marker (many qualitative or blood-type rows).
   Never invent a range — copy only what the report shows.
-- Preserve the source units exactly as printed (US or SI/EU units are both fine). Do NOT convert
-  units yourself; Cairn normalizes recognized marker units deterministically after import.
+${MARKER_UNITS_RULE}
 - doc_date is the specimen/collection/scan date (prefer it over a final-report date), YYYY-MM-DD.
   Drop any panel whose date you genuinely cannot determine.
 - Infer each panel's "kind" from its content (a lab panel is "bloodwork", a body-composition/bone
@@ -190,8 +190,7 @@ normal, qualitative, or "uninteresting" markers. Every named result with a value
 `
     : ""
 }
-OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
-${HEALTH_INGEST_SCHEMA}
+${renderJsonContract(HEALTH_INGEST_SCHEMA)}
 
 CONTEXT:
 profile: ${JSON.stringify(profile)}
@@ -359,8 +358,7 @@ EVIDENCE & THE CONNECTED BRAIN (this is what makes the review act across the who
 ${learnedMarkerBlock}${evidenceBlock}${groundingBlock}${renderBodyComp(ctx)}
 ${CONTEXT_GUARDRAILS}
 
-OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
-${HEALTH_REVIEW_SCHEMA}
+${renderJsonContract(HEALTH_REVIEW_SCHEMA)}
 
 PRIORITY MARKERS (impact-ranked: distance from OPTIMAL, most-actionable first — lead with these):
 ${JSON.stringify(topMarkers)}
@@ -421,8 +419,7 @@ ${m.length ? `\nRELEVANT MARKERS for this question: ${m.join(", ")}` : ""}
 QUESTION:
 ${q}
 
-OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
-${RESEARCH_SCHEMA}`;
+${renderJsonContract(RESEARCH_SCHEMA)}`;
 }
 
 // Agentic marker reconciliation — the clinical-judgment layer over the
@@ -474,9 +471,10 @@ RULES (a wrong merge corrupts a clinical trend — be CONSERVATIVE):
 - "members" = the EXACT names from the list (verbatim) that belong to the group. Every member must be a
   string copied from the list below.
 
-OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdown fences:
-{"groups": [{"canonical": "<name>", "unit": "<unit or null>", "members": ["<verbatim name>", "<verbatim name>", ...]}]}
-If nothing should be merged, return {"groups": []}.
+${renderJsonContract(
+    `{"groups": [{"canonical": "<name>", "unit": "<unit or null>", "members": ["<verbatim name>", "<verbatim name>", ...]}]}`,
+    { after: `If nothing should be merged, return {"groups": []}.` }
+  )}
 
 MARKER NAMES (${items.length}):
 ${list}`;
@@ -641,8 +639,7 @@ ${ELITE_STRENGTH_GUARDRAILS}
 ${renderCoachingFocus(context)}${COACHING_STANCE}
 
 ${renderEnduranceGoal(context, "training")}${renderRunCompliance(context, "weekly")}${renderRunZones(context)}${renderRunPlan(context)}${renderProgramState(context)}${renderMuscleGroups(context)}${renderPerformance(context)}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}
-OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdown fences.
-${WEEK_AHEAD_SCHEMA}
+${renderJsonContract(WEEK_AHEAD_SCHEMA)}
 
 DATA:
 ${promptData(context, "week_ahead")}`;

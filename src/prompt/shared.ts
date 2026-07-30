@@ -65,6 +65,61 @@ ${CHAT_ACTION_SENTINEL}
 ${schema}${empty}`;
 }
 
+// The non-streaming counterpart to renderStreamingContract: ONE canonical "return
+// only JSON" preamble. ~25 hand-written variants had drifted into two wordings ("no
+// fences" vs the stricter "ONE bare JSON object only — no markdown fences"), so the
+// bar an op set depended on which builder its author copied. The strictest wording
+// wins here. Op-specific clauses are options rather than a reason to hand-write the
+// preamble again: `note` extends the contract sentence, `lead` introduces the schema
+// (an alternative "nothing to say" answer), `after` follows it.
+export function renderJsonContract(
+  schema: string,
+  opts: { note?: string; lead?: string; after?: string } = {}
+): string {
+  const note = opts.note ? ` ${opts.note.trim()}` : "";
+  const lead = opts.lead ? `\n${opts.lead.trim()}` : "";
+  const after = opts.after ? `\n${opts.after.trim()}` : "";
+  return `OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdown fences.${note}${lead}
+${schema}${after}`;
+}
+
+// The two mechanical ENCODINGS every plan-shaping prompt has to state. These are
+// storage contracts (see src/repo), not coaching taste — a prompt that words them
+// loosely is a prompt that can corrupt a row — so they live here instead of being
+// restated at ~8 sites. A site that adds its own elaboration (a step size, a "don't
+// corrupt these", a Garmin-specific "leave that sign intact") keeps it BESIDE this
+// block; only the shared core moved. The weight sentence names both field spellings
+// because the prescribing prompts write `target_weight` while chat's log_set writes
+// `weight`, and either wording alone would silently narrow the rule at the other site.
+export const MECHANICS_ENCODING = `- Assisted movements use NEGATIVE weight (target_weight when prescribing, weight when logging); bodyweight uses null.
+- TIMED exercises (mode:'timed', e.g. plank, dead hang) log duration_sec and are prescribed via
+  target_seconds — progression is in seconds (+5-15s/step), never load.`;
+
+// The target FALLBACK, stated once per prompt instead of re-derived at every kcal /
+// protein reference. `effective_target` is the accepted or coordinated target the
+// adaptive-nutrition loop persisted; `recommended` is the re-derived formula. A site
+// that names only one of them either ignores an accepted target or pins a stale one,
+// which is exactly the drift this collapses. `path` is how THIS prompt addresses the
+// goal object — chat points at `DATA.goal` because its guardrails address the DATA
+// block by name, the nutrition prompts use the bare `goal` their other rules use.
+export function renderGoalTargetFallback(path = "goal"): string {
+  return `TARGETS: for EVERY kcal or protein target reference, use ${path}.effective_target first (the accepted/coordinated target when one exists), falling back to ${path}.recommended only when effective_target is absent.`;
+}
+
+// The marker-transcription rules the health-document INGEST and the single-document
+// ENRICH prompt both have to state. They read the same kind of source and write the
+// same marker rows, and both copies had already been edited into byte-identical text
+// — which is the point at which a third edit lands in only one of them. Same
+// one-home pattern as src/foodCapture.ts. Neither rule is trimmed here; they moved.
+export const MARKER_UNITS_RULE = `- Preserve the source units exactly as printed (US or SI/EU units are both fine). Do NOT convert
+  units yourself; Cairn normalizes recognized marker units deterministically after import.`;
+export const MYCHART_VITALS_RULE = `- Do not skip MyChart vitals/basic measurements: blood pressure, pulse/heart rate, weight, BMI,
+  height, SpO2, temperature. If BP is printed as 124/78, emit two markers: Systolic BP 124 mmHg
+  and Diastolic BP 78 mmHg.`;
+// The adjacent pair, for the enrich prompt that states them together.
+export const HEALTH_TRANSCRIPTION_RULES = `${MARKER_UNITS_RULE}
+${MYCHART_VITALS_RULE}`;
+
 // The ONE unified identity every coaching prompt opens with. Cairn is a single
 // intelligence — at once a longevity-minded coach, a preventive-medicine-literate
 // reader of labs, a nutritionist, and a life-aware buddy — that adapts its

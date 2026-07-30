@@ -2,7 +2,7 @@
 // drafted meal plan and a suggested session.
 import * as repo from "../repo.js";
 import { promptData } from "./context-projection.js";
-import { CAIRN_PERSONA, dateScopedPromptContext } from "./shared.js";
+import { CAIRN_PERSONA, dateScopedPromptContext, MECHANICS_ENCODING } from "./shared.js";
 
 // ---------- self-critique verify pass (Trust build V1) ----------
 // A bounded SECOND agent turn that checks a just-drafted high-stakes generative
@@ -69,8 +69,8 @@ is a backstop, not a rewrite — a compliant session passes through untouched. I
 HARD CONSTRAINTS (the only things you enforce):
 - Conservative loading only. Respect every exercise constraint_note and any active injury in the DATA's
   context_events / health directives — NEVER program loaded movement through an injured area.
-- Encoding integrity: assisted movements use NEGATIVE target_weight, bodyweight uses null, TIMED work
-  (plank/dead hang) uses target_seconds + mode:"timed" (never load). Don't corrupt these.
+- Encoding integrity — don't corrupt these:
+${MECHANICS_ENCODING}
 ${limits.length ? limits.join("\n") : "- (no extra time/equipment limits were requested)"}
 
 If everything already holds, ok:true (do NOT nitpick exercise choice or order). If a constraint is

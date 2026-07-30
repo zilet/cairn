@@ -23,6 +23,8 @@ import {
   renderTrajectory,
   renderTodayFuel,
   renderStreamingContract,
+  renderJsonContract,
+  renderGoalTargetFallback,
   CAIRN_PERSONA,
 } from "./shared.js";
 
@@ -276,7 +278,20 @@ function renderGoalMode(ctx: any): string {
 // and wearable history estimate baseline maintenance; training, recovery,
 // performance and life context shape aggressiveness/timing and may protect fuel,
 // but never masquerade as extra baseline calories or get added twice.
-function renderHolisticNutritionStrategy(ctx: any, expenditure: any): string {
+// `opts.contextInData` says the caller ends in a `DATA:` block that already carries
+// the ctx-derived subtrees below. The nutrition CHECK-IN has no DATA block, so it is
+// the reason this JSON exists at all and it keeps the full payload; the meal plan's
+// meal_plan projection already ships goal, recovery, performance, program_state,
+// recent_activities, fueling and context_events, so re-serializing compacted copies
+// beside them only gave the model two views of the same facts to reconcile. The
+// expenditure subtree is NOT in any projection (it comes from repo.estimateExpenditure)
+// and is what makes maintenance checkable, so it ships either way — along with the two
+// rules, which are the actual instruction and are not derivable from the data.
+function renderHolisticNutritionStrategy(
+  ctx: any,
+  expenditure: any,
+  opts: { contextInData?: boolean } = {}
+): string {
   const compactActivities = (Array.isArray(ctx?.recent_activities) ? ctx.recent_activities : [])
     .slice(0, 10)
     .map((activity: any) => ({
@@ -293,40 +308,46 @@ function renderHolisticNutritionStrategy(ctx: any, expenditure: any): string {
       start_date: event?.start_date ?? null,
       end_date: event?.end_date ?? null,
     }));
-  const strategy = {
-    maintenance: {
-      ordinary_day_kcal: expenditure?.typical_tdee ?? expenditure?.tdee ?? null,
-      long_run_average_kcal: expenditure?.tdee ?? null,
-      range: expenditure?.maintenance_range ?? null,
-      confidence: expenditure?.confidence ?? "none",
-      basis: expenditure?.basis ?? null,
-      exceptional_activity: expenditure?.exceptional_activity ?? null,
-      rule: "Exceptional activity is already frequency-amortized. Never add wearable/activity calories again.",
-    },
-    coordinated_target: ctx?.goal?.effective_target ?? null,
-    goal_mode: ctx?.goal_mode ?? ctx?.goal?.goal_mode ?? null,
-    recovery: ctx?.recovery
-      ? {
-          has_data: ctx.recovery.has_data ?? null,
-          days: ctx.recovery.days ?? null,
-          recent: ctx.recovery.recent ?? null,
-          baseline: ctx.recovery.baseline ?? null,
-          delta: ctx.recovery.delta ?? null,
-        }
-      : null,
-    performance: ctx?.performance
-      ? {
-          headline: ctx.performance.headline ?? null,
-          status: ctx.performance.status ?? null,
-          trend: ctx.performance.trend ?? null,
-        }
-      : null,
-    hybrid_fuel: ctx?.program_state?.hybrid?.fuel ?? null,
-    recent_training: compactActivities,
-    fueling_feedback: Array.isArray(ctx?.fueling) ? ctx.fueling.slice(0, 8) : [],
-    life_context: compactEvents,
+  const maintenance = {
+    ordinary_day_kcal: expenditure?.typical_tdee ?? expenditure?.tdee ?? null,
+    long_run_average_kcal: expenditure?.tdee ?? null,
+    range: expenditure?.maintenance_range ?? null,
+    confidence: expenditure?.confidence ?? "none",
+    basis: expenditure?.basis ?? null,
+    exceptional_activity: expenditure?.exceptional_activity ?? null,
+    rule: "Exceptional activity is already frequency-amortized. Never add wearable/activity calories again.",
   };
-  return `\nWHOLE-PERSON NUTRITION STRATEGY:\n${JSON.stringify(strategy)}\n- Baseline maintenance comes ONLY from the completed-day expenditure evidence above. Training/recovery/performance/life signals tune deficit aggressiveness, carb timing, and protective fueling; they do not increase baseline TDEE.\n- Low recovery, performance fade, rising hybrid load, illness, or explicit under-fueling may HOLD or RAISE fuel. They can never justify lowering calories.\n`;
+  const strategy = opts.contextInData
+    ? { maintenance }
+    : {
+        maintenance,
+        coordinated_target: ctx?.goal?.effective_target ?? null,
+        goal_mode: ctx?.goal_mode ?? ctx?.goal?.goal_mode ?? null,
+        recovery: ctx?.recovery
+          ? {
+              has_data: ctx.recovery.has_data ?? null,
+              days: ctx.recovery.days ?? null,
+              recent: ctx.recovery.recent ?? null,
+              baseline: ctx.recovery.baseline ?? null,
+              delta: ctx.recovery.delta ?? null,
+            }
+          : null,
+        performance: ctx?.performance
+          ? {
+              headline: ctx.performance.headline ?? null,
+              status: ctx.performance.status ?? null,
+              trend: ctx.performance.trend ?? null,
+            }
+          : null,
+        hybrid_fuel: ctx?.program_state?.hybrid?.fuel ?? null,
+        recent_training: compactActivities,
+        fueling_feedback: Array.isArray(ctx?.fueling) ? ctx.fueling.slice(0, 8) : [],
+        life_context: compactEvents,
+      };
+  const where = opts.contextInData
+    ? " (the goal, recovery, performance, hybrid-fuel, recent-training, fueling-feedback and life-context evidence for these rules is in the DATA block below)"
+    : "";
+  return `\nWHOLE-PERSON NUTRITION STRATEGY${where}:\n${JSON.stringify(strategy)}\n- Baseline maintenance comes ONLY from the completed-day expenditure evidence above. Training/recovery/performance/life signals tune deficit aggressiveness, carb timing, and protective fueling; they do not increase baseline TDEE.\n- Low recovery, performance fade, rising hybrid load, illness, or explicit under-fueling may HOLD or RAISE fuel. They can never justify lowering calories.\n`;
 }
 
 // Recognized whole-diet identities that are HARD constraints — as firm as an
@@ -450,22 +471,25 @@ function renderHardDiet(sources: Array<string | null | undefined>): string {
 // Protein and omega-3 anchors bend to a plant-forward diet (vegan/vegetarian): no
 // animal-protein instruction, no fish — otherwise the guardrails would contradict
 // the HARD dietary-identity block above.
-function longevityGuardrails(plantForward = false): string {
+// `targetsAlreadyStated` is for the caller that renders the TARGETS rule itself
+// higher up (the meal plan states it in HARD RULES, above this block) so the same
+// resolution rule is not printed twice in one prompt.
+function longevityGuardrails(plantForward = false, targetsAlreadyStated = false): string {
   const proteinLine = plantForward
-    ? "- Anchor EVERY meal on PLANT protein (legumes, lentils, beans, chickpeas, tofu, tempeh, seitan, edamame, soy, seeds); use goal.effective_target.protein_g when present, otherwise goal.recommended.protein_g. Do NOT use meat, poultry, or fish to hit protein."
-    : "- Anchor EVERY meal on protein; use goal.effective_target.protein_g when present, otherwise goal.recommended.protein_g.";
+    ? "- Anchor EVERY meal on PLANT protein (legumes, lentils, beans, chickpeas, tofu, tempeh, seitan, edamame, soy, seeds) to the protein target. Do NOT use meat, poultry, or fish to hit protein."
+    : "- Anchor EVERY meal on protein, to the protein target.";
   const omega3Line = plantForward
     ? "- Omega-3s from plant sources 2-3x/week (ground flaxseed, chia, walnuts, hemp, algae oil) — no fish."
     : "- Oily fish 2-3x/week (salmon, sardines, mackerel) or another omega-3 source.";
-  return `LONGEVITY GUARDRAILS:
+  const targets = targetsAlreadyStated ? "" : `${renderGoalTargetFallback()}\n\n`;
+  return `${targets}LONGEVITY GUARDRAILS:
 ${proteinLine}
 - 30g+ fiber per day: vegetables, legumes, fruit, whole grains.
 - Build meals from mostly whole, single-ingredient foods; minimize ultra-processed food, added
   sugar, and alcohol.
 ${omega3Line}
-- Calorie target follows goal.effective_target when present, otherwise goal.recommended for the active
-  GOAL MODE (a lean-safe deficit, maintenance, or a conservative surplus) — never a crash deficit and
-  never an aggressive bulk.
+- The calorie target follows the active GOAL MODE (a lean-safe deficit, maintenance, or a conservative
+  surplus) — never a crash deficit and never an aggressive bulk.
 - Keep the last meal of the day moderate, not enormous or very late.`;
 }
 
@@ -512,11 +536,11 @@ export function buildMealPlanPrompt(userInstruction?: string): string {
   const freqBlock = freqList.length
     ? `\nREPEATED FOOD PATTERNS (observed on 2+ DISTINCT days — optional dish/staple ideas, not preferences or future commitments; reuse only where they fit):\n${freqList.map((f) => `  - ${f.summary} (logged ${f.count}× across ${f.distinct_days} days${f.protein_g != null ? `, ~${Math.round(f.protein_g)}g protein` : ""})`).join("\n")}\n- Never infer a scheduled restaurant visit, takeout, cafe stop, or treat from these historical logs. Only an explicit current instruction or a durable preference/decision can schedule one.\n`
     : "";
-  const strategyBlock = renderHolisticNutritionStrategy(ctx, exp);
+  const strategyBlock = renderHolisticNutritionStrategy(ctx, exp, { contextInData: true });
   const defaultTask =
     disciplineOf(ctx) === "endurance"
-      ? "Build next week's meal plan around goal.effective_target when present, otherwise goal.recommended, to FUEL the training week — carbs periodized around long/quality sessions, protein adequate for recovery; no forced deficit unless fat loss is the stated goal."
-      : "Build next week's meal plan around goal.effective_target when present, otherwise goal.recommended for the active GOAL MODE, including its protein target.";
+      ? "Build next week's meal plan around the effective target, to FUEL the training week — carbs periodized around long/quality sessions, protein adequate for recovery; no forced deficit unless fat loss is the stated goal."
+      : "Build next week's meal plan around the effective target for the active GOAL MODE, including its protein target.";
   // A whole-diet identity can be declared in the profile, in meal prefs, OR typed
   // into the request — scan all three and treat it as hard as an allergy.
   const dietSources = [
@@ -533,13 +557,14 @@ meal plan that fuels the user's CURRENT goal (see GOAL MODE below) while eating 
 user's profile, goal check (with computed TDEE and a mode-correct recommended intake), training
 plan, recent activities, and purpose-scoped durable planning memory are in the DATA section.
 ${renderGoalMode(ctx)}${hardDiet}
+${renderGoalTargetFallback()}
+
 HARD RULES:
-- Anchor daily_kcal to goal.effective_target when present (the coordinated reviewed target), otherwise
-  goal.recommended (the mode-correct formula target). Never silently replace an accepted target with a
+- Anchor daily_kcal to that target. Never silently replace an accepted target with a
   newer volatile formula, and never use an aggressive crash deficit or dirty bulk, even if
   the user's requested timeline implies more. If their goal is aggressive, build the sustainable
   plan and say so in notes.
-- Hit goal.effective_target.protein_g when present, otherwise goal.recommended.protein_g. During a cut, continued strength and muscle
+- Hit that target's protein_g. During a cut, continued strength and muscle
   DEVELOPMENT remain the objective; preservation is the universal safety floor, not the aspiration.
   Use adequate total energy and training-day carbs to fuel earned progression, and never frame the
   plan summary/rationale as if merely preserving lean mass were the goal.
@@ -561,7 +586,7 @@ HARD RULES:
   portions. The server verifies that the week averages at least this target with no day below 80% of it;
   do not label fiber "adequate" unless the meal totals establish that.
 
-${longevityGuardrails(plantForward)}
+${longevityGuardrails(plantForward, true)}
 
 ${MEAL_TIMING_RULES}
 
@@ -583,8 +608,7 @@ ${CONTEXT_GUARDRAILS}
 ${renderSignalState(ctx)}${renderCoachingFocus(ctx, { brief: true })}${renderDiscipline(ctx, "nutrition")}${renderEnduranceGoal(ctx, "nutrition")}${freqBlock}${strategyBlock}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderTrajectory(ctx)}${renderFoodMemory(planningMemory)}${renderDexaTargeting(ctx, "nutrition")}${renderBodyComp(ctx)}${renderHouseholdDiet(ctx)}
 TASK: ${userInstruction?.trim() || defaultTask}
 
-OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
-${MEAL_SCHEMA}
+${renderJsonContract(MEAL_SCHEMA)}
 
 DATA:
 ${promptData(planningCtx, "meal_plan")}`;
@@ -787,8 +811,7 @@ USER'S HINT (honor this): ${hint.trim()}
 USER: profile: ${JSON.stringify(profile)}
 goal: ${JSON.stringify(goal)}
 
-OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdown fences:
-${SWAP_SCHEMA}`;
+${renderJsonContract(SWAP_SCHEMA)}`;
 }
 
 const RECIPE_SCHEMA = `{ "summary": "<1-2 sentences: how this meal serves the user's goal & longevity>",
@@ -854,6 +877,5 @@ ${prefs}
 USER: profile: ${JSON.stringify(profile)}
 goal: ${JSON.stringify(goal)}
 
-OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdown fences:
-${RECIPE_SCHEMA}`;
+${renderJsonContract(RECIPE_SCHEMA)}`;
 }

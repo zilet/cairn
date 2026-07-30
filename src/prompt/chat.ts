@@ -23,6 +23,9 @@ import {
   CAIRN_PERSONA,
   CHAT_ACTION_SENTINEL,
   CHAT_REPLY_SENTINEL,
+  renderGoalTargetFallback,
+  MECHANICS_ENCODING,
+  renderJsonContract,
 } from "./shared.js";
 // CHAT_ACTION_SENTINEL / CHAT_REPLY_SENTINEL now live in shared.js (chat AND the
 // streaming job ops share them). The prompt.js barrel re-exports them via shared.js,
@@ -264,18 +267,14 @@ GUARDRAILS:
 - Conservative progression. Respect every exercise constraint_note (e.g. injury limits); never contradict them.
 - A cut never changes the strength objective to mere maintenance. No avoidable muscle/strength loss is
   the floor; when recovery and performance support it, keep building strength and evolving the program.
-- Fuel guidance follows the user's GOAL MODE (DATA: goal_mode). For EVERY kcal or protein target
-  reference, use DATA.goal.effective_target first (the accepted/coordinated target when one exists),
-  falling back to DATA.goal.recommended only when effective_target is absent: a lean-safe deficit
-  when LOSING, maintenance calories when MAINTAINING (don't push a deficit), a conservative surplus
-  when GAINING — never a crash deficit and never a dirty bulk.
+- Fuel guidance follows the user's GOAL MODE (DATA: goal_mode). ${renderGoalTargetFallback("DATA.goal")} Then: a
+  lean-safe deficit when LOSING, maintenance calories when MAINTAINING (don't push a deficit), a
+  conservative surplus when GAINING — never a crash deficit and never a dirty bulk.
 - Treat Garmin as a context source, not the plan authority. Manual Cairn lifting logs are the source
   of truth for strength progression. Adapt recommendations to the user's stated focus: strength-first
   means Garmin runs/rides mainly influence recovery and conditioning; runner/cyclist-first means
   endurance progression is central and lifting supports it.
-- Assisted lifts use NEGATIVE weight; bodyweight uses null.
-- TIMED exercises (mode:'timed', e.g. plank, dead hang) log duration_sec and are prescribed via
-  target_seconds — progression is in seconds (+5-15s/step), never load.
+${MECHANICS_ENCODING}
 - Keep training fresh: when the user sounds bored or an accessory has stalled for weeks, suggest
   swapping in a new same-muscle exercise (within their constraints, conservative starting load)
   rather than grinding the same movement forever.
@@ -378,8 +377,7 @@ Distill ONLY the durable facts from it that you should still know weeks from now
 ALREADY REMEMBERED (do not repeat or restate any of these):
 ${known || "(nothing yet)"}
 
-OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
-${DISTILL_SCHEMA}
+${renderJsonContract(DISTILL_SCHEMA)}
 
 CONVERSATION BEING ARCHIVED:
 ${convo || "(empty)"}`;
@@ -460,8 +458,7 @@ when it was last surfaced to the coach.
 CURRENT MEMORY (most recent first):
 ${rows || "(empty)"}
 
-OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
-${CONSOLIDATION_SCHEMA}`;
+${renderJsonContract(CONSOLIDATION_SCHEMA)}`;
 }
 
 const ABOUT_ME_SCHEMA = `{
@@ -505,6 +502,5 @@ ${family || "(none)"}
 RECENT CHECK-INS:
 ${checkins || "(none)"}
 
-OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
-${ABOUT_ME_SCHEMA}`;
+${renderJsonContract(ABOUT_ME_SCHEMA)}`;
 }

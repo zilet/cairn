@@ -9,6 +9,7 @@ import {
 } from "../foodCapture.js";
 import { HEALTH_DOCUMENT_KIND_SCHEMA } from "../healthDocumentKinds.js";
 import * as repo from "../repo.js";
+import { HEALTH_TRANSCRIPTION_RULES, renderJsonContract } from "./shared.js";
 
 const ENRICH_ACTIVITY_SCHEMA = `{
   "structured": {
@@ -116,8 +117,7 @@ and extract any durable fact worth remembering.
 
 ${guardrails}
 
-OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
-${ENRICH_ACTIVITY_SCHEMA}
+${renderJsonContract(ENRICH_ACTIVITY_SCHEMA)}
 
 CONTEXT:
 profile: ${JSON.stringify(profile)}
@@ -142,8 +142,7 @@ ${foodCaptureGuardrailLines()}
   Explicit cooking method/oil in the note or durable memory overrides generic assumptions (for example,
   grilled with a drizzle of olive oil should not be treated like butter-fried food).
 
-OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
-${ENRICH_FOOD_SCHEMA}
+${renderJsonContract(ENRICH_FOOD_SCHEMA)}
 
 CONTEXT:
 profile: ${JSON.stringify(profile)}
@@ -192,11 +191,7 @@ GUARDRAILS:
   or recommend treatment. Just transcribe and summarize what the document shows.
 - Never invent values. Only include markers you can actually read from the file. Use null for any
   flag you cannot determine (e.g. when no reference range is shown).
-- Preserve the source units exactly as printed (US or SI/EU units are both fine). Do NOT convert
-  units yourself; Cairn normalizes recognized marker units deterministically after import.
-- Do not skip MyChart vitals/basic measurements: blood pressure, pulse/heart rate, weight, BMI,
-  height, SpO2, temperature. If BP is printed as 124/78, emit two markers: Systolic BP 124 mmHg
-  and Diastolic BP 78 mmHg.
+${HEALTH_TRANSCRIPTION_RULES}
 - Infer top-level "kind" from the document itself (${HEALTH_DOCUMENT_KIND_SCHEMA}). Do not rely on
   the upload label.
 - Infer top-level "doc_date" from the collection date, test date, exam date, scan date, or report
@@ -208,8 +203,7 @@ GUARDRAILS:
   worth tracking, a meaningful body-composition change, an injury-relevant finding). Keep items
   short and factual. Do NOT repeat anything already in EXISTING MEMORY below.
 
-OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
-${ENRICH_HEALTH_SCHEMA}
+${renderJsonContract(ENRICH_HEALTH_SCHEMA)}
 
 CONTEXT:
 profile: ${JSON.stringify(profile)}
@@ -274,8 +268,7 @@ ${foodCaptureGuardrailLines()}
   durable preparation memory support a practical split; otherwise use null. The two should remain
   consistent with total fat. User-reported cooking method/oil overrides generic visual assumptions.
 
-OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
-{
+${renderJsonContract(`{
   "summary": "<clean dish name / short description of the plate>",
   "items": ["<visible item + estimated quantity, e.g. 'scrambled eggs (~2 eggs)' >"],
   "ingredients": [
@@ -289,7 +282,7 @@ OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
   "nutrition_pattern": ${FOOD_NUTRITION_PATTERN_SCHEMA},
   "notes": <string|null>,
   ${FOOD_PROVENANCE_SCHEMA}
-}
+}`)}
 
 CONTEXT (for portion realism only — do NOT let the goal bias the estimate up or down):
 profile: ${JSON.stringify(profile)}
@@ -387,6 +380,5 @@ KNOWN EXERCISES (reuse these names + their mode): ${JSON.stringify(exercises)}
 TRAINING PLAN (map categories to these where they fit): ${JSON.stringify(plan)}
 PROFILE (units are POUNDS): ${JSON.stringify(profile)}
 
-OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
-${GARMIN_STRENGTH_SCHEMA}`;
+${renderJsonContract(GARMIN_STRENGTH_SCHEMA)}`;
 }

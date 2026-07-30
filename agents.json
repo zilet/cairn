@@ -61,7 +61,7 @@
   },
   "antigravity": {
     "command": "agy",
-    "args": ["{file_access_args}", "{model_args}", "{reasoning_args}", "-p", "{prompt}", "--print-timeout", "5m"],
+    "args": ["{file_access_args}", "{model_args}", "{reasoning_args}", "{schema_args}", "-p", "{prompt}", "--print-timeout", "5m"],
     "input": "arg",
     "description": "Google Antigravity CLI 'agy' (the successor to the Gemini CLI; Google account). Auth: ~/.gemini.",
     "env_required": [],
@@ -73,7 +73,15 @@
     "capabilities": { "model": true, "reasoning": ["low", "medium", "high"] },
     "reasoning_flag": ["--effort", "{reasoning}"],
     "file_access_args": ["--add-dir", "{data_dir}"],
-    "structured_output_note": "No structured_output: `agy --help` (1.1.7) lists no JSON-schema / structured-output / output-format flag at all. Runs on this backend keep the prose JSON contract + extractJson scraping, which is why a schema must never be a hard requirement of an op.",
+    "structured_output": {
+      "flag": ["--json-schema", "{schema}", "--output-format", "json"],
+      "arg": "inline",
+      "envelope": {
+        "structured_key": "structured_output",
+        "text_key": "response"
+      },
+      "note": "agy 1.1.8 gained what 1.1.7 had none of: '--json-schema  Optional JSON schema string or path to a schema file to enforce structured output'. Unlike grok it does NOT imply the output format — `agy -p … --json-schema …` alone exits with '--json-schema can only be used when --output-format is json or stream-json', so the format flag is part of this template rather than a separate slot. Verified live on 1.1.8: with both flags stdout is a telemetry ENVELOPE — {conversation_id, status, response, duration_seconds, num_turns, structured_output, json_schema, usage} — so the first `{` is NOT the contract. `structured_output` carries the parsed payload and `response` the same payload as a string, hence the envelope declaration; without it an op would receive the telemetry object. Both flags ride the {schema_args} slot, so a run with no RunOpts.schema still gets plain text and the prose contract + extractJson path."
+    },
     "install": {
       "method": "script",
       "url": "https://antigravity.google/cli/install.sh",
@@ -99,7 +107,7 @@
       "flag": ["--json-schema", "{schema}"],
       "arg": "inline",
       "envelope": { "structured_key": "structuredOutput", "text_key": "text" },
-      "note": "grok 0.2.112 --help: '--json-schema <SCHEMA>  JSON Schema for structured output. When set, the model is constrained to produce JSON matching this schema. Implies --output-format json.' That implied switch is why `envelope` exists: verified live, stdout becomes {text, thought, usage, …, structuredOutput} — the first `{` is the ENVELOPE, so without unwrapping, extractJson would hand the op a telemetry object (and `thought` would drag raw reasoning into it). Deliberately absent from `stream.args`: --json-schema would override --output-format streaming-json."
+      "note": "grok 0.2.114 --help: '--json-schema <SCHEMA>  JSON Schema for structured output. When set, the model is constrained to produce JSON matching this schema. Implies --output-format json.' That implied switch is why `envelope` exists: verified live, stdout becomes {text, thought, usage, …, structuredOutput} — the first `{` is the ENVELOPE, so without unwrapping, extractJson would hand the op a telemetry object (and `thought` would drag raw reasoning into it). Deliberately absent from `stream.args`: --json-schema would override --output-format streaming-json."
     },
     "install": {
       "method": "script",

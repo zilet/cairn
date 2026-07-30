@@ -27,6 +27,8 @@ import {
   renderStrengthJourney,
   renderTrainingSignals,
   renderTrajectory,
+  renderJsonContract,
+  MECHANICS_ENCODING,
   CAIRN_PERSONA,
 } from "./shared.js";
 
@@ -116,10 +118,9 @@ NON-NEGOTIABLE GUARDRAILS:
   user's stated focus: strength-first users use runs/rides mainly as recovery/cardio-load
   context; runner/cyclist-first users make endurance progression central and keep lifting
   supportive.
-- Assisted movements use NEGATIVE target_weight. Small steps. Thin/absent data -> do not change.
-- TIMED exercises (mode:'timed', e.g. plank, dead hang) are prescribed in SECONDS (target_seconds)
-  and logged as duration_sec, not load. Progress them in seconds (+5-15s/step) and ONLY when recent
-  durations comfortably meet the current target; never propose target_weight for a timed exercise.
+${MECHANICS_ENCODING}
+- Small steps. Thin/absent data -> do not change. Progress a timed exercise ONLY when recent durations
+  comfortably meet the current target; never propose target_weight for one.
 
 KEEP TRAINING FRESH (anti-staleness — a plan that never changes gets abandoned):
 - Main lifts that are progressing stay put. But when an ACCESSORY has been unchanged for ~3-4 weeks,
@@ -156,8 +157,7 @@ ${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${ren
 TASK: ${userInstruction?.trim() || "Review recent training and propose conservative target adjustments for next week."}
 PROPOSAL AS-OF DATE: ${localDateISO()}. Use this exact date for as_of_date and for every reason_provenance.as_of_date.
 
-OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
-${PLAN_SCHEMA}
+${renderJsonContract(PLAN_SCHEMA)}
 
 DATA:
 ${promptData(ctx, "coach")}`;
@@ -292,8 +292,8 @@ NON-NEGOTIABLE GUARDRAILS (same as the coach):
 - Conservative loading: upper-body +5 lb/step max, lower-body +5-10 lb/step max. Only raise when
   recent sessions hit the TOP of the rep range on ALL sets at RIR 2-3. Thin/absent data → don't change.
 - Respect every constraint_note and active injury — never load an injured area; swap to a pain-free
-  alternative instead. Assisted movements use NEGATIVE target_weight; bodyweight null; TIMED work uses
-  target_seconds (+5-15s/step), never load.
+  alternative instead.
+${MECHANICS_ENCODING}
 - Read each recent session's soreness/performance/joint_pain: high soreness / low performance / a named
   joint → pull volume or load back there, don't progress through it. Autoregulation is a brake, not the driver.
 - Prefer 1-3 focused, well-justified changes over a sweeping rewrite. Restructure the split (a "days"
@@ -308,8 +308,7 @@ ${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${ren
 TASK: ${userInstruction?.trim() || "Evolve the program: progress what's working, break what's stalled, keep it fresh, and periodize sensibly. Explain each change in plain words."}
 PROPOSAL AS-OF DATE: ${localDateISO()}. Use this exact date for as_of_date and for every reason_provenance.as_of_date.
 
-OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
-${PLAN_SCHEMA}
+${renderJsonContract(PLAN_SCHEMA)}
 
 DATA:
 ${promptData(ctx, "program_evolution")}`;
@@ -351,8 +350,7 @@ THE CONSTITUTION (binding):
 - NEVER name internal pattern labels; just speak the
   read as if you'd noticed it yourself.
 
-OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdown fences:
-${REACTION_NARRATIVE_SCHEMA}
+${renderJsonContract(REACTION_NARRATIVE_SCHEMA)}
 
 PATTERNS (the only ground truth for this read):
 ${lines.length ? lines.join("\n") : "  (none)"}`;
