@@ -194,7 +194,17 @@ function chatFuelHtml(day: ChatClientDayIntake | null | undefined): string {
 // note's live enrichment_status + a compact {meal,summary,kcal,protein_g}; these
 // pure helpers turn that into the in-thread chip and keep it in sync as the note's
 // SSE stream settles (see chat-message-client.ts).
-type CaptureFood = { meal?: unknown; summary?: unknown; kcal?: unknown; protein_g?: unknown };
+type CaptureFoodRow = { item?: unknown; amount?: unknown; kcal?: unknown; protein_g?: unknown };
+type CaptureFood = {
+  meal?: unknown;
+  summary?: unknown;
+  kcal?: unknown;
+  protein_g?: unknown;
+  ingredients?: unknown;
+  ingredient_count?: unknown;
+  confidence?: unknown;
+  basis?: unknown;
+};
 type CaptureFoodInfo = { id: number; status: string; food: CaptureFood; missing: boolean };
 
 function captureFoodActive(status: unknown): boolean {
@@ -234,10 +244,106 @@ function captureFoodFromRow(row: unknown): { status: string; food: CaptureFood }
     try { parsed = JSON.parse(String(r.parsed_json)); } catch { parsed = null; }
   }
   const p = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+  const source = Array.isArray(p.ingredients) ? p.ingredients : Array.isArray(p.items) ? p.items : [];
+  const rows = source.map(captureFoodRow).filter((row): row is CaptureFoodRow => !!row);
   return {
     status: String(r.enrichment_status || ""),
-    food: { meal: r.meal, summary: p.summary, kcal: p.kcal, protein_g: p.protein_g },
+    food: {
+      meal: r.meal,
+      summary: p.summary,
+      kcal: p.kcal,
+      protein_g: p.protein_g,
+      ingredients: rows.slice(0, CAPTURE_REVIEW_MAX_ROWS),
+      ingredient_count: rows.length,
+      confidence: p.confidence,
+      basis: p.basis,
+    },
   };
+}
+
+// ---- the settled review ------------------------------------------------
+// Once the estimate lands, the chip alone can't answer "built from what?". The
+// review under it names the components and how the numbers were obtained, so a
+// guess never reads like a weighing (the one rule in src/foodCapture.ts). Rows are
+// capped: the full breakdown lives in the food detail sheet, not in a chat bubble.
+const CAPTURE_REVIEW_MAX_ROWS = 6;
+
+// The same normalization the server runs in stampCaptureFood, for the SSE/poll path
+// that hands us a raw food-note row instead of an already-stamped result.
+function captureFoodRow(raw: unknown): CaptureFoodRow | null {
+  if (typeof raw === "string") {
+    const item = raw.trim();
+    return item ? { item } : null;
+  }
+  if (!raw || typeof raw !== "object") return null;
+  const row = raw as Record<string, unknown>;
+  const item = String(row.item ?? row.name ?? row.food ?? "").trim();
+  if (!item) return null;
+  return {
+    item,
+    amount: String(row.amount ?? row.qty ?? row.quantity ?? row.portion ?? "").trim(),
+    kcal: row.kcal,
+    protein_g: row.protein_g,
+  };
+}
+
+// How the numbers were obtained, in the athlete's register. Deliberately plain:
+// these are the food-capture contract's own basis values, not a grade.
+const CAPTURE_BASIS_PHRASES: Record<string, string> = {
+  label: "Read off the label or menu",
+  user_report: "From what you said",
+  photo: "Read from the photo",
+  estimated_from_foods: "Estimated from usual servings",
+};
+
+function captureFoodMacroText(row: CaptureFoodRow): string {
+  const bits: string[] = [];
+  const kcal = Number(row.kcal);
+  const protein = Number(row.protein_g);
+  if (Number.isFinite(kcal) && kcal > 0) bits.push(`~${Math.round(kcal)} kcal`);
+  if (Number.isFinite(protein) && protein > 0) bits.push(`${Math.round(protein)}g P`);
+  return bits.join(" · ");
+}
+
+function captureFoodBasisLine(food: CaptureFood): string {
+  const bits: string[] = [];
+  const basis = CAPTURE_BASIS_PHRASES[String(food.basis ?? "")];
+  if (basis) bits.push(basis);
+  const confidence = String(food.confidence ?? "");
+  if (confidence === "low" || confidence === "medium" || confidence === "high") {
+    bits.push(`${confidence} confidence`);
+  }
+  return bits.join(" · ");
+}
+
+// The review's inner HTML, or "" when there is nothing honest to show yet (still
+// enriching, failed, or an estimate that came back with no components). Reuses the
+// ingredient-row classes from the food detail sheet — same breakdown, same look.
+function captureFoodReviewInner(status: unknown, food: unknown): string {
+  const s = String(status || "");
+  if (captureFoodActive(s) || s === "failed" || s === "skipped") return "";
+  const f = food && typeof food === "object" ? (food as CaptureFood) : {};
+  const rows = (Array.isArray(f.ingredients) ? f.ingredients : [])
+    .map(captureFoodRow)
+    .filter((row): row is CaptureFoodRow => !!row)
+    .slice(0, CAPTURE_REVIEW_MAX_ROWS);
+  const basisLine = captureFoodBasisLine(f);
+  if (!rows.length) return "";
+  const total = Number(f.ingredient_count);
+  const hidden = Number.isFinite(total) ? Math.max(0, total - rows.length) : 0;
+  const body = rows
+    .map((row) => {
+      const macros = captureFoodMacroText(row);
+      const amount = String(row.amount ?? "").trim();
+      return `<div class="ing-row">
+        <div class="ing-main"><span>${escHtml(row.item)}</span>${amount ? `<small>${escHtml(amount)}</small>` : ""}</div>
+        <div class="ing-nutri">${escHtml(macros || "estimated")}</div>
+      </div>`;
+    })
+    .join("");
+  const more = hidden ? `<div class="capture-review-more">and ${hidden} more</div>` : "";
+  const foot = basisLine ? `<div class="capture-review-basis">${escHtml(basisLine)}</div>` : "";
+  return `<div class="ing-breakdown">${body}</div>${more}${foot}`;
 }
 
 // The chip's inner HTML for a given status. Active -> a calm "filling in details…"
@@ -313,6 +419,7 @@ const CAIRN_CHAT_CLIENT = {
   captureFoodInfo,
   captureFoodFromRow,
   captureFoodTagInner,
+  captureFoodReviewInner,
   highlightTerm,
   historySessionRow: chatHistorySessionRow,
   historyHitRow: chatHistoryHitRow,

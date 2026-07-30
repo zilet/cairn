@@ -12,6 +12,7 @@ import {
   type ChatRoutingDecision,
 } from "../chatRouting.js";
 import { withSqliteSavepoint } from "./sqlite-savepoint.js";
+import { FOOD_BASIS_VALUES, FOOD_CONFIDENCE_BANDS } from "../foodCapture.js";
 
 // ---------- chat ----------
 function hydrateChat(row: any) {
@@ -63,6 +64,63 @@ function foodNoteMacro(value: unknown): number | null {
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
 }
+
+// The review that settles under an enriched capture chip: the ingredient rows the
+// estimate was actually built from, plus how many there were in total, so the chip
+// can say "and 3 more" instead of growing a wall inside a chat bubble. Derived at
+// READ time from the note's CURRENT parsed blob, exactly like the macros above —
+// nothing is written back onto the message, so a re-enrichment or a Garmin-style
+// re-sync REVISES the review in place rather than appending a second one, and the
+// idempotency question never arises. Mirrors the client's foodIngredients()
+// normalization (src/client/food-note-client.ts): structured `ingredients` rows
+// first, the flat `items` list as the fallback for an older/thinner estimate.
+const CAPTURE_REVIEW_MAX_ROWS = 6;
+const CAPTURE_REVIEW_TEXT_CAP = 90;
+
+type CaptureReviewRow = { item: string; amount: string | null; kcal: number | null; protein_g: number | null };
+
+function captureReviewText(value: unknown): string {
+  return String(value ?? "").trim().slice(0, CAPTURE_REVIEW_TEXT_CAP);
+}
+
+function captureReviewRow(raw: unknown): CaptureReviewRow | null {
+  if (typeof raw === "string") {
+    const item = captureReviewText(raw);
+    return item ? { item, amount: null, kcal: null, protein_g: null } : null;
+  }
+  if (!raw || typeof raw !== "object") return null;
+  const row = raw as Record<string, unknown>;
+  const item = captureReviewText(row.item ?? row.name ?? row.food);
+  if (!item) return null;
+  return {
+    item,
+    amount: captureReviewText(row.amount ?? row.qty ?? row.quantity ?? row.portion) || null,
+    kcal: foodNoteMacro(row.kcal),
+    protein_g: foodNoteMacro(row.protein_g),
+  };
+}
+
+function captureReviewRows(parsed: any): { rows: CaptureReviewRow[]; total: number } {
+  const source = Array.isArray(parsed?.ingredients)
+    ? parsed.ingredients
+    : Array.isArray(parsed?.items)
+      ? parsed.items
+      : null;
+  if (!source) return { rows: [], total: 0 };
+  const all = source.map(captureReviewRow).filter((row: CaptureReviewRow | null): row is CaptureReviewRow => !!row);
+  return { rows: all.slice(0, CAPTURE_REVIEW_MAX_ROWS), total: all.length };
+}
+
+// Provenance is passed through ONLY when the stored value is one the food-capture
+// contract actually defines. An estimate must never be made to look like a
+// measurement (src/foodCapture.ts), so an unrecognized band reads as absent — the
+// chip then says nothing about how the numbers were obtained rather than implying
+// a basis nobody claimed.
+function captureReviewBand(value: unknown, allowed: readonly string[]): string | null {
+  const band = String(value ?? "").toLowerCase();
+  return allowed.includes(band) ? band : null;
+}
+
 function stampCaptureFood(meta: any): void {
   const applied = Array.isArray(meta?.applied) ? meta.applied : null;
   if (!applied) return;
@@ -84,11 +142,16 @@ function stampCaptureFood(meta: any): void {
     } catch {
       parsed = null;
     }
+    const review = captureReviewRows(parsed);
     (result as any).food = {
       meal: (result as any).meal ?? row.meal ?? null,
       summary: parsed && typeof parsed.summary === "string" ? parsed.summary : null,
       kcal: foodNoteMacro(parsed?.kcal),
       protein_g: foodNoteMacro(parsed?.protein_g),
+      ingredients: review.rows,
+      ingredient_count: review.total,
+      confidence: captureReviewBand(parsed?.confidence, FOOD_CONFIDENCE_BANDS),
+      basis: captureReviewBand(parsed?.basis, FOOD_BASIS_VALUES),
     };
   }
 }

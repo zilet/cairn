@@ -1439,6 +1439,18 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
   border-radius:50%;border:1.5px solid var(--accent);border-top-color:transparent;
   animation:enrspin .7s linear infinite;vertical-align:-1px}
 @media (prefers-reduced-motion:reduce){.bubble-tag.capture-food.pending .enr-dot{animation:none;opacity:.6}}
+/* What the estimate was built from, settling under the chip once enrichment lands.
+   Reuses the food detail sheet's .ing-breakdown/.ing-row family, one notch tighter
+   for a chat bubble; the basis line stays muted — provenance, never a verdict. */
+.capture-review{margin-top:10px}
+/* Only the review that lands WHILE you are looking settles in; one rendered from
+   history is already part of the message and must not re-animate on every paint. */
+.capture-review.settling{animation:settlein var(--dur-2) var(--ease)}
+.capture-review .ing-row{padding:6px 0;font-size:.82rem}
+.capture-review .ing-row:last-child{border-bottom:none}
+.capture-review .ing-nutri{font-size:.78rem}
+.capture-review-more,.capture-review-basis{margin-top:6px;font-size:.76rem;color:var(--muted);line-height:1.45}
+@media (prefers-reduced-motion:reduce){.capture-review.settling{animation:none}}
 .agentcheck{
   display:inline-flex;align-items:center;gap:7px;margin-top:8px;max-width:100%;
   background:var(--card-2);border:1px solid var(--line);color:var(--muted);

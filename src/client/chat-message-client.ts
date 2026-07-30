@@ -128,14 +128,35 @@ function chatAppliedTagHtml(a: ChatScreenAppliedAction): string {
   return `<span class="bubble-tag">✓ ${escHtml(String(record.type).replace(/_/g, " "))}${record.error ? " ⚠" : ""}</span>`;
 }
 
-// Re-render a capture chip in place from a fetched food-note row (found anywhere in
-// the log by its note id, so it survives a re-render that rebuilt the bubble).
+// The settled review under a capture chip: what the estimate was built from. The
+// slot is rendered EMPTY while enrichment runs so the message the athlete already
+// read can fill in place — the ack and the details are ONE message, never a
+// follow-up. Empty content stays hidden, so a note that never enriches (failed,
+// skipped, or an estimate with no components) leaves no orphan gap.
+function chatCaptureReviewHtml(a: ChatScreenAppliedAction): string {
+  const info = CairnChatClient.captureFoodInfo(a);
+  if (!info || info.missing) return "";
+  const inner = CairnChatClient.captureFoodReviewInner(info.status, info.food);
+  return `<div class="capture-review" data-capture-review="${escAttr(info.id)}"${inner ? "" : " hidden"}>${inner}</div>`;
+}
+
+// Re-render a capture chip AND its review in place from a fetched food-note row
+// (found anywhere in the log by its note id, so it survives a re-render that
+// rebuilt the bubble).
 function applyCaptureFoodRow(id: number, row: unknown): void {
   const tag = document.querySelector(`.capture-food[data-capture-note="${id}"]`);
   if (!(tag instanceof HTMLElement)) return;
   const { status, food } = CairnChatClient.captureFoodFromRow(row);
   tag.classList.toggle("pending", CairnChatClient.captureFoodActive(status));
   tag.innerHTML = CairnChatClient.captureFoodTagInner(status, food);
+  const review = document.querySelector(`.capture-review[data-capture-review="${id}"]`);
+  if (!(review instanceof HTMLElement)) return;
+  const inner = CairnChatClient.captureFoodReviewInner(status, food);
+  if (inner === review.innerHTML) return; // an SSE re-emit of the same state: don't re-animate
+  const wasEmpty = !!review.hidden;
+  review.innerHTML = inner;
+  review.hidden = !inner;
+  review.classList.toggle("settling", !!inner && wasEmpty);
 }
 
 // Guards against arming two concurrent watchers for the same note+render token; a
@@ -241,6 +262,7 @@ function appendMsg(
   const applied = chatMessageApplied(meta.applied).filter((a) => chatMessageRecord((a as Record<string, unknown>).result).background !== true);
   if (applied.length) {
     extra += `<div class="bubble-meta">${applied.map(chatAppliedTagHtml).join("")}</div>`;
+    extra += applied.map(chatCaptureReviewHtml).join("");
   }
   const drafts = chatMessageDrafts(meta.drafts);
   if (drafts.length) {

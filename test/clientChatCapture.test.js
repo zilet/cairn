@@ -109,6 +109,98 @@ test("captureFoodFromRow maps a fetched food-note row (parsed or parsed_json) to
   assert.match(upgraded, /✓ Dinner · 720 kcal · 52g protein/);
 });
 
+test("captureFoodReviewInner shows what the estimate was built from, once it exists", () => {
+  const chat = loadChatClient();
+  const food = {
+    meal: "lunch",
+    kcal: 635,
+    protein_g: 51,
+    ingredient_count: 3,
+    confidence: "medium",
+    basis: "estimated_from_foods",
+    ingredients: [
+      { item: "swordfish", amount: "6 oz", kcal: 320, protein_g: 42 },
+      { item: "vegetable medley", amount: "1.5 cups", kcal: 95, protein_g: 4 },
+      { item: "olive oil", amount: "1 tbsp", kcal: 120 },
+    ],
+  };
+
+  const done = chat.captureFoodReviewInner("done", food);
+  assert.match(done, /swordfish/);
+  assert.match(done, /6 oz/);
+  assert.match(done, /~320 kcal · 42g P/);
+  assert.match(done, /1 tbsp/);
+  assert.match(done, /~120 kcal/);
+  // Provenance in the athlete's register, never the wire vocabulary and never a score.
+  assert.match(done, /Estimated from usual servings · medium confidence/);
+  assert.doesNotMatch(done, /estimated_from_foods/);
+
+  // Nothing is claimed before the estimate lands, or when it never will.
+  assert.equal(chat.captureFoodReviewInner("pending", food), "");
+  assert.equal(chat.captureFoodReviewInner("in_progress", food), "");
+  assert.equal(chat.captureFoodReviewInner("failed", food), "");
+  assert.equal(chat.captureFoodReviewInner("skipped", food), "");
+  // An enriched note with no components has no review to show — no orphan block.
+  assert.equal(chat.captureFoodReviewInner("done", { meal: "lunch", kcal: 400 }), "");
+});
+
+test("the review is bounded, honest about what it hides, and escapes every string", () => {
+  const chat = loadChatClient();
+  const many = chat.captureFoodReviewInner("done", {
+    ingredient_count: 11,
+    ingredients: Array.from({ length: 11 }, (_, i) => ({ item: `component ${i + 1}` })),
+  });
+  assert.equal((many.match(/class="ing-row"/g) || []).length, 6, "a chat bubble never grows a wall of rows");
+  assert.match(many, /and 5 more/);
+
+  // Provenance the food-capture contract doesn't define is simply not spoken.
+  const unknownBasis = chat.captureFoodReviewInner("done", {
+    ingredient_count: 1,
+    ingredients: [{ item: "toast" }],
+    basis: "vibes",
+    confidence: "92%",
+  });
+  assert.doesNotMatch(unknownBasis, /capture-review-basis/);
+
+  const hostile = chat.captureFoodReviewInner("done", {
+    ingredient_count: 1,
+    ingredients: [{ item: "<img src=x onerror=alert(1)>", amount: '"><script>' }],
+  });
+  assert.doesNotMatch(hostile, /<img src=x/);
+  assert.doesNotMatch(hostile, /<script>/);
+  assert.match(hostile, /&lt;img src=x/);
+});
+
+test("captureFoodFromRow carries the review through the SSE path, not just the macros", () => {
+  const chat = loadChatClient();
+  const live = chat.captureFoodFromRow({
+    enrichment_status: "done",
+    meal: "lunch",
+    parsed: {
+      summary: "Swordfish",
+      kcal: 635,
+      ingredients: [{ item: "swordfish", amount: "6 oz", kcal: 320 }],
+      confidence: "medium",
+      basis: "photo",
+    },
+  });
+  assert.equal(live.food.ingredient_count, 1);
+  assert.equal(live.food.ingredients[0].item, "swordfish");
+  // Composing fromRow → reviewInner is exactly the in-place fill the watcher performs.
+  const review = chat.captureFoodReviewInner(live.status, live.food);
+  assert.match(review, /swordfish/);
+  assert.match(review, /Read from the photo · medium confidence/);
+
+  // An older estimate that only carried a flat items list still yields rows.
+  const flat = chat.captureFoodFromRow({
+    enrichment_status: "done",
+    meal: "lunch",
+    parsed_json: JSON.stringify({ kcal: 620, items: ["turkey (5 oz)", "rice (1 cup)"] }),
+  });
+  assert.equal(flat.food.ingredient_count, 2);
+  assert.match(chat.captureFoodReviewInner("done", flat.food), /turkey \(5 oz\)/);
+});
+
 // ---- wiring: chat-message-client.ts DOM glue --------------------------------
 const messageClient = readFileSync(join(root, "src/client/chat-message-client.ts"), "utf8");
 
@@ -146,4 +238,16 @@ test("applyCaptureFoodRow upgrades the chip in place by its note id", () => {
   assert.match(messageClient, /CairnChatClient\.captureFoodFromRow\(row\)/);
   assert.match(messageClient, /tag\.classList\.toggle\("pending", CairnChatClient\.captureFoodActive\(status\)\)/);
   assert.match(messageClient, /tag\.innerHTML = CairnChatClient\.captureFoodTagInner\(status, food\)/);
+});
+
+test("the review fills the ORIGINAL message in place — a slot on render, filled on settle", () => {
+  // The slot is rendered with the ack (hidden while empty) so the message the athlete
+  // already read becomes the one that carries the details — never a follow-up message.
+  assert.match(messageClient, /function chatCaptureReviewHtml/);
+  assert.match(messageClient, /data-capture-review="\$\{escAttr\(info\.id\)\}"/);
+  assert.match(messageClient, /applied\.map\(chatCaptureReviewHtml\)/);
+  // Filled in place by the same watcher that upgrades the chip, found by note id.
+  assert.match(messageClient, /document\.querySelector\(`\.capture-review\[data-capture-review="\$\{id\}"\]`\)/);
+  assert.match(messageClient, /CairnChatClient\.captureFoodReviewInner\(status, food\)/);
+  assert.match(messageClient, /review\.hidden = !inner/);
 });

@@ -114,6 +114,141 @@ test("a status transition (pending → done) reaches the turn + message payload"
   assert.equal(onMessage.result.food.kcal, 620);
 });
 
+// The estimate the athlete reads should say what it was built from, in the SAME
+// message that acked the log — not a follow-up. These pin the server half: the
+// review is derived from the note's CURRENT parsed blob on every read path.
+test("the settled payload carries the ingredient rows and the estimate's provenance", () => {
+  const { turnId } = instantCapture("Log swordfish with medley vegetables for lunch");
+  const note = repo.listFoodNotes(10)[0];
+
+  repo.updateFoodNoteParsed(note.id, {
+    summary: "Swordfish with vegetable medley",
+    kcal: 635,
+    protein_g: 51,
+    ingredients: [
+      { item: "swordfish", amount: "6 oz", kcal: 320, protein_g: 42, fat_g: 15 },
+      { item: "vegetable medley", amount: "1.5 cups", kcal: 95, protein_g: 4 },
+      { item: "olive oil", amount: "1 tbsp", kcal: 120 },
+    ],
+    confidence: "medium",
+    basis: "estimated_from_foods",
+  });
+  repo.setFoodNoteEnrichStatus(note.id, "done");
+
+  const message = repo.getChatMessage(repo.getChatTurn(turnId).assistant_message_id);
+  const { food } = appliedFood(message).result;
+  assert.equal(food.ingredient_count, 3);
+  assert.deepEqual(
+    food.ingredients.map((row) => row.item),
+    ["swordfish", "vegetable medley", "olive oil"]
+  );
+  assert.equal(food.ingredients[0].amount, "6 oz", "the quantity stays its own field");
+  assert.equal(food.ingredients[0].kcal, 320);
+  assert.equal(food.ingredients[0].protein_g, 42);
+  assert.equal(food.ingredients[2].protein_g, null, "a row that estimated no protein says so");
+  assert.equal(food.confidence, "medium");
+  assert.equal(food.basis, "estimated_from_foods");
+});
+
+test("a re-enrichment revises the review in place — never appends a second one", () => {
+  const { turnId } = instantCapture("Log turkey and rice for lunch");
+  const note = repo.listFoodNotes(10)[0];
+  const messageId = repo.getChatTurn(turnId).assistant_message_id;
+
+  const first = {
+    summary: "Turkey and rice",
+    kcal: 620,
+    ingredients: [{ item: "turkey", amount: "5 oz" }, { item: "rice", amount: "1 cup" }],
+    confidence: "low",
+    basis: "estimated_from_foods",
+  };
+  repo.updateFoodNoteParsed(note.id, first);
+  repo.setFoodNoteEnrichStatus(note.id, "done");
+  assert.equal(appliedFood(repo.getChatMessage(messageId)).result.food.ingredient_count, 2);
+
+  // The SAME payload landing twice (a queue retry / re-sync) must be a no-op.
+  repo.updateFoodNoteParsed(note.id, first);
+  repo.setFoodNoteEnrichStatus(note.id, "done");
+  const repeated = appliedFood(repo.getChatMessage(messageId)).result.food;
+  assert.equal(repeated.ingredient_count, 2, "a replayed completion does not duplicate the rows");
+  assert.equal(repeated.kcal, 620);
+
+  // A genuinely better estimate REPLACES the review rather than stacking onto it.
+  repo.updateFoodNoteParsed(note.id, {
+    summary: "Turkey and rice",
+    kcal: 655,
+    ingredients: [{ item: "turkey breast", amount: "205 g", kcal: 240, protein_g: 46 }],
+    confidence: "high",
+    basis: "user_report",
+  });
+  const revised = appliedFood(repo.getChatMessage(messageId)).result.food;
+  assert.equal(revised.ingredient_count, 1);
+  assert.equal(revised.ingredients[0].item, "turkey breast");
+  assert.equal(revised.basis, "user_report");
+  assert.equal(revised.confidence, "high");
+});
+
+test("the review reaches a later page load through the history read path", () => {
+  const { turnId } = instantCapture("Log turkey and rice for lunch");
+  const note = repo.listFoodNotes(10)[0];
+  const messageId = repo.getChatTurn(turnId).assistant_message_id;
+
+  repo.updateFoodNoteParsed(note.id, {
+    summary: "Turkey and rice",
+    kcal: 620,
+    ingredients: [{ item: "turkey", amount: "5 oz", kcal: 240 }],
+    confidence: "medium",
+    basis: "label",
+  });
+  repo.setFoodNoteEnrichStatus(note.id, "done");
+
+  // listChatMessages is what a cold page load reads — a client that was closed when
+  // the estimate landed must still see it, not the pending snapshot.
+  const fromHistory = repo.listChatMessages(50).find((m) => m.id === messageId);
+  assert.ok(fromHistory, "the assistant message is in the live conversation");
+  const { food } = appliedFood(fromHistory).result;
+  assert.equal(food.kcal, 620);
+  assert.equal(food.ingredients[0].item, "turkey");
+  assert.equal(food.basis, "label");
+});
+
+test("the review is bounded, and provenance outside the contract reads as absent", () => {
+  const { turnId } = instantCapture("Log turkey and rice for lunch");
+  const note = repo.listFoodNotes(10)[0];
+
+  repo.updateFoodNoteParsed(note.id, {
+    summary: "A long plate",
+    kcal: 900,
+    ingredients: Array.from({ length: 11 }, (_, i) => ({ item: `component ${i + 1}` })),
+    confidence: "92%", // a scored confidence is not one of the contract's bands
+    basis: "vibes",
+  });
+  repo.setFoodNoteEnrichStatus(note.id, "done");
+
+  const { food } = appliedFood(repo.getChatTurn(turnId)).result;
+  assert.equal(food.ingredients.length, 6, "a chat bubble never grows a wall of rows");
+  assert.equal(food.ingredient_count, 11, "the true count survives so the chip can say how many are hidden");
+  assert.equal(food.confidence, null, "an unrecognized band is dropped, not passed through");
+  assert.equal(food.basis, null, "an estimate never claims a basis nobody defined");
+});
+
+test("an older estimate with only a flat items list still yields a review", () => {
+  const { turnId } = instantCapture("Log turkey and rice for lunch");
+  const note = repo.listFoodNotes(10)[0];
+
+  repo.updateFoodNoteParsed(note.id, {
+    summary: "Turkey and rice",
+    kcal: 620,
+    items: ["turkey (5 oz)", "white rice (1 cup)"],
+  });
+  repo.setFoodNoteEnrichStatus(note.id, "done");
+
+  const { food } = appliedFood(repo.getChatTurn(turnId)).result;
+  assert.equal(food.ingredient_count, 2);
+  assert.equal(food.ingredients[0].item, "turkey (5 oz)");
+  assert.equal(food.ingredients[0].amount, null);
+});
+
 test("a deleted linked note settles the chip payload without breaking", () => {
   const { turnId } = instantCapture("Log turkey and rice for lunch");
   const note = repo.listFoodNotes(10)[0];
