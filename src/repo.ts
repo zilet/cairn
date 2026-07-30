@@ -52,6 +52,7 @@ export * from "./repo/prevent.js"; // AHA PREVENT (2023) base-model risk engine 
 export * from "./repo/coach-context.js";
 export * from "./repo/coach.js";
 export * from "./repo/baseline-bands.js"; // personal-baseline recovery + training-load reads
+export * from "./repo/sensor-freshness.js"; // how old a wearable reading may be before it behaves as absent
 export * from "./repo/propagation.js";
 export * from "./repo/marker-response.js"; // the lab loop: anchor an applied plan/meal change to its marker + learn which change coincided with which direction
 export * from "./repo/symptom-links.js"; // deterministic symptom → off-marker reasoning

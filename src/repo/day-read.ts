@@ -31,6 +31,7 @@ import { activitySportWhere, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
 import { estimateExpenditure } from "./expenditure.js";
 import { flexibleTrainingAgenda } from "./flexible-training-agenda.js";
 import { listContextEvents } from "./health.js";
+import { sensorIsCurrent } from "./sensor-freshness.js";
 import { getRecentSessions } from "./sessions.js";
 import { getActiveBlock } from "./program-blocks.js";
 import { activeRecoveryWeekLedger, RECOVERY_WEEK_ACTIVE_DAYS } from "./recovery-week-ledger.js";
@@ -1757,13 +1758,10 @@ export function dayRead(
   // (a 25-day-old night is not last night), and feeding a stale night to the Brief is
   // what made it assert "you slept fine" off month-old data. Treat an old night as
   // ABSENT so the read never claims how they slept from data it doesn't have.
-  const SLEEP_FRESH_DAYS = 2;
+  // The bound itself now lives in SENSOR_MAX_AGE_DAYS, so the signal state cannot
+  // keep voicing a night this read has already dropped.
   const lsRaw = latestSleep();
-  let lastNight = lsRaw;
-  if (lsRaw?.date) {
-    const ageDays = Math.round((Date.parse(d + "T00:00:00Z") - Date.parse(lsRaw.date + "T00:00:00Z")) / 864e5);
-    if (!(ageDays >= 0 && ageDays <= SLEEP_FRESH_DAYS)) lastNight = null;
-  }
+  const lastNight = lsRaw?.date && !sensorIsCurrent("sleep", lsRaw.date, d) ? null : lsRaw;
   const avgSleepMin = rec?.recovery?.avg_sleep_min ?? null;
   const lowSleep = avgSleepMin != null && avgSleepMin > 0 && avgSleepMin < 360; // <6h average
   const freshShortSleep =
@@ -1793,7 +1791,15 @@ export function dayRead(
   if (dl?.rhr != null && dl.rhr > 2) recoveryDrift++;
   // Sleep running short vs their norm.
   if (dl?.sleep != null && dl.sleep < -25) recoveryDrift++;
-  const acuteLoad = rec?.recovery?.acute_load ?? null;
+  // Acute training load is a CURRENT number the coach reasons and speaks from, but
+  // `getRecoverySummary` resolves it as "the newest non-null row in the last 14 days"
+  // — so a watch that stopped syncing kept handing the prompt a fortnight-old load as
+  // though it were today's. Past its bound it reads as absent, like every other
+  // sensor datum here.
+  const acuteLoadQuality = rec?.quality?.acute_load ?? rec?.recovery?.quality?.acute_load ?? null;
+  const acuteLoad = sensorIsCurrent("training_load", acuteLoadQuality?.latest_date ?? null, d)
+    ? (rec?.recovery?.acute_load ?? null)
+    : null;
   // Readiness is a CURRENT decision signal only when its dated reading is today or
   // yesterday relative to the day being read. The multi-day average remains useful
   // context, but can never force a current recommendation (and a stale current value
@@ -1801,10 +1807,7 @@ export function dayRead(
   const readinessQuality = rec?.quality?.training_readiness ?? rec?.recovery?.quality?.training_readiness ?? null;
   const readinessCurrent = rec?.recovery?.training_readiness ?? null;
   const readinessDate = readinessQuality?.latest_date ?? null;
-  const readinessAgeDays = readinessDate
-    ? Math.round((Date.parse(`${d}T00:00:00Z`) - Date.parse(`${readinessDate}T00:00:00Z`)) / 864e5)
-    : null;
-  const readinessFresh = readinessAgeDays != null && readinessAgeDays >= 0 && readinessAgeDays <= 1;
+  const readinessFresh = sensorIsCurrent("training_readiness", readinessDate, d);
   const lowReadiness = readinessFresh && readinessCurrent != null && Number(readinessCurrent) < 35;
   const readinessAverage = rec?.recovery?.avg_training_readiness ?? null;
   // Mounting fatigue: at least 2 straight training days AND recovery drifting the

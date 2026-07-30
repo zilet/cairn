@@ -6,6 +6,7 @@ import { inferHealthDocumentKind, normalizeHealthDocumentKind } from "../healthD
 import { activeTimeZone } from "../tz.js";
 import { safeUploadPath } from "../uploadPaths.js";
 import { invalidateDayRead } from "./intelligence.js";
+import { sensorAgeDays } from "./sensor-freshness.js";
 import { daysBetweenISO, localDateISO } from "./shared.js";
 import { listExercises } from "./exercises.js";
 import { normalizeMarkerReading, parseLabNumber, seriesUnitsCompatible } from "./lab-units.js";
@@ -1055,7 +1056,7 @@ export function deleteHealthDocument(id: number) {
 // "drifting away from optimal" / "stable") — words and a direction only, NEVER a
 // number-as-score (the constitution bans 0-100 grades). `eta_weeks` is kept
 // internal for ordering (prioritizeMarkers); only the text is ever surfaced.
-interface MarkerForecast {
+export interface MarkerForecast {
   // direction RELATIVE TO OPTIMAL: improving = heading toward the band,
   // worsening = drifting away the bad way, stable = no meaningful drift,
   // null = not enough data / no zone to judge against.
@@ -1189,6 +1190,62 @@ export function forecastMarker(
     eta_text = inside ? "holding within optimal" : improving ? "trending toward optimal" : "drifting away from optimal";
   }
   return { direction, eta_text, eta_weeks, crossing };
+}
+
+// Whether a marker series can actually SUPPORT the forecast just computed off it.
+// `forecastMarker` will happily draw a confident line through any two dots; this
+// is the honesty layer that decides when that line may be published.
+//
+// Shared by BOTH marker paths on purpose. The lab path (computeMarkerHistory) has
+// carried these guards since an n=2 Lp(a) read "falling, ~3 weeks to optimal" off
+// two readings; its wearable twin (wearableFitnessMarkers in propagation.ts) had
+// none, so two synced Garmin days could emit an equally confident VO2max forecast
+// — which then fed prioritizeMarkers' trajectory boost and moved the marker up the
+// athlete's list. One helper, so the two can't drift apart again.
+export interface ForecastSupport {
+  nonTrending: boolean; // genetically fixed — never carries a direction
+  stale: boolean; // newest reading too old to speak for today
+  suppressProjection: boolean; // no ETA / projection text may be published
+}
+
+export function forecastSupport(input: {
+  name?: string | null;
+  n: number; // readings in the series
+  weeklySlope: number | null; // slope per week, or null when undefined
+  latestValue: number | null;
+  latestDate?: string | null;
+  // Only the SENSOR paths pass this. Labs are dated events that stay true — a
+  // cholesterol panel from March is still that March panel — so the lab path
+  // leaves it null and never ages out.
+  staleAfterDays?: number | null;
+  asOf?: string;
+}): ForecastSupport {
+  const nonTrending = isNonTrendingMarker(input.name);
+  // n<3 readings can't sustain a projection — keep the raw direction, drop the ETA.
+  const thin = input.n < 3;
+  // An implausibly steep slope (>50%/week of the value) won't hold — drop the ETA.
+  const latest = input.latestValue;
+  const weekly = input.weeklySlope;
+  const implausibleSlope =
+    weekly != null && latest != null && Number.isFinite(latest) && latest !== 0
+      ? Math.abs(weekly) > Math.abs(latest) * 0.5
+      : false;
+  let stale = false;
+  if (input.staleAfterDays != null) {
+    const age = sensorAgeDays(input.latestDate, input.asOf ?? localDateISO());
+    stale = age == null || age < 0 || age > input.staleAfterDays;
+  }
+  return { nonTrending, stale, suppressProjection: nonTrending || thin || implausibleSlope || stale };
+}
+
+// Apply that verdict to a computed forecast. Stale is checked FIRST and returns
+// the fully-null forecast: a series the watch stopped feeding has no direction to
+// report at all, not even the "stable" a genetically-fixed marker honestly earns.
+export function supportedForecast(forecast: MarkerForecast, support: ForecastSupport): MarkerForecast {
+  if (support.stale) return { direction: null, eta_text: null, eta_weeks: null, crossing: null };
+  if (support.nonTrending) return { direction: "stable", eta_text: null, eta_weeks: null, crossing: null };
+  if (support.suppressProjection) return { direction: null, eta_text: null, eta_weeks: null, crossing: null };
+  return forecast;
 }
 
 // ---------- getMarkerHistory memoization ----------
@@ -1635,30 +1692,24 @@ function computeMarkerHistory() {
               : weekly < 0
                 ? "falling"
                 : "stable";
-      // Forecast vs the OPTIMAL band — plain-language projection + eta direction.
-      forecast = forecastMarker(points, slope, zone);
-      // Don't project a confident trend the data can't support:
-      //  • genetically-fixed markers (Lp(a), ApoE, MTHFR) don't "trend" — the honest
-      //    read is 'stable', with no ETA.
-      //  • n<3 readings can't sustain a projection (an n=2 Lp(a) once read "falling,
-      //    ~3 weeks to optimal" off two dots) — keep the raw direction, drop the ETA.
-      //  • an implausibly steep slope (>50%/week of the value) won't hold — drop the ETA.
-      const nonTrending = isNonTrendingMarker(displayName);
-      const implausibleSlope =
-        weekly != null &&
-        Number.isFinite(lastP.value) &&
-        lastP.value !== 0 &&
-        Math.abs(weekly) > Math.abs(lastP.value) * 0.5;
-      const suppressProjection = nonTrending || n < 3 || implausibleSlope;
-      if (nonTrending) forecast = { direction: "stable", eta_text: null, eta_weeks: null, crossing: null };
-      else if (suppressProjection) forecast = { direction: null, eta_text: null, eta_weeks: null, crossing: null };
+      // Forecast vs the OPTIMAL band — plain-language projection + eta direction,
+      // then the shared honesty layer that decides whether the series can actually
+      // support it (genetically-fixed marker / too few readings / implausible slope).
+      // A lab reading is a dated event that stays true, so no staleness bound here.
+      const support = forecastSupport({
+        name: displayName,
+        n,
+        weeklySlope: weekly,
+        latestValue: lastP.value,
+      });
+      forecast = supportedForecast(forecastMarker(points, slope, zone), support);
       trend = {
-        dir: nonTrending ? "stable" : dir,
+        dir: support.nonTrending ? "stable" : dir,
         change,
         span_days,
         n,
         slope_per_week: weekly == null ? null : Math.round(weekly * 1000) / 1000,
-        projection: suppressProjection ? null : forecast.eta_text,
+        projection: support.suppressProjection ? null : forecast.eta_text,
       };
     }
     const grp = markerGroup(displayName);

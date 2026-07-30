@@ -13,6 +13,7 @@
 // band row itself.
 
 import { db } from "../db.js";
+import { type SensorSignal, sensorIsCurrent } from "./sensor-freshness.js";
 import { localDateISO } from "./shared.js";
 
 // ---- shared math (module-private) --------------------------------------------
@@ -153,6 +154,13 @@ export function recoveryBaselineRead(input: RecoveryBaselineInput): RecoveryBase
 const RECOVERY_WINDOW_DAYS = 28;
 const RECOVERY_FIELDS = ["hrv_ms", "resting_hr", "sleep_min"] as const;
 type RecoveryField = (typeof RECOVERY_FIELDS)[number];
+// Each band's dot is a CURRENT reading, so it answers to the same per-signal age
+// bound every other decision site uses rather than to this module's window length.
+const RECOVERY_FIELD_SIGNAL: Record<RecoveryField, SensorSignal> = {
+  hrv_ms: "hrv",
+  resting_hr: "resting_hr",
+  sleep_min: "sleep",
+};
 type RecoveryDbRow = { date: string } & Partial<Record<RecoveryField, number | null>>;
 
 // Collapse a source's rows to the newest non-null value per date/field. Rows
@@ -213,6 +221,13 @@ export function getRecoveryBaselineRead(windowDays = RECOVERY_WINDOW_DAYS): Reco
     const arr = series[field];
     if (!arr.length) return { values: [], current: null };
     const latest = arr.reduce((a, b) => (b.date > a.date ? b : a));
+    // The band's dot is spoken in the PRESENT TENSE ("above your usual"), so it may
+    // only be drawn from a reading that can still speak for today. Past the signal's
+    // age bound the dot is dropped — and `recoveryBaselineRead` already treats a
+    // missing `current` as a missing dimension, so the row simply doesn't render.
+    // The 28-day series behind it is a baseline and stays whole either way.
+    if (!sensorIsCurrent(RECOVERY_FIELD_SIGNAL[field], latest.date, today))
+      return { values: arr.map((x) => x.v), current: null };
     return { values: arr.map((x) => x.v), current: latest.v };
   };
   return recoveryBaselineRead({ hrv: dim("hrv_ms"), rhr: dim("resting_hr"), sleep: dim("sleep_min") });

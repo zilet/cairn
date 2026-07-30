@@ -5,6 +5,7 @@
 // retain their own provenance/conflicts and only meet at one bounded INTERNAL
 // arbitration index that emits plain-language posture/reasons (never a score).
 import { pickDayVariant } from "./brain/day-read-rules.js";
+import { SENSOR_MAX_AGE_DAYS } from "./sensor-freshness.js";
 import { joinList } from "./shared.js";
 
 export type SignalDimension =
@@ -1049,7 +1050,12 @@ export function planningSignalState(input: {
     direction: SignalDirection,
     summary: string,
     voice: SignalVoiceKey,
-    maxAgeDays = 3
+    // Deliberately REQUIRED. Every one of these observations is a wearable reading
+    // dated to whenever the watch last produced it, and the age at which it stops
+    // speaking is a per-signal fact that lives in SENSOR_MAX_AGE_DAYS. A default
+    // here is how the sleep observation ended up on an unconsidered 3 days while
+    // day-read had already dropped the same night at 2.
+    maxAgeDays: number
   ) => {
     const q = quality[qualityField] ?? {};
     observations.push(
@@ -1076,7 +1082,8 @@ export function planningSignalState(input: {
       Number(current.sleep_min) < 360
         ? "The most recent recorded night came in short."
         : "The most recent recorded night supports the planned day.",
-      Number(current.sleep_min) < 360 ? "sleep_night_short" : "sleep_night_ok"
+      Number(current.sleep_min) < 360 ? "sleep_night_short" : "sleep_night_ok",
+      SENSOR_MAX_AGE_DAYS.sleep
     );
   // The multi-night trend, which is the only evidence a chronic sentence may be spoken
   // for. Same <6h line day-read's own `low_sleep` flag uses, off the same `avg_sleep_min`,
@@ -1089,7 +1096,11 @@ export function planningSignalState(input: {
       "sleep_min",
       "caution",
       "Sleep across the recent window is averaging under six hours.",
-      "sleep_short"
+      "sleep_short",
+      // Dated to the newest night in the window, so it ages out on the same bound the
+      // night itself does: once no recent night exists, the window average behind it is
+      // thinning too and can no longer claim to describe "recent" sleep.
+      SENSOR_MAX_AGE_DAYS.sleep
     );
   // Readiness rides a ONE-day window, matching day-read's own gate ("a stale current
   // value cannot" force a recommendation, src/repo/day-read.ts). At the former 3 days a
@@ -1111,7 +1122,7 @@ export function planningSignalState(input: {
         ? "The wearable readiness signal is subdued."
         : "The wearable readiness signal is supportive.",
       Number(current.training_readiness) < 50 ? "readiness_subdued" : "readiness_ok",
-      1
+      SENSOR_MAX_AGE_DAYS.training_readiness
     );
   if (input.recovery?.delta?.hrv != null)
     addRecovery(
@@ -1121,7 +1132,8 @@ export function planningSignalState(input: {
       Number(input.recovery.delta.hrv) < -5
         ? "HRV is below the athlete's recent norm."
         : "HRV is steady against the athlete's norm.",
-      Number(input.recovery.delta.hrv) < -5 ? "hrv_below" : "hrv_steady"
+      Number(input.recovery.delta.hrv) < -5 ? "hrv_below" : "hrv_steady",
+      SENSOR_MAX_AGE_DAYS.hrv
     );
   if (input.recovery?.delta?.rhr != null)
     addRecovery(
@@ -1131,7 +1143,8 @@ export function planningSignalState(input: {
       Number(input.recovery.delta.rhr) > 3
         ? "Resting heart rate is above the athlete's norm."
         : "Resting heart rate is steady against the athlete's norm.",
-      Number(input.recovery.delta.rhr) > 3 ? "resting_hr_up" : "resting_hr_steady"
+      Number(input.recovery.delta.rhr) > 3 ? "resting_hr_up" : "resting_hr_steady",
+      SENSOR_MAX_AGE_DAYS.resting_hr
     );
 
   // Apple daily activity is not a sport-specific workout record, but meaningful

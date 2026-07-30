@@ -6,6 +6,8 @@
 import * as repo from "../repo.js";
 import { extractJson } from "../agents.js";
 import type { CoachContext, PartialCoachContext } from "../repo/coach-context.js";
+import { type SensorSignal, sensorIsCurrent } from "../repo/sensor-freshness.js";
+import { localDateISO } from "../repo/shared.js";
 
 // getCoachContext deliberately describes the host's current local day. Dated
 // prompts are historical/forward planning surfaces, so patch only their compact
@@ -471,6 +473,23 @@ export function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | 
   }
   const rec = ctx?.recovery?.recovery;
   if (ctx?.recovery?.has_data && rec) {
+    // The `avg_*` figures below are honestly labelled window averages. The rest are
+    // POINT-IN-TIME readings, and getRecoverySummary resolves each as "the newest
+    // non-null row in the window" — so a watch left in a drawer kept handing this
+    // block a fortnight-old training status, VO2max or skin-temp deviation, printed
+    // beside today's averages with nothing to say how old it was. Past its signal's
+    // age bound a point reading is simply not printed: stale sensor data behaves as
+    // absent, which is the one thing the coach already knows how to handle.
+    const quality = rec.quality ?? ctx?.recovery?.quality ?? {};
+    const asOf = String(ctx?.now?.date || "").slice(0, 10) || localDateISO();
+    const current = <T>(signal: SensorSignal, field: string, value: T): T | null =>
+      value != null && sensorIsCurrent(signal, quality?.[field]?.latest_date ?? null, asOf) ? value : null;
+    const hrvStatus = current("hrv", "hrv_status", rec.hrv_status);
+    const skinTempDev = current("sleep", "skin_temp_dev_c", rec.skin_temp_dev_c);
+    const acuteLoad = current("training_load", "acute_load", rec.acute_load);
+    const trainingStatus = current("training_load", "training_status", rec.training_status);
+    const vo2max = current("fitness_marker", "vo2max", rec.vo2max);
+    const fitnessAge = current("fitness_marker", "fitness_age", rec.fitness_age);
     const bits: string[] = [];
     if (rec.avg_sleep_min != null) {
       let sleep = `avg sleep ~${Math.round(rec.avg_sleep_min)} min`;
@@ -484,21 +503,21 @@ export function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | 
       bits.push(sleep);
     }
     if (rec.avg_resting_hr != null) bits.push(`resting HR ~${rec.avg_resting_hr}`);
-    if (rec.avg_hrv_ms != null) bits.push(`HRV ~${rec.avg_hrv_ms} ms${rec.hrv_status ? ` (${String(rec.hrv_status).toLowerCase()})` : ""}`);
+    if (rec.avg_hrv_ms != null) bits.push(`HRV ~${rec.avg_hrv_ms} ms${hrvStatus ? ` (${String(hrvStatus).toLowerCase()})` : ""}`);
     if (rec.avg_stress != null) bits.push(`stress ~${rec.avg_stress}`);
     if (rec.avg_body_battery != null) bits.push(`body battery ~${rec.avg_body_battery}`);
     if (rec.avg_respiration != null) bits.push(`respiration ~${rec.avg_respiration}/min`);
     if (rec.avg_spo2 != null) bits.push(`SpO2 ~${rec.avg_spo2}%`);
-    if (rec.skin_temp_dev_c != null) bits.push(`skin-temp dev ${rec.skin_temp_dev_c > 0 ? "+" : ""}${rec.skin_temp_dev_c}°C`);
+    if (skinTempDev != null) bits.push(`skin-temp dev ${skinTempDev > 0 ? "+" : ""}${skinTempDev}°C`);
     if (rec.avg_training_readiness != null) {
       const tr = Math.round(rec.avg_training_readiness);
       const word = tr < 40 ? "low" : tr <= 65 ? "moderate" : "high";
       bits.push(`${word} training readiness`);
     }
-    if (rec.acute_load != null) bits.push(`acute training load ~${Math.round(rec.acute_load)}`);
-    if (rec.vo2max != null) bits.push(`VO2max ${rec.vo2max}`);
-    if (rec.fitness_age != null) bits.push(`fitness age ~${Math.round(rec.fitness_age)}`);
-    if (rec.training_status) bits.push(`status: ${String(rec.training_status).toLowerCase()}`);
+    if (acuteLoad != null) bits.push(`acute training load ~${Math.round(acuteLoad)}`);
+    if (vo2max != null) bits.push(`VO2max ${vo2max}`);
+    if (fitnessAge != null) bits.push(`fitness age ~${Math.round(fitnessAge)}`);
+    if (trainingStatus) bits.push(`status: ${String(trainingStatus).toLowerCase()}`);
     if (rec.avg_steps != null) bits.push(`~${Math.round(rec.avg_steps)} steps/day`);
     if (rec.avg_vigorous_min != null && rec.avg_vigorous_min > 0) bits.push(`~${Math.round(rec.avg_vigorous_min)} vigorous min/day`);
     const body: string[] = [];

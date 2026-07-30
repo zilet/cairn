@@ -12,7 +12,16 @@ import {
 } from "./coach.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { buildSafetyMarkerContext, safetyGate, verifyCitation } from "./evidence.js";
-import { activeMedications, forecastMarker, getMarkerHistory, lsqSlopePerDay } from "./health.js";
+import {
+  type MarkerForecast,
+  activeMedications,
+  forecastMarker,
+  forecastSupport,
+  getMarkerHistory,
+  lsqSlopePerDay,
+  supportedForecast,
+} from "./health.js";
+import { SENSOR_MAX_AGE_DAYS, sensorAgeDays, sensorIsCurrent } from "./sensor-freshness.js";
 import { invalidateDayRead } from "./intelligence.js";
 import { canonicalMarker } from "./marker-canon.js";
 import { maybeRequestMealRefreshForDirectives } from "./meal-directive-trigger.js";
@@ -165,7 +174,15 @@ function wearableFitnessMarkers(days = 120): any[] {
     const zone = matchOptimalZone(spec.label);
     const slope = lsqSlopePerDay(points);
     const n = points.length;
+    // The watch is not a subscription to the truth — it comes off, and syncs stop.
+    // A series whose newest dot is a fortnight old still describes SOMETHING (these
+    // markers move slowly), but it can no longer claim a direction for today, so
+    // past the bound it reads as absent: no trend, no forecast, and `stale` set so
+    // the surfaces can say when it was actually last measured.
+    const ageDays = sensorAgeDays(last.date, today);
+    const stale = !sensorIsCurrent("fitness_marker", last.date, today);
     let trend: any;
+    let forecast: MarkerForecast = { direction: null, eta_text: null, eta_weeks: null, crossing: null };
     if (n < 2) {
       trend = { dir: null, change: null, span_days: null, n, slope_per_week: null, projection: null };
     } else {
@@ -191,15 +208,28 @@ function wearableFitnessMarkers(days = 120): any[] {
               : weekly < 0
                 ? "falling"
                 : "stable";
-      const fc = forecastMarker(points, slope, zone);
+      // Same honesty layer the lab path uses — two synced days must not emit a
+      // confident forecast (which would then feed prioritizeMarkers' trajectory
+      // boost below) — plus the staleness bound labs don't need.
+      const support = forecastSupport({
+        name: spec.label,
+        n,
+        weeklySlope: weekly,
+        latestValue: last.value,
+        latestDate: last.date,
+        staleAfterDays: SENSOR_MAX_AGE_DAYS.fitness_marker,
+        asOf: today,
+      });
+      const fc = supportedForecast(forecastMarker(points, slope, zone), support);
       trend = {
-        dir,
+        dir: stale ? null : dir,
         change,
         span_days,
         n,
         slope_per_week: weekly == null ? null : Math.round(weekly * 1000) / 1000,
-        projection: fc.eta_text,
+        projection: support.suppressProjection ? null : fc.eta_text,
       };
+      forecast = fc;
     }
     const grp = markerGroup(spec.label);
     out.push({
@@ -212,7 +242,12 @@ function wearableFitnessMarkers(days = 120): any[] {
       latest: { value: last.value, flag: null, date: last.date, doc_id: null, kind: "wearable" },
       prev: before ? { value: before.value, date: before.date } : null,
       trend,
-      forecast: forecastMarker(points, slope, zone),
+      forecast,
+      // Freshness, stated rather than implied. `latest.date` already carried the
+      // truth, but every consumer had to re-derive it; these two say it once so a
+      // surface can show "last measured N days ago" instead of implying today.
+      stale,
+      age_days: ageDays,
       points,
     });
   }
