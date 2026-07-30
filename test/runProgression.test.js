@@ -382,18 +382,23 @@ test("enduranceTestsDue never prescribes running tests from cycling-only history
 // ── weeklyRunPlan: the learned run-volume personal modifier ───────────────────
 
 // A learned CONSERVATIVE run-volume default (the shape whatWorksForYou emits for a
-// missed run_volume_adherence / vo2max_trend expectation): scale < 1, bounded 0.85–1.15.
+// missed run_volume_adherence expectation): scale < 1, inside the declared 0.9–1.05
+// band — both ends of which the model can actually produce.
 const RUN_MODIFIER_EASE = {
   key: "training_target:run_volume_adherence:all:complete:all-phases",
   target: "run_volume_step",
   stage: null,
   scale: 0.9,
-  bounds: { min: 0.85, max: 1.15 },
+  bounds: { min: 0.9, max: 1.05 },
   confidence: "observed",
   evidence_n: 3,
   rationale: "a slightly more conservative run volume step is the earned default",
   never_overrides: ["injury", "allergy", "clinical", "lean_safe"],
 };
+
+// The mirror image: what the model emits after a sustained run of absorbed weeks with
+// nothing missed and no symptom on record. Capped at 1.05 — the slowest lever there is.
+const RUN_MODIFIER_ACCELERATE = { ...RUN_MODIFIER_EASE, scale: 1.05, rationale: "a slightly larger run volume step is the earned default" };
 
 test("weeklyRunPlan: a learned conservative run-volume modifier eases the weekly build", () => {
   repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
@@ -428,6 +433,54 @@ test("weeklyRunPlan: the run-volume modifier never exceeds the recovery/directiv
   assert.ok(totalRunKm(heldMod) <= totalRunKm(held), "the modifier never exceeds the directive cap");
 });
 
+test("weeklyRunPlan: an earned run-volume acceleration lifts an ordinary build week", () => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  seedRunner({ weeks: 8, perWeek: 3, km: 12 });
+  const base = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, responseModifier: null });
+  const accelerated = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, responseModifier: RUN_MODIFIER_ACCELERATE });
+  assert.ok(
+    totalRunKm(accelerated) > totalRunKm(base),
+    `a scale above 1 is honored, not discarded (${totalRunKm(accelerated)} > ${totalRunKm(base)})`
+  );
+  assert.ok(
+    accelerated.rationale.some((r) => /nudging the weekly build up|absorbing the prescribed mileage/i.test(r)),
+    "the acceleration is explained in plain words"
+  );
+  NO_SCORE(accelerated, "run plan accelerated by modifier");
+});
+
+test("weeklyRunPlan: an accelerated build stays inside one conservative weekly step", () => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  seedRunner({ weeks: 8, perWeek: 3, km: 12 });
+  const base = totalRunKm(repo.weeklyRunPlan(REF, { block: { week_index: 1 }, responseModifier: null }));
+  const accelerated = totalRunKm(
+    repo.weeklyRunPlan(REF, { block: { week_index: 1 }, responseModifier: RUN_MODIFIER_ACCELERATE })
+  );
+  // The standard build is ~1.1; the ceiling is 1.15, so the most an acceleration can
+  // add is ~4.5% on top of the ordinary week. A little slack absorbs km rounding.
+  assert.ok(accelerated / base <= 1.08, `the ceiling holds (${accelerated} vs ${base})`);
+});
+
+test("weeklyRunPlan: an acceleration never overrides a protective week", () => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  seedRunner({ weeks: 8, perWeek: 3, km: 12 });
+
+  // Recovery-down: the week is already being protected, so the learned default is mute.
+  const recDown = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, recovery: recoveryFixture({ band: "low" }), responseModifier: null });
+  const recDownAccel = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, recovery: recoveryFixture({ band: "low" }), responseModifier: RUN_MODIFIER_ACCELERATE });
+  assert.equal(totalRunKm(recDownAccel), totalRunKm(recDown), "a recovery-down week is untouchable");
+
+  // A scheduled down week is a deliberate reset, not headroom.
+  const downWeek = repo.weeklyRunPlan(REF, { block: { week_index: 4 }, responseModifier: null });
+  const downWeekAccel = repo.weeklyRunPlan(REF, { block: { week_index: 4 }, responseModifier: RUN_MODIFIER_ACCELERATE });
+  assert.equal(totalRunKm(downWeekAccel), totalRunKm(downWeek), "a scheduled down week is untouchable");
+
+  // And a firm endurance-limiting health flag stays the outermost word.
+  const held = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, directives: [ANEMIA_DIRECTIVE], responseModifier: null });
+  const heldAccel = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, directives: [ANEMIA_DIRECTIVE], responseModifier: RUN_MODIFIER_ACCELERATE });
+  assert.equal(totalRunKm(heldAccel), totalRunKm(held), "a health flag is never accelerated past");
+});
+
 // ── buildRunPlanProposal (the apply path, shared by REST + MCP) ────────────────
 
 test("buildRunPlanProposal drafts a proposal whose cardio carries day_number + interval structure", () => {
@@ -460,4 +513,29 @@ test("buildRunPlanProposal returns the designed ok:false when there is no run pl
   const out = repo.buildRunPlanProposal(REF);
   assert.equal(out.ok, false, "no plan → the designed failure signal, not a throw");
   assert.ok(typeof out.error === "string" && out.error.length > 0, "carries a plain error reason");
+});
+
+// ── the weekly cadence is the wrong home for a long-horizon claim ─────────────
+
+test("applying a weekly run plan writes no eight-week aerobic expectation", () => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  repo.setProfile({ endurance_goal: { mode: "race", event: "Apply Half", date: fwd(84), distance_km: 21.1, weekly_km: 35, weekly_sessions: 4 } });
+  seedRunner({ weeks: 10, perWeek: 3, km: 10 });
+  // A watch that IS reporting VO2max, so nothing here is silent merely for want of data.
+  for (const off of [3, 10, 17]) {
+    db.prepare(`INSERT INTO daily_metrics (source, date, vo2max, updated_at) VALUES ('apple', ?, ?, datetime('now'))`).run(back(off), 50);
+  }
+
+  const out = repo.buildRunPlanProposal(REF);
+  assert.equal(out.ok, true);
+  assert.equal(repo.applyProposal(out.proposal.id).ok, true);
+
+  const written = db.prepare(`SELECT metric_key, COUNT(*) AS n FROM brain_expectations GROUP BY metric_key`).all();
+  const byMetric = new Map(written.map((row) => [row.metric_key, row.n]));
+  assert.ok(byMetric.get("run_volume_adherence") > 0, "the weekly claim the run plan CAN make is still written");
+  assert.equal(
+    byMetric.get("vo2max_trend"),
+    undefined,
+    "an eight-week aerobic trend is never attached to a decision that is remade every week"
+  );
 });

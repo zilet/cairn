@@ -16,6 +16,9 @@ import { activeRecoveryWeek, getEnduranceGoal } from "./profile.js";
 import { recoveryCycleAt } from "./recovery-cycles.js";
 import { recordTestWeek } from "./muscle-trajectory.js";
 import { bumpTrainingDataVersion } from "./training-cache.js";
+import { recordDecision } from "./brain-decisions.js";
+import { buildAerobicTrendExpectation } from "./brain/change-expectations.js";
+import { localDateISO } from "./shared.js";
 
 // ---- allowed enum values ----
 const VALID_FOCUS = ["strength", "hypertrophy", "endurance-base", "peak"] as const;
@@ -162,9 +165,84 @@ export function createBlock(input: CreateBlockInput = {}): ProgramBlock {
   `).run(goal, focus, phase, week_index, total_weeks, started_at);
 
   bumpTrainingDataVersion(); // the active periodization block is part of the training picture
-  return hydrateBlock(
+  const block = hydrateBlock(
     db.prepare("SELECT * FROM program_blocks WHERE id = ?").get(res.lastInsertRowid)
   )!;
+  recordBlockDecision(block);
+  return block;
+}
+
+/**
+ * Record the ledger decision for a newly structured block, and hang the LONG-HORIZON
+ * aerobic expectation off it.
+ *
+ * Why here and nowhere else. `vo2max_trend` needs a window measured in months — its
+ * evaluator refuses to read a slope off fewer than 4 readings spanning 21 days — and
+ * every other decision that could host one is remade too often. A weekly run-plan apply
+ * would either write overlapping windows that confound each other into silence, or
+ * attribute two months of aerobic drift to one week's prescription. A block is the only
+ * training structure in the app with a declared multi-week lifetime, and it is created
+ * rarely: by hand, or once by ensureActiveBlock when none is running.
+ *
+ * The decision itself claims nothing beyond what happened — a block was structured,
+ * which is true, dated and reversible only by the athlete abandoning it. The expectation
+ * is attached ONLY when buildAerobicTrendExpectation permits it (the watch is actually
+ * reporting VO2max, and no aerobic window is already standing), so a second block
+ * started mid-window records the structural fact without opening a duplicate window.
+ * A 56-day window can outlive a short block; nothing transitions this decision when the
+ * block completes, so the expectation still matures honestly.
+ *
+ * FAIL-SOFT: the block row is already committed by the time this runs, and periodization
+ * must not fail because the ledger is unavailable. Recording is audit, not the mutation.
+ */
+function recordBlockDecision(block: ProgramBlock): void {
+  try {
+    const startedOn = localDateISO(new Date(block.started_at)) || localDateISO();
+    const aerobic = buildAerobicTrendExpectation(startedOn);
+    recordDecision(
+      {
+        effective_date: startedOn,
+        kind: "training_structure",
+        domain: "training",
+        summary: `A ${block.total_weeks}-week ${block.focus} block is running.`,
+        rationale: aerobic
+          ? "A block is long enough to ask whether aerobic fitness holds across it — the shortest horizon that read is honest over."
+          : "Recorded so the block's shape is part of the training history.",
+        source: "program_block",
+        // BRAIN_SOURCE_REF_TYPES has no block member, and a ref key without a ref type
+        // is rejected, so the block id travels in `action` instead — where it also
+        // keeps each block's decision fingerprint distinct.
+        source_ref_type: null,
+        source_ref_key: null,
+        status: "applied",
+        // Cairn recorded this; it did not decide it. The block comes from the athlete
+        // or from ensureActiveBlock's default, so claiming any acting tier here would
+        // overstate what the system did.
+        autonomy_tier: "observe",
+        risk_class: "low",
+        // No rollback snapshot: a block is ended by abandoning it, not by a
+        // server-owned Undo, and only decisions with a real reversal path claim one.
+        reversible: false,
+        input_fingerprint: null,
+        context: {
+          block_id: block.id,
+          focus: block.focus,
+          phase: block.phase,
+          week_index: block.week_index,
+          total_weeks: block.total_weeks,
+        },
+        action: { block_id: block.id, focus: block.focus, total_weeks: block.total_weeks },
+        specialist: null,
+        applied_at: new Date().toISOString(),
+        reverted_at: null,
+        superseded_by: null,
+        evaluator_version: aerobic?.evaluator_version ?? null,
+      },
+      aerobic ? [aerobic] : []
+    );
+  } catch {
+    // The block is authoritative; its audit trail is best effort.
+  }
 }
 
 /**

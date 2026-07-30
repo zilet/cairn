@@ -9,14 +9,18 @@ import assert from "node:assert/strict";
 import { db, repo } from "./_seed.js";
 import { localDateISO } from "../dist/repo/shared.js";
 import {
+  buildAerobicTrendExpectation,
   buildHrvGuardExpectation,
   buildLiftProgressionExpectations,
   buildTrainingFeedbackExpectations,
+  hasLiveAerobicTrendWindow,
   liftProgressionSubjects,
   rebaseDeferredExpectations,
 } from "../dist/repo/brain/change-expectations.js";
 import { evaluateExpectation } from "../dist/brainEvaluator.js";
 import { recordDecision } from "../dist/domain/brain/decision-service.js";
+import { transitionBrainDecision } from "../dist/repo/brain-decisions.js";
+import { createBlock } from "../dist/repo/program-blocks.js";
 
 function isoDaysAgo(n) {
   return localDateISO(new Date(Date.now() - n * 864e5));
@@ -375,4 +379,240 @@ test("a parked prediction thaws with its window slid onto the day the change lan
   assert.equal(thawed.window_end, "2026-03-24", "the original 14-day length is preserved");
   assert.deepEqual(rebaseDeferredExpectations([{ metric_key: "nonsense" }], "2026-03-10"), []);
   assert.deepEqual(rebaseDeferredExpectations(null, "2026-03-10"), []);
+});
+
+// ---- the long-horizon aerobic read ------------------------------------------
+//
+// vo2max_trend is the one metric whose evaluator refuses to speak on less than 4
+// readings spanning 21 days, so its window has to be long enough that an ordinary
+// training month can fill it. That length is what makes it fragile, and the two guards
+// below are the whole design: it is written only when the watch is actually producing
+// VO2max, and never while another aerobic window is still standing — two overlapping
+// windows are flagged as each other's confounder and both come back inconclusive.
+
+function seedVo2max(rows) {
+  const insert = db.prepare(
+    `INSERT INTO daily_metrics (source, date, vo2max, updated_at) VALUES ('apple', ?, ?, datetime('now'))`
+  );
+  for (const [date, value] of rows) insert.run(date, value);
+}
+
+// Three readings inside the trailing month before 2026-02-01 — the flowing-signal bar.
+function seedFlowingSignal() {
+  seedVo2max([
+    ["2026-01-15", 49],
+    ["2026-01-22", 50],
+    ["2026-01-29", 50],
+  ]);
+}
+
+// Four readings inside the 2026-02-01 → 2026-03-29 window, spanning past the
+// evaluator's 21-day floor, moving by `step` each reading.
+function seedWindowTrend(step) {
+  seedVo2max([
+    ["2026-02-05", 50],
+    ["2026-02-19", 50 + step],
+    ["2026-03-05", 50 + step * 2],
+    ["2026-03-19", 50 + step * 3],
+  ]);
+}
+
+test("the aerobic-trend expectation is written only when VO2max readings are actually flowing", () => {
+  assert.equal(buildAerobicTrendExpectation("2026-02-01"), null, "no watch data writes nothing at all");
+
+  seedVo2max([
+    ["2026-01-15", 49],
+    ["2026-01-22", 50],
+  ]);
+  assert.equal(buildAerobicTrendExpectation("2026-02-01"), null, "two readings is not a flowing signal");
+
+  seedVo2max([["2026-01-29", 50]]);
+  const written = buildAerobicTrendExpectation("2026-02-01");
+  assert.ok(written, "three readings in the trailing month opens the window");
+  assert.equal(written.metric_key, "vo2max_trend");
+  assert.equal(written.evaluator, "vo2max_trend");
+  assert.equal(written.window_start, "2026-02-01");
+  assert.equal(written.window_end, "2026-03-29", "an eight-week window");
+  assert.deepEqual(
+    written.minimum_data,
+    { readings: 4, span_days: 21 },
+    "the minimum-data rule mirrors what the evaluator actually demands"
+  );
+  assert.equal(written.direction, "at_least", "the claim is a floor — flat aerobic fitness is a fine outcome");
+  assert.ok(written.target.value < 0, "the floor sits just below flat, not above it");
+  assert.equal(written.baseline.recent_readings, 3, "the evidence that opened the window is recorded");
+});
+
+test("a standing aerobic window blocks a second one, so the two can never confound each other", () => {
+  // The data gate is satisfied explicitly here so the OVERLAP guard is the only thing
+  // under test.
+  const flowing = { recentReadings: 5 };
+  const first = buildAerobicTrendExpectation("2026-02-01", flowing);
+  assert.ok(first);
+  storedExpectation(first, { summary: "A long-horizon aerobic read." });
+
+  assert.equal(buildAerobicTrendExpectation("2026-02-08", flowing), null, "a week later it is still standing");
+  assert.equal(buildAerobicTrendExpectation("2026-03-28", flowing), null, "and still, right up to its last day");
+  assert.ok(
+    buildAerobicTrendExpectation("2026-03-30", flowing),
+    "the day after it closes, the next window is free to open"
+  );
+});
+
+test("a canceled decision releases its aerobic window instead of blocking the next one forever", () => {
+  const flowing = { recentReadings: 5 };
+  const stored = storedExpectation(buildAerobicTrendExpectation("2026-02-01", flowing), {
+    summary: "A long-horizon aerobic read.",
+  });
+  assert.equal(buildAerobicTrendExpectation("2026-02-08", flowing), null);
+
+  transitionBrainDecision(stored.decision.id, "canceled");
+  assert.ok(buildAerobicTrendExpectation("2026-02-08", flowing), "a decision that died takes its window with it");
+});
+
+test("the aerobic evaluator reads a held trend as aligned on mature evidence", () => {
+  seedFlowingSignal();
+  seedWindowTrend(0.5); // gently climbing across the window
+  const stored = storedExpectation(buildAerobicTrendExpectation("2026-02-01"), {
+    summary: "A long-horizon aerobic read.",
+  });
+  const verdict = evaluateExpectation(stored.expectation, stored.decision, "2026-03-30");
+  assert.equal(verdict.verdict, "aligned", JSON.stringify(verdict.confounders));
+  assert.equal(verdict.actual.readings, 4, "exactly the evaluator's minimum is enough");
+  assert.ok(verdict.actual.span_days >= 21);
+  assert.ok(verdict.actual.value > 0, "the reported value is the per-week slope");
+});
+
+test("a real aerobic decline across the window reads as not aligned", () => {
+  seedFlowingSignal();
+  seedWindowTrend(-1.5);
+  const stored = storedExpectation(buildAerobicTrendExpectation("2026-02-01"), {
+    summary: "A long-horizon aerobic read.",
+  });
+  const verdict = evaluateExpectation(stored.expectation, stored.decision, "2026-03-30");
+  assert.equal(verdict.verdict, "not_aligned", JSON.stringify(verdict.confounders));
+  assert.ok(verdict.actual.value < 0);
+});
+
+test("a flat aerobic trend is a perfectly good outcome, not a miss", () => {
+  seedFlowingSignal();
+  seedWindowTrend(0);
+  const stored = storedExpectation(buildAerobicTrendExpectation("2026-02-01"), {
+    summary: "A long-horizon aerobic read.",
+  });
+  const verdict = evaluateExpectation(stored.expectation, stored.decision, "2026-03-30");
+  assert.equal(verdict.verdict, "aligned", "holding aerobic fitness clears a floor-shaped claim");
+});
+
+test("a thin window stays inconclusive rather than convicting an athlete whose watch went quiet", () => {
+  seedFlowingSignal();
+  const stored = storedExpectation(buildAerobicTrendExpectation("2026-02-01"), {
+    summary: "A long-horizon aerobic read.",
+  });
+  // Only two readings land inside the window, and they span under three weeks.
+  seedVo2max([
+    ["2026-02-05", 50],
+    ["2026-02-12", 49],
+  ]);
+  const verdict = evaluateExpectation(stored.expectation, stored.decision, "2026-03-30");
+  assert.equal(verdict.verdict, "inconclusive", "absence of signal is neutral, never a miss");
+  assert.ok(verdict.confounders.some((item) => /4 readings|readings were available/i.test(item)));
+});
+
+// ---- where the aerobic read actually lives ----------------------------------
+//
+// A program block is the only training structure with a declared multi-week lifetime
+// and it is created rarely, so it is the one decision that can host a window measured
+// in months without either confounding itself or attributing two months of aerobic
+// drift to one week's prescription.
+
+function blockDecisions() {
+  return db
+    .prepare(`SELECT id, summary, status, action_json FROM brain_decisions WHERE kind = 'training_structure' ORDER BY id`)
+    .all();
+}
+
+function aerobicExpectations() {
+  return db
+    .prepare(`SELECT id, decision_id, window_start, window_end FROM brain_expectations WHERE metric_key = 'vo2max_trend' ORDER BY id`)
+    .all();
+}
+
+test("structuring a block opens the aerobic window when the watch is reporting VO2max", () => {
+  seedVo2max([
+    [isoDaysAgo(20), 49],
+    [isoDaysAgo(12), 50],
+    [isoDaysAgo(5), 50],
+  ]);
+
+  const block = createBlock({ goal: "Strength base", focus: "strength", total_weeks: 6 });
+  const decisions = blockDecisions();
+  assert.equal(decisions.length, 1, "the block is recorded in the ledger");
+  assert.equal(decisions[0].status, "applied");
+  assert.equal(JSON.parse(decisions[0].action_json).block_id, block.id, "the decision points back at its block");
+
+  const written = aerobicExpectations();
+  assert.equal(written.length, 1, "and carries the long-horizon aerobic expectation");
+  assert.equal(written[0].decision_id, decisions[0].id);
+  assert.equal(written[0].window_start, localDateISO(), "the window opens the day the block starts");
+});
+
+test("a block started by an athlete with no VO2max readings records the block and claims nothing", () => {
+  createBlock({ goal: "Strength base", focus: "strength", total_weeks: 6 });
+  assert.equal(blockDecisions().length, 1, "the structural fact is still recorded");
+  assert.equal(aerobicExpectations().length, 0, "no watch, no prediction — absence stays neutral");
+});
+
+test("a second block inside a live window is recorded without opening a duplicate window", () => {
+  seedVo2max([
+    [isoDaysAgo(20), 49],
+    [isoDaysAgo(12), 50],
+    [isoDaysAgo(5), 50],
+  ]);
+
+  createBlock({ goal: "Strength base", focus: "strength", total_weeks: 6 });
+  assert.equal(aerobicExpectations().length, 1);
+
+  // The athlete changes direction a fortnight in. The block is superseded; the aerobic
+  // window it opened is not, and a second one would confound both into silence.
+  createBlock({ goal: "Endurance base", focus: "endurance-base", total_weeks: 8 });
+  assert.equal(blockDecisions().length, 2, "the new block is recorded on its own decision");
+  assert.equal(aerobicExpectations().length, 1, "but the standing aerobic window is left alone");
+});
+
+test("block recording never takes periodization down with it", () => {
+  // The ledger is audit, not the mutation: with the decision tables unavailable,
+  // creating a block must still return a live block rather than throwing at the athlete.
+  //
+  // The schema is captured and restored in `finally` rather than simply dropped. The
+  // harness's per-test wipe (test/_isolate.mjs) enumerates tables and prepares its
+  // DELETE statements ONCE at import, and worker processes are shared across files, so
+  // a table left dropped here would fail the wipe for every later test in the process —
+  // including tests in other files.
+  const ddl = db
+    .prepare(
+      `SELECT sql FROM sqlite_master
+        WHERE sql IS NOT NULL
+          AND (name IN ('brain_decisions', 'brain_expectations')
+               OR tbl_name IN ('brain_decisions', 'brain_expectations'))
+        ORDER BY CASE WHEN type = 'table' THEN 0 ELSE 1 END, rootpage`
+    )
+    .all()
+    .map((row) => row.sql);
+  assert.ok(ddl.length >= 2, "the ledger schema was captured before it is taken away");
+
+  try {
+    db.exec(`DROP TABLE IF EXISTS brain_expectations; DROP TABLE IF EXISTS brain_decisions;`);
+    const block = createBlock({ goal: "Strength base", focus: "strength", total_weeks: 6 });
+    assert.ok(block?.id > 0, "the block is created regardless");
+    assert.equal(block.status, "active");
+  } finally {
+    for (const sql of ddl) db.exec(sql);
+  }
+
+  // …and the restored ledger is usable again, so nothing downstream inherits a wreck.
+  assert.equal(blockDecisions().length, 0);
+  const after = createBlock({ goal: "Endurance base", focus: "endurance-base", total_weeks: 8 });
+  assert.ok(after?.id > 0);
+  assert.equal(blockDecisions().length, 1, "recording resumes once the ledger is back");
 });

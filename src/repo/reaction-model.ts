@@ -875,6 +875,23 @@ export function buildReactionModel(): { version: number; patterns: ReactionPatte
 const PERSONAL_RESPONSE_VERSION = 2 as const;
 const PERSONAL_RESPONSE_GUARDRAILS: CoachPersonalSafetyGuardrail[] = ["injury", "allergy", "clinical", "lean_safe"];
 
+// Every declared modifier target, as a Record over the union rather than a plain array:
+// adding a target to CoachPersonalModifierTarget without listing it here is a TYPE
+// ERROR, not a silently under-sized cap. That is the whole point — the bug this exists
+// to prevent was a cap that quietly fell below the number of targets in the contract.
+const PERSONAL_MODIFIER_TARGETS: Record<CoachPersonalModifierTarget, true> = {
+  nutrition_step: true,
+  training_progression_step: true,
+  run_volume_step: true,
+  recovery_adjustment: true,
+  plan_complexity: true,
+};
+
+// One slot per declared target is the FLOOR this cap may never fall below. The spare
+// slots are headroom for the staged nutrition variants a single target can legitimately
+// carry, so backfilling those can never cost another target its slot.
+const MAX_PERSONAL_MODIFIERS = Object.keys(PERSONAL_MODIFIER_TARGETS).length + 3;
+
 interface EvaluatedDecisionRow {
   decision_id: number;
   decision_kind: string;
@@ -1086,6 +1103,24 @@ const ACCELERATING_TRAINING_METRICS: ReadonlySet<string> = new Set([
   "exercise_est_1rm_trend",
 ]);
 
+// Weekly RUNNING volume may accelerate too — and it is the most cautious lever in the
+// system, deliberately held to a higher bar than the in-session load step above.
+//
+// Connective tissue adapts on a slower clock than cardio fitness: the aerobic engine
+// says "that was easy" weeks before bone and tendon have finished remodelling around
+// the mileage that produced it. So a run of aligned adherence verdicts is real evidence
+// the athlete is ABSORBING the prescribed volume, but it is weaker evidence about the
+// tissue than the same run would be about a lift, where the next session rechecks the
+// step directly. Three consecutive aligned verdicts instead of two, and a ceiling of
+// 1.05 rather than the load step's 1.1, is what that difference buys.
+const RUN_VOLUME_ACCELERATION_MIN_RUN = 3;
+
+// DECLARED == REACHABLE. Both ends of this band are values the branch below can
+// actually produce (0.9 on a miss, 1.05 on an earned acceleration) — an unreachable
+// ceiling is a promise the model never has to keep, and the whole point of wiring
+// acceleration at all was to stop declaring headroom that could not be reached.
+const RUN_VOLUME_BOUNDS = { min: 0.9, max: 1.05 } as const;
+
 // How far back a raw session-level joint-pain note still speaks for today.
 const RECENT_JOINT_PAIN_DAYS = 14;
 
@@ -1128,7 +1163,7 @@ function modifierFor(
   verdict: EvaluatedDecisionRow["verdict"],
   confidence: CoachPersonalResponseConfidence,
   evidenceN: number,
-  window: { missed_n: number }
+  window: { missed_n: number; preceding_verdict: EvaluatedDecisionRow["verdict"] | null }
 ): CoachPersonalModifier | null {
   let target: CoachPersonalModifierTarget | null = null;
   let scale = 1;
@@ -1174,18 +1209,37 @@ function modifierFor(
           : 1;
   } else if (row.metric_key === "run_volume_adherence") {
     // A missed run-volume expectation (the athlete isn't absorbing the prescribed km)
-    // eases the weekly build step; a met one holds the standard build. ACCELERATION IS
-    // DELIBERATELY EXCLUDED HERE and must stay excluded: bone and tendon adapt to
-    // mileage on a slower clock than the aligned-verdict window can see, so a learned
-    // "you're absorbing it" is not evidence that a bigger weekly jump is safe. That is
-    // the endurance round's injury-safety ruling, and it is why the branch above —
-    // which steps LOAD inside a session, recheckable next session — is the only one
-    // that may push. vo2max_trend is deliberately
-    // NOT wired here: a flat 4-week VO2max is normal and no reason to ease volume, so it
-    // stays a pure ledger-accountability read with no modifier.
+    // eases the weekly build step; a met one holds the standard build; and a sustained
+    // run of met ones may now earn a slightly larger one — the slowest, most heavily
+    // guarded acceleration in the model (see RUN_VOLUME_ACCELERATION_MIN_RUN).
+    //
+    // FOUR conditions, each of which alone withholds the acceleration:
+    //   1. a run of >=3 consecutive aligned verdicts — one more than the load step asks,
+    //      because a week of mileage is not recheckable next session the way a lift is;
+    //   2. nothing missed ANYWHERE in the comparable window, not merely none inside the
+    //      current run — one week the athlete could not absorb outranks three they could;
+    //   3. no training symptom on record (the lifecycle table AND raw session joint-pain
+    //      notes, both failing CLOSED) — mileage must never stack onto something already
+    //      sore;
+    //   4. no ease immediately before this run. A miss eases the step, and the FIRST
+    //      aligned verdict after it only earns back the standard build; acceleration has
+    //      to wait for a full clean cycle at 1.0 on top of that. Otherwise one good week
+    //      after a bad one whipsaws the athlete from a reduced build straight to a
+    //      raised one, which is exactly the pattern that breaks tendons.
+    //
+    // vo2max_trend is still deliberately NOT wired here: aerobic fitness trending up is
+    // an OUTCOME, not headroom-per-decision, and a flat 4-week VO2max is normal and no
+    // reason to ease volume either. It stays a pure ledger-accountability read.
     target = "run_volume_step";
-    bounds = { min: 0.85, max: 1.15 };
-    scale = verdict === "not_aligned" ? 0.9 : 1;
+    bounds = { ...RUN_VOLUME_BOUNDS };
+    const easedIntoThisRun = window.preceding_verdict === "not_aligned";
+    const requiredRun = RUN_VOLUME_ACCELERATION_MIN_RUN + (easedIntoThisRun ? 1 : 0);
+    scale =
+      verdict === "not_aligned"
+        ? 0.9
+        : verdict === "aligned" && evidenceN >= requiredRun && window.missed_n === 0 && !trainingSymptomOnRecord()
+          ? bounds.max
+          : 1;
   } else if (["recovery_hrv_delta", "recovery_rhr_delta", "sleep_duration_delta"].includes(row.metric_key)) {
     target = "recovery_adjustment";
     bounds = { min: 0.9, max: 1.15 };
@@ -1260,8 +1314,19 @@ function learningForGroup(
     : activeVerdict === "aligned"
       ? `${label.charAt(0).toUpperCase() + label.slice(1)} has matched the expectation across ${latestRun.length} comparable decision${latestRun.length === 1 ? "" : "s"}.`
       : `${label.charAt(0).toUpperCase() + label.slice(1)} has missed the expectation across ${latestRun.length} comparable decisions, so the next step should change modestly and be rechecked.`;
+  // What the ledger said IMMEDIATELY BEFORE the current run began — read off the full
+  // comparable history rather than the 365-day slice, because that is the whole point:
+  // a miss that has aged out of `rows` no longer shows up in `missed_n`, and without
+  // this the model would forget the ease it just applied and jump straight to a bigger
+  // step. Null when this run is the athlete's entire history on the metric.
+  const runStartRow = rows[runStart];
+  const runStartIndex = eligible.indexOf(runStartRow);
+  const precedingVerdict = runStartIndex > 0 ? eligible[runStartIndex - 1].verdict : null;
   const modifier = activeVerdict
-    ? modifierFor(latest, activeVerdict, confidence, latestRun.length, { missed_n: missedN })
+    ? modifierFor(latest, activeVerdict, confidence, latestRun.length, {
+        missed_n: missedN,
+        preceding_verdict: precedingVerdict,
+      })
     : null;
   const change = modifier
     ? modifier.rationale
@@ -1382,11 +1447,14 @@ export function whatWorksForYou(): CoachWhatWorksForYou | null {
     const key = comparableKey(row);
     groups.set(key, [...(groups.get(key) ?? []), row]);
   }
-  const learned = [...groups.values()]
+  // EVERY learning that qualified, newest first. The prose list below is capped for
+  // calm; the modifier map is NOT selected from that cap — see the slot logic further
+  // down for why deriving it from the top four silently switched targets off.
+  const ranked = [...groups.values()]
     .map(learningForGroup)
     .filter((item): item is NonNullable<typeof item> => item != null)
-    .sort((a, b) => b.learning.last_observed.localeCompare(a.learning.last_observed))
-    .slice(0, 4);
+    .sort((a, b) => b.learning.last_observed.localeCompare(a.learning.last_observed));
+  const learned = ranked.slice(0, 4);
   // Selected and capped SEPARATELY, then appended. A day read is evaluated every
   // morning, so these are always the most recent rows in the ledger — folded into the
   // sort above they would win the four slots outright and starve the very learnings
@@ -1400,11 +1468,43 @@ export function whatWorksForYou(): CoachWhatWorksForYou | null {
   // nutrition step when the weight signal hasn't itself earned one. Stable sort keeps
   // the last_observed ordering within each rank; only body-measurement is demoted.
   const measurementRank = (metricKey: string): number => (metricKey === "body_measurement_direction" ? 1 : 0);
-  const modifiers = [...learned]
+  const carriers = [...ranked]
     .filter((item) => item.modifier)
-    .sort((a, b) => measurementRank(a.learning.metric_key) - measurementRank(b.learning.metric_key))
-    .map((item) => item.modifier as CoachPersonalModifier)
-    .slice(0, 4);
+    .sort((a, b) => measurementRank(a.learning.metric_key) - measurementRank(b.learning.metric_key));
+
+  // ONE SLOT PER TARGET, and the target claims it before any second reading of the same
+  // target does.
+  //
+  // This used to be `learned.filter(…).slice(0, 4)`: four slots handed out by recency
+  // across what are now FIVE declared targets, off a list that had already been cut to
+  // the four most recent learnings for the prose. Whichever lever the athlete happened
+  // to learn about least recently lost its modifier — silently, with no evidence that
+  // anything had been dropped, and the consumer reading that target simply saw no
+  // personal default. A busy ledger could switch off a whole lever.
+  //
+  // So the pass below is two-phase. Phase one gives each distinct target its most
+  // recent modifier, which is the guarantee: no target can be displaced by another
+  // target's fresher learning. Phase two backfills the additional target+STAGE variants
+  // a single target may legitimately carry (personalResponseModifierFor matches on
+  // stage as well, so a mid-cut and a lean-gain nutrition step are different answers,
+  // not duplicates). Ordering within each phase is unchanged, so the first match for a
+  // bare target lookup is the same modifier it has always been.
+  const claimedTargets = new Set<CoachPersonalModifierTarget>();
+  const claimedSlots = new Set<string>();
+  const perTarget: CoachPersonalModifier[] = [];
+  const stageVariants: CoachPersonalModifier[] = [];
+  for (const item of carriers) {
+    const modifier = item.modifier as CoachPersonalModifier;
+    const slot = `${modifier.target}|${modifier.stage ?? ""}`;
+    if (claimedSlots.has(slot)) continue; // an older reading of the same target+stage
+    claimedSlots.add(slot);
+    if (claimedTargets.has(modifier.target)) stageVariants.push(modifier);
+    else {
+      claimedTargets.add(modifier.target);
+      perTarget.push(modifier);
+    }
+  }
+  const modifiers = [...perTarget, ...stageVariants].slice(0, MAX_PERSONAL_MODIFIERS);
   return {
     version: PERSONAL_RESPONSE_VERSION,
     learnings: [...learned.map((item) => item.learning), ...readPatterns],

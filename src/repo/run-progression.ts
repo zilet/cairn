@@ -479,6 +479,11 @@ function holdMarkerPhrase(d: any): string {
 }
 
 const DIRECTIVE_HOLD_FACTOR = 0.9; // a firm endurance-limiting directive caps the weekly build
+// The hard ceiling on ONE week's volume step, whatever the learned personal default says.
+// The standard build is ~10%; a fully earned acceleration may lift that, but never past
+// a single conservative jump — this is the number that keeps "the model learned you can
+// take more" from compounding into a mileage spike the spike guard then has to catch.
+const MAX_WEEKLY_BUILD_FACTOR = 1.15;
 
 export function weeklyRunPlan(
   date?: string,
@@ -588,6 +593,12 @@ export function weeklyRunPlan(
   const taper = phase === "taper";
 
   let factor = 1.1; // default ~10% build
+  // Whether this week's factor came from the ORDINARY build path. Every other branch
+  // below is a protective reduction (taper, deload, recovery-down, a mileage spike, a
+  // scheduled down week) or a deliberate hold while the base rebuilds, and a learned
+  // personal default must never be able to undo one of those. Only the plain build is
+  // eligible to be nudged upward.
+  let standardBuild = false;
   if (taper) {
     factor = 0.55;
     rationale.push("Race week — tapering volume right down so you arrive fresh.");
@@ -611,15 +622,26 @@ export function weeklyRunPlan(
     factor = 1.0;
     rationale.push("Rebuilding the base back gently — steady, not a jump.");
   } else {
+    standardBuild = true;
     rationale.push("Building conservatively — about a 10% step on last week.");
   }
 
   // Personal response: a LEARNED run-volume step bends the weekly build multiplicatively.
-  // It only ever HOLDS or eases (never accelerates — mirroring the training step), and it
-  // is capped at the current factor, so the recovery gating above and the directive caps
-  // below stay the outermost, FINAL word: a learned default can never push volume past a
-  // recovery- or health-driven reduction. never_overrides (injury/clinical/lean_safe) are
-  // untouched. Injectable for tests; otherwise read from what_works_for_you.
+  // never_overrides (injury/clinical/lean_safe) are untouched. Injectable for tests;
+  // otherwise read from what_works_for_you.
+  //
+  // EASING is unconditional — a learned "you aren't absorbing this" applies on any kind
+  // of week, and is capped at the current factor so it can only ever reduce.
+  //
+  // ACCELERATING composes with, and never bypasses, the gating above: it applies ONLY on
+  // an ordinary build week (`standardBuild` — so a taper, deload, recovery-down week,
+  // mileage spike, scheduled down week or detraining rebuild is untouchable), and only
+  // when no endurance-limiting health flag is standing. The firm-hold cap below still
+  // runs afterwards and still takes the minimum, so the health path remains the final
+  // word either way. The absolute ceiling keeps even a fully earned acceleration inside
+  // one conservative weekly step: 1.1 × 1.05 would be a ~15.5% jump, and the whole
+  // reason this lever is capped at 1.05 upstream is that mileage is where a jump costs
+  // bone and tendon rather than a missed rep.
   const runModifier =
     opts?.responseModifier === undefined
       ? (() => {
@@ -641,6 +663,19 @@ export function weeklyRunPlan(
       factor = eased;
       rationale.push(
         "Easing the weekly build a touch — your own recent results point to a more conservative volume step."
+      );
+    }
+  } else if (runModifier && runModifier.scale > 1 && standardBuild && !firmHold && !softHold) {
+    const accelerated = applyPersonalResponseModifier({
+      base: factor,
+      modifier: runModifier,
+      min: factor,
+      max: MAX_WEEKLY_BUILD_FACTOR,
+    });
+    if (accelerated > factor) {
+      factor = accelerated;
+      rationale.push(
+        "Nudging the weekly build up a little — you've been absorbing the prescribed mileage cleanly for a while now."
       );
     }
   }

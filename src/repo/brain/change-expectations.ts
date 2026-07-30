@@ -337,6 +337,142 @@ export function buildHrvGuardExpectation(
   };
 }
 
+// ---------------------------------------------------------------------------
+// The LONG-HORIZON aerobic read.
+//
+// Every other prediction in this file rides a change that can be rechecked in one to
+// four weeks. VO2max cannot: the evaluator needs at least 4 readings spanning 21 days
+// INSIDE the window before it will say anything at all, and a watch only re-estimates
+// VO2max on hard or long efforts. An eight-week window is the shortest one an ordinary
+// training month can actually fill.
+//
+// That length is also what makes this expectation fragile, and the two guards below are
+// what keep it from rotting:
+//
+//   • FLOWING DATA. A wearable is optional in this app. An athlete whose watch never
+//     reports VO2max must collect nothing — absence of a signal is neutral, never a
+//     miss, and an expectation that can only ever mature inconclusive is ledger rot.
+//
+//   • ONE LIVE WINDOW. `overlappingDecisionConfounders` (evaluation-service) flags any
+//     OTHER decision carrying the same metric + subject over an overlapping window, and
+//     a single confounder forces `inconclusive`. That check is unconditional —
+//     `confounder_policy` does not gate it — so two overlapping aerobic windows would
+//     annihilate each other. The only remedy is to never write the second one, which is
+//     what hasLiveAerobicTrendWindow enforces. It also gives the expectation its
+//     cadence: it re-arms when the previous window closes, not on whatever schedule its
+//     host decision happens to run on.
+//
+// The claim itself is deliberately a FLOOR, not a promise of improvement: "the training
+// as it currently stands should not let aerobic fitness drift downward." A flat VO2max
+// over two months is a perfectly good outcome and reads aligned. It carries no modifier
+// anywhere — fitness trending up is an OUTCOME, not headroom-per-decision, and nothing
+// in the reaction model may turn it into a bigger training step.
+export const AEROBIC_TREND_WINDOW_DAYS = 56;
+// Mirrors the evaluator's own refusal to read a slope off less than this.
+export const AEROBIC_TREND_MIN_READINGS = 4;
+export const AEROBIC_TREND_MIN_SPAN_DAYS = 21;
+// How much recent signal counts as "the watch is actually reporting this".
+const AEROBIC_TREND_RECENT_LOOKBACK_DAYS = 28;
+const AEROBIC_TREND_MIN_RECENT_READINGS = 3;
+// The per-WEEK slope floor the evaluator compares against (its `actual.value` is
+// slope × 7). About half a point of VO2max lost across the whole eight weeks — inside
+// the noise of consumer estimates, so only a real downward drift falls through it.
+const AEROBIC_TREND_WEEKLY_SLOPE_FLOOR = -0.05;
+
+/**
+ * How many distinct days carried a VO2max reading in the trailing lookback, merged
+ * across the same three feeds the evaluator reads (one value per date).
+ */
+export function recentVo2maxReadings(asOf: string, lookbackDays = AEROBIC_TREND_RECENT_LOOKBACK_DAYS): number {
+  const end = addDaysISO(asOf, -1) ?? asOf;
+  const start = addDaysISO(asOf, -Math.max(1, Math.trunc(lookbackDays))) ?? asOf;
+  const dates = new Set<string>();
+  for (const table of ["garmin_daily_metrics", "garmin_activities", "daily_metrics"]) {
+    let rows: Array<{ date: string; vo2max: number | null }> = [];
+    try {
+      rows = db
+        .prepare(
+          `SELECT date, vo2max FROM ${table} WHERE date BETWEEN ? AND ? AND vo2max IS NOT NULL ORDER BY date LIMIT 500`
+        )
+        .all(start, end) as Array<{ date: string; vo2max: number | null }>;
+    } catch {
+      // An imported or partial database may not carry every feed. A missing table is
+      // simply no readings from it, never a reason to refuse the whole read.
+      rows = [];
+    }
+    for (const row of rows) {
+      const value = Number(row.vo2max);
+      if (Number.isFinite(value) && value > 0) dates.add(String(row.date));
+    }
+  }
+  return dates.size;
+}
+
+/**
+ * Is an aerobic-trend window already standing over any part of [start, end]?
+ *
+ * Deliberately WIDER than the confounder query it exists to stay clear of: any
+ * expectation whose decision has not reached a terminal status counts, not only the
+ * applied/announced ones the confounder check sees. Skipping a cycle costs nothing;
+ * writing a second window costs both of them their verdict.
+ */
+export function hasLiveAerobicTrendWindow(windowStart: string, windowEnd: string): boolean {
+  try {
+    return !!db
+      .prepare(
+        `SELECT 1 FROM brain_expectations expectation
+           JOIN brain_decisions decision ON decision.id = expectation.decision_id
+          WHERE expectation.metric_key = 'vo2max_trend'
+            AND expectation.window_start <= ?
+            AND expectation.window_end >= ?
+            AND decision.superseded_by IS NULL
+            AND decision.status NOT IN ('rejected', 'reverted', 'superseded', 'canceled')
+          LIMIT 1`
+      )
+      .get(windowEnd, windowStart);
+  } catch {
+    // No ledger tables to read means nothing can be confounded — but it also means this
+    // guard cannot do its job, so it fails CLOSED and no window is opened.
+    return true;
+  }
+}
+
+/**
+ * The eight-week "aerobic fitness should not drift down" expectation, or null when the
+ * athlete isn't producing VO2max readings or a window is already standing.
+ *
+ * Belongs on a decision whose lifetime outlives the window — a canceled or superseded
+ * decision takes its expectations down with it (`evaluateExpectation` writes a
+ * `canceled` verdict), which is exactly the rot this window is long enough to attract.
+ */
+export function buildAerobicTrendExpectation(
+  asOf: string,
+  opts: { windowDays?: number; recentReadings?: number } = {}
+): ProposedExpectation | null {
+  const windowDays = Math.max(AEROBIC_TREND_MIN_SPAN_DAYS, Math.trunc(opts.windowDays ?? AEROBIC_TREND_WINDOW_DAYS));
+  const windowEnd = addDaysISO(asOf, windowDays);
+  if (!windowEnd) return null;
+  const recentReadings = opts.recentReadings ?? recentVo2maxReadings(asOf);
+  if (recentReadings < AEROBIC_TREND_MIN_RECENT_READINGS) return null;
+  if (hasLiveAerobicTrendWindow(asOf, windowEnd)) return null;
+  return {
+    metric_key: "vo2max_trend",
+    subject_key: null,
+    direction: "at_least",
+    baseline: { recent_readings: recentReadings, lookback_days: AEROBIC_TREND_RECENT_LOOKBACK_DAYS },
+    target: { value: AEROBIC_TREND_WEEKLY_SLOPE_FLOOR },
+    window_start: asOf,
+    window_end: windowEnd,
+    minimum_data: { readings: AEROBIC_TREND_MIN_READINGS, span_days: AEROBIC_TREND_MIN_SPAN_DAYS },
+    // A trip, an illness or an injury genuinely does own an eight-week aerobic trend,
+    // and saying so is more honest than convicting the programming for it.
+    confounder_policy: "exclude_context_events",
+    confidence: "tentative",
+    evaluator: "vo2max_trend",
+    evaluator_version: "aerobic-trend-hold-v1",
+  };
+}
+
 export const MAX_DEFERRED_EXPECTATIONS = 6;
 
 /**
