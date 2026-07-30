@@ -174,7 +174,14 @@ test("reverted decisions receive a canceled outcome rather than a causal verdict
   assert.equal(result.evaluations[0].evidence_keys.length, 0);
 });
 
-test("material context and overlapping decisions contaminate an otherwise aligned window", () => {
+test("material context contaminates an otherwise aligned window", () => {
+  // Two applied nutrition targets reaching for the SAME metric over the same span used
+  // to leave two live windows, each confounded by the other, and both permanently
+  // inconclusive. Supersede-on-write ends that: the second one owns the metric, the
+  // first is retired unevaluated, and the survivor is judged on its own evidence.
+  // (The confounder rule itself is unchanged and still covered — see
+  // "a live overlapping window on another decision still confounds" in
+  // brainExpectationSupersede.test.js.)
   recordDecision(decision({ summary: "First bounded target." }), [weightExpectation()]);
   recordDecision(
     decision({
@@ -190,12 +197,17 @@ test("material context and overlapping decisions contaminate an otherwise aligne
   addWeights(CLEAN_WEIGHTS);
 
   const result = evaluateMatureExpectations("2026-01-15");
-  assert.equal(result.evaluated, 2);
-  for (const evaluation of result.evaluations) {
-    assert.equal(evaluation.verdict, "inconclusive");
-    assert.ok(evaluation.confounders.some((item) => /also targeted/i.test(item)));
-    assert.ok(evaluation.confounders.some((item) => /Work travel/i.test(item)));
-  }
+  assert.equal(result.evaluated, 1, "only the surviving window is evaluated");
+  const [evaluation] = result.evaluations;
+  // A trip through the middle of the window still muddies a causal weight question,
+  // which is the whole point of `exclude_context_events` — the supersede changed who
+  // gets asked, never what counts as contamination.
+  assert.equal(evaluation.verdict, "inconclusive");
+  assert.ok(evaluation.confounders.some((item) => /Work travel/i.test(item)));
+  assert.ok(
+    !evaluation.confounders.some((item) => /also targeted/i.test(item)),
+    "the retired window is no longer a rival"
+  );
 });
 
 test("zero exposure yields inconclusive, never a decisive verdict the contract refuses", () => {

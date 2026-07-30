@@ -9,6 +9,7 @@ import {
   normalizeProposedExpectation,
 } from "../brain/expectation-contract.js";
 import { withSqliteSavepoint } from "./sqlite-savepoint.js";
+import { retireSupersededExpectations } from "./brain/expectation-arbitration.js";
 
 function json(value: unknown): string | null {
   return value == null ? null : JSON.stringify(value);
@@ -391,7 +392,15 @@ export function insertBrainExpectation(decisionId: number, value: ProposedExpect
     );
   const stored = getBrainExpectation(Number(info.lastInsertRowid));
   if (!stored) throw new Error("brain expectation was not stored");
-  return stored;
+  // The newest change owns the metric: this window either retires the older ones it
+  // overtook or — thawed out of cold storage onto a decision that only just applied —
+  // arrives retired behind a newer one. Either way exactly one live window survives per
+  // metric + subject, which is what lets the survivor reach a verdict instead of being
+  // annihilated into `inconclusive` by the confounder rule. The rule itself lives in
+  // ./brain/expectation-arbitration.js, shared with the repair migration that applied it
+  // to the rows written before it existed.
+  retireSupersededExpectations(db, { expectationId: stored.id! });
+  return getBrainExpectation(stored.id!) ?? stored;
 }
 
 export function getBrainExpectation(id: number): BrainExpectation | null {

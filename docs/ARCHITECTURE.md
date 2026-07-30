@@ -1126,6 +1126,23 @@ check it exists to stay clear of, so two overlapping windows can never flag each
 Recording is fail-soft: the block row is already committed, so periodization must never fail because
 the ledger write did not land.
 
+**The newest change owns the metric.** `overlappingDecisionConfounders` forces `inconclusive` on any
+expectation whose metric + subject window overlaps another live decision's, which is right — two
+changes racing over one outcome cannot be told apart — but the writers open windows far faster than
+14-28 day windows close, so every pair silenced both halves and the ledger learned nothing. Writing an
+expectation now RETIRES (`status = 'superseded'`) any still-live window from a different decision that
+covers part of the same metric + subject and started earlier; a window thawed out of cold storage
+behind a newer one arrives retired itself, and ties go to the row written last. Exactly one live
+window per metric + subject, so the survivor reaches a real verdict. Superseded and canceled rows are
+excluded from the confounder query and from the "matured but unevaluated" diagnostics, and are never
+evaluated. Two windows on ONE decision are untouched — they never confounded each other — and only
+`applied`/`announced` decisions take part, so an advisory `review` prediction neither retires a real
+change nor is retired by one. The rule lives once in
+`src/repo/brain/expectation-arbitration.ts` (`retireSupersededExpectations`, which takes the DB handle
+rather than the singleton so a migration can call it); migration 87 applies the identical pass to the
+rows written before it existed. The `vo2max_trend` write-side guard above still runs first and is
+deliberately wider, so it keeps suppressing a duplicate aerobic window before this is ever reached.
+
 `src/domain/brain/expectation-followup.ts` turns a genuine `not_aligned`
 verdict on a change-effect metric into ONE quiet in-app note per DECISION (never per-prediction),
 released after three weeks or the moment the change behind it is no longer in force — nothing

@@ -19,6 +19,7 @@ import {
   setBrainExpectationStatus,
 } from "../../repo/brain-decisions.js";
 import { insertBrainEvaluation, latestBrainEvaluation } from "../../repo/brain-evaluations.js";
+import { RETIRED_EXPECTATION_STATUSES } from "../../repo/brain/expectation-arbitration.js";
 
 const TERMINAL_DECISION_STATUSES = new Set(["rejected", "reverted", "superseded", "canceled"]);
 const DISRUPTIVE_CONTEXT = /\b(trip|travel|injur|ill|sick|stress|medicat|supplement|surgery|hospital|bereave|grief)\b/i;
@@ -63,6 +64,11 @@ function decisionCanceled(decision: BrainDecision): boolean {
   return TERMINAL_DECISION_STATUSES.has(decision.status) || decision.superseded_by != null;
 }
 
+// A window only confounds while it is still ASKING something. `retireSupersededExpectations`
+// retires the older of two overlapping same-metric windows precisely so the survivor can reach a
+// real verdict — leaving the retired row in this query would hand back the mutual silence the
+// supersede exists to break. Canceled rows are out for the same reason: their decision was undone,
+// so they no longer describe a change competing for this metric.
 function overlappingDecisionConfounders(expectation: BrainExpectation): string[] {
   const rows = db
     .prepare(
@@ -75,6 +81,7 @@ function overlappingDecisionConfounders(expectation: BrainExpectation): string[]
         AND COALESCE(other.subject_key, '') = COALESCE(?, '')
         AND other.window_start <= ?
         AND other.window_end >= ?
+        AND other.status NOT IN (${RETIRED_EXPECTATION_STATUSES.map(() => "?").join(", ")})
         AND decision.status IN ('applied', 'announced')
       ORDER BY other.id DESC LIMIT 20`
     )
@@ -84,7 +91,8 @@ function overlappingDecisionConfounders(expectation: BrainExpectation): string[]
       expectation.metric_key,
       expectation.subject_key,
       expectation.window_end,
-      expectation.window_start
+      expectation.window_start,
+      ...RETIRED_EXPECTATION_STATUSES
     ) as Array<{ expectation_id: number; decision_id: number }>;
   return rows.map((row) => `Decision ${row.decision_id} also targeted this outcome during the evaluation window.`);
 }

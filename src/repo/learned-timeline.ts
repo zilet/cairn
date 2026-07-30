@@ -221,6 +221,9 @@ function latestExpectationOutcome(decision: BrainDecision): {
   evaluation: BrainEvaluation | null;
 } {
   const candidates = listBrainExpectations({ decisionId: decision.id, limit: 12 })
+    // A window a newer change took ownership of never earns a verdict, so it could
+    // only ever render as "still waiting" — which is not this decision's outcome.
+    .filter((expectation) => expectation.status !== "superseded")
     .map((expectation) => ({
       expectation,
       evaluation: expectation.id ? latestBrainEvaluation(expectation.id) : null,

@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { extractMeasuredRmr } from "./repo/metabolism-core.js";
+import { retireSupersededExpectations } from "./repo/brain/expectation-arbitration.js";
 
 export interface Migration {
   version: number;
@@ -1798,6 +1799,41 @@ export const MIGRATIONS: Migration[] = [
         ).run();
       } catch {
         /* an ancient DB without the directive columns has no churn to compact */
+      }
+    },
+  },
+  {
+    version: 87,
+    name: "expectation-overlap-arbitration",
+    // Pure data repair — no schema change, so no db.ts counterpart. A fresh DB has no rows
+    // to arbitrate and every row it will write goes through insertBrainExpectation, which
+    // applies this same rule at write time.
+    //
+    // THE ROWS THIS EXISTS FOR. `overlappingDecisionConfounders` forces an inconclusive
+    // verdict on any expectation whose window overlaps another live decision's over the same
+    // metric + subject, and the writers open windows far faster than 14-28 day windows close.
+    // The result on the live deployment was mutual annihilation: 82 pending expectations
+    // against 5 evaluated, and exactly two conclusive verdicts in the ledger's entire
+    // lifetime — both on `day_read_adherence`, the one metric whose windows are a single day
+    // and therefore never overlap. Stacks of six windows stood open on one exercise.
+    // Supersede-on-write stops new stacks forming; this retires the ones already standing so
+    // the newest window in each can finally answer for itself.
+    //
+    // Same helper as the write path, deliberately: retireSupersededExpectations owns the rule
+    // once (src/repo/brain/expectation-arbitration.ts) so a repair and a write cannot come to
+    // different conclusions about who owns a metric. It takes the handle rather than reaching
+    // for the db singleton, which is what lets a migration call it at all — db.ts statically
+    // imports this module.
+    //
+    // Idempotent by construction: a survivor is a row that loses to nobody, so a second pass
+    // finds no pairs and updates nothing. Precedent for the underlying rule is
+    // recordBlockDecision (src/repo/program-blocks.ts:180-183), which has always refused to
+    // open a second `vo2max_trend` window over a live one.
+    up: (db) => {
+      try {
+        retireSupersededExpectations(db);
+      } catch {
+        /* a DB predating the brain ledger has no windows to arbitrate */
       }
     },
   },

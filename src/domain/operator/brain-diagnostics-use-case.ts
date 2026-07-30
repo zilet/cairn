@@ -3,6 +3,7 @@ import { listBrainDecisions, listBrainExpectations } from "../../repo/brain-deci
 import { latestBrainEvaluation, listBrainToolCalls } from "../../repo/brain-evaluations.js";
 import { normalizeStrictCaseConferenceDecision } from "../../brain/case-conference-contract.js";
 import { readAdherenceModel } from "../../repo/brain/read-adherence.js";
+import { RETIRED_EXPECTATION_STATUSES } from "../../repo/brain/expectation-arbitration.js";
 import { localDateISO } from "../../repo/shared.js";
 
 const METRIC_WINDOW_DAYS = 90;
@@ -18,6 +19,11 @@ const MATERIAL_KINDS = new Set([
   "goal_change",
   "case_conference",
 ]);
+
+// Neither status is a window still waiting on an answer: `canceled` means the decision
+// was undone, `superseded` means a newer change took the metric over. Counting either as
+// "matured but unevaluated" would read as a stalled scheduler.
+const RETIRED_STATUSES = new Set<string>(RETIRED_EXPECTATION_STATUSES);
 
 function pct(numerator: number, denominator: number): number | null {
   return denominator > 0 ? Math.round((numerator / denominator) * 1_000) / 10 : null;
@@ -71,7 +77,9 @@ function expectationHealth() {
     .all() as any[];
   const verdictByExpectation = new Map(latest.map((row) => [Number(row.expectation_id), row]));
 
-  const matured = rows.filter((row) => String(row.window_end) <= today && String(row.status) !== "canceled");
+  const matured = rows.filter(
+    (row) => String(row.window_end) <= today && !RETIRED_STATUSES.has(String(row.status))
+  );
   const maturedUnevaluated = matured.filter((row) => !verdictByExpectation.has(Number(row.id)));
   const evaluated = rows.filter((row) => verdictByExpectation.has(Number(row.id)));
   const verdicts = countBy(
@@ -91,7 +99,7 @@ function expectationHealth() {
     as_of: today,
     total: rows.length,
     by_status: countBy(rows, "status"),
-    pending: rows.filter((row) => String(row.window_end) > today && String(row.status) !== "canceled").length,
+    pending: rows.filter((row) => String(row.window_end) > today && !RETIRED_STATUSES.has(String(row.status))).length,
     matured: matured.length,
     matured_unevaluated: maturedUnevaluated.length,
     evaluated: evaluated.length,
@@ -120,7 +128,9 @@ function expectationHealth() {
       return {
         metric_key: metricKey,
         total: forMetric.length,
-        matured: forMetric.filter((row) => String(row.window_end) <= today && String(row.status) !== "canceled").length,
+        matured: forMetric.filter(
+          (row) => String(row.window_end) <= today && !RETIRED_STATUSES.has(String(row.status))
+        ).length,
         evaluated: forMetricEvaluated.length,
         conclusive: (metricVerdicts.aligned ?? 0) + (metricVerdicts.not_aligned ?? 0),
         latest_verdicts: metricVerdicts,
@@ -160,7 +170,9 @@ function brainAggregateMetrics() {
   );
   const materialWithExpectations = activeMaterial.filter((row) => expectationDecisionIds.has(Number(row.id))).length;
   const today = new Date().toISOString().slice(0, 10);
-  const matured = expectations.filter((row) => String(row.window_end) <= today && String(row.status) !== "canceled");
+  const matured = expectations.filter(
+    (row) => String(row.window_end) <= today && !RETIRED_STATUSES.has(String(row.status))
+  );
   const evaluatedMatured = matured.filter((row) => latestByExpectation.has(Number(row.id)));
   const reverted = decisions.filter((row) => row.status === "reverted").length;
   const resolved = decisions.filter((row) => ["applied", "reverted"].includes(String(row.status))).length;

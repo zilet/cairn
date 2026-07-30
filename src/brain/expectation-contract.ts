@@ -48,7 +48,13 @@ export type ExpectationDirection = (typeof EXPECTATION_DIRECTIONS)[number];
 export const EXPECTATION_CONFIDENCE = ["tentative", "observed", "strong"] as const;
 export type ExpectationConfidence = (typeof EXPECTATION_CONFIDENCE)[number];
 
-export const EXPECTATION_STATUSES = ["pending", "mature", "evaluated", "canceled"] as const;
+// `superseded` is a live window that a NEWER change took ownership of. It is
+// terminal and never evaluated: the change it was asking about is no longer the
+// most recent thing that happened to its metric, so no verdict it could reach
+// would be about the right intervention. Distinct from `canceled`, which means
+// the decision itself was undone. The rule lives in
+// src/repo/brain/expectation-arbitration.ts (retireSupersededExpectations).
+export const EXPECTATION_STATUSES = ["pending", "mature", "evaluated", "canceled", "superseded"] as const;
 export type ExpectationStatus = (typeof EXPECTATION_STATUSES)[number];
 
 export const EXPECTATION_CONFOUNDER_POLICIES = [
