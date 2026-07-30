@@ -6,6 +6,7 @@ import { precomputeDayRead, localToday, warmToday } from "./dayread.js";
 import { checkForUpdate } from "./updateCheck.js";
 import {
   evaluateMatureExpectations,
+  queueExpectationRevisions,
   releaseStaleExpectationFollowups,
   surfaceExpectationMisses,
 } from "./brainEvaluator.js";
@@ -825,6 +826,19 @@ export function startScheduler() {
         const quieted = releaseStaleExpectationFollowups(stamp);
         if (noted.length || quieted) {
           console.log(`[brain] change follow-ups: ${noted.length} noted, ${quieted} released.`);
+        }
+        // …and the second half of the same fact: where the miss says the CHANGE
+        // made the work worse, draft the step back and hand it to the autonomy
+        // layer. Same evaluation set as the note above, so the two can never
+        // disagree about which changes failed. Nothing is applied here — policy
+        // decides whether the draft lands quietly, announces, or waits for review.
+        const revisions = queueExpectationRevisions(evaluated.evaluations, stamp);
+        const queued = revisions.filter((entry: { status: string }) => entry.status === "queued");
+        if (revisions.length) {
+          console.log(
+            `[brain] step-backs: ${queued.length} queued (${queued.map((entry: { tier?: string | null }) => entry.tier ?? "?").join(", ") || "-"}), ` +
+              `${revisions.length - queued.length} skipped.`
+          );
         }
       } catch (e: any) {
         recordSchedulerFailure("maturity_evaluation", e);
