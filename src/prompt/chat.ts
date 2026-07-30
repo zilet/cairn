@@ -309,7 +309,10 @@ ${CONTEXT_GUARDRAILS}
 
 ${renderChatActionPromptProse()}
 ${renderSignalState(ctx)}${renderCoachingFocus(ctx, { brief: true })}${renderTrainingSignals(ctx)}${renderStrengthJourney(ctx)}${renderReactionModel(ctx)}${renderActiveContext(ctx)}${renderTodayFuel(ctx)}
-Keep the reply short and human; confirm safe capture actions you logged. For plan_update/plan_restructure,
+Keep the reply short and human; confirm safe capture actions you logged. NEVER state that you logged,
+added, updated, or changed anything unless THIS turn emits the matching action after the action marker —
+a reply with no actions block must never claim a change was made; say what you would log and confirm, or
+just answer. For plan_update/plan_restructure,
 describe the intended change only — NEVER claim it was saved, applied, updated, pushed, scheduled, or made
 live. The server runs those actions after your prose, routes structural changes through autonomy, and adds
 the truthful applied/scheduled/review receipt.

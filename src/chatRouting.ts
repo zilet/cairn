@@ -38,6 +38,8 @@ export interface ChatRoutingInput {
   message?: unknown;
   has_image?: boolean;
   capture_confirmation?: boolean;
+  /** A food note was captured recently, so a bare "add/also X" is likely a meal amendment. */
+  recent_food_capture?: boolean;
 }
 
 // Mirrors ReasoningLevel in agents.ts (kept a standalone literal so this policy
@@ -102,7 +104,7 @@ const COACHING_REQUEST =
   /\b(?:suggest|recommend|explain|review|analy[sz]e|plan|evaluate|compare|tell|help|what\s+should)\b/i;
 
 const FOOD_NOUN =
-  /\b(?:food|meal|breakfast|lunch|dinner|snack|drink|coffee|shake|smoothie|calorie(?:s)?|kcal|macro(?:s)?|protein|carb(?:s)?|fat|serving|plate)\b/i;
+  /\b(?:food|meal|breakfast|lunch|dinner|snack|drink|coffee|shake|smoothie|calorie(?:s)?|kcal|macro(?:s)?|protein|carb(?:s)?|fat|serving|plate|appetizer|starter|entr[eé]e|dessert|side\s+(?:dish|of))\b/i;
 const ACTIVITY_NOUN =
   /\b(?:activity|workout|training|session|exercise|run|ride|walk|hike|swim|row|cycle|cycling|bike|lifting|cardio|yoga|sport)\b/i;
 const WEIGHT_NOUN = /\b(?:weight|weigh-?in|bodyweight|body weight|lb|lbs|pounds?|kg|kilograms?)\b/i;
@@ -111,6 +113,8 @@ const SUPPLEMENT_NOUN =
 const FOOD_ITEM =
   /\b(?:pizza|slice(?:s)?|sandwich|tacos?|banana|oatmeal|yogurt|berries|chicken|rice|broccoli|salmon|potatoes|asparagus|latte|cookie|eggs?|pasta|smoothie)\b/i;
 const CAPTURE_VERB = /\b(?:log|track|record|add|save|enter)\b/i;
+const AMENDMENT_VERB = /\b(?:add|include|also|plus)\b/i;
+const NEW_LOG_VERB = /\b(?:log|track|record|save|enter)\b/i;
 const CORRECTION_VERB = /\b(?:correct(?:ion)?|fix|edit|update|change|actually|remove|forgot|don'?t log)\b/i;
 
 function addReason(reasons: Set<ChatRoutingReasonCode>, reason: ChatRoutingReasonCode): void {
@@ -133,7 +137,12 @@ function constrainedInMultipleWays(message: string): boolean {
   return signals.reduce((count, pattern) => count + (pattern.test(message) ? 1 : 0), 0) >= 2;
 }
 
-function captureReasons(message: string, hasImage: boolean, confirmation: boolean): ChatRoutingReasonCode[] {
+function captureReasons(
+  message: string,
+  hasImage: boolean,
+  confirmation: boolean,
+  recentFoodCapture: boolean
+): ChatRoutingReasonCode[] {
   const reasons = new Set<ChatRoutingReasonCode>();
   const hasCaptureVerb =
     CAPTURE_VERB.test(message) &&
@@ -160,6 +169,27 @@ function captureReasons(message: string, hasImage: boolean, confirmation: boolea
     addReason(reasons, "explicit_supplement_log");
   }
 
+  // An amendment-verbed follow-up shortly after a food capture is a correction
+  // to that meal even when the item is in no noun list ("Add half of Brussel
+  // sprouts from their appetizer list"). It must carry capture_correction: that
+  // is what keeps it OFF the no-agent instant path (which can only create a NEW
+  // note — a duplicate meal here) and on the agent path where update_food_note
+  // can reach the existing row. Plain log verbs ("log/track/record…") are
+  // excluded so a genuinely new entry keeps its instant receipt, and the other
+  // logging domains keep priority: an activity/weight/supplement-shaped message
+  // never rides this branch.
+  if (
+    recentFoodCapture &&
+    (AMENDMENT_VERB.test(message) || hasCorrectionVerb) &&
+    !NEW_LOG_VERB.test(message) &&
+    !ACTIVITY_NOUN.test(message) &&
+    !WEIGHT_NOUN.test(message) &&
+    !SUPPLEMENT_NOUN.test(message)
+  ) {
+    addReason(reasons, "explicit_food_log");
+    addReason(reasons, "capture_correction");
+  }
+
   // Only food has a first-class correction target (`update_food_note` with an
   // existing id). Historical activity, weight, and supplement corrections do not
   // yet have bounded update actions, so they must stay conversational rather than
@@ -184,7 +214,7 @@ function captureReasons(message: string, hasImage: boolean, confirmation: boolea
 export function decideChatRouting(input: ChatRoutingInput): ChatRoutingDecision {
   const message = String(input?.message ?? "").trim();
   const hasImage = input?.has_image === true;
-  const captures = captureReasons(message, hasImage, input?.capture_confirmation === true);
+  const captures = captureReasons(message, hasImage, input?.capture_confirmation === true, input?.recent_food_capture === true);
   const reasons = new Set<ChatRoutingReasonCode>(captures);
   let lane: ChatLane = captures.length > 0 ? "capture" : "coach";
   const ambiguous = AMBIGUOUS.test(message);
@@ -253,6 +283,7 @@ export function chatMessageRequestsCoaching(message: unknown): boolean {
 export function classifyChatRoute(input: {
   message?: string | null;
   has_image?: boolean;
+  recent_food_capture?: boolean;
 }): ChatRoutingDecision {
   return decideChatRouting(input);
 }

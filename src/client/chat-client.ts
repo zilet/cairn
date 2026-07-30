@@ -7,7 +7,11 @@ type ClientChatSessionSummary = import("../contracts/client.js").ClientChatSessi
 type ChatClientDayIntake = import("../contracts/client.js").ClientDayIntake;
 
 type ChatAppliedAction = { type?: unknown };
-type ChatMessageMeta = { image?: unknown; applied?: ChatAppliedAction[] };
+type ChatMessageMeta = {
+  image?: unknown;
+  applied?: ChatAppliedAction[];
+  routing?: { reason_codes?: unknown };
+};
 type ChatImagePayload = { dataUrl: string; base64: string; mime: "image/jpeg"; bytes: number };
 type ChatFuelSurfaceOptions = { todayISO: string; dayISO: (timestamp: unknown) => string };
 
@@ -16,7 +20,7 @@ const CHAT_IMAGE_EDGE_STEPS = [1280, 1024, 768];
 const CHAT_IMAGE_QUALITY_STEPS = [0.82, 0.72, 0.62, 0.52];
 const CHAT_STARTERS = ["Plan my week", "Evaluate my last meal", "How's my progress?", "Swap today's workout"];
 const CHAT_FOOD_RE =
-  /\b(food|meal|meals|breakfast|lunch|dinner|snack|plate|bowl|ate|eaten|eating|calor(?:y|ies)|kcal|macro|macros|protein|carb|carbs|fiber|fuel|refuel|grams?|ounces?|oz|serving|portion|recipe|restaurant|menu|label|logged?|logging)\b/i;
+  /\b(food|meal|meals|breakfast|lunch|dinner|snack|plate|bowl|ate|eaten|eating|calor(?:y|ies)|kcal|macro|macros|protein|carb|carbs|fiber|fuel|refuel|grams?|ounces?|oz|serving|portion|recipe|restaurant|menu|label|appetizer|starter|entr[eé]e|dessert|side\s+dish|logged?|logging)\b/i;
 const CHAT_NON_FOOD_PHOTO_RE =
   /\b(physique|body|mirror|pose|form|equipment|bike|run|shoe|injur(?:y|ed)?|pain|dexa|scan|lab|blood|chart|screenshot)\b/i;
 const CHAT_FOOD_ACTION_TYPES = new Set(["log_food", "update_food_note"]);
@@ -124,6 +128,18 @@ function chatMessageHasFoodAction(message: Partial<ClientChatMessage> | null | u
   return Array.isArray(meta.applied) && meta.applied.some((action) => CHAT_FOOD_ACTION_TYPES.has(String(action?.type || "")));
 }
 
+// The server already classified the user's message when it picked the chat lane,
+// and that verdict rides back on the reply's meta.routing. Trusting it here keeps
+// the fuel strip from disagreeing with the lane that handled the message — the
+// local CHAT_FOOD_RE stays only as a fallback for pre-routing history rows.
+const CHAT_FOOD_ROUTING_REASONS = new Set(["explicit_food_log", "photo_food_default", "capture_correction"]);
+
+function chatMessageRoutedFood(message: Partial<ClientChatMessage> | null | undefined): boolean {
+  if (!message) return false;
+  const codes = chatMeta(message.meta).routing?.reason_codes;
+  return Array.isArray(codes) && codes.some((code) => CHAT_FOOD_ROUTING_REASONS.has(String(code)));
+}
+
 function chatUserMessageSuggestsFood(message: Partial<ClientChatMessage> | null | undefined): boolean {
   if (!message || String(message.role || "") !== "user") return false;
   const content = String(message.content || "");
@@ -150,7 +166,10 @@ function chatWantsFuelSurface(
   if (latestUserIdx < 0) return false;
   const latestUser = recentToday[latestUserIdx];
   const sinceLatestUser = recentToday.slice(latestUserIdx);
-  return chatUserMessageSuggestsFood(latestUser) || sinceLatestUser.some(chatMessageHasFoodAction);
+  return (
+    chatUserMessageSuggestsFood(latestUser) ||
+    sinceLatestUser.some((message) => chatMessageHasFoodAction(message) || chatMessageRoutedFood(message))
+  );
 }
 
 function chatFuelHtml(day: ChatClientDayIntake | null | undefined): string {

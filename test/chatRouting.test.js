@@ -185,3 +185,51 @@ test("capture food-note linking validates identifiers and writes at most once", 
   assert.equal(repo.setChatTurnCaptureFoodNoteId(turn.id, 41).capture_food_note_id, 41);
   assert.equal(repo.setChatTurnCaptureFoodNoteId(turn.id, 99).capture_food_note_id, 41);
 });
+
+test("menu language counts as food: an appetizer amendment routes to capture without a hardcoded item match", () => {
+  const message = "Add half of Brussel sprouts from their appetizer list.";
+  const decision = decideChatRouting({ message });
+  assert.equal(decision.lane, "capture");
+  assert.ok(decision.reason_codes.includes("explicit_food_log"));
+
+  const amendment = decideChatRouting({ message, recent_food_capture: true });
+  assert.ok(
+    amendment.reason_codes.includes("capture_correction"),
+    "with a fresh food note the same message is an amendment to it, never an instant duplicate note"
+  );
+});
+
+test("an amendment-verbed follow-up after a recent food capture corrects the meal even with no food noun", () => {
+  const message = "Also add half of that portion for me";
+  const withContext = decideChatRouting({ message, recent_food_capture: true });
+  assert.equal(withContext.lane, "capture", "recent capture context makes the bare amendment a food capture");
+  assert.ok(withContext.reason_codes.includes("explicit_food_log"));
+  assert.ok(
+    withContext.reason_codes.includes("capture_correction"),
+    "the correction reason keeps the amendment off the instant path, which can only create a duplicate note"
+  );
+
+  const withoutContext = decideChatRouting({ message });
+  assert.equal(withoutContext.lane, "coach", "the same message with no recent capture stays conversational");
+  assert.ok(!withoutContext.reason_codes.includes("explicit_food_log"));
+});
+
+test("a plain new log keeps its instant receipt even while a food note is fresh", () => {
+  const decision = decideChatRouting({ message: "Log lunch: chicken, rice, and broccoli", recent_food_capture: true });
+  assert.equal(decision.lane, "capture");
+  assert.ok(decision.reason_codes.includes("explicit_food_log"));
+  assert.ok(
+    !decision.reason_codes.includes("capture_correction"),
+    "log-verbed entries are new notes, so they must stay eligible for the instant path"
+  );
+});
+
+test("other logging domains keep priority over the recent-capture amendment branch", () => {
+  const activity = decideChatRouting({ message: "Add a bike ride for tomorrow", recent_food_capture: true });
+  assert.ok(!activity.reason_codes.includes("explicit_food_log"), "an activity-shaped add never becomes a food log");
+  assert.ok(activity.reason_codes.includes("explicit_activity_log"));
+
+  const supplement = decideChatRouting({ message: "Add 400mg magnesium tonight", recent_food_capture: true });
+  assert.ok(!supplement.reason_codes.includes("explicit_food_log"));
+  assert.ok(supplement.reason_codes.includes("explicit_supplement_log"));
+});

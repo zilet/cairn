@@ -61,6 +61,22 @@ blob at READ time — nothing is written back onto the message, so a re-enrichme
 in place instead of appending a second one, and a client that was closed when the estimate landed
 sees it on the next ordinary history read.
 
+A same-day follow-up closed a hole that machinery couldn't reach: "Add half of Brussel sprouts from
+their appetizer list" routed to the coach lane (no word of it was in the food-noun lists), where the
+model *claimed* the addition and emitted no action — nothing changed and no estimate was ever made.
+Chat routing now treats menu language (appetizer/starter/entrée/dessert/side of) as food, and gains a
+`recent_food_capture` input (`hasRecentFoodNote()`, 6h): an amendment-verbed follow-up (add/include/
+also — plain "log …" keeps its instant receipt) while a food note is fresh routes to the capture lane
+tagged `capture_correction`, which keeps it off the no-agent instant path (that path can only create a
+NEW note — a duplicate meal here) and on the agent path where `update_food_note` reaches the existing
+row; activity/weight/supplement-shaped messages never ride the branch. The coach-lane prompt
+additionally forbids claiming anything was logged or changed unless the turn actually emits the
+matching action. The same message also silently folded the chat fuel strip: the client gates it on its
+OWN food regex (a third drifting food classifier), which knew no menu vocabulary either. The client
+now recognizes menu language and, more structurally, trusts the reply's `meta.routing` reason codes —
+the server's own verdict — as a food signal, keeping the strip from ever disagreeing with the lane
+that handled the message (sw v538).
+
 ## 2026-07-30 — the completion round: every declared lever now pulls
 
 Four commits closing out the elite-brain arc below: every target the personal-response model and the

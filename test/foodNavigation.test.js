@@ -64,4 +64,18 @@ test("chat fuel strip follows current food intent, not broad health nutrition pr
     { role: "user", content: "Would genome sequencing help with my LDL and ApoB?" },
     { role: "assistant", content: "A targeted lipid genetics panel may help." },
   ]), false, "a later unrelated user turn hides the earlier food banner");
+
+  assert.equal(chatWantsFuelSurface([
+    { role: "user", content: "Add half of Brussel sprouts from their appetizer list." },
+    { role: "assistant", content: "Added half an order to lunch." },
+  ]), true, "menu language (appetizer) is food intent even with no hardcoded item match");
+
+  assert.equal(chatWantsFuelSurface([
+    { role: "user", content: "Also add half of that portion for me" },
+    {
+      role: "assistant",
+      content: "Updated your lunch.",
+      meta: { routing: { reason_codes: ["explicit_food_log", "capture_correction"] } },
+    },
+  ]), true, "the server's routing verdict on the reply keeps the fuel strip up when the local regex has no signal");
 });

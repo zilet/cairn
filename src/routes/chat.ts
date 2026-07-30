@@ -27,6 +27,7 @@ import {
   searchChatMessages,
 } from "../domain/person/index.js";
 import { classifyChatRoute } from "../chatRouting.js";
+import { hasRecentFoodNote } from "../domain/nutrition/index.js";
 import { UPLOADS_DIR } from "../uploadPaths.js";
 import { extForMime, isAcceptedMime } from "../uploadMime.js";
 
@@ -113,7 +114,9 @@ chatRouter.post("/", (req, res) => {
 
   const settings = getSettings();
   const routing =
-    settings.chat_routing_mode === "adaptive" ? classifyChatRoute({ message, has_image: !!imagePath }) : null;
+    settings.chat_routing_mode === "adaptive"
+      ? classifyChatRoute({ message, has_image: !!imagePath, recent_food_capture: hasRecentFoodNote() })
+      : null;
   let created: any;
   try {
     created = createChatRequest({

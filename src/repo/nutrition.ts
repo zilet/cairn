@@ -1889,6 +1889,15 @@ export function listFoodNotes(limit = 20) {
   return (db.prepare(`SELECT * FROM food_notes ORDER BY id DESC LIMIT ?`).all(limit) as any[]).map(hydrate);
 }
 
+// Routing signal, not data access: "add half of the sprouts" minutes after a meal
+// was logged is an amendment to that meal even when no food word appears in the
+// message, so chat routing needs to know a capture target plausibly exists.
+export function hasRecentFoodNote(hours = 6): boolean {
+  return !!db
+    .prepare(`SELECT 1 FROM food_notes WHERE created_at >= datetime('now', ?) LIMIT 1`)
+    .get(`-${Math.max(1, Math.floor(hours))} hours`);
+}
+
 export function getFoodNote(id: number) {
   return hydrate(db.prepare(`SELECT * FROM food_notes WHERE id = ?`).get(id));
 }
