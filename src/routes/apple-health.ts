@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Router } from "express";
 import type { Request } from "express";
 import { authEnabled } from "../auth.js";
@@ -45,15 +48,48 @@ function requestOrigin(req: Request): string {
   return `${req.protocol}://${req.get("host") || "localhost"}`;
 }
 
+// The repo ships a signed, device-validated Shortcut template as a static
+// asset, so a fresh install has a working Install button with zero
+// configuration. The generator behind it lives in scripts/apple-shortcut/.
+const BUNDLED_SHORTCUT_PATH = "/shortcuts/Cairn%20Apple%20Health%20Sync.shortcut";
+const BUNDLED_SHORTCUT_FILE = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+  "public",
+  "shortcuts",
+  "Cairn Apple Health Sync.shortcut"
+);
+let bundledShortcutExists: boolean | null = null;
+
+export function bundledShortcutInstallPath(): string | null {
+  if (bundledShortcutExists == null) bundledShortcutExists = fs.existsSync(BUNDLED_SHORTCUT_FILE);
+  return bundledShortcutExists ? BUNDLED_SHORTCUT_PATH : null;
+}
+
+export function resolveShortcutInstallUrl(configured: unknown, requestBaseUrl: string): string | null {
+  // An operator-configured URL always wins — and an explicitly configured but
+  // INVALID value stays null rather than silently falling back, so the
+  // misconfiguration surfaces in Settings instead of being masked.
+  if (typeof configured === "string" && configured.trim()) {
+    return validatedAppleHealthShortcutUrl(configured, requestBaseUrl);
+  }
+  return bundledShortcutInstallPath();
+}
+
 function shortcutConfig(req: Request) {
-  const installUrl = validatedAppleHealthShortcutUrl(process.env.CAIRN_APPLE_HEALTH_SHORTCUT_URL, requestOrigin(req));
+  const installUrl = resolveShortcutInstallUrl(process.env.CAIRN_APPLE_HEALTH_SHORTCUT_URL, requestOrigin(req));
   const configuredName = (process.env.CAIRN_APPLE_HEALTH_SHORTCUT_NAME || "Cairn Apple Health Sync")
     .trim()
     .slice(0, 80);
+  // shortcut_name is returned even without a published install URL: the
+  // Connect & test deep link runs the Shortcut BY NAME, so a hand-installed
+  // (pre-publication) Shortcut can pair — that is exactly the documented
+  // validate-before-publish flow in docs/APPLE_HEALTH.md.
   return {
     available: !!installUrl,
     install_url: installUrl,
-    shortcut_name: installUrl ? configuredName || "Cairn Apple Health Sync" : null,
+    shortcut_name: configuredName || "Cairn Apple Health Sync",
     help_url: HELP_URL,
     pairing_available: authEnabled,
   };

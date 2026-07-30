@@ -45,6 +45,7 @@ type AppleHealthUiState = {
     pairing_available?: boolean;
   } | null;
   connections?: AppleHealthConnectionView[];
+  dates?: SettingsSurfaceDateFns;
 };
 
 type SettingsAutomationSliceOptions = {
@@ -213,37 +214,64 @@ function settingsSourcesSliceHtml(options: SettingsSourcesSliceOptions): string 
       </section>`;
 }
 
+// A row has to answer "is this thing working, and if not what do I do?" on its
+// own: the pairing exchange alone flips a connection to "connected", but no
+// Health data moves until the athlete opens the Shortcut once on the phone.
+function appleHealthConnectionRowHtml(
+  connection: AppleHealthConnectionView,
+  shortcutName: string,
+  dates: SettingsSurfaceDateFns
+): string {
+  const stamp = (iso: string | null | undefined): { text: string; title: string } => {
+    const raw = String(iso || "");
+    if (!raw) return { text: "", title: "" };
+    return {
+      text: dates.relTime ? dates.relTime(raw) : raw,
+      title: dates.absDate ? dates.absDate(raw.slice(0, 10)) : raw.slice(0, 10),
+    };
+  };
+  const paired = stamp(connection.created_at);
+  const used = stamp(connection.last_used_at);
+  const pairedSuffix = paired.text
+    ? ` · <span title="${escAttr(paired.title)}">paired ${escHtml(paired.text)}</span>`
+    : "";
+  const lead = used.text
+    ? `<span title="${escAttr(used.title)}">Last update ${escHtml(used.text)}</span>${pairedSuffix}`
+    : `Waiting for its first update${pairedSuffix}`;
+  const hint = used.text
+    ? ""
+    : `<br><span style="color:var(--muted)">Open the Shortcuts app and tap ${escHtml(shortcutName || "the Shortcut")} once to allow Health access and send today.</span>`;
+  return `<div class="syncrow ah-connection">
+        <div class="syncstatus"><b>${escHtml(connection.label || "Apple Health Shortcut")}</b><br><span style="color:var(--muted)">${lead}</span>${hint}</div>
+        <button class="ghostbtn ah-revoke" type="button" data-connection-id="${Number(connection.id)}">Revoke</button>
+      </div>`;
+}
+
 function appleHealthCardHtml(state: AppleHealthUiState): string {
   const config = state.config ?? null;
   const connections = Array.isArray(state.connections) ? state.connections : [];
   const active = connections.filter((connection) => connection.status === "connected");
   const helpUrl = config?.help_url || "https://github.com/zilet/cairn/blob/main/docs/APPLE_HEALTH.md";
+  const shortcutName = typeof config?.shortcut_name === "string" && config.shortcut_name ? config.shortcut_name : "";
   const install =
     config?.available && config.install_url
       ? `<a class="ghostbtn ah-install" href="${escAttr(config.install_url)}" target="_blank" rel="noopener">Install Apple Health Sync</a>`
-      : `<div class="sess-line ah-unavailable" style="color:var(--muted)"><b>Shortcut package not published yet.</b> Cairn will show the install button only when this server has a validated public Shortcut URL.</div>`;
+      : `<div class="sess-line ah-unavailable" style="color:var(--muted)">This server has no install link configured — <a href="${escAttr(helpUrl)}" target="_blank" rel="noopener">the setup guide</a> covers publishing your own Shortcut link or installing it by hand, and Connect &amp; test works either way.</div>`;
   const connect =
-    config?.available && config.shortcut_name && config.pairing_available
+    config?.shortcut_name && config.pairing_available
       ? `<button id="ahConnect" class="ghostbtn" type="button">Connect &amp; test</button>`
-      : config?.available && !config.pairing_available
+      : config && !config.pairing_available
         ? `<div class="sess-line" style="color:var(--muted)">Secure pairing requires <code>CAIRN_AUTH_TOKEN</code> on this instance.</div>`
         : "";
   const rows = active.length
-    ? active
-        .map(
-          (connection) => `<div class="syncrow ah-connection">
-        <div class="syncstatus"><b>${escHtml(connection.label || "Apple Health Shortcut")}</b><br><span style="color:var(--muted)">${connection.last_used_at ? `Last update ${escHtml(connection.last_used_at)}` : "Connected · waiting for first update"}</span></div>
-        <button class="ghostbtn ah-revoke" type="button" data-connection-id="${Number(connection.id)}">Revoke</button>
-      </div>`
-        )
-        .join("")
+    ? active.map((connection) => appleHealthConnectionRowHtml(connection, shortcutName, state.dates ?? {})).join("")
     : `<div class="sess-line" style="color:var(--muted)">Not connected yet.</div>`;
   const error = state.error
     ? `<div class="sess-line" id="ahError" style="color:var(--danger,#b33)">${escHtml(state.error)} <button id="ahRetry" class="ghostbtn" type="button">Retry</button></div>`
     : "";
   return `
     <h1 class="lbl" style="margin:22px 0 8px">Apple Health (steps, sleep, recovery)</h1>
-    <div class="sess-line" style="color:var(--muted)">Install the maintained Shortcut, then pair it to this Cairn without copying the owner token. Apple still asks you to confirm Add Shortcut and each Health permission.</div>
+    <div class="sess-line" style="color:var(--muted)">Install the Shortcut, tap Connect &amp; test to pair it without copying the owner token, then open it once in the Shortcuts app to allow Health access. Apple asks you to confirm Add Shortcut and each Health permission.</div>
     <div class="ah-fields"><span>steps</span><span>sleep</span><span>resting HR</span><span>HRV</span><span>active energy</span><span>VO₂ max</span></div>
     ${
       state.loading
@@ -252,12 +280,6 @@ function appleHealthCardHtml(state: AppleHealthUiState): string {
       <div class="ah-builder-actions">${install}${connect}<button id="ahRefresh" class="ghostbtn" type="button">Refresh status</button></div>
       ${error}
       <div style="margin-top:10px">${rows}</div>
-      <details class="ah-steps">
-        <summary>Advanced manual setup</summary>
-        <p class="sess-line" style="color:var(--muted)">For an unpublished template or a custom Shortcut, post an idempotent daily summary to <code id="ahUrl"></code>. Copying this endpoint never copies a credential.</p>
-        <button id="ahUrlCopy" class="ghostbtn" type="button">Copy endpoint</button>
-        <button id="ahRecipeCopy" class="ghostbtn" type="button">Copy manual recipe</button>
-      </details>
       <div class="sess-line" style="color:var(--muted);margin-top:8px"><a href="${escAttr(helpUrl)}" target="_blank" rel="noopener">Apple Health setup, privacy, and limitations</a></div>`
     }
   `;

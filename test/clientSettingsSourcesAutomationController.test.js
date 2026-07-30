@@ -41,9 +41,6 @@ class FakeElement {
       "garminSyncBtn",
       "garminStatus",
       "appleHealthCard",
-      "ahUrl",
-      "ahUrlCopy",
-      "ahRecipeCopy",
       "ahConnect",
       "ahRefresh",
       "ahRetry",
@@ -111,6 +108,9 @@ class FakeRoot extends FakeElement {}
 function loadSettingsSourcesAutomationController() {
   const context = { Object, Array, Set, String, Number, RegExp, JSON, URLSearchParams, escHtml, escAttr };
   context.window = context;
+  // The controller hands the real date helpers to the surface, so the connection
+  // rows are rendered here exactly as the browser renders them.
+  vm.runInNewContext(readFileSync(join(root, "public/js/date-utils.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/settings-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/settings-surface-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/settings-sources-automation-controller.js"), "utf8"), context);
@@ -120,7 +120,6 @@ function loadSettingsSourcesAutomationController() {
 function baseDeps(rootEl, wm, overrides = {}) {
   const calls = [];
   const toasts = [];
-  const clipboardWrites = [];
   const timers = [];
   const openedUrls = [];
   return {
@@ -149,7 +148,6 @@ function baseDeps(rootEl, wm, overrides = {}) {
       },
       toast: (message) => toasts.push(message),
       locationOrigin: "https://cairn.test",
-      clipboard: { writeText: async (value) => clipboardWrites.push(value) },
       authToken: () => "shortcut-secret",
       setTimeout: (fn) => {
         timers.push(fn);
@@ -160,7 +158,6 @@ function baseDeps(rootEl, wm, overrides = {}) {
     },
     calls,
     toasts,
-    clipboardWrites,
     timers,
     openedUrls,
   };
@@ -185,25 +182,14 @@ test("settings sources controller owns Garmin and Apple Health wiring", async ()
   assert.match(rootEl.innerHTML, /Garmin Connect/);
   const appleCard = rootEl.querySelector("#appleHealthCard");
   assert.match(appleCard.innerHTML, /Install Apple Health Sync/);
-  assert.equal(appleCard.querySelector("#ahUrl").textContent, "https://cairn.test/api/health-metrics");
+  // The guided path is the only path: no hand-built recipe, no endpoint copy.
+  assert.doesNotMatch(appleCard.innerHTML, /Advanced manual setup|ahRecipeCopy|ahUrlCopy/);
+  assert.equal(controller.appleHealthShortcutRecipe, undefined);
 
   rootEl.querySelector("#garminUsername").input("athlete@example.com");
   rootEl.querySelector("#garminPassword").input("secret");
   assert.equal(wm.garmin_username, "athlete@example.com");
   assert.equal(wm.garmin_password, "secret");
-
-  await appleCard.querySelector("#ahUrlCopy").click();
-  assert.deepEqual(harness.clipboardWrites, ["https://cairn.test/api/health-metrics"]);
-  assert.equal(appleCard.querySelector("#ahUrlCopy").textContent, "Copied");
-  harness.timers[0]();
-  assert.equal(appleCard.querySelector("#ahUrlCopy").textContent, "Copy endpoint");
-
-  await appleCard.querySelector("#ahRecipeCopy").click();
-  assert.match(harness.clipboardWrites[1], /source: apple_health/);
-  assert.doesNotMatch(harness.clipboardWrites[1], /shortcut-secret/);
-  assert.match(harness.clipboardWrites[1], /source\+date upsert makes repeats safe/);
-  assert.equal(appleCard.querySelector("#ahRecipeCopy").textContent, "Recipe copied");
-  assert.doesNotMatch(controller.appleHealthShortcutRecipe("https://cairn.test"), /shortcut-secret/);
 
   await appleCard.querySelector("#ahConnect").click();
   assert.equal(harness.openedUrls.length, 1);
@@ -211,6 +197,10 @@ test("settings sources controller owns Garmin and Apple Health wiring", async ()
   const deepLink = new URL(harness.openedUrls[0]);
   const input = JSON.parse(deepLink.searchParams.get("text"));
   assert.deepEqual(input, { base_url: "https://cairn.test", pairing_code: "cairn_pair_one-time" });
+  // Shortcuts takes "+" literally in run-shortcut URLs — the name must be
+  // percent-encoded ("Cairn%20Apple…"), never form-encoded ("Cairn+Apple…").
+  assert.match(harness.openedUrls[0], /name=Cairn%20Apple%20Health%20Sync/);
+  assert.doesNotMatch(harness.openedUrls[0], /\+/);
   assert.doesNotMatch(harness.openedUrls[0], /shortcut-secret|Bearer/);
   assert.equal(appleCard.querySelector("#ahConnect").textContent, "Waiting for Shortcut…");
 
@@ -246,7 +236,8 @@ test("Apple Health connect polls boundedly and restores retry controls after tim
     await new Promise((resolve) => setImmediate(resolve));
   }
 
-  assert.match(card.innerHTML, /The Shortcut did not connect yet/);
+  assert.match(card.innerHTML, /Paired, but no Health data has arrived yet/);
+  assert.match(card.innerHTML, /Open the Shortcuts app and tap the Shortcut once/);
   assert.ok(card.querySelector("#ahRetry"));
   assert.ok(card.querySelector("#ahRefresh"));
   assert.equal(card.querySelector("#ahConnect").disabled, false);
@@ -290,6 +281,7 @@ test("Apple Health connect waits for the first metrics ingest before reporting s
             id: 41,
             label: "Apple Health Shortcut",
             status: "connected",
+            created_at: "2026-07-14T12:00:00.000Z",
             last_used_at: connectionReads >= 4 ? "2026-07-14T12:00:00.000Z" : null,
           },
         ],
@@ -310,7 +302,11 @@ test("Apple Health connect waits for the first metrics ingest before reporting s
   harness.timers.at(-1)();
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(harness.toasts, ["Apple Health connected"]);
-  assert.match(card.innerHTML, /Last update 2026-07-14T12:00:00.000Z/);
+  // Rendered through the app's own relTime/absDate, never as a raw ISO stamp.
+  assert.match(card.innerHTML, /Last update (just now|\d+[mhd] ago)/);
+  assert.match(card.innerHTML, /paired (just now|\d+[mhd] ago)/);
+  assert.doesNotMatch(card.innerHTML, /2026-07-14T12:00:00\.000Z/);
+  assert.doesNotMatch(card.innerHTML, /Open the Shortcuts app/);
 });
 
 test("settings automation controller owns enrichment and research toggles", () => {

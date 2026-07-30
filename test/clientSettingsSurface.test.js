@@ -99,10 +99,25 @@ test("settings surface renders source and automation slices without echoing secr
     config: { available: false, pairing_available: true },
     connections: [],
   });
-  assert.match(unavailable, /Shortcut package not published yet/);
+  assert.match(unavailable, /This server has no install link configured/);
+  assert.match(unavailable, /docs\/APPLE_HEALTH\.md/);
   assert.doesNotMatch(unavailable, /class="ghostbtn ah-install"/);
-  assert.match(unavailable, /id="ahRecipeCopy"/);
+  assert.doesNotMatch(unavailable, /id="ahConnect"/);
+  // The hand-built recipe is gone: the published Shortcut is the only setup path.
+  assert.doesNotMatch(unavailable, /id="ahRecipeCopy"|Advanced manual setup|ah-steps/);
 
+  // Pre-publication validate flow: a hand-installed Shortcut can still pair —
+  // Connect & test needs only a name + auth, never a published install URL.
+  const handInstalled = surface.appleHealthCardHtml({
+    config: { available: false, shortcut_name: "Cairn Apple Health Sync", pairing_available: true },
+    connections: [],
+  });
+  assert.match(handInstalled, /This server has no install link configured/);
+  assert.doesNotMatch(handInstalled, /class="ghostbtn ah-install"/);
+  assert.match(handInstalled, /id="ahConnect"/);
+  assert.doesNotMatch(handInstalled, /id="ahRecipeCopy"|Advanced manual setup/);
+
+  const dates = { relTime: (iso) => `rel(${iso})`, absDate: (iso) => `abs(${iso})` };
   const available = surface.appleHealthCardHtml({
     config: {
       available: true,
@@ -110,11 +125,49 @@ test("settings surface renders source and automation slices without echoing secr
       shortcut_name: "Cairn Apple Health Sync",
       pairing_available: true,
     },
-    connections: [{ id: 7, label: "iPhone", status: "connected", last_used_at: null }],
+    connections: [
+      {
+        id: 7,
+        label: "iPhone",
+        status: "connected",
+        created_at: "2026-07-14T12:00:00.000Z",
+        last_used_at: null,
+      },
+    ],
+    dates,
   });
   assert.match(available, /Install Apple Health Sync/);
   assert.match(available, /id="ahConnect"/);
-  assert.match(available, /waiting for first update/);
+  // A never-used connection says what to do next, by name.
+  assert.match(available, /Waiting for its first update/);
+  assert.match(available, /paired rel\(2026-07-14T12:00:00\.000Z\)/);
+  assert.match(available, /title="abs\(2026-07-14\)"/);
+  assert.match(available, /Open the Shortcuts app and tap Cairn Apple Health Sync once/);
+
+  const used = surface.appleHealthCardHtml({
+    config: { available: true, install_url: "https://www.icloud.com/shortcuts/abc", pairing_available: true },
+    connections: [
+      {
+        id: 8,
+        label: "iPhone",
+        status: "connected",
+        created_at: "2026-07-14T12:00:00.000Z",
+        last_used_at: "2026-07-20T06:30:00.000Z",
+      },
+    ],
+    dates,
+  });
+  assert.match(used, /Last update rel\(2026-07-20T06:30:00\.000Z\)/);
+  assert.match(used, /paired rel\(2026-07-14T12:00:00\.000Z\)/);
+  assert.doesNotMatch(used, /Open the Shortcuts app/);
+
+  // Without injected date helpers the raw stamp still renders — never "undefined".
+  const bare = surface.appleHealthCardHtml({
+    config: { available: true, install_url: "https://www.icloud.com/shortcuts/abc", pairing_available: true },
+    connections: [{ id: 9, label: "iPhone", status: "connected", created_at: "2026-07-14T12:00:00.000Z" }],
+  });
+  assert.match(bare, /paired 2026-07-14T12:00:00\.000Z/);
+  assert.doesNotMatch(bare, /undefined/);
 
   const automation = surface.automationSliceHtml({
     workingModel: wm,

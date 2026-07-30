@@ -18,35 +18,16 @@
     return event.currentTarget as HTMLInputElement;
   }
 
-  function appleHealthShortcutRecipe(origin: string): string {
-    const endpoint = origin.replace(/\/$/, "") + "/api/health-metrics";
-    return `Cairn Apple Health Shortcut manual recipe
-
-1. Name the shortcut "Update Cairn from Apple Health".
-2. Choose the day to summarize and Format Date as yyyy-MM-dd.
-3. Add Find Health Samples actions for only the data you want to share. Filter to that day, then calculate the appropriate sum or average.
-4. Build a Dictionary. Always include:
-   source: apple_health
-   date: <formatted date>
-   Add only available values: steps, sleep_min, resting_hr, hrv_ms, active_calories, total_calories, distance_km, exercise_min, stand_hours, spo2_avg, vo2max.
-5. Add Get Contents of URL:
-   URL: ${endpoint}
-   Method: POST
-   Request Body: JSON (the Dictionary)
-   Authorization: use a dedicated ingest token obtained through the pairing exchange, or the owner token only for a manually managed trusted instance. Never put either token in the URL.
-6. Read the response Dictionary. If ok is true, Show Notification "Cairn updated". Otherwise Show Alert with errors. A connection failure can be retried by running the shortcut again; source+date upsert makes repeats safe.
-7. Run once and approve the requested Health permissions. Optionally create a Time of Day personal automation that runs this shortcut.
-
-Apple requires the shortcut actions and Health permissions to be reviewed on your device. The Cairn project can publish an exported, Apple-validated Shortcut, but this checkout does not fabricate or bundle one.`;
-  }
-
   function appleHealthRunLink(shortcutName: string, origin: string, pairingCode: string): string {
     const payload = JSON.stringify({
       base_url: origin.replace(/\/$/, ""),
       pairing_code: pairingCode,
     });
-    const params = new URLSearchParams({ name: shortcutName, input: "text", text: payload });
-    return `shortcuts://run-shortcut?${params.toString()}`;
+    // Percent-encode by hand: URLSearchParams emits form-encoding (space → "+"),
+    // and the Shortcuts app takes those pluses literally — "Cairn+Apple+Health+Sync"
+    // then fails name lookup on-device.
+    const query = `name=${encodeURIComponent(shortcutName)}&input=text&text=${encodeURIComponent(payload)}`;
+    return `shortcuts://run-shortcut?${query}`;
   }
 
   function appleHealthStateRecord(value: unknown): Record<string, unknown> {
@@ -108,6 +89,10 @@ Apple requires the shortcut actions and Health permissions to be reviewed on you
     const card = settingsSourcesAutomationOptional<HTMLElement>(deps.root, "#appleHealthCard");
     if (!card) return;
 
+    // Resolved at call time: the date helpers are plain globals from another
+    // client script, so a top-level reference would not survive load order.
+    const dates = { relTime, absDate };
+
     const loadAppleHealth = async (error: string | null = null): Promise<void> => {
       try {
         const [rawConfig, rawConnections] = await Promise.all([
@@ -118,42 +103,14 @@ Apple requires the shortcut actions and Health permissions to be reviewed on you
         const config = appleHealthStateRecord(rawConfig);
         const connectionData = appleHealthStateRecord(rawConnections);
         const connections = Array.isArray(connectionData.connections) ? connectionData.connections : [];
-        card.innerHTML = CairnSettingsSurface.appleHealthCardHtml({ config, connections, error });
+        card.innerHTML = CairnSettingsSurface.appleHealthCardHtml({ config, connections, error, dates });
       } catch {
         if (!card.isConnected) return;
         card.innerHTML = CairnSettingsSurface.appleHealthCardHtml({
           error: error || "Could not load Apple Health connection status.",
+          dates,
         });
       }
-
-      const ahUrl = settingsSourcesAutomationOptional<HTMLElement>(card, "#ahUrl");
-      if (ahUrl) ahUrl.textContent = origin.replace(/\/$/, "") + "/api/health-metrics";
-      const ahCopy = settingsSourcesAutomationOptional<HTMLButtonElement>(card, "#ahUrlCopy");
-      if (ahCopy)
-        ahCopy.addEventListener("click", async () => {
-          try {
-            await (deps.clipboard ?? navigator.clipboard).writeText(origin.replace(/\/$/, "") + "/api/health-metrics");
-            ahCopy.textContent = "Copied";
-          } catch {
-            ahCopy.textContent = "Copy failed";
-          }
-          (deps.setTimeout ?? setTimeout)(() => {
-            ahCopy.textContent = "Copy endpoint";
-          }, 1600);
-        });
-      const recipeCopy = settingsSourcesAutomationOptional<HTMLButtonElement>(card, "#ahRecipeCopy");
-      if (recipeCopy)
-        recipeCopy.addEventListener("click", async () => {
-          try {
-            await (deps.clipboard ?? navigator.clipboard).writeText(appleHealthShortcutRecipe(origin));
-            recipeCopy.textContent = "Recipe copied";
-          } catch {
-            recipeCopy.textContent = "Copy failed";
-          }
-          (deps.setTimeout ?? setTimeout)(() => {
-            recipeCopy.textContent = "Copy manual recipe";
-          }, 2000);
-        });
 
       const refresh = settingsSourcesAutomationOptional<HTMLButtonElement>(card, "#ahRefresh");
       if (refresh) refresh.addEventListener("click", () => void loadAppleHealth());
@@ -222,7 +179,9 @@ Apple requires the shortcut actions and Health permissions to be reviewed on you
               } catch {}
               if (!card.isConnected) return;
               if (attempts >= 8) {
-                await loadAppleHealth("The Shortcut did not connect yet. Run it again, then retry or refresh status.");
+                await loadAppleHealth(
+                  "Paired, but no Health data has arrived yet. Open the Shortcuts app and tap the Shortcut once to allow Health access, then tap Refresh status."
+                );
                 return;
               }
               wait(() => void poll(), 2000);
@@ -280,7 +239,6 @@ Apple requires the shortcut actions and Health permissions to be reviewed on you
   }
 
   const CAIRN_SETTINGS_SOURCES_AUTOMATION_CONTROLLER = {
-    appleHealthShortcutRecipe,
     appleHealthRunLink,
     renderSources: renderSettingsSources,
     renderAutomation: renderSettingsAutomation,

@@ -2,7 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo } from "./_seed.js";
 import { shouldMarkAppleHealthUsed } from "../dist/routes/health-metrics.js";
-import { validatedAppleHealthShortcutUrl } from "../dist/routes/apple-health.js";
+import {
+  bundledShortcutInstallPath,
+  resolveShortcutInstallUrl,
+  validatedAppleHealthShortcutUrl,
+} from "../dist/routes/apple-health.js";
 
 test("Apple Health pairing stores hashes, expires, and exchanges exactly once", () => {
   const now = Date.parse("2026-07-14T12:00:00.000Z");
@@ -61,6 +65,44 @@ test("Apple Health scoped credentials revoke independently and last-used updates
   assert.equal(repo.listAppleHealthConnections(now + 7_000)[0].status, "revoked");
 });
 
+test("a successful pairing reaps superseded never-used connections under the same label", () => {
+  const now = Date.parse("2026-07-14T12:00:00.000Z");
+  const pair = (label, atMs) =>
+    repo.exchangeAppleHealthPairing(repo.createAppleHealthPairing({ label, now_ms: atMs }).code, {
+      label,
+      now_ms: atMs + 1_000,
+    });
+
+  const abandoned = pair("iPhone Shortcut", now);
+  const alsoAbandoned = pair("iPhone Shortcut", now + 10_000);
+  const other = pair("iPad Shortcut", now + 20_000);
+  const current = pair("iPhone Shortcut", now + 30_000);
+  assert.ok(abandoned && alsoAbandoned && other && current);
+
+  const ids = repo.listAppleHealthConnections(now + 40_000).map((connection) => connection.id);
+  assert.deepEqual(
+    ids.slice().sort((a, b) => a - b),
+    [other.connection.id, current.connection.id].sort((a, b) => a - b),
+    "18 identical never-used rows collapse to the newest one, per label"
+  );
+  assert.equal(repo.verifyAppleHealthIngestToken(abandoned.ingest_token, now + 40_000), null);
+  assert.equal(repo.verifyAppleHealthIngestToken(current.ingest_token, now + 40_000)?.id, current.connection.id);
+  assert.equal(repo.verifyAppleHealthIngestToken(other.ingest_token, now + 40_000)?.id, other.connection.id);
+
+  // A connection that ever ingested is history, not noise: re-pairing keeps it.
+  assert.equal(repo.markAppleHealthConnectionUsed(current.connection.id, now + 41_000), true);
+  const replacement = pair("iPhone Shortcut", now + 50_000);
+  assert.ok(replacement);
+  const after = repo.listAppleHealthConnections(now + 60_000).map((connection) => connection.id);
+  assert.equal(after.includes(current.connection.id), true, "a used credential is never reaped");
+  assert.equal(after.includes(replacement.connection.id), true);
+  assert.equal(after.length, 3);
+
+  // A revoked-but-used row also survives; the direct helper is a no-op without a keeper.
+  assert.equal(repo.reapSupersededAppleHealthConnections("iPhone Shortcut", 0), 0);
+  assert.equal(repo.reapSupersededAppleHealthConnections("", replacement.connection.id), 0);
+});
+
 test("Apple Health install URL accepts only official iCloud or same-origin shortcut assets", () => {
   const origin = "https://cairn.test";
   assert.match(validatedAppleHealthShortcutUrl("https://www.icloud.com/shortcuts/abc-123", origin), /icloud\.com/);
@@ -75,6 +117,21 @@ test("Apple Health install URL accepts only official iCloud or same-origin short
   assert.equal(validatedAppleHealthShortcutUrl("http://www.icloud.com/shortcuts/abc", origin), null);
   assert.equal(validatedAppleHealthShortcutUrl("https://evil.test/cairn.shortcut", origin), null);
   assert.equal(validatedAppleHealthShortcutUrl("shortcuts://create-shortcut", origin), null);
+});
+
+test("Apple Health install URL defaults to the bundled signed template only when unconfigured", () => {
+  const origin = "https://cairn.test";
+  // No configured URL → the repo-shipped artifact under public/shortcuts/.
+  assert.equal(resolveShortcutInstallUrl(undefined, origin), "/shortcuts/Cairn%20Apple%20Health%20Sync.shortcut");
+  assert.equal(resolveShortcutInstallUrl("  ", origin), "/shortcuts/Cairn%20Apple%20Health%20Sync.shortcut");
+  assert.equal(bundledShortcutInstallPath(), "/shortcuts/Cairn%20Apple%20Health%20Sync.shortcut");
+  // A configured value always wins; a configured-but-invalid value surfaces as
+  // unavailable instead of being silently masked by the bundled fallback.
+  assert.match(
+    resolveShortcutInstallUrl("https://www.icloud.com/shortcuts/abc-123", origin),
+    /icloud\.com/
+  );
+  assert.equal(resolveShortcutInstallUrl("https://evil.test/cairn.shortcut", origin), null);
 });
 
 test("Apple Health install URL tolerates HTTPS termination without trusting forwarded headers", () => {

@@ -146,6 +146,9 @@ export function exchangeAppleHealthPairing(
       .run(label, version, tokenHash, now, iso(nowMs + ttlMs));
     insertedId = Number(inserted.lastInsertRowid);
     db.prepare(`UPDATE apple_health_pairings SET connection_id = ? WHERE id = ?`).run(insertedId, pairing.id);
+    // Same transaction as the insert: Settings never observes both the superseded
+    // rows and their replacement.
+    reapSupersededAppleHealthConnections(label, insertedId);
     db.exec("COMMIT");
   } catch (error) {
     try {
@@ -156,6 +159,21 @@ export function exchangeAppleHealthPairing(
 
   const row = db.prepare(`SELECT * FROM apple_health_connections WHERE id = ?`).get(insertedId) as StoredConnection;
   return { connection: publicConnection(row, nowMs), ingest_token: token };
+}
+
+// Every "Connect & test" tap mints a fresh credential, so an attempt the athlete
+// abandoned (or one where the Shortcut was never opened afterwards) leaves a row
+// that never ingested anything. Once a newer credential exists under the same
+// label those earlier rows are pure noise in Settings, and each is a live grant
+// nobody is using. A connection that has EVER ingested keeps its row — its
+// last_used_at is the only record that this phone ever reached this instance —
+// and so does any row under a different label, which is a different device.
+export function reapSupersededAppleHealthConnections(label: string, keepId: number): number {
+  if (typeof label !== "string" || !label || !Number.isSafeInteger(keepId) || keepId <= 0) return 0;
+  const result = db
+    .prepare(`DELETE FROM apple_health_connections WHERE label = ? AND id <> ? AND last_used_at IS NULL`)
+    .run(label, keepId);
+  return Number(result.changes);
 }
 
 export function verifyAppleHealthIngestToken(token: unknown, nowMs = Date.now()): AppleHealthConnection | null {
