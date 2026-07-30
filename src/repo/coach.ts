@@ -232,6 +232,19 @@ export interface AutoregSignal {
   joint_areas: string[];
   note: string; // one rolled-up plain sentence
 }
+// The POSITIVE half of the same rollup. AutoregSignal above only ever exists when
+// something is wrong, so the read had no way to tell "the athlete rated their last
+// session strongly" apart from "the athlete has rated nothing at all" — which is how
+// a maximally-supported day and an evidence-less one ended up looking identical to
+// the arbitration layer. Emitted only when the FRESHEST rated session is strong and
+// no soreness/joint report has landed since; anything less is simply absent.
+export interface SessionQualitySignal {
+  strong_flag: boolean;
+  // The session the claim is about (same honesty rule as the dates above).
+  strong_date: string | null;
+  rated_sessions: number;
+  note: string;
+}
 // How far back a felt signal counts. Autoregulation feedback is a report on a
 // body that changes daily; a rating from a fortnight ago is history, not a signal.
 const AUTOREG_WINDOW_DAYS = 7;
@@ -247,6 +260,7 @@ export function trainingSignals(
 ): {
   progression: ProgressionSignal[];
   autoregulation: AutoregSignal | null;
+  session_quality: SessionQualitySignal | null;
 } {
   const historical = !!asOf && asOf !== localDateISO();
   const sessions = (recent ?? getRecentSessions(20, historical ? { through: asOf } : {})) as any[];
@@ -430,7 +444,31 @@ export function trainingSignals(
       note: `${parts.join("; ")} — ease volume/load there or de-load the movements that load it; a brake, never a penalty.`,
     };
   }
-  return { progression, autoregulation };
+
+  // The positive rollup, built out of the SAME window and the same
+  // recovery-evidence-clears rule, run the other way round: the newest rated
+  // session is strong and nothing rougher has been rated since. Because
+  // `clearedByLater` looks for anything NEWER that clears the hit, and any rating
+  // below 4 clears a "strong" hit, this can only ever be true when the FRESHEST
+  // rating is the strong one — which is exactly the claim the note makes.
+  //
+  // Withheld while soreness or a joint report is live: a strong rating alongside a
+  // sore knee is not evidence the day carries room, and the brake owns that case.
+  const strongDays = clearedByLater(
+    ratedPerf,
+    (s) => Number(s.performance) >= 4,
+    (s) => Number(s.performance) <= 3
+  );
+  const sessionQuality: SessionQualitySignal | null =
+    strongDays.length && !soreDays.length && !joints.length
+      ? {
+          strong_flag: true,
+          strong_date: strongDays[0]?.date ? String(strongDays[0].date) : null,
+          rated_sessions: strongDays.length,
+          note: `the ${strongDays.length === 1 ? "most recent rated session came" : "recent rated sessions came"} back strong — the current dose is landing.`,
+        }
+      : null;
+  return { progression, autoregulation, session_quality: sessionQuality };
 }
 
 // A BOUNDED view of the deterministic program-state for the coach prompt — the
@@ -2366,6 +2404,22 @@ export function recentInsightTexts(limit = 12): string[] {
     }
   }
   return out;
+}
+
+// The other half of the same one-tap. A thumbs-DOWN already steers the generator —
+// it suppresses the theme through the dedup corpus above — while a thumbs-UP did
+// nothing at all, so the only feedback the athlete could give that changed anything
+// was negative. These are the connections they said were worth having: a small,
+// bounded "more like this" the generator can aim at. Never a template to copy (the
+// dedup guard still refuses a near-repeat of any of them) — a direction only.
+export const UPVOTED_STEER_LIMIT = 6;
+
+export function upvotedInsightTexts(limit = UPVOTED_STEER_LIMIT): string[] {
+  return db
+    .prepare(`SELECT text FROM insights WHERE feedback = 'up' ORDER BY id DESC LIMIT ?`)
+    .all(Math.max(1, Math.min(UPVOTED_STEER_LIMIT, limit)))
+    .map((r: any) => String(r?.text ?? "").trim())
+    .filter(Boolean);
 }
 
 // True when a candidate insight essentially repeats one of the recent ones:

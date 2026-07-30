@@ -1510,7 +1510,7 @@ export async function generateInsight(
     return cached.result;
   }
   hooks?.onPhase?.(k === "weekly_read" ? "reading your week" : "looking for a connection");
-  const prompt = k === "weekly_read" ? buildWeeklyReadPrompt() : buildInsightPrompt(undefined, recent);
+  const prompt = k === "weekly_read" ? buildWeeklyReadPrompt() : buildInsightPrompt(undefined, recent, repo.upvotedInsightTexts());
   // Only the weekly read is reshaped to the streaming contract + wired for deltas; a
   // connection insight keeps the bare-JSON prompt and (with no onDelta) delegates
   // straight to the one-shot rotation — unchanged.

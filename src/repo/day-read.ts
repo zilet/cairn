@@ -352,6 +352,23 @@ const TRAIN_CLEAR_WHY: readonly string[] = [
   "Nothing's holding you back today — the session's yours.",
   "Recovery looks fine and the session is due. Good day for it.",
 ];
+// The clear day's louder sibling, for the day the evidence positively BACKS rather
+// than merely permits (signal_state.action.support === "backed"). Until this set
+// existed the floor could only ever get quieter: the arbitration had rest, easy and
+// modify thresholds and nothing above train, so a week of strongly-rated sessions
+// with nothing pulling the other way read exactly like a day with no evidence at
+// all — "nothing's holding you back", forever.
+//
+// Still a SUGGESTION and still inside the reading grammar: every phrasing OFFERS the
+// reach ("worth", "if you feel like it", "a good day to"), none of them asks for it,
+// and none names a number. The one idea each must carry is that today is a day to go
+// AFTER something, on the evidence of what they have already logged.
+const TRAIN_PUSH_WHY: readonly string[] = [
+  "Everything you've logged lately says you're carrying this well — a good day to go after a little more.",
+  "Your recent sessions have come back strong and nothing's pulling the other way, so today's worth reaching on.",
+  "You're due, you're absorbing the work, and today looks like a day to ask a bit more of yourself.",
+  "By your own recent evidence this block is landing — if you feel like pushing today, today's the day for it.",
+];
 const TRAIN_CAVEAT_LEAD: readonly string[] = [
   "You're good to train",
   "Today's a green light",
@@ -655,14 +672,42 @@ const TRAIN_FOCUS_HEADLINE: ReadonlyArray<(focus: string) => string> = [
   (focus) => `${focus} is on today.`,
 ];
 
+// The BACKED train day's headline sets — its own rather than a fifth `kind` entry in
+// DAY_READ_HEADLINE_VARIANTS above, because the read's kind really is `train` (the
+// safety ladder in enforceDayReadSafetyPosture ranks rest < easy < train and knows
+// nothing else) and every consumer that maps a kind to a headline set must keep
+// resolving to the same four. The push is a FLAVOUR of train, not a fifth posture.
+const TRAIN_PUSH_HEADLINE: readonly string[] = [
+  "Good day to go after it.",
+  "Today's one to push.",
+  "A day to train and reach a little.",
+  "Good day to ask more of yourself.",
+];
+const TRAIN_PUSH_FOCUS_HEADLINE: ReadonlyArray<(focus: string) => string> = [
+  (focus) => `${focus} — go after it.`,
+  (focus) => `${focus}, and a good day to push.`,
+  (focus) => `${focus} today. Reach a little.`,
+];
+
 // The one headline a read gets on a given day. Every writer of the field goes through
 // here (dayread.ts's clamps and agent fallback, and the use case's factual replace).
-export function dayReadHeadline(read: { kind?: unknown; focus?: unknown }, date: string): string {
+//
+// `signals.push_bias` is read rather than a fifth kind for the reason above: a caller
+// that passes only `{kind, focus}` (every clamp, and the agent fallback for a read the
+// agent itself downgraded) is asking the plain question and gets the plain answer.
+export function dayReadHeadline(
+  read: { kind?: unknown; focus?: unknown; signals?: Record<string, any> | null },
+  date: string
+): string {
   const kind = String(read?.kind ?? "");
   const focus = typeof read?.focus === "string" ? read.focus.trim() : "";
+  const push = kind === "train" && !!read?.signals?.push_bias;
   if (kind === "train" && focus) {
-    return pickDayVariant(TRAIN_FOCUS_HEADLINE, date, "headline:train_focus")(focus);
+    return push
+      ? pickDayVariant(TRAIN_PUSH_FOCUS_HEADLINE, date, "headline:train_focus_push")(focus)
+      : pickDayVariant(TRAIN_FOCUS_HEADLINE, date, "headline:train_focus")(focus);
   }
+  if (push) return pickDayVariant(TRAIN_PUSH_HEADLINE, date, "headline:train_push");
   const variants = DAY_READ_HEADLINE_VARIANTS[kind] ?? DAY_READ_HEADLINE_VARIANTS.train;
   return pickDayVariant(variants, date, `headline:${kind || "train"}`);
 }
@@ -680,6 +725,14 @@ export const DAY_READ_HEADLINE_CONCEPT: Readonly<Record<string, RegExp>> = {
 // The focus form, rendered with a sample focus — registered so the shape and
 // constitution guards cover it alongside the fixed sets.
 export const DAY_READ_FOCUS_HEADLINE_VARIANTS: readonly string[] = TRAIN_FOCUS_HEADLINE.map((render) =>
+  render("Lower body")
+);
+
+// The backed train day's two headline forms, registered on the same terms: a phrasing
+// the athlete can read has to be enumerable and held to the constitution, whichever
+// branch of dayReadHeadline reaches it.
+export const DAY_READ_PUSH_HEADLINE_VARIANTS: readonly string[] = TRAIN_PUSH_HEADLINE;
+export const DAY_READ_PUSH_FOCUS_HEADLINE_VARIANTS: readonly string[] = TRAIN_PUSH_FOCUS_HEADLINE.map((render) =>
   render("Lower body")
 );
 
@@ -770,6 +823,11 @@ export const DAY_READ_WHY_VARIANTS: Readonly<Record<string, readonly string[]>> 
   outcome_feedback_soften: OUTCOME_FEEDBACK_SOFTEN_WHY,
   unprogrammed_easy_day: UNPROGRAMMED_WHY,
   planned_training: TRAIN_CLEAR_WHY,
+  // The backed train day. It keeps the `planned_training` LEDGER code — the decision
+  // is the same one, and a second code would split the adherence history of the most
+  // common read in two — and carries its own registered vocabulary, keyed off
+  // `signals.push_bias` rather than off the rule that produced it.
+  planned_training_push: TRAIN_PUSH_WHY,
   // `planned_reduced_training` has no `why` set of its own on purpose: a recovery-week
   // train day composes its sentence from the registered lead + the registered
   // `planned_training:recovery_week` caveat (see the retired RECOVERY_WEEK_TRAIN_WHY
@@ -807,6 +865,8 @@ export const DAY_READ_REQUIRED_CONCEPT: Readonly<Record<string, RegExp>> = {
   outcome_feedback_soften: /\b(?:trained|training)\b(?=[\s\S]*\b(?:well|held up|working|fine)\b)/i,
   planned_reduced_training: /\b(?:reduced|light|lighter)\b/i,
   planned_training: /\b(?:due|train|session)\b/i,
+  // A push read that forgets to offer the reach is just a clear day with extra words.
+  planned_training_push: /\b(?:more|reach(?:ing)?|push(?:ing)?)\b/i,
   unprogrammed_easy_day: /\b(?:nothing|no session|open)\b/i,
   quiet_streak: /\bquiet days?\b/i,
   quiet_streak_guarded: /\bquiet days?\b/i,
@@ -1515,6 +1575,23 @@ export function dayPlanningSignalState(date: string, provided: DayPlanningSignal
 //   • `recovery_dose_overrun` — yesterday measurably exceeded a reduced week's dose.
 //     Also a fact about the last 24 hours.
 //   • anything clinical — see clinicallyDriven() below. That floor is absolute.
+//
+// WHICH OF THESE ACTUALLY KEYS A READ, verified rather than assumed (the earned-rest
+// rule below carries the matching note, and the two used to disagree). On the
+// PRODUCTION path — `dayRead(date)`, where the signal state is built rich from the
+// same DB the rule reads — `low_readiness_rest` and `felt_run_down_rest` never key
+// anything: a low check-in becomes a safety_override constraint and a subdued
+// readiness reading a recovery constraint, so the unified protect rule ABOVE the
+// earned-rest rule wins the posture first and the read ships as
+// `acute_signal_protection` (rest and easy respectively).
+//
+// They are listed here anyway because they are not dead — they are reachable through
+// the one documented seam that can separate the two, a caller that SCOPES the whole
+// state via `dayRead`'s `unifiedState` argument while the athlete's check-in or
+// readiness reading still sits in the DB. That path still produces a genuine rest
+// under those codes, and an accumulation rest is exactly what softening is for, so
+// dropping them would silently make one shape of rest unsoftenable. Membership is
+// pinned by test/dayReadPushLadder.test.js in both directions.
 const SOFTENABLE_REST_CODES: ReadonlySet<string> = new Set([
   DAY_READ_OUTCOMES.accumulated_load_rest.code,
   DAY_READ_OUTCOMES.low_readiness_rest.code,
@@ -2059,10 +2136,16 @@ export function dayRead(
         // Each branch reports the outcome that matches its own words. Before the
         // reason moved onto the rule, a low check-in or a low readiness reading was
         // filed under "accumulated load" and explained as stacked training days the
-        // athlete may not have done. (Both of those now reach rest through the
-        // unified protect posture above, so their branches here are shadowed in
-        // practice — labelled correctly regardless, so a future reorder can't
-        // resurrect the mislabel.)
+        // athlete may not have done.
+        //
+        // The two subjective branches are SHADOWED on the production path and live
+        // off it, which is the same fact SOFTENABLE_REST_CODES above is written
+        // against: when the signal state is built from the same DB this rule reads,
+        // a low check-in and a subdued readiness reading both reach the unified
+        // protect rule first and ship as `acute_signal_protection`. They still fire
+        // for a caller that SCOPES the state through `dayRead`'s `unifiedState`
+        // argument — the one documented way the two inputs can diverge — so the
+        // labels here are live code, not a hedge against a future reorder.
         const branch = yesterdayRecoveryOverdose
           ? {
               outcome: DAY_READ_OUTCOMES.recovery_dose_overrun,
@@ -2241,11 +2324,25 @@ export function dayRead(
         // one a reduced week takes — there is no separate recovery-week arm (the one
         // that used to sit between these two was unreachable for exactly that reason;
         // see the retired RECOVERY_WEEK_TRAIN_WHY note at the top of this file).
+        // The brain's other direction. Every arm above this one either holds the day
+        // back or leaves it alone; this is the only one that offers MORE, and it fires
+        // exactly when the unified state says the evidence positively backs the day
+        // (support === "backed") AND this rule found nothing at all to caveat. Both
+        // halves matter: `backed` already requires no fresh caution or constraint
+        // anywhere, and an empty caveat list is what rules out the day's non-signal
+        // brakes too — a recovery week (which always pushes its own caveat), a
+        // deload on the horizon, a mileage spike, a work-around. Suggestion, never a
+        // gate; `est_minutes` is deliberately untouched, because a backed day is a
+        // reason to reach WITHIN the session, not a reason to make it longer.
+        const pushBias = signalState.action.support?.level === "backed" && !holdAggression && !caveats.length;
+        if (pushBias) (signals as any).push_bias = { backed_by: signalState.action.support?.fields ?? [] };
         const why = holdAggression
           ? `${holdLead} ${pickDayVariant(TRAIN_HOLD_LEAD, d, "planned_training:hold_lead")} — ${caveats.join("; and ")}.`
           : caveats.length
             ? `${pickDayVariant(TRAIN_CAVEAT_LEAD, d, "planned_training:caveats")} — ${caveats.join("; and ")}.`
-            : pickDayVariant(TRAIN_CLEAR_WHY, d, "planned_training");
+            : pushBias
+              ? pickDayVariant(TRAIN_PUSH_WHY, d, "planned_training_push")
+              : pickDayVariant(TRAIN_CLEAR_WHY, d, "planned_training");
         return {
           outcome: recoveryWeek ? DAY_READ_OUTCOMES.planned_reduced_training : DAY_READ_OUTCOMES.planned_training,
           read: { kind: "train", focus: sd.focus, why, est_minutes: commitmentPressure ? 40 : 60, signals },

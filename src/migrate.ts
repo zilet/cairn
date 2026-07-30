@@ -1694,6 +1694,41 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 85,
+    name: "day-read-entity-decode",
+    // Pure data repair — no schema change, so no db.ts counterpart.
+    //
+    // Agent-authored Brief prose arrived HTML-escaped and nothing stopped it: the
+    // live deployment stores a headline reading `Push session &amp; run complete`,
+    // which the PWA then escapes a SECOND time for rendering, so the athlete reads
+    // the entity itself. The intake guard now decodes on the way in
+    // (decodeDayReadAgentProse, src/dayread.ts); this decodes what is already stored.
+    //
+    // `&amp;` is decoded LAST, exactly as the runtime helper does it — decoding it
+    // first would turn a stored `&amp;lt;` into `<` in one hop, which is the
+    // double-decode the runtime guard rejects rather than performs. Idempotent for
+    // singly-escaped text (the only shape observed): a second run finds no entity
+    // left and matches no row.
+    up: (db) => {
+      const decode = (column: string) =>
+        `REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(${column},` +
+        ` '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&#39;', ''''), '&nbsp;', ' '), '&amp;', '&')`;
+      for (const column of ["headline", "why", "focus"]) {
+        try {
+          db.prepare(
+            `UPDATE day_reads
+                SET ${column} = ${decode(column)}
+              WHERE ${column} IS NOT NULL
+                AND (${column} LIKE '%&amp;%' OR ${column} LIKE '%&lt;%' OR ${column} LIKE '%&gt;%'
+                     OR ${column} LIKE '%&quot;%' OR ${column} LIKE '%&#39;%' OR ${column} LIKE '%&nbsp;%')`
+          ).run();
+        } catch {
+          /* column absent on an ancient DB — nothing to repair */
+        }
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: DatabaseSync) {

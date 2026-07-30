@@ -640,15 +640,29 @@ export function activeInjuryAreas(ctx: any): string[] {
 
 // HOW THIS USER RESPONDS — the personalization spine. Carries the standing principle
 // that prevents the engine's hard-won fixes from regressing in the agent's own prose.
+// `what_works_for_you` has shipped in the DATA block at EVERY site for a while (it is
+// in context-projection's PERSON bundle), and no prompt narrative ever said what it
+// was — so the agent was handed the one structure in the payload that records how this
+// person's past decisions actually turned out, with no reason to open it. One tight
+// sentence, here, because every prompt that renders the reaction model is already in
+// the "how this person responds" frame and this is the checked half of that frame.
+function renderWhatWorksForYou(ctx: any): string {
+  const learnings = Array.isArray(ctx?.what_works_for_you?.learnings) ? ctx.what_works_for_you.learnings : [];
+  if (!learnings.length) return "";
+  return `\nWHAT WORKS FOR YOU (DATA.what_works_for_you): outcomes Cairn has already checked against this user — what it expected, what actually happened, and how confident that pattern is. Lean on it before any generic default; it is observed evidence about THIS person, and like everything else here a suggestion, never a gate.\n`;
+}
+
 export function renderReactionModel(ctx: any): string {
   const rm = ctx?.reaction_model;
   const pats = rm && Array.isArray(rm.patterns) ? rm.patterns : [];
   const lines = pats.slice(0, 5)
     .map((p: any) => `  - [${p.confidence}] ${String(p.statement || "").trim()}`)
     .filter((l: string) => l.trim().length > 10);
-  if (!lines.length) return "";
+  // The checked-outcome pointer stands on its own: a user with no reaction patterns
+  // yet can still have several closed decisions behind them.
+  if (!lines.length) return renderWhatWorksForYou(ctx);
   const narr = rm.narrative ? `\n${String(rm.narrative).trim()}` : "";
-  return `\nHOW THIS USER RESPONDS (learned from their OWN logged history — personalize your defaults to this; a suggestion, never a gate. Trust their LOGGED loads over any stale plan number, and read a grip/form note as a technique cue, not a load cap):${narr}\n${lines.join("\n")}\n`;
+  return `\nHOW THIS USER RESPONDS (learned from their OWN logged history — personalize your defaults to this; a suggestion, never a gate. Trust their LOGGED loads over any stale plan number, and read a grip/form note as a technique cue, not a load cap):${narr}\n${lines.join("\n")}\n${renderWhatWorksForYou(ctx)}`;
 }
 
 // THE ARC — where today sits on the path to their goals. One clause, never a date wall.

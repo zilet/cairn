@@ -31,6 +31,10 @@ import { metricLabel } from "./shared.js";
 // (with its chronic-cluster guard) and the prior-week training-load helpers.
 import { isAcuteMarker } from "./propagation.js";
 import { weeklyTonnage, weeklyKm } from "./program-state.js";
+// The metric key only — read-adherence sits below this module in the graph (db,
+// brain-decisions, profile, shared, training-intent, training-read), so nothing
+// imports upward and the name stays a single source of truth.
+import { DAY_READ_ADHERENCE_METRIC } from "./brain/read-adherence.js";
 import type {
   CoachOutcomeLearning,
   CoachPersonalModifier,
@@ -1055,11 +1059,40 @@ function nutritionMissScale(row: EvaluatedDecisionRow): number {
   return 1;
 }
 
+// The one metric family that may ACCELERATE, and the conditions it has to clear.
+//
+// Every branch below used to be ease-or-hold: `scale = not_aligned ? 0.9 : 1`, so the
+// declared `max: 1.1` on training_progression_step was unreachable and the model could
+// only ever make the next step smaller or leave it alone. A response model that can
+// only brake is not learning the athlete, it is only learning their bad weeks.
+//
+// The bar is deliberately high and entirely deterministic: a RUN of aligned verdicts
+// (never a single one), zero missed verdicts anywhere in the comparable window (not
+// merely none in the current run), and no training symptom on record — because the one
+// thing a larger step must never do is stack onto something that already hurts.
+const ACCELERATION_MIN_RUN = 2;
+
+// Any symptom row still standing. Read straight off the table rather than through
+// listTrainingSymptoms for the reason stated at the top of this module (it must not
+// import upward), and deliberately on the RAW stored status: an event whose lifecycle
+// only resolves as of some later date still counts as live here, which errs toward
+// holding the standard step rather than granting a larger one.
+function trainingSymptomOnRecord(): boolean {
+  try {
+    return !!db.prepare(`SELECT 1 FROM training_symptom_events WHERE status = 'active' LIMIT 1`).get();
+  } catch {
+    // No lifecycle table (an imported or partial DB) is not evidence of health, so
+    // the conservative reading is "something might be live" — no acceleration.
+    return true;
+  }
+}
+
 function modifierFor(
   row: EvaluatedDecisionRow,
   verdict: EvaluatedDecisionRow["verdict"],
   confidence: CoachPersonalResponseConfidence,
-  evidenceN: number
+  evidenceN: number,
+  window: { missed_n: number }
 ): CoachPersonalModifier | null {
   let target: CoachPersonalModifierTarget | null = null;
   let scale = 1;
@@ -1087,11 +1120,29 @@ function modifierFor(
   ) {
     target = "training_progression_step";
     bounds = { min: 0.85, max: 1.1 };
-    scale = verdict === "not_aligned" ? 0.9 : 1;
+    // Ease on a miss; hold by default; and — the branch this family alone gets —
+    // ACCELERATE to the declared ceiling when a run of aligned verdicts has stood up
+    // with nothing missed against it and no symptom on record. Capped by `bounds`
+    // through boundedScale below, so the ceiling is the declared 1.1 and not a
+    // number this branch invents.
+    scale =
+      verdict === "not_aligned"
+        ? 0.9
+        : verdict === "aligned" &&
+            evidenceN >= ACCELERATION_MIN_RUN &&
+            window.missed_n === 0 &&
+            !trainingSymptomOnRecord()
+          ? bounds.max
+          : 1;
   } else if (row.metric_key === "run_volume_adherence") {
     // A missed run-volume expectation (the athlete isn't absorbing the prescribed km)
-    // eases the weekly build step; a met one holds the standard build (it never
-    // accelerates — mirroring training_progression_step). vo2max_trend is deliberately
+    // eases the weekly build step; a met one holds the standard build. ACCELERATION IS
+    // DELIBERATELY EXCLUDED HERE and must stay excluded: bone and tendon adapt to
+    // mileage on a slower clock than the aligned-verdict window can see, so a learned
+    // "you're absorbing it" is not evidence that a bigger weekly jump is safe. That is
+    // the endurance round's injury-safety ruling, and it is why the branch above —
+    // which steps LOAD inside a session, recheckable next session — is the only one
+    // that may push. vo2max_trend is deliberately
     // NOT wired here: a flat 4-week VO2max is normal and no reason to ease volume, so it
     // stays a pure ledger-accountability read with no modifier.
     target = "run_volume_step";
@@ -1130,6 +1181,10 @@ function learningForGroup(
   // let one intervention manufacture confidence.
   const byDecision = new Map<number, EvaluatedDecisionRow>();
   for (const row of allRows) {
+    // `applied` only. A day read is never applied — it is a suggestion the athlete
+    // may take or leave — so those rows are excluded here and read separately by
+    // dayReadAdherenceLearnings() below, which is also where the reason they must
+    // NOT produce a modifier is written down.
     if (row.decision_status !== "applied" || row.superseded_by != null || row.confounders.length > 0) continue;
     const prior = byDecision.get(row.decision_id);
     if (!prior || row.evaluated_at >= prior.evaluated_at) byDecision.set(row.decision_id, row);
@@ -1167,7 +1222,9 @@ function learningForGroup(
     : activeVerdict === "aligned"
       ? `${label.charAt(0).toUpperCase() + label.slice(1)} has matched the expectation across ${latestRun.length} comparable decision${latestRun.length === 1 ? "" : "s"}.`
       : `${label.charAt(0).toUpperCase() + label.slice(1)} has missed the expectation across ${latestRun.length} comparable decisions, so the next step should change modestly and be rechecked.`;
-  const modifier = activeVerdict ? modifierFor(latest, activeVerdict, confidence, latestRun.length) : null;
+  const modifier = activeVerdict
+    ? modifierFor(latest, activeVerdict, confidence, latestRun.length, { missed_n: missedN })
+    : null;
   const change = modifier
     ? modifier.rationale
     : unresolvedContradiction
@@ -1197,9 +1254,87 @@ function learningForGroup(
   };
 }
 
+// ---- the day read, read back ---------------------------------------------
+// The ledger's highest-VOLUME metric and, until now, the one it learned nothing
+// from. Two things kept it out of learningForGroup above:
+//   • its decisions are recorded `observed`, never `applied` — a read is a
+//     suggestion, so there is nothing to apply — and that filter dropped every row;
+//   • even past it, `comparableKey` carries `subject_key`, which for this metric is
+//     the READ DATE. Every day would have been its own singleton group and no group
+//     would ever have reached the two-outcome minimum.
+// So it gets its own read: grouped by the READ KIND the verdicts are about, which is
+// the question worth asking of them ("what happens on the mornings this reads rest?").
+//
+// PROSE ONLY, and that is a hard rule, not a simplification. `restOverrideSoftening`
+// (src/repo/brain/rest-override-softening.ts, consumed by dayRead) ALREADY acts on
+// these exact rows — it is what turns a repeatedly-overruled rest read into an easy
+// day. A modifier derived here would read the same evidence a second time and move a
+// second lever with it, which is double-counting one pattern as two. These learnings
+// therefore never reach `modifiers`, and `modifierFor` is never called for them.
+const READ_ADHERENCE_MIN_OUTCOMES = 4;
+const READ_KIND_LABEL: Readonly<Record<string, string>> = {
+  rest: "reads rest",
+  easy: "reads easy",
+  train: "reads train",
+};
+
+function dayReadAdherenceLearnings(rows: EvaluatedDecisionRow[]): CoachOutcomeLearning[] {
+  const byKind = new Map<string, EvaluatedDecisionRow[]>();
+  for (const row of rows) {
+    if (row.metric_key !== DAY_READ_ADHERENCE_METRIC || row.superseded_by != null) continue;
+    const kind = String(row.baseline?.read_kind ?? row.actual?.read_kind ?? "");
+    if (!READ_KIND_LABEL[kind]) continue;
+    byKind.set(kind, [...(byKind.get(kind) ?? []), row]);
+  }
+  const out: CoachOutcomeLearning[] = [];
+  for (const [kind, all] of byKind) {
+    const ordered = [...all].sort((a, b) => a.evaluated_at.localeCompare(b.evaluated_at));
+    const latestDate = ordered[ordered.length - 1].evaluated_at;
+    // Same 365-day horizon the applied learnings use, so one stale year cannot speak
+    // for the current athlete.
+    const window = ordered.filter((row) => dayGap(latestDate, row.evaluated_at) <= 365);
+    if (window.length < READ_ADHERENCE_MIN_OUTCOMES) continue;
+    const followed = window.filter((row) => row.verdict === "aligned").length;
+    const diverged = window.length - followed;
+    // A pattern, not a tally: it has to be lopsided before it is worth a sentence.
+    const majority = Math.max(followed, diverged);
+    if (majority * 3 < window.length * 2) continue;
+    const followsIt = followed >= diverged;
+    const label = READ_KIND_LABEL[kind];
+    const statement = followsIt
+      ? `When the morning ${label}, they usually take it — ${followed} of the last ${window.length}.`
+      : `When the morning ${label}, they usually train anyway — ${diverged} of the last ${window.length}.`;
+    out.push({
+      key: `day_read:${DAY_READ_ADHERENCE_METRIC}:${kind}`,
+      domain: "cross_domain",
+      metric_key: DAY_READ_ADHERENCE_METRIC,
+      subject_key: kind,
+      stage: null,
+      statement,
+      expected: `the ${kind} read to be followed`,
+      observed: `${followed} followed, ${diverged} diverged`,
+      // What this learning is FOR, said plainly: it shapes how a read is worded and
+      // how much weight to put behind it, and it moves no number by itself.
+      change: "Let it shape how firmly the next read is put, never what the read is allowed to say.",
+      confidence: window.length >= 10 ? "observed" : "tentative",
+      evidence_n: window.length,
+      aligned_n: followed,
+      missed_n: diverged,
+      contradictions: window
+        .slice(1)
+        .reduce((count, row, index) => count + (row.verdict !== window[index].verdict ? 1 : 0), 0),
+      superseded_evidence_n: 0,
+      last_observed: latestDate,
+    });
+  }
+  // Newest first, and capped: this is a footnote on the model, not the model.
+  return out.sort((a, b) => b.last_observed.localeCompare(a.last_observed)).slice(0, 2);
+}
+
 export function whatWorksForYou(): CoachWhatWorksForYou | null {
+  const allRows = evaluatedDecisionRows();
   const groups = new Map<string, EvaluatedDecisionRow[]>();
-  for (const row of evaluatedDecisionRows()) {
+  for (const row of allRows) {
     const key = comparableKey(row);
     groups.set(key, [...(groups.get(key) ?? []), row]);
   }
@@ -1208,7 +1343,13 @@ export function whatWorksForYou(): CoachWhatWorksForYou | null {
     .filter((item): item is NonNullable<typeof item> => item != null)
     .sort((a, b) => b.learning.last_observed.localeCompare(a.learning.last_observed))
     .slice(0, 4);
-  if (!learned.length) return null;
+  // Selected and capped SEPARATELY, then appended. A day read is evaluated every
+  // morning, so these are always the most recent rows in the ledger — folded into the
+  // sort above they would win the four slots outright and starve the very learnings
+  // that carry modifiers, quietly switching off the personal response the progression
+  // and nutrition layers read.
+  const readPatterns = dayReadAdherenceLearnings(allRows);
+  if (!learned.length && !readPatterns.length) return null;
   // Order modifiers so the PRIMARY nutrition levers (weight trend / intake response)
   // precede body-measurement evidence for the same target+stage: personalResponse-
   // ModifierFor takes the first match, so measurement evidence only sets the
@@ -1222,7 +1363,7 @@ export function whatWorksForYou(): CoachWhatWorksForYou | null {
     .slice(0, 4);
   return {
     version: PERSONAL_RESPONSE_VERSION,
-    learnings: learned.map((item) => item.learning),
+    learnings: [...learned.map((item) => item.learning), ...readPatterns],
     modifiers,
   };
 }

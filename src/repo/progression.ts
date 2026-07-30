@@ -341,6 +341,7 @@ function trainingModifierFor(
 function clampedOverload(current: number, group: string | null, modifier?: CoachPersonalModifier | null): number {
   const ceil = stepCeiling(group);
   const step = Math.min(Math.abs(current) * STEP_FRAC, ceil);
+  let earned = step;
   if (modifier) {
     const adjusted = applyPersonalResponseModifier({
       base: step,
@@ -356,10 +357,17 @@ function clampedOverload(current: number, group: string | null, modifier?: Coach
       const conservativeStep = Math.max(2.5, Math.floor(adjusted / 2.5) * 2.5);
       return Math.min(current + ceil, current + conservativeStep);
     }
+    // …and the same has to hold the other way now that a modifier can exceed 1 (the
+    // aligned-verdict acceleration in reaction-model.ts). Left on `step`, an earned
+    // larger step was discarded here and the branch was decorative. The per-session
+    // `ceil` still caps it — applyPersonalResponseModifier already clamped to it, and
+    // the rounding guard below re-clamps — so this can raise the step within the safe
+    // envelope and nowhere past it.
+    if (adjusted > step) earned = Math.min(ceil, adjusted);
   }
   // Round to 5 lb for compounds, 2.5 for isolation, but never below the smaller
   // plate (so a light isolation lift still moves).
-  const next = current + step;
+  const next = current + earned;
   const rounded = ceil === STEP_CEIL_ISOLATION ? round2_5(next) : round5(next);
   // Guarantee the rounding never produces a step BIGGER than the cap, and never
   // a no-op (a too-small fraction shouldn't strand the lift).

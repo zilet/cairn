@@ -688,10 +688,17 @@ const INSIGHT_SCHEMA = `{
 // pushed. Honors the constitution: at most one real thing, plainly, kindly, or
 // nothing at all. recent[] are insights already surfaced — do NOT repeat them.
 
-export function buildInsightPrompt(ctx?: CoachContext, recent: string[] = []): string {
+export function buildInsightPrompt(ctx?: CoachContext, recent: string[] = [], liked: string[] = []): string {
   const context = ctx ?? repo.getCoachContext();
   const recentBlock = recent.length
     ? `\nALREADY SAID (do NOT repeat or reword any of these — find something genuinely new, or return found:false):\n${recent.map((r) => `  - ${r}`).join("\n")}\n`
+    : "";
+  // The positive half of the same one-tap. Deliberately weaker than the block above:
+  // "already said" is a prohibition, this is a direction, and it must never become a
+  // reason to manufacture a connection the data doesn't carry (the constitution's
+  // silence-is-usually-right rule outranks it, which is why that is said here too).
+  const likedBlock = liked.length
+    ? `\nTHEY LIKED THESE (a direction, not a template — the kind of connection that landed for this person; aim near it when the data genuinely offers one, and still return found:false when it doesn't):\n${liked.map((r) => `  - ${r}`).join("\n")}\n`
     : "";
   return `${CAIRN_PERSONA}
 
@@ -716,7 +723,7 @@ THE CONSTITUTION (binding):
   its internal fields (no "the health_review confirms…", "recent_sessions show…", "the goal object").
   No grocery-list of evidence; one plain reason is enough.
 - It is a suggestion, never pressure. Rest and a quiet week are healthy, not problems to solve.
-${recentBlock}
+${recentBlock}${likedBlock}
 ${renderTodayFuel(context)}
 OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdown fences.
 When there's nothing real to say: {"found": false}

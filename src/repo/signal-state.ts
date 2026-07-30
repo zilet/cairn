@@ -19,6 +19,30 @@ export type SignalFreshness = "fresh" | "recent" | "stale";
 export type SignalPosture = "train" | "modify" | "easy" | "rest" | "done";
 export type PlanningTrainingDirective = "proceed" | "hold_aggression" | "modify" | "recover";
 
+// HOW WELL BACKED a train day is — deliberately NOT a sixth `SignalPosture`.
+//
+// The posture enum is a five-value safety ladder the PWA, enforceDayReadSafetyPosture
+// (rest < easy < train) and a long tail of tests all rank against, so a "push" posture
+// would have to be ranked above train and every one of those consumers would have to
+// learn it. But the arbitration below only ever had NEGATIVE thresholds (rest / easy /
+// modify), so a day where every rated session came back strong and nothing at all was
+// pulling the other way resolved to exactly the same bare `posture:"train"` as a day
+// with no evidence whatsoever. The brain could only get quieter.
+//
+// This is that missing half, carried BESIDE the posture: same day, same ladder, with
+// the positive evidence named. `null` is the ordinary train day.
+export interface SignalSupport {
+  level: "backed";
+  // MACHINE-facing evidence prose, on the same terms as every `summary` in this
+  // module. Never rendered to the athlete.
+  summary: string;
+  // The athlete-facing voice of the same evidence, on the same terms as `action.voice`.
+  voice: SignalVoiceRef;
+  // Which observations earned it, so a surface (and the provenance trail) can say
+  // what the day is backed BY rather than just that it is.
+  fields: string[];
+}
+
 export interface SignalObservation {
   dimension: SignalDimension;
   field: string;
@@ -83,6 +107,10 @@ export interface UnifiedSignalState {
     // The athlete-facing voice of the SAME evidence `reason` speaks for — the one
     // thing a surface the athlete reads (the Brief's `why`) may use. Always set.
     voice: SignalVoiceRef;
+    // Present only on a train day the evidence positively BACKS (see SignalSupport).
+    // Downstream this is what licenses a push-flavoured read; `null` everywhere else,
+    // including on every protective posture, so nothing has to negate it.
+    support: SignalSupport | null;
     source_dimensions: SignalDimension[];
     confidence: SignalConfidence;
     directives: {
@@ -289,6 +317,19 @@ export const SIGNAL_VOICE = {
       "Recent work has felt heavier than it should, so back the loading off a little.",
     ],
   },
+  // The POSITIVE counterpart of `low_performance`. Every other rated-session voice in
+  // this registry speaks a brake; nothing spoke the case where the athlete's own
+  // ratings say the current dose is landing well, so a maximally-supported day and an
+  // evidence-less one sounded identical.
+  session_strong: {
+    concept: /\b(?:session|sessions|work)\b/i,
+    variants: [
+      "Your recent sessions have come back strong.",
+      "The last session you rated felt like your usual self or better.",
+      "Recent work has been landing well by your own account.",
+      "You've been rating your sessions well lately.",
+    ],
+  },
   generic_activity_load: {
     concept: /\b(?:already|moved|movement)\b/i,
     sample: "some real movement",
@@ -481,6 +522,18 @@ export const SIGNAL_VOICE = {
       "Nothing in today's signals argues against the plan.",
       "There's room in today's signals for the day you had planned.",
       "Today's signals leave the planned day alone.",
+    ],
+  },
+  // The day the evidence is actively GOOD rather than merely quiet. `unvoiced_clear`
+  // above is the absence of an argument against the plan; this is the presence of an
+  // argument for reaching a little further, and the two must not sound alike.
+  well_backed: {
+    concept: /\b(?:carrying|handling|absorbing|well)\b/i,
+    variants: [
+      "Everything you've logged lately says you're carrying this well.",
+      "What you've put in recently says you're handling the current load.",
+      "Your own recent evidence says you're absorbing this work well.",
+      "By everything you've logged, this block is landing well for you.",
     ],
   },
 } as const satisfies Record<string, SignalVoiceEntry>;
@@ -844,6 +897,42 @@ function actionState(dimensions: Record<SignalDimension, SignalDimensionState>) 
   };
 }
 
+// Evidence that says the athlete is carrying the work WELL, rather than merely that
+// nothing is wrong. Deliberately the ATHLETE's own lane — a session they rated, a
+// check-in they filled in. A wearable reading can corroborate a backed day (it lands
+// in `fields` below like any other support item) but can never earn one on its own,
+// which is what keeps the whole tier neutral to the watch: an absent wearable leaves
+// the day exactly where a present one would, and a junk reading cannot hand out a
+// push it has no standing to give.
+const SUPPORT_EARNED_FIELDS: ReadonlySet<string> = new Set(["session_quality", "felt_energy", "sleep_feel"]);
+
+// Is this a train day the evidence positively BACKS? Three conditions, all of them
+// about what is actually on record:
+//   • the arbitration already landed on a plain train day with evidence behind it
+//     (readiness "ready" — an evidence-less day is "unknown" and stays neutral),
+//   • NOTHING fresh is pulling the other way (no caution, no constraint, anywhere),
+//   • and at least one fresh item from the athlete's own lane says it is going well.
+// Anything short of all three is an ordinary train day, which is the common answer.
+function supportState(
+  action: ReturnType<typeof actionState>,
+  dimensions: Record<SignalDimension, SignalDimensionState>
+): SignalSupport | null {
+  if (action.posture !== "train" || action.readiness !== "ready") return null;
+  const active = Object.values(dimensions).flatMap((dimension) =>
+    dimension.evidence.filter((item) => item.freshness !== "stale")
+  );
+  if (active.some((item) => item.direction === "caution" || item.direction === "constraint")) return null;
+  const support = active.filter((item) => item.direction === "support");
+  if (!support.some((item) => SUPPORT_EARNED_FIELDS.has(item.field))) return null;
+  return {
+    level: "backed",
+    summary:
+      "Recent logged evidence is positively supportive and nothing fresh is pulling the other way, so the day carries room to reach.",
+    voice: { key: "well_backed" },
+    fields: [...new Set(support.map((item) => item.field))],
+  };
+}
+
 export function buildUnifiedSignalState(date: string, observations: SignalObservation[]): UnifiedSignalState {
   const resolved = resolveSignalObservations(date, observations);
   const dimensions = Object.fromEntries(
@@ -890,6 +979,7 @@ export function buildUnifiedSignalState(date: string, observations: SignalObserv
       reason,
       reasons,
       voice,
+      support: supportState(action, dimensions),
       source_dimensions: sourceDimensions,
       confidence: actionConfidence,
       directives,
@@ -1189,6 +1279,23 @@ export function planningSignalState(input: {
         "caution",
         "Recent session feedback shows elevated soreness.",
         { voice: { key: "session_soreness" }, safety_override: true, max_age_days: 7 }
+      )
+    );
+  // The positive counterpart of the two brakes above, and the observation that can
+  // earn the backed support tier on its own (see SUPPORT_EARNED_FIELDS). Dated to the
+  // session it is about for the same reason they are, and windowed the same way, so a
+  // strong week ages out instead of licensing a push indefinitely. Deliberately no
+  // `safety_override`: a positive item must never gain standing to overrule anything.
+  if (input.trainingSignals?.session_quality?.strong_flag)
+    observations.push(
+      observation(
+        "training_load_tolerance",
+        "session_quality",
+        input.trainingSignals.session_quality.strong_date ?? date,
+        "manual_session",
+        "support",
+        "Recent rated sessions came back strong, so the athlete is absorbing the current dose.",
+        { voice: { key: "session_strong" }, max_age_days: 7 }
       )
     );
 

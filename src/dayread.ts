@@ -291,6 +291,49 @@ export function enforceRecoveryWeekCadence(out: any, baseline: any, hasOverride 
   return out;
 }
 
+// ---------- agent prose arrives HTML-escaped ----------
+// Live data carries a stored headline of `Push session &amp; run complete`. An agent
+// emitted an HTML entity (they routinely do — the prose is often assembled by tooling
+// that escapes for a web context), validation had nothing to say about it, and the
+// PWA then escapes for rendering a second time, so the athlete reads the entity
+// itself. Neither layer is wrong on its own; storing text that is already escaped is.
+//
+// So the entities are decoded ON THE WAY IN, at the one boundary where agent prose
+// becomes stored prose, and text that STILL carries an entity after one decode pass
+// is rejected: `&amp;amp;` is not prose that needs decoding twice, it is a payload
+// that has been through an escaper twice, and quietly unwrapping it would leave the
+// same class of bug one level down.
+const HTML_ENTITY = /&(?:amp|lt|gt|quot|apos|nbsp|#0*39);/i;
+
+export function decodeCommonEntities(text: string): string {
+  // ONE pass, and `&amp;` LAST: decoding it first would turn a literal `&amp;lt;`
+  // into `&lt;` and then into `<`, which is the double-decode this guard exists to
+  // refuse rather than perform.
+  return String(text)
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&(?:apos|#0*39);/gi, "'")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&");
+}
+
+// The agent's three prose fields, decoded. Returns the value untouched when there is
+// nothing to decode, so the common path allocates nothing.
+export function decodeDayReadAgentProse<T>(value: T): T {
+  if (!value || typeof value !== "object") return value;
+  const row = value as Record<string, unknown>;
+  let changed = false;
+  const out: Record<string, unknown> = { ...row };
+  for (const field of ["headline", "why", "focus"]) {
+    const raw = row[field];
+    if (typeof raw !== "string" || !HTML_ENTITY.test(raw)) continue;
+    out[field] = decodeCommonEntities(raw);
+    changed = true;
+  }
+  return (changed ? out : value) as T;
+}
+
 export function isValidDayReadAgentResult(
   value: any,
   baseline?: { kind?: unknown; signals?: Record<string, any> }
@@ -306,6 +349,14 @@ export function isValidDayReadAgentResult(
     (value.est_minutes == null || Number.isFinite(Number(value.est_minutes)))
   );
   if (!validShape) return false;
+  // Entities are decoded by decodeDayReadAgentProse before this predicate sees the
+  // value, so anything still matching here survived a decode pass — double-escaped
+  // prose, which is rejected rather than unwrapped (see the note above). The `focus`
+  // field is checked too: it is rendered in the headline.
+  for (const field of ["headline", "why", "focus"] as const) {
+    const raw = (value as Record<string, unknown>)[field];
+    if (typeof raw === "string" && HTML_ENTITY.test(raw)) return false;
+  }
   // The reading grammar (VISION.md Amendment 2) applies to the layer that can actually
   // break it. The deterministic vocabulary has been held to these four rules for a
   // while; the AGENT's sentence — the one the athlete reads on most mornings — was
@@ -359,9 +410,11 @@ export async function computeDayRead(opts: { date?: string; override?: string; a
       op: "day_read",
       mode: "ordinary",
       timeoutMs: repo.interactiveTimeoutForOp("day_read"),
-      acceptParsed: (parsed) => isValidDayReadAgentResult(parsed, baseline),
+      acceptParsed: (parsed) => isValidDayReadAgentResult(decodeDayReadAgentProse(parsed), baseline),
     });
-    const p = result.parsed;
+    // Decoded HERE, once, before both the predicate and the write — so what is
+    // validated is exactly what is stored, and the athlete never reads an entity.
+    const p = decodeDayReadAgentProse(result.parsed);
     if (isValidDayReadAgentResult(p, baseline)) {
       const computedAt = decisionAt();
       const conservative = baseline.kind === "train" && (p.kind === "easy" || p.kind === "rest");
@@ -370,7 +423,11 @@ export async function computeDayRead(opts: { date?: string; override?: string; a
         headline:
           typeof p.headline === "string" && p.headline.trim()
             ? p.headline.trim()
-            : dayReadHeadline({ kind: p.kind, focus: p.focus ?? null }, resolvedDate),
+            : // The baseline's `signals` ride along so a headline written by the FLOOR
+              // for an agent that supplied none still reads as the backed day the floor
+              // resolved (see dayReadHeadline / push_bias). The agent's own kind still
+              // gates it: a read it downgraded to easy takes the plain easy set.
+              dayReadHeadline({ kind: p.kind, focus: p.focus ?? null, signals: baseline.signals }, resolvedDate),
         why: String(p.why).trim(),
         focus: p.focus == null ? null : String(p.focus).trim() || null,
         est_minutes: Number.isFinite(Number(p.est_minutes)) ? Number(p.est_minutes) : baseline.est_minutes,
