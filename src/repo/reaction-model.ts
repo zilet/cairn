@@ -333,6 +333,13 @@ function foodRecovery(): ReactionPattern | null {
     if (!pattern || typeof pattern !== "object") continue;
     const date = String(row.date ?? "").slice(0, 10);
     if (!date) continue;
+    // An uncertain guess is not evidence either way — a low-confidence entry is
+    // skipped entirely rather than folded into the day's flags, so it can neither
+    // manufacture an "exposed" night nor a falsely "clean" comparison night. A date
+    // whose only entries are low-confidence never enters `byDate` at all, which
+    // excludes it from both the exposed and clean classification below.
+    const confidence = String(pattern.confidence ?? "").toLowerCase();
+    if (confidence === "low") continue;
     const current = byDate.get(date) ?? { alcohol: false, lateCaffeine: false };
     current.alcohol ||= Number(pattern.alcohol_servings) > 0;
     const caffeine = Number(pattern.caffeine_mg);

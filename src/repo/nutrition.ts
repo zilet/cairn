@@ -35,6 +35,7 @@ import {
 } from "./shared.js";
 import { afterSqliteCommit, withSqliteSavepoint } from "./sqlite-savepoint.js";
 import { bumpFoodDataVersion } from "./training-cache.js";
+import { nutritionRelevantDirectives } from "./nutrition-progress.js";
 
 // ---------- accepted nutrition targets (adaptive-nutrition loop OUTPUT) ----------
 // Persist an accepted target so the fuel card / goal math / next check-in read the
@@ -470,6 +471,24 @@ function newerNutritionDirectiveThanPlan(plan: any): boolean {
   }
 }
 
+// A stable athlete generates no newer upstream signal for months, so the upstream
+// checks below never fire — a plan can go quietly stale from calendar age alone with
+// nothing to compare it against. 21 days is a full three-week cycle past the weekly
+// cadence this plan was drafted for.
+const MEAL_PLAN_CALENDAR_STALE_DAYS = 21;
+
+// Pure calendar age since the plan's own week (fallback: created_at day), independent
+// of any upstream-source comparison. Null when there is nothing to date it by.
+function mealPlanCalendarAgeDays(plan: any): number | null {
+  const stamped = plan?.week_of
+    ? String(plan.week_of).slice(0, 10)
+    : plan?.created_at
+      ? String(plan.created_at).slice(0, 10)
+      : null;
+  if (!stamped) return null;
+  return daysBetweenISO(localDateISO(), stamped);
+}
+
 // Is a drafted/accepted meal plan outrun by newer upstream data since it was stamped?
 // Compares the plan's stamped source_ts (fallback: its created_at day) against the
 // current max upstream source. Quiet by default: stale:false when there's nothing
@@ -489,7 +508,53 @@ export function mealPlanFreshness(plan: any): { stale: boolean; reason: string |
   // A directive sharing the plan's date but written later (same-day boundary) still
   // makes the plan stale — the day-granular compare above can't see intra-day order.
   if (newerNutritionDirectiveThanPlan(plan)) return { stale: true, reason, source_ts: stamped };
+  // Nothing newer has landed, but the plan itself may simply be old. This never
+  // implies the athlete did anything wrong — it is a calendar fact, not adherence.
+  const ageDays = mealPlanCalendarAgeDays(plan);
+  if (ageDays != null && ageDays > MEAL_PLAN_CALENDAR_STALE_DAYS) {
+    return {
+      stale: true,
+      reason: `This plan was drafted ${ageDays} days ago — worth a fresh look even though nothing newer has landed since.`,
+      source_ts: stamped,
+    };
+  }
   return { stale: false, reason: null, source_ts: stamped };
+}
+
+// Deterministic marker -> nutrient-concern mapping, small and fixed on purpose:
+// only the markers whose canonical nutrition directive (propagation-data.ts's
+// OPTIMAL_ZONES derive table) explicitly names saturated fat or added sugar as
+// the dietary lever. There is no sodium entry: the drafting prompt is deliberately
+// forbidden from inventing precise sodium amounts without a label/source, so a
+// meal plan's own nutrition_pattern never carries a sodium read at all — a
+// sodium-relevant directive (e.g. a blood-pressure DASH directive) has nothing on
+// the plan side to cross-check, so it never produces a warning here. That is
+// honest silence, not a gap.
+const SATURATED_FAT_OR_ADDED_SUGAR_DIRECTIVE_MARKERS = new Set([
+  "ApoB",
+  "LDL-C",
+  "Non-HDL-C",
+  "Total cholesterol",
+  "Triglycerides",
+  "HbA1c",
+]);
+
+// Non-blocking, informational cross-check between an active nutrition-relevant
+// directive and the plan's OWN coarse quality read. Saturated fat and added sugar
+// share one combined band on a meal plan (nutrition_pattern.saturated_fat_added_sugar),
+// so this can't say which of the two is driving the "watch" reading — the warning
+// names both. Never medical advice, never a gate: it flows into validation_warnings
+// alongside the fiber/dietary ones and never affects the `ok` verdict.
+function mealPlanDirectiveWarnings(parsed: any): string[] {
+  const band = String(parsed?.nutrition_pattern?.saturated_fat_added_sugar ?? "").toLowerCase();
+  if (band !== "watch") return [];
+  const flagged = nutritionRelevantDirectives().find((directive: any) =>
+    SATURATED_FAT_OR_ADDED_SUGAR_DIRECTIVE_MARKERS.has(String(directive?.marker ?? ""))
+  );
+  if (!flagged) return [];
+  return [
+    `An active nutrition directive for ${flagged.marker} favors less saturated fat/added sugar, and this plan's own saturated-fat/added-sugar pattern currently reads as a watch item — worth a look, not a rule.`,
+  ];
 }
 
 export type MealPlanPersistenceCheck =
@@ -777,6 +842,7 @@ export function validateMealPlanForPersistence(
         ]
       : []),
     ...dietWarnings,
+    ...mealPlanDirectiveWarnings(floored),
   ];
   const qualityValidated = stampMealPlanConstraintWrite({
     ...floored,

@@ -133,17 +133,48 @@ test("food-quality estimates aggregate only object-shaped sampled entries withou
   assert.equal(estimates.total_entries, 3);
   assert.equal(estimates.sampled_days, 2);
   assert.equal(estimates.total_logged_days, 2);
+  // The second entry is confidence "low", so it moves the band tallies at half
+  // weight (0.5), not the full weight the first (medium-confidence) entry gets.
   assert.equal(estimates.food_quality.mostly_whole, 1);
   assert.equal(estimates.food_quality.mixed, 1);
   assert.equal(estimates.saturated_fat.low, 1);
-  assert.equal(estimates.saturated_fat.moderate, 1);
-  assert.equal(estimates.added_sugar.high, 1);
+  assert.equal(estimates.saturated_fat.moderate, 0.5);
+  assert.equal(estimates.added_sugar.high, 0.5);
   assert.deepEqual(estimates.omega_3_source, { yes: 1, no: 1, unknown: 0 });
   assert.equal(estimates.fat_grams.sampled_entries, 1);
   assert.equal(estimates.fat_grams.average_saturated_fat_g, 4.2);
   assert.equal(estimates.fat_grams.average_unsaturated_fat_g, 11.8);
   assert.match(estimates.note, /2 of 3 recorded entries.*2 of 2 logged days/i);
   assert.match(estimates.note, /not extrapolated/i);
+});
+
+test("low-confidence entries shift a food-quality band tally at half weight, not full weight", () => {
+  food(ago(4), {
+    ...full(700),
+    nutrition_pattern: { sodium: "high", confidence: "high", basis: "label" },
+  });
+  food(ago(3), {
+    ...full(700),
+    nutrition_pattern: { sodium: "high", confidence: "medium", basis: "user_report" },
+  });
+  food(ago(2), {
+    ...full(700),
+    nutrition_pattern: { sodium: "high", confidence: "low", basis: "estimated_from_foods" },
+  });
+  food(ago(1), {
+    ...full(700),
+    nutrition_pattern: { sodium: "high", confidence: "low", basis: "estimated_from_foods" },
+  });
+
+  const estimates = repo.nutritionProgress(14).food_quality_estimates;
+  // Two full-weight (high/medium confidence) entries + two half-weight (low
+  // confidence) entries = 2 + 0.5 + 0.5 = 3, not 4.
+  assert.equal(estimates.sodium.high, 3);
+  // The provenance histograms still count every entry at full weight, unchanged.
+  assert.equal(estimates.confidence.high, 1);
+  assert.equal(estimates.confidence.medium, 1);
+  assert.equal(estimates.confidence.low, 2);
+  assert.equal(estimates.sampled_entries, 4);
 });
 
 test("fat-quality gram averages require both sides and reject splits above the entry total", () => {

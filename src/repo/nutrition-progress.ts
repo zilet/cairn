@@ -137,13 +137,18 @@ function nutritionPatternEstimate(rows: any[], loggedDays: number): NutritionPat
   let fatGramSamples = 0;
 
   for (const { parsed, value } of patterns) {
+    const confidenceValue = String(value.confidence ?? "unknown").toLowerCase() as keyof typeof confidence;
+    // A low-confidence estimate still counts as a data point (the provenance
+    // histograms below count every entry unchanged), but it should sway the
+    // band tallies less than a medium/high one — so it counts at half weight
+    // there. Medium/high/unknown confidence count at full weight.
+    const bandWeight = confidenceValue === "low" ? 0.5 : 1;
     for (const key of Object.keys(bandFields) as Array<keyof typeof bandFields>) {
       const band = String(value[key] ?? "unknown").toLowerCase() as NutritionPatternBand;
-      bandFields[key][patternBands.includes(band) ? band : "unknown"] += 1;
+      bandFields[key][patternBands.includes(band) ? band : "unknown"] += bandWeight;
     }
     const quality = String(value.food_quality ?? "unknown").toLowerCase() as FoodQualityBand;
     foodQuality[qualityBands.includes(quality) ? quality : "unknown"] += 1;
-    const confidenceValue = String(value.confidence ?? "unknown").toLowerCase() as keyof typeof confidence;
     confidence[confidenceBands.includes(confidenceValue) ? confidenceValue : "unknown"] += 1;
     const basisValue = String(value.basis ?? "unknown").toLowerCase() as keyof typeof basis;
     basis[basisBands.includes(basisValue) ? basisValue : "unknown"] += 1;
@@ -326,15 +331,24 @@ function currentReference(targetRow: any): {
   };
 }
 
+// Is an active directive one this athlete's nutrition should account for? A
+// domain:'nutrition' directive always qualifies; a domain:'watch' one qualifies
+// only when it names a nutrition-actionable marker (lipids, glucose, key
+// micronutrients). Exported so callers outside this file (meal-plan validation)
+// identify nutrition-relevant directives the same way, rather than re-deriving
+// the domain/marker check themselves.
+export function nutritionRelevantDirectives(): any[] {
+  return annotateDirectiveFreshness(listActiveDirectives(), localDateISO()).filter((directive: any) => {
+    if (directive?.domain === "nutrition") return true;
+    return (
+      directive?.domain === "watch" &&
+      WATCH_NUTRITION_RE.test(`${directive.marker || ""} ${directive.directive || ""}`)
+    );
+  });
+}
+
 function directiveContext() {
-  const active = annotateDirectiveFreshness(listActiveDirectives(), localDateISO())
-    .filter((directive: any) => {
-      if (directive?.domain === "nutrition") return true;
-      return (
-        directive?.domain === "watch" &&
-        WATCH_NUTRITION_RE.test(`${directive.marker || ""} ${directive.directive || ""}`)
-      );
-    })
+  const active = nutritionRelevantDirectives()
     .sort((a: any, b: any) => {
       const domain = Number(b.domain === "nutrition") - Number(a.domain === "nutrition");
       if (domain) return domain;

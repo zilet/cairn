@@ -4,7 +4,7 @@
 // the swap/recipe prompts so a disliked food never gets reintroduced.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { completeMealWeek, repo, resetTables, localDaysAgo } from "./_seed.js";
+import { completeMealWeek, repo, resetTables, localDaysAgo, db } from "./_seed.js";
 import { buildMealSwapPrompt } from "../dist/prompt.js";
 
 const ABBR = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -59,6 +59,22 @@ test("a plan outrun by newer upstream data reads stale (worth re-drafting)", () 
   // listMealPlans annotates the live plan so the PWA can show the quiet chip.
   const listed = repo.listMealPlans().find((p) => p.id === plan.id);
   assert.equal(listed.stale, true);
+});
+
+test("a calendar-old plan reads stale on age alone, with no newer upstream data required", () => {
+  const plan = seedPlan();
+  // No newer upstream signal at all (no weigh-in, directive, or target) — a young
+  // plan should not read stale on age alone.
+  db.prepare(`UPDATE meal_plans SET week_of = ? WHERE id = ?`).run(localDaysAgo(7), plan.id);
+  const week = repo.getMealPlan(plan.id);
+  assert.equal(repo.mealPlanFreshness(week).stale, false, "a week-old plan is not stale on age alone");
+
+  db.prepare(`UPDATE meal_plans SET week_of = ? WHERE id = ?`).run(localDaysAgo(28), plan.id);
+  const monthOld = repo.getMealPlan(plan.id);
+  const f = repo.mealPlanFreshness(monthOld);
+  assert.equal(f.stale, true, "a plan drafted 28 days ago reads stale on calendar age alone");
+  assert.match(f.reason, /28 days ago/i);
+  assert.doesNotMatch(f.reason, /streak|grade|score|failed|missed/i);
 });
 
 test("food-preference memory reaches the swap prompt (a disliked food is honored)", () => {

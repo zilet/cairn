@@ -335,3 +335,62 @@ test("constraints that cannot be proven from labels remain visible as validation
   const mixed = repo.createMealPlan("stub", "", week());
   assert.match(mixed.parsed.validation_warnings[0], /no cilantro/);
 });
+
+test("an active saturated-fat/added-sugar directive plus a plan reading 'watch' on that band surfaces a non-blocking warning", () => {
+  repo.addDirective({
+    source: "markers",
+    domain: "nutrition",
+    marker: "ApoB",
+    directive: "Lower saturated fat and add soluble fiber to bring ApoB toward optimal.",
+    rationale: "ApoB is worth keeping in view.",
+  });
+  const plan = repo.createMealPlan("stub", "", {
+    ...week(),
+    nutrition_pattern: { saturated_fat_added_sugar: "watch", basis: "planned_food_pattern", confidence: "medium" },
+  });
+  assert.equal(plan.status, "draft"); // persisted — the warning never blocked creation
+  assert.ok(
+    plan.parsed.validation_warnings.some((w) => /ApoB/.test(w) && /saturated fat/i.test(w)),
+    "expected a directive cross-check warning naming the marker"
+  );
+
+  const coach = repo.mealPlanForCoach();
+  assert.ok(coach.validation_warnings.some((w) => /ApoB/.test(w)));
+});
+
+test("no active nutrition-relevant directive means no directive cross-check warning, even when the plan reads 'watch'", () => {
+  const plan = repo.createMealPlan("stub", "", {
+    ...week(),
+    nutrition_pattern: { saturated_fat_added_sugar: "watch", basis: "planned_food_pattern", confidence: "medium" },
+  });
+  assert.ok(!plan.parsed.validation_warnings.some((w) => /saturated fat|added sugar/i.test(w)));
+});
+
+test("a sodium-relevant directive never produces a plan cross-check warning — the plan never estimates sodium", () => {
+  repo.addDirective({
+    source: "markers",
+    domain: "nutrition",
+    marker: "Systolic BP",
+    directive: "Lean toward a DASH-style pattern: more vegetables, fruit and potassium, less sodium and alcohol.",
+    rationale: "DASH and sodium reduction are first-line levers for blood pressure.",
+  });
+  const plan = repo.createMealPlan("stub", "", {
+    ...week(),
+    nutrition_pattern: { saturated_fat_added_sugar: "watch", basis: "planned_food_pattern", confidence: "medium" },
+  });
+  assert.ok(!plan.parsed.validation_warnings.some((w) => /sodium/i.test(w)));
+});
+
+test("a plan reading 'supportive' on saturated fat/added sugar never warns, even with the directive active", () => {
+  repo.addDirective({
+    source: "markers",
+    domain: "nutrition",
+    marker: "HbA1c",
+    directive: "Reduce refined carbs and added sugar to bring HbA1c toward optimal.",
+  });
+  const plan = repo.createMealPlan("stub", "", {
+    ...week(),
+    nutrition_pattern: { saturated_fat_added_sugar: "supportive", basis: "planned_food_pattern", confidence: "medium" },
+  });
+  assert.ok(!plan.parsed.validation_warnings.some((w) => /saturated fat|added sugar/i.test(w)));
+});

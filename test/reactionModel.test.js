@@ -230,6 +230,32 @@ test("repeated explicit late caffeine learns an observational next-sleep pattern
   assert.ok(pattern.domains.includes("lifestyle"));
 });
 
+test("a low-confidence alcohol entry lands in neither the exposed nor the clean comparison", () => {
+  // Real, confidently-logged alcohol days: sleep runs noticeably shorter.
+  for (const day of [20, 19, 18, 17]) {
+    seedFoodPattern(day, { alcohol_servings: 2, confidence: "high" });
+    seedSleep(day - 1, 350);
+  }
+  // Real, confidently-logged clean days: no alcohol/late caffeine.
+  for (const day of [16, 15, 14, 13]) {
+    seedFoodPattern(day, { alcohol_servings: 0, caffeine_mg: 0, confidence: "high" });
+    seedSleep(day - 1, 450);
+  }
+  // A low-confidence guess claiming alcohol, paired with a sleep value that would
+  // swing the average sharply if it were folded into either bucket — it must be
+  // excluded from both, so the result below should be unaffected by it.
+  seedFoodPattern(12, { alcohol_servings: 1, confidence: "low" });
+  seedSleep(11, 200);
+
+  const model = buildReactionModel();
+  const pattern = model.patterns.find((item) => item.id === "food_recovery_alcohol");
+  assert.ok(pattern, "expected an alcohol recovery pattern");
+  assert.equal(pattern.evidence_n, 8, "the low-confidence day must not add to the evidence pool");
+  assert.equal(pattern.params.exposed_n, 4);
+  assert.equal(pattern.params.clean_n, 4);
+  assert.equal(pattern.params.sleep_delta_min, -100);
+});
+
 // ---------------------------------------------------------------------------
 // app_state round-trip
 // ---------------------------------------------------------------------------
