@@ -400,7 +400,7 @@ export async function suggestSession(
   return out;
 }
 
-// Stage 3 — bounded agent composition (docs/ADAPTIVE_DAILY_TRAINING_PLAN.md §5).
+// Stage 3 of the adaptive daily training plan — bounded agent composition.
 // Compose ONE session strictly inside the deterministic Stage 2 decision
 // envelope. The agent proposes; the server VERIFIES: every item is clamped and
 // checked against the envelope's exclusions/caps and the safe novel-exercise

@@ -17,7 +17,7 @@ export {
   type RecentMovementResponseVerdict,
 } from "./training-response.js";
 
-// Stage 4 — outcome reconciliation (docs/ADAPTIVE_DAILY_TRAINING_PLAN.md §6).
+// Stage 4 of the adaptive daily training plan — outcome reconciliation.
 // After a session, deterministically compare what was SUGGESTED/accepted (the
 // active daily-session composition) against what was actually TRAINED (logged
 // sets + skips), and store a durable, idempotent outcome record with confidence

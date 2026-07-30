@@ -29,7 +29,7 @@ import {
 import { listTrainingSymptoms } from "./training-symptoms.js";
 
 // The deterministic daily-decision envelope (Stage 2 of the adaptive daily
-// training plan, docs/ADAPTIVE_DAILY_TRAINING_PLAN.md §4). This is the
+// training plan). This is the
 // explainable, reproducible default the athlete sees BEFORE any agent is
 // involved: a bounded snapshot of the day's signals in, a versioned decision
 // envelope out. The same snapshot always yields the same envelope and

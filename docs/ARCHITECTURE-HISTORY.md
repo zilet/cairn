@@ -4,6 +4,40 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-07-30 — the presentation round: docs hold living references only
+
+Two commits, no migration, no service-worker change — nothing under `public/` moved.
+
+`docs/` now holds only documents that describe how Cairn currently works. Four executed one-round
+build plans and agent-process notes are deleted: `ADAPTIVE_DAILY_TRAINING_PLAN.md` (the four-stage
+daily training plan — all four stages shipped and are described in `ARCHITECTURE.md`),
+`ELITE-BRAIN-PLAN.md` (whose outcome is `ELITE-BRAIN-IMPLEMENTATION.md`),
+`ELITE_COACHING_QUALITY_PLAN.md`, and `CODEX-MULTIAGENT-ORCHESTRATION.md` (how one round's
+multi-agent build was driven, not how the product behaves). Git history keeps all four; none of them
+described running behavior that lives nowhere else. `ELITE-BRAIN-IMPLEMENTATION.md` opened by naming
+the plan it was integrated against and closed by citing the orchestration note for its
+model-selection rules — both lines now stand on their own. Five source comments in `coachOps.ts`,
+`db.ts`, `daily-composition.ts`, `daily-decision.ts` and `daily-reconciliation.ts` cited section
+numbers inside the deleted training plan (`§4`, `§5`, `§6`, `§8`); they name their stage instead.
+
+`README.md` went from 508 lines to 253. It had grown two Docker sections whose `docker run` block
+was byte-identical, a 230-word identity paragraph above the fold, an API count (`211 routes across
+84 groups`) that had drifted from the generated index's 307, and the MCP server — half of what makes
+Cairn interesting to anyone building with agents — buried at line 446. The rebuilt page leads with
+the tagline, hero and five bullets, keeps ONE quickstart, promotes MCP to its own section with live
+generated counts, condenses `WHY-CAIRN.md` into four paragraphs that each name when the alternative
+wins, and moves the no-auth security callout below the install material rather than above the fold.
+The hero deliberately stays a GIF: GitHub strips `<video>` from rendered markdown and serves a repo
+raw `.mp4` as `application/octet-stream`, so the 1 MB `media/cairn-hero.mp4` would download instead
+of playing — only uploaded-attachment URLs render a player.
+
+One fact from the previous round the entry below does not record, from the review commit it folds
+in: `RecentLoad` carried the internal decaying muscle residual, and `coach.ts` spreads that record
+whole into the coach context as `recent_load` — which sits in `TRAINING_FULL`, so every training
+prompt was handed a raw float per muscle group with nothing in the reading grammar to catch it. The
+field is gone; consumers wanting the depth behind the boolean call `acuteGate()` / `muscleResidual()`
+directly, and a test pins that the key never returns.
+
 ## 2026-07-30 — sensor timestamps, muscle time, ledger ownership, and a chat review that resolves
 
 Six commits, migration **v87** (`expectation-overlap-arbitration`, no schema change), sw v537.

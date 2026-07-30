@@ -11,7 +11,7 @@ import { findExercise, recentWorkingSeconds, recentWorkingWeight } from "./exerc
 import { getPlanDay } from "./plan.js";
 import { adaptBasePlanDayForRecovery } from "./recovery-cycles.js";
 
-// Stage 3 — bounded agent composition (docs/ADAPTIVE_DAILY_TRAINING_PLAN.md §5).
+// Stage 3 of the adaptive daily training plan — bounded agent composition.
 // The agent composes INSIDE the deterministic Stage 2 envelope; it never
 // redefines safety. This module is the server-side normalizer + deterministic
 // fallback that make that boundary real: every agent item is re-verified,

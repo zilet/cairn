@@ -100,7 +100,7 @@ CREATE INDEX IF NOT EXISTS idx_daily_session_history
   ON daily_session_compositions(date, version DESC);
 CREATE INDEX IF NOT EXISTS idx_daily_session_fingerprint
   ON daily_session_compositions(date, request_fingerprint, status);
--- Stage 2 decision metadata (docs/ADAPTIVE_DAILY_TRAINING_PLAN.md §4/§8): the
+-- Stage 2 decision metadata for the adaptive daily training plan: the
 -- versioned, reason-coded envelope that explains why a day's session was chosen.
 -- Additive + null-safe; a brand-new table needs no user_version migration. No raw
 -- health payloads are stored here — only render-safe derived decision facts.

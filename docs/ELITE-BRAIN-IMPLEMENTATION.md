@@ -1,6 +1,7 @@
 # Elite Brain implementation handoff
 
-_Integrated 2026-07-09 against `docs/ELITE-BRAIN-PLAN.md`._
+_Integrated 2026-07-09. The originating plan lives in git history; this document is the living
+description of what shipped._
 
 ## Outcome
 
@@ -156,7 +157,7 @@ the same answer.
 - `BRAIN_EVAL_AGENT=codex BRAIN_EVAL_MODEL=gpt-5.4 BRAIN_EVAL_SCENARIOS=maintenance-must-not-drift ...` — pass after the stricter gate: snapshot-only baseline had two missing evidence keys; conference synthesis had zero missing/invented keys, zero unsafe autonomy findings, and one measured improvement.
 - `npm run docs:check` and `git diff --check` — pass.
 
-The configured local Sol model could not be used for the connected gate because the installed Codex CLI reported that it requires a newer CLI. The harness failed closed, then the compatible connected `gpt-5.4` model was pinned for the bounded release check. Model-selection intent and verification rules are documented in `docs/CODEX-MULTIAGENT-ORCHESTRATION.md`.
+The configured local Sol model could not be used for the connected gate because the installed Codex CLI reported that it requires a newer CLI. The harness failed closed, then the compatible connected `gpt-5.4` model was pinned for the bounded release check — a connected gate never silently downgrades to a model it did not ask for.
 
 ## Deployment state
 

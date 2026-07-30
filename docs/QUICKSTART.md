@@ -395,6 +395,13 @@ review posture in Settings if you want every material change held for approval.
 
 Google is transitioning **Gemini CLI → Antigravity CLI**; Cairn uses `agy` for the Google path.
 
+### Keeping the CLIs current
+
+Each installed agent card has its own **Update** action, and a provider you never installed stays
+absent. The shell equivalent names the tools explicitly, and opt-in interval updates
+(`AGENT_CLI_AUTO_UPDATE`) touch only what is already installed — both are in
+[`docs/OPERATIONS.md`](OPERATIONS.md#architecture-of-state).
+
 ---
 
 ## Try the demo persona

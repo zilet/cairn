@@ -1,4 +1,16 @@
-# Cairn
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/zilet/cairn?color=8a7f70" alt="MIT license"></a>
+  <a href="https://github.com/zilet/cairn/releases/latest"><img src="https://img.shields.io/github/v/release/zilet/cairn?color=8a7f70" alt="Latest release"></a>
+  <a href="https://github.com/zilet/cairn/pkgs/container/cairn"><img src="https://img.shields.io/badge/ghcr.io-zilet%2Fcairn-8a7f70?logo=docker&logoColor=white" alt="GHCR image"></a>
+  <a href="https://github.com/zilet/cairn/actions/workflows/ci.yml"><img src="https://github.com/zilet/cairn/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/zilet/cairn/stargazers"><img src="https://img.shields.io/github/stars/zilet/cairn?style=social" alt="Stars"></a>
+</p>
+
+# Cairn — a self-hosted wellness OS
+
+**A self-hosted health coach with a brain, not a dashboard.** Cairn reads your labs, lifting,
+running, food, sleep and life as one picture and suggests the one thing worth doing today. It runs
+on your own hardware, keeps your data in a SQLite file you own, and never scores or nags you.
 
 <p align="center">
   <img src="media/cairn-hero.gif" alt="Cairn — the Brief reads your day, a flagged lab propagates across domains, progress, and coach chat" width="300">
@@ -10,58 +22,25 @@
   <a href="https://codespaces.new/zilet/cairn"><img src="https://github.com/codespaces/badge.svg" height="30" alt="Open in GitHub Codespaces"></a>
 </p>
 
-> **Just want to see it — no install, no terminal?** Click the button above. One click runs a
-> real Cairn (preloaded with fictional demo data) in your browser — nothing to set up, nothing on
-> your machine. Explore the Brief, the plan, and the connected brain, then close the tab. When
-> you're ready to use it for real on your phone, **self-host it** (below) — it's yours, your data
-> stays with you. More one-click cloud options (Daytona, devcontainer hosts) are in [`docs/SANDBOX.md`](docs/SANDBOX.md).
+> **Want to look before you install?** One click runs a real Cairn, preloaded with fictional demo
+> data, in your browser — nothing on your machine. More cloud options: [`docs/SANDBOX.md`](docs/SANDBOX.md).
 
-A self-hosted, connected, **day-reading wellness OS** for **training, nutrition & longevity** with
-an agentic coaching loop and a memory that grows over time. It opens to a calm **Brief** that reads
-your whole picture and *suggests* what kind of day today should be (a suggestion, never a gate),
-propagates flagged lab findings across every domain they touch, runs adaptive nutrition toward your
-actual goal — **losing, holding, or building** — learns who you are and grounds every coaching call
-in it, captures effortlessly (a plate photo, time-of-day frequents, voice, or Apple Health), and
-surfaces quiet cross-domain insights one at a time. It follows your athlete-owned ordered training
-priorities — strength, muscle, endurance, leanness, and longevity in whatever hierarchy fits you —
-instead of assuming every mixed athlete wants equal lifting and endurance. It can periodize a
-conservative ramp + taper toward a dated **race** or hold a no-date **standing** readiness goal;
-current-week run intentions move around completed lifting and endurance work without creating
-catch-up debt.
-Its strength plan **evolves** as you progress (earned overloads, deloads where you've stalled), and
-the whole app runs on your **device's local clock**, so an evening log lands on the right day at home
-*and* while traveling. The product north-star lives in [`docs/VISION.md`](docs/VISION.md). One Node
-service serves:
+## What it is
 
-- **PWA** (`/`) - a phone-first app (with a responsive two-column desktop layout) and six primary
-  spaces: **Today** for the calm day-read Brief, effortless capture, and upcoming-change heads-ups;
-  **Train** for history, strength trends, muscle balance, endurance, bodyweight, and energy balance;
-  **Stand** for the whole-health read, records, markers, connected directives, body measurements,
-  and clinician sharing; **Plan** for Training, Endurance, Food, and Meals — showing the current plan,
-  what is coming next, and what recently changed; **Coach** for durable streaming conversation and
-  direction; and **Settings** for agents, autonomy posture, sources, security, backup, and the profile
-  areas Cairn plans around. Safe logging happens immediately. Plan-shaping work is governed by the
-  server-owned autonomy policy: bounded reversible changes can land at natural boundaries,
-  structural changes announce first, and clinical or goal-identity decisions always ask.
-- **REST API** (`/api/*`).
-- **MCP server** (`/mcp`, Streamable HTTP) - Claude / Codex / Antigravity / Grok read & write
-  everything: plan, logs, profile, goal, activities, memory, meal plans, food notes, health
-  records, and life-context events (trips/injuries).
-- **Agent runner + scheduler** - monitors the whole picture, prepares training and nutrition
-  adaptations, and routes each through the same accountable autonomy policy.
+- **It reads your day.** Cairn opens to a calm **Brief** — rest, easy, or train, in plain language,
+  with the reasoning shown. A suggestion, never a gate. You drive.
+- **It connects your labs to your meals and your training.** A flagged marker propagates into
+  concrete nutrition, training and watch directives, each with its why and a citation.
+- **Adaptive nutrition that never blames you.** Expenditure is derived from your real weight trend;
+  a thin logging week lowers confidence instead of scolding. `change: false` is the common answer.
+- **Lifting and running plans that evolve.** Earned overloads, deloads where you stalled, a
+  conservative ramp and taper toward a race — adapting to the work you actually did.
+- **Agent-native.** A full MCP server ships alongside the PWA, so any MCP client can read and write
+  everything Cairn knows.
 
-Storage is SQLite via Node's built-in `node:sqlite`. **Requires Node 24** (where `node:sqlite`
-is unflagged). The Docker image bundles Node 24, so users do not need Node installed on the host.
-
-> [!IMPORTANT]
-> **Security & where to run it.** Cairn ships with **no authentication by default** — it is a
-> single-user app built for a network you already trust, **not the public internet**. Run it on your
-> own machine, a home server, or a small VM. The simplest setup that is both private and reachable
-> from your phone: put the host on a [Tailscale](https://tailscale.com) (or similar) network and open
-> it by its **MagicDNS** name — no ports forwarded, no certificates to manage. **Never expose port
-> `8787` to the open internet.** If any untrusted device can reach it, set `CAIRN_AUTH_TOKEN` to
-> require a shared token, and serve it over HTTPS (Tailscale Serve / a private reverse proxy) so the
-> PWA can install offline. See [`SECURITY.md`](SECURITY.md) and the deployment shapes below.
+One Node service serves the PWA (`/`), the REST API (`/api/*`), the MCP server (`/mcp`), and a
+background scheduler; storage is SQLite via Node's built-in `node:sqlite`. The north-star is
+[`docs/VISION.md`](docs/VISION.md): calm, suggestion-never-gate, no scores, pull-never-push.
 
 ## Screens
 
@@ -100,8 +79,7 @@ is unflagged). The Docker image bundles Node 24, so users do not need Node insta
 
 ## Quickstart (30 seconds)
 
-**Just want to run it?** You don't need the source. The image is published to GHCR (multi-arch,
-amd64 + arm64) — one command, no clone, no Node:
+You don't need the source. The image is published to GHCR (multi-arch, amd64 + arm64):
 
 ```bash
 docker run -d --name cairn -p 127.0.0.1:8787:8787 \
@@ -110,42 +88,39 @@ docker run -d --name cairn -p 127.0.0.1:8787:8787 \
   --restart unless-stopped ghcr.io/zilet/cairn:latest
 ```
 
-Open **http://localhost:8787** — you land on the Brief immediately. The three named volumes keep your
-data (`cairn-data`), logins (`cairn-home`), and selected tools (`cairn-tools`) across updates; to update, `docker pull
-ghcr.io/zilet/cairn:latest` and re-run the command. Add `-e TZ=Europe/London` for your timezone.
-Only widen the bind to your LAN (for example `-p 8787:8787`) on a private network and with
-`CAIRN_AUTH_TOKEN` set.
-Prefer a compose file (env vars, loopback-safe defaults)?
-`curl -LO https://github.com/zilet/cairn/releases/latest/download/docker-compose.yml && docker compose up -d`.
+Open **http://localhost:8787** — you land on the Brief immediately. Three named volumes keep your
+data (`cairn-data`), your CLI logins (`cairn-home`), and any tools you install (`cairn-tools`)
+across updates, so rebuilds touch none of them. To update: `docker pull ghcr.io/zilet/cairn:latest`
+and re-run. Add `-e TZ=Europe/London` for your timezone.
 
-**Want the source** — to build locally, develop, or run on Node instead of Docker?
+Prefer a compose file, with the env vars and loopback-safe defaults already wired up? Or want the
+source, to build locally and develop?
 
 ```bash
-git clone https://github.com/zilet/cairn.git
-cd cairn
-./quickstart.sh
+curl -LO https://github.com/zilet/cairn/releases/latest/download/docker-compose.yml && docker compose up -d
+git clone https://github.com/zilet/cairn.git && cd cairn && ./quickstart.sh
 ```
 
-The script detects Docker (preferred, no Node needed on the host) or falls back to
-local Node 24, starts Cairn, waits for health, and prints the URL. Open
-**http://localhost:8787** — you land on the Brief immediately.
+`quickstart.sh` detects Docker (preferred, no Node needed on the host) or falls back to local Node
+24, starts Cairn, waits for health, and prints the URL. **Node 24 is required** for a non-Docker
+run — that's where `node:sqlite` is unflagged. The Docker image bundles it.
 
 **First paint is real**, no agent required. For chat, adaptive coaching, and meal plans, add **one**
-agent. The image stays lean and ships no provider CLI by default: open **Settings → Agents**, tap
-**Install** on the provider you use, then **Connect**. A terminal opens in the browser and walks you
-through that provider's sign-in, no `docker exec` needed. An agent you haven't connected is kept out
-of the rotation, and each card shows the CLI's version + current model.
-
-Prefer a terminal? For the default instance it's one `docker exec` (household
-instances use their configured container name):
-
-```bash
-docker exec -u app -it cairn claude auth login   # or: codex login --device-auth · agy · grok login --device-auth
-```
-
-The built-in `stub` agent returns a canned response for offline contract and integration smoke tests
-(it is not a coach). Full detail (Grok API key, local-Node logins):
+agent: open **Settings → Agents**, tap **Install** on the provider you use, then **Connect**. A
+terminal opens in the browser and walks you through that provider's sign-in — no `docker exec`
+needed. An agent you haven't connected stays out of the rotation rather than failing requests. Full
+detail, including terminal logins and the Grok API-key path:
 [Connect your first agent](docs/QUICKSTART.md#connect-your-first-agent).
+
+> [!IMPORTANT]
+> **Security & where to run it.** Cairn ships with **no authentication by default** — it is a
+> single-user app built for a network you already trust, **not the public internet**. Run it on your
+> own machine, a home server, or a small VM. The simplest setup that is both private and reachable
+> from your phone: put the host on a [Tailscale](https://tailscale.com) (or similar) network and open
+> it by its **MagicDNS** name — no ports forwarded, no certificates to manage. **Never expose port
+> `8787` to the open internet.** If any untrusted device can reach it, set `CAIRN_AUTH_TOKEN` to
+> require a shared token, and serve it over HTTPS (Tailscale Serve / a private reverse proxy) so the
+> PWA can install offline. See [`SECURITY.md`](SECURITY.md) and [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
 ### What works out of the box vs. what needs a coaching agent
 
@@ -177,332 +152,110 @@ you connect a real coach.
 | Just run it on your laptop (no clone) | the `docker run … ghcr.io/zilet/cairn:latest` above |
 | Build from source / develop | `./quickstart.sh` |
 | Keep it always-on at home | `./scripts/quickstart-rpi.sh` on a Raspberry Pi or small home box |
+| Put it on your phone as an installable PWA | `./scripts/setup-phone.sh` (Tailscale Serve, tailnet-only) |
 | Give a household member a private profile | Run one isolated released instance per person; see [`docs/HOUSEHOLDS.md`](docs/HOUSEHOLDS.md) |
 | Run it on a cheap VM | Docker + Tailscale; see [`docs/QUICKSTART.md#small-vm-private-online-box`](docs/QUICKSTART.md#small-vm-private-online-box) |
 | Try it on demand in the cloud | [`docs/SANDBOX.md`](docs/SANDBOX.md) for Daytona / Codespaces |
 
-For Raspberry Pi: `./scripts/quickstart-rpi.sh` handles Docker install, arm64 checks, and low-memory
-notes. To put Cairn on your phone, run **`./scripts/setup-phone.sh`** — it detects your exact
-private `https://…ts.net` URL via Tailscale Serve (tailnet-only) and prints the Add-to-Home-Screen
-steps for an installable, offline-capable PWA.
+## MCP server
 
-For a throwaway **cloud sandbox** (Daytona / GitHub Codespaces) with persistent storage —
-spin it up on demand, stop it when idle to cut cost — see [`docs/SANDBOX.md`](docs/SANDBOX.md). A
-`.devcontainer/` is included, so "open in cloud" works out of the box.
+Cairn is agent-native: the same logic the PWA uses is exposed as an MCP server at `/mcp`
+(Streamable HTTP), so a Claude client — or any other MCP client — can read and write everything.
+Point Claude Code at it with one command:
 
-## Quick links
+```bash
+claude mcp add --transport http cairn http://localhost:8787/mcp
+```
+
+**253 MCP tools** span the plan, sessions and exercises, the accountable coaching loop, profile and
+goal, activities and bodyweight, memory, meal plans and recipes, health records and markers, the
+connected-brain directives and insights, recovery, chat, Garmin sync, and settings. A representative
+slice: `get_plan`, `log_set`, `get_day_read`, `suggest_session`, `draft_plan_update`,
+`apply_proposal`, `draft_meal_plan`, `swap_meal`, `get_priority_markers`, `list_directives`,
+`generate_insight`, `log_activity`, `log_food_note`, `set_profile`, `sync_garmin`.
+
+This is where vision and loose natural language belong — snap a plate and say *"this was lunch,
+estimate it"*, or *"log my ride: 2h in the fells, felt strong"*. Packaged Claude Code and Codex
+skills at `.claude/skills/cairn/` and `.agents/skills/cairn/` map everyday phrases to these tools.
+
+The same surface is reachable over REST — **307 routes across 107 groups** under `/api`. Both
+indexes are generated from source and never hand-edited: [`docs/MCP-TOOLS.md`](docs/MCP-TOOLS.md)
+and [`docs/API.md`](docs/API.md).
+
+## Why not just use…
+
+**MacroFactor?** Its adherence-neutral expenditure model is the right way to do adaptive nutrition,
+and Cairn adopts the same philosophy on purpose. The difference is that here nutrition is one domain
+rather than the whole product — a meal target can be shaped by a flagged lab or suppressed during a
+travel week, automatically. *MacroFactor wins* if you want a refined single-purpose nutrition app
+maintained for you and you don't want to host anything.
+
+**Oura / Garmin / Whoop?** Wearables are the best in the world at measurement, and Cairn reads
+*from* them rather than replacing them. What it adds is synthesis instead of a metric wall, and the
+loop your watch leaves open: Garmin records the run you did, Cairn writes the run you should do
+next. *The wearable wins* on precise passive measurement — keep it, and let Cairn read from it.
+
+**ChatGPT and a spreadsheet?** The closest comparison, and genuinely capable. Cairn is what happens
+when you make that loop durable: every coaching call is already grounded in your profile, plan,
+sessions, labs and memory, a flagged lab *propagates* into directives still there next week, and
+nothing changes your plan without propose → review → apply. *ChatGPT wins* for a one-off question
+with zero setup.
+
+**Another self-hosted tracker?** Most are excellent ledgers — they record what you did, well. Cairn
+is trying to be the thing that reads across those records and points at one action. *A focused
+tracker wins* if you want a stable offline log and no agent in the loop at all.
+
+The longer, fully honest version is [`docs/WHY-CAIRN.md`](docs/WHY-CAIRN.md).
+
+## What Cairn is not
+
+- **Not a social app.** No feed, no friends, no leaderboards, no sharing.
+- **Not a multi-user SaaS.** Cairn is single-user by design. No account system, no billing, no team
+  management.
+- **Not medical advice.** Health findings are informational. It is a buddy who reads your numbers,
+  not a doctor — anything clinical defers to a clinician.
+- **Not a wearable.** It has no sensors of its own; it reads from the ones you already have.
+- **Not an engagement machine.** No streaks, points, badges, push nags, or upsell. It has nothing to
+  sell and no one to retain. If it ever feels like it's trying to keep you in the app, that's a bug.
+- **Not zero-setup.** It's self-hosted. That's the price of owning your data and your model.
+
+## Docs
 
 | Doc | What it covers |
 |---|---|
 | [`docs/QUICKSTART.md`](docs/QUICKSTART.md) | 30-second start, Raspberry Pi, VM, Docker, Node, agent setup |
-| [`docs/SANDBOX.md`](docs/SANDBOX.md) | Run on Daytona / Codespaces (on-demand, persistent) |
-| [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Tailscale, HTTPS PWA, Pi/VM, backups |
-| [`docs/HOUSEHOLDS.md`](docs/HOUSEHOLDS.md) | Private profiles for partners/family on one host |
-| [`docs/OPERATIONS.md`](docs/OPERATIONS.md) | Updates, migrations, restore |
-| [`docs/APPLE_HEALTH.md`](docs/APPLE_HEALTH.md) | iOS Shortcut → `/api/health-metrics` (Apple Health / Oura / Whoop) |
+| [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) · [`docs/OPERATIONS.md`](docs/OPERATIONS.md) | Tailscale, HTTPS PWA, updates, migrations, backup/restore |
+| [`docs/HOUSEHOLDS.md`](docs/HOUSEHOLDS.md) · [`docs/SANDBOX.md`](docs/SANDBOX.md) | Private profiles per person; Daytona / Codespaces |
+| [`docs/APPLE_HEALTH.md`](docs/APPLE_HEALTH.md) · [`docs/GARMIN.md`](docs/GARMIN.md) | Bringing sleep, HRV and activities in |
 | [`docs/API.md`](docs/API.md) · [`docs/MCP-TOOLS.md`](docs/MCP-TOOLS.md) | Generated REST + MCP reference (`npm run docs:index`) |
-| [`docs/VISION.md`](docs/VISION.md) | Product constitution |
-| [`docs/WHY-CAIRN.md`](docs/WHY-CAIRN.md) | How Cairn compares (vs MacroFactor, Oura/Garmin, ChatGPT) |
-| [`CHANGELOG.md`](CHANGELOG.md) | Release history |
+| [`docs/VISION.md`](docs/VISION.md) · [`docs/WHY-CAIRN.md`](docs/WHY-CAIRN.md) | The product constitution; how Cairn compares, at length |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · [`CHANGELOG.md`](CHANGELOG.md) | Subsystem depth for contributors; release history |
 
-Coaching needs an agent. For **Claude Code**, **Codex**, and **Antigravity** that means the
-provider's CLI installed and **logged in** for the Cairn process — they use their subscription OAuth login
-directory, not an environment API key (`claude -p` and `codex exec` ignore `ANTHROPIC_API_KEY` /
-`OPENAI_API_KEY` for this flow). Only **Grok headless** reliably uses an API key (`XAI_API_KEY`).
-`GEMINI_API_KEY` is for the optional generated **artwork** only — it is not a coaching path (Cairn
-even strips it from the agent subprocess env). Or use the built-in **`stub`** agent for an offline
-contract smoke test. Without an agent, deterministic reads and logging keep working; generative
-features show a calm fallback instead of persisting empty work.
+Schema migrations run automatically on every boot, so an update is `docker pull` and re-run.
 
-## Run With Docker
+## Why I built this
 
-Cairn is designed to run wherever you already keep personal services: your
-laptop, a small home server, a VM, a Raspberry Pi, or a private Tailscale /
-WireGuard network. The same container can be started only when you need it or
-left running full-time.
+I had the data — years of lifts, a watch on my wrist, bloodwork in a folder — and none of it talked
+to anything else. Every app was excellent at its one column and blind to the other five. I didn't
+want another dashboard to interpret; I wanted something that had already read all of it before I
+opened it, and had one honest thing to say.
 
-**Prebuilt image (no clone).** A multi-arch image (amd64 + arm64) is published to GHCR with every
-tagged release, so you can skip the build entirely. The shortest path is one `docker run` — no source,
-no compose file:
+So the rules came first. No scores, because a number you must decode is the opposite of calm. No
+notifications, because a tool that has to interrupt you hasn't earned being opened. Suggestions
+rather than gates, because it's my body and my day. Self-hosted, because a system that knows this
+much about you should live on hardware you own.
 
-```bash
-docker run -d --name cairn -p 127.0.0.1:8787:8787 \
-  -v cairn-data:/data -v cairn-home:/home/app \
-  -v cairn-tools:/home/app/.cairn-tools \
-  --restart unless-stopped ghcr.io/zilet/cairn:latest
-```
-
-This binds Cairn to loopback. Widen to your LAN (for example `-p 8787:8787`) only on a private
-network and with `CAIRN_AUTH_TOKEN` set.
-
-Or, for a compose file with the env vars and loopback-safe defaults already wired up:
-
-```bash
-mkdir cairn
-cd cairn
-curl -LO https://github.com/zilet/cairn/releases/latest/download/docker-compose.yml
-docker compose up -d
-```
-
-Either way, then open `http://localhost:8787`. Update later with `docker pull
-ghcr.io/zilet/cairn:latest` and re-run.
-
-**Build from source.** Only needed if you want to develop or change the code — it builds the image
-locally instead of pulling it:
-
-```bash
-git clone https://github.com/zilet/cairn.git
-cd cairn
-docker compose up -d --build
-```
-
-The image builds only Cairn and its runtime dependencies. Provider CLIs are optional, one-click
-installs from Settings and never inflate the base image.
-
-See [`docs/SHARING.md`](docs/SHARING.md) for the GHCR publishing flow and the maintainer release
-checklist.
-
-- `cairn-data` = SQLite; `cairn-home` = logins; `cairn-tools` = optional, regenerable binaries. Rebuilds touch none.
-- **No built-in auth by default** — keep Cairn behind localhost, a LAN, Tailscale/VPN, or another
-  trusted private network, and never expose the port to the public internet. If the port is reachable
-  beyond loopback, set **`CAIRN_AUTH_TOKEN`** (env / `.env`) to require a shared token on `/api` and
-  `/mcp`; the PWA prompts for it once and stores it. See [`SECURITY.md`](SECURITY.md).
-- The container runs its main process as a non-root user. To run a one-off command that must persist
-  a login in the home volume, pass `-u app` (see the login commands below).
-- For an installable/offline PWA, serve it over HTTPS on your private network. Plain HTTP works for
-  basic use, but browsers will not register the service worker except on secure origins.
-- See "Coaching agents" below for the one-time login per provider.
-
-### Common Deployment Shapes
-
-- **Occasional local app:** run `docker compose up -d` on your laptop, use
-  `http://localhost:8787`, then stop it when you are done.
-- **Always-on box or VM:** run the release compose on any Docker host. Keep the
-  host private; set `CAIRN_AUTH_TOKEN` if another device can reach the port.
-- **Tailscale / MagicDNS:** run Cairn on a home server, VM, or Pi joined to your
-  tailnet, then open it from your phone or laptop with a tailnet hostname. For
-  installable PWA/offline support, put HTTPS in front of the container with
-  Tailscale Serve, Caddy, nginx, or another private-network reverse proxy.
-- **Public cloud VM:** do not expose `8787` directly to the public internet.
-  Bind it to localhost or a private interface, then reach it through a VPN,
-  tailnet, SSH tunnel, or an authenticated reverse proxy.
-
-## What Cairn tracks
-
-- **Your training direction:** ordered durable priorities and an explicit endurance role tell Cairn
-  what leads, what supports, and what is absent. The older strength/endurance/hybrid discipline
-  remains a compatibility fallback, not proof that mixed goals are co-equal. On top of that durable
-  direction sits an optional **endurance goal**:
-  a dated **race** (Cairn periodizes a conservative ramp and taper toward it) or a no-date
-  **standing** readiness target ("stay 10k-ready" — maintain, don't peak).
-- **Lifting** (precise): the weekly strength plan with per-exercise targets, logged sets, and
-  est-1RM trends.
-  This is the part that gets actively optimized.
-- **Running & endurance:** the coach shapes the week's runs (easy / tempo / intervals / long,
-  each with distance, duration, and target zone) through the same autonomy policy. Run-day anchors
-  are provisional: compatible work closes the intention on the day it happened, and remaining work
-  moves around real lifting/riding/running load without prescribing the same day twice or making up
-  missed volume. A synced Garmin run reconciles against what was prescribed, and next week adapts
-  **conservatively** to the miles actually completed. Weekly mileage, time-in-zone, pace trend, and
-  endurance PRs live in Progress → Endurance; VO2max, resting HR, and HRV join the connected brain
-  as optimal-zone markers.
-- **Profile & goal**: a neutral example profile ships seeded — replace it with your own in the Me
-  tab (or first-run onboarding). Pick a **goal mode** — **lose / maintain / gain** — and the math
-  follows it: maintaining anchors to your real TDEE (no forced deficit), building is a conservative
-  lean surplus, and losing tests feasibility against a lean-safe rate (<=1 %/wk). The **goal check**
-  computes TDEE (Mifflin-St Jeor x activity factor), flags aggressive targets, and recommends a
-  realistic intake/timeline — e.g. a 20 lb-in-10-weeks target (~2 lb/wk) is flagged, with a
-  recommended pace of ~1.35 lb/wk over ~15 weeks at the matching intake and protein floor.
-- **Activities** (plain text): log a run or ride in natural language - "ran 50 min @ 5:30/km" or
-  "MTB through the fells for 2 hours". Cairn parses type / duration / distance / pace **instantly**
-  (offline), then — if enrichment is on — a background agent refines the entry and distills any
-  notable durable fact into memory. The coach factors cardio load into training progression.
-- **Memory**: durable notes (preferences, constraints, insights) that every coach prompt reads, so
-  planning keeps improving as the picture fills in. Notes come from chat, manual entry, or
-  background enrichment of your logs; you can curate them in the **Me → Memory** view (or via the
-  `update_memory` / `delete_memory` MCP tools).
-- **Meal plans**: goal-aware weekly plans that use the lean-safe target and protein floor (never a
-  crash deficit), respect food preferences, and can be prepared ahead without replacing the current
-  week before its natural food-day boundary.
-- **Food notes** (optional, no daily logging): see below.
-- **Health records**: upload bloodwork / DEXA / other docs (PDF or photo) in Me → Health; an agent
-  reads the file in the background, extracts structured markers + a plain-language summary, and
-  distills notable flags into memory. Different labs that name the same analyte differently are
-  merged into one series automatically. Markers feed coaching (e.g. low ferritin → caution on
-  endurance volume) through feedback-aware directives: Done means handled for that result, Dismiss
-  suppresses that advice family until the marker materially changes. From Health → Share, **"Open
-  doctor report"** prints a self-contained clinical report (findings to discuss, panels
-  with optimal targets + full dated history, a "Copy for MyChart" twin). Informational, not medical
-  advice.
-- **Life context**: trips, injuries, and life events (Me → Life) with dates the coach plans
-  **around** — travel-friendly/deload weeks over a trip, de-loading an injured area, easing volume
-  during a rough stretch. Active/upcoming items surface on Today.
-- **Garmin source data** (experimental): sync Garmin Connect activities and daily recovery
-  metrics into normalized source tables. Garmin stays an input signal — manual Cairn lifting logs
-  remain the strength-progression source of truth. See **[`docs/GARMIN.md`](docs/GARMIN.md)** for
-  local connector setup and official Garmin API request wording.
-
-## The chat-driven parts (food photos, free-text)
-
-The headless CLIs you choose to install handle scheduled/triggered **text** optimization. The inputs that
-need vision or loose natural language are best done from a **Claude client** (which has vision +
-memory) talking to Cairn's MCP server:
-
-- Snap a plate -> in Claude: *"this was lunch, estimate it"* -> Claude estimates and calls
-  `log_food_note`. No daily logging; just occasional snapshots that nudge the meal proposals.
-- *"log my ride: 2h in the fells, felt strong"* -> `log_activity`.
-- *"I'm down to 176, push the goal date out two weeks"* -> `set_profile`.
-
-## Coaching agents (one login per provider, then it runs)
-
-There is no single login across providers. Install only the tools you use, then sign in once per
-provider; `cairn-home` keeps logins and `cairn-tools` keeps selected binaries across image updates.
-
-| agent | CLI | subscription | headless | chat streaming | auth dir |
-|---|---|---|---|---|---|
-| `claude` | Claude Code | Anthropic Pro/Max | `claude -p` | ✅ token deltas | `~/.claude` |
-| `codex` | Codex | ChatGPT | `codex exec` | one-shot | `~/.codex` |
-| `antigravity` | Antigravity (`agy`) | Google plan | `agy -p` | one-shot | `~/.gemini` |
-| `grok` | Grok Build | SuperGrok/X Premium+ | `grok -p` | ✅ token deltas | xAI (headless may need `XAI_API_KEY`) |
-| `stub` | built-in | none | - | - | offline test agent |
-
-> **Google coach path:** Google is transitioning **Gemini CLI → Antigravity CLI**; Cairn uses
-> `agy` (auth under `~/.gemini`). Headless streaming is not available yet — chat falls back to
-> one-shot for Codex and Antigravity.
-
-The published image contains a server-owned installer manifest, not the provider binaries. In
-**Settings → Agents**, tap **Install** for one provider, then connect it:
-
-**In the app (no terminal):** **Settings → Agents → Install → Connect** installs the pinned tool into
-`cairn-tools`, then opens a live terminal in the browser and
-runs that CLI's sign-in for you (rendered via a PTY the server spawns as itself, so the token lands
-where it's read — no `-u app` gotcha). The card flips to **✓ Connected**, and an unconnected agent is
-auto-excluded from the rotation rather than failing requests. It also shows the CLI version + current
-model (and, for grok/agy, its model catalog).
-
-**From a terminal:** the container is named `cairn` (whether you used `docker run` or compose):
-```bash
-docker exec -u app -it cairn claude auth login   # Claude Code — sign in (URL + code)
-docker exec -u app -it cairn codex login --device-auth  # Codex — ChatGPT device login
-docker exec -u app -it cairn agy                 # Antigravity (Google), if installed
-docker exec -u app -it cairn grok login --device-auth   # Grok, if installed (or set XAI_API_KEY)
-```
-Grok headless can use an API key instead of the login — pass `-e XAI_API_KEY=…` on `docker run`
-(re-create the container to apply) or set it in `.env` for the compose path. Then enable the agent
-in **Settings → Agents**. Notes: `claude -p` on subscription draws from a separate Agent SDK credit
-pool from 2026-06-15; `agy`/`grok` installs run only after an explicit choice and only when the
-download matches the checksum bundled in `agents.json`.
-
-Cairn does **not** proxy a shared API key or shared subscription. Each user chooses and installs
-their own provider tool and logs in with their own account. `cairn-tools` keeps the regenerable
-binary; `cairn-home` keeps auth state.
-
-### Updating CLI tools
-
-Each installed agent card has its own **Update** action. Missing providers remain absent. The
-installer reads exact npm versions or checksum-pinned vendor URLs from the bundled manifest and
-writes only under the dedicated `cairn-tools` volume. The shell equivalent names tools explicitly:
-
-```bash
-docker exec -u app cairn cairn-update-agent-clis claude codex
-```
-
-Automatic runtime updates are opt-in and update only tools already installed:
-
-```bash
-AGENT_CLI_AUTO_UPDATE=1 AGENT_CLI_AUTO_UPDATE_INTERVAL_HOURS=168 docker compose up -d
-```
-
-Keep this on a trusted local host or tailnet. Updating CLIs runs vendor install scripts inside the
-container; it should not be enabled for an internet-exposed deployment.
-
-### Agent rotation & settings
-Open the **Settings** tab (or `get_settings`/`set_settings` over MCP) to choose how Cairn picks an
-agent when you don't name one: **round-robin** (even rotation across your subscriptions), **random**
-(dice), or **priority** (top of the list first). Toggle individual agents on/off and reorder them —
-disable a provider that isn't logged in and the rest keep working. Any automatic coaching run tries
-the chosen order and **falls through on failure**, so a dead login never blocks the read. In Coach,
-pick **⟳ Auto** to use this rotation, or pick a specific agent.
-
-### Let it run
-In **Settings → Agents → Weekly review cadence**, choose when Cairn should run its weekly
-whole-picture review. The proactive scheduler quietly keeps the picture current: it prepares the
-weekly read and any warranted training, nutrition, meal, or health follow-through, while nightly
-work precomputes the Brief and genuine cross-domain insights. Results wait in the app — Cairn never
-pushes a notification. In Lead mode, bounded reversible updates land at a natural boundary,
-structural updates are announced first, and Hold/Undo remain close at hand. Choose the review
-posture if you want every material change held for approval. (First boot seeds the cadence from
-`COACH_AGENT`/`COACH_DAY`/`COACH_HOUR` in `.env` if set.)
-
-Keep your injury constraints current in the Plan editor so every automatic read sees them. The PWA
-reports the browser/device IANA timezone and Cairn remembers the last valid zone for scheduled work,
-updating it when the device timezone changes. Docker's `TZ` value is only the fallback before a
-device has connected; for example:
-
-```env
-TZ=Europe/London
-```
-
-## Connect MCP to Claude Code
-```bash
-claude mcp add --transport http cairn http://localhost:8787/mcp
-```
-Cairn exposes MCP tools spanning the whole app — plan & sessions, exercises, progress &
-volume, the accountable coaching loop, profile & goal, bodyweight & activities, memory, meal plans &
-recipes, food notes, health records & markers, the connected-brain directives & insights, the
-day-read Brief & on-demand session suggestions, recovery & adaptive nutrition, check-ins & daily
-metrics, family, chat, Garmin sync, life-context events, and settings. A representative slice:
-`get_plan`, `log_set`, `get_day_read`, `suggest_session`, `draft_plan_update`, `apply_proposal`,
-`draft_meal_plan`, `swap_meal`, `get_recovery`, `get_priority_markers`, `list_directives`,
-`generate_insight`, `log_activity`, `log_food_note`, `set_profile`, `sync_garmin`. Use your MCP
-client's tool listing for the full, current set (defined in `src/surfaces/mcp/*`, registered by `src/mcp.ts`).
-
-There are also packaged Claude Code and Codex skills at `.claude/skills/cairn/` and
-`.agents/skills/cairn/` that map everyday phrases ("log my ride", "update my plan",
-"how am I tracking") to these tools.
-
-## Updating & migrations
-
-```bash
-git pull && docker compose up -d --build
-```
-
-Schema migrations run automatically on every boot (`runMigrations()` in `src/migrate.ts`,
-tracked via `PRAGMA user_version`) — no manual step. See [docs/OPERATIONS.md](docs/OPERATIONS.md)
-for the full update/backup/restore/rollback playbook and how to add a new migration.
-
-## API
-
-All app logic is reachable over REST under `/api` — **211 routes across 84 groups**. The full,
-always-current reference is generated straight from the source: [`docs/API.md`](docs/API.md) (run
-`npm run docs:index` to refresh; never edited by hand, so it can't drift). A representative slice:
-
-```
-Brief & today      GET /today-read  GET /today-agenda  POST /session-suggest  GET /learned-timeline
-Training & plan    GET /plan  PUT /plan/:day/target  POST /sets  GET /progress/:exercise
-                   GET /program/balance  GET /program/progression  POST /program/evolve
-Nutrition & meals  GET /nutrition/expenditure  GET /nutrition/day  POST /coach/mealplan
-                   POST /meal-plans/:id/swap  POST /meal-plans/:id/recipe
-Connected brain    GET|POST /health-docs  GET /markers/priority  GET /directives  GET /guidelines
-                   GET /health/focus  GET /health/synthesis  GET /health-report
-Coach & chat       GET /proposals  POST /proposals/:id/apply  POST /chat  GET /chat/turns/:id/stream
-Recovery & life    GET /recovery  GET|POST /checkins  GET|POST /context-events  GET|POST /family
-Ops                GET /settings  GET /export  GET /health
-```
-
-See [`docs/API.md`](docs/API.md) for the authoritative grouped list and
-[`docs/MCP-TOOLS.md`](docs/MCP-TOOLS.md) for the authoritative parallel MCP surface.
-
-## Notes
-- Assisted lifts: negative weight. Bodyweight: null. Est-1RM = Epley on best set/day.
-- Goal math is guidance, not medical advice; it deliberately steers away from crash deficits.
-- No built-in auth by default — keep it on a trusted private network (and `cairn-home` holds live
-  OAuth tokens). Set `CAIRN_AUTH_TOKEN` to gate `/api` and `/mcp` if the port is reachable beyond
-  loopback. See [`SECURITY.md`](SECURITY.md).
+A cairn is a stack of stones on a trail. It doesn't shout, it doesn't follow you, and it doesn't
+tell you where to go — it sits at the junction and marks the path, and you consult it when you get
+there. That's the whole idea.
 
 ## Contributing & license
-Contributions welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md) (Node 24, the thin-adapter rule, the
-migration + service-worker conventions) and [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md). Licensed under [MIT](LICENSE).
 
-## Stack
-Node 24 + TypeScript - Express - node:sqlite - @modelcontextprotocol/sdk - vanilla PWA - Docker.
+Contributions welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md) (Node 24, the thin-adapter rule,
+the migration + service-worker conventions) and [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
+Licensed under [MIT](LICENSE). Built with Node 24 + TypeScript, Express, `node:sqlite`,
+`@modelcontextprotocol/sdk`, a vanilla PWA, and Docker.
+
+<a href="https://star-history.com/#zilet/cairn&Date">
+  <img src="https://api.star-history.com/svg?repos=zilet/cairn&type=Date" alt="Star history" width="600">
+</a>
