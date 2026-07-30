@@ -480,10 +480,13 @@ function holdMarkerPhrase(d: any): string {
 
 const DIRECTIVE_HOLD_FACTOR = 0.9; // a firm endurance-limiting directive caps the weekly build
 // The hard ceiling on ONE week's volume step, whatever the learned personal default says.
-// The standard build is ~10%; a fully earned acceleration may lift that, but never past
-// a single conservative jump — this is the number that keeps "the model learned you can
-// take more" from compounding into a mileage spike the spike guard then has to catch.
-const MAX_WEEKLY_BUILD_FACTOR = 1.15;
+// The standard build is ~10%. Composed, the levers can ask for more than that (a 1.1 base
+// times a 1.05 earned acceleration is +15.5%), and this ceiling deliberately refuses most
+// of it: mileage acceleration is capped TIGHTER than the arithmetic allows, because
+// connective tissue pays for optimism on a slower clock than the aerobic system that
+// earned the acceleration. +12% is still a genuine step above the standard build; it just
+// never compounds into the mileage spike the spike guard would then have to catch.
+const MAX_WEEKLY_BUILD_FACTOR = 1.12;
 
 export function weeklyRunPlan(
   date?: string,

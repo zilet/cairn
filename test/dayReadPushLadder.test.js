@@ -706,10 +706,9 @@ test("migration 85 decodes stored day-read prose and is idempotent", () => {
     1,
     "one migration per integer version"
   );
-  assert.equal(
-    MIGRATIONS.reduce((max, m) => Math.max(max, m.version), 0),
-    85,
-    "85 is the newest rung"
+  assert.ok(
+    MIGRATIONS.reduce((max, m) => Math.max(max, m.version), 0) >= 85,
+    "85 has landed on the ladder"
   );
 
   const rows = [

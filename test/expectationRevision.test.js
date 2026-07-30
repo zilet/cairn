@@ -185,6 +185,57 @@ test("a step back that fails its OWN prediction spawns no revision of a revision
   );
 });
 
+// The same restraint, on the path where the step back went through the REVIEW gate.
+// Applying a held draft records a brand-new decision that the autonomy layer never
+// touched, so the `revises_decision_id` stamp the test above relies on is not the
+// thing keeping the loop closed here — miss that and a later not_aligned on the
+// applied step back reconstructs from ITS snapshot and puts the load straight back up.
+test("a step back applied from review is still a step back — no revision of a revision", () => {
+  const decision = landBenchStep();
+  repo.setSettings({ lead_mode: "review_everything" });
+  const held = queueExpectationRevisions([attachMiss(decision.id)], ASOF);
+  assert.equal(held[0].tier, "ask");
+  assert.equal(repo.getProposal(held[0].proposal_id).status, "draft");
+
+  // The athlete taps apply days later, through the ordinary proposal route.
+  const applied = repo.applyProposal(held[0].proposal_id);
+  assert.equal(applied.ok, true, "the held step back applies like any other draft");
+  assert.equal(targetOf(1, "Barbell Bench Press").target_weight, 115, "it lands the step back");
+
+  const revision = listBrainDecisions({ limit: 100 }).find(
+    (entry) => entry.status === "applied" && entry.source === "revision-step-back"
+  );
+  assert.ok(revision, "the manual apply recorded its own applied decision");
+  assert.equal(revision.context.revises_decision_id, decision.id, "provenance rode in on the proposal payload");
+  db.prepare(`UPDATE brain_decisions SET created_at = '2026-01-02T12:00:00.000Z' WHERE id = ?`).run(revision.id);
+
+  const outcomes = queueExpectationRevisions([attachMiss(revision.id)], "2026-02-01");
+  assert.equal(outcomes.length, 1);
+  assert.equal(outcomes[0].status, "skipped");
+  assert.match(outcomes[0].reason, /itself a step back/);
+  assert.equal(targetOf(1, "Barbell Bench Press").target_weight, 115, "the load is never put back up by a machine");
+});
+
+test("a step back with no provenance stamp is still recognised by what filed it", () => {
+  const decision = landBenchStep();
+  repo.setSettings({ lead_mode: "review_everything" });
+  const held = queueExpectationRevisions([attachMiss(decision.id)], ASOF);
+  repo.applyProposal(held[0].proposal_id);
+  const revision = listBrainDecisions({ limit: 100 }).find(
+    (entry) => entry.status === "applied" && entry.source === "revision-step-back"
+  );
+  // A row written before the payload carried its provenance — the belt that needs no
+  // stamp at all is the proposal agent, copied onto every applied decision.
+  patchBrainDecision(revision.id, { context: { instruction: null } });
+  assert.equal(getBrainDecision(revision.id).context.revises_decision_id, undefined);
+  db.prepare(`UPDATE brain_decisions SET created_at = '2026-01-02T12:00:00.000Z' WHERE id = ?`).run(revision.id);
+
+  const outcomes = queueExpectationRevisions([attachMiss(revision.id)], "2026-02-01");
+  assert.equal(outcomes[0].status, "skipped");
+  assert.match(outcomes[0].reason, /itself a step back/);
+  assert.equal(targetOf(1, "Barbell Bench Press").target_weight, 115);
+});
+
 // ---- the misses that are NOT the change's fault -------------------------------
 
 test("behavioural misses queue nothing — adherence is the athlete's call", () => {

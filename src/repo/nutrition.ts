@@ -156,8 +156,10 @@ function nutritionTrendExpectation(
 // THE HONESTY RULE governs whether the prediction is written at all: a prediction is
 // only made when the evidence that could FALSIFY it is already being logged. Tape is
 // rare — most target changes will correctly write nothing here, and that silence is
-// the feature. Two readings in the trailing window means a third can plausibly land
-// inside the expectation's own window, which is what `minimum_data` then requires.
+// the feature. Two readings in the trailing 60 days is the evidence that tape is
+// flowing at all; the expectation then asks for that same cadence to continue, since
+// `minimum_data` requires TWO readings inside its own 56-day window before the
+// prediction is allowed to mature into a verdict.
 const WAIST_FLOW_WINDOW_DAYS = 60;
 const WAIST_FLOW_MIN_READINGS = 2;
 // Home tape measurement varies by roughly a quarter-inch between honest readings of an

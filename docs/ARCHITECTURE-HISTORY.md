@@ -4,6 +4,93 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-07-30 — the completion round: every declared lever now pulls
+
+Four commits closing out the elite-brain arc below: every target the personal-response model and the
+expectation ledger had declared, and nothing yet read, gets a real consumer.
+
+Weekly running volume could only ever brake. `reaction-model.ts`'s `run_volume_step` now accelerates
+too, to a declared ceiling of 1.05, behind the strictest guard stack in the model: three consecutive
+aligned adherence verdicts (one more than the in-session load step's two, since a week of mileage isn't
+recheckable next session the way a lift is), nothing missed anywhere in the comparable window, no
+training symptom on record, and — the no-whiplash rule — a full clean cycle at the standard build
+before an ease may become an acceleration, so one good week straight after a bad one can't whipsaw the
+athlete from a reduced build into a raised one. `weeklyRunPlan()` (`src/repo/run-progression.ts`) had
+been silently discarding any modifier scale above 1, the same bug the strength consumer once carried;
+it now composes an earned acceleration only on an ordinary build week (never taper, deload,
+recovery-down, a mileage spike, or a scheduled/detraining rebuild) under a hard 1.15 ceiling on the
+week's total factor, so run volume's declared bounds are finally the ones the model can actually reach.
+
+`vo2max_trend` needed a window measured in months — its evaluator refuses a slope off fewer than 4
+readings spanning 21 days — and every decision remade often enough to host a training change was
+remade far too often to carry an eight-week question. `buildAerobicTrendExpectation()`
+(`src/repo/brain/change-expectations.ts`) instead hangs an aerobic-floor expectation ("fitness should
+not drift down," never a promise it goes up) off `createBlock()` (`src/repo/program-blocks.ts`), the
+only training structure in the app with a declared multi-week lifetime and one created rarely enough
+not to remake the question every week. It writes only when the watch is actually reporting VO2max, and
+a re-arm guard (`hasLiveAerobicTrendWindow`, deliberately wider than the confounder check it exists to
+stay clear of) refuses a second window while one is already standing, so two overlapping windows can
+never flag each other as confounders. Recording is fail-soft: the block itself is authoritative, its
+ledger entry best effort.
+
+The personal-response modifier map had been quietly starving whichever target was learned about least
+recently: `whatWorksForYou()` handed out four slots by recency across what are now five declared
+targets, sliced from a prose list that had *already* been cut to four for calm — two stacked
+truncations, so a busy ledger could switch a whole lever off with no evidence anything had been
+dropped. The slot logic is now two-phase — one slot per distinct target claimed before any second
+reading of the same target, then staged nutrition-stage variants backfilled — and the cap is derived
+from the declared target record (`Object.keys(PERSONAL_MODIFIER_TARGETS).length + 3`) rather than a
+literal 4, so a sixth declared target nobody wired a slot for is a build error, not a silently reopened
+bug.
+
+The two targets that fix unblocked now have real consumers. `plan_complexity` — earned from
+repeatedly-missed plan days — rides the daily-decision snapshot (never read live inside the decision
+itself, so `buildDailySessionDecision` stays a pure function of its input and the fingerprint moves
+only when the learning does) into `softenVolume`: below 0.95 the day is offered in the reduced shape
+with a rotating athlete-facing reason, silent on a rest day where volume is already minimal.
+`recovery_adjustment` steers `buildRecoveryMenu()` (`src/repo/recovery-menu.ts`) toward the quieter
+half of the same combo — dropping the option that raises breathing, shortening the rest — but ONLY
+above 1, since this target sizes the recovery response itself rather than a step size and so eases
+*upward*, the opposite direction from every step-size target; read the other way, a scale that ever
+drifted under 1 could never talk the menu into offering more than the standard day.
+
+The nutrition-target change now writes the composition half of its own prediction. A cut whose tape is
+genuinely flowing (two waist readings in the trailing 60 days) claims what a deficit unambiguously
+claims — the waist should not go up — via `bodyMeasurementExpectation()` (`src/repo/nutrition.ts`).
+Gain and maintenance deliberately claim nothing: some waist gain is expected in a lean gain and nothing
+in the evidence knows how much, so predicting a ceiling there would be inventing a number. This is
+cut-only by design, not an oversight.
+
+`checkins.mood` has been written since the first check-in and read by nothing that reasons about it.
+It now enters the signal state as a generic `context_only` observation (`src/repo/signal-state.ts`) —
+carried into coverage, provenance and the evidence trail, excluded from every computation that produces
+a status, confidence, voice or posture. A bare `neutral` direction would not have been safe on its own:
+a neutral observation still makes a dimension's `active` list non-empty, which would have flipped an
+otherwise evidence-free morning from `unknown` readiness to `ready`.
+
+An audit of directive churn found the suspected bug already fixed — the diff-based reconcile has
+churned zero rows since it landed — so the round adds the row-level regression test the old
+count-based assertion could never have caught, and migration **v86**
+(`directive-soft-resolve-compaction`, no schema change) compacts only the historical pile the
+pre-reconcile engine left behind: ~1000 `'markers'`-source rows soft-resolved in 300-a-day bursts for a
+handful of live findings. The compaction is deliberately narrow — machine soft-resolves only
+(`status_at IS NULL`; a user Done/Dismiss is never touched), exact duplicates only (same directive_key,
+text, domain, marker AND trigger snapshot), and nothing a `resurfaced_from_id` audit chain points at —
+and idempotent, keeping the earliest `created_at` in each group.
+
+Last, a failed prediction now queues a real step-back instead of only a note. When a change-EFFECT
+guard (session feedback, joint pain, est-1RM — never an adherence/completion metric, where a miss is
+the athlete's own choice and walking their plan back would be punishment) comes back `not_aligned` on
+an applied training change, `queueExpectationRevisions()`
+(`src/domain/brain/expectation-followup.ts`) reconstructs the prior prescription field-by-field from
+that change's own `brain_rollbacks` before-snapshot — the same compare-and-set Undo uses, so a target
+the athlete has since moved is left alone rather than overwritten — and drafts the reverse as an
+ordinary proposal through `applyProposalWithAutonomy()`. No agent is called; this is server-policy
+actuation, so `decideAutonomyTier` still owns the posture, `lead_mode` still governs, and the step-back
+spends the same surprise budget as anything else. One attempt per failed change, ever, recorded on the
+decision either way; behavioral metrics queue nothing, and a step-back that itself misses spawns
+nothing but the note — a machine revising its own revision is not coaching.
+
 ## 2026-07-30 — the brain learns to push and to check its own changes
 
 Three tracks land beside the wearable-truth round below: a day that has actually earned it can now

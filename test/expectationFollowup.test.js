@@ -17,6 +17,7 @@ import { recordDecision } from "../dist/domain/brain/decision-service.js";
 import { insertBrainEvaluation } from "../dist/repo/brain-evaluations.js";
 import { getAttentionSchedule, listAttentionBySource } from "../dist/repo/attention.js";
 import { teamWeekRead } from "../dist/repo/team-week.js";
+import { violatesReadingGrammar } from "../dist/repo/day-read.js";
 import {
   releaseStaleExpectationFollowups,
   surfaceExpectationMisses,
@@ -372,4 +373,96 @@ test("a note that nobody acted on goes quiet after its standing window", () => {
   assert.equal(releaseStaleExpectationFollowups("2026-02-01"), 0, "still inside its standing window");
   assert.equal(releaseStaleExpectationFollowups("2026-02-10"), 1);
   assert.equal(getAttentionSchedule(`training:change-check:d${recorded.decision.id}`).tier, "released");
+});
+
+// ---- the note has to be true about WHAT missed -------------------------------
+
+// A periodization block describes strength work. Pinning a missed AEROBIC prediction
+// to that sentence — "A 6-week strength block is running. — that change hasn't done
+// what we hoped" — told the athlete something untrue AND read as a typo. An aerobic
+// miss names the aerobic base, in complete sentences of its own.
+function aerobicMissOnStrengthBlock(asOf = "2026-01-16") {
+  const recorded = recordDecision(
+    {
+      effective_date: "2026-01-01",
+      kind: "training_structure",
+      domain: "training",
+      summary: "A 6-week strength block is running.",
+      rationale: "The block opened at the start of the mesocycle.",
+      source: "test",
+      source_ref_type: null,
+      source_ref_key: null,
+      status: "applied",
+      autonomy_tier: "observe",
+      risk_class: "low",
+      reversible: true,
+      input_fingerprint: null,
+      context: {},
+      action: {},
+      specialist: null,
+      applied_at: "2026-01-01T12:00:00.000Z",
+      reverted_at: null,
+      superseded_by: null,
+      evaluator_version: "test-v1",
+    },
+    [
+      {
+        ...conferenceExpectation,
+        metric_key: "vo2max_trend",
+        direction: "at_least",
+        target: { value: 46 },
+        evaluator: "vo2max_trend",
+        evaluator_version: "run-plan-v1",
+      },
+    ]
+  );
+  const evaluation = insertBrainEvaluation({
+    expectation_id: recorded.expectations[0].id,
+    verdict: "not_aligned",
+    actual: { value: 44, readings: 5 },
+    evidence_keys: ["garmin_daily_metrics:2026-01-01..2026-01-15:n=5"],
+    confounders: [],
+    explanation: "The observed result did not land within the expectation.",
+    evaluator_version: "brain-maturity-v1/vo2max_trend",
+  });
+  return surfaceExpectationMisses([evaluation], asOf);
+}
+
+test("an aerobic miss speaks about the aerobic base, not about the strength block", () => {
+  const written = aerobicMissOnStrengthBlock();
+  assert.equal(written.length, 1);
+  const entry = written[0];
+  assert.equal(entry.domain, "running", "an aerobic metric files under running");
+  assert.doesNotMatch(entry.reason, /strength block/i, "the block was never the promise about the aerobic base");
+  assert.match(entry.reason, /aerobic|running base|endurance/i);
+  assert.doesNotMatch(entry.reason, /you must|failed|score|not_aligned|expectation/i);
+});
+
+test("the composed note never doubles its punctuation", () => {
+  // Decision summaries are written as complete sentences, and the composition
+  // supplies its own terminal period.
+  const recorded = appliedTrainingExpectation();
+  const entry = surfaceExpectationMisses([missVerdict(recorded.expectations[0].id)], "2026-01-16")[0];
+  assert.match(entry.reason, /^Bench moves up one small step — /);
+  assert.doesNotMatch(entry.reason, /\.\s*—/, "no orphaned period before the dash");
+  assert.match(entry.reason, /\.$/, "one terminal period");
+});
+
+test("the aerobic phrasing is a rotating variant set that holds the reading grammar", () => {
+  const seen = new Set();
+  for (const asOf of ["2026-01-16", "2026-01-17", "2026-01-18", "2026-01-19", "2026-01-20", "2026-01-21"]) {
+    db.prepare(`DELETE FROM attention_schedule`).run();
+    db.prepare(`DELETE FROM brain_evaluations`).run();
+    db.prepare(`DELETE FROM brain_expectations`).run();
+    db.prepare(`DELETE FROM brain_decisions`).run();
+    const written = aerobicMissOnStrengthBlock(asOf);
+    assert.equal(written.length, 1);
+    seen.add(written[0].reason);
+    assert.equal(
+      violatesReadingGrammar(written[0].reason),
+      null,
+      `"${written[0].reason}" must hold the same grammar every other athlete-facing line does`
+    );
+  }
+  assert.ok(seen.size >= 3, `a variant set, never one literal (saw ${seen.size})`);
 });

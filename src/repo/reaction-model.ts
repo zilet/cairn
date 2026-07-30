@@ -35,6 +35,7 @@ import { weeklyTonnage, weeklyKm } from "./program-state.js";
 // brain-decisions, profile, shared, training-intent, training-read), so nothing
 // imports upward and the name stays a single source of truth.
 import { DAY_READ_ADHERENCE_METRIC } from "./brain/read-adherence.js";
+import { currentTrainingDataVersion, registerTrainingCacheClear } from "./training-cache.js";
 import type {
   CoachOutcomeLearning,
   CoachPersonalModifier,
@@ -1440,7 +1441,66 @@ function dayReadAdherenceLearnings(rows: EvaluatedDecisionRow[]): CoachOutcomeLe
   return out.sort((a, b) => b.last_observed.localeCompare(a.last_observed)).slice(0, 2);
 }
 
+// MEMOIZED (repo/training-cache.ts), same shape as getProgramState's memo. This is
+// a pure function of the decision ledger, and it is now read several times per day
+// read (the progression ladder, the run ladder and the coach context each ask), each
+// call paying for a correlated latest-evaluation subquery over brain_evaluations
+// joined across expectations and decisions, plus the grouping pass over 500 rows.
+//
+// The key is the shared training version PLUS a backstop over this module's OWN
+// inputs, because the training counter alone cannot see them: nothing in
+// brain-decisions.ts bumps it, and an evaluator writing overnight would otherwise
+// serve yesterday's model. The backstop carries
+//   • COUNT + MAX(id) over the three ledger tables the query reads (inserts, deletes);
+//   • two status aggregates over brain_decisions — `applied` and superseded — because
+//     those fields are edited IN PLACE by transitionBrainDecision/patchBrainDecision
+//     and are exactly the fields the grouping filters on;
+//   • the safety read itself. trainingSymptomOnRecord() withholds every acceleration,
+//     and it answers off an in-place `status` edit AND a rolling window over
+//     `sessions.joint_pain` — a note that simply AGES OUT changes the answer with no
+//     write at all, so the flag (and today's date with it) belongs in the key rather
+//     than any count. Two indexed LIMIT-1 reads, next to the 500-row join they guard.
+// The training version stays in the key as the cheap over-invalidation belt: a
+// session-feedback edit or a plan write costs one recompute, never staleness.
+let whatWorksCache: { key: string; value: CoachWhatWorksForYou | null } | null = null;
+registerTrainingCacheClear(() => {
+  whatWorksCache = null;
+});
+
+function personalResponseBackstop(): string {
+  try {
+    const r = db
+      .prepare(
+        `SELECT
+           (SELECT COUNT(*) FROM brain_evaluations) AS ec, (SELECT COALESCE(MAX(id),0) FROM brain_evaluations) AS em,
+           (SELECT COUNT(*) FROM brain_expectations) AS xc, (SELECT COALESCE(MAX(id),0) FROM brain_expectations) AS xm,
+           (SELECT COUNT(*) FROM brain_decisions) AS dc, (SELECT COALESCE(MAX(id),0) FROM brain_decisions) AS dm,
+           (SELECT COUNT(*) FROM brain_decisions WHERE status = 'applied') AS dap,
+           (SELECT COUNT(*) FROM brain_decisions WHERE superseded_by IS NOT NULL) AS dsup`
+      )
+      .get() as any;
+    return [r?.ec, r?.em, r?.xc, r?.xm, r?.dc, r?.dm, r?.dap, r?.dsup].join("|");
+  } catch {
+    // A partial/imported DB without the ledger tables: never cache rather than risk
+    // serving a stale model.
+    return `noledger:${Math.random()}`;
+  }
+}
+
 export function whatWorksForYou(): CoachWhatWorksForYou | null {
+  const today = localDateISO();
+  const key = `${currentTrainingDataVersion()}|${today}|${trainingSymptomOnRecord(today) ? 1 : 0}|${personalResponseBackstop()}`;
+  if (whatWorksCache && whatWorksCache.key === key) {
+    // Cloned on the way out: callers read `modifiers`/`learnings` and the arrays must
+    // not become shared mutable state across reads.
+    return whatWorksCache.value ? structuredClone(whatWorksCache.value) : null;
+  }
+  const value = computeWhatWorksForYou();
+  whatWorksCache = { key, value };
+  return value ? structuredClone(value) : null;
+}
+
+function computeWhatWorksForYou(): CoachWhatWorksForYou | null {
   const allRows = evaluatedDecisionRows();
   const groups = new Map<string, EvaluatedDecisionRow[]>();
   for (const row of allRows) {

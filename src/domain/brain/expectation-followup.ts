@@ -69,8 +69,36 @@ const MISS_VARIANTS = [
   "we expected more from that change than what's turned up so far — worth talking through",
 ] as const;
 
+// An AEROBIC miss gets its own complete sentences rather than the `${summary} — …`
+// composition. The decision's summary describes what the team changed, and that is
+// usually strength work ("A 6-week strength block is running"); pinning a missed
+// aerobic expectation to it tells the athlete something untrue, because the block was
+// never the promise about their aerobic base. Same calm register, same rules: no
+// score, no verdict, no "you must".
+const AEROBIC_MISS_VARIANTS = [
+  "the aerobic base under this block hasn't come along the way we hoped — worth a look when you have a minute",
+  "the running base underneath this training hasn't moved the way we expected; worth revisiting together",
+  "the aerobic side of this stretch hasn't turned up the way we thought it would — it might be worth another look",
+  "we expected more from the endurance base under the current work than what's turned up so far — worth talking through",
+] as const;
+
 const RELEASE_CONDITION =
   "It goes quiet on its own once it has had its say, or as soon as the change behind it is no longer the one in force.";
+
+// The note is composed as `${subject} — ${variant}.`, so a summary that already ends
+// in a period would print "…is running. — that change hasn't…". Decision summaries are
+// written as complete sentences; the composed line supplies its own terminal period.
+// Stripped BEFORE the clip, so a summary long enough to be clipped still keeps the
+// ellipsis clipText added rather than having it read as the sentence's own period.
+function noteSubject(summary: string): string {
+  return clipText(
+    String(summary ?? "")
+      .trim()
+      .replace(/\s*\.+$/, ""),
+    90,
+    { ellipsis: "..." }
+  );
+}
 
 function attentionDomain(domain: string, metricKey: BrainMetricKey): AttentionDomain {
   if (RUNNING_METRICS.has(metricKey)) return "running";
@@ -110,8 +138,16 @@ export function surfaceExpectationMisses(
       // long since released — means this change has already had its note.
       if (handled.has(signalKey) || getAttentionSchedule(signalKey)) continue;
       handled.add(signalKey);
-      const variant = pickDayVariant(MISS_VARIANTS, asOf, `change-check:${decision.id}`);
-      const summary = clipText(decision.summary, 90, { ellipsis: "..." });
+      // An aerobic expectation is never about the change's own words — see
+      // AEROBIC_MISS_VARIANTS. Everything else keeps the decision's summary, which is
+      // the honest subject of its own miss.
+      const aerobic = RUNNING_METRICS.has(expectation.metric_key);
+      const variant = pickDayVariant(
+        aerobic ? AEROBIC_MISS_VARIANTS : MISS_VARIANTS,
+        asOf,
+        `change-check:${decision.id}`
+      );
+      const summary = aerobic ? "" : noteSubject(decision.summary);
       written.push(
         upsertAttentionSchedule({
           signal_key: signalKey,
@@ -217,13 +253,20 @@ const REVISABLE_METRICS = new Set<BrainMetricKey>([
 const STEP_BACK_FIELDS = ["target_weight", "target_seconds", "sets", "rep_low", "rep_high"] as const;
 type StepBackField = (typeof STEP_BACK_FIELDS)[number];
 
+// The proposal agent a step-back is filed under. applyProposal copies it onto the
+// decision's `source`, which is what makes a step-back self-identifying even when
+// no context stamp survived.
+const REVISION_STEP_BACK_AGENT = "revision-step-back";
+
 // Athlete-facing, one variant set rather than one literal — same rule the day read
 // lives by. Calm register: no score, no verdict, no "you must", and none of the
 // engineering vocabulary the reading grammar rejects.
 const STEP_BACK_VARIANTS = [
   "putting {what} back where it was — that last step up hasn't sat well",
   "easing {what} back to the earlier prescription while that last step settles",
-  "{what} goes back to what it was before; the change hasn't shown up in how the work feels",
+  // Every line reads {what} as a NOUN PHRASE only — never as a subject the verb has
+  // to agree with — because describeTargets legitimately returns "3 lifts".
+  "stepping {what} back to where it was; the change hasn't shown up in how the work feels",
   "walking {what} back one step, so we build again from ground that held",
   "returning {what} to the earlier prescription — that step hasn't earned its place yet",
 ] as const;
@@ -445,7 +488,14 @@ export function queueExpectationRevisions(
 
       // A step-back that misses its own prediction surfaces the note and stops.
       // Revising a revision is a machine arguing with itself; a human decides next.
-      if (context.revises_decision_id != null) {
+      //
+      // Two belts, because the provenance stamp is not guaranteed. The context key
+      // rides in on the autonomy path (patched below) and now on every apply path
+      // (the proposal payload carries it). `source` is the belt that needs no
+      // stamping at all: applyProposal copies the proposal's agent onto the decision
+      // on EVERY path, so a step-back held for review and applied by hand days later
+      // is still recognisable as one.
+      if (context.revises_decision_id != null || decision.source === REVISION_STEP_BACK_AGENT) {
         const outcome: RevisionOutcome = { ...base, status: "skipped", reason: "this change was itself a step back; a human takes it from here" };
         markRevisionAttempt(decision, outcome);
         outcomes.push(outcome);
@@ -464,11 +514,16 @@ export function queueExpectationRevisions(
       const variant = pickDayVariant(STEP_BACK_VARIANTS, asOf, `step-back:${decision.id}`);
       const spoken = variant.replace("{what}", what);
       const proposal = createProposal(
-        "revision-step-back",
+        REVISION_STEP_BACK_AGENT,
         `step back after ${expectation.metric_key} missed on change ${decision.id}`,
         "",
         {
           summary: clipText(`${spoken.charAt(0).toUpperCase()}${spoken.slice(1)}.`, 280, { ellipsis: "..." }),
+          // Provenance travels WITH the draft, so it reaches the decision no matter
+          // which path applies it — the autonomy layer below, or the athlete tapping
+          // apply on a proposal that was held for review.
+          revises_decision_id: decision.id,
+          revises_expectation_id: Number(expectation.id),
           // Machine register — it names the failed prediction precisely, which the
           // athlete-facing summary above deliberately never does.
           rationale:

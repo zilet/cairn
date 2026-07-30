@@ -1743,13 +1743,25 @@ export const MIGRATIONS: Migration[] = [
     //
     // DELIBERATELY NARROW — three guards, each load-bearing:
     //
-    //  1. `status_at IS NULL` — a MACHINE soft-resolve. This is the whole safety
-    //     argument: every consumer of a non-active directive filters on
-    //     `status_at IS NOT NULL` (lastDirectiveFeedback and directiveFeedbackForCoach
-    //     in propagation.ts, sinceLast, the reaction model's intervention list), so the
-    //     rows removed here are invisible to all of them. USER feedback — a Done or a
-    //     Dismiss, which suppresses a directive from resurfacing and dates an
-    //     intervention — is never touched, however duplicated it looks.
+    //  1. `status_at IS NULL` — a MACHINE soft-resolve, never a user action. The
+    //     learning consumers filter on `status_at IS NOT NULL` (lastDirectiveFeedback
+    //     and directiveFeedbackForCoach in propagation.ts, sinceLast, the reaction
+    //     model's intervention list), so nothing removed here was ever visible to
+    //     them at all. USER feedback — a Done or a Dismiss, which suppresses a
+    //     directive from resurfacing and dates an intervention — is never touched,
+    //     however duplicated it looks.
+    //     The HISTORY consumers do read these rows — `listDirectives({all:true})`
+    //     feeds the learned timeline (repo/learned-timeline.ts), the health-outcome
+    //     annotations (repo/health-outcomes.ts) and the `?all=1` REST/MCP listing.
+    //     For them the deletion is not merely safe but favourable: guard 2 partitions
+    //     on the full trigger snapshot, so every row it drops is informationally
+    //     identical to the keeper — the timeline showed the same sentence a hundred
+    //     times over, and the annotation pass deduped them again on its own key.
+    //     One nuance: intent_key, rationale, citation and uncertain sit OUTSIDE the
+    //     partition, so a group collapses onto the EARLIEST row's wording of those.
+    //     That is the intended reading of a machine re-derive (the first time the
+    //     brain reached this conclusion), and the directive text itself — the part a
+    //     person reads — is inside the partition and therefore identical either way.
     //  2. EXACT duplicates only: same directive_key, text, domain, marker AND the same
     //     trigger snapshot. Two resolves of the same advice at different marker values
     //     are two different facts and both survive.

@@ -367,7 +367,14 @@ function didGroups(windowStart: string, asOf: string): TeamWeekDomainGroup[] {
   const byDomain = new Map<string, RawChange[]>();
   try {
     const decisions = listBrainDecisions({ limit: 200 }).filter(
-      (d) => d.status === "applied" || d.status === "announced"
+      (d) =>
+        (d.status === "applied" || d.status === "announced") &&
+        // "What the team did this week" must only carry things the team DID. An
+        // observe-tier row is the ledger recording a fact it noticed — a periodization
+        // block that opened on its own, say — and reading that back as team work
+        // claims credit for something nobody decided. The learned timeline still shows
+        // it; that surface is about what is true, not about who acted.
+        d.autonomy_tier !== "observe"
     );
     for (const d of decisions) {
       // Window on when the team acted: an applied change lands at applied_at, an

@@ -456,9 +456,10 @@ test("weeklyRunPlan: an accelerated build stays inside one conservative weekly s
   const accelerated = totalRunKm(
     repo.weeklyRunPlan(REF, { block: { week_index: 1 }, responseModifier: RUN_MODIFIER_ACCELERATE })
   );
-  // The standard build is ~1.1; the ceiling is 1.15, so the most an acceleration can
-  // add is ~4.5% on top of the ordinary week. A little slack absorbs km rounding.
-  assert.ok(accelerated / base <= 1.08, `the ceiling holds (${accelerated} vs ${base})`);
+  // The standard build is ~1.1; the ceiling is 1.12, so the most an acceleration can
+  // add is ~1.8% on top of the ordinary week — mileage is capped tighter than the
+  // composed levers ask for. A little slack absorbs km rounding.
+  assert.ok(accelerated / base <= 1.05, `the ceiling holds (${accelerated} vs ${base})`);
 });
 
 test("weeklyRunPlan: an acceleration never overrides a protective week", () => {

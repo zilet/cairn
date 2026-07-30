@@ -233,6 +233,17 @@ sentence ("… supports the day. But …"): lowercasing the brake clause's first
 turned an acronym or device name into "hRV"/"apple"; it now lowercases only when the opening word owns
 no case of its own.
 
+**Context you can see but cannot act on.** `SignalObservation.context_only`
+(`src/repo/signal-state.ts`) marks evidence that reaches `coverage`/`provenance`/`evidence` — so it is
+visible in the coach context and the provenance trail — but is excluded from every computation that
+produces a status, a confidence, a conflict, a voice or a posture. `bearingEvidence()` is the one
+filter every arbitration site (`dimensionState`, `actionState`, `supportState`) reads instead of the
+raw evidence list, so the carried-vs-decided split can never drift apart across sites. `checkins.mood`
+is the first user of it: written since the first check-in and read by nothing that reasons about it, it
+now enters as a `neutral`-direction, voiceless observation. `neutral` alone would not have been safe —
+a neutral observation still makes a dimension's `active` list non-empty, which would have flipped an
+otherwise evidence-free morning from `unknown` readiness to `ready`.
+
 **Which dimension is actually speaking.** `UnifiedSignalState.action.directives.training_source`
 (`src/repo/signal-state.ts`) names the `SignalDimension` whose status produced `directives.training` —
 `recovery_capacity`, `training_load_tolerance`, `health_constraints` or `energy_fueling` can each
@@ -607,6 +618,15 @@ diff-based per-`directive_key` resolve: an unchanged existing row is kept untouc
 updated in place, a row no longer desired is soft-resolved, and a new one is inserted — zero-churn
 instead of clear-all-then-reinsert. `directivesForCoach()` condenses the active set for the prompt.
 Plus `addDirective`/`getDirective`/`listActiveDirectives`/`listDirectives`/`updateDirective`.
+
+Migration **v86** (`directive-soft-resolve-compaction`, no schema change) is historical cleanup, not
+evidence the engine above still churns — it has churned zero rows since the diff-based reconcile
+landed. Before that reconcile, every propagation pass soft-resolved and rewrote its own output, leaving
+~1000 machine-resolved `'markers'`-source rows behind in 300-a-day bursts for a handful of live
+findings. The migration deletes only exact duplicates (same directive_key/text/domain/marker/trigger
+snapshot) among rows with `status_at IS NULL` — a machine soft-resolve, never a user Done/Dismiss, which
+always stamps `status_at` — and never one a `resurfaced_from_id` audit chain points at; `'health_review'`
+rows are untouched entirely.
 
 Quiet insights: `addInsight`/`getInsight`/`listInsights`/`updateInsight`/`listVisibleInsights`
 (new+seen only) /`recentInsightTexts`/`isDuplicateInsight` — the soft+real dedup guard so the same
@@ -1091,15 +1111,68 @@ revision asserts them; a HELD one parks them on its own decision record instead 
 and `recordAppliedProposalDecision()` (`src/repo/profile.ts`) thaws a parked set with re-based windows
 the moment the proposal is finally applied; an advice-only conference keeps its predictions live
 throughout, since an advisory read is checkable against where the picture actually heads regardless of
-whether any change lands. `src/domain/brain/expectation-followup.ts` turns a genuine `not_aligned`
+whether any change lands.
+
+**A long-horizon prediction belongs on the decision whose own lifetime outlives the window.**
+`vo2max_trend`'s evaluator refuses to read a slope off fewer than 4 readings spanning 21 days, so its
+expectation needs an 8-week window — longer than any decision remade weekly could carry without either
+writing overlapping windows that confound each other into silence, or attributing two months of
+aerobic drift to one week's prescription. `buildAerobicTrendExpectation()`
+(`src/repo/brain/change-expectations.ts`) instead hangs off `createBlock()` (`src/repo/program-blocks.ts`)
+— the only training structure with a declared multi-week lifetime, created rarely (by hand, or once by
+`ensureActiveBlock` when none is running) — and only when the watch is actually reporting VO2max and no
+aerobic window is already standing (`hasLiveAerobicTrendWindow`, deliberately wider than the confounder
+check it exists to stay clear of, so two overlapping windows can never flag each other as confounders).
+Recording is fail-soft: the block row is already committed, so periodization must never fail because
+the ledger write did not land.
+
+`src/domain/brain/expectation-followup.ts` turns a genuine `not_aligned`
 verdict on a change-effect metric into ONE quiet in-app note per DECISION (never per-prediction),
 released after three weeks or the moment the change behind it is no longer in force — nothing
-reverted, nothing pushed. `training_progression_step` is the one metric family allowed to ACCELERATE:
-`reaction-model.ts`'s `modifierFor` steps to its declared ceiling only on a run of ≥2 aligned verdicts,
-zero misses anywhere in the comparable window, and no training symptom on record (`clampedOverload`,
-`src/repo/progression.ts`, now honors a modifier above 1 instead of discarding it); `run_volume_step`
-stays deliberately hold-or-ease, since bone and tendon adapt on a slower clock than an aligned-verdict
-window can see. **Adherence can only take a verdict away, never hand one out**: `mealPlanAdherence()`
+reverted, nothing pushed. `queueExpectationRevisions()` (same file) is the ACTUATION half of that same
+fact: when the miss is specifically on a change-EFFECT guard (`session_performance_feedback`,
+`joint_pain_or_soreness`, `exercise_est_1rm_trend` — never an adherence/completion metric, where a miss
+is the athlete's own choice and walking their plan back would be punishment, not coaching), it
+reconstructs the prior prescription field-by-field from that decision's own `brain_rollbacks`
+before-snapshot — the same compare-and-set Undo uses, so a target the athlete has since moved is left
+alone rather than overwritten — and drafts the reverse as an ordinary proposal through
+`applyProposalWithAutonomy()`. No agent is called (this is server-policy actuation, so there is no
+model discretion to launder), and the step-back gets no special standing: `decideAutonomyTier` still
+picks the posture, `lead_mode` still governs, and it spends the same surprise budget as any other
+change. One attempt per failed change, ever, recorded on the decision either way; a step-back that
+itself misses spawns nothing but the note — a machine revising its own revision is not coaching.
+
+Two metric families are allowed to ACCELERATE, each to its own ceiling and its own bar — an unreachable
+declared ceiling is a promise the model never has to keep. `training_progression_step`
+(`reaction-model.ts`'s `modifierFor`) steps to 1.1 on a run of ≥2 aligned verdicts, zero misses
+anywhere in the comparable window, and no training symptom on record (`clampedOverload`,
+`src/repo/progression.ts`, honors a modifier above 1 instead of discarding it). `run_volume_step` is
+held to a stricter bar and a lower ceiling of 1.05 — bone and tendon adapt on a slower clock than
+cardio fitness, so a week of mileage is not recheckable next session the way a lift is: a run of ≥3
+aligned verdicts, nothing missed anywhere in the comparable window, no training symptom on record, and
+a full clean cycle at the standard build before an ease may become an acceleration (the no-whiplash
+rule — otherwise one good week straight after a bad one would flip the athlete from a reduced build
+into a raised one, which is exactly the pattern that breaks tendons). `weeklyRunPlan()`
+(`src/repo/run-progression.ts`) had been silently discarding any modifier scale above 1, the same bug
+the strength consumer once had; it now composes an earned acceleration only on an ordinary build week
+(never taper, deload, recovery-down, a mileage spike, or a scheduled/detraining rebuild) under a hard
+`MAX_WEEKLY_BUILD_FACTOR` of 1.15 on the week's total factor.
+
+**Every declared modifier target has a consumer, and directions are not uniform.** Each member of
+`CoachPersonalModifierTarget` names its live consumer in that type's own doc comment
+(`src/brain/coach-context-contract.ts`) — a modifier the nightly model computes and nothing reads is a
+learning loop that only looks closed, so the consumer is part of the declaration rather than something
+to go find later. Direction is set by the producer (`modifierFor` in `reaction-model.ts`) and is NOT
+uniform: a step-size target eases below 1 on a disappointing outcome, while `recovery_adjustment` sizes
+the recovery response itself and so rises above 1 on one — `buildRecoveryMenu()`
+(`src/repo/recovery-menu.ts`) reads it in that one direction only, so a scale that ever drifted under 1
+could never talk the menu into offering more than the standard day. The modifier map itself used to
+silently starve whichever target was learned about least recently — four slots handed out by recency
+over what are now five declared targets, sliced from a prose list already cut to four for calm.
+`whatWorksForYou()` now gives each target its own slot before backfilling staged nutrition-stage
+variants, and the cap (`MAX_PERSONAL_MODIFIERS`) is derived from the declared target record, so a sixth
+target nobody wired a slot for is a build error rather than a silently reopened bug. **Adherence can
+only take a verdict away, never hand one out**: `mealPlanAdherence()`
 (`src/repo/nutrition.ts`) confounds the intake→weight evaluator into `inconclusive` on a
 clearly-diverged or unreadable logging window — a followed window adds nothing and simply lets the
 existing comparison run, so adherence can never itself supply a decisive verdict.

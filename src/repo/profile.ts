@@ -1147,6 +1147,19 @@ function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?:
         proposal_as_of_date: p.parsed?.as_of_date ?? proposalEvidence?.as_of_date ?? null,
         proposal_evidence: proposalEvidence as any,
         proposal_freshness: (result?.proposal_freshness ?? null) as any,
+        // A step-back carries the change it reverses in its own payload, so the
+        // provenance survives EVERY apply path — including the one where the draft
+        // waited for review and the athlete applied it days later, long after the
+        // autonomy layer that would otherwise have stamped it had returned.
+        ...(Number.isFinite(Number(p.parsed?.revises_decision_id))
+          ? {
+              revises_decision_id: Number(p.parsed.revises_decision_id),
+              ...(Number.isFinite(Number(p.parsed?.revises_expectation_id))
+                ? { revises_expectation_id: Number(p.parsed.revises_expectation_id) }
+                : {}),
+              revision_step_back: true,
+            }
+          : {}),
         ...(recoveryCycle
           ? {
               recovery_cycle: {

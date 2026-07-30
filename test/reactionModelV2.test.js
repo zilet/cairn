@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { repo } from "./_seed.js";
+import { db, repo } from "./_seed.js";
 import { recordDecision, transitionBrainDecision } from "../dist/repo/brain-decisions.js";
 import { insertBrainEvaluation } from "../dist/repo/brain-evaluations.js";
 import { applyPersonalResponseModifier, whatWorksForYou } from "../dist/repo/reaction-model.js";
+import { bumpTrainingDataVersion } from "../dist/repo/training-cache.js";
 
 function decision(key, overrides = {}) {
   return {
@@ -176,4 +177,52 @@ test("personal modifiers stay bounded and cannot weaken universal safety constra
   for (const hard_constraint of ["injury", "allergy", "clinical"]) {
     assert.equal(applyPersonalResponseModifier({ base: 100, modifier, hard_constraint }), 100);
   }
+});
+
+// ---- the model is memoized on the shared training version + a ledger backstop ----
+// It is read several times per day read (the progression ladder, the run ladder, the
+// coach context), and each compute pays for a correlated latest-evaluation subquery
+// over the whole ledger. These pin BOTH halves of the contract: an unchanged version
+// serves one compute, and a bump recomputes rather than serving a stale model.
+
+test("two reads on the same training version compute the model once", () => {
+  recordOutcome("1", "not_aligned");
+  recordOutcome("2", "not_aligned");
+  const first = whatWorksForYou();
+  assert.equal(first.learnings[0].missed_n, 2);
+
+  // Row-touch evidence: flip a stored verdict UNDERNEATH the memo, touching nothing
+  // the key can see (no insert, no delete, no decision status). A recompute would
+  // read the new verdict; the memo must not.
+  db.prepare(`UPDATE brain_evaluations SET verdict = 'aligned'`).run();
+  assert.equal(whatWorksForYou().learnings[0].missed_n, 2, "the second read was served from the memo");
+
+  // …and the memo hands out a COPY, so one caller's edit cannot reach the next.
+  const copy = whatWorksForYou();
+  copy.modifiers.length = 0;
+  assert.ok(whatWorksForYou().modifiers.length > 0, "callers never share the cached arrays");
+});
+
+test("a bumped training version recomputes the model", () => {
+  recordOutcome("1", "not_aligned");
+  recordOutcome("2", "not_aligned");
+  assert.equal(whatWorksForYou().learnings[0].missed_n, 2);
+
+  db.prepare(`UPDATE brain_evaluations SET verdict = 'aligned'`).run();
+  bumpTrainingDataVersion();
+  const rebuilt = whatWorksForYou();
+  assert.equal(rebuilt.learnings[0].missed_n, 0, "the bump invalidated the memo");
+  assert.equal(rebuilt.learnings[0].aligned_n, 2);
+});
+
+test("a new evaluation invalidates the model without needing a bump", () => {
+  recordOutcome("1", "not_aligned");
+  assert.equal(whatWorksForYou(), null, "one outcome is below the repeat floor");
+
+  // No writer of the ledger bumps the training counter, so the backstop is the only
+  // thing standing between the nightly evaluator and a day of stale coaching.
+  recordOutcome("2", "not_aligned");
+  const learned = whatWorksForYou();
+  assert.ok(learned, "the second outcome is visible to the very next read");
+  assert.equal(learned.learnings[0].evidence_n, 2);
 });

@@ -699,3 +699,40 @@ test("teamWeekRead frames the endurance line as plan compliance when a run plan 
   assert.ok(read.endurance);
   assert.match(read.endurance.text, /of .* km this week/i, "compliance framing (actual of prescribed)");
 });
+
+test('"What we did" excludes observed facts — a block that opened on its own is not team work', () => {
+  // ensureActiveBlock opens a periodization block deterministically and records it at
+  // the observe tier: the ledger noting something is TRUE, not the team deciding it.
+  // Crediting it under "what we did this week" claims work nobody did.
+  recordDecision(
+    decision("blk", {
+      kind: "training_structure",
+      domain: "training",
+      source: "program-blocks",
+      summary: "A 6-week strength block is running.",
+      autonomy_tier: "observe",
+      applied_at: tsDaysAgo(2),
+    }),
+    []
+  );
+  recordDecision(
+    decision("t1", {
+      kind: "training_target",
+      domain: "training",
+      summary: "Add a second pull day.",
+      applied_at: tsDaysAgo(2),
+    }),
+    []
+  );
+
+  const read = repo.teamWeekRead(ASOF, { drainBacklog: false });
+  const lines = (read.did ?? []).flatMap((group) => (group.changes ?? []).map((change) => change.text));
+  assert.ok(
+    lines.some((line) => /second pull day/i.test(line)),
+    "a real decision still reads as team work"
+  );
+  assert.ok(
+    !lines.some((line) => /strength block is running/i.test(line)),
+    "an observed fact is not something the team did"
+  );
+});
