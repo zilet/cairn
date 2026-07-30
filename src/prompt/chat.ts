@@ -394,10 +394,35 @@ const CONSOLIDATION_SCHEMA = `{
 // into a durable PREFERENCE/CONSTRAINT/DECISION/GOAL. It changes nothing on its
 // own — coachOps.consolidateMemory applies the result via the repo functions
 // (which MARK, never hard-delete). Empty arrays are the calm, common answer.
+// A memory carries three stamps — when it was first recorded, when it was last
+// rewritten, and when it was last actually surfaced to the coach — and the librarian
+// used to see none of them. Judging staleness is most of this job ("is this still
+// true?"), and without dates a preference stated once in June read exactly like one
+// confirmed yesterday. Dates only (no clock), and the two later stamps are printed
+// only when they say something the first one doesn't.
+function memoryLedgerLine(m: any): string {
+  const day = (v: unknown): string | null => {
+    const s = String(v ?? "").slice(0, 10);
+    return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+  };
+  const created = day(m.created_at);
+  const updated = day(m.updated_at);
+  const referenced = day(m.last_referenced_at);
+  const facts = [
+    m.kind ?? "observation",
+    // WHO said it — the line between a fact the athlete stated and one Cairn inferred,
+    // which is the line the age rule below turns on.
+    String(m.source ?? "") === "user" ? "user-stated" : `source ${String(m.source || "unknown")}`,
+    ...(Number(m.confidence) > 1 ? [`seen×${Math.round(Number(m.confidence) * 2) / 2}`] : []),
+    ...(created ? [`recorded ${created}`] : []),
+    ...(updated && updated !== created ? [`last updated ${updated}`] : []),
+    ...(referenced ? [`last surfaced ${referenced}`] : ["never surfaced"]),
+  ];
+  return `- [id ${m.id}] (${facts.join(", ")}) ${String(m.content ?? "").slice(0, 240)}`;
+}
+
 export function buildMemoryConsolidationPrompt(): string {
-  const rows = (repo.listMemory(120) as any[]).map(
-    (m) => `- [id ${m.id}] (${m.kind ?? "observation"}${Number(m.confidence) > 1 ? `, seen×${Math.round(Number(m.confidence) * 2) / 2}` : ""}) ${String(m.content ?? "").slice(0, 240)}`
-  ).join("\n");
+  const rows = (repo.listMemory(120) as any[]).map(memoryLedgerLine).join("\n");
   return `${CAIRN_PERSONA}
 
 Right now you are acting as Cairn's coaching-memory librarian. Tidy the user's memory store so it stays a
@@ -416,6 +441,18 @@ WHAT TO DO (each is optional; empty arrays are a perfectly good answer):
   explicit user statement. One occurrence is never enough to promote into a routine or preference.
 - Do NOT merge facts that are merely on the same topic but say different things. Do NOT invent facts.
   Do NOT touch ids you don't see below. Never surface a numeric score.
+
+HOW TO READ THE DATES: each line carries when the fact was recorded, when it was last updated, and
+when it was last surfaced to the coach.
+- AGE ALONE IS NEVER A REASON TO SUPERSEDE ANYTHING. A goal, constraint, preference or decision the
+  user STATED THEMSELVES (marked "user-stated") is theirs until they say otherwise — one they set in
+  March is still true in July, however long ago it was last surfaced. Supersede it ONLY when a LATER
+  fact plainly contradicts it, never because it looks old or has gone quiet.
+- The dates are for judging INFERRED facts — observations Cairn derived rather than the user stated.
+  An old observation that nothing has reinforced since is the one worth folding into a merge, or
+  superseding when a newer observation says otherwise.
+- A recent stamp is likewise not evidence: a fact surfaced yesterday is not more true than one that
+  wasn't.
 
 CURRENT MEMORY (most recent first):
 ${rows || "(empty)"}

@@ -1,6 +1,7 @@
 import { db } from "../db.js";
-import { localDateISO } from "./shared.js";
-import { getSessionByDate, getWeeklyStats, sessionSummary } from "./sessions.js";
+import { POST_INTERVENTION_MIN_SPAN_DAYS, postInterventionWeightTrend } from "./goal-pace.js";
+import { addDaysISO, localDateISO } from "./shared.js";
+import { getSessionByDate, sessionSummary } from "./sessions.js";
 
 export type KnownMemoryKind =
   | "note"
@@ -224,6 +225,14 @@ function touchMemoryReferenced(ids: number[]) {
 // milestone/goal) — the durable person-model — PLUS the most recent observations,
 // excludes superseded rows, and is bounded. Surfacing a memory stamps its
 // last_referenced_at so the consolidation pass can tell live facts from stale ones.
+//
+// RECENCY IS THE TIEBREAK, NEVER THE RANK. Confidence stays primary — a fact the
+// athlete has restated is load-bearing however long ago they first said it — but
+// among equally-confident rows the one that has been LIVE most recently wins, and
+// "live" means COALESCE(last_referenced_at, updated_at, created_at): a stamp this
+// column has carried since v-whenever and that, until now, nothing ever read.
+// Ordering by updated_at alone made a preference stated once in June rank exactly
+// like one confirmed yesterday.
 export function memoryForCoach(limit = 40): MemoryRow[] {
   const loadBearing = db
     .prepare(
@@ -231,7 +240,9 @@ export function memoryForCoach(limit = 40): MemoryRow[] {
      WHERE superseded_by IS NULL
        AND COALESCE(source, '') <> 'reaction-model'
        AND kind IN ('constraint','injury','preference','decision','milestone','goal')
-     ORDER BY COALESCE(confidence,1) DESC, COALESCE(updated_at, created_at) DESC, id DESC
+     ORDER BY COALESCE(confidence,1) DESC,
+              COALESCE(last_referenced_at, updated_at, created_at) DESC,
+              id DESC
      LIMIT ?`
     )
     .all(Math.max(8, Math.floor(limit * 0.7))) as unknown as MemoryRow[];
@@ -401,47 +412,94 @@ export function getOutcomeLearnings(limit = 12): { learnings: OutcomeLearning[] 
   return { learnings };
 }
 
+// Write a durable learning, retiring any live learning it CONTRADICTS. The two
+// minutes-drift lessons are the case that needs this: they are opposite readings of
+// one tendency, so leaving yesterday's "running shorter" live beside today's
+// "running longer" would show the coach both at once. Ordering matters — the new row
+// is written first so the retired one can point AT it (supersession marks, never
+// deletes), and the two texts are deliberately worded far enough apart that
+// addMemory's near-dup fold cannot merge them into one drifting sentence.
+function writeLearning(lesson: string, retire: readonly string[] = []): void {
+  const added = addMemory(lesson, "learning", "outcome-learning");
+  if (!added?.id || !retire.length) return;
+  for (const stale of retire) {
+    const rows = db
+      .prepare(
+        `SELECT id FROM memory
+          WHERE kind = 'learning' AND superseded_by IS NULL AND content = ? COLLATE NOCASE AND id <> ?`
+      )
+      .all(stale, added.id) as Array<{ id: number }>;
+    for (const row of rows) supersedeMemory(row.id, { replacementId: added.id });
+  }
+}
+
 // Reconcile suggestions whose date has passed and that aren't reconciled yet:
 // compare suggestion → actual and, where there's a genuine, plain-language lesson,
 // write ONE durable 'learning' memory. Deterministic & calm — no agent needed, no
 // numeric scores surfaced, never a gate. Bounded per pass.
-export function reconcileSuggestions(opts: { maxPerPass?: number } = {}): { reconciled: number; learnings: number } {
+//
+// A row can also DEFER: a nutrition check-in judged the day after it was made has no
+// post-intervention evidence yet, and guessing off the pre-intervention trend is
+// exactly the bug this loop used to have. A deferred row records its partial outcome
+// and keeps `reconciled_at` NULL so a later nightly pass concludes it. That is
+// idempotent (the partial outcome is rewritten, never appended) and terminating —
+// reconcileOneSuggestion closes a check-in at its deadline whatever the evidence, so
+// nothing requeues forever. Deferral is SILENT: no lesson, no error.
+export function reconcileSuggestions(opts: { maxPerPass?: number } = {}): {
+  reconciled: number;
+  learnings: number;
+  deferred: number;
+} {
   const today = localDateISO();
   const max = Math.max(1, Math.min(40, opts.maxPerPass ?? 20));
   // Only reconcile suggestions whose target date is strictly in the past (so the
-  // day's logging is settled) — never today's open suggestion.
+  // day's logging is settled) — never today's open suggestion. A nutrition check-in
+  // additionally waits out its minimum post-intervention span before it is even
+  // SELECTED, so the common case never occupies a pass's budget just to defer.
+  const checkinEligibleThrough = addDaysISO(today, -POST_INTERVENTION_MIN_SPAN_DAYS) ?? today;
   const rows = (
     db
       .prepare(
     `SELECT * FROM suggestions
      WHERE reconciled_at IS NULL AND date IS NOT NULL AND date < ?
+       AND (kind <> 'nutrition_checkin' OR date <= ?)
      ORDER BY id ASC LIMIT ?`
       )
-      .all(today, max) as any[]
+      .all(today, checkinEligibleThrough, max) as any[]
   ).map(hydrateSuggestion);
   let learnings = 0;
+  let deferred = 0;
+  let reconciled = 0;
   for (const s of rows) {
     let outcome: any = null;
     let lesson: string | null = null;
+    let retire: readonly string[] = [];
+    let defer = false;
     try {
-      const r = reconcileOneSuggestion(s);
+      const r = reconcileOneSuggestion(s, today);
       outcome = r.outcome;
       lesson = r.lesson;
+      retire = r.retire ?? [];
+      defer = !!r.defer;
     } catch {
       outcome = { error: true };
     }
     if (lesson) {
       // A learning is durable & curatable like any memory (it can be edited or
       // superseded by a later, contradicting learning).
-      addMemory(lesson, "learning", "outcome-learning");
+      writeLearning(lesson, retire);
       learnings++;
     }
-    db.prepare(`UPDATE suggestions SET outcome_json = ?, reconciled_at = datetime('now') WHERE id = ?`).run(
-      outcome != null ? JSON.stringify(outcome).slice(0, 8000) : null,
-      s.id
-    );
+    const blob = outcome != null ? JSON.stringify(outcome).slice(0, 8000) : null;
+    if (defer) {
+      db.prepare(`UPDATE suggestions SET outcome_json = ? WHERE id = ?`).run(blob, s.id);
+      deferred++;
+      continue;
+    }
+    db.prepare(`UPDATE suggestions SET outcome_json = ?, reconciled_at = datetime('now') WHERE id = ?`).run(blob, s.id);
+    reconciled++;
   }
-  return { reconciled: rows.length, learnings };
+  return { reconciled, learnings, deferred };
 }
 
 const OUTCOME_LESSONS = {
@@ -451,12 +509,108 @@ const OUTCOME_LESSONS = {
     "Rest-day reads can be conservative for you: training through one went fine, so the coach can tolerate slightly higher frequency before calling rest.",
   deficitTrendUp:
     "Deficit check-ins may be underestimating intake or expenditure when bodyweight trends up; lean toward the higher TDEE next time.",
+  // The two minutes-drift readings. They are OPPOSITES, so each retires the other
+  // (see writeLearning) — and they are worded far enough apart that addMemory's
+  // 0.6-Jaccard near-dup fold cannot silently merge them, which would have left one
+  // row whose text said "shorter" while the evidence said "longer".
+  sessionsRunShort:
+    "Sessions have been finishing well under the suggested time lately; the coach can size suggestions down.",
+  sessionsRunLong: "Sessions keep running past the suggested time lately; the coach can budget more minutes up front.",
 };
+
+// ---- session_suggest: reading the minutes drift ----
+// One session that overran is a busy Tuesday. The lesson needs a PATTERN, so it takes
+// at least three reconciled outcomes drifting the SAME way; a window with drift in
+// both directions says nothing and stays silent. The margin is deliberately coarse —
+// ±30% of the suggested minutes — because est_minutes is itself an estimate and a
+// 50-vs-55-minute day is agreement, not drift.
+const MINUTES_DRIFT_MIN_OUTCOMES = 3;
+const MINUTES_DRIFT_SHORT_RATIO = 0.7;
+const MINUTES_DRIFT_LONG_RATIO = 1.3;
+// Recent means recent: an eight-week-old tendency should not still be shaping today's
+// suggestion, and the sample cap keeps the read on the current stretch.
+const MINUTES_DRIFT_LOOKBACK_DAYS = 45;
+const MINUTES_DRIFT_SAMPLE = 12;
+
+interface MinutesOutcome {
+  suggested_minutes?: unknown;
+  actual_minutes?: unknown;
+  trained?: unknown;
+}
+
+// A comparable day: the athlete actually trained AND both minute figures exist. A
+// day they skipped is not a shorter session, and a session logged without a duration
+// is presence without measurement — never evidence of a shortfall.
+function minutesRatio(outcome: MinutesOutcome | null): number | null {
+  if (!outcome || !outcome.trained) return null;
+  const suggested = Number(outcome.suggested_minutes);
+  const actual = Number(outcome.actual_minutes);
+  if (!Number.isFinite(suggested) || suggested <= 0) return null;
+  if (!Number.isFinite(actual) || actual <= 0) return null;
+  return actual / suggested;
+}
+
+// The durable lesson (and the contradicting one it retires), or null — the calm,
+// common answer. `pending` is the outcome just computed for the row being reconciled,
+// which has not been stored yet, so it must be counted here explicitly.
+function sessionMinutesDriftLesson(
+  pending: MinutesOutcome,
+  today: string
+): { lesson: string; retire: readonly string[] } | null {
+  const since = addDaysISO(today, -MINUTES_DRIFT_LOOKBACK_DAYS) ?? today;
+  let prior: any[] = [];
+  try {
+    prior = db
+      .prepare(
+        `SELECT outcome_json FROM suggestions
+          WHERE kind = 'session_suggest' AND reconciled_at IS NOT NULL
+            AND outcome_json IS NOT NULL AND date IS NOT NULL AND date >= ?
+          ORDER BY date DESC, id DESC LIMIT ?`
+      )
+      .all(since, MINUTES_DRIFT_SAMPLE) as any[];
+  } catch {
+    return null;
+  }
+  const ratios: number[] = [];
+  const pendingRatio = minutesRatio(pending);
+  if (pendingRatio != null) ratios.push(pendingRatio);
+  for (const row of prior) {
+    let parsed: MinutesOutcome | null = null;
+    try {
+      parsed = row.outcome_json ? JSON.parse(String(row.outcome_json)) : null;
+    } catch {
+      parsed = null;
+    }
+    const ratio = minutesRatio(parsed);
+    if (ratio != null) ratios.push(ratio);
+  }
+  const short = ratios.filter((r) => r < MINUTES_DRIFT_SHORT_RATIO).length;
+  const long = ratios.filter((r) => r > MINUTES_DRIFT_LONG_RATIO).length;
+  if (short >= MINUTES_DRIFT_MIN_OUTCOMES && long === 0) {
+    return { lesson: OUTCOME_LESSONS.sessionsRunShort, retire: [OUTCOME_LESSONS.sessionsRunLong] };
+  }
+  if (long >= MINUTES_DRIFT_MIN_OUTCOMES && short === 0) {
+    return { lesson: OUTCOME_LESSONS.sessionsRunLong, retire: [OUTCOME_LESSONS.sessionsRunShort] };
+  }
+  return null;
+}
+
+// How long a nutrition check-in may wait for its own evidence before the ledger
+// closes it out regardless. Four weeks is generous next to the 7-day minimum span,
+// and it is what makes deferral terminate: a check-in made by someone who then
+// stopped weighing in reconciles at the deadline with `evidence:"insufficient"` and
+// no lesson, rather than sitting unreconciled forever.
+const NUTRITION_CHECKIN_MAX_DEFER_DAYS = 28;
 
 // Compare ONE suggestion to what actually happened. Returns the recorded outcome
 // blob plus an optional one-line lesson (null = nothing worth remembering — the
-// calm, common answer). All comparisons are best-effort and null-safe.
-function reconcileOneSuggestion(s: any): { outcome: any; lesson: string | null } {
+// calm, common answer), the contradicting lessons that lesson retires, and whether
+// the row should DEFER instead of closing. All comparisons are best-effort and
+// null-safe.
+function reconcileOneSuggestion(
+  s: any,
+  today = localDateISO()
+): { outcome: any; lesson: string | null; retire?: readonly string[]; defer?: boolean } {
   const date = String(s.date);
   const p = s.payload || {};
   if (s.kind === "day_read") {
@@ -493,23 +647,38 @@ function reconcileOneSuggestion(s: any): { outcome: any; lesson: string | null }
       sets: summary?.sets ?? 0,
       actual_minutes: sess?.duration_min ?? null,
     };
-    // Reserved for a future minutes-drift lesson; calm by default.
-    return { outcome, lesson: null };
+    // The drift read spans this outcome plus the recent reconciled ones, so it can
+    // only speak once a run of days points the same way (see sessionMinutesDriftLesson).
+    const drift = sessionMinutesDriftLesson(outcome, today);
+    return drift ? { outcome, lesson: drift.lesson, retire: drift.retire } : { outcome, lesson: null };
   }
   if (s.kind === "nutrition_checkin") {
-    // Did the bodyweight trend move the way the check-in expected? Reuse the
-    // existing weekly trend slope rather than recomputing.
-    const stats = getWeeklyStats() as any;
-    const trend = Number(stats?.trend_lb_wk);
+    // Did the bodyweight trend move the way the check-in expected? The ONLY evidence
+    // that can answer that is what the scale did on or after the check-in date. The
+    // trailing-window slope this used to read (getWeeklyStats' trend_lb_wk, ≤21 days
+    // ending today) is almost entirely PRE-intervention at reconciliation time, so it
+    // was scoring the check-in against the trend it was made to change.
+    const trend = postInterventionWeightTrend(date, today);
     const expected = String(
       p.direction ?? (Number(p.target_kcal) && p.tdee && Number(p.target_kcal) < Number(p.tdee) ? "down" : "")
     );
-    const outcome = {
+    const outcome: Record<string, unknown> = {
       proposed_target_kcal: p.target_kcal ?? null,
       expected_direction: expected || null,
-      trend_lb_wk: Number.isFinite(trend) ? trend : null,
+      post_intervention_trend_lb_wk: trend.lb_wk,
+      post_intervention_weigh_ins: trend.weigh_ins,
+      post_intervention_span_days: trend.span_days,
+      evidence_window: trend.first_date && trend.last_date ? `${trend.first_date}..${trend.last_date}` : null,
     };
-    if (expected === "down" && Number.isFinite(trend) && trend > 0.2) {
+    if (!trend.sufficient) {
+      // Not enough post-intervention weigh-ins yet. Wait — quietly — unless the
+      // deadline has passed, in which case close the row honestly with no lesson.
+      const deadlinePassed = date <= (addDaysISO(today, -NUTRITION_CHECKIN_MAX_DEFER_DAYS) ?? today);
+      outcome.evidence = deadlinePassed ? "insufficient" : "pending";
+      return { outcome, lesson: null, defer: !deadlinePassed };
+    }
+    outcome.evidence = "sufficient";
+    if (expected === "down" && trend.lb_wk != null && trend.lb_wk > 0.2) {
       return { outcome, lesson: OUTCOME_LESSONS.deficitTrendUp };
     }
     return { outcome, lesson: null };

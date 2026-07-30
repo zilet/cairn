@@ -62,16 +62,14 @@ function clampWeight(lb: number): number {
   return round2(Math.max(1, lb));
 }
 
-// Unweighted least-squares over the trailing ≤21-day slice of the series. Returns
-// the raw per-day slope + intercept (for projecting endpoints) or null under the
-// established rules: fewer than 2 points, or a first→last span under 3 days.
-function fitTrend(points: GoalPacePoint[], today: string): { slopePerDay: number; intercept: number; firstDate: string } | null {
-  const since = addDaysISO(today, -TREND_WINDOW_DAYS);
-  const recent = since ? points.filter((p) => p.date >= since) : points;
-  if (recent.length < 2) return null;
-  const xs = recent.map((p) => dayNumber(p.date));
-  const ys = recent.map((p) => p.weight_lb);
-  if (xs[xs.length - 1] - xs[0] < 3) return null;
+// Unweighted least squares over an already-selected set of weigh-ins. Returns the
+// raw per-day slope + intercept (for projecting endpoints), or null when the x's
+// carry no spread at all. Selection rules (which window, how many points) belong to
+// the callers — this only does the arithmetic.
+function leastSquares(points: GoalPacePoint[]): { slopePerDay: number; intercept: number } | null {
+  if (points.length < 2) return null;
+  const xs = points.map((p) => dayNumber(p.date));
+  const ys = points.map((p) => p.weight_lb);
   const mx = xs.reduce((a, b) => a + b, 0) / xs.length;
   const my = ys.reduce((a, b) => a + b, 0) / ys.length;
   let num = 0;
@@ -82,7 +80,83 @@ function fitTrend(points: GoalPacePoint[], today: string): { slopePerDay: number
   }
   if (den <= 0) return null;
   const slopePerDay = num / den;
-  return { slopePerDay, intercept: my - slopePerDay * mx, firstDate: recent[0].date };
+  return { slopePerDay, intercept: my - slopePerDay * mx };
+}
+
+// The trailing ≤21-day slice of the series, under the established rules: fewer than
+// 2 points, or a first→last span under 3 days, draws no line.
+function fitTrend(points: GoalPacePoint[], today: string): { slopePerDay: number; intercept: number; firstDate: string } | null {
+  const since = addDaysISO(today, -TREND_WINDOW_DAYS);
+  const recent = since ? points.filter((p) => p.date >= since) : points;
+  if (recent.length < 2) return null;
+  const xs = recent.map((p) => dayNumber(p.date));
+  if (xs[xs.length - 1] - xs[0] < 3) return null;
+  const fit = leastSquares(recent);
+  return fit ? { ...fit, firstDate: recent[0].date } : null;
+}
+
+// ---------- the post-intervention slope ----------
+// A nutrition check-in is an INTERVENTION, so the only evidence that can judge it is
+// what the scale did AFTER it. The trailing-window slope above (and getWeeklyStats'
+// `trend_lb_wk`, which mirrors it) answers a different question: read the day after a
+// check-in, ≤20 of its ≤21 days predate the check-in entirely, so it reports where the
+// athlete was already heading — never whether the new target moved anything.
+//
+// This fits the same unweighted least squares over weigh-ins on/after the intervention
+// date ONLY, and reports whether an evidential base exists at all:
+//   • ≥3 weigh-ins, so one stray scale reading cannot draw the line by itself;
+//   • ≥7 days of span, because the slope is quoted per WEEK — extrapolating a two-day
+//     span to lb/week is arithmetic, not evidence.
+// Under that base the slope is null and `sufficient` is false, and the caller is
+// expected to stay SILENT rather than guess. Never throws.
+export const POST_INTERVENTION_MIN_WEIGH_INS = 3;
+export const POST_INTERVENTION_MIN_SPAN_DAYS = 7;
+
+export interface PostInterventionTrend {
+  lb_wk: number | null;
+  weigh_ins: number;
+  span_days: number;
+  first_date: string | null;
+  last_date: string | null;
+  sufficient: boolean;
+}
+
+export function postInterventionWeightTrend(since: string, through = localDateISO()): PostInterventionTrend {
+  const empty: PostInterventionTrend = {
+    lb_wk: null,
+    weigh_ins: 0,
+    span_days: 0,
+    first_date: null,
+    last_date: null,
+    sufficient: false,
+  };
+  const from = String(since ?? "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) return empty;
+  let points: GoalPacePoint[] = [];
+  try {
+    points = canonicalBodyweightSeries({ since: from, through })
+      // The since/through filter belongs to the series query; the explicit >= guard
+      // keeps a pre-intervention weigh-in out even if that ever loosens.
+      .filter((p) => p.date >= from && Number.isFinite(p.weight_lb) && p.weight_lb > 0)
+      .map((p) => ({ date: p.date, weight_lb: p.weight_lb }));
+  } catch {
+    return empty;
+  }
+  if (!points.length) return empty;
+  const first = points[0];
+  const last = points[points.length - 1];
+  const base = {
+    weigh_ins: points.length,
+    span_days: Math.round(dayNumber(last.date) - dayNumber(first.date)),
+    first_date: first.date,
+    last_date: last.date,
+  };
+  if (points.length < POST_INTERVENTION_MIN_WEIGH_INS || base.span_days < POST_INTERVENTION_MIN_SPAN_DAYS) {
+    return { ...base, lb_wk: null, sufficient: false };
+  }
+  const fit = leastSquares(points);
+  if (!fit) return { ...base, lb_wk: null, sufficient: false };
+  return { ...base, lb_wk: round2(fit.slopePerDay * 7), sufficient: true };
 }
 
 // The motivational weight-progress read. `windowDays` clamps to 14–365; everything

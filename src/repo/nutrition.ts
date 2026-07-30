@@ -22,6 +22,7 @@ import {
   MEAL_PLAN_FIBER_FLOOR_G,
 } from "./nutrition-safety.js";
 import { getSettings } from "./settings.js";
+import { completedIntakeRange } from "./intake-window.js";
 import { canonicalHardDietKeys, mealPlanHardDietKeys, stampInstructionHardDiets } from "./dietary-constraints.js";
 import {
   localDateISO,
@@ -845,6 +846,199 @@ export function mealPlanForCoach() {
     stale_reason: freshness.reason,
     constraint_state: constraintState,
     refresh_needed: false,
+  };
+}
+
+// ---------- meal-plan adherence (the missing confounder) ----------
+// Nothing anywhere compared the accepted meal plan with what was actually logged, so
+// when a weight expectation missed, the intake evaluator had exactly one explanation
+// available — the calorie target was wrong — and eased it. "They didn't eat the plan"
+// was not a hypothesis the machinery could hold.
+//
+// This is the deterministic read that makes it one. It is COARSE on purpose: a
+// persisted plan is validated to keep every day inside a tight tolerance of its
+// headline `daily_kcal`/`daily_protein_g` (validateMealPlanForPersistence), so those
+// two numbers ARE the plan's daily band and no weekday matching is needed to compare
+// against them.
+//
+// ADHERENCE-NEUTRAL, like every nutrition read here. It classifies days and lowers
+// CONFIDENCE when the logging is thin; it never scores, never blames, and its prose
+// is machine register (an evaluator confounder and coach context, not something an
+// athlete is shown). A day nobody logged is counted as unlogged and left alone — it
+// is not a diverged day, and it is certainly not a zero-calorie one.
+export type MealPlanAdherenceClass = "followed" | "diverged" | "too_thin";
+export type MealPlanAdherenceConfidence = "none" | "low" | "moderate" | "high";
+
+export interface MealPlanAdherenceDay {
+  date: string;
+  kcal: number;
+  protein_g: number | null;
+  classification: MealPlanAdherenceClass;
+}
+
+export interface MealPlanAdherenceResult {
+  plan_id: number | null;
+  window_start: string;
+  window_end: string;
+  daily_kcal: number | null;
+  daily_protein_g: number | null;
+  calendar_days: number;
+  logged_days: number;
+  readable_days: number;
+  followed_days: number;
+  diverged_days: number;
+  too_thin_days: number;
+  unlogged_days: number;
+  confidence: MealPlanAdherenceConfidence;
+  clearly_diverged: boolean;
+  days: MealPlanAdherenceDay[];
+  summary: string;
+}
+
+// The band a logged day has to land in to read as following the plan. Percentage-led
+// so it scales with the target, with an absolute floor because ±15% of a 1,800 kcal
+// day is 270 kcal and a single mis-estimated restaurant meal is worth about that.
+const ADHERENCE_KCAL_TOLERANCE_FRACTION = 0.15;
+const ADHERENCE_MIN_KCAL_TOLERANCE = 250;
+// Protein is read as a FLOOR, never a band: a day that beat the protein target has
+// not diverged from a plan built around hitting it.
+const ADHERENCE_PROTEIN_FLOOR_FRACTION = 0.8;
+// Confidence steps, as the share of the window's calendar days that were readable.
+const ADHERENCE_LOW_COVERAGE = 0.4;
+const ADHERENCE_HIGH_COVERAGE = 0.7;
+const ADHERENCE_MIN_READABLE_DAYS = 4;
+// A run of days pointing the same way, not one takeout night.
+const ADHERENCE_CLEAR_DIVERGENCE_DAYS = 3;
+
+// Logged protein per day, keyed exactly the way completedIntakeRange keys calories
+// (COALESCE(date, substr(created_at,1,10))), so the two reads describe the same days.
+// completedIntakeRange owns the calorie total and the credibility call; this only
+// adds the one macro it does not carry.
+function loggedProteinByDay(since: string, through: string): Map<string, number> {
+  const rows = db
+    .prepare(
+      `SELECT COALESCE(date, substr(created_at, 1, 10)) AS day, parsed_json
+         FROM food_notes
+        WHERE COALESCE(date, substr(created_at, 1, 10)) >= ?
+          AND COALESCE(date, substr(created_at, 1, 10)) <= ?`
+    )
+    .all(since, through) as any[];
+  const byDay = new Map<string, number>();
+  for (const row of rows) {
+    let parsed: any = null;
+    try {
+      parsed = row.parsed_json ? JSON.parse(String(row.parsed_json)) : null;
+    } catch {
+      parsed = null;
+    }
+    const protein = Number(parsed?.protein_g);
+    const date = String(row.day ?? "").slice(0, 10);
+    if (!date || !Number.isFinite(protein) || protein <= 0) continue;
+    byDay.set(date, (byDay.get(date) ?? 0) + protein);
+  }
+  return byDay;
+}
+
+function adherenceConfidence(readable: number, calendarDays: number): MealPlanAdherenceConfidence {
+  if (readable <= 0) return "none";
+  const coverage = calendarDays > 0 ? readable / calendarDays : 0;
+  if (readable < ADHERENCE_MIN_READABLE_DAYS || coverage < ADHERENCE_LOW_COVERAGE) return "low";
+  if (coverage < ADHERENCE_HIGH_COVERAGE) return "moderate";
+  return "high";
+}
+
+export function mealPlanAdherence(windowStart: string, windowEnd: string): MealPlanAdherenceResult {
+  const empty = (summary: string, planId: number | null = null): MealPlanAdherenceResult => ({
+    plan_id: planId,
+    window_start: windowStart,
+    window_end: windowEnd,
+    daily_kcal: null,
+    daily_protein_g: null,
+    calendar_days: 0,
+    logged_days: 0,
+    readable_days: 0,
+    followed_days: 0,
+    diverged_days: 0,
+    too_thin_days: 0,
+    unlogged_days: 0,
+    confidence: "none",
+    clearly_diverged: false,
+    days: [],
+    summary,
+  });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(windowStart)) || !/^\d{4}-\d{2}-\d{2}$/.test(String(windowEnd))) {
+    return empty("The adherence window was not a pair of calendar dates.");
+  }
+  let plan: any = null;
+  try {
+    plan = currentMealPlan();
+  } catch {
+    plan = null;
+  }
+  const targetKcal = Number(plan?.parsed?.daily_kcal);
+  const targetProtein = Number(plan?.parsed?.daily_protein_g);
+  if (!plan || !Number.isFinite(targetKcal) || targetKcal <= 0) {
+    // No live plan means there is nothing to have followed — an absence, not a miss.
+    return empty("No live meal plan with a daily calorie target covered this window.", plan?.id ?? null);
+  }
+
+  let intake: ReturnType<typeof completedIntakeRange>;
+  try {
+    intake = completedIntakeRange(windowStart, windowEnd);
+  } catch {
+    return empty("Logged intake could not be read for this window.", plan.id ?? null);
+  }
+  const proteinByDay = loggedProteinByDay(windowStart, intake.through);
+  const kcalTolerance = Math.max(ADHERENCE_MIN_KCAL_TOLERANCE, Math.round(targetKcal * ADHERENCE_KCAL_TOLERANCE_FRACTION));
+  const proteinFloor =
+    Number.isFinite(targetProtein) && targetProtein > 0 ? targetProtein * ADHERENCE_PROTEIN_FLOOR_FRACTION : null;
+
+  const days: MealPlanAdherenceDay[] = intake.days.map((day) => {
+    const protein = proteinByDay.get(day.date) ?? null;
+    if (!day.credible) {
+      // Too little logged to say anything about the day — explicitly NOT a divergence.
+      return { date: day.date, kcal: day.kcal, protein_g: protein, classification: "too_thin" as const };
+    }
+    const kcalInBand = Math.abs(day.kcal - targetKcal) <= kcalTolerance;
+    // A day whose protein was never estimated cannot fail the protein floor; the
+    // calorie band decides it alone.
+    const proteinOk = proteinFloor == null || protein == null ? true : protein >= proteinFloor;
+    return {
+      date: day.date,
+      kcal: day.kcal,
+      protein_g: protein,
+      classification: kcalInBand && proteinOk ? ("followed" as const) : ("diverged" as const),
+    };
+  });
+
+  const followed = days.filter((d) => d.classification === "followed").length;
+  const diverged = days.filter((d) => d.classification === "diverged").length;
+  const tooThin = days.filter((d) => d.classification === "too_thin").length;
+  const readable = followed + diverged;
+  const confidence = adherenceConfidence(readable, intake.calendar_days);
+  const clearlyDiverged = diverged >= ADHERENCE_CLEAR_DIVERGENCE_DAYS && diverged > followed;
+  const summary =
+    readable > 0
+      ? `Logged intake sat inside the plan's daily bands on ${followed} of ${readable} readable days (target ${Math.round(targetKcal)} kcal${proteinFloor != null ? `, ${Math.round(targetProtein)} g protein` : ""}); ${tooThin} day(s) carried too little detail to read and ${intake.missing_days} of ${intake.calendar_days} day(s) carried no food log. Adherence confidence: ${confidence}.`
+      : `No day in this window carried enough logged detail to compare against the plan's daily bands; ${intake.missing_days} of ${intake.calendar_days} day(s) carried no food log. Adherence confidence: ${confidence}.`;
+
+  return {
+    plan_id: plan.id ?? null,
+    window_start: windowStart,
+    window_end: intake.through,
+    daily_kcal: Math.round(targetKcal),
+    daily_protein_g: Number.isFinite(targetProtein) && targetProtein > 0 ? Math.round(targetProtein) : null,
+    calendar_days: intake.calendar_days,
+    logged_days: days.length,
+    readable_days: readable,
+    followed_days: followed,
+    diverged_days: diverged,
+    too_thin_days: tooThin,
+    unlogged_days: intake.missing_days,
+    confidence,
+    clearly_diverged: clearlyDiverged,
+    days,
+    summary,
   };
 }
 

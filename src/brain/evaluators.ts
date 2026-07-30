@@ -10,6 +10,7 @@ import {
   readAdherenceOutcome,
 } from "../repo/brain/read-adherence.js";
 import { completedIntakeRange } from "../repo/intake-window.js";
+import { mealPlanAdherence } from "../repo/nutrition.js";
 import { canonicalEnduranceSport } from "../repo/endurance-sports.js";
 import { lsqSlopePerDay } from "../repo/health.js";
 import { addDaysISO } from "../repo/shared.js";
@@ -139,6 +140,43 @@ function weightObservation(context: EvaluatorContext): MetricObservation {
   };
 }
 
+// Did they eat the plan? The intake→weight metric asks whether the CALORIE TARGET
+// produced the weight response it predicted, and that question is only answerable
+// while the target is what was actually eaten. Without this read the evaluator had
+// one explanation for every miss — the target is wrong — so a window the athlete
+// simply ate around came back a clean `not_aligned` and eased a target that was fine.
+//
+// Deliberately asymmetric, in the athlete's favour and the truth's:
+//   • No live meal plan → NO confounder. There is no plan to have diverged from, and
+//     inventing one would make every plan-less athlete permanently inconclusive.
+//   • Clearly diverged, or too thin to read → confounded. Both are "this window
+//     cannot attribute the weight response to the target", which is a different
+//     statement from "the target is wrong" and must not be collapsed into it.
+//   • Following the plan is NOT evidence of anything and adds nothing — a followed
+//     window simply leaves the comparison to run as before.
+// Adherence never decides the verdict's direction. It can only take the decisive
+// verdict away, which is exactly what a confounder is for.
+function mealPlanAdherenceIssues(windowStart: string, windowEnd_: string): string[] {
+  let adherence: ReturnType<typeof mealPlanAdherence> | null = null;
+  try {
+    adherence = mealPlanAdherence(windowStart, windowEnd_);
+  } catch {
+    return []; // an unreadable plan is never itself a confounder
+  }
+  if (!adherence || adherence.plan_id == null) return [];
+  if (adherence.clearly_diverged) {
+    return [
+      "Logged intake diverged from the live meal plan on most readable days in this window, so the weight response cannot be attributed to the calorie target.",
+    ];
+  }
+  if (adherence.confidence === "none" || adherence.confidence === "low") {
+    return [
+      "Too few days in this window carried enough logged detail to tell whether the meal plan was followed, so the weight response cannot be attributed to the calorie target.",
+    ];
+  }
+  return [];
+}
+
 function intakeObservation(context: EvaluatorContext): MetricObservation {
   const { expectation } = context;
   const end = windowEnd(context);
@@ -177,6 +215,7 @@ function intakeObservation(context: EvaluatorContext): MetricObservation {
     issues: [
       ...(values.length ? [] : ["There were no credible completed intake days in the evaluation window."]),
       ...weights.issues,
+      ...mealPlanAdherenceIssues(expectation.window_start, end),
     ],
   };
 }
