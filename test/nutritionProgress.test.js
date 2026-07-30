@@ -133,13 +133,13 @@ test("food-quality estimates aggregate only object-shaped sampled entries withou
   assert.equal(estimates.total_entries, 3);
   assert.equal(estimates.sampled_days, 2);
   assert.equal(estimates.total_logged_days, 2);
-  // The second entry is confidence "low", so it moves the band tallies at half
-  // weight (0.5), not the full weight the first (medium-confidence) entry gets.
+  // The second entry is confidence "low", so it stays out of the band tallies
+  // entirely — only the first (medium-confidence) entry moves them.
   assert.equal(estimates.food_quality.mostly_whole, 1);
   assert.equal(estimates.food_quality.mixed, 1);
   assert.equal(estimates.saturated_fat.low, 1);
-  assert.equal(estimates.saturated_fat.moderate, 0.5);
-  assert.equal(estimates.added_sugar.high, 0.5);
+  assert.equal(estimates.saturated_fat.moderate, 0);
+  assert.equal(estimates.added_sugar.high, 0);
   assert.deepEqual(estimates.omega_3_source, { yes: 1, no: 1, unknown: 0 });
   assert.equal(estimates.fat_grams.sampled_entries, 1);
   assert.equal(estimates.fat_grams.average_saturated_fat_g, 4.2);
@@ -148,7 +148,7 @@ test("food-quality estimates aggregate only object-shaped sampled entries withou
   assert.match(estimates.note, /not extrapolated/i);
 });
 
-test("low-confidence entries shift a food-quality band tally at half weight, not full weight", () => {
+test("low-confidence entries leave the food-quality band tallies alone", () => {
   food(ago(4), {
     ...full(700),
     nutrition_pattern: { sodium: "high", confidence: "high", basis: "label" },
@@ -167,14 +167,37 @@ test("low-confidence entries shift a food-quality band tally at half weight, not
   });
 
   const estimates = repo.nutritionProgress(14).food_quality_estimates;
-  // Two full-weight (high/medium confidence) entries + two half-weight (low
-  // confidence) entries = 2 + 0.5 + 0.5 = 3, not 4.
-  assert.equal(estimates.sodium.high, 3);
-  // The provenance histograms still count every entry at full weight, unchanged.
+  // Only the two high/medium-confidence entries are evidence of a sodium band,
+  // so the athlete-facing count is 2 — and it is a whole number, never "3.5".
+  assert.equal(estimates.sodium.high, 2);
+  // The provenance histograms still count every entry, unchanged.
   assert.equal(estimates.confidence.high, 1);
   assert.equal(estimates.confidence.medium, 1);
   assert.equal(estimates.confidence.low, 2);
   assert.equal(estimates.sampled_entries, 4);
+});
+
+test("every band tally an athlete reads is a whole number, low-confidence entries included", () => {
+  food(ago(3), {
+    ...full(700),
+    nutrition_pattern: { saturated_fat: "high", added_sugar: "high", sodium: "high", confidence: "low", basis: "photo" },
+  });
+
+  const estimates = repo.nutritionProgress(14).food_quality_estimates;
+  // The lone entry is a rough guess: it shifts no band, but it is still visible
+  // as provenance — one low-confidence, photo-based sample.
+  assert.equal(estimates.saturated_fat.high, 0);
+  assert.equal(estimates.added_sugar.high, 0);
+  assert.equal(estimates.sodium.high, 0);
+  assert.equal(estimates.confidence.low, 1);
+  assert.equal(estimates.basis.photo, 1);
+  assert.equal(estimates.sampled_entries, 1);
+  const bands = ["saturated_fat", "added_sugar", "sodium", "potassium", "calcium", "iron"];
+  for (const band of bands) {
+    for (const [name, count] of Object.entries(estimates[band])) {
+      assert.ok(Number.isInteger(count), `${band}.${name} must be a whole count, got ${count}`);
+    }
+  }
 });
 
 test("fat-quality gram averages require both sides and reject splits above the entry total", () => {

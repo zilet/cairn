@@ -217,7 +217,12 @@ test("acuteGate agrees with recentMuscleLoad's derived heavy for every group", (
       acuteGate(group, REF).saturated,
       `${group}: recentMuscleLoad.heavy must be the acuteGate reading, not a second opinion`
     );
-    assert.equal(rl.residual, acuteGate(group, REF).residual);
+    // The whole record is spread into the coach context as `recent_load`, so the
+    // internal float stays behind the gate — a prompt only ever sees the band.
+    assert.ok(
+      !("residual" in rl),
+      `${group}: recentMuscleLoad must not carry the internal residual into the coach context`
+    );
   }
 });
 

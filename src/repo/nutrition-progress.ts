@@ -138,14 +138,18 @@ function nutritionPatternEstimate(rows: any[], loggedDays: number): NutritionPat
 
   for (const { parsed, value } of patterns) {
     const confidenceValue = String(value.confidence ?? "unknown").toLowerCase() as keyof typeof confidence;
-    // A low-confidence estimate still counts as a data point (the provenance
-    // histograms below count every entry unchanged), but it should sway the
-    // band tallies less than a medium/high one — so it counts at half weight
-    // there. Medium/high/unknown confidence count at full weight.
-    const bandWeight = confidenceValue === "low" ? 0.5 : 1;
-    for (const key of Object.keys(bandFields) as Array<keyof typeof bandFields>) {
-      const band = String(value[key] ?? "unknown").toLowerCase() as NutritionPatternBand;
-      bandFields[key][patternBands.includes(band) ? band : "unknown"] += bandWeight;
+    // Band tallies are COUNTS an athlete reads verbatim ("2 high saturated-fat
+    // estimates"), so they only ever move by whole entries. A low-confidence
+    // estimate is an uncertain guess — not evidence either way, exactly as
+    // foodRecovery treats it — so it is left out of the bands entirely rather
+    // than fractionally weighted. It still shows up in the provenance
+    // confidence/basis histograms below, which is where "2 of your 5 were rough
+    // guesses" lives.
+    if (confidenceValue !== "low") {
+      for (const key of Object.keys(bandFields) as Array<keyof typeof bandFields>) {
+        const band = String(value[key] ?? "unknown").toLowerCase() as NutritionPatternBand;
+        bandFields[key][patternBands.includes(band) ? band : "unknown"] += 1;
+      }
     }
     const quality = String(value.food_quality ?? "unknown").toLowerCase() as FoodQualityBand;
     foodQuality[qualityBands.includes(quality) ? quality : "unknown"] += 1;

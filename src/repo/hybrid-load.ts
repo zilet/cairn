@@ -24,9 +24,6 @@ export interface RecentLoad {
   last_date: string;
   days_ago: number;
   heavy: boolean;
-  // The INTERNAL decaying residual this group's `heavy` was derived from (see
-  // muscleResidual). Never rendered — an athlete surface reads bands and words.
-  residual: number;
   source: "strength" | "endurance" | "both";
   activity: string | null;
   detail: string;
@@ -403,7 +400,12 @@ export function muscleResidual(
       if (halfLife == null) continue;
       const cur = touch(group, impact.date);
       cur.endurance += dose * decayFactor(impact.days_ago, halfLife);
-      // Name the most recent endurance effort, so a consumer can say what did it.
+      // Name the endurance effort a consumer can blame — which is NOT simply the
+      // most recent one. recentEnduranceImpacts arrives heaviest-first and only
+      // then by recency, and `cur.last` already counts strength days, so the
+      // heaviest effort takes the name whenever something more recent touched the
+      // group, and otherwise it passes to whichever effort last matched the
+      // running-latest date.
       if (!cur.activity || impact.date >= (cur.last ?? impact.date)) {
         cur.activity = impact.label;
         cur.detail = impact.detail;
@@ -527,6 +529,11 @@ export function suppressSaturatedDue(due: string[], date = localDateISO()): stri
 // which looks back further and forgets at each group's own rate. So a group can be
 // listed as trained yesterday and still read fresh, which the old cliff could not
 // express.
+//
+// This record is spread whole into the coach context as `recent_load`, so it must
+// carry NO internal magnitude — a consumer that needs the depth behind `heavy`
+// reads acuteGate()/muscleResidual() directly rather than having the float ride
+// along into every training prompt.
 export function recentMuscleLoad(days = 2, date = localDateISO()): Map<MuscleGroup, RecentLoad> {
   const out = new Map<MuscleGroup, RecentLoad>();
   const today = String(date).slice(0, 10);
@@ -534,12 +541,10 @@ export function recentMuscleLoad(days = 2, date = localDateISO()): Map<MuscleGro
   const dAgo = (iso: string): number => Math.max(0, daysBetweenISO(today, String(iso).slice(0, 10)) ?? 0);
   const residuals = muscleResidual(RESIDUAL_LOOKBACK_DAYS, today);
   const bump = (g: MuscleGroup, when: string, src: "strength" | "endurance", activity: string | null, detail: string) => {
-    const r = residuals.get(g);
-    const heavy = r?.band === "saturated";
-    const residual = r?.residual ?? 0;
+    const heavy = residuals.get(g)?.band === "saturated";
     const prev = out.get(g);
     if (!prev) {
-      out.set(g, { group: g, last_date: when, days_ago: dAgo(when), heavy, residual, source: src, activity, detail });
+      out.set(g, { group: g, last_date: when, days_ago: dAgo(when), heavy, source: src, activity, detail });
       return;
     }
     const newer = when > prev.last_date;
@@ -548,7 +553,6 @@ export function recentMuscleLoad(days = 2, date = localDateISO()): Map<MuscleGro
       last_date: newer ? when : prev.last_date,
       days_ago: Math.min(prev.days_ago, dAgo(when)),
       heavy,
-      residual,
       source: prev.source === src ? src : "both",
       activity: src === "endurance" ? activity : prev.activity,
       detail: src === "endurance" && detail ? detail : prev.detail,
