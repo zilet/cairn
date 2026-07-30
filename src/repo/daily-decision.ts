@@ -17,7 +17,9 @@ import { selectAdaptivePlanDay, selectedPlanDayForDate } from "./plan-selection.
 import { getProgramState } from "./program-state.js";
 import { muscleGroupsForPainArea, painAreaLoadsExercise } from "./pain-relevance.js";
 import { planDayProgression, recentAutoregulation } from "./progression.js";
+import { personalResponseModifierFor } from "./reaction-model.js";
 import { adaptBasePlanDayForRecovery, recoveryCycleAt } from "./recovery-cycles.js";
+import { pickDayVariant } from "./brain/day-read-rules.js";
 import { addDaysISO, localDateISO } from "./shared.js";
 import {
   getTrainingIntent,
@@ -73,6 +75,7 @@ export const DAILY_DECISION_REASONS = [
   "athlete_override",
   "template_rotation",
   "training_intent",
+  "personal_response_ease",
 ] as const;
 
 export type DailyDecisionReason = (typeof DAILY_DECISION_REASONS)[number];
@@ -190,6 +193,14 @@ export interface DailyDecisionSnapshot {
     kind: "quality" | "long";
     suggested_date: string;
   } | null;
+  // The LEARNED plan-complexity default, carried on the snapshot rather than read
+  // inside the decision so `buildDailySessionDecision` stays a pure function of its
+  // input — and so the fingerprint moves when the learning does instead of two
+  // different days silently hashing the same. `gatherDailyDecisionSnapshot` stamps
+  // the key ONLY when an easing modifier actually exists, so a snapshot with
+  // nothing learned serializes byte-for-byte as it did before this field existed
+  // and every historical envelope stays readable.
+  personal_response?: { plan_complexity: number };
 }
 
 export interface DailyDecisionTarget {
@@ -532,6 +543,17 @@ export function gatherDailyDecisionSnapshot(
               String(a.intent_id ?? a.id ?? "").localeCompare(String(b.intent_id ?? b.id ?? ""))
           )[0] ?? null
       : null;
+  // The learned plan-complexity default, read fail-soft (a problem in the learning
+  // layer must never cost the athlete their day's decision) and stamped ONLY in the
+  // easing direction. `plan_complexity` is declared with `max: 1`, so the producer
+  // can hold at 1 or ease below it and never push above — this narrows that to the
+  // one case the snapshot has any use for, which is also what keeps an unlearned
+  // snapshot hashing exactly as it did before the field existed. The floor rejects
+  // an implausible scale outright rather than passing it on.
+  const planComplexityScale = safe(() => {
+    const scale = Number(personalResponseModifierFor("plan_complexity")?.scale);
+    return Number.isFinite(scale) && scale >= 0.5 && scale < 1 ? scale : null;
+  }, null);
   return {
     date: d,
     request: {
@@ -705,6 +727,10 @@ export function gatherDailyDecisionSnapshot(
           suggested_date: String(openKeyRun.suggested_date),
         }
       : null,
+    // Spread rather than a `null` field on purpose: stableJson walks Object.keys,
+    // so writing the key with a null value would change every fingerprint on the
+    // planet the day this shipped. Absent means absent.
+    ...(planComplexityScale == null ? {} : { personal_response: { plan_complexity: planComplexityScale } }),
   };
 }
 
@@ -826,6 +852,35 @@ const PROGRESSION_REASON: Record<string, DailyDecisionReason> = {
 };
 
 const LOWER_BODY_GROUPS = new Set(["quads", "hamstrings", "glutes", "calves"]);
+
+// Below this, the learned plan-complexity default prefers the simpler shape. The
+// producer emits only 1 (hold) or 0.9 (ease) for this target and declares `max: 1`,
+// so the threshold sits between those two rather than inventing a third position.
+const PLAN_COMPLEXITY_SIMPLER_BELOW = 0.95;
+
+// What a below-1 plan-complexity modifier MEANS: plan days kept going unfinished,
+// and the athlete's own record is the evidence that the standard ask is more than
+// the day holds. It joins `softenVolume` below, which is a cap on what Stage 3
+// OFFERS (movements, working sets, sets per movement) — never a limit on what the
+// athlete may then do. Nothing else about the day changes: not the kind, not the
+// intensity cap, not a single hard constraint.
+// Deliberately un-coerced: `Number.isFinite` on the raw value, so a stored envelope
+// carrying a string where a number belongs reads as "nothing learned" rather than
+// quietly steering the day.
+function earnedSimplerDay(snapshot: DailyDecisionSnapshot): boolean {
+  const scale = snapshot.personal_response?.plan_complexity;
+  return Number.isFinite(scale) && (scale as number) < PLAN_COMPLEXITY_SIMPLER_BELOW;
+}
+
+// Athlete-facing (soft preferences surface in the session preview), so a set rather
+// than one literal — a stable learning would otherwise print the same sentence every
+// morning for weeks. Worded about the DAY rather than the person: adherence evidence
+// lowers the ask, it never blames.
+const PLAN_COMPLEXITY_EASE_DETAILS: readonly string[] = [
+  "Recent fuller days haven't been fitting — keeping today simpler",
+  "Keeping today's list short, the way recent weeks have actually run",
+  "A simpler shape today; the longer days haven't been fitting lately",
+];
 
 type CompactTrainingIntent = {
   endurance_role: EnduranceRole;
@@ -1241,6 +1296,17 @@ export function buildDailySessionDecision(
       text: "Longevity leads your priorities — today's work stays a little easier rather than stacking hard on hard.",
     });
   }
+  // A learned ease is the softest input in this list and behaves like it: it can
+  // only ever join the others in preferring the reduced shape, and on a rest day —
+  // where volume is already `minimal` — it has nothing to say and stays silent.
+  const planComplexityEase = earnedSimplerDay(snapshot) && kind !== "rest";
+  if (planComplexityEase) {
+    fire(precedence, "personal_response_ease");
+    soft.push({
+      code: "personal_response_ease",
+      detail: pickDayVariant(PLAN_COMPLEXITY_EASE_DETAILS, snapshot.date, "plan_complexity_ease"),
+    });
+  }
   const softenVolume =
     kind === "easy" ||
     (trainAnyway && baseKind === "rest") ||
@@ -1248,7 +1314,8 @@ export function buildDailySessionDecision(
     highSoreness ||
     consecutive >= 3 ||
     snapshot.day_read.recovery_week ||
-    longevityEase;
+    longevityEase ||
+    planComplexityEase;
   const volume: DailyDecisionEnvelope["caps"]["volume"] =
     kind === "rest" ? "minimal" : softenVolume ? "reduced" : "normal";
   const intensity: DailyDecisionEnvelope["caps"]["intensity"] =

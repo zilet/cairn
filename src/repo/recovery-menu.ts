@@ -5,12 +5,15 @@
 // gate: the athlete is never told to do any of it, and resting stays a
 // perfectly good answer every single option sits beside.
 //
-// Deliberately reads only from its own repo module (training-symptoms.ts) and
-// hybrid-load.ts for the "what's been loaded lately" grounding — never
+// Deliberately reads only from its own repo module (training-symptoms.ts),
+// hybrid-load.ts for the "what's been loaded lately" grounding, and
+// reaction-model.ts for the learned recovery bias below — never
 // dayread.ts/repo/day-read.ts/repo/coach.ts/repo/signal-state.ts, which other
 // tracks are editing in parallel worktrees.
+import type { CoachPersonalModifier } from "../brain/coach-context-contract.js";
 import { recentMuscleLoad } from "./hybrid-load.js";
 import { listTrainingSymptoms } from "./training-symptoms.js";
+import { personalResponseModifierFor } from "./reaction-model.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
 
 export interface RecoveryMenuOption {
@@ -123,16 +126,23 @@ function flaggedArea(date: string): string | null {
 
 type PoolKey = "spin" | "walk" | "mobility" | "core";
 
-function poolOption(key: PoolKey, date: string): RecoveryMenuOption {
+// `gentle` picks the quieter rendering of the SAME option, never a new one: the
+// walk collapses to its already-registered shorter wording and the mobility pass
+// sits at the bottom of the range its own detail already names. No literal here
+// is new, so recoveryMenuGrammarPool() still enumerates everything this module
+// can say.
+function poolOption(key: PoolKey, date: string, gentle = false): RecoveryMenuOption {
   switch (key) {
     case "spin":
       return { label: "Easy spin", detail: SPIN_DETAIL, minutes: 25 };
     case "walk":
-      return { label: "Short walk", detail: WALK_DETAIL, minutes: 18 };
+      return gentle
+        ? { label: "Short walk", detail: GUARDED_WALK_DETAIL, minutes: 12 }
+        : { label: "Short walk", detail: WALK_DETAIL, minutes: 18 };
     case "core":
       return { label: "Easy core", detail: CORE_DETAIL, minutes: 10 };
     case "mobility":
-      return { label: "Mobility", detail: mobilityDetail(plainMuscleWords(date)), minutes: 12 };
+      return { label: "Mobility", detail: mobilityDetail(plainMuscleWords(date)), minutes: gentle ? 10 : 12 };
   }
 }
 
@@ -146,6 +156,34 @@ const COMBOS: readonly PoolKey[][] = [
   ["spin", "walk", "core"],
 ];
 
+// A LEARNED bias, not a new signal. `recovery_adjustment` is the personal-response
+// target the recovery evidence stream actually earns: reaction-model raises it
+// ABOVE 1 — "a slightly larger recovery adjustment is the earned default" — when
+// the HRV / resting-HR / sleep deltas that followed recent changes kept coming in
+// short of what was expected. This module reads it in exactly ONE direction. Above
+// 1 it offers the quieter half of the same menu; at or below 1 nothing changes at
+// all, so a scale that ever drifted under 1 could never talk the menu into offering
+// MORE than the standard day. That asymmetry is deliberate and mirrors how the
+// ease-only bounds elsewhere were drawn: a learned default may add caution, never
+// remove it.
+//
+// Wearable-absence neutrality falls out of the same path rather than being special-
+// cased: with no HRV/resting-HR/sleep nights there is no recovery delta to observe,
+// so no expectation resolves, so no modifier exists, so the menu is identical to
+// the one this module produced before the modifier had any consumer at all.
+function gentlerMenuEarned(modifier: CoachPersonalModifier | null | undefined): boolean {
+  const scale = modifier?.scale;
+  return Number.isFinite(scale) && (scale as number) > 1;
+}
+
+// Same day-rotated combo, minus the one option that raises breathing and runs
+// longest. Every combo keeps at least two options; the explicit floor is a belt-
+// and-braces guard so a future COMBOS edit can never strand the menu at one item.
+function gentleKeys(combo: readonly PoolKey[]): PoolKey[] {
+  const kept = combo.filter((key) => key !== "spin");
+  return kept.length >= 2 ? kept : ["walk", "mobility"];
+}
+
 function guardedMobilityOption(date: string, area: string): RecoveryMenuOption {
   const detail = pickDayVariant(GUARDED_MOBILITY_TEMPLATES, date, "recovery_menu_guarded_mobility")(area);
   return { label: "Gentle mobility", detail, minutes: 12 };
@@ -154,20 +192,41 @@ function guardedMobilityOption(date: string, area: string): RecoveryMenuOption {
 // null for any kind other than rest/easy — a train/done day never gets this
 // menu at all. Never persisted (see attachDayReadContext): derived fresh on
 // every response, the same as forward/arc.
-export function buildRecoveryMenu(date: string, kind: string): RecoveryMenu | null {
+// `responseModifier` is injectable for tests; left undefined it is read from the
+// learned model fail-soft, because a query problem in the learning layer must never
+// cost the athlete their menu.
+export function buildRecoveryMenu(
+  date: string,
+  kind: string,
+  opts: { responseModifier?: CoachPersonalModifier | null } = {}
+): RecoveryMenu | null {
   if (kind !== "rest" && kind !== "easy") return null;
 
   const area = flaggedArea(date);
   if (area) {
+    // Already the gentlest thing this module builds — two short options steering
+    // around the flagged area. A learned recovery bias has nothing left to soften
+    // here, so this branch deliberately never reads the modifier.
     return {
       line: pickDayVariant(GUARDED_LINES, date, "recovery_menu_line"),
       options: [{ label: "Short walk", detail: GUARDED_WALK_DETAIL, minutes: 12 }, guardedMobilityOption(date, area)],
     };
   }
 
+  const modifier =
+    opts.responseModifier === undefined
+      ? (() => {
+          try {
+            return personalResponseModifierFor("recovery_adjustment");
+          } catch {
+            return null;
+          }
+        })()
+      : opts.responseModifier;
+  const gentle = gentlerMenuEarned(modifier);
   const combo = pickDayVariant(COMBOS, date, "recovery_menu_combo");
   return {
     line: pickDayVariant(OPEN_LINES, date, "recovery_menu_line"),
-    options: combo.map((key) => poolOption(key, date)),
+    options: (gentle ? gentleKeys(combo) : combo).map((key) => poolOption(key, date, gentle)),
   };
 }

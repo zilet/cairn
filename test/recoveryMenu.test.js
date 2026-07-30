@@ -104,3 +104,97 @@ test("every line/label/detail string in the full recovery-menu vocabulary passes
     assert.equal(violatesReadingGrammar(text), null, `violated grammar: ${JSON.stringify(text)}`);
   }
 });
+
+// ---- learned recovery bias (recovery_adjustment) ----
+//
+// Direction matters and is NOT the same as the step-size targets: reaction-model
+// raises `recovery_adjustment` ABOVE 1 when recovery outcomes disappoint, because
+// the thing being scaled is the recovery response itself. These pin that the menu
+// reads it in one direction only.
+function recoveryModifier(scale) {
+  return {
+    key: "recovery_hrv_delta::test",
+    target: "recovery_adjustment",
+    stage: null,
+    scale,
+    bounds: { min: 0.9, max: 1.15 },
+    confidence: "observed",
+    evidence_n: 3,
+    rationale: "test fixture",
+    never_overrides: [],
+  };
+}
+
+test("a recovery_adjustment above 1 offers the gentler half of the same menu", () => {
+  resetTables("training_symptom_events");
+  // Cover every combo the day rotation can land on, not just today's.
+  for (let daysAgo = 0; daysAgo < 5; daysAgo++) {
+    const date = localDaysAgo(daysAgo);
+    const gentle = buildRecoveryMenu(date, "rest", { responseModifier: recoveryModifier(1.1) });
+    assert.ok(gentle, `expected a menu for ${date}`);
+    assert.ok(gentle.options.length >= 2, `gentle menu kept ${gentle.options.length} options on ${date}`);
+    assert.ok(
+      !gentle.options.some((o) => /spin/i.test(o.label)),
+      "the option that raises breathing is dropped when recovery evidence has been disappointing"
+    );
+    const walk = gentle.options.find((o) => /walk/i.test(o.label));
+    if (walk) assert.ok(walk.minutes <= 12, `gentle walk should be short, got ${walk.minutes}`);
+    const mobility = gentle.options.find((o) => /mobility/i.test(o.label));
+    if (mobility) assert.ok(mobility.minutes <= 10, `gentle mobility should be short, got ${mobility.minutes}`);
+  }
+});
+
+test("a recovery_adjustment of exactly 1 leaves the menu byte-identical to no modifier at all", () => {
+  resetTables("training_symptom_events");
+  for (let daysAgo = 0; daysAgo < 5; daysAgo++) {
+    const date = localDaysAgo(daysAgo);
+    for (const kind of ["rest", "easy"]) {
+      assert.deepEqual(
+        buildRecoveryMenu(date, kind, { responseModifier: recoveryModifier(1) }),
+        buildRecoveryMenu(date, kind, { responseModifier: null }),
+        `a holding modifier changed the menu on ${date}/${kind}`
+      );
+    }
+  }
+});
+
+test("a recovery_adjustment below 1 can never talk the menu into offering more", () => {
+  resetTables("training_symptom_events");
+  const date = localDaysAgo(1);
+  const standard = buildRecoveryMenu(date, "rest", { responseModifier: null });
+  // The producer never emits this for recovery_adjustment; the guard exists so a
+  // future producer change cannot quietly turn a caution-only lever into a push.
+  assert.deepEqual(buildRecoveryMenu(date, "rest", { responseModifier: recoveryModifier(0.9) }), standard);
+});
+
+test("with no wearable nights on record the live read changes nothing", () => {
+  resetTables("training_symptom_events", "daily_metrics", "brain_decisions", "brain_expectations");
+  const date = localDaysAgo(2);
+  // No opts at all: the live personalResponseModifierFor path. Nothing has been
+  // learned, so there is no modifier and the menu is the standard one.
+  assert.deepEqual(buildRecoveryMenu(date, "rest"), buildRecoveryMenu(date, "rest", { responseModifier: null }));
+});
+
+test("a flagged area still wins over the learned recovery bias, unchanged", () => {
+  resetTables("training_symptom_events", "sessions", "logged_sets");
+  const date = localDaysAgo(0);
+  repo.reportTrainingSymptom({ area_text: "left knee", onset_on: date });
+  assert.deepEqual(
+    buildRecoveryMenu(date, "rest", { responseModifier: recoveryModifier(1.1) }),
+    buildRecoveryMenu(date, "rest", { responseModifier: null }),
+    "the guarded pair is already the gentlest menu; the modifier has nothing to add"
+  );
+});
+
+test("the gentle menu says nothing the grammar pool does not already enumerate", () => {
+  resetTables("training_symptom_events");
+  const pool = new Set(recoveryMenuGrammarPool());
+  for (let daysAgo = 0; daysAgo < 5; daysAgo++) {
+    const menu = buildRecoveryMenu(localDaysAgo(daysAgo), "rest", { responseModifier: recoveryModifier(1.1) });
+    assert.ok(pool.has(menu.line), `unregistered line: ${JSON.stringify(menu.line)}`);
+    for (const opt of menu.options) {
+      assert.ok(pool.has(opt.label), `unregistered label: ${JSON.stringify(opt.label)}`);
+      assert.equal(violatesReadingGrammar(opt.detail), null, `violated grammar: ${JSON.stringify(opt.detail)}`);
+    }
+  }
+});

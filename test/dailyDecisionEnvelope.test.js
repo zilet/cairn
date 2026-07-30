@@ -422,3 +422,79 @@ test("no plan day degrades to a custom-intent envelope without candidates", () =
   assert.equal(env.candidates.length, 0);
   assert.equal(env.kind, "train");
 });
+
+// ---- learned plan-complexity ease ----
+//
+// `plan_complexity` is the learned default earned from repeatedly-missed plan days.
+// It is declared with `max: 1`, so it can only ever hold or ease. These pin that it
+// biases what Stage 3 OFFERS (the volume cap) and touches nothing else about the day.
+function envelopeOf(overrides) {
+  return buildDailySessionDecision(snapshot(overrides), { now: NOW });
+}
+
+test("a plan_complexity below the threshold prefers the simpler shape", () => {
+  const eased = envelopeOf({ personal_response: { plan_complexity: 0.9 } });
+  assert.equal(eased.caps.volume, "reduced");
+  assert.ok(eased.precedence.includes("personal_response_ease"));
+  const soft = eased.soft_preferences.find((entry) => entry.code === "personal_response_ease");
+  assert.ok(soft, "the ease should record why it fired");
+  assert.ok(soft.detail.trim().length > 0);
+  // A bias on what is offered, never a limit on what the athlete may do.
+  assert.equal(eased.kind, "train");
+  assert.ok(!eased.hard_constraints.some((entry) => entry.code === "personal_response_ease"));
+});
+
+test("a plan_complexity at or above the threshold leaves the standard shape alone", () => {
+  for (const scale of [0.96, 1]) {
+    const held = envelopeOf({ personal_response: { plan_complexity: scale } });
+    assert.equal(held.caps.volume, "normal", `scale ${scale} should not soften volume`);
+    assert.ok(!held.precedence.includes("personal_response_ease"));
+  }
+});
+
+test("a holding plan_complexity decides exactly what an absent one decides", () => {
+  const absent = envelopeOf({});
+  const holding = envelopeOf({ personal_response: { plan_complexity: 1 } });
+  // Fingerprints differ (the snapshots genuinely differ); the DECISION must not.
+  const { input_fingerprint: _a, ...absentContent } = absent;
+  const { input_fingerprint: _b, ...holdingContent } = holding;
+  assert.deepEqual(holdingContent, absentContent);
+});
+
+test("an absent plan_complexity leaves the fingerprint exactly where it was", () => {
+  // The gather path spreads the key in only when an easing modifier exists, so a
+  // snapshot with nothing learned must hash identically to one that never knew the
+  // field. Writing the key as null instead would have moved every fingerprint.
+  const bare = snapshot();
+  const explicitlyAbsent = snapshot();
+  delete explicitlyAbsent.personal_response;
+  assert.equal(dailyDecisionFingerprint(bare), dailyDecisionFingerprint(explicitlyAbsent));
+  assert.notEqual(
+    dailyDecisionFingerprint(bare),
+    dailyDecisionFingerprint(snapshot({ personal_response: { plan_complexity: 0.9 } })),
+    "a learned ease must move the fingerprint so the decision is recomputed"
+  );
+});
+
+test("the learned ease stays silent on a rest day, where volume is already minimal", () => {
+  const resting = envelopeOf({
+    day_read: {
+      kind: "rest",
+      focus: null,
+      est_minutes: null,
+      consecutive_training_days: 0,
+      recovery_week: false,
+      trained_today: false,
+    },
+    personal_response: { plan_complexity: 0.9 },
+  });
+  assert.equal(resting.caps.volume, "minimal");
+  assert.ok(!resting.precedence.includes("personal_response_ease"));
+});
+
+test("a malformed plan_complexity is ignored rather than trusted", () => {
+  for (const scale of [Number.NaN, "0.9", null, undefined]) {
+    const envelope = envelopeOf({ personal_response: { plan_complexity: scale } });
+    assert.equal(envelope.caps.volume, "normal", `scale ${String(scale)} should not soften volume`);
+  }
+});

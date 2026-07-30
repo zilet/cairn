@@ -165,6 +165,21 @@ export interface CoachFuelingFeedback extends CoachRecord {
 
 export type CoachPersonalResponseConfidence = "tentative" | "observed" | "strong";
 
+// Every target here MUST name a live consumer. A modifier the nightly model
+// computes and nothing reads is a learning loop that only looks closed, so the
+// consumer is part of the declaration rather than something to go looking for:
+//
+//   nutrition_step             -> personalizedNutritionStep()  (domain/brain/underfueling-service.ts)
+//   training_progression_step  -> trainingModifierFor()/clampedOverload()/timedStep() (repo/progression.ts)
+//   run_volume_step            -> weekly build factor          (repo/run-progression.ts)
+//   recovery_adjustment        -> buildRecoveryMenu()          (repo/recovery-menu.ts)
+//   plan_complexity            -> softenVolume / caps.volume   (repo/daily-decision.ts)
+//
+// Direction is NOT uniform across targets and is set by the producer in
+// reaction-model.ts `modifierFor`, so read it there before wiring a new consumer:
+// a step-size target eases BELOW 1 on a disappointing outcome, while
+// `recovery_adjustment` sizes the recovery response itself and therefore rises
+// ABOVE 1 on one. Both mean "be more careful"; they say it in opposite directions.
 export type CoachPersonalModifierTarget =
   | "nutrition_step"
   | "training_progression_step"
