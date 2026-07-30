@@ -146,6 +146,98 @@ function nutritionTrendExpectation(
   };
 }
 
+// ---------- the composition half of a nutrition-target change ----------
+// The weight lever answers "did the scale move as predicted"; it cannot tell a lost
+// pound of fat from a lost pound of lean mass. Waist tape can, and the evaluator for
+// `body_measurement_direction` has been registered (brain/evaluators.ts) with nothing
+// ever writing it — so the reaction model's body-measurement branch, which is already
+// built to stage composition evidence per recomposition phase, could never fire.
+//
+// THE HONESTY RULE governs whether the prediction is written at all: a prediction is
+// only made when the evidence that could FALSIFY it is already being logged. Tape is
+// rare — most target changes will correctly write nothing here, and that silence is
+// the feature. Two readings in the trailing window means a third can plausibly land
+// inside the expectation's own window, which is what `minimum_data` then requires.
+const WAIST_FLOW_WINDOW_DAYS = 60;
+const WAIST_FLOW_MIN_READINGS = 2;
+// Home tape measurement varies by roughly a quarter-inch between honest readings of an
+// unchanged waist. The band is deliberately wider than that noise, so "not increasing"
+// means a real increase, never a re-measure.
+const WAIST_TAPE_NOISE_IN = 0.5;
+// Eight weeks, not the weight lever's four: tape moves on a slower clock and is logged
+// far less often, so a four-week window would mature into `inconclusive` most times.
+const WAIST_WINDOW_DAYS = 56;
+// Below this the target isn't asking the body to lose anything, so "the waist should
+// not increase" is not a claim the change actually makes.
+const CUT_TREND_FLOOR_LB_WK = -0.15;
+
+// The latest waist reading, but ONLY when tape is genuinely flowing. Null (write no
+// prediction) whenever it is not.
+function flowingWaistTape(effectiveDate: string): { value: number; date: string } | null {
+  try {
+    const since = addDaysISO(effectiveDate, -WAIST_FLOW_WINDOW_DAYS);
+    const rows = db
+      .prepare(
+        `SELECT date, waist_in AS value FROM body_measurements
+          WHERE date BETWEEN ? AND ? AND waist_in IS NOT NULL
+          ORDER BY date DESC, id DESC LIMIT 20`
+      )
+      .all(since, effectiveDate) as Array<{ date: string; value: number }>;
+    if (rows.length < WAIST_FLOW_MIN_READINGS) return null;
+    const value = Number(rows[0]?.value);
+    if (!Number.isFinite(value) || value <= 0) return null;
+    return { value, date: String(rows[0].date) };
+  } catch {
+    // No tape table on an older ladder position is simply "no evidence flowing".
+    return null;
+  }
+}
+
+// The composition expectation attached to a nutrition-target change, or null.
+//
+// Shaped to what `bodyMeasurementObservation` really computes: it reports the LATEST
+// reading as `actual.value` and counts rows as `measurements`, so the falsifiable claim
+// is an absolute ceiling on the waist (`at_most` + `target.max`), not an invented rate.
+// `recomposition_stage` rides in `baseline` because that is where reaction-model's
+// `outcomeStage` reads it from — without it the learning would pool a mid-cut outcome
+// with a lean-gain one.
+//
+// DELIBERATELY CUT-ONLY. A deficit makes one unambiguous composition claim: the waist
+// should not go up. A surplus does not — some waist gain is expected in a lean gain and
+// nothing here knows how much, so predicting a ceiling would be inventing a number the
+// evidence cannot settle. Maintenance is the same story in miniature. Both correctly
+// write nothing.
+function bodyMeasurementExpectation(
+  effectiveDate: string,
+  predictedTrendLbWk: number | null,
+  stage: string | null
+): ProposedExpectation | null {
+  if (predictedTrendLbWk == null || !Number.isFinite(predictedTrendLbWk)) return null;
+  if (predictedTrendLbWk > CUT_TREND_FLOOR_LB_WK) return null;
+  const tape = flowingWaistTape(effectiveDate);
+  if (!tape) return null;
+  const round1 = (value: number) => Math.round(value * 10) / 10;
+  return {
+    metric_key: "body_measurement_direction",
+    subject_key: "waist_in",
+    direction: "at_most",
+    baseline: {
+      value: round1(tape.value),
+      baseline_date: tape.date,
+      recomposition_stage: stage ?? "unknown",
+      predicted_trend_lb_wk: predictedTrendLbWk,
+    },
+    target: { max: round1(tape.value + WAIST_TAPE_NOISE_IN) },
+    window_start: effectiveDate,
+    window_end: addDaysISO(effectiveDate, WAIST_WINDOW_DAYS),
+    minimum_data: { measurements: WAIST_FLOW_MIN_READINGS },
+    confounder_policy: "exclude_context_events",
+    confidence: "tentative",
+    evaluator: "body_measurement_direction",
+    evaluator_version: "nutrition-body-measurement-v1",
+  };
+}
+
 function previousNutritionTargetKcal(saved: AcceptedNutritionTarget): number | null {
   const row = db
     .prepare(
@@ -168,6 +260,15 @@ function recordNutritionTargetDecision(saved: AcceptedNutritionTarget): void {
           })
         : null;
     const stage = response?.expectation.baseline?.recomposition_stage ?? null;
+    // The composition half of the same change, when — and only when — tape is flowing.
+    const predictedTrend = Number(response?.expectation.baseline?.predicted_trend_lb_wk);
+    const body = response
+      ? bodyMeasurementExpectation(
+          saved.effective_date,
+          Number.isFinite(predictedTrend) ? predictedTrend : null,
+          stage == null ? null : String(stage)
+        )
+      : null;
     recordDecision(
       {
         effective_date: saved.effective_date,
@@ -199,7 +300,7 @@ function recordNutritionTargetDecision(saved: AcceptedNutritionTarget): void {
         superseded_by: null,
         evaluator_version: response?.expectation.evaluator_version ?? null,
       },
-      response ? [response.expectation] : []
+      [response?.expectation, body].filter((item): item is ProposedExpectation => !!item)
     );
   } catch {
     // The durable target is authoritative; accountability telemetry is fail-soft.

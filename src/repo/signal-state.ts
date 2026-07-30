@@ -67,6 +67,18 @@ export interface SignalObservation {
   subject_key?: string | null;
   max_age_days?: number;
   safety_override?: boolean;
+  // CONTEXT, NOT POSTURE. Evidence the coach may READ but which decides nothing: it
+  // rides in the dimension's `coverage`, `provenance` and `evidence` (so it reaches the
+  // coach context and the provenance trail) and is excluded from every computation that
+  // produces a status, a confidence, a conflict, a voice or a posture.
+  //
+  // The constitution's rule for subjective signals is that they inform and never
+  // override (see `checkins` in CLAUDE.md's domain gotchas). Mood is the fuzziest of
+  // them — a bad morning is not a training verdict — so it gets a way to be SEEN
+  // without a way to act. `neutral` alone would not have been enough: a neutral
+  // observation still makes `active` non-empty, which flips an otherwise-evidence-free
+  // day's readiness from "unknown" to "ready" and changes the fallback voice with it.
+  context_only?: boolean;
 }
 
 export interface ResolvedSignalEvidence extends SignalObservation {
@@ -698,9 +710,21 @@ export function resolveSignalObservations(date: string, observations: SignalObse
   );
 }
 
+// The evidence a posture may be computed FROM. Context-only observations are carried
+// everywhere the state is read and excluded everywhere it is decided — one predicate,
+// used by every arbitration site, so the two can never drift apart.
+function bearingEvidence<T extends { context_only?: boolean }>(items: T[]): T[] {
+  return items.filter((item) => !item.context_only);
+}
+
 function dimensionState(dimension: SignalDimension, evidence: ResolvedSignalEvidence[]): SignalDimensionState {
   const all = evidence.filter((item) => item.dimension === dimension);
-  const active = all.filter((item) => item.freshness !== "stale");
+  // `all` still feeds coverage, provenance and `evidence` — a context-only observation
+  // is meant to be visible. Everything below that produces a JUDGEMENT (status,
+  // confidence, conflicts, reason, voice, latest_date) reads `bearing` instead, so the
+  // whole decided half of a dimension is byte-identical with and without it.
+  const bearing = bearingEvidence(all);
+  const active = bearing.filter((item) => item.freshness !== "stale");
   const strongest = [...active].sort((a, b) => {
     const safety = Number(!!b.safety_override) - Number(!!a.safety_override);
     return safety || DIRECTION_RANK[b.direction] - DIRECTION_RANK[a.direction];
@@ -723,9 +747,9 @@ function dimensionState(dimension: SignalDimension, evidence: ResolvedSignalEvid
     if (support && brake) conflicts.push(`${support.summary} But ${joinedCase(brake.summary)}`);
   }
   const activeFields = [...new Set(active.map((item) => item.field))];
-  const staleFields = [...new Set(all.filter((item) => item.freshness === "stale").map((item) => item.field))];
+  const staleFields = [...new Set(bearing.filter((item) => item.freshness === "stale").map((item) => item.field))];
   let confidence: SignalConfidence = "none";
-  if (all.length)
+  if (bearing.length)
     confidence =
       active.length === 0
         ? "low"
@@ -735,7 +759,7 @@ function dimensionState(dimension: SignalDimension, evidence: ResolvedSignalEvid
             ? "medium"
             : "low";
   const latestDate =
-    all
+    bearing
       .map((item) => item.date)
       .filter((value): value is string => !!value)
       .sort()
@@ -761,7 +785,9 @@ function dimensionState(dimension: SignalDimension, evidence: ResolvedSignalEvid
     conflicts,
     reason:
       strongest?.summary ??
-      (all.length ? "Only stale evidence is available, so this stays open." : "No current evidence in this dimension."),
+      (bearing.length
+        ? "Only stale evidence is available, so this stays open."
+        : "No current evidence in this dimension."),
     voice: strongest?.voice ?? {
       key: status === "constrained" || status === "watch" ? "unvoiced_protect" : "unvoiced_clear",
     },
@@ -848,8 +874,12 @@ function planningDirectives(dimensions: Record<SignalDimension, SignalDimensionS
 }
 
 function actionState(dimensions: Record<SignalDimension, SignalDimensionState>) {
-  const active = Object.values(dimensions).flatMap((dimension) =>
-    dimension.evidence.filter((item) => item.freshness !== "stale")
+  // `dimension.evidence` deliberately still carries context-only items, so the posture
+  // ladder filters them here. Note the `!active.length` rung further down: without this
+  // filter a single context-only observation would be enough to turn an
+  // evidence-free morning from "unknown" into "ready".
+  const active = bearingEvidence(
+    Object.values(dimensions).flatMap((dimension) => dimension.evidence.filter((item) => item.freshness !== "stale"))
   );
   const done = active.find((item) => item.field === "completed_today" && item.direction === "support");
   if (done) return { readiness: "complete" as const, posture: "done" as const, evidence: [done] };
@@ -914,8 +944,8 @@ function supportState(
   dimensions: Record<SignalDimension, SignalDimensionState>
 ): SignalSupport | null {
   if (action.posture !== "train" || action.readiness !== "ready") return null;
-  const active = Object.values(dimensions).flatMap((dimension) =>
-    dimension.evidence.filter((item) => item.freshness !== "stale")
+  const active = bearingEvidence(
+    Object.values(dimensions).flatMap((dimension) => dimension.evidence.filter((item) => item.freshness !== "stale"))
   );
   if (active.some((item) => item.direction === "caution" || item.direction === "constraint")) return null;
   const support = active.filter((item) => item.direction === "support");
@@ -1189,6 +1219,35 @@ export function planningSignalState(input: {
           safety_override: Number(checkin.energy) <= 2,
           max_age_days: 0,
         }
+      )
+    );
+  // Mood has been WRITTEN by the check-in since the beginning and read by nothing: it
+  // reached the day-read's signals for display and stopped there, so the one place the
+  // coach actually reasons from never saw it. It enters here as CONTEXT ONLY.
+  //
+  // Deliberately inert (`context_only`, `neutral`, no `safety_override`): a flat mood on
+  // a well-recovered morning is not a reason to pull training, and the constitution is
+  // explicit that subjective signals inform and never override. What it buys is a coach
+  // that can NOTICE — a run of low mood beside a hard block is exactly the cross-domain
+  // connection this system exists to make, and it could not previously be made at all.
+  //
+  // No `voice`: context-only evidence can never become a dimension's `strongest` or the
+  // action's lead evidence, so nothing would ever speak it. A voice key here would be
+  // dead vocabulary — see the note at the end of SIGNAL_VOICE.
+  if (checkin?.mood != null)
+    observations.push(
+      observation(
+        "recovery_capacity",
+        "felt_mood",
+        date,
+        "user_checkin",
+        "neutral",
+        Number(checkin.mood) <= 2
+          ? "The athlete reports low mood today; context for how the day may feel, not a training constraint."
+          : Number(checkin.mood) >= 4
+            ? "The athlete reports good mood today."
+            : "The athlete reports steady mood today.",
+        { context_only: true, max_age_days: 0 }
       )
     );
   if (checkin?.sleep_feel != null)

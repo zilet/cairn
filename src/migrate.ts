@@ -1729,6 +1729,66 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 86,
+    name: "directive-soft-resolve-compaction",
+    // Pure data repair — no schema change, so no db.ts counterpart (a fresh DB has no
+    // rows to compact and is already in the post-migration shape).
+    //
+    // HISTORY, NOT A LIVE BUG. Before the diff-based reconcile landed
+    // (reconcileDirectives, src/repo/coach.ts), every propagation pass soft-resolved its
+    // own output and wrote it again, so a handful of live findings left ~1000 resolved
+    // 'markers' rows in bursts of 300+ a day. The engine has churned zero rows since;
+    // this clears the pile that engine already left behind.
+    //
+    // DELIBERATELY NARROW — three guards, each load-bearing:
+    //
+    //  1. `status_at IS NULL` — a MACHINE soft-resolve. This is the whole safety
+    //     argument: every consumer of a non-active directive filters on
+    //     `status_at IS NOT NULL` (lastDirectiveFeedback and directiveFeedbackForCoach
+    //     in propagation.ts, sinceLast, the reaction model's intervention list), so the
+    //     rows removed here are invisible to all of them. USER feedback — a Done or a
+    //     Dismiss, which suppresses a directive from resurfacing and dates an
+    //     intervention — is never touched, however duplicated it looks.
+    //  2. EXACT duplicates only: same directive_key, text, domain, marker AND the same
+    //     trigger snapshot. Two resolves of the same advice at different marker values
+    //     are two different facts and both survive.
+    //  3. Nothing referenced by `resurfaced_from_id`. That chain should only ever point
+    //     at a status_at-stamped row, but a legacy row predating the intent-key engine
+    //     could break the rule, and a dangling audit link is worse than a duplicate.
+    //
+    // 'health_review' rows are left alone entirely — that source clears and rewrites
+    // only its own rows, and its history is agent-authored rather than machine churn.
+    //
+    // Idempotent: the keeper is the earliest `created_at` in each group, so a second run
+    // finds one row per group and matches nothing.
+    up: (db) => {
+      try {
+        db.prepare(
+          `DELETE FROM health_directives
+            WHERE id IN (
+                  SELECT id FROM (
+                         SELECT id, ROW_NUMBER() OVER (
+                                  PARTITION BY COALESCE(directive_key, ''), COALESCE(directive, ''),
+                                               COALESCE(domain, ''), COALESCE(marker, ''),
+                                               COALESCE(trigger_value, ''), COALESCE(trigger_side, ''),
+                                               COALESCE(trigger_date, '')
+                                      ORDER BY created_at ASC, id ASC
+                                ) AS rn
+                           FROM health_directives
+                          WHERE source = 'markers' AND status = 'resolved' AND status_at IS NULL
+                       )
+                   WHERE rn > 1
+                 )
+              AND id NOT IN (
+                  SELECT resurfaced_from_id FROM health_directives WHERE resurfaced_from_id IS NOT NULL
+                 )`
+        ).run();
+      } catch {
+        /* an ancient DB without the directive columns has no churn to compact */
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: DatabaseSync) {
