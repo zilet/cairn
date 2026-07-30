@@ -91,6 +91,14 @@ export interface ClientDayRead {
   // Which Today surface leads today. Optional: absent on any non-live date and
   // whenever the arbitration can't be made.
   attention?: ClientTodayAttention;
+  // The optional guided recovery menu on a rest/easy day (VISION: "rest" must
+  // never feel like "do nothing"). Absent/null on train/done reads and whenever
+  // the server has nothing to suggest. Never persisted — derived fresh per
+  // response, same as forward/arc.
+  recovery?: {
+    line: string;
+    options: Array<{ label: string; detail: string; minutes: number | null }>;
+  } | null;
   periodization_context?: {
     program_block: {
       goal: string;

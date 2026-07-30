@@ -185,6 +185,40 @@ type TodayBriefHtmlOptions = {
     return reason && normalized(reason) !== normalized(read?.why) ? reason : "";
   }
 
+  // The guided recovery menu on a rest/easy day: a short optional line + a
+  // handful of low-key rows, never a chip and never an action — resting is
+  // still a perfectly good answer beside every option here. Rendered only for
+  // rest/easy kinds; a train/done read (or an absent/malformed payload) gets
+  // nothing. Every interpolated string is escaped.
+  function todayBriefRecoveryHtml(read: TodayBriefRead | null | undefined, kind: string): string {
+    if (kind !== "rest" && kind !== "easy") return "";
+    const recovery = read?.recovery as { line?: unknown; options?: unknown } | null | undefined;
+    if (!recovery || typeof recovery !== "object") return "";
+    const line = recovery.line == null ? "" : String(recovery.line).trim();
+    const options = Array.isArray(recovery.options) ? recovery.options : [];
+    const rows = options
+      .map((opt) => {
+        const o = (opt && typeof opt === "object" ? opt : {}) as {
+          label?: unknown;
+          detail?: unknown;
+          minutes?: unknown;
+        };
+        const label = o.label == null ? "" : String(o.label).trim();
+        const detail = o.detail == null ? "" : String(o.detail).trim();
+        if (!label && !detail) return "";
+        const minutesNum = o.minutes == null ? null : Number(o.minutes);
+        const mins =
+          minutesNum != null && Number.isFinite(minutesNum) && minutesNum > 0
+            ? ` <span class="brief-recovery-opt-mins">· ${escHtml(String(Math.round(minutesNum)))} min</span>`
+            : "";
+        return `<div class="brief-recovery-opt">${label ? `<span class="brief-recovery-opt-label">${escHtml(label)}${mins}</span>` : ""}${detail ? `<span class="brief-recovery-opt-detail">${escHtml(detail)}</span>` : ""}</div>`;
+      })
+      .filter(Boolean)
+      .join("");
+    if (!rows && !line) return "";
+    return `<div class="brief-recovery">${line ? `<p class="brief-recovery-line">${escHtml(line)}</p>` : ""}${rows ? `<div class="brief-recovery-list">${rows}</div>` : ""}</div>`;
+  }
+
   function todayBriefUpdatedHtml(read: TodayBriefRead | null | undefined, kind: string, isToday = true): string {
     const raw = read?.computed_at || read?.decision?.computed_at;
     const stamp = raw ? new Date(String(raw)) : null;
@@ -208,6 +242,7 @@ type TodayBriefHtmlOptions = {
     const est = estMinutes != null ? `${estMinutes} min` : "";
     const headline = escHtml(read?.headline || meta.lead);
     const why = read?.why ? escHtml(read.why) : "";
+    const recovery = todayBriefRecoveryHtml(read, kind);
     // The forward line rides on train days AND done days — after the work is in,
     // "Next: …" is the so-what that replaces the retired Start-session controls.
     const forward = read?.forward && (kind === "train" || kind === "done") ? escHtml(read.forward) : "";
@@ -274,6 +309,7 @@ type TodayBriefHtmlOptions = {
       <h2 class="brief-headline">${headline}</h2>
       ${focus && kind === "train" ? `<div class="brief-focus">${focus}</div>` : ""}
       ${why ? `<p class="brief-why">${why}</p>` : ""}
+      ${recovery}
       ${forward ? `<button class="brief-forward" data-redirect="view-week" title="See your week"><span class="brief-forward-arrow" aria-hidden="true">↗</span><span class="brief-forward-txt">${forward}</span></button>` : ""}
       ${periodization}
       ${arc ? `<button class="brief-forward brief-arc" data-redirect="view-program" title="See your plan's arc"><span class="brief-forward-arrow" aria-hidden="true">◷</span><span class="brief-forward-txt">${arc}</span></button>` : ""}
@@ -305,6 +341,7 @@ type TodayBriefHtmlOptions = {
     };
     if (mins(a.est_minutes) !== mins(b.est_minutes)) return true;
     if (todayBriefPeriodizationHtml(a) !== todayBriefPeriodizationHtml(b)) return true;
+    if (todayBriefRecoveryHtml(a, todayBriefKind(a)) !== todayBriefRecoveryHtml(b, todayBriefKind(b))) return true;
     // The freshness line's REASON is content and repaints; its clock is not. A
     // bare timestamp tick was rewriting the whole Brief (replaceWith + settle
     // animation) for a minute that changed nothing the athlete is reading —
@@ -434,6 +471,7 @@ type TodayBriefHtmlOptions = {
     periodizationHtml: todayBriefPeriodizationHtml,
     updatedHtml: todayBriefUpdatedHtml,
     decisiveReason: todayBriefDecisiveReason,
+    recoveryHtml: todayBriefRecoveryHtml,
   };
 
   Object.assign(globalThis, { CairnTodayBrief: CAIRN_TODAY_BRIEF });

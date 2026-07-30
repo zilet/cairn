@@ -202,6 +202,11 @@ export const PROMPT_CONTEXT_SITES = {
       "coaching_focus",
       "signal_state",
       "next_step",
+      // How often each read is actually FOLLOWED. The one site that gets it: the Brief
+      // is the read being measured, so this is the only prompt where the divergence
+      // pattern is about the very decision it is being asked to make. Compacted hard
+      // (see compactReadAdherence) because it ships every morning.
+      "read_adherence",
     ],
     sessions: SESSIONS_RECENT,
   },
@@ -444,6 +449,25 @@ function compactCoachingFocus(focus: unknown): unknown {
   return out;
 }
 
+// The read-adherence model, cut to what a prompt can act on. The full model carries a
+// 42-day window and up to fourteen recent days; the Brief needs the standing counts
+// (which read kind gets followed, and the plain-words test behind each count — the
+// `measures` string must survive, or a followed `train` day reads as a hard one) plus
+// enough recent days to see whether a divergence run is CURRENT. Seven is a week: long
+// enough to show a pattern, short enough that this stays a few hundred bytes on a
+// payload that ships every morning. The window bookkeeping (`window_days`,
+// `days_observed`, `as_of`) is operator diagnostics and is dropped.
+const RECENT_ADHERENCE_DAYS = 7;
+
+function compactReadAdherence(model: unknown): unknown {
+  if (!model || typeof model !== "object" || Array.isArray(model)) return model;
+  const row = model as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  if (Array.isArray(row.by_read)) out.by_read = row.by_read;
+  if (Array.isArray(row.recent)) out.recent = row.recent.slice(-RECENT_ADHERENCE_DAYS);
+  return out;
+}
+
 // ---------- the helper every prompt uses ----------
 
 /**
@@ -466,7 +490,9 @@ export function projectCoachContext(ctx: PartialCoachContext, site: PromptSite):
           ? compactRecovery(value)
           : key === "coaching_focus"
             ? compactCoachingFocus(value)
-            : value;
+            : key === "read_adherence"
+              ? compactReadAdherence(value)
+              : value;
   }
   return out as PartialCoachContext;
 }

@@ -878,3 +878,33 @@ test("one signal state per date per request — the Brief and the coach share it
     assert.equal(second.input_fingerprint, first.input_fingerprint);
   });
 });
+
+// The prompt tells the agent "today has ALREADY been eased" so it does not spend the
+// read re-arguing the softening. That claim was keyed on `active`, which says only
+// that the divergence pattern EXISTS — just as true on a train morning, or one where
+// a clinical constraint held the rest in place. It must key on `applied`: the fact.
+test("the prompt claims today was already eased only when it actually was", () => {
+  resetTables("day_reads", "plan_days", "plan_items", "sessions", "logged_sets", "daily_metrics", "profile");
+  const date = localDaysAgo(0);
+  // Enough of a rest-divergence pattern for the outcomes block to render at all.
+  const ctx = {
+    ...repo.getCoachContext(),
+    read_adherence: {
+      by_read: [{ read: "rest", measures: "no training was logged", days: 5, followed: 1, diverged: 4, unclear: 0 }],
+      recent: [],
+    },
+  };
+  const live = repo.dayRead(date);
+  const evidence = { active: true, window_days: 10, overridden_and_fine: ["a", "b", "c"], last_honored_rest: null };
+  const promptFor = (kind, applied) =>
+    buildDayReadPrompt(ctx, {
+      date,
+      baseline: { ...live, kind, signals: { ...live.signals, outcome_feedback: { ...evidence, applied } } },
+    });
+
+  const untouched = promptFor("train", false);
+  assert.match(untouched, /HOW YOUR READS HAVE ACTUALLY LANDED/, "the pattern itself still reaches the agent");
+  assert.ok(!/ALREADY been eased/.test(untouched), "nothing was eased on a morning that reads train");
+
+  assert.match(promptFor("easy", true), /ALREADY been eased/);
+});

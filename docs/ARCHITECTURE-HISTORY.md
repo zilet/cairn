@@ -4,6 +4,59 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-07-30 — grounded wearable truth and an adaptive rest read
+
+Four tracks, one round. Migration **v84** (`garmin-wear-quality-repair`, no schema change) repairs
+two classes of junk already sitting in `garmin_daily_metrics`: a `resting_hr` derived from the daily
+summary on a day the watch caught no genuine rest window (no sleep record, and no witnessed minimum
+HR inside a physiologically plausible 30–65 bpm rest band), and negative "no data" sentinels (`-1`,
+`-2`) stored raw across roughly two dozen metric columns. Both classes are idempotently nulled.
+`src/garmin.ts`'s ingest now rejects the same junk at the source: `credibleSummaryRestingHr`
+(exported) accepts a summary-derived resting HR only when its own witnessing min-HR sample is itself
+plausible and low enough to prove real rest coverage — the sleep-derived value always wins when
+present — and every non-negative picker (`pickNonNegNum`/`asNonNegNum`) now also guards `min_hr`/
+`max_hr`. The bug this closes: a watch worn only in the daytime reported a "resting" HR of 94–118 off
+its own daytime minimum (70–78), which then poisoned the 7-day-vs-30-day recovery delta into a daily
+false "resting HR elevated" caution.
+
+`src/repo/coach.ts`'s autoregulation rollup (the soreness/low-performance flags feeding
+`dayPlanningSignalState`) moves from a session-INDEXED window — the last 4 sessions — to a 7
+CALENDAR-DAY one: indexed at 4, a rest read that produced less training meant the flag's own clearing
+evidence took longer to arrive, so a low-performance flag could prolong the very rest posture that
+produced it. 0-set sessions no longer count toward either rated signal (an opened-and-abandoned row
+is not a report on how training felt), a later good session (performance ≥4, soreness ≤2) clears an
+earlier flag inside the window instead of waiting for it to age out, and each flag's observation dates
+to the offending SESSION, never to "now".
+
+`src/repo/brain/read-adherence.ts` gains `restOverrideSoftening`: when 3 or more of the last 10 closed
+days offered a rest (or already-softened easy) morning that the athlete trained through anyway with
+nothing in session feedback suggesting it cost them (worst-of-day performance ≥3, or unrated — silence
+is not evidence of harm), the next non-clinical rest read softens one notch to easy, via a new
+`outcome_feedback_soften` rule outcome. Softening is scoped to exactly the four accumulation-style
+rest codes in `SOFTENABLE_REST_CODES` (`accumulated_load_rest` / `low_readiness_rest` /
+`felt_run_down_rest` / `acute_signal_protection`); `acute_sleep_corroborated` and
+`recovery_dose_overrun` stay excluded as fresh 24-hour facts history cannot argue with, and
+`clinicallyDriven()` — probing an active constraint item, the arbitrated `source_dimensions`, and the
+`health_constraints` dimension's own status — is an absolute floor regardless of which rule fired.
+Push-direction logic has to live in these deterministic rules to have any effect at all, since
+`enforceDayReadSafetyPosture` clamps away any agent-side upgrade of a rest baseline. A softened easy
+morning trained through without harm counts as the SAME evidence restated, so the pattern keeps
+accumulating once active instead of self-extinguishing the moment rest mornings stop appearing; an
+honored rest or an honored softened-easy morning resets the count. `signals.outcome_feedback` now
+publishes `{...RestOverrideSoftening, applied}`, and the day-read prompt site
+(`src/prompt/context-projection.ts`) gains a compacted `read_adherence` block (`compactReadAdherence`,
+capped to the recent window) — the one prompt allowed to see it, since the Brief is the very read
+being measured.
+
+`src/repo/recovery-menu.ts` (new) builds a derived, never-persisted menu of 2–3 low-key recovery
+options (easy spin / walk / mobility / core) for a rest or easy Brief, so a quiet day never reads as a
+void. Grounded in recent muscle load and steered clear of any active training symptom via a gentler,
+symptom-guarded phrasing variant; wording rotates through `pickDayVariant`. `attachDayReadContext`
+(`src/domain/brain/day-read-use-case.ts`) computes it fresh on every response — same precedent as
+`forward`/`arc` — and only for a read date on or after today, since a routed past date would invite a
+session that day is already over for. `public/styles.css` and `today-brief-client.ts` render the menu;
+`sw.js` bumps to `cairn-v536`.
+
 ## 2026-07-28 — pain-aware daily authority and calm lifecycle feedback
 
 No schema change. The versioned daily-session decision now fingerprints its policy identity, ordered

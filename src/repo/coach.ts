@@ -223,9 +223,18 @@ export interface ProgressionSignal {
 export interface AutoregSignal {
   soreness_flag: boolean;
   low_performance_flag: boolean;
+  // The date of the session each flag is actually about. Downstream these become
+  // the observation dates in the signal state, so `age_days` / `max_age_days`
+  // describe the athlete's feedback rather than the moment the read was built.
+  low_performance_date: string | null;
+  soreness_date: string | null;
+  joint_date: string | null;
   joint_areas: string[];
   note: string; // one rolled-up plain sentence
 }
+// How far back a felt signal counts. Autoregulation feedback is a report on a
+// body that changes daily; a rating from a fortnight ago is history, not a signal.
+const AUTOREG_WINDOW_DAYS = 7;
 // `asOf` is the calendar date these signals are being read FOR. It changes two
 // things, and only for a FIXED HISTORICAL date (today and the omitted default stay
 // byte-for-byte as before): the sessions fetched are bounded to that day, and the
@@ -330,11 +339,46 @@ export function trainingSignals(
     };
   });
 
-  // Autoregulation rollup over the last 4 sessions — a single plain-language signal
-  // the prompt can act on without re-scanning the raw session array.
-  const recent4 = sessions.slice(0, 4);
-  const soreDays = recent4.filter((s) => s.soreness != null && Number(s.soreness) >= 4);
-  const lowPerfDays = recent4.filter((s) => s.performance != null && Number(s.performance) <= 2);
+  // Autoregulation rollup — a single plain-language signal the prompt can act on
+  // without re-scanning the raw session array.
+  //
+  // The window is by DATE, not by session index. Indexed at "the last 4 sessions",
+  // a low-performance rating survived until four more sessions were logged — and
+  // because the flag itself pushes the read toward rest, the very sessions that
+  // would have retired it never happened. A rest read prolonged its own trigger.
+  // Sessions carrying no logged work are skipped for the RATED signals too: an
+  // opened-and-abandoned row is not a report on how training felt.
+  const readDate = asOf ?? localDateISO();
+  const windowStart = addDaysISO(readDate, -(AUTOREG_WINDOW_DAYS - 1)) ?? readDate;
+  const inWindow = sessions.filter((s) => {
+    const d = String(s.date ?? "");
+    return d >= windowStart && d <= readDate;
+  });
+  // `sets` is present on every session from getRecentSessions (both production
+  // callers). A caller that hands over a session-shaped object WITHOUT the key at
+  // all is not asserting emptiness, so it still counts.
+  const carriedWork = (s: any) => (Array.isArray(s.sets) ? s.sets.length > 0 : true);
+  // Newest-first, matching getRecentSessions' ORDER BY date DESC, id DESC.
+  const ratedPerf = inWindow.filter(carriedWork).filter((s) => s.performance != null);
+  const ratedSore = inWindow.filter(carriedWork).filter((s) => s.soreness != null);
+  // Recovery evidence CLEARS the flag: the read has to follow the athlete's most
+  // recent information. A session that felt strong after a rough one is the
+  // athlete telling us the rough one has passed, and it must not keep speaking.
+  const clearedByLater = <T>(list: T[], hit: (s: T) => boolean, clears: (s: T) => boolean) => {
+    const idx = list.findIndex(hit);
+    if (idx < 0) return [] as T[];
+    return list.slice(0, idx).some(clears) ? ([] as T[]) : list.filter(hit);
+  };
+  const soreDays = clearedByLater(
+    ratedSore,
+    (s) => Number(s.soreness) >= 4,
+    (s) => Number(s.soreness) <= 2
+  );
+  const lowPerfDays = clearedByLater(
+    ratedPerf,
+    (s) => Number(s.performance) <= 2,
+    (s) => Number(s.performance) >= 4
+  );
   // An area the athlete has explicitly CLOSED must stop speaking. The raw session
   // notes log what was said, not what is still true, so a joint area whose symptom
   // record is resolved — with no open record left for the same place — drops out.
@@ -357,17 +401,15 @@ export function trainingSignals(
   } catch {
     /* the rollup is a plain read — lifecycle trouble must never break it */
   }
-  const joints = [
-    ...new Set(
-      recent4
-        .map((s) => String(s.joint_pain || "").trim())
-        .filter(Boolean)
-        .filter((area) => {
-          const key = symptomAreaKey(area);
-          return !key || openAreas.has(key) || !closedAreas.has(key);
-        })
-    ),
-  ];
+  // Joint reports take the same date window but NOT the logged-work filter — a
+  // free-text "left knee" is self-evidently content, whatever else the row holds.
+  const jointSessions = inWindow.filter((s) => {
+    const area = String(s.joint_pain || "").trim();
+    if (!area) return false;
+    const key = symptomAreaKey(area);
+    return !key || openAreas.has(key) || !closedAreas.has(key);
+  });
+  const joints = [...new Set(jointSessions.map((s) => String(s.joint_pain).trim()))];
   let autoregulation: AutoregSignal | null = null;
   if (soreDays.length || lowPerfDays.length || joints.length) {
     const parts: string[] = [];
@@ -380,6 +422,10 @@ export function trainingSignals(
     autoregulation = {
       soreness_flag: soreDays.length > 0,
       low_performance_flag: lowPerfDays.length > 0,
+      // Newest offending session in each case — the honest date for the claim.
+      low_performance_date: lowPerfDays[0]?.date ? String(lowPerfDays[0].date) : null,
+      soreness_date: soreDays[0]?.date ? String(soreDays[0].date) : null,
+      joint_date: jointSessions[0]?.date ? String(jointSessions[0].date) : null,
       joint_areas: joints,
       note: `${parts.join("; ")} — ease volume/load there or de-load the movements that load it; a brake, never a penalty.`,
     };
@@ -2637,6 +2683,22 @@ export function getRecoverySummary(days = 14, garminSummary?: any, asOfDate = lo
       .filter(Number.isFinite);
     return values.length ? round1(values.reduce((sum, value) => sum + value, 0) / values.length) : null;
   };
+  // Robust centre for the recent-vs-baseline windows below. A single junk wearable
+  // day — a daytime-only-wear resting HR of 118 against a 55 norm — shifts a
+  // 7-value MEAN by roughly 9 bpm, which is enough on its own to manufacture a
+  // "resting heart rate above the athlete's norm" caution every morning. The
+  // median ignores it. Only `recent`/`baseline`/`delta` use this; the surfaced
+  // `avg_*` figures keep the arithmetic mean, so nothing displayed changes.
+  const median = (field: Signal, list = rows): number | null => {
+    const values = list
+      .filter((row) => row.values[field] != null)
+      .map((row) => Number(row.values[field]))
+      .filter(Number.isFinite)
+      .sort((a, b) => a - b);
+    if (!values.length) return null;
+    const mid = values.length >> 1;
+    return round1(values.length % 2 ? values[mid] : (values[mid - 1] + values[mid]) / 2);
+  };
   const freshness = (date: string | null): "fresh" | "recent" | "stale" | "missing" => {
     if (!date) return "missing";
     const age = Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${date}T00:00:00Z`)) / 864e5);
@@ -2716,7 +2778,7 @@ export function getRecoverySummary(days = 14, garminSummary?: any, asOfDate = lo
   };
   const avgWindow = (winDays: number) => {
     const list = resolveRows(winDays);
-    return { sleep: average("sleep_min", list), hrv: average("hrv_ms", list), rhr: average("resting_hr", list) };
+    return { sleep: median("sleep_min", list), hrv: median("hrv_ms", list), rhr: median("resting_hr", list) };
   };
   const recent = avgWindow(7);
   const baseline = avgWindow(30);

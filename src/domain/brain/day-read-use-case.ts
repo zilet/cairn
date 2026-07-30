@@ -20,6 +20,7 @@ import {
   type DayReadPeriodizationContext,
 } from "../../repo/intelligence.js";
 import { recordSuggestion } from "../../repo/memory.js";
+import { buildRecoveryMenu, type RecoveryMenu } from "../../repo/recovery-menu.js";
 import { getTrajectory } from "../../repo/trajectory.js";
 import { decideTodayAttention, type TodayAttention } from "./today-attention.js";
 
@@ -47,6 +48,9 @@ export interface DayReadResult {
   computed_at?: string;
   // A hand-authored read (the demo seed's Brief) pinned against recompute.
   curated?: boolean;
+  // The optional guided recovery menu on a rest/easy day (never dayRead-computed,
+  // never persisted — derived fresh alongside forward/arc; see attachDayReadContext).
+  recovery?: RecoveryMenu | null;
   periodization_context: DayReadPeriodizationContext;
   // Which Today surface earns the position of prominence (see today-attention.ts).
   // Optional by contract: absent on any non-live date and on any failure, and the
@@ -111,12 +115,29 @@ export function attachDayReadContext(readDate: string, read: Record<string, unkn
     attention = null;
   }
 
+  // The guided recovery menu (Track D): a rest/easy Brief is never a void. Same
+  // precedent as forward/arc above — derived fresh per response, never cached
+  // or persisted, so it always reflects today's live symptom/load state.
+  //
+  // …and for the same reason, only on a day the athlete can still act on. The menu
+  // is an invitation to move NOW, grounded in today's live symptom and load state;
+  // offered against a routed past date it invites a session that day is over for,
+  // and it would be grounded in today's symptoms rather than that day's anyway.
+  // `attention` above declines past dates on the same reasoning.
+  let recovery: RecoveryMenu | null = null;
+  try {
+    if (readDate >= localToday()) recovery = buildRecoveryMenu(readDate, String(read.kind ?? ""));
+  } catch {
+    recovery = null;
+  }
+
   return {
     ...read,
     forward,
     arc,
     periodization_context: periodizationContext,
     ...(attention ? { attention } : {}),
+    ...(recovery ? { recovery } : {}),
   } as DayReadResult;
 }
 

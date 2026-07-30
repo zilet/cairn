@@ -2876,6 +2876,18 @@ body.sheet-open{overflow:hidden}
 }
 .brief-why{font-size:.92rem;color:var(--ink-2);line-height:1.5;margin:11px 0 0;max-width:46ch}
 
+/* the optional guided recovery menu on a rest/easy day — never a prescription,
+   just a few low-key ways to move if the athlete feels like it (VISION.md:
+   "rest" must never feel like "do nothing"). Sage, matching the calm/complete
+   register rather than the terracotta action language below. */
+.brief-recovery{margin:13px 0 0;padding-top:12px;border-top:1px solid var(--line);max-width:46ch}
+.brief-recovery-line{font-size:.85rem;color:var(--ink-2);line-height:1.5;margin:0 0 10px;font-style:italic}
+.brief-recovery-list{display:flex;flex-direction:column;gap:9px}
+.brief-recovery-opt{display:flex;flex-direction:column;gap:1px;padding-left:11px;border-left:2px solid var(--sage)}
+.brief-recovery-opt-label{font-family:var(--font-display);font-size:.88rem;font-weight:560;color:var(--ink)}
+.brief-recovery-opt-mins{font-family:var(--font-ui);font-weight:500;color:var(--muted);font-size:.72rem}
+.brief-recovery-opt-detail{font-size:.78rem;color:var(--muted);line-height:1.4}
+
 /* the day-ahead heads-up — the Program intelligence woven onto the Brief. Quiet,
    one tap to the week; a hairline rule sets it apart from the read without a card. */
 .brief-forward{

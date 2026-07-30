@@ -148,6 +148,15 @@ suggestions, never gates.
   `daily_metrics`, preferring Garmin for sleep/HRV/RHR/body-battery. `recordDailyMetrics(source,
   date, metrics)` upserts one source's row (clamped at the trust boundary); `getDailyMetrics(source?,
   days)` reads them back.
+- **Wearable credibility, sleep-first.** `src/garmin.ts` ingest prefers the sleep-derived resting HR
+  (`foldSleep`, measured across actual sleep) over the daily-summary figure, which Garmin computes
+  from the day's lowest observed HR — only a real resting number when the watch was actually worn
+  through a rest window. `credibleSummaryRestingHr(restingHr, minHr)` accepts a summary value only
+  when it sits in a physiologically plausible band AND the day's own witnessing min-HR sample is
+  itself plausible and low enough (≤65 bpm) to prove genuine rest coverage; daytime-only wear reports
+  90–120 off its own quietest desk minute otherwise, poisoning the 7d-vs-30d delta into a false
+  caution. Every non-negative picker (`pickNonNegNum`/`asNonNegNum`) also guards `min_hr`/`max_hr`,
+  rejecting Garmin's `-1`/`-2` "no data" sentinels rather than averaging them in as real lows.
 
 **One rich signal state, shared by the Brief and the coach.** `dayPlanningSignalState(date,
 provided?)` (`src/repo/day-read.ts`) is the ONE builder of `UnifiedSignalState` — memoized per
@@ -189,6 +198,15 @@ the read graded 373). All three now take the read date. The remaining callers �
 MCP tool, `profile.ts`'s exercise detail, and muscle-trajectory (which filters in JS) — are genuine
 "what is true now" reads, omit the option and are unaffected. This closes the same "measured from
 now" seam `programState`'s own date parameter closed above, one layer down.
+
+**The autoregulation window clears by date, not by count.** `src/repo/coach.ts`'s soreness/
+low-performance rollup windows by the last 7 CALENDAR days rather than the last 4 sessions: indexed
+by session count, a rest read that itself produced fewer sessions meant the flag's own clearing
+evidence took longer to arrive, so a low-performance flag could prolong the very rest posture that
+produced it. 0-set sessions never count toward either rated signal (an opened-and-abandoned row is
+not a report on how training felt), a later good session (performance ≥4, soreness ≤2) clears an
+earlier flag inside the window instead of waiting for it to age out, and each flag's observation
+dates to the offending session, never to "now".
 
 **One night is not a trend.** `SIGNAL_VOICE`'s sleep entries used to speak off `recovery.sleep_min` —
 the latest DATED night, never an average — under a chronic-sounding key (`sleep_short`/`sleep_ok`), so
@@ -457,9 +475,44 @@ per-kind follow/diverge/unclear counts plus the last 14 days, reading the mornin
 EARLIEST `brain_decisions` row per date — never `day_reads` (mutable end-of-day state) or
 `suggestions` (pre-dedupe duplicate rows; see `dayReadSuggestionsByDate()` in `src/repo/memory.ts`).
 The same model rides in `getCoachContext()` as the optional `CoachContextEnvelope.read_adherence`,
-memoized per build (`buildBrainSlice`, `src/repo/coach.ts`) — and deliberately absent from every
-`promptData` site in `context-projection.ts`, so no prompt can quote it back to the athlete or the
-model.
+memoized per build (`buildBrainSlice`, `src/repo/coach.ts`). It is absent from every `promptData`
+site except one: `day_read` (`context-projection.ts`) carries a compacted copy
+(`compactReadAdherence`, capped to the recent window) because the Brief is the one prompt where the
+divergence pattern is about the very decision being made — every other site still drops it, so no
+other prompt can quote it back to the athlete.
+
+**Adherence can soften a rest read, never harden one.** `restOverrideSoftening(model, asOf)`
+(`src/repo/brain/read-adherence.ts`) reads the same rolling model for a narrower, bounded question:
+has the athlete been training through rest mornings, and did those days go fine? Active once 3 or
+more of the last `OUTCOME_SOFTENING_WINDOW_DAYS` (10) closed days offered a rest — or an
+already-softened easy — morning the athlete trained through with nothing in session feedback
+suggesting it cost them (worst-of-day `performance` ≥3, or unrated; silence is not evidence of harm).
+`dayRead()` applies it as one rule-outcome step down, rest → easy, and only for the four
+accumulation-style rest codes in `SOFTENABLE_REST_CODES` (`accumulated_load_rest` /
+`low_readiness_rest` / `felt_run_down_rest` / `acute_signal_protection`) — never
+`acute_sleep_corroborated` or `recovery_dose_overrun`, which are fresh 24-hour facts history cannot
+argue with. `clinicallyDriven()` is an absolute floor on top of that allowlist, probing an active
+constraint item, the arbitrated `source_dimensions`, and the `health_constraints` dimension's own
+status; any of the three and the day never softens, whichever rule fired. This is also why the push
+logic has to live here rather than in the agent layer: `enforceDayReadSafetyPosture` clamps away any
+agent-side upgrade of a rest baseline, so only a deterministic rule sitting ahead of that clamp can
+actually move the read. A softened easy morning trained through without harm counts as the SAME
+evidence restated under the new read — without that, the signal would self-extinguish the moment
+rest mornings stopped appearing, then relapse once the qualifying days aged out of the window. An
+honored rest, or an honored softened-easy morning, resets the count. `signals.outcome_feedback`
+publishes `{...RestOverrideSoftening, applied}` — `applied` is the only field a consumer should key
+on; the softening can be evaluated `active` on a morning that reads `train`, or one a clinical
+constraint held at rest, so `active` alone would misreport whether today was actually eased.
+
+**The rest/easy Brief is never a void.** `src/repo/recovery-menu.ts` derives a short menu of 2–3
+low-key recovery options (easy spin / walk / mobility / core, named from recent muscle load) for a
+rest or easy read, steering clear of anything an active training symptom flags via a gentler,
+symptom-guarded phrasing variant; wording rotates through `pickDayVariant`. It is computed fresh
+inside `attachDayReadContext` (`src/domain/brain/day-read-use-case.ts`) alongside `forward`/`arc` —
+never cached, never persisted — and only for a read date on or after today, since a routed past date
+would invite a session that day is already over for and would be grounded in today's symptoms rather
+than that day's anyway. A suggestion, never a gate: nothing on the menu is presented as required, and
+resting stays a fine answer beside every option.
 
 ### Person, memory, chat
 

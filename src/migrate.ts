@@ -1621,6 +1621,79 @@ export const MIGRATIONS: Migration[] = [
     // instance — see repairPlanItemNoteV83 above.
     up: (db) => repairPlanItemNotesV83(db),
   },
+  {
+    version: 84,
+    name: "garmin-wear-quality-repair",
+    // Pure data repair — no schema change, so no db.ts counterpart.
+    //
+    // Two classes of junk already sitting in garmin_daily_metrics, both of which
+    // the ingest guards (src/garmin.ts) now reject at the source:
+    //   1. Resting HR derived from the DAILY SUMMARY on a day the watch was not
+    //      worn overnight. Garmin computes that figure from the lowest HR it saw
+    //      all day, so daytime-only wear reports 90–120 against a true 52–60.
+    //      A row with no sleep recorded and no low-HR minute is exactly that case.
+    //      A stored min_hr that is itself junk — a negative sentinel, or a zero from
+    //      a dropped HR trace — cannot vouch for anything either, so it is treated
+    //      the same as a missing one rather than as a very low resting minute.
+    //   2. Negative "no data" sentinels (-1, -2) stored raw on metrics that are
+    //      physically non-negative — averageStressLevel: -1 is the common one.
+    // Idempotent: every statement is a guarded UPDATE that no longer matches once
+    // it has run. The 30 / 65 / 90 thresholds mirror RHR_PLAUSIBLE_MIN,
+    // RHR_REST_COVERAGE_MAX_HR and RHR_PLAUSIBLE_MAX in src/garmin.ts; they are
+    // inlined rather than imported because db.ts runs this ladder on import and sits
+    // BELOW garmin.ts in the graph — importing upward would close a cycle.
+    up: (db) => {
+      try {
+        db.prepare(
+          `UPDATE garmin_daily_metrics
+              SET resting_hr = NULL
+            WHERE resting_hr IS NOT NULL
+              AND sleep_min IS NULL
+              AND (min_hr IS NULL OR min_hr < 30 OR min_hr > 65 OR resting_hr > 90 OR resting_hr < 30)`
+        ).run();
+      } catch {
+        /* table absent on an ancient DB — nothing to repair */
+      }
+      for (const column of [
+        // min_hr/max_hr carry the same sentinel. The pass above already treats a
+        // negative min_hr as no witness at all, so either order repairs the same
+        // rows; these are here so the stored trace itself stops reading as a real
+        // (impossibly low) heart rate.
+        "min_hr",
+        "max_hr",
+        "stress_avg",
+        "stress_max",
+        "body_battery_charged",
+        "body_battery_drained",
+        "body_battery_max",
+        "body_battery_min",
+        "body_battery_avg",
+        "spo2_avg",
+        "spo2_min",
+        "respiration_avg",
+        "respiration_min",
+        "respiration_max",
+        "training_readiness",
+        "steps",
+        "active_calories",
+        "total_calories",
+        "bmr_calories",
+        "floors_climbed",
+        "distance_m",
+        "intensity_min_moderate",
+        "intensity_min_vigorous",
+        "restless_count",
+        "avg_sleep_stress",
+        "sleep_score",
+      ]) {
+        try {
+          db.prepare(`UPDATE garmin_daily_metrics SET ${column} = NULL WHERE ${column} < 0`).run();
+        } catch {
+          /* column may not exist on an older ladder position */
+        }
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: DatabaseSync) {

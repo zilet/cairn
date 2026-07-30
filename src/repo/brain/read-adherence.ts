@@ -441,6 +441,12 @@ export interface ReadAdherenceDay {
   outcome: ReadAdherenceOutcome;
   load: TrainingLoad | "none";
   trained: boolean;
+  // Was this morning's read itself the product of the softening below — an easy day
+  // that would otherwise have been a rest? Only ever true on an `easy` read. It is
+  // what lets the softening tell its OWN easy mornings apart from ordinary ones, and
+  // therefore what lets the evidence keep accumulating after it activates (see
+  // restOverrideSoftening).
+  softened: boolean;
 }
 
 export interface ReadAdherenceModel {
@@ -453,14 +459,27 @@ export interface ReadAdherenceModel {
 
 const READ_ORDER: PredictiveDayReadKind[] = ["train", "easy", "rest"];
 
+export interface MorningRead {
+  kind: PredictiveDayReadKind;
+  softened: boolean;
+}
+
 // Which read the athlete was actually GIVEN that morning, taken from the earliest
 // ledger entry for the date. Deliberately not `day_reads` (one mutable row that
 // holds end-of-day state — a rest morning that ended in a session reads back as
 // `done`) and not `suggestions` (pre-dedupe duplicate rows).
-function morningReadsByDate(from: string, to: string): Map<string, PredictiveDayReadKind> {
+//
+// `context_json` comes back for the same reason: that column is MORNING state (the
+// first write of the day wins and later recomputes never overwrite it — see
+// recordDayReadDecision), so `signals.outcome_feedback.applied` on it is a faithful
+// record of whether the read the athlete opened to had been softened. Reading the
+// softening off the read itself, rather than recomputing it, is what keeps this
+// free of a recursion back into restOverrideSoftening.
+function morningReadsByDate(from: string, to: string): Map<string, MorningRead> {
   const rows = db
     .prepare(
-      `SELECT current.source_ref_key AS date, current.action_json AS action_json
+      `SELECT current.source_ref_key AS date, current.action_json AS action_json,
+              current.context_json AS context_json
          FROM brain_decisions current
          JOIN (
            SELECT MIN(id) AS id FROM brain_decisions
@@ -470,8 +489,8 @@ function morningReadsByDate(from: string, to: string): Map<string, PredictiveDay
          ) first ON first.id = current.id
         ORDER BY current.source_ref_key LIMIT 400`
     )
-    .all(from, to) as Array<{ date: string; action_json: string | null }>;
-  const out = new Map<string, PredictiveDayReadKind>();
+    .all(from, to) as Array<{ date: string; action_json: string | null; context_json: string | null }>;
+  const out = new Map<string, MorningRead>();
   for (const row of rows) {
     let kind: unknown = null;
     try {
@@ -479,7 +498,15 @@ function morningReadsByDate(from: string, to: string): Map<string, PredictiveDay
     } catch {
       kind = null;
     }
-    if (isPredictiveDayReadKind(kind)) out.set(String(row.date), kind);
+    if (!isPredictiveDayReadKind(kind)) continue;
+    let softened = false;
+    try {
+      const context = JSON.parse(String(row.context_json ?? "null"));
+      softened = context?.signals?.outcome_feedback?.applied === true;
+    } catch {
+      softened = false;
+    }
+    out.set(String(row.date), { kind, softened });
   }
   return out;
 }
@@ -499,7 +526,7 @@ export function readAdherenceModel(asOf: string = localDateISO(), windowDays = 4
     ])
   );
   const recent: ReadAdherenceDay[] = [];
-  let reads = new Map<string, PredictiveDayReadKind>();
+  let reads = new Map<string, MorningRead>();
   try {
     reads = morningReadsByDate(from, lastClosed);
   } catch {
@@ -520,7 +547,8 @@ export function readAdherenceModel(asOf: string = localDateISO(), windowDays = 4
       })();
 
   for (const date of [...reads.keys()].sort()) {
-    const read = reads.get(date)!;
+    const morning = reads.get(date)!;
+    const read = morning.kind;
     let truth: DayTrainingTruth | null = null;
     try {
       truth = dayTrainingTruth(date, { countsCardio, cardioLoadMedian });
@@ -534,7 +562,7 @@ export function readAdherenceModel(asOf: string = localDateISO(), windowDays = 4
     if (outcome === "followed") stat.followed++;
     else if (outcome === "diverged") stat.diverged++;
     else stat.unclear++;
-    recent.push({ date, read, outcome, load: truth.load, trained: truth.trained });
+    recent.push({ date, read, outcome, load: truth.load, trained: truth.trained, softened: morning.softened });
   }
 
   return {
@@ -543,5 +571,133 @@ export function readAdherenceModel(asOf: string = localDateISO(), windowDays = 4
     days_observed: recent.length,
     by_read: READ_ORDER.map((read) => stats.get(read)!).filter((stat) => stat.days > 0),
     recent: recent.slice(-14),
+  };
+}
+
+// ---------- reading the outcomes back ----------
+//
+// Everything above MEASURES. This is the one derivation that a decision path is
+// allowed to consult, and it is deliberately narrow: it answers a single question
+// about a single read kind — has the athlete been training through REST mornings,
+// and did those days go fine? Nothing else here may grow a consumer without the
+// same care, because the module's whole premise is that adherence is evidence, not
+// a verdict on the person.
+//
+// It can only ever make a read SOFTER (dayRead turns a rest into an easy day, never
+// into a train day), and every clinical path is excluded by the caller before this
+// is consulted at all.
+
+// How far back a divergence still says something about today. Ten closed days is
+// about a training block's worth of mornings: long enough that three of them is a
+// pattern rather than a bad week, short enough that a stretch the athlete has since
+// moved on from falls out on its own.
+export const OUTCOME_SOFTENING_WINDOW_DAYS = 10;
+// Three, not two: two is a coincidence in a ten-day window, and the cost of being
+// wrong here is asymmetric — softening a genuinely-earned rest is worse than being
+// slow to soften one the athlete has already overruled six times.
+export const OUTCOME_SOFTENING_MIN_DIVERGENCES = 3;
+// Session feedback at or above this reads as "that went fine". An UNRATED session
+// counts the same way: the athlete not answering is not evidence of harm, and
+// treating silence as a bad day would quietly make the common case unreachable.
+const NO_HARM_PERFORMANCE = 3;
+
+export interface RestOverrideSoftening {
+  active: boolean;
+  window_days: number;
+  // The mornings inside the window the athlete trained through with nothing in the
+  // session feedback suggesting it cost them, newest last. Both kinds count — see
+  // restOverrideSoftening.
+  overridden_and_fine: string[];
+  // The most recent morning they actually TOOK the quiet day it offered: a rest read
+  // they rested on, or a softened easy read they did not train through. Everything on
+  // or before it is discarded — honoring the read is the athlete agreeing with it,
+  // which starts the count over rather than leaving old disagreements standing.
+  last_honored_rest: string | null;
+}
+
+// What dayRead publishes on `signals.outcome_feedback`: the evidence above PLUS
+// whether the read actually MOVED because of it. The two are genuinely different
+// facts — the pattern can be established on a morning that reads train, or one where
+// a clinical constraint or a fresh short night holds the rest in place — and every
+// consumer that says "today has already been eased" must key on `applied`. It is
+// also what tomorrow's window reads back off the ledger to tell a softened easy
+// morning from an ordinary one.
+export interface OutcomeFeedbackSignal extends RestOverrideSoftening {
+  applied: boolean;
+}
+
+const NO_SOFTENING: RestOverrideSoftening = Object.freeze({
+  active: false,
+  window_days: OUTCOME_SOFTENING_WINDOW_DAYS,
+  overridden_and_fine: [],
+  last_honored_rest: null,
+});
+
+// Did the work logged on `date` show any sign of having cost them? Only the
+// athlete's own session feedback answers this — `performance` is their 1-5 read of
+// how the session went against expectation. The WORST session of the day decides,
+// so one good lift cannot paper over a second effort that went badly.
+function trainedWithoutHarm(date: string): boolean {
+  try {
+    const row = db
+      .prepare(`SELECT MIN(performance) AS worst FROM sessions WHERE date = ? AND performance IS NOT NULL`)
+      .get(date) as { worst?: number | null } | undefined;
+    // An aggregate ALWAYS returns a row, so an unrated day arrives as `worst: null`
+    // — and `Number(null)` is 0, not NaN, which read every unrated session as the
+    // worst possible one and made the common case (they log the work, they don't
+    // rate it) permanently unreachable. Test the absence before coercing.
+    if (row?.worst == null) return true;
+    const worst = Number(row.worst);
+    return Number.isFinite(worst) ? worst >= NO_HARM_PERFORMANCE : true;
+  } catch {
+    return true;
+  }
+}
+
+// Which mornings this signal is allowed to reason about at all. Two kinds, and the
+// second is what makes the softening a standing adaptation rather than a ten-day
+// oscillation:
+//
+//   • a REST morning — the read the athlete has been overruling; and
+//   • a SOFTENED EASY morning — a rest this very signal already eased.
+//
+// Counting only the first was self-extinguishing. Once active, no new rest mornings
+// could accrue (the read had stopped saying rest), the qualifying days aged out of
+// the ten-day window, and the read relapsed to rest — a periodic cycle straight back
+// to the defect the softening exists to fix. A softened easy morning the athlete
+// trains through without harm is the SAME evidence, restated under the new read: the
+// quiet day is still not what their body is asking for.
+//
+// A plain, unsoftened easy morning is neither evidence nor a reset. It was never a
+// rest the read had to argue for, so training through it says nothing about whether
+// the athlete disagrees with the quiet reads, and taking it easy says nothing either.
+function softeningRelevant(day: ReadAdherenceDay): boolean {
+  return day.read === "rest" || (day.read === "easy" && day.softened);
+}
+
+// The bounded softening signal for `asOf`, read off a model the caller already
+// holds. Pure with respect to the model plus the sessions table; safe to call with
+// null (a caller whose model read failed gets "no softening", never an exception).
+export function restOverrideSoftening(model: ReadAdherenceModel | null, asOf: string): RestOverrideSoftening {
+  if (!model || !Array.isArray(model.recent)) return NO_SOFTENING;
+  const lastClosed = addDaysISO(asOf, -1);
+  const from = addDaysISO(asOf, -OUTCOME_SOFTENING_WINDOW_DAYS);
+  if (!lastClosed || !from) return NO_SOFTENING;
+  const quietMornings = model.recent
+    .filter((day) => day.date >= from && day.date <= lastClosed && softeningRelevant(day))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  // Honoring EITHER kind resets. A softened easy day they simply took is the athlete
+  // agreeing that a quiet day was right, which is the same answer as resting on a
+  // rest read and starts the count over the same way.
+  const lastHonoredRest = quietMornings.filter((day) => !day.trained).at(-1)?.date ?? null;
+  const overriddenAndFine = quietMornings
+    .filter((day) => day.trained && (lastHonoredRest == null || day.date > lastHonoredRest))
+    .map((day) => day.date)
+    .filter(trainedWithoutHarm);
+  return {
+    active: overriddenAndFine.length >= OUTCOME_SOFTENING_MIN_DIVERGENCES,
+    window_days: OUTCOME_SOFTENING_WINDOW_DAYS,
+    overridden_and_fine: overriddenAndFine,
+    last_honored_rest: lastHonoredRest,
   };
 }

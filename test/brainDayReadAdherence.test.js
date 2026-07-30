@@ -16,9 +16,12 @@ import { getBrainDiagnostics } from "../dist/domain/operator/brain-diagnostics-u
 import {
   dayReadAdherenceExpectation,
   dayTrainingTruth,
+  OUTCOME_SOFTENING_MIN_DIVERGENCES,
+  OUTCOME_SOFTENING_WINDOW_DAYS,
   readAdherenceModel,
   readAdherenceOutcome,
   reopenDayReadAdherence,
+  restOverrideSoftening,
 } from "../dist/repo/brain/read-adherence.js";
 
 const LEDGER_TABLES = [
@@ -579,4 +582,186 @@ test("diagnostics carry the read-adherence model for the operator", () => {
   const model = getBrainDiagnostics(5).metrics.read_adherence;
   assert.equal(model.days_observed, 1);
   assert.equal(model.by_read[0].read, "rest");
+});
+
+// ------------------------------------------------- reading the outcomes back
+// The measurement above finally has ONE consumer. It is deliberately narrow — it can
+// only ever tell dayRead that a rest read has been overruled without cost — so these
+// pin the bounds themselves rather than the read that consumes them.
+
+const TODAY = () => localDaysAgo(0);
+const softening = () => restOverrideSoftening(readAdherenceModel(TODAY(), OUTCOME_SOFTENING_WINDOW_DAYS + 2), TODAY());
+
+// A rest morning the athlete trained through, with their own read of how it went.
+function overriddenRest(daysAgo, performance = 4) {
+  const date = localDaysAgo(daysAgo);
+  repo.saveDayRead(date, read("rest"));
+  seedTrainingDay(date);
+  if (performance != null) repo.setSessionFeedback(date, { performance });
+  return date;
+}
+
+test("a run of overruled rest mornings that went fine activates the softening", () => {
+  reset();
+  const dates = [3, 2, 1].map((n) => overriddenRest(n));
+
+  const signal = softening();
+  assert.equal(signal.active, true);
+  assert.deepEqual(signal.overridden_and_fine, dates);
+  assert.equal(signal.last_honored_rest, null);
+  assert.equal(signal.window_days, OUTCOME_SOFTENING_WINDOW_DAYS);
+});
+
+test("one short of the bound is not a pattern", () => {
+  reset();
+  for (let n = OUTCOME_SOFTENING_MIN_DIVERGENCES - 1; n >= 1; n--) overriddenRest(n);
+
+  const signal = softening();
+  assert.equal(signal.overridden_and_fine.length, OUTCOME_SOFTENING_MIN_DIVERGENCES - 1);
+  assert.equal(signal.active, false);
+});
+
+test("a rest morning they honored discards everything at or before it", () => {
+  reset();
+  for (const n of [7, 6, 5]) overriddenRest(n);
+  const honored = localDaysAgo(4);
+  repo.saveDayRead(honored, read("rest"));
+
+  const signal = softening();
+  assert.equal(signal.last_honored_rest, honored);
+  assert.deepEqual(signal.overridden_and_fine, []);
+  assert.equal(signal.active, false);
+});
+
+test("divergences AFTER the honored rest count again", () => {
+  reset();
+  for (const n of [7, 6, 5]) overriddenRest(n);
+  repo.saveDayRead(localDaysAgo(4), read("rest"));
+  const since = [3, 2, 1].map((n) => overriddenRest(n));
+
+  const signal = softening();
+  assert.equal(signal.last_honored_rest, localDaysAgo(4));
+  assert.deepEqual(signal.overridden_and_fine, since);
+  assert.equal(signal.active, true);
+});
+
+test("a day the session went badly is not a day the override was free", () => {
+  reset();
+  overriddenRest(3);
+  overriddenRest(2, 1);
+  overriddenRest(1);
+
+  const signal = softening();
+  assert.deepEqual(signal.overridden_and_fine, [localDaysAgo(3), localDaysAgo(1)]);
+  assert.equal(signal.active, false);
+});
+
+test("a PLAIN easy morning is not evidence — an overrun easy day is a different question", () => {
+  reset();
+  for (const n of [3, 2, 1]) {
+    const date = localDaysAgo(n);
+    repo.saveDayRead(date, read("easy"));
+    seedTrainingDay(date);
+  }
+
+  assert.equal(softening().active, false);
+});
+
+test("divergences older than the window have stopped speaking", () => {
+  reset();
+  const past = OUTCOME_SOFTENING_WINDOW_DAYS;
+  for (const n of [past + 3, past + 2, past + 1]) overriddenRest(n);
+
+  const signal = softening();
+  assert.deepEqual(signal.overridden_and_fine, []);
+  assert.equal(signal.active, false);
+});
+
+test("TODAY is never counted — the day is still open, so it cannot have gone well", () => {
+  reset();
+  for (const n of [2, 1]) overriddenRest(n);
+  overriddenRest(0);
+
+  const signal = softening();
+  assert.deepEqual(signal.overridden_and_fine, [localDaysAgo(2), localDaysAgo(1)]);
+  assert.equal(signal.active, false);
+});
+
+test("a missing model degrades to no softening rather than throwing", () => {
+  assert.equal(restOverrideSoftening(null, TODAY()).active, false);
+  assert.equal(restOverrideSoftening({ recent: null }, TODAY()).active, false);
+});
+
+// ------------------------------------------------- the softening has to SUSTAIN
+// Counting only rest mornings made this self-extinguishing: once active, the read
+// stopped saying rest, so no new evidence could accrue, the qualifying days aged out
+// of the ten-day window, and the read relapsed — a periodic cycle straight back to
+// the defect the softening exists to fix. A softened easy morning trained through
+// without harm is the same evidence restated under the new read.
+
+// A morning that read easy BECAUSE this signal eased it — identifiable downstream by
+// the `applied` flag dayRead publishes on the read's own signals.
+function softenedEasy(daysAgo, { trained = true, performance = 4 } = {}) {
+  const date = localDaysAgo(daysAgo);
+  repo.saveDayRead(date, read("easy", { signals: { outcome_feedback: { active: true, applied: true } } }));
+  if (trained) {
+    seedTrainingDay(date);
+    if (performance != null) repo.setSessionFeedback(date, { performance });
+  }
+  return date;
+}
+
+test("softened easy mornings trained through carry the pattern after the rest evidence ages out", () => {
+  reset();
+  // The rest mornings that started it are all OUTSIDE the ten-day window now.
+  const past = OUTCOME_SOFTENING_WINDOW_DAYS;
+  for (const n of [past + 3, past + 2, past + 1]) overriddenRest(n);
+  // Everything inside the window is a softened easy day they trained through.
+  const sustained = [5, 4, 3, 2, 1].map((n) => softenedEasy(n));
+
+  const signal = softening();
+  assert.deepEqual(signal.overridden_and_fine, sustained, "the softened days are the evidence now");
+  assert.equal(signal.active, true, "the softening must not relapse the moment its first evidence ages out");
+  assert.equal(signal.last_honored_rest, null);
+});
+
+test("a softened easy morning they simply TOOK resets the count, same as an honored rest", () => {
+  reset();
+  for (const n of [6, 5, 4]) overriddenRest(n);
+  const honored = softenedEasy(3, { trained: false });
+  // Two more overruled rest mornings since — real evidence, but short of the bound.
+  const since = [2, 1].map((n) => overriddenRest(n));
+
+  const signal = softening();
+  assert.equal(signal.last_honored_rest, honored);
+  assert.deepEqual(signal.overridden_and_fine, since);
+  assert.equal(signal.active, false, "honoring the quiet day is the athlete agreeing with the read");
+});
+
+test("plain easy mornings neither sustain the pattern nor reset it", () => {
+  reset();
+  for (const n of [6, 5, 4]) overriddenRest(n);
+  // An ordinary easy morning trained through, and another they took off. Neither was
+  // a rest the read had to argue for, so neither says anything about this signal.
+  repo.saveDayRead(localDaysAgo(3), read("easy"));
+  seedTrainingDay(localDaysAgo(3));
+  repo.saveDayRead(localDaysAgo(2), read("easy"));
+
+  const signal = softening();
+  assert.deepEqual(signal.overridden_and_fine, [localDaysAgo(6), localDaysAgo(5), localDaysAgo(4)]);
+  assert.equal(signal.last_honored_rest, null, "an untrained plain easy day is not an honored rest");
+  assert.equal(signal.active, true);
+});
+
+test("a softened easy morning that went badly is not sustaining evidence", () => {
+  reset();
+  const past = OUTCOME_SOFTENING_WINDOW_DAYS;
+  for (const n of [past + 3, past + 2, past + 1]) overriddenRest(n);
+  softenedEasy(3);
+  softenedEasy(2, { performance: 1 });
+  softenedEasy(1);
+
+  const signal = softening();
+  assert.deepEqual(signal.overridden_and_fine, [localDaysAgo(3), localDaysAgo(1)]);
+  assert.equal(signal.active, false);
 });

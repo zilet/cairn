@@ -132,6 +132,51 @@ rest: acknowledge the stretch and offer the smallest thing worth doing, as an op
 `;
 }
 
+// How those reads actually LANDED. renderRecentReads above tells the agent what it
+// SAID; nothing told it what happened next, so it could re-argue the same rest case
+// for a fortnight without ever learning the athlete had trained through every one of
+// them and rated the sessions well. That disagreement is measured (`read_adherence` —
+// counts only, never a rate or a grade), and this is the one prompt where it is about
+// the very decision being made.
+//
+// Only rendered once a rest pattern is genuinely there (two or more), so an athlete
+// who follows their reads never carries this block; and never as a licence to
+// escalate — the server owns the safety call and discards an upgrade, so the guidance
+// is about how to shape the day already open, not about opening a bigger one.
+function renderReadOutcomes(context: any, baseline: any): string {
+  const byRead = Array.isArray(context?.read_adherence?.by_read) ? context.read_adherence.by_read : [];
+  const rest = byRead.find((row: any) => row?.read === "rest");
+  const diverged = Number(rest?.diverged ?? 0);
+  const days = Number(rest?.days ?? 0);
+  if (!Number.isFinite(diverged) || diverged < 2 || !Number.isFinite(days) || days < diverged) return "";
+  const followed = Number(rest?.followed ?? 0);
+  // `applied`, never `active`. `active` says only that the pattern exists, and it is
+  // just as true on a morning that reads train or one where a clinical constraint held
+  // the rest in place — so keying on it told the agent the day had been eased on
+  // mornings where nothing had been eased at all.
+  const softened = baseline?.signals?.outcome_feedback?.applied === true;
+  const softenedLine = softened
+    ? `
+Today's suggestion has ALREADY been eased from rest to an easy day for exactly this reason — that
+easing is the answer to the pattern, so do not spend the read re-arguing it or apologising for it.`
+    : "";
+  return `
+HOW YOUR READS HAVE ACTUALLY LANDED: of the ${days} rest read${days === 1 ? "" : "s"} in the recent
+window, they trained anyway on ${diverged} and took ${followed} as rest. \`read_adherence\` in DATA has
+the day by day.${softenedLine}
+- A read they keep declining is not a read that is working. Do NOT re-derive the same case in fresh
+  words. Say what today actually supports and let the day be theirs.
+- Where today's picture leaves room, take the MORE PERMISSIVE of the readings open to you, and give
+  them a reason to move by naming the concrete next thing their own logs support — a lift that has
+  been sitting at the same weight and is ready to go up, a run that is due, a group that hasn't been
+  touched this week. Grounded in what is actually in the data; never hype, never a target, never a
+  gate, never a number about them.
+- The safety call is NOT yours to raise. You may write a CALMER day than the one suggested above,
+  never a bigger one — an upgrade is discarded and they see the plain version instead. So shape the
+  day inside what is open rather than promising a session that isn't.
+`;
+}
+
 // Where today sits in the program, so a deload day 3 of 7 is not proposed as though
 // rest were a new idea. "" when no block and no overlay are running.
 function renderPeriodization(date: string): string {
@@ -430,7 +475,7 @@ ${JSON.stringify(baseline.signals)}
 A rules-only baseline suggested: kind="${baseline.kind}", focus=${JSON.stringify(baseline.focus)}.
 You MAY disagree with the baseline when the whole picture warrants it — it is a floor, not a ceiling.
 RECENT TRAINING (most recent first): ${sessionLine}.
-TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${renderRecentReads(feltDate)}${renderPeriodization(feltDate)}${doneBlock}${lastNightLine}${oneNightLine}
+TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${renderRecentReads(feltDate)}${renderReadOutcomes(context, baseline)}${renderPeriodization(feltDate)}${doneBlock}${lastNightLine}${oneNightLine}
 ${CONTEXT_GUARDRAILS}
 ${renderSignalState(context)}${renderCoachingFocus(context, { brief: true })}${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderRunZones(context)}${renderRunPlan(context)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderMuscleGroups(context)}${renderPerformance(context, { brief: true })}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${feltBlock}${learnedBlock}${overrideBlock}
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:

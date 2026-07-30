@@ -50,6 +50,50 @@ function pickNum(obj: any, keys: string[]): number | null {
   return null;
 }
 
+// Garmin signals "no data" with a NEGATIVE SENTINEL rather than by omitting the
+// key or sending null — `averageStressLevel: -1` is the one that shows up daily,
+// and -2 appears on some firmware. Every metric guarded by these helpers is
+// physically non-negative (a stress level, a body-battery reading, an SpO2
+// percentage, a step count, a calorie burn), so a negative reading is ABSENCE and
+// must be stored as null. Left raw, -1 lands in the averages as a real low value.
+function asNonNegNum(v: any): number | null {
+  const n = asNum(v);
+  return n == null || n < 0 ? null : n;
+}
+
+function pickNonNegNum(obj: any, keys: string[]): number | null {
+  const n = pickNum(obj, keys);
+  return n == null || n < 0 ? null : n;
+}
+
+// Garmin computes the daily-summary `restingHeartRate` from the LOWEST heart rate
+// it observed over the calendar day. That is only a resting figure when the watch
+// was actually worn through a rest window — overnight, normally. Worn during
+// waking hours only, the "resting" HR is just the day's quietest desk minute and
+// lands at 90–120 against a true 52–60 baseline, which then poisons every
+// recent-vs-baseline delta built on it.
+//
+// So the sleep-derived value (foldSleep, measured across actual sleep) always
+// wins, and a summary-derived one is credible only when the day shows genuine
+// rest coverage: a minimum HR low enough that the athlete was demonstrably at
+// rest at some point, and a value inside a physiologically plausible band.
+// Anything else stays null — wearable data is an optional input, and its absence
+// must read as absence, never as a caution.
+const RHR_REST_COVERAGE_MAX_HR = 65; // day's min HR at/below this ⇒ a real rest window was captured
+const RHR_PLAUSIBLE_MIN = 30;
+const RHR_PLAUSIBLE_MAX = 90;
+
+export function credibleSummaryRestingHr(restingHr: number | null, minHr: number | null): number | null {
+  if (restingHr == null) return null;
+  if (restingHr < RHR_PLAUSIBLE_MIN || restingHr > RHR_PLAUSIBLE_MAX) return null;
+  // The witness is held to the same plausibility bar as the value it vouches for.
+  // A `-1` no-data sentinel or a 0 from a dropped HR trace satisfies "low enough to
+  // prove a rest window" arithmetically while proving the opposite — the watch saw
+  // nothing — and that is exactly the day whose summary "resting" HR is junk.
+  if (minHr == null || minHr < RHR_PLAUSIBLE_MIN || minHr > RHR_REST_COVERAGE_MAX_HR) return null;
+  return restingHr;
+}
+
 function pickStr(obj: any, keys: string[]): string | null {
   if (!obj) return null;
   for (const k of keys) {
@@ -456,7 +500,7 @@ async function fetchActivityDetail(
 // override with `pickNum(...) ?? m.x` where the daily summary is the better
 // source. So precedence lives in the LATER fold, not here.
 
-function foldSleep(sleep: any, m: repo.GarminDailyMetricInput) {
+export function foldSleep(sleep: any, m: repo.GarminDailyMetricInput) {
   const d = sleep?.dailySleepDTO;
   if (!d && !sleep) return;
   if (d) {
@@ -466,17 +510,17 @@ function foldSleep(sleep: any, m: repo.GarminDailyMetricInput) {
     m.rem_sleep_min = secToMin(d.remSleepSeconds);
     m.awake_min = secToMin(d.awakeSleepSeconds);
     m.nap_min = secToMin(d.napTimeSeconds);
-    m.avg_sleep_stress = asNum(d.avgSleepStress);
-    m.respiration_avg = asNum(d.averageRespirationValue);
-    m.respiration_min = asNum(d.lowestRespirationValue);
-    m.respiration_max = asNum(d.highestRespirationValue);
-    m.sleep_score = asNum(d.sleepScores?.overall?.value ?? d.sleepScore);
+    m.avg_sleep_stress = asNonNegNum(d.avgSleepStress);
+    m.respiration_avg = asNonNegNum(d.averageRespirationValue);
+    m.respiration_min = asNonNegNum(d.lowestRespirationValue);
+    m.respiration_max = asNonNegNum(d.highestRespirationValue);
+    m.sleep_score = asNonNegNum(d.sleepScores?.overall?.value ?? d.sleepScore);
   }
   // SleepData top-level recovery signals.
   m.hrv_ms = asNum(sleep?.avgOvernightHrv);
   m.hrv_status = pickStr(sleep, ["hrvStatus"]);
   m.resting_hr = asNum(sleep?.restingHeartRate);
-  m.restless_count = asNum(sleep?.restlessMomentsCount);
+  m.restless_count = asNonNegNum(sleep?.restlessMomentsCount);
   const bbChange = asNum(sleep?.bodyBatteryChange);
   if (bbChange != null && bbChange > 0) m.body_battery_charged = bbChange;
 }
@@ -498,31 +542,35 @@ function foldSleepDetail(sleep: any, m: repo.GarminDailyMetricInput) {
   m.awake_min = m.awake_min ?? secToMin(d.awakeSleepSeconds);
 }
 
-function foldDailySummary(s: any, m: repo.GarminDailyMetricInput) {
+export function foldDailySummary(s: any, m: repo.GarminDailyMetricInput) {
   if (!s) return;
-  m.steps = m.steps ?? pickNum(s, ["totalSteps", "steps"]);
-  m.distance_m = pickNum(s, ["totalDistanceMeters"]);
-  m.floors_climbed = pickNum(s, ["floorsAscended"]);
-  m.active_calories = pickNum(s, ["activeKilocalories", "activeCalories"]);
-  m.total_calories = pickNum(s, ["totalKilocalories", "totalCalories"]);
-  m.bmr_calories = pickNum(s, ["bmrKilocalories", "bmrCalories"]);
-  m.resting_hr = pickNum(s, ["restingHeartRate"]) ?? m.resting_hr;
-  m.max_hr = pickNum(s, ["maxHeartRate"]);
-  m.min_hr = pickNum(s, ["minHeartRate"]);
+  m.steps = m.steps ?? pickNonNegNum(s, ["totalSteps", "steps"]);
+  m.distance_m = pickNonNegNum(s, ["totalDistanceMeters"]);
+  m.floors_climbed = pickNonNegNum(s, ["floorsAscended"]);
+  m.active_calories = pickNonNegNum(s, ["activeKilocalories", "activeCalories"]);
+  m.total_calories = pickNonNegNum(s, ["totalKilocalories", "totalCalories"]);
+  m.bmr_calories = pickNonNegNum(s, ["bmrKilocalories", "bmrCalories"]);
+  m.max_hr = pickNonNegNum(s, ["maxHeartRate"]);
+  m.min_hr = pickNonNegNum(s, ["minHeartRate"]);
+  // Resting HR precedence: whatever foldSleep measured across actual sleep wins
+  // outright. The summary value is only ever a FALLBACK, and only when the day's
+  // HR trace proves a rest window was captured — see credibleSummaryRestingHr.
+  // Ordered after min_hr because that guard reads it.
+  m.resting_hr = m.resting_hr ?? credibleSummaryRestingHr(pickNum(s, ["restingHeartRate"]), m.min_hr);
   m.hr_7d_avg = pickNum(s, ["lastSevenDaysAvgRestingHeartRate"]);
-  m.stress_avg = pickNum(s, ["averageStressLevel", "avgStressLevel"]);
-  m.stress_max = pickNum(s, ["maxStressLevel"]);
-  m.body_battery_charged = pickNum(s, ["bodyBatteryChargedValue"]) ?? m.body_battery_charged;
-  m.body_battery_drained = pickNum(s, ["bodyBatteryDrainedValue"]);
-  m.body_battery_max = pickNum(s, ["bodyBatteryHighestValue"]);
-  m.body_battery_min = pickNum(s, ["bodyBatteryLowestValue"]);
-  m.spo2_avg = pickNum(s, ["averageSpo2Value", "averageSpo2", "avgSpo2"]);
-  m.spo2_min = pickNum(s, ["lowestSpo2Value", "lowestSpo2"]);
-  m.respiration_avg = pickNum(s, ["avgWakingRespirationValue", "respiration"]) ?? m.respiration_avg;
-  m.respiration_max = pickNum(s, ["highestRespirationValue"]) ?? m.respiration_max;
-  m.respiration_min = pickNum(s, ["lowestRespirationValue"]) ?? m.respiration_min;
-  m.intensity_min_moderate = pickNum(s, ["moderateIntensityMinutes"]);
-  m.intensity_min_vigorous = pickNum(s, ["vigorousIntensityMinutes"]);
+  m.stress_avg = pickNonNegNum(s, ["averageStressLevel", "avgStressLevel"]);
+  m.stress_max = pickNonNegNum(s, ["maxStressLevel"]);
+  m.body_battery_charged = pickNonNegNum(s, ["bodyBatteryChargedValue"]) ?? m.body_battery_charged;
+  m.body_battery_drained = pickNonNegNum(s, ["bodyBatteryDrainedValue"]);
+  m.body_battery_max = pickNonNegNum(s, ["bodyBatteryHighestValue"]);
+  m.body_battery_min = pickNonNegNum(s, ["bodyBatteryLowestValue"]);
+  m.spo2_avg = pickNonNegNum(s, ["averageSpo2Value", "averageSpo2", "avgSpo2"]);
+  m.spo2_min = pickNonNegNum(s, ["lowestSpo2Value", "lowestSpo2"]);
+  m.respiration_avg = pickNonNegNum(s, ["avgWakingRespirationValue", "respiration"]) ?? m.respiration_avg;
+  m.respiration_max = pickNonNegNum(s, ["highestRespirationValue"]) ?? m.respiration_max;
+  m.respiration_min = pickNonNegNum(s, ["lowestRespirationValue"]) ?? m.respiration_min;
+  m.intensity_min_moderate = pickNonNegNum(s, ["moderateIntensityMinutes"]);
+  m.intensity_min_vigorous = pickNonNegNum(s, ["vigorousIntensityMinutes"]);
   // body battery avg is not reported directly; mid-point of the day's range.
   if (m.body_battery_avg == null && m.body_battery_min != null && m.body_battery_max != null) {
     m.body_battery_avg = round1((m.body_battery_min + m.body_battery_max) / 2);
@@ -557,7 +605,7 @@ function foldHrv(hrv: any, m: repo.GarminDailyMetricInput) {
 function foldReadiness(tr: any, m: repo.GarminDailyMetricInput) {
   const row = Array.isArray(tr) ? tr[0] : tr;
   if (!row) return;
-  m.training_readiness = pickNum(row, ["score"]);
+  m.training_readiness = pickNonNegNum(row, ["score"]);
 }
 
 async function syncDailyMetrics(client: any, sourceId: number, days: number, displayName: string | null) {
@@ -570,7 +618,7 @@ async function syncDailyMetrics(client: any, sourceId: number, days: number, dis
     const metric: repo.GarminDailyMetricInput = { date: iso };
 
     try {
-      metric.steps = asNum(await client.getSteps(date));
+      metric.steps = asNonNegNum(await client.getSteps(date));
     } catch {}
 
     try {

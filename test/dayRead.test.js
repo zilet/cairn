@@ -2389,3 +2389,246 @@ test("the bare dayRead sees a due deload from the program state", () => {
   assert.equal(state.action.directives.training, "recover");
   assert.equal(r.decision.rule_code, "acute_signal_protection");
 });
+
+// ---------- the outcome loop: a rest the athlete keeps overruling softens ----------
+// Every rule above reads only TODAY's inputs, which is how a stable picture came to
+// suggest rest for eleven mornings running while the athlete trained through six of
+// them and rated those sessions well. The disagreement was recorded and reconciled
+// the whole time; nothing read it back. These pin the one place that now does — and,
+// more importantly, every place it must NOT.
+
+// A morning the Brief said rest. Written through saveDayRead because that is what
+// records the MORNING ledger row readAdherenceModel reads back (day_reads holds
+// end-of-day state and answers a different question).
+const seedMorningRead = (date, kind, signals = {}) =>
+  repo.saveDayRead(date, {
+    kind,
+    headline: `${kind} today.`,
+    why: "A calm sentence about the day.",
+    focus: null,
+    est_minutes: kind === "rest" ? null : 45,
+    signals,
+    source: "deterministic",
+    override: null,
+  });
+
+// A morning the Brief eased from rest to easy. `applied` is what marks it — `active`
+// merely says the pattern exists, and is just as true on a morning nothing was eased.
+const seedSoftenedEasy = (date, { trained = true } = {}) => {
+  seedMorningRead(date, "easy", { outcome_feedback: { active: true, applied: true } });
+  if (trained) seedTrainingDay(date);
+};
+
+// ...and they trained anyway, and it went fine (their own 1-5 read of the session).
+const seedOverriddenRest = (date, performance = 4) => {
+  seedMorningRead(date, "rest");
+  seedTrainingDay(date);
+  if (performance != null) repo.setSessionFeedback(date, { performance });
+};
+
+test("three rest mornings trained through without cost soften today's earned rest to easy", () => {
+  for (let i = 1; i <= 3; i++) seedOverriddenRest(dayBefore(REF, i));
+
+  const r = repo.dayRead(REF, { has_data: false, recovery: {} });
+
+  // The same three loading days that used to produce a flat rest...
+  assert.equal(r.signals.consecutive_training_days, 3);
+  // ...now produce an easy day, carrying the softening's own ledger code so the
+  // decision trail and repeat_of_yesterday key on the softening, not on the rule it
+  // replaced.
+  assert.equal(r.kind, "easy");
+  assert.equal(r.decision.rule_code, "outcome_feedback_soften");
+  assert.equal(r.est_minutes, 20);
+  saysOneOf(r.why, "outcome_feedback_soften");
+  assert.ok(DAY_READ_OUTCOMES.outcome_feedback_soften.reasons.includes(r.decision.reason));
+  assert.equal(violatesReadingGrammar(r.why), null, `softened why broke the grammar: ${r.why}`);
+  assert.equal(violatesReadingGrammar(r.decision.reason), null, `softened reason: ${r.decision.reason}`);
+  // And the evidence rides in signals, so the prompt and the audit trail can both see
+  // WHY it softened rather than being told to trust it.
+  assert.equal(r.signals.outcome_feedback.active, true);
+  assert.equal(r.signals.outcome_feedback.overridden_and_fine.length, 3);
+  assert.equal(r.signals.outcome_feedback.last_honored_rest, null);
+});
+
+test("it softens ONE step — never past easy into a training day", () => {
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  for (let i = 1; i <= 4; i++) seedOverriddenRest(dayBefore(REF, i));
+
+  const r = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.equal(r.kind, "easy", "a due plan day must not turn a softened rest into a session");
+  assert.equal(r.focus, null);
+});
+
+test("two divergences are a coincidence, not a pattern — the rest stands", () => {
+  // Three loading days (so the earned-rest rule still fires), but only two of those
+  // mornings actually read rest.
+  seedOverriddenRest(dayBefore(REF, 1));
+  seedOverriddenRest(dayBefore(REF, 2));
+  seedMorningRead(dayBefore(REF, 3), "train");
+  seedTrainingDay(dayBefore(REF, 3));
+
+  const r = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.equal(r.signals.consecutive_training_days, 3);
+  assert.equal(r.kind, "rest");
+  assert.equal(r.decision.rule_code, "accumulated_load_rest");
+  assert.equal(r.signals.outcome_feedback.active, false);
+});
+
+test("a rest they actually TOOK resets the count — older divergences no longer speak", () => {
+  // Three rest mornings trained through a week ago...
+  for (let i = 5; i <= 7; i++) seedOverriddenRest(dayBefore(REF, i));
+  // ...then a rest morning they honored, which is the athlete agreeing with the read.
+  seedMorningRead(dayBefore(REF, 4), "rest");
+  // ...and three ordinary training days since, on mornings that read train.
+  for (let i = 1; i <= 3; i++) {
+    seedMorningRead(dayBefore(REF, i), "train");
+    seedTrainingDay(dayBefore(REF, i));
+  }
+
+  const r = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.equal(r.kind, "rest", "an honored rest starts the count over");
+  assert.equal(r.decision.rule_code, "accumulated_load_rest");
+  assert.equal(r.signals.outcome_feedback.active, false);
+  assert.equal(r.signals.outcome_feedback.last_honored_rest, dayBefore(REF, 4));
+  assert.deepEqual(r.signals.outcome_feedback.overridden_and_fine, []);
+});
+
+test("sessions that went badly are not evidence that overruling the read was fine", () => {
+  for (let i = 1; i <= 3; i++) seedOverriddenRest(dayBefore(REF, i), 2);
+
+  const r = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.equal(r.kind, "rest");
+  // Sessions felt below par also latch the low-performance signal, so the protect
+  // posture owns this morning — a softenable rule. It stays rest anyway, because the
+  // evidence the softening rests on is exactly what is missing here.
+  assert.equal(r.decision.rule_code, "acute_signal_protection");
+  assert.equal(r.signals.outcome_feedback.active, false);
+});
+
+test("an unrated session still counts — silence is not evidence of harm", () => {
+  for (let i = 1; i <= 3; i++) seedOverriddenRest(dayBefore(REF, i), null);
+
+  const r = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.equal(r.kind, "easy");
+  assert.equal(r.decision.rule_code, "outcome_feedback_soften");
+});
+
+test("a corroborated short night is fresh evidence about TODAY — history cannot soften it", () => {
+  for (let i = 1; i <= 3; i++) seedOverriddenRest(dayBefore(REF, i));
+  db.prepare(`INSERT INTO daily_metrics (source, date, sleep_min) VALUES ('apple', ?, 300)`).run(dayBefore(REF, 1));
+
+  const r = repo.dayRead(REF, { has_data: true, recovery: { avg_sleep_min: 330 } });
+  assert.equal(r.kind, "rest");
+  assert.equal(r.decision.rule_code, "acute_sleep_corroborated");
+  assert.equal(r.signals.outcome_feedback.active, true, "the pattern is there; the rule is simply out of reach");
+});
+
+test("the clinical floor is absolute — an active injury is never softened away", () => {
+  for (let i = 1; i <= 3; i++) seedOverriddenRest(dayBefore(REF, i));
+  repo.addContextEvent({
+    kind: "injury",
+    title: "Achilles tendinopathy",
+    detail: "Running and jumping aggravate it",
+    start_date: REF,
+  });
+
+  const r = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.equal(r.kind, "rest");
+  assert.equal(r.decision.rule_code, "accumulated_load_rest");
+  assert.equal(r.signals.health_workaround.field, "active_injury");
+  assert.equal(r.signals.outcome_feedback.active, true);
+});
+
+test("an illness holds the same line", () => {
+  for (let i = 1; i <= 3; i++) seedOverriddenRest(dayBefore(REF, i));
+  repo.addContextEvent({ kind: "illness", title: "Head cold", start_date: REF });
+
+  const r = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.equal(r.kind, "rest");
+  assert.notEqual(r.decision.rule_code, "outcome_feedback_soften");
+});
+
+test("a felt-signal rest softens too, since that is the read they keep overruling", () => {
+  // A low-energy check-in reaches rest through the unified protect posture, whose
+  // evidence is recovery_capacity — nothing clinical, so the pattern applies.
+  for (let i = 1; i <= 3; i++) seedOverriddenRest(dayBefore(REF, i));
+  repo.addCheckin(REF, { energy: 1, sleep_feel: 3, mood: 3, soreness: 2 });
+
+  const r = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.equal(r.signals.signal_state.action.posture, "rest");
+  assert.equal(r.kind, "easy");
+  assert.equal(r.decision.rule_code, "outcome_feedback_soften");
+});
+
+test("softening never touches a day that already reads train, easy or done", () => {
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  for (let i = 5; i <= 7; i++) seedOverriddenRest(dayBefore(REF, i));
+
+  const r = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.equal(r.signals.outcome_feedback.active, true);
+  assert.equal(r.kind, "train", "a clear day is still a training day, not a softened one");
+  assert.equal(r.decision.rule_code, "planned_training");
+});
+
+// ---------- and the softening has to SUSTAIN, or it is a ten-day oscillation ----------
+// The first cut counted only rest mornings as evidence. Once it activated the read
+// stopped saying rest, so nothing new could accrue, the qualifying days aged out of
+// the window, and the read relapsed to rest — cycling back to the exact defect the
+// rule exists to fix. A softened easy morning trained through without harm is the
+// same evidence restated under the new read; honoring one resets, like an honored rest.
+
+test("softened easy mornings trained through hold the read open after the rest evidence ages out", () => {
+  // Nothing inside the window is a rest morning any more — the read has been easy for
+  // a week, and the athlete has trained through every one of those days.
+  for (let i = 1; i <= 5; i++) seedSoftenedEasy(dayBefore(REF, i));
+
+  const r = repo.dayRead(REF, { has_data: false, recovery: {} });
+  // The five loading days still earn a rest from the rules...
+  assert.ok(r.signals.consecutive_training_days >= 3);
+  // ...and the softening is still standing on its own evidence, so it stays an easy day.
+  assert.equal(r.kind, "easy");
+  assert.equal(r.decision.rule_code, "outcome_feedback_soften");
+  assert.equal(r.signals.outcome_feedback.active, true);
+  assert.equal(r.signals.outcome_feedback.applied, true);
+  assert.equal(r.signals.outcome_feedback.overridden_and_fine.length, 5);
+});
+
+test("a softened easy day they actually TOOK sends the next morning back to rest", () => {
+  // Three rest mornings trained through, then the eased day they simply took.
+  for (let i = 6; i >= 4; i--) seedOverriddenRest(dayBefore(REF, i));
+  seedSoftenedEasy(dayBefore(REF, 3), { trained: false });
+  // A low-energy check-in reaches rest through the protect posture (nothing clinical),
+  // so the only question left is whether the softening still has evidence to spend.
+  repo.addCheckin(REF, { energy: 1, sleep_feel: 3, mood: 3, soreness: 2 });
+
+  const r = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.equal(r.signals.signal_state.action.posture, "rest");
+  assert.equal(r.kind, "rest", "honoring the eased day is the athlete agreeing with the read");
+  assert.notEqual(r.decision.rule_code, "outcome_feedback_soften");
+  assert.equal(r.signals.outcome_feedback.active, false);
+  assert.equal(r.signals.outcome_feedback.applied, false);
+  assert.equal(r.signals.outcome_feedback.last_honored_rest, dayBefore(REF, 3));
+});
+
+test("the same week with that eased day trained through stays soft", () => {
+  for (let i = 6; i >= 4; i--) seedOverriddenRest(dayBefore(REF, i));
+  seedSoftenedEasy(dayBefore(REF, 3));
+  repo.addCheckin(REF, { energy: 1, sleep_feel: 3, mood: 3, soreness: 2 });
+
+  const r = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.equal(r.kind, "easy");
+  assert.equal(r.decision.rule_code, "outcome_feedback_soften");
+  assert.equal(r.signals.outcome_feedback.applied, true);
+});
+
+test("`applied` is the fact, `active` only the argument for it", () => {
+  // The pattern is established, but a due plan day means the read never was a rest —
+  // so nothing was eased, and the signal must not claim otherwise.
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  for (let i = 5; i <= 7; i++) seedOverriddenRest(dayBefore(REF, i));
+
+  const r = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.equal(r.kind, "train");
+  assert.equal(r.signals.outcome_feedback.active, true);
+  assert.equal(r.signals.outcome_feedback.applied, false);
+});

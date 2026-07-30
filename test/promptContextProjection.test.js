@@ -62,7 +62,7 @@ const SITES = [
   {
     site: "day_read",
     build: () => buildDayReadPrompt(),
-    kept: ["training_intent", "endurance_capacity", "recovery", "signal_state", "coaching_focus", "recent_sessions", "day_intake", "health_focus"],
+    kept: ["training_intent", "endurance_capacity", "recovery", "signal_state", "coaching_focus", "recent_sessions", "day_intake", "health_focus", "read_adherence"],
     // day_read recomputes a FRESH deterministic baseline and renders the last few
     // days' reads itself — handing it the STORED read invites parroting.
     dropped: ["day_read", "garmin", "recent_decisions", "insights"],
@@ -384,4 +384,47 @@ test("every site carrying the conductor strips the posture prose from its DATA t
   assert.equal(kept.coaching_focus.lead.why, "Stalled three weeks.");
   // And the projection never mutates the caller's snapshot.
   assert.equal(POSTURE_FOCUS.lead.why, POSTURE_PROSE, "the shared context object is left alone");
+});
+
+// The Brief is the read `read_adherence` MEASURES, so it is the one site where the
+// divergence pattern is about the very decision being made — and the one site where a
+// key that ships every single morning has to be cut to size before it goes anywhere.
+test("the Brief carries the adherence pattern, compacted", () => {
+  seedDemo();
+  const ctx = repo.getCoachContext();
+  assert.ok(ctx.read_adherence, "the snapshot carries the full model");
+
+  const projected = projectCoachContext(ctx, "day_read").read_adherence;
+  assert.deepEqual(Object.keys(projected).sort(), ["by_read", "recent"], "counts and recent days, nothing else");
+  assert.ok(Array.isArray(projected.by_read));
+  assert.ok(projected.recent.length <= 7, `recent is capped at a week, got ${projected.recent.length}`);
+  // The counts must never travel without the plain-words test behind them — a
+  // followed `train` day means training was logged, not that it was hard.
+  for (const row of projected.by_read) {
+    assert.equal(typeof row.measures, "string");
+    assert.ok(row.measures.length > 0, `${row.read} lost the sentence that says what its counts mean`);
+  }
+  // The operator-only window bookkeeping stays out of every prompt.
+  for (const gone of ["as_of", "window_days", "days_observed"]) {
+    assert.ok(!Object.hasOwn(projected, gone), `the prompt payload drops ${gone}`);
+  }
+  // And it is genuinely small: this ships on every morning open.
+  assert.ok(JSON.stringify(projected).length < 2_000, "the adherence block stays a footnote on the payload");
+});
+
+test("a fourteen-day model reaches the prompt as at most seven days", () => {
+  const recent = Array.from({ length: 14 }, (_, n) => ({
+    date: `2026-03-${String(n + 1).padStart(2, "0")}`,
+    read: "rest",
+    outcome: "diverged",
+    load: "hard",
+    trained: true,
+  }));
+  const projected = projectCoachContext(
+    { read_adherence: { as_of: "2026-03-15", window_days: 42, days_observed: 14, by_read: [], recent } },
+    "day_read"
+  ).read_adherence;
+  assert.equal(projected.recent.length, 7);
+  assert.equal(projected.recent[0].date, "2026-03-08", "the MOST RECENT week is what survives");
+  assert.equal(projected.recent.at(-1).date, "2026-03-14");
 });

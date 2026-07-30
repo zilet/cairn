@@ -16,7 +16,15 @@ import {
   type DayReadRule,
   type DayReadRuleOutcome,
 } from "./brain/day-read-rules.js";
-import { recordDayReadDecision, reopenDayReadAdherence } from "./brain/read-adherence.js";
+import {
+  OUTCOME_SOFTENING_WINDOW_DAYS,
+  type OutcomeFeedbackSignal,
+  readAdherenceModel,
+  recordDayReadDecision,
+  reopenDayReadAdherence,
+  restOverrideSoftening,
+  type RestOverrideSoftening,
+} from "./brain/read-adherence.js";
 import { getCheckinByDate, getRecoverySummary, latestSleep, trainingSignals } from "./coach.js";
 import { activeContextEffect } from "./context-effect.js";
 import { activitySportWhere, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
@@ -251,6 +259,22 @@ export const DAY_READ_OUTCOMES = {
       "A session is waiting and you look ready for it.",
     ],
   },
+  // The one rule that reads the athlete's OWN outcomes back into the floor. Every
+  // other rule above looks only at today's inputs, which is why a stable picture
+  // could suggest rest for eleven mornings running while the athlete trained
+  // through six of them and rated those sessions well: the disagreement was
+  // recorded, reconciled and then never consulted. This rule consults it, and does
+  // exactly one thing with it — turns a rest into an EASY day. Never a train day,
+  // never against a clinical constraint, never against a fresh short night.
+  outcome_feedback_soften: {
+    code: "outcome_feedback_soften",
+    reasons: [
+      "You've trained through the last few of these and it's gone well.",
+      "The last few times today read like this, you trained and came out fine.",
+      "Training through reads like this has been working for you lately.",
+      "You've kept training on days like this recently, and it's held up.",
+    ],
+  },
 } as const satisfies Record<string, DayReadRuleOutcome>;
 
 // The athlete-facing `why` for each deterministic read, in several calm phrasings
@@ -305,6 +329,16 @@ const CHRONIC_SLEEP_WHY: readonly string[] = [
   "The sleep trend's been thin for a while — nothing alarming today, so ease rather than stop.",
   "Short sleep has been the pattern recently; an easier day covers it.",
   "Nothing acute this morning, but sleep's been light lately — keep today gentle.",
+];
+// The softened rest. It has to do two things at once: name the evidence honestly
+// (their own logged days, not a hunch) and point forward, because the whole reason
+// this rule exists is that a read which never moves stops being coaching. Still a
+// suggestion — every phrasing offers a lighter day, none of them asks for a session.
+const OUTCOME_FEEDBACK_SOFTEN_WHY: readonly string[] = [
+  "You've trained through the last few reads like this one and it's gone well, so today leans light rather than fully off.",
+  "The last handful of times this came up you trained and it held up — so today reads easy instead of a full stop.",
+  "Training through days like this has been working for you lately, so keep today light rather than taking it off entirely.",
+  "You've been training through these and coming out fine, so today's an easy day rather than a rest day.",
 ];
 const UNPROGRAMMED_WHY: readonly string[] = [
   "Nothing programmed — some easy movement is plenty today.",
@@ -733,6 +767,7 @@ export const DAY_READ_WHY_VARIANTS: Readonly<Record<string, readonly string[]>> 
   logged_light_work_today: LIGHT_WORK_WHY,
   endurance_volume_spike: VOLUME_SPIKE_WHY,
   chronic_sleep_watch: CHRONIC_SLEEP_WHY,
+  outcome_feedback_soften: OUTCOME_FEEDBACK_SOFTEN_WHY,
   unprogrammed_easy_day: UNPROGRAMMED_WHY,
   planned_training: TRAIN_CLEAR_WHY,
   // `planned_reduced_training` has no `why` set of its own on purpose: a recovery-week
@@ -765,6 +800,11 @@ export const DAY_READ_REQUIRED_CONCEPT: Readonly<Record<string, RegExp>> = {
   logged_light_work_today: /\b(?:moved|movement|board)\b/i,
   endurance_volume_spike: /\b(?:running|run|mileage)\b/i,
   chronic_sleep_watch: /\bsleep\b/i,
+  // Both halves, not one. This rule's whole claim is "you trained through reads like
+  // this AND it went well" — a phrasing that keeps the history and drops how it turned
+  // out would soften the day without saying what earned it, which is the one thing an
+  // outcome-driven rule may never do.
+  outcome_feedback_soften: /\b(?:trained|training)\b(?=[\s\S]*\b(?:well|held up|working|fine)\b)/i,
   planned_reduced_training: /\b(?:reduced|light|lighter)\b/i,
   planned_training: /\b(?:due|train|session)\b/i,
   unprogrammed_easy_day: /\b(?:nothing|no session|open)\b/i,
@@ -1463,6 +1503,42 @@ export function dayPlanningSignalState(date: string, provided: DayPlanningSignal
   });
 }
 
+// ---------- which rests the outcome loop may soften ----------
+// The rest reads whose case is an ACCUMULATION argument — enough loading days have
+// stacked up, the watch read low, the athlete said they felt flat. Those are exactly
+// the reads the athlete has been overruling successfully, and they are reversible: a
+// softened one still asks for an easy day, and tomorrow's read sees today's log.
+//
+// Everything else is excluded ON PURPOSE and the exclusions are the safety contract:
+//   • `acute_sleep_corroborated` — a short night on top of a short stretch is FRESH
+//     evidence about today, not a standing judgement. History cannot argue with it.
+//   • `recovery_dose_overrun` — yesterday measurably exceeded a reduced week's dose.
+//     Also a fact about the last 24 hours.
+//   • anything clinical — see clinicallyDriven() below. That floor is absolute.
+const SOFTENABLE_REST_CODES: ReadonlySet<string> = new Set([
+  DAY_READ_OUTCOMES.accumulated_load_rest.code,
+  DAY_READ_OUTCOMES.low_readiness_rest.code,
+  DAY_READ_OUTCOMES.felt_run_down_rest.code,
+  DAY_READ_OUTCOMES.acute_signal_protection.code,
+]);
+
+// Is anything clinical in play today? Probed three ways because the same constraint
+// can reach the read by three routes, and a single check would miss two of them:
+// a fresh constraint item (an injury, an illness, a painful joint — the same probe
+// the work-around sentence uses), the DRIVING evidence behind today's posture
+// (`source_dimensions`, which is where a health item that only contributed to the
+// arbitration shows up), and the dimension's own standing status. Any of them and
+// the day is not softenable, whichever rule produced the rest.
+function clinicallyDriven(signalState: UnifiedSignalState, healthWorkaround: unknown): boolean {
+  const health = signalState.dimensions.health_constraints;
+  return (
+    !!healthWorkaround ||
+    signalState.action.source_dimensions.includes("health_constraints") ||
+    health.status === "constrained" ||
+    health.status === "watch"
+  );
+}
+
 // Deterministic baseline (T1 layers the agentic sentence + buildDayReadPrompt on
 // top). Rules: rest if >=3 consecutive training days OR recovery clearly low;
 // else train the suggested plan day; else easy. Never throws on missing data.
@@ -1882,6 +1958,27 @@ export function dayRead(
   // it changes the words, never the posture, so it must not churn a warm read.
   const continuity = dayReadContinuity(d);
   (signals as any).continuity = continuity;
+  // …and how those reads actually WENT. The continuity above is what the Brief said;
+  // this is what the athlete did with it and whether it cost them. Nothing else in the
+  // deterministic floor looks past today's inputs, which is how a stable picture came
+  // to suggest rest for eleven mornings running while the athlete trained through six
+  // of them and rated those sessions well — every one of those disagreements was
+  // already recorded, reconciled and then never read back.
+  //
+  // Bounded on purpose: a 12-day model rather than the coach context's 42, because the
+  // softening window is ten closed days and the model costs two queries per day it
+  // covers. Memoized per (date, request) like the other expensive producers, and
+  // fail-soft — an audit-table outage degrades to "no softening", never to no Brief.
+  const outcomeFeedback: RestOverrideSoftening | null = signalInput(
+    () =>
+      brainSignal(`rest_override_softening:${d}`, () =>
+        restOverrideSoftening(readAdherenceModel(d, OUTCOME_SOFTENING_WINDOW_DAYS + 2), d)
+      ),
+    null
+  );
+  // Published here so the rules below can see the evidence, and REPUBLISHED once the
+  // rules have resolved with `applied` — whether the softening actually fired — added.
+  if (outcomeFeedback) (signals as any).outcome_feedback = { ...outcomeFeedback, applied: false };
   const rules: DayReadRule[] = [
     {
       resolve: () => {
@@ -2176,14 +2273,47 @@ export function dayRead(
   ];
 
   const resolved = resolveDayReadRule(rules);
-  const outcome = resolved?.outcome ?? UNPROGRAMMED_EASY_DAY;
-  const resolvedRead = resolved?.read ?? {
+  const ruleOutcome = resolved?.outcome ?? UNPROGRAMMED_EASY_DAY;
+  const ruleRead = resolved?.read ?? {
     kind: "easy" as const,
     focus: null,
     why: pickDayVariant(UNPROGRAMMED_WHY, d, "unprogrammed_easy_day"),
     est_minutes: 20,
     signals,
   };
+  // ---- the outcome loop, closed ----
+  // A rest the athlete has repeatedly overruled without paying for it becomes an easy
+  // day. ONE step, and only ever this one: rest → easy. It cannot reach train, it
+  // cannot fire against a fresh short night or a measured dose overrun, and it cannot
+  // fire while anything clinical is live (see SOFTENABLE_REST_CODES + clinicallyDriven
+  // above). The result carries its own rule code, so the ledger, the repeat-of-
+  // yesterday check and the Brief's reason all key on the softening rather than on the
+  // rule it replaced — and tomorrow's model sees how THIS day went, so the loop is
+  // self-correcting in both directions.
+  const softenRest =
+    outcomeFeedback?.active === true &&
+    ruleRead.kind === "rest" &&
+    SOFTENABLE_REST_CODES.has(ruleOutcome.code) &&
+    !clinicallyDriven(signalState, healthWorkaround);
+  // Republish the evidence with the ANSWER attached. `active` says only that the
+  // pattern is there; it stays true on a morning that reads train, and on one where a
+  // clinical constraint or a fresh short night holds the rest in place. Anything
+  // downstream that claims the day has already been eased — the day-read prompt, and
+  // tomorrow's evidence window reading this row back off the ledger — must key on
+  // `applied`, which is the fact rather than the argument for it.
+  if (outcomeFeedback) {
+    (signals as any).outcome_feedback = { ...outcomeFeedback, applied: softenRest } satisfies OutcomeFeedbackSignal;
+  }
+  const outcome = softenRest ? DAY_READ_OUTCOMES.outcome_feedback_soften : ruleOutcome;
+  const resolvedRead = softenRest
+    ? {
+        ...ruleRead,
+        kind: "easy" as const,
+        focus: null,
+        why: pickDayVariant(OUTCOME_FEEDBACK_SOFTEN_WHY, d, "outcome_feedback_soften"),
+        est_minutes: 20,
+      }
+    : ruleRead;
   // The health work-around closes EVERY protective read, whichever rule produced it
   // — a short night, stacked load, a light walk already logged, or the bare floor. It
   // used to be spoken by one rule only, so the athlete's constraint guidance disappeared

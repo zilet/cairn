@@ -1144,12 +1144,16 @@ export function planningSignalState(input: {
     );
 
   const autoreg = input.trainingSignals?.autoregulation;
+  // Each autoregulation observation is dated to the SESSION it is about, not to
+  // the day the read is being built. Stamped with today's date these constraints
+  // were age 0 forever, so `max_age_days` never expired them and a single rough
+  // session could hold the read down indefinitely.
   if (autoreg?.joint_areas?.length)
     observations.push(
       observation(
         "health_constraints",
         "joint_pain",
-        date,
+        autoreg.joint_date ?? date,
         "manual_session",
         "constraint",
         `Recent user-reported joint pain calls for pain-free substitutions around ${autoreg.joint_areas.join(", ")}.`,
@@ -1168,7 +1172,7 @@ export function planningSignalState(input: {
       observation(
         "training_load_tolerance",
         "felt_fatigue",
-        date,
+        autoreg.low_performance_date ?? date,
         "manual_session",
         "constraint",
         "Recent sessions felt below usual performance, so loading should ease.",
@@ -1180,7 +1184,7 @@ export function planningSignalState(input: {
       observation(
         "training_load_tolerance",
         "felt_soreness",
-        date,
+        autoreg.soreness_date ?? date,
         "manual_session",
         "caution",
         "Recent session feedback shows elevated soreness.",
