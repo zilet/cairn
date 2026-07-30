@@ -113,6 +113,26 @@ export function dailyWindowOperationDue(now: Date, hour: number, stateKey: strin
   return nowContext(now).hour === hour && repo.schedulerOperationDue(stateKey, slotStamp, now);
 }
 
+// The small-hours hour the quiet nightly memory/learning pass prefers — an hour
+// before the Brief precompute so the agent isn't double-booked.
+const MEMORY_HOUR = (() => {
+  const h = Number(process.env.MEMORY_MAINT_HOUR);
+  return Number.isInteger(h) && h >= 0 && h <= 23 ? h : 3; // default 3am local
+})();
+export const MEMORY_MAINT_STATE_KEY = "memory_maint_last_date";
+
+// The nightly learning pass PREFERS MEMORY_HOUR but is owned by the DAY, not by the
+// minute the process happened to be alive for. It used to gate on `hour === MEMORY_HOUR`
+// with the last-run date held in process memory only, so a restart across the memory
+// hour silently dropped a whole day of learning — suggestion reconciliation, expectation
+// evaluation, miss follow-ups, step-back drafting, and every model rebuild. An hour FLOOR
+// over the same durable daily slot the other daily jobs use means a missed hour is caught
+// up on the next tick past it instead of waiting a full day.
+export function memoryMaintenanceDue(now: Date): boolean {
+  if (nowContext(now).hour < MEMORY_HOUR) return false;
+  return dailySlotDue(now, MEMORY_MAINT_STATE_KEY);
+}
+
 export function acceptsWeeklyCoachProposal(parsed: unknown): boolean {
   return isPlanProposalResult(parsed);
 }
@@ -781,135 +801,134 @@ export function startScheduler() {
     }
   };
 
-  // Stream 2 — quiet nightly memory housekeeping (runs once per day at MEMORY_HOUR,
-  // default 3am local, an hour before the Brief precompute so the agent isn't
-  // double-booked). Each pass: reconcile passed suggestions → durable learnings
-  // (deterministic, always), then consolidate the memory store and grow about_me
-  // (agentic, best-effort — a failed agent is a calm no-op). NEVER notifies; this
-  // is pure background curation the user never has to think about.
-  const MEMORY_HOUR = (() => {
-    const h = Number(process.env.MEMORY_MAINT_HOUR);
-    return Number.isInteger(h) && h >= 0 && h <= 23 ? h : 3; // default 3am local
-  })();
-  let lastMemoryDate = "";
+  // Stream 2 — quiet nightly memory housekeeping (once per day, at or after
+  // MEMORY_HOUR; see memoryMaintenanceDue for the durable ownership). Each pass:
+  // reconcile passed suggestions → durable learnings (deterministic, always), then
+  // consolidate the memory store and grow about_me (agentic, best-effort — a failed
+  // agent is a calm no-op). NEVER notifies; this is pure background curation the
+  // user never has to think about.
   let memoryBusy = false;
   const memoryTick = async () => {
     if (memoryBusy) return;
     const now = new Date();
-    if (nowContext(now).hour !== MEMORY_HOUR) return;
+    if (!memoryMaintenanceDue(now)) return;
     const stamp = localToday(now);
-    if (stamp === lastMemoryDate) return; // already ran today
-    lastMemoryDate = stamp;
     memoryBusy = true;
     try {
-      // 1. Deterministic outcome reconciliation — no agent, never fails the pass.
-      try {
-        const rec = repo.reconcileSuggestions();
-        if (rec.learnings > 0)
-          console.log(`[memory] reconciled ${rec.reconciled} suggestions → ${rec.learnings} learnings.`);
-      } catch (e: any) {
-        recordSchedulerFailure("memory_reconcile", e);
-        console.error(`[memory] reconcile failed: ${e?.message ?? e}`);
-      }
-      // 1a. Mature generalized expectations before rebuilding the response model,
-      // so the same nightly pass can learn from any newly authoritative verdict.
-      try {
-        const evaluated = evaluateMatureExpectations(stamp, { limit: 200 });
-        if (evaluated.evaluated > 0) {
-          console.log(`[brain] evaluated ${evaluated.evaluated}/${evaluated.scanned} matured expectation(s).`);
+      await runScheduled(MEMORY_MAINT_STATE_KEY, stamp, MEMORY_MAINT_STATE_KEY, async () => {
+        // 1. Deterministic outcome reconciliation — no agent, never fails the pass.
+        try {
+          const rec = repo.reconcileSuggestions();
+          if (rec.learnings > 0)
+            console.log(`[memory] reconciled ${rec.reconciled} suggestions → ${rec.learnings} learnings.`);
+        } catch (e: any) {
+          recordSchedulerFailure("memory_reconcile", e);
+          console.error(`[memory] reconcile failed: ${e?.message ?? e}`);
         }
-        // A change that missed its prediction used to stay applied forever with
-        // nobody told. File ONE quiet in-app note per such change on the
-        // attention schedule, and retire the notes that have had their say.
-        // Nothing is reverted and nothing is pushed — it waits to be read.
-        const noted = surfaceExpectationMisses(evaluated.evaluations, stamp);
-        const quieted = releaseStaleExpectationFollowups(stamp);
-        if (noted.length || quieted) {
-          console.log(`[brain] change follow-ups: ${noted.length} noted, ${quieted} released.`);
+        // 1a. Mature generalized expectations before rebuilding the response model,
+        // so the same nightly pass can learn from any newly authoritative verdict.
+        try {
+          const evaluated = evaluateMatureExpectations(stamp, { limit: 200 });
+          if (evaluated.evaluated > 0) {
+            console.log(`[brain] evaluated ${evaluated.evaluated}/${evaluated.scanned} matured expectation(s).`);
+          }
+          // A change that missed its prediction used to stay applied forever with
+          // nobody told. File ONE quiet in-app note per such change on the
+          // attention schedule, and retire the notes that have had their say.
+          // Nothing is reverted and nothing is pushed — it waits to be read.
+          const noted = surfaceExpectationMisses(evaluated.evaluations, stamp);
+          const quieted = releaseStaleExpectationFollowups(stamp);
+          if (noted.length || quieted) {
+            console.log(`[brain] change follow-ups: ${noted.length} noted, ${quieted} released.`);
+          }
+          // …and the second half of the same fact: where the miss says the CHANGE
+          // made the work worse, draft the step back and hand it to the autonomy
+          // layer. Same evaluation set as the note above, so the two can never
+          // disagree about which changes failed. Nothing is applied here — policy
+          // decides whether the draft lands quietly, announces, or waits for review.
+          const revisions = queueExpectationRevisions(evaluated.evaluations, stamp);
+          const queued = revisions.filter((entry: { status: string }) => entry.status === "queued");
+          if (revisions.length) {
+            console.log(
+              `[brain] step-backs: ${queued.length} queued (${queued.map((entry: { tier?: string | null }) => entry.tier ?? "?").join(", ") || "-"}), ` +
+                `${revisions.length - queued.length} skipped.`
+            );
+          }
+        } catch (e: any) {
+          recordSchedulerFailure("maturity_evaluation", e);
+          console.error(`[brain] maturity evaluation failed: ${e?.message ?? e}`);
         }
-        // …and the second half of the same fact: where the miss says the CHANGE
-        // made the work worse, draft the step back and hand it to the autonomy
-        // layer. Same evaluation set as the note above, so the two can never
-        // disagree about which changes failed. Nothing is applied here — policy
-        // decides whether the draft lands quietly, announces, or waits for review.
-        const revisions = queueExpectationRevisions(evaluated.evaluations, stamp);
-        const queued = revisions.filter((entry: { status: string }) => entry.status === "queued");
-        if (revisions.length) {
-          console.log(
-            `[brain] step-backs: ${queued.length} queued (${queued.map((entry: { tier?: string | null }) => entry.tier ?? "?").join(", ") || "-"}), ` +
-              `${revisions.length - queued.length} skipped.`
-          );
+        // 1b. Rebuild the PERSONAL-RESPONSE model (deterministic) from the freshly
+        //     reconciled history + latest logs — cache it + promote the load-bearing
+        //     patterns into memory so the coach voice personalizes. Pull, never push.
+        try {
+          repo.saveReactionModel();
+        } catch (e: any) {
+          recordSchedulerFailure("reaction_model_rebuild", e);
+          console.error(`[memory] reaction-model rebuild failed: ${e?.message ?? e}`);
         }
-      } catch (e: any) {
-        recordSchedulerFailure("maturity_evaluation", e);
-        console.error(`[brain] maturity evaluation failed: ${e?.message ?? e}`);
-      }
-      // 1b. Rebuild the PERSONAL-RESPONSE model (deterministic) from the freshly
-      //     reconciled history + latest logs — cache it + promote the load-bearing
-      //     patterns into memory so the coach voice personalizes. Pull, never push.
-      try {
-        repo.saveReactionModel();
-      } catch (e: any) {
-        recordSchedulerFailure("reaction_model_rebuild", e);
-        console.error(`[memory] reaction-model rebuild failed: ${e?.message ?? e}`);
-      }
-      // 1b′. Rebuild the FELT-SIGNALS model (deterministic) — what the athlete's own
-      //      subjective steers / check-ins / fueling reads reveal — and cache it so
-      //      getCoachContext + the Brief read it cheaply. Pull, never push; sparse
-      //      data yields nothing. Isolated so it never sinks the nightly pass.
-      try {
-        repo.saveFeltSignals();
-      } catch (e: any) {
-        recordSchedulerFailure("felt_signals_rebuild", e);
-        console.error(`[memory] felt-signals rebuild failed: ${e?.message ?? e}`);
-      }
-      // 1b″. Rebuild the LEARNED CROSS-DOMAIN models (deterministic) — endurance→
-      //      strength interference + short-sleep→fueling — and cache them so
-      //      getCoachContext + the Brief read them cheaply. Pull, never push; sparse
-      //      data yields nothing. Isolated so it never sinks the nightly pass.
-      try {
-        repo.saveLearnedModels();
-      } catch (e: any) {
-        recordSchedulerFailure("learned_models_rebuild", e);
-        console.error(`[memory] learned-models rebuild failed: ${e?.message ?? e}`);
-      }
-      // 1c. Write the plain-language NARRATIVE over the freshly rebuilt patterns
-      //     (agentic, best-effort). A quiet/failed agent leaves the prior narrative,
-      //     and an emptied model already cleared it in saveReactionModel. Pull, never push.
-      try {
-        const { refreshReactionNarrative } = await import("./coachOps.js");
-        const rn: any = await refreshReactionNarrative("auto");
-        if (rn.ok && rn.narrative) console.log(`[memory] refreshed the reaction-model narrative.`);
-      } catch (e: any) {
-        recordSchedulerFailure("reaction_narrative_refresh", e);
-        console.error(`[memory] reaction-model narrative refresh failed: ${e?.message ?? e}`);
-      }
-      // 2. Agentic consolidation + about-me growth — best-effort, lazy-imported.
-      try {
-        const { consolidateMemory, growAboutMe } = await import("./coachOps.js");
-        const c = await consolidateMemory("auto");
-        if (c.ok && (c.merged || c.superseded || c.promoted))
-          console.log(`[memory] consolidated: ${c.merged} merged, ${c.superseded} superseded, ${c.promoted} promoted.`);
-        const g = await growAboutMe("auto");
-        if (g.ok && (g as any).changed) console.log(`[memory] grew about_me from memory.`);
-      } catch (e: any) {
-        recordSchedulerFailure("memory_consolidation", e);
-        console.error(`[memory] nightly consolidation failed: ${e?.message ?? e}`);
-      }
-      // 3. Agentic exercise-name tidy — best-effort, pull-never-push. Messy /
-      //    duplicate movement titles self-align over time so the volume +
-      //    progression read stays clean (never touches logged numbers).
-      try {
-        const { reconcileExercises } = await import("./coachOps.js");
-        // Nightly, background: fill only empty groups — never override a group the
-        // athlete may have set (that override is reserved for the user-initiated "Tidy").
-        const x: any = await reconcileExercises("auto", undefined, { authoritativeGroups: false });
-        if (x.ok && x.applied)
-          console.log(`[memory] tidied exercise names: ${x.applied} alias(es) across ${x.aligned} movement(s).`);
-      } catch (e: any) {
-        recordSchedulerFailure("exercise_reconciliation", e);
-        console.error(`[memory] nightly exercise tidy failed: ${e?.message ?? e}`);
-      }
+        // 1b′. Rebuild the FELT-SIGNALS model (deterministic) — what the athlete's own
+        //      subjective steers / check-ins / fueling reads reveal — and cache it so
+        //      getCoachContext + the Brief read it cheaply. Pull, never push; sparse
+        //      data yields nothing. Isolated so it never sinks the nightly pass.
+        try {
+          repo.saveFeltSignals();
+        } catch (e: any) {
+          recordSchedulerFailure("felt_signals_rebuild", e);
+          console.error(`[memory] felt-signals rebuild failed: ${e?.message ?? e}`);
+        }
+        // 1b″. Rebuild the LEARNED CROSS-DOMAIN models (deterministic) — endurance→
+        //      strength interference + short-sleep→fueling — and cache them so
+        //      getCoachContext + the Brief read them cheaply. Pull, never push; sparse
+        //      data yields nothing. Isolated so it never sinks the nightly pass.
+        try {
+          repo.saveLearnedModels();
+        } catch (e: any) {
+          recordSchedulerFailure("learned_models_rebuild", e);
+          console.error(`[memory] learned-models rebuild failed: ${e?.message ?? e}`);
+        }
+        // 1c. Write the plain-language NARRATIVE over the freshly rebuilt patterns
+        //     (agentic, best-effort). A quiet/failed agent leaves the prior narrative,
+        //     and an emptied model already cleared it in saveReactionModel. Pull, never push.
+        try {
+          const { refreshReactionNarrative } = await import("./coachOps.js");
+          const rn: any = await refreshReactionNarrative("auto");
+          if (rn.ok && rn.narrative) console.log(`[memory] refreshed the reaction-model narrative.`);
+        } catch (e: any) {
+          recordSchedulerFailure("reaction_narrative_refresh", e);
+          console.error(`[memory] reaction-model narrative refresh failed: ${e?.message ?? e}`);
+        }
+        // 2. Agentic consolidation + about-me growth — best-effort, lazy-imported.
+        try {
+          const { consolidateMemory, growAboutMe } = await import("./coachOps.js");
+          const c = await consolidateMemory("auto");
+          if (c.ok && (c.merged || c.superseded || c.promoted))
+            console.log(`[memory] consolidated: ${c.merged} merged, ${c.superseded} superseded, ${c.promoted} promoted.`);
+          const g = await growAboutMe("auto");
+          if (g.ok && (g as any).changed) console.log(`[memory] grew about_me from memory.`);
+        } catch (e: any) {
+          recordSchedulerFailure("memory_consolidation", e);
+          console.error(`[memory] nightly consolidation failed: ${e?.message ?? e}`);
+        }
+        // 3. Agentic exercise-name tidy — best-effort, pull-never-push. Messy /
+        //    duplicate movement titles self-align over time so the volume +
+        //    progression read stays clean (never touches logged numbers).
+        try {
+          const { reconcileExercises } = await import("./coachOps.js");
+          // Nightly, background: fill only empty groups — never override a group the
+          // athlete may have set (that override is reserved for the user-initiated "Tidy").
+          const x: any = await reconcileExercises("auto", undefined, { authoritativeGroups: false });
+          if (x.ok && x.applied)
+            console.log(`[memory] tidied exercise names: ${x.applied} alias(es) across ${x.aligned} movement(s).`);
+        } catch (e: any) {
+          recordSchedulerFailure("exercise_reconciliation", e);
+          console.error(`[memory] nightly exercise tidy failed: ${e?.message ?? e}`);
+        }
+        // Every step above isolates its own failure, so reaching here means the pass
+        // ran. Acknowledging the day is what makes the next tick skip it — and what a
+        // process restarted later today reads instead of running it all again.
+        return { outcome: "succeeded" as const };
+      });
     } finally {
       memoryBusy = false;
     }

@@ -2,7 +2,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { repo } from "./_seed.js";
 import { runAgentWithFallback } from "../dist/agents.js";
-import { acceptsWeeklyCoachProposal, dailyWindowOperationDue } from "../dist/scheduler.js";
+import {
+  acceptsWeeklyCoachProposal,
+  dailyWindowOperationDue,
+  MEMORY_MAINT_STATE_KEY,
+  memoryMaintenanceDue,
+} from "../dist/scheduler.js";
 import { localDateISO } from "../dist/repo/shared.js";
 import { brainRevisionSlotStamp } from "../dist/scheduler.js";
 
@@ -135,6 +140,28 @@ test("a current-day insight retry remains pollable outside its initial hour", as
   const neverScheduled = "insight_not_scheduled_today";
   assert.equal(dailyWindowOperationDue(afterBackoff, 4, neverScheduled), false);
   assert.equal(repo.getSchedulerOperation(neverScheduled, slot), null, "after-hours polling must not create a row");
+});
+
+test("a restart through the memory hour still runs the nightly learning pass that day", async () => {
+  const slot = localDateISO();
+  // Nothing to do before the memory hour (3am local by default).
+  assert.equal(memoryMaintenanceDue(new Date(`${slot}T01:30:00`)), false);
+  assert.equal(memoryMaintenanceDue(new Date(`${slot}T03:00:00`)), true);
+
+  // The restart case: the process was down for the whole 3am hour, so nothing ever
+  // acknowledged the day. The next tick past the hour catches the pass up rather
+  // than dropping a day of reconciliation, evaluation, and model rebuilds.
+  assert.equal(memoryMaintenanceDue(new Date(`${slot}T07:12:00`)), true);
+  assert.equal(repo.getAppState(MEMORY_MAINT_STATE_KEY), null, "a skipped hour must not acknowledge the day");
+
+  // A completed pass acknowledges the day durably — exactly what runScheduled does.
+  // That DB record, not a process-memory flag, is what stops a second run, so it
+  // still holds for a process that starts fresh later the same day.
+  const run = await repo.runSchedulerOperation(MEMORY_MAINT_STATE_KEY, slot, async () => ({ outcome: "succeeded" }));
+  assert.equal(run.status, "succeeded");
+  repo.setAppState(MEMORY_MAINT_STATE_KEY, slot);
+  assert.equal(memoryMaintenanceDue(new Date(`${slot}T07:13:00`)), false);
+  assert.equal(memoryMaintenanceDue(new Date(`${slot}T23:59:00`)), false);
 });
 
 test("legacy weekly coach rotates parseable wrong-shape JSON through its semantic contract", async () => {

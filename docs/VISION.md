@@ -400,14 +400,25 @@ Principles encoded:
 
 ### Information architecture
 
-Keep the six tabs (Today / Plan / Progress / Chat / Me / Settings) — the structure is sound — but:
-- **Today** becomes day intelligence (above).
-- **Chat** is the buddy you talk to: already reachable; every "ask about this" deep-links into it with
-  the question pre-written (the codebase already does this via `gotoChatWith` / `state.chatPrefill`).
-- **Me** is where understanding lives: Profile → Memory → Health → Life → **Family**, plus a richer,
+Six tabs — **Today / Train / Stand / Plan / Coach / Settings**. Still six, but not the six this
+document first named: health outgrew a sub-view and took a tab, and *Me* gave one up.
+- **Today** is day intelligence (above) — the read, and the one or two things that genuinely matter,
+  ranked by the salience arbiter (§12 item 1).
+- **Train** is the trajectory tier: history, 1RM, volume, endurance, calendar, the program's blocks,
+  and a Body group for weight and measurements. Where you go to see whether it's working.
+- **Stand** is the whole-health home — where you stand across labs, body, recovery, supplements, and
+  the long view of aging, each marker's trend there when you look for it. Every health surface is
+  first-class here rather than nested inside a profile tab, because this is where the connected brain
+  shows its work.
+- **Plan** is the program and the food plan, editable directly.
+- **Coach** is the buddy you talk to: every "ask about this" deep-links into it with the question
+  pre-written (`gotoChatWith` / `state.chatPrefill`).
+- **Settings → You** is where understanding lives: Profile, Memory, Life, **Family**, plus the richer,
   progressively-filled "About me."
-- **Progress** stays the trajectory tier (History / 1RM / Volume / Weight / Calendar); add **Readiness**
-  and **Markers** sub-views for those who want to look — never pushed.
+
+**Me was demoted out of the tab bar, not deleted** — it is a place you visit rarely and on purpose, so
+it no longer spends one of six permanent slots. Old `me/health/*` and `me/standing` links hard-redirect
+into Stand (`src/client/app/router.ts`), so nothing anyone bookmarked breaks.
 
 ---
 
@@ -630,8 +641,24 @@ the high-ROI additions:
 - **Rich "about me"** (profile/memory extension) — the understanding engine. *(2A)*
 
 Deliberately **not** adding (low decision-value, anxiety risk, or surface bloat): CGM/glucose scoring,
-per-supplement logging (capture as memory if notable), circumference/photos, menstrual tracking unless
-relevant, hydration unless it ever drives a recommendation, and *anything gamified*.
+**daily** supplement logging, body photos, menstrual tracking unless relevant, hydration unless it ever
+drives a recommendation, and *anything gamified*.
+
+> **Reversed (2026-07).** Two entries on that list were overturned by the one rule above them, and the
+> doc says so rather than quietly dropping them.
+>
+> **Supplements.** "Capture as memory if notable" lost the thing that actually changes a decision:
+> *which markers a supplement touches*. So Cairn now keeps a durable supplement **understanding** —
+> you say it once, it approximates the name, dose, and frequency, and records the markers involved, so
+> the connected brain can reason across them (D3 ↔ vitamin D, omega-3 ↔ triglycerides, creatine ↔
+> eGFR). What stays refused is the part that was really the objection: it is **not** a daily log.
+> Nothing to tick off, no adherence, no streak — you tell it what you take, once.
+>
+> **Circumference.** Nine tape sites are tracked (`body_measurements`), because a waist drifting up
+> while the scale holds is a read that scale weight alone cannot give — it reshapes fueling and is read
+> alongside the lipid and glucose markers. Trends over single readings, suggestions never verdicts.
+> **Photos remain out.** The anxiety risk was the real argument against that pair, and it applies to
+> the photo, not the tape.
 
 ---
 
@@ -773,9 +800,30 @@ modes (lose/maintain/gain) + a daily fuel review & edit (v41). Schema reached **
 - [x] Item 3 — photo → macros (Phase 5A): `food_photo` enrich kind + `buildFoodPhotoPrompt`, vision draft upgrades in place
 - [x] Item 4 — "since you last looked" (`src/repo/since-last.ts`): one calm line, never a streak, silent on first open
 - [x] Item 5 — gentle "is this still your goal?" (`src/repo/goal-checkin.ts`): ~90-day-stable, dismissible, never nags a new user
-- [x] Item 6 — the learned timeline (`src/repo/learned-timeline.ts`): pull-only Me→Health→Learned, explains never grades
+- [x] Item 6 — the learned timeline (`src/repo/learned-timeline.ts`): pull-only, explains never grades (shipped into Me→Health→Learned; it moved to **Stand→Learned** with the rest of the health surfaces in Era 3)
 
 **Era 2 build complete (2026-06-23).** All six frontier features shipped across PWA + REST + MCP, built by parallel agent teams with seam integration owned centrally; schema unchanged (v41, state in `app_state`), `sw.js` `cairn-v129`, build-green, full test suite green (incl. 6 new suites), lint clean, route/tool docs regenerated. The constitution held: no scores, pull-never-push, you-drive, nothing auto-applies.
+
+### Era 3 — the accountable brain (shipped; `docs/ELITE-BRAIN-IMPLEMENTATION.md`)
+
+Era 2 kept Cairn calm as it got smarter. Era 3 answered the question that follows: *can it be held to
+what it says?* A buddy allowed to change your training on its own initiative owes you a record of what
+it decided and what it expected, an honest reckoning when that expectation misses, and a boundary it
+cannot argue its way past.
+
+- [x] **The decision ledger** — every material decision is recorded in `brain_decisions` (twelve kinds, from the morning `day_read` to a whole-person `case_conference`) with a **falsifiable expectation**. A suggestion becomes a claim about the future rather than a sentence that evaporates once read.
+- [x] **Deterministic evaluators** — mature expectations are checked against what actually happened. Inconclusive stays inconclusive, and late-arriving data reopens a closed verdict rather than leaving a stale flattering one: a learning loop whose only failure mode is self-congratulation is worse than one that never learned.
+- [x] **The day-read adherence loop** — the highest-frequency judgement Cairn makes finally predicts something (`rest` / `train` / `easy`) and so can be wrong. What it produces is followed / diverged / unclear counts — never a rate, never a percentage, never a verdict about the person.
+- [x] **Five specialists and one voice** — strength coach, nutrition lead, lab reader, recovery lead, and wellness lead reason in parallel over one immutable snapshot; deterministic conflict detection (injury vs load, deficit vs recovery, race vs strength, and the clinical classes) reconciles them, autonomy clamps to the strictest specialist, and the athlete hears a single conductor.
+- [x] **Autonomy as server policy, not model discretion** — `settings.lead_mode` resolves every decision to observe / quiet_apply / announce / ask / clinician. Bounded reversible changes land at natural boundaries with their reason and one-tap Undo; structural ones announce first; goal identity always asks. The **clinician floor is deterministic** — nothing a model can say about its own confidence moves a clinical decision out of your hands and your clinician's.
+- [x] **The surprise budget and the salience arbiter** — one genuinely new thing a day, and one ranked attention budget every surface competes for. The safeguard that keeps an accountable brain from becoming a louder one.
+- [x] **Learned personal-response modifiers** — repeated evaluated outcomes earn *bounded numeric steps* in how Cairn adapts you (`what_works_for_you`): a little more or a little less, within clamps. Universal safety floors never move, and a floor clearing twice is never read as permission to push harder.
+
+**Era 3 landed 2026-07-09** and kept growing through the month — the day-read adherence loop
+(2026-07-25) and durable, athlete-owned training intent (2026-07-28) are both part of it. It produced
+**Amendment 1** (§2), the only amendment so far that changed what Cairn is *allowed to do* rather than
+how it speaks. Everything else held: no scores, pull-never-push, and every change visible, explained,
+and reversible in one tap.
 
 ---
 
