@@ -117,6 +117,31 @@ type TodayBriefActionsDayRead = import("../contracts/client.js").ClientDayRead &
       })
     );
 
+    // A recovery-menu tap is one tap: ask for exactly this option and put it on
+    // today. The option's own minutes/detail become the request, so what lands is
+    // the thing the athlete read, not a generic session. Rest stays the default —
+    // nothing here fires unless it is tapped.
+    brief.querySelectorAll<HTMLElement>("[data-recovery-opt]").forEach((button) =>
+      button.addEventListener("click", () => {
+        if (button.getAttribute("aria-busy") === "true") return;
+        const label = button.dataset.recoveryOpt || "";
+        const detail = button.dataset.recoveryDetail || "";
+        const minutes = Number(button.dataset.recoveryMin);
+        button.setAttribute("aria-busy", "true");
+        void Promise.resolve(
+          deps.askForSession({
+            focus: label,
+            ...(Number.isFinite(minutes) && minutes > 0 ? { minutes } : {}),
+            // The detail is the coach's own caveat for this option ("nothing that
+            // asks anything of the …"). Passing it verbatim is what keeps a guarded
+            // menu guarded once it becomes a real session.
+            ...(detail ? { constraints: detail } : {}),
+            autoUse: true,
+          })
+        ).finally(() => button.removeAttribute("aria-busy"));
+      })
+    );
+
     brief.querySelectorAll<HTMLElement>("[data-redirect]").forEach((button) =>
       button.addEventListener("click", () => {
         handleBriefRedirect(button.dataset.redirect, button, deps);

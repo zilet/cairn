@@ -4304,7 +4304,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todaySessionSuggestControllerSource, /type TodaySessionSuggestDeps = \{/);
   assert.match(
     todaySessionSuggestControllerSource,
-    /function sessionSuggestOpOpts\(\s*deps: TodaySessionSuggestDeps,\s*request: Record<string, unknown> = \{},\s*\): TodaySessionSuggestRunOptions/
+    /function sessionSuggestOpOpts\(\s*deps: TodaySessionSuggestDeps,\s*request: Record<string, unknown> = \{},\s*autoUse = false,\s*\): TodaySessionSuggestRunOptions/
   );
   assert.match(
     todaySessionSuggestControllerSource,
@@ -4327,7 +4327,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   );
   assert.match(todaySessionStatusSource, /function todaySetsTonnage\(sets: unknown\): number/);
   assert.match(todaySessionStatusSource, /function todaySessionDoneCardHtml\(\s*session: SessionLike/);
-  assert.match(todaySessionStatusSource, /function todayFeedbackFormHtml\(session: SessionLike/);
+  assert.match(todaySessionStatusSource, /function todayFeedbackFormHtml\(_session: SessionLike/);
   assert.match(todaySessionStatusSource, /CairnTodaySessionStatus/);
   assert.match(todaySessionFeedbackSource, /type TodaySessionFeedbackDeps = \{/);
   assert.match(

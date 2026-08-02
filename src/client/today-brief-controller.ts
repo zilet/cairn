@@ -57,7 +57,7 @@ type TodayBriefControllerDeps = {
   loadTrainingProvenance(isToday?: boolean): unknown;
   revealPlanThen(after: () => unknown, opts?: { blank?: boolean }): unknown;
   revealSessionComposer(): unknown;
-  askForSession(opts?: { minutes?: unknown; focus?: unknown }): unknown;
+  askForSession(opts?: { minutes?: unknown; focus?: unknown; constraints?: unknown; autoUse?: boolean }): unknown;
 };
 
 (() => {

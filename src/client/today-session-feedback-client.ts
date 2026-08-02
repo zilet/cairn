@@ -221,25 +221,23 @@ type ClientTrainingSymptom = import("../contracts/client-api.js").ClientTraining
     // A save is confirmed only when the server accepts it (no {error}, no network
     // throw). Returning that truth lets the tap handler avoid a lying "Noted".
     const save = async (): Promise<boolean> => {
-      const joint = slot.querySelector<HTMLInputElement>("#feedbackJoint");
-      const jointVal = joint ? joint.value.trim() : "";
       try {
+        // joint_pain is deliberately absent from this body, not sent as null: the
+        // repo leaves the column untouched on `undefined` and CLEARS it on null, so
+        // omitting it is what stops a soreness tap from wiping a note an earlier
+        // session already carries. The field itself is gone from the form — pain is
+        // reported in words (session note or chat) and derived from them.
         const saved = await deps.api(`/sessions/${date}/feedback`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             soreness: picked.soreness,
             performance: picked.performance,
-            joint_pain: jointVal || null,
           }),
         });
         const row = responseRecord(saved);
         if (row.error) return false;
         Object.assign(session, row);
-        // The words the athlete typed are captured verbatim server-side and the
-        // extraction lane derives the record from them; the client no longer opens
-        // one itself. Re-render so anything already derived shows up.
-        if (jointVal) void renderSymptomLifecycle(slot, session, deps);
         return true;
       } catch {
         return false;
@@ -266,9 +264,8 @@ type ClientTrainingSymptom = import("../contracts/client-api.js").ClientTraining
             notified = true;
             deps.toast("Noted");
           }
-          // Both scales in → collapse to the calm settled line (the joint note, if
-          // any, was already carried on this same save). The finish moment stays two
-          // taps, never a lingering form.
+          // Both scales in → collapse to the calm settled line. The finish moment
+          // stays two taps, never a lingering form.
           if (picked.soreness != null && picked.performance != null) renderFeedbackNoted(slot);
           if (picked.soreness != null && picked.performance != null) void renderSymptomLifecycle(slot, session, deps);
           return;
@@ -279,19 +276,6 @@ type ClientTrainingSymptom = import("../contracts/client-api.js").ClientTraining
         deps.toast("Couldn't save that — try again.");
       }));
 
-    // The joint free-text starts collapsed behind "anything ache?"; reveal it in place.
-    const jointToggle = slot.querySelector<HTMLElement>("#feedbackJointToggle");
-    const joint = slot.querySelector<HTMLInputElement>("#feedbackJoint");
-    jointToggle?.addEventListener("click", () => {
-      jointToggle.hidden = true;
-      if (joint) {
-        joint.hidden = false;
-        joint.focus();
-      }
-    });
-    if (joint) joint.addEventListener("change", () => {
-      if (picked.soreness || picked.performance || joint.value.trim()) void save();
-    });
     slot.querySelector("#feedbackDismiss")?.addEventListener("click", () => {
       slot.innerHTML = "";
     });

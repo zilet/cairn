@@ -480,24 +480,20 @@ type DoneRuntimeGlobals = typeof globalThis & {
     return `<div class="feel-row"><span class="feel-lbl lbl">${escHtml(label)}</span><div class="feel-dots">${dots}</div></div>`;
   }
 
-  function todayFeedbackFormHtml(session: SessionLike): string {
-    const row = session && typeof session === "object" ? session : {};
-    // The two feel scales lead; the joint free-text starts collapsed behind a small
-    // "add a pain note" affordance so the moment reads as two calm taps, not a form.
-    // A session already carrying a pain note opens with the field shown (editing).
-    // The wording is the Pain & injury family's, so this and the panel below it read
-    // as one thing rather than two features that happen to sit together.
-    const joint = String(row.joint_pain || "");
-    const hasJoint = joint.trim() !== "";
+  function todayFeedbackFormHtml(_session: SessionLike): string {
+    // The two feel scales, and nothing else. There is no pain field here: the
+    // "add a pain note" toggle and its `where? (e.g. left knee)` input were the last
+    // pain mini-UI left standing after 2026-07-30 ("pain is reported in words, not
+    // filled into widgets"), and asking for a PLACE is what squeezed a sentence into
+    // the 60-character area_text label in the first place — the live DB still holds
+    // "…right hand joint (probably" from exactly that. Pain now arrives through the
+    // session note or chat and the extraction lane derives the record from the
+    // athlete's own words; the display-only lifecycle below shows what it found.
+    // See docs/DESIGN.md: do not reintroduce a mini pain form.
     return `<div class="checkin-form feedback-form chip-in">
       <div class="feedback-prompt lbl">how did that feel?</div>
       ${todayFeedbackScaleHtml("soreness", "soreness")}
       ${todayFeedbackScaleHtml("performance", "performance")}
-      <div class="feedback-joint-wrap">
-        <button class="feedback-joint-toggle" id="feedbackJointToggle" type="button"${hasJoint ? " hidden" : ""}>add a pain note</button>
-        <input id="feedbackJoint" class="feedback-joint" type="text" autocomplete="off"
-          placeholder="where? (e.g. left knee)" value="${escAttr(joint)}"${hasJoint ? "" : " hidden"}>
-      </div>
       <button class="checkin-dismiss" id="feedbackDismiss" type="button" aria-label="Not now">✕</button>
     </div><div data-symptom-lifecycle></div>`;
   }

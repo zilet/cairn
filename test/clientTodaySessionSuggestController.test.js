@@ -267,7 +267,14 @@ test("Today session-suggest controller submits composer constraints and guards d
   harness.slot.querySelector("[data-sugbuild]").click();
   assert.equal(harness.requests.length, 1);
   assert.equal(harness.requests[0].kind, "session_suggest");
-  assert.deepEqual(plain(harness.requests[0].body), { date: "2026-06-30", constraints: "upper body" });
+  // train_anyway rides with every PWA ask: tapping "ask for a session" IS the
+  // intent to train, and it has to be on the JOB for acceptance to keep the
+  // movements on a rest day (a no-op on a train day).
+  assert.deepEqual(plain(harness.requests[0].body), {
+    date: "2026-06-30",
+    train_anyway: true,
+    constraints: "upper body",
+  });
   assert.match(harness.slot.innerHTML, /sug-loading/);
 
   await harness.controller.askForSession({}, harness.deps);

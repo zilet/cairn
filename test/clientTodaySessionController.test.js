@@ -115,7 +115,6 @@ class FakeElement {
       this.appendChild(new FakeElement("button", { className: "feel-dot", dataset: { feel: "soreness", val: "1" } }));
       this.appendChild(new FakeElement("button", { className: "feel-dot", dataset: { feel: "soreness", val: "2" } }));
       this.appendChild(new FakeElement("button", { className: "feel-dot", dataset: { feel: "performance", val: "1" } }));
-      this.appendChild(new FakeElement("input", { id: "feedbackJoint", value: decodeAttr(this._innerHTML.match(/id="feedbackJoint"[^>]*value="([^"]*)"/)?.[1] || "") }));
       this.appendChild(new FakeElement("button", { id: "feedbackDismiss" }));
     }
     if (this._innerHTML.includes('id="feedbackEdit"')) {
@@ -442,7 +441,7 @@ function loadController({ apiImpl, contextOverrides } = {}) {
     localISO: () => "2026-06-30",
     sessionStatus: {
       feedbackDoneHtml: (session) => session?.soreness != null ? `<div><button id="feedbackEdit"></button></div>` : "",
-      feedbackFormHtml: () => `<div class="feedback-form"><button class="feel-dot" data-feel="soreness" data-val="1"></button><button class="feel-dot" data-feel="soreness" data-val="2"></button><input id="feedbackJoint" value=""><button id="feedbackDismiss"></button></div>`,
+      feedbackFormHtml: () => `<div class="feedback-form"><button class="feel-dot" data-feel="soreness" data-val="1"></button><button class="feel-dot" data-feel="soreness" data-val="2"></button><button id="feedbackDismiss"></button></div>`,
       feedbackOpenHtml: () => `<button id="feedbackOpen"></button>`,
       hasFeedback: (session) => session?.soreness != null,
       setChipHtml: (set) => `<span class="chip" data-set="${set.id}">#${set.set_number} ${set.weight} <span>×</span> ${set.reps}<button data-del="${set.id}"></button></span>`,
@@ -1749,7 +1748,7 @@ test("Today session controller saves feedback and merges the returned row", asyn
   await flushAsync();
 
   assert.equal(harness.requests[0].path, "/sessions/2026-06-30/feedback");
-  assert.deepEqual(JSON.parse(harness.requests[0].opts.body), { soreness: 1, joint_pain: null });
+  assert.deepEqual(JSON.parse(harness.requests[0].opts.body), { soreness: 1 });
   assert.equal(session.soreness, 2);
   assert.deepEqual(harness.toasts.map((toast) => toast.message), ["Noted"]);
 });

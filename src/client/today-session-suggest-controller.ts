@@ -34,6 +34,11 @@ type TodaySessionSuggestAskOptions = {
   focus?: unknown;
   equipment?: unknown;
   constraints?: unknown;
+  // One-tap entries (the Brief's recovery menu) accept the draft as soon as it
+  // lands instead of painting a card and waiting for "Use this session". The card
+  // is still rendered first, so a failed accept leaves the athlete looking at the
+  // session they asked for with the button they need.
+  autoUse?: boolean;
 };
 
 type TodaySessionSuggestDeps = {
@@ -422,6 +427,7 @@ type TodaySnapshotRecovery = {
   function sessionSuggestOpOpts(
     deps: TodaySessionSuggestDeps,
     request: Record<string, unknown> = {},
+    autoUse = false,
   ): TodaySessionSuggestRunOptions {
     return {
       path: "/session-suggest",
@@ -450,6 +456,13 @@ type TodaySnapshotRecovery = {
         deps.runCountUps(slot);
         wireSuggestCard(slot, deps);
         slot.scrollIntoView({ behavior: deps.reducedMotion() ? "auto" : "smooth", block: "nearest" });
+        // One-tap entries accept what they just asked for. The card is painted and
+        // wired FIRST so a refused/failed accept leaves a working "Use this session"
+        // behind rather than an empty slot.
+        if (autoUse) {
+          const useButton = slot.querySelector<HTMLElement>('[data-sugaction="use"]');
+          if (useButton) void acceptSuggestedSession(useButton, slot, deps);
+        }
       },
       onFail: (result?: unknown) => {
         sessionSuggestInFlight = false;
@@ -499,13 +512,19 @@ type TodaySnapshotRecovery = {
     if (!slot) return;
     sessionSuggestInFlight = true;
     slot.innerHTML = CairnTodaySessionSuggest.loadingHtml();
-    const body: Record<string, unknown> = { date: deps.state.logDate };
+    // Every caller of askForSession is the athlete explicitly asking for a session
+    // (the composer's Build, Try again, a recovery-menu tap) — never a background
+    // read. That ask is the training consent, so it rides with the job: on a train
+    // day it changes nothing, and on a rest day it is the difference between the
+    // session they were shown and an empty "Rest day" when they accept it. Agent /
+    // MCP callers are untouched and must still say so themselves.
+    const body: Record<string, unknown> = { date: deps.state.logDate, train_anyway: true };
     if (opts.minutes != null) body.minutes = opts.minutes;
     if (opts.focus) body.focus = opts.focus;
     if (opts.equipment) body.equipment = opts.equipment;
     if (opts.constraints) body.constraints = opts.constraints;
 
-    await deps.runOp("session_suggest", body, sessionSuggestOpOpts(deps, body));
+    await deps.runOp("session_suggest", body, sessionSuggestOpOpts(deps, body, opts.autoUse === true));
   }
 
   function wireSuggestCard(slot: Element, deps: TodaySessionSuggestDeps): void {
@@ -527,53 +546,66 @@ type TodaySnapshotRecovery = {
           void askForSession({}, deps);
           return;
         }
-        if (action !== "use" || button.dataset.busy === "1") return;
-        const session = deps.state.suggestedSession;
-        if (!session || !Array.isArray(session.items)) return;
-        const status = card?.querySelector<HTMLElement>(".sug-save-status");
-        const original = button.textContent || "Use this session";
-        button.dataset.busy = "1";
-        button.setAttribute("aria-busy", "true");
-        (button as HTMLButtonElement).disabled = true;
-        button.textContent = "Saving…";
-        if (status) status.textContent = "Saving this session for today…";
-        try {
-          const context = deps.state.suggestedSessionContext || {};
-          const date = String(deps.state.logDate || "");
-          const opened = await deps.openSession(date, {
-            source: "agent_suggest",
-            agentJobId: context.agentJobId,
-            constraints: context.constraints,
-            provenance: context.provenance,
-            replace: true,
-            trigger: button,
-          });
-          if (opened !== true) {
-            button.dataset.busy = "";
-            button.removeAttribute("aria-busy");
-            (button as HTMLButtonElement).disabled = false;
-            button.textContent = original;
-            return;
-          }
-          deps.state.suggestedSession = null;
-          deps.state.suggestedSessionContext = null;
-          const currentSlot = suggestSlot(deps);
-          if (currentSlot) currentSlot.innerHTML = "";
-          deps.toast("Saved for today — it will be here when you come back");
-        } catch (error) {
-          const message =
-            error instanceof Error && error.message
-              ? error.message
-              : "Could not save this session. Try again when you're ready.";
-          if (status) status.textContent = message;
-          deps.toast(message);
-          button.dataset.busy = "";
-          button.removeAttribute("aria-busy");
-          (button as HTMLButtonElement).disabled = false;
-          button.textContent = original;
-        }
+        if (action !== "use") return;
+        await acceptSuggestedSession(button, slot, deps);
       })
     );
+  }
+
+  // The "Use this session" body, reachable both from the button and from a
+  // one-tap ask (see askForSession's autoUse). Every failure path restores the
+  // button, so an auto-accept that fails degrades exactly into the manual card.
+  async function acceptSuggestedSession(
+    button: HTMLElement,
+    slot: Element,
+    deps: TodaySessionSuggestDeps,
+  ): Promise<void> {
+    const card = slot.querySelector(".sug-card");
+    if (button.dataset.busy === "1") return;
+    const session = deps.state.suggestedSession;
+    if (!session || !Array.isArray(session.items)) return;
+    const status = card?.querySelector<HTMLElement>(".sug-save-status");
+    const original = button.textContent || "Use this session";
+    const restore = () => {
+      button.dataset.busy = "";
+      button.removeAttribute("aria-busy");
+      (button as HTMLButtonElement).disabled = false;
+      button.textContent = original;
+    };
+    button.dataset.busy = "1";
+    button.setAttribute("aria-busy", "true");
+    (button as HTMLButtonElement).disabled = true;
+    button.textContent = "Saving…";
+    if (status) status.textContent = "Saving this session for today…";
+    try {
+      const context = deps.state.suggestedSessionContext || {};
+      const date = String(deps.state.logDate || "");
+      const opened = await deps.openSession(date, {
+        source: "agent_suggest",
+        agentJobId: context.agentJobId,
+        constraints: context.constraints,
+        provenance: context.provenance,
+        replace: true,
+        trigger: button,
+      });
+      if (opened !== true) {
+        restore();
+        return;
+      }
+      deps.state.suggestedSession = null;
+      deps.state.suggestedSessionContext = null;
+      const currentSlot = suggestSlot(deps);
+      if (currentSlot) currentSlot.innerHTML = "";
+      deps.toast("Saved for today — it will be here when you come back");
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : "Could not save this session. Try again when you're ready.";
+      if (status) status.textContent = message;
+      deps.toast(message);
+      restore();
+    }
   }
 
   function reconnectSessionSuggest(job: unknown, deps: TodaySessionSuggestDeps): TodaySessionSuggestReconnectHandlers | null {

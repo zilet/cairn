@@ -438,7 +438,7 @@ declare global {
     loadTrainingProvenance(isToday?: boolean): unknown;
     revealPlanThen(after: () => unknown, opts?: { blank?: boolean }): unknown;
     revealSessionComposer(): unknown;
-    askForSession(opts?: { minutes?: unknown; focus?: unknown }): unknown;
+    askForSession(opts?: { minutes?: unknown; focus?: unknown; constraints?: unknown; autoUse?: boolean }): unknown;
   };
 
   type ClientTodayBriefOverrideRunOptions = ClientAgentOpHandlers & {
@@ -462,7 +462,7 @@ declare global {
     withViewTransition(fn: () => unknown): Promise<unknown> | unknown;
     reducedMotion(): boolean;
     escapeHtml(value: unknown): string;
-    askForSession(opts?: { minutes?: unknown; focus?: unknown }): unknown;
+    askForSession(opts?: { minutes?: unknown; focus?: unknown; constraints?: unknown; autoUse?: boolean }): unknown;
   };
 
   type ClientTodayBriefActionsDeps = {
@@ -486,7 +486,7 @@ declare global {
     escapeHtml(value: unknown): string;
     revealPlanThen(after: () => unknown, opts?: { blank?: boolean }): unknown;
     revealSessionComposer(): unknown;
-    askForSession(opts?: { minutes?: unknown; focus?: unknown }): unknown;
+    askForSession(opts?: { minutes?: unknown; focus?: unknown; constraints?: unknown; autoUse?: boolean }): unknown;
   };
 
   type ClientTodayRailControllerDeps = {
@@ -587,7 +587,7 @@ declare global {
     loadTrainingProvenance(isToday?: boolean): unknown;
     revealPlanThen(after: () => unknown, opts?: { blank?: boolean }): unknown;
     revealSessionComposer(): unknown;
-    askForSession(opts?: { minutes?: unknown; focus?: unknown; equipment?: unknown; constraints?: unknown }): unknown;
+    askForSession(opts?: { minutes?: unknown; focus?: unknown; equipment?: unknown; constraints?: unknown; autoUse?: boolean }): unknown;
     thinkingCaption(el: Element | null | undefined, op: unknown): () => void;
     appendOffPlanCard(name: any, mode: any): unknown;
     gotoChatWith(text: string): unknown;

@@ -651,7 +651,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/api/session-suggest` | Build ONE session for today on demand ("ask it for a session right now"). A SUGGESTION the user can act on or ignore — NOT saved/applied as the plan. Like the meal-swap endpoint, ok:false at status 200 is the designed failure signal (the PWA api() helper reads the body regardless of status). |
+| POST | `/api/session-suggest` | Build ONE session for today on demand ("ask it for a session right now"). A SUGGESTION the user can act on or ignore — NOT saved/applied as the plan. Like the meal-swap endpoint, ok:false at status 200 is the designed failure signal (the PWA api() helper reads the body regardless of status). Optional train_anyway records that the ask itself was the intent to train, which is what lets the suggestion keep its movements when it is accepted on a rest day (acceptance revalidates against the live envelope and would otherwise clamp every item away); the PWA sends it, agents must opt in explicitly. |
 
 ## `/sessions`
 

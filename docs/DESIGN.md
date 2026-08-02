@@ -140,6 +140,12 @@ New/changed components (CSS must implement, the client JS must emit):
   check, `.done-kicker` (`.lbl`), `.done-title` (display serif), `.done-chips` (cream pills:
   sets/tonnage/duration), optional `.done-notes` (italic), the `#feedbackSlot` ("how did
   that feel?"), and `.done-actions` (Log more / In your history →). No score, ever.
+  The `#feedbackSlot` form is the two feel scales and nothing else — the "add a pain note"
+  toggle and its `where? (e.g. left knee)` input are GONE (they were the last pain mini-UI
+  standing, and asking for a place is what clipped a sentence into the `area_text` label).
+  A stored note is still SHOWN on the settled `.feedback-done` line; it is never re-offered
+  as a field. The save omits `joint_pain` entirely rather than sending null, so a soreness
+  tap cannot clear a note written elsewhere.
 - Session-close **Pain & injury** `.symptom-lifecycle`: a compact, left-aligned editorial lifecycle
   under `#feedbackSlot` — a DISPLAY surface with exactly one action on it. Pain is reported the way a
   person reports it (a session note, the feedback line, chat) and derived from those words, so there

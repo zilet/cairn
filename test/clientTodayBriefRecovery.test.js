@@ -66,6 +66,39 @@ test("Today Brief renders the recovery menu on a rest day with escaped content",
   assert.match(html, /brief-recovery-opt-mins">· 20 min<\/span>/, "renders the option's minutes");
 });
 
+test("Today Brief recovery options are tappable and carry their own request", () => {
+  const brief = loadTodayBrief();
+  const html = brief.briefHtml(
+    { kind: "rest", headline: "Rest today", why: "Nothing stacked up.", signals: {}, recovery: RECOVERY },
+    { isToday: true }
+  );
+
+  // Each option is a real button, not a div — one tap asks for exactly this
+  // session. The label/minutes/detail ride on the element so the handler never has
+  // to parse the rendered copy back into a request.
+  assert.match(html, /<button type="button" class="brief-recovery-opt"/);
+  assert.match(html, /data-recovery-opt="Mobility"/);
+  assert.match(html, /data-recovery-min="12"/);
+  assert.match(html, /data-recovery-detail="10–15 minutes for your hips and hamstrings\."/);
+  assert.equal((html.match(/data-recovery-opt=/g) || []).length, 2, "every option is tappable");
+});
+
+test("Today Brief recovery option with no minutes omits the minutes hook", () => {
+  const brief = loadTodayBrief();
+  const html = brief.briefHtml(
+    {
+      kind: "rest",
+      headline: "Rest today",
+      why: "Nothing stacked up.",
+      signals: {},
+      recovery: { line: "Only if you feel like it.", options: [{ label: "Mobility", detail: "As long as you like.", minutes: null }] },
+    },
+    { isToday: true }
+  );
+  assert.match(html, /data-recovery-opt="Mobility"/);
+  assert.doesNotMatch(html, /data-recovery-min=/);
+});
+
 test("Today Brief renders no recovery menu on an easy day when the read carries none", () => {
   const brief = loadTodayBrief();
   const html = brief.briefHtml(

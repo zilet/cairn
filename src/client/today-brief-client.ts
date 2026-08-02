@@ -186,10 +186,14 @@ type TodayBriefHtmlOptions = {
   }
 
   // The guided recovery menu on a rest/easy day: a short optional line + a
-  // handful of low-key rows, never a chip and never an action — resting is
-  // still a perfectly good answer beside every option here. Rendered only for
-  // rest/easy kinds; a train/done read (or an absent/malformed payload) gets
-  // nothing. Every interpolated string is escaped.
+  // handful of low-key rows. Each row is now a TAP — the owner asked for the menu
+  // to be actionable ("tap on that gentle mobility and get that plan running
+  // today"), so an option carries its own minutes/focus/detail and hands them to
+  // the session-suggest lane. The invitation is unchanged: nothing is required,
+  // resting is still a perfectly good answer beside every option, and the tap only
+  // happens when the athlete makes it. Rendered only for rest/easy kinds; a
+  // train/done read (or an absent/malformed payload) gets nothing. Every
+  // interpolated string is escaped.
   function todayBriefRecoveryHtml(read: TodayBriefRead | null | undefined, kind: string): string {
     if (kind !== "rest" && kind !== "easy") return "";
     const recovery = read?.recovery as { line?: unknown; options?: unknown } | null | undefined;
@@ -211,7 +215,18 @@ type TodayBriefHtmlOptions = {
           minutesNum != null && Number.isFinite(minutesNum) && minutesNum > 0
             ? ` <span class="brief-recovery-opt-mins">· ${escHtml(String(Math.round(minutesNum)))} min</span>`
             : "";
-        return `<div class="brief-recovery-opt">${label ? `<span class="brief-recovery-opt-label">${escHtml(label)}${mins}</span>` : ""}${detail ? `<span class="brief-recovery-opt-detail">${escHtml(detail)}</span>` : ""}</div>`;
+        // minutes/detail ride on the element so the tap handler never has to
+        // re-parse the rendered copy back into a request.
+        const attrs = [
+          `data-recovery-opt="${escAttr(label)}"`,
+          minutesNum != null && Number.isFinite(minutesNum) && minutesNum > 0
+            ? `data-recovery-min="${escAttr(String(Math.round(minutesNum)))}"`
+            : "",
+          detail ? `data-recovery-detail="${escAttr(detail)}"` : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
+        return `<button type="button" class="brief-recovery-opt" ${attrs}>${label ? `<span class="brief-recovery-opt-label">${escHtml(label)}${mins}</span>` : ""}${detail ? `<span class="brief-recovery-opt-detail">${escHtml(detail)}</span>` : ""}</button>`;
       })
       .filter(Boolean)
       .join("");

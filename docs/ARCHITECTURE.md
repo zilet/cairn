@@ -631,6 +631,14 @@ would invite a session that day is already over for and would be grounded in tod
 than that day's anyway. A suggestion, never a gate: nothing on the menu is presented as required, and
 resting stays a fine answer beside every option.
 
+Each option is a TAP. `todayBriefRecoveryHtml` renders a `<button class="brief-recovery-opt">`
+carrying its own `data-recovery-opt` / `-min` / `-detail`, and `today-brief-actions-client.ts` hands
+those straight to `askForSession({focus, minutes, constraints, autoUse:true})` — the option's own
+detail becomes the constraint, so a symptom-guarded option stays guarded once it is a real session.
+`autoUse` accepts the draft as soon as it lands (the card is still painted and wired first, so a
+failed accept degrades into the ordinary "Use this session"). Because the athlete is asking for a
+session on a rest day, the PWA sends `train_anyway` with the ask — see below.
+
 **A day the evidence backs can push, not just hold.** `supportState()` (`src/repo/signal-state.ts`)
 earns a `backed` support tier riding beside the existing five-value posture enum — untouched,
 including its safety ranking — from evidence in the athlete's OWN lane only:

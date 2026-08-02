@@ -65,7 +65,11 @@ dayCoachRouter.post("/today-read/reshape", async (req, res) => {
 // Build ONE session for today on demand ("ask it for a session right now"). A
 // SUGGESTION the user can act on or ignore — NOT saved/applied as the plan. Like
 // the meal-swap endpoint, ok:false at status 200 is the designed failure signal
-// (the PWA api() helper reads the body regardless of status).
+// (the PWA api() helper reads the body regardless of status). Optional
+// train_anyway records that the ask itself was the intent to train, which is what
+// lets the suggestion keep its movements when it is accepted on a rest day
+// (acceptance revalidates against the live envelope and would otherwise clamp
+// every item away); the PWA sends it, agents must opt in explicitly.
 dayCoachRouter.post("/session-suggest", async (req, res) => {
   const b = req.body ?? {};
   const input = {
@@ -74,6 +78,15 @@ dayCoachRouter.post("/session-suggest", async (req, res) => {
     equipment: b.equipment != null ? String(b.equipment) : undefined,
     focus: b.focus != null ? String(b.focus) : undefined,
     constraints: b.constraints != null ? String(b.constraints) : undefined,
+    // Asking for a session on a rest day IS the intent to train, and this is the
+    // moment it is given — so it is recorded on the job, where acceptance reads it
+    // back (agentDecisionOpts). Without it the athlete gets a card full of
+    // movements and then an empty day: /session-suggest composes freely, but
+    // prepare_daily_session revalidates against the live envelope and a rest
+    // envelope rejects every item as `rest_requires_train_anyway`. Recording it
+    // here rather than at acceptance is what keeps a STALE suggestion — drafted
+    // before recovery turned — still correctly clamped when it is finally used.
+    train_anyway: b.train_anyway === true ? true : undefined,
     // Persist the resolved local date with the job. Preparing an agent suggestion
     // later must be able to prove that its canonical job belongs to this day.
     date: b.date != null ? String(b.date) : localDateISO(),

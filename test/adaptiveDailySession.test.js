@@ -675,6 +675,28 @@ test("legacy session suggestions are revalidated against the current rest envelo
   assert.equal(accepted.daily_session.plan_day_id, null);
 });
 
+test("asking for a session on a rest day keeps its movements once accepted", () => {
+  // The reported bug: on a rest day the athlete taps "Ask for a session", reads a
+  // card full of movements, taps "Use this session" — and every exercise vanishes.
+  // /session-suggest composes freely, but acceptance revalidates against the live
+  // envelope, and a rest envelope rejects each item as `rest_requires_train_anyway`
+  // then falls back to `{name:"Rest day", items:[]}`. The PWA now records the ask
+  // itself as the intent (train_anyway on the job), which is what carries through.
+  seedPlan();
+  repo.addCheckin(DATE, { sleep_feel: 1, energy: 3, mood: 3 });
+  assert.equal(repo.decideDailySession(DATE).envelope.kind, "rest");
+
+  const asked = completedSuggestionJob(suggestedSession(), { train_anyway: true });
+  const accepted = prepare({ date: DATE, source: "agent_suggest", agent_job_id: asked.id });
+
+  assert.equal(accepted.daily_session.decision.baseline_kind, "rest");
+  assert.equal(accepted.daily_session.decision.train_anyway, true);
+  assert.ok(accepted.daily_session.items.length > 0, "the movements survive acceptance");
+  // Still a rest day underneath: the caps stay conservative, it is not a free pass.
+  assert.equal(accepted.daily_session.decision.caps.volume, "reduced");
+  assert.equal(accepted.daily_session.decision.caps.intensity, "deload");
+});
+
 test("legacy train-intent agent input persists train_anyway and conservative rest-day caps", () => {
   seedPlan();
   repo.addCheckin(DATE, { sleep_feel: 1, energy: 3, mood: 3 });

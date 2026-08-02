@@ -80,28 +80,27 @@ test("done card: feedback slot sits directly under the chips, above journey/anal
   assert.ok(notes < actions, "actions stay at the bottom");
 });
 
-test("feedback form: joint free-text starts collapsed behind 'anything ache?'", () => {
+test("feedback form: the two feel scales, and no pain field at all", () => {
   const ctx = loadStatus();
   const html = ctx.CairnTodaySessionStatus.feedbackFormHtml({});
   // Both feel scales render as their own line.
   assert.match(html, /data-feel="soreness"/);
   assert.match(html, /data-feel="performance"/);
-  // The affordance is present and the input starts hidden.
-  assert.match(html, /id="feedbackJointToggle"/);
-  const inputTag = /<input[^>]*id="feedbackJoint"[^>]*>/.exec(html)[0];
-  assert.match(inputTag, /\bhidden\b/);
-  const toggleTag = /<button[^>]*id="feedbackJointToggle"[^>]*>/.exec(html)[0];
-  assert.doesNotMatch(toggleTag, /\bhidden\b/);
+  // The last pain mini-UI is gone: no toggle, no input, no "where?" prompt. Pain
+  // is reported in words (session note or chat) and derived from them.
+  assert.doesNotMatch(html, /feedbackJointToggle/);
+  assert.doesNotMatch(html, /feedbackJoint/);
+  assert.doesNotMatch(html, /add a pain note/);
+  assert.doesNotMatch(html, /<input/);
 });
 
-test("feedback form: a session already carrying a joint note opens with the field shown", () => {
+test("feedback form: a session already carrying a joint note still renders no field for it", () => {
   const ctx = loadStatus();
+  // The stored note is display-only now (the done line and the lifecycle panel
+  // show it); the finish form never offers to re-edit it as a place-label.
   const html = ctx.CairnTodaySessionStatus.feedbackFormHtml({ joint_pain: "left knee" });
-  const inputTag = /<input[^>]*id="feedbackJoint"[^>]*>/.exec(html)[0];
-  assert.doesNotMatch(inputTag, /\bhidden\b/);
-  assert.match(inputTag, /left knee/);
-  const toggleTag = /<button[^>]*id="feedbackJointToggle"[^>]*>/.exec(html)[0];
-  assert.match(toggleTag, /\bhidden\b/);
+  assert.doesNotMatch(html, /feedbackJoint/);
+  assert.doesNotMatch(html, /left knee/);
 });
 
 // ---- behavioral tests: renderFeedback (today-session-feedback-client.ts) ----
@@ -182,16 +181,8 @@ class FakeEl {
           this.append(new FakeEl("button", { className: "feel-dot", dataset: { feel, val: String(val) } }));
         }
       }
-      const toggleTag = /<button[^>]*id="feedbackJointToggle"[^>]*>/.exec(this._html)?.[0] || "";
-      this.append(new FakeEl("button", { id: "feedbackJointToggle", hidden: /\bhidden\b/.test(toggleTag) }));
-      const inputTag = /<input[^>]*id="feedbackJoint"[^>]*>/.exec(this._html)?.[0] || "";
-      this.append(
-        new FakeEl("input", {
-          id: "feedbackJoint",
-          value: decodeAttr(/value="([^"]*)"/.exec(inputTag)?.[1] || ""),
-          hidden: /\bhidden\b/.test(inputTag),
-        })
-      );
+      // No joint toggle / input is parsed out because feedbackFormHtml no longer
+      // emits one — the fake stays a mirror of the real markup.
       this.append(new FakeEl("button", { id: "feedbackDismiss" }));
     }
     if (this._html.includes('id="feedbackEdit"')) this.append(new FakeEl("button", { id: "feedbackEdit" }));
@@ -482,7 +473,11 @@ test("renderFeedback: answering BOTH scales collapses to the settled 'Noted' lin
   assert.doesNotMatch(slot.innerHTML, /feedback-form/);
   // The collapse rode a real save carrying both scales.
   const feedbackSave = requests.filter((request) => request.path === "/sessions/2026-07-16/feedback").at(-1);
-  assert.deepEqual(JSON.parse(feedbackSave.opts.body), { soreness: 2, performance: 3, joint_pain: null });
+  // joint_pain is ABSENT, not null: the repo clears the column on null and leaves
+  // it alone on undefined, so omitting it is what stops a soreness tap from wiping
+  // a pain note an earlier write already put on this session.
+  assert.deepEqual(JSON.parse(feedbackSave.opts.body), { soreness: 2, performance: 3 });
+  assert.ok(!("joint_pain" in JSON.parse(feedbackSave.opts.body)));
 });
 
 test("renderFeedback: answering only ONE scale keeps the form open (no premature collapse)", async () => {
@@ -501,21 +496,18 @@ test("renderFeedback: answering only ONE scale keeps the form open (no premature
   assert.equal(soreDots[1].classList.contains("feel-dot-on"), true);
 });
 
-test("renderFeedback: the 'anything ache?' toggle reveals the joint input in place", async () => {
+test("renderFeedback: the finish form offers no pain field to reveal", async () => {
   const ctx = loadFeedback();
   const slot = makeDoneSlot();
   const { deps } = makeDeps(ctx);
   ctx.CairnTodaySessionFeedback.renderFeedback(slot, { date: "2026-07-16" }, deps);
 
-  const toggle = slot.querySelector("#feedbackJointToggle");
-  const joint = slot.querySelector("#feedbackJoint");
-  assert.equal(toggle.hidden, false);
-  assert.equal(joint.hidden, true);
-
-  await Promise.all(toggle.click());
-  assert.equal(toggle.hidden, true);
-  assert.equal(joint.hidden, false);
-  assert.equal(joint.focusCount, 1);
+  // Nothing to toggle, nothing to type into: the pain mini-UI is gone from the
+  // moment the athlete finishes. What remains beneath is the display-only Pain &
+  // injury lifecycle and its "mention it in your notes or chat" hint.
+  assert.equal(slot.querySelector("#feedbackJointToggle"), null);
+  assert.equal(slot.querySelector("#feedbackJoint"), null);
+  assert.doesNotMatch(slot.innerHTML, /<input/);
 });
 
 test("renderFeedback: a failed save rolls back the dots and does NOT collapse", async () => {

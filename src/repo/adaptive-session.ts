@@ -998,6 +998,13 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
   ) {
     decision = decideDailySession(date, { ...decisionOpts(input), train_anyway: true });
   }
+  // There is deliberately NO equivalent branch for agent_suggest. Acceptance must
+  // keep revalidating a suggestion against the CURRENT envelope, because a job
+  // drafted before the athlete's recovery turned may be days old — reading that
+  // stale draft as consent is exactly what the rest-envelope revalidation exists to
+  // prevent. Train intent for an agent suggestion is recorded where it is actually
+  // given: on the job, at the moment the athlete asks (see /session-suggest's
+  // train_anyway and agentDecisionOpts).
   const manualPlan = source === "manual_plan" ? planSnapshot(date, input.day_number) : null;
   const boundedManual =
     manualPlan && decision
