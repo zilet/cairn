@@ -255,6 +255,93 @@ test("a flip in direction retires the contradicting lesson instead of leaving bo
   assert.equal(retired.length, 2, "supersession MARKS the old lesson; it is never destroyed");
 });
 
+// ── the rest-override lesson ────────────────────────────────────────────────
+//
+// n = 1 IS NOT A POLICY. One rest read trained through used to write "the coach can
+// tolerate slightly higher frequency before calling rest" straight into the durable
+// store, where the nightly librarian promoted it to a standing constraint that was
+// then read into the coach prompt every morning after. The live deployment carries
+// exactly that row.
+
+function restDayTrainedThrough(daysAgo, { performance = null } = {}) {
+  const date = localDaysAgo(daysAgo);
+  repo.recordSuggestion("day_read", date, { kind: "rest" });
+  const session = seedTrainingDay(date);
+  if (performance != null) {
+    db.prepare(`UPDATE sessions SET performance = ? WHERE id = ?`).run(performance, session.id);
+  }
+  return date;
+}
+
+test("one overruled rest day is an anecdote, not a standing rule", () => {
+  restDayTrainedThrough(3);
+
+  const result = repo.reconcileSuggestions();
+  assert.equal(result.reconciled, 1, "the outcome is still recorded — only the lesson waits");
+  assert.equal(result.learnings, 0);
+  assert.equal(learningRows().length, 0, "nothing durable, not even a tentative row");
+});
+
+test("two overruled rest days that went fine become one durable lesson", () => {
+  restDayTrainedThrough(4);
+  restDayTrainedThrough(3);
+
+  const result = repo.reconcileSuggestions();
+  assert.equal(result.reconciled, 2);
+  assert.equal(result.learnings, 1);
+  const rows = learningRows();
+  assert.equal(rows.length, 1);
+  assert.match(rows[0].content, /tolerate slightly higher frequency/i);
+  assert.doesNotMatch(rows[0].content, /\byou must\b/i, "a lesson seasons the coach, it never gates");
+});
+
+test("two overruled rest days that left them flat teach the opposite lesson", () => {
+  restDayTrainedThrough(4, { performance: 2 });
+  restDayTrainedThrough(3, { performance: 1 });
+
+  assert.equal(repo.reconcileSuggestions().learnings, 1);
+  const rows = learningRows();
+  assert.equal(rows.length, 1);
+  assert.match(rows[0].content, /keep rest prominent/i);
+});
+
+test("two days reading opposite ways are two anecdotes, not a pattern either way", () => {
+  restDayTrainedThrough(4, { performance: 1 });
+  restDayTrainedThrough(3);
+
+  const result = repo.reconcileSuggestions();
+  assert.equal(result.reconciled, 2);
+  assert.equal(result.learnings, 0);
+  assert.equal(learningRows().length, 0);
+});
+
+test("a rest day the athlete actually rested on teaches nothing at all", () => {
+  repo.recordSuggestion("day_read", localDaysAgo(4), { kind: "rest" });
+  repo.recordSuggestion("day_read", localDaysAgo(3), { kind: "rest" });
+
+  const result = repo.reconcileSuggestions();
+  assert.equal(result.reconciled, 2);
+  assert.equal(result.learnings, 0);
+});
+
+test("once the evidence turns over, the contradicting lesson is retired rather than left beside it", () => {
+  restDayTrainedThrough(9);
+  restDayTrainedThrough(8);
+  repo.reconcileSuggestions();
+  assert.match(learningRows()[0].content, /tolerate slightly higher frequency/i);
+
+  db.prepare(`DELETE FROM suggestions WHERE kind = 'day_read'`).run();
+  restDayTrainedThrough(4, { performance: 2 });
+  restDayTrainedThrough(3, { performance: 2 });
+  repo.reconcileSuggestions();
+
+  const live = learningRows();
+  assert.equal(live.length, 1);
+  assert.match(live[0].content, /keep rest prominent/i);
+  const all = repo.listMemory(50, { includeSuperseded: true }).filter((m) => m.kind === "learning");
+  assert.equal(all.length, 2, "supersession MARKS the old lesson; it is never destroyed");
+});
+
 // ── the lesson actually reaches the prompt that needs it ────────────────────
 
 test("the minutes-drift lesson reaches the session-suggest prompt", () => {

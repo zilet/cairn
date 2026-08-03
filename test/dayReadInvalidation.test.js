@@ -188,13 +188,20 @@ test("saving changed reads keeps immutable history while one current observation
     .filter((row) => row.source_ref_key === date);
   const current = history.filter((row) => row.status === "observed");
   const superseded = history.filter((row) => row.status === "superseded");
-  assert.equal(current.length, 1, "one date owns one current observation");
-  assert.equal(current[0].summary, "Work is covered");
-  assert.equal(current[0].action?.kind, "done");
   assert.equal(history.length, 3, "an identical repeat is idempotent while material changes append");
-  assert.equal(superseded.length, 2);
-  assert.deepEqual(new Set(superseded.map((row) => row.summary)), new Set(["Push today", "Keep it easy"]));
-  assert.deepEqual(new Set(superseded.map((row) => row.action?.kind)), new Set(["train", "easy"]));
-  assert.ok(superseded.every((row) => row.superseded_by != null));
-  assert.equal(superseded.find((row) => row.summary === "Keep it easy")?.superseded_by, current[0].id);
+
+  // ONLY A NEW PREDICTION CLOSES AN OLD ONE. `easy` replaced `train` — a genuine
+  // change of call — but the closing `done` acknowledges the work rather than
+  // predicting anything, so the easy read it acknowledges still stands and can still
+  // be judged against the day (see read-adherence.ts, dayReadSupersedesPriorReads).
+  assert.equal(superseded.length, 1);
+  assert.equal(superseded[0].summary, "Push today");
+  assert.equal(superseded[0].action?.kind, "train");
+  assert.ok(superseded[0].superseded_by != null);
+
+  assert.deepEqual(new Set(current.map((row) => row.action?.kind)), new Set(["easy", "done"]));
+  const easy = current.find((row) => row.action?.kind === "easy");
+  assert.equal(easy.summary, "Keep it easy");
+  assert.equal(easy.superseded_by, null, "the acknowledgement did not close the read it acknowledges");
+  assert.equal(Number(superseded[0].superseded_by), Number(easy.id));
 });

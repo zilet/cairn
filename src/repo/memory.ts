@@ -236,7 +236,7 @@ function touchMemoryReferenced(ids: number[]) {
 export function memoryForCoach(limit = 40): MemoryRow[] {
   const loadBearing = db
     .prepare(
-    `SELECT * FROM memory
+      `SELECT * FROM memory
      WHERE superseded_by IS NULL
        AND COALESCE(source, '') <> 'reaction-model'
        AND kind IN ('constraint','injury','preference','decision','milestone','goal')
@@ -360,7 +360,7 @@ export function recentLearnings(limit = 6): RecentLearning[] {
   return (
     db
       .prepare(
-    `SELECT id, kind, content, source, COALESCE(updated_at, created_at) AS updated_at FROM memory
+        `SELECT id, kind, content, source, COALESCE(updated_at, created_at) AS updated_at FROM memory
      WHERE kind = 'learning' AND superseded_by IS NULL
      ORDER BY COALESCE(updated_at, created_at) DESC, id DESC LIMIT ?`
       )
@@ -396,7 +396,7 @@ export function getOutcomeLearnings(limit = 12): { learnings: OutcomeLearning[] 
     learnings = (
       db
         .prepare(
-      `SELECT id, content, COALESCE(updated_at, created_at) AS noticed_at FROM memory
+          `SELECT id, content, COALESCE(updated_at, created_at) AS noticed_at FROM memory
        WHERE kind = 'learning' AND superseded_by IS NULL
        ORDER BY COALESCE(updated_at, created_at) DESC, id DESC LIMIT ?`
         )
@@ -460,7 +460,7 @@ export function reconcileSuggestions(opts: { maxPerPass?: number } = {}): {
   const rows = (
     db
       .prepare(
-    `SELECT * FROM suggestions
+        `SELECT * FROM suggestions
      WHERE reconciled_at IS NULL AND date IS NOT NULL AND date < ?
        AND (kind <> 'nutrition_checkin' OR date <= ?)
      ORDER BY id ASC LIMIT ?`
@@ -517,6 +517,84 @@ const OUTCOME_LESSONS = {
     "Sessions have been finishing well under the suggested time lately; the coach can size suggestions down.",
   sessionsRunLong: "Sessions keep running past the suggested time lately; the coach can budget more minutes up front.",
 };
+
+// ---- day_read: reading a rest call the athlete trained through ----
+//
+// n = 1 IS NOT A POLICY.
+//
+// These two lessons are the only ones here that tell the coach to change how it reads
+// a WHOLE CLASS of mornings, and they used to be written off a single day: one rest
+// read trained through, and "the coach can tolerate slightly higher frequency before
+// calling rest" entered the store as a durable sentence, was promoted to a standing
+// constraint by the nightly librarian, and was read into the coach prompt every
+// morning after. A live audit found exactly that row, carrying a confidence its
+// evidence never earned.
+//
+// So they need a PATTERN, the way the minutes drift below already does, and at the
+// floor the reaction model holds every other learned pattern to (`learningForGroup`,
+// src/repo/reaction-model.ts): at least two DISTINCT days saying the same thing. Below
+// the floor nothing is written at all — no tentative row, no half-lesson — because the
+// calm, common answer here is silence.
+//
+// The two readings are opposites, so whichever clears the floor retires the other: an
+// athlete whose evidence has genuinely turned over should replace the old sentence,
+// not accumulate a second one beside it.
+const REST_OVERRIDE_MIN_OUTCOMES = 2;
+// The same lookback and sample as the minutes drift: recent means recent, and a
+// stretch the athlete has moved on from should stop speaking on its own.
+const REST_OVERRIDE_LOOKBACK_DAYS = 45;
+const REST_OVERRIDE_SAMPLE = 12;
+
+type RestOverrideReading = "fine" | "flat";
+
+// How ONE reconciled rest morning reads: the athlete trained through it, and their own
+// session feedback says whether it cost them. An explicit low score (≤2) is the only
+// thing that reads as "the rest call was right"; absent feedback is not evidence of
+// harm. Anything that is not a trained-through rest read returns null and takes no part.
+function restOverrideReading(outcome: unknown): RestOverrideReading | null {
+  if (!outcome || typeof outcome !== "object") return null;
+  const row = outcome as Record<string, any>;
+  if (String(row.read_kind ?? "") !== "rest" || !row.trained) return null;
+  const felt = row.feedback?.performance == null ? null : Number(row.feedback.performance);
+  return felt != null && Number.isFinite(felt) && felt <= 2 ? "flat" : "fine";
+}
+
+// The durable lesson for a rest read just trained through, or null. `pendingDate` and
+// `pending` describe the row being reconciled, whose outcome has not been stored yet
+// and so must be counted here explicitly; prior days count once each, by date.
+function restOverrideLesson(
+  pendingDate: string,
+  pending: RestOverrideReading,
+  today: string
+): { lesson: string; retire: readonly string[] } | null {
+  const since = addDaysISO(today, -REST_OVERRIDE_LOOKBACK_DAYS) ?? today;
+  const agreeing = new Set<string>([pendingDate]);
+  try {
+    const prior = db
+      .prepare(
+        `SELECT date, outcome_json FROM suggestions
+          WHERE kind = 'day_read' AND reconciled_at IS NOT NULL
+            AND outcome_json IS NOT NULL AND date IS NOT NULL AND date >= ? AND date <> ?
+          ORDER BY date DESC, id DESC LIMIT ?`
+      )
+      .all(since, pendingDate, REST_OVERRIDE_SAMPLE) as any[];
+    for (const row of prior) {
+      let parsed: unknown = null;
+      try {
+        parsed = row.outcome_json ? JSON.parse(String(row.outcome_json)) : null;
+      } catch {
+        parsed = null;
+      }
+      if (restOverrideReading(parsed) === pending) agreeing.add(String(row.date));
+    }
+  } catch {
+    return null;
+  }
+  if (agreeing.size < REST_OVERRIDE_MIN_OUTCOMES) return null;
+  return pending === "flat"
+    ? { lesson: OUTCOME_LESSONS.restTrainedFlat, retire: [OUTCOME_LESSONS.restTrainedFine] }
+    : { lesson: OUTCOME_LESSONS.restTrainedFine, retire: [OUTCOME_LESSONS.restTrainedFlat] };
+}
 
 // ---- session_suggest: reading the minutes drift ----
 // One session that overran is a busy Tuesday. The lesson needs a PATTERN, so it takes
@@ -625,12 +703,14 @@ function reconcileOneSuggestion(
     if (p.kind === "rest" && trained) {
       // performance feedback is optional 1-tap (1-5). Only an EXPLICIT low score
       // (≤2) flips this to "the rest read was right"; null/absent means we don't
-      // know it went badly, so the default learning is the higher-frequency one.
-      const felt = fb?.performance == null ? null : Number(fb.performance);
-      if (felt != null && Number.isFinite(felt) && felt <= 2) {
-        return { outcome, lesson: OUTCOME_LESSONS.restTrainedFlat };
-      }
-      return { outcome, lesson: OUTCOME_LESSONS.restTrainedFine };
+      // know it went badly, so the default reading is the higher-frequency one.
+      //
+      // The reading of THIS day is not yet a lesson: restOverrideLesson spans it plus
+      // the recent reconciled days, so the store only hears it once a run of mornings
+      // points the same way (n = 1 is not a policy — see the floor above).
+      const reading = restOverrideReading(outcome) ?? "fine";
+      const override = restOverrideLesson(date, reading, today);
+      return override ? { outcome, lesson: override.lesson, retire: override.retire } : { outcome, lesson: null };
     }
     if (p.kind === "train" && !trained) {
       return { outcome, lesson: null }; // a planned-but-skipped day is normal life, not a lesson

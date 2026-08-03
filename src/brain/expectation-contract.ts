@@ -123,6 +123,92 @@ export function isTerminalOnceEvaluated(metricKey: string): boolean {
   return (TERMINAL_ONCE_EVALUATED_METRICS as readonly string[]).includes(metricKey);
 }
 
+// ---------- minimum_data: the keys an evaluator can actually count ----------
+//
+// `minimum_data` is the expectation's own evidence floor — "don't conclude until at
+// least N of these exist" — and every evaluator answers it from the `counts` it
+// publishes on its observation. An agent-authored expectation arrives with free-form
+// keys, and a key no evaluator counts used to be recorded as a CONFOUNDER, which
+// forces `inconclusive` on a window that may have had perfectly good evidence in it.
+// A live audit found 21 of 146 expectations permanently silenced this way, on names
+// like `credible_days` and `rated_strength_sessions` that simply do not exist.
+//
+// A rule nobody can check is not a reason to distrust the data; it is a rule that was
+// never applied. So the vocabulary is closed HERE, at the write, where a near-miss can
+// still be renamed to the key that was meant and an unrecognizable one dropped in the
+// open (normalizeMinimumData records the drop on `baseline.dropped_minimum_data`), and
+// the evaluator downgrades anything that slips past to an ignored note.
+//
+// Add a key here only when an evaluator in src/brain/evaluators.ts genuinely emits a
+// count under that name.
+export const SUPPORTED_MINIMUM_DATA_KEYS = [
+  "closed_days",
+  "data_points",
+  "draws",
+  "exposures",
+  "feedback_entries",
+  "intake_days",
+  "measurements",
+  "nights",
+  "outings",
+  "planned_days",
+  "readings",
+  "sessions",
+  "span_days",
+  "weigh_ins",
+] as const;
+export type SupportedMinimumDataKey = (typeof SUPPORTED_MINIMUM_DATA_KEYS)[number];
+
+const SUPPORTED_MINIMUM_DATA_KEY_SET: ReadonlySet<string> = new Set(SUPPORTED_MINIMUM_DATA_KEYS);
+
+// Near-misses that mean a supported key. Kept small and literal on purpose — this is
+// spelling tolerance, not inference.
+export const MINIMUM_DATA_ALIASES: Readonly<Record<string, SupportedMinimumDataKey>> = Object.freeze({
+  weigh_in_days: "weigh_ins",
+  intake_logged_days: "intake_days",
+  credible_intake_days: "intake_days",
+  exposure_count: "exposures",
+  session_count: "sessions",
+  measurement_count: "measurements",
+  nights_logged: "nights",
+  marker_draws: "draws",
+});
+
+export function canonicalMinimumDataKey(key: string): SupportedMinimumDataKey | null {
+  const alias = MINIMUM_DATA_ALIASES[key];
+  if (alias) return alias;
+  return SUPPORTED_MINIMUM_DATA_KEY_SET.has(key) ? (key as SupportedMinimumDataKey) : null;
+}
+
+export interface NormalizedMinimumData {
+  minimum_data: JsonObject | null;
+  dropped: string[];
+}
+
+/**
+ * Canonicalize a minimum_data object: known aliases renamed, non-numeric and
+ * unrecognized rules dropped, and the dropped names returned so the caller can record
+ * them somewhere an operator can see.
+ */
+export function normalizeMinimumData(value: unknown): NormalizedMinimumData {
+  const input = value == null ? null : normalizeJsonObject(value);
+  if (!input) return { minimum_data: null, dropped: [] };
+  const kept: JsonObject = {};
+  const dropped: string[] = [];
+  for (const [rawKey, rawValue] of Object.entries(input)) {
+    const key = canonicalMinimumDataKey(rawKey);
+    const required = Number(rawValue);
+    if (!key || !Number.isFinite(required)) {
+      dropped.push(rawKey.slice(0, 60));
+      continue;
+    }
+    // A later duplicate spelling of the same rule takes the STRICTER of the two.
+    const existing = Number(kept[key]);
+    kept[key] = Number.isFinite(existing) ? Math.max(existing, required) : required;
+  }
+  return { minimum_data: Object.keys(kept).length ? kept : null, dropped: [...new Set(dropped)].slice(0, 12) };
+}
+
 export interface ProposedExpectation {
   metric_key: BrainMetricKey;
   subject_key: string | null;
@@ -171,15 +257,23 @@ export function normalizeProposedExpectation(value: unknown): ProposedExpectatio
     return null;
   }
 
+  const minimum = normalizeMinimumData(input.minimum_data);
+  let baseline = input.baseline == null ? null : normalizeJsonObject(input.baseline);
+  // The drop has to be VISIBLE. `baseline` is the expectation's own free-form record
+  // of what it was written against, and it is what the ledger and the diagnostics
+  // read back, so a rule that was thrown away leaves its name there rather than
+  // disappearing between the agent and the row.
+  if (minimum.dropped.length) baseline = { ...(baseline ?? {}), dropped_minimum_data: minimum.dropped };
+
   return {
     metric_key: metricKey,
     subject_key: cleanOptionalText(input.subject_key, 160),
     direction,
-    baseline: input.baseline == null ? null : normalizeJsonObject(input.baseline),
+    baseline,
     target,
     window_start: windowStart,
     window_end: windowEnd,
-    minimum_data: input.minimum_data == null ? null : normalizeJsonObject(input.minimum_data),
+    minimum_data: minimum.minimum_data,
     confounder_policy: enumValue(input.confounder_policy, EXPECTATION_CONFOUNDER_POLICIES) ?? "standard",
     confidence,
     evaluator,

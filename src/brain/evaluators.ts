@@ -1,7 +1,12 @@
 import { db } from "../db.js";
 import type { BrainDecision } from "./decision-contract.js";
 import type { BrainEvaluation, BrainEvaluationVerdict } from "./evaluation-contract.js";
-import { BRAIN_METRIC_KEYS, type BrainExpectation, type BrainMetricKey } from "./expectation-contract.js";
+import {
+  BRAIN_METRIC_KEYS,
+  canonicalMinimumDataKey,
+  type BrainExpectation,
+  type BrainMetricKey,
+} from "./expectation-contract.js";
 import { isoDate, type JsonObject } from "./contract-utils.js";
 import {
   READ_ADHERENCE_MEASURES,
@@ -88,8 +93,7 @@ function predictionFields(expectation: BrainExpectation, observedTrend: number |
   return {
     predicted_trend_lb_wk: predicted,
     observed_trend_lb_wk: observedTrend,
-    trend_residual_lb_wk:
-      predicted == null || observedTrend == null ? null : rounded(observedTrend - predicted),
+    trend_residual_lb_wk: predicted == null || observedTrend == null ? null : rounded(observedTrend - predicted),
     recomposition_stage: String(expectation.baseline?.recomposition_stage ?? "unknown"),
     target_delta_kcal: numberFrom(expectation.baseline, ["target_delta_kcal"]),
   };
@@ -948,31 +952,42 @@ function compareExpectation(expectation: BrainExpectation, actual: JsonObject): 
   }
 }
 
-const MINIMUM_ALIASES: Record<string, string> = {
-  weigh_in_days: "weigh_ins",
-  intake_logged_days: "intake_days",
-  exposure_count: "exposures",
-  session_count: "sessions",
-  measurement_count: "measurements",
-  nights_logged: "nights",
-  marker_draws: "draws",
-};
-
+// A minimum-data rule this evaluator can genuinely check, and one it cannot.
+//
+// A SHORTFALL is a real confounder: the window did not hold the evidence the
+// expectation asked for, so no verdict off it would be honest. An UNRECOGNIZED rule is
+// not — it is a rule that was never applied to anything, and treating it as a
+// confounder silenced 21 live expectations permanently, on key names no evaluator has
+// ever emitted. Write-time normalization (normalizeMinimumData in
+// expectation-contract.ts) drops those before they are stored; anything already on
+// disk degrades to an ignored note here instead of a reason to distrust the data.
 export function minimumDataIssues(expectation: BrainExpectation, observation: MetricObservation): string[] {
   if (!expectation.minimum_data) return [];
   const issues: string[] = [];
   for (const [rawKey, rawRequired] of Object.entries(expectation.minimum_data)) {
     const required = finite(rawRequired);
     if (required == null) continue;
-    const key = MINIMUM_ALIASES[rawKey] ?? rawKey;
+    const key = canonicalMinimumDataKey(rawKey);
+    if (key == null) continue;
     const actual = observation.counts[key];
-    if (actual == null) {
-      issues.push(`Minimum-data rule '${rawKey}' is not supported by this evaluator.`);
-    } else if (actual < required) {
-      issues.push(`Only ${actual} ${rawKey.replaceAll("_", " ")} were available; ${required} were required.`);
+    if (actual == null) continue;
+    if (actual < required) {
+      issues.push(`Only ${actual} ${key.replaceAll("_", " ")} were available; ${required} were required.`);
     }
   }
   return issues;
+}
+
+// The rules that were skipped, named — so an ignored rule still shows up on the
+// verdict it did not get to shape.
+export function ignoredMinimumDataRules(expectation: BrainExpectation, observation: MetricObservation): string[] {
+  if (!expectation.minimum_data) return [];
+  const ignored: string[] = [];
+  for (const rawKey of Object.keys(expectation.minimum_data)) {
+    const key = canonicalMinimumDataKey(rawKey);
+    if (key == null || observation.counts[key] == null) ignored.push(String(rawKey).slice(0, 60));
+  }
+  return [...new Set(ignored)];
 }
 
 export function evaluateMetricObservation(
@@ -1000,6 +1015,10 @@ export function evaluateMetricObservation(
         ? "The observed result landed within the expectation after enough comparable data was available."
         : "The observed result did not land within the expectation after enough comparable data was available.";
     }
+  }
+  const ignored = ignoredMinimumDataRules(expectation, observation);
+  if (ignored.length) {
+    explanation = `${explanation} Ignored unsupported minimum-data rule${ignored.length > 1 ? "s" : ""}: ${ignored.join(", ")}.`;
   }
   return {
     expectation_id: expectation.id!,

@@ -52,6 +52,90 @@ export function isPredictiveDayReadKind(value: unknown): value is PredictiveDayR
   return typeof value === "string" && PREDICTIVE_KINDS.has(value);
 }
 
+// ---------- THE SUPERSESSION INVARIANT ----------
+//
+// ONLY A NEW PREDICTION MAY CLOSE AN OLD ONE.
+//
+// A day's ledger holds every materially different read of that day, and the older
+// ones are closed against the current one — which is right when the current one is
+// itself a claim about the day: a morning that read rest and re-read train because
+// the signals moved genuinely retires the rest call, and the expectation riding on it
+// is honestly canceled rather than judged against a day it stopped describing.
+//
+// `done` is not that. It is an acknowledgement written AFTER the work, it predicts
+// nothing (dayReadAdherenceExpectation returns null for it), and every training day
+// ends in one. Letting it supersede meant the morning's train/easy read was retired
+// by the very evidence that would have confirmed it: a live audit found 13 of 13
+// train/easy reads over ten days closed this way, their expectations stamped
+// `canceled` without the day ever being looked at. The loop could record divergence —
+// a rest read stands, because a rest day writes no `done` — and essentially never
+// compliance, which is the one asymmetry a learning loop must not have.
+//
+// The rule is enforced at the WRITE (recordDayReadDecision does not supersede for a
+// non-predictive read) and read back at EVALUATION (supersededOnlyByAcknowledgement,
+// which is what lets rows written before this heal). Both spellings are here so they
+// cannot drift.
+export function dayReadSupersedesPriorReads(kind: unknown): boolean {
+  return isPredictiveDayReadKind(kind);
+}
+
+interface SupersessionCandidate {
+  kind?: unknown;
+  source_ref_type?: unknown;
+  superseded_by?: unknown;
+}
+
+function isDayReadDecision(row: SupersessionCandidate): boolean {
+  return String(row.kind ?? "") === "day_read" && String(row.source_ref_type ?? "") === "day_read";
+}
+
+/**
+ * Was this day-read decision closed out ONLY by acknowledgements of the day's work,
+ * with no newer read making a competing claim about it? Walks the supersession chain,
+ * because a train → done → rest sequence IS a genuine replacement and must still
+ * cancel. Returns false for anything that is not a day-read decision, and for any
+ * decision terminal for its own reasons (reverted, rejected, canceled).
+ */
+export function supersededOnlyByAcknowledgement(decision: {
+  id?: unknown;
+  kind?: unknown;
+  status?: unknown;
+  source_ref_type?: unknown;
+  superseded_by?: unknown;
+}): boolean {
+  if (!isDayReadDecision(decision)) return false;
+  const status = String(decision.status ?? "");
+  if (status !== "observed" && status !== "superseded") return false;
+  let next = Number(decision.superseded_by);
+  if (!Number.isInteger(next) || next <= 0) return false;
+  const seen = new Set<number>();
+  for (let hops = 0; hops < MAX_FINGERPRINT_HOPS; hops++) {
+    if (seen.has(next)) return false;
+    seen.add(next);
+    let row: (SupersessionCandidate & { action_json?: unknown }) | undefined;
+    try {
+      row = db
+        .prepare(`SELECT kind, source_ref_type, action_json, superseded_by FROM brain_decisions WHERE id = ?`)
+        .get(next) as (SupersessionCandidate & { action_json?: unknown }) | undefined;
+    } catch {
+      return false;
+    }
+    if (!row || !isDayReadDecision(row)) return false;
+    let kind: unknown = null;
+    try {
+      kind = JSON.parse(String(row.action_json ?? "null"))?.kind;
+    } catch {
+      kind = null;
+    }
+    // A newer PREDICTION about the day took ownership: the genuine cancel path.
+    if (isPredictiveDayReadKind(kind)) return false;
+    const following = Number(row.superseded_by);
+    if (!Number.isInteger(following) || following <= 0) return true;
+    next = following;
+  }
+  return false;
+}
+
 // What a calendar day's training log actually says, graded the SAME way dayRead()
 // grades it (discipline-aware `dayLoad`, plus the hard-cardio bump that makes a
 // lifter's genuinely hard run count). Deliberately a separate small read rather
@@ -93,9 +177,7 @@ export function dayTrainingTruth(date: string, opts: DayTrainingTruthOptions = {
   const countsCardio = opts.countsCardio ?? configuredEnduranceCountsAsTraining();
   const recoveryWeekActive = !!activeRecoveryWeek(date);
   const setRow = db
-    .prepare(
-      `SELECT COUNT(*) AS n FROM logged_sets l JOIN sessions s ON s.id = l.session_id WHERE s.date = ?`
-    )
+    .prepare(`SELECT COUNT(*) AS n FROM logged_sets l JOIN sessions s ON s.id = l.session_id WHERE s.date = ?`)
     .get(date) as { n?: number } | undefined;
   const activityRows = db
     .prepare(`SELECT duration_min, distance_km FROM activities WHERE date = ? LIMIT 100`)
@@ -324,17 +406,22 @@ export function recordDayReadDecision(
   );
 
   // The cache has one mutable row per date; the accountability ledger does not.
-  // Every materially different observation stays as its own immutable entry, and
-  // the older ones for the same date are closed against the current read.
+  // Every materially different observation stays as its own immutable entry, and the
+  // older ones for the same date are closed against the current read — but only when
+  // the current read is itself a claim about the day. See dayReadSupersedesPriorReads:
+  // a `done` acknowledgement leaves the morning's prediction standing, so the day it
+  // predicted can still be judged against it.
   const currentId = Number(recorded.decision.id);
-  const priors = db
-    .prepare(
-      `SELECT id FROM brain_decisions
+  const priors = dayReadSupersedesPriorReads(kind)
+    ? (db
+        .prepare(
+          `SELECT id FROM brain_decisions
         WHERE kind = 'day_read' AND source_ref_type = 'day_read' AND source_ref_key = ?
           AND status = 'observed' AND id <> ?
         ORDER BY id`
-    )
-    .all(date, currentId) as Array<{ id: number }>;
+        )
+        .all(date, currentId) as Array<{ id: number }>)
+    : [];
   for (const prior of priors) transitionBrainDecision(Number(prior.id), "superseded", { supersededBy: currentId });
 
   return {

@@ -13,16 +13,120 @@ import {
   observeExpectation,
 } from "../../brain/evaluators.js";
 import { isoDate } from "../../brain/contract-utils.js";
-import {
-  getBrainDecision,
-  getBrainExpectation,
-  setBrainExpectationStatus,
-} from "../../repo/brain-decisions.js";
+import { getBrainDecision, getBrainExpectation, setBrainExpectationStatus } from "../../repo/brain-decisions.js";
+import { supersededOnlyByAcknowledgement } from "../../repo/brain/read-adherence.js";
+import { addDaysISO, localDateISO } from "../../repo/shared.js";
 import { insertBrainEvaluation, latestBrainEvaluation } from "../../repo/brain-evaluations.js";
 import { RETIRED_EXPECTATION_STATUSES } from "../../repo/brain/expectation-arbitration.js";
 
 const TERMINAL_DECISION_STATUSES = new Set(["rejected", "reverted", "superseded", "canceled"]);
 const DISRUPTIVE_CONTEXT = /\b(trip|travel|injur|ill|sick|stress|medicat|supplement|surgery|hospital|bereave|grief)\b/i;
+
+// HOW LONG AN UNCLOSED EVENT IS STILL ALLOWED TO SPEAK.
+//
+// `context_events.end_date` is nullable — "ongoing / open-ended" — and the overlap
+// test used to read a null end as "still running", which in SQL terms means it
+// overlaps every window from its start date to the end of time. Nobody closes these
+// rows: a live audit found two injuries opened in late July with a null end_date,
+// silently confounding every long-window evaluation opened afterwards, forever. Any
+// confounder forces `inconclusive`, so the whole learning loop went quiet and the
+// cause was invisible.
+//
+// So an event with no explicit end participates in overlap only for a bounded
+// staleness horizon after it STARTED. The bound is the event's own recorded
+// expectation where it has one — `expected_recovery_days`, the healing window logged
+// with the injury — and otherwise 14 days: about one training block, long enough to
+// cover the acute phase of the injuries and illnesses this regex matches, short
+// enough that a row nobody ever closed stops standing in the way of every future
+// verdict. An explicitly closed event (`end_date`, or `resolved_at` for one marked
+// healed) keeps its exact dates and is untouched by any of this.
+//
+// Aging past the horizon is not silent: `staleOpenEndedContextEvents()` publishes
+// every such row on the operator diagnostics card.
+const OPEN_ENDED_CONTEXT_HORIZON_DAYS = 14;
+// An `expected_recovery_days` far past the acute phase would restore the same
+// unbounded silence by another name, so the event's own number is honored only up to
+// a season.
+const OPEN_ENDED_CONTEXT_HORIZON_MAX_DAYS = 120;
+
+interface ContextEventRow {
+  id?: unknown;
+  kind?: unknown;
+  title?: unknown;
+  detail?: unknown;
+  start_date?: unknown;
+  end_date?: unknown;
+  resolved_at?: unknown;
+  expected_recovery_days?: unknown;
+  meta_json?: unknown;
+}
+
+// The last date an event is treated as running. `null` means it can never be bounded
+// (no end, no resolution and no start date), and an unbounded, undated row is not
+// evidence that anything overlapped anything — it is a row with no dates on it.
+function contextEventEffectiveEnd(row: ContextEventRow): string | null {
+  const explicit = isoDate(row.end_date) ?? isoDate(row.resolved_at);
+  if (explicit) return explicit;
+  const start = isoDate(row.start_date);
+  if (!start) return null;
+  const recovery = Number(row.expected_recovery_days);
+  const horizon =
+    Number.isFinite(recovery) && recovery > 0
+      ? Math.min(OPEN_ENDED_CONTEXT_HORIZON_MAX_DAYS, Math.trunc(recovery))
+      : OPEN_ENDED_CONTEXT_HORIZON_DAYS;
+  return addDaysISO(start, horizon) ?? start;
+}
+
+export interface StaleOpenEndedContextEvent {
+  id: number;
+  kind: string;
+  title: string;
+  start_date: string;
+  horizon_end: string;
+  days_past_horizon: number;
+}
+
+/**
+ * Open-ended context events that have aged past the horizon above and therefore no
+ * longer confound anything. Surfaced on the operator diagnostics card so an event
+ * that is genuinely still running gets closed or extended deliberately, rather than
+ * quietly ceasing to be considered.
+ */
+export function staleOpenEndedContextEvents(asOf = localDateISO()): StaleOpenEndedContextEvent[] {
+  const today = isoDate(asOf) ?? localDateISO();
+  let rows: ContextEventRow[] = [];
+  try {
+    rows = db
+      .prepare(
+        `SELECT id, kind, title, start_date, end_date, resolved_at, expected_recovery_days
+           FROM context_events
+          WHERE end_date IS NULL AND resolved_at IS NULL AND COALESCE(archived, 0) = 0
+            AND start_date IS NOT NULL
+          ORDER BY start_date, id LIMIT 100`
+      )
+      .all() as ContextEventRow[];
+  } catch {
+    return [];
+  }
+  const out: StaleOpenEndedContextEvent[] = [];
+  for (const row of rows) {
+    const start = isoDate(row.start_date);
+    const end = contextEventEffectiveEnd(row);
+    if (!start || !end || end >= today) continue;
+    out.push({
+      id: Number(row.id),
+      kind: String(row.kind ?? ""),
+      title: String(row.title ?? "").slice(0, 100),
+      start_date: start,
+      horizon_end: end,
+      days_past_horizon: Math.max(
+        0,
+        Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${end}T00:00:00Z`)) / 864e5)
+      ),
+    });
+  }
+  return out;
+}
 
 export interface EvaluationRunSummary {
   as_of: string;
@@ -61,6 +165,12 @@ function sameEvaluation(previous: BrainEvaluation | null, next: Omit<BrainEvalua
 }
 
 function decisionCanceled(decision: BrainDecision): boolean {
+  // A morning read closed out by that same day's `done` acknowledgement was never
+  // replaced by a competing prediction, so it still has a day to answer for. The
+  // invariant itself lives in read-adherence.ts beside the writer that must not
+  // create the state in the first place; this call is what heals the rows written
+  // before that writer was fixed.
+  if (supersededOnlyByAcknowledgement(decision)) return false;
   return TERMINAL_DECISION_STATUSES.has(decision.status) || decision.superseded_by != null;
 }
 
@@ -101,7 +211,7 @@ function contextEventConfounders(expectation: BrainExpectation): string[] {
   if (expectation.confounder_policy === "none") return [];
   const rows = db
     .prepare(
-      `SELECT id, kind, title, detail, start_date, end_date, meta_json
+      `SELECT id, kind, title, detail, start_date, end_date, resolved_at, expected_recovery_days, meta_json
        FROM context_events
       WHERE COALESCE(start_date, ?) <= ?
         AND COALESCE(end_date, ?) >= ?
@@ -110,7 +220,13 @@ function contextEventConfounders(expectation: BrainExpectation): string[] {
     .all(expectation.window_start, expectation.window_end, expectation.window_end, expectation.window_start) as Array<
     Record<string, unknown>
   >;
-  const material = rows.filter((row) => {
+  const overlapping = rows.filter((row) => {
+    // The SQL above lets every unclosed row through (a null end coalesces to the
+    // window's own end); the horizon is what decides whether it is still running.
+    const end = contextEventEffectiveEnd(row);
+    return end != null && end >= expectation.window_start;
+  });
+  const material = overlapping.filter((row) => {
     const kind = String(row.kind ?? "");
     if (kind === "trip" || kind === "injury") return true;
     let meta = "";
@@ -164,8 +280,7 @@ export function evaluateExpectation(
   // Honor the stored policy: a require_exposure expectation must not reach a
   // decisive verdict from a window in which the subject never appeared at all.
   if (expectation.confounder_policy === "require_exposure") {
-    const exposure =
-      observation.counts.exposures ?? observation.counts.sessions ?? observation.counts.data_points ?? 0;
+    const exposure = observation.counts.exposures ?? observation.counts.sessions ?? observation.counts.data_points ?? 0;
     if (!exposure) confounders.push("The expectation requires exposure and none was observed in the window.");
   }
   return evaluateMetricObservation(

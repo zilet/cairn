@@ -60,7 +60,7 @@ test("an applied training change anchors a marker-direction expectation to the a
   assert.equal(found.expectation.subject_key, "Ferritin");
   assert.equal(found.expectation.direction, "increase", "low ferritin should move UP toward optimal");
   assert.equal(found.expectation.confounder_policy, "next_draw");
-  assert.deepEqual(found.expectation.minimum_data, { marker_draws: 2 });
+  assert.deepEqual(found.expectation.minimum_data, { draws: 2 });
   assert.equal(found.expectation.baseline.value, 20, "the baseline is the trigger value when the directive was raised");
   assert.equal(found.expectation.confidence, "tentative", "an applied plan is an indirect lever — a soft anchor");
   // 180-day lab horizon.

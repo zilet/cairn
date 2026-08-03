@@ -213,7 +213,7 @@ function markerDirectionExpectation(anchor: MarkerInterventionAnchor, effectiveD
     target: {},
     window_start: effectiveDate,
     window_end: addDaysISO(effectiveDate, MARKER_HORIZON_DAYS) ?? effectiveDate,
-    minimum_data: { marker_draws: 2 },
+    minimum_data: { draws: 2 },
     confounder_policy: "next_draw",
     // An applied plan is an INDIRECT lever on a marker (unlike the directive itself),
     // so the anchor stays tentative until a verdict repeats.

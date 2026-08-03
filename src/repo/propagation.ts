@@ -483,7 +483,7 @@ function recordActiveDirectiveDecisions(source: string): void {
                 target: {},
                 window_start: effectiveDate,
                 window_end: addDaysISO(effectiveDate, 180) ?? effectiveDate,
-                minimum_data: { marker_draws: 2 },
+                minimum_data: { draws: 2 },
                 confounder_policy: "next_draw",
                 confidence: row.uncertain ? "tentative" : "observed",
                 evaluator: "marker_direction",

@@ -101,34 +101,38 @@ test("getOutcomeLearnings clamps the limit to a bounded window", () => {
   assert.ok(repo.getOutcomeLearnings(9999).learnings.length <= 50); // hard cap, never unbounded
 });
 
-// reconcileSuggestions → getOutcomeLearnings is the real path: a past 'rest' read
-// the athlete trained through produces a durable, surfaced learning.
+// reconcileSuggestions → getOutcomeLearnings is the real path: 'rest' reads the
+// athlete trained through produce a durable, surfaced learning. It takes TWO of them —
+// one day is an anecdote, and that floor is pinned in outcomeLessonEvidence.test.js.
 test("reconcileSuggestions writes a learning that getOutcomeLearnings then surfaces", () => {
   resetTables("suggestions", "sessions", "logged_sets", "exercises");
-  const yesterday = localDaysAgo(1);
-  repo.recordSuggestion("day_read", yesterday, { kind: "rest" });
-  // The athlete trained that day anyway (a logged set on the date) — logSetByName
-  // resolves/creates the session for that date itself.
-  repo.logSetByName({ exercise: "ZTest Bench", weight: 135, reps: 5, date: yesterday });
+  for (const daysAgo of [2, 1]) {
+    const date = localDaysAgo(daysAgo);
+    repo.recordSuggestion("day_read", date, { kind: "rest" });
+    // The athlete trained that day anyway (a logged set on the date) — logSetByName
+    // resolves/creates the session for that date itself.
+    repo.logSetByName({ exercise: "ZTest Bench", weight: 135, reps: 5, date });
+  }
   const out = repo.reconcileSuggestions();
-  assert.ok(out.learnings >= 1, "a rest-read-then-trained day yields a learning");
+  assert.ok(out.learnings >= 1, "a run of rest-read-then-trained days yields a learning");
   const { learnings } = repo.getOutcomeLearnings();
   assert.ok(learnings.some((l) => /higher training frequency|rest/i.test(l.content)), "the learning is now visible");
 });
 
 test("repeated outcome learnings reinforce one curatable pattern instead of dated noise", () => {
   resetTables("suggestions", "sessions", "logged_sets", "exercises", "memory");
-  const first = localDaysAgo(2);
-  const second = localDaysAgo(1);
 
-  repo.recordSuggestion("day_read", first, { kind: "rest" });
-  repo.recordSuggestion("day_read", second, { kind: "rest" });
-  repo.logSetByName({ exercise: "ZTest Bench", weight: 135, reps: 5, date: first });
-  repo.logSetByName({ exercise: "ZTest Bench", weight: 140, reps: 5, date: second });
+  for (const [index, daysAgo] of [3, 2, 1].entries()) {
+    const date = localDaysAgo(daysAgo);
+    repo.recordSuggestion("day_read", date, { kind: "rest" });
+    repo.logSetByName({ exercise: "ZTest Bench", weight: 135 + index * 5, reps: 5, date });
+  }
 
   const out = repo.reconcileSuggestions({ maxPerPass: 10 });
-  assert.equal(out.reconciled, 2);
-  assert.equal(out.learnings, 2, "both outcomes reinforced the durable pattern");
+  assert.equal(out.reconciled, 3);
+  // The first day is one day's worth of evidence and writes nothing; the two after it
+  // clear the floor and reinforce the SAME row rather than appending dated variants.
+  assert.equal(out.learnings, 2, "every day past the floor reinforced the durable pattern");
 
   const { learnings } = repo.getOutcomeLearnings();
   assert.equal(learnings.length, 1, "duplicate pattern folded into one live learning");

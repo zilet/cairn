@@ -276,7 +276,7 @@ test("measurable marker directives carry a next-draw expectation", () => {
   const marker = expectations.find((row) => row.metric_key === "marker_direction");
   assert.equal(marker.direction, "increase");
   assert.equal(marker.confounder_policy, "next_draw");
-  assert.deepEqual(marker.minimum_data, { marker_draws: 2 });
+  assert.deepEqual(marker.minimum_data, { draws: 2 });
 });
 
 test("ledger failures never break authoritative proposal, day-read, or directive writes", () => {

@@ -3,6 +3,7 @@ import { listBrainDecisions, listBrainExpectations } from "../../repo/brain-deci
 import { latestBrainEvaluation, listBrainToolCalls } from "../../repo/brain-evaluations.js";
 import { normalizeStrictCaseConferenceDecision } from "../../brain/case-conference-contract.js";
 import { readAdherenceModel } from "../../repo/brain/read-adherence.js";
+import { staleOpenEndedContextEvents } from "../brain/evaluation-service.js";
 import { RETIRED_EXPECTATION_STATUSES } from "../../repo/brain/expectation-arbitration.js";
 import { localDateISO } from "../../repo/shared.js";
 
@@ -310,6 +311,11 @@ function brainAggregateMetrics() {
     },
     // Unwindowed health of the learning loop — see expectationHealth().
     expectation_health: expectationHealth(),
+    // Context events left open past their staleness horizon. They no longer confound
+    // any evaluation (see OPEN_ENDED_CONTEXT_HORIZON_DAYS in evaluation-service.ts),
+    // which is right for a row nobody ever closed and wrong for an injury genuinely
+    // still running — so the aging is shown rather than left to happen silently.
+    stale_open_ended_context_events: staleOpenEndedContextEvents(),
     // How often each kind of morning read is actually followed. COUNTS, never a
     // rate and never a grade: it exists so the gap between what the Brief suggests
     // and what the athlete does is measurable before any threshold is retuned.

@@ -103,6 +103,72 @@ test("a genuinely changed read still records, and closes the one it replaces", (
   assert.equal(expectationsFor(newer.id)[0].status, "pending");
 });
 
+// ONLY A NEW PREDICTION MAY CLOSE AN OLD ONE.
+//
+// Every training day ends in a `done` read, and `done` used to supersede the morning
+// call that preceded it — so the morning's train/easy prediction was retired by the
+// very evidence that would have confirmed it, and its expectation was stamped
+// `canceled` without the day ever being looked at. On the live deployment that was 13
+// of 13 train/easy reads over ten days: the loop could see divergence (a rest day
+// writes no `done`) and essentially never compliance.
+test("a done acknowledgement does not cancel the morning it acknowledges", () => {
+  reset();
+  const date = localDaysAgo(2);
+  repo.saveDayRead(date, read("train", { focus: "Lower" }));
+  seedTrainingDay(date);
+  repo.saveDayRead(date, read("done", { focus: null, est_minutes: null }));
+
+  const rows = dayDecisions(date);
+  assert.equal(rows.length, 2, "the acknowledgement is still its own immutable entry");
+  const [morning, ack] = rows;
+  assert.equal(morning.status, "observed", "the prediction still stands — nothing replaced it");
+  assert.equal(morning.superseded_by, null);
+  assert.equal(ack.status, "observed");
+  const expectation = expectationsFor(morning.id)[0];
+  assert.equal(expectation.status, "pending", "and its expectation is still asking");
+
+  evaluateMatureExpectations(localDaysAgo(0));
+  const evaluation = latestBrainEvaluation(expectation.id);
+  assert.equal(evaluation.verdict, "aligned", "the day is judged, not canceled");
+  assert.equal(evaluation.actual.trained, true);
+});
+
+test("a NEW predictive read for the same date still supersedes and cancels", () => {
+  reset();
+  const date = localDaysAgo(2);
+  repo.saveDayRead(date, read("rest"));
+  repo.saveDayRead(date, read("train", { focus: "Upper" }));
+
+  const [older, newer] = dayDecisions(date);
+  assert.equal(older.status, "superseded");
+  assert.equal(Number(older.superseded_by), Number(newer.id));
+  assert.equal(expectationsFor(older.id)[0].status, "canceled", "a real change of call cancels honestly");
+
+  const expectation = expectationsFor(older.id)[0];
+  evaluateMatureExpectations(localDaysAgo(0));
+  assert.equal(latestBrainEvaluation(expectation.id).verdict, "canceled");
+});
+
+test("a done read between two predictions does not shield the first from the second", () => {
+  reset();
+  const date = localDaysAgo(2);
+  repo.saveDayRead(date, read("rest"));
+  seedTrainingDay(date);
+  repo.saveDayRead(date, read("done", { focus: null, est_minutes: null }));
+  repo.saveDayRead(date, read("train", { focus: "Upper" }));
+
+  const rows = dayDecisions(date);
+  assert.equal(rows.length, 3);
+  const [morning, ack, evening] = rows;
+  assert.equal(morning.status, "superseded", "the chain reaches a genuine replacement");
+  assert.equal(ack.status, "superseded");
+  assert.equal(evening.status, "observed");
+
+  const expectation = expectationsFor(morning.id)[0];
+  evaluateMatureExpectations(localDaysAgo(0));
+  assert.equal(latestBrainEvaluation(expectation.id).verdict, "canceled");
+});
+
 test("repeated readToday calls for an unchanged day do not grow the ledger", async () => {
   reset();
   const date = localDaysAgo(0);
