@@ -621,6 +621,28 @@ publishes `{...RestOverrideSoftening, applied}` — `applied` is the only field 
 on; the softening can be evaluated `active` on a morning that reads `train`, or one a clinical
 constraint held at rest, so `active` alone would misreport whether today was actually eased.
 
+**The training drive is a standing preference that selects, never one that decides.**
+`settings.training_drive` (`steady` by default, or `push`) lets the athlete answer ONE rest — the
+accumulated-load rest, which is about rhythm rather than about a signal — with a targeted session for
+what is genuinely due. The rule sits directly above `accumulated_load_rest` in `dayRead()`'s list and
+below the done, corroborated-short-night and protect rules, so a fact, a fresh short night and a
+protective posture all reach the athlete before the preference is ever consulted. It withholds the
+read unless every gate holds: the stacked-days rest is the one in play and nothing else in the
+earned-rest branch is also true (a dose overrun, a run-down check-in or a low readiness reading each
+keeps its rest); the run of loading days is under a hard ceiling of five, above which the rest stands
+whatever the athlete has asked for; nothing clinical is in play, by the same three-way
+`clinicallyDriven()` probe the softening uses; the evidence is positively green, either the `backed`
+support tier or a fresh readiness reading of 60+ over last night's own sleep with **no** fresh
+caution or constraint anywhere in the signal state (`hasFreshBrake` in `signal-state.ts`, the same
+predicate the `backed` tier asks of itself); and the acute gate leaves at least one group actually
+due, rendered through `plainGroupWords` with no raw-key fallback behind it. It never overrides a
+safety floor, never raises volume or intensity beyond the day that was already programmed, and never
+reaches the read on any morning the deterministic floor would not otherwise have rested. The posture
+is hashed into the day-read fingerprint so flipping the control regenerates the Brief — but the
+default is omitted from the hash rather than nulled, so the key's first appearance cannot invalidate
+every warm read at once; and the drive read hashes a stable token in the `focus` slot, because its
+focus is the rendered due list, which moves as the session is logged.
+
 **The rest/easy Brief is never a void.** `src/repo/recovery-menu.ts` derives a short menu of 2–3
 low-key recovery options (easy spin / walk / mobility / core, named from recent muscle load) for a
 rest or easy read, steering clear of anything an active training symptom flags via a gentler,

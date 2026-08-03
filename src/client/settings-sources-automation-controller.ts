@@ -230,6 +230,13 @@
         ["lead", "announce_first", "review_everything"].includes(value) ? value : "lead"
       ) as SettingsScreenWorkingModel["lead_mode"];
     });
+    settingsSourcesAutomationRequired<HTMLSelectElement>(deps.root, "#trainingDrive").addEventListener(
+      "change",
+      (event) => {
+        const value = (event.currentTarget as HTMLSelectElement).value;
+        wm.training_drive = (value === "push" ? "push" : "steady") as SettingsScreenWorkingModel["training_drive"];
+      }
+    );
     settingsSourcesAutomationRequired<HTMLInputElement>(deps.root, "#geminiApiKey").addEventListener(
       "input",
       (event) => {

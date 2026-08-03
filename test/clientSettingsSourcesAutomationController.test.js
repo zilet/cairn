@@ -49,6 +49,7 @@ class FakeElement {
       "researchEnabled",
       "geminiApiKey",
       "leadMode",
+      "trainingDrive",
     ];
     for (const id of ids) {
       if (!new RegExp(`id="${id}"`).test(value)) continue;
@@ -320,6 +321,7 @@ test("settings automation controller owns enrichment and research toggles", () =
     research_enabled: false,
     gemini_api_key: "",
     lead_mode: "lead",
+    training_drive: "steady",
   };
   const harness = baseDeps(rootEl, wm, {
     settings: { gemini_api_key_configured: true, gemini_api_key_source: "env" },
@@ -334,11 +336,17 @@ test("settings automation controller owns enrichment and research toggles", () =
   rootEl.querySelector("#artEnabled").change(true);
   rootEl.querySelector("#researchEnabled").change(true);
   rootEl.querySelector("#leadMode").change("announce_first");
+  rootEl.querySelector("#trainingDrive").change("push");
   rootEl.querySelector("#geminiApiKey").input("gemini-key");
 
   assert.equal(wm.enrich_enabled, false);
   assert.equal(wm.art_enabled, true);
   assert.equal(wm.research_enabled, true);
   assert.equal(wm.lead_mode, "announce_first");
+  assert.equal(wm.training_drive, "push");
+  // An unrecognized value from a stale cached bundle falls back to the calm posture
+  // rather than writing junk the server would then have to reject.
+  rootEl.querySelector("#trainingDrive").change("maximum-overload");
+  assert.equal(wm.training_drive, "steady");
   assert.equal(wm.gemini_api_key, "gemini-key");
 });

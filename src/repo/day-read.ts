@@ -33,8 +33,9 @@ import { flexibleTrainingAgenda } from "./flexible-training-agenda.js";
 import { listContextEvents } from "./health.js";
 import { plainGroupWords } from "./exercise-canon.js";
 import { suppressSaturatedDue } from "./hybrid-load.js";
-import { SENSOR_MAX_AGE_DAYS, sensorIsCurrent } from "./sensor-freshness.js";
+import { SENSOR_MAX_AGE_DAYS, sensorAgeDays, sensorIsCurrent } from "./sensor-freshness.js";
 import { getRecentSessions } from "./sessions.js";
+import { getSettings } from "./settings.js";
 import { getActiveBlock } from "./program-blocks.js";
 import { activeRecoveryWeekLedger, RECOVERY_WEEK_ACTIVE_DAYS } from "./recovery-week-ledger.js";
 import {
@@ -50,6 +51,7 @@ import { programBalance } from "./progression.js";
 import { daysBetweenISO, localDateISO } from "./shared.js";
 import { getTrainingIntent } from "./training-intent.js";
 import {
+  hasFreshBrake,
   lifeCapacityIsCommitment,
   planningSignalState,
   signalVoice,
@@ -211,6 +213,21 @@ export const DAY_READ_OUTCOMES = {
       "You've been loading day after day without a gap.",
     ],
   },
+  // The accumulated-load rest, answered by the athlete's own standing preference.
+  // It is NOT a second opinion about the same evidence: every safety input that
+  // produces a rest still produces one, and this rule only ever fires on the ONE
+  // shape of rest that is about rhythm rather than about a signal — stacked loading
+  // days with nothing else pulling the other way. The preference sets the posture;
+  // the evidence still decides the day (see the rule in dayRead for the whole gate).
+  push_drive_targeted_training: {
+    code: "push_drive_targeted_training",
+    reasons: [
+      "You've asked to keep training when recovery reads well, and there's real work due.",
+      "Recovery reads clear, and some muscle groups are genuinely due.",
+      "The days have stacked up, but nothing is pulling the other way and work is still due.",
+      "You'd rather train than take the day off, and there's due work worth doing.",
+    ],
+  },
   low_readiness_rest: {
     code: "low_readiness_rest",
     reasons: [
@@ -313,6 +330,23 @@ const STACKED_LOAD_WHY: readonly string[] = [
   "That's a real run of training days. Today is where it turns into fitness.",
   "Several loading days back to back — the adaptation happens on the day you stop.",
   "You've stacked the work. Let today do the quiet half of it.",
+];
+// The same stacked days, read for an athlete who has asked to keep training. It has
+// three jobs at once and every phrasing carries all three: name the groups that are
+// actually due (templated, because a targeted day that will not say what it is
+// targeting is just a rest day with a nicer headline), frame the day as NARROW rather
+// than as a licence to do more, and acknowledge the run of days honestly instead of
+// pretending it is not there. No phrasing agrees a verb with the subject — the groups
+// arrive as one phrase that may be singular ("quads") or plural ("quads and back").
+export const PUSH_DRIVE_WHY: ReadonlyArray<(groups: string) => string> = [
+  (groups) =>
+    `Several loading days back to back, and nothing is pulling the other way — so keep today narrow: the heavy work due for your ${groups}, and nothing extra stacked on top.`,
+  (groups) =>
+    `You'd rather train while the evidence looks good, and it does — go after your ${groups}, which is where the work is due, and leave the running out of today.`,
+  (groups) =>
+    `That's a real run of training days, so make today count where it is due — heavy, focused sets for your ${groups}, and no added miles on top of them.`,
+  (groups) =>
+    `The days have stacked up, but recovery reads clear and you'd rather train — so spend today on what is due, your ${groups}, and save the extra cardio for another day.`,
 ];
 const LOW_READINESS_WHY: readonly string[] = [
   "A lighter day is the safer call today — your readiness reading came in low this morning.",
@@ -699,6 +733,24 @@ const TRAIN_PUSH_FOCUS_HEADLINE: ReadonlyArray<(focus: string) => string> = [
   (focus) => `${focus} today. Reach a little.`,
 ];
 
+// The drive read's own headline sets, on the same terms as the backed day's above: the
+// kind really is `train`, and this is a third FLAVOUR of it rather than a fifth posture.
+// It has to read differently from the push sets, because it means something different —
+// the backed day offers MORE, this one offers a NARROWER day in place of a rest — so a
+// phrasing that says "go after it" would misdescribe the very restraint the rule is
+// built around.
+const TRAIN_DRIVE_HEADLINE: readonly string[] = [
+  "Train what's due today.",
+  "A targeted day, not a day off.",
+  "Keep today narrow and useful.",
+  "Today's for the work that's due.",
+];
+const TRAIN_DRIVE_FOCUS_HEADLINE: ReadonlyArray<(focus: string) => string> = [
+  (focus) => `${focus} — what's due today.`,
+  (focus) => `${focus}, and keep it targeted.`,
+  (focus) => `${focus} today, and nothing on top.`,
+];
+
 // The one headline a read gets on a given day. Every writer of the field goes through
 // here (dayread.ts's clamps and agent fallback, and the use case's factual replace).
 //
@@ -712,11 +764,18 @@ export function dayReadHeadline(
   const kind = String(read?.kind ?? "");
   const focus = typeof read?.focus === "string" ? read.focus.trim() : "";
   const push = kind === "train" && !!read?.signals?.push_bias;
+  // The drive read is checked FIRST because the two flags can co-occur (a backed day
+  // is one of the two ways the drive gate can be satisfied), and when they do, the
+  // narrower sentence is the honest one: this day exists in place of a rest.
+  const drive = kind === "train" && !!read?.signals?.training_drive_push;
   if (kind === "train" && focus) {
-    return push
-      ? pickDayVariant(TRAIN_PUSH_FOCUS_HEADLINE, date, "headline:train_focus_push")(focus)
-      : pickDayVariant(TRAIN_FOCUS_HEADLINE, date, "headline:train_focus")(focus);
+    return drive
+      ? pickDayVariant(TRAIN_DRIVE_FOCUS_HEADLINE, date, "headline:train_focus_drive")(focus)
+      : push
+        ? pickDayVariant(TRAIN_PUSH_FOCUS_HEADLINE, date, "headline:train_focus_push")(focus)
+        : pickDayVariant(TRAIN_FOCUS_HEADLINE, date, "headline:train_focus")(focus);
   }
+  if (drive) return pickDayVariant(TRAIN_DRIVE_HEADLINE, date, "headline:train_drive");
   if (push) return pickDayVariant(TRAIN_PUSH_HEADLINE, date, "headline:train_push");
   const variants = DAY_READ_HEADLINE_VARIANTS[kind] ?? DAY_READ_HEADLINE_VARIANTS.train;
   return pickDayVariant(variants, date, `headline:${kind || "train"}`);
@@ -743,6 +802,12 @@ export const DAY_READ_FOCUS_HEADLINE_VARIANTS: readonly string[] = TRAIN_FOCUS_H
 // branch of dayReadHeadline reaches it.
 export const DAY_READ_PUSH_HEADLINE_VARIANTS: readonly string[] = TRAIN_PUSH_HEADLINE;
 export const DAY_READ_PUSH_FOCUS_HEADLINE_VARIANTS: readonly string[] = TRAIN_PUSH_FOCUS_HEADLINE.map((render) =>
+  render("Lower body")
+);
+
+// The drive read's two headline forms, registered for the same guards.
+export const DAY_READ_DRIVE_HEADLINE_VARIANTS: readonly string[] = TRAIN_DRIVE_HEADLINE;
+export const DAY_READ_DRIVE_FOCUS_HEADLINE_VARIANTS: readonly string[] = TRAIN_DRIVE_FOCUS_HEADLINE.map((render) =>
   render("Lower body")
 );
 
@@ -825,6 +890,7 @@ export const DAY_READ_WHY_VARIANTS: Readonly<Record<string, readonly string[]>> 
   acute_sleep_corroborated: ACUTE_SLEEP_WHY,
   recovery_dose_overrun: DOSE_OVERRUN_WHY,
   accumulated_load_rest: STACKED_LOAD_WHY,
+  push_drive_targeted_training: PUSH_DRIVE_WHY.map((render) => render("quads and back")),
   low_readiness_rest: LOW_READINESS_WHY,
   felt_run_down_rest: RUN_DOWN_WHY,
   logged_light_work_today: LIGHT_WORK_WHY,
@@ -863,6 +929,11 @@ export const DAY_READ_REQUIRED_CONCEPT: Readonly<Record<string, RegExp>> = {
   acute_signal_protection: /\b(?:protect|protecting|protection|recovery|guarding)\b/i,
   recovery_dose_overrun: /\byesterday\b/i,
   accumulated_load_rest: /\b(?:trained|training|loading|stacked|hard days)\b/i,
+  // The one word this rule may never lose. It offers TRAINING on a day the floor would
+  // otherwise have rested, and the only thing that earns that is work genuinely being
+  // owed — a phrasing that drops "due" would be offering the session on the strength of
+  // the preference alone, which is exactly what the gate below refuses to do.
+  push_drive_targeted_training: /\bdue\b/i,
   low_readiness_rest: /\b(?:readiness|reading)\b/i,
   felt_run_down_rest: /\b(?:run-down|low)\b/i,
   logged_light_work_today: /\b(?:moved|movement|board)\b/i,
@@ -1357,10 +1428,21 @@ export function dayReadInputFingerprint(
     const value = Number(minutes);
     return Number.isFinite(value) && value > 0 && value < 360;
   };
+  // The drive read's `focus` is not a decision, it is the RENDERED due list — and the
+  // due list moves every time a set is logged, which is precisely what a partially
+  // completed session does. Hashing it discarded the warm Brief and queued a fresh
+  // agent call mid-session on a decision that had not changed (log two rows of curls
+  // and "Back and biceps" becomes "Back and rear shoulders"). So this read hashes a
+  // stable token in the focus slot instead. Scoped to the drive read alone: every
+  // other read still hashes its focus exactly as before, because for them the focus
+  // IS part of the decision (which body region the day is about) rather than a
+  // read-time rendering of a list that is being consumed as the day goes on. The
+  // due list itself is out of the hash for the same reason (see `training_drive`).
+  const driveRead = !!(read.signals as any)?.training_drive_push;
   const input = {
     date,
     baseline_kind: read.kind,
-    focus: read.focus ?? null,
+    focus: driveRead ? "training_drive_push" : (read.focus ?? null),
     program_block: context.program_block,
     flexible_training_agenda: compactFlexibleAgendaFingerprint(context.flexible_training_agenda),
     recovery_week: signals.recovery_week ?? null,
@@ -1381,6 +1463,24 @@ export function dayReadInputFingerprint(
       low_readiness: !!signals.fatigue?.low_readiness,
     },
     volume_spike: !!signals.endurance_volume?.volume_spike,
+    // The athlete's standing posture. It is a decision INPUT — it selects which rules
+    // are available on a stacked-days morning — so flipping it must throw away the warm
+    // read rather than leave a rest on screen the floor would no longer produce. The
+    // DUE-group list deliberately stays out: it moves every time a set is logged, and
+    // hashing it would churn a read that has not changed.
+    //
+    // The key is OMITTED, not nulled, on the default `steady` posture, which serves the
+    // same end as the `fuel` comparator in day-read-use-case.ts: a row cached before
+    // this signal existed carries no posture at all, and the mere APPEARANCE of a new
+    // key must not invalidate every warm read on the estate once, on deploy day. Every
+    // pre-deploy read was a steady read by definition, so omitting the key there makes
+    // the two hashes identical — while a genuine steady→push flip (or push→steady)
+    // still adds or removes the key and still throws the warm read away. Unlike a
+    // serve-time both-present comparator, this also catches the athlete who flips to
+    // push on deploy day, whose cached row has no key to compare against.
+    ...(signals.training_drive && signals.training_drive !== "steady"
+      ? { training_drive: signals.training_drive }
+      : {}),
     context: signals.context ?? null,
     // The unified signal state's DECISION, not its narration: `reason`/`reasons`/
     // `confidence` restate the same posture in different words as evidence lines
@@ -1609,6 +1709,19 @@ const SOFTENABLE_REST_CODES: ReadonlySet<string> = new Set([
   DAY_READ_OUTCOMES.acute_signal_protection.code,
 ]);
 
+// The hard ceiling on the training-drive read. Three stacked loading days is where the
+// accumulated-load rest starts, and this is where the preference stops being able to
+// answer it: at five days running the rest stands whatever the athlete has asked for
+// and whatever the evidence says, because the whole point of a floor is that it is not
+// negotiable all the way up. Named rather than inlined so the bound is greppable and
+// test/dayRead.test.js can pin both sides of it.
+const PUSH_DRIVE_CONSEC_CEILING = 5;
+// Readiness that positively CORROBORATES the day, as opposed to merely failing to
+// object. `lowReadiness` (the rest trigger) sits at <35; this is a long way clear of
+// it, because the wearable path is the one that can earn the read without a single
+// rated session behind it and so has to clear a higher bar than "not alarming".
+const PUSH_DRIVE_READINESS_FLOOR = 60;
+
 // Is anything clinical in play today? Probed three ways because the same constraint
 // can reach the read by three routes, and a single check would miss two of them:
 // a fresh constraint item (an injury, an illness, a painful joint — the same probe
@@ -1651,6 +1764,18 @@ export function dayRead(
 ): DayRead {
   const d = date || localDateISO();
   const recoveryWeek = activeRecoveryWeek(d);
+  // The athlete's standing posture toward an accumulated-load rest. A PREFERENCE, and
+  // read like one: it can only ever select among reads the evidence already permits
+  // (see the drive rule below), never produce one on its own. Fail-soft to the floor's
+  // own rhythm — dayRead never throws, and a settings read that fails must not be able
+  // to hand out a training day.
+  const trainingDrive = (() => {
+    try {
+      return getSettings().training_drive;
+    } catch {
+      return "steady" as const;
+    }
+  })();
 
   // Discipline shapes what "a training day" means for the consecutive-days +
   // earned-rest rules. For a strength athlete a logged lifting session counts;
@@ -1888,6 +2013,11 @@ export function dayRead(
     // Consecutive genuinely-LOADING (hard/moderate) days ending yesterday — a
     // recovery/easy day breaks the streak (it's earned rest, not stacked fatigue).
     consecutive_training_days: consec,
+    // The athlete's standing posture, carried so the read's provenance says which
+    // rules were even available this morning — and hashed into the input fingerprint,
+    // so flipping the control regenerates the Brief instead of leaving yesterday's
+    // rest warm on a morning it can no longer produce.
+    training_drive: trainingDrive,
     // The last few days' actual load grade (hard/moderate/easy/none), so the read
     // reflects intensity, not just "did something get logged".
     recent_load: recentLoads,
@@ -2101,6 +2231,19 @@ export function dayRead(
   // Published here so the rules below can see the evidence, and REPUBLISHED once the
   // rules have resolved with `applied` — whether the softening actually fired — added.
   if (outcomeFeedback) (signals as any).outcome_feedback = { ...outcomeFeedback, applied: false };
+  // The rhythm-driven rest: genuinely-loading days stacking up outside a reduced week.
+  // Hoisted out of the earned-rest rule because the training-drive rule directly above
+  // it answers THIS trigger and no other, and two copies of the condition is how the
+  // two would eventually come to disagree about which day they are talking about.
+  const stackedLoadingRest = consec >= 3 && !recoveryWeek;
+  // A commitment on the calendar compresses the training window (see the planned-
+  // training rule below for the split between a commitment and a thin stretch, and
+  // for the caveat each one pushes). Hoisted because BOTH train-shaped rules answer
+  // to it: the drive read is a shorter, narrower day, not an exemption from the
+  // athlete's actual afternoon.
+  const schedulePressure =
+    signalState.action.posture === "train" && signalState.action.directives.schedule === "compress";
+  const commitmentPressure = schedulePressure && lifeCapacityIsCommitment(signalState);
   const rules: DayReadRule[] = [
     {
       resolve: () => {
@@ -2166,6 +2309,99 @@ export function dayRead(
       },
     },
     {
+      // ---- the training drive, answering the accumulated-load rest ----
+      // The ONE rest the athlete's standing preference may answer, and it sits here —
+      // directly above the rule that would otherwise produce it, and BELOW the done,
+      // corroborated-short-night and protect rules — so the ordering itself is the
+      // guarantee: a fact, a fresh short night and a protective posture all reach the
+      // athlete before the preference is ever consulted.
+      //
+      // The preference sets the POSTURE; the evidence still decides the day. Six
+      // conditions, and the read is withheld unless every one of them holds:
+      //   1. the athlete asked for it,
+      //   2. the rest in question is the RHYTHM one (stacked days) and nothing else in
+      //      the earned-rest branch is also true — a dose overrun, a run-down check-in
+      //      or a low readiness reading each keeps its rest, because those are signals
+      //      about today rather than a pattern about the week,
+      //   3. the run of days is under the hard ceiling,
+      //   4. nothing clinical is in play, by the same three-way probe the outcome
+      //      softening uses,
+      //   5. the evidence is positively green — either the backed tier (earned from
+      //      the athlete's own rated sessions) or a fresh, solid readiness reading over
+      //      last night's own sleep, with nothing fresh pulling the other way anywhere
+      //      in the state (the same brake question the backed tier asks itself, asked
+      //      through the same predicate),
+      //   6. and there is actually something DUE, after the acute gate has removed the
+      //      groups still carrying yesterday's work.
+      // Miss any of them and this returns null, the earned-rest rule below fires, and
+      // the athlete gets exactly the rest day they get today.
+      resolve: () => {
+        if (trainingDrive !== "push") return null;
+        if (!stackedLoadingRest) return null;
+        if (yesterdayRecoveryOverdose || lowSubjective || lowReadiness) return null;
+        if (consec >= PUSH_DRIVE_CONSEC_CEILING) return null;
+        if (clinicallyDriven(signalState, healthWorkaround)) return null;
+        const backed = signalState.action.support?.level === "backed";
+        const solidReadiness =
+          readinessFresh && readinessCurrent != null && Number(readinessCurrent) >= PUSH_DRIVE_READINESS_FLOOR;
+        // Last night has to be PRESENT, be LAST NIGHT, and not be short. The sensor
+        // bound alone is too loose here: SENSOR_MAX_AGE_DAYS.sleep is 2, so a night
+        // from the day before yesterday is still "current" enough to be voiced — but
+        // it is not corroboration for THIS morning, and the wearable path is the one
+        // that can open a training day with no rated session behind it. So the age is
+        // tightened to the night immediately preceding `d`. An absent, stale or
+        // day-old night reads as absent, and the path simply does not open — silence
+        // is never corroboration.
+        const lastNightAge = sensorAgeDays(lastNight?.date ?? null, d);
+        const sleptEnough =
+          lastNightAge != null &&
+          lastNightAge >= 0 &&
+          lastNightAge <= 1 &&
+          lastNight?.total_min != null &&
+          Number(lastNight.total_min) >= 360;
+        // The wearable path has no brake check of its own to inherit — the `backed`
+        // tier refuses to exist while any fresh caution or constraint is on the board,
+        // but readiness-plus-sleep is only two fields and knows nothing about the other
+        // seven dimensions. Without this, a morning carrying a fresh routine disruption
+        // AND fresh schedule pressure still handed out the training day. Same predicate
+        // the tier uses, so the two answers cannot drift.
+        const wearablePath = solidReadiness && sleptEnough && !hasFreshBrake(signalState.dimensions);
+        if (!(backed || wearablePath)) return null;
+        // The same acute gate every other "what's due" surface reads, so this day can
+        // never open by naming a group that is still flattened from yesterday. Wrapped
+        // like its sibling call sites: no balance ⇒ no due groups ⇒ no drive read.
+        let due: string[] = [];
+        try {
+          const bal: any = programBalance(2, d);
+          due = suppressSaturatedDue(Array.isArray(bal?.due) ? bal.due : [], d).slice(0, 2);
+        } catch {
+          due = [];
+        }
+        if (!due.length) return null;
+        // EVERY rendering of the groups goes through the canon folding, with no raw
+        // fallback behind it: `plainGroupWords` returns null only when nothing in the
+        // list folds to athlete-facing words, and a due list we cannot say out loud is
+        // the same absence as no due list at all. Joining the raw keys instead would
+        // put "rear_delts" in the headline, the why and the focus at once.
+        const groups = plainGroupWords(due, 2);
+        if (!groups) return null;
+        (signals as any).training_drive_push = { due, backed_by: backed ? "logged_sessions" : "recovery_reading" };
+        return {
+          outcome: DAY_READ_OUTCOMES.push_drive_targeted_training,
+          read: {
+            kind: "train" as const,
+            focus: groups.charAt(0).toUpperCase() + groups.slice(1),
+            why: pickDayVariant(PUSH_DRIVE_WHY, d, "push_drive_targeted_training")(groups),
+            // The same clock the ordinary train rule keeps: a commitment on the
+            // calendar compresses the window there, and a targeted day is no less
+            // subject to the athlete's actual afternoon than a planned one is.
+            est_minutes: commitmentPressure ? 40 : 60,
+            signals,
+          },
+        };
+      },
+    },
+    {
       resolve: () => {
         // Earned rest comes from genuinely-loading days stacking up (intensity-aware
         // now), or an acute recovery signal (short sleep / a run-down check-in). A
@@ -2176,7 +2412,6 @@ export function dayRead(
         // A recovery week is already the periodized answer to accumulated load.
         // Pre-deload hard days cannot turn every reduced session into another rest
         // day; acute safety signals and actual dose overruns retain full authority.
-        const stackedLoadingRest = consec >= 3 && !recoveryWeek;
         if (!(yesterdayRecoveryOverdose || stackedLoadingRest || lowSubjective || lowReadiness)) return null;
         // Each branch reports the outcome that matches its own words. Before the
         // reason moved onto the rule, a low check-in or a low readiness reading was
@@ -2338,9 +2573,8 @@ export function dayRead(
         // compresses the window; a thin stretch asks for less intensity at full length.
         // Anything unrecognized falls to the life-pressure branch, which claims less
         // and clamps nothing.
-        const schedulePressure =
-          signalState.action.posture === "train" && signalState.action.directives.schedule === "compress";
-        const commitmentPressure = schedulePressure && lifeCapacityIsCommitment(signalState);
+        // `schedulePressure` / `commitmentPressure` are derived once above the rule
+        // list, so the drive read compresses on exactly the same condition.
         const scheduleReason = signalState.dimensions.life_capacity.reason;
         if (commitmentPressure) {
           caveats.push(pickDayVariant(COMMITMENT_PRESSURE_CAVEAT, d, "planned_training:commitment_pressure"));

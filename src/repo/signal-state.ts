@@ -1011,6 +1011,27 @@ function actionState(dimensions: Record<SignalDimension, SignalDimensionState>) 
 // push it has no standing to give.
 const SUPPORT_EARNED_FIELDS: ReadonlySet<string> = new Set(["session_quality", "felt_energy", "sleep_feel"]);
 
+const isBrakeEvidence = (item: { direction: string }): boolean =>
+  item.direction === "caution" || item.direction === "constraint";
+
+// Every fresh, decision-bearing item on the board, across all dimensions. Both call
+// sites below need exactly this set, so it is derived once here rather than twice
+// slightly differently.
+function freshBearingEvidence(dimensions: Record<SignalDimension, SignalDimensionState>): ResolvedSignalEvidence[] {
+  return bearingEvidence(
+    Object.values(dimensions).flatMap((dimension) => dimension.evidence.filter((item) => item.freshness !== "stale"))
+  );
+}
+
+// Is anything fresh pulling the other way — a caution or a constraint, on any
+// dimension? Exported because the `backed` tier below is not the only place that
+// must refuse to call a morning green while a brake is on the board: day-read's
+// training-drive rule asks the same question of its wearable path. One predicate,
+// so the two can never come to disagree about what counts as a brake.
+export function hasFreshBrake(dimensions: Record<SignalDimension, SignalDimensionState>): boolean {
+  return freshBearingEvidence(dimensions).some(isBrakeEvidence);
+}
+
 // Is this a train day the evidence positively BACKS? Three conditions, all of them
 // about what is actually on record:
 //   • the arbitration already landed on a plain train day with evidence behind it
@@ -1023,10 +1044,8 @@ function supportState(
   dimensions: Record<SignalDimension, SignalDimensionState>
 ): SignalSupport | null {
   if (action.posture !== "train" || action.readiness !== "ready") return null;
-  const active = bearingEvidence(
-    Object.values(dimensions).flatMap((dimension) => dimension.evidence.filter((item) => item.freshness !== "stale"))
-  );
-  if (active.some((item) => item.direction === "caution" || item.direction === "constraint")) return null;
+  const active = freshBearingEvidence(dimensions);
+  if (active.some(isBrakeEvidence)) return null;
   const support = active.filter((item) => item.direction === "support");
   if (!support.some((item) => SUPPORT_EARNED_FIELDS.has(item.field))) return null;
   return {

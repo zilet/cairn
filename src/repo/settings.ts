@@ -50,6 +50,7 @@ export interface Settings {
   agent_profile_bindings: AgentProfileBindings; // provider -> task -> optional model/reasoning override of TASK_EXECUTION_PROFILES
   update_check_enabled: boolean; // quiet daily check for a newer Cairn release (pull-never-push; off ⇒ no outbound check)
   lead_mode: "lead" | "announce_first" | "review_everything"; // how much Cairn leads within server policy
+  training_drive: "steady" | "push"; // how the athlete wants a stacked-days rest read: 'push' asks for targeted training when the evidence is green
   updated_at?: string;
 }
 
@@ -298,6 +299,7 @@ const SETTINGS_COLUMN_REPAIRS: [string, string][] = [
   ["agent_profile_bindings", "TEXT DEFAULT ''"],
   ["update_check_enabled", "INTEGER DEFAULT 1"],
   ["lead_mode", "TEXT DEFAULT 'lead'"],
+  ["training_drive", "TEXT DEFAULT 'steady'"],
 ];
 let settingsSchemaChecked = false;
 
@@ -458,6 +460,7 @@ function defaultSettings(): Settings {
     agent_profile_bindings: {}, // empty means every op uses the TASK_EXECUTION_PROFILES default
     update_check_enabled: true, // quiet daily update check on by default (one toggle disables the outbound call)
     lead_mode: "lead", // bounded background coaching is the default relationship
+    training_drive: "steady", // the safety floor's own rhythm until the athlete asks otherwise
   };
 }
 
@@ -543,6 +546,8 @@ function rowToSettings(row: any): Settings {
     // NULL on old rows (column added by migration v47) defaults to ON.
     update_check_enabled: row.update_check_enabled == null ? true : !!row.update_check_enabled,
     lead_mode: ["lead", "announce_first", "review_everything"].includes(String(row.lead_mode)) ? row.lead_mode : "lead",
+    // NULL on old rows (column added by migration v89) reads as the steady rhythm.
+    training_drive: String(row.training_drive) === "push" ? "push" : "steady",
     updated_at: row.updated_at,
   };
 }
@@ -656,6 +661,12 @@ export function setSettings(patch: any): Settings {
     lead_mode: ["lead", "announce_first", "review_everything"].includes(String(patch.lead_mode))
       ? patch.lead_mode
       : cur.lead_mode,
+    // Same shape as lead_mode: an unrecognized value KEEPS what is stored rather than
+    // resetting it, so a client that omits the field (or sends junk) can never silently
+    // switch the athlete's standing posture.
+    training_drive: ["steady", "push"].includes(String(patch.training_drive))
+      ? patch.training_drive
+      : cur.training_drive,
   };
   if (!["round_robin", "random", "priority"].includes(merged.agent_strategy)) merged.agent_strategy = "round_robin";
   merged.coach_day = Number.isInteger(Number(merged.coach_day))
@@ -677,7 +688,7 @@ export function setSettings(patch: any): Settings {
     `UPDATE settings SET agent_strategy=?, agent_order=?, disabled_agents=?, rr_cursor=?,
        coach_enabled=?, coach_day=?, coach_hour=?, onboarded=?, enrich_enabled=?, proactive_enabled=?, art_enabled=?, art_enabled_at=?, meal_prefs=?,
        garmin_username=?, garmin_password=?, garmin_password_encrypted=?, gemini_api_key=?, gemini_api_key_encrypted=?,
-       research_enabled=?, bg_ops_enabled=?, agent_routes=?, chat_routing_mode=?, chat_profile_bindings=?, agent_profile_bindings=?, update_check_enabled=?, lead_mode=?, updated_at=datetime('now') WHERE id = 1`
+       research_enabled=?, bg_ops_enabled=?, agent_routes=?, chat_routing_mode=?, chat_profile_bindings=?, agent_profile_bindings=?, update_check_enabled=?, lead_mode=?, training_drive=?, updated_at=datetime('now') WHERE id = 1`
   ).run(
     merged.agent_strategy,
     JSON.stringify(merged.agent_order),
@@ -704,7 +715,8 @@ export function setSettings(patch: any): Settings {
     JSON.stringify(merged.chat_profile_bindings),
     JSON.stringify(merged.agent_profile_bindings),
     merged.update_check_enabled ? 1 : 0,
-    merged.lead_mode
+    merged.lead_mode,
+    merged.training_drive
   );
   return getSettings();
 }

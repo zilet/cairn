@@ -149,6 +149,7 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
       chat_profile_bindings: wm.chat_profile_bindings,
       update_check_enabled: wm.update_check_enabled,
       lead_mode: wm.lead_mode,
+      training_drive: wm.training_drive,
     };
     // password / api-key fields: blank means "leave the configured value intact" — only
     // send a typed value (matches the old per-field placeholder behavior).

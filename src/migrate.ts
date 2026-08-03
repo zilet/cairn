@@ -1863,6 +1863,17 @@ export const MIGRATIONS: Migration[] = [
       );
     },
   },
+  {
+    version: 89,
+    name: "settings-training-drive",
+    // The athlete's standing posture toward the accumulated-load rest, beside
+    // lead_mode (v59) and read the same way: a PREFERENCE that sets which reads are
+    // available, never one that can produce a read the evidence does not support.
+    // 'steady' is what every existing row has always meant, so the default is the
+    // backfill rather than a guess. Idempotent — a fresh DB already has the column
+    // from db.ts's CREATE TABLE, and addColumn guards the second pass.
+    up: (db) => addColumn(db, "settings", "training_drive TEXT DEFAULT 'steady'"),
+  },
 ];
 
 export function runMigrations(db: DatabaseSync) {

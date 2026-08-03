@@ -80,6 +80,18 @@ test("lead_mode is one validated autonomy control and defaults to lead", () => {
   assert.equal(repo.getSettings().lead_mode, "lead");
 });
 
+test("training_drive is one validated posture and defaults to steady", () => {
+  assert.equal(repo.getSettings().training_drive, "steady");
+  assert.equal(repo.setSettings({ training_drive: "push" }).training_drive, "push");
+  // Junk KEEPS what is stored rather than resetting it — a client that mistypes the
+  // field must never silently switch the athlete's standing posture back.
+  assert.equal(repo.setSettings({ training_drive: "maximum-overload" }).training_drive, "push");
+  assert.equal(repo.setSettings({ training_drive: "steady" }).training_drive, "steady");
+  // A pre-v89 row (column NULL) reads as steady, which is what those rows always meant.
+  db.prepare("UPDATE settings SET training_drive = NULL WHERE id = 1").run();
+  assert.equal(repo.getSettings().training_drive, "steady");
+});
+
 test("meal_prefs round-trips (trimmed, capped at 2000 chars)", () => {
   repo.setSettings({ meal_prefs: "  I train fasted most mornings  " });
   assert.equal(repo.getSettings().meal_prefs, "I train fasted most mornings");

@@ -35,6 +35,7 @@ type SettingsScreenWorkingModel = {
   time_zone: string;
   update_check_enabled: boolean;
   lead_mode: "lead" | "announce_first" | "review_everything";
+  training_drive: "steady" | "push";
 };
 
 type SettingsScreenPersistBody = {
@@ -52,6 +53,7 @@ type SettingsScreenPersistBody = {
   chat_profile_bindings: Record<string, Record<string, Record<string, unknown>>>;
   update_check_enabled: boolean;
   lead_mode: "lead" | "announce_first" | "review_everything";
+  training_drive: "steady" | "push";
   gemini_api_key?: string;
   garmin_password?: string;
 };

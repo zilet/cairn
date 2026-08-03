@@ -49,7 +49,10 @@ type AppleHealthUiState = {
 };
 
 type SettingsAutomationSliceOptions = {
-  workingModel: Pick<SettingsScreenWorkingModel, "enrich_enabled" | "art_enabled" | "research_enabled" | "lead_mode">;
+  workingModel: Pick<
+    SettingsScreenWorkingModel,
+    "enrich_enabled" | "art_enabled" | "research_enabled" | "lead_mode" | "training_drive"
+  >;
   settings: Record<string, unknown>;
   artSpendHtml: string;
   researchEligible: SettingsSurfaceRouteEligibility;
@@ -137,6 +140,7 @@ function settingsWorkingModel(data: SettingsScreenData): SettingsScreenWorkingMo
     lead_mode: ["lead", "announce_first", "review_everything"].includes(settingsSurfaceString(s.lead_mode))
       ? (settingsSurfaceString(s.lead_mode) as SettingsScreenWorkingModel["lead_mode"])
       : "lead",
+    training_drive: settingsSurfaceString(s.training_drive) === "push" ? "push" : "steady",
   };
 }
 
@@ -309,6 +313,15 @@ function settingsAutomationSliceHtml(options: SettingsAutomationSliceOptions): s
           </select>
         </div>
         <div class="sess-line" style="color:var(--muted);margin-top:6px">Lead lets Cairn make bounded, reversible coaching changes at natural boundaries and explain them where they land. Announce first tells you before they take effect. Review everything keeps the classic approval flow. Goal-level and clinical decisions always stay with you.</div>
+
+        <h1 class="lbl" style="margin:22px 0 8px">Training drive</h1>
+        <div class="field">
+          <select id="trainingDrive" aria-label="Training drive">
+            <option value="steady" ${wm.training_drive === "steady" ? "selected" : ""}>Steady</option>
+            <option value="push" ${wm.training_drive === "push" ? "selected" : ""}>Push</option>
+          </select>
+        </div>
+        <div class="sess-line" style="color:var(--muted);margin-top:6px">Steady keeps the usual rhythm — a run of loading days reads as a rest day. Push asks Cairn to favour a targeted session for the muscle groups that are due instead, and only while the recovery evidence is good. A long enough run of days, anything clinical, or a signal pulling the other way still reads as rest.</div>
 
         <h1 class="lbl" style="margin:22px 0 8px">Agentic enrichment</h1>
         <label class="toggle"><input type="checkbox" id="enrichEnabled" ${wm.enrich_enabled ? "checked" : ""}>

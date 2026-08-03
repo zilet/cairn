@@ -8,10 +8,21 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { db, repo, resetTables, seedTrainingDay, seedRecoveryDay, isoDaysAgo, localDaysAgo } from "./_seed.js";
+import {
+  db,
+  repo,
+  resetTables,
+  seedSleep,
+  seedTrainingDay,
+  seedRecoveryDay,
+  isoDaysAgo,
+  localDaysAgo,
+} from "./_seed.js";
 import {
   DAY_READ_CAVEAT_CONCEPT,
   DAY_READ_CAVEAT_VARIANTS,
+  DAY_READ_DRIVE_FOCUS_HEADLINE_VARIANTS,
+  DAY_READ_DRIVE_HEADLINE_VARIANTS,
   DAY_READ_FOCUS_HEADLINE_VARIANTS,
   DAY_READ_HEADLINE_CONCEPT,
   DAY_READ_HEADLINE_VARIANTS,
@@ -21,6 +32,7 @@ import {
   DAY_READ_POLICY_REASON_VARIANTS,
   DAY_READ_REQUIRED_CONCEPT,
   DAY_READ_WHY_VARIANTS,
+  PUSH_DRIVE_WHY,
   QUIET_STREAK_GUARDED_WHY,
   QUIET_STREAK_WHY,
   RECOVERY_WEEK_SOFTEN_WHY,
@@ -86,6 +98,328 @@ test("REST on >=3 consecutive training days ending the day before", () => {
   assert.equal(r.signals.consecutive_training_days, 3);
   assert.equal(r.decision.rule_code, "accumulated_load_rest");
   saysOneOf(r.why, "accumulated_load_rest");
+});
+
+// ---------- the training drive: a PREFERENCE that selects, never one that decides ----------
+// `settings.training_drive = 'push'` lets the athlete answer the ONE rest that is about
+// rhythm rather than about a signal — stacked loading days — with a targeted session for
+// what is actually due. These cases pin both halves of that: the day it produces, and the
+// far longer list of mornings where the preference changes nothing at all because the
+// evidence still decides. The reference date is TODAY, like test/dayReadPushLadder.js,
+// because the backed tier and the acute due-gate both read freshness off the wall clock.
+const DRIVE_REF = localDaysAgo(0);
+const DRIVE_WORLD = [
+  "checkins",
+  "daily_metrics",
+  "garmin_daily_metrics",
+  "garmin_sources",
+  "context_events",
+  "sessions",
+  "logged_sets",
+  "activities",
+  "plan_items",
+  "plan_days",
+  "exercises",
+  "profile",
+  "day_reads",
+  "training_symptom_events",
+];
+
+// A stacked-days morning with something genuinely due. The loading days are all squat
+// work, so quads/glutes come back saturated and only the programmed-but-untrained pull
+// survives the acute gate — which is exactly the shape the read has to name.
+function seedDriveMorning({ days = 3, rated = true, due = true } = {}) {
+  resetTables(...DRIVE_WORLD);
+  if (due) {
+    repo.upsertExercise({ name: "Barbell Row", muscle_group: "back" });
+    repo.savePlanDay(1, "Pull", "Pull", [{ exercise: "Barbell Row", sets: 3, rep_low: 5, rep_high: 8 }]);
+  }
+  for (let i = 1; i <= days; i++) seedTrainingDay(localDaysAgo(i));
+  if (rated) {
+    repo.setSessionFeedback(localDaysAgo(1), { performance: 5 });
+    repo.setSessionFeedback(localDaysAgo(2), { performance: 4 });
+  }
+}
+
+// Fresh, solid readiness — the wearable half of the green-evidence gate.
+const readiness = (value) => ({
+  has_data: true,
+  recovery: { training_readiness: value, avg_training_readiness: value },
+  quality: { training_readiness: { latest_date: DRIVE_REF, source: "garmin", freshness: "fresh", sample_count: 1 } },
+});
+
+test("the steady drive is the default, and it leaves the stacked-days rest exactly where it is", () => {
+  seedDriveMorning();
+  assert.equal(repo.getSettings().training_drive, "steady");
+  const r = repo.dayRead(DRIVE_REF);
+  assert.equal(r.kind, "rest");
+  assert.equal(r.decision.rule_code, "accumulated_load_rest");
+  assert.equal(r.signals.training_drive, "steady");
+  assert.equal(r.signals.training_drive_push, undefined);
+  // The evidence that WOULD satisfy the push gate is all present — so this case is
+  // pinning the preference, not the absence of a green morning.
+  assert.equal(r.signals.signal_state.action.support?.level, "backed");
+});
+
+test("the push drive turns a stacked-days rest into a targeted train day for what is due", () => {
+  seedDriveMorning();
+  repo.setSettings({ training_drive: "push" });
+  const r = repo.dayRead(DRIVE_REF);
+
+  assert.equal(r.kind, "train");
+  assert.equal(r.decision.rule_code, "push_drive_targeted_training");
+  assert.equal(r.signals.consecutive_training_days, 3);
+  assert.equal(r.focus, "Back");
+  assert.equal(r.est_minutes, 60);
+  // The whole set, rendered with the group that actually landed — the registered form
+  // in DAY_READ_WHY_VARIANTS carries a sample argument, like every other templated set.
+  assert.ok(
+    PUSH_DRIVE_WHY.map((render) => render("back")).includes(r.why),
+    `unexpected wording ${JSON.stringify(r.why)}`
+  );
+  // It names the group it is targeting, and only the one the acute gate left standing:
+  // the squats of the last three days flattened quads and glutes.
+  assert.match(r.why, /\bback\b/);
+  assert.deepEqual(r.signals.training_drive_push.due, ["back"]);
+  assert.equal(r.signals.training_drive_push.backed_by, "logged_sessions");
+  assert.equal(r.signals.training_drive, "push");
+  // Its own headline set, so a day that exists in PLACE of a rest does not borrow the
+  // backed day's "go after it" voice.
+  const headline = dayReadHeadline(r, DRIVE_REF);
+  assert.ok(
+    DAY_READ_DRIVE_FOCUS_HEADLINE_VARIANTS.some((variant) => variant.replace("Lower body", "Back") === headline),
+    `unexpected headline ${JSON.stringify(headline)}`
+  );
+});
+
+test("a fresh, solid readiness reading with a real night behind it earns the drive read on its own", () => {
+  // No rated sessions anywhere, so the backed tier is unavailable: this is the wearable
+  // corroboration path, and it has to clear a bar well above "nothing is alarming".
+  seedDriveMorning({ rated: false });
+  seedSleep(DRIVE_REF, 470);
+  repo.setSettings({ training_drive: "push" });
+
+  const r = repo.dayRead(DRIVE_REF, readiness(72));
+  assert.equal(r.signals.signal_state.action.support, null, "the backed tier is not what earned this");
+  assert.equal(r.kind, "train");
+  assert.equal(r.decision.rule_code, "push_drive_targeted_training");
+  assert.equal(r.signals.training_drive_push.backed_by, "recovery_reading");
+});
+
+test("a middling readiness reading does NOT earn the drive read, even though it never triggered a rest", () => {
+  seedDriveMorning({ rated: false });
+  seedSleep(DRIVE_REF, 470);
+  repo.setSettings({ training_drive: "push" });
+
+  const r = repo.dayRead(DRIVE_REF, readiness(45));
+  assert.notEqual(r.kind, "train");
+  assert.notEqual(r.decision.rule_code, "push_drive_targeted_training");
+});
+
+test("a solid readiness reading with a short night behind it does NOT earn the drive read", () => {
+  seedDriveMorning({ rated: false });
+  seedSleep(DRIVE_REF, 300); // 5h
+  repo.setSettings({ training_drive: "push" });
+
+  const r = repo.dayRead(DRIVE_REF, readiness(72));
+  assert.notEqual(r.decision.rule_code, "push_drive_targeted_training");
+});
+
+test("silence is not corroboration: no night at all leaves the wearable path shut", () => {
+  seedDriveMorning({ rated: false });
+  repo.setSettings({ training_drive: "push" });
+
+  const r = repo.dayRead(DRIVE_REF, readiness(72));
+  assert.equal(r.signals.last_night, null);
+  assert.notEqual(r.decision.rule_code, "push_drive_targeted_training");
+});
+
+test("the drive read has a hard ceiling: at five loading days running the rest stands", () => {
+  seedDriveMorning({ days: 5 });
+  repo.setSettings({ training_drive: "push" });
+  const r = repo.dayRead(DRIVE_REF);
+  assert.equal(r.signals.consecutive_training_days, 5);
+  assert.equal(r.kind, "rest");
+  assert.equal(r.decision.rule_code, "accumulated_load_rest");
+  assert.equal(r.signals.training_drive_push, undefined);
+  // Four is still inside the ceiling, so the bound is pinned from both sides.
+  seedDriveMorning({ days: 4 });
+  repo.setSettings({ training_drive: "push" });
+  const four = repo.dayRead(DRIVE_REF);
+  assert.equal(four.signals.consecutive_training_days, 4);
+  assert.equal(four.decision.rule_code, "push_drive_targeted_training");
+});
+
+test("a low readiness reading keeps its rest whatever the drive says", () => {
+  seedDriveMorning();
+  repo.setSettings({ training_drive: "push" });
+  const r = repo.dayRead(DRIVE_REF, readiness(20));
+  assert.notEqual(r.kind, "train");
+  assert.notEqual(r.decision.rule_code, "push_drive_targeted_training");
+});
+
+test("a run-down check-in keeps its rest whatever the drive says", () => {
+  seedDriveMorning();
+  repo.addCheckin(DRIVE_REF, { energy: 1, sleep_feel: 2 });
+  repo.setSettings({ training_drive: "push" });
+  const r = repo.dayRead(DRIVE_REF);
+  assert.notEqual(r.kind, "train");
+  assert.notEqual(r.decision.rule_code, "push_drive_targeted_training");
+});
+
+test("anything clinical keeps its rest whatever the drive says", () => {
+  seedDriveMorning();
+  repo.addContextEvent({ kind: "injury", title: "Shoulder strain", start_date: DRIVE_REF });
+  repo.setSettings({ training_drive: "push" });
+  const r = repo.dayRead(DRIVE_REF);
+  assert.notEqual(r.kind, "train");
+  assert.notEqual(r.decision.rule_code, "push_drive_targeted_training");
+});
+
+test("with nothing genuinely due the drive read has nothing to offer, so the rest stands", () => {
+  // Every group the last three days touched is saturated, and there is no programmed
+  // work waiting behind them — a targeted day with no target is just a rest day.
+  seedDriveMorning({ due: false });
+  repo.setSettings({ training_drive: "push" });
+  const r = repo.dayRead(DRIVE_REF);
+  assert.equal(r.kind, "rest");
+  assert.equal(r.decision.rule_code, "accumulated_load_rest");
+});
+
+test("flipping the drive changes the decision fingerprint, so the warm read cannot survive it", () => {
+  seedDriveMorning();
+  const steady = repo.dayRead(DRIVE_REF);
+  repo.setSettings({ training_drive: "push" });
+  const push = repo.dayRead(DRIVE_REF);
+  assert.notEqual(steady.input_fingerprint, push.input_fingerprint);
+});
+
+// The wearable path is two fields wide — a readiness number and a sleep total — and it
+// can open a training day with no rated session behind it at all. It therefore has to
+// answer the SAME brake question the backed tier answers about itself, or the athlete
+// gets the least-evidenced version of the read on the most-caveated morning.
+test("a fresh caution anywhere shuts the wearable path, even with green readiness and a full night", () => {
+  seedDriveMorning({ rated: false });
+  seedSleep(DRIVE_REF, 470);
+  // Bad hotel beds abroad: a fresh routine disruption AND fresh schedule pressure, in
+  // two different dimensions, neither of which is severe enough on its own to move the
+  // posture off "train" — which is exactly why checking the posture was not enough.
+  repo.addContextEvent({
+    kind: "travel",
+    title: "Overseas trip, bad hotel beds",
+    start_date: localDaysAgo(2),
+    end_date: DRIVE_REF,
+  });
+  repo.setSettings({ training_drive: "push" });
+
+  const r = repo.dayRead(DRIVE_REF, readiness(61));
+  const brakes = Object.values(r.signals.signal_state.dimensions)
+    .flatMap((dimension) => dimension.evidence ?? [])
+    .filter((item) => item.direction === "caution" || item.direction === "constraint");
+  assert.ok(brakes.length > 0, "the case is only meaningful with a brake actually on the board");
+  assert.equal(r.signals.signal_state.action.posture, "train", "no brake was severe enough to move the posture");
+  assert.equal(r.kind, "rest");
+  assert.equal(r.decision.rule_code, "accumulated_load_rest");
+  assert.equal(r.signals.training_drive_push, undefined);
+});
+
+// SENSOR_MAX_AGE_DAYS.sleep is 2, so a night from the day before yesterday is still
+// current enough for the read to VOICE — but it is not corroboration for this morning,
+// and the wearable path is the one that needs corroborating.
+test("the night before last does not corroborate the drive read, however good it was", () => {
+  seedDriveMorning({ rated: false });
+  seedSleep(localDaysAgo(2), 480);
+  repo.setSettings({ training_drive: "push" });
+
+  const r = repo.dayRead(DRIVE_REF, readiness(72));
+  assert.ok(r.signals.last_night, "the night is still visible — its AGE is what shuts the path, not its absence");
+  assert.equal(r.signals.last_night.date, localDaysAgo(2));
+  assert.notEqual(r.decision.rule_code, "push_drive_targeted_training");
+
+  // Last night's own sleep, same everything else, does earn it.
+  seedSleep(localDaysAgo(1), 480);
+  const fresh = repo.dayRead(DRIVE_REF, readiness(72));
+  assert.equal(fresh.decision.rule_code, "push_drive_targeted_training");
+});
+
+// A commitment on the calendar registers as a fresh caution on life_capacity, so it
+// shuts BOTH halves of the green-evidence gate before the clock is ever consulted. The
+// compression the read carries for it is therefore belt-and-braces; what the athlete
+// actually gets on a committed morning is the rest, not a compressed targeted day.
+test("a commitment on the calendar keeps the stacked-days rest rather than compressing the drive read", () => {
+  seedDriveMorning();
+  repo.addContextEvent({
+    kind: "family_event",
+    title: "School pickup and evening event",
+    start_date: DRIVE_REF,
+    end_date: DRIVE_REF,
+  });
+  repo.setSettings({ training_drive: "push" });
+
+  const r = repo.dayRead(DRIVE_REF);
+  assert.equal(r.signals.signal_state.action.directives.schedule, "compress");
+  assert.equal(r.signals.signal_state.action.support, null, "the commitment is itself a brake");
+  assert.equal(r.kind, "rest");
+  assert.equal(r.decision.rule_code, "accumulated_load_rest");
+});
+
+// The drive read's `focus` is the RENDERED due list, and the due list is consumed as the
+// session is logged. Hashing it discarded the warm Brief and queued a fresh agent call
+// mid-session on a decision that had not moved at all.
+test("logging through a drive session does not churn the read's fingerprint", () => {
+  resetTables(...DRIVE_WORLD);
+  repo.upsertExercise({ name: "Barbell Row", muscle_group: "back" });
+  repo.upsertExercise({ name: "Barbell Curl", muscle_group: "biceps" });
+  repo.savePlanDay(1, "Pull", "Pull", [{ exercise: "Barbell Row", sets: 3, rep_low: 5, rep_high: 8 }]);
+  for (let i = 1; i <= 3; i++) seedTrainingDay(localDaysAgo(i));
+  repo.setSessionFeedback(localDaysAgo(1), { performance: 5 });
+  repo.setSessionFeedback(localDaysAgo(2), { performance: 4 });
+  repo.setSettings({ training_drive: "push" });
+
+  const session = repo.getOrCreateSession(DRIVE_REF);
+  const logSet = (exercise) => repo.logSetByName({ session_id: session.id, exercise, weight: 95, reps: 5 });
+
+  // The first set is allowed to move the hash: it flips `trained_today` and lifts
+  // `today_load` off "none", both of which are banded decision inputs of long standing
+  // and are hashed for EVERY read. From there the day's grade holds at "easy" and
+  // nothing about the decision changes, so nothing about the hash may either.
+  logSet("Barbell Row");
+  const first = repo.dayRead(DRIVE_REF);
+  assert.equal(first.decision.rule_code, "push_drive_targeted_training");
+
+  logSet("Barbell Row");
+  const second = repo.dayRead(DRIVE_REF);
+  assert.equal(second.input_fingerprint, first.input_fingerprint);
+
+  // Now log a different group, which is what actually shifts the rendered due list.
+  logSet("Barbell Curl");
+  logSet("Barbell Curl");
+  const third = repo.dayRead(DRIVE_REF);
+  assert.equal(third.decision.rule_code, "push_drive_targeted_training");
+  assert.equal(third.signals.today_load, first.signals.today_load, "still the same load grade");
+  assert.notEqual(third.focus, first.focus, "the due list really did move — that is the case being pinned");
+  assert.equal(third.input_fingerprint, first.input_fingerprint);
+});
+
+// Every read now carries `signals.training_drive`. If the mere APPEARANCE of that key
+// moved the hash, the first open after deploy would discard every warm agentic Brief on
+// the estate and queue a fresh agent call for each — so the default posture is omitted
+// from the hash entirely, exactly as `fuel` is kept out of it for the same reason.
+test("the drive key's appearance does not invalidate a warm steady read", () => {
+  seedDriveMorning();
+  const steady = repo.dayRead(DRIVE_REF);
+  assert.equal(steady.signals.training_drive, "steady");
+
+  const preDeploy = { kind: steady.kind, focus: steady.focus, signals: { ...steady.signals } };
+  delete preDeploy.signals.training_drive;
+  assert.equal(
+    repo.dayReadInputFingerprint(DRIVE_REF, preDeploy),
+    repo.dayReadInputFingerprint(DRIVE_REF, { kind: steady.kind, focus: steady.focus, signals: steady.signals })
+  );
+
+  // A real flip still throws the warm read away (pinned above too, end to end).
+  const pushed = { kind: steady.kind, focus: steady.focus, signals: { ...steady.signals, training_drive: "push" } };
+  assert.notEqual(repo.dayReadInputFingerprint(DRIVE_REF, pushed), repo.dayReadInputFingerprint(DRIVE_REF, preDeploy));
 });
 
 test("does NOT force rest on only 2 consecutive training days", () => {
@@ -1361,6 +1695,8 @@ function everyRegisteredPhrasing() {
   for (const [code, variants] of Object.entries(DAY_READ_POLICY_REASON_VARIANTS)) push(`reason:${code}`, variants);
   for (const [kind, variants] of Object.entries(DAY_READ_HEADLINE_VARIANTS)) push(`headline:${kind}`, variants);
   push("headline:train_focus", DAY_READ_FOCUS_HEADLINE_VARIANTS);
+  push("headline:train_drive", DAY_READ_DRIVE_HEADLINE_VARIANTS);
+  push("headline:train_focus_drive", DAY_READ_DRIVE_FOCUS_HEADLINE_VARIANTS);
   push("recovery_week_soften_why", RECOVERY_WEEK_SOFTEN_WHY);
   for (const [key, outcome] of [...Object.entries(DAY_READ_OUTCOMES), ["unprogrammed_easy_day", UNPROGRAMMED_EASY_DAY]])
     push(`outcome:${key}`, outcome.reasons);
@@ -1374,6 +1710,12 @@ function everyRegisteredPhrasing() {
     push(
       `quiet_streak_guarded:${n}`,
       QUIET_STREAK_GUARDED_WHY.map((render) => render(quietOrdinal(n)))
+    );
+  }
+  for (const groups of ["back", "quads and back"]) {
+    push(
+      `push_drive:${groups}`,
+      PUSH_DRIVE_WHY.map((render) => render(groups))
     );
   }
   push(
@@ -1532,6 +1874,20 @@ test("every headline phrasing reads as a calm finished sentence, several per kin
     assert.match(text, /Lower body/, `the focus form must name the focus: ${JSON.stringify(text)}`);
     assert.match(text, /[.!?]$/, "the focus form should read as a finished sentence");
     holdsTheConstitution(text, "headline:train_focus");
+  }
+  // The training-drive read is a third flavour of `train` and owns its own two forms —
+  // held to the same shape rules, and required to read as a NARROWER day rather than as
+  // the backed day's invitation to reach for more.
+  assert.ok(DAY_READ_DRIVE_HEADLINE_VARIANTS.length >= 3, "the drive form needs several phrasings");
+  for (const text of DAY_READ_DRIVE_HEADLINE_VARIANTS) {
+    assert.match(text, /^[A-Z]/, `the drive headline should open as a sentence: ${JSON.stringify(text)}`);
+    assert.match(text, /[.!?]$/, "the drive headline should read as a finished sentence");
+    holdsTheConstitution(text, "headline:train_drive");
+  }
+  for (const text of DAY_READ_DRIVE_FOCUS_HEADLINE_VARIANTS) {
+    assert.match(text, /Lower body/, `the drive focus form must name the focus: ${JSON.stringify(text)}`);
+    assert.match(text, /[.!?]$/, "the drive focus form should read as a finished sentence");
+    holdsTheConstitution(text, "headline:train_focus_drive");
   }
 });
 
