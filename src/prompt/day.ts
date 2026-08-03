@@ -394,6 +394,23 @@ export function buildDayReadPrompt(
   } catch {
     backedBlock = "";
   }
+  // The athlete's OWN standing choice, named on the same terms. `training_drive_push`
+  // is set only when the deterministic gate has ALREADY passed (evidence green, muscle
+  // groups genuinely due, inside the load ceiling, nothing clinical) on a day they have
+  // explicitly set their drive to push. The safety clamp downstream only ever moves a
+  // read LEFT, so without this nothing stopped one model sentence from quietly
+  // reverting a setting they went and flipped — the same silence that left `backed`
+  // invisible above.
+  let driveBlock = "";
+  try {
+    const drive: any = (baseline.signals as any)?.training_drive_push;
+    if (drive) {
+      const due = Array.isArray(drive.due) && drive.due.length ? ` (what's due: ${drive.due.join(" and ")})` : "";
+      driveBlock = `\nTHEY HAVE ASKED TO PUSH (DATA.signals.training_drive_push): this is the athlete's own standing choice, not an inference — they deliberately asked for the work that's due on a day that can carry it, and every condition for that has already been checked and met today${due}. Write the read as the targeted training day it is. You MAY still disagree, but only by naming the CONCRETE thing that changed your mind — a short night, a fresh flag, something they told you — never on taste, and never by quietly softening it into an ordinary easy day. Same rules as everything else: a suggestion in a friend's voice, no score, no gate.\n`;
+    }
+  } catch {
+    driveBlock = "";
+  }
   const overrideBlock = opts.override?.trim()
     ? `\nUSER OVERRIDE (honor this — they're steering): "${opts.override.trim()}". Reshape the read accordingly (e.g. "rough night" → lean easy/rest; "short on time" → a compressed session; "I want to train anyway" → a train read even if the baseline leaned rest, kept appropriately light).\n`
     : "";
@@ -493,7 +510,7 @@ You MAY disagree with the baseline when the whole picture warrants it — it is 
 RECENT TRAINING (most recent first): ${sessionLine}.
 TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${renderRecentReads(feltDate)}${renderReadOutcomes(context, baseline)}${renderPeriodization(feltDate)}${doneBlock}${lastNightLine}${oneNightLine}
 ${CONTEXT_GUARDRAILS}
-${renderSignalState(context)}${renderCoachingFocus(context, { brief: true })}${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderRunZones(context)}${renderRunPlan(context)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderMuscleGroups(context)}${renderPerformance(context, { brief: true })}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${feltBlock}${learnedBlock}${backedBlock}${overrideBlock}
+${renderSignalState(context)}${renderCoachingFocus(context, { brief: true })}${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderRunZones(context)}${renderRunPlan(context)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderMuscleGroups(context)}${renderPerformance(context, { brief: true })}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${feltBlock}${learnedBlock}${backedBlock}${driveBlock}${overrideBlock}
 ${renderJsonContract(DAY_READ_SCHEMA)}
 
 DATA:

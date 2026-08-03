@@ -36,6 +36,11 @@ import { sensorAgeDays } from "./sensor-freshness.js";
 
 export type WearAbsenceShape = "episodic" | "unworn" | "lapsed";
 
+// The variant SETS are one finer than the shapes: an episodic wearer's silence is
+// the same fact whichever series it is, but only the sleep series may be called a
+// night. Every other shape's words are already field-neutral.
+export type WearAbsenceVoiceSet = WearAbsenceShape | "episodic_nights";
+
 /** What a surface needs to say absence well, derived once from a cadence. */
 export interface WearAbsenceView {
   shape: WearAbsenceShape;
@@ -48,7 +53,25 @@ export interface WearAbsenceView {
   median_gap_days: number | null;
   /** Plain-words age of the last reading ("about 3 weeks ago"), or null. */
   age_phrase: string | null;
+  /** Which recovery series this cadence describes ("sleep_min"/"hrv_ms"/…), or null. */
+  field: string | null;
+  /**
+   * What the phrasing is allowed to CALL the thing the watch last caught.
+   *
+   * "nights" only when the series is sleep — a night is the one reading a person
+   * recognizes as a night. Every other series, and an unknown one, is "readings",
+   * which is true of all of them.
+   *
+   * This exists because the cadence spoken for is the DENSEST series, and on a live
+   * payload that was resting HR while the sentence said "the watch last caught a
+   * night today" — on a day with no sleep row at all. The prose must be keyed to the
+   * series it names, not to the series that happens to have the most samples.
+   */
+  measures: "nights" | "readings";
 }
+
+/** The recovery-quality field whose readings a person would call nights. */
+export const SLEEP_CADENCE_FIELD = "sleep_min";
 
 // ---- plain-words age --------------------------------------------------------
 
@@ -80,7 +103,14 @@ export function readingAgePhrase(ageDays: number | null | undefined): string | n
  * quality entries). A null/garbage cadence resolves to `unworn`, which is the
  * safe direction: it says less than we know rather than more.
  */
-export function wearAbsenceView(cadence: Partial<SensorCadence> | null | undefined, asOf: string): WearAbsenceView {
+export function wearAbsenceView(
+  cadence: Partial<SensorCadence> | null | undefined,
+  asOf: string,
+  // WHICH recovery series this cadence is. Optional, and its absence is the
+  // conservative direction: an unnamed series may only be spoken of as "readings",
+  // never as nights.
+  field?: string | null
+): WearAbsenceView {
   const readings = Math.max(0, Math.trunc(Number(cadence?.readings)) || 0);
   const lastDate = typeof cadence?.last_reading_date === "string" ? cadence.last_reading_date : null;
   const pattern: WearPattern =
@@ -118,6 +148,8 @@ export function wearAbsenceView(cadence: Partial<SensorCadence> | null | undefin
     age_days: ageDays,
     median_gap_days: medianGap,
     age_phrase: readingAgePhrase(ageDays),
+    field: typeof field === "string" && field ? field : null,
+    measures: field === SLEEP_CADENCE_FIELD ? "nights" : "readings",
   };
 }
 
@@ -133,20 +165,32 @@ export function wearAbsenceView(cadence: Partial<SensorCadence> | null | undefin
  * overclaim in the other direction.
  */
 export function dominantSensorCadence(quality: unknown): SensorCadence | null {
+  return dominantSensorCadenceEntry(quality)?.cadence ?? null;
+}
+
+/**
+ * The same choice, WITH the name of the series that won it.
+ *
+ * The field matters to the words: the winning series is routinely resting HR, and
+ * only the sleep series may be spoken of as nights (see `WearAbsenceView.measures`).
+ * `dominantSensorCadence` above is this function with the name thrown away, kept for
+ * callers that only need the numbers.
+ */
+export function dominantSensorCadenceEntry(quality: unknown): { field: string; cadence: SensorCadence } | null {
   const map = quality && typeof quality === "object" ? (quality as Record<string, any>) : {};
-  let best: SensorCadence | null = null;
-  for (const entry of Object.values(map)) {
+  let best: { field: string; cadence: SensorCadence } | null = null;
+  for (const [field, entry] of Object.entries(map)) {
     const cadence = entry && typeof entry === "object" ? (entry.cadence as SensorCadence | undefined) : undefined;
     if (!cadence || typeof cadence !== "object") continue;
     if (!best) {
-      best = cadence;
+      best = { field, cadence };
       continue;
     }
     const better =
-      Number(cadence.readings || 0) > Number(best.readings || 0) ||
-      (Number(cadence.readings || 0) === Number(best.readings || 0) &&
-        String(cadence.last_reading_date ?? "") > String(best.last_reading_date ?? ""));
-    if (better) best = cadence;
+      Number(cadence.readings || 0) > Number(best.cadence.readings || 0) ||
+      (Number(cadence.readings || 0) === Number(best.cadence.readings || 0) &&
+        String(cadence.last_reading_date ?? "") > String(best.cadence.last_reading_date ?? ""));
+    if (better) best = { field, cadence };
   }
   return best;
 }
@@ -167,7 +211,15 @@ export function dominantSensorCadence(quality: unknown): SensorCadence | null {
 
 /** Full sentences — the signal state's voice, and the next step's `why`. */
 export const WEAR_ABSENCE_SENTENCES = {
+  // The FIELD-NEUTRAL episodic set: true of whichever series the cadence describes,
+  // and therefore the default. `episodic_nights` below is the same fact said about a
+  // night, and is reachable only when the series really is sleep (see `measures`).
   episodic: [
+    "The last reading your watch took was {}, which is the rhythm you wear it in — so today goes by how you feel.",
+    "Nothing new from the watch since {}, and that's normal for how you use it; how you feel is the read today.",
+    "Your watch picks things up here and there and the last one was {} — so today leans on your own sense of it.",
+  ],
+  episodic_nights: [
     "The last night your watch recorded was {}, which is the rhythm you wear it in — so today goes by how you feel.",
     "Nothing new from the watch since {}, and that's normal for how you use it; how you feel is the read today.",
     "Your watch catches nights here and there and the last one was {} — so today leans on your own sense of it.",
@@ -182,11 +234,16 @@ export const WEAR_ABSENCE_SENTENCES = {
     "The last reading came in {}, which is a longer quiet stretch than usual for you; how you feel carries today.",
     "The watch went quiet {}, unlike its usual run of days — so go by your own sense of today.",
   ],
-} as const satisfies Record<WearAbsenceShape, readonly [string, ...string[]]>;
+} as const satisfies Record<WearAbsenceVoiceSet, readonly [string, ...string[]]>;
 
 /** Lowercase FRAGMENTS for the Brief's contributor row, which supplies the label. */
 export const WEAR_ABSENCE_ROW_STATES = {
   episodic: [
+    "last reading {} — your usual rhythm, not a gap",
+    "the watch last picked something up {}; that's how you wear it",
+    "nothing new from the watch since {} — normal for your pattern",
+  ],
+  episodic_nights: [
     "last recorded night {} — your usual rhythm, not a gap",
     "the watch last caught a night {}; that's how you wear it",
     "nothing new from the watch since {} — normal for your pattern",
@@ -201,7 +258,7 @@ export const WEAR_ABSENCE_ROW_STATES = {
     "the watch went quiet {}; a morning check-in fills it in",
     "nothing synced since the last reading {} — a morning check-in sharpens the read",
   ],
-} as const satisfies Record<WearAbsenceShape, readonly [string, ...string[]]>;
+} as const satisfies Record<WearAbsenceVoiceSet, readonly [string, ...string[]]>;
 
 // The subject a set renders with when no age is known — and the sample the static
 // registries render for the constitution tests.
@@ -213,10 +270,20 @@ function render(variants: readonly [string, ...string[]], view: WearAbsenceView 
   return pickDayVariant(spoken, date, key);
 }
 
+/**
+ * Which variant set speaks for this view. A "night" claim is licensed only by the
+ * sleep series; anything else — including a view whose field was never named — takes
+ * the field-neutral episodic words.
+ */
+export function wearAbsenceVoiceSet(view: WearAbsenceView | null | undefined): WearAbsenceVoiceSet {
+  const shape = view?.shape ?? "unworn";
+  return shape === "episodic" && view?.measures === "nights" ? "episodic_nights" : shape;
+}
+
 /** One athlete-facing SENTENCE about today's silence, rotating by day. */
 export function wearAbsenceWhy(view: WearAbsenceView | null | undefined, date: string, key = "wear_absence"): string {
-  const shape = view?.shape ?? "unworn";
-  return render(WEAR_ABSENCE_SENTENCES[shape], view ?? null, date, `${key}:${shape}`);
+  const set = wearAbsenceVoiceSet(view);
+  return render(WEAR_ABSENCE_SENTENCES[set], view ?? null, date, `${key}:${set}`);
 }
 
 /** One athlete-facing FRAGMENT for the Brief's contributor row, rotating by day. */
@@ -225,8 +292,8 @@ export function wearAbsenceRowState(
   date: string,
   key = "wear_absence:row"
 ): string {
-  const shape = view?.shape ?? "unworn";
-  return render(WEAR_ABSENCE_ROW_STATES[shape], view ?? null, date, `${key}:${shape}`);
+  const set = wearAbsenceVoiceSet(view);
+  return render(WEAR_ABSENCE_ROW_STATES[set], view ?? null, date, `${key}:${set}`);
 }
 
 // ---- the machine register ---------------------------------------------------

@@ -220,7 +220,10 @@ test("the recovery view ships one quality map instead of four copies of it", () 
 // TOOLS allow for an entire query loop. The ceiling is generous on purpose (it must
 // not flake as the demo seed's dates roll); what it catches is a future prompt or
 // context key quietly restoring the whole-snapshot dump.
-const DAY_READ_DATA_CEILING_BYTES = 140_000;
+// Lowered when the Brief's `recent_sessions` stopped shipping raw set rows, Garmin
+// payloads and composition blobs (session_detail: "summary"). Still generous — it
+// must not flake as the seed's dates roll — but it now locks that gain in.
+const DAY_READ_DATA_CEILING_BYTES = 120_000;
 
 test("the Brief's DATA payload stays under its byte ceiling", () => {
   seedDemo();
@@ -427,4 +430,96 @@ test("a fourteen-day model reaches the prompt as at most seven days", () => {
   assert.equal(projected.recent.length, 7);
   assert.equal(projected.recent[0].date, "2026-03-08", "the MOST RECENT week is what survives");
   assert.equal(projected.recent.at(-1).date, "2026-03-14");
+});
+
+// ---- the Brief reads the RHYTHM of training, not every set of it -------------
+//
+// `recent_sessions` was the single largest key in the one prompt that ships every
+// morning, and most of its weight was structure the Brief never reads: the raw set
+// rows (already digested into training_signals / program_state / progression), the
+// Garmin payload and the daily-composition blob. On a deployed DB a session with
+// ZERO logged sets still cost several KB of the last two.
+
+test("the Brief's sessions carry the shape of the work, not the raw set rows", () => {
+  seedDemo();
+  const ctx = repo.getCoachContext();
+  const projected = projectCoachContext(ctx, "day_read").recent_sessions;
+  assert.ok(projected.length > 0, "the demo seed logs real sessions");
+
+  for (const session of projected) {
+    for (const gone of ["garmin", "daily_session", "id", "plan_day_id", "created_at"]) {
+      assert.ok(!Object.hasOwn(session, gone), `a summarized session drops ${gone}`);
+    }
+    // What a day read actually uses: when, what kind, and what they said about it.
+    for (const kept of ["date", "kind"]) assert.ok(Object.hasOwn(session, kept), `it keeps ${kept}`);
+    for (const set of session.sets ?? []) {
+      assert.ok(Object.hasOwn(set, "exercise") && Object.hasOwn(set, "sets"), "a roll-up names the movement + volume");
+      assert.ok(!Object.hasOwn(set, "set_number"), "and is not a set row");
+    }
+  }
+
+  // Feedback survives verbatim — it is the whole reason the Brief looks at sessions.
+  const rated = ctx.recent_sessions.find((s) => s.soreness != null || s.performance != null || s.joint_pain);
+  if (rated) {
+    const match = projected.find((s) => s.date === rated.date);
+    assert.ok(match, "the rated session is still in the window");
+    assert.equal(match.soreness, rated.soreness);
+    assert.equal(match.performance, rated.performance);
+    assert.equal(match.joint_pain, rated.joint_pain);
+  }
+});
+
+test("the roll-up keeps the top set honest about both weight encodings", () => {
+  const sets = [
+    { exercise: "Squat", mode: "reps", set_number: 1, weight: 185, reps: 5, rir: 2 },
+    { exercise: "Squat", mode: "reps", set_number: 2, weight: 205, reps: 3, rir: 1 },
+    { exercise: "Pull-up", mode: "reps", set_number: 1, weight: -30, reps: 8, rir: 2 },
+    { exercise: "Pull-up", mode: "reps", set_number: 2, weight: -10, reps: 5, rir: 1 },
+    { exercise: "Push-up", mode: "reps", set_number: 1, weight: null, reps: 12, rir: 2 },
+    { exercise: "Push-up", mode: "reps", set_number: 2, weight: null, reps: 20, rir: 1 },
+    { exercise: "Plank", mode: "timed", set_number: 1, duration_sec: 45 },
+    { exercise: "Plank", mode: "timed", set_number: 2, duration_sec: 70 },
+  ];
+  const ctx = { recent_sessions: [{ date: "2026-01-01", kind: "strength", sets }] };
+  const [session] = projectCoachContext(ctx, "day_read").recent_sessions;
+  const by = Object.fromEntries(session.sets.map((row) => [row.exercise, row]));
+
+  assert.deepEqual(
+    { sets: by.Squat.sets, reps: by.Squat.reps, top_weight: by.Squat.top_weight, top_reps: by.Squat.top_reps },
+    { sets: 2, reps: 8, top_weight: 205, top_reps: 3 }
+  );
+  // Assisted: -10 is TEN pounds of help, which is the harder set of the two.
+  assert.equal(by["Pull-up"].top_weight, -10);
+  // Bodyweight stays null (never absent, never 0), and more reps is the better set.
+  assert.ok(Object.hasOwn(by["Push-up"], "top_weight") && by["Push-up"].top_weight === null);
+  assert.equal(by["Push-up"].top_reps, 20);
+  // A timed movement ranks on seconds and carries no load at all.
+  assert.equal(by.Plank.top_duration_sec, 70);
+  assert.ok(!Object.hasOwn(by.Plank, "top_weight"));
+});
+
+test("only the Brief summarizes: every other site keeps its full set rows", () => {
+  seedDemo();
+  const ctx = repo.getCoachContext();
+  const rawSets = ctx.recent_sessions.flatMap((session) => session.sets ?? []).length;
+  assert.ok(rawSets > 0);
+
+  for (const [site, spec] of Object.entries(PROMPT_CONTEXT_SITES)) {
+    const projected = projectCoachContext(ctx, site).recent_sessions ?? [];
+    const summarized = spec.session_detail === "summary";
+    assert.equal(summarized, site === "day_read", `${site}: only the Brief summarizes`);
+    if (summarized) continue;
+    const inWindow = ctx.recent_sessions.slice(0, spec.sessions);
+    assert.equal(
+      projected.flatMap((session) => session.sets ?? []).length,
+      inWindow.flatMap((session) => session.sets ?? []).length,
+      `${site} keeps every set in its window`
+    );
+    // And the session-level blobs a plan-shaping site may read are untouched.
+    for (const key of ["garmin", "daily_session"]) {
+      if (inWindow.length && Object.hasOwn(inWindow[0], key)) {
+        assert.ok(Object.hasOwn(projected[0], key), `${site} keeps ${key}`);
+      }
+    }
+  }
 });

@@ -61,7 +61,7 @@ import {
   type UnifiedSignalState,
 } from "./signal-state.js";
 import {
-  dominantSensorCadence,
+  dominantSensorCadenceEntry,
   isWorkingEpisodicPattern,
   wearAbsenceRowState,
   wearAbsenceView,
@@ -1997,8 +1997,18 @@ export function dayRead(
   // extra query and no second opinion about the same series. Null when the
   // recovery snapshot predates that field (a caller passing a hand-built
   // `recovery`), which leaves every downstream surface exactly where it is today.
-  const recoveryCadence = dominantSensorCadence(rec?.quality ?? rec?.recovery?.quality ?? {});
-  const recoveryAbsence = recoveryCadence ? wearAbsenceView(recoveryCadence, d) : null;
+  // The FIELD rides along because the words depend on it: the densest series is
+  // routinely resting HR, and only the sleep series may be spoken of as a night.
+  const recoveryCadenceEntry = dominantSensorCadenceEntry(rec?.quality ?? rec?.recovery?.quality ?? {});
+  const recoveryAbsence = recoveryCadenceEntry
+    ? wearAbsenceView(recoveryCadenceEntry.cadence, d, recoveryCadenceEntry.field)
+    : null;
+  // Absence prose describes a day with NOTHING to lean on, and was being written on
+  // every day regardless — including days whose wearable data was driving the read,
+  // where it contradicted the read beside it. Consumers all gate on
+  // `has_recovery_data === false`, so it stayed off the screen; it is persisted into
+  // the decision ledger either way, and nothing gates it there.
+  const lacksBearingReading = !rec?.has_data;
 
   const signals = {
     // Active context the brain is accounting for (injury/illness/travel), or null.
@@ -2053,8 +2063,9 @@ export function dayRead(
           // A real, current habit rather than two readings left over from last
           // spring — the predicate a surface uses before deciding to stay quiet.
           working_episodic: isWorkingEpisodicPattern(recoveryAbsence),
-          absence_state: wearAbsenceRowState(recoveryAbsence, d),
-          absence_why: wearAbsenceWhy(recoveryAbsence, d),
+          // Null on a day that HAS a bearing reading — there is no absence to word.
+          absence_state: lacksBearingReading ? wearAbsenceRowState(recoveryAbsence, d) : null,
+          absence_why: lacksBearingReading ? wearAbsenceWhy(recoveryAbsence, d) : null,
         }
       : null,
     // Last night's single-night sleep architecture + HRV (plain numbers + a calm
@@ -2575,7 +2586,16 @@ export function dayRead(
         // and clamps nothing.
         // `schedulePressure` / `commitmentPressure` are derived once above the rule
         // list, so the drive read compresses on exactly the same condition.
+        // MACHINE register, and now named as such. `life_capacity.reason` is
+        // third-person evidence prose written for the model and the provenance trail
+        // ("A current commitment or stressful stretch is likely to compress recovery
+        // capacity."), and it sat on a field called plain `reason` inside the read's
+        // own signals — one plausible client render away from printing observer prose
+        // at the athlete. The athlete-facing counterpart is the dimension's `voice`,
+        // carried beside it: a surface that shows this must speak it through
+        // spokenSignalVoice, never render the evidence string.
         const scheduleReason = signalState.dimensions.life_capacity.reason;
+        const scheduleVoice = signalState.dimensions.life_capacity.voice;
         if (commitmentPressure) {
           caveats.push(pickDayVariant(COMMITMENT_PRESSURE_CAVEAT, d, "planned_training:commitment_pressure"));
           (signals as any).schedule = {
@@ -2583,7 +2603,8 @@ export function dayRead(
             compressed: true,
             original_est_minutes: 60,
             est_minutes: 40,
-            reason: scheduleReason,
+            evidence_reason: scheduleReason,
+            voice: scheduleVoice,
           };
         } else if (schedulePressure) {
           caveats.push(pickDayVariant(LIFE_PRESSURE_CAVEAT, d, "planned_training:life_pressure"));
@@ -2596,7 +2617,8 @@ export function dayRead(
             compressed: false,
             original_est_minutes: 60,
             est_minutes: 60,
-            reason: scheduleReason,
+            evidence_reason: scheduleReason,
+            voice: scheduleVoice,
           };
         }
         // A recovery week ALWAYS pushes its own caveat above, so the caveat arm is the

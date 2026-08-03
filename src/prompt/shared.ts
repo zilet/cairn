@@ -697,6 +697,17 @@ export function renderTrainingSignals(ctx: any): string {
     for (const p of stalled) lines.push(`  - ${p.exercise}: ${p.reason}`);
   }
   if (ts.autoregulation?.note) lines.push(`AUTOREGULATION (recent 1-tap body feedback): ${ts.autoregulation.note}`);
+  // The POSITIVE half of the same rollup. It was computed and shipped in DATA but
+  // never rendered, so the model saw the brake in plain language and the "this is
+  // landing" evidence only as a buried JSON flag — which is how a read came back
+  // asserting the lifts felt heavier than they should on a morning whose freshest
+  // rated session was strong. Both halves are mutually exclusive by construction
+  // (session_quality is withheld while soreness or a joint report is live), so this
+  // never contradicts the line above it.
+  if (ts.session_quality?.note)
+    lines.push(
+      `SESSION QUALITY (recent 1-tap body feedback — the work is landing; do NOT describe it as heavy, flat or below their usual): ${ts.session_quality.note}`
+    );
   if (!lines.length) return "";
   return `\nLOGGED-PERFORMANCE SIGNALS (deterministic, from the user's OWN recent sets + feedback — evidence for whether a lift earned a bump, so the plan visibly reflects what they actually did):\n${lines.join("\n")}\n`;
 }

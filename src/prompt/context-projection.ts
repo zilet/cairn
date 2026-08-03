@@ -149,6 +149,19 @@ export interface PromptSiteSpec {
   keys: readonly PromptContextKey[];
   /** How many recent sessions this site's DATA carries (see compactSessions). */
   sessions: number;
+  /**
+   * How much of each session this site's DATA carries.
+   *
+   * "full" (the default, and every plan-shaping site) is the whole row with each set
+   * projected to SET_FIELDS — a site that PRESCRIBES the next session has to see the
+   * working sets it is progressing from.
+   *
+   * "summary" is for a site that reads the RHYTHM of recent training and nothing
+   * finer: the date, the kind, what the athlete said about it, and a per-exercise
+   * roll-up — with the raw set rows, the Garmin blob and the daily-composition blob
+   * dropped (see summarizeSession).
+   */
+  session_detail?: "full" | "summary";
 }
 
 // `recent_sessions` is 30% of the whole snapshot (58 KB / 20 items on the demo seed).
@@ -209,6 +222,13 @@ export const PROMPT_CONTEXT_SITES = {
       "read_adherence",
     ],
     sessions: SESSIONS_RECENT,
+    // The Brief READS the day; it does not prescribe the session. Every set-level
+    // decision it could touch has already been made deterministically and arrives
+    // pre-digested (training_signals, program_state, progression, signal_state), and
+    // the builder renders its own session + rhythm lines off the FULL context — so
+    // the raw set rows, the Garmin payload and the daily-composition blob on each
+    // session were pure weight in the one prompt that ships every single morning.
+    session_detail: "summary",
   },
 
   // On-demand session. Same plan-shaping needs as the coach minus the weekly framing:
@@ -388,12 +408,108 @@ function projectSet(set: unknown): unknown {
   return out;
 }
 
-// Cap the window and project each set's fields. Session-level fields (date, title,
-// soreness/performance/joint_pain, notes, skips, garmin) are all read by prompts and
-// stay untouched.
-function compactSessions(sessions: unknown, limit: number): unknown {
+// ---------- the SUMMARY session (session_detail: "summary") ----------
+//
+// A site that reads the rhythm of recent training needs to know WHEN they trained,
+// what kind of day it was, what they said about it, and roughly what the work was.
+// It does not need every set row, and it certainly does not need the raw Garmin
+// payload or the daily-composition blob hanging off each session — on a deployed DB
+// those two are the bulk of `recent_sessions` (a session with zero sets still costs
+// several KB of them), and nothing in the day-read prompt names or renders either.
+//
+// Session-level fields kept verbatim. `finished_at` stays because "logged but never
+// finished" is a real distinction; the internal row ids, `created_at` (the session's
+// own `date` covers it) and `plan_day_id` go.
+const SUMMARY_SESSION_FIELDS = [
+  "date",
+  "kind",
+  "title",
+  "day_name",
+  "duration_min",
+  "finished_at",
+  "notes",
+  "soreness",
+  "performance",
+  "joint_pain",
+  "skips",
+] as const;
+
+interface ExerciseRollup {
+  exercise: unknown;
+  mode?: unknown;
+  sets: number;
+  reps?: number;
+  top_weight?: unknown;
+  top_reps?: unknown;
+  top_rir?: unknown;
+  top_duration_sec?: unknown;
+}
+
+// One row per exercise: how much of it there was, and the single best set.
+//
+// "Best" is the plain numeric MAX of `weight`, which is correct for both encodings
+// (CLAUDE.md): a smaller assist is a harder set, and -10 > -30 says exactly that. A
+// bodyweight set (`weight: null`) can only win when no set of that exercise carried a
+// number at all, so `top_weight: null` still reads as "bodyweight", never as "unknown".
+// Timed movements rank on `duration_sec` and carry no load at all.
+function summarizeSets(sets: readonly unknown[]): ExerciseRollup[] {
+  const byExercise = new Map<string, ExerciseRollup>();
+  for (const raw of sets) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const set = raw as Record<string, unknown>;
+    const key = String(set.exercise ?? "");
+    let row = byExercise.get(key);
+    if (!row) {
+      row = { exercise: set.exercise, sets: 0 };
+      if (set.mode != null) row.mode = set.mode;
+      byExercise.set(key, row);
+    }
+    row.sets += 1;
+    const reps = Number(set.reps);
+    if (Number.isFinite(reps)) row.reps = (row.reps ?? 0) + reps;
+
+    if (set.mode === "timed") {
+      const seconds = Number(set.duration_sec);
+      const best = Number(row.top_duration_sec);
+      if (Number.isFinite(seconds) && (!Number.isFinite(best) || seconds > best)) row.top_duration_sec = seconds;
+      continue;
+    }
+    const weight = Number(set.weight);
+    const bestWeight = Number(row.top_weight);
+    const carriesLoad = set.weight != null && Number.isFinite(weight);
+    const hasTop = "top_weight" in row;
+    const hasLoadedTop = hasTop && row.top_weight != null && Number.isFinite(bestWeight);
+    // A loaded set always outranks a bodyweight one; between two loaded sets the
+    // heavier wins; between two bodyweight sets the one with more reps wins.
+    let wins: boolean;
+    if (carriesLoad) wins = !hasLoadedTop || weight > bestWeight;
+    else if (hasLoadedTop) wins = false;
+    else wins = !hasTop || Number(set.reps) > Number(row.top_reps);
+    if (!wins) continue;
+    row.top_weight = carriesLoad ? weight : null;
+    row.top_reps = set.reps ?? null;
+    row.top_rir = set.rir ?? null;
+  }
+  return [...byExercise.values()];
+}
+
+function summarizeSession(session: unknown): unknown {
+  if (!session || typeof session !== "object" || Array.isArray(session)) return session;
+  const row = session as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const field of SUMMARY_SESSION_FIELDS) if (Object.hasOwn(row, field)) out[field] = row[field];
+  if (Array.isArray(row.sets)) out.sets = summarizeSets(row.sets);
+  return out;
+}
+
+// Cap the window and right-size each session for the site. At "full" detail the
+// session-level fields (date, title, soreness/performance/joint_pain, notes, skips,
+// garmin) are all read by prompts and stay untouched, and only each SET is projected.
+function compactSessions(sessions: unknown, limit: number, detail: "full" | "summary" = "full"): unknown {
   if (!Array.isArray(sessions)) return sessions;
-  return sessions.slice(0, limit).map((session) => {
+  const window = sessions.slice(0, limit);
+  if (detail === "summary") return window.map(summarizeSession);
+  return window.map((session) => {
     if (!session || typeof session !== "object" || Array.isArray(session)) return session;
     const row = session as Record<string, unknown>;
     if (!Array.isArray(row.sets)) return row;
@@ -477,7 +593,10 @@ function compactReadAdherence(model: unknown): unknown {
  * mutates the input.
  */
 export function projectCoachContext(ctx: PartialCoachContext, site: PromptSite): PartialCoachContext {
-  const spec = PROMPT_CONTEXT_SITES[site];
+  // Annotated: the `as const satisfies` above keeps each site's literal type, and a
+  // union member that simply omits the optional `session_detail` has no such property
+  // to read. The interface is the contract every member satisfies.
+  const spec: PromptSiteSpec = PROMPT_CONTEXT_SITES[site];
   const source = (ctx ?? {}) as Record<string, unknown>;
   const out: Record<string, unknown> = {};
   for (const key of spec.keys) {
@@ -485,7 +604,7 @@ export function projectCoachContext(ctx: PartialCoachContext, site: PromptSite):
     const value = source[key];
     out[key] =
       key === "recent_sessions"
-        ? compactSessions(value, spec.sessions)
+        ? compactSessions(value, spec.sessions, spec.session_detail ?? "full")
         : key === "recovery" || key === "garmin"
           ? compactRecovery(value)
           : key === "coaching_focus"

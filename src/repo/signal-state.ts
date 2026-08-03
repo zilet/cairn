@@ -8,11 +8,13 @@ import { pickDayVariant } from "./brain/day-read-rules.js";
 import { SENSOR_MAX_AGE_DAYS } from "./sensor-freshness.js";
 import type { SensorCadence } from "./sensor-cadence.js";
 import {
-  dominantSensorCadence,
+  dominantSensorCadenceEntry,
   wearAbsenceEvidence,
   wearAbsenceView,
   WEAR_ABSENCE_SAMPLE_AGE,
   WEAR_ABSENCE_SENTENCES,
+  wearAbsenceVoiceSet,
+  type WearAbsenceVoiceSet,
   type WearAbsenceView,
 } from "./wear-pattern-voice.js";
 import { joinList } from "./shared.js";
@@ -204,6 +206,8 @@ export const SIGNAL_VOICE = {
       "Your most recent night came up short, so today is worth easing into.",
       "The last night on record was a short one — today is a good place to give some of that back.",
       "You've got one short night behind you, which is reason enough to keep today gentle.",
+      "One short night sits behind today, so there's no need to make this a big one.",
+      "Last night came up short — a good day to ask a little less of yourself.",
     ],
   },
   sleep_night_ok: {
@@ -328,6 +332,8 @@ export const SIGNAL_VOICE = {
       "You're feeling run-down today — rest is the smart call.",
       "You said you're low today, and that's the signal that counts — rest.",
       "Feeling run-down is reason enough. Take today.",
+      "You're running low today, and that's the read that counts — rest.",
+      "Low by your own account today, so let this one be a rest day.",
     ],
   },
   felt_energy_ok: {
@@ -344,6 +350,8 @@ export const SIGNAL_VOICE = {
       "You don't feel recovered this morning, whatever the watch says — and that's the read that counts.",
       "You woke up feeling poorly rested, which outranks any device reading.",
       "By your own read you're not rested today, so today is for recovering.",
+      "You haven't woken up rested, and that's worth listening to ahead of anything a watch says.",
+      "However you slept, you don't feel recovered — today is for getting some of that back.",
     ],
   },
   sleep_feel_ok: {
@@ -498,6 +506,8 @@ export const SIGNAL_VOICE = {
       "Keep whatever you do today pain-free around your {}.",
       "Work around your {} today and stop short of anything that aggravates it.",
       "Your {} still needs working around, so keep every movement comfortable today.",
+      "Give your {} a wide berth today and keep everything else comfortable.",
+      "Today works best built around your {}, with nothing that puts it under strain.",
     ],
   },
   joint_pain: {
@@ -511,6 +521,8 @@ export const SIGNAL_VOICE = {
       "Keep today pain-free around your {} and swap out any movement that provokes pain.",
       "Worth working around your {} today, so choose movements that stay comfortable.",
       "Stay off anything that bothers your {} today and pick a pain-free substitute.",
+      "Choose movements that leave your {} comfortable today.",
+      "Today is worth shaping around your {}, skipping anything that provokes pain.",
     ],
   },
   illness: {
@@ -576,6 +588,8 @@ export const SIGNAL_VOICE = {
       "Today reads like a day to protect your recovery rather than push.",
       "What's showing up today asks for recovery more than effort.",
       "The kinder read on today is to protect your recovery.",
+      "The gentler read on today is to look after your recovery first.",
+      "Today reads as one to protect rather than press.",
     ],
   },
   unvoiced_open: {
@@ -612,6 +626,15 @@ export const SIGNAL_VOICE = {
     sample: WEAR_ABSENCE_SAMPLE_AGE,
     variants: WEAR_ABSENCE_SENTENCES.episodic,
   },
+  // The same silence, said about a NIGHT — reachable only when the series behind the
+  // cadence really is sleep. Splitting the key rather than the sentence keeps the
+  // rotation stable: an athlete whose sleep series is the one that went quiet reads
+  // the same words every morning it stays quiet, instead of drifting between nouns.
+  wear_absence_episodic_nights: {
+    concept: /\bwatch\b/i,
+    sample: WEAR_ABSENCE_SAMPLE_AGE,
+    variants: WEAR_ABSENCE_SENTENCES.episodic_nights,
+  },
   wear_absence_lapsed: {
     concept: /\b(?:watch|reading)\b/i,
     sample: WEAR_ABSENCE_SAMPLE_AGE,
@@ -635,11 +658,34 @@ export interface SignalVoiceRef {
   subject?: string;
 }
 
+// Where an unknown or missing voice lands, BY DIRECTION of the day.
+//
+// The floor used to be `unvoiced_protect` unconditionally, which meant a green
+// morning whose voice went missing was handed protective words — the layer failing
+// safe in the engineering sense and unsafe in the coaching one, since a read that
+// tells a fresh athlete to protect their recovery for no stated reason is exactly the
+// unfounded brake this whole vocabulary exists to prevent. So the floor follows the
+// posture: protective words only where the day is actually protective, and the
+// honestly-thin "go by how you feel" line everywhere else.
+export const POSTURE_FALLBACK_VOICE: Readonly<Record<SignalPosture, SignalVoiceKey>> = {
+  rest: "unvoiced_protect",
+  easy: "unvoiced_protect",
+  modify: "unvoiced_protect",
+  train: "unvoiced_open",
+  done: "unvoiced_open",
+};
+
 // The athlete-facing phrasings for one voice, subject substituted. Never empty: an
-// unknown or missing key degrades to the protect floor rather than to silence (or,
-// worse, to a machine-facing `summary`).
-export function signalVoice(ref?: SignalVoiceRef | null): readonly [string, ...string[]] {
-  const entry: SignalVoiceEntry = (ref && SIGNAL_VOICE[ref.key]) || SIGNAL_VOICE.unvoiced_protect;
+// unknown or missing key degrades to `fallback` rather than to silence (or, worse, to
+// a machine-facing `summary`). `fallback` defaults to the protective floor because a
+// caller that knows nothing about the day should claim nothing about it; a caller
+// that HAS a posture should pass POSTURE_FALLBACK_VOICE[posture].
+export function signalVoice(
+  ref?: SignalVoiceRef | null,
+  fallback: SignalVoiceKey = "unvoiced_protect"
+): readonly [string, ...string[]] {
+  const entry: SignalVoiceEntry =
+    (ref && SIGNAL_VOICE[ref.key]) || SIGNAL_VOICE[fallback] || SIGNAL_VOICE.unvoiced_protect;
   const subject = String(ref?.subject ?? "").trim() || entry.sample || "";
   return entry.variants.map((variant) => variant.replace(/\{\}/g, subject)) as [string, ...string[]];
 }
@@ -681,9 +727,13 @@ export const SIGNAL_VOICE_KEYS = {
 export function spokenSignalVoice(
   ref: SignalVoiceRef | null | undefined,
   date: string,
-  key: string = SIGNAL_VOICE_KEYS.protect
+  key: string = SIGNAL_VOICE_KEYS.protect,
+  // The posture whose direction the FLOOR should follow when `ref` names no voice.
+  // Omitted, the protective floor stands (see POSTURE_FALLBACK_VOICE).
+  posture?: SignalPosture | null
 ): string {
-  return pickDayVariant(signalVoice(ref), date, key);
+  const fallback = posture ? POSTURE_FALLBACK_VOICE[posture] : undefined;
+  return pickDayVariant(signalVoice(ref, fallback ?? "unvoiced_protect"), date, key);
 }
 
 // `directives.schedule === "compress"` has TWO unrelated causes, and only one of them
@@ -803,14 +853,17 @@ function bearingEvidence<T extends { context_only?: boolean }>(items: T[]): T[] 
 // The voice key for a shape of wearable silence. Kept beside the shapes it maps so
 // a new shape is a compile error here rather than a silent fall-through to a
 // sentence written about a different situation.
-const WEAR_ABSENCE_VOICE_KEY: Record<WearAbsenceView["shape"], SignalVoiceKey> = {
+const WEAR_ABSENCE_VOICE_KEY: Record<WearAbsenceVoiceSet, SignalVoiceKey> = {
   episodic: "wear_absence_episodic",
+  episodic_nights: "wear_absence_episodic_nights",
   lapsed: "wear_absence_lapsed",
   unworn: "wear_absence_unworn",
 };
 
 function wearAbsenceVoiceRef(absence: WearAbsenceView | null): SignalVoiceRef {
-  const key = WEAR_ABSENCE_VOICE_KEY[absence?.shape ?? "unworn"];
+  // Keyed by the VARIANT SET, not the shape: which noun the words may use is a
+  // property of the series, and the set is the one place that decision is made.
+  const key = WEAR_ABSENCE_VOICE_KEY[wearAbsenceVoiceSet(absence)];
   const subject = absence?.age_phrase ?? undefined;
   return subject ? { key, subject } : { key };
 }
@@ -1182,6 +1235,10 @@ export interface UnifiedSignalStateOptions {
   // the state it gets today. Supplying it changes only how ABSENCE is worded; it
   // never reaches a status, a confidence, a directive or a posture.
   sensorCadence?: Partial<SensorCadence> | null;
+  // WHICH recovery series `sensorCadence` describes. Optional, and its absence is
+  // the conservative direction: an unnamed series is only ever spoken of as
+  // "readings", never as nights (see WearAbsenceView.measures).
+  sensorCadenceField?: string | null;
 }
 
 export function buildUnifiedSignalState(
@@ -1190,7 +1247,9 @@ export function buildUnifiedSignalState(
   options: UnifiedSignalStateOptions = {}
 ): UnifiedSignalState {
   const resolved = resolveSignalObservations(date, observations);
-  const sensorAbsence = options.sensorCadence ? wearAbsenceView(options.sensorCadence, date) : null;
+  const sensorAbsence = options.sensorCadence
+    ? wearAbsenceView(options.sensorCadence, date, options.sensorCadenceField)
+    : null;
   const dimensions = Object.fromEntries(
     DIMENSIONS.map((dimension) => [dimension, dimensionState(dimension, resolved, sensorAbsence)])
   ) as Record<SignalDimension, SignalDimensionState>;
@@ -1999,5 +2058,11 @@ export function planningSignalState(input: {
   // field). It decides nothing — it only lets an absent dimension say WHICH kind
   // of quiet it is. A recovery snapshot from before that field existed simply
   // yields null, and the state is byte-identical to today's.
-  return buildUnifiedSignalState(date, observations, { sensorCadence: dominantSensorCadence(quality) });
+  // The FIELD comes too, because only the sleep series may be spoken of as a night
+  // and the winning (densest) series is routinely resting HR.
+  const cadenceEntry = dominantSensorCadenceEntry(quality);
+  return buildUnifiedSignalState(date, observations, {
+    sensorCadence: cadenceEntry?.cadence ?? null,
+    sensorCadenceField: cadenceEntry?.field ?? null,
+  });
 }

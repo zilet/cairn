@@ -71,11 +71,9 @@ function policyDecision(
   };
 }
 
-export interface DayReadProseConsistencyIssue {
-  code: "completed_load_understated";
-  classified_load: "moderate" | "hard";
-  evidence: string;
-}
+export type DayReadProseConsistencyIssue =
+  | { code: "completed_load_understated"; classified_load: "moderate" | "hard"; evidence: string }
+  | { code: "felt_quality_understated"; evidence: string };
 
 const COMPLETED_ACTIVITY =
   /\b(?:that|this|today(?:'s)?|the|your)\s+(?:run|ride|session|workout|lift|training|activity|effort|work)\b/gi;
@@ -84,6 +82,71 @@ const FUTURE_OR_RECOVERY_CUE =
   /\b(?:next|tomorrow(?:'s)?|later|upcoming|afterward|afterwards|follow(?:-?up)?|cool(?:-?down)?|remainder)\b/i;
 const NEGATED_EASY = /\b(?:not|never|wasn't|weren't|isn't|no)\s+(?:an?\s+)?(?:easy|light|gentle)\b/i;
 
+// ---- the other direction: work the server saw come back STRONG, described as poor ----
+//
+// The mirror of the guard above, and the one that actually reached an athlete twice:
+// the deterministic rollup said the freshest rated session came back strong and
+// nothing rougher has been rated since (repo.trainingSignals().session_quality), and
+// the agent's sentence still opened with the lifts having felt heavier than they
+// should. That is not a softer reading of the same evidence — it is a claim about a
+// fact the athlete themselves supplied, stated backwards.
+const RECENT_WORK_SUBJECT =
+  /\b(?:that|this|those|these|today(?:'s)?|the|your|recent|last)\s+(?:runs?|rides?|sessions?|workouts?|lifts?|training|activity|efforts?|work|sets|reps|weights?|bar)\b/gi;
+// Deliberately an ASSERTION list, not a vocabulary list: each alternative states that
+// the work came back worse than usual. Forward-looking advice ("keep the bar light"),
+// prescriptions and questions carry none of these shapes.
+const DEGRADED_QUALITY_CLAIM =
+  /\b(?:felt|feeling|feels|was|were|is|are|came back|coming back|landed|landing)\s+(?:a bit\s+|a little\s+|slightly\s+|somewhat\s+)?(?:heavy|heavier|flat|sluggish|harder|tougher|laboured|labored)\b|\bheavier than (?:they|it|you) should\b|\bbelow (?:your|their|the)?\s*usual\b|\bbelow par\b/gi;
+// Any of these in the sentence and it is no longer an assertion that the work was
+// poor — it is the denial of one ("nothing felt heavy"), which agrees with the flags.
+const NEGATED_QUALITY = /\b(?:not|never|didn't|did not|wasn't|weren't|isn't|aren't|hasn't|haven't|no|nothing)\b/i;
+
+// Shared proximity test: a descriptor that follows a subject closely enough to be
+// predicated on it, with an optional bridge veto for cues that re-target the claim.
+function claimsAboutSubject(
+  sentence: string,
+  subjects: RegExp,
+  descriptors: RegExp,
+  bridgeVeto?: RegExp
+): string | null {
+  subjects.lastIndex = 0;
+  descriptors.lastIndex = 0;
+  const subjectHits = [...sentence.matchAll(subjects)];
+  const descriptorHits = [...sentence.matchAll(descriptors)];
+  for (const subject of subjectHits) {
+    const subjectEnd = (subject.index ?? 0) + subject[0].length;
+    for (const descriptor of descriptorHits) {
+      const descriptorAt = descriptor.index ?? 0;
+      if (descriptorAt < subjectEnd || descriptorAt - subjectEnd > 90) continue;
+      if (bridgeVeto?.test(sentence.slice(subjectEnd, descriptorAt))) continue;
+      return sentence.slice(0, 240);
+    }
+  }
+  return null;
+}
+
+// Was the freshest rated feedback STRONG, with no low-performance brake live?
+//
+// Read off the unified signal state the server acted on (`signals.signal_state`),
+// which is where repo.trainingSignals' two flags land as evidence: `session_quality`
+// (support, added only on strong_flag) and `felt_fatigue` (constraint, added only on
+// low_performance_flag), both under training_load_tolerance and both windowed, so a
+// strong week ages out of `active_fields` instead of licensing this guard forever.
+// Callers holding the rollup itself may pass it directly.
+function feltStrongWithNoBrake(
+  signals: Record<string, any> | null | undefined,
+  trainingSignals?: Record<string, any> | null
+): boolean {
+  if (trainingSignals)
+    return (
+      trainingSignals.session_quality?.strong_flag === true &&
+      trainingSignals.autoregulation?.low_performance_flag !== true
+    );
+  const active = signals?.signal_state?.dimensions?.training_load_tolerance?.coverage?.active_fields;
+  if (!Array.isArray(active)) return false;
+  return active.includes("session_quality") && !active.includes("felt_fatigue");
+}
+
 // Structured, deliberately conservative semantic guard for the one contradiction
 // that materially changes the athlete's read: a completed moderate/hard effort
 // described as easy. It does NOT reject forward-looking recovery advice such as
@@ -91,12 +154,9 @@ const NEGATED_EASY = /\b(?:not|never|wasn't|weren't|isn't|no)\s+(?:an?\s+)?(?:ea
 // near the easy descriptor (or an "easy run complete" construction).
 export function dayReadProseConsistencyIssue(
   read: { kind?: unknown; headline?: unknown; why?: unknown },
-  signals: Record<string, any> | null | undefined
+  signals: Record<string, any> | null | undefined,
+  trainingSignals?: Record<string, any> | null
 ): DayReadProseConsistencyIssue | null {
-  const classifiedLoad = String(signals?.today_load ?? "").toLowerCase();
-  if (classifiedLoad !== "moderate" && classifiedLoad !== "hard") return null;
-  if (signals?.trained_today !== true && read?.kind !== "done") return null;
-
   const prose = [read?.headline, read?.why]
     .filter((value): value is string => typeof value === "string" && !!value.trim())
     .join("\n");
@@ -104,41 +164,46 @@ export function dayReadProseConsistencyIssue(
     .split(/(?:\r?\n|(?<=[.!?])\s+)/)
     .map((sentence) => sentence.trim())
     .filter(Boolean);
-  for (const sentence of sentences) {
-    if (NEGATED_EASY.test(sentence)) continue;
 
-    COMPLETED_ACTIVITY.lastIndex = 0;
-    EASY_DESCRIPTOR.lastIndex = 0;
-    const subjects = [...sentence.matchAll(COMPLETED_ACTIVITY)];
-    const descriptors = [...sentence.matchAll(EASY_DESCRIPTOR)];
-    for (const subject of subjects) {
-      const subjectEnd = (subject.index ?? 0) + subject[0].length;
-      for (const descriptor of descriptors) {
-        const descriptorAt = descriptor.index ?? 0;
-        if (descriptorAt < subjectEnd || descriptorAt - subjectEnd > 90) continue;
-        const bridge = sentence.slice(subjectEnd, descriptorAt);
-        if (FUTURE_OR_RECOVERY_CUE.test(bridge)) continue;
+  const classifiedLoad = String(signals?.today_load ?? "").toLowerCase();
+  const loadIsChecked =
+    (classifiedLoad === "moderate" || classifiedLoad === "hard") &&
+    (signals?.trained_today === true || read?.kind === "done");
+  const qualityIsChecked = feltStrongWithNoBrake(signals, trainingSignals);
+
+  for (const sentence of sentences) {
+    if (loadIsChecked && !NEGATED_EASY.test(sentence)) {
+      const evidence = claimsAboutSubject(sentence, COMPLETED_ACTIVITY, EASY_DESCRIPTOR, FUTURE_OR_RECOVERY_CUE);
+      if (evidence)
         return {
           code: "completed_load_understated",
-          classified_load: classifiedLoad,
+          classified_load: classifiedLoad as "moderate" | "hard",
+          evidence,
+        };
+
+      // Headline-style construction: "Easy run complete." This is kept narrower
+      // than a generic "easy run" match so suggested future easy work remains valid.
+      if (
+        /\b(?:easy|light|gentle|recovery(?:-paced)?)\s+(?:run|ride|session|workout|lift|training|activity|effort)\b.{0,30}\b(?:complete|completed|done|finished|logged|in the books)\b/i.test(
+          sentence
+        ) &&
+        !FUTURE_OR_RECOVERY_CUE.test(sentence)
+      ) {
+        return {
+          code: "completed_load_understated",
+          classified_load: classifiedLoad as "moderate" | "hard",
           evidence: sentence.slice(0, 240),
         };
       }
     }
 
-    // Headline-style construction: "Easy run complete." This is kept narrower
-    // than a generic "easy run" match so suggested future easy work remains valid.
-    if (
-      /\b(?:easy|light|gentle|recovery(?:-paced)?)\s+(?:run|ride|session|workout|lift|training|activity|effort)\b.{0,30}\b(?:complete|completed|done|finished|logged|in the books)\b/i.test(
-        sentence
-      ) &&
-      !FUTURE_OR_RECOVERY_CUE.test(sentence)
-    ) {
-      return {
-        code: "completed_load_understated",
-        classified_load: classifiedLoad,
-        evidence: sentence.slice(0, 240),
-      };
+    if (qualityIsChecked && !NEGATED_QUALITY.test(sentence)) {
+      // No bridge veto here: unlike the load guard there is no legitimate
+      // forward-looking reading of "your lifts felt heavier than they should" —
+      // the claim is in the past tense by construction, and a prescription for
+      // today ("keep the bar lighter") matches no alternative in the claim set.
+      const evidence = claimsAboutSubject(sentence, RECENT_WORK_SUBJECT, DEGRADED_QUALITY_CLAIM);
+      if (evidence) return { code: "felt_quality_understated", evidence };
     }
   }
   return null;
@@ -336,7 +401,11 @@ export function decodeDayReadAgentProse<T>(value: T): T {
 
 export function isValidDayReadAgentResult(
   value: any,
-  baseline?: { kind?: unknown; signals?: Record<string, any> }
+  baseline?: { kind?: unknown; signals?: Record<string, any> },
+  // The trainingSignals rollup, for a caller holding it directly. Omitted (every
+  // production call site), the two flags are read off `baseline.signals.signal_state`,
+  // which is the same evidence by another route — see feltStrongWithNoBrake.
+  trainingSignals?: Record<string, any> | null
 ): boolean {
   const validShape = !!(
     value &&
@@ -368,7 +437,7 @@ export function isValidDayReadAgentResult(
   // passes this predicate by construction, is the worst case).
   if (violatesReadingGrammar(value.headline)) return false;
   if (violatesReadingGrammar(value.why)) return false;
-  if (dayReadProseConsistencyIssue(value, baseline?.signals)) return false;
+  if (dayReadProseConsistencyIssue(value, baseline?.signals, trainingSignals)) return false;
   // Whether meaningful training is already DONE is a server-owned fact, not a
   // nuance the prose layer may reinterpret. Reject a mismatch before fallback
   // stops so the same agent can repair it or the next healthy agent can answer.

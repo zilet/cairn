@@ -444,13 +444,18 @@ test("an active dated obligation compresses a train day without changing its pos
   assert.equal(r.est_minutes, 40);
   assert.equal(r.signals.signal_state.action.posture, "train");
   assert.equal(r.signals.signal_state.action.directives.schedule, "compress");
+  // `evidence_reason` is the MACHINE register, named as such so no client render can
+  // mistake observer prose for something to print; `voice` beside it is what a surface
+  // an athlete reads must speak through (spokenSignalVoice).
   assert.deepEqual(r.signals.schedule, {
     directive: "compress",
     compressed: true,
     original_est_minutes: 60,
     est_minutes: 40,
-    reason: "School pickup and evening event adds schedule pressure today.",
+    evidence_reason: "School pickup and evening event adds schedule pressure today.",
+    voice: r.signals.signal_state.dimensions.life_capacity.voice,
   });
+  assert.equal(r.signals.schedule.voice.key, "commitment_pressure");
   assert.equal(r.signals.signal_state.dimensions.life_capacity.voice.key, "commitment_pressure");
   saysOneCaveat(r.why, "planned_training:commitment_pressure");
 });
@@ -478,8 +483,10 @@ test("a stressful stretch is NOT a commitment: no calendar claim, and the clock 
     compressed: false,
     original_est_minutes: 60,
     est_minutes: 60,
-    reason: "A current commitment or stressful stretch is likely to compress recovery capacity.",
+    evidence_reason: "A current commitment or stressful stretch is likely to compress recovery capacity.",
+    voice: r.signals.signal_state.dimensions.life_capacity.voice,
   });
+  assert.equal(r.signals.schedule.voice.key, "schedule_pressure");
 
   saysOneCaveat(r.why, "planned_training:life_pressure");
   // The false claim, in every phrasing the commitment set can produce.
@@ -3001,4 +3008,95 @@ test("`applied` is the fact, `active` only the argument for it", () => {
   assert.equal(r.kind, "train");
   assert.equal(r.signals.outcome_feedback.active, true);
   assert.equal(r.signals.outcome_feedback.applied, false);
+});
+
+// ---- the OTHER direction of the same guard -----------------------------------
+//
+// Twice on a live deployment the agent opened the Brief by asserting the lifts had
+// felt heavier than they should — on a morning whose freshest rated session was the
+// athlete's own "that came back strong", with no low-performance brake anywhere.
+// The rollup that knew this shipped in DATA as a flag and was never rendered in
+// words (fixed in renderTrainingSignals), and nothing rejected the sentence.
+test("felt-quality prose consistency: strong recent feedback cannot be described as heavy or flat", async () => {
+  const { dayReadProseConsistencyIssue, isValidDayReadAgentResult } = await import("../dist/dayread.js");
+  // The rollup, passed directly — the same two flags the signal state carries.
+  const strong = {
+    session_quality: { strong_flag: true, strong_date: "2026-08-01", rated_sessions: 2 },
+    autoregulation: null,
+  };
+  const braked = {
+    session_quality: { strong_flag: true, strong_date: "2026-08-01", rated_sessions: 2 },
+    autoregulation: { low_performance_flag: true },
+  };
+
+  const understated = {
+    kind: "train",
+    headline: "Take it steady.",
+    why: "Your recent sessions felt heavier than they should, so keep the load conservative.",
+  };
+  assert.deepEqual(dayReadProseConsistencyIssue(understated, null, strong), {
+    code: "felt_quality_understated",
+    evidence: understated.why,
+  });
+  assert.equal(isValidDayReadAgentResult({ ...understated, focus: null }, { kind: "train", signals: null }, strong), false);
+
+  // A brake ON the board is the athlete telling us the same thing — the guard has no
+  // business rejecting prose that agrees with it.
+  assert.equal(dayReadProseConsistencyIssue(understated, null, braked), null);
+  // And with no positive evidence at all, the guard is silent.
+  assert.equal(dayReadProseConsistencyIssue(understated, null, null), null);
+
+  // Prose that AGREES with the strong read passes, and so does the denial of a heavy
+  // day — "nothing felt heavy" must not read as the claim it refutes.
+  for (const why of [
+    "That work is landing — the last session came back strong.",
+    "Nothing about the recent sets felt heavy, so today has room in it.",
+    "Keep the bar a touch lighter on the last set if you want to.",
+    "Today's session is due and the recent work has been landing well.",
+  ]) {
+    assert.equal(dayReadProseConsistencyIssue({ kind: "train", why }, null, strong), null, why);
+  }
+});
+
+test("felt-quality guard reads the two flags off the signal state the server acted on", async () => {
+  const { dayReadProseConsistencyIssue } = await import("../dist/dayread.js");
+  const withFields = (fields) => ({
+    signal_state: { dimensions: { training_load_tolerance: { coverage: { active_fields: fields } } } },
+  });
+  const understated = { kind: "train", why: "Those lifts felt flat, so ease the loading today." };
+
+  assert.equal(dayReadProseConsistencyIssue(understated, withFields(["session_quality"]))?.code, "felt_quality_understated");
+  // The brake's own field on the board withdraws the guard.
+  assert.equal(dayReadProseConsistencyIssue(understated, withFields(["session_quality", "felt_fatigue"])), null);
+  assert.equal(dayReadProseConsistencyIssue(understated, withFields(["felt_fatigue"])), null);
+  assert.equal(dayReadProseConsistencyIssue(understated, withFields([])), null);
+  // A stale strong week has aged out of active_fields and stops licensing the guard.
+  assert.equal(dayReadProseConsistencyIssue(understated, { signal_state: { dimensions: {} } }), null);
+});
+
+// ---- the athlete's own push setting reaches the agent, not just the floor ----
+//
+// `training_drive_push` is set only after the deterministic gate has passed on a day
+// the athlete deliberately set their drive to push. Nothing in the prompt said so, and
+// enforceDayReadSafetyPosture only ever clamps DOWN — so one model sentence could
+// quietly revert a setting they went and flipped, and no layer would object.
+test("the prompt tells the agent the athlete CHOSE to push, on a drive day only", async () => {
+  const { buildDayReadPrompt } = await import("../dist/prompt.js");
+
+  seedDriveMorning();
+  const steady = buildDayReadPrompt(undefined, { date: DRIVE_REF, baseline: repo.dayRead(DRIVE_REF) });
+  assert.doesNotMatch(steady, /THEY HAVE ASKED TO PUSH/, "an ordinary day carries no drive block");
+
+  repo.setSettings({ training_drive: "push" });
+  const baseline = repo.dayRead(DRIVE_REF);
+  assert.ok(baseline.signals.training_drive_push, "the fixture is a real drive morning");
+  const drive = buildDayReadPrompt(undefined, { date: DRIVE_REF, baseline });
+
+  assert.match(drive, /THEY HAVE ASKED TO PUSH/);
+  // It must name the athlete's own choice, what is due, and the terms of disagreement.
+  assert.match(drive, /standing choice/i);
+  assert.match(drive, /what's due: back/i);
+  assert.match(drive, /naming the CONCRETE thing/);
+  // And it stays inside the same rules as every neighbouring block.
+  assert.match(drive, /no score, no gate/);
 });

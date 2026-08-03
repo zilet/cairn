@@ -1459,8 +1459,11 @@ function signalStateCandidates(input: CoachingFocusInput): Candidate[] {
   // instead, rotated on the state's own date, and on the same key the Brief uses — the
   // conductor's lead and the Brief are one tap apart, so one signal must read as one
   // observation rather than two differently-worded notes about the same morning.
+  // The posture rides along so a MISSING voice falls back by direction rather than
+  // always to protective words (see POSTURE_FALLBACK_VOICE) — a green day whose voice
+  // went missing was being handed a brake it had no evidence for.
   const spoken = (voice: Parameters<typeof spokenSignalVoice>[0], key?: string) =>
-    spokenSignalVoice(voice, String(state?.date ?? ""), key);
+    spokenSignalVoice(voice, String(state?.date ?? ""), key, action.posture);
 
   if (action.posture === "rest" || action.posture === "easy" || action.posture === "done") {
     const posture = action.posture;

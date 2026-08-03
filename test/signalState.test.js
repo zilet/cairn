@@ -1127,3 +1127,69 @@ test("the fuel hold states a constraint, so the conflict join reads as a qualifi
   assert.ok(conflict, "the pairing itself is unchanged — support plus a brake is still worth surfacing");
   assert.match(conflict, /^Recent rated sessions came back strong.*\. But fuel availability is still being protected/);
 });
+
+// ---- the protective voices repeat the least often, so they need the most words ----
+//
+// Every voice set is held to "at least three phrasings" (test/dayRead.test.js runs the
+// whole registry through the constitution). But the protective keys are the ones a
+// stable input fires morning after morning — an open injury, a sore joint, a run of
+// short nights — so three phrasings meant a three-day cycle for exactly the athlete
+// most likely to notice it. These six carry a longer rotation.
+test("the highest-frequency protective voices carry at least five phrasings", async () => {
+  const { SIGNAL_VOICE_REGISTRY } = await import("../dist/repo/signal-state.js");
+  const HIGH_FREQUENCY_PROTECTIVE = [
+    "active_injury",
+    "joint_pain",
+    "sleep_night_short",
+    "felt_energy_low",
+    "sleep_feel_low",
+    "unvoiced_protect",
+  ];
+  for (const key of HIGH_FREQUENCY_PROTECTIVE) {
+    const entry = SIGNAL_VOICE_REGISTRY[key];
+    assert.ok(entry, `${key} is a registered voice`);
+    assert.ok(entry.variants.length >= 5, `${key} has ${entry.variants.length} phrasings, needs 5`);
+    assert.equal(new Set(entry.variants).size, entry.variants.length, `${key} has a duplicate phrasing`);
+    // The registry test in dayRead.test.js already holds every variant to the reading
+    // grammar; this pins the one thing that is specific to these keys — each phrasing
+    // still carries the idea the key exists to convey.
+    for (const variant of entry.variants) {
+      assert.match(variant, entry.concept, `${key}: "${variant}" drifted off the concept`);
+    }
+  }
+});
+
+// ---- a missing voice must not invent a brake -------------------------------
+//
+// signalVoice floors to `unvoiced_protect` when a ref names no voice. That is safe in
+// the engineering sense and unsafe in the coaching one: on a green morning it hands
+// the athlete protective words with no evidence behind them, which is the unfounded
+// brake this whole vocabulary exists to prevent. The floor now follows the posture.
+test("an unvoiced fallback follows the direction of the day, not the protective floor", async () => {
+  const { signalVoice, spokenSignalVoice, POSTURE_FALLBACK_VOICE, SIGNAL_VOICE_REGISTRY } = await import(
+    "../dist/repo/signal-state.js"
+  );
+  const date = localDaysAgo(0);
+  const protect = SIGNAL_VOICE_REGISTRY.unvoiced_protect.variants;
+  const open = SIGNAL_VOICE_REGISTRY.unvoiced_open.variants;
+
+  // Unchanged for a caller that knows nothing about the day.
+  assert.deepEqual([...signalVoice(null)], [...protect]);
+  assert.deepEqual([...signalVoice({ key: "no_such_voice" })], [...protect]);
+
+  // A protective posture keeps the protective words...
+  for (const posture of ["rest", "easy", "modify"]) {
+    assert.equal(POSTURE_FALLBACK_VOICE[posture], "unvoiced_protect");
+    assert.ok(protect.includes(spokenSignalVoice(null, date, "k", posture)));
+  }
+  // ...and a green one gets the honestly-thin line instead of an invented brake.
+  for (const posture of ["train", "done"]) {
+    assert.equal(POSTURE_FALLBACK_VOICE[posture], "unvoiced_open");
+    const spoken = spokenSignalVoice(null, date, "k", posture);
+    assert.ok(open.includes(spoken), spoken);
+    assert.ok(!protect.includes(spoken), "a green day is never handed a protective floor");
+  }
+  // A ref that DOES name a voice is untouched by the posture either way.
+  const named = { key: "sleep_night_short" };
+  assert.equal(spokenSignalVoice(named, date, "k", "train"), spokenSignalVoice(named, date, "k", "rest"));
+});

@@ -216,10 +216,11 @@ test("SPOT CHECK: the machine register carries the date and the pattern, not a b
   assert.match(state.action.reason, /not enough fresh signal/i);
   assert.match(state.action.reason, /spot-check pattern/);
 
-  // And the athlete-facing sibling speaks the cadence, not the generic floor.
-  assert.equal(state.action.voice.key, "wear_absence_episodic");
+  // And the athlete-facing sibling speaks the cadence, not the generic floor. This
+  // wearer's sleep series IS the one that went quiet, so a night is a sayable thing.
+  assert.equal(state.action.voice.key, "wear_absence_episodic_nights");
   assert.equal(state.action.voice.subject, "about 3 weeks ago");
-  assert.equal(recovery.voice.key, "wear_absence_episodic");
+  assert.equal(recovery.voice.key, "wear_absence_episodic_nights");
 });
 
 test("SPOT CHECK: the next step does not tell a working wearer to fix their sync", () => {
@@ -347,4 +348,84 @@ test("a caller that knows nothing about wear habits gets exactly the state it go
     rows.find((row) => row.label === "Recovery signals")?.state,
     "none synced yet — a morning check-in sharpens the read"
   );
+});
+
+// ---- a NIGHT is a claim about the sleep series, and only about that -----------
+//
+// The cadence a surface speaks for is the DENSEST series, which on a real payload is
+// routinely resting HR — while the episodic words named a night. That produced "the
+// watch last caught a night today" for an athlete whose watch had recorded no night
+// at all. The noun now follows the series.
+
+// A wearer whose watch reports resting HR on run days and has never logged a night.
+function seedRhrOnlyWearer() {
+  for (const back of [20, 34, 48, 62, 76]) day(back, { resting_hr: 52 });
+}
+
+test("NIGHT CLAIM: an athlete whose watch has never recorded a night is never told it caught one", () => {
+  seedRhrOnlyWearer();
+  const state = repo.dayRead(TODAY()).signals.signal_state;
+
+  assert.equal(state.dimensions.recovery_capacity.voice.key, "wear_absence_episodic");
+  const spoken = repo.spokenSignalVoice(state.dimensions.recovery_capacity.voice, TODAY(), "wear_absence");
+  assert.doesNotMatch(spoken, /\bnights?\b/i, "no night may be claimed off a resting-HR series");
+  assert.equal(violatesReadingGrammar(spoken), null);
+});
+
+test("NIGHT CLAIM: the view names the series, and only the sleep series may say night", () => {
+  const cadence = classifyWearPattern([localDaysAgo(20), localDaysAgo(34)], TODAY());
+  assert.equal(wearAbsenceView(cadence, TODAY(), "sleep_min").measures, "nights");
+  assert.equal(wearAbsenceView(cadence, TODAY(), "resting_hr").measures, "readings");
+  assert.equal(wearAbsenceView(cadence, TODAY(), "hrv_ms").measures, "readings");
+  // An UNNAMED series claims the less, never the more.
+  assert.equal(wearAbsenceView(cadence, TODAY()).measures, "readings");
+  assert.equal(wearAbsenceView(cadence, TODAY()).field, null);
+
+  const neutral = wearAbsenceWhy(wearAbsenceView(cadence, TODAY(), "resting_hr"), TODAY());
+  const nights = wearAbsenceWhy(wearAbsenceView(cadence, TODAY(), "sleep_min"), TODAY());
+  assert.doesNotMatch(neutral, /\bnights?\b/i);
+  assert.doesNotMatch(wearAbsenceRowState(wearAbsenceView(cadence, TODAY(), "resting_hr"), TODAY()), /\bnights?\b/i);
+  assert.notEqual(neutral, nights);
+});
+
+test("NIGHT CLAIM: every neutral phrasing holds the reading grammar and asks for nothing", () => {
+  for (const variants of [WEAR_ABSENCE_SENTENCES.episodic, WEAR_ABSENCE_ROW_STATES.episodic]) {
+    assert.ok(variants.length >= 3);
+    for (const variant of variants) {
+      const rendered = variant.replaceAll("{}", "about 3 weeks ago");
+      assert.equal(violatesReadingGrammar(rendered), null, rendered);
+      assert.doesNotMatch(rendered, FAULT_REPORT, rendered);
+      assert.doesNotMatch(rendered, AN_ASK, rendered);
+      assert.doesNotMatch(rendered, /\bnights?\b/i, rendered);
+    }
+  }
+});
+
+// ---- absence prose is written only when there IS an absence ------------------
+
+test("ABSENCE GATE: a day with a bearing wearable reading carries no absence prose at all", () => {
+  for (let back = 0; back <= 30; back++) day(back, { sleep_min: 430, hrv_ms: 60, resting_hr: 52 });
+  const signals = repo.dayRead(TODAY()).signals;
+
+  assert.equal(signals.has_recovery_data, true);
+  // The factual cadence block survives — it is what a surface reads to decide.
+  assert.ok(signals.recovery_cadence, "the cadence facts still ship");
+  assert.equal(typeof signals.recovery_cadence.pattern, "string");
+  assert.ok(signals.recovery_cadence.readings > 0);
+  // The WORDS do not: there is no silence to word, and they used to persist into
+  // the decision ledger contradicting the very read they travelled with.
+  assert.equal(signals.recovery_cadence.absence_state, null);
+  assert.equal(signals.recovery_cadence.absence_why, null);
+});
+
+test("ABSENCE GATE: a day with nothing to lean on still gets its words", () => {
+  seedSpotCheckWearer();
+  const signals = repo.dayRead(TODAY()).signals;
+
+  assert.equal(signals.has_recovery_data, false);
+  assert.equal(typeof signals.recovery_cadence.absence_state, "string");
+  assert.equal(typeof signals.recovery_cadence.absence_why, "string");
+  assert.equal(violatesReadingGrammar(signals.recovery_cadence.absence_why), null);
+  assert.doesNotMatch(signals.recovery_cadence.absence_state, FAULT_REPORT);
+  assert.doesNotMatch(signals.recovery_cadence.absence_why, AN_ASK);
 });

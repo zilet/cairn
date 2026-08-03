@@ -429,7 +429,12 @@ test("the injury work-around survives intact on a lead whose why is already at i
     }),
   });
   assert.equal(out.lead.domain, "running");
-  assert.ok(out.lead.why.length > 240, "the budget is spent on the caveat, not stolen from it");
+  // The budget is spent on the PRODUCER'S prose, never stolen from the caveat: the
+  // lead's own sentence is what gets clipped, and the caveat is appended whole after
+  // it. (Asserted as the invariant rather than as a total length — the caveat is a
+  // rotating variant set, so its length is not a fixed number.)
+  assert.ok(out.lead.why.endsWith(out.caveat), "the caveat is appended whole, never clipped");
+  assert.match(out.lead.why, /…/, "the producer's own prose is what absorbed the budget");
   assert.ok(out.lead.why.includes(out.caveat), "the caveat is appended whole, never clipped");
   assert.match(out.lead.why, /pain-free substitutions and keep the load conservative\.$/);
   assert.doesNotMatch(out.caveat, /…$/, "the caveat itself never ends in an ellipsis");

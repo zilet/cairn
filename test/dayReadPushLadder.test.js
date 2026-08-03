@@ -740,3 +740,46 @@ test("migration 85 decodes stored day-read prose and is idempotent", () => {
   migration.up(db);
   assert.deepEqual(after(), once, "a second run must find nothing left to repair");
 });
+
+// ---- the positive half of the rollup is RENDERED, not just shipped ----------
+//
+// renderTrainingSignals wrote the brake (`autoregulation.note`) into the prompt in
+// plain language and left the positive counterpart (`session_quality.note`) as a
+// buried JSON flag — so at every site that renders this block the model read the
+// brake in words and the "this is landing" evidence only as a flag. Twice on a live
+// deployment the agent then opened with the lifts having felt heavier than they
+// should, on a morning whose freshest rated session was the athlete's own "strong".
+// (The Brief itself does not render this block; there the backed tier speaks for the
+// same evidence, and dayReadProseConsistencyIssue rejects the contradiction outright.)
+test("a session that came back strong is named for the agent in words", async () => {
+  const { buildCoachPrompt } = await import("../dist/prompt.js");
+
+  seedPlan();
+  const plain = buildCoachPrompt();
+  assert.doesNotMatch(plain, /SESSION QUALITY/, "nothing rated, nothing claimed");
+
+  seedPlan();
+  logRatedSession(3, { performance: 5 });
+  const ctx = repo.getCoachContext();
+  assert.equal(ctx.training_signals.session_quality.strong_flag, true, "the rollup saw it");
+
+  const strong = buildCoachPrompt();
+  assert.match(strong, /SESSION QUALITY/);
+  assert.match(strong, /came back strong/);
+  // The model is told, in the block itself, not to say the opposite.
+  assert.match(strong, /do NOT describe it as heavy, flat or below their usual/);
+});
+
+test("the brake and the positive note are mutually exclusive by construction", async () => {
+  const { buildCoachPrompt } = await import("../dist/prompt.js");
+  seedPlan();
+  // A strong rating alongside a sore joint is not evidence the day carries room —
+  // the brake owns that case, and session_quality is withheld.
+  logRatedSession(3, { performance: 5, joint_pain: "left knee" });
+  const ctx = repo.getCoachContext();
+  assert.equal(ctx.training_signals.session_quality, null);
+
+  const prompt = buildCoachPrompt();
+  assert.doesNotMatch(prompt, /SESSION QUALITY/);
+  assert.match(prompt, /AUTOREGULATION/);
+});
