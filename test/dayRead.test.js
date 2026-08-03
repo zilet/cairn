@@ -3058,6 +3058,38 @@ test("felt-quality prose consistency: strong recent feedback cannot be described
   }
 });
 
+// A guard this blunt costs the athlete calm, correct prose. The claim set had the
+// present-tense copulas `is`/`are` in it, so "today's session is heavier than last
+// week" — a description of the PLAN, and the ordinary way to say load went up — was
+// rejected as a complaint about how the work came back. Four of five legitimate
+// sentences failed. These nine pin both edges of the seam at once.
+test("felt-quality guard: prescribed heaviness passes, degraded work still flags", async () => {
+  const { dayReadProseConsistencyIssue } = await import("../dist/dayread.js");
+  const strong = { session_quality: { strong_flag: true, rated_sessions: 2 }, autoregulation: null };
+  const flagged = (why) => !!dayReadProseConsistencyIssue({ kind: "train", why }, null, strong);
+
+  // Still wrong: each of these asserts the work came back worse than usual, on a
+  // morning whose freshest rating was the athlete's own "that came back strong".
+  for (const why of [
+    "Recent work has felt heavier than it should, so keep the load conservative.",
+    "Your last sessions came back flat.",
+    "That lift felt sluggish.",
+    "These sets landed harder than usual.",
+  ])
+    assert.equal(flagged(why), true, `should still flag: ${why}`);
+
+  // Legitimate: a plan getting heavier, said in the present tense or vetoed as
+  // deliberate — plus the denial the negation veto already covered.
+  for (const why of [
+    "Today's session is heavier than last week, so take the warm-up seriously.",
+    "These sets are heavier now — a good sign.",
+    "The work is heavier today by design.",
+    "The bar is heavier this block, which is what progression looks like.",
+    "Nothing about the recent sets felt heavy, so today has room in it.",
+  ])
+    assert.equal(flagged(why), false, `should pass: ${why}`);
+});
+
 test("felt-quality guard reads the two flags off the signal state the server acted on", async () => {
   const { dayReadProseConsistencyIssue } = await import("../dist/dayread.js");
   const withFields = (fields) => ({

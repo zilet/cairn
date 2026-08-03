@@ -103,7 +103,7 @@ test("a sleep-backed steady series reads as supportive", () => {
 // The excursion path reads the verified series only, and needs TWO consecutive
 // verified readings beyond the band before it will brake the day. These drive it
 // directly so the band arithmetic is exact.
-const withSeries = (readings, { baseline = 54, latestTrust = "verified" } = {}) => {
+const withSeries = (readings, { baseline = 54, latestTrust = "verified", trustworthyDate } = {}) => {
   const date = localDaysAgo(0);
   return repo.planningSignalState({
     date,
@@ -117,7 +117,7 @@ const withSeries = (readings, { baseline = 54, latestTrust = "verified" } = {}) 
           latest_date: readings[0]?.date ?? null,
           latest_value: readings[0]?.value ?? null,
           latest_trust: latestTrust,
-          latest_trustworthy_date: readings[0]?.date ?? null,
+          latest_trustworthy_date: trustworthyDate ?? readings[0]?.date ?? null,
         },
         hrv_ms: { readings: [], latest_date: null, latest_value: null, latest_trust: "uncorroborated" },
       },
@@ -170,6 +170,60 @@ test("an empty verified series cannot produce an excursion of any kind", () => {
   const resting = restingOf(state);
   assert.equal(resting.direction, "support", "no verified reading is absence, and absence is neutral");
   assert.match(resting.summary, /provisional and is not being read as a change/);
+});
+
+// ---------- the excursion obeys the freshness law, and dates itself honestly ----------
+// The run walks the whole 90-day verified series, so nothing about it is recent by
+// construction. The claim's DATE used to come from `latest_trustworthy_date` — the
+// newest non-contradicted row of any kind, `uncorroborated` included — which is a row
+// the excursion may never have consulted. Two months of silence plus one fresh
+// uncorroborated reading therefore produced a caution about "your latest reading",
+// stamped today, built entirely out of readings from June.
+test("a verified series that has aged out cannot open an excursion", () => {
+  const state = withSeries(
+    [
+      { date: localDaysAgo(60), value: 66 },
+      { date: localDaysAgo(61), value: 64 },
+      { date: localDaysAgo(62), value: 54 },
+    ],
+    { latestTrust: "uncorroborated", trustworthyDate: localDaysAgo(0) }
+  );
+  const resting = restingOf(state);
+  assert.equal(resting.direction, "support", "stale behaves as absent, and absence is neutral");
+  assert.equal(resting.voice.key, "resting_hr_steady");
+  assert.notEqual(state.dimensions.recovery_capacity.status, "watch");
+  // The trend keeps the newest trustworthy date, which is correct for IT — the
+  // medians are taken over exactly those rows. What may no longer happen is an
+  // EXCURSION borrowing that date for a run it built out of readings from June.
+  assert.notEqual(resting.voice.key, "resting_hr_excursion");
+});
+
+test("a stale single outlier is not even an unsettled note", () => {
+  const state = withSeries(
+    [
+      { date: localDaysAgo(30), value: 66 },
+      { date: localDaysAgo(31), value: 53 },
+    ],
+    { trustworthyDate: localDaysAgo(0) }
+  );
+  const resting = restingOf(state);
+  assert.equal(resting.direction, "support");
+  assert.equal(resting.voice.key, "resting_hr_steady", "the trend/steady logic handles an aged-out series");
+});
+
+test("an excursion is dated to the newest reading it was actually built from", () => {
+  const state = withSeries(
+    [
+      { date: localDaysAgo(2), value: 66 },
+      { date: localDaysAgo(3), value: 64 },
+      { date: localDaysAgo(4), value: 54 },
+    ],
+    { trustworthyDate: localDaysAgo(0) }
+  );
+  const resting = restingOf(state);
+  assert.equal(resting.direction, "caution");
+  assert.equal(resting.voice.key, "resting_hr_excursion");
+  assert.equal(resting.date, localDaysAgo(2), "the claim points at the reading the run starts from");
 });
 
 test("the unsettled voices are non-directive, and a real vocabulary", () => {

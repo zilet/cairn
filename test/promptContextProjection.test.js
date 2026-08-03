@@ -215,6 +215,34 @@ test("the recovery view ships one quality map instead of four copies of it", () 
   assert.ok(projected.has_data === ctx.recovery.has_data && projected.days === ctx.recovery.days);
 });
 
+// The deterministic layer's WORKING is not the model's evidence. `verified` carries the
+// raw series each excursion test walks — up to 90 {date, value} pairs per metric, ~6 KB
+// on every recovery-carrying site — and handing it over does worse than cost tokens: it
+// invites the model to re-derive by eye the very claims the classification above it
+// deliberately withholds (a provisional or aged-out reading is not a finding). The
+// answer ships; the arithmetic does not. `min_hr`'s quality entry goes with it: the
+// field exists only so a resting-HR row can be checked against its own floor.
+test("the raw verified series and min_hr plumbing stay out of every prompt", () => {
+  seedDemo();
+  const ctx = repo.getCoachContext();
+  assert.ok(Array.isArray(ctx.recovery.verified.resting_hr.readings), "the snapshot still carries the series");
+
+  for (const site of ["day_read", "coach", "chat", "weekly_read", "insight"]) {
+    const projected = projectCoachContext(ctx, site).recovery;
+    if (!projected?.verified) continue;
+    for (const [metric, trust] of Object.entries(projected.verified)) {
+      assert.ok(!Object.hasOwn(trust, "readings"), `${site}: ${metric} still ships its raw readings`);
+      // The classification — which IS the answer — survives intact.
+      assert.equal(trust.latest_trust, ctx.recovery.verified[metric].latest_trust);
+      assert.equal(trust.latest_trustworthy_date, ctx.recovery.verified[metric].latest_trustworthy_date);
+      assert.equal(trust.latest_date, ctx.recovery.verified[metric].latest_date);
+    }
+    assert.ok(!Object.hasOwn(projected.quality, "min_hr"), `${site}: min_hr is corroboration plumbing`);
+  }
+  // And nothing was taken from the snapshot every non-prompt consumer reads.
+  assert.ok(ctx.recovery.verified.resting_hr.readings.length >= 0 && ctx.recovery.quality.min_hr !== undefined);
+});
+
 // The regression this whole change exists to prevent: the ambient snapshot riding on
 // every coaching call had grown to ~196 KB — 2-3x the budget the bounded coach-read
 // TOOLS allow for an entire query loop. The ceiling is generous on purpose (it must
@@ -477,6 +505,11 @@ test("the roll-up keeps the top set honest about both weight encodings", () => {
     { exercise: "Pull-up", mode: "reps", set_number: 2, weight: -10, reps: 5, rir: 1 },
     { exercise: "Push-up", mode: "reps", set_number: 1, weight: null, reps: 12, rir: 2 },
     { exercise: "Push-up", mode: "reps", set_number: 2, weight: null, reps: 20, rir: 1 },
+    // Assistance came off mid-exercise: the unassisted set is the harder one, and
+    // it is the one the rollup must call best. Ranking any numbered weight above
+    // bodyweight put the machine-assisted set on top instead.
+    { exercise: "Chin-up", mode: "reps", set_number: 1, weight: -30, reps: 8, rir: 2 },
+    { exercise: "Chin-up", mode: "reps", set_number: 2, weight: null, reps: 4, rir: 1 },
     { exercise: "Plank", mode: "timed", set_number: 1, duration_sec: 45 },
     { exercise: "Plank", mode: "timed", set_number: 2, duration_sec: 70 },
   ];
@@ -484,15 +517,26 @@ test("the roll-up keeps the top set honest about both weight encodings", () => {
   const [session] = projectCoachContext(ctx, "day_read").recent_sessions;
   const by = Object.fromEntries(session.sets.map((row) => [row.exercise, row]));
 
+  // `total_reps` is the cross-set total and says so — it used to be `reps`, the same
+  // name the per-set rows carry, sitting next to the per-set `top_reps`.
   assert.deepEqual(
-    { sets: by.Squat.sets, reps: by.Squat.reps, top_weight: by.Squat.top_weight, top_reps: by.Squat.top_reps },
-    { sets: 2, reps: 8, top_weight: 205, top_reps: 3 }
+    {
+      sets: by.Squat.sets,
+      total_reps: by.Squat.total_reps,
+      top_weight: by.Squat.top_weight,
+      top_reps: by.Squat.top_reps,
+    },
+    { sets: 2, total_reps: 8, top_weight: 205, top_reps: 3 }
   );
+  assert.ok(!Object.hasOwn(by.Squat, "reps"), "the ambiguous name is gone");
   // Assisted: -10 is TEN pounds of help, which is the harder set of the two.
   assert.equal(by["Pull-up"].top_weight, -10);
   // Bodyweight stays null (never absent, never 0), and more reps is the better set.
   assert.ok(Object.hasOwn(by["Push-up"], "top_weight") && by["Push-up"].top_weight === null);
   assert.equal(by["Push-up"].top_reps, 20);
+  // Bodyweight outranks assistance: four unassisted beats eight with 30 lb of help.
+  assert.equal(by["Chin-up"].top_weight, null, "the true bodyweight set is the best set");
+  assert.equal(by["Chin-up"].top_reps, 4);
   // A timed movement ranks on seconds and carries no load at all.
   assert.equal(by.Plank.top_duration_sec, 70);
   assert.ok(!Object.hasOwn(by.Plank, "top_weight"));

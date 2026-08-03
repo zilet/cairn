@@ -5,7 +5,7 @@
 // retain their own provenance/conflicts and only meet at one bounded INTERNAL
 // arbitration index that emits plain-language posture/reasons (never a score).
 import { pickDayVariant } from "./brain/day-read-rules.js";
-import { SENSOR_MAX_AGE_DAYS } from "./sensor-freshness.js";
+import { SENSOR_MAX_AGE_DAYS, type SensorSignal, sensorIsCurrent } from "./sensor-freshness.js";
 import type { SensorCadence } from "./sensor-cadence.js";
 import {
   dominantSensorCadenceEntry,
@@ -1487,14 +1487,34 @@ export function planningSignalState(input: {
   // How many of the NEWEST verified readings in a row sit beyond the excursion band.
   // Consecutive READINGS, not calendar days: on an episodically-worn watch two nights
   // a week apart are still the last two things it actually measured.
+  //
+  // But "consecutive readings, not days" says nothing about AGE, and the series it
+  // walks is the full 90-day one. So the run had no recency bound at all: two nights
+  // from June were still "the last two things it measured" in August. Worse, the date
+  // it stamped came from `latest_trustworthy_date` — the newest NON-CONTRADICTED row
+  // of any kind, `uncorroborated` included — which is a row the run may never have
+  // consulted. One fresh uncorroborated reading on top of two months of silence
+  // therefore produced a caution about the athlete's latest reading, dated today,
+  // built entirely out of readings nobody would call current.
+  //
+  // Both halves are closed here. The excursion path is gated on the newest VERIFIED
+  // reading being current for its own signal (SENSOR_MAX_AGE_DAYS — stale behaves as
+  // absent, never as current), and when a run does fire it is dated to that reading
+  // rather than to whatever arrived afterwards. Aged out, the run is zero and the
+  // trend/steady logic — which reads medians, and is self-gating on its own window —
+  // owns the observation, exactly as it does when the series is empty. That also
+  // takes the fresh-brake interaction with it: no caution is minted, so a stale
+  // series cannot arm `hasFreshBrake`.
   const excursionRun = (
     trust: any,
     norm: number,
+    signal: SensorSignal,
     beyond: (value: number, norm: number) => boolean
   ): { run: number; provisional: boolean; claim_date: string | null } => {
     const readings: Array<{ date: string; value: number }> = Array.isArray(trust?.readings) ? trust.readings : [];
+    const newest = readings[0] ?? null;
     let run = 0;
-    if (Number.isFinite(norm) && norm > 0) {
+    if (newest && sensorIsCurrent(signal, newest.date, date) && Number.isFinite(norm) && norm > 0) {
       for (const reading of readings) {
         if (!Number.isFinite(Number(reading.value)) || !beyond(Number(reading.value), norm)) break;
         run += 1;
@@ -1503,10 +1523,10 @@ export function planningSignalState(input: {
     return {
       run,
       provisional: trust?.latest_trust === "contradicted",
-      // The newest reading this claim is allowed to be dated to — never a
-      // contradicted one, which is what let a provisional estimate stamp today's
-      // date onto a sentence derived from readings two days older.
-      claim_date: (trust?.latest_trustworthy_date ?? null) || null,
+      // An excursion is dated to the newest reading it was actually built from. Every
+      // other outcome here is the trend, taken over exactly the non-contradicted rows,
+      // so it keeps the newest trustworthy date those medians already describe.
+      claim_date: (run > 0 ? (newest?.date ?? null) : (trust?.latest_trustworthy_date ?? null)) || null,
     };
   };
   // A provisional latest reading is worth SAYING (the agent should know the newest
@@ -1518,11 +1538,13 @@ export function planningSignalState(input: {
   const hrvTrust = excursionRun(
     input.recovery?.verified?.hrv_ms,
     baselineHrv,
+    "hrv",
     (value, norm) => value < norm - Math.max(5, norm * 0.15)
   );
   const rhrTrust = excursionRun(
     input.recovery?.verified?.resting_hr,
     baselineRhr,
+    "resting_hr",
     (value, norm) => value > norm + Math.max(5, norm * 0.08)
   );
 

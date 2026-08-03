@@ -438,7 +438,10 @@ interface ExerciseRollup {
   exercise: unknown;
   mode?: unknown;
   sets: number;
-  reps?: number;
+  // The CROSS-SET total, named as one. It sat next to the per-set `top_reps` under the
+  // bare name `reps`, which is also the per-set field name everywhere else in the
+  // payload — so a rollup of five sets of eight read as a set of forty.
+  total_reps?: number;
   top_weight?: unknown;
   top_reps?: unknown;
   top_rir?: unknown;
@@ -447,11 +450,16 @@ interface ExerciseRollup {
 
 // One row per exercise: how much of it there was, and the single best set.
 //
-// "Best" is the plain numeric MAX of `weight`, which is correct for both encodings
-// (CLAUDE.md): a smaller assist is a harder set, and -10 > -30 says exactly that. A
-// bodyweight set (`weight: null`) can only win when no set of that exercise carried a
-// number at all, so `top_weight: null` still reads as "bodyweight", never as "unknown".
-// Timed movements rank on `duration_sec` and carry no load at all.
+// "Best" is the highest EFFECTIVE load, on the scale the weight encoding already
+// defines (CLAUDE.md): a positive number is load, `null` is bodyweight, and a negative
+// number is assistance — so -30 is thirty pounds of the athlete's own weight taken
+// away, which is easier than bodyweight, and -10 is harder than -30. Bodyweight
+// therefore sits at zero on that scale rather than below every number that exists.
+// Ranking any set carrying a number above every bodyweight set got this backwards in
+// exactly one place, but the place that matters: a machine-assisted pull-up outranked
+// a true one and shipped as the day's best set. Ties fall through to reps, which is
+// what separates two bodyweight sets. Timed movements rank on `duration_sec` and carry
+// no load at all.
 function summarizeSets(sets: readonly unknown[]): ExerciseRollup[] {
   const byExercise = new Map<string, ExerciseRollup>();
   for (const raw of sets) {
@@ -466,7 +474,7 @@ function summarizeSets(sets: readonly unknown[]): ExerciseRollup[] {
     }
     row.sets += 1;
     const reps = Number(set.reps);
-    if (Number.isFinite(reps)) row.reps = (row.reps ?? 0) + reps;
+    if (Number.isFinite(reps)) row.total_reps = (row.total_reps ?? 0) + reps;
 
     if (set.mode === "timed") {
       const seconds = Number(set.duration_sec);
@@ -478,13 +486,16 @@ function summarizeSets(sets: readonly unknown[]): ExerciseRollup[] {
     const bestWeight = Number(row.top_weight);
     const carriesLoad = set.weight != null && Number.isFinite(weight);
     const hasTop = "top_weight" in row;
-    const hasLoadedTop = hasTop && row.top_weight != null && Number.isFinite(bestWeight);
-    // A loaded set always outranks a bodyweight one; between two loaded sets the
-    // heavier wins; between two bodyweight sets the one with more reps wins.
+    // Bodyweight is zero on the encoding's own scale: above every assisted set,
+    // below every loaded one.
+    const effort = carriesLoad ? weight : 0;
+    const bestEffort = row.top_weight == null ? 0 : bestWeight;
+    // The heavier effective load wins; equal load falls through to reps, which is
+    // what separates two bodyweight sets (and two sets at the same weight).
     let wins: boolean;
-    if (carriesLoad) wins = !hasLoadedTop || weight > bestWeight;
-    else if (hasLoadedTop) wins = false;
-    else wins = !hasTop || Number(set.reps) > Number(row.top_reps);
+    if (!hasTop) wins = true;
+    else if (effort !== bestEffort) wins = effort > bestEffort;
+    else wins = Number(set.reps) > Number(row.top_reps);
     if (!wins) continue;
     row.top_weight = carriesLoad ? weight : null;
     row.top_reps = set.reps ?? null;
@@ -525,11 +536,39 @@ function compactSessions(sessions: unknown, limit: number, detail: "full" | "sum
 // map, a strict superset of the other three. ~11 KB per site, zero information lost.
 // (The full object still goes to every non-prompt consumer — this is prompt-boundary
 // only.) Anything without a top-level `quality` map is returned untouched.
+//
+// Two more things are dropped here, both for the same reason — they are the
+// deterministic layer's WORKING, not the model's evidence:
+//
+//   • `verified.{hrv_ms,resting_hr}.readings` — up to 90 raw {date, value} pairs per
+//     metric (~6 KB), the series the excursion test walks. Handing it over is worse
+//     than expensive: the classification above it (`latest_trust`, and the date a
+//     claim is entitled to) exists precisely so a provisional or aged-out reading
+//     cannot become a finding, and a raw series invites the model to re-derive the
+//     claims the deterministic layer deliberately nulled. The classification fields
+//     stay — they are the answer; the readings were the arithmetic.
+//   • `quality.min_hr` — corroboration plumbing. `min_hr` rides in the field list
+//     only so a resting-HR row can be checked against its own floor (READING_TRUST,
+//     src/repo/coach.ts) and is never surfaced on its own; its quality entry is a
+//     coverage map for a signal no prompt may speak about.
 function compactRecovery(view: unknown): unknown {
   if (!view || typeof view !== "object" || Array.isArray(view)) return view;
   const row = view as Record<string, unknown>;
   if (!Object.hasOwn(row, "quality")) return row;
   const { coverage: _coverage, provenance: _provenance, ...rest } = row;
+  if (rest.quality && typeof rest.quality === "object" && !Array.isArray(rest.quality)) {
+    const { min_hr: _minHr, ...qualityRest } = rest.quality as Record<string, unknown>;
+    rest.quality = qualityRest;
+  }
+  if (rest.verified && typeof rest.verified === "object" && !Array.isArray(rest.verified)) {
+    rest.verified = Object.fromEntries(
+      Object.entries(rest.verified as Record<string, unknown>).map(([metric, trust]) => {
+        if (!trust || typeof trust !== "object" || Array.isArray(trust)) return [metric, trust];
+        const { readings: _readings, ...classification } = trust as Record<string, unknown>;
+        return [metric, classification];
+      })
+    );
+  }
   const inner = rest.recovery;
   if (inner && typeof inner === "object" && !Array.isArray(inner) && Object.hasOwn(inner, "quality")) {
     const { quality: _nested, ...innerRest } = inner as Record<string, unknown>;

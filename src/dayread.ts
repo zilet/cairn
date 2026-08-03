@@ -95,11 +95,25 @@ const RECENT_WORK_SUBJECT =
 // Deliberately an ASSERTION list, not a vocabulary list: each alternative states that
 // the work came back worse than usual. Forward-looking advice ("keep the bar light"),
 // prescriptions and questions carry none of these shapes.
+//
+// The copulas `is`/`are` were in this list and did not belong: in the PRESENT tense
+// "heavier" is the ordinary word for prescribed load going up, not a complaint about
+// how work came back. "Today's session is heavier than last week" is a description of
+// the plan; "recent work has FELT heavier than it should" — the sentence that actually
+// reached an athlete — is a claim about how it landed. The past-tense and perception
+// verbs carry that distinction on their own, so the copulas only ever cost legitimate
+// prose. ("was"/"were" stay: they are past tense, and read as the claim.)
 const DEGRADED_QUALITY_CLAIM =
-  /\b(?:felt|feeling|feels|was|were|is|are|came back|coming back|landed|landing)\s+(?:a bit\s+|a little\s+|slightly\s+|somewhat\s+)?(?:heavy|heavier|flat|sluggish|harder|tougher|laboured|labored)\b|\bheavier than (?:they|it|you) should\b|\bbelow (?:your|their|the)?\s*usual\b|\bbelow par\b/gi;
+  /\b(?:felt|feeling|feels|was|were|came back|coming back|landed|landing)\s+(?:a bit\s+|a little\s+|slightly\s+|somewhat\s+)?(?:heavy|heavier|flat|sluggish|harder|tougher|laboured|labored)\b|\bheavier than (?:they|it|you) should\b|\bbelow (?:your|their|the)?\s*usual\b|\bbelow par\b/gi;
 // Any of these in the sentence and it is no longer an assertion that the work was
 // poor — it is the denial of one ("nothing felt heavy"), which agrees with the flags.
 const NEGATED_QUALITY = /\b(?:not|never|didn't|did not|wasn't|weren't|isn't|aren't|hasn't|haven't|no|nothing)\b/i;
+// Nor is it a complaint when the sentence says the heaviness was the INTENT. Harder
+// work landing as harder work is progressive overload doing its job, and a coach is
+// entitled to say so; the guard exists for prose that contradicts the athlete's own
+// "that came back strong", not for prose that explains a deliberate step up.
+const BY_DESIGN_QUALITY =
+  /\bby design\b|\bon purpose\b|\bthat was the point\b|\ba good sign\b|\bplanned\b|\bthis block\b/i;
 
 // Shared proximity test: a descriptor that follows a subject closely enough to be
 // predicated on it, with an optional bridge veto for cues that re-target the claim.
@@ -197,7 +211,7 @@ export function dayReadProseConsistencyIssue(
       }
     }
 
-    if (qualityIsChecked && !NEGATED_QUALITY.test(sentence)) {
+    if (qualityIsChecked && !NEGATED_QUALITY.test(sentence) && !BY_DESIGN_QUALITY.test(sentence)) {
       // No bridge veto here: unlike the load guard there is no legitimate
       // forward-looking reading of "your lifts felt heavier than they should" —
       // the claim is in the past tense by construction, and a prescription for
