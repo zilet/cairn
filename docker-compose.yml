@@ -45,6 +45,10 @@ services:
       # reliably uses XAI_API_KEY. ANTHROPIC_API_KEY / OPENAI_API_KEY are passed
       # through for completeness but are not the claude/codex coaching path.
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # Headless subscription auth for the Claude Code CLI (from `claude setup-token`
+      # on a machine with a browser). Lets the containerized CLI run without an
+      # interactive login lapsing; the cairn-home volume login remains the fallback.
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - XAI_API_KEY=${XAI_API_KEY:-}
       # Generated ARTWORK only (src/art.ts, gemini-3.1-flash-image) — this is NOT a
