@@ -2615,29 +2615,24 @@ export function readinessBand(value: unknown): "low" | "steady" | "primed" | nul
 export function getRecoverySummary(days = 14, garminSummary?: any, asOfDate = localDateISO()) {
   const windowDays = recoveryWindowDays(days, 14);
   const requestedAsOf = String(asOfDate || localDateISO());
-  const parsedAsOf = /^\d{4}-\d{2}-\d{2}$/.test(requestedAsOf)
-    ? new Date(`${requestedAsOf}T00:00:00Z`)
-    : null;
-  if (
-    !parsedAsOf ||
-    Number.isNaN(parsedAsOf.getTime()) ||
-    parsedAsOf.toISOString().slice(0, 10) !== requestedAsOf
-  ) {
+  const parsedAsOf = /^\d{4}-\d{2}-\d{2}$/.test(requestedAsOf) ? new Date(`${requestedAsOf}T00:00:00Z`) : null;
+  if (!parsedAsOf || Number.isNaN(parsedAsOf.getTime()) || parsedAsOf.toISOString().slice(0, 10) !== requestedAsOf) {
     throw new Error("as-of date must be a real YYYY-MM-DD");
   }
   const today = requestedAsOf;
   // A caller-supplied aggregate cannot be safely rewound. Preserve the existing
   // current-date injection path, but rebuild Garmin's summary for historical reads.
   const garmin =
-    today === localDateISO() && garminSummary != null
-      ? garminSummary
-      : getGarminCoachSummary(windowDays, today);
+    today === localDateISO() && garminSummary != null ? garminSummary : getGarminCoachSummary(windowDays, today);
   const fields = [
     "steps",
     "sleep_min",
     "sleep_score",
     "resting_hr",
     "hrv_ms",
+    // Never surfaced on its own — it rides here so a resting-HR reading can be checked
+    // against its own row's floor. See READING_TRUST below.
+    "min_hr",
     "active_calories",
     "total_calories",
     "distance_km",
@@ -2807,6 +2802,56 @@ export function getRecoverySummary(days = 14, garminSummary?: any, asOfDate = lo
     list.filter((row) => row.values[field] != null).map((row) => row.date);
   const countOf = (field: Signal, list: ResolvedRow[]): number =>
     list.filter((row) => row.values[field] != null && Number.isFinite(Number(row.values[field]))).length;
+
+  // ---------- IS THIS READING VERIFIED, OR IS IT THE WATCH GUESSING? ----------
+  //
+  // A daily resting-HR row is not automatically a measured overnight resting heart
+  // rate. Garmin writes a PROVISIONAL estimate during the day and revises it once it
+  // has actually seen a night, and on a wrist the watch is worn episodically that
+  // revision may never come. Live on 2026-08-03 the row said resting HR 68 — the
+  // highest ever recorded — and it was written 16:55, mid-afternoon, with no
+  // `sleep_min` for the date at all and a `min_hr` of 50 on the very same row. A
+  // resting heart rate eighteen beats above the day's own floor is not a resting
+  // heart rate. Meanwhile every sleep-backed row that month read 50-54 and steady.
+  //
+  // So each reading is classified ONCE, here, where the rows are resolved — never at
+  // each consumer, which is how three call sites come to hold three opinions about
+  // the same number:
+  //
+  //   verified       the row shows the overnight the value claims to describe:
+  //                  `sleep_min` is present, or the row's own `min_hr` is consistent
+  //                  with it (a true resting HR sits just above the day's floor —
+  //                  1-3 bpm apart in every sleep-backed row on record).
+  //   contradicted   `min_hr` is present and the value argues with it: below the
+  //                  day's own minimum (impossible), or implausibly far above it.
+  //                  This is the provisional mid-day estimate, and it is the ONLY
+  //                  class that gets actively withheld.
+  //   uncorroborated neither test can run — no sleep, no `min_hr` (a generic Apple or
+  //                  Oura row carries no `min_hr` at all). Not evidence of a problem;
+  //                  just nothing to check against.
+  //
+  // Only `verified` may open the excursion path in the signal state (a caution has to
+  // clear a higher bar than a number does), and only `contradicted` is dropped from
+  // the trend windows. `uncorroborated` keeps counting exactly as it always has —
+  // absence of corroboration is not contradiction, and treating it as such would
+  // silently delete the trend for every non-Garmin wearable.
+  const RESTING_HR_FLOOR_MARGIN = 5;
+  type ReadingTrust = "verified" | "contradicted" | "uncorroborated";
+  const READING_TRUST = (row: ResolvedRow, field: "resting_hr" | "hrv_ms"): ReadingTrust => {
+    if (row.values[field] == null) return "uncorroborated";
+    // A row that recorded sleep saw the night. That is the overnight context both
+    // resting HR and HRV are derived from, so it verifies either of them.
+    if (row.values.sleep_min != null) return "verified";
+    const floor = Number(row.values.min_hr);
+    const resting = Number(row.values.resting_hr);
+    if (!Number.isFinite(floor) || !Number.isFinite(resting)) return "uncorroborated";
+    // The HR coherence check speaks for the whole ROW, not just for resting HR: it
+    // answers "did this row's sampling include the sleep window", which is the same
+    // question that decides whether its HRV figure means anything either.
+    return resting >= floor && resting - floor <= RESTING_HR_FLOOR_MARGIN ? "verified" : "contradicted";
+  };
+  const trustworthy = (list: ResolvedRow[], field: "resting_hr" | "hrv_ms"): ResolvedRow[] =>
+    list.filter((row) => READING_TRUST(row, field) !== "contradicted");
   const recentRows = withinDays(cadenceRows, DELTA_RECENT_DAYS);
   const baselineRows = withinDays(cadenceRows, DELTA_BASELINE_DAYS);
 
@@ -2863,8 +2908,13 @@ export function getRecoverySummary(days = 14, garminSummary?: any, asOfDate = lo
   // projection, so the agent sees exactly what the deterministic layer saw).
   const deltaReady: Record<"sleep" | "hrv" | "rhr", boolean> = { sleep: false, hrv: false, rhr: false };
   for (const [key, field] of Object.entries(DELTA_FIELDS) as ["sleep" | "hrv" | "rhr", Signal][]) {
-    const recentN = countOf(field, recentRows);
-    const baselineN = countOf(field, baselineRows);
+    // Counted over the same rows the medians are taken from, so a window whose
+    // coverage is made up of contradicted mid-day estimates cannot report itself
+    // ready for a comparison it has no readings to make.
+    const countable = (list: ResolvedRow[]) =>
+      field === "resting_hr" || field === "hrv_ms" ? trustworthy(list, field) : list;
+    const recentN = countOf(field, countable(recentRows));
+    const baselineN = countOf(field, countable(baselineRows));
     const ready = recentN >= DELTA_MIN_RECENT_N && baselineN >= DELTA_MIN_BASELINE_N;
     deltaReady[key] = ready;
     const cadence = classifyWearPattern(datesOf(field, cadenceRows), today, CADENCE_WINDOW_DAYS);
@@ -2938,9 +2988,10 @@ export function getRecoverySummary(days = 14, garminSummary?: any, asOfDate = lo
     quality,
   };
   const medians = (list: ResolvedRow[]) => ({
+    // Sleep is self-verifying — a sleep figure IS the overnight — so it is untouched.
     sleep: median("sleep_min", list),
-    hrv: median("hrv_ms", list),
-    rhr: median("resting_hr", list),
+    hrv: median("hrv_ms", trustworthy(list, "hrv_ms")),
+    rhr: median("resting_hr", trustworthy(list, "resting_hr")),
   });
   const recent = medians(recentRows);
   const baseline = medians(baselineRows);
@@ -2954,6 +3005,33 @@ export function getRecoverySummary(days = 14, garminSummary?: any, asOfDate = lo
     hrv: deltaReady.hrv ? diff(recent.hrv, baseline.hrv) : null,
     rhr: deltaReady.rhr ? diff(recent.rhr, baseline.rhr) : null,
   };
+  // The VERIFIED series each excursion test is allowed to reason from, newest first,
+  // plus what the newest reading of any kind actually was — so a consumer can say
+  // "the latest figure is provisional" without having to re-derive that itself. The
+  // 90-day `cadenceRows` is the source rather than the display window, because
+  // continuity ("is this the second one in a row?") is a question about consecutive
+  // READINGS on an episodically-worn watch, not about consecutive calendar days.
+  const verifiedSeries = (field: "resting_hr" | "hrv_ms") => {
+    const readings = cadenceRows
+      .filter((row) => READING_TRUST(row, field) === "verified")
+      .map((row) => ({ date: row.date, value: Number(row.values[field]) }))
+      .filter((entry) => Number.isFinite(entry.value));
+    const newest = cadenceRows.find((row) => row.values[field] != null) ?? null;
+    // The newest reading any CLAIM about this field may be dated to: the medians
+    // above are taken over exactly the non-contradicted rows, so stamping a trend
+    // with the date of a reading that was excluded from it would recreate the
+    // original bug — a sentence pointing at a number it never looked at.
+    const newestTrustworthy =
+      cadenceRows.find((row) => row.values[field] != null && READING_TRUST(row, field) !== "contradicted") ?? null;
+    return {
+      readings,
+      latest_date: newest?.date ?? null,
+      latest_value: newest == null ? null : Number(newest.values[field]),
+      latest_trust: newest ? READING_TRUST(newest, field) : ("uncorroborated" as ReadingTrust),
+      latest_trustworthy_date: newestTrustworthy?.date ?? null,
+    };
+  };
+  const verified = { resting_hr: verifiedSeries("resting_hr"), hrv_ms: verifiedSeries("hrv_ms") };
   const sources = [...new Set(Object.values(quality).flatMap((entry: any) => entry.sources ?? []))] as string[];
   const surfaced = Object.entries(recovery).filter(([key]) => key !== "last_date" && key !== "quality");
   const has_data = surfaced.some(([, value]) => value != null);
@@ -2990,6 +3068,7 @@ export function getRecoverySummary(days = 14, garminSummary?: any, asOfDate = lo
     recent,
     baseline,
     delta,
+    verified,
     activities: (garmin?.activities ?? []).filter((activity: any) => {
       const date = String(activity?.date ?? activity?.last_date ?? "");
       return !date || date <= today;

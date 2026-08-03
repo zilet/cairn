@@ -84,6 +84,11 @@ test("field/date collisions and linked activity duplicates resolve once with pro
   assert.equal(training.evidence[0].selected_from.length, 2);
 });
 
+// The field name here used to be `felt_fatigue`, which is a REAL field owned by the
+// autoregulation observation (training_load_tolerance, dated to the session, 7-day
+// window) — so this case was pinning the felt-protect rung through a name that in
+// production carries a week-old session rating. `felt_energy` is the check-in field
+// this rung actually exists for; the behaviour under test is unchanged.
 test("fresh user-reported fatigue overrides benign wearable evidence and preserves the conflict", () => {
   const date = localDaysAgo(0);
   const state = repo.buildUnifiedSignalState(date, [
@@ -97,7 +102,7 @@ test("fresh user-reported fatigue overrides benign wearable evidence and preserv
     },
     {
       dimension: "recovery_capacity",
-      field: "felt_fatigue",
+      field: "felt_energy",
       date,
       source: "user_checkin",
       direction: "constraint",
@@ -511,8 +516,9 @@ test("a voice-less observation degrades to an athlete-facing floor, never to the
   const date = localDaysAgo(0);
   const state = repo.buildUnifiedSignalState(date, [
     {
+      // Same rename as the case above, for the same reason.
       dimension: "recovery_capacity",
-      field: "felt_fatigue",
+      field: "felt_energy",
       date,
       source: "user_checkin",
       direction: "constraint",
@@ -765,4 +771,359 @@ test("coach context, deterministic Brief, and prompt consume the same planning p
   const prompt = buildDayReadPrompt(ctx, { date });
   assert.match(prompt, /UNIFIED DAILY PLANNING STATE/);
   assert.match(prompt, /POSTURE: REST/);
+});
+
+// ---------- the felt-protect rung is for TODAY-dated felt signals ----------
+// It sits at the very top of the posture ladder and is the only rung a single
+// observation can use to return a whole rest day. It used to match its field name by
+// SUBSTRING (`/fatigue|energy|sleep_feel|illness/`), and the autoregulation
+// observation is called `felt_fatigue` and carries a 7-day window — so one below-par
+// session rating won the top of the ladder for a week, and did it with the severity
+// exactly inverted against the check-in signals filed that same morning.
+test("a week-old low-performance rating eases the day rather than owning it", () => {
+  const date = localDaysAgo(0);
+  const state = repo.planningSignalState({
+    date,
+    trainingSignals: {
+      autoregulation: { low_performance_flag: true, low_performance_date: localDaysAgo(6) },
+    },
+  });
+
+  const felt = state.dimensions.training_load_tolerance.evidence.find((item) => item.field === "felt_fatigue");
+  assert.ok(felt, "the observation is still made — only its rung changed");
+  assert.equal(felt.direction, "constraint");
+  assert.equal(
+    state.action.posture,
+    "easy",
+    "'loading should ease' is an easy day, not a rest day claimed six days after the session"
+  );
+  assert.equal(state.action.readiness, "protect");
+});
+
+test("today's felt signals still own the rest rung, and the severity is no longer inverted", () => {
+  const date = localDaysAgo(0);
+  const runDown = repo.planningSignalState({ date, checkin: { energy: 1 } });
+  assert.equal(runDown.action.posture, "rest", "the athlete saying they are run-down today is what this rung is for");
+
+  const unrested = repo.planningSignalState({ date, checkin: { sleep_feel: 1 } });
+  assert.equal(unrested.action.posture, "rest");
+
+  const ill = repo.planningSignalState({
+    date,
+    context: { reduce_load: true, active: [{ kind: "life_event", reduce_load: true, title: "Head cold" }] },
+  });
+  assert.equal(ill.action.posture, "rest");
+
+  // The comparison the dry-run caught: a sore check-in filed TODAY used to read easy
+  // while a six-day-old session rating read rest. Both are now easy, and the acute
+  // felt signals above are the only things that reach rest.
+  const soreToday = repo.planningSignalState({ date, checkin: { soreness: 5 } });
+  assert.equal(soreToday.action.posture, "easy");
+});
+
+test("the felt-protect rung matches exact field names, so a lookalike cannot join it", () => {
+  const date = localDaysAgo(0);
+  const lookalike = repo.buildUnifiedSignalState(date, [
+    {
+      // Under the old substring rule every one of these matched: "fatigue", "energy",
+      // "sleep_feel". None of them is a field this rung was written for.
+      dimension: "training_load_tolerance",
+      field: "accumulated_fatigue",
+      date,
+      source: "manual_session",
+      direction: "constraint",
+      summary: "Accumulated fatigue is high.",
+      safety_override: true,
+      max_age_days: 0,
+    },
+  ]);
+  assert.equal(lookalike.action.posture, "easy", "a load constraint eases the day; it does not claim the rest rung");
+
+  const dated = repo.buildUnifiedSignalState(date, [
+    {
+      dimension: "recovery_capacity",
+      field: "felt_energy",
+      date: localDaysAgo(3),
+      source: "user_checkin",
+      direction: "constraint",
+      summary: "The athlete reported feeling run-down.",
+      safety_override: true,
+      max_age_days: 7,
+    },
+  ]);
+  assert.equal(
+    dated.action.posture,
+    "easy",
+    "even a listed field may not claim the morning off a three-day-old reading"
+  );
+});
+
+// ---------- the backed tier's earned bar ----------
+// `backed` licenses the Brief to say "everything you've logged lately says you're
+// carrying this well" (TRAIN_PUSH_WHY) and licenses the prompt's TODAY IS BACKED block.
+// A single check-in with energy rated 4 — one tap, on the "fine" end of a five-point
+// scale, on an otherwise empty morning — used to be enough to earn all of it.
+test("a lone low-confidence check-in tap does not earn the backed tier", () => {
+  const date = localDaysAgo(0);
+  const oneTap = repo.planningSignalState({ date, checkin: { energy: 4 } });
+  assert.equal(oneTap.action.posture, "train");
+  assert.equal(oneTap.action.readiness, "ready");
+  assert.equal(oneTap.action.confidence, "low");
+  assert.equal(oneTap.action.support, null, "one self-report is not 'everything you've logged lately'");
+
+  // TWO self-reports agreeing is a different claim, and clears the bar.
+  const twoReports = repo.planningSignalState({ date, checkin: { energy: 4, sleep_feel: 4 } });
+  assert.equal(twoReports.action.support?.level, "backed");
+  assert.deepEqual(twoReports.action.support.fields.sort(), ["felt_energy", "sleep_feel"]);
+});
+
+test("a rated session still earns the tier on its own, at any confidence", () => {
+  const date = localDaysAgo(0);
+  const state = repo.planningSignalState({
+    date,
+    trainingSignals: { session_quality: { strong_flag: true, strong_date: localDaysAgo(2) } },
+  });
+  assert.equal(state.action.confidence, "low", "one dimension, one field — the tier is not riding on confidence here");
+  assert.equal(state.action.support?.level, "backed");
+  assert.deepEqual(state.action.support.fields, ["session_quality"]);
+});
+
+// ---------- supportive evidence may not out-vote a fresh brake ----------
+// The private arbitration summed STATUS_VALUE x DIMENSION_WEIGHT x CONFIDENCE_WEIGHT,
+// and `supportive` is +2 against `watch`'s -1 — so enough good wearable readings
+// cancelled genuine cautions outright and a day that should have read modify read
+// train. An athlete with a dead watch got the SAFER read than one whose watch worked,
+// which inverts the absence-is-neutral law the module is built on.
+function brakedBoard(date, { withSupport }) {
+  const support = [
+    ["sleep", "The most recent recorded night supports the planned day."],
+    ["training_readiness", "The wearable readiness signal is supportive."],
+    ["hrv", "HRV is steady against the athlete's norm."],
+  ].map(([field, summary]) => ({
+    dimension: "recovery_capacity",
+    field,
+    date,
+    source: "garmin",
+    direction: "support",
+    summary,
+    max_age_days: 3,
+  }));
+  const brakes = [
+    {
+      dimension: "training_load_tolerance",
+      field: "hybrid_interference",
+      date,
+      source: "cairn_hybrid_state",
+      direction: "caution",
+      summary: "Recent endurance work changes how the next strength session should land.",
+      max_age_days: 2,
+    },
+    {
+      dimension: "training_load_tolerance",
+      field: "acute_load",
+      date,
+      source: "cairn_program_state",
+      direction: "caution",
+      summary: "Acute training load is running above the established base.",
+      max_age_days: 1,
+    },
+    {
+      dimension: "life_capacity",
+      field: "schedule_pressure",
+      date,
+      source: "user_context",
+      direction: "caution",
+      summary: "A current commitment adds schedule pressure today.",
+      max_age_days: 1,
+    },
+  ];
+  return repo.buildUnifiedSignalState(date, withSupport ? [...support, ...brakes] : brakes);
+}
+
+test("good wearable readings cannot cancel a board of fresh cautions", () => {
+  const date = localDaysAgo(0);
+  const withoutWatch = brakedBoard(date, { withSupport: false });
+  const withWatch = brakedBoard(date, { withSupport: true });
+
+  assert.equal(withoutWatch.action.posture, "modify", "three fresh cautions are a modify day");
+  assert.equal(
+    withWatch.action.posture,
+    "modify",
+    "a healthy watch may corroborate and may soften the voice, but it does not vote the brakes down"
+  );
+  assert.equal(withWatch.dimensions.recovery_capacity.status, "supportive", "the support itself is untouched");
+  assert.equal(withWatch.action.support, null, "and the backed tier still refuses to exist beside a brake");
+});
+
+test("with no brake on the board the arbitration is unchanged", () => {
+  const date = localDaysAgo(0);
+  const clear = repo.buildUnifiedSignalState(date, [
+    {
+      dimension: "recovery_capacity",
+      field: "sleep",
+      date,
+      source: "garmin",
+      direction: "support",
+      summary: "The most recent recorded night supports the planned day.",
+      max_age_days: 3,
+    },
+    {
+      dimension: "recovery_capacity",
+      field: "training_readiness",
+      date,
+      source: "garmin",
+      direction: "support",
+      summary: "The wearable readiness signal is supportive.",
+      max_age_days: 1,
+    },
+  ]);
+  assert.equal(clear.action.posture, "train");
+  assert.equal(clear.action.readiness, "ready");
+  assert.equal(clear.dimensions.recovery_capacity.status, "supportive");
+});
+
+// ---------- HRV and resting HR are read against the athlete's OWN numbers ----------
+// day-read already compared the same delta to a baseline-relative band; this layer used
+// flat constants, so a 40 ms athlete's real collapse never registered and a 120 ms
+// athlete's noise registered constantly.
+const wearable = (date, { delta, baseline, current: cur = {} }) => ({
+  date,
+  recovery: {
+    recovery: cur,
+    delta,
+    baseline,
+    quality: {
+      hrv_ms: { latest_date: date, source: "garmin", freshness: "fresh", sample_count: 14 },
+      resting_hr: { latest_date: date, source: "garmin", freshness: "fresh", sample_count: 14 },
+    },
+  },
+});
+const fieldOf = (state, field) => state.dimensions.recovery_capacity.evidence.find((item) => item.field === field);
+
+test("the HRV trend band is a share of the athlete's own norm, with the constant as a floor", () => {
+  const date = localDaysAgo(0);
+  // 40 ms norm, 4 ms down — a real 10% drop the flat 5 ms constant used to miss.
+  const low = repo.planningSignalState(wearable(date, { delta: { hrv: -4 }, baseline: { hrv: 40 } }));
+  assert.equal(fieldOf(low, "hrv").direction, "caution");
+  assert.equal(fieldOf(low, "hrv").voice.key, "hrv_below");
+
+  // 120 ms norm, 5.5 ms down — inside this athlete's noise, and formerly a caution.
+  const high = repo.planningSignalState(wearable(date, { delta: { hrv: -5.5 }, baseline: { hrv: 120 } }));
+  assert.equal(fieldOf(high, "hrv").direction, "support");
+  assert.equal(fieldOf(high, "hrv").voice.key, "hrv_steady");
+
+  // No baseline at all falls back to the constant, so a caller without one is unchanged.
+  const bare = repo.planningSignalState(wearable(date, { delta: { hrv: -9 }, baseline: undefined }));
+  assert.equal(fieldOf(bare, "hrv").direction, "caution");
+  const belowFloor = repo.planningSignalState(wearable(date, { delta: { hrv: -4 }, baseline: undefined }));
+  assert.equal(belowFloor.dimensions.recovery_capacity.evidence.find((i) => i.field === "hrv").direction, "support");
+});
+
+test("the resting-HR trend band scales with the norm and never dips under its floor", () => {
+  const date = localDaysAgo(0);
+  // 80 bpm norm: 3.5 bpm is inside 5%, and used to trip the flat 3 bpm constant.
+  const high = repo.planningSignalState(wearable(date, { delta: { rhr: 3.5 }, baseline: { rhr: 80 } }));
+  assert.equal(fieldOf(high, "resting_hr").direction, "support");
+
+  // 50 bpm norm: 5% is 2.5, so the 3 bpm floor holds and the test does not get
+  // hypersensitive on a low-resting athlete.
+  const low = repo.planningSignalState(wearable(date, { delta: { rhr: 2.8 }, baseline: { rhr: 50 } }));
+  assert.equal(fieldOf(low, "resting_hr").direction, "support");
+  const clear = repo.planningSignalState(wearable(date, { delta: { rhr: 4 }, baseline: { rhr: 50 } }));
+  assert.equal(fieldOf(clear, "resting_hr").direction, "caution");
+});
+
+// ---------- a raw value is not a finding ----------
+// The observation's date and freshness came from the LATEST reading while its DIRECTION
+// came only from the median-vs-median trend. Live on 2026-08-03 that produced "Resting
+// heart rate is steady against the athlete's norm … latest 2026-08-03, fresh, high
+// confidence" on a morning whose resting HR was the highest ever recorded.
+//
+// The first fix for that read the latest VALUE and flipped on it, which turned out to
+// be the same mistake wearing the other sign: on the live data that value was Garmin's
+// provisional mid-day estimate, contradicted by its own row. So the excursion path now
+// reads only the verified series and only a RUN of it — the cases for that live in
+// test/readingTrust.test.js, beside the classification seam they exercise. What these
+// two pin is the floor underneath it: a bare latest value, with nothing saying it was
+// ever verified, decides nothing at all.
+test("a bare latest value cannot flip the observation on its own", () => {
+  const date = localDaysAgo(0);
+  const spike = repo.planningSignalState(
+    wearable(date, { delta: { rhr: 0 }, baseline: { rhr: 54 }, current: { resting_hr: 68 } })
+  );
+  const rhr = fieldOf(spike, "resting_hr");
+  assert.equal(rhr.direction, "support", "an unverified number is not evidence of anything");
+  assert.equal(rhr.voice.key, "resting_hr_steady");
+  assert.equal(spike.action.posture, "train");
+
+  // …and the ordinary morning it is indistinguishable from, for the same reason.
+  const steady = repo.planningSignalState(
+    wearable(date, { delta: { rhr: 0 }, baseline: { rhr: 54 }, current: { resting_hr: 56 } })
+  );
+  assert.equal(fieldOf(steady, "resting_hr").direction, "support");
+  assert.equal(fieldOf(steady, "resting_hr").summary, "Resting heart rate is steady against the athlete's norm.");
+});
+
+test("the same floor holds for HRV", () => {
+  const date = localDaysAgo(0);
+  const spike = repo.planningSignalState(
+    wearable(date, { delta: { hrv: 0 }, baseline: { hrv: 60 }, current: { hrv_ms: 40 } })
+  );
+  assert.equal(fieldOf(spike, "hrv").direction, "support");
+  assert.equal(fieldOf(spike, "hrv").voice.key, "hrv_steady");
+
+  const steady = repo.planningSignalState(
+    wearable(date, { delta: { hrv: 0 }, baseline: { hrv: 60 }, current: { hrv_ms: 58 } })
+  );
+  assert.equal(fieldOf(steady, "hrv").direction, "support");
+  assert.equal(fieldOf(steady, "hrv").summary, "HRV is steady against the athlete's norm.");
+});
+
+test("the excursion voices are a real athlete vocabulary, not one literal", () => {
+  for (const key of ["hrv_excursion", "resting_hr_excursion"]) {
+    const variants = repo.signalVoice({ key });
+    assert.ok(variants.length >= 4, `${key} needs enough phrasings to rotate`);
+    assert.equal(new Set(variants).size, variants.length, `${key} repeats a phrasing`);
+    for (const line of variants) {
+      assert.doesNotMatch(line, /\bthe athlete\b/i, `${key} speaks the machine register`);
+      // HRV and resting HR ride a 3-day window, so the newest reading may not be from
+      // today at all — a sentence claiming the morning would be the same overclaim
+      // these observations exist to stop.
+      assert.doesNotMatch(line, /\bthis morning\b|\btoday's reading\b/i, `${key} claims a reading it may not have`);
+    }
+  }
+});
+
+// ---------- a constraint is not a conflict ----------
+// The conflict line pairs the first support with the first brake ("X. But Y."), and the
+// fuel-hold summary was written as a DECISION about agreement — so it read as
+// opposition to a support statement it was not actually in tension with, and cost the
+// dimension a confidence tier for a disagreement that did not exist.
+test("the fuel hold states a constraint, so the conflict join reads as a qualification", () => {
+  const date = localDaysAgo(0);
+  const state = repo.planningSignalState({
+    date,
+    trainingSignals: { session_quality: { strong_flag: true, strong_date: date } },
+    underfueling: {
+      state: "settling",
+      agreeing_channels: ["weight_trend", "performance"],
+      rationale: "The correction is settling.",
+      action: { training: "hold_aggression", line: "One bounded fuel step is settling." },
+    },
+  });
+
+  const hold = state.dimensions.training_load_tolerance.evidence.find((item) => item.field === "fuel_protection");
+  assert.equal(
+    hold.summary,
+    "Fuel availability is still being protected, so progression aggression stays held while the next correction settles."
+  );
+  assert.doesNotMatch(
+    hold.summary,
+    /\bagree enough\b/i,
+    "the summary observes a constraint rather than reporting a vote"
+  );
+
+  const [conflict] = state.dimensions.training_load_tolerance.conflicts;
+  assert.ok(conflict, "the pairing itself is unchanged — support plus a brake is still worth surfacing");
+  assert.match(conflict, /^Recent rated sessions came back strong.*\. But fuel availability is still being protected/);
 });

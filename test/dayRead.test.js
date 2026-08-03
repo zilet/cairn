@@ -2719,10 +2719,17 @@ test("the bare dayRead sees the low-performance flag and reads protectively", ()
     state.dimensions.training_load_tolerance.evidence.some((e) => e.field === "felt_fatigue"),
     "recent sessions feeling below par has to reach the read"
   );
-  assert.equal(state.action.posture, "rest");
+  // EASY, not rest. A rated session that felt below par means "loading should ease",
+  // and the observation carries a 7-day window — so on the old felt-protect rung,
+  // which matched field names by SUBSTRING and caught `felt_fatigue` on "fatigue",
+  // this three-day-old rating claimed the top of the posture ladder and returned a
+  // full rest day every morning for a week. The observation, the constrained
+  // dimension, the rule and the directive are all unchanged; the severity is now
+  // proportional to the evidence behind it.
+  assert.equal(state.action.posture, "easy");
   assert.equal(state.action.directives.training, "recover");
   // And the read itself follows — the plan day is no longer simply handed over.
-  assert.equal(r.kind, "rest");
+  assert.equal(r.kind, "easy");
   assert.equal(r.decision.rule_code, "acute_signal_protection");
 });
 
@@ -2853,12 +2860,19 @@ test("sessions that went badly are not evidence that overruling the read was fin
   for (let i = 1; i <= 3; i++) seedOverriddenRest(dayBefore(REF, i), 2);
 
   const r = repo.dayRead(REF, { has_data: false, recovery: {} });
-  assert.equal(r.kind, "rest");
-  // Sessions felt below par also latch the low-performance signal, so the protect
-  // posture owns this morning — a softenable rule. It stays rest anyway, because the
-  // evidence the softening rests on is exactly what is missing here.
+  // Sessions felt below par latch the low-performance signal, so the protect posture
+  // owns this morning — a softenable rule. The read this case is about is `applied`:
+  // nothing was softened, because the evidence the softening rests on (overrides that
+  // went WELL) is exactly what is missing here.
+  //
+  // `easy` rather than `rest` is the low-performance flag now sitting on the rung that
+  // matches what it means, and it is NOT the softening — the assertions below are what
+  // separate the two, and they are the point of the case.
+  assert.equal(r.kind, "easy");
   assert.equal(r.decision.rule_code, "acute_signal_protection");
   assert.equal(r.signals.outcome_feedback.active, false);
+  assert.equal(r.signals.outcome_feedback.applied, false, "no rest was eased away — this easy is the read's own");
+  assert.deepEqual(r.signals.outcome_feedback.overridden_and_fine, []);
 });
 
 test("an unrated session still counts — silence is not evidence of harm", () => {

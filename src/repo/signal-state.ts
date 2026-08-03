@@ -257,6 +257,52 @@ export const SIGNAL_VOICE = {
       "There is nothing unusual in your heart-rate variability today.",
     ],
   },
+  // ONE verified reading off the norm, which is not yet a finding. These belong to a
+  // `neutral` observation — it can neither brake the day nor endorse it — so every
+  // phrasing has to be genuinely non-directive. A sentence here telling the athlete to
+  // ease off would be a brake the arbitration never agreed to.
+  hrv_unsettled: {
+    concept: /\bvariability\b/i,
+    variants: [
+      "One recent heart-rate variability reading came in off your usual — worth noticing, not worth reading into yet.",
+      "Your last variability reading was on the low side for you. One reading is not a pattern.",
+      "There is a single odd heart-rate variability reading in your recent numbers, which is worth keeping an eye on.",
+      "Variability came in lower than usual once recently — nothing to act on unless it repeats.",
+    ],
+  },
+  resting_hr_unsettled: {
+    concept: /\bheart rate\b/i,
+    variants: [
+      "One recent resting heart rate reading came in off your usual — worth noticing, not worth reading into yet.",
+      "Your last resting heart rate reading was on the high side for you. One reading is not a pattern.",
+      "There is a single odd resting heart rate reading in your recent numbers, which is worth keeping an eye on.",
+      "Resting heart rate came in higher than usual once recently — nothing to act on unless it repeats.",
+    ],
+  },
+  // The EXCURSION pair — a RUN of verified readings well outside the athlete's own
+  // norm, which is a different fact from the multi-day trend the `*_below` / `*_up`
+  // sets speak for and needs words that cannot be mistaken for it. Deliberately no
+  // "this morning": HRV and resting HR ride a 3-day window (SENSOR_MAX_AGE_DAYS), and
+  // the newest VERIFIED reading may be older still, so a sentence claiming the morning
+  // would be exactly the overclaim these observations were built to stop.
+  hrv_excursion: {
+    concept: /\bvariability\b/i,
+    variants: [
+      "Your latest heart-rate variability reading came in a long way under where it normally sits for you.",
+      "The most recent variability reading is unusually low for you — worth easing rather than pushing through.",
+      "Your last heart-rate variability reading stands out as low against your own usual, so give today a gentler shape.",
+      "Variability on your most recent reading is well off your normal range, which is reason enough to go easy.",
+    ],
+  },
+  resting_hr_excursion: {
+    concept: /\bheart rate\b/i,
+    variants: [
+      "Your latest resting heart rate reading came in a long way above where it normally sits for you.",
+      "The most recent resting heart rate reading is unusually high for you, which is worth taking gently.",
+      "Your last resting heart rate reading stands out against your own usual, so ease into today.",
+      "Resting heart rate on your most recent reading is well off your normal range, and that is worth respecting.",
+    ],
+  },
   resting_hr_up: {
     concept: /\bheart rate\b/i,
     variants: [
@@ -892,14 +938,31 @@ const CONFIDENCE_WEIGHT: Record<SignalConfidence, number> = { none: 0, low: 0.5,
 // Private structured metric: fixed dimension/confidence weights and a bounded
 // result. Hard safety gates run first; this breaks only the remaining mixed-signal
 // ties. The number is deliberately never returned or rendered.
+//
+// SUPPORT CANNOT OUT-VOTE A BRAKE. The sum used to be unweighted in sign: `supportive`
+// contributes +2 per dimension against `watch`'s -1, so four supportive wearable
+// readings cancelled three genuine cautions and a day that should have read modify
+// read train. Two things were wrong with that. It contradicts the absence-is-neutral
+// law the rest of this module is built on — an athlete whose watch had simply died
+// got the SAFER read than one whose watch was working — and it contradicts
+// `supportState` directly, which refuses to call a day backed while any fresh brake
+// exists. One layer was cancelling brakes that the layer above it treats as absolute.
+//
+// So while `hasFreshBrake` holds, every positive contribution clamps to zero. Only
+// `supportive` is positive (every other status is <= 0), so this removes exactly the
+// cancelling and nothing else: supportive evidence still rides in the dimensions,
+// still raises confidence, still owns the voice — it just stops voting the brake down.
+// With no fresh brake on the board, `Math.min(0, …)` never binds and the sum is
+// byte-identical to what it always was.
 function privateArbitration(dimensions: Record<SignalDimension, SignalDimensionState>) {
-  const components = DIMENSIONS.map((dimension) => ({
-    dimension,
-    contribution:
+  const braked = hasFreshBrake(dimensions);
+  const components = DIMENSIONS.map((dimension) => {
+    const raw =
       STATUS_VALUE[dimensions[dimension].status] *
       DIMENSION_WEIGHT[dimension] *
-      CONFIDENCE_WEIGHT[dimensions[dimension].confidence],
-  }));
+      CONFIDENCE_WEIGHT[dimensions[dimension].confidence];
+    return { dimension, contribution: braked ? Math.min(0, raw) : raw };
+  });
   return {
     components,
     value: Math.max(
@@ -952,6 +1015,27 @@ function planningDirectives(dimensions: Record<SignalDimension, SignalDimensionS
   };
 }
 
+// The TOP of the posture ladder — the one rung that returns a full rest day, and the
+// only place a single observation can. It exists for the felt signals the athlete
+// states about THIS MORNING: they said they feel run-down, they said they woke up
+// unrecovered, they are ill today. Nothing else belongs here.
+//
+// It used to be a SUBSTRING match (`/fatigue|energy|sleep_feel|illness/`) over the
+// field name, and `felt_fatigue` — the autoregulation observation built from a rated
+// session, carrying `max_age_days: 7` — matched on "fatigue". So one below-par session
+// rating won the top of the ladder for a WEEK: a six-day-old low-performance flag
+// returned rest while a soreness-5 check-in filed the same morning returned easy, with
+// the severity exactly inverted. It also held the push-drive rule shut for all seven
+// days. `felt_fatigue` now falls through to the recovery/load-constraint rung below,
+// which yields easy — which is what "loading should ease" always meant.
+//
+// So: EXACT field names, and today-dated. Both halves are the guard. The exact set
+// means a new field cannot join this rung by accident of its spelling; the age check
+// means a field on this list cannot claim the morning off a reading that is not from
+// it. (All three carry `max_age_days: 0` today, so the age test is belt-and-braces for
+// them — it is the contract written down, for a caller assembling raw observations.)
+const FELT_PROTECT_FIELDS: ReadonlySet<string> = new Set(["felt_energy", "sleep_feel", "illness"]);
+
 function actionState(dimensions: Record<SignalDimension, SignalDimensionState>) {
   // `dimension.evidence` deliberately still carries context-only items, so the posture
   // ladder filters them here. Note the `!active.length` rung further down: without this
@@ -964,7 +1048,10 @@ function actionState(dimensions: Record<SignalDimension, SignalDimensionState>) 
   if (done) return { readiness: "complete" as const, posture: "done" as const, evidence: [done] };
   const feltProtect = active.find(
     (item) =>
-      item.safety_override && item.direction === "constraint" && /fatigue|energy|sleep_feel|illness/.test(item.field)
+      item.safety_override &&
+      item.direction === "constraint" &&
+      FELT_PROTECT_FIELDS.has(item.field) &&
+      item.age_days === 0
   );
   if (feltProtect) return { readiness: "protect" as const, posture: "rest" as const, evidence: [feltProtect] };
   // Recovery and accumulated-load protection own the overall posture before a
@@ -1011,6 +1098,28 @@ function actionState(dimensions: Record<SignalDimension, SignalDimensionState>) 
 // push it has no standing to give.
 const SUPPORT_EARNED_FIELDS: ReadonlySet<string> = new Set(["session_quality", "felt_energy", "sleep_feel"]);
 
+// …but not every item in that lane weighs the same, and the tier used to treat them as
+// if it did. A single check-in with energy rated 4 — one tap, on the "fine" end of a
+// five-point scale, on a morning with nothing else on the board — earned `backed` at
+// confidence `low`, and the Brief then said "everything you've logged lately says
+// you're carrying this well". One tap is not everything, and 4-out-of-5 is not
+// carrying it well.
+//
+// A rated session is different in kind: it is an OUTCOME the athlete produced and then
+// judged, `strong_flag` is derived from their recent ratings rather than from one box,
+// and it ages out on its own window. So it stays sufficient on its own — which is the
+// law the tier was built on ("strongly-rated sessions ALONE earn it, with no wearable
+// anywhere") and which nothing here weakens.
+//
+// The self-reports are corroboration instead: they earn the tier when there are TWO of
+// them, or when the day's confidence is better than `low` (i.e. the state has real
+// breadth behind it). Alone at low confidence they leave an ordinary train day, which
+// is the calm and common answer. This is also just the constitution applied where it
+// had not been: subjective check-ins "INFORM coach selection — they never override
+// progressive overload", and a lone tap MINTING a licence to push is that override
+// wearing the other sign.
+const SUPPORT_SUFFICIENT_FIELDS: ReadonlySet<string> = new Set(["session_quality"]);
+
 const isBrakeEvidence = (item: { direction: string }): boolean =>
   item.direction === "caution" || item.direction === "constraint";
 
@@ -1037,17 +1146,26 @@ export function hasFreshBrake(dimensions: Record<SignalDimension, SignalDimensio
 //   • the arbitration already landed on a plain train day with evidence behind it
 //     (readiness "ready" — an evidence-less day is "unknown" and stays neutral),
 //   • NOTHING fresh is pulling the other way (no caution, no constraint, anywhere),
-//   • and at least one fresh item from the athlete's own lane says it is going well.
+//   • and the athlete's own lane clears the earned bar above — a rated session, or
+//     two self-reports, or one self-report on a day whose confidence is not `low`.
 // Anything short of all three is an ordinary train day, which is the common answer.
 function supportState(
   action: ReturnType<typeof actionState>,
-  dimensions: Record<SignalDimension, SignalDimensionState>
+  dimensions: Record<SignalDimension, SignalDimensionState>,
+  // The day's own `action.confidence`, computed by the caller from the same evidence
+  // this reads. Passed in rather than recomputed: two derivations of one number is how
+  // a tier and the prose that describes it come to disagree about the same morning.
+  confidence: SignalConfidence
 ): SignalSupport | null {
   if (action.posture !== "train" || action.readiness !== "ready") return null;
   const active = freshBearingEvidence(dimensions);
   if (active.some(isBrakeEvidence)) return null;
   const support = active.filter((item) => item.direction === "support");
-  if (!support.some((item) => SUPPORT_EARNED_FIELDS.has(item.field))) return null;
+  const earned = [...new Set(support.map((item) => item.field).filter((field) => SUPPORT_EARNED_FIELDS.has(field)))];
+  if (!earned.length) return null;
+  const sufficient =
+    earned.some((field) => SUPPORT_SUFFICIENT_FIELDS.has(field)) || earned.length >= 2 || confidence !== "low";
+  if (!sufficient) return null;
   return {
     level: "backed",
     summary:
@@ -1131,7 +1249,7 @@ export function buildUnifiedSignalState(
       reason,
       reasons,
       voice,
-      support: supportState(action, dimensions),
+      support: supportState(action, dimensions, actionConfidence),
       source_dimensions: sourceDimensions,
       confidence: actionConfidence,
       directives,
@@ -1181,19 +1299,33 @@ export function planningSignalState(input: {
     // speaking is a per-signal fact that lives in SENSOR_MAX_AGE_DAYS. A default
     // here is how the sleep observation ended up on an unconsidered 3 days while
     // day-read had already dropped the same night at 2.
-    maxAgeDays: number
+    maxAgeDays: number,
+    // The date this particular CLAIM is entitled to, when it is not simply the
+    // field's newest reading. Resting HR and HRV need it: their direction is decided
+    // from verified readings only, so a provisional mid-day estimate arriving later
+    // must not lend the claim its (fresher) date. Everything else passes nothing and
+    // keeps the newest-reading date it always had.
+    claimDate?: string | null
   ) => {
     const q = quality[qualityField] ?? {};
     observations.push(
-      observation("recovery_capacity", field, q.latest_date ?? null, q.source ?? "recovery", direction, summary, {
-        voice: { key: voice },
-        coverage: {
-          samples: Number(q.sample_count) || 1,
-          expected: q.expected_days ?? null,
-          window_days: q.window_days ?? null,
-        },
-        max_age_days: maxAgeDays,
-      })
+      observation(
+        "recovery_capacity",
+        field,
+        claimDate ?? q.latest_date ?? null,
+        q.source ?? "recovery",
+        direction,
+        summary,
+        {
+          voice: { key: voice },
+          coverage: {
+            samples: Number(q.sample_count) || 1,
+            expected: q.expected_days ?? null,
+            window_days: q.window_days ?? null,
+          },
+          max_age_days: maxAgeDays,
+        }
+      )
     );
   };
   const current = input.recovery?.recovery ?? {};
@@ -1250,28 +1382,138 @@ export function planningSignalState(input: {
       Number(current.training_readiness) < 50 ? "readiness_subdued" : "readiness_ok",
       SENSOR_MAX_AGE_DAYS.training_readiness
     );
-  if (input.recovery?.delta?.hrv != null)
+  // ---------- HRV and resting HR: verified, continuous, and only then a caution ----------
+  //
+  // TEST ONE, the trend, is `delta` — median(recent) minus median(baseline), built in
+  // getRecoverySummary. It used to be compared against flat constants (5 ms, 3 bpm)
+  // while day-read, reading the same delta four hundred lines away, already used
+  // norm-relative bands. Flat constants are two different mistakes at once: on a 40 ms
+  // athlete a real 10% collapse never registered, and on a 120 ms athlete 5 ms of
+  // ordinary noise read as fatigue every other day. The bands are the athlete's own
+  // now, with the former constant kept as the floor so a tiny or missing norm can
+  // never make the test hypersensitive. HRV's floor is day-read's 2 ms rather than the
+  // old 5, deliberately — matching day-read is the point, and 5 would have left the
+  // 40 ms athlete exactly where they were.
+  //
+  // TEST TWO, the excursion, is the one that did not exist. Direction came only from
+  // the trend, but the observation's DATE and freshness came from the LATEST reading —
+  // so a morning whose resting HR was the highest ever recorded went out as "Resting
+  // heart rate is steady against the athlete's norm … latest <today>, fresh, high
+  // confidence". The claim's date pointed at a reading the claim had never looked at.
+  //
+  // But a value is not a finding, and the first version of this test proved it: on the
+  // live data it fired on a resting HR of 68 that was Garmin's provisional mid-day
+  // estimate — no sleep on the row, and a `min_hr` of 50 on the same row calling it a
+  // fiction — while every sleep-backed reading that month sat at 50-54 and steady. The
+  // athlete's rule, and now this code's: a result that CHANGES something has to be
+  // recent AND verified AND continuous. Stale or provisional means do not assume; no
+  // complaint means things are good.
+  //
+  // So the excursion path reads only the VERIFIED series (classified once in
+  // getRecoverySummary — see READING_TRUST there), and needs TWO consecutive verified
+  // readings beyond the band before it will call a caution. Exactly one is a note that
+  // decides nothing: `neutral`, so it can neither brake the day nor endorse it, with
+  // wording that says it is watching rather than concluding. Absent or stale evidence
+  // stays neutral, exactly as the freshness law already has it.
+  //
+  // The excursion bands are wider than the trend bands because a single reading is
+  // noisier than a median. When both tests fire the excursion owns the wording: it is
+  // the more specific claim, and the day reads caution either way.
+  const EXCURSION_RUN_FOR_CAUTION = 2;
+  const baselineHrv = Number(input.recovery?.baseline?.hrv);
+  const baselineRhr = Number(input.recovery?.baseline?.rhr);
+  const hrvTrendBar = Number.isFinite(baselineHrv) && baselineHrv > 0 ? Math.max(2, baselineHrv * 0.05) : 5;
+  const rhrTrendBar = Number.isFinite(baselineRhr) && baselineRhr > 0 ? Math.max(3, baselineRhr * 0.05) : 3;
+
+  // How many of the NEWEST verified readings in a row sit beyond the excursion band.
+  // Consecutive READINGS, not calendar days: on an episodically-worn watch two nights
+  // a week apart are still the last two things it actually measured.
+  const excursionRun = (
+    trust: any,
+    norm: number,
+    beyond: (value: number, norm: number) => boolean
+  ): { run: number; provisional: boolean; claim_date: string | null } => {
+    const readings: Array<{ date: string; value: number }> = Array.isArray(trust?.readings) ? trust.readings : [];
+    let run = 0;
+    if (Number.isFinite(norm) && norm > 0) {
+      for (const reading of readings) {
+        if (!Number.isFinite(Number(reading.value)) || !beyond(Number(reading.value), norm)) break;
+        run += 1;
+      }
+    }
+    return {
+      run,
+      provisional: trust?.latest_trust === "contradicted",
+      // The newest reading this claim is allowed to be dated to — never a
+      // contradicted one, which is what let a provisional estimate stamp today's
+      // date onto a sentence derived from readings two days older.
+      claim_date: (trust?.latest_trustworthy_date ?? null) || null,
+    };
+  };
+  // A provisional latest reading is worth SAYING (the agent should know the newest
+  // number it can see is not being read as a change) but only in the machine register,
+  // and never as a caution. The athlete voice is unchanged by it.
+  const provisionalAside = (provisional: boolean, what: string): string =>
+    provisional ? ` The newest ${what} figure is provisional and is not being read as a change.` : "";
+
+  const hrvTrust = excursionRun(
+    input.recovery?.verified?.hrv_ms,
+    baselineHrv,
+    (value, norm) => value < norm - Math.max(5, norm * 0.15)
+  );
+  const rhrTrust = excursionRun(
+    input.recovery?.verified?.resting_hr,
+    baselineRhr,
+    (value, norm) => value > norm + Math.max(5, norm * 0.08)
+  );
+
+  if (input.recovery?.delta?.hrv != null) {
+    const trendDown = Number(input.recovery.delta.hrv) < -hrvTrendBar;
+    const excursion = hrvTrust.run >= EXCURSION_RUN_FOR_CAUTION;
+    const unsettled = hrvTrust.run === 1;
     addRecovery(
       "hrv",
       "hrv_ms",
-      Number(input.recovery.delta.hrv) < -5 ? "caution" : "support",
-      Number(input.recovery.delta.hrv) < -5
-        ? "HRV is below the athlete's recent norm."
-        : "HRV is steady against the athlete's norm.",
-      Number(input.recovery.delta.hrv) < -5 ? "hrv_below" : "hrv_steady",
-      SENSOR_MAX_AGE_DAYS.hrv
+      excursion || trendDown ? "caution" : unsettled ? "neutral" : "support",
+      (excursion
+        ? "The most recent verified HRV readings sit unusually far below the athlete's own norm, whatever the wider trend says."
+        : unsettled
+          ? "One verified HRV reading sits unusually far below the athlete's own norm; a single reading is being watched, not concluded from."
+          : trendDown
+            ? "HRV is below the athlete's recent norm."
+            : "HRV is steady against the athlete's norm.") + provisionalAside(hrvTrust.provisional, "HRV"),
+      excursion ? "hrv_excursion" : unsettled ? "hrv_unsettled" : trendDown ? "hrv_below" : "hrv_steady",
+      SENSOR_MAX_AGE_DAYS.hrv,
+      hrvTrust.claim_date
     );
-  if (input.recovery?.delta?.rhr != null)
+  }
+  if (input.recovery?.delta?.rhr != null) {
+    const trendUp = Number(input.recovery.delta.rhr) > rhrTrendBar;
+    const excursion = rhrTrust.run >= EXCURSION_RUN_FOR_CAUTION;
+    const unsettled = rhrTrust.run === 1;
     addRecovery(
       "resting_hr",
       "resting_hr",
-      Number(input.recovery.delta.rhr) > 3 ? "caution" : "support",
-      Number(input.recovery.delta.rhr) > 3
-        ? "Resting heart rate is above the athlete's norm."
-        : "Resting heart rate is steady against the athlete's norm.",
-      Number(input.recovery.delta.rhr) > 3 ? "resting_hr_up" : "resting_hr_steady",
-      SENSOR_MAX_AGE_DAYS.resting_hr
+      excursion || trendUp ? "caution" : unsettled ? "neutral" : "support",
+      (excursion
+        ? "The most recent verified resting heart rate readings sit unusually far above the athlete's own norm, whatever the wider trend says."
+        : unsettled
+          ? "One verified resting heart rate reading sits unusually far above the athlete's own norm; a single reading is being watched, not concluded from."
+          : trendUp
+            ? "Resting heart rate is above the athlete's norm."
+            : "Resting heart rate is steady against the athlete's norm.") +
+        provisionalAside(rhrTrust.provisional, "resting heart rate"),
+      excursion
+        ? "resting_hr_excursion"
+        : unsettled
+          ? "resting_hr_unsettled"
+          : trendUp
+            ? "resting_hr_up"
+            : "resting_hr_steady",
+      SENSOR_MAX_AGE_DAYS.resting_hr,
+      rhrTrust.claim_date
     );
+  }
 
   // Apple daily activity is not a sport-specific workout record, but meaningful
   // exercise minutes/distance still say the athlete has carried recent load. Keep
@@ -1608,7 +1850,15 @@ export function planningSignalState(input: {
           persistent ? "constraint" : "caution",
           persistent
             ? "Independent fuel, performance, and recovery channels still show strain after the correction settled, so the next training dose should reduce."
-            : "Fuel and outcome signals agree enough to hold progression aggression while the next correction settles.",
+            : // A CONSTRAINT STATEMENT, not a decision. This summary is one of the two
+              // halves the conflict join splices together ("X. But Y."), and written as
+              // a verdict about agreement — "Fuel and outcome signals agree enough to
+              // hold progression aggression" — it read as opposition to whatever
+              // support it was paired with, manufacturing a conflict out of two
+              // statements that were not in tension and costing the dimension a
+              // confidence tier for it. It now says what is being HELD and why, so it
+              // joins onto a support line as the qualification it always was.
+              "Fuel availability is still being protected, so progression aggression stays held while the next correction settles.",
           { voice: { key: persistent ? "fuel_strain_persistent" : "fuel_strain_hold" }, max_age_days: 1 }
         )
       );
