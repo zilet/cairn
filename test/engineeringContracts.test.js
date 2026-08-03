@@ -7047,3 +7047,50 @@ test("the recovery-week instruction prefix is one contract across client and ser
   assert.ok(c, "the client declares RECOVERY_WEEK_INSTRUCTION");
   assert.ok(c[1].startsWith(prefix), `the client instruction must start with the server prefix ("${prefix}")`);
 });
+
+test("connected-brain re-derivation is a scheduler op of its own, never a step inside proactiveTick", () => {
+  // The propagation engine is deterministic, spawns no agent and pushes nothing, so it must
+  // NOT inherit settings.proactive_enabled — a user who turns quiet proactivity off would
+  // otherwise silently freeze their labs' propagation into training and nutrition.
+  const scheduler = read("src/scheduler.ts");
+  assert.match(scheduler, /const propagationTick = async \(\) => \{/, "the tick exists as its own function");
+  assert.match(scheduler, /dailySlotDue\(now, "directive_derive_date"\)/);
+  assert.match(scheduler, /runScheduled\("directive_derive_date", localToday\(now\), "directive_derive_date"/);
+  assert.match(scheduler, /setInterval\(inOwnerTimeZone\(propagationTick\), 60_000\)/, "registered on the minute tick");
+  assert.match(scheduler, /setTimeout\(inOwnerTimeZone\(propagationTick\), 20_000\)/, "with a boot catch-up pass");
+
+  // Compare CODE, not prose: the tick's own comment explains why it is not gated on the
+  // proactivity toggle, and that sentence must not read as the gate itself.
+  const blockStart = scheduler.indexOf("// ---- Connected-brain propagation");
+  const start = scheduler.indexOf("let propagationBusy", blockStart);
+  const end = scheduler.indexOf("const s = repo.getSettings(); // also lazily creates the row");
+  assert.ok(blockStart > 0 && start > blockStart && end > start, "the tick is declared before the registration block");
+  const tickBody = stripLineComments(scheduler.slice(start, end));
+  assert.match(tickBody, /repo\.deriveDirectives\(\)/);
+  assert.doesNotMatch(tickBody, /proactive_enabled/, "the tick never consults the proactivity toggle");
+  assert.equal(
+    (stripLineComments(scheduler).match(/repo\.deriveDirectives\(\)/g) || []).length,
+    1,
+    "the dedicated tick is the ONLY place the scheduler re-derives"
+  );
+  const proactive = stripLineComments(scheduler.slice(scheduler.indexOf("const proactiveTick"), blockStart));
+  assert.doesNotMatch(proactive, /directive_derive_date|deriveDirectives/, "proactiveTick owns no part of it");
+});
+
+test("the directive event edges re-derive on both surfaces", () => {
+  // Removing a panel must WITHDRAW what it propagated, and a user Done/Dismiss must settle
+  // the board on the tap rather than at the next daily tick. Both surfaces, or the two drift.
+  const healthDocRoutes = read("src/routes/health-docs.ts");
+  const healthRecordTools = read("src/surfaces/mcp/health-records.ts");
+  const connectedBrainRoutes = read("src/routes/connected-brain.ts");
+  const connectedBrainTools = read("src/surfaces/mcp/connected-brain.ts");
+  assert.match(healthDocRoutes, /deleteHealthDocument\(Number\(req\.params\.id\)\)[\s\S]{0,400}deriveDirectives\(\)/);
+  assert.match(healthRecordTools, /deleteHealthDocument\(id\)[\s\S]{0,400}deriveDirectives\(\)/);
+  // The user-flip path goes through setDirectiveStatusByUser, never the raw writer:
+  // updateDirective is what reconcileDirectives calls in place, so re-deriving from inside
+  // it would re-enter the pass mid-reconcile.
+  assert.match(connectedBrainRoutes, /setDirectiveStatusByUser\(Number\(req\.params\.id\), status\)/);
+  assert.match(connectedBrainTools, /setDirectiveStatusByUser\(id, status\)/);
+  assert.doesNotMatch(connectedBrainRoutes, /updateDirective\(/);
+  assert.doesNotMatch(connectedBrainTools, /updateDirective\(/);
+});

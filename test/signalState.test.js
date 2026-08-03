@@ -1079,6 +1079,30 @@ test("the same floor holds for HRV", () => {
   assert.equal(fieldOf(steady, "hrv").summary, "HRV is steady against the athlete's norm.");
 });
 
+// An Apple/Oura row has no `min_hr` to argue with, so before the plausibility floor a
+// phone posting a wear-artifact "resting" heart rate of 105 was VERIFIED outright — its
+// own sleep row vouched for it. Two mornings of that, and the brain braked the day on a
+// number no human resting heart rate reaches.
+test("an implausible generic resting HR cannot brake the day, however good its night looks", () => {
+  const date = localDaysAgo(0);
+  for (let i = 0; i < 30; i++) {
+    repo.recordDailyMetrics("apple_health", localDaysAgo(i), { sleep_min: 430, resting_hr: i < 2 ? 105 : 52 });
+  }
+  const recovery = repo.getRecoverySummary(30);
+  assert.equal(recovery.verified.resting_hr.latest_value, 105, "the reading is still reported, not deleted");
+  assert.ok(
+    !recovery.verified.resting_hr.readings.some((reading) => reading.value === 105),
+    "an impossible value never enters the verified series"
+  );
+
+  const state = repo.planningSignalState({ date, recovery });
+  const resting = fieldOf(state, "resting_hr");
+  assert.equal(resting.direction, "support", "a wear artifact is absence, and absence is neutral");
+  assert.equal(resting.voice.key, "resting_hr_steady");
+  assert.notEqual(state.dimensions.recovery_capacity.status, "watch");
+  assert.notEqual(state.action.posture, "rest");
+});
+
 test("the excursion voices are a real athlete vocabulary, not one literal", () => {
   for (const key of ["hrv_excursion", "resting_hr_excursion"]) {
     const variants = repo.signalVoice({ key });

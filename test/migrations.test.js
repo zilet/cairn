@@ -399,6 +399,59 @@ test("dist/db.js BOOTS a pre-v73 chat_turns table before request/build indexes a
   rmSync(dir, { recursive: true, force: true });
 });
 
+// Same class of failure as the two above, one migration later. `insights.intent_key`
+// arrives in v90, so an index on it must not sit in the main schema exec — on any DB
+// still at v89 SQLite throws at module load, before runMigrations can add the column,
+// and the container dies in a crash loop. A FRESH DB cannot catch this (db.ts's
+// CREATE TABLE already carries the column), so the fixture must be a DOWNGRADED one.
+test("dist/db.js BOOTS a pre-v90 insights table before the intent-key index is created", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cairn-v89-insights-boot-"));
+  const dbPath = join(dir, "cairn.db");
+  const staged = new DatabaseSync(dbPath);
+  // The pre-v90 shape: every column except intent_key.
+  staged.exec(`CREATE TABLE insights (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT DEFAULT (datetime('now')),
+    kind TEXT,
+    text TEXT,
+    rationale TEXT,
+    next_step TEXT,
+    status TEXT DEFAULT 'new',
+    feedback TEXT
+  );`);
+  staged.exec("INSERT INTO insights (kind, text) VALUES ('connection', 'A legacy insight that must survive boot.')");
+  staged.exec("PRAGMA user_version = 89;");
+  staged.close();
+
+  const dbModule = pathToFileURL(join(root, "dist/db.js")).href;
+  const boot = spawnSync(process.execPath, ["--input-type=module", "-e", `await import(${JSON.stringify(dbModule)});`], {
+    env: { ...process.env, DATA_DIR: dir, DB_PATH: dbPath },
+    timeout: 60_000,
+    encoding: "utf8",
+  });
+  assert.equal(boot.status, 0, `boot must survive a pre-v90 DB — stderr: ${(boot.stderr || "").slice(0, 500)}`);
+
+  const after = new DatabaseSync(dbPath, { readOnly: true });
+  assert.equal(Number(after.prepare("PRAGMA user_version").get().user_version), MAX_VERSION, "the ladder completed");
+  const columns = new Set(
+    after
+      .prepare("PRAGMA table_info(insights)")
+      .all()
+      .map((c) => c.name)
+  );
+  assert.ok(columns.has("intent_key"), "v90 added intent_key");
+  const indexes = new Set(
+    after
+      .prepare("PRAGMA index_list(insights)")
+      .all()
+      .map((row) => row.name)
+  );
+  assert.ok(indexes.has("idx_insights_intent_key"), "and its index was created AFTER the migration");
+  assert.equal(after.prepare("SELECT COUNT(*) AS n FROM insights").get().n, 1, "the legacy row survives boot");
+  after.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
 // Before the dedupe guard in recordDayReadSuggestion() existed, every Brief open
 // re-recorded the day's canonical (override:null) day_read suggestion, so a date
 // whose read evolved during the day (rest -> the athlete trains -> train -> done)
@@ -782,6 +835,55 @@ test("v83 repairs the fossil shapes v82's one-transform pass exposed or missed",
   d.close();
 });
 
+// v90 gives an insight a TERRITORIAL identity (which two facets it links), so a
+// genuine rephrase of a connection already made can be refused. Deliberately NOT
+// backfilled: pre-existing rows keep a NULL key and have one derived from their text
+// at read time, so improving derivation improves them retroactively.
+test("v90 adds insights.intent_key to an upgraded DB without touching existing rows", () => {
+  const d = new DatabaseSync(":memory:");
+  d.exec(`CREATE TABLE insights (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT DEFAULT (datetime('now')),
+    kind TEXT,
+    text TEXT,
+    rationale TEXT,
+    next_step TEXT,
+    status TEXT DEFAULT 'new',
+    feedback TEXT
+  );`);
+  d.exec(`CREATE TABLE settings (id INTEGER PRIMARY KEY CHECK (id = 1));`);
+  d.exec("INSERT INTO settings (id) VALUES (1)");
+  d.exec(
+    "INSERT INTO insights (kind, text, status) VALUES ('connection', 'Your weekly mileage climbed and your resting heart rate drifted up.', 'seen')"
+  );
+  d.exec("INSERT INTO insights (kind, text, feedback) VALUES ('weekly_read', 'A steady week.', 'up')");
+  d.exec("PRAGMA user_version = 89;");
+
+  const first = runMigrations(d);
+  assert.equal(first.from, 89);
+  assert.equal(first.to, MAX_VERSION);
+
+  const cols = new Set(
+    d
+      .prepare("PRAGMA table_info(insights)")
+      .all()
+      .map((row) => row.name)
+  );
+  assert.ok(cols.has("intent_key"), "v90 insights.intent_key");
+
+  const rows = d.prepare("SELECT kind, text, status, feedback, intent_key FROM insights ORDER BY id").all();
+  assert.equal(rows.length, 2, "pre-existing insights survive the upgrade");
+  assert.equal(rows[0].status, "seen");
+  assert.equal(rows[1].feedback, "up");
+  assert.equal(rows[0].intent_key, null, "no backfill — legacy keys are derived at read time");
+  assert.equal(rows[1].intent_key, null);
+
+  const second = runMigrations(d);
+  assert.equal(second.applied, 0, "replaying the ladder is a no-op");
+  assert.equal(Number(d.prepare("PRAGMA user_version").get().user_version), MAX_VERSION);
+  d.close();
+});
+
 test("re-running migrations on an up-to-date DB is a no-op (idempotent boot)", async () => {
   const { runMigrations } = await import("../dist/migrate.js");
   const before = Number(db.prepare("PRAGMA user_version").get().user_version);
@@ -825,4 +927,5 @@ test("the migrated schema has the columns later code depends on", () => {
   assert.ok(cols("chat_turns").has("idempotent_replays"), "v73 chat_turns.idempotent_replays");
   assert.ok(cols("chat_turns").has("build_id"), "v74 chat_turns.build_id");
   assert.ok(cols("food_notes").has("eaten_at"), "v79 food_notes.eaten_at");
+  assert.ok(cols("insights").has("intent_key"), "v90 insights.intent_key");
 });

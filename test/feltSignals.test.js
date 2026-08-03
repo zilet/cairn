@@ -222,3 +222,37 @@ test("a downvoted insight stays suppressed after it ages past the recency window
   // A genuinely new connection is still allowed.
   assert.equal(repo.isDuplicateInsight("Your resting heart rate rose the week after your biggest mileage jump."), false);
 });
+
+// Suppression is TERRITORIAL as well as textual: a thumbs-down means "don't make
+// this connection again", and the connection survives being reworded. The key corpus
+// (src/repo/insight-intent.ts) carries downvoted KEYS past the time window exactly as
+// recentInsightTexts carries downvoted TEXTS past the row window.
+test("a downvoted insight's KEY stays suppressed after it ages out of the key window", () => {
+  const key = "nutrition.protein~sleep.quality:same";
+  const downed = repo.addInsight({
+    kind: "connection",
+    text: "Your protein intake and sleep quality look linked.",
+    intent_key: key,
+    feedback: "down",
+  });
+  assert.ok(downed, "seeded a downvoted, keyed insight");
+  db.prepare(`UPDATE insights SET created_at = datetime('now', ?) WHERE id = ?`).run(
+    `-${repo.INSIGHT_KEY_WINDOW_DAYS + 30} days`,
+    downed.id
+  );
+  for (let i = 0; i < 15; i++) {
+    repo.addInsight({ kind: "connection", text: `Unrelated observation number ${i} about something else entirely.` });
+  }
+
+  const corpus = repo.insightIntentCorpus();
+  assert.ok(corpus.keys.includes(key), "the downvoted key is unioned into the corpus regardless of age");
+  assert.equal(repo.isDuplicateInsightIntent(key, corpus.keys), true);
+  // The same claim, globally flipped, is still that claim — however it gets worded.
+  const flipped = repo.parseInsightIntentKey({
+    a: { facet: "sleep.quality", direction: "down" },
+    b: { facet: "nutrition.protein", direction: "down" },
+  });
+  assert.equal(repo.isDuplicateInsightIntent(flipped, corpus.keys), true);
+  // Different territory is still free.
+  assert.equal(repo.isDuplicateInsightIntent("body.weight~training.volume:opposite", corpus.keys), false);
+});

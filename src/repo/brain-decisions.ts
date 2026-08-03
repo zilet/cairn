@@ -246,10 +246,20 @@ export function insertBrainDecision(value: unknown): BrainDecision {
   return stored;
 }
 
+/**
+ * Move a decision to a new lifecycle status, cancelling its live expectations when the
+ * status is terminal.
+ *
+ * `keepExpectations` opts OUT of that cancel, for the one case where retiring the
+ * decision does not retire the question it asked: a day-read whose outcome the day has
+ * already decided (see dayReadOutcomeLocked in repo/brain/read-adherence.ts). It
+ * defaults to false, so every other caller — supersedeReviewDecisionsForProposal, the
+ * autonomy layer, revert/reject — keeps its existing semantics exactly.
+ */
 export function transitionBrainDecision(
   id: number,
   status: BrainDecisionStatus,
-  opts: { supersededBy?: number | null; effectiveDate?: string | null } = {}
+  opts: { supersededBy?: number | null; effectiveDate?: string | null; keepExpectations?: boolean } = {}
 ): BrainDecision | null {
   return withSqliteSavepoint(`transition_decision_${Math.trunc(Number(id))}`, () => {
     const current = getBrainDecision(id);
@@ -263,7 +273,7 @@ export function transitionBrainDecision(
     db.prepare(
       `UPDATE brain_decisions SET status = ?, superseded_by = ?, effective_date = COALESCE(?, effective_date)${nowColumn} WHERE id = ?`
     ).run(status, opts.supersededBy ?? current.superseded_by, opts.effectiveDate ?? null, id);
-    if (["reverted", "superseded", "canceled", "rejected"].includes(status)) {
+    if (!opts.keepExpectations && ["reverted", "superseded", "canceled", "rejected"].includes(status)) {
       db.prepare(
         `UPDATE brain_expectations SET status = 'canceled' WHERE decision_id = ? AND status IN ('pending','mature')`
       ).run(id);

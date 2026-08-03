@@ -12,7 +12,6 @@ import {
   listBrainDecisions,
   revertDecision,
   snoozeNextStep,
-  updateDirective,
 } from "../../domain/brain/index.js";
 import {
   annotateDirectiveFreshness,
@@ -33,6 +32,7 @@ import {
   healthStanding,
   prioritizeMarkers,
   recordHealthOutcomeAnnotations,
+  setDirectiveStatusByUser,
   symptomMarkerLinks,
 } from "../../domain/health/index.js";
 import { getOutcomeLearnings } from "../../domain/person/index.js";
@@ -245,7 +245,9 @@ export function registerConnectedBrainTools(server: McpToolRegistrar) {
     "update_directive",
     "Flip a directive's status (the review side of propose-review-apply — nothing auto-applies). `resolved` means handled for that marker snapshot; `dismissed` suppresses equivalent future advice until the marker materially changes. Returns the updated directive, or null when the id is unknown.",
     { id: z.number().int(), status: z.enum(["active", "resolved", "dismissed"]) },
-    async ({ id, status }) => asText(updateDirective(id, { status }))
+    // Mirrors PUT /api/directives/:id: a Done/Dismiss re-derives synchronously so a
+    // cross-source twin is suppressed on the same flip.
+    async ({ id, status }) => asText(setDirectiveStatusByUser(id, status))
   );
 
   server.tool(

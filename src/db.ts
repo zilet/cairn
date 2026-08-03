@@ -1272,7 +1272,12 @@ CREATE TABLE IF NOT EXISTS insights (
   rationale TEXT,                     -- the short supporting reasoning, user-facing voice
   next_step TEXT,                     -- optional one concrete, low-friction suggestion (or null)
   status TEXT DEFAULT 'new',          -- new | seen | dismissed
-  feedback TEXT                       -- up | down | NULL
+  feedback TEXT,                      -- up | down | NULL
+  -- WHAT this insight connects, independent of how it was worded:
+  -- '<facetA>~<facetB>:<same|opposite|*>' with the facets sorted lexicographically
+  -- (src/repo/insight-intent.ts). NULL on legacy rows and whenever derivation was
+  -- ambiguous — those fall back to the text-level dedup guard.
+  intent_key TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_insights_status ON insights(status);
 
@@ -1515,6 +1520,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_turns_request_id
   ON chat_turns(request_id) WHERE request_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_chat_turns_build_created
   ON chat_turns(build_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_insights_intent_key ON insights(intent_key);
 `);
 
 export function todayISO(): string {

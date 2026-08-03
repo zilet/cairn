@@ -630,3 +630,53 @@ test("a deterministic reconciliation does not re-arm itself on every subsequent 
   assert.equal(timer.state.armed, armedAfterReconcile, "later opens must not each arm another recompute");
   assert.equal(timer.state.live.size, 1, "exactly one re-warm is outstanding");
 });
+
+// ---------------------------------------------------------------------------
+// The LEDGER economy: an invalidation that reaches the same call costs no row.
+// ---------------------------------------------------------------------------
+
+// The read cache and the decision ledger were paying the same tax from opposite
+// directions. The cache stopped churning once the fingerprint banded its inputs — but
+// the ledger kept hashing those inputs, so any invalidation that DID get through (a
+// wearable sync, a fuel bucket) still wrote a fresh immutable decision, superseded the
+// morning's, and cancelled the falsifiable prediction riding on it. The fingerprint now
+// hashes the CLAIM, so a recompute that agrees with the morning is free on both sides.
+
+const dayDecisionCount = (date) =>
+  Number(
+    db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM brain_decisions
+          WHERE kind = 'day_read' AND source_ref_type = 'day_read' AND source_ref_key = ?`
+      )
+      .get(date).n
+  );
+
+test("mid-day invalidations that reach the same call grow the ledger by ZERO", async () => {
+  resetTables(...TRAINING_TABLES, "brain_expectations", "brain_evaluations", "garmin_daily_metrics", "daily_metrics");
+  const date = localDaysAgo(0);
+  configureDayReadRefresh({ today: () => date, setTimer: () => 0, clearTimer: () => {} });
+  seedPlan();
+
+  const baseline = repo.dayRead(date);
+  warmAgenticRead(date, baseline);
+  const kind = baseline.kind;
+  const before = dayDecisionCount(date);
+  assert.equal(before, 1, "precondition: the morning read is one row");
+  const expectationBefore = dayExpectation(date);
+
+  // Eight wearable syncs across the day — each one genuinely invalidates the cached
+  // Brief and forces a real recompute. None of them changes what the day is FOR.
+  for (let n = 0; n < 8; n++) {
+    repo.upsertGarminDailyMetric({ date, sleep_min: 400 + n, resting_hr: 50 + (n % 3) });
+    const recomputed = await readToday({ date });
+    assert.equal(recomputed.kind, kind, "fixture check: the recompute must reach the same call");
+  }
+
+  assert.equal(dayDecisionCount(date), before, "eight recomputes, zero new immutable observations");
+  const expectationAfter = dayExpectation(date);
+  if (expectationBefore) {
+    assert.equal(Number(expectationAfter.id), Number(expectationBefore.id), "the same question, not a new one");
+    assert.equal(expectationAfter.status, "pending", "and it is still being asked");
+  }
+});

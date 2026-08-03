@@ -1874,6 +1874,111 @@ export const MIGRATIONS: Migration[] = [
     // from db.ts's CREATE TABLE, and addColumn guards the second pass.
     up: (db) => addColumn(db, "settings", "training_drive TEXT DEFAULT 'steady'"),
   },
+  {
+    version: 90,
+    name: "insight-intent-key",
+    // WHAT an insight connects, so a genuine rephrase of a connection already made
+    // can be refused — text dedup only ever caught rewordings. Nullable with no
+    // default and no CHECK: the vocabulary lives in src/repo/insight-intent.ts and
+    // will keep growing, and a schema constraint would freeze it at today's list.
+    //
+    // DELIBERATELY NOT BACKFILLED. Legacy rows keep a NULL key and have one derived
+    // from their text at READ time (insightIntentCorpus), so every later improvement
+    // to derivation improves them retroactively — a backfill would instead freeze
+    // today's weaker derivation into the table. Idempotent: a fresh DB already has
+    // the column from db.ts, and addColumn guards the second pass.
+    up: (db) => addColumn(db, "insights", "intent_key TEXT"),
+  },
+  {
+    version: 91,
+    name: "day-read-expectations-heal",
+    // Pure data repair — no schema change, so no db.ts counterpart.
+    //
+    // THE ROWS THIS EXISTS FOR. Every day-read decision used to be fingerprinted off
+    // the read's INPUTS, so a mid-day recompute reaching the very same call still wrote
+    // a new immutable row, superseded the morning's, and cancelled the pending
+    // prediction riding on it. On the live deployment that cancelled 13 of 22
+    // day_read_adherence expectations: the ledger's highest-frequency learning signal,
+    // thrown away by its own recompute loop. The writer no longer creates the state
+    // (the fingerprint hashes the CLAIM now) and the evaluator no longer reads it that
+    // way (dayReadExpectationSurvivesSupersession); this puts the rows already written
+    // back to `pending` so the nightly pass can finally judge the days they ask about.
+    //
+    // WHICH ROWS. Only `day_read_adherence`, only rows that were cancelled, and only
+    // where the whole supersession chain behind them is built of successors that never
+    // took the claim away: a non-predictive `done` acknowledgement, or a later read
+    // making the SAME call. A genuine change of call (rest → train) stays cancelled,
+    // which is exactly what it should be.
+    //
+    // brain_evaluations is APPEND-ONLY and nothing here deletes from it. A stored
+    // `canceled` verdict remains as history; sameEvaluation (evaluation-service.ts)
+    // appends the new verdict beside it and every reader takes the newest.
+    //
+    // DIAGNOSTICS ONLY. readAdherenceModel reads the training log, never a verdict, so
+    // nothing this touches can change what the Brief says — only what the loop is able
+    // to learn from.
+    //
+    // Idempotent by construction: a second pass finds the rows already `pending`, which
+    // the status filter excludes.
+    up: (db) => {
+      try {
+        db.exec(`
+          WITH RECURSIVE chain(root_id, own_kind, node_id, bad, depth) AS (
+            SELECT root.id,
+                   json_extract(root.action_json, '$.kind'),
+                   successor.id,
+                   CASE
+                     WHEN successor.kind <> 'day_read' OR successor.source_ref_type <> 'day_read' THEN 1
+                     WHEN json_extract(successor.action_json, '$.kind') IN ('train','easy','rest')
+                      AND json_extract(successor.action_json, '$.kind')
+                          IS NOT json_extract(root.action_json, '$.kind') THEN 1
+                     ELSE 0
+                   END,
+                   1
+              FROM brain_decisions root
+              JOIN brain_decisions successor ON successor.id = root.superseded_by
+             WHERE root.kind = 'day_read' AND root.source_ref_type = 'day_read'
+            UNION ALL
+            SELECT chain.root_id,
+                   chain.own_kind,
+                   successor.id,
+                   CASE
+                     WHEN successor.kind <> 'day_read' OR successor.source_ref_type <> 'day_read' THEN 1
+                     WHEN json_extract(successor.action_json, '$.kind') IN ('train','easy','rest')
+                      AND json_extract(successor.action_json, '$.kind') IS NOT chain.own_kind THEN 1
+                     ELSE 0
+                   END,
+                   chain.depth + 1
+              FROM chain
+              JOIN brain_decisions node ON node.id = chain.node_id
+              JOIN brain_decisions successor ON successor.id = node.superseded_by
+             WHERE chain.depth < 20
+          )
+          UPDATE brain_expectations
+             SET status = 'pending'
+           WHERE metric_key = 'day_read_adherence'
+             AND status IN ('canceled', 'evaluated')
+             AND (
+               status = 'canceled'
+               OR EXISTS (
+                 SELECT 1 FROM brain_evaluations latest
+                  WHERE latest.expectation_id = brain_expectations.id
+                    AND latest.verdict = 'canceled'
+                    AND latest.id = (
+                      SELECT newest.id FROM brain_evaluations newest
+                       WHERE newest.expectation_id = brain_expectations.id
+                       ORDER BY newest.evaluated_at DESC, newest.id DESC LIMIT 1
+                    )
+               )
+             )
+             AND decision_id IN (SELECT root_id FROM chain)
+             AND decision_id NOT IN (SELECT root_id FROM chain WHERE bad = 1)
+        `);
+      } catch {
+        /* a DB predating the brain ledger has no cancelled predictions to heal */
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: DatabaseSync) {

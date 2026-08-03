@@ -439,6 +439,28 @@ function directiveCitationTag(d: any): string {
   return g ? ` [general guidance · ${g.source}]` : "";
 }
 
+// WHEN the lab reading behind a directive was drawn. The honored block used to render a
+// directive with no date signal at all, so a finding from a panel three years ago read
+// exactly like one drawn last week.
+//
+// The DATE only, deliberately. Past 180 days `applyStaleness` (src/repo/propagation.ts)
+// already writes the age in words into the directive's own rationale, which renders on
+// this same line — spelling out "~14 months old" here too said it twice in one sentence.
+// The date carries the recency for everything under the band; the rationale carries it
+// above. Empty when the directive carries no reading date.
+//
+// NOTE: a >365-day directive still renders inside "honor these" (with a visibly old date).
+// Moving aged chronic findings out to AGING LAB FINDINGS below is a PRODUCT call about what
+// the coach is still allowed to act on, deliberately left to the athlete rather than decided
+// here.
+function directiveAgeTag(d: any): string {
+  const raw = d?.trigger_date ?? null;
+  if (!raw) return "";
+  const stamp = String(raw).slice(0, 10);
+  if (!Number.isFinite(Date.parse(stamp))) return "";
+  return ` (reading ${stamp})`;
+}
+
 export function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | "training" | "watch")[] } = {}): string {
   const directives = Array.isArray(ctx?.directives) ? ctx.directives : [];
   const wanted = opts.domains;
@@ -483,7 +505,7 @@ export function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | 
       for (const d of fresh) {
         const dom = String(d.domain ?? "watch");
         (byDomain[dom] ||= []).push(
-          `  - ${String(d.directive ?? "").trim()}${d.rationale ? ` (why: ${String(d.rationale).trim()})` : ""}${directiveCitationTag(d)}`
+          `  - ${String(d.directive ?? "").trim()}${d.rationale ? ` (why: ${String(d.rationale).trim()})` : ""}${directiveAgeTag(d)}${directiveCitationTag(d)}`
         );
       }
       lines.push("DERIVED HEALTH DIRECTIVES (the connected brain — your labs propagated into this domain; honor these):");

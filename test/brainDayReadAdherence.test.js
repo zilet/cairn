@@ -11,8 +11,10 @@ import { readToday } from "../dist/domain/brain/day-read-use-case.js";
 import { configureDayReadRefresh } from "../dist/dayread-refresh.js";
 import { evaluateMatureExpectations } from "../dist/brainEvaluator.js";
 import { listBrainExpectations, recordDecision } from "../dist/repo/brain-decisions.js";
-import { latestBrainEvaluation } from "../dist/repo/brain-evaluations.js";
+import { insertBrainEvaluation, latestBrainEvaluation } from "../dist/repo/brain-evaluations.js";
 import { getBrainDiagnostics } from "../dist/domain/operator/brain-diagnostics-use-case.js";
+import { whatWorksForYou } from "../dist/repo/reaction-model.js";
+import { MIGRATIONS } from "../dist/migrate.js";
 import {
   dayReadAdherenceExpectation,
   dayTrainingTruth,
@@ -149,7 +151,15 @@ test("a NEW predictive read for the same date still supersedes and cancels", () 
   assert.equal(latestBrainEvaluation(expectation.id).verdict, "canceled");
 });
 
-test("a done read between two predictions does not shield the first from the second", () => {
+// A SUPERSESSION MAY NOT ERASE A CLAIM THE DAY HAS ALREADY DECIDED.
+//
+// The evening read still retires the morning one — the chain reaches a genuine
+// replacement and the decision is superseded for lineage. But the rest read said "no
+// training today", the athlete trained, and no later read can un-log that. Within one
+// day `trained` and `above_easy` only ever go TRUE, so the outcome LOCKED before the
+// replacement arrived and the prediction is judged rather than thrown away. Cancelling
+// here is how 13 of 22 live predictions were lost.
+test("a locked outcome survives the read that replaces it, and is judged", () => {
   reset();
   const date = localDaysAgo(2);
   repo.saveDayRead(date, read("rest"));
@@ -165,6 +175,26 @@ test("a done read between two predictions does not shield the first from the sec
   assert.equal(evening.status, "observed");
 
   const expectation = expectationsFor(morning.id)[0];
+  assert.equal(expectation.status, "pending", "the day already answered it — the supersede does not close it");
+
+  evaluateMatureExpectations(localDaysAgo(0));
+  assert.equal(latestBrainEvaluation(expectation.id).verdict, "not_aligned");
+});
+
+// The sibling case, and the boundary: nothing was logged, so the rest read's outcome
+// was still OPEN when the train read took the day over. An open claim IS honestly
+// replaced, and cancels.
+test("an OPEN claim is still cancelled by the read that replaces it", () => {
+  reset();
+  const date = localDaysAgo(2);
+  repo.saveDayRead(date, read("rest"));
+  repo.saveDayRead(date, read("done", { focus: null, est_minutes: null }));
+  repo.saveDayRead(date, read("train", { focus: "Upper" }));
+
+  const [morning] = dayDecisions(date);
+  const expectation = expectationsFor(morning.id)[0];
+  assert.equal(expectation.status, "canceled", "nothing had happened yet, so nothing was decided");
+
   evaluateMatureExpectations(localDaysAgo(0));
   assert.equal(latestBrainEvaluation(expectation.id).verdict, "canceled");
 });
@@ -325,18 +355,35 @@ test("a read for a day that has not closed is never concluded early", () => {
   assert.equal(latestBrainEvaluation(expectation.id), null);
 });
 
-test("a superseded read is closed as canceled, never judged against the day", () => {
+// The healing half of the lock, reached from the other direction. The rest read was
+// replaced while its outcome was still open, so it was cancelled at the WRITE — and
+// then the athlete trained. By the time the day closes the outcome is locked, and the
+// evaluator judges it rather than repeating the stale cancel. Same rule as the write
+// path, read back at evaluation, which is also what heals rows written before it.
+test("a read cancelled before the day decided it is still judged once the day does", () => {
   reset();
   const date = localDaysAgo(2);
   repo.saveDayRead(date, read("rest"));
   const first = dayDecisions(date)[0];
   repo.saveDayRead(date, read("train", { focus: "Lower" }));
+  assert.equal(expectationsFor(first.id)[0].status, "canceled", "open at the time of the replacement");
   seedTrainingDay(date);
 
   evaluateMatureExpectations(localDaysAgo(0));
   const retired = expectationsFor(first.id)[0];
-  const evaluation = latestBrainEvaluation(retired.id);
-  assert.equal(evaluation.verdict, "canceled");
+  assert.equal(latestBrainEvaluation(retired.id).verdict, "not_aligned");
+});
+
+test("a superseded read whose day never decided it is closed as canceled", () => {
+  reset();
+  const date = localDaysAgo(2);
+  repo.saveDayRead(date, read("rest"));
+  const first = dayDecisions(date)[0];
+  repo.saveDayRead(date, read("easy"));
+
+  evaluateMatureExpectations(localDaysAgo(0));
+  const retired = expectationsFor(first.id)[0];
+  assert.equal(latestBrainEvaluation(retired.id).verdict, "canceled");
 });
 
 // ----------------------------------------------------- terminal same-day verdicts
@@ -369,7 +416,7 @@ test("a conclusive same-day verdict is final too", () => {
   assert.equal(evaluateMatureExpectations(localDaysAgo(0)).scanned, 0);
 });
 
-test("a superseded read's canceled verdict is final too", () => {
+test("a superseded read's verdict is final too", () => {
   reset();
   const date = localDaysAgo(2);
   repo.saveDayRead(date, read("rest"));
@@ -830,4 +877,262 @@ test("a softened easy morning that went badly is not sustaining evidence", () =>
   const signal = softening();
   assert.deepEqual(signal.overridden_and_fine, [localDaysAgo(3), localDaysAgo(1)]);
   assert.equal(signal.active, false);
+});
+
+// ============================================================ THE CHURN, AND THE COST
+//
+// The decision fingerprint used to hash the read's INPUTS, so every mid-day recompute
+// that reached the SAME conclusion still wrote a new immutable row, superseded the
+// morning's and cancelled the prediction riding on it. A live audit found 13 of 22
+// day_read_adherence expectations cancelled that way: the loop's highest-frequency
+// learning signal, destroyed by its own recompute loop. Two things stop it — the
+// fingerprint hashes the CLAIM, and an outcome the day has already decided survives
+// the read that replaces it — and both are pinned end to end below.
+
+test("ten recomputes that reach the same call are ONE decision and ONE live question", () => {
+  reset();
+  const date = localDaysAgo(3);
+  for (let n = 0; n < 10; n++) {
+    repo.saveDayRead(
+      date,
+      read("rest", {
+        // Everything that used to move the hash and never moved the call: the signals
+        // blob, the prose, and the focus the read happened to name.
+        signals: { readiness: n, sleep_min: 400 + n, logged_today: { sets: n } },
+        headline: `Rest, take ${n}.`,
+        why: `A ${n}th way of saying the same thing.`,
+        focus: n % 2 ? "Upper" : "Lower",
+      })
+    );
+  }
+
+  const rows = dayDecisions(date);
+  assert.equal(rows.length, 1, "ten recomputes, one claim");
+  assert.equal(rows[0].status, "observed");
+  assert.equal(rows[0].superseded_by, null);
+  const expectations = expectationsFor(rows[0].id);
+  assert.equal(expectations.length, 1);
+  assert.equal(expectations[0].status, "pending", "and the morning's question is still being asked");
+});
+
+test("an invalidating write followed by a real recompute leaves the morning's question open", async () => {
+  reset();
+  const date = localDaysAgo(0);
+  configureDayReadRefresh({ today: () => date, setTimer: () => 0, clearTimer: () => {} });
+  // Seeded from the canonical read, so a recompute genuinely lands on the same kind.
+  const baseline = repo.dayRead(date);
+  repo.saveDayRead(date, { ...baseline, headline: "Steady today.", source: "agent", agent: "claude", override: null });
+  const morning = dayDecisions(date)[0];
+  assert.ok(morning, "precondition: the morning read is in the ledger");
+  const expectationId = expectationsFor(morning.id)[0]?.id;
+  assert.ok(expectationId, "precondition: it carries a falsifiable question");
+
+  // A wearable sync — the single most common mid-day invalidation on the live device.
+  repo.upsertGarminDailyMetric({ date, sleep_min: 402, resting_hr: 51 });
+  await readToday({ date });
+
+  const rows = dayDecisions(date);
+  assert.equal(rows.length, 1, "the recompute reached the same call, so nothing new was recorded");
+  assert.equal(Number(rows[0].id), Number(morning.id));
+  assert.equal(rows[0].status, "observed");
+  assert.equal(rows[0].superseded_by, null);
+  assert.equal(expectationsFor(morning.id)[0].status, "pending");
+});
+
+test("a rest read the day already answered survives the train read that replaces it", () => {
+  reset();
+  const date = localDaysAgo(2);
+  repo.saveDayRead(date, read("rest"));
+  const morning = dayDecisions(date)[0];
+  seedTrainingDay(date);
+  repo.saveDayRead(date, read("train", { focus: "Upper" }));
+
+  const rows = dayDecisions(date);
+  assert.equal(rows.length, 2);
+  const evening = rows[1];
+  assert.equal(rows[0].status, "superseded", "the read is retired — the lineage is unchanged");
+  assert.equal(Number(rows[0].superseded_by), Number(evening.id));
+  const restExpectation = expectationsFor(morning.id)[0];
+  assert.equal(restExpectation.status, "pending", "but the claim the day already decided is not");
+
+  evaluateMatureExpectations(localDaysAgo(0));
+  assert.equal(latestBrainEvaluation(restExpectation.id).verdict, "not_aligned");
+  assert.equal(latestBrainEvaluation(restExpectation.id).actual.trained, true);
+
+  // Both live questions for the date reach a verdict. Nothing confounds them:
+  // day-read decisions are recorded `observed`, and overlappingDecisionConfounders
+  // only counts applied/announced ones.
+  const eveningExpectation = expectationsFor(evening.id)[0];
+  const eveningVerdict = latestBrainEvaluation(eveningExpectation.id);
+  assert.equal(eveningVerdict.verdict, "aligned");
+  assert.deepEqual(eveningVerdict.confounders, []);
+});
+
+test("a train read the day already answered survives the easy read that replaces it", () => {
+  reset();
+  const date = localDaysAgo(2);
+  repo.saveDayRead(date, read("train", { focus: "Lower" }));
+  const morning = dayDecisions(date)[0];
+  seedTrainingDay(date);
+  repo.saveDayRead(date, read("easy"));
+
+  const expectation = expectationsFor(morning.id)[0];
+  assert.equal(expectation.status, "pending");
+  evaluateMatureExpectations(localDaysAgo(0));
+  assert.equal(latestBrainEvaluation(expectation.id).verdict, "aligned", "they trained — the read was right");
+});
+
+test("an OPEN rest read replaced mid-day with nothing logged is still cancelled", () => {
+  reset();
+  const date = localDaysAgo(2);
+  repo.saveDayRead(date, read("rest"));
+  const morning = dayDecisions(date)[0];
+  repo.saveDayRead(date, read("train", { focus: "Upper" }));
+
+  const expectation = expectationsFor(morning.id)[0];
+  assert.equal(expectation.status, "canceled", "nothing had happened, so nothing was decided");
+  evaluateMatureExpectations(localDaysAgo(0));
+  assert.equal(latestBrainEvaluation(expectation.id).verdict, "canceled");
+});
+
+// ------------------------------------------- migration 91: healing the rows already written
+
+const healDayReadExpectations = () => MIGRATIONS.find((entry) => entry.version === 91).up(db);
+
+// A day-read decision written STRAIGHT to the ledger, so the fixture can build the
+// exact shape the old writer left behind — a state the fixed writer can no longer
+// create, which is precisely why the repair migration exists.
+function legacyRead(date, kind) {
+  const recorded = recordDecision(
+    {
+      effective_date: date,
+      kind: "day_read",
+      domain: "cross_domain",
+      summary: `${kind} day`,
+      rationale: null,
+      source: "deterministic",
+      source_ref_type: "day_read",
+      source_ref_key: date,
+      status: "observed",
+      autonomy_tier: "observe",
+      risk_class: "low",
+      reversible: false,
+      // Distinct per row, the way the old input-hashing fingerprint was.
+      input_fingerprint: `legacy-${date}-${kind}-${Math.random().toString(16).slice(2)}`,
+      context: { signals: {} },
+      action: { kind, focus: null, est_minutes: null, why: null },
+      specialist: null,
+      applied_at: null,
+      reverted_at: null,
+      superseded_by: null,
+      evaluator_version: "day-read-adherence-v1",
+    },
+    [dayReadAdherenceExpectation(date, read(kind))]
+  );
+  return {
+    decisionId: Number(recorded.decision.id),
+    expectationId: Number(recorded.expectations[0].id),
+  };
+}
+
+// Close `prior` out against `next` the way the old writer did: supersede the decision
+// AND cancel its question, then store the canceled verdict the nightly pass reached.
+function legacyCancel(prior, next) {
+  db.prepare(`UPDATE brain_decisions SET status = 'superseded', superseded_by = ? WHERE id = ?`).run(
+    next.decisionId,
+    prior.decisionId
+  );
+  insertBrainEvaluation({
+    expectation_id: prior.expectationId,
+    verdict: "canceled",
+    actual: null,
+    evidence_keys: [],
+    confounders: ["The decision was superseded before its outcome could be interpreted."],
+    explanation: "The decision was superseded before its outcome could be interpreted.",
+    evaluator_version: "maturity-v1/canceled",
+  });
+}
+
+const expectationStatus = (id) => db.prepare(`SELECT status FROM brain_expectations WHERE id = ?`).get(id).status;
+const expectationSnapshot = () =>
+  db.prepare(`SELECT id, status FROM brain_expectations ORDER BY id`).all().map((row) => `${row.id}:${row.status}`);
+
+test("migration 91 re-opens a prediction cancelled by a recompute that agreed with it", () => {
+  reset();
+  const date = localDaysAgo(2);
+  const morning = legacyRead(date, "rest");
+  const recompute = legacyRead(date, "rest");
+  legacyCancel(morning, recompute);
+  assert.equal(expectationStatus(morning.expectationId), "canceled", "precondition: the old writer closed it");
+
+  healDayReadExpectations();
+  assert.equal(expectationStatus(morning.expectationId), "pending", "nothing ever took the claim away from it");
+
+  // ...and the nightly pass can finally answer the day it asks about.
+  evaluateMatureExpectations(localDaysAgo(0));
+  const verdict = latestBrainEvaluation(morning.expectationId);
+  assert.equal(verdict.verdict, "aligned", "no training was logged, so the rest read was followed");
+  // The old canceled verdict is history, not deleted — brain_evaluations is append-only.
+  const stored = db
+    .prepare(`SELECT verdict FROM brain_evaluations WHERE expectation_id = ? ORDER BY id`)
+    .all(morning.expectationId)
+    .map((row) => row.verdict);
+  assert.deepEqual(stored, ["canceled", "aligned"]);
+});
+
+test("migration 91 leaves a genuine change of call cancelled", () => {
+  reset();
+  const date = localDaysAgo(2);
+  const morning = legacyRead(date, "rest");
+  const evening = legacyRead(date, "train");
+  legacyCancel(morning, evening);
+
+  healDayReadExpectations();
+  assert.equal(expectationStatus(morning.expectationId), "canceled", "a rest read really was replaced by a train read");
+});
+
+test("migration 91 is idempotent", () => {
+  reset();
+  const date = localDaysAgo(2);
+  const morning = legacyRead(date, "rest");
+  legacyCancel(morning, legacyRead(date, "rest"));
+  const flipped = legacyRead(localDaysAgo(3), "rest");
+  legacyCancel(flipped, legacyRead(localDaysAgo(3), "train"));
+
+  const before = expectationSnapshot();
+  healDayReadExpectations();
+  const afterFirst = expectationSnapshot();
+  // Guard the guard: "twice equals once" also holds for a migration that does nothing.
+  assert.notDeepEqual(afterFirst, before, "the first pass really did heal something");
+
+  healDayReadExpectations();
+  assert.deepEqual(expectationSnapshot(), afterFirst, "a second pass finds nothing left to heal");
+  healDayReadExpectations();
+  assert.deepEqual(expectationSnapshot(), afterFirst);
+});
+
+// ---------------------------------------- the surviving evidence reaches the athlete
+
+// The last place the evidence could still be silently dropped. dayReadAdherenceLearnings
+// used to skip any row whose DECISION carried a superseded_by, which under the lock is
+// exactly the shape a surviving verdict has — so the Learned timeline would have shown
+// nothing for precisely the days the athlete overruled the read.
+test("a locked verdict on a superseded read still reaches the Learned timeline", () => {
+  reset();
+  for (const n of [6, 5, 4, 3, 2]) {
+    const date = localDaysAgo(n);
+    repo.saveDayRead(date, read("rest"));
+    seedTrainingDay(date);
+    // On one of them the Brief caught up and re-read the day as train — the shape that
+    // used to be dropped twice over (cancelled at the write, filtered at the read).
+    if (n === 4) repo.saveDayRead(date, read("train", { focus: "Upper" }));
+  }
+  evaluateMatureExpectations(localDaysAgo(0));
+
+  const learnings = whatWorksForYou()?.learnings ?? [];
+  const pattern = learnings.find((row) => row.key === "day_read:day_read_adherence:rest");
+  assert.ok(pattern, "five overruled rest mornings is a pattern the athlete should be told about");
+  assert.equal(pattern.evidence_n, 5, "including the morning a later read replaced");
+  assert.equal(pattern.missed_n, 5);
+  assert.match(pattern.statement, /you usually train anyway/);
 });

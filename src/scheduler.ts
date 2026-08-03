@@ -975,6 +975,44 @@ export function startScheduler() {
     }
   };
 
+  // ---- Connected-brain propagation (labs → nutrition / training / watch). ----
+  //      deriveDirectives() is diff-based, idempotent and feedback-suppressing, and folds a
+  //      coarse monthly reading-AGE bucket into its signature — so the PASSAGE OF TIME alone
+  //      moves a directive (an aging finding picks up its age note, then softens to
+  //      uncertain past a year). Nothing ever ran it on a timer, though: it only fired when
+  //      a lab landed or someone hit /api/directives/derive, so on a quiet month the
+  //      propagation engine was dormant and directives aged silently.
+  //
+  //      Deliberately its OWN tick and NOT a step inside proactiveTick: this is
+  //      deterministic, spawns no agent and pushes nothing, so the connected brain must not
+  //      be tied to the settings.proactive_enabled toggle.
+  //
+  //      The daily slot flips at LOCAL MIDNIGHT — hours before PRECOMPUTE_HOUR — so the
+  //      nightly Brief precompute warms against fresh directives, instead of a derive
+  //      invalidating the cached read moments after it was computed.
+  let propagationBusy = false;
+  const propagationTick = async () => {
+    if (propagationBusy) return;
+    const now = new Date();
+    if (!dailySlotDue(now, "directive_derive_date")) return;
+    propagationBusy = true;
+    try {
+      await runScheduled("directive_derive_date", localToday(now), "directive_derive_date", () => {
+        // No markers on file → nothing to propagate. Calm no-op (mirrors the
+        // checkup-attention guard), and it still acknowledges the day.
+        const hasMarkers = ((repo.getMarkerHistory() as any).markers || []).length > 0;
+        if (!hasMarkers) return { outcome: "no_op" };
+        const out = repo.deriveDirectives();
+        // Log only when something actually moved — an unchanged pass is the common case
+        // and must stay silent.
+        if (out.derived > 0) console.log(`[brain] re-derived the connected brain (${out.derived} directive(s) moved).`);
+        return { outcome: "succeeded", value: out };
+      });
+    } finally {
+      propagationBusy = false;
+    }
+  };
+
   const s = repo.getSettings(); // also lazily creates the row (seeding env defaults)
   const schedulerZone = repo.recordedClientTimeZone() ?? "server local time until a device reports its zone";
   console.log(
@@ -1000,9 +1038,11 @@ export function startScheduler() {
   setInterval(inOwnerTimeZone(precomputeTick), 60_000);
   setInterval(inOwnerTimeZone(memoryTick), 60_000); // Stream 2: nightly memory maintenance
   setInterval(inOwnerTimeZone(updateCheckTick), 60_000); // self-hosted update check (≤ once/day)
+  setInterval(inOwnerTimeZone(propagationTick), 60_000); // connected-brain re-derivation (≤ once/day)
   setInterval(heartbeatTick, 60_000); // readiness evidence; no agent/provider dependency
   setTimeout(inOwnerTimeZone(garminTick), 45_000); // the boot-time pass; later passes ride the minute tick
   setTimeout(inOwnerTimeZone(updateCheckTick), 30_000); // first update check shortly after boot (then daily)
+  setTimeout(inOwnerTimeZone(propagationTick), 20_000); // catch up a day the process slept through
   setTimeout(inOwnerTimeZone(boundaryApplyTick), 5_000);
   setTimeout(inOwnerTimeZone(revisionTick), 15_000);
 

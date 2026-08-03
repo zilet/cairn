@@ -14,7 +14,10 @@ import {
 } from "../../brain/evaluators.js";
 import { isoDate } from "../../brain/contract-utils.js";
 import { getBrainDecision, getBrainExpectation, setBrainExpectationStatus } from "../../repo/brain-decisions.js";
-import { supersededOnlyByAcknowledgement } from "../../repo/brain/read-adherence.js";
+import {
+  dayReadExpectationOutcomeLocked,
+  dayReadExpectationSurvivesSupersession,
+} from "../../repo/brain/read-adherence.js";
 import { addDaysISO, localDateISO } from "../../repo/shared.js";
 import { insertBrainEvaluation, latestBrainEvaluation } from "../../repo/brain-evaluations.js";
 import { RETIRED_EXPECTATION_STATUSES } from "../../repo/brain/expectation-arbitration.js";
@@ -165,12 +168,12 @@ function sameEvaluation(previous: BrainEvaluation | null, next: Omit<BrainEvalua
 }
 
 function decisionCanceled(decision: BrainDecision): boolean {
-  // A morning read closed out by that same day's `done` acknowledgement was never
-  // replaced by a competing prediction, so it still has a day to answer for. The
-  // invariant itself lives in read-adherence.ts beside the writer that must not
-  // create the state in the first place; this call is what heals the rows written
-  // before that writer was fixed.
-  if (supersededOnlyByAcknowledgement(decision)) return false;
+  // A morning read closed out only by that same day's `done` acknowledgement, or by a
+  // later recompute that reached the SAME call, was never replaced by a competing
+  // prediction — so it still has a day to answer for. The invariant itself lives in
+  // read-adherence.ts beside the writer that must not create the state in the first
+  // place; this call is what heals the rows written before that writer was fixed.
+  if (dayReadExpectationSurvivesSupersession(decision)) return false;
   return TERMINAL_DECISION_STATUSES.has(decision.status) || decision.superseded_by != null;
 }
 
@@ -272,7 +275,13 @@ export function evaluateExpectation(
   if (!expectation.id || !decision.id || expectation.decision_id !== decision.id) {
     throw new Error("evaluation requires a stored expectation and its decision");
   }
-  if (decisionCanceled(decision)) return canceledEvaluation(expectation, decision);
+  // A superseded read whose outcome the DAY has already decided is judged anyway: the
+  // replacement retired the read, but it cannot un-log the training that answered it.
+  // The rule of what "already decided" means belongs to read-adherence.ts, which
+  // answers false for every other metric — so this stays one condition, not a branch.
+  if (decisionCanceled(decision) && !dayReadExpectationOutcomeLocked(expectation)) {
+    return canceledEvaluation(expectation, decision);
+  }
   if (date < expectation.window_end) return null;
 
   const observation = observeExpectation({ expectation, decision, as_of: date });

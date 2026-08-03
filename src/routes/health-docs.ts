@@ -476,6 +476,13 @@ healthDocsRouter.delete("/:id", (req, res) => {
   }
   const result = deleteHealthDocument(Number(req.params.id));
   if ((result as any).error) return res.status(500).json(result);
+  // Removing a panel WITHDRAWS what it propagated: re-derive so directives grounded in
+  // markers that no longer exist are soft-resolved instead of outliving their evidence.
+  try {
+    deriveDirectives();
+  } catch {
+    /* the document is already gone; the connected brain settles on the next daily pass */
+  }
   const filePath = safeUploadPath(row?.file_path);
   if (filePath) {
     try {

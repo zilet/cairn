@@ -2119,6 +2119,10 @@ export interface InsightInput {
   next_step?: string | null; // optional concrete, low-friction suggestion
   status?: string | null; // new | seen | dismissed
   feedback?: string | null; // up | down
+  // The territorial identity of the connection — see src/repo/insight-intent.ts.
+  // Callers pass a key they already resolved; NULL is the honest value when
+  // derivation was ambiguous, and legacy rows keep deriving theirs at read time.
+  intent_key?: string | null;
 }
 
 const INSIGHT_STATUSES = new Set(["new", "seen", "dismissed"]);
@@ -2131,14 +2135,17 @@ const INSIGHT_FEEDBACK = new Set(["up", "down"]);
 export function addInsight(fields: InsightInput = {}) {
   const status = INSIGHT_STATUSES.has(String(fields.status)) ? String(fields.status) : "new";
   const info = db
-    .prepare(`INSERT INTO insights (kind, text, rationale, next_step, status, feedback) VALUES (?, ?, ?, ?, ?, ?)`)
+    .prepare(
+      `INSERT INTO insights (kind, text, rationale, next_step, status, feedback, intent_key) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
     .run(
       fields.kind == null ? null : String(fields.kind).trim().slice(0, 60) || null,
       fields.text == null ? null : capStr(fields.text, 320) || null,
       fields.rationale == null ? null : capStr(fields.rationale, 360) || null,
       fields.next_step == null ? null : capStr(fields.next_step, 200) || null,
       status,
-      INSIGHT_FEEDBACK.has(String(fields.feedback)) ? String(fields.feedback) : null
+      INSIGHT_FEEDBACK.has(String(fields.feedback)) ? String(fields.feedback) : null,
+      fields.intent_key == null ? null : String(fields.intent_key).trim().slice(0, 120) || null
     );
   return getInsight(Number(info.lastInsertRowid));
 }
@@ -2818,16 +2825,17 @@ export function getRecoverySummary(days = 14, garminSummary?: any, asOfDate = lo
   // each consumer, which is how three call sites come to hold three opinions about
   // the same number:
   //
-  //   verified       the row shows the overnight the value claims to describe:
-  //                  `sleep_min` is present, or the row's own `min_hr` is consistent
-  //                  with it (a true resting HR sits just above the day's floor —
-  //                  1-3 bpm apart in every sleep-backed row on record).
-  //   contradicted   `min_hr` is present and the value argues with it: below the
-  //                  day's own minimum (impossible), or implausibly far above it.
-  //                  This is the provisional mid-day estimate, and it is the ONLY
-  //                  class that gets actively withheld.
-  //   uncorroborated neither test can run — no sleep, no `min_hr` (a generic Apple or
-  //                  Oura row carries no `min_hr` at all). Not evidence of a problem;
+  //   verified       the value's OWN source shows the overnight it claims to describe:
+  //                  a same-source night, or a same-source `min_hr` consistent with it
+  //                  (a true resting HR sits just above the day's floor — 1-3 bpm apart
+  //                  in every sleep-backed row on record) — and the value is possible.
+  //   contradicted   the same source's `min_hr` argues with the value: below the day's
+  //                  own minimum (impossible), or implausibly far above it. This is the
+  //                  provisional mid-day estimate, and it is the ONLY class that gets
+  //                  actively withheld.
+  //   uncorroborated no test can run — no same-source night, no same-source `min_hr`
+  //                  (a generic Apple or Oura row carries no `min_hr` at all) — or the
+  //                  number is outside human resting range. Not evidence of a problem;
   //                  just nothing to check against.
   //
   // Only `verified` may open the excursion path in the signal state (a caution has to
@@ -2835,20 +2843,80 @@ export function getRecoverySummary(days = 14, garminSummary?: any, asOfDate = lo
   // the trend windows. `uncorroborated` keeps counting exactly as it always has —
   // absence of corroboration is not contradiction, and treating it as such would
   // silently delete the trend for every non-Garmin wearable.
+  // THE RULE, in one sentence: a reading is verified when its OWN source also
+  // provided evidence that its own sampling covered a rest window — either a
+  // coherent same-source `min_hr`, or a same-source night of at least two hours —
+  // and the value itself is physiologically possible. Absent that evidence it is
+  // uncorroborated. Only a same-source `min_hr` can contradict.
+  //
+  // "Same source" is the load-bearing word, and it is keyed off `row.sources[field]`
+  // — field provenance — never off a vendor name. `resolveRows` merges PER FIELD
+  // across feeds, so a date can legitimately hold an Apple resting HR beside a
+  // Garmin min HR from a watch that was on the charger all night. Two devices
+  // disagreeing about a day's floor is not a device contradicting itself: a
+  // cross-source `sleep_min` corroborates nothing, and a cross-source `min_hr`
+  // contradicts nothing.
+  //
+  // A resting HR just above the day's floor is the coherence signature (1-3 bpm
+  // apart in every sleep-backed row on record). The tolerance is relative rather
+  // than a flat 5 bpm, so an athlete whose floor sits at 70 is not told their own
+  // 77 argues with it; at a floor of 50 it is exactly 5, so the calibration this
+  // was tuned on is unchanged.
   const RESTING_HR_FLOOR_MARGIN = 5;
+  const RESTING_HR_FLOOR_MARGIN_RATIO = 0.1;
+  // Two hours is the shortest thing worth calling a night. A phone that recorded a
+  // 20-minute Sleep-Focus window saw a nap at most, and must not certify a resting
+  // heart rate on the strength of it. Below the floor the row falls through to the
+  // next test rather than to `contradicted` — a short night is thin evidence, not
+  // counter-evidence.
+  const SLEEP_WITNESS_MIN_MINUTES = 120;
+  // Physiological band, inherited from the Garmin ingest gate (`credibleSummaryRestingHr`).
+  // Generic ingest deliberately keeps storing whatever the phone said — the value stays
+  // visible and stays in the trend — but a figure this far outside human resting range is
+  // a wear artifact, and no witness may promote it to `verified`. An athlete with a true
+  // resting HR of 92 loses only the excursion path, by design.
+  const RESTING_HR_PLAUSIBLE_MIN = 30;
+  const RESTING_HR_PLAUSIBLE_MAX = 90;
   type ReadingTrust = "verified" | "contradicted" | "uncorroborated";
   const READING_TRUST = (row: ResolvedRow, field: "resting_hr" | "hrv_ms"): ReadingTrust => {
     if (row.values[field] == null) return "uncorroborated";
-    // A row that recorded sleep saw the night. That is the overnight context both
-    // resting HR and HRV are derived from, so it verifies either of them.
-    if (row.values.sleep_min != null) return "verified";
-    const floor = Number(row.values.min_hr);
-    const resting = Number(row.values.resting_hr);
-    if (!Number.isFinite(floor) || !Number.isFinite(resting)) return "uncorroborated";
+    const source = row.sources[field] ?? null;
+    // A witness only speaks for values from its own feed.
+    const witness = (key: Signal): number | null => {
+      if (source == null || row.values[key] == null || row.sources[key] !== source) return null;
+      const value = Number(row.values[key]);
+      return Number.isFinite(value) ? value : null;
+    };
+    const resting = row.values.resting_hr == null ? null : Number(row.values.resting_hr);
+    const restingPlausible =
+      resting == null ||
+      (Number.isFinite(resting) && resting >= RESTING_HR_PLAUSIBLE_MIN && resting <= RESTING_HR_PLAUSIBLE_MAX);
+    // ORDER MATTERS. The coherence test runs BEFORE the plausibility band, because an
+    // implausible figure beside a same-source floor is the exact shape of the mid-day
+    // provisional estimate this whole classifier exists to withhold: 105 beside a
+    // min_hr of 50 is contradicted evidence, not missing evidence, and only
+    // `contradicted` is dropped from the trend windows. Short-circuiting on the band
+    // first would return `uncorroborated` and let that number into the median.
+    //
     // The HR coherence check speaks for the whole ROW, not just for resting HR: it
     // answers "did this row's sampling include the sleep window", which is the same
     // question that decides whether its HRV figure means anything either.
-    return resting >= floor && resting - floor <= RESTING_HR_FLOOR_MARGIN ? "verified" : "contradicted";
+    const floor = witness("min_hr");
+    const coherent =
+      floor == null || resting == null || !Number.isFinite(resting)
+        ? null // no same-source floor to test against
+        : resting >= floor && resting - floor <= Math.max(RESTING_HR_FLOOR_MARGIN, RESTING_HR_FLOOR_MARGIN_RATIO * floor);
+    if (coherent === false) return "contradicted";
+    // A row that recorded a real night saw the overnight context both resting HR and
+    // HRV are derived from, so it verifies either of them.
+    const night = witness("sleep_min");
+    const verified = coherent === true || (night != null && night >= SLEEP_WITNESS_MIN_MINUTES);
+    if (!verified) return "uncorroborated";
+    // The band DEMOTES a would-be verified reading; it never promotes or contradicts.
+    // An implausible resting HR may not be certified, and (because the coherence check
+    // leans on that same figure) it cannot vouch for the row's HRV either.
+    if (!restingPlausible && (field === "resting_hr" || coherent === true)) return "uncorroborated";
+    return "verified";
   };
   const trustworthy = (list: ResolvedRow[], field: "resting_hr" | "hrv_ms"): ResolvedRow[] =>
     list.filter((row) => READING_TRUST(row, field) !== "contradicted");

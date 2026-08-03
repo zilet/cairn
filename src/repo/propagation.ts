@@ -9,6 +9,7 @@ import {
   listActiveDirectives,
   normalizeDirectiveKey,
   reconcileDirectives,
+  updateDirective,
 } from "./coach.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { buildSafetyMarkerContext, safetyGate, verifyCitation } from "./evidence.js";
@@ -540,27 +541,64 @@ function recordActiveDirectiveDecisions(source: string): void {
 // it. Separate from the acute-marker directiveFreshness decay (which is a daily-surface
 // cap on point-in-time reactants); this is a simple, universal age note.
 const STALE_READING_DAYS = 365;
+// The gentler first band: past half a year the reading is worth NAMING as old, but it is
+// still the best evidence on file — the directive keeps its confidence (no uncertain flip).
+const AGING_READING_DAYS = 180;
 const DERIVE_SIG_KEY = "directive_derive_sig";
 
-function stalenessClause(readingDate: string | null | undefined, today?: string): string | null {
+// Age of a source reading in whole days, or null when there is no parseable date.
+function readingAgeDays(readingDate: string | null | undefined, today?: string): number | null {
   if (!readingDate) return null;
   const t = Date.parse(String(readingDate).slice(0, 10));
   if (!Number.isFinite(t)) return null;
   const now = today ? Date.parse(today) : Date.now();
   if (!Number.isFinite(now)) return null;
-  const ageDays = Math.floor((now - t) / 864e5);
-  if (ageDays <= STALE_READING_DAYS) return null;
-  const months = Math.max(12, Math.round(ageDays / 30));
-  return `This reading is from ~${months} months ago — a recheck would confirm it still holds.`;
+  return Math.floor((now - t) / 864e5);
 }
 
-// Fold the staleness note into a desired directive: append the clause to its rationale
-// and soften it to uncertain. Idempotent — built fresh from the base rationale each pass.
+// The coarse MONTH bucket every age-derived STRING is built from. Deliberately the same
+// `floor(ageDays / 30)` deriveSignature folds in, so a note's wording can only change on a
+// day the signature also moves. A finer (or differently-rounded) bucket would rewrite the
+// rationale on days the short-circuit skips the pass — the text would land late, and once
+// the pass runs daily it would rewrite directive rows on a schedule of its own.
+function readingAgeMonths(ageDays: number): number {
+  return Math.floor(ageDays / 30);
+}
+
+// The age note a desired directive carries, if any — a graded band, not a cliff:
+//   > 180 days: name the age, keep the confidence.
+//   > 365 days: name the age AND soften to uncertain (an old value is worth confirming
+//               before acting on it).
+// Separate from the acute-marker directiveFreshness decay (which is a daily-surface cap on
+// point-in-time reactants); this is a simple, universal age note.
+function agingClause(
+  readingDate: string | null | undefined,
+  today?: string
+): { clause: string; uncertain: boolean } | null {
+  const ageDays = readingAgeDays(readingDate, today);
+  if (ageDays == null) return null;
+  const months = readingAgeMonths(ageDays);
+  if (ageDays > STALE_READING_DAYS)
+    return {
+      clause: `This reading is from ~${Math.max(12, months)} months ago — a recheck would confirm it still holds.`,
+      uncertain: true,
+    };
+  if (ageDays > AGING_READING_DAYS)
+    return {
+      clause: `This reading is ~${months} months old — still the most recent one on file.`,
+      uncertain: false,
+    };
+  return null;
+}
+
+// Fold the age note into a desired directive: append the clause to its rationale, and past
+// the stale threshold soften it to uncertain. Idempotent — built fresh from the base
+// rationale each pass, so a directive never accumulates two clauses.
 function applyStaleness(input: DirectiveInput, readingDate: string | null | undefined, today?: string): DirectiveInput {
-  const clause = stalenessClause(readingDate, today);
-  if (!clause) return input;
-  const rationale = input.rationale ? `${input.rationale} ${clause}` : clause;
-  return { ...input, rationale, uncertain: true };
+  const age = agingClause(readingDate, today);
+  if (!age) return input;
+  const rationale = input.rationale ? `${input.rationale} ${age.clause}` : age.clause;
+  return age.uncertain ? { ...input, rationale, uncertain: true } : { ...input, rationale };
 }
 
 // A cheap fingerprint of everything that affects derivation: the marker snapshot, the
@@ -583,14 +621,14 @@ function deriveSignature(
   // the passage of TIME itself moves the fingerprint. Otherwise a directive whose source
   // reading ages past the staleness threshold (STALE_READING_DAYS) with no new value/flag/
   // date would be short-circuited away, and applyStaleness's clause would never be applied.
-  const now = Date.now();
   const ages = offMarkers
     ? [...offMarkers.values()]
         .map((ctx) => {
-          const raw = ctx?.marker?.latest?.date;
-          const t = raw ? Date.parse(String(raw).slice(0, 10)) : NaN;
-          if (!Number.isFinite(t)) return null;
-          return { k: ctx.zone?.label ?? "", a: Math.floor(Math.max(0, now - t) / 864e5 / 30) };
+          const ageDays = readingAgeDays(ctx?.marker?.latest?.date);
+          if (ageDays == null) return null;
+          // The SAME bucket agingClause words its notes from, so a note can never change
+          // on a day this fingerprint does not.
+          return { k: ctx.zone?.label ?? "", a: readingAgeMonths(Math.max(0, ageDays)) };
         })
         .filter((x): x is { k: string; a: number } => x != null)
         .sort((a, b) => (a.k < b.k ? -1 : a.k > b.k ? 1 : 0))
@@ -694,6 +732,31 @@ export function deriveDirectives() {
     }
   }
   return { source: SOURCE, derived: result.saved, directives: listActiveDirectives() };
+}
+
+// THE USER-FLIP EDGE. A person marking a directive Done/Dismissed is feedback the engine
+// reads (bumpDirectiveFeedbackCounter moves the derive signature, and shouldSuppressDirective
+// honors the verdict), but nothing re-ran the engine — so a suppressed twin from another
+// source, or a directive whose whole cluster the flip retires, lingered until the next lab
+// or the next daily tick. Re-derive HERE, synchronously, so the board settles at once.
+//
+// This lives ONE layer above updateDirective on purpose: updateDirective is also what
+// reconcileDirectives calls to update a row in place, so re-deriving from inside it would
+// re-enter the pass mid-reconcile. Every surface a PERSON flips a directive through (the
+// PUT route, the MCP tool) calls this; the engine itself never does.
+//
+// Only resolved/dismissed re-derive: a flip back to `active` is the athlete un-hiding a row,
+// and a pass that no longer desires it would soft-resolve it right back out from under them.
+export function setDirectiveStatusByUser(id: number, status: string) {
+  const updated = updateDirective(id, { status });
+  if (updated && (status === "resolved" || status === "dismissed")) {
+    try {
+      deriveDirectives();
+    } catch {
+      /* the flip is the athlete's action and always stands; re-derivation is best-effort */
+    }
+  }
+  return updated;
 }
 
 // The COMPLETE off-optimal picture: one MarkerContext per optimal-zone label (the

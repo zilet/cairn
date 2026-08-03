@@ -433,6 +433,10 @@ export function isHealthSynthesisResult(value: unknown): boolean {
   return !!p && p.found !== false && (text(p.headline) || text(p.story));
 }
 
+// `connection` (the facet-pair identity, src/repo/insight-intent.ts) is deliberately
+// NOT required here: a CLI that predates it still returns a usable insight, and the
+// acceptance ladder in generateInsight falls back to deriving the key from the text.
+// Whether a supplied connection is VALID is judged there, not at this parse gate.
 export function isInsightResult(value: unknown): boolean {
   const p = object(value);
   if (!p || typeof p.found !== "boolean") return false;

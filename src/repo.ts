@@ -51,6 +51,7 @@ export * from "./repo/next-checkup.js"; // athlete-facing "next checkup" read: d
 export * from "./repo/prevent.js"; // AHA PREVENT (2023) base-model risk engine (pure math)
 export * from "./repo/coach-context.js";
 export * from "./repo/coach.js";
+export * from "./repo/insight-intent.js"; // WHAT an insight connects (facet pair + polarity), so a genuine rephrase can be refused
 export * from "./repo/baseline-bands.js"; // personal-baseline recovery + training-load reads
 export * from "./repo/sensor-freshness.js"; // how old a wearable reading may be before it behaves as absent
 export * from "./repo/sensor-cadence.js"; // how MUCH of a wearable series there is before it may describe a trend

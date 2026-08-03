@@ -72,7 +72,7 @@ export function isPredictiveDayReadKind(value: unknown): value is PredictiveDayR
 // compliance, which is the one asymmetry a learning loop must not have.
 //
 // The rule is enforced at the WRITE (recordDayReadDecision does not supersede for a
-// non-predictive read) and read back at EVALUATION (supersededOnlyByAcknowledgement,
+// non-predictive read) and read back at EVALUATION (dayReadExpectationSurvivesSupersession,
 // which is what lets rows written before this heal). Both spellings are here so they
 // cannot drift.
 export function dayReadSupersedesPriorReads(kind: unknown): boolean {
@@ -89,23 +89,50 @@ function isDayReadDecision(row: SupersessionCandidate): boolean {
   return String(row.kind ?? "") === "day_read" && String(row.source_ref_type ?? "") === "day_read";
 }
 
+function decisionActionKind(row: { action?: unknown; action_json?: unknown }): unknown {
+  const action = row.action;
+  if (action && typeof action === "object") return (action as Record<string, unknown>).kind;
+  try {
+    return JSON.parse(String(row.action_json ?? "null"))?.kind;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Was this day-read decision closed out ONLY by acknowledgements of the day's work,
- * with no newer read making a competing claim about it? Walks the supersession chain,
- * because a train → done → rest sequence IS a genuine replacement and must still
- * cancel. Returns false for anything that is not a day-read decision, and for any
+ * Does this day-read decision's expectation SURVIVE the chain that closed it out?
+ *
+ * Two successors leave the claim standing, and both for the same reason — neither
+ * takes the claim away from it:
+ *
+ *   • a NON-PREDICTIVE successor (`done`), which acknowledges work that already
+ *     happened and predicts nothing; and
+ *   • a successor making the SAME claim, which is the same read restated. A mid-day
+ *     recompute that lands on the same kind is not a change of call, and retiring the
+ *     morning's expectation for it was cancelling a prediction nothing had replaced.
+ *
+ * Anything else — a newer read of a DIFFERENT kind — is a genuine change of call and
+ * still cancels, because the day it predicted stopped being the day it describes.
+ *
+ * Walks the whole chain, because a train → done → rest sequence IS a genuine
+ * replacement. Returns false for anything that is not a day-read decision, and for any
  * decision terminal for its own reasons (reverted, rejected, canceled).
  */
-export function supersededOnlyByAcknowledgement(decision: {
+export function dayReadExpectationSurvivesSupersession(decision: {
   id?: unknown;
   kind?: unknown;
   status?: unknown;
   source_ref_type?: unknown;
   superseded_by?: unknown;
+  action?: unknown;
+  action_json?: unknown;
 }): boolean {
   if (!isDayReadDecision(decision)) return false;
   const status = String(decision.status ?? "");
   if (status !== "observed" && status !== "superseded") return false;
+  // The claim this decision's own expectation rides on. Unknown (an old row with no
+  // action) degrades to the narrower original rule: only acknowledgements survive.
+  const ownKind = decisionActionKind(decision);
   let next = Number(decision.superseded_by);
   if (!Number.isInteger(next) || next <= 0) return false;
   const seen = new Set<number>();
@@ -121,14 +148,9 @@ export function supersededOnlyByAcknowledgement(decision: {
       return false;
     }
     if (!row || !isDayReadDecision(row)) return false;
-    let kind: unknown = null;
-    try {
-      kind = JSON.parse(String(row.action_json ?? "null"))?.kind;
-    } catch {
-      kind = null;
-    }
-    // A newer PREDICTION about the day took ownership: the genuine cancel path.
-    if (isPredictiveDayReadKind(kind)) return false;
+    const kind = decisionActionKind(row);
+    // A newer, DIFFERENT prediction about the day took ownership: the genuine cancel path.
+    if (isPredictiveDayReadKind(kind) && kind !== ownKind) return false;
     const following = Number(row.superseded_by);
     if (!Number.isInteger(following) || following <= 0) return true;
     next = following;
@@ -205,6 +227,17 @@ export function dayTrainingTruth(date: string, opts: DayTrainingTruthOptions = {
   };
 }
 
+// The training truth, or null if it could not be read. A ledger write must never fail
+// because a truth query did — the caller degrades to "nothing is locked", which is the
+// pre-existing behavior.
+function safeDayTrainingTruth(date: string): DayTrainingTruth | null {
+  try {
+    return dayTrainingTruth(date);
+  } catch {
+    return null;
+  }
+}
+
 export type ReadAdherenceOutcome = "followed" | "diverged" | "unclear";
 
 // The exact test each read is held to, in plain words. Published alongside every
@@ -243,6 +276,52 @@ export function readAdherenceOutcome(kind: string, truth: DayTrainingTruth): Rea
       return "followed";
     default:
       return "unclear";
+  }
+}
+
+// ---------- an outcome the day has already decided ----------
+//
+// Within one calendar day the two facts these outcomes turn on only ever go TRUE:
+// `trained` once a set or a real activity is logged, `above_easy` once the day grades
+// moderate or hard. Nothing later in the day can take either back. So some outcomes
+// LOCK the moment they happen and are no longer open questions:
+//
+//   rest  + trained    → diverged, and stays diverged
+//   train + trained    → followed, and stays followed
+//   easy  + above_easy → diverged, and stays diverged
+//
+// Everything else is still open (a train read with nothing logged yet may still be
+// followed at 21:00), and an open claim is one a newer read may honestly take over.
+//
+// A SUPERSESSION MAY NOT ERASE A CLAIM THE DAY HAS ALREADY DECIDED. A morning that
+// read rest and was re-read as train after the athlete had already trained is not a
+// read whose day stopped describing it — it is a read the day answered. Cancelling it
+// is how 13 of 22 predictions were being thrown away: the loop kept the evidence only
+// on the days nothing happened.
+export function dayReadOutcomeLocked(kind: unknown, truth: DayTrainingTruth): boolean {
+  if (!isPredictiveDayReadKind(kind)) return false;
+  return kind === "easy" ? truth.above_easy : truth.trained;
+}
+
+// The same question asked of a stored expectation, for the ONE evaluator branch that
+// needs it. Kept here so the domain knowledge (which read predicts what, and when the
+// day has settled it) stays in this module rather than leaking into the evaluator.
+// Answers false for any other metric, so the caller needs no metric test of its own.
+export function dayReadExpectationOutcomeLocked(expectation: {
+  metric_key?: unknown;
+  subject_key?: unknown;
+  baseline?: unknown;
+}): boolean {
+  if (String(expectation.metric_key ?? "") !== DAY_READ_ADHERENCE_METRIC) return false;
+  const date = String(expectation.subject_key ?? "");
+  if (!date) return false;
+  const baseline = expectation.baseline;
+  const kind = baseline && typeof baseline === "object" ? (baseline as Record<string, unknown>).read_kind : null;
+  if (!isPredictiveDayReadKind(kind)) return false;
+  try {
+    return dayReadOutcomeLocked(kind, dayTrainingTruth(date));
+  } catch {
+    return false;
   }
 }
 
@@ -333,22 +412,33 @@ const MAX_FINGERPRINT_HOPS = 20;
 export function recordDayReadDecision(
   date: string,
   read: DayReadForLedger,
-  opts: { inputFingerprint?: string | null; override?: string | null } = {}
+  opts: { override?: string | null } = {}
 ): DayReadLedgerEntry | null {
   const kind = String(read.kind ?? "").trim();
   if (!date || !kind) return null;
   const override = opts.override ?? null;
   const focus = typeof read.focus === "string" && read.focus.trim() ? read.focus.trim() : null;
+  // THE FINGERPRINT HASHES THE CLAIM, NOT THE INPUTS.
+  //
+  // What the ledger asks of a day-read row is "what did the brain claim about this
+  // day, and was it right?" — and the claim is the KIND (plus whether the athlete
+  // overrode it). Everything else the read carries is presentation or provenance.
+  //
+  // Hashing `dayReadInputFingerprint` here instead meant every input that could move
+  // a recommendation opened a new decision row even when the recommendation did not
+  // move: a watch sync, a fuel bucket, an evening's first set. A live audit found 13
+  // of 22 predictions cancelled that way — the day's own expectation retired by a
+  // recompute that reached the SAME conclusion. `focus` goes for the same reason: a
+  // train read that re-picks Upper over Lower is the same claim about the day, and
+  // adherence measures whether training was logged, never which muscles.
+  //
+  // So a mid-day recompute landing on the same kind is a pure INSERT OR IGNORE: no
+  // new row, no supersession, no cancel, and the morning's expectation goes on asking.
   const root = brainDecisionFingerprint({
     scope: "day_read",
     date,
     read_kind: kind,
-    focus,
     override,
-    // The day-read input fingerprint already excludes narration and continuous
-    // measurements that cannot move the decision; reusing it is what makes an
-    // unchanged morning idempotent here.
-    input_fingerprint: opts.inputFingerprint ?? null,
   });
   // A read that flips away and back within one day (train → rest → train) finds
   // its own earlier row already SUPERSEDED. That row is immutable history, not
@@ -415,14 +505,32 @@ export function recordDayReadDecision(
   const priors = dayReadSupersedesPriorReads(kind)
     ? (db
         .prepare(
-          `SELECT id FROM brain_decisions
+          `SELECT id, action_json FROM brain_decisions
         WHERE kind = 'day_read' AND source_ref_type = 'day_read' AND source_ref_key = ?
           AND status = 'observed' AND id <> ?
         ORDER BY id`
         )
-        .all(date, currentId) as Array<{ id: number }>)
+        .all(date, currentId) as Array<{ id: number; action_json: string | null }>)
     : [];
-  for (const prior of priors) transitionBrainDecision(Number(prior.id), "superseded", { supersededBy: currentId });
+  // A prior read whose outcome the day has ALREADY DECIDED keeps its expectation.
+  // Being replaced retires the read; it does not un-happen the training that answered
+  // it (see dayReadOutcomeLocked). The decision itself is still marked superseded, so
+  // the lineage and `recent_decisions` read exactly as before — only the pending
+  // question survives.
+  //
+  // INVARIANT, and the one place it is visible: a date may now hold two LIVE
+  // expectations — a locked prior plus the new claim. Both are real, separately
+  // falsifiable predictions and both must be judged, so `expectation_health` counts
+  // two while `readAdherenceModel` (which reads the MORNING read only) counts one.
+  // That divergence is expected, not drift.
+  const truth = priors.length ? safeDayTrainingTruth(date) : null;
+  for (const prior of priors) {
+    const locked = !!truth && dayReadOutcomeLocked(decisionActionKind(prior), truth);
+    transitionBrainDecision(Number(prior.id), "superseded", {
+      supersededBy: currentId,
+      keepExpectations: locked,
+    });
+  }
 
   return {
     decision_id: currentId,

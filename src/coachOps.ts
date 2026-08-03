@@ -1487,6 +1487,55 @@ export async function synthesizeHealth(agent: string | undefined, hooks?: OpHook
   };
 }
 
+export type InsightVerdict =
+  | { accept: true; text: string; key: string | null }
+  // `agent_ran` is the difference between "the agent answered and had nothing" and
+  // "no agent answered at all" — the caller turns it into agent_status.
+  | { accept: false; agent_ran: boolean };
+
+// The acceptance ladder for a parsed insight, extracted so it can be tested without
+// spawning a CLI (no offline e2e exists for this op — the stub agent emits proposal
+// JSON that isInsightResult rejects before it ever reaches here). Every rejection is
+// the SAME calm silence; an insight that doesn't clear the ladder is not an error the
+// athlete ever sees.
+//
+//   1. the agent named a VALID connection -> dedupe on its key: territory, not words.
+//      A valid key that COLLIDES with covered territory is still a rejection: that is
+//      the whole point of the key layer.
+//   2. it named an INVALID one (unknown facet, same domain, malformed) -> fall through
+//      to rung 3 exactly as if it had named none. Silence was the original design here,
+//      and preserving the insight won: a vocabulary miss in one optional field must not
+//      cost a genuine connection, and corpus safety is identical either way — the
+//      invalid key is discarded, never stored, so nothing downstream can be poisoned.
+//   3. it named none -> derive the key from the text; ambiguous derivation falls back
+//      to the text-only guard with a NULL key (the pre-key status quo, no regression)
+//
+// The text guard runs regardless, as a second net. `weekly_read` is exempt from the
+// key layer entirely: it legitimately recurs on the same territory every week.
+export function insightVerdict(opts: {
+  parsed: unknown;
+  kind: string;
+  keyCorpus: string[];
+  recentTexts: string[];
+}): InsightVerdict {
+  const p: any = opts.parsed;
+  if (!p || typeof p !== "object") return { accept: false, agent_ran: false };
+  const text = String(p.text ?? "").trim();
+  if (p.found === false || !text) return { accept: false, agent_ran: true };
+  const keyed = opts.kind === "connection";
+  const named = keyed
+    ? repo.resolveInsightIntent(p.connection, text, p.rationale)
+    : ({ status: "unkeyed", key: null } as const);
+  // An unusable `connection` is treated as no connection at all: drop it and derive.
+  const intent =
+    named.status === "invalid" ? repo.resolveInsightIntent(undefined, text, p.rationale) : named;
+  if (intent.status === "keyed" && repo.isDuplicateInsightIntent(intent.key, opts.keyCorpus)) {
+    return { accept: false, agent_ran: true };
+  }
+  if (repo.isDuplicateInsight(text, opts.recentTexts)) return { accept: false, agent_ran: true };
+  return { accept: true, text, key: intent.key };
+}
+
 // Run ONE agentic pass over the whole picture for a single genuine cross-domain
 // connection (or a weekly read), dedupe against what's already been said, and
 // store it. ok:false is the designed failure signal — found:false, no text, a
@@ -1499,18 +1548,26 @@ export async function generateInsight(
 ) {
   const k = kind === "weekly_read" ? "weekly_read" : "connection";
   const recent = repo.recentInsightTexts(12);
+  // The territory already covered (facet-pair keys) + the residue of rows whose
+  // territory couldn't be derived. Only the connection pass is keyed — a weekly read
+  // legitimately recurs on the same territory every week.
+  const corpus = k === "connection" ? repo.insightIntentCorpus() : { keys: [], unkeyedTexts: [] };
   // Serve-stale-then-revalidate, keyed on a coarse time bucket + the set of
-  // recently-said insight texts (so a new connection can't be masked by a stale
+  // recently-said insight texts AND the covered-territory keys, so cache identity and
+  // guard identity are the same model (a new connection can't be masked by a stale
   // hit, and an identical same-window repeat returns instantly with no agent run).
   const cacheKind = k === "weekly_read" ? "weekly_read" : "insight";
-  const cacheKey = insightCacheKey(k, recent);
+  const cacheKey = insightCacheKey(k, recent, corpus.keys);
   const cached = repo.getAiCache(cacheKind, cacheKey);
   if (cached && !cached.stale) {
     hooks?.onPhase?.("served from cache");
     return cached.result;
   }
   hooks?.onPhase?.(k === "weekly_read" ? "reading your week" : "looking for a connection");
-  const prompt = k === "weekly_read" ? buildWeeklyReadPrompt() : buildInsightPrompt(undefined, recent, repo.upvotedInsightTexts());
+  const prompt =
+    k === "weekly_read"
+      ? buildWeeklyReadPrompt()
+      : buildInsightPrompt(undefined, corpus.unkeyedTexts, repo.upvotedInsightTexts(), corpus.keys);
   // Only the weekly read is reshaped to the streaming contract + wired for deltas; a
   // connection insight keeps the bare-JSON prompt and (with no onDelta) delegates
   // straight to the one-shot rotation — unchanged.
@@ -1538,20 +1595,21 @@ export async function generateInsight(
     };
   }
   const p: any = result.parsed;
-  const text = p && typeof p === "object" ? String(p.text ?? "").trim() : "";
-  if (!p || typeof p !== "object" || p.found === false || !text || repo.isDuplicateInsight(text, recent)) {
+  const verdict = insightVerdict({ parsed: p, kind: k, keyCorpus: corpus.keys, recentTexts: recent });
+  if (!verdict.accept) {
     // Distinguish "no agent configured / every attempt failed" from a legitimate
     // quiet answer (the agent ran and genuinely found nothing new). When the agent
-    // DID parse a result (p is an object), it succeeded — found:false is calm 'ok'.
-    const status = p && typeof p === "object" ? ("ok" as const) : agentStatusFor({ ok: false, agent: chosen, tried });
+    // DID parse a result, it succeeded — found:false is calm 'ok'.
+    const status = verdict.agent_ran ? ("ok" as const) : agentStatusFor({ ok: false, agent: chosen, tried });
     return { ok: false as const, error: "no genuine new insight", agent: chosen, tried, agent_status: status };
   }
   const insight = repo.addInsight({
     kind: k,
-    text,
+    text: verdict.text,
     rationale: p.rationale ?? null,
     next_step: p.next_step ?? null,
     status: "new",
+    intent_key: verdict.key,
   });
   // Stamp the weekly read's freshness signature so a later serve can tell when the
   // picture has moved past this read (pull-only staleness — see weeklyReadFreshness).
@@ -1576,11 +1634,19 @@ export async function generateInsight(
   return out;
 }
 
-// Fingerprint an insight pass: the kind + a coarse hour bucket + the recently-said
-// insight texts (the dedup floor). A new said-set or a fresh hour busts it.
-function insightCacheKey(kind: string, recent: string[]): string {
+// Fingerprint an insight pass: the kind + a coarse hour bucket + the dedup floor —
+// both halves of it, the recently-said texts AND the covered-territory keys. Keeping
+// the keys out would let a newly-covered connection be served from a cache built
+// before the guard knew about it. A new said-set, new territory, or a fresh hour
+// busts it.
+export function insightCacheKey(kind: string, recent: string[], keys: string[] = []): string {
   const hourBucket = new Date().toISOString().slice(0, 13); // YYYY-MM-DDTHH
-  return repo.fingerprint({ kind, hourBucket, recent: [...recent].map((t) => String(t).trim().toLowerCase()).sort() });
+  return repo.fingerprint({
+    kind,
+    hourBucket,
+    recent: [...recent].map((t) => String(t).trim().toLowerCase()).sort(),
+    keys: [...keys].map((k) => String(k).trim()).sort(),
+  });
 }
 
 // ---------- chat distill (lifted from the inlined api.ts / mcp.ts reset paths) ----------

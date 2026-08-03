@@ -3023,11 +3023,12 @@ function writeDayRead(date: string, read: any, expectedStaleOverride?: CachedOve
   // unavailable.
   //
   // The identity used to be the whole `signals` blob, which moves all day, so one
-  // date produced ~19 immutable rows and 18 supersedes. It is now the read's own
-  // decision fingerprint (see recordDayReadDecision), so an unchanged morning is
-  // idempotent and only a genuine change records.
+  // date produced ~19 immutable rows and 18 supersedes. It is now the CLAIM the read
+  // makes — kind plus override, deliberately NOT `inputFingerprint` (see
+  // recordDayReadDecision) — so any recompute reaching the same conclusion is
+  // idempotent and only a genuine change of call records.
   try {
-    recordDayReadDecision(date, read, { inputFingerprint, override });
+    recordDayReadDecision(date, read, { override });
   } catch {
     // The day-read cache is authoritative; learning/audit recording is best effort.
   }

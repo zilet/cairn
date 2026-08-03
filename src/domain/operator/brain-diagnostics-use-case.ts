@@ -59,6 +59,13 @@ function parsed(value: unknown): any {
 // and is sitting UNEVALUATED (the actual failure mode — a scheduler that stopped,
 // an evaluator that throws), what has been evaluated, with what verdict mix, and
 // how overdue the oldest unresolved one is.
+//
+// INVARIANT WORTH KNOWING BEFORE READING A DAY-READ COUNT HERE: one calendar date may
+// legitimately hold more than one live `day_read_adherence` expectation — a prior read
+// whose outcome the day had already decided keeps its own question when a later read
+// replaces it (see dayReadOutcomeLocked in repo/brain/read-adherence.ts). So these
+// counts can exceed `read_adherence.days_observed`, which counts one MORNING read per
+// day. Both are correct; they are counting different things.
 function expectationHealth() {
   const today = localDateISO();
   const rows = db

@@ -47,7 +47,16 @@ export function registerHealthRecordTools(server: McpToolRegistrar) {
     }
   );
 
-  server.tool("delete_health_record", "Delete a health document by id.", { id: z.number().int() }, async ({ id }) =>
-    asText(getHealthDocument(id)?.kind === "imaging" ? deleteImagingStudy(id) : deleteHealthDocument(id))
-  );
+  server.tool("delete_health_record", "Delete a health document by id.", { id: z.number().int() }, async ({ id }) => {
+    if (getHealthDocument(id)?.kind === "imaging") return asText(deleteImagingStudy(id));
+    const result = deleteHealthDocument(id);
+    // Removing a panel WITHDRAWS what it propagated: re-derive so directives grounded in
+    // markers that no longer exist are soft-resolved instead of outliving their evidence.
+    try {
+      deriveDirectives();
+    } catch {
+      /* never fail the delete */
+    }
+    return asText(result);
+  });
 }

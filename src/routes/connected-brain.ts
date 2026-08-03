@@ -13,7 +13,6 @@ import {
   listBrainDecisions,
   revertDecision,
   snoozeNextStep,
-  updateDirective,
   updateInsight,
 } from "../domain/brain/index.js";
 import {
@@ -37,6 +36,7 @@ import {
   listMarkerAliases,
   prioritizeMarkers,
   recordHealthOutcomeAnnotations,
+  setDirectiveStatusByUser,
   symptomMarkerLinks,
 } from "../domain/health/index.js";
 import { addMemory } from "../domain/person/index.js";
@@ -245,7 +245,10 @@ connectedBrainRouter.put("/directives/:id", (req, res) => {
   if (!["active", "resolved", "dismissed"].includes(status)) {
     return res.status(400).json({ error: "status must be active | resolved | dismissed" });
   }
-  const updated = updateDirective(Number(req.params.id), { status });
+  // setDirectiveStatusByUser, not updateDirective: a Done/Dismiss re-runs the propagation
+  // pass synchronously, so a suppressed cross-source twin clears on the same tap instead of
+  // lingering until the daily tick.
+  const updated = setDirectiveStatusByUser(Number(req.params.id), status);
   if (!updated) return res.status(404).json({ error: "directive not found" });
   res.json({ ok: true, directive: updated });
 });

@@ -702,9 +702,19 @@ ${promptData(context, "daily_composition")}`;
 }
 
 // ---------- quiet cross-domain insight (Phase 6A — pull, never push) ----------
+// TRAP, if anyone later wires JSON-schema structured output for the insight op:
+// `connection` MUST be named in that schema. Constrained decoding drops fields the
+// schema does not name, and `additionalProperties: true` does NOT prevent it (see
+// docs/ARCHITECTURE.md on agent structured output) — the model would emit prose with
+// no connection object, every insight would fall back to text-only derivation, and
+// the dedup regression would be silent.
 const INSIGHT_SCHEMA = `{
   "kind": "connection",
   "found": true,
+  "connection": {
+    "a": {"facet": "<one facet from the list above>", "direction": "up|down"},
+    "b": {"facet": "<a facet from a DIFFERENT domain>", "direction": "up|down"}
+  },
   "text": "<the ONE connection, one or two plain sentences in a friend's voice — NO numbers as scores, NO alarm>",
   "rationale": "<ONE short sentence (≤240 chars) of plain-language reasoning that backs the connection — speak TO the user ('your recent labs show…'), never narrate the data structures you were given>",
   "next_step": "<OPTIONAL: one concrete, low-friction next step (a food swap, a retest to consider) in ≤140 chars, or null — calm, never a directive>"
@@ -718,10 +728,34 @@ const INSIGHT_SCHEMA = `{
 // pushed. Honors the constitution: at most one real thing, plainly, kindly, or
 // nothing at all. recent[] are insights already surfaced — do NOT repeat them.
 
-export function buildInsightPrompt(ctx?: CoachContext, recent: string[] = [], liked: string[] = []): string {
+export function buildInsightPrompt(
+  ctx?: CoachContext,
+  recent: string[] = [],
+  liked: string[] = [],
+  priorKeys: string[] = []
+): string {
   const context = ctx ?? repo.getCoachContext();
-  const recentBlock = recent.length
-    ? `\nALREADY SAID (do NOT repeat or reword any of these — find something genuinely new, or return found:false):\n${recent.map((r) => `  - ${r}`).join("\n")}\n`
+  // What's already been covered is stated as TERRITORY, not as sentences. Listing the
+  // prose invited a rewrite of it (the model reads "don't say this" and writes the
+  // same claim in new words, which the text guard then waves through); naming the
+  // facet pair says the connection itself is spent. `recent` is the residue: rows
+  // whose territory could not be derived, still listed verbatim so a literal repeat
+  // stays blocked.
+  // Both lists are capped HERE — the one place every caller passes through — because
+  // the corpus they come from is deliberately whole (the dedupe guards and the cache
+  // key need all of it) and can run to a couple hundred rows over 90 days. Newest
+  // first: the corpus is built id-DESC.
+  const coveredLines = priorKeys
+    .map((k) => repo.describeInsightIntentKey(k))
+    .filter((d): d is string => !!d)
+    .slice(0, repo.INSIGHT_PROMPT_COVERED_LIMIT)
+    .map((d) => `  - ${d}`);
+  const recentTexts = recent.slice(0, repo.INSIGHT_PROMPT_UNKEYED_LIMIT);
+  const coveredBlock = coveredLines.length
+    ? `\nALREADY COVERED (these connections are spent — do NOT make the same link again in different words; find genuinely new territory, or return found:false):\n${coveredLines.join("\n")}\n`
+    : "";
+  const recentBlock = recentTexts.length
+    ? `\nALREADY SAID (do NOT repeat or reword any of these — find something genuinely new, or return found:false):\n${recentTexts.map((r) => `  - ${r}`).join("\n")}\n`
     : "";
   // The positive half of the same one-tap. Deliberately weaker than the block above:
   // "already said" is a prohibition, this is a direction, and it must never become a
@@ -753,7 +787,14 @@ THE CONSTITUTION (binding):
   its internal fields (no "the health_review confirms…", "recent_sessions show…", "the goal object").
   No grocery-list of evidence; one plain reason is enough.
 - It is a suggestion, never pressure. Rest and a quiet week are healthy, not problems to solve.
-${recentBlock}${likedBlock}
+${coveredBlock}${recentBlock}${likedBlock}
+NAME WHAT YOU CONNECTED. Alongside the prose, tag the two sides of the connection with facets from
+this closed list, and say which way each one moved ("up" / "down" — bigger/smaller, better/worse):
+${repo.renderInsightFacetVocabulary()}
+The two facets MUST come from different domains — a link inside one domain is not a cross-domain
+connection. Pick the closest facet; if nothing on the list fits either side, the connection isn't one
+this can carry, so return {"found": false}.
+
 ${renderTodayFuel(context)}
 ${renderJsonContract(INSIGHT_SCHEMA, {
     lead: `When there's nothing real to say: {"found": false}

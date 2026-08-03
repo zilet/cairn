@@ -163,6 +163,126 @@ test("absent wearable data is neutral: no resting-HR evidence and nothing pushed
   assert.equal(state.action.directives.training, "proceed");
 });
 
+// ---- READING_TRUST: whose witness, and is the number even possible? ----------
+//
+// The rule: a reading is verified when its OWN source also provided evidence that
+// its own sampling covered a rest window — a coherent same-source min HR, or a
+// same-source night of at least two hours — and the value itself is possible.
+// Absent that, uncorroborated. Only a same-source min HR may contradict.
+
+const apple = (daysAgo, metrics) => repo.recordDailyMetrics("apple_health", localDaysAgo(daysAgo), metrics);
+function garminDay(daysAgo, cols) {
+  db.prepare("INSERT OR IGNORE INTO garmin_sources (id, provider, mode) VALUES (1, 'garmin', 'unofficial')").run();
+  const keys = Object.keys(cols);
+  db.prepare(
+    `INSERT INTO garmin_daily_metrics (source_id, date, ${keys.join(", ")})
+     VALUES (1, ?, ${keys.map(() => "?").join(", ")})`
+  ).run(localDaysAgo(daysAgo), ...keys.map((k) => cols[k]));
+}
+const verifiedDates = (summary) => summary.verified.resting_hr.readings.map((r) => r.date);
+
+test("an Apple night verifies the Apple resting HR that sits beside it", () => {
+  apple(0, { sleep_min: 430, resting_hr: 52 });
+  const summary = repo.getRecoverySummary(30);
+  assert.deepEqual(verifiedDates(summary), [localDaysAgo(0)]);
+  assert.equal(summary.verified.resting_hr.latest_trust, "verified");
+});
+
+test("an Apple resting HR with no night is uncorroborated, and still counts toward the trend", () => {
+  for (let i = 0; i < 6; i++) apple(i, { resting_hr: 52 + (i % 3) });
+  const summary = repo.getRecoverySummary(30);
+  assert.deepEqual(verifiedDates(summary), [], "nothing certified it, so nothing may open the excursion path");
+  assert.equal(summary.verified.resting_hr.latest_trust, "uncorroborated");
+  // Absence of corroboration is not contradiction: the readings keep counting.
+  assert.equal(summary.quality.resting_hr.recent_n, 6);
+  assert.ok(summary.recent.rhr != null, "the median still describes the readings it has");
+});
+
+test("a Garmin min HR cannot contradict an Apple resting HR from another feed", () => {
+  // Watch on the charger overnight, phone on the wrist-free athlete: two devices
+  // legitimately disagree about the day's floor. That is not self-contradiction.
+  apple(0, { resting_hr: 52 });
+  garminDay(0, { min_hr: 61 });
+  const summary = repo.getRecoverySummary(30);
+  assert.equal(summary.verified.resting_hr.latest_trust, "uncorroborated");
+  assert.equal(summary.verified.resting_hr.latest_trustworthy_date, localDaysAgo(0));
+  assert.deepEqual(verifiedDates(summary), []);
+});
+
+test("a twenty-minute Sleep-Focus window is not a night and certifies nothing", () => {
+  apple(0, { sleep_min: 25, resting_hr: 84 });
+  const summary = repo.getRecoverySummary(30);
+  assert.equal(
+    summary.verified.resting_hr.latest_trust,
+    "uncorroborated",
+    "a nap is thin evidence, not counter-evidence"
+  );
+  assert.deepEqual(verifiedDates(summary), []);
+});
+
+test("a resting HR outside human resting range can never be verified, whatever vouches for it", () => {
+  apple(0, { sleep_min: 430, resting_hr: 105 });
+  apple(1, { sleep_min: 430, resting_hr: 28 });
+  const summary = repo.getRecoverySummary(30);
+  assert.deepEqual(verifiedDates(summary), []);
+  // It stays in the display/trend series — we keep storing what the phone said.
+  assert.equal(summary.verified.resting_hr.latest_value, 105);
+  assert.equal(summary.quality.resting_hr.sample_count, 2);
+});
+
+// An IMPLAUSIBLE reading beside a same-source floor is contradicted, not merely
+// uncorroborated — the classification order matters. 105 with a min HR of 50 on the
+// same row is the exact shape of Garmin's mid-day provisional estimate, and only
+// `contradicted` is withheld from the trend windows. Checking the 30-90 band first
+// would call it uncorroborated and let it into the median, which is the bug this pins.
+test("an implausible resting HR contradicted by its own row's floor is dropped from the trend", () => {
+  garminDay(2, { resting_hr: 52, min_hr: 50 });
+  garminDay(1, { resting_hr: 53, min_hr: 51 });
+  garminDay(0, { resting_hr: 105, min_hr: 50 });
+  const summary = repo.getRecoverySummary(30);
+  assert.equal(summary.verified.resting_hr.latest_trust, "contradicted", "its own floor argues with it");
+  assert.equal(summary.quality.resting_hr.recent_n, 2, "the contradicted row is excluded from the trend windows");
+  assert.equal(summary.recent.rhr, 52.5, "and so cannot move the median");
+  assert.deepEqual(verifiedDates(summary), [localDaysAgo(1), localDaysAgo(2)]);
+});
+
+test("the same implausible value with only a sleep witness stays uncorroborated, not contradicted", () => {
+  // Nothing from its own source can argue with it — no min HR — so the band may only
+  // DEMOTE it out of `verified`. It keeps counting toward the trend, as every
+  // uncorroborated reading does.
+  apple(0, { sleep_min: 430, resting_hr: 105 });
+  const summary = repo.getRecoverySummary(30);
+  assert.equal(summary.verified.resting_hr.latest_trust, "uncorroborated");
+  assert.deepEqual(verifiedDates(summary), [], "and the excursion path stays shut");
+  assert.equal(summary.quality.resting_hr.recent_n, 1);
+});
+
+// Unchanged at a floor of 50 (where the old flat 5 bpm and the relative margin agree
+// exactly) and deliberately WIDER above it: the margin is max(5, 0.10 * floor), so a
+// higher-floor athlete is no longer told their own physiology argues with itself.
+test("the live Garmin coherence behaviour is unchanged at floors up to 50, wider above", () => {
+  garminDay(0, { resting_hr: 68, min_hr: 50 });
+  let summary = repo.getRecoverySummary(30);
+  assert.equal(summary.verified.resting_hr.latest_trust, "contradicted", "18 bpm above the day's floor is not resting");
+
+  resetTables("garmin_daily_metrics", "garmin_sources", "daily_metrics");
+  garminDay(0, { resting_hr: 54, min_hr: 50 });
+  summary = repo.getRecoverySummary(30);
+  assert.equal(summary.verified.resting_hr.latest_trust, "verified");
+});
+
+test("the coherence margin is relative, and identical to the old flat 5 at a floor of 50", () => {
+  const trustAt = (restingHr, minHr) => {
+    resetTables("garmin_daily_metrics", "garmin_sources", "daily_metrics");
+    garminDay(0, { resting_hr: restingHr, min_hr: minHr });
+    return repo.getRecoverySummary(30).verified.resting_hr.latest_trust;
+  };
+  assert.equal(trustAt(55, 50), "verified", "5 above a floor of 50 — the old calibration, bit for bit");
+  assert.equal(trustAt(56, 50), "contradicted", "6 above a floor of 50 — still contradicted");
+  // A higher-floor athlete is no longer told their own physiology argues with itself.
+  assert.equal(trustAt(77, 70), "verified");
+});
+
 // ---- migration v84: repair what is already stored ---------------------------
 
 const V84 = MIGRATIONS.find((m) => m.version === 84);

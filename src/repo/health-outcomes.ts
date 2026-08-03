@@ -1,4 +1,5 @@
 import { addInsight, isDuplicateInsight, listDirectives } from "./coach.js";
+import { insightIntentCorpus, isDuplicateInsightIntent, resolveInsightIntent } from "./insight-intent.js";
 import { getMarkerHistory } from "./health.js";
 import { canonicalMarker } from "./marker-canon.js";
 import { addMemory } from "./memory.js";
@@ -286,17 +287,28 @@ export function recordHealthOutcomeAnnotations(limit = 12): RecordedHealthOutcom
   const read = healthOutcomeAnnotations(limit);
   let insights = 0;
   let memories = 0;
+  // The same territory guard the agentic pass uses (src/repo/insight-intent.ts), so
+  // an outcome annotation can't re-say a connection either producer already made.
+  // These summaries are deterministic and marker-anchored, so derivation is the
+  // reliable path here — there is no agent to name a connection object. Newly stored
+  // keys join the corpus in-loop, so two annotations on one territory don't both land.
+  const keyCorpus = insightIntentCorpus().keys;
   for (const annotation of read.annotations.slice(0, Math.max(1, Math.min(20, Number(limit) || 12)))) {
     const text = annotation.summary;
-    if (text && !isDuplicateInsight(text)) {
+    const intent = resolveInsightIntent(null, text, annotation.caveat);
+    if (text && !isDuplicateInsightIntent(intent.key, keyCorpus) && !isDuplicateInsight(text)) {
       const row = addInsight({
         kind: "health_outcome",
         text,
         rationale: annotation.caveat,
         next_step: annotation.next_step,
         status: "new",
+        intent_key: intent.key,
       });
-      if (row) insights++;
+      if (row) {
+        insights++;
+        if (intent.key) keyCorpus.push(intent.key);
+      }
     }
     const memory = addMemory(`${annotation.marker} outcome: ${annotation.summary}`, "learning", "health-outcome");
     if (memory) memories++;

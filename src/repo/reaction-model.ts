@@ -1538,7 +1538,14 @@ const READ_KIND_LABEL: Readonly<Record<string, string>> = {
 function dayReadAdherenceLearnings(rows: EvaluatedDecisionRow[]): CoachOutcomeLearning[] {
   const byKind = new Map<string, EvaluatedDecisionRow[]>();
   for (const row of rows) {
-    if (row.metric_key !== DAY_READ_ADHERENCE_METRIC || row.superseded_by != null) continue;
+    // Filtered on the VERDICT, never on `superseded_by`. A read whose outcome the day
+    // had already decided keeps its expectation through a later recompute (see
+    // dayReadOutcomeLocked in brain/read-adherence.ts), so its decision carries a
+    // `superseded_by` while its verdict is a genuine, conclusive one — and this filter
+    // was the last place that evidence could still be silently dropped on its way to
+    // the Learned timeline. A claim the replacement really did retire reads
+    // `canceled`, which is what this excludes instead.
+    if (row.metric_key !== DAY_READ_ADHERENCE_METRIC || String(row.verdict) === "canceled") continue;
     const kind = String(row.baseline?.read_kind ?? row.actual?.read_kind ?? "");
     if (!READ_KIND_LABEL[kind]) continue;
     byKind.set(kind, [...(byKind.get(kind) ?? []), row]);
