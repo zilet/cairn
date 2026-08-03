@@ -356,8 +356,13 @@ function directiveContext() {
     .sort((a: any, b: any) => {
       const domain = Number(b.domain === "nutrition") - Number(a.domain === "nutrition");
       if (domain) return domain;
-      const stale = Number(!!a.stale || !!a.stale_measurement) - Number(!!b.stale || !!b.stale_measurement);
-      return stale || Number(b.id || 0) - Number(a.id || 0);
+      // Aged-out evidence sinks below current evidence for the same reason stale does:
+      // there are only four honored slots, and a finding whose reading is past what its
+      // KIND of marker stays current for must not hold one against a current finding.
+      const aged =
+        Number(!!a.stale || !!a.stale_measurement || !!a.past_validity) -
+        Number(!!b.stale || !!b.stale_measurement || !!b.past_validity);
+      return aged || Number(b.id || 0) - Number(a.id || 0);
     })
     .slice(0, 4);
   return active.map((directive: any) => ({
@@ -372,6 +377,8 @@ function directiveContext() {
     acute: !!directive.acute,
     age_days: directive.age_days ?? null,
     stale: !!directive.stale,
+    validity_class: directive.validity_class ?? null,
+    past_validity: !!directive.past_validity,
     transient: !!directive.transient,
     transient_reason: directive.transient_reason ?? null,
     stale_measurement: !!directive.stale_measurement,

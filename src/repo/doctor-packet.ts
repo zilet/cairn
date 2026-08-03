@@ -33,6 +33,9 @@ type PacketDirective = {
     reason: string | null;
     acute: boolean;
     age_days: number | null;
+    validity_class: string | null;
+    past_validity: boolean;
+    reading_age_days: number | null;
   };
 };
 
@@ -99,6 +102,11 @@ function activeDirectivePacket(): PacketDirective[] {
       reason: cleanText(d?.stale_reason ?? d?.freshness_reason ?? d?.reason, 240),
       acute: !!d?.acute,
       age_days: Number.isFinite(Number(d?.age_days)) ? Number(d.age_days) : null,
+      // How long this KIND of marker stays current, and whether this reading is past it —
+      // so a clinician reading the packet sees WHY a finding is presented as informational.
+      validity_class: cleanText(d?.validity_class, 20),
+      past_validity: !!d?.past_validity,
+      reading_age_days: Number.isFinite(Number(d?.reading_age_days)) ? Number(d.reading_age_days) : null,
     },
   }));
 }

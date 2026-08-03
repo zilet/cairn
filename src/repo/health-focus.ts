@@ -3,6 +3,7 @@ import { getAppState, setAppState } from "./app-state.js";
 import { listActiveDirectives } from "./coach.js";
 import { newestHealthDocDate } from "./health.js";
 import { markerGroup } from "./propagation-data.js";
+import { readingAgeDays, readingPastValidity } from "./marker-validity.js";
 import {
   ACUTE_DIRECTIVE_STALE_DAYS,
   annotateDirectiveFreshness,
@@ -55,8 +56,15 @@ export interface HealthFocus {
 
 export function healthFocus(): HealthFocus {
   const { markers } = prioritizeMarkers(); // ordered: flagged-first then furthest-from-optimal
+  // Is this marker's own latest reading past the window its KIND of marker stays current
+  // for (src/repo/marker-validity.ts)? Per-marker, so a group mixing a current finding
+  // with an aged one still leads on the current one.
+  const markerPastValidity = (m: any): boolean =>
+    readingPastValidity(m?.name, readingAgeDays(m?.latest?.date ?? null));
   // Off-optimal markers, in priority order, bucketed by health group (preserving rank).
-  const groups = new Map<string, { markers: any[]; rank: number }>();
+  // `currentRank` is the panel position of the group's best still-in-date marker — an aged
+  // reading must not lend the group its place near the top of the priority order either.
+  const groups = new Map<string, { markers: any[]; rank: number; currentRank: number }>();
   markers.forEach((m: any, i: number) => {
     // Admit a marker when it sits OUT of its optimal band (in_optimal === false) OR
     // the lab itself flagged it low/high. A lab-flagged marker with NO optimal zone
@@ -67,8 +75,10 @@ export function healthFocus(): HealthFocus {
     if (m?.in_optimal === true) return; // clearly in optimal — clean
     if (m?.in_optimal == null && !flagged) return; // no band + not flagged — nothing to say
     const label = m.group_label || markerGroup(m?.name || "").label;
-    if (!groups.has(label)) groups.set(label, { markers: [], rank: i });
-    groups.get(label)!.markers.push(m);
+    if (!groups.has(label)) groups.set(label, { markers: [], rank: i, currentRank: Number.POSITIVE_INFINITY });
+    const g = groups.get(label)!;
+    g.markers.push(m);
+    if (!markerPastValidity(m) && i < g.currentRank) g.currentRank = i;
   });
 
   // The active directives, bucketed to the same groups, so each priority carries
@@ -76,6 +86,10 @@ export function healthFocus(): HealthFocus {
   const dirByGroup = new Map<string, any[]>();
   for (const d of annotateDirectiveFreshness(listActiveDirectives() as any[])) {
     if (d.stale) continue; // a stale acute directive (e.g. an old hs-CRP) no longer drives a move/tier
+    // …and neither does one whose reading is past what its OWN kind of marker stays
+    // current for. The connected-brain prompt already tells the coach not to act on these;
+    // letting one supply a group's lead MOVE would contradict that on the same page.
+    if (d.past_validity) continue;
     const label = markerGroup(String(d.marker || "")).label;
     if (!dirByGroup.has(label)) dirByGroup.set(label, []);
     dirByGroup.get(label)!.push(d);
@@ -93,12 +107,21 @@ export function healthFocus(): HealthFocus {
   };
 
   const priorities: FocusPriority[] = [];
-  for (const [label, { markers: ms, rank }] of groups) {
+  for (const [label, { markers: ms, currentRank }] of groups) {
     const dirs = dirByGroup.get(label) || [];
+    // EVERY act-now input is scoped to evidence still inside its own marker's window —
+    // the flag weight, whether this reads as a compounding picture, how far out it sits,
+    // whether it's drifting, and the group's place in the panel order. An aged reading
+    // cannot lend weight to a priority the connected-brain block on the same page says
+    // not to act on. (`dirs` is already past-window-free, so its cluster check is too.)
+    const currentMs = ms.filter((m) => !markerPastValidity(m));
+    // …but `flagged` stays FACTUAL: the lab did flag it, and the surfaces render that
+    // truthfully alongside whatever tier the current evidence earns.
     const flagged = ms.some((m) => m?.latest?.flag === "low" || m?.latest?.flag === "high");
-    const compounding = ms.length >= 2 || dirs.some((d) => String(d.marker || "").includes("+"));
-    const worsening = ms.some((m) => m?.forecast?.direction === "worsening");
-    const maxDistance = ms.reduce((mx, m) => Math.max(mx, Number(m?.distance) || 0), 0);
+    const flaggedCurrent = currentMs.some((m) => m?.latest?.flag === "low" || m?.latest?.flag === "high");
+    const compounding = currentMs.length >= 2 || dirs.some((d) => String(d.marker || "").includes("+"));
+    const worsening = currentMs.some((m) => m?.forecast?.direction === "worsening");
+    const maxDistance = currentMs.reduce((mx, m) => Math.max(mx, Number(m?.distance) || 0), 0);
 
     // The LEAD actionable move per domain (a non-uncertain directive wins). Computed
     // BEFORE the tier so an act-now requires real substance to act on (the gate below).
@@ -123,33 +146,48 @@ export function healthFocus(): HealthFocus {
         return Number.isFinite(dt) && (Date.now() - dt) / 864e5 > ACUTE_DIRECTIVE_STALE_DAYS;
       });
 
+    // PAST ITS WINDOW: the same treatment, generalized per marker class — a group whose
+    // off-optimal markers are ALL reading older than their own kind stays current for is
+    // a picture from a while ago, not a current priority. It stays a quiet track item, so
+    // the Brief can never headline "X is the priority right now" off evidence the
+    // connected-brain block on the same page says not to act on.
+    const allPastValidity = ms.length > 0 && currentMs.length === 0;
+
     // Tier score — flagged + compounding + how far out + worsening + near the top of the
     // panel's priority order. ≥3 ⇒ act now; else track. A lab flag is a STRONG floor (the
     // lab calling a value low/high is itself an act-now signal). No score is surfaced —
     // this only decides the plain-words tier.
     let score = 0;
-    if (flagged) score += 3;
+    if (flaggedCurrent) score += 3;
     if (compounding) score += 2;
     if (maxDistance >= 0.4) score += 2;
     else if (maxDistance >= 0.2) score += 1;
     if (worsening) score += 1;
-    if (rank < 6) score += 1; // among the panel's most-pressing markers
+    if (currentRank < 6) score += 1; // among the panel's most-pressing CURRENT markers
     let tier: FocusTier = score >= 3 ? "act_now" : "track";
     // SUBSTANCE GATE: don't surface an ACT-NOW the athlete can't actually act on — a
     // compounding-but-moveless, unflagged, not-worsening group (e.g. an "Other Markers"
     // bucket) is a quiet track item, not a loud priority. Aging-acute is always track.
-    if (tier === "act_now" && !flagged && !anyActionable && !worsening) tier = "track";
-    if (allAcuteStale) tier = "track";
+    if (tier === "act_now" && !flaggedCurrent && !anyActionable && !worsening) tier = "track";
+    if (allAcuteStale || allPastValidity) tier = "track";
 
+    // The athlete-facing clause names only what it is entitled to name: the two all-aged
+    // branches speak ABOUT the old reading, and every other branch speaks about evidence
+    // that is still current — never "Fasting Glucose and HbA1c sit off together" when the
+    // glucose draw is one the same page says not to act on. (`named` falls back to `ms`
+    // defensively; the branches below only run when currentMs is non-empty.)
+    const named = currentMs.length ? currentMs : ms;
     const why = allAcuteStale
       ? `${ms[0]?.name} reads off, but it's a point-in-time marker from a while ago — worth a recheck before it shapes anything`
-      : compounding
-        ? `${ms[0]?.name}${ms[1] ? ` and ${ms[1]?.name}` : ""} sit off together — they move as one picture, so the same change shifts several at once`
-        : flagged
-          ? `the lab flagged ${ms[0]?.name}`
-          : worsening
-            ? `${ms[0]?.name} has been drifting the wrong way`
-            : `${ms[0]?.name} is sitting outside its optimal range`;
+      : allPastValidity
+        ? `${ms[0]?.name} reads off, but the reading behind it is older than this kind of marker stays current for — worth a recheck before it shapes anything`
+        : compounding
+          ? `${named[0]?.name}${named[1] ? ` and ${named[1]?.name}` : ""} sit off together — they move as one picture, so the same change shifts several at once`
+          : flaggedCurrent
+            ? `the lab flagged ${named[0]?.name}`
+            : worsening
+              ? `${named[0]?.name} has been drifting the wrong way`
+              : `${named[0]?.name} is sitting outside its optimal range`;
 
     const readings: FocusReading[] = ms.slice(0, 4).map((m: any) => ({
       name: m.name,

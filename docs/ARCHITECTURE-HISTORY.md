@@ -4,6 +4,43 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-08-03 — the brain stops lying to itself about time
+
+Four rounds in one day. Migrations **v89** (`settings-training-drive`), **v90**
+(`insight-intent-key`), **v91** (`day-read-expectations-heal`). No service-worker bump (no
+`public/` change).
+
+**Push drive (v89).** `settings.training_drive` (`steady`|`push`): in push, an
+`accumulated_load_rest` read becomes a targeted train read for due muscles — only when no other
+rest trigger fired, the consecutive-hard-day ceiling holds, nothing clinical is active, and the
+evidence is green (backed, or fresh readiness + last-night sleep).
+
+**Brain honesty.** The learning ledger had zero conclusive verdicts lifetime — three annihilators
+fixed (`resolved_at`/`expected_recovery_days` finally honored, done no longer cancels the morning
+read, `minimum_data` normalized at write). `READING_TRUST` was born: a wearable reading is
+`verified`/`uncorroborated`/`contradicted` by sleep-duration and `min_hr` coherence, and an
+excursion needs ≥2 consecutive verified current readings before it changes interpretation.
+
+**Brain quality (v90/v91).** Day-read decisions fingerprint the CLAIM (date, kind, override), not
+the inputs, so a mid-day recompute is a no-op instead of a canceled prediction; reality-locked
+outcomes survive supersession and v91 heals the wrongly-canceled history. `deriveDirectives()`
+runs daily (ungated scheduler slot) plus on user dismiss/resolve and doc delete — the labs lane
+can no longer go dormant between panels. Insights carry a flip-symmetric **intent key**
+(`src/repo/insight-intent.ts`, 38-facet closed vocabulary) so a rephrased repeat collides with its
+territory instead of slipping past raw-text dedupe. Reading-trust witnesses must share the
+reading's source; the plausibility band demotes but never contradicts.
+
+**Marker temporal validity (no schema change).** "Old" stopped being one number:
+`src/repo/marker-validity.ts` classifies every marker into `genetic` (never age-doubted; a year
+reads as confirmation), `slow` (365d note / 730d), `standard` (180/365, the default), or `fast`
+(90/180 — acute-phase, white line, fasting glucose/insulin, cortisol, iron kinetics, electrolytes,
+BP, wearable vitals). A finding past its own class's window leaves the prompt's "honor these"
+block for an informational one, loses act-now weight in the health focus, and sinks in nutrition's
+honored slots; a synthesized cluster takes its longest-lived non-genetic member and floors at
+`standard` when any member is genetic. The derive signature folds one `(label, month bucket,
+band)` entry per marker × reading date — clusters and zone-less markers included — so the daily
+re-derive stays zero-churn and a horizon crossing lands the day it happens.
+
 ## 2026-07-30 — pain is reported in words, not filled into widgets
 
 Migration **v88** (`symptom-scope-and-inferred-evidence`) plus one new table. Service worker

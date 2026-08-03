@@ -23,6 +23,14 @@ import {
   supportedForecast,
 } from "./health.js";
 import { SENSOR_MAX_AGE_DAYS, sensorAgeDays, sensorIsCurrent } from "./sensor-freshness.js";
+import {
+  markerAgingClause,
+  markerValidityClass,
+  readingAgeDays,
+  readingAgeMonths,
+  readingPastValidity,
+  validityBand,
+} from "./marker-validity.js";
 import { invalidateDayRead } from "./intelligence.js";
 import { canonicalMarker } from "./marker-canon.js";
 import { maybeRequestMealRefreshForDirectives } from "./meal-directive-trigger.js";
@@ -87,6 +95,10 @@ export {
   psaHighBound,
 } from "./propagation-data.js";
 export type { DirectiveIntent, OptimalZone, ZoneProfile } from "./propagation-data.js";
+// The per-marker temporal-validity classification (how long a reading keeps describing
+// the person) — pure data + matchers, re-exported so `repo.*` sees it like the rest of
+// the connected-brain surface.
+export * from "./marker-validity.js";
 export * from "./supplements.js";
 export * from "./health-export.js";
 export * from "./health-focus.js";
@@ -536,103 +548,83 @@ function recordActiveDirectiveDecisions(source: string): void {
   }
 }
 
-// After a source reading is older than this, a derived directive gets a calm staleness
-// note and is softened to uncertain — an old value is worth confirming before acting on
-// it. Separate from the acute-marker directiveFreshness decay (which is a daily-surface
-// cap on point-in-time reactants); this is a simple, universal age note.
-const STALE_READING_DAYS = 365;
-// The gentler first band: past half a year the reading is worth NAMING as old, but it is
-// still the best evidence on file — the directive keeps its confidence (no uncertain flip).
-const AGING_READING_DAYS = 180;
 const DERIVE_SIG_KEY = "directive_derive_sig";
 
-// Age of a source reading in whole days, or null when there is no parseable date.
-function readingAgeDays(readingDate: string | null | undefined, today?: string): number | null {
-  if (!readingDate) return null;
-  const t = Date.parse(String(readingDate).slice(0, 10));
-  if (!Number.isFinite(t)) return null;
-  const now = today ? Date.parse(today) : Date.now();
-  if (!Number.isFinite(now)) return null;
-  return Math.floor((now - t) / 864e5);
-}
+// How old a reading has to be before it is worth naming, and before it stops being
+// something to act on, is a PER-MARKER question — a morning cortisol is a snapshot of one
+// day, a lipid panel describes a season, Lp(a) is set for life. The classification and its
+// class-specific prose live in ./marker-validity.js; this module only applies them.
+// Separate from the acute-marker directiveFreshness decay below (a daily-surface cap on
+// point-in-time reactants measured in DAYS); this is the months-scale evidence-age read.
 
-// The coarse MONTH bucket every age-derived STRING is built from. Deliberately the same
-// `floor(ageDays / 30)` deriveSignature folds in, so a note's wording can only change on a
-// day the signature also moves. A finer (or differently-rounded) bucket would rewrite the
-// rationale on days the short-circuit skips the pass — the text would land late, and once
-// the pass runs daily it would rewrite directive rows on a schedule of its own.
-function readingAgeMonths(ageDays: number): number {
-  return Math.floor(ageDays / 30);
-}
-
-// The age note a desired directive carries, if any — a graded band, not a cliff:
-//   > 180 days: name the age, keep the confidence.
-//   > 365 days: name the age AND soften to uncertain (an old value is worth confirming
-//               before acting on it).
-// Separate from the acute-marker directiveFreshness decay (which is a daily-surface cap on
-// point-in-time reactants); this is a simple, universal age note.
-function agingClause(
-  readingDate: string | null | undefined,
-  today?: string
-): { clause: string; uncertain: boolean } | null {
-  const ageDays = readingAgeDays(readingDate, today);
-  if (ageDays == null) return null;
-  const months = readingAgeMonths(ageDays);
-  if (ageDays > STALE_READING_DAYS)
-    return {
-      clause: `This reading is from ~${Math.max(12, months)} months ago — a recheck would confirm it still holds.`,
-      uncertain: true,
-    };
-  if (ageDays > AGING_READING_DAYS)
-    return {
-      clause: `This reading is ~${months} months old — still the most recent one on file.`,
-      uncertain: false,
-    };
-  return null;
-}
-
-// Fold the age note into a desired directive: append the clause to its rationale, and past
-// the stale threshold soften it to uncertain. Idempotent — built fresh from the base
-// rationale each pass, so a directive never accumulates two clauses.
+// Fold the age note into a desired directive: append the class's clause to its rationale,
+// and past the class's uncertain horizon soften it to uncertain. Idempotent — built fresh
+// from the base rationale each pass, so a directive never accumulates two clauses. The
+// marker comes off the directive itself, so the mapped (zone label), generic (canonical
+// name) and cluster (synthesized "A+B+C") paths each classify what they actually stored.
 function applyStaleness(input: DirectiveInput, readingDate: string | null | undefined, today?: string): DirectiveInput {
-  const age = agingClause(readingDate, today);
+  const age = markerAgingClause(input.marker ?? null, readingDate, today);
   if (!age) return input;
   const rationale = input.rationale ? `${input.rationale} ${age.clause}` : age.clause;
   return age.uncertain ? { ...input, rationale, uncertain: true } : { ...input, rationale };
 }
 
+interface AgeFoldEntry {
+  k: string; // the marker label the clause is classified from
+  a: number; // the month bucket every age NUMBER in the prose comes from
+  b: 0 | 1 | 2; // the class's validity band the clause's WORDING comes from
+}
+
+// The reading-AGE fold: one entry per (marker label × reading date) that a desired
+// directive could carry an age clause for. markerAgingClause is a pure function of exactly
+// those two inputs, so folding this set is what keeps the wording in lockstep with the
+// fingerprint — the passage of TIME itself moves the signature, and a clause can never
+// change on a day the short-circuit skips the pass.
+//
+// All THREE emit paths are covered, because each stores a different marker label and
+// anchors on a different reading:
+//   - mapped levers      → the optimal-zone label, that marker's own reading date;
+//   - firing clusters    → the synthesized "A+B+C" label, hits[0]'s reading date (which is
+//     what emitFiringClusters passes to applyStaleness — a per-ZONE band cannot stand in
+//     for it: an Lp(a)+hs-CRP cluster crosses its own horizon on a day neither member's
+//     band nor month bucket moves);
+//   - generic long-tail  → the canonical marker NAME, including flagged markers with no
+//     optimal zone at all, which never reach offMarkers and so were never folded.
+function ageFold(markers: any[], offMarkers: Map<string, MarkerContext>, firing: FiringCluster[]): AgeFoldEntry[] {
+  const out = new Map<string, AgeFoldEntry>();
+  const add = (label: string | null | undefined, date: string | null | undefined) => {
+    const name = String(label ?? "").trim();
+    if (!name || !date) return;
+    const key = `${name}|${date}`;
+    if (out.has(key)) return;
+    const ageDays = readingAgeDays(date);
+    if (ageDays == null) return;
+    out.set(key, {
+      k: name,
+      a: readingAgeMonths(Math.max(0, ageDays)),
+      b: validityBand(name, ageDays),
+    });
+  };
+  for (const ctx of offMarkers.values()) add(ctx.zone?.label, ctx.marker?.latest?.date);
+  for (const cl of firing) add(cl.markerLabel, cl.ctx?.marker?.latest?.date);
+  for (const m of Array.isArray(markers) ? markers : []) {
+    if (m?.latest?.flag !== "low" && m?.latest?.flag !== "high") continue; // the generic path's own gate
+    add(canonicalMarker(String(m?.name ?? "")).name || String(m?.name ?? "").trim(), m?.latest?.date);
+  }
+  return [...out.values()].sort((x, y) => (x.k < y.k ? -1 : x.k > y.k ? 1 : x.a - y.a || x.b - y.b));
+}
+
 // A cheap fingerprint of everything that affects derivation: the marker snapshot, the
-// sex/age zone profile, active meds, a counter bumped on every user Done/Dismiss, and a
-// coarse reading-AGE bucket per off-optimal marker. When it's unchanged since the last
-// pass, deriveDirectives can skip the whole thing.
-function deriveSignature(
-  markers: any[],
-  profile: ZoneProfile | null,
-  meds: any[],
-  offMarkers?: Map<string, MarkerContext>
-): string {
+// sex/age zone profile, active meds, a counter bumped on every user Done/Dismiss, and the
+// reading-AGE fold above. When it's unchanged since the last pass, deriveDirectives can
+// skip the whole thing.
+function deriveSignature(markers: any[], profile: ZoneProfile | null, meds: any[], ages: AgeFoldEntry[]): string {
   const snap = (Array.isArray(markers) ? markers : []).map((m) => ({
     k: canonicalMarker(String(m?.name ?? "")).key,
     v: m?.latest?.value ?? null,
     f: m?.latest?.flag ?? null,
     d: m?.latest?.date ?? null,
   }));
-  // Fold a coarse reading-age bucket (~one tick per month) for each off-optimal marker, so
-  // the passage of TIME itself moves the fingerprint. Otherwise a directive whose source
-  // reading ages past the staleness threshold (STALE_READING_DAYS) with no new value/flag/
-  // date would be short-circuited away, and applyStaleness's clause would never be applied.
-  const ages = offMarkers
-    ? [...offMarkers.values()]
-        .map((ctx) => {
-          const ageDays = readingAgeDays(ctx?.marker?.latest?.date);
-          if (ageDays == null) return null;
-          // The SAME bucket agingClause words its notes from, so a note can never change
-          // on a day this fingerprint does not.
-          return { k: ctx.zone?.label ?? "", a: readingAgeMonths(Math.max(0, ageDays)) };
-        })
-        .filter((x): x is { k: string; a: number } => x != null)
-        .sort((a, b) => (a.k < b.k ? -1 : a.k > b.k ? 1 : 0))
-    : [];
   return brainDecisionFingerprint({
     snap,
     profile: profile ? { sex: profile.sex ?? null, age: profile.age ?? null } : null,
@@ -673,21 +665,6 @@ export function deriveDirectives() {
   //    (testosterone ⇄ Free T / SHBG / LH). Built ONCE and threaded onto each context.
   //    Built BEFORE the signature so an aging reading moves the fingerprint (see below).
   const offMarkers = buildOffMarkers(markers, profile);
-
-  // Short-circuit: nothing that drives derivation changed since the last pass — including
-  // the reading-age of each off-optimal marker, so a directive that crosses the staleness
-  // threshold purely by time re-derives instead of being skipped.
-  const sig = deriveSignature(markers, profile, meds, offMarkers);
-  if (getAppState(DERIVE_SIG_KEY) === sig) {
-    return { source: SOURCE, derived: 0, directives: listActiveDirectives() };
-  }
-
-  const desired: DirectiveInput[] = [];
-  // Dedup within the run: the SAME zone can be reached by several marker entries (name
-  // variants like "Glucose" / "Fasting Glucose", or repeat lab rows). A directive is
-  // about the zone+domain+intent, so the first (highest-priority) one wins.
-  const seen = new Set<string>();
-
   const offZones = new Set(offMarkers.keys());
   const companions = buildCompanionIndex(markers);
   for (const ctx of offMarkers.values()) {
@@ -700,7 +677,25 @@ export function deriveDirectives() {
   //    marks their zones consumed so the mapped + generic layers don't ALSO emit scattered
   //    per-marker cards for them. The CV / anemia clusters consume nothing (their members
   //    keep their distinct individual levers), preserving existing behavior.
+  //    Computed BEFORE the short-circuit (it is pure over the contexts above) because a
+  //    cluster's synthesized directive carries its OWN label and reading anchor, and its
+  //    age clause has to be folded into the signature like every other one.
   const firing = computeFiringClusters(offMarkers, profile);
+
+  // Short-circuit: nothing that drives derivation changed since the last pass — including
+  // the reading-age fold, so a directive that crosses its class's horizon purely by the
+  // passage of time re-derives instead of being skipped.
+  const sig = deriveSignature(markers, profile, meds, ageFold(markers, offMarkers, firing));
+  if (getAppState(DERIVE_SIG_KEY) === sig) {
+    return { source: SOURCE, derived: 0, directives: listActiveDirectives() };
+  }
+
+  const desired: DirectiveInput[] = [];
+  // Dedup within the run: the SAME zone can be reached by several marker entries (name
+  // variants like "Glucose" / "Fasting Glucose", or repeat lab rows). A directive is
+  // about the zone+domain+intent, so the first (highest-priority) one wins.
+  const seen = new Set<string>();
+
   const consumedZones = new Set<string>();
   for (const cl of firing) for (const z of cl.consumesZones) consumedZones.add(z);
 
@@ -1587,11 +1582,30 @@ export function annotateDirectiveFreshness(directives: any[], today?: string, ef
     // Body-comp recency decay (additive): a directive off a month-old DEXA while the
     // athlete's weight has since moved reads as "worth a rescan", not a current fact.
     const bc = anyBodyComp ? bodyCompStaleness(d, weights, today) : { stale: false, reason: null, delta_lb: null };
+    // PER-MARKER evidence age (additive, months-scale — distinct from the acute `stale`
+    // read above, which is a days-scale cap on point-in-time reactants). `past_validity`
+    // is the one place every surface agrees a finding's reading is too old for its OWN
+    // kind of marker to still be acted on; a genetic marker never reaches it.
+    //
+    // Anchored on a REAL reading date only (the resolved acute anchor, else the
+    // directive's own trigger_date) — never on created_at, which is when the row was
+    // WRITTEN. An agent-emitted health_review directive that resolved no marker context
+    // has no trigger_date, and aging it by its own birthday would both retire it on
+    // evidence nobody measured and make the prompt print "(reading ~6 months ago)" for a
+    // reading date that does not exist. With no reading date there is no verdict:
+    // reading_age_days is null and the finding keeps the behavior it had before this
+    // classification existed.
+    const validity_class = markerValidityClass(d?.marker);
+    const reading_age_days = readingAgeDays(anchor || d?.trigger_date || null, today);
+    const past_validity = readingPastValidity(d?.marker, reading_age_days);
     return {
       ...d,
       acute: f.acute,
       age_days: f.ageDays,
       stale: f.stale,
+      validity_class,
+      reading_age_days,
+      past_validity,
       transient,
       transient_reason,
       stale_measurement: bc.stale,

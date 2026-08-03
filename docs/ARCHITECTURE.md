@@ -764,6 +764,50 @@ snapshot) among rows with `status_at IS NULL` — a machine soft-resolve, never 
 always stamps `status_at` — and never one a `resurfaced_from_id` audit chain points at; `'health_review'`
 rows are untouched entirely.
 
+### How old is too old: per-marker temporal validity
+
+"Is this reading stale?" is answered PER MARKER, not by one blanket age rule
+(`src/repo/marker-validity.ts`, matched exactly like `MARKER_GROUPS` — lowercased substring,
+longest-match-wins, unmatched falls to `standard`). Four classes, each with two horizons — the day
+the age is worth NAMING in the directive's rationale, and the day the finding softens to `uncertain`
+and stops being something the coach honors:
+
+| class | note / demote | membership |
+|---|---|---|
+| `genetic` | 365d / never | Lp(a), ABO-Rh, any genotype — age is never doubt, only a one-line "one confirmatory re-test is all it needs" |
+| `slow` | 365d / 730d | bone mineral density, T/Z-score, coronary-calcium (Agatston) |
+| `standard` | 180d / 365d | the default: lipids, HbA1c, thyroid, hormones, vitamins, kidney, liver |
+| `fast` | 90d / 180d | acute-phase reactants, white line, fasting glucose/insulin, cortisol, iron kinetics, electrolytes, BP, wearable vitals |
+
+`applyStaleness` reads the class off the directive's own `marker`, so the mapped (zone label),
+generic (canonical name) and cluster (`"A+B+C"`) paths each classify what they actually stored. A
+CLUSTER name takes its longest-lived non-genetic member, and **floors at `standard` when any member
+is genetic** — so the degenerate `"Lp(a)+hs-CRP"` pair keeps a lab-cadence clock instead of hs-CRP's
+week-to-week one (the same string `CHRONIC_GUARD_RE` refuses to age out), while still re-deriving,
+since the modifiable half of that story is not lifelong.
+
+Every number in the athlete-facing prose comes from the `floor(ageDays/30)` month bucket, and
+`ageFold()` folds one `(label, bucket, band)` entry for **every (marker × reading date) a desired
+directive could carry a clause for** — the zone labels, each firing cluster's synthesized label and
+its own `hits[0]` anchor, and every lab-flagged marker's canonical name including those with no
+optimal zone. `deriveSignature` folds that set, so the wording can only change on a day the
+fingerprint also moves (a per-zone band alone is not enough: a cluster crosses its horizon on its own
+anchor, and a zone-less flagged marker never reaches `offMarkers`). A daily re-derive stays
+zero-churn. Because clusters must be folded, `computeFiringClusters` now runs BEFORE the
+short-circuit — it is pure over the already-built contexts.
+
+`annotateDirectiveFreshness` stamps `validity_class`, `reading_age_days` and `past_validity`. The
+verdict is anchored on a REAL reading date (the resolved acute anchor, else `trigger_date`) and never
+on `created_at`: an agent-emitted review directive that resolved no marker context has no reading to
+be old, so it keeps the behavior it had before this classification existed. Consumers of
+`past_validity`: the connected-brain prompt block splits the finding out of "honor these" into an
+informational block; `healthFocus()` refuses it act-now weight and demotes an all-past-window group
+to `track` (mirroring the existing aging-acute rule) so the Brief can never headline evidence the
+same page says not to act on; `nutritionProgress` sinks it below current findings in the four honored
+slots; the doctor packet reports it. This is DISTINCT from the days-scale acute decay
+(`isAcuteMarker` / `ACUTE_DIRECTIVE_STALE_DAYS`), which caps what a point-in-time reactant may do to
+TODAY's training; both verdicts are additive.
+
 Quiet insights: `addInsight`/`getInsight`/`listInsights`/`updateInsight`/`listVisibleInsights`
 (new+seen only) /`recentInsightTexts`/`isDuplicateInsight` — the soft+real dedup guard so the same
 connection is never surfaced twice.

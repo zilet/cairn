@@ -443,16 +443,17 @@ function directiveCitationTag(d: any): string {
 // directive with no date signal at all, so a finding from a panel three years ago read
 // exactly like one drawn last week.
 //
-// The DATE only, deliberately. Past 180 days `applyStaleness` (src/repo/propagation.ts)
-// already writes the age in words into the directive's own rationale, which renders on
-// this same line — spelling out "~14 months old" here too said it twice in one sentence.
-// The date carries the recency for everything under the band; the rationale carries it
-// above. Empty when the directive carries no reading date.
+// The DATE only, deliberately. Once a reading passes its own marker class's note horizon
+// (90 / 180 / 365 days — src/repo/marker-validity.ts), `applyStaleness` already writes the
+// age in words into the directive's own rationale, which renders on this same line —
+// spelling out "~14 months old" here too said it twice in one sentence. The date carries
+// the recency for everything under the band; the rationale carries it above. Empty when
+// the directive carries no reading date.
 //
-// NOTE: a >365-day directive still renders inside "honor these" (with a visibly old date).
-// Moving aged chronic findings out to AGING LAB FINDINGS below is a PRODUCT call about what
-// the coach is still allowed to act on, deliberately left to the athlete rather than decided
-// here.
+// NOTE: how old is too old is a PER-MARKER question, answered by the validity classes in
+// src/repo/marker-validity.ts (annotateDirectiveFreshness stamps `past_validity`). A
+// directive past its own marker's window is split out of "honor these" into the
+// PAST-THEIR-WINDOW block below; a genetic marker is never demoted by age alone.
 function directiveAgeTag(d: any): string {
   const raw = d?.trigger_date ?? null;
   if (!raw) return "";
@@ -497,8 +498,13 @@ export function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | 
     // A TRANSIENT acute finding (a fresh hs-CRP/ESR drawn during an active illness/
     // injury/hard-block window) is informational the same way an aging one is — it
     // must NOT cap today's training. Split it out of "honor these" alongside stale.
-    const fresh = annotated.filter((d: any) => !d.stale && !d.transient);
+    // …and the same split by EVIDENCE AGE, judged per marker (marker-validity.ts): a
+    // finding whose reading is past the window its own kind of marker stays current for
+    // is informational too — a year-old vitamin D, a six-month-old fasting glucose. A
+    // genetic marker (Lp(a), blood type) never lands here, however old the draw.
+    const fresh = annotated.filter((d: any) => !d.stale && !d.transient && !d.past_validity);
     const agingAcute = annotated.filter((d: any) => d.stale && !d.transient);
+    const pastWindow = annotated.filter((d: any) => d.past_validity && !d.stale && !d.transient);
     const transient = annotated.filter((d: any) => d.transient && !d.stale);
     if (fresh.length) {
       const byDomain: Record<string, string[]> = {};
@@ -516,9 +522,24 @@ export function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | 
     if (agingAcute.length) {
       lines.push("AGING LAB FINDINGS (acute, point-in-time markers from a while ago — INFORMATIONAL ONLY: do NOT cap today's training or meals on these; at most a gentle 'worth a recheck' if it naturally fits):");
       for (const d of agingAcute) {
-        const wks = d.age_days != null ? Math.max(1, Math.round(d.age_days / 7)) : null;
-        const age = wks != null ? `~${wks} week${wks === 1 ? "" : "s"} ago` : "a while ago";
-        lines.push(`  - ${String(d.marker ?? "a marker").trim()}: ${String(d.directive ?? "").trim()} (reading ${age} — point-in-time; recheck before it shapes anything)`);
+        // The READING's age, never the row's own. `age_days` falls back to created_at (when
+        // the directive was written), so a review directive that resolved no marker context
+        // used to render "(reading ~135 weeks ago)" for a draw that never happened. With no
+        // reading date there is no reading-age sentence — the point-in-time caveat stands
+        // on its own.
+        const wks = d.reading_age_days != null ? Math.max(1, Math.round(d.reading_age_days / 7)) : null;
+        const age = wks == null ? "" : `reading ~${wks} week${wks === 1 ? "" : "s"} ago — `;
+        lines.push(`  - ${String(d.marker ?? "a marker").trim()}: ${String(d.directive ?? "").trim()} (${age}point-in-time; recheck before it shapes anything)`);
+      }
+    }
+    if (pastWindow.length) {
+      lines.push("FINDINGS FROM AN OLD READING (the draw behind each is older than this KIND of marker stays current for — INFORMATIONAL ONLY: do NOT cap today's training or meals on these; at most a gentle 'worth a recheck' if it naturally fits):");
+      for (const d of pastWindow) {
+        // The reading age, never the row's own age — `past_validity` only fires on a real
+        // reading date, so this is always present here and never invents one.
+        const mo = d.reading_age_days != null ? Math.max(1, Math.floor(d.reading_age_days / 30)) : null;
+        const age = mo != null ? `~${mo} month${mo === 1 ? "" : "s"} ago` : "a while ago";
+        lines.push(`  - ${String(d.marker ?? "a marker").trim()}: ${String(d.directive ?? "").trim()} (reading ${age} — past what this marker's reading can still say; recheck before it shapes anything)`);
       }
     }
     if (transient.length) {

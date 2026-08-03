@@ -220,6 +220,11 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   order is the display order** — conventional clinical lab-review order, mirrored by the doctor
   export and the in-app catalog. Full ordering rules and the non-clinical-marker filter live in
   `docs/ARCHITECTURE.md`.
+- **Marker staleness is per-class, not one number.** `src/repo/marker-validity.ts` classifies every
+  marker (`genetic` never age-doubted / `slow` / `standard` default / `fast`); horizons, cluster
+  rules and the honor-vs-informational split all derive from it, and its `(label, bucket, band)`
+  entries feed the derive signature — extend the table there, never hardcode an age threshold.
+  Details in `docs/ARCHITECTURE.md`.
 - **Directives never change anything by themselves.** A flagged marker propagates into
   `health_directives` via `deriveDirectives()`; sources `'markers'` (deterministic) and
   `'health_review'` (agent-emitted) coexist and each clears/rewrites only its own rows. Directives
