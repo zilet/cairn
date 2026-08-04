@@ -19,6 +19,7 @@ import {
   recoveryWeekStatus,
   setProposalStatus,
 } from "../../repo/profile.js";
+import { buildVolumeRestoreProposal } from "../../repo/progression.js";
 import { activeRecoveryWeekLedger } from "../../repo/recovery-week-ledger.js";
 import { addDaysISO, daysBetweenISO, localDateISO } from "../../repo/shared.js";
 import { currentUnderfuelingRead } from "../../repo/underfueling-snapshot.js";
@@ -45,6 +46,9 @@ export interface UnderfuelingControlResult {
   nutrition: any | null;
   recovery: any | null;
   reason: string;
+  // The one-set-per-boundary climb back out of a protective volume cut, present
+  // only on the passes where the fuel read has cleared and something is owed.
+  volume_restore?: any | null;
 }
 
 function parsedStamp(value: string | null): { date: string; key: string } | null {
@@ -453,6 +457,35 @@ function scheduleNutrition(
 }
 
 /**
+ * The road back up from a protective volume cut. A fuel-protection hold takes sets
+ * OFF the plan, and nothing in the progression ladder can put them back — so once
+ * the read that asked for less has cleared, each cut lift takes one set back per
+ * boundary until it reaches the value the reduction recorded.
+ *
+ * It goes through the ordinary propose→apply path at ANNOUNCE, never quietly: the
+ * athlete sees their volume coming back and can stop it. Returns null when nothing
+ * is owed, which is the common answer.
+ *
+ * Scoped to volume the FUEL path itself took off. A cut that pain or a deload block
+ * asked for keeps its recorded debt, but this trigger is not the one that cleared it
+ * — climbing it back here would tell the athlete a fuelling story about a decision
+ * fuelling never made.
+ */
+function runVolumeRestorePass(): any | null {
+  try {
+    return withSqliteSavepoint("volume_restore_pass", () => {
+      const built = buildVolumeRestoreProposal({ cause: "fuel" });
+      if (!built.ok) return null;
+      return applyProposalWithAutonomy(Number(built.proposal.id), { requested_tier: "announce" });
+    });
+  } catch {
+    // The climb back is re-derived from the plan on every pass, so a failed one
+    // costs nothing but a day — it must never sink the fuel loop around it.
+    return null;
+  }
+}
+
+/**
  * Deterministic under-fuelling control loop. Most calls are a no-op: no agent is
  * invoked, one noisy day never acts, and the seven-day settling window prevents
  * calorie ping-pong. Material actions use the existing autonomy/Undo ledger.
@@ -462,6 +495,10 @@ export function runUnderfuelingControlLoop(
   opts: { read?: UnderfuelingRead } = {}
 ): UnderfuelingControlResult {
   const read = opts.read ?? currentUnderfuelingRead(today);
+  // The trigger that took volume away is this same read's training action. Once it
+  // says proceed, the hold has cleared and what it held back is owed at this
+  // boundary — checked before the branches below, all of which return early.
+  const volumeRestore = read.action.training === "proceed" ? runVolumeRestorePass() : null;
   const none = (reason = read.action.line): UnderfuelingControlResult => ({
     ok: true,
     read,
@@ -470,6 +507,7 @@ export function runUnderfuelingControlLoop(
     nutrition: null,
     recovery: null,
     reason,
+    ...(volumeRestore ? { volume_restore: volumeRestore } : {}),
   });
 
   if (read.state === "execution_gap") {
@@ -493,6 +531,7 @@ export function runUnderfuelingControlLoop(
       nutrition: null,
       recovery: null,
       reason: "The target stays fixed; the next meal boundary gets a simpler, carb-forward execution pattern.",
+      ...(volumeRestore ? { volume_restore: volumeRestore } : {}),
     };
   }
 

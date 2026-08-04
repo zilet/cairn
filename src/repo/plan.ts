@@ -47,6 +47,7 @@ type AccountablePlanChange = {
   rationale: string | null;
   reason_provenance: ReasonProvenance | null;
   reversible: boolean;
+  before: Omit<PlanPrescription, "day_number" | "exercise"> | null;
 };
 
 function accountablePlanChanges(): Map<string, AccountablePlanChange> {
@@ -108,11 +109,157 @@ function accountablePlanChanges(): Map<string, AccountablePlanChange> {
                 : null,
             reason_provenance: reasonProvenance,
             reversible: !!row.reversible,
+            before:
+              change?.before && typeof change.before === "object"
+                ? {
+                    sets: change.before.sets ?? null,
+                    rep_low: change.before.rep_low ?? null,
+                    rep_high: change.before.rep_high ?? null,
+                    target_weight: change.before.target_weight ?? null,
+                    target_seconds: change.before.target_seconds ?? null,
+                  }
+                : null,
           });
       }
     }
   } catch {
     /* pre-ledger / partial migration: plan reads remain unchanged */
+  }
+  return map;
+}
+
+// ---------- accountable prescription diff ----------
+// The ledger's `action.changes` is what lights up per-item provenance on every plan
+// surface (decorateAccountablePlan below). A targeted `changes[]` apply can describe
+// itself, but a RESTRUCTURE (parsed.days -> replacePlan) rewrites the whole template
+// at once and used to record only `action.days` — so the athlete saw sets drop from
+// four to two with nothing anywhere saying why. These two helpers give both apply
+// paths one shape: snapshot the live prescriptions before the mutation, diff after.
+export interface PlanPrescription {
+  day_number: number;
+  exercise: string;
+  sets: number | null;
+  rep_low: number | null;
+  rep_high: number | null;
+  target_weight: number | null;
+  target_seconds: number | null;
+}
+
+// The canonical `action.changes` entry. After-values stay at the TOP level (the shape
+// the targeted path already wrote, and the shape accountablePlanChanges reads); the
+// pre-change prescription rides in `before`, so "why is this different" can be
+// answered without re-deriving history.
+export interface AccountablePlanChangeRecord extends PlanPrescription {
+  change: "updated" | "added";
+  before: Omit<PlanPrescription, "day_number" | "exercise"> | null;
+  reason: string | null;
+  reason_provenance: ReasonProvenance | null;
+}
+
+export function planPrescriptionKey(dayNumber: unknown, exercise: unknown): string | null {
+  const day = Number(dayNumber);
+  const name = String(exercise ?? "")
+    .trim()
+    .toLowerCase();
+  return Number.isFinite(day) && name ? `${day}|${name}` : null;
+}
+
+// Every strength prescription currently on the template, keyed the same way
+// decorateAccountablePlan keys its lookup. Cardio rows carry no loaded prescription
+// to compare, so they stay out of the diff (their provenance rides `run_reasons`).
+export function planPrescriptionSnapshot(): Map<string, PlanPrescription> {
+  const map = new Map<string, PlanPrescription>();
+  const rows = db
+    .prepare(
+      `SELECT pd.day_number, e.name AS exercise, pi.sets, pi.rep_low, pi.rep_high,
+              pi.target_weight, pi.target_seconds
+         FROM plan_items pi
+         JOIN plan_days pd ON pd.id = pi.plan_day_id
+         JOIN exercises e ON e.id = pi.exercise_id
+        WHERE pi.kind IS NULL OR pi.kind != 'cardio'`
+    )
+    .all() as any[];
+  for (const row of rows) {
+    const key = planPrescriptionKey(row.day_number, row.exercise);
+    if (!key || map.has(key)) continue;
+    map.set(key, {
+      day_number: Number(row.day_number),
+      exercise: String(row.exercise),
+      sets: row.sets ?? null,
+      rep_low: row.rep_low ?? null,
+      rep_high: row.rep_high ?? null,
+      target_weight: row.target_weight ?? null,
+      target_seconds: row.target_seconds ?? null,
+    });
+  }
+  return map;
+}
+
+function samePrescription(a: PlanPrescription, b: PlanPrescription): boolean {
+  return (
+    a.sets === b.sets &&
+    a.rep_low === b.rep_low &&
+    a.rep_high === b.rep_high &&
+    a.target_weight === b.target_weight &&
+    a.target_seconds === b.target_seconds
+  );
+}
+
+// Only what MOVED. A removed movement is deliberately absent: it is no longer on the
+// plan, so nothing on a plan surface could carry its note, and listing it would only
+// pad the ledger. Reasons come from the proposal's own per-item prose when it wrote
+// any; an item the agent changed silently still gets its before/after, and the
+// decision's own rationale remains the fallback the surface reads.
+export function planPrescriptionDiff(
+  before: Map<string, PlanPrescription>,
+  after: Map<string, PlanPrescription>,
+  reasons: Map<string, { reason: string | null; reason_provenance: ReasonProvenance | null }> = new Map(),
+  limit = 24
+): AccountablePlanChangeRecord[] {
+  const out: AccountablePlanChangeRecord[] = [];
+  for (const [key, next] of after) {
+    const prior = before.get(key);
+    if (prior && samePrescription(prior, next)) continue;
+    const note = reasons.get(key);
+    out.push({
+      ...next,
+      change: prior ? "updated" : "added",
+      before: prior
+        ? {
+            sets: prior.sets,
+            rep_low: prior.rep_low,
+            rep_high: prior.rep_high,
+            target_weight: prior.target_weight,
+            target_seconds: prior.target_seconds,
+          }
+        : null,
+      reason: note?.reason ?? null,
+      reason_provenance: note?.reason_provenance ?? null,
+    });
+  }
+  return out
+    .sort((a, b) => a.day_number - b.day_number || a.exercise.localeCompare(b.exercise))
+    .slice(0, Math.max(0, Math.trunc(limit)));
+}
+
+// Per-item prose off a restructure payload (`parsed.days[].items[]`), keyed for the
+// diff above. `label` is the cardio/free-form spelling some drafts use for `exercise`.
+export function planRestructureReasons(
+  days: unknown
+): Map<string, { reason: string | null; reason_provenance: ReasonProvenance | null }> {
+  const map = new Map<string, { reason: string | null; reason_provenance: ReasonProvenance | null }>();
+  for (const day of Array.isArray(days) ? days : []) {
+    const dayNumber = (day as any)?.day_number;
+    for (const item of Array.isArray((day as any)?.items) ? (day as any).items : []) {
+      const key = planPrescriptionKey(dayNumber, item?.exercise ?? item?.label);
+      if (!key || map.has(key)) continue;
+      const reason = item?.reason == null ? null : String(item.reason);
+      if (!reason && !item?.reason_provenance) continue;
+      map.set(key, {
+        reason,
+        reason_provenance: validReasonProvenance(item?.reason_provenance) ? item.reason_provenance : null,
+      });
+    }
   }
   return map;
 }
@@ -136,6 +283,7 @@ function decorateAccountablePlan(days: any[]): any[] {
             brain_change_reason: change.rationale,
             brain_change_reason_provenance: change.reason_provenance,
             brain_change_reversible: change.reversible,
+            brain_change_before: change.before,
           }
         : item;
     }),
@@ -321,6 +469,43 @@ function boundPrescriptionInt(
             applied,
             reason: `${field} bounded to the supported ${min}–${max} range`,
           },
+  };
+}
+
+// A volume cut is not a load step, and it is the one prescription field the
+// progression ladder structurally cannot climb back: overload only ever moves
+// load/reps, so an applied change that drops an item from 5 sets to 1 is a
+// one-way ratchet. On the APPLY path an applied change may therefore lower an
+// item's `sets` by at most one per revision. A halver that keeps proposing
+// ceil(n/2) simply descends one step per natural boundary — which is the
+// bounded-reversible-change law, not a refusal. Increases are untouched, and a
+// deliberate manual edit (clamp:false) is never stepped: the athlete drives.
+//
+// The step is measured against where the plan stood when the REVISION began, not
+// against the row's live value. Applying a proposal writes its changes[] one at a
+// time, so a payload naming the same day+exercise three times would otherwise walk
+// 5 → 4 → 3 → 2 inside a single apply, each hop legal on its own — one revision,
+// three sets gone. `revision_baseline` (the pre-apply prescription snapshot the
+// caller already reads for provenance) makes the whole revision the unit.
+const MAX_SET_REDUCTION_PER_APPLY = 1;
+
+function clampSetReductionStep(
+  exercise: string,
+  current: number | null,
+  requested: number | null
+): { value: number | null; adjustment: ClampAdjustment | null } {
+  if (requested == null || current == null || !Number.isFinite(current)) return { value: requested, adjustment: null };
+  const floor = Math.max(1, Math.trunc(current) - MAX_SET_REDUCTION_PER_APPLY);
+  if (requested >= floor) return { value: requested, adjustment: null };
+  return {
+    value: floor,
+    adjustment: {
+      exercise,
+      field: "sets",
+      requested,
+      applied: floor,
+      reason: `sets lowered one step at a time (requested ${requested}, applied ${floor} from ${Math.trunc(current)})`,
+    },
   };
 }
 
@@ -834,7 +1019,14 @@ function assertNoRedundantPress(dayItems: Array<{ ex_name: string }>, incoming: 
 
 export function applyPlanChange(
   c: PlanChange,
-  opts: { clamp?: boolean; defer_cache_bump?: boolean; defer_day_read_invalidation?: boolean } = {}
+  opts: {
+    clamp?: boolean;
+    defer_cache_bump?: boolean;
+    defer_day_read_invalidation?: boolean;
+    // What the plan held before THIS revision started writing. Only the set-reduction
+    // step reads it, so that N changes naming one item still move it a single step.
+    revision_baseline?: Map<string, PlanPrescription>;
+  } = {}
 ): {
   action: "updated" | "added" | "swapped" | "removed";
   day: number;
@@ -842,6 +1034,7 @@ export function applyPlanChange(
   from?: string;
   updated?: number;
   sets?: number | null;
+  prior_sets?: number | null;
   rep_low?: number | null;
   rep_high?: number | null;
   target_weight?: number | null;
@@ -904,7 +1097,7 @@ export function applyPlanChange(
   if (match) {
     const current = db
       .prepare(
-        `SELECT pi.rep_low, pi.rep_high, e.mode
+        `SELECT pi.sets, pi.rep_low, pi.rep_high, e.mode
          FROM plan_items pi JOIN exercises e ON e.id = pi.exercise_id
         WHERE pi.plan_day_id = ? AND e.name = ?`
       )
@@ -913,12 +1106,26 @@ export function applyPlanChange(
     if (requestedMode && requestedMode !== current?.mode) {
       throw new Error(`Cannot change mode for existing exercise "${match.ex_name}" through a plan update`);
     }
+    const priorSets = Number.isFinite(Number(current?.sets)) ? Math.trunc(Number(current.sets)) : null;
     const boundedSets = boundPrescriptionInt("sets", match.ex_name, c.sets, 1, 20);
+    // The absolute 1–20 bound above answers "is this a supported number"; the step
+    // clamp answers "is this a supported MOVE from where the plan stood when this
+    // revision began" — the baseline, when the caller supplied one, so repeated
+    // changes on one item cannot each take their own step.
+    const baselineKey = planPrescriptionKey(dayNumber, match.ex_name);
+    const baselineSets = baselineKey ? opts.revision_baseline?.get(baselineKey)?.sets : undefined;
+    const stepFrom = Number.isFinite(Number(baselineSets)) ? Math.trunc(Number(baselineSets)) : priorSets;
+    const steppedSets = opts.clamp
+      ? clampSetReductionStep(match.ex_name, stepFrom, boundedSets.value)
+      : { value: boundedSets.value, adjustment: null as ClampAdjustment | null };
     const boundedRepLow = boundPrescriptionInt("rep_low", match.ex_name, c.rep_low, 1, 100);
     const boundedRepHigh = boundPrescriptionInt("rep_high", match.ex_name, c.rep_high, 1, 100);
-    const volumeClamps = [boundedSets.adjustment, boundedRepLow.adjustment, boundedRepHigh.adjustment].filter(
-      (entry): entry is ClampAdjustment => !!entry
-    );
+    const volumeClamps = [
+      boundedSets.adjustment,
+      steppedSets.adjustment,
+      boundedRepLow.adjustment,
+      boundedRepHigh.adjustment,
+    ].filter((entry): entry is ClampAdjustment => !!entry);
     const nextRepLow = boundedRepLow.value ?? current?.rep_low;
     const nextRepHigh = boundedRepHigh.value ?? current?.rep_high;
     if (nextRepLow != null && nextRepHigh != null && Number(nextRepLow) > Number(nextRepHigh)) {
@@ -948,7 +1155,7 @@ export function applyPlanChange(
       sets.push(`${column} = ?`);
       vals.push(value);
     };
-    addInt("sets", boundedSets.value);
+    addInt("sets", steppedSets.value);
     addInt("rep_low", boundedRepLow.value);
     addInt("rep_high", boundedRepHigh.value);
     if (sets.length) {
@@ -989,6 +1196,9 @@ export function applyPlanChange(
       exercise: match.ex_name,
       updated,
       sets: stored?.sets ?? null,
+      // What this item's volume WAS before the change — the only record of where a
+      // reduction has to climb back to, since nothing downstream can re-derive it.
+      prior_sets: priorSets,
       rep_low: stored?.rep_low ?? null,
       rep_high: stored?.rep_high ?? null,
       target_weight: stored?.target_weight ?? null,

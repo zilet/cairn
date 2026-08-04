@@ -67,6 +67,13 @@ import {
   setProposalStatus,
   supersedeAutoProgressionDrafts,
 } from "./profile.js";
+import {
+  VOLUME_RESTORE_AGENT,
+  VOLUME_RESTORE_INSTRUCTION,
+  type VolumeCutCause,
+  openVolumeRestoreDraftIds,
+  volumeRestorePayload,
+} from "./volume-guard.js";
 import { type LiftState, getProgramState } from "./program-state.js";
 import { addDaysISO, daysBetweenISO, localDateISO, round2_5 } from "./shared.js";
 import { supportWorkRead } from "./support-work.js";
@@ -139,6 +146,11 @@ export interface Prescription {
   plan_item_id?: number; // set by planDayProgression for the apply path
   day_number?: number; // set by planDayProgression — the day the lift sits on (for the swap apply path)
   autoregulated?: boolean; // recovery signals braked this step (overload→hold / hold→deload) — informational
+  // A protective FUEL read cut this prescription's volume (applyFuelProtection's
+  // recovery dose). It rides the proposal into the restore ledger as the cut's
+  // `cause`, so the fuel loop's climb back speaks about fuel and never re-tells that
+  // story over a cut something else asked for. See repo/volume-guard.ts.
+  fuel_protected?: boolean;
   movement_response?: RecentMovementResponseVerdict; // repeated comparable dose evidence that supported or braked the step
   rep_step?: boolean; // double-progression REP advance (load held, reps climb in-range) — no plan change
   dose_eligibility?: {
@@ -1634,6 +1646,7 @@ function applyFuelProtection(prescription: Prescription, read: UnderfuelingRead,
     rep_step: undefined,
     starting_idea: undefined,
     autoregulated: true,
+    fuel_protected: true,
     why: say(voice.FUEL_RECOVERY_DOSE, "fuel_recovery_dose"),
   };
 }
@@ -1713,6 +1726,10 @@ export function buildProgressionProposal(
       rep_low: p.suggested?.rep_low ?? null,
       rep_high: p.suggested?.rep_high ?? null,
       reason: p.why || p.delta_text || null,
+      // WHY any volume this change takes off is owed back — read at apply time by
+      // the restore ledger (volume-guard.ts). Only the fuel-protection dose claims
+      // the fuel story; every other cut records its debt as ordinary policy.
+      ...(p.fuel_protected ? { volume_cause: "fuel" } : {}),
     };
     if (p.mode === "timed") {
       if (p.suggested.seconds != null) c.target_seconds = p.suggested.seconds;
@@ -1731,6 +1748,25 @@ export function buildProgressionProposal(
   // never stack duplicates (the fresh draft reflects the latest logs).
   supersedeAutoProgressionDrafts(day);
   const proposal = createProposal("auto-progression", `day ${day} progression`, "", parsed);
+  return { ok: true, proposal };
+}
+
+// Build the DRAFT proposal that gives held training volume back — one set per
+// item per boundary, never past the value the reduction recorded. Volume is the
+// one prescription field the ladder above cannot climb (see volume-guard.ts), so
+// without this a protective cut is permanent. It rides the ordinary propose→apply
+// path and is never auto-applied here; the caller routes it through autonomy,
+// which lands it announced. Returns the designed { ok:false, error } when nothing
+// is owed — the calm, common answer.
+export function buildVolumeRestoreProposal(
+  opts: { cause?: VolumeCutCause } = {}
+): { ok: false; error: string } | { ok: true; proposal: any } {
+  const parsed = volumeRestorePayload(opts);
+  if (!parsed) return { ok: false, error: "no held training volume to restore" };
+  // At most one restore card is ever open: a daily pass re-derives the same step
+  // from the plan, so a waiting draft is replaced rather than stacked beside.
+  for (const draftId of openVolumeRestoreDraftIds()) setProposalStatus(draftId, "superseded");
+  const proposal = createProposal(VOLUME_RESTORE_AGENT, VOLUME_RESTORE_INSTRUCTION, "", parsed);
   return { ok: true, proposal };
 }
 

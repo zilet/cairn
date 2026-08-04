@@ -702,3 +702,107 @@ test("athlete-facing decision rationale and Undo identifiers remain escaped", ()
   assert.match(source, /escHtml\(item\.brain_change_reason \|\| note\)/);
   assert.match(source, /escAttr\(item\.brain_decision_id\)/);
 });
+
+// ---- accountable provenance: what the athlete can actually SEE about a change ----
+// The plan surface decorates items from `action.changes` on the ledger. A targeted
+// apply always wrote that array; a RESTRUCTURE (parsed.days -> replacePlan) recorded
+// only `action.days`, so the one change big enough to halve someone's sets arrived
+// with no per-movement provenance anywhere in the app.
+
+test("a restructure records per-movement before/after changes in the shape the plan surface reads", () => {
+  seedPlan();
+  repo.savePlanDay(1, "Push", "Chest", [
+    { exercise: "Temporal Bench Press", sets: 4, rep_low: 6, rep_high: 8, target_weight: 100 },
+    { exercise: "Temporal Overhead Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 60 },
+  ]);
+
+  const proposal = repo.createProposal("stub", "pull the volume back", "", {
+    summary: "Volume comes down while sleep recovers.",
+    rationale: "Two short nights in a row, so the block gets lighter before it gets heavier.",
+    days: [
+      {
+        day_number: 1,
+        name: "Push",
+        focus: "Chest",
+        items: [
+          {
+            exercise: "Temporal Bench Press",
+            sets: 2,
+            rep_low: 6,
+            rep_high: 8,
+            target_weight: 100,
+            reason: "Half the sets while sleep catches up.",
+          },
+          { exercise: "Temporal Overhead Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 60 },
+        ],
+      },
+    ],
+  });
+  assert.equal(repo.applyProposal(proposal.id).ok, true);
+
+  const decision = repo.listBrainDecisions({ limit: 10 }).find((d) => d.source_ref_key === String(proposal.id));
+  assert.ok(decision, "the restructure recorded a decision");
+  const changes = decision.action.changes;
+  assert.ok(Array.isArray(changes), "a restructure now records action.changes");
+  assert.deepEqual(
+    changes.map((c) => c.exercise),
+    ["Temporal Bench Press"],
+    "only the movement that actually moved is recorded"
+  );
+  const bench = changes[0];
+  assert.equal(bench.day_number, 1);
+  assert.equal(bench.change, "updated");
+  assert.equal(bench.sets, 2, "after-values stay at the top level");
+  assert.equal(bench.before.sets, 4, "the prescription it overwrote rides in `before`");
+  assert.equal(bench.before.target_weight, 100);
+  assert.match(bench.reason, /Half the sets/);
+});
+
+test("a restructure's provenance reaches the plan item the athlete is looking at", () => {
+  seedPlan();
+  const proposal = repo.createProposal("stub", "pull the volume back", "", {
+    summary: "Volume comes down while sleep recovers.",
+    rationale: "Two short nights in a row.",
+    days: [
+      {
+        day_number: 1,
+        name: "Push",
+        focus: "Chest",
+        items: [
+          {
+            exercise: "Temporal Bench Press",
+            sets: 1,
+            rep_low: 6,
+            rep_high: 8,
+            target_weight: 100,
+            reason: "One working set while sleep catches up.",
+          },
+        ],
+      },
+    ],
+  });
+  assert.equal(repo.applyProposal(proposal.id).ok, true);
+  const decision = repo.listBrainDecisions({ limit: 10 }).find((d) => d.source_ref_key === String(proposal.id));
+  // decorateAccountablePlan only speaks for changes the BRAIN made on its own.
+  repo.patchBrainDecision(decision.id, { autonomy_tier: "quiet_apply" });
+
+  const item = repo.getPlanDay(1).items[0];
+  assert.equal(item.sets, 1);
+  assert.equal(item.brain_decision_id, decision.id);
+  assert.match(item.brain_change_summary, /Volume comes down/);
+  assert.match(item.brain_change_reason, /One working set/);
+  assert.equal(item.brain_change_before.sets, 3, "the surface can say what it used to be");
+});
+
+test("a targeted target step records the prescription it overwrote", () => {
+  seedPlan();
+  const proposal = createFreshnessProposal();
+  assert.equal(repo.applyProposal(proposal.id).ok, true);
+  const decision = repo.listBrainDecisions({ limit: 10 }).find((d) => d.source_ref_key === String(proposal.id));
+  const change = decision.action.changes[0];
+  assert.equal(change.exercise, "Temporal Bench Press");
+  assert.equal(change.target_weight, 105, "the value written");
+  assert.equal(change.before.target_weight, 100, "the value it replaced");
+  assert.equal(change.before.sets, 3);
+  assert.equal(change.change, "updated");
+});

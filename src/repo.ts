@@ -65,6 +65,7 @@ export * from "./repo/intelligence.js";
 export * from "./repo/program-state.js";
 export * from "./repo/training-playbook.js"; // plateau/adherence playbook suggestions for plan evolution
 export * from "./repo/progression.js";
+export * from "./repo/volume-guard.js"; // prescribed VOLUME has no ladder back up: bound a cut, record what it owes, climb back
 export * from "./repo/daily-decision.js"; // Stage 2: the deterministic daily-session decision envelope (policy-versioned, reason-coded)
 export * from "./repo/daily-composition.js"; // Stage 3: server-side normalizer + deterministic fallback for bounded agent composition
 export * from "./repo/equipment-capability.js"; // bounded per-session equipment parsing + exercise compatibility

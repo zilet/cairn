@@ -24,14 +24,21 @@ import { lsqSlopePerDay } from "./health.js";
 import { invalidateDayRead } from "./intelligence.js";
 import { getLatestNutritionTarget, setNutritionTarget } from "./nutrition.js";
 import {
+  type AccountablePlanChangeRecord,
   type ClampAdjustment,
+  type PlanPrescription,
   type RunPrescription,
   applyPlanChange,
   getPlan,
+  planPrescriptionDiff,
+  planPrescriptionKey,
+  planPrescriptionSnapshot,
+  planRestructureReasons,
   replacePlan,
   setWeeklyRuns,
 } from "./plan.js";
 import { PlanQualityError, type PlanQualityReport, qualityIssueKey, validateTrainingPlan } from "./plan-quality.js";
+import { volumeRestoreLedger } from "./volume-guard.js";
 import { latestMeasuredRmr, measuredRmrAssessment } from "./metabolism.js";
 import { getProgress, getRunCompliance } from "./sessions.js";
 import { addDaysISO, LB_PER_KG, localDateISO, parseDbTime } from "./shared.js";
@@ -723,7 +730,13 @@ function recordProposalStatusDecision(p: any, proposalStatus: string): void {
 // Manual apply telemetry remains fail-soft. Autonomy-owned apply passes `required`
 // because its decision + expectations are part of the authoritative mutation and
 // must commit in the same savepoint as the proposal and rollback snapshot.
-function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?: number, required = false): void {
+function recordAppliedProposalDecision(
+  p: any,
+  result: any,
+  existingDecisionId?: number,
+  required = false,
+  prescriptionsBefore?: Map<string, PlanPrescription>
+): void {
   try {
     const today = localDateISO();
     const nutrition = p.parsed?.kind === "nutrition_target";
@@ -1038,6 +1051,22 @@ function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?:
         : exercises.map((exercise) => `exercise:${exercise}:plan-and-history`).slice(0, 12)),
     ];
     const proposalEvidence = proposalEvidenceSnapshot(p.parsed);
+    // The prescription this change overwrote, for the entries below. Absent for a
+    // legacy/manual caller that had no snapshot to hand — the entry then records its
+    // after-value alone, exactly as it always did.
+    const beforeFor = (dayNumber: unknown, exercise: unknown): AccountablePlanChangeRecord["before"] => {
+      const key = prescriptionsBefore ? planPrescriptionKey(dayNumber, exercise) : null;
+      const prior = key ? prescriptionsBefore!.get(key) : undefined;
+      return prior
+        ? {
+            sets: prior.sets,
+            rep_low: prior.rep_low,
+            rep_high: prior.rep_high,
+            target_weight: prior.target_weight,
+            target_seconds: prior.target_seconds,
+          }
+        : null;
+    };
     const baseAction = nutrition
       ? {
           target_kcal: result?.nutrition?.target_kcal ?? null,
@@ -1061,6 +1090,10 @@ function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?:
         ? {
             plan_proposal_id: p.id,
             day_count: Number(result?.days) || p.parsed.days.length,
+            // The same per-movement shape a targeted apply writes, derived from the
+            // before/after diff of the rewrite. Without it a restructure that halves
+            // your sets reaches the plan surface with no provenance at all.
+            changes: (Array.isArray(result?.item_changes) ? result.item_changes : []) as AccountablePlanChangeRecord[],
             days: p.parsed.days.slice(0, 14).map((day: any) => ({
               day_number: day?.day_number ?? null,
               name: day?.name ?? null,
@@ -1082,9 +1115,12 @@ function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?:
               exercise: item?.exercise ?? null,
               target_weight: item?.target_weight ?? null,
               sets: item?.sets ?? null,
+              prior_sets: item?.prior_sets ?? null,
               rep_low: item?.rep_low ?? null,
               rep_high: item?.rep_high ?? null,
               target_seconds: item?.target_seconds ?? null,
+              before: beforeFor(item?.day_number, item?.exercise),
+              change: item?.action === "added" ? "added" : "updated",
               reason: item?.reason ?? null,
               reason_provenance: item?.reason_provenance ?? null,
             })),
@@ -1115,8 +1151,14 @@ function recordAppliedProposalDecision(p: any, result: any, existingDecisionId?:
               })),
             proposal_evidence: proposalEvidence,
           };
+    // Volume is the one prescription field nothing downstream can raise, so a
+    // change that lowered `sets` has to leave behind the value it owes back. The
+    // record lives here, on the decision that made the cut — the same row that
+    // owns its Undo (src/repo/volume-guard.ts).
+    const volumeRestore = nutrition || recoveryCycle || restructure ? [] : volumeRestoreLedger(affected, p.parsed);
     const action = {
       ...baseAction,
+      ...(volumeRestore.length ? { volume_restore: volumeRestore } : {}),
       proposal_evidence: proposalEvidence,
       rationale_provenance: p.parsed?.rationale_provenance ?? null,
       ...(result?.legacy_migration ? { legacy_migration: result.legacy_migration } : {}),
@@ -1364,7 +1406,15 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
     const quality = validateTrainingPlan(parsed.days);
     if (!quality.ok)
       throw new Error(`Plan quality check failed: ${quality.errors.map((entry) => entry.message).join(" ")}`);
+    // A restructure rewrites every prescription at once. Snapshot first, diff after,
+    // so the ledger can say what moved per movement instead of only "the plan changed".
+    const prescriptionsBefore = planPrescriptionSnapshot();
     replacePlan(parsed.days);
+    const itemChanges = planPrescriptionDiff(
+      prescriptionsBefore,
+      planPrescriptionSnapshot(),
+      planRestructureReasons(parsed.days)
+    );
     cancelAnnouncementsForProposal(id, opts.decisionId, opts.requireDecisionLedger === true);
     setProposalStatus(id, "applied");
     stampRecoveryWeekIfApplies(p, opts.requireDecisionLedger === true);
@@ -1373,6 +1423,7 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
       ok: true,
       id,
       restructured: true,
+      item_changes: itemChanges,
       days: parsed.days.length,
       quality,
       proposal_freshness: proposalFreshness,
@@ -1395,6 +1446,9 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
   const cardioRuns: any[] = [];
   let caughtQuality: PlanQualityReport | null = null;
   const savepoint = `apply_plan_proposal_${Math.trunc(Number(id))}`;
+  // Read once, BEFORE any mutation: the pre-change prescription each targeted change
+  // is about to overwrite. applyPlanChange reports only the value it wrote.
+  const prescriptionsBefore = planPrescriptionSnapshot();
   const beforeQuality = validateTrainingPlan(getPlan());
   db.exec(`SAVEPOINT ${savepoint}`);
   for (const c of hasChanges ? parsed.changes : []) {
@@ -1414,6 +1468,10 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
         clamp: true,
         defer_cache_bump: true,
         defer_day_read_invalidation: true,
+        // The set-reduction step is bounded across the WHOLE revision. Without a
+        // baseline, a payload repeating one day+exercise would take a fresh step
+        // per entry and strip an item several sets inside one apply.
+        revision_baseline: prescriptionsBefore,
       });
       if (Array.isArray(r.clamped)) clamped.push(...r.clamped);
       if (r.action === "added") added.push({ ...c, ...r });
@@ -1533,7 +1591,7 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
     proposal_freshness: proposalFreshness,
     ...(opts.normalizedApplyPayload ? { legacy_migration: opts.normalizedApplyPayload.migration } : {}),
   };
-  recordAppliedProposalDecision(p, result, opts.decisionId, opts.requireDecisionLedger === true);
+  recordAppliedProposalDecision(p, result, opts.decisionId, opts.requireDecisionLedger === true, prescriptionsBefore);
   // Exactly one in-process invalidation for the committed plan + proposal-state
   // unit. Failed savepoints return above without touching the counter.
   afterSqliteCommit(bumpTrainingDataVersion);

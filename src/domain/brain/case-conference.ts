@@ -25,6 +25,7 @@ import { getSettings } from "../../repo/settings.js";
 import { patchBrainDecision, recordDecision } from "../../repo/brain-decisions.js";
 import { MAX_DEFERRED_EXPECTATIONS } from "../../repo/brain/change-expectations.js";
 import { createProposal } from "../../repo/profile.js";
+import { changesReduceSets } from "../../repo/volume-guard.js";
 import { runChosen, runChosenWithCoachReads } from "../../runChosen.js";
 import { applyProposalWithAutonomy } from "./autonomy-service.js";
 
@@ -553,12 +554,20 @@ export async function runCaseConference(
       unresolvedConflicts.includes("clinical_autonomy") ? "clinician" : "ask"
     );
   }
+  // A plan_update that LOWERS prescribed volume is not one bounded load step, and
+  // it must not take the tier meant for one. Volume is the field nothing downstream
+  // can raise again (src/repo/volume-guard.ts), so a cut is structural: it announces
+  // rather than landing quietly. Detected deterministically against what the plan
+  // actually holds — never from the conductor's own account of how small it is.
+  const reducesVolume = decision.revision?.type === "plan_update" && changesReduceSets(decision.revision.changes);
   const executableKind =
     decision.revision?.type === "plan_restructure"
       ? "training_structure"
       : decision.revision?.type === "nutrition_target"
         ? "nutrition_target"
-        : "training_target";
+        : reducesVolume
+          ? "training_structure"
+          : "training_target";
   const policy = decideAutonomyTier({
     kind: decision.revision ? executableKind : decision.kind,
     risk_class: decision.risk_class,
