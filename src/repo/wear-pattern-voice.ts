@@ -221,7 +221,9 @@ export const WEAR_ABSENCE_SENTENCES = {
   ],
   episodic_nights: [
     "The last night your watch recorded was {}, which is the rhythm you wear it in — so today goes by how you feel.",
-    "Nothing new from the watch since {}, and that's normal for how you use it; how you feel is the read today.",
+    // Distinct from the field-neutral set on purpose: the two rotate on the same day
+    // index, and the neutral-vs-nights voices must never collapse into one literal.
+    "No night on the watch since {}, and that's normal for how you wear it; how you feel is the read today.",
     "Your watch catches nights here and there and the last one was {} — so today leans on your own sense of it.",
   ],
   unworn: [
@@ -246,7 +248,7 @@ export const WEAR_ABSENCE_ROW_STATES = {
   episodic_nights: [
     "last recorded night {} — your usual rhythm, not a gap",
     "the watch last caught a night {}; that's how you wear it",
-    "nothing new from the watch since {} — normal for your pattern",
+    "no night recorded since {} — normal for your pattern",
   ],
   unworn: [
     "no wearable connected — a morning check-in sharpens the read",
