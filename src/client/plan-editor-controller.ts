@@ -125,22 +125,34 @@ function upcomingWhenLabel(iso: string): string {
 // The calm forward look: queued training/recovery changes the brain will land
 // soon, one quiet line each. Pull-never-push — a heads-up that a reshaped week is
 // coming, never a retrospective "what your team did" feed. Capped at 2.
-function planUpcomingNoteHtml(note: import("../contracts/client.js").ClientPlanUpcomingNote): string {
-  const items = note && Array.isArray(note.items) ? note.items.slice(0, 2) : [];
-  const rows = items
+function planUpcomingRowsHtml(items: import("../contracts/client.js").ClientPlanUpcomingItem[]): string {
+  return items
     .map((it) => {
       const summary = String(it?.summary ?? "").trim();
       if (!summary) return "";
       const when = upcomingWhenLabel(String(it?.effective_date ?? ""));
+      const explanation = String(it?.explanation ?? "").trim();
       return `<div class="plan-upcoming-item">
         <p class="plan-upcoming-line">${when ? `<span class="plan-upcoming-when">${escHtml(when)}</span> — ` : ""}${escHtml(summary)}</p>
+        ${explanation ? `<p class="plan-upcoming-why">${escHtml(explanation)}</p>` : ""}
       </div>`;
     })
     .join("");
-  if (!rows.trim()) return "";
+}
+
+function planUpcomingNoteHtml(note: import("../contracts/client.js").ClientPlanUpcomingNote): string {
+  const rows = planUpcomingRowsHtml(note && Array.isArray(note.items) ? note.items.slice(0, 2) : []);
+  // What already landed, and why — the half that used to vanish the moment a change
+  // took effect, leaving a reshaped week with nothing to explain it.
+  const landedRows = planUpcomingRowsHtml(note && Array.isArray(note.landed) ? note.landed.slice(0, 2) : []);
+  // Still waiting on the athlete — shown first, because it is the only one of the
+  // three that is an open question rather than a report.
+  const awaitingRows = planUpcomingRowsHtml(note && Array.isArray(note.awaiting) ? note.awaiting.slice(0, 2) : []);
+  if (!rows.trim() && !landedRows.trim() && !awaitingRows.trim()) return "";
   return `<div class="plan-upcoming reveal">
-    <span class="lbl plan-upcoming-mast">Coming up</span>
-    ${rows}
+    ${awaitingRows.trim() ? `<span class="lbl plan-upcoming-mast">Waiting on you</span>${awaitingRows}` : ""}
+    ${rows.trim() ? `<span class="lbl plan-upcoming-mast">Coming up</span>${rows}` : ""}
+    ${landedRows.trim() ? `<span class="lbl plan-upcoming-mast">Where this came from</span>${landedRows}` : ""}
   </div>`;
 }
 

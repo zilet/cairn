@@ -93,8 +93,35 @@ export function listBrainDecisions(
   return rows.map(hydrateDecision).filter((row): row is BrainDecision => row != null);
 }
 
+// The decision list as an athlete-visible surface reads it: every stored field, plus
+// the one sentence written for a person lifted out of the action payload where no
+// reader could find it. Additive — existing consumers of the raw rows are unaffected.
+export type ReadableBrainDecision = BrainDecision & { user_explanation: string | null };
+
+export function listReadableBrainDecisions(
+  opts: { status?: BrainDecisionStatus; domain?: string; kind?: string; limit?: number } = {}
+): ReadableBrainDecision[] {
+  return listBrainDecisions(opts).map((decision) => ({
+    ...decision,
+    user_explanation: decisionExplanation(decision),
+  }));
+}
+
 // ---- forward + rotation readers ---------------------------------------------
 // Both feed calm surfaces, so they return small plain shapes, never raw rows.
+
+// The sentence the conductor wrote FOR the athlete. The case conference emits it on
+// every path it takes (applied, held, advisory) as `action.user_explanation`, capped
+// at 700 chars by its own contract — it is agent-authored per decision, so it passes
+// through verbatim rather than rotating through a variant set. Falls back to the
+// decision's `rationale`, which is the same register, when no conference wrote one.
+export function decisionExplanation(decision: BrainDecision | null | undefined): string | null {
+  if (!decision) return null;
+  const spoken = (decision.action as any)?.user_explanation;
+  const text = typeof spoken === "string" && spoken.trim() ? spoken : decision.rationale;
+  const trimmed = String(text ?? "").trim();
+  return trimmed ? trimmed.slice(0, 700) : null;
+}
 
 // A queued change the athlete will see land soon: an ANNOUNCED decision, or a
 // quiet_apply-tier PENDING one, whose effective_date sits in (asOf, asOf+window].
@@ -107,6 +134,7 @@ export interface UpcomingBrainDecision {
   effective_date: string;
   autonomy_tier: string;
   status: string;
+  explanation: string | null;
 }
 
 export function upcomingBrainDecisions(windowDays = 10, asOf = localDateISO()): UpcomingBrainDecision[] {
@@ -126,7 +154,106 @@ export function upcomingBrainDecisions(windowDays = 10, asOf = localDateISO()): 
       effective_date: String(d.effective_date),
       autonomy_tier: String(d.autonomy_tier),
       status: String(d.status),
+      explanation: decisionExplanation(d),
     }));
+}
+
+// The other half of the same question. upcomingBrainDecisions answers "what is
+// COMING"; a change that has already landed dropped out of every surface the moment
+// its effective date arrived, which is exactly when the athlete starts asking why
+// their week looks different.
+export interface LandedBrainDecision extends UpcomingBrainDecision {
+  landed_date: string;
+}
+
+// A landed change speaks through the thing it changed, so this window is short on
+// purpose: it exists to explain a week that just moved, not to build a feed. The
+// bound is inclusive at both ends, so the default reads the last seven days plus
+// today — "this week and the day it started from", not a rolling seven.
+export function landedBrainDecisions(windowDays = 7, asOf = localDateISO()): LandedBrainDecision[] {
+  const floor = addDaysISO(asOf, -Math.max(1, Math.trunc(windowDays))) ?? asOf;
+  const out: LandedBrainDecision[] = [];
+  for (const d of listBrainDecisions({ status: "applied", limit: 100 })) {
+    const id = Number(d.id);
+    if (!Number.isFinite(id)) continue;
+    const landed = String(d.effective_date ?? d.applied_at ?? d.created_at ?? "").slice(0, 10);
+    if (!landed || landed < floor || landed > asOf) continue;
+    out.push({
+      id,
+      kind: String(d.kind),
+      domain: String(d.domain),
+      summary: String(d.summary ?? ""),
+      effective_date: String(d.effective_date ?? landed),
+      landed_date: landed,
+      autonomy_tier: String(d.autonomy_tier),
+      status: String(d.status),
+      explanation: decisionExplanation(d),
+    });
+  }
+  return out.sort((a, b) => b.landed_date.localeCompare(a.landed_date) || b.id - a.id);
+}
+
+// A decision that is WAITING — held for the athlete, or observed without acting.
+// Deliberately NOT time-windowed, unlike the landed read above: a hold is not an
+// event that recedes into history, it is an open question, and one that ages out
+// unseen is the failure this exists to prevent. It stays until it transitions.
+//
+// Included ONLY when a conductor wrote it a sentence FOR the athlete —
+// `action.user_explanation`, and nothing else. decisionExplanation's fallback to
+// `rationale` is right for the landed list and the general decisions payload, where
+// the reader has already asked to see a record; here it admitted almost every
+// `review`/`observed` row, including two writers that are pure bookkeeping (the
+// per-directive rows propagation re-derives daily, and the underfuelling
+// coordination link, whose rationale is machine register about immutability and
+// Undo history). Bookkeeping on a "waiting on you" surface is noise, not
+// accountability — and machine register on an athlete surface breaks the
+// spokenSignalVoice law outright.
+//
+// Two kinds are additionally never a waiting question, whatever they carry:
+// `health_directive` is re-derived from the markers every day and has its own
+// surface, and `day_read` is an observation the Brief already speaks. Tier is NOT
+// the filter: both `observe` and `clinician` carry genuine conference output.
+//
+// `review`/`observed` rows carry no effective_date — nothing was scheduled — so they
+// are dated by their creation.
+export interface AwaitingBrainDecision extends UpcomingBrainDecision {
+  decided_date: string;
+}
+
+const AWAITING_BOOKKEEPING_KINDS = new Set(["health_directive", "day_read"]);
+
+function awaitingExplanation(decision: BrainDecision): string | null {
+  const spoken = (decision.action as any)?.user_explanation;
+  const trimmed = typeof spoken === "string" ? spoken.trim() : "";
+  return trimmed ? trimmed.slice(0, 700) : null;
+}
+
+export function awaitingBrainDecisions(limit = 20): AwaitingBrainDecision[] {
+  const out: AwaitingBrainDecision[] = [];
+  for (const d of [
+    ...listBrainDecisions({ status: "review", limit: 100 }),
+    ...listBrainDecisions({ status: "observed", limit: 100 }),
+  ]) {
+    const id = Number(d.id);
+    const explanation = awaitingExplanation(d);
+    if (!Number.isFinite(id) || !explanation) continue;
+    if (AWAITING_BOOKKEEPING_KINDS.has(String(d.kind))) continue;
+    const decided = String(d.effective_date ?? d.created_at ?? "").slice(0, 10);
+    if (!decided) continue;
+    out.push({
+      id,
+      kind: String(d.kind),
+      domain: String(d.domain),
+      summary: String(d.summary ?? ""),
+      effective_date: String(d.effective_date ?? decided),
+      decided_date: decided,
+      autonomy_tier: String(d.autonomy_tier),
+      status: String(d.status),
+      explanation,
+    });
+  }
+  const cap = Math.max(1, Math.trunc(Number(limit)) || 20);
+  return out.sort((a, b) => b.decided_date.localeCompare(a.decided_date) || b.id - a.id).slice(0, cap);
 }
 
 // Exercise rotations the brain (or the athlete) applied recently — the signal

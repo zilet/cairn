@@ -19,6 +19,34 @@ function agentName(agent: CoachAgent): string {
   return typeof agent.name === "string" && agent.name ? agent.name : "agent";
 }
 
+// Decisions still waiting on the athlete, across every domain. The Plan tab's
+// forward note is scoped to training/recovery, so a conference about labs or
+// fuelling has nowhere else to land — and this screen is the one that promises "a
+// clear record here". Each row shows the sentence the conference wrote for a person,
+// not its machine summary. Pull-only: it waits here, it never notifies.
+function coachWaitingDecisionsHtml(rows: unknown): string {
+  const items = coachMealRows(rows)
+    .map((d) => ({
+      summary: String(d.summary ?? "").trim(),
+      explanation: String(d.explanation ?? "").trim(),
+    }))
+    .filter((d) => d.explanation)
+    .slice(0, 4);
+  if (!items.length) return "";
+  const body = items
+    .map(
+      (d) => `<div class="plan-upcoming-item">
+        ${d.summary ? `<p class="plan-upcoming-line">${escHtml(d.summary)}</p>` : ""}
+        <p class="plan-upcoming-why">${escHtml(d.explanation)}</p>
+      </div>`
+    )
+    .join("");
+  return `<div class="plan-upcoming reveal">
+    <span class="lbl plan-upcoming-mast">Waiting on you</span>
+    ${body}
+  </div>`;
+}
+
 // ---------- Coach ----------
 async function renderCoach(): Promise<void> {
   headerTitle.textContent = "Changes";
@@ -26,6 +54,12 @@ async function renderCoach(): Promise<void> {
   view.innerHTML = skelLines(2) + skelLines(3);
   const agents = coachMealRows<CoachAgent>(await api("/agents"));
   const proposals = await api("/proposals?limit=10");
+  let waiting: unknown = null;
+  try {
+    waiting = await api("/brain/decisions/waiting?limit=8");
+  } catch {
+    // A missing waiting read never blocks the change history this screen is for.
+  }
   const agentOpts =
     `<option value="auto">⟳ Auto · rotate enabled agents</option>` +
     agents
@@ -39,6 +73,7 @@ async function renderCoach(): Promise<void> {
     view.innerHTML = `
     <button class="linkbtn linkbtn-plain" id="changesBackToPlan" type="button">‹ Plan</button>
     <p class="changes-lede sess-line" style="color:var(--muted);margin:2px 2px 16px;line-height:1.5">Your expert team adapts training and meals in the background, then leaves a clear record here. Most changes need nothing from you: they arrive at the right boundary with a heads-up and Undo. Talk to the team anytime in the <button class="linkbtn linkbtn-plain" id="changesToChat" type="button">Coach</button> tab.</p>
+    ${coachWaitingDecisionsHtml(waiting)}
     <h1 class="lbl" style="margin:24px 0 8px">Program change history</h1>
     <div id="proplist"></div>
     <h1 class="lbl" style="margin:24px 0 8px">Meal-plan change history</h1>

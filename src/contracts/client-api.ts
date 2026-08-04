@@ -286,6 +286,7 @@ export interface ClientBrainDecisionSummary {
   autonomy_tier: string;
   reversible: boolean;
   latest_verdict?: string | null;
+  explanation?: string | null;
 }
 
 export interface ClientBrainToolCall {
@@ -2789,6 +2790,7 @@ export interface ClientApiResponses {
   "/api/diagnostics": ClientDiagnosticsResponse;
   "/api/telemetry/client": undefined;
   "/api/brain/decisions": ClientBrainDecisionSummary[];
+  "/api/brain/decisions/waiting": ClientBrainDecisionSummary[];
   "/api/agent-clis/update": ClientAgentCliUpdateStatus;
   "/api/art/manifest": ClientArtManifestResponse;
   "/api/art/stats": ClientArtStatsResponse;

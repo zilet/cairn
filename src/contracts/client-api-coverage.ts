@@ -25,6 +25,7 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/diagnostics",
   "/telemetry/client",
   "/brain/decisions",
+  "/brain/decisions/waiting",
   "/brain/decisions/:id/revert",
   "/agent-clis/update",
   "/agent-clis/:name/install",

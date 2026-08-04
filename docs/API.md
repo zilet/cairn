@@ -9,7 +9,7 @@ Health's short-lived pairing exchange is public and passes through the instance-
 when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**307 routes** across 107 groups.
+**308 routes** across 107 groups.
 
 ## `/activities`
 
@@ -107,8 +107,9 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/brain/decisions` |  |
+| GET | `/api/brain/decisions` | Carries `user_explanation` — the conductor's own athlete-facing sentence, which the case conference has always written and nothing has ever read. |
 | POST | `/api/brain/decisions/:id/revert` |  |
+| GET | `/api/brain/decisions/waiting` | Decisions still waiting on the athlete, ACROSS domains, each with the conference's own sentence. Cross-domain on purpose: the Plan tab's forward note is scoped to training/recovery, so a conference about labs or fuelling has nowhere else to land. |
 
 ## `/brain-diagnostics`
 

@@ -10,7 +10,8 @@ import {
   nextBestStep,
   nextStepDone,
   reactionModelForCoach,
-  listBrainDecisions,
+  awaitingBrainDecisions,
+  listReadableBrainDecisions,
   revertDecision,
   snoozeNextStep,
   updateInsight,
@@ -47,9 +48,22 @@ export const connectedBrainRouter = Router();
 // ---- health insights (marker history + whole-picture agentic review) ----
 connectedBrainRouter.get("/health/markers", (_req, res) => res.json(getMarkerHistory()));
 
+// Carries `user_explanation` — the conductor's own athlete-facing sentence, which the
+// case conference has always written and nothing has ever read.
 connectedBrainRouter.get("/brain/decisions", (req, res) =>
-  res.json(listBrainDecisions({ limit: req.query.limit ? Number(req.query.limit) : 50 }))
+  res.json(listReadableBrainDecisions({ limit: req.query.limit ? Number(req.query.limit) : 50 }))
 );
+
+// Decisions still waiting on the athlete, ACROSS domains, each with the conference's
+// own sentence. Cross-domain on purpose: the Plan tab's forward note is scoped to
+// training/recovery, so a conference about labs or fuelling has nowhere else to land.
+connectedBrainRouter.get("/brain/decisions/waiting", (req, res) => {
+  // A non-numeric ?limit= used to reach the reader as NaN and slice the list to
+  // nothing, so a typo read as "there is nothing waiting on you" — the exact silence
+  // this surface exists to prevent. Anything unusable falls back to the default.
+  const requested = Number(req.query.limit);
+  res.json(awaitingBrainDecisions(Number.isFinite(requested) && requested > 0 ? requested : 20));
+});
 
 connectedBrainRouter.post("/brain/decisions/:id/revert", (req, res) =>
   res.json(revertDecision(Number(req.params.id), String(req.body?.reason ?? "user undo")))

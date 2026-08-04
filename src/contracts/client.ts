@@ -197,8 +197,17 @@ export interface ClientPlanUpcomingItem {
   effective_date: string;
   kind: string;
   domain: string;
+  // The conductor's own sentence to the athlete, where a case conference wrote one.
+  explanation?: string | null;
 }
-export type ClientPlanUpcomingNote = { items: ClientPlanUpcomingItem[] } | null;
+// `landed` carries changes that already took effect in the last week — the "why does
+// my week look different" half. `awaiting` carries decisions still waiting on the
+// athlete, which are never aged out: a hold is an open question, not history.
+export type ClientPlanUpcomingNote = {
+  items: ClientPlanUpcomingItem[];
+  landed?: ClientPlanUpcomingItem[];
+  awaiting?: ClientPlanUpcomingItem[];
+} | null;
 
 export interface ClientCoachingRetest {
   in_weeks: number | null;

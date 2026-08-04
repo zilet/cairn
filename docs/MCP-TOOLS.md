@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**253 tools.**
+**254 tools.**
 
 | Tool | Description |
 |---|---|
@@ -188,6 +188,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `list_supplements` | List the user's understood supplement regimen (canonical name, approximate dose, cadence, the markers/domains each touches). Not a daily log. all=true includes stopped ones. |
 | `list_training_symptoms` | List the athlete's active movement-scoped symptom records and their movement-specific tolerance evidence. Optionally include resolved records. Trial-ready means two distinct pain-free observations for that movement only; it does not resolve the symptom. |
 | `list_unreconciled_garmin_strength` | List synced Garmin strength activities not yet linked to a Cairn session (session_id null) over a recent window — the watch logged a lift Cairn doesn't know about. Empty when Garmin isn't configured. Follow with reconcile_garmin_strength to merge them in. |
+| `list_waiting_brain_decisions` | Read the coaching decisions still waiting on the athlete, across every domain, each with the athlete-facing sentence the case conference wrote for it. Not time-windowed: a hold stays until it is resolved. |
 | `list_weight` | List bodyweight history (chronological). |
 | `log_activity` | Log a cardio/other session. Pass free text (e.g. 'ran 50 min @5:30/km') and/or structured fields. |
 | `log_blood_pressure` | Record a point-in-time blood pressure reading. Use measured_at for the actual cuff/clinic time (YYYY-MM-DD or YYYY-MM-DDTHH:mm). The reading also appears in marker history as Systolic BP, Diastolic BP, and Pulse when present. |

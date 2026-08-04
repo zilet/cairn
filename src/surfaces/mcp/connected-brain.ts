@@ -9,7 +9,8 @@ import {
   nextBestStep,
   nextStepDone,
   reactionModelForCoach,
-  listBrainDecisions,
+  awaitingBrainDecisions,
+  listReadableBrainDecisions,
   revertDecision,
   snoozeNextStep,
 } from "../../domain/brain/index.js";
@@ -44,7 +45,14 @@ export function registerConnectedBrainTools(server: McpToolRegistrar) {
     "list_brain_decisions",
     "Read recent meaningful coaching decisions and their accountable status. Bounded, pull-only, with no raw prompts or hidden reasoning.",
     { limit: z.number().int().min(1).max(100).optional() },
-    async ({ limit }) => asText(listBrainDecisions({ limit: limit ?? 50 }))
+    async ({ limit }) => asText(listReadableBrainDecisions({ limit: limit ?? 50 }))
+  );
+
+  server.tool(
+    "list_waiting_brain_decisions",
+    "Read the coaching decisions still waiting on the athlete, across every domain, each with the athlete-facing sentence the case conference wrote for it. Not time-windowed: a hold stays until it is resolved.",
+    { limit: z.number().int().min(1).max(100).optional() },
+    async ({ limit }) => asText(awaitingBrainDecisions(limit ?? 20))
   );
 
   server.tool(
