@@ -310,6 +310,64 @@ function recordNutritionTargetDecision(saved: AcceptedNutritionTarget): void {
   }
 }
 
+const TARGET_BASIS_WINDOW_DAYS = 21;
+const NUTRITION_NOTE_MAX = 600;
+
+// The kcal target in force immediately before `effectiveDate`, so a write that does
+// not move the number does not announce arithmetic nobody asked about.
+function activeTargetKcalBefore(effectiveDate: string): number | null {
+  const row = db
+    .prepare(
+      `SELECT target_kcal FROM nutrition_targets
+        WHERE effective_date <= ? AND target_kcal IS NOT NULL
+        ORDER BY effective_date DESC, id DESC LIMIT 1`
+    )
+    .get(effectiveDate) as any;
+  const value = Number(row?.target_kcal);
+  return Number.isFinite(value) ? value : null;
+}
+
+// A target the athlete did not pick has to be auditable, not oracular. This is the
+// empirical basis behind the number: what they actually ate over the trailing window,
+// what the scale actually did over the same window, and the maintenance those two
+// imply (intake minus the measured daily balance). Deterministic and server-computed —
+// the model never does this arithmetic, and never gets to narrate it differently.
+//
+// Adherence-neutral by construction. Thin logging produces no blame and no invented
+// precision: it says the estimate is looser, which is the honest consequence, and
+// stops. Scale weight carries water noise, so the line says so rather than presenting
+// a trend as a settled fact.
+function nutritionTargetBasisLine(effectiveDate: string): string | null {
+  let estimate: ReturnType<typeof estimateExpenditure>;
+  try {
+    estimate = estimateExpenditure(TARGET_BASIS_WINDOW_DAYS, { asOf: effectiveDate });
+  } catch {
+    return null;
+  }
+  const days = Number(estimate.window_days) || TARGET_BASIS_WINDOW_DAYS;
+  const intake = estimate.intake_avg_kcal;
+  const trend = estimate.trend_lb_wk;
+  const maintenance = estimate.outcome_tdee;
+  const settled =
+    (estimate.confidence === "medium" || estimate.confidence === "high") &&
+    estimate.quality.outcome === "plausible" &&
+    intake != null &&
+    trend != null &&
+    maintenance != null;
+  if (!settled) {
+    const intakeDays = estimate.coverage.credible_intake_days + estimate.coverage.partial_intake_days;
+    const weighIns = estimate.coverage.weigh_in_days;
+    const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+    return `Basis: the last ${days} days hold ${plural(intakeDays, "logged intake day", "logged intake days")} and ${plural(weighIns, "weigh-in", "weigh-ins")} — enough to point a direction, not enough to pin maintenance to a number, so this target leans on the wider picture and its confidence stays lower.`;
+  }
+  const magnitude = Math.abs(trend!);
+  const movement =
+    magnitude < 0.1
+      ? "your weight held level"
+      : `your weight moved ${trend! < 0 ? "down" : "up"} ${magnitude.toFixed(1)} lb a week`;
+  return `Basis: over the last ${days} days you averaged ${Math.round(intake!)} kcal a day and ${movement}, which puts maintenance near ${Math.round(maintenance!)} kcal. Scale weight carries water noise, so this stays an estimate that keeps updating.`;
+}
+
 export function setNutritionTarget(
   input: {
     target_kcal?: number | null;
@@ -350,6 +408,13 @@ export function setNutritionTarget(
   const protein = int(safeInput.protein_g, 500);
   // Nothing usable → don't persist an empty target row.
   if (kcal == null && protein == null) return null;
+  // The kcal number MOVED, so the note discloses the measurement behind it. Written
+  // here rather than in any one caller so the check-in, chat and a direct edit all
+  // disclose the same arithmetic instead of three drifting explanations.
+  const priorKcal = kcal == null ? null : activeTargetKcalBefore(eff);
+  const basis = kcal != null && priorKcal !== kcal ? nutritionTargetBasisLine(eff) : null;
+  const reason = safeInput.note ? capStr(safeInput.note, 300) : null;
+  const note = [reason, basis].filter(Boolean).join(" ") || null;
   const info = db
     .prepare(
       `INSERT INTO nutrition_targets (effective_date, target_kcal, protein_g, carbs_g, fat_g, source, note)
@@ -362,7 +427,7 @@ export function setNutritionTarget(
       int(safeInput.carbs_g, 2000),
       int(safeInput.fat_g, 1000),
       safeInput.source ? String(safeInput.source).slice(0, 40) : null,
-      safeInput.note ? capStr(safeInput.note, 300) : null
+      note ? capStr(note, NUTRITION_NOTE_MAX) : null
     );
   const saved = getNutritionTarget(Number(info.lastInsertRowid));
   if (saved) {

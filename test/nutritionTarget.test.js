@@ -4,7 +4,7 @@
 // the formula only as a fallback/floor.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { db, repo, resetTables, localDaysAgo } from "./_seed.js";
+import { db, repo, resetTables, localDaysAgo, seedIntake, seedWeight } from "./_seed.js";
 import { buildChatPrompt, buildNutritionCheckinPrompt } from "../dist/prompt.js";
 
 beforeEach(() => resetTables("nutrition_targets", "profile", "food_notes", "bodyweight_log", "plan_proposals"));
@@ -172,4 +172,56 @@ test("chat target guidance uses the effective target and retains the formula fal
     /"effective_target":\{"target_kcal":3000,"protein_g":200,.*"source":"accepted"/,
     "the accepted target is the number chat sees as authoritative"
   );
+});
+
+// ---- the target discloses its own arithmetic -------------------------------
+// A number the athlete did not choose has to be auditable. When the kcal target
+// MOVES, the note carries the measurement behind it: trailing logged intake, the
+// measured weight change over the same window, and the maintenance those imply.
+// Adherence-neutral — thin logging lowers confidence, it never blames and never
+// invents precision.
+
+test("a changed target discloses measured intake, weight movement and implied maintenance", () => {
+  seedProfile();
+  // 30 completed days of intake plus a weigh-in series with a real downward slope:
+  // enough coverage for the outcome anchor to settle.
+  for (let d = 1; d <= 30; d++) seedIntake(d, 2300);
+  for (let d = 30; d >= 1; d--) seedWeight(localDaysAgo(d), 184 - (30 - d) * (2.4 / 30));
+
+  repo.setNutritionTarget({ target_kcal: 2600, protein_g: 190, source: "checkin", note: "A mileage ramp — fuel it." });
+  const active = repo.getActiveNutritionTarget();
+  assert.match(active.note, /A mileage ramp/, "the coach's own reason survives");
+  assert.match(active.note, /Basis: over the last 21 days you averaged \d+ kcal a day/);
+  assert.match(active.note, /your weight moved down 0\.\d lb a week/);
+  assert.match(active.note, /puts maintenance near \d+ kcal/);
+  assert.match(active.note, /water noise/, "the estimate stays honest about scale noise");
+  assert.doesNotMatch(active.note, /\b\d{1,3}\/100\b/, "no scores");
+});
+
+test("thin logging lowers the stated confidence instead of blaming or inventing a number", () => {
+  seedProfile();
+  seedIntake(2, 2200);
+  seedWeight(localDaysAgo(2), 183);
+
+  repo.setNutritionTarget({ target_kcal: 2400, protein_g: 180, source: "checkin", note: "Holding steady." });
+  const note = repo.getActiveNutritionTarget().note;
+  assert.match(note, /Holding steady\./);
+  assert.match(note, /enough to point a direction, not enough to pin maintenance to a number/);
+  assert.match(note, /confidence stays lower/);
+  assert.doesNotMatch(note, /puts maintenance near/, "no maintenance figure is fabricated from thin data");
+  assert.doesNotMatch(note, /should|missed|failed|only logged/i, "never blames the athlete for a thin week");
+});
+
+test("a target that does not move the number says nothing new about arithmetic", () => {
+  seedProfile();
+  repo.setNutritionTarget({ target_kcal: 2400, protein_g: 180, source: "checkin", note: "First target." });
+  repo.setNutritionTarget({
+    target_kcal: 2400,
+    protein_g: 195,
+    source: "checkin",
+    note: "Protein up, energy unchanged.",
+    effective_date: localDaysAgo(-1),
+  });
+  const rows = db.prepare(`SELECT note FROM nutrition_targets ORDER BY id DESC LIMIT 1`).all();
+  assert.equal(rows[0].note, "Protein up, energy unchanged.", "an unchanged kcal target appends no basis line");
 });
