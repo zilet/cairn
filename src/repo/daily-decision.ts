@@ -20,6 +20,7 @@ import { planDayProgression, recentAutoregulation } from "./progression.js";
 import { personalResponseModifierFor } from "./reaction-model.js";
 import { adaptBasePlanDayForRecovery, recoveryCycleAt } from "./recovery-cycles.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
+import { sensorIsCurrent } from "./sensor-freshness.js";
 import { addDaysISO, localDateISO } from "./shared.js";
 import {
   getTrainingIntent,
@@ -372,17 +373,20 @@ function driftOf(value: unknown): "down" | "flat" | "up" | null {
   return "flat";
 }
 
-function recoveryReadiness(recovery: any): "low" | "moderate" | "high" | null {
+// Readiness is a CURRENT decision signal only when its dated reading is within
+// the sensor's freshness horizon of the day being read (see sensor-freshness.ts
+// — matches day-read.ts's own readiness gate). A stale reading behaves exactly
+// as absent: it must not silently fall through to the 14-day average, which
+// would let an old datum keep driving the volume clamp under a different name.
+function recoveryReadiness(recovery: any, asOf: string): "low" | "moderate" | "high" | null {
   const r = recovery?.recovery ?? recovery ?? {};
-  const candidates = [r.training_readiness, r.avg_training_readiness, recovery?.quality?.training_readiness];
-  for (const c of candidates) {
-    const n = finite(c);
-    if (n == null) continue;
-    if (n >= 66) return "high";
-    if (n >= 40) return "moderate";
-    return "low";
-  }
-  return null;
+  const readinessDate = recovery?.quality?.training_readiness?.latest_date ?? null;
+  if (!sensorIsCurrent("training_readiness", readinessDate, asOf)) return null;
+  const n = finite(r.training_readiness);
+  if (n == null) return null;
+  if (n >= 66) return "high";
+  if (n >= 40) return "moderate";
+  return "low";
 }
 
 const ILLNESS_RE = /\b(ill|sick|flu|cold|fever|covid|infection|unwell)\b/i;
@@ -600,7 +604,7 @@ export function gatherDailyDecisionSnapshot(
     },
     recovery: {
       has_data: recoverySummary?.has_data === true,
-      readiness: recoveryReadiness(recoverySummary),
+      readiness: recoveryReadiness(recoverySummary, d),
       hrv_drift: driftOf(recoverySummary?.delta?.hrv),
       rhr_drift: driftOf(recoverySummary?.delta?.rhr),
       sleep_drift: driftOf(recoverySummary?.delta?.sleep),
