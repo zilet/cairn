@@ -5,6 +5,55 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [1.7.1] — 2026-08-04
+
+The theme of this patch is accountability in both directions. The brain already knew how to lower
+your training volume to protect recovery or fuelling; now every set it takes away is owed back, said
+out loud, and returned when the reason passes — and everything it is still holding for your decision
+has a place where you can actually see it. Underneath, the signals it reasons from got another round
+of honesty: a lab marker's age is judged by what kind of marker it is, a stale readiness number
+behaves as absent, and a calorie target arrives with its arithmetic instead of as a bare number.
+
+### Added
+
+- **A cut set is owed back** — when the brain reduces an exercise's sets (to protect fuelling, for
+  example), it now steps down at most one set at a time, announces the change instead of applying it
+  quietly, and records a debt: once fuelling settles and the day reads "proceed", it proposes the
+  climb back, one step per week boundary. Editing the exercise yourself clears the debt — your hand
+  always wins.
+- **"Waiting on you"** — decisions the coaching brain is holding for your call no longer age off the
+  bottom of the Changes feed. A new block beside the plan's forward note (plus an API endpoint and
+  MCP tool) lists everything still waiting, each in the plain sentence the case conference wrote for
+  you — and it stays until you resolve it.
+- **A calorie target shows its work** — when a nutrition target moves, the note now carries the
+  arithmetic behind it: your logged intake over the last three weeks, your weight trend over the same
+  window, and the maintenance those two imply. Thin logging gets an honest "confidence is lower"
+  line, never blame.
+- **Plan rewrites explain themselves per movement** — a full program restructure now records what
+  each exercise looked like before and after, so the Changes screen can say exactly what moved
+  instead of only that "the plan changed".
+- **A marker's age is judged by its kind** — genetic results never go stale, slow-moving markers
+  keep their standing for months, fast-moving ones are doubted sooner. Lab findings re-derive daily
+  so a directive is always built from readings that are still current.
+- **Push drive answers with the work that's due** — a stacked-days rest suggestion now comes with
+  the targeted work that has genuinely accumulated, not a blanket day off (from the preceding
+  rounds, first released here).
+- **The Apple Health Shortcut ships signed in the repo** — install works with zero configuration.
+
+### Fixed
+
+- A stale training-readiness reading can no longer steer today's decision — it behaves as absent,
+  like every other wearable signal, and the rolling-average back door is closed.
+- The learning ledger can reach conclusions again: predictions survive recomputes, verdicts land on
+  the decision that owns the metric, and trust adjustments stay within the same signal source.
+- Interpretation stops outrunning its evidence — what the model is told and what you read both stay
+  inside what was actually observed, and cautions are built only from readings that are still
+  current.
+- A rest-day session keeps its movements, and the last of the old pain mini-forms is gone — pain is
+  reported in your own words.
+- Two wearable-absence phrasings could collapse into the same sentence on the same morning; the
+  "nights" voice now has its own words.
+
 ## [1.7.0] — 2026-07-30
 
 Several connected rounds land here, and they share one direction: the coaching brain got harder to
