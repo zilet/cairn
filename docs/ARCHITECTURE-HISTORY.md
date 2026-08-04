@@ -4,6 +4,37 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-08-04 — a volume cut is owed back
+
+No schema change (`user_version` stays 91). Service worker `cairn-v543`.
+
+**Training volume gets a floor and a road back up.** Progressive overload only ever moves load and
+reps, so nothing in the push ladder could raise a plan item's `sets` back — a repeated
+fuel-protection deload halved it forever with no bottom. `src/repo/volume-guard.ts` caps an applied
+`changes[]` set-reduction to one per revision (measured against a pre-apply snapshot, so a payload
+repeating one item can't each take their own step; manual edits and the `parsed.days` restructure
+path are exempt by design — the restructure now reclassifies quiet_apply→announce whenever it lowers
+volume, via a deterministic detector in `case-conference.ts`). Every cut records a cause-tagged
+restore debt (`fuel` vs. `policy`) on its decision; only fuel-caused debt is auto-restored, one set
+per item per boundary, once the underfueling loop's own training action reads `proceed` — routed
+through the ordinary propose→apply path at `announce`, never quiet, and voided the moment the
+athlete moves the item themselves.
+
+**A restructure finally explains itself per movement.** `planPrescriptionSnapshot()` /
+`planPrescriptionDiff()` (`src/repo/plan.ts`) diff every strength prescription across a `parsed.days`
+rewrite, so `brain_change_before`/`brain_change_reason` reach the plan surface the way a targeted
+change already did.
+
+**The waiting surface.** `awaitingBrainDecisions()` surfaces held/observed decisions that carry the
+case conference's own athlete-facing sentence (`action.user_explanation`), across every domain,
+un-windowed — a hold stays until it resolves. `GET /api/brain/decisions/waiting` and MCP
+`list_waiting_brain_decisions` expose it.
+
+**Two smaller closures.** `recoveryReadiness()` now honors `sensorIsCurrent()` instead of falling
+back to a stale-average readiness score. `nutritionTargetBasisLine()` appends the trailing-21-day
+intake/weight/maintenance arithmetic (or an honest thin-data disclosure) to a nutrition target's
+note whenever the kcal number actually moves.
+
 ## 2026-08-03 — the brain stops lying to itself about time
 
 Four rounds in one day. Migrations **v89** (`settings-training-drive`), **v90**

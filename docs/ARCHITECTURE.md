@@ -1408,6 +1408,53 @@ decision parks in `review`, never blocks the pass) with exact three-way-merge Un
 change/domain/week surprise budget, and 90-day veto-rate demotion. The clinician floor is
 deterministic — a conductor cannot self-attest it away (`src/domain/brain/case-conference.ts`).
 
+**Training volume has no ladder back up, so a cut has to be owed back.** Progressive overload only
+ever moves load and reps; nothing in the push ladder can raise a plan item's `sets`, so a repeated
+fuel-protection deload (`applyFuelProtection`, `src/repo/progression.ts`) used to halve it forever —
+5 → 3 → 2 → 1 with no floor. `src/repo/volume-guard.ts` bounds the incremental apply path
+(`applyPlanChange` in `src/repo/plan.ts`) to at most one set of reduction per revision, measured
+against a `revision_baseline` snapshot taken before the revision's own `changes[]` are walked — so a
+payload naming the same day+exercise three times can't each take their own step. A `parsed.days`
+restructure deliberately bypasses the step clamp (it rewrites the whole template, not one item) and
+is instead reclassified `training_structure` in `case-conference.ts` whenever `changesReduceSets()`
+detects a volume-lowering `plan_update`, which routes it to announce/ask rather than the tier meant
+for one lift's load nudge. Every cut is recorded on its decision's `action_json` as a cause-tagged
+restore debt (`fuel` from the fuel-protection path, `policy` for everything else — pain, a deload
+block, a manual edit) via `volumeRestoreLedger()`; only `fuel`-caused debt is auto-restored, one set
+per item per boundary, by `runUnderfuelingControlLoop()` the moment its own training action reads
+`proceed` (`buildVolumeRestoreProposal()` → the ordinary propose→apply path at `announce`, never
+quiet). A manual edit since the cut voids that item's debt — `openVolumeRestoreTargets()` drops an
+item the moment the live plan no longer matches what Cairn last left it at.
+
+A restructure also now carries per-movement provenance it never had: `planPrescriptionSnapshot()` /
+`planPrescriptionDiff()` (`src/repo/plan.ts`) snapshot every strength prescription before
+`replacePlan()` and diff after, so `brain_change_before`/`brain_change_reason` light up on the plan
+surface the same way a targeted change already did, instead of a restructure landing as "the plan is
+different" with no reason attached anywhere.
+
+**The waiting surface answers "what is Cairn holding for me."** `awaitingBrainDecisions()`
+(`src/repo/brain-decisions.ts`) reads `review`/`observed` decisions that carry a genuine
+`action.user_explanation` — the sentence the case conference already writes per decision but nothing
+previously read — deny-listing `health_directive` (re-derived from markers daily, has its own
+surface) and `day_read` (the Brief already speaks it). It is deliberately NOT time-windowed: a hold
+is an open question, not an event that recedes into history. `GET /api/brain/decisions/waiting` and
+MCP `list_waiting_brain_decisions` expose it; `listBrainDecisions` gained a `listReadableBrainDecisions`
+sibling that lifts the same `user_explanation` onto the general decision list.
+
+**Readiness joins the sensor-freshness law it had quietly skipped.** `recoveryReadiness()`
+(`src/repo/daily-decision.ts`) used to fall back to a 14-day average when the latest
+`training_readiness` reading was stale, which let an old datum keep driving the volume clamp under a
+different name. It now runs through `sensorIsCurrent()` (`src/repo/sensor-freshness.ts`) against the
+reading's own date — stale behaves exactly as absent, matching `day-read.ts`'s own gate — with no
+average fallback.
+
+**A target the athlete didn't pick carries its own arithmetic.** `nutritionTargetBasisLine()`
+(`src/repo/nutrition.ts`) appends a disclosure to `setNutritionTarget()`'s stored `note` whenever the
+kcal number actually moves: the trailing-21-day logged-intake average, the measured weight trend, and
+the maintenance those two imply (`estimateExpenditure`) — or, when logging is too thin to settle,
+a plain statement of how much evidence there is and that confidence stays lower. Adherence-neutral by
+construction: thin logging loosens the estimate, never assigns blame.
+
 Depth on demand: nine read-only capabilities (`src/brain/read-tools.ts`) behind the server-owned
 bounded query loop in `src/runChosen.ts`. The whole-person trajectory
 (`src/repo/whole-person-trajectory.ts`) drives revision conferences from the scheduler. Nutrition
