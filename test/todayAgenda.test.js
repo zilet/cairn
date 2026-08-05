@@ -352,7 +352,7 @@ test("more than TODAY_PRIMARY_MAX candidates → exactly MAX primary, rest in mo
   // Garmin strength activity with no linked session (isStrengthGarminType matches
   // 'strength_training'); date is today so it falls in the 30-day window. Foreign
   // keys are ON, so seed a real source first and reference its id.
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDaysAgo(0);
   const src = repo.upsertGarminSource({ label: "default" });
   db.prepare(
     `INSERT INTO garmin_activities (source_id, external_id, type, name, date, session_id)

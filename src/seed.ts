@@ -1,4 +1,4 @@
-import { db } from "./db.js";
+import { db, todayISO } from "./db.js";
 import { installSeedArt } from "./art.js";
 
 // [name, muscle_group, constraint_note, form_cues]
@@ -134,7 +134,7 @@ export function seed(options: { blankProfile?: boolean } = {}) {
   // At 70in, waist 35.8in and neck 15.5in produce a ~20% Navy tape estimate.
   // The remaining circumferences are intentionally ordinary, not an aspirational
   // physique and not derived targets; users replace them with their own tape.
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayISO();
   db.prepare(
     `INSERT INTO body_measurements
       (date, waist_in, hip_in, chest_in, shoulder_in, neck_in, thigh_in, upper_arm_in, calf_in, forearm_in, note, source)

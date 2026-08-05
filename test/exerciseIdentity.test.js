@@ -11,8 +11,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { reconcileExercises } from "../dist/coachOps.js";
 import { db, repo, isoDaysAgo } from "./_seed.js";
+import { localDateISO } from "../dist/repo/shared.js";
 
-const TODAY = new Date().toISOString().slice(0, 10);
+// Local frame, NOT UTC — isoDaysAgo and the repo's day keys are local, so a UTC
+// TODAY here would land sets on a different day every evening.
+const TODAY = localDateISO();
 
 function logReps(exercise, weight, reps, date) {
   repo.logSetByName({ exercise, weight, reps, date });

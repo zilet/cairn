@@ -21,7 +21,10 @@ import {
 import { localDateISO } from "../dist/repo/shared.js";
 import { runWithTimeZone } from "../dist/tz.js";
 
-const TODAY = new Date().toISOString().slice(0, 10);
+// Local frame, NOT UTC: the omitted-date food note gets localDateISO() from the
+// repo, so a UTC TODAY would query a different day every evening. (The explicit
+// utcToday in the timezone test below is the one deliberate UTC framing.)
+const TODAY = localDateISO();
 
 function reset() {
   for (const t of [

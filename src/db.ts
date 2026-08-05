@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runMigrations } from "./migrate.js";
+import { localDateISO } from "./repo/shared.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "..", "data");
@@ -1523,6 +1524,9 @@ CREATE INDEX IF NOT EXISTS idx_chat_turns_build_created
 CREATE INDEX IF NOT EXISTS idx_insights_intent_key ON insights(intent_key);
 `);
 
+// The LOCAL calendar day, never the UTC one: every caller uses this to day-key
+// rows or frame "today" windows, and the repo's law is UTC instants, local-day
+// keying — a UTC date here is tomorrow's key every evening once UTC rolls over.
 export function todayISO(): string {
-  return new Date().toISOString().slice(0, 10);
+  return localDateISO();
 }

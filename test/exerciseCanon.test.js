@@ -9,6 +9,7 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo } from "./_seed.js";
+import { localDateISO } from "../dist/repo/shared.js";
 
 beforeEach(() => {
   try { db.prepare("DELETE FROM logged_sets").run(); } catch { /* ok */ }
@@ -242,7 +243,7 @@ test("getProgress: assisted lift (negative weight) with known bodyweight gives n
   } catch { /* ok */ }
 
   const ex = repo.upsertExercise({ name: "Assisted Pull-Up", muscle_group: "back" });
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateISO();
   const sess = repo.getOrCreateSession(today);
   // -30 means 30 lb assist; effective load = 185 - 30 = 155 lb for Epley.
   db.prepare(
@@ -265,7 +266,7 @@ test("getProgress: assisted lift without known bodyweight yields null best1rm, n
   } catch { /* ok if profile doesn't exist */ }
 
   const ex = repo.upsertExercise({ name: "Machine Assisted Dip", muscle_group: "chest" });
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateISO();
   const sess = repo.getOrCreateSession(today);
   db.prepare(
     "INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps) VALUES (?, ?, 1, -20, 10)"
@@ -285,7 +286,7 @@ test("getProgress: assisted lift without known bodyweight yields null best1rm, n
 
 test("getProgress: regular positive-weight lift still computes a valid best1rm", () => {
   const ex = repo.upsertExercise({ name: "Barbell Bench Press", muscle_group: "chest" });
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateISO();
   const sess = repo.getOrCreateSession(today);
   db.prepare(
     "INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps) VALUES (?, ?, 1, 135, 8)"
@@ -366,7 +367,7 @@ test("planExerciseAliases (pure validator) folds messy variants onto a clean can
 
 test("distinctExerciseNames returns logged/planned movements with group + usage context", () => {
   const ex = repo.findOrCreateExercise("Barbell Bench Press", "chest");
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateISO();
   const sess = repo.getOrCreateSession(today);
   db.prepare("INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps) VALUES (?, ?, 1, 135, 8)").run(sess.id, ex.id);
   db.prepare("INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps) VALUES (?, ?, 2, 135, 8)").run(sess.id, ex.id);

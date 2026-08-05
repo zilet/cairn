@@ -1,4 +1,5 @@
 import { db } from "../db.js";
+import { localDateISO } from "./shared.js";
 import { EVIDENCE_PACK } from "../evidencePack.js";
 import {
   downgradedEvidenceConfidence,
@@ -101,7 +102,7 @@ export function addEvidence(fields: EvidenceInput) {
   const sourceUrl = rawUrl && plausibleEvidenceUrl(rawUrl) ? rawUrl : null;
   const confidence = EVIDENCE_CONFIDENCE.has(String(fields.confidence)) ? String(fields.confidence) : "moderate";
   const sourceScope = normalizeEvidenceScope(fields.source_scope);
-  const reviewedAt = normalizeEvidenceDate(fields.reviewed_at) ?? new Date().toISOString().slice(0, 10);
+  const reviewedAt = normalizeEvidenceDate(fields.reviewed_at) ?? localDateISO();
   const expiryDays = sourceScope === "clinician" ? 365 : 90;
   const expiresAt = normalizeEvidenceDate(fields.expires_at) ?? datePlusDays(reviewedAt, expiryDays);
   const publishedAt = normalizeEvidenceDate(fields.published_at);

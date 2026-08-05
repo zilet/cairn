@@ -19,6 +19,7 @@
 import { existsSync } from "node:fs";
 import { BUNDLES } from "../scripts/build-client.mjs";
 import { serverEntry, withServer } from "../scripts/smoke-server.mjs";
+import { localDateISO } from "../dist/repo/shared.js";
 
 // The app shell boots via the LAST bundle (it carries the 10-boot shim). Derive
 // it from the build manifest so a bundle rename/reshape can't silently break this.
@@ -167,7 +168,7 @@ async function runOpenSmoke(ctx) {
 
   // 8) Log a set, then read it back via the session-by-date lookup. Asserts the
   //    logged_set round-trips with the right exercise/weight/reps and est-1RM.
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateISO();
   {
     const post = await getJson(base, "/api/sets", {
       method: "POST",

@@ -197,7 +197,7 @@ function nightRecovery(date: string): { sleep_min: number | null; hrv_ms: number
 // there isn't enough data to anchor an event comparison against.
 function sleepBaseline(): { avg_min: number | null; n: number } {
   try {
-    const since = isoDaysAgo(new Date().toISOString().slice(0, 10), 30);
+    const since = isoDaysAgo(localDateISO(), 30);
     const g = db
       .prepare(
         `SELECT ROUND(AVG(sleep_min),1) AS a, COUNT(*) AS n FROM garmin_daily_metrics WHERE date >= ? AND sleep_min IS NOT NULL AND sleep_min > 0`
@@ -780,7 +780,7 @@ function weekAvgRestingHr(endISO: string): number | null {
 }
 
 function mileageRecovery(): ReactionPattern | null {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateISO();
   const weeks: Array<{ km: number; rhrDelta: number }> = [];
   let lastObserved: string | null = null;
   // Consecutive 7-day windows, most recent first. Week w ends at today−w·7; its
@@ -828,7 +828,7 @@ function mileageRecovery(): ReactionPattern | null {
 const EASY_TE_LABELS = new Set(["RECOVERY", "BASE", "EASY", "AEROBIC_BASE", "LOW_AEROBIC"]);
 
 function easyPaceEfficiency(): ReactionPattern | null {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateISO();
   const since = isoDaysAgo(today, 120);
   const sport = activitySportWhere("a", RUN_SPORT_PATTERNS);
   let rows: any[] = [];

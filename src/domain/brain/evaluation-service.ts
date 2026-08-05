@@ -357,7 +357,7 @@ function candidateExpectationIds(asOf: string, limit: number): number[] {
  * duplicate rows; changed evidence appends a new evaluation and preserves history.
  */
 export function evaluateMatureExpectations(
-  asOf = new Date().toISOString().slice(0, 10),
+  asOf = localDateISO(),
   options: { limit?: number } = {}
 ): EvaluationRunSummary {
   const date = isoDate(asOf);

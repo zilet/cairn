@@ -18,6 +18,7 @@ import { insertBrainEvaluation } from "../dist/repo/brain-evaluations.js";
 import { getAttentionSchedule, listAttentionBySource } from "../dist/repo/attention.js";
 import { teamWeekRead } from "../dist/repo/team-week.js";
 import { violatesReadingGrammar } from "../dist/repo/day-read.js";
+import { localDateISO } from "../dist/repo/shared.js";
 import {
   releaseStaleExpectationFollowups,
   surfaceExpectationMisses,
@@ -157,7 +158,9 @@ test("a parked prediction thaws onto the decision that finally applies the propo
     (e) => e.metric_key === "plan_day_adherence" && e.evaluator_version === "case-conference-v1"
   );
   assert.ok(thawed, "the conference prediction reached the change that actually happened");
-  const today = new Date().toISOString().slice(0, 10);
+  // Local frame, NOT UTC: window_start is a local day key, and toISOString()
+  // is a day ahead of it every evening once UTC has rolled over.
+  const today = localDateISO();
   assert.equal(thawed.window_start, today, "the window starts the day the change landed");
   assert.notEqual(thawed.window_start, "2026-01-01");
 });

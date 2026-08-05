@@ -177,7 +177,7 @@ function brainAggregateMetrics() {
       MATERIAL_KINDS.has(String(row.kind)) && !["rejected", "canceled", "superseded"].includes(String(row.status))
   );
   const materialWithExpectations = activeMaterial.filter((row) => expectationDecisionIds.has(Number(row.id))).length;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateISO();
   const matured = expectations.filter(
     (row) => String(row.window_end) <= today && !RETIRED_STATUSES.has(String(row.status))
   );

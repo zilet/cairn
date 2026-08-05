@@ -354,7 +354,7 @@ export function buildDayReadPrompt(
   // Brief-override rhythm on this weekday (pre-acknowledge, never gate), a persistent
   // check-in read, or how a recent fuel change has felt. Calm, humble, adherence-
   // neutral; "" when there's nothing to say.
-  const feltDate = opts.date || (context as any).now?.date || new Date().toISOString().slice(0, 10);
+  const feltDate = opts.date || (context as any).now?.date || localDateISO();
   let feltBlock = "";
   try {
     const feltLines = repo.feltSignalDayLines(feltDate, (context as any).felt_signals?.patterns);
@@ -479,7 +479,7 @@ export function buildDayReadPrompt(
 - Do NOT propose more training unless they ask. The day's work is in.
 - "headline": acknowledge the WORK specifically — name what they actually did (a standout lift from SESSION TODAY, or the run/ride from CARDIO TODAY with its real effort) like a friend who watched you train, e.g. "Strong push session." / "Solid 6 km — you pushed that one.". If CARDIO TODAY shows a hard effort (high avg HR), don't call it "easy".
 - "why": for a DONE day you MAY use 2-3 short sentences (the one exception to one-sentence): (1) how today fits the week's rhythm, (2) ONE forward focus — what the next session leans toward / what's DUE, (3) a brief refuel nudge ONLY if FUEL shows a real protein gap. Warm, plain, never a number-wall or a score.
-- Output "kind":"done", "focus":null, "est_minutes":null. DONE is a factual temporal state, not another easy-day recommendation.${debriefFacts(opts.date || context.now?.date || new Date().toISOString().slice(0, 10))}`
+- Output "kind":"done", "focus":null, "est_minutes":null. DONE is a factual temporal state, not another easy-day recommendation.${debriefFacts(opts.date || context.now?.date || localDateISO())}`
       : "";
   return `${CAIRN_PERSONA}
 
