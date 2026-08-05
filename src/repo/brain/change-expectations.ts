@@ -4,6 +4,7 @@ import {
   normalizeProposedExpectation,
 } from "../../brain/expectation-contract.js";
 import { addDaysISO } from "../shared.js";
+import { verifiedStrengthAnchor } from "../calibration.js";
 
 // The "did this change actually help?" writers.
 //
@@ -195,6 +196,13 @@ export interface LiftProgressionSubject {
   exercise: string;
   exercise_id: number;
   baseline_est_1rm: number;
+  /**
+   * Where the baseline number came from. Optional so every existing construction
+   * site stays valid; absent reads as "estimated", which is what it was.
+   */
+  baseline_basis?: "verified_top_set" | "estimated";
+  /** The day a heavy set stood behind the baseline, when one did. */
+  verified_on?: string | null;
 }
 
 /**
@@ -202,6 +210,17 @@ export interface LiftProgressionSubject {
  * non-timed movement with enough loaded history behind it to have a baseline.
  * Anything else is filtered out silently — this is a data-presence gate, not a
  * judgement about the lift.
+ *
+ * The baseline PREFERS a fresh verified top set over the Epley best. The
+ * prediction written below is "this load step should hold", and it is only worth
+ * writing against a number the athlete has actually stood under: an Epley
+ * estimate extrapolated from sets of five is a ceiling nobody has tested, and a
+ * plan that progresses off it writes a hold expectation that can miss forever —
+ * easing the step, teaching the ledger a false lesson about the lift, and
+ * shrinking the program on evidence that was never real. When a heavy set has
+ * confirmed the estimate recently, that is the number the claim is made against.
+ * See verifiedStrengthAnchor for why this holds even when the verified number is
+ * LOWER than the running estimate.
  */
 export function liftProgressionSubjects(exercises: string[], asOf: string, limit = 3): LiftProgressionSubject[] {
   const out: LiftProgressionSubject[] = [];
@@ -214,12 +233,32 @@ export function liftProgressionSubjects(exercises: string[], asOf: string, limit
       | { id: number; name: string; mode: string | null }
       | undefined;
     if (!row || String(row.mode ?? "reps") === "timed") continue;
-    const baseline = recentEst1rm(Number(row.id), asOf);
-    if (baseline == null) continue;
-    out.push({ exercise: String(row.name), exercise_id: Number(row.id), baseline_est_1rm: baseline });
+    const estimated = recentEst1rm(Number(row.id), asOf);
+    // No loaded history at all means nothing to predict about, whatever the
+    // calibration ladder remembers — the data-presence gate is unchanged.
+    if (estimated == null) continue;
+    const verified = attemptedAnchor(String(row.name), asOf);
+    out.push({
+      exercise: String(row.name),
+      exercise_id: Number(row.id),
+      baseline_est_1rm: verified ? rounded(verified.est_1rm, 1) : estimated,
+      baseline_basis: verified ? "verified_top_set" : "estimated",
+      verified_on: verified?.anchored_on ?? null,
+    });
     if (out.length >= limit) break;
   }
   return out;
+}
+
+// The calibration ladder is an enhancement to this writer, never a dependency of
+// it: a DB without the ledger's tables, or an unreadable one, must still be able
+// to write the estimated-baseline expectation it always wrote.
+function attemptedAnchor(exerciseName: string, asOf: string): { est_1rm: number; anchored_on: string } | null {
+  try {
+    return verifiedStrengthAnchor(exerciseName, asOf);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -228,6 +267,10 @@ export function liftProgressionSubjects(exercises: string[], asOf: string, limit
  * should not fall meaningfully below where it stood when the step was made.
  * A 3% floor absorbs ordinary day-to-day variation; a real regression below it
  * is the signal that the progression outran the athlete.
+ *
+ * `baseline.basis` and `baseline.verified_on` travel with the claim so the
+ * evaluator can tell, months later, whether the number it is judging against was
+ * ever confirmed by a heavy set — see exerciseEst1rmObservation.
  */
 export function buildLiftProgressionExpectations(
   subjects: LiftProgressionSubject[],
@@ -238,7 +281,12 @@ export function buildLiftProgressionExpectations(
     metric_key: "exercise_est_1rm_trend",
     subject_key: subject.exercise,
     direction: "at_least",
-    baseline: { est_1rm: subject.baseline_est_1rm, lookback_days: LOOKBACK_DAYS },
+    baseline: {
+      est_1rm: subject.baseline_est_1rm,
+      lookback_days: LOOKBACK_DAYS,
+      basis: subject.baseline_basis ?? "estimated",
+      verified_on: subject.verified_on ?? null,
+    },
     target: { value: rounded(subject.baseline_est_1rm * 0.97, 1) },
     window_start: asOf,
     window_end: windowEnd,
@@ -246,7 +294,7 @@ export function buildLiftProgressionExpectations(
     confounder_policy: "require_exposure",
     confidence: "tentative",
     evaluator: "exercise_est_1rm",
-    evaluator_version: "lift-progression-hold-v1",
+    evaluator_version: "lift-progression-hold-v2",
   }));
 }
 

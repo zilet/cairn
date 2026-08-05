@@ -35,8 +35,10 @@ import {
   type EnduranceState,
   getProgramState,
   type ProgramState,
+  strengthBlockPeaking,
   weeklyKm as recordedWeeklyKm,
 } from "./program-state.js";
+import { legLoadGroupsPhrase, NO_LEG_LOAD, type StrengthLegLoad, strengthLegLoad } from "./hybrid-load.js";
 import { createProposal, getEnduranceGoal, getProfile, supersedeAutoRunPlanDrafts } from "./profile.js";
 import { applyPersonalResponseModifier, personalResponseModifierFor } from "./reaction-model.js";
 import {
@@ -64,6 +66,9 @@ function mondayOf(dateISO: string): string {
 }
 function isoDaysAgo(dateISO: string, n: number): string {
   return new Date(new Date(dateISO + "T00:00:00Z").getTime() - n * 864e5).toISOString().slice(0, 10);
+}
+function shiftDaysISO(dateISO: string, n: number): string {
+  return isoDaysAgo(dateISO, -n);
 }
 function round1(n: number): number {
   return Math.round(n * 10) / 10;
@@ -429,6 +434,60 @@ export const RACE_VS_SUPPORTING_VARIANTS = [
   "Two things you've told Cairn: a time to chase, and running kept light. The week follows the lighter setting and leaves the run days where they are.",
 ] as const;
 
+// ---- the other direction of the hybrid read ---------------------------------
+// Endurance load has always reached strength decisions in real time (hybrid-load's
+// muscleResidual / acuteGate feed progression's autoregulation brake). The reverse
+// was a calendar lookup: the run builder read the plan's fixed leg-day WEEKDAY slots
+// and never asked what the legs were actually carrying — so a long-run step-up and a
+// race-ramp pull could both land on top of a leg day that had already happened.
+//
+// These sentences say the deferral out loud. Variant SETS, like every athlete-facing
+// string here: a stable situation fires the same branch every Monday, and one literal
+// printed for a month reads as a broken app rather than a coach.
+export const LEG_LOAD_LONG_DEFER_VARIANTS: ReadonlyArray<(what: string) => string> = [
+  (what) =>
+    `Holding the long run at the distance it's already at — ${what} are still carrying your recent lifting, and the extra kilometres land better once that's cleared.`,
+  (what) =>
+    `${cap1(what)} haven't let go of the lifting yet, so the long run keeps its current distance this week rather than stepping up.`,
+  (what) =>
+    `The long run stays where it is: the last lower-body session is still in ${what}, and a longer day stacked on top of it costs more than it gives.`,
+  (what) =>
+    `Leaving the long run as it is this week — ${what} are still working through the weights, and they'll take a step up better once they have.`,
+];
+
+export const LEG_LOAD_PULL_DEFER_VARIANTS: ReadonlyArray<(what: string) => string> = [
+  (what) =>
+    `Keeping the weekly step at the usual size rather than stretching it for the race — ${what} are still carrying your recent lifting, and absorbing that is what makes the next step count.`,
+  (what) =>
+    `The race would take a slightly bigger week, but the last lower-body session is still sitting in ${what} — this week takes the ordinary step and adds nothing on top.`,
+  (what) =>
+    `Not reaching for extra mileage this week: ${what} haven't cleared the weights yet, and a bigger step off tired legs is the one that gets paid for later.`,
+  (what) =>
+    `Ordinary step this week instead of the race-sized one — ${what} are still working through your lifting, and the build keeps better when it waits for them.`,
+];
+
+// The same deferral, when the LIFTING block is the reason. A strength block at its
+// heaviest or in its peak week is already the week's big ask; a mileage step on top
+// is two peaks in one week.
+export const STRENGTH_PEAK_PULL_DEFER_VARIANTS: ReadonlyArray<(phase: string) => string> = [
+  (phase) =>
+    `Your lifting block is in its ${phase} weeks, so the mileage takes its ordinary step rather than a race-sized one — two big asks in one week is one too many.`,
+  (phase) =>
+    `The race would take a bigger week, but the strength block is at its ${phase} right now — the running holds its usual step and lets the lifting have the week.`,
+  (phase) =>
+    `Keeping the weekly running step ordinary while the lifting block works through its ${phase} — the race build picks the extra back up once that's behind you.`,
+  (phase) =>
+    `Strength is at its ${phase} this block, so the run build doesn't stretch this week; it steps as usual and waits for a quieter one.`,
+];
+
+// Placement, when the fatigue read (not the calendar) is what moved a day.
+export const LEG_LOAD_PLACEMENT_VARIANTS: ReadonlyArray<(what: string) => string> = [
+  (what) => `Pushed the hard running later into the week — ${what} open it still carrying the weights.`,
+  (what) => `The week starts with lifting still in ${what}, so the demanding runs sit further down it.`,
+  (what) => `Moved the harder running days back a little: ${what} haven't cleared the last lower-body session.`,
+  (what) => `The quality running lands later this week, since ${what} begin it still loaded from the weights.`,
+];
+
 // Quality-session candidates per periodization phase (rotated deterministically by
 // week ordinal so it cycles without app_state side-effects on a read).
 const QUALITY_BY_PHASE: Record<string, ("tempo" | "threshold" | "vo2" | "hills")[]> = {
@@ -604,6 +663,16 @@ export function weeklyRunPlan(
     // logged km and the shortfall can never appear. Point it at the week boundary
     // to anchor on the volume that was already in the bank when the week started.
     volumeAnchorDate?: string;
+    // What the LIFTING has left in the running legs, as of the PLAN date (deliberately
+    // NOT the volume anchor — this is a physiological read of now, not a volume ledger).
+    // Omit and it is derived; pass null to read the week as if nothing were logged.
+    // Absence is neutral by construction: no lower-body strength residual → NO_LEG_LOAD
+    // → every branch below behaves exactly as it did before this existed.
+    //
+    // Supplying it explicitly overrides BOTH reads (see legLoadAtLong below) — an
+    // injected load is "read the week as if the legs were like this", not a claim
+    // about one particular day of it.
+    legLoad?: StrengthLegLoad | null;
   }
 ): WeeklyRunPlan {
   const d = date || localDateISO();
@@ -680,6 +749,74 @@ export function weeklyRunPlan(
   ).filter(isEnduranceHoldDirective);
   const firmHold = enduranceHolds.find((d: any) => !d.uncertain) ?? null;
   const softHold = enduranceHolds[0] ?? null;
+
+  // Which weekday the long run is destined for. Read here, before anything sizes the
+  // week, because the leg-load read below is anchored on it — and it is derived from
+  // the plan's lower-body days alone, so it is a property of the WEEK rather than of
+  // the day the question is asked. (The fatigue-aware slot preference further down
+  // may still move the run within the week; that one is allowed to change day to day,
+  // and it changes only WHICH day, never how far.)
+  let lowerDays: Set<number>;
+  try {
+    lowerDays = lowerBodyPlanDayNumbers();
+  } catch {
+    lowerDays = new Set();
+  }
+  const staticLongSlot = [6, 5, 7, 4].find((s) => !lowerDays.has(s)) ?? 6;
+  const longRunDate = shiftDaysISO(week_start, staticLongSlot - 1);
+
+  // What the running legs are carrying, and whether the LIFTING block is at its own
+  // peak. Read once here and consulted by the three decisions that can add running
+  // stress: the race pull, the long-run floor-raise, and where the hard days land.
+  //
+  // TWO reads, because the three decisions are asking two different questions.
+  //
+  // SIZE and the race pull are decisions about the whole WEEK, and they must not
+  // wobble inside it. The residual decays continuously and the saturated band has an
+  // edge, so a Monday leg day reads saturated on Monday and Tuesday, fresh on
+  // Wednesday, and saturated again after Thursday's session — and since this plan is
+  // rebuilt on every read, the same week's long-run distance and its stated reason
+  // changed between Tuesday and Wednesday with nothing logged in between. So those
+  // two decisions evaluate the residual DECAYED FORWARD to the day the long run
+  // actually lands on. A Monday leg day is four or five half-lives from a Saturday
+  // long run; it has no business shrinking it, and the answer now comes out the same
+  // whenever in the week you ask.
+  //
+  // PLACEMENT is a decision about today's legs — "the week OPENS still loaded, so the
+  // hard days sit further down it" — and that one SHOULD move day to day. It keeps
+  // the live read.
+  const legLoad: StrengthLegLoad =
+    opts?.legLoad === undefined
+      ? (() => {
+          try {
+            return strengthLegLoad(d);
+          } catch {
+            return NO_LEG_LOAD;
+          }
+        })()
+      : (opts.legLoad ?? NO_LEG_LOAD);
+  const legLoadAtLong: StrengthLegLoad =
+    opts?.legLoad === undefined
+      ? (() => {
+          try {
+            return strengthLegLoad(longRunDate);
+          } catch {
+            return NO_LEG_LOAD;
+          }
+        })()
+      : (opts.legLoad ?? NO_LEG_LOAD);
+  const legsSaturated = legLoadAtLong.saturated;
+  const legLoadPhrase = legLoadGroupsPhrase(legLoadAtLong);
+  const legLoadPlacementPhrase = legLoadGroupsPhrase(legLoad);
+  // Three decisions below can turn on this one cause, and three consecutive sentences
+  // opening "your quads and glutes…" is the kind of rationale a person stops reading.
+  // The two that change what the week ASKS FOR (the race pull, the long-run raise) each
+  // say their own piece — a held-back step the athlete can't see explained is worse than
+  // a repetitive paragraph. The placement nudge only moves WHICH day, so it stays quiet
+  // once either of those has already named the cause.
+  let legLoadSaid = false;
+  // A strength block in its heaviest or peak weeks is already the week's big ask.
+  const strengthPeaking = strengthBlockPeaking(block);
 
   // --- weekly volume target (periodized, conservative ~10% caps) ---
   // Anchor to what actually happened last week (or the chronic base), seed a gentle
@@ -781,9 +918,30 @@ export function weeklyRunPlan(
   // caught by the 0.9 cap afterwards, but softHold caps nothing — without this an
   // uncertain hold would be contradicted in the same breath by a race pull stepping
   // the build 1.10 → 1.12.
+  //
+  // Two more states suppress the pull the same way, and for the same reason a taper or
+  // a health hold does — the week already has as much on it as it should:
+  //   • the running legs are still SATURATED with recent work (E). The reactive floor
+  //     stands; the race simply doesn't get to add to it this week.
+  //   • the LIFTING block is in its intensification or realization weeks (F). The base
+  //     plan is untouched, exactly as on a non-standard-build week; only the extra
+  //     stretch is withheld.
+  // Leg load speaks first when both apply: it's the one that describes tissue rather
+  // than a calendar, and one sentence is enough.
   if (ramp && standardBuild && anchorKm > 0 && !softHold) {
     const pull = ramp.required_km / anchorKm;
-    if (pull > factor) {
+    if (pull > factor && legsSaturated) {
+      rationale.push(pickDayVariant(LEG_LOAD_PULL_DEFER_VARIANTS, d, "run-pull-leg-load")(legLoadPhrase));
+      legLoadSaid = true;
+    } else if (pull > factor && strengthPeaking) {
+      rationale.push(
+        pickDayVariant(
+          STRENGTH_PEAK_PULL_DEFER_VARIANTS,
+          d,
+          "run-pull-strength-peak"
+        )(block?.phase === "realization" ? "peak" : "heaviest")
+      );
+    } else if (pull > factor) {
       factor = Math.min(MAX_WEEKLY_BUILD_FACTOR, pull);
       rationale.push(
         `Stepping up a touch more than the usual 10% — ${goal?.event ? String(goal.event).slice(0, 60) : "your race"} is ${ramp.weeks_to_race} week${ramp.weeks_to_race === 1 ? "" : "s"} out, and this is the biggest step that still sits inside a safe build.`
@@ -949,7 +1107,16 @@ export function weeklyRunPlan(
   // The raise applies only when nothing protective is standing: a recovery/deload/
   // taper week or a health hold owns the long run outright, and a past long run is
   // not a reason to spend one during any of them.
-  const longSuppressed = taper || recoveryWeek || recoveryDown || !!firmHold || !!softHold;
+  //
+  // Saturated running legs suppress it too, and for exactly the same reason: what the
+  // athlete has demonstrated is still true, it just isn't a good week to spend it. The
+  // deferral is honest and temporary — the floor comes back the moment the legs do.
+  const protectiveSuppression = taper || recoveryWeek || recoveryDown || !!firmHold || !!softHold;
+  const longSuppressed = protectiveSuppression || legsSaturated;
+  if (legsSaturated && !protectiveSuppression && prevLong > 0) {
+    rationale.push(pickDayVariant(LEG_LOAD_LONG_DEFER_VARIANTS, d, "run-long-leg-load")(legLoadPhrase));
+    legLoadSaid = true;
+  }
   // The ramp's long-run curve is usable as a ceiling only when the ramp could see
   // the same demonstrated long the plan can. Seeded blind (no 4-week longest in the
   // endurance state) it would cap a real long run against an invented one.
@@ -993,33 +1160,61 @@ export function weeklyRunPlan(
   // day with no planned lower session — so the two big leg stimuli don't stack. Best-effort:
   // on a packed week we place anyway and note it. This only moves WHICH slot; it never
   // reorders or weakens the recovery gating / directive caps above (those stay final).
-  let lowerDays: Set<number>;
-  try {
-    lowerDays = lowerBodyPlanDayNumbers();
-  } catch {
-    lowerDays = new Set();
-  }
+  // `lowerDays` and the LONG run's default slot (late, and off a planned lower day)
+  // were both read above — the leg-load read is anchored on the day that slot lands.
   const dayAfterLower = new Set<number>();
   for (const n of lowerDays) if (n + 1 <= 7) dayAfterLower.add(n + 1);
 
-  // LONG run: default late (6); prefer a slot that is NOT a planned lower day.
-  const longSlot = [6, 5, 7, 4].find((s) => !lowerDays.has(s)) ?? 6;
   // QUALITY run: default mid-week (2); avoid the day right after a leg day, and keep it clear
   // of the long run (never adjacent → no two hard days back-to-back).
-  const qualitySlot =
-    [2, 3, 4, 5].find((s) => !dayAfterLower.has(s) && Math.abs(s - longSlot) >= 2) ??
-    [2, 3, 4, 5].find((s) => Math.abs(s - longSlot) >= 2) ??
+  const qualitySlotFor = (long: number): number =>
+    [2, 3, 4, 5].find((s) => !dayAfterLower.has(s) && Math.abs(s - long) >= 2) ??
+    [2, 3, 4, 5].find((s) => Math.abs(s - long) >= 2) ??
     2;
+  const staticQualitySlot = qualitySlotFor(staticLongSlot);
 
-  if (q && qualitySlot !== 2 && !dayAfterLower.has(qualitySlot)) {
-    rationale.push("Shifted the quality run off the day after your leg day so the hard efforts don't stack.");
-  } else if (q && dayAfterLower.has(qualitySlot)) {
-    rationale.push("The week's packed enough that the quality run still lands near a leg day — keep it controlled and well fuelled.");
+  // FATIGUE-AWARE preference on top of that calendar: the slots above answer "which day
+  // has no leg session PLANNED", which says nothing about what the legs are actually
+  // carrying into the week. When they open it still loaded from the weights, the
+  // demanding runs prefer to sit far enough down the week for that to have faded — one
+  // day per band, since the bands are roughly a half-life apart.
+  //
+  // Measured from day 1, not from the plan date: day_number is a Mon–Sun TEMPLATE for
+  // the whole week, not a countdown from today, so a plan rebuilt on Thursday must not
+  // shove every run into the weekend. Strictly a PREFERENCE — the static slot is the
+  // fallback, so a week with nowhere to move to is placed exactly as it always was, and
+  // a week with no lower-body lifting behind it never enters this branch at all (the
+  // floor is 0 and the filter is skipped).
+  const legRecoveryDays = legLoad.band === "saturated" ? 2 : legLoad.band === "loaded" ? 1 : 0;
+  const freshFloor = legRecoveryDays > 0 ? Math.min(7, 1 + legRecoveryDays) : 0;
+  const longSlot =
+    freshFloor > 0 ? ([6, 5, 7, 4].find((s) => !lowerDays.has(s) && s >= freshFloor) ?? staticLongSlot) : staticLongSlot;
+  const qualitySlot =
+    freshFloor > 0
+      ? ([2, 3, 4, 5].find((s) => !dayAfterLower.has(s) && Math.abs(s - longSlot) >= 2 && s >= freshFloor) ??
+        qualitySlotFor(longSlot))
+      : staticQualitySlot;
+
+  const qualityMovedByLegLoad = qualitySlot !== staticQualitySlot;
+  const longMovedByLegLoad = longSlot !== staticLongSlot;
+  if (((q && qualityMovedByLegLoad) || longMovedByLegLoad) && !legLoadSaid) {
+    rationale.push(pickDayVariant(LEG_LOAD_PLACEMENT_VARIANTS, d, "run-placement-leg-load")(legLoadPlacementPhrase));
   }
-  if (longSlot !== 6) {
-    rationale.push("Placed the long run clear of your planned leg days so the legs are fresh for it.");
-  } else if (lowerDays.has(6)) {
-    rationale.push("Couldn't fully separate the long run from a leg day this week — keep it easy so the legs stay honest.");
+  if (q && !qualityMovedByLegLoad) {
+    if (qualitySlot !== 2 && !dayAfterLower.has(qualitySlot)) {
+      rationale.push("Shifted the quality run off the day after your leg day so the hard efforts don't stack.");
+    } else if (dayAfterLower.has(qualitySlot)) {
+      rationale.push(
+        "The week's packed enough that the quality run still lands near a leg day — keep it controlled and well fuelled."
+      );
+    }
+  }
+  if (!longMovedByLegLoad) {
+    if (longSlot !== 6) {
+      rationale.push("Placed the long run clear of your planned leg days so the legs are fresh for it.");
+    } else if (lowerDays.has(6)) {
+      rationale.push("Couldn't fully separate the long run from a leg day this week — keep it easy so the legs stay honest.");
+    }
   }
 
   const runs: RunPlanPrescription[] = [];

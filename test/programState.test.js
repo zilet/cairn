@@ -6,7 +6,13 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo, resetTables } from "./_seed.js";
-import { familyLabelFromKey } from "../dist/repo/program-state.js";
+import {
+  COMBINED_LOAD_RUN_YIELDS_QUIET_VARIANTS,
+  COMBINED_LOAD_RUN_YIELDS_VARIANTS,
+  COMBINED_LOAD_STRENGTH_YIELDS_VARIANTS,
+  familyLabelFromKey,
+} from "../dist/repo/program-state.js";
+import { violatesReadingGrammar } from "../dist/repo/day-read.js";
 
 const REF = "2026-04-20";
 const back = (n) => new Date(new Date(REF + "T00:00:00Z").getTime() - n * 864e5).toISOString().slice(0, 10);
@@ -598,4 +604,127 @@ test("a historical timed-lift grade is bounded to the day being read too", () =>
   const lift = repo.getProgramState(readDate).lifts.find((l) => /side plank/i.test(String(l.exercise)));
   assert.ok(lift, "the timed lift is present as of the read date");
   assert.ok(lift.best_seconds < 200, `held ${lift.best_seconds}s — a hold logged after the read date leaked in`);
+});
+
+// ── the COMBINED weekly stress budget ────────────────────────────────────────
+// The two ACWR guards are per-lane and blind to each other, each with its own alarm
+// bar (tonnage 1.4 → "intensification"; weekly km 1.5 → "spiking"). Both lanes can
+// therefore ramp hard in the same week, each stay under its own bar, and nothing
+// notice. These pin the cross-modality read that does.
+
+const fwd = (n) => new Date(new Date(REF + "T00:00:00Z").getTime() + n * 864e5).toISOString().slice(0, 10);
+
+// Four chronic weeks in each lane, then an acute week ~1.35x in BOTH — comfortably
+// inside each lane's own caution band and under each lane's own alarm.
+function seedBothLanesRamped() {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  for (const wk of [1, 2, 3, 4]) {
+    for (let i = 0; i < 5; i++)
+      repo.logSetByName({ exercise: "Back Squat", weight: 250, reps: 5, rir: 2, date: back(wk * 7 + 2) });
+    repo.addActivity({ type: "run", duration_min: 60, distance_km: 10, date: back(wk * 7 + 2) });
+  }
+  for (let i = 0; i < 6; i++) repo.logSetByName({ exercise: "Back Squat", weight: 250, reps: 5, rir: 2, date: back(3) });
+  repo.logSetByName({ exercise: "Back Squat", weight: 250, reps: 3, rir: 2, date: back(3) });
+  repo.addActivity({ type: "run", duration_min: 80, distance_km: 13.5, date: back(2) });
+}
+
+test("both lanes ramping in the same week surfaces a combined read neither lane's own guard would", () => {
+  seedBothLanesRamped();
+  const st = repo.getProgramState(REF);
+  // Neither lane is loud on its own — that is the whole point.
+  assert.ok(st.mesocycle.acute_chronic_ratio < 1.4, "tonnage is under its own alarm bar");
+  assert.ok(st.endurance.acute_chronic_ratio < 1.5, "weekly km is under its own alarm bar");
+  assert.notEqual(st.endurance.status, "spiking");
+
+  const combined = st.hybrid?.combined_load;
+  assert.ok(combined, "the cross-modality read fires");
+  assert.ok(typeof combined.why === "string" && combined.why.length > 20, "it speaks in plain sentences");
+  assert.doesNotMatch(combined.why, /\d/, "no ratio, no number, ever");
+  assert.doesNotMatch(combined.why, /acwr|ratio|chronic|acute/i, "and no engineering vocabulary");
+  // It reaches the athlete through the same channel the per-lane guards use.
+  assert.ok(st.adaptations_due.includes(combined.why), "the read is carried on the existing rationale channel");
+});
+
+test("the combined read stays quiet unless BOTH lanes are ramped", () => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  // Strength ramps; running holds completely steady.
+  for (const wk of [1, 2, 3, 4]) {
+    for (let i = 0; i < 5; i++)
+      repo.logSetByName({ exercise: "Back Squat", weight: 250, reps: 5, rir: 2, date: back(wk * 7 + 2) });
+    repo.addActivity({ type: "run", duration_min: 60, distance_km: 10, date: back(wk * 7 + 2) });
+  }
+  for (let i = 0; i < 7; i++) repo.logSetByName({ exercise: "Back Squat", weight: 250, reps: 5, rir: 2, date: back(3) });
+  repo.addActivity({ type: "run", duration_min: 60, distance_km: 10, date: back(2) });
+  const st = repo.getProgramState(REF);
+  assert.ok(st.mesocycle.acute_chronic_ratio >= 1.3, "the strength lane really did ramp");
+  assert.equal(st.hybrid?.combined_load ?? null, null, "one lane alone is not a combined budget");
+});
+
+test("a thin base never produces a combined read (each lane's low-base guard still stands)", () => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  // A returning athlete: one prior week in each lane, then a real week. Both raw
+  // ratios would be enormous; both lanes suppress them, so there is nothing to combine.
+  for (let i = 0; i < 2; i++) repo.logSetByName({ exercise: "Back Squat", weight: 200, reps: 5, date: back(9) });
+  repo.addActivity({ type: "run", duration_min: 30, distance_km: 4, date: back(9) });
+  for (let i = 0; i < 8; i++) repo.logSetByName({ exercise: "Back Squat", weight: 250, reps: 5, date: back(3) });
+  repo.addActivity({ type: "run", duration_min: 90, distance_km: 15, date: back(2) });
+  const st = repo.getProgramState(REF);
+  assert.equal(st.hybrid?.combined_load ?? null, null, "building a base is not two spikes");
+});
+
+test("with a dated race in the picture the STRENGTH lane yields its spike first", () => {
+  repo.setProfile({
+    endurance_goal: { mode: "race", event: "Combined Half", date: fwd(70), distance_km: 21.1, weekly_km: 35 },
+  });
+  seedBothLanesRamped();
+  const combined = repo.getProgramState(REF).hybrid?.combined_load;
+  assert.ok(combined, "the combined read fires");
+  assert.equal(combined.yields, "strength", "the race has the deadline; the weights can wait a week");
+  assert.equal(combined.basis, "race-build");
+  assert.match(combined.why, /lifting|strength|weights/i, "and the sentence says which lane holds");
+});
+
+test("a strength block at its peak flips the yielder — the RUN lane holds instead", () => {
+  repo.setProfile({
+    endurance_goal: { mode: "race", event: "Combined Half", date: fwd(70), distance_km: 21.1, weekly_km: 35 },
+  });
+  repo.createBlock({ goal: "Peak strength", focus: "peak", phase: "realization", week_index: 4, total_weeks: 4 });
+  seedBothLanesRamped();
+  const combined = repo.getProgramState(REF).hybrid?.combined_load;
+  assert.ok(combined, "the combined read fires");
+  assert.equal(combined.yields, "run", "the block's peak week is the week's fixed point");
+  assert.equal(combined.basis, "block-peak");
+  assert.doesNotMatch(combined.why, /\d/, "still no numbers");
+});
+
+test("with nothing peaking and nothing dated, the running is the lane that holds", () => {
+  seedBothLanesRamped();
+  const combined = repo.getProgramState(REF).hybrid?.combined_load;
+  assert.ok(combined);
+  assert.equal(combined.yields, "run");
+  assert.equal(combined.basis, "no-deadline");
+});
+
+// ── the reading grammar, over the combined-load vocabulary ────────────────────
+// Both lanes ramped at once is a WEEK-long state, so this fires on every read for
+// days. One literal would print verbatim the whole time, and every phrasing has to
+// hold the same line as the rest of the athlete-facing surface.
+
+test("every combined-load phrasing is a variant set that holds the reading grammar", () => {
+  const sets = [
+    ["COMBINED_LOAD_STRENGTH_YIELDS", COMBINED_LOAD_STRENGTH_YIELDS_VARIANTS],
+    ["COMBINED_LOAD_RUN_YIELDS", COMBINED_LOAD_RUN_YIELDS_VARIANTS],
+    ["COMBINED_LOAD_RUN_YIELDS_QUIET", COMBINED_LOAD_RUN_YIELDS_QUIET_VARIANTS],
+  ];
+  for (const [label, set] of sets) {
+    assert.ok(set.length >= 3, `${label}: a set, never one literal printed for weeks`);
+    assert.equal(new Set(set).size, set.length, `${label}: no duplicate phrasings`);
+    for (const line of set) {
+      assert.equal(violatesReadingGrammar(line), null, `${label}: "${line}"`);
+      assert.doesNotMatch(line, /acwr|ratio|residual|\bload score\b/i, `${label}: no engineering register — "${line}"`);
+    }
+  }
+  // The three sets say different things and must not be interchangeable.
+  const all = sets.flatMap(([, set]) => set);
+  assert.equal(new Set(all).size, all.length, "no phrasing is shared between the three answers");
 });

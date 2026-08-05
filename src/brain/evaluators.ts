@@ -20,6 +20,7 @@ import { canonicalEnduranceSport } from "../repo/endurance-sports.js";
 import { lsqSlopePerDay } from "../repo/health.js";
 import { addDaysISO } from "../repo/shared.js";
 import { robustWeightEvidence } from "../repo/weight-evidence.js";
+import { verifiedTopSetInWindow } from "../repo/calibration.js";
 
 export const MATURITY_EVALUATOR_VERSION = "brain-maturity-v1";
 
@@ -293,6 +294,40 @@ function exerciseCompletionObservation(context: EvaluatorContext): MetricObserva
   };
 }
 
+interface Est1rmVerification {
+  verified: boolean;
+  verified_on: string | null;
+  /** Which side confirmed it: the baseline it was written against, or the window itself. */
+  basis: "baseline" | "window" | "none";
+}
+
+/**
+ * Was the number this window is being judged against ever confirmed by a heavy set?
+ *
+ * Two ways it can be. The baseline itself may have been rebased onto a verified
+ * top set when the expectation was written (`baseline.basis`), or a verifying set
+ * may have landed INSIDE the window, which re-anchors the estimate mid-flight.
+ * Either one means the comparison is against a load the athlete has actually
+ * stood under rather than a formula measured against itself.
+ */
+function est1rmVerification(context: EvaluatorContext): Est1rmVerification {
+  const { expectation } = context;
+  if (String(expectation.baseline?.basis ?? "") === "verified_top_set") {
+    return { verified: true, verified_on: isoDate(expectation.baseline?.verified_on), basis: "baseline" };
+  }
+  const subject = String(expectation.subject_key ?? "").trim();
+  if (subject) {
+    try {
+      const inWindow = verifiedTopSetInWindow(subject, expectation.window_start, windowEnd(context));
+      if (inWindow) return { verified: true, verified_on: inWindow.date, basis: "window" };
+    } catch {
+      // The calibration ladder is evidence when it is readable and silence when it
+      // is not. An unreadable ledger is never itself a reason to distrust a window.
+    }
+  }
+  return { verified: false, verified_on: null, basis: "none" };
+}
+
 function exerciseEst1rmObservation(context: EvaluatorContext): MetricObservation {
   const { expectation } = context;
   const read = exerciseSets(context);
@@ -316,6 +351,29 @@ function exerciseEst1rmObservation(context: EvaluatorContext): MetricObservation
   // had in fact worked. `last_est_1rm` is kept beside it as provenance.
   const best = points.length ? Math.max(...points.map((point) => point.value)) : null;
   const delta = first != null && best != null ? rounded(best - first) : null;
+  // WHAT VERIFICATION CHANGES HERE, AND WHAT IT DELIBERATELY DOES NOT.
+  //
+  // It does not move the verdict. The tempting version of this — letting a
+  // marginal miss off an unverified baseline stay inconclusive — is wrong twice
+  // over. The hold expectation's target is ALREADY `baseline * 0.97`: the 3%
+  // Epley-noise allowance has been subtracted once, at write time, and
+  // subtracting a second one here would quietly double the tolerance the writer
+  // chose and turn a real regression into silence. And the caution it was
+  // reaching for already exists in the right place — `estimateConfidenceFor`
+  // hands the same fact to the progression DECISION, which prefers
+  // hold-plus-test over an automatic deload on an unverified lift. Spending one
+  // pattern on two levers is the double-count this module refuses elsewhere.
+  //
+  // So the root fix lives at write time (buildLiftProgressionExpectations rebases
+  // the baseline onto a verified top set when one exists, so the claim is made
+  // against a number the athlete actually stood under), and what belongs HERE is
+  // provenance: the verdict records whether it was measured against a confirmed
+  // number, and a confirming set is carried as an evidence row in its own right —
+  // the single strongest piece of evidence behind any claim about a lift's
+  // ceiling, and the thing that makes a stored evaluation still readable years
+  // later as "this was measured" rather than "this was extrapolated".
+  const verification = est1rmVerification(context);
+
   return {
     actual:
       delta == null
@@ -327,9 +385,26 @@ function exerciseEst1rmObservation(context: EvaluatorContext): MetricObservation
             best_est_1rm: rounded(best!),
             last_est_1rm: rounded(last!),
             exposures: points.length,
+            // Provenance on the verdict itself, so a stored evaluation can still be
+            // read back years later as "this was measured against a confirmed
+            // number" or "this was formula against formula".
+            estimate_verified: verification.verified,
+            estimate_verified_on: verification.verified_on,
+            estimate_basis: verification.basis,
           },
-    evidence_keys: stableEvidence("logged_sets", read.rows, expectation.window_start, windowEnd(context)),
-    counts: { exposures: points.length, data_points: points.length },
+    evidence_keys: [
+      ...stableEvidence("logged_sets", read.rows, expectation.window_start, windowEnd(context)),
+      // The heavy set is evidence in its own right — the single strongest row
+      // behind a verdict about a lift's ceiling.
+      ...(verification.verified && verification.verified_on
+        ? [`calibration_events:strength_topset:${expectation.subject_key ?? "-"}:${verification.verified_on}`]
+        : []),
+    ],
+    counts: {
+      exposures: points.length,
+      data_points: points.length,
+      verified_exposures: verification.verified ? 1 : 0,
+    },
     issues: [
       ...(read.issue ? [read.issue] : []),
       ...(points.length < 2 ? ["At least two comparable loaded exercise exposures are needed."] : []),

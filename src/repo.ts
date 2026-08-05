@@ -86,6 +86,7 @@ export * from "./repo/run-progression.js"; // the deterministic RUNNING program 
 export * from "./repo/run-ramp.js"; // pure goal-anchored ramp arithmetic behind the weekly run plan
 export * from "./repo/hr-model.js"; // the PERSONAL HR model — observed max, threshold, zone bands (never an age formula)
 export * from "./repo/calibration.js"; // the coach's testing ladder: staleness → suggestion → detection → fold-back
+export * from "./repo/movement-risk.js"; // durable per-exercise tolerance memory (hybrid-elite seam)
 export * from "./repo/flexible-training-agenda.js"; // rolling run intentions: actual logs, not fixed weekdays, control completion + next window
 export * from "./repo/hybrid-run-lookahead.js"; // hybrid planned_run_next override from flexible agenda (cycle-safe; not in training-read)
 export * from "./repo/dexa-targeting.js"; // DEXA regional read → training + nutrition targets

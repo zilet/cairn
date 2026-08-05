@@ -264,6 +264,80 @@ export function planRestructureReasons(
   return map;
 }
 
+// ---------- what the plan has already DONE to one lift ------------------------
+// The plan itself keeps no per-target history, so applied proposals are the only
+// audit trail of a load cut. Auto-progression marks its own deload changes
+// (`progression_action: 'deload'`) precisely so a SECOND cut on the same lift can
+// be recognised as a repeat rather than prescribed as another identical one — see
+// the escalation branch in repo/progression.ts. A fuel-protection dose never
+// carries the marker: that cut is about fuel, not about this lift stalling.
+//
+// Fail-soft: an unreadable payload counts as nothing, so a bad row can never
+// manufacture an escalation.
+export function appliedProgressionDeloads(exerciseName: string, sinceISO: string, asOfISO?: string): number {
+  return countAppliedProgressionChanges(exerciseName, sinceISO, asOfISO, (change) => change?.progression_action === "deload");
+}
+
+/**
+ * How many times an ESCALATED rep wave has actually been applied to this lift.
+ *
+ * The escalation branch answers a repeated deload by changing the SHAPE of the
+ * work rather than cutting again — but a wave that is itself repeated every week
+ * is the same failure one rung up, and it never terminates. So the applied wave
+ * carries its own marker (`progression_escalation`) and the branch reads it back:
+ * a lift already inside a wave is left to run it out, not re-waved.
+ */
+export function appliedProgressionEscalations(exerciseName: string, sinceISO: string, asOfISO?: string): number {
+  return countAppliedProgressionChanges(
+    exerciseName,
+    sinceISO,
+    asOfISO,
+    (change) => change?.progression_escalation === "rep_wave"
+  );
+}
+
+function countAppliedProgressionChanges(
+  exerciseName: string,
+  sinceISO: string,
+  asOfISO: string | undefined,
+  matches: (change: any) => boolean
+): number {
+  const key = normalizedExerciseKey(String(exerciseName ?? ""));
+  if (!key) return 0;
+  const since = String(sinceISO ?? "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(since)) return 0;
+  const asOf = /^\d{4}-\d{2}-\d{2}$/.test(String(asOfISO ?? "").slice(0, 10))
+    ? String(asOfISO).slice(0, 10)
+    : localDateISO();
+  let rows: Array<{ parsed_json: string | null }> = [];
+  try {
+    rows = db
+      .prepare(
+        `SELECT parsed_json FROM plan_proposals
+          WHERE status = 'applied' AND parsed_json IS NOT NULL
+            AND date(created_at) >= ? AND date(created_at) <= ?`
+      )
+      .all(since, asOf) as Array<{ parsed_json: string | null }>;
+  } catch {
+    return 0;
+  }
+  let count = 0;
+  for (const row of rows) {
+    let parsed: any = null;
+    try {
+      parsed = JSON.parse(String(row?.parsed_json ?? ""));
+    } catch {
+      continue;
+    }
+    const changes = Array.isArray(parsed?.changes) ? parsed.changes : [];
+    const hit = changes.some(
+      (change: any) => matches(change) && normalizedExerciseKey(String(change?.exercise ?? "")) === key
+    );
+    if (hit) count += 1;
+  }
+  return count;
+}
+
 function decorateAccountablePlan(days: any[]): any[] {
   const changes = accountablePlanChanges();
   if (!changes.size) return days;

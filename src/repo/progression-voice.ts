@@ -364,6 +364,147 @@ export const FUEL_RECOVERY_DOSE: VoiceSet = [
   "Fueling is behind the work right now, so this exposure goes lighter instead of taking another step.",
 ];
 
+// ---- periodization: what the training phase asks of a main lift -------------
+
+// Accumulation: the range is capped but the phase wants one more clean rep on top
+// before the load moves. The number is the rep the athlete is reaching for.
+//
+// That number sits ABOVE the rep window printed on the card, deliberately — the
+// phase widens the ask and the plan item is never rewritten (a stored widened
+// range would outlive the block). So every phrasing here NAMES the gap rather than
+// leaving a card that says 6–8 arguing with a line that asks for 9.
+export const ACCUMULATION_REP_STAGE: VoiceSet1 = [
+  (top) =>
+    `You're in the build stretch, so the ask goes one rep past the card's window — take this to ${top} clean reps on every set before the weight moves.`,
+  (top) =>
+    `This part of the run is about volume, and it asks for a rep beyond what the card shows: earn ${top} good reps across the sets, then the load steps.`,
+  (top) =>
+    `Build phase — stack the reps first, one past the range written on the card. ${top} clean on each set, then we add weight.`,
+];
+
+// The same widened ask, on the day the top set alone reached it. Separate from
+// TOP_SET_ONLY_HOLD because outside a build stretch that number IS the card's own
+// ceiling and there is no gap to explain.
+export const ACCUMULATION_TOP_SET_ONLY_HOLD: VoiceSet1 = [
+  (high) =>
+    `Your top set reached ${high} — a rep past the card's window, which is this block's ask — but not every set did, so hold the load until they all get there.`,
+  (high) =>
+    `${high} on the top set, one beyond the range on the card. That's the build stretch's ask; hold the weight until every set matches it.`,
+  (high) =>
+    `The top set hit ${high}, which is deliberately a rep over the card's window in this part of the run — keep the load until the rest of the sets follow.`,
+];
+
+// Accumulation: a step WAS earned, but the phase takes it small.
+export const ACCUMULATION_OVERLOAD: VoiceSet = [
+  "Earned, and in a volume stretch the step stays small — take the little one and keep the reps piling up.",
+  "That's earned. This part of the run banks work rather than chasing load, so it's a modest step.",
+  "You earned the step; in a build stretch it goes up gently and the volume stays the point.",
+];
+
+// Intensification: a strong top set at the ceiling buys the step on its own.
+export const INTENSIFICATION_OVERLOAD: VoiceSet = [
+  "You're in the sharper stretch of the run — a strong set at the top of the range buys the weight, so take it.",
+  "This part of the run is about intensity: that top set at the ceiling earns the load, so step it up.",
+  "Sharpening now — a clean set at the top of the range is enough to move the weight up.",
+];
+
+// A recovery week inside the program: nothing new is added, and that is the point.
+export const PHASE_DELOAD_HOLD: VoiceSet = [
+  "This is the easy week of the run — the work was there, but hold the weight and let the week do its job.",
+  "You earned a step and it can wait: this week is the light one, so keep the load where it is.",
+  "Recovery week — the step is banked. Hold here and take it when the week turns over.",
+];
+
+// Peak week, on a lift with nothing to test: express, don't add.
+export const PHASE_PEAK_HOLD: VoiceSet = [
+  "Peak week — this one holds where it is while the main lifts get expressed.",
+  "It's the week the run gets shown, so hold this one steady and save the effort for the big lifts.",
+  "Nothing new goes on here this week; keep it where it is while the main work gets tested.",
+];
+
+// Peak week on a main lift: the top-set protocol. (weight label, reps word)
+export const REALIZATION_TOP_SET: VoiceSet2 = [
+  (weight, reps) =>
+    `Peak week — work up to a heavy ${reps} at ${weight}, then drop back for the rest of the work and call it there.`,
+  (weight, reps) =>
+    `This is the week to show it: build to ${weight} for ${reps}, then back off for the remaining sets.`,
+  (weight, reps) => `Time to express the run — one heavy ${reps} at ${weight}, then lighter back-off work.`,
+];
+
+// ---- the cut, as a lever ----------------------------------------------------
+
+// A slip that coincides with live evidence of under-fueling. Cutting the load
+// does not fix a fueling problem, so the load holds and the story is told.
+export const CUT_REGRESSION_HOLD: VoiceSet = [
+  "This one's dipped, and your fueling has been running behind the work — hold the weight rather than cutting it, and let food do the fixing.",
+  "The dip lines up with a stretch of eating under the work, so keep the load here; taking weight off wouldn't address what's actually short.",
+  "Strength has softened while fueling has been light — hold the load steady and give the food side the room to catch up.",
+];
+
+// A slip read off an estimate nothing recent has confirmed.
+export const UNVERIFIED_REGRESSION_HOLD: VoiceSet = [
+  "This might be the number drifting rather than you — nothing heavy has confirmed it in a while, so hold the load and let a heavy set settle it.",
+  "Before cutting anything, hold here: it's been a while since a genuinely heavy set confirmed where this lift sits.",
+  "The dip could be the estimate rather than the lift — keep the weight and let one heavy set tell the truth.",
+];
+
+// Flat on a real cut: holding IS the win, and it is not a plateau.
+export const CUT_HOLDING_WIN: VoiceSet = [
+  "You're leaning out and this lift is holding its ground — that's a win, not a stall. Keep the load and take the reps as they come.",
+  "Weight's coming down and the load isn't — holding here through a cut is exactly the result to want.",
+  "Holding this weight while you're in a deficit counts as progress; stay here and keep the reps clean.",
+];
+
+// A long flat stretch that would ordinarily ask for a variation — but the athlete
+// is cutting, so patience is the right call.
+export const PLATEAU_CUT_HOLD: VoiceSet = [
+  "It's been level for a while, though you're eating under maintenance — hold the movement and the load rather than reshuffling mid-cut.",
+  "Flat for a stretch, but a cut is a poor time to judge a lift; keep it as it is a bit longer.",
+  "Nothing's moved lately and that's fair while you're leaning out — stay with this one for now.",
+];
+
+// ---- what the learning ledger's own verdicts add ----------------------------
+
+export const LEDGER_PATIENCE_HOLD: VoiceSet = [
+  "This lift has been answering the way we expected lately, so it's earned a little patience — hold and give it another clean run.",
+  "Recent calls on this one have landed, which buys time: keep the load and let it come.",
+  "It's been level, but this lift has been honest with us lately — hold here rather than reshuffling.",
+];
+
+export const LEDGER_MISSED_DELOAD: VoiceSet = [
+  "The last few calls on this lift haven't landed the way we expected — ease the load and rebuild from a clean run.",
+  "Recent steps here haven't come good, so take the weight down a touch and build back up.",
+  "This one keeps falling short of what we asked of it — a small step back is the honest move.",
+];
+
+// ---- a second cut is not the answer -----------------------------------------
+
+// Escalation, rep-scheme wave: the window drops instead of the load being cut again.
+export const ESCALATE_REP_WAVE: VoiceSet2 = [
+  (low, high) =>
+    `You've already backed this one off recently, so a second cut isn't the lever — drop into ${low}–${high} reps for a stretch and let heavier sets do the work.`,
+  (low, high) =>
+    `Cutting the weight again would just repeat what didn't work; run ${low}–${high} reps for a few weeks instead and rebuild the shape.`,
+  (low, high) =>
+    `Same lift, second step back — change the shape rather than the number: ${low}–${high} reps for a stretch, then re-test.`,
+];
+
+// The wave is ALREADY RUNNING. A second wave stacked on the first is the same
+// failure one rung up — the shape changed, it just hasn't had time to work yet.
+export const ESCALATE_WAVE_SETTLE: VoiceSet = [
+  "You're already partway through the heavier rep stretch on this one — let it run its course before anything else changes; that's what it needs to show what it can do.",
+  "The lower rep window on this lift is still bedding in. Hold here and let it finish rather than changing the shape again on top of it.",
+  "This one is mid-way through its heavier stretch — keep it where it is and give the change already in flight time to land.",
+];
+
+// Escalation, forced variation: the movement itself gets rotated.
+export const ESCALATE_VARIATION: VoiceSet1 = [
+  (to) =>
+    `This lift has already had a step back recently — rather than cutting it again, run ${to} for a stretch and come back to it fresh.`,
+  (to) => `A second cut here would be more of the same. Give ${to} a run instead, then re-test this one.`,
+  (to) => `Twice backed off now — the movement is the thing to change, so take ${to} for a few weeks.`,
+];
+
 // ---- the whole vocabulary, rendered ----------------------------------------
 // Every phrasing this engine can say, with representative arguments filled in, so
 // a test can hold ALL of it to the reading grammar at once. A set added above and
@@ -403,6 +544,17 @@ export function progressionVoicePhrases(): string[] {
     FUEL_HOLD_CLAUSE,
     FUEL_DELOAD_CLAUSE,
     FUEL_RECOVERY_DOSE,
+    ACCUMULATION_OVERLOAD,
+    INTENSIFICATION_OVERLOAD,
+    PHASE_DELOAD_HOLD,
+    PHASE_PEAK_HOLD,
+    CUT_REGRESSION_HOLD,
+    UNVERIFIED_REGRESSION_HOLD,
+    CUT_HOLDING_WIN,
+    PLATEAU_CUT_HOLD,
+    LEDGER_PATIENCE_HOLD,
+    LEDGER_MISSED_DELOAD,
+    ESCALATE_WAVE_SETTLE,
   ];
   const one: Array<[VoiceSet1, string | number]> = [
     [PLATEAU_VARY_OPEN, 4],
@@ -413,12 +565,17 @@ export function progressionVoicePhrases(): string[] {
     [PLAN_UNSET_OVERLOAD, "95 lb"],
     [PLAN_UNSET_HOLD, "95 lb"],
     [STRAIN_BRAKE_HOLD, "recent soreness is running high"],
+    [ACCUMULATION_REP_STAGE, 13],
+    [ACCUMULATION_TOP_SET_ONLY_HOLD, 13],
+    [ESCALATE_VARIATION, "Front Squat"],
   ];
   const two: Array<[VoiceSet2, string | number, string | number]> = [
     [PLATEAU_VARY_TO, 4, "Front Squat"],
     [RELATED_START_IDEA, "Bench Press", "75 lb"],
     [EARNED_RANGE_OVERLOAD, 12, 8],
     [TIMED_OVERLOAD, 5, 45],
+    [REALIZATION_TOP_SET, "205 lb", "single"],
+    [ESCALATE_REP_WAVE, 3, 5],
   ];
   const three: Array<[VoiceSet3, string | number, string | number, string | number]> = [
     [INTRODUCE_VARIATION, "Back Squat", 13, "Front Squat"],

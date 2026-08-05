@@ -522,6 +522,92 @@ export function suppressSaturatedDue(due: string[], date = localDateISO()): stri
   }
 }
 
+// ---- strengthLegLoad: what the LIFTING has left in the running legs ---------
+// The run builder's mirror of the strength side's autoregulation brake. Endurance
+// load already reaches strength decisions in real time through acuteGate; the reverse
+// direction was a static calendar lookup (the plan's fixed leg-day weekday slots), so
+// a long run could be sized and placed with no idea that the legs had squatted heavy
+// twice since Friday.
+//
+// It reads the STRENGTH-sourced share of the residual ON PURPOSE, not the total. The
+// run builder can already see its own lane from every angle — the volume anchor is
+// last week's real mileage, `spiking` reads the endurance ACWR, and the recovery gates
+// read the wearable — so folding the athlete's own running back in as a second reason
+// to hold would double-count it, and a runner training normally would then have every
+// build week deferred by the running that earned it. What the run builder genuinely
+// cannot see is the other lane. That is what this answers.
+//
+// The prime movers are the run modality's own regions (heavy-load.ENDURANCE_MODALITIES)
+// MINUS core: core is loaded by nearly everything, recovers on its own clock, and is
+// never the tissue that decides whether a long run is a good idea.
+export const RUN_PRIME_GROUPS: readonly MuscleGroup[] = ["quads", "hamstrings", "glutes", "calves"];
+
+export interface StrengthLegLoad {
+  /** The COMPOSITE band across the prime movers — not any single group's band. */
+  band: AcuteBand;
+  /** The shared bar: the legs are carrying a real lower-body session, not an accessory. */
+  saturated: boolean;
+  saturated_groups: MuscleGroup[];
+  loaded_groups: MuscleGroup[];
+  /** False when no lifting has touched a running muscle at all — absence is neutral. */
+  has_data: boolean;
+}
+
+export const NO_LEG_LOAD: StrengthLegLoad = {
+  band: "fresh",
+  saturated: false,
+  saturated_groups: [],
+  loaded_groups: [],
+  has_data: false,
+};
+
+export function strengthLegLoad(
+  date = localDateISO(),
+  residuals?: Map<MuscleGroup, MuscleResidual>
+): StrengthLegLoad {
+  let map: Map<MuscleGroup, MuscleResidual>;
+  try {
+    map = residuals ?? muscleResidual(RESIDUAL_LOOKBACK_DAYS, date);
+  } catch {
+    return NO_LEG_LOAD;
+  }
+  const saturated_groups: MuscleGroup[] = [];
+  const loaded_groups: MuscleGroup[] = [];
+  for (const group of RUN_PRIME_GROUPS) {
+    const strength = map.get(group)?.strength ?? 0;
+    if (!(strength > 0)) continue;
+    const band = residualBand(strength);
+    if (band === "saturated") saturated_groups.push(group);
+    else if (band === "loaded") loaded_groups.push(group);
+  }
+  // SATURATED wants one group at the full-session bar AND a second carrying real work —
+  // that is a leg day (a squat saturates the quads and leaves the glutes and hamstrings
+  // loaded), where one group alone is an accessory block and no reason to shrink a long
+  // run. Anything else that is carrying work at all reads LOADED, which nudges placement
+  // but defers nothing.
+  const carrying = saturated_groups.length + loaded_groups.length;
+  const band: AcuteBand =
+    saturated_groups.length >= 1 && carrying >= 2 ? "saturated" : carrying >= 1 ? "loaded" : "fresh";
+  return {
+    band,
+    saturated: band === "saturated",
+    saturated_groups,
+    loaded_groups,
+    has_data: carrying > 0,
+  };
+}
+
+// The groups a deferral sentence names, in plain words: "your quads and glutes".
+// Deliberately not loadPhrase(): that names the single most recent thing that touched
+// the group, which for a hybrid athlete is often a run — and a run is exactly what this
+// read is NOT about.
+export function legLoadGroupsPhrase(load: StrengthLegLoad): string {
+  const groups = [...load.saturated_groups, ...load.loaded_groups];
+  if (!groups.length) return "your legs";
+  if (groups.length === 1) return `your ${groups[0]}`;
+  return `your ${groups.slice(0, -1).join(", ")} and ${groups[groups.length - 1]}`;
+}
+
 // Which groups were touched in the last `days`, and what shape that work was in.
 // The WINDOW here still scopes what gets REPORTED (last_date / days_ago / source /
 // activity are recency facts about the near past), but `heavy` is no longer a raw

@@ -29,6 +29,11 @@ type Focus = (typeof VALID_FOCUS)[number];
 type Phase = (typeof VALID_PHASE)[number];
 type Status = (typeof VALID_STATUS)[number];
 
+// The phase/focus words are part of the periodization contract the progression
+// engine reads, so they are nameable outside this module.
+export type BlockPhase = Phase;
+export type BlockFocus = Focus;
+
 // ---- public types ----
 export interface ProgramBlock {
   id: number;
@@ -462,6 +467,17 @@ export function abandonBlock(id: number): ProgramBlock | null {
 }
 
 /**
+ * The phase a block is EFFECTIVELY in on a date. The stored block remains the
+ * long-running structural program; during an applied recovery window its effective
+ * phase is deload, so no reader ever sees "accumulation / build volume" beside
+ * "recovery week active". ONE place says this, because both the coaching prompt
+ * and the per-session progression math ask the same question.
+ */
+function effectivePhase(block: ProgramBlock, date?: string): Phase {
+  return activeRecoveryWeek(date) ? "deload" : block.phase;
+}
+
+/**
  * Return a compact plain-language summary for coaching prompts, or null
  * when no block is active. No scores, no grades — purely descriptive.
  *
@@ -471,14 +487,117 @@ export function abandonBlock(id: number): ProgramBlock | null {
 export function blockForCoach(date?: string): BlockCoachSummary | null {
   const block = getActiveBlock();
   if (!block) return null;
-  const recoveryWeek = activeRecoveryWeek(date);
   return {
     goal: block.goal,
     focus: block.focus,
-    // The stored block remains the long-running structural program. During an
-    // applied recovery window, its effective coaching phase is deload so prompts
-    // never receive "accumulation/build volume" beside "recovery week active".
-    phase: recoveryWeek ? "deload" : block.phase,
+    phase: effectivePhase(block, date),
     week_of: `week ${block.week_index} of ${block.total_weeks}`,
   };
+}
+
+// ============================================================================
+// What a phase ASKS OF THE MATH
+// ============================================================================
+// The block used to be prose: a phase word in the coach prompt, read by nothing
+// that actually prescribes. This is the seam that makes periodization real — the
+// per-session progression engine (repo/progression.ts) reads the active phase and
+// changes what a MAIN lift is prescribed. Isolation work stays on plain double
+// progression; with NO block active nothing here applies and the engine behaves
+// exactly as it did before periodization existed.
+//
+// Constitution: still a suggestion. A phase never gates a session, and every
+// athlete-facing sentence about it lives in the progression vocabulary.
+
+export interface PhaseProgressionPolicy {
+  /**
+   * Reps beyond the plan's own ceiling every working set must reach before LOAD is
+   * earned. Accumulation asks for one more clean rep on top of the range — the
+   * volume phase should be spent at the top of the window, not stepping the bar.
+   */
+  rep_saturation: number;
+  /**
+   * A strong TOP set at the ceiling earns the load step on its own, without every
+   * working set having capped the range. Intensification buys load with intensity.
+   */
+  top_set_earns_load: boolean;
+  /**
+   * Multiplier on the earned load step. The per-session ceiling still caps the
+   * result, so this changes PACING inside the safe envelope and nothing else.
+   */
+  step_scale: number;
+  /** No new load is earned this week — the week is for recovering or expressing. */
+  holds_load: boolean;
+  /** Main lifts express the block's work: a heavy top set with back-off work. */
+  top_set_protocol: boolean;
+}
+
+const PHASE_POLICIES: Record<Phase, PhaseProgressionPolicy> = {
+  // Build volume: one extra clean rep on top of the range before the load moves,
+  // and a smaller step when it does — the phase banks work, it doesn't chase load.
+  accumulation: {
+    rep_saturation: 1,
+    top_set_earns_load: false,
+    step_scale: 0.5,
+    holds_load: false,
+    top_set_protocol: false,
+  },
+  // Push intensity: a strong top set at the ceiling is enough to earn the step, so
+  // load moves MORE OFTEN than in accumulation. The step keeps its ordinary size —
+  // pacing here is frequency, and stacking a bigger step on a more frequent one is
+  // how a sharpening stretch turns into a stalled one.
+  intensification: {
+    rep_saturation: 0,
+    top_set_earns_load: true,
+    step_scale: 1,
+    holds_load: false,
+    top_set_protocol: false,
+  },
+  // Earned recovery: nothing new is added this week.
+  deload: {
+    rep_saturation: 0,
+    top_set_earns_load: false,
+    step_scale: 1,
+    holds_load: true,
+    top_set_protocol: false,
+  },
+  // Peak week: express what the block built as a heavy top set, and add nothing.
+  realization: {
+    rep_saturation: 0,
+    top_set_earns_load: false,
+    step_scale: 1,
+    holds_load: true,
+    top_set_protocol: true,
+  },
+};
+
+/** What the named phase asks of the per-session progression math. */
+export function phaseProgressionPolicy(phase: BlockPhase): PhaseProgressionPolicy {
+  return PHASE_POLICIES[phase] ?? PHASE_POLICIES.accumulation;
+}
+
+export interface ActiveBlockContext {
+  phase: Phase;
+  focus: Focus;
+  week_index: number;
+  total_weeks: number;
+}
+
+/**
+ * The active block reduced to what the progression math needs, or null when no
+ * block is running (in which case the engine periodizes nothing). Fail-soft: a
+ * read problem is "no block", never a thrown prescription.
+ */
+export function activeBlockContext(date?: string): ActiveBlockContext | null {
+  try {
+    const block = getActiveBlock();
+    if (!block) return null;
+    return {
+      phase: effectivePhase(block, date),
+      focus: block.focus,
+      week_index: block.week_index,
+      total_weeks: block.total_weeks,
+    };
+  } catch {
+    return null;
+  }
 }

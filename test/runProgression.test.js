@@ -8,6 +8,13 @@
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo, resetTables } from "./_seed.js";
+import { violatesReadingGrammar } from "../dist/repo/day-read.js";
+import {
+  LEG_LOAD_LONG_DEFER_VARIANTS,
+  LEG_LOAD_PLACEMENT_VARIANTS,
+  LEG_LOAD_PULL_DEFER_VARIANTS,
+  STRENGTH_PEAK_PULL_DEFER_VARIANTS,
+} from "../dist/repo/run-progression.js";
 
 const REF = "2026-04-20";
 const back = (n) => new Date(new Date(REF + "T00:00:00Z").getTime() - n * 864e5).toISOString().slice(0, 10);
@@ -38,11 +45,14 @@ function resetAll() {
 }
 
 // Seed a runner with `weeks` weeks of easy running, `perWeek` runs/wk at `km` each.
-function seedRunner({ weeks = 10, perWeek = 3, km = 9 } = {}) {
+// `from` is the day the history runs BACK from — REF unless a test needs to read the
+// plan on some other morning and see the same runner.
+function seedRunner({ weeks = 10, perWeek = 3, km = 9, from = REF } = {}) {
+  const before = (n) => new Date(new Date(from + "T00:00:00Z").getTime() - n * 864e5).toISOString().slice(0, 10);
   for (let wk = 0; wk < weeks; wk++) {
     const offsets = [1, 3, 5].slice(0, perWeek);
     for (const off of offsets) {
-      repo.addActivity({ type: "run", duration_min: Math.round(km * 6), distance_km: km, date: back(wk * 7 + off) });
+      repo.addActivity({ type: "run", duration_min: Math.round(km * 6), distance_km: km, date: before(wk * 7 + off) });
     }
   }
 }
@@ -482,6 +492,202 @@ test("weeklyRunPlan: an acceleration never overrides a protective week", () => {
   assert.equal(totalRunKm(heldAccel), totalRunKm(held), "a health flag is never accelerated past");
 });
 
+// ── the OTHER direction of the hybrid read: lifting fatigue reaches the run week ─
+//
+// Endurance load has always reached strength decisions in real time. The reverse was
+// a static calendar lookup (the plan's fixed leg-day weekday slots), so the long run
+// could be sized and placed with no idea what the last lower-body session left behind.
+
+// The composite shape strengthLegLoad emits after a real lower-body session: one prime
+// mover at the full-session bar plus a second still carrying work.
+const LEGS_SATURATED = {
+  band: "saturated",
+  saturated: true,
+  saturated_groups: ["quads"],
+  loaded_groups: ["glutes"],
+  has_data: true,
+};
+
+function seedRacingRunner(from = REF) {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  repo.setProfile({
+    endurance_goal: { mode: "race", event: "Test Half", date: fwd(84), distance_km: 21.1, weekly_km: 35, weekly_sessions: 4 },
+  });
+  seedRunner({ weeks: 10, perWeek: 3, km: 10, from });
+}
+
+const longKm = (plan) => plan.runs.find((r) => r.kind_label === "long")?.target_distance_km ?? null;
+const said = (plan) => `${plan.why} ${plan.rationale.join(" ")}`;
+
+test("saturated lower-body lifting defers the long-run floor-raise AND the race pull", () => {
+  seedRacingRunner();
+  const base = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, legLoad: null });
+  const held = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, legLoad: LEGS_SATURATED });
+
+  assert.ok(base.available && held.available);
+  // The race pull is what lifts an ordinary build past its usual ~10% step.
+  assert.match(said(base), /biggest step that still sits inside a safe build/i, "the base week takes the race pull");
+  assert.doesNotMatch(said(held), /biggest step that still sits inside a safe build/i, "the pull is withheld");
+  assert.ok(totalRunKm(held) <= totalRunKm(base), `the deferred week is never the bigger one (${totalRunKm(held)} vs ${totalRunKm(base)})`);
+
+  // …and the demonstrated-long FLOOR-RAISE waits with it.
+  assert.ok(longKm(held) < longKm(base), `the long run is not stepped up (${longKm(held)} < ${longKm(base)})`);
+
+  // Both deferrals are said out loud, in plain words that name the legs, not a metric.
+  assert.match(said(held), /quads/i, "the sentence names the muscles carrying the work");
+  assert.doesNotMatch(said(held), /residual|saturat|acwr|band/i, "no engineering vocabulary reaches the athlete");
+  NO_SCORE(held, "leg-load deferred plan");
+});
+
+test("the leg-load deferral rotates its wording rather than printing one literal", () => {
+  seedRacingRunner();
+  const words = new Set();
+  for (let i = 0; i < 4; i++) {
+    const plan = repo.weeklyRunPlan(back(i * 7), { block: { week_index: 1 }, legLoad: LEGS_SATURATED });
+    words.add(plan.rationale.find((r) => /quads/i.test(r)) ?? "");
+  }
+  assert.ok(words.size > 1, "a state that holds for weeks does not print the same sentence every week");
+});
+
+test("with no lower-body lifting behind it, the run week is byte-for-byte what it always was", () => {
+  // Absence is NEUTRAL: a runner who never lifts must get exactly the plan they got
+  // before this read existed — the derived path and an explicitly-empty one agree.
+  seedRacingRunner();
+  const derived = repo.weeklyRunPlan(REF, { block: { week_index: 1 } });
+  const absent = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, legLoad: null });
+  assert.deepEqual(derived, absent, "no leg residual → nothing changes");
+  assert.match(said(derived), /biggest step that still sits inside a safe build/i, "and the race pull still fires");
+});
+
+// A genuine leg day: squats + RDLs, enough to saturate the prime movers.
+function logLegDay(date) {
+  for (let i = 0; i < 4; i++) repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, rir: 2, date });
+  for (let i = 0; i < 3; i++) repo.logSetByName({ exercise: "Romanian Deadlift", weight: 185, reps: 8, rir: 2, date });
+}
+
+// REF is a Monday, and with no lower-body PLAN days the long run defaults to slot 6
+// — Saturday of REF's week. FRIDAY is the morning before it lands.
+const FRIDAY = fwd(4);
+
+test("real logged lower-body work reaches the run builder with no injection", () => {
+  // Read on the Friday, so the leg day that same day genuinely has not cleared by
+  // the time Saturday's long run lands.
+  seedRacingRunner(FRIDAY);
+  const before = repo.weeklyRunPlan(FRIDAY, { block: { week_index: 1 } });
+  logLegDay(FRIDAY);
+  const after = repo.weeklyRunPlan(FRIDAY, { block: { week_index: 1 } });
+  assert.doesNotMatch(said(after), /biggest step that still sits inside a safe build/i, "the pull defers off real logged sets");
+  assert.ok(longKm(after) < longKm(before), "and so does the long-run raise");
+});
+
+// The residual decays continuously and the saturated band has an edge, so a Monday
+// leg day used to read saturated on Monday and Tuesday, fresh on Wednesday, and the
+// SAME week's long run therefore changed size depending on which morning the athlete
+// opened the app. The size decisions now read the legs at the day the long run
+// actually lands, so a Monday leg day is several half-lives away from it.
+test("a leg day early in the week does not shrink a long run five days later", () => {
+  seedRacingRunner(FRIDAY);
+  const before = repo.weeklyRunPlan(FRIDAY, { block: { week_index: 1 } });
+  logLegDay(REF); // Monday
+  const after = repo.weeklyRunPlan(FRIDAY, { block: { week_index: 1 } });
+  assert.equal(longKm(after), longKm(before), "Monday's lifting has cleared by Saturday");
+  assert.match(said(after), /biggest step that still sits inside a safe build/i, "and the race pull is not withheld");
+});
+
+// Does a leg day still hold the long run? The wording rotates, so ask the decision.
+const legLoadDeferred = (plan) =>
+  /still carrying your recent lifting|haven't let go of the lifting|haven't cleared the weights|still working through the weights|is still in your|still working through your lifting/i.test(
+    said(plan)
+  );
+
+// The one that broke: quads decay on a 60-hour half-life, so a Monday leg day sat
+// saturated Monday and Tuesday, cleared Wednesday, and saturated again after
+// Thursday's session — and since the week is rebuilt on every read, the SAME week's
+// long run changed size between Tuesday and Wednesday with nothing logged.
+//
+// Framed as a DELTA against the same morning with no lifting behind it, because the
+// running side has its own trailing windows that legitimately move day to day (the
+// four-week longest, the endurance state). What must not move is the LIFTING's
+// effect on the week, and that is what each pair below isolates.
+test("a Monday leg day changes the week the same way — none at all — on Tuesday and on Wednesday", () => {
+  seedRacingRunner();
+  const opts = { block: { week_index: 1 }, volumeAnchorDate: REF };
+  const tuesdayAlone = repo.weeklyRunPlan(fwd(1), opts);
+  const wednesdayAlone = repo.weeklyRunPlan(fwd(2), opts);
+
+  logLegDay(REF); // Monday — the day that used to flicker the band beneath the week
+  const tuesday = repo.weeklyRunPlan(fwd(1), opts);
+  const wednesday = repo.weeklyRunPlan(fwd(2), opts);
+
+  assert.equal(longKm(tuesday), longKm(tuesdayAlone), "Tuesday: Monday's lifting does not shrink Saturday's long run");
+  assert.equal(longKm(wednesday), longKm(wednesdayAlone), "Wednesday: nor does it on the other side of the band edge");
+  assert.equal(totalRunKm(tuesday), totalRunKm(tuesdayAlone), "and the week is not resized either");
+  assert.equal(totalRunKm(wednesday), totalRunKm(wednesdayAlone));
+  // The deferral is a decision about the WEEK, so it is taken (or not) the same way
+  // on both mornings.
+  assert.equal(legLoadDeferred(tuesday), legLoadDeferred(wednesday), "the same week defers, or does not, on both days");
+  assert.equal(legLoadDeferred(tuesday), false, "and with the long run five days out, it does not");
+});
+
+test("the long-run day is what the size read is anchored on, not the read date", () => {
+  // The same leg day, asked about from four different mornings of the same week: the
+  // answer cannot move, because the day it is about has not moved.
+  seedRacingRunner();
+  const opts = { block: { week_index: 1 }, volumeAnchorDate: REF };
+  const mornings = [REF, fwd(1), fwd(2), fwd(3)];
+  const alone = mornings.map((day) => longKm(repo.weeklyRunPlan(day, opts)));
+  logLegDay(REF);
+  const withLegDay = mornings.map((day) => repo.weeklyRunPlan(day, opts));
+  assert.deepEqual(withLegDay.map(longKm), alone, "the long run is untouched from every morning of the week");
+  assert.deepEqual(
+    withLegDay.map(legLoadDeferred),
+    [false, false, false, false],
+    "and no morning of the week defers on its account"
+  );
+});
+
+test("a runner's OWN mileage never counts as a reason to defer their build", () => {
+  // The run builder already sees its own lane (the volume anchor, the endurance ACWR,
+  // the recovery gates). Folding running back in as leg fatigue would defer every
+  // build week a runner ever earns — so the read is strength-sourced by design.
+  seedRacingRunner();
+  repo.addActivity({ type: "run", duration_min: 110, distance_km: 18, date: back(1) }); // a big long run yesterday
+  const derived = repo.weeklyRunPlan(REF, { block: { week_index: 1 } });
+  const absent = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, legLoad: null });
+  assert.deepEqual(derived, absent, "a long run yesterday leaves the leg-load path silent");
+  assert.doesNotMatch(said(derived), /lifting|weights/i, "nothing is deferred on account of the athlete's own running");
+});
+
+test("a strength block at its peak suppresses the race pull exactly as a taper does", () => {
+  seedRacingRunner();
+  const ordinary = repo.weeklyRunPlan(REF, { block: { week_index: 1, phase: "accumulation" } });
+  const peak = repo.weeklyRunPlan(REF, { block: { week_index: 1, phase: "realization" } });
+  const heaviest = repo.weeklyRunPlan(REF, { block: { week_index: 1, phase: "intensification" } });
+
+  assert.match(said(ordinary), /biggest step that still sits inside a safe build/i);
+  for (const [label, plan] of [["realization", peak], ["intensification", heaviest]]) {
+    assert.doesNotMatch(said(plan), /biggest step that still sits inside a safe build/i, `${label} withholds the pull`);
+    assert.ok(totalRunKm(plan) <= totalRunKm(ordinary), `${label} never asks for more (${totalRunKm(plan)})`);
+    // The BASE plan is untouched — only the extra stretch is withheld.
+    assert.equal(plan.runs.length, ordinary.runs.length, `${label} keeps the same runs`);
+    assert.equal(plan.quality_focus, ordinary.quality_focus, `${label} keeps the quality session`);
+    assert.match(said(plan), /lifting|strength/i, `${label} says why in plain words`);
+    NO_SCORE(plan, `run plan under a ${label} block`);
+  }
+});
+
+test("the hard running moves off the front of the week when the legs open it loaded from lifting", () => {
+  seedRacingRunner();
+  const base = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, legLoad: null });
+  const held = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, legLoad: LEGS_SATURATED });
+  const qualityDay = (plan) => plan.runs.find((r) => r.kind_label === "quality")?.day_number ?? null;
+  assert.equal(qualityDay(base), 2, "the static placement puts quality mid-week");
+  assert.ok(qualityDay(held) > qualityDay(base), `the quality run sits further down the week (${qualityDay(held)})`);
+  // Placement only ever moves WHICH day — never how many runs there are.
+  assert.equal(held.runs.length, base.runs.length);
+  assert.equal(new Set(held.runs.map((r) => r.day_number)).size, held.runs.length, "no two runs collide on a day");
+});
+
 // ── buildRunPlanProposal (the apply path, shared by REST + MCP) ────────────────
 
 test("buildRunPlanProposal drafts a proposal whose cardio carries day_number + interval structure", () => {
@@ -539,4 +745,45 @@ test("applying a weekly run plan writes no eight-week aerobic expectation", () =
     undefined,
     "an eight-week aerobic trend is never attached to a decision that is remade every week"
   );
+});
+
+// ── the reading grammar, over the leg-load vocabulary ─────────────────────────
+// Every sentence the hybrid read can put in front of the athlete, rendered with the
+// arguments it is actually called with, held to the same line as the rest.
+
+test("every leg-load phrasing holds the reading grammar", () => {
+  const phrases = ["your quads", "your quads and glutes", "your quads, hamstrings and glutes", "your legs"];
+  const rendered = [];
+  for (const phrase of phrases) {
+    for (const say of [
+      ...LEG_LOAD_LONG_DEFER_VARIANTS,
+      ...LEG_LOAD_PULL_DEFER_VARIANTS,
+      ...LEG_LOAD_PLACEMENT_VARIANTS,
+    ]) {
+      rendered.push(say(phrase));
+    }
+  }
+  // The strength-peak line names the BLOCK's phase, not a muscle.
+  for (const phase of ["peak", "heaviest"]) {
+    for (const say of STRENGTH_PEAK_PULL_DEFER_VARIANTS) rendered.push(say(phase));
+  }
+  for (const line of rendered) assert.equal(violatesReadingGrammar(line), null, `"${line}"`);
+  // No scores, and no engineering register leaking through the band names.
+  for (const line of rendered) {
+    assert.doesNotMatch(line, /residual|saturat|acwr|\bband\b|half-life/i, `"${line}"`);
+  }
+});
+
+test("each leg-load set is a variant SET, with no duplicate phrasings", () => {
+  const sets = [
+    ["LEG_LOAD_LONG_DEFER", LEG_LOAD_LONG_DEFER_VARIANTS, "your quads and glutes"],
+    ["LEG_LOAD_PULL_DEFER", LEG_LOAD_PULL_DEFER_VARIANTS, "your quads and glutes"],
+    ["LEG_LOAD_PLACEMENT", LEG_LOAD_PLACEMENT_VARIANTS, "your quads and glutes"],
+    ["STRENGTH_PEAK_PULL_DEFER", STRENGTH_PEAK_PULL_DEFER_VARIANTS, "peak"],
+  ];
+  for (const [label, set, arg] of sets) {
+    assert.ok(set.length >= 3, `${label}: a set, never one literal printed for weeks`);
+    const rendered = set.map((say) => say(arg));
+    assert.equal(new Set(rendered).size, rendered.length, `${label}: no duplicate phrasings`);
+  }
 });

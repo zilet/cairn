@@ -200,3 +200,102 @@ test("a second reading of the same target never costs another target its slot", 
     "the stage-specific lookup finds its own variant"
   );
 });
+
+// ---------------------------------------------------------------------------
+// SUBJECT slots: one per main lift, not four for the whole program.
+//
+// The subject headroom was 4. A normal week runs four training days built on two
+// main lifts each, plus the one whole-athlete reading with no subject at all that
+// every lift without a learning of its own falls back to — so a lifter with five
+// or more main lifts silently lost the rest. The progression ladder asked for that
+// lift's personal response, found nothing, and used the universal default while
+// the ledger held a perfectly good verdict about it. Nothing said so; that silence
+// is the other half of this fix.
+const MAIN_LIFTS = [
+  "Back Squat",
+  "Barbell Bench Press",
+  "Deadlift",
+  "Overhead Press",
+  "Barbell Row",
+  "Front Squat",
+  "Incline Bench Press",
+  "Romanian Deadlift",
+];
+
+function seedLiftFamily(exercise, daysAgo) {
+  seedFamily(
+    {
+      target: "training_progression_step",
+      kind: "training_target",
+      metric_key: "exercise_target_completion",
+      subject_key: exercise,
+      direction: "complete",
+      baseline: null,
+      target_json: { exposures: 2 },
+      evaluator: "exercise_completion",
+      actual: { value: 1, completion_rate: 1, exposures: 4 },
+      slot_prefix: `lift-${exercise.replace(/\s+/g, "-")}`,
+    },
+    daysAgo
+  );
+}
+
+test("every main lift in a normal program keeps its own learned response", () => {
+  MAIN_LIFTS.forEach((exercise, index) => seedLiftFamily(exercise, index * 3));
+  const learned = whatWorksForYou();
+  assert.ok(learned);
+
+  const subjects = learned.modifiers
+    .filter((modifier) => modifier.target === "training_progression_step")
+    .map((modifier) => modifier.subject_key);
+  for (const exercise of MAIN_LIFTS) {
+    assert.ok(subjects.includes(exercise), `${exercise} kept its learning (got: ${subjects.join(", ") || "none"})`);
+  }
+});
+
+test("the whole-athlete reading survives alongside a full slate of per-lift ones", () => {
+  MAIN_LIFTS.forEach((exercise, index) => seedLiftFamily(exercise, index * 3));
+  // A subject-less training learning — the fallback every lift without one of its
+  // own depends on. Deliberately the OLDEST, so recency alone would drop it.
+  seedFamily(
+    {
+      target: "training_progression_step",
+      kind: "training_target",
+      metric_key: "exercise_est_1rm_trend",
+      subject_key: null,
+      direction: "at_least",
+      baseline: { est_1rm: 200 },
+      target_json: { value: 194 },
+      evaluator: "exercise_est_1rm",
+      actual: { value: 205, exposures: 5 },
+      slot_prefix: "whole-athlete",
+    },
+    60
+  );
+
+  const learned = whatWorksForYou();
+  const training = learned.modifiers.filter((modifier) => modifier.target === "training_progression_step");
+  assert.ok(
+    training.some((modifier) => modifier.subject_key == null),
+    "the fallback reading is not crowded out by the lifts that have their own"
+  );
+});
+
+test("a subject that does not fit is logged, never dropped in silence", () => {
+  // Well past the headroom, so the cap is genuinely the binding constraint.
+  const many = Array.from({ length: 14 }, (_, index) => `Accessory Lift ${index + 1}`);
+  many.forEach((exercise, index) => seedLiftFamily(exercise, index * 2));
+
+  const warnings = [];
+  const original = console.warn;
+  console.warn = (...args) => warnings.push(args.join(" "));
+  try {
+    whatWorksForYou();
+  } finally {
+    console.warn = original;
+  }
+  const notice = warnings.find((line) => line.includes("personal-response slots full"));
+  assert.ok(notice, `the drop is announced (got ${JSON.stringify(warnings)})`);
+  assert.match(notice, /training_progression_step/, "the slot that lost out is named");
+  assert.match(notice, /universal default stands/, "and what the athlete gets instead is said plainly");
+});

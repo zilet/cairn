@@ -135,6 +135,69 @@ compact `{home,effective,source,trip_id,trip_title}` read to person-aware prompt
 weather: a future fresh-weather source may shape practical options, but location and weather remain
 suggestions, never gates.
 
+**Block-phase-driven progression, and the realization top-set protocol.**
+`phaseProgressionPolicy(phase)` (`program-blocks.ts`) maps the four periodization phases —
+`accumulation` / `intensification` / `deload` / `realization` — to a small policy `progression.ts`
+reads on every main-lift prescription: `rep_saturation` (accumulation banks one extra clean rep on top
+of the range before load moves), `top_set_earns_load` (intensification lets one strong ceiling set
+alone earn the step), `step_scale` (paces an earned step inside the same safe envelope, never widens
+it), `holds_load` (deload/realization add nothing new), and `top_set_protocol` — realization's own
+flag. The block's peak week expresses the work as ONE heavy top set (`peakTopSetFor`) plus back-off
+work, sized off `estimateConfidenceFor` below: a lift nothing heavy has confirmed gets a WIDER top set
+(a double, not a single) than a verified one. `buildProgressionProposal` deliberately never writes a
+peak top set into `plan_items` — it is a SESSION protocol, not a plan target, and the result re-anchors
+the estimate through the logged set itself (`detectStrengthCalibration`) rather than becoming the
+number every later step is measured from.
+
+**The cut as a lever, not a target.** A genuine calorie deficit changes what a slip or a stall MEANS,
+never what a session looks like. `readCutPressure()` reads `currentUnderfuelingRead` + `cutQualityRead`
+into one `CutPressure`, computed at most once per pass and threaded through every lift via a lazy
+thunk. A regressing lift under cut pressure HOLDS instead of deloading (`CUT_REGRESSION_HOLD`) —
+cutting weight cannot fix a food problem. A plateaued lift under cut pressure earns
+`PLATEAU_CUT_PATIENCE_WEEKS` (2) extra weeks before a variation is offered — holding ground on a real
+deficit is the win, not a stall to reshuffle away from.
+
+**Three evidence seams the strength-progression decision reads, none of them gates.**
+`estimateConfidenceFor(exercise, date)` (`calibration.ts`) reruns the SAME anchored/aging/never
+freshness ladder the calibration card's athlete-facing word runs on, so a lift the card calls
+"anchored" and a lift the progression ladder calls "verified" can never disagree about the same day.
+With no cut pressure, a regressing lift whose estimate is unverified HOLDS with
+`UNVERIFIED_REGRESSION_HOLD` ("this might be the number drifting, not you") instead of the ordinary
+`REGRESSING_DELOAD` — the honest read when nothing heavy has confirmed the formula in months is to test
+it, not cut it. `ledgerCounsel()` reads `liftLedgerRead()` (`reaction-model.ts` — conclusive
+`brain_evaluations` verdicts scoped to THIS lift's own progression expectations, at least two of them
+to speak at all): two-or-more aligned verdicts among the most recent three buy a stalled lift +2 weeks
+of patience before a variation is offered; two-or-more missed verdicts bring that boundary a week
+sooner and relabel a grinding deload as `LEDGER_MISSED_DELOAD`. `riskRerank()` reads `movementRiskFor()`
+(`movement-risk.ts` — flagged only after `pain_present` observations land on ≥2 separate days inside
+the tolerance window) and stably sorts a flagged candidate to the back of the same-pattern vary menu —
+never removing it, since a swap-in the athlete will run for weeks deserves the demotion, not
+disappearance. All three only ever widen or narrow an existing decision (hold vs. deload, this week vs.
+next, lead candidate vs. demoted); none introduces a new action class or overrides a safety floor.
+
+**`strengthLegLoad()` closes the run builder's blind side.** `hybrid-load.ts`'s `strengthLegLoad(date)`
+reads the STRENGTH-sourced share of the muscle residual across the run's prime movers
+(`RUN_PRIME_GROUPS`: quads/hamstrings/glutes/calves — core excluded, since it recovers on its own clock
+and never decides whether a long run is a good idea). Deliberately the strength share alone, not the
+total residual: the run builder already sees its OWN lane (mileage anchor, endurance ACWR, wearable
+recovery gates) from every angle, so folding the athlete's own running back in would double-count it.
+`band` reads `saturated` only when one prime mover sits at the full-session bar AND a second is
+genuinely carrying work — a real leg day, not an accessory set — so a runner's own mileage never defers
+their build, but the plan's own lifting two sessions ago now can.
+
+**The combined weekly stress budget and its deterministic yielder.** `combinedLoadState()`
+(`program-state.ts`) is the cross-modality read neither lane's own ACWR guard can produce alone: it
+fires ONLY when both the strength mesocycle's and the endurance week's acute:chronic ratios sit at or
+above their own caution bar (`TONNAGE_ACWR_CAUTION`/`ENDURANCE_ACWR_CAUTION`, both 1.3) — each lane's
+low-base guard still stands on its own, since a ratio off a thin base means nothing in either lane. When
+both are genuinely elevated at once, ONE lane yields by a fixed, documented policy, never a live
+negotiation: the lifting block is peaking (intensification/realization) → the RUN lane yields
+(`run-progression.ts` already suppresses the race-ramp pull under the same predicate, so the two
+agree); otherwise a dated race is in the picture → the STRENGTH lane yields (the race has the deadline,
+the lifting can wait a week); otherwise neither is deadline-bound → the RUN lane yields by default
+(mileage is where a spike is paid for in bone and tendon, not a missed rep). Informational only — it
+shapes rationale, it gates nothing.
+
 ### Body, nutrition, capture
 
 - Bodyweight log (`logWeight`/`listWeight`, syncs `profile.weight_lb`); the TDEE + lean-safe goal

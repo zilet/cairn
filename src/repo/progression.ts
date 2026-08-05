@@ -52,9 +52,31 @@ import {
 import * as voice from "./progression-voice.js";
 import { painAreaLoadsGroup } from "./pain-relevance.js";
 export { painAreaLoadsExercise } from "./pain-relevance.js";
-import { addExerciseToPlanDay, getPlan, pressSlotKey } from "./plan.js";
+import {
+  addExerciseToPlanDay,
+  appliedProgressionDeloads,
+  appliedProgressionEscalations,
+  getPlan,
+  pressSlotKey,
+} from "./plan.js";
+// PERIODIZATION. The active block's phase changes what a main lift is prescribed
+// (see the policy table in program-blocks.ts). No block active → nothing here fires.
+import {
+  type ActiveBlockContext,
+  activeBlockContext,
+  type PhaseProgressionPolicy,
+  phaseProgressionPolicy,
+} from "./program-blocks.js";
+// THE THREE LEARNED SEAMS the decision consults but never obeys blindly: how much
+// this lift's est-1RM deserves to be trusted, what the ledger's own verdicts said
+// about it, and whether the movement itself has been flagged as one to be careful
+// with. Each answers a today's-world neutral value until the learning loop fills
+// it in, so every branch below has to be correct for both.
+import { type UnverifiedRegressionHold, unverifiedRegressionHold } from "./calibration.js";
+import { movementRiskFor } from "./movement-risk.js";
+import { cutQualityRead } from "./cut-quality.js";
 import type { CoachPersonalModifier, CoachWhatWorksForYou } from "../brain/coach-context-contract.js";
-import { applyPersonalResponseModifier, whatWorksForYou } from "./reaction-model.js";
+import { applyPersonalResponseModifier, liftLedgerRead, whatWorksForYou } from "./reaction-model.js";
 // createProposal + the auto-progression dedup live in profile.js; imported here (as
 // run-progression.ts does for buildRunPlanProposal) so REST + MCP share ONE proposal
 // builder instead of duplicating the change-shaping logic (and drifting).
@@ -96,8 +118,15 @@ export { loadPhrase, recentMuscleLoad, type RecentLoad } from "./hybrid-load.js"
 // fraction (10%) keeps very light loads from ever leaping. Clamping happens
 // here so a prescription is always safe BEFORE it ever reaches propose→apply.
 const STEP_FRAC = 0.1; // ≤10% of the current load…
-const STEP_CEIL_COMPOUND = 5; // …or ≤5 lb on a compound, whichever is smaller
-const STEP_CEIL_ISOLATION = 2.5; // …or ≤2.5 lb on an isolation lift
+// …or the lift's own PROPORTIONAL ceiling, whichever is smaller. A flat 5 lb cap
+// made a 250 lb squat and a 100 lb press earn the identical increment, which is a
+// rounding error on one and a real week's work on the other. The ceiling is a small
+// fraction of what is actually on the bar, floored at the minimum plate jump the
+// lift deserves (so nothing gets SMALLER than it used to be) and rounded onto the
+// 2.5 lb plate grid. Below ~200 lb this reproduces the old flat cap exactly.
+const STEP_CEIL_FRAC = 0.025;
+const STEP_CEIL_COMPOUND = 5; // the compound floor: never smaller than 5 lb
+const STEP_CEIL_ISOLATION = 2.5; // the isolation floor: never smaller than 2.5 lb
 // Timed holds progress by a RELATIVE step — a fraction of the current hold, clamped to
 // a sane floor/ceiling — so a 20s plank and a 120s dead hang each progress proportionally
 // (a flat +N is trivial on a long hold and a huge jump on a short one). Timed work moves
@@ -106,6 +135,29 @@ const SECONDS_STEP_FRAC = 0.1; // ~10% of the current hold…
 const SECONDS_STEP_MIN = 3; // …never smaller than 3s (a real nudge on a short hold)
 const SECONDS_STEP_MAX = 20; // …never larger than 20s in one step (a long hold doesn't leap)
 const DELOAD_FRAC = 0.1; // a deload backs the load off ~10%
+// A REPEAT deload inside this window is not another identical cut — the second one
+// escalates structurally (a lower rep window, or the movement itself rotates). See
+// the escalation branch in repsPrescription and appliedProgressionDeloads (plan.ts).
+const DELOAD_REPEAT_DAYS = 56;
+// How long a lift sits flat before a variation is offered — and how much longer it
+// gets while the athlete is in a genuine deficit. A flat lift on a real cut is muscle
+// HELD, not a stall, and a cut is the worst moment to trade a readable movement for
+// an unfamiliar one.
+const PLATEAU_VARY_WEEKS = 3;
+const PLATEAU_CUT_PATIENCE_WEEKS = 2;
+const DELOAD_WAVE_FRAC = 0.05; // the escalated wave eases load only slightly; the SHAPE changes
+const WAVE_REP_FLOOR = 3; // a rep wave never drops below a genuinely heavy triple
+// Peak week's top set, as a fraction of the lift's best estimated single. The
+// confident version is a true heavy single; the cautious one (a deep cut, or an
+// estimate nothing recent has confirmed) is a double a touch lighter. BOTH sit
+// above the fraction detectStrengthCalibration counts as a verifying set, so a
+// logged peak actually re-anchors the estimate instead of just feeling heavy.
+const PEAK_TOP_FRAC_CONFIDENT = 0.95;
+const PEAK_TOP_FRAC_CAUTIOUS = 0.93;
+const PEAK_BACKOFF_FRAC = 0.85;
+// How far back the est-1RM history is read — mirrors calibration.ts's own window so
+// the peak target is derived from the same number a verifying set is measured against.
+const PEAK_HISTORY_DAYS = 400;
 // A movement run this long (steady, not stalled) is ripe for PROACTIVE variety —
 // introduce a fresh variation before staleness sets in, at a block boundary, rather
 // than waiting for a measured plateau. Tenure = weeks since the lift was first logged.
@@ -151,6 +203,21 @@ export interface Prescription {
   fuel_protected?: boolean;
   movement_response?: RecentMovementResponseVerdict; // repeated comparable dose evidence that supported or braked the step
   rep_step?: boolean; // double-progression REP advance (load held, reps climb in-range) — no plan change
+  // The active training block's phase, when one shaped this prescription. Purely
+  // informational for surfaces; the phase's effect is already in the numbers.
+  block_phase?: ActiveBlockContext["phase"];
+  // PEAK WEEK's top-set protocol: work up to one heavy set, then the back-off work.
+  // A session protocol, not a plan edit — a near-maximal single is not a target the
+  // plan should carry forward, so buildProgressionProposal deliberately skips it and
+  // the result reaches the models through the logged set (detectStrengthCalibration).
+  top_set?: {
+    weight: number;
+    reps: number;
+    backoff: { sets: number; weight: number; rep_low?: number; rep_high?: number } | null;
+  };
+  // A REPEATED deload escalated instead of repeating itself: 'rep_wave' dropped the
+  // rep window, 'variation' rotated the movement out. Informational.
+  escalated?: "rep_wave" | "variation";
   dose_eligibility?: {
     linked_outcome: boolean;
     eligible: boolean;
@@ -397,10 +464,30 @@ function timedStep(seconds: number, modifier?: CoachPersonalModifier | null): nu
   );
 }
 
-// The step ceiling for a lift, by group (compound vs isolation).
-function stepCeiling(group: string | null): number {
+function isIsolationGroup(group: string | null): boolean {
   const g = canonicalGroup(group);
-  return g && ISOLATION_GROUPS.has(g) ? STEP_CEIL_ISOLATION : STEP_CEIL_COMPOUND;
+  return !!g && ISOLATION_GROUPS.has(g);
+}
+
+// The step ceiling for a lift: PROPORTIONAL to what is on the bar, floored at the
+// minimum plate jump for its kind, on the 2.5 lb plate grid. A 100 lb press keeps
+// the familiar 5 lb cap; a 300 lb squat earns 7.5 — the same relative step, not the
+// same absolute one. `weight` null/unknown falls back to the flat floor.
+function stepCeiling(group: string | null, weight?: number | null): number {
+  const floor = isIsolationGroup(group) ? STEP_CEIL_ISOLATION : STEP_CEIL_COMPOUND;
+  const load = weight == null ? null : Math.abs(Number(weight));
+  if (load == null || !Number.isFinite(load) || load <= 0) return floor;
+  return Math.max(floor, round2_5(load * STEP_CEIL_FRAC));
+}
+
+// The same ceiling after the active phase's PACING is applied. The scale has to
+// reach the ceiling and not just the 10% fraction: at any real working weight the
+// ceiling is what actually binds, so a phase that only scaled the fraction would
+// change nothing. Never below the smallest plate — a paced step is still a step.
+function phaseStepCeiling(group: string | null, weight: number | null | undefined, scale: number): number {
+  const ceil = stepCeiling(group, weight);
+  if (!Number.isFinite(scale) || scale <= 0 || scale === 1) return ceil;
+  return Math.max(2.5, round2_5(ceil * scale));
 }
 
 // The learned load step for one lift, read straight off `modifiers` — the map the
@@ -433,10 +520,19 @@ export function trainingModifierFor(
 }
 
 // Clamp a desired LOADED step to the safe cap, rounded to a sane plate. Only
-// for positive loaded weight; assist/bodyweight handled separately.
-function clampedOverload(current: number, group: string | null, modifier?: CoachPersonalModifier | null): number {
-  const ceil = stepCeiling(group);
-  const step = Math.min(Math.abs(current) * STEP_FRAC, ceil);
+// for positive loaded weight; assist/bodyweight handled separately. `phaseScale`
+// is the active block phase's PACING (accumulation earns less of the step,
+// intensification more) — it scales the step BEFORE the ceiling, never past it.
+function clampedOverload(
+  current: number,
+  group: string | null,
+  modifier?: CoachPersonalModifier | null,
+  phaseScale = 1
+): number {
+  const isolation = isIsolationGroup(group);
+  const scale = Number.isFinite(phaseScale) && phaseScale > 0 ? phaseScale : 1;
+  const ceil = phaseStepCeiling(group, current, scale);
+  const step = Math.min(Math.abs(current) * STEP_FRAC * scale, ceil);
   let earned = step;
   if (modifier) {
     const adjusted = applyPersonalResponseModifier({
@@ -462,13 +558,18 @@ function clampedOverload(current: number, group: string | null, modifier?: Coach
     if (adjusted > step) earned = Math.min(ceil, adjusted);
   }
   // Round to 5 lb for compounds, 2.5 for isolation, but never below the smaller
-  // plate (so a light isolation lift still moves).
+  // plate (so a light isolation lift still moves). A compound whose proportional
+  // ceiling has outgrown the 5 lb floor rounds on the 2.5 grid instead — otherwise
+  // a heavy squat's earned 7.5 lb step would be rounded straight back down to 5 and
+  // the proportional cap would be decorative.
   const next = current + earned;
-  const rounded = ceil === STEP_CEIL_ISOLATION ? round2_5(next) : round5(next);
+  const rounded = isolation || ceil % 5 !== 0 ? round2_5(next) : round5(next);
   // Guarantee the rounding never produces a step BIGGER than the cap, and never
   // a no-op (a too-small fraction shouldn't strand the lift).
   if (rounded > current + ceil) return current + ceil;
-  if (rounded <= current) return current + (ceil === STEP_CEIL_ISOLATION ? 2.5 : 5);
+  // …and the minimum-plate guarantee never exceeds a ceiling the phase has paced
+  // down: a half-step phase must be able to produce a genuine half step.
+  if (rounded <= current) return current + Math.min(ceil, isolation ? 2.5 : 5);
   return rounded;
 }
 
@@ -482,10 +583,16 @@ function planItemFor(name: string): {
   weight: number | null;
   seconds: number | null;
   kind: string;
+  // Where this movement sits among the day's STRENGTH work (0-based). The first
+  // couple of movements are the day's main work; what follows them is accessory —
+  // the same reading calibration.ts uses to decide which lifts are worth re-testing.
+  strength_position: number;
 } | null {
   const lc = String(name).toLowerCase();
   for (const day of getPlan() as any[]) {
+    let strengthPosition = 0;
     for (const it of day.items || []) {
+      const cardio = it.kind === "cardio";
       if (String(it.exercise || "").toLowerCase() === lc) {
         return {
           plan_item_id: it.id,
@@ -495,9 +602,11 @@ function planItemFor(name: string): {
           rep_high: it.rep_high ?? null,
           weight: it.target_weight ?? null,
           seconds: it.target_seconds ?? null,
-          kind: it.kind === "cardio" ? "cardio" : "strength",
+          kind: cardio ? "cardio" : "strength",
+          strength_position: strengthPosition,
         };
       }
+      if (!cardio) strengthPosition += 1;
     }
   }
   return null;
@@ -972,6 +1081,238 @@ export function learnedPreferences(): ParsedPreference[] {
   }
 }
 
+// ---- periodization: is this lift one the phase speaks to? --------------------
+// The block's phase shapes MAIN work — the first movements of a day, the compounds
+// the program is built on. Isolation and accessory work stays on plain double
+// progression, where a rep window and a small plate are the whole story.
+const MAIN_LIFT_POSITIONS = 2;
+
+function isMainLift(group: string | null, plan: ReturnType<typeof planItemFor>): boolean {
+  if (!plan || plan.kind === "cardio") return false;
+  if (plan.strength_position >= MAIN_LIFT_POSITIONS) return false;
+  return !isIsolationGroup(group);
+}
+
+// The best estimated single this lift's logged work supports — Epley on the best
+// set of each day, carried as a running max. This MIRRORS calibration.ts's own
+// reconstruction on purpose: a peak-week top set is prescribed as a fraction of
+// exactly the number a verifying set will be measured against, so a completed peak
+// re-anchors the estimate rather than landing just under the bar it had to clear.
+function bestEstimated1rm(name: string, asOf: string): number | null {
+  try {
+    const key = normalizedExerciseKey(name);
+    if (!key) return null;
+    const ids = (db.prepare(`SELECT id, name FROM exercises`).all() as Array<{ id: number; name: string }>)
+      .filter((row) => normalizedExerciseKey(String(row.name ?? "")) === key)
+      .map((row) => Number(row.id));
+    if (!ids.length) return null;
+    const since = addDaysISO(asOf, -PEAK_HISTORY_DAYS) ?? asOf;
+    const rows = db
+      .prepare(
+        `SELECT ls.weight AS weight, ls.reps AS reps
+           FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+          WHERE ls.exercise_id IN (${ids.map(() => "?").join(",")})
+            AND ls.weight IS NOT NULL AND ls.weight > 0
+            AND ls.reps IS NOT NULL AND ls.reps > 0
+            AND s.date <= ? AND s.date >= ?`
+      )
+      .all(...ids, asOf, since) as Array<{ weight: number; reps: number }>;
+    let best = 0;
+    for (const row of rows) {
+      const weight = Number(row.weight);
+      const reps = Number(row.reps);
+      if (!Number.isFinite(weight) || !Number.isFinite(reps) || weight <= 0 || reps <= 0) continue;
+      const est = weight * (1 + reps / 30);
+      if (est > best) best = est;
+    }
+    return best > 0 ? best : null;
+  } catch {
+    return null;
+  }
+}
+
+// Round UP onto the plate grid. The peak target rounds up rather than to nearest so
+// a light lift's top set can never land a hair UNDER the fraction that makes it a
+// verifying set — which would turn the whole peak week into a heavy set that
+// anchored nothing.
+function ceil2_5(n: number): number {
+  return Math.ceil(n / 2.5) * 2.5;
+}
+
+interface TopSetProtocol {
+  weight: number;
+  reps: number;
+  backoff: { sets: number; weight: number; rep_low?: number; rep_high?: number } | null;
+}
+
+// Peak week's protocol for one main lift: work up to a heavy top set derived from
+// the lift's own best estimated single, then back off for the remaining work. This
+// is est-1RM's FIRST prescriptive role — until now the estimate was read, charted
+// and re-anchored, but it never told anybody what to lift.
+//
+// Cautious (a slightly lighter double) whenever the estimate is unconfirmed or the
+// cut is biting; confident (a true heavy single) otherwise. Both clear the
+// verifying fraction, so either way the logged result re-anchors the estimate.
+function peakTopSetFor(
+  name: string,
+  baseWeight: number,
+  sets: number,
+  repLow: number | undefined,
+  repHigh: number | undefined,
+  cautious: boolean,
+  asOf: string
+): TopSetProtocol | null {
+  const est = bestEstimated1rm(name, asOf);
+  if (est == null || est <= 0) return null;
+  const frac = cautious ? PEAK_TOP_FRAC_CAUTIOUS : PEAK_TOP_FRAC_CONFIDENT;
+  // Never lighter than what they already handle for working reps — that would be a
+  // back-off set masquerading as a peak.
+  const weight = Math.max(ceil2_5(est * frac), ceil2_5(baseWeight));
+  const backoffSets = Math.max(1, (Number(sets) || 1) - 1);
+  return {
+    weight,
+    reps: cautious ? 2 : 1,
+    backoff: {
+      sets: backoffSets,
+      weight: round2_5(weight * PEAK_BACKOFF_FRAC),
+      rep_low: repLow,
+      rep_high: repHigh,
+    },
+  };
+}
+
+// ---- the cut, as a lever rather than a sentence ------------------------------
+// "Holding strength on a cut is a win" was prose in the playbook and nothing in the
+// math. These two reads make it operational: the protective fuel read says whether
+// training is being asked for more than the food supports, and the cut-quality read
+// says whether the deficit itself is running hot. Both are READ-ONLY here.
+export interface CutPressure {
+  /** The fuel read asks for aggression to be held. */
+  hold: boolean;
+  /** The fuel read asks for an outright lighter dose. */
+  reduce: boolean;
+  /** The cut itself is deep: anchor lifts sliding, or losing faster than lean-safe. */
+  deep: boolean;
+  /** Any of the above — the athlete is training in a genuine deficit right now. */
+  any: boolean;
+}
+
+const NO_CUT_PRESSURE: CutPressure = { hold: false, reduce: false, deep: false, any: false };
+
+function readCutPressure(date: string): CutPressure {
+  let hold = false;
+  let reduce = false;
+  let deep = false;
+  try {
+    const fuel = currentUnderfuelingRead(date);
+    hold = fuel?.action?.training === "hold_aggression";
+    reduce = fuel?.action?.training === "reduce";
+  } catch {
+    /* no fuel read → no pressure claimed */
+  }
+  try {
+    const cut = cutQualityRead(date);
+    if (cut.active && (cut.verdict === "sliding" || cut.rate.vs_lean_safe === "above")) deep = true;
+  } catch {
+    /* no cut read → no pressure claimed */
+  }
+  return { hold, reduce, deep, any: hold || reduce || deep };
+}
+
+// The cut read is expensive (it walks the goal check and the program state), so it
+// is computed at most ONCE per pass and only when a branch actually consults it —
+// most days, no lift asks. A whole-day pass threads ONE thunk through every lift so
+// the work is shared rather than repeated per movement.
+function cutPressureThunk(date: string, provided?: CutPressure | (() => CutPressure) | null): () => CutPressure {
+  if (typeof provided === "function") return provided;
+  if (provided) return () => provided;
+  let cached: CutPressure | null = null;
+  return () => {
+    if (!cached) cached = readCutPressure(date);
+    return cached;
+  };
+}
+
+// ---- the calibration read, shared across a day's pass -----------------------
+// Reading how much a lift's estimate deserves to be trusted costs a full exercises
+// SELECT plus a 400-day walk of that lift's logged sets, and only TWO branches
+// below ever consult it (the peak-week protocol and the regressing arm). Computing
+// it eagerly for every movement put that walk on the daily-decision, session-primer
+// and coach hot paths for lifts that never asked. So it is LAZY per lift and shared
+// per pass — the same shape as cutPressureThunk, keyed per movement because this
+// answer, unlike the cut read, is about one lift rather than about the day.
+export type EstimateReader = (name: string) => UnverifiedRegressionHold;
+
+function estimateReader(date: string, provided?: EstimateReader | null): EstimateReader {
+  if (provided) return provided;
+  const cache = new Map<string, UnverifiedRegressionHold>();
+  return (name: string) => {
+    const key = normalizedExerciseKey(String(name ?? "")) || String(name ?? "");
+    const cached = cache.get(key);
+    if (cached) return cached;
+    const read = unverifiedRegressionHold(name, date);
+    cache.set(key, read);
+    return read;
+  };
+}
+
+// ---- what the ledger's own verdicts add to a stalled lift --------------------
+// Conclusive verdicts on THIS lift's past progression expectations. Aligned
+// verdicts buy patience (the lift has been answering honestly — give it another
+// clean run before reshuffling); missed verdicts add confidence to changing
+// something. It only ever moves the flat-for-long-enough line; it never reaches a
+// safety brake, and an uninformative ledger says nothing at all.
+const LEDGER_RECENT_VERDICTS = 3;
+
+interface LedgerCounsel {
+  /** Extra weeks of patience before a flat lift is offered a variation. */
+  patience: number;
+  /** The ledger has been missing on this lift — a change is better supported. */
+  doubt: boolean;
+}
+
+function ledgerCounsel(name: string): LedgerCounsel {
+  try {
+    const read = liftLedgerRead(name);
+    if (!read?.informative || !Array.isArray(read.verdicts) || !read.verdicts.length)
+      return { patience: 0, doubt: false };
+    const recent = read.verdicts.slice(0, LEDGER_RECENT_VERDICTS);
+    const missed = recent.filter((v) => v?.outcome === "missed").length;
+    const aligned = recent.filter((v) => v?.outcome === "aligned").length;
+    if (missed >= 2) return { patience: 0, doubt: true };
+    if (aligned >= 2 && missed === 0) return { patience: 2, doubt: false };
+    return { patience: 0, doubt: false };
+  } catch {
+    return { patience: 0, doubt: false };
+  }
+}
+
+// Has this lift already been backed off recently? Applied auto-progression deloads
+// carry their own marker (see appliedProgressionDeloads in plan.ts).
+function deloadedRecently(name: string, date: string): boolean {
+  const since = addDaysISO(date, -DELOAD_REPEAT_DAYS);
+  if (!since) return false;
+  try {
+    return appliedProgressionDeloads(name, since, date) > 0;
+  } catch {
+    return false;
+  }
+}
+
+// …and is an escalated rep wave ALREADY running on it? The escalation answers a
+// repeated deload by changing the shape of the work; re-answering the same way
+// every week is the same failure one rung up, and it never terminates. So the
+// ladder stops here: a lift inside a wave is left to run it out.
+function waveRunning(name: string, date: string): boolean {
+  const since = addDaysISO(date, -DELOAD_REPEAT_DAYS);
+  if (!since) return false;
+  try {
+    return appliedProgressionEscalations(name, since, date) > 0;
+  } catch {
+    return false;
+  }
+}
+
 // Same-pattern variation MENU for a lift, ranked toward the athlete's available
 // equipment + heavier COMPOUND loading (the owner's explicit goal), gently biased
 // by learned 'preference' memories, never re-suggesting a movement/slot already in
@@ -998,9 +1339,31 @@ function rankedVaryOptions(name: string, ctx?: PrescCtx): { name: string; why: s
         (candidatePress != null && pressSlotKey(planned) === candidatePress)
     );
   });
-  return preferenceRerank(filtered, name, prefs)
+  return riskRerank(preferenceRerank(filtered, name, prefs), ctx?.date)
     .slice(0, 3)
     .map((v) => ({ name: v.name, why: v.why }));
+}
+
+// Demote movements this athlete's own tolerance memory has FLAGGED. A swap-in is a
+// movement they'll be running for weeks, so proposing one that has repeatedly gone
+// badly is worse than proposing the second-best candidate. Never filters — a flagged
+// movement drops to the back of the menu but stays available, the same way a
+// disliked one does. Stable: everything else keeps the ranking it arrived with.
+function riskRerank(candidates: ExerciseVariation[], date?: string): ExerciseVariation[] {
+  if (candidates.length < 2) return candidates;
+  const flagged = (candidate: ExerciseVariation): boolean => {
+    try {
+      const ex = findExercise(candidate.name);
+      if (!ex) return false; // never trained → no tolerance memory to hold against it
+      return movementRiskFor(ex.id, date)?.risk === "flagged";
+    } catch {
+      return false;
+    }
+  };
+  return candidates
+    .map((c, i) => ({ c, i, flagged: flagged(c) }))
+    .sort((a, b) => Number(a.flagged) - Number(b.flagged) || a.i - b.i)
+    .map((x) => x.c);
 }
 
 // ---- the per-lift prescription ----------------------------------------------
@@ -1017,6 +1380,9 @@ export interface PrescriptionOpts {
   personalModifier?: CoachPersonalModifier | null; // learned step size; never overrides constraints/recovery
   preferences?: ParsedPreference[] | null; // learned like/dislike memories; gently re-ranks variety, never constraints
   date?: string | null; // the day whose phrasing rotation applies (defaults to today)
+  block?: ActiveBlockContext | null; // the active periodization block; null = nothing periodizes this pass
+  cut?: CutPressure | (() => CutPressure) | null; // the shared fuel/cut read for the pass (lazy when a thunk, recomputed when absent)
+  estimate?: EstimateReader | null; // the shared, lazy per-lift calibration read for the pass
 }
 
 export function nextPrescription(
@@ -1053,6 +1419,7 @@ export function nextPrescription(
   // Nothing logged and nothing planned → genuinely nothing to read.
   if (!last && !plan) return null;
 
+  const date = String(opts?.date || localDateISO()).slice(0, 10);
   const brakeCtx: PrescCtx = {
     canonGroup,
     autoreg,
@@ -1062,7 +1429,10 @@ export function nextPrescription(
     excludeNames,
     personalModifier,
     preferences,
-    date: String(opts?.date || localDateISO()).slice(0, 10),
+    date,
+    block: opts && "block" in opts ? (opts.block ?? null) : activeBlockContext(date),
+    cut: cutPressureThunk(date, opts?.cut ?? null),
+    estimate: estimateReader(date, opts?.estimate ?? null),
   };
   if (mode === "timed")
     return timedPrescription(exerciseName, group, loadConstrained, plan, cur, last, state, brakeCtx);
@@ -1079,6 +1449,9 @@ interface PrescCtx {
   personalModifier: CoachPersonalModifier | null;
   preferences: ParsedPreference[];
   date: string; // keys the per-day phrasing rotation (with the exercise as the offset)
+  block: ActiveBlockContext | null; // the active periodization block, when one is running
+  cut: () => CutPressure; // the fuel/cut pressure, computed at most once and only if consulted
+  estimate: EstimateReader; // the calibration read, computed at most once per lift and only if consulted
 }
 
 function repsPrescription(
@@ -1155,44 +1528,146 @@ function repsPrescription(
 
   const status = state?.status ?? "new";
   const lastRir = last?.rir ?? null;
+  // PERIODIZATION. The active block's phase changes what a MAIN lift is asked for;
+  // isolation/accessory work keeps plain double progression, and with no block
+  // running `policy` is null and every line below behaves exactly as it always did.
+  const mainLift = isMainLift(group, plan);
+  const policy: PhaseProgressionPolicy | null =
+    brakeCtx?.block && mainLift ? phaseProgressionPolicy(brakeCtx.block.phase) : null;
   // DOUBLE PROGRESSION, grounded in what was ACTUALLY logged: advance REPS within the
   // prescribed range first, and only add LOAD once EVERY working set has hit the TOP of
   // the range — then reset reps to the bottom at the new load. `allSetsAtTop` reads the
   // latest session's working sets (a lone logged top set is trusted); `roomInRange` means
   // the top set is still below the ceiling (a rep to earn). No range (repHigh null) → the
   // old single-top-set read.
+  //
+  // A volume phase raises that ceiling by its saturation reps: the range has to be
+  // genuinely full — a clean rep ON TOP of it, every set — before the load moves, so
+  // the phase is spent banking work rather than stepping the bar.
   const hasRange = repLow != null && repHigh != null;
+  const repCeiling = hasRange ? (repHigh as number) + (policy?.rep_saturation ?? 0) : null;
   const workingSets = latestWorkingSets(name);
   const doseEligibility = linkedDoseEligibility(last?.session_id, name);
   const topReps = last?.reps != null ? Number(last.reps) : null;
   const setsAtTop = hasRange
-    ? workingSets.filter((s) => s.reps != null && (s.reps as number) >= (repHigh as number)).length
+    ? workingSets.filter((s) => s.reps != null && (s.reps as number) >= (repCeiling as number)).length
     : 0;
   const allSetsAtTop = hasRange && workingSets.length > 0 && setsAtTop === workingSets.length;
-  const roomInRange = hasRange && topReps != null && topReps < (repHigh as number);
+  const topSetAtTop = hasRange && topReps != null && topReps >= (repCeiling as number);
+  const roomInRange = hasRange && topReps != null && topReps < (repCeiling as number);
   // "Strong" = the work earned progression: last top set at RIR ≥ 2, OR the program-state
   // trend reads progressing. RIR ≤ 1 means it was a grind — hold.
   const strong = ((lastRir != null && lastRir >= 2) || status === "progressing") && doseEligibility.eligible;
   // The LOAD step is earned only when EVERY working set capped the range (double
   // progression). With no rep range, fall back to a strong top set (RIR 2+ / progressing).
-  const earned = hasRange ? allSetsAtTop && strong : strong;
+  // An INTENSIFICATION phase buys the step with intensity instead of completeness: a
+  // strong top set at the ceiling is enough on its own.
+  const earnedByWork = hasRange ? (policy?.top_set_earns_load ? topSetAtTop : allSetsAtTop) && strong : strong;
+  // The REP stage: strong work with a rep still to win inside the (possibly widened) range.
+  const repStageEligible = hasRange && strong && roomInRange && !allSetsAtTop;
+  // A recovery or peak week adds nothing new — neither load nor another rep. The
+  // work was real; it just waits for the week to turn over.
+  const phaseHolds = !!policy?.holds_load && (earnedByWork || repStageEligible);
+  const earned = policy?.holds_load ? false : earnedByWork;
+  // The phase's PACING of an earned step. Outside a block this is 1 — the step size
+  // the engine has always produced.
+  const phaseStepScale = policy?.step_scale ?? 1;
+  // How much this lift's estimated single deserves to be trusted, and whether an
+  // apparent slip is worth pausing over rather than deloading. Read at most once
+  // per lift per pass, and ONLY from the two branches below that consult it.
+  let estimateRead: UnverifiedRegressionHold | null = null;
+  const estimate = (): UnverifiedRegressionHold =>
+    (estimateRead ??= (brakeCtx?.estimate ?? estimateReader(date))(name));
+  // PEAK WEEK's top-set protocol, when the phase asks for one and this lift is a main
+  // lift the plan actually loads (the same reading the calibration ledger uses to pick
+  // which lifts are worth re-testing). A slipping lift is not tested; it is rebuilt.
+  const peakProtocol =
+    policy?.top_set_protocol &&
+    !loadConstrained &&
+    status !== "regressing" &&
+    baseWeight != null &&
+    baseWeight > 0 &&
+    (plan?.weight ?? 0) > 0
+      ? peakTopSetFor(
+          name,
+          baseWeight,
+          sets,
+          repLow,
+          repHigh,
+          estimate().confidence !== "verified" || (brakeCtx?.cut?.() ?? NO_CUT_PRESSURE).any,
+          date
+        )
+      : null;
+  let topSet: TopSetProtocol | undefined;
+  // A repeat deload rewrites the rep window instead of cutting load again (below).
+  let waveRepLow: number | undefined;
+  let waveRepHigh: number | undefined;
+  let escalated: Prescription["escalated"];
 
   if (loadConstrained) {
     action = "hold";
     nextWeight = baseWeight;
     why = say(voice.CONSTRAINED_HOLD, "constrained_hold");
+  } else if (peakProtocol) {
+    // PEAK WEEK. The block's last week on a main lift is not another small step —
+    // it is the week the work gets expressed: up to one heavy top set derived from
+    // this lift's own best estimate, then back-off work. Logged, that top set is
+    // exactly what re-anchors the estimate the rest of the year progresses from.
+    action = "overload";
+    nextWeight = peakProtocol.weight;
+    topSet = peakProtocol;
+    why = say(voice.REALIZATION_TOP_SET, "realization_top_set")(
+      `${peakProtocol.weight} lb`,
+      peakProtocol.reps === 1 ? "single" : peakProtocol.reps === 2 ? "double" : "triple"
+    );
   } else if (status === "regressing") {
-    action = "deload";
-    nextWeight = baseWeight != null && baseWeight > 0 ? round5(baseWeight * (1 - DELOAD_FRAC)) : baseWeight;
-    why = say(voice.REGRESSING_DELOAD, "regressing_deload");
+    // A slip is not automatically a load problem. Cutting the weight cannot fix a
+    // calorie shortfall, and it cannot fix an estimate that nothing heavy has
+    // confirmed in months — in both cases the honest move is to hold and let the
+    // real cause resolve (the calibration ladder already suggests the test).
+    //
+    // The unverified arm is SCOPED and BOUNDED by calibration.ts, and has to be:
+    // "unverified" is near-universal on real data, so an unconditional hold here
+    // would switch the deload arm off, and a hold on a lift the ladder never offers
+    // a test for is a dead end that leaves it at its current weight indefinitely.
+    // See unverifiedRegressionHold for the three conditions.
+    const cut = brakeCtx?.cut?.() ?? NO_CUT_PRESSURE;
+    if (cut.any) {
+      action = "hold";
+      nextWeight = baseWeight;
+      why = say(voice.CUT_REGRESSION_HOLD, "cut_regression_hold");
+    } else if (estimate().holds) {
+      action = "hold";
+      nextWeight = baseWeight;
+      why = say(voice.UNVERIFIED_REGRESSION_HOLD, "unverified_regression_hold");
+    } else {
+      action = "deload";
+      nextWeight = baseWeight != null && baseWeight > 0 ? round5(baseWeight * (1 - DELOAD_FRAC)) : baseWeight;
+      why = say(voice.REGRESSING_DELOAD, "regressing_deload");
+    }
   } else if (status === "plateaued") {
-    // Grinding (RIR ≤ 1) → deload; flat ≥ ~3 wk → vary; else hold/technique.
+    // Grinding (RIR ≤ 1) → deload; flat long enough → vary; else hold/technique.
+    //
+    // How long "long enough" is is not a constant any more. A genuine deficit widens
+    // it — a flat lift while the scale falls is muscle held, not a stall, and
+    // reshuffling movements mid-cut trades a readable lift for a fresh unknown. The
+    // ledger's own record on THIS lift moves it too: verdicts that have been landing
+    // buy it patience, verdicts that have been missing bring the change forward.
+    const cut = brakeCtx?.cut?.() ?? NO_CUT_PRESSURE;
+    const counsel = ledgerCounsel(name);
+    const flatWeeks = state?.weeks_static ?? 0;
+    const varyAfterWeeks = Math.min(
+      8,
+      Math.max(2, PLATEAU_VARY_WEEKS + (cut.any ? PLATEAU_CUT_PATIENCE_WEEKS : 0) + counsel.patience - (counsel.doubt ? 1 : 0))
+    );
     const grinding = lastRir != null && lastRir <= 1;
-    const flatLong = (state?.weeks_static ?? 0) >= 3;
+    const flatLong = flatWeeks >= varyAfterWeeks;
     if (grinding) {
       action = "deload";
       nextWeight = baseWeight != null && baseWeight > 0 ? round5(baseWeight * (1 - DELOAD_FRAC)) : baseWeight;
-      why = say(voice.PLATEAU_GRIND_DELOAD, "plateau_grind_deload");
+      why = counsel.doubt
+        ? say(voice.LEDGER_MISSED_DELOAD, "ledger_missed_deload")
+        : say(voice.PLATEAU_GRIND_DELOAD, "plateau_grind_deload");
     } else if (flatLong) {
       action = "vary";
       nextWeight = baseWeight;
@@ -1210,7 +1685,12 @@ function repsPrescription(
     } else {
       action = "hold";
       nextWeight = baseWeight;
-      why = say(voice.PLATEAU_HOLD, "plateau_hold");
+      // Same hold, three different truths about why it is the right one.
+      why = cut.any
+        ? say(voice.PLATEAU_CUT_HOLD, "plateau_cut_hold")
+        : counsel.patience > 0
+          ? say(voice.LEDGER_PATIENCE_HOLD, "ledger_patience_hold")
+          : say(voice.PLATEAU_HOLD, "plateau_hold");
     }
   } else if (!last && plan) {
     action = "hold";
@@ -1245,14 +1725,18 @@ function repsPrescription(
       brakeCtx?.tenureWeeks ?? 0,
       varyTo ?? "a close variation"
     );
-  } else if (hasRange && strong && roomInRange && !allSetsAtTop) {
+  } else if (repStageEligible && !policy?.holds_load) {
     // DOUBLE PROGRESSION — the REP stage. The work was strong but not every set has
     // capped the range yet: advance reps within the range, hold the load. This is NO
     // plan change (the plan already prescribes the range) — the athlete just earns reps.
+    // In a volume phase the rep being chased is the one ON TOP of the plan's range.
     action = "overload";
     repStep = true;
     nextWeight = baseWeight;
-    why = say(voice.REP_STAGE_OVERLOAD, "rep_stage_overload")(repHigh as number);
+    why =
+      policy && policy.rep_saturation > 0
+        ? say(voice.ACCUMULATION_REP_STAGE, "accumulation_rep_stage")(repCeiling as number)
+        : say(voice.REP_STAGE_OVERLOAD, "rep_stage_overload")(repHigh as number);
   } else if (earned) {
     // DOUBLE PROGRESSION — the LOAD stage. Every working set capped the range at RIR 2+
     // (or no range + a strong top set) → the small earned step up, then reset to the bottom.
@@ -1263,8 +1747,8 @@ function repsPrescription(
       why = say(voice.BODYWEIGHT_OVERLOAD, "bodyweight_overload");
     } else if (baseWeight < 0) {
       // Assisted — reduce the assist toward bodyweight (a smaller absolute value).
-      const ceil = stepCeiling(group);
-      const standardStep = Math.min(Math.abs(baseWeight) * STEP_FRAC, ceil);
+      const ceil = phaseStepCeiling(group, baseWeight, phaseStepScale);
+      const standardStep = Math.min(Math.abs(baseWeight) * STEP_FRAC * phaseStepScale, ceil);
       const step = brakeCtx?.personalModifier
         ? applyPersonalResponseModifier({
             base: standardStep,
@@ -1281,11 +1765,25 @@ function repsPrescription(
           ? say(voice.ASSIST_TO_BODYWEIGHT, "assist_to_bodyweight")
           : say(voice.ASSIST_PEEL, "assist_peel");
     } else {
-      nextWeight = clampedOverload(baseWeight, group, brakeCtx?.personalModifier);
-      why = hasRange
-        ? say(voice.EARNED_RANGE_OVERLOAD, "earned_range_overload")(repHigh as number, repLow as number)
-        : say(voice.EARNED_OPEN_OVERLOAD, "earned_open_overload");
+      nextWeight = clampedOverload(baseWeight, group, brakeCtx?.personalModifier, phaseStepScale);
+      // The phase, when there is one, owns the sentence: the same earned step means
+      // something different in a volume stretch than in a sharpening one.
+      why =
+        policy?.top_set_earns_load && hasRange
+          ? say(voice.INTENSIFICATION_OVERLOAD, "intensification_overload")
+          : policy && policy.step_scale < 1
+            ? say(voice.ACCUMULATION_OVERLOAD, "accumulation_overload")
+            : hasRange
+              ? say(voice.EARNED_RANGE_OVERLOAD, "earned_range_overload")(repHigh as number, repLow as number)
+              : say(voice.EARNED_OPEN_OVERLOAD, "earned_open_overload");
     }
+  } else if (phaseHolds) {
+    // The work earned something and the WEEK is the reason it waits.
+    action = "hold";
+    nextWeight = baseWeight;
+    why = policy?.top_set_protocol
+      ? say(voice.PHASE_PEAK_HOLD, "phase_peak_hold")
+      : say(voice.PHASE_DELOAD_HOLD, "phase_deload_hold");
   } else {
     action = "hold";
     nextWeight = baseWeight;
@@ -1299,8 +1797,19 @@ function repsPrescription(
               ? say(voice.DOSE_UNDER_HOLD, "dose_under_hold")
               : say(voice.DOSE_NON_COMPARABLE_HOLD, "dose_non_comparable_hold");
     else if (!last) why = say(voice.NO_HISTORY_HOLD, "no_history_hold");
-    else if (hasRange && topReps != null && topReps >= (repHigh as number) && !allSetsAtTop)
-      why = say(voice.TOP_SET_ONLY_HOLD, "top_set_only_hold")(repHigh as number);
+    else if (hasRange && topReps != null && topReps >= (repCeiling as number) && !allSetsAtTop)
+      // In a volume phase the ceiling being named sits ABOVE the rep window printed
+      // on the plan card — plan_items is deliberately never rewritten for a block, so
+      // the card says 6–8 while the line asks for 9. The gap is real and intended;
+      // the sentence has to own it rather than leave the two contradicting.
+      why =
+        policy && policy.rep_saturation > 0
+          ? say(voice.ACCUMULATION_TOP_SET_ONLY_HOLD, "accumulation_top_set_only_hold")(repCeiling as number)
+          : say(voice.TOP_SET_ONLY_HOLD, "top_set_only_hold")(repCeiling as number);
+    // A lift carrying its load through a real deficit is holding ground, not falling
+    // short of a bar. Same prescription; the athlete is told what it actually means.
+    else if ((brakeCtx?.cut?.() ?? NO_CUT_PRESSURE).any && baseWeight != null && baseWeight > 0)
+      why = say(voice.CUT_HOLDING_WIN, "cut_holding_win");
     else why = say(voice.NOT_EARNED_HOLD, "not_earned_hold");
   }
 
@@ -1311,7 +1820,9 @@ function repsPrescription(
     const lbl = baseWeight < 0 ? `${Math.abs(baseWeight)} lb assist` : `${baseWeight} lb`;
     // "The plan said a lighter number" and "the plan said nothing at all" are
     // different facts, and the athlete can tell them apart on the card.
-    if (action === "overload" && !repStep)
+    // …except in peak week, where the sentence IS the protocol — a catch-up line
+    // would drop the top set the athlete is meant to work up to.
+    if (action === "overload" && !repStep && !topSet)
       why = planUnset
         ? say(voice.PLAN_UNSET_OVERLOAD, "plan_unset_overload")(lbl)
         : say(voice.PLAN_BEHIND_OVERLOAD, "plan_behind_overload")(lbl);
@@ -1326,6 +1837,11 @@ function repsPrescription(
   // Repeated under-prescription moves at most one rung toward safety before the
   // existing acute autoregulation gate runs. A latest linked ineligible dose has
   // already taken that rung, so the history response must not compound it.
+  // Whether the final deload was MANUFACTURED by a brake rather than chosen by the
+  // progression ladder. The escalation below replaces a chosen deload outright (a
+  // second cut is not the lever), but it may never hand back load a brake asked to
+  // take off — those are two different claims about the same number.
+  let brakedDeload = false;
   const response = recentMovementResponse(name, {
     intent_key: `strength:reps:${repLow ?? "open"}-${repHigh ?? repLow ?? "open"}`,
   });
@@ -1334,9 +1850,12 @@ function repsPrescription(
       action = "hold";
       nextWeight = baseWeight;
       repStep = false;
+      // The peak protocol is a near-maximal effort; a braked week is not the week for it.
+      topSet = undefined;
       why = say(voice.MOVEMENT_RESPONSE_HOLD, "movement_response_hold");
     } else if (action === "hold" && last && doseEligibility.eligible) {
       action = "deload";
+      brakedDeload = true;
       nextWeight = baseWeight != null && baseWeight > 0 ? round5(baseWeight * (1 - DELOAD_FRAC)) : baseWeight;
       why = say(voice.MOVEMENT_RESPONSE_DELOAD, "movement_response_deload");
     }
@@ -1357,21 +1876,92 @@ function repsPrescription(
     action = brake.action;
     why = brake.why;
     repStep = false; // a braked step is a hold/deload, not a rep advance
+    topSet = undefined; // …and never a near-maximal top set
     if (brake.action === "hold") nextWeight = baseWeight;
     else nextWeight = baseWeight != null && baseWeight > 0 ? round5(baseWeight * (1 - DELOAD_FRAC)) : baseWeight;
     varyTo = undefined;
     varyOptions = undefined;
   }
 
-  const suggested: PrescriptionTarget = {
-    sets,
-    rep_low: repLow ?? undefined,
-    rep_high: repHigh ?? undefined,
-    weight: nextWeight,
-  };
+  // ESCALATION. A second light deload on the same lift inside a couple of months is
+  // the definition of doing the same thing again: the first one already told us that
+  // taking a tenth off and rebuilding is not what this lift needs. So the repeat
+  // changes SHAPE instead of size — a lower, heavier rep window for a stretch (the
+  // load barely moves; the scheme is the new stimulus), or, when there is no window
+  // to wave, the movement itself rotates out.
+  //
+  // Runs LAST, off the FINAL action, and that ordering is the point. It used to run
+  // before the brakes, so a deload the movement-response brake created afterwards
+  // was never considered for escalation — while still carrying the deload marker
+  // into the audit trail, which is what makes the NEXT one a "repeat". The two reads
+  // disagreed about the same cut. Running here, the marker and the escalation are
+  // derived from the same final decision, and a wave can no longer be left stranded
+  // in `suggested` after a brake recomputed the weight underneath it.
+  //
+  // The ACUTE safety brake suppresses it outright. Its deload is a recovery response
+  // to a sore joint or a smoked muscle, not evidence that a load cut is the wrong
+  // lever for this lift — and restructuring a block, or rotating a movement, is not
+  // what a sore knee is asking for. Its own sentence is the honest one.
+  if (action === "deload" && !loadConstrained && !autoregulated && deloadedRecently(name, date)) {
+    if (waveRunning(name, date)) {
+      // A wave is already in flight. Stacking a second one changes the shape again
+      // before the first change has had a chance to show anything — so the lift
+      // holds and runs the wave out. The plan already carries the wave's own rep
+      // window, so nothing needs to be re-prescribed here.
+      action = "hold";
+      nextWeight = baseWeight;
+      why = say(voice.ESCALATE_WAVE_SETTLE, "escalate_wave_settle");
+    } else if (hasRange && baseWeight != null && baseWeight > 0) {
+      waveRepLow = Math.max(WAVE_REP_FLOOR, (repLow as number) - 2);
+      waveRepHigh = Math.max(waveRepLow + 1, (repHigh as number) - 3);
+      // The wave eases load only slightly — the scheme is the new stimulus, and it
+      // REPLACES the second cut the ladder would otherwise have taken. But when a
+      // brake is what produced this deload, its cut stands: the shape changes, and
+      // load a brake asked to take off never travels back up.
+      const waved = round5(baseWeight * (1 - DELOAD_WAVE_FRAC));
+      nextWeight = brakedDeload && nextWeight != null && nextWeight > 0 ? Math.min(waved, nextWeight) : waved;
+      escalated = "rep_wave";
+      why = say(voice.ESCALATE_REP_WAVE, "escalate_rep_wave")(waveRepLow, waveRepHigh);
+    } else if (varyCandidates.length > 0) {
+      action = "vary";
+      nextWeight = baseWeight;
+      varyOptions = varyCandidates;
+      varyTo = varyOptions[0]?.name;
+      escalated = "variation";
+      why = say(voice.ESCALATE_VARIATION, "escalate_variation")(varyTo ?? "a close variation");
+    }
+  }
+
+  // A peak week is TWO-TIER work and PrescriptionTarget only describes one tier, so
+  // `suggested` carries the BULK of the session — the back-off block — and `top_set`
+  // carries the heavy single the athlete works up to first (the delta text and the
+  // why both lead with it). That split matters beyond presentation: the daily
+  // composition authorizes today's session from `suggested`, and a consumer that
+  // knows nothing about peak weeks must land on a real, lighter session rather than
+  // on one near-maximal single with the rest of the work missing.
+  //
+  // A rep wave carries its new, lower window instead.
+  const suggested: PrescriptionTarget = topSet
+    ? {
+        sets: topSet.backoff?.sets ?? sets,
+        rep_low: repLow ?? undefined,
+        rep_high: repHigh ?? undefined,
+        weight: topSet.backoff?.weight ?? nextWeight,
+      }
+    : {
+        sets,
+        rep_low: waveRepLow ?? repLow ?? undefined,
+        rep_high: waveRepHigh ?? repHigh ?? undefined,
+        weight: nextWeight,
+      };
   // A rep advance holds the load and climbs the range — the honest delta is "+1 rep",
-  // not "hold X lb" (loadedDeltaText would read it as a no-op load move).
-  const delta_text = repStep ? "+1 rep" : loadedDeltaText(baseWeight, nextWeight);
+  // not "hold X lb" (loadedDeltaText would read it as a no-op load move). A peak-week
+  // top set says what the set IS; it is not a step from anywhere.
+  const delta_text = topSet
+    ? `top set ${topSet.weight} × ${topSet.reps}`
+    : repStep
+      ? "+1 rep"
+      : loadedDeltaText(baseWeight, nextWeight);
   // The displayed "current" reflects REALITY when the plan was behind, so the card
   // reads "50 → 52.5", never "27 → …" off a number the athlete left behind weeks ago.
   const displayCurrent: PrescriptionTarget | null = cur
@@ -1399,6 +1989,9 @@ function repsPrescription(
     autoregulated: autoregulated || undefined,
     movement_response: response.verdict,
     rep_step: repStep || undefined,
+    block_phase: brakeCtx?.block?.phase,
+    top_set: topSet,
+    escalated,
     dose_eligibility: doseEligibility,
   };
 }
@@ -1558,6 +2151,15 @@ export function planDayProgression(dayNumber: number, opts: { forNextSession?: b
   const preferences = learnedPreferences();
   const today = localDateISO();
   const fuelProtection = currentUnderfuelingRead(today);
+  // The periodization phase and the fuel/cut read are properties of the DAY, not of
+  // a lift — read once and threaded in, so a day's pass never walks the program state
+  // once per movement.
+  const block = activeBlockContext(today);
+  const cut = cutPressureThunk(today);
+  // The calibration read is per-LIFT, not per-day, so the shared reader is a memo
+  // rather than a single value — a movement appearing twice in a pass walks its
+  // 400-day history once, and a movement no branch asks about never walks it.
+  const estimate = estimateReader(today);
   const out: Prescription[] = [];
   for (const it of items) {
     if (it.kind === "cardio" || !it.name) continue; // skip cardio + label-only rows
@@ -1571,6 +2173,9 @@ export function planDayProgression(dayNumber: number, opts: { forNextSession?: b
       personalModifier,
       preferences,
       date: today,
+      block,
+      cut,
+      estimate,
     });
     if (p) {
       const protectedPrescription = applyFuelProtection(p, fuelProtection, today);
@@ -1612,6 +2217,9 @@ function applyFuelProtection(prescription: Prescription, read: UnderfuelingRead,
       vary_to: undefined,
       vary_options: undefined,
       rep_step: undefined,
+      // A near-maximal top set is exactly the kind of aggression this read is asking
+      // to hold, so the peak protocol comes off with the step.
+      top_set: undefined,
       // The suggestion is the plan's own number again, so it is no longer the
       // related-lift idea this prescription came in carrying.
       starting_idea: undefined,
@@ -1642,6 +2250,7 @@ function applyFuelProtection(prescription: Prescription, read: UnderfuelingRead,
     vary_to: undefined,
     vary_options: undefined,
     rep_step: undefined,
+    top_set: undefined,
     starting_idea: undefined,
     autoregulated: true,
     fuel_protected: true,
@@ -1706,6 +2315,11 @@ export function buildProgressionProposal(
       (planned == null || Math.abs(Number(p.suggested.weight) - Number(planned)) > 0.1);
     if (p.action === "hold" && !regroundOnly) continue;
     if (p.rep_step) continue; // a double-progression rep advance is no plan change — the range already covers it
+    // A peak-week top set is a SESSION protocol, not a plan target. Writing a
+    // near-maximal single into plan_items would make it the number every later step
+    // is measured from, long after the peak week is over — the result reaches the
+    // models through the logged set instead (detectStrengthCalibration).
+    if (p.top_set) continue;
     // A vary/introduce → a first-class swap (rotate the lift out for the lead option).
     if (p.action === "vary" || p.action === "introduce") {
       const to = p.vary_to ?? p.vary_options?.[0]?.name ?? null;
@@ -1728,6 +2342,15 @@ export function buildProgressionProposal(
       // the restore ledger (volume-guard.ts). Only the fuel-protection dose claims
       // the fuel story; every other cut records its debt as ordinary policy.
       ...(p.fuel_protected ? { volume_cause: "fuel" } : {}),
+      // The audit trail a REPEAT deload is recognised from. Only a progression deload
+      // claims it — a fuel-protection dose is a cut about fuel, and a lift should not
+      // inherit an escalation for a week the kitchen was the problem. Nothing on the
+      // apply path reads this field; it is history, not an instruction.
+      ...(p.action === "deload" && !p.fuel_protected ? { progression_action: "deload" } : {}),
+      // …and the SHAPE change, when the repeat escalated into one. Without it the
+      // wave has no audit trail of its own, so the next repeat would escalate again
+      // on top of a wave that has not had time to work. Read back by waveRunning().
+      ...(p.escalated === "rep_wave" && !p.fuel_protected ? { progression_escalation: "rep_wave" } : {}),
     };
     if (p.mode === "timed") {
       if (p.suggested.seconds != null) c.target_seconds = p.suggested.seconds;

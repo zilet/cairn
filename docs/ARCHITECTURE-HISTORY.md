@@ -4,6 +4,48 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-08-05 — the phase enters the math, the cut becomes a lever, the two engines see the same week
+
+No schema migration (`user_version` stays 91); no service-worker bump (no `public/` change). Three
+tracks landed in parallel, each consuming a seam the others gave a real body.
+
+**Periodized, cut-aware, evidence-led progression** (see the architecture section). A block's phase
+stops being prose and starts changing what a main lift is prescribed: accumulation banks a clean rep
+on top of the range before load moves, intensification earns the step on a strong top set alone,
+deload adds nothing, and realization prescribes ONE heavy top set derived from the lift's own best
+estimate — est-1RM's first prescriptive role, sized to clear the calibration ledger's verifying
+fraction so a logged peak re-anchors the estimate rather than becoming a stored guess. The cut turns
+from a sentence in a playbook into an actual lever: a slip that coincides with live under-fuelling
+evidence holds instead of taking the automatic tenth off, and a flat lift on a real deficit buys weeks
+of patience before a variation is offered. A second applied deload inside eight weeks changes SHAPE —
+a lower, heavier rep window, or a forced variation when there is none to wave — instead of repeating
+itself, and the proportional step cap (2.5% of the bar, floored at the old flat cap) stops a 300 lb
+squat and a 100 lb press from earning identical increments.
+
+**The strength learning loop closes.** Three seams that were inert stubs while the progression round
+above was built now speak for real: `movementRiskFor` reads pain on two separate days inside 90 days
+as a flag (sparse data, an unknown exercise, an unreadable table all read clear — the asymmetry is
+deliberate, nothing may reach the swap pool on the strength of silence); `estimateConfidenceFor` runs
+the same staleness ladder the athlete-facing freshness word already runs on, and `liftProgressionSubjects`
+now writes the 21-day hold expectation against a VERIFIED anchor rather than Epley's reach, since a
+baseline nobody tested is exactly what let a hold expectation miss forever and teach the ledger a false
+lesson; `liftLedgerRead` returns a lift's own conclusive verdicts, informative only at two or more.
+`strengthRead` gains the same confounder discipline the evaluators already had, so a trip, an injury, a
+measured deficit, or an open symptom loading the lifts that slid keeps a regression visible without
+opening a case conference the window already explains.
+
+**The two training engines can see each other's week.** The run builder used to consult a calendar
+where it should have consulted the legs; `weeklyRunPlan` now reads `strengthLegLoad` — the
+strength-sourced share of the residual on the run's own prime movers — and defers the demonstrated-long
+floor-raise and the race-ramp pull, out loud, when the legs are genuinely carrying a lifting session (a
+runner's own mileage never defers their build). A strength block in its intensification/realization
+weeks suppresses the race pull the same way a taper or a health hold already does, and
+`combinedLoadState` names a documented cross-modality read when both lanes' acute:chronic ratios sit in
+their own upper caution band at once — a peaking block yields the run, a dated race yields the
+strength, otherwise the run yields by default — spoken through `adaptations_due`, never a new surface
+or a number. The strength-evolution prompt now carries the hybrid placement rule: never stack the
+heaviest lower-body day next to the long or quality run, and say so when the week cannot avoid it.
+
 ## 2026-08-05 — the race pulls, the zones are yours, the coach tests
 
 No schema migration (`user_version` stays 91); two new tables via `CREATE TABLE IF NOT EXISTS`

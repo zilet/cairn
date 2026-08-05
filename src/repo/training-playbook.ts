@@ -4,6 +4,9 @@
 // numeric grade. The agentic evolution loop can use it to focus a proposal, but
 // the athlete still chooses whether anything changes.
 import { db } from "../db.js";
+import { pickDayVariant } from "./brain/day-read-rules.js";
+import { unverifiedRegressionHold } from "./calibration.js";
+import { appliedProgressionDeloads } from "./plan.js";
 import { getProfile } from "./profile.js";
 import { getProgramState, type ProgramState } from "./program-state.js";
 import { addDaysISO, localDateISO } from "./shared.js";
@@ -101,7 +104,52 @@ function uniqueActions(actions: string[]): string[] {
   return out;
 }
 
-function strengthPlateauPlays(ps: any): PlateauPlay[] {
+// A lift that has ALREADY been backed off recently is not a candidate for another
+// light deload — the first one is the evidence that a small load cut is not what it
+// needs. The per-session engine escalates the prescription itself (a lower rep
+// window, or the movement rotating out; see repo/progression.ts); the playbook has
+// to tell the same story, or the coaching layer keeps recommending the move the
+// engine has already stopped making. Phrasings rotate per day and per lift.
+const DELOAD_REPEAT_WINDOW_DAYS = 56;
+
+const ESCALATION_ACTIONS: readonly ((name: string) => string)[] = [
+  (name) =>
+    `${name} has already been backed off once recently — change the shape rather than the number: run a lower, heavier rep window for a few weeks, or rotate to a close variation and re-test the original.`,
+  (name) =>
+    `A second light deload for ${name} would repeat what did not work; drop into a heavier rep bracket for a stretch, or swap in a near variation and come back to it.`,
+  (name) =>
+    `${name} was eased recently and is still stuck, so the lever is the scheme or the movement — a lower rep window for a block, or a close variation before returning to it.`,
+];
+
+// The OTHER arm the engine can take on a regressing lift: when the slip is read
+// off an estimate nothing heavy has confirmed, and the lift is one the calibration
+// ladder will actually offer a test for, the engine HOLDS and asks for a heavy set
+// rather than deloading. The playbook has to tell that story too — recommending a
+// deload for a lift the engine is deliberately holding is the coaching layer and
+// the engine giving the athlete two different answers about the same lift.
+//
+// The engine's own predicate is reused (unverifiedRegressionHold), never a second
+// copy of the conditions: a diverging copy is exactly how the two would drift.
+const VERIFY_FIRST_ACTIONS: readonly ((name: string) => string)[] = [
+  (name) =>
+    `Before backing ${name} off, put one genuinely heavy set on it — the dip may be the estimate drifting rather than the lift, and a top single or triple settles which.`,
+  (name) =>
+    `Hold ${name} where it is and open a session with one heavy top set; nothing recent has confirmed where this lift actually sits, so that set is what tells you whether there is anything to fix.`,
+  (name) =>
+    `Keep the load on ${name} and let a heavy set answer it first — a slip measured off an unconfirmed number is worth checking before it is worth cutting.`,
+];
+
+function recentlyDeloaded(name: string, date: string): boolean {
+  const since = addDaysISO(date, -DELOAD_REPEAT_WINDOW_DAYS);
+  if (!since) return false;
+  try {
+    return appliedProgressionDeloads(name, since, date) > 0;
+  } catch {
+    return false;
+  }
+}
+
+function strengthPlateauPlays(ps: any, date: string): PlateauPlay[] {
   const lifts = Array.isArray(ps?.lifts) ? ps.lifts : [];
   const mode = effectiveGoalMode();
   return lifts
@@ -110,8 +158,24 @@ function strengthPlateauPlays(ps: any): PlateauPlay[] {
       const name = String(l.exercise || "this lift");
       const grinding = Array.isArray(l.stall_signals) && l.stall_signals.some((s: any) => /grind|rir|same top/i.test(String(s)));
       const weeks = Number(l.weeks_static);
+      const repeatDeload = recentlyDeloaded(name, date);
+      // Only a REGRESSING lift can be in the engine's verify-first hold; a plateau
+      // grind deloads on its own evidence, whatever the estimate is worth.
+      const verifyFirst =
+        l.status === "regressing" &&
+        (() => {
+          try {
+            return unverifiedRegressionHold(name, date).holds;
+          } catch {
+            return false;
+          }
+        })();
       const actions: string[] = [];
-      if (l.status === "regressing" || l.suggested_action === "deload" || grinding) {
+      if (repeatDeload) {
+        actions.push(pickDayVariant(ESCALATION_ACTIONS, date, `deload_escalation:${name.toLowerCase()}`)(name));
+      } else if (verifyFirst) {
+        actions.push(pickDayVariant(VERIFY_FIRST_ACTIONS, date, `verify_first:${name.toLowerCase()}`)(name));
+      } else if (l.status === "regressing" || l.suggested_action === "deload" || grinding) {
         actions.push(`Run a light deload for ${name}, then rebuild from clean reps.`);
       }
       if (Number.isFinite(weeks) && weeks >= 3 || l.suggested_action === "vary") {
@@ -119,9 +183,13 @@ function strengthPlateauPlays(ps: any): PlateauPlay[] {
       }
       actions.push(`Hold the load and win by adding one clean rep or tightening technique before chasing weight.`);
       if (mode === "lose") actions.push("If the cut is deep, treat holding strength as a win; do not chase a risky load jump just to force progress.");
-      const why = l.status === "regressing"
-        ? `${name} is slipping rather than climbing, so the first lever is recovery and a cleaner rebuild.`
-        : `${name} is flat${Number.isFinite(weeks) && weeks > 0 ? ` ~${weeks} wk` : ""}; the lever is a planned variation or technique reset, not forcing load.`;
+      const why = repeatDeload
+        ? `${name} has already had a step back inside the last couple of months and is still not moving, so the next lever is a different shape of work, not a smaller number.`
+        : verifyFirst
+          ? `${name} reads as slipping, but the number it is measured against has not been confirmed by a heavy set in a while — so the first lever is a test, not a load cut.`
+          : l.status === "regressing"
+            ? `${name} is slipping rather than climbing, so the first lever is recovery and a cleaner rebuild.`
+            : `${name} is flat${Number.isFinite(weeks) && weeks > 0 ? ` ~${weeks} wk` : ""}; the lever is a planned variation or technique reset, not forcing load.`;
       return {
         kind: "strength_plateau",
         title: `Strength plateau: ${name}`,
@@ -196,9 +264,9 @@ function hybridInterferencePlay(ps: any): PlateauPlay | null {
   };
 }
 
-function plateauPlays(ps: any): PlateauPlay[] {
+function plateauPlays(ps: any, date: string): PlateauPlay[] {
   const out: PlateauPlay[] = [];
-  out.push(...strengthPlateauPlays(ps));
+  out.push(...strengthPlateauPlays(ps, date));
   out.push(...endurancePlateauPlays(ps));
   const hybrid = hybridInterferencePlay(ps);
   if (hybrid) out.push(hybrid);
@@ -304,7 +372,7 @@ function adherenceRead(date: string, windowDays: number): AdherenceRestructureRe
 export function trainingPlaybook(date?: string, opts: TrainingPlaybookOpts = {}): TrainingPlaybookRead {
   const d = String(date || localDateISO()).slice(0, 10);
   const ps = opts.programState === undefined ? getProgramState(d) : opts.programState;
-  const plays = plateauPlays(ps);
+  const plays = plateauPlays(ps, d);
   const adherence = adherenceRead(d, opts.windowDays ?? 28);
   const adaptations = uniqueActions([
     ...plays.flatMap((p) => p.adaptations.slice(0, 1)),

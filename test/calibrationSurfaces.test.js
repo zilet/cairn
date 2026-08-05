@@ -74,3 +74,89 @@ test("a populated ladder carries only the fields the Endurance line renders", ()
   }
   assert.doesNotMatch(suggestion.line, /\b\d+\s*(?:%|\/100)\b/, "suggestions are prose, never a score");
 });
+
+// ---------------------------------------------------------------------------
+// The engine the surfaces above render: how much a lift's est-1RM deserves to be
+// trusted (estimateConfidenceFor), and the verified number a writer should make
+// its claim against (verifiedStrengthAnchor).
+//
+// Both run on the SAME staleness ladder the athlete-facing freshness word uses,
+// which is the property worth locking: a lift the calibration card calls
+// "anchored" and the progression ladder calls "verified" must never be able to
+// disagree about the same day.
+import { db as engineDb, repo as engineRepo } from "./_seed.js";
+import { estimateConfidenceFor, verifiedStrengthAnchor } from "../dist/repo/calibration.js";
+
+const ENGINE_TODAY = "2026-08-05";
+
+function engineDaysBefore(n) {
+  return new Date(Date.parse(`${ENGINE_TODAY}T00:00:00Z`) - n * 864e5).toISOString().slice(0, 10);
+}
+
+function logSet(exercise, dateISO, weight, reps) {
+  const session = engineRepo.getOrCreateSession(dateISO, null);
+  engineDb
+    .prepare(`INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps) VALUES (?, ?, 1, ?, ?)`)
+    .run(session.id, exercise.id, weight, reps);
+}
+
+/**
+ * A lift whose estimate was CONFIRMED `verifiedDaysAgo`, and then carried on with
+ * ordinary work that pushed the Epley number higher without ever testing it.
+ *
+ * The confirming day is the 110x3: at that point the running estimate was 116.7
+ * (from 100x5), and 110 clears the 92% bar, so a heavy set genuinely stood behind
+ * it. The later 105x8 extrapolates to 133 on the formula alone — a ceiling nobody
+ * has been near.
+ */
+function liftVerifiedDaysAgo(name, verifiedDaysAgo) {
+  const exercise = engineRepo.upsertExercise({ name, muscle_group: "shoulders" });
+  logSet(exercise, engineDaysBefore(verifiedDaysAgo + 5), 100, 5);
+  logSet(exercise, engineDaysBefore(verifiedDaysAgo), 110, 3);
+  return exercise;
+}
+
+test("a lift a heavy set confirmed recently reads verified", () => {
+  liftVerifiedDaysAgo("Overhead Press", 10);
+  assert.equal(estimateConfidenceFor("Overhead Press", ENGINE_TODAY), "verified");
+});
+
+test("the same confirmation, older, ages rather than flipping straight to unverified", () => {
+  liftVerifiedDaysAgo("Overhead Press", 55);
+  assert.equal(estimateConfidenceFor("Overhead Press", ENGINE_TODAY), "aging");
+});
+
+test("a confirmation past the aging horizon reads unverified", () => {
+  liftVerifiedDaysAgo("Overhead Press", 120);
+  assert.equal(estimateConfidenceFor("Overhead Press", ENGINE_TODAY), "unverified");
+});
+
+test("a lift no heavy set ever confirmed reads unverified, and so does one we cannot find", () => {
+  const exercise = engineRepo.upsertExercise({ name: "Incline Press", muscle_group: "chest" });
+  // Ordinary work only: every day's top set sits well under the running estimate,
+  // so the formula is the only thing holding the number up.
+  logSet(exercise, engineDaysBefore(20), 100, 5);
+  logSet(exercise, engineDaysBefore(10), 60, 5);
+  assert.equal(estimateConfidenceFor("Incline Press", ENGINE_TODAY), "unverified");
+  // The honest answer for an estimate we cannot locate is "not confirmed" — the
+  // consumer softens a deload into hold-plus-test on this reading, so the unknown
+  // case errs toward caution rather than toward trusting a number blindly.
+  assert.equal(estimateConfidenceFor("A Movement Nobody Logged", ENGINE_TODAY), "unverified");
+  assert.equal(estimateConfidenceFor("", ENGINE_TODAY), "unverified");
+});
+
+test("the verified anchor is the number a set stood under, even when the formula has since climbed past it", () => {
+  const exercise = liftVerifiedDaysAgo("Overhead Press", 15);
+  // Ordinary sets of eight, extrapolating to 133 on Epley alone.
+  logSet(exercise, engineDaysBefore(5), 105, 8);
+
+  const anchor = verifiedStrengthAnchor("Overhead Press", ENGINE_TODAY);
+  assert.ok(anchor, "a fresh confirmation is available");
+  assert.equal(anchor.est_1rm, 121, "the confirmed 110x3, not the unconfirmed 133 the formula reached");
+  assert.equal(anchor.anchored_on, engineDaysBefore(15));
+});
+
+test("an aged confirmation stops overriding a fresher read of the athlete", () => {
+  liftVerifiedDaysAgo("Overhead Press", 120);
+  assert.equal(verifiedStrengthAnchor("Overhead Press", ENGINE_TODAY), null);
+});

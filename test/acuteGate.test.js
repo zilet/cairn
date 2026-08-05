@@ -10,7 +10,13 @@
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo, resetTables } from "./_seed.js";
-import { acuteGate, acuteGates, suppressSaturatedDue } from "../dist/repo/hybrid-load.js";
+import {
+  acuteGate,
+  acuteGates,
+  legLoadGroupsPhrase,
+  strengthLegLoad,
+  suppressSaturatedDue,
+} from "../dist/repo/hybrid-load.js";
 import { forwardLook, weekAheadPlan } from "../dist/repo/day-read.js";
 import { programAdjustments, programBalance } from "../dist/repo/progression.js";
 import { gatherDailyDecisionSnapshot } from "../dist/repo/daily-decision.js";
@@ -331,4 +337,55 @@ test("with nothing saturated the picker leaves the normal rotation alone", () =>
     /carrying recent work|another day|recover/i,
     "so it never invents a freshness reason"
   );
+});
+
+// ── strengthLegLoad: what the LIFTING left in the running legs ────────────────
+// The run builder's half of the same question. It reads the STRENGTH-sourced share
+// of the residual on purpose — the run week already sees its own lane from every
+// angle, so counting the athlete's running here would defer every build week their
+// running earned.
+
+test("a real lower-body session reads saturated, and names the groups in plain words", () => {
+  for (let i = 0; i < 4; i++) repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, rir: 2, date: REF });
+  for (let i = 0; i < 3; i++)
+    repo.logSetByName({ exercise: "Romanian Deadlift", weight: 185, reps: 8, rir: 2, date: REF });
+  const load = strengthLegLoad(REF);
+  assert.equal(load.band, "saturated");
+  assert.equal(load.saturated, true);
+  assert.ok(load.saturated_groups.includes("quads"), "the squat's prime mover is at the bar");
+  assert.ok(load.saturated_groups.length + load.loaded_groups.length >= 2, "and a second group is carrying work");
+  const phrase = legLoadGroupsPhrase(load);
+  assert.match(phrase, /^your /, "plain second-person words");
+  assert.doesNotMatch(phrase, /\d|residual|saturat/i, "no number and no engineering vocabulary");
+});
+
+test("a long run does NOT read as leg load here — that lane is already visible to the run week", () => {
+  longRun();
+  assert.equal(acuteGate("quads", REF).saturated, true, "the run genuinely saturated the quads");
+  const load = strengthLegLoad(REF);
+  assert.equal(load.band, "fresh", "but the STRENGTH share is empty, so this read stays quiet");
+  assert.equal(load.has_data, false);
+  assert.equal(load.saturated, false);
+});
+
+test("one isolated accessory group is loaded, never saturated (a leg day is two groups)", () => {
+  for (let i = 0; i < 6; i++)
+    repo.logSetByName({ exercise: "Standing Calf Raise", weight: 120, reps: 12, rir: 1, date: REF });
+  const load = strengthLegLoad(REF);
+  assert.equal(load.saturated, false, "a calf block is not a reason to shrink a long run");
+  assert.equal(load.band, "loaded");
+});
+
+test("strengthLegLoad is quiet and neutral with nothing logged at all", () => {
+  const load = strengthLegLoad(REF);
+  assert.deepEqual(load, { band: "fresh", saturated: false, saturated_groups: [], loaded_groups: [], has_data: false });
+});
+
+test("lower-body lifting fades: the same session read a week later no longer defers anything", () => {
+  const weekAgo = new Date(new Date(`${REF}T00:00:00Z`).getTime() - 7 * 864e5).toISOString().slice(0, 10);
+  for (let i = 0; i < 4; i++) repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, rir: 2, date: weekAgo });
+  for (let i = 0; i < 3; i++)
+    repo.logSetByName({ exercise: "Romanian Deadlift", weight: 185, reps: 8, rir: 2, date: weekAgo });
+  assert.equal(strengthLegLoad(weekAgo).saturated, true, "on the day, it defers");
+  assert.equal(strengthLegLoad(REF).saturated, false, "a week later it does not");
 });

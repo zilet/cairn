@@ -968,9 +968,51 @@ const PERSONAL_MODIFIER_TARGETS: Record<CoachPersonalModifierTarget, true> = {
 // level down: a busy lifter's per-exercise readings would quietly eat the room the
 // staged nutrition variants need.
 const MAX_STAGE_VARIANTS = 3;
-const MAX_SUBJECT_VARIANTS = 4;
+// The subject headroom is SIZED OFF THE PROGRAM, not picked. A normal week runs
+// four training days built on two main lifts each — the same eight the
+// calibration ladder and the progression layer treat as "the lifts the program
+// is built on" — plus the one whole-athlete reading with no subject at all, which
+// is the fallback every lift without a learning of its own depends on.
+//
+// It was 4. A lifter with five main lifts silently lost the fifth one's learning:
+// the progression ladder asked for that lift's personal response, found nothing,
+// and fell back to the universal default while the ledger held a perfectly good
+// verdict about it. Nothing said so — which is the other half of this fix (see
+// reportDroppedModifiers below). Anything past the cap is now logged, so the next
+// time the ceiling is the binding constraint it will be visible rather than
+// inferred from a lift that mysteriously stopped adapting.
+const MAIN_LIFTS_TRACKED = 8;
+const MAX_SUBJECT_VARIANTS = MAIN_LIFTS_TRACKED + 1;
 const MAX_PERSONAL_MODIFIERS =
   Object.keys(PERSONAL_MODIFIER_TARGETS).length + MAX_STAGE_VARIANTS + MAX_SUBJECT_VARIANTS;
+
+/** A modifier's slot identity, in the shape the lookups match on. */
+function modifierSlotLabel(modifier: CoachPersonalModifier): string {
+  return `${modifier.target}/${modifier.stage ?? "-"}/${modifier.subject_key ?? "-"}`;
+}
+
+/**
+ * A learned default that did NOT survive the slot caps, said out loud.
+ *
+ * The bug this exists for was never the cap's number — it was that exceeding it
+ * was indistinguishable from having learned nothing. A dropped modifier means an
+ * athlete is being coached with the universal default on a lever the ledger has
+ * a real verdict about, and that has to be observable from outside.
+ */
+function reportDroppedModifiers(dropped: CoachPersonalModifier[]): void {
+  if (!dropped.length) return;
+  const seen = new Set<string>();
+  const labels: string[] = [];
+  for (const modifier of dropped) {
+    const label = modifierSlotLabel(modifier);
+    if (seen.has(label)) continue;
+    seen.add(label);
+    labels.push(label);
+  }
+  console.warn(
+    `[reaction-model] personal-response slots full: ${labels.length} learned modifier(s) dropped and the universal default stands for them — ${labels.join(", ")}`
+  );
+}
 
 interface EvaluatedDecisionRow {
   decision_id: number;
@@ -1775,11 +1817,20 @@ function computeWhatWorksForYou(today = localDateISO()): CoachWhatWorksForYou | 
   // learning of its own depends on. Stable within each rank, so recency still decides
   // between two readings of the same kind.
   const globalFirst = [...subjectVariants].sort((a, b) => (a.subject_key ? 1 : 0) - (b.subject_key ? 1 : 0));
-  const modifiers = [
+  const kept = [
     ...perTarget,
     ...stageVariants.slice(0, MAX_STAGE_VARIANTS),
     ...globalFirst.slice(0, MAX_SUBJECT_VARIANTS),
-  ].slice(0, MAX_PERSONAL_MODIFIERS);
+  ];
+  const modifiers = kept.slice(0, MAX_PERSONAL_MODIFIERS);
+  // Every learned default that earned a slot and did not get one, from either the
+  // per-kind headroom or the overall ceiling. Silence here is what once switched a
+  // lever off with no way to tell.
+  reportDroppedModifiers([
+    ...stageVariants.slice(MAX_STAGE_VARIANTS),
+    ...globalFirst.slice(MAX_SUBJECT_VARIANTS),
+    ...kept.slice(MAX_PERSONAL_MODIFIERS),
+  ]);
   return {
     version: PERSONAL_RESPONSE_VERSION,
     learnings: [...learned.map((item) => item.learning), ...readPatterns],
@@ -1924,4 +1975,120 @@ export function saveReactionModel(): void {
       }
     }
   }
+}
+
+// FROZEN CONTRACT (hybrid-elite round): the ledger's word on one lift, readable by
+// the progression DECISION (deload/vary/hold), not just the step-size modifier.
+// The learning-loop track implements it; the strength-core track consumes it.
+// The stub is uninformative — exactly today's world, where verdicts never reach
+// the decision ladder.
+export type LiftLedgerRead = {
+  /** Conclusive verdicts on this lift's progression expectations, newest first. */
+  verdicts: Array<{ outcome: "aligned" | "missed"; decided_on: string }>;
+  /** True only when there is enough evidence to let the ledger speak at all. */
+  informative: boolean;
+};
+
+// The two metrics that are about THIS LIFT'S progression. The other two of the
+// training family — session feedback and joint pain — are session-level safety
+// floors written against whatever was trained that day; they answer "did anything
+// break?", not "is this lift's progression working?", and folding them in would
+// let a good week on the bike vouch for a squat.
+const LIFT_LEDGER_METRICS = ["exercise_est_1rm_trend", "exercise_target_completion"] as const;
+
+// How far back a verdict on a lift still describes today's athlete. The est-1RM
+// hold expectation spans 21 days, so half a year is roughly eight windows —
+// enough for a lift trained once or twice a week to have said something twice,
+// and the same horizon MODIFIER_FULL_STRENGTH_DAYS uses for "this outcome still
+// speaks at full strength". One ladder, not two.
+const LIFT_LEDGER_WINDOW_DAYS = MODIFIER_FULL_STRENGTH_DAYS;
+
+// Two conclusive verdicts. One verdict is an anecdote — it is exactly the
+// evidence bar learningForGroup already refuses to earn a default from, and the
+// consumer here is making a DECISION (deload / vary / hold) off it, not a step
+// size, so it may not be a looser bar than the step size gets.
+const LIFT_LEDGER_MIN_VERDICTS = 2;
+
+// How many of this lift's verdicts are handed to the consumer. It reads the most
+// recent few; the rest are history.
+const LIFT_LEDGER_MAX_VERDICTS = 20;
+
+/**
+ * What the ledger has concluded about one lift's progression, newest first.
+ *
+ * Only the LATEST evaluation of each expectation counts, the same rule
+ * evaluatedDecisionRows applies — a re-evaluated window is one outcome, not two.
+ * Only conclusive verdicts appear, and by construction those already carry no
+ * confounders (evaluateMetricObservation refuses a decisive verdict with any).
+ * Superseded and canceled decisions are excluded: their change was undone, so
+ * what happened afterwards was never about them.
+ *
+ * `informative` is the whole point of the contract. The consumer must be able to
+ * tell "the ledger says this lift keeps missing" from "the ledger has nothing to
+ * say", and a bare empty list cannot carry that difference once a caller starts
+ * counting misses.
+ */
+export function liftLedgerRead(exercise: string): LiftLedgerRead {
+  const name = String(exercise ?? "").trim();
+  const empty: LiftLedgerRead = { verdicts: [], informative: false };
+  if (!name) return empty;
+  // The ledger's subject_key is matched on the CANONICAL exercise key, not on a
+  // lowercased literal. The strength stack keys every other lift fact this way
+  // (normalizedExerciseKey), so a punctuation- or plural-variant row — "Bench
+  // Press" vs "Bench-Press" — would otherwise split one lift's ledger in two and
+  // leave both halves too thin to be informative. Matched in JS because the fold
+  // is not expressible in SQL; the query stays bounded and the filter runs on a
+  // couple of hundred rows at most.
+  const key = normalizedExerciseKey(name);
+  if (!key) return empty;
+  const since = addDaysISO(localDateISO(), -LIFT_LEDGER_WINDOW_DAYS) ?? "";
+  let rows: Array<{ verdict: string; evaluated_at: string; subject_key: string | null }> = [];
+  try {
+    rows = db
+      .prepare(
+        `SELECT e.verdict AS verdict, e.evaluated_at AS evaluated_at, x.subject_key AS subject_key
+           FROM brain_evaluations e
+           JOIN brain_expectations x ON x.id = e.expectation_id
+           JOIN brain_decisions d ON d.id = x.decision_id
+          WHERE e.id = (
+            SELECT e2.id FROM brain_evaluations e2
+             WHERE e2.expectation_id = e.expectation_id
+             ORDER BY e2.id DESC LIMIT 1
+          )
+            AND e.verdict IN ('aligned','not_aligned')
+            AND x.metric_key IN (${LIFT_LEDGER_METRICS.map(() => "?").join(", ")})
+            AND COALESCE(x.subject_key, '') <> ''
+            AND d.superseded_by IS NULL
+            AND d.status NOT IN ('rejected','reverted','superseded','canceled')
+            AND date(e.evaluated_at) >= ?
+          ORDER BY e.evaluated_at DESC, e.id DESC
+          LIMIT 200`
+      )
+      .all(...LIFT_LEDGER_METRICS, since) as Array<{
+      verdict: string;
+      evaluated_at: string;
+      subject_key: string | null;
+    }>;
+  } catch {
+    // Same null-safety the rest of this module keeps for imported or partial
+    // databases: no ledger tables is no ledger opinion, never a false one.
+    return empty;
+  }
+  if (rows.length === 200) {
+    // The ceiling exists to bound the JS-side fold, but hitting it means the
+    // window holds MORE evaluations than the query returned — a lift whose
+    // verdicts all sit past the 200th row would silently read as "the ledger has
+    // nothing to say" when it does. Same observability rule as
+    // reportDroppedModifiers above: a cap may bind, but never silently.
+    console.warn(`[reaction-model] liftLedgerRead hit its 200-row ceiling; older verdicts for "${name}" may be unread`);
+  }
+  const verdicts = rows
+    .filter((row) => normalizedExerciseKey(String(row.subject_key ?? "")) === key)
+    .slice(0, LIFT_LEDGER_MAX_VERDICTS)
+    .map((row) => ({
+      outcome: (row.verdict === "not_aligned" ? "missed" : "aligned") as "aligned" | "missed",
+      decided_on: String(row.evaluated_at ?? "").slice(0, 10),
+    }))
+    .filter((row) => /^\d{4}-\d{2}-\d{2}$/.test(row.decided_on));
+  return { verdicts, informative: verdicts.length >= LIFT_LEDGER_MIN_VERDICTS };
 }

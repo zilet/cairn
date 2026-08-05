@@ -226,3 +226,133 @@ test("a new evaluation invalidates the model without needing a bump", () => {
   assert.ok(learned, "the second outcome is visible to the very next read");
   assert.equal(learned.learnings[0].evidence_n, 2);
 });
+
+// ---------------------------------------------------------------------------
+// liftLedgerRead — the ledger's word on ONE lift, readable by the progression
+// DECISION (deload / vary / hold) rather than only by the step-size modifier.
+//
+// Until this existed, per-lift verdicts dead-ended in modifierFor's ±10% step
+// scale: the ledger could know a lift had missed three windows running and the
+// only thing that knowledge could do was shrink the next increment slightly.
+import { liftLedgerRead } from "../dist/repo/reaction-model.js";
+import { addDaysISO, localDateISO as ledgerToday } from "../dist/repo/shared.js";
+
+function liftExpectation(exercise, overrides = {}) {
+  return expectation({
+    metric_key: "exercise_est_1rm_trend",
+    subject_key: exercise,
+    direction: "at_least",
+    baseline: { est_1rm: 200 },
+    target: { value: 194 },
+    minimum_data: { exposures: 3 },
+    evaluator: "exercise_est_1rm",
+    ...overrides,
+  });
+}
+
+function recordLiftOutcome(exercise, key, verdict, opts = {}) {
+  const recorded = recordDecision(
+    decision(key, { kind: "training_target", domain: "training", action: { lift: exercise, slot: key }, ...opts.decision }),
+    [liftExpectation(exercise, opts.expectation)]
+  );
+  const evaluation = insertBrainEvaluation({
+    expectation_id: recorded.expectations[0].id,
+    verdict,
+    actual: { value: verdict === "aligned" ? 205 : 180, exposures: 5 },
+    evidence_keys: [`logged_sets:2026-01-01..2026-01-21:n=5`],
+    confounders: [],
+    explanation: verdict === "aligned" ? "The estimate held." : "The estimate did not hold.",
+    evaluator_version: "response-test-v1",
+  });
+  db.prepare(`UPDATE brain_evaluations SET evaluated_at = ? WHERE id = ?`).run(
+    `${addDaysISO(ledgerToday(), -(opts.daysAgo ?? 10))} 12:00:00`,
+    evaluation.id
+  );
+  return recorded;
+}
+
+test("a lift the ledger has never judged says so, rather than reading as a clean sheet", () => {
+  const read = liftLedgerRead("Back Squat");
+  assert.deepEqual(read.verdicts, []);
+  assert.equal(read.informative, false, "silence is distinguishable from a good record");
+  assert.equal(liftLedgerRead("").informative, false);
+});
+
+test("one verdict is an anecdote, not something to make a decision on", () => {
+  recordLiftOutcome("Back Squat", "1", "not_aligned", { daysAgo: 5 });
+  const read = liftLedgerRead("Back Squat");
+  assert.equal(read.verdicts.length, 1);
+  assert.equal(read.informative, false);
+});
+
+test("two conclusive verdicts let the ledger speak, newest first", () => {
+  recordLiftOutcome("Back Squat", "1", "not_aligned", { daysAgo: 40 });
+  recordLiftOutcome("Back Squat", "2", "not_aligned", { daysAgo: 5 });
+  const read = liftLedgerRead("Back Squat");
+  assert.equal(read.informative, true);
+  assert.equal(read.verdicts.length, 2);
+  assert.deepEqual(
+    read.verdicts.map((row) => row.outcome),
+    ["missed", "missed"]
+  );
+  assert.ok(read.verdicts[0].decided_on > read.verdicts[1].decided_on, "newest first");
+  for (const row of read.verdicts) assert.match(row.decided_on, /^\d{4}-\d{2}-\d{2}$/);
+});
+
+test("the read is scoped to ONE lift — another lift's record never vouches for it", () => {
+  recordLiftOutcome("Back Squat", "1", "not_aligned", { daysAgo: 30 });
+  recordLiftOutcome("Back Squat", "2", "not_aligned", { daysAgo: 5 });
+  recordLiftOutcome("Barbell Bench Press", "3", "aligned", { daysAgo: 10 });
+
+  assert.deepEqual(
+    liftLedgerRead("Back Squat").verdicts.map((row) => row.outcome),
+    ["missed", "missed"]
+  );
+  const bench = liftLedgerRead("Barbell Bench Press");
+  assert.deepEqual(bench.verdicts.map((row) => row.outcome), ["aligned"]);
+  assert.equal(bench.informative, false, "one outcome of its own is still only one");
+});
+
+test("the lift name is matched without case being load-bearing", () => {
+  recordLiftOutcome("Back Squat", "1", "aligned", { daysAgo: 30 });
+  recordLiftOutcome("Back Squat", "2", "aligned", { daysAgo: 5 });
+  assert.equal(liftLedgerRead("back squat").informative, true);
+});
+
+test("verdicts that have aged out of the window stop speaking for today", () => {
+  recordLiftOutcome("Back Squat", "1", "not_aligned", { daysAgo: 400 });
+  recordLiftOutcome("Back Squat", "2", "not_aligned", { daysAgo: 380 });
+  const read = liftLedgerRead("Back Squat");
+  assert.deepEqual(read.verdicts, []);
+  assert.equal(read.informative, false);
+});
+
+test("a superseded decision's verdict is not the ledger's word on the lift", () => {
+  recordLiftOutcome("Back Squat", "1", "not_aligned", { daysAgo: 30 });
+  const later = recordLiftOutcome("Back Squat", "2", "not_aligned", { daysAgo: 5 });
+  assert.equal(liftLedgerRead("Back Squat").informative, true);
+
+  db.prepare(`UPDATE brain_decisions SET superseded_by = ? WHERE id = ?`).run(
+    later.decision.id,
+    // supersede the OLDER decision with the newer one
+    db.prepare(`SELECT id FROM brain_decisions ORDER BY id LIMIT 1`).get().id
+  );
+  const read = liftLedgerRead("Back Squat");
+  assert.equal(read.verdicts.length, 1, "the undone decision's outcome drops out");
+  assert.equal(read.informative, false);
+});
+
+test("session feedback and joint pain never vouch for a lift's progression", () => {
+  // Both are session-level safety floors written against whatever was trained that
+  // day: they answer "did anything break?", not "is this lift's progression
+  // working?", and folding them in would let a good week elsewhere speak for a squat.
+  recordLiftOutcome("Back Squat", "1", "aligned", {
+    daysAgo: 20,
+    expectation: { metric_key: "session_performance_feedback", evaluator: "session_feedback", direction: "maintain" },
+  });
+  recordLiftOutcome("Back Squat", "2", "aligned", {
+    daysAgo: 10,
+    expectation: { metric_key: "joint_pain_or_soreness", evaluator: "symptom_load", direction: "avoid" },
+  });
+  assert.deepEqual(liftLedgerRead("Back Squat").verdicts, []);
+});

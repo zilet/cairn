@@ -29,9 +29,12 @@ import {
   activeRecoveryWeek,
   type ActiveRecoveryWeek,
   effectiveGoalMode,
+  getEnduranceGoal,
   getPrimaryDiscipline,
   getProfile,
 } from "./profile.js";
+import { pickDayVariant } from "./brain/day-read-rules.js";
+import { getActiveBlock } from "./program-blocks.js";
 import { completedRecoveryWeekLedger, type CompletedRecoveryWeekLedger } from "./recovery-week-ledger.js";
 import { getProgress } from "./sessions.js";
 import { recoverySessionDose } from "./training-read.js";
@@ -55,6 +58,18 @@ import { getTrainingIntent } from "./training-intent.js";
 const TONNAGE_CHRONIC_FLOOR = 4000; // lb/wk of chronic tonnage before ACWR means anything
 const ENDURANCE_CHRONIC_FLOOR_KM = 8; // km/wk of chronic running before ACWR means anything
 const NON_TONNAGE_WEEK_FLOOR = 3; // timed/bodyweight/endurance units before a week counts as loaded
+// ---- the COMBINED weekly stress budget --------------------------------------
+// The two ACWR guards below are per-lane and blind to each other: tonnage checks
+// tonnage, weekly km checks weekly km, and each has its own alarm bar (1.4 → the
+// mesocycle reads "intensification"; 1.5 → endurance reads "spiking"). So both lanes
+// can ramp hard in the SAME week, each stay under its own bar, and nothing anywhere
+// notices that the athlete just took two big steps at once.
+//
+// The upper CAUTION band is the shared floor beneath each lane's own alarm: clearly
+// ramped, not yet loud. Both lanes in it at once is the state neither guard can see.
+// Neither number is ever shown — they decide which sentence gets said, nothing else.
+const TONNAGE_ACWR_CAUTION = 1.3;
+const ENDURANCE_ACWR_CAUTION = 1.3;
 const FATIGUE_DELOAD_MIN_WEEKS = 4; // enough accumulated work that feedback can bring the reset forward
 
 export type LiftStatus = "progressing" | "plateaued" | "regressing" | "maintaining" | "new";
@@ -186,6 +201,18 @@ export interface HybridFuelRead {
   why: string;
 }
 
+/** Which lane gives its spike back first when both have ramped in the same week. */
+export type CombinedLoadYield = "strength" | "run";
+
+export interface CombinedLoadState {
+  /** The lane that yields this week under the documented policy. */
+  yields: CombinedLoadYield;
+  /** Why that lane and not the other — machine register, for the provenance trail. */
+  basis: "block-peak" | "race-build" | "no-deadline";
+  /** Plain words for the athlete-facing rationale channel. No numbers, ever. */
+  why: string;
+}
+
 export interface HybridState {
   status: HybridStatus;
   headline: string;
@@ -194,6 +221,111 @@ export interface HybridState {
   recent_endurance_all?: HybridEnduranceImpact[];
   next_strength: HybridStrengthConflict | null;
   fuel: HybridFuelRead | null;
+  /** Null whenever the two lanes are not both ramped — the quiet, common answer. */
+  combined_load?: CombinedLoadState | null;
+}
+
+/**
+ * Is the LIFTING block at its own big ask — its heaviest weeks or its peak?
+ *
+ * One predicate, two consumers: this decides which lane yields in the combined-budget
+ * policy below, and it is what run-progression's race-ramp pull reads to suppress
+ * itself. Two copies would let "the run lane yields during a peak" and "the pull
+ * suppresses during a peak" drift into contradicting each other.
+ */
+export function strengthBlockPeaking(block: { phase?: string | null } | null | undefined): boolean {
+  const phase = String(block?.phase ?? "");
+  return phase === "intensification" || phase === "realization";
+}
+
+// The combined read, in the two shapes the policy can take. Variant SETS, like every
+// athlete-facing string: both lanes ramped is a WEEK-long state, so this fires on every
+// read for days, and one literal would print verbatim the whole time.
+export const COMBINED_LOAD_STRENGTH_YIELDS_VARIANTS = [
+  "Both sides of your training stepped up this week — the running is building toward a date, so let the lifting hold its loads where they are and take its step next week instead.",
+  "Lifting and running both climbed at once this week. The race is the thing with a deadline, so keep the running step and let the weights sit where they are for now.",
+  "Two step-ups landed in the same week. With a race on the calendar the running keeps its build; the lifting is the one that can comfortably wait a week.",
+  "Your week grew on both fronts at once — hold the strength loads steady and let the running carry the increase, since that's the one with a date on it.",
+] as const;
+
+export const COMBINED_LOAD_RUN_YIELDS_VARIANTS = [
+  "Both sides of your training stepped up this week, and your lifting block is at its heaviest — let the running hold its usual step so the strength block gets the week it's built for.",
+  "Lifting and running both climbed at once. The strength block is at its peak right now, so the mileage is the one to keep ordinary this week.",
+  "Two step-ups in one week, with the lifting at the sharp end of its block — keep the running where it is and give the weights the room.",
+  "Your week grew on both fronts. The strength block is peaking, so let the running take its normal step rather than stretching it as well.",
+] as const;
+
+// The same "the running yields" answer when nothing is peaking and nothing is dated —
+// the reason is different, so the words are too.
+export const COMBINED_LOAD_RUN_YIELDS_QUIET_VARIANTS = [
+  "Both sides of your training stepped up this week. With nothing on the calendar to chase, the easiest one to hold steady is the mileage — keep it where it is and let the week settle.",
+  "Lifting and running both climbed at once, and there's no date pulling either of them. Hold the running step where it is this week; the weights can keep their rhythm.",
+  "Two step-ups in the same week. Nothing needs to be chased right now, so keep the mileage steady and let the strength work carry on as it is.",
+  "Your week grew on both fronts at once — with no race in the picture, the calm move is to leave the running where it is for a week.",
+] as const;
+
+/**
+ * The cross-modality read the two per-lane ACWR guards cannot produce.
+ *
+ * Fires ONLY when both lanes' own ratios exist (each low-base guard still stands — a
+ * ratio off a thin base is meaningless in either lane) and both sit in their upper
+ * caution band. Then a deterministic, documented policy names ONE lane to yield:
+ *
+ *   • the lifting block is in its intensification/realization weeks → the RUN lane
+ *     yields. That block's peak is the week's fixed point; run-progression already
+ *     suppresses the race-ramp pull under exactly this predicate, so the two agree.
+ *   • otherwise, a dated race is in the picture → the STRENGTH lane yields. The race
+ *     is the thing with a deadline; strength volume is the thing that can wait a week.
+ *   • otherwise, nothing is deadline-bound → the RUN lane yields. Mileage is where a
+ *     spike is paid for in bone and tendon rather than a missed rep.
+ *
+ * Informational, like every read here: it shapes rationale, it gates nothing.
+ */
+function combinedLoadState(
+  date: string,
+  meso: MesocycleState,
+  endurance: EnduranceState | null
+): CombinedLoadState | null {
+  const tonnage = meso?.acute_chronic_ratio;
+  const km = endurance?.acute_chronic_ratio;
+  if (tonnage == null || km == null) return null;
+  if (!(tonnage >= TONNAGE_ACWR_CAUTION && km >= ENDURANCE_ACWR_CAUTION)) return null;
+
+  const block = (() => {
+    try {
+      return getActiveBlock();
+    } catch {
+      return null;
+    }
+  })();
+  const goal = (() => {
+    try {
+      return getEnduranceGoal(date);
+    } catch {
+      return null;
+    }
+  })();
+  const raceBuild = !!(goal?.is_race && goal.phase && goal.phase !== "past");
+
+  if (strengthBlockPeaking(block)) {
+    return {
+      yields: "run",
+      basis: "block-peak",
+      why: pickDayVariant(COMBINED_LOAD_RUN_YIELDS_VARIANTS, date, "combined-load-run-yields"),
+    };
+  }
+  if (raceBuild) {
+    return {
+      yields: "strength",
+      basis: "race-build",
+      why: pickDayVariant(COMBINED_LOAD_STRENGTH_YIELDS_VARIANTS, date, "combined-load-strength-yields"),
+    };
+  }
+  return {
+    yields: "run",
+    basis: "no-deadline",
+    why: pickDayVariant(COMBINED_LOAD_RUN_YIELDS_QUIET_VARIANTS, date, "combined-load-run-quiet"),
+  };
 }
 
 export interface ProgramState {
@@ -1117,7 +1249,12 @@ function hybridFuelRead(
   return { risk: "low", why: "Keep the deficit lean-safe and protein anchored; today's endurance load is light." };
 }
 
-function hybridState(date: string, endurance: EnduranceState | null, enduranceConfigured: boolean): HybridState | null {
+function hybridState(
+  date: string,
+  endurance: EnduranceState | null,
+  enduranceConfigured: boolean,
+  meso: MesocycleState
+): HybridState | null {
   const impacts = recentEnduranceImpacts(3, date);
   const materialImpacts = impacts.filter((impact) => impact.load !== "light");
   const lead = materialImpacts[0] ?? impacts[0] ?? null;
@@ -1156,6 +1293,10 @@ function hybridState(date: string, endurance: EnduranceState | null, enduranceCo
     recent_endurance_all: materialImpacts.map(impactSummary).slice(0, 6),
     next_strength: conflict,
     fuel,
+    // The cross-modality budget rides here rather than on its own surface: this IS the
+    // object that already answers "are these two competing this week". It reaches the
+    // athlete only through adaptations_due, the same channel the per-lane guards use.
+    combined_load: combinedLoadState(date, meso, endurance),
   };
 }
 
@@ -1199,7 +1340,7 @@ function computeProgramState(date?: string, recovery?: any): ProgramState {
   const completedRecoveryWeek = recoveryWeek ? null : completedRecoveryWeekLedger(d);
   const meso = mesocycle(d, recovery, recoveryWeek, completedRecoveryWeek);
   const endurance = enduranceConfigured ? enduranceState(d) : null;
-  const hybrid = hybridState(d, endurance, enduranceConfigured);
+  const hybrid = hybridState(d, endurance, enduranceConfigured, meso);
 
   // The "what to evolve next" list — plain language, deduped, most actionable first.
   const adaptations: string[] = [];
@@ -1229,6 +1370,10 @@ function computeProgramState(date?: string, recovery?: any): ProgramState {
   if (hybrid?.next_strength?.advice === "swap-or-upper" || hybrid?.next_strength?.advice === "hold-load") {
     adaptations.push(hybrid.next_strength.why);
   }
+  // Ahead of the per-lift push list below on purpose: when both lanes have ramped in
+  // the same week, "which lane yields" is the shape of the week, and the individual
+  // load steps are decided inside that shape.
+  if (hybrid?.combined_load) adaptations.push(hybrid.combined_load.why);
   if (hybrid?.fuel?.risk === "high") adaptations.push(hybrid.fuel.why);
   if (progressing.length && !recoveryWeek)
     adaptations.push(

@@ -24,10 +24,16 @@ import {
   recentMuscleLoad,
 } from "../dist/repo/progression.js";
 import { progressionVoicePhrases } from "../dist/repo/progression-voice.js";
+import * as blocks from "../dist/repo/program-blocks.js";
+import { detectStrengthCalibration, dueCalibrations, estimateConfidenceFor } from "../dist/repo/calibration.js";
+import { normalizedExerciseKey } from "../dist/repo/exercise-canon.js";
+import { trainingPlaybook } from "../dist/repo/training-playbook.js";
 import { violatesReadingGrammar } from "../dist/repo/day-read.js";
 import { currentUnderfuelingRead } from "../dist/repo/underfueling-snapshot.js";
 import { registerProgramTools } from "../dist/surfaces/mcp/program.js";
-import { localDateISO } from "../dist/repo/shared.js";
+import { localDateISO, addDaysISO } from "../dist/repo/shared.js";
+import { recordDecision } from "../dist/repo/brain-decisions.js";
+import { insertBrainEvaluation } from "../dist/repo/brain-evaluations.js";
 
 // ---- local seeding (kept in-file so we don't touch the shared _seed.js) ----
 function reset() {
@@ -100,12 +106,12 @@ function planWith(dayNumber, item) {
 
 // Log a top set for an exercise on a given ISO date (UTC). reps/weight for reps
 // lifts; duration_sec for timed; rir optional.
-function logSet(name, date, { weight = null, reps = null, rir = null, duration_sec = null, setNum = 1 } = {}) {
+function logSet(name, date, { weight = null, reps = null, rir = null, duration_sec = null, setNum = 1, note = null } = {}) {
   const ex = repo.findExercise(name);
   const sess = repo.getOrCreateSession(date, null);
   db.prepare(
-    `INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps, rir, duration_sec) VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).run(sess.id, ex.id, setNum, weight, reps, rir, duration_sec);
+    `INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps, rir, duration_sec, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(sess.id, ex.id, setNum, weight, reps, rir, duration_sec, note);
 }
 
 function isoDaysAgo(n) {
@@ -210,9 +216,34 @@ test("overload step is CLAMPED — a giant history never yields a giant jump", (
 
   const p = nextPrescription("Back Squat");
   assert.equal(p.action, "overload");
-  // 10% of 300 = 30, but the compound ceiling caps it at 5 lb → 305.
-  assert.equal(p.suggested.weight, 305);
-  assert.ok(p.suggested.weight - 300 <= 5, "step never exceeds the 5 lb compound cap");
+  // 10% of 300 = 30, but the proportional compound ceiling caps it at 7.5 lb.
+  assert.equal(p.suggested.weight, 307.5);
+  assert.ok(p.suggested.weight - 300 <= 7.5, "step never exceeds the proportional compound cap");
+});
+
+// The cap used to be a flat 5 lb for every compound, so a 300 lb squat and a 100 lb
+// press earned the identical increment — a rounding error on one, a real week's work
+// on the other. It scales with what is actually on the bar, and the light lift keeps
+// exactly the step it always had.
+test("the compound step SCALES with the load — heavy lifts earn more than light ones", () => {
+  makeExercise("Back Squat", { muscle_group: "quads" });
+  makeExercise("Overhead Press", { muscle_group: "shoulders" });
+  planWith(1, { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 5, target_weight: 300, focus: "Legs" });
+  planWith(2, { exercise: "Overhead Press", sets: 3, rep_low: 5, rep_high: 5, target_weight: 100, focus: "Push" });
+  for (const setNum of [1, 2, 3]) {
+    logSet("Back Squat", isoDaysAgo(5), { weight: 300, reps: 5, rir: 2, setNum });
+    logSet("Overhead Press", isoDaysAgo(5), { weight: 100, reps: 5, rir: 2, setNum });
+  }
+
+  const squat = nextPrescription("Back Squat");
+  const press = nextPrescription("Overhead Press");
+  assert.equal(squat.action, "overload");
+  assert.equal(press.action, "overload");
+  const squatStep = squat.suggested.weight - 300;
+  const pressStep = press.suggested.weight - 100;
+  assert.ok(squatStep > pressStep, `the heavy compound steps up more (${squatStep} vs ${pressStep})`);
+  assert.equal(pressStep, 5, "a 100 lb press keeps the familiar 5 lb jump");
+  assert.equal(squatStep, 7.5, "a 300 lb squat earns a proportional 7.5 lb jump, on the plate grid");
 });
 
 test("isolation lifts get the smaller 2.5 lb plate jump", () => {
@@ -238,19 +269,45 @@ test("hold: reps not at the top / RIR low → hold the load, no bump", () => {
   assert.match(p.delta_text, /^hold/);
 });
 
-test("deload: a regressing lift backs the load off ~10%", () => {
+// SEAM: calibration.ts's estimateConfidenceFor (src/repo/calibration.ts) is the
+// evidence gate the strength-core track built against while it was still a stub
+// that answered "verified" for everything. Live, a regressing est-1RM nothing
+// heavy has confirmed reads as an unconfirmed FORMULA, not a confirmed slip — the
+// prescription HOLDS and asks for a test instead of cutting the load.
+test("deload gated on estimate confidence: unverified holds with a test story, verified deloads", () => {
   makeExercise("Deadlift", { muscle_group: "hamstrings" });
   planWith(1, { exercise: "Deadlift", sets: 1, rep_low: 5, rep_high: 5, target_weight: 365, focus: "Pull" });
   // Est-1RM clearly sliding over several sessions → program-state reads regressing.
+  // No set here is a genuinely heavy single/AMRAP near the running estimate, so
+  // nothing has ever VERIFIED it — the ladder's honest "unverified" case.
   logSet("Deadlift", isoDaysAgo(28), { weight: 365, reps: 5, rir: 1 });
   logSet("Deadlift", isoDaysAgo(21), { weight: 355, reps: 5, rir: 1 });
   logSet("Deadlift", isoDaysAgo(14), { weight: 345, reps: 5, rir: 1 });
   logSet("Deadlift", isoDaysAgo(5), { weight: 335, reps: 5, rir: 1 });
 
-  const p = nextPrescription("Deadlift");
-  assert.equal(p.action, "deload");
-  assert.ok(p.suggested.weight < 365 && p.suggested.weight > 0, "load backed off, never negative");
-  assert.match(p.delta_text, /^−/, "delta reads as a decrease");
+  assert.equal(estimateConfidenceFor("Deadlift"), "unverified");
+  const unverified = nextPrescription("Deadlift");
+  assert.equal(unverified.action, "hold", "an unconfirmed formula holds rather than deloads");
+  assert.equal(unverified.suggested.weight, 365, "load stays where it is while the estimate is untested");
+  assert.match(unverified.why, /heavy set|confirm/i, "the why tells the settle-it-with-a-test story");
+  assert.equal(violatesReadingGrammar(unverified.why), null);
+
+  // Mark the FIRST day's set AMRAP — a genuine test of that day's ceiling. It
+  // verifies on its own (no prior estimate needed to compare against), anchoring
+  // the estimate recently enough to read as "verified" without touching the
+  // weights the decline trend is graded on.
+  db.prepare(
+    `UPDATE logged_sets SET note = 'AMRAP' WHERE id = (
+       SELECT ls.id FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+       WHERE s.date = ? ORDER BY ls.id ASC LIMIT 1
+     )`
+  ).run(isoDaysAgo(28));
+
+  assert.equal(estimateConfidenceFor("Deadlift"), "verified");
+  const verified = nextPrescription("Deadlift");
+  assert.equal(verified.action, "deload", "a confirmed estimate returns to the ordinary deload path");
+  assert.ok(verified.suggested.weight < 365 && verified.suggested.weight > 0, "load backed off, never negative");
+  assert.match(verified.delta_text, /^−/, "delta reads as a decrease");
 });
 
 test("vary: a long flat plateau (not grinding) suggests rotating a variation", () => {
@@ -679,8 +736,10 @@ test("programAdjustments flags missing-pattern GAPS (no core / grip / mobility)"
 test("programAdjustments surfaces a due deload + a due group, plain words", () => {
   makeExercise("Back Squat", { muscle_group: "quads" });
   repo.savePlanDay(1, "Legs", "Legs", [{ exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 5, target_weight: 315 }]);
-  // Sliding squat → a deload adaptation should appear.
-  logSet("Back Squat", isoDaysAgo(28), { weight: 315, reps: 5, rir: 1 });
+  // Sliding squat → a deload adaptation should appear. The first set is marked
+  // AMRAP so the estimate is genuinely VERIFIED (see the calibration seam test
+  // above) — an unverified slide reads as "hold and test", not "deload".
+  logSet("Back Squat", isoDaysAgo(28), { weight: 315, reps: 5, rir: 1, note: "AMRAP" });
   logSet("Back Squat", isoDaysAgo(21), { weight: 305, reps: 5, rir: 1 });
   logSet("Back Squat", isoDaysAgo(14), { weight: 295, reps: 5, rir: 1 });
   logSet("Back Squat", isoDaysAgo(5), { weight: 285, reps: 5, rir: 1 });
@@ -803,4 +862,562 @@ test("multiple smoked due groups consolidate into ONE calm recovering note", () 
   assert.match(rec[0].title, /hamstring/i);
   assert.match(rec[0].why, /they're due/i, "plural phrasing for multiple groups");
   assert.match(rec[0].why, /ride/i, "names the ride that loaded them");
+});
+
+// ===========================================================================
+// PERIODIZATION — the block's phase is read by the math, not just the prompt
+// ===========================================================================
+// The program-block model has always carried accumulation / intensification /
+// deload / realization, and until now NOTHING that prescribes read it. These
+// tests pin the seam: same logged inputs, different phase, different answer —
+// and with no block running, byte-for-byte the old behavior.
+
+function seedCappedBenchWeek(reps = 8) {
+  makeExercise("Barbell Bench Press", { muscle_group: "chest" });
+  planWith(1, { exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185, focus: "Push" });
+  for (let s = 1; s <= 3; s++) logSet("Barbell Bench Press", isoDaysAgo(4), { weight: 185, reps, rir: 2, setNum: s });
+}
+
+// The multi-channel fuel fixture: enough logged intake below target, flat energy
+// and flat sessions that the protective fuel read stops asking for aggression.
+function seedUnderfueledWeek() {
+  db.prepare(
+    `INSERT INTO nutrition_targets (effective_date, target_kcal, protein_g, source) VALUES (?, 2200, 175, 'test')`
+  ).run(isoDaysAgo(30));
+  for (const daysAgo of [1, 2, 3, 4]) {
+    for (const [meal, kcal] of [["breakfast", 750], ["dinner", 1000]]) {
+      db.prepare(`INSERT INTO food_notes (date, meal, raw_output, parsed_json) VALUES (?, ?, '', ?)`).run(
+        isoDaysAgo(daysAgo),
+        meal,
+        JSON.stringify({ kcal })
+      );
+    }
+  }
+  for (const daysAgo of [1, 2]) {
+    db.prepare(`INSERT INTO fueling_feedback (date, energy, hunger) VALUES (?, 1, 3)`).run(isoDaysAgo(daysAgo));
+    db.prepare(`INSERT INTO sessions (date, performance, finished_at) VALUES (?, 2, datetime('now'))`).run(
+      isoDaysAgo(daysAgo)
+    );
+  }
+}
+
+// A slipping lift: est-1RM clearly sliding over several sessions. `verified: true`
+// marks the first day's set AMRAP so the calibration ladder reads the estimate as
+// confirmed (see the calibration seam test above) — callers exercising the
+// ordinary REGRESSING_DELOAD path need that; callers only after cut-pressure hold
+// (which short-circuits before the confidence check) don't.
+function seedRegressingDeadlift({ verified = false } = {}) {
+  makeExercise("Deadlift", { muscle_group: "hamstrings" });
+  planWith(1, { exercise: "Deadlift", sets: 3, rep_low: 5, rep_high: 5, target_weight: 365, focus: "Pull" });
+  logSet("Deadlift", isoDaysAgo(28), { weight: 365, reps: 5, rir: 1, note: verified ? "AMRAP" : null });
+  logSet("Deadlift", isoDaysAgo(21), { weight: 355, reps: 5, rir: 1 });
+  logSet("Deadlift", isoDaysAgo(14), { weight: 345, reps: 5, rir: 1 });
+  logSet("Deadlift", isoDaysAgo(5), { weight: 335, reps: 5, rir: 1 });
+}
+
+test("the training phase changes the prescription — same logs, different answer", () => {
+  seedCappedBenchWeek(8); // every set capped the plan's 6–8 range at RIR 2
+
+  // NO BLOCK — the engine behaves exactly as it did before periodization existed.
+  const noBlock = nextPrescription("Barbell Bench Press");
+  assert.equal(noBlock.action, "overload");
+  assert.equal(noBlock.suggested.weight, 190, "the ordinary earned compound step");
+  assert.ok(!noBlock.rep_step);
+  assert.equal(noBlock.block_phase, undefined, "no block, nothing periodized");
+
+  // ACCUMULATION — the range has to be genuinely full (a clean rep on top of the
+  // ceiling) before load moves, so the same session earns REPS, not weight.
+  blocks.createBlock({ goal: "Build", focus: "strength", total_weeks: 6, week_index: 1 });
+  const accumulation = nextPrescription("Barbell Bench Press");
+  assert.equal(accumulation.block_phase, "accumulation");
+  assert.equal(accumulation.rep_step, true, "a volume stretch is spent at the top of the window");
+  assert.equal(accumulation.suggested.weight, 185, "the load is held while the reps saturate");
+
+  // INTENSIFICATION — a strong top set at the ceiling buys the load on its own.
+  blocks.createBlock({ goal: "Sharpen", focus: "strength", total_weeks: 6, week_index: 5 });
+  const intensification = nextPrescription("Barbell Bench Press");
+  assert.equal(intensification.block_phase, "intensification");
+  assert.ok(!intensification.rep_step);
+  assert.equal(intensification.suggested.weight, 190, "intensity earns the step");
+
+  // DELOAD — the work was there; the week is the reason it waits.
+  blocks.createBlock({ goal: "Ease", focus: "strength", total_weeks: 6, week_index: 6 });
+  const deload = nextPrescription("Barbell Bench Press");
+  assert.equal(deload.block_phase, "deload");
+  assert.equal(deload.action, "hold");
+  assert.equal(deload.suggested.weight, 185, "an easy week adds nothing");
+});
+
+test("a volume phase paces the step down when it IS earned", () => {
+  seedCappedBenchWeek(9); // a clean rep ON TOP of the 6–8 range, every set
+  blocks.createBlock({ goal: "Build", focus: "strength", total_weeks: 6, week_index: 1 });
+
+  const p = nextPrescription("Barbell Bench Press");
+  assert.equal(p.action, "overload");
+  assert.ok(!p.rep_step, "the window is saturated — this is the LOAD stage");
+  assert.equal(p.suggested.weight, 187.5, "a build stretch takes half the ordinary step");
+});
+
+test("an isolation lift is untouched by the phase — plain double progression", () => {
+  makeExercise("Dumbbell Curl", { muscle_group: "biceps" });
+  planWith(1, { exercise: "Dumbbell Curl", sets: 3, rep_low: 10, rep_high: 12, target_weight: 30, focus: "Arms" });
+  for (let s = 1; s <= 3; s++) logSet("Dumbbell Curl", isoDaysAgo(4), { weight: 30, reps: 12, rir: 2, setNum: s });
+  blocks.createBlock({ goal: "Build", focus: "strength", total_weeks: 6, week_index: 1 });
+
+  const p = nextPrescription("Dumbbell Curl");
+  assert.equal(p.action, "overload");
+  assert.equal(p.suggested.weight, 32.5, "accessory work keeps its own 2.5 lb ladder");
+});
+
+test("peak week prescribes a heavy top set — and logging it re-anchors the estimate", () => {
+  makeExercise("Back Squat", { muscle_group: "quads" });
+  planWith(1, { exercise: "Back Squat", sets: 4, rep_low: 5, rep_high: 5, target_weight: 190, focus: "Legs" });
+  // A genuine single early in the trail VERIFIES the estimate (see the calibration
+  // seam test above) — a peak week the calibration ladder trusts expresses as a
+  // heavy SINGLE; an unconfirmed one widens to a double instead.
+  logSet("Back Squat", isoDaysAgo(25), { weight: 185, reps: 1, rir: 0 });
+  logSet("Back Squat", isoDaysAgo(21), { weight: 185, reps: 5, rir: 2 });
+  logSet("Back Squat", isoDaysAgo(10), { weight: 190, reps: 5, rir: 2 });
+  blocks.createBlock({ goal: "Peak", focus: "peak", total_weeks: 3, week_index: 3 });
+
+  const p = nextPrescription("Back Squat");
+  assert.equal(p.block_phase, "realization");
+  assert.ok(p.top_set, "peak week carries a top-set protocol");
+  assert.equal(p.top_set.reps, 1, "a confirmed estimate is expressed as a heavy single");
+  assert.ok(p.top_set.weight > 190, "the top set is heavier than the working load");
+  assert.ok(p.top_set.backoff, "…with back-off work after it");
+  assert.ok(p.top_set.backoff.weight < p.top_set.weight);
+  assert.ok(p.top_set.backoff.sets >= 1);
+  assert.match(p.delta_text, /^top set /);
+  // `suggested` describes the BULK of the session — the back-off block — so a
+  // consumer that composes today's work from it lands on a real, lighter session
+  // rather than on one near-maximal single with the rest of the work missing.
+  assert.equal(p.suggested.weight, p.top_set.backoff.weight);
+  assert.equal(p.suggested.sets, p.top_set.backoff.sets);
+  assert.equal(p.suggested.rep_low, 5, "the back-off block keeps the plan's own window");
+  assert.equal(violatesReadingGrammar(p.why), null);
+
+  // A near-maximal single is a SESSION protocol, never a plan target — writing it
+  // into plan_items would make it the number every later step is measured from.
+  assert.equal(buildProgressionProposal(1).ok, false, "the peak set never lands as a plan change");
+
+  // …and the logged result is exactly what the calibration ledger counts as a
+  // verifying set, so the peak re-anchors the estimate instead of just feeling heavy.
+  const today = localDateISO();
+  logSet("Back Squat", today, { weight: p.top_set.weight, reps: p.top_set.reps, rir: 0 });
+  const session = repo.getSessionByDate(today);
+  const events = detectStrengthCalibration(session.id);
+  assert.ok(
+    events.some((e) => e.kind === "strength_topset" && /squat/i.test(String(e.result?.exercise ?? ""))),
+    "the peak set anchors the estimate"
+  );
+});
+
+// ===========================================================================
+// THE CUT AS A LEVER — "holding is a win" stops being a sentence in a playbook
+// ===========================================================================
+
+test("a slip while fueling is behind HOLDS the load — cutting weight can't fix a food problem", () => {
+  seedRegressingDeadlift();
+  seedUnderfueledWeek();
+
+  const p = nextPrescription("Deadlift");
+  assert.equal(p.action, "hold", "the automatic tenth off is the wrong answer here");
+  assert.equal(p.suggested.weight, 365, "the load stays where it is");
+  assert.match(p.why, /fuel|food|eating/i, "the why tells the fueling story");
+  assert.equal(violatesReadingGrammar(p.why), null);
+  assert.doesNotMatch(p.why, /calorie|kcal|settling window/i, "…in the training register, not the nutrition one");
+});
+
+test("a flat lift on a real cut is holding ground — no variation is forced mid-cut", () => {
+  makeExercise("Leg Press", { muscle_group: "quads" });
+  planWith(1, { exercise: "Leg Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 400, focus: "Legs" });
+  for (const d of [28, 21, 14, 7, 2]) logSet("Leg Press", isoDaysAgo(d), { weight: 400, reps: 10, rir: 2 });
+
+  const wellFed = nextPrescription("Leg Press");
+  assert.equal(wellFed.action, "vary", "flat this long ordinarily asks for a variation");
+
+  seedUnderfueledWeek();
+  const cutting = nextPrescription("Leg Press");
+  assert.notEqual(cutting.action, "vary", "a cut buys the movement patience — the same weeks read differently");
+  assert.equal(cutting.suggested.weight, 400);
+});
+
+// ===========================================================================
+// A SECOND DELOAD IS NOT ANOTHER DELOAD
+// ===========================================================================
+
+function seedAppliedDeload(exercise, daysAgo, weight) {
+  db.prepare(
+    `INSERT INTO plan_proposals (created_at, agent, instruction, raw_output, parsed_json, status)
+     VALUES (?, 'auto-progression', 'day 1 progression', '', ?, 'applied')`
+  ).run(
+    `${isoDaysAgo(daysAgo)} 12:00:00`,
+    JSON.stringify({
+      summary: "Auto-progression",
+      changes: [{ day_number: 1, exercise, target_weight: weight, progression_action: "deload" }],
+    })
+  );
+}
+
+test("a SECOND deload on the same lift changes the SHAPE instead of cutting load again", () => {
+  seedRegressingDeadlift({ verified: true });
+
+  // First, the ordinary answer — and it carries the marker a repeat is recognised from.
+  const first = nextPrescription("Deadlift");
+  assert.equal(first.action, "deload");
+  assert.ok(!first.escalated, "the first step back is an ordinary one");
+  const proposal = buildProgressionProposal(1);
+  assert.equal(proposal.ok, true);
+  const change = proposal.proposal.parsed.changes.find((c) => c.exercise === "Deadlift");
+  assert.equal(change.progression_action, "deload", "an applied deload leaves an audit trail");
+
+  // Now the same lift, three weeks after a deload that was actually applied.
+  seedAppliedDeload("Deadlift", 21, 330);
+  const second = nextPrescription("Deadlift");
+  assert.equal(second.escalated, "rep_wave");
+  assert.equal(second.suggested.rep_low, 3, "the window drops into heavier reps");
+  assert.equal(second.suggested.rep_high, 4);
+  assert.ok(
+    second.suggested.weight > first.suggested.weight,
+    `the load barely moves — the scheme is the change (${second.suggested.weight} vs ${first.suggested.weight})`
+  );
+  assert.equal(violatesReadingGrammar(second.why), null);
+});
+
+test("the playbook tells the escalation story instead of asking for another light deload", () => {
+  seedRegressingDeadlift();
+  seedAppliedDeload("Deadlift", 21, 330);
+
+  const play = trainingPlaybook().plateau_plays.find((p) => /deadlift/i.test(p.title));
+  assert.ok(play, "the slipping lift still gets a play");
+  assert.doesNotMatch(play.adaptations.join(" "), /light deload/i, "it stops recommending the move that failed");
+  assert.match(play.adaptations.join(" "), /rep window|rep bracket|variation/i);
+  assert.match(play.why, /already/i, "the why names the earlier step back");
+});
+
+// A wave already applied is not a reason to wave again. Without a termination
+// bound the ladder had none: every week the lift still read regressing, the
+// escalation fired, and the shape changed again before the last change had shown
+// anything. The applied wave carries its own marker, and the branch reads it back.
+function seedAppliedWave(exercise, daysAgo, weight) {
+  db.prepare(
+    `INSERT INTO plan_proposals (created_at, agent, instruction, raw_output, parsed_json, status)
+     VALUES (?, 'auto-progression', 'day 1 progression', '', ?, 'applied')`
+  ).run(
+    `${isoDaysAgo(daysAgo)} 12:00:00`,
+    JSON.stringify({
+      summary: "Auto-progression",
+      changes: [
+        {
+          day_number: 1,
+          exercise,
+          target_weight: weight,
+          progression_action: "deload",
+          progression_escalation: "rep_wave",
+        },
+      ],
+    })
+  );
+}
+
+test("an escalated wave does not stack another one — the lift runs the wave out", () => {
+  seedRegressingDeadlift({ verified: true });
+  // The applied wave IS an applied deload too, so the repeat condition still holds.
+  seedAppliedWave("Deadlift", 21, 347.5);
+
+  const p = nextPrescription("Deadlift");
+  assert.equal(p.action, "hold", "the shape does not change again on top of a change in flight");
+  assert.equal(p.escalated, undefined, "and nothing new is marked as an escalation");
+  assert.equal(p.suggested.weight, 365, "the load stays where the wave left it");
+  assert.match(p.why, /already|still|mid-way/i, "the why says the wave is still running");
+  assert.equal(violatesReadingGrammar(p.why), null);
+});
+
+test("the applied wave leaves the audit trail the bound is read from", () => {
+  seedRegressingDeadlift({ verified: true });
+  seedAppliedDeload("Deadlift", 21, 330);
+  const proposal = buildProgressionProposal(1);
+  assert.equal(proposal.ok, true);
+  const change = proposal.proposal.parsed.changes.find((c) => c.exercise === "Deadlift");
+  assert.equal(change.progression_escalation, "rep_wave", "a wave records that it was one");
+  assert.equal(change.progression_action, "deload", "…and still counts as a step back");
+});
+
+// ===========================================================================
+// THE UNVERIFIED-REGRESSION HOLD IS SCOPED AND BOUNDED
+// ===========================================================================
+// "Unverified" is near-universal on real data — a verifying set is an AMRAP or a
+// set at 0.92× the running estimate, which ordinary work rarely is. So an
+// unconditional hold on every unverified regression would have switched the deload
+// arm off entirely, and on a lift the calibration ladder never offers a test for,
+// the hold's own "let a heavy set settle it" story is unreachable: the lift would
+// sit at its current weight indefinitely. Three bounds, one test each.
+
+// An accessory: third on the day, so mainPlanLifts (the day's first two loaded
+// movements) does not track it and no test is ever suggested for it.
+function seedRegressingAccessory() {
+  makeExercise("Barbell Bench Press", { muscle_group: "chest" });
+  makeExercise("Overhead Press", { muscle_group: "shoulders" });
+  makeExercise("Cable Fly", { muscle_group: "chest" });
+  repo.savePlanDay(1, "Push", "Push", [
+    { exercise: "Barbell Bench Press", sets: 3, rep_low: 5, rep_high: 5, target_weight: 225 },
+    { exercise: "Overhead Press", sets: 3, rep_low: 5, rep_high: 5, target_weight: 135 },
+    { exercise: "Cable Fly", sets: 3, rep_low: 10, rep_high: 12, target_weight: 60 },
+  ]);
+  for (const [days, weight] of [[28, 60], [21, 57.5], [14, 55], [5, 52.5]]) {
+    logSet("Cable Fly", isoDaysAgo(days), { weight, reps: 10, rir: 1 });
+  }
+}
+
+test("an accessory keeps the ordinary deload — the hold's test is unreachable there", () => {
+  seedRegressingAccessory();
+  assert.equal(estimateConfidenceFor("Cable Fly"), "unverified", "nothing has confirmed this estimate either");
+  const p = nextPrescription("Cable Fly");
+  assert.equal(p.action, "deload", "Epley noise on an accessory is cheap; a silent dead end is not");
+  assert.ok(p.suggested.weight < 60 && p.suggested.weight > 0);
+  // …and the ladder confirms why: it would never put a test in front of this lift.
+  assert.ok(
+    !dueCalibrations().some((entry) => entry.target_key === normalizedExerciseKey("Cable Fly")),
+    "the calibration ladder does not track an accessory"
+  );
+});
+
+test("a main lift holds ONCE, then falls through to the deload on a continued slide", () => {
+  // A fresh slide: the peak is recent, so the hold's story ("one heavy set would
+  // settle this") is still live.
+  makeExercise("Deadlift", { muscle_group: "hamstrings" });
+  planWith(1, { exercise: "Deadlift", sets: 3, rep_low: 5, rep_high: 5, target_weight: 365, focus: "Pull" });
+  for (const [days, weight] of [[28, 365], [21, 355], [14, 345], [5, 335]]) {
+    logSet("Deadlift", isoDaysAgo(days), { weight, reps: 5, rir: 1 });
+  }
+  const fresh = nextPrescription("Deadlift");
+  assert.equal(fresh.action, "hold", "a fresh, shallow slide gets the pause");
+  assert.match(fresh.why, /heavy set|confirm/i);
+
+  // The same lift, the same shallow slide — but it has been running for two months.
+  // The heavy set has been offered and not taken; the deload arm takes over.
+  reset();
+  makeExercise("Deadlift", { muscle_group: "hamstrings" });
+  planWith(1, { exercise: "Deadlift", sets: 3, rep_low: 5, rep_high: 5, target_weight: 365, focus: "Pull" });
+  for (const [days, weight] of [[55, 365], [40, 360], [25, 355], [5, 350]]) {
+    logSet("Deadlift", isoDaysAgo(days), { weight, reps: 5, rir: 1 });
+  }
+  const continued = nextPrescription("Deadlift");
+  assert.equal(continued.action, "deload", "a slide still running a month later is not estimate noise");
+  assert.ok(continued.suggested.weight < 365 && continued.suggested.weight > 0);
+});
+
+test("a DEEP slide deloads even unverified — holding there is not the conservative arm", () => {
+  makeExercise("Deadlift", { muscle_group: "hamstrings" });
+  planWith(1, { exercise: "Deadlift", sets: 3, rep_low: 5, rep_high: 5, target_weight: 365, focus: "Pull" });
+  // Down about 18% off its own recent peak — further than the deload would have
+  // taken it, so calling it a formula artifact stops being honest.
+  for (const [days, weight] of [[28, 365], [21, 345], [14, 325], [5, 300]]) {
+    logSet("Deadlift", isoDaysAgo(days), { weight, reps: 5, rir: 1 });
+  }
+  assert.equal(estimateConfidenceFor("Deadlift"), "unverified");
+  const p = nextPrescription("Deadlift");
+  assert.equal(p.action, "deload");
+});
+
+test("the playbook agrees with whichever arm the engine actually takes", () => {
+  // Held: the playbook asks for the heavy set, not for the cut the engine refused.
+  seedRegressingDeadlift();
+  const held = trainingPlaybook().plateau_plays.find((p) => /deadlift/i.test(p.title));
+  assert.ok(held);
+  assert.equal(nextPrescription("Deadlift").action, "hold", "the engine is holding this one");
+  assert.doesNotMatch(held.adaptations.join(" "), /light deload/i, "so the playbook does not ask for a deload");
+  assert.match(held.adaptations.join(" "), /heavy set|heavy top set/i);
+  for (const line of [...held.adaptations, held.why]) assert.equal(violatesReadingGrammar(line), null, `"${line}"`);
+
+  // Deloading: the deload story is the honest one again.
+  reset();
+  seedRegressingDeadlift({ verified: true });
+  const deloading = trainingPlaybook().plateau_plays.find((p) => /deadlift/i.test(p.title));
+  assert.ok(deloading);
+  assert.equal(nextPrescription("Deadlift").action, "deload", "a confirmed estimate returns to the deload arm");
+  assert.match(deloading.adaptations.join(" "), /light deload/i);
+});
+
+// ===========================================================================
+// SEAM: THE LEDGER'S OWN RECORD MOVES THE PLATEAU-VARY BOUNDARY (ledgerCounsel,
+// consuming reaction-model.ts's liftLedgerRead — brain_decisions/brain_evaluations
+// on THIS lift's own progression expectations, not just liftLedgerRead's own unit
+// coverage in test/reactionModelV2.test.js)
+// ===========================================================================
+
+// Minimal, valid brain_decisions/brain_expectations/brain_evaluations rows for one
+// lift's progression expectation — mirrors test/reactionModelV2.test.js's fixture
+// shape (recordDecision validates the full decision, so every field here matters).
+function ledgerDecision(key, exercise) {
+  return {
+    effective_date: "2026-01-01",
+    kind: "training_target",
+    domain: "training",
+    summary: `Lift target ${key} for ${exercise}.`,
+    rationale: "Measure the response before changing the target again.",
+    source: "test",
+    // BRAIN_SOURCE_REF_TYPES (src/brain/decision-contract.ts) has no
+    // "training_target" member — "nutrition_target" is just a valid enum slot
+    // here, unrelated to this decision's actual (training) kind/domain.
+    source_ref_type: "nutrition_target",
+    source_ref_key: key,
+    status: "applied",
+    autonomy_tier: "quiet_apply",
+    risk_class: "low",
+    reversible: true,
+    input_fingerprint: null,
+    context: {},
+    action: { lift: exercise, slot: key },
+    specialist: null,
+    applied_at: "2026-01-01T12:00:00.000Z",
+    reverted_at: null,
+    superseded_by: null,
+    evaluator_version: "seam-test-v1",
+  };
+}
+
+function ledgerExpectation(exercise) {
+  return {
+    metric_key: "exercise_est_1rm_trend",
+    subject_key: exercise,
+    direction: "at_least",
+    baseline: { est_1rm: 200 },
+    target: { value: 194 },
+    window_start: "2026-01-01",
+    window_end: "2026-01-21",
+    minimum_data: { exposures: 3 },
+    confounder_policy: "standard",
+    confidence: "tentative",
+    evaluator: "exercise_est_1rm",
+    evaluator_version: "seam-test-v1",
+  };
+}
+
+// Record ONE conclusive verdict on `exercise`'s progression, dated `daysAgo` back —
+// the shape liftLedgerRead (src/repo/reaction-model.ts) reads as the ledger's word
+// on this specific lift.
+function recordLiftVerdict(exercise, key, verdict, daysAgo) {
+  const recorded = recordDecision(ledgerDecision(key, exercise), [ledgerExpectation(exercise)]);
+  const evaluation = insertBrainEvaluation({
+    expectation_id: recorded.expectations[0].id,
+    verdict,
+    actual: { value: verdict === "aligned" ? 205 : 180, exposures: 5 },
+    evidence_keys: [`logged_sets:2026-01-01..2026-01-21:n=5`],
+    confounders: [],
+    explanation: verdict === "aligned" ? "The estimate held." : "The estimate did not hold.",
+    evaluator_version: "seam-test-v1",
+  });
+  db.prepare(`UPDATE brain_evaluations SET evaluated_at = ? WHERE id = ?`).run(
+    `${addDaysISO(localDateISO(), -daysAgo)} 12:00:00`,
+    evaluation.id
+  );
+  return recorded;
+}
+
+test("ledger counsel: two MISSED verdicts bring the plateau-vary boundary a week sooner", () => {
+  makeExercise("Leg Press", { muscle_group: "quads" });
+  planWith(1, { exercise: "Leg Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 400, focus: "Legs" });
+  // Same top load, 4 sessions spanning 15 days → plateaued, exactly 2 weeks static.
+  // Ordinarily (PLATEAU_VARY_WEEKS = 3) that is not long enough to vary yet.
+  for (const d of [16, 11, 6, 1]) logSet("Leg Press", isoDaysAgo(d), { weight: 400, reps: 10, rir: 2 });
+
+  const before = nextPrescription("Leg Press");
+  assert.equal(before.action, "hold", "2 static weeks doesn't clear the ordinary 3-week bar yet");
+
+  // Two conclusive MISSED verdicts on this lift's own progression, both inside the
+  // ledger's window and among its most recent — enough for `informative: true` and
+  // for ledgerCounsel to read doubt.
+  recordLiftVerdict("Leg Press", "m1", "not_aligned", 40);
+  recordLiftVerdict("Leg Press", "m2", "not_aligned", 5);
+
+  const after = nextPrescription("Leg Press");
+  assert.equal(after.action, "vary", "a ledger that keeps missing brings the change forward a week");
+  assert.equal(violatesReadingGrammar(after.why), null);
+});
+
+test("ledger counsel: two ALIGNED verdicts buy the plateau extra patience before varying", () => {
+  makeExercise("Leg Press", { muscle_group: "quads" });
+  planWith(1, { exercise: "Leg Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 400, focus: "Legs" });
+  // Same top load, 5 sessions spanning 27 days → plateaued, 4 weeks static — past
+  // the ordinary 3-week bar, so the baseline answer is already "vary".
+  for (const d of [28, 21, 14, 7, 1]) logSet("Leg Press", isoDaysAgo(d), { weight: 400, reps: 10, rir: 2 });
+
+  const before = nextPrescription("Leg Press");
+  assert.equal(before.action, "vary", "4 static weeks ordinarily clears the bar");
+
+  // Two conclusive ALIGNED verdicts, no misses — the ledger has been honest about
+  // this lift, buying it patience instead of a reshuffle.
+  recordLiftVerdict("Leg Press", "a1", "aligned", 40);
+  recordLiftVerdict("Leg Press", "a2", "aligned", 5);
+
+  const after = nextPrescription("Leg Press");
+  assert.equal(after.action, "hold", "a ledger that keeps landing buys the lift another clean run");
+  assert.match(after.why, /answering|landed|honest/i, "the why credits the lift's own record");
+  assert.equal(violatesReadingGrammar(after.why), null);
+});
+
+// ===========================================================================
+// SEAM: MOVEMENT-RISK DEMOTES A VARY CANDIDATE (riskRerank, consuming
+// movement-risk.ts's movementRiskFor — proven live through rankedVaryOptions
+// inside nextPrescription's vary path, not just movementRisk.test.js's direct
+// unit coverage of movementRiskFor itself)
+// ===========================================================================
+
+function openSymptomOn(areaText, onsetDaysAgo, lastDaysAgo) {
+  const info = db
+    .prepare(
+      `INSERT INTO training_symptom_events (source_kind, area_text, status, scope, onset_on, last_reported_on)
+       VALUES ('test', ?, 'active', 'area', ?, ?)`
+    )
+    .run(areaText, isoDaysAgo(onsetDaysAgo), isoDaysAgo(lastDaysAgo));
+  return Number(info.lastInsertRowid);
+}
+
+function painOnDays(eventId, exerciseName, daysAgoList) {
+  const ex = repo.findExercise(exerciseName);
+  for (const d of daysAgoList) {
+    db.prepare(
+      `INSERT INTO movement_tolerance_observations
+         (symptom_event_id, session_id, exercise_id, movement_key, movement_name, observed_on, outcome, relevant)
+       VALUES (?, NULL, ?, ?, ?, ?, 'pain_present', 1)`
+    ).run(eventId, ex.id, `exercise:${ex.id}`, ex.name, isoDaysAgo(d));
+  }
+}
+
+test("movement risk demotes a flagged vary candidate below an otherwise lower-ranked clear one", () => {
+  makeExercise("Back Squat", { muscle_group: "quads" });
+  planWith(1, { exercise: "Back Squat", sets: 3, rep_low: 8, rep_high: 10, target_weight: 315, focus: "Legs" });
+  for (const d of [35, 28, 21, 14, 7, 2]) logSet("Back Squat", isoDaysAgo(d), { weight: 315, reps: 10, rir: 2 });
+
+  // Register the two same-pattern candidates the athlete has actually trained.
+  // Every other candidate suggestAlternatives("Back Squat") offers stays a bare
+  // catalog name (never trained → riskRerank can't hold tolerance memory against
+  // it), so excluding them isolates the ranking to these two real lifts.
+  makeExercise("Front Squat", { muscle_group: "quads" });
+  makeExercise("Hack Squat", { muscle_group: "quads" });
+  const excludeNames = ["Box Squat", "Safety Bar Squat", "Zercher Squat", "Leg Press", "DB Goblet Squat", "Goblet Squat"];
+
+  const before = nextPrescription("Back Squat", undefined, { excludeNames });
+  assert.equal(before.action, "vary");
+  assert.equal(before.vary_to, "Front Squat", "unflagged, Front Squat leads the menu");
+  assert.deepEqual(
+    before.vary_options.map((o) => o.name),
+    ["Front Squat", "Hack Squat"]
+  );
+
+  // Repeated pain on Front Squat, 2 separate days inside the tolerance window.
+  const event = openSymptomOn("left knee", 60, 10);
+  painOnDays(event, "Front Squat", [60, 10]);
+
+  const after = nextPrescription("Back Squat", undefined, { excludeNames });
+  assert.equal(after.action, "vary");
+  assert.equal(after.vary_to, "Hack Squat", "the flagged candidate no longer leads the menu");
+  assert.deepEqual(
+    after.vary_options.map((o) => o.name),
+    ["Hack Squat", "Front Squat"],
+    "Front Squat is demoted below Hack Squat, which ranked behind it before the flag"
+  );
+  assert.equal(violatesReadingGrammar(after.why), null);
 });

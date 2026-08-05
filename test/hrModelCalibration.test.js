@@ -540,3 +540,61 @@ test("the coach context carries the compact model and the due list", () => {
   assert.match(ctx.hr_model.zones.z2, /bpm/);
   assert.ok(Array.isArray(ctx.calibration.due));
 });
+
+// ── the two suggestion slots are SHARED, not first-come ──────────────────────
+// A hybrid athlete has two endurance quantities aging on their own clocks and a
+// plan full of lifts. Taking the due list in item order handed both slots to
+// endurance forever, so a strength test was never offered — and the progression
+// engine's "hold this lift until a heavy set settles it" had no reachable way to
+// be settled. The slots now split when both domains are waiting.
+
+test("when both domains are due, the two slots split one and one", () => {
+  seedThisAthlete();
+  raceGoal();
+  seedBenchPlanAndHistory();
+  appliedProgression(back(80), 200);
+  appliedProgression(back(50), 205);
+  appliedProgression(back(20), 210);
+
+  const items = calibrationStatus(REF).items;
+  const dueEndurance = items.filter((item) => item.domain === "endurance" && item.due);
+  const dueStrength = items.filter((item) => item.domain === "strength" && item.due);
+  assert.equal(dueEndurance.length, 2, "both endurance quantities are genuinely due");
+  assert.ok(dueStrength.length >= 1, "and so is the lift the plan keeps raising");
+
+  const due = dueCalibrations(REF);
+  assert.equal(due.length, 2, "still at most two suggestions — this is an opening, not a to-do list");
+  assert.equal(due[0].kind, "lthr_tt", "endurance still speaks first");
+  assert.equal(due[1].kind, "strength_topset", "…it just no longer speaks twice while strength waits");
+  assert.equal(due[1].target_key, normalizedExerciseKey(BENCH));
+});
+
+test("with only one domain due, that domain still fills both slots", () => {
+  // Fairness is a tiebreak, not a quota: nothing is withheld when there is nothing
+  // on the other side waiting for the slot.
+  seedThisAthlete();
+  raceGoal();
+  const due = dueCalibrations(REF);
+  assert.equal(due.length, 2);
+  assert.deepEqual(due.map((entry) => entry.kind), ["lthr_tt", "benchmark_run"]);
+});
+
+// ── a lift the engine is HOLDING is a lift whose test is due ─────────────────
+
+test("a lift held for want of a heavy set counts as due, however few raises it has had", () => {
+  // No applied progressions at all, so the raise-count path cannot fire. What makes
+  // the test due is that a live decision — the progression engine's hold — is
+  // waiting on exactly the confirmation this ladder would produce.
+  repo.savePlanDay(1, "Push", "Push", [{ exercise: BENCH, sets: 3, rep_low: 5, rep_high: 5, target_weight: 205 }]);
+  for (const [days, weight] of [[28, 205], [21, 200], [14, 195], [5, 190]]) {
+    repo.logSetByName({ date: back(days), exercise: BENCH, weight, reps: 5 });
+  }
+  const item = calibrationStatus(REF).items.find((entry) => entry.key === normalizedExerciseKey(BENCH));
+  assert.ok(item, "the plan's main lift is tracked");
+  assert.equal(item.freshness, "never", "no heavy set has ever stood behind this estimate");
+  assert.equal(item.due, true, "the hold is the live decision depending on it");
+  assert.ok(
+    dueCalibrations(REF).some((entry) => entry.target_key === normalizedExerciseKey(BENCH)),
+    "and it reaches the suggestion list"
+  );
+});

@@ -615,3 +615,108 @@ test("block recording never takes periodization down with it", () => {
   assert.ok(after?.id > 0);
   assert.equal(blockDecisions().length, 1, "recording resumes once the ledger is back");
 });
+
+// A verified top set rebases the baseline the hold expectation is written against
+// (src/repo/calibration.ts verifiedStrengthAnchor -> liftProgressionSubjects).
+//
+// The claim "this load step should hold" is only worth making against a number the
+// athlete has actually stood under. An Epley estimate extrapolated from sets of
+// five is a ceiling nobody has tested, and a plan progressing off it writes a hold
+// expectation that can miss forever — easing the step, teaching the ledger a false
+// lesson about the lift, and shrinking the program on evidence that was never real.
+test("a confirmed heavy set is what the hold prediction is written against, not the formula's reach", () => {
+  const exercise = repo.upsertExercise({ name: "Overhead Press", muscle_group: "shoulders" });
+  for (const [daysAgo, weight, reps] of [
+    [20, 100, 5], // running estimate 116.7
+    [15, 110, 3], // 110 clears 92% of 116.7 — a heavy set genuinely stood behind 121
+    [5, 105, 8], // ordinary work, extrapolating to 133 on the formula alone
+  ]) {
+    const session = repo.getOrCreateSession(isoDaysAgo(daysAgo), null);
+    dbInsertSet(session.id, exercise.id, { weight, reps });
+  }
+  const today = localDateISO();
+
+  const [subject] = liftProgressionSubjects(["Overhead Press"], today);
+  assert.equal(subject.baseline_basis, "verified_top_set");
+  assert.equal(subject.baseline_est_1rm, 121, "the confirmed 121, not the unconfirmed 133");
+  assert.equal(subject.verified_on, isoDaysAgo(15));
+
+  const [expectation] = buildLiftProgressionExpectations([subject], today);
+  assert.equal(expectation.baseline.est_1rm, 121);
+  assert.equal(expectation.baseline.basis, "verified_top_set");
+  assert.equal(expectation.baseline.verified_on, isoDaysAgo(15));
+  // The 3% floor is applied to the CONFIRMED number, so the lift is held to a bar
+  // it has actually cleared rather than one only the formula ever reached.
+  assert.equal(expectation.target.value, 117.4);
+});
+
+test("a lift no heavy set has confirmed keeps the estimated baseline it always had", () => {
+  const exercise = repo.upsertExercise({ name: "Incline Press", muscle_group: "chest" });
+  for (const [daysAgo, weight, reps] of [
+    [20, 100, 5],
+    [10, 60, 5], // never near the running estimate, so nothing verifies it
+  ]) {
+    const session = repo.getOrCreateSession(isoDaysAgo(daysAgo), null);
+    dbInsertSet(session.id, exercise.id, { weight, reps });
+  }
+  const [subject] = liftProgressionSubjects(["Incline Press"], localDateISO());
+  assert.equal(subject.baseline_basis, "estimated");
+  assert.equal(subject.verified_on, null);
+  assert.equal(subject.baseline_est_1rm, 116.7, "the Epley best, exactly as before");
+});
+
+// The evaluator does NOT let verification move the verdict — the hold target is
+// already baseline * 0.97, so a second noise allowance here would silently double
+// the tolerance the writer chose. What it does is record HOW the number was known,
+// so a stored evaluation stays readable later as measured rather than extrapolated.
+test("a verdict records whether it was measured against a confirmed number", () => {
+  const exercise = repo.upsertExercise({ name: "Overhead Press", muscle_group: "shoulders" });
+  for (const [date, weight, reps] of [
+    ["2026-01-03", 100, 5],
+    ["2026-01-08", 110, 3], // the confirming set, inside the window
+    ["2026-01-13", 112, 3],
+  ]) {
+    const session = repo.getOrCreateSession(date, null);
+    dbInsertSet(session.id, exercise.id, { weight, reps });
+  }
+  const lift = storedExpectation(
+    buildLiftProgressionExpectations(
+      [{ exercise: "Overhead Press", exercise_id: exercise.id, baseline_est_1rm: 120 }],
+      "2026-01-01"
+    )[0]
+  );
+  const verdict = evaluateExpectation(lift.expectation, lift.decision, "2026-01-25");
+  assert.equal(verdict.verdict, "aligned");
+  assert.equal(verdict.actual.estimate_verified, true);
+  assert.equal(verdict.actual.estimate_basis, "window");
+  // The confirming set is evidence in its own right — the single strongest row
+  // behind any claim about a lift's ceiling.
+  assert.ok(
+    verdict.evidence_keys.some((key) => key.startsWith("calibration_events:strength_topset:Overhead Press:")),
+    `the heavy set is carried as evidence (got ${JSON.stringify(verdict.evidence_keys)})`
+  );
+});
+
+test("an unverified window still reaches its verdict, and says that it was unverified", () => {
+  const exercise = repo.upsertExercise({ name: "Incline Press", muscle_group: "chest" });
+  for (const [date, weight] of [
+    ["2026-01-03", 205],
+    ["2026-01-08", 195],
+    ["2026-01-13", 185],
+  ]) {
+    const session = repo.getOrCreateSession(date, null);
+    dbInsertSet(session.id, exercise.id, { weight, reps: 5 });
+  }
+  const lift = storedExpectation(
+    buildLiftProgressionExpectations(
+      [{ exercise: "Incline Press", exercise_id: exercise.id, baseline_est_1rm: 250 }],
+      "2026-01-01"
+    )[0]
+  );
+  const verdict = evaluateExpectation(lift.expectation, lift.decision, "2026-01-25");
+  // A real regression still eases the step. Verification is provenance here, never
+  // a second floor under the miss.
+  assert.equal(verdict.verdict, "not_aligned", JSON.stringify(verdict.confounders));
+  assert.equal(verdict.actual.estimate_verified, false);
+  assert.equal(verdict.actual.estimate_basis, "none");
+});

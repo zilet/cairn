@@ -79,6 +79,27 @@ const MAX_SUGGESTIONS = 2;
 // How far back logged work is read when reconstructing verification history.
 const STRENGTH_HISTORY_DAYS = 400;
 
+// ---------- the unverified-slide hold, and its bounds ----------
+// A regressing lift whose estimate nothing heavy has confirmed gets ONE pause
+// instead of a deload — the slide may be the formula drifting rather than the
+// athlete. That pause is a one-shot, not a policy, so it carries two bounds.
+//
+// DEPTH: past a full deload's worth of slide there is nothing conservative left
+// about holding — the lift has already fallen further than the deload would have
+// taken it, and calling that estimate noise stops being honest. Deliberately the
+// same tenth `DELOAD_FRAC` uses in progression.ts (not imported: progression
+// imports this module, and a cycle for one number is a poor trade).
+const UNVERIFIED_HOLD_SLIDE_FRAC = 0.1;
+// DURATION: the hold's whole story is "let one heavy set settle it". A slide
+// still running a month later has had that chance, so the deload arm takes over.
+// The engine keeps no record of a hold (a hold produces no proposal), so the
+// repeat is derived from the slide itself: a peak this old means a hold fired on
+// this same unbroken slide roughly a window ago.
+const UNVERIFIED_HOLD_WINDOW_DAYS = 28;
+// The window the slide is measured over — the same two months progression.ts
+// treats as "recently" for a repeated deload.
+const UNVERIFIED_HOLD_PEAK_DAYS = 60;
+
 // ---------- detection thresholds ----------
 const TT_MIN_MINUTES = 25;
 const TT_MAX_MINUTES = 45;
@@ -345,7 +366,10 @@ interface VerificationHistory {
 // of that prior estimate (so a formula extrapolated from fives is confirmed by a
 // genuinely heavy single or triple), or when the athlete marked a set AMRAP.
 function verificationHistory(exerciseIds: number[], asOf: string): VerificationHistory {
-  const days = liftDays(exerciseIds, asOf);
+  return historyFromDays(liftDays(exerciseIds, asOf));
+}
+
+function historyFromDays(days: LiftDay[]): VerificationHistory {
   let running: number | null = null;
   let lastVerified: string | null = null;
   let lastSet: VerificationHistory["last_verified_set"] = null;
@@ -367,6 +391,46 @@ function verificationHistory(exerciseIds: number[], asOf: string): VerificationH
     current_est_1rm: running == null ? null : Math.round(running * 10) / 10,
     last_verified: lastVerified,
     last_verified_set: lastSet,
+  };
+}
+
+// ---------- the slide, and how far it has run ----------
+// Read off the SAME logged days the verification walk uses, so nothing here needs
+// a second query or the program state.
+
+interface SlideRead {
+  /** The lift's latest est-1RM sits under its own recent peak. */
+  regressing: boolean;
+  /** …by more than a deload's worth. A slide that deep is not formula noise. */
+  deep: boolean;
+  /** …and it has been running longer than one hold window. */
+  continued: boolean;
+}
+
+const NO_SLIDE: SlideRead = { regressing: false, deep: false, continued: false };
+
+function slideFromDays(days: LiftDay[], asOf: string): SlideRead {
+  const since = shiftISO(asOf, -UNVERIFIED_HOLD_PEAK_DAYS);
+  const window = days.filter((day) => day.date >= since);
+  if (window.length < 2) return NO_SLIDE;
+  let peak = 0;
+  let peakDate: string | null = null;
+  for (const day of window) {
+    // The MOST RECENT day holding the peak owns it — a lift that touched its top
+    // (an exact-or-greater est-1RM match; a near-rebound does not reset the clock)
+    // again last week has not been sliding for two months, whatever it did before.
+    if (day.est_1rm >= peak) {
+      peak = day.est_1rm;
+      peakDate = day.date;
+    }
+  }
+  const latest = window[window.length - 1]?.est_1rm ?? 0;
+  if (!(peak > 0) || !(latest < peak)) return NO_SLIDE;
+  const age = daysBetween(peakDate, asOf);
+  return {
+    regressing: true,
+    deep: latest < peak * (1 - UNVERIFIED_HOLD_SLIDE_FRAC),
+    continued: age != null && age > UNVERIFIED_HOLD_WINDOW_DAYS,
   };
 }
 
@@ -400,6 +464,175 @@ function progressionsSince(lift: MainLift, sinceISO: string | null, asOf: string
     if (hit) count += 1;
   }
   return count;
+}
+
+// ---------- what a heavy set has actually confirmed ----------
+// One internal read, four public questions. Every consumer below — INCLUDING the
+// plan-lift loop in calibrationStatus — goes through `liftRead` rather than
+// re-walking the 400-day history or re-deciding which confirmation speaks: the
+// walk is the expensive part of this module, and a second copy of the
+// newest-confirmation-wins rule is how the surfaces and the brain would drift
+// into disagreeing about the same lift.
+
+interface StrengthAnchor {
+  /** The lift's normalized key, or "" when the name resolves to nothing. */
+  key: string;
+  /** The est-1RM the plan is currently progressing from, formula or otherwise. */
+  running_est_1rm: number | null;
+  /** The day a heavy set last stood behind the estimate, from either source. */
+  anchored_on: string | null;
+  /** The est-1RM that verifying day supports — a number a set was actually taken at. */
+  verified_est_1rm: number | null;
+}
+
+/**
+ * Every exercise row that IS this lift. A re-created duplicate row must never
+ * split a lift's history in two — the same rule mainPlanLifts() applies, reused
+ * here for a lift named directly rather than found through the plan.
+ */
+function exerciseIdsForLift(exerciseName: string): { key: string; ids: number[] } {
+  const key = normalizedExerciseKey(String(exerciseName ?? ""));
+  if (!key) return { key: "", ids: [] };
+  const rows = db.prepare(`SELECT id, name FROM exercises`).all() as Array<{ id: number; name: string }>;
+  return { key, ids: rows.filter((row) => normalizedExerciseKey(row.name) === key).map((row) => Number(row.id)) };
+}
+
+/**
+ * ONE read of a lift, from ONE walk of its history.
+ *
+ * Everything this module answers about a strength lift — which confirmation
+ * speaks, how fresh it is, how much its estimate deserves to be trusted, and
+ * whether it is mid-slide — is derived here, from the single 400-day walk that is
+ * the expensive part of the module. `key`/`ids` arrive pre-resolved so a caller
+ * that already knows them (the plan-lift loop) does not re-resolve or re-walk.
+ */
+interface LiftRead {
+  key: string;
+  days: LiftDay[];
+  history: VerificationHistory;
+  anchor: StrengthAnchor;
+  freshness: CalibrationStatusItem["freshness"];
+  confidence: EstimateConfidence;
+  slide: SlideRead;
+}
+
+function liftRead(key: string, ids: number[], asOf: string): LiftRead {
+  if (!key || !ids.length) {
+    return {
+      key,
+      days: [],
+      history: { current_est_1rm: null, last_verified: null, last_verified_set: null },
+      anchor: { key, running_est_1rm: null, anchored_on: null, verified_est_1rm: null },
+      freshness: "never",
+      confidence: "unverified",
+      slide: NO_SLIDE,
+    };
+  }
+  const days = liftDays(ids, asOf);
+  const history = historyFromDays(days);
+  const anchor = anchorFrom(key, history, asOf);
+  const freshness = freshnessFor(daysBetween(anchor.anchored_on, asOf), STRENGTH_ANCHORED_DAYS, STRENGTH_AGING_DAYS);
+  return {
+    key,
+    days,
+    history,
+    anchor,
+    freshness,
+    confidence: freshness === "anchored" ? "verified" : freshness === "aging" ? "aging" : "unverified",
+    slide: slideFromDays(days, asOf),
+  };
+}
+
+/** The same read, for a lift named directly rather than found through the plan. */
+function strengthAnchor(exerciseName: string, asOf: string): StrengthAnchor {
+  const { key, ids } = exerciseIdsForLift(exerciseName);
+  return liftRead(key, ids, asOf).anchor;
+}
+
+function anchorFrom(key: string, history: VerificationHistory, asOf: string): StrengthAnchor {
+  const event = lastCalibration("strength_topset", key, asOf);
+  const eventEst = event ? num((event.result as any)?.est_1rm) : null;
+  // Whichever confirmation is NEWER speaks. They normally agree — the recorded
+  // event is written FROM this same history at session finish — but a detection
+  // that never ran (enrichment off, a hand-imported DB) must not make a genuinely
+  // verified lift read unverified, and an event carried across an import must not
+  // be outranked by a history that no longer holds the sets behind it.
+  const eventDate = event?.date ?? null;
+  const historyDate = history.last_verified;
+  const anchoredOn =
+    eventDate && historyDate ? (historyDate > eventDate ? historyDate : eventDate) : (historyDate ?? eventDate);
+  const verified =
+    anchoredOn == null
+      ? null
+      : anchoredOn === eventDate && eventEst != null
+        ? eventEst
+        : (history.last_verified_set?.est_1rm ?? eventEst);
+  return {
+    key,
+    running_est_1rm: history.current_est_1rm,
+    anchored_on: anchoredOn,
+    verified_est_1rm: verified,
+  };
+}
+
+export interface VerifiedStrengthAnchor {
+  /** The est-1RM a heavy set actually stood behind. */
+  est_1rm: number;
+  /** The day it stood behind it. */
+  anchored_on: string;
+}
+
+/**
+ * The est-1RM a FRESH heavy set confirms for this lift, when one has.
+ *
+ * A verified top set is authoritative over Epley-from-ordinary-sets: the formula
+ * extrapolates a single-rep ceiling from work the athlete never took near it, and
+ * a plan that then progresses off that extrapolation is raising load against a
+ * number nothing has ever stood behind. So a caller writing a "this should hold"
+ * baseline prefers this over the running estimate — INCLUDING when this is lower.
+ * A running estimate that has climbed above the last verified set since is exactly
+ * the unconfirmed extrapolation this ladder exists to distrust.
+ *
+ * Bounded by the same STRENGTH_ANCHORED_DAYS horizon the freshness word uses: past
+ * it the confirmation itself has aged, and an aged number must not override a
+ * fresher read of the athlete.
+ */
+export function verifiedStrengthAnchor(exerciseName: string, dateISO?: string): VerifiedStrengthAnchor | null {
+  const asOf = isoDay(dateISO || localDateISO());
+  const anchor = strengthAnchor(exerciseName, asOf);
+  if (!anchor.anchored_on || anchor.verified_est_1rm == null || anchor.verified_est_1rm <= 0) return null;
+  const age = daysBetween(anchor.anchored_on, asOf);
+  if (age == null || age >= STRENGTH_ANCHORED_DAYS) return null;
+  return { est_1rm: anchor.verified_est_1rm, anchored_on: anchor.anchored_on };
+}
+
+/**
+ * Did a heavy set verify this lift INSIDE a given window?
+ *
+ * The evaluation-time half of the same question: an outcome window that contains
+ * a confirmation is measuring a real number, and one that does not is measuring a
+ * formula against itself.
+ */
+export function verifiedTopSetInWindow(
+  exerciseName: string,
+  windowStart: string,
+  windowEnd: string
+): { date: string; est_1rm: number | null } | null {
+  const start = isoDay(windowStart);
+  const end = isoDay(windowEnd);
+  if (!start || !end || start > end) return null;
+  const { key, ids } = exerciseIdsForLift(exerciseName);
+  if (!key || !ids.length) return null;
+  const event = lastCalibration("strength_topset", key, end);
+  if (event && event.date >= start) return { date: event.date, est_1rm: num((event.result as any)?.est_1rm) };
+  // No recorded event does not mean no verification: detection runs at session
+  // finish, so an imported DB or a window whose sessions predate the ladder still
+  // holds the sets that verify it.
+  const history = verificationHistory(ids, end);
+  if (history.last_verified && history.last_verified >= start) {
+    return { date: history.last_verified, est_1rm: history.last_verified_set?.est_1rm ?? null };
+  }
+  return null;
 }
 
 // ---------- status ----------
@@ -463,29 +696,35 @@ export function calibrationStatus(dateISO?: string): { as_of: string; items: Cal
   });
 
   for (const lift of mainPlanLifts()) {
-    const history = verificationHistory(lift.exercise_ids, asOf);
+    // ONE read per lift, shared with everything else this module answers about it
+    // (which confirmation speaks, how fresh it is, whether it is mid-slide).
+    const read = liftRead(lift.key, lift.exercise_ids, asOf);
     // A lift with no logged history has no estimate to verify — nothing is being
     // extrapolated, so nothing is stale.
-    if (history.current_est_1rm == null) continue;
-    const event = lastCalibration("strength_topset", lift.key, asOf);
-    const anchoredOn =
-      history.last_verified && event?.date
-        ? history.last_verified > event.date
-          ? history.last_verified
-          : event.date
-        : (history.last_verified ?? event?.date ?? null);
-    const freshness = freshnessFor(daysBetween(anchoredOn, asOf), STRENGTH_ANCHORED_DAYS, STRENGTH_AGING_DAYS);
+    if (read.history.current_est_1rm == null) continue;
+    const anchoredOn = read.anchor.anchored_on;
     const progressions = progressionsSince(lift, anchoredOn, asOf);
     items.push({
       key: lift.key,
       domain: "strength",
       label: strengthLabel(lift.name),
       last_anchored: anchoredOn,
-      freshness,
-      // Stale alone is not a reason. The estimate has to be STEERING something:
-      // the plan has raised this lift's target repeatedly on top of a number no
-      // heavy set has confirmed.
-      due: needsAnchor(freshness) && progressions >= UNVERIFIED_PROGRESSIONS_DUE,
+      freshness: read.freshness,
+      // Stale alone is not a reason. The estimate has to be STEERING something,
+      // and it does in two ways: the plan has raised this lift's target repeatedly
+      // on top of a number no heavy set has confirmed, OR the progression engine is
+      // holding the lift right now BECAUSE the estimate is unconfirmed. The hold IS
+      // the "current decisions depend on it" condition this ladder was built for —
+      // and a hold the athlete is never offered the test for is a dead end, since
+      // the hold's own story is "let a heavy set settle it".
+      // The hold clause deliberately does NOT sit behind needsAnchor: the hold
+      // fires on any non-verified confidence, which includes the "aging" band
+      // (anchored 42-70 days ago) that needsAnchor excludes — and a lift held
+      // with "let a heavy set settle it" while the ladder declines to offer the
+      // test is the exact dead end the fairness work exists to close.
+      due:
+        (needsAnchor(read.freshness) && progressions >= UNVERIFIED_PROGRESSIONS_DUE) ||
+        unverifiedHoldFromRead(read),
     });
   }
 
@@ -547,9 +786,11 @@ export function dueCalibrations(
 ): CalibrationSuggestion[] {
   const asOf = isoDay(dateISO || localDateISO());
   const { items } = opts?.status ?? calibrationStatus(asOf);
-  const out: CalibrationSuggestion[] = [];
+  const endurance: CalibrationSuggestion[] = [];
+  const strength: CalibrationSuggestion[] = [];
   for (const item of items) {
     if (!item.due) continue;
+    const out = item.domain === "strength" ? strength : endurance;
     if (item.key === "lthr") {
       out.push({
         kind: "lthr_tt",
@@ -573,7 +814,18 @@ export function dueCalibrations(
       });
     }
   }
-  return out.slice(0, MAX_SUGGESTIONS);
+  // DOMAIN FAIRNESS. The two slots are shared, not first-come: a runner who also
+  // lifts has two endurance quantities aging on their own clocks, and taking the
+  // list in item order handed them both slots forever — so a strength test was
+  // never offered, and the progression engine's "let a heavy set settle it" hold
+  // had no reachable way to be settled. Endurance still speaks first; it just no
+  // longer speaks twice while the other domain is waiting.
+  const out: CalibrationSuggestion[] = [];
+  for (let i = 0; out.length < MAX_SUGGESTIONS && i < Math.max(endurance.length, strength.length); i++) {
+    if (endurance[i]) out.push(endurance[i]);
+    if (out.length < MAX_SUGGESTIONS && strength[i]) out.push(strength[i]);
+  }
+  return out;
 }
 
 // ---------- detection ----------
@@ -744,5 +996,109 @@ export function calibrationForCoach(dateISO?: string): CalibrationCoachView {
   return {
     due: dueCalibrations(asOf),
     recently_anchored: recent.map((event) => ({ kind: event.kind, target_key: event.target_key, date: event.date })),
+  };
+}
+
+// How much a lift's est-1RM deserves to be trusted, from the verification ledger
+// above. Two consumers, and they are NOT interchangeable: `estimateConfidenceFor`
+// is the reading (used to decide how bold a peak-week top set may be), and
+// `unverifiedRegressionHold` is the scoped, bounded decision the progression
+// engine's regressing branch consults.
+export type EstimateConfidence = "verified" | "aging" | "unverified";
+
+/**
+ * How much this lift's est-1RM deserves to be trusted right now.
+ *
+ * Deliberately the SAME ladder the athlete-facing freshness word runs on
+ * (`freshnessFor` against STRENGTH_ANCHORED_DAYS / STRENGTH_AGING_DAYS) rather
+ * than a second set of horizons: a lift the calibration card calls "anchored"
+ * and a lift the progression ladder calls "verified" must never be able to
+ * disagree about the same day.
+ *
+ * "never" collapses into "unverified", which is the literal truth: a lift no
+ * heavy set has ever confirmed is running on a formula. Same for a name that
+ * resolves to nothing — the honest answer to "how confirmed is this estimate?"
+ * for an estimate we cannot find is "not".
+ *
+ * This is a READING, not a decision. It does NOT by itself soften a deload:
+ * "unverified" is near-universal on real data (a verifying set is an AMRAP or a
+ * set at 0.92× the running estimate, which ordinary work rarely is), so a
+ * consumer that held every unverified regression would have switched its deload
+ * arm off. `unverifiedRegressionHold` is the decision, and it is scoped and
+ * bounded; read that when the question is "what should happen to this lift".
+ */
+export function estimateConfidenceFor(exerciseName: string, dateISO?: string): EstimateConfidence {
+  const asOf = isoDay(dateISO || localDateISO());
+  const { key, ids } = exerciseIdsForLift(String(exerciseName ?? ""));
+  return liftRead(key, ids, asOf).confidence;
+}
+
+export interface UnverifiedRegressionHold {
+  /** How much the estimate behind this lift deserves to be trusted. */
+  confidence: EstimateConfidence;
+  /** A hold is the honest answer for this lift today. */
+  holds: boolean;
+  /** The ladder can actually surface a heavy-set test for this lift. */
+  tracked: boolean;
+  /** The slide is deeper than a deload would have taken it. */
+  deep: boolean;
+  /** The slide has been running longer than one hold window. */
+  continued: boolean;
+}
+
+// A hold, from a read that already knows everything it needs.
+function unverifiedHoldFromRead(read: LiftRead): boolean {
+  if (read.confidence === "verified") return false;
+  if (!read.slide.regressing) return false;
+  if (read.slide.deep || read.slide.continued) return false;
+  return isTrackedMainLift(read.key);
+}
+
+// Is this lift one the calibration ladder can put a test in front of? Only the
+// first couple of loaded movements on each plan day, capped at MAX_TRACKED_LIFTS.
+function isTrackedMainLift(key: string): boolean {
+  if (!key) return false;
+  try {
+    return mainPlanLifts().some((lift) => lift.key === key);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Should a regressing lift PAUSE rather than deload, because the slip may be the
+ * estimate drifting rather than the athlete?
+ *
+ * A one-shot pause, not a policy. Three things have to be true, and each one
+ * exists because the unbounded version of this was strictly worse than the deload
+ * it replaced:
+ *
+ *   • the lift is TRACKED — a main plan lift the calibration ladder will actually
+ *     offer a heavy-set test for. The hold's story is "let one heavy set settle
+ *     it", and on an accessory nothing ever offers that set, so the story is a
+ *     dead end and the lift sits at its current weight indefinitely. On an
+ *     accessory the Epley noise the hold guards against is cheap; a silent
+ *     dead-end is not, so accessories keep the ordinary deload.
+ *   • the slide is SHALLOW. Past a deload's own depth the lift has already fallen
+ *     further than the deload would have taken it — holding there is not the
+ *     conservative arm, it is just the inactive one.
+ *   • the slide is FRESH. A slide still running a window later has already had its
+ *     heavy set offered and not taken; the deload arm takes over.
+ *
+ * The caller supplies "is this lift regressing" from the program state; this
+ * answers everything else. Its own slide read (off the logged est-1RM days) is
+ * what bounds the hold, and is deliberately the same one calibrationStatus uses
+ * to decide the test is due — so the hold and the test that ends it agree.
+ */
+export function unverifiedRegressionHold(exerciseName: string, dateISO?: string): UnverifiedRegressionHold {
+  const asOf = isoDay(dateISO || localDateISO());
+  const { key, ids } = exerciseIdsForLift(String(exerciseName ?? ""));
+  const read = liftRead(key, ids, asOf);
+  return {
+    confidence: read.confidence,
+    holds: unverifiedHoldFromRead(read),
+    tracked: isTrackedMainLift(read.key),
+    deep: read.slide.deep,
+    continued: read.slide.continued,
   };
 }
