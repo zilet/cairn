@@ -442,13 +442,17 @@ test("live gather drops completed and undated key-run intentions from the compac
 
   const before = gatherDailyDecisionSnapshot(DATE);
   assert.equal(before.open_key_run?.kind, "quality");
-  const quality = repo.weeklyRunPlan(DATE).runs.find((run) => run.kind_label === "quality");
-  const activity = repo.addActivity({
-    type: "run",
-    date: DATE,
-    duration_min: 60,
-    distance_km: Math.max(8, Number(quality.target_distance_km ?? 0)),
-  });
+  const week = repo.weeklyRunPlan(DATE).runs;
+  const quality = week.find((run) => run.kind_label === "quality");
+  const long = week.find((run) => run.kind_label === "long");
+  // A dose that closes the QUALITY intention and nothing else. matchCompletions
+  // deliberately hands a quality-flagged outing to the LONG slot when it is also
+  // long-shaped (>= 0.9 of the long target), so a flat "at least 8 km" here would be
+  // arbitrated onto the long run and leave the quality intention legitimately open —
+  // testing the arbitration rather than the drop it means to test.
+  const km = Math.max(3.5, Number(quality.target_distance_km ?? 0));
+  assert.ok(km < Number(long.target_distance_km) * 0.9, `the dose must not read as long-shaped (${km})`);
+  const activity = repo.addActivity({ type: "run", date: DATE, duration_min: 60, distance_km: km });
   const source = db
     .prepare(`INSERT INTO garmin_sources (provider, label) VALUES ('garmin', 'decision-intent-quality')`)
     .run();

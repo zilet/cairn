@@ -14,6 +14,7 @@
     "tsBuildInfoFile": ".tsbuildcache/client.tsbuildinfo"
   },
   "include": [
-    "src/contracts/client-globals.d.ts"
+    "src/contracts/client-globals.d.ts",
+    "src/contracts/client-shell-globals.d.ts"
   ]
 }

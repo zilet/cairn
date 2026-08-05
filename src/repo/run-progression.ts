@@ -70,6 +70,15 @@ function isoDaysAgo(dateISO: string, n: number): string {
 function shiftDaysISO(dateISO: string, n: number): string {
   return isoDaysAgo(dateISO, -n);
 }
+// Cyclic neighbours of a day_number. day_number is a Mon–Sun TEMPLATE that repeats, so
+// day 7 and day 1 are neighbours in the athlete's actual life — the same ring
+// week-layout.ts judges adjacency on.
+function nextDayNumber(n: number): number {
+  return n === 7 ? 1 : n + 1;
+}
+function prevDayNumber(n: number): number {
+  return n === 1 ? 7 : n - 1;
+}
 function round1(n: number): number {
   return Math.round(n * 10) / 10;
 }
@@ -783,13 +792,18 @@ export function weeklyRunPlan(
     directives?: any[];
     responseModifier?: CoachPersonalModifier | null;
     trainingIntent?: ResolvedTrainingIntent;
-    // The date the weekly VOLUME anchor is read at (defaults to `date`). The anchor
-    // is max(compliance.actual_km, trailing-7-day km), and both of those include
-    // whatever has been run since the week opened — fine when shaping a week ahead,
-    // wrong when the resulting prescription is the thing this same week is being
-    // judged against (runComplianceRead), because the target then grows with every
-    // logged km and the shortfall can never appear. Point it at the week boundary
-    // to anchor on the volume that was already in the bank when the week started.
+    // The date the trailing-7-day VOLUME anchor is read at. DEFAULTS to the day
+    // before this week's Monday — i.e. the previous full Mon–Sun week — so a plan is
+    // a property of the WEEK and reads the same from every morning of it. Pass this
+    // only to anchor on some other week entirely; passing the plan date restores the
+    // self-anchoring the default exists to prevent (the week counts its own runs as
+    // base fitness and the prescription grows as it is run).
+    //
+    // It governs BOTH halves of the anchor: the trailing seven days ending here, and
+    // the logged actuals of the Mon–Sun week this date falls in. (The two must name the
+    // same week, or the max() between them compares nothing.) The actuals half yields
+    // to an injected `compliance` — a caller that hands one in has already said which
+    // week it means; the one that does, runComplianceRead, hands in last week's.
     volumeAnchorDate?: string;
     // What the LIFTING has left in the running legs, as of the PLAN date (deliberately
     // NOT the volume anchor — this is a physiological read of now, not a volume ledger).
@@ -834,8 +848,27 @@ export function weeklyRunPlan(
   // Gate: only shape a week for a RUNNER. Endurance/hybrid alone is not enough:
   // a cycling-only or hiking-only athlete must never receive an invented run plan.
   // Real running history or an explicit running goal/configuration supplies intent.
+  // Logged run kilometres for the compliance read above — THIS week's when it was
+  // defaulted. It answers "is this person a runner at all", where a first-ever run
+  // logged on Tuesday genuinely is the evidence, so it deliberately keeps the live
+  // read. It is NOT what the volume anchor uses; see anchorActualKm further down.
   const lastActualKm = compliance?.actual_km ?? 0;
-  const baseKm = recordedWeeklyKm(opts?.volumeAnchorDate ?? d, 0, RUN_SPORT_PATTERNS);
+  // The trailing-window half of the volume anchor, read at the day BEFORE this week's
+  // Monday, not at the plan date. recordedWeeklyKm(anchor, 0, …) is the inclusive seven
+  // days ENDING at the anchor, so the Sunday before Monday is exactly the previous
+  // Mon–Sun week: the mileage that was already in the bank when this week opened.
+  //
+  // Self-anchoring on `d` made the week chase itself. A plan rebuilt on Wednesday
+  // counted Monday's and Tuesday's runs as base fitness, so the prescription grew as
+  // the athlete ran it — the target moved day to day and the shortfall it is judged
+  // against could never appear. runComplianceRead had already refused this for its own
+  // read; it is a property of the week, so it belongs in the default for every caller.
+  // `opts.volumeAnchorDate` still overrides, for a caller that means some other week.
+  //
+  // The anchor's OTHER half (anchorActualKm) reads the closed week too — moving only
+  // this one left the max() still pulling in this week's actuals, and the week went on
+  // chasing itself through that door.
+  const baseKm = recordedWeeklyKm(opts?.volumeAnchorDate ?? shiftDaysISO(mondayOf(d), -1), 0, RUN_SPORT_PATTERNS);
   const configuredSports = configuredEnduranceSportKeys(profile?.endurance_sport, false);
   const goalText = `${goal?.event || ""} ${goal?.label || ""}`;
   const explicitRunningGoal =
@@ -892,7 +925,23 @@ export function weeklyRunPlan(
   } catch {
     lowerDays = new Set();
   }
-  const staticLongSlot = [6, 5, 7, 4].find((s) => !lowerDays.has(s)) ?? 6;
+  // Where the long run may go, best first. The preference is TIERED, and the tiers are
+  // the honest statement of what the engine can promise:
+  //   1. a slot that is neither a lower day NOR cyclically beside one — the legs get a
+  //      clear day on each side, and the week-layout read comes back clean;
+  //   2. a slot that merely isn't a lower day — the old rule, kept as the fallback;
+  //   3. slot 6, when the plan leaves nothing at all.
+  // Tier 1 exists because tier 2 alone was placing the run onto exactly the day the
+  // week-layout read would then flag: lower days on Mon/Fri/Sat sent the long run to
+  // Sunday, cyclically adjacent to Monday's heavy lower work, and the read fed the
+  // engine's OWN choice back to the athlete as a weekly nudge nobody could act on.
+  // When no tier-1 slot exists the week genuinely cannot be separated; the run is
+  // placed as it always was and the read still says so truthfully.
+  const LONG_SLOT_CANDIDATES = [6, 5, 7, 4] as const;
+  const ringClearOfLower = (s: number): boolean =>
+    !lowerDays.has(s) && !lowerDays.has(prevDayNumber(s)) && !lowerDays.has(nextDayNumber(s));
+  const staticLongSlot =
+    LONG_SLOT_CANDIDATES.find(ringClearOfLower) ?? LONG_SLOT_CANDIDATES.find((s) => !lowerDays.has(s)) ?? 6;
   const longRunDate = shiftDaysISO(week_start, staticLongSlot - 1);
 
   // What the running legs are carrying, and whether the LIFTING block is at its own
@@ -951,7 +1000,27 @@ export function weeklyRunPlan(
   // --- weekly volume target (periodized, conservative ~10% caps) ---
   // Anchor to what actually happened last week (or the chronic base), seed a gentle
   // starter when there's no history.
-  let anchorKm = Math.max(lastActualKm, baseKm);
+  //
+  // Both terms are the CLOSED week. `compliance` when injected is already last week's
+  // (runComplianceRead hands in getRunCompliance(weekStart - 7) for exactly this
+  // reason), so it is used as given; when it was defaulted above it is THIS week's, and
+  // feeding that to the anchor is what let a 40 km Monday–Wednesday block raise the same
+  // week's own prescription from 33 to 40.2 km. So the default reads the closed week's
+  // compliance for itself instead, and leaves the live read to the runner gate.
+  //
+  // Which closed week is `volumeAnchorDate`'s to say, exactly as it is for baseKm —
+  // the two halves must name the SAME week or the max() between them is meaningless.
+  // Defaulted, that is the Sunday before this Monday, whose week is the previous one.
+  const anchorActualKm = opts?.compliance
+    ? lastActualKm
+    : (() => {
+        try {
+          return getRunCompliance(mondayOf(opts?.volumeAnchorDate ?? shiftDaysISO(week_start, -1)))?.actual_km ?? 0;
+        } catch {
+          return 0;
+        }
+      })();
+  let anchorKm = Math.max(anchorActualKm, baseKm);
   if (anchorKm <= 0) {
     anchorKm = goal?.weekly_km && goal.weekly_km > 0 ? Math.min(goal.weekly_km, 20) : 15;
     rationale.push(`No mileage logged yet — starting conservatively around ${Math.round(anchorKm)} km.`);
@@ -1292,8 +1361,19 @@ export function weeklyRunPlan(
   // reorders or weakens the recovery gating / directive caps above (those stay final).
   // `lowerDays` and the LONG run's default slot (late, and off a planned lower day)
   // were both read above — the leg-load read is anchored on the day that slot lands.
+  // Wraps: the Mon–Sun template REPEATS, so Sunday's leg day is what Monday opens on.
+  // (Behaviour-preserving with today's candidate slots — quality only ever considers
+  // 2–5 — but it keeps this model identical to week-layout.ts's cyclic `adjacent`.)
+  //
+  // The contract between this engine and that read, stated exactly: the LONG run
+  // prefers a slot with no lower day on either side of it ON THE RING, and takes one
+  // merely free of lower work only when no such slot exists. So the read never flags a
+  // placement the engine could have avoided — and on a week that genuinely cannot be
+  // separated, the read still tells the truth about it rather than being talked out of
+  // it. The two halves agreeing means agreeing about which weeks are separable, not
+  // that a collision can never be reported.
   const dayAfterLower = new Set<number>();
-  for (const n of lowerDays) if (n + 1 <= 7) dayAfterLower.add(n + 1);
+  for (const n of lowerDays) dayAfterLower.add(nextDayNumber(n));
 
   // QUALITY run: default mid-week (2); avoid the day right after a leg day, and keep it clear
   // of the long run (never adjacent → no two hard days back-to-back).
@@ -1317,8 +1397,15 @@ export function weeklyRunPlan(
   // floor is 0 and the filter is skipped).
   const legRecoveryDays = legLoad.band === "saturated" ? 2 : legLoad.band === "loaded" ? 1 : 0;
   const freshFloor = legRecoveryDays > 0 ? Math.min(7, 1 + legRecoveryDays) : 0;
+  // Same three tiers as staticLongSlot, with the freshness floor applied inside each:
+  // a ring-clear slot still leads, a merely-free one is the fallback, and the static
+  // slot catches a week where the floor rules everything out.
   const longSlot =
-    freshFloor > 0 ? ([6, 5, 7, 4].find((s) => !lowerDays.has(s) && s >= freshFloor) ?? staticLongSlot) : staticLongSlot;
+    freshFloor > 0
+      ? (LONG_SLOT_CANDIDATES.find((s) => ringClearOfLower(s) && s >= freshFloor) ??
+        LONG_SLOT_CANDIDATES.find((s) => !lowerDays.has(s) && s >= freshFloor) ??
+        staticLongSlot)
+      : staticLongSlot;
   const qualitySlot =
     freshFloor > 0
       ? ([2, 3, 4, 5].find((s) => !dayAfterLower.has(s) && Math.abs(s - longSlot) >= 2 && s >= freshFloor) ??

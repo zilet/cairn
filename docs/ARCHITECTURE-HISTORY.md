@@ -4,6 +4,32 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-08-05 — the week is a ring, the anchor belongs to the closed week, a question is never a veto
+
+Follow-up round closing the flags the day's three builds left open. **The week is cyclic**: the
+Mon–Sun template repeats, so day 7 and day 1 are neighbours — `weekLayoutRead`'s adjacency, its
+hard-stack scan (rotated so a Fri→Mon stretch reads as one stack, and a stack's `days` list may wrap,
+e.g. `[6,7,1]`), the clearing-slot legality check, and the run engine's `dayAfterLower` all read the
+ring; plan days outside 1–7 are ignored rather than misread. The long-run slot preference is tiered —
+a slot with no leg day on either ring side first, a merely-free slot second — in both the static and
+fatigue-aware paths, so the engine no longer places the long run exactly where the read will flag it;
+on a genuinely unseparable week the placement is unchanged and the read still tells the truth.
+**The volume anchor belongs to the closed week**: `weeklyRunPlan`'s trailing-volume window AND its
+`max(actual, base)` ratchet both default to the previous full Mon–Sun week (one `volumeAnchorDate`
+governs both halves; an injected `compliance` is used as given), so a week's prescription can no
+longer grow from the runs it itself prescribed — the property `runComplianceRead` already enforced
+for judging now holds for planning. The runner *gate* keeps the live read (a first run logged Tuesday
+is real evidence). **Chat honesty**: `hasExplicitDecisionRevertIntent` shares the edit gates'
+leading-question guard (with `will` added to the interrogatives everywhere), so "Can/Will you undo
+that?" is conversation, not a veto; a refused or failed `revert_decision` whose prose claims success
+is REPLACED by a rotating correction (`reconcileChatRevertReply`, refused ids on their own channel
+out of `applyChatActions`); and fifteen refusal/no-op literals in the chat reconcilers became
+`pickDayVariant` variant sets, each keeping an invariant phrase so the fact survives the rotation.
+**Typecheck honesty**: the server `tsconfig` excludes the client ambient-global `.d.ts` files, so a
+server module referencing a browser global fails compile instead of throwing at runtime;
+`client-shell-globals.d.ts` joined `tsconfig.client.json` so it lives in a program again. No schema
+change, no `public/` change (no service-worker step).
+
 ## 2026-08-05 — the hard day earns its fuel, the week reads its own shape, chat writes a run honestly
 
 Third round of the day, closing the gaps the first two named. **Day-specific fueling**:

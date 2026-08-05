@@ -17,15 +17,34 @@ import { readFileSync } from "node:fs";
 import { db, repo } from "./_seed.js";
 import {
   applyChatActions,
+  CARDIO_REMOVAL_REFUSAL_VARIANTS,
   classifyChatAgentResult,
   clinicalLineageForTurn,
   clinicalPlanProvenance,
+  DECISION_REVERT_FAILED_VARIANTS,
+  DECISION_REVERT_NOT_AUTHORIZED_VARIANTS,
   hasExplicitDecisionRevertIntent,
   hasExplicitPlanEditIntent,
   hasExplicitRunEditIntent,
+  PLAN_NO_CHANGE_APPENDED_VARIANTS,
+  PLAN_NOT_LIVE_VARIANTS,
+  PLAN_NOT_SAVED_VARIANTS,
+  PLAN_UNTOUCHED_BY_QUESTION_VARIANTS,
+  PLAN_WRITE_UNVERIFIED_VARIANTS,
   reconcileChatPlanReply,
+  reconcileChatRevertReply,
+  RESTRUCTURE_DRAFT_VARIANTS,
+  RESTRUCTURE_HELD_FOR_REVIEW_VARIANTS,
+  RESTRUCTURE_NOT_SCHEDULED_VARIANTS,
+  RUN_HELD_FOR_REVIEW_VARIANTS,
+  RUN_NOT_LIVE_VARIANTS,
+  RUN_NOT_SAVED_VARIANTS,
   shouldCreatePhotoFoodPlaceholder,
+  STRENGTH_OBJECTIVE_NONE_SAVED_VARIANTS,
+  STRENGTH_OBJECTIVE_NOT_SAVED_VARIANTS,
+  STRENGTH_OBJECTIVE_UNVERIFIED_VARIANTS,
 } from "../dist/chatTurns.js";
+import { pickDayVariant } from "../dist/repo/brain/day-read-rules.js";
 import { localDateISO } from "../dist/repo/shared.js";
 import { currentTrainingDataVersion } from "../dist/repo/training-cache.js";
 
@@ -1098,7 +1117,8 @@ test("a model restructure action cannot mutate or schedule from a non-edit train
   );
   assert.match(
     reconcileChatPlanReply("I changed your program to two days.", message, out.applied, out.drafts),
-    /haven't changed or scheduled/i,
+    // The wording rotates by day (PLAN_UNTOUCHED_BY_QUESTION_VARIANTS); the FACT does not.
+    /your current training split is unchanged/i,
     "an off-contract success claim is corrected truthfully"
   );
 });
@@ -1196,6 +1216,178 @@ test("a model cannot turn decision discussion or explanation questions into Undo
     assert.deepEqual(applyChatActions(hallucinated, { agent: "stub", message }).applied, [], message);
     assert.equal(repo.getBrainDecision(announced.id).status, "announced", message);
   }
+});
+
+// The revert gate predates isLeadingQuestion and used to strip "can you " per
+// sentence with nothing above it, so the politeness-question form the plan/run edit
+// gates read as CONVERSATION carried a veto here. One guard, one reading.
+test("the revert gate shares the edit gates' question guard", () => {
+  const announced = repo.recordDecision({
+    effective_date: localDateISO(),
+    kind: "training_structure",
+    domain: "training",
+    summary: "Move the next block to upper/lower",
+    rationale: "Match the current recovery envelope.",
+    source: "test",
+    source_ref_type: "plan_proposal",
+    source_ref_key: "79",
+    status: "announced",
+    autonomy_tier: "announce",
+    risk_class: "moderate",
+    reversible: true,
+    action: { proposal_id: 79 },
+  }).decision;
+
+  // A leading interrogative that ends in a question mark is a question, exactly as
+  // "Can you make tomorrow's run 8k?" is to hasExplicitRunEditIntent.
+  for (const question of ["Can you undo that?", "Could you revert that?", "Would you put that back?"]) {
+    assert.equal(hasExplicitDecisionRevertIntent(question, announced.id), false, question);
+    assert.deepEqual(
+      applyChatActions(
+        { actions: [{ type: "revert_decision", id: announced.id, reason: "model guessed veto" }] },
+        { agent: "stub", message: question }
+      ).applied,
+      [],
+      question
+    );
+    assert.equal(repo.getBrainDecision(announced.id).status, "announced", question);
+  }
+
+  // The same words WITHOUT a question mark stay a command — the per-sentence
+  // "can you" stripping still matters.
+  assert.equal(hasExplicitDecisionRevertIntent("Can you undo that", announced.id), true);
+  assert.equal(hasExplicitDecisionRevertIntent("Please undo that.", announced.id), true);
+
+  // isLeadingQuestion tests the WHOLE trimmed message, so a multi-sentence message
+  // that merely ENDS in a question still authorizes: its first word is "That".
+  assert.equal(hasExplicitDecisionRevertIntent("That made it worse. Can you undo it?", announced.id), true);
+  assert.equal(hasExplicitDecisionRevertIntent("I hate the new split. Could you revert it?", announced.id), true);
+
+  // One modal used to flip the outcome: the per-sentence strip removed "will you "
+  // while isLeadingQuestion's alternation did not list `will`, so the identical
+  // politeness form authorized on "will" and refused on "would".
+  assert.equal(hasExplicitDecisionRevertIntent("Will you undo that?", announced.id), false);
+  assert.equal(hasExplicitDecisionRevertIntent("Will you undo that", announced.id), true);
+  assert.equal(repo.getBrainDecision(announced.id).status, "announced");
+});
+
+// `will` joins the shared question guard, so it reads the plan/run edit gates the
+// same way it reads the revert gate — one sentence form, one answer.
+test("a leading 'will you' question is conversation across every training-edit gate", () => {
+  assert.equal(hasExplicitPlanEditIntent("Will you make tomorrow's session easier?"), false);
+  assert.equal(hasExplicitPlanEditIntent("Will you make tomorrow's session easier"), true);
+  assert.equal(hasExplicitRunEditIntent("Will you make tomorrow's run 8k?"), false);
+  assert.equal(hasExplicitRunEditIntent("Will you make tomorrow's run 8k"), true);
+  // The neighbouring modals keep behaving exactly as they did.
+  assert.equal(hasExplicitRunEditIntent("Would you make tomorrow's run 8k?"), false);
+  assert.equal(hasExplicitRunEditIntent("Make tomorrow's run 8k."), true);
+});
+
+// A refused revert used to be a bare `break`: nothing recorded, no reconciler, so
+// model prose claiming "Done, I've put that back" stood over a decision that was
+// still live. The refusal now reaches the reply.
+test("a refused revert corrects model prose that claimed the Undo happened", () => {
+  const announced = repo.recordDecision({
+    effective_date: localDateISO(),
+    kind: "training_structure",
+    domain: "training",
+    summary: "Move the next block to upper/lower",
+    rationale: "Match the current recovery envelope.",
+    source: "test",
+    source_ref_type: "plan_proposal",
+    source_ref_key: "81",
+    status: "announced",
+    autonomy_tier: "announce",
+    risk_class: "moderate",
+    reversible: true,
+    action: { proposal_id: 81 },
+  }).decision;
+
+  const question = "Will you undo that?";
+  const out = applyChatActions(
+    { actions: [{ type: "revert_decision", id: announced.id, reason: "model guessed veto" }] },
+    { agent: "stub", message: question }
+  );
+  assert.deepEqual(out.applied, [], "a refused action is never an applied one");
+  assert.deepEqual(out.refusedReverts, [announced.id], "the refused id rides its own channel to the reconciler");
+  assert.equal(repo.getBrainDecision(announced.id).status, "announced", "the decision is still live");
+
+  const corrected = reconcileChatRevertReply("Done, I've put that back.", out.applied, out.refusedReverts);
+  assert.match(corrected, /nothing was reverted/i, "the invariant fact survives the rotation");
+  assert.match(corrected, new RegExp(`undo decision ${announced.id}`, "i"), "the athlete is told how to authorize");
+  // Replaced, not decorated — the same rule reconcileChatRunReply applies to a run
+  // write that did not land, so the false sentence does not survive at the top.
+  assert.doesNotMatch(corrected, /put that back\./, "the false success claim does not stand");
+
+  // Detection is claim-only, exactly as reconcileChatRunReply's is: an honest reply
+  // shares every verb with the false one and must not be corrected twice.
+  const honest = "I didn't undo anything — nothing was reverted, and that decision is still standing.";
+  assert.equal(reconcileChatRevertReply(honest, out.applied, out.refusedReverts), honest, "no double-correction");
+  const advice = "That block change is meant to spread your pulling volume across the week.";
+  assert.equal(reconcileChatRevertReply(advice, out.applied, out.refusedReverts), advice);
+  // And the correction itself is not a claim, so a second pass is a no-op.
+  assert.equal(reconcileChatRevertReply(corrected, out.applied, out.refusedReverts), corrected);
+});
+
+test("a legitimate explicit revert reverts and adds no correction", () => {
+  repo.savePlanDay(1, "Lower", "legs", [{ exercise: "Squat", sets: 3, rep_low: 8, rep_high: 10, target_weight: 190 }]);
+  const changed = applyChatActions(
+    {
+      actions: [
+        {
+          type: "plan_update",
+          summary: "small squat progression",
+          changes: [{ day_number: 1, exercise: "Squat", target_weight: 200, reason: "Repeated crisp sessions." }],
+        },
+      ],
+    },
+    { agent: "stub", message: "Squats have been crisp for several sessions." }
+  );
+  const decisionId = changed.applied[0].result.decision.id;
+
+  const undone = applyChatActions(
+    { actions: [{ type: "revert_decision", id: decisionId, reason: "Put it back." }] },
+    { agent: "stub", message: `Undo decision #${decisionId}.` }
+  );
+  assert.equal(undone.applied[0].result.ok, true);
+  assert.deepEqual(undone.refusedReverts, []);
+  assert.equal(repo.getBrainDecision(decisionId).status, "reverted");
+  assert.equal(repo.getPlanDay(1).items[0].target_weight, 190);
+
+  const reply = "Done, I've put that back — squats are at 190 again.";
+  assert.equal(
+    reconcileChatRevertReply(reply, undone.applied, undone.refusedReverts),
+    reply,
+    "a real revert leaves the model's receipt exactly as written"
+  );
+});
+
+test("a revert the server refused is corrected with its own reason", () => {
+  const locked = repo.recordDecision({
+    effective_date: localDateISO(),
+    kind: "health_directive",
+    domain: "health",
+    summary: "Keep the clinical observation immutable.",
+    rationale: "It is evidence, not a reversible plan write.",
+    source: "test",
+    source_ref_type: "directive",
+    source_ref_key: "locked-2",
+    status: "applied",
+    autonomy_tier: "ask",
+    risk_class: "clinical",
+    reversible: false,
+    action: null,
+  }).decision;
+  const out = applyChatActions(
+    { actions: [{ type: "revert_decision", id: locked.id, reason: "explicit request" }] },
+    { agent: "stub", message: `Undo decision #${locked.id}.` }
+  );
+  assert.equal(out.applied[0].result.ok, false);
+  assert.deepEqual(out.refusedReverts, []);
+  assert.equal(repo.getBrainDecision(locked.id).status, "applied");
+  const corrected = reconcileChatRevertReply("That's been rolled back.", out.applied, out.refusedReverts);
+  assert.match(corrected, /nothing was reverted/i);
+  assert.doesNotMatch(corrected, /undo decision/i, "a decision the server won't roll back gets no fake command");
 });
 
 test("explicit cancel and rollback commands retain exact server-owned Undo behavior", () => {
@@ -1541,4 +1733,153 @@ test("photo food placeholder is created only for food-intent photo turns", () =>
     false,
     "non-food images do not become food notes"
   );
+});
+
+// ── refusal prose is a variant set, never one literal ────────────────────────
+// The reconcilers' inputs are deterministic: the same guard, the same review
+// posture, the same off-contract response fires the same branch. A single literal
+// there would print the identical chat bubble every time the athlete walked into
+// it — the exact failure day-read prose was fixed for. Each set rotates by day and
+// carries an invariant FACT that survives the rotation.
+const REFUSAL_VARIANT_SITES = [
+  {
+    name: "RESTRUCTURE_HELD_FOR_REVIEW",
+    set: RESTRUCTURE_HELD_FOR_REVIEW_VARIANTS,
+    key: "chat-restructure-held",
+    invariant: /held for review/i,
+    forbid: /is scheduled|scheduled for|draft for review/i,
+  },
+  {
+    name: "RESTRUCTURE_NOT_SCHEDULED",
+    set: RESTRUCTURE_NOT_SCHEDULED_VARIANTS,
+    key: "chat-restructure-not-scheduled",
+    invariant: /your current plan is unchanged/i,
+  },
+  {
+    name: "RESTRUCTURE_DRAFT",
+    set: RESTRUCTURE_DRAFT_VARIANTS,
+    key: "chat-restructure-draft",
+    invariant: /draft for review/i,
+  },
+  {
+    name: "PLAN_NOT_SAVED",
+    set: PLAN_NOT_SAVED_VARIANTS,
+    key: "chat-plan-not-saved",
+    invariant: /your current plan is unchanged/i,
+  },
+  {
+    name: "PLAN_NO_CHANGE_APPENDED",
+    set: PLAN_NO_CHANGE_APPENDED_VARIANTS,
+    key: "chat-plan-no-change-note",
+    invariant: /no plan change was saved/i,
+  },
+  {
+    name: "PLAN_UNTOUCHED_BY_QUESTION",
+    set: PLAN_UNTOUCHED_BY_QUESTION_VARIANTS,
+    key: "chat-plan-question-no-op",
+    invariant: /your current training split is unchanged/i,
+  },
+  {
+    name: "PLAN_WRITE_UNVERIFIED",
+    set: PLAN_WRITE_UNVERIFIED_VARIANTS,
+    key: "chat-plan-write-unverified",
+    invariant: /Reopen Today before training/,
+  },
+  {
+    name: "PLAN_NOT_LIVE",
+    set: PLAN_NOT_LIVE_VARIANTS,
+    key: "chat-plan-not-live",
+    invariant: [/is not live/i, /your current plan is unchanged/i],
+  },
+  {
+    name: "RUN_NOT_SAVED",
+    set: RUN_NOT_SAVED_VARIANTS,
+    key: "chat-run-not-saved",
+    invariant: /this week's runs are unchanged/i,
+  },
+  {
+    name: "RUN_HELD_FOR_REVIEW",
+    set: RUN_HELD_FOR_REVIEW_VARIANTS,
+    key: "chat-run-held",
+    invariant: /held for review/i,
+  },
+  {
+    name: "RUN_NOT_LIVE",
+    set: RUN_NOT_LIVE_VARIANTS,
+    key: "chat-run-not-live",
+    invariant: /this week's runs are unchanged/i,
+  },
+  {
+    name: "STRENGTH_OBJECTIVE_NOT_SAVED",
+    set: STRENGTH_OBJECTIVE_NOT_SAVED_VARIANTS,
+    key: "chat-objective-not-saved",
+    invariant: /your existing objective is unchanged/i,
+  },
+  {
+    name: "STRENGTH_OBJECTIVE_NONE_SAVED",
+    set: STRENGTH_OBJECTIVE_NONE_SAVED_VARIANTS,
+    key: "chat-objective-none-saved",
+    invariant: /no strength objective was saved/i,
+  },
+  {
+    name: "STRENGTH_OBJECTIVE_UNVERIFIED",
+    set: STRENGTH_OBJECTIVE_UNVERIFIED_VARIANTS,
+    key: "chat-objective-unverified",
+    invariant: /I won't claim it was saved/i,
+  },
+  {
+    name: "DECISION_REVERT_NOT_AUTHORIZED",
+    set: DECISION_REVERT_NOT_AUTHORIZED_VARIANTS,
+    key: "chat-revert-not-authorized",
+    invariant: /nothing was reverted/i,
+  },
+  {
+    name: "DECISION_REVERT_FAILED",
+    set: DECISION_REVERT_FAILED_VARIANTS,
+    key: "chat-revert-failed",
+    invariant: /nothing was reverted/i,
+  },
+  {
+    name: "CARDIO_REMOVAL_REFUSAL",
+    set: CARDIO_REMOVAL_REFUSAL_VARIANTS,
+    key: "chat-cardio-removal",
+    invariant: /Plan screen/,
+  },
+];
+
+const render = (variant) => (typeof variant === "function" ? variant(" the readback did not match") : variant);
+const dayISO = (offset) => new Date(Date.UTC(2026, 0, 1) + offset * 864e5).toISOString().slice(0, 10);
+
+test("every chat refusal rotates its phrasing and keeps its meaning invariant", () => {
+  for (const site of REFUSAL_VARIANT_SITES) {
+    assert.ok(site.set.length >= 3, `${site.name}: a set of one is the literal this law exists to kill`);
+    for (const variant of site.set) {
+      const text = render(variant);
+      for (const invariant of [site.invariant].flat()) {
+        assert.match(text, invariant, `${site.name}: every phrasing must carry the same fact`);
+      }
+      if (site.forbid) assert.doesNotMatch(text, site.forbid, `${site.name}: forbidden claim leaked into a phrasing`);
+      // VISION.md Amendment 2: calm coach voice — no gate language, no score.
+      assert.doesNotMatch(text, /\byou must\b|\byou need to\b|\byou have to\b/i, `${site.name}: gate language`);
+      assert.doesNotMatch(text, /\b\d{1,3}\s*\/\s*100\b|\bscore\b/i, `${site.name}: score language`);
+    }
+
+    // Same day + same key is stable; consecutive days always differ; the whole set
+    // is reached across a full cycle.
+    const cycle = site.set.map((_, i) => render(pickDayVariant(site.set, dayISO(i), site.key)));
+    assert.equal(new Set(cycle).size, site.set.length, `${site.name}: a full cycle must reach every phrasing`);
+    for (let i = 1; i < cycle.length; i++) {
+      assert.notEqual(cycle[i], cycle[i - 1], `${site.name}: consecutive days repeated a phrasing`);
+    }
+    assert.equal(
+      render(pickDayVariant(site.set, dayISO(3), site.key)),
+      render(pickDayVariant(site.set, dayISO(3), site.key)),
+      `${site.name}: the same day must read the same`
+    );
+  }
+});
+
+test("no two chat refusal sites rotate in lockstep on the same day", () => {
+  const keys = REFUSAL_VARIANT_SITES.map((site) => site.key);
+  assert.equal(new Set(keys).size, keys.length, "every refusal site needs its OWN stable key");
 });

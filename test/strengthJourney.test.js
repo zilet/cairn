@@ -8,6 +8,7 @@ import {
   applyChatActions,
   hasExplicitStrengthObjectiveIntent,
   reconcileStrengthObjectiveReply,
+  STRENGTH_OBJECTIVE_NOT_SAVED_VARIANTS,
 } from "../dist/chatTurns.js";
 import { localDateISO } from "../dist/repo/shared.js";
 
@@ -424,10 +425,10 @@ test("natural lift-goal commands are explicit and false success prose is removed
   const message = "Set my bench goal to 225.";
   assert.equal(hasExplicitStrengthObjectiveIntent(message), true);
   const reconciled = reconcileStrengthObjectiveReply("I've saved your new bench goal.", message, []);
-  assert.equal(
-    reconciled,
-    "I didn't save a strength objective from that response, so your existing objective is unchanged."
-  );
+  // The refusal rotates its phrasing by day; it is always ONE of the set, and every
+  // phrasing carries the same invariant fact.
+  assert.ok(STRENGTH_OBJECTIVE_NOT_SAVED_VARIANTS.includes(reconciled), `unexpected refusal phrasing: ${reconciled}`);
+  assert.match(reconciled, /your existing objective is unchanged/i);
   assert.doesNotMatch(reconciled, /I've saved/i);
 });
 

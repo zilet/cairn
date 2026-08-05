@@ -56,6 +56,7 @@ import {
   type SetRunAction,
 } from "./chatActions.js";
 import { normalizeFoodCaptureParsed } from "./foodCapture.js";
+import { pickDayVariant } from "./repo/brain/day-read-rules.js";
 import { applyProposalWithAutonomy, revertDecision } from "./domain/brain/autonomy-service.js";
 import { diagnosticErrorName, recordAsyncFailure } from "./diagnostics.js";
 import {
@@ -299,7 +300,7 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
     // and skip the normal log_food application so the photo never double-logs.
     const photoFood = turn.image_path ? logPhotoFood(actions, turn) : null;
 
-    const { applied, drafts, labConfirms } = applyChatActions(
+    const { applied, drafts, labConfirms, refusedReverts } = applyChatActions(
       { actions },
       {
         agent,
@@ -313,7 +314,8 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
     if (photoFood) applied.unshift({ type: "log_food", result: photoFood });
     const planReply = reconcileChatPlanReply(proposedReply, turn.message, applied, drafts);
     const runReply = reconcileChatRunReply(planReply, turn.message, applied);
-    const reply = reconcileStrengthObjectiveReply(runReply, turn.message, applied);
+    const objectiveReply = reconcileStrengthObjectiveReply(runReply, turn.message, applied);
+    const reply = reconcileChatRevertReply(objectiveReply, applied, refusedReverts);
     const failedAttempts = attempts.filter((a) => !a.ok);
     const meta: {
       applied: typeof applied;
@@ -780,8 +782,14 @@ export function hasExplicitStrengthObjectiveIntent(message: string | null | unde
 // which meant the identical sentence ("Can you make tomorrow's run 8k?") quiet-applied
 // through plan_update and held through set_run. Where the two gates disagreed, the
 // conservative reading is the one that survives.
+// `will` belongs here for the same reason `would` does: the revert gate's own
+// per-sentence strip already treats "will you " as the same politeness wrapper as
+// "can|could|would you ", so leaving it out of this alternation made one modal flip
+// the outcome — "Would you undo that?" was conversation while "Will you undo that?"
+// was a veto. Adding it also makes "Will you make tomorrow's run 8k?" a question to
+// the plan/run edit gates, which is the point: one reading for one sentence form.
 function isLeadingQuestion(text: string): boolean {
-  return /^(?:should|could|would|can|what|how|why|is|do|does)\b/i.test(text) && /\?\s*$/.test(text);
+  return /^(?:should|could|would|will|can|what|how|why|is|do|does)\b/i.test(text) && /\?\s*$/.test(text);
 }
 
 export function hasExplicitPlanEditIntent(message: string | null | undefined): boolean {
@@ -872,6 +880,16 @@ function decisionCanReplaceCurrentPlan(decisionId: number, phrase: string): bool
 // deterministic and narrower than ordinary intent classification: a direct
 // command wins; hypotheticals, feature questions, and broad negative sentiment do
 // not mutate state.
+//
+// This gate SHARES `isLeadingQuestion` with the plan/run edit gates above. It
+// predates that guard and used to strip "can you " per sentence with nothing above
+// it, so "Can you undo that?" — the identical politeness-question form the edit
+// gates read as conversation — carried the athlete's veto. The per-sentence
+// stripping still stands for the non-question form ("Can you undo that", no
+// question mark), exactly as "Can you make tomorrow's run 8k" still reads as a
+// command to hasExplicitRunEditIntent. `isLeadingQuestion` tests the WHOLE trimmed
+// message, so a message that merely ends in a question still authorizes when it
+// does not open as one ("That made it worse. Can you undo it?").
 export function hasExplicitDecisionRevertIntent(
   message: string | null | undefined,
   decisionId?: number | null
@@ -882,6 +900,7 @@ export function hasExplicitDecisionRevertIntent(
     .replace(/\s+/g, " ")
     .trim();
   if (!text) return false;
+  if (isLeadingQuestion(text)) return false;
 
   const id = Number(decisionId);
   const refs = decisionReferences(text);
@@ -1593,10 +1612,20 @@ function isCardioRemoval(change: Record<string, unknown>): boolean {
   return change.remove === true && String(change.kind ?? "").toLowerCase() === "cardio";
 }
 
+// A capability refusal an athlete can walk into every week, so it rotates like any
+// other repeating athlete-facing sentence (see CHAT_REFUSAL_VARIANTS below). Every
+// phrasing names the Plan screen — that is the part the athlete has to act on.
+export const CARDIO_REMOVAL_REFUSAL_VARIANTS: ReadonlyArray<(where: string) => string> = [
+  (where) => `taking a run${where} off the week isn't something chat can do yet; the Plan screen owns removing a run`,
+  (where) => `chat can't take a run${where} off the week yet — removing a run is the Plan screen's job`,
+  (where) => `removing a run${where} isn't something I can do from chat yet; the Plan screen is where a run comes off`,
+  (where) => `I can't lift a run${where} out of the week from here yet — use the Plan screen to remove a run`,
+] as const;
+
 function cardioRemovalRefusal(change: Record<string, unknown>): string {
   const day = Math.trunc(Number(change.day_number));
   const where = Number.isFinite(day) && day >= 1 ? ` from day ${day}` : "";
-  return `taking a run${where} off the week isn't something chat can do yet; the Plan screen owns removing a run`;
+  return pickDayVariant(CARDIO_REMOVAL_REFUSAL_VARIANTS, localDateISO(), "chat-cardio-removal")(where);
 }
 
 export function splitPlanChangesForRuns(changes: unknown[]): SplitPlanChanges {
@@ -1618,6 +1647,135 @@ function replyClaimsPlanSuccess(reply: string): boolean {
   );
 }
 
+// ── CHAT_REFUSAL_VARIANTS ────────────────────────────────────────────────────
+// The reconcilers below are the athlete-facing truth about what did NOT happen,
+// and their inputs are deterministic: the same guard, the same review posture, the
+// same off-contract model response produces the same branch. A single literal there
+// prints the identical sentence in the chat bubble every time the athlete walks into
+// it — the same failure the day read had before its prose became a variant set
+// (`src/repo/brain/day-read-rules.ts`). Add a PHRASING to a set here; never add a
+// literal at the call site.
+//
+// Every set carries a stable invariant phrase — "your current plan is unchanged",
+// "held for review", "this week's runs are unchanged", "your existing objective is
+// unchanged" — because the thing that must survive rotation is the FACT, not the
+// wording. Index 0 is the canonical phrasing. Keys are per-site so two sets never
+// rotate in lockstep.
+export const RESTRUCTURE_HELD_FOR_REVIEW_VARIANTS = [
+  "That structural plan change is held for review under the current policy; it is not live yet.",
+  "That reshape is held for review, so your week is still exactly as it was.",
+  "That structural plan change sits held for review for now; nothing about your week has moved.",
+  "A change to the shape of your week is held for review under your current setting, so it isn't live.",
+] as const;
+
+export const RESTRUCTURE_NOT_SCHEDULED_VARIANTS: ReadonlyArray<(reason: string) => string> = [
+  (reason) => `That structural plan change was not scheduled, so your current plan is unchanged: ${reason}`,
+  (reason) => `Nothing went on the calendar from that reshape — your current plan is unchanged: ${reason}`,
+  (reason) => `The structural change never got a date, so your current plan is unchanged: ${reason}`,
+  (reason) => `That reshape didn't take, and your current plan is unchanged: ${reason}`,
+] as const;
+
+export const RESTRUCTURE_DRAFT_VARIANTS = [
+  "That structural plan change is a draft for review; it is not live yet.",
+  "What came back is a draft for review rather than a live change — your week is untouched.",
+  "That reshape landed as a draft for review, so nothing has moved on your plan.",
+  "It's a draft for review at this point; the structural change isn't live.",
+] as const;
+
+export const PLAN_NOT_SAVED_VARIANTS = [
+  "I didn't save a plan change from that response, so your current plan is unchanged.",
+  "Nothing from that response reached the plan — your current plan is unchanged.",
+  "No plan write came out of that, so your current plan is unchanged.",
+  "I stopped short of writing anything there; your current plan is unchanged.",
+] as const;
+
+export const PLAN_NO_CHANGE_APPENDED_VARIANTS = [
+  "No plan change was saved from this response.",
+  "For the record: no plan change was saved from this response.",
+  "To be clear, no plan change was saved here.",
+  "Nothing landed on the plan — no plan change was saved from this response.",
+] as const;
+
+export const PLAN_UNTOUCHED_BY_QUESTION_VARIANTS = [
+  "I haven't changed or scheduled your plan from that question; your current training split is unchanged.",
+  "That was a question, not a change — your current training split is unchanged.",
+  "Nothing was written or put on the calendar from that question; your current training split is unchanged.",
+  "I answered rather than acted there, so your current training split is unchanged.",
+] as const;
+
+export const PLAN_WRITE_UNVERIFIED_VARIANTS = [
+  "The plan write completed, but I couldn't verify the full stored prescription. Reopen Today before training; I won't claim the displayed plan is confirmed.",
+  "The write went through, but I couldn't read the whole stored prescription back. Reopen Today before training rather than taking my word for it.",
+  "That change was written, though the full stored prescription didn't confirm. Reopen Today before training — I'd rather you see the real thing.",
+  "The plan write landed but didn't fully confirm on readback. Reopen Today before training; I won't call the displayed plan confirmed.",
+] as const;
+
+export const PLAN_NOT_LIVE_VARIANTS: ReadonlyArray<(reason: string) => string> = [
+  (reason) => `That plan change is not live. Your current plan is unchanged: ${reason}`,
+  (reason) => `That one didn't land — it is not live, and your current plan is unchanged: ${reason}`,
+  (reason) => `To be straight with you: that change is not live, so your current plan is unchanged: ${reason}`,
+  (reason) => `Your current plan is unchanged, because that change is not live: ${reason}`,
+] as const;
+
+export const RUN_NOT_SAVED_VARIANTS = [
+  "I didn't save a run change from that response, so this week's runs are unchanged.",
+  "Nothing from that response reached your running — this week's runs are unchanged.",
+  "No run write came out of that, so this week's runs are unchanged.",
+  "I stopped short of writing a run there; this week's runs are unchanged.",
+] as const;
+
+export const RUN_HELD_FOR_REVIEW_VARIANTS = [
+  "That run change is held for review under the current policy; it is not live yet.",
+  "That run change is held for review, so it isn't live yet.",
+  "Your review setting keeps that run change held for review rather than live.",
+  "The run edit is held for review for now; nothing has moved on the week.",
+] as const;
+
+export const RUN_NOT_LIVE_VARIANTS: ReadonlyArray<(reason: string) => string> = [
+  (reason) => `That run change is not live, so this week's runs are unchanged: ${reason}.`,
+  (reason) => `That run change didn't land, so this week's runs are unchanged: ${reason}.`,
+  (reason) => `This week's runs are unchanged — the run change is not live: ${reason}.`,
+  (reason) => `Nothing moved on the running side; this week's runs are unchanged: ${reason}.`,
+] as const;
+
+export const STRENGTH_OBJECTIVE_NOT_SAVED_VARIANTS = [
+  "I didn't save a strength objective from that response, so your existing objective is unchanged.",
+  "No strength objective came out of that response — your existing objective is unchanged.",
+  "Nothing was written to your strength goals there, so your existing objective is unchanged.",
+  "I stopped short of saving an objective from that; your existing objective is unchanged.",
+] as const;
+
+export const STRENGTH_OBJECTIVE_NONE_SAVED_VARIANTS = [
+  "No strength objective was saved from this response.",
+  "For the record: no strength objective was saved from this response.",
+  "To be clear, no strength objective was saved here.",
+  "Nothing landed on your strength goals — no strength objective was saved.",
+] as const;
+
+export const DECISION_REVERT_NOT_AUTHORIZED_VARIANTS: ReadonlyArray<(how: string) => string> = [
+  (how) =>
+    `I read that as a question rather than a go-ahead, so nothing was reverted. Say “${how}” and I'll roll it back.`,
+  (how) =>
+    `To be straight with you: nothing was reverted, and that decision is still standing. “${how}” is the word that puts it back.`,
+  (how) => `Nothing was reverted here — I wait for the direct ask on an Undo. Say “${how}” and it goes back.`,
+  (how) => `That one is still live: nothing was reverted. When you want it undone for real, say “${how}”.`,
+] as const;
+
+export const DECISION_REVERT_FAILED_VARIANTS: ReadonlyArray<(reason: string) => string> = [
+  (reason) => `The Undo didn't go through, so nothing was reverted: ${reason}.`,
+  (reason) => `That rollback didn't land — nothing was reverted: ${reason}.`,
+  (reason) => `Nothing was reverted; the Undo couldn't complete: ${reason}.`,
+  (reason) => `I couldn't put that one back, so nothing was reverted: ${reason}.`,
+] as const;
+
+export const STRENGTH_OBJECTIVE_UNVERIFIED_VARIANTS: ReadonlyArray<(reason: string) => string> = [
+  (reason) => `I couldn't verify that strength objective, so I won't claim it was saved: ${reason}.`,
+  (reason) => `That strength objective didn't read back cleanly, so I won't claim it was saved: ${reason}.`,
+  (reason) =>
+    `I couldn't match that strength objective against what's stored, so I won't claim it was saved: ${reason}.`,
+  (reason) => `That objective isn't confirmed on my side, so I won't claim it was saved: ${reason}.`,
+] as const;
+
 export function reconcileChatPlanReply(
   reply: string,
   message: string | null | undefined,
@@ -1625,6 +1783,7 @@ export function reconcileChatPlanReply(
   drafts: unknown[]
 ): string {
   const explicit = hasExplicitPlanEditIntent(message);
+  const today = localDateISO();
   const restructureEntries = applied.filter((entry) => entry.type === "plan_restructure");
   const planEntries = applied.filter((entry) => entry.type === "plan_update");
   const restructureDraft = drafts.some((draft: any) => Array.isArray(draft?.parsed?.days));
@@ -1639,15 +1798,14 @@ export function reconcileChatPlanReply(
       return replyClaimsPlanSuccess(reply) ? receipt : `${reply.trim()}\n\n${receipt}`.trim();
     }
     if (result.review_required === true || status === "review") {
-      const receipt =
-        "That structural plan change is held for review under the current policy; it is not scheduled or live yet.";
+      const receipt = pickDayVariant(RESTRUCTURE_HELD_FOR_REVIEW_VARIANTS, today, "chat-restructure-held");
       return replyClaimsPlanSuccess(reply) ? receipt : `${reply.trim()}\n\n${receipt}`.trim();
     }
     if (result.persisted === true || status === "applied") {
       return "The structural plan change is live and recorded with its Undo history.";
     }
     const reason = String(result.error ?? restructureEntries[0].error ?? "the server could not own the change");
-    return `That structural plan change was not scheduled, so your current plan is unchanged: ${reason}`;
+    return pickDayVariant(RESTRUCTURE_NOT_SCHEDULED_VARIANTS, today, "chat-restructure-not-scheduled")(reason);
   }
 
   if (!planEntries.length) {
@@ -1656,14 +1814,17 @@ export function reconcileChatPlanReply(
     // the verified run receipt.
     if (applied.some((entry) => entry.type === "set_run")) return reply;
     if (restructureDraft && (explicit || replyClaimsPlanSuccess(reply))) {
-      return "That structural plan change is a draft for review; it is not live yet.";
+      return pickDayVariant(RESTRUCTURE_DRAFT_VARIANTS, today, "chat-restructure-draft");
     }
     if (explicit && replyClaimsPlanSuccess(reply)) {
-      return "I didn't save a plan change from that response, so your current plan is still unchanged.";
+      return pickDayVariant(PLAN_NOT_SAVED_VARIANTS, today, "chat-plan-not-saved");
     }
-    if (explicit) return `${reply.trim()}\n\nNo plan change was saved from this response.`.trim();
+    if (explicit) {
+      const note = pickDayVariant(PLAN_NO_CHANGE_APPENDED_VARIANTS, today, "chat-plan-no-change-note");
+      return `${reply.trim()}\n\n${note}`.trim();
+    }
     if (replyClaimsPlanSuccess(reply)) {
-      return "I haven't changed or scheduled your plan from that question; your current training split is unchanged.";
+      return pickDayVariant(PLAN_UNTOUCHED_BY_QUESTION_VARIANTS, today, "chat-plan-question-no-op");
     }
     return reply;
   }
@@ -1730,10 +1891,10 @@ export function reconcileChatPlanReply(
   // Do not retain model prose that claimed a write succeeded. The server receipt is
   // authoritative and is what gets persisted/displayed after the streamed draft.
   if (first?.ok === true && (Array.isArray(first?.applied) || first?.restructured === true)) {
-    return "The plan write completed, but I couldn't verify the full stored prescription. Reopen Today before training; I won't claim the displayed plan is confirmed.";
+    return pickDayVariant(PLAN_WRITE_UNVERIFIED_VARIANTS, today, "chat-plan-write-unverified");
   }
   if (explicit || replyClaimsPlanSuccess(reply)) {
-    return `That plan change is not live. Your current plan is unchanged: ${reason}`;
+    return pickDayVariant(PLAN_NOT_LIVE_VARIANTS, today, "chat-plan-not-live")(reason);
   }
   return reply;
 }
@@ -1754,10 +1915,11 @@ export function reconcileChatRunReply(
   message: string | null | undefined,
   applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>
 ): string {
+  const today = localDateISO();
   const entries = applied.filter((entry) => entry.type === "set_run");
   if (!entries.length) {
     if (hasExplicitRunEditIntent(message) && replyClaimsRunSuccess(reply)) {
-      return "I didn't save a run change from that response, so this week's runs are unchanged.";
+      return pickDayVariant(RUN_NOT_SAVED_VARIANTS, today, "chat-run-not-saved");
     }
     return reply;
   }
@@ -1789,7 +1951,7 @@ export function reconcileChatRunReply(
     );
   }
   if (held.length) {
-    lines.push("That run change is held for review under the current policy; it is not live yet.");
+    lines.push(pickDayVariant(RUN_HELD_FOR_REVIEW_VARIANTS, today, "chat-run-held"));
   }
   for (const result of failed) {
     const check = recordOrNull((result as any).verification) as any;
@@ -1800,7 +1962,7 @@ export function reconcileChatRunReply(
           ? `the stored run doesn't match what you asked for (${mismatches.join(", ")})`
           : "the run write did not land")
     );
-    lines.push(`That run change is not live, so this week's runs are unchanged: ${reason}.`);
+    lines.push(pickDayVariant(RUN_NOT_LIVE_VARIANTS, today, "chat-run-not-live")(reason));
   }
   const receipt = lines.join(" ");
   // Model prose that claimed the write already happened is replaced, not decorated —
@@ -1815,6 +1977,7 @@ export function reconcileStrengthObjectiveReply(
   applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>
 ): string {
   if (!hasExplicitStrengthObjectiveIntent(message)) return reply;
+  const today = localDateISO();
   const entries = applied.filter((entry) => entry.type === "set_strength_objective");
   if (!entries.length) {
     if (
@@ -1822,15 +1985,16 @@ export function reconcileStrengthObjectiveReply(
         reply
       )
     ) {
-      return "I didn't save a strength objective from that response, so your existing objective is unchanged.";
+      return pickDayVariant(STRENGTH_OBJECTIVE_NOT_SAVED_VARIANTS, today, "chat-objective-not-saved");
     }
-    return `${reply.trim()}\n\nNo strength objective was saved from this response.`.trim();
+    const note = pickDayVariant(STRENGTH_OBJECTIVE_NONE_SAVED_VARIANTS, today, "chat-objective-none-saved");
+    return `${reply.trim()}\n\n${note}`.trim();
   }
   const results = entries.map((entry) => recordOrNull(entry.result) ?? {});
   const verified = results.length > 0 && results.every((result) => result.ok === true && result.verified === true);
   if (!verified) {
     const reason = String(entries.find((entry) => entry.error)?.error ?? "the stored objective did not verify");
-    return `I couldn't verify that strength objective, so I won't claim it was saved: ${reason}.`;
+    return pickDayVariant(STRENGTH_OBJECTIVE_UNVERIFIED_VARIANTS, today, "chat-objective-unverified")(reason);
   }
   const objective = results.at(-1)?.objective as any;
   const exercise = String(objective?.exercise ?? "the anchor lift");
@@ -1839,6 +2003,48 @@ export function reconcileStrengthObjectiveReply(
     ? `Strength objective saved and verified: ${exercise} to ${target} lb estimated 1RM.`
     : `Strength objective saved and verified: ${exercise}.`;
   return `${reply.trim()}\n\n${receipt}`.trim();
+}
+
+// Prose claiming the Undo already happened. Subject-anchored on purpose, exactly as
+// replyClaimsRunSuccess is topic-anchored: an honest sentence ("nothing was reverted",
+// "I couldn't put that back") shares every verb with the false claim and differs only
+// in who is doing what, so a bare verb match would correct the truthful reply too.
+function replyClaimsRevertSuccess(reply: string): boolean {
+  return /\b(?:i(?:['’]ve| have)?\s+(?:now\s+|already\s+)?(?:reverted|undone|undid|restored|cancell?ed|rolled\s+(?:it|that|this|them|the\s+\S+|your\s+\S+)\s+back|put\s+(?:it|that|this|them|the\s+\S+|your\s+\S+)\s+back)|(?:it|that|this|the\s+(?:change|decision|update|plan|split|program)|your\s+(?:plan|split|program))(?:['’]s)?\s+(?:has\s+been|have\s+been|been|is|was|are|were)\s+(?:now\s+)?(?:reverted|rolled\s+back|undone|cancell?ed|put\s+back|restored))\b/i.test(
+    reply
+  );
+}
+
+// The Undo counterpart to reconcileChatPlanReply / reconcileChatRunReply. A
+// revert_decision the athlete never authorized (the shared question guard) leaves no
+// trace in `applied` — a refused action is not an applied one, and `applied` is the
+// chat bubble's own receipt ledger — so the refused decision ids ride their own
+// channel out of applyChatActions. Either way the decision is still live, so the
+// correction REPLACES the claim rather than decorating it — the same rule
+// reconcileChatRunReply applies to a run write that did not land, for the same
+// reason: an appended note leaves the false sentence sitting at the top of the
+// bubble, and the server's account is the only truthful one. A reply that never
+// claimed the Undo happened is returned untouched.
+export function reconcileChatRevertReply(
+  reply: string,
+  applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>,
+  refusedReverts: readonly number[]
+): string {
+  if (!replyClaimsRevertSuccess(reply)) return reply;
+  const today = localDateISO();
+  const failed = applied.filter(
+    (entry) => entry.type === "revert_decision" && (recordOrNull(entry.result)?.ok !== true || !!entry.error)
+  );
+  if (failed.length) {
+    const reason = String(
+      recordOrNull(failed[0].result)?.error ?? failed[0].error ?? "the decision could not be rolled back"
+    );
+    return pickDayVariant(DECISION_REVERT_FAILED_VARIANTS, today, "chat-revert-failed")(reason);
+  }
+  if (!refusedReverts.length) return reply;
+  const id = refusedReverts.find((value) => Number.isInteger(value) && value > 0);
+  const how = id ? `undo decision ${id}` : "undo that decision";
+  return pickDayVariant(DECISION_REVERT_NOT_AUTHORIZED_VARIANTS, today, "chat-revert-not-authorized")(how);
 }
 
 function logPhotoFood(actions: ChatAction[], turn: any): { id: number; [key: string]: unknown } | null {
@@ -2775,10 +2981,15 @@ export function applyChatActions(
   applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>;
   drafts: unknown[];
   labConfirms: LabConfirmDraft[];
+  refusedReverts: number[];
 } {
   const applied: Array<{ type: ChatActionType; result?: unknown; error?: string }> = [];
   const drafts: unknown[] = [];
   const labConfirms: LabConfirmDraft[] = [];
+  // Ids of revert_decision actions the gate refused. They deliberately stay OUT of
+  // `applied` (which the PWA renders as the turn's applied-action chips and the tests
+  // read as "nothing was applied"); reconcileChatRevertReply is their only consumer.
+  const refusedReverts: number[] = [];
   const message = ctx.message ?? "";
   const foodOnly = isFoodOnlyTurn(message, ctx.imagePath);
   const explicitGoalIntent = !foodOnly && hasExplicitGoalIntent(message);
@@ -3120,7 +3331,10 @@ export function applyChatActions(
           });
           break;
         case "revert_decision":
-          if (!hasExplicitDecisionRevertIntent(message, Number(a.id))) break;
+          if (!hasExplicitDecisionRevertIntent(message, Number(a.id))) {
+            refusedReverts.push(Number(a.id));
+            break;
+          }
           applied.push({
             type: a.type,
             result: revertDecision(Number(a.id), stringOrUndefined(a.reason) ?? "user veto"),
@@ -3135,5 +3349,5 @@ export function applyChatActions(
       applied.push({ type: a.type, error: e instanceof Error ? e.message : String(e) });
     }
   }
-  return { applied, drafts, labConfirms };
+  return { applied, drafts, labConfirms, refusedReverts };
 }

@@ -688,6 +688,178 @@ test("the hard running moves off the front of the week when the legs open it loa
   assert.equal(new Set(held.runs.map((r) => r.day_number)).size, held.runs.length, "no two runs collide on a day");
 });
 
+// ── the long run is placed off the RING, not merely off the leg days ────────────
+// Adjacency in this template is cyclic (day 7 and day 1 are neighbours), so a rule
+// that only asked "is this slot itself a leg day" could put the long run on Sunday
+// with a heavy Monday waiting on the other side of the seam — and the week-layout
+// read then flagged the run engine's OWN choice back at the athlete as a weekly
+// nudge nobody could act on. The preference is tiered: a slot with no leg day on
+// either side first, a merely-free slot second, and slot 6 last.
+function planLowerDay(dayNumber, name = "Lower") {
+  repo.savePlanDay(dayNumber, name, "Lower", [
+    { exercise: "Back Squat", sets: 5, rep_low: 3, rep_high: 5, target_weight: 225 },
+    { exercise: "Romanian Deadlift", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185 },
+  ]);
+}
+const longDay = (plan) => plan.runs.find((r) => r.kind_label === "long")?.day_number ?? null;
+
+test("the long run takes the slot with clear days on BOTH sides of it, not merely a free one", () => {
+  seedRacingRunner();
+  planLowerDay(1, "Heavy legs"); // Monday
+  planLowerDay(6, "Legs"); // Saturday
+  const plan = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, legLoad: null });
+  // Candidates run [6, 5, 7, 4]. 6 is a leg day; 5 touches Saturday; 7 touches both
+  // Saturday and Monday across the seam. 4 is the only slot with air on each side.
+  assert.equal(longDay(plan), 4, "Thursday is the one ring-clean slot this week has");
+  assert.equal(new Set(plan.runs.map((r) => r.day_number)).size, plan.runs.length, "no two runs collide on a day");
+});
+
+test("when no ring-clean slot exists the long run is placed exactly as it always was", () => {
+  seedRacingRunner();
+  planLowerDay(1, "Heavy legs"); // Monday
+  planLowerDay(5); // Friday
+  planLowerDay(6); // Saturday
+  const plan = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, legLoad: null });
+  // Every candidate touches a leg day somewhere on the ring, so the second tier — the
+  // old rule, "just not a leg day itself" — decides, and it picks 7 as it always did.
+  // The week-layout read will flag that Sunday/Monday pair, and it is RIGHT to: this
+  // week genuinely cannot be separated. The engine does not get to talk it out of it.
+  assert.equal(longDay(plan), 7, "the pre-existing fallback still owns an unseparable week");
+  assert.equal(new Set(plan.runs.map((r) => r.day_number)).size, plan.runs.length, "no two runs collide on a day");
+});
+
+test("a single mid-week leg day places the long run exactly where it always went", () => {
+  seedRacingRunner();
+  planLowerDay(3, "Legs"); // Wednesday — nowhere near the weekend
+  const plan = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, legLoad: null });
+  const bare = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, legLoad: null });
+  assert.equal(longDay(plan), 6, "Saturday, the default, is ring-clean here");
+  assert.equal(longDay(bare), 6, "and a week with no lifting at all is unchanged");
+});
+
+test("the freshness floor still moves the long run, and still prefers a ring-clean slot", () => {
+  seedRacingRunner();
+  planLowerDay(1, "Heavy legs");
+  planLowerDay(6, "Legs");
+  const fresh = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, legLoad: null });
+  const loaded = repo.weeklyRunPlan(REF, { block: { week_index: 1 }, legLoad: LEGS_SATURATED });
+  // The floor (slot >= 3 under a saturated read) cannot make the placement WORSE:
+  // whatever it lands on is still the best available slot at or past the floor.
+  assert.ok(longDay(loaded) >= 3, `the floor is respected (${longDay(loaded)})`);
+  assert.equal(longDay(fresh), 4, "and the unfloored week still takes the ring-clean slot");
+  assert.equal(new Set(loaded.runs.map((r) => r.day_number)).size, loaded.runs.length, "no two runs collide on a day");
+});
+
+// ── the volume anchor belongs to the WEEK, not to the morning it's read on ───
+// The trailing-7-day base used to be read at the plan date, so a week rebuilt on
+// Wednesday counted its OWN Monday and Tuesday runs as base fitness: the prescription
+// grew as the athlete ran it, and the shortfall it is judged against could never
+// appear. BOTH halves of the anchor now read the week that has already closed — the
+// trailing window ends the day before this Monday, and the actuals term reads last
+// week's compliance rather than this week's. Moving only the window left the max()
+// still pulling this week's kilometres in through the other door.
+
+test("a week's prescribed volume is the same from every morning of that week", () => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  seedRunner({ weeks: 8, perWeek: 3, km: 10 }); // ~30 km/wk, all of it BEFORE this Monday
+  // programState is pinned at the week's Monday on purpose. It is a DIFFERENT input
+  // from the anchor — a live physiological/load read whose "spiking" status is a
+  // protective brake — and leaving it live would let that brake mask (or be mistaken
+  // for) the anchor's own stability. Pinning it isolates exactly the anchor. The
+  // default-path behaviour under a big mid-week block is locked in the next test.
+  const opts = { block: { week_index: 1 }, programState: repo.getProgramState(REF) };
+  const monday = repo.weeklyRunPlan(REF, opts);
+  assert.ok(monday.available);
+
+  // A block bigger than the whole of LAST week (30 km) run inside THIS one. Anything
+  // smaller never reaches max(actuals, base) at all, so it could not have exercised
+  // the ratchet even when the ratchet was there.
+  repo.addActivity({ type: "run", duration_min: 90, distance_km: 15, date: REF });
+  repo.addActivity({ type: "run", duration_min: 90, distance_km: 15, date: fwd(1) });
+  repo.addActivity({ type: "run", duration_min: 60, distance_km: 10, date: fwd(2) });
+
+  const wednesday = repo.weeklyRunPlan(fwd(2), opts);
+  assert.equal(wednesday.week_start, monday.week_start, "still the same week");
+  assert.equal(
+    totalRunKm(wednesday),
+    totalRunKm(monday),
+    `the week must not chase the runs it prescribes (Mon ${totalRunKm(monday)} → Wed ${totalRunKm(wednesday)})`
+  );
+  assert.equal(longKm(wednesday), longKm(monday), "nor may the long run grow mid-week");
+});
+
+test("a huge mid-week block never raises the same week's ask, brake or no brake", () => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  seedRunner({ weeks: 8, perWeek: 3, km: 10 }); // 30 km last week
+  const opts = { block: { week_index: 1 } };
+  const monday = repo.weeklyRunPlan(REF, opts);
+  assert.ok(monday.available);
+
+  repo.addActivity({ type: "run", duration_min: 90, distance_km: 15, date: REF });
+  repo.addActivity({ type: "run", duration_min: 90, distance_km: 15, date: fwd(1) });
+  repo.addActivity({ type: "run", duration_min: 60, distance_km: 10, date: fwd(2) });
+
+  // Everything live, exactly as a caller with no opts gets it. The anchor read last
+  // week's actuals, so 40 logged kilometres cannot become base fitness for the week
+  // they were logged in: the ask never rises. The one thing still allowed to move the
+  // week from inside it is the mileage-spike brake — a protective read of NOW, not a
+  // volume ledger, and it can only ever pull the week DOWN. Asserted by name, so that
+  // if some other input ever starts moving the week mid-week this fails loudly.
+  const wednesday = repo.weeklyRunPlan(fwd(2), opts);
+  assert.equal(wednesday.week_start, monday.week_start, "still the same week");
+  assert.ok(
+    totalRunKm(wednesday) <= totalRunKm(monday),
+    `the week must never grow from its own runs (Mon ${totalRunKm(monday)} → Wed ${totalRunKm(wednesday)})`
+  );
+  assert.ok(
+    totalRunKm(wednesday) < 40,
+    `40 km logged this week must not become this week's anchor (${totalRunKm(wednesday)})`
+  );
+  assert.match(said(wednesday), /mileage jumped recently/i, "the only mid-week move is the spike brake");
+});
+
+test("an injected compliance is the anchor exactly as given — the caller owns which week it means", () => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  seedRunner({ weeks: 8, perWeek: 3, km: 10 }); // 30 km/wk of history
+  const opts = { block: { week_index: 1 }, volumeAnchorDate: back(90) }; // trailing window: empty
+  const lean = repo.weeklyRunPlan(REF, { ...opts, compliance: { actual_km: 0 } });
+  const rich = repo.weeklyRunPlan(REF, { ...opts, compliance: { actual_km: 50 } });
+  assert.ok(
+    totalRunKm(rich) > totalRunKm(lean),
+    `an injected actual_km still anchors the week (${totalRunKm(lean)} → ${totalRunKm(rich)})`
+  );
+});
+
+test("but volume run LAST week is exactly what the anchor is supposed to move", () => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  seedRunner({ weeks: 8, perWeek: 3, km: 10 });
+  const opts = { block: { week_index: 1 } };
+  const lean = repo.weeklyRunPlan(REF, opts);
+
+  // Two more runs in the week that has already closed (REF is a Monday, so back(2)
+  // and back(4) are last Saturday and last Thursday).
+  repo.addActivity({ type: "run", duration_min: 60, distance_km: 10, date: back(2) });
+  repo.addActivity({ type: "run", duration_min: 60, distance_km: 10, date: back(4) });
+
+  const fuller = repo.weeklyRunPlan(REF, opts);
+  assert.ok(
+    totalRunKm(fuller) > totalRunKm(lean),
+    `last week's mileage still raises the ask (${totalRunKm(lean)} → ${totalRunKm(fuller)})`
+  );
+});
+
+test("an explicit volumeAnchorDate still overrides the week-boundary default", () => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  seedRunner({ weeks: 8, perWeek: 3, km: 10 });
+  const opts = { block: { week_index: 1 } };
+  const defaulted = repo.weeklyRunPlan(REF, opts);
+  // Anchor a fortnight back, where seedRunner's history is identical — same answer —
+  // and then somewhere the history is thinner, where it must differ.
+  assert.equal(totalRunKm(repo.weeklyRunPlan(REF, { ...opts, volumeAnchorDate: back(8) })), totalRunKm(defaulted));
+  const thin = repo.weeklyRunPlan(REF, { ...opts, volumeAnchorDate: back(90) });
+  assert.notEqual(totalRunKm(thin), totalRunKm(defaulted), "an anchor before the history reads a different base");
+});
+
 // ── buildRunPlanProposal (the apply path, shared by REST + MCP) ────────────────
 
 test("buildRunPlanProposal drafts a proposal whose cardio carries day_number + interval structure", () => {

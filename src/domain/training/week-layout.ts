@@ -36,7 +36,11 @@ export type WeekLayoutCollisionKind =
 
 export interface WeekLayoutCollision {
   kind: WeekLayoutCollisionKind;
-  /** The plan day_numbers involved, ascending. */
+  /**
+   * The plan day_numbers involved. Ascending for an adjacency collision. For a stack
+   * they are in TEMPLATE order, which may wrap past Sunday (e.g. [6, 7, 1]) — the week
+   * is a ring, so a hard stretch can straddle the Sunday/Monday seam.
+   */
   days: number[];
   /** Plain words for what collided — athlete register, never a score. */
   detail: string;
@@ -89,11 +93,30 @@ const weekday = (dayNumber: number): string => WEEKDAYS[dayNumber - 1] ?? `day $
 
 const cap = (s: string): string => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 
-// Adjacency is LINEAR (Sunday and the following Monday are not treated as neighbours),
-// matching the run engine's own model — `dayAfterLower` there stops at 7. Reading the
-// week as a ring here would flag placements weeklyRunPlan considers legal and put the
-// two halves of the composition at odds with each other.
-const adjacent = (a: number, b: number): boolean => Math.abs(a - b) === 1;
+// Adjacency is CYCLIC, because day_number is a Mon–Sun TEMPLATE that repeats every
+// week — day 7 and day 1 are neighbours in the athlete's actual life, not a seam.
+// A Sunday long run IS followed by Monday's heavy lower session, every single week;
+// reading the week as a line hid exactly one collision (7↔1) and hid it forever,
+// since a template that repeats never stops producing it. The run engine judges the
+// week on this same ring (src/repo/run-progression.ts): its long-run placement PREFERS
+// a slot with no lower day on either side of it and falls back to a merely-free slot
+// only when the week has none. So the two halves agree about which weeks are separable
+// — this read never flags a placement the engine could have avoided — but on a week
+// that genuinely cannot be separated it still reports the collision rather than going
+// quiet about it. Agreement is about the week, not about always reading clean.
+const adjacent = (a: number, b: number): boolean => Math.abs(a - b) === 1 || Math.abs(a - b) === 6;
+
+// Cyclic neighbours of a day_number in the repeating template.
+const nextDay = (d: number): number => (d === 7 ? 1 : d + 1);
+const prevDay = (d: number): number => (d === 1 ? 7 : d - 1);
+
+// The ring has exactly seven positions, and every piece of arithmetic above assumes
+// it. `replacePlan` puts no cap on day_number, so a hand-authored or agent-authored
+// plan can carry an 8 — and on a line that reads as adjacent to 7, inventing a
+// collision between a day that exists and one that doesn't. Days off the ring are
+// dropped SILENTLY at the boundary: the read is a quiet suggestion, and a plan the
+// athlete can see on their own screen is not a place to raise an error.
+const onRing = (d: unknown): d is number => Number.isInteger(d) && (d as number) >= 1 && (d as number) <= 7;
 
 // What to call the strength day in a sentence. The plan day's own name is what the
 // athlete sees everywhere else, so use it when there is one.
@@ -157,7 +180,7 @@ function runPlacement(opts?: { runPlan?: WeeklyRunPlan | null; agenda?: Flexible
   }
   const pick = (rows: { day_number: number; kind: string }[], kind: string): number | null => {
     const hit = rows
-      .filter((r) => r.kind === kind && Number.isFinite(r.day_number))
+      .filter((r) => r.kind === kind && onRing(r.day_number))
       .sort((a, b) => a.day_number - b.day_number)[0];
     return hit ? hit.day_number : null;
   };
@@ -189,14 +212,31 @@ function runPlacement(opts?: { runPlan?: WeeklyRunPlan | null; agenda?: Flexible
 // plus the long and quality runs. Deliberately the full heavy-lower set rather than
 // just the heaviest: three real leg-or-run days in a row is a week-shape problem
 // whichever of them happens to be the biggest.
+//
+// Consecutive is read on the same ring `adjacent` uses: Saturday-Sunday-Monday is
+// three hard days back to back in a repeating template, and scanning 1→7 in a line
+// would report it as two unrelated stretches of one and two days.
 function hardStacks(heavy: number[], long: number | null, quality: number | null): number[][] {
-  const hard = [...new Set([...heavy, ...(long == null ? [] : [long]), ...(quality == null ? [] : [quality])])].sort(
-    (a, b) => a - b
-  );
+  const hard = [
+    ...new Set([...heavy, ...(long == null ? [] : [long]), ...(quality == null ? [] : [quality])].filter(onRing)),
+  ].sort((a, b) => a - b);
+  if (!hard.length) return [];
+  // Every day hard: the ring has no boundary to start the scan at, and the stretch is
+  // simply the whole week. (Also the guard that keeps the rotation below well-defined.)
+  // Counted as DISTINCT ring days — a length test alone would trip on a duplicate or an
+  // off-ring number and hand back a whole-week stack the athlete doesn't have.
+  if (new Set(hard).size >= 7) return [[1, 2, 3, 4, 5, 6, 7]];
+  // Rotate the scan to begin at a day whose cyclic predecessor is NOT hard, so a
+  // stretch that straddles the Sunday/Monday seam is seen whole rather than split at
+  // the array's edges. With a gap somewhere in the week such a day always exists.
+  const set = new Set(hard);
+  const firstIdx = hard.findIndex((d) => !set.has(prevDay(d)));
+  const startIdx = firstIdx < 0 ? 0 : firstIdx;
+  const ordered = [...hard.slice(startIdx), ...hard.slice(0, startIdx)];
   const runs: number[][] = [];
-  for (const day of hard) {
+  for (const day of ordered) {
     const current = runs[runs.length - 1];
-    if (current && day === current[current.length - 1] + 1) current.push(day);
+    if (current && day === nextDay(current[current.length - 1])) current.push(day);
     else runs.push([day]);
   }
   return runs.filter((r) => r.length >= 3);
@@ -218,10 +258,17 @@ function detectCollisions(
       ["quality", quality],
     ] as const) {
       if (day == null || !adjacent(h, day)) continue;
+      // Which side the lift sits on, read on the ring. Across the Sunday/Monday seam
+      // the order inverts: day 1 FOLLOWS day 7 (Monday's session is what Sunday's long
+      // run runs into, next week and every week), so comparing the raw numbers there
+      // would print "Monday sits right before Sunday's long run" — a sentence that is
+      // both false and obviously nonsense to the person reading it.
+      const wrapped = Math.abs(h - day) === 6;
+      const liftIsBefore = wrapped ? h > day : h < day;
       out.push({
         kind: kind === "long" ? "heavy_lower_adjacent_long_run" : "heavy_lower_adjacent_quality",
         days: [h, day].sort((a, b) => a - b),
-        detail: `${cap(strengthDayLabel(byDay.get(h), h))} sits right ${h < day ? "before" : "after"} ${weekday(day)}'s ${runLabel(kind)}.`,
+        detail: `${cap(strengthDayLabel(byDay.get(h), h))} sits right ${liftIsBefore ? "before" : "after"} ${weekday(day)}'s ${runLabel(kind)}.`,
       });
     }
   }
@@ -243,6 +290,14 @@ function detectCollisions(
 // a day that doesn't exist for this athlete. Earlier is preferred at equal distance —
 // pulling a leg day forward costs the athlete less than pushing it into the weekend,
 // where the long run already lives. null when the week has nowhere clean to put it.
+//
+// LEGALITY is judged on the ring: the candidate is accepted only if re-running
+// detectCollisions over the moved week comes back empty, and that now includes the
+// 7↔1 wrap — so a lift can never be proposed onto the day cyclically beside the long
+// run. The ORDERING above stays linear on purpose: it is a preference about the week
+// the athlete lives through Monday to Sunday, not a claim about physiology, and
+// ranking by ring distance would start recommending Sunday as the "nearest" slot to
+// a Monday lift.
 function clearingSlot(
   move: number,
   heaviest: number[],
@@ -283,10 +338,17 @@ export function weekLayoutRead(
   } catch {
     loads = [];
   }
+  // Filter the LOADS rather than the derived day list, so `heavy`, `heaviest` and the
+  // label lookup all see the same week (see `onRing` above).
+  loads = loads.filter((l) => onRing(l.day_number));
   const heavy = loads.map((l) => l.day_number);
   let planDays: ReadonlySet<number> = new Set();
   try {
-    planDays = new Set(planDayStrengthGroups().map((d) => d.day_number));
+    planDays = new Set(
+      planDayStrengthGroups()
+        .map((d) => d.day_number)
+        .filter(onRing)
+    );
   } catch {
     planDays = new Set();
   }

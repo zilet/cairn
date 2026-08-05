@@ -19,6 +19,7 @@ import { db, repo, resetTables } from "./_seed.js";
 import {
   applyChatActions,
   hasExplicitRunEditIntent,
+  PLAN_NO_CHANGE_APPENDED_VARIANTS,
   reconcileChatPlanReply,
   reconcileChatRunReply,
   runZoneTag,
@@ -357,7 +358,8 @@ test("the verified receipt is composed from the stored run, and names the day", 
 
 test("an unbacked run claim is corrected when nothing was written", () => {
   const reply = reconcileChatRunReply("I've set tomorrow's run to 8k.", ASK, []);
-  assert.match(reply, /didn't save a run change/);
+  // The wording rotates by day (RUN_NOT_SAVED_VARIANTS); the FACT does not.
+  assert.match(reply, /this week's runs are unchanged/i);
   // Ordinary coaching prose about running is left alone.
   assert.equal(
     reconcileChatRunReply("Tomorrow's run should feel conversational.", ASK, []),
@@ -476,7 +478,11 @@ test("a run edit does not draw 'No plan change was saved' from the plan reconcil
   seedRunDay();
   const out = setRun({ day_number: DAY, distance_km: 8 });
   const planReply = reconcileChatPlanReply("I'll take that run out to 8k.", ASK, out.applied, out.drafts);
-  assert.doesNotMatch(planReply, /No plan change was saved/);
+  // The appended note rotates, so exclude the WHOLE set, not one phrasing of it.
+  for (const variant of PLAN_NO_CHANGE_APPENDED_VARIANTS) {
+    assert.ok(!planReply.includes(variant), variant);
+  }
+  assert.doesNotMatch(planReply, /no plan change was saved/i);
   const full = reconcileChatRunReply(planReply, ASK, out.applied);
   assert.match(full, /Saved and verified/);
 });

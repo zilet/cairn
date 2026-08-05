@@ -1767,7 +1767,12 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(smokeBrowser, /kb-geometry-open/);
   assert.match(verifyRunner, /await runGroup\("build", buildJobs\);\nawait runGroup\("post-build", postBuildJobs\);/);
   assert.match(rootTsconfig, /"tsBuildInfoFile": "\.tsbuildcache\/server\.tsbuildinfo"/);
-  assert.match(rootTsconfig, /"exclude": \["src\/client\/\*\*\/\*\.ts"\]/);
+  // The server compile must exclude the client sources AND the ambient client-global
+  // declaration files — with those included, a server module can reference a
+  // browser-only global and still typecheck, deferring the failure to runtime.
+  assert.match(rootTsconfig, /"exclude": \[\s*"src\/client\/\*\*\/\*\.ts",/);
+  assert.match(rootTsconfig, /"src\/contracts\/client-globals\.d\.ts"/);
+  assert.match(rootTsconfig, /"src\/contracts\/client-shell-globals\.d\.ts"/);
   assert.match(clientTsconfig, /"tsBuildInfoFile": "\.tsbuildcache\/client\.tsbuildinfo"/);
   assert.match(
     contracts,

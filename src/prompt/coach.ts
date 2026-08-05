@@ -295,7 +295,9 @@ HOW TO EVOLVE (this is the whole point — be a real coach, not a preset):
   and SAY SO in the proposal rationale, with what to trade — lighter loads, fewer sets, or an easier run.
   CHECK YOURSELF AGAINST THE DATA, don't judge this by eye: DATA.week_layout is the deterministic read of
   the week you are restructuring — heaviest_lower_days, long_run_day, quality_run_day, and any collisions
-  already present (a heaviest lower day adjacent to either run, or three hard days back to back). If it
+  already present (a heaviest lower day adjacent to either run, or three hard days back to back —
+  adjacency is CYCLIC, so a collision's "days" list is in template order and may wrap the Sunday→Monday
+  seam, e.g. [6,7,1]). If it
   reads clean:true, your restructure MUST leave it clean — moving a lower-body day next to one of those
   runs is a regression, not an evolution. If it already reports collisions, fixing the one it names is a
   legitimate reason for a "days" restructure on its own.

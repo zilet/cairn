@@ -16,5 +16,12 @@
     "sourceMap": false
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["src/client/**/*.ts"]
+  "exclude": [
+    "src/client/**/*.ts",
+    // The client ambient-global declarations must never reach server compilation:
+    // with them included, a server module can reference a browser-only global and
+    // still typecheck, deferring the failure to a runtime ReferenceError.
+    "src/contracts/client-globals.d.ts",
+    "src/contracts/client-shell-globals.d.ts"
+  ]
 }
