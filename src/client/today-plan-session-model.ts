@@ -44,8 +44,19 @@ type TodayPlanSessionItemGroups = {
   planEx: string[];
   offPlanEx: string[];
 };
+type TodayPlanSessionCardAttribution = {
+  key: string;
+  exercise: string;
+  sets: TodayPlanSessionModelLoggedSet[];
+  siblings: number;
+};
 type TodayPlanSessionModelApi = {
   planItems(day: TodayPlanSessionModelPlanDay | null | undefined): TodayPlanSessionModelPlanItem[];
+  cardAttribution(params: {
+    items: TodayPlanSessionModelPlanItem[];
+    loggedByEx: Record<string, TodayPlanSessionModelLoggedSet[]>;
+    isCardioItem(item: TodayPlanSessionModelPlanItem): boolean;
+  }): Map<TodayPlanSessionModelPlanItem, TodayPlanSessionCardAttribution>;
   groupLoggedSets(session: TodayPlanSessionModelSession | null | undefined): Record<string, TodayPlanSessionModelLoggedSet[]>;
   selectedPlanDay(state: TodayPlanSessionModelState, revealBlank: boolean): TodayPlanSessionModelPlanDay;
   matchCardioEfforts(
@@ -71,6 +82,7 @@ type TodayPlanSessionModelApi = {
     loggedByEx: Record<string, TodayPlanSessionModelLoggedSet[]>,
     lastSets: Record<string, Record<string, unknown> | null>,
     rx?: TodayPlanSessionModelPrescription | null,
+    attributed?: TodayPlanSessionCardAttribution | null,
   ): TodayPlanSessionModelPrefill;
 };
 
@@ -91,6 +103,50 @@ type TodayPlanSessionModelApi = {
       loggedByEx[key].sort((a, b) => (a.set_number ?? 0) - (b.set_number ?? 0));
     }
     return loggedByEx;
+  }
+
+  // A peak day prescribes the SAME lift twice — the near-max top single, then its
+  // back-off block — so an exercise NAME no longer identifies a card. Logged sets
+  // arrive under the one real lift name (they must: est-1RM and calibration read
+  // that name), so each card claims its share chronologically against its own
+  // prescribed set count, in plan order: the top single takes the first set, the
+  // back-off block the rest. The last card absorbs whatever is left over, which is
+  // what makes the ordinary one-card day degenerate to exactly today's behaviour —
+  // that card's key IS the exercise name and it claims every logged set.
+  function cardAttribution(params: {
+    items: TodayPlanSessionModelPlanItem[];
+    loggedByEx: Record<string, TodayPlanSessionModelLoggedSet[]>;
+    isCardioItem(item: TodayPlanSessionModelPlanItem): boolean;
+  }): Map<TodayPlanSessionModelPlanItem, TodayPlanSessionCardAttribution> {
+    const attribution = new Map<TodayPlanSessionModelPlanItem, TodayPlanSessionCardAttribution>();
+    const byExercise = new Map<string, { item: TodayPlanSessionModelPlanItem; position: number }[]>();
+    params.items.forEach((item, position) => {
+      if (params.isCardioItem(item)) return;
+      const exercise = String(item.exercise || "");
+      if (!exercise) return;
+      const cards = byExercise.get(exercise) || [];
+      cards.push({ item, position });
+      byExercise.set(exercise, cards);
+    });
+    for (const [exercise, cards] of byExercise) {
+      const logged = params.loggedByEx[exercise] || [];
+      let cursor = 0;
+      cards.forEach((card, ordinal) => {
+        const isLast = ordinal === cards.length - 1;
+        const budget = Number(card.item.sets) || 0;
+        const remaining = Math.max(0, logged.length - cursor);
+        const take = isLast ? remaining : Math.min(budget, remaining);
+        const sets = logged.slice(cursor, cursor + take);
+        cursor += sets.length;
+        attribution.set(card.item, {
+          key: cards.length > 1 ? `${exercise}#${card.position}` : exercise,
+          exercise,
+          sets,
+          siblings: cards.length,
+        });
+      });
+    }
+    return attribution;
   }
 
   function selectedPlanDay(state: TodayPlanSessionModelState, revealBlank: boolean): TodayPlanSessionModelPlanDay {
@@ -160,12 +216,28 @@ type TodayPlanSessionModelApi = {
     loggedByEx: Record<string, TodayPlanSessionModelLoggedSet[]>,
     lastSets: Record<string, Record<string, unknown> | null>,
     rx?: TodayPlanSessionModelPrescription | null,
+    attributed?: TodayPlanSessionCardAttribution | null,
   ): TodayPlanSessionModelPrefill {
     const exercise = String(item.exercise || "");
-    const logged = loggedByEx[exercise] || [];
+    // Only the sets THIS card claimed. Reading the name-keyed pile instead is what
+    // loaded a back-off card with the near-max single the athlete had just hit.
+    const logged = attributed ? attributed.sets : loggedByEx[exercise] || [];
     if (logged.length) {
       const set = logged[logged.length - 1];
       return { weight: set.weight, reps: set.reps, rir: set.rir, duration_sec: set.duration_sec ?? null };
+    }
+    // A card sharing its exercise name with another card today cannot trust a
+    // name-keyed history row to describe ITS dose — one "last time" would open the
+    // top single and its back-off block on the same number. Its own prescribed
+    // target is the only authorized start.
+    if (attributed && attributed.siblings > 1) {
+      const own = {
+        weight: item.target_weight ?? null,
+        reps: item.rep_low ?? null,
+        rir: null,
+        duration_sec: item.target_seconds ?? null,
+      };
+      if (own.weight != null || own.reps != null || own.duration_sec != null) return own;
     }
     const last = lastSets[exercise];
     if (last) return { weight: last.weight, reps: last.reps, rir: last.rir, duration_sec: last.duration_sec ?? null };
@@ -185,6 +257,7 @@ type TodayPlanSessionModelApi = {
   const CAIRN_TODAY_PLAN_SESSION_MODEL: TodayPlanSessionModelApi = {
     planItems,
     groupLoggedSets,
+    cardAttribution,
     selectedPlanDay,
     matchCardioEfforts,
     itemGroups,

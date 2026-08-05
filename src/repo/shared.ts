@@ -247,6 +247,22 @@ export function parseDbTime(s: unknown): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+// The LOCAL calendar day a stored timestamp actually fell on.
+//
+// `created_at` is written by datetime('now'), which is UTC with no zone marker —
+// so slicing its first ten characters, or letting SQLite's own date() do it,
+// answers the question in UTC. Every evening east of Greenwich that is the WRONG
+// DAY: a proposal applied at 8 PM in Boston is stamped tomorrow, and a comparison
+// against a local day then counts it into the wrong week, or misses it entirely.
+//
+// Anything that compares a stamp to a local calendar day (a plan week, a "since
+// this date" count) has to come through here. Null when the stamp is unparseable,
+// which callers should treat as "no day", never as today.
+export function localDayOfStamp(stamp: unknown, tz: string | undefined = activeTimeZone()): string | null {
+  const d = parseDbTime(stamp);
+  return d ? localDateISO(d, tz) : null;
+}
+
 // A short, human time label for a chat message relative to `now`, so the agent
 // can tell this morning's turn from a 5 PM one (the history it's handed is
 // otherwise timestamp-less). Today → just the clock time; yesterday/earlier this

@@ -3,7 +3,7 @@ import { emitBrainEvent } from "../brainEvents.js";
 import { detectStrengthCalibration } from "./calibration.js";
 import { reconcileDailySessionSafe } from "./daily-reconciliation.js";
 import { sessionNoteSuggestsFatigue } from "./training-fatigue.js";
-import { localDateISO } from "./shared.js";
+import { localDateISO, localDayOfStamp } from "./shared.js";
 import {
   isStrengthGarminType,
   listActivities,
@@ -1454,8 +1454,10 @@ export function lastAppliedRunPlanDate(): string | null {
         ORDER BY datetime(created_at) DESC, id DESC LIMIT 1`
     )
     .get() as any;
-  const stamp = row?.created_at ? String(row.created_at).slice(0, 10) : "";
-  return /^\d{4}-\d{2}-\d{2}$/.test(stamp) ? stamp : null;
+  // The LOCAL day the plan landed on. `created_at` is UTC, and the answer is
+  // compared against a local week below — so an evening apply must not report as
+  // tomorrow (see localDayOfStamp).
+  return localDayOfStamp(row?.created_at);
 }
 
 // Can the applied plan honestly speak for the week starting `weekStartISO`?
@@ -1472,9 +1474,9 @@ export function appliedRunPlanCoversWeek(weekStartISO?: string): boolean {
   if (appliedRunPrescription().sessions === 0) return false;
   const applied = lastAppliedRunPlanDate();
   if (!applied) return true;
-  // `created_at` is a UTC stamp read as a local day, so it can read one day ahead
-  // of the local date near midnight — clamp a plan that appears to land in the
-  // future back into the current week rather than calling it uncovered.
+  // A plan that still somehow reads as landing AHEAD of today (a clock that ran
+  // backwards, an imported row) is clamped into the current week rather than
+  // called uncovered — the athlete has a plan either way.
   const current = runComplianceWeekStart();
   const appliedWeek = mondayOfISO(applied);
   return (appliedWeek > current ? current : appliedWeek) === monday;

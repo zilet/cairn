@@ -34,6 +34,10 @@ import {
   getProfile,
 } from "./profile.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
+// The week-SHAPE read (does the lifting week compose with the running week). A leaf
+// module by construction — it takes the run plan as an optional injected value rather
+// than importing the builder — so reaching up into domain/ from here adds no cycle.
+import { weekLayoutRead } from "../domain/training/week-layout.js";
 import { getActiveBlock } from "./program-blocks.js";
 import { completedRecoveryWeekLedger, type CompletedRecoveryWeekLedger } from "./recovery-week-ledger.js";
 import { getProgress } from "./sessions.js";
@@ -1374,6 +1378,17 @@ function computeProgramState(date?: string, recovery?: any): ProgramState {
   // the same week, "which lane yields" is the shape of the week, and the individual
   // load steps are decided inside that shape.
   if (hybrid?.combined_load) adaptations.push(hybrid.combined_load.why);
+  // The other week-shape question, beside "which lane yields": do the two lanes' big
+  // days sit on top of each other? At most ONE line, only when the week genuinely
+  // collides, and it moves nothing — the athlete owns the shape of their week.
+  const weekLayout = (() => {
+    try {
+      return weekLayoutRead(d);
+    } catch {
+      return null;
+    }
+  })();
+  if (weekLayout && !weekLayout.clean && weekLayout.suggestion) adaptations.push(weekLayout.suggestion);
   if (hybrid?.fuel?.risk === "high") adaptations.push(hybrid.fuel.why);
   if (progressing.length && !recoveryWeek)
     adaptations.push(

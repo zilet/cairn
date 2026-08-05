@@ -30,6 +30,7 @@ import {
   type RunPrescription,
   applyPlanChange,
   getPlan,
+  getPlanDay,
   planPrescriptionDiff,
   planPrescriptionKey,
   planPrescriptionSnapshot,
@@ -38,6 +39,7 @@ import {
   setWeeklyRuns,
 } from "./plan.js";
 import { PlanQualityError, type PlanQualityReport, qualityIssueKey, validateTrainingPlan } from "./plan-quality.js";
+import { mergeStoredRun, resolveRunIndex, runEditPatchFromPayload, storedRunsFromItems } from "./run-edit.js";
 import { volumeRestoreLedger } from "./volume-guard.js";
 import { latestMeasuredRmr, measuredRmrAssessment } from "./metabolism.js";
 import { getProgress, getRunCompliance } from "./sessions.js";
@@ -1495,10 +1497,10 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
       priorRunKm = null;
     }
     try {
-      runs = setWeeklyRuns(
-        cardioRuns.map(toRunPrescription).filter((r): r is RunPrescription => r != null),
-        { deferTrainingVersionBump: true, deferDayReadInvalidation: true }
-      );
+      runs = setWeeklyRuns(resolveCardioPrescriptions(cardioRuns), {
+        deferTrainingVersionBump: true,
+        deferDayReadInvalidation: true,
+      });
     } catch (e: any) {
       skipped.push({ kind: "cardio", error: e.message });
     }
@@ -1618,6 +1620,66 @@ function toRunPrescription(c: any): RunPrescription | null {
     focus: c?.focus ?? null,
     interval: c?.interval ?? null,
   };
+}
+
+// What setWeeklyRuns should actually write for this payload.
+//
+// setWeeklyRuns replaces a day's cardio WHOLESALE, so a `cardio[]` entry is normally a
+// whole run and the entries for a day ARE that day's runs — how the Monday tick, a
+// run-plan proposal and a restructure's week of runs all mean it. That stays exactly
+// as it was.
+//
+// A chat run edit is different: the proposal may be held for review or scheduled for a
+// boundary, and a day snapshotted at build time would overwrite whatever landed in
+// between. Those entries are MARKED (`cardio_edit:true`) and carry the edit, so the
+// day's rows are re-read HERE, at the moment of the write, and the edit is folded onto
+// them. `src/repo/run-edit.ts` owns the fold; chat builds with the same one.
+function resolveCardioPrescriptions(entries: any[]): RunPrescription[] {
+  const byDay = new Map<number, any[]>();
+  for (const entry of entries) {
+    const dayNumber = Math.trunc(Number(entry?.day_number));
+    if (!Number.isFinite(dayNumber) || dayNumber < 1) continue;
+    if (!byDay.has(dayNumber)) byDay.set(dayNumber, []);
+    byDay.get(dayNumber)?.push(entry);
+  }
+  const out: RunPrescription[] = [];
+  for (const [dayNumber, dayEntries] of byDay) {
+    if (!dayEntries.some((entry) => entry?.cardio_edit === true)) {
+      for (const entry of dayEntries) {
+        const prescription = toRunPrescription(entry);
+        if (prescription) out.push(prescription);
+      }
+      continue;
+    }
+    const runs = storedRunsFromItems((getPlanDay(dayNumber) as any)?.items);
+    const first = dayEntries[0];
+    for (const entry of dayEntries) {
+      const patch = runEditPatchFromPayload(entry) ?? runEditPatchFromPayload({ ...entry, cardio_edit: true });
+      if (!patch) continue;
+      const index = resolveRunIndex(runs, patch);
+      // The day grew a second unnamed run while this edit was waiting. Guessing which
+      // one was meant is exactly what the build-time refusal exists to prevent, so let
+      // the caller roll the whole unit back and say so.
+      if (index == null) {
+        throw new Error(`day ${dayNumber} carries ${runs.length} runs and this change didn't say which one`);
+      }
+      runs[index >= 0 ? index : runs.length] = mergeStoredRun(index >= 0 ? runs[index] : null, patch);
+    }
+    for (const run of runs) {
+      out.push({
+        day_number: dayNumber,
+        label: run.label,
+        target_distance_km: run.target_distance_km,
+        target_duration_min: run.target_duration_min,
+        target_zone: run.target_zone,
+        note: null,
+        day_name: first?.day_name ?? null,
+        focus: first?.focus ?? null,
+        interval: run.interval ?? null,
+      });
+    }
+  }
+  return out;
 }
 
 // ---------- profile ----------

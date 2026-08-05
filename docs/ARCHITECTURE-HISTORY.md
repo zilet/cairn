@@ -4,6 +4,28 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-08-05 — the hard day earns its fuel, the week reads its own shape, chat writes a run honestly
+
+Third round of the day, closing the gaps the first two named. **Day-specific fueling**:
+`dayFuelDemand()`/`fuelDemandWeek()` (`src/repo/fuel-demand.ts`) classify each day light/standard/big
+from the movable run intentions and the plan's heavy-lower days; a big day earns one quiet carb-bias
+line on the fuel card (today only, never retrospective, the accepted target never moves) and the weekly
+meal-plan prompt receives the week's demand map as a hard rule. **Week layout**:
+`weekLayoutRead()` (`src/domain/training/week-layout.ts`) ranks the plan's lower days by tonnage →
+compound sets → sets, detects the top-ranked day sitting adjacent to the long/quality run and
+3-hard-days-in-a-row stacks, surfaces one movable suggestion through `adaptations_due`, and hands the
+structured read (with a verified `suggested_move`) to the program-evolution prompt. **Chat runs**: a
+`set_run` action lets the athlete's own words adjust one run through the same
+`cardio[] → setWeeklyRuns` writer the Monday tick uses (merge-not-replace, personal-model zone tags,
+refusals over guesses); endurance-shaped `plan_update` changes re-route there instead of becoming
+fabricated strength items, and every readback is composed from a re-read of the store. **Closures**:
+`runZones()` resolves through the personal HR model whenever it can speak (one Z2 everywhere, formula
+as fallback); never-anchored calibration lines wait for enough running to read; four UTC-stamp reads
+now key on the stamp's local day; the race ramp words the rate when the calendar is what broke; and a
+peak day's heavy single renders as its own line ahead of the back-off block, inserted server-side in
+`normalizeComposedSession` so no agent can author one. No schema change; the day's three rounds share
+one service-worker step (`v546`).
+
 ## 2026-08-05 — the phase enters the math, the cut becomes a lever, the two engines see the same week
 
 No schema migration (`user_version` stays 91); no service-worker bump (no `public/` change). Three

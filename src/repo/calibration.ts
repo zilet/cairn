@@ -17,7 +17,7 @@ import { pickDayVariant } from "./brain/day-read-rules.js";
 import { normalizedExerciseKey } from "./exercise-canon.js";
 import { getHrModel, type HrModel } from "./hr-model.js";
 import { getEnduranceGoal } from "./profile.js";
-import { localDateISO } from "./shared.js";
+import { localDateISO, localDayOfStamp } from "./shared.js";
 
 export type CalibrationKind = "lthr_tt" | "benchmark_run" | "strength_topset";
 
@@ -440,15 +440,21 @@ function slideFromDays(days: LiftDay[], asOf: string): SlideRead {
 // it moved it to.
 function progressionsSince(lift: MainLift, sinceISO: string | null, asOf: string): number {
   const from = sinceISO ?? shiftISO(asOf, -STRENGTH_HISTORY_DAYS);
+  // The window is a range of LOCAL days, and `created_at` is UTC — so SQLite's own
+  // date() cannot answer it. The query widens by a day on each side (cheap, and it
+  // can only over-collect), and the local day of each stamp does the real bounding
+  // below. See localDayOfStamp.
   const rows = db
     .prepare(
-      `SELECT parsed_json FROM plan_proposals
+      `SELECT parsed_json, created_at FROM plan_proposals
        WHERE status = 'applied' AND parsed_json IS NOT NULL
-         AND date(created_at) > ? AND date(created_at) <= ?`
+         AND date(created_at) > date(?, '-1 day') AND date(created_at) <= date(?, '+1 day')`
     )
-    .all(from, asOf) as Array<{ parsed_json: string }>;
+    .all(from, asOf) as Array<{ parsed_json: string; created_at: string }>;
   let count = 0;
   for (const row of rows) {
+    const day = localDayOfStamp(row.created_at);
+    if (day == null || day <= from || day > asOf) continue;
     let parsed: any = null;
     try {
       parsed = JSON.parse(row.parsed_json);
@@ -661,12 +667,32 @@ export function calibrationStatus(dateISO?: string): { as_of: string; items: Cal
   const items: CalibrationStatusItem[] = [];
   const model = getHrModel(asOf);
   const goal = enduranceGoalActive(asOf);
+  // The main plan lifts, read ONCE for the whole pass. Two table reads plus a
+  // normalize over every exercise row, and the per-lift questions below ask for
+  // the same list again each time round the loop.
+  const lifts = mainPlanLifts();
+
+  // A never-anchored endurance quantity only becomes something worth SAYING once
+  // there is enough running behind it for a test to read at all. The freshness
+  // ladder still runs underneath — this is about which items reach a surface.
+  //
+  // Without the floor a brand-new runner is told every single morning that their
+  // threshold has never been anchored, which is not news: it is the literal state
+  // of someone who has not been running long enough for the model to derive zones
+  // in the first place, and a suggestion that cannot be acted on usefully is noise
+  // wearing the shape of a coach. An item the athlete HAS anchored keeps speaking
+  // whatever the model can say — their own test is theirs to be told about.
+  const readableEndurance = model.confidence !== "insufficient";
+  const pushEndurance = (item: CalibrationStatusItem): void => {
+    if (item.last_anchored == null && !readableEndurance) return;
+    items.push(item);
+  };
 
   // Threshold HR. Only a field test anchors it — a sustained-effort estimate is
   // precisely the thing a test would replace.
   const lthrEvent = lastCalibration("lthr_tt", "lthr", asOf);
   const lthrFreshness = freshnessFor(daysBetween(lthrEvent?.date, asOf), LTHR_ANCHORED_DAYS, LTHR_AGING_DAYS);
-  items.push({
+  pushEndurance({
     key: "lthr",
     domain: "endurance",
     label: "Threshold heart rate",
@@ -686,7 +712,7 @@ export function calibrationStatus(dateISO?: string): { as_of: string; items: Cal
     EASY_PACE_ANCHORED_DAYS,
     EASY_PACE_AGING_DAYS
   );
-  items.push({
+  pushEndurance({
     key: "easy_pace",
     domain: "endurance",
     label: "Easy-pace benchmark",
@@ -695,7 +721,7 @@ export function calibrationStatus(dateISO?: string): { as_of: string; items: Cal
     due: needsAnchor(benchmarkFreshness) && goal && !!model.zones,
   });
 
-  for (const lift of mainPlanLifts()) {
+  for (const lift of lifts) {
     // ONE read per lift, shared with everything else this module answers about it
     // (which confirmation speaks, how fresh it is, whether it is mid-slide).
     const read = liftRead(lift.key, lift.exercise_ids, asOf);
@@ -724,7 +750,7 @@ export function calibrationStatus(dateISO?: string): { as_of: string; items: Cal
       // test is the exact dead end the fairness work exists to close.
       due:
         (needsAnchor(read.freshness) && progressions >= UNVERIFIED_PROGRESSIONS_DUE) ||
-        unverifiedHoldFromRead(read),
+        unverifiedHoldFromRead(read, lifts),
     });
   }
 
@@ -1047,19 +1073,24 @@ export interface UnverifiedRegressionHold {
 }
 
 // A hold, from a read that already knows everything it needs.
-function unverifiedHoldFromRead(read: LiftRead): boolean {
+function unverifiedHoldFromRead(read: LiftRead, lifts?: MainLift[]): boolean {
   if (read.confidence === "verified") return false;
   if (!read.slide.regressing) return false;
   if (read.slide.deep || read.slide.continued) return false;
-  return isTrackedMainLift(read.key);
+  return isTrackedMainLift(read.key, lifts);
 }
 
 // Is this lift one the calibration ladder can put a test in front of? Only the
 // first couple of loaded movements on each plan day, capped at MAX_TRACKED_LIFTS.
-function isTrackedMainLift(key: string): boolean {
+//
+// `lifts` lets a caller that is already walking the plan hand the list in. Reading
+// it costs two table scans plus a normalize over every exercise row, and the
+// callers below ask this question once per lift — so without the hand-in, a status
+// pass pays for the same list as many times as there are lifts in it.
+function isTrackedMainLift(key: string, lifts?: MainLift[]): boolean {
   if (!key) return false;
   try {
-    return mainPlanLifts().some((lift) => lift.key === key);
+    return (lifts ?? mainPlanLifts()).some((lift) => lift.key === key);
   } catch {
     return false;
   }
@@ -1094,10 +1125,17 @@ export function unverifiedRegressionHold(exerciseName: string, dateISO?: string)
   const asOf = isoDay(dateISO || localDateISO());
   const { key, ids } = exerciseIdsForLift(String(exerciseName ?? ""));
   const read = liftRead(key, ids, asOf);
+  // Read once and share it: both questions below ask the same thing of it.
+  let lifts: MainLift[] = [];
+  try {
+    lifts = mainPlanLifts();
+  } catch {
+    lifts = [];
+  }
   return {
     confidence: read.confidence,
-    holds: unverifiedHoldFromRead(read),
-    tracked: isTrackedMainLift(read.key),
+    holds: unverifiedHoldFromRead(read, lifts),
+    tracked: isTrackedMainLift(read.key, lifts),
     deep: read.slide.deep,
     continued: read.slide.continued,
   };

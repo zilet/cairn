@@ -22,6 +22,7 @@ import {
   clinicalPlanProvenance,
   hasExplicitDecisionRevertIntent,
   hasExplicitPlanEditIntent,
+  hasExplicitRunEditIntent,
   reconcileChatPlanReply,
   shouldCreatePhotoFoodPlaceholder,
 } from "../dist/chatTurns.js";
@@ -620,7 +621,7 @@ test("an explicit same-day chat edit bypasses the surprise budget, applies the w
     source: "deterministic",
   });
 
-  const message = "Can you adjust today's Push session plan to be optimal?";
+  const message = "Adjust today's Push session plan to be optimal.";
   assert.equal(hasExplicitPlanEditIntent(message), true);
   const out = applyChatActions(
     {
@@ -759,6 +760,33 @@ test("explicit plan-edit intent recognizes concise natural commands without broa
     false,
     "a training signal alone still obeys surprise policy"
   );
+});
+
+// ONE question guard across the training-edit gates. It lived on the run gate alone,
+// so the SAME sentence carried the athlete's authorization through plan_update and
+// withheld it through set_run — the coach quiet-applied one and held the other. Where
+// the two disagreed, the conservative reading is the one that survives: a question can
+// still be proposed, it just doesn't come pre-authorized.
+test("a question authorizes neither gate, and the same command authorizes both", () => {
+  for (const question of [
+    "Can you make tomorrow's run 8k?",
+    "Should I drop today's squat to 175?",
+    "Would you change my plan for tomorrow?",
+  ]) {
+    assert.equal(hasExplicitPlanEditIntent(question), false, question);
+    assert.equal(hasExplicitRunEditIntent(question), false, question);
+  }
+  for (const command of ["Make tomorrow's run 8k.", "Change Thursday's run to 6k"]) {
+    assert.equal(hasExplicitPlanEditIntent(command), true, command);
+    assert.equal(hasExplicitRunEditIntent(command), true, command);
+  }
+  // Each gate keeps its own vocabulary; only the question guard is shared.
+  assert.equal(hasExplicitRunEditIntent("Drop Thursday's tempo to 6k"), true);
+  assert.equal(hasExplicitPlanEditIntent("Remove Incline Bench from my push day"), true);
+  // A question mark alone is not the signal — a command that trails one still reads as
+  // a command, and prose that merely mentions training still reads as prose.
+  assert.equal(hasExplicitPlanEditIntent("Change my plan, ok?"), true);
+  assert.equal(hasExplicitPlanEditIntent("What should I change about my squat?"), false);
 });
 
 test("a multi-change chat correction rolls back completely when one removal cannot apply", () => {

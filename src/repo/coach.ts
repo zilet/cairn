@@ -21,6 +21,7 @@ import { blockForCoach, getActiveBlock } from "./program-blocks.js";
 import { getProgramState, type ProgramState } from "./program-state.js";
 import { getStrengthJourney } from "./strength-objectives.js";
 import { performanceStanding } from "./performance.js";
+import { weekLayoutRead } from "../domain/training/week-layout.js";
 import { enduranceTestsDue, runVarietyRead, runZones, weeklyRunPlan } from "./run-progression.js";
 import { hrModelForCoach } from "./hr-model.js";
 import { calibrationForCoach } from "./calibration.js";
@@ -33,6 +34,7 @@ import { planDayProgression, programAdjustments, programBalance, recentMuscleLoa
 import { jaccard, memNorm, memoryForCoach, recentLearnings } from "./memory.js";
 import { capStr, getDayIntake, mealPlanForCoach } from "./nutrition.js";
 import { listFuelingFeedback } from "./fueling.js";
+import { fuelDemandWeek } from "./fuel-demand.js";
 import { bodyMetricsContextSlice } from "./body-metrics.js";
 import { getPlan } from "./plan.js";
 import {
@@ -549,6 +551,7 @@ interface CoachContextSignals {
   strengthJourneyView: any;
   runZonesView: any;
   runPlanView: any;
+  weekLayoutView: any;
   flexibleTrainingAgendaView: any;
   dexaTargetingView: any;
   testWeekView: any;
@@ -662,9 +665,18 @@ function buildNutritionSlice(
   signals: CoachContextSignals
 ): Pick<
   CoachContext,
-  "goal" | "goal_mode" | "journey" | "day_intake" | "meal_plan" | "fueling" | "underfueling" | "cut_quality"
+  | "goal"
+  | "goal_mode"
+  | "journey"
+  | "day_intake"
+  | "meal_plan"
+  | "fueling"
+  | "underfueling"
+  | "cut_quality"
+  | "fuel_demand"
 > {
-  const { profile, journeyView, expenditureView, underfuelingView, cutQualityView } = signals;
+  const { profile, journeyView, expenditureView, underfuelingView, cutQualityView, today, runPlanView, flexibleTrainingAgendaView } =
+    signals;
   return {
     goal: computeGoalCheck(profile, { expenditure: expenditureView }), // reuse profile + expenditure already fetched above
     // The journey's SHAPE (v41) — lose | maintain | gain. Always present (even when
@@ -705,6 +717,17 @@ function buildNutritionSlice(
     // Goal-aware complement: during an active cut (losing), is strength holding while
     // the weight comes down? { active:false } off a cut. Adherence-neutral; no score.
     cut_quality: cutQualityView,
+    // Which of the coming seven days carry the biggest work, so the week's food can
+    // be periodized to the week's training instead of one flat number landing on a
+    // long-run day and a rest day alike. Forward-looking only — it never grades a day
+    // that has already happened — and it never moves an accepted calorie target.
+    fuel_demand: brainSignal(`fuel_demand:${today}`, () => {
+      try {
+        return fuelDemandWeek(undefined, undefined, { runPlan: runPlanView, agenda: flexibleTrainingAgendaView });
+      } catch {
+        return null;
+      }
+    }),
   };
 }
 
@@ -832,6 +855,7 @@ function buildRunningSlice(
   | "run_compliance"
   | "run_zones"
   | "run_plan"
+  | "week_layout"
   | "flexible_training_agenda"
   | "run_variety"
   | "endurance_tests"
@@ -842,6 +866,7 @@ function buildRunningSlice(
     enduranceCapacityView,
     runZonesView,
     runPlanView,
+    weekLayoutView,
     flexibleTrainingAgendaView,
     runVarietyView,
     enduranceTestsView,
@@ -876,6 +901,13 @@ function buildRunningSlice(
     // block/zones already computed so nothing recomputes. {available:false} for a
     // pure strength athlete with no running.
     run_plan: runPlanView,
+    // Whether the two lanes' big days sit on top of each other: the heaviest lower
+    // day against the long/quality run, plus any three-hard-days-in-a-row stretch,
+    // with the smallest STRENGTH move that would clear it. The run engine already
+    // places its runs around the planned statics; this is the other half of that
+    // conversation, and the plan-shaping prompts get it as data rather than as a
+    // rule they are asked to remember. `clean:true` for a week with nothing to stack.
+    week_layout: weekLayoutView,
     // A rolling reconciliation of the provisional run slots against what was
     // actually logged. Calendar anchors remain compatible with the stored plan,
     // but completion and the next clean opening follow reality.
@@ -1103,6 +1135,15 @@ function getCoachContextFromSnapshot(): CoachContext {
   const flexibleTrainingAgendaView = brainSignal(`flexible_training_agenda:${today}`, () => {
     try {
       return flexibleTrainingAgenda(today, { runPlan: runPlanView });
+    } catch {
+      return null;
+    }
+  });
+  // Reads the STORED plan first and only falls back to these two, so it costs nothing
+  // extra — both were already computed above.
+  const weekLayoutView = brainSignal(`week_layout:${today}`, () => {
+    try {
+      return weekLayoutRead(today, { runPlan: runPlanView, agenda: flexibleTrainingAgendaView });
     } catch {
       return null;
     }
@@ -1443,6 +1484,7 @@ function getCoachContextFromSnapshot(): CoachContext {
     strengthJourneyView,
     runZonesView,
     runPlanView,
+    weekLayoutView,
     flexibleTrainingAgendaView,
     dexaTargetingView,
     testWeekView,

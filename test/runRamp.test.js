@@ -21,6 +21,8 @@ import { peakLongKm, peakWeeklyKm, raceRamp, SUSTAINABLE_WEEKLY_BUILD_FACTOR } f
 import {
   RACE_VS_SUPPORTING_VARIANTS,
   TIMELINE_CLOSE_VARIANTS,
+  RAMP_RATE_NEAR_VARIANTS,
+  RAMP_RATE_STEEP_VARIANTS,
   TIMELINE_FIT_VARIANTS,
 } from "../dist/repo/run-progression.js";
 import { violatesReadingGrammar } from "../dist/repo/day-read.js";
@@ -488,4 +490,86 @@ test("the run plan never leaks a score", () => {
   assert.ok(!/impact_score/.test(json));
   assert.ok(!/"score"/.test(json));
   assert.ok(!/\b\d{1,3}\s*\/\s*100\b/.test(json));
+});
+
+// ── the RATE story: feasible + needed_build_factor, wired into the words ──────
+// These two were computed and read by nothing but a test. What they know that the
+// fit sentences above do not is the SHAPE of the gap: a destination gap says how
+// far short the reachable peak lands, but says nothing about how hard the weeks
+// would have to climb to close it. Thirty weeks out and six weeks out can share a
+// fit and be nowhere near the same situation.
+
+const rateLine = (plan) =>
+  plan.rationale.find(
+    (line) => RAMP_RATE_NEAR_VARIANTS.includes(line) || RAMP_RATE_STEEP_VARIANTS.includes(line)
+  ) ?? null;
+
+test("the same fit, two runways: the rate line separates what the fit sentence cannot", () => {
+  // Both are "beyond_horizon" — the reachable peak lands well under what a half
+  // usually leans on — so the destination sentence reads the same for each.
+  const far = repo.weeklyRunPlan(
+    REF,
+    planOpts({ goal: { date: "2027-03-03", weeks_to_race: 30 }, compliance: { actual_km: 12 } })
+  );
+  const near = repo.weeklyRunPlan(
+    REF,
+    planOpts({ goal: { date: "2026-09-16", weeks_to_race: 6 }, compliance: { actual_km: 10 } })
+  );
+
+  const farLine = rateLine(far);
+  const nearLine = rateLine(near);
+  assert.ok(farLine, "a runway that would need a slightly hotter build says so");
+  assert.ok(nearLine, "and so does one that would need a far hotter build");
+  assert.ok(
+    RAMP_RATE_NEAR_VARIANTS.includes(farLine),
+    "thirty weeks out, the required step is only a little past sustainable"
+  );
+  assert.ok(
+    RAMP_RATE_STEEP_VARIANTS.includes(nearLine),
+    "six weeks out, the same destination gap needs a far steeper climb"
+  );
+});
+
+test("a required step that IS the sustainable step stays quiet — the fit line already said it", () => {
+  // A stretch this far out needs a weekly step a fraction of a percent above the
+  // ceiling. There is no rate story there, and a second sentence saying so would
+  // be the fit sentence again in different words.
+  const plan = repo.weeklyRunPlan(
+    REF,
+    planOpts({ goal: { date: "2027-05-12", weeks_to_race: 40 }, compliance: { actual_km: 17 } })
+  );
+  assert.equal(rateLine(plan), null, "inside the margin the rate has nothing to add");
+  assert.equal(plan.goal_feasibility.status, "stretch", "…while the destination gap is still named");
+});
+
+test("a trajectory that arrives never gets a rate sentence at all", () => {
+  const plan = repo.weeklyRunPlan(
+    REF,
+    planOpts({ goal: { date: "2027-05-12", weeks_to_race: 40 }, compliance: { actual_km: 20 } })
+  );
+  assert.equal(rateLine(plan), null);
+});
+
+test("the rate words carry no number, and rotate by day", () => {
+  for (const line of [...RAMP_RATE_NEAR_VARIANTS, ...RAMP_RATE_STEEP_VARIANTS]) {
+    assert.equal(violatesReadingGrammar(line), null, `"${line}"`);
+    assert.ok(!/\d/.test(line), `a weekly build factor is never handed to the athlete: "${line}"`);
+    assert.ok(
+      !/\bbehind\b|\bmust\b|\bneed to\b|\bshould be\b|\bfalling short\b|\bnot enough\b|\bfail/i.test(line),
+      `"${line}"`
+    );
+  }
+  for (const set of [RAMP_RATE_NEAR_VARIANTS, RAMP_RATE_STEEP_VARIANTS]) {
+    assert.ok(set.length >= 3, "a variant SET, never one literal printed for weeks");
+    assert.equal(new Set(set).size, set.length, "no duplicate phrasings");
+  }
+
+  const said = [];
+  for (const day of ["2026-08-05", "2026-08-06", "2026-08-07"]) {
+    said.push(
+      rateLine(repo.weeklyRunPlan(day, planOpts({ goal: { date: "2026-09-16", weeks_to_race: 6 }, compliance: { actual_km: 10 } })))
+    );
+  }
+  assert.ok(said.every(Boolean));
+  for (let i = 1; i < said.length; i++) assert.notEqual(said[i], said[i - 1]);
 });

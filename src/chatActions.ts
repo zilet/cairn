@@ -28,6 +28,7 @@ export const CHAT_ACTION_TYPES = [
   "log_weight",
   "plan_update",
   "plan_restructure",
+  "set_run",
   "log_health",
   "add_context_event",
   "resolve_context_event",
@@ -178,6 +179,56 @@ export interface PlanRestructureAction extends ChatActionBase {
   days: unknown[];
 }
 
+// ONE run on ONE plan day. The endurance counterpart to a single-movement
+// plan_update: `changes[]` can only reach LOADED movements, so before this action
+// existed a run request had nowhere to land (see applyChatRunPrescription).
+export type RunPrescriptionKind = "easy" | "quality" | "long";
+export type RunZoneKey = "z1" | "z2" | "z3" | "z4" | "z5";
+
+export interface SetRunAction extends ChatActionBase {
+  type: "set_run";
+  day_number: number;
+  kind?: RunPrescriptionKind | null;
+  // Distance and duration are two ways to say the same ask, so naming one CLEARS
+  // the other (a "make it 8k" over a stored 45-minute run must not persist as
+  // "8 km for 45 minutes"). Naming both keeps both.
+  distance_km?: unknown;
+  duration_min?: unknown;
+  // A zone KEY only. The bpm band is rendered server-side from the athlete's own
+  // HR model — a model-written band would be a population formula in disguise.
+  zone?: RunZoneKey | null;
+  label?: unknown;
+  // Which run, on a day that already carries more than one. Absent and ambiguous
+  // is an honest refusal, never a guess.
+  match_label?: unknown;
+  note?: unknown;
+  reason?: unknown;
+}
+
+const RUN_PRESCRIPTION_KINDS = new Set<string>(["easy", "quality", "long"]);
+
+export function normalizeRunPrescriptionKind(value: unknown): RunPrescriptionKind | null {
+  if (!nonBlank(value)) return null;
+  const key = value.trim().toLowerCase();
+  return RUN_PRESCRIPTION_KINDS.has(key) ? (key as RunPrescriptionKind) : null;
+}
+
+// "z2" / "Z2" / "zone 2" / "2" all mean the same band, and an already-rendered tag
+// ("Z2 (142–148 bpm)") yields its KEY — the bpm are re-derived from the athlete's own
+// model, never trusted from text. Anything else is not a zone.
+export function normalizeRunZoneKey(value: unknown): RunZoneKey | null {
+  if (value == null) return null;
+  const raw = String(value).trim().toLowerCase();
+  const match = /^(?:zone\s*)?z\s*([1-5])\b/.exec(raw) ?? /^([1-5])$/.exec(raw);
+  return match ? (`z${match[1]}` as RunZoneKey) : null;
+}
+
+export function positiveNumberOrNull(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null;
+}
+
 export interface LogHealthAction extends ChatActionBase {
   type: "log_health";
   kind: string;
@@ -248,6 +299,7 @@ export type ChatAction =
   | LogWeightAction
   | PlanUpdateAction
   | PlanRestructureAction
+  | SetRunAction
   | LogHealthAction
   | AddContextEventAction
   | ResolveContextEventAction
@@ -423,6 +475,25 @@ export const CHAT_ACTION_PROMPT_SPECS = {
         { "exercise": "Plank", "sets": 3, "target_seconds": 45, "mode": "timed", "note": "" } ] } ] }`,
     guidance: [
       `plan_restructure changes the split or days-per-week. Use it only when the athlete explicitly asks for a structural change (for example, "move me to 5 days"), proposing a complete plan that honors constraints and carries forward supported loads. The server routes it through autonomy immediately: coach-led postures announce it for the next natural boundary with Discuss/Undo; review-everything still holds it for review. Never describe it as a bare draft and never claim it is live before the server receipt.`,
+    ],
+  },
+  set_run: {
+    type: "set_run",
+    applyMode: "immediate",
+    shape: `// ONE run in the CURRENT week. This is the ONLY action that can write a run
+    // prescription — plan_update reaches loaded movements only, so a run sent through it
+    // silently becomes a lifting movement. Zone is a KEY; Cairn renders the athlete's own
+    // bpm band from their personal HR model.
+    { "type": "set_run", "day_number": <plan day from DATA.plan>, "kind": "easy|quality|long",
+      "distance_km": <number|null>, "duration_min": <number|null>, "zone": "z1|z2|z3|z4|z5|null",
+      "label": "<e.g. 'Easy run' — omit to keep the run's current label>",
+      "match_label": "<which run, ONLY when that day already carries more than one>",
+      "reason": "<one line: why>" }`,
+    guidance: [
+      `set_run sets or adjusts exactly ONE run on ONE plan day of the current week ("make tomorrow's run 8k easy", "drop Thursday's tempo to 6k", "make the long run 75 minutes"). Use the day_number from DATA.plan — never invent one. It preserves that day's lifting and every other run on it. NEVER use plan_update or plan_restructure for a run: their changes[] can only reach loaded movements, so a run sent that way lands as a fake lifting exercise.`,
+      `Distance and duration are two ways to say the same ask, so naming ONE clears the other. Send both only when the athlete asked for both. Zone is a zone KEY ("z2") — never write bpm numbers yourself; Cairn fills in the athlete's own band.`,
+      `Changing the WHOLE week's run mix is not this action — there is no chat action for it. Say what you would change and point at the run plan, which proposes a full week for the athlete to accept.`,
+      `The server applies actions after your prose. Describe the intended run, but NEVER say it was saved, updated, or is live. Cairn adds a verified receipt only after reading the stored run back.`,
     ],
   },
   log_health: {
@@ -646,6 +717,26 @@ export function normalizeChatAction(value: unknown): ChatAction | null {
     case "plan_restructure": {
       const days = arrayOrEmpty(value.days);
       return days.length ? { ...value, type: "plan_restructure", days } : null;
+    }
+    case "set_run": {
+      const dayNumber = Math.trunc(Number(value.day_number));
+      if (!Number.isFinite(dayNumber) || dayNumber < 1) return null;
+      const distance = positiveNumberOrNull(value.distance_km);
+      const duration = positiveNumberOrNull(value.duration_min);
+      const zone = normalizeRunZoneKey(value.zone);
+      const kind = normalizeRunPrescriptionKind(value.kind);
+      // A run edit that names nothing about the run is a no-op the apply path would
+      // only record as a failure — drop it here instead of writing an empty ask.
+      if (distance == null && duration == null && !zone && !nonBlank(value.label) && !kind) return null;
+      return {
+        ...value,
+        type: "set_run",
+        day_number: dayNumber,
+        kind,
+        distance_km: distance,
+        duration_min: duration,
+        zone,
+      };
     }
     case "log_health": {
       const kind = normalizeChatLogHealthKind(value.kind);

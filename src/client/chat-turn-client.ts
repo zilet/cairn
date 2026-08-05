@@ -241,7 +241,7 @@ type ChatTurnRoot = typeof globalThis & {
     // still withholds success wording, but Today must refetch rather than retain the
     // plan we now know is stale.
     const hasPersistedPlanUpdate = applied.some((entry) => {
-      if (entry.type !== "plan_update") return false;
+      if (entry.type !== "plan_update" && entry.type !== "set_run") return false;
       const result = chatTurnRecord(entry.result);
       return result.verified === true || result.persisted === true || result.committed === true;
     });

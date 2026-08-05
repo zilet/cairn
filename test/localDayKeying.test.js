@@ -8,7 +8,7 @@ import { db, repo, resetTables } from "./_seed.js";
 import { localDateISO } from "../dist/repo/shared.js";
 import { runWithTimeZone } from "../dist/tz.js";
 
-beforeEach(() => resetTables("food_notes", "chat_turns"));
+beforeEach(() => resetTables("food_notes", "chat_turns", "plan_proposals"));
 
 test("getDayIntake keys food by the stamped LOCAL day, not the UTC date of created_at", () => {
   // created_at is 00:30 UTC Jun 24 (= 8:30 PM ET on Jun 23). The local day it
@@ -62,4 +62,88 @@ test("createChatTurn captures the active device timezone (so the worker can re-f
   // An invalid header never persists a junk zone.
   const junk = runWithTimeZone("Not/AReal_Zone", () => repo.createChatTurn({ message: "hi" }));
   assert.equal(junk.tz, null);
+});
+
+// ── the same law, applied to `created_at` on plan_proposals ───────────────────
+// Three reads compared a UTC `created_at` against a LOCAL calendar day: by slicing
+// the stamp's first ten characters, or by letting SQLite's own date() do it. Both
+// answer in UTC. Every evening west of Greenwich that is the wrong day — a
+// proposal applied at 8:30 PM in Boston reports as tomorrow — so a "since this
+// date" window silently included or excluded the whole evening.
+
+const ET = "America/New_York";
+// 00:30 UTC on Jun 24 IS 8:30 PM ET on Jun 23. The two calendars disagree, which
+// is the entire point of the fixture.
+const EVENING = "2026-06-24 00:30:00";
+const LOCAL_DAY = "2026-06-23";
+const UTC_DAY = "2026-06-24";
+
+function appliedProposal({ agent = "coach", createdAt, changes }) {
+  db.prepare(
+    `INSERT INTO plan_proposals (agent, status, created_at, parsed_json, raw_output)
+     VALUES (?, 'applied', ?, ?, '')`,
+  ).run(agent, createdAt, JSON.stringify({ changes }));
+}
+
+test("lastAppliedRunPlanDate reports the LOCAL day an auto run plan landed on", () => {
+  appliedProposal({ agent: "auto-run-plan", createdAt: EVENING, changes: [] });
+  assert.equal(
+    runWithTimeZone(ET, () => repo.lastAppliedRunPlanDate()),
+    LOCAL_DAY,
+    "an evening apply belongs to the evening's day, not to tomorrow",
+  );
+  assert.notEqual(runWithTimeZone(ET, () => repo.lastAppliedRunPlanDate()), UTC_DAY);
+});
+
+test("a midday apply reads identically either way — the fix only moves the boundary", () => {
+  appliedProposal({ agent: "auto-run-plan", createdAt: "2026-06-23 15:00:00", changes: [] });
+  assert.equal(runWithTimeZone(ET, () => repo.lastAppliedRunPlanDate()), LOCAL_DAY);
+});
+
+test("appliedProgressionDeloads counts an evening cut into its own local day", () => {
+  appliedProposal({
+    createdAt: EVENING,
+    changes: [{ exercise: "Back Squat", target_weight: 200, progression_action: "deload" }],
+  });
+
+  // A window ENDING on the local day must contain it…
+  assert.equal(
+    runWithTimeZone(ET, () => repo.appliedProgressionDeloads("Back Squat", "2026-06-01", LOCAL_DAY)),
+    1,
+    "the cut happened on the 23rd local, so a window ending the 23rd sees it",
+  );
+  // …and a window that STARTS the day after must not.
+  assert.equal(
+    runWithTimeZone(ET, () => repo.appliedProgressionDeloads("Back Squat", UTC_DAY, "2026-06-30")),
+    0,
+    "and a window opening on the 24th has already missed it",
+  );
+});
+
+test("appliedProgressionEscalations honors the same boundary", () => {
+  appliedProposal({
+    createdAt: EVENING,
+    changes: [{ exercise: "Bench Press", target_weight: 150, progression_escalation: "rep_wave" }],
+  });
+  assert.equal(
+    runWithTimeZone(ET, () => repo.appliedProgressionEscalations("Bench Press", "2026-06-01", LOCAL_DAY)),
+    1,
+  );
+  assert.equal(
+    runWithTimeZone(ET, () => repo.appliedProgressionEscalations("Bench Press", UTC_DAY, "2026-06-30")),
+    0,
+  );
+});
+
+test("away from the boundary nothing moved: a week-long window counts what it always did", () => {
+  for (const day of ["2026-06-20 14:00:00", "2026-06-22 09:15:00", "2026-06-25 11:00:00"]) {
+    appliedProposal({
+      createdAt: day,
+      changes: [{ exercise: "Back Squat", target_weight: 200, progression_action: "deload" }],
+    });
+  }
+  assert.equal(
+    runWithTimeZone(ET, () => repo.appliedProgressionDeloads("Back Squat", "2026-06-19", "2026-06-26")),
+    3,
+  );
 });

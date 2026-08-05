@@ -30,6 +30,7 @@ import {
   recordCalibrationEvent,
 } from "../dist/repo/calibration.js";
 import { normalizedExerciseKey } from "../dist/repo/exercise-canon.js";
+import { runZones } from "../dist/repo/run-progression.js";
 import { localDateISO } from "../dist/repo/shared.js";
 import { violatesReadingGrammar } from "../dist/repo/day-read.js";
 import { projectCoachContext } from "../dist/prompt/context-projection.js";
@@ -597,4 +598,165 @@ test("a lift held for want of a heavy set counts as due, however few raises it h
     dueCalibrations(REF).some((entry) => entry.target_key === normalizedExerciseKey(BENCH)),
     "and it reaches the suggestion list"
   );
+});
+
+// ── ONE resolved zone view ───────────────────────────────────────────────────
+// The bug: `run_zones` (a population formula — Tanaka off an age, Karvonen off a
+// resting HR) and `hr_model` (this athlete's own threshold) were BOTH projected
+// into the same prompt, at the same sites, with different bpm for the same word.
+// A coach handed two answers to "what is easy today" has no way to pick, and the
+// formula's answer is the wrong one by construction.
+
+test("the formula never speaks over the personal model: run_zones IS the model's bands", () => {
+  seedThisAthlete();
+  const model = deriveHrModel(REF);
+  // The model is passed in, exactly as weeklyRunPlan passes it: a plan built for a
+  // date must carry THAT date's bands, so a dated caller resolves the model itself
+  // rather than letting runZones read today's.
+  const zones = runZones({ profile: { age: 44 }, model });
+
+  assert.equal(zones.method, "personal-model", "the resolved view names its real source");
+  assert.equal(zones.available, true);
+  assert.equal(zones.reserve, false, "these are shares of a threshold, not of a reserve");
+
+  const band = (key) => zones.zones.find((z) => z.zone === key);
+  // Every boundary BETWEEN zones is the model's, to the beat.
+  assert.equal(band("Z1").high_bpm, model.zones.z1_top);
+  assert.equal(band("Z2").low_bpm, model.zones.z1_top + 1);
+  assert.equal(band("Z2").high_bpm, model.zones.z2_top);
+  assert.equal(band("Z3").high_bpm, model.zones.z3_top);
+  assert.equal(band("Z4").high_bpm, model.zones.z4_top);
+  assert.equal(band("Z5").low_bpm, model.zones.z4_top + 1);
+  // The outer edges stay OBSERVATIONS rather than an extrapolation of the bands.
+  assert.equal(band("Z1").low_bpm, model.resting, "the floor is the resting heart rate");
+  assert.equal(band("Z5").high_bpm, model.observed_max, "the ceiling is the observed max");
+
+  // The concrete disagreement this closes: Tanaka would have put this athlete's
+  // easy ceiling near 140. Their own running says 148.
+  assert.equal(band("Z2").high_bpm, 148);
+  assert.ok(band("Z2").high_bpm > 140);
+  assert.ok(!/karvonen/i.test(zones.note), "and the note stops claiming a formula it no longer used");
+});
+
+test("the two coach-context keys can no longer disagree about the same beat", () => {
+  seedThisAthlete();
+  const model = deriveHrModel(REF);
+  const zones = runZones({ profile: { age: 44 }, model });
+  const spoken = hrModelForCoach(REF);
+
+  // hr_model renders the band in words ("Z2 (142–148 bpm)") and run_zones carries
+  // the same two numbers. Every band where hr_model states both edges must state
+  // the ones run_zones is carrying.
+  for (const key of ["z2", "z3", "z4"]) {
+    const band = zones.zones.find((z) => z.zone === key.toUpperCase());
+    assert.match(
+      spoken.zones[key],
+      new RegExp(`${band.low_bpm}[–-]${band.high_bpm} bpm`),
+      `${key}: the two keys state the same beats`
+    );
+  }
+  // The open-ended ends agree on the one edge they both name.
+  assert.match(spoken.zones.z1, new RegExp(`under ${model.zones.z1_top} bpm`));
+  assert.match(spoken.zones.z5, new RegExp(`${model.zones.z4_top + 1}\\+ bpm`));
+});
+
+test("a degenerate model (thresholds out of order) falls back to the formula rather than emit an inverted band", () => {
+  // z2_top < z1_top: a corrupt or nonsensical model. Feeding this straight through
+  // resolveRunZones' arithmetic would hand back a Z2 band whose high sits under its
+  // own low (and a Z2 that reads lower than Z1) — never a real heart-rate zone.
+  const degenerate = {
+    observed_max: 190,
+    lthr: 150,
+    lthr_basis: "sustained_effort",
+    zones: { z1_top: 150, z2_top: 148, z3_top: 160, z4_top: 170 },
+    resting: 50,
+    confidence: "estimated",
+    basis_runs: 5,
+    window_days: 183,
+    updated_at: null,
+  };
+  const zones = runZones({ profile: { age: 44 }, model: degenerate });
+
+  assert.notEqual(zones.method, "personal-model", "a broken model must not be trusted over the formula");
+  assert.equal(zones.method, "age", "the athlete still gets an honest age-formula read");
+
+  // Every band the athlete is actually shown is a real, increasing range.
+  const byZone = new Map(zones.zones.map((z) => [z.zone, z]));
+  const order = ["Z1", "Z2", "Z3", "Z4", "Z5"];
+  for (const key of order) {
+    const band = byZone.get(key);
+    assert.ok(band.high_bpm >= band.low_bpm, `${key} must not be inverted`);
+  }
+  for (let i = 1; i < order.length; i++) {
+    // The age-formula bands share a boundary between adjacent zones (Z1's high is
+    // Z2's low), so this checks non-decreasing rather than strictly-separated —
+    // the point is just that nothing has gone BACKWARDS, unlike the degenerate
+    // personal-model read this replaced.
+    assert.ok(
+      byZone.get(order[i]).low_bpm >= byZone.get(order[i - 1]).high_bpm,
+      `${order[i]} must not sit below ${order[i - 1]}`
+    );
+  }
+});
+
+test("with nothing logged the formula is still there — the resolution is a preference, not a gate", () => {
+  const zones = runZones({ profile: { age: 44 } });
+  assert.equal(zones.available, true, "a brand-new athlete's zones do not go quiet");
+  assert.equal(zones.method, "age", "…they are just honestly labelled as an age estimate");
+  const z2 = zones.zones.find((z) => z.zone === "Z2");
+  assert.ok(z2.low_bpm > 0 && z2.high_bpm > z2.low_bpm);
+});
+
+test("an explicitly passed null model reads the raw formula, so the fallback stays testable", () => {
+  seedThisAthlete();
+  const model = deriveHrModel(REF);
+  const raw = runZones({ profile: { age: 44 }, model: null });
+  assert.equal(raw.method, "age");
+  assert.notEqual(
+    raw.zones.find((z) => z.zone === "Z2").high_bpm,
+    model.zones.z2_top,
+    "the formula and the model really do disagree — which is why one of them has to win"
+  );
+});
+
+// ── the calibration line stays quiet for a brand-new runner ───────────────────
+// A never-anchored quantity is not news when there is not yet enough running for
+// a test to read at all. It is the literal state of someone who just started, and
+// printing it every morning is noise wearing the shape of a suggestion.
+
+test("a runner with no history is not told their threshold has never been anchored", () => {
+  const items = calibrationStatus(REF).items.filter((item) => item.domain === "endurance");
+  assert.deepEqual(items, [], "nothing to say, so nothing is said");
+});
+
+test("…and the moment there is enough running to read, the same items surface", () => {
+  seedThisAthlete();
+  deriveHrModel(REF);
+  const items = calibrationStatus(REF).items.filter((item) => item.domain === "endurance");
+  assert.deepEqual(
+    items.map((item) => item.key).sort(),
+    ["easy_pace", "lthr"],
+    "both endurance anchors are back once a test would mean something"
+  );
+  for (const item of items) {
+    assert.equal(item.freshness, "never", "the freshness ladder underneath is untouched");
+    assert.equal(item.last_anchored, null);
+  }
+});
+
+test("a test the athlete actually ran is always theirs to be told about", () => {
+  // No running seeded at all — the model cannot derive zones. An ANCHORED item
+  // still speaks: the floor is about never-anchored noise, not about hiding a
+  // result the athlete produced.
+  recordCalibrationEvent({
+    kind: "lthr_tt",
+    date: back(200),
+    target_key: "lthr",
+    result: { lthr: 168 },
+    source: "detected",
+  });
+  const items = calibrationStatus(REF).items.filter((item) => item.domain === "endurance");
+  assert.deepEqual(items.map((item) => item.key), ["lthr"]);
+  assert.equal(items[0].last_anchored, back(200));
+  assert.equal(items[0].freshness, "stale", "and its real freshness is reported, not softened");
 });

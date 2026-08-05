@@ -5786,6 +5786,10 @@ button.prow-name:hover{color:var(--accent)}
 .dayfuel-rem{margin-top:4px;color:var(--sage);font-weight:600;font-size:.9rem}
 .dayfuel-rem .numeral{font-size:1rem}
 .dayfuel-rem-done{color:var(--muted);font-weight:500}
+/* The big-day fuel note: quieter than the "remaining" line above it — it shapes the
+   day, it doesn't count anything. Present only on a day carrying the week's bigger
+   work, and never on a past day. */
+.dayfuel-demand{margin-top:6px;color:var(--ink-2);font-size:.86rem;line-height:1.45}
 .dayfuel-list{margin-top:12px;display:flex;flex-direction:column}
 .dayfuel-row{display:flex;align-items:center;gap:11px;width:100%;text-align:left;cursor:pointer;
   background:transparent;border:none;border-top:1px solid var(--line);padding:10px 0;

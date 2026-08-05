@@ -1076,8 +1076,34 @@ TEXT, not parseable JSON, so it deliberately does NOT reuse the JSON-centric `ru
 
 The raw reply is split by `parseChatReply` into `{reply, actions}`; safe actions apply via the lifted
 `applyChatActions({actions}, {agent, imagePath, message})` (`log_*`/`set_profile`/`*_memory`/
-`add_context_event` apply now; `plan_update`/`plan_restructure` become DRAFT proposals), then the
-assistant `chat_messages` row is written + linked.
+`add_context_event` apply now; `plan_update`/`plan_restructure`/`set_run` route through
+`applyProposalWithAutonomy`, so server policy — not the model — decides whether they land, announce,
+or wait for review), then the assistant `chat_messages` row is written + linked.
+
+**A run is `set_run`, never a `plan_update` change.** A change carrying `kind:'cardio'` has routed to
+`setWeeklyRuns` for some time — `applyProposalUnit` lifts it out of `changes[]` before
+`applyPlanChange` sees it. The hole was a change with NO `kind`: `applyPlanChange` reaches LOADED
+movements only, so an endurance prescription arriving as a plain `{exercise, target_distance_km}` was
+added as a fabricated lifting movement, which then read back intact and earned a "Saved and verified"
+receipt. `set_run` adjusts ONE run on one plan day through the same `cardio[]` → `setWeeklyRuns`
+writer the Monday tick and the run-plan proposal use, folding the edit onto that day's CURRENT cardio
+rows so the untouched runs (and their zones) survive; a whole week stays a proposal. Zones are stored
+as the personal HR model's band via `runZoneTag`, never a population formula's. An endurance-shaped
+`plan_update` change is re-routed to that same path rather than becoming a lift — except a cardio
+REMOVAL, which neither writer can express, and which is refused in words instead of becoming a
+verified no-op. A `set_run` naming a weekday slot that has already gone by is refused too: the
+day_number is a Monday-anchored slot, so rewriting a past one would change what compliance says the
+week prescribed. **Every run receipt is composed from a re-read** (`verifyRunReadback` over
+`getPlanDay`, the reader the Plan surface uses); `reconcileChatRunReply` states plainly when a run was
+refused, held, or failed to verify, and replaces model prose that claimed otherwise.
+
+**The `set_run` payload carries the EDIT, not a snapshot.** A proposal can be held or scheduled, and
+`setWeeklyRuns` replaces a day's cardio wholesale, so a build-time copy of the day would overwrite a
+sibling run edited in between. Chat marks its entries `cardio_edit:true` with the resolved edit
+attached; `applyProposalUnit` re-reads the day's cardio at apply time and re-folds the edit onto it.
+Unmarked `cardio[]` entries (the Monday tick, run-plan proposals, a restructure's week of runs) keep
+their wholesale meaning untouched. `src/repo/run-edit.ts` is the one merge both sides call, and is
+dependency-free so the repo layer can import it without a cycle.
 
 Progress rides an **`EventEmitter` bus** (`onTurnEvent(id, cb)`) that the SSE endpoint forwards:
 `phase` / `delta` (a live reply chunk) / `reset` (streaming fell back — clear the partial bubble) /

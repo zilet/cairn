@@ -709,7 +709,100 @@ export function lowerBodyPlanDayNumbers(): Set<number> {
   return set;
 }
 
-interface PlanRunItem {
+// Lower-body work that carries a genuine systemic ask — the squat/hinge/lunge family,
+// as opposed to an isolation curl/extension that shares the same muscle group. Matched
+// over the NORMALIZED name (the same treatment cut-quality's compound gate uses), and
+// deliberately narrow: this decides which lower day reads as the week's HEAVIEST, and a
+// generous pattern would let a leg-extension day outrank a squat day on set count alone.
+const LOWER_COMPOUND_PATTERN =
+  /\b(squat|deadlift|rdl|romanian|good ?morning|lunge|split squat|bulgarian|step[- ]?up|leg press|hack|hip thrust|glute bridge|trap bar|clean|snatch)\b/;
+
+// How heavy a plan day's lower-body work actually is, per day, so the week's HEAVIEST
+// lower day can be named rather than guessed. Three measures rather than one score,
+// because a plan can be fully loaded, partly loaded, or carry no target loads at all,
+// and each of those has a different honest answer to "which day is the big one":
+//   tonnage       — sets x mid-reps x planned load over the heavy-lower items. The real
+//                   answer whenever the plan carries target loads. 0 for a bodyweight or
+//                   assisted prescription (negative weight = assist; see CLAUDE.md).
+//   compound_sets — sets of squat/hinge/lunge work. What ranks a plan whose loads were
+//                   never filled in, and what keeps a high-rep isolation day from
+//                   outranking a low-rep barbell day.
+//   sets          — every heavy-lower set, the last resort.
+// This is an ordering, never a number shown to anyone.
+export interface HeavyLowerDayLoad {
+  day_number: number;
+  name: string;
+  focus: string | null;
+  tonnage: number;
+  compound_sets: number;
+  sets: number;
+}
+
+// The plan's heavy-lower (squat/hinge) days, heaviest first. Ties are left adjacent in
+// day order, so a caller asking for "the top day" can see when two days are genuinely
+// equal instead of being handed an arbitrary winner. [] when there's no plan.
+export function heavyLowerDayLoads(): HeavyLowerDayLoad[] {
+  const heavy = lowerBodyPlanDayNumbers();
+  if (!heavy.size) return [];
+  let rows: any[] = [];
+  try {
+    rows = db
+      .prepare(
+        `SELECT pd.day_number AS day_number, pd.name AS name, pd.focus AS focus,
+                pi.kind AS kind, pi.sets AS sets, pi.rep_low AS rep_low, pi.rep_high AS rep_high,
+                pi.target_weight AS target_weight,
+                e.name AS exercise, e.muscle_group AS muscle_group
+           FROM plan_days pd
+           LEFT JOIN plan_items pi ON pi.plan_day_id = pd.id
+           LEFT JOIN exercises e ON e.id = pi.exercise_id
+          ORDER BY pd.day_number, pi.position`
+      )
+      .all() as any[];
+  } catch {
+    return [];
+  }
+  const map = new Map<number, HeavyLowerDayLoad>();
+  for (const r of rows) {
+    const dn = Number(r.day_number);
+    if (!Number.isFinite(dn) || !heavy.has(dn)) continue;
+    const cur =
+      map.get(dn) ??
+      ({
+        day_number: dn,
+        name: String(r.name ?? "").trim(),
+        focus: r.focus == null ? null : String(r.focus),
+        tonnage: 0,
+        compound_sets: 0,
+        sets: 0,
+      } satisfies HeavyLowerDayLoad);
+    map.set(dn, cur);
+    const exercise = r.exercise == null ? "" : String(r.exercise).trim();
+    if (!exercise || r.kind === "cardio") continue;
+    const group = canonicalGroup(r.muscle_group) ?? classifyMuscleGroup(exercise);
+    if (!group || !HEAVY_LOWER_GROUPS.has(group)) continue;
+    const sets = Number(r.sets);
+    if (!Number.isFinite(sets) || sets <= 0) continue;
+    const low = Number(r.rep_low);
+    const high = Number(r.rep_high);
+    const reps =
+      Number.isFinite(low) && Number.isFinite(high)
+        ? (low + high) / 2
+        : Number.isFinite(low)
+          ? low
+          : Number.isFinite(high)
+            ? high
+            : 8;
+    const load = Number(r.target_weight);
+    cur.sets += sets;
+    if (LOWER_COMPOUND_PATTERN.test(normalizeExerciseName(exercise))) cur.compound_sets += sets;
+    if (Number.isFinite(load) && load > 0) cur.tonnage += sets * reps * load;
+  }
+  return [...map.values()].sort(
+    (a, b) => b.tonnage - a.tonnage || b.compound_sets - a.compound_sets || b.sets - a.sets || a.day_number - b.day_number
+  );
+}
+
+export interface PlanRunItem {
   day_number: number;
   label: string;
   kind: "easy" | "long" | "quality";
@@ -721,7 +814,7 @@ interface PlanRunItem {
 // rides in `note`, exercise_id NULL — see plan.savePlanDay). A ride/swim/hike is skipped:
 // it doesn't load the legs the way a run does. Kind is inferred from the note/zone/interval
 // structure (long > quality > easy). Deterministic; [] on no plan / no runs.
-function planRunItems(): PlanRunItem[] {
+export function planRunItems(): PlanRunItem[] {
   let rows: any[] = [];
   try {
     rows = db

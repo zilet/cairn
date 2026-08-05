@@ -41,6 +41,12 @@ type TodayPlanSessionPrepPrescription = import("../contracts/client.js").ClientP
 type TodayPlanSessionPrepStrengthJourney = import("../contracts/client-api.js").ClientStrengthJourney;
 type TodayPlanSessionPrepPendingOffPlan = { name: string; mode?: string | null };
 type TodayPlanSessionPrepPrefill = { weight: unknown; reps: unknown; rir: unknown; duration_sec?: unknown };
+type TodayPlanSessionPrepCardAttribution = {
+  key: string;
+  exercise: string;
+  sets: TodayPlanSessionPrepLoggedSet[];
+  siblings: number;
+};
 type TodayPlanSessionPrepState = {
   logDate: string;
   day: number | null;
@@ -86,6 +92,7 @@ type TodayPlanSessionPrepResult = {
   strengthJourney: TodayPlanSessionPrepStrengthJourney | null;
   rxFor(name: unknown): TodayPlanSessionPrepPrescription | null;
   prefillFor(item: TodayPlanSessionPrepPlanItem): TodayPlanSessionPrepPrefill;
+  attributionFor(item: TodayPlanSessionPrepPlanItem): TodayPlanSessionPrepCardAttribution | null;
   exDone: number;
   exTotal: number;
   hasSyncedCardioToday: boolean;
@@ -139,8 +146,14 @@ type TodayPlanSessionPrepModelApi = {
     item: TodayPlanSessionPrepPlanItem,
     loggedByEx: Record<string, TodayPlanSessionPrepLoggedSet[]>,
     lastSets: Record<string, Record<string, unknown> | null>,
-    rx?: TodayPlanSessionPrepPrescription | null
+    rx?: TodayPlanSessionPrepPrescription | null,
+    attributed?: TodayPlanSessionPrepCardAttribution | null
   ): TodayPlanSessionPrepPrefill;
+  cardAttribution(params: {
+    items: TodayPlanSessionPrepPlanItem[];
+    loggedByEx: Record<string, TodayPlanSessionPrepLoggedSet[]>;
+    isCardioItem(item: TodayPlanSessionPrepPlanItem): boolean;
+  }): Map<TodayPlanSessionPrepPlanItem, TodayPlanSessionPrepCardAttribution>;
 };
 type TodayPlanSessionPrepDataApi = {
   loadLastSets(
@@ -271,9 +284,21 @@ type TodayPlanSessionPrepDataApi = {
         cardioLabel: deps.cardioLabel,
       });
     const rxFor = (name: unknown) => (name ? rxByEx[String(name).toLowerCase()] || null : null);
+    // Cards, not exercise names, are what the athlete logs into. On a peak day the
+    // top single and its back-off block share one name, so every per-card question
+    // — what to prefill, how many sets are done — asks the attribution, not the pile.
+    const attribution = todayPlanSessionModel.cardAttribution({
+      items,
+      loggedByEx,
+      isCardioItem: deps.isCardioItem,
+    });
+    const attributionFor = (item: TodayPlanSessionPrepPlanItem) => attribution.get(item) || null;
     const prefillFor = (item: TodayPlanSessionPrepPlanItem): TodayPlanSessionPrepPrefill =>
-      todayPlanSessionModel.prefillFor(item, loggedByEx, lastSets, rxFor(item.exercise));
-    const exDone = strengthItems.filter((item) => (loggedByEx[String(item.exercise)] || []).length).length;
+      todayPlanSessionModel.prefillFor(item, loggedByEx, lastSets, rxFor(item.exercise), attributionFor(item));
+    const exDone = strengthItems.filter((item) => {
+      const attributed = attributionFor(item);
+      return (attributed ? attributed.sets : loggedByEx[String(item.exercise)] || []).length > 0;
+    }).length;
     const exTotal = strengthItems.length;
     const hasSyncedCardioToday = cardioEfforts.length > 0;
     const isRunDay = (cardioItems.length > 0 || hasSyncedCardioToday) && exTotal === 0;
@@ -301,6 +326,7 @@ type TodayPlanSessionPrepDataApi = {
       strengthJourney,
       rxFor,
       prefillFor,
+      attributionFor,
       exDone,
       exTotal,
       hasSyncedCardioToday,

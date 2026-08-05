@@ -4,6 +4,7 @@ import type { UnifiedSignalState } from "../repo/signal-state.js";
 import type { EnduranceCapacityRead } from "../repo/endurance-capacity.js";
 import type { ResolvedTrainingIntent } from "../repo/training-intent.js";
 import type { EffectiveLocationContext } from "../repo/location-context.js";
+import type { FuelDemandWeek } from "../repo/fuel-demand.js";
 
 export type CoachRecord = Record<string, any>;
 export type CoachGoalMode = "lose" | "maintain" | "gain";
@@ -274,6 +275,13 @@ export interface CoachContextEnvelope {
   fueling: CoachFuelingFeedback[];
   underfueling: CoachRecord | null;
   cut_quality: CoachRecord | null;
+  // Which of the coming days carry the week's biggest work (a long run, a quality
+  // session, a heavy lower day, a strength+run double) — so carbohydrate can be
+  // biased toward them instead of one flat number being spread across seven very
+  // different days. It never carries a target: the accepted nutrition target stays
+  // authoritative, and this read only says which days are asking for more. Additive +
+  // optional, so partial context builders and imported DBs never synthesize it.
+  fuel_demand?: FuelDemandWeek | null;
   family: CoachFamilyMember[];
   body_composition: CoachRecord | null;
   body_metrics: CoachRecord | null;
@@ -301,6 +309,12 @@ export interface CoachContextEnvelope {
   // Suggestions only; nothing here gates anything. Optional, same reason.
   calibration?: CoachRecord | null;
   run_plan: CoachRecord | null;
+  // Does the lifting week compose with the running week — the heaviest lower day
+  // against the long/quality run, plus any 3-hard-days-in-a-row stretch. The
+  // structured counterpart to the evolution prompt's placement rule, so a proposed
+  // restructure can be checked against the real week instead of against prose.
+  // Optional so partial context builders and imported DBs never synthesize it.
+  week_layout?: CoachRecord | null;
   flexible_training_agenda: CoachRecord | null;
   run_variety: CoachRecord | null;
   endurance_tests: CoachRecord[];

@@ -77,6 +77,12 @@ const TRAINING_FULL = [
 
 // The endurance counterpart. Small (and empty for a pure strength user), so it
 // rides along wherever runs could plausibly shape the answer.
+//
+// `run_zones` here is the RESOLVED zone view, not a second opinion: whenever the
+// personal HR model can speak, its bands ARE these numbers (resolveRunZones, in
+// src/repo/run-progression.ts). So the sites that carry both this and `hr_model`
+// — day_read and session — are carrying one answer described two ways, never two
+// answers to the same question.
 const ENDURANCE = [
   "endurance_capacity",
   "endurance_goal",
@@ -131,6 +137,11 @@ const BRAIN = [
   "next_step",
 ] as const;
 
+// Everything the bundles above cover, for the one site that carries the lot (chat).
+// `fuel_demand` is deliberately absent: it is a narrow periodization read wired to the
+// three sites that plan or read a day's food (meal_plan, day_read, and the check-in's
+// rendered block), and chat already sees the same training week through `plan`,
+// `run_plan` and `flexible_training_agenda`.
 const ALL_KEYS = [
   ...PERSON,
   ...TRAINING_FULL,
@@ -194,7 +205,13 @@ const PLAN_SITE: PromptSiteSpec = {
 
 export const PROMPT_CONTEXT_SITES = {
   coach: PLAN_SITE,
-  program_evolution: PLAN_SITE,
+  // The one site that RESTRUCTURES the week rather than adjusting next week's targets,
+  // so it is the only one handed `week_layout` — the deterministic read of whether the
+  // heaviest lower day already collides with the long/quality run. The placement rule
+  // has lived in the prose bullet alone (HOW TO EVOLVE), which gave the model something
+  // to remember and nothing to check itself against; this gives it the actual week.
+  // Deliberately NOT on the coach site: that prompt nudges loads inside a fixed shape.
+  program_evolution: { ...PLAN_SITE, keys: [...PLAN_SITE.keys, "week_layout"] },
 
   // The Brief. Renders the conductor, signal state, the whole training + endurance
   // + connected-brain chain, body comp, felt/learned signals and today's fuel.
@@ -215,6 +232,10 @@ export const PROMPT_CONTEXT_SITES = {
       "coaching_focus",
       "signal_state",
       "next_step",
+      // Which of the coming days carry the biggest work. The Brief speaks about
+      // TODAY's fuel, and "today is the long-run day" is the one fact that changes
+      // what a calm word about food should be — the day's shape, not a new target.
+      "fuel_demand",
       // The personal HR model + the calibration ladder. The Brief is where a run
       // gets prescribed to a pulse ("easy today" has to mean a bpm this athlete
       // actually holds), and where a stale threshold or an unverified 1RM finds
@@ -296,6 +317,11 @@ export const PROMPT_CONTEXT_SITES = {
       "trajectory",
       "signal_state",
       "coaching_focus",
+      // The week's demand map — which days carry the long run, the quality session,
+      // the heavy lower work or a double. This is the one site that plans SEVEN days
+      // of food at once, so it is the site where "time more carbs around training"
+      // stops being generic advice and names the actual days.
+      "fuel_demand",
     ],
     sessions: SESSIONS_RECENT,
   },

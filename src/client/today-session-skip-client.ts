@@ -118,6 +118,19 @@ type TodaySessionSkipOutboxGlobals = {
     if (!line.querySelector("[data-unskip]")) line.classList.add("skipline-empty");
   }
 
+  // A skip is recorded against the LIFT, by name — the server has no notion of a
+  // per-card skip. A peak day renders that one lift twice (top single, back-off
+  // block), so both cards have to leave together or the surface would keep offering
+  // work the server has already recorded as skipped. One card per exercise returns
+  // just itself.
+  function siblingCards(card: HTMLElement, deps: TodaySessionSkipDeps): HTMLElement[] {
+    const name = (card.dataset.card || "").toLowerCase();
+    if (!name) return [card];
+    const all = [...deps.root.querySelectorAll<HTMLElement>(".ex[data-card]")]
+      .filter((el) => (el.dataset.card || "").toLowerCase() === name);
+    return all.length ? all : [card];
+  }
+
   async function skipFromCard(
     card: HTMLElement | null,
     exercise: string,
@@ -149,21 +162,26 @@ type TodaySessionSkipOutboxGlobals = {
     }
     if (!surfaceStillCurrent(deps, actionDate, actionTab)) return;
     if (result._queued !== true) deps.invalidate("today:session:" + actionDate);
-    const anchor = card.nextElementSibling;
-    deps.collapseEl(card, () => {
-      if (!surfaceStillCurrent(deps, actionDate, actionTab)) return;
-      card.remove();
-      addSkipName(exercise, deps);
-      if (result._queued !== true && deps.state.tab === "today") void deps.renderToday({ soft: true });
-    });
+    const cards = siblingCards(card, deps);
+    const anchor = cards[cards.length - 1].nextElementSibling;
+    let outstanding = cards.length;
+    for (const el of cards) {
+      deps.collapseEl(el, () => {
+        if (!surfaceStillCurrent(deps, actionDate, actionTab)) return;
+        el.remove();
+        if (--outstanding > 0) return;
+        addSkipName(exercise, deps);
+        if (result._queued !== true && deps.state.tab === "today") void deps.renderToday({ soft: true });
+      });
+    }
     deps.toast(result._queued === true ? `${exercise} skip saved — will sync` : `${exercise} skipped today`, {
       action: "Undo",
-      onAction: () => { void undoSkip(card, anchor, exercise, deps, actionDate, actionTab); },
+      onAction: () => { void undoSkip(cards, anchor, exercise, deps, actionDate, actionTab); },
     });
   }
 
   async function undoSkip(
-    card: HTMLElement,
+    cards: HTMLElement[],
     anchor: Element | null,
     exercise: string,
     deps: TodaySessionSkipDeps,
@@ -192,15 +210,16 @@ type TodaySessionSkipOutboxGlobals = {
     if (!queued) deps.invalidate("today:session:" + actionDate);
     if (deps.state.tab !== "today") return;
     removeSkipName(exercise, deps);
-    if (!card.isConnected) {
+    const detached = cards.filter((el) => !el.isConnected);
+    if (detached.length) {
       const before = anchor && anchor.isConnected ? anchor : deps.root.querySelector(".addex");
       if (!before || !before.parentNode) {
         deps.renderToday();
         return;
       }
-      before.parentNode.insertBefore(card, before);
+      for (const el of detached) before.parentNode.insertBefore(el, before);
     }
-    deps.expandEl(card);
+    for (const el of cards) deps.expandEl(el);
     if (queued) deps.toast(`${exercise} restore saved — will sync`);
   }
 

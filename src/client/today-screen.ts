@@ -413,6 +413,7 @@ async function renderToday(opts: any = {}) {
             isRunDay,
             preserveItemOrder: !!prep.dailySession,
             prefillFor,
+            attributionFor: prep.attributionFor,
             rxFor,
           },
           todayPlanSurfaceRendererDeps()
@@ -1292,6 +1293,7 @@ async function renderSession(opts: any = {}): Promise<void> {
       isRunDay: prep.isRunDay,
       preserveItemOrder: !!dailySession,
       prefillFor: prep.prefillFor,
+      attributionFor: prep.attributionFor,
       rxFor: prep.rxFor,
     },
     todayPlanSurfaceRendererDeps()

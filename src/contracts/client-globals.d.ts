@@ -2758,6 +2758,7 @@ declare global {
       MEAL_LABEL: Record<string, string>;
       mealLabelHtml(meal: unknown): string;
       dayFuelHtml(day: Record<string, unknown> | null | undefined): string;
+      dayFuelDemandHtml(day: Record<string, unknown>): string;
     };
 
     CairnDayFuelController: {
@@ -3750,11 +3751,25 @@ declare global {
         planNames: Set<string>,
         loggedByEx: Record<string, Array<Record<string, unknown>>>
       ): Array<{ name: string; mode?: string | null }>;
+      cardAttribution(params: {
+        items: Array<Record<string, unknown>>;
+        loggedByEx: Record<string, Array<Record<string, unknown>>>;
+        isCardioItem(item: Record<string, unknown>): boolean;
+      }): Map<
+        Record<string, unknown>,
+        { key: string; exercise: string; sets: Array<Record<string, unknown>>; siblings: number }
+      >;
       prefillFor(
         item: Record<string, unknown>,
         loggedByEx: Record<string, Array<Record<string, unknown>>>,
         lastSets: Record<string, Record<string, unknown> | null>,
-        rx?: Partial<ClientPrescription> | null
+        rx?: Partial<ClientPrescription> | null,
+        attributed?: {
+          key: string;
+          exercise: string;
+          sets: Array<Record<string, unknown>>;
+          siblings: number;
+        } | null
       ): Record<string, unknown>;
     };
 
@@ -3836,6 +3851,12 @@ declare global {
           strengthJourney: ClientStrengthJourney | null;
           rxFor(name: unknown): unknown;
           prefillFor(item: Record<string, unknown>): Record<string, unknown>;
+          attributionFor(item: Record<string, unknown>): {
+            key: string;
+            exercise: string;
+            sets: Array<Record<string, unknown>>;
+            siblings: number;
+          } | null;
           exDone: number;
           exTotal: number;
           hasSyncedCardioToday: boolean;
@@ -3998,6 +4019,12 @@ declare global {
             rir?: unknown;
             duration_sec?: unknown;
           };
+          attributionFor?(item: Record<string, unknown>): {
+            key: string;
+            exercise: string;
+            sets: unknown[];
+            siblings: number;
+          } | null;
           rxFor(name: unknown): unknown;
         },
         deps: {

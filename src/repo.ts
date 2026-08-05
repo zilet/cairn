@@ -20,6 +20,7 @@ export * from "./repo/brain-evaluations.js";
 export * from "./repo/nutrition.js";
 export * from "./repo/nutrition-progress.js"; // honest multi-week recorded-intake read; gaps and unknown nutrients stay null
 export * from "./repo/fuel-state.js"; // pace-aware protein read for the Brief's FUEL line + day-read signal
+export * from "./repo/fuel-demand.js"; // which days carry the week's biggest work (long run / quality / heavy lower / double)
 export * from "./repo/intake-window.js"; // completed-day food coverage; missing days stay unknown
 export * from "./repo/underfueling.js"; // uncertainty-aware multi-channel fuel protection read
 export * from "./repo/underfueling-snapshot.js"; // fully hydrated, memoized protective read shared by every planning surface

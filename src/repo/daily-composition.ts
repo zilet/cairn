@@ -1,4 +1,8 @@
 import { normalizeSessionSuggestionResult } from "./adaptive-session.js";
+// Imported explicitly, NOT leaned on as a global: client-globals.d.ts declares a
+// `pickDayVariant` for the client bundle's shared scope, so a server module that
+// forgets this import still typechecks and then throws at runtime.
+import { pickDayVariant } from "./brain/day-read-rules.js";
 import { cardioPlanIdentity } from "./cardio-plan-identity.js";
 import { canonicalGroup } from "./exercise-canon.js";
 import { cardioPainRelevance, type DailyDecisionEnvelope } from "./daily-decision.js";
@@ -206,6 +210,74 @@ function clampHeldTarget(item: any, envelope: DailyDecisionEnvelope): boolean {
     changed = true;
   }
   return changed;
+}
+
+// ---- the peak week's top tier ------------------------------------------------
+// A peak/realization day is TWO-tier work: one heavy set worked up to, then the
+// back-off block. `authorized_target` has only ever described the back-off block —
+// correctly, since a consumer that knows nothing about peak weeks must land on a
+// real session rather than on one near-maximal single with the rest missing — so
+// the heavy set survived only as prose inside the candidate's note, and the
+// composed session the athlete actually read was the back-off block alone.
+//
+// It is inserted HERE, from the envelope, and nowhere else. Both composition
+// paths (the deterministic fallback and the agent's own) come through this
+// normalizer, so one insertion point covers both; and because `normalizeItem`
+// whitelists item fields, an agent has no way to author or forge a top set of its
+// own. Like every other authorized number, it is the server's to grant.
+
+const TOP_SET_NOTES: readonly [string, ...string[]] = [
+  "Work up to this single, then drop to the block below.",
+  "One heavy set first — build up to it, then take the back-off work.",
+  "Open with this after your warm-up singles, then the block underneath.",
+];
+
+// A peak single is a near-maximal effort, and every day-level brake in this file
+// exists because near-maximal is exactly what those days are not for. The
+// candidate gate in daily-decision already withdraws the top set when the LIFT
+// steps back; this is the same question asked of the DAY, which can be eased by a
+// cap the lift never saw.
+function dayAllowsTopSet(envelope: DailyDecisionEnvelope): boolean {
+  if (envelope.caps.intensity !== "normal") return false;
+  if (envelope.caps.volume === "minimal") return false;
+  const cycle = envelope.recovery_cycle;
+  if (cycle && (cycle.effective_status === "active" || cycle.effective_status === "recheck")) return false;
+  if (envelope.request.train_anyway === true) return false;
+  return true;
+}
+
+// The heavy single as an item, shaped exactly like every other normalized reps
+// item so no renderer needs to learn a second shape. Null when this back-off item
+// cannot honestly carry one.
+function topSetItemFor(backoff: any, candidate: any, dateISO: string): Record<string, unknown> | null {
+  const top = candidate?.top_set;
+  if (!top) return null;
+  if (backoff?.kind === "cardio" || backoff?.mode === "timed") return null;
+  const weight = finite(top.weight);
+  const reps = finite(top.reps);
+  if (weight == null || reps == null || reps <= 0) return null;
+  // A "top set" at or under the block it leads into is a broken payload rather
+  // than a protocol — and every clamp above may have moved the block down.
+  const blockWeight = finite(backoff?.target_weight);
+  if (blockWeight == null || weight <= blockWeight) return null;
+  return {
+    position: 0, // renumbered with the rest once the insertion is done
+    kind: "strength",
+    exercise: backoff.exercise,
+    sets: 1,
+    rep_low: reps,
+    rep_high: reps,
+    target_weight: weight,
+    target_seconds: null,
+    warmup_sets: null,
+    mode: "reps",
+    note: pickDayVariant(TOP_SET_NOTES, dateISO, "daily-composition:top-set"),
+    target_distance_km: null,
+    target_duration_min: null,
+    target_zone: null,
+    interval: null,
+    superset_group: null,
+  };
 }
 
 const HARD_CARDIO_LANGUAGE =
@@ -501,6 +573,44 @@ export function normalizeComposedSession(
     }
     capped.push(next);
   }
+  // ---- the peak week's heavy single, ahead of its own back-off block ----
+  // Last, so it reads every clamp above rather than racing them: the block's
+  // weight here is the one the athlete will actually be shown, and a single that
+  // no longer sits above it is not a top set. The budget is honoured too — the
+  // heavy set is one working set like any other, and it never displaces work by
+  // pushing the day past its own cap. The guard is against the FINAL list, not a
+  // per-insertion snapshot: `capped` is already at most `cap` items, so every top
+  // set inserted grows the final count past it unless something is checked against
+  // the running total, not `withTopSets.length` (which counts BOTH the top sets
+  // already inserted AND the back-off items already copied over, so re-checking it
+  // per item silently rearms the budget on every iteration and can seat several top
+  // sets in one day). Once the final list would land at `cap`, no further top set is
+  // inserted — dropped, never displacing back-off work to make room. By design, a
+  // fully-budgeted day (`capped.length === cap`) renders NO top set at all: there is
+  // no slack left in the budget for the extra single.
+  const withTopSets: any[] = [];
+  let insertedTopSet = false;
+  let topSetsInserted = 0;
+  const topSetsAllowed = dayAllowsTopSet(envelope);
+  for (const item of capped) {
+    if (topSetsAllowed && remainingSets >= 1 && capped.length + topSetsInserted + 1 <= cap) {
+      const candidate = candidates.get(String(item.exercise ?? "").toLowerCase());
+      const top = topSetItemFor(item, candidate, envelope.date);
+      if (top) {
+        withTopSets.push(top);
+        remainingSets -= 1;
+        insertedTopSet = true;
+        topSetsInserted += 1;
+        changed = true;
+      }
+    }
+    withTopSets.push(item);
+  }
+  // Positions are only rewritten when something was actually inserted, so an
+  // ordinary day's items come out of here byte-for-byte as they always have.
+  if (insertedTopSet) withTopSets.forEach((item, index) => (item.position = index));
+  const finalItems = insertedTopSet ? withTopSets : capped;
+
   let est = base.est_minutes;
   if (envelope.caps.duration_min != null && (est == null || est > envelope.caps.duration_min)) {
     est = envelope.caps.duration_min;
@@ -513,7 +623,7 @@ export function normalizeComposedSession(
       focus: hasEasyCardio ? safeEasySessionText(base.focus, "Easy movement") : base.focus,
       why: hasEasyCardio ? safeEasySessionText(base.why, fallbackWhy) : base.why,
       est_minutes: est,
-      items: capped,
+      items: finalItems,
     },
     validation: {
       ok: true,

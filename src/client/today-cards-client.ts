@@ -100,26 +100,38 @@ function exerciseCardHtml(
   const target = offPlan
     ? `<span class="ex-sets ex-offplan">off-plan</span>`
     : `<span class="ex-sets">${targetText}${showTargetLoad ? ` @ <span class="ex-target numeral">${fmtWeight(item.target_weight)}</span>` : ""}</span>`;
+  // `loggedSets` is what THIS card claimed, so `done` is this card's progress. On a
+  // peak day the same lift renders twice under one name; `cardKey` is the identity
+  // that separates them, and it is only present when there is something to
+  // separate — one card per exercise keeps the name and the markup it always had.
+  const cardKey = todayString(item.cardKey) || exercise;
+  const keyed = cardKey !== exercise;
+  const exKeyAttr = keyed ? ` data-exkey="${encodeURIComponent(cardKey)}"` : "";
   const done = loggedSets.length;
+  // Skipping is name-keyed on the server — there is no per-card skip — so the
+  // affordance goes away as soon as ANY set exists for the lift, not just this
+  // card's. Otherwise the back-off card would still offer a skip the server can
+  // only refuse.
+  const exerciseLogged = todayFinite(item.exerciseLogged) ?? done;
   const goal = offPlan ? 0 : Number(item.sets) || 0;
   const complete = !!goal && done >= goal;
   const progress = `<span class="ex-prog${complete ? " done" : ""}" data-prog>${done}${goal ? ` / ${goal}` : ""} <span>set${done === 1 && !goal ? "" : "s"}</span></span>`;
   const tile = artImg("exercise", exercise, "artile-sm ex-art", art("exercise", exercise, item.muscle_group));
   const reveal = revealIdx != null ? Number(revealIdx) : null;
   const logrow = timed
-    ? `<div class="logrow" data-ex="${encodeURIComponent(exercise)}" data-day="${escAttr(options.day ?? "")}" data-mode="timed">
+    ? `<div class="logrow" data-ex="${encodeURIComponent(exercise)}"${exKeyAttr} data-day="${escAttr(options.day ?? "")}" data-mode="timed">
         <input type="text" inputmode="numeric" autocomplete="off" placeholder="TIME · 1:30" class="in-dur" aria-label="${escAttr(`${exercise} duration`)}" value="${prefill.duration_sec != null ? fmtDur(prefill.duration_sec) : ""}">
         <button type="button" class="timerbtn" data-stopwatch-state="idle" aria-label="${escAttr(`Start ${exercise} stopwatch`)}" aria-pressed="false">Start</button>
         <button class="logbtn">+</button>
       </div>`
-    : `<div class="logrow" data-ex="${encodeURIComponent(exercise)}" data-day="${escAttr(options.day ?? "")}">
+    : `<div class="logrow" data-ex="${encodeURIComponent(exercise)}"${exKeyAttr} data-day="${escAttr(options.day ?? "")}">
         <input type="number" inputmode="decimal" placeholder="WT" class="in-w" aria-label="Weight" value="${prefill.weight ?? ""}">
         <input type="number" inputmode="numeric" placeholder="REPS" class="in-r" aria-label="Reps" value="${prefill.reps ?? ""}">
         <input type="number" inputmode="decimal" placeholder="RIR" title="Reps in reserve — how many more you could have done" aria-label="RIR (reps in reserve)" value="${prefill.rir ?? ""}">
         <button class="logbtn">+</button>
       </div>`;
   const skipButton =
-    !offPlan && !done
+    !offPlan && !exerciseLogged
       ? `<button class="ex-skip" data-skip="${encodeURIComponent(exercise)}" title="Not today" aria-label="Skip ${escAttr(exercise)} today">✕</button>`
       : "";
   const removeButton =
@@ -156,7 +168,7 @@ function exerciseCardHtml(
     todayFinite(lastSetRecord.weight) != null ||
     todayFinite(lastSetRecord.duration_sec) != null;
   const note = todayCardsCleanNote(item.note, groundedDose);
-  return `<div class="ex${complete ? " ex-complete" : ""}${reveal != null ? " reveal" : ""}" data-card="${escAttr(exercise)}" data-mode="${timed ? "timed" : "reps"}"${headlineDose ? ` data-dose="headline"` : ""}${reveal != null ? ` style="${stagger(reveal)}"` : ""}>
+  return `<div class="ex${complete ? " ex-complete" : ""}${reveal != null ? " reveal" : ""}" data-card="${escAttr(exercise)}"${exKeyAttr} data-mode="${timed ? "timed" : "reps"}"${headlineDose ? ` data-dose="headline"` : ""}${reveal != null ? ` style="${stagger(reveal)}"` : ""}>
       <div class="ex-top">
         ${tile}
         <button class="ex-name" data-guide="${encodeURIComponent(exercise)}">${escHtml(exercise)} <span class="guide-i">ⓘ</span></button>

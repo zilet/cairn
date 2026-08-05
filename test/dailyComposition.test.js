@@ -964,3 +964,190 @@ test("a reduced group that is ALSO excluded is still dropped — exclusion wins"
   );
   assert.ok(validation.rejected.some((r) => r.exercise === "Back Squat" && r.reason === "excluded_group"));
 });
+
+// ── the peak week's heavy single, rendered as its own line ───────────────────
+// The gap this closes: `authorized_target` describes ONE tier, and on a peak day
+// that tier is the BACK-OFF block. So the composed session the athlete read was
+// the back-off work alone, with the heavy single surviving only as prose inside
+// the candidate's note. The single is now inserted server-side, in the normalizer
+// both composition paths already run through, so neither the agent nor the
+// deterministic fallback can author, forge, or lose it.
+
+const PEAK_CANDIDATE = {
+  exercise: "Back Squat",
+  muscle_group: "quads",
+  action: "overload",
+  reason_code: null,
+  substitution_for: null,
+  note: null,
+  current_target: { mode: "reps", sets: 3, rep_low: 5, rep_high: 7, target_weight: 215, target_seconds: null },
+  authorized_target: { mode: "reps", sets: 3, rep_low: 5, rep_high: 5, target_weight: 225, target_seconds: null },
+  top_set: { weight: 275, reps: 1 },
+};
+
+const peakEnvelope = (over = {}) => envelope({ candidates: [PEAK_CANDIDATE], ...over });
+const backoffItem = () => ({ exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 5, target_weight: 225 });
+
+function seedSquat() {
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+}
+
+test("a peak day renders BOTH tiers: the heavy single ahead of its back-off block", () => {
+  seedSquat();
+  const { session } = normalizeComposedSession(agentSession([backoffItem()]), peakEnvelope());
+  assert.ok(session);
+  assert.equal(session.items.length, 2, "two entries, not one line with the single hidden in a note");
+
+  const [top, block] = session.items;
+  assert.equal(top.exercise, "Back Squat");
+  assert.equal(top.target_weight, 275, "the heavy single leads");
+  assert.equal(top.sets, 1);
+  assert.equal(top.rep_low, 1);
+  assert.equal(top.rep_high, 1);
+  assert.equal(top.mode, "reps");
+  assert.match(top.note, /\S/, "and it says what to do with it");
+
+  assert.equal(block.target_weight, 225, "the back-off block follows, untouched");
+  assert.equal(block.sets, 3);
+
+  // Positions are rewritten so the two tiers read in the order they are done.
+  assert.deepEqual(session.items.map((i) => i.position), [0, 1]);
+});
+
+test("an ordinary day is byte-for-byte what it always was", () => {
+  seedSquat();
+  const plain = { ...PEAK_CANDIDATE };
+  delete plain.top_set;
+  const { session } = normalizeComposedSession(agentSession([backoffItem()]), envelope({ candidates: [plain] }));
+  assert.equal(session.items.length, 1);
+  assert.equal(session.items[0].target_weight, 225);
+});
+
+test("the deterministic fallback renders both tiers too — agent absence loses nothing", () => {
+  seedSquat();
+  db.prepare(`INSERT INTO plan_days (day_number, name, focus) VALUES (1, 'Lower', 'Lower body')`).run();
+  const planDayId = db.prepare(`SELECT id FROM plan_days WHERE day_number = 1`).get().id;
+  const exId = db.prepare(`SELECT id FROM exercises WHERE name = 'Back Squat'`).get().id;
+  db.prepare(
+    `INSERT INTO plan_items (plan_day_id, exercise_id, position, sets, rep_low, rep_high, target_weight, kind)
+     VALUES (?, ?, 1, 3, 5, 5, 225, 'strength')`,
+  ).run(planDayId, exId);
+
+  const session = deterministicComposedSession(
+    peakEnvelope({ template: { day_number: 1, plan_day_id: planDayId, focus: "Lower body", intent: "template" } })
+  );
+  const squats = session.items.filter((i) => i.exercise === "Back Squat");
+  assert.equal(squats.length, 2, "the fallback is a real peak session, not the back-off block alone");
+  assert.equal(squats[0].target_weight, 275);
+  assert.equal(squats[1].target_weight, 225);
+});
+
+test("an agent cannot forge a heavy single of its own", () => {
+  seedSquat();
+  // The agent asks for a 315 single on a day with no peak protocol authorized.
+  const plain = { ...PEAK_CANDIDATE };
+  delete plain.top_set;
+  const { session } = normalizeComposedSession(
+    agentSession([
+      { exercise: "Back Squat", sets: 1, rep_low: 1, rep_high: 1, target_weight: 315 },
+      backoffItem(),
+    ]),
+    envelope({ candidates: [plain] })
+  );
+  assert.ok(session);
+  for (const item of session.items) {
+    assert.equal(item.target_weight, 225, "every squat entry is clamped to the authorized target");
+  }
+});
+
+test("an eased day withdraws the single even when the lift itself never stepped back", () => {
+  // caps.intensity is a DAY-level brake the candidate gate never sees, so the
+  // top set is asked about a second time here.
+  seedSquat();
+  for (const caps of [
+    { volume: "normal", intensity: "easy", duration_min: 60 },
+    { volume: "normal", intensity: "deload", duration_min: 60 },
+    { volume: "normal", intensity: "hold", duration_min: 60 },
+    { volume: "minimal", intensity: "normal", duration_min: 60 },
+  ]) {
+    const { session } = normalizeComposedSession(agentSession([backoffItem()]), peakEnvelope({ caps }));
+    assert.ok(session);
+    assert.ok(
+      !session.items.some((i) => i.target_weight === 275),
+      `${caps.intensity}/${caps.volume} is no day for a near-maximal single`,
+    );
+  }
+});
+
+test("an active recovery cycle withdraws it as well", () => {
+  seedSquat();
+  const { session } = normalizeComposedSession(
+    agentSession([backoffItem()]),
+    peakEnvelope({ recovery_cycle: { effective_status: "active", working_set_fraction: 0.6 } })
+  );
+  assert.ok(session);
+  assert.ok(!session.items.some((i) => i.target_weight === 275));
+});
+
+test("a single at or under the block it leads into is a broken payload, not a protocol", () => {
+  seedSquat();
+  for (const weight of [225, 200]) {
+    const { session } = normalizeComposedSession(
+      agentSession([backoffItem()]),
+      envelope({ candidates: [{ ...PEAK_CANDIDATE, top_set: { weight, reps: 1 } }] })
+    );
+    assert.equal(session.items.length, 1, `a "top" set of ${weight} over a 225 block leads nothing`);
+  }
+});
+
+test("the heavy set is one working set and is paid for out of the day's budget", () => {
+  seedSquat();
+  const { session } = normalizeComposedSession(
+    agentSession([backoffItem()]),
+    peakEnvelope({ caps: { volume: "reduced", intensity: "normal", duration_min: 60 } })
+  );
+  assert.ok(session);
+  const total = session.items.reduce((sum, i) => sum + (Number(i.sets) || 0), 0);
+  // A reduced day allows 12 working sets; the single plus its clamped block must
+  // sit inside that, and the single itself counts as one.
+  assert.ok(total <= 12, `${total} sets is inside the reduced budget`);
+  assert.equal(session.items[0].sets, 1);
+});
+
+test("a fully-budgeted day never renders more items than its own cap, even with a heavy single available on every lift", () => {
+  // "reduced" volume caps the day at 7 items. Seed exactly 7 distinct lifts, each
+  // one eligible for its own top set (block below the candidate's top_set weight).
+  // A prefix check on withTopSets.length re-arms after every insertion and would
+  // seat several singles before finally refusing one — rendering more than 7 items
+  // on a day whose own cap says 7. The fix must stop BEFORE the first insertion
+  // that would push the final list past the cap.
+  const names = ["Squat A", "Squat B", "Squat C", "Squat D", "Squat E", "Squat F", "Squat G"];
+  const candidates = [];
+  const items = [];
+  for (const name of names) {
+    repo.upsertExercise({ name, muscle_group: "quads", mode: "reps" });
+    candidates.push({
+      exercise: name,
+      muscle_group: "quads",
+      action: "overload",
+      reason_code: null,
+      substitution_for: null,
+      note: null,
+      current_target: { mode: "reps", sets: 1, rep_low: 5, rep_high: 5, target_weight: 100, target_seconds: null },
+      authorized_target: { mode: "reps", sets: 1, rep_low: 5, rep_high: 5, target_weight: 100, target_seconds: null },
+      top_set: { weight: 150, reps: 1 },
+    });
+    items.push({ exercise: name, sets: 1, rep_low: 5, rep_high: 5, target_weight: 100 });
+  }
+  const { session, validation } = normalizeComposedSession(
+    agentSession(items),
+    envelope({ candidates, caps: { volume: "reduced", intensity: "normal", duration_min: 90 } })
+  );
+  assert.ok(session);
+  assert.ok(session.items.length <= 7, `expected at most the day's cap of 7 items, got ${session.items.length}`);
+  // By design a fully-budgeted day (exactly cap items already) has no room left for
+  // any top set at all — dropped, never displacing the back-off work to make room.
+  assert.equal(session.items.length, 7, "no top set fits once the day is already at its own cap");
+  assert.ok(!session.items.some((i) => i.target_weight === 150), "no heavy single was seated on a full day");
+  assert.equal(validation.ok, true);
+});

@@ -930,7 +930,9 @@ export interface ClientRunZones {
   available: boolean;
   max_hr: number | null;
   rest_hr: number | null;
-  method: "explicit" | "age" | "garmin-observed" | "garmin-zones" | null;
+  // "personal-model" is the RESOLVED answer — bands from this athlete's own
+  // threshold. The rest are the population fallbacks it displaces.
+  method: "personal-model" | "explicit" | "age" | "garmin-observed" | "garmin-zones" | null;
   reserve: boolean;
   zones: ClientRunZone[];
   note: string;

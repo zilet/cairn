@@ -125,6 +125,7 @@ export interface RunZones {
   max_hr: number | null;
   rest_hr: number | null;
   method:
+    | "personal-model" // this athlete's own threshold (hr-model.ts) — the resolved answer
     | "explicit" // a max-HR the athlete set
     | "age" // Tanaka 208 − 0.7·age
     | "garmin-observed" // highest HR Garmin has recorded
@@ -217,12 +218,103 @@ function garminZoneBoundaries(): { zone: ZoneKey; low_bpm: number; high_bpm: num
   }
 }
 
+/**
+ * ONE resolved zone view, so no consumer can be handed two answers to the same
+ * question.
+ *
+ * Everything above this line is a POPULATION formula wearing a personal label:
+ * Tanaka off an age, Karvonen off a resting HR, fractions of a max nobody
+ * measured. hr-model.ts is the athlete's OWN threshold, read off what they have
+ * actually run. Both used to arrive in the same prompt side by side — `run_zones`
+ * saying easy is one band and `hr_model` saying it is another — and a coach given
+ * two bpm for "easy" has no way to pick.
+ *
+ * So the personal model speaks whenever it can speak at all, exactly as zoneTag
+ * already decided for the prescription tags, and the formula survives only as the
+ * fallback that keeps a new runner's zones from going quiet.
+ *
+ * The BOUNDARIES between zones all come from the model. The outer floor and
+ * ceiling stay observations — the resting heart rate and the top of the observed
+ * distribution — rather than an extrapolation of the model's own bands, because a
+ * zone edge nobody has ever been near is a made-up number.
+ */
+export function resolveRunZones(zones: RunZones, model: HrModel | null | undefined): RunZones {
+  if (!model?.zones || model.confidence === "insufficient") return zones;
+  const m = model.zones;
+  const formulaBand = (key: ZoneKey) => zones.zones.find((b) => b.zone === key) ?? null;
+  const floor = Math.min(model.resting ?? formulaBand("Z1")?.low_bpm ?? m.z1_top - 25, m.z1_top);
+  const ceiling = Math.max(m.z4_top + 1, model.observed_max ?? formulaBand("Z5")?.high_bpm ?? m.z4_top + 15);
+  const edges: Record<ZoneKey, [number, number]> = {
+    Z1: [Math.max(1, floor), m.z1_top],
+    Z2: [m.z1_top + 1, m.z2_top],
+    Z3: [m.z2_top + 1, m.z3_top],
+    Z4: [m.z3_top + 1, m.z4_top],
+    Z5: [m.z4_top + 1, ceiling],
+  };
+  const resolvedBands = ZONE_BANDS.map((b) => ({
+    zone: b.zone,
+    label: b.label,
+    low_bpm: edges[b.zone][0],
+    high_bpm: edges[b.zone][1],
+    feel: b.feel,
+  }));
+  // A degenerate model (e.g. thresholds that don't actually order z1 < z2 < z3 < z4)
+  // can turn the edges above into an inverted or overlapping band — a Z3 that reads
+  // LOWER than Z2, or a band whose high sits under its own low. That is never a
+  // heart-rate zone anyone should train against, so the whole personal read is
+  // discarded in favor of the formula zones rather than handing back nonsense.
+  const monotonic = resolvedBands.every((band, i) => {
+    if (band.high_bpm < band.low_bpm) return false;
+    if (i === 0) return true;
+    return band.low_bpm > resolvedBands[i - 1].high_bpm;
+  });
+  if (!monotonic) return zones;
+  const basis =
+    model.lthr_basis === "field_test"
+      ? "anchored by a steady test effort you actually ran"
+      : model.lthr_basis === "sustained_effort"
+        ? "read off your steadiest sustained running"
+        : "read off the heart rates your own running has shown";
+  return {
+    available: true,
+    max_hr: model.observed_max ?? zones.max_hr,
+    rest_hr: model.resting,
+    method: "personal-model",
+    // Not Karvonen: these bands are shares of a threshold, not of a reserve.
+    reserve: false,
+    zones: resolvedBands,
+    note: `Zones built from your own threshold${model.lthr != null ? ` (${model.lthr} bpm)` : ""}, ${basis}.`,
+  };
+}
+
+/**
+ * The athlete's zone bands. The formula below is the FALLBACK; the returned view
+ * is always run through resolveRunZones, so the personal HR model is what every
+ * caller sees the moment it has enough running to speak.
+ *
+ * `model` is read here rather than passed by every call site — a route and an MCP
+ * tool ask this question with nothing in hand. A caller that already holds the
+ * model (weeklyRunPlan, which resolves it once for a whole week) passes it in so
+ * nothing derives twice; pass `null` to read the raw formula.
+ */
 export function runZones(opts?: {
   profile?: any;
   recovery?: any;
   maxHr?: number | null;
   restHr?: number | null;
+  model?: HrModel | null;
 }): RunZones {
+  const model =
+    opts && "model" in opts
+      ? opts.model
+      : (() => {
+          try {
+            return getHrModel();
+          } catch {
+            return null;
+          }
+        })();
+  const resolve = (view: RunZones): RunZones => resolveRunZones(view, model);
   const profile = opts?.profile ?? getProfile();
   // Resting HR (for Karvonen) — explicit, else recovery aggregate, else latest Garmin night.
   const recovery = opts?.recovery;
@@ -260,7 +352,7 @@ export function runZones(opts?: {
   if (maxHr == null) {
     const gz = garminZoneBoundaries();
     if (gz) {
-      return {
+      return resolve({
         available: true,
         max_hr: gz[gz.length - 1]?.high_bpm ?? null,
         rest_hr: restHr,
@@ -277,9 +369,9 @@ export function runZones(opts?: {
           };
         }),
         note: "Run zones read straight from your watch's recorded HR zones.",
-      };
+      });
     }
-    return NO_ZONES;
+    return resolve(NO_ZONES);
   }
 
   const useReserve = restHr != null && restHr < maxHr - 30; // Karvonen only with a credible resting HR
@@ -299,7 +391,7 @@ export function runZones(opts?: {
         ? `Zones estimated from your age (max HR ≈ ${maxHr})${useReserve ? `, personalised with resting HR ${restHr}` : ""}.`
         : `Zones from your watch's highest recorded HR (${maxHr})${useReserve ? `, resting HR ${restHr}` : ""}.`;
 
-  return {
+  return resolve({
     available: true,
     max_hr: maxHr,
     rest_hr: useReserve ? restHr : null,
@@ -307,7 +399,7 @@ export function runZones(opts?: {
     reserve: useReserve,
     zones,
     note,
-  };
+  });
 }
 
 // A "Z2 (135–145 bpm)" tag for a prescription's target_zone, falling back to the
@@ -419,6 +511,42 @@ export const TIMELINE_CLOSE_VARIANTS: ReadonlyArray<(supported: number, wanted: 
   (supported, wanted) =>
     `Not far off — this trajectory lands near ${supported} km a week where that time usually wants about ${wanted}. Let the coming weeks answer it.`,
 ];
+
+// The RATE story, which the two sets above cannot tell.
+//
+// TIMELINE_FIT/CLOSE_VARIANTS compare DESTINATIONS: where the reachable build
+// lands by race day against the volume that distance leans on. `feasible` and
+// `needed_build_factor` answer a different question — how fast the weeks would
+// have to climb to arrive on the ideal curve at all — and the two come apart
+// exactly where it matters. Two athletes can face the same volume gap and be in
+// completely different situations: one is nine months out and needs a step barely
+// past the sustainable one, the other is six weeks out and would have to add a
+// third of their week every week. The destination sentence reads identically for
+// both; only this one separates them.
+//
+// So it speaks only when the RATE is the thing that is off, and only in two
+// bands — a little past what a body absorbs, or well past it. No numbers: a
+// weekly build factor is exactly the kind of figure the athlete is never handed,
+// and the honest content is "quicker than a body reliably absorbs", not 1.31.
+export const RAMP_RATE_NEAR_VARIANTS: readonly [string, ...string[]] = [
+  "Arriving on the usual curve by race day would mean adding a little more mileage each week than a body reliably absorbs, so the week builds at the pace that actually sticks.",
+  "Hitting that curve on time would ask for slightly quicker weekly growth than legs adapt to, and the steady step is the one that gets you to the start line whole.",
+  "The build would have to run a touch hotter each week than is worth risking — this week takes the step that holds up instead.",
+];
+
+export const RAMP_RATE_STEEP_VARIANTS: readonly [string, ...string[]] = [
+  "Arriving on the usual curve by race day would take far quicker weekly growth than a body absorbs, so the plan builds at a pace that keeps you running rather than chasing the calendar.",
+  "There are fewer weeks left than that kind of build usually takes, so the week steps at the rate legs actually adapt to and the day comes as it comes.",
+  "Getting to that mileage in the weeks left would mean climbing much faster than tissue rebuilds, so this week takes the honest step and leaves the rush alone.",
+];
+
+// How far past the sustainable weekly step the ideal curve would have to run
+// before the rate is worth a sentence of its own. Inside this margin the required
+// step IS effectively the sustainable one, and the destination sentence has
+// already said everything there is to say.
+const RAMP_RATE_SPEAK_MARGIN = 1.03;
+// And how far past it before "a little quicker" stops being an honest description.
+const RAMP_RATE_STEEP_MARGIN = 1.15;
 
 // A dated race with a time target, next to an explicit choice to keep running in
 // a supporting role. Both are the athlete's own settings; the plan follows the
@@ -715,10 +843,11 @@ export function weeklyRunPlan(
   const isRunner = lastActualKm > 0 || baseKm > 0 || explicitRunningGoal;
   if (!isRunner) return NO_RUN_PLAN(week_start);
 
-  const zones = opts?.zones ?? runZones({ profile, recovery });
   // The personal HR model for THIS plan's date, resolved once for the whole week —
   // every zone tag below reads it, and deriving it is five queries when the nightly
   // tick has not run. A model that cannot be read is not a reason to lose the tags.
+  // Resolved BEFORE the zones so runZones is handed the same model rather than
+  // deriving its own: one date, one model, one set of bands.
   const hrModel: HrModel | null = (() => {
     try {
       return getHrModel(d);
@@ -726,6 +855,7 @@ export function weeklyRunPlan(
       return null;
     }
   })();
+  const zones = opts?.zones ?? runZones({ profile, recovery, model: hrModel });
   const block = opts?.block ?? getActiveBlock();
   const phase = goal?.is_race && goal.phase && goal.phase !== "past" ? goal.phase : "standing";
   const ord = block?.week_index ?? weekOrdinal(week_start);
@@ -1305,6 +1435,19 @@ export function weeklyRunPlan(
     const variants = ramp.fit === "stretch" ? TIMELINE_CLOSE_VARIANTS : TIMELINE_FIT_VARIANTS;
     const say = pickDayVariant(variants, d, "run-ramp-timeline");
     rationale.push(say(Math.round(ramp.constrained_peak_km), Math.round(ramp.ideal_peak_km)));
+    // …and the RATE, when the rate is what the calendar broke rather than the
+    // volume. Silent inside the margin, where the required step is the sustainable
+    // one and the sentence above has already covered it.
+    const overshoot = ramp.needed_build_factor / SUSTAINABLE_WEEKLY_BUILD_FACTOR;
+    if (!ramp.feasible && overshoot >= RAMP_RATE_SPEAK_MARGIN) {
+      rationale.push(
+        pickDayVariant(
+          overshoot >= RAMP_RATE_STEEP_MARGIN ? RAMP_RATE_STEEP_VARIANTS : RAMP_RATE_NEAR_VARIANTS,
+          d,
+          "run-ramp-rate"
+        )
+      );
+    }
   }
 
   return { available: true, week_start, runs, rationale, quality_focus, mix_summary, why, goal_feasibility };

@@ -498,3 +498,81 @@ test("a malformed plan_complexity is ignored rather than trusted", () => {
     assert.equal(envelope.caps.volume, "normal", `scale ${String(scale)} should not soften volume`);
   }
 });
+
+// ── a peak week is TWO tiers, and the envelope used to describe one ───────────
+// On a realization/peak day the progression engine puts the BACK-OFF block in
+// `suggested` and the heavy single in `top_set`. That default is right — a
+// consumer that knows nothing about peak weeks must land on a real, lighter
+// session rather than on one near-maximal single with the rest of the work
+// missing. The cost was that the single survived only as prose inside `why`, so
+// the envelope described a session the athlete was not actually being asked to do.
+
+const PEAK_TOP_SET = { weight: 275, reps: 1, backoff: { sets: 3, weight: 225, rep_low: 5, rep_high: 5 } };
+
+function peakSnapshot(over = {}) {
+  const snap = snapshot();
+  snap.progression[0] = {
+    ...snap.progression[0],
+    action: "overload",
+    current_target: { mode: "reps", sets: 3, rep_low: 5, rep_high: 7, target_weight: 215, target_seconds: null },
+    suggested_target: { mode: "reps", sets: 3, rep_low: 5, rep_high: 5, target_weight: 225, target_seconds: null },
+    top_set: PEAK_TOP_SET,
+    ...over,
+  };
+  return snap;
+}
+
+const squat = (envelope) => envelope.candidates.find((c) => c.exercise === "Back Squat");
+
+test("the heavy single reaches the envelope as data, beside its own back-off block", () => {
+  const envelope = buildDailySessionDecision(peakSnapshot(), { now: NOW });
+  const candidate = squat(envelope);
+  assert.deepEqual(candidate.top_set, { weight: 275, reps: 1 }, "the top tier, as numbers");
+  assert.equal(candidate.authorized_target.target_weight, 225, "and the back-off block underneath it");
+  assert.equal(candidate.authorized_target.sets, 3);
+  assert.equal(candidate.action, "overload");
+});
+
+test("an ordinary day carries no top_set key at all, so every old fingerprint still holds", () => {
+  const plain = snapshot();
+  const envelope = buildDailySessionDecision(plain, { now: NOW });
+  assert.ok(!("top_set" in squat(envelope)), "absent means absent — never a null field");
+  // The snapshot itself must serialize byte-for-byte as it did before the field
+  // existed, or every fingerprint on the planet moves the day this ships.
+  assert.ok(!JSON.stringify(plain).includes("top_set"));
+  assert.equal(dailyDecisionFingerprint(plain), dailyDecisionFingerprint(snapshot()));
+});
+
+test("a day that steps back withdraws the single along with the load", () => {
+  // Recent underperformance turns the overload into a hold. `authorized_target`
+  // falls back to the CURRENT target, and a near-maximal single must not outlive
+  // the decision that authorized it.
+  const snap = peakSnapshot();
+  snap.feedback = { soreness: 4, performance: 2, joint_pain: null, low_performance_count: 2 };
+  const candidate = squat(buildDailySessionDecision(snap, { now: NOW }));
+  assert.notEqual(candidate.action, "overload", "the day stepped the lift back");
+  assert.ok(!("top_set" in candidate), "so the peak protocol goes with it");
+});
+
+test("a deload day never authorizes a peak single", () => {
+  const snap = peakSnapshot();
+  snap.program = { ...snap.program, mesocycle_phase: "deload" };
+  const candidate = squat(buildDailySessionDecision(snap, { now: NOW }));
+  assert.equal(candidate.action, "deload");
+  assert.ok(!("top_set" in candidate));
+});
+
+test("a malformed top set is simply no top set, never a zero-rep prescription", () => {
+  for (const bad of [{ weight: 275 }, { weight: null, reps: 1 }, { weight: 275, reps: 0 }, {}]) {
+    const candidate = squat(buildDailySessionDecision(peakSnapshot({ top_set: bad }), { now: NOW }));
+    assert.ok(!("top_set" in candidate), `${JSON.stringify(bad)} describes no protocol`);
+  }
+});
+
+test("the peak single never becomes a plan target — it rides the candidate only", () => {
+  const envelope = buildDailySessionDecision(peakSnapshot(), { now: NOW });
+  // The envelope's own plan-shaped surface (the authorized target) still carries
+  // the back-off numbers, which is what any plan write would read.
+  assert.equal(squat(envelope).authorized_target.target_weight, 225);
+  assert.notEqual(squat(envelope).authorized_target.target_weight, PEAK_TOP_SET.weight);
+});

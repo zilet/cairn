@@ -270,6 +270,18 @@ export interface ClientNutritionTarget {
   source?: string;
 }
 
+/**
+ * How much work this day carries, from the training plan and the week's run
+ * intentions. `drivers` is the machine register (what makes a day big); the card
+ * speaks its own rotating sentence and never prints these strings.
+ */
+export interface ClientDayFuelDemand {
+  date: ISODateString;
+  demand: "light" | "standard" | "big";
+  drivers: string[];
+  evidence: string[];
+}
+
 export interface ClientDayIntake {
   date: ISODateString;
   totals: ClientMacroTotals;
@@ -278,6 +290,9 @@ export interface ClientDayIntake {
   count: number;
   target: ClientNutritionTarget | null;
   remaining: Pick<ClientMacroTotals, "kcal" | "protein_g"> | null;
+  // Present on GET /nutrition/day; never on an optimistically patched local copy's
+  // recompute path, which only touches entries/totals. Additive and always optional.
+  fuel_demand?: ClientDayFuelDemand | null;
 }
 
 export interface ClientNutritionTargetProvenance {

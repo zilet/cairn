@@ -415,3 +415,65 @@ test("specific modality outranks long and interval modifiers for capture and syn
     assert.equal(cards.cardioEffortMatches(item, { type: "run" }), false);
   }
 });
+
+// On a peak day the same lift renders twice. The card key is what separates them
+// in the DOM; `data-ex` stays the real lift name, because every logged set has to
+// keep attributing to that lift for est-1RM and calibration.
+test("Peak-day cards carry a per-card key while still logging under the real lift name", () => {
+  const cards = loadTodayCards();
+  const topSingle = cards.exerciseCardHtml(
+    { fromPlan: true, exercise: "Back Squat", sets: 1, rep_low: 1, rep_high: 1, target_weight: 315, cardKey: "Back Squat#0", exerciseLogged: 1 },
+    [{ id: "s1", set_number: 1, weight: 315, reps: 1, rir: 0 }],
+    { weight: 315, reps: 1, rir: 0 },
+    0,
+    null
+  );
+  const backOff = cards.exerciseCardHtml(
+    { fromPlan: true, exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 5, target_weight: 265, cardKey: "Back Squat#1", exerciseLogged: 1 },
+    [],
+    { weight: 265, reps: 5, rir: null },
+    1,
+    null
+  );
+
+  assert.match(topSingle, /data-exkey="Back%20Squat%230"/);
+  assert.match(backOff, /data-exkey="Back%20Squat%231"/);
+  // The identity differs; the exercise the set is logged against does not.
+  assert.match(topSingle, /data-ex="Back%20Squat"/);
+  assert.match(backOff, /data-ex="Back%20Squat"/);
+  assert.match(topSingle, /data-card="Back Squat"/);
+
+  // Each card counts only its own sets, so the back-off block does not read as
+  // already done just because the single was hit.
+  assert.match(topSingle, /data-prog[^>]*>1 \/ 1/);
+  assert.match(backOff, /data-prog[^>]*>0 \/ 3/);
+  assert.match(topSingle, /class="ex ex-complete/);
+  assert.doesNotMatch(backOff, /ex-complete/);
+  assert.match(backOff, /value="265"/, "the back-off card opens on its own dose");
+
+  // A skip is recorded against the LIFT, by name — there is no per-card skip — so
+  // once any set exists for it, neither card offers one the server could only refuse.
+  assert.doesNotMatch(topSingle, /class="ex-skip"/);
+  assert.doesNotMatch(backOff, /class="ex-skip"/);
+});
+
+// The ordinary day is the one that must not move: with a single card per exercise
+// there is nothing to disambiguate, so no key is emitted at all.
+test("A single card per exercise emits no card key and keeps its skip affordance", () => {
+  const cards = loadTodayCards();
+  const item = { fromPlan: true, exercise: "Row", sets: 3, rep_low: 8, rep_high: 10, target_weight: 135 };
+  const plain = cards.exerciseCardHtml(item, [], { weight: 135, reps: 8, rir: null }, 0, null);
+
+  assert.doesNotMatch(plain, /data-exkey/);
+  assert.match(plain, /data-skip="Row"/);
+  // Identical to what the same card rendered before per-card identity existed:
+  // an unshared name passes cardKey === exercise and no exerciseLogged.
+  const keyedSameName = cards.exerciseCardHtml(
+    { ...item, cardKey: "Row", exerciseLogged: 0 },
+    [],
+    { weight: 135, reps: 8, rir: null },
+    0,
+    null
+  );
+  assert.equal(keyedSameName, plain);
+});

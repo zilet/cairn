@@ -19,6 +19,7 @@ import {
   updateMealPlanDays,
 } from "../domain/nutrition/index.js";
 import { goalPace } from "../repo/goal-pace.js";
+import { dayFuelDemand } from "../repo/fuel-demand.js";
 import { fuelingFollowThroughDue, listFuelingFeedback, setFuelingFeedback } from "../repo/fueling.js";
 import { ACCEPTED_MIME } from "../uploadMime.js";
 import { UPLOADS_DIR } from "../uploadPaths.js";
@@ -81,7 +82,12 @@ nutritionRouter.get("/nutrition/goal-pace", (req, res) => {
 // target adds the gentle "remaining". ?date=YYYY-MM-DD overrides today.
 nutritionRouter.get("/nutrition/day", (req, res) => {
   const date = typeof req.query.date === "string" ? req.query.date : undefined;
-  res.json(getDayIntake(date));
+  // `fuel_demand` rides alongside the log rather than inside getDayIntake: the intake
+  // read feeds the coach context, the Brief's fuel signal and the pace gauge, none of
+  // which should start carrying a plan projection. The card is the one surface that
+  // wants it, and it only ever produces a quiet carb-bias line on a big day — the
+  // accepted target and the "remaining" arithmetic below are untouched by it.
+  res.json({ ...getDayIntake(date), fuel_demand: dayFuelDemand(date) });
 });
 
 // Meaning-first multi-week recorded-intake read. The domain clamps ?days= to

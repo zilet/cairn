@@ -162,6 +162,11 @@ export interface DailyDecisionSnapshot {
     vary_to: string | null;
     current_target?: DailyDecisionTarget | null;
     suggested_target?: DailyDecisionTarget | null;
+    // A peak week's heavy single, when this lift has one. Absent on every ordinary
+    // day, and spread in rather than written as null so a non-peak snapshot
+    // serializes byte-for-byte as it did before this field existed (see the note
+    // on personal_response — stableJson walks Object.keys).
+    top_set?: DailyDecisionTopSet;
     evidence?: DailyDecisionProgressionEvidence | null;
   }>;
   plan_items: Array<{
@@ -218,6 +223,28 @@ export interface DailyDecisionTarget {
   target_seconds: number | null;
 }
 
+/**
+ * A peak week's TOP TIER: the heavy single the athlete works up to before the
+ * back-off block.
+ *
+ * A peak session is two-tier work, and `DailyDecisionTarget` describes exactly one
+ * tier. Progression resolves that by putting the back-off block in `suggested` —
+ * which is the right default, because a consumer that knows nothing about peak
+ * weeks must land on a real, lighter session rather than on one near-maximal
+ * single with the rest of the work missing. The cost was that the heavy set
+ * survived only as prose inside `why`, so the envelope described a session the
+ * athlete was not actually being asked to do.
+ *
+ * This carries it as data instead. It is a SESSION protocol, never a plan edit:
+ * `buildProgressionProposal` deliberately skips a top set (progression.ts), so
+ * nothing here reaches `plan_items` and the plan never carries a near-maximal
+ * single forward as a target.
+ */
+export interface DailyDecisionTopSet {
+  weight: number;
+  reps: number;
+}
+
 export interface DailyDecisionProgressionEvidence {
   delta_text: string | null;
   why: string | null;
@@ -241,6 +268,12 @@ export interface DailyDecisionCandidate {
   note: string | null;
   current_target?: DailyDecisionTarget | null;
   authorized_target?: DailyDecisionTarget | null;
+  // The heavy single that comes FIRST on a peak day, with `authorized_target`
+  // carrying the back-off block that follows it. Present only when the day is
+  // still taking the progression's own action — a day that stepped back to a hold
+  // or a deload has withdrawn the peak protocol along with the load, and a
+  // near-maximal single must never outlive the decision that authorized it.
+  top_set?: DailyDecisionTopSet;
   progression_evidence?: DailyDecisionProgressionEvidence | null;
   brain_decision_id?: number | null;
   brain_change_summary?: string | null;
@@ -331,6 +364,17 @@ function prescriptionTarget(value: any, mode: unknown): DailyDecisionTarget | nu
     target_seconds: timed ? finite(value.seconds) : null,
   };
   return target;
+}
+
+// The heavy single off a progression entry, when it carries one and the numbers
+// are real. Reps are the SET's reps (a single, a double, a triple), so a zero or a
+// missing load means there is no protocol to describe and the day is an ordinary
+// one — the back-off block in `suggested` already stands on its own.
+function topSetOf(value: any): DailyDecisionTopSet | null {
+  const weight = finite(value?.weight);
+  const reps = finite(value?.reps);
+  if (weight == null || reps == null || reps <= 0) return null;
+  return { weight, reps };
 }
 
 function dedupe(values: Array<string | null | undefined>): string[] {
@@ -684,6 +728,9 @@ export function gatherDailyDecisionSnapshot(
         vary_to: text(p?.vary_to ?? p?.vary_options?.[0]?.name, 120),
         current_target: prescriptionTarget(p?.current, p?.mode),
         suggested_target: prescriptionTarget(p?.suggested, p?.mode),
+        // Spread, not a null field: `stableJson` walks Object.keys, so writing the
+        // key on every ordinary day would move every fingerprint in existence.
+        ...(topSetOf(p?.top_set) ? { top_set: topSetOf(p?.top_set) as DailyDecisionTopSet } : {}),
         evidence: {
           delta_text: text(p?.delta_text, 80),
           why: text(p?.why, 240),
@@ -1260,6 +1307,7 @@ export function buildDailySessionDecision(
       vary_to: string | null;
       current_target: DailyDecisionTarget | null;
       suggested_target: DailyDecisionTarget | null;
+      top_set: DailyDecisionTopSet | null;
       evidence: DailyDecisionProgressionEvidence | null;
     }
   >();
@@ -1270,6 +1318,11 @@ export function buildDailySessionDecision(
       vary_to: p.vary_to ?? null,
       current_target: p.current_target ?? null,
       suggested_target: p.suggested_target ?? null,
+      // Normalized again here, not just at gather time: a snapshot can also arrive
+      // hand-built or replayed off a stored row, and the ENVELOPE is the contract
+      // every consumer reads. Whatever shape came in, what leaves is a heavy single
+      // or nothing.
+      top_set: topSetOf(p.top_set),
       evidence: p.evidence ?? null,
     });
   }
@@ -1440,6 +1493,12 @@ export function buildDailySessionDecision(
                 ? prog.current_target
                 : null
             : null,
+        // The peak protocol rides ONLY with its own authorized back-off block.
+        // Every branch above that hands back something other than
+        // `prog.suggested_target` — a recheck, a saturated group, an underperforming
+        // week, a deload day — has stepped the day back on purpose, and a
+        // near-maximal single is the last thing that should survive that.
+        ...(!substitution && prog && action === prog.action && prog.top_set ? { top_set: prog.top_set } : {}),
         progression_evidence: prog?.evidence ?? null,
         brain_decision_id: it.brain_decision_id ?? null,
         brain_change_summary: it.brain_change_summary ?? null,

@@ -25,6 +25,12 @@ type TodayPlanSurfaceRendererLastSet = TodayPlanSurfaceRendererRecord & {
   rir?: unknown;
   duration_sec?: unknown;
 };
+type TodayPlanSurfaceRendererAttribution = {
+  key: string;
+  exercise: string;
+  sets: unknown[];
+  siblings: number;
+};
 type TodayPlanSurfaceRendererOptions = {
   showDone: boolean;
   showPlan: boolean;
@@ -55,6 +61,7 @@ type TodayPlanSurfaceRendererOptions = {
   isRunDay: boolean;
   preserveItemOrder?: boolean;
   prefillFor(item: TodayPlanSurfaceRendererItem): TodayPlanSurfaceRendererPrefill;
+  attributionFor?(item: TodayPlanSurfaceRendererItem): TodayPlanSurfaceRendererAttribution | null;
   rxFor(name: unknown): unknown;
 };
 type TodayPlanSurfaceRendererDeps = {
@@ -211,14 +218,26 @@ type TodayPlanSurfaceRendererApi = {
       }
       const exerciseName = String(item.exercise || "");
       const carded = journeyItem(item, options.day, options.strengthJourney);
+      // The card, not the exercise name, owns its sets: a peak day renders the same
+      // lift twice and the attribution says which logged sets belong to which card.
+      // With one card per exercise the attribution IS the whole pile, so this stays
+      // exactly what it was.
+      const attributed = options.attributionFor ? options.attributionFor(item) : null;
+      const cardSets = attributed ? attributed.sets : options.loggedByEx[exerciseName] || [];
       html += deps.exCard(
         {
           ...carded,
           ...(easedSession ? { note: withoutEasedPrefix(carded.note) } : {}),
           fromPlan: item.fromPlan !== false,
           fromSession: item.fromSession === true,
+          ...(attributed && attributed.siblings > 1
+            ? {
+                cardKey: attributed.key,
+                exerciseLogged: (options.loggedByEx[exerciseName] || []).length,
+              }
+            : {}),
         },
-        options.loggedByEx[exerciseName] || [],
+        cardSets,
         options.prefillFor(item),
         cardIdx++,
         options.rxFor(exerciseName),

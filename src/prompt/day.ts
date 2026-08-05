@@ -469,6 +469,22 @@ export function buildDayReadPrompt(
     readiness?.current != null
       ? `\nREADINESS: current ${Math.round(Number(readiness.current))} (${readiness.current_date || "date unknown"}; ${readiness.freshness || "unknown freshness"})${readiness.window_average != null ? ` vs ${Math.round(Number(readiness.window_average))} window average` : ""}${readiness.sample_count != null && readiness.window_days != null ? ` from ${readiness.sample_count}/${readiness.window_days} days` : ""}. Treat only a FRESH current reading as a today-decision signal; an average or stale/sparse reading is context, never a gate.`
       : `\nREADINESS: no current readiness reading. A window average, if present in DATA, is context only and must not be described as today's state.`;
+  // Does TODAY carry bigger work than an ordinary day (a long run, a quality session,
+  // a heavy lower day, a strength+run double)? Forward-looking only, and only while the
+  // work is still ahead: once the day is logged, a line about fueling it could only read
+  // as a verdict on what they ate, which the nutrition laws forbid outright. Silent on a
+  // standard or light day — most days say nothing here.
+  const fuelDemandLine = (() => {
+    if (baseline.kind === "done") return "";
+    try {
+      const demand: any = repo.dayFuelDemand(opts.date || context.now?.date || localDateISO());
+      if (demand?.demand !== "big") return "";
+      const drivers = Array.isArray(demand.drivers) && demand.drivers.length ? ` (${demand.drivers.join("; ")})` : "";
+      return `\nTODAY'S FUEL DEMAND: today carries bigger work than an ordinary day${drivers}. If food comes up at all, ONE calm clause is enough — carbohydrate earns its place around that work. DATA.fuel_demand carries the same read for the days ahead. This is never a change to their accepted daily target, and never a judgement about what they have or haven't eaten.`;
+    } catch {
+      return "";
+    }
+  })();
   // The user has ALREADY completed a real, loading session today (a deterministic
   // fact). This becomes a post-session DEBRIEF, not a fresh suggestion: acknowledge the
   // specific work, place it in the week, give ONE forward focus, and nudge refuel only
@@ -508,7 +524,7 @@ ${JSON.stringify(baseline.signals)}
 A rules-only baseline suggested: kind="${baseline.kind}", focus=${JSON.stringify(baseline.focus)}.
 You MAY disagree with the baseline when the whole picture warrants it — it is a floor, not a ceiling.
 RECENT TRAINING (most recent first): ${sessionLine}.
-TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${renderRecentReads(feltDate)}${renderReadOutcomes(context, baseline)}${renderPeriodization(feltDate)}${doneBlock}${lastNightLine}${oneNightLine}
+TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${renderRecentReads(feltDate)}${renderReadOutcomes(context, baseline)}${renderPeriodization(feltDate)}${doneBlock}${lastNightLine}${oneNightLine}${fuelDemandLine}
 ${CONTEXT_GUARDRAILS}
 ${renderSignalState(context)}${renderCoachingFocus(context, { brief: true })}${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderRunZones(context)}${renderRunPlan(context)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderMuscleGroups(context)}${renderPerformance(context, { brief: true })}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${feltBlock}${learnedBlock}${backedBlock}${driveBlock}${overrideBlock}
 ${renderJsonContract(DAY_READ_SCHEMA)}
@@ -645,10 +661,17 @@ export function buildDailyCompositionPrompt(envelope: any, ctx?: CoachContext): 
   const candidateLines = candidates
     .filter((c: any) => c?.action !== "exclude")
     .slice(0, 16)
-    .map(
-      (c: any) =>
-        `- ${c.exercise}${c.muscle_group ? ` (${c.muscle_group})` : ""}: ${c.action}${c.note ? ` — ${c.note}` : ""}`
-    )
+    .map((c: any) => {
+      // A peak day is TWO tiers. Naming the heavy single here keeps the agent from
+      // writing a session around the back-off block alone, or from inventing a
+      // second one of its own — the server inserts the actual top-set line after
+      // composition (normalizeComposedSession), so this is context, not a request.
+      const tiers =
+        c.top_set && c.top_set.weight != null && c.top_set.reps != null
+          ? ` — peak day: one heavy top set of ${c.top_set.reps} at ${c.top_set.weight}, THEN the back-off block below (the server writes the top set in for you; compose the back-off work)`
+          : "";
+      return `- ${c.exercise}${c.muscle_group ? ` (${c.muscle_group})` : ""}: ${c.action}${tiers}${c.note ? ` — ${c.note}` : ""}`;
+    })
     .join("\n");
   const excludedList = Array.isArray(muscles.excluded) ? muscles.excluded : [];
   const reducedList = Array.isArray(muscles.reduced) ? muscles.reduced : [];

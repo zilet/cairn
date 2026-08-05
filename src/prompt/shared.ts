@@ -1213,10 +1213,17 @@ export function renderPerformance(ctx: PartialCoachContext, opts: { brief?: bool
   return lines.length ? `\n${lines.join("\n")}\n` : "";
 }
 
-// renderRunZones: the user's Z1–Z5 bpm bands grounded in real physiology
-// (max-HR + resting HR), so the agent prescribes runs to an actual pulse instead
-// of a vague "easy". Quiet by default — "" when no zones are available (no age +
-// no Garmin HR). Plain words + concrete bpm, never a score.
+// renderRunZones: the user's Z1–Z5 bpm bands, so the agent prescribes runs to an
+// actual pulse instead of a vague "easy". Quiet by default — "" when no zones are
+// available (no age + no Garmin HR). Plain words + concrete bpm, never a score.
+//
+// These bands and the `hr_model` block below them ship into the SAME prompt, and
+// they used to be able to disagree about the same beat: this was a population
+// formula (Tanaka/Karvonen) while hr_model was the athlete's own threshold. The
+// resolution lives in `resolveRunZones` (src/repo/run-progression.ts), applied
+// inside `runZones()` itself — so every consumer, prompt and REST and MCP alike,
+// reads one answer, and the formula survives only as the fallback for an athlete
+// with too little running for the model to speak.
 export function renderRunZones(ctx: PartialCoachContext): string {
   const z = ctx?.run_zones as any;
   if (!z || !z.available || !Array.isArray(z.zones) || !z.zones.length) return "";

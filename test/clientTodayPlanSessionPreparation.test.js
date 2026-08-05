@@ -373,3 +373,92 @@ test("plan-backed daily composition remains an immutable strength and cardio sna
     "later weekly-plan cardio must not be appended to the accepted snapshot"
   );
 });
+
+// A peak day prescribes the SAME lift twice — a near-max top single, then a
+// back-off block — and logged sets can only carry the one real lift name (est-1RM
+// and calibration read that name). Without per-card attribution the back-off card
+// read the name-keyed pile and opened prefilled with the 315x1 the athlete had
+// just hit.
+test("Peak-day cards claim their own logged sets and never prefill from a sibling card", () => {
+  const context = loadPreparation();
+  const model = context.CairnTodayPlanSessionModel;
+  const topSingle = { exercise: "Back Squat", sets: 1, rep_low: 1, rep_high: 1, target_weight: 315 };
+  const backOff = { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 5, target_weight: 265 };
+  const items = [topSingle, backOff];
+  const isCardioItem = (item) => item.kind === "cardio";
+
+  const loggedByEx = model.groupLoggedSets({
+    sets: [{ exercise: "Back Squat", set_number: 1, weight: 315, reps: 1, rir: 0 }],
+  });
+  const attribution = model.cardAttribution({ items, loggedByEx, isCardioItem });
+
+  // The top single claims the first logged set; the back-off block has none yet.
+  assert.deepEqual(plain(attribution.get(topSingle).sets.map((set) => set.weight)), [315]);
+  assert.deepEqual(plain(attribution.get(backOff).sets), []);
+  assert.notEqual(attribution.get(topSingle).key, attribution.get(backOff).key);
+  assert.equal(attribution.get(topSingle).siblings, 2);
+
+  // THE SAFETY CASE: the back-off card opens on its OWN prescribed dose, not on
+  // the near-max single sitting in the name-keyed pile.
+  assert.deepEqual(
+    plain(model.prefillFor(backOff, loggedByEx, {}, null, attribution.get(backOff))),
+    { weight: 265, reps: 5, rir: null, duration_sec: null }
+  );
+  // ...and a name-keyed history row cannot override it either.
+  assert.deepEqual(
+    plain(model.prefillFor(backOff, loggedByEx, { "Back Squat": { weight: 315, reps: 1, rir: 0 } }, null, attribution.get(backOff))),
+    { weight: 265, reps: 5, rir: null, duration_sec: null }
+  );
+  // The card that DID log continues from what it logged.
+  assert.deepEqual(
+    plain(model.prefillFor(topSingle, loggedByEx, {}, null, attribution.get(topSingle))),
+    { weight: 315, reps: 1, rir: 0, duration_sec: null }
+  );
+
+  // Later sets fill the back-off card in order; the top single keeps only its one.
+  const laterLogged = model.groupLoggedSets({
+    sets: [
+      { exercise: "Back Squat", set_number: 1, weight: 315, reps: 1, rir: 0 },
+      { exercise: "Back Squat", set_number: 2, weight: 265, reps: 5, rir: 2 },
+      { exercise: "Back Squat", set_number: 3, weight: 265, reps: 5, rir: 1 },
+      { exercise: "Back Squat", set_number: 4, weight: 265, reps: 5, rir: 1 },
+      { exercise: "Back Squat", set_number: 5, weight: 265, reps: 4, rir: 0 },
+    ],
+  });
+  const later = model.cardAttribution({ items, loggedByEx: laterLogged, isCardioItem });
+  assert.deepEqual(plain(later.get(topSingle).sets.map((set) => set.set_number)), [1]);
+  // The last card absorbs the overflow set rather than dropping it.
+  assert.deepEqual(plain(later.get(backOff).sets.map((set) => set.set_number)), [2, 3, 4, 5]);
+});
+
+// The ordinary day must not notice any of this: one card per exercise means the
+// card key IS the exercise name and the card claims the whole pile, which is
+// exactly what the name-keyed model did.
+test("A one-card-per-exercise day degenerates to the name-keyed behaviour", () => {
+  const context = loadPreparation();
+  const model = context.CairnTodayPlanSessionModel;
+  const bench = { exercise: "Bench", sets: 3, rep_low: 5, target_weight: 185 };
+  const items = [bench, { exercise: "Row", sets: 3, rep_low: 8 }, { kind: "cardio", label: "Easy run" }];
+  const loggedByEx = model.groupLoggedSets({
+    sets: [
+      { exercise: "Bench", set_number: 1, weight: 185, reps: 5, rir: 2 },
+      { exercise: "Bench", set_number: 2, weight: 190, reps: 4, rir: 1 },
+    ],
+  });
+  const attribution = model.cardAttribution({ items, loggedByEx, isCardioItem: (item) => item.kind === "cardio" });
+
+  assert.equal(attribution.get(bench).key, "Bench", "an unshared name stays its own key");
+  assert.equal(attribution.get(bench).siblings, 1);
+  assert.deepEqual(plain(attribution.get(bench).sets.map((set) => set.set_number)), [1, 2]);
+  // Same prefill with and without the attribution argument.
+  const withAttribution = plain(model.prefillFor(bench, loggedByEx, {}, null, attribution.get(bench)));
+  const withoutAttribution = plain(model.prefillFor(bench, loggedByEx, {}, null));
+  assert.deepEqual(withAttribution, withoutAttribution);
+  assert.deepEqual(withAttribution, { weight: 190, reps: 4, rir: 1, duration_sec: null });
+  // A single card still prefers real history over its stored target.
+  const row = items[1];
+  assert.deepEqual(
+    plain(model.prefillFor(row, {}, { Row: { weight: 135, reps: 8, rir: 2 } }, null, attribution.get(row))),
+    { weight: 135, reps: 8, rir: 2, duration_sec: null }
+  );
+});

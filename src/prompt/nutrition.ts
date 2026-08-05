@@ -252,6 +252,63 @@ function renderFuelingFeedback(context: any): string {
 // the deficit / "getting-lean" framing on the actual goal mode, so a maintaining or
 // lean-building user is never pushed into a cut. Reads ctx.goal_mode (always set
 // by getCoachContext) and falls back to ctx.goal.goal_mode. Calm, no scores.
+// ---------- day-specific fuel demand ----------
+// The deterministic read of which days carry the week's biggest work (repo/fuel-demand.ts),
+// rendered for the nutrition prompts that have no DATA block of their own. The meal plan
+// does have one and reads `fuel_demand` straight out of it — this is for the check-in and
+// the single-meal swap.
+//
+// Three things this block must never become, all of them stated in its own text because
+// the model reads the text and not this comment:
+//   1. a target change — the accepted daily number stays authoritative,
+//   2. a reason to CUT another day to pay for a big one,
+//   3. a retrospective judgement ("you underfueled Saturday"). The read is forward-looking
+//      and the loop is adherence-neutral.
+const FUEL_DEMAND_RULE =
+  "A bigger day is a reason to bias CARBOHYDRATE toward it and to protect fuel — never a reason to change the accepted daily target, never a reason to cut another day to pay for it, and never a retrospective judgement about a day that has already passed.";
+
+function fuelDemandLine(day: any, label?: string): string {
+  const when = label ? `${day?.date} (${label})` : String(day?.date ?? "");
+  const drivers = Array.isArray(day?.drivers) && day.drivers.length ? ` — ${day.drivers.join("; ")}` : "";
+  return `- ${when}: ${day?.demand ?? "standard"}${drivers}`;
+}
+
+// `opts.days` takes the first N days (the check-in wants today + tomorrow); `opts.weekday`
+// instead picks the single day matching a plan-day label like "Mon"/"Monday" (the swap
+// works inside one named day). Returns "" whenever there is nothing to say.
+function renderFuelDemand(ctx: any, opts: { days?: number; weekday?: string } = {}): string {
+  const week = ctx?.fuel_demand;
+  const days: any[] = Array.isArray(week?.days) ? week.days : [];
+  if (!days.length) return "";
+
+  let picked: { day: any; label?: string }[];
+  if (opts.weekday) {
+    const wanted = String(opts.weekday).trim().slice(0, 3).toLowerCase();
+    if (!wanted) return "";
+    const match = days.find((day) => {
+      const parsed = Date.parse(`${String(day?.date ?? "")}T00:00:00Z`);
+      if (!Number.isFinite(parsed)) return false;
+      return (
+        new Date(parsed).toLocaleDateString("en-US", { weekday: "short", timeZone: "UTC" }).toLowerCase() === wanted
+      );
+    });
+    // No match means the named day isn't in the read's window — say nothing rather
+    // than describing a different day's work.
+    if (!match) return "";
+    picked = [{ day: match }];
+  } else {
+    picked = days.slice(0, Math.max(1, opts.days ?? 2)).map((day, index) => ({
+      day,
+      label: index === 0 ? "today" : index === 1 ? "tomorrow" : undefined,
+    }));
+  }
+  // Nothing worth a block when every day in view is ordinary.
+  if (!picked.some((entry) => entry.day?.demand === "big")) return "";
+
+  const lines = picked.map((entry) => fuelDemandLine(entry.day, entry.label)).join("\n");
+  return `\nDAY-SPECIFIC FUEL DEMAND (deterministic, from the training plan and this week's run intentions):\n${lines}\n- ${FUEL_DEMAND_RULE}\n`;
+}
+
 function renderGoalMode(ctx: any): string {
   const mode = String(ctx?.goal_mode || ctx?.goal?.goal_mode || "maintain");
   const goal = ctx?.goal && ctx.goal.ok ? ctx.goal : null;
@@ -578,6 +635,10 @@ HARD RULES:
 - Treat "occasionally allowed," "workable option," "not off-limits," and "when ordering" memories
   as contingency guidance only — permission is not intent, so never schedule them proactively.
 - Time more carbs around training days; keep it practical and repeatable, not 7 unique gourmet days.
+  DATA.fuel_demand names WHICH days those are: each day carries a demand of big / standard / light and,
+  on a big day, the drivers behind it (a long run, a quality session, a heavy lower-body day, a
+  strength+run double). Bias carbohydrate toward the big days and say so in that day's note.
+  ${FUEL_DEMAND_RULE}
 - Evaluate PRACTICALITY as part of adequacy: preparation time, household fit, ordinary cost/availability,
   and reuse of the user's frequent foods. A theoretically perfect plan they will not cook is not adequate.
 - Nutrition-pattern judgments are coarse and food-pattern based. Never invent precise sodium, potassium,
@@ -723,7 +784,7 @@ WHEN TO PROPOSE A CHANGE (else change:false):
   }
 
 ${CONTEXT_GUARDRAILS}
-${renderHolisticNutritionStrategy(context, exp)}
+${renderHolisticNutritionStrategy(context, exp)}${renderFuelDemand(context, { days: 2 })}
 ${renderSignalState(context)}${renderDiscipline(context, "nutrition")}${renderEnduranceGoal(context, "nutrition")}${renderConnectedBrain(context, { domains: ["nutrition"] })}${renderTrajectory(context)}${renderDexaTargeting(context, "nutrition")}${renderBodyComp(context)}${renderAcuteLoadNote(context)}${renderTodayFuel(context)}${renderFuelingFeedback(context)}
 USER: profile: ${JSON.stringify(profile)}
 
@@ -793,7 +854,7 @@ REPLACEMENT RULES:
 - It must fit the rest of the day (don't duplicate another meal's main protein/dish).
 
 ${longevityGuardrails(plantForward)}
-${renderGoalMode(ctx)}${hardDiet}${renderSignalState(ctx)}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderTrajectory(ctx)}${renderFoodMemory((ctx as any)?.memory)}${renderHouseholdDiet(ctx)}
+${renderGoalMode(ctx)}${hardDiet}${renderFuelDemand(ctx, { weekday: String(dayObj?.day ?? day ?? "") })}${renderSignalState(ctx)}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderTrajectory(ctx)}${renderFoodMemory((ctx as any)?.memory)}${renderHouseholdDiet(ctx)}
 ${
   prefs
     ? `

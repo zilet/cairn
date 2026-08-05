@@ -5,7 +5,7 @@ import { constraintLimitsLoad, movementKey, normalizeExerciseName, normalizedExe
 import { findExercise, findOrCreateExercise, recentWorkingSeconds, recentWorkingWeight } from "./exercises.js";
 import { relatedLiftStart } from "./related-lift.js";
 import { invalidateDayRead } from "./intelligence.js";
-import { localDateISO } from "./shared.js";
+import { localDateISO, localDayOfStamp } from "./shared.js";
 import { bumpTrainingDataVersion } from "./training-cache.js";
 import { PlanQualityError, pressSlotKey, qualityIssueKey, validateTrainingPlan } from "./plan-quality.js";
 import { afterSqliteCommit, withSqliteSavepoint } from "./sqlite-savepoint.js";
@@ -309,20 +309,26 @@ function countAppliedProgressionChanges(
   const asOf = /^\d{4}-\d{2}-\d{2}$/.test(String(asOfISO ?? "").slice(0, 10))
     ? String(asOfISO).slice(0, 10)
     : localDateISO();
-  let rows: Array<{ parsed_json: string | null }> = [];
+  let rows: Array<{ parsed_json: string | null; created_at: string }> = [];
   try {
+    // `since`/`asOf` are LOCAL days and `created_at` is a UTC stamp, so SQLite's
+    // date() cannot bound this window on its own — an evening apply would land in
+    // the wrong day. The query widens by a day on each side (it can only
+    // over-collect) and the local day of each stamp bounds it exactly below.
     rows = db
       .prepare(
-        `SELECT parsed_json FROM plan_proposals
+        `SELECT parsed_json, created_at FROM plan_proposals
           WHERE status = 'applied' AND parsed_json IS NOT NULL
-            AND date(created_at) >= ? AND date(created_at) <= ?`
+            AND date(created_at) >= date(?, '-1 day') AND date(created_at) <= date(?, '+1 day')`
       )
-      .all(since, asOf) as Array<{ parsed_json: string | null }>;
+      .all(since, asOf) as Array<{ parsed_json: string | null; created_at: string }>;
   } catch {
     return 0;
   }
   let count = 0;
   for (const row of rows) {
+    const day = localDayOfStamp(row?.created_at);
+    if (day == null || day < since || day > asOf) continue;
     let parsed: any = null;
     try {
       parsed = JSON.parse(String(row?.parsed_json ?? ""));
