@@ -43,6 +43,7 @@
   background:var(--accent,#b4552d);color:#fffdf8;border-color:var(--accent,#b4552d)}
 .agent-login-link-open:hover{background:var(--accent,#b4552d);opacity:.92}
 .agent-login-paste{display:flex;gap:8px}
+.agent-login-paste[hidden]{display:none}
 .agent-login-paste-in{flex:1;min-width:0;font-family:inherit;font-size:16px;padding:8px 12px;
   border-radius:11px;border:1px solid var(--line,#e7dfd2);background:var(--paper,#f4efe7);color:var(--ink,#211d17)}
 .agent-login-paste-in::placeholder{color:var(--muted,#746c5c)}
@@ -71,6 +72,11 @@
   function createAgentLoginModal(name: string, retryLogin: AgentLoginRetry): AgentLoginModalHandle | null {
     ensureAgentLoginStyles();
     const model = agentLoginModel();
+    // The paste box exists because iOS never offers a paste callout on xterm's
+    // hidden textarea; on fine-pointer desktops Cmd/Ctrl+V into the terminal
+    // just works, so the box only appears on touch devices.
+    const touchPaste = (typeof navigator !== "undefined" && (navigator.maxTouchPoints || 0) > 0) ||
+      (typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches);
     const overlay = document.createElement("div") as AgentLoginOverlay;
     overlay.className = "agent-login-ov";
     overlay.innerHTML = `
@@ -86,14 +92,16 @@
           <a class="agent-login-btn agent-login-link-open" target="_blank" rel="noopener">Open sign-in page</a>
           <button class="agent-login-btn" type="button" data-copy-link>Copy link</button>
         </div>
-        <div class="agent-login-paste">
+        <div class="agent-login-paste" ${touchPaste ? "" : "hidden"}>
           <input class="agent-login-paste-in" type="text" autocomplete="off" autocapitalize="off"
             autocorrect="off" spellcheck="false" enterkeyhint="send"
             placeholder="Paste the login code here" aria-label="Paste an authorization code">
           <button class="agent-login-btn" type="button" data-paste-send>Send</button>
         </div>
         ${model.providerHintHtml(name)}
-        <p class="agent-login-hint">Follow the prompts. When a sign-in link appears in the terminal it also surfaces as a button above &mdash; open it, authorize, then paste the code in the box; on phones the terminal itself can't take a paste.</p>
+        <p class="agent-login-hint">${touchPaste
+          ? "Follow the prompts. When a sign-in link appears in the terminal it also surfaces as a button above &mdash; open it, authorize, then paste the code in the box; the terminal itself can't take a paste on phones."
+          : "Follow the prompts &mdash; you can type and paste directly into the terminal. When a sign-in link appears it also surfaces as a button above."}</p>
         <div class="agent-login-ft">
           <button class="agent-login-btn" type="button" data-close>Cancel</button>
         </div>
