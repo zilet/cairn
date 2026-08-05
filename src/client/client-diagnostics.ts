@@ -41,7 +41,7 @@ const CLIENT_DIAGNOSTIC_FLUSH_MS = 750;
 const PERMANENT_PAYLOAD_FAILURES = new Set([400, 413, 422]);
 const CLIENT_API_ROUTE_FAMILIES = new Set([
   "activities", "agent", "agent-clis", "agent-jobs", "agent-stats", "agents", "art", "blood-pressure",
-  "body-metrics", "bodyweight", "brain", "brain-diagnostics", "calendar", "cardio", "chat", "chat-images",
+  "body-metrics", "bodyweight", "brain", "brain-diagnostics", "calendar", "calibration", "cardio", "chat", "chat-images",
   "checkins", "coach", "coaching-focus", "context-effect", "context-events", "dexa-targeting", "diagnostics",
   "directives", "endurance-goal", "endurance-prs", "evidence", "exercise", "exercises", "export", "family",
   "food-notes", "frequent-foods", "garmin", "goal", "goal-checkin", "guidelines", "health", "health-docs",

@@ -45,8 +45,6 @@ import {
   enduranceDose,
   loadPhrase,
   recentEnduranceImpacts,
-  recentMuscleLoad,
-  type RecentLoad,
 } from "./hybrid-load.js";
 // Every athlete-facing sentence this engine says lives in ONE vocabulary module as
 // a SET of phrasings, rotated per day and per exercise — never a literal here. See

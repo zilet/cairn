@@ -1206,6 +1206,17 @@ const ACCELERATING_TRAINING_METRICS: ReadonlySet<string> = new Set([
 // 1.05 rather than the load step's 1.1, is what that difference buys.
 const RUN_VOLUME_ACCELERATION_MIN_RUN = 3;
 
+// …unless the athlete has not merely MET the prescribed mileage but comfortably
+// cleared it. Three aligned windows is the bar for "they are absorbing what we
+// asked"; when the completion rate is well over 1 the evidence is stronger than a
+// bare pass — the prescription was under the athlete's demonstrated capacity, and
+// two such windows say more about headroom than three marginal ones do. The
+// eased-into rule still adds its week on top, the ceiling is still 1.05, and the
+// symptom and missed-window guards are untouched: this shortens the wait, it never
+// removes a guard.
+const RUN_VOLUME_OVERSHOOT_MIN_RUN = 2;
+const RUN_VOLUME_OVERSHOOT_RATE = 1.15;
+
 // DECLARED == REACHABLE. Both ends of this band are values the branch below can
 // actually produce (0.9 on a miss, 1.05 on an earned acceleration) — an unreachable
 // ceiling is a promise the model never has to keep, and the whole point of wiring
@@ -1254,7 +1265,13 @@ function modifierFor(
   verdict: EvaluatedDecisionRow["verdict"],
   confidence: CoachPersonalResponseConfidence,
   evidenceN: number,
-  window: { missed_n: number; preceding_verdict: EvaluatedDecisionRow["verdict"] | null }
+  window: {
+    missed_n: number;
+    preceding_verdict: EvaluatedDecisionRow["verdict"] | null;
+    // How many of the most recent windows in the current run were cleared by a
+    // clear margin rather than just met. Read by the run-volume branch only.
+    overshoot_n?: number;
+  }
 ): CoachPersonalModifier | null {
   let target: CoachPersonalModifierTarget | null = null;
   let scale = 1;
@@ -1328,7 +1345,13 @@ function modifierFor(
     target = "run_volume_step";
     bounds = { ...RUN_VOLUME_BOUNDS };
     const easedIntoThisRun = window.preceding_verdict === "not_aligned";
-    const requiredRun = RUN_VOLUME_ACCELERATION_MIN_RUN + (easedIntoThisRun ? 1 : 0);
+    // Condition 1 relaxes — and ONLY condition 1 — when the recent windows were
+    // cleared by a clear margin. An athlete running well past what was prescribed is
+    // telling the model the prescription was under them; making them wait a third
+    // window to say so is how a plan stays quietly too small for a season.
+    const clearlyExceeded = (window.overshoot_n ?? 0) >= RUN_VOLUME_OVERSHOOT_MIN_RUN;
+    const requiredRun =
+      (clearlyExceeded ? RUN_VOLUME_OVERSHOOT_MIN_RUN : RUN_VOLUME_ACCELERATION_MIN_RUN) + (easedIntoThisRun ? 1 : 0);
     scale =
       verdict === "not_aligned"
         ? 0.9
@@ -1470,10 +1493,21 @@ function learningForGroup(
   const runStartRow = rows[runStart];
   const runStartIndex = eligible.indexOf(runStartRow);
   const precedingVerdict = runStartIndex > 0 ? eligible[runStartIndex - 1].verdict : null;
+  // The trailing streak of windows the athlete cleared by a clear margin, not merely
+  // met. Counted from the newest backwards and stopping at the first window that was
+  // only met, so it describes the CURRENT picture rather than a good patch somewhere
+  // in the middle of the run.
+  let overshootN = 0;
+  for (let i = latestRun.length - 1; i >= 0; i--) {
+    const rate = Number(latestRun[i].actual?.completion_rate ?? latestRun[i].actual?.value);
+    if (Number.isFinite(rate) && rate >= RUN_VOLUME_OVERSHOOT_RATE) overshootN++;
+    else break;
+  }
   const earnedModifier = activeVerdict
     ? modifierFor(latest, activeVerdict, confidence, latestRun.length, {
         missed_n: missedN,
         preceding_verdict: precedingVerdict,
+        overshoot_n: overshootN,
       })
     : null;
   const modifier = agedModifier(earnedModifier, latest.evaluated_at, today);

@@ -4,6 +4,32 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-08-05 — the race pulls, the zones are yours, the coach tests
+
+No schema migration (`user_version` stays 91); two new tables via `CREATE TABLE IF NOT EXISTS`
+(`hr_model_state`, `calibration_events`).
+
+**Run planning stops being reactive-only.** New `src/repo/run-ramp.ts` computes ideal + constrained
+race trajectories; `weeklyRunPlan` blends the constrained ask as a pull on ordinary build weeks
+(protective branches untouched), reports `goal_feasibility` in three bands with choice-framed
+variant prose, and treats a demonstrated long run as a floor (bounded), not only a cap. Distance-
+aware phases (≥15 km → 14-week build), threshold in the base quality pool, endurance block for a
+timed race inside 16 weeks, quality from 10 km/wk with a race target, and the supporting-role
+contradiction named plainly. Overshoot became visible: acceleration needs two ≥1.15-cleared windows
+instead of three.
+
+**Personal HR model + calibration ladder** (see the architecture section): zones from observed data
+on a field-test → sustained-effort → fraction-of-max ladder, nightly + post-sync derivation,
+conservative test detection for LTHR/benchmark/strength top sets, staleness → suggestion loop for
+both domains, coach-context projection at day_read/session.
+
+**The Endurance page stops disagreeing with itself.** The lead sentence is completion-aware (a
+banked long run reads as banked, with the actual distance); `getRunCompliance` gains `basis` with a
+live-plan fallback via the new domain composer; a Monday scheduler tick keeps the applied week
+current through the autonomy service; and `planCardioIsRun` fixes machine-applied cardio rows
+counting as zero prescribed runs (the label was folded away on save whenever the engine wrote
+prose). New `GET /api/calibration/status` + `get_calibration_status` MCP mirror.
+
 ## 2026-08-04 — a volume cut is owed back
 
 No schema change (`user_version` stays 91). Service worker `cairn-v543`.

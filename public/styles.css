@@ -5845,8 +5845,23 @@ button.prow-name:hover{color:var(--accent)}
 .plan-recovery-review{margin-top:11px}
 /* Coming up — a quiet forward look: the training/recovery changes about to land.
    Lighter than the recovery banner (no accent bar) so it reads as a heads-up, not
-   an alarm; pull-never-push. */
+   an alarm; pull-never-push. Shared by two shapes: a plain compact banner div
+   (meal-plan-client.ts's "MEALS NEED A REFRESH" / "COMING NEXT", one mast + one
+   line, already calm — flex-column-gap just stacks its children) and the
+   disclosure below (a <details> whose direct children are <summary> + the fold
+   body; the same flex-column-gap stacks those two instead). The disclosure
+   (like .team-fold / .weekly-depth) collapses to one footnote-weight strip
+   naming only the sections that have items — so "Waiting on you" stays
+   discoverable without a wall of prose ahead of the plan — and one tap expands
+   to the full rationale paragraphs. */
 .plan-upcoming{margin:2px 0 14px;display:flex;flex-direction:column;gap:8px}
+.plan-upcoming>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+.plan-upcoming>summary::-webkit-details-marker{display:none}
+.plan-upcoming>summary::before{content:"▸";font-size:.65rem;color:var(--muted);transition:transform .15s ease}
+.plan-upcoming[open]>summary::before{transform:rotate(90deg)}
+.plan-upcoming>summary:hover .plan-upcoming-strip{color:var(--ink-2)}
+.plan-upcoming-strip{color:var(--muted)}
+.plan-upcoming-body{display:flex;flex-direction:column;gap:8px}
 .plan-upcoming-mast{display:block;color:var(--sage-text);letter-spacing:.08em}
 .plan-upcoming-item{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 14px}
 .plan-upcoming-line{margin:0;font-size:.88rem;line-height:1.45;color:var(--ink)}

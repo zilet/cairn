@@ -13,7 +13,6 @@ import {
   buildHrvGuardExpectation,
   buildLiftProgressionExpectations,
   buildTrainingFeedbackExpectations,
-  hasLiveAerobicTrendWindow,
   liftProgressionSubjects,
   rebaseDeferredExpectations,
 } from "../dist/repo/brain/change-expectations.js";

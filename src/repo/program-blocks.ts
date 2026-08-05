@@ -295,6 +295,15 @@ export function ensureActiveBlock(): ProgramBlock {
       focus = "endurance-base";
       total_weeks = wk != null && wk > 0 ? Math.min(8, Math.max(4, wk - 2)) : 6;
       blockGoal = `Build toward ${event} — aerobic base + supportive strength`;
+    } else if (String(goal.target ?? "").trim() && wk != null && wk <= 16) {
+      // A TIME on the race changes what "far out" means. Sixteen weeks is where a
+      // half or a marathon build actually starts, and defaulting an athlete with a
+      // time to chase into an off-season strength block spent the runway they needed
+      // on the wrong stimulus. Still supportive strength — the block's focus is where
+      // the aerobic work sits, not a claim that lifting stops.
+      focus = "endurance-base";
+      total_weeks = Math.min(8, Math.max(4, wk - 2));
+      blockGoal = `Build toward ${event} — aerobic base + supportive strength`;
     } else {
       // Race exists but far out (base phase) — strength-first, build durability.
       focus = "strength";

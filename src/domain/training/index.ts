@@ -28,6 +28,7 @@ export * from "../../repo/support-work.js";
 export * from "../../repo/strength-objectives.js";
 export * from "../../repo/run-progression.js";
 export * from "../../repo/sessions.js";
+export * from "./run-compliance-read.js";
 export { trainingLoadBand, trainingLoadBaselineRead } from "../../repo/baseline-bands.js";
 export * from "../../repo/training-playbook.js";
 export * from "../../repo/training-read.js";

@@ -14,7 +14,9 @@ import {
   adoptOrphanedDrafts,
   applyDueAnnouncedDecisions,
   applyProposalWithAutonomy,
+  buildRunPlanWithAutonomy,
 } from "./domain/brain/autonomy-service.js";
+import { lastAppliedRunPlanDate } from "./repo/sessions.js";
 import { enqueueAgentJob } from "./agentJobs.js";
 import { recordAsyncFailure, recordSchedulerFailure } from "./diagnostics.js";
 import { runWithTimeZone } from "./tz.js";
@@ -183,6 +185,72 @@ async function runScheduled<T>(
 function daysBetweenStamps(a: string, b: string): number {
   const ms = Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`);
   return Number.isFinite(ms) ? Math.round(ms / DAY_MS) : Number.POSITIVE_INFINITY;
+}
+
+// ---- Weekly run-plan apply (Monday) ----
+// The applied plan's cardio rows are the only endurance prescription the Plan
+// screen and run-compliance can see — and NOTHING ever rebuilt them. The only
+// writers were the manual Apply button and the apply_run_plan MCP tool, so a run
+// plan applied once kept prescribing that week's mileage forever while the live
+// weekly mix moved on ("9.1 of 7.3 km this week", from a plan weeks out of date).
+//
+// This is the missing cadence: one bounded, reversible volume step at the natural
+// boundary of a training week. Autonomy is NOT re-implemented here —
+// buildRunPlanWithAutonomy hands the proposal to the same policy layer as every
+// other adaptation, which owns the tier, the announcement, the decision ledger and
+// the one-tap Undo. A week that already has an applied run plan is a calm no-op,
+// as is an athlete the deterministic engine declines to prescribe runs for.
+export const RUN_PLAN_APPLY_STATE_KEY = "run_plan_apply_last_slot";
+export const RUN_PLAN_APPLY_DAY = 1; // Monday
+
+// The gate, exported so the ownership test drives the real one: bg ops off means
+// the cadence is off, and the Monday slot is miss-tolerant like every other.
+export function runPlanApplyDue(
+  now: Date,
+  settings: { bg_ops_enabled: boolean; coach_hour: number }
+): boolean {
+  if (!settings.bg_ops_enabled) return false;
+  return weeklySlotDue(now, RUN_PLAN_APPLY_DAY, settings.coach_hour, RUN_PLAN_APPLY_STATE_KEY);
+}
+
+export function runPlanAppliedSince(weekStartISO: string): boolean {
+  const applied = lastAppliedRunPlanDate();
+  return !!applied && applied >= weekStartISO;
+}
+
+// The exact body the Monday tick runs, exported so the ownership test drives the
+// real decision rather than a restatement of it.
+export function weeklyRunPlanApplyTask(weekStartISO: string): repo.SchedulerTaskCompletion<unknown> {
+  // The machine only starts LEADING run weeks once the athlete has applied one
+  // auto-built run plan through the explicit propose/apply flow. Until that has
+  // happened the cardio rows on the plan are hand-authored — exactly what the
+  // athlete asked for, and never stale (see appliedRunPlanCoversWeek in
+  // repo/sessions.ts) — so there is nothing here to refresh, and under the default
+  // "lead" posture this tick would otherwise quiet-apply a machine week straight
+  // over the athlete's own. Handing over the run week stays an explicit act.
+  if (lastAppliedRunPlanDate() === null) {
+    console.log(`[proactive] no auto run plan has ever been applied — the run week is the athlete's (calm no-op).`);
+    return { outcome: "no_op" };
+  }
+  if (runPlanAppliedSince(weekStartISO)) {
+    console.log(`[proactive] this week's run plan is already applied (calm no-op).`);
+    return { outcome: "no_op" };
+  }
+  const result = buildRunPlanWithAutonomy(weekStartISO);
+  if (!result.ok) {
+    // A designed ok:false — no running history / goal to shape a week from.
+    console.log(`[proactive] no run week to prescribe (calm no-op).`);
+    return { outcome: "no_op" };
+  }
+  const autonomy: any = result.autonomy;
+  console.log(
+    autonomy?.pending || autonomy?.announced
+      ? `[proactive] scheduled this week's run plan for its natural boundary.`
+      : autonomy?.tier === "quiet_apply"
+        ? `[proactive] applied this week's run plan.`
+        : `[proactive] this week's run plan is review-only under the configured posture.`
+  );
+  return { outcome: "succeeded", value: result };
 }
 
 export function startScheduler() {
@@ -1013,6 +1081,56 @@ export function startScheduler() {
     }
   };
 
+  // ---- The personal HR model (observed max, threshold, zone bands). ----
+  //      Derived, never a population formula, and a pure function of logged
+  //      activity plus the calibration ledger — so it is re-derived on a daily
+  //      slot for exactly the reason directives are: the PASSAGE OF TIME alone
+  //      moves it. A field test ages out of its 120-day window; the 183-day
+  //      observation window slides off an old peak; a resting-HR reading goes
+  //      stale and stops counting. Nothing here spawns an agent or pushes
+  //      anything, so like the propagation tick it is independent of the
+  //      proactive toggle. The sync path re-derives too (fresh runs land there
+  //      first); this is the floor that runs on a week with no sync at all.
+  let hrModelBusy = false;
+  const hrModelTick = async () => {
+    if (hrModelBusy) return;
+    const now = new Date();
+    if (!dailySlotDue(now, "hr_model_derive_date")) return;
+    hrModelBusy = true;
+    try {
+      await runScheduled("hr_model_derive_date", localToday(now), "hr_model_derive_date", () => {
+        const model = repo.deriveHrModel(localToday(now));
+        // A model with nothing to read is a calm no-op — an athlete who logs no
+        // heart rate is not a failure, and the day is still acknowledged.
+        if (model.confidence === "insufficient") return { outcome: "no_op" };
+        return { outcome: "succeeded", value: model };
+      });
+    } finally {
+      hrModelBusy = false;
+    }
+  };
+
+  // Its OWN tick, deliberately not a step inside proactiveTick: keeping the
+  // endurance week current is deterministic and spawns no agent, so it must not
+  // ride the settings.proactive_enabled toggle. Miss-tolerant like every other
+  // weekly slot — a process asleep on Monday morning catches up on the next tick.
+  let runPlanApplyBusy = false;
+  const runPlanApplyTick = async () => {
+    if (runPlanApplyBusy) return;
+    const settings = repo.getSettings();
+    const now = new Date();
+    if (!runPlanApplyDue(now, settings)) return;
+    const slot = weeklySlotStamp(now, RUN_PLAN_APPLY_DAY, settings.coach_hour);
+    runPlanApplyBusy = true;
+    try {
+      await runScheduled(RUN_PLAN_APPLY_STATE_KEY, slot, RUN_PLAN_APPLY_STATE_KEY, () =>
+        weeklyRunPlanApplyTask(slot)
+      );
+    } finally {
+      runPlanApplyBusy = false;
+    }
+  };
+
   const s = repo.getSettings(); // also lazily creates the row (seeding env defaults)
   const schedulerZone = repo.recordedClientTimeZone() ?? "server local time until a device reports its zone";
   console.log(
@@ -1039,10 +1157,14 @@ export function startScheduler() {
   setInterval(inOwnerTimeZone(memoryTick), 60_000); // Stream 2: nightly memory maintenance
   setInterval(inOwnerTimeZone(updateCheckTick), 60_000); // self-hosted update check (≤ once/day)
   setInterval(inOwnerTimeZone(propagationTick), 60_000); // connected-brain re-derivation (≤ once/day)
+  setInterval(inOwnerTimeZone(hrModelTick), 60_000); // personal HR model re-derivation (≤ once/day)
+  setInterval(inOwnerTimeZone(runPlanApplyTick), 60_000); // keep the applied run week current (Mondays)
   setInterval(heartbeatTick, 60_000); // readiness evidence; no agent/provider dependency
   setTimeout(inOwnerTimeZone(garminTick), 45_000); // the boot-time pass; later passes ride the minute tick
   setTimeout(inOwnerTimeZone(updateCheckTick), 30_000); // first update check shortly after boot (then daily)
   setTimeout(inOwnerTimeZone(propagationTick), 20_000); // catch up a day the process slept through
+  setTimeout(inOwnerTimeZone(hrModelTick), 25_000); // same catch-up for the HR model
+  setTimeout(inOwnerTimeZone(runPlanApplyTick), 25_000); // catch up a Monday the process slept through
   setTimeout(inOwnerTimeZone(boundaryApplyTick), 5_000);
   setTimeout(inOwnerTimeZone(revisionTick), 15_000);
 

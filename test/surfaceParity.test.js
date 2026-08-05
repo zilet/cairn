@@ -39,6 +39,7 @@ const MCP_SOURCE_FILES = [
   "src/surfaces/mcp/training-log.ts",
   "src/surfaces/mcp/training-status.ts",
   "src/surfaces/mcp/body-metrics.ts",
+  "src/surfaces/mcp/calibration.ts",
 ];
 
 // Normalize a path segment / noun to a comparable token: drop separators, lowercase,

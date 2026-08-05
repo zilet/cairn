@@ -4637,9 +4637,15 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     progressRunPlanSource,
     /function runComplianceLine\(compliance: RunCompliance \| null \| undefined\): string/
   );
+  // The lead sentence takes the AGENDA too — completion is what keeps it from
+  // naming a long run the athlete already finished.
   assert.match(
     progressRunPlanSource,
-    /function enduranceCoachLine\(plan: WeeklyRunPlan \| null \| undefined\): string/
+    /function enduranceCoachLine\(\s*plan: WeeklyRunPlan \| null \| undefined,\s*agenda\?: FlexibleTrainingAgenda \| null,?\s*\): string/
+  );
+  assert.match(
+    progressRunPlanSource,
+    /function enduranceCalibrationLine\(status: CalibrationStatus \| null \| undefined, dateISO\?: string\): string/
   );
   assert.match(progressRunPlanSource, /Object\.assign\(globalThis, \{/);
   assert.match(progressRunPlanSource, /CairnProgressRunPlan/);

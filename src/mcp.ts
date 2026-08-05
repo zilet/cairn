@@ -21,6 +21,7 @@ import { registerTrainingLogTools } from "./surfaces/mcp/training-log.js";
 import { registerTrainingStatusTools } from "./surfaces/mcp/training-status.js";
 import { registerBodyMetricsTools } from "./surfaces/mcp/body-metrics.js";
 import { registerJourneyTools } from "./surfaces/mcp/journey.js";
+import { registerCalibrationTools } from "./surfaces/mcp/calibration.js";
 import { getBuildInfo, getBuildStamp } from "./build-info.js";
 import { recordDiagnosticEvent } from "./repo/diagnostics.js";
 import {
@@ -76,6 +77,7 @@ export function buildMcpServer(): McpServer {
   registerTrainingStatusTools(server);
   registerBodyMetricsTools(server);
   registerJourneyTools(server);
+  registerCalibrationTools(server);
 
   return server;
 }

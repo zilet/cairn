@@ -379,3 +379,29 @@ test("a sustained 2-outings-each shortfall still fires the compliance-drop strai
   assert.equal(perf.direction, "strain");
   assert.ok(perf.evidence_keys.some((k) => /run_compliance_drop/.test(k)), "cites the compliance-drop evidence");
 });
+
+// The plan template carries no dates, so BOTH weeks are otherwise judged against
+// whatever is on the plan right now. A run plan the machine applied weeks ago is a
+// fossil: the athlete never agreed to it for either of these weeks, and quoting it
+// turns real training into a sustained shortfall and pushes a strain signal into
+// nutrition. A prescription that cannot vouch for the week it is judging reads as
+// absent, exactly as a stale sensor reading does.
+test("a fossilized applied run plan cannot fire the compliance-drop strain", () => {
+  target(2200);
+  repo.savePlanDay(1, "Run", "Easy run", [{ exercise: "Easy run", kind: "cardio", target_distance_km: 40, target_duration_min: 200 }]);
+  // The same shortfall shape that fires above...
+  for (const d of [-1, -2]) repo.addActivity({ type: "run", distance_km: 4, duration_min: 24, date: day(d) });
+  for (const d of [-8, -9]) repo.addActivity({ type: "run", distance_km: 4, duration_min: 24, date: day(d) });
+  // ...but the 40 km week was machine-applied a month before either week began.
+  const proposal = repo.createProposal("auto-run-plan", "run plan", "", { summary: "runs", cardio: [] });
+  repo.setProposalStatus(Number(proposal.id), "applied");
+  db.prepare(`UPDATE plan_proposals SET created_at = ? WHERE id = ?`).run(`${day(-30)} 06:00:00`, Number(proposal.id));
+
+  const read = underfuelingRead(TODAY, { expenditure: onPathExp, goal, programState: stableProgram, wholePerson: stableWhole });
+  const perf = perfChannel(read);
+  assert.ok(
+    !perf.evidence_keys.some((k) => /run_compliance_drop/.test(k)),
+    "a fossil prescription never gets to say the athlete fell short"
+  );
+  assert.notEqual(perf.direction, "strain");
+});

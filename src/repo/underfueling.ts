@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { db } from "../db.js";
 import { canonicalEnduranceSport } from "./endurance-sports.js";
 import { completedIntakeWindow, type CompletedIntakeDay } from "./intake-window.js";
-import { getRunCompliance } from "./sessions.js";
+import { vouchedRunCompliance } from "./sessions.js";
 import { addDaysISO, daysBetweenISO, localDateISO } from "./shared.js";
 
 export type UnderfuelingState =
@@ -446,8 +446,14 @@ function sustainedRunComplianceDrop(today: string): { reason: string; evidence: 
   const lastMonday = addDaysISO(monday, -7);
   if (!lastMonday) return null;
   try {
-    const cur = getRunCompliance(monday);
-    const prev = getRunCompliance(lastMonday);
+    // Each week is judged against a prescription that can actually vouch for THAT
+    // week. appliedRunPrescription takes no date — it is "whatever is in the plan
+    // right now" — so both legs would otherwise quote today's plan, and a run plan
+    // applied a month ago would read a real 20 km week as a sustained shortfall and
+    // push a strain signal into nutrition. vouchedRunCompliance makes the fossil
+    // read as absent (prescribed 0, pct null), which cannot fire this branch.
+    const cur = vouchedRunCompliance(monday);
+    const prev = vouchedRunCompliance(lastMonday);
     const short = (c: any) =>
       c.prescribed_km > 0 && c.actual_sessions >= 2 && c.actual_km > 0 && c.pct_km != null && c.pct_km < 0.6;
     if (short(cur) && short(prev)) {

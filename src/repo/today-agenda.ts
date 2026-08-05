@@ -49,7 +49,7 @@ import { getCachedDayRead } from "./intelligence.js";
 import { listVisibleInsights, listActiveDirectives } from "./coach.js";
 import { acuteGates } from "./hybrid-load.js";
 import { programAdjustments, programBalance } from "./progression.js";
-import { getRunCompliance, getWeeklyStats } from "./sessions.js";
+import { getWeeklyStats, vouchedRunCompliance } from "./sessions.js";
 import { listUnreconciledGarminStrength } from "./activities.js";
 import { healthFocus } from "./propagation.js";
 // The health-standing momentum read — the SAME wins-in-motion the top-level Me→Standing
@@ -798,9 +798,11 @@ function weekAheadCandidate(date: string, weeklyStats?: any): TodayAgendaCandida
 
 // ---- run-compliance / endurance: this week's prescribed-vs-actual running, when a
 // run is actually programmed. Low — a quiet trajectory read, not a today decision.
-// Reads getRunCompliance (mirrors the Endurance compliance line). ----
+// Reads vouchedRunCompliance (mirrors the Endurance compliance line) — an applied
+// plan that cannot speak for THIS week reads as no prescription at all, so a card
+// is never printed against a fossilized target. ----
 function runComplianceCandidate(date: string): TodayAgendaCandidate | null {
-  const rc: any = getRunCompliance(weekStartFor(date));
+  const rc: any = vouchedRunCompliance(weekStartFor(date));
   const prescribed = Number(rc?.prescribed_sessions) || 0;
   if (prescribed <= 0) return null; // no runs prescribed → nothing to comply with
   return {

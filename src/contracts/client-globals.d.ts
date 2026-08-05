@@ -1535,7 +1535,14 @@ declare global {
   declare function trainingAgendaCard(agenda: ClientFlexibleTrainingAgenda | null | undefined): string;
   declare function enduranceGoalCard(goal: ClientEnduranceGoal | null | undefined): string;
   declare function runComplianceLine(compliance: ClientRunCompliance | null | undefined): string;
-  declare function enduranceCoachLine(plan: ClientWeeklyRunPlan | null | undefined): string;
+  declare function enduranceCoachLine(
+    plan: ClientWeeklyRunPlan | null | undefined,
+    agenda?: ClientFlexibleTrainingAgenda | null
+  ): string;
+  declare function enduranceCalibrationLine(
+    status: ClientCalibrationStatus | null | undefined,
+    dateISO?: string
+  ): string;
   declare function capWord(input: unknown): string;
   declare function volBalanceHtml(balance: unknown): string;
   declare const CONF_WORD: Record<string, string>;
@@ -3435,7 +3442,14 @@ declare global {
       trainingAgendaCard(agenda: ClientFlexibleTrainingAgenda | null | undefined): string;
       enduranceGoalCard(goal: ClientEnduranceGoal | null | undefined): string;
       runComplianceLine(compliance: ClientRunCompliance | null | undefined): string;
-      enduranceCoachLine(plan: ClientWeeklyRunPlan | null | undefined): string;
+      enduranceCoachLine(
+        plan: ClientWeeklyRunPlan | null | undefined,
+        agenda?: ClientFlexibleTrainingAgenda | null
+      ): string;
+      enduranceCalibrationLine(
+        status: ClientCalibrationStatus | null | undefined,
+        dateISO?: string
+      ): string;
     };
 
     CairnProgressVolume: {
@@ -3613,6 +3627,7 @@ declare global {
         runPlan: ClientWeeklyRunPlan | null,
         agenda: ClientFlexibleTrainingAgenda | null,
         programState: ClientProgramState | null,
+        calibration: ClientCalibrationStatusResponse | null,
         deps: ClientProgressEnduranceControllerDeps
       ): void;
     };

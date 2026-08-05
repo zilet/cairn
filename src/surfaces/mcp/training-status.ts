@@ -4,8 +4,8 @@ import {
   getCardioForDate,
   getEnduranceGoal,
   getEndurancePRs,
-  getRunCompliance,
   getWeeklyStats,
+  runComplianceRead,
 } from "../../domain/training/index.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 
@@ -26,9 +26,9 @@ export function registerTrainingStatusTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_run_compliance",
-    "Run compliance for this week (Monday-anchored): the prescribed plan cardio (sessions / km / min) vs the actual logged cardio efforts, plus a plain-language summary ('32 of 40 km this week'). A ratio, never a 0-100 score — the endurance analogue of plan-day adherence for lifting.",
-    {},
-    async () => asText(getRunCompliance())
+    "Run compliance for this week (Monday-anchored): the prescribed plan cardio (sessions / km / min) vs the actual logged cardio efforts, plus a plain-language summary ('32 of 40 km this week'). A ratio, never a 0-100 score — the endurance analogue of plan-day adherence for lifting. `basis` says where the prescription came from: 'applied' (the plan rows) or 'live_plan' (this week's live run mix, used when the applied rows prescribe no runs or predate this week).",
+    { date: z.string().optional().describe("YYYY-MM-DD inside the week to read; defaults to this week") },
+    async ({ date }) => asText(runComplianceRead(date || undefined))
   );
 
   server.tool(

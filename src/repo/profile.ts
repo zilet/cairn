@@ -2024,9 +2024,22 @@ export function getEnduranceGoal(today?: string):
   const days = daysBetweenISO(today || localDateISO(), g.date);
   if (!Number.isFinite(days)) return { ...g, is_race: true, days_to_race: null, weeks_to_race: null, phase: null };
   const weeks = Math.ceil(days / 7);
-  // Coarse phase hint from time-to-race (the coach refines against actual base):
-  // past → done; ≤2wk taper; ≤4wk sharpen; ≤10wk build; else base.
-  const phase = days < 0 ? "past" : weeks <= 2 ? "taper" : weeks <= 4 ? "sharpen" : weeks <= 10 ? "build" : "base";
+  // Coarse phase hint from time-to-race (the coach refines against actual base).
+  //
+  // DISTANCE-AWARE, because time-to-race alone reads a half-marathon like a 5k. The
+  // longer the race, the longer the build has to be to mean anything: 13 weeks out
+  // from a half is the heart of the build, and calling it "base" left the whole
+  // build phase to fall entirely inside the last 10 weeks — a window too short to
+  // arrive anywhere. A long race (15 km and up) therefore gets a wider build and a
+  // slightly longer sharpen; shorter races keep the original windows, where a 10-week
+  // build genuinely is the whole story.
+  //   long  (≥15 km): past → done; ≤2wk taper; ≤5wk sharpen; ≤14wk build; else base.
+  //   short (<15 km): past → done; ≤2wk taper; ≤4wk sharpen; ≤10wk build; else base.
+  const longRace = Number.isFinite(Number(g.distance_km)) && Number(g.distance_km) >= 15;
+  const sharpenTo = longRace ? 5 : 4;
+  const buildTo = longRace ? 14 : 10;
+  const phase =
+    days < 0 ? "past" : weeks <= 2 ? "taper" : weeks <= sharpenTo ? "sharpen" : weeks <= buildTo ? "build" : "base";
   return { ...g, is_race: true, days_to_race: days, weeks_to_race: Math.max(0, weeks), phase };
 }
 

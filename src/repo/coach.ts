@@ -22,6 +22,8 @@ import { getProgramState, type ProgramState } from "./program-state.js";
 import { getStrengthJourney } from "./strength-objectives.js";
 import { performanceStanding } from "./performance.js";
 import { enduranceTestsDue, runVarietyRead, runZones, weeklyRunPlan } from "./run-progression.js";
+import { hrModelForCoach } from "./hr-model.js";
+import { calibrationForCoach } from "./calibration.js";
 import { flexibleTrainingAgenda } from "./flexible-training-agenda.js";
 import { dexaTargeting } from "./dexa-targeting.js";
 import { muscleGroupTrajectory, planExerciseNames, testWeekDue } from "./muscle-trajectory.js";
@@ -60,7 +62,7 @@ import { CADENCE_WINDOW_DAYS, classifyWearPattern, type WearPattern } from "./se
 import { sensorAgeDays } from "./sensor-freshness.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { readAdherenceModel } from "./brain/read-adherence.js";
-import { getProgress, getRecentSessions, getRunCompliance } from "./sessions.js";
+import { getProgress, getRecentSessions, vouchedRunCompliance } from "./sessions.js";
 import { symptomAreaKey } from "./symptom-area.js";
 import { listTrainingSymptoms } from "./training-symptoms.js";
 import { addDaysISO, localDateISO, nowContext } from "./shared.js";
@@ -556,6 +558,8 @@ interface CoachContextSignals {
   groupsTrajectoryView: any;
   runVarietyView: any;
   enduranceTestsView: any;
+  hrModelView: any;
+  calibrationView: any;
   trajectoryView: any;
   wholePersonTrajectoryView: any;
   journeyView: any;
@@ -831,6 +835,8 @@ function buildRunningSlice(
   | "flexible_training_agenda"
   | "run_variety"
   | "endurance_tests"
+  | "hr_model"
+  | "calibration"
 > {
   const {
     enduranceCapacityView,
@@ -839,6 +845,8 @@ function buildRunningSlice(
     flexibleTrainingAgendaView,
     runVarietyView,
     enduranceTestsView,
+    hrModelView,
+    calibrationView,
   } = signals;
   return {
     // The endurance OBJECTIVE (v37) — race (dated, periodized + taper) or standing
@@ -852,7 +860,13 @@ function buildRunningSlice(
     // Runner loop (closing): prescribed plan cardio vs this week's logged efforts,
     // in plain words ("32 of 40 km this week") — so the coach can speak to run
     // adherence the way week_done/week_planned covers lifting. Never a 0-100 score.
-    run_compliance: getRunCompliance(),
+    // Vouched: an applied plan that cannot speak for THIS week hands the prompt no
+    // prescription at all rather than a fossil, so renderRunCompliance's shortfall
+    // read stays "unknown" and the coach is never told the athlete came up short
+    // against a target nobody set for this week. (The composed live-plan fallback,
+    // runComplianceRead, is a domain-layer read — repo/coach.ts cannot import it
+    // without a cycle: run-compliance-read → run-progression → coach.)
+    run_compliance: vouchedRunCompliance(),
     // The athlete's real HR-zone bpm bands (max-HR + resting HR) so runs are
     // prescribed to an actual pulse, not a vague effort. {available:false} with no
     // age AND no Garmin HR.
@@ -872,6 +886,16 @@ function buildRunningSlice(
     // Running re-tests (no hard effort in ~4 weeks → a time-trial; a stale VO2max
     // reading → a max-effort run). [] for a non-runner.
     endurance_tests: enduranceTestsView,
+    // THE PERSONAL HR MODEL — derived zone bands, the threshold they hang off,
+    // and how that threshold was arrived at (a detected field test, the best
+    // sustained effort, or the observed-max floor). run_zones above is the
+    // legacy max-HR/resting read; this is the one that knows what a pulse means
+    // for THIS athlete. `available:false` until there is enough logged HR.
+    hr_model: hrModelView,
+    // Tests worth suggesting, and what was recently anchored. Already filtered
+    // to "stale AND actually steering a decision" — a prompt reading it is
+    // reading a coach's opening, not a to-do list, and it gates nothing.
+    calibration: calibrationView,
   };
 }
 
@@ -1156,6 +1180,24 @@ function getCoachContextFromSnapshot(): CoachContext {
       return [];
     }
   });
+  // The personal HR model + the calibration ladder that keeps it honest. Both are
+  // deterministic reads over logged work and the calibration ledger; neither
+  // derives or persists here (the nightly tick and the sync path own that), so a
+  // context build never writes.
+  const hrModelView = brainSignal(`hr_model:${today}`, () => {
+    try {
+      return hrModelForCoach(today);
+    } catch {
+      return null;
+    }
+  });
+  const calibrationView = brainSignal(`calibration:${today}`, () => {
+    try {
+      return calibrationForCoach(today);
+    } catch {
+      return null;
+    }
+  });
   const trajectoryView = brainSignal("trajectory", () => getTrajectory(undefined, { programState: fullProgramState }));
   const wholePersonTrajectoryView = brainSignal("whole_person_trajectory", () => wholePersonTrajectory());
   const expenditureView = brainSignal("expenditure:21", () => {
@@ -1410,6 +1452,8 @@ function getCoachContextFromSnapshot(): CoachContext {
     groupsTrajectoryView,
     runVarietyView,
     enduranceTestsView,
+    hrModelView,
+    calibrationView,
     trajectoryView,
     wholePersonTrajectoryView,
     journeyView,

@@ -9,7 +9,7 @@ Health's short-lived pairing exchange is public and passes through the instance-
 when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**308 routes** across 107 groups.
+**309 routes** across 108 groups.
 
 ## `/activities`
 
@@ -122,6 +122,12 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/calendar` |  |
+
+## `/calibration`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/calibration/status` | CALIBRATION — how well-anchored the numbers steering training actually are, plus any test worth suggesting right now. Freshness words and prose only: no counts, no scores, and nothing here gates a session. Quiet by construction — an athlete with nothing calibrated reads {status:{items:[]}, due:[]}. |
 
 ## `/cardio`
 
@@ -622,7 +628,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/run-compliance` | Run compliance (closing the runner loop): prescribed plan cardio vs this week's logged efforts, in plain words ("32 of 40 km this week"). Never a 0-100 score. |
+| GET | `/api/run-compliance` | Run compliance (closing the runner loop): prescribed plan cardio vs this week's logged efforts, in plain words ("32 of 40 km this week"). Never a 0-100 score. Reads through runComplianceRead so an applied plan with nothing to say for this week falls back to the live weekly mix (`basis` reports which) instead of quoting a fossilized target. |
 
 ## `/run-plan`
 

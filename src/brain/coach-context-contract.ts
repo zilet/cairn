@@ -288,6 +288,18 @@ export interface CoachContextEnvelope {
   strength_journey: CoachRecord | null;
   program_adjustments: CoachAdjustment[];
   run_zones: CoachRecord | null;
+  // The PERSONAL heart-rate model: observed max, threshold, the zone bands in
+  // bpm, and the basis + confidence each rests on. Never an age formula — an
+  // athlete whose conversational pace sits at 160 bpm is a baseline, not an
+  // anomaly, and a prompt handed a population band would prescribe against a
+  // pulse this athlete does not have. Optional so partial context builders and
+  // imported DBs never need to synthesize it.
+  hr_model?: CoachRecord | null;
+  // The calibration ladder: which tests are worth an opening right now (already
+  // filtered to stale AND decision-relevant), and what has recently been
+  // anchored — so the coach never asks for a test the athlete just ran.
+  // Suggestions only; nothing here gates anything. Optional, same reason.
+  calibration?: CoachRecord | null;
   run_plan: CoachRecord | null;
   flexible_training_agenda: CoachRecord | null;
   run_variety: CoachRecord | null;

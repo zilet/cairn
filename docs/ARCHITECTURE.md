@@ -1466,6 +1466,57 @@ Quality gates: `npm run brain:eval` (offline, `test/brain-scenarios/`) and `npm 
 
 ---
 
+## The personal HR model & the calibration ladder (`src/repo/hr-model.ts`, `src/repo/calibration.ts`)
+
+A heart rate means what THIS athlete's own data says it means. `hr-model.ts` derives the personal
+model from logged work — an outlier-guarded observed max (a lone spike defers to the runner-up), a
+freshness-gated resting HR, and a lactate-threshold estimate on a three-rung evidence ladder: a
+detected **field test** anchors it (120-day life), else the best **sustained effort** (≥35 min)
+estimates it, else a plain **fraction of observed max**. Zone bands derive from LTHR; with under
+three HR-bearing outings the model reports `insufficient` and consumers fall back to neutral
+language — it never invents a band from an age formula. State persists in `hr_model_state`
+(re-derived on a daily scheduler slot and after every Garmin sync); `zoneTag()` in
+`run-progression.ts` prefers it over the Tanaka fallback, so prescriptions like "Z2 (…bpm)" speak
+the athlete's physiology. Aerobic efficiency (m·min⁻¹·bpm⁻¹) is tracked internally and voiced only
+as comparative direction — never a number.
+
+`calibration.ts` is the elite-coach testing loop for BOTH domains: what is anchored, how stale it
+is (freshness words, never day counts), and whether a test is worth suggesting — `due` only when a
+stale quantity is actually steering a live decision (a dated race for the run zones; three
+unverified target raises for a lift's est-1RM). Tests are **detected from logged work**
+(`calibration_events`, ref-id idempotent), conservatively: an ordinary run anchors nothing, because
+a false anchor poisons every band for months. A heavy top set (≥92% of the est-1RM the plan was
+already using) verifies the extrapolation it was tested against; est-1RM itself stays owned by the
+Epley path. Suggestions rotate variant sets, pass the reading grammar, are capped at two, and gate
+nothing — pull, never push. Surfaces: `GET /api/calibration/status` + the `get_calibration_status`
+MCP tool, one quiet freshness line on Endurance, and coach-context keys projected at the `day_read`
+and `session` sites only.
+
+## The goal-anchored run ramp (`src/repo/run-ramp.ts`)
+
+Pure, database-free arithmetic behind `weeklyRunPlan`. `raceRamp()` computes TWO trajectories: the
+**ideal** curve (what arriving at race-distance mileage on time would want — comparison only) and
+the **constrained** trajectory (the fastest safe path from today's real anchor — the only one that
+reaches a prescription, so the weekly ask is by construction one safe step from what the athlete is
+already doing). The blend is a PULL only, applied on ordinary build weeks; taper, deloads,
+recovery-down, spikes, scheduled down weeks, detraining and health holds always win outright, and
+learned easing still applies after. `goal_feasibility` (`fits`/`stretch`/`beyond_horizon`) reports
+the gap honestly through rotated fit prose that offers the athlete a choice, never a quota. A
+demonstrated long run is a floor as well as a ceiling — bounded by the race curve, a 1.15× step,
+0.55× of the week, and the room the week has left. Phases are distance-aware (a ≥15 km race gets a
+14-week build), the base quality pool includes threshold, and a timed race inside 16 weeks opens an
+endurance block instead of off-season strength. The Monday scheduler tick keeps the APPLIED week
+current through `buildRunPlanWithAutonomy` (policy untouched), but **only once the athlete has
+applied one auto-built run plan themselves** (`lastAppliedRunPlanDate() !== null`) — until then the
+cardio rows are hand-authored and the tick is a calm no-op, so the default "lead" posture can never
+quiet-apply a machine week over the athlete's own. `runComplianceRead`
+(`src/domain/training/run-compliance-read.ts`) composes compliance with a `basis` field — falling
+back to the live weekly mix only when the applied rows prescribe no runs or belong to another week,
+and anchoring that live prescription at the week START so it cannot grow as the week is run. The
+consumers that judge SHORTFALL (coach context, Today, the team week, the underfueling read) instead
+take `vouchedRunCompliance()`, where a prescription that cannot speak for the judged week reads as
+absent rather than as current. A hand-authored endurance week is never overruled.
+
 ## Background enrichment (`src/enrich.ts`)
 
 Free-text activity logs and food notes save **instantly** via the offline regex parser

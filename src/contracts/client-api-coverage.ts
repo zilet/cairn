@@ -77,6 +77,7 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/training-load",
   "/endurance-prs",
   "/run-compliance",
+  "/calibration/status",
   "/cardio",
   "/endurance-goal",
   "/volume",

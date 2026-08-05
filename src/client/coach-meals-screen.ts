@@ -41,10 +41,13 @@ function coachWaitingDecisionsHtml(rows: unknown): string {
       </div>`
     )
     .join("");
-  return `<div class="plan-upcoming reveal">
-    <span class="lbl plan-upcoming-mast">Waiting on you</span>
-    ${body}
-  </div>`;
+  // Collapsed by default, same footnote-weight disclosure as the Plan tab's
+  // forward note — the count stays visible so "waiting on you" never goes dark,
+  // the rationale paragraphs are one tap away.
+  return `<details class="plan-upcoming reveal">
+    <summary><span class="lbl plan-upcoming-strip">Waiting on you (${items.length})</span></summary>
+    <div class="plan-upcoming-body">${body}</div>
+  </details>`;
 }
 
 // ---------- Coach ----------

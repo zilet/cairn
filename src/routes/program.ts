@@ -37,6 +37,7 @@ import {
   updateBlock,
   weeklyRunPlan,
 } from "../domain/training/index.js";
+import { calibrationStatus, dueCalibrations } from "../repo/calibration.js";
 import { backgroundOp } from "./background-op.js";
 import { flexibleTrainingAgenda } from "../repo.js";
 
@@ -271,6 +272,17 @@ programRouter.get("/training-agenda", (req, res) =>
   res.json(flexibleTrainingAgenda(req.query.date ? String(req.query.date) : undefined))
 );
 programRouter.get("/run-zones", (_req, res) => res.json(runZones()));
+// CALIBRATION — how well-anchored the numbers steering training actually are, plus
+// any test worth suggesting right now. Freshness words and prose only: no counts,
+// no scores, and nothing here gates a session. Quiet by construction — an athlete
+// with nothing calibrated reads {status:{items:[]}, due:[]}.
+programRouter.get("/calibration/status", (req, res) => {
+  const date = req.query.date ? String(req.query.date) : undefined;
+  // One status pass feeds both halves of the response — dueCalibrations derives the
+  // same items, and each derive walks every main lift's verification history.
+  const status = calibrationStatus(date);
+  res.json({ status, due: dueCalibrations(date, { status }) });
+});
 // Per-canonical-muscle-group advance/stall trajectory + the cadenced strength
 // test-week read. Plain words, no scores; quiet to {available:false}/{due:false}.
 programRouter.get("/muscle-trajectory", (req, res) =>

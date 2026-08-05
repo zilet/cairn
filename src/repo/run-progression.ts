@@ -39,6 +39,15 @@ import {
 } from "./program-state.js";
 import { createProposal, getEnduranceGoal, getProfile, supersedeAutoRunPlanDrafts } from "./profile.js";
 import { applyPersonalResponseModifier, personalResponseModifierFor } from "./reaction-model.js";
+import {
+  raceRamp,
+  SUSTAINABLE_LONG_STEP_FACTOR,
+  SUSTAINABLE_WEEKLY_BUILD_FACTOR,
+  type RaceRamp,
+  type RaceRampFit,
+} from "./run-ramp.js";
+import { pickDayVariant } from "./brain/day-read-rules.js";
+import { getHrModel, type HrModel, hrZoneLabel, type HrZoneKey } from "./hr-model.js";
 import { getRunCompliance, type RunCompliance } from "./sessions.js";
 import { localDateISO } from "./shared.js";
 import { lowerBodyPlanDayNumbers } from "./training-read.js";
@@ -299,7 +308,20 @@ export function runZones(opts?: {
 // A "Z2 (135–145 bpm)" tag for a prescription's target_zone, falling back to the
 // bare zone key when no bands are available. This is what carries the bpm into the
 // applied plan + every prompt/PWA render.
-function zoneTag(zoneKey: ZoneKey, zones: RunZones): string {
+//
+// The PERSONAL model (hr-model.ts) speaks first whenever it has enough observed
+// data to speak at all: a band built from this athlete's own threshold estimate is
+// the honest one, and the age-modelled ZONE_BANDS below are a population formula
+// wearing a personal label. runZones stays the fallback (and the only source when
+// the athlete has no HR history yet), so nothing goes quiet while the model fills in.
+//
+// The model is READ AND PASSED IN, never fetched here: a plan built for another
+// date must carry that date's bands, and the caller resolves it once for the whole
+// week rather than re-deriving it up to three times (five queries a derive) per plan.
+function zoneTag(zoneKey: ZoneKey, zones: RunZones, model: HrModel | null): string {
+  if (model?.zones && model.confidence !== "insufficient") {
+    return hrZoneLabel(zoneKey.toLowerCase() as HrZoneKey, model);
+  }
   if (!zones.available) return zoneKey;
   const z = zones.zones.find((x) => x.zone === zoneKey);
   return z ? `${zoneKey} (${z.low_bpm}–${z.high_bpm} bpm)` : zoneKey;
@@ -331,6 +353,22 @@ export interface WeeklyRunPlan {
   quality_focus: string | null; // e.g. "Threshold intervals" (null on an all-easy/taper week)
   mix_summary: string; // e.g. "3 easy + 1 long + 1 threshold"
   why: string; // one calm headline sentence
+  // Where this week sits against a dated race — the machine register beside the
+  // rationale's plain words. Additive and null whenever there is no race to arrive
+  // at (a standing goal, no distance, or a short race where mileage is not the
+  // limiter).
+  //
+  // `week_km` is this week's ask, and it always comes from the REACHABLE
+  // trajectory. `constrained_peak_km` is where the fastest safe build from today's
+  // running actually lands by race week; `ideal_peak_km` is what the distance
+  // usually leans on. The status compares the two and nothing else — it is a fit,
+  // not a grade, and "beyond_horizon" describes a calendar, never an athlete.
+  goal_feasibility?: {
+    status: RaceRampFit;
+    week_km: number;
+    constrained_peak_km: number;
+    ideal_peak_km: number;
+  } | null;
 }
 
 const NO_RUN_PLAN = (week_start: string): WeeklyRunPlan => ({
@@ -341,12 +379,65 @@ const NO_RUN_PLAN = (week_start: string): WeeklyRunPlan => ({
   quality_focus: null,
   mix_summary: "",
   why: "No running in the picture yet — set a running goal or log a few runs and Cairn will shape a week.",
+  goal_feasibility: null,
 });
+
+// Where the athlete's OWN trajectory lands against what the race distance usually
+// leans on. Deliberately a fit statement and two real options — never a demand,
+// never "behind schedule", never a number to fail against. The plan follows the
+// athlete's demonstrated pace; the only thing these sentences add is knowing what
+// that pace supports, so the athlete can decide which of the two they want.
+//
+// A variant SET rather than one literal, and rendered from the live numbers: a
+// stable situation fires this same branch every week, and one sentence printed
+// verbatim for a month reads as a broken app rather than a coach.
+export const TIMELINE_FIT_VARIANTS: ReadonlyArray<(supported: number, wanted: number) => string> = [
+  (supported, wanted) =>
+    `Where this is heading: about ${supported} km a week by race day, where that finish time usually leans on something nearer ${wanted}. Nothing to fix — you can run the day off this build, or give the time more room. Your call.`,
+  (supported, wanted) =>
+    `Running the way you're running now, race day arrives on roughly ${supported} km a week; a time like that usually sits closer to ${wanted}. Both are good options — take the day as it comes, or move the target.`,
+  (supported, wanted) =>
+    `This trajectory supports something near ${supported} km a week come race day, and that time tends to want around ${wanted}. Worth knowing rather than chasing — keep going as you are, or pick a softer number to aim at.`,
+  (supported, wanted) =>
+    `By race day this build lands near ${supported} km a week, against the ${wanted} or so that time usually asks for. Two honest paths: run the race off what you've built, or reset the goal to match it.`,
+];
+
+// The same read when the gap is small enough that it may simply close. Lighter
+// still: there is nothing to decide yet, and saying so is the whole point.
+export const TIMELINE_CLOSE_VARIANTS: ReadonlyArray<(supported: number, wanted: number) => string> = [
+  (supported, wanted) =>
+    `This is tracking close to what that time usually leans on — about ${supported} km a week by race day against roughly ${wanted}. Close enough that the next few weeks will tell you more than any decision today would.`,
+  (supported, wanted) =>
+    `You're near the mileage that time tends to want: this build heads toward about ${supported} km a week, and the target sits near ${wanted}. Small enough gap to leave open.`,
+  (supported, wanted) =>
+    `Race day is shaping up around ${supported} km a week, a touch under the ${wanted} that time usually asks. Worth knowing; nothing to change today.`,
+  (supported, wanted) =>
+    `Not far off — this trajectory lands near ${supported} km a week where that time usually wants about ${wanted}. Let the coming weeks answer it.`,
+];
+
+// A dated race with a time target, next to an explicit choice to keep running in
+// a supporting role. Both are the athlete's own settings; the plan follows the
+// role they set and says plainly that it did. No nudge to change either one —
+// the athlete chose the lighter running, and that choice is respected, not argued
+// with.
+export const RACE_VS_SUPPORTING_VARIANTS = [
+  // "behind" is deliberately absent from this whole vocabulary: in a page about a
+  // race it reads as "behind schedule" however it was meant.
+  "You've set running to support your other priorities, and there's a race time on the calendar — this week follows the supporting role, so the run count stays where you put it.",
+  "Running sits under your other priorities by your own choice, race time or not; the plan keeps that setting and shapes the week inside it.",
+  "The race time is on the calendar and running is still in a supporting role — this week honours the role, and the number of runs is unchanged.",
+  "Two things you've told Cairn: a time to chase, and running kept light. The week follows the lighter setting and leaves the run days where they are.",
+] as const;
 
 // Quality-session candidates per periodization phase (rotated deterministically by
 // week ordinal so it cycles without app_state side-effects on a read).
 const QUALITY_BY_PHASE: Record<string, ("tempo" | "threshold" | "vo2" | "hills")[]> = {
-  base: ["tempo", "hills"],
+  // Threshold belongs in the base phase too. Leaving it out meant an athlete with a
+  // long runway rotated tempo and hills for months and never touched the one
+  // stimulus that moves a half-marathon time most — and then met threshold work for
+  // the first time in the build, which is exactly when a new hard stimulus is least
+  // welcome.
+  base: ["tempo", "hills", "threshold"],
   build: ["threshold", "vo2", "tempo"],
   sharpen: ["vo2", "threshold"],
   taper: ["vo2"],
@@ -357,7 +448,8 @@ function qualitySpec(
   type: "tempo" | "threshold" | "vo2" | "hills",
   phase: string,
   zones: RunZones,
-  workKm: number
+  workKm: number,
+  hrModel: HrModel | null
 ): {
   label: string;
   zoneKey: ZoneKey;
@@ -375,7 +467,7 @@ function qualitySpec(
         interval: null,
         distance: round1(Math.max(4, workKm)),
         duration: null,
-        note: `Continuous tempo at ${zoneTag("Z3", zones)} after an easy warm-up.`,
+        note: `Continuous tempo at ${zoneTag("Z3", zones, hrModel)} after an easy warm-up.`,
       };
     case "threshold": {
       const reps = phase === "sharpen" ? 4 : 5;
@@ -385,7 +477,7 @@ function qualitySpec(
         interval: [{ reps, on: "1km", off: "60s jog", zone: "Z4" }],
         distance: round1(Math.max(5, workKm)),
         duration: null,
-        note: `${reps} × 1km at ${zoneTag("Z4", zones)}, 60s easy jog between, with warm-up + cool-down.`,
+        note: `${reps} × 1km at ${zoneTag("Z4", zones, hrModel)}, 60s easy jog between, with warm-up + cool-down.`,
       };
     }
     case "vo2": {
@@ -396,7 +488,7 @@ function qualitySpec(
         interval: [{ reps, on: "800m", off: "90s jog", zone: "Z5" }],
         distance: round1(Math.max(5, workKm)),
         duration: null,
-        note: `${reps} × 800m hard at ${zoneTag("Z5", zones)}, 90s jog recovery, bookended by easy running.`,
+        note: `${reps} × 800m hard at ${zoneTag("Z5", zones, hrModel)}, 90s jog recovery, bookended by easy running.`,
       };
     }
     default: {
@@ -408,7 +500,7 @@ function qualitySpec(
         interval: [{ reps, on: "45s uphill", off: "jog down", zone: "Z4" }],
         distance: round1(Math.max(4, workKm)),
         duration: null,
-        note: `${reps} × 45s uphill at ${zoneTag("Z4", zones)} effort, jog down to recover — strength + economy.`,
+        note: `${reps} × 45s uphill at ${zoneTag("Z4", zones, hrModel)} effort, jog down to recover — strength + economy.`,
       };
     }
   }
@@ -486,7 +578,11 @@ const DIRECTIVE_HOLD_FACTOR = 0.9; // a firm endurance-limiting directive caps t
 // connective tissue pays for optimism on a slower clock than the aerobic system that
 // earned the acceleration. +12% is still a genuine step above the standard build; it just
 // never compounds into the mileage spike the spike guard would then have to catch.
-const MAX_WEEKLY_BUILD_FACTOR = 1.12;
+//
+// The number itself lives in run-ramp.ts, because the ramp measures a race timeline
+// against exactly this ceiling to decide whether arriving on time is reachable — two
+// copies of it would let the plan's ceiling and the ramp's feasibility read drift.
+const MAX_WEEKLY_BUILD_FACTOR = SUSTAINABLE_WEEKLY_BUILD_FACTOR;
 
 export function weeklyRunPlan(
   date?: string,
@@ -500,6 +596,14 @@ export function weeklyRunPlan(
     directives?: any[];
     responseModifier?: CoachPersonalModifier | null;
     trainingIntent?: ResolvedTrainingIntent;
+    // The date the weekly VOLUME anchor is read at (defaults to `date`). The anchor
+    // is max(compliance.actual_km, trailing-7-day km), and both of those include
+    // whatever has been run since the week opened — fine when shaping a week ahead,
+    // wrong when the resulting prescription is the thing this same week is being
+    // judged against (runComplianceRead), because the target then grows with every
+    // logged km and the shortfall can never appear. Point it at the week boundary
+    // to anchor on the volume that was already in the bank when the week started.
+    volumeAnchorDate?: string;
   }
 ): WeeklyRunPlan {
   const d = date || localDateISO();
@@ -534,7 +638,7 @@ export function weeklyRunPlan(
   // a cycling-only or hiking-only athlete must never receive an invented run plan.
   // Real running history or an explicit running goal/configuration supplies intent.
   const lastActualKm = compliance?.actual_km ?? 0;
-  const baseKm = recordedWeeklyKm(d, 0, RUN_SPORT_PATTERNS);
+  const baseKm = recordedWeeklyKm(opts?.volumeAnchorDate ?? d, 0, RUN_SPORT_PATTERNS);
   const configuredSports = configuredEnduranceSportKeys(profile?.endurance_sport, false);
   const goalText = `${goal?.event || ""} ${goal?.label || ""}`;
   const explicitRunningGoal =
@@ -543,6 +647,16 @@ export function weeklyRunPlan(
   if (!isRunner) return NO_RUN_PLAN(week_start);
 
   const zones = opts?.zones ?? runZones({ profile, recovery });
+  // The personal HR model for THIS plan's date, resolved once for the whole week —
+  // every zone tag below reads it, and deriving it is five queries when the nightly
+  // tick has not run. A model that cannot be read is not a reason to lose the tags.
+  const hrModel: HrModel | null = (() => {
+    try {
+      return getHrModel(d);
+    } catch {
+      return null;
+    }
+  })();
   const block = opts?.block ?? getActiveBlock();
   const phase = goal?.is_race && goal.phase && goal.phase !== "past" ? goal.phase : "standing";
   const ord = block?.week_index ?? weekOrdinal(week_start);
@@ -627,6 +741,54 @@ export function weeklyRunPlan(
   } else {
     standardBuild = true;
     rationale.push("Building conservatively — about a 10% step on last week.");
+  }
+
+  // --- the race, pulling ---
+  // Everything above is REACTIVE: it reads what happened and steps off it. That is
+  // the right floor and a poor ceiling — a dated race with a distance has a
+  // destination, and a 10% step off a thin week arrives at race day nowhere near it.
+  // The ramp offers the next reachable step; the blend below lets it PULL the factor
+  // up, and only that.
+  //
+  // Three hard rules, all about not turning a goal into a quota:
+  //   • only on an ordinary build week. Every other branch above is a protective
+  //     reduction or a deliberate hold, and a race on the calendar is never a reason
+  //     to undo one — safety states are final, exactly as they are for the learned
+  //     modifier below.
+  //   • the ask comes from the ramp's CONSTRAINED trajectory, so it is by
+  //     construction one safe step from what the athlete is already doing. The ideal
+  //     arrival curve never reaches the prescription; it only informs the sentence.
+  //   • never past the sustainable ceiling. Belt and braces — the constrained ask
+  //     already cannot exceed it.
+  // A dated race the athlete put a TIME on — the difference between "I'd like to do
+  // this event" and "I'd like to run it in 1:50". The time is what makes the mileage
+  // a requirement rather than a preference, so it is what unlocks the ramp's pull,
+  // the lower quality bar, and the honest word when the two disagree.
+  const raceTarget = !!(goal?.is_race && goal.phase !== "past" && String(goal.target ?? "").trim());
+  const prevLongForRamp = (() => {
+    const stateLongest = Number(runState?.longest_km_4wk);
+    return Number.isFinite(stateLongest) && stateLongest > 0 ? stateLongest : 0;
+  })();
+  const ramp: RaceRamp | null = (() => {
+    try {
+      return raceRamp(goal, d, anchorKm, prevLongForRamp);
+    } catch {
+      return null;
+    }
+  })();
+  // Safety states are final, exactly as for the learned modifier below: an
+  // endurance-limiting health flag stands whether or not it is certain. firmHold is
+  // caught by the 0.9 cap afterwards, but softHold caps nothing — without this an
+  // uncertain hold would be contradicted in the same breath by a race pull stepping
+  // the build 1.10 → 1.12.
+  if (ramp && standardBuild && anchorKm > 0 && !softHold) {
+    const pull = ramp.required_km / anchorKm;
+    if (pull > factor) {
+      factor = Math.min(MAX_WEEKLY_BUILD_FACTOR, pull);
+      rationale.push(
+        `Stepping up a touch more than the usual 10% — ${goal?.event ? String(goal.event).slice(0, 60) : "your race"} is ${ramp.weeks_to_race} week${ramp.weeks_to_race === 1 ? "" : "s"} out, and this is the biggest step that still sits inside a safe build.`
+      );
+    }
   }
 
   // Personal response: a LEARNED run-volume step bends the weekly build multiplicatively.
@@ -726,10 +888,20 @@ export function weeklyRunPlan(
         ? "Running is supporting the higher durable priorities, so this constrained week stays at two useful runs with volume reduced too — nothing gets concentrated into catch-up mileage."
         : "Running is supporting the higher durable priorities, so the race build stays at a minimum-effective three runs."
     );
+    // Two of the athlete's own settings disagreeing, said out loud. A dated race with
+    // a TIME on it wants more running than a supporting role allows, and the caps
+    // above have just followed the role. Naming which one won is the whole point —
+    // silently honouring one of two contradictory asks is how a plan stops making
+    // sense to the person reading it. The caps themselves are untouched.
+    if (raceTarget) rationale.push(pickDayVariant(RACE_VS_SUPPORTING_VARIANTS, d, "run-race-vs-supporting"));
   }
 
   // --- quality session: include unless we're protecting recovery / tapering hard / very thin base ---
-  const baseTooThin = weeklyKm < 12;
+  // The thin-base bar drops for a runner with a dated race and a time on it: at 10–12
+  // km/wk a single quality session is the difference between arriving trained and
+  // arriving merely rested, and holding it back until 12 km/wk was a rule written for
+  // an athlete with nowhere in particular to be.
+  const baseTooThin = weeklyKm < (raceTarget ? 10 : 12);
   const includeQuality =
     !recoveryWeek && !recoveryDown && !baseTooThin && runState?.status !== "spiking" && runDays >= 3 && !softHold;
   let qualityType: "tempo" | "threshold" | "vo2" | "hills" | null = null;
@@ -764,14 +936,50 @@ export function weeklyRunPlan(
       : Number.isFinite(recentLongest) && recentLongest > 0
         ? recentLongest
         : 0;
+  // A demonstrated long run is a FLOOR, not just a ceiling.
+  //
+  // The share-of-the-week rule alone reads an athlete's capacity off their weekly
+  // total, which is exactly wrong for someone whose weeks are thin but whose legs
+  // have already carried 9 km comfortably: 0.35 × 14 km prescribes a 4.9 km "long
+  // run" to a person who ran nearly twice that last Sunday, and then the plan looks
+  // like it was not watching. What the athlete has actually done is the better
+  // evidence, so it sets the floor — bounded above by the race's own curve, so this
+  // never turns one big day into a standing demand.
+  //
+  // The raise applies only when nothing protective is standing: a recovery/deload/
+  // taper week or a health hold owns the long run outright, and a past long run is
+  // not a reason to spend one during any of them.
+  const longSuppressed = taper || recoveryWeek || recoveryDown || !!firmHold || !!softHold;
+  // The ramp's long-run curve is usable as a ceiling only when the ramp could see
+  // the same demonstrated long the plan can. Seeded blind (no 4-week longest in the
+  // endurance state) it would cap a real long run against an invented one.
+  const rampLongCeiling = ramp && (prevLongForRamp > 0 || prevLong <= 0) ? ramp.required_long_km : null;
+  const q = qualityType ? qualitySpec(qualityType, phase, zones, round1(weeklyKm * 0.18), hrModel) : null;
+  const qualityKm = q?.distance ?? 0;
+  // What the week has left for a long run once the other runs have taken their
+  // minimum useful distance. The raise must fit INSIDE the weekly step, not on top
+  // of it: an easy run has a floor of 3 km, so a long run that eats the whole week
+  // pushes the prescribed total past the ceiling the build factor just enforced —
+  // which would be the mileage spike the whole cap exists to prevent, arriving
+  // through the mix instead of through the factor.
+  const longRoomKm = round1(weeklyKm - qualityKm - easyCount * 3);
   let longKm = round1(weeklyKm * (taper ? 0.3 : 0.35));
-  if (prevLong > 0) longKm = round1(Math.min(longKm, prevLong * 1.1));
+  if (prevLong > 0 && !longSuppressed) {
+    const raised = Math.min(prevLong, rampLongCeiling ?? prevLong, Math.max(longKm, longRoomKm));
+    longKm = round1(Math.max(longKm, raised));
+  }
+  // A single step above the demonstrated longest, and never more than a bit over half
+  // the week — the raise must not manufacture a week that is one enormous day. The
+  // step widens to 1.15 only on the weeks the raise can happen at all; a protected
+  // week keeps the tighter 1.1 it always had.
+  if (prevLong > 0) {
+    longKm = round1(Math.min(longKm, prevLong * (longSuppressed ? 1.1 : SUSTAINABLE_LONG_STEP_FACTOR)));
+  }
+  longKm = round1(Math.min(longKm, weeklyKm * 0.55));
   longKm = Math.max(longKm, round1(weeklyKm * 0.25));
   if (supportingConstrained && prevLong > 0) longKm = round1(Math.min(longKm, prevLong * 1.1));
   if (taper) longKm = round1(Math.min(longKm, Math.max(6, prevLong * 0.6)));
 
-  const q = qualityType ? qualitySpec(qualityType, phase, zones, round1(weeklyKm * 0.18)) : null;
-  const qualityKm = q?.distance ?? 0;
   const easyTotal = Math.max(easyCount * 3, round1(weeklyKm - longKm - qualityKm));
   let easyEach = round1(easyTotal / easyCount);
   if (supportingConstrained && recentDose?.average_km != null) {
@@ -815,7 +1023,7 @@ export function weeklyRunPlan(
   }
 
   const runs: RunPlanPrescription[] = [];
-  const z2 = zoneTag("Z2", zones);
+  const z2 = zoneTag("Z2", zones, hrModel);
   // Easy slots, prefer non-adjacent to the hard days.
   const easySlots = [1, 4, 7, 3, 5].slice(0, easyCount);
   for (const slot of easySlots) {
@@ -839,7 +1047,7 @@ export function weeklyRunPlan(
       kind_label: "quality",
       target_distance_km: q.distance,
       target_duration_min: q.duration,
-      target_zone: zoneTag(q.zoneKey, zones),
+      target_zone: zoneTag(q.zoneKey, zones, hrModel),
       note: q.note,
       day_name: q.label,
       focus: "Endurance · quality",
@@ -885,7 +1093,26 @@ export function weeklyRunPlan(
   );
   const why = `~${Math.round(prescribedKm || weeklyKm)} km this week (${phaseWord}): ${mix_summary}${q ? `, with ${q.label.toLowerCase()} as the quality work` : ", all easy aerobic"}${holdClause}.`;
 
-  return { available: true, week_start, runs, rationale, quality_focus, mix_summary, why };
+  // The fit, said plainly and only when it has something to say. A trajectory that
+  // reaches what the distance leans on needs no sentence at all; one that does not
+  // gets the two options and no verdict. The numbers come from the athlete's OWN
+  // reachable trajectory, so the sentence describes their running rather than
+  // measuring them against someone else's.
+  const goal_feasibility = ramp
+    ? {
+        status: ramp.fit,
+        week_km: ramp.required_km,
+        constrained_peak_km: ramp.constrained_peak_km,
+        ideal_peak_km: ramp.ideal_peak_km,
+      }
+    : null;
+  if (ramp && ramp.fit !== "fits") {
+    const variants = ramp.fit === "stretch" ? TIMELINE_CLOSE_VARIANTS : TIMELINE_FIT_VARIANTS;
+    const say = pickDayVariant(variants, d, "run-ramp-timeline");
+    rationale.push(say(Math.round(ramp.constrained_peak_km), Math.round(ramp.ideal_peak_km)));
+  }
+
+  return { available: true, week_start, runs, rationale, quality_focus, mix_summary, why, goal_feasibility };
 }
 
 // ---------------------------------------------------------------------------

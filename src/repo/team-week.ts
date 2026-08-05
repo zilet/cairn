@@ -34,7 +34,7 @@ import { listAttentionSchedule } from "./attention.js";
 import { canonicalMarker } from "./marker-canon.js";
 import { markerGroup } from "./propagation.js";
 import { getAppState, setAppState } from "./app-state.js";
-import { getRunCompliance, weeklyAerobicLoad } from "./sessions.js";
+import { vouchedRunCompliance, weeklyAerobicLoad } from "./sessions.js";
 import { addDaysISO, clipText, joinList, localDateISO, metricLabel, parseDbTime } from "./shared.js";
 import { cutQualityRead, cutQualityWeekLine } from "./cut-quality.js";
 
@@ -744,9 +744,11 @@ function enduranceLine(asOf: string): TeamWeekEndurance | null {
     })();
     const aero = weeklyAerobicLoad(monday);
     if (!aero || aero.outings === 0) return null; // only when endurance activity exists
-    const comp = getRunCompliance(monday);
-    // A run plan exists → frame as compliance (prescribed vs actual); otherwise the
-    // simple broad-aerobic "moved X km over N outings".
+    const comp = vouchedRunCompliance(monday);
+    // A run plan that can vouch for THIS week exists → frame as compliance
+    // (prescribed vs actual); otherwise — including when the applied plan is a
+    // fossil from an earlier week — the honest broad-aerobic "moved X km over N
+    // outings", which never implies the athlete fell short of anything.
     const line = comp.prescribed_sessions > 0 ? comp.in_words : aero.in_words;
     const text = `${capitalize(String(line).trim())}.`;
     return { text, km: aero.km, sessions: aero.outings, longest_km: aero.longest_km };

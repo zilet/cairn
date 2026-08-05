@@ -215,6 +215,13 @@ export const PROMPT_CONTEXT_SITES = {
       "coaching_focus",
       "signal_state",
       "next_step",
+      // The personal HR model + the calibration ladder. The Brief is where a run
+      // gets prescribed to a pulse ("easy today" has to mean a bpm this athlete
+      // actually holds), and where a stale threshold or an unverified 1RM finds
+      // its natural opening. Deliberately NOT at the plan-shaping sites yet: the
+      // model steers today's prescription, not next quarter's split.
+      "hr_model",
+      "calibration",
       // How often each read is actually FOLLOWED. The one site that gets it: the Brief
       // is the read being measured, so this is the only prompt where the divergence
       // pattern is about the very decision it is being asked to make. Compacted hard
@@ -235,7 +242,21 @@ export const PROMPT_CONTEXT_SITES = {
   // DROPPED `garmin`, `signal_state` (not rendered here), day_read, recent_decisions,
   // insights, whole_person_trajectory.
   session: {
-    keys: [...PERSON, ...TRAINING_FULL, ...ENDURANCE, ...FUEL, ...HEALTH_FULL, ...RECOVERY, "coaching_focus"],
+    keys: [
+      ...PERSON,
+      ...TRAINING_FULL,
+      ...ENDURANCE,
+      ...FUEL,
+      ...HEALTH_FULL,
+      ...RECOVERY,
+      "coaching_focus",
+      // A suggested session prescribes effort, and effort here is a heart rate:
+      // the derived bands are the only honest place to point a "keep it easy"
+      // at. `calibration` rides along because a suggested session is exactly the
+      // opening a due test folds into (a quality slot, a first heavy set).
+      "hr_model",
+      "calibration",
+    ],
     sessions: SESSIONS_RECENT,
   },
 

@@ -16,7 +16,6 @@ import {
   getProgress,
   getStrengthJourney,
   getRecentSessions,
-  getRunCompliance,
   getSessionByDate,
   getSessionDetail,
   getTrainingCalendar,
@@ -28,6 +27,7 @@ import {
   recordExerciseSymptomObservation,
   recordMovementTolerance,
   recurTrainingSymptom,
+  runComplianceRead,
   reportTrainingSymptom,
   resolveTrainingSymptom,
   listTrainingSymptoms,
@@ -404,7 +404,12 @@ trainingLogRouter.get("/endurance-prs", (req, res) =>
 
 // Run compliance (closing the runner loop): prescribed plan cardio vs this week's
 // logged efforts, in plain words ("32 of 40 km this week"). Never a 0-100 score.
-trainingLogRouter.get("/run-compliance", (_req, res) => res.json(getRunCompliance()));
+// Reads through runComplianceRead so an applied plan with nothing to say for this
+// week falls back to the live weekly mix (`basis` reports which) instead of
+// quoting a fossilized target.
+trainingLogRouter.get("/run-compliance", (req, res) =>
+  res.json(runComplianceRead(req.query.date != null ? String(req.query.date) : undefined))
+);
 
 // The day's logged cardio efforts (hydrated with Garmin zones/pace). [] when none.
 trainingLogRouter.get("/cardio", (req, res) =>

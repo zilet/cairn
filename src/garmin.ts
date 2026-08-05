@@ -889,6 +889,9 @@ export async function syncGarmin(options: { days?: number; limit?: number; daily
     let strengthFetches = 0;
     let detailFetches = 0;
     const strengthIds: number[] = [];
+    // Runs landed by THIS sync — the calibration reader below looks only at them,
+    // so a 200-activity backfill doesn't re-read the whole history every pass.
+    const runIds: number[] = [];
     for (const row of rows || []) {
       const input = activityToInput(row);
       if (input.date && input.date < since) continue;
@@ -919,6 +922,7 @@ export async function syncGarmin(options: { days?: number; limit?: number; daily
       }
       const saved = repo.upsertGarminActivity(input, source.id) as any;
       if (strength && saved?.id) strengthIds.push(saved.id);
+      if (!strength && saved?.id && /run/i.test(String(saved.type ?? input.type ?? ""))) runIds.push(Number(saved.id));
       activities++;
     }
 
@@ -954,6 +958,24 @@ export async function syncGarmin(options: { days?: number; limit?: number; daily
       last_sync_at: new Date().toISOString(),
     });
     repo.setGarminSyncStatus(`ok: ${activities} activit${activities === 1 ? "y" : "ies"} · ${daily} daily`);
+    // A synced run is where a calibration test physically HAPPENED, so read the
+    // freshly landed runs for a test signature (a 30-min threshold effort, a
+    // fixed-HR benchmark) before re-deriving the personal HR model — a detected
+    // time trial anchors the very threshold the derive is about to compute.
+    // Detection is idempotent per activity, so a re-sync stacks nothing, and both
+    // steps are deterministic: no agent, no push, nothing the athlete must answer.
+    try {
+      for (const id of runIds) {
+        try {
+          repo.detectRunCalibration(id);
+        } catch {
+          /* a detection is additive — it must never fail a sync */
+        }
+      }
+      repo.deriveHrModel(localDateISO());
+    } catch (e: any) {
+      console.warn(`[garmin] HR-model refresh skipped: ${e?.message ?? e}`);
+    }
     return { ok: true, source_id: source.id, days, activities, daily_metrics: daily };
   } catch (e: any) {
     const msg = e?.message ?? String(e);

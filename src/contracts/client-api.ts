@@ -1275,6 +1275,37 @@ export interface ClientRunCompliance {
   actual_min: number;
   pct_km: number | null;
   in_words: string;
+  /** Where the prescription came from: the applied plan rows, or the live weekly run plan when those rows are absent/stale. */
+  basis: "applied" | "live_plan";
+}
+
+/** Freshness of one calibrated quantity — a word, never a days-stale number. */
+export type ClientCalibrationFreshness = "anchored" | "aging" | "stale" | "never";
+
+export interface ClientCalibrationStatusItem {
+  key: string;
+  domain: "endurance" | "strength";
+  label: string;
+  last_anchored: ISODateString | string | null;
+  freshness: ClientCalibrationFreshness;
+  due: boolean;
+}
+
+export interface ClientCalibrationStatus {
+  as_of: ISODateString | string;
+  items: ClientCalibrationStatusItem[];
+}
+
+export interface ClientCalibrationSuggestion {
+  kind: string;
+  target_key: string | null;
+  line: string;
+  placement: string;
+}
+
+export interface ClientCalibrationStatusResponse {
+  status: ClientCalibrationStatus;
+  due: ClientCalibrationSuggestion[];
 }
 
 export interface ClientCardioEffort {
@@ -2826,6 +2857,7 @@ export interface ClientApiResponses {
   "/api/training-load": ClientTrainingLoadBandResponse;
   "/api/endurance-prs": ClientEndurancePRs;
   "/api/run-compliance": ClientRunCompliance;
+  "/api/calibration/status": ClientCalibrationStatusResponse;
   "/api/cardio": ClientCardioEffort[];
   "/api/endurance-goal": ClientEnduranceGoal | null;
   "/api/volume": ClientVolumeByMuscleResponse;

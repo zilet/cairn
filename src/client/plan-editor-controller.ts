@@ -140,20 +140,44 @@ function planUpcomingRowsHtml(items: import("../contracts/client.js").ClientPlan
     .join("");
 }
 
+// Items a section actually renders (non-empty summary) — the same filter
+// planUpcomingRowsHtml applies, kept in sync so the collapsed strip's counts
+// always match what's behind the disclosure.
+function planUpcomingCount(items: import("../contracts/client.js").ClientPlanUpcomingItem[]): number {
+  return items.filter((it) => String(it?.summary ?? "").trim()).length;
+}
+
 function planUpcomingNoteHtml(note: import("../contracts/client.js").ClientPlanUpcomingNote): string {
-  const rows = planUpcomingRowsHtml(note && Array.isArray(note.items) ? note.items.slice(0, 2) : []);
+  const comingItems = note && Array.isArray(note.items) ? note.items.slice(0, 2) : [];
   // What already landed, and why — the half that used to vanish the moment a change
   // took effect, leaving a reshaped week with nothing to explain it.
-  const landedRows = planUpcomingRowsHtml(note && Array.isArray(note.landed) ? note.landed.slice(0, 2) : []);
+  const landedItems = note && Array.isArray(note.landed) ? note.landed.slice(0, 2) : [];
   // Still waiting on the athlete — shown first, because it is the only one of the
   // three that is an open question rather than a report.
-  const awaitingRows = planUpcomingRowsHtml(note && Array.isArray(note.awaiting) ? note.awaiting.slice(0, 2) : []);
+  const awaitingItems = note && Array.isArray(note.awaiting) ? note.awaiting.slice(0, 2) : [];
+  const rows = planUpcomingRowsHtml(comingItems);
+  const landedRows = planUpcomingRowsHtml(landedItems);
+  const awaitingRows = planUpcomingRowsHtml(awaitingItems);
   if (!rows.trim() && !landedRows.trim() && !awaitingRows.trim()) return "";
-  return `<div class="plan-upcoming reveal">
-    ${awaitingRows.trim() ? `<span class="lbl plan-upcoming-mast">Waiting on you</span>${awaitingRows}` : ""}
-    ${rows.trim() ? `<span class="lbl plan-upcoming-mast">Coming up</span>${rows}` : ""}
-    ${landedRows.trim() ? `<span class="lbl plan-upcoming-mast">Where this came from</span>${landedRows}` : ""}
-  </div>`;
+  // Collapsed by default: a single footnote-weight strip naming only the sections
+  // that have items, so "Waiting on you" stays discoverable without reprinting the
+  // full rationale paragraphs every time the plan opens. One tap expands to the
+  // full content below; the plan itself never has to scroll past this to be seen.
+  const strip = [
+    awaitingRows.trim() ? `Waiting on you (${planUpcomingCount(awaitingItems)})` : "",
+    rows.trim() ? `Coming up (${planUpcomingCount(comingItems)})` : "",
+    landedRows.trim() ? `Where this came from (${planUpcomingCount(landedItems)})` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return `<details class="plan-upcoming reveal">
+    <summary><span class="lbl plan-upcoming-strip">${escHtml(strip)}</span></summary>
+    <div class="plan-upcoming-body">
+      ${awaitingRows.trim() ? `<span class="lbl plan-upcoming-mast">Waiting on you</span>${awaitingRows}` : ""}
+      ${rows.trim() ? `<span class="lbl plan-upcoming-mast">Coming up</span>${rows}` : ""}
+      ${landedRows.trim() ? `<span class="lbl plan-upcoming-mast">Where this came from</span>${landedRows}` : ""}
+    </div>
+  </details>`;
 }
 
 // Shared by the Plan edit segment and the endurance segment (both under the

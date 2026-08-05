@@ -51,7 +51,7 @@ const CLIENT_KINDS = new Set<ClientDiagnosticEvent["kind"]>([
 const CLIENT_TABS = new Set(["today", "progress", "stand", "plan", "chat", "settings", "session", "me"]);
 const CLIENT_API_CATEGORIES = new Set([
   "activities", "agent", "agent-clis", "agent-jobs", "agent-stats", "agents", "art", "blood-pressure",
-  "body-metrics", "bodyweight", "brain", "brain-diagnostics", "calendar", "cardio", "chat", "chat-images",
+  "body-metrics", "bodyweight", "brain", "brain-diagnostics", "calendar", "calibration", "cardio", "chat", "chat-images",
   "checkins", "coach", "coaching-focus", "context-effect", "context-events", "dexa-targeting", "diagnostics",
   "directives", "endurance-goal", "endurance-prs", "evidence", "exercise", "exercises", "export", "family",
   "food-notes", "frequent-foods", "garmin", "goal", "goal-checkin", "guidelines", "health", "health-docs",

@@ -1501,6 +1501,40 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_idempotency_created ON idempotency_keys(created_at);
+
+-- The personal HR model, derived (never a population formula) from observed
+-- activity max-HR, sustained efforts and any anchoring field test. ONE row: the
+-- model is a pure function of the data plus the calibration ledger, so this is a
+-- cache of the last nightly derive, not a source of truth — a wipe re-derives.
+-- as_of is the local day it was derived for; a model derived for another day is
+-- recomputed rather than served (a zone table is only honest about its own window).
+CREATE TABLE IF NOT EXISTS hr_model_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  as_of TEXT,
+  model_json TEXT NOT NULL,
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
+-- The calibration ledger: completed tests, DETECTED from logged work (an athlete
+-- is never made to fill in a form) or stated. Each row anchors one quantity —
+-- lthr / easy_pace / an exercise's est-1RM — at one date. ref_id is the
+-- garmin_activities / sessions row the detection read, so a re-sync or a
+-- re-finish is idempotent instead of stacking duplicate anchors.
+CREATE TABLE IF NOT EXISTS calibration_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,                    -- lthr_tt | benchmark_run | strength_topset
+  date TEXT NOT NULL,                    -- the day the test was performed
+  target_key TEXT,                       -- lthr | easy_pace | normalized exercise key
+  result_json TEXT NOT NULL DEFAULT '{}',
+  source TEXT NOT NULL DEFAULT 'detected', -- detected | stated
+  ref_id INTEGER,                        -- garmin_activities.id / sessions.id it came from
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_calibration_events_kind_date
+  ON calibration_events(kind, date DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_calibration_events_detected
+  ON calibration_events(kind, IFNULL(target_key,''), IFNULL(ref_id,0))
+  WHERE ref_id IS NOT NULL;
 `);
 
 runMigrations(db);

@@ -42,6 +42,10 @@ function loadProgressEnduranceController() {
     weeklyRunPlanCard: () => "",
     trainingAgendaCard: (agenda) => agenda?.available ? "agenda:open" : "",
     enduranceCoachLine: () => "",
+    enduranceCalibrationLine: (status) =>
+      status && Array.isArray(status.items) && status.items.some((item) => item.domain === "endurance")
+        ? "calibration:aging"
+        : "",
     cardioSyncLine: undefined,
     wireCardioSync: undefined,
     fmtKm: (value) => String(value),
@@ -75,6 +79,8 @@ function controllerDeps(overrides = {}) {
       if (path === "/settings") return { settings: {} };
       if (path.startsWith("/training-agenda")) return { available: true, intents: [] };
       if (path === "/program-state") return { hybrid: null };
+      if (path.startsWith("/calibration/status"))
+        return { status: { as_of: "2026-06-30", items: [] }, due: [] };
       return null;
     },
     nextToken: () => {
@@ -119,10 +125,38 @@ test("progress endurance controller fans out reads and paints the empty enduranc
     "/run-plan",
     "/training-agenda?date=2026-06-30",
     "/program-state",
+    "/calibration/status?date=2026-06-30",
   ]);
   assert.match(view.querySelector("#endBody").innerHTML, /hero:Endurance:0/);
   assert.match(view.querySelector("#endBody").innerHTML, /agenda:open/);
   assert.match(view.querySelector("#endBody").innerHTML, /No runs or rides logged yet/);
+});
+
+test("progress endurance controller paints the calibration line when the ladder has endurance items", async () => {
+  const controller = loadProgressEnduranceController();
+  const { deps, view } = controllerDeps({
+    api: async (path) => {
+      if (path === "/stats") return { endurance: null };
+      if (path === "/endurance-prs") return { sports: [], longest_km: null, longest_min: null, best_pace: [] };
+      if (path === "/settings") return { settings: {} };
+      if (path.startsWith("/training-agenda")) return { available: true, intents: [] };
+      if (path === "/program-state") return { hybrid: null };
+      if (path.startsWith("/calibration/status"))
+        return {
+          status: {
+            as_of: "2026-06-30",
+            items: [
+              { key: "lthr", domain: "endurance", label: "Your threshold HR", last_anchored: "2026-02-01", freshness: "aging", due: false },
+            ],
+          },
+          due: [],
+        };
+      return null;
+    },
+  });
+
+  await controller.render(deps);
+  assert.match(view.querySelector("#endBody").innerHTML, /calibration:aging/);
 });
 
 test("progress endurance controller keeps stale reads from repainting", async () => {

@@ -558,6 +558,14 @@ function runVolumeAdherenceObservation(context: EvaluatorContext): MetricObserva
   for (const row of measuredRows) actualKm += Number(row.distance_km);
   actualKm = rounded(actualKm, 1);
   const expectedKm = numberFrom(expectation.target, ["expected_km", "prescribed_km"]) ?? 0;
+  // UNCAPPED on purpose — unlike the session-count rates above, which clamp at 1
+  // because you cannot complete more sessions than were planned. Mileage you can:
+  // running 9.1 km against a prescribed 4.9 reads 1.86, and that overshoot is the
+  // single clearest signal the prescription sat under the athlete's capacity. Clamped
+  // to 1 it would be indistinguishable from a week that landed exactly on target, and
+  // the learning model downstream (reaction-model's run-volume acceleration) would
+  // have nothing to read. The verdict bar is unchanged either way — compareExpectation
+  // only asks whether the rate cleared the target.
   const completionRate = expectedKm > 0 ? rounded(actualKm / expectedKm) : 0;
   // The completion bar (matches compareExpectation's 'complete' reading of the target).
   const bar = numberFrom(expectation.target, ["rate", "value", "target"]) ?? 1;

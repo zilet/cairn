@@ -1,5 +1,6 @@
 import { db } from "../db.js";
 import { emitBrainEvent } from "../brainEvents.js";
+import { detectStrengthCalibration } from "./calibration.js";
 import { reconcileDailySessionSafe } from "./daily-reconciliation.js";
 import { sessionNoteSuggestsFatigue } from "./training-fatigue.js";
 import { localDateISO } from "./shared.js";
@@ -186,6 +187,16 @@ export function finishSession(sessionId: number, notes?: string | null) {
     } catch {
       /* inferred evidence is additive — it must never fail a finish */
     }
+  }
+  // A heavy top set is a TEST, and the athlete should never have to declare it as
+  // one: if what they just lifted confirms an est-1RM the plan had only
+  // extrapolated, record that the estimate was verified today. Records nothing
+  // else — the estimate itself stays owned by the Epley path — and is idempotent,
+  // so a re-finish or a Garmin re-sync adds no second anchor.
+  try {
+    detectStrengthCalibration(sessionId);
+  } catch {
+    /* calibration is additive evidence — it must never fail a finish */
   }
   // Stage 4: reconcile the accepted daily-session composition against what was
   // actually trained (idempotent, additive; a no-op for plain plan sessions).
@@ -1338,36 +1349,181 @@ export interface RunCompliance {
   actual_min: number;
   pct_km: number | null; // actual_km / prescribed_km when prescribed_km>0, else null — a proportion, never a 0-100 grade
   in_words: string;
+  // Where the PRESCRIPTION came from. 'applied' is the plan rows the athlete can
+  // see on Plan; 'live_plan' means those rows had nothing to say for this week and
+  // the live weekly run mix supplied the targets instead (composed one layer up —
+  // see runComplianceRead in src/domain/training). Additive provenance: the numbers
+  // and in_words format are identical either way.
+  basis: RunComplianceBasis;
 }
 
-export function getRunCompliance(weekStartISO?: string): RunCompliance {
-  // Monday-anchored week start (mirror computeEnduranceWeekly / getWeeklyStats).
-  const monday =
-    weekStartISO ||
-    (() => {
-      const d = new Date(localDateISO() + "T00:00:00Z");
-      d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
-      return d.toISOString().slice(0, 10);
-    })();
-  const nextMonday = new Date(new Date(monday + "T00:00:00Z").getTime() + 7 * 864e5).toISOString().slice(0, 10);
+export type RunComplianceBasis = "applied" | "live_plan";
 
-  // Prescribed: the current plan's cardio items.
-  let prescribed_sessions = 0;
-  let prescribed_km = 0;
-  let prescribed_min = 0;
+// Monday-anchored week start (mirror computeEnduranceWeekly / getWeeklyStats).
+export function runComplianceWeekStart(weekStartISO?: string): string {
+  if (weekStartISO) return weekStartISO;
+  return mondayOfISO(localDateISO());
+}
+
+// The Monday of the week a given day falls in.
+function mondayOfISO(dateISO: string): string {
+  const d = new Date(String(dateISO).slice(0, 10) + "T00:00:00Z");
+  if (Number.isNaN(d.getTime())) return String(dateISO).slice(0, 10);
+  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+  return d.toISOString().slice(0, 10);
+}
+
+const RECOGNIZED_ENDURANCE_SPORT_KEYS = new Set(["run", "ride", "swim", "row", "walk", "ski"]);
+
+// Which sport an APPLIED cardio plan row prescribes. The row itself is often
+// mute: savePlanDay folds a cardio item's label into `note` only when there is no
+// prose note, and the run engine always writes prose ("Easy aerobic at Z2 —
+// relaxed and conversational."), so "Easy run" / "Long run" is dropped and the
+// exercise column is NULL by design. Reading the item alone therefore classified
+// every machine-applied run as an unrecognized sport and counted ZERO prescribed
+// runs for a week the run engine had just written. The plan DAY still carries the
+// label, so it answers when the item cannot — but only then: an item that names a
+// ride is a ride, whatever day it sits on.
+// The sources are consulted in order of how directly they name a sport, and the
+// first one that names any recognized sport at all decides. `target_zone` is free
+// text ('Z2' | 'tempo' | 'easy'), and canonicalEnduranceSport reads "tempo" and
+// "interval" as running tokens — so folding it into one blob with the label made a
+// cycling item prescribed at "tempo" classify as a run. An effort word is the
+// weakest possible sport signal and must never outvote one, so it only speaks when
+// the item itself is completely mute about what it is.
+function planCardioIsRun(day: any, item: any): boolean {
+  for (const source of [
+    `${item.exercise || ""} ${item.note || ""}`,
+    String(item.target_zone || ""),
+    `${day?.name || ""} ${day?.focus || ""}`,
+  ]) {
+    const key = canonicalEnduranceSport(source).key;
+    if (key === "run") return true;
+    if (RECOGNIZED_ENDURANCE_SPORT_KEYS.has(key)) return false;
+  }
+  return false;
+}
+
+// The APPLIED plan's run-cardio prescription. The plan template is weekly and
+// carries no dates, so this is "whatever is in the plan right now" — which is
+// exactly why it can fossilize (see appliedRunPlanNeedsRefresh).
+export function appliedRunPrescription(): { sessions: number; km: number; min: number } {
+  let sessions = 0;
+  let km = 0;
+  let min = 0;
   for (const day of getPlan() as any[]) {
     for (const it of day.items || []) {
       if (it.kind !== "cardio") continue;
-      if (canonicalEnduranceSport(`${it.exercise || ""} ${it.note || ""}`).key !== "run") continue;
-      prescribed_sessions++;
-      const km = Number(it.target_distance_km);
-      const min = Number(it.target_duration_min);
-      if (Number.isFinite(km) && km > 0) prescribed_km += km;
-      if (Number.isFinite(min) && min > 0) prescribed_min += min;
+      if (!planCardioIsRun(day, it)) continue;
+      sessions++;
+      const itemKm = Number(it.target_distance_km);
+      const itemMin = Number(it.target_duration_min);
+      if (Number.isFinite(itemKm) && itemKm > 0) km += itemKm;
+      if (Number.isFinite(itemMin) && itemMin > 0) min += itemMin;
     }
   }
-  prescribed_km = Math.round(prescribed_km * 10) / 10;
-  prescribed_min = Math.round(prescribed_min);
+  return { sessions, km: Math.round(km * 10) / 10, min: Math.round(min) };
+}
+
+// Plain-language summary — a ratio, never a grade. Prefer distance (the runner's
+// native unit); fall back to session count when there's no prescribed mileage.
+// Shared with the live-plan fallback so the two bases read identically.
+export function runComplianceInWords(parts: {
+  prescribed_sessions: number;
+  prescribed_km: number;
+  actual_sessions: number;
+  actual_km: number;
+}): string {
+  if (parts.prescribed_sessions === 0) {
+    return parts.actual_sessions > 0
+      ? `${parts.actual_sessions} run${parts.actual_sessions === 1 ? "" : "s"} this week, none prescribed`
+      : "no runs prescribed this week";
+  }
+  if (parts.prescribed_km > 0) return `${parts.actual_km} of ${parts.prescribed_km} km this week`;
+  return `${parts.actual_sessions} of ${parts.prescribed_sessions} run${parts.prescribed_sessions === 1 ? "" : "s"} this week`;
+}
+
+// The most recent date an auto-built run plan was actually APPLIED to the plan
+// rows, or null when no machine-built run plan has ever landed (a hand-authored
+// endurance week — never treated as stale, it is exactly what the athlete asked for).
+export function lastAppliedRunPlanDate(): string | null {
+  const row = db
+    .prepare(
+      `SELECT created_at FROM plan_proposals
+        WHERE agent = 'auto-run-plan' AND status = 'applied'
+        ORDER BY datetime(created_at) DESC, id DESC LIMIT 1`
+    )
+    .get() as any;
+  const stamp = row?.created_at ? String(row.created_at).slice(0, 10) : "";
+  return /^\d{4}-\d{2}-\d{2}$/.test(stamp) ? stamp : null;
+}
+
+// Can the applied plan honestly speak for the week starting `weekStartISO`?
+//
+// The freshness law that governs sensor readings governs prescriptions too (see
+// sensor-freshness.ts): a prescription a consumer cannot vouch for the week it is
+// judging behaves as ABSENT, never as current. A machine-built run plan speaks
+// for the week it landed in and no other — quoting a five-week-old applied 40 km
+// week against this week's real 20 km is a shortfall the athlete never agreed to.
+// A hand-authored plan (no applied auto-run-plan on file) is never stale: it is
+// exactly what the athlete asked for, and it stands for every week until changed.
+export function appliedRunPlanCoversWeek(weekStartISO?: string): boolean {
+  const monday = runComplianceWeekStart(weekStartISO);
+  if (appliedRunPrescription().sessions === 0) return false;
+  const applied = lastAppliedRunPlanDate();
+  if (!applied) return true;
+  // `created_at` is a UTC stamp read as a local day, so it can read one day ahead
+  // of the local date near midnight — clamp a plan that appears to land in the
+  // future back into the current week rather than calling it uncovered.
+  const current = runComplianceWeekStart();
+  const appliedWeek = mondayOfISO(applied);
+  return (appliedWeek > current ? current : appliedWeek) === monday;
+}
+
+// True when the applied plan cannot honestly speak for THIS week's running:
+// either it prescribes no runs at all, or the machine-built run plan that put
+// those rows there landed in some other week and nothing has refreshed it since.
+export function appliedRunPlanNeedsRefresh(weekStartISO?: string): boolean {
+  return !appliedRunPlanCoversWeek(weekStartISO);
+}
+
+// getRunCompliance, but honest about freshness. This is what any consumer that
+// judges SHORTFALL must read: when the applied plan cannot vouch for the week
+// (appliedRunPlanCoversWeek), the prescription reads as absent rather than as
+// current, so the branch that would call the athlete short simply never fires and
+// the surface falls back to the quiet it had before a machine-applied run plan
+// became visible to appliedRunPrescription(). Actuals are logged fact and always
+// stand. A surface that wants a REAL target for a stale week wants the composed
+// read instead (runComplianceRead, src/domain/training) — that one substitutes the
+// live weekly mix; this one substitutes silence.
+export function vouchedRunCompliance(weekStartISO?: string): RunCompliance {
+  const monday = runComplianceWeekStart(weekStartISO);
+  const read = getRunCompliance(monday);
+  if (appliedRunPlanCoversWeek(monday)) return read;
+  return {
+    ...read,
+    prescribed_sessions: 0,
+    prescribed_km: 0,
+    prescribed_min: 0,
+    pct_km: null,
+    in_words: runComplianceInWords({
+      prescribed_sessions: 0,
+      prescribed_km: 0,
+      actual_sessions: read.actual_sessions,
+      actual_km: read.actual_km,
+    }),
+  };
+}
+
+export function getRunCompliance(weekStartISO?: string): RunCompliance {
+  const monday = runComplianceWeekStart(weekStartISO);
+  const nextMonday = new Date(new Date(monday + "T00:00:00Z").getTime() + 7 * 864e5).toISOString().slice(0, 10);
+
+  // Prescribed: the current plan's cardio items.
+  const prescription = appliedRunPrescription();
+  const prescribed_sessions = prescription.sessions;
+  const prescribed_km = prescription.km;
+  const prescribed_min = prescription.min;
 
   // Actual: this week's logged RUN efforts only.
   const rows = db
@@ -1389,19 +1545,7 @@ export function getRunCompliance(weekStartISO?: string): RunCompliance {
 
   const pct_km = prescribed_km > 0 ? Math.round((actual_km / prescribed_km) * 100) / 100 : null;
 
-  // Plain-language summary — a ratio, never a grade. Prefer distance (the runner's
-  // native unit); fall back to session count when there's no prescribed mileage.
-  let in_words: string;
-  if (prescribed_sessions === 0) {
-    in_words =
-      actual_sessions > 0
-        ? `${actual_sessions} run${actual_sessions === 1 ? "" : "s"} this week, none prescribed`
-        : "no runs prescribed this week";
-  } else if (prescribed_km > 0) {
-    in_words = `${actual_km} of ${prescribed_km} km this week`;
-  } else {
-    in_words = `${actual_sessions} of ${prescribed_sessions} run${prescribed_sessions === 1 ? "" : "s"} this week`;
-  }
+  const in_words = runComplianceInWords({ prescribed_sessions, prescribed_km, actual_sessions, actual_km });
 
   return {
     prescribed_sessions,
@@ -1412,6 +1556,7 @@ export function getRunCompliance(weekStartISO?: string): RunCompliance {
     actual_min,
     pct_km,
     in_words,
+    basis: "applied",
   };
 }
 

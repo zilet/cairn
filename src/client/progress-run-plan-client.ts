@@ -6,6 +6,8 @@ type EnduranceGoal = import("../contracts/client-api.js").ClientEnduranceGoal;
 type RunCompliance = import("../contracts/client-api.js").ClientRunCompliance;
 type FlexibleTrainingAgenda = import("../contracts/client-api.js").ClientFlexibleTrainingAgenda;
 type FlexibleRunIntent = import("../contracts/client-api.js").ClientFlexibleRunIntent;
+type CalibrationStatus = import("../contracts/client-api.js").ClientCalibrationStatus;
+type CalibrationStatusItem = import("../contracts/client-api.js").ClientCalibrationStatusItem;
 
 function runKindClass(kind: unknown): string {
   if (kind === "quality") return "wrun-quality";
@@ -179,7 +181,84 @@ function runComplianceLine(compliance: RunCompliance | null | undefined): string
     </div>`;
 }
 
-function enduranceCoachLine(plan: WeeklyRunPlan | null | undefined): string {
+// The lead sentence used to read ONLY the live prescription, so it went on
+// naming the long run the athlete had already run ("your 4.9 km long run is the
+// one that matters" the day after a 9.1 km long run). Completion lives in the
+// agenda payload the same controller already fetches, so the line now speaks to
+// what actually happened first and falls back to the prescription only while the
+// week's headline run is still open. Every phrasing rotates by date — a stable
+// input must not print one literal verbatim for a week (VISION Amendment 2).
+const RUN_BANKED_LONG_DOSE = [
+  "Your long run is already banked — {dose} this week.",
+  "The long one is done: {dose} in the bank this week.",
+  "{dose} long run, already behind you this week.",
+  "This week's long run is banked at {dose}.",
+] as const;
+
+const RUN_BANKED_LONG_PLAIN = [
+  "Your long run is already banked this week.",
+  "The long one is done — it's behind you this week.",
+  "This week's long run is in the bank.",
+] as const;
+
+const RUN_BANKED_QUALITY = [
+  "Your quality session is already banked this week.",
+  "The hard one is done — it's behind you this week.",
+  "This week's quality work is in the bank.",
+] as const;
+
+function runIntentDose(completion: NonNullable<FlexibleRunIntent["completion"]>): string {
+  if (completion.distance_km != null && Number(completion.distance_km) > 0) {
+    return `${fmtKm(completion.distance_km)} km`;
+  }
+  if (completion.duration_min != null && Number(completion.duration_min) > 0) {
+    return `${Math.round(Number(completion.duration_min))} min`;
+  }
+  return "";
+}
+
+function runAgendaIntent(agenda: FlexibleTrainingAgenda | null | undefined, kind: string): FlexibleRunIntent | null {
+  if (!agenda || agenda.available === false || !Array.isArray(agenda.intents)) return null;
+  return agenda.intents.find((intent) => intent.kind === kind) || null;
+}
+
+// The date the rotation keys off — the agenda's own as-of when it has one, so
+// the sentence is stable for the day the payload describes.
+function runAgendaDate(agenda: FlexibleTrainingAgenda | null | undefined): string {
+  const asOf = String(agenda?.as_of || "").slice(0, 10);
+  return asOf || localISO();
+}
+
+function enduranceBankedSentence(
+  plan: WeeklyRunPlan | null | undefined,
+  agenda: FlexibleTrainingAgenda | null | undefined
+): string {
+  const date = runAgendaDate(agenda);
+  const long = runAgendaIntent(agenda, "long");
+  if (long && long.status === "completed" && long.completion) {
+    const dose = runIntentDose(long.completion);
+    return dose
+      ? pickDayVariant(RUN_BANKED_LONG_DOSE, date, "endurance-lead:long-banked").replace("{dose}", dose)
+      : pickDayVariant(RUN_BANKED_LONG_PLAIN, date, "endurance-lead:long-banked-plain");
+  }
+  // Quality only speaks for the week when there is no long run to lead with —
+  // an open long run stays the headline even once the hard session is done.
+  if (long) return "";
+  const plannedLong = Array.isArray(plan?.runs) ? plan.runs.some((run) => run.kind_label === "long") : false;
+  if (plannedLong) return "";
+  const quality = runAgendaIntent(agenda, "quality");
+  if (quality && quality.status === "completed" && quality.completion) {
+    return pickDayVariant(RUN_BANKED_QUALITY, date, "endurance-lead:quality-banked");
+  }
+  return "";
+}
+
+function enduranceCoachLine(
+  plan: WeeklyRunPlan | null | undefined,
+  agenda?: FlexibleTrainingAgenda | null
+): string {
+  const banked = enduranceBankedSentence(plan, agenda);
+  if (banked) return `<div class="prog-headline reveal" style="${stagger(0)}">${escHtml(banked)}</div>`;
   if (!plan || plan.available === false || !Array.isArray(plan.runs) || !plan.runs.length) return "";
   const long = plan.runs.find((run) => run.kind_label === "long");
   const quality = plan.runs.find((run) => run.kind_label === "quality");
@@ -195,6 +274,59 @@ function enduranceCoachLine(plan: WeeklyRunPlan | null | undefined): string {
   return `<div class="prog-headline reveal" style="${stagger(0)}">${escHtml(sentence)}</div>`;
 }
 
+// ---- calibration freshness (endurance only) ----
+// One quiet line saying how well-anchored the numbers steering the week actually
+// are. Freshness words only — never a count, never a days-stale number, never a
+// nag: the athlete reads it if they look, and nothing here gates a run.
+const CALIBRATION_FRESHNESS_ORDER = ["never", "stale", "aging", "anchored"] as const;
+
+const CALIBRATION_LINES: Record<CalibrationStatusItem["freshness"], readonly string[]> = {
+  never: [
+    "{label} has never been anchored to a test.",
+    "Nothing has anchored {label} yet.",
+    "{label} is still running on an estimate.",
+  ],
+  stale: [
+    "{label} was anchored a long while back.",
+    "{label} is running on an old anchor.",
+    "It has been a long time since {label} was tested.",
+  ],
+  aging: [
+    "{label} is starting to age.",
+    "{label} was anchored a while ago now.",
+    "{label} could use a fresher anchor before long.",
+  ],
+  anchored: [
+    "{label} is freshly anchored.",
+    "{label} is anchored to recent work.",
+    "{label} is current.",
+  ],
+};
+
+function enduranceCalibrationLine(status: CalibrationStatus | null | undefined, dateISO?: string): string {
+  const items = Array.isArray(status?.items) ? status.items.filter((item) => item && item.domain === "endurance") : [];
+  if (!items.length) return "";
+  let lead: CalibrationStatusItem | null = null;
+  let leadRank: number = CALIBRATION_FRESHNESS_ORDER.length;
+  for (const item of items) {
+    const rank = CALIBRATION_FRESHNESS_ORDER.indexOf(item.freshness);
+    if (rank >= 0 && rank < leadRank) {
+      lead = item;
+      leadRank = rank;
+    }
+  }
+  if (!lead) return "";
+  const variants = CALIBRATION_LINES[lead.freshness];
+  if (!variants || !variants.length) return "";
+  const label = String(lead.label || "Your zones").trim() || "Your zones";
+  const date = String(dateISO || status?.as_of || "").slice(0, 10) || localISO();
+  const sentence = pickDayVariant(variants, date, `endurance-calibration:${lead.key}`).replace("{label}", label);
+  return `<div class="end-compliance reveal" style="${stagger(0)}">
+      <span class="lbl">Anchors</span>
+      <span class="end-compliance-v">${escHtml(sentence)}</span>
+    </div>`;
+}
+
 const CAIRN_PROGRESS_RUN_PLAN = {
   runKindClass,
   runKindLabel,
@@ -203,6 +335,7 @@ const CAIRN_PROGRESS_RUN_PLAN = {
   enduranceGoalCard,
   runComplianceLine,
   enduranceCoachLine,
+  enduranceCalibrationLine,
 };
 
 Object.assign(globalThis, {
@@ -214,6 +347,7 @@ Object.assign(globalThis, {
   enduranceGoalCard,
   runComplianceLine,
   enduranceCoachLine,
+  enduranceCalibrationLine,
 });
 
 if (typeof window !== "undefined") {
@@ -226,5 +360,6 @@ if (typeof window !== "undefined") {
     enduranceGoalCard,
     runComplianceLine,
     enduranceCoachLine,
+    enduranceCalibrationLine,
   });
 }
