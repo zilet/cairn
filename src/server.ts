@@ -248,6 +248,10 @@ server.on("upgrade", (req, socket, head) => {
   }
 
   const agent = url.searchParams.get("agent") || "";
+  // The PTY window is fixed at spawn (see agentLogin.ts), so the client sends its
+  // fitted terminal size up front; clamping happens in startLoginSession.
+  const cols = Number(url.searchParams.get("cols"));
+  const rows = Number(url.searchParams.get("rows"));
 
   wss.handleUpgrade(req, socket, head, (ws) => {
     // Invalid/disallowed agent: we upgraded, so signal cleanly over the socket
@@ -264,6 +268,8 @@ server.on("upgrade", (req, socket, head) => {
     try {
       session = startLoginSession({
         agent,
+        cols,
+        rows,
         // Raw PTY bytes → binary frames; xterm writes them verbatim.
         onData: (buf) => {
           try {

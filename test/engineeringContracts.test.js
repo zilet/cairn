@@ -4184,7 +4184,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     agentLoginSessionSource,
     /async function startAgentLoginSession\(name: string, modal: AgentLoginModalHandle\): Promise<void>/
   );
-  assert.match(agentLoginSessionSource, /agentLoginWsUrl\(name\)/);
+  // The fitted terminal size rides the connect URL — the server PTY window is
+  // fixed at spawn, so a size-less connect would fold agy's ~27-row login screen.
+  assert.match(agentLoginSessionSource, /agentLoginWsUrl\(name, term\.cols \|\| 0, term\.rows \|\| 0\)/);
   assert.match(agentLoginSource, /async function openAgentLoginModal\(agentName: unknown\): Promise<void>/);
   assert.match(agentLoginSource, /session\.start\(name, handle\)/);
   assert.match(agentLoginSource, /Object\.assign\(globalThis, \{ openAgentLoginModal \}\)/);

@@ -20,10 +20,14 @@
     return api;
   }
 
-  function agentLoginWsUrl(name: string): string {
+  function agentLoginWsUrl(name: string, cols: number, rows: number): string {
     const token = (typeof authToken === "function" && authToken()) || "";
+    // The server PTY window is fixed at spawn, so the fitted size rides the
+    // connect URL — the later resize control message is best-effort only.
     return (location.protocol === "https:" ? "wss:" : "ws:") + "//" + location.host +
       "/api/agent-login/ws?agent=" + encodeURIComponent(name) +
+      "&cols=" + encodeURIComponent(String(cols || 0)) +
+      "&rows=" + encodeURIComponent(String(rows || 0)) +
       (token ? "&token=" + encodeURIComponent(token) : "");
   }
 
@@ -46,10 +50,20 @@
     }
     if (!modal.overlay.isConnected) return;
 
+    // A modern CLI may emit OSC 8 hyperlinks — the full URI travels in the
+    // escape even when the visible text is truncated. Clicking one opens it
+    // AND mirrors it onto the modal's link surface; a vendored xterm build
+    // without linkHandler support just ignores the option.
     const term = new Terminal({
       convertEol: false,
       fontSize: 13,
       cursorBlink: true,
+      linkHandler: {
+        activate: (_event: unknown, uri: string) => {
+          modal.showAuthLink(String(uri));
+          try { window.open(String(uri), "_blank", "noopener"); } catch {}
+        },
+      },
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
       theme: {
         background: "#2c2620",
@@ -70,13 +84,67 @@
     term.loadAddon?.(fit);
     term.open(modal.termHost);
     try { fit.fit(); } catch {}
+    // Mirror the server's clampPtySize bounds (40–400 cols, 20–200 rows) so the
+    // xterm grid and the PTY window always agree — a phone whose fit lands
+    // under the floor would otherwise render 17 rows against a 20-row PTY and
+    // garble every full-screen TUI. The host scrolls when the grid overflows.
+    const cols = Math.min(400, Math.max(40, Math.floor(term.cols || 0) || 100));
+    const rows = Math.min(200, Math.max(20, Math.floor(term.rows || 0) || 32));
+    if (cols !== term.cols || rows !== term.rows) {
+      try { term.resize?.(cols, rows); } catch {}
+    }
     modal.overlay._term = term;
-    modal.overlay._onResize = () => { try { fit.fit(); } catch {} };
-    window.addEventListener("resize", modal.overlay._onResize);
+    // No refit-on-window-resize: the PTY window is fixed at spawn, so reflowing
+    // the client grid mid-session (e.g. the phone keyboard opening) would only
+    // desync it from the PTY. The terminal keeps its spawn size for the session.
+
+    // Sign-in URL fallback for CLIs that print the URL as plain text: scan the
+    // terminal buffer after output settles and surface the newest https URL as
+    // the modal's tap-friendly link. Full-screen TUIs hard-wrap long URLs
+    // inside box borders, so a URL-run may continue across following lines —
+    // append lines that are pure URL characters once their border glyphs and
+    // padding are stripped.
+    const URL_CHARS = "[A-Za-z0-9\\-._~:/?#\\[\\]@!$&*+,;=%]";
+    const URL_RE = new RegExp("https://" + URL_CHARS + "+", "g");
+    let scanTimer: ReturnType<typeof setTimeout> | null = null;
+    const scanForAuthUrl = (): void => {
+      scanTimer = null;
+      try {
+        const buf = term.buffer?.active;
+        if (!buf) return;
+        const lines: string[] = [];
+        for (let i = 0; i < buf.length; i++) {
+          const line = buf.getLine(i);
+          const text = line?.translateToString?.(true) ?? "";
+          if (line?.isWrapped && lines.length) lines[lines.length - 1] += text;
+          else lines.push(text);
+        }
+        let found = "";
+        for (let i = 0; i < lines.length; i++) {
+          const matches = (lines[i] ?? "").match(URL_RE);
+          if (!matches) continue;
+          let url = matches[matches.length - 1] ?? "";
+          // Only a URL that ran to the line's end can continue on the next line.
+          if ((lines[i] ?? "").trimEnd().endsWith(url)) {
+            for (let j = i + 1; j < lines.length; j++) {
+              const cont = (lines[j] ?? "").replace(/[\s│┃|]+/g, " ").trim().split(" ")[0] ?? "";
+              if (!cont || !new RegExp("^" + URL_CHARS + "+$").test(cont)) break;
+              url += cont;
+            }
+          }
+          found = url.replace(/[.,;:)\]]+$/, "");
+        }
+        if (found) modal.showAuthLink(found);
+      } catch {}
+    };
+    const scheduleAuthUrlScan = (): void => {
+      if (scanTimer) clearTimeout(scanTimer);
+      scanTimer = setTimeout(scanForAuthUrl, 300);
+    };
 
     let ws: WebSocket;
     try {
-      ws = new WebSocket(agentLoginWsUrl(name));
+      ws = new WebSocket(agentLoginWsUrl(name, term.cols || 0, term.rows || 0));
     } catch {
       modal.setStatus(model.status("connectionOpenError"), "is-err");
       return;
@@ -120,6 +188,7 @@
         try { handleControl(JSON.parse(event.data)); } catch {}
       } else if (event.data instanceof ArrayBuffer) {
         term.write(new Uint8Array(event.data));
+        scheduleAuthUrlScan();
       }
     };
     ws.onerror = () => {

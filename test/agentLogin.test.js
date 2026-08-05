@@ -13,7 +13,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import "./_seed.js"; // ensures DATA_DIR/DB_PATH-backed db is initialized for the dist imports
-import { resolveLoginArgv, buildPtyInvocation, ptyInvocationFor, loginSessionActive, buildLoginSpawnOptions } from "../dist/agentLogin.js";
+import { resolveLoginArgv, buildPtyInvocation, ptyInvocationFor, loginSessionActive, buildLoginSpawnOptions, clampPtySize } from "../dist/agentLogin.js";
 import { AGENT_WORKSPACES_DIRNAME } from "../dist/agentExecution.js";
 import {
   AGENT_ENV_DENYLIST,
@@ -55,19 +55,40 @@ test("ptyInvocationFor builds EVERY platform's PTY wrapper from any host OS", ()
   // assert all three shapes in one run regardless of the host.
   const argv = ["claude", "auth", "login"];
 
-  // Linux / Docker: initialize the piped PTY to a usable 80x24 before exec.
+  // Linux / Docker: initialize the piped PTY to the default window before exec.
   const linux = ptyInvocationFor("linux", argv);
   assert.equal(linux.command, "script");
-  assert.deepEqual(linux.args, ["-qfc", "stty cols 80 rows 24; exec 'claude' 'auth' 'login'", "/dev/null"]);
+  assert.deepEqual(linux.args, ["-qfc", "stty cols 100 rows 32; exec 'claude' 'auth' 'login'", "/dev/null"]);
 
-  // macOS: python3 pty.spawn with the argv JSON-encoded into a Python list literal.
+  // macOS: python3 pty.spawn of an sh -c wrapper (same stty init as Linux), with
+  // the command JSON-encoded into a Python list literal.
   const mac = ptyInvocationFor("darwin", argv);
   assert.equal(mac.command, "python3");
   assert.equal(mac.args[0], "-c");
-  assert.match(mac.args[1], /pty\.spawn\(\["claude","auth","login"\]\)/);
+  assert.match(mac.args[1], /pty\.spawn\(\["sh","-c","stty cols 100 rows 32; exec 'claude' 'auth' 'login'"\]\)/);
 
   // Windows has no PTY bridge — it must throw, never silently mis-spawn.
   assert.throws(() => ptyInvocationFor("win32", argv), /unsupported on Windows/i);
+});
+
+test("clampPtySize bounds client-supplied dimensions and defaults garbage", () => {
+  // The size arrives from the browser via query params — clamp, never trust.
+  assert.deepEqual(clampPtySize(96, 41), { cols: 96, rows: 41 });
+  assert.deepEqual(clampPtySize("96", "41.9"), { cols: 96, rows: 41 });
+  assert.deepEqual(clampPtySize(1, 1), { cols: 40, rows: 20 });
+  assert.deepEqual(clampPtySize(9999, 9999), { cols: 400, rows: 200 });
+  assert.deepEqual(clampPtySize(NaN, null), { cols: 100, rows: 32 });
+  assert.deepEqual(clampPtySize(undefined, "x"), { cols: 100, rows: 32 });
+});
+
+test("ptyInvocationFor bakes the client's fitted size into the PTY init", () => {
+  // The PTY window is fixed at spawn (no native ioctl to resize), so the size the
+  // client measured MUST reach the stty init — agy's sign-in screen is ~27 rows,
+  // and a fold at 24 hid the OAuth URL + authorization-code field entirely.
+  const inv = ptyInvocationFor("linux", ["agy"], { cols: 96, rows: 41 });
+  assert.deepEqual(inv.args, ["-qfc", "stty cols 96 rows 41; exec 'agy'", "/dev/null"]);
+  const mac = ptyInvocationFor("darwin", ["agy"], { cols: 96, rows: 41 });
+  assert.match(mac.args[1], /stty cols 96 rows 41; exec 'agy'/);
 });
 
 test("ptyInvocationFor shell-quotes a token with a space/quote/metachar (Linux injection guard)", () => {
@@ -75,7 +96,7 @@ test("ptyInvocationFor shell-quotes a token with a space/quote/metachar (Linux i
   // when wrapped by `script -qfc "<cmd>"` (run via /bin/sh) — never word-split or inject.
   const inv = ptyInvocationFor("linux", ["my agent", "log'in", "; rm -rf /"]);
   assert.equal(inv.command, "script");
-  assert.deepEqual(inv.args, ["-qfc", "stty cols 80 rows 24; exec 'my agent' 'log'\\''in' '; rm -rf /'", "/dev/null"]);
+  assert.deepEqual(inv.args, ["-qfc", "stty cols 100 rows 32; exec 'my agent' 'log'\\''in' '; rm -rf /'", "/dev/null"]);
 });
 
 test("buildPtyInvocation wraps the login argv in a real PTY (no native module)", () => {
@@ -87,13 +108,13 @@ test("buildPtyInvocation wraps the login argv in a real PTY (no native module)",
     // shell-quoted (the command runs via /bin/sh -c) so a future agents.json entry
     // with a space/metachar can't word-split or inject.
     assert.equal(inv.command, "script");
-    assert.deepEqual(inv.args, ["-qfc", "stty cols 80 rows 24; exec 'claude' 'auth' 'login'", "/dev/null"]);
+    assert.deepEqual(inv.args, ["-qfc", "stty cols 100 rows 32; exec 'claude' 'auth' 'login'", "/dev/null"]);
   } else if (process.platform === "darwin") {
     // python3 pty.spawn — BSD `script` can't PTY with piped stdio.
     assert.equal(inv.command, "python3");
     assert.equal(inv.args[0], "-c");
-    // the server-chosen argv is JSON-encoded into the python list literal
-    assert.match(inv.args[1], /pty\.spawn\(\["claude","auth","login"\]\)/);
+    // the server-chosen command is JSON-encoded into the python list literal
+    assert.match(inv.args[1], /pty\.spawn\(\["sh","-c","stty cols 100 rows 32; exec 'claude' 'auth' 'login'"\]\)/);
   }
 });
 

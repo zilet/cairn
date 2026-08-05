@@ -29,7 +29,7 @@
 .agent-login-x:hover{color:var(--ink,#211d17);background:var(--paper,#f4efe7)}
 .agent-login-bd{padding:14px 16px 16px;display:flex;flex-direction:column;gap:10px;overflow:auto}
 .agent-login-term{background:var(--stone-deep,#2c2620);border-radius:12px;padding:10px 8px 8px;
-  border:1px solid var(--stone,#473f36);min-height:180px;height:clamp(180px,42vh,340px)}
+  border:1px solid var(--stone,#473f36);min-height:180px;height:clamp(180px,42vh,340px);overflow:auto}
 .agent-login-term .xterm{padding:0}
 .agent-login-status{font-size:13px;color:var(--muted,#746c5c);min-height:18px;display:flex;align-items:center;gap:6px}
 .agent-login-status.is-ok{color:var(--sage,#6e7f5c);font-weight:600}
@@ -37,6 +37,11 @@
 .agent-login-hint{font-size:12.5px;color:var(--muted,#746c5c);line-height:1.5;margin:0}
 .agent-login-hint code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;
   background:var(--paper,#f4efe7);padding:1px 5px;border-radius:5px;border:1px solid var(--line,#e7dfd2)}
+.agent-login-link{display:flex;gap:8px;flex-wrap:wrap}
+.agent-login-link[hidden]{display:none}
+.agent-login-link-open{text-decoration:none;text-align:center;display:inline-block;
+  background:var(--accent,#b4552d);color:#fffdf8;border-color:var(--accent,#b4552d)}
+.agent-login-link-open:hover{background:var(--accent,#b4552d);opacity:.92}
 .agent-login-paste{display:flex;gap:8px}
 .agent-login-paste-in{flex:1;min-width:0;font-family:inherit;font-size:16px;padding:8px 12px;
   border-radius:11px;border:1px solid var(--line,#e7dfd2);background:var(--paper,#f4efe7);color:var(--ink,#211d17)}
@@ -77,6 +82,10 @@
       <div class="agent-login-bd">
         <div class="agent-login-status" role="status">${model.status("connecting")}</div>
         <div class="agent-login-term"></div>
+        <div class="agent-login-link" hidden>
+          <a class="agent-login-btn agent-login-link-open" target="_blank" rel="noopener">Open sign-in page</a>
+          <button class="agent-login-btn" type="button" data-copy-link>Copy link</button>
+        </div>
         <div class="agent-login-paste">
           <input class="agent-login-paste-in" type="text" autocomplete="off" autocapitalize="off"
             autocorrect="off" spellcheck="false" enterkeyhint="send"
@@ -84,7 +93,7 @@
           <button class="agent-login-btn" type="button" data-paste-send>Send</button>
         </div>
         ${model.providerHintHtml(name)}
-        <p class="agent-login-hint">Follow the prompts. If a URL and a code appear, open the URL in your browser to authorize, then paste the code in the box above &mdash; on phones the terminal itself can't take a paste.</p>
+        <p class="agent-login-hint">Follow the prompts. When a sign-in link appears in the terminal it also surfaces as a button above &mdash; open it, authorize, then paste the code in the box; on phones the terminal itself can't take a paste.</p>
         <div class="agent-login-ft">
           <button class="agent-login-btn" type="button" data-close>Cancel</button>
         </div>
@@ -98,10 +107,34 @@
     const pasteSend = overlay.querySelector<HTMLButtonElement>("[data-paste-send]");
     const closeBtn = overlay.querySelector<HTMLButtonElement>(".agent-login-ft [data-close]");
     const footer = overlay.querySelector<HTMLElement>(".agent-login-ft");
-    if (!statusEl || !termHost || !pasteInput || !pasteSend || !closeBtn || !footer) {
+    const linkRow = overlay.querySelector<HTMLElement>(".agent-login-link");
+    const linkOpen = overlay.querySelector<HTMLAnchorElement>(".agent-login-link-open");
+    const copyBtn = overlay.querySelector<HTMLButtonElement>("[data-copy-link]");
+    if (!statusEl || !termHost || !pasteInput || !pasteSend || !closeBtn || !footer || !linkRow || !linkOpen || !copyBtn) {
       overlay.remove();
       return null;
     }
+
+    // Sign-in URLs surface as real controls: phones can't select or tap text
+    // inside the terminal canvas, so the URL the CLI prints is otherwise
+    // unreachable there. href is set as a DOM property (never innerHTML).
+    let authLinkUrl = "";
+    const showAuthLink = (url: string): void => {
+      if (!/^https:\/\//.test(url)) return;
+      authLinkUrl = url;
+      linkOpen.href = url;
+      linkRow.hidden = false;
+    };
+    copyBtn.addEventListener("click", async () => {
+      if (!authLinkUrl) return;
+      let copied = false;
+      try {
+        await navigator.clipboard.writeText(authLinkUrl);
+        copied = true;
+      } catch {}
+      copyBtn.textContent = copied ? "Copied" : "Copy failed";
+      setTimeout(() => { copyBtn.textContent = "Copy link"; }, 1600);
+    });
 
     const setStatus = (text: string, cls?: string): void => {
       statusEl.textContent = text;
@@ -159,6 +192,7 @@
       isOk: () => statusEl.classList.contains("is-ok"),
       markFailed,
       setStatus,
+      showAuthLink,
     };
   }
 

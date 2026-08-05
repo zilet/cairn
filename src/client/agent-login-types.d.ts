@@ -26,6 +26,11 @@ type AgentLoginOverlay = HTMLDivElement & {
   _ws?: WebSocket;
 };
 
+type AgentLoginXtermBufferLine = {
+  isWrapped?: boolean;
+  translateToString?(trimRight?: boolean): string;
+};
+
 type AgentLoginXtermConstructor = new (options: AgentLoginRecord) => {
   open(el: Element): void;
   write(text: string | Uint8Array): void;
@@ -34,8 +39,10 @@ type AgentLoginXtermConstructor = new (options: AgentLoginRecord) => {
   onResize?(handler: (size: { cols: number; rows: number }) => void): void;
   focus?(): void;
   loadAddon?(addon: unknown): void;
+  resize?(cols: number, rows: number): void;
   cols?: number;
   rows?: number;
+  buffer?: { active?: { length: number; getLine(index: number): AgentLoginXtermBufferLine | undefined } };
 };
 
 type AgentLoginFitAddonConstructor = new () => { fit(): void };
@@ -66,6 +73,7 @@ type AgentLoginModalHandle = {
   isOk(): boolean;
   markFailed(message: string): void;
   setStatus(text: string, cls?: string): void;
+  showAuthLink(url: string): void;
 };
 
 type AgentLoginRetry = (agentName: string) => unknown;

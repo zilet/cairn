@@ -42,6 +42,21 @@ const FALLBACK_LOGIN: Record<string, string[]> = {
 const IDLE_TIMEOUT_MS = 5 * 60_000; // no I/O for 5 min → kill
 const HARD_CAP_MS = 15 * 60_000; // a login should never run longer than this
 
+// PTY dimensions. `script`/pty.spawn fix the window at spawn (no native ioctl to
+// resize later), so the client sends its REAL fitted size up front and we bake it
+// in. The clamp floor matters: agy's sign-in screen is ~27 rows — at the old fixed
+// 80x24 the OAuth URL and the authorization-code field sat below the fold, which
+// read as "stuck at Signing in…". The default stays for size-less connects.
+export const DEFAULT_PTY_SIZE = { cols: 100, rows: 32 } as const;
+export function clampPtySize(cols: unknown, rows: unknown): { cols: number; rows: number } {
+  const c = Number(cols);
+  const r = Number(rows);
+  return {
+    cols: Number.isFinite(c) && c > 0 ? Math.min(400, Math.max(40, Math.floor(c))) : DEFAULT_PTY_SIZE.cols,
+    rows: Number.isFinite(r) && r > 0 ? Math.min(200, Math.max(20, Math.floor(r))) : DEFAULT_PTY_SIZE.rows,
+  };
+}
+
 export interface LoginCallbacks {
   onData?: (chunk: Buffer) => void;
   onExit?: (code: number | null) => void;
@@ -113,38 +128,45 @@ export function resolveLoginArgv(agent: string): string[] {
 export function ptyInvocationFor(
   platform: NodeJS.Platform,
   loginArgv: string[],
+  size: { cols: number; rows: number } = DEFAULT_PTY_SIZE,
 ): { command: string; args: string[] } {
   if (platform === "win32") {
     throw new Error("In-app login is unsupported on Windows — run the CLI login in a terminal (e.g. `docker exec`).");
   }
+  // Both platform paths fix the PTY window at spawn, so the size is applied from
+  // INSIDE the PTY via stty before exec. The command STRING runs via /bin/sh, so
+  // each token remains shell-quoted (the argv is server-chosen, but a future
+  // agents.json entry with a space / metachar must not word-split or inject).
+  const quoted = loginArgv.map((t) => `'${t.replace(/'/g, "'\\''")}'`).join(" ");
+  const cmd = `stty cols ${Math.floor(size.cols)} rows ${Math.floor(size.rows)}; exec ${quoted}`;
   if (platform === "darwin") {
     // python3's pty.spawn allocates a PTY for the child even when its OWN stdio is
-    // piped — BSD `script` instead errors (tcgetattr) on a non-tty stdin. The argv
-    // is server-chosen + JSON-encoded into a Python string-list literal (safe).
-    const code = `import pty,sys; sys.exit(pty.spawn(${JSON.stringify(loginArgv)}) >> 8)`;
+    // piped — BSD `script` instead errors (tcgetattr) on a non-tty stdin. The sh -c
+    // wrapper applies the same stty init as the Linux path; the command string is
+    // JSON-encoded into a Python string-list literal (safe).
+    const code = `import pty,sys; sys.exit(pty.spawn(${JSON.stringify(["sh", "-c", cmd])}) >> 8)`;
     return { command: "python3", args: ["-c", code] };
   }
   // Linux (util-linux) and other POSIX with util-linux `script`: when `script` is
   // itself driven through pipes (our WebSocket bridge), its child PTY starts at
   // 0x0. Most login CLIs tolerate that; Antigravity waits for a usable window and
-  // therefore renders nothing. Initialize a conservative size from inside the PTY
-  // before exec. `script -c` takes a command STRING run via /bin/sh, so each token
-  // remains shell-quoted (the argv is server-chosen, but a future agents.json entry
-  // with a space / metachar must not word-split or inject).
-  const cmd = loginArgv.map((t) => `'${t.replace(/'/g, "'\\''")}'`).join(" ");
-  return { command: "script", args: ["-qfc", `stty cols 80 rows 24; exec ${cmd}`, "/dev/null"] };
+  // therefore renders nothing.
+  return { command: "script", args: ["-qfc", cmd, "/dev/null"] };
 }
 
 // Build the host's PTY invocation: delegate the shape to `ptyInvocationFor` and add
 // the runtime guard it deliberately omits — on macOS the python3 PTY path needs
 // python3 actually present (it ships with the Xcode CLT, but isn't guaranteed).
-export function buildPtyInvocation(loginArgv: string[]): { command: string; args: string[] } {
+export function buildPtyInvocation(
+  loginArgv: string[],
+  size: { cols: number; rows: number } = DEFAULT_PTY_SIZE,
+): { command: string; args: string[] } {
   if (process.platform === "darwin" && !python3Present()) {
     throw new Error(
       "In-app login on macOS needs python3 (it ships with the Xcode Command Line Tools: `xcode-select --install`), or run Cairn via Docker.",
     );
   }
-  return ptyInvocationFor(process.platform, loginArgv);
+  return ptyInvocationFor(process.platform, loginArgv, size);
 }
 
 export function buildLoginSpawnOptions(sourceEnv: NodeJS.ProcessEnv = process.env) {
@@ -164,7 +186,9 @@ function python3Present(): boolean {
   return _python3Present;
 }
 
-export function startLoginSession(opts: { agent: string } & LoginCallbacks): LoginSession {
+export function startLoginSession(
+  opts: { agent: string; cols?: number; rows?: number } & LoginCallbacks,
+): LoginSession {
   if (active && !active.closed) {
     throw new Error("BUSY: a login session is already in progress. Close it before starting another.");
   }
@@ -173,7 +197,8 @@ export function startLoginSession(opts: { agent: string } & LoginCallbacks): Log
   // Validate + resolve the login command from the allowlist (throws on unknown
   // agent / no-login agent — before any spawn).
   const loginArgv = resolveLoginArgv(agent);
-  const { command, args } = buildPtyInvocation(loginArgv);
+  const size = clampPtySize(opts.cols, opts.rows);
+  const { command, args } = buildPtyInvocation(loginArgv, size);
 
   // Interactive login needs to reach ~/.claude etc., so we KEEP HOME/PATH/USER
   // (and the rest of the inherited env). The login CLIs authenticate to EXTERNAL
@@ -190,8 +215,8 @@ export function startLoginSession(opts: { agent: string } & LoginCallbacks): Log
     child,
     idleTimer: null,
     hardTimer: null,
-    cols: 80,
-    rows: 24,
+    cols: size.cols,
+    rows: size.rows,
     closed: false,
     write(data: Buffer | string) {
       if (this.closed) return;
