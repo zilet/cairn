@@ -3,12 +3,10 @@
 // question "was this lift actually trained since?" reduces to.
 //
 // A LEAF module by construction: it imports only `db`, the recovery-dose ledger
-// read and the training-cache clear registry (whose registered clears run from
-// the test isolate's full reset, not from production writes — a session's
-// cached eligibility lives for the process, same as it always has), and it
-// must never import program-state,
-// coach, or whole-person-trajectory. That is the whole reason it exists as its
-// own file. The trajectory read (repo/whole-person-trajectory.ts) needs this
+// read and the training-cache signal (the version counter every production write
+// bumps, plus the clear registry the test isolate's full reset runs), and it
+// must never import program-state, coach, or whole-person-trajectory. That is
+// the whole reason it exists as its own file. The trajectory read (repo/whole-person-trajectory.ts) needs this
 // counter, program-state.ts needs it too, and program-state reaches up into
 // coach.ts, which reaches back into whole-person-trajectory.ts — so importing
 // the counter from its old home closed a three-module cycle that only happened
@@ -20,18 +18,33 @@
 // ============================================================================
 import { db } from "../db.js";
 import { recoverySessionDose } from "./training-read.js";
-import { registerTrainingCacheClear } from "./training-cache.js";
+import { currentTrainingDataVersion, registerTrainingCacheClear } from "./training-cache.js";
 
 // A deliberately reduced, compliant recovery exposure is not a failed strength
 // test. Keep the raw log intact, but exclude that session from comparable-lift
 // trajectory math. Above-plan / overdosed / unknown sessions remain ordinary
 // evidence. The recovery-dose ledger is the one policy owner for this decision.
+//
+// The answer is derived from the session's LOGGED sets against its prescription,
+// so it moves as sets are logged: a session that read compliant at set three can
+// read overdosed at set eight. The memo therefore keys on the same training-data
+// version every production write bumps — the sibling memos (getProgramState and
+// friends) fold that counter into their key for exactly this reason. The
+// registered clear stays for the test isolate, which wipes tables out of band and
+// resets the counter to zero, so a version match alone cannot be trusted there.
 let trajectorySessionEligibility = new Map<number, boolean>();
+let eligibilityVersion = currentTrainingDataVersion();
 registerTrainingCacheClear(() => {
   trajectorySessionEligibility = new Map();
+  eligibilityVersion = currentTrainingDataVersion();
 });
 
 export function sessionCountsTowardLiftTrajectory(sessionId: number): boolean {
+  const version = currentTrainingDataVersion();
+  if (version !== eligibilityVersion) {
+    trajectorySessionEligibility = new Map();
+    eligibilityVersion = version;
+  }
   const id = Number(sessionId);
   const cached = trajectorySessionEligibility.get(id);
   if (cached != null) return cached;

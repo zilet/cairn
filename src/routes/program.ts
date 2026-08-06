@@ -88,9 +88,13 @@ programRouter.post("/program/evolve", async (req, res) => {
 // plan composeWeek returns the designed { ok:false, error } at 200 pointing at evolve.
 programRouter.post("/program/compose-week", async (req, res) => {
   const { agent, instruction } = req.body ?? {};
-  if (backgroundOp(res, "compose_week", { agent: agent ?? null, instruction: instruction ?? "" }, agent)) return;
+  // The job input is persisted and later String()ed, so a junk shape would be
+  // stored as "[object Object]" and read back as if the athlete had said it.
+  // Length is composeWeek's business — this only decides that it is words at all.
+  const asked = typeof instruction === "string" ? instruction : undefined;
+  if (backgroundOp(res, "compose_week", { agent: agent ?? null, instruction: asked ?? "" }, agent)) return;
   try {
-    res.json(await composeWeek(agent, instruction));
+    res.json(await composeWeek(agent, asked));
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }

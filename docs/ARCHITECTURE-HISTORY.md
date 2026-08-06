@@ -4,6 +4,41 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-08-06 (fourth round) — the easy runs are held to the athlete's own easy
+
+**Run-intensity discipline.** `classifyRunEffort` (`src/repo/hr-model.ts`) could already read a run
+against the personal model's own bands — easy ⟺ at-or-under `z2_top` — and had zero callers. Now
+`runIntensityDiscipline(date)` (`src/repo/run-progression.ts`) classifies the last 14 days of runs
+(inclusive window, genuinely fourteen days) and reads `compressed` when three or more classified
+runs contain no easy running at all: hard work everywhere, easy work nowhere, the polarization the
+prompts kept asking for in prose with nothing measuring it. The read returns null — silence, never
+a caution — when the model is `insufficient` *or implausible* (`z2_top < 100` bpm: the fallback rung
+has no floor, so a few corrupt strap rows could otherwise put "easy" in the single digits and this
+surface would speak that number with confidence). A `compressed` read becomes a
+`training_load_tolerance` caution observation (voice `run_intensity_compressed`, five rotating
+variants quoting the athlete's own ceiling in bpm; no `safety_override`). Deliberately pinned by
+test: alone on a clean board the caution reads the dimension "watch" and the planning directive
+counsels `hold_aggression` — lifting days included — because a fortnight of all-threshold running is
+systemic recovery debt; the posture stays "train" and no prescription number is touched, so it
+remains counsel, never a gate. The compact form rides `run_variety.intensity_balance` into the
+weekly read and insight sites on the existing ENDURANCE key — no new projection key, no new site,
+`hr_model`'s two-site pin untouched. Both consumers share one `brainSignal` memo per snapshot, so
+the Brief and the weekly read can never describe two different fortnights in one request.
+**The directive readers get a leaf.** `listActiveDirectives` and its dedupe closure moved to
+`src/repo/directives-read.ts` (`coach.ts` re-exports; nine importers retargeted), and
+`whole-person-trajectory.ts` imports `matchOptimalZone`/`optimalDistance` from `propagation-data.js`
+where they are declared — together structurally deleting both named call-time cycles
+(wpt→propagation→coach→wpt and wpt→nutrition→marker-response→coach→wpt). Honest scope: the module
+still sits in the repo's one large SCC via profile/health edges this round did not touch.
+**The eligibility memo notices writes.** `lift-comparability.ts` now resets its session-eligibility
+map whenever `currentTrainingDataVersion()` moves (the sibling-memo pattern; every production
+training write already bumps it), so a session graded compliant mid-process re-derives after more
+sets land. **The compose-week instruction is bounded where both surfaces meet.** `composeWeek`
+normalizes it once — string-only, trimmed, 240 code units matching the PWA field, a boundary-split
+emoji's lone surrogate dropped rather than stored as U+FFFD — before the prompt and the stored
+proposal both read it; the route additionally refuses to persist non-string body shapes into the
+job. No schema change; no `public/` change, so the service-worker cache stays **v548**.
+
 ## 2026-08-06 (third round) — a day is judged against the bar that was in force that day
 
 **The underfuel-intake arm reads a per-day bar.** The arm compared a flat window mean against the

@@ -47,6 +47,7 @@ import {
 } from "./plan-selection.js";
 import { activeRecoveryWeek, getPrimaryDiscipline } from "./profile.js";
 import { getProgramState } from "./program-state.js";
+import { runIntensityDiscipline } from "./run-progression.js";
 import { programBalance } from "./progression.js";
 import { daysBetweenISO, localDateISO } from "./shared.js";
 import { getTrainingIntent } from "./training-intent.js";
@@ -1597,6 +1598,7 @@ export interface DayPlanningSignalInputs {
   context?: any;
   contextEvents?: any[];
   completedToday?: boolean;
+  runIntensity?: any;
 }
 
 function signalInput<T>(compute: () => T, fallback: T): T {
@@ -1664,6 +1666,13 @@ export function dayPlanningSignalState(date: string, provided: DayPlanningSignal
       programState,
       expenditure,
       underfueling: provided.underfueling ?? signalInput(() => currentUnderfuelingRead(date), null),
+      // Keyed to the date being read for the same reason program state is: the window
+      // is measured backwards from THAT day, and a read of last Tuesday must not be
+      // handed the fortnight that ends today. Memoized so the signal state and
+      // `run_variety` (which carries the same read's compact form) build it once.
+      runIntensity:
+        provided.runIntensity ??
+        signalInput(() => brainSignal(`run_intensity:${date}`, () => runIntensityDiscipline(date)), null),
       context: provided.context ?? signalInput(() => activeContextEffect(date), null),
       contextEvents:
         provided.contextEvents ??

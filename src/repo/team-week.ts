@@ -28,7 +28,8 @@
 // ============================================================================
 import { db } from "../db.js";
 import { specialistVoiceLine } from "../brain/specialist-voice.js";
-import { listActiveDirectives, updateInsight } from "./coach.js";
+import { updateInsight } from "./coach.js";
+import { listActiveDirectives } from "./directives-read.js";
 import { getBrainDecision, listBrainDecisions, listBrainExpectations } from "./brain-decisions.js";
 import { listAttentionSchedule } from "./attention.js";
 import { canonicalMarker } from "./marker-canon.js";

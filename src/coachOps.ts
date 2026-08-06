@@ -835,6 +835,18 @@ function trainingWeekExists(): boolean {
  * designed { ok:false, error } at 200 pointing at the evolve path, and writes nothing.
  */
 export async function composeWeek(agent: string | undefined, instruction: string | undefined, hooks?: OpHooks) {
+  // The one choke point both surfaces share, so the bound is server policy rather
+  // than something the route and the MCP tool each remember to do. The athlete's
+  // words go into a prompt AND into the stored proposal instruction, so a
+  // non-string body value or a pasted essay must be normalized once, here, before
+  // either sees it. 240 matches what the PWA field accepts.
+  // slice() cuts UTF-16 code units, so the 240 boundary can split an emoji and
+  // leave a lone lead surrogate that round-trips as U+FFFD; drop it, don't store it.
+  const asked =
+    (typeof instruction === "string" ? instruction : "")
+      .trim()
+      .slice(0, 240)
+      .replace(/[\uD800-\uDBFF]$/, "") || undefined;
   if (trainingWeekExists()) {
     return {
       proposal: null,
@@ -846,7 +858,7 @@ export async function composeWeek(agent: string | undefined, instruction: string
     };
   }
   hooks?.onPhase?.("reading where you're starting from");
-  const prompt = buildWeekComposePrompt(instruction);
+  const prompt = buildWeekComposePrompt(asked);
   hooks?.onPhase?.("composing your first week");
   let run: FallbackResult;
   try {
@@ -871,7 +883,6 @@ export async function composeWeek(agent: string | undefined, instruction: string
   const { agent: chosen, result, tried } = run;
   // The marker leads and the athlete's own words follow, so a composed week is
   // recognizable by prefix whether or not they said anything (see the constant).
-  const asked = instruction?.trim();
   const proposal = repo.createProposal(
     chosen,
     asked ? `${COMPOSE_WEEK_INSTRUCTION} — ${asked}` : COMPOSE_WEEK_INSTRUCTION,

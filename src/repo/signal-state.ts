@@ -441,6 +441,21 @@ export const SIGNAL_VOICE = {
       "Nothing about your recent load is out of the ordinary.",
     ],
   },
+  // Easy running that is not easy. The subject is the athlete's OWN easy ceiling in
+  // bpm — a measurement off the personal model, not a grade, and the one number that
+  // makes this sentence actionable instead of vague. Deliberately never a gate: the
+  // finding is that the hard days would land better, not that today is forbidden.
+  run_intensity_compressed: {
+    concept: /\beasy\b/i,
+    sample: "148 bpm",
+    variants: [
+      "Your easy runs have been finishing up near your hard end lately — letting one settle under {} is what makes the quality days land.",
+      "Nothing in the past couple of weeks has actually run easy. An easy day that stays under {} would give the hard ones something to bite into.",
+      "Every recent run has sat above where easy lives for you — under {} — and one genuinely easy outing is worth more right now than another middling one.",
+      "Your easy pace has drifted up toward the hard end; keeping one run under {} protects the sessions you want to be sharp for.",
+      "The easy days have been coming in about as hard as the hard days. Under {} is where easy actually sits for you, if there's room to give one back.",
+    ],
+  },
   hybrid_interference: {
     concept: /\b(?:endurance|running)\b/i,
     variants: [
@@ -1343,6 +1358,8 @@ export function planningSignalState(input: {
   context?: any;
   contextEvents?: any[];
   completedToday?: boolean;
+  /** runIntensityDiscipline's read (src/repo/run-progression.ts); null when the model can't speak. */
+  runIntensity?: any;
 }): UnifiedSignalState {
   const date = input.date;
   const observations: SignalObservation[] = [];
@@ -1812,6 +1829,43 @@ export function planningSignalState(input: {
         "support",
         "Recent rated sessions came back strong, so the athlete is absorbing the current dose.",
         { voice: { key: "session_strong" }, max_age_days: 7 }
+      )
+    );
+
+  // Easy running executed at threshold. A caution rather than a constraint, and
+  // deliberately NO `safety_override`: nothing about it is acute, so it can never be
+  // a hard floor and never flips the posture off "train". It DOES ride the ordinary
+  // caution ladder — alone on an otherwise-clean board it reads the dimension "watch"
+  // and the planning directive counsels holding aggression, on lifting days included.
+  // That is chosen, not incidental: a fortnight where every run finished near
+  // threshold is systemic recovery debt, and a coach who knew it would not pick that
+  // week to reach for more anywhere. The counsel stays a suggestion (the prescription
+  // numbers are untouched); the pin lives in test/runIntensityDiscipline.test.js.
+  // Emitted only on the `compressed` read; a healthy distribution says nothing at all,
+  // because a row asserting "your easy runs are fine" is a sentence the coach then has
+  // to spend attention discounting.
+  const runIntensity = input.runIntensity;
+  if (runIntensity?.status === "compressed" && Number.isFinite(Number(runIntensity.z2_top)))
+    observations.push(
+      observation(
+        "training_load_tolerance",
+        "run_intensity_discipline",
+        date,
+        "cairn_hr_model",
+        "caution",
+        String(
+          runIntensity.summary || "Recent runs finished above this athlete's own easy ceiling, and none read easy."
+        ),
+        {
+          voice: { key: "run_intensity_compressed", subject: `${Math.round(Number(runIntensity.z2_top))} bpm` },
+          coverage: {
+            samples: Number(runIntensity.runs_classified) || 1,
+            window_days: Number(runIntensity.window_days) || null,
+          },
+          // A fortnight-shaped pattern, re-derived every morning from the same window.
+          // Short enough that a scoped state built for an older date lets it expire.
+          max_age_days: 3,
+        }
       )
     );
 

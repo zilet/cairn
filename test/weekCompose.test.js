@@ -371,3 +371,63 @@ test("POST /program/compose-week carries the athlete's instruction through the r
       "background job runner's input.instruction forwarding, into the stored proposal"
   );
 });
+
+// ---------- the bound on what an instruction may be ----------
+//
+// The instruction is unvalidated free text off an HTTP body that goes TWO places:
+// into the prompt the agent reads, and into the proposal instruction the athlete
+// reads back. composeWeek is the one choke point REST and MCP share, so the bound
+// lives there rather than being remembered separately by each surface.
+
+// Drive the REST route the way the passthrough test above does, and return the
+// stored proposal the background job produced.
+async function composeViaRoute(body) {
+  const layer = programRouter.stack.find((entry) => entry.route?.path === "/program/compose-week");
+  const handler = layer.route.stack[0].handle;
+  let responded;
+  await handler({ body }, { json: (payload) => (responded = payload) });
+  const job = await new Promise((resolve, reject) => {
+    const off = onJobEvent(responded.job.id, (event) => {
+      if (event.type === "done") {
+        off();
+        resolve(event.job);
+      } else if (event.type === "error" || event.type === "canceled") {
+        off();
+        reject(new Error(`job ended as ${event.type}`));
+      }
+    });
+  });
+  return repo.getProposal(Number(job.result.proposal.id));
+}
+
+test("a pasted essay is clamped to the length the field accepts, prefix intact", async () => {
+  const essay = "z".repeat(2000);
+  const proposal = await composeViaRoute({ agent: "stub", instruction: essay });
+  const prefix = `${COMPOSE_WEEK_INSTRUCTION} — `;
+  assert.ok(proposal.instruction.startsWith(prefix), `keeps its marker prefix: ${proposal.instruction}`);
+  const athlete = proposal.instruction.slice(prefix.length);
+  assert.equal(athlete.length, 240, "the athlete text is bounded at what the PWA field accepts");
+  assert.equal(athlete, "z".repeat(240));
+});
+
+test("the clamp never splits an emoji — a lone surrogate must not reach the prompt or the proposal", async () => {
+  // 239 plain chars, then an emoji: slice(0, 240) keeps only the emoji's lead
+  // surrogate, which node:sqlite would store as U+FFFD and the prompt would carry
+  // as mojibake. The clamp drops the orphan half instead.
+  const boundary = `${"z".repeat(239)}🏃`;
+  const proposal = await composeViaRoute({ agent: "stub", instruction: boundary });
+  const prefix = `${COMPOSE_WEEK_INSTRUCTION} — `;
+  const athlete = proposal.instruction.slice(prefix.length);
+  assert.equal(athlete, "z".repeat(239), "the split emoji is dropped whole, not stored as half");
+  assert.ok(athlete.isWellFormed(), "what is stored is well-formed text");
+});
+
+test("an instruction that is not words at all is treated as absent, never as '[object Object]'", async () => {
+  const proposal = await composeViaRoute({ agent: "stub", instruction: { evil: true } });
+  assert.equal(
+    proposal.instruction,
+    COMPOSE_WEEK_INSTRUCTION,
+    "a junk shape leaves the bare marker rather than being stringified into the athlete's words"
+  );
+  assert.ok(!proposal.instruction.includes("[object Object]"));
+});

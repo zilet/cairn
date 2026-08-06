@@ -25,7 +25,7 @@
 // suggestion, never a gate. Everything here is deterministic + agent-free.
 
 import { db } from "../db.js";
-import { listActiveDirectives } from "./coach.js";
+import { listActiveDirectives } from "./directives-read.js";
 import { canonicalDirectiveMarker, prioritizeMarkers } from "./propagation.js";
 import { markerSide, matchOptimalZone } from "./propagation-data.js";
 import { addDaysISO } from "./shared.js";

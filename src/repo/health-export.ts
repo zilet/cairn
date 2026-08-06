@@ -1,5 +1,5 @@
 import { db } from "../db.js";
-import { listActiveDirectives } from "./coach.js";
+import { listActiveDirectives } from "./directives-read.js";
 import { cleanClinicalFacts } from "./health.js";
 import { dicomTechnicalExport, listImagingStudiesStructured } from "./imaging.js";
 import { getProfile } from "./profile.js";

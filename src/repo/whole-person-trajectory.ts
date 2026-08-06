@@ -7,7 +7,10 @@ import { completedIntakeRange } from "./intake-window.js";
 import { comparableLiftDates } from "./lift-comparability.js";
 import { latestNutritionTargetRaise, nutritionTargetKcalByDay } from "./nutrition.js";
 import { painAreaLoadsExercise } from "./pain-relevance.js";
-import { matchOptimalZone, optimalDistance } from "./propagation.js";
+// Straight from the leaf that DECLARES them (propagation.ts only re-exports these).
+// Going through propagation.ts would pull this module into propagation -> coach ->
+// whole-person-trajectory, a cycle that buys nothing: the zone table is pure data.
+import { matchOptimalZone, optimalDistance } from "./propagation-data.js";
 import { recoverySessionDose } from "./training-read.js";
 import { getTrainingIntent, type TrainingPriority } from "./training-intent.js";
 

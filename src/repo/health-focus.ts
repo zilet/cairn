@@ -1,6 +1,6 @@
 import { db } from "../db.js";
 import { getAppState, setAppState } from "./app-state.js";
-import { listActiveDirectives } from "./coach.js";
+import { listActiveDirectives } from "./directives-read.js";
 import { newestHealthDocDate } from "./health.js";
 import { markerGroup } from "./propagation-data.js";
 import { readingAgeDays, readingPastValidity } from "./marker-validity.js";

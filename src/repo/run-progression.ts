@@ -20,8 +20,10 @@
 // plan is a SUGGESTION applied only through the usual propose→apply path, never
 // auto-applied; this module computes, it never writes plan rows.
 // ============================================================================
+import { brainSignal } from "../brain/snapshot.js";
 import { db } from "../db.js";
-import { getRecoverySummary, listActiveDirectives } from "./coach.js";
+import { getRecoverySummary } from "./coach.js";
+import { listActiveDirectives } from "./directives-read.js";
 import { canonicalMarker } from "./marker-canon.js";
 import {
   activitySportWhere,
@@ -50,7 +52,7 @@ import {
   type RaceRampFit,
 } from "./run-ramp.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
-import { getHrModel, type HrModel, hrZoneLabel, type HrZoneKey } from "./hr-model.js";
+import { classifyRunEffort, getHrModel, type HrModel, hrZoneLabel, type HrZoneKey, RUN_TYPE_SQL } from "./hr-model.js";
 import { getRunCompliance, type RunCompliance } from "./sessions.js";
 import { localDateISO } from "./shared.js";
 import { lowerBodyPlanDayNumbers } from "./training-read.js";
@@ -1696,14 +1698,211 @@ export function weeklyRunPlan(
 }
 
 // ---------------------------------------------------------------------------
-// (3) runVarietyRead — the endurance mirror of performance.varietyRead.
+// (3) runIntensityDiscipline — is the easy running actually easy?
+//
+// runVarietyRead below asks whether anything HARD is happening. This asks the
+// opposite question, and it is the one that goes unasked: a runner whose every
+// outing finishes a handful of beats under threshold has plenty of hard work and
+// no easy work at all, so the hard days never land and the easy days never
+// recover. Nothing in the app said so, because "easy" was a LABEL on the plan
+// rather than a reading of what the run actually cost.
+//
+// The whole judgement comes from the PERSONAL model (classifyRunEffort against
+// getHrModel's own bands) — never a population band, never a second zone opinion.
+// When the model cannot speak the read returns null and the surfaces stay quiet:
+// absence is neutral here, exactly as it is in hr-model itself. A caution
+// manufactured out of a thin model would be the worst possible version of this
+// feature, since it would fire hardest on the athlete Cairn knows least.
+// ---------------------------------------------------------------------------
+const RUN_INTENSITY_WINDOW_DAYS = 14;
+// Three classified runs is where a DISTRIBUTION starts. Below it, "none of them
+// were easy" describes a fortnight with two runs in it, not a training habit.
+const RUN_INTENSITY_MIN_CLASSIFIED = 3;
+// With the current classifier, easy ⟺ at-or-under the ceiling, so zero easy runs
+// among three classified already forces three above it and this guard cannot bind.
+// It stays as a belt: if classifyRunEffort ever grows a band that is neither easy
+// nor above the ceiling, a single hard run must still not read as a pattern.
+const RUN_INTENSITY_MIN_ABOVE_EASY = 2;
+
+export interface RunIntensityDiscipline {
+  /** `compressed` is the finding: hard work everywhere, easy work nowhere. */
+  status: "polarized" | "compressed" | "insufficient";
+  window_days: number;
+  runs_classified: number;
+  easy_count: number;
+  above_easy_count: number;
+  /** The athlete's OWN easy ceiling, bpm. A measurement, never a grade. */
+  z2_top: number;
+  lthr: number;
+  /** Whether the plan actually asks for easy running (see easyRunningIsPrescribed). */
+  easy_prescribed: boolean;
+  /** MACHINE register — third-person evidence prose. The athlete hears SIGNAL_VOICE. */
+  summary: string;
+}
+
+/** The compact form that rides in `run_variety` for the weekly read + insight sites. */
+export interface RunIntensityBalance {
+  status: "polarized" | "compressed";
+  window_days: number;
+  runs_classified: number;
+  easy_count: number;
+  above_easy_count: number;
+  z2_top: number;
+}
+
+// Does the PLAN ask for easy running at all? Read off the applied plan's cardio
+// items rather than off weeklyRunPlan: the deterministic engine prescribes easy
+// mileage for essentially every runner, so consulting it would answer "yes"
+// unconditionally and the field would carry no information. The applied plan is
+// what the athlete is actually working from, so a "yes" here means the easy runs
+// the read is missing were genuinely asked for.
+function easyRunningIsPrescribed(): boolean {
+  try {
+    const row = db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM plan_items
+          WHERE kind = 'cardio'
+            AND (LOWER(COALESCE(target_zone,'')) LIKE '%z1%'
+                 OR LOWER(COALESCE(target_zone,'')) LIKE '%z2%'
+                 OR LOWER(COALESCE(target_zone,'')) LIKE '%easy%'
+                 OR LOWER(COALESCE(note,'')) LIKE '%easy%'
+                 OR LOWER(COALESCE(note,'')) LIKE '%long run%')`
+      )
+      .get() as { n?: number } | undefined;
+    return Number(row?.n ?? 0) > 0;
+  } catch {
+    return false;
+  }
+}
+
+export function runIntensityDiscipline(date?: string): RunIntensityDiscipline | null {
+  const d = String(date || localDateISO()).slice(0, 10);
+  const model = getHrModel(d);
+  // No model, no reading. Not a caution — silence.
+  if (model.confidence === "insufficient" || model.lthr == null || !model.zones) return null;
+  const z2Top = model.zones.z2_top;
+  const lthr = model.lthr;
+  // A ceiling this low is corrupt strap data, not a small athlete: the field-test
+  // path floors LTHR at 100 bpm, but the fallback path has no floor, so a few
+  // garbage max-HR rows can put "easy" at single digits — and this surface would
+  // then speak that number to the athlete with confidence. Implausible model,
+  // same answer as no model.
+  if (!Number.isFinite(z2Top) || z2Top < 100) return null;
+  // −1: the SQL range is inclusive of both `since` and the read date, so a span of
+  // WINDOW−1 back is what makes the window actually hold fourteen days, not fifteen.
+  const since = isoDaysAgo(d, RUN_INTENSITY_WINDOW_DAYS - 1);
+
+  let rows: Array<{ avg_hr: number | null; minutes: number | null }> = [];
+  try {
+    rows = db
+      .prepare(
+        `SELECT avg_hr, COALESCE(moving_min, duration_min) AS minutes
+           FROM garmin_activities
+          WHERE ${RUN_TYPE_SQL} AND avg_hr IS NOT NULL AND avg_hr > 0
+            AND date >= ? AND date <= ?
+          ORDER BY date`
+      )
+      .all(since, d) as Array<{ avg_hr: number | null; minutes: number | null }>;
+  } catch {
+    return null;
+  }
+
+  let runs_classified = 0;
+  let easy_count = 0;
+  let above_easy_count = 0;
+  for (const row of rows) {
+    const hr = Number(row.avg_hr);
+    if (!Number.isFinite(hr)) continue;
+    const minutes = row.minutes == null ? null : Number(row.minutes);
+    const effort = classifyRunEffort(hr, minutes, model);
+    if (effort === "unknown") continue;
+    runs_classified += 1;
+    if (effort === "easy") easy_count += 1;
+    if (hr > z2Top) above_easy_count += 1;
+  }
+
+  const easy_prescribed = easyRunningIsPrescribed();
+  const status: RunIntensityDiscipline["status"] =
+    runs_classified < RUN_INTENSITY_MIN_CLASSIFIED
+      ? "insufficient"
+      : easy_count === 0 && above_easy_count >= RUN_INTENSITY_MIN_ABOVE_EASY
+        ? "compressed"
+        : "polarized";
+
+  const plural = (n: number) => (n === 1 ? "run" : "runs");
+  const prescribed = easy_prescribed ? ", and the plan does ask for easy running" : "";
+  const summary =
+    status === "compressed"
+      ? `Across the last ${RUN_INTENSITY_WINDOW_DAYS} days, ${above_easy_count} of ${runs_classified} classified ${plural(runs_classified)} finished above this athlete's own easy ceiling of ${z2Top} bpm (threshold around ${lthr} bpm) and none read easy${prescribed}.`
+      : status === "polarized"
+        ? `Across the last ${RUN_INTENSITY_WINDOW_DAYS} days, ${easy_count} of ${runs_classified} classified ${plural(runs_classified)} read easy and ${above_easy_count} sat above the ${z2Top} bpm easy ceiling.`
+        : `Only ${runs_classified} ${plural(runs_classified)} in the last ${RUN_INTENSITY_WINDOW_DAYS} days can be read against this athlete's heart-rate model — too thin to describe the easy/hard split.`;
+
+  return {
+    status,
+    window_days: RUN_INTENSITY_WINDOW_DAYS,
+    runs_classified,
+    easy_count,
+    above_easy_count,
+    z2_top: z2Top,
+    lthr,
+    easy_prescribed,
+    summary,
+  };
+}
+
+// The compact sub-object that travels with `run_variety`. Deliberately silent on
+// the "insufficient" read: a bundle that says "there is not enough here to say"
+// is noise in every prompt that carries it, and the absence says the same thing.
+function intensityBalance(date: string): RunIntensityBalance | null {
+  // The SAME memo key dayPlanningSignalState uses, so the signal state and this
+  // compact form are two views of ONE computation per snapshot. Unwrapped, a run
+  // logged mid-request could hand the weekly read a different fortnight than the
+  // Brief just spoke about — the exact divergence dayRead()'s unifiedState exists
+  // to prevent, one layer down.
+  const read = brainSignal(`run_intensity:${date}`, () => runIntensityDiscipline(date));
+  if (!read || read.status === "insufficient") return null;
+  return {
+    status: read.status,
+    window_days: read.window_days,
+    runs_classified: read.runs_classified,
+    easy_count: read.easy_count,
+    above_easy_count: read.above_easy_count,
+    z2_top: read.z2_top,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// (3b) runVarietyRead — the endurance mirror of performance.varietyRead.
 //     Flags mono-stimulus running and names the missing stimulus.
+//
+// It also CARRIES the intensity balance above, which is how that read reaches the
+// weekly read and the insight generator: `run_variety` is already in the ENDURANCE
+// projection bundle, and a second context key would be a second thing to keep in
+// sync for one sub-object. The variety NOTE is unchanged — an intensity finding
+// alone returns a note-less row, so nothing renders a nudge that was never earned
+// (renderRunPlan gates its variety line on `note`).
 // ---------------------------------------------------------------------------
 const RUN_VARIETY_WINDOW_DAYS = 42; // ~6 weeks
 const RUN_VARIETY_MIN_RUNS = 6;
 
-export function runVarietyRead(date?: string): { note: string; suggestions: string[] } | null {
+export interface RunVarietyRead {
+  note: string;
+  suggestions: string[];
+  intensity_balance?: RunIntensityBalance | null;
+}
+
+export function runVarietyRead(date?: string): RunVarietyRead | null {
   const d = date || localDateISO();
+  const intensity = intensityBalance(d);
+  // A variety finding carries the balance; a bare compressed balance still ships,
+  // with no note, so the finding reaches the prompt payload without inventing a
+  // variety nudge. A merely-polarized balance rides along and never travels alone.
+  const withIntensity = (finding: { note: string; suggestions: string[] } | null): RunVarietyRead | null => {
+    if (finding) return { ...finding, intensity_balance: intensity };
+    if (intensity?.status === "compressed") return { note: "", suggestions: [], intensity_balance: intensity };
+    return null;
+  };
   const since = isoDaysAgo(d, RUN_VARIETY_WINDOW_DAYS);
   const patterns = enduranceSportPatterns(getProfile()?.endurance_sport);
   const aSport = activitySportWhere("a", patterns);
@@ -1723,7 +1922,7 @@ export function runVarietyRead(date?: string): { note: string; suggestions: stri
     return null;
   }
 
-  if (rows.length < RUN_VARIETY_MIN_RUNS) return null; // not enough runs to read variety honestly
+  if (rows.length < RUN_VARIETY_MIN_RUNS) return withIntensity(null); // not enough runs to read variety honestly
 
   const HARD = new Set(["TEMPO", "THRESHOLD", "VO2MAX", "ANAEROBIC", "LACTATE_THRESHOLD"]);
   let hardRuns = 0;
@@ -1752,31 +1951,31 @@ export function runVarietyRead(date?: string): { note: string; suggestions: stri
 
   // Mono-stimulus tells, most useful first.
   if (hardRuns === 0) {
-    return {
+    return withIntensity({
       note: `All ${rows.length} of your last runs have been easy aerobic — no faster work in 6 weeks. A weekly tempo, threshold or interval session would lift your ceiling without adding much mileage.`,
       suggestions: [
         "A tempo run (sustained comfortably-hard)",
         "Threshold intervals (e.g. 5 × 1km)",
         "VO2 intervals (e.g. 6 × 800m)",
       ],
-    };
+    });
   }
   // Same distance over and over (low spread) → missing a long run / variety.
   if (distances.length >= RUN_VARIETY_MIN_RUNS) {
     const mean = distances.reduce((a, b) => a + b, 0) / distances.length;
     const spread = Math.sqrt(distances.reduce((a, b) => a + (b - mean) ** 2, 0) / distances.length);
     if (mean > 0 && spread / mean < 0.15) {
-      return {
+      return withIntensity({
         note: `Almost every run is the same ~${round1(mean)} km — your training is one distance on repeat. Mixing in a genuinely long run and a shorter, faster session would round it out.`,
         suggestions: [
           "A longer easy run (build aerobic durability)",
           "A short quality session (tempo or intervals)",
           "A recovery-paced shakeout",
         ],
-      };
+      });
     }
   }
-  return null;
+  return withIntensity(null);
 }
 
 // ---------------------------------------------------------------------------

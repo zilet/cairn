@@ -1,6 +1,6 @@
 import { db } from "../db.js";
 import { annotateDirectiveFreshness } from "./propagation.js";
-import { listActiveDirectives } from "./coach.js";
+import { listActiveDirectives } from "./directives-read.js";
 import { getDayIntake, hydrateNutritionTarget } from "./nutrition.js";
 import { addDaysISO, localDateISO } from "./shared.js";
 

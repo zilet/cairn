@@ -12,7 +12,8 @@ import {
 } from "./attention.js";
 import { canonicalMarker } from "./marker-canon.js";
 import { getLatestHealthReview, getMarkerHistory } from "./health.js";
-import { directiveIntentOf, listDirectives } from "./coach.js";
+import { listDirectives } from "./coach.js";
+import { directiveIntentOf } from "./directives-read.js";
 import { matchOptimalZone, optimalDistance } from "./propagation-data.js";
 
 type WorkupKind = "lab" | "dexa";

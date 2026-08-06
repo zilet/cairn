@@ -63,7 +63,7 @@ const MIN_BASIS_RUNS = 3;
 // Garmin normalizes running types to a handful of strings ("run", "trail_running",
 // "treadmill_running"). Threshold and efficiency are running-specific reads — a
 // ride's heart rate answers a different question — so both filter on this.
-const RUN_TYPE_SQL = "LOWER(COALESCE(type,'')) LIKE '%run%'";
+export const RUN_TYPE_SQL = "LOWER(COALESCE(type,'')) LIKE '%run%'";
 
 function shiftISO(dateISO: string, days: number): string {
   const ms = Date.parse(`${String(dateISO).slice(0, 10)}T00:00:00Z`);

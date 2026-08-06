@@ -1,6 +1,5 @@
 import { db } from "../db.js";
 import { emitBrainEvent } from "../brainEvents.js";
-import { canonicalMarker } from "./marker-canon.js";
 import { getGarminCoachSummary, hydrateJson, jsonOrNull, listActivities } from "./activities.js";
 import {
   cleanClinicalFacts,
@@ -60,6 +59,23 @@ import {
 } from "./propagation.js";
 import { symptomMarkerLinks } from "./symptom-links.js";
 import { classifyDirectiveIntent } from "./propagation-data.js";
+// The active-directive read lives in its own leaf so the eight modules that ask
+// "what is the athlete acting on?" need not import coach.ts. Re-exported below for
+// the callers that have always imported it from here.
+import {
+  dedupeActiveDirectives,
+  directiveIdentityKey,
+  directiveKey,
+  hydrateDirective,
+  listActiveDirectives,
+} from "./directives-read.js";
+export {
+  directiveIdentityKey,
+  directiveIntentOf,
+  directiveKey,
+  hydrateDirective,
+  listActiveDirectives,
+} from "./directives-read.js";
 import { CADENCE_WINDOW_DAYS, classifyWearPattern, type WearPattern } from "./sensor-cadence.js";
 import { sensorAgeDays } from "./sensor-freshness.js";
 import { getAppState, setAppState } from "./app-state.js";
@@ -86,8 +102,8 @@ import { nextBestStep } from "./next-step.js";
 import { cardiovascularRiskRead } from "./risk.js";
 import { trainingBenchmarkRead } from "./training-milestones.js";
 import { listDueAttention } from "./attention.js";
-// Function-level cycle (doctor-loop imports listDirectives/directiveIntentOf back from
-// here); scheduleDirectiveRecheck is only called at runtime inside updateDirective, so
+// Function-level cycle (doctor-loop imports listDirectives back from here);
+// scheduleDirectiveRecheck is only called at runtime inside updateDirective, so
 // the hoisted binding is always resolved by call time.
 import { scheduleDirectiveRecheck } from "./doctor-loop.js";
 import { brainSignal, runWithBrainSnapshot } from "../brain/snapshot.js";
@@ -1767,12 +1783,6 @@ function directiveTriggerFromMarker(marker: string | null) {
   return { value, side: markerSide(value, z, flag), date: m?.latest?.date ?? null };
 }
 
-// hydrate a stored row: surface `uncertain` as a boolean for consumers.
-export function hydrateDirective(row: any) {
-  if (!row) return row;
-  return { ...row, uncertain: !!row.uncertain };
-}
-
 export function addDirective(fields: DirectiveInput = {}) {
   const domain = DIRECTIVE_DOMAINS.has(String(fields.domain)) ? String(fields.domain) : "watch";
   const status = DIRECTIVE_STATUSES.has(String(fields.status)) ? String(fields.status) : "active";
@@ -1826,14 +1836,6 @@ export function getDirective(id: number) {
   return hydrateDirective(db.prepare(`SELECT * FROM health_directives WHERE id = ?`).get(id) ?? null);
 }
 
-export function listActiveDirectives() {
-  return dedupeActiveDirectives(
-    (db.prepare(`SELECT * FROM health_directives WHERE status = 'active' ORDER BY id DESC`).all() as any[]).map(
-      hydrateDirective
-    )
-  ).reverse();
-}
-
 // Defaults to the active set (what the user/coach should act on); pass
 // { all: true } for the full history incl. resolved/dismissed.
 export function listDirectives(opts: { all?: boolean } = {}) {
@@ -1842,47 +1844,6 @@ export function listDirectives(opts: { all?: boolean } = {}) {
     : (db.prepare(`SELECT * FROM health_directives WHERE status = 'active' ORDER BY id DESC`).all() as any[]);
   const hydrated = rows.map(hydrateDirective);
   return opts.all ? hydrated : dedupeActiveDirectives(hydrated);
-}
-
-export function directiveKey(d: any): string {
-  return [
-    String(d?.domain || "watch").toLowerCase(),
-    String(d?.marker || "")
-      .toLowerCase()
-      .replace(/\s+/g, " ")
-      .trim(),
-    String(d?.directive_key || "")
-      .toLowerCase()
-      .replace(/\s+/g, " ")
-      .trim(),
-  ].join("|");
-}
-
-function directiveTextKey(d: any): string {
-  return String(d?.directive || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
-
-// The semantic intent of a stored row: the persisted intent_key, else classified from
-// the directive text on the fly (legacy rows written before the intent_key column, and
-// the cross-source suppression that must recognize them).
-export function directiveIntentOf(d: any): string {
-  const stored = d?.intent_key;
-  if (stored === "recheck" || stored === "lever" || stored === "notice") return stored;
-  return classifyDirectiveIntent(d?.directive, null);
-}
-
-// The stable IDENTITY of a directive across sources: (canonical marker, domain, intent).
-// Same analyte under different lab names folds to one; a 'markers' directive and a
-// 'health_review' one for the same finding+intent are recognized as the same concern,
-// so one Done clears both and near-twins collapse. Marker-less rows key on "" (no
-// cross-marker collapse). Cluster markers ("A+B+C") key on their own compound label.
-export function directiveIdentityKey(d: any): string {
-  const raw = String(d?.marker || "").trim();
-  const canon = raw ? (raw.includes("+") ? raw.toLowerCase() : canonicalMarker(raw).key) : "";
-  return `${canon}|${String(d?.domain || "watch").toLowerCase()}|${directiveIntentOf(d)}`;
 }
 
 // Monotonic counter bumped on every USER directive status flip. It feeds the derive
@@ -1916,60 +1877,6 @@ function cascadeDirectiveStatus(primary: any, status: string): number {
     changed++;
   }
   return changed;
-}
-
-// When two active directives share an identity tuple, keep the strongest evidence:
-// a cited (settled-lever) directive beats an uncertain one, then the deterministic
-// 'markers' source beats the agent 'health_review' one, then the newest wins.
-function directivePreferred(a: any, b: any): any {
-  const cited = (d: any) => (d?.citation && String(d.citation).trim() && !d?.uncertain ? 0 : 1);
-  if (cited(a) !== cited(b)) return cited(a) < cited(b) ? a : b;
-  const srcRank = (d: any) => (String(d?.source || "") === "markers" ? 0 : 1);
-  if (srcRank(a) !== srcRank(b)) return srcRank(a) < srcRank(b) ? a : b;
-  return a; // same evidence + source → keep the first-seen (the input order is id-DESC = newest)
-}
-
-function dedupeActiveDirectives(rows: any[]) {
-  const seenMarkerDomain = new Set<string>();
-  const seenText = new Set<string>();
-  const out: any[] = [];
-  for (const row of rows) {
-    const mdKey = directiveKey(row);
-    const txtKey = directiveTextKey(row);
-    if ((mdKey !== "|" && seenMarkerDomain.has(mdKey)) || (txtKey && seenText.has(txtKey))) continue;
-    seenMarkerDomain.add(mdKey);
-    if (txtKey) seenText.add(txtKey);
-    out.push(row);
-  }
-  // Cross-source collapse on IDENTITY (canonical marker, domain, intent): when
-  // 'markers' and 'health_review' both kept a directive for the SAME marker+domain+intent
-  // (different directive_key, so they survived the dedup above), they read as one concern
-  // said twice. Keep ONE — cited > deterministic 'markers' source > newest. Conservative:
-  // only collapses when marker AND domain AND intent match; marker-less rows are untouched.
-  const byMd = new Map<string, any>();
-  const collapsed: any[] = [];
-  for (const row of out) {
-    const raw = String(row?.marker || "").trim();
-    if (!raw) {
-      collapsed.push(row);
-      continue;
-    } // no marker → never cross-collapse
-    const key = directiveIdentityKey(row);
-    const prior = byMd.get(key);
-    if (!prior) {
-      byMd.set(key, row);
-      collapsed.push(row);
-      continue;
-    }
-    // Replace the kept row in-place with the preferred of the two.
-    const winner = directivePreferred(prior, row);
-    if (winner !== prior) {
-      const idx = collapsed.indexOf(prior);
-      if (idx >= 0) collapsed[idx] = winner;
-      byMd.set(key, winner);
-    }
-  }
-  return collapsed;
 }
 
 export function updateDirective(id: number, fields: DirectiveInput) {

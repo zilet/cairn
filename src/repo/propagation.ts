@@ -5,12 +5,11 @@ import {
   type DirectiveInput,
   defaultDirectiveKey,
   directiveFeedbackCounter,
-  hydrateDirective,
-  listActiveDirectives,
   normalizeDirectiveKey,
   reconcileDirectives,
   updateDirective,
 } from "./coach.js";
+import { hydrateDirective, listActiveDirectives } from "./directives-read.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { buildSafetyMarkerContext, safetyGate, verifyCitation } from "./evidence.js";
 import {
