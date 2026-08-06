@@ -1,10 +1,12 @@
 import { db } from "../db.js";
 import { effectiveGoalMode, getEnduranceGoal, getPrimaryDiscipline, getProfile } from "./profile.js";
 import { getActiveBlock } from "./program-blocks.js";
-import { addDaysISO, joinList, localDateISO } from "./shared.js";
+import { addDaysISO, daysBetweenISO, joinList, localDateISO } from "./shared.js";
 import { getMarkerHistory, lsqSlopePerDay } from "./health.js";
 import { completedIntakeRange } from "./intake-window.js";
+import { latestNutritionTargetRaise } from "./nutrition.js";
 import { painAreaLoadsExercise } from "./pain-relevance.js";
+import { comparableLiftDates } from "./program-state.js";
 import { matchOptimalZone, optimalDistance } from "./propagation.js";
 import { recoverySessionDose } from "./training-read.js";
 import { getTrainingIntent, type TrainingPriority } from "./training-intent.js";
@@ -30,6 +32,10 @@ export interface WholePersonDomainRead {
    * visible and is never softened away — but it is no longer UNEXPLAINED, and
    * `unexplained_worse` is what triggers a revision. Machine register, third
    * person, one sentence per cause: these are evidence lines, not athlete voice.
+   *
+   * Only LIVE explanations appear here. One whose remedy was already delivered
+   * and outlived is spent — it drops out of this list (so the revision it was
+   * suppressing finally opens) and survives as dated history inside `why`.
    */
   confounders: string[];
 }
@@ -106,6 +112,60 @@ const UNDERFUEL_MIN_WEIGH_INS = 4;
 const UNDERFUEL_INTAKE_FRACTION = 0.9;
 const UNDERFUEL_MIN_CREDIBLE_DAYS = 10;
 
+// ---------- an explanation that was already tested and did not hold ----------
+//
+// A confounder answers "why did this slide?", and while that answer stands there
+// is nothing for a case conference to convene about. But an answer only stays an
+// answer until something acts on it. Once the remedy the explanation implies was
+// actually DELIVERED, the lift has since been trained real times under it, and
+// the slide continued anyway, the explanation has been TESTED and it failed. It
+// stays on the record as history — it stops suppressing the conference.
+//
+// Without this, the suppression was permanent by construction: the fueling read
+// judges intake against the target in force at the END of the window, so raising
+// the target raised the bar the athlete is measured against, and the explanation
+// re-earned itself out of its own remedy, forever.
+//
+// The two thresholds are the shape the expectation contract already uses for
+// "don't judge a lift that wasn't trained since" — `confounder_policy:
+// "require_exposure"` with `minimum_data: { exposures: 3 }`
+// (src/repo/brain/change-expectations.ts). Fourteen days is the shortest span
+// that holds two of most training weeks, so a remedy gets a real hearing before
+// anyone calls it spent.
+const EXPLANATION_TEST_DAYS = 14;
+const EXPLANATION_TEST_EXPOSURES = 3;
+// A rounding nudge to a macro split is not a fueling remedy. Only a raise big
+// enough to be a deliberate answer to a strength slide counts as one delivered.
+const EXPLANATION_TEST_MIN_KCAL_RAISE = 100;
+
+type ConfounderKind = "context" | "fueling" | "symptom";
+
+interface ConfounderEntry {
+  kind: ConfounderKind;
+  /** The evidence line itself. Machine register, third person, one sentence. */
+  sentence: string;
+  /**
+   * The day the remedy this explanation implies took effect — the calorie
+   * target's raise, the context event's real end.
+   *
+   * Null means nothing was ever delivered, and a null date can NEVER be spent:
+   * elapsed time alone does not expire an explanation, only a tested one does.
+   * That is also what keeps this adherence-neutral — the raise is the test
+   * whether or not the athlete ate it, so "they didn't eat more" is never what
+   * re-opens the conference.
+   */
+  tested_from: string | null;
+  /** What was delivered, dated and factual, for the record. */
+  tested_by: string | null;
+}
+
+interface StrengthExplanations {
+  /** Live explanations. These still suppress, and they are the public DTO. */
+  live: string[];
+  /** Tested, outlived, kept as dated history in `why`. These suppress nothing. */
+  spent: string[];
+}
+
 function isoDay(value: unknown): string {
   return String(value ?? "").slice(0, 10);
 }
@@ -128,7 +188,7 @@ function contextEventEffectiveEnd(row: {
   return addDaysISO(start, horizon) ?? start;
 }
 
-function contextConfounders(start: string, end: string): string[] {
+function contextConfounders(start: string, end: string): ConfounderEntry[] {
   let rows: Array<Record<string, unknown>> = [];
   try {
     rows = db
@@ -144,7 +204,7 @@ function contextConfounders(start: string, end: string): string[] {
   } catch {
     return [];
   }
-  const out: string[] = [];
+  const out: ConfounderEntry[] = [];
   for (const row of rows) {
     const effectiveEnd = contextEventEffectiveEnd(row);
     if (effectiveEnd == null || effectiveEnd < start) continue;
@@ -163,7 +223,18 @@ function contextConfounders(start: string, end: string): string[] {
     const label = String(row.title ?? row.kind ?? "context event")
       .trim()
       .slice(0, 100);
-    out.push(`Context event '${label}' overlapped this window.`);
+    // A CLOSED event carries its own remedy: it is over, and the days after it
+    // are the test of whether it was ever the reason. An OPEN one has no such
+    // date — `contextEventEffectiveEnd` synthesizes a horizon so the query can
+    // bound itself, but a synthesized end is a guess and must never be read as
+    // "the trip finished", so an open event is never spent.
+    const closedOn = isoDay(row.end_date) || isoDay(row.resolved_at) || null;
+    out.push({
+      kind: "context",
+      sentence: `Context event '${label}' overlapped this window.`,
+      tested_from: closedOn,
+      tested_by: closedOn ? `context event '${label}' ended on ${closedOn}` : null,
+    });
   }
   return out;
 }
@@ -185,8 +256,30 @@ function activeCalorieTarget(end: string): number | null {
   }
 }
 
-function fuelingConfounders(start: string, end: string): string[] {
-  const out: string[] = [];
+function fuelingConfounders(start: string, end: string): ConfounderEntry[] {
+  const out: ConfounderEntry[] = [];
+  // BOTH arms below share one remedy — the calorie target going up — so the
+  // remedy is looked up once for the kind rather than per sentence.
+  //
+  // A remedy tests only the explanation it was DELIVERED AGAINST, which is why
+  // the raise is bounded to this window (`notBefore: start`). Without that
+  // bound, any raise anywhere in recorded history that was never walked back
+  // satisfies "≥14 days elapsed" and "≥3 exposures since" for free, and a
+  // +500 kcal answer to last year's slide would permanently retire fueling as
+  // an explanation for every deficit an athlete ever has again. The context arm
+  // already holds this line — it drops events whose effective end precedes the
+  // window start — and this mirrors it.
+  const raise = (() => {
+    try {
+      return latestNutritionTargetRaise(end, EXPLANATION_TEST_MIN_KCAL_RAISE, start);
+    } catch {
+      return null;
+    }
+  })();
+  const testedFrom = raise?.effective_date ?? null;
+  const testedBy = raise
+    ? `the calorie target rose ${Math.round(raise.delta_kcal)} kcal to ${Math.round(raise.to_kcal)}, effective ${raise.effective_date}`
+    : null;
   try {
     const weights = db
       .prepare(
@@ -201,15 +294,25 @@ function fuelingConfounders(start: string, end: string): string[] {
     if (points.length >= UNDERFUEL_MIN_WEIGH_INS) {
       const perWeek = (lsqSlopePerDay(points) ?? 0) * 7;
       if (perWeek <= -UNDERFUEL_LB_PER_WEEK) {
-        out.push(
-          `Bodyweight fell about ${Math.abs(Math.round(perWeek * 10) / 10)} lb a week across this window, an energy deficit large enough to account for lost strength on its own.`
-        );
+        out.push({
+          kind: "fueling",
+          sentence: `Bodyweight fell about ${Math.abs(Math.round(perWeek * 10) / 10)} lb a week across this window, an energy deficit large enough to account for lost strength on its own.`,
+          tested_from: testedFrom,
+          tested_by: testedBy,
+        });
       }
     }
   } catch {
     /* no weigh-in history is no fueling evidence, never a claim about one */
   }
   try {
+    // NOTE the interaction this arm has with the remedy above, deliberately left
+    // in place: `activeCalorieTarget` reads the target in force at window END, so
+    // a raise delivered to answer a slide RAISES the bar the same window's intake
+    // is then judged against. This arm can therefore re-fire out of its own
+    // remedy indefinitely. Redesigning the arm is a separate question; what
+    // bounds the harm is that a delivered raise now expires the explanation on a
+    // clock the arm cannot restart.
     const target = activeCalorieTarget(end);
     if (target != null) {
       const intake = completedIntakeRange(start, end, end);
@@ -217,9 +320,12 @@ function fuelingConfounders(start: string, end: string): string[] {
       if (credible.length >= UNDERFUEL_MIN_CREDIBLE_DAYS) {
         const average = credible.reduce((sum, day) => sum + day.kcal, 0) / credible.length;
         if (average < target * UNDERFUEL_INTAKE_FRACTION) {
-          out.push(
-            `Logged intake averaged ${Math.round(average)} kcal against an accepted target of ${Math.round(target)} across ${credible.length} readable days, so this window was underfuelled relative to what was planned.`
-          );
+          out.push({
+            kind: "fueling",
+            sentence: `Logged intake averaged ${Math.round(average)} kcal against an accepted target of ${Math.round(target)} across ${credible.length} readable days, so this window was underfuelled relative to what was planned.`,
+            tested_from: testedFrom,
+            tested_by: testedBy,
+          });
         }
       }
     }
@@ -241,13 +347,26 @@ function fuelingConfounders(start: string, end: string): string[] {
  * lifecycle table for the reason reaction-model states: that is where the athlete
  * actually writes it at session finish, and only some of those notes ever become
  * a lifecycle row.
+ *
+ * A symptom NEVER expires the way a trip or a calorie target does, so every
+ * entry below leaves `tested_from` null. The others are past events whose remedy
+ * can be delivered and then judged; an ACTIVE symptom is not history at all, it
+ * is live evidence still being reported today. Training through pain for three
+ * weeks is not a failed test of the pain — it is the pain, continuing. Only the
+ * symptom resolving ends it, and a resolved symptom stops matching the query.
  */
 function symptomConfounders(
   start: string,
   end: string,
   regressing: Array<{ name: string; muscle_group: string | null }>
-): string[] {
-  const out: string[] = [];
+): ConfounderEntry[] {
+  const out: ConfounderEntry[] = [];
+  const unexpirable = (sentence: string): ConfounderEntry => ({
+    kind: "symptom",
+    sentence,
+    tested_from: null,
+    tested_by: null,
+  });
   try {
     const events = db
       .prepare(
@@ -261,14 +380,18 @@ function symptomConfounders(
     for (const event of events) {
       if (String(event.scope ?? "area") === "systemic") {
         out.push(
-          `An unresolved whole-body symptom ('${String(event.area_text).slice(0, 60)}') was open across this window.`
+          unexpirable(
+            `An unresolved whole-body symptom ('${String(event.area_text).slice(0, 60)}') was open across this window.`
+          )
         );
         continue;
       }
       const hit = regressing.find((exercise) => painAreaLoadsExercise(String(event.area_text), exercise));
       if (hit) {
         out.push(
-          `An unresolved ${String(event.area_text).slice(0, 60)} symptom, last spoken about on ${isoDay(event.last_reported_on)}, covers what ${hit.name} loads.`
+          unexpirable(
+            `An unresolved ${String(event.area_text).slice(0, 60)} symptom, last spoken about on ${isoDay(event.last_reported_on)}, covers what ${hit.name} loads.`
+          )
         );
       }
     }
@@ -286,7 +409,7 @@ function symptomConfounders(
     for (const note of notes) {
       const hit = regressing.find((exercise) => painAreaLoadsExercise(String(note.joint_pain), exercise));
       if (hit) {
-        out.push(`Joint pain was logged on ${isoDay(note.date)} covering what ${hit.name} loads.`);
+        out.push(unexpirable(`Joint pain was logged on ${isoDay(note.date)} covering what ${hit.name} loads.`));
         break; // one is enough to explain the window; a list of them is noise
       }
     }
@@ -296,18 +419,83 @@ function symptomConfounders(
   return out;
 }
 
-function strengthRegressionConfounders(
+/**
+ * How many times one of the lifts that slid was ACTUALLY trained since a remedy
+ * landed — the difference between "we changed something" and "we changed
+ * something and then found out".
+ *
+ * `comparableLiftDates` is the counter rather than a fresh query because it is
+ * the one that excludes a compliant recovery week, which matters exactly here: a
+ * remedy delivered right before a deload would otherwise read as tested by
+ * sessions that were never a strength test at all. Strictly AFTER the remedy
+ * date, so the day it took effect is not counted as evidence about itself.
+ *
+ * The best-covered regressing lift is what answers for the domain: if any lift
+ * that slid was genuinely retrained under the remedy and still slid, the remedy
+ * got its hearing. Case-insensitive lift identity is `comparableLiftDates`'s own
+ * (`e.name = ? COLLATE NOCASE`) and matches how `strengthRead` names them, so
+ * nothing is re-resolved here.
+ */
+function exposuresSinceRemedy(
+  regressing: Array<{ name: string; muscle_group: string | null }>,
+  after: string,
+  end: string
+): { exposures: number; lift: string | null } {
+  let best: { exposures: number; lift: string | null } = { exposures: 0, lift: null };
+  for (const lift of regressing) {
+    let count = 0;
+    try {
+      count = [...comparableLiftDates(lift.name, end)].filter((date) => date > after).length;
+    } catch {
+      count = 0; // an unreadable log is no exposure, never an assumed one
+    }
+    if (count > best.exposures) best = { exposures: count, lift: lift.name };
+  }
+  return best;
+}
+
+/** Has this explanation's remedy been delivered, given time, and outlived? */
+function spendExplanation(
+  entry: ConfounderEntry,
+  end: string,
+  regressing: Array<{ name: string; muscle_group: string | null }>
+): string | null {
+  // The one kind that can never expire, stated where the decision is made rather
+  // than left implicit in a null date. See symptomConfounders for why.
+  if (entry.kind === "symptom") return null;
+  if (!entry.tested_from || !entry.tested_by) return null;
+  const elapsed = daysBetweenISO(end, entry.tested_from);
+  if (elapsed == null || elapsed < EXPLANATION_TEST_DAYS) return null;
+  const { exposures, lift } = exposuresSinceRemedy(regressing, entry.tested_from, end);
+  if (!lift || exposures < EXPLANATION_TEST_EXPOSURES) return null;
+  // Plural is unconditional: nothing reaches this line under three exposures.
+  return `${entry.sentence} That explanation has already been tested: ${entry.tested_by}, and ${exposures} comparable ${lift} exposures have been logged since without the slide stopping.`;
+}
+
+function strengthRegressionExplanations(
   start: string,
   end: string,
   regressing: Array<{ name: string; muscle_group: string | null }>
-): string[] {
-  return [
-    ...new Set([
-      ...contextConfounders(start, end),
-      ...fuelingConfounders(start, end),
-      ...symptomConfounders(start, end, regressing),
-    ]),
-  ];
+): StrengthExplanations {
+  const seen = new Set<string>();
+  const live: string[] = [];
+  const spent: string[] = [];
+  for (const entry of [
+    ...contextConfounders(start, end),
+    ...fuelingConfounders(start, end),
+    ...symptomConfounders(start, end, regressing),
+  ]) {
+    if (seen.has(entry.sentence)) continue;
+    seen.add(entry.sentence);
+    const tested = spendExplanation(entry, end, regressing);
+    if (tested) spent.push(tested);
+    else live.push(entry.sentence);
+  }
+  // Suppression is per-DOMAIN but spending is per-ENTRY, and that asymmetry is
+  // the point: one live explanation is still an explanation, so `live` staying
+  // non-empty keeps the conference closed no matter how many others are spent.
+  // The guard downstream reads `confounders.length` and needs no change.
+  return { live, spent };
 }
 
 function strengthRead(start: string, end: string, parked: boolean): WholePersonDomainRead {
@@ -374,14 +562,15 @@ function strengthRead(start: string, end: string, parked: boolean): WholePersonD
   // Asked ONLY of a regression, and only about the lifts that actually slid. A
   // holding or improving picture has nothing to explain away, and running the
   // reads anyway would cost three table scans on every trajectory call.
-  const confounders =
+  const explanations: StrengthExplanations =
     verdict === "worse"
-      ? strengthRegressionConfounders(
+      ? strengthRegressionExplanations(
           start,
           end,
           regressing.map((row) => ({ name: row.exercise, muscle_group: row.muscle_group }))
         )
-      : [];
+      : { live: [], spent: [] };
+  const confounders = explanations.live;
   const regressionWhy = `${regressing.length} comparable lift${regressing.length === 1 ? " needs" : "s need"} rebuilding: ${names(regressing)}${improving.length ? `; ${improving.length} other lift${improving.length === 1 ? " is" : "s are"} still advancing: ${names(improving)}` : ""}. Regression stays visible even when the overall program is improving.`;
   return {
     domain: "strength",
@@ -396,13 +585,18 @@ function strengthRead(start: string, end: string, parked: boolean): WholePersonD
           : verdict === "holding"
             ? "Comparable lift capacity held steady."
             : // The regression itself is never softened — only the claim that nobody
-              // can say why. What the window already explains is appended to it.
-              `${regressionWhy}${confounders.length ? ` This window already has an explanation on record: ${confounders.join(" ")}` : ""}`,
+              // can say why. What the window already explains is appended to it,
+              // and so is what it USED to explain: a spent explanation leaves the
+              // suppression list but stays in the record, dated, so a specialist
+              // reading this `why` can cite what was already tried and cannot
+              // propose it a second time as if it were new.
+              `${regressionWhy}${confounders.length ? ` This window already has an explanation on record: ${confounders.join(" ")}` : ""}${explanations.spent.length ? ` ${explanations.spent.join(" ")}` : ""}`,
     evidence_keys: rows.length
       ? [
           `logged_sets:${start}..${end}:n=${rows.length}`,
           `strength_exposures_comparable:${comparableRows.length}`,
           `strength_lifts_comparable:${comparable.length}`,
+          ...(explanations.spent.length ? [`strength_explanations_spent:${explanations.spent.length}`] : []),
         ]
       : [],
   };
@@ -641,6 +835,12 @@ export function wholePersonTrajectory(opts: { end?: string; days?: number } = {}
   // feeds (the scheduler's case conference) is no longer opened about it. The
   // evaluators have refused decisive verdicts from confounded windows all along;
   // this read was the one place a confounded window still demanded an answer.
+  //
+  // What an explanation buys is TIME, not silence. `confounders` now holds only
+  // the explanations still standing, so a domain whose every explanation has been
+  // tested and outlived arrives here indistinguishable from one that never had
+  // an explanation — which is the correct answer, because after the remedy ran
+  // and the slide continued, nobody can say why it is still sliding.
   const worse = domains.filter((domain) => domain.verdict === "worse" && !domain.parked);
   const unexplainedWorse = worse.filter((domain) => !domain.confounders.length).map((domain) => domain.domain);
   const confoundedWorse = worse.filter((domain) => domain.confounders.length).map((domain) => domain.domain);

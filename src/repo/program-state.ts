@@ -60,7 +60,7 @@ import { getTrainingIntent } from "./training-intent.js";
 // ACWR 8.79 off essentially nothing) — that's not "spiking", it's BUILDING a
 // base. Below these floors we suppress the scary "spiking" read entirely.
 const TONNAGE_CHRONIC_FLOOR = 4000; // lb/wk of chronic tonnage before ACWR means anything
-const ENDURANCE_CHRONIC_FLOOR_KM = 8; // km/wk of chronic running before ACWR means anything
+export const ENDURANCE_CHRONIC_FLOOR_KM = 8; // km/wk of chronic running before ACWR means anything
 const NON_TONNAGE_WEEK_FLOOR = 3; // timed/bodyweight/endurance units before a week counts as loaded
 // ---- the COMBINED weekly stress budget --------------------------------------
 // The two ACWR guards below are per-lane and blind to each other: tonnage checks
@@ -395,7 +395,11 @@ function sessionCountsTowardLiftTrajectory(sessionId: number): boolean {
 // history — so a read of an earlier date graded the lift, its trend and its
 // push/hold/deload status from sets logged AFTER it. Same bug class as the
 // programState/trainingSignals date-scoping, one layer down.
-function comparableLiftDates(name: string, through: string): Set<string> {
+// Exported because the whole-person trajectory read asks the same question when
+// it tests whether an explanation for a slide has outlived itself: "how many
+// times was this lift ACTUALLY trained since?" — where a compliant recovery week
+// must not be mistaken for exposure. One counter, one answer.
+export function comparableLiftDates(name: string, through: string): Set<string> {
   const rows = db
     .prepare(
       `SELECT DISTINCT s.id AS session_id, s.date AS date

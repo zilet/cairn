@@ -7090,6 +7090,44 @@ test("connected-brain re-derivation is a scheduler op of its own, never a step i
   assert.doesNotMatch(proactive, /directive_derive_date|deriveDirectives/, "proactiveTick owns no part of it");
 });
 
+test("every chat reply receipt is appended and split through the one shared shape", () => {
+  // The reply reconcilers run in a fixed chain, and the last of them takes an already
+  // reconciled reply APART to drop a false Undo claim without dropping the receipts an
+  // earlier reconciler appended below it. That only works while join and split agree on
+  // the separator. When they were two independent literals, the split quietly stopped
+  // matching and a verified plan receipt vanished from the bubble for a change that had
+  // really landed — so neither side may hand-roll it.
+  const src = stripLineComments(read("src/chatTurns.ts"));
+  assert.match(src, /^const RECEIPT_JOIN = "\\n\\n";$/m, "the separator is declared once, by name");
+  assert.doesNotMatch(
+    src,
+    /\$\{\w+\.trim\(\)\}\\n\\n/,
+    "no reconciler hand-rolls an appended reply; appendReceipt is the only join"
+  );
+
+  // Inside the reconciler block the separator exists only as that declaration: every
+  // other use is by name, which is what keeps the two sides from drifting.
+  const start = src.indexOf("const RECEIPT_JOIN");
+  const end = src.indexOf("function logPhotoFood");
+  assert.ok(start > 0 && end > start, "the reconcilers sit between the shape and logPhotoFood");
+  const reconcilers = src.slice(start, end);
+  assert.equal((reconcilers.match(/\\n\\n/g) || []).length, 1, "one literal separator in the whole block");
+  assert.ok(
+    (reconcilers.match(/appendReceipt\(/g) || []).length >= 9,
+    "every append site routes through the helper (8 call sites + its own declaration)"
+  );
+  assert.match(
+    reconcilers,
+    /function splitAppendedReceipts[\s\S]{0,600}RECEIPT_JOIN/,
+    "and the split reads the same named separator"
+  );
+  assert.match(
+    reconcilers,
+    /function withoutLeadingProse[\s\S]{0,400}splitAppendedReceipts\(/,
+    "the revert reconciler takes a reply apart only through that split"
+  );
+});
+
 test("the directive event edges re-derive on both surfaces", () => {
   // Removing a panel must WITHDRAW what it propagated, and a user Done/Dismiss must settle
   // the board on the tap rather than at the next daily tick. Both surfaces, or the two drift.

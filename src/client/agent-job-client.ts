@@ -19,7 +19,11 @@ type AgentJobReconnector = (job?: AgentJob) => AgentJobHandlers | null | undefin
 type AgentRunOptions = Omit<AgentJobHandlers, "onDelta"> & {
   path?: string;
   anchor?: string;
-  caption?: string | readonly string[];
+  // A KEY into THINKING_SCRIPTS (src/client/ui-feedback-client.ts), never the lines
+  // themselves — thinkingCaption looks its script up by this string. Inline arrays
+  // used to typecheck here and silently render "Thinking…" instead; register the
+  // script and pass its key.
+  caption?: string;
   render?: (result: unknown, job?: AgentJob | null) => unknown;
   onFail?: (error?: unknown) => unknown;
   isFail?: (result: unknown) => boolean;

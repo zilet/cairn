@@ -470,6 +470,80 @@ export function getLatestNutritionTarget(date?: string): AcceptedNutritionTarget
   return target;
 }
 
+export interface NutritionTargetRaise {
+  effective_date: string;
+  from_kcal: number;
+  to_kcal: number;
+  delta_kcal: number;
+}
+
+/**
+ * The most recent RAISE in the accepted calorie target on/before `asOf`.
+ *
+ * Nothing in the append-only history records intent, so "a raise" is a
+ * comparison between consecutive rows, not a flag on one. The NEWEST raise is
+ * the one that matters — an older raise a newer acceptance superseded is no
+ * longer the intake in force.
+ *
+ * ANY later decrease below the raised figure discards it, even one that leaves
+ * intake well above where it started (2000 → 2400 → 2300 reports nothing). That
+ * is the deliberately conservative reading: what a caller tests is life AT the
+ * raised number, so a target trimmed part-way through was never run as
+ * delivered, and convicting it of failing would be judging a remedy that was
+ * withdrawn mid-trial. Erring here keeps an explanation alive, which is the
+ * fail-safe direction. Protein-only acceptances (no kcal figure) are skipped
+ * rather than read as a drop to zero.
+ *
+ * `notBefore` bounds WHICH raise may be returned — pass the start of the window
+ * you are reasoning about, so a remedy from long before it cannot be mistaken
+ * for an answer to what is happening now. It filters the RESULT and never the
+ * scan: the row immediately preceding a raise is what makes it legible as a
+ * raise at all, and that predecessor usually predates the window. Bounding the
+ * query instead would make an in-window raise invisible whenever the target it
+ * rose from was accepted earlier.
+ *
+ * The caller this exists for is the whole-person trajectory read, which asks
+ * whether a fueling explanation for a strength slide has already been TESTED —
+ * a delivered raise is the test, regardless of whether the athlete then ate it.
+ */
+export function latestNutritionTargetRaise(
+  asOf: string,
+  minDeltaKcal = 1,
+  notBefore?: string | null
+): NutritionTargetRaise | null {
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(String(asOf ?? "")) ? String(asOf) : localDateISO();
+  const parsedMinimum = Number(minDeltaKcal);
+  const minimum = Number.isFinite(parsedMinimum) && parsedMinimum > 0 ? parsedMinimum : 1;
+  const floor = /^\d{4}-\d{2}-\d{2}$/.test(String(notBefore ?? "")) ? String(notBefore).slice(0, 10) : null;
+  let rows: Array<{ effective_date: string; target_kcal: number }> = [];
+  try {
+    rows = db
+      .prepare(
+        `SELECT effective_date, target_kcal FROM nutrition_targets
+          WHERE effective_date <= ? AND target_kcal IS NOT NULL AND target_kcal > 0
+          ORDER BY effective_date DESC, id DESC LIMIT 200`
+      )
+      .all(day) as Array<{ effective_date: string; target_kcal: number }>;
+  } catch {
+    return null;
+  }
+  let lowestSince = Number.POSITIVE_INFINITY;
+  for (let index = 0; index + 1 < rows.length; index++) {
+    const to = Number(rows[index].target_kcal);
+    const from = Number(rows[index + 1].target_kcal);
+    if (Number.isFinite(to) && Number.isFinite(from) && to - from >= minimum) {
+      if (lowestSince < to) return null;
+      const effective = String(rows[index].effective_date).slice(0, 10);
+      // The newest raise is the only candidate, so one that falls short of the
+      // floor ends the search — every older raise is older still.
+      if (floor && effective < floor) return null;
+      return { effective_date: effective, from_kcal: from, to_kcal: to, delta_kcal: to - from };
+    }
+    if (Number.isFinite(to)) lowestSince = Math.min(lowestSince, to);
+  }
+  return null;
+}
+
 // ---------- meal plans ----------
 // The newest upstream source (a health directive / lab / weigh-in) a nutrition
 // artifact should reflect. Stamped onto a meal plan at draft time; if the CURRENT max

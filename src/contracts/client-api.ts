@@ -2897,6 +2897,10 @@ export interface ClientApiResponses {
   "/api/frequent-foods": ClientFrequentFood[];
   "/api/proposals": ClientProposal[];
   "/api/program/evolve": ClientProposalResult | ClientAgentJobEnvelope;
+  // The blank-slate first week. Same envelope as evolve — it enqueues a durable job,
+  // and the op it runs returns the same proposal/autonomy/error shape (its extra
+  // `days` count is server-side bookkeeping the PWA never reads).
+  "/api/program/compose-week": ClientProposalResult | ClientAgentJobEnvelope;
   "/api/program/progression": ClientPrescription[];
   "/api/program/progression/apply": ClientProposalResult;
   "/api/program/swap": ClientProposalResult;

@@ -723,6 +723,15 @@ export function startScheduler() {
         const weeklySlot = weeklySlotStamp(now, s.coach_day, s.coach_hour);
         await runScheduled("program_evolution_last_slot", weeklySlot, "program_evolution_last_slot", async () => {
           // Nothing to evolve for a brand-new user with no plan — skip the agent call.
+          //
+          // And the scheduler deliberately does NOT compose one either, now that
+          // composeWeek (src/coachOps.ts) can write a first week from nothing. That is
+          // a DECISION, not a gap: a first week is the athlete's whole training shape,
+          // and arriving with one they never asked for is exactly the push the
+          // constitution rules out (VISION.md — pull-never-push, suggestion-not-a-gate).
+          // They ask for it from the Plan tab's empty state, which enqueues the same
+          // compose_week job; the draft then travels the ordinary review path. So this
+          // stays a calm no-op forever, and the blank slate is answered on request.
           const hasPlan = (repo.getPlan() as any[]).some((d) => Array.isArray(d.items) && d.items.length);
           if (!hasPlan) {
             console.log(`[proactive] no plan to evolve yet (calm no-op).`);

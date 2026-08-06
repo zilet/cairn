@@ -200,12 +200,12 @@ test("health read synthesis trigger preserves job contract and refresh fallback"
   assert.equal(runOps[0].kind, "health_synthesis");
   assert.equal(runOps[0].handlers.path, "/health/synthesis");
   assert.equal(runOps[0].handlers.anchor, "#hSynthesis .hsyn");
-  assert.deepEqual(Array.from(runOps[0].handlers.caption), [
-    "reading your labs",
-    "connecting it to your training & recovery",
-    "finding what matters most",
-    "writing your picture",
-  ]);
+  // A registered KEY, not the lines themselves. This used to pin the inline array —
+  // which thinkingCaption could never resolve (it looks a script up by String(op)),
+  // so the copy asserted here rendered as "Thinking…" on every real run. The script
+  // now lives in THINKING_SCRIPTS, shared with the Stand entry point that had its own
+  // duplicate of the same four lines. test/clientUiFeedback.test.js pins the copy.
+  assert.equal(runOps[0].handlers.caption, "health_synthesis");
 
   runOps[0].handlers.render({ synthesis: { headline: "Updated read" } });
   assert.match(synthesis.innerHTML, /Updated read/);

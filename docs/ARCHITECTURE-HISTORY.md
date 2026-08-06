@@ -4,7 +4,35 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
-## 2026-08-06 — both hard runs make the same promise, the blank page gets a week, a correction never eats a receipt
+## 2026-08-06 (second round) — the countdown belongs to the week, an explanation buys time not silence, the blank page gets a door
+
+**The race countdown anchors to the plan week's Monday**: `raceRamp` receives `week_start`, so
+`weeks_to_race` is constant within a week and ticks on rollover — the ~1.3% mid-week upward drift
+from `ceil(days/7)` at the plan date is gone; a guard at the call site skips the ramp once
+`goal.date < d`, so a mid-week race goes quiet the next morning (the countdown belongs to the week;
+whether there is still a countdown belongs to the day). **The detraining sag gates on the closed
+week**: a mid-week empty trailing window no longer eases the week's ask when the anchored closed
+week carried at least `ENDURANCE_CHRONIC_FLOOR_KM`; a genuinely thin closed week still eases,
+identically from every morning. The spiking brake stays live and pinned. **Receipts are a contract**:
+`RECEIPT_JOIN` is declared once, `appendReceipt` is the only join across all eight reconciler append
+sites, `splitAppendedReceipts` the only split (and it requires the separator), pinned by an
+engineering-contracts test. **An explanation buys time, not silence**: confounders on a regressing
+strength domain are structured internally (kind + spent-check) while the public trajectory DTO stays
+`string[]`; a confounder whose remedy was delivered *inside the window* (a ≥100 kcal target raise —
+`latestNutritionTargetRaise` bounds the result, not the scan, so the pre-raise row stays legible — or
+a closed context event's end), ≥14 days before the window end, with ≥3 counted exposures on the
+regressing lift since (recovery-week sessions excluded via `comparableLiftDates`), is SPENT: it stops
+suppressing `unexplained_worse` (so the case conference convenes through the existing scheduler
+guard, untouched) and lives on in `why` as dated history a specialist can cite. A live symptom never
+expires; no raise ever delivered → never spent (adherence-neutral: the raise is the test, whether or
+not the athlete ate it); one live explanation still closes the conference. **The blank page gets a
+door**: the Plan editor's empty state offers "Shape my first week" driving
+`POST /api/program/compose-week` as a durable background job (announce/review/refusal postures
+mirror evolve); blankness mirrors the server's carrying-items predicate; the scheduler's deliberate
+refusal to auto-compose is now documented at its no-op site. The caption registry fix rode along:
+four `THINKING_SCRIPTS` call sites passed arrays that stringified to a missed key and have never
+rendered — evolve/recovery-week/health-synthesis captions now resolve, and the array form is removed
+from the type contract. No schema change; `public/sw.js` CACHE v546 → **v547**.
 
 Ledger-closing round for the 2026-08-05 builds. **The quality run joins the ring contract**: the
 quality slot's placement is an explicit avoidance ladder (ring-clear of leg days → clear of the

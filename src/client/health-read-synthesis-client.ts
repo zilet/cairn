@@ -115,7 +115,7 @@ type HealthReadSynthesisPayload = HealthReadSynthesisRecord & {
     void deps.runOp("health_synthesis", {}, {
       path: "/health/synthesis",
       anchor: "#hSynthesis .hsyn",
-      caption: ["reading your labs", "connecting it to your training & recovery", "finding what matters most", "writing your picture"],
+      caption: "health_synthesis",
       stream: true,
       guard: () => !select(deps, "#hSynthesis")?.isConnected,
       render: (result) => {

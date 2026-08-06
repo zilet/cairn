@@ -32,6 +32,7 @@ import {
 import type { RunPrescription } from "./plan.js";
 import { getActiveBlock, type ProgramBlock } from "./program-blocks.js";
 import {
+  ENDURANCE_CHRONIC_FLOOR_KM,
   type EnduranceState,
   getProgramState,
   type ProgramState,
@@ -801,13 +802,18 @@ export function weeklyRunPlan(
     //
     // It governs the whole ANCHORED FAMILY — every read that says what the week is
     // built from: the trailing seven days ending here, the logged actuals of the Mon–Sun
-    // week this date falls in, the 28-day longest run that floors the long run, and the
-    // 28-day dose that caps the easy runs. (They must all name the SAME week, or the
-    // max() between the first two compares nothing and the rest describe another week.)
+    // week this date falls in, the 28-day longest run that floors the long run, the
+    // 28-day dose that caps the easy runs, and whether a "detraining" status is allowed
+    // to shrink the week at all. (They must all name the SAME week, or the max() between
+    // the first two compares nothing and the rest describe another week.)
     // The actuals half yields to an injected `compliance`, and the longest to an
     // injected `programState` PROVIDED this date is passed too — a caller that hands in
     // both has said which week it means; the one that does, runComplianceRead, hands in
     // last week's. An injected state on its own is read as economy, not as scoping.
+    //
+    // The race COUNTDOWN is anchored too, but to this week's Monday rather than to this
+    // date — see the raceRamp call. A race timeline advancing on the week rollover is
+    // the natural reading; advancing on the Sunday before would be a week out.
     //
     // It deliberately does NOT govern the safety reads (the mileage-spike brake, the
     // leg-load placement): those describe the load as it is now, and they only pull down.
@@ -1029,7 +1035,11 @@ export function weeklyRunPlan(
           return 0;
         }
       })();
-  let anchorKm = Math.max(anchorActualKm, baseKm);
+  // What the CLOSED week actually carried, kept before the starter default below
+  // overwrites it — this is evidence, and the default is a guess. The detraining gate
+  // reads it further down to tell a real drop-off from an empty trailing window.
+  const closedWeekKm = Math.max(anchorActualKm, baseKm);
+  let anchorKm = closedWeekKm;
   if (anchorKm <= 0) {
     anchorKm = goal?.weekly_km && goal.weekly_km > 0 ? Math.min(goal.weekly_km, 20) : 15;
     rationale.push(`No mileage logged yet — starting conservatively around ${Math.round(anchorKm)} km.`);
@@ -1089,6 +1099,21 @@ export function weeklyRunPlan(
   const recoveryDown = hrvDown || rhrUp || sleepDown || readinessLow || statusStrained;
   const recoveryWeek = programState.mesocycle?.phase === "deload" && programState.recovery_week?.state === "applied";
   const spiking = runState?.status === "spiking";
+  // The two live status reads are NOT symmetrical, and this is where that is decided.
+  //
+  // `spiking` is an EVENT — the athlete ran a big block, and the evidence for it is the
+  // block itself. It must read current, and it only pulls down, so it stays live.
+  //
+  // `detraining` is an ABSENCE, and an absence is not evidence until the week that
+  // could have contained it has closed. The status comes off a trailing seven days with
+  // no week boundary, so on a week whose runs sat late in the PREVIOUS one the window
+  // simply empties as the week goes on: nothing logged, nothing changed, and the ask
+  // slid 33.3 → 30.1 km from Wednesday. That is the window sliding, not the athlete
+  // detraining. So the reduction is gated on what the CLOSED week shows — below the
+  // floor where a ratio means anything at all, the drop-off is real and, being read off
+  // a week that cannot change, it says the same thing every morning. Above it, the live
+  // status is left to every other consumer and simply does not shrink this week.
+  const detrainingSag = runState?.status === "detraining" && closedWeekKm < ENDURANCE_CHRONIC_FLOOR_KM;
   const downWeek = ord % 4 === 0; // a reset week roughly every 4th
   const taper = phase === "taper";
 
@@ -1120,13 +1145,15 @@ export function weeklyRunPlan(
     // 1.0 is the smallest build factor an unprotected week can take, so it can only
     // ever hold the week where it is or hand off to a protective branch above.
     // The volume anchor governs what the week is BUILT from; it does not govern
-    // whether a spike is happening. Do not fold this into the anchor.
+    // whether a spike is happening. Do not fold this into the anchor. (Its opposite
+    // number, the detraining sag, IS anchored — see detrainingSag above. A spike is an
+    // event with its own evidence; an absence is only evidence once the week closes.)
     factor = 1.0;
     rationale.push("Mileage jumped recently — holding it here to let it absorb before adding more.");
   } else if (downWeek) {
     factor = 0.8;
     rationale.push("Scheduled down week — a lighter reset before the next build.");
-  } else if (runState?.status === "detraining") {
+  } else if (detrainingSag) {
     factor = 1.0;
     rationale.push("Rebuilding the base back gently — steady, not a jump.");
   } else {
@@ -1173,7 +1200,24 @@ export function weeklyRunPlan(
   })();
   const ramp: RaceRamp | null = (() => {
     try {
-      return raceRamp(goal, d, anchorKm, prevLongForRamp);
+      // Whether the race has already HAPPENED is a question about today, and it stays
+      // on the live plan date. raceRamp answers it against whatever date it is handed,
+      // so anchoring the countdown moved this guard along with it: a race run on the
+      // Wednesday still sat after the week's Monday, and for the rest of that week the
+      // plan went on publishing a feasibility read and speaking a timeline toward an
+      // event the athlete had already run. The countdown belongs to the week; the
+      // question of whether there is still a countdown at all belongs to the day.
+      if (goal?.date && String(goal.date).slice(0, 10) < d) return null;
+      // The ramp reads the calendar as of this week's MONDAY, not the plan date.
+      // weeksBetween is Math.ceil(days / 7), so a race that is not a whole number of
+      // weeks from Monday ticks DOWN inside the week: 78 days out, needed_build_factor
+      // went 1.107 → 1.121 between Monday and Tuesday and the prescribed week grew
+      // 33.3 → 33.7 km with nothing logged. The week is planned as a unit, so its
+      // countdown belongs to the week too — the tick now lands on the Monday rollover,
+      // where a race genuinely does get one week closer, and the ask reads the same from
+      // every morning in between. Deliberately mondayOf(d) and NOT volumeAnchorDate:
+      // that one is the Sunday BEFORE, which would put the whole timeline a week out.
+      return raceRamp(goal, week_start, anchorKm, prevLongForRamp);
     } catch {
       return null;
     }

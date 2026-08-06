@@ -71,9 +71,30 @@ function loadingState(label: unknown): string {
   return CairnUi.loadingStateHtml({ label });
 }
 
+// The ONE place a job's "what's happening" lines live, keyed by the op name a
+// caller passes as `caption`. It is a REGISTRY on purpose: an op's script belongs
+// with every other op's, where a new one is written next to its neighbours rather
+// than inline at a call site.
+//
+// It used to be possible to pass the lines inline as an array instead, and four
+// call sites did — evolve-program, the recovery week, and the whole-picture read
+// from both of its two entry points. None of them ever rendered. thinkingCaption
+// looks its lines up by `String(op)`, so an array stringified to a comma-joined
+// key, missed, and fell through to the "Thinking…" fallback — silently, because a
+// missing script is also what a legitimately unregistered op gets. Authored copy
+// that never reached a screen, in the surface whose whole job is telling the
+// athlete what their team is doing.
+//
+// So the array form is gone from the contract (`caption?: string`), those four
+// sites are entries below, and the two health-synthesis copies — the same four
+// lines, written twice — are now one. Add a script HERE and pass its key.
 const THINKING_SCRIPTS: Record<string, string[]> = {
   session_suggest: ["Reading your week…", "Weighing recovery…", "Shaping today's session…", "Choosing the right load…"],
   proposal: ["Reading your training…", "Weighing your recent sessions…", "Drafting next week's targets…", "Keeping the progression honest…"],
+  compose_week: ["Reading where you're starting…", "Placing the hard days apart…", "Shaping your first week…", "Keeping the first dose honest…"],
+  evolve_program: ["Reading how your lifts are trending…", "Spotting what's stalled…", "Drafting how your plan should evolve…", "Checking it against your constraints…"],
+  recovery_week: ["Reading the load you've accumulated…", "Halving the working volume, keeping the patterns…", "Drafting your recovery week…", "Checking it against your constraints…"],
+  health_synthesis: ["Reading your labs…", "Connecting it to your training & recovery…", "Finding what matters most…", "Writing your picture…"],
   endurance_runs: ["Reading your running…", "Checking your mileage and goal…", "Shaping this week's runs…", "Keeping it aerobic and conservative…"],
   meal_plan: ["Reading your week…", "Balancing the macros…", "Plating the days…", "Checking the protein floor…"],
   meal_swap: ["Reading the meal…", "Finding a match…", "Holding the macros…", "Plating the swap…"],

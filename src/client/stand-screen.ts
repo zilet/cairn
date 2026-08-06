@@ -1247,12 +1247,7 @@ type StandStatus = "ok" | "watch" | "warn" | "mute";
       {
         path: "/health/synthesis",
         anchor: ".stand-read",
-        caption: [
-          "reading your labs",
-          "connecting it to your training & recovery",
-          "finding what matters most",
-          "writing your picture",
-        ],
+        caption: "health_synthesis",
         stream: true,
         guard: () => !(state.tab === "stand" && !state.standSeg),
         render: () => {

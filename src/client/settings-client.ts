@@ -34,6 +34,7 @@ const SETTINGS_AGENT_OP_LABELS: Record<string, string> = {
   health_review: "reviewed your labs",
   chat: "answered in chat",
   coach: "drafted a coach proposal",
+  compose_week: "composed your first week",
   enrich: "tidied a log",
   enrich_activity: "tidied an activity",
   enrich_food: "tidied a food note",

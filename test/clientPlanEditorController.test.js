@@ -45,6 +45,9 @@ class FakeElement {
     }
     if (this.id === "planedit") {
       if (this._innerHTML.includes('id="planEmptyStart"')) this.append(new FakeElement("button", { id: "planEmptyStart" }));
+      if (this._innerHTML.includes('id="planComposeWeek"')) {
+        this.append(new FakeElement("button", { id: "planComposeWeek", className: "draftbtn plan-empty-compose" }));
+      }
       this.parsePlanEditorHtml(this._innerHTML);
     }
   }
@@ -152,6 +155,9 @@ function loadPlanEditorController(plan) {
   const requests = [];
   const invalidations = [];
   const openSessionCalls = [];
+  const runOpCalls = [];
+  const toasts = [];
+  const activatedTabs = [];
   let dirtyCount = 0;
   let saveOptions = null;
   const context = {
@@ -211,6 +217,11 @@ function loadPlanEditorController(plan) {
       return {};
     },
     swrInvalidate: (key) => invalidations.push(key),
+    // The durable-job surface the compose-week entry drives. Captured rather than
+    // run, so each of the op's endings can be replayed through the recorded handlers.
+    runOp: (kind, body, options) => { runOpCalls.push({ kind, body, options }); return Promise.resolve(); },
+    toast: (message) => toasts.push(String(message)),
+    activateTab: (name) => activatedTabs.push(String(name)),
   };
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
@@ -223,6 +234,9 @@ function loadPlanEditorController(plan) {
     requests,
     invalidations,
     openSessionCalls,
+    runOpCalls,
+    toasts,
+    activatedTabs,
     get dirtyCount() { return dirtyCount; },
     get saveOptions() { return saveOptions; },
   };
@@ -376,4 +390,99 @@ test("empty plan starts a durable athlete-owned open session", async () => {
   assert.equal(harness.openSessionCalls.length, 1);
   assert.equal(harness.openSessionCalls[0].options.source, "athlete_override");
   assert.equal(harness.openSessionCalls[0].options.provenance.entry, "empty_plan");
+});
+
+// ---------- the blank page's way out ----------
+// Every other producer refines a week that already exists, so until composeWeek the
+// plan-less athlete's only route forward was hand-building seven days. These pin the
+// entry that asks the team for a first week: where it appears, that it appears on the
+// SAME reading of "blank" the server guards on, and that each of the op's three
+// endings says something true.
+
+test("a blank plan offers the first-week entry alongside the manual routes", async () => {
+  const harness = loadPlanEditorController([]);
+  await harness.context.renderPlanEditor();
+
+  const html = harness.view.querySelector("#planedit").innerHTML;
+  assert.match(html, /No days in your plan yet\./);
+  assert.match(html, /Your team can shape a first week/);
+  assert.match(html, /id="planComposeWeek"/, "the compose entry is present");
+  assert.match(html, /Shape my first week/);
+  // The manual routes survive — the athlete drives, so asking the team is one option
+  // among three, never the only door.
+  assert.match(html, /id="planEmptyStart"/, "hand-start still offered");
+  assert.match(html, /build the days yourself/i);
+  // Suggestion, not a gate, and no score anywhere in the copy.
+  assert.doesNotMatch(html, /you must|required|\d{1,3}\s*(?:\/\s*100|%)/i);
+});
+
+test("plan days that carry no work are still a blank page — the same predicate the server guards on", async () => {
+  // A day row exists but holds nothing. The server reads this as no plan at all
+  // (composeWeek's guard and the scheduler's no-op both test for a day CARRYING
+  // items), so the client must not offer a compose the server would run, nor hide
+  // one it would accept.
+  const shell = loadPlanEditorController([{ day_number: 1, name: "Day 1", focus: "", items: [] }]);
+  await shell.context.renderPlanEditor();
+  const shellHtml = shell.view.querySelector("#planedit").innerHTML;
+  assert.match(shellHtml, /id="planComposeWeek"/, "an empty shell day is still a blank page");
+  assert.match(shellHtml, /Your plan days are still empty\./, "and the copy says so honestly");
+  assert.doesNotMatch(shellHtml, /No days in your plan yet/, "it does not claim there are no days");
+
+  // One real prescription and the entry is gone — there is a week here to evolve now.
+  const real = loadPlanEditorController([
+    { day_number: 1, name: "Upper", focus: "Push", items: [{ kind: "strength", exercise: "Bench", sets: 3, rep_low: 5, rep_high: 5, target_weight: 185 }] },
+  ]);
+  await real.context.renderPlanEditor();
+  assert.doesNotMatch(real.view.querySelector("#planedit").innerHTML, /planComposeWeek/);
+});
+
+test("the first-week tap enqueues the durable compose job and never applies anything itself", async () => {
+  const harness = loadPlanEditorController([]);
+  await harness.context.renderPlanEditor();
+
+  harness.view.querySelector("#planComposeWeek").click();
+  await Promise.resolve();
+
+  assert.equal(harness.runOpCalls.length, 1);
+  const [call] = harness.runOpCalls;
+  assert.equal(call.kind, "compose_week");
+  assert.equal(call.options.path, "/program/compose-week");
+  assert.equal(call.options.caption, "compose_week", "keys the job's own thinking script");
+  // Object.keys, not deepEqual: the body is built inside the vm realm, so its
+  // prototype is not this realm's Object.prototype.
+  assert.deepEqual(Object.keys(call.body), [], "no instruction input on this surface — a parameterless ask");
+  // Nothing was written from here: the draft travels the ordinary propose→apply path.
+  // (The render's own banner reads are GETs and are expected; a WRITE is not.)
+  const writes = harness.requests.filter((request) => request.opts?.method && request.opts.method !== "GET");
+  assert.deepEqual(writes, [], "the tap issues no plan write of its own");
+});
+
+test("each ending of the compose job says something true", async () => {
+  const harness = loadPlanEditorController([]);
+  await harness.context.renderPlanEditor();
+  harness.view.querySelector("#planComposeWeek").click();
+  await Promise.resolve();
+  const { options } = harness.runOpCalls[0];
+
+  // Lead posture: a whole week is structural, so it ANNOUNCES rather than landing
+  // quietly. The copy must not promise a review step this posture does not have.
+  options.render({ ok: true, autonomy: { announced: true, tier: "announce" } });
+  assert.match(harness.toasts.at(-1), /land your first week at the natural boundary/i);
+  assert.deepEqual(harness.activatedTabs, [], "nothing to review — it stays put");
+
+  // Review posture: the draft is waiting in the Coach segment, so go where it is.
+  options.render({ ok: true, autonomy: { tier: "ask", applied: false } });
+  assert.match(harness.toasts.at(-1), /drafted/i);
+  assert.equal(harness.context.state.planJump, "coach");
+  assert.deepEqual(harness.activatedTabs, ["plan"]);
+
+  // The designed ok:false at 200 — a week already exists. The server's own rotating
+  // sentence IS the answer, so it is spoken verbatim rather than replaced.
+  const said = "You already have a training week — this one only writes the first. To change what's there, evolve it.";
+  options.onFail({ ok: false, error: said });
+  assert.equal(harness.toasts.at(-1), said);
+
+  // A genuine failure with nothing to say still gets a calm, non-blaming line.
+  options.onFail(null);
+  assert.match(harness.toasts.at(-1), /couldn't shape a week right now/i);
 });

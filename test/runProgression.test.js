@@ -860,6 +860,179 @@ test("the race ramp cannot raise a week from inside it — a demonstrated long i
   }
 });
 
+// ── the race countdown belongs to the week, and ticks on its rollover ───────
+// weeksBetween is Math.ceil(days / 7) read at the plan date, so a race that is not a
+// whole number of weeks from Monday got one week closer INSIDE the week: the ask grew
+// with nothing logged. Anchoring it to the week's Monday makes the countdown a property
+// of the week — which must not become a countdown that never moves at all.
+
+const raceWeekMornings = (raceOffsetDays) => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  repo.setProfile({
+    endurance_goal: {
+      mode: "race",
+      event: "Test Half",
+      date: fwd(raceOffsetDays),
+      distance_km: 21.1,
+      weekly_km: 35,
+      weekly_sessions: 4,
+    },
+  });
+  seedRunner({ weeks: 10, perWeek: 3, km: 10 });
+  return Array.from({ length: 7 }, (_, day) => repo.weeklyRunPlan(fwd(day), { block: { week_index: 1 } }));
+};
+
+test("a race that is not a whole number of weeks out still reads the same from every morning", () => {
+  // 78 days: ceil(78/7) is 12 on Monday and 11 from Tuesday, so this offset is exactly
+  // the one that used to tick mid-week — the week grew 33.3 → 33.7 km on Tuesday.
+  const week = raceWeekMornings(78);
+  const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  for (let i = 1; i < week.length; i += 1) {
+    assert.equal(
+      totalRunKm(week[i]),
+      totalRunKm(week[0]),
+      `${days[i]}: the countdown must not move the ask (Mon ${totalRunKm(week[0])} → ${totalRunKm(week[i])})`
+    );
+    assert.equal(longKm(week[i]), longKm(week[0]), `${days[i]}: nor the long run`);
+  }
+});
+
+test("but the countdown still advances on the Monday rollover — the anchor must not freeze it", () => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  repo.setProfile({
+    endurance_goal: { mode: "race", event: "Test Half", date: fwd(84), distance_km: 21.1, weekly_km: 35, weekly_sessions: 4 },
+  });
+  // History that ENDS the day before this Monday, plus a normal week logged inside the
+  // test week — so next Monday has a real closed week to anchor on and the race pull,
+  // which is what says the number out loud, fires on both weeks.
+  for (let wk = 1; wk < 11; wk += 1) {
+    for (const off of [1, 3, 5]) {
+      repo.addActivity({ type: "run", duration_min: 60, distance_km: 10, date: back(wk * 7 - 6 + off) });
+    }
+  }
+  for (const off of [0, 2, 4]) {
+    repo.addActivity({ type: "run", duration_min: 60, distance_km: 10, date: fwd(off) });
+  }
+  const weeksOut = (plan) => (plan.rationale.find((r) => /weeks? out/.test(r)) ?? "").match(/is (\d+) weeks? out/)?.[1] ?? null;
+
+  const monday = weeksOut(repo.weeklyRunPlan(REF, { block: { week_index: 1 } }));
+  assert.ok(monday, "the race pull names the number of weeks out");
+  for (let day = 1; day < 7; day += 1) {
+    assert.equal(weeksOut(repo.weeklyRunPlan(fwd(day), { block: { week_index: 1 } })), monday, `day ${day + 1} holds`);
+  }
+  assert.equal(
+    Number(weeksOut(repo.weeklyRunPlan(fwd(7), { block: { week_index: 1 } }))),
+    Number(monday) - 1,
+    "and next Monday the race really is one week closer"
+  );
+});
+
+// Anchoring the countdown to Monday must not anchor the question of whether there is
+// still a countdown. raceRamp answers "has this race already happened" against whatever
+// date it is handed, so the week's Monday kept a Wednesday race reading as still ahead
+// for the rest of that week — the plan published a feasibility read and spoke a timeline
+// toward an event the athlete had already run.
+
+const RACE_WEEK_REF = { distance_km: 21.1, weekly_km: 35, weekly_sessions: 4 };
+const seedRaceWeek = (raceDate) => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  repo.setProfile({ endurance_goal: { mode: "race", event: "Test Half", date: raceDate, ...RACE_WEEK_REF } });
+  seedRunner({ weeks: 10, perWeek: 3, km: 10 });
+};
+const timeline = (plan) => plan.rationale.find((line) => /where this is heading|by race day/i.test(line)) ?? null;
+
+test("a race already run is behind the athlete from the next morning, not the next Monday", () => {
+  seedRaceWeek(fwd(2)); // the race is this Wednesday
+  const raceDay = repo.weeklyRunPlan(fwd(2), { block: { week_index: 1 } });
+  assert.ok(raceDay.goal_feasibility, "on the day itself the race is still ahead of them");
+
+  for (const day of [3, 4, 5, 6]) {
+    const after = repo.weeklyRunPlan(fwd(day), { block: { week_index: 1 } });
+    assert.equal(after.goal_feasibility, null, `day ${day + 1}: no feasibility read for a race already run`);
+    assert.equal(timeline(after), null, `day ${day + 1}: and no timeline sentence either — ${timeline(after)}`);
+  }
+});
+
+test("a Sunday race is behind them on Monday, when the anchor itself has moved past it", () => {
+  // The one case the plan date and the week's Monday would agree on for the wrong
+  // reason: the race sits on the last day of its own week, so nothing but the rollover
+  // separates them. Next Monday's anchor IS after the race, so this passes either way —
+  // it is here to pin that the guard does not somehow read a week behind.
+  seedRaceWeek(fwd(6));
+  assert.ok(repo.weeklyRunPlan(fwd(6), { block: { week_index: 1 } }).goal_feasibility, "race day still counts");
+  const nextMonday = repo.weeklyRunPlan(fwd(7), { block: { week_index: 1 } });
+  assert.equal(nextMonday.goal_feasibility, null, "and the Monday after it is done");
+  assert.equal(timeline(nextMonday), null, "nothing is said about arriving anywhere");
+});
+
+test("race week still reads the same from every morning up to and including race day", () => {
+  // The countdown stays Monday-anchored through race day: before this, the plan date
+  // read gave weeks=1 on Monday and Tuesday but weeks=0 on the Wednesday, so the
+  // feasibility read moved on the morning of the race itself.
+  seedRaceWeek(fwd(2));
+  const mornings = [0, 1, 2].map((day) => repo.weeklyRunPlan(fwd(day), { block: { week_index: 1 } }));
+  for (const plan of mornings) assert.ok(plan.goal_feasibility, "the race is ahead on all three");
+  for (let i = 1; i < mornings.length; i += 1) {
+    assert.deepEqual(
+      mornings[i].goal_feasibility,
+      mornings[0].goal_feasibility,
+      `morning ${i + 1} of race week must read exactly as its Monday did`
+    );
+    assert.equal(totalRunKm(mornings[i]), totalRunKm(mornings[0]), `morning ${i + 1}: and prescribe the same week`);
+  }
+});
+
+// ── an absence is only evidence once the week has closed ────────────────────
+
+test("an emptying trailing window is not detraining — the closed week decides", () => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  seedRunner({ weeks: 10, perWeek: 3, km: 10 }); // runs sit late in each week (offsets 1, 3, 5)
+  const mornings = Array.from({ length: 7 }, (_, day) => repo.weeklyRunPlan(fwd(day), { block: { week_index: 1 } }));
+
+  // The live status genuinely flips: by Wednesday the trailing seven days hold only what
+  // the previous week's tail left in them. Nothing was logged and nothing changed — the
+  // window slid. The status stays honest for every other consumer; it just no longer
+  // shrinks a week whose own closed week carried 30 km.
+  assert.equal(repo.getProgramState(REF).endurance?.status, "maintaining", "Monday reads steady");
+  assert.equal(repo.getProgramState(fwd(2)).endurance?.status, "detraining", "Wednesday's window has emptied");
+
+  for (let i = 1; i < mornings.length; i += 1) {
+    assert.equal(
+      totalRunKm(mornings[i]),
+      totalRunKm(mornings[0]),
+      `day ${i + 1}: a sliding window must not ease the week (Mon ${totalRunKm(mornings[0])} → ${totalRunKm(mornings[i])})`
+    );
+  }
+  for (const plan of mornings) {
+    assert.ok(!/rebuilding the base/i.test(said(plan)), `no rebuild sentence on a 30 km closed week: ${said(plan)}`);
+  }
+});
+
+test("a genuine drop-off still eases the week, and says so from every morning", () => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  // A real chronic base behind them, and then a closed week that all but stopped: 5 km
+  // is below the floor where a load ratio means anything, so this drop-off is evidence
+  // rather than an artefact of where in the week you happen to be standing.
+  for (let wk = 1; wk < 10; wk += 1) {
+    for (const off of [1, 3, 5]) {
+      repo.addActivity({ type: "run", duration_min: 60, distance_km: 10, date: back(wk * 7 + off) });
+    }
+  }
+  repo.addActivity({ type: "run", duration_min: 30, distance_km: 5, date: back(4) });
+  const mornings = Array.from({ length: 7 }, (_, day) => repo.weeklyRunPlan(fwd(day), { block: { week_index: 1 } }));
+
+  for (const plan of mornings) {
+    assert.match(said(plan), /rebuilding the base/i, "the ease is real and it is said");
+  }
+  for (let i = 1; i < mornings.length; i += 1) {
+    assert.equal(
+      totalRunKm(mornings[i]),
+      totalRunKm(mornings[0]),
+      `day ${i + 1}: read off a closed week, it reads the same every morning`
+    );
+  }
+});
+
 // ── the mileage-spike brake is DELIBERATELY live ────────────────────────────
 // It is the one input allowed to move a week from inside it, because it is not a
 // volume ledger — it is a safety read of the load as it is right now, and it only

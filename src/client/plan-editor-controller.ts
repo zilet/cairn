@@ -208,6 +208,89 @@ function loadPlanRecoveryBanner(token: number): void {
     .catch(() => {});
 }
 
+function planEditorRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+// ---------- the blank page's way out ----------
+// Every other producer refines a week that already EXISTS and quietly no-ops
+// without one — the progression engine, the run engine, the weekly evolution. So
+// until now the one athlete with nothing to protect was the one athlete with no
+// way forward but hand-building seven days. This is the entry that asks the team
+// to shape a first week instead.
+//
+// Pull-never-push: it waits here to be tapped, it never notifies, and what it
+// makes is a DRAFT that travels the ordinary review path — no new review UI, and
+// nothing lands without the athlete seeing it. Every string below is a static
+// literal; no server text reaches this markup.
+function composeWeekEntryHtml(hasDays: boolean): string {
+  const opening = hasDays ? "Your plan days are still empty." : "No days in your plan yet.";
+  return `<p class="plan-empty-line">${opening} Your team can shape a first week around your goal, whatever you've already logged, and any running you do.</p>
+      <button class="draftbtn plan-empty-compose" type="button" id="planComposeWeek">Shape my first week →</button>
+      <div id="planComposeCap" class="plan-empty-cap job-cap lbl"></div>`;
+}
+
+// The durable background job behind that tap — the same enqueue → job card →
+// reconnect shape /program/evolve uses, so a reload mid-compose loses nothing.
+async function composeFirstWeek(btn: HTMLButtonElement): Promise<void> {
+  if (btn.disabled) return;
+  const anchor = ".plan-empty";
+  const label = btn.textContent || "Shape my first week →";
+  btn.disabled = true;
+  btn.textContent = "Shaping your week…";
+  const restore = (): void => {
+    const live = document.querySelector<HTMLButtonElement>("#planComposeWeek");
+    if (!live) return;
+    live.disabled = false;
+    live.textContent = label;
+  };
+  await runOp("compose_week", {}, {
+    path: "/program/compose-week",
+    anchor,
+    caption: "compose_week",
+    guard: () => !document.querySelector(anchor)?.isConnected,
+    render: (result: unknown) => {
+      restore();
+      const autonomy = planEditorRecord(planEditorRecord(result).autonomy);
+      swrInvalidate("plan");
+      swrInvalidate("plan:proposals");
+      // The three honest endings, matching what the autonomy layer actually did.
+      // A whole week is structural, so `lead` announces it rather than applying it
+      // quietly — the copy says so instead of promising a review step that posture
+      // does not have.
+      if (autonomy.pending || autonomy.announced) {
+        toast("Set — your team will land your first week at the natural boundary");
+        renderPlanEditor();
+        return;
+      }
+      if (autonomy.tier === "quiet_apply") {
+        toast("Your first week is in");
+        renderPlanEditor();
+        return;
+      }
+      // Review posture: the draft is waiting in the Coach segment, so go where it
+      // is — the same jump the recovery-week banner's review link makes.
+      toast("Your first week is drafted — have a look");
+      state.planJump = "coach";
+      activateTab("plan");
+    },
+    // ok:false at 200 is the designed signal, not an HTTP error. When it carries
+    // the server's own sentence (a week already exists → evolve it instead) that
+    // sentence IS the answer, so it is spoken verbatim rather than replaced by a
+    // generic failure. toast writes textContent, so it needs no escaping.
+    onFail: (error: unknown) => {
+      restore();
+      const said = planEditorRecord(error).error;
+      toast(typeof said === "string" && said.trim() ? said : "Couldn't shape a week right now — try again in a bit.");
+    },
+  });
+}
+
+function wireComposeWeek(root: ParentNode): void {
+  const btn = root.querySelector<HTMLButtonElement>("#planComposeWeek");
+  btn?.addEventListener("click", () => { void composeFirstWeek(btn); });
+}
+
 async function renderPlanEditor(): Promise<void> {
   const helpers = planHelpers();
   const form = planForm();
@@ -251,17 +334,30 @@ async function renderPlanEditor(): Promise<void> {
     form.syncModel(model, view);
   }
 
+  // Is there a week here at all? The SAME predicate the server uses to decide a
+  // blank slate (composeWeek's guard, and the scheduler's "no plan to evolve yet"
+  // no-op): a plan day CARRYING items, not a day row existing. So a leftover empty
+  // shell day still reads as a blank page here, exactly as it does on the server —
+  // and the athlete is never offered a compose the server would refuse, or refused
+  // one it would run.
+  function planIsBlank(): boolean {
+    return !model.some((day) => (Array.isArray(day.items) ? day.items : []).length > 0);
+  }
+
   function draw(): void {
     const root = planEditorRoot();
     if (!root) return;
+    const blank = planIsBlank();
     // Empty plan: still offer the always-available "just start" entry alongside
     // "+ Add day" — mirrors the Train tab's start entry (dayPicked=false →
     // openSession on today) so an empty plan is never a dead end.
     if (!model.length) {
       root.innerHTML = `<div class="plan-empty reveal">
-        <p class="plan-empty-line">No days in your plan yet — build one below, or just start training and log as you go.</p>
+        ${composeWeekEntryHtml(false)}
+        <p class="plan-empty-line plan-empty-alt">Or build the days yourself below — or just start training and log as you go.</p>
         <button class="draftbtn plan-empty-start" type="button" id="planEmptyStart">Start training anyway →</button>
       </div>`;
+      wireComposeWeek(root);
       root.querySelector("#planEmptyStart")?.addEventListener("click", () => {
         state.dayPicked = false;
         if (typeof openSession === "function") void openSession(localISO(), {
@@ -273,7 +369,12 @@ async function renderPlanEditor(): Promise<void> {
       });
       return;
     }
-    root.innerHTML = model.map((day, dayIndex) => editing.has(dayIndex) ? helpers.pdayHtml(day, dayIndex) : helpers.progDayHtml(day, dayIndex)).join("");
+    // Days exist but none carries work yet — still a blank page by the server's own
+    // reading, so the same quiet entry sits above the shells the athlete can fill in.
+    root.innerHTML =
+      (blank ? `<div class="plan-empty reveal">${composeWeekEntryHtml(true)}</div>` : "") +
+      model.map((day, dayIndex) => editing.has(dayIndex) ? helpers.pdayHtml(day, dayIndex) : helpers.progDayHtml(day, dayIndex)).join("");
+    if (blank) wireComposeWeek(root);
     wireGuides(root);
 
     view.querySelectorAll<HTMLElement>("[data-editday]").forEach((button) => button.addEventListener("click", () => {

@@ -121,6 +121,7 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/proposals/:id/apply",
   "/proposals/:id/discard",
   "/program/evolve",
+  "/program/compose-week",
   "/program/progression",
   "/program/progression/apply",
   "/program/swap",

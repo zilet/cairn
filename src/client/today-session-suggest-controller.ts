@@ -56,7 +56,7 @@ type TodaySessionSuggestDeps = {
     body: Record<string, unknown>,
     options: TodaySessionSuggestRunOptions
   ): Promise<unknown>;
-  thinkingCaption(el: Element, op?: string | readonly string[]): () => void;
+  thinkingCaption(el: Element, op?: string): () => void;
   runCountUps(scope?: ParentNode | null, options?: { snap?: boolean }): void;
   collapseEl(el: Element, done?: () => void): void;
   reducedMotion(): boolean;

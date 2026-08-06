@@ -193,7 +193,7 @@ const RECOVERY_WEEK_INSTRUCTION =
 async function triggerProgramEvolve(
   btn: Element,
   deps: ClientProgressProgramControllerDeps,
-  opts: { instruction?: string; busy?: string; anchor?: string; caption?: string[]; toast?: string } = {}
+  opts: { instruction?: string; busy?: string; anchor?: string; caption?: string; toast?: string } = {}
 ): Promise<void> {
   const anchor = opts.anchor || ".prog-evolve-foot";
   const foot = btn.closest(anchor) || btn.parentElement;
@@ -211,12 +211,7 @@ async function triggerProgramEvolve(
   await deps.runOp("evolve_program", opts.instruction ? { instruction: opts.instruction } : {}, {
     path: "/program/evolve",
     anchor,
-    caption: opts.caption || [
-      "reading how your lifts are trending",
-      "spotting what's stalled",
-      "drafting how your plan should evolve",
-      "checking it against your constraints",
-    ],
+    caption: opts.caption || "evolve_program",
     guard: () => !document.querySelector(anchor)?.isConnected,
     render: (result: unknown) => {
       cleanup();
@@ -452,12 +447,7 @@ function paintProgressProgramBody(data: ProgressProgramState, deps: ClientProgre
         instruction: RECOVERY_WEEK_INSTRUCTION,
         busy: "Drafting your recovery week…",
         anchor: ".cfocus-lead",
-        caption: [
-          "reading the load you've accumulated",
-          "halving the working volume, keeping the patterns",
-          "drafting your recovery week",
-          "checking it against your constraints",
-        ],
+        caption: "recovery_week",
         toast: "Recovery week ready for your review",
       });
     });

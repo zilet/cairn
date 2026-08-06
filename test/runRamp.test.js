@@ -517,11 +517,11 @@ test("the same fit, two runways: the rate line separates what the fit sentence c
   // usually leans on — so the destination sentence reads the same for each.
   const far = repo.weeklyRunPlan(
     REF,
-    planOpts({ goal: { date: "2027-03-03", weeks_to_race: 30 }, compliance: { actual_km: 12 } })
+    planOpts({ goal: { date: "2027-03-01", weeks_to_race: 30 }, compliance: { actual_km: 12 } })
   );
   const near = repo.weeklyRunPlan(
     REF,
-    planOpts({ goal: { date: "2026-09-16", weeks_to_race: 6 }, compliance: { actual_km: 10 } })
+    planOpts({ goal: { date: "2026-09-14", weeks_to_race: 6 }, compliance: { actual_km: 10 } })
   );
 
   const farLine = rateLine(far);
@@ -544,7 +544,7 @@ test("a required step that IS the sustainable step stays quiet — the fit line 
   // be the fit sentence again in different words.
   const plan = repo.weeklyRunPlan(
     REF,
-    planOpts({ goal: { date: "2027-05-12", weeks_to_race: 40 }, compliance: { actual_km: 17 } })
+    planOpts({ goal: { date: "2027-05-10", weeks_to_race: 40 }, compliance: { actual_km: 17 } })
   );
   assert.equal(rateLine(plan), null, "inside the margin the rate has nothing to add");
   assert.equal(plan.goal_feasibility.status, "stretch", "…while the destination gap is still named");
@@ -553,7 +553,7 @@ test("a required step that IS the sustainable step stays quiet — the fit line 
 test("a trajectory that arrives never gets a rate sentence at all", () => {
   const plan = repo.weeklyRunPlan(
     REF,
-    planOpts({ goal: { date: "2027-05-12", weeks_to_race: 40 }, compliance: { actual_km: 20 } })
+    planOpts({ goal: { date: "2027-05-10", weeks_to_race: 40 }, compliance: { actual_km: 20 } })
   );
   assert.equal(rateLine(plan), null);
 });
@@ -575,7 +575,7 @@ test("the rate words carry no number, and rotate by day", () => {
   const said = [];
   for (const day of ["2026-08-05", "2026-08-06", "2026-08-07"]) {
     said.push(
-      rateLine(repo.weeklyRunPlan(day, planOpts({ goal: { date: "2026-09-16", weeks_to_race: 6 }, compliance: { actual_km: 10 } })))
+      rateLine(repo.weeklyRunPlan(day, planOpts({ goal: { date: "2026-09-14", weeks_to_race: 6 }, compliance: { actual_km: 10 } })))
     );
   }
   assert.ok(said.every(Boolean));

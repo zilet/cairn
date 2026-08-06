@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import vm from "node:vm";
@@ -149,4 +149,59 @@ test("thinking caption uses reduced-motion static copy and class hook", () => {
   assert.equal(el.classList.contains("typing-cap"), true);
   assert.equal(typeof stop, "function");
   stop();
+});
+
+// ---------- the caption registry ----------
+// Four call sites used to pass their lines INLINE as an array instead of naming a
+// registered script — evolve-program, the recovery week, and the whole-picture read
+// from each of its two entry points. thinkingCaption looks a script up by
+// `String(op)`, so an array stringified to a comma-joined key, missed, and fell
+// through to the "Thinking…" fallback. Authored copy that never once reached a
+// screen, and nothing failed: an unregistered key degrades exactly like a
+// legitimately unlisted op. The union that allowed it is gone from the contract;
+// these pin the runtime side, which is what the athlete actually sees.
+function captionProbe() {
+  return { textContent: "", isConnected: true, offsetWidth: 10, style: { animation: "" }, classList: classList() };
+}
+
+test("the evolve and recovery scripts render their own copy, not the fallback", () => {
+  const context = loadUiFeedback({ reduced: true });
+
+  const evolve = captionProbe();
+  context.thinkingCaption(evolve, "evolve_program");
+  assert.equal(evolve.textContent, "Reading how your lifts are trending…");
+  assert.notEqual(evolve.textContent, "Thinking…", "the authored evolve copy actually reaches the screen");
+
+  const recovery = captionProbe();
+  context.thinkingCaption(recovery, "recovery_week");
+  assert.equal(recovery.textContent, "Reading the load you've accumulated…");
+
+  // Both health-synthesis entry points wrote the same four lines independently;
+  // one registry entry now serves both.
+  const synthesis = captionProbe();
+  context.thinkingCaption(synthesis, "health_synthesis");
+  assert.equal(synthesis.textContent, "Reading your labs…");
+
+  // An op with no script still degrades calmly — that is the fallback's real job.
+  const unknown = captionProbe();
+  context.thinkingCaption(unknown, "no_such_op");
+  assert.equal(unknown.textContent, "Thinking…");
+});
+
+test("every caption key the built client passes resolves to a registered script", () => {
+  const context = loadUiFeedback({ reduced: true });
+  const dir = join(root, "public/js");
+  const keys = new Set();
+  for (const file of readdirSync(dir).filter((name) => name.endsWith(".js"))) {
+    const source = readFileSync(join(dir, file), "utf8");
+    // `caption: "key"` and the defaulted `caption: opts.caption || "key"`.
+    for (const match of source.matchAll(/caption:\s*(?:[\w.]+\s*\|\|\s*)?"([a-z0-9_]+)"/g)) keys.add(match[1]);
+  }
+  assert.ok(keys.size >= 10, `expected the client's caption keys, found ${keys.size}`);
+  assert.ok(keys.has("evolve_program"), "evolve passes a registered key, not inline lines");
+  for (const key of [...keys].sort()) {
+    const el = captionProbe();
+    context.thinkingCaption(el, key);
+    assert.notEqual(el.textContent, "Thinking…", `caption "${key}" has no script in THINKING_SCRIPTS`);
+  }
 });

@@ -1776,6 +1776,33 @@ export const STRENGTH_OBJECTIVE_UNVERIFIED_VARIANTS: ReadonlyArray<(reason: stri
   (reason) => `That objective isn't confirmed on my side, so I won't claim it was saved: ${reason}.`,
 ] as const;
 
+// ── the appended-receipt shape ───────────────────────────────────────────────
+// A reconciler that keeps the model's prose puts its receipt UNDER it, and the last
+// reconciler in the chain (reconcileChatRevertReply) has to take that reply apart
+// again to drop a false sentence without dropping the receipts below it. Join and
+// split are therefore one contract: every append goes through `appendReceipt`, every
+// split through `splitAppendedReceipts`, and neither may hand-roll the separator.
+// When these two drifted apart the split silently stopped matching and a verified
+// plan receipt vanished from the bubble for a change that had really landed.
+const RECEIPT_JOIN = "\n\n";
+
+function appendReceipt(reply: string, receipt: string): string {
+  return `${reply.trim()}${RECEIPT_JOIN}${receipt}`.trim();
+}
+
+// The inverse. `null` means this reply was not built by appendReceipt from that head
+// — an earlier reconciler replaced the prose outright — and the caller must not treat
+// any part of it as a receipt it can keep.
+function splitAppendedReceipts(reply: string, head: string): { head: string; receipts: string } | null {
+  const prose = head.trim();
+  const body = reply.trim();
+  if (!prose || !body.startsWith(prose)) return null;
+  const rest = body.slice(prose.length);
+  if (!rest) return { head: prose, receipts: "" };
+  if (!rest.startsWith(RECEIPT_JOIN)) return null;
+  return { head: prose, receipts: rest.slice(RECEIPT_JOIN.length).trim() };
+}
+
 export function reconcileChatPlanReply(
   reply: string,
   message: string | null | undefined,
@@ -1795,11 +1822,11 @@ export function reconcileChatPlanReply(
     if (result.scheduled === true || status === "announced" || status === "pending") {
       const boundary = String(result.effective_date ?? decision?.effective_date ?? "the next training boundary");
       const receipt = `Scheduled for ${boundary}; Cairn will adapt the structural plan automatically. Use Discuss with coach on Today to work through it, or say Undo before it lands.`;
-      return replyClaimsPlanSuccess(reply) ? receipt : `${reply.trim()}\n\n${receipt}`.trim();
+      return replyClaimsPlanSuccess(reply) ? receipt : appendReceipt(reply, receipt);
     }
     if (result.review_required === true || status === "review") {
       const receipt = pickDayVariant(RESTRUCTURE_HELD_FOR_REVIEW_VARIANTS, today, "chat-restructure-held");
-      return replyClaimsPlanSuccess(reply) ? receipt : `${reply.trim()}\n\n${receipt}`.trim();
+      return replyClaimsPlanSuccess(reply) ? receipt : appendReceipt(reply, receipt);
     }
     if (result.persisted === true || status === "applied") {
       return "The structural plan change is live and recorded with its Undo history.";
@@ -1821,7 +1848,7 @@ export function reconcileChatPlanReply(
     }
     if (explicit) {
       const note = pickDayVariant(PLAN_NO_CHANGE_APPENDED_VARIANTS, today, "chat-plan-no-change-note");
-      return `${reply.trim()}\n\n${note}`.trim();
+      return appendReceipt(reply, note);
     }
     if (replyClaimsPlanSuccess(reply)) {
       return pickDayVariant(PLAN_UNTOUCHED_BY_QUESTION_VARIANTS, today, "chat-plan-question-no-op");
@@ -1854,7 +1881,7 @@ export function reconcileChatPlanReply(
           )
           .join("; ")} to supported safe bounds.`
       : "";
-    return `${reply.trim()}\n\n${receipt}${clampReceipt}`.trim();
+    return appendReceipt(reply, `${receipt}${clampReceipt}`);
   }
 
   // Although the chat contract asks the model for one atomic plan_update, remain
@@ -1968,7 +1995,7 @@ export function reconcileChatRunReply(
   // Model prose that claimed the write already happened is replaced, not decorated —
   // the server receipt is the only truthful account of what is stored.
   if (!verified.length && replyClaimsRunSuccess(reply)) return receipt;
-  return `${reply.trim()}\n\n${receipt}`.trim();
+  return appendReceipt(reply, receipt);
 }
 
 export function reconcileStrengthObjectiveReply(
@@ -1988,7 +2015,7 @@ export function reconcileStrengthObjectiveReply(
       return pickDayVariant(STRENGTH_OBJECTIVE_NOT_SAVED_VARIANTS, today, "chat-objective-not-saved");
     }
     const note = pickDayVariant(STRENGTH_OBJECTIVE_NONE_SAVED_VARIANTS, today, "chat-objective-none-saved");
-    return `${reply.trim()}\n\n${note}`.trim();
+    return appendReceipt(reply, note);
   }
   const results = entries.map((entry) => recordOrNull(entry.result) ?? {});
   const verified = results.length > 0 && results.every((result) => result.ok === true && result.verified === true);
@@ -2002,7 +2029,7 @@ export function reconcileStrengthObjectiveReply(
   const receipt = Number.isFinite(target)
     ? `Strength objective saved and verified: ${exercise} to ${target} lb estimated 1RM.`
     : `Strength objective saved and verified: ${exercise}.`;
-  return `${reply.trim()}\n\n${receipt}`.trim();
+  return appendReceipt(reply, receipt);
 }
 
 // Prose claiming the Undo already happened. Subject-anchored on purpose, exactly as
@@ -2038,9 +2065,9 @@ function replyClaimsRevertSuccess(reply: string): boolean {
 //   - Appended: the reply is the model's prose followed by receipts, so replacing the
 //     whole thing deleted a verified plan/objective receipt along with the false
 //     sentence — the athlete's bench really did change and the bubble no longer said
-//     so. Earlier reconcilers only ever append as `${reply.trim()}\n\n${receipt}`, so
-//     whatever follows the original reply IS those receipts: the correction takes the
-//     top and the receipts keep their place below it.
+//     so. Every append goes through `appendReceipt`, so `splitAppendedReceipts` can
+//     take the same reply apart on the same shape: the correction takes the top and
+//     the receipts keep their place below it.
 //
 // Both arms therefore keep every truthful receipt and drop only the false claim.
 export function reconcileChatRevertReply(
@@ -2070,21 +2097,19 @@ export function reconcileChatRevertReply(
     const how = id ? `undo decision ${id}` : "undo that decision";
     correction = pickDayVariant(DECISION_REVERT_NOT_AUTHORIZED_VARIANTS, today, "chat-revert-not-authorized")(how);
   }
-  if (!claimsNow) return `${reply.trim()}\n\n${correction}`.trim();
+  if (!claimsNow) return appendReceipt(reply, correction);
   return withoutLeadingProse(reply, proposedReply, correction);
 }
 
 // The claim is still standing, so the model's prose is still the head of the reply and
-// anything after it was appended by an earlier reconciler. Swap the head for the
-// correction and keep the tail. No tail — or a reply whose head is no longer the
-// model's (no receipt variant reads as a revert claim, so a standing claim means the
-// prose survived and this cannot happen today) — collapses to a plain replace.
+// anything appendReceipt put after it is a receipt to keep. Swap the head for the
+// correction and re-append the rest. No receipts — or a reply this head did not build
+// (no receipt variant reads as a revert claim, so a standing claim means the prose
+// survived and that cannot happen today) — collapses to a plain replace.
 function withoutLeadingProse(reply: string, proposedReply: string, correction: string): string {
-  const head = proposedReply.trim();
-  const body = reply.trim();
-  if (!head || !body.startsWith(head)) return correction;
-  const tail = body.slice(head.length).trim();
-  return tail ? `${correction}\n\n${tail}` : correction;
+  const split = splitAppendedReceipts(reply, proposedReply);
+  if (!split?.receipts) return correction;
+  return appendReceipt(correction, split.receipts);
 }
 
 function logPhotoFood(actions: ChatAction[], turn: any): { id: number; [key: string]: unknown } | null {

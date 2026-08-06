@@ -1164,7 +1164,8 @@ declare global {
   type ClientAgentOpHandlers = {
     path?: string;
     anchor?: string;
-    caption?: string | readonly string[];
+    // A KEY into THINKING_SCRIPTS, never the lines themselves (see AgentRunOptions).
+    caption?: string;
     guard?: () => boolean;
     isFail?: (result: unknown) => boolean;
     render?: (result: unknown) => void;
@@ -4394,7 +4395,7 @@ declare global {
             body: Record<string, unknown>,
             options: ClientAgentOpHandlers
           ): Promise<unknown>;
-          thinkingCaption(el: Element, op?: string | readonly string[]): () => void;
+          thinkingCaption(el: Element, op?: string): () => void;
           runCountUps(scope?: ParentNode | null, options?: { snap?: boolean }): void;
           collapseEl(el: Element, done?: () => void): void;
           reducedMotion(): boolean;
