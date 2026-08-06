@@ -5,6 +5,90 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [1.7.2] — 2026-08-06
+
+The theme of this patch is a coach that runs on *your* numbers. Heart-rate zones now come from your
+own logged runs instead of a population formula, a race goal becomes a steady pull that only green
+weeks follow, the strength block's phase enters the progression math, and the training week is read
+as the repeating ring it actually is — so the planner stops creating the collisions its own reader
+then flags. Around that core, another round of honesty: a day is judged against the calorie bar that
+was in force that day, an explanation buys time instead of permanent silence, and a correction never
+eats a receipt.
+
+### Added
+
+- **Your zones, from your runs** — a personal heart-rate model is derived nightly from your logged
+  runs (field test, then sustained-effort estimate, then a ceiling fallback), and every surface that
+  speaks a zone resolves through it, with the population formula only as a last resort. A
+  calibration ladder tracks when your threshold, easy pace, and lift estimates were last anchored to
+  real evidence — and quietly suggests a test only when a stale number is steering a live decision.
+- **The race pulls** — a race goal becomes a constrained trajectory whose pull rides the top of the
+  safe band on green weeks only, yields during strength peak weeks, and the countdown anchors to the
+  plan week (a finished race goes quiet the next morning).
+- **The block's phase enters the math** — accumulation banks rep saturation at half-pace steps,
+  intensification lets a strong top set earn the step, and a realization week prescribes a genuine
+  heavy single whose logged result anchors the calibration ladder.
+- **A hard day earns its fuel** — each day is classified light/standard/big from the run intentions
+  and heavy-lower days; a big day earns one quiet carb-bias line (today only, never retrospective),
+  and the weekly meal plan is drafted against the week's demand map.
+- **The week reads its own shape** — the layout read flags a recovery day sitting adjacent to the
+  long or quality run and three-hard-days-in-a-row stacks, and hands the evolution prompt a verified
+  suggested move. The quality-slot placement ladder searches the whole ring — no layout places
+  quality work on a leg day when a legal alternative exists.
+- **Easy runs are held to your own easy** — the last fourteen days of runs are read through your
+  personal bands; hard work everywhere with easy work nowhere becomes a gentle caution quoting your
+  own ceiling in bpm — counsel, never a gate. An insufficient or implausible model stays silent.
+- **The blank page gets a week** — a brand-new plan offers "Shape my first week": an agentic
+  first-week composer running through the same propose→apply autonomy gate as everything else, with
+  an optional one-line instruction ("I can only train 3 days…") carried end to end.
+- **Chat can write a run** — one run per turn, through the same writer the weekly tick uses,
+  merge-not-replace, personal-model zone tags, refusals over guesses — and every readback is
+  composed from a re-read of the store, never from the model's memory.
+- **A combined stress budget** — the run planner reads the strength-sourced share of leg fatigue
+  decayed forward to the long-run day, and the two engines stop spiking the same week.
+- **Sign-in fits the screen** — the agent-login terminal spawns at the browser's fitted size instead
+  of a fixed 80×24 that folded OAuth screens out of view, and any sign-in URL the CLI prints
+  surfaces as tap-friendly Open / Copy buttons.
+
+### Changed
+
+- **A regression during underfueling holds** — instead of cutting load, it holds with the fueling
+  story; repeated deloads escalate into a rep-scheme wave with a settle bound. Movement risk demotes
+  pain-flagged swaps, and Epley noise on a thin estimate can no longer earn a deload by itself.
+- **The week is a ring** — collision detection, hard-stack scanning, clearing-slot legality and
+  day-after checks all read Mon–Sun as cyclic (a Fri→Mon stretch is one stack), so week-boundary
+  collisions stop hiding.
+- **The anchor reads the closed week** — weekly run volume anchors to the previous full Mon–Sun week
+  on both halves of the calculation, so a week's prescription can no longer grow from the runs it
+  itself prescribed.
+- **A day is judged against the bar in force that day** — the underfueling read reconstructs the
+  accepted calorie target per day from its history instead of applying today's bar to the whole
+  window, weights days by energy, and ignores a fat-fingered outlier bar that would otherwise own
+  the verdict.
+- **An explanation buys time, not silence** — a strength-regression explanation whose remedy was
+  delivered and given a fair test window becomes dated history instead of suppressing the case
+  conference forever; a live symptom never expires.
+- **A plan vouches for the week it judges** — compliance learned that a prescription too stale to
+  vouch for the week behaves as absent, and the weekly auto-apply tick leads only after you have
+  explicitly handed the run week over.
+
+### Fixed
+
+- **Today is the local calendar day everywhere** — every remaining UTC-framed date site now frames
+  through your local day, so evaluation windows and evidence dates stop drifting a day forward every
+  evening.
+- **A correction never eats a receipt** — a chat correction is judged against the original reply it
+  corrects, and a refused or failed revert whose prose claimed success is replaced by an honest
+  correction; change receipts survive both.
+- **A question is never a veto** — asking "will you revert this?" is read as the question it is, in
+  every gate, instead of being executed.
+
+### Notes
+
+- Two new tables (`hr_model_state`, `calibration_events`) created on boot; no migration required.
+  Schema version is unchanged.
+- Service worker cache v543 → v548; installed PWAs self-update on next open.
+
 ## [1.7.1] — 2026-08-04
 
 The theme of this patch is accountability in both directions. The brain already knew how to lower
