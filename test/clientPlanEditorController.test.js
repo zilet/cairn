@@ -46,6 +46,9 @@ class FakeElement {
     if (this.id === "planedit") {
       if (this._innerHTML.includes('id="planEmptyStart"')) this.append(new FakeElement("button", { id: "planEmptyStart" }));
       if (this._innerHTML.includes('id="planComposeWeek"')) {
+        if (this._innerHTML.includes('id="planComposeNote"')) {
+          this.append(new FakeInput("input", { id: "planComposeNote", className: "form-input plan-empty-note" }));
+        }
         this.append(new FakeElement("button", { id: "planComposeWeek", className: "draftbtn plan-empty-compose" }));
       }
       this.parsePlanEditorHtml(this._innerHTML);
@@ -407,6 +410,8 @@ test("a blank plan offers the first-week entry alongside the manual routes", asy
   assert.match(html, /No days in your plan yet\./);
   assert.match(html, /Your team can shape a first week/);
   assert.match(html, /id="planComposeWeek"/, "the compose entry is present");
+  assert.match(html, /id="planComposeNote"/, "the optional note input is present");
+  assert.match(html, /Anything your coach should know\?/i, "the note reads as optional, not a gate");
   assert.match(html, /Shape my first week/);
   // The manual routes survive — the athlete drives, so asking the team is one option
   // among three, never the only door.
@@ -448,13 +453,36 @@ test("the first-week tap enqueues the durable compose job and never applies anyt
   assert.equal(call.kind, "compose_week");
   assert.equal(call.options.path, "/program/compose-week");
   assert.equal(call.options.caption, "compose_week", "keys the job's own thinking script");
-  // Object.keys, not deepEqual: the body is built inside the vm realm, so its
-  // prototype is not this realm's Object.prototype.
-  assert.deepEqual(Object.keys(call.body), [], "no instruction input on this surface — a parameterless ask");
+  // No note typed — an empty, optional input reads as no instruction at all.
+  assert.equal(call.body.instruction, undefined, "a blank note asks for nothing extra");
   // Nothing was written from here: the draft travels the ordinary propose→apply path.
   // (The render's own banner reads are GETs and are expected; a WRITE is not.)
   const writes = harness.requests.filter((request) => request.opts?.method && request.opts.method !== "GET");
   assert.deepEqual(writes, [], "the tap issues no plan write of its own");
+});
+
+test("a typed note rides along as the compose job's instruction, trimmed", async () => {
+  const harness = loadPlanEditorController([]);
+  await harness.context.renderPlanEditor();
+
+  harness.view.querySelector("#planComposeNote").value = "  I can only train 3 days  ";
+  harness.view.querySelector("#planComposeWeek").click();
+  await Promise.resolve();
+
+  const [call] = harness.runOpCalls;
+  assert.equal(call.body.instruction, "I can only train 3 days");
+});
+
+test("a blank or whitespace-only note still asks for nothing extra", async () => {
+  const harness = loadPlanEditorController([]);
+  await harness.context.renderPlanEditor();
+
+  harness.view.querySelector("#planComposeNote").value = "   ";
+  harness.view.querySelector("#planComposeWeek").click();
+  await Promise.resolve();
+
+  const [call] = harness.runOpCalls;
+  assert.equal(call.body.instruction, undefined);
 });
 
 test("each ending of the compose job says something true", async () => {

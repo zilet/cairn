@@ -544,6 +544,64 @@ export function latestNutritionTargetRaise(
   return null;
 }
 
+/**
+ * The accepted kcal target in force on EACH day of [start, end] — the bar every
+ * day was actually eaten against, reconstructed from the append-only history
+ * instead of collapsed into the one number that happens to be current.
+ *
+ * A day carries the newest row with `effective_date <= day`, ties broken by id
+ * so a same-day correction wins, exactly like the one-date readers above. Days
+ * before the first target this athlete ever accepted have NO bar and are simply
+ * ABSENT from the map: nothing had been accepted, so nothing was fallen short
+ * of. A caller must read absence as "not judgeable" — never as zero, and never
+ * as today's number.
+ *
+ * History is read RAW, and that is a decision rather than an oversight.
+ * `review_due` — the 42-day adaptive-target staleness gate `hydrateNutritionTarget`
+ * applies — asks a question about the PRESENT target ("should the coach still be
+ * steering by this?"). It says nothing about what the accepted bar WAS on a past
+ * day. A target that has since gone stale was still the number the athlete was
+ * eating to at the time, so consulting the gate here would quietly erase real
+ * history and re-judge closed days against a bar that did not exist for them.
+ *
+ * One bounded query, then a walk over the window, so a caller reading eight
+ * weeks pays for a single scan.
+ */
+export function nutritionTargetKcalByDay(start: string, end: string): Map<string, number> {
+  const out = new Map<string, number>();
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(String(start ?? "")) ? String(start) : null;
+  const through = /^\d{4}-\d{2}-\d{2}$/.test(String(end ?? "")) ? String(end) : null;
+  if (!from || !through || from > through) return out;
+  let rows: Array<{ effective_date: string; target_kcal: number }> = [];
+  try {
+    // Newest-first with a bound, then reversed for the walk. An ASCENDING limit
+    // would truncate the rows nearest the window — the ones that decide most of
+    // its days — which is the opposite of what a bound is for.
+    rows = (
+      db
+        .prepare(
+          `SELECT effective_date, target_kcal FROM nutrition_targets
+            WHERE effective_date <= ? AND target_kcal IS NOT NULL AND target_kcal > 0
+            ORDER BY effective_date DESC, id DESC LIMIT 500`
+        )
+        .all(through) as Array<{ effective_date: string; target_kcal: number }>
+    ).reverse();
+  } catch {
+    return out;
+  }
+  let index = 0;
+  let inForce: number | null = null;
+  for (let day: string = from; day <= through; day = addDaysISO(day, 1)) {
+    while (index < rows.length && String(rows[index].effective_date).slice(0, 10) <= day) {
+      const value = Number(rows[index].target_kcal);
+      if (Number.isFinite(value) && value > 0) inForce = value;
+      index++;
+    }
+    if (inForce != null) out.set(day, inForce);
+  }
+  return out;
+}
+
 // ---------- meal plans ----------
 // The newest upstream source (a health directive / lab / weigh-in) a nutrition
 // artifact should reflect. Stamped onto a meal plan at draft time; if the CURRENT max

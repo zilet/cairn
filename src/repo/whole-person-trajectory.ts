@@ -4,9 +4,9 @@ import { getActiveBlock } from "./program-blocks.js";
 import { addDaysISO, daysBetweenISO, joinList, localDateISO } from "./shared.js";
 import { getMarkerHistory, lsqSlopePerDay } from "./health.js";
 import { completedIntakeRange } from "./intake-window.js";
-import { latestNutritionTargetRaise } from "./nutrition.js";
+import { comparableLiftDates } from "./lift-comparability.js";
+import { latestNutritionTargetRaise, nutritionTargetKcalByDay } from "./nutrition.js";
 import { painAreaLoadsExercise } from "./pain-relevance.js";
-import { comparableLiftDates } from "./program-state.js";
 import { matchOptimalZone, optimalDistance } from "./propagation.js";
 import { recoverySessionDose } from "./training-read.js";
 import { getTrainingIntent, type TrainingPriority } from "./training-intent.js";
@@ -106,9 +106,9 @@ const OPEN_ENDED_CONTEXT_HORIZON_MAX_DAYS = 120;
 // silence the open-ended context event once caused.
 const UNDERFUEL_LB_PER_WEEK = 1.0;
 const UNDERFUEL_MIN_WEIGH_INS = 4;
-// …or logged intake that actually came in under the accepted target, on enough
-// readable days to mean something. Ten days is the shortest span that is more
-// than one hard week.
+// …or logged intake that actually came in under the target accepted FOR THOSE
+// DAYS, on enough readable days to mean something. Ten days is the shortest span
+// that is more than one hard week.
 const UNDERFUEL_INTAKE_FRACTION = 0.9;
 const UNDERFUEL_MIN_CREDIBLE_DAYS = 10;
 
@@ -122,9 +122,13 @@ const UNDERFUEL_MIN_CREDIBLE_DAYS = 10;
 // stays on the record as history — it stops suppressing the conference.
 //
 // Without this, the suppression was permanent by construction: the fueling read
-// judges intake against the target in force at the END of the window, so raising
-// the target raised the bar the athlete is measured against, and the explanation
-// re-earned itself out of its own remedy, forever.
+// USED to judge every day's intake against the target in force at the END of the
+// window, so raising the target raised the bar days already eaten to the old one
+// were measured against, and the explanation re-earned itself out of its own
+// remedy, forever. The arm no longer works that way — each day is paired with
+// the bar that was in force that day — but the clock below is what makes the
+// suppression bounded rather than conditional on the arm's arithmetic, and it
+// bounds the context and (arm-independent) fueling explanations alike.
 //
 // The two thresholds are the shape the expectation contract already uses for
 // "don't judge a lift that wasn't trained since" — `confounder_policy:
@@ -239,23 +243,6 @@ function contextConfounders(start: string, end: string): ConfounderEntry[] {
   return out;
 }
 
-/** The accepted calorie target in force at the end of the window, if any. */
-function activeCalorieTarget(end: string): number | null {
-  try {
-    const row = db
-      .prepare(
-        `SELECT target_kcal FROM nutrition_targets
-          WHERE effective_date <= ? AND target_kcal IS NOT NULL AND target_kcal > 0
-          ORDER BY effective_date DESC, id DESC LIMIT 1`
-      )
-      .get(end) as { target_kcal: number } | undefined;
-    const value = Number(row?.target_kcal);
-    return Number.isFinite(value) && value > 0 ? value : null;
-  } catch {
-    return null;
-  }
-}
-
 function fuelingConfounders(start: string, end: string): ConfounderEntry[] {
   const out: ConfounderEntry[] = [];
   // BOTH arms below share one remedy — the calorie target going up — so the
@@ -306,23 +293,46 @@ function fuelingConfounders(start: string, end: string): ConfounderEntry[] {
     /* no weigh-in history is no fueling evidence, never a claim about one */
   }
   try {
-    // NOTE the interaction this arm has with the remedy above, deliberately left
-    // in place: `activeCalorieTarget` reads the target in force at window END, so
-    // a raise delivered to answer a slide RAISES the bar the same window's intake
-    // is then judged against. This arm can therefore re-fire out of its own
-    // remedy indefinitely. Redesigning the arm is a separate question; what
-    // bounds the harm is that a delivered raise now expires the explanation on a
-    // clock the arm cannot restart.
-    const target = activeCalorieTarget(end);
-    if (target != null) {
+    // Every day is judged against the bar that was in force THAT day. So a raise
+    // delivered to answer a slide moves the bar from its effective date FORWARD
+    // and no further: days already eaten to the old target keep being measured
+    // against the old target, and the days since the raise are measured against
+    // the raise — which is not the arm feeding itself, it is the only question
+    // worth asking about them. The comparison is energy-weighted (everything
+    // eaten against everything prescribed over the paired days) and so reduces
+    // exactly to the old flat mean whenever the target never moved.
+    //
+    // A day with no accepted target in force — anything before the first target
+    // this athlete ever had — is dropped from BOTH sides rather than compared
+    // against a number that did not exist for it.
+    //
+    // What still bounds this arm is the explanation-expiry clock above rather
+    // than its own arithmetic: `tested_from` / `spendExplanation` retire the
+    // explanation once a raise has been delivered, given fourteen days and
+    // genuinely trained under, whatever intake did in the meantime.
+    const bars = nutritionTargetKcalByDay(start, end);
+    if (bars.size) {
       const intake = completedIntakeRange(start, end, end);
-      const credible = intake.days.filter((day) => day.credible);
-      if (credible.length >= UNDERFUEL_MIN_CREDIBLE_DAYS) {
-        const average = credible.reduce((sum, day) => sum + day.kcal, 0) / credible.length;
-        if (average < target * UNDERFUEL_INTAKE_FRACTION) {
+      const barred = intake.days
+        .filter((day) => day.credible)
+        .map((day) => ({ kcal: day.kcal, target: bars.get(day.date) }))
+        .filter((day): day is { kcal: number; target: number } => day.target != null);
+      // The sum is energy-weighted, so a single wild bar could own the verdict —
+      // and `setNutritionTarget` CLAMPS an absurd kcal to its ceiling rather than
+      // rejecting it, so a fat-fingered acceptance lands as a real row. A bar
+      // more than twice, or less than half, the window's median bar is not the
+      // same prescription regime; those days drop from both sides the way an
+      // unbarred day does, instead of manufacturing an explanation.
+      const sortedBars = barred.map((day) => day.target).sort((a, b) => a - b);
+      const medianBar = sortedBars.length ? sortedBars[(sortedBars.length - 1) >> 1] : 0;
+      const paired = barred.filter((day) => day.target >= medianBar * 0.5 && day.target <= medianBar * 2);
+      if (paired.length >= UNDERFUEL_MIN_CREDIBLE_DAYS) {
+        const eaten = paired.reduce((sum, day) => sum + day.kcal, 0);
+        const prescribed = paired.reduce((sum, day) => sum + day.target, 0);
+        if (eaten < prescribed * UNDERFUEL_INTAKE_FRACTION) {
           out.push({
             kind: "fueling",
-            sentence: `Logged intake averaged ${Math.round(average)} kcal against an accepted target of ${Math.round(target)} across ${credible.length} readable days, so this window was underfuelled relative to what was planned.`,
+            sentence: `Logged intake averaged ${Math.round(eaten / paired.length)} kcal against an accepted target averaging ${Math.round(prescribed / paired.length)} kcal across ${paired.length} readable days, so this window was underfuelled relative to what was planned.`,
             tested_from: testedFrom,
             tested_by: testedBy,
           });
@@ -420,15 +430,29 @@ function symptomConfounders(
 }
 
 /**
+ * One lift's comparable exposure dates through the window end, read at most once
+ * per lift for a whole explanation pass.
+ *
+ * Every explanation carrying a remedy asks the same question of the same lifts,
+ * and `comparableLiftDates` re-grades the recovery dose of every session the lift
+ * appears in to answer it — so unmemoized, E explanations across L regressing
+ * lifts issued E×L scans of the log. The two fueling arms in particular share one
+ * `tested_from`, so they were re-asking a question they had already answered. The
+ * memo is per CALL, held in the closure that builds it: a module-level cache
+ * would make a trajectory read depend on what a previous read happened to look at.
+ */
+type LiftExposureDates = (name: string) => Set<string>;
+
+/**
  * How many times one of the lifts that slid was ACTUALLY trained since a remedy
  * landed — the difference between "we changed something" and "we changed
  * something and then found out".
  *
- * `comparableLiftDates` is the counter rather than a fresh query because it is
- * the one that excludes a compliant recovery week, which matters exactly here: a
- * remedy delivered right before a deload would otherwise read as tested by
- * sessions that were never a strength test at all. Strictly AFTER the remedy
- * date, so the day it took effect is not counted as evidence about itself.
+ * `comparableLiftDates` (behind `dates`) is the counter rather than a fresh query
+ * because it is the one that excludes a compliant recovery week, which matters
+ * exactly here: a remedy delivered right before a deload would otherwise read as
+ * tested by sessions that were never a strength test at all. Strictly AFTER the
+ * remedy date, so the day it took effect is not counted as evidence about itself.
  *
  * The best-covered regressing lift is what answers for the domain: if any lift
  * that slid was genuinely retrained under the remedy and still slid, the remedy
@@ -439,16 +463,11 @@ function symptomConfounders(
 function exposuresSinceRemedy(
   regressing: Array<{ name: string; muscle_group: string | null }>,
   after: string,
-  end: string
+  dates: LiftExposureDates
 ): { exposures: number; lift: string | null } {
   let best: { exposures: number; lift: string | null } = { exposures: 0, lift: null };
   for (const lift of regressing) {
-    let count = 0;
-    try {
-      count = [...comparableLiftDates(lift.name, end)].filter((date) => date > after).length;
-    } catch {
-      count = 0; // an unreadable log is no exposure, never an assumed one
-    }
+    const count = [...dates(lift.name)].filter((date) => date > after).length;
     if (count > best.exposures) best = { exposures: count, lift: lift.name };
   }
   return best;
@@ -458,7 +477,8 @@ function exposuresSinceRemedy(
 function spendExplanation(
   entry: ConfounderEntry,
   end: string,
-  regressing: Array<{ name: string; muscle_group: string | null }>
+  regressing: Array<{ name: string; muscle_group: string | null }>,
+  dates: LiftExposureDates
 ): string | null {
   // The one kind that can never expire, stated where the decision is made rather
   // than left implicit in a null date. See symptomConfounders for why.
@@ -466,7 +486,7 @@ function spendExplanation(
   if (!entry.tested_from || !entry.tested_by) return null;
   const elapsed = daysBetweenISO(end, entry.tested_from);
   if (elapsed == null || elapsed < EXPLANATION_TEST_DAYS) return null;
-  const { exposures, lift } = exposuresSinceRemedy(regressing, entry.tested_from, end);
+  const { exposures, lift } = exposuresSinceRemedy(regressing, entry.tested_from, dates);
   if (!lift || exposures < EXPLANATION_TEST_EXPOSURES) return null;
   // Plural is unconditional: nothing reaches this line under three exposures.
   return `${entry.sentence} That explanation has already been tested: ${entry.tested_by}, and ${exposures} comparable ${lift} exposures have been logged since without the slide stopping.`;
@@ -480,6 +500,22 @@ function strengthRegressionExplanations(
   const seen = new Set<string>();
   const live: string[] = [];
   const spent: string[] = [];
+  const exposureDates = new Map<string, Set<string>>();
+  // Case-insensitive because that is `comparableLiftDates`'s own lift identity
+  // (`e.name = ? COLLATE NOCASE`); two spellings of one lift must share an entry.
+  const dates: LiftExposureDates = (name) => {
+    const key = name.toLowerCase();
+    const cached = exposureDates.get(key);
+    if (cached) return cached;
+    let read: Set<string>;
+    try {
+      read = comparableLiftDates(name, end);
+    } catch {
+      read = new Set(); // an unreadable log is no exposure, never an assumed one
+    }
+    exposureDates.set(key, read);
+    return read;
+  };
   for (const entry of [
     ...contextConfounders(start, end),
     ...fuelingConfounders(start, end),
@@ -487,7 +523,7 @@ function strengthRegressionExplanations(
   ]) {
     if (seen.has(entry.sentence)) continue;
     seen.add(entry.sentence);
-    const tested = spendExplanation(entry, end, regressing);
+    const tested = spendExplanation(entry, end, regressing, dates);
     if (tested) spent.push(tested);
     else live.push(entry.sentence);
   }
@@ -561,7 +597,10 @@ function strengthRead(start: string, end: string, parked: boolean): WholePersonD
       .join(", ");
   // Asked ONLY of a regression, and only about the lifts that actually slid. A
   // holding or improving picture has nothing to explain away, and running the
-  // reads anyway would cost three table scans on every trajectory call.
+  // reads anyway would cost, on every trajectory call, the three confounder
+  // collectors' scans PLUS one comparable-exposure scan per regressing lift once
+  // any explanation carries a remedy — and each of those re-grades the recovery
+  // dose of every session the lift appears in.
   const explanations: StrengthExplanations =
     verdict === "worse"
       ? strengthRegressionExplanations(

@@ -226,6 +226,7 @@ function planEditorRecord(value: unknown): Record<string, unknown> {
 function composeWeekEntryHtml(hasDays: boolean): string {
   const opening = hasDays ? "Your plan days are still empty." : "No days in your plan yet.";
   return `<p class="plan-empty-line">${opening} Your team can shape a first week around your goal, whatever you've already logged, and any running you do.</p>
+      <input id="planComposeNote" class="form-input plan-empty-note" type="text" maxlength="240" autocomplete="off" placeholder="Anything your coach should know? (optional) — e.g. I can only train 3 days…">
       <button class="draftbtn plan-empty-compose" type="button" id="planComposeWeek">Shape my first week →</button>
       <div id="planComposeCap" class="plan-empty-cap job-cap lbl"></div>`;
 }
@@ -236,6 +237,13 @@ async function composeFirstWeek(btn: HTMLButtonElement): Promise<void> {
   if (btn.disabled) return;
   const anchor = ".plan-empty";
   const label = btn.textContent || "Shape my first week →";
+  // Scoped to the button's own container rather than a global id lookup: the note
+  // sits alongside the button in the same composeWeekEntryHtml output, and only one
+  // instance of that markup is ever painted at a time (draw() takes either the
+  // no-days branch or the blank-shells branch, never both) — but scoping here still
+  // costs nothing and stays correct even if that ever changes.
+  const noteEl = btn.parentElement?.querySelector<HTMLInputElement>("#planComposeNote");
+  const instruction = noteEl?.value.trim() || undefined;
   btn.disabled = true;
   btn.textContent = "Shaping your week…";
   const restore = (): void => {
@@ -244,7 +252,7 @@ async function composeFirstWeek(btn: HTMLButtonElement): Promise<void> {
     live.disabled = false;
     live.textContent = label;
   };
-  await runOp("compose_week", {}, {
+  await runOp("compose_week", { instruction }, {
     path: "/program/compose-week",
     anchor,
     caption: "compose_week",

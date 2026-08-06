@@ -5877,6 +5877,7 @@ button.prow-name:hover{color:var(--accent)}
    compose entry apart from the two manual routes without adding a second card. */
 .plan-empty{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;text-align:center}
 .plan-empty-line{margin:0 0 12px;font-size:.9rem;line-height:1.5;color:var(--muted)}
+.plan-empty-note{margin-bottom:10px;font-size:.86rem;text-align:left}
 .plan-empty-start,.plan-empty-compose{width:100%}
 .plan-empty-cap{margin-top:10px;color:var(--muted);min-height:1em}
 .plan-empty-cap:empty{display:none}

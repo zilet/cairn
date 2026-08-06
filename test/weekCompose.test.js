@@ -30,6 +30,8 @@ import {
   applyDueAnnouncedDecisions,
   applyProposalWithAutonomy,
 } from "../dist/domain/brain/autonomy-service.js";
+import { programRouter } from "../dist/routes/program.js";
+import { onJobEvent } from "../dist/agentJobs.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
@@ -311,4 +313,61 @@ test("blank slate + a week-shaped agent reply → a draft carrying BOTH lanes, a
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
+});
+
+// ---------- the passthrough: POST body → route → background job runner ----------
+//
+// composeWeek() itself is proven above to fold an instruction into the stored
+// proposal. What nothing pinned before this test is the two hops that carry an
+// athlete's typed words to that call in production: the REST handler reading
+// `req.body.instruction` (src/routes/program.ts) and the background job runner
+// forwarding `input.instruction` out of the persisted job into composeWeek()
+// (src/agentJobs.ts, the "compose_week" case). The built-in `stub` agent is fine
+// here — its `changes`-shaped reply is not a week, so composeWeek stores the
+// proposal and returns without ever reaching the apply step, which is all this
+// needs to prove the words survived the trip.
+test("POST /program/compose-week carries the athlete's instruction through the route and the background job runner into the stored proposal", async () => {
+  const layer = programRouter.stack.find((entry) => entry.route?.path === "/program/compose-week");
+  assert.ok(layer, "REST compose-week route is registered");
+  const handler = layer.route.stack[0].handle;
+
+  let responded;
+  const req = { body: { agent: "stub", instruction: "I can only train 3 days" } };
+  const res = {
+    json: (body) => {
+      responded = body;
+    },
+  };
+  await handler(req, res);
+
+  assert.ok(responded?.ok, "the route enqueues a durable job and answers immediately");
+  const jobId = responded.job?.id;
+  assert.ok(jobId, "the response carries the queued job");
+
+  const job = await new Promise((resolve, reject) => {
+    const off = onJobEvent(jobId, (event) => {
+      if (event.type === "done") {
+        off();
+        resolve(event.job);
+      } else if (event.type === "error" || event.type === "canceled") {
+        off();
+        reject(new Error(`job ended as ${event.type}`));
+      }
+    });
+  });
+
+  assert.equal(job.result?.ok, true, "the stub agent's reply parses, so the op reports ok");
+  const proposalId = job.result?.proposal?.id;
+  assert.ok(proposalId, "compose_week persists a plan_proposals row");
+  const proposal = repo.getProposal(Number(proposalId));
+  assert.ok(proposal, "the proposal the job created is readable back out");
+  assert.ok(
+    proposal.instruction.startsWith(COMPOSE_WEEK_INSTRUCTION),
+    `keeps its marker prefix: ${proposal.instruction}`
+  );
+  assert.ok(
+    proposal.instruction.includes("I can only train 3 days"),
+    "the athlete's own words made it from req.body.instruction, through the route, through the " +
+      "background job runner's input.instruction forwarding, into the stored proposal"
+  );
 });

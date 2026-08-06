@@ -41,7 +41,7 @@ import { weekLayoutRead } from "../domain/training/week-layout.js";
 import { getActiveBlock } from "./program-blocks.js";
 import { completedRecoveryWeekLedger, type CompletedRecoveryWeekLedger } from "./recovery-week-ledger.js";
 import { getProgress } from "./sessions.js";
-import { recoverySessionDose } from "./training-read.js";
+import { comparableLiftDates, sessionCountsTowardLiftTrajectory } from "./lift-comparability.js";
 import {
   activitySportWhere,
   canonicalEnduranceSport,
@@ -372,48 +372,10 @@ function isoDaysAgo(d: string, n: number): string {
 // ---- per-lift progression ----
 const REPS_RECENT = 8; // analyze the most recent N sessions (state, not ancient history)
 
-// A deliberately reduced, compliant recovery exposure is not a failed strength
-// test. Keep the raw log intact, but exclude that session from comparable-lift
-// trajectory math. Above-plan / overdosed / unknown sessions remain ordinary
-// evidence. The recovery-dose ledger is the one policy owner for this decision.
-let trajectorySessionEligibility = new Map<number, boolean>();
-registerTrainingCacheClear(() => {
-  trajectorySessionEligibility = new Map();
-});
-
-function sessionCountsTowardLiftTrajectory(sessionId: number): boolean {
-  const id = Number(sessionId);
-  const cached = trajectorySessionEligibility.get(id);
-  if (cached != null) return cached;
-  const eligible = recoverySessionDose(id).classification !== "compliant";
-  trajectorySessionEligibility.set(id, eligible);
-  return eligible;
-}
-
-// `through` is the day being read. liftStates() already scopes which lifts EXIST
-// as of that date, but every grade underneath it was computed from the full
-// history — so a read of an earlier date graded the lift, its trend and its
-// push/hold/deload status from sets logged AFTER it. Same bug class as the
-// programState/trainingSignals date-scoping, one layer down.
-// Exported because the whole-person trajectory read asks the same question when
-// it tests whether an explanation for a slide has outlived itself: "how many
-// times was this lift ACTUALLY trained since?" — where a compliant recovery week
-// must not be mistaken for exposure. One counter, one answer.
-export function comparableLiftDates(name: string, through: string): Set<string> {
-  const rows = db
-    .prepare(
-      `SELECT DISTINCT s.id AS session_id, s.date AS date
-       FROM logged_sets ls
-       JOIN sessions s ON s.id = ls.session_id
-       JOIN exercises e ON e.id = ls.exercise_id
-      WHERE e.name = ? COLLATE NOCASE AND s.date <= ?
-      ORDER BY s.date, s.id`
-    )
-    .all(name, through) as any[];
-  return new Set(
-    rows.filter((row) => sessionCountsTowardLiftTrajectory(Number(row.session_id))).map((row) => String(row.date))
-  );
-}
+// The comparable-exposure counter and its recovery-week eligibility rule live in
+// the leaf module `lift-comparability.ts` — see the header there for why. Kept
+// re-exported from here, where every caller and test has always found it.
+export { comparableLiftDates } from "./lift-comparability.js";
 
 function gradeRepsLift(name: string, mg: string | null, through: string): GradedLift | null {
   // Bounded to the day being read — an unbounded history hands a historical read

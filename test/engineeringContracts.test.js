@@ -7105,26 +7105,83 @@ test("every chat reply receipt is appended and split through the one shared shap
     "no reconciler hand-rolls an appended reply; appendReceipt is the only join"
   );
 
-  // Inside the reconciler block the separator exists only as that declaration: every
-  // other use is by name, which is what keeps the two sides from drifting.
-  const start = src.indexOf("const RECEIPT_JOIN");
-  const end = src.indexOf("function logPhotoFood");
-  assert.ok(start > 0 && end > start, "the reconcilers sit between the shape and logPhotoFood");
-  const reconcilers = src.slice(start, end);
-  assert.equal((reconcilers.match(/\\n\\n/g) || []).length, 1, "one literal separator in the whole block");
-  assert.ok(
-    (reconcilers.match(/appendReceipt\(/g) || []).length >= 9,
-    "every append site routes through the helper (8 call sites + its own declaration)"
+  // The check above only catches ONE specific hand-rolled shape (`${x.trim()}\n\n`),
+  // and a fixed slice between RECEIPT_JOIN's declaration and logPhotoFood only ever
+  // covered reconcilers written between those two lines — a reconciler added anywhere
+  // else in the file, in any shape, escaped both. So find every receipt-shape function
+  // by NAME instead of by position (a top-level `function`/`const`/`type`/`interface`/
+  // `class` declaration marks where the next one's body ends, since none of these
+  // functions nest another top-level declaration inside themselves), and require that
+  // NONE of their bodies carry a literal "\n\n" of their own — the only legitimate one
+  // is RECEIPT_JOIN's own declaration, which sits outside every function body.
+  const declRe =
+    /^(?:export\s+)?(?:async\s+)?(?:function\s+(\w+)|const\s+(\w+)|interface\s+(\w+)|type\s+(\w+)|class\s+(\w+))/gm;
+  const decls = [];
+  let declMatch;
+  while ((declMatch = declRe.exec(src))) {
+    const kind = declMatch[1]
+      ? "function"
+      : declMatch[2]
+        ? "const"
+        : declMatch[3]
+          ? "interface"
+          : declMatch[4]
+            ? "type"
+            : "class";
+    const name = declMatch[1] || declMatch[2] || declMatch[3] || declMatch[4] || declMatch[5];
+    decls.push({ name, kind, start: declMatch.index });
+  }
+  const receiptShapeRe = /^(?:reconcile\w+|withoutLeadingProse|replyClaims\w+)$/;
+  const receiptShapeFns = decls.filter((d) => d.kind === "function" && receiptShapeRe.test(d.name));
+  assert.ok(receiptShapeFns.length >= 7, "the receipt-shape functions this contract protects are still declared");
+
+  for (const fn of receiptShapeFns) {
+    const declIndex = decls.indexOf(fn);
+    const end = declIndex + 1 < decls.length ? decls[declIndex + 1].start : src.length;
+    const body = src.slice(fn.start, end);
+    assert.doesNotMatch(
+      body,
+      /\\n\\n/,
+      `${fn.name} carries a literal "\\n\\n" of its own — it must build any receipt through ` +
+        "appendReceipt/RECEIPT_JOIN, and read one back only through splitAppendedReceipts"
+    );
+  }
+
+  // Belt and suspenders: the name scan only sees functions whose NAME marks them
+  // as receipt-shaped — a differently-named helper (`foldReceiptInto`, say) would
+  // slip past it. The historical home of every reconciler, the region between
+  // RECEIPT_JOIN's declaration and logPhotoFood, is therefore still held to
+  // exactly one literal separator (RECEIPT_JOIN's own), catching by position
+  // what the name scan cannot see.
+  const regionStart = src.indexOf("const RECEIPT_JOIN");
+  const regionEnd = src.indexOf("function logPhotoFood");
+  assert.ok(regionStart > 0 && regionEnd > regionStart, "the reconciler region still precedes logPhotoFood");
+  assert.equal(
+    (src.slice(regionStart, regionEnd).match(/\\n\\n/g) || []).length,
+    1,
+    "exactly one literal separator in the reconciler region — RECEIPT_JOIN's own declaration"
   );
+
   assert.match(
-    reconcilers,
+    src,
     /function splitAppendedReceipts[\s\S]{0,600}RECEIPT_JOIN/,
     "and the split reads the same named separator"
   );
   assert.match(
-    reconcilers,
+    src,
     /function withoutLeadingProse[\s\S]{0,400}splitAppendedReceipts\(/,
     "the revert reconciler takes a reply apart only through that split"
+  );
+
+  // The append side: every receipt-shape function that appends should route through
+  // the one helper. Derived from how many such functions actually exist (plus the
+  // helper's own declaration) rather than a bare literal floor that would stay
+  // silently satisfied as new reconcilers are added without calling it.
+  const appendCount = (src.match(/appendReceipt\(/g) || []).length;
+  assert.ok(
+    appendCount >= receiptShapeFns.length,
+    `expected at least one appendReceipt( per receipt-shape function found (${receiptShapeFns.length}); ` +
+      `saw ${appendCount} appendReceipt( occurrences`
   );
 });
 

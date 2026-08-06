@@ -4,6 +4,38 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-08-06 (third round) — a day is judged against the bar that was in force that day
+
+**The underfuel-intake arm reads a per-day bar.** The arm compared a flat window mean against the
+single target in force at window END (`activeCalorieTarget`, now deleted), so a mid-window raise
+retroactively raised the bar on days eaten before it existed — the arm could re-fire out of its own
+remedy indefinitely (a defect previously documented in place rather than fixed). Now
+`nutritionTargetKcalByDay(start, end)` (`src/repo/nutrition.ts`) reconstructs the accepted bar per
+day from the append-only `nutrition_targets` history (raw rows by design: `review_due` is a
+freshness gate on the *present* target and says nothing about what the bar *was*), and the arm
+pairs each credible intake day with its own bar, firing on the energy-weighted
+`sum(eaten)/sum(prescribed) < 0.9` over paired days — which reduces exactly to the old comparison
+whenever the target never moved. Days before the first-ever target have no bar and drop from both
+sides; a bar outside half-to-double the window's *median* bar drops the same way (`setNutritionTarget`
+clamps an absurd kcal instead of rejecting it, so a fat-fingered acceptance lands as a real row that
+energy-weighting would otherwise let own the verdict). The mirror behavior is deliberate: a
+mid-window *cut* now lowers the bar on pre-cut days, so a window that ran genuinely under the bar
+then in force can newly carry a fueling confounder. **The comparable-exposure counter is a leaf.**
+`comparableLiftDates` + `sessionCountsTowardLiftTrajectory` + the eligibility memo moved to
+`src/repo/lift-comparability.ts`; `program-state.ts` re-exports, so no caller changed, and
+`whole-person-trajectory.ts` now participates in zero import cycles (it previously closed a
+three-module call-time cycle through program-state → coach). `strengthRegressionExplanations`
+memoizes `comparableLiftDates` per call, keyed by lift alone — the result never depended on
+`tested_from`; each entry still applies its own after-date filter. **The blank week takes a word.**
+The Plan editor's compose-week affordance gains an optional single-line instruction ("I can only
+train 3 days…") passed through the already-plumbed route/agentJobs/`composeWeek` chain; a new test
+pins the passthrough end-to-end (route handler → background job → stored proposal), which nothing
+covered. The receipt contract test finds receipt-shape functions by NAME (any
+`reconcile*`/`replyClaims*`/`withoutLeadingProse` body carrying its own literal separator fails,
+anywhere in the file) *and* still holds the historical reconciler region to exactly one literal —
+position catches differently-named helpers the name scan cannot see. No schema change;
+`public/sw.js` CACHE v547 → **v548**.
+
 ## 2026-08-06 (second round) — the countdown belongs to the week, an explanation buys time not silence, the blank page gets a door
 
 **The race countdown anchors to the plan week's Monday**: `raceRamp` receives `week_start`, so

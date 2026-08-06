@@ -233,8 +233,10 @@ test("a holding picture pays for none of these reads", () => {
 // trained under it, and the slide continued anyway, the explanation has had its
 // hearing. It stays on the record as dated history; it stops closing the case
 // conference. Without this the fueling arm in particular suppressed forever —
-// it judges intake against the target in force at window END, so the remedy
-// raised the very bar that re-earned the confounder.
+// it USED to judge every day's intake against the target in force at window END,
+// so the remedy raised the very bar that re-earned the confounder. That arm now
+// pairs each day with the bar in force that day (see the last section of this
+// file); the clock below is what keeps the suppression bounded regardless.
 //
 // `decliningSquat` logs Barbell Back Squat on 05-04, 05-11, 05-18, 06-01, 06-08
 // and 06-15, so a remedy dated 05-20 has three exposures after it and one dated
@@ -500,5 +502,144 @@ test("an ordinary third exposure after the raise does test it — the recovery c
   const read = wholePersonTrajectory({ end: WINDOW_END, days: 56 });
   assert.deepEqual(strengthOf(read).confounders, []);
   assert.match(strengthOf(read).why, /3 comparable Barbell Back Squat exposures/);
+  assert.ok(read.unexplained_worse.includes("strength"));
+});
+
+// ---------------------------------------------------------------------------
+// A day is judged against the bar that was in force THAT day.
+//
+// The intake arm used to read the target in force at window END and compare it
+// with a flat mean of every credible day in the window, so a mid-window raise
+// retroactively raised the bar on days logged before it existed and the arm
+// re-fired out of its own remedy. Pairing each day with its own accepted target
+// is what closes that: a raise moves the bar from its effective date forward,
+// and never backwards over days that were already eaten to the old one.
+
+function daysFrom(startISO, count) {
+  const base = Date.parse(`${startISO}T00:00:00Z`);
+  return Array.from({ length: count }, (_, index) => new Date(base + index * 86_400_000).toISOString().slice(0, 10));
+}
+
+/** Two primary meals a day, which is what `completedIntakeRange` reads as credible. */
+function logIntakeDays(dates, kcal) {
+  for (const date of dates) {
+    for (const meal of ["breakfast", "dinner"]) {
+      db.prepare(`INSERT INTO food_notes (date, meal, parsed_json) VALUES (?, ?, ?)`).run(
+        date,
+        meal,
+        JSON.stringify({ kcal: kcal / 2 })
+      );
+    }
+  }
+}
+
+function intakeConfounder(read) {
+  return strengthOf(read).confounders.find((line) => /Logged intake averaged/.test(line));
+}
+
+test("a mid-window calorie raise does not retroactively underfuel the days before it", () => {
+  maintainProfile();
+  decliningSquat();
+  acceptTarget("2026-05-01", 2200);
+  acceptTarget("2026-06-15", 2900); // the remedy: +700 kcal, ten days before the window ends
+  logIntakeDays(daysFrom("2026-05-10", 20), 2200); // eaten to the bar that was actually in force
+  logIntakeDays(daysFrom("2026-06-15", 3), 2200); // only three days have lived under the new one
+
+  const read = wholePersonTrajectory({ end: WINDOW_END, days: 56 });
+  assert.equal(strengthOf(read).verdict, "worse", "the regression itself is untouched by any of this");
+  assert.equal(
+    intakeConfounder(read),
+    undefined,
+    `twenty days that met their own target are not underfuelling (got ${JSON.stringify(strengthOf(read).confounders)})`
+  );
+  assert.ok(read.unexplained_worse.includes("strength"));
+});
+
+test("intake genuinely under the bar in force still explains the slide", () => {
+  maintainProfile();
+  decliningSquat();
+  acceptTarget("2026-05-01", 2600);
+  logIntakeDays(daysFrom("2026-05-10", 14), 1800);
+
+  const read = wholePersonTrajectory({ end: WINDOW_END, days: 56 });
+  const line = intakeConfounder(read);
+  assert.ok(line, `the deficit is named (got ${JSON.stringify(strengthOf(read).confounders)})`);
+  assert.match(line, /averaged 1800 kcal/);
+  assert.match(line, /target averaging 2600 kcal/);
+  assert.match(line, /across 14 readable days/);
+  assert.ok(!read.unexplained_worse.includes("strength"));
+});
+
+test("days after a raise are judged against the raised bar, and can still come in under it", () => {
+  maintainProfile();
+  decliningSquat();
+  acceptTarget("2026-05-01", 2600);
+  acceptTarget("2026-06-15", 3000);
+  logIntakeDays(daysFrom("2026-06-01", 10), 2600); // met the old bar
+  logIntakeDays(daysFrom("2026-06-15", 10), 2000); // well under the new one
+
+  const read = wholePersonTrajectory({ end: WINDOW_END, days: 56 });
+  const line = intakeConfounder(read);
+  assert.ok(line, `the post-raise shortfall is named (got ${JSON.stringify(strengthOf(read).confounders)})`);
+  // The paired-days average bar, not the end-of-window number and not the first one.
+  assert.match(line, /target averaging 2800 kcal/);
+  assert.match(line, /across 20 readable days/);
+  assert.ok(!read.unexplained_worse.includes("strength"));
+});
+
+// The comparable-exposure counter moved down into a leaf module so this read no
+// longer imports program-state (which imports coach, which imports this file).
+// Every caller and test keeps finding it where it has always been.
+import { comparableLiftDates } from "../dist/repo/program-state.js";
+import { comparableLiftDates as comparableLiftDatesLeaf } from "../dist/repo/lift-comparability.js";
+
+test("comparableLiftDates is one function, reachable from the leaf module and its old home", () => {
+  maintainProfile();
+  const squat = decliningSquat();
+  assert.equal(typeof comparableLiftDates, "function");
+  assert.equal(comparableLiftDates, comparableLiftDatesLeaf, "program-state re-exports it rather than re-implementing");
+  const dates = comparableLiftDates(squat.name, WINDOW_END);
+  assert.equal(dates.size, 6);
+  assert.ok(dates.has("2026-06-15"));
+});
+
+test("one wild bar cannot own the window — a fat-fingered target is not a regime", () => {
+  // `setNutritionTarget` clamps an absurd kcal instead of rejecting it, so a
+  // mis-typed acceptance lands as a real 10000-kcal row. Energy-weighting would
+  // let that single day drag 26 honestly-met days under the fraction and
+  // manufacture a fueling explanation that suppresses the conference. A bar out
+  // of family with the window's median drops from both sides instead.
+  maintainProfile();
+  decliningSquat();
+  acceptTarget("2026-05-01", 2500);
+  acceptTarget("2026-06-20", 10000); // the fat-finger, in force for one day
+  acceptTarget("2026-06-21", 2500); // caught and corrected the next morning
+  // 26 credible days, eaten exactly to the real bar. Without the guard the sums
+  // are 65000 eaten against 72500 prescribed — 0.897, under the fraction — so
+  // this test FIRES the confounder if the wild bar is allowed to stay.
+  logIntakeDays(daysFrom("2026-05-29", 26), 2500);
+
+  const read = wholePersonTrajectory({ end: WINDOW_END, days: 56 });
+  assert.equal(
+    intakeConfounder(read),
+    undefined,
+    `26 days that met the real bar are not underfuelling (got ${JSON.stringify(strengthOf(read).confounders)})`
+  );
+  assert.ok(read.unexplained_worse.includes("strength"), "so the slide stays unexplained and the conference can convene");
+});
+
+test("days logged before any target was ever accepted have no bar to fall short of", () => {
+  maintainProfile();
+  decliningSquat();
+  acceptTarget("2026-06-01", 2600); // the first target this athlete has ever had
+  logIntakeDays(daysFrom("2026-05-05", 20), 1200); // no accepted bar existed on any of these days
+  logIntakeDays(daysFrom("2026-06-01", 5), 1200); // five paired days is under the readable-day floor
+
+  const read = wholePersonTrajectory({ end: WINDOW_END, days: 56 });
+  assert.equal(
+    intakeConfounder(read),
+    undefined,
+    `an unbarred day is not a shortfall (got ${JSON.stringify(strengthOf(read).confounders)})`
+  );
   assert.ok(read.unexplained_worse.includes("strength"));
 });
