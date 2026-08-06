@@ -816,6 +816,140 @@ test("a huge mid-week block never raises the same week's ask, brake or no brake"
     `40 km logged this week must not become this week's anchor (${totalRunKm(wednesday)})`
   );
   assert.match(said(wednesday), /mileage jumped recently/i, "the only mid-week move is the spike brake");
+  // …and the same for the LONG run, which the weekly total alone does not cover. The
+  // demonstrated-longest read is a third anchored input: read at the plan date it made
+  // Monday's own 15 km the floor for the week it was run in, so the long run rose
+  // 11.5 → 15 km on Wednesday morning while the total was being braked DOWN — the
+  // week chasing itself through the mix instead of through the factor.
+  assert.ok(
+    longKm(wednesday) <= longKm(monday),
+    `nor may the long run grow from the week's own runs (Mon ${longKm(monday)} → Wed ${longKm(wednesday)})`
+  );
+});
+
+test("the race ramp cannot raise a week from inside it — a demonstrated long is a ceiling, not a pull", () => {
+  seedRacingRunner(); // the race is 84 days out from this Monday: an exact number of
+  // weeks, so weeks_to_race — the ramp's OTHER live input — holds constant Mon–Sun and
+  // this test is measuring prevLongForRamp alone.
+  const opts = { block: { week_index: 1 } };
+  const monday = repo.weeklyRunPlan(REF, opts);
+  assert.ok(monday.available);
+  assert.match(said(monday), /stepping up a touch more/i, "the race pull is live — the door under test is open");
+
+  // 30 km in one day: three times this athlete's demonstrated longest, so the live
+  // 28-day maximum the ramp reads triples on Tuesday while the anchored one it shares
+  // with prevLong does not move at all.
+  repo.addActivity({ type: "run", duration_min: 180, distance_km: 30, date: REF });
+
+  // raceRamp routes prevLongKm to required_long_km and nowhere else, and that lands in
+  // the mix as an upper bound beside the anchored prevLong. So the live read can only
+  // loosen a bound something anchored already binds tighter. Every remaining mid-week
+  // move belongs to a protective read (the spike brake, a thin trailing window) and
+  // those only ever pull down — hence <= on every morning rather than equality.
+  for (let day = 1; day < 7; day += 1) {
+    const later = repo.weeklyRunPlan(fwd(day), opts);
+    assert.equal(later.week_start, monday.week_start, `still the same week on day ${day + 1}`);
+    assert.ok(
+      totalRunKm(later) <= totalRunKm(monday),
+      `day ${day + 1}: the race pull must not grow the week from its own runs (Mon ${totalRunKm(monday)} → ${totalRunKm(later)})`
+    );
+    assert.ok(
+      longKm(later) <= longKm(monday),
+      `day ${day + 1}: nor may the ramp's long-run ceiling (Mon ${longKm(monday)} → ${longKm(later)})`
+    );
+  }
+});
+
+// ── the mileage-spike brake is DELIBERATELY live ────────────────────────────
+// It is the one input allowed to move a week from inside it, because it is not a
+// volume ledger — it is a safety read of the load as it is right now, and it only
+// ever pulls down. Pinned in both directions so a later round tidying "everything
+// reads the closed week" cannot quietly fold it into the anchor.
+
+test("the spike brake may lower a week from inside it, and nothing mid-week may raise one", () => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  seedRunner({ weeks: 8, perWeek: 3, km: 10 }); // 30 km last week, no spike in sight
+  const opts = { block: { week_index: 1 } };
+  const monday = repo.weeklyRunPlan(REF, opts);
+  assert.match(said(monday), /building conservatively/i, "Monday opens on an ordinary build");
+
+  // 40 km inside three days, against a ~30 km chronic base: the acute window tips past
+  // the ratio and the brake engages from Wednesday.
+  repo.addActivity({ type: "run", duration_min: 90, distance_km: 15, date: REF });
+  repo.addActivity({ type: "run", duration_min: 90, distance_km: 15, date: fwd(1) });
+  repo.addActivity({ type: "run", duration_min: 60, distance_km: 10, date: fwd(2) });
+  const wednesday = repo.weeklyRunPlan(fwd(2), opts);
+
+  assert.equal(wednesday.week_start, monday.week_start, "still the same week");
+  assert.match(said(wednesday), /mileage jumped recently/i, "the brake is live and it fired");
+  assert.ok(
+    totalRunKm(wednesday) < totalRunKm(monday),
+    `the brake really does lower the week (Mon ${totalRunKm(monday)} → Wed ${totalRunKm(wednesday)})`
+  );
+  assert.ok(
+    longKm(wednesday) <= longKm(monday),
+    `and it lowers the long run with it (Mon ${longKm(monday)} → Wed ${longKm(wednesday)})`
+  );
+});
+
+test("a programState injected to save a compute does not hand the coach a different week", () => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  seedRunner({ weeks: 10, perWeek: 3, km: 9 }); // 9 km is the habitual longest
+  const opts = { block: { week_index: 1 } };
+  const monday = repo.weeklyRunPlan(REF, opts);
+  assert.ok(monday.available);
+
+  // 20 km on the Monday of the week under test — more than twice anything demonstrated.
+  repo.addActivity({ type: "run", duration_min: 150, distance_km: 20, date: REF });
+
+  // What getCoachContext() does: hand in the programState it already built for today,
+  // purely so the run-plan view and the adjustments digest don't compute it twice. That
+  // is economy, not a claim about which week the plan describes — so it must not buy a
+  // different long run from the same engine on the same morning. It did: the default
+  // path held the anchored 10.4 km while every coaching surface read 16.3 km.
+  const wednesday = repo.weeklyRunPlan(fwd(2), opts);
+  const wednesdayInjected = repo.weeklyRunPlan(fwd(2), { ...opts, programState: repo.getProgramState(fwd(2)) });
+
+  assert.equal(
+    longKm(wednesdayInjected),
+    longKm(wednesday),
+    `both surfaces describe the same week (default ${longKm(wednesday)} vs injected ${longKm(wednesdayInjected)})`
+  );
+  assert.ok(
+    longKm(wednesdayInjected) <= longKm(monday),
+    `and neither grows it from its own Monday (Mon ${longKm(monday)} → ${longKm(wednesdayInjected)})`
+  );
+});
+
+test("the supporting-arm easy cap reads the closed week too — a big Monday never lifts it", () => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  // Many SHORT runs: a real weekly volume with nothing long ever demonstrated, which is
+  // what puts this athlete on the supporting-constrained arm where recentRunDose bites.
+  for (let wk = 0; wk < 6; wk += 1) {
+    for (const off of [1, 2, 3, 4, 5]) {
+      repo.addActivity({ type: "run", duration_min: 36, distance_km: 6, date: back(wk * 7 + off) });
+    }
+  }
+  const opts = {
+    block: { week_index: 1 },
+    trainingIntent: { priorities: ["strength"], endurance_role: "supporting", endurance_capacity: null, source: "explicit" },
+    recovery: { readiness: { band: "low", fresh: "fresh" }, delta: { hrv: -20, rhr: 4, sleep: -60 }, recovery: {} },
+  };
+  const monday = repo.weeklyRunPlan(REF, opts);
+  assert.ok(monday.available);
+
+  repo.addActivity({ type: "run", duration_min: 90, distance_km: 15, date: REF });
+  const wednesday = repo.weeklyRunPlan(fwd(2), opts);
+
+  // The dose read caps the EASY runs (average_km × 1.1), so read at the plan date one
+  // big Monday lifted Wednesday's easy run and the week's total with it — the same
+  // self-anchoring as the volume halves, arriving through the easy end of the mix.
+  const easyKm = (plan) => plan.runs.find((r) => r.kind_label === "easy")?.target_distance_km ?? null;
+  assert.equal(easyKm(wednesday), easyKm(monday), `the easy cap holds (Mon ${easyKm(monday)} → ${easyKm(wednesday)})`);
+  assert.ok(
+    totalRunKm(wednesday) <= totalRunKm(monday),
+    `and the week with it (Mon ${totalRunKm(monday)} → ${totalRunKm(wednesday)})`
+  );
 });
 
 test("an injected compliance is the anchor exactly as given — the caller owns which week it means", () => {

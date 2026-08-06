@@ -200,6 +200,10 @@ test("renderHybridSequencing protects the legs before a quality run TOMORROW onl
 
 // ── (3) weeklyRunPlan placement awareness ─────────────────────────────────────
 
+// Days apart on the Mon–Sun ring the template actually repeats on: 7 and 1 are
+// neighbours, so a Sunday run is one day from a Saturday one, not six.
+const ringDays = (a, b) => Math.min(Math.abs(a - b), 7 - Math.abs(a - b));
+
 function seedRunner() {
   repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
   repo.setProfile({
@@ -235,7 +239,9 @@ test("weeklyRunPlan shifts the quality run off the day right after a leg day", (
   const quality = plan.runs.find((r) => r.kind_label === "quality");
   assert.ok(quality, "a quality session is still included");
   assert.notEqual(quality.day_number, 2, "the quality run moves off the day after leg day");
-  assert.ok(Math.abs(quality.day_number - 6) >= 2, "no two hard days back-to-back");
+  // Measured on the RING, not the line: the quality slot can now reach Monday and
+  // Sunday, and Sunday is one day from a Saturday long run however |s − 6| reads.
+  assert.ok(ringDays(quality.day_number, 6) >= 2, "no two hard days back-to-back");
   assert.ok(
     plan.rationale.some((r) => /quality run off the day after/i.test(r)),
     "the shift is noted in plain words"

@@ -475,16 +475,85 @@ test("the run engine never hands this read a collision it could have placed arou
     !read.collisions.some((c) => c.kind === "heavy_lower_adjacent_long_run"),
     `the engine's own long run must not be flagged: ${JSON.stringify(read.collisions)}`
   );
-  // KNOWN, and deliberately pinned rather than left silent: only the LONG run's
-  // placement is ring-aware. The QUALITY slot still ranks on a line (qualitySlotFor
-  // measures |s - long| and avoids only the day AFTER a leg day), so on this week it
-  // falls through to slot 2 and sits beside Monday. The week is flagged either way —
-  // before this change it was the long run on 5 beside Saturday — so nothing got
-  // worse; giving quality the same ring preference is a separate lever.
+  // The QUALITY slot now takes the same ring pass, and this week still cannot give it
+  // a clean day. Ring-clear of Monday's and Saturday's legs leaves only {3, 4}, and
+  // both sit within a day of the long run on 4 — so the tiers degrade and quality
+  // lands on 2, beside Monday. The collision is REAL and the read is right to say so.
+  // What the two halves agree on is which weeks are separable, not that a collision
+  // can never be reported; the engine does not get to talk the read out of this one.
   assert.ok(
     read.collisions.some((c) => c.kind === "heavy_lower_adjacent_quality"),
-    `the quality slot is still line-ranked: ${JSON.stringify(read.collisions)}`
+    `an unseparable week is still reported as one: ${JSON.stringify(read.collisions)}`
   );
+});
+
+test("the quality run never lands ON a heavy leg day — the ring pass looks past mid-week", () => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  seedRunner();
+  heavyLowerDay(2, "Heavy legs"); // Tuesday — the quality run's own default slot
+  const plan = repo.weeklyRunPlan(REF, { block: { week_index: 1 } });
+  const quality = plan.runs.find((r) => r.kind_label === "quality");
+  // The old fallback dropped the leg days entirely rather than degrading, so slot 2
+  // passed "not the day AFTER a leg day" and the hard run was prescribed onto the
+  // squat day itself. Thursday is clear on both sides and two days off the long run.
+  assert.equal(quality.day_number, 4, `the quality run must not sit on Tuesday's legs (got ${quality.day_number})`);
+  const read = weekLayoutRead(REF, { runPlan: plan });
+  assert.ok(
+    !read.collisions.some((c) => c.kind === "heavy_lower_adjacent_quality"),
+    `a week this open must read clean: ${JSON.stringify(read.collisions)}`
+  );
+});
+
+test("a mid-week leg day sends the quality run to Monday rather than the day before the legs", () => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  seedRunner();
+  heavyLowerDay(3, "Heavy legs"); // Wednesday — 2 and 4 both touch it on the ring
+  const plan = repo.weeklyRunPlan(REF, { block: { week_index: 1 } });
+  const quality = plan.runs.find((r) => r.kind_label === "quality");
+  const long = plan.runs.find((r) => r.kind_label === "long");
+  assert.equal(long.day_number, 6, "Saturday is clear on both sides here");
+  // Mid-week has nothing clean left: 2 and 4 flank Wednesday, 5 is beside the long run.
+  // Monday is ring-clear and a full two days off Saturday — a slot the old candidate
+  // list [2,3,4,5] could not reach at all, which is why this week used to collide.
+  assert.equal(quality.day_number, 1, `Monday is the ring-clean slot (got ${quality.day_number})`);
+  const read = weekLayoutRead(REF, { runPlan: plan });
+  assert.ok(
+    !read.collisions.some((c) => c.kind === "heavy_lower_adjacent_quality"),
+    `the engine placed around this one: ${JSON.stringify(read.collisions)}`
+  );
+});
+
+// The contract as a PROPERTY, over every lower-day layout there is. A single hand-built
+// week can only ever show that one case works; what the engine actually promises is that
+// it never places the quality run ON a leg day while some legal day without one sits
+// free. The first ring pass held that mid-week and quietly broke it everywhere else —
+// once the ring-clean level missed, days 1 and 7 were unreachable and the ladder fell
+// through to "a leg day is fine", 55 layouts deep, every one flagged by this very read.
+test("the quality run never takes a leg day while a legal free day exists — all 128 layouts", () => {
+  repo.setProfile({ age: 40, sex: "male", primary_discipline: "hybrid", endurance_sport: "running" });
+  seedRunner();
+  const ring = (a, b) => Math.min(Math.abs(a - b), 7 - Math.abs(a - b));
+  const failures = [];
+  for (let mask = 0; mask < 128; mask += 1) {
+    const lower = new Set();
+    for (let i = 0; i < 7; i += 1) if (mask & (1 << i)) lower.add(i + 1);
+    db.exec("DELETE FROM plan_items; DELETE FROM plan_days;");
+    for (let day = 1; day <= 7; day += 1) (lower.has(day) ? heavyLowerDay : upperDay)(day);
+
+    const plan = repo.weeklyRunPlan(REF, { block: { week_index: 1 } });
+    const quality = plan.runs.find((r) => r.kind_label === "quality");
+    const long = plan.runs.find((r) => r.kind_label === "long");
+    if (!quality || !long) continue;
+    const where = `lower={${[...lower]}} quality=${quality.day_number} long=${long.day_number}`;
+
+    if (ring(quality.day_number, long.day_number) < 2) failures.push(`${where}: the two hard days stack`);
+    if (lower.has(quality.day_number)) {
+      // "Legal" is the engine's own hard rule: a day at least two off the long run.
+      const free = [1, 2, 3, 4, 5, 6, 7].filter((s) => ring(s, long.day_number) >= 2 && !lower.has(s));
+      if (free.length) failures.push(`${where}: on a leg day with ${free} free`);
+    }
+  }
+  assert.deepEqual(failures, [], `every layout must place around what it can:\n${failures.join("\n")}`);
 });
 
 test("on a week that genuinely cannot be separated, the read still tells the truth", () => {

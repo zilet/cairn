@@ -315,7 +315,7 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
     const planReply = reconcileChatPlanReply(proposedReply, turn.message, applied, drafts);
     const runReply = reconcileChatRunReply(planReply, turn.message, applied);
     const objectiveReply = reconcileStrengthObjectiveReply(runReply, turn.message, applied);
-    const reply = reconcileChatRevertReply(objectiveReply, applied, refusedReverts);
+    const reply = reconcileChatRevertReply(objectiveReply, applied, refusedReverts, proposedReply);
     const failedAttempts = attempts.filter((a) => !a.ok);
     const meta: {
       applied: typeof applied;
@@ -2019,32 +2019,72 @@ function replyClaimsRevertSuccess(reply: string): boolean {
 // revert_decision the athlete never authorized (the shared question guard) leaves no
 // trace in `applied` — a refused action is not an applied one, and `applied` is the
 // chat bubble's own receipt ledger — so the refused decision ids ride their own
-// channel out of applyChatActions. Either way the decision is still live, so the
-// correction REPLACES the claim rather than decorating it — the same rule
-// reconcileChatRunReply applies to a run write that did not land, for the same
-// reason: an appended note leaves the false sentence sitting at the top of the
-// bubble, and the server's account is the only truthful one. A reply that never
-// claimed the Undo happened is returned untouched.
+// channel out of applyChatActions. Either way the decision is still live, so the false
+// sentence never survives — the same rule reconcileChatRunReply applies to a run write
+// that did not land, for the same reason: leaving it at the top of the bubble makes
+// the server's account argue with itself. A reply that never claimed the Undo happened
+// is returned untouched.
+//
+// This reconciler runs LAST, so what it reads is rarely what the model wrote: one
+// bubble can claim both a plan/run change and an Undo, and the earlier reconcilers
+// either REPLACE the whole prose (their write did not land) or APPEND a receipt under
+// it (their write did). Both shapes used to lose something.
+//
+//   - Replaced: the revert claim went with the discarded prose, and a claim-only guard
+//     reading the rewritten text then said nothing about a decision the athlete asked
+//     to undo and that is still live. So the claim is judged against the ORIGINAL model
+//     reply, and the correction is APPENDED under the receipt — that receipt is
+//     truthful and must not be thrown away.
+//   - Appended: the reply is the model's prose followed by receipts, so replacing the
+//     whole thing deleted a verified plan/objective receipt along with the false
+//     sentence — the athlete's bench really did change and the bubble no longer said
+//     so. Earlier reconcilers only ever append as `${reply.trim()}\n\n${receipt}`, so
+//     whatever follows the original reply IS those receipts: the correction takes the
+//     top and the receipts keep their place below it.
+//
+// Both arms therefore keep every truthful receipt and drop only the false claim.
 export function reconcileChatRevertReply(
   reply: string,
   applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>,
-  refusedReverts: readonly number[]
+  refusedReverts: readonly number[],
+  proposedReply: string
 ): string {
-  if (!replyClaimsRevertSuccess(reply)) return reply;
   const today = localDateISO();
   const failed = applied.filter(
     (entry) => entry.type === "revert_decision" && (recordOrNull(entry.result)?.ok !== true || !!entry.error)
   );
+  // Nothing to correct: a true claim about a revert that really applied passes through.
+  if (!failed.length && !refusedReverts.length) return reply;
+  const claimsNow = replyClaimsRevertSuccess(reply);
+  // Judged on the model's own words, not on the data alone: a reply that never claimed
+  // the Undo happened stays untouched, deliberately.
+  if (!claimsNow && !replyClaimsRevertSuccess(proposedReply)) return reply;
+  let correction: string;
   if (failed.length) {
     const reason = String(
       recordOrNull(failed[0].result)?.error ?? failed[0].error ?? "the decision could not be rolled back"
     );
-    return pickDayVariant(DECISION_REVERT_FAILED_VARIANTS, today, "chat-revert-failed")(reason);
+    correction = pickDayVariant(DECISION_REVERT_FAILED_VARIANTS, today, "chat-revert-failed")(reason);
+  } else {
+    const id = refusedReverts.find((value) => Number.isInteger(value) && value > 0);
+    const how = id ? `undo decision ${id}` : "undo that decision";
+    correction = pickDayVariant(DECISION_REVERT_NOT_AUTHORIZED_VARIANTS, today, "chat-revert-not-authorized")(how);
   }
-  if (!refusedReverts.length) return reply;
-  const id = refusedReverts.find((value) => Number.isInteger(value) && value > 0);
-  const how = id ? `undo decision ${id}` : "undo that decision";
-  return pickDayVariant(DECISION_REVERT_NOT_AUTHORIZED_VARIANTS, today, "chat-revert-not-authorized")(how);
+  if (!claimsNow) return `${reply.trim()}\n\n${correction}`.trim();
+  return withoutLeadingProse(reply, proposedReply, correction);
+}
+
+// The claim is still standing, so the model's prose is still the head of the reply and
+// anything after it was appended by an earlier reconciler. Swap the head for the
+// correction and keep the tail. No tail — or a reply whose head is no longer the
+// model's (no receipt variant reads as a revert claim, so a standing claim means the
+// prose survived and this cannot happen today) — collapses to a plain replace.
+function withoutLeadingProse(reply: string, proposedReply: string, correction: string): string {
+  const head = proposedReply.trim();
+  const body = reply.trim();
+  if (!head || !body.startsWith(head)) return correction;
+  const tail = body.slice(head.length).trim();
+  return tail ? `${correction}\n\n${tail}` : correction;
 }
 
 function logPhotoFood(actions: ChatAction[], turn: any): { id: number; [key: string]: unknown } | null {

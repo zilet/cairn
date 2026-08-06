@@ -6,6 +6,7 @@ import {
   composeDailySession,
   draftCoachProposal,
   evolveProgram,
+  composeWeek,
   draftMealPlan,
   swapMealAgentic,
   generateRecipe,
@@ -395,6 +396,12 @@ async function processAgentJob(id: number): Promise<void> {
       }
       case "evolve_program": {
         result = await evolveProgram(agent, input.instruction != null ? String(input.instruction) : undefined, hooks);
+        chosen = result?.agent ?? null;
+        if (result?.proposal?.id) ref = { ref_table: "plan_proposals", ref_id: result.proposal.id };
+        break;
+      }
+      case "compose_week": {
+        result = await composeWeek(agent, input.instruction != null ? String(input.instruction) : undefined, hooks);
         chosen = result?.agent ?? null;
         if (result?.proposal?.id) ref = { ref_table: "plan_proposals", ref_id: result.proposal.id };
         break;

@@ -342,8 +342,7 @@ test("a failed run write replaces model prose that claimed success", () => {
     },
   ]);
   assert.doesNotMatch(failed, /I've updated/);
-  assert.match(failed, /not live/);
-  assert.match(failed, /unchanged/);
+  assert.match(failed, /this week's runs are unchanged/i);
   assert.match(failed, /didn't say which one/);
 });
 
@@ -587,7 +586,7 @@ test("a run day that has already gone by this week is refused, not rewritten", (
   assert.equal(planRuns(pastDay)[0].target_distance_km, 5, "what the week prescribed is left as it was");
   const reply = reconcileChatRunReply("I've moved that run out to 8k.", ASK, out.applied);
   assert.doesNotMatch(reply, /I've moved/);
-  assert.match(reply, /not live/);
+  assert.match(reply, /this week's runs are unchanged/i);
   assert.match(reply, /already went by/);
 });
 

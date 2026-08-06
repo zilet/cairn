@@ -9,6 +9,7 @@
 
 import * as repo from "./repo.js";
 import { addDaysISO, localDateISO } from "./repo/shared.js";
+import { pickDayVariant } from "./repo/brain/day-read-rules.js";
 import { trainingBackstopSignature } from "./repo/training-cache.js";
 import { sessionNoteSuggestsFatigue, sessionNoteSuggestsRapidFade } from "./repo/training-fatigue.js";
 import { AgentFallbackError, agentInfo, listAgentModels, loadAgents, type FallbackResult } from "./agents.js";
@@ -16,6 +17,7 @@ import { runChosen, runChosenStreaming, runChosenWithCoachReads } from "./runCho
 import {
   buildCoachPrompt,
   buildProgramEvolutionPrompt,
+  buildWeekComposePrompt,
   buildMealPlanPrompt,
   buildMealSwapPrompt,
   buildRecipePrompt,
@@ -766,6 +768,132 @@ export async function evolveProgram(
     proposal,
     state,
     autonomy,
+    ok: !!result.parsed,
+    agent: chosen,
+    tried,
+    agent_status: agentStatusFor({ ok: !!result.parsed, agent: chosen, tried }),
+    exit_code: result.code,
+    stderr: (result.stderr || "").slice(0, 800),
+  };
+}
+
+// ---------- the FIRST week (blank slate) ----------
+// The stored `instruction` for a composed first week, as a PREFIX contract — the same
+// shape RECOVERY_WEEK_INSTRUCTION_PREFIX uses (src/repo/profile.ts), and for the same
+// reason: both surfaces invite the athlete to send their own instruction, so a marker
+// that only survives an EMPTY one marks nothing on the calls that actually happen.
+// The athlete's words are kept and appended, so `startsWith` is the stable key any
+// future supersede/dedup pass would use (cf. supersedeAutoEvolutionDrafts, which can
+// match on equality only because the scheduler is its sole caller).
+// Deliberately readable prose, not a code: `instruction` is the athlete-facing
+// fallback for a decision's `reason` when the agent writes no rationale
+// (recordAppliedProposalDecision, src/repo/profile.ts), so a machine token here would
+// surface as coaching text.
+export const COMPOSE_WEEK_INSTRUCTION = "compose the first training week";
+
+// What the athlete reads when they ask for a first week and already have one. It is a
+// redirect, not a refusal — so it rotates like every other deterministic sentence
+// (src/repo/brain/day-read-rules.ts) instead of printing one literal forever, and it
+// names the path that CAN change a running week. Exported so the set itself is
+// testable (add a PHRASING here; never call one by name).
+export const WEEK_ALREADY_BUILT_VARIANTS = [
+  "You already have a training week — this one only writes the first. To change what's there, evolve it.",
+  "There's a week on your plan already. Composing starts from nothing; evolving it is how it changes from here.",
+  "This builds a first week, and yours already exists. Evolve the week you're running instead of starting over.",
+  "Your week is already written. From here it changes by evolving, not by composing a new one.",
+] as const;
+
+/**
+ * Does a real training week already exist? Deliberately the SAME predicate the
+ * scheduler uses to decide there is "no plan to evolve yet" (src/scheduler.ts) — a
+ * plan day carrying items. A stray empty shell day is not a week, and treating one as
+ * a plan would leave the athlete with the blank page and no way out of it: every other
+ * producer would still no-op, and this op would refuse.
+ */
+function trainingWeekExists(): boolean {
+  try {
+    return (repo.getPlan() as any[]).some((day) => Array.isArray(day?.items) && day.items.length > 0);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Compose the athlete's FIRST training week — strength and endurance in one Mon-Sun
+ * template — for someone who has no plan at all.
+ *
+ * This is the blank-slate counterpart to evolveProgram, and the ONLY producer that can
+ * write a week from nothing: buildProgressionProposal, buildRunPlanProposal and the
+ * scheduler's weekly evolution all require a plan to already exist and degrade to a
+ * calm no-op without one. It runs ONE agent over buildWeekComposePrompt, persists the
+ * result as a `draft` plan_proposals row carrying a `days` restructure, and hands that
+ * draft to the shared autonomy policy — which classifies a whole-week `days` payload as
+ * structural, so it ANNOUNCES first and lands at a natural boundary with one-tap Undo.
+ * The op itself never applies anything; an agent never applies its own change.
+ *
+ * GUARD: this is the first week only. With a week already on the plan it returns the
+ * designed { ok:false, error } at 200 pointing at the evolve path, and writes nothing.
+ */
+export async function composeWeek(agent: string | undefined, instruction: string | undefined, hooks?: OpHooks) {
+  if (trainingWeekExists()) {
+    return {
+      proposal: null,
+      autonomy: null,
+      ok: false as const,
+      error: pickDayVariant(WEEK_ALREADY_BUILT_VARIANTS, localDateISO(), "compose-week-already-built"),
+      agent: null,
+      tried: [] as { agent: string; error: string }[],
+    };
+  }
+  hooks?.onPhase?.("reading where you're starting from");
+  const prompt = buildWeekComposePrompt(instruction);
+  hooks?.onPhase?.("composing your first week");
+  let run: FallbackResult;
+  try {
+    run = await runChosen(agent, prompt, {
+      op: "compose_week",
+      signal: hooks?.signal,
+      acceptParsed: isPlanProposalResult,
+      schema: PLAN_PROPOSAL_SCHEMA,
+    });
+  } catch (error) {
+    const failure = agentFailure(error, hooks);
+    return {
+      proposal: null,
+      autonomy: null,
+      ok: false as const,
+      ...failure,
+      agent_status: agentStatusFor({ ok: false, ...failure }),
+      exit_code: null,
+      stderr: "",
+    };
+  }
+  const { agent: chosen, result, tried } = run;
+  // The marker leads and the athlete's own words follow, so a composed week is
+  // recognizable by prefix whether or not they said anything (see the constant).
+  const asked = instruction?.trim();
+  const proposal = repo.createProposal(
+    chosen,
+    asked ? `${COMPOSE_WEEK_INSTRUCTION} — ${asked}` : COMPOSE_WEEK_INSTRUCTION,
+    result.raw,
+    result.parsed
+  );
+  // Only a `days` payload is a WEEK. A first-week reply that came back as `changes` or
+  // `cardio` is an edit to a plan that does not exist — there is nothing for it to land
+  // on, so it stays a plain reviewable draft rather than being pushed at an empty plan.
+  const composedDays = Array.isArray((result.parsed as any)?.days) ? (result.parsed as any).days.length : 0;
+  let autonomy: any = null;
+  if (proposal?.id != null && composedDays > 0 && hasPlanProposalActions(result.parsed)) {
+    try {
+      autonomy = applyProposalWithAutonomy(Number(proposal.id));
+    } catch {
+      autonomy = null;
+    }
+  }
+  return {
+    proposal: proposal?.id != null ? repo.getProposal(Number(proposal.id)) : proposal,
+    autonomy,
+    days: composedDays,
     ok: !!result.parsed,
     agent: chosen,
     tried,

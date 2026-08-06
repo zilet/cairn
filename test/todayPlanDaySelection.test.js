@@ -3,7 +3,14 @@ import assert from "node:assert/strict";
 import { db, repo, resetTables } from "./_seed.js";
 import { publicTodayPlanDay } from "../dist/routes/today.js";
 
-const REF = "2026-07-15";
+// Anchored to the most recent Wednesday rather than a literal: writeDayRead keeps a
+// rolling 21-day retention window (day-read.ts), so a fixed REF ages out and the
+// cached-read tests below silently start exercising the cache-miss path instead.
+const REF = (() => {
+  const d = new Date();
+  d.setDate(d.getDate() - ((d.getDay() + 4) % 7));
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+})();
 const before = (days) => new Date(new Date(REF + "T00:00:00Z").getTime() - days * 864e5).toISOString().slice(0, 10);
 
 beforeEach(() => {

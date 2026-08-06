@@ -79,8 +79,9 @@ export const ROUTABLE_TASKS = [
   //     calls (see runChosen.ts taskForOp) — accuracy-critical multi-agent review.
   //   - enrich: the background activity/food/garmin-strength/exercise queue —
   //     high-volume, rotation by default.
-  //   - proposal: a coaching-cadence draft or a program-evolution draft (see
-  //     taskForOp) — both shape a plan change, rotation by default.
+  //   - proposal: a coaching-cadence draft, a program-evolution draft, or a
+  //     blank-slate first-week composition (see taskForOp) — all shape a plan
+  //     change, rotation by default.
   "health",
   "brain_review",
   "enrich",
@@ -144,15 +145,18 @@ export const TASK_POLICY: Record<RoutableTask, "accuracy" | "rotation"> = {
 //   - the case-conference conductor (`case_conference`) and its per-domain
 //     specialist calls (`conference_<domain>`, one per specialist) both route as
 //     the single "brain_review" task.
-//   - a program-evolution draft (`evolve_program`) shares the "proposal" task with
-//     the ordinary coach-draft op (`proposal`) — both shape a plan change.
+//   - a program-evolution draft (`evolve_program`) and a blank-slate first-week
+//     composition (`compose_week`) share the "proposal" task with the ordinary
+//     coach-draft op (`proposal`) — all three shape a plan change, and the composer
+//     is the most consequential of them (it writes the whole week), so it inherits
+//     the same deep/xhigh execution profile rather than declaring a thinner one.
 //   - marker reconciliation (`marker_reconcile`) shares the "health" task — it's
 //     the same accuracy-critical lab-data domain as document ingestion.
 // Extending this table is the only thing needed when a future op should share an
 // existing class instead of inventing a new one.
 export function taskForOp(op: string): string {
   if (op === "case_conference" || op.startsWith("conference_")) return "brain_review";
-  if (op === "evolve_program") return "proposal";
+  if (op === "evolve_program" || op === "compose_week") return "proposal";
   if (op === "marker_reconcile") return "health";
   return op;
 }

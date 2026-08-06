@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**254 tools.**
+**255 tools.**
 
 | Tool | Description |
 |---|---|
@@ -26,6 +26,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `cancel_agent_job` | Stop a queued or running coaching job. Safe no-op after it is already terminal. |
 | `check_for_update` | Force an immediate check against the GitHub Releases API for a newer Cairn version, then return the fresh status. Use when you want to refresh now rather than wait for the daily background check. Never throws — a network/rate-limit failure is reported in the status `error` field. |
 | `compose_daily_session` | Queue a bounded agent composition for today: the server first decides the deterministic envelope (kind, muscle allow/exclude, caps, candidates), then the agent composes ONE session strictly inside it — every item is verified and clamped server-side, and absent/invalid output degrades to a deterministic session. Returns a job immediately; poll get_agent_job. Preview-only; accept via prepare_daily_session (source agent_suggest) with the job id. Never mutates the weekly plan. |
+| `compose_week` | Compose the athlete's FIRST training week when they have NO plan at all — strength and endurance in one Mon–Sun template, placed so the week composes rather than collides (the template repeats, so Sunday is next to Monday: no two hard days back to back across that seam, long run late, quality mid-week). This is the only producer that can write a week from nothing; apply_progression, apply_run_plan and evolve_program all require an existing plan and no-op without one. Emits a DRAFT `days` restructure and routes it through the autonomy layer, which treats a whole-week restructure as structural — it announces first and lands at a natural boundary with one-tap Undo; under 'review_everything' it stays a DRAFT to review then apply_proposal. Never applies anything itself. Returns { ok:true, proposal, autonomy, days } or the designed { ok:false, error } at 200 — including when a week already exists, where the error points at evolve_program. |
 | `confirm_goal_checkin` | Restart the gentle 'is this still your goal?' clock (Era 2): records that the user confirmed (or changed) their goal, so the quiet check-in stays away for ~3 months. You-drive — changes nothing else. |
 | `confirm_imaging_study` | Confirm the current extraction as reviewed by the user. Idempotent and preserves the original confirmation timestamp. |
 | `consolidate_memory` | Queue a quiet memory consolidation: merge near-duplicates, supersede contradictions, and promote recurring observations. Returns a job immediately; poll get_agent_job. Marks, never hard-deletes. |

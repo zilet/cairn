@@ -9,7 +9,7 @@ Health's short-lived pairing exchange is public and passes through the instance-
 when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**309 routes** across 108 groups.
+**310 routes** across 108 groups.
 
 ## `/activities`
 
@@ -560,6 +560,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | POST | `/api/program/blocks/:id/complete` |  |
 | GET | `/api/program/blocks/active` |  |
 | POST | `/api/program/blocks/ensure` | Ensure ONE active periodization block exists (auto-create a sensible default aligned to the user's goal when none is running; idempotent — never resets an in-progress block). Keeps periodization live without waiting for the scheduler's weekly slot. |
+| POST | `/api/program/compose-week` | Compose the FIRST training week for an athlete who has no plan at all — the one producer that can write a week from nothing (progression, the run engine and the weekly evolution all require a plan and no-op without one). Emits a DRAFT `days` restructure covering strength AND endurance, which the autonomy layer treats as structural: it announces first and lands at a natural boundary with one-tap Undo. Same durable-background-job shape as /program/evolve. With a week already on the plan composeWeek returns the designed { ok:false, error } at 200 pointing at evolve. |
 | GET | `/api/program/equipment` | The persisted equipment/preference profile (free text) that RANKS variation suggestions by what the user can actually load. GET reads it (+ the parsed equipment types); PUT replaces it (null/'' clears). A plain profile field. |
 | PUT | `/api/program/equipment` |  |
 | POST | `/api/program/evolve` | Adaptive program evolution: read the program-state, draft a plan EVOLUTION (progress / deload / rotate-a-variation / periodize), then route it through the autonomy layer. Under lead_mode='lead' a bounded, reversible evolution quiet-applies at its natural boundary and a structural restructure announces first (one-tap Undo, surprise budget honored); under 'review_everything' it parks as a DRAFT proposal for review — same propose→apply path as /agent/run. The `autonomy` field says which. |

@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { draftCoachProposal, evolveProgram } from "../coachOps.js";
+import { composeWeek, draftCoachProposal, evolveProgram } from "../coachOps.js";
 import { localToday } from "../dayread.js";
 import {
   applyProposalWithAutonomy,
@@ -74,6 +74,23 @@ programRouter.post("/program/evolve", async (req, res) => {
   if (backgroundOp(res, "evolve_program", { agent: agent ?? null, instruction: instruction ?? "" }, agent)) return;
   try {
     res.json(await evolveProgram(agent, instruction));
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Compose the FIRST training week for an athlete who has no plan at all — the one
+// producer that can write a week from nothing (progression, the run engine and the
+// weekly evolution all require a plan and no-op without one). Emits a DRAFT `days`
+// restructure covering strength AND endurance, which the autonomy layer treats as
+// structural: it announces first and lands at a natural boundary with one-tap Undo.
+// Same durable-background-job shape as /program/evolve. With a week already on the
+// plan composeWeek returns the designed { ok:false, error } at 200 pointing at evolve.
+programRouter.post("/program/compose-week", async (req, res) => {
+  const { agent, instruction } = req.body ?? {};
+  if (backgroundOp(res, "compose_week", { agent: agent ?? null, instruction: instruction ?? "" }, agent)) return;
+  try {
+    res.json(await composeWeek(agent, instruction));
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }

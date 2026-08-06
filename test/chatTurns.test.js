@@ -33,6 +33,8 @@ import {
   PLAN_WRITE_UNVERIFIED_VARIANTS,
   reconcileChatPlanReply,
   reconcileChatRevertReply,
+  reconcileChatRunReply,
+  reconcileStrengthObjectiveReply,
   RESTRUCTURE_DRAFT_VARIANTS,
   RESTRUCTURE_HELD_FOR_REVIEW_VARIANTS,
   RESTRUCTURE_NOT_SCHEDULED_VARIANTS,
@@ -1312,21 +1314,25 @@ test("a refused revert corrects model prose that claimed the Undo happened", () 
   assert.deepEqual(out.refusedReverts, [announced.id], "the refused id rides its own channel to the reconciler");
   assert.equal(repo.getBrainDecision(announced.id).status, "announced", "the decision is still live");
 
-  const corrected = reconcileChatRevertReply("Done, I've put that back.", out.applied, out.refusedReverts);
+  const claim = "Done, I've put that back.";
+  const corrected = reconcileChatRevertReply(claim, out.applied, out.refusedReverts, claim);
   assert.match(corrected, /nothing was reverted/i, "the invariant fact survives the rotation");
   assert.match(corrected, new RegExp(`undo decision ${announced.id}`, "i"), "the athlete is told how to authorize");
   // Replaced, not decorated — the same rule reconcileChatRunReply applies to a run
   // write that did not land, so the false sentence does not survive at the top.
   assert.doesNotMatch(corrected, /put that back\./, "the false success claim does not stand");
+  // Nothing else in the bubble to keep: an untouched reply is all model prose, so the
+  // receipt-preserving arm has no tail and collapses to that plain replace.
+  assert.equal(corrected.includes("\n\n"), false);
 
   // Detection is claim-only, exactly as reconcileChatRunReply's is: an honest reply
   // shares every verb with the false one and must not be corrected twice.
   const honest = "I didn't undo anything — nothing was reverted, and that decision is still standing.";
-  assert.equal(reconcileChatRevertReply(honest, out.applied, out.refusedReverts), honest, "no double-correction");
+  assert.equal(reconcileChatRevertReply(honest, out.applied, out.refusedReverts, honest), honest, "no double-correction");
   const advice = "That block change is meant to spread your pulling volume across the week.";
-  assert.equal(reconcileChatRevertReply(advice, out.applied, out.refusedReverts), advice);
+  assert.equal(reconcileChatRevertReply(advice, out.applied, out.refusedReverts, advice), advice);
   // And the correction itself is not a claim, so a second pass is a no-op.
-  assert.equal(reconcileChatRevertReply(corrected, out.applied, out.refusedReverts), corrected);
+  assert.equal(reconcileChatRevertReply(corrected, out.applied, out.refusedReverts, corrected), corrected);
 });
 
 test("a legitimate explicit revert reverts and adds no correction", () => {
@@ -1356,7 +1362,7 @@ test("a legitimate explicit revert reverts and adds no correction", () => {
 
   const reply = "Done, I've put that back — squats are at 190 again.";
   assert.equal(
-    reconcileChatRevertReply(reply, undone.applied, undone.refusedReverts),
+    reconcileChatRevertReply(reply, undone.applied, undone.refusedReverts, reply),
     reply,
     "a real revert leaves the model's receipt exactly as written"
   );
@@ -1385,9 +1391,254 @@ test("a revert the server refused is corrected with its own reason", () => {
   assert.equal(out.applied[0].result.ok, false);
   assert.deepEqual(out.refusedReverts, []);
   assert.equal(repo.getBrainDecision(locked.id).status, "applied");
-  const corrected = reconcileChatRevertReply("That's been rolled back.", out.applied, out.refusedReverts);
+  const claim = "That's been rolled back.";
+  const corrected = reconcileChatRevertReply(claim, out.applied, out.refusedReverts, claim);
   assert.match(corrected, /nothing was reverted/i);
   assert.doesNotMatch(corrected, /undo decision/i, "a decision the server won't roll back gets no fake command");
+});
+
+// The reconcilers run in one fixed order and reconcileChatRevertReply runs LAST, so
+// what it reads is not what the model wrote: the plan/run/objective reconcilers REPLACE
+// the whole prose when their own write did not land, and APPEND a receipt under it when
+// it did. One bubble claiming both a plan change and an Undo lost something either way
+// — the erased claim left a live decision unmentioned, and the wholesale replace threw
+// away a verified receipt for a change the athlete really did get. The chain, in real
+// order, is what these tests exercise.
+const reconcileChatReplyChain = (proposedReply, message, out) => {
+  const planReply = reconcileChatPlanReply(proposedReply, message, out.applied, out.drafts);
+  const runReply = reconcileChatRunReply(planReply, message, out.applied);
+  const objectiveReply = reconcileStrengthObjectiveReply(runReply, message, out.applied);
+  return {
+    planReply,
+    reply: reconcileChatRevertReply(objectiveReply, out.applied, out.refusedReverts, proposedReply),
+  };
+};
+
+const announcedStructureDecision = (refKey) =>
+  repo.recordDecision({
+    effective_date: localDateISO(),
+    kind: "training_structure",
+    domain: "training",
+    summary: "Move the next block to upper/lower",
+    rationale: "Match the current recovery envelope.",
+    source: "test",
+    source_ref_type: "plan_proposal",
+    source_ref_key: refKey,
+    status: "announced",
+    autonomy_tier: "announce",
+    risk_class: "moderate",
+    reversible: true,
+    action: { proposal_id: Number(refKey) },
+  }).decision;
+
+test("a plan correction that erases the revert claim still tells the athlete the Undo was refused", () => {
+  repo.setSettings({ lead_mode: "review_everything" });
+  repo.savePlanDay(1, "Push", "chest", [
+    { exercise: "Barbell Bench Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 105 },
+  ]);
+  const announced = announcedStructureDecision("91");
+  // A leading question: the shared guard reads it as conversation, so the revert is
+  // refused while the plan_update still reaches autonomy (which holds it for review).
+  const message = "Will you drop my bench to two sets and undo that?";
+  const out = applyChatActions(
+    {
+      actions: [
+        { type: "plan_update", changes: [{ day_number: 1, exercise: "Barbell Bench Press", sets: 2 }] },
+        { type: "revert_decision", id: announced.id, reason: "model guessed veto" },
+      ],
+    },
+    { agent: "stub", message }
+  );
+  assert.equal(out.applied.filter((entry) => entry.type === "plan_update")[0].result.verified, false);
+  assert.deepEqual(out.refusedReverts, [announced.id], "the refused id rides its own channel");
+  assert.equal(repo.getBrainDecision(announced.id).status, "announced", "the decision is still live");
+  assert.equal(repo.getPlanDay(1).items[0].sets, 3, "and the plan write did not land either");
+
+  const proposedReply = "I've updated your plan to two bench sets, and I've put that back.";
+  const { planReply, reply } = reconcileChatReplyChain(proposedReply, message, out);
+  // The precondition this test exists for: the plan receipt erased the revert claim.
+  assert.doesNotMatch(planReply, /put that back/i, "the plan reconciler replaced the model's whole prose");
+
+  assert.match(reply, /your current plan is unchanged/i, "the truthful plan receipt survives");
+  assert.match(reply, /nothing was reverted/i, "and the refused Undo is no longer silent");
+  assert.match(reply, new RegExp(`undo decision ${announced.id}`, "i"), "the athlete is told how to authorize");
+  assert.doesNotMatch(reply, /I've updated your plan/i, "neither false sentence stands");
+  assert.doesNotMatch(reply, /I've put that back/i);
+  // Appended, not substituted: the receipt above the correction is true, so replacing
+  // it would trade one silence for another.
+  assert.ok(
+    reply.search(/your current plan is unchanged/i) < reply.search(/nothing was reverted/i),
+    "the correction lands under the plan receipt"
+  );
+
+  // Judged against the rewritten text instead of the model's own words — which is what
+  // the guard did before it took the original reply — the refusal disappears. That is
+  // the blind spot, and why the fourth argument is required rather than defaulted.
+  assert.equal(reconcileChatRevertReply(planReply, out.applied, out.refusedReverts, planReply), planReply);
+});
+
+test("a failed revert survives a plan correction that erased its claim", () => {
+  repo.setSettings({ lead_mode: "review_everything" });
+  repo.savePlanDay(1, "Push", "chest", [
+    { exercise: "Barbell Bench Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 105 },
+  ]);
+  const locked = repo.recordDecision({
+    effective_date: localDateISO(),
+    kind: "health_directive",
+    domain: "health",
+    summary: "Keep the clinical observation immutable.",
+    rationale: "It is evidence, not a reversible plan write.",
+    source: "test",
+    source_ref_type: "directive",
+    source_ref_key: "locked-9",
+    status: "applied",
+    autonomy_tier: "ask",
+    risk_class: "clinical",
+    reversible: false,
+    action: null,
+  }).decision;
+  const message = `Undo decision #${locked.id} and set my bench to two sets.`;
+  const out = applyChatActions(
+    {
+      actions: [
+        { type: "plan_update", changes: [{ day_number: 1, exercise: "Barbell Bench Press", sets: 2 }] },
+        { type: "revert_decision", id: locked.id, reason: "explicit request" },
+      ],
+    },
+    { agent: "stub", message }
+  );
+  assert.equal(out.applied.find((entry) => entry.type === "revert_decision").result.ok, false);
+  assert.deepEqual(out.refusedReverts, [], "an authorized-but-refused revert is an APPLIED entry");
+  assert.equal(repo.getBrainDecision(locked.id).status, "applied");
+
+  const proposedReply = "I've updated your plan to two bench sets, and I've put that back.";
+  const { planReply, reply } = reconcileChatReplyChain(proposedReply, message, out);
+  assert.doesNotMatch(planReply, /put that back/i);
+  assert.match(reply, /your current plan is unchanged/i);
+  assert.match(reply, /nothing was reverted/i, "the failure variant is appended, not swallowed");
+  assert.doesNotMatch(reply, /undo decision/i, "a decision the server won't roll back gets no fake command");
+});
+
+test("a revert claim the earlier reconcilers left standing is still replaced, never doubled", () => {
+  repo.setSettings({ lead_mode: "review_everything" });
+  repo.savePlanDay(1, "Push", "chest", [
+    { exercise: "Barbell Bench Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 105 },
+  ]);
+  const announced = announcedStructureDecision("92");
+  const message = "Will you drop my bench to two sets and undo that?";
+  const out = applyChatActions(
+    {
+      actions: [
+        { type: "plan_update", changes: [{ day_number: 1, exercise: "Barbell Bench Press", sets: 2 }] },
+        { type: "revert_decision", id: announced.id, reason: "model guessed veto" },
+      ],
+    },
+    { agent: "stub", message }
+  );
+  assert.deepEqual(out.refusedReverts, [announced.id]);
+
+  // No plan-success claim and no explicit plan intent, so the plan reconciler leaves
+  // the prose alone — the revert claim is still standing when the guard reads it.
+  const proposedReply = "I've put that back, so your block is as it was.";
+  const { planReply, reply } = reconcileChatReplyChain(proposedReply, message, out);
+  assert.equal(planReply, proposedReply, "the plan reconciler stayed silent on advice-shaped prose");
+  assert.doesNotMatch(reply, /I've put that back/i, "the false sentence does not survive at the top");
+  assert.equal(
+    (reply.match(/nothing was reverted/gi) ?? []).length,
+    1,
+    "replaced, not appended — the correction is not doubled"
+  );
+  assert.match(reply, new RegExp(`undo decision ${announced.id}`, "i"));
+});
+
+// The mirror of the erased-claim case, and the one that actually cost the athlete
+// something: the plan write LANDED, so its verified receipt was appended under the
+// model's prose — and replacing the whole bubble deleted that receipt along with the
+// false Undo sentence. The bench really was two sets and the chat never said so.
+test("a verified plan receipt survives the correction that removes the false Undo claim", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  repo.savePlanDay(1, "Push", "chest", [
+    { exercise: "Barbell Bench Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 105 },
+  ]);
+  const announced = announcedStructureDecision("93");
+  // The athlete asked for the plan edit and said nothing about an Undo; the model
+  // invented the revert, so the gate refuses it while the plan change goes through.
+  const message = "Drop my bench to two sets.";
+  const out = applyChatActions(
+    {
+      actions: [
+        { type: "plan_update", changes: [{ day_number: 1, exercise: "Barbell Bench Press", sets: 2 }] },
+        { type: "revert_decision", id: announced.id, reason: "model guessed veto" },
+      ],
+    },
+    { agent: "stub", message }
+  );
+  assert.equal(out.applied.find((entry) => entry.type === "plan_update").result.verified, true);
+  assert.deepEqual(out.refusedReverts, [announced.id]);
+  assert.equal(repo.getPlanDay(1).items[0].sets, 2, "the plan change is live");
+
+  const proposedReply = "I've updated your plan, and I've put that back.";
+  const { planReply, reply } = reconcileChatReplyChain(proposedReply, message, out);
+  // The precondition: the plan reconciler APPENDED, so the claim is still standing.
+  assert.match(planReply, /Saved and verified/i);
+  assert.match(planReply, /put that back/i);
+
+  assert.match(reply, /Saved and verified/i, "the receipt for a change that really landed is kept");
+  assert.match(reply, /nothing was reverted/i);
+  assert.match(reply, new RegExp(`undo decision ${announced.id}`, "i"));
+  assert.doesNotMatch(reply, /I've put that back/i, "and only the false sentence is dropped");
+  assert.doesNotMatch(reply, /I've updated your plan/i);
+  assert.ok(
+    reply.search(/nothing was reverted/i) < reply.search(/Saved and verified/i),
+    "the correction takes the top; the receipts keep their place below it"
+  );
+});
+
+test("a failed revert keeps the verified plan receipt it was riding with", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  repo.savePlanDay(1, "Push", "chest", [
+    { exercise: "Barbell Bench Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 105 },
+  ]);
+  const locked = repo.recordDecision({
+    effective_date: localDateISO(),
+    kind: "health_directive",
+    domain: "health",
+    summary: "Keep the clinical observation immutable.",
+    rationale: "It is evidence, not a reversible plan write.",
+    source: "test",
+    source_ref_type: "directive",
+    source_ref_key: "locked-93",
+    status: "applied",
+    autonomy_tier: "ask",
+    risk_class: "clinical",
+    reversible: false,
+    action: null,
+  }).decision;
+  // Named outright, so the revert is AUTHORIZED and reaches the server, which refuses
+  // it — the failed branch, where the test above exercises the refused-at-the-gate one.
+  const message = `Undo decision #${locked.id}. Drop my bench to 2 sets.`;
+  const out = applyChatActions(
+    {
+      actions: [
+        { type: "plan_update", changes: [{ day_number: 1, exercise: "Barbell Bench Press", sets: 2 }] },
+        { type: "revert_decision", id: locked.id, reason: "explicit request" },
+      ],
+    },
+    { agent: "stub", message }
+  );
+  assert.equal(out.applied.find((entry) => entry.type === "plan_update").result.verified, true);
+  assert.equal(out.applied.find((entry) => entry.type === "revert_decision").result.ok, false);
+  assert.deepEqual(out.refusedReverts, []);
+  assert.equal(repo.getPlanDay(1).items[0].sets, 2);
+
+  const proposedReply = "I've put that back for you.";
+  const { planReply, reply } = reconcileChatReplyChain(proposedReply, message, out);
+  assert.match(planReply, /Saved and verified/i);
+
+  assert.match(reply, /Saved and verified/i, "the plan receipt survives the failed-revert correction too");
+  assert.match(reply, /nothing was reverted/i);
+  assert.doesNotMatch(reply, /put that back/i);
+  assert.doesNotMatch(reply, /undo decision/i, "a decision the server won't roll back gets no fake command");
 });
 
 test("explicit cancel and rollback commands retain exact server-owned Undo behavior", () => {

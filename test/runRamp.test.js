@@ -53,6 +53,14 @@ const raceGoal = (over = {}) => ({
 const planOpts = (over = {}) => ({
   goal: raceGoal(over.goal),
   compliance: { actual_km: 17, prescribed_km: 14, ...over.compliance },
+  // This file drives weeklyRunPlan entirely on injected inputs — the activities table
+  // is wiped before every test — so the programState below IS the week, not an echo of
+  // something on disk. Saying so explicitly is what lets the injected longest_km_4wk be
+  // honoured: an injected state on its own now reads as economy (coach.ts hands one in
+  // purely to avoid computing it twice) and yields to the anchored read, and only a
+  // caller that also NAMES its week keeps the last word. The value is the default
+  // anchor for this REF — the Sunday before its Monday — so nothing else moves.
+  volumeAnchorDate: "2026-08-02",
   programState: {
     endurance: { sport: "run", longest_km_4wk: 9.1, has_quality: false, status: "building" },
     mesocycle: { phase: "accumulation" },

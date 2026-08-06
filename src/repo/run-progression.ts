@@ -799,11 +799,18 @@ export function weeklyRunPlan(
     // self-anchoring the default exists to prevent (the week counts its own runs as
     // base fitness and the prescription grows as it is run).
     //
-    // It governs BOTH halves of the anchor: the trailing seven days ending here, and
-    // the logged actuals of the Mon–Sun week this date falls in. (The two must name the
-    // same week, or the max() between them compares nothing.) The actuals half yields
-    // to an injected `compliance` — a caller that hands one in has already said which
-    // week it means; the one that does, runComplianceRead, hands in last week's.
+    // It governs the whole ANCHORED FAMILY — every read that says what the week is
+    // built from: the trailing seven days ending here, the logged actuals of the Mon–Sun
+    // week this date falls in, the 28-day longest run that floors the long run, and the
+    // 28-day dose that caps the easy runs. (They must all name the SAME week, or the
+    // max() between the first two compares nothing and the rest describe another week.)
+    // The actuals half yields to an injected `compliance`, and the longest to an
+    // injected `programState` PROVIDED this date is passed too — a caller that hands in
+    // both has said which week it means; the one that does, runComplianceRead, hands in
+    // last week's. An injected state on its own is read as economy, not as scoping.
+    //
+    // It deliberately does NOT govern the safety reads (the mileage-spike brake, the
+    // leg-load placement): those describe the load as it is now, and they only pull down.
     volumeAnchorDate?: string;
     // What the LIFTING has left in the running legs, as of the PLAN date (deliberately
     // NOT the volume anchor — this is a physiological read of now, not a volume ledger).
@@ -867,8 +874,10 @@ export function weeklyRunPlan(
   //
   // The anchor's OTHER half (anchorActualKm) reads the closed week too — moving only
   // this one left the max() still pulling in this week's actuals, and the week went on
-  // chasing itself through that door.
-  const baseKm = recordedWeeklyKm(opts?.volumeAnchorDate ?? shiftDaysISO(mondayOf(d), -1), 0, RUN_SPORT_PATTERNS);
+  // chasing itself through that door. The demonstrated-longest read (anchorLongestKm,
+  // further down) is the third member of the family and reads the same day.
+  const volumeAnchor = opts?.volumeAnchorDate ?? shiftDaysISO(week_start, -1);
+  const baseKm = recordedWeeklyKm(volumeAnchor, 0, RUN_SPORT_PATTERNS);
   const configuredSports = configuredEnduranceSportKeys(profile?.endurance_sport, false);
   const goalText = `${goal?.event || ""} ${goal?.label || ""}`;
   const explicitRunningGoal =
@@ -1015,7 +1024,7 @@ export function weeklyRunPlan(
     ? lastActualKm
     : (() => {
         try {
-          return getRunCompliance(mondayOf(opts?.volumeAnchorDate ?? shiftDaysISO(week_start, -1)))?.actual_km ?? 0;
+          return getRunCompliance(mondayOf(volumeAnchor))?.actual_km ?? 0;
         } catch {
           return 0;
         }
@@ -1025,6 +1034,44 @@ export function weeklyRunPlan(
     anchorKm = goal?.weekly_km && goal.weekly_km > 0 ? Math.min(goal.weekly_km, 20) : 15;
     rationale.push(`No mileage logged yet — starting conservatively around ${Math.round(anchorKm)} km.`);
   }
+
+  // The anchor's THIRD read: the longest run the athlete has demonstrated recently,
+  // which raises the long-run floor and widens its step ceiling down in the mix.
+  // `runState.longest_km_4wk` is a rolling 28-day max ending at the PLAN date, so a
+  // 15 km Monday raised the same week's long run from Tuesday morning onward — the
+  // week chasing itself again, arriving through the mix rather than through the
+  // factor, exactly what the two reads above exist to stop. Same 28-day window,
+  // ending at the same anchor day, so all three name one closed week.
+  //
+  // Injection alone does NOT hold this read out, and that distinction is load-bearing:
+  // most callers inject a programState purely to avoid computing it twice (coach.ts's
+  // run_plan view hands in the one it already built), and they never meant to name a
+  // week by doing so. Keying off `programState` alone gave the Brief, renderRunPlan and
+  // every coaching prompt the LIVE longest while the default path held the anchored one
+  // — the two surfaces then described the same week differently, a divergence this
+  // read created rather than inherited. So the anchored figure is derived either way,
+  // and an injected state is honoured only when the caller ALSO named the week with
+  // volumeAnchorDate. runComplianceRead is that caller: it computed its state AT the
+  // anchor, so the two agree, and callers that genuinely scope a week keep their say.
+  // Null when there's no running state to read a longest FROM, so a non-running
+  // endurance athlete is left exactly as absent as they were.
+  const anchorLongestKm: number | null =
+    runState && !(opts?.programState && opts?.volumeAnchorDate)
+      ? (() => {
+          try {
+            const sport = activitySportWhere("activities", RUN_SPORT_PATTERNS);
+            const row = db
+              .prepare(
+                `SELECT MAX(distance_km) AS km FROM activities
+                  WHERE date >= ? AND date <= ? AND (${sport.sql})`
+              )
+              .get(isoDaysAgo(volumeAnchor, 27), volumeAnchor, ...sport.params) as any;
+            return row?.km != null ? round1(Number(row.km)) : null;
+          } catch {
+            return null;
+          }
+        })()
+      : (runState?.longest_km_4wk ?? null);
 
   const hrvDown = recovery?.delta?.hrv != null && recovery.delta.hrv < 0;
   const rhrUp = recovery?.delta?.rhr != null && recovery.delta.rhr > 2;
@@ -1066,6 +1113,14 @@ export function weeklyRunPlan(
     if (statusStrained) bits.push(`your watch reads training as ${statusWord}`);
     rationale.push(`Recovery's down this week (${bits.join("; ")}) — easing volume and keeping it gentle.`);
   } else if (spiking) {
+    // DELIBERATELY LIVE, and the one input allowed to move a week from inside it.
+    // `spiking` is a trailing-7-day acute read with no week boundary, so a big block
+    // run on Monday flips it on Tuesday and this week's ask shrinks. That is a safety
+    // brake reading the load as it is NOW, and it is downward-only by construction:
+    // 1.0 is the smallest build factor an unprotected week can take, so it can only
+    // ever hold the week where it is or hand off to a protective branch above.
+    // The volume anchor governs what the week is BUILT from; it does not govern
+    // whether a spike is happening. Do not fold this into the anchor.
     factor = 1.0;
     rationale.push("Mileage jumped recently — holding it here to let it absorb before adding more.");
   } else if (downWeek) {
@@ -1101,6 +1156,17 @@ export function weeklyRunPlan(
   // a requirement rather than a preference, so it is what unlocks the ramp's pull,
   // the lower quality bar, and the honest word when the two disagree.
   const raceTarget = !!(goal?.is_race && goal.phase !== "past" && String(goal.target ?? "").trim());
+  // Deliberately the LIVE 28-day longest, not the anchored figure prevLong reads below,
+  // and safe here because of where it can reach — not because it doesn't move.
+  // raceRamp routes prevLongKm to exactly ONE output, required_long_km; the volume ask
+  // (required_km, and so the pull on the factor) is a pure function of the anchored
+  // anchorKm and weeks_to_race. That one output reaches the mix only as rampLongCeiling,
+  // an UPPER bound, and every bound around it is anchored: the Math.min it sits inside
+  // carries prevLong, and the `prevLong * step` cap runs after the raise regardless.
+  // That cap is the one that actually binds — route this live read into it and the
+  // week grows from its own Monday. So a bigger live longest only loosens something
+  // already held tighter, and a smaller one (an old long run aged out of the window)
+  // only tightens it: downward-only, exactly like the spike brake.
   const prevLongForRamp = (() => {
     const stateLongest = Number(runState?.longest_km_4wk);
     return Number.isFinite(stateLongest) && stateLongest > 0 ? stateLongest : 0;
@@ -1284,8 +1350,12 @@ export function weeklyRunPlan(
   // --- distance distribution ---
   const easyCount = Math.max(1, runDays - 1 - (qualityType ? 1 : 0));
   // Long run ~32–38% of weekly volume, but never a >10% jump on the recent longest.
-  const recentDose = supportingConstrained ? recentRunDose(d) : null;
-  const stateLongest = Number(runState?.longest_km_4wk);
+  // Read at the anchor, not the plan date — the fourth member of the same family. Its
+  // average_km caps the easy runs on the supporting-constrained arm, so read live it
+  // let a 15 km Monday lift Wednesday's easy run and the week's total with it: the same
+  // self-anchoring as the volume halves, just arriving through the easy end of the mix.
+  const recentDose = supportingConstrained ? recentRunDose(volumeAnchor) : null;
+  const stateLongest = Number(anchorLongestKm);
   const recentLongest = Number(recentDose?.longest_km);
   const prevLong =
     Number.isFinite(stateLongest) && stateLongest > 0
@@ -1355,18 +1425,17 @@ export function weeklyRunPlan(
   // --- slot assignment (day_number 1–7): quality mid-week, long late, easy spread —
   //     never two hard days back-to-back (defaults: quality on 2, long on 6). ---
   // HYBRID PLACEMENT (runner + lifter): read the plan's heavy-lower (squat/hinge) days and
-  // (a) keep the QUALITY run off the day right AFTER a leg day, (b) prefer the LONG run on a
-  // day with no planned lower session — so the two big leg stimuli don't stack. Best-effort:
+  // keep BOTH hard runs clear of them — so the two big leg stimuli don't stack. Best-effort:
   // on a packed week we place anyway and note it. This only moves WHICH slot; it never
   // reorders or weakens the recovery gating / directive caps above (those stay final).
   // `lowerDays` and the LONG run's default slot (late, and off a planned lower day)
   // were both read above — the leg-load read is anchored on the day that slot lands.
-  // Wraps: the Mon–Sun template REPEATS, so Sunday's leg day is what Monday opens on.
-  // (Behaviour-preserving with today's candidate slots — quality only ever considers
-  // 2–5 — but it keeps this model identical to week-layout.ts's cyclic `adjacent`.)
+  // Wraps: the Mon–Sun template REPEATS, so Sunday's leg day is what Monday opens on —
+  // the same cyclic model week-layout.ts's `adjacent` judges the finished week on, and
+  // the quality slot now reaches Monday and Sunday, so nothing here measures on a line.
   //
-  // The contract between this engine and that read, stated exactly: the LONG run
-  // prefers a slot with no lower day on either side of it ON THE RING, and takes one
+  // The contract between this engine and that read, stated exactly: BOTH hard runs
+  // prefer a slot with no lower day on either side of them ON THE RING, and take one
   // merely free of lower work only when no such slot exists. So the read never flags a
   // placement the engine could have avoided — and on a week that genuinely cannot be
   // separated, the read still tells the truth about it rather than being talked out of
@@ -1375,12 +1444,50 @@ export function weeklyRunPlan(
   const dayAfterLower = new Set<number>();
   for (const n of lowerDays) dayAfterLower.add(nextDayNumber(n));
 
-  // QUALITY run: default mid-week (2); avoid the day right after a leg day, and keep it clear
-  // of the long run (never adjacent → no two hard days back-to-back).
-  const qualitySlotFor = (long: number): number =>
-    [2, 3, 4, 5].find((s) => !dayAfterLower.has(s) && Math.abs(s - long) >= 2) ??
-    [2, 3, 4, 5].find((s) => Math.abs(s - long) >= 2) ??
-    2;
+  // How far apart two day_numbers are ON THE RING — Sunday and Monday are one day
+  // apart, not six. Every "the hard days don't stack" check below measures this way.
+  // A line measure was only ever safe while the quality candidates stayed inside 2–5.
+  const ringDistance = (a: number, b: number): number => Math.min(Math.abs(a - b), 7 - Math.abs(a - b));
+
+  // QUALITY run: default mid-week (2) and never within a day of the long run on the
+  // ring. What it avoids is ranked, and THE RANKING IS THE CONTRACT — the week-layout
+  // read is judged against this order, so it is written as an explicit ladder rather
+  // than a chain of ?? that has to be read backwards to see what outranks what:
+  //   1. ring-clear — no lower day on either side, the long run's own first tier;
+  //   2. clear of the day AFTER a leg day — the old first tier, one side instead of two;
+  //   3. merely not a leg day itself;
+  //   4. a leg day, and only when nothing above it exists on this week.
+  // Every level is searched over the WHOLE ring, mid-week first and then Monday and
+  // Sunday. Restricting the lower levels to 2–5 (as the first pass of this did) meant
+  // that once the ring-clear level missed, days 1 and 7 became unreachable and level 4
+  // fired — putting the hard run on the squat day while a free Monday sat there. 55
+  // layouts did exactly that, every one of them flagged by the read this ladder is
+  // supposed to agree with.
+  //
+  // The freshness floor is a preference WITHIN a level, never above one: each level is
+  // tried floored, then unfloored, before the next level is considered. Fatigue decides
+  // between two acceptable days; it does not get to buy a leg day. (Floored first
+  // outside the level loop was the other half of the same bug — heavy Wednesday plus
+  // saturated legs put the quality run on Wednesday while Tuesday was open.) The floor
+  // is a TEMPLATE-day comparison — days from the week's start, for the leg-load fade —
+  // not ring arithmetic: day 1 is genuinely below a floor of 3 and day 7 is above it.
+  const QUALITY_CANDIDATES = [2, 3, 4, 5, 1, 7, 6] as const;
+  const QUALITY_AVOIDANCE_LADDER: ((s: number) => boolean)[] = [
+    (s) => ringClearOfLower(s),
+    (s) => !lowerDays.has(s) && !dayAfterLower.has(s),
+    (s) => !lowerDays.has(s),
+    () => true,
+  ];
+  const qualitySlotFor = (long: number, floor = 0): number => {
+    const open = (s: number, f: number) => ringDistance(s, long) >= 2 && s >= f;
+    for (const acceptable of QUALITY_AVOIDANCE_LADDER) {
+      for (const f of floor > 0 ? [floor, 0] : [0]) {
+        const hit = QUALITY_CANDIDATES.find((s) => open(s, f) && acceptable(s));
+        if (hit) return hit;
+      }
+    }
+    return 2;
+  };
   const staticQualitySlot = qualitySlotFor(staticLongSlot);
 
   // FATIGUE-AWARE preference on top of that calendar: the slots above answer "which day
@@ -1399,18 +1506,16 @@ export function weeklyRunPlan(
   const freshFloor = legRecoveryDays > 0 ? Math.min(7, 1 + legRecoveryDays) : 0;
   // Same three tiers as staticLongSlot, with the freshness floor applied inside each:
   // a ring-clear slot still leads, a merely-free one is the fallback, and the static
-  // slot catches a week where the floor rules everything out.
+  // slot catches a week where the floor rules everything out. The quality run does the
+  // same by handing the floor to qualitySlotFor, which applies it inside its own tiers
+  // rather than keeping a second copy of them here.
   const longSlot =
     freshFloor > 0
       ? (LONG_SLOT_CANDIDATES.find((s) => ringClearOfLower(s) && s >= freshFloor) ??
         LONG_SLOT_CANDIDATES.find((s) => !lowerDays.has(s) && s >= freshFloor) ??
         staticLongSlot)
       : staticLongSlot;
-  const qualitySlot =
-    freshFloor > 0
-      ? ([2, 3, 4, 5].find((s) => !dayAfterLower.has(s) && Math.abs(s - longSlot) >= 2 && s >= freshFloor) ??
-        qualitySlotFor(longSlot))
-      : staticQualitySlot;
+  const qualitySlot = freshFloor > 0 ? qualitySlotFor(longSlot, freshFloor) : staticQualitySlot;
 
   const qualityMovedByLegLoad = qualitySlot !== staticQualitySlot;
   const longMovedByLegLoad = longSlot !== staticLongSlot;
@@ -1418,9 +1523,15 @@ export function weeklyRunPlan(
     rationale.push(pickDayVariant(LEG_LOAD_PLACEMENT_VARIANTS, d, "run-placement-leg-load")(legLoadPlacementPhrase));
   }
   if (q && !qualityMovedByLegLoad) {
-    if (qualitySlot !== 2 && !dayAfterLower.has(qualitySlot)) {
+    // Only claim the shift the athlete can check against their own week: the default
+    // slot really was the day after a leg day, and the run really is clear of one now.
+    // The ring pass moves the slot for other reasons too — a leg day the day BEFORE
+    // it, the long run's own separation — and this sentence would then be describing
+    // a week that isn't theirs. A quiet placement says nothing at all.
+    const stillNearLegs = lowerDays.has(qualitySlot) || dayAfterLower.has(qualitySlot);
+    if (qualitySlot !== 2 && dayAfterLower.has(2) && !stillNearLegs) {
       rationale.push("Shifted the quality run off the day after your leg day so the hard efforts don't stack.");
-    } else if (dayAfterLower.has(qualitySlot)) {
+    } else if (stillNearLegs) {
       rationale.push(
         "The week's packed enough that the quality run still lands near a leg day — keep it controlled and well fuelled."
       );

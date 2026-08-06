@@ -4,7 +4,34 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
-## 2026-08-05 — the week is a ring, the anchor belongs to the closed week, a question is never a veto
+## 2026-08-06 — both hard runs make the same promise, the blank page gets a week, a correction never eats a receipt
+
+Ledger-closing round for the 2026-08-05 builds. **The quality run joins the ring contract**: the
+quality slot's placement is an explicit avoidance ladder (ring-clear of leg days → clear of the
+day-after → merely not ON a leg day → a leg day as last resort), each level searched over the whole
+ring (mid-week candidates first, then Monday/Sunday), with the leg-freshness floor a preference
+*inside* each level — so "not on the squat day" always outranks freshness, days 1/7 are reachable at
+every level, and the engine can no longer hand `weekLayoutRead` a quality collision it could have
+placed around (probed exhaustively: 0 of 384 lower-day layouts place quality on a leg day while a
+legal alternative exists; 0 regressions vs the old ladder). **The anchor is a family, and it holds on
+every surface**: the 28-day longest-run and recent-dose reads now end at the same `volumeAnchorDate`
+as the two volume halves, and an injected `programState` is honoured for those reads only when the
+caller also names its week (`volumeAnchorDate`) — so `getCoachContext().run_plan` (the Brief's path,
+which injects state purely as an economy) now agrees with the default path instead of letting the
+long run grow from the week's own Monday. The spike brake and leg-load placement deliberately stay
+live: safety reads pull down only, and the decision is pinned by comment + tests. **Chat corrections
+compose**: `reconcileChatRevertReply` takes the original model reply (required parameter) and judges
+the revert claim against it, so a refusal survives an earlier reconciler REPLACING the bubble
+(appended beneath the truthful receipt) and a standing claim's correction preserves receipts appended
+beneath the prose instead of destroying them. **The blank page gets a week**: `composeWeek`
+(`coachOps`) is the first producer that does not require a pre-existing plan — first-week only (any
+plan day carrying items refuses calmly toward evolve), agentic via the existing `parsed.days` joint
+contract (strength + cardio in one draft), never applying its own change: the draft flows through
+`applyProposalWithAutonomy`, where a structural days payload floors at announce. New site
+`week_compose` in the context projection; `POST /api/program/compose-week` + MCP `compose_week`
+(background-job shape mirroring evolve); the stored instruction keeps a stable marker prefix with the
+athlete's words riding along. No schema change, no `public/` change (no service-worker step); the
+PWA affordance for compose-week is deliberately deferred.
 
 Follow-up round closing the flags the day's three builds left open. **The week is cyclic**: the
 Mon–Sun template repeats, so day 7 and day 1 are neighbours — `weekLayoutRead`'s adjacency, its

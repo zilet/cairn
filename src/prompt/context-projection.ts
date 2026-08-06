@@ -213,6 +213,38 @@ export const PROMPT_CONTEXT_SITES = {
   // Deliberately NOT on the coach site: that prompt nudges loads inside a fixed shape.
   program_evolution: { ...PLAN_SITE, keys: [...PLAN_SITE.keys, "week_layout"] },
 
+  // The FIRST week, composed from nothing. Plan-shaping like its two siblings above,
+  // but the thing it is shaping does not exist yet, so the read layer that exists to
+  // describe a RUNNING program is mostly empty here and is not carried:
+  //   DROPPED vs the plan site — the volume/capacity read a history produces
+  //   (program_balance, program_adjustments, recent_load, strength_journey,
+  //   groups_trajectory, test_week, performance), the whole FUEL bundle (this composes
+  //   training, not food), and `garmin` (no text here rules on it; run history arrives
+  //   through recent_activities and the endurance bundle, which is what a blank-slate
+  //   athlete with a watch actually has).
+  //   NOT ADDED — `week_layout`, the one key program_evolution adds on top of that
+  //   site. It reads whether an EXISTING week already collides; there is no week to
+  //   collide yet, so the ring rules ship as prose here instead.
+  //   KEPT — who they are and what they've said (PERSON carries memory + about_me,
+  //   which is where stated training frequency lives), the log itself plus the
+  //   program-state read for whatever history DOES exist, the full endurance bundle
+  //   (a first week prescribes runs to a zone), the full health set that
+  //   CONTEXT_GUARDRAILS and buildEliteGuardrails read by name, recovery, body comp,
+  //   and the conductor's lead.
+  week_compose: {
+    keys: [
+      ...PERSON,
+      ...TRAINING_CORE,
+      ...ENDURANCE,
+      ...HEALTH_FULL,
+      ...RECOVERY,
+      "trajectory",
+      "coaching_focus",
+      "signal_state",
+    ],
+    sessions: SESSIONS_RECENT,
+  },
+
   // The Brief. Renders the conductor, signal state, the whole training + endurance
   // + connected-brain chain, body comp, felt/learned signals and today's fuel.
   // DROPPED: `garmin` (recovery already carries it), `day_read` (the builder computes

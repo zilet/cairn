@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { draftCoachProposal, evolveProgram } from "../../coachOps.js";
+import { composeWeek, draftCoachProposal, evolveProgram } from "../../coachOps.js";
 import { localToday } from "../../dayread.js";
 import {
   applyProposalWithAutonomy,
@@ -97,6 +97,36 @@ export function registerProgramTools(server: McpToolRegistrar) {
         ok: result.ok,
         agent: result.agent,
         tried: result.tried,
+      });
+    }
+  );
+
+  server.tool(
+    "compose_week",
+    "Compose the athlete's FIRST training week when they have NO plan at all — strength and endurance in one Mon–Sun template, placed so the week composes rather than collides (the template repeats, so Sunday is next to Monday: no two hard days back to back across that seam, long run late, quality mid-week). This is the only producer that can write a week from nothing; apply_progression, apply_run_plan and evolve_program all require an existing plan and no-op without one. Emits a DRAFT `days` restructure and routes it through the autonomy layer, which treats a whole-week restructure as structural — it announces first and lands at a natural boundary with one-tap Undo; under 'review_everything' it stays a DRAFT to review then apply_proposal. Never applies anything itself. Returns { ok:true, proposal, autonomy, days } or the designed { ok:false, error } at 200 — including when a week already exists, where the error points at evolve_program.",
+    {
+      agent: z
+        .string()
+        .optional()
+        .describe("agent name from list_agents; omit or 'auto' to use the configured rotation"),
+      instruction: z
+        .string()
+        .optional()
+        .describe("optional extra guidance (e.g. 'I can only train 3 days and I run on weekends')"),
+    },
+    async ({ agent, instruction }) => {
+      const result = await composeWeek(agent, instruction);
+      return asText({
+        proposal: result.proposal,
+        // The autonomy outcome (announced for a natural boundary, or left as a reviewable
+        // draft under the active lead_mode) — mirrors the REST /program/compose-week body
+        // so MCP ⊆ REST holds.
+        autonomy: result.autonomy,
+        ok: result.ok,
+        agent: result.agent,
+        tried: result.tried,
+        ...("days" in result ? { days: result.days } : {}),
+        ...("error" in result ? { error: result.error } : {}),
       });
     }
   );

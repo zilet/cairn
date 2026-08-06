@@ -3,6 +3,7 @@ export const AGENT_JOB_KINDS = [
   "session_compose",
   "proposal",
   "evolve_program",
+  "compose_week",
   "meal_plan",
   "meal_swap",
   "recipe",

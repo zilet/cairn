@@ -328,6 +328,123 @@ DATA:
 ${promptData(ctx, "program_evolution")}`;
 }
 
+// ---- the FIRST week (the blank slate) ----------------------------------------
+// Every other producer in this system refines a week that already exists: the
+// progression engine prescribes the next load on a plan day, the run engine places
+// runs around the plan's heavy-lower days, the evolution prompt restructures a split
+// that is running. With NO plan they all degrade to the same calm no-op, and the
+// athlete is left holding a blank page. This is the one prompt that writes the first
+// page — and it writes BOTH lanes at once, because a hybrid athlete's first week is
+// where the strength days and the runs either compose or collide.
+//
+// Output is the SAME `days` payload the evolution prompt uses for a restructure, so
+// it lands through the one propose→apply seam (validate → replacePlan → prescription
+// diff → ledger) with autonomy and Undo already attached. Nothing here applies.
+const WEEK_COMPOSE_SCHEMA = `{
+  "as_of_date": "<YYYY-MM-DD date this week was composed>",
+  "summary": "one or two sentences on the shape of this week and why it starts here",
+  "days": [
+    { "day_number": <1-7>, "name": "<day name, e.g. Lower>", "focus": "<focus, e.g. lower>", "items": [
+      { "exercise": "<name>", "sets": <n>, "rep_low": <n>, "rep_high": <n>, "target_weight": <number|null>, "superset_group": <int|null — same value pairs two items as a superset>, "note": "<optional cue, e.g. 'NEW — start light, log actual'>" },
+      { "exercise": "<name>", "sets": <n>, "target_seconds": <n>, "note": "<ONLY for a held/timed movement — omit reps and load>" },
+      { "kind": "cardio", "exercise": "<e.g. Long run>", "target_distance_km": <n|null>,
+        "target_duration_min": <n|null>, "target_zone": "<Z2|easy|tempo|threshold|intervals|long|null>", "note": "<optional timeless pacing/structure>" }
+    ] }
+  ],
+  "notes": "<optional coaching notes, may be empty>"
+}
+// "days"   → the WHOLE week, and the only output. One entry per training day; leave a
+//            rest day OUT rather than emitting an empty day. Each item is strength by
+//            default, or an endurance prescription with "kind":"cardio".
+// A first week has nothing to progress FROM, so it carries no "changes" and no
+// "cardio" array — both of those edit an existing plan. Emit "days" only.`;
+
+// Compose the athlete's FIRST training week — both lanes, one Mon–Sun template.
+// Deliberately NOT an evolution: there is no history to trend, no plateau to break
+// and nothing to preserve, so the whole task is placement and a conservative
+// starting dose. The placement rules read on a RING (the template repeats, so Sunday
+// runs into Monday) — the same cyclic adjacency weekLayoutRead judges a live week on.
+export function buildWeekComposePrompt(userInstruction?: string): string {
+  const ctx = repo.getCoachContext();
+  const disc = disciplineOf(ctx);
+  const coachRole = disc === "endurance"
+    ? "an endurance coach (with strength as supporting work)"
+    : disc === "hybrid"
+      ? "a hybrid coach balancing endurance and strength"
+      : "a strength coach";
+  // What the athlete can actually load. On a blank slate this is often the only
+  // hard constraint on movement selection, so it leads rather than trails.
+  const equip = (() => { try { return repo.availableEquipment(); } catch { return []; } })();
+  const equipBlock = equip.length
+    ? `\nAVAILABLE EQUIPMENT: ${equip.join(", ")}. Every movement in this week must be one they can load with this. Bias the main lifts toward heavier compound options they can progress on.\n`
+    : `\nNO EQUIPMENT PROFILE ON RECORD: prefer movements that work in a normal gym, and keep at least one option per pattern that needs nothing but bodyweight.\n`;
+  return `${CAIRN_PERSONA}
+
+Right now you are ${coachRole} building someone's FIRST training week. They have no plan yet —
+there is nothing to evolve, nothing to progress from, and nothing to preserve. Compose ONE
+weekly template that both their lifting and their endurance work can live inside, sized to the
+life and the history in the DATA below, and worth repeating.
+
+THE WEEK IS A RING, NOT A LIST. Day 1 through Day 7 is the week in order (Monday through Sunday
+by default) and the template REPEATS — so Day 7 sits right next to Day 1 again. Read every
+placement rule below around that seam, not just left to right.
+
+HOW TO COMPOSE IT:
+- BUILD FOR THE ATHLETE IN THE DATA, not a template. Their ordered intent (the DURABLE ATHLETE
+  INTENT line), their endurance role, their goal and any race date decide what leads. A strength-
+  first athlete gets lifting as the spine with running fitted around it; an endurance-first one
+  gets the key runs protected and lifting kept supportive.
+- BOTH LANES, ONE WEEK. If they have an endurance sport, a race or real run history, this week
+  carries actual run prescriptions ("kind":"cardio" items) — easy aerobic work, one long run, and
+  at most one quality session. If the data shows NO endurance sport, no race and no runs, do NOT
+  invent running; compose the lifting week alone.
+- NO TWO HARD DAYS BACK TO BACK, on the ring. A heavy lower day, the long run and the quality run
+  are the hard days. Never place the heaviest lower-body work (squat / hinge / heavy unilateral)
+  the day BEFORE or the day AFTER the long run or the quality run — the legs cannot give their
+  best to both. Never stack three hard days in a row, including across the Sunday→Monday seam.
+- THE LONG RUN GOES LATE in the week, where the days around it can be easy; QUALITY sits MID-WEEK,
+  well clear of it. Put the genuinely easy days and the rest days between them.
+- BUILD FOR THE DAYS THEY ACTUALLY TRAIN. Cairn stores training frequency as something they SAID,
+  not as a field — read DATA.memory and the profile's about_me for it ("trains about 4 days a
+  week"). When nothing says, build a sustainable 3-4 training days and note in the summary that
+  the week can grow once they've run it. An honest week they finish beats an ideal one they drop.
+- LEAVE REAL REST. A week with no rest day is not a week they will run twice. Omit the rest days
+  from "days" entirely rather than emitting an empty day.
+- START LIGHT AND HONEST. With no logged history, prescribe conservative starting loads with a
+  short "NEW — start light, log actual" note, or leave target_weight null and let the first
+  session set the number — never invent a load they have never lifted. Where DATA does carry
+  logged sets, prescribe from what they ACTUALLY lifted, not from a guess.
+- KEEP THE FIRST DOSE MODEST. Both lanes are starting from nothing, so total volume is the thing
+  most likely to be wrong. Build a week they finish feeling like they could have done more; the
+  progression engine earns the rest from real logged work. (When two lanes later ramp at once one
+  has to yield — DATA.program_state.hybrid names which — but nothing has ramped yet.)
+- COMPLETE, NOT MAXIMAL. Across the week cover the basic patterns — a squat, a hinge, a horizontal
+  press, a vertical press, a horizontal pull, a vertical pull — plus direct core and a carry. One
+  or two accessories per day is plenty.
+
+NON-NEGOTIABLE GUARDRAILS:
+- Respect every active injury and constraint on record: never program loaded movement into a
+  painful or injured area — choose a pain-free alternative instead and say so plainly.
+- Conservative from the start. Nothing in a first week is heavy for its own sake, and no lift is
+  prescribed at a load the data cannot support.
+${MECHANICS_ENCODING}
+- This is a suggestion the athlete can rewrite, never a verdict and never a gate. Plain words, no
+  scores, no grades. Health findings are informational, not medical advice.
+
+${buildEliteGuardrails(ctx)}
+${equipBlock}${CONTEXT_GUARDRAILS}
+${renderSignalState(ctx)}${renderCoachingFocus(ctx)}${COACHING_STANCE}
+
+${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunZones(ctx)}${renderRunPlan(ctx)}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderProgramState(ctx)}${renderBodyComp(ctx)}${renderBlock(ctx)}${renderTrajectory(ctx)}
+TASK: ${userInstruction?.trim() || "Compose their first training week — both lanes, placed so the week composes rather than collides, at a dose they can finish."}
+PROPOSAL AS-OF DATE: ${localDateISO()}. Use this exact date for as_of_date.
+
+${renderJsonContract(WEEK_COMPOSE_SCHEMA)}
+
+DATA:
+${promptData(ctx, "week_compose")}`;
+}
+
 // ---------- the personal-response NARRATIVE (the warm layer over the model) ----------
 
 const REACTION_NARRATIVE_SCHEMA = `{
