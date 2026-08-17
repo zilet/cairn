@@ -40,11 +40,11 @@ test("bundled agent manifest pins every supported lazy installer", () => {
   const codex = readAgentInstall(manifest, "codex");
   const antigravity = readAgentInstall(manifest, "antigravity");
   const grok = readAgentInstall(manifest, "grok");
-  assert.deepEqual(claude.spec, { method: "npm", package: "@anthropic-ai/claude-code", version: "2.1.220", args: [] });
+  assert.deepEqual(claude.spec, { method: "npm", package: "@anthropic-ai/claude-code", version: "2.1.233", args: [] });
   assert.deepEqual(codex.spec, {
     method: "npm",
     package: "@openai/codex",
-    version: "0.145.0",
+    version: "0.147.0",
     args: ["--include=optional"],
   });
   assert.match(antigravity.spec.sha256, /^[a-f0-9]{64}$/);
@@ -68,13 +68,13 @@ test("npm CLI installs into the persistent Cairn tools root", () =>
         'printf \'%s\\n\' "$*" > "$NPM_LOG"',
         'printf \'token=%s\\n\' "${' + 'CAIRN_AUTH_TOKEN:-}" >> "$NPM_LOG"',
         'mkdir -p "$CAIRN_CLI_ROOT/bin"',
-        "printf '%s\\n' '#!/bin/sh' 'echo 2.1.220' > \"$CAIRN_CLI_ROOT/bin/claude\"",
+        "printf '%s\\n' '#!/bin/sh' 'echo 2.1.233' > \"$CAIRN_CLI_ROOT/bin/claude\"",
         'chmod +x "$CAIRN_CLI_ROOT/bin/claude"',
       ].join("\n")
     );
     const env = { ...envFor(dir, bin), NPM_LOG: log, CAIRN_AUTH_TOKEN: "must-not-reach-installer" };
     installAgentCli("claude", { manifestPath: manifest, env });
-    assert.match(fs.readFileSync(log, "utf8"), /install --global --prefix .*@anthropic-ai\/claude-code@2\.1\.220/);
+    assert.match(fs.readFileSync(log, "utf8"), /install --global --prefix .*@anthropic-ai\/claude-code@2\.1\.233/);
     assert.doesNotMatch(fs.readFileSync(log, "utf8"), /must-not-reach-installer/);
     assert.ok(fs.existsSync(path.join(env.CAIRN_CLI_ROOT, "bin", "claude")));
   }));

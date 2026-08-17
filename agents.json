@@ -24,7 +24,7 @@
     "install": {
       "method": "npm",
       "package": "@anthropic-ai/claude-code",
-      "version": "2.1.220"
+      "version": "2.1.233"
     },
     "stream": {
       "format": "claude",
@@ -55,7 +55,7 @@
     "install": {
       "method": "npm",
       "package": "@openai/codex",
-      "version": "0.145.0",
+      "version": "0.147.0",
       "args": ["--include=optional"]
     }
   },
@@ -112,7 +112,7 @@
     "install": {
       "method": "script",
       "url": "https://x.ai/cli/install.sh",
-      "sha256": "2019f38002a2beab27f65b928db5d33d2bbe8c2828e4e41081ac23ec33b7a658",
+      "sha256": "43d0943123edade1383a476a4f778674877acee7c1f98a00f094c4a0f7349321",
       "update_args": ["update"]
     },
     "stream": {
