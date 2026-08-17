@@ -5,7 +5,7 @@
 // Live, that wait is where a ratchet hid: each step was bounded and each step was
 // judged against the step before it, and nothing re-asked whether the destination was
 // still somewhere the record supported. The target walked past measured maintenance
-// with a further raise to 2,800 already queued and waiting for its boundary.
+// with the next raise already queued and waiting for its boundary.
 //
 // So the boundary pass re-derives the cut anchor and re-applies the same law the
 // check-in does (capProtectiveRaise: protection buys maintenance, never a surplus).
@@ -24,7 +24,7 @@ import { repo, resetTables, localDaysAgo } from "./_seed.js";
 import { applyDueAnnouncedDecisions, applyProposalWithAutonomy } from "../dist/domain/brain/autonomy-service.js";
 import { localDateISO } from "../dist/repo/shared.js";
 
-// The live athlete's shape: mid-cut, a goal below the current weight, and no open
+// The shape this derivation is built for: mid-cut, a goal below the current weight, and no open
 // goal check-in — so cutReaffirmation reads the cut as the athlete's own.
 function seedReaffirmedCut() {
   repo.setSettings({ lead_mode: "lead" });
@@ -240,8 +240,8 @@ test("with no reaffirmed cut there is no maintenance to cap against, and the cha
 // not actually holding. With meals logged only at the front of the day, grounding
 // fails and the anchor reports the Mifflin prior instead — a number derived from
 // height, weight and an activity factor, which knows nothing whatsoever about what
-// this athlete eats. The cap read it as measured maintenance, found 2,898 kcal of
-// headroom above the 2,600 in force, and waved the queued 2,800 straight through.
+// this athlete eats. The cap read it as measured maintenance, found phantom headroom
+// above the target in force, and waved the queued raise straight through.
 
 test("a formula prior is not headroom — a raise is held on an unmeasured maintenance", () => {
   seedReaffirmedCut();

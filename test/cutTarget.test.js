@@ -38,7 +38,7 @@ function addDaysISO(iso, n) {
   return d.toISOString().slice(0, 10);
 }
 
-// The live athlete's shape: mid-cut at 168 lb with 164 as the goal, and a record
+// The shape this derivation is built for: mid-cut at 168 lb with 164 as the goal, and a record
 // thick enough for the energy-balance read to lead.
 function grounded(extra = {}) {
   return {

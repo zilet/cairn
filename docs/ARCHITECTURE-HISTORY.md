@@ -6,12 +6,12 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ## 2026-08-17 (second round) — protection buys maintenance, and an unlogged day is not a small one
 
-Same-day follow-up, born live: the deployed round's first real check-in raised the cut target
-again (2,600 → 2,800 pending), and the target history showed why — the protective escape in
+Same-day follow-up, born live: the deployed round's first real check-in queued yet another raise
+of the cut target, and the target history showed why — the protective escape in
 `personalizeNutritionCheckinTarget` had no ceiling of its own, and its trigger (heavy endurance
 load during a cut, `hybridFuelRead` in `program-state.ts`) is a *chronic* state for a hybrid
-athlete, so the escape was open at every check-in and the target ratcheted 2,075 → 2,600 in a
-month, past a measured maintenance near 2,250. **Protective discipline:** `capProtectiveRaise`
+athlete, so the escape was open at every check-in and the target ratcheted upward step by step
+until it sat well past measured maintenance. **Protective discipline:** `capProtectiveRaise`
 (`src/repo/cut-target.ts`) caps a protective raise at `max(previous, tdee)` — protection buys
 maintenance, never a surplus, and a refused raise is a hold, never a manufactured cut;
 `applyDueAnnouncedDecisions` re-derives the cut anchor at the natural boundary and re-clamps a

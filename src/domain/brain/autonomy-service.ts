@@ -1520,7 +1520,9 @@ function activeTargetKcalAtBoundary(asOf: string): number {
   ];
   for (const read of ladder) {
     try {
-      const value = Number(read());
+      // `Number(null)` is 0, and a macro-only target row stores a null kcal — coerce
+      // absence to NaN so the ladder falls through instead of reading "0 kcal in force".
+      const value = Number(read() ?? Number.NaN);
       if (Number.isFinite(value)) return value;
     } catch {
       // Each rung is independently fail-soft; a broken read falls to the next.

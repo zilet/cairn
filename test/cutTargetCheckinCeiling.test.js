@@ -101,10 +101,10 @@ test("no anchor at all leaves the existing boundary exactly as it was", () => {
 // ---- protection buys maintenance, never a surplus ----------------------------
 //
 // The protective escape above had no ceiling of its own, and the evidence that opens
-// it (heavy endurance load during a cut) is a CHRONIC state rather than an event. Live,
-// that meant every check-in found the escape open and added another bounded step: the
-// target walked 2,075 → 2,225 → 2,475 → 2,600 in a month, past a measured maintenance
-// of roughly 2,250. A cut fuelled above maintenance is not a protected cut.
+// it (heavy endurance load during a cut) is a CHRONIC state rather than an event, so
+// every check-in finds the escape open and adds another bounded step — bounded raises
+// that compound past measured maintenance within weeks. A cut fuelled above
+// maintenance is not a protected cut.
 
 test("a protective raise stops at measured maintenance", () => {
   // Eating to 2250, the model wants 2600, and the record puts maintenance at 2350.
