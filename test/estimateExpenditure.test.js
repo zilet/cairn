@@ -188,13 +188,17 @@ test("days with no food logged are absent, never counted as a zero-kcal crash di
 test("groups intake by stamped local day when created_at crosses UTC midnight", () => {
   const localDay = localDaysAgo(1);
   const nextUtcDay = new Date(Date.parse(`${localDay}T00:00:00Z`) + 864e5).toISOString().slice(0, 10);
+  // The two labels have to reach across the day (morning food AND evening food):
+  // this case is about DAY KEYING, and a day that does not read as complete is
+  // absent intake evidence, so a lunch-and-dinner pair would count zero points for
+  // a reason that has nothing to do with the UTC boundary being tested.
   db.prepare(
     `INSERT INTO food_notes (date, meal, raw_output, parsed_json, enrichment_status, created_at)
      VALUES (?, 'dinner', '', ?, NULL, ?)`
   ).run(localDay, JSON.stringify({ kcal: 500 }), `${localDay} 23:30:00`);
   db.prepare(
     `INSERT INTO food_notes (date, meal, raw_output, parsed_json, enrichment_status, created_at)
-     VALUES (?, 'lunch', '', ?, NULL, ?)`
+     VALUES (?, 'breakfast', '', ?, NULL, ?)`
   ).run(localDay, JSON.stringify({ kcal: 700 }), `${nextUtcDay} 00:30:00`);
 
   const e = repo.estimateExpenditure(21);
@@ -232,6 +236,65 @@ test("14 snack-only days stay partial and cannot become an authoritative outcome
   assert.deepEqual(e.fusion, { outcome_weight: 0, prior_weight: 1 });
   assert.equal(e.tdee, e.prior_tdee, "the independent prior owns maintenance while coverage settles");
   assert.match(e.quality.explanation, /partial/i);
+});
+
+test("a fortnight of logged breakfasts never becomes a fortnight of intake days", () => {
+  // The intake-coverage law: a day whose dinner was never logged is ABSENT, not a
+  // low-intake day. Averaging these 700 kcal mornings into the trend would put
+  // maintenance a thousand kcal under the truth and read a quiet log as a deficit.
+  repo.setProfile({
+    age: 40,
+    height_cm: 178,
+    weight_lb: 180,
+    sex: "male",
+    activity_factor: 1.5,
+    goal_mode: "maintain",
+  });
+  for (let i = 1; i <= 14; i++) {
+    db.prepare(
+      `INSERT INTO food_notes (date, meal, raw_output, parsed_json, enrichment_status, created_at)
+       VALUES (?, 'breakfast', '', ?, NULL, ?)`
+    ).run(localDaysAgo(i), JSON.stringify({ kcal: 700, summary: "Eggs and oats" }), `${localDaysAgo(i)} 08:00:00`);
+  }
+  for (const d of [14, 12, 10, 8, 6, 4, 2, 1]) seedWeight(localDaysAgo(d), 180);
+
+  const e = repo.estimateExpenditure(21);
+  assert.equal(e.points, 0, "partial days are excluded from intake-based estimation");
+  assert.equal(e.intake_avg_kcal, null, "a partial day never contributes a low daily average");
+  assert.equal(e.coverage.credible_intake_days, 0);
+  assert.equal(e.coverage.partial_intake_days, 14, "they stay VISIBLE as coverage");
+  assert.equal(e.outcome_tdee, null);
+  assert.equal(e.tdee, e.prior_tdee, "the prior owns maintenance rather than an invented deficit");
+});
+
+test("the same fortnight, logged through to dinner, IS admissible evidence", () => {
+  repo.setProfile({
+    age: 40,
+    height_cm: 178,
+    weight_lb: 180,
+    sex: "male",
+    activity_factor: 1.5,
+    goal_mode: "maintain",
+  });
+  for (let i = 1; i <= 14; i++) {
+    for (const [label, kcal, hour] of [
+      ["breakfast", 700, "08:00"],
+      ["dinner", 1_500, "19:00"],
+    ]) {
+      db.prepare(
+        `INSERT INTO food_notes (date, meal, raw_output, parsed_json, enrichment_status, created_at)
+         VALUES (?, ?, '', ?, NULL, ?)`
+      ).run(localDaysAgo(i), label, JSON.stringify({ kcal, summary: label }), `${localDaysAgo(i)} ${hour}:00`);
+    }
+  }
+  for (const d of [14, 12, 10, 8, 6, 4, 2, 1]) seedWeight(localDaysAgo(d), 180);
+
+  const e = repo.estimateExpenditure(21);
+  assert.equal(e.points, 14, "days that reach across the day are real evidence");
+  assert.equal(e.intake_avg_kcal, 2_200);
+  assert.equal(e.coverage.credible_intake_days, 14);
+  assert.equal(e.coverage.partial_intake_days, 0);
+  assert.ok(e.outcome_tdee != null, "the outcome trend exists once the record is complete");
 });
 
 test("an implausible outcome is downgraded, bounded, and cannot create a crash target", () => {

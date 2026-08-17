@@ -420,6 +420,7 @@ export const CHAT_ACTION_PROMPT_SPECS = {
       "date": "YYYY-MM-DD|omit", "eaten_at": "HH:MM (24h, local)|omit" }`,
     guidance: [
       `log_food records a meal estimate (food note) — use it when the user reports something they ate or attaches a plate photo. Estimate macros from ordinary serving sizes; null when too unsure.`,
+      `A QUESTION about food is not a log. "Should I eat this?", "how much protein is in that?", "is X a good dinner?", "what would that do to my day?" are asking for an answer, not for a row — answer them and emit nothing. Only a report of something actually EATEN gets a log_food. If it is genuinely ambiguous ("having the salmon"), answer the question and leave the log alone; an unlogged meal is recoverable, an invented one silently becomes intake evidence.`,
       ...FOOD_CAPTURE_GUARDRAILS,
       `nutrition_pattern is what lets intake be read against their bloodwork later (sodium, potassium, calcium, iron, saturated fat, added sugar, omega-3, alcohol, caffeine). Fill it for every meal you log, in coarse bands — "unknown" is a fine, honest answer for a band you cannot call.`,
       `BEFORE emitting log_food, check DATA.day_intake.entries. If the same meal is already logged today, reference it instead of logging a duplicate. If the user is correcting that row, emit update_food_note with the existing id.`,

@@ -13,7 +13,7 @@
 //   - every athlete-facing sentence passes the shared reading grammar.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { repo, resetTables } from "./_seed.js";
+import { localDaysAgo, repo, resetTables } from "./_seed.js";
 import { violatesReadingGrammar } from "../dist/repo/day-read.js";
 import {
   CUT_DEFICIT_MAX_KCAL,
@@ -88,6 +88,60 @@ test("the grounding gate is exactly the stated evidence floor", () => {
   assert.equal(cutEvidenceIsGrounded({ ...enough, weigh_in_span_days: GROUNDED_MIN_SPAN_DAYS - 1 }, 2_800), false);
   assert.equal(cutEvidenceIsGrounded({ ...enough, intake_days: GROUNDED_MIN_INTAKE_DAYS - 1 }, 2_800), false);
   assert.equal(cutEvidenceIsGrounded(enough, null), false, "no outcome at all is never grounded");
+});
+
+// ---- the intake-coverage law: a partial day is absent, never low -------------
+
+test("only COMPLETE logged days count toward the grounding floor", () => {
+  // A fortnight of logged breakfasts is not a fortnight of logged days. The state
+  // assembler now hands the floor only complete days, so a window of partial ones
+  // arrives here as what it is: no admissible intake evidence.
+  const partialOnly = cutTargetDecision(
+    grounded({ coverage: { window_days: 28, intake_days: 0, weigh_ins: 10, weigh_in_span_days: 26 } })
+  );
+  assert.ok(partialOnly, "the derivation still produces a number (rule 2)");
+  assert.equal(partialOnly.tdee_basis, "formula_estimate", "grounded flips to estimate when no day is complete");
+  assert.equal(partialOnly.confidence, "low");
+});
+
+test("cutTargetState counts complete days only, and says so when the plate is quiet", () => {
+  resetTables("food_notes", "bodyweight_log");
+  seedCut();
+  // Fourteen days of breakfast-only logs plus a real weigh-in habit: every day is
+  // observed, no day is complete.
+  for (let i = 1; i <= 20; i++) {
+    repo.addFoodNote("breakfast", "", { kcal: 700, protein_g: 50 }, undefined, { date: localDaysAgo(i) });
+    if (i % 2 === 0) repo.logWeight(168 - i * 0.05, localDaysAgo(i));
+  }
+  const state = repo.cutTargetState(localDaysAgo(0));
+  assert.equal(state.coverage.intake_days, 0, "breakfast-only days are absent evidence, not logged intake days");
+  assert.equal(state.intake_mode, "quiet");
+
+  const derivation = repo.cutTargetDecision(state);
+  assert.ok(derivation);
+  assert.equal(derivation.tdee_basis, "formula_estimate");
+  assert.match(derivation.reason, /weight trend and a metabolic prior/);
+  assert.doesNotMatch(derivation.reason, /not yet thick enough/, "a quiet log is not a record that failed to thicken");
+});
+
+test("a quiet log gets its own words, and they never ask for more logging", () => {
+  const quiet = cutTargetDecision(
+    grounded({
+      coverage: { window_days: 28, intake_days: 0, weigh_ins: 10, weigh_in_span_days: 26 },
+      intake_mode: "quiet",
+    })
+  );
+  const settling = cutTargetDecision(
+    grounded({
+      coverage: { window_days: 28, intake_days: 3, weigh_ins: 10, weigh_in_span_days: 26 },
+      intake_mode: "occasional",
+    })
+  );
+  const quietBody = cutTargetBody(quiet, TODAY);
+  const settlingBody = cutTargetBody(settling, TODAY);
+  assert.notEqual(quietBody, settlingBody, "the two registers must not share a sentence");
+  assert.match(quietBody, /scale|weigh-in|weight trend|tape/i, "quiet says what it actually stood on");
+  assert.doesNotMatch(quietBody, /a few more logged days|logs and weigh-ins accumulate/i);
 });
 
 // ---- rule 2: absent data estimates and moves, it never parks -----------------

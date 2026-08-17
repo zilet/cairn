@@ -17,7 +17,10 @@ import {
   setMealPlanStatus,
   updateFoodNote,
   updateMealPlanDays,
+  USER_TARGET_MAX_KCAL,
+  USER_TARGET_MIN_KCAL,
 } from "../domain/nutrition/index.js";
+import { userSetNutritionTarget } from "../domain/brain/autonomy-service.js";
 import { goalPace } from "../repo/goal-pace.js";
 import { dayFuelDemand } from "../repo/fuel-demand.js";
 import { fuelingFollowThroughDue, listFuelingFeedback, setFuelingFeedback } from "../repo/fueling.js";
@@ -114,6 +117,40 @@ nutritionRouter.post("/nutrition/checkin", async (req, res) => {
     res.json(await nutritionCheckin(b.agent, window));
   } catch (e: any) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// THE ATHLETE'S OWN NUMBER: a direct set of the calorie target, effective today,
+// stamped `source: "user"` — the provenance every downstream read (the next check-in's
+// `previous`, the fuel card, the goal math) keys off. Every other way a target moves is
+// Cairn's, so without this the only lever the athlete holds over a drifting number is
+// arguing with the coach about it. The lean-safe kcal/protein floors still run inside
+// setNutritionTarget; a number outside 1200-6000 kcal is a 400 with the reason rather
+// than a silent clamp, because a typed number quietly changed underneath a person is
+// worse than one they were told was refused. Stating a number also SUPERSEDES any
+// automated change still waiting for a food-day boundary (`userSetNutritionTarget`) —
+// the athlete outranks the machine, so nothing lands on top of their choice tomorrow.
+// Body: { target_kcal, protein_g?, carbs_g?, fat_g?, note? }. Returns the saved row.
+nutritionRouter.post("/nutrition/target", (req, res) => {
+  const b = req.body ?? {};
+  const kcal = Number(b.target_kcal);
+  if (!Number.isFinite(kcal) || kcal < USER_TARGET_MIN_KCAL || kcal > USER_TARGET_MAX_KCAL) {
+    return res
+      .status(400)
+      .json({ error: `target_kcal must be a number between ${USER_TARGET_MIN_KCAL} and ${USER_TARGET_MAX_KCAL}` });
+  }
+  try {
+    const saved = userSetNutritionTarget({
+      target_kcal: kcal,
+      protein_g: b.protein_g,
+      carbs_g: b.carbs_g,
+      fat_g: b.fat_g,
+      note: b.note,
+    });
+    if (!saved) return res.status(400).json({ error: "target could not be saved" });
+    res.json(saved);
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || "target could not be saved" });
   }
 });
 

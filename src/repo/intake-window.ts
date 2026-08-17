@@ -1,11 +1,20 @@
 import { db } from "../db.js";
-import { addDaysISO, localDateISO } from "./shared.js";
+import { addDaysISO, approxTimeForMealLabel, localDateISO, normalizeWallClock } from "./shared.js";
+
+export type IntakeDayCoverage = "complete" | "partial" | "none";
 
 export interface CompletedIntakeDay {
   date: string;
   kcal: number;
   meals: string[];
+  // The one classification (see `classifyIntakeDay`). `credible` is exactly
+  // `coverage === "complete"`, kept as its own field because every existing reader
+  // filters on it.
+  coverage: IntakeDayCoverage;
   credible: boolean;
+  entries: number;
+  morning: boolean;
+  evening: boolean;
 }
 
 export interface CompletedIntakeWindow {
@@ -24,12 +33,150 @@ function normalizedWindowDays(value: number): number {
   return Number.isFinite(n) ? Math.max(3, Math.min(90, Math.trunc(n))) : 14;
 }
 
-function credibleDay(total: number, meals: string[]): boolean {
-  const snackOnly = meals.length > 0 && meals.every((meal) => /^(snack|treat|drink|beverage)$/.test(meal));
-  const primarySlots = new Set(meals.filter((meal) => /^(breakfast|brunch|lunch|dinner|supper)$/.test(meal))).size;
-  const nonSnackEntries = meals.filter((meal) => !/^(snack|treat|drink|beverage)$/.test(meal)).length;
-  const genericDayTotal = meals.some((meal) => meal === "meal") && total >= 1_000;
-  return !snackOnly && (primarySlots >= 2 || nonSnackEntries >= 2 || genericDayTotal);
+// ---- the one intake-coverage classifier --------------------------------------
+//
+// THE LAW, mirroring sensor-freshness's "a stale wearable reading behaves as
+// absent, never as current": LOGGED INTAKE IS EVIDENCE ONLY WHEN THE DAY IS
+// PLAUSIBLY COMPLETE. A partial or unlogged day is ABSENT, never "low". Reading a
+// day whose dinner was never logged as a low-intake day is how a quiet week turns
+// into a fabricated deficit, an underfueling read, and a maintenance estimate
+// built on food nobody failed to eat.
+//
+// A COMPLETE day looks like the athlete's own description of one: food at the
+// front of the day AND food at the end of it, across at least two entries. A day
+// with food on it that does not span that way — one mid-day entry, an evening-only
+// entry, a day whose dinner never arrived — is PARTIAL. A day with nothing on it
+// is NONE. Partial and none are both absent for evidence purposes; they are kept
+// distinct because coverage reporting wants to say which one it saw.
+//
+// Placement uses the SAME read-time ladder `getDayIntake` sorts a day by, and for
+// the same reason: `eaten_at` is the only recorded fact, a named meal's
+// representative hour is good enough to place breakfast before dinner and never
+// good enough to store, and nothing here is ever written back to the row.
+//
+// Two shapes never reach that ladder, and each keeps its own rule:
+//   - snacks and drinks alone are not a day's eating, whatever hours they span;
+//   - a day whose entries carry no time and no placeable label ("meal") can still
+//     be a whole day declared in one go, so a day's worth of calories on such a
+//     day reads complete. The bar is a DAY's food, not a meal's — and it only
+//     applies where placement is genuinely unknown, which means NOTHING on the day
+//     could be placed. One untimed drink alongside a logged breakfast and lunch
+//     does not make the missing dinner ambiguous; where we can see that the food
+//     landed before the evening, that absence is informative and stands.
+const MORNING_WINDOW_END_HOUR = 12; // food logged before noon opens the day
+// 17:00 — the same hour partOfDay flips to "evening" at and MEAL_WINDOWS opens
+// dinner at, so "the end of the day" means one thing across the whole system.
+const EVENING_WINDOW_START_HOUR = 17;
+const MIN_COMPLETE_ENTRIES = 2;
+// A day's worth of food, for a day whose entries cannot be placed in time at all.
+const UNPLACEABLE_DAY_MIN_KCAL = 1_500;
+// The floor on the SPANNING arm. Reaching from the morning into the evening says
+// the day's shape is on the record; it does not say the day's food is. A logged
+// breakfast and a logged late snack span the whole day between them and come to
+// less than one meal — read as complete, that becomes a fabricated 800 kcal day
+// and the same fabricated deficit the law above exists to prevent. Set BELOW the
+// unplaceable bar on purpose: a spanning day has real placement evidence behind
+// it, so it is asked for less than a day declared in one untimed lump.
+const SPANNING_DAY_MIN_KCAL = 1_200;
+const SNACK_LABEL = /^(snack|treat|drink|beverage)$/;
+
+export interface IntakeDayEntry {
+  meal: string;
+  eaten_at: string | null;
+  kcal: number;
+}
+
+export interface IntakeDayShape {
+  coverage: IntakeDayCoverage;
+  // Entries carrying real calories — the only ones that can back an intake number.
+  entries: number;
+  kcal: number;
+  morning: boolean;
+  evening: boolean;
+  placed: number;
+  unplaceable: number;
+  snack_only: boolean;
+  // MACHINE register — third-person evidence prose for the provenance trail.
+  reason: string;
+}
+
+function minuteOfDay(hhmm: unknown): number | null {
+  const t = normalizeWallClock(hhmm);
+  return t ? Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5)) : null;
+}
+
+/**
+ * Classify one day's logged entries as complete / partial / none.
+ *
+ * PURE — no clock, no database. Every coverage read in the system routes here:
+ * `completedIntakeRange` for a window of closed days, `dayIntakeCoverage` for a
+ * single named day (today included).
+ */
+export function classifyIntakeDay(entries: IntakeDayEntry[]): IntakeDayShape {
+  const food = (Array.isArray(entries) ? entries : []).filter((entry) => Number(entry?.kcal) > 0);
+  const kcal = Math.round(food.reduce((sum, entry) => sum + Number(entry.kcal), 0));
+  if (!food.length) {
+    return {
+      coverage: "none",
+      entries: 0,
+      kcal: 0,
+      morning: false,
+      evening: false,
+      placed: 0,
+      unplaceable: 0,
+      snack_only: false,
+      reason: "Nothing is logged for this day, so intake is unknown rather than low.",
+    };
+  }
+
+  const labels = food.map((entry) =>
+    String(entry?.meal ?? "meal")
+      .trim()
+      .toLowerCase()
+  );
+  const snackOnly = labels.every((label) => SNACK_LABEL.test(label));
+  const placements = food.map(
+    (entry, i) => minuteOfDay(entry.eaten_at) ?? minuteOfDay(approxTimeForMealLabel(labels[i]))
+  );
+  const placed = placements.filter((minute): minute is number => minute != null);
+  const unplaceable = food.length - placed.length;
+  const unplaceableKcal = Math.round(
+    food.reduce((sum, entry, i) => (placements[i] == null ? sum + Number(entry.kcal) : sum), 0)
+  );
+  const morning = placed.some((minute) => minute < MORNING_WINDOW_END_HOUR * 60);
+  const evening = placed.some((minute) => minute >= EVENING_WINDOW_START_HOUR * 60);
+
+  const spans = food.length >= MIN_COMPLETE_ENTRIES && morning && evening;
+  const spansTheDay = spans && kcal >= SPANNING_DAY_MIN_KCAL;
+  // Genuinely unknown placement means NOTHING on the day could be placed, and the
+  // bar is measured against the untimed calories alone — counting placed food
+  // toward it would let one placeable meal carry an untimed sip over the line.
+  const wholeDayDeclared = placed.length === 0 && unplaceable > 0 && unplaceableKcal >= UNPLACEABLE_DAY_MIN_KCAL;
+  const complete = !snackOnly && (spansTheDay || wholeDayDeclared);
+
+  const reason = complete
+    ? spansTheDay
+      ? `${food.length} logged entries reach from the morning into the evening, so the day reads as a whole one.`
+      : `${unplaceableKcal} kcal across ${food.length} untimed ${food.length === 1 ? "entry" : "entries"} is a whole day's food declared at once.`
+    : snackOnly
+      ? "Only snacks or drinks are logged, which does not describe a day's eating."
+      : spans
+        ? `The logged entries reach across the day but come to ${kcal} kcal, less than a day's eating, so the day's total is absent evidence rather than a low intake.`
+        : !evening
+          ? "Nothing is logged at the end of the day, so the day's total is absent evidence rather than a low intake."
+          : "The logged entries do not reach across the day, so the day's total is absent evidence rather than a low intake.";
+
+  return {
+    coverage: complete ? "complete" : "partial",
+    entries: food.length,
+    kcal,
+    morning,
+    evening,
+    placed: placed.length,
+    unplaceable,
+    snack_only: snackOnly,
+    reason,
+  };
 }
 
 // One shared credibility read for expenditure and the protective fuel loop.
@@ -67,13 +214,13 @@ export function completedIntakeRange(
   }
   const rows = db
     .prepare(
-      `SELECT id, COALESCE(date, substr(created_at, 1, 10)) AS day, meal, parsed_json
+      `SELECT id, COALESCE(date, substr(created_at, 1, 10)) AS day, meal, eaten_at, parsed_json
          FROM food_notes
         WHERE COALESCE(date, substr(created_at, 1, 10)) >= ?
-          AND COALESCE(date, substr(created_at, 1, 10)) <= ?`,
+          AND COALESCE(date, substr(created_at, 1, 10)) <= ?`
     )
     .all(since, effectiveThrough) as any[];
-  const byDay = new Map<string, { kcal: number; meals: string[] }>();
+  const byDay = new Map<string, IntakeDayEntry[]>();
   for (const row of rows) {
     let parsed: any = null;
     try {
@@ -84,18 +231,30 @@ export function completedIntakeRange(
     const kcal = Number(parsed?.kcal);
     const date = String(row.day ?? "").slice(0, 10);
     if (!date || !Number.isFinite(kcal) || kcal <= 0) continue;
-    const current = byDay.get(date) ?? { kcal: 0, meals: [] };
-    current.kcal += kcal;
-    current.meals.push(String(row.meal || "meal").trim().toLowerCase());
+    const current = byDay.get(date) ?? [];
+    current.push({
+      meal: String(row.meal || "meal")
+        .trim()
+        .toLowerCase(),
+      eaten_at: row.eaten_at ?? null,
+      kcal,
+    });
     byDay.set(date, current);
   }
   const observed = [...byDay.entries()]
-    .map(([date, value]) => ({
-      date,
-      kcal: Math.round(value.kcal),
-      meals: value.meals,
-      credible: credibleDay(value.kcal, value.meals),
-    }))
+    .map(([date, dayEntries]) => {
+      const shape = classifyIntakeDay(dayEntries);
+      return {
+        date,
+        kcal: shape.kcal,
+        meals: dayEntries.map((entry) => entry.meal),
+        coverage: shape.coverage,
+        credible: shape.coverage === "complete",
+        entries: shape.entries,
+        morning: shape.morning,
+        evening: shape.evening,
+      };
+    })
     .sort((a, b) => a.date.localeCompare(b.date));
   const credible = observed.filter((day) => day.credible).length;
   return {

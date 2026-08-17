@@ -18,6 +18,7 @@ import {
   liftProgressionSubjects,
   rebaseDeferredExpectations,
 } from "./brain/change-expectations.js";
+import { pickDayVariant } from "./brain/day-read-rules.js";
 import { findExercise } from "./exercises.js";
 import { estimateExpenditure, type ExpenditureEstimate } from "./expenditure.js";
 import { lsqSlopePerDay } from "./health.js";
@@ -237,7 +238,19 @@ function hydrateProposal(row: any) {
   };
 }
 
-export function setProposalStatus(id: number, status: string, opts: { deferTrainingVersionBump?: boolean } = {}) {
+export function setProposalStatus(
+  id: number,
+  status: string,
+  opts: {
+    deferTrainingVersionBump?: boolean;
+    // Whether this transition should write its own generic audit row. Default true —
+    // a discard or a supersede that nothing else explained needs SOME ledger entry.
+    // A caller that has ALREADY written the specific receipt for this transition
+    // passes false, so the athlete reads one row saying what happened rather than a
+    // vague second one filed beside it.
+    recordDecision?: boolean;
+  } = {}
+) {
   db.prepare(`UPDATE plan_proposals SET status = ? WHERE id = ?`).run(status, id);
   // applyProposal batches the plan mutation and its proposal-state transition into
   // one logical cache invalidation after the SQL unit commits. Other callers keep
@@ -261,7 +274,7 @@ export function setProposalStatus(id: number, status: string, opts: { deferTrain
   if (status === "applied" || status === "discarded" || status === "superseded")
     supersedeReviewDecisionsForProposal(id);
   const proposal = getProposal(id);
-  if (proposal && status !== "applied") recordProposalStatusDecision(proposal, status);
+  if (proposal && status !== "applied" && opts.recordDecision !== false) recordProposalStatusDecision(proposal, status);
   return proposal;
 }
 
@@ -748,7 +761,11 @@ function recordAppliedProposalDecision(
   result: any,
   existingDecisionId?: number,
   required = false,
-  prescriptionsBefore?: Map<string, PlanPrescription>
+  prescriptionsBefore?: Map<string, PlanPrescription>,
+  // `boundaryTrimmed`: the apply-time re-clamp lowered the reviewed kcal, so the
+  // draft's own summary and its `delta_kcal` both describe a move that did not
+  // happen. Everything derived from them is re-derived from what actually landed.
+  applyContext: { boundaryTrimmed?: boolean } = {}
 ): void {
   try {
     const today = localDateISO();
@@ -862,11 +879,19 @@ function recordAppliedProposalDecision(
     const nutritionStage =
       nutrition && accepted?.target_kcal != null ? recompositionStageAt(nutritionEffectiveDate).kind : null;
     const nutritionTargetDelta = Number(p.parsed?.nutrition?.delta_kcal);
-    const storedTargetDelta = Number.isFinite(nutritionTargetDelta)
-      ? Math.round(nutritionTargetDelta)
-      : Number.isFinite(Number(p.parsed?.nutrition?.prev_target_kcal))
-        ? Math.round(Number(accepted?.target_kcal) - Number(p.parsed.nutrition.prev_target_kcal))
-        : null;
+    const nutritionPrevTarget = Number(p.parsed?.nutrition?.prev_target_kcal);
+    // The delta the expectation baseline is built on, and the one every evaluator
+    // later measures the outcome against (brain/evaluators.ts, predictionFields).
+    // A boundary re-clamp makes the draft's own `delta_kcal` a claim about a step
+    // that was never taken, so a trimmed apply always recomputes it from the number
+    // that actually landed — otherwise the ledger predicts the weight response of a
+    // +200 kcal move and then judges the athlete against a +50 one.
+    const storedTargetDelta =
+      Number.isFinite(nutritionTargetDelta) && !applyContext.boundaryTrimmed
+        ? Math.round(nutritionTargetDelta)
+        : Number.isFinite(nutritionPrevTarget)
+          ? Math.round(Number(accepted?.target_kcal) - nutritionPrevTarget)
+          : null;
     if (nutrition && accepted?.target_kcal != null) {
       try {
         const estimate = estimateExpenditure(21);
@@ -1034,7 +1059,23 @@ function recordAppliedProposalDecision(
     const sourceRefType = nutrition && accepted?.id ? "nutrition_target" : "plan_proposal";
     const sourceRefKey = String(nutrition && accepted?.id ? accepted.id : p.id);
     const shape = proposalDecisionShape(p);
-    const rationale = shape.rationale;
+    // The draft wrote BOTH its summary and its reason about the kcal it asked for
+    // ("Raising you to 2,338 kcal to protect training"). When the boundary trimmed that
+    // number, every PROSE field of the applied row has to describe what landed instead:
+    // a row whose headline says 2,150 and whose reason underneath still says 2,338 is
+    // worse than either alone, because it reads as two different changes. So the two
+    // are replaced together, in their own registers — the summary in the athlete's
+    // voice, the rationale in the machine one. The draft's original wording is not
+    // lost: it stays on the `plan_proposals` row, which is where the un-applied
+    // suggestion belongs. `context.boundary_revalidation` keeps the asked-for kcal as a
+    // STRUCTURED provenance field, which is an audit trail rather than a claim.
+    const trimmedTargetKcal =
+      nutrition && applyContext.boundaryTrimmed && Number.isFinite(Number(accepted?.target_kcal))
+        ? Number(accepted.target_kcal)
+        : null;
+    const summary =
+      trimmedTargetKcal == null ? shape.summary : revalidatedTargetSummary(trimmedTargetKcal, nutritionEffectiveDate);
+    const rationale = trimmedTargetKcal == null ? shape.rationale : revalidatedTargetNote(trimmedTargetKcal);
     // Close the lab loop: when this plan/nutrition change is applied while a marker-sourced
     // directive is active in its domain, anchor a falsifiable "<marker> should move toward
     // optimal at the next reading" expectation to THIS intervention (the primary driver; the
@@ -1183,7 +1224,7 @@ function recordAppliedProposalDecision(
           : recoveryCycle?.effective_on ?? today,
       kind: shape.kind,
       domain: shape.domain,
-      summary: shape.summary,
+      summary,
       rationale,
       source: p.agent || "plan_proposal",
       source_ref_type: sourceRefType,
@@ -1301,12 +1342,49 @@ function cancelAnnouncementsForProposal(proposalId: number, exceptDecisionId?: n
   }
 }
 
+// ---- when the boundary trimmed the raise -------------------------------------
+//
+// A nutrition target that waited for a natural food-day boundary is judged AGAIN on
+// the day it lands (`revalidateNutritionTargetAtBoundary`, domain/brain/autonomy-
+// service.ts) and may land lower than the draft asked for. The draft's own summary
+// and reason were written about the number it asked for; left in place they make the
+// ledger row and the stored target note describe a raise that did not happen — the
+// athlete reads "a step to 2,800 kcal" on the row that actually wrote 2,350.
+//
+// So a trimmed apply gets its own sentence, naming the kcal that landed. Variant set
+// rather than one literal (VISION.md Amendment 2), rotated on the day it took effect
+// so a run of trimmed raises never prints one sentence for weeks.
+const REVALIDATED_TARGET_SUMMARIES: readonly string[] = [
+  "Fuel target moved to {kcal} kcal — the step was trimmed to what your own record puts maintenance at.",
+  "Your target is {kcal} kcal now; the raise came back to the maintenance your record measures.",
+  "The raise landed at {kcal} kcal, held to the maintenance your logged record actually shows.",
+];
+
+function revalidatedTargetSummary(kcal: number, date: string): string {
+  return pickDayVariant(REVALIDATED_TARGET_SUMMARIES, date, "nutrition_target_revalidated").replace(
+    "{kcal}",
+    String(Math.round(kcal))
+  );
+}
+
+// The same fact in the MACHINE register, for the nutrition_targets note — third-person
+// provenance prose that the coach context and the next check-in read.
+function revalidatedTargetNote(kcal: number): string {
+  return `Applied at ${Math.round(kcal)} kcal: the reviewed raise was trimmed to the maintenance the athlete's own record measures, since protection carries a target to maintenance and no further.`;
+}
+
 export interface ProposalApplyOptions {
   orphanSiblingCleanup?: OrphanSiblingCleanup;
   decisionId?: number;
   normalizedApplyPayload?: NormalizedProposalApplyPayload;
   requireDecisionLedger?: boolean;
   freshnessCheckedAt?: string;
+  // The boundary re-clamp (applyDueAnnouncedDecisions, domain/brain/autonomy-service.ts):
+  // a nutrition target scheduled for a natural boundary is judged AGAIN against the
+  // evidence in force on the day it lands, and this is the kcal that survived. Only ever
+  // narrower than the reviewed number the draft carries — the caller has already refused
+  // the change outright when the re-clamp would have taken it to a no-op.
+  revalidatedTargetKcal?: number;
 }
 
 function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
@@ -1335,9 +1413,17 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
   // keeps its already-reviewed kcal (with the absolute kcal floor) while the
   // current protein safety floor and any adjustment remain transparent.
   if (parsed.kind === "nutrition_target") {
-    const incompatibility = reviewedNutritionTargetIncompatibility(parsed.nutrition);
+    // A boundary re-clamp replaces the reviewed kcal BEFORE every floor and safety
+    // read below, so the number that reaches the safety layer is the one this apply
+    // actually intends to write — never the draft's original alongside it.
+    const revalidatedKcal = Number(opts.revalidatedTargetKcal);
+    const boundaryTrimmed = Number.isFinite(revalidatedKcal);
+    const reviewedNutrition = boundaryTrimmed
+      ? { ...parsed.nutrition, target_kcal: Math.round(revalidatedKcal) }
+      : parsed.nutrition;
+    const incompatibility = reviewedNutritionTargetIncompatibility(reviewedNutrition);
     if (incompatibility) throw new Error(incompatibility);
-    const { nutrition, clamped } = clampNutritionTarget(parsed.nutrition, { preserveReviewedKcal: true });
+    const { nutrition, clamped } = clampNutritionTarget(reviewedNutrition, { preserveReviewedKcal: true });
     // Close the loop: PERSIST the accepted (clamped, lean-safe) target so the fuel
     // card, goal math and next check-in read THIS number instead of re-deriving the
     // formula. Effective from today. Persistence is the authoritative mutation: if
@@ -1351,7 +1437,10 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
           carbs_g: nutrition.carbs_g,
           fat_g: nutrition.fat_g,
           source: "checkin",
-          note: nutrition.reason ?? null,
+          // The draft's reason was written about the number it asked for. When the
+          // boundary trimmed that number, quoting it here would leave the stored
+          // target explaining a raise nobody applied.
+          note: boundaryTrimmed ? revalidatedTargetNote(nutrition.target_kcal) : (nutrition.reason ?? null),
         },
         { recordDecision: false, preserveReviewedKcal: true }
       );
@@ -1371,7 +1460,9 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
       ...(accepted ? { accepted } : {}),
       ...(clamped.length ? { clamped } : {}),
     };
-    recordAppliedProposalDecision(p, result, opts.decisionId, opts.requireDecisionLedger === true);
+    recordAppliedProposalDecision(p, result, opts.decisionId, opts.requireDecisionLedger === true, undefined, {
+      boundaryTrimmed,
+    });
     return result;
   }
   const recoveryProposal =

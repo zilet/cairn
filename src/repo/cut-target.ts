@@ -46,7 +46,7 @@ import {
   leannessAwareLossRates,
 } from "./profile.js";
 import { getAttentionSchedule } from "./attention.js";
-import { getLatestNutritionTarget } from "./nutrition.js";
+import { getLatestNutritionTarget, intakeLoggingMode, type KnownIntakeLoggingMode } from "./nutrition.js";
 import { resolvedCurrentBodyweight } from "./bodyweight.js";
 import { addDaysISO, localDateISO } from "./shared.js";
 
@@ -112,6 +112,13 @@ export interface CutTargetState {
   plausible_tdee_min: number;
   plausible_tdee_max: number;
   coverage: CutTargetCoverage;
+  // Whether the athlete is logging meals at all right now. `quiet` does NOT make
+  // the derivation quieter — it changes what the derivation SAYS it stood on, so a
+  // scale-and-prior estimate is never described as a record that has not filled in
+  // yet. Null when the mode could not be read (including the read's own "unknown",
+  // which is normalized away here); the derivation then behaves exactly as it did
+  // before this field existed.
+  intake_mode?: KnownIntakeLoggingMode | null;
   // The protein figure already in force. The derivation moves calories only —
   // protein is carried forward, never trimmed as a side effect of a kcal change.
   protein_floor_g: number | null;
@@ -144,6 +151,9 @@ export interface CutTargetDerivation {
   projected_goal_date: string | null;
   goal_date_adaptation: CutGoalDateAdaptation | null;
   coverage: CutTargetCoverage;
+  // Carried through so the words a person reads (`cutTargetBody`) can tell a
+  // record that is still filling in from one that is deliberately not being kept.
+  intake_mode: KnownIntakeLoggingMode | null;
   // MACHINE register — third-person evidence prose for the target note and the
   // provenance trail.
   reason: string;
@@ -312,10 +322,17 @@ export function cutTargetDecision(state: CutTargetState): CutTargetDerivation | 
     };
   }
 
+  // What the number actually stood on. When the plate has gone quiet, the estimate
+  // is led by the scale and a metabolic prior BY DESIGN — describing it as a record
+  // that has not thickened yet would read as a complaint about missing logs and
+  // would misdescribe where the number came from.
+  const intakeMode = state?.intake_mode ?? null;
   const basisWords =
     tdeeBasis === "logged_reality"
-      ? `logged intake over ${coverage.intake_days} days measured against ${coverage.weigh_ins} weigh-ins spanning ${coverage.weigh_in_span_days} days`
-      : "a formula and activity estimate, because the logged record is not yet thick enough to measure maintenance";
+      ? `logged intake over ${coverage.intake_days} complete days measured against ${coverage.weigh_ins} weigh-ins spanning ${coverage.weigh_in_span_days} days`
+      : intakeMode === "quiet"
+        ? `the measured weight trend and a metabolic prior, since meals are not being logged over the trailing ${coverage.window_days} days`
+        : "a formula and activity estimate, because the logged record is not yet thick enough to measure maintenance";
   const proteinFloor = finite(state?.protein_floor_g);
 
   return {
@@ -332,8 +349,67 @@ export function cutTargetDecision(state: CutTargetState): CutTargetDerivation | 
     projected_goal_date: projected,
     goal_date_adaptation: adaptation,
     coverage,
+    intake_mode: intakeMode,
     reason: `Maintenance estimated at ${tdee} kcal from ${basisWords}; the cut target holds a ${deliveredDeficit} kcal deficit, about ${(Math.round(paceDelivered * 100) / 100).toFixed(2)} lb a week.`,
   };
+}
+
+// ---- protection buys maintenance, never a surplus ----------------------------
+
+export interface ProtectiveRaiseCap {
+  target_kcal: number;
+  capped: boolean;
+}
+
+/**
+ * The ceiling on a PROTECTIVE raise: measured maintenance.
+ *
+ * The grounded ceiling above (rule 3, `target_kcal`) has one deliberate escape —
+ * fresh under-fuelling evidence, which is exactly the grounded evidence the rule
+ * asks for and so passes straight through it. That escape had no ceiling of its
+ * OWN, and the evidence that opens it (heavy endurance load during a cut) is a
+ * CHRONIC condition rather than an event: every check-in found the escape open and
+ * added another bounded step, and the target ratcheted past maintenance and kept
+ * going. A cut fuelled above maintenance is not a protected cut, it is a surplus.
+ *
+ * So: protection may lift the target all the way TO measured maintenance, and no
+ * further. And, exactly as the grounded clamp does, it can never push the target
+ * BELOW the number already in force — refusing a raise is a hold, never a cut
+ * nobody asked for.
+ *
+ * ONLY A MEASURED MAINTENANCE MAY LIFT THE CEILING. `tdee_basis` decides that, and
+ * it is a required argument rather than an optional one so no future caller can
+ * forget to hand it over. When grounding failed the derivation still reports a
+ * number — the Mifflin prior — and reading that as headroom is how a formula
+ * estimate, which knows nothing about this athlete's record, came to authorize a
+ * raise the record had already outrun. So on any basis other than `logged_reality`
+ * the ceiling is `previous`: protection HOLDS the target where it is, because
+ * protection cannot buy a surplus on an unmeasured maintenance.
+ *
+ * `tdee_kcal` absent or unreadable is a different case and keeps its own answer:
+ * there is no ceiling to run this cap against at all, so it does not run and the
+ * caller's own bounded step is the only bound. A present-but-formula figure is not
+ * silence — it is a positive statement that maintenance is unmeasured.
+ *
+ * PURE. Shared by the check-in boundary (`personalizeNutritionCheckinTarget`) and
+ * the apply-time revalidation at a natural boundary, so the two can never disagree
+ * about what protection is allowed to buy.
+ */
+export function capProtectiveRaise(
+  target: number,
+  previous: number,
+  tdeeKcal: number | null | undefined,
+  tdeeBasis: CutTdeeBasis | null | undefined
+): ProtectiveRaiseCap {
+  const tdee = finite(tdeeKcal);
+  if (tdee == null || !Number.isFinite(target) || !Number.isFinite(previous)) {
+    return { target_kcal: target, capped: false };
+  }
+  // Only a RAISE is ever capped. A hold or a lower target is the ordinary path.
+  if (target <= previous) return { target_kcal: target, capped: false };
+  const ceiling = tdeeBasis === "logged_reality" ? Math.max(previous, tdee) : previous;
+  if (target <= ceiling) return { target_kcal: target, capped: false };
+  return { target_kcal: Math.round(ceiling), capped: true };
 }
 
 // ---- the words a person reads ------------------------------------------------
@@ -357,8 +433,25 @@ const ESTIMATE_BODIES: readonly string[] = [
   "This leans on the wider picture for now; your own logged days will take it over.",
 ];
 
+// The same estimate register, for a record that is not filling in because meals
+// are not being logged — by choice, not by omission. The ESTIMATE_BODIES promise
+// that "a few more logged days will sharpen it" is both untrue and a nudge here;
+// what actually sharpens this number is the scale and the tape, which the
+// measurement-request module already asks for on its own schedule.
+const OUTCOME_LED_BODIES: readonly string[] = [
+  "With meals off the log, this leans on the scale and your metabolic picture instead — weigh-ins are what keep it honest.",
+  "This one is read from the scale rather than the plate, so weigh-ins are what move it.",
+  "There's no food log under this number right now; it tracks your weight trend and a metabolic estimate.",
+  "Built from the scale and the tape rather than the diary, which is a perfectly good way to run a cut.",
+];
+
 export function cutTargetBody(derivation: CutTargetDerivation, date: string): string {
-  const set = derivation.tdee_basis === "logged_reality" ? GROUNDED_BODIES : ESTIMATE_BODIES;
+  const set =
+    derivation.tdee_basis === "logged_reality"
+      ? GROUNDED_BODIES
+      : derivation.intake_mode === "quiet"
+        ? OUTCOME_LED_BODIES
+        : ESTIMATE_BODIES;
   return pickVariant(set, date, "cut_target_body");
 }
 
@@ -378,7 +471,7 @@ function pickVariant<T>(variants: readonly T[], date: string, key = ""): T {
 // One flat pool of every athlete-facing literal this module can produce, so a
 // grammar test can enumerate the vocabulary wholesale rather than sampling it.
 export function cutTargetGrammarPool(): string[] {
-  return [...GROUNDED_BODIES, ...ESTIMATE_BODIES];
+  return [...GROUNDED_BODIES, ...ESTIMATE_BODIES, ...OUTCOME_LED_BODIES];
 }
 
 // ---- the thin DB-facing read -------------------------------------------------
@@ -427,6 +520,21 @@ export function cutTargetState(
     bodyFat = null;
   }
 
+  // Is the plate still being logged at all? Read over the SAME trailing window the
+  // grounding floor reads, so the basis words and the evidence they describe can
+  // never be talking about different fortnights.
+  // "unknown" is the read declining to answer, and it is normalized to null here
+  // for the same reason the catch is: an unread habit must leave the derivation
+  // describing its basis exactly as it did before this field existed, never
+  // borrowing the outcome-led words a genuinely quiet plate earns.
+  let mode: KnownIntakeLoggingMode | null = null;
+  try {
+    const read = intakeLoggingMode(CUT_EVIDENCE_WINDOW_DAYS, today);
+    mode = read === "unknown" ? null : read;
+  } catch {
+    mode = null;
+  }
+
   return {
     today,
     weight_lb: weight,
@@ -439,12 +547,15 @@ export function cutTargetState(
     plausible_tdee_max: finite(estimate?.quality?.plausible_tdee_max) ?? 8_000,
     coverage: {
       window_days: CUT_EVIDENCE_WINDOW_DAYS,
-      intake_days:
-        (Number(estimate?.coverage?.credible_intake_days) || 0) +
-        (Number(estimate?.coverage?.partial_intake_days) || 0),
+      // COMPLETE days only. A partial day is absent evidence, never a low-intake
+      // day (the intake-coverage law, src/repo/intake-window.ts) — counting one
+      // toward the grounding floor is how a fortnight of logged breakfasts came to
+      // vouch for a maintenance number measured against a whole day's eating.
+      intake_days: Number(estimate?.coverage?.credible_intake_days) || 0,
       weigh_ins: Number(estimate?.coverage?.weigh_in_days) || 0,
       weigh_in_span_days: Number(estimate?.coverage?.weigh_in_span_days) || 0,
     },
+    intake_mode: mode,
     protein_floor_g: proteinFloor,
   };
 }

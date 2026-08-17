@@ -190,6 +190,14 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   (a stale wearable reading behaves as absent, never as current) and `hybrid-load.ts`'s `acuteGate()`
   (the one "is this muscle recovering" question — call it, never re-derive a window). Details in
   `docs/ARCHITECTURE.md`.
+- **Logged intake is evidence only when the day reads complete** — `classifyIntakeDay`
+  (`src/repo/intake-window.ts`) is the one credibility rule: a morning→evening span carrying at
+  least `SPANNING_DAY_MIN_KCAL`, or, when NOTHING on the day could be placed in time, a whole day
+  declared at once (`UNPLACEABLE_DAY_MIN_KCAL` of *untimed* calories — one placed meal disqualifies
+  that arm). A partial or unlogged day is ABSENT, never "low". Never infer under-eating from
+  missing logs; and during an affirmed cut a protective raise stops at **measured** maintenance
+  (`capProtectiveRaise`, `src/repo/cut-target.ts`) — protection buys maintenance, never a surplus,
+  and a `formula_estimate` anchor is not a measurement, so it can only ever hold the target.
 - **Sessions are keyed by date** — `getOrCreateSession` reuses today's session, so logged sets
   accumulate into one session per day.
 - **Garmin strength is a session, not an activity.** `upsertGarminActivity` deliberately skips the

@@ -30,11 +30,24 @@ function seedProfile() {
 
 // Insert one logged food note with a chosen local-wall-clock created_at (read as
 // UTC under the pinned zone) and protein. enrichment_status 'done' so nothing queues.
-function meal(date, createdAt, protein, { kcal = 500, summary = "meal" } = {}) {
+function meal(date, createdAt, protein, { kcal = 500, summary = "meal", label = "meal" } = {}) {
   db.prepare(
     `INSERT INTO food_notes (date, meal, raw_output, parsed_json, enrichment_status, created_at)
-     VALUES (?, 'meal', '', ?, 'done', ?)`
-  ).run(date, JSON.stringify({ summary, protein_g: protein, kcal }), createdAt);
+     VALUES (?, ?, '', ?, 'done', ?)`
+  ).run(date, label, JSON.stringify({ summary, protein_g: protein, kcal }), createdAt);
+}
+
+// The intake-coverage law: "behind" is the one bucket that makes a claim about
+// food NOT eaten, so it is only spoken when the plate is actually on the record.
+// Every case below that asserts "behind" on TODAY therefore seeds the habit it
+// depends on — a fortnight of complete closed days before the day under test.
+// Nothing lands on the day under test itself, so no total moves.
+function seedFullLogging(before) {
+  for (let i = 1; i <= 14; i++) {
+    const d = new Date(Date.parse(`${before}T00:00:00Z`) - i * 864e5).toISOString().slice(0, 10);
+    meal(d, `${d} 08:00:00`, 60, { kcal: 700, label: "breakfast" });
+    meal(d, `${d} 19:00:00`, 60, { kcal: 900, label: "dinner" });
+  }
 }
 
 function reset() {
@@ -60,6 +73,7 @@ test("behind: little protein in versus where the eating window says you'd be", (
   runWithTimeZone("UTC", () => {
     reset();
     seedProfile();
+    seedFullLogging(TODAY);
     meal(TODAY, "2026-07-13 07:30:00", 20, { summary: "coffee + toast" });
     const out = dayFuelState(TODAY, new Date("2026-07-13T11:51:00Z"));
     assert.ok(out, "a target exists");
@@ -101,6 +115,7 @@ test("on_pace / behind boundary is exactly the 20 g slack under the pace line", 
 
     reset();
     seedProfile();
+    seedFullLogging(TODAY);
     meal(TODAY, "2026-07-13 07:00:00", 60, { summary: "big breakfast" });
     const behind = dayFuelState(TODAY, new Date("2026-07-13T14:00:00Z"));
     assert.equal(behind.expected_by_now_g, 81);
@@ -126,8 +141,12 @@ test("a past local day is graded on full-day totals (pace is meaningless once it
     // Under-target on the whole day → behind, with expected pinned to the full target.
     reset();
     seedProfile();
-    meal(past, "2026-07-10 08:00:00", 60);
-    meal(past, "2026-07-10 19:00:00", 40); // 100 total, well under 162
+    // Breakfast AND dinner, carrying a day's worth of calories between them: a closed
+    // day only reads as under-target when it reads as a whole day in the first place
+    // (see the coverage cases below), and reaching across the day is not enough on its
+    // own — a day that spans 08:00 to 19:00 on one meal's calories is absent evidence.
+    meal(past, "2026-07-10 08:00:00", 60, { kcal: 700, label: "breakfast" });
+    meal(past, "2026-07-10 19:00:00", 40, { kcal: 900, label: "dinner" }); // 100 g protein, well under 162
     const behind = dayFuelState(past, new Date("2026-07-13T09:00:00Z"));
     assert.equal(behind.expected_by_now_g, TARGET_G, "past day expects the FULL target, not a time-fraction");
     assert.equal(behind.bucket, "behind");
@@ -135,10 +154,61 @@ test("a past local day is graded on full-day totals (pace is meaningless once it
     // Full-day total near target → met.
     reset();
     seedProfile();
-    meal(past, "2026-07-10 08:00:00", 100);
-    meal(past, "2026-07-10 19:00:00", 60); // 160 total, within 10 of 162
+    meal(past, "2026-07-10 08:00:00", 100, { kcal: 700, label: "breakfast" });
+    meal(past, "2026-07-10 19:00:00", 60, { kcal: 900, label: "dinner" }); // 160 g, within 10 of 162
     const met = dayFuelState(past, new Date("2026-07-13T09:00:00Z"));
     assert.equal(met.expected_by_now_g, TARGET_G);
     assert.equal(met.bucket, "met");
+  });
+});
+
+// ---- the intake-coverage law: absent, never low ------------------------------
+
+test("a closed day whose dinner was never logged is ABSENT, not behind", () => {
+  runWithTimeZone("UTC", () => {
+    const past = "2026-07-10";
+    reset();
+    seedProfile();
+    meal(past, "2026-07-10 08:00:00", 40, { label: "breakfast" }); // one meal, 40 g
+    assert.equal(
+      dayFuelState(past, new Date("2026-07-13T09:00:00Z")),
+      null,
+      "protein unrecorded must never be reported as protein missed"
+    );
+  });
+});
+
+test("a partial closed day that nonetheless MET the target still reads met", () => {
+  runWithTimeZone("UTC", () => {
+    const past = "2026-07-10";
+    reset();
+    seedProfile();
+    // One entry, so the day is partial — but food that IS logged is still food, and
+    // "met" makes no claim about anything missing.
+    meal(past, "2026-07-10 08:00:00", 160, { label: "breakfast" });
+    const out = dayFuelState(past, new Date("2026-07-13T09:00:00Z"));
+    assert.ok(out);
+    assert.equal(out.bucket, "met");
+  });
+});
+
+test("with meals off the log, today's 'behind' is withheld — it would describe the diary", () => {
+  runWithTimeZone("UTC", () => {
+    reset();
+    seedProfile();
+    // No logging habit behind it: one small breakfast is the whole record.
+    meal(TODAY, "2026-07-13 07:30:00", 20, { summary: "coffee + toast" });
+    assert.equal(dayFuelState(TODAY, new Date("2026-07-13T11:51:00Z")), null);
+  });
+});
+
+test("on_pace is never withheld for coverage — it accuses nothing", () => {
+  runWithTimeZone("UTC", () => {
+    reset();
+    seedProfile();
+    meal(TODAY, "2026-07-13 07:30:00", 60, { summary: "eggs + oats" });
+    const out = dayFuelState(TODAY, new Date("2026-07-13T11:51:00Z"));
+    assert.ok(out, "a quiet log does not silence the pace line itself");
+    assert.equal(out.bucket, "on_pace");
   });
 });

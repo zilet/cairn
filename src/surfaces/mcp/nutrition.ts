@@ -13,6 +13,8 @@ import {
   setMealPlanStatus,
   updateFoodNote,
   updateMealPlanDays,
+  USER_TARGET_MAX_KCAL,
+  USER_TARGET_MIN_KCAL,
 } from "../../domain/nutrition/index.js";
 import { goalPace } from "../../repo/goal-pace.js";
 import { dayFuelDemand } from "../../repo/fuel-demand.js";
@@ -20,6 +22,7 @@ import { setFuelingFeedback } from "../../repo/fueling.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 import { queueMcpAgentJob } from "./background.js";
 import { currentUnderfuelingRead } from "../../domain/brain/underfueling-service.js";
+import { userSetNutritionTarget } from "../../domain/brain/autonomy-service.js";
 import { cutQualityRead } from "../../repo/cut-quality.js";
 
 export function registerNutritionTools(server: McpToolRegistrar) {
@@ -63,6 +66,34 @@ export function registerNutritionTools(server: McpToolRegistrar) {
       window: z.number().int().optional().describe("days to derive expenditure over (default 21)"),
     },
     async ({ agent, window }) => asText(queueMcpAgentJob("nutrition_checkin", { window }, agent))
+  );
+
+  server.tool(
+    "set_nutrition_target",
+    "Set the athlete's OWN calorie target, effective today — the number they state, not one Cairn derived. Use this only when the athlete says what their target is; a coaching adjustment belongs to nutrition_checkin, which is bounded and reversible. Stamped source 'user', so the next check-in measures its step from this number, and any automated target change still waiting for a food-day boundary is superseded rather than applied on top of it. The lean-safe kcal and protein floors still apply and may raise what lands. Returns the saved row, or { error } when target_kcal falls outside 1200-6000 kcal.",
+    {
+      target_kcal: z.number().describe(`daily calorie target, ${USER_TARGET_MIN_KCAL}-${USER_TARGET_MAX_KCAL}`),
+      protein_g: z.number().optional(),
+      carbs_g: z.number().optional(),
+      fat_g: z.number().optional(),
+      note: z.string().optional().describe("why, in the athlete's own words"),
+    },
+    async ({ target_kcal, protein_g, carbs_g, fat_g, note }) => {
+      if (!Number.isFinite(target_kcal) || target_kcal < USER_TARGET_MIN_KCAL || target_kcal > USER_TARGET_MAX_KCAL) {
+        return asText({
+          error: `target_kcal must be a number between ${USER_TARGET_MIN_KCAL} and ${USER_TARGET_MAX_KCAL}`,
+        });
+      }
+      try {
+        return asText(
+          userSetNutritionTarget({ target_kcal, protein_g, carbs_g, fat_g, note }) ?? {
+            error: "target could not be saved",
+          }
+        );
+      } catch (error: any) {
+        return asText({ error: error?.message || "target could not be saved" });
+      }
+    }
   );
 
   server.tool(

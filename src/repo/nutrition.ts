@@ -22,7 +22,7 @@ import {
   MEAL_PLAN_FIBER_FLOOR_G,
 } from "./nutrition-safety.js";
 import { getSettings } from "./settings.js";
-import { completedIntakeRange } from "./intake-window.js";
+import { classifyIntakeDay, completedIntakeRange, type IntakeDayShape } from "./intake-window.js";
 import { canonicalHardDietKeys, mealPlanHardDietKeys, stampInstructionHardDiets } from "./dietary-constraints.js";
 import {
   localDateISO,
@@ -367,6 +367,13 @@ function nutritionTargetBasisLine(effectiveDate: string): string | null {
       : `your weight moved ${trend! < 0 ? "down" : "up"} ${magnitude.toFixed(1)} lb a week`;
   return `Basis: over the last ${days} days you averaged ${Math.round(intake!)} kcal a day and ${movement}, which puts maintenance near ${Math.round(maintenance!)} kcal. Scale weight carries water noise, so this stays an estimate that keeps updating.`;
 }
+
+// The band a HAND-SET target has to land in. Wide on purpose — this is a sanity
+// check on a typed number, not an opinion about what the athlete should eat; the
+// lean-safe floors inside setNutritionTarget are what actually protect them. Shared
+// by the REST route and the MCP tool so the two surfaces refuse the same numbers.
+export const USER_TARGET_MIN_KCAL = 1_200;
+export const USER_TARGET_MAX_KCAL = 6_000;
 
 export function setNutritionTarget(
   input: {
@@ -2139,6 +2146,101 @@ export function setFoodNoteEnrichStatus(id: number, status: string) {
 // the maintenance anchor) — a gentle "remaining". Never a score; "remaining",
 // never "consumed". The day boundary is the stamped LOCAL calendar day; the
 // created_at fallback only keeps legacy rows readable.
+// ---------- how complete is a logged day, and is the athlete still logging? -----
+//
+// THE LAW (see classifyIntakeDay in intake-window.ts, where the rule itself lives):
+// logged intake is evidence only when the day is plausibly complete; a partial or
+// unlogged day is ABSENT, never "low". These two functions are how the rest of the
+// system asks that question — the day-shaped one for a single date, the habit-shaped
+// one for "are they logging their meals at all right now?".
+//
+// They live here, next to getDayIntake, because this is where a day's food is read.
+// The classification itself lives in the leaf so the window reader and this one
+// cannot drift into two answers.
+
+export interface DayIntakeCoverage extends IntakeDayShape {
+  date: string;
+}
+
+/**
+ * Is this day's food log plausibly a WHOLE day?
+ *
+ * Unlike `completedIntakeRange`, this answers for ANY date including today — the
+ * caller decides what an in-progress day means. Reads the day's own rows and hands
+ * them to the shared classifier.
+ */
+export function dayIntakeCoverage(date?: string): DayIntakeCoverage {
+  const d = date || localDateISO();
+  const rows = db
+    .prepare(
+      `SELECT meal, eaten_at, parsed_json FROM food_notes
+        WHERE COALESCE(date, substr(created_at, 1, 10)) = ? ORDER BY id ASC`
+    )
+    .all(d) as any[];
+  const entries = rows.map((row) => {
+    let parsed: any = null;
+    try {
+      parsed = row.parsed_json ? JSON.parse(String(row.parsed_json)) : null;
+    } catch {
+      parsed = null;
+    }
+    return { meal: String(row.meal || "meal"), eaten_at: row.eaten_at ?? null, kcal: Number(parsed?.kcal) };
+  });
+  return { date: d, ...classifyIntakeDay(entries) };
+}
+
+// "unknown" is NOT a habit — it is the absence of a habit read. A failed window
+// query says nothing about whether the athlete is logging, and answering "quiet"
+// (which is a claim: the plate has gone off the record) turned a database error
+// into a confident statement about a person. Callers treat it as missing
+// information and fall back to the behaviour they had before the read existed.
+export type IntakeLoggingMode = "full" | "occasional" | "quiet" | "unknown";
+// The answers that are an actual habit read. A surface that STORES or narrates the
+// habit takes this one, so "we could not tell" can never be persisted or spoken as
+// though it were a fact about the athlete's logging.
+export type KnownIntakeLoggingMode = Exclude<IntakeLoggingMode, "unknown">;
+
+// The trailing habit window. A fortnight is long enough to tell a holiday from a
+// change of habit, short enough that a month-old logging streak cannot vouch for
+// how the athlete is logging this week.
+export const INTAKE_LOGGING_WINDOW_DAYS = 14;
+// Complete days as a share of the window. Above the bar the athlete is logging
+// their meals, so a day's totals mean what they say; below it, with at least one
+// complete day, they log sometimes; with none, the plate has gone quiet and every
+// intake read has to lean on outcome measurements instead.
+const FULL_LOGGING_MIN_DENSITY = 0.6;
+
+/**
+ * Is the athlete logging their meals right now — all of them, some of them, or
+ * none? Measured over CLOSED days only (today is still being lived), from the
+ * density of COMPLETE days, never from raw entry counts: a fortnight of logged
+ * breakfasts is not a fortnight of logged days.
+ *
+ * "unknown" when the window could not be read at all. It is the one answer that
+ * makes no claim about the athlete, and it exists because the alternative was to
+ * report a failed query as a quiet plate.
+ */
+export function intakeLoggingMode(
+  windowDays: number = INTAKE_LOGGING_WINDOW_DAYS,
+  asOf: string = localDateISO()
+): IntakeLoggingMode {
+  const days = Number.isFinite(Number(windowDays))
+    ? Math.max(3, Math.min(90, Math.trunc(Number(windowDays))))
+    : INTAKE_LOGGING_WINDOW_DAYS;
+  const through = addDaysISO(asOf, -1);
+  const since = addDaysISO(through, -(days - 1));
+  let window: ReturnType<typeof completedIntakeRange>;
+  try {
+    window = completedIntakeRange(since, through, through);
+  } catch {
+    return "unknown";
+  }
+  const complete = window.credible_days;
+  if (complete <= 0) return "quiet";
+  const density = window.calendar_days > 0 ? complete / window.calendar_days : 0;
+  return density >= FULL_LOGGING_MIN_DENSITY ? "full" : "occasional";
+}
+
 export function getDayIntake(date?: string) {
   const d = date || localDateISO();
   // Key by the stamped LOCAL day; COALESCE to the legacy UTC-date-of-created_at

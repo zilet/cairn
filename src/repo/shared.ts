@@ -192,6 +192,20 @@ export function mealLabelForTime(hhmm: unknown): string | null {
   return "snack";
 }
 
+// Meal names a person actually uses that are not one of the three default windows
+// but still place a meal on the day. INVERSE ONLY, deliberately: `mealLabelForTime`
+// must never assign these to an unlabeled time — 11:30 is lunch and 19:30 is dinner
+// unless the athlete said otherwise — but when the athlete DID say "brunch" or
+// "supper", refusing to place it sends a perfectly well-described day to the
+// unplaceable pile.
+// A Map rather than an object literal: the key here is athlete-supplied text, and a
+// plain-object lookup answers "constructor" and "toString" with inherited members
+// instead of undefined — which would return a FUNCTION from a `string | null` reader.
+const EXTRA_MEAL_LABEL_HOURS = new Map<string, string>([
+  ["brunch", "11:00"],
+  ["supper", "19:00"],
+]);
+
 // The inverse: a representative local "HH:MM" for a stated meal label, for placing
 // a meal on a day when someone said "breakfast" but not when. Null for "snack" and
 // anything unrecognized — a snack has no representative hour, and inventing one
@@ -200,7 +214,7 @@ export function approxTimeForMealLabel(label: unknown): string | null {
   const key = String(label ?? "")
     .trim()
     .toLowerCase();
-  return MEAL_WINDOWS.find((w) => w.label === key)?.approx ?? null;
+  return MEAL_WINDOWS.find((w) => w.label === key)?.approx ?? EXTRA_MEAL_LABEL_HOURS.get(key) ?? null;
 }
 
 // The current LOCAL clock, folded into getCoachContext().now so every coaching

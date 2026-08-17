@@ -138,18 +138,32 @@ export function personalizeNutritionCheckinTarget(
   //     nobody asked for.
   //   - PROTECTIVE evidence (fresh deterministic under-fuelling / fading
   //     performance) is exactly the grounded evidence the rule asks for, so it
-  //     passes straight through.
+  //     passes the grounded ceiling — but under a ceiling of its own, below.
   //   - The lean-safe kcal FLOOR still runs afterwards and still wins. A safety
   //     floor is never subordinate to a ceiling.
+  //
+  // PROTECTION BUYS MAINTENANCE, NEVER A SURPLUS. The protective escape used to be
+  // unbounded, and the evidence that opens it — heavy endurance load during a cut —
+  // is a CHRONIC state rather than an event, so every check-in found it open and
+  // added another bounded step until the target had ratcheted past maintenance. A
+  // protective raise now stops at the measured maintenance the anchor carries
+  // (`capProtectiveRaise`, repo/cut-target.ts) — and only when that maintenance was
+  // MEASURED off the record, since a formula prior is not headroom — and, like the
+  // grounded clamp, can never land below the number already in force. `clamped` and
+  // `protective_capped`
+  // stay DISTINCT in the stamped payload: the first says the record did not support
+  // the raise at all, the second that protection was allowed but only up to
+  // maintenance.
   let anchorClamped = false;
+  let protectiveCapped = false;
   const anchorTarget = Number(opts.cutAnchor?.target_kcal);
-  if (
-    !opts.protective &&
-    Number.isFinite(anchorTarget) &&
-    Number.isFinite(previous) &&
-    target > previous &&
-    target > anchorTarget
-  ) {
+  if (opts.protective) {
+    if (opts.cutAnchor && Number.isFinite(previous)) {
+      const capped = repo.capProtectiveRaise(target, previous, opts.cutAnchor.tdee_kcal, opts.cutAnchor.tdee_basis);
+      target = capped.target_kcal;
+      protectiveCapped = capped.capped;
+    }
+  } else if (Number.isFinite(anchorTarget) && Number.isFinite(previous) && target > previous && target > anchorTarget) {
     target = Math.round(Math.max(previous, anchorTarget));
     anchorClamped = true;
   }
@@ -167,6 +181,7 @@ export function personalizeNutritionCheckinTarget(
               confidence: opts.cutAnchor.confidence,
               deficit_kcal: opts.cutAnchor.deficit_kcal,
               clamped: anchorClamped,
+              protective_capped: protectiveCapped,
             },
           }
         : {}),

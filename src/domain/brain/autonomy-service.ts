@@ -19,6 +19,7 @@ import {
   currentMealPlan,
   deleteNutritionTarget,
   getActiveNutritionTarget,
+  getLatestNutritionTarget,
   getMealPlan,
   getNutritionTarget,
   restoreMealPlanAfterUndo,
@@ -30,6 +31,7 @@ import { getPlan, replacePlan } from "../../repo/plan.js";
 import { cancelRecoveryCycle, getRecoveryCycle } from "../../repo/recovery-cycles.js";
 import {
   applyProposal,
+  computeGoalCheck,
   getProfile,
   getProposal,
   listProposals,
@@ -44,6 +46,7 @@ import { MEAL_REFRESH_REQUEST_KEY } from "../../repo/meal-refresh-retry.js";
 import { automaticOrphanIntent, chatOrphanIntent } from "../../repo/proposal-intent.js";
 import { buildProgressionProposal } from "../../repo/progression.js";
 import { buildRunPlanProposal } from "../../repo/run-progression.js";
+import { capProtectiveRaise, cutReaffirmation, deriveCutTarget } from "../../repo/cut-target.js";
 import { getSettings } from "../../repo/settings.js";
 import { setAppStateStrict } from "../../repo/app-state.js";
 import { addDaysISO, localDateISO, parseDbTime } from "../../repo/shared.js";
@@ -1461,10 +1464,302 @@ export function adoptOrphanedDrafts(): {
   return { adopted, skipped, thawed: thaw.thawed, superseded: thaw.superseded };
 }
 
+// A PENDING CHANGE IS JUDGED AGAINST THE EVIDENCE IN FORCE ON THE DAY IT APPLIES.
+//
+// A nutrition target never lands the moment it is decided — it waits for a natural
+// food-day boundary so a partly-lived day is never changed underneath the athlete.
+// That wait is the gap this closes: the raise was measured against the target and the
+// maintenance estimate of the day it was WRITTEN, and by the boundary both may have
+// moved. A queue of such waits is how a target ratchets — each step bounded, each step
+// judged against the step before it, and nothing re-asking whether the destination is
+// still somewhere the record supports.
+//
+// So the same law the check-in boundary applies (capProtectiveRaise: protection buys
+// maintenance, never a surplus) is applied again HERE, against a freshly derived anchor.
+// Deliberately NOT conditioned on whether the original change was protective: the
+// grounded ceiling is stricter than maintenance, so this cap can only ever bind on a
+// raise that reached the boundary through the protective escape.
+//
+// Read-only and fail-SOFT: no cut anchor (no reaffirmed cut, an unreadable derivation)
+// means no measured maintenance to cap against, and the change applies as decided.
+type BoundaryTargetRevalidation =
+  | { outcome: "unchanged" }
+  | { outcome: "reduced"; target_kcal: number; from_kcal: number; ceiling_kcal: number }
+  | { outcome: "set_aside"; from_kcal: number; ceiling_kcal: number; active_kcal: number };
+
+// The smallest calorie move that is worth calling a change — the floor of the same
+// canonical 100-250 kcal step this module's own bounded controller uses. Anything
+// under it costs a nutrition_targets row, the week's nutrition budget and a
+// follow-through window in exchange for a number nobody could feel.
+const MIN_MEANINGFUL_TARGET_STEP_KCAL = 100;
+
+// The calorie target the boundary must measure a queued raise against: THE SAME
+// NUMBER THE CHECK-IN SEAM DERIVES ITS `previous` FROM (coachOps.ts,
+// personalizeNutritionCheckinTarget). Not merely similar — identical, and in the
+// same precedence order, because the whole point of re-applying the law here is that
+// the two seams agree about what is currently in force.
+//
+// `getActiveNutritionTarget` is not that number and cannot lead the ladder. It
+// returns NULL once a target's adaptive review window elapses, and `effective_target`
+// answers that same case by falling back to the FORMULA — so on a review-due row the
+// stale accepted kcal is no longer what the athlete eats to. Reading it as `previous`
+// puts the clamp's floor BELOW the number in force, and "the raise isn't supported"
+// stops being a hold: a stale 1,500 row under a formula target of 1,988 let a queued
+// raise land at 1,850 and take 138 kcal off the athlete through a proposal that only
+// ever asked to add. A cut nobody asked for is the one outcome this clamp exists to
+// make impossible.
+//
+// So the goal's effective target leads, exactly as it does at the check-in. The two
+// accepted-row reads sit behind it for the case it cannot answer — no goal read at
+// all — with the stale row last, since by then any number in force beats none.
+function activeTargetKcalAtBoundary(asOf: string): number {
+  const ladder: Array<() => unknown> = [
+    () => (computeGoalCheck() as any)?.effective_target?.target_kcal,
+    () => (getActiveNutritionTarget(asOf) as any)?.target_kcal,
+    () => (getLatestNutritionTarget(asOf) as any)?.target_kcal,
+  ];
+  for (const read of ladder) {
+    try {
+      const value = Number(read());
+      if (Number.isFinite(value)) return value;
+    } catch {
+      // Each rung is independently fail-soft; a broken read falls to the next.
+    }
+  }
+  return Number.NaN;
+}
+
+function revalidateNutritionTargetAtBoundary(proposal: any, asOf: string): BoundaryTargetRevalidation {
+  const proposed = Number(proposal?.parsed?.nutrition?.target_kcal);
+  if (!Number.isFinite(proposed)) return { outcome: "unchanged" };
+  let anchor: ReturnType<typeof deriveCutTarget> = null;
+  try {
+    anchor = cutReaffirmation(asOf).reaffirmed ? deriveCutTarget(asOf) : null;
+  } catch {
+    anchor = null;
+  }
+  if (!anchor) return { outcome: "unchanged" };
+  const active = activeTargetKcalAtBoundary(asOf);
+  if (!Number.isFinite(active)) return { outcome: "unchanged" };
+  const capped = capProtectiveRaise(proposed, active, anchor.tdee_kcal, anchor.tdee_basis);
+  if (!capped.capped) return { outcome: "unchanged" };
+  const ceiling = capped.target_kcal;
+  // The cap took the raise, or all but a rounding remnant of it: there is no change
+  // left worth making. Applying a target a handful of calories from the one in force
+  // would write a fresh row, spend the week's nutrition budget and open a
+  // follow-through window, all for a number that did not really move.
+  if (ceiling - active < MIN_MEANINGFUL_TARGET_STEP_KCAL)
+    return { outcome: "set_aside", from_kcal: proposed, ceiling_kcal: ceiling, active_kcal: active };
+  return { outcome: "reduced", target_kcal: ceiling, from_kcal: proposed, ceiling_kcal: ceiling };
+}
+
+// The set-aside receipt, in the same idiom the thaw uses for a draft whose evidence
+// moved: a superseded ledger row saying what was set aside and why, and the draft
+// retired — which also cancels the pending decision that was waiting on it.
+function setAsideOutrunTargetRaise(
+  proposal: any,
+  decision: { id?: number | null; context?: any },
+  revalidation: Extract<BoundaryTargetRevalidation, { outcome: "set_aside" }>,
+  asOf: string
+): void {
+  const shape = proposalShape(proposal);
+  try {
+    patchBrainDecision(Number(decision.id), {
+      context: {
+        ...(decision.context ?? {}),
+        boundary_revalidation: {
+          outcome: "set_aside",
+          from_kcal: Math.round(revalidation.from_kcal),
+          ceiling_kcal: Math.round(revalidation.ceiling_kcal),
+          active_kcal: Math.round(revalidation.active_kcal),
+        },
+      },
+    });
+  } catch {
+    /* the receipt below is the authoritative record; a failed stamp must not block it */
+  }
+  recordDecision({
+    // The day the pass is judging, not the wall clock: a receipt for a boundary the
+    // caller placed on another date must not file itself under today.
+    effective_date: asOf,
+    kind: shape.kind,
+    domain: shape.domain,
+    summary: "A scheduled fuel raise was set aside instead of applied.",
+    rationale:
+      `By the day this was due to land, ${Math.round(revalidation.from_kcal)} kcal sat above what your own record puts maintenance at, and your target is already there. ` +
+      "Protecting your fuel can carry you up to maintenance, never past it, so nothing changed.",
+    source: proposal.agent || "autonomy",
+    source_ref_type: "plan_proposal",
+    source_ref_key: String(proposal.id),
+    status: "superseded",
+    autonomy_tier: "observe",
+    risk_class: shape.risk,
+    reversible: false,
+    input_fingerprint: null,
+    context: {
+      boundary_revalidation_receipt: true,
+      protective_capped: true,
+      proposed_kcal: Math.round(revalidation.from_kcal),
+      ceiling_kcal: Math.round(revalidation.ceiling_kcal),
+      active_kcal: Math.round(revalidation.active_kcal),
+      superseded_pending_decision_id: decision.id ?? null,
+    },
+    action: {
+      proposal_id: proposal.id,
+      outcome: "superseded_outrun_evidence",
+      reason_provenance: proposalReasonProvenance(proposal),
+    },
+    specialist: null,
+    applied_at: null,
+    reverted_at: null,
+    superseded_by: null,
+    evaluator_version: null,
+  });
+  // Retires the draft AND cancels every announced/pending decision pointing at it, so
+  // the boundary pass cannot re-offer a raise the evidence has already outrun. The
+  // receipt above IS this transition's ledger row — `recordDecision:false` stops the
+  // generic supersede audit writing a second, vaguer row over the top of it.
+  setProposalStatus(Number(proposal.id), "superseded", { recordDecision: false });
+}
+
+// ---- the athlete outranks the machine ----------------------------------------
+//
+// AN EXPLICIT USER TARGET SET SUPERSEDES EVERY QUEUED AUTOMATED CHANGE TO THE SAME
+// METRIC. The athlete drives (VISION.md), and the newest change owns the metric.
+//
+// The gap this closes is the wait itself. A nutrition target never lands when it is
+// decided — it waits for a natural food-day boundary. So an athlete who states their
+// own number today can still have a change queued behind it, and tomorrow the boundary
+// re-judges that queued raise against the number THEY just set and applies it. The
+// re-clamp makes this worse rather than better: it trims the raise to something
+// defensible first, so what overrules the athlete arrives looking like a considered
+// decision instead of a stale one. Set 1,800 by hand, and a protective raise queued
+// last week lands at measured maintenance the next morning.
+//
+// "Supersedes", not "outranks in a comparison": the queued change is RETIRED, with a
+// receipt, so there is nothing left to re-offer on any later pass.
+//
+// Deliberately NOT inside `setNutritionTarget`. That seam is shared by the check-in
+// apply, the boundary apply and Undo — an apply that superseded the queue would retire
+// the very decision it is in the middle of landing, and an Undo restoring an earlier
+// row would silently cancel unrelated queued work. This belongs to the USER'S DOOR
+// alone, which is why it sits one layer above the repo write.
+function supersedeQueuedNutritionTargetChanges(asOf: string): number {
+  // Both statuses a change can be waiting in. Neither has touched the athlete's intake
+  // yet, which is exactly why retiring them costs nothing and leaves nothing to undo.
+  const queued = [
+    ...listBrainDecisions({ status: "pending", kind: "nutrition_target", limit: 100 }),
+    ...listBrainDecisions({ status: "announced", kind: "nutrition_target", limit: 100 }),
+  ];
+  let superseded = 0;
+  for (const decision of queued) {
+    try {
+      const proposalId = Number((decision.action as any)?.proposal_id);
+      const proposal = proposalId > 0 ? getProposal(proposalId) : null;
+      recordDecision({
+        effective_date: asOf,
+        // The queue was filtered on this kind, so the shape is known without re-reading
+        // it off a draft that may not exist for every queued decision.
+        kind: "nutrition_target",
+        domain: "nutrition",
+        summary: "A queued fuel change was set aside because you set your own target.",
+        rationale:
+          "You said what your target is, so the change Cairn had waiting for the next food-day boundary was retired rather than applied on top of it. " +
+          "Your number stands until you or a later check-in moves it.",
+        source: proposal?.agent || "autonomy",
+        source_ref_type: proposal ? "plan_proposal" : (decision.source_ref_type ?? "brain_decision"),
+        source_ref_key: proposal ? String(proposalId) : (decision.source_ref_key ?? String(decision.id)),
+        status: "superseded",
+        autonomy_tier: "observe",
+        risk_class: "low",
+        reversible: false,
+        input_fingerprint: null,
+        context: {
+          user_target_supersede_receipt: true,
+          superseded_pending_decision_id: decision.id ?? null,
+          superseded_decision_status: decision.status,
+        },
+        action: {
+          ...(proposal ? { proposal_id: proposalId, reason_provenance: proposalReasonProvenance(proposal) } : {}),
+          outcome: "superseded_by_user_target",
+        },
+        specialist: null,
+        applied_at: null,
+        reverted_at: null,
+        superseded_by: null,
+        evaluator_version: null,
+      });
+      if (proposal) {
+        // Retires the draft AND cancels every announced/pending decision pointing at it,
+        // this one included. `recordDecision:false` because the receipt above already IS
+        // this transition's ledger row.
+        setProposalStatus(proposalId, "superseded", { recordDecision: false });
+      } else {
+        transitionBrainDecision(decision.id!, "canceled");
+      }
+      superseded += 1;
+    } catch {
+      // Fail-soft, per this module's rule that bookkeeping never blocks an authoritative
+      // write — and here the write is the ATHLETE'S. Refusing their number because a
+      // stale queue entry would not retire would be a worse answer than the rare case
+      // where one survives, which the boundary's own re-clamp still has to judge.
+    }
+  }
+  return superseded;
+}
+
+/**
+ * THE USER'S DOOR to their own calorie target.
+ *
+ * Clears the queue, then writes. Both surfaces (`POST /api/nutrition/target`,
+ * MCP `set_nutrition_target`) call this and stay thin; the band check that turns a
+ * wild number into a 400 stays at the trust boundary where it belongs.
+ *
+ * The order is the safe one and not an accident. Reversed — write first, then
+ * supersede — a write that landed followed by a supersede that threw would leave
+ * precisely the situation this exists to prevent: the athlete's number in force with an
+ * automated change still queued to overrule it in the morning. Clearing first fails the
+ * other way, toward nothing happening at all.
+ */
+export function userSetNutritionTarget(
+  input: {
+    target_kcal: number;
+    protein_g?: number | null;
+    carbs_g?: number | null;
+    fat_g?: number | null;
+    note?: string | null;
+  },
+  asOf: string = localDateISO()
+): ReturnType<typeof setNutritionTarget> {
+  const optional = (value: unknown): number | null => {
+    if (value == null || value === "") return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  };
+  supersedeQueuedNutritionTargetChanges(asOf);
+  return setNutritionTarget({
+    target_kcal: Math.round(Number(input.target_kcal)),
+    protein_g: optional(input.protein_g),
+    carbs_g: optional(input.carbs_g),
+    fat_g: optional(input.fat_g),
+    source: "user",
+    note: typeof input.note === "string" && input.note.trim() ? input.note.trim() : null,
+    // effective_date omitted on purpose: setNutritionTarget defaults it to the athlete's
+    // local today, which is the only day a hand-set target belongs on.
+  });
+}
+
 export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
   applied: number[];
   failed: number[];
   delayed: number[];
+  // A REFUSAL is not an error. `failed` means the pass tried and could not — a
+  // payload that threw, a plan that had moved, a decision that would not transition
+  // — and a caller reading it as "something went wrong" is reading it correctly.
+  // A raise the evidence outran was judged and declined, on purpose, with a receipt
+  // the athlete can read; folding it into `failed` made a working refusal look like
+  // a breakage in every count that watches this pass.
+  set_aside: number[];
 } {
   const due = [
     ...listBrainDecisions({ status: "announced", limit: 100 }),
@@ -1487,6 +1782,7 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
   const applied: number[] = [];
   const failed: number[] = [];
   const delayed: number[] = [];
+  const setAside: number[] = [];
   // A sibling that lands earlier in THIS pass changes the plan and therefore makes
   // later siblings look CAS-stale. Track only those pass-local budget consumers so
   // their policy reason can win that expected collision. A budget spent before this
@@ -1716,6 +2012,34 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
         failed.push(announced.id!);
         continue;
       }
+      // A pending change is judged against the evidence in force on the day it applies.
+      // Placed BEFORE the weekly budget on purpose: a raise the record has already
+      // outrun must be set aside now, not delayed a day at a time until the age ceiling
+      // eventually retires it without ever saying why.
+      let revalidatedTargetKcal: number | undefined;
+      if (shape.kind === "nutrition_target") {
+        const revalidation = revalidateNutritionTargetAtBoundary(proposal, asOf);
+        if (revalidation.outcome === "set_aside") {
+          setAsideOutrunTargetRaise(proposal, announced, revalidation, asOf);
+          setAside.push(announced.id!);
+          continue;
+        }
+        if (revalidation.outcome === "reduced") {
+          revalidatedTargetKcal = revalidation.target_kcal;
+          patchBrainDecision(announced.id!, {
+            context: {
+              ...(announced.context ?? {}),
+              boundary_revalidation: {
+                outcome: "reduced",
+                from_kcal: Math.round(revalidation.from_kcal),
+                to_kcal: Math.round(revalidation.target_kcal),
+                ceiling_kcal: Math.round(revalidation.ceiling_kcal),
+                reason: "protection carries the target to maintenance, never past it",
+              },
+            },
+          });
+        }
+      }
       // With no pass-local collision, freshness and age have had first refusal. Now the
       // ordinary weekly budget, including changes that landed before this pass began —
       // and it delays rather than parks.
@@ -1760,6 +2084,7 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
           decisionId: announced.id!,
           requireDecisionLedger: true,
           freshnessCheckedAt: asOf,
+          revalidatedTargetKcal,
         }) as any;
         if (!result?.ok) throw new Error(String(result?.error ?? "the change could not be applied"));
         const updated = getBrainDecision(announced.id!);
@@ -1800,7 +2125,7 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): {
       parkForReview(announced, String(error?.message ?? error ?? "unexpected apply error"));
     }
   }
-  return { applied, failed, delayed };
+  return { applied, failed, delayed, set_aside: setAside };
 }
 
 // A veto teaches the brain DETERMINISTICALLY, not anecdotally: the reverted

@@ -13,7 +13,7 @@
 // module so day-read.ts can pull it into the deterministic signals with the existing
 // benign function-body-only cycle (day-read → fuel-state → nutrition → profile →
 // intelligence → day-read), never a load-time one.
-import { getDayIntake } from "./nutrition.js";
+import { INTAKE_LOGGING_WINDOW_DAYS, dayIntakeCoverage, getDayIntake, intakeLoggingMode } from "./nutrition.js";
 import { localDateISO, localHourFraction, parseDbTime } from "./shared.js";
 
 // The eating window the pace model measures elapsed time against. Start is the
@@ -103,6 +103,34 @@ export function dayFuelState(date?: string, now: Date = new Date()): FuelState |
         : protein_so_far_g >= expected_by_now_g - ON_PACE_SLACK_G
           ? "on_pace"
           : "behind";
+
+    // THE INTAKE-COVERAGE LAW (src/repo/intake-window.ts): logged intake is
+    // evidence only when the day is plausibly complete. Two ways a day can fail it
+    // here, and only "behind" — the one bucket that makes a claim about food NOT
+    // eaten — is ever withheld for it:
+    //
+    //   1. A CLOSED day graded against the full target. Once the day is over the
+    //      pace model has no elapsed time left to be honest with, so a day whose
+    //      dinner was never logged reads as protein missed rather than as protein
+    //      unrecorded. A partial closed day is absent: no FUEL line at all.
+    //   2. TODAY, when meals are not being logged in full. The pace line only
+    //      means something if the plate is on the record; with the log quiet or
+    //      occasional, "behind" describes the diary, not the athlete.
+    //
+    // "met" and "on_pace" stand in both cases: food that IS logged is still food,
+    // and neither of those says anything about food that is missing.
+    //
+    // Withholding takes an AFFIRMATIVE read of a thin log. An "unknown" habit is
+    // the read declining to answer, not a quiet plate, and suppressing the line on
+    // it would let a failed query silently delete a signal the athlete relies on.
+    if (bucket === "behind") {
+      if (d < today) {
+        if (dayIntakeCoverage(d).coverage !== "complete") return null;
+      } else {
+        const mode = intakeLoggingMode(INTAKE_LOGGING_WINDOW_DAYS, today);
+        if (mode === "quiet" || mode === "occasional") return null;
+      }
+    }
 
     return { bucket, protein_so_far_g, target_g, expected_by_now_g, ...(last_meal ? { last_meal } : {}) };
   } catch {

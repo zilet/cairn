@@ -9,7 +9,7 @@ Health's short-lived pairing exchange is public and passes through the instance-
 when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**310 routes** across 108 groups.
+**311 routes** across 108 groups.
 
 ## `/activities`
 
@@ -511,6 +511,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | GET | `/api/nutrition/fueling-followup` | Fueling follow-through. After a nutrition-target change applies, Today quietly offers a one-tap "how's fueling feeling?" read on days the athlete logs food, only inside the change's 7-day window. Read-only due-check + recent reads; `due:false` is the calm common answer, returned at status 200 like the other nutrition reads (never a 404). |
 | GET | `/api/nutrition/goal-pace` | Goal-pace series behind the motivational weight-progress chart: the canonical weigh-in points, the recent-trend line (with a short forward projection), and the straight line to the goal. Read-only, null-safe; ?days= clamps to 14–365. |
 | GET | `/api/nutrition/progress` | Meaning-first multi-week recorded-intake read. The domain clamps ?days= to 14–90, returns every local calendar day with honest unknowns, names record observation density (not full-day completeness), and conditions every target comparison/advice on the records reflecting most of the day. |
+| POST | `/api/nutrition/target` | THE ATHLETE'S OWN NUMBER: a direct set of the calorie target, effective today, stamped `source: "user"` — the provenance every downstream read (the next check-in's `previous`, the fuel card, the goal math) keys off. Every other way a target moves is Cairn's, so without this the only lever the athlete holds over a drifting number is arguing with the coach about it. The lean-safe kcal/protein floors still run inside setNutritionTarget; a number outside 1200-6000 kcal is a 400 with the reason rather than a silent clamp, because a typed number quietly changed underneath a person is worse than one they were told was refused. Stating a number also SUPERSEDES any automated change still waiting for a food-day boundary (`userSetNutritionTarget`) — the athlete outranks the machine, so nothing lands on top of their choice tomorrow. Body: { target_kcal, protein_g?, carbs_g?, fat_g?, note? }. Returns the saved row. |
 
 ## `/onboard`
 

@@ -4,6 +4,31 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-08-17 (second round) — protection buys maintenance, and an unlogged day is not a small one
+
+Same-day follow-up, born live: the deployed round's first real check-in raised the cut target
+again (2,600 → 2,800 pending), and the target history showed why — the protective escape in
+`personalizeNutritionCheckinTarget` had no ceiling of its own, and its trigger (heavy endurance
+load during a cut, `hybridFuelRead` in `program-state.ts`) is a *chronic* state for a hybrid
+athlete, so the escape was open at every check-in and the target ratcheted 2,075 → 2,600 in a
+month, past a measured maintenance near 2,250. **Protective discipline:** `capProtectiveRaise`
+(`src/repo/cut-target.ts`) caps a protective raise at `max(previous, tdee)` — protection buys
+maintenance, never a surplus, and a refused raise is a hold, never a manufactured cut;
+`applyDueAnnouncedDecisions` re-derives the cut anchor at the natural boundary and re-clamps a
+pending `nutrition_target` decision against the evidence in force on the day it lands — a raise
+the record has outrun is set aside with a superseded receipt, an overshoot lands reduced with the
+reduction recorded. The athlete gained a door of their own: `POST /api/nutrition/target` + the
+`set_nutrition_target` MCP mirror (`source: "user"`, lean-safe floors still in force, out-of-band
+numbers refused with the reason). **Intake coverage law** (mirrors sensor freshness): logged
+intake is evidence only when the day is plausibly complete — `classifyIntakeDay`
+(`intake-window.ts`) replaces the old `credibleDay` label-count with a morning→evening span rule
+on the same read-time placement ladder the day is sorted by; `dayIntakeCoverage` /
+`intakeLoggingMode` (`nutrition.ts`) expose it; the TDEE estimator and `cut-target`'s grounding
+floor count complete days only; `dayFuelState` withholds "behind" — the one word that claims
+something about food *not* eaten — on partial closed days and whenever logging mode isn't "full";
+the quiet-mode basis says what the number stood on (scale + metabolic prior), and the `log_food`
+action contract states the negative case: a question about food is a question, not a row.
+
 ## 2026-08-17 — heads-up autonomy, the brake needs a second opinion, the cut comes off the record
 
 Four parallel workstreams plus a stitch round, born from a live diagnosis: the draft-adoption sweep

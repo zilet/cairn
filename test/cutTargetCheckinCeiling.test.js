@@ -98,10 +98,102 @@ test("no anchor at all leaves the existing boundary exactly as it was", () => {
   assert.equal(legacy.cut_anchor, undefined, "nothing is stamped when there is no cut to anchor to");
 });
 
+// ---- protection buys maintenance, never a surplus ----------------------------
+//
+// The protective escape above had no ceiling of its own, and the evidence that opens
+// it (heavy endurance load during a cut) is a CHRONIC state rather than an event. Live,
+// that meant every check-in found the escape open and added another bounded step: the
+// target walked 2,075 → 2,225 → 2,475 → 2,600 in a month, past a measured maintenance
+// of roughly 2,250. A cut fuelled above maintenance is not a protected cut.
+
+test("a protective raise stops at measured maintenance", () => {
+  // Eating to 2250, the model wants 2600, and the record puts maintenance at 2350.
+  const out = personalizeNutritionCheckinTarget({ target_kcal: 2_600, delta_kcal: 350 }, goal(2_250), {
+    cutAnchor: anchor(2_000, { tdee_kcal: 2_350 }),
+    protective: true,
+  });
+  assert.equal(out.target_kcal, 2_350, "maintenance, not the ordinary +250 step");
+  assert.equal(out.cut_anchor.protective_capped, true);
+  assert.equal(out.cut_anchor.clamped, false, "the grounded ceiling still did not bind — protection passed it");
+  assert.equal(out.delta_kcal, 100, "and the reported delta is restated from the surviving number");
+});
+
+test("a target already at or above maintenance is held, never raised further", () => {
+  // The live shape at the end of the ratchet: 2600 in force, maintenance near 2250.
+  const out = personalizeNutritionCheckinTarget({ target_kcal: 2_800, delta_kcal: 200 }, goal(2_600), {
+    cutAnchor: anchor(1_900, { tdee_kcal: 2_250 }),
+    protective: true,
+  });
+  assert.equal(out.target_kcal, 2_600, "held where it already was");
+  assert.equal(out.cut_anchor.protective_capped, true);
+  assert.equal(out.delta_kcal, 0, "a refused raise is a hold — protection never manufactures a cut either");
+});
+
+test("a protective raise that stays under maintenance is untouched", () => {
+  const out = personalizeNutritionCheckinTarget({ target_kcal: 2_400 }, goal(2_250), {
+    cutAnchor: anchor(2_350),
+    protective: true,
+  });
+  assert.equal(out.target_kcal, 2_400, "still below the 2800 maintenance this anchor carries");
+  assert.equal(out.cut_anchor.protective_capped, false);
+});
+
+test("an unreadable maintenance figure is no ceiling at all, and the raise passes", () => {
+  const out = personalizeNutritionCheckinTarget({ target_kcal: 2_600 }, goal(2_250), {
+    cutAnchor: anchor(2_000, { tdee_kcal: Number.NaN }),
+    protective: true,
+  });
+  assert.equal(out.target_kcal, 2_500, "the ordinary +250 step, exactly as before");
+  assert.equal(out.cut_anchor.protective_capped, false);
+});
+
+test("the two clamps keep their separate meanings in the stamped payload", () => {
+  // `clamped`: the record did not support the raise at all.
+  const grounded = personalizeNutritionCheckinTarget({ target_kcal: 2_600 }, goal(2_250), {
+    cutAnchor: anchor(2_350),
+  });
+  assert.equal(grounded.cut_anchor.clamped, true);
+  assert.equal(grounded.cut_anchor.protective_capped, false);
+  // `protective_capped`: protection was allowed, but only as far as maintenance.
+  const protective = personalizeNutritionCheckinTarget({ target_kcal: 2_600 }, goal(2_250), {
+    cutAnchor: anchor(2_000, { tdee_kcal: 2_350 }),
+    protective: true,
+  });
+  assert.equal(protective.cut_anchor.clamped, false);
+  assert.equal(protective.cut_anchor.protective_capped, true);
+});
+
 test("the anchor's provenance rides along so a surface can say where the number came from", () => {
   const out = personalizeNutritionCheckinTarget({ target_kcal: 2_600 }, goal(2_250), { cutAnchor: anchor(2_350) });
   assert.equal(out.cut_anchor.tdee_basis, "logged_reality");
   assert.equal(out.cut_anchor.confidence, "high");
   assert.equal(out.cut_anchor.tdee_kcal, 2_800);
   assert.equal(out.cut_anchor.deficit_kcal, 450);
+});
+
+// ---- and only a MEASURED maintenance can be bought toward --------------------
+//
+// The cap read `tdee_kcal` without ever asking where it came from. When grounding
+// fails the derivation still reports a number — the Mifflin prior — and a formula
+// built from height, weight and an activity factor knows nothing about what this
+// athlete eats. Live, that prior sat 300 kcal above the target in force and waved a
+// queued raise straight past it. A raise is bought against measurement or not at all.
+
+test("a formula prior is not headroom — protection holds the target where it is", () => {
+  const out = personalizeNutritionCheckinTarget({ target_kcal: 2_800, delta_kcal: 200 }, goal(2_600), {
+    cutAnchor: anchor(2_475, { tdee_kcal: 2_898, tdee_basis: "formula_estimate", confidence: "low" }),
+    protective: true,
+  });
+  assert.equal(out.target_kcal, 2_600, "held, even though the prior claims 2898 kcal of room");
+  assert.equal(out.cut_anchor.protective_capped, true);
+  assert.equal(out.delta_kcal, 0, "and a refused raise is still a hold, never a cut");
+});
+
+test("the same suggestion passes once that maintenance is actually measured", () => {
+  const out = personalizeNutritionCheckinTarget({ target_kcal: 2_800, delta_kcal: 200 }, goal(2_600), {
+    cutAnchor: anchor(2_475, { tdee_kcal: 2_898 }),
+    protective: true,
+  });
+  assert.equal(out.target_kcal, 2_800, "a logged-reality anchor behaves exactly as it did before");
+  assert.equal(out.cut_anchor.protective_capped, false);
 });

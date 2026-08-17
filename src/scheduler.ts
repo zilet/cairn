@@ -296,6 +296,11 @@ export function startScheduler() {
       const result = applyDueAnnouncedDecisions(today);
       if (result.applied.length)
         console.log(`[brain] applied ${result.applied.length} announced change(s) at their natural boundary.`);
+      // A refusal, not a failure: the change was judged against the evidence in force
+      // on the day it came due, declined, and given a receipt. It never reaches the
+      // async-failure counter, which exists to say something is broken.
+      if (result.set_aside.length)
+        console.log(`[brain] set aside ${result.set_aside.length} change(s) the record had outrun by their boundary.`);
       if (result.failed.length) {
         recordAsyncFailure("apply", "announced_boundary", new Error("one or more changes need review"));
         console.error(
