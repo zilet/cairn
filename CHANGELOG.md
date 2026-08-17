@@ -5,6 +5,74 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [1.7.3] — 2026-08-17
+
+The theme of this patch is a coach whose evidence discipline matches its confidence. Under lead
+mode it now gives you a heads-up with a one-tap undo instead of asking permission for changes it
+can safely own — and in exchange it holds itself to a harder standard of proof: a protective
+calorie raise can never outrun measured maintenance, a half-logged day is treated as absent
+rather than "low", a queued change is re-checked against the evidence in force on the morning it
+applies, and a target you set yourself outranks anything the machine had queued.
+
+### Added
+
+- **The coach gives a heads-up instead of asking** — under lead mode, goal-date and structural
+  plan changes are announced with a one-tap undo instead of parking behind a question
+  (VISION Amendment 3). Clinical findings, locked exercises, and irreversible changes still ask.
+  A change that misses the week's change budget is delayed to the next natural boundary, not
+  dropped.
+- **The cut is grounded in the log** — the calorie target during a cut derives from a safe
+  pace band (0.5–0.75% of bodyweight per week) and a bounded deficit against maintenance
+  measured from your own logged reality. When the numbers say the date, the *date* moves —
+  the calories stop inflating to defend an optimistic deadline.
+- **Your own number outranks the queue** — you can set your calorie target directly
+  (`POST /api/nutrition/target`, MCP `set_nutrition_target`); any queued machine adjustment is
+  set aside with a receipt saying exactly that.
+- **The coach asks for the measurement it's missing** — when a decision is steering on a stale
+  weigh-in or waist measurement, a quiet request appears: one card at a time, a few asks, then
+  it lets go instead of nagging.
+- **The week ahead answers instantly** — the week-ahead read is served from a cache warmed in
+  the background, never composed inline while you wait.
+
+### Changed
+
+- **Protection buys maintenance, never a surplus** — a protective fuel raise (heavy endurance
+  load during a cut) is capped at measured maintenance, and only when maintenance really is
+  measured from complete logged days; a formula estimate can hold the target but never raise it.
+- **An unlogged day is not a small one** — logged intake counts as evidence only when the day
+  reads complete: a morning-to-evening span carrying real calories, or a whole day declared at
+  once. A partial or missing day is absent, never "low" — so thin logging can no longer read as
+  under-eating, and "you're behind on fuel" nudges are withheld when the log can't support them.
+  The system recognizes your logging mode — full, occasional, or quiet — and adjusts what it
+  treats as evidence accordingly.
+- **A pending change is judged against the day it applies** — a queued nutrition change is
+  re-derived at its boundary before applying; if the evidence in force that morning no longer
+  supports the number, it is trimmed or set aside with a receipt instead of applied on faith.
+- **The brake needs a second opinion** — a single watch-state dimension no longer holds back a
+  training day by itself, and an HRV dip registers on a meaningful band of your baseline rather
+  than a bare sign flip. Safety vetoes are untouched.
+- **A goal date is not renegotiated weekly** — the goal date adapts only when the projection is
+  materially past it (two weeks or more) and never twice inside a cooldown window.
+
+### Fixed
+
+- **A parked change is not a reading** — a change parked by the change budget stays parked until
+  its turn instead of being quietly reclassified and observed away.
+- **Draft proposals with future evidence dates no longer jam adoption** — provenance dates are
+  clamped at write time, quarantined per row at read time, and a repair migration heals existing
+  poisoned drafts.
+- **An outranked measurement request keeps its place** — a higher-priority ask no longer resets
+  the patience ladder of the requests waiting behind it.
+
+### Notes
+
+- Schema migration 92 runs automatically on boot (repairs draft rows carrying future evidence
+  dates). Back up before deploying, as always.
+- No changes under `public/`; installed PWAs need no update and the service worker version is
+  unchanged.
+- Bundled agent CLI pins bumped: Claude Code 2.1.233, Codex 0.147.0; the Grok installer checksum
+  re-pinned.
+
 ## [1.7.2] — 2026-08-06
 
 The theme of this patch is a coach that runs on *your* numbers. Heart-rate zones now come from your
