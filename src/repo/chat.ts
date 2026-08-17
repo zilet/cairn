@@ -653,14 +653,23 @@ export function createBrainReviewAgentJob(
   return { job, created: true };
 }
 
+// How long a FAILED week-ahead run holds the door shut for its own cacheKey. A
+// dead or unlogged coaching CLI fails in seconds, and the cache is only written
+// on a successful parse, so without a backoff every Today open re-enqueues the
+// same doomed run forever. Half an hour is long enough that a broken login costs
+// a couple of attempts a day rather than one per app open, and short enough that
+// fixing the login is felt on the next open but one.
+const WEEK_AHEAD_FAILURE_BACKOFF_MINUTES = 30;
+
 // The week-ahead cache warm/refresh is fired from two independent callers (a
 // user-facing GET on a cold/stale cache, and the scheduler's day-rollover
 // warm) that can race. Deduplicate against any 'week_ahead' job for the exact
 // same cacheKey (day + plan + goal + training-reality fingerprint) still
-// queued or running, so a burst never spawns more than one coaching CLI. A
-// job that already finished is NOT a match — the caller only asks for one
-// when the cache is missing or stale, so a prior completion (fresh or
-// failed) has nothing left to coalesce against; the next miss/staleness
+// queued or running, so a burst never spawns more than one coaching CLI —
+// and, on the same match, against one that FAILED inside the backoff window
+// above, so a coach that cannot run is not asked again on every open. A job
+// that finished cleanly is NOT a match, nor is an older failure: the caller
+// only asks when the cache is missing or stale, so the next miss/staleness
 // starts a fresh dedup window.
 export function createWeekAheadAgentJob(input: { cacheKey: string; agent?: string | null }): {
   job: any;
@@ -668,14 +677,16 @@ export function createWeekAheadAgentJob(input: { cacheKey: string; agent?: strin
 } {
   const cacheKey = String(input?.cacheKey ?? "").trim();
   if (!cacheKey) throw new Error("invalid week-ahead cache key");
-  const active = db
+  const blocking = db
     .prepare(
       `SELECT id, input_json FROM agent_jobs
-        WHERE kind = 'week_ahead' AND status IN ('queued','running')
+        WHERE kind = 'week_ahead'
+          AND (status IN ('queued','running')
+               OR (status = 'error' AND COALESCE(finished_at, created_at) >= datetime('now', ?)))
         ORDER BY id DESC LIMIT 50`
     )
-    .all() as any[];
-  for (const row of active) {
+    .all(`-${WEEK_AHEAD_FAILURE_BACKOFF_MINUTES} minutes`) as any[];
+  for (const row of blocking) {
     try {
       const parsed = row.input_json ? JSON.parse(row.input_json) : null;
       if (parsed?.cacheKey === cacheKey) return { job: getAgentJob(Number(row.id)), created: false };

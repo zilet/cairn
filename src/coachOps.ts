@@ -1176,7 +1176,12 @@ function sanitizeWeekAhead(input: any): { days: any[]; summary: string } | null 
 // A calm sketch of the next several days (lift / run / mixed / rest), the day-read
 // projected forward. Agentic with the deterministic plan-rotation floor as the
 // always-available fallback; cached per day+plan+goal (serve-stale-then-revalidate).
-export async function weekAheadRead(agent: string | undefined, hooks?: OpHooks) {
+//
+// `cacheKey` is passed by the background job runner, which was handed the key the
+// enqueue deduped on. It must be the SAME slot: re-deriving it here off today's
+// localDateISO() would let a run started before a midnight rollover fill a key
+// nothing is waiting for, leaving the guarded one permanently cold.
+export async function weekAheadRead(agent: string | undefined, hooks?: OpHooks, cacheKeyOverride?: string) {
   const floor = repo.weekAheadPlan();
   const floorResult = {
     ok: true as const,
@@ -1185,7 +1190,7 @@ export async function weekAheadRead(agent: string | undefined, hooks?: OpHooks) 
     source: "deterministic" as const,
     cached: false as const,
   };
-  const cacheKey = weekAheadCacheKey(floor);
+  const cacheKey = cacheKeyOverride?.trim() || weekAheadCacheKey(floor);
   const cached = repo.getAiCache(WEEK_AHEAD_KIND, cacheKey);
   const cachedSane = sanitizeWeekAhead(cached?.result);
   if (cached && cachedSane && !cached.stale) {
@@ -1412,22 +1417,69 @@ export async function draftMealPlan(
 //
 // `from` is never taken on trust: the derivation read the profile's goal date moments
 // ago, and the seam itself refuses an adaptation whose `from` no longer matches.
-// Idempotent on two fronts — the seam answers `changed:false` when the profile already
-// holds `to`, and a goal_change for the same date still waiting (announced, or parked
-// for review) is left alone rather than re-announced every cadence.
+// Idempotent on FOUR fronts — the seam answers `changed:false` when the profile already
+// holds `to`; a goal_change for the same date still waiting (announced, or parked for
+// review) is left alone rather than re-announced every cadence; a projection that lands
+// within a fortnight of the date already on file is not worth moving a goal for; and no
+// second goal-date heads-up goes out within a fortnight of the last one, whatever it said.
+//
+// The last two exist because the derivation re-projects from TODAY on every read, so the
+// arrival date drifts a little every week by construction. Without them, one applied
+// adaptation is immediately followed by a fresh projection a few days later than the date
+// it just wrote, and the athlete's goal identity gets renegotiated every single week,
+// outward forever. The derivation in cut-target.ts stays pure; this is where the ratchet
+// is refused.
+const GOAL_DATE_MATERIAL_DAYS = 14;
+const GOAL_DATE_COOLDOWN_DAYS = 14;
+
+function daysBetweenISO(from: string, to: string): number | null {
+  const a = Date.parse(`${String(from).slice(0, 10)}T00:00:00Z`);
+  const b = Date.parse(`${String(to).slice(0, 10)}T00:00:00Z`);
+  return Number.isFinite(a) && Number.isFinite(b) ? Math.round((b - a) / 86_400_000) : null;
+}
+
 export function maybeAdaptGoalDateFromCut(cutAnchor: repo.CutTargetDerivation | null): any {
   const adaptation = cutAnchor?.goal_date_adaptation ?? null;
   if (!adaptation?.to) return null;
   try {
-    const waiting = repo
-      .listBrainDecisions({ kind: "goal_change", limit: 50 })
-      .some(
-        (decision: any) =>
-          (decision?.status === "announced" || decision?.status === "review") &&
-          String(decision?.action?.goal_date_adaptation?.to ?? "") === String(adaptation.to)
-      );
+    // Measured against the date actually ON THE PROFILE, not the derivation's own
+    // `from`: if the athlete moved the date themselves, theirs is what a new arrival
+    // has to beat.
+    const onFile = String((repo.getProfile() as any)?.goal_date ?? adaptation.from ?? "").slice(0, 10);
+    const slip = onFile ? daysBetweenISO(onFile, String(adaptation.to)) : null;
+    if (slip != null && slip < GOAL_DATE_MATERIAL_DAYS) {
+      return {
+        ok: true,
+        changed: false,
+        immaterial: true,
+        reasons: ["the arrival this pace reaches is close enough to the date already on file"],
+      };
+    }
+    const decisions = repo.listBrainDecisions({ kind: "goal_change", limit: 50 });
+    const waiting = decisions.some(
+      (decision: any) =>
+        (decision?.status === "announced" || decision?.status === "review") &&
+        String(decision?.action?.goal_date_adaptation?.to ?? "") === String(adaptation.to)
+    );
     if (waiting) {
       return { ok: true, changed: false, deduped: true, reasons: ["that goal date is already waiting"] };
+    }
+    // ANY recent goal_change, applied ones included: what the cooldown rations is how
+    // often the athlete is asked to think about their goal date at all, not how often
+    // a particular date is proposed.
+    const cooldownFrom = Date.now() - GOAL_DATE_COOLDOWN_DAYS * 86_400_000;
+    const recent = decisions.some((decision: any) => {
+      const at = Date.parse(String(decision?.created_at ?? ""));
+      return Number.isFinite(at) && at >= cooldownFrom;
+    });
+    if (recent) {
+      return {
+        ok: true,
+        changed: false,
+        deduped: true,
+        cooldown: true,
+        reasons: ["the goal date was looked at recently, so this one waits"],
+      };
     }
     return applyGoalDateAdaptationWithAutonomy(adaptation);
   } catch {

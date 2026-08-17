@@ -121,7 +121,7 @@ export interface CutGoalDateAdaptation {
   from: string;
   to: string;
   weeks_added: number;
-  // MACHINE register. `cutTargetLine` owns what a person reads.
+  // MACHINE register. `cutTargetBody` owns what a person reads.
   reason: string;
 }
 
@@ -299,6 +299,10 @@ export function cutTargetDecision(state: CutTargetState): CutTargetDerivation | 
   }
   let adaptation: CutGoalDateAdaptation | null = null;
   if (goalDate && projected && projected > goalDate) {
+    // The derivation stays PURE and reports every slip it sees, however small. What is
+    // worth moving a goal date FOR is decided at the seam that records the decision
+    // (maybeAdaptGoalDateFromCut), and its materiality bar is a fortnight — so any slip
+    // that reaches a person carries weeks_added >= 2 and the floor below never binds.
     const weeksAdded = Math.max(1, Math.round(((dayEpoch(projected)! - goalEpoch!) / DAY_MS / 7) * 10) / 10);
     adaptation = {
       from: goalDate,

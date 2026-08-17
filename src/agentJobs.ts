@@ -511,7 +511,11 @@ async function processAgentJob(id: number): Promise<void> {
         break;
       }
       case "week_ahead": {
-        result = await weekAheadRead(agent, hooks);
+        // The stored key, not a fresh derivation: this run must fill the exact slot
+        // createWeekAheadAgentJob deduped on, or the guard protects a cache entry
+        // that never gets written.
+        const cacheKey = typeof input?.cacheKey === "string" ? input.cacheKey : undefined;
+        result = await weekAheadRead(agent, hooks, cacheKey);
         chosen = result?.agent ?? null;
         break;
       }

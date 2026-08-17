@@ -302,6 +302,90 @@ test("the adoption sweep runs the thaw on the same tick", () => {
   assert.equal(typeof sweep.adopted, "number");
 });
 
+// ---------- a parked PENDING CHANGE is never thawed as an advisory ----------
+// applyDueAnnouncedDecisions parks a meal-plan or goal-date decision at review when the
+// change itself failed to land ("could not become current", "the goal date did not reach
+// the profile"). Those carry the pending change in `action`, not behind a plan_proposal
+// row, so the thaw's draft lookup cannot see them. Reading them as advisory would observe
+// the change away and take the recorded apply_error with it.
+
+function parkedPendingChange({ kind, domain, action, error }) {
+  return repo.recordDecision({
+    effective_date: null,
+    kind,
+    domain,
+    summary: `A ${kind} change that failed to land`,
+    rationale: null,
+    source: "autonomy",
+    source_ref_type: null,
+    source_ref_key: null,
+    status: "review",
+    autonomy_tier: "announce",
+    risk_class: "moderate",
+    reversible: false,
+    context: { review_required: true, apply_error: error },
+    action,
+    specialist: null,
+    applied_at: null,
+    reverted_at: null,
+    superseded_by: null,
+    evaluator_version: null,
+  });
+}
+
+test("the thaw leaves a parked MEAL-PLAN change parked, with its apply_error intact", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  const parked = parkedPendingChange({
+    kind: "meal_plan",
+    domain: "nutrition",
+    action: { meal_plan_id: 4242, previous_meal_plan_id: null },
+    error: "the meal plan could not become current",
+  });
+  const id = Number(parked.decision.id);
+
+  const result = thawParkedReviewDecisions();
+  assert.equal(result.thawed, 0, "a pending change is not a reading to be observed away");
+  assert.equal(result.superseded, 0);
+  assert.equal(result.skipped, 1);
+
+  const after = repo.getBrainDecision(id);
+  assert.equal(after.status, "review", "the change still waits for the athlete");
+  assert.equal(after.context.review_required, true, "and still says so");
+  assert.equal(after.context.apply_error, "the meal plan could not become current", "the receipt survives");
+  assert.equal(Number(after.action.meal_plan_id), 4242, "the change itself is still attached");
+  assert.equal(after.context.thaw_outcome, undefined, "it was never re-offered");
+  assert.equal(after.context.thaw_attempted, undefined, "and never even stamped");
+});
+
+test("the thaw leaves a parked GOAL-DATE change parked, with its apply_error intact", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  const parked = parkedPendingChange({
+    kind: "goal_change",
+    domain: "nutrition",
+    action: {
+      goal_date_adaptation: {
+        from: "2026-09-01",
+        to: "2026-10-06",
+        weeks_added: 5,
+        reason: "the pace cannot reach it",
+      },
+    },
+    error: "the goal date did not reach the profile",
+  });
+  const id = Number(parked.decision.id);
+
+  const result = thawParkedReviewDecisions();
+  assert.equal(result.thawed, 0);
+  assert.equal(result.skipped, 1);
+
+  const after = repo.getBrainDecision(id);
+  assert.equal(after.status, "review");
+  assert.equal(after.context.review_required, true);
+  assert.equal(after.context.apply_error, "the goal date did not reach the profile");
+  assert.equal(after.action.goal_date_adaptation.to, "2026-10-06", "the date it wanted is still on the row");
+  assert.equal(after.context.thaw_attempted, undefined);
+});
+
 test("a thawed decision keeps its ledger row and its undo machinery", () => {
   repo.setSettings({ lead_mode: "lead" });
   seedPlanDay();

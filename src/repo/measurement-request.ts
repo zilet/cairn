@@ -115,21 +115,24 @@ function ageDays(iso: unknown, today: number): number | null {
 }
 
 /**
- * Which ONE measurement, if any, is worth asking for today?
+ * EVERY need that is live today, keyed by need.
  *
- * Null is the common, calm answer. A need fires only when BOTH halves hold: a
- * live reason to want the datum (a running cut, an open prediction, a lab past its
- * own window) AND the datum being stale or missing. Neither half alone is a need —
- * an old weigh-in outside a cut blocks nothing, and a running cut with a reading
- * from yesterday needs nothing.
+ * A need is live when BOTH halves hold: a live reason to want the datum (a running
+ * cut, an open prediction, a lab past its own window) AND the datum being stale or
+ * missing. Neither half alone is a need — an old weigh-in outside a cut blocks
+ * nothing, and a running cut with a reading from yesterday needs nothing.
+ *
+ * Liveness is per-need and says nothing about priority. Only one need is ever
+ * ASKED (`measurementRequestDecision` picks it), but the attention sweep must ask
+ * this question of all three: a need that is live and merely outranked still owns
+ * the ladder it has already climbed.
  *
  * PURE: no clock, no database, no writes.
  */
-export function measurementRequestDecision(state: MeasurementRequestState): MeasurementRequest | null {
-  const today = dayEpoch(state?.today);
-  if (today == null) return null;
-
+export function liveMeasurementNeeds(state: MeasurementRequestState): Map<MeasurementNeedKey, MeasurementRequest> {
   const candidates = new Map<MeasurementNeedKey, MeasurementRequest>();
+  const today = dayEpoch(state?.today);
+  if (today == null) return candidates;
 
   if (state.active_cut) {
     const age = ageDays(state.last_weigh_in_date, today);
@@ -174,8 +177,22 @@ export function measurementRequestDecision(state: MeasurementRequestState): Meas
     });
   }
 
+  return candidates;
+}
+
+/**
+ * Which ONE measurement, if any, is worth asking for today? The live needs above,
+ * resolved through NEED_ORDER — which IS the priority.
+ *
+ * Null is the common, calm answer. PURE.
+ */
+export function measurementRequestDecision(state: MeasurementRequestState): MeasurementRequest | null {
+  return firstByPriority(liveMeasurementNeeds(state));
+}
+
+function firstByPriority(live: Map<MeasurementNeedKey, MeasurementRequest>): MeasurementRequest | null {
   for (const need of NEED_ORDER) {
-    const found = candidates.get(need);
+    const found = live.get(need);
     if (found) return found;
   }
   return null;
@@ -471,9 +488,15 @@ export function measurementRequestCandidate(asOf: string = localDateISO()): Toda
  *   - the need has resolved (the measurement landed, or the reason for wanting it
  *     lapsed) → clear the schedule row outright, so a LATER lapse opens a fresh
  *     ladder instead of inheriting an exhausted one. Bookkeeping, not spending, so
- *     it runs regardless of `surfacedId`. Every need is swept, not just the one
+ *     it runs regardless of `surfacedId`. Every need is judged, not just the one
  *     firing today: a weigh-in that lands while the tape request is showing must
- *     still retire the weigh-in row.
+ *     still retire the weigh-in row. What is judged is each need's OWN liveness,
+ *     never whether it happens to be the one asked — a live need that is merely
+ *     outranked keeps its ladder untouched. (Clearing it would restart it at
+ *     `active` on the next day it wins, and since the weigh-in need re-fires every
+ *     few days through a cut, a lower-priority ask reset on that cadence could
+ *     never climb far enough to go quiet — breaking this module's own bound of a
+ *     handful of asks and then silence.)
  *   - the need still stands AND its card actually reached the visible set →
  *     advance the ladder exactly once, exactly like a genuine ask.
  *
@@ -484,12 +507,15 @@ export function measurementRequestCandidate(asOf: string = localDateISO()): Toda
  * routed historical date or an agent's read-only pass; the caller owns that gate.
  */
 export function reconcileMeasurementRequestAttention(asOf: string, surfacedId: string | null): void {
-  const request = currentMeasurementRequest(asOf);
+  // One state read serves both halves: which needs are still live at all, and which
+  // one of them is the ask.
+  const live = liveMeasurementNeeds(measurementRequestState(asOf));
+  const request = firstByPriority(live);
 
-  // Sweep every need that is NOT the one currently firing: whatever reason those
-  // rows were opened for is over.
+  // Sweep only the needs that are no longer live — the measurement landed, or the
+  // reason for wanting it is over. Being outranked is not being resolved.
   for (const need of NEED_ORDER) {
-    if (request?.need === need) continue;
+    if (live.has(need)) continue;
     const key = signalKeyFor(need);
     if (getAttentionSchedule(key)) deleteAttentionSchedule(key);
   }

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { maybeAdaptGoalDateFromCut } from "../dist/coachOps.js";
 import { applyDueAnnouncedDecisions } from "../dist/domain/brain/autonomy-service.js";
-import { repo } from "./_seed.js";
+import { db, repo } from "./_seed.js";
 
 // Where the cut-target derivation's `goal_date_adaptation` becomes a DECISION.
 // deriveCutTarget is read-only and runs behind several surfaces, so the ledger entry is
@@ -84,11 +84,62 @@ test("a stricter posture asks, and the parked question is not re-asked next cade
   assert.equal(repo.getProfile().goal_date, ADAPTATION.from, "and nothing was written either time");
 });
 
-test("a different date is a genuinely new decision", () => {
+// ---- the ratchet guards ----
+// The derivation re-projects the arrival from TODAY on every read, so the date drifts a
+// little by construction. Without a bar on how far it must have slipped, and a floor on
+// how often the question may be put at all, one applied adaptation is followed by a
+// slightly later one next week and the athlete's goal identity is renegotiated forever.
+
+const backdateGoalDecisions = (days) => {
+  db.prepare(`UPDATE brain_decisions SET created_at = datetime('now', ?) WHERE kind = 'goal_change'`).run(
+    `-${days} days`
+  );
+};
+
+test("a projection a few days past the date on file is not worth moving a goal for", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  seedGoal("2026-09-01");
+  const result = maybeAdaptGoalDateFromCut(derivation({ ...ADAPTATION, to: "2026-09-07" }));
+  assert.equal(result.changed, false);
+  assert.equal(result.immaterial, true);
+  assert.equal(result.decision, undefined);
+  assert.equal(goalDecisions().length, 0, "six days of drift never reaches the athlete");
+  assert.equal(repo.getProfile().goal_date, "2026-09-01");
+});
+
+test("a projection a fortnight or more out is material, and does adapt", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  seedGoal("2026-09-01");
+  const result = maybeAdaptGoalDateFromCut(derivation({ ...ADAPTATION, to: "2026-09-21" }));
+  assert.equal(result.ok, true);
+  assert.equal(result.announced, true);
+  assert.equal(goalDecisions().length, 1);
+});
+
+test("a second material projection soon after a goal change waits, however different the date", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  seedGoal();
+  const first = maybeAdaptGoalDateFromCut(derivation(ADAPTATION));
+  assert.equal(first.announced, true);
+  applyDueAnnouncedDecisions(first.effective_date);
+  assert.equal(repo.getProfile().goal_date, ADAPTATION.to, "the first one landed");
+
+  // Eight days later the projection has slipped materially again — an APPLIED change is
+  // still a change the athlete heard about, so the cooldown counts it.
+  backdateGoalDecisions(8);
+  const again = maybeAdaptGoalDateFromCut(derivation({ from: ADAPTATION.to, to: "2026-11-10", weeks_added: 5 }));
+  assert.equal(again.changed, false);
+  assert.equal(again.cooldown, true);
+  assert.equal(goalDecisions().length, 1, "the goal date is not renegotiated every cadence");
+  assert.equal(repo.getProfile().goal_date, ADAPTATION.to, "and nothing moved");
+});
+
+test("once the cooldown has passed a genuinely moved date is heard again", () => {
   repo.setSettings({ lead_mode: "lead" });
   seedGoal();
   maybeAdaptGoalDateFromCut(derivation(ADAPTATION));
-  const moved = maybeAdaptGoalDateFromCut(derivation({ ...ADAPTATION, to: "2026-10-20" }));
-  assert.equal(moved.announced, true, "the derivation moved, so the athlete hears the new date");
+  backdateGoalDecisions(20);
+  const moved = maybeAdaptGoalDateFromCut(derivation({ from: ADAPTATION.from, to: "2026-11-10", weeks_added: 5 }));
+  assert.equal(moved.announced, true, "the guard is a cooldown, not a permanent silence");
   assert.equal(goalDecisions().length, 2);
 });

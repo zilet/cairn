@@ -806,9 +806,6 @@ const MAX_WEEKLY_BUILD_FACTOR = SUSTAINABLE_WEEKLY_BUILD_FACTOR;
 const HRV_DOWN_RELATIVE_DROP = 0.07;
 const HRV_DOWN_ABSOLUTE_DROP_MS = 5;
 
-// Is the HRV term of `recoveryDown` genuinely down? Exported for the pin in
-// test/runVolumeBrakes.test.js — the band is a product decision, not an implementation
-// detail, and it should be testable without staging a whole week.
 // ---------------------------------------------------------------------------
 // THE EARN PATH (owner ruling, 2026-08-17).
 //
@@ -833,6 +830,9 @@ export const RUN_VOLUME_LEARNED_EASE_UNLOCK: readonly string[] = [
   "As the weeks start landing the way they used to, the build widens again.",
 ];
 
+// Is the HRV term of `recoveryDown` genuinely down? Exported for the pin in
+// test/brainRebalanceEarnPath.test.js — the band is a product decision, not an
+// implementation detail, and it should be testable without staging a whole week.
 export function hrvReadsDown(delta: unknown, baselineMedian?: unknown): boolean {
   const drop = Number(delta);
   if (!Number.isFinite(drop) || drop >= 0) return false;

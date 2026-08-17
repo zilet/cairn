@@ -1166,6 +1166,18 @@ type ParkedDecision = ReturnType<typeof listBrainDecisions>[number];
 // Amendment 1), and a user lock is the athlete's own word on the matter.
 const THAW_FLOOR_REASON_CODES = new Set(["clinical", "clinical_ceiling", "safety_floor", "user_lock"]);
 
+// A decision parked by applyDueAnnouncedDecisions' own failure path carries the
+// PENDING CHANGE in `action` rather than behind a plan_proposal row — a meal plan
+// that could not become current, a goal date that never reached the profile. The
+// draft lookup in the thaw cannot see either of those, so without this they read as
+// "a reading with nothing behind it" and the advisory re-offer would observe the
+// change away and take its recorded apply_error with it. A pending change is never
+// advisory: it stays parked until the athlete answers it.
+function carriesPendingChange(action: unknown): boolean {
+  if (!action || typeof action !== "object") return false;
+  return Number((action as any).meal_plan_id) > 0 || !!goalDateAdaptationAction(action);
+}
+
 // An advisory record — a conference reading with no draft behind it — asks nothing and
 // changes nothing, so a stored `reversible: false` on it means "no rollback snapshot was
 // taken", not "this cannot be undone". Re-offering it through the irreversibility floor
@@ -1269,6 +1281,12 @@ export function thawParkedReviewDecisions(): { thawed: number; superseded: numbe
         context.user_locked === true ||
         THAW_FLOOR_REASON_CODES.has(String(context.review_reason_code ?? ""))
       ) {
+        skipped += 1;
+        continue;
+      }
+      // Left untouched entirely — not even stamped — so the change and the
+      // apply_error that parked it stay exactly as the athlete will read them.
+      if (carriesPendingChange(decision.action)) {
         skipped += 1;
         continue;
       }

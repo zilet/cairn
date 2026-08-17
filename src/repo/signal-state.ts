@@ -1087,9 +1087,12 @@ function planningDirectives(dimensions: Record<SignalDimension, SignalDimensionS
     { fires: recovery === "constrained", training: "recover", source: "recovery_capacity" },
     { fires: trainingLoad === "constrained", training: "recover", source: "training_load_tolerance" },
     { fires: health === "constrained", training: "modify", source: "health_constraints" },
-    // The three watch rungs keep their original ORDER and their original source
-    // attribution — which dimension gets named when the hold does fire is unchanged.
-    // All three now additionally require the second opinion above.
+    // The three watch rungs keep their original ORDER, so when the second opinion is
+    // there the same dimension is named as before. Attribution DOES move in one case:
+    // with exactly one dimension at watch and energy constrained, the watch rung no
+    // longer fires and the hold falls through to the energy rung below — the same
+    // verdict, credited to energy_fueling rather than to the lone watch. That is the
+    // honest reading of why it held: one caution alone is no longer the reason.
     { fires: secondedWatch && recovery === "watch", training: "hold_aggression", source: "recovery_capacity" },
     {
       fires: secondedWatch && trainingLoad === "watch",

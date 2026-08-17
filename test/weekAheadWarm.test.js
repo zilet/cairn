@@ -111,12 +111,77 @@ test("a DIFFERENT cacheKey (e.g. a new day) is never coalesced into another day'
 test("once a job for a cacheKey is terminal, a later miss/staleness starts a fresh dedup window", () => {
   const { cacheKey } = weekAheadServe();
   const { job } = ensureWeekAheadJob(undefined, cacheKey);
-  // Simulate the worker finishing the job (success or failure — either is terminal).
+  // Simulate the worker finishing the job cleanly.
   db.prepare(`UPDATE agent_jobs SET status = 'done' WHERE id = ?`).run(job.id);
   const again = ensureWeekAheadJob(undefined, cacheKey);
   assert.equal(again.created, true, "a finished job is not a match — it must not block a fresh warm");
   assert.notEqual(again.job.id, job.id);
   assert.equal(weekAheadJobRows().length, 2);
+});
+
+// ---- the failure backoff ----
+// The cache is only written on a SUCCESSFUL parse, so a dead or unlogged coaching CLI
+// leaves the cache cold forever. Without a backoff every Today open sees the same cold
+// cache and enqueues the same doomed run, for as long as the CLI stays broken.
+
+const failJob = (id, minutesAgo) => {
+  db.prepare(`UPDATE agent_jobs SET status = 'error', error = ?, finished_at = datetime('now', ?) WHERE id = ?`).run(
+    "the coach could not be reached",
+    `-${minutesAgo} minutes`,
+    id
+  );
+};
+
+test("a run that just failed for this cacheKey suppresses the next enqueue", () => {
+  const { cacheKey } = weekAheadServe();
+  const { job } = ensureWeekAheadJob(undefined, cacheKey);
+  failJob(job.id, 2);
+
+  const again = ensureWeekAheadJob(undefined, cacheKey);
+  assert.equal(again.created, false, "a dead CLI is not asked again on the very next open");
+  assert.equal(again.job.id, job.id, "the caller is handed the failure rather than a fresh doomed run");
+  assert.equal(weekAheadJobRows().length, 1, "and no second job exists to spawn a second CLI");
+});
+
+test("an older failure has served its backoff and no longer blocks a fresh warm", () => {
+  const { cacheKey } = weekAheadServe();
+  const { job } = ensureWeekAheadJob(undefined, cacheKey);
+  failJob(job.id, 45);
+
+  const again = ensureWeekAheadJob(undefined, cacheKey);
+  assert.equal(again.created, true, "the backoff is a pause, not a permanent refusal");
+  assert.notEqual(again.job.id, job.id);
+  assert.equal(weekAheadJobRows().length, 2);
+});
+
+test("a failure only holds the door on its OWN cacheKey", () => {
+  const { cacheKey } = weekAheadServe();
+  const { job } = ensureWeekAheadJob(undefined, cacheKey);
+  failJob(job.id, 2);
+
+  const other = ensureWeekAheadJob(undefined, `${cacheKey}-a-new-day`);
+  assert.equal(other.created, true, "yesterday's failure must never mute today's week");
+  assert.equal(weekAheadJobRows().length, 2);
+});
+
+test("the background run fills the slot the dedupe guards, rather than re-deriving one", async () => {
+  // A run that re-derived its own key off localDateISO() would write a cache entry
+  // nobody is waiting for, leaving the guarded key cold and the guard protecting
+  // nothing. Source-pinned: the real path needs an agent CLI, which the suite has not
+  // got (CLAUDE.md — deterministic and offline).
+  const fs = await import("node:fs");
+  const jobs = fs.readFileSync(new URL("../src/agentJobs.ts", import.meta.url), "utf8");
+  assert.match(
+    jobs,
+    /case "week_ahead": \{[\s\S]*?weekAheadRead\(agent, hooks, cacheKey\)/,
+    "the week_ahead job must pass its stored cacheKey through to the read"
+  );
+  const ops = fs.readFileSync(new URL("../src/coachOps.ts", import.meta.url), "utf8");
+  assert.match(
+    ops,
+    /const cacheKey = cacheKeyOverride\?\.trim\(\) \|\| weekAheadCacheKey\(floor\)/,
+    "weekAheadRead must prefer the key it was handed over its own derivation"
+  );
 });
 
 // ---- the scheduler warm (day rollover) ----

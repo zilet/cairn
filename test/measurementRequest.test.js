@@ -256,6 +256,86 @@ test("the need lapsing retires it just as cleanly as the data arriving", () => {
   assert.equal(repo.getAttentionSchedule(WEIGH_IN_KEY), null);
 });
 
+// Opens a pending body-composition expectation, which is the only reason the tape
+// request exists. brain_expectations hangs off a decision, so one is recorded for it.
+function openBodyCompExpectation() {
+  const decision = repo.recordDecision({
+    effective_date: null,
+    kind: "training_target",
+    domain: "nutrition",
+    summary: "A cut that should not put the waist up",
+    rationale: null,
+    source: "test",
+    source_ref_type: null,
+    source_ref_key: null,
+    status: "applied",
+    autonomy_tier: "quiet_apply",
+    risk_class: "low",
+    reversible: true,
+    context: null,
+    action: null,
+    specialist: null,
+    applied_at: null,
+    reverted_at: null,
+    superseded_by: null,
+    evaluator_version: null,
+  });
+  db.prepare(
+    `INSERT INTO brain_expectations
+       (decision_id, metric_key, direction, window_start, window_end, confidence, status, evaluator, evaluator_version)
+     VALUES (?, 'body_measurement_direction', 'down', ?, ?, 'moderate', 'pending', 'body_measurement', 'v1')`
+  ).run(Number(decision.decision.id), addDaysISO(today(), -14), addDaysISO(today(), 42));
+}
+
+test("a live need that is merely OUTRANKED keeps the ladder it has already climbed", () => {
+  // The bug this pins: the sweep used to clear every row but the one firing today, so a
+  // lower-priority need was reset to `active` every time the weigh-in came round — and
+  // through a cut that is every few days, which means it could never reach silence.
+  seedCut();
+  repo.logWeight(168, addDaysISO(today(), -20));
+  repo.logWeight(167.5, today()); // fresh, so the weigh-in need is not live
+  openBodyCompExpectation();
+
+  const tapeKey = measurementRequestSignalKey("body_measurement");
+  assert.equal(currentMeasurementRequest(today())?.need, "body_measurement");
+  reconcileMeasurementRequestAttention(today(), "measurement-request-body-measurement");
+  const opened = repo.getAttentionSchedule(tapeKey);
+  assert.ok(opened, "the tape ladder is open");
+
+  // Now the weigh-in goes stale again and outranks the tape — the tape need itself has
+  // not changed at all: the prediction is still open and there is still no measurement.
+  db.prepare(`DELETE FROM bodyweight_log WHERE date = ?`).run(today());
+  assert.equal(currentMeasurementRequest(today())?.need, "weigh_in", "the weigh-in wins today");
+
+  reconcileMeasurementRequestAttention(today(), "measurement-request-weigh-in");
+
+  const survived = repo.getAttentionSchedule(tapeKey);
+  assert.ok(survived, "an outranked need is not a resolved need — its row must survive");
+  assert.equal(survived.tier, opened.tier);
+  assert.equal(survived.next_due, opened.next_due);
+  assert.equal(survived.state.clean_checks, opened.state.clean_checks);
+  assert.equal(survived.last_checked, opened.last_checked);
+});
+
+test("a need that genuinely resolves is still swept, even while another one is firing", () => {
+  seedCut();
+  repo.logWeight(168, addDaysISO(today(), -20));
+  repo.logWeight(167.5, today());
+  openBodyCompExpectation();
+
+  const tapeKey = measurementRequestSignalKey("body_measurement");
+  reconcileMeasurementRequestAttention(today(), "measurement-request-body-measurement");
+  assert.ok(repo.getAttentionSchedule(tapeKey));
+
+  // The tape reading lands, and the weigh-in goes stale on the same day.
+  db.prepare(`INSERT INTO body_measurements (date, waist_in) VALUES (?, ?)`).run(today(), 33.5);
+  db.prepare(`DELETE FROM bodyweight_log WHERE date = ?`).run(today());
+  assert.equal(currentMeasurementRequest(today())?.need, "weigh_in");
+
+  reconcileMeasurementRequestAttention(today(), "measurement-request-weigh-in");
+  assert.equal(repo.getAttentionSchedule(tapeKey), null, "the measurement arrived, so the row is retired");
+});
+
 test("one open request per need — a second ask never opens a second row", () => {
   seedCut();
   repo.logWeight(168, addDaysISO(today(), -20));
